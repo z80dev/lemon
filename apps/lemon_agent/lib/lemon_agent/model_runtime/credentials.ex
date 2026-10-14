@@ -21,6 +21,7 @@ defmodule LemonAgent.ModelRuntime.Credentials do
 
   alias LemonAi.Auth.OAuthSecretResolver
   alias LemonAgent.ModelRuntime.CredentialHealth
+  alias LemonAgent.ModelRuntime.CustomProviders
   alias LemonAgent.ModelRuntime.ProviderNames
   alias LemonAgent.ProviderConfigResolver
   alias LemonCore.Secrets
@@ -61,6 +62,168 @@ defmodule LemonAgent.ModelRuntime.Credentials do
     pool_credential_entries(config, provider, opts) ++ default_entry
   end
 
+  @doc """
+  Force-refreshes the OAuth credential behind one `list_provider_api_keys/3`
+  entry after the provider rejected `previous_key` (for example an HTTP 401).
+
+  `credential_ref` is the entry's `:ref`: `"default"`, `"secret:NAME"` or
+  `"env:VAR"`. Environment variables, inline keys and plain API-key secrets
+  cannot be refreshed and return `{:error, :not_refreshable}`. When the
+  credential currently resolves to a key other than `previous_key` (another
+  caller already refreshed it), that key is returned without a token request.
+  Otherwise the OAuth helper refreshes under its lock and persists the result
+  through the encrypted secret store; a failed refresh never returns the
+  rejected key. Error reasons are bare atoms safe to log.
+  """
+  @spec refresh_provider_api_key(map() | nil, atom() | String.t(), String.t(), String.t() | nil) ::
+          {:ok, String.t()} | {:error, atom()}
+  def refresh_provider_api_key(config, provider, credential_ref, previous_key)
+      when is_binary(credential_ref) do
+    case refresh_target(config, provider, credential_ref) do
+      {:ok, secret_name, resolver} ->
+        force_refresh_secret(secret_name, resolver, previous_key)
+
+      {:error, _} = error ->
+        error
+    end
+  end
+
+  def refresh_provider_api_key(_config, _provider, _credential_ref, _previous_key),
+    do: {:error, :not_refreshable}
+
+  # Maps a credential ref to the secret holding its OAuth payload and the
+  # resolver that `resolve_provider_api_key/3` / pool resolution use for it, so
+  # a refresh persists exactly what the next resolution reads.
+  defp refresh_target(config, provider, "default") do
+    provider_cfg = provider_config(config, provider, [])
+
+    case ProviderNames.canonical_name(provider) do
+      "openai_codex" ->
+        if normalize_auth_source(provider_cfg) == :oauth do
+          provider_cfg
+          |> codex_oauth_secret_name()
+          |> refresh_target_for(:openai_codex)
+        else
+          {:error, :not_refreshable}
+        end
+
+      "anthropic" ->
+        if normalize_auth_source(provider_cfg) == :oauth do
+          [
+            provider_config_value(provider_cfg, :oauth_secret),
+            provider_config_value(provider_cfg, :api_key_secret),
+            ProviderNames.oauth_default_secret_name("anthropic")
+          ]
+          |> first_non_empty_binary()
+          |> refresh_target_for(:anthropic)
+        else
+          {:error, :not_refreshable}
+        end
+
+      canonical when is_binary(canonical) ->
+        # Generic resolution prefers environment and inline keys, which cannot
+        # be refreshed, unless `auth_source = "oauth"` makes the stored sign-in
+        # authoritative; otherwise it reads the configured or default secret.
+        oauth? = normalize_auth_source(provider_cfg) == :oauth
+
+        cond do
+          not oauth? and present_value?(env_first(ProviderNames.env_vars(canonical))) ->
+            {:error, :not_refreshable}
+
+          not oauth? and present_value?(provider_config_value(provider_cfg, :api_key)) ->
+            {:error, :not_refreshable}
+
+          true ->
+            [
+              provider_config_value(provider_cfg, :api_key_secret),
+              ProviderNames.default_secret_name(canonical)
+            ]
+            |> first_non_empty_binary()
+            |> refresh_target_for(:generic)
+        end
+
+      _ ->
+        {:error, :not_refreshable}
+    end
+  end
+
+  defp refresh_target(_config, _provider, ref) do
+    case parse_credential_ref(ref) do
+      %{source: :secret, name: name} -> refresh_target_for(name, :generic)
+      _ -> {:error, :not_refreshable}
+    end
+  end
+
+  defp refresh_target_for(secret_name, resolver) do
+    if present_value?(secret_name),
+      do: {:ok, secret_name, resolver},
+      else: {:error, :not_refreshable}
+  end
+
+  defp codex_oauth_secret_name(provider_cfg) do
+    first_non_empty_binary([
+      provider_config_value(provider_cfg, :oauth_secret),
+      provider_config_value(provider_cfg, :api_key_secret),
+      ProviderNames.default_secret_name("openai_codex")
+    ])
+  end
+
+  defp force_refresh_secret(secret_name, resolver, previous_key) do
+    case resolve_secret_value(secret_name, prefer_env: false, env_fallback: false) do
+      {:ok, value, _source} when is_binary(value) ->
+        case oauth_resolve(resolver, secret_name, value, []) do
+          {:ok, current} when is_binary(current) and current != previous_key ->
+            {:ok, current}
+
+          :ignore ->
+            {:error, :not_refreshable}
+
+          _rejected_or_failed ->
+            case oauth_resolve(resolver, secret_name, value, force_refresh: true) do
+              {:ok, fresh} when is_binary(fresh) -> {:ok, fresh}
+              :ignore -> {:error, :not_refreshable}
+              {:error, reason} -> {:error, safe_reason(reason)}
+            end
+        end
+
+      _ ->
+        {:error, :not_found}
+    end
+  end
+
+  defp oauth_resolve(:anthropic, secret_name, value, opts) do
+    LemonAi.Auth.AnthropicOAuth.resolve_api_key_from_secret(
+      secret_name,
+      value,
+      [
+        persist_secret: &persist_anthropic_secret/2,
+        reload_secret: &reload_secret(&1, env_fallback: false)
+      ] ++ opts
+    )
+  end
+
+  defp oauth_resolve(:openai_codex, secret_name, value, opts) do
+    LemonAi.Auth.OpenAICodexOAuth.resolve_api_key_from_secret(
+      secret_name,
+      value,
+      [
+        persist_secret: &persist_openai_codex_secret/2,
+        reload_secret: &reload_secret(&1, env_fallback: false)
+      ] ++ opts
+    )
+  end
+
+  defp oauth_resolve(:generic, secret_name, value, opts) do
+    OAuthSecretResolver.resolve_api_key_from_secret(
+      secret_name,
+      value,
+      [
+        persist_secret: &persist_oauth_secret/2,
+        reload_secret: &reload_secret(&1, env_fallback: false)
+      ] ++ opts
+    )
+  end
+
   # `build_get_api_key/1` contract: first non-cooldown credential's key; when
   # every credential is cooling down, fall back to the first one rather than
   # returning nil - a cooled key beats no key. With no pool credentials the
@@ -90,7 +253,9 @@ defmodule LemonAgent.ModelRuntime.Credentials do
       "openai_codex" -> resolve_openai_codex_api_key(provider_cfg)
       "anthropic" -> resolve_anthropic_api_key(provider_cfg)
       canonical when is_binary(canonical) -> resolve_generic_api_key(canonical, provider_cfg)
-      _ -> nil
+      # Not a ProviderNames provider: custom `[providers.<id>]` entries resolve
+      # only their own configured credential, never another provider's env key.
+      _ -> resolve_custom_api_key(provider_cfg)
     end
   end
 
@@ -173,8 +338,10 @@ defmodule LemonAgent.ModelRuntime.Credentials do
       "bedrock_converse_stream" ->
         bedrock_credentials_available?(provider_cfg, opts)
 
-      _ ->
-        present_value?(resolve_provider_api_key(provider, provider_cfg, provider_cfg: true))
+      canonical ->
+        ProviderNames.keyless?(canonical) or
+          present_value?(resolve_provider_api_key(provider, provider_cfg, provider_cfg: true)) or
+          (is_nil(canonical) and CustomProviders.keyless?(provider_cfg))
     end
   end
 
@@ -338,18 +505,20 @@ defmodule LemonAgent.ModelRuntime.Credentials do
 
   defp map_value(_, _), do: nil
 
+  # `auth_source = "oauth"` means the stored sign-in (api_key_secret) is the
+  # credential: an ambient API-key env var or plain api_key must not shadow it.
   defp resolve_generic_api_key(provider, provider_cfg) do
+    oauth? = normalize_auth_source(provider_cfg) == :oauth
+
     env_key =
-      provider
-      |> ProviderNames.env_vars()
-      |> env_first()
+      if oauth?, do: nil, else: provider |> ProviderNames.env_vars() |> env_first()
 
     cond do
       present_value?(env_key) ->
         env_key
 
-      present_value?(plain_api_key = provider_config_value(provider_cfg, :api_key)) ->
-        plain_api_key
+      not oauth? and present_value?(provider_config_value(provider_cfg, :api_key)) ->
+        provider_config_value(provider_cfg, :api_key)
 
       present_value?(api_key_secret = provider_config_value(provider_cfg, :api_key_secret)) ->
         resolve_secret_api_key(api_key_secret)
@@ -359,6 +528,32 @@ defmodule LemonAgent.ModelRuntime.Credentials do
 
       true ->
         nil
+    end
+  end
+
+  # Custom providers: `api_key_env` -> inline `api_key` -> `api_key_secret`.
+  # `auth = "none"` providers are ready without any key (see
+  # `single_provider_has_credentials?/3`).
+  defp resolve_custom_api_key(provider_cfg) do
+    cond do
+      present_value?(env_key = provider_env_value(provider_cfg, :api_key_env)) ->
+        env_key
+
+      present_value?(plain_api_key = provider_config_value(provider_cfg, :api_key)) ->
+        plain_api_key
+
+      present_value?(api_key_secret = provider_config_value(provider_cfg, :api_key_secret)) ->
+        resolve_secret_api_key(api_key_secret)
+
+      true ->
+        nil
+    end
+  end
+
+  defp provider_env_value(provider_cfg, key) do
+    case provider_config_value(provider_cfg, key) do
+      name when is_binary(name) and name != "" -> System.get_env(name)
+      _ -> nil
     end
   end
 
@@ -406,7 +601,8 @@ defmodule LemonAgent.ModelRuntime.Credentials do
     case resolve_secret_value(secret_name, prefer_env: false, env_fallback: false) do
       {:ok, value, _source} ->
         case LemonAi.Auth.OpenAICodexOAuth.resolve_api_key_from_secret(secret_name, value,
-               persist_secret: &persist_openai_codex_secret/2
+               persist_secret: &persist_openai_codex_secret/2,
+               reload_secret: &reload_secret(&1, env_fallback: false)
              ) do
           {:ok, resolved_api_key} ->
             resolved_api_key
@@ -416,7 +612,7 @@ defmodule LemonAgent.ModelRuntime.Credentials do
 
           {:error, reason} ->
             Logger.warning(
-              "Failed to resolve OpenAI Codex OAuth secret #{secret_name}: #{inspect(reason)}"
+              "Failed to resolve OpenAI Codex OAuth secret #{secret_name}: #{inspect(safe_reason(reason))}"
             )
 
             nil
@@ -733,6 +929,7 @@ defmodule LemonAgent.ModelRuntime.Credentials do
     else
       providers_or_cfg
       |> ProviderNames.provider_config(provider)
+      |> Kernel.||(CustomProviders.config_for(providers_or_cfg, provider))
       |> normalize_provider_cfg()
     end
   end
@@ -820,6 +1017,10 @@ defmodule LemonAgent.ModelRuntime.Credentials do
   # Error terms from OAuth helpers can carry provider response bodies; log only
   # their leading tag.
   defp safe_reason(reason) when is_atom(reason), do: reason
-  defp safe_reason(reason) when is_tuple(reason) and is_atom(elem(reason, 0)), do: elem(reason, 0)
+
+  defp safe_reason(reason)
+       when is_tuple(reason) and tuple_size(reason) > 0 and is_atom(elem(reason, 0)),
+       do: elem(reason, 0)
+
   defp safe_reason(_reason), do: :unknown
 end

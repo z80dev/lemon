@@ -140,7 +140,7 @@ defmodule LemonCli.CommandRegistry do
         ),
         option("--token TOKEN", ["--token"], "Credential for non-interactive provider setup"),
         option(
-          "--auth oauth|api_key|codex-cli",
+          "--auth oauth|device|api_key|codex-cli",
           ["--auth"],
           "Authentication mode (import is opt-in)"
         ),
@@ -166,7 +166,7 @@ defmodule LemonCli.CommandRegistry do
         option("--provider NAME", ["--provider"], "Provider id"),
         option("--token TOKEN", ["--token"], "Provider credential"),
         option(
-          "--auth oauth|api_key|codex-cli",
+          "--auth oauth|device|api_key|codex-cli",
           ["--auth"],
           "Authentication mode (import is opt-in)"
         ),
@@ -175,8 +175,12 @@ defmodule LemonCli.CommandRegistry do
           ["--codex-auth-path"],
           "Auth file for --auth codex-cli only"
         ),
-        option("--non-interactive", ["--non-interactive"], "Require --token or --auth codex-cli"),
-        option("--secret-name NAME", ["--secret-name"], "Encrypted secret name"),
+        option(
+          "--non-interactive",
+          ["--non-interactive"],
+          "Require --token, --auth device or --auth codex-cli"
+        ),
+        option("--secret-name NAME", ["--secret-name"], "Secret to store, inspect, or log out"),
         option("--model MODEL", ["--model"], "Default model with --set-default"),
         option("--set-default", ["--set-default"], "Set the provider and model as defaults"),
         option("--config-path PATH", ["--config-path"], "Config file to update"),
@@ -185,7 +189,8 @@ defmodule LemonCli.CommandRegistry do
       ],
       details: [
         "Without a provider, Lemon displays an interactive picker. Credentials are stored in the encrypted secrets store and referenced from config.toml.",
-        "`lemon model anthropic` signs in with a Claude Pro/Max subscription in the browser; `--status` and `--logout` need a provider."
+        "`lemon model anthropic` signs in with a Claude Pro/Max subscription in the browser; `--status` and `--logout` need a provider.",
+        "`lemon model openai-codex --auth device` signs in to ChatGPT with a device code (no local callback); `openrouter`, `xai`, `kimi_coding` and `zai` also offer subscription sign-in."
       ]
     },
     %{
@@ -601,7 +606,9 @@ defmodule LemonCli.CommandRegistry do
         option("--vision", ["--vision"], "Only image-capable models"),
         option("--thinking", ["--thinking"], "Only reasoning-capable models"),
         option("--limit N", ["--limit", "-l"], "Maximum rows"),
-        option("--json", ["--json"], "Emit catalog and summary JSON")
+        option("--json", ["--json"], "Emit catalog and summary JSON"),
+        option("--discover", ["--discover"], "Query a preset provider endpoint for its models"),
+        option("--base-url URL", ["--base-url"], "Endpoint for --discover")
       ]
     ),
     runtime(

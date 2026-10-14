@@ -397,7 +397,7 @@ browser-session exchange needed to authenticate that client safely. Never
 place the shared server token in `VITE_*` configuration.
 - `LEMON_PROVIDER_ROUTING_ENABLED`, `LEMON_PROVIDER_FALLBACK_PROVIDERS`, `LEMON_PROVIDER_ROUTING_REQUIRE_CREDENTIALS`
 - `LEMON_THEME`, `LEMON_DEBUG`
-- `<PROVIDER>_API_KEY`, `<PROVIDER>_BASE_URL` (e.g., `ANTHROPIC_API_KEY`, `OPENAI_BASE_URL`, `OPENCODE_API_KEY`, `ZAI_API_KEY`, `MINIMAX_API_KEY`)
+- `<PROVIDER>_API_KEY`, `<PROVIDER>_BASE_URL` (e.g., `ANTHROPIC_API_KEY`, `OPENAI_BASE_URL`, `OPENCODE_API_KEY`, `ZAI_API_KEY`, `MINIMAX_API_KEY`); local servers use `OLLAMA_BASE_URL`/`OLLAMA_HOST`, `LM_STUDIO_BASE_URL`, `LLAMA_CPP_BASE_URL` and `LITELLM_BASE_URL` only when config sets no `base_url` (see [OpenAI-Compatible Endpoints](#openai-compatible-endpoints))
 - `LEMON_CODEX_EXTRA_ARGS`, `LEMON_CODEX_AUTO_APPROVE`
 - `LEMON_CLAUDE_YOLO`
 - `LEMON_WASM_ENABLED`, `LEMON_WASM_RUNTIME_PATH`, `LEMON_WASM_TOOL_PATHS`, `LEMON_WASM_AUTO_BUILD`
@@ -674,41 +674,161 @@ What it does:
 
 The onboarding flow opens the OpenAI auth URL directly and stores the returned OAuth credentials in Lemon secrets.
 
+On a headless machine, or when port 1455 is busy, use the device-code sign-in
+instead: `lemon model openai-codex --auth device` prints
+`https://auth.openai.com/codex/device` and a one-time code, waits for you to
+approve it on any device, and stores the same refreshable login (it also works
+with `--non-interactive`).
+
 To force a token explicitly, set:
 - `OPENAI_CODEX_API_KEY` (preferred)
 - `CHATGPT_TOKEN` (fallback)
 
 ## OpenAI-Compatible Endpoints
 
-For local or hosted services that expose an OpenAI-compatible API, configure the
-normal `openai` provider with a custom `base_url`:
+Lemon ships built-in presets for local inference servers and hosted open-model
+APIs that speak the OpenAI Chat Completions protocol. A preset provider accepts
+any model ID (`ollama:qwen3:32b`, `lm_studio:qwen2.5-coder-7b`, ...); model IDs
+may contain `:`. Model specs accept the underscore or dashed id (`lm-studio:...`);
+`[providers.<id>]` tables also accept omp spellings such as `llama.cpp` and
+`ollama-cloud`.
+
+### Local servers (no API key needed)
+
+| Provider | Default `base_url` | Base-URL env | Optional key env |
+| --- | --- | --- | --- |
+| `ollama` | `http://127.0.0.1:11434/v1` | `OLLAMA_BASE_URL`, `OLLAMA_HOST` | `OLLAMA_API_KEY` |
+| `lm_studio` | `http://127.0.0.1:1234/v1` | `LM_STUDIO_BASE_URL` | `LM_STUDIO_API_KEY` |
+| `llama_cpp` | `http://127.0.0.1:8080/v1` | `LLAMA_CPP_BASE_URL` | `LLAMA_CPP_API_KEY` |
+| `vllm` | `http://127.0.0.1:8000/v1` | — | `VLLM_API_KEY` |
+| `litellm` | `http://localhost:4000/v1` | `LITELLM_BASE_URL` | `LITELLM_API_KEY` |
+
+Requests go out without an `Authorization` header unless a key resolves (env
+variable, `api_key`/`api_key_secret`, or the default secret `llm_<id>_api_key`).
+`base_url` in config wins over the base-URL environment variables; environment
+values are normalized to a `/v1` root (`OLLAMA_HOST=gpu-box` becomes
+`http://gpu-box:11434/v1`). A `base_url` written in config must include the
+OpenAI-compatible root (usually `/v1`).
 
 ```toml
-[providers.openai]
-api_key_secret = "llm_local_openai_api_key"
-base_url = "http://127.0.0.1:11434/v1"
+[providers.ollama]
+base_url = "http://gpu-box:11434/v1"
 
 [defaults]
-provider = "openai"
-model = "openai:local-model-name"
+provider = "ollama"
+model = "ollama:qwen3:32b"
 ```
 
-Then store the endpoint key:
+### Hosted presets (API key required)
 
-```bash
-# Installed release / source checkout
-lemon secrets set llm_local_openai_api_key "local"
-./bin/lemon secrets set llm_local_openai_api_key "local"
+| Provider | `base_url` | Key env |
+| --- | --- | --- |
+| `ollama_cloud` | `https://ollama.com/v1` | `OLLAMA_CLOUD_API_KEY` |
+| `together` | `https://api.together.xyz/v1` | `TOGETHER_API_KEY` |
+| `deepinfra` | `https://api.deepinfra.com/v1/openai` | `DEEPINFRA_API_KEY` |
+| `nvidia` | `https://integrate.api.nvidia.com/v1` | `NVIDIA_API_KEY` |
+| `novita` | `https://api.novita.ai/openai/v1` | `NOVITA_API_KEY` |
+| `baseten` | `https://inference.baseten.co/v1` | `BASETEN_API_KEY` |
+| `venice` | `https://api.venice.ai/api/v1` | `VENICE_API_KEY` |
+| `synthetic` | `https://api.synthetic.new/openai/v1` | `SYNTHETIC_API_KEY` |
+| `nanogpt` | `https://nano-gpt.com/api/v1` | `NANO_GPT_API_KEY` |
+| `zenmux` | `https://zenmux.ai/api/v1` | `ZENMUX_API_KEY` |
+| `aimlapi` | `https://api.aimlapi.com/v1` | `AIMLAPI_API_KEY` |
+| `siliconflow` | `https://api.siliconflow.com/v1` | `SILICONFLOW_API_KEY` |
+| `siliconflow_cn` | `https://api.siliconflow.cn/v1` | `SILICONFLOW_CN_API_KEY` |
+| `gmi_cloud` | `https://api.gmi-serving.com/v1` | `GMI_API_KEY` |
+| `qianfan` | `https://qianfan.baidubce.com/v2` | `QIANFAN_API_KEY` |
+| `aiand` | `https://api.aiand.com/v1` | `AIAND_API_KEY` |
+| `wafer_serverless` | `https://pass.wafer.ai/v1` | `WAFER_SERVERLESS_API_KEY` |
+| `kilo` | `https://api.kilo.ai/api/gateway` | `KILO_API_KEY` |
 
-# Contributor-level Mix alternative
-mix lemon.secrets.set llm_local_openai_api_key "local"
+Store a key with `lemon secrets set llm_<provider>_api_key <key>` or reference
+one with `[providers.<provider>].api_key_secret`. Lemon never sends
+`OPENAI_API_KEY` to a non-OpenAI provider.
+
+### Model discovery
+
+Preset models carry conservative defaults (128k context, 16k output; Ollama
+8k output) until discovered. `lemon models --provider <preset> --discover`
+lists what an endpoint serves (`GET /models`; Ollama uses `/api/tags` and
+`/api/show` for context length), using `--base-url`, the base-URL environment
+variable, or the default, and the provider's key environment variable when set.
+This low-level CLI discovery does not read `[providers]` overrides or encrypted
+credentials; use the picker for config-aware discovery, or pass `--base-url`
+and the preset's environment key explicitly.
+The TUI `/model` picker (daemon `models.list`) includes discovered models for
+hosted presets with a credential and for local servers that are configured in
+`[providers.<id>]` or through their base-URL environment variable; listings are
+cached for five minutes and an unreachable server contributes no models.
+Discovery caches are scoped to the endpoint, wire API, credential, headers and
+model defaults; one account's listing is not reused for another account or
+endpoint. Cache identifiers hash auth material. Registry-only preset lookup
+uses the current default endpoint and environment credential, while the picker
+uses its effective provider config. Discovery refuses redirects and URLs with
+embedded credentials, queries or fragments; use `headers` for endpoint auth.
+
+Any other OpenAI-compatible endpoint can still use the `openai` provider with a
+custom `base_url`. Hosted provider ids with bundled catalogs (`opencode`,
+`openrouter`, `zai`, `minimax`, `kimi`, `xai`, `mistral`, `groq`, `deepseek`,
+`qwen`, ...) take the same `[providers.<id>]` table with `api_key_secret` and
+optional `base_url`.
+
+## Custom Providers and Models
+
+A `[providers.<id>]` table whose id is not a built-in provider defines a custom
+endpoint (the equivalent of omp's `models.yml` providers). Its models are
+selected as `<id>:<model>` or `<id>/<model>` in `default_model`, `/model`,
+`model_roles`, task/compaction selectors and `provider_routing.fallback_providers`,
+and they appear in the TUI `/model` picker once the provider has a credential.
+
+```toml
+[providers.my-gateway]
+api = "openai_completions"        # openai_completions | openai_responses |
+                                  # anthropic_messages | google_generative_ai
+                                  # (omp dashed spellings are accepted too)
+base_url = "https://llm.internal/v1"
+api_key_env = "MY_GATEWAY_KEY"     # or api_key_secret / api_key
+# auth = "none"                    # keyless endpoint: no Authorization header
+headers = { "X-Team" = "platform" }
+# discovery = "openai"             # list models from {base_url}/models ("ollama": /api/tags)
+
+[[providers.my-gateway.models]]
+id = "qwen3-coder"
+name = "Qwen3 Coder"               # default: id
+context_window = 131072            # default: 128000
+max_tokens = 16384                 # default: 16384
+reasoning = false                  # default: false
+input = ["text"]                   # "text" and/or "image"; default ["text"]
+# cost = { input = 0.5, output = 1.5, cache_read = 0, cache_write = 0 }  # USD per 1M tokens
+# headers = { "X-Model" = "qwen" } # override provider headers per model
 ```
 
-The same provider config shape also works for hosted OpenAI-compatible provider
-ids handled by Lemon, including `opencode`, `openrouter`, `zai`, `minimax`,
-`kimi`, `xai`, `mistral`, `groq`, `deepseek`, `qwen`, and related compatible
-providers. Each provider gets its own `[providers.<id>]` table with
-`api_key_secret` and optional `base_url`.
+- Credentials resolve from `api_key_env`, then `api_key`, then
+  `api_key_secret`; a custom provider never receives another provider's key
+  (no `OPENAI_API_KEY` fallback). With `auth = "none"` the provider is ready
+  without a key. OpenAI-, Anthropic- and Google-compatible requests omit their
+  generated credential header when no key resolves; configured headers still
+  apply. Google-compatible endpoints use their own provider's options, not
+  the built-in Google account's key or URL.
+- `api` and `base_url` are required. A provider with `discovery` or without a
+  `models` list accepts any model id (unlisted ids use the defaults above);
+  `discovery` also lists the endpoint's models in the picker, cached by the
+  shared model cache. Use `discovery = { type = "openai", timeout_ms = 5000 }`
+  to bound the listing request. Discovery needs `api = "openai_completions"` or
+  `"openai_responses"`; with `discovery = "ollama"`, `base_url` may be the
+  server root (`http://127.0.0.1:11434`) and requests go to its `/v1` API.
+  Wire roots are protocol-specific: OpenAI APIs usually use `/v1`, Anthropic
+  uses an origin/prefix to which `/v1/messages` is appended, and Google uses
+  a root such as `/v1beta` to which `/models/<id>:streamGenerateContent` is appended.
+- On a built-in provider (`anthropic`, `openai`, ...), `headers` are sent with
+  every request and `[[providers.<id>.models]]` entries add catalog models or
+  replace the catalog entry with the same id, inheriting the provider's wire API
+  and base URL.
+- `lemon config validate` reports unknown `api`/`auth`/`discovery` values, a
+  missing `base_url` when `api` or `discovery` is set, models without `id`, and
+  invalid model limits, inputs and prices.
+- Not supported (omp-only): per-model `compat` overrides, `modelOverrides`,
+  `!command` secrets, and `proxy`/`litellm` discovery.
 
 ## Provider Onboarding (CLI)
 
@@ -764,6 +884,15 @@ Provider onboarding flows:
 - Write the relevant `providers.<provider>` config keys
 - Support `--set-default`, `--model`, and `--config-path`
 
+API-key-only providers in the catalog are offered too: `google` (Gemini API),
+`groq`, `cerebras`, `deepseek`, `mistral`, `huggingface`, `qwen` (DashScope),
+`vercel_ai_gateway`, `opencode`, `opencode_go`, `minimax_cn`, `fireworks`,
+`zai`, `kimi` and `minimax`, plus every hosted OpenAI-compatible preset
+(`together`, `deepinfra`, `nvidia`, …). The pasted key is stored as
+`llm_<provider>_api_key` and referenced through
+`[providers.<provider>].api_key_secret`. For presets, `--set-default` lists the
+models the endpoint reports for that key, and `--model` accepts any model id.
+
 Provider readiness is visible through the source and packaged
 `lemon providers status` command. It uses the same
 `LemonAgent.ModelRuntime.Credentials` credential resolver as model execution, so env keys, encrypted
@@ -799,6 +928,23 @@ references require the exact confirmation value shown by the preview:
 lemon providers fallback remove zai --dry-run --json
 lemon providers fallback remove zai --confirm zai
 ```
+
+To keep several logins for one provider, sign in again under another secret
+name and add that name to a pool; OAuth logins referenced from a pool refresh
+like the default login:
+
+```bash
+lemon model anthropic --auth oauth --secret-name llm_anthropic_work
+lemon providers pool credential add burst anthropic secret:llm_anthropic_work
+```
+
+The most recent onboarding selects its secret in the provider config; it does
+not delete other stored accounts. To inspect or delete a different stored
+account, use `lemon model anthropic --status --secret-name llm_anthropic_work`
+or `--logout --secret-name llm_anthropic_work`. Named logout leaves the active
+provider config unchanged unless that exact secret is the configured login.
+Pool references to a deleted secret remain in config but no longer resolve;
+remove them separately with `lemon providers pool credential remove`.
 
 
 Memory-provider readiness is included in support-bundle
@@ -873,6 +1019,33 @@ the active Gemini project from `providers.google_gemini_cli.project_id`,
 those values overriding the `projectId` stored inside the OAuth payload.
 
 The onboarding alias `gemini` maps to the runtime provider `google_gemini_cli`. This is distinct from the AI Studio provider `google`, which expects a separate API key such as `GOOGLE_GENERATIVE_AI_API_KEY`.
+
+Other subscription and browser sign-ins offered by `lemon model <provider>`:
+
+| Provider | Sign-in | Stored as |
+| --- | --- | --- |
+| `openrouter` | Browser PKCE sign-in (callback on `http://localhost:54549/callback`, or paste the redirect URL); a pasted `sk-or-` key is checked and accepted | A durable OpenRouter API key in `providers.openrouter.api_key_secret` |
+| `xai` | SuperGrok / X Premium+ device code (`--auth oauth`); API key remains the default | Refreshable login in `providers.xai.api_key_secret`, `auth_source = "oauth"` |
+| `kimi_coding` (`kimi-code`) | Kimi Code device code (default) | Refreshable login in `providers.kimi_coding.api_key_secret`, `auth_source = "oauth"` |
+| `zai` | GLM Coding Plan sign-in (`--auth oauth`): paste the full final `zcode://zai-auth/callback?...` redirect (or `code#state`, not a bare code); Lemon finds or creates an API key named `lemon` | A durable Z.AI API key in `providers.zai.api_key_secret` |
+
+Refreshable logins renew shortly before expiry and when a provider rejects the
+token. While `auth_source = "oauth"` is set, the provider's API-key environment
+variables (for example `XAI_API_KEY` or `KIMI_API_KEY`) do not override the
+stored login. `lemon model <provider> --status` reports the stored login or key
+without printing it; `--logout` deletes it and its config references but does
+not revoke it at the provider. `KIMI_CODE_OAUTH_HOST` overrides the Kimi auth
+host; the `ZAI_OAUTH_*` variables override the Z.AI endpoints for allowlist
+changes.
+
+Token-grant requests do not follow redirects. Device-code deadlines include
+time spent waiting for browser instructions and HTTP requests. Refresh and
+persistence are serialized per stored login; waiting callers reload the same
+secret before reusing or rotating it. A removed/replaced login is not recreated
+from a stale reader, and expired or explicitly rejected tokens are never
+returned as successful authentication after a failed refresh. Endpoint/HTTP
+overrides exposed by library APIs are trusted caller options intended for
+testing and controlled integrations, not untrusted remote input.
 
 Antigravity OAuth client credentials resolve from Lemon secrets first:
 - `google_antigravity_oauth_client_id`

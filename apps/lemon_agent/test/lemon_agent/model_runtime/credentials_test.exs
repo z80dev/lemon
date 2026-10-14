@@ -304,6 +304,216 @@ defmodule LemonAgent.ModelRuntime.CredentialsTest do
     end
   end
 
+  describe "refresh_provider_api_key/4" do
+    alias LemonAgent.ModelRuntime.Credentials
+
+    setup do
+      previous_defaults = Req.default_options()
+      Req.default_options(plug: {Req.Test, __MODULE__})
+      Req.Test.set_req_test_to_shared(%{})
+      test_pid = self()
+
+      Req.Test.stub(__MODULE__, fn conn ->
+        send(test_pid, :token_request)
+
+        Req.Test.json(conn, %{
+          "access_token" => "sk-ant-oat01-forced",
+          "refresh_token" => "sk-ant-ort01-forced",
+          "expires_in" => 28_800
+        })
+      end)
+
+      on_exit(fn ->
+        Req.default_options(previous_defaults)
+        Req.Test.set_req_test_to_private(%{})
+      end)
+    end
+
+    test "force-refreshes the default OAuth login the provider rejected and persists it" do
+      assert {:ok, _} = Secrets.set("llm_anthropic_api_key", anthropic_login(3_600_000))
+      providers = %{"anthropic" => %{auth_source: "oauth"}}
+
+      assert [%{ref: "default", api_key: "sk-ant-oat01-stored"}] =
+               Credentials.list_provider_api_keys(providers, :anthropic)
+
+      refute_received :token_request
+
+      assert {:ok, "sk-ant-oat01-forced"} =
+               Credentials.refresh_provider_api_key(
+                 providers,
+                 :anthropic,
+                 "default",
+                 "sk-ant-oat01-stored"
+               )
+
+      assert_received :token_request
+      assert {:ok, stored} = Secrets.get("llm_anthropic_api_key")
+      assert %{"refresh_token" => "sk-ant-ort01-forced"} = Jason.decode!(stored)
+      assert Credentials.resolve_provider_api_key(:anthropic, providers) == "sk-ant-oat01-forced"
+    end
+
+    test "returns a key another caller already refreshed without a token request" do
+      assert {:ok, _} = Secrets.set("llm_anthropic_api_key", anthropic_login(3_600_000))
+
+      assert {:ok, "sk-ant-oat01-stored"} =
+               Credentials.refresh_provider_api_key(
+                 %{"anthropic" => %{auth_source: "oauth"}},
+                 :anthropic,
+                 "default",
+                 "sk-ant-oat01-rejected-earlier"
+               )
+
+      refute_received :token_request
+    end
+
+    test "force-refreshes a pool secret ref through the generic OAuth resolver" do
+      assert {:ok, _} =
+               Secrets.set(
+                 "work_codex_login",
+                 Jason.encode!(%{
+                   "type" => "openai_codex_oauth",
+                   "access_token" => "codex-rejected",
+                   "refresh_token" => "codex-refresh",
+                   "expires_at_ms" => System.system_time(:millisecond) + 3_600_000
+                 })
+               )
+
+      assert {:ok, "sk-ant-oat01-forced"} =
+               Credentials.refresh_provider_api_key(
+                 %{},
+                 "openai-codex",
+                 "secret:work_codex_login",
+                 "codex-rejected"
+               )
+
+      assert {:ok, stored} = Secrets.get("work_codex_login")
+      assert %{"access_token" => "sk-ant-oat01-forced"} = Jason.decode!(stored)
+    end
+
+    test "refreshing a selected pool login updates only its owning secret" do
+      assert {:ok, _} = Secrets.set("personal_login", anthropic_login(3_600_000))
+      assert {:ok, _} = Secrets.set("work_login", anthropic_login(3_600_000))
+      assert {:ok, original} = Secrets.get("personal_login")
+
+      config = %{
+        providers: %{"anthropic" => %{auth_source: "oauth", oauth_secret: "personal_login"}},
+        provider_routing: %{
+          default_pool: "work",
+          credential_pools: %{
+            "work" => %{credentials: %{"anthropic" => ["secret:work_login"]}}
+          }
+        }
+      }
+
+      assert [%{ref: selected_ref, api_key: rejected}, %{ref: "default"}] =
+               Credentials.list_provider_api_keys(config, :anthropic)
+
+      assert selected_ref == "secret:work_login"
+
+      assert {:ok, "sk-ant-oat01-forced"} =
+               Credentials.refresh_provider_api_key(config, :anthropic, selected_ref, rejected)
+
+      assert {:ok, ^original} = Secrets.get("personal_login")
+      assert {:ok, work} = Secrets.get("work_login")
+      assert Jason.decode!(work)["access_token"] == "sk-ant-oat01-forced"
+
+      assert [
+               %{ref: ^selected_ref, api_key: "sk-ant-oat01-forced"},
+               %{ref: "default", api_key: "sk-ant-oat01-stored"}
+             ] =
+               Credentials.list_provider_api_keys(config, :anthropic)
+    end
+
+    test "environment, inline and plain API-key credentials are not refreshable" do
+      assert {:error, :not_refreshable} =
+               Credentials.refresh_provider_api_key(%{}, :openai, "env:OPENAI_API_KEY", "k")
+
+      assert {:error, :not_refreshable} =
+               Credentials.refresh_provider_api_key(
+                 %{"openai" => %{api_key: "sk-inline"}},
+                 :openai,
+                 "default",
+                 "sk-inline"
+               )
+
+      assert {:ok, _} = Secrets.set("llm_openai_api_key", "sk-plain")
+
+      assert {:error, :not_refreshable} =
+               Credentials.refresh_provider_api_key(%{}, :openai, "default", "sk-plain")
+
+      assert {:error, :not_refreshable} =
+               Credentials.refresh_provider_api_key(
+                 %{"anthropic" => %{auth_source: "api_key"}},
+                 :anthropic,
+                 "default",
+                 "k"
+               )
+
+      assert {:error, :not_found} =
+               Credentials.refresh_provider_api_key(%{}, :openai, "secret:missing", "k")
+
+      refute_received :token_request
+    end
+
+    test "with auth_source = oauth an ambient env key does not block refreshing the sign-in" do
+      System.put_env("GITHUB_COPILOT_API_KEY", "ambient-key")
+
+      assert {:ok, _} =
+               Secrets.set(
+                 "llm_github_copilot_api_key",
+                 Jason.encode!(%{
+                   "type" => "github_copilot_oauth",
+                   "refresh_token" => "github-token",
+                   "access_token" => "copilot-rejected",
+                   "expires_at_ms" => System.system_time(:millisecond) + 3_600_000
+                 })
+               )
+
+      Req.Test.stub(__MODULE__, fn conn ->
+        Req.Test.json(conn, %{
+          "token" => "copilot-forced",
+          "expires_at" => div(System.system_time(:millisecond), 1000) + 3600
+        })
+      end)
+
+      providers = %{"github_copilot" => %{auth_source: "oauth"}}
+
+      assert {:ok, "copilot-forced"} =
+               Credentials.refresh_provider_api_key(
+                 providers,
+                 :github_copilot,
+                 "default",
+                 "copilot-rejected"
+               )
+
+      assert {:error, :not_refreshable} =
+               Credentials.refresh_provider_api_key(
+                 %{},
+                 :github_copilot,
+                 "default",
+                 "ambient-key"
+               )
+    end
+
+    test "a rejected refresh fails with a bare reason and never returns the old key" do
+      assert {:ok, _} = Secrets.set("llm_anthropic_api_key", anthropic_login(3_600_000))
+
+      Req.Test.stub(__MODULE__, fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(400, ~s({"error":"invalid_grant"}))
+      end)
+
+      assert {:error, :reauth_required} =
+               Credentials.refresh_provider_api_key(
+                 %{"anthropic" => %{auth_source: "oauth"}},
+                 :anthropic,
+                 "default",
+                 "sk-ant-oat01-stored"
+               )
+    end
+  end
+
   defp anthropic_login(expires_in_ms) do
     Jason.encode!(%{
       "type" => "anthropic_oauth",
