@@ -14,13 +14,13 @@ export function createEventService(services:BackendServices):EventService {
     if(!member?.enabled) return false;
     if(audience.userIds && !audience.userIds.includes(principal.userId)) return false;
     if(audience.admin && principal.role==='member') return false;
+    const [kind,action]=event.event.split('.');
+    if(action==='deleted') return !!(audience.userIds?.includes(principal.userId)||audience.admin||audience.public);
     try {
       if(audience.conversationId) services.auth.conversation(principal,audience.conversationId);
       if(audience.botId) services.auth.bot(principal,audience.botId);
       if(audience.machineId) services.auth.machine(principal,audience.machineId);
     } catch { return false; }
-    const [kind,action]=event.event.split('.');
-    if(action==='deleted') return !!(audience.userIds?.includes(principal.userId)||audience.admin||audience.public||audience.conversationId||audience.botId||audience.machineId);
     if(kind==='policies'||kind==='governance') return principal.role!=='member'||audience.userIds?.includes(principal.userId)===true;
     if(kind==='workspace') return true;
     if(event.event==='entry.delta'||event.event==='conversation.read'||event.event==='composer.updated') {

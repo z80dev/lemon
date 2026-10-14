@@ -44,7 +44,7 @@ export interface AccessService {
 export interface MutationService {
   execute<T>(context: RequestContext, operation: () => Promise<T> | T): Promise<T>;
   checkRevision(resource: { revision: number }, revision: unknown): void;
-  preview(principal: Principal, target: { id: string; revision: number }, action: string, name: string, effects: string[], affected?: P.ScopeEffect[], binding?: unknown): P.Confirmation;
+  preview(principal: Principal, target: { id: string; revision: number }, action: string, name: string, effects: string[], affected?: P.ScopeEffect[], binding?: unknown, expiresInMs?: number): P.Confirmation;
   confirm(principal: Principal, target: { id: string; revision: number }, action: string, body: unknown, binding?: unknown): void;
   digest(value: unknown): string;
 }

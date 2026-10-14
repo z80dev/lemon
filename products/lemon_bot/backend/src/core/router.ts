@@ -39,7 +39,8 @@ export class Router {
   private async body(request:Request,route:Route):Promise<unknown> {
     if(route.body==='none'||request.method==='GET'||request.method==='HEAD')return undefined;
     if(route.body==='multipart'){if(!request.headers.get('Content-Type')?.startsWith('multipart/form-data'))fail('unsupported_media','Multipart upload is required.');return await request.formData();}
-    if(!request.headers.get('Content-Type')?.toLowerCase().startsWith('application/json'))fail('unsupported_media','JSON content type is required.');
+    const contentType=request.headers.get('Content-Type')?.toLowerCase().split(';')[0]?.trim();
+    if(contentType!=='application/json'&&!(route.path.startsWith('/v1/scim/v2')&&contentType==='application/scim+json'))fail('unsupported_media','JSON content type is required.');
     const max=route.path.includes('/files')?2*1024*1024:1024*1024;
     const chunks:Uint8Array[]=[];let size=0;const reader=request.body?.getReader();if(!reader)fail('invalid_request','A JSON body is required.');
     while(true){const value=await reader.read();if(value.done)break;size+=value.value.byteLength;if(size>max){await reader.cancel();fail('too_large','Request body exceeds its maximum size.');}chunks.push(value.value);}
@@ -59,12 +60,16 @@ export class Router {
       const mutating=match.route.mutation??(!['GET','HEAD','OPTIONS'].includes(request.method)&&match.route.path!=='/v1/auth/reauth');
       const value=await this.contexts.run(context,()=>mutating?this.services.mutations.execute(context,()=>match.route.handler(context)):match.route.handler(context));
       if(value instanceof Response){for(const [name,item] of headers)value.headers.set(name,item);return value;}
+      const redirect=z.object({status:z.literal(302),location:z.string().min(1)}).strict().safeParse(value);
+      if(redirect.success){headers.set('Location',redirect.data.location);return new Response(null,{status:302,headers});}
       const uncertainHook=url.pathname.startsWith('/hooks/')&&z.object({status:z.literal('outcome_unknown')}).passthrough().safeParse(value).success;
       const status=uncertainHook?202:match.route.status??200;
       headers.set('Content-Type','application/json; charset=utf-8');return new Response(JSON.stringify(value),{status,headers});
     } catch(error) {
       const known=error instanceof z.ZodError||error instanceof SyntaxError?new ApiError('invalid_request','Request has invalid or unsupported fields.'):error;
-      const envelope=errorEnvelope(known,requestId);headers.set('Content-Type','application/json; charset=utf-8');if(envelope.error.code==='rate_limited')headers.set('Retry-After','60');return new Response(JSON.stringify(envelope),{status:statusFor[envelope.error.code],headers});
+      const envelope=errorEnvelope(known,requestId);
+      if(new URL(request.url).pathname.startsWith('/v1/scim/v2')){headers.set('Content-Type','application/scim+json');return new Response(JSON.stringify({schemas:['urn:ietf:params:scim:api:messages:2.0:Error'],status:String(statusFor[envelope.error.code]),detail:envelope.error.message}),{status:statusFor[envelope.error.code],headers});}
+      headers.set('Content-Type','application/json; charset=utf-8');if(envelope.error.code==='rate_limited')headers.set('Retry-After','60');return new Response(JSON.stringify(envelope),{status:statusFor[envelope.error.code],headers});
     }
   }
   private async staticFile(request:Request,headers:Headers):Promise<Response> {

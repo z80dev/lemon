@@ -1,8 +1,9 @@
-import { randomBytes } from 'node:crypto';
+import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { z } from 'zod';
 import type { BackendServices, Principal, RequestContext } from './services';
 import type * as P from '../../../contracts/protocol';
 import { fail } from './errors';
+import { Store } from './store';
 const cursorSchema=z.object({userId:z.string(),binding:z.string(),after:z.string(),expiresAtMs:z.number()}).strict();
 const actorSchema=z.object({kind:z.enum(['user','bot','system']),id:z.string().nullable(),displayName:z.string().max(120)}).strict();
 const targetId=z.string().min(1).max(128).regex(/^[^/\u0000-\u0020]+$/);
@@ -24,15 +25,24 @@ export function installHelpers(services:BackendServices):void {
     const binding=services.mutations.digest({path:context.route.path,params:context.params,filters,ascending:options?.ascending??false,extra:options?.binding??null});
     const userId=context.user?.userId??'public';const encoded=context.query.get('cursor');let after:string|null=null;
     if(encoded) {
-      if(!/^\d{1,12000}$/.test(encoded))fail('invalid_request','Page cursor is invalid.');
-      try {let hex=BigInt(encoded).toString(16);if(hex.length%2)hex='0'+hex;const cursor=cursorSchema.parse(services.decrypt(Buffer.from(hex,'hex').toString('base64url')));if(cursor.userId!==userId||cursor.binding!==binding)fail('invalid_request','Cursor belongs to different filters or principal.');if(cursor.expiresAtMs<=services.now())fail('expired','Page cursor expired.');after=cursor.after;}catch(error){if(error instanceof Error&&error.name==='ApiError')throw error;fail('invalid_request','Page cursor is invalid.');}
+      if(!/^\d{1,78}$/.test(encoded))fail('invalid_request','Page cursor is invalid.');
+      try {
+        const bytes=Buffer.from(BigInt(encoded).toString(16).padStart(64,'0'),'hex');
+        if(bytes.length!==32)fail('invalid_request','Page cursor is invalid.');
+        const cursorId=bytes.subarray(0,16).toString('hex');const expected=Buffer.from(services.mutations.digest({cursorId}).slice(0,32),'hex');
+        if(!timingSafeEqual(bytes.subarray(16),expected))fail('invalid_request','Page cursor signature is invalid.');
+        const record=services.store.get<{id:string;value:string;expiresAtMs:number}>('pageCursors',cursorId);if(!record)fail('expired','Page cursor expired.');
+        const cursor=cursorSchema.parse(services.decrypt(record.value));
+        if(cursor.userId!==userId||cursor.binding!==binding)fail('invalid_request','Cursor belongs to different filters or principal.');
+        if(cursor.expiresAtMs<=services.now())fail('expired','Page cursor expired.');after=cursor.after;
+      }catch(error){if(error instanceof Error&&error.name==='ApiError')throw error;fail('invalid_request','Page cursor is invalid.');}
     }
     const key=options?.key??((value:T)=>{const shape=z.object({id:z.string(),createdAtMs:z.number().optional()}).passthrough().parse(value);return `${String(shape.createdAtMs??0).padStart(16,'0')}:${shape.id}`;});
     const ascending=options?.ascending??false;
     const sorted=[...values].sort((a,b)=>ascending?key(a).localeCompare(key(b)):key(b).localeCompare(key(a)));
     const remaining=after===null?sorted:sorted.filter(value=>ascending?key(value)>after!:key(value)<after!);
     const items=remaining.slice(0,limit);let nextCursor:string|null=null;
-    if(remaining.length>limit&&items.length) {const payload=services.encrypt({userId,binding,after:key(items[items.length-1]!),expiresAtMs:services.now()+86400000});nextCursor=BigInt('0x'+Buffer.from(payload,'base64url').toString('hex')).toString();}
+    if(remaining.length>limit&&items.length) {const cursorId=randomBytes(16).toString('hex');const expiresAtMs=services.now()+86400000;const value=services.encrypt({userId,binding,after:key(items[items.length-1]!),expiresAtMs});services.store.put('pageCursors',{id:cursorId,value,expiresAtMs});nextCursor=BigInt('0x'+cursorId+services.mutations.digest({cursorId}).slice(0,32)).toString();}
     return {items,nextCursor};
   };
   services.audit=(principal,action,targetId,outcome,details={},requestId=services.id('req'))=>{
@@ -70,7 +80,8 @@ export function installHelpers(services:BackendServices):void {
     }else {if(!botId||!conversationId||!entryId)fail('internal_error','Notification navigation target is required.',false);target={kind:'entry',botId,conversationId,taskConversationId:services.store.get<P.Conversation>('conversations',conversationId)?.kind==='task'?conversationId:null,entryId};const params=new URLSearchParams({conversationId,entryId});if(target.taskConversationId)params.set('taskConversationId',target.taskConversationId);deepLink=`lemonbot://workspace/${encodeURIComponent(workspaceId)}/bot/${encodeURIComponent(botId)}?${params}`;}
     const notification=services.resource('notification',{userId,conversationId,botId,entryId,kind:parsed.kind,title:parsed.title,body:parsed.body,requestId:parsed.requestId??null,readAtMs:null,dismissedAtMs:null,target,deepLink});
     services.store.put('notifications',notification);services.events.emit('notification.upserted',notification,{userIds:[userId]});
-    void services.integrations.emitProviderNotifications(notification).catch(()=>{services.audit(null,'notification.delivery',notification.id,'failed');});
+    const deliver=()=>{void services.integrations.emitProviderNotifications(notification).catch(()=>{services.audit(null,'notification.delivery',notification.id,'failed');});};
+    if(services.store instanceof Store)services.store.afterCommit(deliver);else deliver();
     return notification;
   });
 }

@@ -54,8 +54,9 @@ export function createMutationService(services:BackendServices,key:Uint8Array):M
       pending.set(identity,promise);
       return await promise;
     },
-    preview(principal:Principal,target,action,name,effects:string[],affected:ScopeEffect[]=[],binding:unknown=null):Confirmation {
-      const token=services.id('confirm'); const expiresAtMs=services.now()+300000;
+    preview(principal:Principal,target,action,name,effects:string[],affected:ScopeEffect[]=[],binding:unknown=null,expiresInMs=300000):Confirmation {
+      const ttl=z.number().int().min(1000).max(action==='memory_import'?600000:300000).parse(expiresInMs);
+      const token=services.id('confirm'); const expiresAtMs=services.now()+ttl;
       db.query('INSERT INTO confirmations(token_digest,user_id,target_id,revision,action,name,binding,expires_at_ms) VALUES(?,?,?,?,?,?,?,?)').run(digest(token),principal.userId,target.id,target.revision,action,name,digest(binding),expiresAtMs);
       return {confirmationToken:token,revision:target.revision,confirmName:name,expiresAtMs,effects,affected};
     },
