@@ -1,9 +1,10 @@
 import { describe, expect, test } from 'bun:test';
 import type * as P from '../../../contracts/protocol';
-import { composeEffectivePolicy, defaultGovernance, type PolicyCompositionInput } from '../../src/enterprise/policy';
+import { composeEffectivePolicy, createPolicyServices, defaultGovernance, type PolicyCompositionInput } from '../../src/enterprise/policy';
+import type { BackendServices, Principal } from '../../src/core/services';
 const resource = { revision: 1, createdAtMs: 1, updatedAtMs: 1 };
 const group: P.DirectoryGroup = { ...resource, id: 'g', name: 'Engineering', externalId: null, source: 'scim', memberUserIds: ['u'] };
-const groupPolicy: P.GroupPolicy = { ...resource, id: 'gp', directoryGroupId: 'g', productAccess: true, defaultBotIds: [], capabilityModes: { shell: 'allow' }, requiredRuleIds: [], localExecutionCeiling: 'allow', allowEgress: true, allowSudo: true, networkPolicyId: null, reviewExempt: true };
+const groupPolicy: P.GroupPolicy = { ...resource, id: 'gp', directoryGroupId: 'g', productAccess: true, capabilityModes: { shell: 'allow' }, requiredRuleIds: [], localExecutionCeiling: 'allow', allowEgress: true, allowSudo: true, networkPolicyId: null, reviewExempt: true };
 function fixture(changes: Partial<PolicyCompositionInput> = {}): PolicyCompositionInput {
   return { userId: 'u', botId: 'b', machineId: 'm', workspaceEnabled: true, memberEnabled: true, governance: { ...defaultGovernance, allowSudo: true, allowEgress: true }, policies: { revision: 1, publicTemplates: false, allowedMcpOrigins: null, localExecutionCeiling: 'ask', actionRecording: false, auditRetentionDays: 90, rules: [] }, groups: [group], groupPolicies: [groupPolicy], rules: [], networkPolicies: [], ...changes };
 }
@@ -43,4 +44,42 @@ describe('effective policy composition', () => {
     expect(composeEffectivePolicy(base).networkPolicies.map(item => item.id)).toEqual(['wn']);
     expect(composeEffectivePolicy({ ...base, governance: { ...base.governance, lockNetworkForGroups: false } }).networkPolicies.map(item => item.id)).toEqual(['gn']);
   });
+});
+
+function serviceFixture() {
+  const input = fixture();
+  const bot = { id: 'b', ownerUserId: 'u', machineId: 'm' } as P.Bot;
+  const rows: Record<string, unknown[]> = { directoryGroups: input.groups, groupPolicies: input.groupPolicies, policyRules: input.rules, networkPolicies: input.networkPolicies };
+  const metadata: Record<string, unknown> = { workspaceId: 'w', policies: input.policies, governance: input.governance };
+  const services = {
+    store: {
+      metadata: (key: string) => metadata[key] ?? null,
+      get: (collection: string) => collection === 'workspaces' ? { enabled: true } : null,
+      list: (collection: string) => rows[collection] ?? [],
+    },
+    // Deliberately permissive legacy authorization: policy must enforce ownership independently.
+    auth: { bot: () => bot, member: () => ({ enabled: true }) },
+  } as unknown as BackendServices;
+  const owner: Principal = { kind: 'user', id: 'u', userId: 'u', workspaceId: 'w', role: 'member', sessionId: null, deviceId: null, botId: null };
+  return { services, rows, owner };
+}
+
+test('owner bot policy retains personal choices and mandatory group rules', async () => {
+  const f = serviceFixture();
+  f.rows.policyRules = [rule('personal', 'auto_review', { ownerUserId: 'u' }), rule('mandatory', 'ask_first', { required: true })];
+  const policy = await createPolicyServices(f.services).effectivePolicy(f.owner, 'b');
+  expect(policy.userId).toBe('u');
+  expect(policy.directoryGroupIds).toEqual(['g']);
+  expect(policy.rules.find(item => item.category === 'shell')).toMatchObject({ id: 'mandatory', mode: 'ask_first', required: true });
+  f.rows.policyRules = [rule('personal', 'auto_review', { ownerUserId: 'u' })];
+  expect((await createPolicyServices(f.services).effectivePolicy(f.owner, 'b')).rules.find(item => item.category === 'shell')?.mode).toBe('auto_review');
+});
+
+test('legacy visibility and grants cannot authorize another actor bot policy, including administrators', async () => {
+  const f = serviceFixture();
+  for (const role of ['member', 'admin', 'owner'] as const) {
+    const stranger = { ...f.owner, id: 'other', userId: 'other', role };
+    await expect(createPolicyServices(f.services).effectivePolicy(stranger, 'b')).rejects.toMatchObject({ code: 'policy_denied' });
+    await expect(createPolicyServices(f.services).requiredNetworkPolicies(stranger, 'b')).rejects.toMatchObject({ code: 'policy_denied' });
+  }
 });
