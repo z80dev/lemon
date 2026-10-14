@@ -450,7 +450,7 @@ async function resetBot(s: BackendServices, c: RequestContext, bot: P.Bot, input
       }
       const audience = botAudience(s, bot);
       s.store.setMetadata(`botMcp:${bot.id}`, null); s.store.remove('bots', bot.id); updateMachineBots(s, bot.machineId, bot.id, false); s.events.emit('bot.deleted', { id: bot.id, deleted: true }, { userIds: audience });
-    } else { if (scopes.includes('conversations')) { const conversation = await s.invoke<P.Conversation>(p, 'POST', '/v1/conversations', { clientNonce: s.id('nonce'), kind: bot.visibility === 'team' ? 'team_dm' : 'dm', botIds: [bot.id], name: bot.name }, { botLifecycle: { botId: bot.id, userId: p.userId, action: 'reset' } }); changed = s.update(s.store.require<P.Bot>('bots', bot.id), { mainConversationId: conversation.id }); } saveBot(s, changed); }
+    } else { if (scopes.includes('conversations')) { const conversation = await s.invoke<P.Conversation>(p, 'POST', '/v1/conversations', { clientNonce: s.id('nonce'), kind: bot.visibility === 'team' ? 'team_dm' : 'dm', botIds: [bot.id], name: bot.name }, { botLifecycle: { botId: bot.id, userId: p.userId, action: 'reset' } }); changed = s.update(s.store.require<P.Bot>('bots', bot.id), { mainConversationId: conversation.id }); } await configureNativeFollowupAdmission(s, changed); saveBot(s, changed); }
     s.audit(p, remove ? 'bot.delete' : 'bot.reset', bot.id, 'succeeded');
     return { bot: remove ? changed : projected(s, p, changed), removedIds, retainedScopes: allScopes.filter(scope => !scopes.includes(scope)), status: 'completed' };
   });
