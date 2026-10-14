@@ -1224,26 +1224,27 @@ defmodule CodingAgent.ExecutionNode.Worker do
   end
 
   defp native_controller_request(socket_module, socket, method, params) do
-    with {:ok, params} <-
-           LemonCore.JSONPayload.round_trip(params, LemonCore.ToolPolicy.execution_json_opts()) do
-      ref = make_ref()
-      socket_module.request(socket, method, params, {:native_reply, self(), ref}, 30_000)
+    case LemonCore.JSONPayload.round_trip(params, LemonCore.ToolPolicy.execution_json_opts()) do
+      {:ok, params} ->
+        ref = make_ref()
+        socket_module.request(socket, method, params, {:native_reply, self(), ref}, 30_000)
 
-      receive do
-        {:native_controller_reply, ^ref, {:ok, payload}} ->
-          {:ok, payload}
+        receive do
+          {:native_controller_reply, ^ref, {:ok, payload}} ->
+            {:ok, payload}
 
-        {:native_controller_reply, ^ref, {:error, reason}}
-        when reason in [:timeout, :disconnected] ->
-          {:error, :outcome_unknown}
+          {:native_controller_reply, ^ref, {:error, reason}}
+          when reason in [:timeout, :disconnected] ->
+            {:error, :outcome_unknown}
 
-        {:native_controller_reply, ^ref, {:error, _}} ->
-          {:error, :native_admission_unavailable}
-      after
-        31_000 -> {:error, :outcome_unknown}
-      end
-    else
-      _ -> {:error, :invalid_native_request}
+          {:native_controller_reply, ^ref, {:error, _}} ->
+            {:error, :native_admission_unavailable}
+        after
+          31_000 -> {:error, :outcome_unknown}
+        end
+
+      _ ->
+        {:error, :invalid_native_request}
     end
   catch
     _, _ -> {:error, :native_admission_unavailable}

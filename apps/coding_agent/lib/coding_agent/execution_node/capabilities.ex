@@ -13,24 +13,26 @@ defmodule CodingAgent.ExecutionNode.Capabilities do
     measured_at = System.system_time(:millisecond)
     cwd = Keyword.get(opts, :default_cwd, System.user_home!())
 
-    with {:ok, catalog} <- probe.tool_names(cwd, opts) do
-      items =
-        [
-          files(probe, catalog, opts),
-          shell(probe, catalog),
-          browser(probe, catalog),
-          connectors(probe)
-        ] ++ desktop(os, probe, catalog)
+    case probe.tool_names(cwd, opts) do
+      {:ok, catalog} ->
+        items =
+          [
+            files(probe, catalog, opts),
+            shell(probe, catalog),
+            browser(probe, catalog),
+            connectors(probe)
+          ] ++ desktop(os, probe, catalog)
 
-      {:ok,
-       %{
-         "os" => Atom.to_string(os),
-         "measuredAtMs" => measured_at,
-         "stale" => Enum.any?(items, & &1["stale"]),
-         "items" => Enum.map(items, &Map.put(&1, "measuredAtMs", measured_at))
-       }}
-    else
-      _ -> {:error, :capability_inspection_unavailable}
+        {:ok,
+         %{
+           "os" => Atom.to_string(os),
+           "measuredAtMs" => measured_at,
+           "stale" => Enum.any?(items, & &1["stale"]),
+           "items" => Enum.map(items, &Map.put(&1, "measuredAtMs", measured_at))
+         }}
+
+      _ ->
+        {:error, :capability_inspection_unavailable}
     end
   rescue
     _ -> {:error, :capability_inspection_unavailable}

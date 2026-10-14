@@ -86,17 +86,19 @@ defmodule CodingAgent.ExecutionNode.HostIO do
   end
 
   defp dispatch("node.secrets.receipt", args, opts) do
-    with {:ok, receipt} <- Secrets.receipt(args["operationId"], secret_opts(opts)) do
-      {:ok,
-       %{
-         "nodeId" => receipt.node_id,
-         "operationId" => receipt.operation_id,
-         "status" => receipt.status,
-         "name" => receipt.name,
-         "currentBindingMatches" => receipt.current_binding_matches
-       }}
-    else
-      {:error, reason} -> {:error, secret_error(reason)}
+    case Secrets.receipt(args["operationId"], secret_opts(opts)) do
+      {:ok, receipt} ->
+        {:ok,
+         %{
+           "nodeId" => receipt.node_id,
+           "operationId" => receipt.operation_id,
+           "status" => receipt.status,
+           "name" => receipt.name,
+           "currentBindingMatches" => receipt.current_binding_matches
+         }}
+
+      {:error, reason} ->
+        {:error, secret_error(reason)}
     end
   end
 
