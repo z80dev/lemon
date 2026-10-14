@@ -12,6 +12,7 @@ import { effectiveBotGrants } from '../core/experiences';
 import { cancelConnectorConsents, cancelGate } from '../core/gates';
 import { baseBotMcpConfig, syncBotConnectorRevocation } from '../core/bots';
 import { revokeOAuthCompletion, reconcileOAuthRevocation, type OAuthRevocationReceipt } from './oauth-revocation';
+import { effectiveInvocationAudience } from '../runtime/runs';
 
 const nonce = z.string().regex(/^[A-Za-z0-9_-]{16,128}$/);
 const revision = z.number().int().positive().max(Number.MAX_SAFE_INTEGER);
@@ -313,10 +314,17 @@ export function createConnectorServices(services: BackendServices) {
     if (!conversation.botIds.includes(bot.id) || actor.kind === 'bot' && actor.botId !== bot.id) fail('forbidden', 'Connector invocation does not match the authorized Bot and conversation.');
     const connector = services.store.require<P.Connector>('connectors', input.connectorId);
     if (connector.botId !== bot.id || connector.state !== 'connected' || details(connector.id).provisionState !== 'acknowledged') fail('policy_denied', 'Connector is not provisioned and connected for this Bot.');
+    const productRunId = services.store.metadata<string>(`nativeRunProduct:${input.operationId}`);
+    const admitted = services.store.metadata<string[]>(`invocationConnectors:${input.operationId}`);
+    const epochs = productRunId ? services.store.metadata<{ connectorId: string; epoch: number }[]>(`runConnectorEpochs:${productRunId}`) : null;
+    if (!productRunId || !admitted?.includes(connector.id) || epochs?.find(value => value.connectorId === connector.id)?.epoch !== (services.store.metadata<number>(`connectorEpoch:${connector.id}`) ?? 0)) fail('policy_denied', 'Connector authority was not admitted for this fixed invocation, or has been revoked. Start a newly authorized invocation.');
+    const run = services.store.require<P.Run>('runs', productRunId);
+    if (run.botId !== bot.id || ['succeeded', 'failed', 'cancelled'].includes(run.status) || effectiveInvocationAudience(services, actor, services.auth.conversation(actor, run.conversationId), run.id).id !== conversation.id) fail('forbidden', 'Connector access must match the initiating invocation and its actual response audience.');
     assertConnectorPolicy(connector);
     const expiresAtMs = details(connector.id).oauthExpiresAtMs;
     if (expiresAtMs !== null && expiresAtMs <= services.now()) fail('expired', 'Connector OAuth credential has expired.');
     const grants = await connectorGrants(actor, bot);
+    if (services.store.require<P.Connector>('connectors', connector.id).revision !== connector.revision || epochs?.find(value => value.connectorId === connector.id)?.epoch !== (services.store.metadata<number>(`connectorEpoch:${connector.id}`) ?? 0)) fail('policy_denied', 'Connector authority changed during invocation authorization.');
     destination(connector);
     const level = grants.find(grant => grant.capabilityId === `connector:${connector.id}`)?.effectiveLevel ?? 'off';
     if (!enabled(connector, level).includes(input.toolName)) fail('policy_denied', 'Connector tool is disabled by its explicit tool or capability grant.');
