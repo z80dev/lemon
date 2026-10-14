@@ -1,5 +1,6 @@
 import { isIP } from 'node:net';
 import { posix } from 'node:path';
+import { StringDecoder } from 'node:string_decoder';
 import { z } from 'zod';
 import type * as P from '../../../contracts/protocol';
 import type { BackendServices, Principal, RequestContext, Route } from '../core/services';
@@ -23,7 +24,7 @@ const update = mutation.extend({ revision: z.number().int().positive().max(Numbe
 const machineIds = z.array(id).min(1).max(1000).refine(v => new Set(v).size === v.length);
 const action = z.enum(['update', 'recover', 'restart_worker', 'stop_worker', 'suspend', 'recreate_environment', 'delete_environment']);
 const command = z.object({ argv: z.array(z.string().min(1).max(32768)).min(1).max(128), cwd: z.string().startsWith('/'), timeoutMs: z.number().int().min(1000).max(1800000), probeArgv: z.array(z.string().min(1).max(32768)).min(1).max(128) }).strict();
-const entry = z.object({ id, setupScript: z.string().min(1).max(262144), checkScript: z.string().min(1).max(262144).nullable(), secretNames: z.array(z.string().regex(/^[A-Za-z_][A-Za-z0-9_]{0,127}$/)).max(100).refine(v => new Set(v).size === v.length), timeoutMs: z.number().int().min(1000).max(1800000) }).strict();
+const entry = z.object({ id, setupScript: z.string().min(1).max(262144), checkScript: z.string().min(1).max(262144).nullable(), secretNames: z.array(z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_.-]{0,255}$/)).max(100).refine(v => new Set(v).size === v.length), timeoutMs: z.number().int().min(1000).max(1800000) }).strict();
 const entries = z.array(entry).min(1).max(100).refine(v => new Set(v.map(e => e.id)).size === v.length);
 const reviewed = z.object({ name: z.string().min(1).max(120), directoryGroupId: id.nullable(), machineIds, entries }).strict();
 export type ReviewedSetup = z.infer<typeof reviewed>;
@@ -162,6 +163,7 @@ export function createHostServices(s: BackendServices, options: HostOptions = {}
     const input = s.decrypt<Record<string, unknown>>(j.encryptedInput);
     const json = JSON.stringify({ ...input, version: 1, operationId: j.id, machineId: j.machineId, configDigest: j.configDigest, inputDigest: j.inputDigest, probe });
     let shellId: string | null = null, output = '', bytes = 0, seq = 0, receipt: Receipt | null = null, exited = false;
+    const decoder = new StringDecoder('utf8');
     const early: { event: string; payload: unknown }[] = [];
     let settled = false;
     let settle!: (result: Receipt | null) => void;
@@ -176,7 +178,7 @@ export function createHostServices(s: BackendServices, options: HostOptions = {}
         const data = Buffer.from(chunk.data.dataBase64, 'base64');
         bytes += data.length;
         if (bytes > 1048576) { settle(null); return; }
-        output += data.toString('utf8');
+        output += decoder.write(data);
         let newline: number;
         while ((newline = output.indexOf('\n')) >= 0) {
           const line = output.slice(0, newline).trim(); output = output.slice(newline + 1);

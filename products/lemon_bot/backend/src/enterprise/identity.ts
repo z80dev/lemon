@@ -4,6 +4,19 @@ import type * as P from '../../../contracts/protocol';
 import type { BackendServices, Principal, Route } from '../core/services';
 import { fail } from '../core/errors';
 import { equalSecret, secureToken, tokenDigest } from './tokens';
+import { assertActiveAccount } from '../integrations/common';
+import { lookup } from 'node:dns/promises';
+import { isPublicAddress } from '../integrations/common';
+function approveOIDC(s: BackendServices, p: P.OIDCProvider, origin = new URL(p.issuer).origin): void {
+  if (!(s.config.operator.oidcAllowedOrigins ?? []).includes(origin) || !(s.config.operator.oidcClientApprovals ?? []).some(value => value.origin === origin && value.clientId === p.clientId && value.clientSecretRef === p.clientSecretRef)) fail('capability_unavailable', 'The server operator must approve this exact OIDC HTTPS origin, clientId and serverSecret reference.');
+}
+async function oidcTransport(s: BackendServices, p: P.OIDCProvider, endpoint = p.issuer): Promise<void> {
+  const url = new URL(endpoint); approveOIDC(s, p, url.origin);
+  if ((s.config.operator.oidcApprovedPrivateOrigins ?? []).includes(url.origin)) return;
+  const addresses = await lookup(url.hostname, { all: true }).catch(() => []);
+  if (!addresses.length) fail('upstream_unavailable', 'The approved identity provider cannot be resolved.');
+  if (addresses.some(value => !isPublicAddress(value.address))) fail('policy_denied', 'Private identity-provider addresses require explicit operator oidcApprovedPrivateOrigins.');
+}
 
 const nonce = z.string().regex(/^[A-Za-z0-9_-]{16,128}$/);
 const id = z.string().min(1).max(256);
@@ -22,6 +35,7 @@ interface Flow {
 }
 export interface VerifiedClaims { issuer: string; subject: string; email: string; displayName: string; groups: string[]; authTime: number | null }
 interface ProviderSession { id: string; userId: string; providerId: string; encryptedIDToken: string }
+export interface OIDCExchangeOperation { id: string; userId: string; providerId: string; sessionId: string; state: 'pending' | 'dispatching' | 'issued' | 'failed' | 'outcome_unknown'; createdAtMs: number }
 interface ManagedIdentity { id: string; requireSSO: boolean; providerIds: string[] }
 
 function parse<T>(schema: z.ZodType<T>, body: unknown): T {
@@ -31,15 +45,19 @@ function provider(services: BackendServices, providerId: string, enabled = true)
   const result = services.store.get<P.OIDCProvider>('oidcProviders', providerId);
   if (!result) fail('not_found', 'Identity provider not found.');
   if (enabled && !result.enabled) fail('policy_denied', 'Identity provider is disabled.');
+  approveOIDC(services, result);
   return result;
 }
-function pinnedUrl(value: string, issuer: string): URL {
+function pinnedUrl(value: string, issuer: string, services?: BackendServices, provider?: P.OIDCProvider): URL {
   let url: URL; let origin: URL;
   try { url = new URL(value); origin = new URL(issuer); } catch { fail('capability_unavailable', 'Identity provider endpoint is invalid.'); }
-  if (url.protocol !== 'https:' || url.origin !== origin.origin || url.username || url.password || url.hash) fail('capability_unavailable', 'Identity endpoints must use the approved HTTPS issuer origin.');
+  if (url.protocol !== 'https:' || url.username || url.password || url.hash || !services && url.origin !== origin.origin) fail('capability_unavailable', 'Identity endpoints must use explicitly operator-approved HTTPS origins.');
+  if (services && provider) approveOIDC(services, provider, url.origin);
   return url;
 }
-async function providerFetch(url: URL, init?: RequestInit): Promise<unknown> {
+async function providerFetch(url: URL, init?: RequestInit, services?: BackendServices, provider?: P.OIDCProvider, beforeDispatch?: () => void): Promise<unknown> {
+  if (services && provider) await oidcTransport(services, provider, url.href);
+  beforeDispatch?.();
   let response: Response;
   try { response = await fetch(url, { ...init, redirect: 'error', signal: AbortSignal.timeout(10000) }); } catch { fail('upstream_unavailable', 'Identity provider could not be reached.'); }
   if (!response.ok) fail('upstream_unavailable', 'Identity provider rejected the request.');
@@ -51,25 +69,25 @@ async function providerFetch(url: URL, init?: RequestInit): Promise<unknown> {
   } catch { fail('upstream_unavailable', 'Identity provider response was interrupted or exceeded its size bound.'); }
   try { return JSON.parse(Buffer.concat(chunks).toString('utf8')) as unknown; } catch { fail('upstream_unavailable', 'Identity provider returned malformed JSON.'); }
 }
-async function discover(p: P.OIDCProvider): Promise<Discovery> {
-  const endpoint = pinnedUrl(`${p.issuer.replace(/\/$/, '')}/.well-known/openid-configuration`, p.issuer);
-  const parsed = discoverySchema.safeParse(await providerFetch(endpoint));
+async function discover(services: BackendServices, p: P.OIDCProvider): Promise<Discovery> {
+  const endpoint = pinnedUrl(`${p.issuer.replace(/\/$/, '')}/.well-known/openid-configuration`, p.issuer, services, p);
+  const parsed = discoverySchema.safeParse(await providerFetch(endpoint, undefined, services, p));
   if (!parsed.success || parsed.data.issuer !== p.issuer) fail('capability_unavailable', 'Discovery issuer does not match the registered issuer.');
   const d = parsed.data;
-  for (const endpoint of [d.authorization_endpoint, d.token_endpoint, d.jwks_uri, ...(d.end_session_endpoint ? [d.end_session_endpoint] : [])]) pinnedUrl(endpoint, p.issuer);
+  for (const endpoint of [d.authorization_endpoint, d.token_endpoint, d.jwks_uri, ...(d.end_session_endpoint ? [d.end_session_endpoint] : [])]) pinnedUrl(endpoint, p.issuer, services, p);
   if (d.code_challenge_methods_supported && !d.code_challenge_methods_supported.includes('S256')) fail('capability_unavailable', 'Identity provider must support S256 PKCE.');
   return d;
 }
 
 /** Verify the JWT, never trust a decoded token or email without its verified claim. */
-export async function verifyOIDCToken(token: string, p: P.OIDCProvider, d: Discovery, expectedNonce: string, now: number, flowStarted: number, purpose: P.OIDCStart['purpose']): Promise<VerifiedClaims> {
+export async function verifyOIDCToken(token: string, p: P.OIDCProvider, d: Discovery, expectedNonce: string, now: number, flowStarted: number, purpose: P.OIDCStart['purpose'], services?: BackendServices): Promise<VerifiedClaims> {
   if (token.length > 131072) fail('unauthenticated', 'Invalid identity token.');
   const parts = token.split('.'); if (parts.length !== 3 || parts.some(part => !/^[A-Za-z0-9_-]+$/.test(part))) fail('unauthenticated', 'Invalid identity token.');
   let header: Record<string, unknown>; let claims: Record<string, unknown>;
   try { header = JSON.parse(Buffer.from(parts[0]!, 'base64url').toString()) as Record<string, unknown>; claims = JSON.parse(Buffer.from(parts[1]!, 'base64url').toString()) as Record<string, unknown>; } catch { fail('unauthenticated', 'Invalid identity token.'); }
   if (!header || typeof header !== 'object' || !claims || typeof claims !== 'object' || typeof header.alg !== 'string' || !['RS256', 'PS256', 'ES256', 'EdDSA'].includes(header.alg) || header.crit !== undefined || header.jku !== undefined || header.jwk !== undefined || header.x5u !== undefined) fail('unauthenticated', 'Unsupported identity token signature.');
   if (d.id_token_signing_alg_values_supported && !d.id_token_signing_alg_values_supported.includes(header.alg)) fail('unauthenticated', 'Unexpected identity token signature.');
-  const jwks = z.object({ keys: z.array(z.record(z.string(), z.unknown())).max(100) }).safeParse(await providerFetch(pinnedUrl(d.jwks_uri, p.issuer)));
+  const jwks = z.object({ keys: z.array(z.record(z.string(), z.unknown())).max(100) }).safeParse(await providerFetch(pinnedUrl(d.jwks_uri, p.issuer, services, p), undefined, services, p));
   if (!jwks.success) fail('upstream_unavailable', 'Identity signing keys are invalid.');
   const kty = header.alg === 'ES256' ? 'EC' : header.alg === 'EdDSA' ? 'OKP' : 'RSA';
   const keys = jwks.data.keys.filter(key => (header.kid === undefined || key.kid === header.kid) && key.kty === kty && (key.use === undefined || key.use === 'sig') && (key.alg === undefined || key.alg === header.alg) && (key.key_ops === undefined || Array.isArray(key.key_ops) && key.key_ops.includes('verify')) && (header.alg !== 'ES256' || key.crv === 'P-256') && (header.alg !== 'EdDSA' || key.crv === 'Ed25519'));
@@ -93,6 +111,7 @@ function checkedFlow(services: BackendServices, flowId: string): Flow {
   const flow = services.store.get<Flow>('oidcFlows', flowId); if (!flow) fail('unauthenticated', 'Invalid identity flow.');
   if (flow.expiresAtMs <= services.now()) fail('expired', 'Identity flow expired.');
   const p = provider(services, flow.providerId); if (p.revision !== flow.providerRevision) fail('expired', 'Identity provider changed; start a new flow.');
+  if (flow.userId) assertActiveAccount(services, flow.userId);
   return flow;
 }
 function completion(services: BackendServices, body: P.OIDCComplete, user: Principal | null, purpose?: 'link'): Flow & { claims: VerifiedClaims } {
@@ -106,8 +125,10 @@ function completion(services: BackendServices, body: P.OIDCComplete, user: Princ
     return { ...flow, claims: flow.claims };
   });
 }
-function linked(services: BackendServices, claims: VerifiedClaims): P.IdentityLink | undefined {
-  return services.store.list<P.IdentityLink>('identityLinks').find(link => link.issuer === claims.issuer && link.subject === claims.subject);
+function linked(services: BackendServices, claims: VerifiedClaims, externalEffect = false): P.IdentityLink | undefined {
+  const result = services.store.list<P.IdentityLink>('identityLinks').find(link => link.issuer === claims.issuer && link.subject === claims.subject);
+  if (result) assertActiveAccount(services, result.userId, externalEffect);
+  return result;
 }
 function reviewedSubject(services: BackendServices, providerId: string, subject: string): string | null {
   const mappings = z.array(z.strictObject({ providerId: id, subject: id, userId: id })).safeParse(services.config.operatorExtras?.oidcSubjectMappings ?? []);
@@ -142,7 +163,7 @@ function synchronize(services: BackendServices, userId: string, p: P.OIDCProvide
   services.store.put('managedIdentities', { id: userId, requireSSO: (managed?.requireSSO ?? false) || p.requireSSO, providerIds: [...new Set([...(managed?.providerIds ?? []), p.id])] });
 }
 export function createProvisionedUser(services: BackendServices, email: string, displayName: string, role: 'member' | 'admin' = 'member'): P.User {
-  const user = services.resource('user', { email, displayName, avatarAttachmentId: null, preferences: { appearance: 'system' as const, language: null, timezone: 'UTC', botColors: true, threadsBesideChat: false, voice: { voiceId: 'default', speed: 1, language: null }, celebrationsEnabled: false }, notifications: { enabled: true, sound: true, previews: true, completed: true, needsInput: true } });
+  const user = services.resource('user', { email, displayName, avatarAttachmentId: null, preferences: { appearance: 'system' as const, language: null, timezone: 'UTC', botColors: true, threadsBesideChat: false, voice: { voiceId: 'default', speed: 1, language: null }, celebrationsEnabled: true }, notifications: { enabled: true, sound: true, previews: true, completed: true, needsInput: true } });
   services.store.put('users', user);
   services.store.put('members', services.resource('member', { userId: user.id, displayName, email, role, enabled: true }));
   return user;
@@ -165,21 +186,26 @@ function resolveLogin(services: BackendServices, p: P.OIDCProvider, claims: Veri
     user = createProvisionedUser(services, claims.email, claims.displayName, invite.role);
     services.store.put('invites', services.update(invite, { status: 'accepted' }));
   }
+  assertActiveAccount(services, user.id);
   const link = services.resource('identity', { userId: user.id, providerId: p.id, issuer: p.issuer, subject: claims.subject, lastUsedAtMs: services.now() }); services.store.put('identityLinks', link); return link;
 }
 async function endProviderSessions(services: BackendServices, userId: string, providerId?: string): Promise<void> {
   for (const session of services.store.list<ProviderSession>('oidcProviderSessions', value => value.userId === userId && (!providerId || value.providerId === providerId))) {
-    services.store.remove('oidcProviderSessions', session.id);
     const p = services.store.get<P.OIDCProvider>('oidcProviders', session.providerId);
-    let outcome: 'unsupported' | 'succeeded' | 'failed' | 'outcome_unknown' = 'unsupported';
+    const receipt = { id: services.id('oidc_logout'), userId, providerId: session.providerId, sessionId: session.id, state: p?.endSessionEndpoint ? 'running' : 'failed', errorCode: p?.endSessionEndpoint ? null as string | null : 'capability_unavailable', updatedAtMs: services.now() };
+    services.store.put('oidcEndSessionReceipts', receipt); services.store.remove('oidcProviderSessions', session.id);
     if (p?.endSessionEndpoint) {
       try {
-        const url = pinnedUrl(p.endSessionEndpoint, p.issuer); url.searchParams.set('id_token_hint', services.decrypt<string>(session.encryptedIDToken)); url.searchParams.set('client_id', p.clientId);
+        const url = pinnedUrl(p.endSessionEndpoint, p.issuer, services, p); await oidcTransport(services, p, url.href); const destination = new URL(services.config.publicUrl);
+        url.searchParams.set('id_token_hint', services.decrypt<string>(session.encryptedIDToken)); url.searchParams.set('client_id', p.clientId); url.searchParams.set('post_logout_redirect_uri', destination.href); url.searchParams.set('state', receipt.id);
         const result = await fetch(url, { redirect: 'manual', signal: AbortSignal.timeout(10000) }); await result.body?.cancel();
-        outcome = result.ok ? 'succeeded' : result.status >= 400 && result.status < 500 ? 'failed' : 'outcome_unknown';
-      } catch { outcome = 'outcome_unknown'; }
+        const location = result.headers.get('location'); let confirmed = false;
+        if (location && [302, 303].includes(result.status)) { const target = new URL(location, p.endSessionEndpoint); confirmed = target.origin === destination.origin && target.pathname === destination.pathname && target.searchParams.get('state') === receipt.id && !target.searchParams.has('error'); }
+        receipt.state = confirmed ? 'completed' : result.status >= 400 && result.status < 500 ? 'failed' : 'outcome_unknown'; receipt.errorCode = confirmed ? null : 'upstream_unavailable';
+      } catch { receipt.state = 'outcome_unknown'; receipt.errorCode = 'upstream_unavailable'; }
     }
-    services.audit(null, 'identity.provider_end_session', userId, outcome === 'unsupported' ? 'succeeded' : outcome, { providerId: session.providerId, status: outcome });
+    receipt.updatedAtMs = services.now(); services.store.put('oidcEndSessionReceipts', receipt);
+    services.audit(null, 'identity.provider_end_session', userId, receipt.state === 'completed' ? 'succeeded' : receipt.state === 'outcome_unknown' ? 'outcome_unknown' : 'failed', { providerId: session.providerId, state: receipt.state, receiptId: receipt.id });
   }
 }
 /** Core must invoke requireSSO before password login/reauth and this hook on deprovision. */
@@ -203,6 +229,7 @@ export function createIdentityServices(services: BackendServices) {
       await services.auth.revokeUser(userId); services.gates.cancelUser(userId); await endProviderSessions(services, userId);
     },
     endProviderSessions: (userId: string) => endProviderSessions(services, userId),
+    observeProviderSessions(userId: string): boolean { return services.store.list<{ userId: string; state: string }>('oidcEndSessionReceipts', value => value.userId === userId).every(value => value.state === 'completed' || value.state === 'not_required'); },
     async reconcile(): Promise<void> {
       for (const flow of services.store.list<Flow>('oidcFlows')) if (flow.expiresAtMs <= services.now()) services.store.remove('oidcFlows', flow.id);
     },
@@ -212,14 +239,14 @@ export function createIdentityRoutes(services: BackendServices): Route[] {
   const identity = createIdentityServices(services);
   return [
     { method: 'GET', path: '/v1/auth/oidc/providers', auth: 'public', handler: () => services.store.list<P.OIDCProvider>('oidcProviders').map(({ id, name, enabled, requireSSO }) => ({ id, name, enabled, requireSSO })) },
-    { method: 'GET', path: '/v1/admin/oidc/providers', auth: 'owner', handler: context => services.page(context, services.store.list<P.OIDCProvider>('oidcProviders')) },
+    { method: 'GET', path: '/v1/admin/oidc/providers', auth: 'owner', handler: context => { const values = services.store.list<P.OIDCProvider>('oidcProviders'); for (const value of values) approveOIDC(services, value); return services.page(context, values); } },
     { method: 'POST', path: '/v1/admin/oidc/providers', auth: 'owner', status: 201, handler: async context => {
       const body = parse(createSchema, context.body); pinnedUrl(body.issuer, body.issuer);
       if (!services.config.operator.serverSecrets[body.clientSecretRef]) fail('capability_unavailable', 'Register the confidential client secret in operator serverSecrets.');
       if (!body.scopes.includes('openid') || !body.scopes.includes('email')) fail('invalid_request', 'OIDC scopes must include openid and email.');
       if (services.store.list<P.OIDCProvider>('oidcProviders').some(value => value.issuer === body.issuer && value.clientId === body.clientId)) fail('conflict', 'Identity provider already exists.');
       const p = services.resource('oidc_provider', { name: body.name, issuer: body.issuer, clientId: body.clientId, clientSecretRef: body.clientSecretRef, scopes: body.scopes, allowedEmailDomains: body.allowedEmailDomains.map(value => value.toLowerCase()), groupClaim: body.groupClaim ?? null, enabled: true, requireSSO: body.requireSSO, endSessionEndpoint: null as string | null });
-      const d = await discover(p); await services.secret(p.clientSecretRef); p.endSessionEndpoint = d.end_session_endpoint ?? null;
+      await oidcTransport(services, p); const d = await discover(services, p); await services.secret(p.clientSecretRef); p.endSessionEndpoint = d.end_session_endpoint ?? null;
       services.store.transaction(() => { if (services.store.list<P.OIDCProvider>('oidcProviders').some(value => value.issuer === p.issuer && value.clientId === p.clientId)) fail('conflict', 'Identity provider already exists.'); services.store.put('oidcProviders', p); services.audit(context.user, 'identity.provider_create', p.id, 'succeeded', undefined, context.requestId); }); return p;
     } },
     { method: 'PATCH', path: '/v1/admin/oidc/providers/:id', auth: 'owner', handler: context => services.store.transaction(() => {
@@ -236,14 +263,15 @@ export function createIdentityRoutes(services: BackendServices): Route[] {
     { method: 'POST', path: '/v1/auth/oidc/start', auth: 'optional', mutation: true, handler: async context => {
       const body = parse(startSchema, context.body); const p = provider(services, body.providerId);
       const user = context.user; if (body.purpose !== 'login' && (!user || user.kind !== 'user')) fail('unauthenticated', 'Sign in before reauthenticating or linking.');
+      await oidcTransport(services, p);
       let redirect: URL; try { redirect = new URL(body.redirectUri); } catch { fail('invalid_request', 'Invalid client redirect.'); }
       const web = redirect.origin === new URL(services.config.publicUrl).origin && ['https:', 'http:'].includes(redirect.protocol) && !redirect.username && !redirect.password && !redirect.hash;
       const native = body.redirectUri === 'lemonbot://auth/complete' && services.config.operator.oauthRedirectUris.includes(body.redirectUri);
       if ((!web && !native) || redirect.searchParams.has('completionCode') || redirect.searchParams.has('flowId')) fail('invalid_request', 'Client redirect is not allowlisted.');
       if (body.deviceId) { const device = services.store.get<P.Device>('devices', body.deviceId); if (!user || !device || device.userId !== user.userId) fail('forbidden', 'Device must belong to the current account.'); }
-      const d = await discover(p); const state = secureToken(); const verifier = secureToken();
+      const d = await discover(services, p); const state = secureToken(); const verifier = secureToken();
       const flow: Flow = { id: services.id('oidc_flow'), providerId: p.id, providerRevision: p.revision, issuer: p.issuer, clientId: p.clientId, discovery: d, redirectUri: body.redirectUri, codeChallenge: body.codeChallenge, purpose: body.purpose, userId: body.purpose === 'login' ? null : user!.userId, sessionId: body.purpose === 'login' ? null : user!.sessionId, deviceId: body.deviceId ?? null, createdAtMs: services.now(), expiresAtMs: services.now() + 600000, stateDigest: tokenDigest(state), nonce: secureToken(), encryptedVerifier: services.encrypt(verifier), status: 'pending', completionDigest: null, claims: null, encryptedIDToken: null };
-      const url = pinnedUrl(d.authorization_endpoint, p.issuer);
+      const url = pinnedUrl(d.authorization_endpoint, p.issuer, services, p);
       for (const [key, value] of Object.entries({ client_id: p.clientId, response_type: 'code', redirect_uri: `${services.config.publicUrl.replace(/\/$/, '')}/v1/auth/oidc/callback/${encodeURIComponent(p.id)}`, scope: p.scopes.join(' '), state, nonce: flow.nonce, code_challenge: Buffer.from(tokenDigest(verifier), 'hex').toString('base64url'), code_challenge_method: 'S256' })) url.searchParams.set(key, value);
       if (body.purpose === 'reauth') { url.searchParams.set('prompt', 'login'); url.searchParams.set('max_age', '0'); }
       services.store.put('oidcFlows', flow); return { id: flow.id, authorizationUrl: url.toString(), expiresAtMs: flow.expiresAtMs } satisfies P.OIDCFlow;
@@ -256,17 +284,33 @@ export function createIdentityRoutes(services: BackendServices): Route[] {
         if (current.status !== 'pending') fail('unauthenticated', 'Identity callback was already used.'); services.store.put('oidcFlows', { ...current, status: 'exchanging' }); return current;
       });
       if (query.error || !query.code) fail('unauthenticated', 'Provider authentication was not completed.');
+      const exchange: OIDCExchangeOperation | null = flow.userId ? { id: flow.id, userId: flow.userId, providerId: flow.providerId, sessionId: `oidc_pending:${flow.id}`, state: 'pending', createdAtMs: services.now() } : null;
+      if (exchange) services.store.put('oidcExchangeOperations', exchange);
+      try {
       const p = provider(services, flow.providerId); const secret = await services.secret(p.clientSecretRef);
+      await oidcTransport(services, p);
       const form = new URLSearchParams({ grant_type: 'authorization_code', code: query.code, redirect_uri: `${services.config.publicUrl.replace(/\/$/, '')}/v1/auth/oidc/callback/${encodeURIComponent(p.id)}`, code_verifier: services.decrypt<string>(flow.encryptedVerifier) });
       const methods = flow.discovery.token_endpoint_auth_methods_supported ?? ['client_secret_basic']; const headers: Record<string, string> = { 'content-type': 'application/x-www-form-urlencoded' };
       if (methods.includes('client_secret_basic')) headers.authorization = `Basic ${Buffer.from(`${encodeURIComponent(p.clientId)}:${encodeURIComponent(secret)}`).toString('base64')}`;
       else if (methods.includes('client_secret_post')) { form.set('client_id', p.clientId); form.set('client_secret', secret); }
       else fail('capability_unavailable', 'Provider requires an unsupported confidential client authentication method.');
-      const tokens = z.object({ id_token: z.string() }).safeParse(await providerFetch(pinnedUrl(flow.discovery.token_endpoint, p.issuer), { method: 'POST', headers, body: form })); if (!tokens.success) fail('unauthenticated', 'Provider did not return an identity token.');
-      const claims = await verifyOIDCToken(tokens.data.id_token, p, flow.discovery, flow.nonce, services.now(), flow.createdAtMs, flow.purpose);
+      if (flow.userId) assertActiveAccount(services, flow.userId);
+      const tokens = z.object({ id_token: z.string() }).safeParse(await providerFetch(pinnedUrl(flow.discovery.token_endpoint, p.issuer, services, p), { method: 'POST', headers, body: form }, services, p, () => { if (flow.userId) assertActiveAccount(services, flow.userId); if (exchange) services.store.put('oidcExchangeOperations', { ...exchange, state: 'dispatching' }); })); if (!tokens.success) fail('unauthenticated', 'Provider did not return an identity token.');
+      const claims = await verifyOIDCToken(tokens.data.id_token, p, flow.discovery, flow.nonce, services.now(), flow.createdAtMs, flow.purpose, services);
+      if (exchange) {
+        services.store.put('oidcProviderSessions', { id: exchange.sessionId, userId: exchange.userId, providerId: exchange.providerId, encryptedIDToken: services.encrypt(tokens.data.id_token) });
+        services.store.put('oidcExchangeOperations', { ...exchange, state: 'issued' });
+        if (services.store.metadata(`accountDeletion:${exchange.userId}`)) await endProviderSessions(services, exchange.userId, exchange.providerId);
+      }
+      if (flow.userId) assertActiveAccount(services, flow.userId, true);
+      linked(services, claims, true);
       const code = secureToken(); const location = new URL(flow.redirectUri); location.searchParams.set('flowId', flow.id); location.searchParams.set('completionCode', code);
       services.store.transaction(() => { checkedFlow(services, flow.id); services.store.put('oidcFlows', { ...flow, status: 'verified', completionDigest: tokenDigest(code), claims, encryptedVerifier: '', encryptedIDToken: services.encrypt(tokens.data.id_token) }); });
       return { status: 302, location: location.toString() } satisfies P.RedirectResponse;
+      } catch (error) {
+        if (exchange) { const current = services.store.get<OIDCExchangeOperation>('oidcExchangeOperations', exchange.id); if (current?.state !== 'issued') services.store.put('oidcExchangeOperations', { ...exchange, state: current?.state === 'pending' ? 'failed' : 'outcome_unknown' }); }
+        throw error;
+      }
     } },
     { method: 'POST', path: '/v1/auth/oidc/complete', auth: 'optional', mutation: true, handler: async context => {
       const body = parse(completeSchema, context.body); const flow = completion(services, body, context.user); const p = provider(services, flow.providerId);
@@ -282,6 +326,7 @@ export function createIdentityRoutes(services: BackendServices): Route[] {
       if (flow.purpose === 'reauth') return services.auth.issueReauth(link.userId);
       const result = await services.auth.session(link.userId, flow.deviceId);
       if (flow.encryptedIDToken) services.store.put('oidcProviderSessions', { id: result.session.id, userId: link.userId, providerId: p.id, encryptedIDToken: flow.encryptedIDToken });
+      if (flow.userId) { services.store.remove('oidcProviderSessions', `oidc_pending:${flow.id}`); services.store.remove('oidcExchangeOperations', flow.id); }
       services.audit(context.user, 'identity.login', link.userId, 'succeeded', { providerId: p.id }, context.requestId); return result;
     } },
     { method: 'GET', path: '/v1/auth/identities', auth: 'member', handler: context => services.page(context, services.store.list<P.IdentityLink>('identityLinks', link => link.userId === context.user!.userId)) },
@@ -301,7 +346,9 @@ export function createIdentityRoutes(services: BackendServices): Route[] {
         if ((!password && other.length === 0) || (identity.requireSSO(value.userId) && !other.some(link => services.store.get<P.OIDCProvider>('oidcProviders', link.providerId)?.enabled))) fail('policy_denied', 'Cannot remove the final login method or required SSO identity.');
         identity.consumeReauth(value.userId, body.reauthToken); services.store.remove('identityLinks', value.id); services.audit(context.user, 'identity.unlink', value.id, 'succeeded', undefined, context.requestId); return value;
       });
-      await services.auth.revokeUser(link.userId); await endProviderSessions(services, link.userId, link.providerId); return { id: link.id, deleted: true } satisfies P.Deleted;
+      const sessions = services.store.list<ProviderSession>('oidcProviderSessions', session => session.userId === link.userId && session.providerId === link.providerId);
+      for (const session of sessions) if (services.store.get<P.AuthSession>('authSessions', session.id)) await services.invoke(context.user!, 'DELETE', `/v1/auth/sessions/${encodeURIComponent(session.id)}`, { clientNonce: services.id('nonce') });
+      await endProviderSessions(services, link.userId, link.providerId); return { id: link.id, deleted: true } satisfies P.Deleted;
     } },
   ];
 }

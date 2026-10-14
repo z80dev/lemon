@@ -24,12 +24,15 @@ export function identityFixture() {
   let clock = Date.UTC(2026, 9, 14); let sequence = 0; const events: unknown[] = []; const revoked: string[] = []; const cancelled: string[] = [];
   const unavailable = (): never => { throw new Error('This test does not configure this boundary.'); };
   const operator: P.OperatorConfiguration = { version: 1, trustedFrontendOrigins: [], oauthRedirectUris: ['lemonbot://auth/complete'], serverSecrets: { oidc: { kind: 'env', name: 'OIDC_TEST_SECRET' } }, channelProviders: [], emailProviders: [], eventProviders: [{ id: 'github', source: 'github', signingSecretRef: 'sig', eventNames: ['push'], routineIds: [], principalUserId: 'owner', maxAgeMs: 300000 }], hostDrivers: [], xProvider: null, exportAllowedOrigins: [], requiredRuntimeDestinations: [], breakGlassOwnerUserId: null };
+  operator.oidcAllowedOrigins = ['https://idp.example'];
+  operator.oidcApprovedPrivateOrigins = ['https://idp.example'];
+  operator.oidcClientApprovals = [{ origin: 'https://idp.example', clientId: 'client', clientSecretRef: 'oidc' }];
   const services: BackendServices = {
     config: { publicUrl: 'https://product.example', controlUrl: 'wss://controller.example/ws', operatorToken: 'server-only', dataDir: '/private/test', host: '127.0.0.1', port: 4080, trustedOverlay: false, operator }, store,
     id: prefix => `${prefix ?? 'id'}_${++sequence}`, now: () => clock,
     resource<T extends object>(prefix: string, fields: T): T & P.Resource { return { ...fields, id: services.id(prefix), revision: 1, createdAtMs: clock, updatedAtMs: clock }; },
     update<T extends { revision: number; updatedAtMs: number }>(resource: T, changes: Partial<T>): T { return { ...resource, ...changes, revision: resource.revision + 1, updatedAtMs: clock }; },
-    page: (_context, items) => ({ items, nextCursor: null }), secret: async () => 'test-client-secret', encrypt: value => Buffer.from(JSON.stringify(value)).toString('base64'), decrypt: <T>(value: string): T => JSON.parse(Buffer.from(value, 'base64').toString()) as T,
+    page: (_context, items) => ({ items, nextCursor: null }), pageAfter: unavailable, secret: async () => 'test-client-secret', encrypt: value => Buffer.from(JSON.stringify(value)).toString('base64'), decrypt: <T>(value: string): T => JSON.parse(Buffer.from(value, 'base64').toString()) as T,
     events: { emit: (event, payload) => { const value = { type: 'event' as const, seq: String(++sequence), event, timestampMs: clock, payload }; events.push(value); return value as P.RealtimeEvent; }, cursor: () => String(sequence), earliestCursor: () => '1', replay: () => [], visible: () => true, subscribe: unavailable },
     auth: {
       authenticate: async () => null, user: userId => store.require<P.User>('users', userId), member: userId => { const member = store.list<P.Member>('members').find(value => value.userId === userId); if (!member) throw new ApiError('forbidden', 'No membership.'); return member; }, requireRole: (principal, role) => { if (principal.role !== 'owner' && principal.role !== role) throw new ApiError('forbidden', 'Role required.'); }, bot: unavailable, conversation: unavailable, machine: unavailable, attachment: unavailable, canRead: () => false,
@@ -39,9 +42,10 @@ export function identityFixture() {
       consumeReauth: (userId, token) => { const key = tokenDigest(token); const row = store.get<{ id: string; userId: string; expiresAtMs: number }>('reauthTokens', key); if (!row || row.userId !== userId || row.expiresAtMs <= clock) throw new ApiError('expired', 'Reauth expired.'); store.remove('reauthTokens', key); },
     },
     mutations: { execute: async (_context, operation) => operation(), checkRevision: (resource, revision) => { if (resource.revision !== revision) throw new ApiError('revision_conflict', 'Revision changed.'); }, preview: unavailable, confirm: unavailable, digest: value => tokenDigest(JSON.stringify(value)) },
-    lemon: { connected: false, methods: [], call: unavailable, onEvent: unavailable, onConnected: unavailable, start: unavailable, close: unavailable }, runtime: { submit: unavailable, send: unavailable, cancel: unavailable, reconcile: unavailable, sessionKey: unavailable }, attachments: { create: unavailable, bytes: unavailable, download: unavailable }, gates: { create: unavailable, resolve: unavailable, wait: unavailable, cancelUser: userId => { cancelled.push(userId); } },
+    lemon: { connected: false, methods: [], call: unavailable, onEvent: unavailable, onConnected: unavailable, start: unavailable, close: unavailable }, runtime: { submit: unavailable, send: unavailable, cancel: unavailable, revokeConnectorInvocations: unavailable, reconcile: unavailable, sessionKey: unavailable }, attachments: { create: unavailable, copy: unavailable, bytes: unavailable, download: unavailable }, gates: { create: unavailable, resolve: unavailable, wait: unavailable, cancelUser: userId => { cancelled.push(userId); } },
     integrations: { admission: unavailable, effectivePolicy: async principal => ({ userId: principal.userId, botId: null, directoryGroupIds: [], productAccess: true, localExecutionCeiling: 'ask', allowSudo: false, allowEgress: false, rules: [], networkPolicies: [], explanations: [] }), connectorConfig: unavailable, sendApprovedDraft: unavailable, emitProviderNotifications: unavailable, channelIngress: unavailable, providerCapabilities: () => ({}) },
     audit: (principal, action, targetId, outcome, details, requestId) => { const actor: P.Actor = { kind: principal?.kind === 'user' ? 'user' : principal?.kind === 'bot' ? 'bot' : 'system', id: principal?.id ?? null, displayName: 'Test actor' }; const value = services.resource('audit', { actor, action, resourceType: 'identity', resourceId: targetId, outcome, metadata: details ?? {}, requestId: requestId ?? 'req_test' }); store.put('audit', value); return value; }, entry: unavailable, notify: unavailable, invoke: unavailable,
+    syncBotProfile: unavailable,
   };
   const owner = createProvisionedUser(services, 'owner@example.com', 'Owner'); const ownerMember = services.auth.member(owner.id); store.put('members', { ...ownerMember, role: 'owner' }); const workspace = services.resource('workspace', { ownerUserId: owner.id, name: 'Workspace', enabled: true, timezone: 'UTC' }); store.put('workspaces', workspace);
   const principal: Principal = { kind: 'user', id: owner.id, userId: owner.id, workspaceId: workspace.id, role: 'owner', sessionId: 'current-session', deviceId: null, botId: null };
@@ -140,7 +144,7 @@ describe('OIDC identity security', () => {
       await createIdentityServices(f.services).deprovisionUser(user.id);
       expect(f.services.auth.member(user.id).enabled).toBe(false); expect(f.revoked).toContain(user.id); expect(f.services.store.list('oidcProviderSessions')).toHaveLength(0);
       const record = f.services.store.list<P.AuditRecord>('audit').find(value => value.action === 'identity.provider_end_session');
-      expect(record?.outcome).toBe('outcome_unknown'); expect(record?.metadata.status).toBe('outcome_unknown');
+      expect(record?.outcome).toBe('outcome_unknown'); expect(record?.metadata.state).toBe('outcome_unknown');
       expect(JSON.stringify(record)).not.toContain('identity-token-hint');
     } finally { f.close(); }
   });
@@ -155,6 +159,35 @@ describe('OIDC identity security', () => {
       f.services.store.put('credentials', { id: link.userId, passwordHash: 'local-hash' });
       await expect(invokeRoute(routes, f.services, 'DELETE', '/v1/auth/identities/:id', { clientNonce: secureToken(), revision: link.revision, reauthToken: f.services.auth.issueReauth(link.userId).reauthToken }, { principal: f.principal, params: { id: link.id } })).rejects.toBeInstanceOf(ApiError);
       f.services.config.operator.breakGlassOwnerUserId = link.userId; expect(createIdentityServices(f.services).requireSSO(link.userId)).toBe(false);
+    } finally { f.close(); }
+  });
+  test('unlink revokes only the linked provider sessions and retains local work authority', async () => {
+    const f = identityFixture();
+    try {
+      const p = { ...registeredProvider(f.services), requireSSO: false };
+      f.services.store.put('oidcProviders', p);
+      const userId = f.principal.userId;
+      f.services.store.put('credentials', { id: userId, passwordHash: 'local-hash' });
+      const link = f.services.resource('identity', { userId, providerId: p.id, issuer: p.issuer, subject: 'subject', lastUsedAtMs: null });
+      f.services.store.put('identityLinks', link);
+      for (const id of ['provider-session', 'local-session']) f.services.store.put('authSessions', { ...f.services.resource('session', { userId, deviceId: null, expiresAtMs: f.services.now() + 600000, lastSeenAtMs: f.services.now(), current: false }), id });
+      f.services.store.put('oidcProviderSessions', { id: 'provider-session', userId, providerId: p.id, encryptedIDToken: f.services.encrypt('private-id-token') });
+      const revokedSessions: string[] = [];
+      f.services.invoke = async <T>(_principal: Principal, method: string, path: string): Promise<T> => {
+        expect(method).toBe('DELETE');
+        const id = decodeURIComponent(path.split('/').at(-1)!);
+        const session = f.services.store.require<P.AuthSession>('authSessions', id);
+        expect(session.userId).toBe(userId);
+        revokedSessions.push(id); f.services.store.remove('authSessions', id);
+        const response: unknown = { id, deleted: true }; return response as T;
+      };
+      await invokeRoute(createIdentityRoutes(f.services), f.services, 'DELETE', '/v1/auth/identities/:id', { clientNonce: secureToken(), revision: link.revision, reauthToken: f.services.auth.issueReauth(userId).reauthToken }, { principal: f.principal, params: { id: link.id } });
+      expect(revokedSessions).toEqual(['provider-session']);
+      expect(f.services.store.get('authSessions', 'local-session')).not.toBeNull();
+      expect(f.revoked).toEqual([]); expect(f.cancelled).toEqual([]);
+      expect(f.services.auth.member(userId).enabled).toBe(true);
+      expect(f.services.store.list('oidcProviderSessions')).toEqual([]);
+      expect(JSON.stringify(f.services.store.list('audit'))).not.toContain('private-id-token');
     } finally { f.close(); }
   });
   test('expired flow, public privacy and final-owner deprovision protection', async () => {

@@ -3,10 +3,10 @@ import type * as P from '../../../contracts/protocol';
 import type { BackendServices } from '../core/services';
 import { ApiError } from '../core/errors';
 
-const https = z.string().url().refine(value => new URL(value).protocol === 'https:', 'HTTPS is required');
-const origin = https.refine(value => new URL(value).origin === value, 'Expected an origin, not a URL path');
-const oauth = z.object({ id: z.string().min(1), clientId: z.string().min(1), clientSecretRef: z.string().min(1), authorizeUrl: https, tokenUrl: https, scopes: z.array(z.string().min(1)), redirectUris: z.array(z.string().min(1)), allowedOrigins: z.array(origin).min(1) }).strict();
-const entries = z.array(z.object({ id: z.string().regex(/^[A-Za-z0-9_.-]{1,128}$/), setupScript: z.string().min(1).max(262144), checkScript: z.string().max(262144).nullable(), secretNames: z.array(z.string().regex(/^[A-Za-z][A-Za-z0-9_]{0,127}$/)).max(64), timeoutMs: z.number().int().min(1000).max(1800000) }).strict()).max(100);
+const https = z.string().url().refine(value => { try { const url = new URL(value); return url.protocol === 'https:' && !url.username && !url.password && !url.hash; } catch { return false; } }, 'HTTPS without inline credentials or fragments is required');
+const origin = https.refine(value => URL.canParse(value) && new URL(value).origin === value, 'Expected an origin, not a URL path');
+const oauth = z.object({ id: z.string().min(1), clientId: z.string().min(1), clientSecretRef: z.string().min(1), authorizeUrl: https, tokenUrl: https, revocationUrl: https.optional(), introspectionUrl: https.optional(), clientAuthentication: z.enum(['basic', 'body']).optional(), scopes: z.array(z.string().min(1)), redirectUris: z.array(z.string().min(1)), allowedOrigins: z.array(origin).min(1) }).strict();
+const entries = z.array(z.object({ id: z.string().regex(/^[A-Za-z0-9_.-]{1,128}$/), setupScript: z.string().min(1).max(262144), checkScript: z.string().min(1).max(262144).nullable(), secretNames: z.array(z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_.-]{0,255}$/)).max(100).refine(values => new Set(values).size === values.length), timeoutMs: z.number().int().min(1000).max(1800000) }).strict()).min(1).max(100);
 export interface ConnectorProvider { id: string; origins: string[]; oauth: P.OAuthProviderConfig | null; sharedServiceAccount: boolean }
 export interface ReviewedSetupManifest { name: string; directoryGroupId: string | null; machineIds: string[]; entries: P.SetupManifest['entries'] }
 export interface IntegrationConfiguration { connectorProviders: ConnectorProvider[]; approvedPrivateMcpOrigins: string[]; reviewedSetupManifests: ReviewedSetupManifest[] }
@@ -38,6 +38,9 @@ const providerSchema = z.object({
   requiredRuntimeDestinations: z.array(networkRule),
   breakGlassOwnerUserId: ident.nullable(),
   ...extensions.shape,
+  oidcAllowedOrigins: z.array(origin).default([]),
+  oidcApprovedPrivateOrigins: z.array(origin).default([]),
+  oidcClientApprovals: z.array(z.object({ origin, clientId: ident, clientSecretRef: ident }).strict()).default([]),
   machineManagementUserIds: stringList.optional(),
   exportPrivateOrigins: z.array(origin).optional(),
   oidcGroupMappings: z.array(z.object({ providerId: ident, externalId: ident, directoryGroupId: ident, name: z.string().min(1).max(120).optional() }).strict()).optional(),
@@ -56,6 +59,7 @@ export function parseOperatorConfiguration(input: unknown): P.OperatorConfigurat
   const references: string[] = [];
   if (config.xPublicAccountSecretRef) references.push(config.xPublicAccountSecretRef);
   for (const source of config.providerSpendSources ?? []) references.push(source.secretRef);
+  for (const approval of config.oidcClientApprovals) references.push(approval.clientSecretRef);
   for (const provider of config.channelProviders) { if (provider.accountSecretRef) references.push(provider.accountSecretRef); if (provider.signingSecretRef) references.push(provider.signingSecretRef); if (provider.oauth) references.push(provider.oauth.clientSecretRef); }
   for (const provider of config.emailProviders) references.push(provider.provisioningSecretRef, provider.signingSecretRef, provider.smtp.secretRef, provider.imap.secretRef);
   for (const provider of config.eventProviders) references.push(provider.signingSecretRef);
@@ -63,9 +67,12 @@ export function parseOperatorConfiguration(input: unknown): P.OperatorConfigurat
   for (const provider of config.connectorProviders) if (provider.oauth) references.push(provider.oauth.clientSecretRef);
   if (references.some(ref => !Object.hasOwn(config.serverSecrets, ref))) throw new ApiError('invalid_request', 'Provider secret references must name configured serverSecrets entries.');
   if ((config.exportPrivateOrigins ?? []).some(value => !config.exportAllowedOrigins.includes(value))) throw new ApiError('invalid_request', 'Private export origins must also be approved export origins.');
+  if (config.oidcApprovedPrivateOrigins.some(value => !config.oidcAllowedOrigins.includes(value)) || config.oidcClientApprovals.some(value => !config.oidcAllowedOrigins.includes(value.origin))) throw new ApiError('invalid_request', 'OIDC private origins and client approvals must be a subset of oidcAllowedOrigins.');
+  const ingressIds = [...config.channelProviders, ...config.emailProviders, ...config.eventProviders].map(provider => provider.id);
+  if (new Set(ingressIds).size !== ingressIds.length) throw new ApiError('invalid_request', 'Ingress provider IDs must be globally unique across channel, email and event providers.');
   for (const providers of [config.channelProviders, config.emailProviders, config.eventProviders, config.connectorProviders]) if (new Set(providers.map(provider => provider.id)).size !== providers.length) throw new ApiError('invalid_request', 'Provider IDs must be unique within each provider family.');
   const oauthProviders = [...config.channelProviders.flatMap(provider => provider.oauth ? [provider.oauth] : []), ...config.connectorProviders.flatMap(provider => provider.oauth ? [provider.oauth] : []), ...(config.xProvider ? [config.xProvider.oauth] : [])];
-  for (const provider of oauthProviders) if (![provider.authorizeUrl, provider.tokenUrl].every(value => provider.allowedOrigins.includes(new URL(value).origin))) throw new ApiError('invalid_request', 'OAuth endpoints must be pinned to their configured allowed origins.');
+  for (const provider of oauthProviders) if (![provider.authorizeUrl, provider.tokenUrl, ...(provider.revocationUrl ? [provider.revocationUrl] : []), ...(provider.introspectionUrl ? [provider.introspectionUrl] : [])].every(value => provider.allowedOrigins.includes(new URL(value).origin))) throw new ApiError('invalid_request', 'OAuth endpoints must be pinned to their configured allowed origins.');
   return config;
 }
 export function integrationConfiguration(services: BackendServices): IntegrationConfiguration {

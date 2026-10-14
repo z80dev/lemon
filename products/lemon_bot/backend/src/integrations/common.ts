@@ -40,10 +40,10 @@ export function pinnedUrl(input: string, origins: readonly string[]): URL {
 export async function providerRequest(input: string, init: RequestInit, options: ProviderRequestOptions): Promise<Response> {
   const url = pinnedUrl(input, options.allowedOrigins);
   if (!options.allowPrivate) { const addresses = await lookup(url.hostname, { all: true }).catch(() => []); if (!addresses.length || addresses.some(row => !isPublicAddress(row.address))) throw new ApiError('policy_denied', 'Provider destination must resolve only to public addresses.'); }
-  options.beforeDispatch?.();
   const timeout = AbortSignal.timeout(options.timeoutMs ?? 30000);
   const signal = init.signal ? AbortSignal.any([init.signal, timeout]) : timeout;
   signal.throwIfAborted();
+  options.beforeDispatch?.();
   try { const response = await (options.fetch ?? globalThis.fetch)(url, { ...init, redirect: 'error', signal }); if (response.status >= 300 && response.status < 400) providerFailure('Provider redirects are not accepted.', options.mutation); return response; }
   catch (error) { if (error instanceof ApiError) throw error; providerFailure('Provider connection was interrupted.', options.mutation); }
 }
@@ -60,3 +60,8 @@ export async function fetchJson<T = unknown>(input: string, init: RequestInit, o
 export function privateMetadata<T>(services: BackendServices, key: string): T | null { const encrypted = services.store.metadata<string>(key); return encrypted === null ? null : services.decrypt<T>(encrypted); }
 export function savePrivateMetadata(services: BackendServices, key: string, value: unknown): void { services.store.setMetadata(key, services.encrypt(value)); }
 export function userPrincipal(services: BackendServices, userId: string): Principal { const member = services.auth.member(userId); if (!member.enabled) throw new ApiError('policy_denied', 'Workspace membership is disabled.'); return { kind: 'user', id: userId, userId, workspaceId: services.store.metadata<string>('workspaceId') ?? '', role: member.role, sessionId: null, botId: null, deviceId: null }; }
+
+export function assertActiveAccount(services: BackendServices, userId: string, externalEffect = false): void {
+  const member = services.store.list<P.Member>('members', member => member.userId === userId)[0];
+  if (!services.store.get<P.User>('users', userId) || !member?.enabled || services.store.metadata(`accountDeletion:${userId}`)) throw new ApiError(externalEffect ? 'outcome_unknown' : 'conflict', 'Account deletion or deprovisioning fences new provider authorization; reconcile the existing account operation.', !externalEffect, { resourceIds: [userId] });
+}

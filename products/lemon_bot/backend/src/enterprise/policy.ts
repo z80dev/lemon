@@ -17,13 +17,26 @@ const revision = z.object(update).strict();
 const ceilingRank: Record<P.GroupPolicy['localExecutionCeiling'], number> = { deny: 0, ask: 1, allow: 2 };
 const modeRank: Record<P.PolicyRule['mode'], number> = { ask_first: 0, auto_review: 1, allow: 2 };
 export interface PolicyCompositionInput { userId: string; botId: string | null; machineId: string | null; workspaceEnabled: boolean; memberEnabled: boolean; governance: P.Governance; policies: P.Policies; groups: P.DirectoryGroup[]; groupPolicies: P.GroupPolicy[]; rules: P.PolicyRule[]; networkPolicies: P.NetworkPolicy[] }
+function directoryAccess(workspaceEnabled: boolean, memberEnabled: boolean, governance: P.Governance, grants: P.GroupPolicy[]): boolean {
+  return workspaceEnabled && memberEnabled && (governance.groupAccess === 'all' ? grants.length === 0 || grants.some(policy => policy.productAccess) : grants.some(policy => policy.productAccess));
+}
+/** Live synchronous access guard for existing sockets/resources; uses the same composition as admission. */
+export function hasProductAccess(services: BackendServices, userId: string): boolean {
+  const workspaceId = services.store.metadata<string>('workspaceId');
+  const workspace = workspaceId ? services.store.get<P.Workspace>('workspaces', workspaceId) : null;
+  const member = services.store.list<P.Member>('members', member => member.userId === userId)[0];
+  const governance = services.store.metadata<P.Governance>('governance') ?? defaultGovernance;
+  const eligible = services.store.list<P.DirectoryGroup>('directoryGroups', group => group.memberUserIds.includes(userId) && (governance.groupAccess === 'all' || governance.allowedDirectoryGroupIds.includes(group.id)));
+  const grants = services.store.list<P.GroupPolicy>('groupPolicies', policy => eligible.some(group => group.id === policy.directoryGroupId));
+  return directoryAccess(workspace?.enabled ?? false, member?.enabled ?? false, governance, grants);
+}
 /** Group grants widen ordinary capabilities; locked ceilings and personal restrictions only tighten. */
 export function composeEffectivePolicy(input: PolicyCompositionInput): P.EffectivePolicy {
   const ownGroups = input.groups.filter(group => group.memberUserIds.includes(input.userId));
   const eligible = ownGroups.filter(group => input.governance.groupAccess === 'all' || input.governance.allowedDirectoryGroupIds.includes(group.id));
   const grants = eligible.map(group => input.groupPolicies.find(policy => policy.directoryGroupId === group.id)).filter((value): value is P.GroupPolicy => !!value);
   const explanations = ['Workspace and enabled membership are required.', 'Product authorization does not isolate shared host files or OS credentials.'];
-  const productAccess = input.workspaceEnabled && input.memberEnabled && (input.governance.groupAccess === 'all' ? grants.length === 0 || grants.some(policy => policy.productAccess) : grants.some(policy => policy.productAccess));
+  const productAccess = directoryAccess(input.workspaceEnabled, input.memberEnabled, input.governance, grants);
   const activeGrants = grants.filter(policy => policy.productAccess);
   const groupCeiling = activeGrants.reduce<P.GroupPolicy['localExecutionCeiling']>((value, policy) => ceilingRank[policy.localExecutionCeiling] > ceilingRank[value] ? policy.localExecutionCeiling : value, activeGrants.length ? 'deny' : input.policies.localExecutionCeiling);
   const localExecutionCeiling = ceilingRank[groupCeiling] < ceilingRank[input.policies.localExecutionCeiling] ? groupCeiling : input.policies.localExecutionCeiling;
@@ -69,7 +82,17 @@ export function createPolicyServices(services: BackendServices) {
     const ids = new Set(services.store.list<P.GroupPolicy>('groupPolicies', group => policy.directoryGroupIds.includes(group.directoryGroupId) && group.productAccess).flatMap(group => group.defaultBotIds));
     return [...ids].filter(id => { try { const bot = services.auth.bot(who, id); return bot.visibility === 'team' && bot.published; } catch { return false; } }).sort();
   }
-  return { governance, effectivePolicy, defaultBotIds, requiredNetworkPolicies: async (who: Principal, botId?: string) => (await effectivePolicy(who, botId)).networkPolicies };
+  async function sharedProfilePolicy(botId: string): Promise<P.EffectivePolicy> {
+    const bot = services.store.require<P.Bot>('bots', botId);
+    const workspaceId = services.store.metadata<string>('workspaceId');
+    const workspace = workspaceId ? services.store.get<P.Workspace>('workspaces', workspaceId) : null;
+    const base: P.Policies = services.store.metadata<P.Policies>('policies') ?? { revision: 1, publicTemplates: false, allowedMcpOrigins: null, localExecutionCeiling: 'ask', actionRecording: false, auditRetentionDays: 90, rules: [] };
+    const hardRules = services.store.list<P.PolicyRule>('policyRules', rule => rule.required && rule.ownerUserId === null);
+    const floor = composeEffectivePolicy({ userId: bot.ownerUserId, botId, machineId: bot.machineId, workspaceEnabled: workspace?.enabled ?? false, memberEnabled: true, governance: { ...governance(), groupAccess: 'all', allowedDirectoryGroupIds: [], requireReview: false }, policies: base, groups: [], groupPolicies: [], rules: hardRules, networkPolicies: services.store.list<P.NetworkPolicy>('networkPolicies', policy => policy.scope === 'workspace') });
+    floor.explanations.push('Shared profile floor excludes owner personal choices and directory-group grants; every placed invocation applies the actual initiating principal policy.');
+    return floor;
+  }
+  return { governance, effectivePolicy, sharedProfilePolicy, defaultBotIds, requiredNetworkPolicies: async (who: Principal, botId?: string) => (await effectivePolicy(who, botId)).networkPolicies };
 }
 
 export function createPolicyRoutes(services: BackendServices, hooks: { governanceChanged?: (previous: P.Governance, next: P.Governance) => Promise<void>; cancelContent?: () => void } = {}): Route[] {
