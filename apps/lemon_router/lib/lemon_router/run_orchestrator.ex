@@ -918,7 +918,7 @@ defmodule LemonRouter.RunOrchestrator do
 
   defp compact_admission(state, identity, entry) when state in ["submitting", "accepted"] do
     %{state: state, identity: identity}
-    |> Map.merge(Map.take(entry, [:scope, :terminal, :native_source, :native_followup, :native_failure]))
+    |> Map.merge(Map.take(entry, [:scope, :terminal, :native_source, :native_followup, :native_root_binding, :native_failure]))
   end
 
   defp admission_scope(%RunRequest{} = params) do

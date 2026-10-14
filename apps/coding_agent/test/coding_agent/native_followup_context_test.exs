@@ -43,8 +43,9 @@ defmodule CodingAgent.NativeFollowupContextTest do
       source = %{run_id: request.meta.native_lineage_run_id,
         lineage_handle: request.meta.native_lineage_handle}
       :ok = opts.native_source_floor_fun.(source, request.tool_policy)
-      fresh = LemonCore.RunRequest.new(%{agent_id: request.meta.profile_id,
-        session_key: request.session_key, prompt: "remote returning work", tool_policy: request.tool_policy})
+      fresh = LemonCore.RunRequest.new(%{run_id: LemonCore.Id.run_id(),
+        agent_id: request.meta.profile_id, session_key: request.session_key,
+        prompt: "remote returning work", tool_policy: request.tool_policy})
       {:ok, fresh_id} = opts.native_followup_submit.(source, fresh)
       owner = Application.fetch_env!(:lemon_router, :native_context_consumer_pid)
       send(owner, {:remote_native_conduit, request, fresh_id})
@@ -224,7 +225,8 @@ defmodule CodingAgent.NativeFollowupContextTest do
     source = %{run_id: id, lineage_handle: sealed.execution_request.meta.native_lineage_handle}
     assert {:error, :invalid_native_lineage} = NativeLineage.register_source_floor(source, %{allow: ["read"]},
       %{node_id: node_id, connection_pid: destination.pid, generation: destination.generation + 1})
-    assert {:ok, _ref, remote} = CodingAgent.Executor.start_run(sealed.execution_request, %{}, self())
+    request = LemonGateway.ExecutionRequest.from_command(sealed.execution_request)
+    assert {:ok, _ref, remote} = CodingAgent.Executor.start_run(request, %{}, self())
     assert_receive {:native_issuer, fresh_id, %{"runId" => fresh_id}, {:ok, lineage}}, 3000
     assert lineage["sourceRootRunId"] == id
     assert_receive {:native_dispatch, admitted}

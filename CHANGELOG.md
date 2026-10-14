@@ -10,6 +10,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Added
 
+- Keep native root target/policy/destination bindings through durable admission
+  compaction, including proofless startup receipts and queued activation fences.
+  Native agent/task follow-ups allocate their fixed ID before proof admission.
+
 - Machine invitations now return a short, credential-free repository join-script
   command and a separate one-use code. The script reads hidden terminal input,
   sends enrollment only through `--invite-code-stdin`, restores echo on exit,

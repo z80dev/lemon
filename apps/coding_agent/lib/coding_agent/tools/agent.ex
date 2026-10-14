@@ -649,6 +649,7 @@ defmodule CodingAgent.Tools.Agent do
 
       request =
         RunRequest.new(%{
+          run_id: LemonCore.Id.run_id(),
           origin: :node,
           session_key: delegated_session_key,
           agent_id: validated.agent_id,
@@ -967,6 +968,7 @@ defmodule CodingAgent.Tools.Agent do
 
       followup =
         RunRequest.new(%{
+          run_id: LemonCore.Id.run_id(),
           origin: :node,
           session_key: parent_session_key,
           agent_id: parent_agent_id,

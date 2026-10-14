@@ -141,8 +141,10 @@ defmodule CodingAgent.Executor.ProfileExecutionTest do
     assert {:error, :not_connected} = tool.execute.("stale", %{}, nil, nil)
   end
 
-  @tag :tmp_dir
-  test "local and JSON-decoded execution attach persona and MCP without management metadata leaks", %{tmp_dir: root} do
+  test "local and JSON-decoded execution attach persona and MCP without management metadata leaks" do
+    root = Path.join(System.tmp_dir!(), "profile-native-#{System.unique_integer([:positive])}")
+    File.mkdir_p!(root)
+    on_exit(fn -> File.rm_rf!(root) end)
     Application.put_env(:lemon_core, :paths,
       home_state_dir: Path.join(root, "destination-state"),
       global_config: Path.join(root, "config.toml"))

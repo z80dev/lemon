@@ -286,6 +286,10 @@ In-process native children inside the still-active original invocation may
 inherit its exact authority and clients. A fresh routed task or delegated-agent
 follow-up is a distinct fixed-ID execution, never a way to replay
 the completed root's proof or attach ambient profile credentials.
+The native caller allocates that ID before submitting to admission or invoking
+the proof issuer. Admission compaction retains the sealed current target,
+destination and policy binding, so acceptance cannot drop the startup or queued
+activation fences.
 
 Provision the backend-owned issuer using admin `profile.followup.admission.set`
 with exactly `profileId`, `url` and `token`. Success is

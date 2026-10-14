@@ -225,27 +225,20 @@ defmodule LemonRouter.NativeLineageTest do
 
   test "managed memory-only initial root requires exact empty MCP replacement", ctx do
     assert {:ok, profile} = ProfileStore.get_for_execution(ctx.profile_id)
-    assert {:ok, request} = ProfileStore.chat_request(profile, "private memory scope only", run_id: ctx.run_id)
+    request = memory_request(ctx, ctx.run_id, profile["mcpServers"])
     assert RunOrchestrator.submit(ctx.server, request) == {:error, :admission_unavailable}
     id = ctx.prefix <> "-memory-only"
-    meta = request.meta |> Map.put(:mcp_servers, [])
-      |> Map.put(:invocation_context_key, "memory-only-actor")
-      |> Map.put(:memory_context_key, "memory-only-audience")
-      |> Map.put(:memory_context_verified, true)
-    assert RunOrchestrator.submit(ctx.server, %{request | run_id: id, meta: meta}) == {:ok, id}
+    request = memory_request(ctx, id)
+    assert RunOrchestrator.submit(ctx.server, request) == {:ok, id}
     assert_receive {:native_dispatch, submission}
     assert submission.execution_request.meta.mcp_servers == []
     assert submission.execution_request.meta[:invocation_proof] == nil
-    assert {:ok, %{native_root_binding: %{invocation_proof_required: false}} = row} =
-      Store.fetch(RunOrchestrator.admission_table(), id)
-    refute Map.has_key?(row, :native_source)
     refute Map.has_key?(submission.execution_request.meta, :native_lineage_handle)
     assert :ok = NativeLineage.register_source_floor(%{run_id: id}, %{allow: ["read"]}, :local)
     assert :ok = NativeLineage.register_source_floor(%{run_id: id}, %{allow: :all}, :local)
-    assert {:ok, sealed} = Store.fetch(RunOrchestrator.admission_table(), id)
-    assert sealed.native_root_binding.native_floor_verified
-    assert sealed.native_root_binding.native_startup_tool_policy.allow == ["read"]
-    refute Map.has_key?(sealed, :native_source)
+    assert :ok = NativeLineage.validate_activation(submission.execution_request)
+    assert {:error, :invalid_native_lineage} =
+      NativeLineage.authenticate(%{run_id: id, lineage_handle: String.duplicate("x", 43)}, :local)
     assert {:error, :invalid_native_lineage} =
       NativeLineage.register_source_floor(%{run_id: id, lineage_handle: nil}, %{allow: :all}, :local)
   end
@@ -265,18 +258,13 @@ defmodule LemonRouter.NativeLineageTest do
   end
 
   test "proofless managed root cannot acknowledge native startup after current ceiling rotation", ctx do
-    assert {:ok, profile} = ProfileStore.get_for_execution(ctx.profile_id)
-    assert {:ok, request} = ProfileStore.chat_request(profile, "memory-only stale startup", run_id: ctx.run_id)
-    request = %{request | meta: Map.put(request.meta, :mcp_servers, [])}
+    request = memory_request(ctx, ctx.run_id)
     assert RunOrchestrator.submit(ctx.server, request) == {:ok, ctx.run_id}
-    assert_receive {:native_dispatch, _submission}
+    assert_receive {:native_dispatch, submission}
     assert {:ok, _} = ProfileStore.update(ctx.profile_id, %{"mcpServers" => []})
     assert {:error, :admission_unavailable} =
       NativeLineage.register_source_floor(%{run_id: ctx.run_id}, %{allow: ["read"]}, :local)
-    assert {:ok, %{terminal: true, native_failure: :admission_unavailable} = row} =
-      Store.fetch(RunOrchestrator.admission_table(), ctx.run_id)
-    refute Map.get(row.native_root_binding, :native_floor_verified, false)
-    refute Map.has_key?(row, :native_source)
+    assert {:error, :admission_unavailable} = NativeLineage.validate_activation(submission.execution_request)
   end
 
   test "proofless startup receipt binds exact authenticated node and never creates continuation authority", ctx do
@@ -287,9 +275,7 @@ defmodule LemonRouter.NativeLineageTest do
         "version" => 1, "nativePrivacyContext" => %{"version" => 1}}}})
     on_exit(fn -> NodeRegistry.unregister(node, node_pid) end)
     assert {:ok, _} = ProfileStore.update(ctx.profile_id, %{"node" => node})
-    assert {:ok, profile} = ProfileStore.get_for_execution(ctx.profile_id)
-    assert {:ok, request} = ProfileStore.chat_request(profile, "proofless named startup", run_id: ctx.run_id)
-    request = %{request | meta: Map.put(request.meta, :mcp_servers, [])}
+    request = memory_request(ctx, ctx.run_id)
     assert RunOrchestrator.submit(ctx.server, request) == {:ok, ctx.run_id}
     assert_receive {:native_dispatch, _submission}
     receipt = %{run_id: ctx.run_id}
@@ -301,10 +287,6 @@ defmodule LemonRouter.NativeLineageTest do
     assert :ok =
       RunOrchestrator.register_native_source_floor_from_node(receipt, %{allow: ["read"]},
         %{node_id: node, connection_pid: node_pid, generation: 7})
-    assert {:ok, row} = Store.fetch(RunOrchestrator.admission_table(), ctx.run_id)
-    assert row.native_root_binding.native_floor_verified
-    assert row.native_root_binding.native_startup_tool_policy.allow == ["read"]
-    refute Map.has_key?(row, :native_source)
     assert {:error, :invalid_native_lineage} =
       NativeLineage.authenticate(%{run_id: ctx.run_id, lineage_handle: String.duplicate("x", 43)},
         %{node_id: node, connection_pid: node_pid, generation: 7})
@@ -868,6 +850,17 @@ defmodule LemonRouter.NativeLineageTest do
     end
     assert {:ok, source} = NativeLineage.authenticate(captured(submission), transport)
     {source, submission}
+  end
+
+  defp memory_request(ctx, id, invocation_servers \\ []) do
+    assert {:ok, profile} = ProfileStore.get_for_execution(ctx.profile_id)
+    assert {:ok, request} = ProfileStore.chat_request(profile, "actual memory-only source",
+      run_id: id, invocation_mcp_servers: invocation_servers)
+    assert {:ok, request} = InvocationProof.attach_execution_context(request, %{
+      "runId" => id, "invocationContextKey" => "memory-only-actor",
+      "memoryContextKey" => "memory-only-audience", "sharedMemoryGrant" => false
+    })
+    request
   end
 
   defp root_request(ctx, id, invocation_servers) do

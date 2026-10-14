@@ -227,6 +227,7 @@ defmodule CodingAgent.Tools.Task.Followup do
 
       followup =
         RunRequest.new(%{
+          run_id: LemonCore.Id.run_id(),
           origin: :node,
           session_key: parent_session_key,
           agent_id: parent_agent_id,
