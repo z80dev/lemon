@@ -226,4 +226,18 @@ describe('account lifecycle', () => {
     await f.call('PATCH', '/v1/workspace', { clientNonce: opaqueToken(), revision: disabled.revision, enabled: true }, owner);
     await expect(f.services.auth.authenticate(authenticated(paired.token))).rejects.toMatchObject({ code: 'unauthenticated' });
   });
+  test('a persistent bearer cannot rebind itself to another installation to evade device revocation', async () => {
+    const f = accounts();
+    const body = { clientNonce: opaqueToken(), installationId: 'original-phone', platform: 'ios', name: 'Phone', appVersion: '1.0.0' };
+    const device = await f.call<P.Device>('POST', '/v1/devices', body);
+    const paired = await f.services.auth.session('alice', device.id, { persistent: true });
+    const actor: Principal = { ...f.alice, sessionId: paired.session.id, deviceId: device.id };
+    await expect(f.call('POST', '/v1/devices', { ...body, clientNonce: opaqueToken(), installationId: 'other-phone' }, actor)).rejects.toMatchObject({ code: 'forbidden' });
+    expect(f.store.list('devices')).toHaveLength(1);
+    const refreshed = await f.call<P.Device>('POST', '/v1/devices', { ...body, clientNonce: opaqueToken(), appVersion: '2.0.0' }, actor);
+    expect(refreshed.id).toBe(device.id);
+    expect(f.store.require<P.AuthSession>('authSessions', paired.session.id).deviceId).toBe(device.id);
+    await f.call('DELETE', '/v1/devices/:id', { clientNonce: opaqueToken() }, f.alice, { id: device.id });
+    await expect(f.services.auth.authenticate(authenticated(paired.token))).rejects.toMatchObject({ code: 'unauthenticated' });
+  });
 });

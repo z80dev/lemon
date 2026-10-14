@@ -498,12 +498,17 @@ export function createAccountRoutes(services: BackendServices, hooks: Revocation
       const body = parse(registerSchema, context.body); const actor = current(context); if (body.push) await validatePushRegistration(body.push);
       if (body.push && (body.platform === 'web' ? body.push.kind !== 'web_push' : body.push.kind !== 'apns')) fail('invalid_request', 'Push registration must match the installation platform.');
       return store.transaction(() => {
+        const session = actor.sessionId === null ? null : store.require<P.AuthSession>('authSessions', actor.sessionId);
+        if (session?.expiresAtMs === null) {
+          const bound = session.deviceId === null ? null : store.get<P.Device>('devices', session.deviceId);
+          if (!bound || bound.userId !== actor.userId || bound.platform !== body.platform || store.metadata<string>(`deviceInstallation:${bound.id}`) !== body.installationId) fail('forbidden', 'A paired session cannot change its device installation.');
+        }
         const prior = store.list<P.Device>('devices', value => value.userId === actor.userId && store.metadata<string>(`deviceInstallation:${value.id}`) === body.installationId)[0];
         if (prior && prior.platform !== body.platform) fail('invalid_request', 'Installation platform cannot change.');
         const fields = { userId: actor.userId, platform: body.platform, name: body.name, appVersion: body.appVersion, pushEnabled: body.push !== undefined || prior?.pushEnabled === true, lastSeenAtMs: services.now() };
         const device = prior ? services.update(prior, fields) : services.resource('device', fields); store.put('devices', device); store.setMetadata(`deviceInstallation:${device.id}`, body.installationId);
         if (body.push) { store.setMetadata(`devicePush:${device.id}`, services.encrypt(body.push)); store.setMetadata(`devicePushRegisteredAt:${device.id}`, services.now()); }
-        if (actor.sessionId) { const session = store.require<P.AuthSession>('authSessions', actor.sessionId); store.put('authSessions', services.update(session, { deviceId: device.id })); }
+        if (session && session.expiresAtMs !== null && session.deviceId !== device.id) store.put('authSessions', services.update(session, { deviceId: device.id }));
         services.events.emit('device.upserted', device, { userIds: [actor.userId] }); return device;
       });
     } },
