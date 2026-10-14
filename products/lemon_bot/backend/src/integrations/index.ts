@@ -1,5 +1,5 @@
 import type * as P from '../../../contracts/protocol';
-import type { BackendServices, IntegrationServices, Principal, Route } from '../core/services';
+import type { BackendServices, IntegrationServices, Route } from '../core/services';
 import { ApiError } from '../core/errors';
 import { assertActiveAccount, userPrincipal } from './common';
 import { createConnectorRoutes, createConnectorServices } from './connectors';

@@ -229,7 +229,6 @@ export function createIdentityServices(services: BackendServices) {
       await services.auth.revokeUser(userId); services.gates.cancelUser(userId); await endProviderSessions(services, userId);
     },
     endProviderSessions: (userId: string) => endProviderSessions(services, userId),
-    observeProviderSessions(userId: string): boolean { return services.store.list<{ userId: string; state: string }>('oidcEndSessionReceipts', value => value.userId === userId).every(value => value.state === 'completed' || value.state === 'not_required'); },
     async reconcile(): Promise<void> {
       for (const flow of services.store.list<Flow>('oidcFlows')) if (flow.expiresAtMs <= services.now()) services.store.remove('oidcFlows', flow.id);
     },
