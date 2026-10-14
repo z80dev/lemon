@@ -39,7 +39,10 @@ defmodule LemonSkills.McpSession do
 
   The execution request may use atom or JSON keys. Only connection fields are
   accepted; profile definitions cannot select stdio, OAuth persistence or paths.
-  Credentials remain volatile and errors never include a definition.
+  `${LEMON_SECRET:NAME}` header references resolve only through the encrypted
+  secret store on this executing host, immediately before client attachment.
+  Missing or failing reads fail closed; no environment expansion is performed.
+  Credentials remain volatile and errors never include a definition or value.
   """
   @spec open_http(term(), String.t(), [map()], pid()) :: :ok | {:error, atom()}
   def open_http(id, cwd, configs, owner_pid) when is_list(configs) do
@@ -57,10 +60,86 @@ defmodule LemonSkills.McpSession do
           nil
       end)
 
-    open(id, cwd, configs, owner_pid)
+    with :ok <- validate_identity(id, cwd, owner_pid),
+         {:ok, configs} <- normalize_configs(configs),
+         {:ok, configs} <- resolve_http_secrets(configs) do
+      request({:open, id, Path.expand(cwd), configs, owner_pid}, {:error, :runtime_unavailable})
+    end
   end
 
   def open_http(_id, _cwd, _configs, _owner_pid), do: {:error, :invalid_config}
+
+  defp resolve_http_secrets(configs) do
+    Enum.reduce_while(configs, {:ok, []}, fn {:http, url, opts}, {:ok, acc} ->
+      case resolve_http_headers(Keyword.get(opts, :headers, [])) do
+        {:ok, headers} ->
+          {:cont, {:ok, [{:http, url, Keyword.put(opts, :headers, headers)} | acc]}}
+
+        {:error, _} = error ->
+          {:halt, error}
+      end
+    end)
+    |> case do
+      {:ok, configs} -> {:ok, Enum.reverse(configs)}
+      error -> error
+    end
+  end
+
+  defp resolve_http_headers(headers) do
+    Enum.reduce_while(headers, {:ok, []}, fn {name, value}, {:ok, acc} ->
+      case resolve_header(value) do
+        {:ok, resolved} -> {:cont, {:ok, [{name, resolved} | acc]}}
+        {:error, _} = error -> {:halt, error}
+      end
+    end)
+    |> case do
+      {:ok, headers} -> {:ok, Enum.reverse(headers)}
+      error -> error
+    end
+  end
+
+  defp resolve_header(value) do
+    with {:ok, parts} <- resolve_header_segments(value, []),
+         resolved <- parts |> Enum.reverse() |> IO.iodata_to_binary(),
+         true <- byte_size(resolved) <= 8_192 and String.valid?(resolved) and
+                   not String.contains?(resolved, ["\r", "\n", <<0>>]) do
+      {:ok, resolved}
+    else
+      _ -> {:error, :secret_resolution_failed}
+    end
+  rescue
+    _ -> {:error, :secret_resolution_failed}
+  catch
+    _, _ -> {:error, :secret_resolution_failed}
+  end
+
+  defp resolve_header_segments(value, parts) do
+    case :binary.match(value, "${LEMON_SECRET:") do
+      :nomatch ->
+        {:ok, [value | parts]}
+
+      {offset, size} ->
+        prefix = binary_part(value, 0, offset)
+        rest = binary_part(value, offset + size, byte_size(value) - offset - size)
+
+        case :binary.match(rest, "}") do
+          {length, 1} when length > 0 ->
+            name = binary_part(rest, 0, length)
+            tail = binary_part(rest, length + 1, byte_size(rest) - length - 1)
+
+            with true <- name == String.trim(name) and byte_size(name) <= 512 and
+                           not String.contains?(name, ["{", "\r", "\n", <<0>>]),
+                 {:ok, secret} when is_binary(secret) <- LemonCore.Secrets.get(name) do
+              resolve_header_segments(tail, [secret, prefix | parts])
+            else
+              _ -> {:error, :secret_resolution_failed}
+            end
+
+          _ ->
+            {:error, :secret_resolution_failed}
+        end
+    end
+  end
 
   @spec tools(term()) :: [LemonAgent.Types.AgentTool.t()]
   def tools(id), do: request({:lookup, id, :tools}, [])

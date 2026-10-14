@@ -33,6 +33,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   invitations install and enroll a bot machine without sharing the operator
   credential; node listings include purpose and labels. See
   [attaching a bot machine](docs/user-guide/attaching-a-bot-machine.md).
+- Profile MCP headers support explicit `${LEMON_SECRET:NAME}` references resolved
+  exclusively from the encrypted secret store on the execution host. Missing or
+  failing secret reads fail closed before MCP clients start; controller requests
+  keep references unchanged and never substitute environment values.
 
 ### Fixed
 

@@ -69,6 +69,12 @@ and `headers`. The native run owner opens them through `LemonSkills.McpSession`;
 the tool registry combines these owner-bound tools with configured and ACP tools.
 Connections close when execution ends, initialization fails or the owner dies.
 Headers are volatile execution credentials, not session management metadata.
+`${LEMON_SECRET:NAME}` references in profile HTTP headers resolve through
+`LemonCore.Secrets.get/1` on the executing host before any client starts.
+Reference-bearing request metadata stays unchanged; resolved values are used
+only in volatile connection configuration. No environment expansion or external
+source fallback is performed. Missing/failing reads and malformed references
+fail attachment with a credential-free `secret_resolution_failed` classification.
 
 
 ## Memory Scopes

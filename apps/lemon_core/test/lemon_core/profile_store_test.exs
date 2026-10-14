@@ -309,6 +309,21 @@ defmodule LemonCore.ProfileStoreTest do
   end
 
   @tag :tmp_dir
+  test "controller persists and forwards destination secret references without resolving them", %{tmp_dir: root} do
+    opts = opts(root)
+    headers = %{"Authorization" => "${LEMON_SECRET:destination-only-token}"}
+    servers = [%{"name" => "bot", "url" => "https://bot.example/mcp", "headers" => headers}]
+    assert {:ok, public} =
+             ProfileStore.create(%{id: "secret-bound", node: "worker", mcpServers: servers}, opts)
+    refute inspect(public) =~ "destination-only-token"
+    assert {:ok, profile} = ProfileStore.get_for_execution("secret-bound", opts)
+    assert {:ok, request} = ProfileStore.chat_request(profile, "Use the connector")
+    assert request.meta.mcp_servers == servers
+    assert request.meta.node == "worker"
+    assert request.cwd == nil
+  end
+
+  @tag :tmp_dir
   test "profile update rolls back and MCP definitions are validated without exposing values", %{tmp_dir: root} do
     opts = opts(root)
     assert {:ok, profile} = ProfileStore.create(%{id: "updated", name: "Original"}, opts)

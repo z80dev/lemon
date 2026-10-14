@@ -135,6 +135,11 @@ defmodule CodingAgent.Executor.ProfileExecutionTest do
     Application.put_env(:lemon_core, :paths, home_state_dir: Path.join(root, "destination-state"))
     url = fixture_url(self())
     parent = self()
+    secret_name = prepare_secret_store()
+    assert {:ok, _} = LemonCore.Secrets.set(secret_name, "runtime-secret")
+    literal_name = "LEMON_MCP_LITERAL_#{System.unique_integer([:positive])}"
+    System.put_env(literal_name, "must-not-expand")
+    on_exit(fn -> System.delete_env(literal_name) end)
 
     for transport <- [:local, :json] do
       profile_id = "writer-#{transport}"
@@ -143,9 +148,13 @@ defmodule CodingAgent.Executor.ProfileExecutionTest do
         profile_id: profile_id,
         system_prompt: "private-profile-system-prompt",
         profile_instructions: %{"SOUL.md" => "private-profile-soul", "README.md" => "private-profile-job"},
-        mcp_servers: [%{name: "profile", url: url, headers: %{"Authorization" => "Bearer runtime-secret"}}]
+        mcp_servers: [%{name: "profile", url: url, headers: %{
+          "Authorization" => "Bearer ${LEMON_SECRET:#{secret_name}}",
+          "X-Literal" => "${#{literal_name}}"
+        }}]
       }
       meta = if transport == :json, do: meta |> Jason.encode!() |> Jason.decode!(), else: meta
+      refute inspect(meta) =~ "runtime-secret"
       request = %ExecutionRequest{
         run_id: "profile-execution-#{transport}",
         session_key: "agent:#{profile_id}:task-1",
@@ -153,6 +162,10 @@ defmodule CodingAgent.Executor.ProfileExecutionTest do
         cwd: root,
         meta: meta
       }
+      assert {:ok, outbound} = RemoteRequestCodec.encode(request)
+      refute inspect(outbound) =~ "runtime-secret"
+      assert hd(outbound["meta"]["mcp_servers"])["headers"]["Authorization"] ==
+               "Bearer ${LEMON_SECRET:#{secret_name}}"
 
       stream_fn = fn model, context, _options ->
         {:ok, stream} = LemonAi.EventStream.start_link()
@@ -176,6 +189,8 @@ defmodule CodingAgent.Executor.ProfileExecutionTest do
       assert Enum.any?(session_state.base_tools, &(&1.name == tool.name)) or tool.name in hidden_names
       assert {:ok, _} = tool.execute.("profile-tool", %{}, nil, nil)
       assert_receive {:mcp_request, "tools/call", %{"authorization" => "Bearer runtime-secret"}}, 5_000
+      assert_receive {:mcp_request, "initialize", %{"x-literal" => literal_header}}, 5_000
+      assert literal_header == "${#{literal_name}}"
 
       # Rebuilding the registry preserves the owner-bound session connection.
       assert {:ok, _tool} = CodingAgent.ToolRegistry.get_tool(root, tool.name,
@@ -234,6 +249,72 @@ defmodule CodingAgent.Executor.ProfileExecutionTest do
     assert_receive {:mcp_request, "initialize", %{"authorization" => "Bearer failure-secret"}}, 5_000
     assert (:sys.get_state(McpSession) |> Map.keys() |> Enum.sort()) == before
     Process.flag(:trap_exit, previous_trap_exit)
+  end
+
+  @tag :tmp_dir
+  test "missing destination secret never falls back to environment or attaches clients", %{tmp_dir: root} do
+    name = prepare_secret_store()
+    System.put_env(name, "environment-is-not-the-store")
+    on_exit(fn -> System.delete_env(name) end)
+    url = fixture_url(self())
+    id = "missing-secret-#{System.unique_integer([:positive])}"
+    definition = %{"name" => "profile", "url" => url,
+                   "headers" => %{"Authorization" => "${LEMON_SECRET:#{name}}"}}
+    before = :sys.get_state(McpSession)
+
+    assert {:error, :not_found} = LemonCore.Secrets.get(name)
+    log = capture_log(fn ->
+      assert {:error, :secret_resolution_failed} =
+               McpSession.open_http(id, root, [definition], self())
+    end)
+    assert :sys.get_state(McpSession) == before
+    assert McpSession.tools(id) == []
+    refute_receive {:mcp_request, _, _}, 50
+    refute log =~ "environment-is-not-the-store"
+    refute log =~ name
+  end
+
+  @tag :tmp_dir
+  test "failing encrypted destination read and malformed references fail closed", %{tmp_dir: root} do
+    name = prepare_secret_store()
+    assert {:ok, _} = LemonCore.Secrets.set(name, "never-expose-this-value")
+    System.put_env("LEMON_SECRETS_MASTER_KEY", :crypto.strong_rand_bytes(32) |> Base.encode64())
+    assert {:error, _} = LemonCore.Secrets.get(name)
+    url = fixture_url(self())
+    id = "failed-secret-#{System.unique_integer([:positive])}"
+    before = :sys.get_state(McpSession)
+
+    for header <- ["${LEMON_SECRET:#{name}}", "${LEMON_SECRET:}", "${LEMON_SECRET:unterminated"] do
+      definition = %{name: "profile", url: url, headers: %{"Authorization" => header}}
+      log = capture_log(fn ->
+        assert {:error, :secret_resolution_failed} =
+                 McpSession.open_http(id, root, [definition], self())
+      end)
+      refute log =~ "never-expose-this-value"
+      refute log =~ name
+    end
+
+    assert :sys.get_state(McpSession) == before
+    assert McpSession.tools(id) == []
+    refute_receive {:mcp_request, _, _}, 50
+  end
+
+  defp prepare_secret_store do
+    previous_config = Application.get_env(:lemon_core, LemonCore.Secrets)
+    previous_key = System.get_env("LEMON_SECRETS_MASTER_KEY")
+    name = "profile-mcp-secret-#{System.unique_integer([:positive])}"
+    Application.put_env(:lemon_core, LemonCore.Secrets, key_providers: [:env])
+    System.put_env("LEMON_SECRETS_MASTER_KEY", :crypto.strong_rand_bytes(32) |> Base.encode64())
+
+    on_exit(fn ->
+      LemonCore.Secrets.delete(name)
+      restore_env(:lemon_core, LemonCore.Secrets, previous_config)
+      if previous_key,
+        do: System.put_env("LEMON_SECRETS_MASTER_KEY", previous_key),
+        else: System.delete_env("LEMON_SECRETS_MASTER_KEY")
+    end)
+
+    name
   end
 
   defp fixture_url(owner) do
