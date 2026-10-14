@@ -88,6 +88,16 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   meter also use the measurement for resumed sessions before their first run.
   All surfaces read the new read-scoped `sessions.context` control-plane method;
   category splits are estimates scaled to the provider-reported total.
+- `read` accepts path line selectors (`file:50-80`, `file:50+20`, `file:50`,
+  `file:-30`, `:raw`) on files, archive members and internal references, and
+  opens SQLite databases read-only (`app.db`, `app.db:table`,
+  `app.db:table:key`, `app.db:table?limit=&offset=&where=&order=`,
+  `app.db?q=SELECT ...`).
+- `grep` gains `skip` paging plus `hidden`/`no_ignore`; ignored and hidden files
+  are now skipped by the Elixir fallback too, matching ripgrep.
+- `webfetch` converts PDF responses to page text and handles GitHub blob URLs
+  (raw file) and issue/pull request URLs (REST API rendering).
+- `websearch` providers: Tavily, Kagi (V1 API) and Jina.
 
 ### Changed
 
