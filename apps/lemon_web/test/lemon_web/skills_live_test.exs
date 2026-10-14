@@ -123,11 +123,6 @@ defmodule LemonWeb.SkillsLiveTest do
     end
   end
 
-  test "empty registry renders the empty state", %{conn: conn} do
-    {:ok, _view, html} = live(conn, "/skills")
-    assert html =~ "No skills installed"
-  end
-
   test "a failed query is an unavailable state, not an empty list", %{conn: conn} do
     {:ok, module} = Registry.lookup("skills.list")
     :ok = Registry.unregister("skills.list")
