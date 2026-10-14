@@ -52,6 +52,7 @@ defmodule CodingAgent.ToolPolicy do
     "bash",
     "bash_output",
     "kill_process",
+    "eval",
     "grep",
     "find",
     "ls",
@@ -140,6 +141,8 @@ defmodule CodingAgent.ToolPolicy do
     "skill_manage",
     "remember",
     "bash",
+    # Runs arbitrary Python/JavaScript in a persistent kernel.
+    "eval",
     # Runs project compilers/checkers (`mix compile`, `cargo check`, `go test`),
     # which execute project code.
     "lsp_diagnostics",

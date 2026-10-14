@@ -10,6 +10,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Added
 
+- `eval` coding tool: persistent per-session Python (`python3`) and JavaScript
+  (Bun, or Node) kernels with streamed output, trailing-expression display,
+  top-level `await`, `reset`, and timeout/abort that kill the kernel tree.
+  Output follows the `bash` cap and spill handle. See [Eval](docs/tools/eval.md).
 - **Lemon Web, rebuilt.** The browser UI is now a full workspace on the same
   control-plane methods and events as the TUI. Chat streams Markdown with
   highlighted code, thinking blocks and rich tool cards (shell output and exit

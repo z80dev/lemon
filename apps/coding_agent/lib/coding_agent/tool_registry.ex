@@ -48,6 +48,7 @@ defmodule CodingAgent.ToolRegistry do
     {:bash, Tools.Bash},
     {:bash_output, Tools.BashOutput},
     {:kill_process, Tools.KillProcess},
+    {:eval, Tools.Eval},
     {:grep, Tools.Grep},
     {:ast_grep, Tools.AstGrep},
     {:find, Tools.Find},
@@ -384,7 +385,7 @@ defmodule CodingAgent.ToolRegistry do
   # batch of tool calls concurrently, and two writers interleaving on the
   # workspace (an edit racing a `bash` rewrite of the same file) lose updates.
   # Read-only tools stay parallel. File tools additionally lock per path.
-  @mutating_builtins ~w(write edit patch ast_grep bash checkpoint)
+  @mutating_builtins ~w(write edit patch ast_grep bash eval checkpoint)
 
   defp maybe_serialize_mutation(%AgentTool{} = tool, name, cwd, opts)
        when name in @mutating_builtins do
