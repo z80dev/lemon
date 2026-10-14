@@ -302,7 +302,72 @@ defmodule LemonCore.SessionLifecycleTest do
     assert markdown.content =~ "Redacted export: yes"
     refute markdown.content =~ secret
 
-    assert {:error, :unsupported_format} = SessionLifecycle.export(session_key, format: :html)
+    assert {:error, :unsupported_format} = SessionLifecycle.export(session_key, format: :pdf)
+  end
+
+  test "html export is self-contained and escapes every interpolated value" do
+    suffix = unique_suffix()
+    session_key = "agent:export_html_#{suffix}:main"
+    on_exit(fn -> cleanup_sessions([session_key]) end)
+
+    seed_session(
+      session_key,
+      "run-html-#{suffix}",
+      "<script>alert('x')</script> & \"quoted\"",
+      "<img src=x onerror=alert(1)>",
+      [
+        %{
+          __event__: :action_event,
+          action: %{title: "<b>tool</b>", kind: :http},
+          ok: true,
+          message: "done"
+        }
+      ]
+    )
+
+    assert {:ok, html} = SessionLifecycle.export(session_key, format: "html")
+    assert html.format == :html
+    assert html.filename =~ ~r/\.html$/
+    assert html.redacted == true
+    assert html.content =~ "<!DOCTYPE html>"
+    assert html.content =~ "<style>"
+    refute html.content =~ "<script"
+    refute html.content =~ "<img"
+    refute html.content =~ "<b>tool"
+
+    tags = Regex.scan(~r/<\/?([a-zA-Z!][a-zA-Z0-9]*)/, html.content) |> Enum.map(&List.last/1)
+
+    assert Enum.uniq(tags) --
+             ~w(!DOCTYPE html head meta title style body h1 h2 h3 p ul li code pre section) ==
+             []
+
+    assert html.content =~
+             "&lt;script&gt;alert(&#39;x&#39;)&lt;/script&gt; &amp; &quot;quoted&quot;"
+
+    assert html.content =~ "&lt;img src=x onerror=alert(1)&gt;"
+    assert html.content =~ "&lt;b&gt;tool&lt;/b&gt;"
+  end
+
+  test "jsonl export emits a session record then one compact run record per line" do
+    suffix = unique_suffix()
+    session_key = "agent:export_jsonl_#{suffix}:main"
+    secret = "jsonl-secret-#{suffix}"
+    on_exit(fn -> cleanup_sessions([session_key]) end)
+
+    seed_session(session_key, "run-jsonl-#{suffix}", "api_key=#{secret}", "answer", [])
+
+    assert {:ok, jsonl} = SessionLifecycle.export(session_key, format: :jsonl)
+    assert jsonl.format == :jsonl
+    assert jsonl.filename =~ ~r/\.jsonl$/
+    refute jsonl.content =~ secret
+    assert String.ends_with?(jsonl.content, "\n")
+
+    lines = String.split(jsonl.content, "\n", trim: true)
+    assert length(lines) == 1 + jsonl.run_count
+    records = Enum.map(lines, &Jason.decode!/1)
+    assert [%{"type" => "session", "session" => session, "redacted" => true} | runs] = records
+    assert session["sessionKey"] == session_key
+    assert [%{"type" => "run", "runId" => "run-jsonl-" <> _, "answer" => "answer"}] = runs
   end
 
   test "guarded prune binds parameters and exact candidates, excludes pins, and verifies deletion" do

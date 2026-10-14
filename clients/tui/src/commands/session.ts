@@ -33,7 +33,14 @@ import type {
 	SessionsPruneParams,
 } from "../protocol/types.ts";
 import type { AppStore } from "../store/app-store.ts";
-import { asArray, asRecord, humanTime, pickNumber, pickString } from "./format.ts";
+import {
+	asArray,
+	asRecord,
+	humanTime,
+	pickNumber,
+	pickString,
+	sessionUsageLine,
+} from "./format.ts";
 import type { CommandContext, PickerChoice, SlashCommand } from "./registry.ts";
 
 const HISTORY_DEFAULT = 20;
@@ -329,9 +336,9 @@ function renderSessionHelp(ctx: CommandContext): void {
 		"/session title <key> <title…> | title <key> --clear",
 		"/session pin|unpin|archive|unarchive [key]",
 		"/session preview [key] [count]",
-		"/session export [key] [json|markdown] [--output <path>] [--force]",
+		"/session export [key] [json|jsonl|markdown|html] [--output <path>] [--force]",
 		"/session prune --older-than <30d|ISO-date|unix-ms> [--all] [--include-pinned] [--confirm <token>]",
-		"/session delete [key] --confirm <exact-key> [--export json|markdown] [--output <path>]",
+		"/session delete [key] --confirm <exact-key> [--export json|jsonl|markdown|html] [--output <path>]",
 		"destructive operations are never queued while offline; previews and exact confirmations are required",
 	]);
 }
@@ -468,6 +475,7 @@ async function showSession(ctx: CommandContext, key: string, current: boolean): 
 				`busy: ${ctx.session.busy}${ctx.session.activeRunId ? " · active run present" : ""}`,
 				`model: ${ctx.session.model ?? "daemon default"} · native runtime: ${ctx.session.engine ?? "not reported"}`,
 				`thinking: ${ctx.session.thinkingLevel ?? "daemon default"} · tool policy: ${ctx.session.toolPolicy ?? "daemon default"}`,
+				...(await currentUsageLines(ctx, key)),
 			]);
 			return;
 		}
@@ -484,9 +492,29 @@ async function showSession(ctx: CommandContext, key: string, current: boolean): 
 		...(current
 			? [
 					`native runtime: ${ctx.session.engine ?? "not reported"} · thinking: ${ctx.session.thinkingLevel ?? "daemon default"}`,
+					...(await currentUsageLines(ctx, key)),
 				]
 			: []),
 	]);
+}
+
+/**
+ * Cumulative usage of the current session, from `sessions.context`. Strictly
+ * additive: an old daemon, an unmeasured session, or any failure yields no
+ * line rather than breaking `/session info`.
+ */
+async function currentUsageLines(ctx: CommandContext, key: string): Promise<string[]> {
+	if (!ctx.methods.supports(METHOD.sessionsContext)) return [];
+	try {
+		const context = await ctx.methods.sessionsContext({
+			sessionKey: key,
+			cwd: ctx.cwd ?? process.cwd(),
+		});
+		if (context.sessionKey !== key || !context.usage) return [];
+		return [sessionUsageLine(context.usage)];
+	} catch {
+		return [];
+	}
 }
 
 async function openSession(ctx: CommandContext, key: string | undefined): Promise<void> {
@@ -640,7 +668,7 @@ async function exportSession(ctx: CommandContext, argv: string[]): Promise<void>
 	const parsed = parseExportArgs(argv, ctx.session.key);
 	if (typeof parsed === "string") {
 		ctx.ui.notice(
-			`${parsed} · usage: /session export [key] [json|markdown] [--output <path>] [--force]`,
+			`${parsed} · usage: /session export [key] [json|jsonl|markdown|html] [--output <path>] [--force]`,
 			"error",
 		);
 		return;
@@ -664,9 +692,9 @@ function parseExportArgs(argv: string[], defaultKey: string): ExportOptions | st
 			output = value;
 		} else if (arg === "--format") {
 			const value = normalizeExportFormat(argv[++index]);
-			if (!value) return "--format must be json or markdown";
+			if (!value) return "--format must be json, jsonl, markdown or html";
 			format = value;
-		} else if (arg === "json" || arg === "markdown" || arg === "md") {
+		} else if (normalizeExportFormat(arg)) {
 			const value = normalizeExportFormat(arg);
 			if (value) format = value;
 		} else if (arg.startsWith("--")) {
@@ -683,7 +711,9 @@ function parseExportArgs(argv: string[], defaultKey: string): ExportOptions | st
 
 function normalizeExportFormat(value: string | undefined): SessionExportFormat | undefined {
 	if (value === "json") return "json";
+	if (value === "jsonl" || value === "ndjson") return "jsonl";
 	if (value === "markdown" || value === "md") return "markdown";
+	if (value === "html") return "html";
 	return undefined;
 }
 
@@ -863,7 +893,7 @@ async function deleteSession(ctx: CommandContext, argv: string[]): Promise<void>
 	const parsed = parseDeleteArgs(argv, ctx.session.key);
 	if (typeof parsed === "string") {
 		ctx.ui.notice(
-			`${parsed} · usage: /session delete [key] --confirm <exact-key> [--export json|markdown] [--output <path>]`,
+			`${parsed} · usage: /session delete [key] --confirm <exact-key> [--export json|jsonl|markdown|html] [--output <path>]`,
 			"error",
 		);
 		return;
@@ -879,7 +909,7 @@ async function deleteSession(ctx: CommandContext, argv: string[]): Promise<void>
 				`delete preview · ${parsed.key}`,
 				`title present: ${Boolean(pickString(candidate, "title"))} · runs: ${pickNumber(candidate, "runCount") ?? 0} · pinned: ${candidate.pinned === true} · archived: ${candidate.archived === true}`,
 				`confirm this exact session: /session delete ${parsed.key} --confirm ${parsed.key}`,
-				`add --export json|markdown [--output <path>] to save and verify a redacted export before deletion`,
+				`add --export json|jsonl|markdown|html [--output <path>] to save and verify a redacted export before deletion`,
 			],
 			"warning",
 		);

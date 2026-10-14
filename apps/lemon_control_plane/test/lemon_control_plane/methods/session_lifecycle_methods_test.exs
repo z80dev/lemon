@@ -97,6 +97,40 @@ defmodule LemonControlPlane.Methods.SessionLifecycleMethodsTest do
     assert cleanup["maxBytes"] >= exported["bytes"]
   end
 
+  test "sessions.export supports html and jsonl and rejects unknown formats" do
+    suffix = unique_suffix()
+    session_key = "agent:cp_export_fmt_#{suffix}:main"
+
+    on_exit(fn -> SessionLifecycle.delete(session_key) end)
+
+    seed_session(
+      session_key,
+      "run-cp-export-fmt-#{suffix}",
+      "<script>alert(1)</script>",
+      "done"
+    )
+
+    assert {:ok, html} =
+             SessionsExport.handle(%{"sessionKey" => session_key, "format" => "html"}, %{})
+
+    assert html["format"] == "html"
+    assert html["filename"] =~ ~r/\.html$/
+    refute html["content"] =~ "<script"
+    assert html["content"] =~ "&lt;script&gt;"
+
+    assert {:ok, jsonl} =
+             SessionsExport.handle(%{"sessionKey" => session_key, "format" => "jsonl"}, %{})
+
+    assert jsonl["format"] == "jsonl"
+    assert jsonl["filename"] =~ ~r/\.jsonl$/
+    lines = String.split(jsonl["content"], "\n", trim: true)
+    assert length(lines) == 1 + jsonl["summary"]["runCount"]
+    assert Enum.map(lines, &Jason.decode!(&1)["type"]) == ["session", "run"]
+
+    assert {:error, {:invalid_params, "format must be json, jsonl, markdown or html", nil}} =
+             SessionsExport.handle(%{"sessionKey" => session_key, "format" => "pdf"}, %{})
+  end
+
   test "sessions.stats exposes exact filtered aggregates without session or content fields" do
     suffix = unique_suffix()
     session_key = "agent:cp_stats_#{suffix}:main"
