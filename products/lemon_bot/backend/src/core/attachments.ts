@@ -3,7 +3,7 @@ import { mkdir, open, lstat, readFile, readdir, unlink, link } from 'node:fs/pro
 import { join } from 'node:path';
 import { fileTypeFromBuffer, type FileTypeResult } from 'file-type';
 import { unzipSync } from 'fflate';
-import sharp from './image';
+import sharp, { reportImageFailure } from './image';
 import { PDFDocument } from 'pdf-lib';
 import { XMLValidator } from 'fast-xml-parser';
 import { inspectAudio } from '../integrations/audio';
@@ -154,7 +154,7 @@ export async function inspectAttachment(bytes: Uint8Array, filename: string, pur
       const metadata = await image.metadata();
       await image.stats();
       width = metadata.width ?? null; height = metadata.height ?? null;
-    } catch { fail('unsupported_media', 'Image is damaged or cannot be decoded safely.'); }
+    } catch (error) { reportImageFailure(error, 'decode'); fail('unsupported_media', 'Image is damaged or cannot be decoded safely.'); }
   }
   if (preview === 'pdf') {
     try {

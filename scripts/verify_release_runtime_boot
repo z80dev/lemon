@@ -333,6 +333,7 @@ import tarfile
 import time
 import zlib
 from urllib.parse import quote
+from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 tarball, work_dir = sys.argv[1:]
@@ -449,6 +450,39 @@ with log_path.open("xb") as log:
         if (attachment.get("state") != "ready" or attachment.get("mime") != "image/png"
                 or attachment.get("width") != 1 or attachment.get("height") != 1):
             raise SystemExit("lemon_bot: packaged native image pipeline did not decode the uploaded PNG")
+    except HTTPError as error:
+        # Only report the API classification, not arbitrary response messages,
+        # sessions, bootstrap credentials or the raw private backend log.
+        classification = "unknown"
+        try:
+            failure = json.loads(error.read(4096))
+            candidate = failure.get("error", {}).get("code")
+            if isinstance(candidate, str) and re.fullmatch(r"[a-z_]{1,64}", candidate):
+                classification = candidate
+        except (ValueError, AttributeError):
+            pass
+        print(f"lemon_bot: HTTP {error.code}, classification={classification}", file=sys.stderr)
+        with log_path.open("rb") as private_log:
+            private_log.seek(max(0, log_path.stat().st_size - 4096))
+            lines = private_log.read(4096).decode("utf-8", errors="replace").splitlines()
+        diagnostics = [line.removeprefix("LEMON_BOT_IMAGE_DIAGNOSTIC ") for line in lines
+                       if line.startswith("LEMON_BOT_IMAGE_DIAGNOSTIC ")]
+        for line in diagnostics[-3:]:
+            try:
+                diagnostic = json.loads(line)
+                phase = diagnostic.get("phase")
+                reason = diagnostic.get("classification")
+                dependency = diagnostic.get("dependency")
+                if phase not in ("load", "decode") or not isinstance(reason, str) or not re.fullmatch(r"[a-z-]{1,64}", reason):
+                    continue
+                if dependency is not None and (not isinstance(dependency, str) or not re.fullmatch(
+                    r"(?:sharp|detect-libc|semver|@img/(?:colour|sharp-(?:libvips-)?(?:darwin|linux|linuxmusl)-(?:arm64|x64)))", dependency
+                )):
+                    continue
+                print(f"lemon_bot image: phase={phase}, classification={reason}, dependency={dependency or 'unspecified'}", file=sys.stderr)
+            except (ValueError, AttributeError):
+                continue
+        raise SystemExit("lemon_bot: authenticated native image smoke failed; private logs removed")
     finally:
         process.terminate()
         try:

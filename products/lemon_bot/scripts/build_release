@@ -36,4 +36,5 @@ chmod 755 "$STAGE/bot/bin/lemon-bot"
 # Private operator configuration, keys, databases and checkout source are never copied.
 printf '{"product":"lemon_bot","version":"%s","channel":"%s","platform":"%s"}\n' \
   "$VERSION" "$CHANNEL" "$PLATFORM" > "$STAGE/bot/release.json"
-tar -czf "$OUTPUT_DIR/lemon-$VERSION-$CHANNEL-$PLATFORM-lemon_bot.tar.gz" -C "$STAGE" bot
+# macOS tar otherwise adds AppleDouble ._bot outside the allowed archive root.
+COPYFILE_DISABLE=1 tar -czf "$OUTPUT_DIR/lemon-$VERSION-$CHANNEL-$PLATFORM-lemon_bot.tar.gz" -C "$STAGE" bot

@@ -104,5 +104,8 @@ gate uses a clean HOME, verifies the web build, consumes the real one-use setup
 code privately, and uploads a valid PNG through the authenticated API to exercise
 the on-disk native image decoder. Version/help do not load native image libraries;
 their success alone is not evidence the image pipeline works.
+On HTTP failure the gate prints only status/API classification and bounded,
+allowlisted native-image diagnostic classifications. It never prints raw backend
+errors, private logs, setup codes, session tokens or filesystem paths.
 
 Behavioral tests cover actual persistence, authentication/ACL, nonce conflicts/concurrency/restart fences, revision/confirmation binding, group routing, targeted gate races/deadlines, attachment tickets/ranges/provenance, voice concurrency, and runtime adapter boundaries. These commands are prescribed checks, not a claim that they were exercised. Live verification also requires an enrolled host and real provider configuration for the corresponding integrations.
