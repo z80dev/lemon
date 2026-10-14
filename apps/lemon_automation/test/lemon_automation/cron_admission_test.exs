@@ -7,6 +7,7 @@ defmodule LemonAutomation.CronAdmissionTest do
   @origin "https://admission.example.test"
   @profile_id "profile-admission"
   @token "private-admission-token"
+  @run_id "router-run-admission"
   @fixture_options [plug: {Req.Test, __MODULE__}]
 
   setup do
@@ -46,7 +47,7 @@ defmodule LemonAutomation.CronAdmissionTest do
     run = %CronRun{
       id: "cron-run-admission",
       job_id: job.id,
-      run_id: "router-run-admission",
+      run_id: @run_id <> "-" <> suffix,
       status: :pending,
       triggered_by: :schedule,
       meta: %{scheduled_for_ms: 1_800_000_000_000}
@@ -192,13 +193,13 @@ defmodule LemonAutomation.CronAdmissionTest do
     end
   end
 
-  describe "validate_invocation/1" do
+  describe "validate_invocation/2" do
     test "normalizes the complete private wire object without resolving secrets" do
-      assert {:ok, projection} = CronAdmission.validate_invocation(invocation())
+      assert {:ok, projection} = CronAdmission.validate_invocation(invocation(), @run_id)
       assert projection == canonical_invocation()
     end
 
-    test "requires all three exact string keys and their supported types" do
+    test "requires all six exact string keys and their supported types" do
       input = invocation()
 
       for invalid <- [
@@ -207,45 +208,66 @@ defmodule LemonAutomation.CronAdmissionTest do
             false,
             Map.put(input, "unexpected", true),
             Map.put(input, :invocationContextKey, "ambiguous"),
+            Map.take(input, ~w(invocationContextKey invocationMcpServers invocationToolPolicy)),
             %{context_key: "context", mcp_servers: [], tool_policy: %{}}
           ] do
-        assert {:error, :admission_unavailable} = CronAdmission.validate_invocation(invalid)
+        assert {:error, :admission_unavailable} = CronAdmission.validate_invocation(invalid, @run_id)
       end
 
-      for key <- Map.keys(input), value <- [nil, 123, "wrong-type", false] do
-        if key != "invocationContextKey" or value != "wrong-type" do
+      for key <- Map.keys(input), value <- [nil, 123, "wrong-type", false, true] do
+        if not (key in ["invocationContextKey", "memoryContextKey"] and value == "wrong-type") and
+             not (key == "sharedMemoryGrant" and value == false) do
           assert {:error, :admission_unavailable} =
-                   CronAdmission.validate_invocation(Map.put(input, key, value))
+                   CronAdmission.validate_invocation(Map.put(input, key, value), @run_id)
         end
       end
 
       for key <- Map.keys(input) do
         assert {:error, :admission_unavailable} =
-                 CronAdmission.validate_invocation(Map.delete(input, key))
+                 CronAdmission.validate_invocation(Map.delete(input, key), @run_id)
       end
     end
 
-    test "uses bounded ASCII context identities" do
-      for key <- ["a", "A0_.:-context", String.duplicate("x", 128)] do
-        assert {:ok, %{context_key: ^key}} =
-                 CronAdmission.validate_invocation(Map.put(invocation(), "invocationContextKey", key))
-      end
+    test "uses bounded ASCII invocation and memory identities" do
+      for field <- ["invocationContextKey", "memoryContextKey"] do
+        for key <- ["a", "A0_.:-context", String.duplicate("x", 128)] do
+          assert {:ok, projection} =
+                   CronAdmission.validate_invocation(Map.put(invocation(), field, key), @run_id)
 
-      for key <- [nil, "", " space", "_start", "a/b", "a\n", "é", <<255>>, 123, String.duplicate("x", 129)] do
+          canonical_field = if field == "memoryContextKey", do: :memory_key, else: :context_key
+          assert projection[canonical_field] == key
+        end
+
+        for key <- [nil, "", " space", "_start", "a/b", "a\n", "é", <<255>>, 123, String.duplicate("x", 129)] do
+          assert {:error, :admission_unavailable} =
+                   CronAdmission.validate_invocation(Map.put(invocation(), field, key), @run_id)
+        end
+      end
+    end
+
+    test "an empty replacement cannot bind a proof while sparse empty policy stays explicit" do
+      input = Map.put(invocation(), "invocationToolPolicy", %{})
+      assert {:ok, %{tool_policy: %{}}} = CronAdmission.validate_invocation(input, @run_id)
+
+      assert {:error, :admission_unavailable} =
+               CronAdmission.validate_invocation(Map.put(input, "invocationMcpServers", []), @run_id)
+    end
+
+    test "fresh proof validation rejects stale or foreign authority before any transport" do
+      stub_no_dispatch()
+      input = invocation()
+
+      for invalid <- invalid_bound_invocations(input) do
         assert {:error, :admission_unavailable} =
-                 CronAdmission.validate_invocation(Map.put(invocation(), "invocationContextKey", key))
+                 CronAdmission.validate_invocation(invalid, @run_id)
       end
-    end
 
-    test "an explicit empty MCP replacement and sparse empty policy stay explicit" do
-      input = %{
-        "invocationContextKey" => "empty-context",
-        "invocationMcpServers" => [],
-        "invocationToolPolicy" => %{}
-      }
+      for fixed_run_id <- [nil, "", "invalid run", "foreign-run", String.duplicate("x", 129)] do
+        assert {:error, :admission_unavailable} =
+                 CronAdmission.validate_invocation(input, fixed_run_id)
+      end
 
-      assert {:ok, %{context_key: "empty-context", mcp_servers: [], tool_policy: %{}}} =
-               CronAdmission.validate_invocation(input)
+      refute_received :unexpected_dispatch
     end
 
     test "rejects unknown server fields, duplicate names, and malformed native configuration" do
@@ -265,7 +287,10 @@ defmodule LemonAutomation.CronAdmissionTest do
             %{}
           ] do
         assert {:error, :admission_unavailable} =
-                 CronAdmission.validate_invocation(Map.put(invocation(), "invocationMcpServers", servers))
+                 CronAdmission.validate_invocation(
+                   Map.put(invocation(), "invocationMcpServers", servers),
+                   @run_id
+                 )
       end
     end
 
@@ -288,7 +313,8 @@ defmodule LemonAutomation.CronAdmissionTest do
           ] do
         assert {:error, :admission_unavailable} =
                  CronAdmission.validate_invocation(
-                   Map.put(invocation(), "invocationMcpServers", [Map.put(server, "url", url)])
+                   Map.put(invocation(), "invocationMcpServers", [Map.put(server, "url", url)]),
+                   @run_id
                  )
       end
     end
@@ -311,11 +337,12 @@ defmodule LemonAutomation.CronAdmissionTest do
             "${LEMON_SECRET:" <> String.duplicate("x", 513) <> "}",
             nil
           ] do
-        headers = %{"Authorization" => value}
+        headers = Map.put(server["headers"], "Authorization", value)
 
         assert {:error, :admission_unavailable} =
                  CronAdmission.validate_invocation(
-                   Map.put(invocation(), "invocationMcpServers", [Map.put(server, "headers", headers)])
+                   Map.put(invocation(), "invocationMcpServers", [Map.put(server, "headers", headers)]),
+                   @run_id
                  )
       end
     end
@@ -334,7 +361,7 @@ defmodule LemonAutomation.CronAdmissionTest do
             %{"no_reply" => "false"}
           ] do
         assert {:error, :admission_unavailable} =
-                 CronAdmission.validate_invocation(Map.put(invocation(), "invocationToolPolicy", policy))
+                 CronAdmission.validate_invocation(Map.put(invocation(), "invocationToolPolicy", policy), @run_id)
       end
     end
 
@@ -355,19 +382,27 @@ defmodule LemonAutomation.CronAdmissionTest do
           ] do
         assert {:error, :admission_unavailable} =
                  CronAdmission.validate_invocation(
-                   Map.put(invocation(), "invocationMcpServers", [Map.put(server, "headers", headers)])
+                   Map.put(invocation(), "invocationMcpServers", [
+                     Map.put(server, "headers", Map.merge(server["headers"], headers))
+                   ]),
+                   @run_id
                  )
       end
 
-      headers = %{"Cookie" => "${LEMON_SECRET:missing}", "authorization" => "${LEMON_SECRET:missing}"}
+      headers =
+        Map.merge(server["headers"], %{
+          "Cookie" => "${LEMON_SECRET:missing}",
+          "authorization" => "${LEMON_SECRET:missing}"
+        })
       assert {:ok, _} =
                CronAdmission.validate_invocation(
-                 Map.put(invocation(), "invocationMcpServers", [Map.put(server, "headers", headers)])
+                 Map.put(invocation(), "invocationMcpServers", [Map.put(server, "headers", headers)]),
+                 @run_id
                )
     end
 
     test "literal-loopback HTTP creator bridges require both exact origin approvals", %{job: job, run: run} do
-      server = hd(invocation()["invocationMcpServers"])
+      [core, server] = invocation(run.run_id)["invocationMcpServers"]
 
       for origin <- ["http://127.0.0.1:8123", "http://[::1]:8123"] do
         bridge =
@@ -376,9 +411,12 @@ defmodule LemonAutomation.CronAdmissionTest do
           |> Map.put("allowedOrigins", [origin <> "/"])
           |> Map.put("approvedPrivateOrigins", [origin])
 
-        input = Map.put(invocation(), "invocationMcpServers", [bridge])
-        expected = %{canonical_invocation() | mcp_servers: [Map.put(bridge, "allowedOrigins", [origin])]}
-        assert {:ok, ^expected} = CronAdmission.validate_invocation(input)
+        input = Map.put(invocation(run.run_id), "invocationMcpServers", [core, bridge])
+        expected = %{
+          canonical_invocation(run.run_id)
+          | mcp_servers: [core, Map.put(bridge, "allowedOrigins", [origin])]
+        }
+        assert {:ok, ^expected} = CronAdmission.validate_invocation(input, run.run_id)
 
         Req.Test.stub(__MODULE__, fn conn ->
           {context, conn} = read_context(conn)
@@ -395,7 +433,10 @@ defmodule LemonAutomation.CronAdmissionTest do
               Map.put(bridge, "url", String.replace(bridge["url"], ":8123", ":8124"))
             ] do
           assert {:error, :admission_unavailable} =
-                   CronAdmission.validate_invocation(Map.put(input, "invocationMcpServers", [invalid]))
+                   CronAdmission.validate_invocation(
+                     Map.put(input, "invocationMcpServers", [core, invalid]),
+                     run.run_id
+                   )
         end
       end
 
@@ -414,14 +455,20 @@ defmodule LemonAutomation.CronAdmissionTest do
           |> Map.put("approvedPrivateOrigins", [origin])
 
         assert {:error, :admission_unavailable} =
-                 CronAdmission.validate_invocation(Map.put(invocation(), "invocationMcpServers", [bridge]))
+                 CronAdmission.validate_invocation(
+                   Map.put(invocation(run.run_id), "invocationMcpServers", [core, bridge]),
+                   run.run_id
+                 )
       end
     end
 
     test "native policy preset and all-allow retain sparse canonical values" do
       policy = %{"profile" => "full_access", "allow" => "all"}
       assert {:ok, %{tool_policy: ^policy}} =
-               CronAdmission.validate_invocation(Map.put(invocation(), "invocationToolPolicy", policy))
+               CronAdmission.validate_invocation(
+                 Map.put(invocation(), "invocationToolPolicy", policy),
+                 @run_id
+               )
     end
   end
 
@@ -466,27 +513,81 @@ defmodule LemonAutomation.CronAdmissionTest do
       assert {:error, :denied} = CronAdmission.check(job, run, @fixture_options)
     end
 
-    test "approved bound projection returns canonical private invocation", %{job: job, run: run} do
-      expected = canonical_invocation()
+    test "approved fresh slot returns canonical core proof, creator refs and native memory key", %{job: job, run: run} do
+      expected = canonical_invocation(run.run_id)
 
       Req.Test.stub(__MODULE__, fn conn ->
         {context, conn} = read_context(conn)
         assert context === expected_context(job, run)
-        Req.Test.json(conn, %{"allow" => true, "context" => context, "invocation" => invocation()})
+        Req.Test.json(conn, %{
+          "allow" => true,
+          "context" => context,
+          "invocation" => invocation(context["routerRunId"])
+        })
       end)
 
       assert {:ok, ^expected} = CronAdmission.check(job, run, @fixture_options)
+      assert expected.memory_key == "creator-memory:epoch.1"
+      assert expected.shared_memory_grant == false
+      assert expected.proof["runId"] == run.run_id
+      [core, creator] = expected.mcp_servers
+      assert core["headers"]["X-Lemon-Bot-Invocation"] ==
+               "${LEMON_SECRET:lemon_bot/invocations/#{run.run_id}}"
+      assert creator["headers"]["Authorization"] ==
+               "Bearer ${LEMON_SECRET:cron-projection-missing-token}"
     end
 
-    test "approved explicit empty MCP list remains a complete empty replacement", %{job: job, run: run} do
-      input = Map.put(invocation(), "invocationMcpServers", [])
+    test "approved empty MCP replacement is unavailable without a bindable proof", %{job: job, run: run} do
+      input = Map.put(invocation(run.run_id), "invocationMcpServers", [])
 
       Req.Test.stub(__MODULE__, fn conn ->
         {context, conn} = read_context(conn)
         Req.Test.json(conn, %{"allow" => true, "context" => context, "invocation" => input})
       end)
 
-      assert {:ok, %{mcp_servers: []}} = CronAdmission.check(job, run, @fixture_options)
+      assert {:error, :admission_unavailable} = CronAdmission.check(job, run, @fixture_options)
+    end
+
+    test "a previous slot's otherwise valid proof cannot approve the fresh slot", %{job: job, run: run} do
+      stale = invocation(run.run_id <> "-previous-slot")
+
+      Req.Test.stub(__MODULE__, fn conn ->
+        {context, conn} = read_context(conn)
+        assert context["routerRunId"] == run.run_id
+        Req.Test.json(conn, %{"allow" => true, "context" => context, "invocation" => stale})
+      end)
+
+      assert {:error, :admission_unavailable} = CronAdmission.check(job, run, @fixture_options)
+    end
+
+    test "invalid run-bound proof, memory, grants and callback attestation flags fail closed", %{job: job, run: run} do
+      for invalid <- invalid_bound_invocations(invocation(run.run_id)) do
+        Req.Test.stub(__MODULE__, fn conn ->
+          {context, conn} = read_context(conn)
+          Req.Test.json(conn, %{"allow" => true, "context" => context, "invocation" => invalid})
+        end)
+
+        assert {:error, :admission_unavailable} = CronAdmission.check(job, run, @fixture_options)
+      end
+    end
+
+    test "receipt-level metadata cannot attest otherwise valid execution context", %{job: job, run: run} do
+      for field <- ["meta", "memory_context_verified", "invocation_proof_verified", "shared_memory_grant"] do
+        Req.Test.stub(__MODULE__, fn conn ->
+          {context, conn} = read_context(conn)
+
+          receipt = %{
+            "allow" => true,
+            "context" => context,
+            "invocation" => invocation(context["routerRunId"]),
+            field => true
+          }
+
+          Req.Test.json(conn, receipt)
+        end)
+
+        assert {:error, :admission_unavailable} = CronAdmission.check(job, run, @fixture_options)
+      end
     end
 
     test "projection never weakens exact binding or denied receipt shape", %{job: job, run: run} do
@@ -495,7 +596,7 @@ defmodule LemonAutomation.CronAdmissionTest do
           Req.Test.stub(__MODULE__, fn conn ->
             {context, conn} = read_context(conn)
             context = if mismatch, do: Map.put(context, "creatorId", "other-creator"), else: context
-            receipt = %{"allow" => allow, "context" => context, "invocation" => invocation()}
+            receipt = %{"allow" => allow, "context" => context, "invocation" => invocation(run.run_id)}
             receipt = if extra, do: Map.put(receipt, "unexpected", true), else: receipt
             Req.Test.json(conn, receipt)
           end)
@@ -506,17 +607,18 @@ defmodule LemonAutomation.CronAdmissionTest do
     end
 
     test "invalid approved projections and any denied projection are unavailable", %{job: job, run: run} do
-      server = hd(invocation()["invocationMcpServers"])
+      input = invocation(run.run_id)
+      server = hd(input["invocationMcpServers"])
       literal_server = Map.put(server, "headers", %{"Authorization" => "Bearer literal-credential"})
 
       for input <- [
             nil,
             %{},
-            Map.delete(invocation(), "invocationToolPolicy"),
-            Map.put(invocation(), "unexpected", true),
-            Map.put(invocation(), "invocationContextKey", "invalid key"),
-            Map.put(invocation(), "invocationToolPolicy", %{"unsupported" => true}),
-            Map.put(invocation(), "invocationMcpServers", [literal_server])
+            Map.delete(input, "invocationToolPolicy"),
+            Map.put(input, "unexpected", true),
+            Map.put(input, "invocationContextKey", "invalid key"),
+            Map.put(input, "invocationToolPolicy", %{"unsupported" => true}),
+            Map.put(input, "invocationMcpServers", [literal_server])
           ], allow <- [true, false] do
         Req.Test.stub(__MODULE__, fn conn ->
           {context, conn} = read_context(conn)
@@ -529,8 +631,23 @@ defmodule LemonAutomation.CronAdmissionTest do
 
     test "job and run metadata cannot supply a trusted projection", %{job: job, run: run} do
       stub_receipt(true)
-      job = %{job | meta: %{"invocation" => invocation()}}
-      run = %{run | meta: %{invocation: invocation()}}
+      job = %{
+        job
+        | meta: %{
+            "invocation" => invocation(run.run_id),
+            "memory_context_verified" => true,
+            "invocation_proof_verified" => true
+          }
+      }
+
+      run = %{
+        run
+        | meta: %{
+            invocation: invocation(run.run_id),
+            memory_context_verified: true,
+            invocation_proof_verified: true
+          }
+      }
       assert :ok = CronAdmission.check(job, run, @fixture_options)
     end
 
@@ -806,10 +923,26 @@ defmodule LemonAutomation.CronAdmissionTest do
     end
   end
 
-  defp invocation do
+  defp invocation(run_id \\ @run_id) do
     %{
       "invocationContextKey" => "creator-context:epoch.1",
+      "memoryContextKey" => "creator-memory:epoch.1",
+      "sharedMemoryGrant" => false,
+      "invocationProof" => %{
+        "runId" => run_id,
+        "serverName" => "core-mcp",
+        "serverUrl" => "https://core.example.test/mcp",
+        "headerName" => "X-Lemon-Bot-Invocation",
+        "secretName" => "lemon_bot/invocations/" <> run_id
+      },
       "invocationMcpServers" => [
+        %{
+          "name" => "core-mcp",
+          "url" => "https://core.example.test/mcp",
+          "headers" => %{
+            "X-Lemon-Bot-Invocation" => "${LEMON_SECRET:lemon_bot/invocations/#{run_id}}"
+          }
+        },
         %{
           "name" => "creator-mcp",
           "url" => "https://mcp.example.test/mcp",
@@ -833,15 +966,84 @@ defmodule LemonAutomation.CronAdmissionTest do
     }
   end
 
-  defp canonical_invocation do
-    input = invocation()
-    server = hd(input["invocationMcpServers"])
+  defp canonical_invocation(run_id \\ @run_id) do
+    input = invocation(run_id)
+    [core, creator] = input["invocationMcpServers"]
 
     %{
-      context_key: "creator-context:epoch.1",
-      mcp_servers: [Map.put(server, "allowedOrigins", ["https://mcp.example.test"])],
-      tool_policy: Map.put(input["invocationToolPolicy"], "allow", ["query"])
+      context_key: input["invocationContextKey"],
+      memory_key: input["memoryContextKey"],
+      mcp_servers: [core, Map.put(creator, "allowedOrigins", ["https://mcp.example.test"])],
+      tool_policy: Map.put(input["invocationToolPolicy"], "allow", ["query"]),
+      proof: input["invocationProof"],
+      shared_memory_grant: false
     }
+  end
+
+  defp invalid_bound_invocations(input) do
+    proof = input["invocationProof"]
+    [core, creator] = input["invocationMcpServers"]
+    header = proof["headerName"]
+    reference = core["headers"][header]
+    foreign_secret = "lemon_bot/invocations/foreign-run"
+    wrong_namespace = "other/invocations/" <> proof["runId"]
+
+    invalid_proofs = [
+      nil,
+      %{},
+      proof |> Map.delete("runId") |> Map.put(:run_id, proof["runId"]),
+      Map.put(proof, "unexpected", true),
+      Map.put(proof, "runId", "foreign-run"),
+      Map.put(proof, "serverName", creator["name"]),
+      Map.put(proof, "serverName", "unselected-core"),
+      Map.put(proof, "serverUrl", creator["url"]),
+      Map.put(proof, "serverUrl", "https://foreign.example.test/mcp"),
+      Map.put(proof, "headerName", String.downcase(header)),
+      Map.put(proof, "secretName", foreign_secret),
+      Map.put(proof, "secretName", wrong_namespace)
+    ]
+
+    invalid_proofs =
+      invalid_proofs ++
+        Enum.map(Map.keys(proof), &Map.delete(proof, &1)) ++
+        for field <- Map.keys(proof), value <- [nil, true, 123, ""] do
+          Map.put(proof, field, value)
+        end
+
+    invalid_headers = [
+      %{},
+      %{String.downcase(header) => reference},
+      %{header => reference, String.downcase(header) => reference},
+      %{header => "${LEMON_SECRET:#{foreign_secret}}"},
+      %{header => "${LEMON_SECRET:#{wrong_namespace}}"},
+      %{header => "literal-proof"},
+      %{header => "${FOREIGN_SECRET:#{proof["secretName"]}}"}
+    ]
+
+    Enum.map(invalid_proofs, &Map.put(input, "invocationProof", &1)) ++
+      Enum.map(invalid_headers, fn headers ->
+        Map.put(input, "invocationMcpServers", [Map.put(core, "headers", headers), creator])
+      end) ++
+      [
+        invocation("foreign-run"),
+        input
+        |> Map.put("invocationProof", Map.put(proof, "secretName", wrong_namespace))
+        |> Map.put("invocationMcpServers", [
+          Map.put(core, "headers", %{header => "${LEMON_SECRET:#{wrong_namespace}}"}),
+          creator
+        ]),
+        Map.put(input, "invocationMcpServers", []),
+        Map.put(input, "invocationMcpServers", [creator]),
+        Map.put(input, "invocationMcpServers", [core, core, creator]),
+        Map.delete(input, "memoryContextKey"),
+        Map.put(input, "memoryContextKey", "invalid memory key"),
+        Map.put(input, "sharedMemoryGrant", true),
+        Map.put(input, "sharedMemoryGrant", "false"),
+        Map.put(input, "meta", %{"memory_context_verified" => true, "invocation_proof_verified" => true}),
+        Map.put(input, "memory_context_verified", true),
+        Map.put(input, "invocation_proof_verified", true),
+        Map.put(input, "shared_memory_grant", false)
+      ]
   end
 
   defp stub_receipt(allow) do

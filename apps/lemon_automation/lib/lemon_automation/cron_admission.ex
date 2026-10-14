@@ -15,13 +15,18 @@ defmodule LemonAutomation.CronAdmission do
   trailing `/`), query, userinfo or fragment; callback URLs also forbid queries.
 
   A bound approving receipt may additionally contain a private `invocation`
-  object with exactly `invocationContextKey`, `invocationMcpServers`, and
-  `invocationToolPolicy`. Its canonical projection is returned to the caller,
-  never persisted here. MCP headers contain destination-local encrypted secret
-  references only; this module does not resolve invocation credentials.
+  object with exactly `invocationContextKey`, `memoryContextKey`,
+  `invocationMcpServers`, `invocationToolPolicy`, `invocationProof`, and
+  `sharedMemoryGrant`. Both context keys are validated; scheduled invocations
+  cannot grant shared memory. The proof must bind the actual fixed router run ID
+  to exactly one normalized MCP server's factory-owned invocation header.
+  Its string-keyed descriptor is preserved in the canonical private projection
+  for the execution factory to revalidate against the profile-built request.
+  MCP headers contain destination-local encrypted secret references only; this
+  module neither resolves invocation credentials nor accepts attestation flags.
   """
 
-  alias LemonCore.{Env, ProfileStore, RunRequest, Secrets, ToolPolicy}
+  alias LemonCore.{Env, InvocationProof, ProfileStore, RunRequest, Secrets, ToolPolicy}
 
   @fields [:url, :token_secret, :routine_id, :creator_id, :workspace_id]
   @string_fields Enum.map(@fields, &Atom.to_string/1)
@@ -30,7 +35,7 @@ defmodule LemonAutomation.CronAdmission do
   @max_token_bytes 4096
   @max_response_bytes 16_384
   @request_timeout_ms 5000
-  @invocation_fields ~w(invocationContextKey invocationMcpServers invocationToolPolicy)
+  @invocation_fields ~w(invocationContextKey memoryContextKey invocationMcpServers invocationToolPolicy invocationProof sharedMemoryGrant)
   @mcp_fields ~w(name url headers enabledTools allowedOrigins approvedPrivateOrigins)
   @transport_headers ~w(host content-length connection transfer-encoding upgrade proxy-authorization mcp-session-id)
 
@@ -43,8 +48,11 @@ defmodule LemonAutomation.CronAdmission do
         }
   @type invocation :: %{
           context_key: String.t(),
+          memory_key: String.t(),
           mcp_servers: [map()],
-          tool_policy: map()
+          tool_policy: map(),
+          proof: %{String.t() => String.t()},
+          shared_memory_grant: false
         }
   @type outcome :: :ok | {:ok, invocation()} | {:error, :denied | :admission_unavailable}
 
@@ -77,28 +85,42 @@ defmodule LemonAutomation.CronAdmission do
   def validate(_, _), do: {:error, "invalid_admission"}
 
   @doc """
-  Validates the exact string-keyed invocation object from an approving receipt.
-  Uses the shared context-key, MCP and sparse tool-policy normalizers. Unknown
-  invocation/server fields, credential-bearing URLs, and literal header values
-  fail closed. Header values must be `${LEMON_SECRET:NAME}` (optionally prefixed
-  with `Bearer ` for Authorization); resolution belongs solely to the executing
-  host. HTTPS is required except for literal-loopback HTTP whose exact origin is
-  in both `allowedOrigins` and `approvedPrivateOrigins`. `[]` is an explicit
-  complete MCP replacement, not profile inheritance.
+  Validates the exact string-keyed invocation object from an approving receipt
+  against the actual fixed router run ID. Uses the shared context-key, MCP,
+  sparse tool-policy and run-bound proof validators. Unknown invocation/server
+  fields, credential-bearing URLs, and literal header values fail closed.
+  Header values must be `${LEMON_SECRET:NAME}` (optionally prefixed with
+  `Bearer ` for Authorization); resolution belongs solely to the executing host.
+  HTTPS is required except for literal-loopback HTTP whose exact origin is in
+  both `allowedOrigins` and `approvedPrivateOrigins`. The MCP list is a complete
+  replacement, not profile inheritance; an empty list cannot bind a proof.
   """
-  @spec validate_invocation(term()) ::
+  @spec validate_invocation(term(), term()) ::
           {:ok, invocation()} | {:error, :admission_unavailable}
-  def validate_invocation(projection) when is_map(projection) do
+  def validate_invocation(projection, fixed_run_id) when is_map(projection) do
     with true <- map_size(projection) == length(@invocation_fields),
          true <- Enum.all?(Map.keys(projection), &(&1 in @invocation_fields)),
          key = projection["invocationContextKey"],
          :ok <- RunRequest.validate_invocation_context_key(key),
+         memory_key = projection["memoryContextKey"],
+         :ok <- RunRequest.validate_invocation_context_key(memory_key),
+         false <- projection["sharedMemoryGrant"],
          servers = projection["invocationMcpServers"],
          true <- valid_invocation_servers?(servers),
          {:ok, servers} <- ProfileStore.normalize_mcp_servers(servers),
          true <- Enum.all?(servers, &valid_invocation_transport?/1),
+         proof = projection["invocationProof"],
+         {:ok, _bound_proof} <- InvocationProof.validate(proof, fixed_run_id, servers),
          {:ok, policy} <- ToolPolicy.normalize(projection["invocationToolPolicy"]) do
-      {:ok, %{context_key: key, mcp_servers: servers, tool_policy: policy}}
+      {:ok,
+       %{
+         context_key: key,
+         memory_key: memory_key,
+         mcp_servers: servers,
+         tool_policy: policy,
+         proof: proof,
+         shared_memory_grant: false
+       }}
     else
       _ -> {:error, :admission_unavailable}
     end
@@ -108,7 +130,7 @@ defmodule LemonAutomation.CronAdmission do
     _, _ -> {:error, :admission_unavailable}
   end
 
-  def validate_invocation(_), do: {:error, :admission_unavailable}
+  def validate_invocation(_, _), do: {:error, :admission_unavailable}
 
   defp valid_invocation_servers?(servers) when is_list(servers) and length(servers) <= 32 do
     Enum.all?(servers, fn server ->
@@ -305,7 +327,7 @@ defmodule LemonAutomation.CronAdmission do
       case {allow, Map.fetch(decoded, "invocation")} do
         {true, :error} -> :ok
         {false, :error} -> {:error, :denied}
-        {true, {:ok, projection}} -> validate_invocation(projection)
+        {true, {:ok, projection}} -> validate_invocation(projection, context["routerRunId"])
         {false, {:ok, _}} -> {:error, :admission_unavailable}
       end
     else
