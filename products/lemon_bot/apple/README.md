@@ -53,6 +53,8 @@ Skills, routines, reviewed memory import, templates, search, inbox, workspace an
 
 Mailbox indexing warnings appear only for a real provider-reported delay, with the observation time/age; missing observations remain unknown rather than implying an up-to-date mailbox. The address flow is availability check → exact scoped proposal → targeted approval → actual provider claim, never a synthetic local mailbox.
 
+After account deletion revokes its sessions, an enabled workspace Owner can read the bounded cleanup-operation list/details, keeping product removal separate from each actual provider's receipt/status. Refresh is read-only and never replays deletion or provider revocation. The deleted client retains only safe opaque user/operation/request diagnostics for handoff, with copy/clear controls available at sign-in; it does not retain an authorization capability or restore deleted login. Pending X connections display **Account not yet verified**, not an invented username/account identity.
+
 ## Explicit platform capture and voice
 
 **macOS:** menu bar access, optional single selected-Bot compact companion, configurable global summon and hold-to-talk shortcuts. Dictation/PTT displays microphone ownership and on/off cues; release produces editable **unsent** text for review, and cancellation discards capture. The summon composer accepts explicitly selected text/files only. It does not capture screens, monitor clipboard history, listen ambiently, or create a virtual desktop per Bot.

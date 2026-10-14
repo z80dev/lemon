@@ -204,7 +204,12 @@ struct XConnectionSettingsRow: View {
     @State private var enabled = false
     var body: some View {
         VStack(alignment: .leading) {
-            Text("@\(connection.username) · \(connection.state) · external account \(connection.externalAccountId)")
+            if let username = connection.username, let externalID = connection.externalAccountId {
+                Text("@\(username) · \(connection.state) · verified external account \(externalID)")
+                if connection.state != "connected" { Text("Last verified identity only; this is not an active authorization grant.").font(.caption).foregroundStyle(.secondary) }
+            } else {
+                Text("Account not yet verified · \(connection.state)")
+            }
             if let error = connection.lastError { Text(error).foregroundStyle(.red).textSelection(.enabled) }
             AdminBotPicker(store: store, value: $botID, ownedOnly: true)
             Toggle("Enable my mention integration", isOn: $enabled)

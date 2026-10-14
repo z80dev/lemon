@@ -124,6 +124,8 @@ struct AdminPreviewDelete: View {
     let path: String
     var action = "delete"
     var additional: JSONObject = [:]
+    var submitted: (String) -> Void = { _ in }
+    var failed: (String, Error) -> Void = { _, _ in }
     var completed: () async throws -> Void = {}
     @State private var control = AdminControl()
     @State private var preview: Confirmation?
@@ -151,7 +153,15 @@ struct AdminPreviewDelete: View {
                     body["revision"] = .number(Double(preview.revision))
                     body["confirmationToken"] = .string(preview.confirmationToken)
                     body["confirmName"] = .string(typedName)
-                    _ = try await store.mutate("DELETE", path, body: body, as: Deleted.self)
+                    let nonce = UUID().uuidString
+                    body["clientNonce"] = .string(nonce)
+                    submitted(nonce)
+                    do {
+                        _ = try await store.mutate("DELETE", path, body: body, as: Deleted.self)
+                    } catch {
+                        failed(nonce, error)
+                        throw error
+                    }
                     self.preview = nil; typedName = ""
                     try await completed()
                 }.disabled(typedName != preview.confirmName || Double(preview.expiresAtMs) <= Date().timeIntervalSince1970 * 1000)
@@ -172,6 +182,9 @@ public struct SettingsHubView: View {
             }
             Section("Workspace and access") {
                 NavigationLink("Workspace, members and invitations") { WorkspaceSettingsView(store: store) }
+                if store.member?.role == "owner" {
+                    NavigationLink("Read-only account cleanup observations") { AccountCleanupSettingsView(store: store) }
+                }
                 NavigationLink("Policies, action review and consents") { PolicySettingsView(store: store) }
                 NavigationLink("Identity, OIDC and SCIM") { IdentitySettingsView(store: store) }
                 NavigationLink("Directory groups and governance") { DirectorySettingsView(store: store) }

@@ -18,6 +18,7 @@ struct AccountSettingsView: View {
     @State private var sessions: [AuthSession] = []
     @State private var devices: [Device] = []
     @State private var importingAvatar = false
+    @AppStorage("LemonBot.safeAccountCleanupDiagnostics") private var cleanupDiagnostics = ""
     var body: some View {
         Form {
             AdminStatus(control: control, store: store)
@@ -67,6 +68,7 @@ struct AccountSettingsView: View {
             }
             Section("Account-wide deletion") {
                 Text("Deletion revokes product access and removes the previewed personal resources across all devices. Transfer final workspace ownership first. Host files, browser sessions, destination credentials, external provider authorizations/subscriptions and retained operator backups are separate. Mailbox retirement is only complete when the provider acknowledges it; unknown cleanup is not success.")
+                Text("Sessions revoke immediately, even when external cleanup is not yet confirmed. An enabled workspace Owner can inspect the fixed operation in Settings → Read-only account cleanup observations. Safe operation/user/request diagnostics below can be handed to that Owner; they never restore your deleted login or retry deletion.")
                 SecureField("Password for one-use reauthentication", text: $reauthPassword)
                 AdminAction(title: "Reauthenticate", store: store, control: control) {
                     let result = try await store.mutate("POST", "/auth/reauth", body: ["password": .string(reauthPassword)], as: ReauthResult.self)
@@ -74,9 +76,21 @@ struct AccountSettingsView: View {
                 }
                 OIDCVerificationView(store: store, purpose: "reauth", reauthToken: $reauthToken)
                 if !reauthToken.isEmpty {
-                    AdminPreviewDelete(store: store, path: "/me", additional: ["reauthToken": .string(reauthToken)]) {
+                    AdminPreviewDelete(store: store, path: "/me", additional: ["reauthToken": .string(reauthToken)], submitted: { nonce in
+                        retainCleanupDiagnostics(nonce: nonce)
+                    }, failed: { nonce, error in
+                        retainCleanupDiagnostics(nonce: nonce, error: error)
+                    }) {
                         reauthToken = ""; try await store.signOut()
                     }
+                }
+            }
+            if !cleanupDiagnostics.isEmpty {
+                Section("Safe account-cleanup handoff diagnostics") {
+                    Text(cleanupDiagnostics).font(.caption).textSelection(.enabled)
+                    Button("Copy safe cleanup diagnostics") { copyText(cleanupDiagnostics) }
+                    Button("Clear this local diagnostic copy") { cleanupDiagnostics = "" }
+                    Text("This contains only opaque operation/user/request identifiers and observation time, not credentials or a read capability.").font(.caption)
                 }
             }
             Button("Refresh account, sessions and devices") { Task { await control.perform { try await load() } } }
@@ -94,6 +108,15 @@ struct AccountSettingsView: View {
                 } }
             }
             .onDisappear { currentPassword = ""; newPassword = ""; reauthPassword = ""; reauthToken = "" }
+    }
+    private func retainCleanupDiagnostics(nonce: String, error: Error? = nil) {
+        var fields = ["userId=\(user?.id ?? store.user?.id ?? "unknown")", "workspaceId=\(store.workspace?.id ?? "unknown")", "clientNonce=\(nonce)", "observedAt=\(Date().formatted(.iso8601))"]
+        if let backend = error as? BackendError {
+            fields.append("requestId=\(backend.failure.requestId)")
+            fields.append("errorCode=\(backend.failure.code)")
+            if let teardownID = backend.failure.details?["teardownId"]?.stringValue { fields.append("teardownId=\(teardownID)") }
+        }
+        cleanupDiagnostics = fields.joined(separator: "\n")
     }
     private func loadSessions() async throws { sessions = try await adminReadAll(store, "/auth/sessions", as: AuthSession.self) }
     private func loadDevices() async throws { devices = try await adminReadAll(store, "/devices", as: Device.self) }

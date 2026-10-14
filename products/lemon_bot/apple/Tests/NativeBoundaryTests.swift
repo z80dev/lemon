@@ -75,4 +75,22 @@ final class NativeBoundaryTests: XCTestCase {
         XCTAssertNil(receipt.delivery.first?.targetRunId)
         XCTAssertEqual(receipt.clientNonce, "receipt_fixed_nonce")
     }
+
+    func testProductCleanupDoesNotHideUnknownProviderOutcome() throws {
+        let data = Data(#"{"id":"cleanup_fixed","revision":3,"createdAtMs":1000,"updatedAtMs":2000,"operation":"delete_account","userId":"user_deleted","workspaceId":"workspace_owned","state":"outcome_unknown","productCleanup":{"state":"completed","updatedAtMs":1900,"errorCode":null},"providerCleanup":[{"providerId":"registered_mail","kind":"email","receiptId":"receipt_original","state":"outcome_unknown","updatedAtMs":2000,"errorCode":"upstream_unavailable"}],"requestId":"request_delete","startedAtMs":1200,"completedAtMs":null}"#.utf8)
+        let operation = try JSONDecoder().decode(AccountTeardown.self, from: data)
+        XCTAssertEqual(operation.productCleanup.state, "completed")
+        XCTAssertEqual(operation.state, "outcome_unknown")
+        XCTAssertEqual(operation.providerCleanup.first?.state, "outcome_unknown")
+        XCTAssertEqual(operation.providerCleanup.first?.receiptId, "receipt_original")
+        XCTAssertNil(operation.completedAtMs)
+    }
+
+    func testPendingXConnectionDoesNotInventVerifiedAccountIdentity() throws {
+        let data = Data(#"{"id":"x_pending","revision":1,"createdAtMs":1000,"updatedAtMs":1000,"userId":"user_owner","externalAccountId":null,"username":null,"mainBotId":"bot_owned","enabled":true,"state":"pending","lastError":null}"#.utf8)
+        let connection = try JSONDecoder().decode(XConnection.self, from: data)
+        XCTAssertEqual(connection.state, "pending")
+        XCTAssertNil(connection.username)
+        XCTAssertNil(connection.externalAccountId)
+    }
 }

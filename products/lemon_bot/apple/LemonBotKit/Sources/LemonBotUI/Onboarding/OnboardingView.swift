@@ -27,6 +27,7 @@ public struct OnboardingView: View {
     @State private var setupRequired = false
     @State private var action = UIActionState()
     @State private var browser = AdminWebAuthentication()
+    @AppStorage("LemonBot.safeAccountCleanupDiagnostics") private var cleanupDiagnostics = ""
     public init(store: LemonBotStore) { self.store = store }
     public var body: some View {
         NavigationStack {
@@ -84,6 +85,14 @@ public struct OnboardingView: View {
                             }
                             Text("The system browser verifies your identity. PKCE protects the one-use completion code; no password is shared with this app.").font(.caption)
                         }
+                    }
+                }
+                if !cleanupDiagnostics.isEmpty {
+                    SwiftUI.Section("Previous account cleanup · safe handoff metadata") {
+                        Text(cleanupDiagnostics).font(.caption).textSelection(.enabled)
+                        Text("Give these opaque identifiers to the workspace Owner for read-only cleanup observation. This is not a login, read capability or permission to retry deletion.").font(.caption)
+                        Button("Copy safe diagnostics") { copyText(cleanupDiagnostics) }
+                        Button("Clear local diagnostic copy") { cleanupDiagnostics = "" }
                     }
                 }
                 ActionErrorView(message: action.error)
