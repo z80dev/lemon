@@ -12,6 +12,45 @@ defmodule LemonControlPlane.NodeStore do
   @name_table :nodes_by_name
   @challenge_table :node_challenges
   @invocation_table :node_invocations
+  @invite_table :node_pair_invites
+
+  @doc "Stores an enrollment invite keyed by its credential digest, never its plaintext code."
+  def put_invite(code, invite) when is_binary(code) and is_map(invite),
+    do: Store.put_new(@invite_table, invite_digest(code), invite)
+
+  def fetch_invite(code) when is_binary(code) and byte_size(code) in 32..128 do
+    case Store.fetch(@invite_table, invite_digest(code)) do
+      {:ok, invite} when is_map(invite) ->
+        expires_at = invite_field(invite, :expires_at_ms)
+        if is_integer(expires_at) and expires_at > System.system_time(:millisecond),
+          do: {:ok, invite},
+          else: {:error, :invalid_invite}
+
+      {:ok, _} -> {:error, :invalid_invite}
+      {:error, _} -> {:error, :store_unavailable}
+    end
+  end
+
+  def fetch_invite(_code), do: {:error, :invalid_invite}
+
+  @doc "Atomically consumes a live invite, bound to its exact trimmed node name."
+  def consume_invite(code, name, invite_id) do
+    with {:ok, invite} <- fetch_invite(code),
+         true <- invite_field(invite, :node_name) == name,
+         true <- invite_field(invite, :id) == invite_id,
+         :ok <-
+           Store.compare_and_delete_many([{@invite_table, invite_digest(code), invite}]) do
+      {:ok, invite}
+    else
+      {:error, :store_unavailable} -> {:error, :store_unavailable}
+      _ -> {:error, :invalid_invite}
+    end
+  end
+
+  def invite_field(invite, key),
+    do: Map.get(invite, key, Map.get(invite, Atom.to_string(key)))
+
+  defp invite_digest(code), do: :crypto.hash(:sha256, code) |> Base.encode16(case: :lower)
 
   @spec put_pairing(binary(), map()) :: :ok
   def put_pairing(pairing_id, value) when is_binary(pairing_id) and is_map(value),

@@ -231,6 +231,11 @@ defmodule LemonCore.NodeRegistry do
     GenServer.call(__MODULE__, {:push, String.trim(name_or_id), event_name, payload})
   end
 
+  @doc "Routes bounded shell frames only to the recipient of a pinned open invocation."
+  def shell_event_session(node_id, connection_pid, generation, invoke_id, payload) do
+    GenServer.call(__MODULE__, {:shell_event_session, node_id, connection_pid, generation, invoke_id, payload})
+  end
+
   @impl true
   def init(_opts) do
     {:ok, %{nodes: %{}, names: %{}, invocations: %{}, controls: %{}, generation_floors: %{}}}
@@ -313,6 +318,25 @@ defmodule LemonCore.NodeRegistry do
     else
       {:error, :not_found} = error -> {:reply, error, state}
       {:error, reason} -> {:reply, {:error, {:invalid_payload, reason}}, state}
+    end
+  end
+
+  def handle_call({:shell_event_session, node_id, pid, generation, invoke_id, payload}, _from, state) do
+    case {Map.get(state.nodes, node_id), Map.get(state.invocations, invoke_id)} do
+      {%{pid: ^pid, generation: ^generation},
+       %{node_id: ^node_id, node_pid: ^pid, node_generation: ^generation,
+         method: "node.shell.open"} = invocation} ->
+        case JSONPayload.validate(payload, max_bytes: 32_768) do
+          {:ok, _} ->
+            case Process.info(invocation.recipient, :message_queue_len) do
+              {:message_queue_len, length} when length < 128 ->
+                send(invocation.recipient, {:lemon_node_shell_event, invoke_id, payload})
+                {:reply, :ok, state}
+              _ -> {:reply, {:error, :slow_consumer}, state}
+            end
+          {:error, _} -> {:reply, {:error, :invalid_payload}, state}
+        end
+      _ -> {:reply, {:error, :stale_invocation}, state}
     end
   end
 
@@ -946,7 +970,7 @@ defmodule LemonCore.NodeRegistry do
         send(pid, {
           :node_event,
           "node.invoke.cancel",
-          %{"invokeId" => invoke_id, "reason" => inspect(reason)}
+          %{"invokeId" => invoke_id, "nodeId" => invocation.node_id, "reason" => inspect(reason)}
         })
 
       _ ->

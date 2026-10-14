@@ -27,6 +27,12 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   read/admin scopes, and return bounded redacted previews. Named-node profiles
   execute memory operations on their destination through authenticated node
   invocations, without controller paths or credentials crossing the boundary.
+- Attached-machine control-plane APIs: destination-local host information,
+  policy-rooted chunked file transfer, connection-owned real PTY terminals and
+  write-only encrypted node secrets. Single-use, expiring, name-bound node
+  invitations install and enroll a bot machine without sharing the operator
+  credential; node listings include purpose and labels. See
+  [attaching a bot machine](docs/user-guide/attaching-a-bot-machine.md).
 
 ### Fixed
 

@@ -24,6 +24,10 @@ defmodule CodingAgent.ExecutionNode.Worker do
     "approve_once" => :approve_once, "approve_session" => :approve_session,
     "approve_agent" => :approve_agent, "approve_global" => :approve_global, "deny" => :deny
   }
+  @host_io_methods ["node.host.info", "node.fs.list", "node.fs.stat", "node.fs.read",
+    "node.fs.write", "node.fs.mkdir", "node.fs.move", "node.fs.delete",
+    "node.secrets.set", "node.secrets.list", "node.secrets.delete"]
+  @shell_methods ["node.shell.open", "node.shell.input", "node.shell.resize", "node.shell.close"]
   @capabilities %{
     "coding_agent.run" => %{"version" => @protocol_version},
     "node.invoke.event" => %{"version" => @protocol_version, "maxBytes" => 65_536},
@@ -45,6 +49,8 @@ defmodule CodingAgent.ExecutionNode.Worker do
     :controller,
     :default_cwd,
     :socket,
+    :allowed_roots,
+    :invite_code,
     :socket_module,
     :socket_opts,
     :socket_mode,
@@ -61,6 +67,7 @@ defmodule CodingAgent.ExecutionNode.Worker do
     :pairing_stage,
     :pairing_id,
     :max_payload_bytes,
+    shells: %{},
     invocations: %{},
     run_refs: %{}
   ]
@@ -96,6 +103,8 @@ defmodule CodingAgent.ExecutionNode.Worker do
        name: name,
        controller: controller,
        default_cwd: default_cwd,
+       allowed_roots: Keyword.get(opts, :allowed_roots, [System.user_home!()]),
+       invite_code: Keyword.get(opts, :invite_code),
        socket_module: Keyword.get(opts, :socket_module, Socket),
        socket_opts: Keyword.get(opts, :socket_opts, []),
        executor_module: Keyword.get(opts, :executor_module, CodingAgent.Executor),
@@ -109,8 +118,8 @@ defmodule CodingAgent.ExecutionNode.Worker do
   end
 
   defp connect_initial(state, opts) do
-    if Keyword.get(opts, :pair, false) do
-      with {:ok, state} <- prepare_pairing_identity(state) do
+    if Keyword.get(opts, :pair, false) or is_binary(state.invite_code) do
+      with {:ok, state} <- if(is_binary(state.invite_code), do: {:ok, state}, else: prepare_pairing_identity(state)) do
         connect_pairing(state, Keyword.get(opts, :operator_token))
       end
     else
@@ -122,11 +131,13 @@ defmodule CodingAgent.ExecutionNode.Worker do
 
   defp connect_pairing(state, operator_token) do
     connect_params =
-      %{
-        "role" => "operator",
-        "client" => %{"id" => "lemon-execution-node-pair:#{state.name}"}
-      }
-      |> maybe_put_auth(operator_token)
+      if is_binary(state.invite_code) do
+        %{"role" => "enrollment", "auth" => %{"inviteCode" => state.invite_code},
+          "client" => %{"id" => "lemon-execution-node-pair:#{state.name}"}}
+      else
+        %{"role" => "operator", "client" => %{"id" => "lemon-execution-node-pair:#{state.name}"}}
+        |> maybe_put_auth(operator_token)
+      end
 
     start_socket(state, :pairing, connect_params)
   end
@@ -230,6 +241,22 @@ defmodule CodingAgent.ExecutionNode.Worker do
     {:stop, reason, state}
   end
 
+  def handle_info({:node_pty, invoke_id, type, payload}, state) do
+    case state.shells[invoke_id] do
+      nil -> {:noreply, state}
+      shell ->
+        frame = Map.put(payload, "type", type)
+        request(state, "node.shell.event", %{"invokeId" => invoke_id, "payload" => frame}, {:shell_event, invoke_id, type})
+        if type == "exit" do
+          request(state, "node.invoke.result", %{"invokeId" => invoke_id, "result" => %{"code" => payload["code"]}}, {:invoke_result, invoke_id})
+          {:noreply, %{state | shells: Map.delete(state.shells, invoke_id)}}
+        else
+          _ = shell
+          {:noreply, state}
+        end
+    end
+  end
+
   def handle_info({:engine_delta, run_ref, text}, state) when is_binary(text) do
     case Map.get(state.run_refs, run_ref) do
       nil ->
@@ -326,13 +353,35 @@ defmodule CodingAgent.ExecutionNode.Worker do
     {:stop, {:socket_exited, reason}, state}
   end
 
-  def handle_info({:EXIT, _pid, _reason}, state), do: {:noreply, state}
+  def handle_info({:EXIT, pid, _reason}, state) do
+    case Enum.find(state.shells, fn {_, shell} -> shell.pid == pid end) do
+      {invoke_id, _} ->
+        state = send_invoke_error(state, invoke_id, :pty_closed)
+        {:noreply, %{state | shells: Map.delete(state.shells, invoke_id)}}
+      nil -> {:noreply, state}
+    end
+  end
   def handle_info(_message, state), do: {:noreply, state}
 
   @impl true
   def terminate(_reason, state) do
     _ = cancel_all_invocations(state)
     :ok
+  end
+
+  defp handle_socket_response(:pair_request, {:ok, %{"challengeToken" => _} = payload}, %{invite_code: code} = state)
+       when is_binary(code) do
+    handle_socket_response(:pair_approve, {:ok, payload}, state)
+  end
+
+  defp handle_socket_response({:shell_event, invoke_id, _type}, result, state) do
+    if shell = state.shells[invoke_id] do
+      case result do
+        {:ok, _} -> CodingAgent.ExecutionNode.PTY.ack(shell.pid)
+        _ -> GenServer.stop(shell.pid, :normal)
+      end
+    end
+    {:noreply, state}
   end
 
   defp handle_socket_response(:pair_request, {:ok, payload}, state) when is_map(payload) do
@@ -381,7 +430,7 @@ defmodule CodingAgent.ExecutionNode.Worker do
       old_socket = state.socket
       :ok = state.socket_module.stop(old_socket)
 
-      case connect_authenticated(%{state | socket: nil, pairing_stage: nil}, token, node_id) do
+      case connect_authenticated(%{state | socket: nil, pairing_stage: nil, invite_code: nil}, token, node_id) do
         {:ok, new_state} ->
           notify(new_state, {:status, :paired, node_id})
           {:noreply, new_state}
@@ -445,9 +494,12 @@ defmodule CodingAgent.ExecutionNode.Worker do
       %{
         "nodeType" => "coding_agent",
         "nodeName" => state.name,
-        "capabilities" => @capabilities
+        "capabilities" => Map.merge(@capabilities, Map.new(@host_io_methods ++ @shell_methods, &{&1, true}))
       }
-      |> maybe_put_recovery(state)
+      |> then(fn params ->
+        if is_binary(state.invite_code), do: Map.put(params, "inviteCode", state.invite_code),
+          else: maybe_put_recovery(params, state)
+      end)
 
     request(state, "node.pair.request", params, :pair_request)
     %{state | pairing_stage: :requesting}
@@ -463,7 +515,7 @@ defmodule CodingAgent.ExecutionNode.Worker do
         not is_binary(invoke_id) or invoke_id == "" ->
           {:noreply, state}
 
-        Map.has_key?(state.invocations, invoke_id) ->
+        Map.has_key?(state.invocations, invoke_id) or Map.has_key?(state.shells, invoke_id) ->
           {:noreply, state}
 
         not is_map(args) ->
@@ -475,11 +527,18 @@ defmodule CodingAgent.ExecutionNode.Worker do
         method in ["memory.list", "memory.search", "memory.get", "memory.add", "memory.delete"] ->
           {:noreply, invoke_memory(state, invoke_id, method, args)}
 
-        method != "coding_agent.run" ->
-          {:noreply, send_invoke_error(state, invoke_id, {:unsupported_method, method})}
+        method == "coding_agent.run" ->
+          {:noreply, start_invocation(state, invoke_id, args)}
+
+        method in @host_io_methods ->
+          result = CodingAgent.ExecutionNode.HostIO.handle(method, args, host_io_opts(state))
+          {:noreply, send_host_io_result(state, invoke_id, result)}
+
+        method in @shell_methods ->
+          {:noreply, dispatch_shell(state, invoke_id, method, args)}
 
         true ->
-          {:noreply, start_invocation(state, invoke_id, args)}
+          {:noreply, send_invoke_error(state, invoke_id, :unsupported_method)}
       end
     else
       {:noreply, state}
@@ -489,13 +548,21 @@ defmodule CodingAgent.ExecutionNode.Worker do
   defp handle_node_event("node.invoke.cancel", payload, state) do
     invoke_id = payload["invokeId"]
 
-    case Map.get(state.invocations, invoke_id) do
-      nil ->
-        {:noreply, state}
-
-      invocation ->
-        _ = state.executor_module.cancel(invocation.context)
-        {:noreply, remove_invocation(state, invoke_id)}
+    if targeted?(payload, state) do
+      case state.shells[invoke_id] do
+        %{pid: pid} ->
+          GenServer.stop(pid, :normal)
+          {:noreply, %{state | shells: Map.delete(state.shells, invoke_id)}}
+        nil ->
+          case Map.get(state.invocations, invoke_id) do
+            nil -> {:noreply, state}
+            invocation ->
+              _ = state.executor_module.cancel(invocation.context)
+              {:noreply, remove_invocation(state, invoke_id)}
+          end
+      end
+    else
+      {:noreply, state}
     end
   end
 
@@ -548,6 +615,44 @@ defmodule CodingAgent.ExecutionNode.Worker do
     _ -> send_invoke_error(state, invoke_id, :memory_unavailable)
   catch
     _, _ -> send_invoke_error(state, invoke_id, :memory_unavailable)
+  end
+
+  defp host_io_opts(state), do: [default_cwd: state.default_cwd, allowed_roots: state.allowed_roots]
+
+  defp send_host_io_result(state, invoke_id, {:ok, result}) do
+    request(state, "node.invoke.result", %{"invokeId" => invoke_id, "result" => result}, {:invoke_result, invoke_id})
+    state
+  end
+  defp send_host_io_result(state, invoke_id, {:error, reason}), do: send_invoke_error(state, invoke_id, reason)
+
+  defp dispatch_shell(state, invoke_id, "node.shell.open", args) do
+    if map_size(state.shells) < 64 and is_binary(args["shellId"]) do
+      case CodingAgent.ExecutionNode.PTY.start_link(self(), invoke_id, args, host_io_opts(state)) do
+        {:ok, pid} -> %{state | shells: Map.put(state.shells, invoke_id, %{pid: pid, id: args["shellId"]})}
+        {:error, _} -> send_invoke_error(state, invoke_id, :pty_unavailable)
+      end
+    else
+      send_invoke_error(state, invoke_id, :shell_limit)
+    end
+  end
+
+  defp dispatch_shell(state, invoke_id, method, args) do
+    shell_id = args["shellId"]
+    result =
+      case state.shells[args["openInvokeId"]] do
+        %{pid: pid, id: ^shell_id} ->
+          try do
+            operation = String.replace_prefix(method, "node.shell.", "")
+            case CodingAgent.ExecutionNode.PTY.command(pid, operation, args) do
+              :ok -> {:ok, %{"shellId" => shell_id, "accepted" => true}}
+              error -> error
+            end
+          catch
+            :exit, _ -> {:error, :shell_closed}
+          end
+        _ -> {:error, :shell_not_found}
+      end
+    send_host_io_result(state, invoke_id, result)
   end
 
   defp start_invocation(state, invoke_id, args) do
@@ -1136,6 +1241,13 @@ defmodule CodingAgent.ExecutionNode.Worker do
     Enum.reduce(state.invocations, state, fn {invoke_id, invocation}, current ->
       _ = state.executor_module.cancel(invocation.context)
       remove_invocation(current, invoke_id)
+    end)
+    |> then(fn current ->
+      Enum.each(current.shells, fn {_, shell} ->
+        if Process.alive?(shell.pid), do: GenServer.stop(shell.pid, :normal)
+      end)
+
+      %{current | shells: %{}}
     end)
   end
 

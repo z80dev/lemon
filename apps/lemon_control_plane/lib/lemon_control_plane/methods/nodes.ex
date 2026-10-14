@@ -66,6 +66,8 @@ defmodule LemonControlPlane.Methods.NodesSupport do
       "id" => id,
       "name" => SkillsSupport.text(field(node, :name), 64),
       "type" => SkillsSupport.text(to_text(field(node, :type)), 40),
+      "purpose" => SkillsSupport.text(field(node, :purpose), 64),
+      "labels" => labels(field(node, :labels)),
       "status" => status,
       "connectedAtMs" => live_entry && live_entry[:connected_at_ms],
       "lastSeenMs" => int(field(node, :last_seen_ms)),
@@ -105,6 +107,15 @@ defmodule LemonControlPlane.Methods.NodesSupport do
   end
 
   defp capabilities(_), do: []
+  defp labels(values) when is_list(values) do
+    values
+    |> Enum.filter(&is_binary/1)
+    |> Enum.take(16)
+    |> Enum.map(&SkillsSupport.text(&1, 64))
+  end
+
+  defp labels(_), do: []
+
 
   defp to_text(value) when is_binary(value), do: value
   defp to_text(value) when is_atom(value) and not is_nil(value), do: Atom.to_string(value)

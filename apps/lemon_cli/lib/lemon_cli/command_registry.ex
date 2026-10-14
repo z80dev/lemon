@@ -544,6 +544,7 @@ defmodule LemonCli.CommandRegistry do
         option("--name NAME", ["--name"], "Unique execution node name"),
         option("--controller URL", ["--controller"], "Controller control-plane WebSocket"),
         option("--pair", ["--pair"], "Pair and store a controller-issued node token"),
+        option("--invite-code CODE", ["--invite-code"], "Single-use enrollment invite (implies --pair)"),
         option("--node-id ID", ["--node-id"], "Durable controller node ID"),
         option("--repair", ["--repair"], "Operator-authorized legacy credential repair"),
         option(
@@ -551,7 +552,8 @@ defmodule LemonCli.CommandRegistry do
           ["--allow-insecure-controller"],
           "Allow non-loopback ws://"
         ),
-        option("--cwd PATH", ["--cwd"], "Default local working directory")
+        option("--cwd PATH", ["--cwd"], "Default local working directory"),
+        option("--allowed-root PATH", ["--allowed-root"], "Allowed host file/shell root (repeatable)")
       ]
     },
     %{

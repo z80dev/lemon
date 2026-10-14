@@ -99,7 +99,27 @@ defmodule LemonControlPlane.Methods.ConnectChallenge do
 
   defp session_generation(_identity), do: {:error, :invalid_session_generation}
 
-  defp verify_challenge(challenge, _ctx) do
+  defp verify_challenge(challenge, ctx) do
+    # A restricted enrollment connection may exchange only the challenge issued
+    # for its own invite, not another node's challenge.
+    with {:ok, info} <- LemonCore.Store.fetch(:node_challenges, challenge),
+         true <- challenge_owned?(info, ctx) do
+      consume_challenge(challenge)
+    else
+      _ -> {:error, "Invalid challenge"}
+    end
+  end
+
+  defp challenge_owned?(info, %{auth: %{role: :enrollment, identity: identity}})
+       when is_map(info) do
+    is_binary(identity["inviteId"]) and
+      identity["inviteId"] == NodeStore.invite_field(info, :invite_id)
+  end
+
+  defp challenge_owned?(_info, %{auth: %{role: :enrollment}}), do: false
+  defp challenge_owned?(_info, _ctx), do: true
+
+  defp consume_challenge(challenge) do
     case NodeStore.take_challenge(challenge) do
       nil ->
         {:error, "Invalid challenge"}
