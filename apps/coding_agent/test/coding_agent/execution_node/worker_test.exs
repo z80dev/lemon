@@ -754,6 +754,10 @@ defmodule CodingAgent.ExecutionNode.WorkerTest do
     assert_receive {:socket_request, ^socket, "node.invoke.result",
                     %{"error" => "event_backpressure_limit_exceeded"}, _, 30_000}
     Process.exit(context.runner_pid, :kill)
+    GenServer.stop(worker)
+  end
+
+  @tag :tmp_dir
   test "profile memory executes on the destination workspace without a local profile record", %{
     tmp_dir: tmp_dir
   } do
