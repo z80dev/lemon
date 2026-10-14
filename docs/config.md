@@ -474,6 +474,107 @@ Docker limits, invalid Docker image/network names, invalid SSH ports, invalid
 SSH connect timeouts, and unsupported strict-host-key values fail closed at the
 policy boundary instead of reaching Docker or OpenSSH.
 
+Background `exec` launches fail closed when admission is unavailable: there is
+no direct-execution fallback, including `exec_sync` or internal callers passing
+`use_lane_queue: false`. Each logical launch has a fixed identity, bound to its
+session owner and a validated request fingerprint. Reusing that identity with
+the same request reconciles the original receipt; changing the request or owner
+is a conflict. Intentionally running the same command twice creates two identities.
+Accepted receipts track the existing process. A missing reply or lost process
+owner can produce `outcome_unknown`, which is not a rejection and must not trigger
+automatic replay. Inspect/reconcile the fixed identity; any recovery that repeats
+external effects must be explicitly requested. Receipt projections exclude
+commands, environment values, and exception details. Clearing completed output
+retains a small redacted identity tombstone so clearing logs cannot authorize a
+duplicate launch.
+
+### Background process admission
+
+Background process admission limits are umbrella application configuration,
+not TOML or agent-controlled tool inputs:
+
+```elixir
+config :coding_agent,
+  background_process_limit: 8,
+  background_pending_limit: 32,
+  background_admission_timeout_ms: 5_000,
+  background_admission_wait_ms: 1_000
+```
+
+The process limit holds capacity for the managed command's live lifetime, not
+just the launch callback. `lane_caps.background_exec` remains a separate launch
+concurrency cap; main/subagent lanes retain their existing callback semantics.
+The pending limit bounds waiting admissions per LaneQueue; the acceptance ledger
+also bounds in-flight registrations. Process/pending limits are integers up to
+1,000,000 (process minimum 1, pending minimum 0). Admission deadline/wait values
+must be integers from 1 to 86,400,000 milliseconds. Invalid settings fail
+explicitly at startup, without echoing the invalid value.
+
+The caller wait budget yields `{:queued, identity}` independently of execution
+lifetime. Queued cancellation, deadline expiry, or abandonment prevents later
+start. An explicitly supplied `owner_pid` keeps a deliberately yielded queued
+launch owned after the submitting tool task returns; losing that owner cancels
+pending work. Accepted work outlives its transient submitting caller, but is
+signaled when its supplied owner exits. Without `owner_pid`, accepted work
+deliberately continues until completion, explicit cancellation, or its separately
+requested execution timeout. Use foreground commands with background execution,
+not shell daemonization, for an inspectable managed lifetime.
+
+Cancellation is a request: `:killing` does not free capacity. On local Unix
+launches, the runtime binds and persists an isolated process-group identity
+before permitting the command to execute. A root shell's Port exit is not a
+workload-termination witness: surviving descendants keep an `outcome_unknown`
+receipt and the lifetime slot. The owning session reconciles actual group
+membership and releases once only after no live members remain. It retains the
+group through root exit so later cancellation can target verified descendants,
+never a recycled positive root PID. Lost ownership or failed observation remains
+unknown and charged, not a license to signal an unverified group.
+Before forwarding stdin that may end the root, the runtime durably retains live
+members observed under the root's matching identity. After root exit, verified
+cancellation requires a surviving previously bound member with matching birth
+identity. If the root and all previously bound members disappear before another
+member can be bound, the numeric PGID alone is insufficient proof: cancellation
+remains unknown and charged, requiring independently verified recovery.
+
+A host process group cannot prove termination of remote SSH/container work,
+PTY work in a separate session, or Windows job descendants; wrapper exits in
+these cases conservatively remain unknown and charged. Repeating cancellation
+after the host wrapper disappears still requires the backend-aware full-workload
+witness; an empty host group cannot confirm remote or separately contained work.
+A lost BEAM process owner also retains its persisted identity and capacity. Nothing is automatically
+relaunched. Queue/store restart reconciles surviving registered processes before
+admission.
+The internal operator API `ProcessManager.confirm_external_termination(id, owner)`
+may release unknown capacity only after independently verifying termination of
+the entire owned workload, not merely the root shell; it is an assertion, not a
+liveness probe or agent tool, and refuses a launch still starting. The original
+uncertain receipt remains uncertain.
+
+`ProcessManager.admission_counts/0` exposes bounded active, queued, rejected,
+expired, canceled, unknown, and occupied counts, with no commands or secrets.
+Unknown historical outcomes are distinct from currently occupied capacity.
+Receipt/count lookup failures report unavailability, never an empty/idle state.
+Synchronous completion-wait expiry retains the fixed identity as
+`{:error, {:outcome_unknown, identity}}`; reconcile instead of rerunning.
+Direct `ProcessSession.start_link` is an internal/test primitive, not an agent
+admission bypass. This contract prevents duplicate managed starts for an identity;
+it does not claim exactly-once external side effects.
+
+Unknown Bash launch receipts are tool errors with retained `process_id`,
+`status: "unknown"` and `classification: "outcome_unknown"`, not failed-start
+receipts. Startup rejections preserve their actual pre-execution failure reason.
+Every durable load, including late permission recovery or reopening, restores
+capacity and live owner monitors before permitting a new admission.
+
+Cleared identity tombstones and historical unknown receipts do not expire.
+The default finished-process TTL (86,400 seconds) and cleanup interval
+(300 seconds) do not bound ledger rows; recovery, count and artifact scans grow
+with that history. Observable retained local workloads reconcile after 100 ms
+plus scan cost using a system-wide `ps` snapshot. Ownership-lost and nonlocal
+unknown workloads do not schedule this polling. These are local containment
+contracts, not proof of remote workload termination.
+
+
 The Bun TUI uses the runtime's model and thinking defaults from `[defaults]`.
 The `[tui]` section controls terminal presentation settings loaded at startup.
 

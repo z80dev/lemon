@@ -78,6 +78,45 @@ describe("merging", () => {
 		expect(shelf.cards[0]?.compact).toBe(false);
 	});
 
+	test("an uncertain Bash error keeps its process receipt on the shelf and expanded card", () => {
+		const session = new SessionStore("background-receipt");
+		const shelf = shelfWith([["read", "success"]]);
+		const processId = "proc_unknown_1";
+		const action = {
+			id: "background-call",
+			kind: "command",
+			title: "`sleep 100`",
+			detail: {
+				name: "bash",
+				args: { command: "sleep 100", run_in_background: true },
+				result: `Launch outcome unknown for ${processId}. Reconcile with bash_output; do not automatically rerun the command.`,
+				details: {
+					process_id: processId,
+					status: "unknown",
+					classification: "outcome_unknown",
+					exit_code: null,
+					background: true,
+				},
+			},
+		};
+		const block = session.upsertTool(action, "completed", { runId: "r", ok: false });
+		shelf.add(block);
+		const card = shelf.cards[1]!;
+		expect(card.compact).toBe(true);
+		const compact = renderPlain(shelf.render(160));
+		expect(compact).toContain(`background outcome unknown: ${processId}`);
+		expect(compact).not.toMatch(/started in background|background start failed/);
+		expect(shelf.toggle(block.id)).toBe("expanded");
+		const expanded = renderPlain(shelf.render(160));
+		expect(expanded).toContain(processId);
+		expect(expanded).toContain("outcome unknown");
+		expect(expanded).toContain("do not automatically rerun");
+		const native = JSON.stringify(card.describe());
+		expect(native).toContain(processId);
+		expect(native).toContain("outcome unknown");
+		expect(native).not.toMatch(/started in background|background start failed/);
+	});
+
 	test("a run of completed tools merges to one line each", () => {
 		const shelf = shelfWith([
 			["read", "success"],

@@ -422,29 +422,41 @@ Time:        1.234s`;
 	});
 
 	describe("run_in_background", () => {
-		it("summarizes the started process id", () => {
-			const result = bashFormatter.formatResult(
+		it("never presents queued or uncertain admission as an observed start", () => {
+			for (const receipt of [
 				{
-					content: [{ type: "text", text: "Started background process bg_1" }],
-					details: { process_id: "bg_1", status: "running" },
+					content: [{ type: "text", text: "Queued background launch bg_1." }],
+					details: { process_id: "bg_1", status: "queued", exit_code: null, background: true },
 					is_error: false,
 				},
-				{ command: "sleep 100", run_in_background: true },
-			);
-
-			expect(result.summary).toBe("started in background: bg_1");
-			expect(result.details).toContain("process_id: bg_1");
-			expect(result.details).toContain("status: running");
-			expect(result.isError).toBe(false);
-		});
-
-		it("omits the id when the result has none", () => {
-			const result = bashFormatter.formatResult(
-				{ content: [], details: {}, is_error: false },
-				{ command: "sleep 100", run_in_background: true },
-			);
-
-			expect(result.summary).toBe("started in background");
+				{
+					content: [
+						{
+							type: "text",
+							text: "Launch outcome unknown for bg_1. Reconcile with bash_output; do not automatically rerun the command.",
+						},
+					],
+					details: {
+						process_id: "bg_1",
+						status: "unknown",
+						classification: "outcome_unknown",
+						exit_code: null,
+						background: true,
+					},
+					is_error: true,
+				},
+			]) {
+				const result = bashFormatter.formatResult(receipt, {
+					command: "sleep 100",
+					run_in_background: true,
+				});
+				expect(result.summary).toMatch(
+					receipt.details.status === "queued" ? /queued/i : /unknown/i,
+				);
+				expect(result.summary).not.toMatch(/started|start failed/i);
+				expect(result.summary).toContain("bg_1");
+				expect(result.isError).toBe(receipt.is_error);
+			}
 		});
 	});
 

@@ -50,6 +50,31 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 - Session context queries fall back to saved accounting when the live owner
   retires during the read, instead of exiting on a stale registry PID. Timeouts
   and unexpected owner crashes still surface.
+- Background process launches no longer bypass admission after queue failures.
+  Fixed, owner-bound launch identities reconcile lost acknowledgements and
+  reject conflicting retries instead of risking duplicate external effects.
+- Background execution now holds a validated live-process capacity limit until
+  confirmed termination, bounds pending admission and waiting, prevents canceled
+  or expired queued commands from starting, and retains unknown capacity through
+  restart. Yielded launches remain owner-scoped and inspectable; cancellation
+  receipts no longer claim termination before it is confirmed.
+- Local Unix background capacity now stays held when the root shell exits but
+  descendants survive. Owned process groups are bound before command execution;
+  live members are retained before forwarding stdin that can end the root, so
+  verified cancellation still works after natural root exit. Groups reconcile
+  until confirmed empty; stale ownership and unsupported workload witnesses
+  remain unknown rather than freeing slots or signaling recycled PIDs.
+  Repeated cancellation also requires the backend-aware workload witness:
+  an empty host wrapper group cannot release SSH, container or PTY capacity.
+  TUI tool cards and compact shelves also preserve queued and outcome-unknown
+  receipts instead of presenting them as started or failed.
+- Unknown Bash launch outcomes now preserve their structured process identity
+  through the actual agent event and TUI render path. Late or reopened durable
+  storage restores retained capacity and owner monitors before new admission.
+  Pre-execution startup rejections retain the real failure reason.
+- Unix process admission now uses a portable POSIX stdin gate, including dash
+  on Linux, preserving subsequent command input and refusing an unreleased gate.
+  Verified group signals use fixed argv with an OS-owned kill executable.
 - JSONL storage rejects unreadable or corrupt journals rather than publishing
   empty state. Failed loads remain recoverable after repair; rejected writes
   return bounded errors before cache mutation without crashing the Store.
