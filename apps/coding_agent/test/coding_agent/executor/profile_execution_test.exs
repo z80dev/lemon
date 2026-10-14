@@ -56,9 +56,20 @@ defmodule CodingAgent.Executor.ProfileExecutionTest do
   alias CodingAgent.Executor
   alias CodingAgent.Executor.RemoteRequestCodec
   alias CodingAgent.Session
+  alias CodingAgent.ExecutionNode.Worker
+  alias LemonCore.{InvocationProof, ProfileStore, Secrets, Store}
+  alias LemonRouter.RunOrchestrator
   alias LemonAi.Types.{AssistantMessage, Cost, TextContent, Usage}
   alias LemonGateway.ExecutionRequest
   alias LemonSkills.{McpSession, McpSource}
+
+  defmodule Coordinator do
+    def submit(_key, submission) do
+      send(Application.fetch_env!(:lemon_router, :profile_execution_consumer_pid),
+        {:profile_dispatch, submission.execution_request})
+      :ok
+    end
+  end
 
   setup do
     previous_paths = Application.get_env(:lemon_core, :paths)
@@ -132,43 +143,82 @@ defmodule CodingAgent.Executor.ProfileExecutionTest do
 
   @tag :tmp_dir
   test "local and JSON-decoded execution attach persona and MCP without management metadata leaks", %{tmp_dir: root} do
-    Application.put_env(:lemon_core, :paths, home_state_dir: Path.join(root, "destination-state"))
+    Application.put_env(:lemon_core, :paths,
+      home_state_dir: Path.join(root, "destination-state"),
+      global_config: Path.join(root, "config.toml"))
+    prepare_admission()
     url = fixture_url(self())
+    origin = url |> URI.parse() |> Map.put(:path, nil) |> URI.to_string()
     parent = self()
     secret_name = prepare_secret_store()
-    assert {:ok, _} = LemonCore.Secrets.set(secret_name, "runtime-secret")
+    assert {:ok, _} = Secrets.set(secret_name, "runtime-secret")
     literal_name = "LEMON_MCP_LITERAL_#{System.unique_integer([:positive])}"
+    literal_secret = secret_name <> "-literal"
     System.put_env(literal_name, "must-not-expand")
-    on_exit(fn -> System.delete_env(literal_name) end)
+    assert {:ok, _} = Secrets.set(literal_secret, "${#{literal_name}}")
+    on_exit(fn ->
+      Secrets.delete(literal_secret)
+      System.delete_env(literal_name)
+    end)
 
     for transport <- [:local, :json] do
-      profile_id = "writer-#{transport}"
-      meta = %{
-        model: "openai:gpt-4o",
-        profile_id: profile_id,
-        invocation_context_key: "profile-client-#{transport}",
-        memory_context_key: "profile-memory-#{transport}",
-        memory_context_verified: true,
-        system_prompt: "private-profile-system-prompt",
-        profile_instructions: %{"SOUL.md" => "private-profile-soul", "README.md" => "private-profile-job"},
-        mcp_servers: [%{name: "profile", url: url, headers: %{
-          "Authorization" => "Bearer ${LEMON_SECRET:#{secret_name}}",
-          "X-Literal" => "${#{literal_name}}"
-        }}]
+      profile_id = "writer-#{transport}-#{System.unique_integer([:positive])}"
+      run_id = "profile-execution-#{transport}-#{System.unique_integer([:positive])}"
+      proof_secret = "lemon_bot/invocations/" <> run_id
+      assert {:ok, _} = Secrets.set(proof_secret, "runtime-secret")
+      on_exit(fn ->
+        Store.delete(RunOrchestrator.admission_table(), run_id)
+        Secrets.delete(proof_secret)
+      end)
+      template = %{
+        "name" => "profile", "url" => url, "headers" => %{},
+        "allowedOrigins" => [origin], "approvedPrivateOrigins" => [origin]
       }
-      meta = if transport == :json, do: meta |> Jason.encode!() |> Jason.decode!(), else: meta
+      assert {:ok, _} = ProfileStore.create(%{
+        "id" => profile_id, "model" => "openai:gpt-4o",
+        "systemPrompt" => "private-profile-system-prompt",
+        "mcpServers" => [template]
+      })
+      assert {:ok, profile} = ProfileStore.get_for_execution(profile_id)
+      workspace = profile["paths"]["workspace"]
+      File.write!(Path.join(workspace, "SOUL.md"), "private-profile-soul")
+      File.write!(Path.join(workspace, "README.md"), "private-profile-job")
+      servers = [%{template | "headers" => %{
+        "Authorization" => "Bearer ${LEMON_SECRET:#{secret_name}}",
+        "X-Literal" => "${LEMON_SECRET:#{literal_secret}}",
+        "X-Lemon-Bot-Invocation" => "${LEMON_SECRET:#{proof_secret}}"
+      }}]
+      assert {:ok, request} = ProfileStore.chat_request(profile,
+        "Exercise the profile execution contract.",
+        run_id: run_id, invocation_mcp_servers: servers)
+      assert {:ok, request} = InvocationProof.attach_execution_context(request, %{
+        "runId" => run_id,
+        "invocationContextKey" => "profile-client-#{transport}",
+        "memoryContextKey" => "profile-memory-#{transport}",
+        "sharedMemoryGrant" => false,
+        "invocationProof" => %{
+          "runId" => run_id, "serverName" => "profile", "serverUrl" => url,
+          "headerName" => "X-Lemon-Bot-Invocation", "secretName" => proof_secret
+        }
+      })
+      assert {:ok, ^run_id} = RunOrchestrator.submit(request)
+      assert_receive {:profile_dispatch, command}
+      request = ExecutionRequest.from_command(command)
+      meta = request.meta
       refute inspect(meta) =~ "runtime-secret"
-      request = %ExecutionRequest{
-        run_id: "profile-execution-#{transport}",
-        session_key: "agent:#{profile_id}:task-1",
-        prompt: "Exercise the profile execution contract.",
-        cwd: root,
-        meta: meta
-      }
       assert {:ok, outbound} = RemoteRequestCodec.encode(request)
       refute inspect(outbound) =~ "runtime-secret"
       assert hd(outbound["meta"]["mcp_servers"])["headers"]["Authorization"] ==
                "Bearer ${LEMON_SECRET:#{secret_name}}"
+      request =
+        case transport do
+          :local ->
+            request
+          :json ->
+            assert {:ok, decoded, _opts} = Worker.execution_request(
+              outbound, %{default_cwd: root, name: "profile-fixture"}, run_id)
+            decoded
+        end
 
       stream_fn = fn model, context, _options ->
         {:ok, stream} = LemonAi.EventStream.start_link()
@@ -398,6 +448,22 @@ defmodule CodingAgent.Executor.ProfileExecutionTest do
     names = Enum.map(Session.get_state(replacement).tools, & &1.name)
     assert caller.name in names
     refute ambient.name in names
+  end
+
+  defp prepare_admission do
+    for app <- [:lemon_router, :coding_agent] do
+      assert {:ok, started} = Application.ensure_all_started(app)
+      on_exit(fn -> Enum.each(Enum.reverse(started), &Application.stop/1) end)
+    end
+
+    previous_coordinator = Application.get_env(:lemon_router, :session_coordinator)
+    previous_consumer = Application.get_env(:lemon_router, :profile_execution_consumer_pid)
+    Application.put_env(:lemon_router, :session_coordinator, Coordinator)
+    Application.put_env(:lemon_router, :profile_execution_consumer_pid, self())
+    on_exit(fn ->
+      restore_env(:lemon_router, :session_coordinator, previous_coordinator)
+      restore_env(:lemon_router, :profile_execution_consumer_pid, previous_consumer)
+    end)
   end
 
   defp prepare_secret_store do
