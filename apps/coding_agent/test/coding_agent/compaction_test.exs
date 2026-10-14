@@ -209,6 +209,37 @@ defmodule CodingAgent.CompactionTest do
       end
     end
 
+    test "threshold_tokens overrides threshold_percent and both only lower the reserve ceiling" do
+      window = 100_000
+      # Default reserve ceiling: 83_616.
+      assert Compaction.context_threshold(window, %{threshold_percent: 50}) == 50_000
+      assert Compaction.context_threshold(window, %{threshold_percent: 100}) == 83_616
+      assert Compaction.context_threshold(window, %{threshold_tokens: 40_000}) == 40_000
+      assert Compaction.context_threshold(window, %{threshold_tokens: 95_000}) == 83_616
+
+      assert Compaction.context_threshold(window, %{
+               threshold_percent: 50,
+               threshold_tokens: 70_000
+             }) == 70_000
+
+      settings = %{reserve_tokens: 2_000, threshold_percent: 90}
+      assert Compaction.context_threshold(window, settings) == 90_000
+
+      # Invalid values fall back to the reserve threshold.
+      for bad <- [
+            %{threshold_percent: 0},
+            %{threshold_percent: 150},
+            %{threshold_tokens: 0},
+            %{threshold_tokens: "9"}
+          ] do
+        assert Compaction.context_threshold(window, bad) == 83_616
+      end
+
+      settings = %{threshold_percent: 50}
+      refute Compaction.should_compact?(50_000, window, settings)
+      assert Compaction.should_compact?(50_001, window, settings)
+    end
+
     test "counts tool arguments, thinking, and images in typed and persisted messages" do
       args = %{"path" => "src/large.ex", "content" => String.duplicate("x", 4000)}
 

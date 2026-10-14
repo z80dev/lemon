@@ -345,6 +345,40 @@ defmodule CodingAgent.SettingsManagerTest do
       assert settings.keep_recent_tokens == 10_000
     end
 
+    test "extracts optional compaction thresholds and ignores invalid ones" do
+      build = fn compaction ->
+        SettingsManager.from_config(%LemonConfig{
+          providers: %{},
+          agent: %{compaction: compaction},
+          tui: %{},
+          logging: %{},
+          gateway: %{},
+          agents: %{}
+        })
+      end
+
+      default = build.(%{})
+      assert default.compaction_threshold_percent == nil
+      assert default.compaction_threshold_tokens == nil
+      refute Map.has_key?(SettingsManager.get_compaction_settings(default), :threshold_percent)
+      refute Map.has_key?(SettingsManager.get_compaction_settings(default), :threshold_tokens)
+
+      set = build.(%{threshold_percent: 75, threshold_tokens: 120_000})
+      assert set.compaction_threshold_percent == 75
+      assert set.compaction_threshold_tokens == 120_000
+
+      assert %{threshold_percent: 75, threshold_tokens: 120_000} =
+               SettingsManager.get_compaction_settings(set)
+
+      invalid = build.(%{threshold_percent: 0, threshold_tokens: -5})
+      assert invalid.compaction_threshold_percent == nil
+      assert invalid.compaction_threshold_tokens == nil
+      assert build.(%{threshold_percent: 101}).compaction_threshold_percent == nil
+
+      assert build.(%{threshold_percent: "50", threshold_tokens: 1.5}).compaction_threshold_percent ==
+               nil
+    end
+
     test "extracts retry settings from agent config" do
       config = %LemonConfig{
         providers: %{},
