@@ -216,7 +216,9 @@ defmodule LemonAi.Auth.GitHubCopilotOAuth do
   # Secret resolution / refresh
   # ----------------------------------------------------------------------------
 
-  defp decode_secret(secret_value) do
+  @doc "Decode a stored Copilot OAuth payload; `:not_oauth` for other values."
+  @spec decode_secret(term()) :: {:ok, oauth_secret()} | :not_oauth
+  def decode_secret(secret_value) when is_binary(secret_value) do
     with {:ok, decoded} <- Jason.decode(secret_value),
          true <- is_map(decoded),
          true <- decoded["type"] == @secret_type do
@@ -225,6 +227,8 @@ defmodule LemonAi.Auth.GitHubCopilotOAuth do
       _ -> :not_oauth
     end
   end
+
+  def decode_secret(_), do: :not_oauth
 
   defp force_refresh?(opts), do: Keyword.get(opts, :force_refresh, false) == true
 

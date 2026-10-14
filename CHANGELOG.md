@@ -21,7 +21,14 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   `lemon config validate`. On built-in providers, `headers` are sent with every
   request and `models` entries add or replace catalog models. See
   [Custom Providers and Models](docs/config.md#custom-providers-and-models).
-
+- **More provider sign-ins in `lemon model`.** `lemon model openai-codex
+  --auth device` signs in to ChatGPT with a device code (headless, also
+  `--non-interactive`). `openrouter` adds browser sign-in that mints an API key,
+  `xai` adds SuperGrok / X Premium+ device sign-in, `kimi_coding` (`kimi-code`)
+  adds Kimi Code device sign-in, and `zai` adds GLM Coding Plan sign-in that
+  provisions an API key. xAI and Kimi logins refresh automatically;
+  `--status`/`--logout` cover all of them. See
+  [CLI](docs/user-guide/cli.md#other-provider-sign-ins).
 - **Lemon Web, rebuilt.** The browser UI is now a full workspace on the same
   control-plane methods and events as the TUI. Chat streams Markdown with
   highlighted code, thinking blocks and rich tool cards (shell output and exit
@@ -153,6 +160,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 - Unknown provider ids in `default_model`/`default_provider` and custom
   provider option keys no longer create atoms from config input.
+- `lemon model github_copilot --status`/`--logout` no longer crash once a
+  Copilot login is stored.
+- With `auth_source = "oauth"`, a provider's API-key env var (for example
+  `GOOGLE_GEMINI_CLI_API_KEY`) no longer overrides the stored sign-in.
 - Concurrent ChatGPT (Codex) token refreshes no longer replay a rotated refresh
   token: refresh is single-flight per stored login and re-reads the secret.
 - OpenAI-compatible providers no longer fall back to `OPENAI_API_KEY`: a

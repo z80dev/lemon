@@ -1,7 +1,8 @@
 defmodule LemonCli.Onboarding.Provider do
   @moduledoc false
 
-  @type auth_mode :: :oauth | :api_key | :codex_cli
+  # `:device` is a headless device-code sign-in offered beside a browser `:oauth` flow.
+  @type auth_mode :: :oauth | :device | :api_key | :codex_cli
 
   @enforce_keys [
     :id,
@@ -33,7 +34,9 @@ defmodule LemonCli.Onboarding.Provider do
     preferred_models: [],
     switches: [],
     auth_source_by_mode: %{},
-    secret_config_key_by_mode: %{}
+    secret_config_key_by_mode: %{},
+    # `:api_key` when the sign-in yields a durable API key rather than an OAuth payload.
+    oauth_result: :secret
   ]
 
   @type t :: %__MODULE__{
@@ -59,7 +62,8 @@ defmodule LemonCli.Onboarding.Provider do
           preferred_models: [String.t()],
           switches: keyword(),
           auth_source_by_mode: %{optional(auth_mode()) => String.t()},
-          secret_config_key_by_mode: %{optional(auth_mode()) => String.t()}
+          secret_config_key_by_mode: %{optional(auth_mode()) => String.t()},
+          oauth_result: :secret | :api_key
         }
 
   @doc """

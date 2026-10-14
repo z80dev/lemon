@@ -674,6 +674,12 @@ What it does:
 
 The onboarding flow opens the OpenAI auth URL directly and stores the returned OAuth credentials in Lemon secrets.
 
+On a headless machine, or when port 1455 is busy, use the device-code sign-in
+instead: `lemon model openai-codex --auth device` prints
+`https://auth.openai.com/codex/device` and a one-time code, waits for you to
+approve it on any device, and stores the same refreshable login (it also works
+with `--non-interactive`).
+
 To force a token explicitly, set:
 - `OPENAI_CODEX_API_KEY` (preferred)
 - `CHATGPT_TOKEN` (fallback)
@@ -987,6 +993,24 @@ the active Gemini project from `providers.google_gemini_cli.project_id`,
 those values overriding the `projectId` stored inside the OAuth payload.
 
 The onboarding alias `gemini` maps to the runtime provider `google_gemini_cli`. This is distinct from the AI Studio provider `google`, which expects a separate API key such as `GOOGLE_GENERATIVE_AI_API_KEY`.
+
+Other subscription and browser sign-ins offered by `lemon model <provider>`:
+
+| Provider | Sign-in | Stored as |
+| --- | --- | --- |
+| `openrouter` | Browser PKCE sign-in (callback on `http://localhost:54549/callback`, or paste the redirect URL); a pasted `sk-or-` key is checked and accepted | A durable OpenRouter API key in `providers.openrouter.api_key_secret` |
+| `xai` | SuperGrok / X Premium+ device code (`--auth oauth`); API key remains the default | Refreshable login in `providers.xai.api_key_secret`, `auth_source = "oauth"` |
+| `kimi_coding` (`kimi-code`) | Kimi Code device code (default) | Refreshable login in `providers.kimi_coding.api_key_secret`, `auth_source = "oauth"` |
+| `zai` | GLM Coding Plan sign-in (`--auth oauth`): paste the final `zcode://` redirect; Lemon finds or creates an API key named `lemon` | A durable Z.AI API key in `providers.zai.api_key_secret` |
+
+Refreshable logins renew shortly before expiry and when a provider rejects the
+token. While `auth_source = "oauth"` is set, the provider's API-key environment
+variables (for example `XAI_API_KEY` or `KIMI_API_KEY`) do not override the
+stored login. `lemon model <provider> --status` reports the stored login or key
+without printing it; `--logout` deletes it and its config references but does
+not revoke it at the provider. `KIMI_CODE_OAUTH_HOST` overrides the Kimi auth
+host; the `ZAI_OAUTH_*` variables override the Z.AI endpoints for allowlist
+changes.
 
 Antigravity OAuth client credentials resolve from Lemon secrets first:
 - `google_antigravity_oauth_client_id`

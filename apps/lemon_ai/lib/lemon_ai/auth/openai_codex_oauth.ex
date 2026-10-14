@@ -3,7 +3,8 @@ defmodule LemonAi.Auth.OpenAICodexOAuth do
   OpenAI Codex OAuth helpers.
 
   Supports PKCE authorization URL generation, automatic localhost callback capture
-  with manual code fallback, code/token exchange, refresh, and encrypted secret resolution.
+  with manual code fallback, headless device-code sign-in (`login_device_code/1`),
+  code/token exchange, refresh, and encrypted secret resolution.
   `import_codex_cli_login/1` explicitly copies a ChatGPT OAuth login from the selected
   Codex CLI auth file into a canonical secret payload. Import never contacts the
   network or modifies the source file; callers own encrypted storage and refresh
@@ -24,6 +25,12 @@ defmodule LemonAi.Auth.OpenAICodexOAuth do
   @legacy_secret_types ["onboarding_openai_codex_oauth"]
   @near_expiry_ms 10 * 60 * 1000
   @default_callback_timeout_ms 120_000
+  @device_usercode_url "https://auth.openai.com/api/accounts/deviceauth/usercode"
+  @device_token_url "https://auth.openai.com/api/accounts/deviceauth/token"
+  @device_verification_url "https://auth.openai.com/codex/device"
+  @device_redirect_uri "https://auth.openai.com/deviceauth/callback"
+  @device_poll_margin_ms 3_000
+  @device_max_polls 120
 
   @type oauth_secret :: %{required(String.t()) => String.t() | integer() | nil}
   @type login_opt ::
@@ -83,6 +90,98 @@ defmodule LemonAi.Auth.OpenAICodexOAuth do
         stop_local_callback_listener(listener)
       end
     end
+  end
+
+  @doc """
+  Sign in with ChatGPT's device-code flow, without a local callback server.
+
+  Useful on headless machines or when port 1455 is busy. Shows
+  `https://auth.openai.com/codex/device` and a user code through `:on_auth`,
+  polls until the user approves, then exchanges the returned authorization
+  code exactly like the browser flow, so the payload is the same refreshable
+  Codex login. Polls wait the server interval plus three seconds, at most
+  #{@device_max_polls} times. Optional: `:on_progress`, `:sleep` (milliseconds),
+  `:req_options`, and `:device_usercode_url`/`:device_token_url`/`:token_url`
+  overrides for local fakes.
+  """
+  @spec login_device_code(keyword()) :: {:ok, oauth_secret()} | {:error, term()}
+  def login_device_code(opts \\ []) when is_list(opts) do
+    notify_progress(opts, "Requesting ChatGPT device authorization...")
+
+    with {:ok, device} <- start_device_authorization(opts),
+         :ok <-
+           LemonAi.Auth.OAuthFlow.notify_auth(
+             opts,
+             Keyword.get(opts, :device_verification_url, @device_verification_url),
+             "Enter code: #{device.user_code}"
+           ),
+         :ok <- notify_progress(opts, "Waiting for device authorization..."),
+         {:ok, %{code: code, verifier: verifier}} <- poll_device_authorization(device, opts),
+         :ok <- notify_progress(opts, "Exchanging authorization code for tokens...") do
+      exchange_code_for_secret(code, verifier,
+        redirect_uri: @device_redirect_uri,
+        token_url: Keyword.get(opts, :token_url, @token_url)
+      )
+    end
+  end
+
+  defp start_device_authorization(opts) do
+    url = Keyword.get(opts, :device_usercode_url, @device_usercode_url)
+
+    case LemonAi.Auth.OAuthFlow.request(url, [json: %{"client_id" => oauth_client_id()}], opts) do
+      {:ok, %{status: status, body: %{} = body}} when status in 200..299 ->
+        device_auth_id = non_empty_binary(body["device_auth_id"])
+        user_code = non_empty_binary(body["user_code"])
+
+        if device_auth_id && user_code do
+          interval_s = parse_integer(body["interval"]) || 5
+
+          {:ok,
+           %{
+             device_auth_id: device_auth_id,
+             user_code: user_code,
+             interval_ms: max(interval_s, 1) * 1000 + @device_poll_margin_ms
+           }}
+        else
+          {:error, :invalid_device_authorization_response}
+        end
+
+      {:ok, %{status: status}} ->
+        {:error, {:device_authorization_failed, status}}
+
+      {:error, _} = error ->
+        error
+    end
+  end
+
+  defp poll_device_authorization(device, opts) do
+    sleep = Keyword.get(opts, :sleep, &Process.sleep/1)
+    url = Keyword.get(opts, :device_token_url, @device_token_url)
+    body = %{"device_auth_id" => device.device_auth_id, "user_code" => device.user_code}
+
+    Enum.reduce_while(1..@device_max_polls, {:error, :device_flow_timed_out}, fn poll, acc ->
+      sleep.(if poll == 1, do: min(device.interval_ms, 5_000), else: device.interval_ms)
+
+      case LemonAi.Auth.OAuthFlow.request(url, [json: body], opts) do
+        # The endpoint answers 403/404 until the user approves.
+        {:ok, %{status: status}} when status in [403, 404] ->
+          {:cont, acc}
+
+        {:ok, %{status: status, body: %{} = response}} when status in 200..299 ->
+          code = non_empty_binary(response["authorization_code"])
+          verifier = non_empty_binary(response["code_verifier"])
+
+          if code && verifier,
+            do: {:halt, {:ok, %{code: code, verifier: verifier}}},
+            else: {:halt, {:error, :invalid_device_token_response}}
+
+        {:ok, %{status: status}} ->
+          {:halt, {:error, {:device_token_failed, status}}}
+
+        {:error, _} = error ->
+          {:halt, error}
+      end
+    end)
   end
 
   @doc """
@@ -274,7 +373,7 @@ defmodule LemonAi.Auth.OpenAICodexOAuth do
       "redirect_uri" => redirect_uri
     }
 
-    with {:ok, data} <- post_form(@token_url, body),
+    with {:ok, data} <- post_form(Keyword.get(opts, :token_url, @token_url), body),
          {:ok, token_data} <- parse_token_response(data),
          account_id when is_binary(account_id) and account_id != "" <-
            extract_account_id(token_data.access_token) do
