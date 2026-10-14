@@ -15,8 +15,11 @@ defmodule CodingAgent.Tools.Task.Swarm do
   @poll_ms 20
 
   def execute(tool_call_id, params, signal, on_update, cwd, opts) do
-    with {:ok, graph} <- Graph.prepare(params, cwd),
-         {:ok, root} <- Params.validate_run_params(root_params(params, graph), cwd),
+    # The coordinator root is not a persona launch, so a spawns allowlist applies to nodes only.
+    root_opts = Keyword.delete(opts, :task_allowed_agents)
+
+    with {:ok, graph} <- Graph.prepare(params, cwd, opts),
+         {:ok, root} <- Params.validate_run_params(root_params(params, graph), cwd, root_opts),
          :ok <- Params.check_budget_and_policy(root, opts),
          :ok <- check_nodes(graph.nodes, opts) do
       root_opts =
@@ -38,10 +41,12 @@ defmodule CodingAgent.Tools.Task.Swarm do
       "tasks",
       "concurrency",
       "output_schema",
+      "schema_mode",
       "agent",
       "worktree",
       "merge",
-      "tool_policy"
+      "tool_policy",
+      "context"
     ])
     |> Map.put("prompt", "Coordinate the native task dependency graph: " <> names)
     |> Map.put_new("description", "Swarm: " <> names)

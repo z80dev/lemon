@@ -10,6 +10,8 @@ defmodule CodingAgent.Tools.Task.Runner do
 
   @await_poll_ms 200
   @default_task_session_timeout_ms nil
+  @output_retries 2
+  @max_correction_error_chars 1_000
 
   @spec start_session_with_prompt(
           keyword(),
@@ -43,37 +45,31 @@ defmodule CodingAgent.Tools.Task.Runner do
         try do
           with :ok <- attach_control_session(opts[:task_id], session, session_id),
                :ok <- Session.prompt(session, prompt) do
-            case await_result(
-                   session,
-                   session_ref,
-                   session_id,
-                   signal,
-                   on_update,
-                   description,
-                   "",
-                   "",
-                   role_id,
-                   timeout_ms,
-                   deadline_ms,
-                   task_session_poll_ms(opts)
-                 ) do
-              {:ok, %{text: text, thinking: thinking}} ->
-                details =
-                  %{
-                    session_id: session_id,
-                    description: description,
-                    status: "completed",
-                    role: role_id
-                  }
-
-                %AgentToolResult{
-                  content: Result.build_update_content(text, thinking),
-                  details: details
-                }
-
-              {:error, reason} ->
-                {:error, reason}
+            await = fn ->
+              await_result(
+                session,
+                session_ref,
+                session_id,
+                signal,
+                on_update,
+                description,
+                "",
+                "",
+                role_id,
+                timeout_ms,
+                deadline_ms,
+                task_session_poll_ms(opts)
+              )
             end
+
+            details = %{
+              session_id: session_id,
+              description: description,
+              status: "completed",
+              role: role_id
+            }
+
+            await_valid_result(session, await, details, opts[:validate_output], @output_retries)
           else
             {:error, :already_streaming} ->
               {:error, "Task session is already running"}
@@ -94,6 +90,62 @@ defmodule CodingAgent.Tools.Task.Runner do
 
       {:error, reason} ->
         {:error, "Failed to start task session: #{inspect(reason)}"}
+    end
+  end
+
+  # Re-prompts the same child session when its final output fails the caller's
+  # validator. After the retries are spent, the last result is returned and the
+  # caller decides whether invalid output fails the task.
+  defp await_valid_result(session, await, details, validator, retries_left) do
+    with {:ok, %{text: text, thinking: thinking}} <- await.() do
+      result = %AgentToolResult{
+        content: Result.build_update_content(text, thinking),
+        details: details
+      }
+
+      case validate_result(validator, result) do
+        {:error, reason} when retries_left > 0 ->
+          with :ok <- prompt_idle_session(session, correction_prompt(reason)) do
+            await_valid_result(session, await, details, validator, retries_left - 1)
+          end
+
+        _ ->
+          result
+      end
+    end
+  end
+
+  defp validate_result(validator, result) when is_function(validator, 1),
+    do: validator.(Result.visible_output_text(result))
+
+  defp validate_result(_validator, _result), do: :ok
+
+  defp correction_prompt(reason) do
+    reason = if is_binary(reason), do: reason, else: inspect(reason)
+
+    reason =
+      if String.length(reason) > @max_correction_error_chars,
+        do: String.slice(reason, 0, @max_correction_error_chars) <> "...",
+        else: reason
+
+    "Your final response failed validation against the required output schema: #{reason}\n" <>
+      "Reply again with ONLY the corrected JSON value that satisfies the schema; " <>
+      "no Markdown fences, explanations, or other prose."
+  end
+
+  # The terminal event can reach subscribers just before the session records
+  # itself idle, so a brief already-streaming window is retried.
+  defp prompt_idle_session(session, text, attempts \\ 50) do
+    case Session.prompt(session, text) do
+      {:error, :already_streaming} when attempts > 0 ->
+        Process.sleep(20)
+        prompt_idle_session(session, text, attempts - 1)
+
+      {:error, :already_streaming} ->
+        {:error, "Task session is already running"}
+
+      other ->
+        other
     end
   end
 

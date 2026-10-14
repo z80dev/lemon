@@ -15,8 +15,8 @@ defmodule CodingAgent.Tools.Task do
   """
   @spec tool(cwd :: String.t(), opts :: keyword()) :: AgentTool.t()
   def tool(cwd, opts \\ []) do
-    description = Params.build_description(cwd)
-    agent_enum = Params.build_agent_enum(cwd)
+    description = Params.build_description(cwd, opts)
+    agent_enum = Params.build_agent_enum(cwd, opts)
 
     %AgentTool{
       name: "task",
@@ -63,6 +63,13 @@ defmodule CodingAgent.Tools.Task do
             "type" => "string",
             "description" => "Child assignment"
           },
+          "context" => %{
+            "type" => "string",
+            "maxLength" => 65_536,
+            "description" =>
+              "Shared background for run/tasks[]/swarm (top-level only); each child receives " <>
+                "<context>…</context> then its prompt inside <assignment>…</assignment>"
+          },
           "message" => %{
             "type" => "string",
             "description" => "Peer input delivered at the next steering boundary"
@@ -107,7 +114,14 @@ defmodule CodingAgent.Tools.Task do
           "output_schema" => %{
             "type" => ["object", "boolean"],
             "description" =>
-              "Final JSON Schema; invalid output fails. Valid data becomes structured_output"
+              "Final JSON Schema (default: persona output). Invalid output is re-prompted up to twice; " <>
+                "valid data becomes structured_output"
+          },
+          "schema_mode" => %{
+            "type" => "string",
+            "enum" => ["strict", "permissive"],
+            "description" =>
+              "strict (default) fails on invalid output after retries; permissive returns text plus structured_output_error"
           },
           "async" => %{
             "type" => "boolean",
@@ -168,7 +182,11 @@ defmodule CodingAgent.Tools.Task do
     else
       case Params.normalize_action(Map.get(params, "action")) do
         "swarm" ->
-          Swarm.execute(tool_call_id, params, signal, on_update, cwd, opts)
+          opts = Params.with_settings(cwd, opts)
+
+          with :ok <- Params.check_spawn_depth(cwd, opts) do
+            Swarm.execute(tool_call_id, params, signal, on_update, cwd, opts)
+          end
 
         "wait" ->
           Wait.execute(params, signal, opts)
@@ -187,9 +205,13 @@ defmodule CodingAgent.Tools.Task do
           end
 
         "run" ->
-          if Map.has_key?(params, "tasks"),
-            do: run_batch(tool_call_id, params, signal, on_update, cwd, opts),
-            else: do_execute(tool_call_id, params, signal, on_update, cwd, opts)
+          opts = Params.with_settings(cwd, opts)
+
+          with :ok <- Params.check_spawn_depth(cwd, opts) do
+            if Map.has_key?(params, "tasks"),
+              do: run_batch(tool_call_id, params, signal, on_update, cwd, opts),
+              else: do_execute(tool_call_id, params, signal, on_update, cwd, opts)
+          end
 
         _ ->
           {:error, "Unknown task action"}
@@ -198,7 +220,7 @@ defmodule CodingAgent.Tools.Task do
   end
 
   defp do_execute(tool_call_id, params, signal, on_update, cwd, opts) do
-    with {:ok, validated} <- Params.validate_run_params(params, cwd),
+    with {:ok, validated} <- Params.validate_run_params(params, cwd, opts),
          :ok <- Params.check_budget_and_policy(validated, opts) do
       Execution.run(tool_call_id, validated, signal, on_update, cwd, opts)
     end
@@ -212,6 +234,7 @@ defmodule CodingAgent.Tools.Task do
         "prompt",
         "agent",
         "output_schema",
+        "schema_mode",
         "model",
         "thinking_level",
         "cwd",
@@ -230,7 +253,7 @@ defmodule CodingAgent.Tools.Task do
       "minItems" => 1,
       "maxItems" => 32,
       "description" =>
-        "Children inherit top-level options. Swarm nodes require unique names; depends_on defines their DAG.",
+        "Children inherit top-level options (context is top-level only). Swarm nodes require unique names; depends_on defines their DAG.",
       "items" => %{"type" => "object", "properties" => child_properties, "required" => ["prompt"]}
     }
 
@@ -276,55 +299,64 @@ defmodule CodingAgent.Tools.Task do
   defp run_batch(tool_call_id, params, signal, on_update, cwd, opts) do
     tasks = params["tasks"]
 
-    if is_list(tasks) and length(tasks) in 1..32 and Enum.all?(tasks, &is_map/1) do
-      defaults = Map.drop(params, ["tasks", "action"])
+    cond do
+      not (is_list(tasks) and length(tasks) in 1..32 and Enum.all?(tasks, &is_map/1)) ->
+        {:error, "tasks must contain 1 to 32 task objects"}
 
-      validated =
-        Enum.map(tasks, fn task ->
-          child = Map.merge(defaults, task) |> Map.put("async", true)
+      Enum.any?(tasks, &Map.has_key?(&1, "context")) ->
+        {:error, "context is only supported at the top level, not per task"}
 
-          child =
-            if params["async"] == false, do: Map.put(child, "auto_followup", false), else: child
+      true ->
+        launch_batch(tool_call_id, tasks, params, signal, on_update, cwd, opts)
+    end
+  end
 
-          Params.validate_run_params(child, cwd)
+  defp launch_batch(tool_call_id, tasks, params, signal, on_update, cwd, opts) do
+    defaults = Map.drop(params, ["tasks", "action"])
+
+    validated =
+      Enum.map(tasks, fn task ->
+        child = Map.merge(defaults, task) |> Map.put("async", true)
+
+        child =
+          if params["async"] == false, do: Map.put(child, "auto_followup", false), else: child
+
+        Params.validate_run_params(child, cwd, opts)
+      end)
+
+    with nil <- Enum.find(validated, &match?({:error, _}, &1)),
+         :ok <- unique_task_names(validated) do
+      results =
+        Enum.map(validated, fn {:ok, child} ->
+          with :ok <- Params.check_budget_and_policy(child, opts) do
+            Execution.run(tool_call_id, child, signal, on_update, cwd, opts)
+          end
         end)
 
-      with nil <- Enum.find(validated, &match?({:error, _}, &1)),
-           :ok <- unique_task_names(validated) do
-        results =
-          Enum.map(validated, fn {:ok, child} ->
-            with :ok <- Params.check_budget_and_policy(child, opts) do
-              Execution.run(tool_call_id, child, signal, on_update, cwd, opts)
-            end
-          end)
+      receipts =
+        Enum.map(results, fn
+          %AgentToolResult{details: details} -> details
+          {:error, reason} -> %{status: "error", error: reason}
+        end)
 
-        receipts =
-          Enum.map(results, fn
-            %AgentToolResult{details: details} -> details
-            {:error, reason} -> %{status: "error", error: reason}
-          end)
+      task_ids = for %{task_id: id} <- receipts, do: id
 
-        task_ids = for %{task_id: id} <- receipts, do: id
+      if params["async"] == false and task_ids != [] do
+        case Result.do_join(%{"task_ids" => task_ids}, signal) do
+          %AgentToolResult{} = result ->
+            %{result | details: Map.put(result.details, :launches, receipts)}
 
-        if params["async"] == false and task_ids != [] do
-          case Result.do_join(%{"task_ids" => task_ids}, signal) do
-            %AgentToolResult{} = result ->
-              %{result | details: Map.put(result.details, :launches, receipts)}
-
-            error ->
-              error
-          end
-        else
-          %AgentToolResult{
-            content: [%LemonAi.Types.TextContent{text: Jason.encode!(%{tasks: receipts})}],
-            details: %{tasks: receipts, task_ids: task_ids, status: "queued"}
-          }
+          error ->
+            error
         end
       else
-        {:error, _} = error -> error
+        %AgentToolResult{
+          content: [%LemonAi.Types.TextContent{text: Jason.encode!(%{tasks: receipts})}],
+          details: %{tasks: receipts, task_ids: task_ids, status: "queued"}
+        }
       end
     else
-      {:error, "tasks must contain 1 to 32 task objects"}
+      {:error, _} = error -> error
     end
   end
 
