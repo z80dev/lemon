@@ -163,8 +163,43 @@ defmodule CodingAgent.Session.CompactionManager do
   # Overflow Recovery Logic
   # ============================================================================
 
+  @doc """
+  Whether `reason` is a context-window overflow. Structured provider errors are
+  classified by `LemonAi.Error.context_length_error?/1` (also through common
+  `{:error, _}`/`{:assistant_error, _}`/`%{reason: _}` wrappers); the text
+  heuristics below remain the fallback for opaque messages.
+  """
   @spec context_length_exceeded_error?(term()) :: boolean()
-  def context_length_exceeded_error?(reason) do
+  def context_length_exceeded_error?(reason),
+    do: structured_overflow?(reason, 3) or text_overflow?(reason)
+
+  @wrapper_tags [:error, :assistant_error, :provider_error, :stream_error]
+
+  defp structured_overflow?(reason, depth) do
+    LemonAi.Error.context_length_error?(reason) or unwrap_overflow?(reason, depth)
+  rescue
+    _ -> false
+  end
+
+  defp unwrap_overflow?(_reason, 0), do: false
+
+  defp unwrap_overflow?({tag, inner}, depth) when tag in @wrapper_tags,
+    do: structured_overflow?(inner, depth - 1)
+
+  defp unwrap_overflow?(%{__exception__: true}, _depth), do: false
+
+  defp unwrap_overflow?(%{} = reason, depth) do
+    Enum.any?([:reason, :error, "reason", "error"], fn key ->
+      case Map.fetch(reason, key) do
+        {:ok, inner} -> structured_overflow?(inner, depth - 1)
+        :error -> false
+      end
+    end)
+  end
+
+  defp unwrap_overflow?(_reason, _depth), do: false
+
+  defp text_overflow?(reason) do
     text =
       cond do
         is_binary(reason) ->
