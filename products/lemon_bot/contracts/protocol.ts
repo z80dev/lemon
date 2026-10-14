@@ -92,6 +92,7 @@ export type ConversationKind = 'dm' | 'task' | 'team_dm' | 'group' | 'channel';
 export interface Conversation extends Resource { kind: ConversationKind; name: string; botIds: ID[]; humanUserIds: ID[]; ownerUserId: ID; parentConversationId: ID | null; leadBotId: ID | null; channelBindingId: ID | null; lastEntryId: ID | null; unreadCount: number; lastReadSeq: number; activity: { botId: ID; phase: 'reading' | 'working' | 'typing' }[] }
 export interface ConversationCreate extends Mutation { kind: ConversationKind; name?: string; botIds: ID[]; humanUserIds?: ID[]; parentConversationId?: ID; leadBotId?: ID }
 export interface ConversationUpdate extends Update { name?: string; botIds?: ID[]; humanUserIds?: ID[]; leadBotId?: ID | null }
+export interface GroupLeave extends Mutation { newOwnerUserId?: ID }
 export interface ReadRequest extends Mutation { throughSeq: number; unread?: boolean }
 export interface ComposerDraft { conversationId: ID; text: string; attachmentIds: ID[]; replyToEntryId: ID | null; updatedAtMs: TimestampMs; revision: number }
 export interface ComposerDraftUpdate extends Update { text: string; attachmentIds: ID[]; replyToEntryId?: ID | null }
@@ -260,6 +261,7 @@ export type ResourceEventPayloads = {
   'machine.upserted': Machine; 'machine.deleted': Deleted; 'machine_invite.upserted': MachineInvite;
   'bot.upserted': Bot; 'bot.deleted': Deleted; 'section.upserted': Section; 'section.deleted': Deleted; 'template.upserted': BotTemplate; 'template.deleted': Deleted;
   'conversation.upserted': Conversation; 'conversation.deleted': Deleted; 'conversation.read': { conversationId: ID; userId: ID; throughSeq: number; unread: boolean }; 'composer.updated': ComposerDraft;
+  'conversation.left': { conversationId: ID; userId: ID };
   'entry.upserted': TranscriptEntry; 'entry.deleted': { id: ID; conversationId: ID }; 'entry.delta': { conversationId: ID; entryId: ID; runId: ID; offset: number; text: string }; 'run.upserted': Run;
   'attachment.upserted': Attachment; 'attachment.deleted': Deleted; 'approval.upserted': Approval; 'question.upserted': Question; 'human_step.upserted': HumanStep; 'secret_request.upserted': SecretRequest; 'draft.upserted': Draft;
   'skill.upserted': Skill; 'skill.deleted': Deleted; 'routine.upserted': Routine; 'routine.deleted': Deleted; 'routine_run.upserted': RoutineRun; 'memory.upserted': Memory; 'memory.deleted': { id: ID; botId: ID; scope: Memory['scope']; userId: ID | null };
@@ -643,6 +645,7 @@ export interface RestEndpoints {
   'POST /conversations/:id/preview': Endpoint<PreviewRequest, Confirmation>;
   'DELETE /conversations/:id': Endpoint<Confirm, Deleted>;
   'POST /conversations/:id/read': Endpoint<ReadRequest, Conversation>;
+  'POST /conversations/:id/leave': Endpoint<GroupLeave, Empty>;
   'GET /conversations/:id/composer': Endpoint<undefined, ComposerDraft>;
   'PUT /conversations/:id/composer': Endpoint<ComposerDraftUpdate, ComposerDraft>;
   'GET /conversations/:id/entries': Endpoint<undefined, Page<TranscriptEntry>, PageQuery & { beforeSeq?: number; afterSeq?: number }>;

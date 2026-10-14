@@ -36,6 +36,8 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   status/time instead of fabricated eventual-indexing warning labels.
 - Lemon Bot group receipts distinguish proven per-target rejection from
   admitted work and genuinely uncertain dispatch without automatic replay.
+- Lemon Bot groups have explicit own-member leave and successor selection,
+  preserving other members' history and truthful membership-loss events.
 - Named execution-node runs now stream live chat deltas, tool activity and
   checkpoints through the controller's normal run/session events. Invocation-bound,
   sequenced `node.invoke.event` frames reject foreign/stale node sessions, ignore
