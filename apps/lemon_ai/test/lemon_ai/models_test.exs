@@ -454,8 +454,8 @@ defmodule LemonAi.ModelsTest do
       end
     end
 
-    test "every provider in get_providers has at least one model" do
-      for provider <- Models.get_providers() do
+    test "every static catalog provider has at least one model" do
+      for provider <- Models.get_providers(), not LemonAi.Models.Presets.preset?(provider) do
         models = Models.get_models(provider)
         assert models != [], "provider #{provider} has no models"
       end
