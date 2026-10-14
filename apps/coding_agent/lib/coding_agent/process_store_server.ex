@@ -81,9 +81,8 @@ defmodule CodingAgent.ProcessStoreServer do
 
   @impl true
   def init(opts) do
-    with {:ok, limits} <- CodingAgent.ProcessManager.background_limits(opts) do
-      init_store(opts, limits)
-    else
+    case CodingAgent.ProcessManager.background_limits(opts) do
+      {:ok, limits} -> init_store(opts, limits)
       {:error, reason} -> {:stop, reason}
     end
   end

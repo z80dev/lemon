@@ -750,11 +750,13 @@ defmodule CodingAgent.ProcessSession do
       {:unix, _} ->
         # Noninteractive POSIX sh does not source the command's BASH_ENV. The
         # subshell consumes only our newline; exec preserves the target shell,
-        # env, cwd, argv and subsequent stdin without a new PATH lookup.
+        # env, cwd, argv and subsequent stdin without a new PATH lookup. POSIX
+        # `read` requires a variable name: dash (Linux /bin/sh) rejects a bare
+        # `read -r`, which would exit before exec and never run the command.
         true = Path.type(executable) == :absolute
 
         gated_args =
-          ["-c", "( IFS= read -r ) && exec \"$@\"", "lemon-process", executable | args]
+          ["-c", "( IFS= read -r lemon_gate ) && exec \"$@\"", "lemon-process", executable | args]
 
         Port.open(
           {:spawn_executable, "/bin/sh"},

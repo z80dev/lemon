@@ -562,30 +562,9 @@ defmodule CodingAgent.BashExecutor do
   def workload_group_status(%{ownership_lost: true} = identity, _root_exited),
     do: {:unknown, identity}
 
-  def workload_group_status(%{pgid: pgid, root_pid: root_pid} = identity, root_exited) do
-    with {:ok, rows} <- process_group_rows() do
-      root = Enum.find(rows, &(&1.pid == root_pid))
-      live = Enum.filter(rows, &(&1.pgid == pgid and not String.starts_with?(&1.status, "Z")))
-
-      cond do
-        root && not String.starts_with?(root.status, "Z") &&
-            (root_exited || root.birth != identity.root_birth || root.pgid != pgid) ->
-          # Never send a signal to a recycled identity, even if it is later empty.
-          {:unknown, %{identity | ownership_lost: true}}
-
-        live == [] ->
-          :terminated
-
-        (root && root.birth == identity.root_birth) ||
-            Enum.any?(live, &(Map.get(identity.members, &1.pid) == &1.birth)) ->
-          {:alive, %{identity | members: group_members(live)}}
-
-        true ->
-          # The root disappeared before we could bind a surviving member.
-          # Retain capacity, but do not signal an unproven group.
-          {:unknown, identity}
-      end
-    else
+  def workload_group_status(%{pgid: _pgid, root_pid: _root_pid} = identity, root_exited) do
+    case process_group_rows() do
+      {:ok, rows} -> classify_workload_group(rows, identity, root_exited)
       _ -> {:unknown, identity}
     end
   end
@@ -595,12 +574,16 @@ defmodule CodingAgent.BashExecutor do
   @doc false
   def signal_workload_group(identity, signal, root_exited \\ false) do
     case workload_group_status(identity, root_exited) do
-      {:alive, %{pgid: pgid} = observed} ->
-        number = if signal == :sigterm, do: 15, else: 9
+      {:alive, %{pgid: pgid} = observed} when is_integer(pgid) and pgid > 1 ->
         # The owned group was checked immediately above; never signal a stale
         # positive root PID after the original shell has exited.
-        :os.cmd(String.to_charlist("kill -#{number} -#{pgid} 2>/dev/null"))
-        {:ok, observed}
+        case signal_process_group(pgid, signal) do
+          :ok -> {:ok, observed}
+          :error -> {:error, :workload_unobservable, observed}
+        end
+
+      {:alive, observed} ->
+        {:error, :workload_unobservable, observed}
 
       :terminated ->
         {:terminated, identity}
@@ -610,6 +593,48 @@ defmodule CodingAgent.BashExecutor do
     end
   catch
     _, _ -> {:error, :workload_unobservable, identity}
+  end
+
+  defp classify_workload_group(rows, %{pgid: pgid, root_pid: root_pid} = identity, root_exited) do
+    root = Enum.find(rows, &(&1.pid == root_pid))
+    live = Enum.filter(rows, &(&1.pgid == pgid and not String.starts_with?(&1.status, "Z")))
+
+    cond do
+      root && not String.starts_with?(root.status, "Z") &&
+          (root_exited || root.birth != identity.root_birth || root.pgid != pgid) ->
+        # Never send a signal to a recycled identity, even if it is later empty.
+        {:unknown, %{identity | ownership_lost: true}}
+
+      live == [] ->
+        :terminated
+
+      (root && root.birth == identity.root_birth) ||
+          Enum.any?(live, &(Map.get(identity.members, &1.pid) == &1.birth)) ->
+        {:alive, %{identity | members: group_members(live)}}
+
+      true ->
+        # The root disappeared before we could bind a surviving member.
+        # Retain capacity, but do not signal an unproven group.
+        {:unknown, identity}
+    end
+  end
+
+  # Signals the whole verified group through an OS-owned absolute `kill`, with
+  # a fixed argv and no shell. A group that exits between the check and the
+  # signal is still reconciled by the caller; a missing binary cannot signal.
+  defp signal_process_group(pgid, signal) do
+    case Enum.find(["/bin/kill", "/usr/bin/kill"], &File.regular?/1) do
+      nil ->
+        :error
+
+      executable ->
+        number = if signal == :sigterm, do: "-15", else: "-9"
+
+        {_output, _status} =
+          System.cmd(executable, [number, "--", "-#{pgid}"], stderr_to_stdout: true)
+
+        :ok
+    end
   end
 
   defp process_group_rows do

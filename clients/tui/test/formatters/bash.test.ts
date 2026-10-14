@@ -430,10 +430,12 @@ Time:        1.234s`;
 					is_error: false,
 				},
 				{
-					content: [{
-						type: "text",
-						text: "Launch outcome unknown for bg_1. Reconcile with bash_output; do not automatically rerun the command.",
-					}],
+					content: [
+						{
+							type: "text",
+							text: "Launch outcome unknown for bg_1. Reconcile with bash_output; do not automatically rerun the command.",
+						},
+					],
 					details: {
 						process_id: "bg_1",
 						status: "unknown",
@@ -444,11 +446,13 @@ Time:        1.234s`;
 					is_error: true,
 				},
 			]) {
-				const result = bashFormatter.formatResult(
-					receipt,
-					{ command: "sleep 100", run_in_background: true },
+				const result = bashFormatter.formatResult(receipt, {
+					command: "sleep 100",
+					run_in_background: true,
+				});
+				expect(result.summary).toMatch(
+					receipt.details.status === "queued" ? /queued/i : /unknown/i,
 				);
-				expect(result.summary).toMatch(receipt.details.status === "queued" ? /queued/i : /unknown/i);
 				expect(result.summary).not.toMatch(/started|start failed/i);
 				expect(result.summary).toContain("bg_1");
 				expect(result.isError).toBe(receipt.is_error);

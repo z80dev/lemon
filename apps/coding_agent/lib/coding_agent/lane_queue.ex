@@ -51,9 +51,8 @@ defmodule CodingAgent.LaneQueue do
 
   @impl true
   def init(opts) do
-    with {:ok, limits} <- CodingAgent.ProcessManager.background_limits(opts) do
-      init_queue(opts, limits)
-    else
+    case CodingAgent.ProcessManager.background_limits(opts) do
+      {:ok, limits} -> init_queue(opts, limits)
       {:error, reason} -> {:stop, reason}
     end
   end

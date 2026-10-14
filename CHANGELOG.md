@@ -32,6 +32,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   through the actual agent event and TUI render path. Late or reopened durable
   storage restores retained capacity and owner monitors before new admission.
   Pre-execution startup rejections retain the real failure reason.
+- Unix process admission now uses a portable POSIX stdin gate, including dash
+  on Linux, preserving subsequent command input and refusing an unreleased gate.
+  Verified group signals use fixed argv with an OS-owned kill executable.
 
 ---
 

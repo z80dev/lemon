@@ -732,14 +732,16 @@ defmodule CodingAgent.ProcessManager do
 
   @impl true
   def init(opts) do
-    with {:ok, _limits} <- background_limits(opts) do
-      DynamicSupervisor.init(
-        strategy: :one_for_one,
-        max_restarts: 100,
-        max_seconds: 60
-      )
-    else
-      {:error, reason} -> {:stop, reason}
+    case background_limits(opts) do
+      {:ok, _limits} ->
+        DynamicSupervisor.init(
+          strategy: :one_for_one,
+          max_restarts: 100,
+          max_seconds: 60
+        )
+
+      {:error, reason} ->
+        {:stop, reason}
     end
   end
 
