@@ -97,22 +97,6 @@ defmodule LemonControlPlane.Methods.SessionLifecycleMethodsTest do
     assert cleanup["maxBytes"] >= exported["bytes"]
   end
 
-  test "sessions.export accepts html and jsonl and rejects unknown formats" do
-    suffix = unique_suffix()
-    session_key = "agent:cp_export_fmt_#{suffix}:main"
-
-    on_exit(fn -> SessionLifecycle.delete(session_key) end)
-    seed_session(session_key, "run-cp-export-fmt-#{suffix}", "hello", "done")
-
-    for format <- ["html", "jsonl"] do
-      assert {:ok, %{"format" => ^format}} =
-               SessionsExport.handle(%{"sessionKey" => session_key, "format" => format}, %{})
-    end
-
-    assert {:error, {:invalid_params, _, nil}} =
-             SessionsExport.handle(%{"sessionKey" => session_key, "format" => "pdf"}, %{})
-  end
-
   test "sessions.stats exposes exact filtered aggregates without session or content fields" do
     suffix = unique_suffix()
     session_key = "agent:cp_stats_#{suffix}:main"

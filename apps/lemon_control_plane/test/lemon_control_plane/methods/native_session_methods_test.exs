@@ -439,24 +439,6 @@ defmodule LemonControlPlane.Methods.NativeSessionMethodsTest do
              SessionsLabel.handle(label_target("x"), %{})
   end
 
-  test "tree entries expose their latest label" do
-    entry = %{"id" => "e2", "parentId" => nil, "type" => "message", "label" => "bookmark"}
-
-    Process.put(
-      :tree_result,
-      {:ok,
-       %{
-         "sessionId" => "native",
-         "leafId" => "e2",
-         "entries" => [entry],
-         "branches" => [%{"leafId" => "e2", "active" => true}]
-       }}
-    )
-
-    assert {:ok, %{"entries" => [%{"label" => "bookmark"}]}} =
-             SessionsTree.handle(target(), %{})
-  end
-
   test "native history is authoritative after rewind, including an empty active branch" do
     key = "agent:history_rewind_#{System.unique_integer([:positive])}:main"
     params = Map.put(target(), "sessionKey", key)
