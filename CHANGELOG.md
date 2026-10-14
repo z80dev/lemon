@@ -39,6 +39,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   rather than exposing fabricated or empty account IDs/usernames.
 - Lemon Bot OIDC uses explicit operator-approved HTTPS origins, private-IdP
   DNS exceptions and exact client/secret-reference destination bindings.
+- Canonical Lemon Bot private configuration now types delivered host/export
+  grants, OIDC mappings, separate public X credentials, actual provider spend
+  sources and fixed channel app principals without an untyped extras bag.
 
 ---
 
