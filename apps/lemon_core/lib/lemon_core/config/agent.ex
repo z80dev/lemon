@@ -43,6 +43,11 @@ defmodule LemonCore.Config.Agent do
       path = "/bin/zsh"
       command_prefix = ""
 
+      [runtime.secret_obfuscation]
+      # Opt-in: replace secrets in provider-visible session text with
+      # reversible placeholders (see docs/security/secret-obfuscation.md).
+      enabled = false
+
   Environment variables override file configuration:
   - `LEMON_DEFAULT_PROVIDER`
   - `LEMON_DEFAULT_MODEL`
@@ -50,6 +55,7 @@ defmodule LemonCore.Config.Agent do
   - `LEMON_EXTENSION_PATHS` (comma-separated)
   - `LEMON_EXTENSIONS_ENABLED`
   - `LEMON_EXTENSIONS_AUTO_LOAD_DEFAULT_PATHS`
+  - `LEMON_SECRET_OBFUSCATION_ENABLED`
   - `LEMON_THEME`
   """
 
@@ -67,7 +73,8 @@ defmodule LemonCore.Config.Agent do
     :extension_paths,
     :theme,
     :budget_defaults,
-    :provider_routing
+    :provider_routing,
+    :secret_obfuscation
   ]
 
   @type t :: %__MODULE__{
@@ -96,7 +103,8 @@ defmodule LemonCore.Config.Agent do
           extension_paths: [String.t()],
           theme: String.t(),
           budget_defaults: %{max_children: integer()},
-          provider_routing: map()
+          provider_routing: map(),
+          secret_obfuscation: %{enabled: boolean()}
         }
 
   @doc """
@@ -120,7 +128,8 @@ defmodule LemonCore.Config.Agent do
       extension_paths: resolve_extension_paths(agent_settings),
       theme: resolve_theme(agent_settings),
       budget_defaults: resolve_budget_defaults(agent_settings),
-      provider_routing: resolve_provider_routing(agent_settings)
+      provider_routing: resolve_provider_routing(agent_settings),
+      secret_obfuscation: resolve_secret_obfuscation(agent_settings)
     }
   end
 
@@ -261,6 +270,17 @@ defmodule LemonCore.Config.Agent do
               do: false,
               else: extensions["auto_load_default_paths"]
             )
+        )
+    }
+  end
+
+  defp resolve_secret_obfuscation(settings) do
+    secret_obfuscation = ensure_map(settings["secret_obfuscation"])
+
+    %{
+      enabled:
+        Env.get(:lemon_secret_obfuscation_enabled,
+          default: secret_obfuscation["enabled"] == true
         )
     }
   end
@@ -486,6 +506,9 @@ defmodule LemonCore.Config.Agent do
       "extensions" => %{
         "enabled" => true,
         "auto_load_default_paths" => false
+      },
+      "secret_obfuscation" => %{
+        "enabled" => false
       },
       "extension_paths" => [],
       "theme" => "lemon"

@@ -36,9 +36,15 @@ interface BootOptions {
 }
 
 async function boot(options: BootOptions = {}) {
-	const server = await FakeControlPlane.start();
+	// This fixture models prompt delivery, not routing/activity/approval hydration.
+	// Advertise only implemented services so startup does not depend on unrelated
+	// METHOD_NOT_FOUND fallbacks or reconnect resync changing the queue state.
+	const server = await FakeControlPlane.start({
+		methods: ["chat.send", "chat.abort", "chat.history", "health"],
+	});
 	teardown.push(() => server.stop());
 	server.respondWith("chat.history", { messages: [] });
+	server.respondWith("health", { status: "ok" });
 	let runSeq = 0;
 	server.onMethod(
 		"chat.send",

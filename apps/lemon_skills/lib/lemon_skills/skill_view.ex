@@ -41,7 +41,8 @@ defmodule LemonSkills.SkillView do
           missing_tools: [String.t()],
           trust_level: Entry.trust_level() | nil,
           source_kind: Entry.source_kind() | nil,
-          platforms: [String.t()]
+          platforms: [String.t()],
+          hidden_from_model: boolean()
         }
 
   @enforce_keys [:key, :path]
@@ -57,7 +58,8 @@ defmodule LemonSkills.SkillView do
     missing_bins: [],
     missing_env_vars: [],
     missing_tools: [],
-    platforms: ["any"]
+    platforms: ["any"],
+    hidden_from_model: false
   ]
 
   @doc """
@@ -84,7 +86,8 @@ defmodule LemonSkills.SkillView do
       missing_tools: status.missing_tools,
       trust_level: entry.trust_level,
       source_kind: entry.source_kind,
-      platforms: Manifest.platforms(manifest)
+      platforms: Manifest.platforms(manifest),
+      hidden_from_model: entry.hidden_from_model == true
     }
   end
 
@@ -98,6 +101,16 @@ defmodule LemonSkills.SkillView do
   @spec displayable?(t()) :: boolean()
   def displayable?(%__MODULE__{activation_state: state}),
     do: state in [:active, :not_ready]
+
+  @doc """
+  Return `true` when the skill may be listed in model-visible prompts.
+
+  Skills with `hide: true` / `disable-model-invocation: true` stay displayable
+  in the CLI and loadable by name, but are never advertised to the model.
+  """
+  @spec prompt_visible?(t()) :: boolean()
+  def prompt_visible?(%__MODULE__{hidden_from_model: true}), do: false
+  def prompt_visible?(%__MODULE__{} = view), do: displayable?(view)
 
   @doc """
   Return `true` when the skill is fully ready to use.

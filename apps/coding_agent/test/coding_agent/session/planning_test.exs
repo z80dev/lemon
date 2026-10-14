@@ -201,6 +201,81 @@ defmodule CodingAgent.Session.PlanningTest do
              tools["propose_plan"].execute.("p", propose, nil, nil)
   end
 
+  test "private plan tools restore secrets and enforce hooks before restricted writes", %{
+    root: root
+  } do
+    manager = SessionManager.new(root)
+    {:ok, _, manager} = Planning.transition(manager, :enter, [])
+    secret = "private-plan-secret"
+
+    obfuscator =
+      CodingAgent.Security.SecretObfuscator.build(
+        cwd: root,
+        agent_dir: root,
+        env: %{"API_KEY" => secret}
+      )
+
+    placeholder = CodingAgent.Security.SecretObfuscator.obfuscate(obfuscator, secret)
+    parent = self()
+    outside = Path.join(root, "outside.md")
+
+    hooks = [
+      on_tool_call: [
+        fn event ->
+          send(parent, {:plan_tool_call, event.tool_name, event.args})
+
+          cond do
+            event.tool_name == "propose_plan" ->
+              {:block, "not ready"}
+
+            event.args["content"] == "redirect" ->
+              {:replace_args, Map.put(event.args, "path", outside)}
+
+            true ->
+              :ok
+          end
+        end
+      ]
+    ]
+
+    context = %{
+      gate: Planning.new_gate(),
+      cwd: root,
+      session_pid: self(),
+      session_id: manager.header.id,
+      run_id: "run",
+      session_key: "key",
+      agent_id: "default",
+      approval_request_fun: fn _ -> flunk("blocked proposal reached approval") end,
+      hooks: hooks,
+      secret_obfuscator: obfuscator
+    }
+
+    plan_file = Path.join(Planning.plan_dir(manager), "hook-plan.md")
+
+    for base <- [[reader()], [reader(), writer()]] do
+      tools = Map.new(Planning.tools(base, manager, context), &{&1.name, &1})
+      assert %AgentToolResult{is_error: false} = run(tools["write"], plan_file, placeholder)
+      assert_receive {:plan_tool_call, "write", %{"content" => ^secret}}
+      assert File.read!(plan_file) == secret
+
+      assert %AgentToolResult{is_error: true} = run(tools["write"], plan_file, "redirect")
+      assert_receive {:plan_tool_call, "write", %{"content" => "redirect"}}
+      refute File.exists?(outside)
+      assert File.read!(plan_file) == secret
+
+      assert %AgentToolResult{is_error: true} =
+               tools["propose_plan"].execute.(
+                 "p",
+                 %{"path" => plan_file, "title" => "Plan"},
+                 nil,
+                 nil
+               )
+
+      assert_receive {:plan_tool_call, "propose_plan", _}
+    end
+  end
+
   test "legacy reviewed-artifact entries load as plan mode and approved context", %{root: root} do
     artifact = Path.join(root, "legacy.md")
     File.write!(artifact, "# Legacy pending")

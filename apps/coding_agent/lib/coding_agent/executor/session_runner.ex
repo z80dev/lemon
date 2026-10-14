@@ -227,6 +227,7 @@ defmodule CodingAgent.Executor.SessionRunner do
               })
 
           _ ->
+            prompt = CodingAgent.Commands.prepare_prompt(cwd, prompt, request.meta || %{})
             :ok = CodingAgent.Session.prompt(session, prompt, images: request.images)
         end
 

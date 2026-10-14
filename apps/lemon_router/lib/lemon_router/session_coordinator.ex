@@ -484,7 +484,7 @@ defmodule LemonRouter.SessionCoordinator do
            active_run_id,
            steer_mode,
            submission.run_id,
-           submission.execution_request.prompt
+           prepare_steering_prompt(state, submission.execution_request)
          ) do
       :ok ->
         {state, reply_acc}
@@ -903,6 +903,32 @@ defmodule LemonRouter.SessionCoordinator do
   end
 
   defp maybe_cancel_active(state, _reason), do: state
+
+  # Origin comes from the incoming command; cwd/placement come from the active
+  # run. Never discover controller-local files for a remote active invocation.
+  defp prepare_steering_prompt(state, request) do
+    prompt = request.prompt || ""
+
+    case active_submission(state) do
+      %Submission{execution_request: active} ->
+        incoming_meta = request.meta || %{}
+
+        node =
+          MapHelpers.get_key(active.meta || %{}, :node) ||
+            MapHelpers.get_key(incoming_meta, :node)
+
+        meta = incoming_meta |> Map.delete("node") |> Map.put(:node, node)
+        args = [active.cwd, prompt, meta]
+
+        case LemonCore.AgentRuntime.call(:prepare_prompt, args, prompt) do
+          prepared when is_binary(prepared) -> prepared
+          _ -> prompt
+        end
+
+      nil ->
+        prompt
+    end
+  end
 
   defp dispatch_steer(active_run_id, steer_mode, submission_run_id, prompt)
        when steer_mode in [:steer, :steer_backlog, :redirect] and is_binary(submission_run_id) do

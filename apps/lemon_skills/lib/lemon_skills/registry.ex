@@ -8,8 +8,8 @@ defmodule LemonSkills.Registry do
   ## Architecture
 
   Skills are loaded from `Config.global_skills_dirs/0` and
-  `Config.project_skills_dirs/1`. These include Lemon, harness, OMP, and Claude
-  SKILL.md bundles, one directory level below each skill root.
+  `Config.project_skills_dirs/1`. These include Lemon, harness, OMP, Claude,
+  Codex and GitHub SKILL.md bundles, one directory level below each skill root.
 
   Project skills override global skills with the same directory key. Within a
   scope, the first configured directory wins; ancestors are closest-first.

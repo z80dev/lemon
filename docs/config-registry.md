@@ -48,6 +48,7 @@ Call-site migration to `LemonCore.Env.get/2` is out of scope for this pass and i
 | `LEMON_PROVIDER_ROUTING_ENABLED` | boolean | `true` |  | `lemon_core` | Whether multi-provider routing/fallback is enabled. |
 | `LEMON_PROVIDER_ROUTING_REQUIRE_CREDENTIALS` | boolean | `true` |  | `lemon_core` | Whether provider routing requires resolvable credentials before selecting a provider. |
 | `LEMON_RETRY_ENABLED` | boolean | `true` |  | `lemon_core` | Whether transient LLM call failures are retried. |
+| `LEMON_SECRET_OBFUSCATION_ENABLED` | boolean | `false` |  | `lemon_core` | Whether secrets are replaced with placeholders in provider-visible session text. |
 | `LEMON_SHELL_COMMAND_PREFIX` | string | _(none)_ |  | `lemon_core` | Command prefix prepended to every shell tool invocation. |
 | `LEMON_SHELL_PATH` | string | _(none)_ |  | `lemon_core` | Shell executable path used by the bash/shell tool. |
 | `LEMON_THEME` | string | `lemon` |  | `lemon_core` | Agent-level theme name (distinct from the TUI theme). |
@@ -266,6 +267,8 @@ When a session's resolved tool catalog costs more than `LEMON_TOOL_DISCLOSURE_BU
 | `LEMON_AGENT_ID` | string | `default` |  | `lemon_skills` | Default agent id used by `mix lemon.skill` CLI operations. |
 | `LEMON_HARNESS_SKILLS_DIR` | string | _(none)_ |  | `lemon_skills` | Override directory for harness/eval skill fixtures. |
 | `LEMON_MCP_DISABLED` | boolean | `false` |  | `lemon_skills` | Kill switch to disable all MCP tool sources. |
+| `LEMON_MCP_EXTERNAL_DISCOVERY` | boolean | `true` |  | `lemon_skills` | Set to 0/false/no to stop importing MCP servers from other tools' config files. |
+| `LEMON_MCP_EXTERNAL_USER_DISCOVERY` | boolean | `false` |  | `lemon_skills` | Set to 1/true/yes to also import MCP servers from other tools' user-level (~/) configs. |
 | `LEMON_MCP_SERVERS` | string | _(none)_ |  | `lemon_skills` | JSON-encoded list of MCP server configs, overriding the TOML/app config. |
 
 ### Browser tool

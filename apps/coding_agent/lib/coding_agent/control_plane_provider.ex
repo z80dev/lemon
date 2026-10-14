@@ -278,6 +278,17 @@ defmodule CodingAgent.ControlPlaneProvider do
     end
   end
 
+  @doc "Display projection of the file slash commands discovered for `cwd`."
+  def slash_commands(cwd) do
+    cwd
+    |> CodingAgent.Commands.list()
+    |> Enum.map(&Map.take(&1, [:name, :description, :argument_hint]))
+  end
+
+  @doc "Prepare a local user-origin prompt without changing internal or named-node requests."
+  def prepare_prompt(cwd, prompt, meta),
+    do: CodingAgent.Commands.prepare_prompt(cwd, prompt, meta)
+
   defp ensure_idle(session_key) do
     case live_session(session_key) do
       nil ->
