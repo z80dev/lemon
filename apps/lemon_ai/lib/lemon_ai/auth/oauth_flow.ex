@@ -206,18 +206,20 @@ defmodule LemonAi.Auth.OAuthFlow do
   Poll `poll_fun` until it completes, fails, or the device code expires.
 
   Options: `:interval_s` and `:expires_in_s` from the device response, and
-  `:sleep` (a 1-arity function receiving milliseconds).
+  `:sleep` (a 1-arity function receiving milliseconds). Expiry counts the time
+  spent waiting between polls; a code that expires during a request is
+  reported by the server as `expired_token`.
   """
   @spec poll_device_token((-> poll_result()), keyword()) :: {:ok, map()} | {:error, term()}
   def poll_device_token(poll_fun, opts) when is_function(poll_fun, 0) do
     interval_s = positive(Keyword.get(opts, :interval_s)) || @default_interval_s
     expires_in_s = positive(Keyword.get(opts, :expires_in_s)) || @default_expires_in_s
-    deadline = System.monotonic_time(:millisecond) + expires_in_s * 1000
     sleep = Keyword.get(opts, :sleep, &Process.sleep/1)
-    do_poll(poll_fun, max(@min_interval_ms, interval_s * 1000), deadline, sleep, false)
+
+    do_poll(poll_fun, max(@min_interval_ms, interval_s * 1000), expires_in_s * 1000, sleep, false)
   end
 
-  defp do_poll(poll_fun, interval_ms, deadline, sleep, slowed?) do
+  defp do_poll(poll_fun, interval_ms, remaining_ms, sleep, slowed?) do
     case poll_fun.() do
       {:ok, _body} = done ->
         done
@@ -231,16 +233,11 @@ defmodule LemonAi.Auth.OAuthFlow do
             do: {interval_ms + @slow_down_increment_ms, true},
             else: {interval_ms, slowed?}
 
-        remaining = deadline - System.monotonic_time(:millisecond)
-
-        if remaining <= 0 do
+        if remaining_ms <= interval_ms do
           {:error, timeout_reason(slowed?)}
         else
-          sleep.(min(interval_ms, remaining))
-
-          if deadline - System.monotonic_time(:millisecond) <= 0,
-            do: {:error, timeout_reason(slowed?)},
-            else: do_poll(poll_fun, interval_ms, deadline, sleep, slowed?)
+          sleep.(interval_ms)
+          do_poll(poll_fun, interval_ms, remaining_ms - interval_ms, sleep, slowed?)
         end
     end
   end

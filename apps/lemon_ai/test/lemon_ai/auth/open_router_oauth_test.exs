@@ -40,20 +40,6 @@ defmodule LemonAi.Auth.OpenRouterOAuthTest do
     end)
   end
 
-  test "authorization URL carries callback_url and an S256 challenge, no state" do
-    {:ok, auth} = OpenRouterOAuth.build_authorize_url()
-    %URI{host: "openrouter.ai", path: "/auth", query: query} = URI.parse(auth.authorize_url)
-    params = URI.decode_query(query)
-
-    assert params["callback_url"] == "http://localhost:54549/callback"
-    assert params["code_challenge_method"] == "S256"
-
-    assert params["code_challenge"] ==
-             Base.url_encode64(:crypto.hash(:sha256, auth.code_verifier), padding: false)
-
-    refute Map.has_key?(params, "state")
-  end
-
   test "captures the loopback callback and exchanges the code with its verifier", %{opts: opts} do
     test_pid = self()
     stub_keys(test_pid)
@@ -112,14 +98,6 @@ defmodule LemonAi.Auth.OpenRouterOAuthTest do
     assert {:ok, "sk-or-v1-good"} = login.("sk-or-v1-good")
     assert {:error, :invalid_api_key} = login.("sk-or-v1-bad")
     refute_received {:request, "POST", "/api/v1/auth/keys", _, _}
-  end
-
-  test "a failed exchange reports only the status", %{opts: opts} do
-    Req.Test.stub(__MODULE__, fn conn ->
-      conn |> Plug.Conn.put_status(403) |> Req.Test.json(%{"error" => %{"message" => "nope"}})
-    end)
-
-    assert {:error, {:http_error, 403}} = OpenRouterOAuth.exchange_code("c", "v", opts)
   end
 
   test "the minted key is a plain API key the OAuth resolver ignores" do

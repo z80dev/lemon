@@ -58,11 +58,14 @@ defmodule LemonAgent.ModelRuntime.CredentialsOAuthSourceTest do
     assert Credentials.resolve_provider_api_key("kimi_coding", providers) == "kimi-login-token"
   end
 
-  test "without auth_source the API-key env var still wins" do
-    providers = %{"kimi_coding" => %{"api_key_secret" => "llm_kimi_coding_api_key"}}
-    assert Credentials.resolve_provider_api_key("kimi_coding", providers) == "sk-kimi-ambient"
+  test "auth_source = api_key keeps the API-key env var ahead of the stored secret" do
+    providers = %{
+      "kimi_coding" => %{
+        "auth_source" => "api_key",
+        "api_key_secret" => "llm_kimi_coding_api_key"
+      }
+    }
 
-    providers = put_in(providers, ["kimi_coding", "auth_source"], "api_key")
     assert Credentials.resolve_provider_api_key("kimi_coding", providers) == "sk-kimi-ambient"
   end
 

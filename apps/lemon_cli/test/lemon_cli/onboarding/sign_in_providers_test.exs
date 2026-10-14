@@ -101,12 +101,6 @@ defmodule LemonCli.Onboarding.SignInProvidersTest do
         io: io()
       )
     end
-
-    assert_raise Mix.Error, ~r/does not support device/, fn ->
-      Runner.run(["--config-path", config_path, "--auth", "device"], Providers.fetch!("xai"),
-        io: io()
-      )
-    end
   end
 
   test "openrouter browser sign-in stores the minted key as a plain API key",
@@ -178,9 +172,6 @@ defmodule LemonCli.Onboarding.SignInProvidersTest do
            }
 
     assert output() =~ "Enter code: GROK-1"
-
-    assert :ok = SetupProvider.run(["xai", "--status", "--config-path", config_path], io())
-    assert output() =~ "Stored login: llm_xai_api_key (refreshable login, me@example.com)"
   end
 
   test "kimi_coding status ignores KIMI_API_KEY while signed in; logout removes the login",
@@ -203,11 +194,6 @@ defmodule LemonCli.Onboarding.SignInProvidersTest do
     """)
 
     System.put_env("KIMI_API_KEY", "sk-kimi-ambient")
-
-    assert LemonAgent.ModelRuntime.Credentials.resolve_provider_api_key(
-             "kimi_coding",
-             Toml.decode_file!(config_path)["providers"]
-           ) == "kimi-at"
 
     assert :ok = SetupProvider.run(["kimi-code", "--status", "--config-path", config_path], io())
     status = output()

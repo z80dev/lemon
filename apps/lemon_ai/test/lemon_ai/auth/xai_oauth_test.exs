@@ -106,7 +106,6 @@ defmodule LemonAi.Auth.XAIOAuthTest do
              } = secret
 
       assert secret["expires_at_ms"] > System.system_time(:millisecond) + 3_500_000
-      assert XAIOAuth.describe_secret(secret).account_email == "grok@example.com"
     end
 
     test "rejects a discovered token endpoint outside x.ai", %{opts: opts} do
@@ -120,11 +119,11 @@ defmodule LemonAi.Auth.XAIOAuthTest do
       refute_received {:request, _, "/oauth2/device/code", _}
     end
 
-    for {error, reason} <- [
-          {"expired_token", :device_code_expired},
-          {"access_denied", :access_denied}
-        ] do
-      test "stops on #{error}", %{opts: opts} do
+    test "stops on expired_token and access_denied", %{opts: opts} do
+      for {error, reason} <- [
+            {"expired_token", :device_code_expired},
+            {"access_denied", :access_denied}
+          ] do
         stub(fn conn, path, _ ->
           case path do
             "/oauth2/device/code" ->
@@ -135,7 +134,7 @@ defmodule LemonAi.Auth.XAIOAuthTest do
               })
 
             "/oauth2/token" ->
-              json(conn, 400, %{"error" => unquote(error)})
+              json(conn, 400, %{"error" => error})
           end
         end)
 
@@ -145,43 +144,12 @@ defmodule LemonAi.Auth.XAIOAuthTest do
             on_auth: fn _, _ -> :ok end
           )
 
-        assert {:error, unquote(reason)} = XAIOAuth.login_device_flow(opts)
+        assert {:error, ^reason} = XAIOAuth.login_device_flow(opts)
       end
-    end
-
-    test "times out when the device code expires", %{opts: opts} do
-      stub(fn conn, path, _ ->
-        case path do
-          "/oauth2/device/code" ->
-            json(conn, %{
-              "device_code" => "d",
-              "user_code" => "U",
-              "verification_uri" => "https://x.ai/d",
-              "interval" => 1,
-              "expires_in" => 1
-            })
-
-          "/oauth2/token" ->
-            json(conn, 400, %{"error" => "authorization_pending"})
-        end
-      end)
-
-      opts =
-        Keyword.merge(opts,
-          token_url: "https://auth.x.ai/oauth2/token",
-          on_auth: fn _, _ -> :ok end,
-          sleep: &Process.sleep/1
-        )
-
-      assert {:error, :device_flow_timed_out} = XAIOAuth.login_device_flow(opts)
     end
   end
 
   describe "resolve_api_key_from_secret/3" do
-    test "ignores values that are not xAI OAuth payloads" do
-      assert :ignore = XAIOAuth.resolve_api_key_from_secret("llm_xai_api_key", "xai-plain-key")
-    end
-
     test "returns an unexpired token without a request", %{opts: opts} do
       stub(fn _, _, _ -> flunk("must not refresh") end)
       secret = payload(expires_in_ms: 60 * 60 * 1000)

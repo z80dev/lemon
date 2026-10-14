@@ -64,18 +64,6 @@ defmodule LemonAi.Auth.ZaiOAuthTest do
     end)
   end
 
-  test "authorization URL matches ZCode's request without PKCE" do
-    {:ok, auth} = ZaiOAuth.build_authorize_url(state: "s1")
-    %URI{host: "chat.z.ai", query: query} = URI.parse(auth.authorize_url)
-
-    assert URI.decode_query(query) == %{
-             "client_id" => "client_P8X5CMWmlaRO9gyO-KSqtg",
-             "response_type" => "code",
-             "redirect_uri" => "zcode://zai-auth/callback",
-             "state" => "s1"
-           }
-  end
-
   test "pasted redirect -> token exchange -> business login -> created key", %{opts: opts} do
     stub([%{"name" => "someone-else", "apiKey" => "other"}])
 

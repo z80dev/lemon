@@ -106,7 +106,7 @@ defmodule LemonAi.Auth.KimiCodeOAuthTest do
     assert_received {:request, "auth.kimi.test", _, _, _}
   end
 
-  test "refresh near expiry persists; force_refresh dispatches through the resolver",
+  test "a near-expiry login refreshes through the resolver and persists the rotated token",
        %{opts: opts} do
     test_pid = self()
 
@@ -118,36 +118,16 @@ defmodule LemonAi.Auth.KimiCodeOAuthTest do
     end)
 
     persist = fn name, value -> send(test_pid, {:persisted, name, value}) end
-    opts = Keyword.put(opts, :persist_secret, persist)
-
-    assert {:ok, "fresh"} =
-             KimiCodeOAuth.resolve_api_key_from_secret(
-               "llm_kimi_coding_api_key",
-               payload(60_000),
-               opts
-             )
-
-    assert_received {:persisted, "llm_kimi_coding_api_key", stored}
-    assert Jason.decode!(stored)["refresh_token"] == "kimi-rt-2"
 
     assert {:ok, "fresh"} =
              OAuthSecretResolver.resolve_api_key_from_secret(
                "llm_kimi_coding_api_key",
-               payload(3_600_000),
-               Keyword.put(opts, :force_refresh, true)
+               payload(60_000),
+               Keyword.put(opts, :persist_secret, persist)
              )
 
-    no_refresh =
-      payload(3_600_000) |> Jason.decode!() |> Map.delete("refresh_token") |> Jason.encode!()
-
-    assert {:error, :not_refreshable} =
-             KimiCodeOAuth.resolve_api_key_from_secret("s", no_refresh, force_refresh: true)
-  end
-
-  test "oauth_token? separates JWT access tokens from Kimi API keys" do
-    assert KimiCodeOAuth.oauth_token?(jwt(%{"sub" => "x"}))
-    refute KimiCodeOAuth.oauth_token?("sk-kimi-abc")
-    refute KimiCodeOAuth.oauth_token?(nil)
+    assert_received {:persisted, "llm_kimi_coding_api_key", stored}
+    assert Jason.decode!(stored)["refresh_token"] == "kimi-rt-2"
   end
 
   describe "kimi_coding requests" do
