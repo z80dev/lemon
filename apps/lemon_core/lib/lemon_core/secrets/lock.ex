@@ -2,10 +2,10 @@ defmodule LemonCore.Secrets.Lock do
   @moduledoc """
   Exclusive lease that serialises secret writes with master-key rotation.
 
-  `LemonCore.Secrets.set/3` holds it from resolving the master key until the
-  record is stored, and `LemonCore.Secrets.KeyRotation.rotate/2` holds it for
-  the whole rotation, so no write can be encrypted under a key that a rotation
-  is about to retire, and two rotations never interleave.
+  `LemonCore.Secrets.set/3` and `set_if_revision/4` hold it from resolving the
+  master key until persistence; deletion and expiry cleanup hold it around
+  conditional removal. `LemonCore.Secrets.KeyRotation.rotate/2` holds it for the
+  whole rotation, so no write uses a retiring key and mutations never interleave.
 
   The lease is a record in the `:secrets_lock` Store table created with
   `LemonCore.Store.put_new/4`. With the SQLite backend that insert is atomic
@@ -45,25 +45,25 @@ defmodule LemonCore.Secrets.Lock do
            :secrets_locked | {:secrets_lock_held, String.t() | :unknown} | {:store_failed, term()}}
 
   @doc "Runs `fun` while holding the lock for one secret write."
-  @spec with_write_lock((-> result)) :: result | error() when result: term()
-  def with_write_lock(fun) do
+  @spec with_write_lock((-> result), Store.server()) :: result | error() when result: term()
+  def with_write_lock(fun, server \\ Store) do
     :lemon_core
     |> Application.get_env(LemonCore.Secrets, [])
     |> Keyword.get(:write_lock_wait_ms, @write_wait_ms)
-    |> with_lock(fun)
+    |> with_lock(fun, server)
   end
 
   @doc "Runs `fun` while holding the lock for a master-key rotation."
   @spec with_rotation_lock((-> result)) :: result | error() when result: term()
   def with_rotation_lock(fun), do: with_lock(@rotation_wait_ms, fun)
 
-  defp with_lock(wait_ms, fun) do
-    case acquire(System.monotonic_time(:millisecond) + wait_ms) do
+  defp with_lock(wait_ms, fun, server \\ Store) do
+    case acquire(server, System.monotonic_time(:millisecond) + wait_ms) do
       {:ok, lease} ->
         try do
           fun.()
         after
-          release(lease)
+          release(server, lease)
         end
 
       {:error, _reason} = error ->
@@ -71,7 +71,7 @@ defmodule LemonCore.Secrets.Lock do
     end
   end
 
-  defp acquire(deadline) do
+  defp acquire(server, deadline) do
     lease = %{
       owner: Base.encode16(:crypto.strong_rand_bytes(12), case: :lower),
       host: host(),
@@ -79,23 +79,23 @@ defmodule LemonCore.Secrets.Lock do
       holder: self() |> :erlang.pid_to_list() |> List.to_string()
     }
 
-    case Store.put_new(@table, @key, lease) do
+    case Store.put_new(server, @table, @key, lease) do
       :ok -> {:ok, lease}
-      {:error, :exists} -> contended(deadline)
+      {:error, :exists} -> contended(server, deadline)
       {:error, reason} -> {:error, {:store_failed, reason}}
     end
   end
 
-  defp contended(deadline) do
-    case Store.fetch(@table, @key) do
+  defp contended(server, deadline) do
+    case Store.fetch(server, @table, @key) do
       {:ok, nil} ->
-        acquire(deadline)
+        acquire(server, deadline)
 
       {:ok, lease} ->
         case holder_state(lease) do
-          :dead -> reclaim(lease, deadline)
-          :alive -> wait(deadline, {:error, :secrets_locked})
-          {:unprovable, host} -> wait(deadline, {:error, {:secrets_lock_held, host}})
+          :dead -> reclaim(server, lease, deadline)
+          :alive -> wait(server, deadline, {:error, :secrets_locked})
+          {:unprovable, host} -> wait(server, deadline, {:error, {:secrets_lock_held, host}})
         end
 
       {:error, reason} ->
@@ -105,25 +105,25 @@ defmodule LemonCore.Secrets.Lock do
 
   # The compare-and-delete only removes the exact lease judged dead, never a
   # lease another contender installed in the meantime.
-  defp reclaim(lease, deadline) do
-    case Store.compare_and_delete_many([{@table, @key, lease}]) do
-      :ok -> acquire(deadline)
-      {:error, :mismatch} -> wait(deadline, {:error, :secrets_locked})
+  defp reclaim(server, lease, deadline) do
+    case Store.compare_and_delete_many(server, [{@table, @key, lease}]) do
+      :ok -> acquire(server, deadline)
+      {:error, :mismatch} -> wait(server, deadline, {:error, :secrets_locked})
       {:error, reason} -> {:error, {:store_failed, reason}}
     end
   end
 
   # A normal release may still arrive, so keep polling until the deadline.
-  defp wait(deadline, timeout_error) do
+  defp wait(server, deadline, timeout_error) do
     if System.monotonic_time(:millisecond) >= deadline do
       timeout_error
     else
       Process.sleep(@poll_ms)
-      acquire(deadline)
+      acquire(server, deadline)
     end
   end
 
-  defp release(lease), do: Store.compare_and_delete_many([{@table, @key, lease}])
+  defp release(server, lease), do: Store.compare_and_delete_many(server, [{@table, @key, lease}])
 
   defp holder_state(%{host: host, os_pid: os_pid, holder: holder})
        when is_binary(host) and is_binary(os_pid) and is_binary(holder) do

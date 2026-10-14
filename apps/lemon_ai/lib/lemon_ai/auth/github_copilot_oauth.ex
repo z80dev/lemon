@@ -32,7 +32,8 @@ defmodule LemonAi.Auth.GitHubCopilotOAuth do
           | {:on_auth, (String.t(), String.t() | nil -> any())}
           | {:on_progress, (String.t() -> any())}
           | {:enable_models, boolean()}
-          | {:persist_secret, (String.t(), String.t() -> any())}
+          | {:persist_secret,
+             (String.t(), String.t(), term() -> :ok | {:ok, term()} | {:error, term()})}
 
   @doc """
   Run GitHub Copilot OAuth device flow.
@@ -111,12 +112,17 @@ defmodule LemonAi.Auth.GitHubCopilotOAuth do
           opts,
           fn latest, opts ->
             with {:ok, refreshed_secret, changed?} <-
-                   ensure_fresh_secret(latest, force_refresh?(opts)),
+                   ensure_fresh_secret(latest, force_refresh?(opts), secret_name, opts),
                  access_token when is_binary(access_token) and access_token != "" <-
                    non_empty_binary(refreshed_secret["access_token"]),
                  :ok <-
                    if(changed?,
-                     do: persist_secret(secret_name, refreshed_secret, opts),
+                     do:
+                       LemonAi.Auth.OAuthSecretResolver.persist_secret(
+                         secret_name,
+                         encode_secret(refreshed_secret),
+                         opts
+                       ),
                      else: :ok
                    ) do
               {:ok, access_token}
@@ -251,7 +257,7 @@ defmodule LemonAi.Auth.GitHubCopilotOAuth do
 
   # A forced refresh (the provider rejected the Copilot token) never falls back
   # to the rejected token.
-  defp ensure_fresh_secret(secret, force?) when is_map(secret) do
+  defp ensure_fresh_secret(secret, force?, secret_name, opts) when is_map(secret) do
     access_token = non_empty_binary(secret["access_token"])
     refresh_token = non_empty_binary(secret["refresh_token"])
     expires_at_ms = parse_integer(secret["expires_at_ms"])
@@ -270,7 +276,7 @@ defmodule LemonAi.Auth.GitHubCopilotOAuth do
         {:error, :not_refreshable}
 
       should_refresh? ->
-        refresh_copilot_secret(secret, refresh_token, access_token, force?)
+        refresh_copilot_secret(secret, refresh_token, access_token, force?, secret_name, opts)
 
       not unexpired?(expires_at_ms) ->
         {:error, :expired_access_token}
@@ -280,7 +286,7 @@ defmodule LemonAi.Auth.GitHubCopilotOAuth do
     end
   end
 
-  defp refresh_copilot_secret(secret, refresh_token, access_token, force?) do
+  defp refresh_copilot_secret(secret, refresh_token, access_token, force?, secret_name, opts) do
     case fetch_copilot_token(refresh_token, non_empty_binary(secret["enterprise_domain"])) do
       {:ok, %{token: token, expires_at_ms: refreshed_expires_at_ms}} ->
         updated =
@@ -292,12 +298,25 @@ defmodule LemonAi.Auth.GitHubCopilotOAuth do
 
         {:ok, updated, true}
 
+      {:error, :reauth_required} = error ->
+        error
+
       {:error, reason} ->
         if not force? and is_binary(access_token) and access_token != "" and
              unexpired?(secret["expires_at_ms"]) do
-          Logger.debug("GitHub Copilot refresh failed; using the unexpired token")
+          Logger.debug("GitHub Copilot refresh failed; reloading the unexpired token")
 
-          {:ok, secret, false}
+          with {:ok, latest, _opts} <-
+                 LemonAi.Auth.OAuthSecretResolver.reload_secret(
+                   __MODULE__,
+                   secret_name,
+                   secret,
+                   opts
+                 ) do
+            if unexpired?(latest["expires_at_ms"]),
+              do: {:ok, latest, false},
+              else: {:error, :expired_access_token}
+          end
         else
           {:error, reason}
         end
@@ -310,24 +329,6 @@ defmodule LemonAi.Auth.GitHubCopilotOAuth do
       ms when is_integer(ms) -> ms > System.system_time(:millisecond)
       _ -> true
     end
-  end
-
-  # A refreshed secret that was not stored is a failure, not a success.
-  defp persist_secret(secret_name, secret, opts) do
-    encoded = encode_secret(secret)
-
-    case Keyword.get(opts, :persist_secret) do
-      callback when is_function(callback, 2) ->
-        case callback.(secret_name, encoded) do
-          {:error, _} -> {:error, :oauth_secret_persistence_failed}
-          _ -> :ok
-        end
-
-      _ ->
-        :ok
-    end
-  rescue
-    _ -> {:error, :oauth_secret_persistence_failed}
   end
 
   # ----------------------------------------------------------------------------
@@ -362,6 +363,9 @@ defmodule LemonAi.Auth.GitHubCopilotOAuth do
           true ->
             {:ok, %{token: token, expires_at_ms: expires_at * 1000 - @near_expiry_ms}}
         end
+
+      {:ok, %{status: status}} when status in [401, 403] ->
+        {:error, :reauth_required}
 
       {:ok, %{status: status, body: body}} ->
         {:error, {:copilot_token_http_error, LemonAi.Auth.OAuthFlow.http_error(status, body)}}

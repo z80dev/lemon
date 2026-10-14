@@ -43,7 +43,8 @@ defmodule LemonAi.Auth.OpenAICodexOAuth do
           | {:callback_timeout_ms, pos_integer()}
           | {:listen_for_callback, boolean()}
           | {:local_callback_listener, module()}
-          | {:persist_secret, (String.t(), String.t() -> any())}
+          | {:persist_secret,
+             (String.t(), String.t(), term() -> :ok | {:ok, term()} | {:error, term()})}
 
   @doc false
   @spec oauth_client_id() :: String.t()
@@ -515,7 +516,13 @@ defmodule LemonAi.Auth.OpenAICodexOAuth do
       :global.trans(
         {{__MODULE__, :refresh, secret_name}, self()},
         fn ->
-          with {:ok, latest} <- reload_latest_secret(secret_name, secret, opts) do
+          with {:ok, latest, opts} <-
+                 LemonAi.Auth.OAuthSecretResolver.reload_secret(
+                   __MODULE__,
+                   secret_name,
+                   secret,
+                   opts
+                 ) do
             cond do
               force? and latest["access_token"] == secret["access_token"] ->
                 refresh_and_persist(secret_name, latest, true, opts)
@@ -558,23 +565,6 @@ defmodule LemonAi.Auth.OpenAICodexOAuth do
     end
   end
 
-  # Without a reload callback the caller's copy is the latest one available.
-  defp reload_latest_secret(secret_name, stale, opts) do
-    case Keyword.get(opts, :reload_secret) do
-      reload when is_function(reload, 1) ->
-        with {:ok, value} when is_binary(value) <- reload.(secret_name),
-             {:ok, latest} <- decode_secret(value) do
-          {:ok, latest}
-        else
-          :not_oauth -> {:error, :oauth_secret_replaced}
-          _ -> {:error, :oauth_secret_missing}
-        end
-
-      _ ->
-        {:ok, stale}
-    end
-  end
-
   defp refresh_and_persist(secret_name, secret, force?, opts) do
     access_token = non_empty_binary(secret["access_token"])
     expires_at_ms = token_expiry_ms(access_token, parse_integer(secret["expires_at_ms"]))
@@ -596,7 +586,13 @@ defmodule LemonAi.Auth.OpenAICodexOAuth do
               |> maybe_put("account_id", account_id)
               |> Map.put("updated_at_ms", System.system_time(:millisecond))
 
-            with :ok <- persist_secret(secret_name, updated, opts), do: {:ok, updated}
+            with :ok <-
+                   LemonAi.Auth.OAuthSecretResolver.persist_secret(
+                     secret_name,
+                     encode_secret(updated),
+                     opts
+                   ),
+                 do: {:ok, updated}
 
           {:error, :reauth_required} = error ->
             error
@@ -604,9 +600,16 @@ defmodule LemonAi.Auth.OpenAICodexOAuth do
           {:error, reason} ->
             if not force? and is_binary(access_token) and is_integer(expires_at_ms) and
                  expires_at_ms > System.system_time(:millisecond) do
-              Logger.debug("OpenAI Codex OAuth refresh failed; using unexpired existing token")
+              Logger.debug("OpenAI Codex OAuth refresh failed; reloading the unexpired token")
 
-              {:ok, secret}
+              with {:ok, latest, _opts} <-
+                     LemonAi.Auth.OAuthSecretResolver.reload_secret(
+                       __MODULE__,
+                       secret_name,
+                       secret,
+                       opts
+                     ),
+                   do: usable(latest)
             else
               {:error, reason}
             end
@@ -665,24 +668,6 @@ defmodule LemonAi.Auth.OpenAICodexOAuth do
   end
 
   defp parse_token_response(_), do: {:error, :invalid_token_response}
-
-  defp persist_secret(secret_name, secret, opts) do
-    encoded = encode_secret(secret)
-
-    case Keyword.get(opts, :persist_secret) do
-      callback when is_function(callback, 2) ->
-        case callback.(secret_name, encoded) do
-          {:error, _} -> {:error, :oauth_secret_persistence_failed}
-          _ -> :ok
-        end
-
-      _ ->
-        :ok
-    end
-  rescue
-    _ ->
-      {:error, :oauth_secret_persistence_failed}
-  end
 
   defp post_form(url, body, opts) when is_map(body) do
     case LemonAi.Auth.OAuthFlow.request(url, [form: body], opts) do

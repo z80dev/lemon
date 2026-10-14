@@ -73,8 +73,37 @@ defmodule LemonAgent.ModelRuntime.CustomProvidersTest do
       assert model.context_window == 131_072
       assert model.max_tokens == 8192
       assert model.cost == %ModelCost{input: 0.5, output: 1.0, cache_read: 0.0, cache_write: 0.0}
-      assert model.headers == %{"X-Team" => "platform", "X-Model" => "qwen"}
+      assert model.headers == %{"x-team" => "platform", "x-model" => "qwen"}
       assert model.compat == nil
+    end
+
+    test "provider defaults are below case-insensitive model overrides" do
+      for provider <- ["gateway", "anthropic"] do
+        providers = %{
+          provider =>
+            gateway(%{
+              headers: %{"X-Tenant" => "providerA", "X-Route" => "provider-route"},
+              models: [
+                %{id: "override", headers: %{"x-TENANT" => "modelB", "x-route" => "model-route"}}
+              ]
+            })
+        }
+
+        model = CustomProviders.lookup(providers, provider, "override")
+        assert model.headers["x-tenant"] == "modelB"
+        assert model.headers["x-route"] == "model-route"
+
+        opts =
+          LemonAgent.ModelRuntime.StreamOptions.build_stream_options(
+            model,
+            providers,
+            %{headers: %{"X-TENANT" => "callerC"}},
+            nil
+          )
+
+        assert (opts.headers["x-tenant"] || opts.headers["X-TENANT"]) == "callerC"
+        refute "providerA" in Map.values(opts.headers)
+      end
     end
 
     test "an explicit models list is closed; discovery or no list accepts any id" do
@@ -125,7 +154,7 @@ defmodule LemonAgent.ModelRuntime.CustomProvidersTest do
       assert model.api == :anthropic_messages
       assert model.name == "Claude Internal"
       assert model.context_window == 50_000
-      assert model.headers["X-Org"] == "lemon"
+      assert model.headers["x-org"] == "lemon"
       assert CustomProviders.lookup(providers, :anthropic, "claude-sonnet-5") == nil
 
       assert [%Model{id: "claude-internal", provider: :anthropic}] =
@@ -181,7 +210,7 @@ defmodule LemonAgent.ModelRuntime.CustomProvidersTest do
   end
 
   describe "stream options" do
-    test "custom providers pass their own key, base_url and headers" do
+    test "custom providers pass their own key and base_url, keeping headers caller-only" do
       System.put_env("MY_GATEWAY_KEY", "gw-key")
       System.put_env("OPENAI_API_KEY", "sk-openai")
       providers = %{"my-gateway" => gateway()}
@@ -202,6 +231,17 @@ defmodule LemonAgent.ModelRuntime.CustomProvidersTest do
                api_key: "gw-key",
                base_url: "https://llm.internal/v1"
              }
+    end
+
+    test "custom provider defaults are not promoted to explicit caller headers" do
+      providers = %{"my-gateway" => gateway()}
+      model = CustomProviders.lookup(providers, "my-gateway", "qwen3-coder")
+
+      opts =
+        LemonAgent.ModelRuntime.StreamOptions.build_stream_options(model, providers, nil, nil)
+
+      assert opts.headers == %{}
+      assert model.headers == %{"x-team" => "platform", "x-model" => "qwen"}
     end
 
     test "keyless custom providers send no key" do
@@ -228,7 +268,7 @@ defmodule LemonAgent.ModelRuntime.CustomProvidersTest do
           nil
         )
 
-      assert opts.headers == %{"X-Org" => "lemon", "X-Call" => "1"}
+      assert opts.headers == %{"x-org" => "lemon", "x-call" => "1"}
     end
   end
 
@@ -295,7 +335,7 @@ defmodule LemonAgent.ModelRuntime.CustomProvidersTest do
 
       discovered = Enum.find(models, &(&1.id == "llama-4"))
       assert discovered.context_window == 65_536
-      assert discovered.headers == %{"X-Team" => "platform"}
+      assert discovered.headers == %{"x-team" => "platform"}
       assert discovered.api == :openai_completions
 
       # Resolution reuses the cached listing without another request.
@@ -336,7 +376,6 @@ defmodule LemonAgent.ModelRuntime.CustomProvidersTest do
         uncached = CustomProviders.lookup(providers, "gw", "discovered")
         assert uncached.context_window == 128_000
         assert uncached.base_url == changed.base_url
-        assert uncached.headers == changed.headers
         assert uncached.api == CustomProviders.api_atom(changed.api)
 
         assert [current] =
@@ -349,7 +388,6 @@ defmodule LemonAgent.ModelRuntime.CustomProvidersTest do
         assert host == URI.parse(changed.base_url).host
         assert current.context_window == 32_768
         assert current.base_url == changed.base_url
-        assert current.headers == changed.headers
         assert current.api == CustomProviders.api_atom(changed.api)
         assert CustomProviders.lookup(providers, "gw", "discovered") == current
 
@@ -391,7 +429,7 @@ defmodule LemonAgent.ModelRuntime.CustomProvidersTest do
 
       assert model.provider == "gw"
       assert model.api == :openai_completions
-      assert model.headers == %{"X-Team" => "platform"}
+      assert model.headers == %{"x-team" => "platform"}
       assert CustomProviders.lookup(providers, "gw", "discovered") == model
     end
 

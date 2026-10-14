@@ -542,13 +542,43 @@ stream. See any module under `lib/ai/providers/` for the pattern.
 
 Most providers authenticate with a bearer key from options or the environment. Providers
 that require OAuth (Anthropic Claude Pro/Max, GitHub Copilot, Google Gemini CLI, OpenAI
-Codex, Google Antigravity) have helpers under `LemonAi.Auth.*` for the device-code / PKCE
-flows and token refresh. Callers own encrypted storage through `:persist_secret`. The one
-exception is `LemonAi.Auth.AnthropicOAuth.resolve_access_token/0`, which reads ambient
-Claude Code credentials and writes a refresh it performs back to
-`~/.claude/.credentials.json` so Claude Code's rotated login stays valid. Anthropic refresh
-is single-flight per secret on the local node; pass `:reload_secret` so a queued caller
-reuses the stored rotation.
+Codex, Google Antigravity, Kimi Code and xAI) have helpers under `LemonAi.Auth.*` for
+device-code / PKCE flows and token refresh. Callers own encrypted storage through
+revision-aware callbacks:
+
+- When `:persist_secret` is configured, `:reload_secret` must be an arity-one callback
+  returning `{:ok, encoded, revision}`, with an opaque storage revision. Missing
+  callbacks or value-only `{:ok, encoded}` results fail with
+  `{:error, :oauth_secret_reload_failed}` before the refresh HTTP request.
+- `persist_secret.(name, new_encoded, expected_revision)` must atomically compare the
+  revision and store the refreshed payload. Only `:ok` or `{:ok, metadata}` acknowledges
+  success. `{:error, :stale_revision}` becomes `{:error, :oauth_secret_changed}`; other
+  failures, malformed acknowledgements and callback exceptions become
+  `{:error, :oauth_secret_persistence_failed}`.
+
+Refreshes are single-flight per secret on the local node. The reload captures the
+revision under the lock before the HTTP refresh, and persistence compares that same
+revision. A login replaced or deleted during refresh is never overwritten or recreated,
+and the stale refreshed key is not returned. Storage revisions must also change on
+login replacement and deletion, including deletion followed by recreating identical
+credentials. A transient refresh failure re-reads storage before selecting an unexpired
+fallback; a forced refresh never reuses the rejected token. Missing or unreadable
+storage fails closed.
+
+Copilot token-endpoint HTTP 401/403 responses are terminal
+`{:error, :reauth_required}` failures: even a still-valid cached token is not returned.
+Other transient failures retain the reload-based unexpired fallback.
+
+Standalone callers that omit `:persist_secret` may still refresh ephemerally without
+a reload callback, or with a value-only `{:ok, encoded}` reload result. These modes do
+not provide durable revision guarantees. In a Lemon runtime, inject
+`LemonCore.Secrets.get_with_revision/2` with environment fallback disabled and
+`LemonCore.Secrets.set_if_revision/4` with the returned revision.
+
+The ambient exception is `LemonAi.Auth.AnthropicOAuth.resolve_access_token/0`, which
+reads Claude Code credentials and writes a refresh it performs back to
+`~/.claude/.credentials.json` so Claude Code's rotated login stays valid; this file path
+does not use the stored-secret callbacks.
 
 Common environment variables (used as a standalone fallback when a key isn't passed in
 options):

@@ -141,6 +141,9 @@ defmodule LemonAi.Auth.XAIOAuth do
 
   Options: `:persist_secret`, `:reload_secret`, `:force_refresh`, plus the
   `:token_url`/`:discovery_url`/`:req_options` overrides.
+  Stored refreshes capture the revision through `:reload_secret` and pass it
+  to arity-three `:persist_secret`; a stale write returns
+  `{:error, :oauth_secret_changed}` without exposing the refreshed token.
   """
   @spec resolve_api_key_from_secret(String.t(), String.t(), keyword()) ::
           {:ok, String.t()} | :ignore | {:error, term()}

@@ -17,7 +17,10 @@ defmodule LemonCore.Store.JsonlBackend do
   ```
 
   On init, all existing `*.jsonl` files in the store directory are loaded.
-  New tables are created on first write.
+  Discovery or replay failures stop initialization; unknown data is never empty.
+  Lazy load failures leave the table unloaded, so access after repair can recover.
+  New tables are created on first write. Errors contain bounded classifications,
+  not journal contents, keys, file paths or exception messages.
   """
 
   @behaviour LemonCore.Store.Backend
@@ -55,69 +58,52 @@ defmodule LemonCore.Store.JsonlBackend do
         state = %{
           path: path,
           data: %{},
-          file_handles: %{},
           loaded_tables: MapSet.new()
         }
 
         load_all_tables(state, skip_tables)
 
-      {:error, reason} ->
-        {:error, {:mkdir_failed, path, reason}}
+      {:error, _reason} ->
+        {:error, {:jsonl_unavailable, :mkdir_failed}}
     end
   end
 
   @impl true
   def put(state, table, key, value) do
-    # Ensure table is loaded (for dynamic tables)
-    state = ensure_table_loaded(state, table)
-
-    entry = %{
-      "op" => "put",
-      "key" => encode_key(key),
-      "value" => encode_value(value),
-      "ts" => System.system_time(:millisecond)
-    }
-
-    state = append_entry(state, table, entry)
-    data = put_in(state.data, [Access.key(table, %{}), key], value)
-    {:ok, %{state | data: data}}
+    with {:ok, state} <- ensure_table_loaded(state, table),
+         {:ok, entry} <- encode_entry("put", key, value),
+         :ok <- append_entry(state, table, entry) do
+      data = put_in(state.data, [Access.key(table, %{}), key], value)
+      {:ok, %{state | data: data}}
+    end
   end
 
   @impl true
   def put_new(state, table, key, value) do
-    state = ensure_table_loaded(state, table)
-
-    table_data = Map.get(state.data, table, %{})
-
-    if Map.has_key?(table_data, key) do
-      {:exists, state}
-    else
-      put(state, table, key, value)
+    with {:ok, state} <- ensure_table_loaded(state, table) do
+      if Map.has_key?(Map.get(state.data, table, %{}), key) do
+        {:exists, state}
+      else
+        put(state, table, key, value)
+      end
     end
   end
 
   @impl true
   def get(state, table, key) do
-    # Ensure table is loaded (for dynamic tables)
-    state = ensure_table_loaded(state, table)
-    value = get_in(state.data, [table, key])
-    {:ok, value, state}
+    with {:ok, state} <- ensure_table_loaded(state, table) do
+      {:ok, get_in(state.data, [table, key]), state}
+    end
   end
 
   @impl true
   def delete(state, table, key) do
-    # Ensure table is loaded (for dynamic tables)
-    state = ensure_table_loaded(state, table)
-
-    entry = %{
-      "op" => "delete",
-      "key" => encode_key(key),
-      "ts" => System.system_time(:millisecond)
-    }
-
-    state = append_entry(state, table, entry)
-    data = update_in(state.data, [Access.key(table, %{})], &Map.delete(&1, key))
-    {:ok, %{state | data: data}}
+    with {:ok, state} <- ensure_table_loaded(state, table),
+         {:ok, entry} <- encode_entry("delete", key, nil),
+         :ok <- append_entry(state, table, entry) do
+      data = update_in(state.data, [Access.key(table, %{})], &Map.delete(&1, key))
+      {:ok, %{state | data: data}}
+    end
   end
 
   # Appends are unsynced; fsync every table file, then the directory so newly
@@ -131,14 +117,14 @@ defmodule LemonCore.Store.JsonlBackend do
     |> Enum.reduce_while(:ok, fn file, :ok ->
       case LemonCore.Durable.sync_file(file) do
         :ok -> {:cont, :ok}
-        {:error, reason} -> {:halt, {:error, {:jsonl_sync_failed, file, reason}}}
+        {:error, _reason} -> {:halt, {:error, {:jsonl_unavailable, :sync_failed}}}
       end
     end)
     |> case do
       :ok ->
         case LemonCore.Durable.sync_directory(state.path) do
           :ok -> {:ok, state}
-          {:error, reason} -> {:error, {:jsonl_sync_failed, state.path, reason}}
+          {:error, _reason} -> {:error, {:jsonl_unavailable, :sync_failed}}
         end
 
       error ->
@@ -148,40 +134,39 @@ defmodule LemonCore.Store.JsonlBackend do
 
   @impl true
   def compare_and_delete_many(state, entries) do
-    state =
-      Enum.reduce(entries, state, fn {table, _key, _expected}, acc ->
-        ensure_table_loaded(acc, table)
-      end)
-
-    if Enum.all?(entries, fn {table, key, expected} ->
-         Map.fetch(Map.get(state.data, table, %{}), key) == {:ok, expected}
-       end) do
-      Enum.reduce_while(entries, {:ok, state}, fn {table, key, _expected}, {:ok, acc} ->
-        try do
-          {:ok, next_state} = delete(acc, table, key)
-          {:cont, {:ok, next_state}}
-        rescue
-          error -> {:halt, {:error, {:jsonl_delete_failed, Exception.message(error)}, acc}}
-        catch
-          kind, reason -> {:halt, {:error, {:jsonl_delete_failed, kind, reason}, acc}}
+    loaded =
+      Enum.reduce_while(entries, {:ok, state}, fn {table, _key, _expected}, {:ok, acc} ->
+        case ensure_table_loaded(acc, table) do
+          {:ok, next_state} -> {:cont, {:ok, next_state}}
+          {:error, reason} -> {:halt, {:error, reason, acc}}
         end
       end)
-    else
-      {:error, :mismatch, state}
+
+    case loaded do
+      {:ok, state} ->
+        if Enum.all?(entries, fn {table, key, expected} ->
+             Map.fetch(Map.get(state.data, table, %{}), key) == {:ok, expected}
+           end) do
+          Enum.reduce_while(entries, {:ok, state}, fn {table, key, _expected}, {:ok, acc} ->
+            case delete(acc, table, key) do
+              {:ok, next_state} -> {:cont, {:ok, next_state}}
+              {:error, reason} -> {:halt, {:error, reason, acc}}
+            end
+          end)
+        else
+          {:error, :mismatch, state}
+        end
+
+      error ->
+        error
     end
   end
 
   @impl true
   def list(state, table) do
-    # Ensure table is loaded (for dynamic tables)
-    state = ensure_table_loaded(state, table)
-
-    items =
-      state.data
-      |> Map.get(table, %{})
-      |> Enum.to_list()
-
-    {:ok, items, state}
+    with {:ok, state} <- ensure_table_loaded(state, table) do
+      {:ok, state.data |> Map.get(table, %{}) |> Enum.to_list(), state}
+    end
   end
 
   @doc """
@@ -196,20 +181,16 @@ defmodule LemonCore.Store.JsonlBackend do
   Ensure a table is loaded into memory.
 
   If the table file exists but hasn't been loaded, it will be loaded.
-  If the table doesn't exist, it will be marked as loaded (empty).
+  Only confirmed absence marks a table as loaded (empty). A failed load returns
+  an error without publishing partial data or preventing access after repair.
   """
-  @spec ensure_table_loaded(map(), atom()) :: map()
+  @spec ensure_table_loaded(map(), atom()) :: {:ok, map()} | {:error, term()}
   def ensure_table_loaded(state, table) do
     if MapSet.member?(state.loaded_tables, table) do
-      state
+      {:ok, state}
     else
-      case load_table(state, table) do
-        {:ok, new_state} ->
-          %{new_state | loaded_tables: MapSet.put(new_state.loaded_tables, table)}
-
-        {:error, _reason} ->
-          # If loading fails, still mark as loaded to avoid repeated attempts
-          %{state | loaded_tables: MapSet.put(state.loaded_tables, table)}
+      with {:ok, new_state} <- load_table(state, table) do
+        {:ok, %{new_state | loaded_tables: MapSet.put(new_state.loaded_tables, table)}}
       end
     end
   end
@@ -217,92 +198,118 @@ defmodule LemonCore.Store.JsonlBackend do
   # Private functions
 
   defp load_all_tables(state, skip_tables) do
-    # First, discover all existing .jsonl files in the directory
-    discovered_tables = discover_tables(state.path)
-
-    # Combine core tables, parity tables, and discovered tables
-    all_tables =
+    with {:ok, discovered_tables} <- discover_tables(state.path) do
       (@core_tables ++ @parity_tables ++ discovered_tables)
       |> Enum.reject(&(&1 in skip_tables))
       |> Enum.uniq()
-
-    result =
-      Enum.reduce_while(all_tables, state, fn table, acc ->
-        case load_table(acc, table) do
-          {:ok, new_state} ->
-            new_state = %{new_state | loaded_tables: MapSet.put(new_state.loaded_tables, table)}
-            {:cont, new_state}
-
-          {:error, reason} ->
-            # Log but continue - don't fail init for optional tables
-            require Logger
-            Logger.warning("Failed to load table #{table}: #{inspect(reason)}")
-            {:cont, acc}
+      |> Enum.reduce_while({:ok, state}, fn table, {:ok, acc} ->
+        case ensure_table_loaded(acc, table) do
+          {:ok, next_state} -> {:cont, {:ok, next_state}}
+          error -> {:halt, error}
         end
       end)
-
-    {:ok, result}
+    end
   end
 
   defp discover_tables(path) do
     case File.ls(path) do
       {:ok, files} ->
-        files
-        |> Enum.filter(&String.ends_with?(&1, ".jsonl"))
-        |> Enum.map(fn filename ->
-          filename
-          |> String.replace_suffix(".jsonl", "")
-          |> String.to_atom()
-        end)
+        tables =
+          files
+          |> Enum.filter(&String.ends_with?(&1, ".jsonl"))
+          |> Enum.map(fn filename ->
+            filename |> String.replace_suffix(".jsonl", "") |> String.to_atom()
+          end)
 
-      {:error, _} ->
-        []
+        {:ok, tables}
+
+      {:error, _reason} ->
+        {:error, {:jsonl_unavailable, :discovery_failed}}
     end
   end
 
   defp load_table(state, table) do
     file_path = table_path(state.path, table)
 
-    case File.exists?(file_path) do
-      true -> replay_file(state, table, file_path)
-      false -> {:ok, state}
+    case File.read(file_path) do
+      {:ok, content} ->
+        replay_file(state, table, content)
+
+      {:error, :enoent} ->
+        # A dangling link or missing store directory is not a new table.
+        with {:error, :enoent} <- File.lstat(file_path),
+             {:ok, %File.Stat{type: :directory}} <- File.stat(state.path) do
+          {:ok, state}
+        else
+          _ -> {:error, {:jsonl_unavailable, :read_failed}}
+        end
+
+      {:error, _reason} ->
+        {:error, {:jsonl_unavailable, :read_failed}}
     end
   end
 
-  defp replay_file(state, table, file_path) do
-    case File.read(file_path) do
-      {:ok, content} ->
+  defp replay_file(state, table, content) do
+    content
+    |> String.split("\n", trim: true)
+    |> Enum.reduce_while({:ok, %{}}, fn line, {:ok, acc} ->
+      case replay_entry(line, acc) do
+        {:ok, data} -> {:cont, {:ok, data}}
+        error -> {:halt, error}
+      end
+    end)
+    |> case do
+      {:ok, data} ->
+        # Keep absent tables out of data, as for a fresh store.
         data =
-          content
-          |> String.split("\n", trim: true)
-          |> Enum.reduce(Map.get(state.data, table, %{}), fn line, acc ->
-            case Jason.decode(line) do
-              {:ok, %{"op" => "put", "key" => key, "value" => value}} ->
-                Map.put(acc, decode_key(key), decode_value(value))
+          if data == %{},
+            do: Map.delete(state.data, table),
+            else: Map.put(state.data, table, data)
 
-              {:ok, %{"op" => "delete", "key" => key}} ->
-                Map.delete(acc, decode_key(key))
+        {:ok, %{state | data: data}}
 
-              _ ->
-                acc
-            end
-          end)
-
-        {:ok, put_in(state, [:data, Access.key(table, %{})], data)}
-
-      {:error, reason} ->
-        {:error, {:read_failed, file_path, reason}}
+      error ->
+        error
     end
+  end
+
+  defp replay_entry(line, data) do
+    case Jason.decode(line) do
+      {:ok, %{"op" => "put", "key" => key, "value" => value}} ->
+        {:ok, Map.put(data, decode_key(key), decode_value(value))}
+
+      {:ok, %{"op" => "delete", "key" => key}} ->
+        {:ok, Map.delete(data, decode_key(key))}
+
+      _ ->
+        {:error, {:jsonl_unavailable, :corrupt_table}}
+    end
+  rescue
+    _error -> {:error, {:jsonl_unavailable, :corrupt_table}}
+  end
+
+  defp encode_entry(op, key, value) do
+    entry = %{
+      "op" => op,
+      "key" => encode_key(key),
+      "ts" => System.system_time(:millisecond)
+    }
+
+    entry = if op == "put", do: Map.put(entry, "value", encode_value(value)), else: entry
+
+    case Jason.encode(entry) do
+      {:ok, line} -> {:ok, [line, "\n"]}
+      {:error, _reason} -> {:error, {:jsonl_unavailable, :encode_failed}}
+    end
+  rescue
+    _error -> {:error, {:jsonl_unavailable, :encode_failed}}
   end
 
   defp append_entry(state, table, entry) do
-    file_path = table_path(state.path, table)
-    line = Jason.encode!(entry) <> "\n"
-
-    # Append to file (create if doesn't exist)
-    File.write!(file_path, line, [:append, :utf8])
-
-    state
+    case File.write(table_path(state.path, table), entry, [:append, :binary]) do
+      :ok -> :ok
+      {:error, _reason} -> {:error, {:jsonl_unavailable, :write_failed}}
+    end
   end
 
   defp table_path(base_path, table) do

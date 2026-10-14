@@ -173,15 +173,23 @@ defmodule LemonAi.Auth.XAIOAuthTest do
         })
       end)
 
+      secret = payload(expires_in_ms: 60_000)
+      revision = make_ref()
+
       opts =
-        Keyword.put(opts, :persist_secret, fn name, value ->
-          send(test_pid, {:persisted, name, value})
-        end)
+        Keyword.merge(opts,
+          reload_secret: fn _ -> {:ok, secret, revision} end,
+          persist_secret: fn name, value, expected ->
+            assert expected == revision
+            send(test_pid, {:persisted, name, value})
+            :ok
+          end
+        )
 
       assert {:ok, "new-access"} =
                XAIOAuth.resolve_api_key_from_secret(
                  "llm_xai_api_key",
-                 payload(expires_in_ms: 60_000),
+                 secret,
                  opts
                )
 
@@ -202,7 +210,11 @@ defmodule LemonAi.Auth.XAIOAuthTest do
                OAuthSecretResolver.resolve_api_key_from_secret(
                  "llm_xai_api_key",
                  secret,
-                 Keyword.merge(opts, force_refresh: true, persist_secret: fn _, _ -> :ok end)
+                 Keyword.merge(opts,
+                   force_refresh: true,
+                   reload_secret: fn _ -> {:ok, secret, :test_revision} end,
+                   persist_secret: fn _, _, _ -> :ok end
+                 )
                )
 
       stub(fn conn, "/oauth2/token", _ -> json(conn, 503, %{"error" => "unavailable"}) end)
@@ -234,7 +246,10 @@ defmodule LemonAi.Auth.XAIOAuthTest do
                XAIOAuth.resolve_api_key_from_secret(
                  "llm_xai_api_key",
                  expiring,
-                 Keyword.put(opts, :persist_secret, fn _, _ -> {:error, :disk_full} end)
+                 Keyword.merge(opts,
+                   reload_secret: fn _ -> {:ok, expiring, :test_revision} end,
+                   persist_secret: fn _, _, _ -> {:error, :disk_full} end
+                 )
                )
     end
 

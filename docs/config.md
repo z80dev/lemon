@@ -871,6 +871,13 @@ input = ["text"]                   # "text" and/or "image"; default ["text"]
   generated credential header when no key resolves; configured headers still
   apply. Google-compatible endpoints use their own provider's options, not
   the built-in Google account's key or URL.
+- Header names are case-insensitive. Requests apply provider `headers` as
+  defaults, then per-model `headers`, then explicitly supplied caller stream
+  headers. For example, provider `X-Tenant = "A"` and model `x-tenant = "B"`
+  send one `x-tenant: B`; a caller's `X-TENANT = "C"` sends one `x-tenant: C`.
+  This precedence applies to all four supported compatible wire APIs.
+  Provider-required protocol rules still apply (for example, custom Anthropic
+  beta tokens extend rather than remove the required beta tokens).
 - `api` and `base_url` are required. A provider with `discovery` or without a
   `models` list accepts any model id (unlisted ids use the defaults above);
   `discovery` also lists the endpoint's models in the picker, cached by the

@@ -271,12 +271,6 @@ defmodule LemonAi.Providers.OpenAICompletions do
         if api_key, do: Map.put(headers, "authorization", "Bearer #{api_key}"), else: headers
       end)
 
-    # Add model-specific headers
-    model_headers =
-      (model.headers || %{})
-      |> Enum.map(fn {k, v} -> {String.downcase(to_string(k)), v} end)
-      |> Map.new()
-
     # OpenCode Go requires a stable per-conversation session header
     session_headers = OpenCodeGoSession.headers(model, context, opts)
 
@@ -288,18 +282,12 @@ defmodule LemonAi.Providers.OpenAICompletions do
         %{}
       end
 
-    # Add user-provided headers last (highest priority)
-    opts_headers =
-      (opts.headers || %{})
-      |> Enum.map(fn {k, v} -> {String.downcase(to_string(k)), v} end)
-      |> Map.new()
-
     # Merge headers - later entries override earlier ones
     base_headers
-    |> Map.merge(session_headers)
-    |> Map.merge(model_headers)
-    |> Map.merge(copilot_headers)
-    |> Map.merge(opts_headers)
+    |> LemonAi.Providers.RequestHeaders.merge(session_headers)
+    |> LemonAi.Providers.RequestHeaders.merge(model.headers)
+    |> LemonAi.Providers.RequestHeaders.merge(copilot_headers)
+    |> LemonAi.Providers.RequestHeaders.merge(opts.headers)
     |> Map.to_list()
   end
 

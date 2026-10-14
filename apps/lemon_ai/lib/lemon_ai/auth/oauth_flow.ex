@@ -9,11 +9,12 @@ defmodule LemonAi.Auth.OAuthFlow do
     device-code expiry. `:sleep` (default `Process.sleep/1`) is injectable.
   - `ensure_fresh/4` returns a usable secret map, refreshing it under a
     per-secret lock. A queued caller re-reads the stored secret through
-    `:reload_secret` so it reuses the token the previous holder stored instead
-    of replaying a rotated refresh token. A refreshed secret that
-    `:persist_secret` fails to store is an error. `force_refresh: true`
-    refreshes an unexpired token the provider rejected, unless the stored
-    token already differs from it, and never falls back to the rejected token.
+    `:reload_secret`, which returns `{:ok, encoded, revision}`, so it reuses
+    a previous refresh. The three-argument `:persist_secret` callback receives
+    that revision and must atomically compare it before storing. A losing
+    refresh returns `:oauth_secret_changed`, never the stale refreshed token.
+    Persistence failures are errors. `force_refresh: true` never falls back
+    to a rejected token.
   """
 
   require Logger
@@ -305,7 +306,7 @@ defmodule LemonAi.Auth.OAuthFlow do
       :global.trans(
         {{spec.lock, :refresh, secret_name}, self()},
         fn ->
-          with {:ok, latest} <- reload(secret_name, secret, opts, spec) do
+          with {:ok, latest, opts} <- reload(secret_name, secret, opts, spec) do
             cond do
               force? and latest["access_token"] == secret["access_token"] ->
                 refresh_and_persist(secret_name, latest, true, opts, spec)
@@ -354,22 +355,16 @@ defmodule LemonAi.Auth.OAuthFlow do
     end
   end
 
-  # Without a reload callback the caller's copy is the latest one available. A
-  # deleted or replaced login must not be refreshed from a stale copy.
+  # Snapshot the durable incarnation before the network call; the storage
+  # callback compares it atomically with ordinary login/logout mutations.
   defp reload(secret_name, stale, opts, spec) do
-    case Keyword.get(opts, :reload_secret) do
-      reload when is_function(reload, 1) ->
-        with {:ok, value} when is_binary(value) <- reload.(secret_name),
-             {:ok, secret} <- spec.decode.(value) do
-          {:ok, secret}
-        else
-          :not_oauth -> {:error, :oauth_secret_replaced}
-          _ -> {:error, :oauth_secret_missing}
-        end
-
-      _ ->
-        {:ok, stale}
-    end
+    LemonAi.Auth.OAuthSecretResolver.reload_secret(
+      secret_name,
+      stale,
+      opts,
+      spec.decode,
+      spec.encode
+    )
   end
 
   defp refresh_and_persist(secret_name, secret, force?, opts, spec) do
@@ -386,8 +381,11 @@ defmodule LemonAi.Auth.OAuthFlow do
         {:error, reason} ->
           if not force? and non_empty_binary(secret["access_token"]) != nil and
                not expired?(secret) do
-            Logger.debug("OAuth refresh failed; using the unexpired access token")
-            {:ok, secret}
+            Logger.debug("OAuth refresh failed; checking the current unexpired access token")
+
+            with {:ok, latest, _opts} <- reload(secret_name, secret, opts, spec) do
+              usable(latest)
+            end
           else
             {:error, reason}
           end
@@ -395,21 +393,9 @@ defmodule LemonAi.Auth.OAuthFlow do
     end
   end
 
-  # A refreshed secret that was not stored is a failure: the previous refresh
-  # token may already be revoked.
+  # A rotated token is usable only after authoritative conditional persistence.
   defp persist(secret_name, secret, opts, spec) do
-    case Keyword.get(opts, :persist_secret) do
-      callback when is_function(callback, 2) ->
-        case callback.(secret_name, spec.encode.(secret)) do
-          {:error, _} -> {:error, :oauth_secret_persistence_failed}
-          _ -> :ok
-        end
-
-      _ ->
-        :ok
-    end
-  rescue
-    _ -> {:error, :oauth_secret_persistence_failed}
+    LemonAi.Auth.OAuthSecretResolver.persist_secret(secret_name, spec.encode.(secret), opts)
   end
 
   # ── Callbacks and helpers ──────────────────────────────────────────────────

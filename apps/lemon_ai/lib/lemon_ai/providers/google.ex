@@ -155,13 +155,13 @@ defmodule LemonAi.Providers.Google do
   end
 
   defp build_headers(api_key, model, opts) do
-    base = [{"Content-Type", "application/json"}]
-    base = if api_key, do: base ++ [{"x-goog-api-key", api_key}], else: base
+    base = %{"content-type" => "application/json"}
+    base = if api_key, do: Map.put(base, "x-goog-api-key", api_key), else: base
 
-    model_headers = Enum.map(model.headers || %{}, fn {k, v} -> {to_string(k), to_string(v)} end)
-    opts_headers = Enum.map(opts.headers || %{}, fn {k, v} -> {to_string(k), to_string(v)} end)
-
-    base ++ model_headers ++ opts_headers
+    base
+    |> LemonAi.Providers.RequestHeaders.merge(model.headers)
+    |> LemonAi.Providers.RequestHeaders.merge(opts.headers)
+    |> Map.to_list()
   end
 
   defp build_request_body(model, context, opts) do

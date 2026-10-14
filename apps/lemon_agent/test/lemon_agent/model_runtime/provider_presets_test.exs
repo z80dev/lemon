@@ -166,7 +166,7 @@ defmodule LemonAgent.ModelRuntime.ProviderPresetsTest do
       assert shared.name == "Static Shared"
       assert shared.context_window == 128_000
       assert shared.max_tokens == 1024
-      assert shared.headers == %{"X-Team" => "configured"}
+      assert shared.headers == %{"x-team" => "configured"}
       assert Enum.all?(models, &(&1.base_url == "http://configured.test:1234/v1"))
 
       Req.Test.stub(__MODULE__, &Req.Test.transport_error(&1, :econnrefused))

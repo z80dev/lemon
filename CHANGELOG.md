@@ -214,6 +214,21 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- JSONL storage rejects unreadable or corrupt journals rather than publishing
+  empty state. Failed loads remain recoverable after repair; rejected writes
+  return bounded errors before cache mutation without crashing the Store.
+- Stored OAuth refreshes bind persistence to the selected login's opaque
+  revision. Atomic saves cannot overwrite a concurrent login, logout, or
+  delete/recreate; stale or failed saves cannot return the rotated credential.
+  Persistence callbacks take `(name, encoded, expected_revision)` and require
+  revision-bearing reloads and explicit success acknowledgements. Transient
+  fallback reselects authoritative storage; non-persisting refresh stays ephemeral.
+- Copilot token-endpoint HTTP 401/403 requires a fresh sign-in rather than
+  returning a cached token, including near-expiry refreshes.
+- Provider header defaults no longer override per-model headers on the wire.
+  OpenAI Completions/Responses, Anthropic and Google compatible endpoints merge
+  header names case-insensitively: provider defaults, then model overrides,
+  then explicit caller overrides, without duplicate mixed-case headers.
 - Subagent definition parsing stays independent of the application controller
   while preserving duplicate frontmatter checks and nested JSON Schema/JTD
   output constraints.

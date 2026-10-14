@@ -133,7 +133,10 @@ defmodule LemonAi.Auth.OAuthFlowTest do
 
   test "serialized refreshes reload and persist only the requested storage identity" do
     stale = %{"access_token" => "old", "refresh_token" => "old-refresh", "expires_at_ms" => 0}
-    {:ok, store} = Agent.start_link(fn -> Jason.encode!(stale) end)
+
+    {:ok, store} =
+      Agent.start_link(fn -> %{encoded: Jason.encode!(stale), revision: make_ref()} end)
+
     test_pid = self()
     name = "custom-profile-secret"
 
@@ -160,8 +163,14 @@ defmodule LemonAi.Auth.OAuthFlowTest do
     }
 
     opts = [
-      reload_secret: fn ^name -> {:ok, Agent.get(store, & &1)} end,
-      persist_secret: fn ^name, value -> Agent.update(store, fn _ -> value end) end
+      reload_secret: fn ^name -> Agent.get(store, &{:ok, &1.encoded, &1.revision}) end,
+      persist_secret: fn ^name, value, expected ->
+        Agent.get_and_update(store, fn current ->
+          if current.revision == expected,
+            do: {:ok, %{encoded: value, revision: make_ref()}},
+            else: {{:error, :stale_revision}, current}
+        end)
+      end
     ]
 
     first = Task.async(fn -> OAuthFlow.ensure_fresh(name, stale, opts, spec) end)
@@ -172,7 +181,7 @@ defmodule LemonAi.Auth.OAuthFlowTest do
     assert {:ok, %{"access_token" => "new"}} = Task.await(first)
     assert {:ok, %{"access_token" => "new"}} = Task.await(second)
     refute_received {:refreshing, _}
-    assert Jason.decode!(Agent.get(store, & &1))["refresh_token"] == "rotated"
+    assert Jason.decode!(Agent.get(store, & &1.encoded))["refresh_token"] == "rotated"
   end
 
   test "a removed or replaced secret never refreshes its stale credential" do
@@ -192,6 +201,94 @@ defmodule LemonAi.Auth.OAuthFlowTest do
         ] do
       assert {:error, ^reason} =
                OAuthFlow.ensure_fresh("custom", secret, [reload_secret: fn _ -> loaded end], spec)
+    end
+  end
+
+  test "storage failures stay distinct from absent credentials and never request refresh" do
+    secret = %{"access_token" => "old", "refresh_token" => "refresh", "expires_at_ms" => 0}
+
+    spec = %{
+      lock: {__MODULE__, make_ref()},
+      skew_ms: 0,
+      decode: &Jason.decode/1,
+      encode: &Jason.encode!/1,
+      refresh: fn _ -> flunk("storage failure cannot authorize refresh") end
+    }
+
+    for reload <- [
+          fn _ -> {:error, :store_unavailable} end,
+          fn _ -> raise "private storage failure" end,
+          fn _ -> exit(:private_storage_failure) end
+        ] do
+      assert {:error, :oauth_secret_reload_failed} =
+               OAuthFlow.ensure_fresh("custom", secret, [reload_secret: reload], spec)
+    end
+  end
+
+  test "only acknowledged conditional persistence makes a rotated credential usable" do
+    secret = %{"access_token" => "old", "refresh_token" => "refresh", "expires_at_ms" => 0}
+    encoded = Jason.encode!(secret)
+    revision = make_ref()
+    fresh = Map.merge(secret, %{"access_token" => "new", "expires_at_ms" => nil})
+
+    spec = %{
+      lock: {__MODULE__, make_ref()},
+      skew_ms: 0,
+      decode: &Jason.decode/1,
+      encode: &Jason.encode!/1,
+      refresh: fn _ -> {:ok, fresh} end
+    }
+
+    for {acknowledgement, result} <- [
+          {:ok, {:ok, fresh}},
+          {{:ok, %{}}, {:ok, fresh}},
+          {{:error, :stale_revision}, {:error, :oauth_secret_changed}},
+          {{:error, :store_unavailable}, {:error, :oauth_secret_persistence_failed}},
+          {nil, {:error, :oauth_secret_persistence_failed}},
+          {false, {:error, :oauth_secret_persistence_failed}},
+          {:unexpected, {:error, :oauth_secret_persistence_failed}}
+        ] do
+      opts = [
+        reload_secret: fn "conditional" -> {:ok, encoded, revision} end,
+        persist_secret: fn "conditional", value, expected ->
+          assert expected == revision
+          assert Jason.decode!(value) == fresh
+          acknowledgement
+        end
+      ]
+
+      assert OAuthFlow.ensure_fresh("conditional", secret, opts, spec) == result
+    end
+  end
+
+  test "durable refresh requires an explicit incarnation snapshot before the request" do
+    secret = %{"access_token" => "old", "refresh_token" => "refresh", "expires_at_ms" => 0}
+    encoded = Jason.encode!(secret)
+
+    spec = %{
+      lock: {__MODULE__, make_ref()},
+      skew_ms: 0,
+      decode: &Jason.decode/1,
+      encode: &Jason.encode!/1,
+      refresh: fn _ -> flunk("unbound refresh cannot start a token request") end
+    }
+
+    for reload <- [
+          nil,
+          :malformed,
+          fn _ -> {:ok, encoded} end,
+          fn _ -> {:ok, encoded, nil} end
+        ] do
+      assert {:error, :oauth_secret_reload_failed} =
+               OAuthFlow.ensure_fresh(
+                 "conditional",
+                 secret,
+                 [
+                   reload_secret: reload,
+                   persist_secret: fn _, _, _ -> flunk("unbound write cannot run") end
+                 ],
+                 spec
+               )
     end
   end
 end

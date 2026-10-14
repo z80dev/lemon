@@ -45,7 +45,8 @@ defmodule LemonAi.Auth.GoogleAntigravityOAuth do
           | {:callback_timeout_ms, pos_integer()}
           | {:listen_for_callback, boolean()}
           | {:local_callback_listener, module()}
-          | {:persist_secret, (String.t(), String.t() -> any())}
+          | {:persist_secret,
+             (String.t(), String.t(), term() -> :ok | {:ok, term()} | {:error, term()})}
 
   @doc false
   @spec oauth_client_id() :: String.t()
@@ -263,14 +264,24 @@ defmodule LemonAi.Auth.GoogleAntigravityOAuth do
           opts,
           fn latest, opts ->
             with {:ok, refreshed_secret, changed?} <-
-                   ensure_fresh_secret(latest, Keyword.get(opts, :force_refresh, false) == true),
+                   ensure_fresh_secret(
+                     latest,
+                     Keyword.get(opts, :force_refresh, false) == true,
+                     secret_name,
+                     opts
+                   ),
                  access_token when is_binary(access_token) and access_token != "" <-
                    non_empty_binary(refreshed_secret["access_token"]),
                  project_id when is_binary(project_id) and project_id != "" <-
                    project_id_from_secret(refreshed_secret),
                  :ok <-
                    if(changed?,
-                     do: persist_secret(secret_name, refreshed_secret, opts),
+                     do:
+                       LemonAi.Auth.OAuthSecretResolver.persist_secret(
+                         secret_name,
+                         encode_secret(refreshed_secret),
+                         opts
+                       ),
                      else: :ok
                    ) do
               {:ok, Jason.encode!(%{"token" => access_token, "projectId" => project_id})}
@@ -290,7 +301,7 @@ defmodule LemonAi.Auth.GoogleAntigravityOAuth do
 
   # A forced refresh (the provider rejected the access token) never falls back
   # to the rejected token.
-  defp ensure_fresh_secret(secret, force?) when is_map(secret) do
+  defp ensure_fresh_secret(secret, force?, secret_name, opts) when is_map(secret) do
     access_token = non_empty_binary(secret["access_token"])
     refresh_token = non_empty_binary(secret["refresh_token"])
     expires_at_ms = parse_integer(secret["expires_at_ms"])
@@ -311,7 +322,7 @@ defmodule LemonAi.Auth.GoogleAntigravityOAuth do
         {:error, :not_refreshable}
 
       should_refresh? ->
-        refresh_secret(secret, refresh_token, project_id, access_token, force?)
+        refresh_secret(secret, refresh_token, project_id, access_token, force?, secret_name, opts)
 
       not unexpired?(expires_at_ms) ->
         {:error, :expired_access_token}
@@ -321,7 +332,7 @@ defmodule LemonAi.Auth.GoogleAntigravityOAuth do
     end
   end
 
-  defp refresh_secret(secret, refresh_token, project_id, access_token, force?) do
+  defp refresh_secret(secret, refresh_token, project_id, access_token, force?, secret_name, opts) do
     case refresh_access_token(refresh_token, project_id) do
       {:ok, refreshed} ->
         updated =
@@ -341,9 +352,19 @@ defmodule LemonAi.Auth.GoogleAntigravityOAuth do
       {:error, reason} ->
         if not force? and is_binary(access_token) and access_token != "" and
              unexpired?(secret["expires_at_ms"]) do
-          Logger.debug("Google Antigravity OAuth refresh failed; using the unexpired token")
+          Logger.debug("Google Antigravity OAuth refresh failed; reloading the unexpired token")
 
-          {:ok, secret, false}
+          with {:ok, latest, _opts} <-
+                 LemonAi.Auth.OAuthSecretResolver.reload_secret(
+                   __MODULE__,
+                   secret_name,
+                   secret,
+                   opts
+                 ) do
+            if unexpired?(latest["expires_at_ms"]),
+              do: {:ok, latest, false},
+              else: {:error, :expired_access_token}
+          end
         else
           {:error, reason}
         end
@@ -434,24 +455,6 @@ defmodule LemonAi.Auth.GoogleAntigravityOAuth do
          "updated_at_ms" => now
        }}
     end
-  end
-
-  # A refreshed secret that was not stored is a failure, not a success.
-  defp persist_secret(secret_name, secret, opts) do
-    encoded = encode_secret(secret)
-
-    case Keyword.get(opts, :persist_secret) do
-      callback when is_function(callback, 2) ->
-        case callback.(secret_name, encoded) do
-          {:error, _} -> {:error, :oauth_secret_persistence_failed}
-          _ -> :ok
-        end
-
-      _ ->
-        :ok
-    end
-  rescue
-    _ -> {:error, :oauth_secret_persistence_failed}
   end
 
   defp post_form(url, body) when is_map(body) do

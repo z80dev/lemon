@@ -165,8 +165,8 @@ defmodule LemonAgent.ModelRuntime.Credentials do
   end
 
   defp force_refresh_secret(secret_name, resolver, previous_key) do
-    case resolve_secret_value(secret_name, prefer_env: false, env_fallback: false) do
-      {:ok, value, _source} when is_binary(value) ->
+    case reload_secret(secret_name) do
+      {:ok, value, _revision} when is_binary(value) ->
         case oauth_resolve(resolver, secret_name, value, []) do
           {:ok, current} when is_binary(current) and current != previous_key ->
             {:ok, current}
@@ -174,17 +174,24 @@ defmodule LemonAgent.ModelRuntime.Credentials do
           :ignore ->
             {:error, :not_refreshable}
 
-          _rejected_or_failed ->
+          {:ok, _current} ->
             case oauth_resolve(resolver, secret_name, value, force_refresh: true) do
               {:ok, fresh} when is_binary(fresh) -> {:ok, fresh}
               :ignore -> {:error, :not_refreshable}
               {:error, reason} -> {:error, safe_reason(reason)}
             end
+
+          {:error, reason} ->
+            {:error, safe_reason(reason)}
         end
 
-      _ ->
-        {:error, :not_found}
+      {:error, reason} ->
+        {:error, safe_reason(reason)}
     end
+  rescue
+    _ -> {:error, :store_unavailable}
+  catch
+    _, _ -> {:error, :store_unavailable}
   end
 
   defp oauth_resolve(:anthropic, secret_name, value, opts) do
@@ -192,8 +199,8 @@ defmodule LemonAgent.ModelRuntime.Credentials do
       secret_name,
       value,
       [
-        persist_secret: &persist_anthropic_secret/2,
-        reload_secret: &reload_secret(&1, env_fallback: false)
+        persist_secret: &persist_anthropic_secret/3,
+        reload_secret: &reload_secret/1
       ] ++ opts
     )
   end
@@ -203,8 +210,8 @@ defmodule LemonAgent.ModelRuntime.Credentials do
       secret_name,
       value,
       [
-        persist_secret: &persist_openai_codex_secret/2,
-        reload_secret: &reload_secret(&1, env_fallback: false)
+        persist_secret: &persist_openai_codex_secret/3,
+        reload_secret: &reload_secret/1
       ] ++ opts
     )
   end
@@ -214,8 +221,8 @@ defmodule LemonAgent.ModelRuntime.Credentials do
       secret_name,
       value,
       [
-        persist_secret: &persist_oauth_secret/2,
-        reload_secret: &reload_secret(&1, env_fallback: false)
+        persist_secret: &persist_oauth_secret/3,
+        reload_secret: &reload_secret/1
       ] ++ opts
     )
   end
@@ -264,8 +271,8 @@ defmodule LemonAgent.ModelRuntime.Credentials do
     case resolve_secret_value(secret_name, prefer_env: false, env_fallback: env_fallback) do
       {:ok, value, _source} ->
         case OAuthSecretResolver.resolve_api_key_from_secret(secret_name, value,
-               persist_secret: &persist_oauth_secret/2,
-               reload_secret: &reload_secret(&1, env_fallback: env_fallback)
+               persist_secret: &persist_oauth_secret/3,
+               reload_secret: &reload_secret/1
              ) do
           {:ok, resolved_api_key} ->
             resolved_api_key
@@ -617,8 +624,8 @@ defmodule LemonAgent.ModelRuntime.Credentials do
     case resolve_secret_value(secret_name, prefer_env: false, env_fallback: false) do
       {:ok, value, _source} ->
         case LemonAi.Auth.OpenAICodexOAuth.resolve_api_key_from_secret(secret_name, value,
-               persist_secret: &persist_openai_codex_secret/2,
-               reload_secret: &reload_secret(&1, env_fallback: false)
+               persist_secret: &persist_openai_codex_secret/3,
+               reload_secret: &reload_secret/1
              ) do
           {:ok, resolved_api_key} ->
             resolved_api_key
@@ -723,8 +730,8 @@ defmodule LemonAgent.ModelRuntime.Credentials do
     case resolve_secret_value(secret_name, prefer_env: false, env_fallback: false) do
       {:ok, value, _source} ->
         case LemonAi.Auth.AnthropicOAuth.resolve_api_key_from_secret(secret_name, value,
-               persist_secret: &persist_anthropic_secret/2,
-               reload_secret: &reload_secret(&1, env_fallback: false)
+               persist_secret: &persist_anthropic_secret/3,
+               reload_secret: &reload_secret/1
              ) do
           {:ok, resolved_api_key} ->
             {:ok, resolved_api_key}
@@ -757,12 +764,10 @@ defmodule LemonAgent.ModelRuntime.Credentials do
     end
   end
 
-  # Lets an OAuth helper re-read a secret under its refresh lock.
-  defp reload_secret(secret_name, opts) do
-    case resolve_secret_value(secret_name, prefer_env: false, env_fallback: opts[:env_fallback]) do
-      {:ok, value, _source} -> {:ok, value}
-      _ -> :error
-    end
+  # Bind a refresh to the authoritative encrypted-store incarnation. External
+  # and environment credentials are read-only and cannot be refreshed into it.
+  defp reload_secret(secret_name) do
+    Secrets.get_with_revision(secret_name)
   end
 
   defp resolve_anthropic_raw_api_key(provider_cfg) do
@@ -1018,16 +1023,16 @@ defmodule LemonAgent.ModelRuntime.Credentials do
   # that was not stored (for example `{:error, :secrets_locked}` during a key
   # rotation) must fail the resolution rather than strand a rotated refresh
   # token.
-  defp persist_oauth_secret(secret_name, encoded_secret) do
-    Secrets.set(secret_name, encoded_secret, provider: "ai_oauth")
+  defp persist_oauth_secret(secret_name, encoded_secret, revision) do
+    Secrets.set_if_revision(secret_name, encoded_secret, revision, provider: "ai_oauth")
   end
 
-  defp persist_openai_codex_secret(secret_name, encoded_secret) do
-    Secrets.set(secret_name, encoded_secret, provider: "openai_codex_oauth")
+  defp persist_openai_codex_secret(secret_name, encoded_secret, revision) do
+    Secrets.set_if_revision(secret_name, encoded_secret, revision, provider: "openai_codex_oauth")
   end
 
-  defp persist_anthropic_secret(secret_name, encoded_secret) do
-    Secrets.set(secret_name, encoded_secret, provider: "anthropic_oauth")
+  defp persist_anthropic_secret(secret_name, encoded_secret, revision) do
+    Secrets.set_if_revision(secret_name, encoded_secret, revision, provider: "anthropic_oauth")
   end
 
   # Error terms from OAuth helpers can carry provider response bodies; log only
