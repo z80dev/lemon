@@ -635,7 +635,7 @@ defmodule LemonControlPlane.Protocol.Schemas do
     },
     "runs.receipt.get" => %{
       required: %{"runId" => :string},
-      optional: %{}
+      optional: %{"includeAnswer" => :boolean}
     },
     "runs.followup.lineage.get" => %{
       required: %{"runId" => :string},

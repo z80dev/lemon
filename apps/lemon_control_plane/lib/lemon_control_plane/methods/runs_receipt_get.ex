@@ -13,6 +13,7 @@ defmodule LemonControlPlane.Methods.RunsReceiptGet do
   @impl true
   def handle(params, _ctx) do
     with true <- Map.has_key?(params, "runId"),
+         true <- is_boolean(Map.get(params, "includeAnswer", false)),
          {:ok, run_id} <- ChatSubmission.run_id(params) do
       case LemonCore.RouterBridge.run_receipt(run_id) do
         {:ok, receipt} -> {:ok, %{"receipt" => ChatSubmission.project(receipt)}}
@@ -20,7 +21,7 @@ defmodule LemonControlPlane.Methods.RunsReceiptGet do
         _ -> {:error, Errors.error(:unavailable, "Run receipt is unavailable")}
       end
     else
-      false -> {:error, Errors.invalid_request("runId is required")}
+      false -> {:error, Errors.invalid_request("runId is required and includeAnswer must be a boolean")}
       error -> error
     end
   end

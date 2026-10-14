@@ -257,7 +257,10 @@ Rejected steering updates the receipt to its actual queued/new/merged fallback.
 An admission receipt is not a run completion result.
 
 After a lost response, read `runs.receipt.get` (`read` scope) with `{"runId": ID}`.
-It returns `{"receipt": {...}}` with the same receipt fields. An ambiguous
+It returns `{"receipt": {...}}` with the same receipt fields. It also accepts
+typed `includeAnswer: false` for uniform status-only clients; receipts never
+include an answer, even when the boolean is true, and invalid flag types fail
+before the receipt query. It does not read private run history. An ambiguous
 admission fence returns `state: "outcome_unknown"` with nullable `sessionKey`,
 `effectiveMode` and `targetRunId`. Missing IDs return `NOT_FOUND`; query failures
 remain `UNAVAILABLE`, not missing or idle. Use `agent.wait` for final answer,
