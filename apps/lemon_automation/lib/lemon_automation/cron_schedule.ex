@@ -29,9 +29,15 @@ defmodule LemonAutomation.CronSchedule do
   ## Timezones
 
   `"UTC"` (the default) evaluates schedules in UTC. `"local"` evaluates them in
-  the server's OS-local wall-clock time, DST-aware through `:calendar`, so
-  "09:00" means 09:00 where Lemon runs. The build ships no timezone database,
-  so any other zone name is evaluated as UTC.
+  the server's OS-local wall-clock time through `:calendar`. IANA names such as
+  `"America/New_York"` use the configured `Calendar.TimeZoneDatabase` (Tzdata
+  by default), including historical and future daylight-saving transitions.
+  Invalid or unavailable zones never fall back to UTC.
+
+  Nonexistent wall-clock slots during a spring-forward gap are skipped. A
+  repeated slot during a fall-back fold runs only at its first (earliest UTC)
+  occurrence; the second occurrence is skipped even when the first has passed.
+  Results are strictly after the starting instant and are returned in UTC.
 
   ## Examples
 
@@ -141,58 +147,73 @@ defmodule LemonAutomation.CronSchedule do
   end
 
   @doc """
-  Compute the next run time in milliseconds from now.
+  Compute the next run time in Unix milliseconds.
 
-  Returns the timestamp in milliseconds, or nil if unable to compute.
+  Accepts the same options as `next_runs/3`. Returns nil for an invalid schedule,
+  invalid/unavailable timezone, or no matching slot within the search horizon.
   """
-  @spec next_run_ms(binary(), binary()) :: non_neg_integer() | nil
-  def next_run_ms(expression, timezone \\ "UTC") do
-    case next_run_datetime(expression, timezone) do
+  @spec next_run_ms(binary(), binary(), keyword()) :: integer() | nil
+  def next_run_ms(expression, timezone \\ "UTC", opts \\ []) do
+    case next_run_datetime(expression, timezone, opts) do
       nil -> nil
       datetime -> DateTime.to_unix(datetime, :millisecond)
     end
   end
 
   @doc """
-  Compute the next run time as a DateTime.
-  """
-  @spec next_run_datetime(binary(), binary()) :: DateTime.t() | nil
-  def next_run_datetime(expression, timezone \\ "UTC") do
-    case parse(expression) do
-      {:ok, parsed} ->
-        if local?(timezone) do
-          next_local_run(parsed, local_now())
-        else
-          find_next_run(parsed, now_in_timezone(timezone), 0)
-        end
+  Compute the next run time as a UTC DateTime, strictly after `:from` (or now).
 
-      {:error, _} ->
-        nil
-    end
+  Accepts the same options as `next_runs/3` and returns nil on failure.
+  """
+  @spec next_run_datetime(binary(), binary(), keyword()) :: DateTime.t() | nil
+  def next_run_datetime(expression, timezone \\ "UTC", opts \\ []) do
+    expression
+    |> next_runs(timezone, Keyword.put(opts, :count, 1))
+    |> List.first()
   end
 
   @doc """
-  Compute multiple future run times.
+  Compute multiple future run times as UTC DateTimes in chronological order.
 
   ## Options
 
   - `:count` - Number of future times to compute (default: 5)
-  - `:from` - Starting DateTime (default: now)
+  - `:from` - Starting DateTime instant, exclusive (default: now)
+  - `:time_zone_database` - Calendar timezone database (default: configured database)
+
+  Missing DST slots are skipped; repeated slots use only their first occurrence.
+  Each search looks up to 366 calendar days ahead. Invalid schedules or
+  invalid/unavailable timezones return an empty list.
   """
   @spec next_runs(binary(), binary(), keyword()) :: [DateTime.t()]
   def next_runs(expression, timezone \\ "UTC", opts \\ []) do
     count = Keyword.get(opts, :count, 5)
+    from = Keyword.get_lazy(opts, :from, &DateTime.utc_now/0)
+    database = Keyword.get(opts, :time_zone_database, Calendar.get_time_zone_database())
 
-    case parse(expression) do
-      {:ok, parsed} ->
-        if local?(timezone) do
-          collect_next_local_runs(parsed, local_now(), count, [])
-        else
-          collect_next_runs(parsed, now_in_timezone(timezone), count, [])
-        end
+    with true <- is_integer(count) and count > 0,
+         {:ok, parsed} <- parse(expression),
+         {:ok, date} <- source_date(from, timezone, database) do
+      collect_next_runs(parsed, timezone, database, from, date, count, [])
+    else
+      _ -> []
+    end
+  end
 
-      {:error, _} ->
-        []
+  @doc """
+  Validate a timezone without computing a schedule.
+
+  UTC and OS-local time are always supported. Other names must resolve through
+  the supplied/configured Calendar timezone database. Unknown names return
+  `{:error, :invalid_timezone}`; an unavailable database returns
+  `{:error, :timezone_unavailable}`.
+  """
+  @spec validate_timezone(term(), module()) ::
+          :ok | {:error, :invalid_timezone | :timezone_unavailable}
+  def validate_timezone(timezone, database \\ Calendar.get_time_zone_database()) do
+    case source_date(DateTime.utc_now(), timezone, database) do
+      {:ok, _} -> :ok
+      {:error, reason} -> {:error, reason}
     end
   end
 
@@ -490,105 +511,113 @@ defmodule LemonAutomation.CronSchedule do
   # Next Run Computation
   # ============================================================================
 
-  @max_iterations 366 * 24 * 60
+  @max_days 366
 
-  defp find_next_run(_parsed, _datetime, iterations) when iterations > @max_iterations do
-    nil
-  end
+  defp collect_next_runs(_parsed, _timezone, _database, _from, _date, 0, acc),
+    do: Enum.reverse(acc)
 
-  defp find_next_run(parsed, datetime, iterations) do
-    # Move to next minute
-    candidate = datetime |> add_minute() |> truncate_to_minute()
+  defp collect_next_runs(parsed, timezone, database, from, date, count, acc) do
+    case find_next_run(parsed, timezone, database, from, date, 0) do
+      {:ok, next, date} ->
+        collect_next_runs(parsed, timezone, database, next, date, count - 1, [next | acc])
 
-    if matches_parsed?(parsed, candidate) do
-      candidate
-    else
-      find_next_run(parsed, candidate, iterations + 1)
-    end
-  end
-
-  defp collect_next_runs(_parsed, _from, 0, acc), do: Enum.reverse(acc)
-
-  defp collect_next_runs(parsed, from, count, acc) do
-    case find_next_run(parsed, from, 0) do
-      nil ->
+      _ ->
         Enum.reverse(acc)
-
-      next ->
-        collect_next_runs(parsed, next, count - 1, [next | acc])
     end
   end
 
-  # Local schedules match against OS-local wall-clock minutes, then convert the
-  # matching minute to UTC. A wall-clock minute skipped by a DST jump has no UTC
-  # instant and is passed over; an ambiguous one (clocks falling back) uses its
-  # first occurrence.
-  defp next_local_run(parsed, local_naive) do
-    case find_next_run(parsed, local_naive, 0) do
-      nil ->
-        nil
+  defp find_next_run(_parsed, _timezone, _database, _from, _date, days)
+       when days > @max_days,
+       do: nil
 
-      candidate ->
-        case local_to_utc(candidate) do
-          nil -> next_local_run(parsed, candidate)
-          utc -> utc
-        end
+  defp find_next_run(parsed, timezone, database, from, date, days) do
+    result =
+      if date.day in parsed.day and date.month in parsed.month and
+           day_of_week(date) in parsed.weekday do
+        next_slot(parsed, timezone, database, from, date)
+      end
+
+    case result do
+      {:ok, next} -> {:ok, next, date}
+      {:error, _} = error -> error
+      nil -> find_next_run(parsed, timezone, database, from, Date.add(date, 1), days + 1)
     end
   end
 
-  defp collect_next_local_runs(_parsed, _from, 0, acc), do: Enum.reverse(acc)
+  # Calendar slots, not elapsed-time arithmetic: resolve each candidate against
+  # its own timezone period. Always compare instants, including when :from is
+  # inside the second occurrence of a repeated hour.
+  defp next_slot(parsed, timezone, database, from, date) do
+    Enum.reduce_while(parsed.hour, nil, fn hour, _ ->
+      result =
+        Enum.reduce_while(parsed.minute, nil, fn minute, _ ->
+          wall = NaiveDateTime.new!(date, Time.new!(hour, minute, 0))
 
-  defp collect_next_local_runs(parsed, from, count, acc) do
-    case find_next_run(parsed, from, 0) do
-      nil ->
-        Enum.reverse(acc)
+          case wall_to_utc(wall, timezone, database) do
+            {:ok, utc} ->
+              if DateTime.compare(utc, from) == :gt,
+                do: {:halt, {:ok, utc}},
+                else: {:cont, nil}
 
-      candidate ->
-        case local_to_utc(candidate) do
-          nil -> collect_next_local_runs(parsed, candidate, count, acc)
-          utc -> collect_next_local_runs(parsed, candidate, count - 1, [utc | acc])
-        end
+            :skip ->
+              {:cont, nil}
+
+            {:error, _} = error ->
+              {:halt, error}
+          end
+        end)
+
+      if is_nil(result), do: {:cont, nil}, else: {:halt, result}
+    end)
+  end
+
+  defp source_date(from, "local", _database) do
+    {date, _time} = :calendar.system_time_to_local_time(DateTime.to_unix(from), :second)
+    {:ok, Date.from_erl!(date)}
+  end
+
+  defp source_date(from, timezone, database) when is_binary(timezone) do
+    timezone = if timezone == "UTC", do: "Etc/UTC", else: timezone
+
+    case DateTime.shift_zone(from, timezone, database) do
+      {:ok, zoned} -> {:ok, DateTime.to_date(zoned)}
+      {:error, :time_zone_not_found} -> {:error, :invalid_timezone}
+      {:error, _} -> {:error, :timezone_unavailable}
+    end
+  rescue
+    ArgumentError -> {:error, :timezone_unavailable}
+  end
+
+  defp source_date(_from, _timezone, _database), do: {:error, :invalid_timezone}
+
+  defp wall_to_utc(wall, "local", _database) do
+    case :calendar.local_time_to_universal_time_dst(NaiveDateTime.to_erl(wall)) do
+      [] -> :skip
+      instants -> {:ok, instants |> Enum.min() |> NaiveDateTime.from_erl!() |> utc_from_naive()}
     end
   end
 
-  defp local_to_utc(%NaiveDateTime{} = local) do
-    case :calendar.local_time_to_universal_time_dst(NaiveDateTime.to_erl(local)) do
-      [utc | _] -> utc |> NaiveDateTime.from_erl!() |> DateTime.from_naive!("Etc/UTC")
-      [] -> nil
+  defp wall_to_utc(wall, timezone, database) do
+    timezone = if timezone == "UTC", do: "Etc/UTC", else: timezone
+
+    case DateTime.from_naive(wall, timezone, database) do
+      {:ok, zoned} -> {:ok, utc(zoned)}
+      {:ambiguous, first, _second} -> {:ok, utc(first)}
+      {:gap, _before, _after} -> :skip
+      {:error, :time_zone_not_found} -> {:error, :invalid_timezone}
+      {:error, _} -> {:error, :timezone_unavailable}
     end
+  rescue
+    ArgumentError -> {:error, :timezone_unavailable}
   end
 
-  defp local?(timezone), do: timezone == "local"
+  defp utc_from_naive(wall),
+    do: DateTime.from_naive!(wall, "Etc/UTC", Calendar.UTCOnlyTimeZoneDatabase)
 
-  defp local_now, do: NaiveDateTime.from_erl!(:calendar.local_time())
-
-  defp add_minute(%DateTime{} = datetime), do: DateTime.add(datetime, 1, :minute)
-  defp add_minute(%NaiveDateTime{} = datetime), do: NaiveDateTime.add(datetime, 1, :minute)
-
-  defp matches_parsed?(parsed, datetime) do
-    datetime.minute in parsed.minute and
-      datetime.hour in parsed.hour and
-      datetime.day in parsed.day and
-      datetime.month in parsed.month and
-      day_of_week(datetime) in parsed.weekday
-  end
-
-  defp truncate_to_minute(datetime) do
-    %{datetime | second: 0, microsecond: {0, 0}}
-  end
+  defp utc(datetime),
+    do: DateTime.shift_zone!(datetime, "Etc/UTC", Calendar.UTCOnlyTimeZoneDatabase)
 
   defp day_of_week(datetime) do
     Date.day_of_week(datetime) |> rem(7)
-  end
-
-  defp now_in_timezone("UTC") do
-    DateTime.utc_now()
-  end
-
-  defp now_in_timezone(timezone) do
-    case DateTime.now(timezone) do
-      {:ok, dt} -> dt
-      {:error, _} -> DateTime.utc_now()
-    end
   end
 end

@@ -139,7 +139,7 @@ defmodule LemonAutomation.CronManager do
   ## Optional Parameters
 
   - `:enabled` - Whether job is active (default: true)
-  - `:timezone` - `"UTC"` (default) or `"local"` (server wall-clock time)
+  - `:timezone` - `"UTC"` (default), `"local"` (server clock), or an available IANA name
   - `:jitter_sec` - Random delay spread (default: 0)
   - `:timeout_ms` - Execution timeout (default: 300000)
   - `:deliver_to` - `nil` (default target), `"none"`, or `"telegram:<id>[:<thread>]"`
@@ -426,9 +426,9 @@ defmodule LemonAutomation.CronManager do
               {:ok, params} ->
                 updated = job |> CronJob.update(params) |> recapture_on_unpin(job)
 
-                # Recompute next run if schedule changed
+                # Both schedule and timezone determine the next wall-clock slot.
                 updated =
-                  if params[:schedule] || params["schedule"] do
+                  if has_any_key?(params, [:schedule, "schedule", :timezone, "timezone"]) do
                     next_run = CronSchedule.next_run_ms(updated.schedule, updated.timezone)
                     CronJob.set_next_run(updated, next_run)
                   else
@@ -1614,7 +1614,8 @@ defmodule LemonAutomation.CronManager do
 
   defp prepare_update_patch(%CronJob{} = job, params) do
     with {:ok, params} <- validate_patch_target(job, params),
-         {:ok, params} <- validate_feature_fields(params, CronJob.execution_mode(job), job.id),
+         {:ok, params} <-
+           validate_feature_fields(params, CronJob.execution_mode(job), job.id, job.timezone),
          {:ok, params} <- normalize_schedule_patch(params) do
       {:ok, params}
     end
@@ -1633,14 +1634,34 @@ defmodule LemonAutomation.CronManager do
   # Shared validation for the job-quality and delivery fields. Returns the
   # normalized params (atom keys, trimmed values) or an `{:invalid_target,
   # reason}` tuple that each caller maps onto its own error shape.
-  defp validate_feature_fields(params, mode, job_id) do
-    with {:ok, params} <- validate_cwd(params),
+  defp validate_feature_fields(params, mode, job_id, default_timezone \\ "UTC") do
+    with {:ok, params} <- validate_timezone_field(params, default_timezone),
+         {:ok, params} <- validate_cwd(params),
          {:ok, params} <- validate_monitor_flags(params),
          {:ok, params} <- validate_profile_field(params, mode),
          {:ok, params} <- validate_model_field(params, mode),
          {:ok, params} <- validate_context_from(params, mode, job_id),
          {:ok, params} <- validate_deliver_to(params) do
       validate_once(params)
+    end
+  end
+
+  defp validate_timezone_field(params, default_timezone) do
+    timezone =
+      case fetch_param(params, :timezone) do
+        :error -> default_timezone
+        {:ok, value} -> value
+      end
+
+    case CronSchedule.validate_timezone(timezone) do
+      :ok ->
+        {:ok, params}
+
+      {:error, :invalid_timezone} ->
+        {:invalid_target, "Invalid timezone"}
+
+      {:error, :timezone_unavailable} ->
+        {:invalid_target, "Timezone database is unavailable"}
     end
   end
 

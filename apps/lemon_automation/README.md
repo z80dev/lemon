@@ -412,9 +412,11 @@ LemonAutomation behavior is controlled through cron job fields plus a small appl
 ```
 
 `timezone: "UTC"` (the default) evaluates the schedule in UTC; `"local"` uses
-the server's OS wall-clock time, DST-aware. The build ships no timezone
-database, so any other zone name (for example `"America/New_York"`) is
-evaluated as UTC.
+the server's OS wall-clock time. IANA names such as `"America/New_York"` use
+Tzdata with daylight-saving rules. Creation/update rejects invalid or
+unavailable zones. Missing DST slots are skipped and repeated slots use only
+their first occurrence; next-run values are UTC instants. See the
+[timezone guide](../../docs/user-guide/reminders-and-heartbeats.md#timezones-and-daylight-saving-changes).
 
 ### One-Shot Jobs and Delivery Targets
 
@@ -477,7 +479,7 @@ immutable.
 | Field | Default | Description |
 |-------|---------|-------------|
 | `enabled` | `true` | Whether the job is active |
-| `timezone` | `"UTC"` | `"UTC"` or `"local"` (server wall-clock, DST-aware); other names are evaluated as UTC |
+| `timezone` | `"UTC"` | `"UTC"`, `"local"` (server wall-clock), or an available IANA name; DST gaps skip slots and folds use the first occurrence |
 | `deliver_to` | `nil` | Delivery target: `nil` (originating chat, else paired owner chat), `"none"`, `"telegram:<chat_id>[:<thread_id>]"`, or `"discord:<channel_id>[:<thread_id>]"` |
 | `once` | `false` | One-shot: disabled when its scheduled run is claimed, deleted after that run finishes |
 | `jitter_sec` | `0` | Random delay spread in seconds |

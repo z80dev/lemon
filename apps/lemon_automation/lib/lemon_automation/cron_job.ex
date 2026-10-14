@@ -33,7 +33,9 @@ defmodule LemonAutomation.CronJob do
     drift guard
   - `:captured_default_model` - Global default model observed when the job was
     created. Set by `LemonAutomation.CronManager`, never by `update/2`.
-  - `:timezone` - Timezone for schedule interpretation (default: "UTC")
+  - `:timezone` - `"UTC"` (default), `"local"` (server clock), or an IANA name.
+    Creation/update through `CronManager` rejects unknown or unavailable zones.
+    DST gaps skip the missing slot; folds use only the first occurrence.
   - `:jitter_sec` - Random delay in seconds to spread load (default: 0)
   - `:timeout_ms` - Maximum execution time in milliseconds
   - `:max_retries` - Number of retry runs after failure/timeout (default: 0)
