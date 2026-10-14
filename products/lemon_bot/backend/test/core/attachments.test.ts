@@ -158,6 +158,24 @@ describe('immutable completed attachments', () => {
       await expect(service.serve(download.url.split('/').pop()!, new Request(download.url))).rejects.toMatchObject({ code: 'not_found' });
     } finally { service.close(); await f.close(); }
   });
+  test('authorized copies preserve historic provenance after movement/run removal and own independent immutable blobs', async () => {
+    const f = await mediaFixture(); const service = createAttachmentService(f.services);
+    try {
+      const run: P.Run = f.services.resource('run', { conversationId: f.conversation.id, botId: f.bot.id, initiatorUserId: f.user.userId, clientNonce: nonce, status: 'succeeded', error: null, startedAtMs: f.services.now(), completedAtMs: f.services.now(), routineRunId: null }); f.store.put('runs', run);
+      const provenance: P.DeliverableProvenance = { botId: f.bot.id, machineId: f.bot.machineId, runId: run.id, sourceEntryId: null, generatedAtMs: run.completedAtMs };
+      const original = await service.create(f.user, strToU8('historical result'), { clientNonce: nonce, purpose: 'reference', filename: 'result.txt', botId: f.bot.id, provenance });
+      f.store.put('bots', f.services.update(f.bot, { machineId: 'machine_new' })); f.store.remove('runs', run.id);
+      const target = { ...f.services.update(f.bot, { visibility: 'team', published: false }), id: 'bot_copy_target' }; f.store.put('bots', target);
+      const copy = await service.copy(f.user, original.id, { clientNonce: nonce, purpose: 'reference', botId: target.id });
+      expect(copy.id).not.toBe(original.id); expect(copy.botId).toBe(target.id); expect(copy.ownerUserId).toBe(f.user.userId);
+      expect(copy.provenance).toEqual(provenance); expect(copy.source).toBe(original.source); expect(copy.sha256).toBe(original.sha256);
+      expect(f.store.require<{ basename: string }>('attachmentBlobs', copy.id).basename).not.toBe(f.store.require<{ basename: string }>('attachmentBlobs', original.id).basename);
+      await expect(service.copy(f.other, original.id, { clientNonce: nonce, purpose: 'reference', botId: target.id })).rejects.toThrow();
+      f.store.put('attachments', f.services.update(original, { state: 'deleted' })); await service.removeDeleted(original.id);
+      expect(await service.bytes(copy.id)).toEqual(strToU8('historical result'));
+      await expect(service.bytes(original.id)).rejects.toMatchObject({ code: 'not_found' });
+    } finally { service.close(); await f.close(); }
+  });
   test('deletion confirmation binds current references; expired staging GC retains composer references', async () => {
     const f = await mediaFixture(); const service = createAttachmentService(f.services); const routes = createAttachmentRoutes(f.services);
     try {

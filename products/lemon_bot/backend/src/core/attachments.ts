@@ -23,7 +23,7 @@ const listQuery = z.object({ conversationId: id.optional(), botId: id.optional()
 interface BlobRecord { id: string; basename: string; sha256: string; size: number }
 interface Ticket { id: string; principal: Principal; attachmentId: string; aclDigest: string; expiresAtMs: number }
 export interface AttachmentInspection { mime: string; preview: P.Attachment['preview']; width: number | null; height: number | null; durationMs: number | null }
-export interface StoredAttachmentService extends AttachmentService { collect(): Promise<void>; removeDeleted(attachmentId: string): Promise<void>; serve(ticket: string, request: Request): Promise<Response>; close(): void }
+export interface StoredAttachmentService extends AttachmentService { copy(user: Principal, sourceAttachmentId: string, metadata: P.AttachmentUpload): Promise<P.Attachment>; collect(): Promise<void>; removeDeleted(attachmentId: string): Promise<void>; serve(ticket: string, request: Request): Promise<Response>; close(): void }
 const instances = new WeakMap<BackendServices, StoredAttachmentService>();
 const digest = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest('hex');
 const safeName = (name: string) => name.split(/[\\/]/).pop()!.replace(/[\u0000-\u001f\u007f]/g, '').replace(/[<>:"|?*]/g, '_').trim().slice(0, 240).replace(/[\uD800-\uDFFF]/gu, '_') || 'attachment';
@@ -218,6 +218,20 @@ export function createAttachmentService(services: BackendServices): StoredAttach
       (e.kind === 'card' && ((e.card.type === 'attachment' && e.card.attachmentId === attachmentId) || (e.card.type === 'voice_memo' && e.card.attachmentId === attachmentId)))
     ).length > 0;
   };
+  const publishBlob = async (bytes: Uint8Array, sha256: string) => {
+    const basename = `${sha256}-${randomBytes(16).toString('hex')}`;
+    const temporaryPath = join(staging, basename);
+    const file = await open(temporaryPath, 'wx', 0o600);
+    try { await file.writeFile(bytes); await file.sync(); await file.chmod(0o400); } finally { await file.close(); }
+    // Exclusive publication gives each resource its own immutable path and deletion scope.
+    await link(temporaryPath, join(blobs, basename));
+    await unlink(temporaryPath);
+    for (const directory of [blobs, staging]) {
+      const handle = await open(directory, 'r');
+      try { await handle.sync(); } finally { await handle.close(); }
+    }
+    return basename;
+  };
   const service: StoredAttachmentService = {
     async create(user, inputBytes, metadata) {
       const input = parse(createInput, metadata);
@@ -251,20 +265,37 @@ export function createAttachmentService(services: BackendServices): StoredAttach
       if (input.conversationId) services.auth.conversation(user, input.conversationId);
       if (input.botId) services.auth.bot(user, input.botId, input.purpose === 'avatar' || input.purpose === 'reference');
       const sha256 = digest(bytes);
-      const basename = `${sha256}-${randomBytes(16).toString('hex')}`;
-      const temporaryPath = join(staging, basename);
-      const file = await open(temporaryPath, 'wx', 0o600);
-      try { await file.writeFile(bytes); await file.sync(); await file.chmod(0o400); } finally { await file.close(); }
-      // Exclusive hard-link publication never overwrites an existing immutable blob.
-      await link(temporaryPath, join(blobs, basename));
-      await unlink(temporaryPath);
-      for (const directory of [blobs, staging]) {
-        const handle = await open(directory, 'r');
-        try { await handle.sync(); } finally { await handle.close(); }
-      }
+      const basename = await publishBlob(bytes, sha256);
       const attachment: P.Attachment = services.resource('attachment', { ownerUserId: user.userId, conversationId: input.conversationId ?? null, botId: input.botId ?? null, filename, size: bytes.length, sha256, ...description, source: input.source ?? (provenance.runId ? 'generated' as const : provenance.machineId ? 'node' as const : 'upload' as const), state: 'ready' as const, provenance });
       services.store.transaction(() => {
         services.store.put('attachmentBlobs', { id: attachment.id, basename, sha256, size: bytes.length } satisfies BlobRecord);
+        services.store.put('attachments', attachment);
+        services.store.setMetadata(`attachmentPurpose:${attachment.id}`, input.purpose);
+        services.events.emit('attachment.upserted', attachment, attachment.conversationId ? { conversationId: attachment.conversationId } : { userIds: [attachment.ownerUserId] });
+      });
+      return attachment;
+    },
+    async copy(user, sourceAttachmentId, metadata) {
+      const input = parse(upload, metadata);
+      const source = visible(user, sourceAttachmentId);
+      const authorizeTarget = () => {
+        const conversation = input.conversationId ? services.auth.conversation(user, input.conversationId) : null;
+        const bot = input.botId ? services.auth.bot(user, input.botId, input.purpose === 'avatar' || input.purpose === 'reference') : null;
+        if (conversation && bot && !conversation.botIds.includes(bot.id)) fail('invalid_request', 'Bot is not part of the copied attachment conversation.');
+      };
+      authorizeTarget();
+      const bytes = await service.bytes(source.id);
+      const description = await inspectAttachment(bytes, source.filename, input.purpose);
+      const current = visible(user, source.id);
+      services.mutations.checkRevision(current, source.revision);
+      authorizeTarget();
+      const basename = await publishBlob(bytes, source.sha256);
+      services.mutations.checkRevision(visible(user, source.id), source.revision);
+      authorizeTarget();
+      // Historical provenance belongs to the verified immutable original, not current placement or retained Run rows.
+      const attachment: P.Attachment = services.resource('attachment', { ownerUserId: user.userId, conversationId: input.conversationId ?? null, botId: input.botId ?? null, filename: source.filename, size: source.size, sha256: source.sha256, ...description, source: source.source, state: 'ready' as const, provenance: source.provenance });
+      services.store.transaction(() => {
+        services.store.put('attachmentBlobs', { id: attachment.id, basename, sha256: attachment.sha256, size: attachment.size } satisfies BlobRecord);
         services.store.put('attachments', attachment);
         services.store.setMetadata(`attachmentPurpose:${attachment.id}`, input.purpose);
         services.events.emit('attachment.upserted', attachment, attachment.conversationId ? { conversationId: attachment.conversationId } : { userIds: [attachment.ownerUserId] });
