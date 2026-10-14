@@ -10,6 +10,15 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Added
 
+- Machine invitations now return a short, credential-free repository join-script
+  command and a separate one-use code. The script reads hidden terminal input,
+  sends enrollment only through `--invite-code-stdin`, restores echo on exit,
+  and reuses compatible pinned Lemon installs before invoking the existing
+  installer. Source selection, exact version and capability gates remain
+  fail-closed; the argv enrollment-code flag is removed. Unknown enrollment
+  exchanges stop instead of replaying the invite. The repository script must be
+  published on `main` before its generated curl URL can be used.
+
 - Operator `chat.send` and `profile.chat` accept fixed upstream run IDs with
   durable same-intent replay protection and conflict rejection. Queue-owned
   receipts report actual new/queued/merged/steering/interrupt targets rather

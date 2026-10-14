@@ -215,6 +215,13 @@ defmodule CodingAgent.ExecutionNode.Worker do
 
   @impl true
   def handle_info(
+        {:execution_node_socket, socket, {:connected, _hello}},
+        %{socket: socket, socket_mode: :pairing, invite_code: code, pairing_stage: stage} = state
+      ) when is_binary(code) and not is_nil(stage) do
+    {:stop, {:pairing_failed, :outcome_unknown}, state}
+  end
+
+  def handle_info(
         {:execution_node_socket, socket, {:connected, hello}},
         %{socket: socket} = state
       ) do
@@ -257,6 +264,13 @@ defmodule CodingAgent.ExecutionNode.Worker do
         %{socket: socket, socket_mode: :node} = state
       ) do
     handle_node_event(event, payload, state)
+  end
+
+  def handle_info(
+        {:execution_node_socket, socket, {:disconnected, _reason}},
+        %{socket: socket, socket_mode: :pairing, invite_code: code} = state
+      ) when is_binary(code) do
+    {:stop, {:pairing_failed, :outcome_unknown}, state}
   end
 
   def handle_info(
@@ -562,6 +576,11 @@ defmodule CodingAgent.ExecutionNode.Worker do
   end
 
   defp handle_socket_response(_tag, _result, state), do: {:noreply, state}
+
+  defp handle_pairing_error(reason, %{invite_code: code} = state)
+       when is_binary(code) and reason in [:disconnected, :timeout] do
+    {:stop, {:pairing_failed, :outcome_unknown}, state}
+  end
 
   defp handle_pairing_error(reason, state) when reason in [:disconnected, :timeout] do
     state = if reason == :timeout, do: resume_pairing(state), else: state

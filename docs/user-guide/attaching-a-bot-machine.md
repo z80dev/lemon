@@ -81,9 +81,9 @@ Compatibility is an API contract, not merely a matching version:
 | Component | Required contract |
 | --- | --- |
 | Controller | `node.pair.invite`, `node.pair.invite.revoke`, and exact `nodes.list` enrollment/repair reconciliation with durable node IDs and `enrollmentInviteId`. |
-| Destination CLI | `node capabilities --json --require-bot` must exit zero only for a complete bot runtime; `node join --invite-code` must use restricted enrollment and persist destination-local credentials. |
+| Destination CLI | `node capabilities --json --require-bot` must exit zero only for a complete bot runtime; `node join --invite-code-stdin` must use restricted enrollment and persist destination-local credentials. |
 | Pinned destination build | `version` must report the configured exact pin; it must still pass the capability gate. |
-| Repair flow | Controller-bound repair invitation and generation-checked challenge exchange retain the durable node ID; the destination runs the returned code-only command unchanged. |
+| Repair flow | Controller-bound repair invitation and generation-checked challenge exchange retain the durable node ID; the destination runs the returned credential-free command and enters the separate code at its hidden prompt. |
 
 Use [node files and secrets](node-files-and-secrets.md) for the destination
 capability and credential-proof contracts. Capability readiness does not claim
@@ -132,7 +132,7 @@ The success payload contains:
 
 - `inviteId`: invitation identifier;
 - `inviteCode`: short-lived enrollment credential;
-- `joinCommand`: the complete copy-paste command;
+- `joinCommand`: the credential-free copy-paste script command;
 - `expiresAtMs`: expiry as Unix milliseconds;
 - a bounded summary with no operator credentials.
 
@@ -146,9 +146,10 @@ are not accepted. Control characters are rejected. The invitation's exact
 trimmed node name, purpose, and labels are controller-bound, not chosen later by
 the joining host. A durable name already in use cannot become a second machine.
 
-Treat `inviteCode` and `joinCommand` as secrets until used or expired. Do not put
-them in logs, public issues, telemetry, or transcripts. Only the issuing RPC
-returns the code; the controller stores its digest rather than its plaintext.
+Treat `inviteCode` as secret until used or expired. Never put it in shell commands,
+environment variables, logs, issues, telemetry, or transcripts. `joinCommand`
+contains no enrollment, operator, or node credential. Only the issuing RPC returns
+the code; the controller stores its digest rather than its plaintext.
 
 To cancel a pending, unused invitation, use the same operator pairing authority:
 
@@ -164,44 +165,50 @@ connection that was already open.
 
 ## Run the command on the destination
 
-Copy the returned `joinCommand` to a terminal on the machine being attached.
-Source commands select the provisioned checkout's `bin/lemon`. Packaged commands
-select `$HOME/.lemon/versions/<configured-version>/bin/lemon`, never `PATH` or
-the mutable `versions/current` symlink. If that pinned executable is absent, the
-command fetches the existing
-[HTTPS installer](https://raw.githubusercontent.com/z80dev/lemon/main/install.sh)
-and runs it with explicit `LEMON_VERSION` and `LEMON_INSTALL_BASE_URL` plus the
-POSIX flags `--skip-setup --no-modify-path`. Review the installer before executing
-remote code when required by your policy. It requires `curl`, `tar`, and `python3`
-on a supported macOS/Linux host; source checkouts require their normal development
-dependencies. See [installation](../install.md).
+Copy the returned `joinCommand` to a terminal on the destination. It downloads the
+repository-owned [join script](https://github.com/z80dev/lemon/blob/main/scripts/join-node.sh)
+over HTTPS and invokes Bash. Enter the separately returned one-use code at the
+**hidden terminal prompt**. The prompt reads `/dev/tty`, not the piped script stdin.
+The script disables tracing, restores terminal echo on exit/interruption, validates
+the bounded code without normalizing special characters, and passes it once to
+`node join --invite-code-stdin`. It never puts the code in process arguments or
+environment variables. A controlling terminal is required; EOF or invalid input
+stops before downloads, runtime inspection, or enrollment.
 
-Every route runs the **selected actual CLI**:
-
-```bash
-"$lemon_bin" node capabilities --json --require-bot >/dev/null
-```
-
-Only after this exits zero does the command execute `node join`. Missing or old
-capability commands, incomplete features, a missing source checkout, an installer
-failure, or a version mismatch stop before enrollment with a redacted message;
-there is no fallback to another executable. No controller operator token or
-provider credential appears in the command, and this gate does not run provider
-setup.
-
-The underlying join invocation is:
+**Publication prerequisite:** generated commands use
+`https://raw.githubusercontent.com/z80dev/lemon/main/scripts/join-node.sh`.
+That URL is usable only after this script is published on the repository's `main`
+branch. A local checkout can run the same script before publication:
 
 ```bash
-lemon node join --name studio-mac \
-  --controller wss://controller.example/ws \
-  --invite-code 'THE_RETURNED_INVITE_CODE'
+bash /path/to/lemon/scripts/join-node.sh --name studio-mac \
+  --controller wss://controller.example/ws --source /path/to/lemon
 ```
 
-In a source checkout, use `./bin/lemon` instead. `--invite-code` implies `--pair`
-and cannot be combined with operator/session token flags, `--node-id`, or
-`--repair`. For repair, only the issuing operator supplies the durable `nodeId`
-in the invitation request; the destination receives the code, not recovery
-credentials or a caller-selected identity.
+For packaged installs, replace `--source` with the controller's exact
+`--version VERSION --base-url HTTPS_RELEASE_BASE_URL`. Do not invent a release pin
+or assume a matching version has the required APIs.
+
+Source mode uses only the provisioned checkout's `bin/lemon` and requires its
+`mix.exs`; it never falls back to a PATH executable. Release mode first reuses
+`$HOME/.lemon/versions/<configured-version>/bin/lemon` if it reports the exact
+version and passes `node capabilities --json --require-bot`. Otherwise it fetches
+the existing [HTTPS installer](https://raw.githubusercontent.com/z80dev/lemon/main/install.sh)
+and installs that exact `LEMON_VERSION` and `LEMON_INSTALL_BASE_URL` with
+`--force --skip-setup --no-modify-path`, then repeats the version/capability gate.
+It never uses the mutable `versions/current` symlink to enroll.
+
+Review remote scripts according to your policy. The installer requires `curl`,
+`tar`, and `python3` on a supported macOS/Linux host; source checkouts require
+their normal development dependencies. See [installation](../install.md).
+Missing capabilities, installation failure, an unavailable checkout, or a wrong
+version stop before enrollment. This does not run provider setup.
+
+`--invite-code-stdin` implies `--pair` and cannot be combined with operator/session
+token flags, `--node-id`, or `--repair`. The old argv credential flag is removed.
+For repair, only the operator supplies the durable `nodeId` when issuing the
+invitation; the destination enters its separate code, not recovery credentials
+or a caller-selected identity. Do not retry an uncertain enrollment outcome.
 
 The credential authenticates a restricted **enrollment** connection. It can only
 request enrollment for its bound name and exchange the challenge produced by
@@ -236,10 +243,13 @@ project outside home, configure roots on the destination:
 ```bash
 lemon node join --name studio-mac \
   --controller wss://controller.example/ws \
-  --invite-code 'THE_RETURNED_INVITE_CODE' \
   --cwd /srv/bots/project \
   --allowed-root /srv/bots --allowed-root "$HOME"
 ```
+
+This example reconnects **after enrollment** using the destination's saved
+credential. During enrollment the join script preserves your launch directory;
+start it from the desired existing project directory.
 
 `--allowed-root` is repeatable. Explicit roots **extend** the home default, so
 home remains permitted. These flags become destination-local
@@ -308,7 +318,7 @@ Do not interpret a missing row in a truncated response as offline or absent:
 repeat the read with the exact durable ID or name. A store query failure returns
 `UNAVAILABLE`, not an empty inventory.
 
-For later starts, **remove `--invite-code`** and reuse the stored credential:
+For later starts, omit `--invite-code-stdin` and reuse the stored credential:
 
 ```bash
 lemon node join --name studio-mac --controller wss://controller.example/ws \

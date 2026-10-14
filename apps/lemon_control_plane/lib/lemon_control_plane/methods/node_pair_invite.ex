@@ -12,7 +12,7 @@ defmodule LemonControlPlane.Methods.NodePairInvite do
                     File.regular?(Path.join(@checkout_root, "mix.exs")),
                  do: @checkout_root,
                  else: nil
-  @installer_url "https://raw.githubusercontent.com/z80dev/lemon/main/install.sh"
+  @join_script_url "https://raw.githubusercontent.com/z80dev/lemon/main/scripts/join-node.sh"
 
   @impl true
   def name, do: "node.pair.invite"
@@ -54,7 +54,7 @@ defmodule LemonControlPlane.Methods.NodePairInvite do
           {:ok, %{
             "inviteId" => id,
             "inviteCode" => code,
-            "joinCommand" => join_command(runtime, controller, invite.node_name, code),
+            "joinCommand" => join_command(runtime, controller, invite.node_name),
             "expiresAtMs" => expires_at,
             "summary" => %{"inviteId" => id, "expiresAtMs" => expires_at, "singleUse" => true,
               "includesOperatorCredentials" => false}
@@ -173,39 +173,18 @@ defmodule LemonControlPlane.Methods.NodePairInvite do
     end
   end
 
-  defp join_command(runtime, controller, node_name, code) do
-    "(" <> select_runtime(runtime) <> version_gate(runtime) <>
-      "if ! \"$lemon_bin\" node capabilities --json --require-bot >/dev/null 2>&1; then " <>
-      "printf '%s\\n' 'Lemon bot runtime prerequisites are not satisfied; enrollment was not attempted.' >&2; exit 1; fi; " <>
-      "exec \"$lemon_bin\" node join --name #{quote_arg(node_name)} " <>
-      "--controller #{quote_arg(controller)} --invite-code #{quote_arg(code)})"
+  defp join_command(runtime, controller, node_name) do
+    args = ["--name", node_name, "--controller", controller] ++ runtime_args(runtime)
+    "curl -fsSL --proto '=https' --proto-redir '=https' " <>
+      quote_arg(@join_script_url) <> " | bash -s -- " <>
+      Enum.map_join(args, " ", &quote_arg/1)
   end
 
-  defp select_runtime({:source, source, _version}) do
-    "lemon_bin=#{quote_arg(Path.join(source, "bin/lemon"))}; " <>
-      "if [ ! -f #{quote_arg(Path.join(source, "mix.exs"))} ] || [ ! -x \"$lemon_bin\" ]; then " <>
-      "printf '%s\\n' 'The provisioned Lemon source checkout is unavailable; enrollment was not attempted.' >&2; exit 1; fi; "
-  end
-
-  defp select_runtime({:release, version, base_url}) do
-    "lemon_bin=\"$HOME/.lemon/versions/\"#{quote_arg(version)}\"/bin/lemon\"; " <>
-      "if [ ! -x \"$lemon_bin\" ]; then " <>
-      "installer=$(mktemp 2>/dev/null) || { " <>
-      "printf '%s\\n' 'The pinned Lemon installation failed; enrollment was not attempted.' >&2; exit 1; }; " <>
-      "if curl -fsSL --proto '=https' --proto-redir '=https' #{quote_arg(@installer_url)} -o \"$installer\" >/dev/null 2>&1 && " <>
-      "LEMON_VERSION=#{quote_arg(version)} LEMON_INSTALL_BASE_URL=#{quote_arg(base_url)} " <>
-      "sh \"$installer\" --skip-setup --no-modify-path >/dev/null 2>&1; then result=0; else result=$?; fi; " <>
-      "rm -f \"$installer\"; if [ \"$result\" -ne 0 ]; then " <>
-      "printf '%s\\n' 'The pinned Lemon installation failed; enrollment was not attempted.' >&2; exit 1; fi; fi; "
-  end
-
-  defp version_gate({:source, _source, nil}), do: ""
-  defp version_gate({:source, _source, version}), do: version_gate(version)
-  defp version_gate({:release, version, _base_url}), do: version_gate(version)
-  defp version_gate(version) do
-    "if ! lemon_version=$(\"$lemon_bin\" version 2>/dev/null) || [ \"$lemon_version\" != #{quote_arg(version)} ]; then " <>
-      "printf '%s\\n' 'The Lemon runtime does not match the configured version; enrollment was not attempted.' >&2; exit 1; fi; "
-  end
+  defp runtime_args({:source, source, nil}), do: ["--source", source]
+  defp runtime_args({:source, source, version}),
+    do: ["--source", source, "--version", version]
+  defp runtime_args({:release, version, base_url}),
+    do: ["--version", version, "--base-url", base_url]
 
   defp quote_arg(value), do: "'" <> String.replace(value, "'", "'\\''") <> "'"
 end

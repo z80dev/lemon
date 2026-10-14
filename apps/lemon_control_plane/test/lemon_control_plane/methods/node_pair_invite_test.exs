@@ -26,9 +26,7 @@ defmodule LemonControlPlane.Methods.NodePairInviteTest do
     Enum.each(@runtime_keys, &Application.delete_env(:lemon_control_plane, &1))
     Application.put_env(:lemon_control_plane, :operator_token, "invite-test-operator")
     Application.put_env(:lemon_control_plane, :public_ws_url, "wss://controller.example/ws")
-    source = Path.join(tmp_dir, "source's checkout")
-    write_source_fixture(source)
-    Application.put_env(:lemon_control_plane, :node_source_checkout, source)
+    Application.put_env(:lemon_control_plane, :node_source_checkout, Path.join(tmp_dir, "destination source"))
 
     on_exit(fn ->
       for {key, value} <- old do
@@ -57,7 +55,7 @@ defmodule LemonControlPlane.Methods.NodePairInviteTest do
       end
     end)
 
-    %{name: prefix, source: source, argv_log: Path.join(tmp_dir, "argv.log")}
+    %{name: prefix}
   end
 
   test "auto-approves the bound name and delivers real challenge/recovery credentials", %{name: name} do
@@ -182,8 +180,6 @@ defmodule LemonControlPlane.Methods.NodePairInviteTest do
     competing = invite(name, %{"nodeId" => node_id})
     auth = enrollment_auth(repair)
     competing_auth = enrollment_auth(competing)
-    refute repair["joinCommand"] =~ "--node-id"
-    refute repair["joinCommand"] =~ "--repair"
     assert {:error, {:unauthorized, _}} = enroll(repair, name <> "-wrong", auth)
     assert {:ok, recovered} = enroll(repair, name, auth)
     assert recovered["nodeId"] == node_id
@@ -284,78 +280,22 @@ defmodule LemonControlPlane.Methods.NodePairInviteTest do
   end
 
 
-  test "source checkout wins over PATH and gates before precisely quoted join arguments",
-       %{name: name, tmp_dir: tmp_dir, source: source, argv_log: argv_log} do
-    controller = "wss://controller.example/owner's/ws"
-    Application.put_env(:lemon_control_plane, :public_ws_url, controller)
-    issued = invite(name <> "'s machine")
-    command = issued["joinCommand"]
-    assert command =~ shell_quote(Path.join(source, "bin/lemon"))
-    assert command =~ "\"$lemon_bin\" node capabilities --json --require-bot >/dev/null"
-    refute command =~ "install.sh"
-    refute command =~ "command -v"
-    refute command =~ "invite-test-operator"
-    refute command =~ "--operator-token"
-    old_path = Path.join(tmp_dir, "lemon")
-    File.write!(old_path, "#!/bin/sh\nprintf '%s\\n' 'old PATH executable ran' >&2\nexit 99\n")
-    File.chmod!(old_path, 0o700)
-
-    assert {output, 0} = System.cmd("sh", ["-c", command],
-      env: [{"NODE_INVITE_ARGV_LOG", argv_log}, {"PATH", tmp_dir <> ":" <> (System.get_env("PATH") || "")}],
-      stderr_to_stdout: true)
-    assert output == ""
-    assert recorded_args(argv_log) == [
-      "CALL", "node", "capabilities", "--json", "--require-bot",
-      "CALL", "node", "join", "--name", name <> "'s machine", "--controller",
-      controller, "--invite-code", issued["inviteCode"]
-    ]
+  test "issued commands contain no enrollment or operator authority", %{name: name} do
+    issued = invite(name)
+    refute issued["joinCommand"] =~ issued["inviteCode"]
+    refute issued["joinCommand"] =~ "invite-test-operator"
     assert {:ok, stored} = NodeStore.fetch_invite(issued["inviteCode"])
     refute inspect(stored) =~ issued["inviteCode"]
   end
 
-  test "old or missing capability commands fail closed without leaking enrollment credentials",
-       %{name: name, argv_log: argv_log} do
-    issued = invite(name)
-    for status <- [1, 64, 127] do
-      File.rm(argv_log)
-      assert {output, exit_status} = System.cmd("sh", ["-c", issued["joinCommand"]],
-        env: [{"NODE_INVITE_ARGV_LOG", argv_log}, {"NODE_INVITE_CAPABILITY_STATUS", "#{status}"}],
-        stderr_to_stdout: true)
-      assert exit_status != 0
-      assert output == "Lemon bot runtime prerequisites are not satisfied; enrollment was not attempted.\n"
-      refute output =~ issued["inviteCode"]
-      refute output =~ name
-      assert recorded_args(argv_log) == ["CALL", "node", "capabilities", "--json", "--require-bot"]
-    end
-  end
-
-  test "an unprovisioned destination checkout never falls back to PATH",
-       %{name: name, tmp_dir: tmp_dir, argv_log: argv_log} do
-    Application.put_env(:lemon_control_plane, :node_source_checkout, Path.join(tmp_dir, "missing"))
-    issued = invite(name)
-    assert {output, status} = System.cmd("sh", ["-c", issued["joinCommand"]],
-      env: [{"NODE_INVITE_ARGV_LOG", argv_log}], stderr_to_stdout: true)
-    assert status != 0
-    assert output == "The provisioned Lemon source checkout is unavailable; enrollment was not attempted.\n"
-    refute File.exists?(argv_log)
-    refute output =~ issued["inviteCode"]
-  end
-
-  test "local loopback defaults to the actual controller source checkout", %{name: name} do
+  test "loopback source defaults can issue restricted invitations", %{name: name} do
     Application.delete_env(:lemon_control_plane, :node_source_checkout)
-    root = Path.expand("../../../../..", __DIR__)
-    assert File.regular?(Path.join(root, "bin/lemon"))
-    assert File.regular?(Path.join(root, "mix.exs"))
     for controller <- ["ws://127.0.0.1:4040/ws", "ws://localhost:4040/ws", "ws://[::1]:4040/ws"] do
       Application.put_env(:lemon_control_plane, :public_ws_url, controller)
-      command = invite(name)["joinCommand"]
-      assert command =~ shell_quote(Path.join(root, "bin/lemon"))
-      assert command =~ "\"$lemon_bin\" node capabilities --json --require-bot"
-      refute command =~ "install.sh"
-      refute command =~ "command -v"
+      issued = invite(name)
+      assert enrollment_auth(issued).role == :enrollment
     end
   end
-
   test "remote invites require a destination source or complete explicit release prerequisites",
        %{name: name} do
     Application.delete_env(:lemon_control_plane, :node_source_checkout)
@@ -377,145 +317,23 @@ defmodule LemonControlPlane.Methods.NodePairInviteTest do
        %{name: name} do
     Application.delete_env(:lemon_control_plane, :node_source_checkout)
     System.put_env("LEMON_NODE_SOURCE_CHECKOUT", "/srv/operator provisioned/lemon")
-    command = invite(name)["joinCommand"]
-    assert command =~ "'/srv/operator provisioned/lemon/bin/lemon'"
-    refute command =~ "install.sh"
+    issued = invite(name)
+    assert enrollment_auth(issued).role == :enrollment
     System.put_env("LEMON_NODE_SOURCE_CHECKOUT", "relative/lemon")
     assert {:error, {:invalid_request, "Configure an absolute destination node source checkout"}} =
       NodePairInvite.handle(%{"nodeName" => name}, @ctx)
   end
 
-  test "explicit release pin uses only its installed path and still requires capabilities",
-       %{name: name, tmp_dir: tmp_dir, argv_log: argv_log} do
-    Application.delete_env(:lemon_control_plane, :node_source_checkout)
-    version = "2099.01.7-private"
-    base = "https://releases.example/operator's-lemon"
-    Application.put_env(:lemon_control_plane, :node_install_version, version)
-    Application.put_env(:lemon_control_plane, :node_install_base_url, base)
-    issued = invite(name)
-    command = issued["joinCommand"]
-    assert command =~ "LEMON_VERSION=#{shell_quote(version)}"
-    assert command =~ "LEMON_INSTALL_BASE_URL=#{shell_quote(base)}"
-    assert command =~ "https://raw.githubusercontent.com/z80dev/lemon/main/install.sh"
-    assert command =~ "--proto '=https'"
-    assert command =~ "--skip-setup --no-modify-path"
-    assert command =~ "\"$HOME/.lemon/versions/\"#{shell_quote(version)}\"/bin/lemon\""
-    refute command =~ "command -v"
-    refute command =~ "versions/current"
-    write_runtime_fixture(Path.join([tmp_dir, ".lemon", "versions", version, "bin", "lemon"]))
-    old_bin = Path.join([tmp_dir, ".lemon", "bin", "lemon"])
-    File.mkdir_p!(Path.dirname(old_bin))
-    File.write!(old_bin, "#!/bin/sh\nprintf '%s\\n' 'old installed executable ran' >&2\nexit 99\n")
-    File.chmod!(old_bin, 0o700)
-    File.ln_s!(old_bin, Path.join(tmp_dir, "lemon"))
-    env = [{"HOME", tmp_dir}, {"NODE_INVITE_ARGV_LOG", argv_log}, {"NODE_INVITE_VERSION", version},
-           {"PATH", tmp_dir <> ":" <> (System.get_env("PATH") || "")}]
-    assert {"", 0} = System.cmd("sh", ["-c", command], env: env, stderr_to_stdout: true)
-    assert recorded_args(argv_log) == [
-      "CALL", "version",
-      "CALL", "node", "capabilities", "--json", "--require-bot",
-      "CALL", "node", "join", "--name", name, "--controller",
-      "wss://controller.example/ws", "--invite-code", issued["inviteCode"]
-    ]
-    File.rm!(argv_log)
-    assert {output, status} = System.cmd("sh", ["-c", command],
-      env: env ++ [{"NODE_INVITE_CAPABILITY_STATUS", "64"}], stderr_to_stdout: true)
-    assert status != 0
-    assert output == "Lemon bot runtime prerequisites are not satisfied; enrollment was not attempted.\n"
-    assert recorded_args(argv_log) == [
-      "CALL", "version", "CALL", "node", "capabilities", "--json", "--require-bot"
-    ]
-  end
-
-  test "missing pinned runtime installs with explicit inputs before version and capability checks",
-       %{name: name, tmp_dir: tmp_dir, argv_log: argv_log} do
+  test "release prerequisites issue a restricted invitation without embedding its code", %{name: name} do
     Application.delete_env(:lemon_control_plane, :node_source_checkout)
     Application.put_env(:lemon_control_plane, :node_install_version, "2099.01.7-private")
     Application.put_env(:lemon_control_plane, :node_install_base_url, "https://releases.example/lemon")
     issued = invite(name)
-    binary = Path.join(tmp_dir, "runtime-fixture")
-    write_runtime_fixture(binary)
-    installer = Path.join(tmp_dir, "installer-fixture")
-    File.write!(installer, """
-    #!/bin/sh
-    printf '%s\\n' "$LEMON_VERSION" "$LEMON_INSTALL_BASE_URL" "$@" > "$NODE_INVITE_INSTALL_LOG"
-    printf '%s\\n' 'private installer diagnostic' >&2
-    [ "${NODE_INVITE_INSTALL_STATUS:-0}" -eq 0 ] || exit "$NODE_INVITE_INSTALL_STATUS"
-    target="$HOME/.lemon/versions/$LEMON_VERSION/bin"
-    mkdir -p "$target" && cp "$NODE_INVITE_BINARY_FIXTURE" "$target/lemon" && chmod 700 "$target/lemon"
-    """)
-    curl = Path.join(tmp_dir, "curl")
-    File.write!(curl, """
-    #!/bin/sh
-    printf '%s\\n' "$@" > "$NODE_INVITE_CURL_LOG"
-    while [ "$#" -gt 0 ]; do
-      if [ "$1" = "-o" ]; then cp "$NODE_INVITE_INSTALLER_FIXTURE" "$2"; exit "$?"; fi
-      shift
-    done
-    exit 64
-    """)
-    File.chmod!(curl, 0o700)
-    install_log = Path.join(tmp_dir, "install.log")
-    curl_log = Path.join(tmp_dir, "curl.log")
-    env = [{"HOME", tmp_dir}, {"NODE_INVITE_ARGV_LOG", argv_log},
-           {"NODE_INVITE_BINARY_FIXTURE", binary}, {"NODE_INVITE_INSTALLER_FIXTURE", installer},
-           {"NODE_INVITE_INSTALL_LOG", install_log}, {"NODE_INVITE_CURL_LOG", curl_log},
-           {"PATH", tmp_dir <> ":" <> (System.get_env("PATH") || "")}]
-    assert {output, status} = System.cmd("sh", ["-c", issued["joinCommand"]],
-      env: env ++ [{"NODE_INVITE_INSTALL_STATUS", "1"}], stderr_to_stdout: true)
-    assert status != 0
-    assert output == "The pinned Lemon installation failed; enrollment was not attempted.\n"
-    refute output =~ issued["inviteCode"]
-    refute File.exists?(argv_log)
-    assert {"", 0} = System.cmd("sh", ["-c", issued["joinCommand"]], env: env, stderr_to_stdout: true)
-    assert recorded_args(install_log) == [
-      "2099.01.7-private", "https://releases.example/lemon", "--skip-setup", "--no-modify-path"
-    ]
-    assert ["-fsSL", "--proto", "=https", "--proto-redir", "=https",
-            "https://raw.githubusercontent.com/z80dev/lemon/main/install.sh", "-o", _temp] =
-      recorded_args(curl_log)
-    assert recorded_args(argv_log) == [
-      "CALL", "version", "CALL", "node", "capabilities", "--json", "--require-bot",
-      "CALL", "node", "join", "--name", name, "--controller",
-      "wss://controller.example/ws", "--invite-code", issued["inviteCode"]
-    ]
-  end
-
-  test "a configured version is checked against the selected binary, not advertised as compatibility",
-       %{name: name, argv_log: argv_log} do
-    version = "2099.01.7-private"
-    Application.put_env(:lemon_control_plane, :node_install_version, version)
-    issued = invite(name)
-    for {reported, version_status} <- [{"2099.01.6-private", "0"}, {version, "64"}] do
-      File.rm(argv_log)
-      assert {output, status} = System.cmd("sh", ["-c", issued["joinCommand"]],
-        env: [{"NODE_INVITE_ARGV_LOG", argv_log}, {"NODE_INVITE_VERSION", reported},
-              {"NODE_INVITE_VERSION_STATUS", version_status}], stderr_to_stdout: true)
-      assert status != 0
-      assert output == "The Lemon runtime does not match the configured version; enrollment was not attempted.\n"
-      assert recorded_args(argv_log) == ["CALL", "version"]
-      refute output =~ issued["inviteCode"]
-    end
+    assert enrollment_auth(issued).role == :enrollment
+    refute issued["joinCommand"] =~ issued["inviteCode"]
     Application.put_env(:lemon_control_plane, :node_install_version, "latest")
     assert {:error, {:invalid_request, "Configure an exact node install version"}} =
       NodePairInvite.handle(%{"nodeName" => name}, @ctx)
-  end
-
-  test "release environment aliases reuse the install.sh inputs", %{name: name} do
-    Application.delete_env(:lemon_control_plane, :node_source_checkout)
-    for {version_env, base_env} <- [
-      {"LEMON_NODE_INSTALL_VERSION", "LEMON_NODE_INSTALL_BASE_URL"},
-      {"LEMON_VERSION", "LEMON_INSTALL_BASE_URL"}
-    ] do
-      System.put_env(version_env, "2099.01.7-private")
-      System.put_env(base_env, "https://releases.example/lemon")
-      command = invite(name)["joinCommand"]
-      assert command =~ "LEMON_VERSION='2099.01.7-private'"
-      assert command =~ "LEMON_INSTALL_BASE_URL='https://releases.example/lemon'"
-      assert command =~ "\"$lemon_bin\" node capabilities --json --require-bot"
-      System.delete_env(version_env)
-      System.delete_env(base_env)
-    end
   end
 
   test "validates invitation bounds", %{name: name} do
@@ -665,36 +483,6 @@ defmodule LemonControlPlane.Methods.NodePairInviteTest do
     end
   end
 
-  defp write_source_fixture(source) do
-    File.mkdir_p!(source)
-    File.write!(Path.join(source, "mix.exs"), "# Controlled source checkout fixture\n")
-    write_runtime_fixture(Path.join(source, "bin/lemon"))
-  end
-
-  defp write_runtime_fixture(executable) do
-    File.mkdir_p!(Path.dirname(executable))
-    File.write!(executable, """
-    #!/bin/sh
-    printf '%s\\n' CALL "$@" >> "$NODE_INVITE_ARGV_LOG"
-    case "$1:${2:-}" in
-      node:capabilities)
-        printf '%s\\n' '{"protocol":1,"botReady":true}'
-        printf '%s\\n' 'private fixture diagnostic' >&2
-        exit "${NODE_INVITE_CAPABILITY_STATUS:-0}"
-        ;;
-      version:*)
-        printf '%s\\n' "${NODE_INVITE_VERSION:-2099.01.7-private}"
-        exit "${NODE_INVITE_VERSION_STATUS:-0}"
-        ;;
-      node:join) exit 0 ;;
-      *) exit 64 ;;
-    esac
-    """)
-    File.chmod!(executable, 0o700)
-  end
-
-  defp recorded_args(path), do: path |> File.read!() |> String.split("\n", trim: true)
-  defp shell_quote(value), do: "'" <> String.replace(value, "'", "'\\''") <> "'"
 
   defp invite(name, extra \\ %{}) do
     assert {:ok, result} = NodePairInvite.handle(Map.merge(%{"nodeName" => name}, extra), @ctx)

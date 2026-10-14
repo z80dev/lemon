@@ -2,6 +2,7 @@ defmodule CodingAgent.ExecutionNode.CLITest do
   use ExUnit.Case, async: false
 
   alias CodingAgent.ExecutionNode.CLI
+  alias CodingAgent.ExecutionNode.Worker
 
   test "parses the node join surface" do
     assert {:ok, opts} =
@@ -63,23 +64,23 @@ defmodule CodingAgent.ExecutionNode.CLITest do
   test "invite enrollment implies pairing without operator credentials" do
     assert {:ok, opts} =
              CLI.parse(["--name", "bot", "--controller", "wss://controller.example/ws",
-               "--invite-code", "single-use-enrollment"])
+               "--invite-code-stdin"])
     assert opts[:pair]
-    assert opts[:invite_code] == "single-use-enrollment"
+    assert opts[:invite_code_stdin]
+    refute opts[:invite_code]
     refute opts[:operator_token]
-    assert CLI.help() =~ "--invite-code"
   end
 
   test "rejects invite recovery combinations and never echoes enrollment secrets" do
     base = ["--name", "bot", "--controller", "wss://controller.example/ws",
-      "--invite-code", "sensitive-enrollment"]
+      "--invite-code-stdin"]
     for flags <- [["--repair"], ["--node-id", "other"], ["--token", "session"],
                   ["--operator-token", "operator"]] do
       assert {:error, message} = CLI.parse(base ++ flags)
       refute message =~ "sensitive-enrollment"
     end
     assert {:error, _} = CLI.parse(["--name", "bot", "--controller", "wss://controller.example/ws",
-      "--invite-code", ""])
+      "--invite-code", "retired-argument-credential"])
     assert {:error, message} = CLI.parse(base ++ ["--bad-option=sensitive-enrollment"])
     refute message =~ "sensitive-enrollment"
   end
@@ -109,7 +110,7 @@ defmodule CodingAgent.ExecutionNode.CLITest do
     previous = Process.flag(:trap_exit, true)
     on_exit(fn -> Process.flag(:trap_exit, previous) end)
     assert {:error, message} = CLI.run(["--name", "bot", "--controller",
-      "ws://127.0.0.1:1/ws", "--invite-code", "private-enrollment"], deps)
+      "ws://127.0.0.1:1/ws", "--invite-code-stdin"], deps)
     assert message =~ "matching source checkout"
     refute message =~ "private-enrollment"
   end
@@ -126,6 +127,43 @@ defmodule CodingAgent.ExecutionNode.CLITest do
     end)
     assert {:error, message} = CLI.run(["capabilities", "--bad-option=private"], deps)
     refute message =~ "private"
+  end
+
+  test "invalid stdin credentials fail before worker startup without normalizing input" do
+    deps = [runtime_features: fn -> %{"botReady" => true} end]
+    argv = ["--name", "bot", "--controller", "wss://controller.example/ws", "--invite-code-stdin"]
+    for input <- ["", "short\n", String.duplicate("A", 44) <> "\n",
+                  String.duplicate("A", 42) <> "!\n", String.duplicate("A", 42) <> "\0\n",
+                  String.duplicate("A", 43) <> "\nextra",
+                  String.duplicate("A", 43) <> "\r\n"] do
+      output = ExUnit.CaptureIO.capture_io([input: input], fn ->
+        assert {:error, message} = CLI.run(argv, deps)
+        assert message =~ "stdin"
+        refute message =~ String.duplicate("A", 42)
+      end)
+      assert output == ""
+    end
+  end
+
+  test "unsafe enrollment destinations fail without consuming stdin" do
+    for url <- ["ws://remote.example/ws", "wss://user:secret@host/ws",
+                "wss://host/ws?secret=value", "wss://host/ws#fragment"] do
+      assert {:error, _} = CLI.parse(["--name", "bot", "--controller", url, "--invite-code-stdin"])
+    end
+  end
+
+  test "uncertain invite exchange stops rather than replaying its immutable credential" do
+    state = %Worker{socket: self(), socket_mode: :pairing,
+      invite_code: String.duplicate("A", 43), pairing_stage: :requesting}
+    for tag <- [:pair_request, :pair_approve, {:pair_challenge, "bound-node"}],
+        reason <- [:timeout, :disconnected] do
+      assert {:stop, {:pairing_failed, :outcome_unknown}, ^state} =
+        Worker.handle_info({:execution_node_socket, self(), {:response, tag, {:error, reason}}}, state)
+    end
+    assert {:stop, {:pairing_failed, :outcome_unknown}, ^state} =
+      Worker.handle_info({:execution_node_socket, self(), {:disconnected, :closed}}, state)
+    assert {:stop, {:pairing_failed, :outcome_unknown}, ^state} =
+      Worker.handle_info({:execution_node_socket, self(), {:connected, %{}}}, state)
   end
 
 end

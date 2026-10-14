@@ -550,7 +550,7 @@ defmodule LemonCli.CommandRegistry do
         option("--name NAME", ["--name"], "Unique execution node name"),
         option("--controller URL", ["--controller"], "Controller control-plane WebSocket"),
         option("--pair", ["--pair"], "Pair and store a controller-issued node token"),
-        option("--invite-code CODE", ["--invite-code"], "Single-use enrollment or bound repair invite (implies --pair)"),
+        option("--invite-code-stdin", ["--invite-code-stdin"], "Read one bounded enrollment or repair code from stdin (implies --pair)"),
         option("--node-id ID", ["--node-id"], "Durable controller node ID"),
         option("--repair", ["--repair"], "Operator-authorized legacy credential repair"),
         option(

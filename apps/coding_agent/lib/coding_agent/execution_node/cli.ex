@@ -8,7 +8,7 @@ defmodule CodingAgent.ExecutionNode.CLI do
     controller: :string,
     pair: :boolean,
     operator_token: :string,
-    invite_code: :string,
+    invite_code_stdin: :boolean,
     token: :string,
     node_id: :string,
     repair: :boolean,
@@ -72,6 +72,7 @@ defmodule CodingAgent.ExecutionNode.CLI do
     with {:ok, opts} <- parse(argv),
          false <- opts[:help] == true,
          :ok <- require_invite_features(opts, deps),
+         {:ok, opts} <- read_invite(opts),
          {:ok, _started} <- Application.ensure_all_started(:coding_agent),
          {:ok, worker} <-
            Worker.start_link(
@@ -118,7 +119,7 @@ defmodule CodingAgent.ExecutionNode.CLI do
   end
 
   defp require_invite_features(opts, deps) do
-    if opts[:invite_code] do
+    if opts[:invite_code_stdin] do
       provider = Keyword.get(deps, :runtime_features, &Worker.runtime_features/0)
       if provider.()["botReady"] == true, do: :ok,
         else: {:error, "Invite enrollment requires the matching source checkout or a compatible host/MCP/stream/profile worker build"}
@@ -132,13 +133,43 @@ defmodule CodingAgent.ExecutionNode.CLI do
       opts[:help] == true -> {:ok, opts}
       blank?(opts[:name]) -> {:error, "--name is required"}
       blank?(opts[:controller]) -> {:error, "--controller is required"}
-      Keyword.has_key?(opts, :invite_code) and blank?(opts[:invite_code]) ->
-        {:error, "--invite-code requires a nonempty enrollment credential"}
-      opts[:invite_code] && Enum.any?([:node_id, :repair, :operator_token, :token],
+      opts[:invite_code_stdin] && Enum.any?([:node_id, :repair, :operator_token, :token],
                               &Keyword.has_key?(opts, &1)) ->
-        {:error, "--invite-code cannot be combined with recovery or token flags"}
-      opts[:invite_code] -> {:ok, Keyword.put(opts, :pair, true)}
+        {:error, "--invite-code-stdin cannot be combined with recovery or token flags"}
+      opts[:invite_code_stdin] -> validate_invite_destination(Keyword.put(opts, :pair, true))
       true -> {:ok, opts}
+    end
+  end
+
+  defp validate_invite_destination(opts) do
+    uri = URI.parse(opts[:controller])
+    if byte_size(opts[:name]) in 1..64 and
+         not String.match?(opts[:name], ~r/[\x00-\x1f\x7f]/) and
+         byte_size(opts[:controller]) <= 2048 and
+         uri.scheme in ["ws", "wss"] and is_binary(uri.host) and uri.host != "" and
+         uri.userinfo == nil and uri.query == nil and uri.fragment == nil and
+         (is_nil(uri.port) or (is_integer(uri.port) and uri.port in 1..65_535)) and
+         not String.match?(opts[:controller], ~r/[\s\x00-\x1f\x7f]/) and
+         (uri.scheme == "wss" or uri.host in ["localhost", "127.0.0.1", "::1"]) do
+      {:ok, opts}
+    else
+      {:error, "invalid enrollment name or secure controller URL"}
+    end
+  rescue
+    ArgumentError -> {:error, "invalid enrollment name or secure controller URL"}
+  end
+
+  defp read_invite(opts) do
+    if opts[:invite_code_stdin] do
+      case IO.binread(:stdio, 45) do
+        <<code::binary-size(43), "\n">> ->
+          if Regex.match?(~r/\A[A-Za-z0-9_-]{43}\z/, code),
+            do: {:ok, Keyword.put(opts, :invite_code, code)},
+            else: {:error, "invalid enrollment credential on stdin"}
+        _ -> {:error, "expected a 43-character enrollment credential and newline on stdin"}
+      end
+    else
+      {:ok, opts}
     end
   end
 
@@ -197,7 +228,7 @@ defmodule CodingAgent.ExecutionNode.CLI do
     Options:
       --pair                    Pair and store a controller-issued node token
       --operator-token TOKEN    Operator token used only during pairing
-      --invite-code CODE        Single-use enrollment or bound repair invite (implies --pair)
+      --invite-code-stdin       Read one bounded enrollment code from stdin (implies --pair)
       --token TOKEN             Existing node session token (overrides stored token)
       --node-id ID              Load or repair a credential by durable controller node ID
       --repair                  Operator-authorized repair for a legacy record without a recovery token
@@ -216,11 +247,11 @@ defmodule CodingAgent.ExecutionNode.CLI do
     LEMON_NODE_OPERATOR_TOKEN must match the controller's
     LEMON_CONTROL_PLANE_OPERATOR_TOKEN when operator authentication is enabled.
     Prefer LEMON_NODE_OPERATOR_TOKEN and LEMON_NODE_TOKEN over command-line token
-    flags so credentials do not enter shell history. Invite commands contain only
-    a short-lived enrollment credential, never the controller operator token.
+    flags so credentials do not enter shell history. The repository join script
+    prompts with hidden terminal input and sends the one-use enrollment code only
+    through stdin, never command arguments or environment variables.
     A repair invite's durable node ID is bound by the controller, not a CLI flag.
-    Treat the command as secret until used, revoked or expired. Stored node tokens live only
-    on this machine in a mode-0600 file keyed by durable node ID. Non-loopback
+    Stored node tokens live only on this machine in a mode-0600 file keyed by durable node ID. Non-loopback
     controllers require wss:// by default. The insecure override is acceptable
     only when another verified transport layer, such as Tailscale, encrypts and
     authenticates the complete path.
@@ -230,6 +261,10 @@ defmodule CodingAgent.ExecutionNode.CLI do
   end
 
   defp blank?(value), do: not is_binary(value) or String.trim(value) == ""
+
+  defp format_reason({:pairing_failed, :outcome_unknown}) do
+    "enrollment outcome is unknown; do not retry this code; ask the owner to reconcile the durable node and issue a repair invitation if needed"
+  end
 
   defp format_reason(:operator_token_required) do
     "the controller requires an operator token for pairing; set LEMON_NODE_OPERATOR_TOKEN or pass --operator-token"
