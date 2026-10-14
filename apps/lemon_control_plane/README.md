@@ -624,6 +624,17 @@ terminal input/output and secret values are never written to invocation records
 or general events; audit lines contain only operation and outcome classifications.
 `node.invoke` cannot bypass the admin-scoped file, secret or terminal methods.
 
+Internal callers inspecting a node before dispatch can pin that live connection
+with `NodeRegistry.invoke_node(..., expected_pid: inspected.pid)`. A reconnect
+returns the definite pre-dispatch error `{:node_connection_changed,nodeId}`.
+Private native requests also require `required_native_privacy_context: 1`, which
+checks the actual resolved connection's nested
+`capabilities["coding_agent.run"]["nativePrivacyContext"] == {"version":1}`
+inside the registry owner before invocation allocation or delivery. An absent/
+unsupported marker returns `{:native_privacy_context_unsupported,nodeId}`.
+These are internal admission options, not remotely supplied PID values or a
+post-response privacy check.
+
 | Method | Scope | Request | Success payload |
 | --- | --- | --- | --- |
 | `node.pair.invite` | pairing | `{nodeName,nodeId?,purpose?,labels?,expiresInMs?}` | `{inviteId,inviteCode,joinCommand,expiresAtMs,summary}` |
@@ -677,8 +688,10 @@ direct invite joins perform the same fail-closed check.
 feature flags: `hostIO`, `filesystemCAS`, `deletePreviews`, `encryptedSecrets`,
 `ptyShell`, `mcpDiscovery`, `profileSync`, `liveStreaming`, `repairInvites`,
 `nativeExecutionPolicy`. `missingFeatures` is sorted; `botReady` is true only when
-all are present, including required Python/assets and the large native tool-policy
-JSON envelope. This is installed software compatibility, **not** provider login,
+all are present, including required Python/assets, the large native tool-policy
+JSON envelope and native privacy-context protocol version 1. Native policy readiness
+requires the actual worker's nested `coding_agent.run.nativePrivacyContext` descriptor,
+not just a shared JSON helper. This is installed software compatibility, **not** provider login,
 per-bot policy or an OS permission grant. Reconcile the live enrolled exact node
 and require its `botReady:true` before declaring a machine ready; an online socket
 or a matching version string alone is insufficient.

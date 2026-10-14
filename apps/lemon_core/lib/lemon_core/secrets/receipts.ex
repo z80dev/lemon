@@ -1,5 +1,6 @@
 defmodule LemonCore.Secrets.Receipts do
   @moduledoc false
+  import Kernel, except: [binding: 1]
 
   import Kernel, except: [binding: 1]
 
