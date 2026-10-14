@@ -220,6 +220,8 @@ describe('owned placed runtime', () => {
       const context = { cronRunId: 'fixed_cron_run', routerRunId: 'fixed_native_run', jobId: 'fixed_job', profileId: f.bot.profileId, creatorId: 'alice', workspaceId: 'workspace', routineId: routine.id, triggeredBy: 'schedule', scheduledForMs: null };
       await reserveCronAdmission(f.services, f.alice, routine.id, context); await reserveCronAdmission(f.services, f.alice, routine.id, context);
       expect(f.store.list('runs')).toHaveLength(1); expect(f.store.list('routineRuns')).toHaveLength(1); expect(f.calls.filter(call => call.method === 'chat.send')).toHaveLength(0);
+      const reserved = f.store.list<P.Run>('runs')[0]!;
+      expect(f.store.metadata(`runCron:${reserved.id}`)).toBe(context.cronRunId);
       const bobRun: P.Run = f.services.resource('run', { conversationId: f.conversation.id, botId: f.bot.id, initiatorUserId: 'bob', clientNonce: 'bob_run_nonce_0000000', status: 'running', error: null, startedAtMs: f.services.now(), completedAtMs: null, routineRunId: null }); f.store.put('runs', bobRun);
       f.rpc = async method => method === 'chat.abort' ? { aborted: true } : { ok: false, answer: null, cancelled: true };
       const stopped = await quiesceBotInvocations(f.services, f.alice, f.bot.id, { principalOnly: true });

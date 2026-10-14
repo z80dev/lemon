@@ -33,6 +33,7 @@ const approvalSchema = z.object({ approvalId: id, runId: id, sessionKey: z.strin
 const cronSchema = z.object({ type: z.enum(['started', 'completed']), runId: id.nullable(), cronRunId: id, jobId: id, sessionKey: z.string().nullable(), status: z.string().optional(), startedAtMs: z.number().int().nonnegative().nullable().optional() }).passthrough();
 const terminalStatuses: P.Run['status'][] = ['succeeded', 'failed', 'cancelled'];
 interface ConnectorFence { connectorId: string; runIds: string[]; status: 'pending' | 'outcome_unknown' }
+interface RuntimeCompletion { runId?: string | null; ok: boolean; answer: string | null; error?: unknown; cancelled: boolean }
 function upstream<T>(schema: z.ZodType<T>, value: unknown): T {
   const result = schema.safeParse(value); if (!result.success) fail('upstream_unavailable', 'The runtime returned an invalid receipt.'); return result.data;
 }
@@ -92,7 +93,7 @@ export function observeInvocation(services: BackendServices, proofValue: string)
   const bot = services.auth.bot(actor, run.botId); services.auth.conversation(actor, run.conversationId);
   const machine = services.store.require<P.Machine>('machines', bot.machineId);
   if (machine.nodeId !== bound.nodeId || bot.profileId !== bound.profileId) fail('forbidden', 'The invocation placement has changed.');
-  const cronId = run.routineRunId ? services.store.require<P.RoutineRun>('routineRuns', run.routineRunId).cronRunId : null;
+  const cronId = services.store.metadata<string>(`runCron:${run.id}`);
   const admittedCron = cronId ? services.store.metadata<{ allow: boolean }>(`cronAdmissionReceipt:${cronId}`)?.allow === true : false;
   const admittedFollowup = services.store.metadata<{ allow: boolean }>(`nativeFollowupAdmissionReceipt:${bound.upstreamRunId}`)?.allow === true;
   if (!bound.dispatched && !admittedCron && !admittedFollowup) fail('forbidden', 'The invocation has not been dispatched or admitted.');
@@ -251,7 +252,7 @@ export function createRuntimeService(services: BackendServices): ManagedRuntimeS
     if (entry.kind !== 'message') fail('internal_error', 'Assistant entry type was not retained.', false);
     bound.assistantEntryId = entry.id; services.store.setMetadata(`runtimeRun:${run.id}`, bound); return entry;
   }
-  async function finalize(runId: string, result: z.infer<typeof finalSchema>) {
+  async function finalize(runId: string, result: RuntimeCompletion) {
     const run = services.store.require<P.Run>('runs', runId); const bound = mapping(runId);
     if (!bound || terminalStatuses.includes(run.status) && services.store.metadata<boolean>(`runtimeTerminalProjectionPending:${run.id}`) !== true) return;
     const principal = actor(runId); services.auth.bot(principal, run.botId); services.auth.conversation(principal, run.conversationId);
@@ -319,6 +320,7 @@ export function createRuntimeService(services: BackendServices): ManagedRuntimeS
       services.store.setMetadata(`runPrincipal:${productRun.id}`, principal);
       services.store.setMetadata(`nativeRunProduct:${event.runId}`, productRun.id);
     }
+    services.store.setMetadata(`runCron:${productRun.id}`, event.cronRunId);
     const record = services.store.require<P.RoutineRun>('routineRuns', routineRunId); services.store.put('routineRuns', services.update(record, { runId: productRun.id }));
     if (!terminalStatuses.includes(productRun.status) && event.type === 'started') productRun = services.update(productRun, { status: 'running', startedAtMs: productRun.startedAtMs ?? event.startedAtMs ?? services.now() });
     emitRun(productRun);
@@ -606,6 +608,7 @@ export async function reserveCronAdmission(services: BackendServices, principal:
     services.store.put('runs', run); services.store.put('routineRuns', record);
     services.store.setMetadata(`runtimeRun:${run.id}`, { upstreamRunId: context.routerRunId, executionRunId: context.routerRunId, sessionKey: services.runtime.sessionKey(services.store.require<P.Conversation>('conversations', routine.conversationId), bot), profileId: bot.profileId, nodeId: machine.nodeId!, conversationId: routine.conversationId, botId: bot.id, assistantEntryId: null, deltaSeq: 0, deltaGap: false, dispatched: true } satisfies RuntimeMapping);
     services.store.setMetadata(`runPrincipal:${run.id}`, principal); services.store.setMetadata(`nativeRunProduct:${context.routerRunId}`, run.id); services.store.setMetadata(`cronRun:${context.cronRunId}`, record.id);
+    services.store.setMetadata(`runCron:${run.id}`, context.cronRunId);
     const entry = services.entry(principal, routine.conversationId, { kind: 'message', role: 'user', text: routine.instruction, streaming: false, attachmentIds: [], clientNonce: `cron_${context.cronRunId}`, runId: run.id, actor: { kind: 'system', id: null, displayName: 'Routine' } });
     services.store.setMetadata(`runSourceEntry:${run.id}`, entry.id);
     services.store.setMetadata(`externalEntry:${entry.id}`, { provider: 'routine_event', routineId: routine.id });
@@ -674,7 +677,7 @@ async function stopInvocationResources(services: BackendServices, runs: P.Run[],
     const bound = services.store.metadata<RuntimeMapping>(`runtimeRun:${run.id}`);
     if (!bound) { uncertain = true; continue; }
     const nativeAdmitted = services.store.metadata<{ allow: boolean }>(`nativeFollowupAdmissionReceipt:${bound.upstreamRunId}`)?.allow === true;
-    const cronId = run.routineRunId ? services.store.require<P.RoutineRun>('routineRuns', run.routineRunId).cronRunId : null;
+    const cronId = services.store.metadata<string>(`runCron:${run.id}`);
     const cronAdmitted = cronId ? services.store.metadata<{ allow: boolean }>(`cronAdmissionReceipt:${cronId}`)?.allow === true : false;
     if (!bound.dispatched && !nativeAdmitted && !cronAdmitted) {
       const cancelled = services.update(run, { status: 'cancelled' as const, completedAtMs: services.now(), error: null });
