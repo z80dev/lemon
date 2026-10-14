@@ -160,7 +160,7 @@ defmodule LemonAutomation.CronManagerAdmissionTest do
       trigger = unquote(trigger)
       :persistent_term.put({Admission, :result}, {:error, outcome})
       assert {:ok, job} = add_job(ctx, max_retries: 3, retry_backoff_ms: 0)
-      {run_id, source_id} = dispatch(job, trigger)
+      {run_id, expected_ids} = dispatch(job, trigger)
       job_id = job.id
 
       assert_receive {:admission_checked, checked_job, checked_run}, 5_000
@@ -189,7 +189,6 @@ defmodule LemonAutomation.CronManagerAdmissionTest do
       refute_receive {:router_submitted, _}, 100
       refute_receive {:admission_checked, %{id: ^job_id}, _}, 100
 
-      expected_ids = if source_id, do: [source_id, run_id], else: [run_id]
       assert Enum.sort(Enum.map(CronStore.list_runs(job.id, limit: 20), & &1.id)) ==
                Enum.sort(expected_ids)
 
@@ -348,19 +347,20 @@ defmodule LemonAutomation.CronManagerAdmissionTest do
 
   defp dispatch(job, :manual) do
     assert {:ok, %CronRun{id: run_id, triggered_by: :manual}} = CronManager.run_now(job.id)
-    {run_id, nil}
+    {run_id, [run_id]}
   end
 
   defp dispatch(job, :wake) do
     assert {:ok, %CronRun{id: run_id, triggered_by: :wake}} = Wake.trigger(job.id)
-    {run_id, nil}
+    {run_id, [run_id]}
   end
 
   defp dispatch(job, :schedule) do
     scheduled_for_ms = LemonCore.Clock.now_ms() - 1_000
     replace_job_state(%{job | next_run_at_ms: scheduled_for_ms})
     CronManager.tick()
-    {CronStore.scheduled_run_id(job.id, scheduled_for_ms), nil}
+    run_id = CronStore.scheduled_run_id(job.id, scheduled_for_ms)
+    {run_id, [run_id]}
   end
 
   defp dispatch(job, :retry) do
@@ -382,7 +382,8 @@ defmodule LemonAutomation.CronManagerAdmissionTest do
     CronStore.put_run(source)
     replace_job_state(%{job | next_run_at_ms: now + 86_400_000})
     CronManager.tick()
-    {CronStore.retry_run_id(source.id, 1), source.id}
+    run_id = CronStore.retry_run_id(source.id, 1)
+    {run_id, [source.id, run_id]}
   end
 
   defp replace_job_state(job) do

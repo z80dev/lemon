@@ -121,6 +121,8 @@ defmodule LemonAutomation.CronAdmissionTest do
             @origin <> "/check\r\n",
             @origin <> "/%xx",
             @origin <> ":/check",
+            "HTTPS://admission.example.test:/check",
+            "https://admission.example.test:",
             @origin <> ":99999/check",
             "https://admission.example.test\\@evil.example/check",
             "https:///check",
@@ -128,6 +130,13 @@ defmodule LemonAutomation.CronAdmissionTest do
             @origin <> "/" <> String.duplicate("x", 2048)
           ] do
         assert_invalid(CronAdmission.validate(%{admission | url: url}, @profile_id))
+      end
+    end
+
+    test "accepts a permitted HTTPS callback with omitted or explicit default port", %{admission: admission} do
+      for url <- [@origin <> "/cron/check", @origin <> ":443/cron/check"] do
+        configured = %{admission | url: url}
+        assert {:ok, ^configured} = CronAdmission.validate(configured, @profile_id)
       end
     end
 
