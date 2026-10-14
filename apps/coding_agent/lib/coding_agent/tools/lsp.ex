@@ -1268,8 +1268,11 @@ defmodule CodingAgent.Tools.Lsp do
   defp normalize_locations(nil), do: []
   defp normalize_locations(result) when is_map(result), do: normalize_locations([result])
 
+  # Servers may report one location under both a symlinked and a canonical
+  # path (clangd with /tmp vs /private/tmp on macOS); keep the first of each.
   defp normalize_locations(results) when is_list(results) do
-    Enum.flat_map(results, fn
+    results
+    |> Enum.flat_map(fn
       %{"targetUri" => uri} = link ->
         [%{"uri" => uri, "range" => link["targetSelectionRange"] || link["targetRange"]}]
 
@@ -1278,6 +1281,15 @@ defmodule CodingAgent.Tools.Lsp do
 
       _ ->
         []
+    end)
+    |> Enum.uniq_by(fn location ->
+      canonical =
+        case Text.uri_to_path(location["uri"]) do
+          {:ok, path} -> Text.realpath(path)
+          _ -> location["uri"]
+        end
+
+      {canonical, get_in(location, ["range", "start"])}
     end)
   end
 

@@ -292,7 +292,10 @@ defmodule CodingAgent.Tools.LspTest do
 
       def handle(%{"method" => "textDocument/definition", "id" => id, "params" => params}, state) do
         uri = params["textDocument"]["uri"]
-        reply(id, [%{"targetUri" => uri, "targetRange" => range(0, 0, 20), "targetSelectionRange" => range(0, 13, 18)}])
+        link = %{"targetRange" => range(0, 0, 20), "targetSelectionRange" => range(0, 13, 18)}
+        # The same target under a non-canonical path must be reported once.
+        alias_uri = String.replace(uri, "/src/", "/src/../src/")
+        reply(id, [Map.put(link, "targetUri", uri), Map.put(link, "targetUri", alias_uri)])
         state
       end
 
