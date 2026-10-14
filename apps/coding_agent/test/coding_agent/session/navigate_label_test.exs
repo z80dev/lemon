@@ -301,6 +301,15 @@ defmodule CodingAgent.Session.NavigateLabelTest do
 
     path = bind_resume_token(ctx, session)
     stop_supervised!(Session)
+    # Registry drops a dead process's key asynchronously; the provider must see
+    # no live session before the "without a process" assertions run.
+    wait_until(fn ->
+      Registry.lookup(CodingAgent.SessionRegistry, ctx.key) == [] and
+        Registry.select(CodingAgent.SessionRegistry, [
+          {{:_, :"$1", %{session_key: ctx.key}}, [], [:"$1"]}
+        ]) == []
+    end)
+
     {path, ids}
   end
 
