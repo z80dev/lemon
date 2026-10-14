@@ -10,7 +10,7 @@ defmodule CodingAgent.ProcessSessionTest do
   """
   use ExUnit.Case, async: false
 
-  alias CodingAgent.ProcessSession
+  alias CodingAgent.{ProcessManager, ProcessSession, ProcessStore}
 
   import CodingAgent.AsyncHelpers
 
@@ -325,6 +325,299 @@ defmodule CodingAgent.ProcessSessionTest do
       buf_size = :queue.len(state.log_buffer)
       assert buf_size < 100
     end
+  end
+
+  # ============================================================================
+  # Output capture limits
+  # ============================================================================
+
+  describe "output capture limits" do
+    test "byte quotas bound the tail, its store mirror and the artifact for floods, long lines and one oversized chunk",
+         %{process_id: process_id} do
+      {:ok, pid} =
+        ProcessSession.start_link(
+          command: "read line",
+          process_id: process_id,
+          max_retained_bytes: 256,
+          max_artifact_bytes: 1_000
+        )
+
+      {:ok, %{port: port, full_output_path: path}} = ProcessSession.get_state(process_id)
+
+      on_exit(fn ->
+        if ProcessSession.alive?(process_id), do: ProcessSession.stop(process_id)
+        ProcessStore.delete(process_id)
+      end)
+
+      # Port data is injected directly so chunk boundaries are exact.
+      inject = fn chunk -> send(pid, {port, {:data, chunk}}) end
+
+      inject.(String.duplicate("\n", 5_000))
+      assert_capture_bounds(process_id, path, 5_000)
+
+      for _ <- 1..50, do: inject.(String.duplicate("a", 100))
+      assert_capture_bounds(process_id, path, 10_000)
+
+      inject.(String.duplicate("b", 4_999) <> "\n")
+      {output, store_logs} = assert_capture_bounds(process_id, path, 15_000)
+
+      # The newest line remains as a bounded diagnostic tail; the artifact holds the head.
+      assert List.last(store_logs) =~ ~r/\Ab+\z/
+      assert File.read!(path) == String.duplicate("\n", 1_000)
+
+      assert %{artifact_bytes: 1_000, artifact_discarded_bytes: 14_000, artifact_truncated: true} =
+               output
+
+      # Cancelling after the capture limit reports a kill, never completion.
+      assert :ok = ProcessSession.kill(process_id)
+      await_status(process_id, [:killed])
+      assert {:ok, %{status: :killed}, _logs} = ProcessStore.get(process_id)
+
+      ProcessSession.stop(process_id)
+      ProcessStore.delete(process_id)
+      refute File.exists?(path)
+    end
+
+    test "a write failure keeps the tail and the real exit status, and cleanup removes the file",
+         %{process_id: process_id} do
+      {:ok, _pid} =
+        ProcessSession.start_link(
+          command: "read line; echo got-$line; read again",
+          process_id: process_id
+        )
+
+      {:ok, %{output_file: file, full_output_path: path}} = ProcessSession.get_state(process_id)
+
+      on_exit(fn ->
+        if ProcessSession.alive?(process_id), do: ProcessSession.stop(process_id)
+        ProcessStore.delete(process_id)
+      end)
+
+      # Closing the device makes the next write fail, as a lost file descriptor would.
+      :ok = File.close(file)
+      :ok = ProcessSession.write_stdin(process_id, "go\n")
+
+      assert_eventually(fn ->
+        {:ok, state} = ProcessSession.get_state(process_id)
+        state.received_bytes == 7
+      end)
+
+      {:ok, %{port: port, output_file: nil}} = ProcessSession.get_state(process_id)
+      [{pid, _}] = Registry.lookup(CodingAgent.ProcessRegistry, process_id)
+      send(pid, {port, {:data, "diagnostic\n"}})
+      assert {:ok, %{output: stats}} = ProcessSession.poll(process_id)
+      assert stats.received_bytes == 18
+      assert stats.artifact_bytes == 0
+      assert stats.artifact_discarded_bytes == 18
+      assert stats.artifact_size_unknown == false
+      assert File.stat!(path).size == 0
+      :ok = ProcessSession.write_stdin(process_id, "done\n")
+
+      await_finished(process_id)
+
+      assert {:ok, result} = ProcessSession.read_output(process_id)
+      assert %{status: :completed, exit_code: 0, lines: ["got-go", "diagnostic"]} = result
+      assert %{artifact_error: :terminated, artifact_truncated: true} = result.output
+
+      assert {:ok, %{output: %{artifact_error: :terminated}}, ["got-go", "diagnostic"]} =
+               ProcessStore.get(process_id)
+
+      ProcessSession.stop(process_id)
+      ProcessStore.delete(process_id)
+      refute File.exists?(path)
+    end
+
+    test "partial-only updates evict the store mirror and preserve exact byte accounting",
+         %{process_id: process_id} do
+      {pid, port, path} = start_capture(process_id, max_retained_bytes: 8, max_artifact_bytes: 5)
+      send(pid, {port, {:data, "one\nxy"}})
+
+      assert {:ok, %{output: %{received_bytes: 6, retained_bytes: 6, discarded_bytes: 0}}} =
+               ProcessSession.poll(process_id)
+
+      assert {:ok, %{output: %{retained_bytes: 6}}, ["one"]} = ProcessStore.get(process_id)
+
+      send(pid, {port, {:data, "123456"}})
+      assert {:ok, %{partial_line: "6", log_bytes: 7}} = ProcessSession.get_state(process_id)
+      assert {:ok, %{output: %{retained_bytes: 8}}, ["xy12345"]} = ProcessStore.get(process_id)
+
+      # Partial growth alone must also evict the mirrored segment.
+      send(pid, {port, {:data, "7890"}})
+      assert {:ok, %{partial_line: "67890", log_bytes: 0}} = ProcessSession.get_state(process_id)
+
+      assert {:ok, %{output: %{received_bytes: 16, retained_bytes: 5, discarded_bytes: 11}}, []} =
+               ProcessStore.get(process_id)
+
+      send(pid, {port, {:data, "\n"}})
+
+      assert {:ok, %{lines: ["67890"], dropped_lines: 2, output: stats}} =
+               ProcessSession.read_output(process_id)
+
+      assert stats.retained_bytes == 6
+      assert stats.discarded_bytes == 11
+      assert stats.artifact_bytes == 5
+      assert stats.artifact_discarded_bytes == 12
+      assert File.read!(path) == "one\nx"
+
+      ProcessSession.stop(process_id)
+
+      assert {:ok, %{lines: [], output: %{finalized: true}}} =
+               ProcessManager.read_output(process_id)
+    end
+
+    test "a one-byte budget handles empty lines and split newline boundaries",
+         %{process_id: process_id} do
+      {pid, port, path} = start_capture(process_id, max_retained_bytes: 1, max_artifact_bytes: 1)
+      send(pid, {port, {:data, "a"}})
+
+      assert {:ok, %{output: %{retained_bytes: 1, discarded_bytes: 0}}} =
+               ProcessSession.poll(process_id)
+
+      send(pid, {port, {:data, "\nb\n"}})
+
+      assert {:ok, %{lines: [""], dropped_lines: 3, output: stats}} =
+               ProcessSession.read_output(process_id)
+
+      assert stats.received_bytes == 4
+      assert stats.retained_bytes == 1
+      assert stats.discarded_bytes == 3
+      assert stats.artifact_discarded_bytes == 3
+      assert File.read!(path) == "a"
+    end
+
+    test "normal output and exit partials remain compatible at the exact artifact boundary",
+         %{process_id: process_id} do
+      {pid, port, path} =
+        start_capture(process_id, max_retained_bytes: 32, max_artifact_bytes: 10)
+
+      send(pid, {port, {:data, "ok\npar"}})
+      send(pid, {port, {:data, "tial"}})
+
+      assert {:ok, %{lines: ["ok"], output: %{artifact_truncated: false}}} =
+               ProcessSession.read_output(process_id)
+
+      :ok = ProcessSession.write_stdin(process_id, "\n")
+      await_finished(process_id)
+
+      assert {:ok, %{status: :completed, exit_code: 0, lines: ["partial"], output: stats}} =
+               ProcessSession.read_output(process_id)
+
+      assert stats.received_bytes == 10
+      assert stats.retained_bytes == 10
+      assert stats.discarded_bytes == 0
+      assert stats.artifact_bytes == 10
+      assert stats.artifact_discarded_bytes == 0
+      refute stats.artifact_truncated
+      assert File.read!(path) == "ok\npartial"
+      assert Bitwise.band(File.stat!(path).mode, 0o777) == 0o600
+    end
+
+    test "pre-port startup failure removes its file and releases its artifact reservation" do
+      pattern = Path.join(System.tmp_dir!(), "lemon-process-*.log")
+      before = MapSet.new(Path.wildcard(pattern))
+      marker = Path.join(System.tmp_dir!(), "quota-start-#{System.unique_integer([:positive])}")
+      secret = "startup-quota-secret"
+
+      # Invalid launch env fails while preparing Port.open, after opening the
+      # artifact, but before any external command can run.
+      assert {:error, reason} =
+               ProcessManager.exec(
+                 command: "touch #{marker}",
+                 use_lane_queue: false,
+                 env: %{"BROKEN" => {:invalid, secret}},
+                 max_artifact_bytes: 5
+               )
+
+      refute inspect(reason) =~ secret
+      refute File.exists?(marker)
+      assert MapSet.new(Path.wildcard(pattern)) == before
+    end
+
+    test "an invalid configured limit refuses to launch the command" do
+      previous = Application.fetch_env(:coding_agent, :process_output)
+      Application.put_env(:coding_agent, :process_output, max_artifact_bytes: 0)
+
+      on_exit(fn ->
+        case previous do
+          {:ok, value} -> Application.put_env(:coding_agent, :process_output, value)
+          :error -> Application.delete_env(:coding_agent, :process_output)
+        end
+      end)
+
+      marker =
+        Path.join(System.tmp_dir!(), "lemon-limit-probe-#{System.unique_integer([:positive])}")
+
+      assert {:error, {:invalid_process_output_limit, :max_artifact_bytes}} =
+               ProcessManager.exec(command: "touch #{marker}", use_lane_queue: false)
+
+      refute File.exists?(marker)
+      Application.put_env(:coding_agent, :process_output, [])
+
+      for key <- [
+            :max_retained_bytes,
+            :max_artifact_bytes,
+            :max_owner_artifact_bytes,
+            :max_runtime_artifact_bytes
+          ],
+          invalid <- [nil, 0, -1, 1.5, :infinity] do
+        assert {:error, {:invalid_process_output_limit, ^key}} =
+                 ProcessManager.exec(
+                   [command: "touch #{marker}", use_lane_queue: false] ++ [{key, invalid}]
+                 )
+
+        refute File.exists?(marker)
+      end
+
+      # Explicit limits override application defaults.
+      Application.put_env(:coding_agent, :process_output, max_artifact_bytes: 0)
+
+      {:ok, id} =
+        ProcessManager.exec(command: "true", use_lane_queue: false, max_artifact_bytes: 1)
+
+      on_exit(fn -> ProcessManager.clear(id) end)
+    end
+  end
+
+  defp start_capture(process_id, opts) do
+    {:ok, pid} = ProcessSession.start_link([command: "read line", process_id: process_id] ++ opts)
+    {:ok, %{port: port, full_output_path: path}} = ProcessSession.get_state(process_id)
+
+    on_exit(fn ->
+      if ProcessSession.alive?(process_id), do: ProcessSession.stop(process_id)
+      ProcessStore.delete(process_id)
+    end)
+
+    {pid, port, path}
+  end
+
+  # Port messages and calls are handled in order, so these reads observe every
+  # chunk injected before them.
+  defp assert_capture_bounds(process_id, path, received) do
+    assert {:ok, %{logs: logs, output: output}} = ProcessSession.poll(process_id, 10_000)
+
+    {:ok, %{partial_line: partial, max_line_bytes: 255, log_bytes: log_bytes}} =
+      ProcessSession.get_state(process_id)
+
+    held = [partial | logs]
+
+    assert output.retained_bytes <= 256
+    assert Enum.sum(Enum.map(held, &byte_size/1)) <= 256
+    assert log_bytes + byte_size(partial) == output.retained_bytes
+    # Retained lines are copies, not views pinning a whole received chunk.
+    assert Enum.all?(held, &(:binary.referenced_byte_size(&1) == byte_size(&1)))
+    assert output.received_bytes == received
+    assert output.received_bytes == output.retained_bytes + output.discarded_bytes
+
+    # The store holds exactly the session's retained lines, not a second budget.
+    assert {:ok, record, store_logs} = ProcessStore.get(process_id)
+    assert store_logs == Enum.reverse(logs)
+    assert record.output == output
+
+    assert Enum.sum(Enum.map(store_logs, &byte_size/1)) +
+             Enum.sum(Enum.map(held, &byte_size/1)) <= 512
+
+    assert File.stat!(path).size <= 1_000
+    {output, store_logs}
   end
 
   # ============================================================================
