@@ -27,6 +27,9 @@ defmodule CodingAgent.Tools.ReadFormats do
   * `.ipynb` renders indexed markdown/code/raw cells, execution counts, textual
     outputs and errors. `cell` and `cell_limit` select 1-based cells. Binary MIME
     outputs are summarized by MIME type, not embedded as base64 text.
+  * SQLite files (`.db`, `.sqlite`, ...) list tables; `app.db:table`,
+    `app.db:table:key`, `app.db:table?limit=&offset=&where=&order=` and
+    `app.db?q=SELECT ...` give read-only views (see `ReadSqlite`).
   * Raster images use real dimension inspection/downscaling when `sips` is
     available; `image_backend/0` reports preview availability. Small originals
     fall through to the ordinary reader if no preview backend is available.
@@ -47,7 +50,8 @@ defmodule CodingAgent.Tools.ReadFormats do
     ReadFormatText,
     ReadImage,
     ReadNotebook,
-    ReadPdf
+    ReadPdf,
+    ReadSqlite
   }
 
   alias LemonAgent.Types.AgentToolResult
@@ -67,6 +71,10 @@ defmodule CodingAgent.Tools.ReadFormats do
 
         File.regular?(resolved) ->
           dispatch_file(resolved, params, signal, cwd, opts)
+
+        sqlite = ReadSqlite.split_path(resolved) ->
+          {db, sub_path, query} = sqlite
+          ReadSqlite.read(db, sub_path, query, params, signal, opts)
 
         true ->
           case ReadArchive.split_path(resolved) do
@@ -116,6 +124,9 @@ defmodule CodingAgent.Tools.ReadFormats do
 
       ReadImage.supported?(path) ->
         ReadImage.read(path, params, signal, opts)
+
+      ReadSqlite.database?(path) ->
+        ReadSqlite.read(path, "", "", params, signal, opts)
 
       true ->
         :not_supported

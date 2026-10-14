@@ -41,6 +41,7 @@ defmodule CodingAgent.MixProject do
       {:websockex, "~> 0.4"},
       {:req, "~> 0.5"},
       {:readability, "~> 0.12"},
+      {:exqlite, "~> 0.34.0"},
       {:floki, "~> 0.38"},
       {:httpoison, "~> 3.0", override: true}
     ]

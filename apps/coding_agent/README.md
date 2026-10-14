@@ -172,6 +172,15 @@ image previews (maximum dimension 1568 by default) with original/preview
 dimensions and an animation first-frame notice; original bytes remain untouched.
 Input, extraction, preview, and displayed-output limits bound memory use.
 
+**SQLite reads.** `read` opens `.db`/`.sqlite`/`.sqlite3`/`.db3` files that carry
+the SQLite header read-only (`SQLITE_OPEN_READONLY` plus `PRAGMA query_only`):
+`app.db` lists tables and views with row counts, `app.db:users` shows the schema
+and five sample rows, `app.db:users?limit=20&offset=40&where=age>30&order=name`
+pages rows (limit ≤ 500), `app.db:users:42` shows one row by single-column
+primary key or rowid, and `app.db?q=SELECT ...` runs one query capped at 1000
+rows. `where`/`order`/`q` reject comments, extra statements and write/attach/
+pragma keywords; queries are interrupted after 10 seconds.
+
 **Path line selectors.** `read` also accepts a trailing selector in `path`:
 `file:50-80` (inclusive), `file:50+20` (20 lines from 50), `file:50` or
 `file:50-` (from line 50), `file:-30` (last 30 lines), and `:raw` alone or

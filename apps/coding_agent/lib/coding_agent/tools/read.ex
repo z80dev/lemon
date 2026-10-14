@@ -45,7 +45,8 @@ defmodule CodingAgent.Tools.Read do
     %AgentTool{
       name: "read",
       description:
-        "Read files, directories, archives (archive.zip:member), PDFs, notebooks, and images. " <>
+        "Read files, directories, archives (archive.zip:member), PDFs, notebooks, images, and SQLite databases " <>
+          "(app.db lists tables; app.db:table, app.db:table:key, app.db:table?limit=&offset=&where=&order=, app.db?q=SELECT ...). " <>
           "Text files include a snapshot tag and 1-based lines; prefer edit with snapshot + edits " <>
           "to change line ranges without copying old text. Use offset/limit or a path selector " <>
           "(file:50-80, file:50+20, file:50 from line 50, file:-30 last 30 lines, file:raw or " <>
