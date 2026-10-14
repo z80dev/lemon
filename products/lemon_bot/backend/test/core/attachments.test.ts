@@ -99,7 +99,16 @@ describe('immutable completed attachments', () => {
         const part = await service.serve(ticket, new Request(download.url, { headers: { Range: range } }));
         expect(part.status).toBe(416); expect(part.headers.get('Content-Range')).toBe('bytes */10'); expect(await part.text()).toBe('');
       }
-      f.store.put('conversations', f.services.update(f.conversation, { name: 'Changed' }));
+      const entry = f.services.entry(f.user, f.conversation.id, { kind: 'message', role: 'assistant', text: 'Chat continues during playback', streaming: false, attachmentIds: [] });
+      const conversation = f.store.require<P.Conversation>('conversations', f.conversation.id);
+      expect(conversation.lastEntryId).toBe(entry.id);
+      f.store.put('conversations', f.services.update(conversation, { name: 'Changed', unreadCount: 9, lastReadSeq: entry.seq }));
+      f.store.put('bots', f.services.update(f.bot, { name: 'Renamed', job: 'Updated job', machineId: 'moved_machine', sidebar: { ...f.bot.sidebar, pinned: true } }));
+      const user = f.store.require<P.User>('users', f.user.userId);
+      f.store.put('users', f.services.update(user, { displayName: 'New display name', preferences: { ...user.preferences, appearance: 'dark' } }));
+      const continued = await service.serve(ticket, new Request(download.url, { headers: { Range: 'bytes=4-6' } }));
+      expect(continued.status).toBe(206); expect(await continued.text()).toBe('456');
+      f.store.put('conversations', f.services.update(conversation, { humanUserIds: [...conversation.humanUserIds, f.other.userId] }));
       await expect(service.serve(ticket, new Request(download.url))).rejects.toMatchObject({ code: 'forbidden' });
       const replacement = service.download(f.user, attachment.id); const replacementTicket = replacement.url.split('/').pop()!;
       f.store.put('sessionSecrets', { id: f.user.sessionId!, revoked: true });

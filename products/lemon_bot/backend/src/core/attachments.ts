@@ -198,14 +198,24 @@ export function createAttachmentService(services: BackendServices): StoredAttach
     if (attachment.state !== 'ready') fail('not_found', 'Attachment has been deleted.');
     return attachment;
   };
-  const aclDigest = (user: Principal, attachment: P.Attachment) => services.mutations.digest({
-    principal: user, attachment: { id: attachment.id, revision: attachment.revision },
-    user: services.auth.user(user.userId), member: services.auth.member(user.userId),
-    workspace: services.store.get<P.Workspace>('workspaces', user.workspaceId),
-    conversation: attachment.conversationId ? services.auth.conversation(user, attachment.conversationId) : null,
-    bot: attachment.botId ? services.auth.bot(user, attachment.botId) : null,
-    aclRevision: services.store.metadata('aclRevision'),
-  });
+  const aclDigest = (user: Principal, attachment: P.Attachment) => {
+    const member = services.auth.member(user.userId);
+    const workspace = services.store.get<P.Workspace>('workspaces', user.workspaceId);
+    const conversation = attachment.conversationId ? services.store.get<P.Conversation>('conversations', attachment.conversationId) : null;
+    const botIds = [...new Set([...(conversation?.botIds ?? []), ...(attachment.botId ? [attachment.botId] : [])])].sort();
+    return services.mutations.digest({
+      principal: { kind: user.kind, id: user.id, userId: user.userId, workspaceId: user.workspaceId },
+      attachment: { id: attachment.id, revision: attachment.revision, state: attachment.state, ownerUserId: attachment.ownerUserId, conversationId: attachment.conversationId, botId: attachment.botId },
+      member: { id: member.id, userId: member.userId, enabled: member.enabled, role: member.role },
+      workspace: workspace ? { id: workspace.id, enabled: workspace.enabled } : null,
+      conversation: conversation ? { id: conversation.id, kind: conversation.kind, ownerUserId: conversation.ownerUserId, humanUserIds: [...conversation.humanUserIds].sort(), botIds: [...conversation.botIds].sort() } : null,
+      bots: botIds.map(botId => {
+        const bot = services.store.get<P.Bot>('bots', botId);
+        return bot ? { id: bot.id, ownerUserId: bot.ownerUserId, managerUserIds: [...bot.managerUserIds].sort(), visibility: bot.visibility, published: bot.published, avatarAttached: bot.avatar.attachmentId === attachment.id, referenceAttached: bot.referenceAttachmentIds.includes(attachment.id) } : { id: botId, missing: true };
+      }),
+      aclRevision: services.store.metadata('aclRevision'),
+    });
+  };
   const referenced = (attachmentId: string) => {
     if (services.store.list<P.Bot>('bots', b => b.avatar.attachmentId === attachmentId || b.referenceAttachmentIds.includes(attachmentId)).length) return true;
     if (services.store.list<P.ComposerDraft>('composerDrafts', d => d.attachmentIds.includes(attachmentId)).length) return true;
