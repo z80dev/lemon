@@ -1,5 +1,12 @@
 # Changelog
 
+## Owner assistant cutover
+
+- Migrate to canonical named owner-only Bot/conversation/memory/skill/connector types. Remove obsolete cross-human group departure callers; retain own-Bot group admission and unknown-outcome reconciliation.
+- Add strict `parsePairUrl` returning canonical `PairingLink`, with bounded exact-origin HTTPS/loopback validation and no credential-bearing URL acceptance or secret echo in errors.
+- Add actual pairing boundary tests for owner issuance/approval/read state, anonymous preview/claim/completion, fixed nonces, no automatic replay and nullable device-bound session expiry.
+- Treat canonical non-consuming pairing preview POST as a read for interrupted-response errors; all real mutation unknown-outcome, URL isolation and authoritative realtime cursor behavior remains unchanged.
+
 ## 1.0.0
 
 - Canonical typed product REST calls derive path parameters, body, query and responses directly from RestEndpoints; SCIM media/If-Match, hook prefixes, OIDC redirects and binary responses retain their transport exceptions.
@@ -8,5 +15,5 @@
 - Realtime authenticates before correlated subscriptions, resets from atomic snapshots, serializes async event/frame application and persistence before acknowledgment, resumes bigint cursors and terminal output only, and exposes heartbeat/auth/revocation lifecycle states.
 - Revision-aware resource merging and offset-safe transcript reduction reconcile missing text with authoritative GET rather than blind append.
 - Mixed group receipts preserve proven rejected targets separately from admitted work. Refusal errors retain saved entry/run IDs and nonce for GET-only reconciliation; no refused target is automatically retried.
-- Add canonical own-member group departure and identity-specific membership-loss event consumption, plus Owner-only read-only account teardown observation. Consumer tests preserve successor bodies, fixed conflict IDs, no automatic replay and separate product/provider cleanup outcomes.
+- Add Owner-only read-only account teardown observation, preserving fixed conflict IDs and separate product/provider cleanup outcomes without automatic mutation replay.
 - Consumer boundary tests cover fetch serialization/binary/errors/unknowns, voice, realtime ordering/reset/reconnect/auth/heartbeat, terminal reattachment and no mutation replay. Verification commands are provided for the integrating lead; they were not run during parallel slice implementation.

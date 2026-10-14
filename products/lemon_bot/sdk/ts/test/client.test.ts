@@ -228,40 +228,6 @@ describe('typed client at the fetch boundary', () => {
     expect(boundary.requests.map(request => request.method)).toEqual(['POST', 'GET']);
   });
 
-  test('explicit group departure sends the chosen successor and receives raw Empty', async () => {
-    const body = { clientNonce: nonce(), newOwnerUserId: 'remaining_human' };
-    const boundary = fetchBoundary(async request => {
-      expect(request.method).toBe('POST');
-      expect(new URL(request.url).pathname).toBe('/v1/conversations/group%20id/leave');
-      expect(await request.json()).toEqual(body);
-      return Response.json({ ok: true });
-    });
-    const client = new LemonBotClient({ baseUrl: origin, token: 'own-session', fetch: boundary.clientFetch });
-    expect(await client.call('POST /conversations/:id/leave', { params: { id: 'group id' }, body })).toEqual({ ok: true });
-    expect(boundary.requests).toHaveLength(1);
-  });
-
-  test('group leave conflict keeps fixed run IDs for reads and does not replay after terminal evidence', async () => {
-    const body = { clientNonce: nonce() };
-    const stopped: Run = { id: 'owned_run', revision: 2, createdAtMs: 1, updatedAtMs: 3, conversationId: 'group_1',
-      botId: 'bot_1', initiatorUserId: 'user_1', clientNonce: 'original_work_nonce', status: 'cancelled',
-      error: null, startedAtMs: 1, completedAtMs: 3, routineRunId: null };
-    const boundary = fetchBoundary(request => {
-      if (request.method === 'POST') return Response.json({ error: {
-        code: 'conflict', message: 'Owned work is not yet terminal; membership retained.',
-        requestId: 'leave_1', retrySafe: false, details: { runIds: ['owned_run'] },
-      } }, { status: 409 });
-      expect(new URL(request.url).pathname).toBe('/v1/runs/owned_run');
-      return Response.json(stopped);
-    });
-    const client = new LemonBotClient({ baseUrl: origin, fetch: boundary.clientFetch });
-    await expect(client.call('POST /conversations/:id/leave', { params: { id: 'group_1' }, body })).rejects.toMatchObject({
-      code: 'conflict', outcomeUnknown: false, requestId: 'leave_1', clientNonce: body.clientNonce,
-      resourceIds: ['owned_run', 'group_1'],
-    });
-    expect((await client.call('GET /runs/:id', { params: { id: 'owned_run' } })).status).toBe('cancelled');
-    expect(boundary.requests.map(request => request.method)).toEqual(['POST', 'GET']);
-  });
 
   test('Owner cleanup observation is read-only and preserves distinct product/provider uncertainty', async () => {
     const record: AccountTeardown = {

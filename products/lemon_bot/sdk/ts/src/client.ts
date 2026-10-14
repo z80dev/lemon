@@ -138,7 +138,7 @@ export class LemonBotClient {
       headers.set('Content-Type', scim ? 'application/scim+json' : 'application/json');
     }
     if (options.range) headers.set('Range', rangeHeader(options.range));
-    const mutation = method !== 'GET';
+    const mutation = method !== 'GET' && key !== 'POST /pairings/preview';
     const requestBody = options.body;
     const clientNonce = requestBody && typeof requestBody === 'object' && 'clientNonce' in requestBody
       && typeof requestBody.clientNonce === 'string' ? requestBody.clientNonce : undefined;

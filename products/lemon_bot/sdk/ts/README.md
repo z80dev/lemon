@@ -1,6 +1,6 @@
 # Lemon Bot TypeScript SDK
 
-Dependency-free browser/Bun REST and realtime client for the product backend, not the Lemon operator socket. Wire types are imported and reexported directly from `../../contracts/protocol.ts`; there is no second endpoint catalog, demo data, offline mutation queue or automatic mutation retry. This workspace package exports TypeScript source for Bun and bundlers.
+Browser/Bun REST and realtime client for the owner-only product backend, not the Lemon operator socket. Explicit named wire types are imported and reexported directly from `../../contracts/protocol.ts`; there is no second endpoint catalog, demo data, offline mutation queue or automatic mutation retry. This workspace package exports TypeScript source for Bun and bundlers. Every live Bot belongs only to its human owner; workspace/admin roles never grant another user's live Bot, history or credentials.
 
 ## REST and explicit intent
 
@@ -46,9 +46,50 @@ try {
 }
 ```
 
-`LemonBotError` exposes `code`, `message`, `requestId`, `status`, `retrySafe`, `details`, `outcomeUnknown`, `clientNonce`, `resourceIds`, `currentRevision` and `currentResource`. `status:0` means no HTTP response. Reserved IDs and server details survive errors. A network loss or unreadable receipt after mutation dispatch is `outcome_unknown`, with `retrySafe:false`; an authoritative 2xx receipt containing an unknown outcome is also rejected as `LemonBotError`, with its receipt in `currentResource`. A signal already aborted before dispatch is not an unknown mutation. Offline/read errors reject and never become empty collections. `retrySafe` is server information, not permission for the SDK to repeat anything. Reconciliation is explicit GET only; unknown resource/run states remain unknown until verified.
+`LemonBotError` exposes `code`, `message`, `requestId`, `status`, `retrySafe`, `details`, `outcomeUnknown`, `clientNonce`, `resourceIds`, `currentRevision` and `currentResource`. `status:0` means no HTTP response. Reserved IDs and server details survive errors. A network loss or unreadable receipt after mutation dispatch is `outcome_unknown`, with `retrySafe:false`; an authoritative 2xx receipt containing an unknown outcome is also rejected as `LemonBotError`, with its receipt in `currentResource`. A signal already aborted before dispatch is not an unknown mutation. Offline/read errors reject and never become empty collections. `retrySafe` is server information, not permission for the SDK to repeat anything. Ordinary resource reconciliation is explicit GET only; the documented pairing issuance/completion receipt reconciliations require a separate explicit same-nonce request. Unknown resource/run states remain unknown until verified.
 
-A mixed group receipt may contain `delivery.effectiveMode:"rejected"` while other targets are admitted. That is a successful typed receipt, not blanket uncertainty: inspect the referenced `receipt.runs` row's actual error. A proven zero-admission error remains its policy/machine refusal and may carry saved `entryIds`/`runIds` in details; `resourceIds` includes these IDs, and the original nonce remains available for GET reconciliation. Correcting a prerequisite does not automatically resend the recorded message or admitted targets.
+A mixed **own-Bot group** receipt may contain `delivery.effectiveMode:"rejected"` while other owned targets are admitted. That is a successful typed receipt, not blanket uncertainty: inspect the referenced `receipt.runs` row's actual error. A proven zero-admission error remains its policy/machine refusal and may carry saved `entryIds`/`runIds` in details; `resourceIds` includes these IDs, and the original nonce remains available for GET reconciliation. Correcting a prerequisite does not automatically resend the recorded message or admitted targets. Groups have one human owner and 2–6 Bots owned by that same user; no human membership/leave/transfer or Team DM wire remains.
+
+## Desktop-to-iPhone pairing
+
+```ts
+import { LemonBotClient, nonce, parsePairUrl, type PairingIssued } from '@lemon-bot/sdk';
+
+// Existing authenticated owner client: the browser keeps its ordinary product session.
+const startNonce = nonce();
+const issued: PairingIssued = await ownerClient.call('POST /pairings', {
+  body: { clientNonce: startNonce },
+});
+// Render issued.pairUrl locally as a real QR, in transient screen memory only.
+const requests = await ownerClient.call('GET /pairings'); // Pairing[], safe state only
+const pending = requests.find(request => request.status === 'pending_approval');
+if (pending?.verificationCode) {
+  // Only after the owner explicitly compares the phone's six-digit code:
+  const approveNonce = nonce();
+  await ownerClient.call('POST /pairings/:id/approve', {
+    params: { id: pending.id },
+    body: { clientNonce: approveNonce, revision: pending.revision,
+      verificationCode: pending.verificationCode },
+  });
+}
+
+// Phone/native consumers parse strictly and use an anonymous client for public steps.
+const link = parsePairUrl(scannedLink);
+const phoneClient = new LemonBotClient({ baseUrl: link.backendUrl });
+const preview = await phoneClient.call('POST /pairings/preview', {
+  body: { pairCode: link.pairCode, workspaceId: link.workspaceId },
+});
+// Show preview.clusterName and exact preview.backendUrl before explicit Claim.
+```
+
+`parsePairUrl` returns canonical named `PairingLink`. It accepts only bounded `lemonbot://pair` links with exactly one `backend`, `cluster` and 43-character base64url `code`; no credentials, arbitrary route, fragment or additional query keys. Backend must be an exact HTTPS origin; loopback HTTP is only for same-machine development/Simulator. Tailscale reachability is a deployment prerequisite, never inferred from QR content. A localhost QR does not connect a physical iPhone to a desktop's localhost.
+
+Preview is explicitly non-consuming, nonce-free read data despite using POST. Interrupted preview produces a read error, not an uncertain mutation. Claim, approval, denial, completion and revocation use explicit fixed mutation nonces. Owner refresh/polling uses only GET. Safe owner pairing resources/events never contain QR secret, claim token or session token. Never persist/log `pairUrl` or use an external QR image service; it exists only until claim, original five-minute expiry or the issuing screen closes. An explicit owner reconciliation can request the original issuance receipt with the **same** issuance nonce until that original deadline; it cannot extend expiry or reuse a consumed code. The SDK never performs that POST on its own.
+
+Phone completion retains one fixed `PairingComplete.clientNonce` across pending observation and lost connected receipt reconciliation. Canonical `PairingCompletion` returns pending/denied/expired, or connected with the same device and product session. Private receipt replay is bounded to the original five-minute pairing deadline; a later attempt must re-pair. The resulting `AuthSession.expiresAtMs === null` means **until revoked**, not unknown/expired: show that coherently in device/session lists. Revoke through existing device/session endpoints; no refresh-token plane. Consumers store a paired phone's own bearer privately (Keychain on iOS), not the owner's browser token.
+
+No Team Bot visibility/managers/publish/live team-copy, Team-scoped memory/skills or shared connector/ConnectorConsent/connector_grant contracts remain. Owner OAuth authorization and native capability/tool-policy review still apply. Declarative Workspace/Public templates create separate reviewed owned copies, not access to the publisher's live Bot. Existing explicitly configured operator/admin APIs remain wire-compatible but are not first-run assistant prerequisites.
+
 
 ## Real attachment bytes and voice
 
@@ -128,6 +169,5 @@ bun run test
 
 Consumer tests exercise encoded REST requests, revisions/nonces/errors, actual multipart and binary/range responses, signed-origin credential isolation, voice upload/STT, uncertain outcomes and GET reconciliation, ordered async socket application/persistence/ack, cursor reset/reconnect/auth revocation, heartbeat and terminal reattachment without mutation replay. No source-text/wiring assertions. These commands were not run in the parallel implementation slice; the integrating lead owns verification.
 
-Group departure uses `POST /conversations/:id/leave` with the caller's fixed nonce and an explicit existing human successor only when the caller is creator. Conflict run IDs remain available in `LemonBotError.resourceIds` for GET inspection; terminal evidence never triggers an automatic Leave replay. Consumers handle `conversation.left` by its exact user ID, not as global conversation deletion.
 
 Owner account-cleanup observation uses only canonical `GET /account-teardowns` and `GET /account-teardowns/:id`. Recorded provider `outcome_unknown` remains typed read data, distinct from completed product cleanup; the SDK never interprets the ledger as authorization to repeat account deletion or provider revocation.

@@ -1,20 +1,71 @@
 # Lemon Bot web
 
-A separate React/Vite product client, not Lemon Web or the TUI. The Bot roster is the primary navigation: named teammates with a durable job and an assigned machine. A calm, inspectable companion anchor links to Identity, Job, Memory, Activity, Upcoming, Ideas and effective grants. All normal content comes from the product backend through `@lemon-bot/sdk`; there is no demo seed, virtual desktop or screen-streaming path.
+A separate React/Vite assistant client, not Lemon Web or the TUI. Your named Bots run on your own desktop or swarm hosts. The browser uses native Lemon Bot product APIs through `@lemon-bot/sdk`; no terminal automation, demo data, virtual desktop or screen-streaming path.
 
 ## Run
 
-From the repository root, after starting the separately configured real backend:
+From the repository root, with the real product backend configured and running:
 
 ```sh
 bun --cwd products/lemon_bot/web install
 bun run --cwd products/lemon_bot/web dev
 ```
 
-Development listens on `http://127.0.0.1:4081`. Vite proxies `/v1` (including the product realtime socket), `/hooks` and `/mcp` to `http://127.0.0.1:4080`. Override the development target with `LEMON_BOT_DEV_BACKEND`. A saved account may select a different trusted HTTPS product backend; that deployment must explicitly allow this frontend origin for REST and WebSocket connections. Never enter the Lemon control-plane URL or operator token.
+Development listens on `http://127.0.0.1:4081`. Vite proxies `/v1` (including realtime), `/hooks` and `/mcp` to `http://127.0.0.1:4080`. Override the development target with `LEMON_BOT_DEV_BACKEND`. A saved owner account can select a trusted HTTPS backend; that deployment must allow this frontend origin for REST and WebSocket connections. Never enter the Lemon control-plane URL or operator token.
+
+Production assets are emitted to `web/dist`; the backend serves them outside `/v1`. Use HTTPS except for loopback development. If using a configured OIDC provider, register the exact frontend redirect URLs used by account sign-in and account linking. PKCE verifiers remain in the current browser tab. Swarm credentials remain server-side.
+
+## First use
+
+1. Connect to your product backend. An empty deployment requests the one-time owner setup code printed in its operator terminal. Otherwise sign in to your owner account.
+2. Attach your host using its **server-issued**, one-use join command. Run it on the destination and wait for verified online status. Configure the host's actual provider authentication and supervise its worker. Copying a command does not prove enrollment.
+3. Create a named Bot with a focused job on that host, or review a template to create a separate owned copy. Co-resident Bots share the OS user's files, browser sessions and CLI credentials; personas are not host isolation.
+4. Open its chat and give it a concrete task. Text, references, real files and explicit voice input use placed conversations. Stop requests cancel a real run; only its terminal cancelled state proves it stopped, and prior external effects are not undone.
+
+There is no Team Bot publishing, manager assignment, live other-user Bot access, cross-human room membership, Team memory/skills or shared connector authority. Workspace/Public templates contain reviewed declarative content and always create a separate owned Bot, never access to the publisher's live Bot or credentials.
+
+## Connect iPhone from a desktop browser
+
+Open **Connect iPhone** in the roster or Settings. Explicitly create a five-minute, one-use pairing QR. The QR encodes the backend's actual `pairUrl`, not your browser session or an operator credential. It is rendered locally with `qrcode.react`; no QR image service receives the link.
+
+The backend must advertise its reachable HTTPS public URL. Tailscale Serve is the recommended deployment when desktop and iPhone already have Tailscale reachability. This screen does not provision Tailscale, discover an overlay, or prove phone reachability. A localhost QR works only for same-machine development/Simulator; it cannot connect a physical iPhone to the desktop's localhost.
+
+Scan in Lemon Bot for iOS, inspect the exact cluster and backend origin, then request connection. The browser shows the pending device name, expiry and verification code. Compare that code with the phone and explicitly **Approve** or **Deny**. Approval gives the phone its own device-bound product session, not the browser's session. The paired session lasts **until revoked** (`expiresAtMs: null`). Revoke the device here or revoke its session under Account. Reopening iOS restores its Keychain-backed connection; offline phone state is not permission to replay mutations.
+
+Only explicit button actions mutate pairing/device state. Refresh and polling use GET only. A lost mutation receipt retains its fixed nonce and safe resource metadata in the authenticated tab's session storage and fences another consequential intent until authoritative reconciliation. For a lost QR issuance receipt, a separately labelled explicit action requests the original receipt with the **same** issuance nonce until the original five-minute deadline; it never extends expiry, creates another session or makes a consumed code reusable. Pair URLs exist only in the mounted screen's memory and disappear on claim, expiry, navigation or logout. Safe pending resources contain no QR secret. Nothing stores QR or pairing credentials in public caches, logs, account metadata or URLs belonging to the web app.
+
+## Assistant destinations
+
+- **Bots / chat:** named Bots, Identity/Job/Memory, own conversations/tasks, attributed streaming transcript, tool activity, typed cards, structured questions, masked secrets, human steps, run-bound approvals and reviewed editable drafts.
+- **Hosts & files:** real enrollment/repair/capabilities, privileged file access and transfers, explicit interactive VT terminal, write-only secrets and reviewed host operations. Host process execution and interactive terminals remain distinct.
+- **Memory / skills / routines:** owner memory corrections and reviewed imports, provisioned skills, schedule/webhook/channel/external-event routines with actual tests and run history.
+- **Inbox / activity / upcoming:** real decisions, notifications, work outcomes, reminders and exact-resource navigation.
+- **Settings:** owner account/password/sessions/devices, cluster identity, appearance, notifications/voice, policies, usage/spend limits and necessary provider/network/host configuration. Ordinary chat does not require directory, SCIM or enterprise setup.
+- **Connections:** machine-labelled MCP setup/tool controls/account consent, real channel install/link flows, email availability/approval/claim/read/search and X account setup. Unconfigured providers show their actual prerequisites, never fake connected state.
+
+The canonical [API](../contracts/api.md), [cards](../contracts/cards.md) and [coverage](../contracts/coverage.md) define wire schemas, ACLs, state machines and provider prerequisites. This guide does not claim exercised coverage.
+
+## Keyboard and accessibility
+
+Cmd/Ctrl K opens commands and search; Cmd/Ctrl Shift F searches Bots; Cmd/Ctrl N creates a Bot; Cmd/Ctrl B opens the compact roster; Cmd/Ctrl comma opens settings; Cmd/Ctrl Shift comma opens Bot settings; Cmd/Ctrl 1–9 selects visible Bots. Composer Enter sends and Shift Enter adds a line. Every shortcut has on-screen equivalents. Input fields and native browser-reserved shortcuts are not hijacked. Small screens use a roster drawer and responsive file/terminal layouts. Light/dark/system appearance, labelled controls, visible focus, semantic notices, skip navigation and reduced-motion styling are built in.
+
+## Credential, cache, voice and unknown-outcome boundaries
+
+Bearer sessions use tab-scoped session storage, not URLs or local-storage account lists. Saved backend/email/cluster chooser metadata contains no bearer. Private state is fetched after login and replaced on authoritative sync. Realtime revocation closes the authenticated workspace. Downloads use short-lived authorized tickets, not persisted file identities. HTML/document snapshots never gain app-origin scripting authority. The service worker caches no private API responses; push clicks navigate and authenticated reads reconcile the exact resource.
+
+Text/document previews are bounded to 8 MiB; table views bound rows/columns and do not evaluate formulas. The authorized unchanged original remains downloadable. Conversion errors and unsupported formats show explicit errors, not synthetic documents.
+
+Microphone capture begins only after explicit action, has stop/cancel controls and releases tracks. Dictation is reviewable **unsent** text. Active voice chat uses STT → ordinary message/run stream → TTS. Local browser speech fallbacks are labelled; backend audio providers are separately advertised capabilities. Background or lock-screen microphone continuity is not promised.
+
+No mutation is automatically replayed after a lost response. Unknown outcomes retain draft input and fixed nonce/resource IDs, fence consequential intents and offer read-only reconciliation. Revisions bind edits. Destructive dialogs disclose exact affected/retained scope, expire, require typed confirmation and remain mounted until acknowledgment. Offline destructive actions and approvals are never queued. Read failures are errors, not synthetic empty lists or success. Realtime cursors are acknowledged only after authoritative event application; refresh never treats a watermark as a replacement snapshot.
+
+Owner account cleanup distinguishes product cleanup from actual provider receipt state, error and observation time. Ledger refresh cannot retry deletion/provider revocation or restore a deleted-user login.
+
+## Central integration checks
+
+Implementation workers do not run these gates:
 
 ```sh
-# Central integration checks; implementation workers do not run these gates.
 bun --cwd products/lemon_bot/sdk/ts install
 bun run --cwd products/lemon_bot/sdk/ts check
 bun run --cwd products/lemon_bot/sdk/ts test
@@ -22,50 +73,4 @@ bun run --cwd products/lemon_bot/web check
 bun run --cwd products/lemon_bot/web build
 ```
 
-Production assets are emitted to `web/dist`; the backend serves those files outside `/v1`. Serve the app and service worker over HTTPS (loopback development is the only HTTP exception). For OIDC, register the frontend's exact same-origin redirect URLs, including `/`, `/?screen=settings.account` and `/?screen=settings.identity`, with the backend operator. Provider callbacks convey one-time completion codes; PKCE verifiers remain transient in the current browser tab. Swarm credentials stay server-side.
-
-## First use
-
-1. Choose the product backend. An empty deployment asks for the one-time owner setup code printed in its operator terminal; existing members sign in locally, accept an invitation, or use an actually configured OIDC provider.
-2. Attach a trusted machine. Copy its **server-issued**, one-use join command, run it on the destination, and wait for real verified online status. Copying a command does not prove enrollment. Configure that host's own provider authentication and supervise its worker.
-3. Create a focused named Bot on that online machine, using a suggested job, custom role or reviewed template. Co-resident Bots share the OS user's files, browser logins and CLI credentials; personas are not host isolation.
-4. Give it a concrete task. Text, references, actual files and explicit voice inputs use normal placed conversations. Stop cancels a real run; only a terminal cancelled state proves it stopped, and prior external effects are not undone.
-
-## Product destinations
-
-- Roster: pins, sections/rank/collapse, hidden and unread projections, groups and durable attention. Hide does not stop work.
-- Conversations: incremental attributed transcript, tools and the complete typed card taxonomy, structured questions, masked secrets, human steps, scoped approvals, exact editable drafts with Send/Discard, reactions/replies/feedback, independent task conversations, composer drafts and real attachments.
-- Bots: creation, Identity/Job/Memory, avatar crop/upload/generation, voice sample, owner/manager/team publication, duplicate, explicit selected Team copy, reviewed template publication/import, assigned-machine move and scoped reset/deletion previews.
-- Machines: actual enrollment/repair state, host measurements, capabilities/OS grants, privileged files and chunked transfers, real xterm VT PTY, names-only write-only secret management, access users, detach, configured owned-host operation preview and server progress.
-- Work: provisioned skills, schedule/webhook/channel/external-event routines with real tests and run history, exact event filter schemas, machine-labelled MCP setup/tool controls/account consent, real channel install/link flows, email availability/approval/claim/read/search and X OAuth/main-Bot mention setup.
-- Memory: personal/team/private-note scopes, corrections, forget previews, reviewed import candidates with provenance/exclusions and explicit selection, export, inspectable preference changes and conflict-safe Undo.
-- Settings: account/appearance/password/sessions/devices and deletion reauthentication; workspace/ownership/members/invites; notification/push/mic/voice; effective policy and required/personal rules; usage/nullable pricing and spend limits; OIDC/SCIM/directory; network desired/applied revisions and egress; reviewed host setup and redacted runs; export destinations, explicit participant consent and historical export artifacts.
-- Search, palette, Inbox, Activity and Upcoming route to exact authorized resources. Ideas only draft prompts. Verified milestones are small and nonblocking; reduced motion has a static alternative.
-
-The canonical [API](../contracts/api.md), [cards](../contracts/cards.md), and [coverage](../contracts/coverage.md) define schemas, ACLs, state machines and provider prerequisites; this README does not duplicate those contracts or claim exercised coverage.
-
-## Keyboard and accessibility
-
-Cmd/Ctrl K opens commands and visible-workspace search. Cmd/Ctrl Shift F searches Bots; Cmd/Ctrl N creates a teammate; Cmd/Ctrl B opens the compact roster; Cmd/Ctrl comma opens settings; Cmd/Ctrl Shift comma opens Bot settings; Cmd/Ctrl 1–9 selects visible roster Bots. Composer Enter sends and Shift Enter adds a line; explicit on-screen controls provide equivalents. Input fields and native browser-reserved shortcuts are not hijacked. Phone web uses a compact roster drawer, the same API editors/actions under ACL, and responsive preview/terminal layouts. Light/dark/system appearance, labelled controls, visible focus, semantic status/error notices, skip navigation and reduced-motion styling are built in.
-
-Appearance also applies to pre-login forms: body text and field labels use the active light/dark foreground rather than a fixed light-theme color.
-
-## Credential, voice, cache and unknown-outcome boundaries
-
-Bearer sessions use tab-scoped session storage, not URLs or local-storage account lists. Saved backend/email/workspace chooser metadata contains no bearer. Private state is fetched after login and replaced on authoritative sync; WebSocket revocation closes the workspace. Downloads are short-lived authorized tickets, not persisted file identities. HTML/document snapshots never gain app-origin scripting authority.
-
-Text/document previews are bounded to 8 MiB; table views bound rows/columns and never evaluate formulas. The authorized unchanged original remains downloadable. Document/HTML conversion errors and unsupported slide formats are shown explicitly rather than replaced with synthetic renderings.
-
-Microphone capture starts only after explicit action, has visible stop/cancel controls and releases tracks. Dictation is reviewable **unsent** text; active voice chat explicitly uses STT → normal message/run stream → TTS. Web Speech/on-device synthesis are labelled local fallbacks, backend audio providers are separately advertised capabilities, and voice memos persist real backend audio. Neither ambient listening nor background/lock-screen browser microphone continuity is promised.
-
-Web Push registration is explicit and uses the actual owned browser installation and published VAPID key. `/service-worker.js` caches no private API responses; notification clicks navigate and authenticated fetch reconciles the exact target. OS permission, backend provider configuration and Bot notification preferences are separate states.
-
-No mutation is automatically replayed after a lost response. Unknown outcomes retain input and diagnostic nonce/reserved resource IDs, fence subsequent consequential intents, and offer read-only reconciliation. Revisions bind edits; destructive dialogs show exact affected and retained scope, expire, require typed confirmation and stay mounted until the parent receives an acknowledged result. Offline destructive actions and approvals are never queued. Read failures are errors, never synthetic empty lists or success. Unconfigured provider/host screens surface actual discovery prerequisites rather than claiming connected or applied state.
-
-Unknown errors remain inputs to the shared diagnostic notice; only boolean conditions control surrounding notices and reconciliation buttons. Provider filter variants are narrowed to JSON objects before the guided editor reads schema fields; typed boolean, null, primitive and array values, required fields and separate human broad-listener consent are retained.
-
-Mixed group admission is shown per Bot: admitted targets keep their real started/queued/steering status, and `rejected` targets show the referenced failed Run’s actual bounded reason and request ID. A zero-admission refusal that persisted the original user entry retains the nonce for read-only reconciliation instead of a duplicate send. After prerequisites are corrected, a new explicit reviewed message may address only the refused targets; admitted work is not replayed.
-
-Group details offer explicit own-member Leave with an existing enabled human successor chosen by the creator, or previewed deletion for the last human. Conflicting active/delegated work retains membership and fixed run IDs for authoritative terminal-state reads; cancellation acknowledgment alone is insufficient. Own `conversation.left` events clear that room’s local state and navigation, while another member’s departure retains the room.
-
-Workspace Owners can inspect the canonical `/account-teardowns` list/detail from Account cleanup. Product cleanup, actual per-provider receipt states, errors and observation times remain separate. Status refresh is read-only: no Delete retry, provider revocation replay, private-content access or deleted-user login restoration. A deletion request retains only safe operation/user/request diagnostics for Owner handoff after session revocation, separately from cleared credential/session caches. Pending X authorization renders unverified identity explicitly; retained verified handles in failed/needs-auth states are labelled historical.
+The integrating owner also exercises the connected Safari UI against the real backend, QR scan/claim/approve/completion and device/session revocation. Static build success alone does not demonstrate phone reachability or pairing.

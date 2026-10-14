@@ -1,0 +1,35 @@
+import type { PairingLink } from '../../../contracts/protocol.ts';
+import { localError } from './errors.ts';
+
+/** Parse only the one-use native pairing link; never infer an overlay or accept credentials. */
+export function parsePairUrl(value: string): PairingLink {
+  if (typeof value !== 'string' || new TextEncoder().encode(value).byteLength > 4096
+    || !/^lemonbot:\/\/pair\/?\?/.test(value) || value.includes('#') || /[\u0000-\u0020\u007f]/.test(value)) {
+    throw localError('invalid_request', 'Invalid Lemon Bot pairing link.');
+  }
+  let url: URL;
+  try { url = new URL(value); }
+  catch { throw localError('invalid_request', 'Invalid Lemon Bot pairing link.'); }
+  if (url.protocol !== 'lemonbot:' || url.hostname !== 'pair' || url.port || url.username || url.password
+    || (url.pathname !== '' && url.pathname !== '/') || url.hash
+    || [...url.searchParams.keys()].length !== 3
+    || ['backend', 'cluster', 'code'].some(key => url.searchParams.getAll(key).length !== 1)) {
+    throw localError('invalid_request', 'Pairing links require exactly one backend, cluster and code.');
+  }
+  const backendUrl = url.searchParams.get('backend')!;
+  const workspaceId = url.searchParams.get('cluster')!;
+  const pairCode = url.searchParams.get('code')!;
+  if (!workspaceId || workspaceId.length > 128 || /[\u0000-\u001f\u007f]/.test(workspaceId)
+    || !/^[A-Za-z0-9_-]{43}$/.test(pairCode)) {
+    throw localError('invalid_request', 'Pairing cluster or one-use code is invalid.');
+  }
+  let backend: URL;
+  try { backend = new URL(backendUrl); }
+  catch { throw localError('invalid_request', 'Pairing backend must be an exact HTTPS origin.'); }
+  const loopback = ['localhost', '127.0.0.1', '[::1]'].includes(backend.hostname);
+  if (backendUrl !== backend.origin || backend.username || backend.password || backend.search || backend.hash
+    || (backend.protocol !== 'https:' && !(backend.protocol === 'http:' && loopback))) {
+    throw localError('invalid_request', 'Pairing backend requires HTTPS; loopback HTTP is only for same-machine development.');
+  }
+  return { backendUrl, workspaceId, pairCode };
+}
