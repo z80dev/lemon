@@ -312,6 +312,17 @@ defmodule CodingAgent.SubagentsTest do
       assert Subagents.get(cwd, "scout").source == :builtin
     end
 
+    test "home agent folders keep global precedence when cwd is below home", %{home: home} do
+      cwd = Path.join(home, "projects/unversioned")
+      File.mkdir_p!(cwd)
+      lemon = Path.join(home, ".lemon/agents")
+      write_agent(lemon, "shared", "description: Global Lemon")
+      write_agent(Path.join(home, ".claude/agents"), "shared", "description: Global Claude")
+      assert %{description: "Global Lemon", source: :global} = Subagents.get(cwd, "shared")
+      File.rm!(Path.join(lemon, "shared.md"))
+      assert %{description: "Global Claude", source: :global} = Subagents.get(cwd, "shared")
+    end
+
     test "walks project ancestors nearest first and stops at the git root", %{root: root} do
       repo = Path.join(root, "repo")
       cwd = Path.join([repo, "pkg", "app"])

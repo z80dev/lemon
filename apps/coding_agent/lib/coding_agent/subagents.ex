@@ -187,15 +187,21 @@ defmodule CodingAgent.Subagents do
     home = System.get_env("HOME") || System.user_home!()
     ancestors = project_ancestors(cwd)
 
+    globals = [
+      {Path.join([home, ".lemon", "agents"]), :global, :native},
+      {Path.join([home, ".omp", "agent", "agents"]), :global, :omp},
+      {Path.join([home, ".claude", "agents"]), :global, :claude},
+      {Path.join(to_string(:code.priv_dir(:coding_agent)), "agents"), :builtin, :native}
+    ]
+
+    global_dirs = MapSet.new(globals, fn {dir, _source, _kind} -> Path.expand(dir) end)
+
     ([{Path.join(Config.project_config_dir(cwd), "agents"), :project, :native}] ++
        Enum.map(ancestors, &{Path.join([&1, ".omp", "agents"]), :project, :omp}) ++
-       Enum.map(ancestors, &{Path.join([&1, ".claude", "agents"]), :project, :claude}) ++
-       [
-         {Path.join([home, ".lemon", "agents"]), :global, :native},
-         {Path.join([home, ".omp", "agent", "agents"]), :global, :omp},
-         {Path.join([home, ".claude", "agents"]), :global, :claude},
-         {Path.join(to_string(:code.priv_dir(:coding_agent)), "agents"), :builtin, :native}
-       ])
+       Enum.map(ancestors, &{Path.join([&1, ".claude", "agents"]), :project, :claude}) ++ globals)
+    |> Enum.reject(fn {dir, source, _kind} ->
+      source == :project and MapSet.member?(global_dirs, Path.expand(dir))
+    end)
     |> Enum.uniq_by(fn {dir, _source, _kind} -> dir end)
   end
 
