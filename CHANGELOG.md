@@ -88,6 +88,13 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   meter also use the measurement for resumed sessions before their first run.
   All surfaces read the new read-scoped `sessions.context` control-plane method;
   category splits are estimates scaled to the provider-reported total.
+- Native sessions load other agents' instruction files: `GEMINI.md`,
+  `CLAUDE.local.md`, `.gemini/`, `.agent(s)/`, `.omp/` and
+  `.github/copilot-instructions.md` per directory, plus Gemini, Codex, OpenCode,
+  `.agents` and Copilot globals, with `@path` imports expanded. Cursor,
+  Windsurf, Cline, GitHub Copilot, `.agents` and `.lemon/rules` rule files are
+  injected when always-apply and otherwise listed in a rulebook the model reads
+  on demand. See [Instruction files and rules](docs/user-guide/context-files.md).
 
 ### Changed
 
