@@ -199,7 +199,7 @@ defmodule CodingAgent.Tools.Task.Execution do
             run_override.(on_update_safe, signal)
 
           true ->
-            with {:ok, workspace} <- prepare_workspace(execution) do
+            with {:ok, workspace} <- prepare_workspace(execution, opts) do
               CodingAgent.TaskStoreServer.update_record(execution.task_id, fn record ->
                 Map.put(record, :workspace, workspace)
               end)
@@ -231,33 +231,44 @@ defmodule CodingAgent.Tools.Task.Execution do
                     Keyword.take(opts, [:task_session_timeout_ms, :task_session_poll_ms])
                 )
 
-              case result do
-                %LemonAgent.Types.AgentToolResult{} = result ->
-                  %{
-                    result
-                    | details:
-                        Map.merge(
-                          result.details,
-                          workspace
-                          |> Map.merge(
-                            CodingAgent.Tools.Task.Result.lineage_details(
-                              execution.lifecycle_context
+              result =
+                case result do
+                  %LemonAgent.Types.AgentToolResult{} = result ->
+                    %{
+                      result
+                      | details:
+                          Map.merge(
+                            result.details,
+                            workspace
+                            |> Map.merge(
+                              CodingAgent.Tools.Task.Result.lineage_details(
+                                execution.lifecycle_context
+                              )
                             )
+                            |> Map.merge(%{
+                              task_id: execution.task_id,
+                              run_id: execution.run_id
+                            })
                           )
-                          |> Map.merge(%{
-                            task_id: execution.task_id,
-                            run_id: execution.run_id
-                          })
-                        )
-                  }
+                    }
 
-                error ->
-                  error
-              end
+                  error ->
+                    error
+                end
+
+              {:workspace, result, workspace}
             end
         end
 
-      validate_output(result, execution.validated[:output_schema])
+      case result do
+        {:workspace, result, workspace} ->
+          result
+          |> validate_output(execution.validated[:output_schema])
+          |> finalize_workspace(workspace, execution)
+
+        result ->
+          validate_output(result, execution.validated[:output_schema])
+      end
     end
   end
 
@@ -275,11 +286,65 @@ defmodule CodingAgent.Tools.Task.Execution do
 
   defp validate_output(error, _schema), do: error
 
-  defp prepare_workspace(%{validated: %{worktree: true}} = execution) do
-    Worktree.prepare(execution.effective_cwd, execution.task_id)
+  defp prepare_workspace(%{validated: %{worktree: true} = validated} = execution, opts) do
+    mode =
+      Map.get(validated, :merge) ||
+        (Keyword.get(opts, :settings_manager) ||
+           CodingAgent.SettingsManager.load(execution.effective_cwd)).task.worktree_merge
+
+    Worktree.prepare(execution.effective_cwd, execution.task_id, mode)
   end
 
-  defp prepare_workspace(execution), do: {:ok, %{cwd: execution.effective_cwd}}
+  defp prepare_workspace(execution, _opts), do: {:ok, %{cwd: execution.effective_cwd}}
+
+  # Merge a successful child's worktree back per its mode; failures keep the
+  # worktree untouched and record that the merge was skipped.
+  defp finalize_workspace(result, %{merge: %{mode: mode}} = workspace, execution) do
+    merge =
+      case result do
+        %LemonAgent.Types.AgentToolResult{is_error: true} ->
+          skipped_merge(mode)
+
+        %LemonAgent.Types.AgentToolResult{} ->
+          Worktree.finalize(
+            workspace,
+            execution.effective_cwd,
+            execution.task_id,
+            execution.description
+          )
+
+        _error ->
+          skipped_merge(mode)
+      end
+
+    CodingAgent.TaskStoreServer.update_record(execution.task_id, fn record ->
+      Map.update(record, :workspace, %{merge: merge}, &Map.put(&1, :merge, merge))
+    end)
+
+    case result do
+      %LemonAgent.Types.AgentToolResult{} = result ->
+        line = Worktree.summary(merge)
+        content = if line, do: [%LemonAi.Types.TextContent{text: "\n\n" <> line}], else: []
+
+        %{
+          result
+          | content: result.content ++ content,
+            details: Map.put(result.details || %{}, :merge, merge)
+        }
+
+      error ->
+        error
+    end
+  end
+
+  defp finalize_workspace(result, _workspace, _execution), do: result
+
+  defp skipped_merge(mode),
+    do: %{
+      mode: mode,
+      status: "skipped",
+      reason: "Task did not succeed; the worktree was retained without merging"
+    }
 
   defp await_sync_result(execution, signal) do
     case CodingAgent.Tools.Task.Result.do_join(%{"task_ids" => [execution.task_id]}, signal) do

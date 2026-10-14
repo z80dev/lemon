@@ -34,7 +34,15 @@ defmodule CodingAgent.Tools.Task.Swarm do
     names = Enum.map_join(graph.nodes, ", ", & &1.name)
 
     params
-    |> Map.drop(["tasks", "concurrency", "output_schema", "agent", "worktree", "tool_policy"])
+    |> Map.drop([
+      "tasks",
+      "concurrency",
+      "output_schema",
+      "agent",
+      "worktree",
+      "merge",
+      "tool_policy"
+    ])
     |> Map.put("prompt", "Coordinate the native task dependency graph: " <> names)
     |> Map.put_new("description", "Swarm: " <> names)
     |> Map.put_new("async", true)

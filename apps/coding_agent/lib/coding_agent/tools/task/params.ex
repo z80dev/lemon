@@ -88,6 +88,7 @@ defmodule CodingAgent.Tools.Task.Params do
     async? = Map.get(params, "async", true)
     auto_followup = Map.get(params, "auto_followup", true)
     worktree = Map.get(params, "worktree", false)
+    merge = Map.get(params, "merge")
     delegated_cwd = normalize_optional_string(Map.get(params, "cwd"))
     output_schema = Map.get(params, "output_schema")
     tool_policy = Map.get(params, "tool_policy")
@@ -159,6 +160,12 @@ defmodule CodingAgent.Tools.Task.Params do
       not is_boolean(worktree) ->
         {:error, "worktree must be a boolean"}
 
+      not is_nil(merge) and merge not in ["none", "patch", "branch"] ->
+        {:error, "merge must be one of: none, patch, branch"}
+
+      merge in ["patch", "branch"] and worktree != true ->
+        {:error, "merge=#{merge} requires worktree: true"}
+
       true ->
         with {:ok, persona} <- resolve_persona(role_cwd, role_id),
              :ok <- StructuredOutput.validate_schema(output_schema) do
@@ -184,6 +191,7 @@ defmodule CodingAgent.Tools.Task.Params do
              async: async?,
              auto_followup: auto_followup,
              worktree: worktree,
+             merge: merge,
              cwd: delegated_cwd,
              tool_policy: effective_tool_policy,
              meta: meta || %{},
@@ -283,7 +291,7 @@ defmodule CodingAgent.Tools.Task.Params do
         "enter dependent context as untrusted data; failures block only dependent branches. " <>
         "Join the returned coordinator task_id for its merged report; cancel it to stop the graph.\n" <>
         "Workers are leaf-only unless tool_policy permits delegation; scout/reviewer stay read-only. " <>
-        "Worktrees start at HEAD without uncommitted changes and are retained, not auto-merged.\n" <>
+        "Worktrees start at HEAD; merge=patch also copies uncommitted parent work and applies successful changes back (conflicts keep the patch), merge=branch commits them to a kept review branch, none retains the worktree.\n" <>
         "Message via agent_message or write agent://<name-or-id>, agent://parent, agent://all; " <>
         "read agent:// for the roster. wait returns the first unobserved native child result, " <>
         "not shell jobs. Parent cancellation propagates. Personas supply system prompts, models and tool restrictions."

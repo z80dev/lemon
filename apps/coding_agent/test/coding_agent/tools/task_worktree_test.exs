@@ -183,6 +183,193 @@ defmodule CodingAgent.Tools.Task.WorktreeTest do
     refute branch_exists?(git, repo, "lemon/task-unborn-task")
   end
 
+  describe "patch merge mode" do
+    test "replays the parent's tracked and untracked work into a baseline commit", context do
+      %{git: git, repo: repo, tmp_dir: tmp_dir} = context
+      outside = Path.join(tmp_dir, "outside.txt")
+      File.write!(outside, "outside\n")
+      File.write!(Path.join(repo, "tracked.txt"), "uncommitted\n")
+      File.write!(Path.join(repo, ".env"), "SECRET=private\n")
+      File.mkdir_p!(Path.join(repo, "new/dir"))
+      File.write!(Path.join(repo, "new/dir/untracked.sh"), "#!/bin/sh\n")
+      File.chmod!(Path.join(repo, "new/dir/untracked.sh"), 0o755)
+      File.ln_s!("../../tracked.txt", Path.join(repo, "new/dir/inside-link"))
+      File.ln_s!(outside, Path.join(repo, "outside-link"))
+      File.ln_s!("../../outside.txt", Path.join(repo, "escaping-link"))
+
+      assert {:ok, prepared} = Worktree.prepare(repo, "wip-task", "patch")
+      assert prepared.merge == %{mode: "patch", status: "pending"}
+      assert prepared.base_commit == git!(git, repo, ["rev-parse", "HEAD"])
+      assert prepared.baseline_commit == git!(git, prepared.cwd, ["rev-parse", "HEAD"])
+      refute prepared.baseline_commit == prepared.base_commit
+
+      assert File.read!(Path.join(prepared.cwd, "tracked.txt")) == "uncommitted\n"
+      untracked = Path.join(prepared.cwd, "new/dir/untracked.sh")
+      assert File.read!(untracked) == "#!/bin/sh\n"
+      assert Bitwise.band(File.stat!(untracked).mode, 0o111) != 0
+
+      assert {:ok, "../../tracked.txt"} =
+               File.read_link(Path.join(prepared.cwd, "new/dir/inside-link"))
+
+      refute File.exists?(Path.join(prepared.cwd, ".env"))
+      assert {:error, _} = File.lstat(Path.join(prepared.cwd, "outside-link"))
+      assert {:error, _} = File.lstat(Path.join(prepared.cwd, "escaping-link"))
+      assert git!(git, prepared.cwd, ["status", "--porcelain"]) == ""
+
+      assert git!(git, prepared.cwd, ["log", "-1", "--format=%an <%ae>%n%s"]) ==
+               "Lemon <lemon@localhost>\nlemon: task wip-task baseline"
+
+      # The parent checkout is not modified by preparation.
+      assert File.read!(Path.join(repo, "tracked.txt")) == "uncommitted\n"
+      assert git!(git, repo, ["status", "--porcelain", "--", "tracked.txt"]) == " M tracked.txt"
+      refute File.exists?(Path.join(repo, ".git/lemon-task-worktrees/wip-task.wip.patch"))
+    end
+
+    test "applies child edits and commits to the parent, then removes resources", context do
+      %{git: git, repo: repo} = context
+      File.write!(Path.join(repo, "tracked.txt"), "parent wip\n")
+      File.write!(Path.join(repo, "untracked.txt"), "parent untracked\n")
+      parent_head = git!(git, repo, ["rev-parse", "HEAD"])
+
+      assert {:ok, prepared} = Worktree.prepare(Path.join(repo, "nested"), "apply-task", "patch")
+      path = prepared.worktree_path
+      File.write!(Path.join(path, "tracked.txt"), "parent wip\nchild line\n")
+      File.write!(Path.join(path, "untracked.txt"), "parent untracked\nchild edit\n")
+      File.rm!(Path.join(path, "nested/project/source.ex"))
+      File.write!(Path.join(path, "binary.bin"), <<0, 1, 2, 255>>)
+      File.write!(Path.join(path, "committed.txt"), "child commit\n")
+      git!(git, path, ["add", "committed.txt"])
+      git!(git, path, ["-c", "core.hooksPath=/dev/null", "commit", "-qm", "Child commit"])
+
+      merge = Worktree.finalize(prepared, Path.join(repo, "nested"), "apply-task", "Apply")
+
+      assert merge.mode == "patch"
+      assert merge.status == "applied"
+      assert merge.files_total == 5
+
+      assert Enum.sort(merge.files) ==
+               ~w(binary.bin committed.txt nested/project/source.ex tracked.txt untracked.txt)
+
+      assert File.read!(Path.join(repo, "tracked.txt")) == "parent wip\nchild line\n"
+      assert File.read!(Path.join(repo, "untracked.txt")) == "parent untracked\nchild edit\n"
+      assert File.read!(Path.join(repo, "committed.txt")) == "child commit\n"
+      assert File.read!(Path.join(repo, "binary.bin")) == <<0, 1, 2, 255>>
+      refute File.exists?(Path.join(repo, "nested/project/source.ex"))
+      # Applied to the working tree only: HEAD and the index are untouched.
+      assert git!(git, repo, ["rev-parse", "HEAD"]) == parent_head
+      assert git!(git, repo, ["diff", "--cached", "--name-only"]) == ""
+
+      refute File.exists?(path)
+      refute File.exists?(Path.join(repo, ".git/lemon-task-worktrees/apply-task.patch"))
+      refute branch_exists?(git, repo, prepared.branch)
+      refute git!(git, repo, ["worktree", "list", "--porcelain"]) =~ prepared.branch
+
+      assert Worktree.summary(merge) ==
+               "Merged task changes into the parent checkout (patch, 5 files)."
+    end
+
+    test "fails closed on conflicts, keeping the parent, worktree, branch and patch", context do
+      %{git: git, repo: repo} = context
+      assert {:ok, prepared} = Worktree.prepare(repo, "conflict-task", "patch")
+      File.write!(Path.join(prepared.worktree_path, "tracked.txt"), "child version\n")
+      File.write!(Path.join(prepared.worktree_path, "other.txt"), "child other\n")
+      File.write!(Path.join(repo, "tracked.txt"), "parent changed later\n")
+
+      merge = Worktree.finalize(prepared, repo, "conflict-task", "Conflict")
+
+      assert merge.status == "conflict"
+      assert merge.conflicting_files == ["tracked.txt"]
+      assert merge.patch_path == Path.join(repo, ".git/lemon-task-worktrees/conflict-task.patch")
+      assert File.read!(merge.patch_path) =~ "child version"
+      assert merge.worktree_path == prepared.worktree_path
+      assert File.read!(Path.join(repo, "tracked.txt")) == "parent changed later\n"
+      refute File.exists?(Path.join(repo, "other.txt"))
+      assert File.read!(Path.join(prepared.worktree_path, "tracked.txt")) == "child version\n"
+      assert branch_exists?(git, repo, prepared.branch)
+      assert Worktree.summary(merge) =~ "nothing was applied"
+      assert Worktree.summary(merge) =~ merge.patch_path
+
+      # The retained patch can be applied once the parent conflict is resolved.
+      File.write!(Path.join(repo, "tracked.txt"), "committed\n")
+      git!(git, repo, ["apply", merge.patch_path])
+      assert File.read!(Path.join(repo, "tracked.txt")) == "child version\n"
+    end
+
+    test "removes the worktree and branch when the child changed nothing", context do
+      %{git: git, repo: repo} = context
+      File.write!(Path.join(repo, "tracked.txt"), "parent wip\n")
+      assert {:ok, prepared} = Worktree.prepare(repo, "idle-task", "patch")
+
+      assert %{mode: "patch", status: "no_changes"} =
+               merge = Worktree.finalize(prepared, repo, "idle-task", "Idle")
+
+      refute Map.has_key?(merge, :cleanup_error)
+      refute File.exists?(prepared.worktree_path)
+      refute branch_exists?(git, repo, prepared.branch)
+      assert File.read!(Path.join(repo, "tracked.txt")) == "parent wip\n"
+      assert Worktree.summary(merge) =~ "No task changes"
+    end
+  end
+
+  describe "branch merge mode" do
+    test "commits child work on the kept branch without touching the parent", context do
+      %{git: git, repo: repo} = context
+      File.write!(Path.join(repo, "tracked.txt"), "parent wip\n")
+      parent_head = git!(git, repo, ["rev-parse", "HEAD"])
+
+      assert {:ok, prepared} = Worktree.prepare(repo, "branch-task", "branch")
+      assert prepared.merge == %{mode: "branch", status: "pending"}
+      refute Map.has_key?(prepared, :baseline_commit)
+      # Branch mode does not replay the parent's uncommitted work.
+      assert File.read!(Path.join(prepared.cwd, "tracked.txt")) == "committed\n"
+      File.write!(Path.join(prepared.cwd, "feature.txt"), "child work\n")
+
+      merge =
+        Worktree.finalize(prepared, repo, "branch-task", "Add feature\nwith details")
+
+      assert merge.mode == "branch"
+      assert merge.status == "committed"
+      assert merge.branch == prepared.branch
+      assert merge.commits == 1
+      assert merge.head == git!(git, repo, ["rev-parse", prepared.branch])
+      assert merge.base_commit == parent_head
+
+      assert git!(git, repo, ["log", "-1", "--format=%an%n%s", prepared.branch]) ==
+               "Lemon\nlemon task branch-task: Add feature with details"
+
+      assert git!(git, repo, ["show", "#{prepared.branch}:feature.txt"]) == "child work"
+      refute File.exists?(prepared.worktree_path)
+      assert git!(git, repo, ["rev-parse", "HEAD"]) == parent_head
+      refute File.exists?(Path.join(repo, "feature.txt"))
+      assert File.read!(Path.join(repo, "tracked.txt")) == "parent wip\n"
+      assert Worktree.summary(merge) =~ "Committed task changes on branch #{prepared.branch}"
+    end
+
+    test "keeps child commits and deletes an unchanged branch", context do
+      %{git: git, repo: repo} = context
+      assert {:ok, prepared} = Worktree.prepare(repo, "child-commit", "branch")
+      File.write!(Path.join(prepared.cwd, "own.txt"), "own\n")
+      git!(git, prepared.cwd, ["add", "own.txt"])
+      git!(git, prepared.cwd, ["-c", "core.hooksPath=/dev/null", "commit", "-qm", "Own commit"])
+
+      assert %{status: "committed", commits: 1} =
+               Worktree.finalize(prepared, repo, "child-commit", "Own")
+
+      assert git!(git, repo, ["log", "-1", "--format=%s", prepared.branch]) == "Own commit"
+
+      assert {:ok, idle} = Worktree.prepare(repo, "idle-branch", "branch")
+      assert %{status: "no_changes"} = Worktree.finalize(idle, repo, "idle-branch", "Idle")
+      refute File.exists?(idle.worktree_path)
+      refute branch_exists?(git, repo, idle.branch)
+    end
+  end
+
+  test "rejects unknown merge modes before creating resources", %{repo: repo} do
+    assert {:error, message} = Worktree.prepare(repo, "bad-mode", "squash")
+    assert message =~ "Unknown worktree merge mode"
+    refute File.exists?(Path.join(repo, ".git/lemon-task-worktrees"))
+  end
+
   defp branch_exists?(git, cwd, branch) do
     {_output, status} =
       System.cmd(git, ["show-ref", "--verify", "--quiet", "refs/heads/#{branch}"],

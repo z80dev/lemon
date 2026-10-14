@@ -88,6 +88,13 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   meter also use the measurement for resumed sessions before their first run.
   All surfaces read the new read-scoped `sessions.context` control-plane method;
   category splits are estimates scaled to the provider-reported total.
+- **Task worktrees can merge back.** `task` gains `merge` (`none`, `patch`,
+  `branch`; default `[runtime.task].worktree_merge`) for `worktree: true`
+  children. `patch` replays the parent's uncommitted work into the worktree
+  and, when the child succeeds, applies its changes to the parent checkout,
+  failing closed on conflicts with the patch kept for review. `branch` commits
+  the child's work on its kept `lemon/task-<id>` branch without merging it.
+  Results report `details.merge`.
 
 ### Changed
 
