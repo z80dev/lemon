@@ -209,7 +209,7 @@ The catalogs in this section and §§10–11 together are exhaustive. Substitute
 | `PATCH /notifications/:id` | `NotificationUpdate` | `Notification` | `undefined` | Own | — |
 | `POST /notifications/read-all` | `NotificationReadAll` | `Empty` | `undefined` | Own | — |
 | `GET /usage` | `undefined` | `UsageReport` | `UsageQuery` | Member (own); Admin (workspace) | upstream_unavailable |
-| `GET /audit` | `undefined` | `Page<AuditRecord>` | `PageQuery & { actorId?: ID; resourceId?: ID; fromAtMs?: TimestampMs; toAtMs?: TimestampMs }` | Admin | — |
+| `GET /audit` | `undefined` | `Page<AuditRecord>` | `PageQuery & { actorId?: ID; resourceId?: ID; fromAtMs?: TimestampMs; toAtMs?: TimestampMs }` | Admin product session OR scoped audit_export integration bearer (metadata-only) | unauthenticated, forbidden, expired |
 | `GET /policies` | `undefined` | `Policies` | `undefined` | Member | policy_denied, conflict |
 | `PATCH /policies` | `PoliciesUpdate` | `Policies` | `undefined` | Admin | policy_denied, conflict |
 | `POST /policies/rules` | `PolicyRuleCreate` | `PolicyRule` | `undefined` | Own (personal rules) / Admin (required rules) | policy_denied, conflict |
@@ -706,6 +706,10 @@ The following JSON Schema 2020-12 dictionary supplies **every input** plus share
             },
             "phrase": {
               "type": "string"
+            },
+            "noisyListenerConsent": {
+              "type": "boolean",
+              "default": false
             },
             "reaction": {
               "type": "string"
@@ -1808,3 +1812,13 @@ GET /event-sources retains `{source,events:string[],configured}` for compatible 
 RoutineTrigger external_event eventNames must each occur in the selected source definitions; its filters object must satisfy every selected event's schema (UI may choose one event where schemas differ). Validate before creating/updating/enabling routine and at verified ingress; unknown fields/unsupported filter operators rejected. Optional EventProviderConfig.eventDefinitions can supply operator-reviewed schema/labels only for actually registered event names, not invent an event handler or arbitrary execution target; invalid/mismatched definitions make provider unavailable with precise sanitized configuration prerequisite. Missing optional override uses actual provider implementation schemas, never arbitrary empty permissive fallback. Native channel_event trigger fields retain the already-declared exact mention/message/reaction/email_received typed schema and adapter capability checks.
 
 Web/macOS/iOS use channel/email/X catalog projections for setup selectors and prerequisite copy, own ChannelLinkFlow polling for verified account confirmation, and per-source filter definitions for validated trigger fields. No social-account implicit linking or arbitrary operator-provider ID text entry.
+
+### Explicit broad-listener opt-in and read-only audit collectors
+
+RoutineTrigger channel_event adds optional noisyListenerConsent:boolean, default false when omitted. Broad listener means event message and phrase absent/empty after trimming; limiting channel alone is still broad. Creating or updating that broad trigger requires noisyListenerConsent true on an authenticated **human** POST /routines or PATCH /routines/:id, with normal own routine/bot/binding ACL and revision/nonce fencing. Otherwise policy_denied before listener registration/run dispatch. UI explains “Every new message in this scope may start work and consume usage” and requires explicit unchecked-by-default opt-in. Narrow mention/nonempty phrase/reaction/email triggers remain unchanged; field is not a general action approval.
+
+Persist/audit the human grant bound to exact user/Bot/channelBindingId/channel/event scope. Bot MCP tools, webhook/event payloads, imported templates and duplicate configurations cannot mint or inherit this human opt-in by setting true; fail policy_denied for attempted broad setup and direct user to the routine editor. A copied broad trigger has no grant; it must remain unregistered/disabled until the destination's human confirms exact new scope through authenticated routine update. Existing user may always pause or narrow without fresh broad permission. Broad scope change or re-enabling after grant revocation requires current explicit human consent; listener ingress rechecks effective policy/owned binding and saved grant. No silent backfill, automatic wide-listening consent or secret spend escalation.
+
+IntegrationToken kind audit_export with exact scope audit_export has one callable consumer: **GET /v1/audit**, returning existing Page<AuditRecord> sanitized metadata under its issuance workspace. Enforce token digest/expiry/revocation/scope on each request, bind pagination to integration principal+workspace+filters, same limit/retention/from/to/actor/resource query behavior as Admin metadata audit. This token is **not an Admin session**: forbid every other admin, chat/transcript, realtime, conversation-content, /exports or file/download route. It cannot read prompts, private conversation bodies, raw tool arguments, credentials, paths or collector configuration. Owner-issued token grants workspace audit metadata only; token revocation stops subsequent pages immediately. Source events remain sanitized at recording/export boundaries, not redacted only by frontend.
+
+Outgoing ExportDestination collectors still authenticate with operator serverSecret references independently; audit_export does not become a write credential or grant content-export consent. SCIM/event_ingress tokens retain their separate namespaces/routes and cannot read /audit. Settings.exports/integration token screen states exact metadata-only read scope and endpoint; own user sessions still need Admin for workspace audit.
