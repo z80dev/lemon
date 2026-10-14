@@ -127,12 +127,37 @@ defmodule LemonControlPlane.Methods.ExecApprovalResolveTest do
     assert Task.await(task) == {:ok, :denied}
   end
 
-  defp request(id, expires_in_ms \\ 5_000) do
+  test "private team invocation context is absent from wire events, pending lists and receipts",
+       %{id: id} do
+    private_context = "principal-policy-epoch:private:#{id}"
+    {task, pending} = request(id, 5_000, private_context)
+    assert pending.invocation_context_key == private_context
+    payload = LemonCore.Events.ApprovalRequested.new(%{approval_id: id, pending: pending})
+    event = LemonCore.Event.new(:approval_requested, payload, %{})
+    assert {"exec.approval.requested", projected} =
+             LemonControlPlane.EventBridge.project(event)
+    assert projected["approvalId"] == id
+    assert projected["sessionKey"] == pending.session_key
+    assert {:ok, listed} = LemonControlPlane.Methods.ExecApprovalsGet.handle(%{}, %{})
+    assert Enum.any?(listed["pending"], &(&1["id"] == id))
+    assert {:ok, receipt} = ExecApprovalResolve.handle(params(pending, "approve_once"), %{})
+    assert Task.await(task) == {:ok, :approved, :approve_once}
+
+    for exposed <- [event, projected, listed, receipt] do
+      encoded = Jason.encode!(exposed)
+      refute encoded =~ private_context
+      refute encoded =~ "invocation_context_key"
+      refute encoded =~ "invocationContextKey"
+    end
+  end
+
+  defp request(id, expires_in_ms \\ 5_000, invocation_context_key \\ nil) do
     task = Task.async(fn ->
       ExecApprovals.request(%{
         approval_id: id,
         run_id: "run_#{id}",
         session_key: "agent:test:#{id}",
+        invocation_context_key: invocation_context_key,
         tool: "bash",
         action: %{command: "private action #{id}"},
         rationale: "private rationale",

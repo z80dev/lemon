@@ -29,6 +29,9 @@ defmodule LemonCore.Events.Payload do
   - `new/1` — strict: raises on unknown keys or missing enforced keys. For publishers.
   - `from_map/1` — lenient: drops unknown keys, accepts string keys, passes structs through.
     The coercion `LemonCore.Events.coerce/2` and `cast/2` call for you.
+
+  The optional `private_fields` declaration retains owner fields in typed storage
+  but excludes them from direct JSON encoding. Wire projections still use allowlists.
   """
 
   @doc false
@@ -37,12 +40,18 @@ defmodule LemonCore.Events.Payload do
     fields = Keyword.fetch!(opts, :fields)
     enforce = Keyword.get(opts, :enforce, [])
     version = Keyword.get(opts, :version, 1)
+    json_fields = Keyword.keys(fields) -- Keyword.get(opts, :private_fields, [])
 
-    quote bind_quoted: [type: type, fields: fields, enforce: enforce, version: version] do
-      # Payloads are persisted by the JSONL store backend and rendered by the control
-      # plane, both of which encode with Jason. Deriving keeps a struct payload as
-      # encodable as the map it replaces.
-      @derive Jason.Encoder
+    quote bind_quoted: [
+            type: type,
+            fields: fields,
+            enforce: enforce,
+            version: version,
+            json_fields: json_fields
+          ] do
+      # Store codecs preserve the entire struct separately from wire encoding.
+      # Private owner context never enters a direct JSON payload.
+      @derive {Jason.Encoder, only: json_fields}
       @enforce_keys enforce
       defstruct fields
 

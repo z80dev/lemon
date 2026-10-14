@@ -132,6 +132,13 @@ outcome, timestamp and a snapshot digest; action, rationale and secrets are omit
 Named-node approvals use the controller ID and its controller pending identity;
 the destination still resolves only its own invocation/run/session-bound worker ID.
 
+Context-owned runs also isolate standing session/agent grants by their private
+trusted invocation context, without changing any public session/profile identity.
+Another principal or changed policy must obtain its own approval even for the
+same public bot session. This private field is not an RPC parameter and is absent
+from pending lists, approval events and resolution receipts. Explicit operator
+global/node grants remain independent.
+
 Authenticated sockets receive an RFC WebSocket ping every 25 seconds. Browser,
 Bun and other conforming clients automatically pong, keeping long-running
 outbound streams alive without application-level requests. The listener retains

@@ -178,6 +178,12 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   allow only exact-bound same-decision replays, without reinstalling grants.
   Named-node workers retain failed approval resolutions for teardown and bind
   successful decisions to their invocation's run and session.
+- Standing session/agent tool approvals for context-owned team runs are now
+  isolated by their trusted private principal/policy context. Another user or
+  changed policy cannot inherit a grant through a shared bot session, nor fall
+  back to a legacy unscoped grant. Public identities are unchanged; private
+  context remains in typed owner storage and is excluded from wire projections.
+  Explicit operator global/node grants and nil-context native scopes are retained.
 - Named-node profile chat no longer inherits the controller's default working
   directory. Profile persona instructions and MCP connections accompany the
   execution request, while provider credentials remain destination-local.

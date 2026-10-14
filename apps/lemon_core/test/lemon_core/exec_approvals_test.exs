@@ -422,6 +422,101 @@ defmodule LemonCore.ExecApprovalsTest do
     end
   end
 
+  describe "private invocation-context standing grants" do
+    test "session and agent grants authorize only the exact team context" do
+      LemonCore.Bus.subscribe("exec_approvals")
+
+      for {decision, scope} <- [{:approve_session, :session}, {:approve_agent, :agent}] do
+        run_id = "team_context_A_#{scope}"
+        params = %{
+          run_id: run_id,
+          session_key: "agent:team-bot:shared",
+          agent_id: "team-bot",
+          invocation_context_key: "principal-A:policy-v1:#{scope}",
+          tool: "bash",
+          action: %{command: "team-context-action-#{scope}"},
+          expires_in_ms: 5_000
+        }
+        task = Task.async(fn -> ExecApprovals.request(params) end)
+        assert_receive %LemonCore.Event{
+          type: :approval_requested, payload: %{pending: %{run_id: ^run_id} = pending}
+        }, 1_000
+        assert pending.session_key == params.session_key
+        assert pending.agent_id == params.agent_id
+        assert pending.invocation_context_key == params.invocation_context_key
+        assert {:ok, ^pending} = ExecApprovalStore.fetch_pending(pending.id)
+        encoded = Jason.encode!(pending)
+        refute encoded =~ params.invocation_context_key
+        refute encoded =~ "invocation_context_key"
+
+        assert {:ok, receipt} = ExecApprovals.resolve(pending.id, decision,
+          expected_session_key: params.session_key, expected_run_id: run_id)
+        assert receipt.decision == decision
+        refute inspect(receipt) =~ params.invocation_context_key
+        assert Task.await(task) == {:ok, :approved, decision}
+
+        # Another run with the same trusted principal/policy context retains
+        # the standing grant; changing context on the same public team key does not.
+        assert ExecApprovals.request(%{params | run_id: "same_A_#{scope}"}) ==
+                 {:ok, :approved, scope}
+        other_run = "team_context_B_#{scope}"
+        other_params = %{params | run_id: other_run,
+                                  invocation_context_key: "principal-B:policy-v1:#{scope}"}
+        other_task = Task.async(fn -> ExecApprovals.request(other_params) end)
+        assert_receive %LemonCore.Event{
+          type: :approval_requested, payload: %{pending: %{run_id: ^other_run} = other_pending}
+        }, 1_000
+        assert other_pending.session_key == params.session_key
+        assert other_pending.agent_id == params.agent_id
+        assert {:ok, %{outcome: :denied}} = ExecApprovals.resolve(other_pending.id, :deny)
+        assert Task.await(other_task) == {:ok, :denied}
+
+        # Legacy-native grants remain usable only in the legacy namespace.
+        legacy_run = "legacy_context_#{scope}"
+        legacy_params = %{params | run_id: legacy_run, invocation_context_key: nil}
+        legacy_task = Task.async(fn -> ExecApprovals.request(legacy_params) end)
+        assert_receive %LemonCore.Event{
+          type: :approval_requested,
+          payload: %{pending: %{run_id: ^legacy_run} = legacy_pending}
+        }, 1_000
+        assert {:ok, %{outcome: :approved}} =
+                 ExecApprovals.resolve(legacy_pending.id, decision)
+        assert Task.await(legacy_task) == {:ok, :approved, decision}
+        assert ExecApprovals.request(%{legacy_params | run_id: "same_legacy_#{scope}"}) ==
+                 {:ok, :approved, scope}
+
+        changed_run = "changed_policy_#{scope}"
+        changed_params = %{params | run_id: changed_run,
+                                    invocation_context_key: "principal-A:policy-v2:#{scope}"}
+        changed_task = Task.async(fn -> ExecApprovals.request(changed_params) end)
+        assert_receive %LemonCore.Event{
+          type: :approval_requested,
+          payload: %{pending: %{run_id: ^changed_run} = changed_pending}
+        }, 1_000
+        assert {:ok, %{outcome: :denied}} = ExecApprovals.resolve(changed_pending.id, :deny)
+        assert Task.await(changed_task) == {:ok, :denied}
+      end
+    end
+
+    test "explicit global and node administrator grants remain distinct" do
+      for {scope, tool} <- [{:global, "global_tool"}, {:node, "node_tool"}] do
+        action = %{command: "admin-scoped-action"}
+        approval = %{approved: true, scope: scope}
+        case scope do
+          :global -> ExecApprovalStore.put_global_policy(tool, hash_action(action), approval)
+          :node -> ExecApprovalStore.put_node_policy("admin-node", tool, hash_action(action), approval)
+        end
+        for context <- ["principal-A", "principal-B"] do
+          assert ExecApprovals.request(%{
+            run_id: "admin_#{scope}_#{context}", session_key: "agent:team-bot:shared",
+            agent_id: "team-bot", invocation_context_key: context, node_id: "admin-node",
+            tool: tool, action: action
+          }) == {:ok, :approved, scope}
+        end
+      end
+    end
+  end
+
   describe "verified bound resolutions" do
     test "foreign session and run bindings never consume or authorize the live request" do
       LemonCore.Bus.subscribe("exec_approvals")

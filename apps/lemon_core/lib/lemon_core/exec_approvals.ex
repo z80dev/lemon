@@ -21,6 +21,11 @@ defmodule LemonCore.ExecApprovals do
   - Global: `{tool, action_hash}`
   - Agent: `{agent_id, tool, action_hash}`
   - Session: `{session_key, tool, action_hash}`
+
+  With a trusted `invocation_context_key`, session/agent identity in these
+  keys is `{:invocation_context, public_identity, invocation_context_key}`.
+  There is no fallback to an unscoped identity; nil-context native callers
+  retain their existing keys. The private key never appears in wire receipts.
   """
 
   alias LemonCore.Events.{ApprovalPending, ApprovalRequested, ApprovalResolved}
@@ -39,6 +44,10 @@ defmodule LemonCore.ExecApprovals do
   - `:session_id` - Optional native CodingAgent session ID
   - `:session_key` - Session key for routing
   - `:agent_id` - Agent identifier (for agent-level approvals)
+  - `:invocation_context_key` - Optional trusted private principal/policy context.
+    Session and agent grants are isolated by this exact key; context-owned runs
+    never fall back to legacy shared-session/agent grants. Global/node admin
+    grants remain intentionally independent.
   - `:node_id` - Optional node identifier (for node-level approvals)
   - `:tool` - Tool name
   - `:action` - Action details map
@@ -66,6 +75,7 @@ defmodule LemonCore.ExecApprovals do
     session_key = params[:session_key]
     agent_id = params[:agent_id] || extract_agent_id(session_key)
     node_id = params[:node_id]
+    invocation_context_key = params[:invocation_context_key]
     tool = params[:tool]
     action = params[:action]
     rationale = params[:rationale]
@@ -78,7 +88,9 @@ defmodule LemonCore.ExecApprovals do
         _other -> LemonCore.Id.approval_id()
       end
 
-    case check_existing_approval(tool, action, session_key, agent_id, node_id) do
+    case check_existing_approval(
+           tool, action, session_key, agent_id, node_id, invocation_context_key
+         ) do
       {:approved, scope} ->
         {:ok, :approved, scope}
 
@@ -100,6 +112,7 @@ defmodule LemonCore.ExecApprovals do
             session_id: session_id,
             session_key: session_key,
             agent_id: agent_id,
+            invocation_context_key: invocation_context_key,
             tool: tool,
             tool_call_id: params[:tool_call_id],
             action: action,
@@ -451,8 +464,12 @@ defmodule LemonCore.ExecApprovals do
     :ok
   end
 
-  defp check_existing_approval(tool, action, session_key, agent_id, node_id) do
+  defp check_existing_approval(
+         tool, action, session_key, agent_id, node_id, invocation_context_key
+       ) do
     action_hash = hash_action(action)
+    session_scope = policy_identity(session_key, invocation_context_key)
+    agent_scope = policy_identity(agent_id, invocation_context_key)
 
     # Check scopes in priority order: global > node > agent > session
     checks = [
@@ -463,10 +480,10 @@ defmodule LemonCore.ExecApprovals do
           {:node, fn -> ExecApprovalStore.get_node_policy(node_id, tool, action_hash) end,
            fn -> ExecApprovalStore.get_node_policy(node_id, tool, :any) end}
       ),
-      {:agent, fn -> ExecApprovalStore.get_agent_policy(agent_id, tool, action_hash) end,
-       fn -> ExecApprovalStore.get_agent_policy(agent_id, tool, :any) end},
-      {:session, fn -> ExecApprovalStore.get_session_policy(session_key, tool, action_hash) end,
-       fn -> ExecApprovalStore.get_session_policy(session_key, tool, :any) end}
+      {:agent, fn -> ExecApprovalStore.get_agent_policy(agent_scope, tool, action_hash) end,
+       fn -> ExecApprovalStore.get_agent_policy(agent_scope, tool, :any) end},
+      {:session, fn -> ExecApprovalStore.get_session_policy(session_scope, tool, action_hash) end,
+       fn -> ExecApprovalStore.get_session_policy(session_scope, tool, :any) end}
     ]
 
     checks
@@ -499,6 +516,7 @@ defmodule LemonCore.ExecApprovals do
       end
 
     action_hash = hash_action(pending.action)
+    invocation_context_key = Map.get(pending, :invocation_context_key)
 
     approval = %{
       tool: pending.tool,
@@ -513,11 +531,16 @@ defmodule LemonCore.ExecApprovals do
         ExecApprovalStore.put_global_policy(pending.tool, action_hash, approval)
 
       :agent ->
-        ExecApprovalStore.put_agent_policy(pending.agent_id, pending.tool, action_hash, approval)
+        ExecApprovalStore.put_agent_policy(
+          policy_identity(pending.agent_id, invocation_context_key),
+          pending.tool,
+          action_hash,
+          approval
+        )
 
       :session ->
         ExecApprovalStore.put_session_policy(
-          pending.session_key,
+          policy_identity(pending.session_key, invocation_context_key),
           pending.tool,
           action_hash,
           approval
@@ -527,6 +550,11 @@ defmodule LemonCore.ExecApprovals do
         :ok
     end
   end
+
+  defp policy_identity(identity, nil), do: identity
+
+  defp policy_identity(identity, invocation_context_key),
+    do: {:invocation_context, identity, invocation_context_key}
 
   defp hash_action(action) when is_map(action) do
     :crypto.hash(:sha256, :erlang.term_to_binary(action))

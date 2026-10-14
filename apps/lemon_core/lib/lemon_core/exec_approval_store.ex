@@ -27,22 +27,22 @@ defmodule LemonCore.ExecApprovalStore do
   @spec list_global_policies() :: list()
   def list_global_policies, do: Store.list(@global_policy_table)
 
-  @spec get_agent_policy(binary(), term(), term()) :: map() | nil
+  @spec get_agent_policy(term(), term(), term()) :: map() | nil
   def get_agent_policy(agent_id, tool, action_hash),
     do: Store.get(@agent_policy_table, {agent_id, tool, action_hash})
 
-  @spec put_agent_policy(binary(), term(), term(), map()) :: :ok
+  @spec put_agent_policy(term(), term(), term(), map()) :: :ok
   def put_agent_policy(agent_id, tool, action_hash, value),
     do: Store.put(@agent_policy_table, {agent_id, tool, action_hash}, value)
 
   @spec list_agent_policies() :: list()
   def list_agent_policies, do: Store.list(@agent_policy_table)
 
-  @spec get_session_policy(binary(), term(), term()) :: map() | nil
+  @spec get_session_policy(term(), term(), term()) :: map() | nil
   def get_session_policy(session_key, tool, action_hash),
     do: Store.get(@session_policy_table, {session_key, tool, action_hash})
 
-  @spec put_session_policy(binary(), term(), term(), map()) :: :ok
+  @spec put_session_policy(term(), term(), term(), map()) :: :ok
   def put_session_policy(session_key, tool, action_hash, value),
     do: Store.put(@session_policy_table, {session_key, tool, action_hash}, value)
 

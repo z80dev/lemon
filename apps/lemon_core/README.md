@@ -578,9 +578,19 @@ Tool execution gating with scope-based persistence. Placed in `lemon_core` so an
 | Scope | Persistence |
 |-------|-------------|
 | `:approve_once` | Not persisted (single request) |
-| `:approve_session` | Persisted per session_key |
-| `:approve_agent` | Persisted per agent_id |
+| `:approve_session` | Persisted per session_key and optional private invocation context |
+| `:approve_agent` | Persisted per agent_id and optional private invocation context |
 | `:approve_global` | Persisted globally |
+
+Context-owned team runs carry the trusted private `invocation_context_key`
+through their native approval request. Session/agent grants are bound to both
+the public identity and this exact principal/policy context: one teammate user's
+grant cannot authorize another user or a changed policy on the same shared bot
+session. Context-owned requests never fall back to legacy unscoped session/agent
+grants. Nil-context native requests keep their original scope behavior; explicit
+operator global/node grants remain independent. The typed pending record retains
+the private key for owner policy writes, but direct JSON, wire approval events,
+pending lists, resolution receipts and introspection never expose it.
 
 ```elixir
 # Request (blocks until resolved)
