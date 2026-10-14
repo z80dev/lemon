@@ -295,6 +295,40 @@ defmodule LemonCore.ProfileStoreTest do
   end
 
   @tag :tmp_dir
+  test "metadata updates and cloning preserve literal escapes in private MCP definitions", %{tmp_dir: root} do
+    opts = opts(root)
+    servers = [
+      %{
+        "name" => "connector",
+        "url" => "https://example.com/mcp",
+        "headers" => %{
+          "Authorization" => ~S(Bearer "quoted"\token),
+          "X-Path" => ~S(C:\owner\1\g{1}\0\\tail)
+        },
+        "enabledTools" => ["read"]
+      }
+    ]
+    public_servers = Enum.map(servers, &Map.delete(&1, "headers"))
+
+    assert {:ok, created} = ProfileStore.create(%{id: "escaped-mcp", mcpServers: servers}, opts)
+    assert created["mcpServers"] == public_servers
+    assert {:ok, private} = ProfileStore.get_for_execution("escaped-mcp", opts)
+    assert private["mcpServers"] == servers
+
+    assert {:ok, updated} = ProfileStore.update("escaped-mcp", %{name: "Renamed"}, opts)
+    assert updated["mcpServers"] == public_servers
+    assert updated["mcpConfigFingerprint"] == created["mcpConfigFingerprint"]
+    assert {:ok, private} = ProfileStore.get_for_execution("escaped-mcp", opts)
+    assert private["mcpServers"] == servers
+
+    assert {:ok, cloned} = ProfileStore.clone("escaped-mcp", %{id: "escaped-mcp-clone"}, opts)
+    assert cloned["mcpServers"] == public_servers
+    assert cloned["mcpConfigFingerprint"] == created["mcpConfigFingerprint"]
+    assert {:ok, private_clone} = ProfileStore.get_for_execution("escaped-mcp-clone", opts)
+    assert private_clone["mcpServers"] == servers
+  end
+
+  @tag :tmp_dir
   test "persona text rejects NUL and origin policy canonicalizes DNS and IPv6", %{tmp_dir: root} do
     opts = opts(root)
     assert {:error, {:invalid_field, :system_prompt}} =

@@ -26,6 +26,28 @@ defmodule LemonCore.Config.TomlPatchTest do
     refute patched =~ ~s(api_key_secret = "old_key")
   end
 
+  test "updates escaped raw string bytes literally without changing adjacent keys or tables" do
+    content = """
+    # café — configuration ✓
+    [profiles.owner]
+    system_prompt = "old"
+    unknown = "keep"
+
+    [profiles.other]
+    system_prompt = "untouched"
+    """
+
+    value = ~S(C:\profiles\1\g{1}\0\\tail "quoted") <> "\r\n\t\b\f" <> <<1>>
+    line = "system_prompt = " <> Jason.encode!(value)
+    patched = TomlPatch.upsert_raw_line(content, "profiles.owner", "system_prompt", line)
+
+    assert {:ok, decoded} = Toml.decode(patched)
+    assert decoded["profiles"]["owner"]["system_prompt"] == value
+    assert decoded["profiles"]["owner"]["unknown"] == "keep"
+    assert decoded["profiles"]["other"]["system_prompt"] == "untouched"
+    assert String.starts_with?(patched, "# café — configuration ✓\n")
+  end
+
   test "adds missing key to existing table" do
     content = """
     [providers.github_copilot]

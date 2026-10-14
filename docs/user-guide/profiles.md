@@ -103,6 +103,9 @@ failed config commit restores the home.
 Lifecycle config edits are serialized and atomically replace the global config
 file. Targeted TOML patching preserves unrelated tables, unknown keys, and
 comments instead of decoding and rewriting the entire user file.
+Accepted newlines, control characters, and literal backslashes in managed text
+survive updates and cloning exactly. MCP definitions and tool policies likewise
+round-trip without dropping configured entries.
 
 ## Credential-safe export
 
