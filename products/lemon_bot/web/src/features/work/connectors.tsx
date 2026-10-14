@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { nonce, type AccessLevel, type Bot, type Confirmation, type Connector, type ConnectorAuth, type ConnectorConsent } from '@lemon-bot/sdk';
+import { nonce, type AccessLevel, type Bot, type Confirmation, type Connector, type ConnectorAuth } from '@lemon-bot/sdk';
 import { useApp, type Route } from '../../app';
 import { Badge, ConfirmDialog, EmptyState, Field, PageHeader, formatTime, useQuery } from '../../ui';
 import { useDeadlineClock, ActionNotice, BotSelect, ExternalLink, QueryState, canManage, usePages, useWorkAction } from './shared';
@@ -46,7 +46,6 @@ export function ConnectorsScreen({ route }: { route: Route }) {
     </QueryState>
     {route.id && <QueryState query={requested}>{requested.data && requested.data.bot.id === selectedId && <section aria-label="Requested connector"><h2>Requested account</h2><ConnectorDetails key={requested.data.connector.id} bot={requested.data.bot} connector={requested.data.connector} onSaved={requested.reload} /></section>}</QueryState>}
     <QueryState query={selected}>{selected.data && <BotConnectors key={selected.data.id} bot={selected.data} />}</QueryState>
-    <Consents />
   </div>;
 }
 
@@ -100,42 +99,3 @@ function ConnectorEditor({ bot, connector, onSaved }: { bot: Bot; connector?: Co
   return <form className="card stack" onSubmit={event => { event.preventDefault(); void action.run(async () => { if (connector) await client.call('PATCH /connectors/:id', { params: { id: connector.id }, body: { name, accountLabel, ...(replaceBindings ? { secretBindings: bindings } : {}), revision: connector.revision, clientNonce: nonce() } }); else { if (!hostAccess || bot.ownerUserId !== snapshot.user.id) throw new Error('Connector setup requires your owned Bot and host.'); await client.call('POST /bots/:id/connectors/setup', { params: { id: bot.id }, body: { name, url, accountLabel, authKind, machineId: bot.machineId, secretBindings: bindings, requestedLevel: level, clientNonce: nonce() } }); } await onSaved(); }); }}><><h3>{connector ? 'Update configuration' : 'Machine-labelled MCP setup'}</h3><QueryState query={host}>{host.data && <p>Assigned host: {host.data.name} · {host.data.status}</p>}</QueryState></><p>Destination: {machine?.name ?? bot.machineId}. Host credentials can be reachable by co-resident Bots; a persona is not a sandbox.</p><ActionNotice action={action} reconcile={async () => { await client.call('GET /bots/:id/connectors', { params: { id: bot.id } }); await onSaved(); }} /><fieldset className="stack" disabled={!online || action.blocked || bot.ownerUserId !== snapshot.user.id || (!connector && !hostAccess)}><Field label="Server name"><input required value={name} onChange={event => setName(event.target.value)} /></Field><Field label="HTTPS streamable MCP URL"><input required type="url" pattern="https://.*" disabled={!!connector} value={url} onChange={event => setUrl(event.target.value)} /></Field><Field label="Account label" hint="Identify the actual account. Renaming is not switching OAuth identity; reconnect separately."><input required value={accountLabel} onChange={event => setAccountLabel(event.target.value)} /></Field>{!connector && <><Field label="Authentication"><select value={authKind} onChange={event => setAuthKind(event.target.value as Connector['authKind'])}><option value="oauth">Provider OAuth</option><option value="secret_headers">Named host-secret headers</option><option value="none">No authentication</option></select></Field>{bot.ownerUserId === snapshot.user.id && hostAccess && <Field label="Requested host grant"><select value={level} onChange={event => setLevel(event.target.value as AccessLevel)}><option value="off">Off</option><option value="read_only">Read only</option><option value="read_interact">Read and interact</option></select></Field>}</>}{connector && <><p>Current secret header names: {connector.secretHeaderNames.join(', ') || 'None'}. Existing secret values and bindings are not disclosed.</p><label className="row"><input type="checkbox" checked={replaceBindings} onChange={event => setReplaceBindings(event.target.checked)} />Replace the complete header-to-secret-name mapping</label></>}{(authKind === 'secret_headers' || connector) && replaceBindings && <fieldset><legend>Secret bindings — names only</legend><QueryState query={secrets}>{bindings.map((binding, index) => <div className="row" key={index}><Field label={`HTTP header ${index + 1}`}><input required value={binding.header} onChange={event => setBindings(bindings.map((item, i) => i === index ? { ...item, header: event.target.value } : item))} /></Field><Field label={`Host secret name ${index + 1}`}><select required value={binding.secretName} onChange={event => setBindings(bindings.map((item, i) => i === index ? { ...item, secretName: event.target.value } : item))}><option value="">Choose existing secret name</option>{secrets.data?.items.map(secret => <option key={secret.id} value={secret.name}>{secret.name} · {secret.scope} · {secret.description}</option>)}</select></Field><button type="button" onClick={() => setBindings(bindings.filter((_, i) => i !== index))}>Remove binding {index + 1}</button></div>)}{secrets.controls}</QueryState><button type="button" disabled={!hostAccess} onClick={() => setBindings([...bindings, { header: '', secretName: '' }])}>Add named-secret binding</button>{!hostAccess && <p className="muted">Your owned machine is required to list or select host secrets.</p>}<button type="button" onClick={() => navigate({ screen: 'machine.secrets', id: bot.machineId, botId: bot.id })}>Create / replace masked host secret</button><p className="muted">Only destination encrypted secrets resolve ${'{LEMON_SECRET:NAME}'}. Never enter tokens in header fields or chat.</p></fieldset>}<button className="primary">{connector ? 'Save configuration' : 'Add actual connector'}</button></fieldset></form>;
 }
 
-function Consents() {
-  const { client } = useApp();
-  const action = useWorkAction();
-  const [expiryHours, setExpiryHours] = useState('');
-  
-  const list = usePages('connector-consents', query => client.call('GET /consents', { query }));
-  return <section className="panel stack"><h2>Your account consent grants</h2><ActionNotice action={action} reconcile={async () => { await client.call('GET /consents'); await list.reload(); }} /><Field label="Optional remembered grant expiry (hours)"><input type="number" min="1" value={expiryHours} onChange={event => setExpiryHours(event.target.value)} /></Field><QueryState query={list}>{list.data?.items.map(consent => <ConsentCard key={consent.id} consent={consent} expiryHours={expiryHours} reload={list.reload} />)}{!list.data?.items.length && <EmptyState title="No account consent requests or remembered grants" />}{list.controls}</QueryState></section>;
-}
-
-function ConsentCard({ consent, expiryHours, reload }: { consent: ConnectorConsent; expiryHours: string; reload: () => Promise<void> }) { useDeadlineClock(); const { client, snapshot, online, navigate } = useApp();
-const action = useWorkAction();
-const [revoking, setRevoking] = useState(false);
-const context = useQuery(`consent-context:${consent.id}`, async () => {
-  const bot = await client.call('GET /bots/:id', { params: { id: consent.botId } });
-  let cursor: string | undefined;
-  do {
-    const page = await client.call('GET /bots/:id/connectors', { params: { id: bot.id }, query: { limit: 200, ...(cursor ? { cursor } : {}) } });
-    const connector = page.items.find(item => item.id === consent.connectorId);
-    if (connector) return { bot, connector };
-    cursor = page.nextCursor ?? undefined;
-  } while (cursor);
-  throw new Error('The account for this consent is no longer available. Reconcile the request before granting access.');
-});
-const pending = consent.gate.state === 'pending' && consent.gate.expiresAtMs > Date.now();
-const targeted = consent.accountOwnerUserId === snapshot.user.id && consent.gate.targetUserId === snapshot.user.id;
-return <article className="card stack">
-  <QueryState query={context}>{context.data && <><h3>{context.data.connector.name} · {context.data.connector.accountLabel}</h3><p>Server: {context.data.connector.url} · Bot: {context.data.bot.name} · Account owner: {consent.accountOwnerUserId === snapshot.user.id ? 'You' : consent.accountOwnerUserId}</p><p>Owner account; no credential lending</p></>}</QueryState>
-  <p>{consent.gate.state} · Scope: {consent.scope} · Grant expiry: {formatTime(consent.expiresAtMs)} · Request expiry: {formatTime(consent.gate.expiresAtMs)}</p>
-  <ActionNotice action={action} reconcile={async () => { await client.call('GET /consents'); await reload(); }} />
-  <button onClick={() => navigate({ screen: 'conversation', id: consent.conversationId, entryId: consent.entryId, botId: consent.botId })}>Review exact private request</button>
-  {pending && <div className="row">{(['allow_once', 'allow_bot', 'decline'] as const).map(decision => <button key={decision} disabled={!targeted || !online || action.blocked || !context.data || !!context.error || (decision === 'allow_bot' && !!expiryHours && (!Number.isFinite(Number(expiryHours)) || Number(expiryHours) < 1))} onClick={() => void action.run(async () => {
-    await client.call('POST /consents/:id/resolve', { params: { id: consent.id }, body: { decision, revision: consent.revision, clientNonce: nonce(), ...(decision === 'allow_bot' && expiryHours ? { expiresAtMs: Date.now() + Number(expiryHours) * 3600000 } : {}) } });
-    await reload();
-  })}>{decision === 'allow_once' ? 'Allow once' : decision === 'allow_bot' ? 'Allow this Bot' : 'Decline'}</button>)}</div>}
-  {consent.gate.state === 'approved' && (revoking ? <div className="stack"><p>Revoke future use of this exact account grant? Prior actions are not undone.</p><button className="danger" disabled={!targeted || !online || action.blocked} onClick={() => void action.run(async () => {
-    await client.call('DELETE /consents/:id', { params: { id: consent.id }, body: { revision: consent.revision, clientNonce: nonce() } });
-    setRevoking(false); await reload();
-  })}>Confirm revoke grant</button><button onClick={() => setRevoking(false)}>Keep grant</button></div> : <button disabled={!targeted} onClick={() => setRevoking(true)}>Revoke future account access…</button>)}
-</article>; }
