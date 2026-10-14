@@ -15,7 +15,8 @@ import { revokeConnectorInvocations } from '../../src/runtime/runs';
 import { Router } from '../../src/core/router';
 import { ApiError } from '../../src/core/errors';
 import { createPolicyServices } from '../../src/enterprise/policy';
-import { createConnectorRoutes, createConnectorServices, connectorConfigurationFingerprint, type ConnectorProfileServer } from '../../src/integrations/connectors';
+import { createConnectorRoutes, createConnectorServices, connectorConfigurationFingerprint } from '../../src/integrations/connectors';
+import type { InvocationMcpServer } from '../../src/runtime/runs';
 import { privateMetadata, sha256 } from '../../src/integrations/common';
 import type { OAuthState } from '../../src/integrations/oauth';
 
@@ -208,7 +209,7 @@ describe('destination connector configuration', () => {
     const before = f.peer.calls.length;
     const decrypt = f.services.decrypt;
     f.services.decrypt = () => { throw new Error('Public template getter attempted to inspect private metadata.'); };
-    let templates: ConnectorProfileServer[];
+    let templates: InvocationMcpServer[];
     try { templates = await f.connectors.connectorTemplates(f.bot.id); }
     finally { f.services.decrypt = decrypt; }
     expect(templates).toEqual([{ name: `connector-${connector.id}`, url: `${ORIGIN}/mcp`, headers: {}, enabledTools: ['read_items', 'write_item'], allowedOrigins: [ORIGIN], approvedPrivateOrigins: [] }]);
