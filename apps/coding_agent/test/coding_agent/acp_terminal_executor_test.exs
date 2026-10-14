@@ -18,6 +18,7 @@ defmodule CodingAgent.ACPTerminalExecutorTest do
         ACPTerminalExecutor.execute(command, "/tmp",
           run_id: run_id,
           timeout: 2_000,
+          env: %{"B_VAR" => "two", "A_VAR" => "one"},
           on_chunk: &send(parent, {:chunk, &1}),
           on_terminal: &send(parent, {:terminal, &1})
         )
@@ -27,6 +28,12 @@ defmodule CodingAgent.ACPTerminalExecutorTest do
     assert create.params["command"] == elem(CodingAgent.BashExecutor.get_shell_config(), 0)
     assert create.params["args"] == ["-c", command]
     assert create.params["cwd"] == "/tmp"
+
+    assert create.params["env"] == [
+             %{"name" => "A_VAR", "value" => "one"},
+             %{"name" => "B_VAR", "value" => "two"}
+           ]
+
     reply(create, %{"terminalId" => "native"})
     assert_receive {:terminal, "native"}
     wait = request("terminal/wait_for_exit")

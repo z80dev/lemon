@@ -14,6 +14,14 @@ defmodule CodingAgent.Tools.Bash do
   its output with `bash_output` and stop it with `kill_process`. Background
   processes are owned by the calling session and are killed when that
   session's process exits.
+
+  `cwd` runs the command in another existing directory (relative paths
+  resolve against the session cwd) and `env` layers extra string variables
+  over the inherited environment; both apply to foreground, PTY, background
+  and ACP-terminal runs. Bare or whole-word quoted `skill://` and
+  `artifact://` references in `command` are replaced by their shell-quoted
+  absolute paths before the command starts; an unresolvable reference fails
+  the call without running anything.
   """
 
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
@@ -22,10 +30,12 @@ defmodule CodingAgent.Tools.Bash do
   alias LemonAi.Types.TextContent
   alias CodingAgent.BashExecutor
   alias CodingAgent.ProcessManager
-  alias CodingAgent.Tools.Bash.StreamingPreview
+  alias CodingAgent.Tools.Bash.{InternalUrlExpansion, StreamingPreview}
+  alias CodingAgent.Tools.PathHelpers
 
   @default_timeout_ms 120_000
   @max_timeout_ms 600_000
+  @env_name ~r/\A[A-Za-z_][A-Za-z0-9_]*\z/
 
   @doc """
   Returns the bash tool definition.
@@ -46,15 +56,28 @@ defmodule CodingAgent.Tools.Bash do
     %AgentTool{
       name: "bash",
       description:
-        "Execute a bash command in the project root. Foreground commands time out after " <>
+        "Execute a bash command in the project root (or `cwd`). Foreground commands time out after " <>
           "`timeout` ms (default #{@default_timeout_ms}, max #{@max_timeout_ms}). For servers, " <>
           "watchers, or builds that may run longer, set run_in_background: true, then poll with " <>
-          "bash_output and stop with kill_process.",
+          "bash_output and stop with kill_process. Set `cwd` instead of `cd`; pass multiline or " <>
+          "quote-heavy values through `env`. skill:// and artifact:// references in the command " <>
+          "are replaced with their absolute file paths.",
       label: "Run Command",
       parameters: %{
         "type" => "object",
         "properties" => %{
           "command" => %{"type" => "string", "description" => "The bash command to execute"},
+          "cwd" => %{
+            "type" => "string",
+            "description" =>
+              "Working directory for this command (absolute, or relative to the project root); must exist"
+          },
+          "env" => %{
+            "type" => "object",
+            "additionalProperties" => %{"type" => "string"},
+            "description" =>
+              "Extra environment variables for this command, e.g. {\"NAME\": \"value\"}"
+          },
           "timeout" => %{
             "type" => "integer",
             "minimum" => 1,
@@ -86,8 +109,8 @@ defmodule CodingAgent.Tools.Bash do
 
   ## Parameters
 
-    * `tool_call_id` - Unique identifier for this tool invocation
-    * `params` - "command" (required), "timeout", "run_in_background", "pty"
+    * `params` - "command" (required), "timeout", "run_in_background", "pty",
+      "cwd", "env"
     * `signal` - Abort signal reference for cancellation (can be nil)
     * `on_update` - Callback function for streaming partial results (can be nil)
     * `cwd` - Working directory for command execution
@@ -121,6 +144,7 @@ defmodule CodingAgent.Tools.Bash do
   defp do_execute(params, signal, on_update, cwd, opts) do
     command = Map.get(params, "command")
     use_pty = Map.get(params, "pty", false)
+    background = Map.get(params, "run_in_background", false)
 
     cond do
       not is_binary(command) or String.trim(command) == "" ->
@@ -129,21 +153,66 @@ defmodule CodingAgent.Tools.Bash do
       not is_boolean(use_pty) ->
         {:error, "pty must be a boolean"}
 
-      not is_boolean(Map.get(params, "run_in_background", false)) ->
+      not is_boolean(background) ->
         {:error, "run_in_background must be a boolean"}
 
-      Map.get(params, "run_in_background", false) != true ->
-        with {:ok, timeout_ms} <- resolve_timeout(params, opts) do
-          run_foreground(command, use_pty, timeout_ms, signal, on_update, cwd, opts)
-        end
-
-      use_pty == true ->
+      background and use_pty ->
         {:error, "pty is not supported with run_in_background"}
 
       true ->
-        run_in_background(command, cwd, opts)
+        with {:ok, run_cwd} <- resolve_cwd(Map.get(params, "cwd"), cwd),
+             {:ok, env} <- validate_env(Map.get(params, "env")),
+             {:ok, command} <- InternalUrlExpansion.expand(command, Keyword.put(opts, :cwd, cwd)) do
+          if background do
+            run_in_background(command, run_cwd, env, opts)
+          else
+            with {:ok, timeout_ms} <- resolve_timeout(params, opts) do
+              run_foreground(command, use_pty, timeout_ms, signal, on_update, run_cwd, env, opts)
+            end
+          end
+        end
     end
   end
+
+  defp resolve_cwd(nil, cwd), do: {:ok, cwd}
+
+  defp resolve_cwd(path, cwd) when is_binary(path) do
+    resolved =
+      if String.contains?(path, <<0>>), do: nil, else: PathHelpers.resolve_path(path, cwd)
+
+    cond do
+      String.trim(path) == "" -> {:error, "cwd must be a non-empty string"}
+      resolved && File.dir?(resolved) -> {:ok, resolved}
+      true -> {:error, "cwd is not an existing directory: #{inspect(path)}"}
+    end
+  end
+
+  defp resolve_cwd(_path, _cwd), do: {:error, "cwd must be a string"}
+
+  defp validate_env(nil), do: {:ok, %{}}
+
+  defp validate_env(env) when is_map(env) do
+    Enum.reduce_while(env, {:ok, %{}}, fn {name, value}, {:ok, acc} ->
+      cond do
+        not (is_binary(name) and Regex.match?(@env_name, name)) ->
+          {:halt,
+           {:error,
+            "env name #{inspect(name)} is invalid; names must match ^[A-Za-z_][A-Za-z0-9_]*$"}}
+
+        not is_binary(value) ->
+          {:halt, {:error, "env value for #{name} must be a string"}}
+
+        String.contains?(value, <<0>>) ->
+          {:halt, {:error, "env value for #{name} must not contain NUL bytes"}}
+
+        true ->
+          {:cont, {:ok, Map.put(acc, name, value)}}
+      end
+    end)
+  end
+
+  defp validate_env(_env),
+    do: {:error, "env must be an object mapping variable names to string values"}
 
   defp resolve_timeout(params, opts) do
     default =
@@ -157,7 +226,7 @@ defmodule CodingAgent.Tools.Bash do
     end
   end
 
-  defp run_foreground(command, use_pty, timeout_ms, signal, on_update, cwd, opts) do
+  defp run_foreground(command, use_pty, timeout_ms, signal, on_update, cwd, env, opts) do
     # Set up streaming callback if on_update is provided
     {accumulator_pid, streaming_callback} = build_streaming_callback(on_update)
 
@@ -166,7 +235,8 @@ defmodule CodingAgent.Tools.Bash do
         on_chunk: streaming_callback,
         signal: signal,
         timeout: timeout_ms,
-        pty: use_pty
+        pty: use_pty,
+        env: env
       ]
 
     executor =
@@ -200,10 +270,11 @@ defmodule CodingAgent.Tools.Bash do
     end
   end
 
-  defp run_in_background(command, cwd, opts) do
+  defp run_in_background(command, cwd, env, opts) do
     exec_opts = [
       command: command,
       cwd: cwd,
+      env: env,
       owner: Keyword.get(opts, :session_id),
       owner_pid: Keyword.get(opts, :session_pid)
     ]

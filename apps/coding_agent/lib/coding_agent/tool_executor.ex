@@ -168,7 +168,7 @@ defmodule CodingAgent.ToolExecutor do
       session_key: session_key,
       tool_call_id: tool_call_id,
       tool: tool_name,
-      action: args,
+      action: approval_action(tool_name, args),
       rationale: "Tool execution: #{tool_name}",
       expires_in_ms: timeout_ms
     })
@@ -178,6 +178,16 @@ defmodule CodingAgent.ToolExecutor do
       # exit, and throw here without exposing arbitrary service error terms.
       {:error, :approval_unavailable}
   end
+
+  # Approval actions are stored, broadcast and shown to approvers; they carry
+  # bash env variable names only, never values (which may be secrets).
+  defp approval_action("bash", %{"env" => env} = args) when is_map(env) do
+    args
+    |> Map.delete("env")
+    |> Map.put("env_keys", env |> Map.keys() |> Enum.map(&to_string/1) |> Enum.sort())
+  end
+
+  defp approval_action(_tool_name, args), do: args
 
   defp safe_approval_error(reason) when reason in [:approval_unavailable, :service_unavailable],
     do: reason
