@@ -34,9 +34,10 @@ defmodule CodingAgent.Coordinator do
   The Coordinator uses `CodingAgent.SessionSupervisor` to start sessions.
   Supervised lifecycle workers own each session's event subscription and monitor,
   leaving the coordinator responsive during admission, prompt startup and cleanup.
-  Results retain specification order, and cancelled admissions clean up any session
-  that finishes starting after cancellation. Active IDs remain tracked until their
-  workers and sessions have exited.
+  Results retain specification order and remain terminal during cleanup. Independent
+  admission guardians clean up late-starting sessions even if an execution worker
+  dies before admission returns. Active IDs remain tracked until their workers,
+  guardians and sessions have exited.
 
   Execution deadlines include startup. Remaining subagents are aborted and stopped
   on timeout or cancellation.
@@ -80,7 +81,9 @@ defmodule CodingAgent.Coordinator do
   @typep subagent_state :: %{
            pid: pid() | nil,
            session_id: String.t() | nil,
-           monitor_ref: reference(),
+           monitor_ref: reference() | nil,
+           guardian_ref: reference() | nil,
+           guardian_pid: pid() | nil,
            session_monitor_ref: reference() | nil,
            worker_pid: pid() | nil,
            batch: reference(),
@@ -272,14 +275,14 @@ defmodule CodingAgent.Coordinator do
 
         state =
           Enum.reduce(specs_with_ids, state, fn {id, spec}, acc ->
-            case start_background_task(fn ->
-                   run_subagent_worker(coordinator, id, spec, worker_state)
-                 end) do
-              {:ok, worker} ->
+            case start_subagent_tasks(coordinator, id, spec, worker_state) do
+              {:ok, worker, guardian} ->
                 subagent = %{
                   pid: nil,
                   session_id: nil,
                   monitor_ref: Process.monitor(worker),
+                  guardian_ref: Process.monitor(guardian),
+                  guardian_pid: guardian,
                   session_monitor_ref: nil,
                   worker_pid: worker,
                   batch: batch_ref,
@@ -303,6 +306,13 @@ defmodule CodingAgent.Coordinator do
 
   def handle_call(:abort_all, _from, state) do
     {:reply, :ok, cancel_all(state)}
+  end
+
+  def handle_call({:subagent_result, id, result}, _from, state) do
+    case Map.get(state.active_subagents, id) do
+      nil -> {:reply, :ok, state}
+      subagent -> {:reply, :ok, put_result(state, subagent.batch, result)}
+    end
   end
 
   @impl true
@@ -338,7 +348,7 @@ defmodule CodingAgent.Coordinator do
 
   def handle_info({:DOWN, ref, :process, _pid, reason}, state) do
     case Enum.find(state.active_subagents, fn {_id, subagent} ->
-           ref in [subagent.monitor_ref, subagent.session_monitor_ref]
+           ref in [subagent.monitor_ref, subagent.guardian_ref, subagent.session_monitor_ref]
          end) do
       nil ->
         {:noreply, state}
@@ -347,22 +357,26 @@ defmodule CodingAgent.Coordinator do
         result = build_crashed_result(id, subagent.session_id, reason)
         state = put_result(state, subagent.batch, result)
 
-        if subagent.pid && Process.alive?(subagent.pid) do
-          # A worker crash must not orphan the session it already admitted.
+        subagent = %{subagent | worker_pid: nil, monitor_ref: nil, status: :stopping}
+
+        if is_nil(subagent.guardian_pid) && subagent.pid && Process.alive?(subagent.pid) do
           start_background_task(fn -> cleanup_session(subagent.pid) end)
-          subagent = %{subagent | worker_pid: nil, status: :stopping}
-          {:noreply, %{state | active_subagents: Map.put(state.active_subagents, id, subagent)}}
-        else
-          {:noreply, finish_subagent(state, id, subagent)}
         end
 
-      {id, subagent} ->
-        if subagent.worker_pid do
-          subagent = %{subagent | pid: nil, session_monitor_ref: nil}
-          {:noreply, %{state | active_subagents: Map.put(state.active_subagents, id, subagent)}}
-        else
-          {:noreply, finish_subagent(state, id, subagent)}
+        {:noreply, retain_or_finish_subagent(state, id, subagent)}
+
+      {id, %{guardian_ref: ^ref} = subagent} ->
+        subagent = %{subagent | guardian_pid: nil, guardian_ref: nil}
+
+        if reason != :normal && subagent.worker_pid do
+          send(subagent.worker_pid, {:cancel, :aborted})
         end
+
+        {:noreply, retain_or_finish_subagent(state, id, subagent)}
+
+      {id, subagent} ->
+        subagent = %{subagent | pid: nil, session_monitor_ref: nil}
+        {:noreply, retain_or_finish_subagent(state, id, subagent)}
     end
   end
 
@@ -380,8 +394,88 @@ defmodule CodingAgent.Coordinator do
 
   def handle_info(_msg, state), do: {:noreply, state}
 
+  defp start_subagent_tasks(coordinator, id, spec, state) do
+    case start_background_task(fn -> run_subagent_worker(coordinator, id, spec, state) end) do
+      {:ok, worker} ->
+        case start_background_task(fn -> admission_guardian(coordinator, id, worker, state) end) do
+          {:ok, guardian} ->
+            send(worker, {:admission_guardian, guardian})
+            {:ok, worker, guardian}
+
+          {:error, reason} ->
+            send(worker, {:admission_guardian_error, reason})
+            {:error, reason}
+        end
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp admission_guardian(coordinator, id, worker, state) do
+    worker_ref = Process.monitor(worker)
+    owner_ref = Process.monitor(coordinator)
+
+    receive do
+      {:admit_session, ^worker, opts} ->
+        result =
+          try do
+            state.session_starter.(opts)
+          catch
+            :exit, reason -> {:error, {:crashed, reason}}
+          end
+
+        case result do
+          {:ok, pid} ->
+            Process.unlink(pid)
+            session_ref = Process.monitor(pid)
+            send(coordinator, {:subagent_session, id, pid})
+            send(worker, {:admission_result, self(), result})
+
+            # Admission can outlive a killed caller. This independent owner
+            # stays until normal cleanup or cleans the late child on owner death.
+            receive do
+              :release_guardian -> :ok
+              {:DOWN, ^worker_ref, :process, ^worker, _reason} -> cleanup_session(pid)
+              {:DOWN, ^owner_ref, :process, ^coordinator, _reason} -> cleanup_session(pid)
+            end
+
+            await_session_down(pid, session_ref)
+
+          {:error, _reason} ->
+            send(worker, {:admission_result, self(), result})
+        end
+
+      :release_guardian -> :ok
+      {:DOWN, ^worker_ref, :process, ^worker, _reason} -> :ok
+      {:DOWN, ^owner_ref, :process, ^coordinator, _reason} -> :ok
+    end
+
+    Process.demonitor(worker_ref, [:flush])
+    Process.demonitor(owner_ref, [:flush])
+  end
+
+  defp admit_session(guardian, opts) do
+    send(guardian, {:admit_session, self(), opts})
+    ref = Process.monitor(guardian)
+
+    receive do
+      {:admission_result, ^guardian, result} ->
+        Process.demonitor(ref, [:flush])
+        result
+
+      {:DOWN, ^ref, :process, ^guardian, reason} ->
+        {:error, {:crashed, reason}}
+    end
+  end
+
   defp run_subagent_worker(coordinator, id, spec, state) do
     owner_ref = Process.monitor(coordinator)
+    guardian =
+      receive do
+        {:admission_guardian, guardian} -> guardian
+        {:admission_guardian_error, reason} -> exit(reason)
+      end
 
     result =
       try do
@@ -393,23 +487,23 @@ defmodule CodingAgent.Coordinator do
 
         with {:ok, validated} <- Params.validate_run_params(params, state.cwd),
              :ok <- check_cancelled(owner_ref),
-             {:ok, pid} <- state.session_starter.(build_session_opts(state, validated)) do
-          # Do not kill a blocked starter on cancellation: admission may still
-          # succeed. Its worker retains ownership and cleans up the late child.
-          send(coordinator, {:subagent_session, id, pid})
+             {:ok, pid} <- admit_session(guardian, build_session_opts(state, validated)) do
           session_ref = Process.monitor(pid)
-          # Standalone admission may link the session to this worker. Lifecycle
-          # ownership is monitor-based, so intentional shutdown must not kill it.
-          Process.unlink(pid)
 
           try do
-            with :ok <- check_cancelled(owner_ref) do
-              session_id = Session.get_stats(pid).session_id
-              send(coordinator, {:subagent_ready, id, session_id})
-              run_session(pid, session_ref, session_id, owner_ref, id, validated.prompt)
-            else
-              {:cancelled, status} -> terminal_result(id, nil, status)
-            end
+            result =
+              with :ok <- check_cancelled(owner_ref) do
+                session_id = Session.get_stats(pid).session_id
+                send(coordinator, {:subagent_ready, id, session_id})
+                run_session(pid, session_ref, session_id, owner_ref, id, validated.prompt)
+              else
+                {:cancelled, status} -> terminal_result(id, nil, status)
+              end
+
+            # Execution is terminal before cleanup begins. Later cancellation
+            # must not replace this answer/error while shutdown is still pending.
+            GenServer.call(coordinator, {:subagent_result, id, result})
+            result
           after
             cleanup_session(pid)
             await_session_down(pid, session_ref)
@@ -427,6 +521,7 @@ defmodule CodingAgent.Coordinator do
 
     send(coordinator, {:subagent_result, id, result})
     Process.demonitor(owner_ref, [:flush])
+    send(guardian, :release_guardian)
   end
 
   defp run_session(pid, session_ref, session_id, owner_ref, id, prompt) do
@@ -506,6 +601,15 @@ defmodule CodingAgent.Coordinator do
     end
   end
 
+  defp retain_or_finish_subagent(state, id, subagent) do
+    if is_nil(subagent.worker_pid) && is_nil(subagent.guardian_pid) &&
+         (is_nil(subagent.pid) || not Process.alive?(subagent.pid)) do
+      finish_subagent(state, id, subagent)
+    else
+      %{state | active_subagents: Map.put(state.active_subagents, id, subagent)}
+    end
+  end
+
   defp finish_subagent(state, id, subagent) do
     if subagent.session_monitor_ref, do: Process.demonitor(subagent.session_monitor_ref, [:flush])
     state = %{state | active_subagents: Map.delete(state.active_subagents, id)}
@@ -547,8 +651,11 @@ defmodule CodingAgent.Coordinator do
       end)
 
     # Already-terminal batches may still have admissions or cleanup in flight.
-    Enum.each(state.active_subagents, fn {_id, subagent} ->
-      if subagent.worker_pid, do: send(subagent.worker_pid, {:cancel, :aborted})
+    Enum.each(state.active_subagents, fn {id, subagent} ->
+      case Map.get(state.batches, subagent.batch) do
+        %{results: results} when is_map_key(results, id) -> :ok
+        _ -> if subagent.worker_pid, do: send(subagent.worker_pid, {:cancel, :aborted})
+      end
     end)
 
     state
@@ -571,7 +678,7 @@ defmodule CodingAgent.Coordinator do
               nil ->
                 acc
 
-              subagent ->
+              subagent when not is_map_key(batch.results, id) ->
                 if subagent.worker_pid, do: send(subagent.worker_pid, {:cancel, status})
                 if subagent.pid && subagent.status != :stopping do
                   start_background_task(fn -> cleanup_session(subagent.pid) end)
@@ -580,6 +687,9 @@ defmodule CodingAgent.Coordinator do
                 subagent = %{subagent | status: :stopping}
                 acc = put_result(acc, batch_ref, result)
                 %{acc | active_subagents: Map.put(acc.active_subagents, id, subagent)}
+
+              _terminal_subagent ->
+                acc
             end
           end)
 

@@ -41,7 +41,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   execution request, while provider credentials remain destination-local.
 - Subagent coordinators remain responsive to active-session queries and cancellation
   while child sessions are starting, rather than blocking those requests behind
-  synchronous session initialization.
+  synchronous session initialization. Terminal answers and provider errors survive
+  cancellation during cleanup, and late admissions retain a cleanup owner even if
+  their execution worker dies during startup.
 
 ---
 
