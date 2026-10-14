@@ -764,6 +764,12 @@ Provider onboarding flows:
 - Write the relevant `providers.<provider>` config keys
 - Support `--set-default`, `--model`, and `--config-path`
 
+API-key-only providers in the catalog are offered too: `google` (Gemini API),
+`groq`, `cerebras`, `deepseek`, `mistral`, `huggingface`, `qwen` (DashScope),
+`vercel_ai_gateway`, `opencode`, `opencode_go`, `minimax_cn`, `fireworks`,
+`zai`, `kimi` and `minimax`. The pasted key is stored as `llm_<provider>_api_key`
+and referenced through `[providers.<provider>].api_key_secret`.
+
 Provider readiness is visible through the source and packaged
 `lemon providers status` command. It uses the same
 `LemonAgent.ModelRuntime.Credentials` credential resolver as model execution, so env keys, encrypted
@@ -798,6 +804,15 @@ references require the exact confirmation value shown by the preview:
 ```bash
 lemon providers fallback remove zai --dry-run --json
 lemon providers fallback remove zai --confirm zai
+```
+
+To keep several logins for one provider, sign in again under another secret
+name and add that name to a pool; OAuth logins referenced from a pool refresh
+like the default login:
+
+```bash
+lemon model anthropic --auth oauth --secret-name llm_anthropic_work
+lemon providers pool credential add burst anthropic secret:llm_anthropic_work
 ```
 
 

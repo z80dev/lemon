@@ -329,18 +329,26 @@ defmodule LemonAi.Auth.OpenAICodexOAuth do
   Resolve a usable Codex access token from an OAuth secret.
 
   Returns `:ignore` for non-Codex-OAuth payloads.
+
+  Codex refresh tokens rotate, so a refresh runs under a per-secret lock and
+  re-reads the stored secret through `:reload_secret` first: a caller queued
+  behind a refresh uses the rotated token instead of replaying the consumed
+  refresh token. `force_refresh: true` refreshes even an unexpired token (the
+  provider rejected it) unless the stored token already differs from the
+  rejected one, and never falls back to the rejected token.
   """
-  @spec resolve_api_key_from_secret(String.t(), String.t()) ::
+  @spec resolve_api_key_from_secret(String.t(), String.t(), keyword()) ::
           {:ok, String.t()} | :ignore | {:error, term()}
   def resolve_api_key_from_secret(secret_name, secret_value, opts \\ [])
 
   def resolve_api_key_from_secret(secret_name, secret_value, opts)
       when is_binary(secret_name) and is_binary(secret_value) do
+    force? = Keyword.get(opts, :force_refresh, false) == true
+
     with {:ok, secret} <- decode_secret(secret_value),
-         {:ok, refreshed_secret, changed?} <- ensure_fresh_secret(secret),
+         {:ok, fresh_secret} <- ensure_fresh(secret_name, secret, force?, opts),
          access_token when is_binary(access_token) and access_token != "" <-
-           non_empty_binary(refreshed_secret["access_token"]),
-         :ok <- if(changed?, do: persist_secret(secret_name, refreshed_secret, opts), else: :ok) do
+           non_empty_binary(fresh_secret["access_token"]) do
       {:ok, access_token}
     else
       :not_oauth -> :ignore
@@ -364,50 +372,98 @@ defmodule LemonAi.Auth.OpenAICodexOAuth do
       non_empty_binary(System.get_env("CHATGPT_TOKEN"))
   end
 
-  defp ensure_fresh_secret(secret) when is_map(secret) do
+  defp ensure_fresh(secret_name, secret, force?, opts) do
+    if force? or refresh_due?(secret) do
+      :global.trans(
+        {{__MODULE__, :refresh, secret_name}, self()},
+        fn ->
+          latest = reload_latest_secret(secret_name, secret, opts)
+
+          cond do
+            force? and latest["access_token"] == secret["access_token"] ->
+              refresh_and_persist(secret_name, latest, true, opts)
+
+            not force? and refresh_due?(latest) ->
+              refresh_and_persist(secret_name, latest, false, opts)
+
+            true ->
+              usable(latest)
+          end
+        end,
+        [node()]
+      )
+    else
+      usable(secret)
+    end
+  end
+
+  defp refresh_due?(secret) do
     access_token = non_empty_binary(secret["access_token"])
-    refresh_token = non_empty_binary(secret["refresh_token"])
     expires_at_ms = token_expiry_ms(access_token, parse_integer(secret["expires_at_ms"]))
 
-    should_refresh? =
-      cond do
-        is_nil(refresh_token) -> false
-        is_nil(access_token) -> true
-        is_nil(expires_at_ms) -> false
-        true -> near_expiry?(expires_at_ms)
-      end
+    cond do
+      is_nil(non_empty_binary(secret["refresh_token"])) -> false
+      is_nil(access_token) -> true
+      is_nil(expires_at_ms) -> false
+      true -> near_expiry?(expires_at_ms)
+    end
+  end
 
-    if should_refresh? do
-      case refresh_access_token(refresh_token, refresh_token) do
-        {:ok, refreshed} ->
-          account_id = extract_account_id(refreshed.access_token)
+  defp usable(secret) do
+    access_token = non_empty_binary(secret["access_token"])
+    expires_at_ms = token_expiry_ms(access_token, parse_integer(secret["expires_at_ms"]))
 
-          updated =
-            secret
-            |> Map.put("access_token", refreshed.access_token)
-            |> Map.put("refresh_token", refreshed.refresh_token)
-            |> Map.put("expires_at_ms", refreshed.expires_at_ms)
-            |> maybe_put("account_id", account_id)
-            |> Map.put("updated_at_ms", System.system_time(:millisecond))
-
-          {:ok, updated, true}
-
-        {:error, reason} ->
-          if is_binary(access_token) and is_integer(expires_at_ms) and
-               expires_at_ms > System.system_time(:millisecond) do
-            Logger.debug("OpenAI Codex OAuth refresh failed; using unexpired existing token")
-
-            {:ok, secret, false}
-          else
-            {:error, reason}
-          end
-      end
+    if is_integer(expires_at_ms) and expires_at_ms <= System.system_time(:millisecond) do
+      {:error, :expired_access_token}
     else
-      if is_integer(expires_at_ms) and expires_at_ms <= System.system_time(:millisecond) do
-        {:error, :expired_access_token}
-      else
-        {:ok, secret, false}
-      end
+      {:ok, secret}
+    end
+  end
+
+  # Without a reload callback the caller's copy is the latest one available.
+  defp reload_latest_secret(secret_name, stale, opts) do
+    with reload when is_function(reload, 1) <- Keyword.get(opts, :reload_secret),
+         {:ok, value} when is_binary(value) <- reload.(secret_name),
+         {:ok, latest} <- decode_secret(value) do
+      latest
+    else
+      _ -> stale
+    end
+  end
+
+  defp refresh_and_persist(secret_name, secret, force?, opts) do
+    access_token = non_empty_binary(secret["access_token"])
+    expires_at_ms = token_expiry_ms(access_token, parse_integer(secret["expires_at_ms"]))
+
+    case non_empty_binary(secret["refresh_token"]) do
+      nil ->
+        {:error, :not_refreshable}
+
+      refresh_token ->
+        case refresh_access_token(refresh_token, refresh_token) do
+          {:ok, refreshed} ->
+            account_id = extract_account_id(refreshed.access_token)
+
+            updated =
+              secret
+              |> Map.put("access_token", refreshed.access_token)
+              |> Map.put("refresh_token", refreshed.refresh_token)
+              |> Map.put("expires_at_ms", refreshed.expires_at_ms)
+              |> maybe_put("account_id", account_id)
+              |> Map.put("updated_at_ms", System.system_time(:millisecond))
+
+            with :ok <- persist_secret(secret_name, updated, opts), do: {:ok, updated}
+
+          {:error, reason} ->
+            if not force? and is_binary(access_token) and is_integer(expires_at_ms) and
+                 expires_at_ms > System.system_time(:millisecond) do
+              Logger.debug("OpenAI Codex OAuth refresh failed; using unexpired existing token")
+
+              {:ok, secret}
+            else
+              {:error, reason}
+            end
+        end
     end
   end
 
