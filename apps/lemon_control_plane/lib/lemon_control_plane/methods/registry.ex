@@ -64,6 +64,12 @@ defmodule LemonControlPlane.Methods.Registry do
     LemonControlPlane.Methods.ProfilesDelete,
     LemonControlPlane.Methods.ProfilesRoster,
     LemonControlPlane.Methods.ProfileChat,
+    # Profile-scoped memory
+    LemonControlPlane.Methods.MemoryList,
+    LemonControlPlane.Methods.MemorySearch,
+    LemonControlPlane.Methods.MemoryGet,
+    LemonControlPlane.Methods.MemoryAdd,
+    LemonControlPlane.Methods.MemoryDelete,
     # Agents
     LemonControlPlane.Methods.AgentsList,
     # Skills

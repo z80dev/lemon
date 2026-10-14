@@ -477,6 +477,16 @@ defmodule LemonMemory.Store do
     :exit, reason -> {:error, {:timeout_or_down, reason}}
   end
 
+  @doc "Fetch a bounded agent window without hiding store failures as empty memory."
+  @spec list_agent_recent(GenServer.server(), binary(), keyword()) ::
+          {:ok, [Document.t()]} | {:error, term()}
+  def list_agent_recent(server, agent_id, opts \\ []) when is_binary(agent_id) do
+    limit = opts |> Keyword.get(:limit, 200) |> clamp_limit(500)
+    GenServer.call(server, {:list_agent_recent, agent_id, limit}, 5_000)
+  catch
+    :exit, reason -> {:error, {:timeout_or_down, reason}}
+  end
+
   defp query_opts(opts) do
     since_ms =
       case Keyword.get(opts, :since_ms) do
@@ -772,6 +782,10 @@ defmodule LemonMemory.Store do
 
   def handle_call({:list_recent, limit}, _from, state) do
     {:reply, do_query_result(state, state.stmts.list_recent, [limit]), state}
+  end
+
+  def handle_call({:list_agent_recent, agent_id, limit}, _from, state) do
+    {:reply, do_query_result(state, state.stmts.get_by_agent, [agent_id, limit]), state}
   end
 
   def handle_call({:delete_document_if_unchanged, doc_id, revision}, _from, state) do

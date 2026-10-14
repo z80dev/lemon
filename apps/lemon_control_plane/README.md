@@ -229,6 +229,58 @@ process so heartbeats and other control frames continue while it is working.
 A disconnected client must inspect session status before retrying: the durable
 summary may have committed even when its acknowledgement was lost.
 
+## Profile memory
+
+The `memory.*` methods address a managed profile by `profileId`; they never accept
+a workspace path or an arbitrary memory scope. Reads require `operator.read`;
+add and delete require `operator.admin`. All run asynchronously so a named-node
+request does not block the connection's events or heartbeat.
+
+| Method | Parameters | Successful payload |
+|---|---|---|
+| `memory.list` | `{profileId, query?, limit?, cursor?}` | `{items, nextCursor}` |
+| `memory.search` | `{profileId, query, limit?}` | `{items, nextCursor}` |
+| `memory.get` | `{profileId, id}` | `{item}` |
+| `memory.add` | `{profileId, text, kind?}` | `{item}` |
+| `memory.delete` | `{profileId, id, confirm}` | `{deleted: true, id}` |
+
+`limit` is 1–50 (default 25); `query` is bounded to 256 UTF-8 bytes.
+`nextCursor` is null at the end of the bounded recent window. Pass a returned
+cursor to `memory.list` with the same profile/query; a stale or mismatched cursor
+is rejected rather than silently skipping changed memory. This is not an
+unbounded archive export.
+
+Each item is exactly `{id, kind, text, source, createdAtMs, updatedAtMs}`.
+`text` is an operator-redacted preview of at most 2 KiB, not a full raw memory
+record. `source` is `workspace` or `durable`; raw paths, credentials, provenance
+contents and arbitrary provider errors are excluded. Workspace preferences use
+`kind: "user"` or `"memory"`; durable records retain their supported memory kind.
+
+Adding defaults to `kind: "memory"` (assistant `MEMORY.md`); `"user"` writes
+assistant `USER.md`. It uses the same secret/prompt-injection screening and file
+size limits as `remember`, not a second store. `text` is bounded to 4,096 bytes.
+Read/list the item before deletion and set `confirm` to its **exact item id**;
+booleans or another id are rejected. Opaque item ids bind profile and revision:
+workspace preferences bind exact text plus the whole file revision, while durable
+ids bind the document revision. Refresh the item after any concurrent change.
+Durable deletion uses the lifecycle service's revision-bound preview/confirmation
+and atomic compare-and-delete.
+
+For a named-node profile the controller sends only JSON-safe method parameters
+over the existing node invocation channel. The destination derives the profile
+workspace locally; neither the controller's workspace nor credentials cross the
+boundary. Durable records must match both the profile agent id and the assistant
+home identity; foreign and unscoped legacy memory is not exposed. There is no
+local fallback for an unavailable destination. A lost remote mutation receipt
+returns `UNAVAILABLE` with
+`{code: "MEMORY_OUTCOME_UNKNOWN", profileId, invokeId, retrySafe: false}`.
+Re-read memory before deciding whether to repeat the mutation.
+
+No memory-content event is broadcast. Remote terminal replies use
+`node.invoke.result` with `result: {ok: true, payload: <payload above>}` or
+`result: {ok: false, error: "<bounded service classification>"}`; the existing
+authenticated node/session/invocation ownership checks still apply.
+
 ## Named execution nodes
 
 On the destination host, supply the controller's operator credential for pairing:

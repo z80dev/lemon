@@ -91,6 +91,19 @@ defmodule LemonMemory.Project do
   end
 
   def history_document?(_, _, _), do: false
+
+  @doc "Check an operator profile boundary, including project learnings across repositories."
+  def profile_document?(%Document{} = doc, context) do
+    with {:ok, identity} <- scope(context),
+         meta when is_map(meta) <- doc.meta do
+      doc.agent_id == identity.agent_id and
+        (meta["home_digest"] || meta[:home_digest]) == identity.home_digest
+    else
+      _ -> false
+    end
+  end
+
+  def profile_document?(_, _), do: false
   @doc "Read at most 24 facts/2000 bytes from this exact project and profile."
   def read(context, opts \\ []) do
     with {:ok, scope} <- scope(context) do

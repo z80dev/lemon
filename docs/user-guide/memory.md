@@ -138,6 +138,40 @@ a session has `workspace_dir`; prefix with `./` to access a repo-local file with
 
 ## Memory management
 
+### Profile-scoped operator API
+
+External applications can use the authenticated control-plane `memory.list`,
+`memory.search`, `memory.get`, `memory.add` and `memory.delete` methods. Supply a
+managed `profileId`, not a filesystem path. A profile placed on a named machine
+reads and changes memory on that destination; an offline machine never falls
+back to the controller's memory.
+
+Reads require `operator.read`, while add/delete require `operator.admin`.
+Lists and searches combine the profile's bounded durable memory window with its
+assistant `USER.md`/`MEMORY.md` preferences. Both agent identity and assistant-home
+identity must match for durable documents, so unrelated profiles and unscoped
+legacy history are excluded. Results expose only item id, kind, redacted text
+preview (at most 2 KiB), source label, and creation/update timestamps.
+
+For example, after connecting an operator client:
+
+```json
+{"type":"req","id":"remember-1","method":"memory.add","params":{"profileId":"researcher","text":"Prefers concise summaries","kind":"user"}}
+{"type":"req","id":"memory-1","method":"memory.list","params":{"profileId":"researcher","limit":25}}
+```
+
+Adding uses the same compact-file safety rules as `remember` and defaults to
+`kind: "memory"`; `kind: "user"` saves a human preference. To remove a returned
+item, call `memory.delete` with `{profileId, id, confirm: id}` after reviewing it.
+Confirmation must repeat the exact id, not `true`. Changed or foreign items do
+not authorize deletion. A remote mutation whose acknowledgement is lost returns
+`retrySafe: false`; inspect current memory before retrying.
+
+List pagination is bounded and snapshot-bound: use `nextCursor` as `cursor` in
+`memory.list` with the same profile/query, and restart listing if memory changed.
+See the [control-plane method contract](../../apps/lemon_control_plane/README.md#profile-memory)
+for exact parameters, result shapes, limits, and node invocation behavior.
+
 ### Retention and pruning
 
 Memory documents older than the retention window are pruned automatically. Default retention is

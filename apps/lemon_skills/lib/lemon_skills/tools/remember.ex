@@ -24,49 +24,9 @@ defmodule LemonSkills.Tools.Remember do
   alias LemonAgent.AbortSignal
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonAi.Types.TextContent
-  alias LemonMemory.{Project, Safety}
+  alias LemonMemory.Project
+  alias LemonSkills.WorkspacePreferences
 
-  @targets %{
-    "user" => %{
-      file: "USER.md",
-      heading: "## Context",
-      max_chars: 1_375,
-      label: "user profile"
-    },
-    "memory" => %{
-      file: "MEMORY.md",
-      heading: "## Quick Facts",
-      max_chars: 2_200,
-      label: "long-term memory"
-    }
-  }
-
-  @prompt_injection_patterns [
-    ~r/ignore (all )?(previous|prior|above) instructions/i,
-    ~r/disregard (all )?(previous|prior|above) instructions/i,
-    ~r/reveal (the )?(system|developer) prompt/i,
-    ~r/system prompt/i,
-    ~r/developer message/i,
-    ~r{<\|/?(?:system|developer|assistant|user)\|>}i
-  ]
-
-  @invisible_chars [
-    "\u202A",
-    "\u202B",
-    "\u202C",
-    "\u202D",
-    "\u202E",
-    "\u2066",
-    "\u2067",
-    "\u2068",
-    "\u2069",
-    "\u200B",
-    "\u200C",
-    "\u200D",
-    "\u200E",
-    "\u200F",
-    "\uFEFF"
-  ]
   @max_text_bytes 4_096
 
   @doc """
@@ -168,7 +128,7 @@ defmodule LemonSkills.Tools.Remember do
            {:ok, action} <- get_action(params) do
         if target == "project",
           do: remember_project(context, action, params),
-          else: do_execute(context.workspace_dir, target, action, params)
+          else: WorkspacePreferences.remember(context.workspace_dir, target, action, params)
       end
     end
   end
@@ -214,33 +174,6 @@ defmodule LemonSkills.Tools.Remember do
     if Map.get(params, key) == nil, do: {:ok, nil}, else: get_text(params, key)
   end
 
-  defp do_execute(workspace_dir, target, action, params) do
-    spec = Map.fetch!(@targets, target)
-    path = Path.join(workspace_dir, spec.file)
-
-    case action do
-      "add" ->
-        with {:ok, text} <- get_text(params, "text"),
-             :ok <- screen_text(text),
-             {:ok, content} <- load_or_init(path, target, spec) do
-          add_note(path, target, spec, content, text)
-        end
-
-      "replace" ->
-        with {:ok, old_text} <- get_text(params, "replaces"),
-             {:ok, new_text} <- get_text(params, "text"),
-             :ok <- screen_text(new_text),
-             {:ok, content} <- load_or_init(path, target, spec) do
-          replace_note(path, target, spec, content, old_text, new_text)
-        end
-
-      "remove" ->
-        with {:ok, text} <- get_text(params, "replaces"),
-             {:ok, content} <- load_or_init(path, target, spec) do
-          remove_note(path, target, spec, content, text)
-        end
-    end
-  end
 
   defp validate_workspace_dir(workspace_dir) when is_binary(workspace_dir) do
     if String.trim(workspace_dir) == "" do
@@ -255,7 +188,7 @@ defmodule LemonSkills.Tools.Remember do
   defp get_target(params) do
     case Map.get(params, "target", "memory") do
       "project" -> {:ok, "project"}
-      target when is_map_key(@targets, target) -> {:ok, target}
+      target when target in ["user", "memory"] -> {:ok, target}
       _ -> {:error, "target must be user, memory, or project"}
     end
   end
@@ -299,157 +232,4 @@ defmodule LemonSkills.Tools.Remember do
     end
   end
 
-  defp screen_text(text) do
-    cond do
-      Safety.contains_secret?(text) ->
-        {:error, "Refusing to store secret-looking content in prompt-injected memory"}
-
-      contains_invisible_char?(text) ->
-        {:error, "Refusing to store invisible or bidirectional control characters"}
-
-      Enum.any?(@prompt_injection_patterns, &Regex.match?(&1, text)) ->
-        {:error, "Refusing to store prompt-injection-like content in prompt-injected memory"}
-
-      true ->
-        :ok
-    end
-  end
-
-  defp contains_invisible_char?(text) do
-    Enum.any?(@invisible_chars, &String.contains?(text, &1))
-  end
-
-  defp add_note(path, target, spec, content, text) do
-    if String.contains?(content, text) do
-      result("#{spec.file} already contains that note.", path, target, "add", content, %{
-        changed: false,
-        duplicate: true
-      })
-    else
-      updated = append_under_heading(content, spec.heading, "- #{text}\n")
-      write_checked(path, target, spec, updated, "add", %{changed: true, duplicate: false})
-    end
-  end
-
-  defp replace_note(path, target, spec, content, old_text, new_text) do
-    with :ok <- ensure_unique(content, old_text, "replaces") do
-      updated = String.replace(content, old_text, new_text)
-      write_checked(path, target, spec, updated, "replace", %{changed: true})
-    end
-  end
-
-  defp remove_note(path, target, spec, content, text) do
-    with :ok <- ensure_unique(content, text, "replaces") do
-      updated =
-        content
-        |> String.replace("- #{text}\n", "")
-        |> String.replace(text, "")
-        |> String.replace(~r/\n{3,}/, "\n\n")
-        |> String.trim_trailing()
-        |> Kernel.<>("\n")
-
-      write_checked(path, target, spec, updated, "remove", %{changed: true})
-    end
-  end
-
-  defp ensure_unique(content, text, key) do
-    count =
-      Regex.scan(Regex.compile!(Regex.escape(text)), content)
-      |> length()
-
-    case count do
-      0 -> {:error, "#{key} was not found"}
-      1 -> :ok
-      _ -> {:error, "#{key} must match exactly one occurrence"}
-    end
-  end
-
-  defp write_checked(path, target, spec, content, action, details) do
-    content = String.trim_trailing(content) <> "\n"
-
-    if String.length(content) > spec.max_chars do
-      {:error,
-       "#{spec.file} would exceed #{spec.max_chars} characters; keep compact memory curated"}
-    else
-      File.mkdir_p!(Path.dirname(path))
-
-      case File.write(path, content) do
-        :ok ->
-          result(
-            "#{spec.file} #{action} complete at #{path}",
-            path,
-            target,
-            action,
-            content,
-            details
-          )
-
-        {:error, reason} ->
-          {:error, "Unable to write #{spec.file}: #{reason}"}
-      end
-    end
-  end
-
-  defp result(message, path, target, action, content, details) do
-    %AgentToolResult{
-      content: [%TextContent{text: message <> "\n\n" <> content}],
-      details:
-        Map.merge(details, %{
-          target: target,
-          action: action,
-          path: path,
-          bytes: byte_size(content),
-          chars: String.length(content)
-        })
-    }
-  end
-
-  defp load_or_init(path, target, spec) do
-    case File.read(path) do
-      {:ok, content} ->
-        {:ok, content}
-
-      {:error, :enoent} ->
-        {:ok, template_for(target, spec)}
-
-      {:error, reason} ->
-        {:error, "Unable to read #{spec.file}: #{reason}"}
-    end
-  end
-
-  defp template_for("user", _spec) do
-    """
-    ---
-    summary: "User profile record"
-    ---
-
-    # USER.md - About Your Human
-
-    ## Context
-    """
-    |> String.trim_trailing()
-  end
-
-  defp template_for("memory", _spec) do
-    """
-    ---
-    summary: "Long-term memory (curated)"
-    ---
-
-    # MEMORY.md - Long-term memory
-
-    ## Quick Facts
-    """
-    |> String.trim_trailing()
-  end
-
-  defp append_under_heading(content, heading, addition) do
-    content = String.trim_trailing(content)
-
-    if String.contains?(content, heading) do
-      content <> "\n\n" <> addition
-    else
-      content <> "\n\n" <> heading <> "\n\n" <> addition
-    end
-  end
 end
