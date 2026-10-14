@@ -70,7 +70,7 @@ export interface InvocationProofBinding { runId: string; nativeRunId: string; bo
 /** Native/UI private memory survives deletion of an unrelated chat resource. */
 export function buildPrivateBotMemoryContextKey(services: BackendServices, actor: Principal, bot: P.Bot): string {
   bot = services.auth.bot(actor, bot.id);
-  if (bot.visibility === 'personal' && bot.ownerUserId !== actor.userId) fail('forbidden', 'Private Bot memory belongs to its actual owner.');
+  if (bot.ownerUserId !== actor.userId) fail('forbidden', 'Bot memory belongs to its owner.');
   return services.mutations.digest({ workspaceId: actor.workspaceId, botId: bot.id, userId: actor.userId, kind: 'private_bot_v1' });
 }
 
@@ -96,6 +96,7 @@ export function observeInvocation(services: BackendServices, proofValue: string)
   const member = services.auth.member(retained.userId); if (!member.enabled) fail('forbidden', 'The invocation initiator is disabled.');
   const actor = { ...retained, role: member.role };
   const bot = services.auth.bot(actor, run.botId); services.auth.conversation(actor, run.conversationId);
+  if (bot.ownerUserId !== actor.userId) fail('forbidden', 'Only the Bot owner may use this invocation.');
   const machine = services.store.require<P.Machine>('machines', bot.machineId);
   if (machine.nodeId !== bound.nodeId || bot.profileId !== bound.profileId) fail('forbidden', 'The invocation placement has changed.');
   const cronId = services.store.metadata<string>(`runCron:${run.id}`);
@@ -155,6 +156,7 @@ function restrictNativePolicy(current: P.JSONObject, floors: readonly P.JSONObje
 /** Fixed run reservation precedes one-time connector consent consumption for both chat and cron. */
 export async function buildInvocationContext(services: BackendServices, actor: Principal, conversation: P.Conversation, bot: P.Bot, fixedRunId: string, nativeFloors: readonly P.JSONObject[] = []): Promise<InvocationContext> {
   conversation = services.auth.conversation(actor, conversation.id); bot = services.auth.bot(actor, bot.id);
+  if (bot.ownerUserId !== actor.userId) fail('forbidden', 'Only the Bot owner may construct execution authority.');
   await ensureMachineRuntimeReady(services, services.store.require<P.Machine>('machines', bot.machineId), true);
   const productId = services.store.metadata<string>(`nativeRunProduct:${fixedRunId}`);
   if (!productId) fail('conflict', 'Reserve the fixed run and initiating authority before building invocation clients.');
@@ -415,6 +417,7 @@ export function createRuntimeService(services: BackendServices): ManagedRuntimeS
     send: (principal, conversationId, message, context) => sendMessage(services, principal, conversationId, message, context),
     async submit(principal, conversation, bot, message, context) {
       services.auth.conversation(principal, conversation.id); services.auth.bot(principal, bot.id);
+      if (bot.ownerUserId !== principal.userId) fail('forbidden', 'Only the Bot owner may execute work.');
       if (!conversation.botIds.includes(bot.id)) fail('forbidden', 'This bot is not a participant in the target conversation.');
       const fence = services.store.metadata<{ status: string }>(`botLifecycle:${bot.id}`);
       if (fence) fail(fence.status === 'outcome_unknown' ? 'outcome_unknown' : 'conflict', 'This bot has a placement or lifecycle operation in progress.', fence.status !== 'outcome_unknown', { resourceIds: [bot.id] });
