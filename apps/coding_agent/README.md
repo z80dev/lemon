@@ -247,6 +247,18 @@ They are for `read`, not mutation tools or remote ACP filesystem operations.
 When registration is unavailable, results retain the existing absolute output
 path instead of advertising a nonexistent handle.
 
+**`bash` cwd, env and internal references.** `cwd` runs one command in another
+existing directory (relative paths resolve against the session cwd); a missing
+directory is an error. `env` adds string variables over the inherited
+environment; names must match `^[A-Za-z_][A-Za-z0-9_]*$` and values must not
+contain NUL bytes. Both apply to foreground, `pty`, `run_in_background` and ACP
+client-terminal runs. Approval requests for `bash` carry `env_keys`, never env
+values. Bare or whole-word quoted `skill://…` and `artifact://<id>` references in
+`command` are replaced with shell-quoted absolute paths (e.g.
+`wc -l artifact://<id>`); an unresolvable reference fails the call before
+anything runs. Mentions inside larger quoted strings and other schemes
+(`https://`, `git://`) are left as written.
+
 The `agent` tool accepts an optional `node` string for delegated runs. Omit it
 or pass `"local"` to use the controller host. A named value must resolve to a
 currently connected execution node. If `cwd` is omitted, the destination uses

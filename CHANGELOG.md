@@ -10,6 +10,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Added
 
+- `bash` tool: per-command `cwd` and validated `env` parameters (foreground,
+  PTY, background and ACP terminals; approvals show env names only), and
+  `skill://`/`artifact://` references in commands expand to absolute file paths.
 - `eval` coding tool: persistent per-session Python (`python3`) and JavaScript
   (Bun, or Node) kernels with streamed output, trailing-expression display,
   top-level `await`, `reset`, and timeout/abort that kill the kernel tree.
