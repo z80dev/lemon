@@ -1,0 +1,12 @@
+{
+  "name": "@lemon-bot/sdk",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "exports": { ".": "./src/index.ts" },
+  "scripts": {
+    "check": "tsc --noEmit",
+    "test": "bun test test"
+  },
+  "devDependencies": { "typescript": "^5.9.3", "@types/bun": "^1.3.14" }
+}
