@@ -86,12 +86,13 @@ defmodule LemonMCP.HTTP.OriginPolicy do
        when is_binary(url) and byte_size(url) > 0 and byte_size(url) <= @max_url_bytes do
     with true <- String.valid?(url),
          false <- Regex.match?(~r/[\x00-\x20\x7f\\]/u, url),
-         {:ok, uri} <- URI.new(url),
+         %URI{} = uri <- URI.parse(url),
          scheme when scheme in ["http", "https"] <- normalize_scheme(uri.scheme),
          nil <- uri.userinfo,
          nil <- uri.fragment,
-         host when is_binary(host) and byte_size(host) > 0 and
-                     byte_size(host) <= @max_host_bytes <- uri.host,
+         host
+         when is_binary(host) and byte_size(host) > 0 and
+                byte_size(host) <= @max_host_bytes <- uri.host,
          authority when is_binary(authority) <- uri.authority,
          true <- valid_authority?(authority),
          port when is_integer(port) and port in 1..65_535 <- uri.port || default_port(scheme),

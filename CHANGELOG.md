@@ -18,6 +18,12 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   fail-closed; the argv enrollment-code flag is removed. Unknown enrollment
   exchanges stop instead of replaying the invite. The repository script must be
   published on `main` before its generated curl URL can be used.
+- Correct destination-local MCP URL parsing so normal HTTPS authorities and
+  Unicode hostnames reach the existing exact-origin and DNS-pinning checks;
+  credentials, malformed ports and unsafe authorities remain rejected.
+- Host join reuses a compatible existing PATH installation and starts its
+  worker without binding the desktop runtime's health-server ports. Enrollment
+  stdin also supports standard in-memory IO devices without accepting argv secrets.
 
 - Operator `chat.send` and `profile.chat` accept fixed upstream run IDs with
   durable same-intent replay protection and conflict rejection. Queue-owned

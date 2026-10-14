@@ -214,7 +214,7 @@ describe('account lifecycle', () => {
   });
   test('workspace disable permanently revokes paired credentials while bounded Owner authority can repair', async () => {
     const revoked: string[] = []; const f = accounts({ onRevokeSession: sessionId => { revoked.push(sessionId); } });
-    const device = await f.call<P.Device>('POST', '/v1/devices', { clientNonce: opaqueToken(), installationId: 'revoked-phone', platform: 'ios', name: 'Phone', appVersion: '1.0.0' });
+    const device = await f.call<P.Device>('POST', '/v1/devices', { clientNonce: opaqueToken(), installationId: 'revoked-phone-installation', platform: 'ios', name: 'Phone', appVersion: '1.0.0' });
     const paired = await f.services.auth.session('alice', device.id, { persistent: true });
     const desktop = await f.services.auth.session('owner');
     const owner: Principal = { ...f.owner, sessionId: desktop.session.id };
@@ -228,11 +228,11 @@ describe('account lifecycle', () => {
   });
   test('a persistent bearer cannot rebind itself to another installation to evade device revocation', async () => {
     const f = accounts();
-    const body = { clientNonce: opaqueToken(), installationId: 'original-phone', platform: 'ios', name: 'Phone', appVersion: '1.0.0' };
+    const body = { clientNonce: opaqueToken(), installationId: 'original-phone-installation', platform: 'ios', name: 'Phone', appVersion: '1.0.0' };
     const device = await f.call<P.Device>('POST', '/v1/devices', body);
     const paired = await f.services.auth.session('alice', device.id, { persistent: true });
     const actor: Principal = { ...f.alice, sessionId: paired.session.id, deviceId: device.id };
-    await expect(f.call('POST', '/v1/devices', { ...body, clientNonce: opaqueToken(), installationId: 'other-phone' }, actor)).rejects.toMatchObject({ code: 'forbidden' });
+    await expect(f.call('POST', '/v1/devices', { ...body, clientNonce: opaqueToken(), installationId: 'other-phone-installation' }, actor)).rejects.toMatchObject({ code: 'forbidden' });
     expect(f.store.list('devices')).toHaveLength(1);
     const refreshed = await f.call<P.Device>('POST', '/v1/devices', { ...body, clientNonce: opaqueToken(), appVersion: '2.0.0' }, actor);
     expect(refreshed.id).toBe(device.id);

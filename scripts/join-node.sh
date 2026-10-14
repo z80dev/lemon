@@ -83,8 +83,11 @@ if [[ -n $source ]]; then
   lemon_bin=$source/bin/lemon
   [[ -f $source/mix.exs ]] && compatible "$lemon_bin" || fail 'The configured source runtime is unavailable or incompatible'
 else
+  installed=$(command -v lemon 2>/dev/null || true)
   lemon_bin=$HOME/.lemon/versions/$version/bin/lemon
-  if ! compatible "$lemon_bin"; then
+  if compatible "$installed"; then
+    lemon_bin=$installed
+  elif ! compatible "$lemon_bin"; then
     installer=$(mktemp) || fail 'Cannot prepare pinned installation'
     curl -fsSL --proto '=https' --proto-redir '=https' \
       https://raw.githubusercontent.com/z80dev/lemon/main/install.sh -o "$installer" >/dev/null 2>&1 || fail 'Cannot download the Lemon installer'
@@ -97,6 +100,7 @@ else
 fi
 # printf is a Bash builtin: the credential never becomes a process argument or environment value.
 # Exactly one enrollment attempt; uncertain outcomes must be reconciled by the owner.
-printf '%s\n' "$code" | "$lemon_bin" node join --name "$name" --controller "$controller" --invite-code-stdin
+printf '%s\n' "$code" | LEMON_GATEWAY_HEALTH_PORT=0 LEMON_ROUTER_HEALTH_PORT=0 \
+  "$lemon_bin" node join --name "$name" --controller "$controller" --invite-code-stdin
 }
 main "$@"

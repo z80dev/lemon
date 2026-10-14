@@ -10,6 +10,7 @@ import { botSessionKeys } from '../runtime/runs';
 import { configureNativeFollowupAdmission } from '../runtime/admission';
 import { previewBotResources, cancelBotResources } from './gates';
 import { cancelConversationVoice } from './voice';
+import { createAttachmentService } from './attachments';
 
 const name = boundedText(120, 1).refine(value => !value.includes('\0'));
 const profileText = boundedText(32768).refine(value => Buffer.byteLength(value, 'utf8') <= 32768 && !value.includes('\0'));

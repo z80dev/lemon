@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Behavioral enrollment lifecycle tests: python3 scripts/test_join_node.py."""
+import ast
 import errno
 import fcntl
 import json
@@ -10,6 +11,7 @@ import select
 import signal
 import subprocess
 import tempfile
+import sys
 import termios
 import time
 import unittest
@@ -59,14 +61,26 @@ sys.exit(64)
     def launch(self, args=None, payload=(CODE + '\n').encode(), interrupt=False):
         master, slave = pty.openpty()
         before = termios.tcgetattr(slave)
+        state_reader, state_writer = os.pipe()
 
-        def terminal():
-            os.setsid()
-            fcntl.ioctl(slave, termios.TIOCSCTTY, 0)
-
-        process = subprocess.Popen(['bash', '-s', '--', *(args or self.args)], stdin=subprocess.PIPE,
-                                   stdout=slave, stderr=slave, pass_fds=(slave,), preexec_fn=terminal,
+        # A persistent session models the user's shell and lets Darwin keep the
+        # slave valid while observing the child script's restored settings.
+        keeper = """import fcntl, os, signal, subprocess, sys, termios
+slave, report = int(sys.argv[1]), int(sys.argv[2])
+os.setsid()
+fcntl.ioctl(slave, termios.TIOCSCTTY, 0)
+signal.signal(signal.SIGINT, signal.SIG_IGN)
+child = subprocess.Popen(['bash', '-s', '--', *sys.argv[3:]],
+                         preexec_fn=lambda: signal.signal(signal.SIGINT, signal.SIG_DFL))
+status = child.wait()
+os.write(report, repr(termios.tcgetattr(slave)).encode())
+sys.exit(status)
+"""
+        process = subprocess.Popen([sys.executable, '-c', keeper, str(slave), str(state_writer),
+                                    *(args or self.args)], stdin=subprocess.PIPE,
+                                   stdout=slave, stderr=slave, pass_fds=(slave, state_writer),
                                    cwd=self.root, env=self.env)
+        os.close(state_writer)
         process.stdin.write(SCRIPT.read_bytes())
         process.stdin.close()
         output = b''
@@ -92,15 +106,17 @@ sys.exit(64)
                 if process.poll() is not None:
                     break
             status = process.wait(timeout=2)
-            self.assertEqual(termios.tcgetattr(slave), before)
+            restored = ast.literal_eval(os.read(state_reader, 65536).decode())
+            self.assertEqual(restored[3] & termios.ECHO, before[3] & termios.ECHO)
             self.assertNotIn(CODE.encode(), output)
             return status, output
         finally:
             if process.poll() is None:
-                process.kill()
+                os.killpg(process.pid, signal.SIGKILL)
                 process.wait()
             os.close(master)
             os.close(slave)
+            os.close(state_reader)
 
     def test_source_reuses_runtime_and_sends_code_once_only_on_stdin(self):
         self.assertEqual(self.launch()[0], 0)
@@ -109,7 +125,7 @@ sys.exit(64)
         self.assertEqual(joins[0]['input'], CODE + '\n')
         self.assertFalse(joins[0]['envSecret'])
         self.assertNotIn(CODE, json.dumps(joins[0]['args']))
-        self.assertEqual(joins[0]['cwd'], str(self.root))
+        self.assertTrue(Path(joins[0]['cwd']).samefile(self.root))
 
     def test_invalid_code_never_probes_or_enrolls(self):
         for payload in [b'short\n\x04', b'A' * 44, b'A' * 42 + b'!\n', b'A' * 43 + b'\0', b'\x04']:

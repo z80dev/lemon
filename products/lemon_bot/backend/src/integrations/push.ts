@@ -163,7 +163,7 @@ export function createPushServices(services: BackendServices, overrides?: PushOp
     const title = user.notifications.previews ? categoryTitle : 'Lemon Bot';
     const payload: P.PushPayload = { version: 1, notificationId: notification.id, workspaceId: workspace.id, conversationId: notification.conversationId, entryId: notification.entryId, title, body: 'Open Lemon Bot to view the update.', target, deepLink };
     const viewedConversationId = target.kind === 'entry' ? target.taskConversationId ?? notification.conversationId : notification.conversationId;
-    const sessions = services.store.list<P.AuthSession>('authSessions', s => s.userId === user.id && s.expiresAtMs > services.now());
+    const sessions = services.store.list<P.AuthSession>('authSessions', s => s.userId === user.id && (s.expiresAtMs === null || s.expiresAtMs > services.now()));
     for (const device of services.store.list<P.Device>('devices', d => d.userId === user.id && d.pushEnabled)) {
       if (!sessions.some(s => s.deviceId === device.id && services.store.get<{ revoked: boolean }>('sessionSecrets', s.id)?.revoked === false)) continue;
       const presence = services.store.metadata<{ userId: string; foreground: boolean; conversationId: string | null; updatedAtMs: number }>(`presence:${device.id}`);
@@ -174,7 +174,7 @@ export function createPushServices(services: BackendServices, overrides?: PushOp
         if (services.store.metadata<string>(`devicePush:${device.id}`) !== encrypted || !services.store.get<P.Device>('devices', device.id)?.pushEnabled || !currentUser?.notifications.enabled || !currentMember?.enabled || !services.store.get<P.Workspace>('workspaces', workspace.id)?.enabled) return null;
         if ((notification.kind === 'result' && !currentUser.notifications.completed) || (['approval', 'question', 'human_step'].includes(notification.kind) && !currentUser.notifications.needsInput)) return null;
         principal.role = currentMember.role;
-        if (!services.store.list<P.AuthSession>('authSessions', s => s.userId === user.id && s.deviceId === device.id && s.expiresAtMs > services.now()).some(s => services.store.get<{ revoked: boolean }>('sessionSecrets', s.id)?.revoked === false)) return null;
+        if (!services.store.list<P.AuthSession>('authSessions', s => s.userId === user.id && s.deviceId === device.id && (s.expiresAtMs === null || s.expiresAtMs > services.now())).some(s => services.store.get<{ revoked: boolean }>('sessionSecrets', s.id)?.revoked === false)) return null;
         const currentPresence = services.store.metadata<{ userId: string; foreground: boolean; conversationId: string | null; updatedAtMs: number }>(`presence:${device.id}`);
         if (viewedConversationId && currentPresence?.userId === user.id && currentPresence.foreground && currentPresence.conversationId === viewedConversationId && services.now() - currentPresence.updatedAtMs >= 0 && services.now() - currentPresence.updatedAtMs < 60_000) return null;
         return canDeliverTarget() ? currentUser : null;

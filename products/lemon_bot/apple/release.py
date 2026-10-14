@@ -35,15 +35,15 @@ def notarize(path, profile):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("mode", choices=["macos", "macos-preview", "ios", "ios-upload"])
-    parser.add_argument("--version", required=True, help="Parent CalVer, YYYY.MM.DD[.revision]")
+    parser.add_argument("--version", required=True, help="Parent CalVer, YYYY.MM.PATCH")
     parser.add_argument("--build", required=True, help="Apple numeric build number, at most three components")
     parser.add_argument("--channel", choices=["preview", "stable"], default="preview")
     parser.add_argument("--output", required=True)
     args = parser.parse_args()
-    match = re.fullmatch(r"(\d{4})\.(\d{2})\.(\d{2})(?:\.(\d+))?", args.version)
+    match = re.fullmatch(r"(\d{4})\.(0[1-9]|1[0-2])\.(0|[1-9]\d*)", args.version)
     if not match or not re.fullmatch(r"[1-9]\d{0,3}(?:\.\d{1,2}){0,2}", args.build):
-        raise ValueError("Expected CalVer YYYY.MM.DD[.revision] and Apple build (up to 4.2.2 digits)")
-    # Apple's marketing version permits three numeric components, not CalVer's fourth.
+        raise ValueError("Expected CalVer YYYY.MM.PATCH and Apple build (up to 4.2.2 digits)")
+    # Preserve the canonical three-component CalVer with Apple-compatible integers.
     marketing = ".".join(str(int(part)) for part in match.groups()[:3])
     root = Path(__file__).resolve().parent
     output = Path(args.output).resolve()

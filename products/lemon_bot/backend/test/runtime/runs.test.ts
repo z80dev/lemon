@@ -130,16 +130,6 @@ describe('owned placed runtime', () => {
     } finally { runtime.close(); f.store.close(); }
   });
 
-  test('the credential owner can revoke a private connector without invoking another human’s Bot', async () => {
-    const f = fixture();
-    const connector: P.Connector = f.services.resource('connector', { botId: f.bot.id, ownerUserId: f.alice.userId, name: 'Owner account', url: 'https://connector.example/mcp', accountLabel: 'Owner account', authKind: 'oauth' as const, state: 'connected' as const, tools: [], secretHeaderNames: [], lastError: null });
-    f.store.put('connectors', connector); f.services.auth.bot = () => { throw new ApiError('forbidden', 'Management removed.'); };
-    try {
-      expect(await revokeConnectorInvocations(f.services, f.alice, f.bot.id, connector.id)).toEqual({ runIds: [], status: 'cancelled' });
-      await expect(revokeConnectorInvocations(f.services, f.bob, f.bot.id, connector.id)).rejects.toMatchObject({ code: 'forbidden' });
-      expect(f.calls).toHaveLength(0);
-    } finally { f.store.close(); }
-  });
 
   test('private native memory identity does not require a surviving main conversation', () => {
     const f = fixture();

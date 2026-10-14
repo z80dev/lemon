@@ -294,7 +294,7 @@ describe('export privacy and durable delivery', () => {
     }
   });
   test('historical snapshots include the lower timestamp and exclude the exact upper timestamp', async () => {
-    const f = fixture(); f.conversation('room', ['alice']); f.store.setMetadata('governance', { contentExportEnabled: true }); await f.consent('room');
+    const f = fixture(); f.conversation('room'); f.store.setMetadata('governance', { contentExportEnabled: true }); await f.consent('room');
     f.advance(499 - f.services.now()); f.message('before', 'room', 'before-lower');
     f.advance(1); f.message('lower', 'room', 'at-lower');
     f.advance(499); f.message('inside', 'room', 'before-upper');

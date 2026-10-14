@@ -14,6 +14,7 @@ import { createGateService } from '../../src/core/gates';
 import { createMutationService } from '../../src/core/mutations';
 import { createPairingRoutes, createPairingService, type PairingService } from '../../src/core/pairing';
 import { Router } from '../../src/core/router';
+import { createLemonService } from '../../src/runtime/lemon';
 
 export interface PairingFixture {
   readonly services: BackendServices;
@@ -49,6 +50,7 @@ export async function pairingFixture(): Promise<PairingFixture> {
     store = new Store(database);
     services = { config, store, ...codec, integrations: {} } as unknown as BackendServices;
     installHelpers(services); services.now = () => clock;
+    services.lemon = createLemonService(services.config);
     services.mutations = createMutationService(services, key);
     services.events = createEventService(services);
     services.auth = createAccessService(services);
@@ -79,10 +81,10 @@ export async function pairingFixture(): Promise<PairingFixture> {
     get services() { return services; }, get store() { return store; }, get router() { return router; }, get pairingService() { return pairingService; }, get persistentCalls() { return persistentCalls; },
     workspace, owner, other, desktop,
     advance(ms: number) { clock += ms; },
-    restart() { pairingService.close(); closeGates(); store.close(); open(); },
+    restart() { pairingService.close(); closeGates(); services.lemon.close(); store.close(); open(); },
     fetch(method: string, path: string, body?: unknown, token: string | null = owner.token, extraHeaders: Record<string, string> = {}) {
       return router.fetch(new Request(`https://desktop.example${path}`, { method, headers: { ...(body === undefined ? {} : { 'Content-Type': 'application/json' }), ...(token ? { Authorization: `Bearer ${token}` } : {}), ...extraHeaders }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }));
     },
-    async close() { pairingService.close(); closeGates(); store.close(); await rm(directory, { recursive: true, force: true }); },
+    async close() { pairingService.close(); closeGates(); services.lemon.close(); store.close(); await rm(directory, { recursive: true, force: true }); },
   };
 }

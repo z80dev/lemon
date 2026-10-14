@@ -19,7 +19,9 @@ async function failure(request: Promise<Response>, code: P.ErrorCode): Promise<P
   expect(response.ok).toBe(false);
   const value = await response.json() as P.ErrorEnvelope;
   expect(Object.keys(value)).toEqual(['error']);
-  expect(value.error).toMatchObject({ code, requestId: expect.any(String), retrySafe: expect.any(Boolean) });
+  expect(value.error.code).toBe(code);
+  expect(typeof value.error.requestId).toBe('string');
+  expect(typeof value.error.retrySafe).toBe('boolean');
   return value;
 }
 interface StartedPairing { issued: P.PairingIssued; pairCode: string; startBody: P.PairingStart }

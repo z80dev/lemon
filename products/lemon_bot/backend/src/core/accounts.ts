@@ -107,7 +107,7 @@ export function createAccountRoutes(services: BackendServices, hooks: Revocation
     if (actor.sessionId !== null) {
       const session = store.get<P.AuthSession>('authSessions', actor.sessionId);
       if (!session || session.expiresAtMs !== null && session.expiresAtMs <= services.now() || store.get<SessionSecret>('sessionSecrets', actor.sessionId)?.revoked !== false) fail('unauthenticated', 'Session expired or revoked.');
-      if (session.deviceId !== null && store.get<P.Device>('devices', session.deviceId)?.userId !== actor.userId || session.expiresAtMs === null && (session.deviceId === null || !services.auth.workspace().enabled)) fail('unauthenticated', 'Device connection was revoked.');
+      if (session.deviceId !== null && store.get<P.Device>('devices', session.deviceId)?.userId !== actor.userId || session.expiresAtMs === null && (session.deviceId === null || !workspace().enabled)) fail('unauthenticated', 'Device connection was revoked.');
     }
     if (!services.auth.canRead(actor, 'users', services.auth.user(actor.userId))) fail('unauthenticated', 'Account authority was revoked.');
     return actor;

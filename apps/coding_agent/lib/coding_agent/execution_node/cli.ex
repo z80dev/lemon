@@ -36,8 +36,15 @@ defmodule CodingAgent.ExecutionNode.CLI do
   def run(argv, deps \\ [])
 
   def run(["capabilities" | argv], deps) do
-    case OptionParser.parse(argv, strict: [json: :boolean, require_bot: :boolean,
-           expected_version: :string, help: :boolean], aliases: @aliases) do
+    case OptionParser.parse(argv,
+           strict: [
+             json: :boolean,
+             require_bot: :boolean,
+             expected_version: :string,
+             help: :boolean
+           ],
+           aliases: @aliases
+         ) do
       {opts, [], []} ->
         if opts[:help] do
           IO.puts(help())
@@ -45,24 +52,37 @@ defmodule CodingAgent.ExecutionNode.CLI do
         else
           provider = Keyword.get(deps, :runtime_features, &Worker.runtime_features/0)
           snapshot = provider.()
+
           if opts[:json] do
             IO.puts(Jason.encode!(snapshot))
           else
-            IO.puts("Lemon #{snapshot["lemonVersion"]}; bot runtime compatible: #{snapshot["botReady"]}")
+            IO.puts(
+              "Lemon #{snapshot["lemonVersion"]}; bot runtime compatible: #{snapshot["botReady"]}"
+            )
+
             IO.puts("Missing features: #{Enum.join(snapshot["missingFeatures"], ", ")}")
           end
+
           cond do
             opts[:expected_version] &&
-                (byte_size(opts[:expected_version]) > 64 or not LemonCore.Update.Version.valid?(opts[:expected_version])) ->
+                (byte_size(opts[:expected_version]) > 64 or
+                   not LemonCore.Update.Version.valid?(opts[:expected_version])) ->
               {:error, "--expected-version must be an exact Lemon CalVer"}
+
             opts[:expected_version] && opts[:expected_version] != snapshot["lemonVersion"] ->
               {:error, "Installed Lemon version does not match the configured worker build"}
+
             opts[:require_bot] && snapshot["botReady"] != true ->
-              {:error, "Compatible bot worker APIs are missing; use the matching source checkout or an operator-supported build"}
-            true -> :ok
+              {:error,
+               "Compatible bot worker APIs are missing; use the matching source checkout or an operator-supported build"}
+
+            true ->
+              :ok
           end
         end
-      _ -> {:error, "invalid compatibility inspection options"}
+
+      _ ->
+        {:error, "invalid compatibility inspection options"}
     end
   end
 
@@ -121,8 +141,12 @@ defmodule CodingAgent.ExecutionNode.CLI do
   defp require_invite_features(opts, deps) do
     if opts[:invite_code_stdin] do
       provider = Keyword.get(deps, :runtime_features, &Worker.runtime_features/0)
-      if provider.()["botReady"] == true, do: :ok,
-        else: {:error, "Invite enrollment requires the matching source checkout or a compatible host/MCP/stream/profile worker build"}
+
+      if provider.()["botReady"] == true,
+        do: :ok,
+        else:
+          {:error,
+           "Invite enrollment requires the matching source checkout or a compatible host/MCP/stream/profile worker build"}
     else
       :ok
     end
@@ -130,19 +154,33 @@ defmodule CodingAgent.ExecutionNode.CLI do
 
   defp validate(opts) do
     cond do
-      opts[:help] == true -> {:ok, opts}
-      blank?(opts[:name]) -> {:error, "--name is required"}
-      blank?(opts[:controller]) -> {:error, "--controller is required"}
-      opts[:invite_code_stdin] && Enum.any?([:node_id, :repair, :operator_token, :token],
-                              &Keyword.has_key?(opts, &1)) ->
+      opts[:help] == true ->
+        {:ok, opts}
+
+      blank?(opts[:name]) ->
+        {:error, "--name is required"}
+
+      blank?(opts[:controller]) ->
+        {:error, "--controller is required"}
+
+      opts[:invite_code_stdin] &&
+          Enum.any?(
+            [:node_id, :repair, :operator_token, :token],
+            &Keyword.has_key?(opts, &1)
+          ) ->
         {:error, "--invite-code-stdin cannot be combined with recovery or token flags"}
-      opts[:invite_code_stdin] -> validate_invite_destination(Keyword.put(opts, :pair, true))
-      true -> {:ok, opts}
+
+      opts[:invite_code_stdin] ->
+        validate_invite_destination(Keyword.put(opts, :pair, true))
+
+      true ->
+        {:ok, opts}
     end
   end
 
   defp validate_invite_destination(opts) do
     uri = URI.parse(opts[:controller])
+
     if byte_size(opts[:name]) in 1..64 and
          not String.match?(opts[:name], ~r/[\x00-\x1f\x7f]/) and
          byte_size(opts[:controller]) <= 2048 and
@@ -161,12 +199,14 @@ defmodule CodingAgent.ExecutionNode.CLI do
 
   defp read_invite(opts) do
     if opts[:invite_code_stdin] do
-      case IO.binread(:stdio, 45) do
+      case :io.request(:standard_io, {:get_chars, :latin1, ~c"", 45}) do
         <<code::binary-size(43), "\n">> ->
           if Regex.match?(~r/\A[A-Za-z0-9_-]{43}\z/, code),
             do: {:ok, Keyword.put(opts, :invite_code, code)},
             else: {:error, "invalid enrollment credential on stdin"}
-        _ -> {:error, "expected a 43-character enrollment credential and newline on stdin"}
+
+        _ ->
+          {:error, "expected a 43-character enrollment credential and newline on stdin"}
       end
     else
       {:ok, opts}
@@ -207,11 +247,11 @@ defmodule CodingAgent.ExecutionNode.CLI do
       ) do
     opts[:cwd] || launch_cwd || process_cwd
   end
+
   @doc false
   def allowed_roots(opts) do
     Enum.uniq([System.user_home!() | Keyword.get_values(opts, :allowed_root)])
   end
-
 
   @doc false
   def allow_insecure_controller?(opts) do
