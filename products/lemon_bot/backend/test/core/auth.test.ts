@@ -28,7 +28,7 @@ export function authFixture(hooks: RevocationHooks = {}) {
     gates: { create: unavailable, resolve: unavailable, wait: unavailable, cancelUser: (userId: string) => { cancelled.push(userId); } },
     integrations: { admission: unavailable, effectivePolicy: unavailable, connectorConfig: unavailable, sendApprovedDraft: unavailable, emitProviderNotifications: unavailable, channelIngress: unavailable, providerCapabilities: unavailable },
     invoke: unavailable,
-  } as BackendServices;
+  } as unknown as BackendServices;
   installHelpers(services); services.now = () => now;
   services.mutations = createMutationService(services, key);
   services.auth = createAccessService(services, hooks);

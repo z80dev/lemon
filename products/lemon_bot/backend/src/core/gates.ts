@@ -40,6 +40,23 @@ type GateResource = P.Approval | P.Question | P.HumanStep | P.SecretRequest | P.
 type Collection = 'approvals' | 'questions' | 'humanSteps' | 'secretRequests' | 'consents';
 const collections: Collection[] = ['approvals', 'questions', 'humanSteps', 'secretRequests', 'consents'];
 const collectionFor = { approval: 'approvals', question: 'questions', human_step: 'humanSteps', secret_request: 'secretRequests', consent: 'consents' } as const;
+
+export interface BotGateResourceScope {
+  collection: Collection | 'drafts';
+  id: string;
+  revision: number;
+  entryId: string;
+  entryRevision: number;
+  state: P.ResolutionState | P.Draft['state'];
+}
+/** Opaque deletion candidates only: no answers, draft content or private transcript text. */
+export function previewBotResources(services: BackendServices, botId: string): BotGateResourceScope[] {
+  const result: BotGateResourceScope[] = [];
+  for (const name of collections) for (const resource of services.store.list<GateResource>(name, value => value.botId === botId)) result.push({ collection: name, id: resource.id, revision: resource.revision, entryId: resource.entryId, entryRevision: services.store.require<P.TranscriptEntry>('entries', resource.entryId).revision, state: resource.gate.state });
+  for (const draft of services.store.list<P.Draft>('drafts', value => value.botId === botId)) result.push({ collection: 'drafts', id: draft.id, revision: draft.revision, entryId: draft.entryId, entryRevision: services.store.require<P.TranscriptEntry>('entries', draft.entryId).revision, state: draft.state });
+  return result.sort((left, right) => left.collection.localeCompare(right.collection) || left.id.localeCompare(right.id));
+}
+
 function collection(value: string): Collection {
   if (!collections.includes(value as Collection)) fail('invalid_request', 'Unsupported gate collection.');
   return value as Collection;
@@ -157,7 +174,7 @@ function recordCreate(services: BackendServices, actor: Principal, kind: string,
   if (input.clientNonce) services.store.setMetadata(nonceKey(actor, kind, input.clientNonce), { digest, collection: name, id: resourceId });
 }
 
-const lifecycle = new WeakMap<BackendServices, { cancelGate(name: Collection, id: string): void; cancelConsents(connectorId: string, actorUserId?: string): void; cancelConversation(id: string): void; acknowledge(event: unknown): boolean }>();
+const lifecycle = new WeakMap<BackendServices, { cancelBot(botId: string, expected: BotGateResourceScope[]): void; cancelGate(name: Collection, id: string): void; cancelConsents(connectorId: string, actorUserId?: string): void; cancelConversation(id: string): void; acknowledge(event: unknown): boolean }>();
 /** Call before removing a conversation's entries; possibly-sent drafts are never discarded. */
 export function cancelConversationGates(services: BackendServices, conversationId: string): void {
   const hooks = lifecycle.get(services);
@@ -179,6 +196,12 @@ export function cancelConnectorConsents(services: BackendServices, connectorId: 
   const hooks = lifecycle.get(services);
   if (!hooks) fail('internal_error', 'Gate lifecycle is not initialized.', false);
   hooks.cancelConsents(connectorId, actorUserId);
+}
+/** The caller must bind this exact opaque candidate snapshot in the confirmed Bot deletion scope. */
+export function cancelBotResources(services: BackendServices, botId: string, expected: BotGateResourceScope[]): void {
+  const hooks = lifecycle.get(services);
+  if (!hooks) fail('internal_error', 'Gate lifecycle is not initialized.', false);
+  hooks.cancelBot(botId, expected);
 }
 
 /** Durable lifecycle: shutdown cancels pending input, fences in-flight writes, and never grants permission. */
@@ -216,6 +239,32 @@ export function createGateService(services: BackendServices): GateService & { sw
   });
   sweep();
   const hooks = {
+    cancelBot(botId: string, expected: BotGateResourceScope[]): void {
+      services.store.transaction(() => {
+        const current = previewBotResources(services, botId);
+        if (services.mutations.digest(current) !== services.mutations.digest(expected)) fail('revision_conflict', 'Bot gate deletion scope changed; repeat the preview.');
+        if (current.some(item => item.state === 'submitted' || item.state === 'sending' || item.state === 'outcome_unknown')) fail('outcome_unknown', 'Resolve uncertain gate or send outcomes before deleting this bot.', false, { resourceIds: current.filter(item => item.state === 'submitted' || item.state === 'sending' || item.state === 'outcome_unknown').map(item => item.id) });
+        for (const item of current) {
+          const entry = services.store.require<P.TranscriptEntry>('entries', item.entryId);
+          if (item.collection === 'drafts') {
+            const draft = services.store.require<P.Draft>('drafts', item.id);
+            if (draft.state === 'editable') persistDraft(services, services.update(draft, { state: 'discarded' }));
+            services.store.setMetadata(`draftUnsent:${item.id}`, null);
+          } else {
+            const resource = services.store.require<GateResource>(item.collection, item.id);
+            if (resource.gate.state === 'pending' || item.collection === 'consents' && resource.gate.state === 'approved') wake(item.collection, transition(services, item.collection, resource, 'cancelled', null));
+            if (item.collection === 'approvals') {
+              services.store.remove('approvalSources', item.id);
+              services.store.setMetadata(`approvalDecision:${item.id}`, null);
+            }
+          }
+          services.store.remove(item.collection, item.id);
+          services.store.remove('entries', item.entryId);
+          services.events.emit('entry.deleted', { id: entry.id, conversationId: entry.conversationId }, { conversationId: entry.conversationId });
+        }
+      });
+      schedule();
+    },
     cancelConsents(connectorId: string, actorUserId?: string): void {
       services.store.transaction(() => {
         for (const resource of services.store.list<P.ConnectorConsent>('consents', consent => consent.connectorId === connectorId)) if (resource.gate.state === 'pending' || resource.gate.state === 'approved') wake('consents', transition(services, 'consents', resource, 'cancelled', actorUserId ?? null));

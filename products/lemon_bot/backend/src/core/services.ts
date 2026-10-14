@@ -2,6 +2,7 @@ import type { Database } from 'bun:sqlite';
 import type * as P from '../../../contracts/protocol';
 import type { InvocationMcpServer } from '../runtime/runs';
 
+export interface HttpClient { (input: RequestInfo | URL, init?: RequestInit): Promise<Response> }
 export type Entity = P.Resource & Record<string, unknown>;
 export interface Principal { kind: 'user' | 'bot' | 'hook' | 'integration'; id: string; userId: string; workspaceId: string; role: P.Role; sessionId: string | null; botId: string | null; deviceId: string | null; scopes?: string[] }
 export type Authentication = 'public' | 'member' | 'admin' | 'owner' | 'bot' | 'hook' | 'integration' | 'optional';
@@ -70,7 +71,7 @@ export interface RuntimeService {
 export interface AttachmentService {
   create(principal: Principal, bytes: Uint8Array, metadata: P.AttachmentUpload & { filename: string; mime?: string; source?: P.Attachment['source']; provenance?: P.Attachment['provenance'] }): Promise<P.Attachment>;
   copy(principal: Principal, sourceAttachmentId: string, metadata: P.AttachmentUpload): Promise<P.Attachment>;
-  bytes(attachmentId: string): Promise<Uint8Array>;
+  bytes(attachmentId: string): Promise<Uint8Array<ArrayBuffer>>;
   download(principal: Principal, attachmentId: string): P.Download;
 }
 export interface GateService {
@@ -118,6 +119,7 @@ export interface BackendConfiguration {
 export interface BackendServices {
   config: BackendConfiguration; store: EntityStore; events: EventService; auth: AccessService; mutations: MutationService;
   lemon: LemonService; runtime: RuntimeService; attachments: AttachmentService; gates: GateService; integrations: IntegrationServices;
+  http?: HttpClient;
   id(prefix?: string): string;
   now(): number;
   resource<T extends object>(prefix: string, fields: T): T & P.Resource;

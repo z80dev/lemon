@@ -10,5 +10,8 @@
 - Added immutable validated attachments, authorization-bound range download tickets, actual artifact provenance and private persistent voice-session lifecycles.
 - Added managed skills, profile-placed cron/webhook/event routines with authenticated creator admission, scoped memory/search, real usage/audit/policy/notification resources, reviewed memory import, activity/upcoming/ideas, conflict-safe preference undo and verified milestones.
 - Added read-only Owner account-teardown status recovery after session revocation, completing reachable product cleanup independently from unconfirmed provider effects.
+- Preserved exact 64-bit event cursors through SQLite decimal-text projections and added an adjacent-sequence regression above JavaScript's safe-integer limit.
+- Closed the native tool inventory using the source-owned MCP alias projection; synchronized credential-free profile ceilings without owner credential lending and separated private execution results from bounded management status.
+- Completed exact gate-resource lifecycle previews/cancellation, corrected typed resource pagination/atomic cron receipts, and supplied named HTTP/connector dependency contracts for deterministic provider fixtures.
 
 No implementation-worker verification gates were run. Deployment requires the coordinated owning platform RPCs and real configured credentials for provider-dependent operations; see README.md and the canonical contracts.

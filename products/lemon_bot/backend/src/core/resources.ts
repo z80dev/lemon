@@ -42,6 +42,7 @@ function memoryRead<T>(schema:z.ZodType<T>,value:unknown):T {
   return result.data;
 }
 type RuntimeItem = z.infer<typeof runtimeItem>;
+type ScopedMemoryPage = z.infer<typeof runtimePage> & {memoryScope:'shared'|'private';memoryContextKey:string|null};
 type MemoryRow = P.Memory & { runtimeMemoryId:string|null; memoryContextKey?:string };
 type MemorySelection = {memoryScope:'shared'} | {memoryScope:'private';memoryContextKey:string};
 type RoutineRow = P.Routine & { conversationId: string };
@@ -134,12 +135,13 @@ export async function measureUsage(services: BackendServices, user: Principal, q
     outputTokens:z.number().int().nonnegative(),totalTokens:z.number().int().nonnegative(),costUsd:z.number().nonnegative().nullable(),priceKnown:z.boolean(),
   });
   const pageSchema=z.object({records:z.array(recordSchema).max(500),nextCursor:z.string().nullable(),incomplete:z.boolean()});
+  type UsageLedgerPage = z.infer<typeof pageSchema>;
   const buckets=new Map<string,P.UsageBucket>();
   const seenRecords=new Set<string>();const seenCursors=new Set<string>();
   const profiles=new Set(services.store.list<P.Bot>('bots').map(bot=>bot.profileId));
   let cursor:string|null=null;let incomplete=false;let priced=false;
   do {
-    const page=parse(pageSchema,await services.lemon.call('usage.records',{fromMs:query.fromAtMs,toMs:query.toAtMs,limit:500,...(cursor?{cursor}:{})}));
+    const page:UsageLedgerPage=parse(pageSchema,await services.lemon.call('usage.records',{fromMs:query.fromAtMs,toMs:query.toAtMs,limit:500,...(cursor?{cursor}:{})}));
     incomplete ||= page.incomplete;
     for(const record of page.records) {
       if(seenRecords.has(record.id))continue;seenRecords.add(record.id);
@@ -429,7 +431,7 @@ export function createResourceRoutes(services: BackendServices): Route[] {
     const method = query ? 'memory.search':'memory.list'; assertAvailable(services,method);
     const seen = new Set<string>(); let cursor:string|null = null;
     do {
-      const result=memoryRead(runtimePage.extend(memoryEcho(selection)),await services.lemon.call(method,{profileId:bot.profileId,...selection,limit:50,...(query?{query}:{}),...(cursor?{cursor}:{})}));
+      const result:ScopedMemoryPage=memoryRead(runtimePage.extend(memoryEcho(selection)),await services.lemon.call(method,{profileId:bot.profileId,...selection,limit:50,...(query?{query}:{}),...(cursor?{cursor}:{})}));
       for(const item of result.items){const row=projection(u,bot,item);if(row)output.push(publicMemory(row));}
       cursor = result.nextCursor;
       if (cursor) { if (seen.has(cursor)) fail('upstream_unavailable','Runtime memory returned a repeated cursor.'); seen.add(cursor); }
@@ -534,7 +536,7 @@ export function createResourceRoutes(services: BackendServices): Route[] {
         if(['upstream_unavailable','machine_offline','capability_unavailable','outcome_unknown','internal_error'].includes(error.code))throw error;
       }
       const receipt={allow,context:input,...(allow?{invocation}:{})};
-      services.store.atomic(()=>{
+      services.store.transaction(()=>{
         services.store.setMetadata(key,{hash,state:'complete',receipt:services.encrypt(receipt)});
         if(allow&&input.triggeredBy==='schedule')services.store.setMetadata(`routineCadence:${row.id}`,{scheduledForMs:input.scheduledForMs,admittedAtMs:services.now()});
       });

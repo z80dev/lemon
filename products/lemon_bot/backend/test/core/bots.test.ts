@@ -66,6 +66,7 @@ function fixture() {
   const unavailable = (): never => { throw new Error('This test did not supply the requested external operation.'); };
   f.services.runtime = { submit: unavailable, send: unavailable, cancel: unavailable, reconcile: unavailable, revokeConnectorInvocations: unavailable, sessionKey: (room, bot) => room.kind === 'team_dm' ? `agent:${bot.profileId}:dm-${room.ownerUserId}` : `agent:${bot.profileId}:main` };
   f.services.integrations.connectorConfig = async () => [];
+  f.services.integrations.connectorTemplates = async () => [];
   f.services.integrations.effectivePolicy = async (actor, botId) => ({ userId: actor.userId, botId: botId ?? null, directoryGroupIds: [], productAccess: true, localExecutionCeiling: 'ask', allowSudo: false, allowEgress: false, rules: [], networkPolicies: [], explanations: [] });
   f.services.integrations.sharedProfilePolicy = botId => f.services.integrations.effectivePolicy(f.alice, botId);
   f.services.integrations.emitProviderNotifications = async () => {};
@@ -167,6 +168,7 @@ describe('acknowledged bot provisioning and placement', () => {
     expect(metadata.encryptedToken).not.toContain(token); expect(f.services.decrypt(metadata.encryptedToken)).toBe(token);
     const profileCall = f.calls.find(call => call.method === 'profiles.create')!;
     expect(JSON.stringify(profileCall.params)).not.toContain(token);
+    expect(profileCall.params.mcpServers).toEqual([{ ...baseBotMcpConfig(f.services, bot), headers: {} }]);
     expect(baseBotMcpConfig(f.services, bot).headers.Authorization).toBe(`Bearer \${LEMON_SECRET:${secretCall.params.name}}`);
     expect(baseBotMcpConfig(f.services, bot).allowedOrigins).toEqual(['https://lemon.example']);
     expect(baseBotMcpConfig(f.services, bot).approvedPrivateOrigins).toEqual([]);
@@ -323,7 +325,8 @@ describe('acknowledged recovery and shared floor ownership', () => {
     f.store.put('machineCapabilities', { ...capabilities, id: 'machine' });
     await syncBotPolicyFloor(f.services, f.owner, bot.id);
     const changed = f.calls.find(call => call.method === 'profiles.update')!;
-    expect(Object.keys(changed.params).sort()).toEqual(['id', 'toolPolicy']);
+    expect(Object.keys(changed.params).sort()).toEqual(['id', 'mcpServers', 'toolPolicy']);
+    expect(changed.params.mcpServers).toEqual([{ ...baseBotMcpConfig(f.services, bot), headers: {} }]);
     expect(f.store.require<P.Bot>('bots', bot.id)).toEqual(bot);
     expect(f.store.metadata(`botPolicyFloor:${bot.id}`)).toMatchObject({ state: 'acknowledged' });
     await expect(syncBotPolicyFloor(f.services, f.alice, bot.id)).rejects.toMatchObject({ code: 'forbidden' });
@@ -383,5 +386,29 @@ describe('fresh native follow-up readiness fence', () => {
     f.fail(null); await createBotService(f.services).reconcile();
     expect(f.calls.filter(call => call.method === 'profile.followup.admission.set')).toHaveLength(1);
     expect(f.store.metadata(`botLifecycle:${bot.id}`)).not.toBeNull();
+  });
+});
+
+describe('credential-free public native MCP ceiling', () => {
+  test('profile rebuild consumes every declared template without querying owner/account credential configuration', async () => {
+    const f = fixture(), bot = f.bot('team', true);
+    f.services.integrations.connectorConfig = async () => { throw new Error('Owner credential configuration must not be queried by public profile rebuild.'); };
+    const templates = [
+      { name: 'connector-account-a', url: 'https://a.example/mcp', headers: {}, enabledTools: ['lookup'], allowedOrigins: ['https://a.example'], approvedPrivateOrigins: [] },
+      { name: 'connector-account-b', url: 'https://b.example/mcp', headers: {}, enabledTools: ['read'], allowedOrigins: ['https://b.example'], approvedPrivateOrigins: [] },
+    ];
+    f.services.integrations.connectorTemplates = async botId => { expect(botId).toBe(bot.id); return templates; };
+    const changed = await f.request<P.Bot>('PATCH', `/v1/bots/${bot.id}`, { clientNonce: nonce('public_ceiling'), revision: bot.revision, job: 'Public declarative job' });
+    const update = f.calls.find(call => call.method === 'profiles.update')!;
+    expect(update.params.mcpServers).toEqual([{ ...baseBotMcpConfig(f.services, bot), headers: {} }, ...templates]);
+    expect(JSON.stringify(update.params)).not.toContain('LEMON_SECRET');
+    expect(changed.job).toBe('Public declarative job');
+  });
+  test('a getter returning any credential header cannot become a persisted or acknowledged profile', async () => {
+    const f = fixture(), bot = f.bot();
+    f.services.integrations.connectorTemplates = async () => [{ name: 'connector-private', url: 'https://provider.example/mcp', headers: { Authorization: '${LEMON_SECRET:private_account}' }, enabledTools: ['read'], allowedOrigins: ['https://provider.example'], approvedPrivateOrigins: [] }];
+    await expect(f.request('PATCH', `/v1/bots/${bot.id}`, { clientNonce: nonce('forbidden_header'), revision: bot.revision, job: 'Rejected configuration' })).rejects.toMatchObject({ code: 'capability_unavailable' });
+    expect(f.calls.some(call => call.method === 'profiles.update')).toBe(false);
+    expect(f.store.require<P.Bot>('bots', bot.id).job).toBe(bot.job);
   });
 });

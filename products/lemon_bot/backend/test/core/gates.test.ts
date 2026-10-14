@@ -4,7 +4,8 @@ import { createHash } from 'node:crypto';
 import type * as P from '../../../contracts/protocol';
 import type { BackendServices, EntityStore, Principal, RequestContext } from '../../src/core/services';
 import { ApiError } from '../../src/core/errors';
-import { createDraft, createGateRoutes, createGateService, cancelConversationGates, cancelConnectorConsents, acknowledgeExecutionApproval } from '../../src/core/gates';
+import { z, parse } from '../../src/core/validation';
+import { createDraft, createGateRoutes, createGateService, cancelConversationGates, cancelConnectorConsents, previewBotResources, cancelBotResources, acknowledgeExecutionApproval } from '../../src/core/gates';
 
 const actor: Principal = { kind: 'user', id: 'user_1', userId: 'user_1', workspaceId: 'workspace_1', role: 'member', sessionId: null, botId: null, deviceId: null };
 const nonce = 'abcdefghijklmnop';
@@ -48,7 +49,17 @@ function fixture() {
     runtime: Object.assign({ submit: unreachable, send: unreachable, cancel: unreachable, reconcile: unreachable, sessionKey: () => 'session_1' }, { revokeConnectorInvocations: unreachable }),
     integrations: { admission: unreachable, effectivePolicy: async () => policy, connectorConfig: unreachable, async sendApprovedDraft(_principal, draft) { sent.push(structuredClone(draft)); return sender(draft); }, emitProviderNotifications: unreachable, channelIngress: unreachable, providerCapabilities: unreachable },
     entry(principal, conversationId, payload) {
-      const entry = { ...services.resource('entry', {}), ...payload, id: String(payload.id ?? services.id('entry')), conversationId, seq: store.list<P.TranscriptEntry>('entries', item => item.conversationId === conversationId).length + 1, timestampMs: now, actor: payload.actor ?? { kind: 'user', id: principal.userId, displayName: 'Member' }, clientNonce: null, batchId: null, replyToEntryId: null, runId: payload.runId ?? null, targetedUserId: payload.targetedUserId ?? null, reactions: [] } as P.TranscriptEntry;
+      const entryActor = parse(z.object({ kind: z.enum(['user', 'bot', 'system']), id: z.string().nullable(), displayName: z.string() }).strict(), payload.actor ?? { kind: 'user', id: principal.userId, displayName: 'Member' });
+      const base: P.EntryBase = { ...services.resource('entry', {}), id: parse(z.string(), payload.id ?? services.id('entry')), conversationId, seq: store.list<P.TranscriptEntry>('entries', item => item.conversationId === conversationId).length + 1, timestampMs: now, actor: entryActor, clientNonce: null, batchId: null, replyToEntryId: null, runId: parse(z.string().nullable(), payload.runId ?? null), targetedUserId: parse(z.string().nullable(), payload.targetedUserId ?? null), reactions: [] };
+      let entry: P.TranscriptEntry;
+      if (payload.kind === 'card') {
+        if (!payload.card || typeof payload.card !== 'object' || !('type' in payload.card)) unreachable();
+        // Gate factories pass an already typed in-process Card through the shared Record payload seam.
+        const card = payload.card as P.Card;
+        entry = { ...base, kind: 'card', card };
+      } else if (payload.kind === 'notice') {
+        entry = { ...base, kind: 'notice', severity: parse(z.enum(['info', 'warning', 'error']), payload.severity), text: parse(z.string(), payload.text), requestId: parse(z.string().nullable(), payload.requestId ?? null) };
+      } else unreachable();
       store.put('entries', entry);
       services.events.emit('entry.upserted', entry, { conversationId });
       return entry;
@@ -302,4 +313,42 @@ test('connector revocation wakes only its exact pending consent and replaces emb
   expect(cancelled.gate.resolvedByUserId).toBe(actor.userId);
   const entry = f.store.require<P.TranscriptEntry>('entries', consent.entryId);
   expect(entry.kind === 'card' && entry.card.type === 'connector_grant' ? entry.card.consent : null).toEqual(cancelled);
+});
+
+describe('exact bot-owned gate deletion', () => {
+  test('removes only selected bot cards in a retained group and wakes its pending waiter', async () => {
+    const f = fixture();
+    const bot = f.store.require<P.Bot>('bots', 'bot_1');
+    f.store.put('bots', { ...bot, id: 'bot_2', name: 'Other bot', profileId: 'profile_2' });
+    const room = f.store.require<P.Conversation>('conversations', 'room_1');
+    f.store.put('conversations', { ...room, kind: 'group', botIds: ['bot_1', 'bot_2'] });
+    const selected = await f.gates.create<P.Question>(actor, 'question', { ...questionInput, title: 'Private candidate wording' });
+    const other = await f.gates.create<P.Question>(actor, 'question', { ...questionInput, botId: 'bot_2' });
+    const waiting = f.gates.wait<P.Question>('questions', selected.id);
+    const candidates = previewBotResources(f.services, 'bot_1');
+    expect(candidates.map(item => item.id)).toEqual([selected.id]);
+    expect(JSON.stringify(candidates)).not.toContain('Private candidate wording');
+    cancelBotResources(f.services, 'bot_1', candidates);
+    expect((await waiting).gate.state).toBe('cancelled');
+    expect(f.store.get('questions', selected.id)).toBeNull();
+    expect(f.store.get('entries', selected.entryId)).toBeNull();
+    expect(f.store.require<P.Question>('questions', other.id)).toEqual(other);
+    expect(f.store.get('entries', other.entryId)).not.toBeNull();
+    expect(f.store.get('conversations', 'room_1')).not.toBeNull();
+  });
+  test('changed candidates and uncertain sends retain every row before cancellation', async () => {
+    const f = fixture();
+    const question = await f.gates.create<P.Question>(actor, 'question', questionInput);
+    const stale = previewBotResources(f.services, 'bot_1');
+    const draft = await createDraft(f.services, actor, { ...common, content });
+    expect(() => cancelBotResources(f.services, 'bot_1', stale)).toThrow(ApiError);
+    expect(f.store.require<P.Question>('questions', question.id).gate.state).toBe('pending');
+    f.store.put('drafts', f.services.update(draft, { state: 'outcome_unknown' }));
+    const current = previewBotResources(f.services, 'bot_1');
+    expect(() => cancelBotResources(f.services, 'bot_1', current)).toThrow(ApiError);
+    expect(f.store.require<P.Question>('questions', question.id).gate.state).toBe('pending');
+    expect(f.store.require<P.Draft>('drafts', draft.id).state).toBe('outcome_unknown');
+    expect(f.store.get('entries', question.entryId)).not.toBeNull();
+    expect(f.store.get('entries', draft.entryId)).not.toBeNull();
+  });
 });

@@ -5,6 +5,32 @@ import { buildMemoryContextKey, buildPrivateBotMemoryContextKey, createRuntimeSe
 import { fixture } from './fixture';
 
 describe('owned placed runtime', () => {
+  test('revocation reads only terminal status; the actual initiating context separately owns full completion projection', async () => {
+    const f = fixture(); const runtime = createRuntimeService(f.services); f.services.runtime = runtime;
+    try {
+      const started = await runtime.submit(f.alice, f.conversation, f.bot, { clientNonce: 'status_only_stop_nonce01', text: 'work' });
+      const sessionKey = f.store.metadata<RuntimeMapping>(`runtimeRun:${started.run.id}`)!.sessionKey;
+      await runtime.project('chat', { type: 'delta', runId: started.run.id, sessionKey, seq: 1, text: 'partial private answer' });
+      const original = f.rpc;
+      f.rpc = async (method, params) => {
+        if (method === 'chat.abort') return { aborted: true };
+        if (method === 'agent.wait') { expect(params.includeAnswer).toBe(false); return { runId: started.run.id, ok: false, cancelled: true, answer: null }; }
+        return original(method, params);
+      };
+      const stopped = await quiesceBotInvocations(f.services, f.alice, f.bot.id, { principalOnly: true });
+      expect(stopped.status).toBe('cancelled');
+      expect(f.store.metadata(`runtimeTerminalProjectionPending:${started.run.id}`)).toBe(true);
+      expect(f.store.list<P.TranscriptEntry>('entries').filter(entry => entry.kind === 'message')).toMatchObject([{ text: 'partial private answer', streaming: false }]);
+      f.rpc = async (method, params) => {
+        if (method === 'agent.wait') { expect(params.includeAnswer).toBeUndefined(); return { runId: started.run.id, ok: false, cancelled: true, answer: 'authoritative private completion' }; }
+        return original(method, params);
+      };
+      await runtime.project('agent', { type: 'completed', runId: started.run.id, sessionKey, ok: false, cancelled: true });
+      expect(f.store.metadata(`runtimeTerminalProjectionPending:${started.run.id}`)).toBe(false);
+      expect(f.store.list<P.TranscriptEntry>('entries').filter(entry => entry.kind === 'message')).toMatchObject([{ text: 'authoritative private completion', streaming: false }]);
+    } finally { runtime.close(); f.store.close(); }
+  });
+
   test('a shared credential owner can revoke after losing Bot management, while another member cannot', async () => {
     const f = fixture();
     const connector: P.Connector = f.services.resource('connector', { botId: f.bot.id, ownerUserId: f.alice.userId, name: 'Shared account', url: 'https://connector.example/mcp', accountLabel: 'Owner account', authKind: 'oauth' as const, state: 'connected' as const, tools: [], secretHeaderNames: [], shared: true, lastError: null });

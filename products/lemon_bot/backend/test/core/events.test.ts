@@ -33,4 +33,11 @@ describe('persisted realtime authorization and transaction boundary',()=>{
     const {store,services,notification}=fixture();const first=services.events.emit('notification.upserted',notification('alice'),{userIds:['alice']});const second=services.events.emit('notification.upserted',notification('alice'),{userIds:['alice']});store.db.query('DELETE FROM events WHERE seq=?').run(BigInt(first.seq));
     expect(()=>services.events.replay(alice,'0')).toThrow();expect(services.events.replay(alice,first.seq).map(event=>event.seq)).toEqual([second.seq]);store.db.exec('DELETE FROM events');const third=services.events.emit('notification.upserted',notification('alice'),{userIds:['alice']});expect(BigInt(third.seq)).toBeGreaterThan(BigInt(second.seq));expect(()=>services.events.replay(alice,(BigInt(third.seq)+1n).toString())).toThrow();store.close();
   });
+  test('preserves adjacent 64-bit sequences beyond the JavaScript safe integer boundary',()=>{
+    const {store,services,notification}=fixture();services.events.emit('notification.upserted',notification('alice'),{userIds:['alice']});
+    const base=9007199254740993n;store.db.query('UPDATE sqlite_sequence SET seq=? WHERE name=\'events\'').run(base);
+    const first=services.events.emit('notification.upserted',notification('alice'),{userIds:['alice']});const second=services.events.emit('notification.upserted',notification('alice'),{userIds:['alice']});
+    expect(first.seq).toBe((base+1n).toString());expect(second.seq).toBe((base+2n).toString());expect(services.events.cursor()).toBe(second.seq);
+    expect(services.events.replay(alice,base.toString()).map(event=>event.seq)).toEqual([first.seq,second.seq]);expect(services.events.replay(alice,first.seq).map(event=>event.seq)).toEqual([second.seq]);store.close();
+  });
 });
