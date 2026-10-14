@@ -356,8 +356,9 @@ defmodule LemonEvals.Support do
   end
 
   @doc """
-  A memory document for scripted `recall` search functions. `doc_id` is also
-  the prompt text, so it shows up in the tool's rendered result.
+  A canonical owned legacy history document for scripted `recall` search
+  functions, indexed like real ingest so recall's ownership filter admits it.
+  `doc_id` is also the prompt text, so it shows up in the tool's rendered result.
   """
   def eval_memory_doc(doc_id, cwd, workspace_dir, agent_id \\ "eval") do
     {:ok, identity} =
@@ -368,7 +369,7 @@ defmodule LemonEvals.Support do
         session_scope: :main
       })
 
-    %LemonMemory.Document{
+    LemonMemory.Document.new(%{
       doc_id: doc_id,
       run_id: "run-#{doc_id}",
       session_key: "agent:#{agent_id}:main",
@@ -379,8 +380,10 @@ defmodule LemonEvals.Support do
       ingested_at_ms: 1_758_000_000_000,
       prompt_summary: doc_id,
       answer_summary: "Recalled #{doc_id}.",
-      meta: %{"home_digest" => identity.home_digest}
-    }
+      meta:
+        LemonMemory.ContextScope.metadata(:legacy)
+        |> Map.merge(%{"home_digest" => identity.home_digest, "kind" => "run"})
+    })
   end
 
   def assert_curator_prompt(prompt) do
