@@ -345,7 +345,7 @@ private final class TestAccountCredentialStore: AccountCredentialStore {
         store.conversations = [room]; store.entries["chat"] = [try message("Previously authorized")]; store.selectedConversationID = "chat"
         XCTAssertNotNil(store.entries["chat"])
         XCTAssertEqual(try persistence.loadDraft(conversationID: "chat", accountID: "account")?.text, "Unsent group draft")
-        try await store.apply(RealtimeEvent(seq: "1", payload: .conversationDeleted(Deleted(id: "chat")), timestampMs: 1))
+        try await store.apply(RealtimeEvent(seq: "1", payload: .conversationDeleted(Deleted(id: "chat", deleted: true)), timestampMs: 1))
         XCTAssertTrue(store.conversations.isEmpty); XCTAssertNil(store.entries["chat"]); XCTAssertNil(store.selectedConversationID)
         XCTAssertNil(try persistence.loadDraft(conversationID: "chat", accountID: "account"))
         XCTAssertFalse(FileManager.default.fileExists(atPath: staged.path))

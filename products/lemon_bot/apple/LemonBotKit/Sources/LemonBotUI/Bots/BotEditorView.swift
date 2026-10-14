@@ -102,7 +102,7 @@ struct BotEditorView: View {
                     TextField("Reply language (blank for automatic)", text: $language)
                     Text("Every durable voice/language edit records an inspectable PreferenceChange with conflict-safe Undo.").font(.caption)
                 }
-                if let bot {
+                if bot != nil {
                     SwiftUI.Section("Reference files") {
                         ForEach(references, id: \.self) { id in HStack { AttachmentView(store: store, attachmentID: id); Button("Remove reference") { references.removeAll { $0 == id } } } }
                         Button("Choose reference files") { referencePicker = true }

@@ -89,7 +89,7 @@ public struct PhonePairingView: View {
             try store.preparePairing(raw); link = ""; error = nil
             perform { try await store.previewPairing() }
         }
-        catch { error = "This is not a valid secure Lemon Bot pairing link."; link = "" }
+        catch { self.error = "This is not a valid secure Lemon Bot pairing link."; link = "" }
     }
     private var previewReady: Bool {
         guard let preview = store.pendingPairing,
