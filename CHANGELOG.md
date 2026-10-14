@@ -109,8 +109,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   category splits are estimates scaled to the provider-reported total.
 - **API-key sign-in for every catalog provider.** `lemon model` now offers
   Google Gemini API, Groq, Cerebras, DeepSeek, Mistral, Hugging Face, Qwen
-  (DashScope), Vercel AI Gateway, OpenCode Zen/Go and MiniMax China; the key is
-  stored encrypted and referenced as `api_key_secret`.
+  (DashScope), Vercel AI Gateway, OpenCode Zen/Go, MiniMax China and every
+  hosted OpenAI-compatible preset (model choice lists the endpoint's models);
+  the key is stored encrypted and referenced as `api_key_secret`.
 - OAuth logins can be force-refreshed after the provider rejects an unexpired
   token (`Credentials.refresh_provider_api_key/4`, used by 401 recovery).
 - **Local and open-model provider presets.** Ollama, LM Studio, llama.cpp,

@@ -872,8 +872,11 @@ Provider onboarding flows:
 API-key-only providers in the catalog are offered too: `google` (Gemini API),
 `groq`, `cerebras`, `deepseek`, `mistral`, `huggingface`, `qwen` (DashScope),
 `vercel_ai_gateway`, `opencode`, `opencode_go`, `minimax_cn`, `fireworks`,
-`zai`, `kimi` and `minimax`. The pasted key is stored as `llm_<provider>_api_key`
-and referenced through `[providers.<provider>].api_key_secret`.
+`zai`, `kimi` and `minimax`, plus every hosted OpenAI-compatible preset
+(`together`, `deepinfra`, `nvidia`, …). The pasted key is stored as
+`llm_<provider>_api_key` and referenced through
+`[providers.<provider>].api_key_secret`. For presets, `--set-default` lists the
+models the endpoint reports for that key, and `--model` accepts any model id.
 
 Provider readiness is visible through the source and packaged
 `lemon providers status` command. It uses the same
