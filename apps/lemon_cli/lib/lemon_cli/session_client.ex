@@ -74,13 +74,18 @@ defmodule LemonCli.SessionClient do
       {:ok, payload} ->
         summary = normalize(payload["summary"] || %{})
         export = normalize(Map.drop(payload, ["summary"]))
-        format = if payload["format"] == "markdown", do: :markdown, else: :json
+        format = export_format(payload["format"])
         {:ok, export |> Map.merge(summary) |> Map.put(:format, format)}
 
       error ->
         error
     end
   end
+
+  defp export_format("jsonl"), do: :jsonl
+  defp export_format("markdown"), do: :markdown
+  defp export_format("html"), do: :html
+  defp export_format(_other), do: :json
 
   def prune(opts) do
     case request("sessions.prune", %{

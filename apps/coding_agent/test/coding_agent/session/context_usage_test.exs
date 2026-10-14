@@ -325,4 +325,95 @@ defmodule CodingAgent.Session.ContextUsageTest do
     assert ContextUsage.stored_overhead(id) == nil
     assert ContextUsage.record_overhead(nil, profile) == nil
   end
+
+  describe "session usage" do
+    alias CodingAgent.Session.{BudgetLedger, MessageSerialization}
+
+    defp assistant(input, output, cache_read, cache_write, cost) do
+      %AssistantMessage{
+        role: :assistant,
+        content: [%TextContent{text: "done"}],
+        stop_reason: :stop,
+        timestamp: 1,
+        usage: %Usage{
+          input: input,
+          output: output,
+          cache_read: cache_read,
+          cache_write: cache_write,
+          total_tokens: input + output + cache_read + cache_write,
+          cost: %LemonAi.Types.Cost{total: cost}
+        }
+      }
+    end
+
+    test "sums active-branch assistant tokens and reports the cumulative ledger", %{
+      tmp_dir: tmp_dir,
+      settings: settings
+    } do
+      manager = SessionManager.new(tmp_dir)
+      manager = SessionManager.append_message(manager, %{"role" => "user", "content" => "hi"})
+      root_id = manager.leaf_id
+
+      # An abandoned branch: counted by the ledger, not by the branch sums.
+      manager =
+        SessionManager.append_message(
+          manager,
+          MessageSerialization.serialize_message(assistant(1_000, 100, 0, 0, 0.5))
+        )
+
+      manager = SessionManager.set_leaf_id(manager, root_id)
+
+      manager =
+        SessionManager.append_message(
+          manager,
+          MessageSerialization.serialize_message(assistant(200, 30, 400, 50, 0.25))
+        )
+
+      manager =
+        SessionManager.append_message(
+          manager,
+          MessageSerialization.serialize_message(assistant(300, 20, 600, 0, 0.125))
+        )
+
+      assert ContextUsage.session_usage(manager) == %{
+               tokens: 1_100 + 680 + 920,
+               cost_usd: 0.875,
+               input: 500,
+               output: 50,
+               cache_read: 1_000,
+               cache_write: 50,
+               assistant_messages: 2
+             }
+
+      # An explicit ledger wins over derived values; negative/garbage is bounded.
+      usage = ContextUsage.session_usage(manager, %{tokens: 9_999, cost_usd: 1.5})
+      assert usage.tokens == 9_999
+      assert usage.cost_usd == 1.5
+
+      {manager, _ledger} = BudgetLedger.initialize(manager)
+      assert ContextUsage.session_usage(manager).tokens == 2_700
+
+      assert ContextUsage.session_usage(nil) == %{
+               tokens: 0,
+               cost_usd: 0.0,
+               input: 0,
+               output: 0,
+               cache_read: 0,
+               cache_write: 0,
+               assistant_messages: 0
+             }
+
+      state = %{
+        session_manager: manager,
+        settings_manager: settings,
+        model: model(100_000)
+      }
+
+      messages = transcript(usage: %Usage{input: 500, output: 10, total_tokens: 510})
+      assert {:ok, report} = ContextUsage.measure_durable(state, messages, nil)
+      assert report.usage.assistant_messages == 2
+      assert report.usage.input == 500
+      assert report.usage.cache_read == 1_000
+    end
+  end
 end

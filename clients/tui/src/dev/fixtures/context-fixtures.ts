@@ -16,6 +16,7 @@ function receipt(
 		categories: Categories;
 		top: Array<[category: string, label: string, tokens: number]>;
 		messageCount: number;
+		usage?: Record<string, number>;
 	},
 ): Record<string, unknown> {
 	const { window } = options;
@@ -48,6 +49,7 @@ function receipt(
 		})),
 		top: options.top.map(([category, label, tokens]) => ({ category, label, tokens })),
 		messageCount: options.messageCount,
+		usage: options.usage,
 		measuredAt: 1_755_400_000_000,
 	};
 }
@@ -79,6 +81,15 @@ export function reportedContextFixture(sessionKey: string): Record<string, unkno
 			["tool_definitions", "bash", 700],
 		],
 		messageCount: 42,
+		usage: {
+			tokens: 182_400,
+			costUsd: 0.4231,
+			input: 120_000,
+			output: 14_500,
+			cacheRead: 40_000,
+			cacheWrite: 7_900,
+			assistantMessages: 12,
+		},
 	});
 }
 

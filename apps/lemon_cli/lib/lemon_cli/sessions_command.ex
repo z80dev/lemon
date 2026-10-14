@@ -340,9 +340,13 @@ defmodule LemonCli.SessionsCommand do
   end
 
   defp export_format(nil), do: {:ok, :json}
-  defp export_format(value) when value in ["json"], do: {:ok, :json}
+  defp export_format("json"), do: {:ok, :json}
+  defp export_format(value) when value in ["jsonl", "ndjson"], do: {:ok, :jsonl}
   defp export_format(value) when value in ["markdown", "md"], do: {:ok, :markdown}
-  defp export_format(_value), do: {:error, "Export format must be json or markdown."}
+  defp export_format("html"), do: {:ok, :html}
+
+  defp export_format(_value),
+    do: {:error, "Export format must be json, jsonl, markdown or html."}
 
   defp maybe_write_export(nil, _content, _force), do: :ok
 
@@ -757,7 +761,8 @@ defmodule LemonCli.SessionsCommand do
     split =
       if report["source"] == "estimate",
         do: "Counts are estimates (~4 characters per token).",
-        else: "Category splits are estimates (~4 characters per token) scaled to the reported total."
+        else:
+          "Category splits are estimates (~4 characters per token) scaled to the reported total."
 
     case report["overhead"] do
       "snapshot" -> split <> " System prompt and tools were measured when the last turn ended."

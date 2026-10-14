@@ -387,6 +387,12 @@ turn ended. Output contains counts and bounded labels only—no prompt text, too
 arguments or absolute paths. The TUI `/context` and ACP `/context` commands use
 the same `sessions.context` control-plane method.
 
+The reply also carries a numeric `usage` block: cumulative `tokens` and
+catalog-estimated `costUsd` from the session's spend ledger (every branch), and
+`input`/`output`/`cacheRead`/`cacheWrite` token sums plus `assistantMessages`
+for the active branch. The TUI prints it as a `tokens … in / … out / … cache ·
+cost $… (estimate)` line under `/context` and `/session info`.
+
 ### Title, pin, and archive state
 
 ```bash
@@ -404,11 +410,13 @@ success.
 
 ### Redacted export
 
-Print an always-redacted JSON or Markdown export:
+Print an always-redacted export as JSON, JSON Lines, Markdown or a self-contained HTML page:
 
 ```bash
 lemon sessions export agent:research:main --format json
+lemon sessions export agent:research:main --format jsonl
 lemon sessions export agent:research:main --format markdown
+lemon sessions export agent:research:main --format html --output research-session.html
 ```
 
 Write the selected export to an owner-only file:
@@ -426,6 +434,11 @@ metadata and only the output basename; the exported content stays in the file.
 Without `--output`, `--json` returns the redacted content in its JSON envelope.
 Exports contain selected session/run/tool fields, SHA-256 integrity metadata,
 and omission counts. They never contain raw run records or raw event payloads.
+`jsonl` emits one compact JSON object per line: a `{"type":"session",...}`
+record followed by one `{"type":"run",...}` record per run. `html` is a single
+file with inline CSS only (no scripts or external resources) and every value
+escaped. The TUI `/session export [key] [json|jsonl|markdown|html]` uses the same
+method.
 
 ### Preview-confirm prune
 

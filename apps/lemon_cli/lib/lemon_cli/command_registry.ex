@@ -419,7 +419,7 @@ defmodule LemonCli.CommandRegistry do
         option("--agent-id ID", ["--agent-id"], "Filter by agent id"),
         option("--pinned | --unpinned", ["--pinned", "--unpinned"], "Filter pin state"),
         option("--archived | --active", ["--archived", "--active"], "Filter archive state"),
-        option("--format json|markdown", ["--format"], "Redacted export format"),
+        option("--format json|jsonl|markdown|html", ["--format"], "Redacted export format"),
         option("--cwd DIR", ["--cwd"], "Project directory for context (default: current)"),
         option("--clear", ["--clear"], "Clear a session title"),
         option("--output PATH", ["--output"], "Write export content to a private file"),

@@ -24,7 +24,11 @@ test("/context fetches the focused session with the TUI cwd and opens the panel"
 	});
 	expect(h.host.contextPanels).toHaveLength(1);
 	expect(h.host.contextPanels[0]?.usedTokens).toBe(45_210);
-	expect(h.host.notices).toHaveLength(0);
+	expect(h.host.notices).toHaveLength(1);
+	expect(h.host.last).toEqual({
+		text: "tokens 120k in / 14.5k out / 47.9k cache (40k read, 7.9k write) · cost $0.42 (estimate)",
+		level: "info",
+	});
 });
 
 test("a successful measurement feeds the status-bar gauge", async () => {

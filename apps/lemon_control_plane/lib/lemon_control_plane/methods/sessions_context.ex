@@ -86,10 +86,12 @@ defmodule LemonControlPlane.Methods.SessionsContext do
          "source" => if(Map.get(usage, :source) in @sources, do: usage.source, else: "estimate"),
          "estimatedTokens" => non_negative(Map.get(usage, :estimated_tokens)),
          "autoCompaction" => auto_compaction(Map.get(usage, :auto_compaction), window),
-         "categories" => Enum.map(categories, &Map.put(&1, "percent", percent(&1["tokens"], window))),
+         "categories" =>
+           Enum.map(categories, &Map.put(&1, "percent", percent(&1["tokens"], window))),
          "top" =>
            usage |> Map.get(:top, []) |> Enum.flat_map(&top_item/1) |> Enum.take(@top_limit),
          "messageCount" => non_negative(Map.get(usage, :message_count)),
+         "usage" => usage(Map.get(usage, :usage)),
          "measuredAt" => non_negative(Map.get(usage, :measured_at))
        }}
     end
@@ -145,6 +147,24 @@ defmodule LemonControlPlane.Methods.SessionsContext do
   end
 
   defp auto_compaction(_budget, _window), do: nil
+
+  # Numeric session spend only. Absent for runtimes that report no usage block.
+  defp usage(%{} = usage) do
+    %{
+      "tokens" => non_negative(Map.get(usage, :tokens)),
+      "costUsd" => cost(Map.get(usage, :cost_usd)),
+      "input" => non_negative(Map.get(usage, :input)),
+      "output" => non_negative(Map.get(usage, :output)),
+      "cacheRead" => non_negative(Map.get(usage, :cache_read)),
+      "cacheWrite" => non_negative(Map.get(usage, :cache_write)),
+      "assistantMessages" => non_negative(Map.get(usage, :assistant_messages))
+    }
+  end
+
+  defp usage(_usage), do: nil
+
+  defp cost(value) when is_number(value) and value >= 0, do: value / 1
+  defp cost(_), do: 0.0
 
   defp enum(value, allowed, default),
     do: if(value in allowed, do: Atom.to_string(value), else: default)

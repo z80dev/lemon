@@ -213,6 +213,34 @@ describe("redacted export and guarded deletion", () => {
 		expect(harness.host.text).not.toContain(workdir);
 	});
 
+	test("export accepts html and jsonl formats and sends them over the wire", async () => {
+		const html = "<!DOCTYPE html><html><body>&lt;script&gt;</body></html>\n";
+		const htmlOut = join(workdir, "session.html");
+		harness.server.respondWith("sessions.export", exportResult(html, "html"));
+		await harness.run(`/session export ${sessionKey} html --output ${htmlOut}`);
+		expect(harness.server.requestsFor("sessions.export")[0]?.params).toEqual({
+			sessionKey,
+			format: "html",
+		});
+		expect(readFileSync(htmlOut, "utf8")).toBe(html);
+
+		const jsonl = '{"type":"session"}\n{"type":"run"}\n';
+		const jsonlOut = join(workdir, "session.jsonl");
+		harness.server.respondWith("sessions.export", exportResult(jsonl, "jsonl"));
+		await harness.run(`/session export ${sessionKey} --format jsonl --output ${jsonlOut}`);
+		expect(harness.server.requestsFor("sessions.export")[1]?.params).toEqual({
+			sessionKey,
+			format: "jsonl",
+		});
+		expect(readFileSync(jsonlOut, "utf8")).toBe(jsonl);
+	});
+
+	test("an unknown --format is rejected before the wire", async () => {
+		await harness.run(`/session export ${sessionKey} --format pdf`);
+		expect(harness.server.requestsFor("sessions.export")).toHaveLength(0);
+		expect(harness.host.text).toContain("--format must be json, jsonl, markdown or html");
+	});
+
 	test("digest mismatch and unsafe destinations fail closed without leaking details", async () => {
 		const output = join(workdir, "secret-output.json");
 		const target = join(workdir, "target.json");
@@ -364,11 +392,11 @@ describe("exact preview-confirm pruning", () => {
 	});
 });
 
-function exportResult(content: string, format: "json" | "markdown") {
+function exportResult(content: string, format: "json" | "jsonl" | "markdown" | "html") {
 	return {
 		sessionKey,
 		format,
-		filename: format === "json" ? "session.json" : "session.md",
+		filename: `session.${{ json: "json", jsonl: "jsonl", markdown: "md", html: "html" }[format]}`,
 		content,
 		sha256: createHash("sha256").update(content).digest("hex"),
 		bytes: Buffer.byteLength(content),
