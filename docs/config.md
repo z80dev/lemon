@@ -1053,6 +1053,70 @@ cache_dir = ""
 max_tool_invoke_depth = 4
 ```
 
+## Tool Disclosure
+
+Every tool a session exposes sends its name, description and JSON schema with
+each model request. `[runtime.tools.disclosure]` can move tools behind two
+bridge tools: `tool_search` (look up a deferred tool and read its schema) and
+`tool_invoke` (call it by name). A bridged call runs the same policy, approval,
+checkpoint, cancellation and per-session mutation-lock path as a direct call,
+and `tool_invoke` never runs in parallel with other calls. Plan mode judges a
+bridged call by the tool it reaches.
+
+```toml
+[runtime.tools.disclosure]
+enabled = true           # false keeps every tool directly exposed
+budget_tokens = 40000    # legacy profile: defer only above this estimate
+catalog_tokens = 2000    # size of the deferred-tool list in tool_search's description
+max_results = 5          # default tool_search result count
+profile = "legacy"       # "legacy" (default) or "coding" (opt-in experiment)
+pinned = []              # tool names that always stay directly exposed
+```
+
+- **`legacy`** (default): built-in tools stay exposed. The MCP, extension and
+  WASM tools are deferred only when the estimated schema cost of the whole
+  catalog exceeds `budget_tokens`; below it the tool list is unchanged.
+- **`coding`**: an experiment for coding sessions. Only the coding core stays
+  directly exposed — `read`, `write`, `edit`, `patch`, `ls`, `find`, `grep`,
+  `ast_grep`, `lsp_diagnostics`, `checkpoint`, `bash`, `bash_output`,
+  `kill_process`, `websearch`, `webfetch`, `read_skill`, `recall`, `todo`,
+  `ask`, `task`, `wait`, `agent_message` and `parent_question` — plus `pinned`
+  names. Every other resolved tool, including browser, media, automation and
+  other optional built-ins, is deferred whenever there is one to defer;
+  `budget_tokens` is not consulted. Whether this improves cost, latency or task
+  success is not established, so it is not the default.
+
+Tools the session policy denies are never searchable or invokable. Tools passed
+as `extra_tools` always stay exposed, and sessions started with an explicit
+`tools` list skip disclosure. Names `tool_search` and `tool_invoke` are
+reserved; a real tool using either name is dropped while disclosure is active.
+
+The tool list is computed at session start and on extension reload, never per
+turn. `extensions_status` reports the active profile, the exposed and deferred
+tool names, estimated schema tokens before and after disclosure, and a
+`catalog_digest`: a SHA-256 over the exposed schemas, the deferred tools, their
+sources and the session's tool policy. Matching digests identify matching
+schemas, source metadata and policy; they do not attest to external tool state
+or outcome. An authority change recomputes the catalog at the next run's session
+startup/resume boundary, or when explicitly supplied to a lifecycle reload, and
+changes its identity even if the visible schemas remain identical. Denied tools
+are removed from the rebuilt bridge, not merely hidden from its search results.
+The `[:coding_agent, :tool_disclosure, :applied]` telemetry event also carries the
+profile and safe catalog digest, with before/after schema estimates and tool
+counts as measurements, so isolated trial collectors need not log raw schemas.
+Diagnostic event version `1` adds `:search` events with a matched count and
+success/error status, and `:invoke_rejected` events with a bounded rejection
+reason (`unknown_tool`, `invalid_arguments` or `invalid_request`). These events
+contain no query, tool name, arguments or error text. Pre-aborted calls do not
+count as discovery or incorrect-call failures.
+
+For a controlled trial, scope the profile to the trial instead of the user's
+global config: put the section in the benchmark project's `.lemon/config.toml`
+(applies only to sessions in that project), set
+`LEMON_TOOL_DISCLOSURE_PROFILE=coding` on a separately launched runtime (it
+overrides file config for that process only), or start sessions
+programmatically with `CodingAgent.Session.start_link(tool_disclosure: [profile: :coding])`.
+
 ## Sections
 
 - `providers.<name>`: API keys and base URLs per provider.
@@ -1060,6 +1124,7 @@ max_tool_invoke_depth = 4
 - `runtime`: runtime behavior and tool settings.
 - `runtime.tools.web`: `websearch` / `webfetch` providers, guardrails, cache, and Firecrawl fallback.
 - `runtime.tools.wasm`: WASM sidecar runtime controls and discovery paths.
+- `runtime.tools.disclosure`: deferring tool schemas behind `tool_search` / `tool_invoke` (see [Tool Disclosure](#tool-disclosure)).
 - `profiles.<agent_id>`: assistant profiles (identity + defaults) used by gateway/control-plane.
 - `runtime.compaction`: context compaction settings.
 - `runtime.retry`: session retry of transient provider failures (backoff + retry-after).

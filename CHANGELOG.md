@@ -8,7 +8,16 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
-No unreleased changes yet.
+### Added
+
+- Opt-in `runtime.tools.disclosure.profile = "coding"` keeps a coding core
+  directly exposed and defers optional registry-resolved built-ins behind
+  `tool_search` / `tool_invoke`. Explicit pins and per-session overrides support
+  isolated trials; defaults and caller-supplied toolsets remain unchanged.
+  Disclosure diagnostics include resolved inventories, estimated schema size
+  and a safe catalog/policy digest. Bridged calls retain approval, plan-mode,
+  checkpoint, cancellation and sequential execution constraints. No cost or
+  latency improvement is claimed; see [Tool Disclosure](docs/config.md#tool-disclosure).
 
 ---
 

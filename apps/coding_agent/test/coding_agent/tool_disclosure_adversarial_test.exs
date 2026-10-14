@@ -17,12 +17,19 @@ defmodule CodingAgent.ToolDisclosureAdversarialTest do
   """
   use ExUnit.Case, async: false
 
+  alias CodingAgent.Checkpoint
   alias CodingAgent.ExtensionLifecycle
+  alias CodingAgent.MutationLock
+  alias CodingAgent.Session
+  alias CodingAgent.Session.Planning
+  alias CodingAgent.SessionManager
+  alias CodingAgent.SettingsManager
   alias CodingAgent.ToolDisclosure
   alias CodingAgent.ToolPolicy
   alias CodingAgent.ToolRegistry
-  alias LemonAgent.Types.{AgentTool, AgentToolResult}
-  alias LemonAi.Types.TextContent
+  alias LemonAgent.AbortSignal
+  alias LemonAgent.Types.{AgentContext, AgentLoopConfig, AgentTool, AgentToolResult}
+  alias LemonAi.Types.{AssistantMessage, Model, ModelCost, TextContent, ToolCall}
 
   @moduletag :tmp_dir
 
@@ -207,7 +214,9 @@ defmodule CodingAgent.ToolDisclosureAdversarialTest do
             "disclosure" => %{
               "budget_tokens" => 7,
               "catalog_tokens" => 9,
-              "max_results" => 2
+              "max_results" => 2,
+              "profile" => "coding",
+              "pinned" => ["browser_tabs", "browser_navigate"]
             }
           }
         }).disclosure
@@ -226,7 +235,9 @@ defmodule CodingAgent.ToolDisclosureAdversarialTest do
                enabled: true,
                budget_tokens: 7,
                catalog_tokens: 9,
-               max_results: 2
+               max_results: 2,
+               profile: :coding,
+               pinned: ["browser_navigate", "browser_tabs"]
              }
     end
 
@@ -858,5 +869,700 @@ defmodule CodingAgent.ToolDisclosureAdversarialTest do
 
       assert result.details.matched == ["mcp_srv_probe"]
     end
+  end
+
+  # ==========================================================================
+  # Coding profile: deferred built-ins keep their execution authority
+  # ==========================================================================
+
+  describe "coding profile authority" do
+    test "denied tools stay unreachable; approvals and plan mode still bind the bridge", %{
+      tmp_dir: tmp_dir
+    } do
+      parent = self()
+      notes = Path.join(tmp_dir, "notes.txt")
+      File.write!(notes, "plan-mode readable")
+
+      result =
+        ExtensionLifecycle.initialize(
+          cwd: tmp_dir,
+          settings_manager: settings(),
+          tool_opts: [
+            mcp_tools: [],
+            tool_disclosure: [profile: :coding],
+            tool_policy:
+              ToolPolicy.custom(deny: ["browser_click"], require_approval: ["browser_tabs"]),
+            approval_context: %{
+              run_id: "run-1",
+              session_id: "session-1",
+              session_key: "key-1",
+              approval_request_fun: fn request ->
+                send(parent, {:approval_requested, request.tool})
+                {:ok, :denied}
+              end
+            },
+            browser_request: fn method, _args, _timeout_ms ->
+              send(parent, {:browser_called, method})
+              {:ok, %{"tabs" => []}}
+            end
+          ]
+        )
+
+      hidden = result.tool_disclosure.hidden_names
+      assert "browser_tabs" in hidden
+      assert "browser_navigate" in hidden
+      refute "browser_click" in hidden
+      refute "browser_click" in names(result.tools)
+
+      search = find(result.tools, "tool_search")
+      invoke = find(result.tools, "tool_invoke")
+
+      # Denied: invisible to search and to every spelling of a guessed name.
+      refute "browser_click" in search.execute.("id", %{"query" => "browser click"}, nil, nil).details.matched
+
+      assert text(search.execute.("id", %{"query" => "select:browser_click"}, nil, nil)) =~
+               "Not found: browser_click"
+
+      for guess <- ["browser_click", " browser_click "] do
+        assert {:error, message} =
+                 invoke.execute.(
+                   "id",
+                   %{"name" => guess, "args" => %{"selector" => "#go"}},
+                   nil,
+                   nil
+                 )
+
+        assert message =~ "Unknown tool 'browser_click'"
+      end
+
+      # Approval-gated deferred built-in: the human sees the real tool, and a
+      # denial means the browser is never touched.
+      denied = invoke.execute.("id", %{"name" => "browser_tabs", "args" => %{}}, nil, nil)
+      assert_received {:approval_requested, "browser_tabs"}
+      assert text(denied) =~ "denied"
+      refute_received {:browser_called, _}
+
+      # Plan mode judges the bridge by the tool it reaches.
+      {:ok, _status, planning} = Planning.transition(SessionManager.new(tmp_dir), :enter, [])
+
+      planned =
+        Planning.tools(result.tools, planning, %{
+          gate: Planning.new_gate(),
+          cwd: tmp_dir,
+          session_pid: self(),
+          session_id: planning.header.id,
+          run_id: nil,
+          session_key: nil,
+          agent_id: nil,
+          approval_request_fun: nil
+        })
+
+      planned_invoke = find(planned, "tool_invoke")
+
+      blocked =
+        planned_invoke.execute.(
+          "id",
+          %{"name" => "browser_navigate", "args" => %{"url" => "https://example.test"}},
+          nil,
+          nil
+        )
+
+      assert blocked.is_error
+      assert text(blocked) =~ "Plan mode is active: `browser_navigate` is blocked"
+      refute_received {:browser_called, _}
+
+      read =
+        planned_invoke.execute.("id", %{"name" => "read", "args" => %{"path" => notes}}, nil, nil)
+
+      assert all_text(read) =~ "plan-mode readable"
+
+      selected =
+        find(planned, "tool_search").execute.(
+          "id",
+          %{"query" => "select:browser_navigate"},
+          nil,
+          nil
+        )
+
+      assert selected.details.matched == ["browser_navigate"]
+
+      # Plan-file writes must behave like direct writes, not become forbidden
+      # merely because the same target is reached through the bridge.
+      plan_path = Path.join(Planning.plan_dir(planning), "trial.md")
+      plan_args = %{"path" => plan_path, "content" => "# Trial plan"}
+      direct_plan = find(planned, "write").execute.("plan-direct", plan_args, nil, nil)
+
+      bridged_plan =
+        planned_invoke.execute.(
+          "plan-bridge",
+          %{"name" => "write", "args" => plan_args},
+          nil,
+          nil
+        )
+
+      assert %AgentToolResult{} = direct_plan
+      assert %AgentToolResult{} = bridged_plan
+      assert File.read!(plan_path) == "# Trial plan"
+
+      blocked_write =
+        planned_invoke.execute.(
+          "outside-plan",
+          %{"name" => "write", "args" => %{"path" => notes, "content" => "unsafe"}},
+          nil,
+          nil
+        )
+
+      assert blocked_write.is_error
+      assert File.read!(notes) == "plan-mode readable"
+    end
+
+    test "a bridged call keeps the direct call's checkpoint, mutation lock and cancellation", %{
+      tmp_dir: tmp_dir
+    } do
+      session_id = "disclosure-contract-#{System.unique_integer([:positive])}"
+      on_exit(fn -> Checkpoint.delete_all(session_id) end)
+
+      path = Path.join(tmp_dir, "target.txt")
+      File.write!(path, "before")
+
+      result =
+        ExtensionLifecycle.initialize(
+          cwd: tmp_dir,
+          settings_manager: settings(),
+          tool_opts: [mcp_tools: [], session_id: session_id, tool_disclosure: [profile: :coding]]
+        )
+
+      invoke = find(result.tools, "tool_invoke")
+      write = find(result.tools, "write")
+
+      # Invalid arguments must not reach a mutation through either entry point.
+      invalid = %{"path" => 42}
+
+      assert {:error, _} =
+               invoke.execute.("invalid", %{"name" => "write", "args" => invalid}, nil, nil)
+
+      assert {:error, _} = write.execute.("invalid-direct", invalid, nil, nil)
+      assert File.read!(path) == "before"
+
+      bridged =
+        invoke.execute.(
+          "write-1",
+          %{"name" => "write", "args" => %{"path" => path, "content" => "bridged"}},
+          nil,
+          nil
+        )
+
+      assert %AgentToolResult{details: details} = bridged
+      assert is_binary(details.checkpoint_id)
+      assert details.checkpoint_kind == "filesystem"
+      assert File.read!(path) == "bridged"
+
+      # Another mutation of this session holds the lock: the bridged write
+      # queues behind it exactly as a direct write would.
+      parent = self()
+      lock_key = {:session, session_id}
+
+      holder =
+        Task.async(fn ->
+          MutationLock.with_lock(lock_key, fn ->
+            send(parent, :lock_held)
+
+            receive do
+              :release -> :ok
+            end
+          end)
+        end)
+
+      assert_receive :lock_held
+
+      signal = AbortSignal.new()
+      args = %{"path" => path, "content" => "late"}
+
+      queued =
+        Task.async(fn ->
+          invoke.execute.("write-2", %{"name" => "write", "args" => args}, signal, nil)
+        end)
+
+      await_lock_waiter(lock_key)
+
+      # Cancelled while queued: the tool itself observes the abort when it gets
+      # the lock, and answers exactly as the direct call does.
+      AbortSignal.abort(signal)
+      send(holder.pid, :release)
+      Task.await(holder)
+
+      assert Task.await(queued) == write.execute.("write-3", args, signal, nil)
+      assert File.read!(path) == "bridged"
+    end
+
+    test "catalog identity is stable across rebuilds and moves with authority", %{
+      tmp_dir: tmp_dir
+    } do
+      tool_opts = fn policy ->
+        [
+          mcp_tools: [mcp("mcp_fixture_alpha")],
+          tool_policy: policy,
+          tool_disclosure: [profile: :coding]
+        ]
+      end
+
+      build = fn policy ->
+        ExtensionLifecycle.initialize(
+          cwd: tmp_dir,
+          settings_manager: settings(),
+          tool_opts: tool_opts.(policy)
+        )
+      end
+
+      first = build.(nil)
+      second = build.(nil)
+      digest = first.tool_disclosure.catalog_digest
+
+      assert digest =~ ~r/\A[0-9a-f]{64}\z/
+      assert wire(second.tools) == wire(first.tools)
+      assert second.tool_disclosure.catalog_digest == digest
+
+      # An explicit reload over unchanged inputs recomputes to the same identity.
+      reloaded =
+        ExtensionLifecycle.reload(
+          cwd: tmp_dir,
+          settings_manager: settings(),
+          tool_opts: tool_opts.(nil),
+          previous_status_report: first.extension_status_report
+        )
+
+      assert wire(reloaded.tools) == wire(first.tools)
+      assert reloaded.tool_disclosure.catalog_digest == digest
+
+      # Same schemas, different authority: the identity must still change.
+      gated = build.(ToolPolicy.custom(require_approval: ["browser_navigate"]))
+      assert wire(gated.tools) == wire(first.tools)
+      refute gated.tool_disclosure.catalog_digest == digest
+
+      # A rebuilt session after a denial carries no stale privilege.
+      denied = build.(ToolPolicy.custom(deny: ["browser_navigate"]))
+      refute denied.tool_disclosure.catalog_digest == digest
+      refute "browser_navigate" in denied.tool_disclosure.hidden_names
+
+      assert {:error, message} =
+               find(denied.tools, "tool_invoke").execute.(
+                 "id",
+                 %{"name" => "browser_navigate", "args" => %{"url" => "https://example.test"}},
+                 nil,
+                 nil
+               )
+
+      assert message =~ "Unknown tool 'browser_navigate'"
+    end
+
+    test "an explicit authority reload invalidates a previously invocable built-in", %{
+      tmp_dir: tmp_dir
+    } do
+      first =
+        ExtensionLifecycle.initialize(
+          cwd: tmp_dir,
+          settings_manager: settings(),
+          tool_opts: [mcp_tools: [], tool_disclosure: [profile: :coding]]
+        )
+
+      assert "browser_navigate" in first.tool_disclosure.hidden_names
+
+      denied =
+        ExtensionLifecycle.reload(
+          cwd: tmp_dir,
+          settings_manager: settings(),
+          tool_opts: [mcp_tools: [], tool_disclosure: [profile: :coding]],
+          tool_policy: ToolPolicy.custom(deny: ["browser_navigate"]),
+          previous_status_report: first.extension_status_report
+        )
+
+      refute denied.tool_disclosure.catalog_digest == first.tool_disclosure.catalog_digest
+
+      assert find(denied.tools, "tool_search").execute.(
+               "select",
+               %{"query" => "select:browser_navigate"},
+               nil,
+               nil
+             ).details.matched == []
+
+      assert {:error, _} =
+               find(denied.tools, "tool_invoke").execute.(
+                 "invoke",
+                 %{"name" => "browser_navigate", "args" => %{"url" => "https://example.test"}},
+                 nil,
+                 nil
+               )
+    end
+
+    test "bridged calls are execution barriers in the production tool scheduler" do
+      parent = self()
+
+      target =
+        tuple("browser_tabs", :builtin,
+          execute: fn id, _params, _signal, _on_update ->
+            send(parent, {:target_started, id, self()})
+
+            receive do
+              :finish -> %AgentToolResult{content: [%TextContent{text: id}]}
+            end
+          end
+        )
+
+      read =
+        %{tool("read", []) | parallel_safe: true}
+
+      %{tools: tools} =
+        ToolDisclosure.apply([{"read", read, :builtin}, target], [], %{profile: :coding})
+
+      context = AgentContext.new(tools: tools)
+      supervisor = start_supervised!(Task.Supervisor)
+      config = %AgentLoopConfig{model: mock_model(), tool_task_supervisor: supervisor}
+      {:ok, stream} = LemonAgent.EventStream.start_link(timeout: :infinity)
+
+      calls = [
+        %ToolCall{
+          id: "first",
+          name: "tool_invoke",
+          arguments: %{"name" => "browser_tabs", "args" => %{}}
+        },
+        %ToolCall{id: "read", name: "read", arguments: %{}},
+        %ToolCall{
+          id: "second",
+          name: "tool_invoke",
+          arguments: %{"name" => "browser_tabs", "args" => %{}}
+        }
+      ]
+
+      runner =
+        Task.async(fn ->
+          LemonAgent.Loop.ToolCalls.execute_and_collect_tools(
+            context,
+            [],
+            calls,
+            config,
+            nil,
+            stream
+          )
+        end)
+
+      assert_receive {:target_started, "first", first}, 1_000
+      send(first, :finish)
+      assert_receive {:target_started, "second", second}, 1_000
+      send(second, :finish)
+      {results, [], _context, _messages} = Task.await(runner, 5_000)
+      assert Enum.all?(results, &(not &1.is_error))
+      LemonAgent.EventStream.complete(stream, [])
+
+      execution =
+        LemonAgent.EventStream.events(stream)
+        |> Enum.flat_map(fn
+          {:tool_execution_start, id, _, _} -> [{:start, id}]
+          {:tool_execution_end, id, _, _, _} -> [{:end, id}]
+          _ -> []
+        end)
+
+      assert execution == [
+               {:start, "first"},
+               {:end, "first"},
+               {:start, "read"},
+               {:end, "read"},
+               {:start, "second"},
+               {:end, "second"}
+             ]
+    end
+
+    test "the bridge keeps the registry-bound process owner scope", %{tmp_dir: tmp_dir} do
+      process_id =
+        CodingAgent.ProcessStore.new_process(%{owner: "owner-session", command: "fixture"})
+
+      on_exit(fn -> CodingAgent.ProcessStore.delete(process_id) end)
+      :ok = CodingAgent.ProcessStore.append_log(process_id, "private output")
+
+      result =
+        ExtensionLifecycle.initialize(
+          cwd: tmp_dir,
+          settings_manager: settings(),
+          tool_opts: [
+            mcp_tools: [],
+            session_id: "foreign-session",
+            tool_disclosure: [profile: :coding]
+          ]
+        )
+
+      args = %{"process_id" => process_id}
+      direct = find(result.tools, "bash_output").execute.("direct", args, nil, nil)
+      assert {:error, _} = direct
+
+      assert find(result.tools, "tool_invoke").execute.(
+               "bridge",
+               %{"name" => "bash_output", "args" => args},
+               nil,
+               nil
+             ) == direct
+
+      assert {:ok, _record, ["private output"]} = CodingAgent.ProcessStore.get(process_id)
+    end
+  end
+
+  describe "safe discovery diagnostics" do
+    test "counts actual search and rejection outcomes without query, name or argument content" do
+      parent = self()
+      handler_id = "disclosure-diagnostics-#{System.unique_integer([:positive])}"
+      search_event = [:coding_agent, :tool_disclosure, :search]
+      rejected_event = [:coding_agent, :tool_disclosure, :invoke_rejected]
+
+      :ok =
+        :telemetry.attach_many(
+          handler_id,
+          [search_event, rejected_event],
+          fn event, measurements, metadata, _ ->
+            send(parent, {:diagnostic, event, measurements, metadata})
+          end,
+          nil
+        )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
+      target =
+        tuple("browser_fixture", :builtin,
+          parameters: %{
+            "type" => "object",
+            "properties" => %{"path" => %{"type" => "string"}},
+            "required" => ["path"]
+          }
+        )
+
+      %{tools: tools} = ToolDisclosure.apply([target], [], %{profile: :coding})
+      search = find(tools, "tool_search")
+      invoke = find(tools, "tool_invoke")
+
+      assert search.execute.("found", %{"query" => "browser"}, nil, nil).details.matched ==
+               ["browser_fixture"]
+
+      assert_received {:diagnostic, ^search_event, %{matched_count: 1}, %{status: :ok}}
+
+      assert search.execute.("miss", %{"query" => "private-unmatched-query"}, nil, nil).details.matched ==
+               []
+
+      assert_received {:diagnostic, ^search_event, %{matched_count: 0}, %{status: :ok}}
+      assert {:error, _} = search.execute.("invalid-search", %{"query" => 42}, nil, nil)
+      assert_received {:diagnostic, ^search_event, %{matched_count: 0}, %{status: :error}}
+
+      assert {:error, _} =
+               invoke.execute.(
+                 "unknown",
+                 %{"name" => "private-unknown-tool", "args" => %{}},
+                 nil,
+                 nil
+               )
+
+      assert_received {:diagnostic, ^rejected_event, %{count: 1}, %{reason: :unknown_tool}}
+
+      assert {:error, _} =
+               invoke.execute.(
+                 "invalid-args",
+                 %{"name" => "browser_fixture", "args" => %{"path" => 42}},
+                 nil,
+                 nil
+               )
+
+      assert_received {:diagnostic, ^rejected_event, %{count: 1}, %{reason: :invalid_arguments}}
+
+      assert {:error, _} =
+               invoke.execute.(
+                 "invalid-request",
+                 %{"name" => "browser_fixture", "args" => "private-args"},
+                 nil,
+                 nil
+               )
+
+      assert_received {:diagnostic, ^rejected_event, %{count: 1}, %{reason: :invalid_request}}
+
+      signal = AbortSignal.new()
+      AbortSignal.abort(signal)
+      assert {:error, _} = search.execute.("cancelled", %{"query" => "browser"}, signal, nil)
+
+      assert {:error, _} =
+               invoke.execute.(
+                 "cancelled",
+                 %{"name" => "browser_fixture", "args" => %{}},
+                 signal,
+                 nil
+               )
+
+      refute_received {:diagnostic, _, _, _}
+    end
+  end
+
+  # ==========================================================================
+  # Production session smoke (scripted model, no network)
+  # ==========================================================================
+
+  describe "production session" do
+    test "a coding-profile session discovers and invokes a deferred built-in", %{
+      tmp_dir: tmp_dir
+    } do
+      parent = self()
+      handler_id = "disclosure-invoke-#{System.unique_integer([:positive])}"
+
+      :telemetry.attach(
+        handler_id,
+        [:coding_agent, :tool_disclosure, :invoke],
+        fn _event, _measurements, metadata, _ -> send(parent, {:bridged, metadata}) end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
+      browser_request = fn method, _args, _timeout_ms ->
+        send(parent, {:browser_request, method})
+
+        {:ok,
+         %{
+           "tabs" => [
+             %{"targetId" => "tab-1", "title" => "Fixture tab", "url" => "about:blank"}
+           ]
+         }}
+      end
+
+      stream_fn =
+        scripted_stream(parent, [
+          tool_use("search-1", "tool_search", %{"query" => "browser tabs"}),
+          tool_use("invoke-1", "tool_invoke", %{"name" => "browser_tabs", "args" => %{}}),
+          stop("Listed the open tabs.")
+        ])
+
+      session =
+        start_supervised!(
+          {Session,
+           [
+             cwd: tmp_dir,
+             workspace_dir: Path.join(tmp_dir, "workspace"),
+             model: mock_model(),
+             settings_manager: %SettingsManager{},
+             stream_fn: stream_fn,
+             mcp_tools: [],
+             browser_request: browser_request,
+             tool_disclosure: [profile: :coding]
+           ]}
+        )
+
+      Session.subscribe(session)
+      :ok = Session.prompt(session, "List the open browser tabs.")
+      assert_receive {:session_event, _, {:agent_end, _}}, 5_000
+
+      assert_received {:provider_context, 1, first}
+      assert_received {:provider_context, 2, second}
+      assert_received {:provider_context, 3, third}
+
+      # The model is shown the coding core and the bridge, not the browser.
+      offered = names(first.tools)
+      assert Enum.all?(~w(read edit bash tool_search tool_invoke), &(&1 in offered))
+      refute "browser_tabs" in offered
+
+      # Ordinary turns resend a byte-identical tool array.
+      assert wire(second.tools) == wire(first.tools)
+      assert wire(third.tools) == wire(first.tools)
+
+      results =
+        for %{role: :tool_result} = message <- Session.get_messages(session),
+            into: %{},
+            do: {message.tool_call_id, message}
+
+      refute results["search-1"].is_error
+      assert all_text(results["search-1"]) =~ "## browser_tabs"
+
+      refute results["invoke-1"].is_error
+      assert all_text(results["invoke-1"]) =~ "Fixture tab"
+
+      assert_received {:browser_request, "browser.tabs"}
+
+      assert_received {:bridged,
+                       %{
+                         tool_name: "browser_tabs",
+                         tool_call_id: "invoke-1",
+                         source: :builtin,
+                         hidden: true,
+                         status: :ok
+                       }}
+    end
+  end
+
+  defp wire(tools) do
+    Enum.map(tools, fn t -> {t.name, t.description, t.parameters} end)
+  end
+
+  defp all_text(%{content: content}), do: Enum.map_join(content, &Map.get(&1, :text, ""))
+
+  defp await_lock_waiter(key) do
+    await_lock_waiter(key, System.monotonic_time(:millisecond) + 5_000)
+  end
+
+  defp await_lock_waiter(key, deadline) do
+    assert System.monotonic_time(:millisecond) < deadline,
+           "mutation did not queue for its session lock"
+
+    case :sys.get_state(MutationLock) do
+      %{locks: %{^key => %{waiters: waiters}}} ->
+        if :queue.is_empty(waiters), do: await_lock_waiter(key, deadline), else: :ok
+
+      _ ->
+        await_lock_waiter(key, deadline)
+    end
+  end
+
+  defp mock_model do
+    %Model{
+      id: "disclosure-smoke",
+      name: "Disclosure Smoke",
+      api: :mock,
+      provider: :mock_provider,
+      base_url: "https://invalid.test",
+      reasoning: false,
+      input: [:text],
+      cost: %ModelCost{},
+      context_window: 128_000,
+      max_tokens: 4096
+    }
+  end
+
+  # Serves `responses` in order and reports each provider context to `parent`.
+  defp scripted_stream(parent, responses) do
+    calls = :counters.new(1, [:atomics])
+
+    fn _model, context, _opts ->
+      :counters.add(calls, 1, 1)
+      call = :counters.get(calls, 1)
+      send(parent, {:provider_context, call, context})
+      {:ok, events(Enum.at(responses, call - 1))}
+    end
+  end
+
+  defp tool_use(id, name, arguments),
+    do: response([%ToolCall{id: id, name: name, arguments: arguments}], :tool_use)
+
+  defp stop(text), do: response([%TextContent{text: text}], :stop)
+
+  defp response(content, reason) do
+    %AssistantMessage{
+      content: content,
+      api: :mock,
+      provider: :mock_provider,
+      model: "disclosure-smoke",
+      stop_reason: reason,
+      timestamp: System.system_time(:millisecond)
+    }
+  end
+
+  defp events(message) do
+    {:ok, stream} = LemonAi.EventStream.start_link()
+
+    Task.start(fn ->
+      LemonAi.EventStream.push(stream, {:start, message})
+      LemonAi.EventStream.push(stream, {:done, message.stop_reason, message})
+      LemonAi.EventStream.complete(stream, message)
+    end)
+
+    stream
   end
 end
