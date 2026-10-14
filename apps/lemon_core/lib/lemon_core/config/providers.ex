@@ -29,6 +29,11 @@ defmodule LemonCore.Config.Providers do
   - `OPENCODE_API_KEY`, `OPENCODE_BASE_URL` (OpenCode and OpenCode Go)
   - `GITHUB_COPILOT_API_KEY`
 
+  Local OpenAI-compatible servers take a default `base_url` from
+  `OLLAMA_BASE_URL`/`OLLAMA_HOST`, `LM_STUDIO_BASE_URL`, `LLAMA_CPP_BASE_URL`
+  and `LITELLM_BASE_URL` (normalized to a `/v1` root); a `base_url` set in the
+  file takes precedence over these.
+
   The `api_key_secret` field allows referencing secrets from the secret store
   instead of hardcoding API keys in config files.
 
@@ -111,6 +116,16 @@ defmodule LemonCore.Config.Providers do
   }
 
   @custom_apis ~w(openai_completions openai_responses anthropic_messages google_generative_ai)
+  # Base-URL environment variables for local OpenAI-compatible servers (omp
+  # names). Unlike the mappings above, an explicit `[providers.<id>].base_url`
+  # wins (under any alias spelling such as `lm-studio` or `llama.cpp`); values
+  # are normalized to the OpenAI-compatible `/v1` root. First set variable wins.
+  @local_base_url_env [
+    {"ollama", ["OLLAMA_BASE_URL", "OLLAMA_HOST"]},
+    {"lm_studio", ["LM_STUDIO_BASE_URL"]},
+    {"llama_cpp", ["LLAMA_CPP_BASE_URL"]},
+    {"litellm", ["LITELLM_BASE_URL"]}
+  ]
 
   @doc """
   Resolves providers configuration from settings and environment variables.
@@ -129,6 +144,7 @@ defmodule LemonCore.Config.Providers do
       end)
       |> Enum.into(%{})
       |> apply_env_overrides()
+      |> apply_local_base_url_env()
 
     %__MODULE__{
       providers: resolved_providers
@@ -318,6 +334,77 @@ defmodule LemonCore.Config.Providers do
 
   defp env_var_value(name) when is_binary(name), do: Helpers.get_env(name)
   defp env_var_value(_), do: nil
+
+  defp apply_local_base_url_env(providers) do
+    Enum.reduce(@local_base_url_env, providers, fn {canonical, vars}, acc ->
+      key = Enum.find(Map.keys(acc), canonical, &(provider_key(&1) == canonical))
+      existing = Map.get(acc, key, %{})
+
+      with nil <- existing[:base_url],
+           url when is_binary(url) <- Enum.find_value(vars, &local_base_url(&1)) do
+        Map.put(acc, key, Map.put(existing, :base_url, url))
+      else
+        _ -> acc
+      end
+    end)
+  end
+
+  defp provider_key(name) when is_binary(name),
+    do: name |> String.trim() |> String.downcase() |> String.replace(["-", "."], "_")
+
+  defp provider_key(_), do: nil
+
+  defp local_base_url("OLLAMA_HOST" = var) do
+    case env_var_value(var) do
+      value when is_binary(value) -> value |> ollama_host_url() |> ensure_v1()
+      _ -> nil
+    end
+  end
+
+  defp local_base_url(var), do: var |> env_var_value() |> ensure_v1()
+
+  # OLLAMA_HOST is a bind address ("0.0.0.0", ":11434", "host:port"); omp turns
+  # it into a client URL, defaulting the scheme to http and the port to 11434.
+  defp ollama_host_url(value) do
+    trimmed = String.trim(value)
+
+    candidate =
+      cond do
+        trimmed == "" -> nil
+        String.contains?(trimmed, "://") -> trimmed
+        String.starts_with?(trimmed, "//") -> "http:" <> trimmed
+        String.starts_with?(trimmed, ":") -> "http://127.0.0.1" <> trimmed
+        true -> "http://" <> trimmed
+      end
+
+    with candidate when is_binary(candidate) <- candidate,
+         %URI{scheme: scheme, host: host} = uri when scheme in ["http", "https"] and host != "" <-
+           URI.parse(candidate) do
+      port_suffix =
+        cond do
+          String.match?(candidate, ~r{^[a-z]+://(\[[^\]]*\]|[^/:\[]*):\d+}i) -> ":#{uri.port}"
+          scheme == "http" -> ":11434"
+          true -> ""
+        end
+
+      host = if String.contains?(host, ":"), do: "[#{host}]", else: host
+      "#{scheme}://#{host}#{port_suffix}"
+    else
+      _ -> nil
+    end
+  end
+
+  defp ensure_v1(value) when is_binary(value) do
+    trimmed = value |> String.trim() |> String.trim_trailing("/")
+
+    cond do
+      trimmed == "" -> nil
+      String.ends_with?(trimmed, "/v1") -> trimmed
+      true -> trimmed <> "/v1"
+    end
+  end
+
+  defp ensure_v1(_), do: nil
 
   @doc """
   Gets a specific provider's configuration.

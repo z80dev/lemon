@@ -105,8 +105,9 @@ defmodule CodingAgent.Session.ModelResolver do
   defp find_model_prefer_configured(model_id, %CodingAgent.SettingsManager{} = settings) do
     configured = configured_provider_atoms(settings)
 
+    # known_model/2: preset providers answer get_model/2 for any ID.
     Enum.find_value(configured, fn provider ->
-      LemonAi.Models.get_model(provider, model_id)
+      LemonAi.Models.known_model(provider, model_id)
     end) || LemonAi.Models.find_by_id(model_id)
   end
 

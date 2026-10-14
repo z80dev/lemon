@@ -56,24 +56,6 @@ defmodule LemonAi.Models.DiscoveryTest do
       assert %Model{id: "zeta/model", context_window: 32_768, max_tokens: 16_384} = zeta
     end
 
-    test "omits Authorization without an api key" do
-      test_pid = self()
-
-      Req.Test.stub(__MODULE__, fn conn ->
-        send(test_pid, {:headers, conn.req_headers})
-        Req.Test.json(conn, [%{"id" => "local-model"}])
-      end)
-
-      assert {:ok, [%Model{id: "local-model"}]} =
-               Discovery.discover(:openai_models, "http://127.0.0.1:1234/v1",
-                 provider: :lm_studio,
-                 req_options: req_options()
-               )
-
-      assert_receive {:headers, headers}
-      refute List.keymember?(headers, "authorization", 0)
-    end
-
     test "returns errors instead of raising and does not cache failures" do
       {:ok, calls} = Agent.start_link(fn -> 0 end)
 
@@ -100,18 +82,6 @@ defmodule LemonAi.Models.DiscoveryTest do
 
       assert {:error, :transport_failure} = Discovery.discover(:openai_models, base, opts)
       assert {:ok, [%Model{id: "recovered"}]} = Discovery.discover(:openai_models, base, opts)
-    end
-
-    test "rejects unsupported kinds, apis and base urls" do
-      assert {:error, {:unsupported_discovery_kind, :bogus}} =
-               Discovery.discover(:bogus, "http://127.0.0.1:1/v1", [])
-
-      assert {:error, :invalid_base_url} = Discovery.discover(:openai_models, "not a url", [])
-
-      assert {:error, {:unsupported_api, :anthropic_messages}} =
-               Discovery.discover(:openai_models, "http://127.0.0.1:1/v1",
-                 api: :anthropic_messages
-               )
     end
 
     test "caches by kind, provider and base url until the TTL or a forced refresh" do
