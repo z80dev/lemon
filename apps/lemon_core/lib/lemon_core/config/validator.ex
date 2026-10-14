@@ -32,7 +32,7 @@ defmodule LemonCore.Config.Validator do
   implementations produce messages in the same shape.
   """
 
-  alias LemonCore.Config.{Features, LegacyAgentMigration, Memory, Modular}
+  alias LemonCore.Config.{Features, LegacyAgentMigration, Memory, Modular, Providers}
   alias LemonCore.Config.Gateway.Channel
 
   @valid_log_levels [:debug, :info, :notice, :warning, :error, :critical, :alert, :emergency]
@@ -874,6 +874,7 @@ defmodule LemonCore.Config.Validator do
     |> validate_provider_secret_refs(name, config, "providers")
     |> validate_openai_codex_auth_source(name, config, "providers")
     |> validate_anthropic_auth_source(name, config, "providers")
+    |> validate_custom_provider(name, config, "providers")
   end
 
   defp validate_legacy_provider_config(errors, name, _config) do
@@ -913,11 +914,133 @@ defmodule LemonCore.Config.Validator do
     |> validate_provider_secret_refs(name, config, "providers.providers")
     |> validate_openai_codex_auth_source(name, config, "providers.providers")
     |> validate_anthropic_auth_source(name, config, "providers.providers")
+    |> validate_custom_provider(name, config, "providers.providers")
   end
 
   defp validate_provider_config(errors, name, _config) do
     ["providers.providers.#{name}: must be a map" | errors]
   end
+
+  # Custom provider/model definitions parsed by `LemonCore.Config.Providers`:
+  # invalid enum values are kept verbatim there so they can be reported here.
+  defp validate_custom_provider(errors, name, config, prefix) do
+    path = "#{prefix}.#{name}"
+    api = Map.get(config, :api)
+    discovery = Map.get(config, :discovery)
+
+    errors
+    |> validate_custom_enum(api, "#{path}.api", &Providers.canonical_api/1, api_choices())
+    |> validate_custom_enum(
+      Map.get(config, :auth),
+      "#{path}.auth",
+      &Providers.canonical_auth/1,
+      "api_key | none"
+    )
+    |> validate_custom_enum(
+      discovery,
+      "#{path}.discovery",
+      &Providers.canonical_discovery/1,
+      "openai | ollama"
+    )
+    |> validate_positive_integer(
+      Map.get(config, :discovery_timeout_ms),
+      "#{path}.discovery.timeout_ms"
+    )
+    |> validate_custom_base_url(path, config, api || discovery)
+    |> validate_header_map(Map.get(config, :headers), "#{path}.headers")
+    |> validate_custom_models(Map.get(config, :models), "#{path}.models")
+  end
+
+  defp api_choices, do: Enum.join(Providers.custom_apis(), " | ")
+
+  defp validate_custom_enum(errors, nil, _path, _canonical, _choices), do: errors
+
+  defp validate_custom_enum(errors, value, path, canonical, choices) do
+    if canonical.(value) do
+      errors
+    else
+      ["#{path}: invalid value #{inspect(value)} (expected #{choices})" | errors]
+    end
+  end
+
+  defp validate_custom_base_url(errors, _path, _config, nil), do: errors
+
+  defp validate_custom_base_url(errors, path, config, _custom) do
+    if is_nil(Map.get(config, :base_url)) do
+      ["#{path}.base_url: is required for a custom provider (api/discovery set)" | errors]
+    else
+      errors
+    end
+  end
+
+  defp validate_header_map(errors, nil, _path), do: errors
+
+  defp validate_header_map(errors, headers, path) when is_map(headers) do
+    if Enum.all?(headers, fn {_key, value} -> is_binary(value) end) do
+      errors
+    else
+      ["#{path}: header values must be strings" | errors]
+    end
+  end
+
+  defp validate_header_map(errors, _headers, path), do: ["#{path}: must be a table" | errors]
+
+  defp validate_custom_models(errors, nil, _path), do: errors
+
+  defp validate_custom_models(errors, models, path) when is_list(models) do
+    models
+    |> Enum.with_index()
+    |> Enum.reduce(errors, fn {model, index}, acc ->
+      validate_custom_model(acc, model, "#{path}[#{index}]")
+    end)
+  end
+
+  defp validate_custom_models(errors, _models, path),
+    do: ["#{path}: must be an array of tables ([[...models]])" | errors]
+
+  defp validate_custom_model(errors, model, path) when is_map(model) do
+    errors =
+      if is_binary(Map.get(model, :id)),
+        do: errors,
+        else: ["#{path}.id: is required" | errors]
+
+    errors
+    |> validate_custom_enum(
+      Map.get(model, :api),
+      "#{path}.api",
+      &Providers.canonical_api/1,
+      api_choices()
+    )
+    |> validate_positive_integer(Map.get(model, :context_window), "#{path}.context_window")
+    |> validate_positive_integer(Map.get(model, :max_tokens), "#{path}.max_tokens")
+    |> validate_boolean(Map.get(model, :reasoning), "#{path}.reasoning")
+    |> validate_model_input(Map.get(model, :input), "#{path}.input")
+    |> validate_model_cost(Map.get(model, :cost), "#{path}.cost")
+    |> validate_header_map(Map.get(model, :headers), "#{path}.headers")
+  end
+
+  defp validate_custom_model(errors, _model, path), do: ["#{path}: must be a table" | errors]
+
+  defp validate_model_input(errors, nil, _path), do: errors
+
+  defp validate_model_input(errors, input, path) when is_list(input) do
+    if input != [] and Enum.all?(input, &(&1 in ["text", "image"])),
+      do: errors,
+      else: ["#{path}: must list \"text\" and/or \"image\"" | errors]
+  end
+
+  defp validate_model_input(errors, _input, path),
+    do: ["#{path}: must list \"text\" and/or \"image\"" | errors]
+
+  defp validate_model_cost(errors, nil, _path), do: errors
+
+  defp validate_model_cost(errors, cost, path) when is_map(cost) do
+    if Enum.all?(cost, fn {_key, value} -> is_number(value) and value >= 0 end),
+      do: errors,
+      else: ["#{path}: prices must be non-negative numbers" | errors]
+  end
+
+  defp validate_model_cost(errors, _cost, path), do: ["#{path}: must be a table" | errors]
 
   @doc """
   Returns true when the string references an environment variable, e.g. `"${MY_VAR}"`.

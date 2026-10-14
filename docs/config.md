@@ -710,6 +710,57 @@ ids handled by Lemon, including `opencode`, `openrouter`, `zai`, `minimax`,
 providers. Each provider gets its own `[providers.<id>]` table with
 `api_key_secret` and optional `base_url`.
 
+## Custom Providers and Models
+
+A `[providers.<id>]` table whose id is not a built-in provider defines a custom
+endpoint (the equivalent of omp's `models.yml` providers). Its models are
+selected as `<id>:<model>` or `<id>/<model>` in `default_model`, `/model`,
+`model_roles`, task/compaction selectors and `provider_routing.fallback_providers`,
+and they appear in the TUI `/model` picker once the provider has a credential.
+
+```toml
+[providers.my-gateway]
+api = "openai_completions"        # openai_completions | openai_responses |
+                                  # anthropic_messages | google_generative_ai
+                                  # (omp dashed spellings are accepted too)
+base_url = "https://llm.internal/v1"
+api_key_env = "MY_GATEWAY_KEY"     # or api_key_secret / api_key
+# auth = "none"                    # keyless endpoint: no Authorization header
+headers = { "X-Team" = "platform" }
+# discovery = "openai"             # list models from {base_url}/models ("ollama": /api/tags)
+
+[[providers.my-gateway.models]]
+id = "qwen3-coder"
+name = "Qwen3 Coder"               # default: id
+context_window = 131072            # default: 128000
+max_tokens = 16384                 # default: 16384
+reasoning = false                  # default: false
+input = ["text"]                   # "text" and/or "image"; default ["text"]
+# cost = { input = 0.5, output = 1.5, cache_read = 0, cache_write = 0 }  # USD per 1M tokens
+# headers = { "X-Model" = "qwen" } # override provider headers per model
+```
+
+- Credentials resolve from `api_key_env`, then `api_key`, then
+  `api_key_secret`; a custom provider never receives another provider's key
+  (no `OPENAI_API_KEY` fallback). With `auth = "none"` the provider is ready
+  without a key.
+- `api` and `base_url` are required. A provider with `discovery` or without a
+  `models` list accepts any model id (unlisted ids use the defaults above);
+  `discovery` also lists the endpoint's models in the picker, cached by the
+  shared model cache. Use `discovery = { type = "openai", timeout_ms = 5000 }`
+  to bound the listing request. Discovery needs `api = "openai_completions"` or
+  `"openai_responses"`; with `discovery = "ollama"`, `base_url` may be the
+  server root (`http://127.0.0.1:11434`) and requests go to its `/v1` API.
+- On a built-in provider (`anthropic`, `openai`, ...), `headers` are sent with
+  every request and `[[providers.<id>.models]]` entries add catalog models or
+  replace the catalog entry with the same id, inheriting the provider's wire API
+  and base URL.
+- `lemon config validate` reports unknown `api`/`auth`/`discovery` values, a
+  missing `base_url` when `api` or `discovery` is set, models without `id`, and
+  invalid model limits, inputs and prices.
+- Not supported (omp-only): per-model `compat` overrides, `modelOverrides`,
+  `!command` secrets, and `proxy`/`litellm` discovery.
+
 ## Provider Onboarding (CLI)
 
 For an installed release, start provider onboarding with `lemon model`. From a

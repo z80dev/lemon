@@ -47,7 +47,11 @@ defmodule CodingAgent.Session.ModelResolver do
     resolve_explicit_model(spec, nil)
   end
 
-  def resolve_explicit_model(spec) when is_map(spec) do
+  def resolve_explicit_model(spec) when is_map(spec), do: resolve_map_spec(spec, nil)
+
+  def resolve_explicit_model(_), do: nil
+
+  defp resolve_map_spec(spec, settings) do
     provider = spec[:provider] || spec["provider"]
 
     provider =
@@ -57,10 +61,8 @@ defmodule CodingAgent.Session.ModelResolver do
       spec[:model_id] || spec["model_id"] || spec[:id] || spec["id"] || spec[:model] ||
         spec["model"]
 
-    lookup_model(non_empty_string(provider), non_empty_string(model_id))
+    lookup_model(non_empty_string(provider), non_empty_string(model_id), settings)
   end
-
-  def resolve_explicit_model(_), do: nil
 
   # Settings-aware overload: for bare model names (no provider prefix),
   # prefer providers that are configured with API keys in the user's settings.
@@ -70,6 +72,9 @@ defmodule CodingAgent.Session.ModelResolver do
     trimmed = String.trim(spec)
     if trimmed == "", do: nil, else: resolve_model_spec(trimmed, settings)
   end
+
+  defp resolve_explicit_model(spec, settings) when is_map(spec),
+    do: resolve_map_spec(spec, settings)
 
   defp resolve_explicit_model(spec, _settings) do
     resolve_explicit_model(spec)
@@ -81,12 +86,12 @@ defmodule CodingAgent.Session.ModelResolver do
         bare_id = non_empty_string(model_id)
 
         find_model_prefer_configured(bare_id, settings) ||
-          resolve_slash_model_spec(model_id)
+          resolve_slash_model_spec(model_id, settings) || find_custom_model(bare_id, settings)
 
       [provider, model_id] ->
         provider = non_empty_string(provider)
         model_id = non_empty_string(model_id)
-        if model_id, do: lookup_model(provider, model_id)
+        if model_id, do: lookup_model(provider, model_id, settings)
 
       _ ->
         nil
@@ -239,7 +244,12 @@ defmodule CodingAgent.Session.ModelResolver do
         provider_atom when is_atom(provider_atom) ->
           # model_id may be prefixed (e.g. "zai:glm-5-turbo"); try as-is first,
           # then strip the provider prefix for a direct registry lookup.
-          LemonAi.Models.get_model(provider_atom, model_id) ||
+          LemonAgent.ModelRuntime.CustomProviders.lookup(
+            settings.providers,
+            provider_atom,
+            model_id
+          ) ||
+            LemonAi.Models.get_model(provider_atom, model_id) ||
             case String.split(model_id, ":", parts: 2) do
               [_prefix, bare_id] when bare_id != "" ->
                 LemonAi.Models.get_model(provider_atom, bare_id)
@@ -250,7 +260,19 @@ defmodule CodingAgent.Session.ModelResolver do
             LemonAi.Models.find_by_id(model_id)
 
         provider_str when is_binary(provider_str) ->
-          lookup_model(provider_str, model_id)
+          # `[defaults] provider = "gw"` + `model = "gw:id"` names model "id".
+          model_id =
+            case String.split(model_id, ":", parts: 2) do
+              [prefix, bare_id] when bare_id != "" ->
+                if normalize_provider_id(prefix) == normalize_provider_id(provider_str),
+                  do: bare_id,
+                  else: model_id
+
+              _ ->
+                model_id
+            end
+
+          lookup_model(provider_str, model_id, settings)
       end
 
     case model do
@@ -371,15 +393,16 @@ defmodule CodingAgent.Session.ModelResolver do
 
   # ---- Private helpers ----
 
-  @spec resolve_slash_model_spec(String.t()) :: LemonAi.Types.Model.t() | nil
-  defp resolve_slash_model_spec(model_spec) when is_binary(model_spec) do
+  @spec resolve_slash_model_spec(String.t(), SettingsManager.t() | nil) ::
+          LemonAi.Types.Model.t() | nil
+  defp resolve_slash_model_spec(model_spec, settings) when is_binary(model_spec) do
     case String.split(model_spec, "/", parts: 2) do
       [provider, model_id] ->
         provider = non_empty_string(provider)
         model_id = non_empty_string(model_id)
 
         if provider && model_id do
-          lookup_model(provider, model_id)
+          lookup_model(provider, model_id, settings)
         else
           nil
         end
@@ -388,6 +411,26 @@ defmodule CodingAgent.Session.ModelResolver do
         nil
     end
   end
+
+  # User-defined `[providers.<id>]` models (custom providers and additions to
+  # built-in providers) take precedence over the registry.
+  defp lookup_model(provider, model_id, %SettingsManager{providers: providers})
+       when is_binary(provider) and is_binary(model_id) do
+    LemonAgent.ModelRuntime.CustomProviders.lookup(providers, provider, model_id) ||
+      lookup_model(provider, model_id)
+  end
+
+  defp lookup_model(provider, model_id, _settings), do: lookup_model(provider, model_id)
+
+  # Bare ids also match models listed under a custom provider.
+  defp find_custom_model(model_id, %SettingsManager{providers: providers})
+       when is_binary(model_id) do
+    providers
+    |> LemonAgent.ModelRuntime.CustomProviders.models()
+    |> Enum.find(&(&1.id == model_id))
+  end
+
+  defp find_custom_model(_model_id, _settings), do: nil
 
   @spec lookup_model(String.t() | nil, String.t() | nil) :: LemonAi.Types.Model.t() | nil
   defp lookup_model(_provider, nil), do: nil
@@ -455,7 +498,7 @@ defmodule CodingAgent.Session.ModelResolver do
         routing
         |> routing_candidate_providers(model_id, :global)
         |> Enum.find_value(provider, fn fallback_provider ->
-          if fallback_model_available?(fallback_provider, model_id) and
+          if fallback_model_available?(fallback_provider, model_id, settings) and
                provider_credentials_ready?(fallback_provider, settings, routing) do
             fallback_provider
           end
@@ -471,8 +514,8 @@ defmodule CodingAgent.Session.ModelResolver do
     )
   end
 
-  defp fallback_model_available?(provider, model_id) do
-    model = lookup_model(to_string(provider), model_id)
+  defp fallback_model_available?(provider, model_id, settings) do
+    model = lookup_model(to_string(provider), model_id, settings)
     match?(%LemonAi.Types.Model{}, model)
   end
 
@@ -480,7 +523,7 @@ defmodule CodingAgent.Session.ModelResolver do
     if provider_credentials_ready?(provider, settings, routing) do
       provider
       |> to_string()
-      |> lookup_model(model_id)
+      |> lookup_model(model_id, settings)
       |> case do
         %LemonAi.Types.Model{} = model -> apply_provider_base_url(model, settings)
         _ -> nil

@@ -58,7 +58,8 @@ defmodule LemonAi.CallDispatcher do
   # Types
   # ============================================================================
 
-  @type provider :: atom()
+  # Binary ids are user-configured custom providers (never converted to atoms).
+  @type provider :: atom() | String.t()
   # {waiter_ref, from, from_pid, timeout_timer_ref}
   @type waiter :: {reference(), GenServer.from(), pid(), reference()}
   @type state :: %{
@@ -110,7 +111,8 @@ defmodule LemonAi.CallDispatcher do
   @spec dispatch(provider(), (-> result), keyword()) :: result | {:error, atom()}
         when result: any()
   def dispatch(provider, callback, opts \\ [])
-      when is_atom(provider) and is_function(callback, 0) and is_list(opts) do
+      when (is_atom(provider) or is_binary(provider)) and is_function(callback, 0) and
+             is_list(opts) do
     queue_timeout_ms = Keyword.get_lazy(opts, :queue_timeout_ms, &default_queue_timeout_ms/0)
     start_time = System.monotonic_time()
 
@@ -191,7 +193,8 @@ defmodule LemonAi.CallDispatcher do
   Set the concurrency cap for a provider.
   """
   @spec set_concurrency_cap(provider(), pos_integer()) :: :ok
-  def set_concurrency_cap(provider, cap) when is_atom(provider) and is_integer(cap) and cap > 0 do
+  def set_concurrency_cap(provider, cap)
+      when (is_atom(provider) or is_binary(provider)) and is_integer(cap) and cap > 0 do
     GenServer.call(__MODULE__, {:set_concurrency_cap, provider, cap})
   end
 
@@ -199,7 +202,7 @@ defmodule LemonAi.CallDispatcher do
   Get the current concurrency cap for a provider.
   """
   @spec get_concurrency_cap(provider()) :: pos_integer()
-  def get_concurrency_cap(provider) when is_atom(provider) do
+  def get_concurrency_cap(provider) when is_atom(provider) or is_binary(provider) do
     GenServer.call(__MODULE__, {:get_concurrency_cap, provider})
   end
 
@@ -207,7 +210,7 @@ defmodule LemonAi.CallDispatcher do
   Get the number of active requests for a provider.
   """
   @spec get_active_requests(provider()) :: non_neg_integer()
-  def get_active_requests(provider) when is_atom(provider) do
+  def get_active_requests(provider) when is_atom(provider) or is_binary(provider) do
     GenServer.call(__MODULE__, {:get_active_requests, provider})
   end
 
