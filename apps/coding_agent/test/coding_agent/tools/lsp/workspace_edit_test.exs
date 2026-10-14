@@ -147,4 +147,142 @@ defmodule CodingAgent.Tools.Lsp.WorkspaceEditTest do
 
     assert File.read!(Path.join(tmp, "a.c")) == "keep"
   end
+
+  test "resource operations refuse symlink parents before changing any file", %{tmp: tmp} do
+    outside = Path.join(tmp, "outside")
+    File.mkdir_p!(outside)
+    File.write!(Path.join(outside, "keep.c"), "keep")
+    File.ln_s!(outside, Path.join(tmp, "alias"))
+
+    for change <- [
+          %{"kind" => "delete", "uri" => uri(tmp, "alias/keep.c")},
+          %{
+            "kind" => "rename",
+            "oldUri" => uri(tmp, "alias/keep.c"),
+            "newUri" => uri(tmp, "new.c")
+          }
+        ] do
+      {:ok, ops} =
+        WorkspaceEdit.plan(%{
+          "documentChanges" => [%{"kind" => "create", "uri" => uri(tmp, "first.c")}, change]
+        })
+
+      assert {:error, message} =
+               WorkspaceEdit.apply(ops, tmp, [filesystem_checkpoints: false], nil, %{})
+
+      assert message =~ "symlink"
+      assert File.read!(Path.join(outside, "keep.c")) == "keep"
+      refute File.exists?(Path.join(tmp, "first.c"))
+      refute File.exists?(Path.join(tmp, "new.c"))
+    end
+  end
+
+  test "refuses stale document bytes and versions before creating other files", %{tmp: tmp} do
+    path = Path.join(tmp, "main.c")
+    original = "int value;\n"
+    File.write!(path, original)
+    documents = %{path => %{version: 2, digest: :erlang.md5(original)}}
+    opts = [filesystem_checkpoints: false, lsp_documents: documents]
+
+    edit = %{
+      "documentChanges" => [
+        %{"kind" => "create", "uri" => uri(tmp, "new.c")},
+        %{
+          "textDocument" => %{"uri" => uri(tmp, "main.c"), "version" => 1},
+          "edits" => [edit(0, 4, 9, "other")]
+        }
+      ]
+    }
+
+    {:ok, ops} = WorkspaceEdit.plan(edit)
+    assert {:error, message} = WorkspaceEdit.apply(ops, tmp, opts, nil, %{})
+    assert message =~ "version"
+    refute File.exists?(Path.join(tmp, "new.c"))
+
+    {:ok, ops} =
+      WorkspaceEdit.plan(%{"changes" => %{uri(tmp, "main.c") => [edit(0, 4, 9, "other")]}})
+
+    File.write!(path, "// user edit\n" <> original)
+    assert {:error, message} = WorkspaceEdit.apply(ops, tmp, opts, nil, %{})
+    assert message =~ "changed since"
+    assert File.read!(path) == "// user edit\n" <> original
+  end
+
+  test "a partial write failure returns a complete recoverable checkpoint receipt", %{tmp: tmp} do
+    paths = Application.get_env(:lemon_core, :paths, [])
+
+    Application.put_env(
+      :lemon_core,
+      :paths,
+      Keyword.put(paths, :checkpoint_dir, Path.join(tmp, "checkpoints"))
+    )
+
+    on_exit(fn -> Application.put_env(:lemon_core, :paths, paths) end)
+    existing = Path.join(tmp, "existing.c")
+    created = Path.join(tmp, "created.c")
+    File.write!(existing, "keep")
+
+    {:ok, ops} =
+      WorkspaceEdit.plan(%{
+        "documentChanges" => [
+          %{"kind" => "create", "uri" => uri(tmp, "created.c")},
+          %{"kind" => "create", "uri" => uri(tmp, "existing.c")}
+        ]
+      })
+
+    opts = [
+      session_id: "partial-#{System.unique_integer([:positive])}",
+      filesystem_checkpoints: true
+    ]
+
+    assert {:error, _reason, receipt} = WorkspaceEdit.apply(ops, tmp, opts, nil, %{tool: "lsp"})
+    assert receipt.changed == [created]
+    assert length(receipt.applied) == 1
+    assert File.exists?(created)
+    assert File.read!(existing) == "keep"
+    assert {:ok, _} = CodingAgent.Checkpoint.restore_filesystem(receipt.checkpoint.id)
+    refute File.exists?(created)
+    assert File.read!(existing) == "keep"
+  end
+
+  test "abort after checkpoint publication retains the receipt without writing", %{tmp: tmp} do
+    paths = Application.get_env(:lemon_core, :paths, [])
+
+    Application.put_env(
+      :lemon_core,
+      :paths,
+      Keyword.put(paths, :checkpoint_dir, Path.join(tmp, "checkpoints"))
+    )
+
+    on_exit(fn -> Application.put_env(:lemon_core, :paths, paths) end)
+    signal = LemonAgent.AbortSignal.new()
+    on_exit(fn -> LemonAgent.AbortSignal.clear(signal) end)
+    parent = self()
+
+    opts = [
+      session_id: "abort-#{System.unique_integer([:positive])}",
+      filesystem_checkpoints: true,
+      on_checkpoint: fn checkpoint ->
+        send(parent, {:published, checkpoint.id})
+        LemonAgent.AbortSignal.abort(signal)
+      end
+    ]
+
+    {:ok, ops} =
+      WorkspaceEdit.plan(%{
+        "documentChanges" => [
+          %{"kind" => "create", "uri" => uri(tmp, "never.c")}
+        ]
+      })
+
+    assert {:error, _reason, receipt} =
+             WorkspaceEdit.apply(ops, tmp, opts, signal, %{tool: "lsp"})
+
+    assert_receive {:published, checkpoint_id}
+    assert receipt.checkpoint.id == checkpoint_id
+    assert receipt.changed == []
+    assert receipt.applied == []
+    refute File.exists?(Path.join(tmp, "never.c"))
+    assert {:ok, _} = CodingAgent.Checkpoint.restore_filesystem(checkpoint_id)
+  end
 end

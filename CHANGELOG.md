@@ -23,8 +23,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   (listed, or one applied including server commands) and raw requests. Servers
   are chosen by file extension, reused per session and workspace root, and stop
   with the session; applied edits are locked, checkpointed and written
-  atomically. `status` shows which servers are installed or running. See
-  [LSP tools](docs/tools/lsp.md).
+  atomically. Server edit acknowledgements follow actual application, and
+  multi-batch actions retain all checkpoints on success, partial failure or
+  cancellation for complete rewind. `status` shows which servers are installed
+  or running. See [LSP tools](docs/tools/lsp.md).
 - `debug` coding tool: a Debug Adapter Protocol client for `lldb-dap`, `gdb`,
   `debugpy` and `dlv` with breakpoints (source, conditional, function), launch
   and attach, stepping, stack/scope/variable inspection, expression

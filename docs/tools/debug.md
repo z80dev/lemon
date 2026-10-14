@@ -92,9 +92,14 @@ src/main.c:
 - When breakpoints are pending at launch, the program runs straight to them.
   Without breakpoints the adapter's stop-on-entry default applies (for
   `lldb-dap` that is the process entry point, before `main`).
-- The debug adapter, its debug server and the debuggee are killed on
-  `terminate`, when the program exits, when a launch is cancelled or fails,
-  when the coding session ends, and after 10 minutes without a `debug` call.
+- Successful native executor turns preserve the debugger across save/stop/resume
+  of the transient session process. Explicit abort/stop or logical reset/delete,
+  failed launch, unexpected owner death and 10-minute idle expiry dispose of it.
+- Locally launched adapters and their debuggees are killed on teardown; a crashed
+  adapter also disposes of its launched debuggee. Attached targets are not owned:
+  `terminate` disconnects without terminating them.
+- Debugpy port attach connects directly to the DAP endpoint exposed by
+  `python -m debugpy --listen <port>`; no second local Python adapter is launched.
 - Adapter requests to open terminals (`runInTerminal`) or start child debug
   sessions (`startDebugging`) are rejected; debuggee output arrives through
   the adapter and is available via `output` (a 128 KiB rolling buffer; output

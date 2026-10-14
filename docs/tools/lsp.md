@@ -71,6 +71,12 @@ Behavior:
   and the session's read tracker is refreshed, so a later `edit` is not
   rejected as stale. Applying calls are serialized with other mutating tools in
   the session; read-only calls run in parallel.
+  A code action retains chronological `checkpoint_ids` for its direct edit and
+  every server-requested batch, including partial failure or cancellation.
+  Rewinding restores these batches in reverse order, recovering the pre-action
+  state for repeated as well as disjoint paths. A failed action reports
+  `success: false`; its receipt still identifies any committed paths and
+  recoverable checkpoints.
 - `status` lists every registered server as installed, missing (with its
   install hint) or running for this session.
 
@@ -161,7 +167,14 @@ session.
 The manager answers server-initiated requests as a headless client
 (configuration defaults, workspace folders, progress and capability
 registration). `workspace/applyEdit` is accepted only during
-`request_with_edits/4` and the edits are returned to that caller to apply.
+`request_with_edits/4`, which requires an `apply_edit` callback returning
+`{:ok, receipt}` or `{:error, reason}`. The callback runs outside the manager
+through the caller's mutation/checkpoint path; the server receives
+`applied: true` only after the filesystem application succeeds. Partial failures
+and expired requests receive `applied: false`. Receipts/outcomes are returned in
+application order. Only one edit-capturing operation may run per server session;
+ordinary requests remain available during callbacks. Timeout or caller death
+cancels the operation and stops its in-flight callback.
 
 The manager records both push diagnostics from
 `textDocument/publishDiagnostics` notifications and pull diagnostics from

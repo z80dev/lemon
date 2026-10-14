@@ -236,6 +236,8 @@ def handle(request):
         respond(request, {})
         kill_debuggee()
         sys.exit(0)
+    elif command == "crash":
+        sys.exit(3)
     elif command == "echo":
         respond(request, {"echo": args})
     else:

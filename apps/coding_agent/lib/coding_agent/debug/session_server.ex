@@ -23,6 +23,7 @@ defmodule CodingAgent.Debug.SessionServer do
 
   use GenServer
 
+  alias CodingAgent.BashExecutor
   alias CodingAgent.Debug.Adapters
   alias CodingAgent.Debug.Client
   alias LemonAgent.AbortSignal
@@ -53,7 +54,8 @@ defmodule CodingAgent.Debug.SessionServer do
   @doc false
   def start_link(opts) do
     key = Keyword.fetch!(opts, :key)
-    GenServer.start_link(__MODULE__, opts, name: {:via, Registry, {@registry, key}})
+    value = %{session_key: Keyword.get(opts, :session_key), started_at: System.monotonic_time()}
+    GenServer.start_link(__MODULE__, opts, name: {:via, Registry, {@registry, key, value}})
   end
 
   @doc "Server pid for a session key, if one is running."
@@ -99,13 +101,17 @@ defmodule CodingAgent.Debug.SessionServer do
   defp ensure_server(key, action, opts) do
     case whereis(key) do
       pid when is_pid(pid) ->
-        {:ok, pid}
+        case CodingAgent.ToolResources.bind(pid, Keyword.get(opts, :owner)) do
+          :ok -> {:ok, pid}
+          {:error, _} -> {:error, "debug session belongs to another active turn"}
+        end
 
       nil when action in @start_actions ->
         spec =
           {__MODULE__,
            key: key,
            owner: Keyword.get(opts, :owner),
+           session_key: Keyword.get(opts, :session_key),
            idle_timeout_ms: Keyword.get(opts, :idle_timeout_ms, @idle_timeout_ms)}
 
         case DynamicSupervisor.start_child(@supervisor, spec) do
@@ -135,6 +141,7 @@ defmodule CodingAgent.Debug.SessionServer do
       %{
         key: Keyword.fetch!(opts, :key),
         owner_ref: owner_ref,
+        owner_pid: Keyword.get(opts, :owner),
         idle_timeout_ms: Keyword.get(opts, :idle_timeout_ms, @idle_timeout_ms),
         idle_token: nil,
         breakpoints: %{},
@@ -148,6 +155,10 @@ defmodule CodingAgent.Debug.SessionServer do
   end
 
   @impl true
+  def handle_call({operation, owner}, _from, state)
+      when operation in [:bind_owner, :detach_owner],
+      do: CodingAgent.ToolResources.owner_reply(operation, owner, state)
+
   def handle_call({:op, request, ctx}, _from, state) do
     {reply, state} =
       try do
@@ -514,6 +525,13 @@ defmodule CodingAgent.Debug.SessionServer do
     |> put_present("args", request[:args])
   end
 
+  defp start_args(:attach, %{adapter: %{connect_mode: :remote}} = request, _state) do
+    Map.put(request.adapter.attach_defaults, "connect", %{
+      "host" => request.adapter.host,
+      "port" => request.adapter.port
+    })
+  end
+
   defp start_args(:attach, request, _state) do
     request.adapter.attach_defaults
     |> Map.put("cwd", request.cwd)
@@ -868,7 +886,7 @@ defmodule CodingAgent.Debug.SessionServer do
         ctx = %{ctx | deadline: min(ctx.deadline, System.monotonic_time(:millisecond) + 5_000)}
 
         state =
-          if session.capabilities["supportsTerminateRequest"] == true and
+          if session.kind == :launch and session.capabilities["supportsTerminateRequest"] == true and
                session.status != :terminated do
             case dap_request(state, "terminate", nil, ctx) do
               {_, _, state} -> state
@@ -879,7 +897,12 @@ defmodule CodingAgent.Debug.SessionServer do
 
         state =
           if state.session.client do
-            case dap_request(state, "disconnect", %{"terminateDebuggee" => true}, ctx) do
+            case dap_request(
+                   state,
+                   "disconnect",
+                   %{"terminateDebuggee" => session.kind == :launch},
+                   ctx
+                 ) do
               {_, _, state} -> state
             end
           else
@@ -903,7 +926,12 @@ defmodule CodingAgent.Debug.SessionServer do
 
     state =
       try do
-        case dap_request(state, "disconnect", %{"terminateDebuggee" => true}, ctx) do
+        case dap_request(
+               state,
+               "disconnect",
+               %{"terminateDebuggee" => state.session.kind == :launch},
+               ctx
+             ) do
           {_, _, state} -> state
         end
       catch
@@ -1108,6 +1136,16 @@ defmodule CodingAgent.Debug.SessionServer do
 
   defp apply_payload(state, {:exit, reason}) do
     update_session(state, fn session ->
+      # The adapter may have died before disconnecting its launched program.
+      # Its children can already be reparented, so the adapter pid alone no
+      # longer identifies them. Never claim ownership of an attached process.
+      if session.status != :terminated and session.kind == :launch do
+        case session.process do
+          %{pid: pid} when is_integer(pid) and pid > 0 -> BashExecutor.kill_process_tree(pid)
+          _ -> :ok
+        end
+      end
+
       error = if session.status == :terminated, do: session.error, else: reason
       %{session | client: nil, status: :terminated, error: error}
     end)

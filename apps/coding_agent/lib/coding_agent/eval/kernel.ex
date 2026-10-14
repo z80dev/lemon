@@ -42,6 +42,7 @@ defmodule CodingAgent.Eval.Kernel do
     :cwd,
     :runtime,
     :owner_ref,
+    :owner_pid,
     :idle_timeout_ms,
     :idle_timer,
     :port,
@@ -124,6 +125,7 @@ defmodule CodingAgent.Eval.Kernel do
       cwd: Keyword.fetch!(opts, :cwd),
       runtime: Keyword.fetch!(opts, :runtime),
       owner_ref: owner_ref,
+      owner_pid: Keyword.get(opts, :owner_pid),
       idle_timeout_ms: Keyword.get(opts, :idle_timeout_ms) || @default_idle_timeout_ms
     }
 
@@ -131,6 +133,10 @@ defmodule CodingAgent.Eval.Kernel do
   end
 
   @impl true
+  def handle_call({operation, owner}, _from, state)
+      when operation in [:bind_owner, :detach_owner],
+      do: CodingAgent.ToolResources.owner_reply(operation, owner, state)
+
   def handle_call({:run, _code, _reset, _caller}, _from, %{busy: busy} = state)
       when busy != nil do
     {:reply, {:error, :busy}, state}
@@ -168,6 +174,7 @@ defmodule CodingAgent.Eval.Kernel do
   end
 
   def handle_info({port, {:exit_status, status}}, %{port: port} = state) do
+    if state.os_pid, do: BashExecutor.kill_process_tree(state.os_pid)
     state = flush_buffer(state)
 
     if state.busy do
@@ -314,7 +321,7 @@ defmodule CodingAgent.Eval.Kernel do
   end
 
   defp driver_path("py"), do: Application.app_dir(:coding_agent, "priv/eval/python_kernel.py")
-  defp driver_path("js"), do: Application.app_dir(:coding_agent, "priv/eval/js_kernel.js")
+  defp driver_path("js"), do: Application.app_dir(:coding_agent, "priv/eval/js_kernel_host.js")
 
   # ── Stream parsing ──────────────────────────────────────────────────────
 

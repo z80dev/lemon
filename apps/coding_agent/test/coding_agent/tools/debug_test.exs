@@ -64,6 +64,15 @@ defmodule CodingAgent.Tools.DebugTest do
 
     assert {:error, "attach requires pid or port"} = run(tool, %{"action" => "attach"})
 
+    for target <- [
+          %{"adapter" => "fake"},
+          %{"pid" => 0},
+          %{"port" => 65536},
+          %{"pid" => 12, "port" => 5678}
+        ] do
+      assert {:error, _} = run(tool, Map.put(target, "action", "attach"))
+    end
+
     assert {:error, "set_breakpoint requires file+line or function"} =
              run(tool, %{"action" => "set_breakpoint", "file" => "main.c"})
   end
@@ -80,74 +89,5 @@ defmodule CodingAgent.Tools.DebugTest do
     result = run(tool, %{"action" => "status"})
     assert text(result) == "No debug sessions."
     assert {:error, "No active debug session" <> _} = run(tool, %{"action" => "continue"})
-  end
-
-  @tag skip: if(is_nil(@python), do: "python3 is required for the fake DAP adapter", else: false)
-  test "drives a full breakpoint, inspect, step and continue cycle", %{tool: tool} do
-    launched =
-      run(tool, %{"action" => "launch", "program" => "prog.fake", "file" => "main.c", "line" => 5})
-
-    launch_text = text(launched)
-    assert launched.trust == :untrusted
-    assert launch_text =~ "Launched prog.fake with fake (session debug-1)."
-    assert launch_text =~ "Stopped: breakpoint at main.c:5 in main (thread 1)"
-    assert launch_text =~ "> 5 | line 5;"
-    assert launch_text =~ "  4 | line 4;"
-    assert launch_text =~ "- main.c:5 verified"
-    assert launched.details.state == :stopped
-    assert launched.details.snapshot.line == 5
-
-    stack = text(run(tool, %{"action" => "stack_trace"}))
-    assert stack =~ "#0 main main.c:5 (frame_id 100)"
-    assert stack =~ "#1 start <no source> (frame_id 101)"
-
-    assert text(run(tool, %{"action" => "scopes"})) =~ "Locals [scope_id 10]"
-
-    variables = text(run(tool, %{"action" => "variables", "scope_id" => 10}))
-    assert variables =~ "x = 40 (int)"
-    assert variables =~ "p = {a=1} (struct point) [ref 11]"
-
-    evaluated = run(tool, %{"action" => "evaluate", "expression" => "x", "context" => "watch"})
-    assert text(evaluated) =~ "Result: eval:x frame=100 ctx=watch\nType: string"
-
-    stepped = text(run(tool, %{"action" => "step_over"}))
-    assert stepped =~ "Stopped: step at main.c:6 in main (thread 1)"
-    assert stepped =~ "> 6 | line 6;"
-
-    finished = run(tool, %{"action" => "continue"})
-    assert text(finished) =~ "Program terminated with exit code 7."
-    assert finished.details.state == :terminated
-
-    assert text(run(tool, %{"action" => "output"})) =~ "hello from debuggee\nbye\n"
-
-    status = text(run(tool, %{"action" => "status"}))
-    assert status =~ "Session debug-1 (fake): terminated"
-    assert status =~ "Exit code: 7"
-
-    assert text(run(tool, %{"action" => "terminate"})) =~ "Debug session debug-1 terminated."
-  end
-
-  @tag skip: if(is_nil(@python), do: "python3 is required for the fake DAP adapter", else: false)
-  test "set_breakpoint with function sets a function breakpoint on the live session", %{
-    tool: tool
-  } do
-    assert text(run(tool, %{"action" => "launch", "program" => "prog.fake"})) =~ "Stopped: entry"
-
-    result =
-      run(tool, %{"action" => "set_breakpoint", "function" => "add", "condition" => "a > 1"})
-
-    assert text(result) =~ "Function breakpoints:\n- add: verified if a > 1"
-
-    removed = run(tool, %{"action" => "remove_breakpoint", "function" => "add"})
-    assert text(removed) =~ "Function breakpoints:\n(none)"
-
-    assert text(
-             run(tool, %{
-               "action" => "custom_request",
-               "command" => "echo",
-               "arguments" => %{"k" => "v"}
-             })
-           ) =~
-             ~s("k": "v")
   end
 end

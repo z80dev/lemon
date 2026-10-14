@@ -149,6 +149,7 @@ defmodule CodingAgent.Debug.Client do
 
   def handle_info({port, {:exit_status, status}}, %{port: port} = state) do
     # Unframed bytes still buffered at exit are diagnostics, not protocol.
+    if state.os_pid, do: BashExecutor.kill_process_tree(state.os_pid)
     stderr = String.trim(bounded(state.stderr <> state.buffer))
 
     reason =
@@ -179,6 +180,7 @@ defmodule CodingAgent.Debug.Client do
 
   defp open_transport(adapter, cwd, env) do
     case Map.get(adapter, :connect_mode, :stdio) do
+      :remote -> open_remote_transport(adapter)
       :socket -> open_socket_transport(adapter, cwd, env)
       _stdio -> open_stdio_transport(adapter, cwd, env)
     end
@@ -187,6 +189,20 @@ defmodule CodingAgent.Debug.Client do
   defp open_stdio_transport(adapter, cwd, env) do
     with {:ok, port} <- open_port(adapter.command, adapter.args, cwd, env) do
       {:ok, port, nil}
+    end
+  end
+
+  defp open_remote_transport(adapter) do
+    opts = [:binary, packet: :raw, active: true]
+
+    case :gen_tcp.connect(
+           String.to_charlist(adapter.host),
+           adapter.port,
+           opts,
+           @socket_ready_timeout_ms
+         ) do
+      {:ok, socket} -> {:ok, nil, socket}
+      {:error, reason} -> {:error, "cannot connect to debug adapter: #{inspect(reason)}"}
     end
   end
 
@@ -381,12 +397,14 @@ defmodule CodingAgent.Debug.Client do
     end
   end
 
-  defp port_os_pid(port) do
+  defp port_os_pid(port) when is_port(port) do
     case Port.info(port, :os_pid) do
       {:os_pid, pid} -> pid
       _ -> nil
     end
   end
+
+  defp port_os_pid(_port), do: nil
 
   defp maybe_put(map, _key, nil), do: map
   defp maybe_put(map, key, value), do: Map.put(map, key, value)

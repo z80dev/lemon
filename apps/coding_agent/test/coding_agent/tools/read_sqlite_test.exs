@@ -16,6 +16,8 @@ defmodule CodingAgent.Tools.ReadSqliteTest do
       Sqlite3.execute(conn, """
       CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, age INTEGER, avatar BLOB);
       CREATE TABLE tags (label TEXT);
+      CREATE TABLE codes (code TEXT PRIMARY KEY, name TEXT);
+      INSERT INTO codes VALUES ('007', 'bond');
       CREATE VIEW adults AS SELECT name FROM users WHERE age >= 18;
       """)
 
@@ -70,6 +72,7 @@ defmodule CodingAgent.Tools.ReadSqliteTest do
     assert text(read(tmp_dir, "app.db:users:7")) =~ "2: name: user7\n3: age: 7"
     assert text(read(tmp_dir, "app.db:tags:2")) =~ "label: b"
     assert text(read(tmp_dir, "app.db:users:999")) =~ "No row found in table 'users'"
+    assert text(read(tmp_dir, "app.db:codes:007")) =~ "code: 007\n2: name: bond"
   end
 
   test "raw read queries", %{tmp_dir: tmp_dir} do
@@ -88,15 +91,50 @@ defmodule CodingAgent.Tools.ReadSqliteTest do
     assert {:error, "SQLite q may not use ATTACH" <> _} =
              read(tmp_dir, "app.db?q=ATTACH 'x.db' AS x")
 
-    # Even a write disguised past the keyword guard fails on the read-only handle.
-    assert {:error, message} = read(tmp_dir, "app.db?q=WITH x AS (SELECT 1) SELECT * FROM nope")
-    assert message =~ "no such table"
+    for sql <- [
+          "PRAGMA query_only = 0",
+          "PRAGMA journal_mode = DELETE",
+          "WITH x AS (SELECT 1) DELETE FROM users",
+          "SELECT 1; ATTACH 'x.db' AS x"
+        ] do
+      assert {:error, message} = read(tmp_dir, "app.db?q=" <> URI.encode_www_form(sql))
+      assert message =~ ~r/(may not use|single statement)/
+    end
 
+    refute File.exists?(Path.join(tmp_dir, "x.db"))
     {:ok, conn} = Sqlite3.open(db)
     {:ok, stmt} = Sqlite3.prepare(conn, "SELECT count(*) FROM users")
     assert {:row, [30]} = Sqlite3.step(conn, stmt)
     Sqlite3.release(conn, stmt)
     Sqlite3.close(conn)
+  end
+
+  test "SQLite engine rejects real CTE writes on readonly and query-only handles", %{db: db} do
+    # These are engine-defense checks, not alleged fragment-guard bypasses.
+    for {mode, query_only} <- [{:readonly, 0}, {:readwrite, 1}] do
+      {:ok, conn} = Sqlite3.open(db, mode: mode)
+
+      try do
+        :ok = Sqlite3.execute(conn, "PRAGMA query_only = #{query_only}")
+
+        assert {:error, reason} =
+                 Sqlite3.execute(conn, """
+                 WITH selected AS (SELECT id FROM users WHERE id = 1)
+                 DELETE FROM users WHERE id IN (SELECT id FROM selected)
+                 """)
+
+        assert to_string(reason) =~ ~r/read.?only/i
+        {:ok, stmt} = Sqlite3.prepare(conn, "SELECT count(*) FROM users")
+
+        try do
+          assert {:row, [30]} = Sqlite3.step(conn, stmt)
+        after
+          :ok = Sqlite3.release(conn, stmt)
+        end
+      after
+        :ok = Sqlite3.close(conn)
+      end
+    end
   end
 
   test "non-SQLite .db files fall back to the ordinary reader", %{tmp_dir: tmp_dir} do

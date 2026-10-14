@@ -151,6 +151,7 @@ defmodule CodingAgent.Tools.Eval do
              cwd: Path.expand(cwd),
              runtime: runtime,
              owner_pid: Keyword.get(opts, :session_pid),
+             session_key: Keyword.get(opts, :session_key),
              idle_timeout_ms: Keyword.get(opts, :eval_idle_timeout_ms)
            ),
          {:ok, %{ref: ref, restarted: restarted}} <-

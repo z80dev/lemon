@@ -286,7 +286,7 @@ defmodule CodingAgent.Tools.ReadSqlite do
          {:ok, lookup} <- row_lookup(conn, table),
          {:ok, columns, rows, _} <-
            query(conn, "SELECT * FROM #{ident(table)} WHERE #{lookup} = ? LIMIT 1", [
-             coerce_key(key)
+             key
            ]) do
       case rows do
         [row] ->
@@ -328,13 +328,6 @@ defmodule CodingAgent.Tools.ReadSqlite do
       {:ok, _, [[column]], _} -> {:ok, ident(column)}
       {:ok, _, _, _} -> {:ok, "rowid"}
       {:error, _} = error -> error
-    end
-  end
-
-  defp coerce_key(key) do
-    case Integer.parse(key) do
-      {n, ""} -> n
-      _ -> key
     end
   end
 

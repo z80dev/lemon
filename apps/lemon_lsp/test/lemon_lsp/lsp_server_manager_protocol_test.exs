@@ -31,35 +31,107 @@ defmodule LemonLsp.ServerManagerProtocolTest do
     end
   end
 
-  test "answers server requests and returns edits captured during a command", %{
+  test "acknowledges edits only after applying them and permits reentrant manager calls", %{
     tmp_dir: tmp_dir,
     session_id: session_id
   } do
+    path = Path.join(tmp_dir, "applied.ex")
+    uri = "file://" <> URI.encode(path)
+    text = "updated\n"
+    receipt = %{path: path, bytes: byte_size(text)}
+    File.write!(path, "original\n")
+
     assert {:ok, _} =
              ServerManager.start_session(:elixir_ls, cwd: tmp_dir, session_id: session_id)
 
     assert {:ok, _} = ServerManager.initialize_session(session_id, %{}, timeout_ms: 20_000)
 
-    assert {:ok, response, [edit]} =
+    apply_edit = fn edit ->
+      assert %{"changes" => %{^uri => [%{"newText" => ^text}]}} = edit
+      assert {:ok, %{seq: 0, entry: nil}} = ServerManager.document_diagnostics(session_id, uri)
+
+      assert {:error, :edit_request_in_progress} =
+               ServerManager.request_with_edits(session_id, "workspace/executeCommand", %{},
+                 timeout_ms: 2_000,
+                 apply_edit: fn _ -> flunk("an overlapping operation must not capture edits") end
+               )
+
+      assert {:ok, probe} =
+               ServerManager.request_session(session_id, "fake/editProbe", %{"path" => path},
+                 timeout_ms: 2_000
+               )
+
+      assert probe["result"] == %{
+               "applyEditAcknowledged" => false,
+               "bytes" => "original\n"
+             }
+
+      File.write!(path, text)
+      {:ok, receipt}
+    end
+
+    assert {:ok, response, [{:ok, ^receipt}]} =
              ServerManager.request_with_edits(
                session_id,
                "workspace/executeCommand",
-               %{"command" => "fake.apply"},
-               timeout_ms: 20_000
+               %{"command" => "fake.apply", "path" => path, "text" => text},
+               timeout_ms: 20_000,
+               apply_edit: apply_edit
              )
 
     # The server's configuration request reused the pending client id; it must
     # be answered as a server request rather than completing our call.
     assert response["result"]["configuration"] == [nil, nil]
     assert response["result"]["applyEdit"] == %{"applied" => true}
-    assert edit == %{"changes" => %{"file:///tmp/a.ex" => []}}
+    assert response["result"]["bytesAfterAck"] == text
+    assert File.read!(path) == text
 
     assert {:ok, plain} =
-             ServerManager.request_session(session_id, "workspace/executeCommand", %{},
+             ServerManager.request_session(
+               session_id,
+               "workspace/executeCommand",
+               %{"path" => path, "text" => "unrequested\n"},
                timeout_ms: 20_000
              )
 
     assert plain["result"]["applyEdit"]["applied"] == false
+    assert plain["result"]["bytesAfterAck"] == text
+    assert File.read!(path) == text
+  end
+
+  test "reports callback failure to the server without changing the file", %{
+    tmp_dir: tmp_dir,
+    session_id: session_id
+  } do
+    path = Path.join(tmp_dir, "rejected.ex")
+    uri = "file://" <> URI.encode(path)
+    reason = "workspace edit rejected"
+    File.write!(path, "original\n")
+
+    assert {:ok, _} =
+             ServerManager.start_session(:elixir_ls, cwd: tmp_dir, session_id: session_id)
+
+    assert {:ok, _} = ServerManager.initialize_session(session_id, %{}, timeout_ms: 20_000)
+
+    assert {:ok, response, [{:error, ^reason}]} =
+             ServerManager.request_with_edits(
+               session_id,
+               "workspace/executeCommand",
+               %{"path" => path, "text" => "rejected\n"},
+               timeout_ms: 20_000,
+               apply_edit: fn edit ->
+                 assert %{"changes" => %{^uri => [%{"newText" => "rejected\n"}]}} = edit
+                 {:error, reason}
+               end
+             )
+
+    assert response["result"]["applyEdit"] == %{
+             "applied" => false,
+             "failureReason" => reason
+           }
+
+    assert response["result"]["bytesAfterAck"] == "original\n"
+    assert File.read!(path) == "original\n"
   end
 
   test "keeps raw diagnostics per document while status stays redacted", %{
@@ -111,6 +183,58 @@ defmodule LemonLsp.ServerManagerProtocolTest do
 
     assert [id] = response["result"]
     assert is_integer(id)
+  end
+
+  test "cancels an in-flight edit callback before acknowledging timeout with no late writes", %{
+    tmp_dir: tmp_dir,
+    session_id: session_id
+  } do
+    path = Path.join(tmp_dir, "cancelled.ex")
+    File.write!(path, "original\n")
+    caller = self()
+
+    assert {:ok, _} =
+             ServerManager.start_session(:elixir_ls, cwd: tmp_dir, session_id: session_id)
+
+    assert {:ok, _} = ServerManager.initialize_session(session_id, %{}, timeout_ms: 20_000)
+
+    request =
+      Task.async(fn ->
+        ServerManager.request_with_edits(
+          session_id,
+          "workspace/executeCommand",
+          %{"path" => path, "text" => "late\n"},
+          timeout_ms: 1_000,
+          on_timeout: :cancel,
+          apply_edit: fn _edit ->
+            send(caller, {:callback_started, self()})
+
+            receive do
+              :finish ->
+                File.write!(path, "late\n")
+                {:ok, %{path: path}}
+            end
+          end
+        )
+      end)
+
+    assert_receive {:callback_started, worker}, 1_000
+    monitor = Process.monitor(worker)
+    assert {:error, :request_timeout} = Task.await(request, 2_000)
+    assert_receive {:DOWN, ^monitor, :process, ^worker, _reason}, 1_000
+
+    # A released callback must not outlive the request and mutate the workspace.
+    send(worker, :finish)
+
+    assert {:ok, response} =
+             ServerManager.request_session(session_id, "fake/editStatus", %{}, timeout_ms: 2_000)
+
+    assert response["result"]["applyEdit"]["applied"] == false
+    assert is_binary(response["result"]["applyEdit"]["failureReason"])
+    assert response["result"]["bytesAfterAck"] == "original\n"
+    assert [id] = response["result"]["cancelled"]
+    assert id == response["result"]["commandId"]
+    assert File.read!(path) == "original\n"
   end
 
   test "stops the session when its owner exits", %{tmp_dir: tmp_dir, session_id: session_id} do
@@ -184,31 +308,51 @@ defmodule LemonLsp.ServerManagerProtocolTest do
         IO.binwrite(:stdio, "Content-Length: #{byte_size(body)}\r\n\r\n" <> body)
       end
 
-      def await_responses(ids, acc) do
+      def await_responses(ids, acc, cancelled) do
         if ids == [] do
-          acc
+          {acc, cancelled}
         else
-          message = read()
-          id = message["id"]
+          case read() do
+            %{"method" => "$/cancelRequest", "params" => %{"id" => id}} ->
+              await_responses(ids, acc, [id | cancelled])
 
-          if id in ids and not Map.has_key?(message, "method") do
-            await_responses(List.delete(ids, id), Map.put(acc, id, message["result"]))
-          else
-            await_responses(ids, acc)
+            %{"method" => "fake/editProbe", "id" => id, "params" => params} ->
+              send(%{
+                "id" => id,
+                "result" => %{
+                  "applyEditAcknowledged" => Map.has_key?(acc, "edit-1"),
+                  "bytes" => File.read!(params["path"])
+                }
+              })
+
+              await_responses(ids, acc, cancelled)
+
+            message ->
+              id = message["id"]
+
+              if id in ids and not Map.has_key?(message, "method") do
+                await_responses(
+                  List.delete(ids, id),
+                  Map.put(acc, id, message["result"]),
+                  cancelled
+                )
+              else
+                await_responses(ids, acc, cancelled)
+              end
           end
         end
       end
 
-      def loop(cancelled) do
+      def loop(cancelled, last_command \\ nil) do
         case read() do
           nil ->
             :ok
 
           %{"method" => "initialize", "id" => id} ->
             send(%{"id" => id, "result" => %{"capabilities" => %{}}})
-            loop(cancelled)
+            loop(cancelled, last_command)
 
-          %{"method" => "workspace/executeCommand", "id" => id} ->
+          %{"method" => "workspace/executeCommand", "id" => id, "params" => params} ->
             send(%{
               "id" => id,
               "method" => "workspace/configuration",
@@ -218,17 +362,49 @@ defmodule LemonLsp.ServerManagerProtocolTest do
             send(%{
               "id" => "edit-1",
               "method" => "workspace/applyEdit",
-              "params" => %{"edit" => %{"changes" => %{"file:///tmp/a.ex" => []}}}
+              "params" => %{
+                "edit" => %{
+                  "changes" => %{
+                    ("file://" <> URI.encode(params["path"])) => [
+                      %{
+                        "range" => %{
+                          "start" => %{"line" => 0, "character" => 0},
+                          "end" => %{"line" => 1, "character" => 0}
+                        },
+                        "newText" => params["text"]
+                      }
+                    ]
+                  }
+                }
+              }
             })
 
-            results = await_responses([id, "edit-1"], %{})
+            {results, cancelled} = await_responses([id, "edit-1"], %{}, cancelled)
 
+            result = %{
+              "commandId" => id,
+              "configuration" => results[id],
+              "applyEdit" => results["edit-1"],
+              "bytesAfterAck" => File.read!(params["path"])
+            }
+
+            send(%{"id" => id, "result" => result})
+            loop(cancelled, result)
+
+          %{"method" => "fake/editProbe", "id" => id, "params" => params} ->
             send(%{
               "id" => id,
-              "result" => %{"configuration" => results[id], "applyEdit" => results["edit-1"]}
+              "result" => %{
+                "applyEditAcknowledged" => last_command != nil,
+                "bytes" => File.read!(params["path"])
+              }
             })
 
-            loop(cancelled)
+            loop(cancelled, last_command)
+
+          %{"method" => "fake/editStatus", "id" => id} ->
+            send(%{"id" => id, "result" => Map.put(last_command, "cancelled", cancelled)})
+            loop(cancelled, last_command)
 
           %{"method" => "textDocument/didOpen", "params" => params} ->
             send(%{
@@ -240,17 +416,17 @@ defmodule LemonLsp.ServerManagerProtocolTest do
               }
             })
 
-            loop(cancelled)
+            loop(cancelled, last_command)
 
           %{"method" => "$/cancelRequest", "params" => %{"id" => cancelled_id}} ->
-            loop([cancelled_id | cancelled])
+            loop([cancelled_id | cancelled], last_command)
 
           %{"method" => "fake/cancelled", "id" => id} ->
             send(%{"id" => id, "result" => cancelled})
-            loop(cancelled)
+            loop(cancelled, last_command)
 
           _other ->
-            loop(cancelled)
+            loop(cancelled, last_command)
         end
       end
     end

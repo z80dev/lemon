@@ -34,5 +34,7 @@ defmodule CodingAgent.Eval.KernelTest do
     {acc, "é"} = Output.append(acc, second)
     {acc, "red"} = Output.append(acc, "\e[31mred\e[0m")
     assert Output.finalize(acc) == %{output: "éred", truncated: false, full_output_path: nil}
+    acc = Output.append_block(Output.new(), "\e[31mframed error\e[0m")
+    assert Output.finalize(acc).output == "framed error"
   end
 end

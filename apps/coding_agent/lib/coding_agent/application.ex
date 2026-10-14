@@ -30,6 +30,7 @@ defmodule CodingAgent.Application do
       {DynamicSupervisor, name: CodingAgent.Tools.Lsp.Supervisor, strategy: :one_for_one},
       {Registry, keys: :unique, name: CodingAgent.Debug.Registry},
       {DynamicSupervisor, name: CodingAgent.Debug.Supervisor, strategy: :one_for_one},
+      CodingAgent.ToolResources,
       {Task.Supervisor, name: CodingAgent.Search.TaskSupervisor},
       CodingAgent.Search.SingleFlight,
       CodingAgent.Tools.TodoStoreOwner,

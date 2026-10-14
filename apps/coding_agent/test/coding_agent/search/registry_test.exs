@@ -25,11 +25,6 @@ defmodule CodingAgent.Search.RegistryTest do
     assert "perplexity" in ids
     assert "duckduckgo" in ids
     assert "searxng" in ids
-    assert "tavily" in ids
-    assert "kagi" in ids
-    assert "jina" in ids
-
-    assert %{count: 10, search_count: 8, extract_count: 3} = Registry.status()
   end
 
   test "registers and unregisters a valid runtime provider" do

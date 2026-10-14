@@ -98,24 +98,30 @@ defmodule CodingAgent.Tools.Lsp.Client do
 
   @doc false
   def start_link(args) do
-    GenServer.start_link(__MODULE__, args, name: {:via, Registry, {@registry, args.key}})
+    value = %{session_key: Map.get(args, :session_key), started_at: System.monotonic_time()}
+    GenServer.start_link(__MODULE__, args, name: {:via, Registry, {@registry, args.key, value}})
   end
 
   @doc "Find or start the client for `key`."
-  @spec ensure(key(), map(), pid() | nil) :: {:ok, pid()} | {:error, term()}
-  def ensure({_scope, _server_id, _root} = key, server, owner) do
+  @spec ensure(key(), map(), pid() | nil, String.t() | nil) :: {:ok, pid()} | {:error, term()}
+  def ensure({_scope, _server_id, _root} = key, server, owner, session_key) do
     case Registry.lookup(@registry, key) do
       [{pid, _value}] ->
-        {:ok, pid}
+        with :ok <- CodingAgent.ToolResources.bind(pid, owner), do: {:ok, pid}
 
       [] ->
         case DynamicSupervisor.start_child(
                @supervisor,
-               {__MODULE__, %{key: key, server: server, owner: owner}}
+               {__MODULE__, %{key: key, server: server, owner: owner, session_key: session_key}}
              ) do
-          {:ok, pid} -> {:ok, pid}
-          {:error, {:already_started, pid}} -> {:ok, pid}
-          {:error, reason} -> {:error, reason}
+          {:ok, pid} ->
+            {:ok, pid}
+
+          {:error, {:already_started, pid}} ->
+            with :ok <- CodingAgent.ToolResources.bind(pid, owner), do: {:ok, pid}
+
+          {:error, reason} ->
+            {:error, reason}
         end
     end
   end
@@ -174,6 +180,9 @@ defmodule CodingAgent.Tools.Lsp.Client do
     :exit, _reason -> {:error, :session_lost}
   end
 
+  @doc false
+  def documents(pid), do: GenServer.call(pid, :documents)
+
   @doc "LSP `languageId` for a path."
   @spec language_id(String.t()) :: String.t()
   def language_id(path) do
@@ -205,6 +214,7 @@ defmodule CodingAgent.Tools.Lsp.Client do
        server: server,
        root: root,
        owner_ref: if(is_pid(owner), do: Process.monitor(owner)),
+       owner_pid: owner,
        session_id: nil,
        capabilities: nil,
        documents: %{},
@@ -214,6 +224,10 @@ defmodule CodingAgent.Tools.Lsp.Client do
   end
 
   @impl true
+  def handle_call({operation, owner}, _from, state)
+      when operation in [:bind_owner, :detach_owner],
+      do: CodingAgent.ToolResources.owner_reply(operation, owner, state)
+
   def handle_call({:sync, path, timeout_ms}, _from, state) do
     state = touch(state)
 
@@ -261,6 +275,8 @@ defmodule CodingAgent.Tools.Lsp.Client do
         server_id: state.server.id
       }}, state}
   end
+
+  def handle_call(:documents, _from, state), do: {:reply, state.documents, state}
 
   @impl true
   def handle_info(:idle_timeout, state), do: {:stop, :normal, state}
@@ -356,7 +372,15 @@ defmodule CodingAgent.Tools.Lsp.Client do
       {synced, state} = sync_text(state, path, text)
       state = state |> resync_open(path) |> evict()
       doc = state.documents[path]
-      {:ok, %{uri: doc.uri, version: doc.version, synced: synced, diagnostics_seq: seq}, state}
+
+      {:ok,
+       %{
+         uri: doc.uri,
+         version: doc.version,
+         synced: synced,
+         diagnostics_seq: seq,
+         documents: state.documents
+       }, state}
     else
       {:error, :unknown_lsp_session} -> {:error, :session_lost, state}
       {:error, reason} when is_atom(reason) -> {:error, {:file, reason, path}, state}

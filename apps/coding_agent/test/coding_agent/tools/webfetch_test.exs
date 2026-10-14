@@ -543,7 +543,119 @@ defmodule CodingAgent.Tools.WebFetchTest do
   end
 
   @tag :tmp_dir
+  test "fetch-only policy never probes project or ancestor PDF interpreters", %{tmp_dir: tmp_dir} do
+    cwd = Path.join(tmp_dir, "project")
+    File.mkdir_p!(cwd)
+    project_marker = install_pdf_sentinel(cwd)
+    ancestor_marker = install_pdf_sentinel(tmp_dir)
+    isolate_path(tmp_dir)
+
+    policy = %{allow: ["webfetch"], deny: ["bash", "eval", "debug"]}
+    [tool] = CodingAgent.ToolPolicy.apply_policy(policy, [pdf_tool(cwd)])
+
+    assert {:error, message} =
+             tool.execute.(
+               "pdf-denied",
+               %{
+                 "url" => "https://8.8.8.8/denied.pdf",
+                 "pdf_python" => Path.join(cwd, ".lemon/read-formats-venv/bin/python3")
+               },
+               nil,
+               nil
+             )
+
+    assert message =~ "pypdf"
+    refute File.exists?(project_marker)
+    refute File.exists?(ancestor_marker)
+  end
+
+  @tag :tmp_dir
+  test "only explicit operator selection permits probing a project interpreter", %{
+    tmp_dir: tmp_dir
+  } do
+    marker = install_pdf_sentinel(tmp_dir)
+    isolate_path(tmp_dir)
+    interpreter = Path.join(tmp_dir, ".lemon/read-formats-venv/bin/python3")
+    tool = pdf_tool(tmp_dir, pdf_python: interpreter)
+
+    assert {:error, _message} =
+             tool.execute.("pdf-trusted", %{"url" => "https://8.8.8.8/trusted.pdf"}, nil, nil)
+
+    assert File.read!(marker) == "probed\n"
+  end
+
+  @tag :tmp_dir
+  test "fetch-only ignores relative PATH entries and symlinked project backends", %{
+    tmp_dir: tmp_dir
+  } do
+    cwd = Path.join(tmp_dir, "project")
+    marker = install_pdf_sentinel(cwd)
+    ancestor_marker = install_pdf_sentinel(tmp_dir)
+    interpreter = Path.join(cwd, ".lemon/read-formats-venv/bin/python3")
+    operator_bin = external_toolchain()
+
+    for name <- ["pdftotext", "mutool", "python3"] do
+      File.ln_s!(interpreter, Path.join(cwd, name))
+      File.ln_s!(interpreter, Path.join(operator_bin, name))
+    end
+
+    directory_link = Path.join(operator_bin, "directory-link")
+    File.ln_s!(Path.dirname(interpreter), directory_link)
+    isolate_path(tmp_dir)
+
+    System.put_env(
+      "PATH",
+      Enum.join(
+        [
+          "",
+          ".",
+          ".lemon/read-formats-venv/bin",
+          cwd,
+          Path.join(tmp_dir, ".lemon/read-formats-venv/bin"),
+          operator_bin,
+          directory_link
+        ],
+        ":"
+      )
+    )
+
+    result =
+      File.cd!(cwd, fn ->
+        pdf_tool(cwd).execute.(
+          "relative-pdf",
+          %{"url" => "https://8.8.8.8/relative.pdf"},
+          nil,
+          nil
+        )
+      end)
+
+    assert {:error, message} = result
+    assert message =~ "pypdf"
+    refute File.exists?(marker)
+    refute File.exists?(ancestor_marker)
+  end
+
+  @tag :tmp_dir
+  test "absolute operator toolchains outside the project remain available", %{tmp_dir: tmp_dir} do
+    cwd = Path.join(tmp_dir, "project")
+    operator_bin = external_toolchain()
+    File.mkdir_p!(cwd)
+    executable = Path.join(operator_bin, "pdftotext")
+    File.ln_s!("/bin/sh", executable)
+    isolate_path(tmp_dir)
+    System.put_env("PATH", operator_bin)
+
+    assert {:ok, %{name: :pdftotext, executable: ^executable}} =
+             CodingAgent.Tools.ReadPdf.backend(cwd, pdf_system_only: true)
+  end
+
+  @tag :tmp_dir
   test "PDF responses become page text or an actionable backend error", %{tmp_dir: tmp_dir} do
+    project_marker = install_pdf_sentinel(tmp_dir)
+    cwd = Path.join(tmp_dir, "nested")
+    File.mkdir_p!(cwd)
+    nested_marker = install_pdf_sentinel(cwd)
+
     http_get = fn _url, _opts ->
       {:ok,
        %Req.Response{
@@ -553,18 +665,20 @@ defmodule CodingAgent.Tools.WebFetchTest do
        }}
     end
 
-    tool = WebFetch.tool(tmp_dir, http_get: http_get, cache_opts: [persistent: false])
+    tool = WebFetch.tool(cwd, http_get: http_get, cache_opts: [persistent: false])
 
-    case CodingAgent.Tools.ReadFormats.pdf_backend(tmp_dir) do
+    case CodingAgent.Tools.ReadPdf.backend(cwd, pdf_system_only: true) do
       {:ok, %{name: backend}} ->
-        payload =
-          tool.execute.("id", %{"url" => "https://8.8.8.8/doc.pdf"}, nil, nil)
-          |> decode_payload()
+        result = tool.execute.("id", %{"url" => "https://8.8.8.8/doc.pdf"}, nil, nil)
+        assert result.trust == :untrusted
+        payload = decode_payload(result)
 
         assert payload["extractor"] == "pdf:#{backend}"
         assert payload["text"] =~ "=== Page 1 ==="
         assert payload["text"] =~ "Alpha page"
         assert payload["text"] =~ "Beta page"
+        assert payload["text"] =~ "EXTERNAL_UNTRUSTED_CONTENT"
+        assert payload["trustMetadata"]["untrusted"] == true
 
       {:error, _} ->
         assert {:error, message} =
@@ -573,6 +687,58 @@ defmodule CodingAgent.Tools.WebFetchTest do
         assert message =~ "pypdf"
         refute message =~ "Unsupported binary response"
     end
+
+    refute File.exists?(project_marker)
+    refute File.exists?(nested_marker)
+  end
+
+  defp external_toolchain do
+    directory =
+      Path.join(System.tmp_dir!(), "lemon-pdf-toolchain-#{System.unique_integer([:positive])}")
+
+    File.mkdir_p!(directory)
+    on_exit(fn -> File.rm_rf!(directory) end)
+    directory
+  end
+
+  defp pdf_tool(cwd, opts \\ []) do
+    WebFetch.tool(
+      cwd,
+      Keyword.merge(
+        [
+          cache_opts: [persistent: false],
+          http_get: fn _url, _opts ->
+            {:ok,
+             %Req.Response{
+               status: 200,
+               headers: [{"content-type", "application/pdf"}],
+               body: pdf(["Alpha page", "Beta page"])
+             }}
+          end
+        ],
+        opts
+      )
+    )
+  end
+
+  defp install_pdf_sentinel(directory) do
+    interpreter = Path.join(directory, ".lemon/read-formats-venv/bin/python3")
+    marker = Path.join(directory, "pdf-interpreter-probed")
+    File.mkdir_p!(Path.dirname(interpreter))
+    File.write!(interpreter, "#!/bin/sh\nprintf 'probed\\n' >> \"#{marker}\"\nexit 1\n")
+    File.chmod!(interpreter, 0o700)
+    marker
+  end
+
+  defp isolate_path(directory) do
+    original = System.get_env("PATH")
+    empty_path = Path.join(directory, "empty-path")
+    File.mkdir_p!(empty_path)
+    System.put_env("PATH", empty_path)
+
+    on_exit(fn ->
+      if original, do: System.put_env("PATH", original), else: System.delete_env("PATH")
+    end)
   end
 
   defp pdf(page_texts) do

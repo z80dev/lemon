@@ -35,14 +35,14 @@ defmodule CodingAgent.Eval.Output do
   end
 
   @doc """
-  Appends an already-clean block (display value, error report) on its own
-  line after any earlier output.
+  Appends a display value or error report on its own line, sanitizing it with
+  the same rules as streamed shell output.
   """
   @spec append_block(t(), String.t()) :: t()
   def append_block(%__MODULE__{} = acc, text) when is_binary(text) do
     acc = flush_tail(acc)
     acc = if acc.newline_terminated, do: acc, else: store(acc, "\n")
-    store(acc, text)
+    store(acc, BashExecutor.sanitize_output(text))
   end
 
   @doc "Whether nothing has been recorded yet."
@@ -76,8 +76,13 @@ defmodule CodingAgent.Eval.Output do
 
         truncated ->
           path = temp_path()
-          File.write!(path, full, [:exclusive])
-          File.chmod!(path, 0o600)
+
+          {:ok, :ok} =
+            File.open(path, [:write, :binary, :exclusive], fn file ->
+              File.chmod!(path, 0o600)
+              IO.binwrite(file, full)
+            end)
+
           path
 
         true ->

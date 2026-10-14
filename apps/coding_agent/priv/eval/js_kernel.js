@@ -646,6 +646,9 @@ async function runCell(code, cell) {
 const READER_SOURCE = `
 const fs = require("node:fs");
 const { parentPort } = require("node:worker_threads");
+const { spawnSync } = require("node:child_process");
+const { StringDecoder } = require("node:string_decoder");
+const decoder = new StringDecoder("utf8");
 const sleepCell = new Int32Array(new SharedArrayBuffer(4));
 const buffer = Buffer.alloc(65536);
 let pending = "";
@@ -657,8 +660,16 @@ for (;;) {
     if (error && error.code === "EAGAIN") { Atomics.wait(sleepCell, 0, 0, 5); continue; }
     count = 0;
   }
-  if (count === 0) process.kill(process.pid, "SIGKILL");
-  pending += buffer.toString("utf8", 0, count);
+  if (count === 0) {
+    if (process.platform === "win32") {
+      spawnSync("taskkill", ["/F", "/T", "/PID", String(process.pid)], { stdio: "ignore" });
+      process.kill(process.pid, "SIGKILL");
+    } else {
+      // js_kernel_host.js launched this process as the detached group leader.
+      process.kill(-process.pid, "SIGKILL");
+    }
+  }
+  pending += decoder.write(buffer.subarray(0, count));
   let newline;
   while ((newline = pending.indexOf("\\n")) >= 0) {
     const line = pending.slice(0, newline);

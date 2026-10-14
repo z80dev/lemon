@@ -120,28 +120,33 @@ defmodule CodingAgent.Debug.Adapters do
   def select_attach(adapter_name, port, opts \\ []) do
     configs = configs(opts)
 
-    if is_binary(adapter_name) and adapter_name != "" do
-      resolve_named(adapter_name, configs)
+    if is_integer(port) and adapter_name in [nil, "", "debugpy"] do
+      {:ok,
+       Map.merge(configs["debugpy"], %{name: "debugpy", command: nil, connect_mode: :remote})}
     else
-      available =
-        configs
-        |> Map.keys()
-        |> Enum.sort()
-        |> Enum.flat_map(fn name ->
-          case resolve_config(name, configs) do
-            {:ok, adapter} -> [adapter]
-            _ -> []
-          end
-        end)
+      if is_binary(adapter_name) and adapter_name != "" do
+        resolve_named(adapter_name, configs)
+      else
+        available =
+          configs
+          |> Map.keys()
+          |> Enum.sort()
+          |> Enum.flat_map(fn name ->
+            case resolve_config(name, configs) do
+              {:ok, adapter} -> [adapter]
+              _ -> []
+            end
+          end)
 
-      preferred =
-        if is_integer(port), do: ["debugpy" | @extensionless_order], else: @extensionless_order
+        preferred =
+          if is_integer(port), do: ["debugpy" | @extensionless_order], else: @extensionless_order
 
-      found =
-        Enum.find_value(preferred, fn name -> Enum.find(available, &(&1.name == name)) end) ||
-          List.first(available)
+        found =
+          Enum.find_value(preferred, fn name -> Enum.find(available, &(&1.name == name)) end) ||
+            List.first(available)
 
-      if found, do: {:ok, found}, else: {:error, no_adapter_message(configs)}
+        if found, do: {:ok, found}, else: {:error, no_adapter_message(configs)}
+      end
     end
   end
 

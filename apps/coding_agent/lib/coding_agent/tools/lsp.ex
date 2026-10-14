@@ -133,6 +133,11 @@ defmodule CodingAgent.Tools.Lsp do
         {:error, :session_lost} ->
           {:error, "The language server exited unexpectedly; retry the request"}
 
+        {:partial_error, reason, details} ->
+          reason
+          |> result(Map.merge(%{action: req.action, success: false}, details), ctx)
+          |> ToolResultTrust.untrusted(:local_search)
+
         {:error, reason} when is_binary(reason) ->
           {:error, reason}
       end
@@ -602,7 +607,12 @@ defmodule CodingAgent.Tools.Lsp do
   end
 
   defp apply_ops(ctx, conn, ops, action, heading) do
-    case WorkspaceEdit.apply(ops, ctx.cwd, ctx.opts, ctx.signal, %{tool: "lsp", action: action}) do
+    opts =
+      ctx.opts
+      |> Keyword.put(:lsp_documents, conn.documents)
+      |> Keyword.put(:mutation_deadline, ctx.deadline)
+
+    case WorkspaceEdit.apply(ops, ctx.cwd, opts, ctx.signal, %{tool: "lsp", action: action}) do
       {:ok, %{changed: changed, applied: applied, checkpoint: checkpoint}} ->
         Client.refresh(conn.pid, changed)
 
@@ -615,6 +625,19 @@ defmodule CodingAgent.Tools.Lsp do
           |> CheckpointGuard.put_details(checkpoint)
 
         {:ok, heading <> ":\n" <> Enum.map_join(applied, "\n", &("  " <> &1)), details}
+
+      {:error, reason, %{changed: changed, checkpoint: checkpoint}} ->
+        Client.refresh(conn.pid, changed)
+
+        details =
+          %{
+            success: false,
+            applied: changed != [],
+            changed_files: Enum.map(Enum.uniq(changed), &Text.display_path(&1, ctx.cwd))
+          }
+          |> CheckpointGuard.put_details(checkpoint)
+
+        {:partial_error, "Failed to apply #{action} edits: #{reason}", details}
 
       {:error, reason} ->
         {:error, "Failed to apply #{action} edits: #{reason}"}
@@ -748,26 +771,37 @@ defmodule CodingAgent.Tools.Lsp do
 
   defp apply_code_action(ctx, conn, %{"command" => command} = action) when is_binary(command) do
     with {:ok, applied, details} <- execute_command(ctx, conn, action) do
-      {:ok, "Applied #{inspect(action["title"])}:\n" <> applied, details}
+      {:ok, action_heading(action, details) <> applied, details}
     end
   end
 
   defp apply_code_action(ctx, conn, action) do
     action = maybe_resolve(ctx, conn, action)
 
-    with {:ok, ops} <- WorkspaceEdit.plan(action["edit"]),
-         {:ok, edit_text, edit_details} <- maybe_apply(ctx, conn, ops),
-         {:ok, command_text, command_details} <- maybe_command(ctx, conn, action["command"]) do
-      if ops == [] and is_nil(action["command"]) do
-        {:ok, "Action #{inspect(action["title"])} has no workspace edit or command to apply",
-         %{server: to_string(conn.server.id), applied: false, success: false}}
-      else
-        details = merge_apply_details(edit_details, command_details)
+    with {:ok, ops} <- WorkspaceEdit.plan(action["edit"]) do
+      case maybe_apply(ctx, conn, ops) do
+        {:ok, edit_text, edit_details} ->
+          {:ok, command_text, command_details} = maybe_command(ctx, conn, action["command"])
 
-        {:ok, "Applied #{inspect(action["title"])}:\n" <> edit_text <> command_text,
-         Map.put(details, :server, to_string(conn.server.id))}
+          if ops == [] and is_nil(action["command"]) do
+            {:ok, "Action #{inspect(action["title"])} has no workspace edit or command to apply",
+             %{server: to_string(conn.server.id), applied: false, success: false}}
+          else
+            details = merge_apply_details(edit_details, command_details)
+
+            {:ok, action_heading(action, details) <> edit_text <> command_text,
+             Map.put(details, :server, to_string(conn.server.id))}
+          end
+
+        error ->
+          error
       end
     end
+  end
+
+  defp action_heading(action, details) do
+    verb = if details[:success] == false, do: "Failed", else: "Applied"
+    "#{verb} #{inspect(action["title"])}:\n"
   end
 
   defp maybe_resolve(ctx, conn, action) do
@@ -797,42 +831,126 @@ defmodule CodingAgent.Tools.Lsp do
 
   defp maybe_command(_ctx, _conn, _command), do: {:ok, "", %{}}
 
-  # Commands commonly answer by sending `workspace/applyEdit`; those edits are
-  # captured by the manager during this request and applied here.
+  # Commands may send `workspace/applyEdit` before answering. Apply each edit
+  # before acknowledging it, so server commands can observe their actual writes.
   defp execute_command(ctx, conn, command) do
     params = %{"command" => command["command"], "arguments" => command["arguments"] || []}
 
-    result =
-      run_abortable(ctx, fn ->
-        ServerManager.request_with_edits(conn.session_id, "workspace/executeCommand", params,
-          timeout_ms: remaining(ctx),
-          on_timeout: :cancel
-        )
+    {:ok, receipts} = Agent.start_link(fn -> [] end)
+    on_checkpoint = Keyword.get(ctx.opts, :on_checkpoint)
+
+    opts =
+      Keyword.put(ctx.opts, :on_checkpoint, fn checkpoint ->
+        if checkpoint do
+          details = CheckpointGuard.put_details(%{applied: false, changed_files: []}, checkpoint)
+          Agent.update(receipts, &[{:ok, {"", details}} | &1])
+        end
+
+        if on_checkpoint, do: on_checkpoint.(checkpoint)
       end)
 
-    with {:ok, _result, edits} <- response(result, ctx, conn, "workspace/executeCommand"),
-         {:ok, text, details} <- apply_captured(ctx, conn, edits) do
-      {:ok, text <> "  Executed command: #{command["command"]}", details}
+    ctx = %{ctx | opts: opts}
+
+    try do
+      result =
+        run_abortable(ctx, fn ->
+          ServerManager.request_with_edits(conn.session_id, "workspace/executeCommand", params,
+            timeout_ms: remaining(ctx),
+            on_timeout: :cancel,
+            apply_edit: fn edit ->
+              conn = Map.put(conn, :documents, Client.documents(conn.pid))
+
+              outcome =
+                case WorkspaceEdit.plan(edit) do
+                  {:ok, ops} ->
+                    case maybe_apply(ctx, conn, ops) do
+                      {:ok, text, details} -> {:ok, {text, details}}
+                      {:partial_error, reason, details} -> {:partial_error, reason, details}
+                      {:error, _} = error -> error
+                    end
+
+                  {:error, _} = error ->
+                    error
+                end
+
+              Agent.update(receipts, &[outcome | &1])
+
+              case outcome do
+                {:partial_error, reason, _details} -> {:error, reason}
+                other -> other
+              end
+            end
+          )
+        end)
+
+      {text, details, failures} = receipts |> Agent.get(&Enum.reverse/1) |> apply_receipts()
+
+      response =
+        case result do
+          {:ok, message, _receipts} ->
+            response({:ok, message}, ctx, conn, "workspace/executeCommand")
+
+          other ->
+            response(other, ctx, conn, "workspace/executeCommand")
+        end
+
+      failures =
+        case response do
+          {:ok, _} -> failures
+          {:error, reason} -> failures ++ [error_text(reason)]
+        end
+
+      callback_failures =
+        case result do
+          {:ok, _message, outcomes} -> for {:error, reason} <- outcomes, do: reason
+          _ -> []
+        end
+
+      failures = Enum.uniq(failures ++ callback_failures)
+
+      if failures == [] do
+        {:ok, text <> "  Executed command: #{command["command"]}", details}
+      else
+        {:ok, text <> Enum.join(failures, "\n"), Map.put(details, :success, false)}
+      end
+    after
+      Agent.stop(receipts)
     end
   end
 
-  defp apply_captured(ctx, conn, edits) do
-    Enum.reduce_while(edits, {:ok, "", %{}}, fn edit, {:ok, text, details} ->
-      with {:ok, ops} <- WorkspaceEdit.plan(edit),
-           {:ok, more, more_details} <- maybe_apply(ctx, conn, ops) do
-        {:cont, {:ok, text <> more, merge_apply_details(details, more_details)}}
-      else
-        error -> {:halt, error}
-      end
+  defp apply_receipts(receipts) do
+    Enum.reduce(receipts, {"", %{}, []}, fn
+      {:ok, {more, more_details}}, {text, details, failures} ->
+        {text <> more, merge_apply_details(details, more_details), failures}
+
+      {:partial_error, reason, more_details}, {text, details, failures} ->
+        {text, merge_apply_details(details, more_details), failures ++ [reason]}
+
+      {:error, reason}, {text, details, failures} ->
+        {text, details, failures ++ [reason]}
     end)
   end
 
   defp merge_apply_details(left, right) do
+    checkpoints = Enum.uniq(checkpoint_ids(left) ++ checkpoint_ids(right))
+
     Map.merge(left, right, fn
       :changed_files, a, b -> Enum.uniq(a ++ b)
+      :applied, a, b -> a or b
+      :success, a, b -> a and b
       _key, _a, b -> b
     end)
+    |> then(fn details ->
+      case checkpoints do
+        [] -> details
+        [id] -> details |> Map.put(:checkpoint_ids, [id]) |> Map.put(:checkpoint_id, id)
+        ids -> details |> Map.put(:checkpoint_ids, ids) |> Map.delete(:checkpoint_id)
+      end
+    end)
   end
+
+  defp checkpoint_ids(details),
+    do: Map.get(details, :checkpoint_ids, List.wrap(Map.get(details, :checkpoint_id)))
 
   defp diagnostics(ctx) do
     with_file(ctx, fn conn ->
@@ -1042,7 +1160,13 @@ defmodule CodingAgent.Tools.Lsp do
     key = {ctx.scope, server.id, root}
 
     result =
-      with {:ok, pid} <- Client.ensure(key, server, Keyword.get(ctx.opts, :session_pid)),
+      with {:ok, pid} <-
+             Client.ensure(
+               key,
+               server,
+               Keyword.get(ctx.opts, :session_pid),
+               Keyword.get(ctx.opts, :session_key)
+             ),
            {:ok, conn} <- Client.sync(pid, path, remaining(ctx)) do
         case fun.(Map.merge(conn, %{pid: pid, root: root, path: path})) do
           {:error, :session_lost} = lost ->
@@ -1091,7 +1215,8 @@ defmodule CodingAgent.Tools.Lsp do
           case Client.ensure(
                  {ctx.scope, server.id, ctx.cwd},
                  server,
-                 Keyword.get(ctx.opts, :session_pid)
+                 Keyword.get(ctx.opts, :session_pid),
+                 Keyword.get(ctx.opts, :session_key)
                ) do
             {:ok, pid} -> [{server, pid}]
             {:error, _} -> []
@@ -1374,11 +1499,14 @@ defmodule CodingAgent.Tools.Lsp do
   defp kind_name(_kind), do: "Symbol"
 
   defp result(text, details, ctx) do
-    if byte_size(text) <= @max_output_bytes do
-      %AgentToolResult{content: [%TextContent{text: text}], details: details}
-    else
-      spill(text, details, ctx)
-    end
+    result =
+      if byte_size(text) <= @max_output_bytes do
+        %AgentToolResult{content: [%TextContent{text: text}], details: details}
+      else
+        spill(text, details, ctx)
+      end
+
+    %{result | is_error: details[:success] == false}
   end
 
   defp spill(text, details, ctx) do

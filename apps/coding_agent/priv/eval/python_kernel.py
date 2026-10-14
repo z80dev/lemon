@@ -25,6 +25,7 @@ import os
 import platform
 import queue
 import signal
+import subprocess
 import sys
 import threading
 import traceback
@@ -39,11 +40,14 @@ def main():
     marker = ("\x1eLEMONEVAL:" + token + ":").encode("ascii")
 
     group_leader = False
-    try:
-        os.setpgrp()
+    if hasattr(os, "setpgrp"):
+        try:
+            os.setpgrp()
+        except OSError:
+            pass
         group_leader = os.getpgrp() == os.getpid()
-    except OSError:
-        pass
+        if not group_leader:
+            raise RuntimeError("could not isolate the Python kernel process group")
 
     command_fd = os.dup(0)
     devnull = os.open(os.devnull, os.O_RDONLY)
@@ -83,6 +87,11 @@ def main():
         # The host closed the pipe: nothing can read results any more.
         if group_leader:
             os.killpg(os.getpgrp(), signal.SIGKILL)
+        elif os.name == "nt":
+            subprocess.run(
+                ["taskkill", "/F", "/T", "/PID", str(os.getpid())],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False,
+            )
         os._exit(0)
 
     threading.Thread(target=read_commands, name="lemon-eval-commands", daemon=True).start()

@@ -3,9 +3,9 @@ defmodule CodingAgent.Eval.KernelSupervisor do
   Supervises `eval` kernel slots (`CodingAgent.Eval.Kernel`), one per
   `{owner, language}` and registered in `CodingAgent.Eval.Registry`.
 
-  The owner is the coding session id, or `{:cwd, expanded_cwd}` for callers
-  without a session. A slot monitors its owning session pid and kills its
-  kernel when that session exits.
+  The owner is the durable coding session id, or `{:cwd, expanded_cwd}` for
+  standalone callers. Successful executor turns explicitly detach and later
+  rebind the transient Session pid; unexpected owner death still kills the kernel.
   """
 
   use DynamicSupervisor
@@ -29,15 +29,27 @@ defmodule CodingAgent.Eval.KernelSupervisor do
   def ensure_slot(key, opts) do
     case lookup(key) do
       {:ok, pid} ->
-        {:ok, pid}
+        with :ok <- CodingAgent.ToolResources.bind(pid, Keyword.get(opts, :owner_pid)),
+             do: {:ok, pid}
 
       :error ->
-        opts = Keyword.merge(opts, key: key, name: {:via, Registry, {@registry, key}})
+        value = %{
+          session_key: Keyword.get(opts, :session_key),
+          started_at: System.monotonic_time()
+        }
+
+        opts = Keyword.merge(opts, key: key, name: {:via, Registry, {@registry, key, value}})
 
         case DynamicSupervisor.start_child(__MODULE__, {Kernel, opts}) do
-          {:ok, pid} -> {:ok, pid}
-          {:error, {:already_started, pid}} -> {:ok, pid}
-          {:error, reason} -> {:error, reason}
+          {:ok, pid} ->
+            {:ok, pid}
+
+          {:error, {:already_started, pid}} ->
+            with :ok <- CodingAgent.ToolResources.bind(pid, Keyword.get(opts, :owner_pid)),
+                 do: {:ok, pid}
+
+          {:error, reason} ->
+            {:error, reason}
         end
     end
   end

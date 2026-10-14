@@ -161,6 +161,7 @@ defmodule CodingAgent.Tools.Read do
     path = Map.get(params, "path", "")
     offset = Map.get(params, "offset")
     limit = Map.get(params, "limit")
+    opts = Keyword.put(opts, :raw, Map.get(view, :raw, false))
 
     with :ok <- validate_params(path, offset, limit),
          {:ok, resolved_path} <- resolve_path(path, cwd, opts),

@@ -484,12 +484,20 @@ defmodule CodingAgent.Tools.Grep do
   defp build_result_from_match_refs(match_refs, opts) do
     total_match_count = length(match_refs)
     shown_refs = match_refs |> Enum.drop(opts.skip) |> Enum.take(opts.max_results)
-    shown_count = length(shown_refs)
     match_limit_reached? = total_match_count > opts.skip + opts.max_results
 
-    {formatted_lines, lines_truncated?} = format_match_refs(shown_refs, opts)
+    {formatted_lines, lines_truncated?, shown_count, byte_limit_reached?} =
+      format_match_refs(shown_refs, opts)
+
     raw_output = Enum.join(formatted_lines, "\n")
     truncation = truncate_head_output(raw_output, opts.max_bytes)
+
+    truncation =
+      if byte_limit_reached?,
+        do: %{truncation | truncated: true, truncated_by: :bytes},
+        else: truncation
+
+    more? = total_match_count > opts.skip + shown_count
 
     notices =
       []
@@ -499,11 +507,13 @@ defmodule CodingAgent.Tools.Grep do
       )
       |> maybe_add_notice(
         match_limit_reached?,
-        "#{opts.max_results} matches limit reached: showing matches #{opts.skip + 1}-#{opts.skip + shown_count} of #{total_match_count}. Use skip=#{opts.skip + opts.max_results} for the next page, or refine pattern"
+        "#{opts.max_results} matches limit reached: showing matches #{opts.skip + 1}-#{opts.skip + shown_count} of #{total_match_count}. Use skip=#{opts.skip + shown_count} for the next page, or refine pattern"
       )
       |> maybe_add_notice(
         truncation.truncated,
-        "#{format_size(opts.max_bytes)} limit reached. Narrow path/pattern or use read on the reported file and line"
+        "#{format_size(opts.max_bytes)} limit reached. " <>
+          if(more?, do: "Use skip=#{opts.skip + shown_count} for the next page; ", else: "") <>
+          "use read on the reported file and line for full text"
       )
       |> maybe_add_notice(
         lines_truncated?,
@@ -540,7 +550,7 @@ defmodule CodingAgent.Tools.Grep do
         truncated: match_limit_reached? or truncation.truncated,
         match_limit_reached: if(match_limit_reached?, do: opts.max_results),
         skip: if(opts.skip > 0, do: opts.skip),
-        next_skip: if(match_limit_reached?, do: opts.skip + opts.max_results),
+        next_skip: if(more?, do: opts.skip + shown_count),
         truncation: if(truncation.truncated, do: truncation),
         lines_truncated: if(lines_truncated?, do: true)
       }
@@ -563,16 +573,43 @@ defmodule CodingAgent.Tools.Grep do
   defp format_match_refs(match_refs, opts) do
     directory_search? = directory_search?(opts.path)
 
-    {lines, _cache, lines_truncated?} =
-      Enum.reduce(match_refs, {[], %{}, false}, fn match_ref,
-                                                   {acc_lines, cache, any_truncated?} ->
-        {block_lines, next_cache, block_truncated?} =
+    {blocks, _cache, lines_truncated?, shown, _bytes, byte_limited?} =
+      Enum.reduce_while(match_refs, {[], %{}, false, 0, 0, false}, fn match_ref,
+                                                                      {blocks, cache, truncated?,
+                                                                       shown, bytes, _} ->
+        {lines, cache, line_truncated?} =
           format_match_ref(match_ref, opts, cache, directory_search?)
 
-        {acc_lines ++ block_lines, next_cache, any_truncated? or block_truncated?}
+        block = Enum.join(lines, "\n")
+        size = byte_size(block) + if(shown == 0, do: 0, else: 1)
+
+        cond do
+          bytes + size <= opts.max_bytes ->
+            {:cont,
+             {[block | blocks], cache, truncated? or line_truncated?, shown + 1, bytes + size,
+              false}}
+
+          shown == 0 ->
+            {lines, cache, _} =
+              format_match_ref(match_ref, %{opts | context_lines: 0}, cache, directory_search?)
+
+            line = Enum.join(lines, "\n")
+            prefix = binary_part(line, 0, min(byte_size(line), opts.max_bytes))
+
+            prefix =
+              case :unicode.characters_to_binary(prefix) do
+                text when is_binary(text) -> text
+                {:incomplete, text, _} -> text
+              end
+
+            {:halt, {[prefix], cache, true, 1, byte_size(prefix), true}}
+
+          true ->
+            {:halt, {blocks, cache, truncated?, shown, bytes, true}}
+        end
       end)
 
-    {lines, lines_truncated?}
+    {Enum.reverse(blocks), lines_truncated?, shown, byte_limited?}
   end
 
   defp directory_search?(path) do

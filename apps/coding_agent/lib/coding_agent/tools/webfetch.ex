@@ -4,7 +4,8 @@ defmodule CodingAgent.Tools.WebFetch do
 
   Fetches content from a URL with SSRF protections, readability extraction,
   optional Firecrawl fallback, and structured JSON output.
-  PDF responses are converted to page text with the `read` PDF backends.
+  PDF responses use system PDF backends or an operator-selected `:pdf_python`;
+  project/ancestor virtual environments are never auto-discovered or probed.
   GitHub blob URLs fetch raw file contents; issue and pull request URLs render
   through the public REST API (see `CodingAgent.Tools.WebFetchGitHub`).
   Other binary responses are rejected instead of being treated as readable text.
@@ -542,7 +543,7 @@ defmodule CodingAgent.Tools.WebFetch do
            :ok <- File.chmod(dir, 0o700),
            :ok <- File.write(path, body),
            {:ok, %{text: text, backend: backend}} <-
-             ReadPdf.extract_text(path, runtime.cwd, [], nil) do
+             ReadPdf.extract_text(path, runtime.cwd, runtime.pdf_opts, nil) do
         {:ok, %{text: text, title: nil, extractor: "pdf:#{backend}"}}
       else
         {:error, reason} when is_binary(reason) -> {:error, reason}
@@ -1146,6 +1147,7 @@ defmodule CodingAgent.Tools.WebFetch do
 
     %{
       cwd: Keyword.get_lazy(opts, :cwd, &File.cwd!/0),
+      pdf_opts: Keyword.take(opts, [:pdf_python]),
       enabled: truthy?(get_map_value(fetch_cfg, :enabled, true)),
       max_chars:
         get_map_value(fetch_cfg, :max_chars, @default_fetch_max_chars)

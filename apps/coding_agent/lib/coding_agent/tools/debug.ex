@@ -147,6 +147,7 @@ defmodule CodingAgent.Tools.Debug do
 
       call_opts =
         [owner: Keyword.get(opts, :session_pid), timeout_ms: timeout_ms, signal: signal]
+        |> put_opt(:session_key, Keyword.get(opts, :session_key))
         |> put_opt(:idle_timeout_ms, Keyword.get(opts, :debug_idle_timeout_ms))
 
       key
@@ -212,6 +213,11 @@ defmodule CodingAgent.Tools.Debug do
          {:ok, host} <- optional_string(params, "host"),
          :ok <- require_attach_target(pid, port, adapter_name),
          {:ok, adapter} <- Adapters.select_attach(adapter_name, port, adapter_opts(opts)) do
+      adapter =
+        if adapter.connect_mode == :remote,
+          do: Map.merge(adapter, %{host: host || "127.0.0.1", port: port}),
+          else: adapter
+
       {:ok,
        %{action: "attach", adapter: adapter, cwd: command_cwd, pid: pid, port: port, host: host}}
     end
@@ -362,8 +368,18 @@ defmodule CodingAgent.Tools.Debug do
     end
   end
 
-  defp require_attach_target(nil, nil, nil), do: {:error, "attach requires pid or port"}
-  defp require_attach_target(_pid, _port, _adapter), do: :ok
+  defp require_attach_target(nil, nil, _adapter), do: {:error, "attach requires pid or port"}
+
+  defp require_attach_target(pid, port, _adapter) when not is_nil(pid) and not is_nil(port),
+    do: {:error, "attach accepts either pid or port, not both"}
+
+  defp require_attach_target(pid, nil, _adapter) when is_integer(pid) and pid > 0, do: :ok
+
+  defp require_attach_target(nil, port, _adapter) when is_integer(port) and port in 1..65535,
+    do: :ok
+
+  defp require_attach_target(_, _, _),
+    do: {:error, "attach requires a positive pid or port in 1..65535"}
 
   defp program_exists(:missing, program, cwd),
     do: {:error, "launch program not found: #{display_path(program, cwd)}"}

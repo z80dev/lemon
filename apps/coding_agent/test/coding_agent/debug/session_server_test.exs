@@ -1,6 +1,8 @@
 defmodule CodingAgent.Debug.SessionServerTest do
   use ExUnit.Case, async: true
 
+  import CodingAgent.AsyncHelpers
+
   alias CodingAgent.Debug.SessionServer
   alias LemonAgent.AbortSignal
 
@@ -65,7 +67,7 @@ defmodule CodingAgent.Debug.SessionServerTest do
 
   defp stop_quietly(pid) do
     ref = Process.monitor(pid)
-    Process.exit(pid, :shutdown)
+    _ = DynamicSupervisor.terminate_child(CodingAgent.Debug.Supervisor, pid)
 
     receive do
       {:DOWN, ^ref, _, _, _} -> :ok
@@ -79,14 +81,6 @@ defmodule CodingAgent.Debug.SessionServerTest do
     case System.cmd("ps", ["-o", "stat=", "-p", Integer.to_string(pid)], stderr_to_stdout: true) do
       {stat, 0} -> not String.starts_with?(String.trim(stat), "Z")
       _ -> false
-    end
-  end
-
-  defp eventually(fun, attempts \\ 50) do
-    cond do
-      fun.() -> true
-      attempts == 0 -> false
-      true -> Process.sleep(100) && eventually(fun, attempts - 1)
     end
   end
 
@@ -214,20 +208,29 @@ defmodule CodingAgent.Debug.SessionServerTest do
   end
 
   test "an aborted wait returns promptly and keeps the session", ctx do
-    assert {:ok, %{state: :stopped}} = launch(ctx, %{"fakeMode" => "hang"})
+    assert {:ok, %{state: :stopped, snapshot: %{id: id, process_id: debuggee}}} =
+             launch(ctx, %{"fakeMode" => "hang"})
+
     signal = AbortSignal.new()
+    server = SessionServer.whereis(ctx.key)
+    :erlang.trace(server, true, [:send, {:tracer, self()}])
 
     task =
       Task.async(fn ->
         call(ctx.key, %{action: "continue"}, timeout_ms: 30_000, signal: signal)
       end)
 
-    Process.sleep(200)
+    assert_receive {:trace, ^server, :send, {:"$gen_call", _from, {:request, "continue", _args}},
+                    _client},
+                   5_000
+
+    :erlang.trace(server, false, [:send])
     AbortSignal.abort(signal)
 
-    assert {:aborted, message} = Task.await(task, 5_000)
-    assert message =~ "cancelled"
-    assert {:ok, %{snapshot: %{status: :running}}} = call(ctx.key, %{action: "status"})
+    assert {:aborted, _message} = Task.await(task, 5_000)
+
+    assert {:ok, %{snapshot: %{id: ^id, process_id: ^debuggee}}} =
+             call(ctx.key, %{action: "status"})
   end
 
   test "a missing initialized event times out and kills the adapter", ctx do
@@ -253,7 +256,7 @@ defmodule CodingAgent.Debug.SessionServerTest do
     assert os_alive?(debuggee)
 
     assert {:ok, %{snapshot: %{status: :terminated}}} = call(ctx.key, %{action: "terminate"})
-    assert eventually(fn -> not os_alive?(debuggee) end)
+    assert_eventually(fn -> not os_alive?(debuggee) end, timeout: 5_000)
     assert {"disconnect", %{"terminateDebuggee" => true}} = List.last(commands(ctx.log))
 
     assert {:ok, %{snapshot: %{breakpoints: [%{line: 4}]}}} = call(ctx.key, %{action: "status"})
@@ -263,7 +266,7 @@ defmodule CodingAgent.Debug.SessionServerTest do
   end
 
   test "the owning coding session exiting kills the adapter and debuggee", ctx do
-    owner = spawn(fn -> Process.sleep(:infinity) end)
+    owner = spawn(fn -> receive do: (:stop -> :ok) end)
     assert {:ok, %{snapshot: %{process_id: debuggee}}} = launch(ctx, %{}, owner: owner)
     server = SessionServer.whereis(ctx.key)
     ref = Process.monitor(server)
@@ -271,7 +274,15 @@ defmodule CodingAgent.Debug.SessionServerTest do
     Process.exit(owner, :kill)
 
     assert_receive {:DOWN, ^ref, :process, ^server, _}, 5_000
-    assert eventually(fn -> not os_alive?(debuggee) end)
+    assert_eventually(fn -> not os_alive?(debuggee) end, timeout: 5_000)
+  end
+
+  test "adapter crash kills a launched debuggee even after reparenting", ctx do
+    assert {:ok, %{snapshot: %{process_id: debuggee}}} = launch(ctx)
+    assert os_alive?(debuggee)
+    assert {:error, _} = call(ctx.key, %{action: "custom_request", command: "crash"})
+    assert_eventually(fn -> not os_alive?(debuggee) end, timeout: 5_000)
+    assert {:ok, %{snapshot: %{status: :terminated}}} = call(ctx.key, %{action: "status"})
   end
 
   test "an idle server stops and kills its adapter", ctx do
@@ -280,7 +291,7 @@ defmodule CodingAgent.Debug.SessionServerTest do
     ref = Process.monitor(server)
 
     assert_receive {:DOWN, ^ref, :process, ^server, :normal}, 5_000
-    assert eventually(fn -> not os_alive?(debuggee) end)
+    assert_eventually(fn -> not os_alive?(debuggee) end, timeout: 5_000)
   end
 
   test "read-only actions without a server do not start one", ctx do

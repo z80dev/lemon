@@ -4,9 +4,15 @@ defmodule CodingAgent.Session.Rewind do
 
   Rewind moves the cursor to immediately before a selected user message. The
   abandoned suffix remains in the session tree, but is no longer sent to the
-  model. Files restore from the first recorded pre-mutation snapshot for each
-  path in that suffix. Confirmation binds the branch revision and current file
-  contents; it is stored server-side, expires after five minutes and is single use.
+  model. Recorded mutations restore in reverse chronological order, including
+  overlapping file and directory snapshots. Confirmation binds the branch revision
+  and current tree contents; it expires after five minutes and is single use.
+  Arbitrary eval and executing/unknown debug actions remain unrestorable even when
+  they fail or are interrupted. Only explicit debug inspection is exempt; shell-only
+  partial consent does not cover arbitrary code execution.
+  Effect classification unwraps persisted `tool_invoke` targets while matching
+  results by the unchanged outer tool name and call ID. Missing bridge identity
+  remains unrestorable; bridge result metadata cannot claim a pure target.
   """
 
   alias CodingAgent.SessionManager
@@ -15,6 +21,7 @@ defmodule CodingAgent.Session.Rewind do
   @confirmation_table :session_rewinds
   @confirmation_ttl_ms 5 * 60 * 1000
   @mutation_tools ~w(write edit patch apply_patch bash)
+  @debug_inspection_actions ~w(status sessions output threads stack_trace scopes)
   @max_review_commands 100
   @max_command_chars 2048
 
@@ -109,7 +116,7 @@ defmodule CodingAgent.Session.Rewind do
              "allowPartialRestore" => allow_partial,
              "prompt" => message_text(target.message),
              "discardedMessages" => Enum.count(suffix, &(&1.type in [:message, :custom_message])),
-             "restorePaths" => Enum.map(plan, & &1.path),
+             "restorePaths" => restore_paths(plan),
              "unrestorableTools" => unavailable
            }), session}
 
@@ -137,6 +144,9 @@ defmodule CodingAgent.Session.Rewind do
         Map.get(confirmation, :allow_partial_restore) != allow_partial or
         Map.get(confirmation, :review) != review or confirmation.unavailable != unavailable ->
         {:error, :stale_confirmation}
+
+      restore_files and Enum.any?(unavailable, &(&1 in ["eval", "debug"])) ->
+        {:error, :unrestorable_effects}
 
       restore_files and Enum.any?(unavailable, &(&1 != "bash")) ->
         {:error, :checkpoint_missing}
@@ -188,7 +198,7 @@ defmodule CodingAgent.Session.Rewind do
                "entryId" => target.id,
                "prompt" => message_text(target.message),
                "leafId" => session.leaf_id,
-               "restoredPaths" => Enum.map(plan, & &1.path)
+               "restoredPaths" => restore_paths(plan)
              }, session}
 
           {:error, _} ->
@@ -203,7 +213,7 @@ defmodule CodingAgent.Session.Rewind do
   defp backup_current_files(_session, []), do: {:ok, nil}
 
   defp backup_current_files(session, plan) do
-    case Checkpoint.create_filesystem(session.header.id, Enum.map(plan, & &1.path),
+    case Checkpoint.create_filesystem(session.header.id, restore_paths(plan),
            cwd: session.header.cwd,
            tool: "rewind",
            metadata: %{reason: "rewind_rollback"}
@@ -252,8 +262,10 @@ defmodule CodingAgent.Session.Rewind do
   end
 
   defp restoration_review(session, suffix) do
-    {plan, unavailable} = restoration_plan(session, suffix)
-    commands = shell_commands(suffix)
+    calls = persisted_calls(suffix)
+    index = call_index(calls)
+    {plan, unavailable} = restoration_plan(session, suffix, calls, index)
+    commands = shell_commands(suffix, calls, index)
     unavailable = if commands == [], do: unavailable, else: Enum.uniq(unavailable ++ ["bash"])
     count = length(commands)
 
@@ -269,38 +281,26 @@ defmodule CodingAgent.Session.Rewind do
     {plan, unavailable, review}
   end
 
-  defp shell_commands(suffix) do
+  defp shell_commands(suffix, invocations, index) do
     calls =
-      Enum.flat_map(suffix, fn entry ->
-        case field(entry.message, :content) do
-          blocks when is_list(blocks) ->
-            blocks
-            |> Enum.with_index()
-            |> Enum.flat_map(fn {block, index} ->
-              if field(block, :type) in [:tool_call, "tool_call"] and
-                   field(block, :name) == "bash" do
-                id = field(block, :id) || {:entry, entry.id, index}
-                [{id, field(field(block, :arguments), :command)}]
-              else
-                []
-              end
-            end)
-
-          _ ->
-            []
-        end
-      end)
+      invocations
+      |> Enum.filter(&(&1.name == "bash"))
+      |> Enum.map(&{{&1.outer_name, &1.id}, field(&1.arguments, :command)})
 
     call_ids = MapSet.new(calls, &elem(&1, 0))
 
     missing =
       Enum.flat_map(suffix, fn entry ->
         message = entry.message
-        id = field(message, :tool_call_id) || {:result, entry.id}
+
+        identity =
+          {field(message, :tool_name), field(message, :tool_call_id) || {:result, entry.id}}
+
+        invocation = result_invocation(message, index)
 
         if field(message, :role) in [:tool_result, "tool_result"] and
-             field(message, :tool_name) == "bash" and not MapSet.member?(call_ids, id),
-           do: [{id, nil}],
+             invocation.name == "bash" and not MapSet.member?(call_ids, identity),
+           do: [{identity, nil}],
            else: []
       end)
 
@@ -326,51 +326,63 @@ defmodule CodingAgent.Session.Rewind do
   defp command_review(_),
     do: %{display: "[shell command unavailable in persisted history]", complete?: false}
 
-  defp restoration_plan(session, suffix) do
-    mutating_calls =
-      Enum.flat_map(suffix, fn entry ->
-        case field(entry.message, :content) do
-          blocks when is_list(blocks) -> Enum.filter(blocks, &mutating_call?/1)
-          _ -> []
-        end
-      end)
+  defp restoration_plan(session, suffix, calls, index) do
+    mutating_calls = Enum.filter(calls, &mutating_call?/1)
 
-    mutating_ids = MapSet.new(mutating_calls, &field(&1, :id))
+    mutating_ids = MapSet.new(mutating_calls, &{&1.outer_name, &1.id})
 
     {paths, unavailable} =
-      Enum.reduce(suffix, {%{}, []}, fn entry, {paths, unavailable} ->
+      Enum.reduce(suffix, {[], []}, fn entry, {paths, unavailable} ->
         message = entry.message || %{}
-        name = field(message, :tool_name)
+        invocation = result_invocation(message, index)
+        name = invocation.name
 
         if entry.type == :message and field(message, :role) in [:tool_result, "tool_result"] do
           details = field(message, :details) || %{}
-          checkpoint_id = field(details, :checkpoint_id)
+
+          checkpoint_ids =
+            field(details, :checkpoint_ids) || List.wrap(field(details, :checkpoint_id))
+
+          debug_arguments = invocation.arguments
 
           cond do
-            is_binary(checkpoint_id) ->
-              case checkpoint_files(checkpoint_id, session.header.cwd) do
-                {:ok, files} ->
-                  paths =
-                    Enum.reduce(files, paths, fn snapshot, acc ->
-                      Map.put_new(acc, snapshot.path, %{
-                        checkpoint_id: checkpoint_id,
-                        path: snapshot.path,
-                        snapshot_digest: digest(snapshot)
-                      })
-                    end)
+            name in ["eval", "tool_invoke"] or
+                (name == "debug" and not debug_inspection?(debug_arguments)) ->
+              {paths, [name | unavailable]}
 
-                  {paths, unavailable}
+            is_list(checkpoint_ids) and checkpoint_ids != [] ->
+              Enum.reduce(checkpoint_ids, {paths, unavailable}, fn checkpoint_id,
+                                                                   {paths, unavailable} ->
+                case checkpoint_files(checkpoint_id, session.header.cwd) do
+                  {:ok, files} ->
+                    paths =
+                      Enum.reduce(files, paths, fn snapshot, acc ->
+                        [
+                          %{
+                            checkpoint_id: checkpoint_id,
+                            path: snapshot.path,
+                            snapshot_digest: digest(snapshot)
+                          }
+                          | acc
+                        ]
+                      end)
 
-                {:error, _} ->
-                  {paths, [name || "unknown" | unavailable]}
-              end
+                    {paths, unavailable}
+
+                  {:error, _} ->
+                    {paths, [name || "unknown" | unavailable]}
+                end
+              end)
 
             name in ["ast_grep", "lsp"] and
-                MapSet.member?(mutating_ids, field(message, :tool_call_id)) ->
+                MapSet.member?(
+                  mutating_ids,
+                  {field(message, :tool_name), field(message, :tool_call_id)}
+                ) ->
               # A failed multi-file AST replacement or LSP edit may already have written some paths.
               {paths, [name | unavailable]}
 
-            name in @mutation_tools and field(message, :is_error) != true ->
+            name in @mutation_tools ->
               {paths, [name | unavailable]}
 
             true ->
@@ -381,32 +393,95 @@ defmodule CodingAgent.Session.Rewind do
         end
       end)
 
-    result_ids = MapSet.new(suffix, fn entry -> field(entry.message, :tool_call_id) end)
+    result_ids =
+      suffix
+      |> Enum.filter(
+        &(field(&1.message, :role) in [:tool_result, "tool_result"] and
+            is_binary(field(&1.message, :tool_call_id)))
+      )
+      |> MapSet.new(&{field(&1.message, :tool_name), field(&1.message, :tool_call_id)})
 
     interrupted =
       Enum.flat_map(mutating_calls, fn call ->
-        if MapSet.member?(result_ids, field(call, :id)),
+        if MapSet.member?(result_ids, {call.outer_name, call.id}),
           do: [],
-          else: [field(call, :name)]
+          else: [call.name]
       end)
 
-    {paths |> Map.values() |> Enum.sort_by(& &1.path),
-     (Enum.reverse(unavailable) ++ interrupted) |> Enum.uniq()}
+    {paths, (Enum.reverse(unavailable) ++ interrupted) |> Enum.uniq()}
   end
 
   defp mutating_call?(call) do
-    arguments = field(call, :arguments)
+    name = call.name
+    arguments = call.arguments
 
-    field(call, :type) in [:tool_call, "tool_call"] and
-      (field(call, :name) in @mutation_tools or
-         (field(call, :name) == "ast_grep" and field(arguments, :action) == "replace" and
-            field(arguments, :dry_run) == false) or
-         (field(call, :name) == "lsp" and field(arguments, :apply) == true))
+    name in @mutation_tools or name in ["eval", "tool_invoke"] or
+      (name == "debug" and not debug_inspection?(arguments)) or
+      (name == "ast_grep" and field(arguments, :action) == "replace" and
+         field(arguments, :dry_run) == false) or
+      (name == "lsp" and field(arguments, :apply) == true)
   end
 
-  defp checkpoint_files(id, cwd) do
+  defp persisted_calls(suffix) do
+    Enum.flat_map(suffix, fn entry ->
+      case field(entry.message, :content) do
+        blocks when is_list(blocks) ->
+          blocks
+          |> Enum.with_index()
+          |> Enum.flat_map(fn {block, position} ->
+            if field(block, :type) in [:tool_call, "tool_call"] do
+              outer_name = field(block, :name)
+              {name, arguments} = effective_invocation(outer_name, field(block, :arguments))
+
+              [
+                %{
+                  id: field(block, :id) || {:entry, entry.id, position},
+                  outer_name: outer_name,
+                  name: name,
+                  arguments: arguments
+                }
+              ]
+            else
+              []
+            end
+          end)
+
+        _ ->
+          []
+      end
+    end)
+  end
+
+  defp effective_invocation("tool_invoke", arguments) do
+    case field(arguments, :name) do
+      name when is_binary(name) ->
+        case String.trim(name) do
+          "" -> {"tool_invoke", nil}
+          target -> {target, field(arguments, :args)}
+        end
+
+      _ ->
+        {"tool_invoke", nil}
+    end
+  end
+
+  defp effective_invocation(name, arguments), do: {name, arguments}
+
+  defp call_index(calls), do: Map.new(calls, &{{&1.outer_name, &1.id}, &1})
+
+  defp result_invocation(message, index) do
+    Map.get(index, {field(message, :tool_name), field(message, :tool_call_id)}) ||
+      %{name: field(message, :tool_name), arguments: field(message, :details)}
+  end
+
+  defp debug_inspection?(arguments),
+    do: field(arguments, :action) in @debug_inspection_actions
+
+  defp checkpoint_files(id, cwd) when is_binary(id) do
     with {:ok, checkpoint} <- Checkpoint.load(id),
-         %{cwd: checkpoint_cwd, files: files} <- get_in(checkpoint, [:state, :filesystem]),
+         %{cwd: checkpoint_cwd, files: files} when is_binary(checkpoint_cwd) and is_list(files) <-
+           get_in(checkpoint, [:state, :filesystem]),
+         true <- Enum.all?(files, &(is_map(&1) and is_binary(Map.get(&1, :path)))),
          true <- Path.expand(checkpoint_cwd) == Path.expand(cwd) do
       {:ok, files}
     else
@@ -414,40 +489,22 @@ defmodule CodingAgent.Session.Rewind do
     end
   end
 
+  defp checkpoint_files(_, _), do: {:error, :invalid_checkpoint_id}
+
   defp fingerprints(_plan, false), do: {:ok, []}
 
   defp fingerprints(plan, true) do
-    Enum.reduce_while(plan, {:ok, []}, fn item, {:ok, acc} ->
-      case file_fingerprint(item.path) do
-        {:ok, value} -> {:cont, {:ok, [{item.path, value} | acc]}}
+    Enum.reduce_while(restore_paths(plan), {:ok, []}, fn path, {:ok, acc} ->
+      case file_fingerprint(path) do
+        {:ok, value} -> {:cont, {:ok, [{path, value} | acc]}}
         {:error, _} = error -> {:halt, error}
       end
     end)
   end
 
-  defp file_fingerprint(path) do
-    case File.lstat(path) do
-      {:error, :enoent} ->
-        {:ok, :missing}
+  defp restore_paths(plan), do: plan |> Enum.map(& &1.path) |> Enum.uniq() |> Enum.sort()
 
-      {:ok, %{type: :regular, mode: mode}} ->
-        hash =
-          path
-          |> File.stream!(65_536, [])
-          |> Enum.reduce(:crypto.hash_init(:sha256), &:crypto.hash_update(&2, &1))
-          |> :crypto.hash_final()
-
-        {:ok, {mode, hash}}
-
-      {:ok, _} ->
-        {:error, :unsupported_file_type}
-
-      {:error, _} ->
-        {:error, :restore_failed}
-    end
-  rescue
-    _ -> {:error, :restore_failed}
-  end
+  defp file_fingerprint(path), do: Checkpoint.filesystem_fingerprint(path)
 
   defp revision(session),
     do: {session.header.id, session.leaf_id, SessionManager.entry_count(session)}

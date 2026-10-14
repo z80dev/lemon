@@ -64,16 +64,26 @@ defmodule CodingAgent.Tools.Lsp.WorkspaceEdit do
   def plan(edit) when is_map(edit), do: {:ok, []}
   def plan(_edit), do: {:error, "Malformed workspace edit"}
 
-  defp plan_change(%{"textDocument" => %{"uri" => uri}, "edits" => edits}, ops, pending) do
+  defp plan_change(
+         %{"textDocument" => %{"uri" => uri} = document, "edits" => edits},
+         ops,
+         pending
+       ) do
     with {:ok, path} <- path(uri),
          {:ok, edits} <- text_edits(edits) do
-      pending =
-        case List.keyfind(pending, path, 0) do
-          nil -> pending ++ [{path, edits}]
-          {^path, existing} -> List.keyreplace(pending, path, 0, {path, existing ++ edits})
-        end
+      version = document["version"]
 
-      {:ok, ops, pending}
+      case List.keyfind(pending, path, 0) do
+        nil ->
+          {:ok, ops, pending ++ [{path, %{edits: edits, version: version}}]}
+
+        {^path, %{version: ^version} = existing} ->
+          updated = %{existing | edits: existing.edits ++ edits}
+          {:ok, ops, List.keyreplace(pending, path, 0, {path, updated})}
+
+        _ ->
+          {:error, "Conflicting document versions in workspace edit: #{path}"}
+      end
     end
   end
 
@@ -107,12 +117,13 @@ defmodule CodingAgent.Tools.Lsp.WorkspaceEdit do
     do: {:error, "Unsupported workspace edit change: #{inspect(change, limit: 5)}"}
 
   defp flush(ops, pending, select?) do
-    Enum.reduce(pending, ops, fn {path, edits}, ops ->
-      if select?.(path) and edits != [], do: [text_op(path, edits) | ops], else: ops
+    Enum.reduce(pending, ops, fn {path, %{edits: edits, version: version}}, ops ->
+      if select?.(path) and edits != [], do: [text_op(path, edits, version) | ops], else: ops
     end)
   end
 
-  defp text_op(path, edits), do: %{kind: :text, path: path, edits: edits}
+  defp text_op(path, edits, version \\ nil),
+    do: %{kind: :text, path: path, edits: edits, version: version}
 
   defp text_edits(edits) when is_list(edits) do
     # AnnotatedTextEdit is a TextEdit with an extra annotationId.
@@ -186,12 +197,14 @@ defmodule CodingAgent.Tools.Lsp.WorkspaceEdit do
   @doc """
   Apply planned operations to disk.
 
-  Returns the changed paths, summary lines and checkpoint. On a mid-way
-  failure the error names the operations that were already committed.
+  Returns changed paths, summary lines and checkpoint on success or a mid-way
+  failure. The error receipt retains the preimage of every planned target.
   """
   @spec apply([op()], String.t(), keyword(), reference() | nil, map()) ::
           {:ok, %{changed: [String.t()], applied: [String.t()], checkpoint: map() | nil}}
           | {:error, String.t()}
+          | {:error, String.t(),
+             %{changed: [String.t()], applied: [String.t()], checkpoint: map() | nil}}
   def apply([], _cwd, _opts, _signal, _meta),
     do: {:ok, %{changed: [], applied: [], checkpoint: nil}}
 
@@ -199,12 +212,25 @@ defmodule CodingAgent.Tools.Lsp.WorkspaceEdit do
     paths = affected_paths(ops)
 
     MutationLock.with_locks(Enum.map(paths, &MutationLock.path_key/1), fn ->
-      with :ok <- validate_targets(ops, cwd, opts),
-           {:ok, prepared} <- prepare(ops),
+      with :ok <- check_deadline(opts),
+           :ok <- validate_targets(ops, cwd, opts),
+           :ok <- validate_versions(ops, opts),
+           {:ok, prepared} <- prepare(ops, opts),
            {:ok, checkpoint} <- CheckpointGuard.before_mutation(paths, cwd, opts, meta),
-           {:ok, changed, applied} <- commit(prepared, cwd, signal) do
-        FileReadTracker.refresh(opts, paths)
-        {:ok, %{changed: changed, applied: applied, checkpoint: checkpoint}}
+           :ok <- notify_checkpoint(checkpoint, opts) do
+        case commit(prepared, cwd, signal, opts) do
+          {:ok, changed, applied} ->
+            FileReadTracker.refresh(opts, paths)
+            {:ok, %{changed: changed, applied: applied, checkpoint: checkpoint}}
+
+          {:error, reason, changed, applied} ->
+            FileReadTracker.refresh(opts, paths)
+
+            if is_nil(checkpoint) and changed == [],
+              do: {:error, reason},
+              else:
+                {:error, reason, %{changed: changed, applied: applied, checkpoint: checkpoint}}
+        end
       else
         {:error, reason} when is_binary(reason) -> {:error, reason}
         {:error, reason} -> {:error, "Cannot apply workspace edit: #{inspect(reason)}"}
@@ -212,13 +238,57 @@ defmodule CodingAgent.Tools.Lsp.WorkspaceEdit do
     end)
   end
 
+  defp check_deadline(opts) do
+    case Keyword.get(opts, :mutation_deadline) do
+      deadline when is_integer(deadline) ->
+        if System.monotonic_time(:millisecond) < deadline,
+          do: :ok,
+          else: {:error, "Workspace edit request expired"}
+
+      _ ->
+        :ok
+    end
+  end
+
+  defp notify_checkpoint(checkpoint, opts) do
+    if callback = Keyword.get(opts, :on_checkpoint), do: callback.(checkpoint)
+    :ok
+  end
+
+  defp validate_versions(ops, opts) do
+    documents = Keyword.get(opts, :lsp_documents, %{})
+
+    Enum.reduce_while(ops, :ok, fn
+      %{kind: :text, path: path, version: version}, :ok when not is_nil(version) ->
+        case Map.get(documents, path) do
+          %{version: ^version} -> {:cont, :ok}
+          _ -> {:halt, {:error, "Stale or unknown document version: #{path}"}}
+        end
+
+      _, :ok ->
+        {:cont, :ok}
+    end)
+  end
+
+  defp check_original(content, path, opts) do
+    case opts |> Keyword.get(:lsp_documents, %{}) |> Map.get(path) do
+      %{digest: digest} ->
+        if :erlang.md5(content) == digest,
+          do: :ok,
+          else: {:error, "File changed since the language server synchronized it: #{path}"}
+
+      _ ->
+        FileReadTracker.check(opts, path, content)
+    end
+  end
+
   defp validate_targets(ops, cwd, opts) do
-    mutation_opts = Keyword.put(opts, :mutation_root, cwd)
+    mutation_opts =
+      opts |> Keyword.put(:mutation_root, cwd) |> Keyword.put(:allow_directories, true)
 
     ops
     |> Enum.flat_map(fn
-      %{kind: :rename, to: to} -> [to]
-      %{kind: :delete} -> []
+      %{kind: :rename, from: from, to: to} -> [from, to]
       %{path: path} -> [path]
     end)
     |> Enum.uniq()
@@ -232,10 +302,10 @@ defmodule CodingAgent.Tools.Lsp.WorkspaceEdit do
 
   # Text edits for files no earlier resource operation touches are computed
   # now, so malformed or overlapping edits fail before any write.
-  defp prepare(ops) do
+  defp prepare(ops, opts) do
     ops
     |> Enum.reduce_while({:ok, [], []}, fn op, {:ok, acc, touched} ->
-      case prepare_op(op, touched) do
+      case prepare_op(op, touched, opts) do
         {:ok, prepared} -> {:cont, {:ok, [prepared | acc], touched ++ touched_by(op)}}
         {:error, _} = error -> {:halt, error}
       end
@@ -246,36 +316,39 @@ defmodule CodingAgent.Tools.Lsp.WorkspaceEdit do
     end
   end
 
-  defp prepare_op(%{kind: :text, path: path, edits: edits} = op, touched) do
+  defp prepare_op(%{kind: :text, path: path, edits: edits} = op, touched, opts) do
     if Enum.any?(touched, &within?(path, &1)) do
       {:ok, op}
     else
       with {:ok, original} <- read(path),
+           :ok <- check_original(original, path, opts),
            {:ok, content} <- edited(original, edits, path) do
         {:ok, Map.merge(op, %{original: original, content: content})}
       end
     end
   end
 
-  defp prepare_op(op, _touched), do: {:ok, op}
+  defp prepare_op(op, _touched, _opts), do: {:ok, op}
 
   defp touched_by(%{kind: :text}), do: []
   defp touched_by(%{kind: :rename, from: from, to: to}), do: [from, to]
   defp touched_by(%{path: path}), do: [path]
 
-  defp commit(prepared, cwd, signal) do
+  defp commit(prepared, cwd, signal, opts) do
     Enum.reduce_while(prepared, {:ok, [], []}, fn op, {:ok, changed, applied} ->
       result =
-        if AbortHelpers.aborted?(signal),
-          do: {:error, "Operation aborted"},
-          else: commit_op(op, cwd)
+        with :ok <- check_deadline(opts) do
+          if AbortHelpers.aborted?(signal),
+            do: {:error, "Operation aborted"},
+            else: commit_op(op, cwd)
+        end
 
       case result do
         {:ok, paths, line} ->
           {:cont, {:ok, changed ++ paths, applied ++ List.wrap(line)}}
 
         {:error, reason} ->
-          {:halt, {:error, partial_error(reason, changed)}}
+          {:halt, {:error, partial_error(reason, changed), changed, applied}}
       end
     end)
   end

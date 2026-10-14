@@ -1608,4 +1608,94 @@ defmodule CodingAgent.Tools.FindIgnoreTest do
       assert "build/artifact.txt" in files
     end
   end
+
+  test "fallback combines local gitignore and hierarchical ignore precedence and negation", %{
+    tmp_dir: tmp_dir
+  } do
+    File.rm_rf!(Path.join(tmp_dir, ".git"))
+    root = Path.join(tmp_dir, "nonrepo")
+    File.mkdir_p!(Path.join(root, "nested/blocked"))
+    File.write!(Path.join(root, ".gitignore"), "*.cache\n")
+    File.write!(Path.join(root, ".ignore"), "!keep.cache\ndrop.cache\n*.txt\nblocked/\n")
+    File.write!(Path.join(root, "nested/.gitignore"), "!git-keep.cache\n!drop.cache\n")
+    File.write!(Path.join(root, "nested/.ignore"), "!visible.txt\n!blocked/keep.txt\n")
+
+    for file <- [
+          "skip.cache",
+          "keep.cache",
+          "nested/git-keep.cache",
+          "nested/drop.cache",
+          "nested/hidden.txt",
+          "nested/visible.txt",
+          "nested/blocked/keep.txt"
+        ] do
+      File.write!(Path.join(root, file), "")
+    end
+
+    assert %AgentToolResult{details: %{files: files}} =
+             Find.execute("c1", %{"pattern" => "*", "type" => "file"}, nil, nil, root,
+               fd_available?: false
+             )
+
+    assert Enum.sort(files) == ["keep.cache", "nested/git-keep.cache", "nested/visible.txt"]
+
+    assert %AgentToolResult{details: %{files: all_files}} =
+             Find.execute(
+               "c2",
+               %{"pattern" => "*", "type" => "file", "no_ignore" => true},
+               nil,
+               nil,
+               root,
+               fd_available?: false
+             )
+
+    assert "skip.cache" in all_files
+    assert "nested/drop.cache" in all_files
+    assert "nested/blocked/keep.txt" in all_files
+  end
+
+  test "fallback preserves Git repository and configured excludes for quoted newline paths", %{
+    tmp_dir: tmp_dir
+  } do
+    File.write!(Path.join(tmp_dir, ".gitignore"), "ignored*.txt\n!ignored-keep*.txt\n")
+    File.write!(Path.join(tmp_dir, ".git/info/exclude"), "info*.txt\n")
+    excludes = Path.join(tmp_dir, ".global-ignore")
+    File.write!(excludes, "global*.txt\n")
+    {_, 0} = System.cmd("git", ["config", "core.excludesFile", excludes], cd: tmp_dir)
+
+    names =
+      for prefix <- ["ignored", "ignored-keep", "info", "global", "visible"] do
+        name = prefix <> "\"quote\nname.txt"
+        File.write!(Path.join(tmp_dir, name), "")
+        {prefix, name}
+      end
+      |> Map.new()
+
+    assert %AgentToolResult{details: %{files: files}} =
+             Find.execute("c1", %{"pattern" => "*.txt"}, nil, nil, tmp_dir, fd_available?: false)
+
+    assert names["visible"] in files
+    assert names["ignored-keep"] in files
+    refute names["ignored"] in files
+    refute names["info"] in files
+    refute names["global"] in files
+  end
+
+  test "fallback ignore double stars span quoted newline directory names", %{tmp_dir: tmp_dir} do
+    File.rm_rf!(Path.join(tmp_dir, ".git"))
+    root = Path.join(tmp_dir, "nonrepo")
+    dir = "nested\n'quoted'"
+    File.mkdir_p!(Path.join(root, dir))
+    File.write!(Path.join(root, ".ignore"), "**/secret*.txt\n")
+    File.write!(Path.join([root, dir, "secret.txt"]), "")
+    File.write!(Path.join([root, dir, "secret.txt\n"]), "")
+    File.write!(Path.join([root, dir, "visible.txt"]), "")
+
+    assert %AgentToolResult{details: %{files: files}} =
+             Find.execute("c1", %{"pattern" => "*", "type" => "file"}, nil, nil, root,
+               fd_available?: false
+             )
+
+    assert Enum.sort(files) == [dir <> "/secret.txt\n", dir <> "/visible.txt"]
+  end
 end

@@ -218,12 +218,13 @@ defmodule CodingAgent.Session.Presentation do
     CodingAgent.SessionManager.session_file_path(cwd, session_id)
   end
 
-  def finalize_session(state) do
+  def finalize_session(state, preserve_tool_resources \\ false) do
     session = state.session
 
     if is_pid(session) and Process.alive?(session) do
       case safe_save_session(session) do
         :ok ->
+          if preserve_tool_resources, do: CodingAgent.Session.handoff_tool_resources(session)
           :ok
 
         {:error, reason} ->

@@ -9,9 +9,20 @@ external-content tools:
 - `webfetch`: extract readable content through registered providers. Guarded
   direct extraction is the default and optionally falls back to Firecrawl.
   Direct extraction converts PDF responses to `=== Page N ===` text with the
-  same backends as `read` (pdftotext, mutool, or Python pypdf/PyMuPDF,
-  including a project `.lemon/read-formats-venv`); without a backend the error
-  names the install options. GitHub `blob/<ref>/<path>` URLs fetch the raw file
+  same system backends as `read` (pdftotext, mutool, or Python pypdf/PyMuPDF
+  on the operator's PATH). Only absolute PATH entries are used; workspace
+  binaries and ancestor `.lemon` trees are excluded, including canonical
+  symlink targets. Normal absolute user-installed toolchain paths outside
+  those project trees remain available. Unlike local `read`, fetching never discovers or
+  probes project/ancestor `.lemon/read-formats-venv` interpreters. An operator
+  may explicitly trust one with `WebFetch.tool(cwd, pdf_python: "/trusted/venv/bin/python3")`;
+  this constructor option is not exposed to model-supplied fetch arguments.
+  Python runs with `-I` for both probing and extraction, excluding cwd,
+  `PYTHONPATH`, and user-site imports. A project backend must be trusted before
+  even a capability probe can execute; permitting `webfetch` does not grant
+  project code execution. Without a backend the error names the install/trust
+  options. Extracted PDF text remains fenced, untrusted web data.
+  GitHub `blob/<ref>/<path>` URLs fetch the raw file
   from `raw.githubusercontent.com`, and `issues/<n>` / `pull/<n>` URLs render
   title, state, labels, body and the first 100 comments from the public REST
   API (unauthenticated, subject to GitHub's anonymous rate limit). All of these

@@ -47,9 +47,12 @@ then definitions, then use.
   cancelled, the kernel and every process it started are killed, and its state
   is lost. The result says so, and the next call starts a fresh kernel and
   reports that it did (`details.kernel_restarted`).
-- **Lifetime.** Kernels are killed when their session ends and after 30 minutes
-  without use. A kernel that exits on its own (for example `os._exit()` or
-  `process.exit()`) reports its exit status; the next call starts fresh.
+- **Lifetime.** State survives successful native executor turns: saving and
+  stopping the transient session process does not end the logical coding session.
+  Its resumed turn reuses the same kernel. Explicit abort/stop, reset/delete,
+  unexpected owner death, or 30 minutes without use dispose of kernels. A root
+  that exits (`os._exit()` or `process.exit()`) also kills its owned process group
+  and reports its exit status; the next call starts fresh.
 
 `details` contains `language`, `title`, `status` (`ok`, `error`, `timeout` or
 `aborted`), `duration_ms`, `kernel_restarted`, `truncated` and

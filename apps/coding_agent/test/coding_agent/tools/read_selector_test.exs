@@ -82,5 +82,6 @@ defmodule CodingAgent.Tools.ReadSelectorTest do
     result = read(tmp_dir, "bundle.zip:a.txt:2-3")
     assert text(result) =~ "2: m2\n3: m3"
     refute text(result) =~ "4: m4"
+    assert text(read(tmp_dir, "bundle.zip:a.txt:2-3:raw")) == "m2\nm3"
   end
 end

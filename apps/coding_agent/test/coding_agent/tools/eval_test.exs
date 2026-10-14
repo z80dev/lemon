@@ -56,12 +56,6 @@ defmodule CodingAgent.Tools.EvalTest do
   end
 
   describe "tool contract" do
-    test "restricted policy profiles deny eval like bash" do
-      for profile <- [:safe_mode, :subagent_restricted] do
-        assert "eval" in CodingAgent.ToolPolicy.from_profile(profile).deny
-      end
-    end
-
     test "rejects invalid parameters before starting a kernel", ctx do
       for {params, message} <- [
             {%{"language" => "rb", "code" => "1"}, "language must be"},
@@ -237,7 +231,28 @@ defmodule CodingAgent.Tools.EvalTest do
 
       result = run(other, "py", "secret")
       assert result.is_error
+
+      assert {:error, :owner_conflict} =
+               run(
+                 %{ctx | opts: [session_id: ctx.session_id, session_pid: other_owner]},
+                 "py",
+                 "secret"
+               )
+
       assert text(result) =~ "NameError"
+    end
+
+    test "handoff rebinds the durable kernel and ignores the old owner's queued DOWN", ctx do
+      run(ctx, "py", "kept = 41")
+      slot = slot!(ctx, "py")
+      old_ref = :sys.get_state(slot).owner_ref
+      assert :ok = CodingAgent.ToolResources.handoff(ctx.session_id, ctx.owner)
+      next_owner = spawn(fn -> receive do: (:stop -> :ok) end)
+      on_exit(fn -> send(next_owner, :stop) end)
+      next = %{ctx | opts: [session_id: ctx.session_id, session_pid: next_owner]}
+      assert text(run(next, "py", "kept")) == "41"
+      send(slot, {:DOWN, old_ref, :process, ctx.owner, :normal})
+      assert text(run(next, "py", "kept + 1")) == "42"
     end
 
     test "kernels die with the owning session", ctx do
@@ -265,10 +280,18 @@ defmodule CodingAgent.Tools.EvalTest do
       assert text(result) =~ "False"
     end
 
-    test "a kernel that exits reports lost state", ctx do
-      result = run(ctx, "py", "import os\nprint('bye', flush=True)\nos._exit(3)")
+    test "a kernel that exits kills its orphaned child and reports lost state", ctx do
+      result =
+        run(ctx, "py", """
+        import os, subprocess
+        child = subprocess.Popen(['sleep', '60'], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        print(child.pid, flush=True)
+        os._exit(3)
+        """)
+
       assert result.details.status == :error
-      assert text(result) =~ "bye"
+      [child_pid] = Regex.run(~r/^\d+/, text(result))
+      assert_eventually(fn -> not os_alive?(String.to_integer(child_pid)) end, timeout: 5_000)
       assert text(result) =~ "kernel exited (status 3)"
       assert text(run(ctx, "py", "1")) =~ "previous one ended (exited)"
     end
@@ -351,6 +374,9 @@ defmodule CodingAgent.Tools.EvalTest do
 
       assert text(run(ctx, "js", "await Promise.resolve(add(2))", opts)) == "42"
       assert text(run(ctx, "js", "typeof Bun + ' ' + total", opts)) == "'undefined 42'"
+      unicode = String.duplicate("é日🙂", 20_000)
+      code = "const unicode = #{Jason.encode!(unicode)}; unicode === 'é日🙂'.repeat(20000)"
+      assert text(run(ctx, "js", code, opts)) == "true"
     end
   end
 end

@@ -206,6 +206,29 @@ defmodule CodingAgent.ToolExecutorTest do
       assert request.action["command"] == "deploy"
       assert request.action["cwd"] == "app"
       refute inspect(request) =~ secret
+
+      changed =
+        ToolExecutor.project_action("bash", put_in(args, ["env", "TOKEN"], "different-value"))
+
+      refute changed["env_digest"] == request.action["env_digest"]
+
+      malformed = Map.put(args, "env", [secret])
+
+      assert :ran =
+               ToolExecutor.execute_with_approval("bash", malformed, fn -> :ran end, context)
+
+      assert_received {:approval_request, request}
+      refute Map.has_key?(request.action, "env")
+      refute inspect(request) =~ secret
+
+      bridge = %{"name" => "bash", "args" => args}
+
+      assert :ran =
+               ToolExecutor.execute_with_approval("tool_invoke", bridge, fn -> :ran end, context)
+
+      assert_received {:approval_request, request}
+      assert request.action["args"]["env_keys"] == ["A", "TOKEN"]
+      refute inspect(request) =~ secret
     end
   end
 

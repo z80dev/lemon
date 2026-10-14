@@ -3,7 +3,7 @@ defmodule CodingAgent.Tools.ReadPdf do
 
   alias CodingAgent.Tools.{ReadFormats, ReadFormatText, ReadFormatCommand}
 
-  @missing "PDF text extraction needs pdftotext (Poppler), mutool (MuPDF), or Python with pypdf/PyMuPDF. Install a backend, or create a project-local venv: python3 -m venv .lemon/read-formats-venv && .lemon/read-formats-venv/bin/python3 -m pip install pypdf. Set :pdf_python to its interpreter when reading outside the project."
+  @missing "PDF text extraction needs pdftotext (Poppler), mutool (MuPDF), or Python with pypdf/PyMuPDF. Install a backend on the operator's PATH, or explicitly trust an interpreter with the :pdf_python tool option. Fetched PDFs never auto-discover project/ancestor .lemon/read-formats-venv interpreters."
 
   @python_probe "import importlib.util; print('pypdf' if importlib.util.find_spec('pypdf') else 'pymupdf' if importlib.util.find_spec('pymupdf') else 'fitz' if importlib.util.find_spec('fitz') else '')"
   @python_read """
@@ -32,18 +32,7 @@ defmodule CodingAgent.Tools.ReadPdf do
   print(json.dumps({'total_pages': total, 'pages': pages}, ensure_ascii=False))
   """
 
-  def backend(cwd, opts \\ []) do
-    cond do
-      executable = System.find_executable("pdftotext") ->
-        {:ok, %{name: :pdftotext, executable: executable}}
-
-      executable = System.find_executable("mutool") ->
-        {:ok, %{name: :mutool, executable: executable}}
-
-      true ->
-        python_backend(cwd, opts, nil)
-    end
-  end
+  def backend(cwd, opts \\ []), do: discover_backend(cwd, opts, nil)
 
   def read(path, params, signal, cwd, opts) do
     with :ok <- ReadFormats.check_input(path, opts),
@@ -69,13 +58,19 @@ defmodule CodingAgent.Tools.ReadPdf do
   end
 
   @doc """
-  Extracts all page text from `path` with the same backends as `read/5`,
-  returning `=== Page N ===` sections for callers that render their own output.
+  Extracts all page text from `path`, returning `=== Page N ===` sections.
+  Unlike local `read/5`, this fetch-facing entrypoint never discovers project
+  interpreters. `:pdf_python` is an explicit operator trust grant, not a model
+  parameter. Otherwise only absolute operator PATH backends outside the project
+  and ancestor `.lemon` trees are considered, including their symlink targets.
+  Python probes and extraction run in isolated mode to exclude project imports.
   """
   @spec extract_text(String.t(), String.t(), keyword(), reference() | nil) ::
           {:ok, %{text: String.t(), backend: atom(), total_pages: pos_integer() | nil}}
           | {:error, String.t()}
   def extract_text(path, cwd, opts, signal) do
+    opts = Keyword.put(opts, :pdf_system_only, true)
+
     with :ok <- ReadFormats.check_input(path, opts),
          {:ok, backend} <- discover_backend(cwd, opts, signal),
          {:ok, document} <- extract(backend, path, %{}, signal),
@@ -101,10 +96,10 @@ defmodule CodingAgent.Tools.ReadPdf do
 
   defp discover_backend(cwd, opts, signal) do
     cond do
-      executable = System.find_executable("pdftotext") ->
+      executable = system_executable("pdftotext", cwd, opts) ->
         {:ok, %{name: :pdftotext, executable: executable}}
 
-      executable = System.find_executable("mutool") ->
+      executable = system_executable("mutool", cwd, opts) ->
         {:ok, %{name: :mutool, executable: executable}}
 
       true ->
@@ -112,15 +107,29 @@ defmodule CodingAgent.Tools.ReadPdf do
     end
   end
 
-  defp python_backend(cwd, opts, signal) do
-    candidates =
-      [Keyword.get(opts, :pdf_python)] ++
-        local_pythons(Path.expand(cwd)) ++ [System.find_executable("python3")]
+  defp system_executable(name, cwd, opts) do
+    if Keyword.get(opts, :pdf_system_only, false),
+      do: ReadFormatCommand.system_executable(name, cwd),
+      else: System.find_executable(name)
+  end
 
-    candidates = candidates |> Enum.reject(&is_nil/1) |> Enum.uniq()
+  defp python_backend(cwd, opts, signal) do
+    system_only? = Keyword.get(opts, :pdf_system_only, false)
+    local = if system_only?, do: [], else: local_pythons(Path.expand(cwd))
+    python_args = if system_only?, do: ["-I"], else: []
+
+    selected =
+      if system_only?,
+        do: ReadFormatCommand.operator_executable(Keyword.get(opts, :pdf_python), cwd),
+        else: Keyword.get(opts, :pdf_python)
+
+    candidates =
+      ([selected] ++ local ++ [system_executable("python3", cwd, opts)])
+      |> Enum.reject(&is_nil/1)
+      |> Enum.uniq()
 
     Enum.reduce_while(candidates, {:error, @missing}, fn executable, _error ->
-      case ReadFormatCommand.run(executable, ["-c", @python_probe], signal,
+      case ReadFormatCommand.run(executable, python_args ++ ["-c", @python_probe], signal,
              timeout_ms: 5000,
              max_bytes: 4096
            ) do
@@ -128,7 +137,9 @@ defmodule CodingAgent.Tools.ReadPdf do
           name = String.trim(name)
 
           if name in ["pypdf", "pymupdf", "fitz"] do
-            {:halt, {:ok, %{name: :python, executable: executable, module: name}}}
+            {:halt,
+             {:ok,
+              %{name: :python, executable: executable, module: name, python_args: python_args}}}
           else
             {:cont, {:error, @missing}}
           end
@@ -150,14 +161,16 @@ defmodule CodingAgent.Tools.ReadPdf do
   end
 
   defp extract(%{name: :python} = backend, path, params, signal) do
-    args = [
-      "-c",
-      @python_read,
-      backend.module,
-      path,
-      Integer.to_string(Map.get(params, "page", 1)),
-      Integer.to_string(Map.get(params, "page_limit", 0))
-    ]
+    args =
+      backend.python_args ++
+        [
+          "-c",
+          @python_read,
+          backend.module,
+          path,
+          Integer.to_string(Map.get(params, "page", 1)),
+          Integer.to_string(Map.get(params, "page_limit", 0))
+        ]
 
     with {:ok, output} <- ReadFormatCommand.run(backend.executable, args, signal),
          {:ok, %{"total_pages" => total, "pages" => pages}} <- Jason.decode(output) do

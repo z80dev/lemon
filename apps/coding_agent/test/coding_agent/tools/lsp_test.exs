@@ -125,16 +125,12 @@ defmodule CodingAgent.Tools.LspTest do
   end
 
   test "code actions list, resolve and execute commands that send applyEdit", ctx do
+    ctx = checkpoint_context(ctx)
     path = Path.join(ctx.tmp, "src/main.c")
     listing = run(ctx, %{"action" => "code_actions", "file" => "src/main.c", "line" => 1})
 
-    assert text!(listing) ==
-             """
-             3 code action(s):
-               0: [quickfix] Insert header (preferred)
-               1: [command] Run fixer
-               2: [quickfix] Diagnostics in context: 1\
-             """
+    assert listing.details.count == 4
+    assert text!(listing) =~ "Diagnostics in context: 1"
 
     resolved =
       run(ctx, %{
@@ -147,6 +143,7 @@ defmodule CodingAgent.Tools.LspTest do
 
     assert text!(resolved) =~ ~s(Applied "Insert header")
     assert File.read!(path) =~ ~r/^\/\/ header\n/
+    before_command = File.read!(path)
 
     command =
       run(ctx, %{
@@ -158,8 +155,18 @@ defmodule CodingAgent.Tools.LspTest do
       })
 
     assert text!(command) =~ "Executed command: fake.fix"
-    assert File.read!(path) =~ ~r/^\/\/ fixed\n\/\/ header\n/
-    assert command.details.changed_files == ["src/main.c"]
+    assert File.read!(path) == "// fixed again\n// fixed\n" <> before_command
+    assert Enum.sort(command.details.changed_files) == ["src/fixed.c", "src/main.c"]
+    assert length(command.details.checkpoint_ids) == 3
+    refute Map.has_key?(command.details, :checkpoint_id)
+    assert File.read!(Path.join(ctx.tmp, "src/fixed.c")) == ""
+
+    for id <- Enum.reverse(command.details.checkpoint_ids) do
+      assert {:ok, _} = CodingAgent.Checkpoint.restore_filesystem(id)
+    end
+
+    assert File.read!(path) == before_command
+    refute File.exists?(Path.join(ctx.tmp, "src/fixed.c"))
 
     missing =
       run(ctx, %{
@@ -171,6 +178,99 @@ defmodule CodingAgent.Tools.LspTest do
       })
 
     assert text!(missing) =~ ~s(No code action matches "nope")
+  end
+
+  test "partial command failure retains direct and captured edit checkpoints", ctx do
+    ctx = checkpoint_context(ctx)
+    path = Path.join(ctx.tmp, "src/main.c")
+    original = File.read!(path)
+
+    result =
+      run(ctx, %{
+        "action" => "code_actions",
+        "file" => "src/main.c",
+        "line" => 1,
+        "apply" => true,
+        "query" => "partial fixer"
+      })
+
+    refute result.details.success
+    assert result.details.applied
+    assert length(result.details.checkpoint_ids) == 3
+    assert Enum.sort(result.details.changed_files) == ["src/fixed.c", "src/main.c"]
+    assert File.read!(path) != original
+    assert File.exists?(Path.join(ctx.tmp, "src/fixed.c"))
+
+    for id <- Enum.reverse(result.details.checkpoint_ids) do
+      assert {:ok, _} = CodingAgent.Checkpoint.restore_filesystem(id)
+    end
+
+    assert File.read!(path) == original
+    refute File.exists?(Path.join(ctx.tmp, "src/fixed.c"))
+  end
+
+  test "abort retains checkpoints already published before an in-flight batch", ctx do
+    ctx = checkpoint_context(ctx)
+    parent = self()
+    signal = LemonAgent.AbortSignal.new()
+    on_exit(fn -> LemonAgent.AbortSignal.clear(signal) end)
+
+    opts =
+      Keyword.put(ctx.opts, :on_checkpoint, fn checkpoint ->
+        send(parent, {:checkpoint_ready, self(), checkpoint.id})
+        receive do: (:continue -> :ok)
+      end)
+
+    path = Path.join(ctx.tmp, "src/main.c")
+    original = File.read!(path)
+
+    task =
+      Task.async(fn ->
+        Lsp.execute(
+          "abort-call",
+          %{
+            "action" => "code_actions",
+            "file" => "src/main.c",
+            "line" => 1,
+            "apply" => true,
+            "query" => "run fixer"
+          },
+          signal,
+          nil,
+          ctx.tmp,
+          opts
+        )
+      end)
+
+    assert_receive {:checkpoint_ready, first_worker, first_id}, 20_000
+    send(first_worker, :continue)
+    assert_receive {:checkpoint_ready, _second_worker, second_id}, 20_000
+    assert File.read!(path) == "// fixed\n" <> original
+    LemonAgent.AbortSignal.abort(signal)
+    result = Task.await(task, 2_000)
+
+    refute result.details.success
+    assert result.details.checkpoint_ids == [first_id, second_id]
+
+    for id <- Enum.reverse(result.details.checkpoint_ids) do
+      assert {:ok, _} = CodingAgent.Checkpoint.restore_filesystem(id)
+    end
+
+    assert File.read!(path) == original
+    refute File.exists?(Path.join(ctx.tmp, "src/fixed.c"))
+  end
+
+  defp checkpoint_context(ctx) do
+    paths = Application.get_env(:lemon_core, :paths, [])
+
+    Application.put_env(
+      :lemon_core,
+      :paths,
+      Keyword.put(paths, :checkpoint_dir, Path.join(ctx.tmp, "checkpoints"))
+    )
+
+    on_exit(fn -> Application.put_env(:lemon_core, :paths, paths) end)
+    %{ctx | opts: Keyword.put(ctx.opts, :filesystem_checkpoints, true)}
   end
 
   test "surfaces server errors, unsupported files and missing servers", ctx do
@@ -338,6 +438,9 @@ defmodule CodingAgent.Tools.LspTest do
         reply(id, [
           %{"title" => "Insert header", "kind" => "quickfix", "isPreferred" => true, "data" => uri},
           %{"title" => "Run fixer", "command" => "fake.fix", "arguments" => [uri]},
+          %{"title" => "Partial fixer",
+            "edit" => %{"changes" => %{uri => [%{"range" => range(0, 0, 0), "newText" => "// direct\n"}]}},
+            "command" => %{"command" => "fake.partial", "arguments" => [uri]}},
           %{"title" => "Diagnostics in context: #{count}", "kind" => "quickfix"}
         ])
 
@@ -355,6 +458,21 @@ defmodule CodingAgent.Tools.LspTest do
         edit = %{"changes" => %{uri => [%{"range" => range(0, 0, 0), "newText" => "// fixed\n"}]}}
         send(%{"id" => "apply-1", "method" => "workspace/applyEdit", "params" => %{"edit" => edit}})
         %{"result" => %{"applied" => true}} = await("apply-1")
+        if params["command"] == "fake.partial" do
+          partial = %{"documentChanges" => [
+            %{"kind" => "create", "uri" => String.replace_suffix(uri, "main.c", "fixed.c")},
+            %{"kind" => "create", "uri" => uri}
+          ]}
+          send(%{"id" => "apply-2", "method" => "workspace/applyEdit", "params" => %{"edit" => partial}})
+          %{"result" => %{"applied" => false}} = await("apply-2")
+        else
+          same = %{"changes" => %{uri => [%{"range" => range(0, 0, 0), "newText" => "// fixed again\n"}]}}
+          send(%{"id" => "apply-2", "method" => "workspace/applyEdit", "params" => %{"edit" => same}})
+          %{"result" => %{"applied" => true}} = await("apply-2")
+          extra = %{"documentChanges" => [%{"kind" => "create", "uri" => String.replace_suffix(uri, "main.c", "fixed.c")}]}
+          send(%{"id" => "apply-3", "method" => "workspace/applyEdit", "params" => %{"edit" => extra}})
+          %{"result" => %{"applied" => true}} = await("apply-3")
+        end
         reply(id, nil)
         state
       end
