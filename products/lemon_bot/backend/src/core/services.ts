@@ -105,7 +105,7 @@ export interface IntegrationServices {
   endProviderSessions?(userId: string): Promise<void>;
   captureUsage?(principal: Principal, report: P.UsageReport, atMs?: number): void;
   captureAction?(principal: Principal, metadata: P.JSONObject, sourceId?: string): void;
-  dispose?(): void;
+  dispose?(): void | Promise<void>;
   refreshPolicy?(principal: Principal, botIds?: string[], options?: { workspace?: boolean }): Promise<void>;
   canReadResource?(principal: Principal, collection: string, entity: unknown): boolean;
   sharedProfilePolicy?(botId: string): Promise<P.EffectivePolicy>;
