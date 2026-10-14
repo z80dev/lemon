@@ -16,6 +16,8 @@ Shutdown must unsubscribe runtime consumers, dispose terminal buffers, and close
 
 A product Run, upstream run ID, session mapping and actual initiating Principal are persisted before chat dispatch. No dispatched mutation is automatically retried. A disconnect/deadline produces `outcome_unknown`, `retrySafe:false`, and reserved resource IDs. Definitive pre-dispatch rejections remain safe failures. Repeating a runtime nonce returns the reservation/receipt and rejects a different intent.
 
+Controller error `details` may be any JSON value. A scalar or array diagnostic rejects only its correlated call; it does not disconnect unrelated host reads. Only structured, allowlisted fields can establish classified no-effect evidence, and raw diagnostics never enter product errors.
+
 `RuntimeMapping` is stored under `runtimeRun:<productRunId>`; `runPrincipal:<productRunId>` retains the initiating context. `nativeRunProduct:<nativeRunId>` maps native usage/cron records to product IDs. `runReturnConversation`, `runSourceEntry`, `runNoHandoff`, and `runParent` retain authorized handoff provenance. Delivery receipts distinguish queued/pending control from acknowledged steering and interruption. Interrupt replacements execute under their own fixed ID; the receipt target is the old cancellation target. Only actual terminal completion proves cancelled/succeeded/failed.
 
 When several control aliases execute on one upstream run, receipt targets and approvals select the product Run that owns that exact native ID before considering aliases. List ordering or equal timestamps cannot redirect a target to the steering request itself.

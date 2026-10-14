@@ -22,7 +22,7 @@ export interface ConnectedLemonService extends LemonService {
 const object = z.record(z.string(), z.unknown());
 const frameSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('hello-ok'), protocol: z.literal(1), features: z.object({ methods: z.array(z.string()) }).passthrough(), auth: z.object({ role: z.string(), scopes: z.array(z.string()).optional() }).passthrough(), policy: z.object({ maxPayload: z.number().int().positive().optional() }).passthrough().optional() }).passthrough(),
-  z.object({ type: z.literal('res'), id: z.string(), ok: z.boolean(), payload: z.unknown().optional(), error: z.object({ code: z.string(), details: object.nullable().optional(), message: z.string().optional() }).passthrough().optional() }).passthrough(),
+  z.object({ type: z.literal('res'), id: z.string(), ok: z.boolean(), payload: z.unknown().optional(), error: z.object({ code: z.string(), details: z.unknown().optional(), message: z.string().optional() }).passthrough().optional() }).passthrough(),
   z.object({ type: z.literal('event'), event: z.string(), seq: z.number().int().nonnegative(), payload: z.unknown().optional() }).passthrough(),
 ]);
 function nativeSocket(url: string): ControlSocket {
@@ -173,7 +173,11 @@ export function createLemonService(config: Pick<BackendConfiguration, 'controlUr
           if (!item) return;
           clearTimeout(item.timer); pending.delete(frame.id);
           if (frame.ok) item.resolve(frame.payload);
-          else item.reject(upstreamFailure(frame.error?.code ?? 'INTERNAL_ERROR', frame.error?.details ?? undefined, item.mutation, item.ids, item.method));
+          else {
+            const details = frame.error?.details;
+            const structuredDetails = details !== null && typeof details === 'object' && !Array.isArray(details) ? details as Record<string, unknown> : undefined;
+            item.reject(upstreamFailure(frame.error?.code ?? 'INTERNAL_ERROR', structuredDetails, item.mutation, item.ids, item.method));
+          }
         } else if (service.connected && frame.seq > lastSeq) {
           lastSeq = frame.seq;
           for (const listener of events) listener(frame.event, frame.payload);

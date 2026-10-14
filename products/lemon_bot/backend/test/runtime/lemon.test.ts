@@ -67,6 +67,25 @@ describe('long-lived operator connection', () => {
       expect(failure.message).not.toContain('secret');
     } finally { service.close(); }
   });
+  test('scalar controller error details reject only the correlated query without disconnecting healthy host reads', async () => {
+    for (const details of ['private native diagnostic', ['private native diagnostic']]) {
+      const socket = new Socket();
+      const service = createLemonService(config, { socket: () => socket });
+      try {
+        service.start(); socket.handshake(['agent.wait', 'nodes.list']);
+        const missing = service.call('agent.wait', { runId: 'unknown_run' }).catch((error: unknown) => error);
+        const hosts = service.call('nodes.list');
+        socket.deliver({ type: 'res', id: socket.sent[1]!.id, ok: false, error: { code: 'NOT_FOUND', message: 'private native diagnostic', details } });
+        const failure = await missing;
+        if (!(failure instanceof ApiError)) throw new Error('Expected a classified query rejection.');
+        expect(failure.code).toBe('not_found');
+        expect(JSON.stringify(failure)).not.toContain('private native diagnostic');
+        expect(service.connected).toBe(true);
+        socket.deliver({ type: 'res', id: socket.sent[2]!.id, ok: true, payload: { nodes: [] } });
+        expect(await hosts).toEqual({ nodes: [] });
+      } finally { service.close(); }
+    }
+  });
   test('preserves only authenticated strict-process capacity evidence without making it retry-safe',async()=>{
     for(const method of ['node.process.run','node.process.get','node.process.cancel']){
       for(const reason of ['process_receipt_limit','process_limit','process_busy']){
