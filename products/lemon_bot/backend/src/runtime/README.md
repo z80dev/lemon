@@ -1,0 +1,50 @@
+# Runtime and machine integration
+
+The factories in this directory use the shared `BackendServices` interface. They do not own a second router, scheduler, execution-node registry or host filesystem.
+
+## Bootstrap
+
+- `lemon.ts`: `createLemonService(config, options?)` accepts `controlUrl`, `operatorToken`, `trustedOverlay`. It returns `ConnectedLemonService` (`LemonService` plus `onDisconnected(listener)`). Call `start()` once after consumers subscribe; `close()` stops reconnects. Optional `ControlSocket` injection is the transport test seam. Defaults: 10-second handshake, 40-second request deadline, 500-ms–30-second exponential reconnect with jitter. The authenticated `connect` request uses `params.auth.token`; only protocol-1 `hello-ok` with operator role establishes the connection. Requests and events follow the actual Lemon `req`/`res`/`event` protocol. Payload bounds follow the negotiated controller limit.
+- `runs.ts`: `createRuntimeService(services)` supplies submit/send/cancel/reconcile/sessionKey/revokeConnectorInvocations. Its additional `project(event,payload)` and `close()` support deterministic lifecycle testing and shutdown. Product `/runs` routes are owned by the conversation slice, not registered twice here. `send` delegates the conversation slice's `sendMessage`, without another nonce wrapper.
+- `machines.ts`: `createMachineRoutes(services)` registers full `/v1` machine/enrollment/host/file/secret/terminal paths with declared statuses and receipt reauthorization. `refreshMachines`, `getHostInfo`, and `ensureMachineRuntimeReady` are the measured host helpers.
+- `terminals.ts`: `getTerminalService(services)` returns the same terminal service used by REST. Do not create a second terminal directory for realtime. `createTerminalService` is an independent injected-service test seam.
+
+Shutdown must unsubscribe runtime consumers, dispose terminal buffers, and close the Lemon connection. Controller disconnection closes connection-owned PTYs; it does not resubmit or reopen anything.
+
+## Fixed execution identity and authority
+
+A product Run, upstream run ID, session mapping and actual initiating Principal are persisted before chat dispatch. No dispatched mutation is automatically retried. A disconnect/deadline produces `outcome_unknown`, `retrySafe:false`, and reserved resource IDs. Definitive pre-dispatch rejections remain safe failures. Repeating a runtime nonce returns the reservation/receipt and rejects a different intent.
+
+`RuntimeMapping` is stored under `runtimeRun:<productRunId>`; `runPrincipal:<productRunId>` retains the initiating context. `nativeRunProduct:<nativeRunId>` maps native usage/cron records to product IDs. `runReturnConversation`, `runSourceEntry`, `runNoHandoff`, and `runParent` retain authorized handoff provenance. Delivery receipts distinguish queued/pending control from acknowledged steering and interruption. Interrupt replacements execute under their own fixed ID; the receipt target is the old cancellation target. Only actual terminal completion proves cancelled/succeeded/failed.
+
+`buildInvocationContext(services, principal, conversation, bot, fixedRunId)` requires an existing reservation and returns `InvocationContext`: destination-reference-only MCP servers, actual-initiator native tool policy, opaque invocation context key, and stable memory context key. It is shared by chat and the owning cron admission callback. It never inherits a Team owner's private connectors or tool policy. Native context keys bind actor, room, MCP/policy and credential/grant epochs. Private memory keys are bot+actual-user scoped; shared surfaces additionally bind room and current audience. Native coordinator guards must prevent cross-context merges, controls, journal resume and standing-approval reuse. Backend history seeding contains only authorized messages from that room; private notes never enter group/channel contexts.
+
+`buildMemoryContextKey(services, actualPrincipal, conversation, bot)` is the synchronous authorized UI/native scope helper; it performs no host RPC or one-time consent consumption. It is independent of placement/credential/grant epochs.
+
+Core MCP uses a separate `X-Lemon-Bot-Invocation` transport header referring to destination secret `lemon_bot/invocations/<fixedNativeRunId>`. Real `node.secrets.set` provisioning uses that fixed ID as its operation ID and requires an acknowledged matching binding. The proof value is never persisted in a resource or invocation config. Its keyed lookup `invocationProof:<mutations.digest(headerValue)>` resolves the exported `InvocationProofBinding` (product/native IDs, Bot/node, retained principal identity and invocation key). The MCP slice must verify this actual authenticated header **before** selecting authority from any tool body. A body conversation/run ID is not proof. `runtimeInvocation:<nativeRunId>` retains the reference-only transport. Unknown provisioning cannot be repeated. Until the platform validates a trusted exact core-proof descriptor, exact MCP comparison conservatively queues changed transports; generic header-name stripping is not safe.
+
+`reserveCronAdmission(services, principal, routineId, context)` reserves product Run/RoutineRun and the fixed router ID before an owning scheduler callback returns allow. It creates a system-attributed Routine instruction entry, never a fabricated freshly typed user request. The resource slice supplies `pendingRoutineRun:<kind>:<id>:<conversationId>:<nonce>` and `routineRunSource:<routineRunId>` for tests/hooks/events; submit links their run/source records before dispatch. Cron observation/reconciliation reuses those mappings and respects the stored admission decision.
+
+`botSessionKeys(services, conversation, bot)` returns current and historical placement-epoch session keys for lifecycle cleanup. Personal canonical sessions come from acknowledged `profileCanonicalSession:<botId>`, not an inferred foreign native continuation.
+
+## Realtime terminal wiring
+
+Call `getTerminalService(services).subscribe(principal, deviceId, terminalId, afterSeq, send)` for each authenticated `terminal_subscribe`. The returned disposer must run when that subscription or WebSocket ends. Only the opening user/device can subscribe; another administrator cannot attach. A same-device reconnection may resume during the 60-second disconnect grace.
+
+Frames are the exact ephemeral `terminal_output`, `terminal_exit`, and `terminal_gap` types. Output is buffered in memory, bounded to 1 MiB or 10,000 chunks, and does not enter workspace event replay, generic audit or push. Gap frames expose loss instead of fabricating continuity. Sequence counts decoded terminal output chunks; input nonces remain on REST, never replayed on reconnect.
+
+Use `revokeSession(sessionId)` for one session logout/revocation, and `revokeUser(userId)` for complete deprovisioning. `closeMachine(machineId)` closes that machine's terminals. Session revocation does not close the user's other devices. Late open receipts after revocation are rejected and their actual shell is closed. A controller reconnect does not resurrect a shell. Unknown close outcomes are recorded without claiming a proven process exit.
+
+## Privileged machine and provider boundaries
+
+Machines bind to durable node identity only after matching the consumed issued invitation ID; matching an arbitrary node name is insufficient. Reconnect uses a node-ID-bound repair invite and revokes old unused invitations. Query errors do not become empty listings or idle state. Connected incompatible workers remain pending with a precise enrollment failure, not verified Bot-ready. `node.runtime.features` must report protocol 1, all required feature flags including native execution policy, `botReady:true`; software compatibility is not provider authentication or an OS permission grant. Controller reconnect invalidates cached feature readiness. Capability/grant endpoints remain owned by Experiences, using real measured RPCs.
+
+File paths remain destination-local. Worker CAS protects overwrite and move; moves cannot overwrite. Deletion uses both a principal/path/stat/candidate-bound product confirmation and the worker's exact preview token. FileChunk.size is total source file size, not chunk byte count. Directory snapshots bind pagination; the destination's truncated 500-entry listing is an explicit too-large failure, never a fabricated complete directory. Imports verify unchanged stat across transfer and use the attachment service's actual content inspection/limits.
+
+`importMachineFile(services, principal, machineId, input, provenance?)` is the common REST/MCP transfer helper. Internal provenance supports filename/run/source-entry only before immutable blob creation. Bot output import requires its real retained invocation authority and effective file-read grant, not a synthetic bot Principal or a broad human host grant. Human machine endpoints still require privileged host ACL. Names-only secret projections never retain or return supplied values.
+
+`revokeConnectorInvocations` and `quiesceBotInvocations(services, actor, botId, {principalOnly?})` stop bounded owned-context IDs and require actual terminal proof before acknowledging restriction. `quiesceMachineInvocations` is the privileged host-detach boundary; it does not impersonate private run initiators. Owning connector/profile services must clear/acknowledge the corresponding pending fence only after their configuration floor is actually installed. Unknown outcomes remain fenced.
+
+## Verification handoff
+
+No gates are run by this slice. The injected socket/RPC tests exercise authentication failure, correlation, uncertain no-replay, private fanout, actual remote shell routing, spool/grace, session revocation, CAS/confirmation and invite identity. The integrating agent must run Bun type checking/tests after the sibling factories and required platform RPC extensions are merged, then verify a real compatible worker, placement/control, cron admission, file CAS and PTY lifecycle end to end.
