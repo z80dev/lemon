@@ -247,6 +247,7 @@ defmodule LemonRouter.SessionCoordinatorTest do
     Enum.each(~w(run1 run2 run3 run4 run-registry-repair), fn run_id ->
       LemonCore.Store.delete(:runs, run_id)
       LemonCore.Store.delete(:run_receipts, run_id)
+      LemonCore.Store.delete(:native_resume_contexts, {:run, run_id})
     end)
 
     on_exit(fn ->
@@ -254,6 +255,7 @@ defmodule LemonRouter.SessionCoordinatorTest do
       restore_engine_runtime(original_engine_runtime)
       Enum.each(~w(run1 run2 run3 run4 run-registry-repair), fn run_id ->
         LemonCore.Store.delete(:run_receipts, run_id)
+        LemonCore.Store.delete(:native_resume_contexts, {:run, run_id})
       end)
 
       case original_bridge_test_pid do
@@ -1632,6 +1634,361 @@ defmodule LemonRouter.SessionCoordinatorTest do
              SessionCoordinator.submit_with_receipt(key, correction, receipt_store: store)
     refute_receive {:run_cast, :steer, ^steering, _, _}, 50
     GenServer.stop(runtime_run)
+  end
+
+  test "different contexts queue own receipts and preserve each sequential execution's capabilities", %{
+    run_supervisor: supervisor
+  } do
+    contexts = [
+      {%{invocation_context_key: "principal-a"}, %{invocation_context_key: "principal-b"}, %{}, %{}},
+      {%{invocation_context_key: "principal-a"},
+       %{invocation_context_key: "principal-b", task_auto_followup: true}, %{}, %{}},
+      {%{invocation_context_key: "principal-a"},
+       %{invocation_context_key: "principal-b", delegated_auto_followup: true}, %{}, %{}},
+      {%{}, %{invocation_context_key: "principal-b"}, %{}, %{}},
+      {%{invocation_context_key: "principal-a"}, %{}, %{}, %{}},
+      {%{invocation_context_key: "same", memory_context_key: "private-room"},
+       %{invocation_context_key: "same", memory_context_key: "shared-room"}, %{}, %{}},
+      {%{memory_context_key: "private-room"}, %{}, %{}, %{}},
+      {%{invocation_context_key: "same", memory_context_key: "room", memory_context_verified: true},
+       %{invocation_context_key: "same", memory_context_key: "room"}, %{}, %{}},
+      {%{invocation_context_key: "same", memory_context_key: "room", shared_memory_grant: true},
+       %{invocation_context_key: "same", memory_context_key: "room", shared_memory_grant: false}, %{}, %{}},
+      {%{invocation_context_key: "same"}, %{invocation_context_key: "same"},
+       %{deny: ["bash"]}, %{deny: ["read"]}},
+      {%{}, %{}, %{deny: ["bash"]}, %{deny: ["read"]}},
+      {%{mcp_servers: [%{url: "https://mcp.invalid", secret_ref: "grant-a"}]},
+       %{mcp_servers: []}, %{}, %{}},
+      {%{}, %{mcp_servers: []}, %{}, %{}}
+    ]
+
+    for {active_meta, incoming_meta, active_policy, incoming_policy} <- contexts,
+        mode <- [:followup, :steer, :steer_backlog, :redirect, :interrupt] do
+      key = {:session, unique_session_key()}
+      active = receipt_run_id()
+      first = receipt_run_id()
+      second = receipt_run_id()
+      holding = context_submission(key, active, "hold", :collect, supervisor, active_meta, active_policy)
+      own_first = context_submission(key, first, "first own prompt", mode, supervisor, incoming_meta, incoming_policy)
+      own_second = context_submission(key, second, "second own prompt", mode, supervisor, incoming_meta, incoming_policy)
+
+      assert {:ok, %{effective_mode: :new_run, target_run_id: ^active}} =
+               SessionCoordinator.submit_with_receipt(key, holding)
+      assert_receive {:started, ^active, active_opts}
+      assert active_opts[:execution_request].tool_policy == active_policy
+      runtime_run = start_runtime_run(active)
+
+      for own <- [own_first, own_second] do
+        id = own.run_id
+        assert {:ok, %{effective_mode: :queued, target_run_id: ^id}} =
+                 SessionCoordinator.submit_with_receipt(key, own)
+        assert {:ok, %{effective_mode: :queued, target_run_id: ^id}} =
+                 RunReceiptStore.fetch(id)
+      end
+
+      # Calls serialize behind any control casts before checking their absence.
+      _ = :sys.get_state(runtime_run)
+      assert {:ok, ^active} = SessionCoordinator.active_run(key)
+      refute_receive {:run_cast, _, _, _, _}, 0
+      refute_receive {:aborted, ^active, _}, 0
+
+      :ok = stop_active_run(supervisor)
+      assert_receive {:started, ^first, first_opts}
+      assert first_opts[:execution_request].run_id == first
+      assert first_opts[:execution_request].prompt == "first own prompt"
+      assert first_opts[:execution_request].tool_policy == incoming_policy
+      assert Map.take(first_opts[:execution_request].meta, [:invocation_context_key, :mcp_servers]) ==
+               Map.take(incoming_meta, [:invocation_context_key, :mcp_servers])
+      assert {:ok, ^first} = SessionCoordinator.active_run(key)
+      refute_receive {:started, ^second, _}, 0
+
+      :ok = stop_active_run(supervisor)
+      assert_receive {:started, ^second, second_opts}
+      assert second_opts[:execution_request].run_id == second
+      assert second_opts[:execution_request].prompt == "second own prompt"
+      assert second_opts[:execution_request].tool_policy == incoming_policy
+      assert Map.take(second_opts[:execution_request].meta, [:invocation_context_key, :mcp_servers]) ==
+               Map.take(incoming_meta, [:invocation_context_key, :mcp_servers])
+      assert {:ok, ^second} = SessionCoordinator.active_run(key)
+      :ok = stop_active_run(supervisor)
+      assert eventually(fn -> SessionCoordinator.active_run(key) == :none end)
+      GenServer.stop(runtime_run)
+    end
+  end
+
+  test "matching private contexts still steer backlog redirect and interrupt the owner", %{
+    run_supervisor: supervisor
+  } do
+    meta = %{invocation_context_key: "same", mcp_servers: []}
+    policy = %{deny: ["bash"]}
+
+    for {mode, pending, accepted} <- [
+          {:steer, :steer_pending, :steer_accepted},
+          {:steer_backlog, :steer_backlog_pending, :steer_backlog_accepted},
+          {:redirect, :redirect_pending, :redirect_accepted}
+        ] do
+      key = {:session, unique_session_key()}
+      active = receipt_run_id()
+      control = receipt_run_id()
+      holding = context_submission(key, active, "hold", :collect, supervisor, meta, policy)
+      correction = context_submission(key, control, "correction", mode, supervisor, meta, policy)
+      assert {:ok, _} = SessionCoordinator.submit_with_receipt(key, holding)
+      assert_receive {:started, ^active, _}
+      runtime_run = start_runtime_run(active)
+      assert {:ok, %{effective_mode: ^pending, target_run_id: ^active}} =
+               SessionCoordinator.submit_with_receipt(key, correction)
+      assert_receive {:run_cast, ^mode, ^control, "correction", owner}
+      send(owner, {accepted, control})
+      assert {:ok, ^active} = SessionCoordinator.active_run(key)
+      assert {:ok, %{effective_mode: ^mode, target_run_id: ^active}} =
+               RunReceiptStore.fetch(control)
+      :ok = stop_active_run(supervisor)
+      assert eventually(fn -> SessionCoordinator.active_run(key) == :none end)
+      refute_receive {:started, ^control, _}, 0
+      GenServer.stop(runtime_run)
+    end
+
+    key = {:session, unique_session_key()}
+    active = receipt_run_id()
+    urgent = receipt_run_id()
+    assert {:ok, _} = SessionCoordinator.submit_with_receipt(
+      key, context_submission(key, active, "hold", :collect, supervisor, meta, policy))
+    assert_receive {:started, ^active, _}
+    assert {:ok, %{effective_mode: :interrupt, target_run_id: ^active}} =
+             SessionCoordinator.submit_with_receipt(
+               key, context_submission(key, urgent, "urgent", :interrupt, supervisor, meta, policy))
+    assert_receive {:aborted, ^active, :interrupted}
+    assert_receive {:started, ^urgent, opts}
+    assert opts[:execution_request].prompt == "urgent"
+    assert opts[:execution_request].tool_policy == policy
+  end
+
+  test "matching keyed followups still merge and run the complete prompt under their policy", %{
+    run_supervisor: supervisor
+  } do
+    key = {:session, unique_session_key()}
+    active = receipt_run_id()
+    first = receipt_run_id()
+    second = receipt_run_id()
+    meta = %{invocation_context_key: "same", mcp_servers: []}
+    policy = %{deny: ["bash"]}
+    assert {:ok, _} = SessionCoordinator.submit_with_receipt(
+      key, context_submission(key, active, "hold", :collect, supervisor, meta, policy))
+    assert_receive {:started, ^active, _}
+    assert {:ok, %{effective_mode: :queued, target_run_id: ^first}} =
+             SessionCoordinator.submit_with_receipt(
+               key, context_submission(key, first, "first", :followup, supervisor, meta, policy))
+    assert {:ok, %{effective_mode: :merged, target_run_id: ^second}} =
+             SessionCoordinator.submit_with_receipt(
+               key, context_submission(key, second, "second", :followup, supervisor, meta, policy))
+    assert {:ok, %{effective_mode: :merged, target_run_id: ^second}} = RunReceiptStore.fetch(first)
+    :ok = stop_active_run(supervisor)
+    assert_receive {:started, ^second, opts}
+    assert opts[:execution_request].prompt == "first\nsecond"
+    assert opts[:execution_request].tool_policy == policy
+    assert opts[:execution_request].meta.invocation_context_key == "same"
+    refute_receive {:started, ^first, _}, 0
+  end
+
+  test "recovered active execution without submission cannot receive a keyed control", %{
+    run_supervisor: supervisor
+  } do
+    for mode <- [:followup, :steer, :steer_backlog, :redirect, :interrupt] do
+      session_key = unique_session_key()
+      key = {:session, session_key}
+      active = receipt_run_id()
+      own = receipt_run_id()
+      survivor =
+        start_supervised!(
+          {SessionCoordinatorForwardingRunStub,
+           run_id: active, session_key: session_key, test_pid: self()},
+          id: {:recovered_context, active}
+        )
+      input = context_submission(key, own, "own prompt", mode, supervisor,
+        %{invocation_context_key: "new"}, %{deny: ["bash"]})
+
+      assert {:ok, %{effective_mode: :queued, target_run_id: ^own}} =
+               SessionCoordinator.submit_with_receipt(key, input)
+      assert {:ok, ^active} = SessionCoordinator.active_run(key)
+      _ = :sys.get_state(survivor)
+      refute_receive {:run_cast, _, _, _, _}, 0
+      assert Process.alive?(survivor)
+      GenServer.stop(survivor)
+      assert_receive {:started, ^own, opts}
+      assert opts[:execution_request].prompt == "own prompt"
+      assert opts[:execution_request].tool_policy == %{deny: ["bash"]}
+      :ok = stop_active_run(supervisor)
+      assert eventually(fn -> SessionCoordinator.active_run(key) == :none end)
+    end
+  end
+
+  test "context handoff starts a new journal without deleting the prior owner's resume", %{
+    run_supervisor: supervisor
+  } do
+    session_key = unique_session_key()
+    key = {:session, session_key}
+    active = receipt_run_id()
+    own = receipt_run_id()
+    token = "shared-transcript-#{System.unique_integer([:positive])}"
+    holding = context_submission(key, active, "hold", :collect, supervisor,
+      %{invocation_context_key: "old", memory_context_key: "private-room"}, %{deny: ["read"]})
+    assert :ok = LemonRouter.ResumeResolver.bind(
+      %LemonCore.ResumeToken{engine: "lemon", value: token}, holding.execution_request)
+    assert :ok = LemonCore.ChatStateStore.put(session_key, %{
+      last_engine: "lemon", last_resume_token: token
+    })
+    on_exit(fn -> LemonCore.ChatStateStore.delete(session_key) end)
+
+    assert {:ok, _} = SessionCoordinator.submit_with_receipt(key, holding)
+    assert_receive {:started, ^active, active_opts}
+    assert active_opts[:execution_request].resume ==
+             %LemonCore.ResumeToken{engine: "lemon", value: token}
+    assert {:ok, %{effective_mode: :queued, target_run_id: ^own}} =
+             SessionCoordinator.submit_with_receipt(
+               key, context_submission(key, own, "new principal prompt", :interrupt, supervisor,
+                 %{invocation_context_key: "new", memory_context_key: "shared-room", mcp_servers: []},
+                 %{deny: ["bash"]}))
+    assert {:ok, ^active} = SessionCoordinator.active_run(key)
+    :ok = stop_active_run(supervisor)
+    assert_receive {:started, ^own, own_opts}
+    assert own_opts[:execution_request].run_id != active_opts[:execution_request].run_id
+    assert own_opts[:execution_request].prompt == "new principal prompt"
+    assert own_opts[:execution_request].tool_policy == %{deny: ["bash"]}
+    assert own_opts[:execution_request].meta.mcp_servers == []
+    assert own_opts[:execution_request].resume == nil
+    assert LemonCore.ChatStateStore.get(session_key).last_resume_token == token
+    refute_receive {:aborted, ^active, _}, 0
+  end
+
+  test "durable same-context resume survives coordinator restart but changed capabilities start fresh", %{
+    run_supervisor: supervisor
+  } do
+    key = {:session, unique_session_key()}
+    session_key = elem(key, 1)
+    meta = %{invocation_context_key: "same", memory_context_key: "same-room", mcp_servers: []}
+    policy = %{blocked_tools: ["bash"]}
+    token = %LemonCore.ResumeToken{engine: "lemon", value: session_key}
+    first = context_submission(key, receipt_run_id(), "first", :collect, supervisor, meta, policy)
+    assert :ok = LemonRouter.ResumeResolver.bind(token, first.execution_request)
+    assert :ok = LemonCore.ChatStateStore.put(session_key, %{
+      last_engine: "lemon", last_resume_token: token.value
+    })
+    on_exit(fn -> LemonCore.ChatStateStore.delete(session_key) end)
+
+    assert {:ok, _} = SessionCoordinator.submit_with_receipt(key, first)
+    first_id = first.run_id
+    assert_receive {:started, ^first_id, first_opts}
+    assert first_opts[:execution_request].resume == token
+    :ok = stop_active_run(supervisor)
+    assert eventually(fn -> SessionCoordinator.active_run(key) == :none end)
+    GenServer.stop(coordinator_pid(key))
+
+    second = context_submission(key, receipt_run_id(), "second", :collect, supervisor, meta, policy)
+    second_id = second.run_id
+    assert {:ok, _} = SessionCoordinator.submit_with_receipt(key, second)
+    assert_receive {:started, ^second_id, second_opts}
+    assert second_opts[:execution_request].resume == token
+    :ok = stop_active_run(supervisor)
+    assert eventually(fn -> SessionCoordinator.active_run(key) == :none end)
+    GenServer.stop(coordinator_pid(key))
+
+    for changed <- [
+          %{meta | invocation_context_key: "changed"},
+          %{meta | memory_context_key: "other-room"},
+          Map.delete(meta, :mcp_servers)
+        ] do
+      input = context_submission(key, receipt_run_id(), "fresh", :collect, supervisor, changed, policy)
+      id = input.run_id
+      assert {:ok, _} = SessionCoordinator.submit_with_receipt(key, input)
+      assert_receive {:started, ^id, opts}
+      assert opts[:execution_request].resume == nil
+      assert opts[:execution_request].prompt == "fresh"
+      assert LemonCore.ChatStateStore.get(session_key).last_resume_token == token.value
+      :ok = stop_active_run(supervisor)
+      assert eventually(fn -> SessionCoordinator.active_run(key) == :none end)
+      GenServer.stop(coordinator_pid(key))
+    end
+  end
+
+  test "attested rotating proofs retain steering and resume without replacing raw execution headers", %{
+    run_supervisor: supervisor
+  } do
+    key = {:session, unique_session_key()}
+    session_key = elem(key, 1)
+    active = receipt_run_id()
+    steering = receipt_run_id()
+    queued = receipt_run_id()
+    unattested = receipt_run_id()
+    policy = %{blocked_tools: ["bash"]}
+    active_meta = proof_meta(active)
+    steering_meta = proof_meta(steering)
+    queued_meta = proof_meta(queued)
+    unattested_meta = Map.delete(proof_meta(unattested), :invocation_proof_verified)
+    holding = context_submission(key, active, "hold", :collect, supervisor, active_meta, policy)
+    token = %LemonCore.ResumeToken{engine: "lemon", value: session_key}
+    assert :ok = LemonRouter.ResumeResolver.bind(token, holding.execution_request)
+    assert :ok = LemonCore.ChatStateStore.put(session_key, %{
+      last_engine: "lemon", last_resume_token: token.value
+    })
+    on_exit(fn -> LemonCore.ChatStateStore.delete(session_key) end)
+
+    assert {:ok, _} = SessionCoordinator.submit_with_receipt(key, holding)
+    assert_receive {:started, ^active, active_opts}
+    assert active_opts[:execution_request].meta.mcp_servers == active_meta.mcp_servers
+    active_runtime = start_runtime_run(active)
+    assert {:ok, %{effective_mode: :steer_pending, target_run_id: ^active}} =
+             SessionCoordinator.submit_with_receipt(key,
+               context_submission(key, steering, "correction", :steer, supervisor, steering_meta, policy))
+    assert_receive {:run_cast, :steer, ^steering, "correction", owner}
+    send(owner, {:steer_accepted, steering})
+    assert {:ok, ^active} = SessionCoordinator.active_run(key)
+    assert {:ok, %{effective_mode: :steer, target_run_id: ^active}} = RunReceiptStore.fetch(steering)
+
+    assert {:ok, %{effective_mode: :queued, target_run_id: ^queued}} =
+             SessionCoordinator.submit_with_receipt(key,
+               context_submission(key, queued, "next turn", :collect, supervisor, queued_meta, policy))
+    :ok = stop_active_run(supervisor)
+    assert_receive {:started, ^queued, queued_opts}
+    assert queued_opts[:execution_request].resume == token
+    assert queued_opts[:execution_request].prompt == "next turn"
+    assert queued_opts[:execution_request].meta.mcp_servers == queued_meta.mcp_servers
+    assert queued_opts[:execution_request].meta.invocation_proof == queued_meta.invocation_proof
+    queued_runtime = start_runtime_run(queued)
+
+    assert {:ok, %{effective_mode: :queued, target_run_id: ^unattested}} =
+             SessionCoordinator.submit_with_receipt(key,
+               context_submission(key, unattested, "unattested own turn", :steer, supervisor,
+                 unattested_meta, policy))
+    _ = :sys.get_state(queued_runtime)
+    assert {:ok, ^queued} = SessionCoordinator.active_run(key)
+    refute_receive {:run_cast, _, ^unattested, _, _}, 0
+    :ok = stop_active_run(supervisor)
+    assert_receive {:started, ^unattested, unattested_opts}
+    assert unattested_opts[:execution_request].resume == nil
+    assert unattested_opts[:execution_request].prompt == "unattested own turn"
+    assert unattested_opts[:execution_request].meta.mcp_servers == unattested_meta.mcp_servers
+    GenServer.stop(active_runtime)
+    GenServer.stop(queued_runtime)
+  end
+
+  defp proof_meta(run_id) do
+    name = "lemon_bot/invocations/#{run_id}"
+    servers = [%{name: "core", url: "https://core.invalid/mcp", headers: %{
+      "X-Lemon-Bot-Invocation" => "${LEMON_SECRET:#{name}}",
+      "Authorization" => "${LEMON_SECRET:connector/same}"
+    }}]
+    descriptor = %{"runId" => run_id, "serverName" => "core",
+      "serverUrl" => "https://core.invalid/mcp", "headerName" => "X-Lemon-Bot-Invocation",
+      "secretName" => name}
+    assert {:ok, proof} = LemonCore.InvocationProof.validate(descriptor, run_id, servers)
+    %{invocation_context_key: "same-actor", memory_context_key: "same-room",
+      memory_context_verified: true, invocation_proof_verified: true,
+      invocation_proof: proof, mcp_servers: servers}
+  end
+
+  defp context_submission(key, id, prompt, mode, supervisor, meta, policy) do
+    input = submission(key, id, prompt, mode, supervisor, meta: meta)
+    %{input | execution_request: %{input.execution_request | meta: meta, tool_policy: policy}}
   end
 
   defp receipt_run_id, do: "receipt-#{System.unique_integer([:positive, :monotonic])}"

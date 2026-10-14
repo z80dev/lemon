@@ -17,10 +17,10 @@ defmodule LemonRouter.RunReceiptStore do
   `{:error, {:sync_failed, reason}}`; storage backends without sync fail closed.
   """
 
-  alias LemonCore.Store
+  alias LemonCore.{MapHelpers, Store}
 
   @table :run_receipts
-  @keys [:run_id, :session_key, :state, :effective_mode, :target_run_id, :request_identity]
+  @keys [:run_id, :session_key, :agent_id, :profile_id, :dependent_profile_ids, :state, :effective_mode, :target_run_id, :request_identity, :terminal]
   @modes [
     :new_run,
     :queued,
@@ -40,8 +40,60 @@ defmodule LemonRouter.RunReceiptStore do
           required(:state) => :accepted | :outcome_unknown,
           required(:effective_mode) => atom() | nil,
           required(:target_run_id) => binary() | nil,
-          optional(:request_identity) => binary()
+          optional(:request_identity) => binary(),
+          optional(:profile_id) => binary() | nil,
+          optional(:agent_id) => binary() | nil,
+          optional(:dependent_profile_ids) => [binary()],
+          optional(:terminal) => true
         }
+
+  @doc false
+  def fetch_all do
+    with {:ok, rows} <- Store.fetch_all(@table),
+         :ok <- sync(Store) do
+      Enum.reduce_while(rows, {:ok, []}, fn {id, row}, {:ok, acc} ->
+        case normalize(row, id) do
+          {:ok, receipt} -> {:cont, {:ok, [{id, receipt} | acc]}}
+          error -> {:halt, error}
+        end
+      end)
+    end
+  end
+
+  @doc false
+  def retain_terminal_evidence(server \\ Store, run_id) do
+    case Store.fetch(server, :runs, run_id) do
+      {:ok, record} when is_map(record) ->
+        if is_map(MapHelpers.get_key(record, :summary)) do
+          with :ok <- mark_terminal(server, LemonRouter.RunOrchestrator.admission_table(), run_id),
+               :ok <- mark_terminal(server, @table, run_id) do
+            sync(server)
+          end
+        else
+          :ok
+        end
+
+      {:ok, _nonterminal_or_absent} ->
+        :ok
+
+      {:error, _reason} = error ->
+        error
+    end
+  end
+
+  defp mark_terminal(server, table, run_id) do
+    case Store.fetch(server, table, run_id) do
+      {:ok, nil} -> :ok
+      {:ok, %{terminal: true}} -> :ok
+      {:ok, current} when is_map(current) ->
+        case Store.compare_and_swap(server, table, run_id, current, Map.put(current, :terminal, true)) do
+          :ok -> :ok
+          {:error, :mismatch} -> mark_terminal(server, table, run_id)
+          error -> error
+        end
+      _ -> {:error, :invalid_terminal_evidence}
+    end
+  end
 
   @spec fetch(Store.server(), binary()) :: {:ok, receipt() | nil} | {:error, term()}
   def fetch(server \\ Store, run_id) do
@@ -60,9 +112,16 @@ defmodule LemonRouter.RunReceiptStore do
   def put(server \\ Store, receipt)
 
   def put(server, receipt) when is_map(receipt) do
-    with {:ok, receipt} <- normalize(receipt, Map.get(receipt, :run_id)) do
+    with {:ok, receipt} <- normalize(Map.delete(receipt, :dependent_profile_ids), Map.get(receipt, :run_id)),
+         {:ok, admission} <- Store.fetch(server, LemonRouter.RunOrchestrator.admission_table(), receipt.run_id) do
+      receipt =
+        case LemonRouter.NativeLineage.dependent_profile_ids(admission) do
+          [] -> receipt
+          dependencies -> Map.put(receipt, :dependent_profile_ids, dependencies)
+        end
       case Store.put_new(server, @table, receipt.run_id, receipt) do
-        :ok -> sync(server)
+        :ok ->
+          with :ok <- sync(server), do: retain_terminal_evidence(server, receipt.run_id)
         {:error, :exists} -> existing_receipt(server, receipt)
         {:error, _reason} = error -> error
       end
@@ -162,10 +221,15 @@ defmodule LemonRouter.RunReceiptStore do
   defp normalize(_receipt, _run_id), do: {:error, :invalid_receipt}
 
   defp normalize_identity(receipt) do
-    case Map.get(receipt, :request_identity) do
-      nil -> {:ok, receipt |> Map.take(@keys) |> Map.delete(:request_identity)}
-      identity when is_binary(identity) and identity != "" -> {:ok, Map.take(receipt, @keys)}
-      _invalid -> {:error, :invalid_receipt}
+    dependencies = Map.get(receipt, :dependent_profile_ids, [])
+    if is_list(dependencies) and Enum.all?(dependencies, &(is_binary(&1) and &1 != "")) do
+      case Map.get(receipt, :request_identity) do
+        nil -> {:ok, receipt |> Map.take(@keys) |> Map.delete(:request_identity)}
+        identity when is_binary(identity) and identity != "" -> {:ok, Map.take(receipt, @keys)}
+        _invalid -> {:error, :invalid_receipt}
+      end
+    else
+      {:error, :invalid_receipt}
     end
   end
 end

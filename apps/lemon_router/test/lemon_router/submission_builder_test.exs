@@ -2,7 +2,7 @@ defmodule LemonRouter.SubmissionBuilderTest do
   use ExUnit.Case, async: false
 
   alias LemonCore.{ExecutionCommand, ResumeToken}
-  alias LemonRouter.{Submission, SubmissionBuilder}
+  alias LemonRouter.{PendingCompactionStore, ResumeResolver, Submission, SubmissionBuilder}
 
   setup do
     original_profiles_state = :sys.get_state(LemonRouter.AgentProfiles)
@@ -214,6 +214,133 @@ defmodule LemonRouter.SubmissionBuilderTest do
     assert submission.execution_request.meta.system_prompt == "New managed persona"
     assert submission.execution_request.meta.model == "new-profile-model"
     assert submission.execution_request.cwd == nil
+  end
+
+  test "resolved capabilities and memory audience bind both native resume and compaction history" do
+    session_key = unique_session_key("scoped-history")
+    meta = %{invocation_context_key: "same", memory_context_key: "private-room", mcp_servers: []}
+    initial = %{request(session_key, %{agent_id: "test", meta: meta}) | origin: :channel,
+      prompt: "private bootstrap"}
+    assert {:ok, owner} = SubmissionBuilder.build(initial, orchestrator_state())
+    token = %ResumeToken{engine: "lemon", value: session_key}
+    assert :ok = ResumeResolver.bind_run(owner.execution_request)
+    assert :ok = ResumeResolver.bind(token, owner.execution_request)
+    assert :ok = LemonCore.ChatStateStore.put(session_key, %{
+      last_engine: "lemon", last_resume_token: token.value
+    })
+    assert :ok = LemonCore.RunHistoryStore.put(session_key, System.system_time(:millisecond),
+      initial.run_id, %{summary: %{prompt: initial.prompt, answer: "private answer", meta: meta}})
+    marker = %{set_at_ms: System.system_time(:millisecond)}
+    assert :ok = PendingCompactionStore.put(session_key, marker)
+    on_exit(fn ->
+      LemonCore.ChatStateStore.delete(session_key)
+      LemonCore.RunHistoryStore.delete_session(session_key)
+      PendingCompactionStore.delete(session_key)
+    end)
+
+    same = %{request(session_key, %{agent_id: "test", meta: meta}) | origin: :channel,
+      prompt: "continue private work"}
+    assert {:ok, resumed} = SubmissionBuilder.build(same, orchestrator_state())
+    assert resumed.execution_request.resume == token
+    assert resumed.execution_request.prompt =~ "private bootstrap"
+    assert resumed.pending_compaction_marker == marker
+
+    for other_meta <- [
+          %{meta | invocation_context_key: "other"},
+          %{meta | memory_context_key: "shared-room"},
+          Map.delete(meta, :mcp_servers)
+        ] do
+      incoming = %{request(session_key, %{agent_id: "test", meta: other_meta}) | origin: :channel,
+        prompt: "public room prompt"}
+      assert {:ok, fresh} = SubmissionBuilder.build(incoming, orchestrator_state())
+      assert fresh.execution_request.resume == nil
+      assert fresh.execution_request.prompt == "public room prompt"
+      assert fresh.pending_compaction_marker == nil
+      assert PendingCompactionStore.get(session_key) == marker
+      assert LemonCore.ChatStateStore.get(session_key).last_resume_token == token.value
+    end
+
+    restricted = %{same | run_id: "#{same.run_id}-restricted", tool_policy: %{blocked_tools: ["read"]}}
+    assert {:ok, fresh} = SubmissionBuilder.build(restricted, orchestrator_state())
+    assert fresh.execution_request.resume == nil
+    assert fresh.execution_request.prompt == same.prompt
+    assert "read" in fresh.execution_request.tool_policy.blocked_tools
+  end
+
+  test "legacy unknown journals retain default policy resume but explicit overrides start fresh" do
+    session_key = unique_session_key("legacy-resume")
+    token = %ResumeToken{engine: "lemon", value: session_key}
+    assert :ok = LemonCore.ChatStateStore.put(session_key, %{
+      last_engine: "lemon", last_resume_token: token.value
+    })
+    on_exit(fn -> LemonCore.ChatStateStore.delete(session_key) end)
+    assert {:ok, legacy} = SubmissionBuilder.build(
+      request(session_key, %{agent_id: "test"}), orchestrator_state())
+    assert is_map(legacy.execution_request.tool_policy)
+    assert legacy.execution_request.resume == token
+
+    for attrs <- [
+          %{agent_id: "test", tool_policy: %{blocked_tools: ["bash"]}},
+          %{agent_id: "test", meta: %{mcp_servers: []}},
+          %{agent_id: "test", meta: %{invocation_context_key: "scoped"}},
+          %{agent_id: "test", meta: %{memory_context_key: "shared-room"}}
+        ] do
+      assert {:ok, fresh} = SubmissionBuilder.build(request(session_key, attrs), orchestrator_state())
+      assert fresh.execution_request.resume == nil
+    end
+    assert LemonCore.ChatStateStore.get(session_key).last_resume_token == token.value
+  end
+
+  test "builder binds proof comparison to the actual fixed ID for resume and compaction" do
+    session_key = unique_session_key("proof-history")
+    initial = %{request(session_key, %{agent_id: "test"}) | origin: :channel, prompt: "prior work"}
+    initial = %{initial | meta: proof_meta(initial.run_id)}
+    assert {:ok, owner} = SubmissionBuilder.build(initial, orchestrator_state())
+    token = %ResumeToken{engine: "lemon", value: session_key}
+    assert :ok = ResumeResolver.bind_run(owner.execution_request)
+    assert :ok = ResumeResolver.bind(token, owner.execution_request)
+    assert :ok = LemonCore.ChatStateStore.put(session_key, %{
+      last_engine: "lemon", last_resume_token: token.value
+    })
+    assert :ok = LemonCore.RunHistoryStore.put(session_key, System.system_time(:millisecond),
+      initial.run_id, %{summary: %{prompt: initial.prompt, answer: "done", meta: initial.meta}})
+    marker = %{set_at_ms: System.system_time(:millisecond)}
+    assert :ok = PendingCompactionStore.put(session_key, marker)
+    on_exit(fn ->
+      LemonCore.ChatStateStore.delete(session_key)
+      LemonCore.RunHistoryStore.delete_session(session_key)
+      PendingCompactionStore.delete(session_key)
+    end)
+
+    next = %{request(session_key, %{agent_id: "test"}) | origin: :channel, prompt: "next work"}
+    next = %{next | meta: proof_meta(next.run_id)}
+    assert {:ok, resumed} = SubmissionBuilder.build(next, orchestrator_state())
+    assert resumed.execution_request.resume == token
+    assert resumed.execution_request.prompt =~ "prior work"
+    assert resumed.pending_compaction_marker == marker
+    assert resumed.execution_request.meta.mcp_servers == next.meta.mcp_servers
+
+    borrowed = %{next | meta: initial.meta}
+    assert {:ok, fresh} = SubmissionBuilder.build(borrowed, orchestrator_state())
+    assert fresh.execution_request.resume == nil
+    assert fresh.execution_request.prompt == "next work"
+    assert fresh.pending_compaction_marker == nil
+    assert PendingCompactionStore.get(session_key) == marker
+  end
+
+  defp proof_meta(run_id) do
+    name = "lemon_bot/invocations/#{run_id}"
+    servers = [%{name: "core", url: "https://core.invalid/mcp", headers: %{
+      "X-Lemon-Bot-Invocation" => "${LEMON_SECRET:#{name}}",
+      "Authorization" => "${LEMON_SECRET:connector/same}"
+    }}]
+    descriptor = %{"runId" => run_id, "serverName" => "core",
+      "serverUrl" => "https://core.invalid/mcp", "headerName" => "X-Lemon-Bot-Invocation",
+      "secretName" => name}
+    assert {:ok, proof} = LemonCore.InvocationProof.validate(descriptor, run_id, servers)
+    %{invocation_context_key: "same-actor", memory_context_key: "same-room",
+      memory_context_verified: true, invocation_proof_verified: true,
+      invocation_proof: proof, mcp_servers: servers}
   end
 
   defp request(session_key, attrs) do

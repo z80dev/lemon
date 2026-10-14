@@ -256,6 +256,206 @@ defmodule LemonControlPlane.Methods.ChatSendTest do
     assert details["retrySafe"] == false
   end
 
+  test "invocation context reaches execution privately for ordinary and profile-bound sessions", %{ctx: ctx} do
+    key = "hmac_private_principal_policy_epoch"
+    for extra <- [%{}, %{"profileId" => "workspace", "invocationMcpServers" => []}] do
+      assert {:ok, response} =
+               ChatSend.handle(params(Map.put(extra, "invocationContextKey", key)), ctx)
+      assert_receive {:submitted, request}
+      assert request.meta.invocation_context_key == key
+      assert response["targetRunId"] == request.run_id
+      refute inspect(response) =~ key
+    end
+  end
+
+  test "malformed invocation contexts reject before any dispatch without echoing input", %{ctx: ctx} do
+    for key <- [nil, "", 123, %{}, " private_context", "PRIVATE_CONTEXT\n",
+                String.duplicate("PRIVATE_CONTEXT", 20)] do
+      assert {:error, {:invalid_request, message, nil}} =
+               ChatSend.handle(params(%{"invocationContextKey" => key}), ctx)
+      refute message =~ "PRIVATE_CONTEXT"
+    end
+    refute_receive {:submitted, _}
+  end
+
+  test "validated invocation and memory keys install private owner proof", %{ctx: ctx} do
+    for extra <- [%{}, %{"profileId" => "workspace", "invocationMcpServers" => []}] do
+      values = Map.merge(extra, %{"invocationContextKey" => "actor_epoch_digest",
+                                 "memoryContextKey" => "private_audience_digest"})
+      assert {:ok, response} = ChatSend.handle(params(values), ctx)
+      assert_receive {:submitted, request}
+      assert request.meta.invocation_context_key == "actor_epoch_digest"
+      assert request.meta.memory_context_key == "private_audience_digest"
+      assert request.meta.memory_context_verified == true
+      refute inspect(response) =~ "actor_epoch_digest"
+      refute inspect(response) =~ "private_audience_digest"
+      refute Map.has_key?(response, "memoryContextVerified")
+    end
+  end
+
+  test "caller proof flags cannot create a memory context", %{ctx: ctx} do
+    assert {:ok, _} =
+             ChatSend.handle(params(%{"invocationContextKey" => "actor_epoch",
+                                      "memoryContextVerified" => true,
+                                      "memory_context_verified" => true}), ctx)
+    assert_receive {:submitted, request}
+    refute Map.get(request.meta, :memory_context_verified, false)
+    refute Map.has_key?(request.meta, :memory_context_key)
+  end
+
+  test "memory identity requires a valid invocation identity before dispatch", %{ctx: ctx} do
+    assert {:error, {:invalid_request, _, nil}} =
+             ChatSend.handle(params(%{"memoryContextKey" => "memory_private"}), ctx)
+    for key <- [nil, "", 12, " private_memory", String.duplicate("memory_private", 20)] do
+      assert {:error, {:invalid_request, message, nil}} =
+               ChatSend.handle(params(%{"invocationContextKey" => "actor_epoch",
+                                        "memoryContextKey" => key}), ctx)
+      refute message =~ "memory_private"
+    end
+    refute_receive {:submitted, _}
+  end
+
+  test "shared memory intent requires real operator admin authority, not caller flags", %{ctx: ctx} do
+    values = %{"invocationContextKey" => "actor_epoch", "memoryContextKey" => "actor_room",
+               "sharedMemoryGrant" => true, "role" => "operator", "scopes" => ["admin"]}
+    for auth <- [nil, %{role: :operator, scopes: [:write]},
+                  %{role: :node, scopes: [:write, :admin]}] do
+      assert {:error, {:forbidden, _}} =
+               ChatSend.handle(params(values), Map.put(ctx, :auth, auth))
+    end
+    refute_receive {:submitted, _}
+
+    admin = Map.put(ctx, :auth, %{role: :operator, scopes: [:write, :admin]})
+    assert {:ok, response} = ChatSend.handle(params(values), admin)
+    assert_receive {:submitted, request}
+    assert request.meta.shared_memory_grant == true
+    assert request.meta.memory_context_verified == true
+    refute Map.has_key?(response, "sharedMemoryGrant")
+    refute inspect(response) =~ "actor_room"
+  end
+
+  test "memory grants default false and require a verified identity pair", %{ctx: ctx} do
+    keys = %{"invocationContextKey" => "actor_epoch", "memoryContextKey" => "actor_room"}
+    assert {:ok, _} = ChatSend.handle(params(keys), ctx)
+    assert_receive {:submitted, request}
+    assert request.meta.shared_memory_grant == false
+
+    for extra <- [%{"sharedMemoryGrant" => true},
+                  %{"invocationContextKey" => "actor_epoch", "sharedMemoryGrant" => true},
+                  Map.put(keys, "sharedMemoryGrant", "true")] do
+      assert {:error, {:invalid_request, _, nil}} = ChatSend.handle(params(extra), ctx)
+    end
+    refute_receive {:submitted, _}
+  end
+
+  test "managed profile does not inherit an owner's connector when replacement is missing", %{ctx: ctx} do
+    owner_secret = "private-owner-profile-credential"
+    assert {:ok, _} =
+             LemonCore.ProfileStore.create(%{
+               id: "owner-template",
+               mcpServers: [%{
+                 "name" => "owner", "url" => "https://owner.example/mcp",
+                 "headers" => %{"Authorization" => "Bearer " <> owner_secret}
+               }]
+             })
+
+    values = %{
+      "profileId" => "owner-template",
+      "invocationContextKey" => "actual_principal_policy_epoch",
+      "memoryContextKey" => "actual_principal_private_audience"
+    }
+
+    assert {:error, {:invalid_request, _, nil}} = ChatSend.handle(params(values), ctx)
+    refute_receive {:submitted, _}
+    assert {:ok, _} =
+             ChatSend.handle(params(Map.put(values, "invocationMcpServers", [])), ctx)
+    assert_receive {:submitted, request}
+    assert request.meta.mcp_servers == []
+    refute inspect(request) =~ owner_secret
+  end
+
+  test "operator proof attestation binds the actual admitted profile connector", %{ctx: ctx} do
+    run_id = "factory-proof-root"
+    descriptor = %{
+      "runId" => run_id, "serverName" => "core",
+      "serverUrl" => "https://core.example/mcp",
+      "headerName" => "X-Lemon-Bot-Invocation",
+      "secretName" => "lemon_bot/invocations/" <> run_id
+    }
+
+    assert {:ok, _} =
+             LemonCore.ProfileStore.create(%{
+               id: "proof-source",
+               mcpServers: [%{
+                 "name" => "core", "url" => "https://core.example/mcp",
+                 "headers" => %{},
+                 "allowedOrigins" => ["https://core.example"],
+                 "approvedPrivateOrigins" => []
+               }]
+             })
+
+    values = %{
+      "runId" => run_id, "profileId" => "proof-source",
+      "invocationContextKey" => "principal_policy_epoch",
+      "memoryContextKey" => "principal_private_audience",
+      "invocationProof" => descriptor,
+      "invocationMcpServers" => [%{
+        "name" => "core", "url" => "https://core.example/mcp",
+        "headers" => %{
+          "X-Lemon-Bot-Invocation" => "${LEMON_SECRET:lemon_bot/invocations/#{run_id}}"
+        },
+        "allowedOrigins" => ["https://core.example"],
+        "approvedPrivateOrigins" => []
+      }]
+    }
+
+    admin = Map.put(ctx, :auth, %{role: :operator, scopes: [:write, :admin]})
+    assert {:ok, response} = ChatSend.handle(params(values), admin)
+    assert_receive {:submitted, request}
+    assert request.meta.invocation_proof_verified == true
+    assert request.meta.invocation_proof.run_id == run_id
+    assert request.meta.invocation_proof.secret_name == descriptor["secretName"]
+    assert hd(request.meta.mcp_servers)["headers"]["X-Lemon-Bot-Invocation"] ==
+             "${LEMON_SECRET:lemon_bot/invocations/#{run_id}}"
+    refute inspect(response) =~ descriptor["secretName"]
+
+    for auth <- [nil, %{role: :operator, scopes: [:write]},
+                  %{role: :node, scopes: [:admin, :write]}] do
+      assert {:error, {:forbidden, _}} =
+               ChatSend.handle(params(values), Map.put(ctx, :auth, auth))
+    end
+
+    for invalid <- [
+          Map.put(descriptor, "runId", "another-fixed-id"),
+          Map.put(descriptor, "serverName", "another-server"),
+          Map.put(descriptor, "serverUrl", "https://other.example/mcp"),
+          Map.put(descriptor, "headerName", "Authorization"),
+          Map.put(descriptor, "secretName", "lemon_bot/invocations/another-fixed-id"),
+          Map.put(descriptor, "verified", true),
+          false
+        ] do
+      assert {:error, {:invalid_request, _, nil}} =
+               ChatSend.handle(params(Map.put(values, "invocationProof", invalid)), admin)
+    end
+
+    assert {:error, {:invalid_request, _, nil}} =
+             ChatSend.handle(params(Map.delete(values, "memoryContextKey")), admin)
+    assert {:error, {:invalid_request, _, nil}} =
+             ChatSend.handle(params(Map.delete(values, "runId")), admin)
+    refute_receive {:submitted, _}
+  end
+
+  test "raw proof markers without a validated descriptor do not attest a connector", %{ctx: ctx} do
+    assert {:ok, _} =
+             ChatSend.handle(params(%{
+               "invocationContextKey" => "actor_epoch", "memoryContextKey" => "actor_private",
+               "invocationProofVerified" => true, "invocation_proof_verified" => true
+             }), ctx)
+    assert_receive {:submitted, request}
+    refute Map.has_key?(request.meta, :invocation_proof)
+    refute Map.has_key?(request.meta, :invocation_proof_verified)
+  end
+
   test "profileId inherits placement and persona for a noncanonical session", %{ctx: ctx} do
     assert {:ok, profile} =
              LemonCore.ProfileStore.create(%{

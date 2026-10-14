@@ -17,6 +17,24 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   without dispatch. Unknown outcomes retain the original nonretryable ID.
   Stable-storage barriers precede dispatch and merge effects and protect receipt
   acknowledgements/readback; failed barriers never authorize another send.
+  Private invocation-context keys isolate shared-session queue controls, merging
+  and native standing approvals across principals, policy and connector epochs;
+  changed execution capabilities queue their own run instead of steering an
+  older runtime with broader credentials.
+  Verified memory identities keep private native recall/capture separate from
+  shared rooms; standing session/agent grants and native resume/compaction history
+  cannot cross execution contexts. Explicit admin shared-memory intent remains
+  separate from private automatic capture. Bound per-run MCP proofs mask only
+  their exact attested header value during context comparison, never transport.
+  Fresh native task/background/delegated follow-ups reserve their own ID, verify
+  sealed lineage through a private backend issuer and provision new proofs before
+  independent execution; unknown outcomes never replay a completed root proof.
+  Remote private execution requires fresh advertised privacy-context support and
+  atomic exact-node/connection/session-generation fences. Public raw native node
+  calls reject private attestation and lineage aliases rather than minting trust.
+  `agent.wait` supports answer-free terminal status queries. `runs.active.list`
+  reports complete pre-limit active/queued/unknown presence, actual profile/source
+  dependencies and explicit unavailable failures instead of unsafe empty results.
 - Lemon Bot product architecture and dependency-free client/backend contracts:
   authenticated local/OIDC accounts and SCIM directory provisioning, durable
   named teammates on user-owned swarm machines, typed REST/realtime/MCP,

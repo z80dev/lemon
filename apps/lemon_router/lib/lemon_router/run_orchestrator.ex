@@ -49,6 +49,13 @@ defmodule LemonRouter.RunOrchestrator do
   @doc false
   def abort_tombstone_table, do: @abort_tombstone_table
 
+  # This barrier only reads durable state. Never call coordinators from the
+  # orchestrator: they may be waiting for a serialized start/admission.
+  @doc false
+  def presence_snapshot do
+    GenServer.call(__MODULE__, :presence_snapshot, @serialized_mutation_timeout_ms)
+  end
+
   @doc """
   Submit a run request.
 
@@ -89,6 +96,36 @@ defmodule LemonRouter.RunOrchestrator do
   def submit(server, request) when is_map(request) or is_list(request) do
     normalized = RunRequest.new(request)
     submit(server, normalized)
+  end
+
+  @doc "Admit a fixed-ID fresh native execution from immutable local tool provenance."
+  def submit_native_followup(source, %RunRequest{} = request) do
+    submit_native_followup(__MODULE__, source, request)
+  end
+
+  def submit_native_followup(server, source, %RunRequest{} = request) do
+    GenServer.call(server, {:native_followup, source, request, :local}, @serialized_mutation_timeout_ms)
+  end
+
+  @doc false
+  def submit_native_followup_from_node(source, %RunRequest{} = request, authenticated_session) do
+    submit_native_followup_from_node(__MODULE__, source, request, authenticated_session)
+  end
+
+  @doc false
+  def submit_native_followup_from_node(server, source, %RunRequest{} = request, authenticated_session) do
+    GenServer.call(server, {:native_followup, source, request, authenticated_session},
+      @serialized_mutation_timeout_ms)
+  end
+
+  @doc "Seal immutable executing-host native startup policy before native execution begins."
+  def register_native_source_floor(source, actual_policy) do
+    LemonRouter.NativeLineage.register_source_floor(source, actual_policy, :local)
+  end
+
+  @doc false
+  def register_native_source_floor_from_node(source, actual_policy, authenticated_session) do
+    LemonRouter.NativeLineage.register_source_floor(source, actual_policy, authenticated_session)
   end
 
   @doc "Submit once and return the owning queue's durable disposition."
@@ -230,6 +267,21 @@ defmodule LemonRouter.RunOrchestrator do
   end
 
   @impl true
+  def handle_call(:presence_snapshot, _from, state) do
+    result =
+      with {:ok, admissions} <- Store.fetch_all(@run_admission_table),
+           {:ok, receipts} <- LemonRouter.RunReceiptStore.fetch_all(),
+           :ok <- Store.sync() do
+        {:ok, %{admissions: Map.new(admissions), receipts: Map.new(receipts)}}
+      else
+        _ -> {:error, :query_failed}
+      end
+
+    {:reply, result, state}
+  end
+
+  def handle_call(:presence_barrier, _from, state), do: {:reply, :ok, state}
+
   def handle_call({:submit_with_receipt, %RunRequest{} = params}, from, state) do
     {:reply, result, next_state} = handle_call({:submit, params}, from, state)
 
@@ -253,6 +305,17 @@ defmodule LemonRouter.RunOrchestrator do
 
     {result, state} = submit_idempotently(params, state)
 
+    {:reply, result, state}
+  end
+
+  def handle_call({:native_followup, captured, %RunRequest{} = request, transport}, _from, state) do
+    result =
+      with :ok <- RunRequest.validate_invocation_context_key(request.run_id),
+           {:ok, source} <- LemonRouter.NativeLineage.authenticate(captured, transport) do
+        identity = request_identity(%{request | meta:
+          LemonRouter.NativeLineage.semantic_meta(request.meta || %{}, source.run_id)})
+        native_followup_once(Map.put(source, :authenticated_transport, transport), request, identity, state)
+      end
     {:reply, result, state}
   end
 
@@ -317,7 +380,7 @@ defmodule LemonRouter.RunOrchestrator do
       provenance: :direct
     )
 
-    case SubmissionBuilder.build(request, orchestrator_state) do
+    case build_native_submission(request, orchestrator_state) do
       {:ok, %Submission{} = submission} ->
         LemonCore.EventBridge.subscribe_run(run_id)
 
@@ -393,6 +456,94 @@ defmodule LemonRouter.RunOrchestrator do
     end
   end
 
+  defp build_native_submission(request, state) do
+    with {:ok, submission} <- SubmissionBuilder.build(request, state) do
+      LemonRouter.NativeLineage.capture_submission(submission)
+    end
+  end
+
+  defp native_followup_once(source, request, identity, state) do
+    case Store.fetch(@run_admission_table, request.run_id) do
+      {:ok, nil} -> reserve_native_followup(source, request, identity, state)
+      {:ok, %{identity: ^identity, native_followup: %{status: :accepted}}} -> {:ok, request.run_id}
+      {:ok, %{identity: ^identity, native_followup: %{status: status}}}
+      when status in [:denied, :admission_unavailable, :aborted] -> {:error, status}
+      {:ok, %{identity: ^identity, native_failure: status}} -> {:error, status}
+      {:ok, %{identity: ^identity}} -> {:error, :outcome_unknown}
+      {:ok, %{}} -> {:error, :run_id_conflict}
+      _ -> {:error, :outcome_unknown}
+    end
+  end
+
+  defp reserve_native_followup(source, request, identity, state) do
+    case LemonRouter.NativeLineage.prepare_request(source, request) do
+      {:ok, prepared, destination} ->
+        case LemonRouter.NativeLineage.reserve(source, prepared, identity, destination) do
+          {:ok, entry, :new} -> issue_native_followup(source, prepared, identity, entry, destination, state)
+          {:ok, _, :existing} -> {:error, :outcome_unknown}
+          {:error, :admission_unavailable} ->
+            reject_native_preparation(request, identity, :admission_unavailable)
+          error -> error
+        end
+      {:error, reason} ->
+        reject_native_preparation(request, identity, reason)
+    end
+  end
+
+  defp reject_native_preparation(request, identity, reason) do
+    entry = %{state: "native_rejected", identity: identity, native_failure: reason, terminal: true,
+      scope: %{profile_id: nil, agent_id: request.agent_id, session_key: request.session_key}}
+    with :ok <- Store.put_new(@run_admission_table, request.run_id, entry),
+         :ok <- Store.sync() do
+      {:error, reason}
+    else
+      _ -> {:error, :outcome_unknown}
+    end
+  end
+
+  defp issue_native_followup(source, request, identity, entry, destination, state) do
+    result =
+      try do
+        with :ok <- native_abort_preflight(request.run_id, state),
+             :ok <- LemonRouter.NativeLineage.current_source(source),
+             :ok <- LemonRouter.NativeLineage.current_target(request, destination),
+             {:ok, admitted} <- LemonRouter.NativeLineage.admit(source, request, entry),
+             :ok <- LemonRouter.NativeLineage.current_source(source),
+             :ok <- LemonRouter.NativeLineage.current_target(admitted, destination),
+             :ok <- LemonRouter.NativeLineage.record_outcome(request.run_id, :dispatch_pending),
+             {:ok, run_id} <- do_submit(attach_request_identity(admitted, identity), state),
+             {:ok, current} <- Store.fetch(@run_admission_table, run_id),
+             {:ok, _} <- persist_accepted_admission(run_id, identity, current, state.run_admission_retention_ms) do
+          {:ok, run_id}
+        end
+      rescue
+        _ -> {:error, :outcome_unknown}
+      catch
+        _, _ -> {:error, :outcome_unknown}
+      end
+
+    status = case result do
+      {:ok, _} -> :accepted
+      {:error, :denied} -> :denied
+      {:error, :admission_unavailable} -> :admission_unavailable
+      {:error, :aborted} -> :aborted
+      _ -> :outcome_unknown
+    end
+
+    case LemonRouter.NativeLineage.record_outcome(request.run_id, status) do
+      :ok -> result
+      _ -> {:error, :outcome_unknown}
+    end
+  end
+
+  defp native_abort_preflight(run_id, state) do
+    case fetch_abort_tombstone(run_id, state) do
+      {:none, _} -> :ok
+      {:active, _, _} -> {:error, :aborted}
+      _ -> {:error, :outcome_unknown}
+    end
+  end
+
   defp submit_idempotently(%RunRequest{} = params, state) do
     state = prune_accepted_run_ids(state)
     identity = request_identity(params)
@@ -426,7 +577,8 @@ defmodule LemonRouter.RunOrchestrator do
       state: "claimed",
       claimed_at_ms: claimed_at_ms,
       expires_at_ms: claimed_at_ms + retention_ms,
-      retention_ms: retention_ms
+      retention_ms: retention_ms,
+      scope: admission_scope(params)
     }
 
     case Store.put_new(@run_admission_table, params.run_id, entry) do
@@ -558,10 +710,9 @@ defmodule LemonRouter.RunOrchestrator do
   end
 
   defp dispatch_new_admission(params, identity, admission, state) do
-    # Once the external-enqueue boundary becomes ambiguous, retain only the
-    # permanent idempotency fence. Delivery/session metadata and diagnostic
-    # timestamps are not needed to reject a replay and must not live forever.
-    submitting = compact_admission("submitting", identity)
+    # Preserve only content-free attribution alongside the permanent replay
+    # fence, including when dispatch's outcome cannot be established.
+    submitting = compact_admission("submitting", identity, admission)
 
     with :ok <- Store.compare_and_swap(@run_admission_table, params.run_id, admission, submitting),
          :ok <- Store.sync() do
@@ -683,7 +834,7 @@ defmodule LemonRouter.RunOrchestrator do
 
   defp persist_accepted_admission(run_id, identity, expected, retention_ms, attempts_left \\ 3) do
     expires_at_ms = System.system_time(:millisecond) + retention_ms
-    replacement = compact_admission("accepted", identity)
+    replacement = compact_admission("accepted", identity, expected)
 
     case Store.compare_and_swap(@run_admission_table, run_id, expected, replacement) do
       :ok ->
@@ -765,8 +916,18 @@ defmodule LemonRouter.RunOrchestrator do
     end
   end
 
-  defp compact_admission(state, identity) when state in ["submitting", "accepted"] do
+  defp compact_admission(state, identity, entry) when state in ["submitting", "accepted"] do
     %{state: state, identity: identity}
+    |> Map.merge(Map.take(entry, [:scope, :terminal, :native_source, :native_followup, :native_failure]))
+  end
+
+  defp admission_scope(%RunRequest{} = params) do
+    agent_id = params.agent_id || SessionKey.agent_id(params.session_key) || "default"
+    %{
+      session_key: params.session_key,
+      agent_id: agent_id,
+      profile_id: MapHelpers.get_key(params.meta || %{}, :profile_id)
+    }
   end
 
   defp request_identity(%RunRequest{} = params) do
@@ -839,7 +1000,9 @@ defmodule LemonRouter.RunOrchestrator do
       |> enrich_submission_defaults(state)
       |> Submission.new!()
 
-    RunStarter.start(submission, coordinator_pid, conversation_key)
+    with :ok <- LemonRouter.NativeLineage.validate_activation(submission.execution_request) do
+      RunStarter.start(submission, coordinator_pid, conversation_key)
+    end
   end
 
   defp ensure_run_id(%RunRequest{run_id: run_id} = request)
@@ -946,7 +1109,7 @@ defmodule LemonRouter.RunOrchestrator do
   defp compact_existing_admission(run_id, entry, identity) do
     case MapHelpers.get_key(entry, :state) do
       state when state in ["accepted", "submitting"] ->
-        compacted = compact_admission(state, identity)
+        compacted = compact_admission(state, identity, entry)
 
         if entry == compacted do
           {:ok, entry}
@@ -980,7 +1143,7 @@ defmodule LemonRouter.RunOrchestrator do
 
           state when state in ["accepted", "submitting"] ->
             identity = MapHelpers.get_key(entry, :identity)
-            compacted = compact_admission(state, identity)
+            compacted = compact_admission(state, identity, entry)
 
             if entry != compacted,
               do: Store.compare_and_swap(@run_admission_table, run_id, entry, compacted)

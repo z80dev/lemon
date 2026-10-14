@@ -195,6 +195,23 @@ defmodule LemonControlPlane.Auth.AuthorizeTest do
                Authorize.authorize(ctx, "node.invoke.result", [:invoke, :event])
     end
 
+    test "native continuation and floor receipts require the actual node role and invoke scope" do
+      for method <- ["node.native.followup", "node.native.lineage.floor"] do
+        assert :ok =
+                 Authorize.authorize(%{role: :node, scopes: [:invoke]}, method, [:invoke])
+
+        assert {:error, {:forbidden, _}} =
+                 Authorize.authorize(
+                   %{role: :operator, scopes: [:admin, :invoke]},
+                   method,
+                   [:invoke]
+                 )
+
+        assert {:error, {:forbidden, _}} =
+                 Authorize.authorize(%{role: :node, scopes: [:read]}, method, [:invoke])
+      end
+    end
+
     test "returns generic insufficient-permissions forbidden error" do
       ctx = %{role: :operator, scopes: [:read]}
 

@@ -7,6 +7,8 @@ defmodule LemonControlPlane.Methods.RunsActiveList do
 
   @behaviour LemonControlPlane.Method
 
+  alias LemonControlPlane.Protocol.Errors
+
   @default_limit 100
   @max_limit 200
 
@@ -21,30 +23,34 @@ defmodule LemonControlPlane.Methods.RunsActiveList do
     params = params || %{}
 
     agent_id = get_param(params, "agentId")
+    profile_id = get_param(params, "profileId")
     session_key = get_param(params, "sessionKey")
     limit = normalize_limit(get_param(params, "limit"), @default_limit, @max_limit)
 
-    runs = fetch_active_runs(agent_id, session_key, limit)
-
     filters = %{
       "agentId" => agent_id,
+      "profileId" => profile_id,
       "sessionKey" => session_key,
       "limit" => limit
     }
 
-    {:ok, response(runs, filters)}
-  rescue
-    _ ->
-      filters = %{"agentId" => nil, "sessionKey" => nil, "limit" => @default_limit}
-      {:ok, response([], filters)}
+    case LemonRouter.run_presence(%{agent_id: agent_id, profile_id: profile_id, session_key: session_key}) do
+      {:ok, %{runs: runs, presence: presence}} ->
+        runs = runs |> Enum.take(limit) |> Enum.map(&build_run_entry/1)
+        {:ok, response(runs, filters, presence)}
+
+      {:error, _reason} ->
+        {:error, Errors.error(:unavailable, "Run presence is unavailable")}
+    end
   end
 
-  defp response(runs, filters) do
+  defp response(runs, filters, presence) do
     %{
       "runs" => runs,
       "total" => length(runs),
       "filters" => filters,
-      "summary" => summary(runs, filters)
+      "summary" => summary(runs, filters),
+      "presence" => Map.new(presence, fn {key, value} -> {Atom.to_string(key), value} end)
     }
   end
 
@@ -73,32 +79,19 @@ defmodule LemonControlPlane.Methods.RunsActiveList do
     }
   end
 
-  defp fetch_active_runs(agent_id, session_key, limit) do
-    LemonRouter.active_runs()
-    |> Enum.map(&build_run_entry/1)
-    |> Enum.filter(&filter_by_agent(&1, agent_id))
-    |> Enum.filter(&filter_by_session(&1, session_key))
-    |> Enum.take(limit)
-  end
 
   defp build_run_entry(run) do
     %{
       "runId" => run.run_id,
       "sessionKey" => run.session_key,
       "agentId" => run.agent_id,
+      "profileId" => run.profile_id,
       "engine" => "lemon",
       "startedAtMs" => run.started_at_ms,
       "status" => "active"
     }
   end
 
-  defp filter_by_agent(_run, nil), do: true
-  defp filter_by_agent(%{"agentId" => agent_id}, filter), do: agent_id == filter
-  defp filter_by_agent(_, _), do: false
-
-  defp filter_by_session(_run, nil), do: true
-  defp filter_by_session(%{"sessionKey" => session_key}, filter), do: session_key == filter
-  defp filter_by_session(_, _), do: false
 
   defp count_by(rows, key) do
     rows

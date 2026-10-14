@@ -65,6 +65,7 @@ defmodule LemonControlPlane.Methods.Registry do
     LemonControlPlane.Methods.ProfilesDelete,
     LemonControlPlane.Methods.ProfilesRoster,
     LemonControlPlane.Methods.ProfileChat,
+    LemonControlPlane.Methods.ProfileFollowupAdmissionSet,
     # Profile-scoped memory
     LemonControlPlane.Methods.MemoryList,
     LemonControlPlane.Methods.MemorySearch,
@@ -114,6 +115,7 @@ defmodule LemonControlPlane.Methods.Registry do
     # Runs
     LemonControlPlane.Methods.RunsActiveList,
     LemonControlPlane.Methods.RunsRecentList,
+    LemonControlPlane.Methods.RunsFollowupLineageGet,
     # Tasks
     LemonControlPlane.Methods.TasksActiveList,
     LemonControlPlane.Methods.TasksRecentList,
@@ -161,6 +163,8 @@ defmodule LemonControlPlane.Methods.Registry do
     LemonControlPlane.Methods.NodeInvokeResult,
     LemonControlPlane.Methods.NodeInvokeEvent,
     LemonControlPlane.Methods.NodeInvokeControlResult,
+    LemonControlPlane.Methods.NodeNativeFollowup,
+    LemonControlPlane.Methods.NodeNativeLineageFloor,
     LemonControlPlane.Methods.NodesList,
     LemonControlPlane.Methods.NodesRevoke,
     # Config

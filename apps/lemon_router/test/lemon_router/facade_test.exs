@@ -21,7 +21,7 @@ defmodule LemonRouter.FacadeTest do
     end
 
     test "active_runs/0 returns run summaries without leaking pids" do
-      runs = LemonRouter.active_runs()
+      assert {:ok, runs} = LemonRouter.active_runs()
 
       assert is_list(runs)
 
@@ -57,6 +57,7 @@ defmodule LemonRouter.FacadeTest do
         )
 
       ref = Process.monitor(pid)
+      assert {:ok, runs} = LemonRouter.active_runs()
 
       assert %{
                run_id: ^run_id,
@@ -65,7 +66,7 @@ defmodule LemonRouter.FacadeTest do
                engine: "lemon",
                started_at_ms: started
              } =
-               Enum.find(LemonRouter.active_runs(), &(&1.run_id == run_id))
+               Enum.find(runs, &(&1.run_id == run_id))
 
       assert is_integer(started)
       assert Process.alive?(pid)
@@ -97,9 +98,10 @@ defmodule LemonRouter.FacadeTest do
 
       try do
         started = System.monotonic_time(:millisecond)
+        assert {:ok, runs} = LemonRouter.active_runs()
 
         assert %{run_id: ^run_id, started_at_ms: nil} =
-                 Enum.find(LemonRouter.active_runs(), &(&1.run_id == run_id))
+                 Enum.find(runs, &(&1.run_id == run_id))
 
         assert System.monotonic_time(:millisecond) - started < 1_000
         assert Process.alive?(pid)
@@ -109,6 +111,16 @@ defmodule LemonRouter.FacadeTest do
 
       assert %{engine: "lemon"} = GenServer.call(pid, :get_metadata)
       assert Process.alive?(pid)
+    end
+
+    test "an unresponsive controller cannot turn an empty registry into an idle snapshot" do
+      pid = Process.whereis(LemonRouter.RunOrchestrator)
+      :ok = :sys.suspend(pid)
+      try do
+        assert {:error, :query_failed} = LemonRouter.active_runs()
+      after
+        :sys.resume(pid)
+      end
     end
 
     test "active_run_count/0 counts supervised runs" do
@@ -131,9 +143,9 @@ defmodule LemonRouter.FacadeTest do
       :ok
     end
 
-    test "reports nothing active instead of raising" do
+    test "reports authoritative reads unavailable instead of idle" do
       refute LemonRouter.available?()
-      assert LemonRouter.active_runs() == []
+      assert LemonRouter.active_runs() == {:error, :unavailable}
       assert LemonRouter.active_run_count() == 0
       refute LemonRouter.run_active?("run_1")
       assert LemonRouter.counts() == %{active: 0, queued: 0, completed_today: 0}

@@ -12,6 +12,37 @@ defmodule LemonControlPlane.Methods.NodeInvoke do
   alias LemonControlPlane.NodeStore
   alias LemonControlPlane.Protocol.Errors
 
+
+  @private_native_authority_fields [
+    :memory_context_verified, "memory_context_verified",
+    :memoryContextVerified, "memoryContextVerified",
+    :shared_memory_grant, "shared_memory_grant",
+    :sharedMemoryGrant, "sharedMemoryGrant",
+    :invocation_proof, "invocation_proof",
+    :invocationProof, "invocationProof",
+    :invocation_proof_verified, "invocation_proof_verified",
+    :invocationProofVerified, "invocationProofVerified",
+    :native_lineage_handle, "native_lineage_handle",
+    :nativeLineageHandle, "nativeLineageHandle",
+    :native_lineage_run_id, "native_lineage_run_id",
+    :nativeLineageRunId, "nativeLineageRunId",
+    :native_destination_pid, "native_destination_pid",
+    :nativeDestinationPid, "nativeDestinationPid",
+    :native_destination_generation, "native_destination_generation",
+    :nativeDestinationGeneration, "nativeDestinationGeneration",
+    :native_source_profile_id, "native_source_profile_id",
+    :nativeSourceProfileId, "nativeSourceProfileId",
+    :native_source_session_key, "native_source_session_key",
+    :nativeSourceSessionKey, "nativeSourceSessionKey",
+    :native_followup_submit, "native_followup_submit",
+    :nativeFollowupSubmit, "nativeFollowupSubmit",
+    :native_source_floor_fun, "native_source_floor_fun",
+    :nativeSourceFloorFun, "nativeSourceFloorFun",
+    :native_managed_context, "native_managed_context",
+    :nativeManagedContext, "nativeManagedContext",
+    :native_root_binding, "native_root_binding",
+    :nativeRootBinding, "nativeRootBinding"
+  ]
   @impl true
   def name, do: "node.invoke"
 
@@ -38,9 +69,24 @@ defmodule LemonControlPlane.Methods.NodeInvoke do
       not is_map(args) ->
         {:error, Errors.invalid_request("args must be an object")}
 
+      method == "coding_agent.run" and supplied_private_authority?(args) ->
+        {:error, Errors.forbidden("Native execution authority must come from the chat admission factory")}
+
       true ->
         invoke_bounded(node_id, method, args, timeout_ms, ctx)
     end
+  end
+
+  defp supplied_private_authority?(args) do
+    Enum.any?([:meta, "meta"], fn key ->
+      case Map.get(args, key) do
+        meta when is_map(meta) ->
+          Enum.any?(@private_native_authority_fields, &Map.has_key?(meta, &1))
+
+        _ ->
+          false
+      end
+    end)
   end
 
   defp invoke_bounded(node_id, method, args, timeout_ms, ctx) do

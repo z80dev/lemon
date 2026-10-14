@@ -152,6 +152,84 @@ fixed ID as `outcome_unknown`; work never dispatches across an unproven fence.
 Receipt replay/readback also requires a successful barrier, so an earlier failed
 flush cannot turn a merely visible row into a durable acceptance.
 
+Trusted operator producers can also supply `chat.send.invocationContextKey`,
+an opaque keyed digest derived from the **authenticated** initiating principal,
+effective policy, connector/grant epochs and exact MCP configuration. It uses
+the same bounded ASCII identifier alphabet as `runId` and is private execution
+metadata, not an authorization grant or a caller-claimed user identity.
+
+An optional `memoryContextKey` supplies a stable private memory identity. The
+trusted backend derives it from the authenticated principal, workspace, bot and
+authorized conversation/surface audience, distinguishing private DM/task memory
+from shared-room memory. Unlike the invocation key, it excludes policy/grant
+epochs. It has the same scalar validation and requires `invocationContextKey`.
+The control plane installs the private verification marker only after validating
+both keys; caller/provider/tool proof flags are never accepted.
+
+Trusted control-plane producers use
+`LemonControlPlane.ChatSubmission.attach_execution_context/3` with the actual
+authenticated operator context and the already-built fixed-ID profile request.
+It authorizes grants/proofs, then delegates to the shared pure factory
+`LemonCore.InvocationProof.attach_execution_context/2`. Scheduled admission calls
+that same pure factory only after its owning authenticated, admin-configured
+callback validates the bound projection, with `sharedMemoryGrant: false`; it
+must not synthesize an operator context. The pure factory grants no authority
+itself. The request must already contain the explicit per-principal MCP
+replacement and effective restrictive policy. The projection's `runId` must
+match that request's actual fixed ID.
+
+`sharedMemoryGrant` defaults to `false`. Enabling it requires both validated keys
+and an authenticated operator connection with `admin` authorization; the backend
+must derive it solely from explicit workspace-maintainer/admin shared-write
+intent, never a product client field. Only the control-plane factory stamps the
+private grant. Native children inherit it only within the unchanged authorized
+context. It permits explicit shared `remember` writes, not shared automatic run
+capture: automatic capture remains private regardless of this flag.
+
+Trusted admin `chat.send` producers may add `invocationProof` only with both
+verified context keys and an explicitly submitted fixed `runId`. The descriptor
+has exactly these fields:
+
+```json
+{
+  "runId": "fixed-run-id",
+  "serverName": "lemon-bot",
+  "serverUrl": "https://bot.example/mcp",
+  "headerName": "X-Lemon-Bot-Invocation",
+  "secretName": "lemon_bot/invocations/fixed-run-id"
+}
+```
+
+The actual admitted MCP server must match the name and URL and contain the exact
+header value `${LEMON_SECRET:lemon_bot/invocations/fixed-run-id}`. The factory
+stamps the private proof marker; booleans or model-provided attestations cannot
+replace this binding. Context comparisons may mask only that exact attested
+header **value**. They retain the server, URL, header name and every other
+configuration field. The actual transport header is never removed: an active
+same-context steer keeps its original proof, while each fresh native execution
+attaches its own freshly provisioned proof and clients.
+
+Queue merging and active-run controls require the same invocation/memory context,
+effective tool policy and exact MCP configuration. Explicit and missing context keys
+differ; an absent MCP override is distinct from explicit `[]`. Cross-context
+followup, steer, redirect, backlog-steer and interrupt requests become their own
+ordinary queued run, with its own `targetRunId`, never text or cancellation
+injected into another principal's execution. Matching legacy missing keys retain
+the previous behavior when capabilities also match.
+
+Native resume tokens and pending compaction history are bound to the effective
+execution context. A mismatch, or an unproven keyed token, starts a separate
+native journal without deleting the old one. The backend supplies only the
+currently authorized transcript summary; another principal's old private journal
+is not automatically replayed. Same-context history can resume, while each new
+execution rebuilds its policy, clients and credential resolver.
+
+Session and agent standing approvals are scoped by the invocation key, never
+another principal's shared-session grant. Explicit workspace-admin global/node
+grants remain separate administrative policy. Native memory recall/indexing uses
+the verified memory identity and cannot fall back to unscoped private notes.
+Changing either context key conflicts with an existing fixed `runId`.
+
 Success includes `runId`, `sessionKey`, `state: "accepted"`, `effectiveMode`,
 `targetRunId`, and `retrySafe: false`. Requested `queueMode` in the redacted
 summary is not evidence of the effective action:
@@ -176,14 +254,159 @@ admission fence returns `state: "outcome_unknown"` with nullable `sessionKey`,
 `effectiveMode` and `targetRunId`. Missing IDs return `NOT_FOUND`; query failures
 remain `UNAVAILABLE`, not missing or idle. Use `agent.wait` for final answer,
 success/error and explicit `cancelled` proof, following `targetRunId` for merged
-or steered work. `SUBMISSION_OUTCOME_UNKNOWN` errors retain the original `runId`
-and `sessionKey` with `retrySafe: false`; reconcile that ID, never fabricate
-another send. Receipts retain only IDs, private semantic hashes and dispositions,
-never prompt content; semantic hashes do not cross the wire.
+or steered work. `includeAnswer: false` provides status-only completion: `answer`
+is null, answer-derived byte counts are zero, and usage/budget are omitted.
+The original initiator can keep the default full-answer projection; a credential
+revocation manager need not fetch another principal's answer to inspect terminal
+status. Malformed nonboolean flags are rejected rather than returning an answer.
+`SUBMISSION_OUTCOME_UNKNOWN` errors retain the original `runId` and `sessionKey`
+with `retrySafe: false`; reconcile that ID, never fabricate another send.
+Receipt management views contain only IDs, status and dispositions. Owner rows
+also retain private content-free scope/fingerprint and terminal evidence, never
+prompt content or plaintext lineage handles.
 
 For `interrupt`, await completion under the submitted `runId`, not the old
 cancellation target. Re-read pending steering receipts before choosing a
 completion target: a rejected instruction can become its own queued run.
+
+### Native follow-up proof renewal
+
+In-process native children inside the still-active original invocation may
+inherit its exact authority and clients. A fresh routed task or delegated-agent
+follow-up is a distinct fixed-ID execution, never a way to replay
+the completed root's proof or attach ambient profile credentials.
+
+Provision the backend-owned issuer using admin `profile.followup.admission.set`
+with exactly `profileId`, `url` and `token`. Success is
+`{"profileId": "...", "configured": true}`. The encrypted token and private URL
+are not returned by profile get/list/roster or history. Configure exact permitted
+origins through `LEMON_NATIVE_FOLLOWUP_ALLOWED_ORIGINS`, or
+`:lemon_router, :native_followup_allowed_origins`. HTTPS is required except
+explicitly allowlisted HTTP on literal loopback IPs; userinfo, query strings,
+fragments, redirects and automatic retries are not allowed.
+
+The existing **current target profile's `mcpServers`** is the operator-authored
+identity/origin/tool ceiling. For managed contexts, register credential-free
+templates with `headers: {}`: current Core/connector name and URL, allowed origins,
+explicit private-origin approvals and optional enabled-tool limits. Never put
+an owner's account credentials in these templates. They are not execution
+defaults: every managed initial run, task, SideQuery and fresh follow-up must
+supply the exact complete per-principal MCP replacement, including `[]` when no
+connections are authorized. Missing replacement must not inherit the templates,
+ambient profile headers or cached OAuth clients.
+
+The native owner records actual root/parent provenance before dispatch and
+hands its factory a private, run-bound continuing-lineage handle. Only its hash
+is durable; raw handles do not enter management/history/provider projections.
+Remote renewal requests must come from the actual authenticated source node and
+current session generation, not a body claiming an actor or ancestor.
+
+Only the actual executing-root factory receipts its immutable native policy
+floor before MCP clients, bootstrap, session/model or tools start. In-process
+children cannot reseal that root with a narrower child/persona floor. Fresh
+renewal refuses an unverified source floor; destination-local configuration is
+not approximated from a controller or model-supplied policy.
+An explicitly empty proofless managed root has no continuing-lineage handle:
+its startup floor receipt is bound to its actual sealed root ID and authenticated
+destination, and cannot create later follow-up authority.
+
+The node-only conduits are `node.native.lineage.floor`
+(`sourceRunId`, `toolPolicy`, optional `lineageHandle`) and `node.native.followup`
+(`sourceRunId`, `lineageHandle`, `request`). A request contains fixed `runId`,
+`prompt` and optional `agentId`, `sessionKey`, `images`, `model`, `cwd`,
+`toolPolicy`, `meta`; there is no queue/resume, actor/audience or body-provided
+node/generation selector. Private metadata is discarded and owner-derived.
+The floor acknowledgement is `{}`; admitted follow-up acknowledgement is
+`{"runId": "F"}`. Neither response returns the private handle. Their native
+payload bound is 16 MiB with strict JSON validation; ordinary RPC bounds remain
+unchanged.
+
+Before contacting the issuer, the owner reserves and flushes fixed follow-up
+`F`, its verified source lineage and the exact current destination. The callback
+sends only `{"runId": "F"}` with the private per-profile bearer. The backend must
+read admin `runs.followup.lineage.get` with exactly that ID. During the pending
+callback it returns the retained `sourceRootRunId`, `parentRunId`, `sourceProfileId`,
+`sourceSessionKey`, `sourceInvocationContextKey`, `sourceMemoryContextKey`,
+`sourceRestrictiveToolPolicy`, and the actual `targetProfileId`, `targetAgentId`,
+`targetSessionKey`, `targetNodeId`, plus `runId`. There is no parent selector,
+answer, prompt, token, MCP header or process identifier in this projection.
+
+The issuer derives the actual root actor/private audience from retained owned
+records, checks current membership and source/target policy/connector fences,
+and provisions a new destination proof bound to `F`. An approving HTTP 200
+response is exactly:
+
+```json
+{
+  "allow": true,
+  "invocation": {
+    "invocationContextKey": "current-principal-policy-connectors-digest",
+    "memoryContextKey": "authorized-stable-private-audience-digest",
+    "invocationToolPolicy": {"allow": ["read"]},
+    "invocationMcpServers": [{
+      "name": "lemon-bot",
+      "url": "https://bot.example/mcp",
+      "allowedOrigins": ["https://bot.example"],
+      "approvedPrivateOrigins": [],
+      "headers": {
+        "X-Lemon-Bot-Invocation": "${LEMON_SECRET:lemon_bot/invocations/F}"
+      }
+    }],
+    "invocationProof": {
+      "runId": "F",
+      "serverName": "lemon-bot",
+      "serverUrl": "https://bot.example/mcp",
+      "headerName": "X-Lemon-Bot-Invocation",
+      "secretName": "lemon_bot/invocations/F"
+    },
+    "sharedMemoryGrant": false
+  }
+}
+```
+
+Refusal is exactly `{"allow": false}`. Response authority flags and principal
+claims are not accepted. The owner validates the fixed proof, intersects actual
+source/request/current target and issuer policy, and validates the currently
+authorized target BaseCore/connector MCP transport against the **current target's
+current operator-authored `mcpServers`**, using canonical origin and destination-secret
+rules. Response servers must match canonical template name/URL and may only
+narrow origin, private-origin and enabled-tool sets. Their own allowlists do not
+create operator consent. New keys/transports may legitimately change with target
+or current epochs; original keys authenticate retained lineage, not stale
+credentials. Configuration changes fence prepared and queued executions before
+private dispatch. Arbitrary callback transports, permission widening and
+owner/default credentials are not accepted. It rechecks exact destination identity,
+connection and privacy capability before dispatch. Fresh `F` uses independent
+collect admission, with truthful `new_run`/`queued` receipt targeting `F`.
+Known rejection retains fixed-ID terminal evidence; unavailable or ambiguous
+outcomes never manufacture a new ID, retry the callback or redispatch.
+
+Context-owned remote execution requires the **current authenticated worker's**
+`capabilities["coding_agent.run"]["nativePrivacyContext"] = {"version": 1}`.
+Generic coding-agent version 1 and stale durable capability rows are not proof.
+Private execution and proof provisioning bind the inspected durable node ID,
+current connection PID and session generation atomically; unsupported, stale or
+unavailable destinations fail before enqueueing the private payload.
+
+### Complete profile-idle proof
+
+`runs.active.list` accepts `profileId`, `agentId`, `sessionKey` and display
+`limit`. Its existing `runs` array remains active entries; `presence` contains
+`active`, `queued`, `unknown`, `idle`, and `complete: true`. Counts are computed
+**before** the display limit. Idle means all three counts are zero with every
+read successful, not merely an empty active array.
+
+Presence combines live native owners, coordinator queues/pending controls,
+durable admission/receipt uncertainty and retained terminal evidence. It uses
+actual executed profile/agent identity and verified source-profile dependencies;
+it never invents a profile from an arbitrary session-key string. Unattributed
+legacy or timed-out metadata candidates remain fixed-ID unknown work, not idle.
+Completed rows remain terminal through history pruning. Controller/registry/store
+failure or a racing durable snapshot returns `UNAVAILABLE`; a valid available
+empty registry returns genuine idle proof.
+A source-profile query can therefore return a run whose actual `profileId` is
+another dependent execution profile; the authoritative `presence` counts, not
+that display array, determine whether the source resource is idle.
 
 ### Placement-aware sessions and routines
 

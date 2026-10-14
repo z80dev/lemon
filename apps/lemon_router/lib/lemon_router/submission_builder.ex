@@ -40,10 +40,7 @@ defmodule LemonRouter.SubmissionBuilder do
     queue_mode = params.queue_mode || :collect
     request_model = params.model
 
-    {prepared_compaction_marker, meta} =
-      params.meta
-      |> Kernel.||(%{})
-      |> PendingCompaction.pop_prepared_marker()
+    meta = params.meta || %{}
 
     cwd_override = params.cwd
     tool_policy_override = params.tool_policy
@@ -51,41 +48,28 @@ defmodule LemonRouter.SubmissionBuilder do
 
     session_config = get_session_config(session_key)
 
-    with {:ok, resolved_resume, resume_source} <-
-           ResumeResolver.resolve(params.resume, session_key, meta),
-         {:ok, agent_profile} <- get_agent_profile(agent_id) do
-      base_tool_policy =
-        Policy.resolve_for_run(%{
-          agent_id: agent_id,
-          session_key: session_key,
-          origin: origin,
-          channel_context: MapHelpers.get_key(meta, :channel_context)
-        })
-
-      profile_tool_policy = normalize_profile_tool_policy(agent_profile)
-
-      base_tool_policy =
-        if map_size(profile_tool_policy) > 0 do
-          Policy.merge(base_tool_policy, profile_tool_policy)
-        else
-          base_tool_policy
-        end
-
-      tool_policy =
-        if tool_policy_override && is_map(tool_policy_override) do
-          Policy.merge(base_tool_policy, tool_policy_override)
-        else
-          base_tool_policy
-        end
+    with {:ok, agent_profile} <- get_execution_profile(agent_id, meta),
+         tool_policy <-
+           resolve_tool_policy(agent_profile, tool_policy_override, %{
+             agent_id: agent_id,
+             session_key: session_key,
+             origin: origin,
+             channel_context: MapHelpers.get_key(meta, :channel_context),
+             native_factory_authority: Map.get(meta, :invocation_proof_verified) == true or
+               is_binary(MapHelpers.get_key(meta, :profile_id))
+           }),
+         meta <- Map.put(meta, :resume_policy_override, is_map(tool_policy_override)),
+         {:ok, resolved_resume, resume_source} <-
+           ResumeResolver.resolve(params.resume, session_key, meta, tool_policy, LemonCore.Store, run_id) do
 
       cwd = resolve_effective_cwd(cwd_override, meta, origin)
 
       {prompt, pending_compaction_marker} =
-        if is_map(prepared_compaction_marker) do
-          {prompt, prepared_compaction_marker}
-        else
-          PendingCompaction.prepare(prompt, session_key, origin)
-        end
+        PendingCompaction.prepare(prompt, session_key, origin,
+          meta: meta,
+          tool_policy: tool_policy,
+          run_id: run_id
+        )
 
       prompt =
         if MapHelpers.get_key(meta, :voice_transcribed) do
@@ -165,12 +149,38 @@ defmodule LemonRouter.SubmissionBuilder do
          run_process_module: MapHelpers.get_key(opts, :run_process_module),
          run_process_opts: MapHelpers.get_key(opts, :run_process_opts),
          pending_compaction_marker: pending_compaction_marker,
-         meta: Map.drop(enriched_meta, [:mcp_servers, "mcp_servers"])
+         meta: LemonCore.RunStore.execution_projection(enriched_meta)
        })}
     end
   end
 
   def build(_request, _opts), do: {:error, :invalid_run_request}
+
+  @doc false
+  def current_native_target_policy(profile_id, session_key, meta) do
+    with {:ok, profile} <- get_managed_profile(profile_id) do
+      profile
+      |> resolve_tool_policy(nil, %{
+        agent_id: profile_id,
+        session_key: session_key,
+        origin: :node,
+        channel_context: MapHelpers.get_key(meta || %{}, :channel_context),
+        native_factory_authority: true
+      })
+      |> LemonCore.ToolPolicy.normalize()
+    end
+  end
+
+  defp resolve_tool_policy(agent_profile, override, context) do
+    base = Policy.resolve_for_run(context)
+    profile = normalize_profile_tool_policy(agent_profile)
+    if context.native_factory_authority do
+      base |> LemonCore.ToolPolicy.intersect(profile) |> LemonCore.ToolPolicy.intersect(override)
+    else
+      base = if map_size(profile) > 0, do: Policy.merge(base, profile), else: base
+      if is_map(override), do: Policy.merge(base, override), else: base
+    end
+  end
 
   defp get_session_config(nil), do: %{}
 
@@ -178,6 +188,15 @@ defmodule LemonRouter.SubmissionBuilder do
     case LemonCore.PolicyStore.get_session(session_key) do
       nil -> %{}
       config when is_map(config) -> config
+    end
+  end
+
+  defp get_execution_profile(agent_id, meta) do
+    case {Map.get(meta, :invocation_proof_verified) == true, MapHelpers.get_key(meta, :profile_id)} do
+      {_, ^agent_id} -> get_managed_profile(agent_id)
+      {true, _} -> {:error, {:unknown_agent_id, agent_id}}
+      {false, profile_id} when is_binary(profile_id) -> {:error, {:unknown_agent_id, agent_id}}
+      {false, _} -> get_agent_profile(agent_id)
     end
   end
 
@@ -204,7 +223,8 @@ defmodule LemonRouter.SubmissionBuilder do
   defp get_managed_profile(agent_id) do
     case LemonCore.ProfileStore.get(agent_id) do
       {:ok, profile} ->
-        {:ok, %{id: agent_id, model: profile["model"], system_prompt: profile["systemPrompt"]}}
+        {:ok, %{id: agent_id, model: profile["model"], system_prompt: profile["systemPrompt"],
+          tool_policy: profile["toolPolicy"] || %{}}}
 
       {:error, _} ->
         {:error, {:unknown_agent_id, agent_id}}
