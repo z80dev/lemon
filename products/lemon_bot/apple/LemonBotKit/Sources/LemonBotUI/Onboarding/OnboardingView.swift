@@ -21,18 +21,26 @@ public struct OnboardingView: View {
     @State private var displayName = ""
     @State private var workspaceName = ""
     @State private var setupCode = ""
-    @State private var inviteToken = ""
     @State private var providers: [PublicOIDCProvider] = []
     @State private var checkedURL: URL?
     @State private var setupRequired = false
     @State private var action = UIActionState()
     @State private var browser = AdminWebAuthentication()
     @AppStorage("LemonBot.safeAccountCleanupDiagnostics") private var cleanupDiagnostics = ""
+    #if os(iOS)
+    @State private var showPairing = false
+    #endif
     public init(store: LemonBotStore) { self.store = store }
     public var body: some View {
         NavigationStack {
             Form {
-                SwiftUI.Section("Your persistent teammates") {
+                #if os(iOS)
+                SwiftUI.Section("Connect to your desktop") {
+                    Text("Your iPhone connects to your own desktop cluster. Scan its one-use QR or paste a pairing link, compare verification codes, then approve on the Mac. No desktop password required.")
+                    Button(store.pendingPairing == nil ? "Scan or paste desktop pairing link" : "Resume pending desktop connection") { showPairing = true }
+                }
+                #endif
+                SwiftUI.Section("Your persistent assistant") {
                     Text("Give each Bot a name, a focused job and a machine you own.").font(.headline)
                     Text("Work continues when you close the app, but requires the assigned machine to stay online. Bots on the same OS user share files, browser logins and CLI credentials; personas are not security sandboxes.")
                 }
@@ -54,25 +62,23 @@ public struct OnboardingView: View {
                     TextField("https://bot.example", text: $backend).autocorrectionDisabled()
                     Button("Check setup and sign-in methods · read only") { Task { await discover() } }.disabled(action.inFlight)
                     if checkedURL != nil {
-                        Text(setupRequired ? "Owner setup required. Obtain the one-use setup code from the backend operator terminal." : "Use your local account, invitation, or configured identity provider.").font(.caption)
+                        Text(setupRequired ? "Owner setup required. Obtain the one-use setup code from the backend operator terminal." : "Use your local account or configured identity provider.").font(.caption)
                     }
                 }
                 if checkedURL != nil {
                     SwiftUI.Section("Account") {
                         Picker("Sign in method", selection: $mode) {
                             Text("Sign in").tag("login")
-                            Text("Accept invitation").tag("invite")
                             if setupRequired { Text("Create owner").tag("setup") }
                         }
                         TextField("Email", text: $email).autocorrectionDisabled()
                         SecureField("Password (at least 12 bytes for a new account)", text: $password)
                         if mode != "login" { TextField("Display name", text: $displayName) }
-                        if mode == "invite" { SecureField("Invitation token", text: $inviteToken) }
                         if mode == "setup" {
                             SecureField("One-use setup code", text: $setupCode)
                             TextField("Workspace name", text: $workspaceName)
                         }
-                        Button(mode == "setup" ? "Create workspace" : mode == "invite" ? "Accept invitation" : "Sign in") {
+                        Button(mode == "setup" ? "Create workspace" : "Sign in") {
                             Task { await localLogin() }
                         }.disabled(action.busy || email.isEmpty || password.isEmpty)
                     }
@@ -101,6 +107,19 @@ public struct OnboardingView: View {
                 .frame(maxWidth: 700)
                 .toolbar { if store.account != nil { Button("Close") { dismiss() } } }
                 .onChange(of: backend) { _, _ in checkedURL = nil; providers = [] }
+                #if os(iOS)
+                .sheet(isPresented: $showPairing) {
+                    NavigationStack {
+                        PhonePairingView(store: store)
+                            .toolbar { Button("Close") { showPairing = false } }
+                    }
+                }
+                .onAppear { showPairing = store.pendingPairing != nil }
+                .onChange(of: store.pairingState) { _, state in
+                    if state == "preview" || state == "pending_approval" || state == "claim_unknown" { showPairing = true }
+                    if state == "connected" { showPairing = false; dismiss() }
+                }
+                #endif
         }
     }
     private func validatedURL() throws -> URL {
@@ -132,12 +151,9 @@ public struct OnboardingView: View {
             case "setup":
                 path = "/setup"
                 body["setupCode"] = .string(setupCode); body["workspaceName"] = .string(workspaceName); body["displayName"] = .string(displayName)
-            case "invite":
-                path = "/auth/invites/accept"
-                body["inviteToken"] = .string(inviteToken); body["displayName"] = .string(displayName)
             default: path = "/auth/login"
             }
-            defer { password = ""; setupCode = ""; inviteToken = "" }
+            defer { password = ""; setupCode = "" }
             try await store.authenticate(baseURL: url, path: path, body: body)
             dismiss()
         }

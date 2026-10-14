@@ -76,8 +76,8 @@ final class NativeVoiceSession: NSObject, AVSpeechSynthesizerDelegate, AVAudioPl
             try await resetSpeechBaseline(conversationID: conversationID)
         }
         catch { self.error = error.localizedDescription; return }
-        guard conversation.ownerUserId == user.id, ["dm", "task", "team_dm"].contains(conversation.kind) else {
-            error = "Voice is available only in your own direct chat, task or owned Team direct chat, not groups, channels or another teammate's Team Bot."
+        guard conversation.ownerUserId == user.id, ["dm", "task"].contains(conversation.kind) else {
+            error = "Voice is available only in your own direct chat or task, not groups, channels or another user's conversation."
             return
         }
         do {

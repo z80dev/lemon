@@ -10,6 +10,16 @@ The app target includes this directory excluding `ShareExtension/`. The share ta
 
 Only local networking is exempted in App Transport Security for loopback development. An installed phone normally needs a reachable HTTPS backend; the phone's loopback address is not a development Mac's loopback address.
 
+## Connect to your desktop
+
+On the signed-in Mac choose **Connect iPhone**, then create a one-use QR. On iPhone choose **Scan or paste desktop pairing link**. Camera capture and its permission prompt start only after **Scan desktop QR**, using the actual QR metadata camera output; leaving the screen or foreground stops capture. If Camera is unavailable (including Simulator), paste the link into the secure field and choose **Preview**.
+
+Check the exact origin and cluster before **Request connection**. The server then confirms cluster name and expiry and gives the phone a verification code. Compare that exact code and device name on the Mac, approve once there, and explicitly choose **Check approval / finish connection** on the phone. This creates its own revocable device session, not a copy of the Mac credential; no manual password is required. Never put QR screenshots or raw links in logs, chat or push notifications.
+
+The desktop's configured public URL must be reachable HTTPS. A recommended deployment is Tailscale Serve terminating HTTPS to the local Lemon Bot backend; configure the backend's public URL to that exact Serve origin, and connect both devices to the tailnet. A QR does not establish trust in an overlay or make an HTTP LAN origin secure. Loopback HTTP is accepted only for same-machine development/Simulator; `127.0.0.1` on a physical phone refers to the phone, not the Mac.
+
+Pending requests survive reopening. Resume them explicitly; unknown claim/completion results reconcile the original fixed nonce instead of minting new authority. Launch restores the saved Keychain account; foreground reconnect is read-only, keeps offline credentials and never replays sends or approvals. Revoked sessions require an explicit new connection. Revoke a paired phone through desktop account device/session controls.
+
 ## Selected content and unsent drafts
 
 1. In a conversation choose **Camera**, **Photos** or **Files**, or choose Lemon Bot in another app's Share sheet. Camera asks permission only when invoked. Photos uses Apple's selected-item picker without broad library authorization. Files uses security-scoped access only while copying selected files.
@@ -24,7 +34,7 @@ Local files remain in App Group storage across app launches and conversation swi
 
 **Dictation** opens explicit Record/Stop/Cancel controls. Apple Speech uses on-device recognition when supported; otherwise its network-processing status is disclosed. Stop freezes the recognized text so a late callback cannot overwrite edits. **Add reviewed text to unsent composer** durably writes the chosen conversation's draft without sending. Microphone or Speech denial names the relevant iOS permission and offers Settings.
 
-**Voice** starts only from an empty composer in an authorized owned direct/task/Team direct conversation. It registers a real device and creates the backend VoiceSession. Record each turn explicitly, stop, review/edit, and press **Send reviewed utterance** with that session ID. Streaming assistant sentences are spoken through configured backend speech and authorized audio download/playback when available, or a clearly labelled Apple `AVSpeechSynthesizer` fallback. The user can explicitly choose the Apple spoken voice. Provider errors retain the exact backend explanation rather than substituting generated silence.
+**Voice** starts only from an empty composer in your own direct chat or task. It registers a real device and creates the backend VoiceSession. Record each turn explicitly, stop, review/edit, and press **Send reviewed utterance** with that session ID. Streaming assistant sentences are spoken through configured backend speech and authorized audio download/playback when available, or a clearly labelled Apple `AVSpeechSynthesizer` fallback. The user can explicitly choose the Apple spoken voice. Provider errors retain the exact backend explanation rather than substituting generated silence.
 
 The visible session banner survives navigation and offers Return/Hang up. The overlay includes mute, transcript, provider voice/language/speed, local spoken voice, duration, terminal call state and feedback. Existing-call conflicts fetch the authorized `details.voiceSessionId` and require the user to end it explicitly; another device's session never acquires this phone's microphone. Message outcomes that are unknown retain the reviewed utterance and fence its send button; no automatic resend. App launch reconciles a retained session ID but never restarts microphone capture.
 
@@ -45,3 +55,7 @@ Notification taps and resource `lemonbot://` URLs go through LemonBotKit's stric
 - `LemonBot.platformSettingsRequest`: explicit opening of the app's iOS Settings pane.
 
 These hooks cross the package/app boundary without introducing an app dependency into the shared UI library.
+
+## Changelog
+
+- Added explicit one-use desktop pairing, real QR scanning, secure paste/preview, saved pending reconciliation and saved-account startup with read-only foreground reconnect. Removed invitation-first onboarding and Team voice eligibility.

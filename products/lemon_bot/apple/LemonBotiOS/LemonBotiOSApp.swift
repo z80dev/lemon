@@ -35,6 +35,7 @@ struct NativeLemonBotView: View {
     @State private var stagedCount = 0
     @State private var localError: String?
     @State private var handlingNativeRequest = false
+    @State private var showPairing = false
 
     init(store: LemonBotStore, delegate: LemonBotAppDelegate) {
         self.store = store
@@ -90,6 +91,13 @@ struct NativeLemonBotView: View {
             }
             .fileImporter(isPresented: $filePicker, allowedContentTypes: [.item], allowsMultipleSelection: true, onCompletion: filesFinished)
             .onOpenURL { url in
+                if url.scheme == "lemonbot", url.host == "pair" {
+                    do {
+                        try store.preparePairing(url.absoluteString)
+                        if store.account != nil { showPairing = true }
+                    } catch { localError = "Invalid or unsafe desktop pairing link." }
+                    return
+                }
                 if url.scheme == "lemonbot", url.host == "auth", url.path == "/complete" { return }
                 if url.scheme == "lemonbot", url.host == "share", url.path.isEmpty, url.query == nil, url.fragment == nil {
                     reloadShares()
@@ -119,6 +127,10 @@ struct NativeLemonBotView: View {
                 if phase == .active {
                     voice.foreground = true
                     reloadShares()
+                    Task {
+                        guard store.account != nil, store.connectionState != "online", store.connectionState != "reconnect_required" else { return }
+                        do { try await store.refresh() } catch { localError = error.localizedDescription }
+                    }
                     Task { await delegate.inspectPermission(); await voice.reconcile(); await delegate.publishPresence() }
                 } else {
                     dictation.cancel(clearText: false)
@@ -153,6 +165,9 @@ struct NativeLemonBotView: View {
                 } catch { localError = error.localizedDescription }
             }
             .task {
+                if store.account == nil {
+                    do { try await store.restoreSavedAccount() } catch { localError = error.localizedDescription }
+                }
                 delegate.store = store
                 reloadShares()
                 while !Task.isCancelled {
@@ -164,6 +179,12 @@ struct NativeLemonBotView: View {
                 while !Task.isCancelled {
                     await voice.speakReplies()
                     try? await Task.sleep(for: .milliseconds(300))
+                }
+            }
+            .sheet(isPresented: $showPairing) {
+                NavigationStack {
+                    PhonePairingView(store: store)
+                        .toolbar { Button("Close") { showPairing = false } }
                 }
             }
     }

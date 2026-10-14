@@ -14,7 +14,7 @@
     <key>UISupportedInterfaceOrientations</key><array><string>UIInterfaceOrientationPortrait</string><string>UIInterfaceOrientationLandscapeLeft</string><string>UIInterfaceOrientationLandscapeRight</string></array>
     <key>UISupportedInterfaceOrientations~ipad</key><array><string>UIInterfaceOrientationPortrait</string><string>UIInterfaceOrientationPortraitUpsideDown</string><string>UIInterfaceOrientationLandscapeLeft</string><string>UIInterfaceOrientationLandscapeRight</string></array>
     <key>CFBundleURLTypes</key><array><dict><key>CFBundleURLName</key><string>org.lemonbot.navigation</string><key>CFBundleURLSchemes</key><array><string>lemonbot</string></array></dict></array>
-    <key>NSCameraUsageDescription</key><string>Take a photo only when you choose Camera, then review it before attaching it to a selected Lemon Bot conversation.</string>
+    <key>NSCameraUsageDescription</key><string>Scan your desktop pairing QR only after you choose Scan, or take a photo after you choose Camera. Scanning stops when the app leaves the foreground; photos are reviewed before attaching.</string>
     <key>NSMicrophoneUsageDescription</key><string>Record speech only after you choose Dictate or start an explicit voice session. Capture stops when Lemon Bot leaves the foreground.</string>
     <key>NSSpeechRecognitionUsageDescription</key><string>Transcribe speech you explicitly record into editable, unsent text. Apple Speech may require network processing when on-device recognition is unavailable.</string>
     <key>NSPhotoLibraryUsageDescription</key><string>Attach only photos or videos you explicitly select and review. Lemon Bot does not scan your photo library.</string>

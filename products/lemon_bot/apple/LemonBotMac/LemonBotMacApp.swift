@@ -50,7 +50,14 @@ struct LemonBotMacApp: App {
     private var workspaceContent: some View {
         workspaceComposerEvents
             .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in Task { await platform.publishPresence() } }
-            .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in Task { await platform.publishPresence() } }
+            .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+                Task {
+                    if store.account != nil, store.connectionState != "online", store.connectionState != "reconnect_required" {
+                        do { try await store.refresh() } catch { platform.errorMessage = error.localizedDescription }
+                    }
+                    await platform.publishPresence()
+                }
+            }
             .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { _ in Task { await platform.publishPresence() } }
             .onReceive(NotificationCenter.default.publisher(for: NSWindow.didResignKeyNotification)) { _ in Task { await platform.publishPresence() } }
     }

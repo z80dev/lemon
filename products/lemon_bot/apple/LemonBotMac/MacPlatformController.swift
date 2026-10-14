@@ -71,8 +71,8 @@ final class MacPlatformController: NSObject {
         NSApp.servicesProvider = self
         lifecycleTask = Task { [weak self] in
             guard let self else { return }
-            if self.store.account == nil, let account = self.store.accounts.first {
-                do { try await self.store.restoreAccount(account) }
+            if self.store.account == nil {
+                do { try await self.store.restoreSavedAccount() }
                 catch { self.errorMessage = error.localizedDescription }
             }
             await self.accountChanged()

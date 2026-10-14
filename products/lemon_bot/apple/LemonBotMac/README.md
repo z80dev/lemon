@@ -2,6 +2,14 @@
 
 `LemonBotMacApp` hosts the shared `LemonBotRootView(store:)` and one menu-bar entry. Requires macOS 14+, the shared LemonBotKit/LemonBotUI products, and the authenticated product backend. The Apple project owns build/signing settings; this directory supplies `Info.plist` and `LemonBotMac.entitlements`.
 
+## Connect iPhone
+
+Open **Connect iPhone** from the signed-in workspace, create a one-use QR and leave the request list open. The QR is rendered locally with CoreImage, using only the one-use link returned by the backend. On the phone scan or securely paste it, verify the exact origin/cluster, and request connection. Match the exact device name and verification code shown on both devices before **Approve this device once**; deny unfamiliar requests. The UI shows the canonical cluster name, backend URL and expiry. **Refresh requests** reads authoritative state without repeating mutations; unconfirmed approval/denial remains fenced.
+
+Configure the backend public URL to reachable HTTPS before creating the QR. Tailscale Serve is the recommended HTTPS front door to a local backend; both devices need tailnet reachability and the configured public URL must match that exact origin. Never use remote plain HTTP or infer transport trust from a QR. Loopback HTTP is for same-Mac development and iOS Simulator only, not a physical phone.
+
+The phone completes approval explicitly and receives its own Keychain-backed revocable session without your password. Revoke it through account Devices / sessions, using the real device/session revoke controls. Launch restores the last saved account; foreground reconnect reads state only, retains offline credentials and does not replay mutations. Revocation requires explicit reconnection. Treat the QR as a temporary secret: do not log or share its link or screenshot.
+
 ## Explicit companion and capture
 
 Open **Lemon Bot → Settings** to choose a Bot and optionally enable one compact companion. Global summon and push-to-talk are disabled by default. Enter combinations such as `control+option+space` or `command+shift+f8`; clear a field to disable it. Carbon registers only those combinations and reports registration conflicts. There is no global keyboard monitor or Accessibility permission.
@@ -31,3 +39,4 @@ Generate the lead-owned XcodeGen project and build the LemonBotMac scheme with `
 ## Changelog
 
 - Added native workspace entry, menu-bar integration, opt-in single companion, Carbon global summon/PTT, review-only Speech dictation, backend voice-session loop and voice preview, explicit Services/file sharing, device/account lifecycle and privacy-bounded notifications/deep links.
+- Added CoreImage one-use phone QR and exact-device approval/denial with read-only reconciliation; startup restores the last saved account and foreground reconnect retains offline credentials.
