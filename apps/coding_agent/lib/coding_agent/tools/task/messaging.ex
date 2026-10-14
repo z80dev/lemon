@@ -121,21 +121,25 @@ defmodule CodingAgent.Tools.Task.Messaging do
     else
       owner = Control.owner(opts)
 
-      ids =
+      matches =
         case owner do
           {session, _agent} when not is_nil(session) ->
             for {id, record} <- TaskStore.list(),
                 record[:name] == target,
                 record[:owner] == owner,
-                do: id
+                do: {id, record}
 
           _ ->
             []
         end
 
-      case ids do
+      # A completed task must not shadow a reused name's unique live child.
+      live = Enum.filter(matches, fn {_id, record} -> record[:status] in [:queued, :running] end)
+      candidates = if live == [], do: matches, else: live
+
+      case candidates do
         [] -> :error
-        [id] -> {:ok, id}
+        [{id, _record}] -> {:ok, id}
         _ -> {:error, "Ambiguous agent name: #{target}; use its task ID"}
       end
     end

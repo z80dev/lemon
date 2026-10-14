@@ -117,6 +117,8 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   and persona `spawns` grants allowlisted delegation below it,
   `max_runtime_ms` limits each child, `disabled_agents` hides personas, and
   `agent_models` overrides persona models.
+  Child depth/allowlists survive extension reloads, resumed user forks can
+  still delegate, and live `agent://` names override completed namesakes.
 
 ### Changed
 

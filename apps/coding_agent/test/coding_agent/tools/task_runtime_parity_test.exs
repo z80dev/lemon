@@ -230,6 +230,11 @@ defmodule CodingAgent.Tools.TaskRuntimeParityTest do
 
       assert message =~ "nesting depth is unknown"
 
+      assert {:error, _} =
+               execute("/tmp", Keyword.merge(opts, session_scope: :subagent, task_child: nil), %{
+                 "prompt" => "x"
+               })
+
       unlimited =
         opts
         |> Keyword.put(:settings_manager, settings(%{max_depth: -1}))
@@ -368,6 +373,69 @@ defmodule CodingAgent.Tools.TaskRuntimeParityTest do
                  "auto_followup" => false
                })
     end
+
+    @tag :tmp_dir
+    test "child depth and spawns restrictions survive extension reload", %{tmp_dir: cwd} do
+      define(cwd, "lead", "description: Lead\nspawns: [scout]\n")
+
+      opts =
+        base_opts(
+          model: @model,
+          stream_fn: Mocks.mock_stream_fn_single(Mocks.assistant_message("done"))
+        )
+
+      assert {:ok, validated} =
+               Params.validate_run_params(%{"prompt" => "Lead", "agent" => "lead"}, cwd, opts)
+
+      child =
+        start_supervised!({CodingAgent.Session, Params.build_session_opts(cwd, opts, validated)})
+
+      for reload <- [false, true] do
+        if reload, do: assert({:ok, _} = CodingAgent.Session.reload_extensions(child))
+        state = CodingAgent.Session.get_state(child)
+        assert state.task_depth == 1
+        task = Enum.find(state.tools, &(&1.name == "task"))
+
+        assert {:error, denied} =
+                 task.execute.(unique_id(), %{"prompt" => "x", "agent" => "reviewer"}, nil, nil)
+
+        assert denied =~ "not in this session's spawns list"
+      end
+    end
+
+    @tag :tmp_dir
+    test "resumed user forks can delegate without relaxing bootstrap isolation", %{tmp_dir: cwd} do
+      source = Path.join(cwd, "source.jsonl")
+      fork = Path.join(cwd, "fork.jsonl")
+      :ok = CodingAgent.SessionManager.save_to_file(source, CodingAgent.SessionManager.new(cwd))
+      assert {:ok, _} = CodingAgent.SessionManager.fork_file(source, fork)
+
+      opts =
+        base_opts(
+          model: @model,
+          stream_fn: Mocks.mock_stream_fn_single(Mocks.assistant_message("done"))
+        )
+
+      session =
+        start_supervised!(
+          {CodingAgent.Session, Keyword.merge(opts, cwd: cwd, session_file: fork)}
+        )
+
+      state = CodingAgent.Session.get_state(session)
+      assert state.session_scope == :subagent
+      refute state.system_prompt =~ "## MEMORY.md"
+      task = Enum.find(state.tools, &(&1.name == "task"))
+
+      result =
+        task.execute.(
+          unique_id(),
+          %{"prompt" => "x", "async" => false, "auto_followup" => false},
+          nil,
+          nil
+        )
+
+      assert result.details.status == "completed"
+    end
   end
 
   describe "structured output retries" do
@@ -482,6 +550,51 @@ defmodule CodingAgent.Tools.TaskRuntimeParityTest do
       end
 
       assert {:error, "Unknown task: #{id}"} == Messaging.read("agent://#{id}/answer", foreign)
+    end
+
+    test "a unique live child wins over a completed child with the same name" do
+      owner = self()
+      opts = base_opts(run_override: fn _, _ -> result("first") end)
+
+      execute("/tmp", opts, %{
+        "prompt" => "x",
+        "name" => "Worker",
+        "async" => false,
+        "auto_followup" => false
+      })
+
+      live_opts =
+        Keyword.put(opts, :run_override, fn _, _ ->
+          send(owner, {:live_worker, self()})
+
+          receive do
+            :finish -> result("second")
+          after
+            2_000 -> {:error, "test worker was not released"}
+          end
+        end)
+
+      second =
+        execute("/tmp", live_opts, %{
+          "prompt" => "y",
+          "name" => "Worker",
+          "auto_followup" => false
+        })
+
+      assert_receive {:live_worker, worker}
+
+      try do
+        read = Messaging.read("agent://Worker", opts)
+        assert read.details.task_id == second.details.task_id
+        assert read.details.status == "running"
+      after
+        send(worker, :finish)
+      end
+
+      execute("/tmp", opts, %{"action" => "join", "task_ids" => [second.details.task_id]})
+
+      assert {:error, ambiguous} = Messaging.read("agent://Worker", opts)
+      assert ambiguous =~ "Ambiguous"
     end
   end
 

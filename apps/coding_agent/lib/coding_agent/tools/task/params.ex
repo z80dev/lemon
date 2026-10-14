@@ -293,7 +293,8 @@ defmodule CodingAgent.Tools.Task.Params do
 
       _ ->
         cond do
-          Keyword.get(opts, :session_scope) == :subagent ->
+          Keyword.get(opts, :session_scope) == :subagent and
+              Keyword.get(opts, :task_child) != false ->
             {:error, "Task delegation is unavailable: this subagent's nesting depth is unknown"}
 
           can_spawn?(max_depth, 0) ->
@@ -576,6 +577,7 @@ defmodule CodingAgent.Tools.Task.Params do
       |> maybe_put_kw(:model, task_model)
       |> maybe_put_kw(:thinking_level, validated[:thinking_level])
       |> Keyword.put(:task_depth, current_task_depth(opts) + 1)
+      |> Keyword.put(:task_child, true)
       |> maybe_put_kw(:task_allowed_agents, validated[:task_allowed_agents])
       |> maybe_put_kw(:tool_policy, validated[:tool_policy])
       |> maybe_put_kw(:session_key, validated[:session_key])

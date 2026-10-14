@@ -98,6 +98,36 @@ defmodule CodingAgent.Tools.TaskWorktreeMergeTest do
     assert record.workspace.merge.status == "applied"
   end
 
+  test "default merge retains child work without changing the parent", %{git: git, repo: repo} do
+    owner = self()
+
+    stream_fn = fn model, context, options ->
+      [worktree] = Path.wildcard(Path.join(repo, ".git/lemon-task-worktrees/*"))
+      File.write!(Path.join(worktree, "tracked.txt"), "child work\n")
+      send(owner, {:default_child, worktree})
+      Mocks.mock_stream_fn_single(Mocks.assistant_message("Edited.")).(model, context, options)
+    end
+
+    # Exercise core config resolution as well as the runtime settings default.
+    task_settings = LemonCore.Config.Agent.resolve(%{}).task
+
+    result =
+      TaskTool.execute(
+        unique_id(),
+        %{"prompt" => "Edit", "worktree" => true, "async" => false, "auto_followup" => false},
+        nil,
+        nil,
+        repo,
+        opts(stream_fn, %{%SettingsManager{} | task: task_settings})
+      )
+
+    assert_receive {:default_child, worktree}
+    assert File.read!(Path.join(repo, "tracked.txt")) == "committed\n"
+    assert File.read!(Path.join(worktree, "tracked.txt")) == "child work\n"
+    assert branch_exists?(git, repo, result.details.branch)
+    assert git!(git, repo, ["status", "--porcelain"]) == ""
+  end
+
   test "an explicit merge overrides settings and an idle child reports no changes", %{
     git: git,
     repo: repo
