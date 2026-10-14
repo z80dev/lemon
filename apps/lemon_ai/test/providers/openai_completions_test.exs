@@ -1571,4 +1571,143 @@ defmodule LemonAi.Providers.OpenAICompletionsTest do
 
     assert {:ok, _} = EventStream.result(stream, 1000)
   end
+
+  describe "credential scoping" do
+    setup do
+      names = ["OPENAI_API_KEY", "DEEPSEEK_API_KEY", "OLLAMA_API_KEY"]
+      previous = Map.new(names, &{&1, System.get_env(&1)})
+      Enum.each(names, &System.delete_env/1)
+
+      on_exit(fn ->
+        Enum.each(previous, fn
+          {name, nil} -> System.delete_env(name)
+          {name, value} -> System.put_env(name, value)
+        end)
+      end)
+
+      :ok
+    end
+
+    defp capture_headers(test_pid) do
+      Req.Test.stub(__MODULE__, fn conn ->
+        send(test_pid, {:request, conn.host, conn.request_path, conn.req_headers})
+        Plug.Conn.send_resp(conn, 200, sse_body([:done]))
+      end)
+    end
+
+    test "never sends OPENAI_API_KEY to deepseek" do
+      System.put_env("OPENAI_API_KEY", "openai-env-key")
+      capture_headers(self())
+
+      model =
+        LemonAi.Models.get_model(:deepseek, "deepseek-chat") || raise "missing catalog model"
+
+      context = Context.new(messages: [%UserMessage{content: "Hi"}])
+      {:ok, stream} = OpenAICompletions.stream(model, context, %StreamOptions{})
+
+      assert {:error, %AssistantMessage{error_message: message}} =
+               EventStream.result(stream, 1000)
+
+      assert message =~ "No API key provided for provider deepseek"
+      assert message =~ "DEEPSEEK_API_KEY"
+      refute_received {:request, _, _, _}
+    end
+
+    test "uses DEEPSEEK_API_KEY for deepseek" do
+      System.put_env("OPENAI_API_KEY", "openai-env-key")
+      System.put_env("DEEPSEEK_API_KEY", "deepseek-env-key")
+      capture_headers(self())
+
+      model = LemonAi.Models.get_model(:deepseek, "deepseek-chat")
+      context = Context.new(messages: [%UserMessage{content: "Hi"}])
+      {:ok, stream} = OpenAICompletions.stream(model, context, %StreamOptions{})
+
+      assert_receive {:request, _host, _path, headers}, 1000
+      assert Map.new(headers)["authorization"] == "Bearer deepseek-env-key"
+      assert {:ok, _} = EventStream.result(stream, 1000)
+    end
+
+    test "OpenAI still falls back to OPENAI_API_KEY" do
+      System.put_env("OPENAI_API_KEY", "openai-env-key")
+      capture_headers(self())
+
+      model = %Model{
+        id: "gpt-4o",
+        name: "GPT-4o",
+        api: :openai_completions,
+        provider: :openai,
+        base_url: "https://api.openai.test/v1"
+      }
+
+      context = Context.new(messages: [%UserMessage{content: "Hi"}])
+      {:ok, stream} = OpenAICompletions.stream(model, context, %StreamOptions{})
+
+      assert_receive {:request, _host, _path, headers}, 1000
+      assert Map.new(headers)["authorization"] == "Bearer openai-env-key"
+      assert {:ok, _} = EventStream.result(stream, 1000)
+    end
+
+    test "keyless preset model sends no Authorization header" do
+      System.put_env("OPENAI_API_KEY", "openai-env-key")
+      capture_headers(self())
+
+      model = LemonAi.Models.get_model(:ollama, "qwen3:32b")
+      context = Context.new(messages: [%UserMessage{content: "Hi"}])
+      {:ok, stream} = OpenAICompletions.stream(model, context, %StreamOptions{})
+
+      assert_receive {:request, "127.0.0.1", "/v1/chat/completions", headers}, 1000
+      refute Map.has_key?(Map.new(headers), "authorization")
+      assert {:ok, _} = EventStream.result(stream, 1000)
+    end
+
+    test "keyless preset uses its optional key env var and resolved provider options" do
+      System.put_env("OLLAMA_API_KEY", "ollama-env-key")
+      capture_headers(self())
+
+      model = LemonAi.Models.get_model(:ollama, "qwen3:32b")
+      context = Context.new(messages: [%UserMessage{content: "Hi"}])
+      {:ok, stream} = OpenAICompletions.stream(model, context, %StreamOptions{})
+
+      assert_receive {:request, _host, _path, headers}, 1000
+      assert Map.new(headers)["authorization"] == "Bearer ollama-env-key"
+      assert {:ok, _} = EventStream.result(stream, 1000)
+
+      opts = %StreamOptions{
+        provider_options: %{ollama: %{base_url: "http://gpu-box.test:11434/v1"}}
+      }
+
+      {:ok, stream} = OpenAICompletions.stream(model, context, opts)
+      assert_receive {:request, "gpu-box.test", "/v1/chat/completions", _headers}, 1000
+      assert {:ok, _} = EventStream.result(stream, 1000)
+    end
+
+    test "binary custom providers resolve provider options without atom creation" do
+      capture_headers(self())
+
+      provider = "custom-gateway-#{System.unique_integer([:positive])}"
+
+      model = %Model{
+        id: "m",
+        name: "m",
+        api: :openai_completions,
+        provider: provider,
+        base_url: "https://unused.test/v1"
+      }
+
+      opts = %StreamOptions{
+        provider_options: %{provider => %{api_key: "gw-key", base_url: "https://gw.test/v1"}}
+      }
+
+      context = Context.new(messages: [%UserMessage{content: "Hi"}])
+      {:ok, stream} = OpenAICompletions.stream(model, context, opts)
+
+      assert_receive {:request, "gw.test", "/v1/chat/completions", headers}, 1000
+      assert Map.new(headers)["authorization"] == "Bearer gw-key"
+      assert {:ok, _} = EventStream.result(stream, 1000)
+
+      assert_raise ArgumentError, fn ->
+        String.to_existing_atom(String.replace(provider, "-", "_"))
+      end
+    end
+  end
 end

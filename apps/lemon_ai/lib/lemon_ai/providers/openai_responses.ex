@@ -77,7 +77,7 @@ defmodule LemonAi.Providers.OpenAIResponses do
     try do
       api_key = get_api_key(model, opts)
 
-      if !api_key || api_key == "" do
+      if is_nil(api_key) and not allow_missing_api_key?(model) do
         raise missing_api_key_error(model.provider)
       end
 
@@ -148,6 +148,8 @@ defmodule LemonAi.Providers.OpenAIResponses do
     end
   end
 
+  # OPENAI_API_KEY is only a fallback for OpenAI itself; other providers using
+  # this wire format must resolve their own credentials.
   defp get_api_key(model, opts) do
     cond do
       is_binary(opts.api_key) and opts.api_key != "" ->
@@ -156,13 +158,25 @@ defmodule LemonAi.Providers.OpenAIResponses do
       api_key = get_provider_env_key(model.provider) ->
         api_key
 
-      api_key = get_env_api_key() ->
+      api_key = openai_env_api_key(model.provider) ->
         api_key
 
       true ->
         nil
     end
   end
+
+  defp present?(value), do: is_binary(value) and value != ""
+
+  defp openai_env_api_key(provider) when provider in [:openai, "openai"] do
+    api_key = get_env_api_key()
+    if present?(api_key), do: api_key
+  end
+
+  defp openai_env_api_key(_provider), do: nil
+
+  defp allow_missing_api_key?(%Model{compat: %{allow_missing_api_key: true}}), do: true
+  defp allow_missing_api_key?(_model), do: false
 
   defp get_provider_env_key(provider) do
     env_var =
@@ -172,7 +186,12 @@ defmodule LemonAi.Providers.OpenAIResponses do
         _ -> nil
       end
 
-    if env_var, do: System.get_env(env_var), else: nil
+    env_vars = if env_var, do: [env_var], else: LemonAi.Models.Presets.env_vars(provider)
+
+    Enum.find_value(env_vars, fn var ->
+      value = System.get_env(var)
+      if present?(value), do: value
+    end)
   end
 
   defp missing_api_key_error(:opencode),
@@ -183,9 +202,12 @@ defmodule LemonAi.Providers.OpenAIResponses do
     do:
       "OpenCode API key is required. Set OPENCODE_API_KEY environment variable or pass it as an argument."
 
-  defp missing_api_key_error(_),
+  defp missing_api_key_error(provider) when provider in [:openai, "openai"],
     do:
       "OpenAI API key is required. Set OPENAI_API_KEY environment variable or pass it as an argument."
+
+  defp missing_api_key_error(provider),
+    do: "No API key provided for provider #{provider}. Configure an API key for it."
 
   # ============================================================================
   # Request Building
@@ -242,11 +264,14 @@ defmodule LemonAi.Providers.OpenAIResponses do
   end
 
   defp build_headers(model, context, opts, api_key) do
-    base_headers = %{
-      "Authorization" => "Bearer #{api_key}",
-      "Content-Type" => "application/json",
-      "Accept" => "text/event-stream"
-    }
+    base_headers =
+      %{
+        "Content-Type" => "application/json",
+        "Accept" => "text/event-stream"
+      }
+      |> then(fn headers ->
+        if api_key, do: Map.put(headers, "Authorization", "Bearer #{api_key}"), else: headers
+      end)
 
     # Add model-specific headers
     headers = Map.merge(base_headers, model.headers || %{})
