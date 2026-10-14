@@ -287,6 +287,11 @@ that ultimately reaches a concrete model; it cannot fall back to itself.
 Omitting `task.model` preserves parent inheritance unless `model_roles.task` is
 configured; an explicit task model takes precedence.
 
+Entering plan mode automatically selects `model_roles.plan` only when configured.
+Exiting or approving a plan restores the execution model recorded on entry,
+including after durable session resume. `@commit` is available to explicit model
+selectors and delegated tasks; it does not automatically invoke a commit tool.
+
 Compaction and abandoned-branch summaries choose `model_roles.compaction` first,
 then `model_roles.smol` **only if configured**, otherwise the active session model.
 An explicit compaction `:model` option takes precedence. Summary credentials and

@@ -97,6 +97,12 @@ the session. The approved plan stays in the native session's context through
 restarts and compaction. Sending `/plan` while planning exits without approving
 or executing anything.
 
+An explicitly configured `[model_roles] plan = "provider:model"` (or another
+`@role` alias) selects the planning model on entry. Without that mapping, plan
+mode keeps the current model. Approval or an explicit exit restores the model
+that entered planning, including after a saved session is resumed; in-run
+approval uses that restored model for the next execution response.
+
 ### Connection-owned tools
 
 When the client advertises terminal support, foreground non-PTY bash can use

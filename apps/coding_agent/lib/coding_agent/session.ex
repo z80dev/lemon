@@ -237,9 +237,9 @@ defmodule CodingAgent.Session do
       `[runtime] max_tool_turns`, which is unlimited (`:infinity`) unless configured.
 
   Transient provider failures (rate limits, overloads, 5xx, network errors) are
-  retried by the agent loop under `[runtime.retry]`, including interrupted
-  streams. Failed attempts are not persisted as completed messages or replayed
-  tool calls. Retry status uses `{:provider_retry, details}` and
+  retried by the agent loop under `[runtime.retry]` only before text, thinking,
+  or tool-call output is committed. Interrupted streams with committed output
+  remain terminal. Retry status uses `{:provider_retry, details}` and
   `{:provider_retry_end, details}` events.
 
   ## System Prompt Composition
