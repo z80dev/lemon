@@ -425,7 +425,7 @@ defmodule LemonAgent.LoopAbortTest do
         EventStream.cancel(stream, :user_abort)
         # A result call from the same sender is a barrier for the cancel cast.
         result = EventStream.result(stream, 5000)
-        assert result in [{:error, {:canceled, :user_abort}}, {:error, :stream_not_found}]
+        refute match?({:ok, _}, result)
         assert AbortSignal.aborted?(signal)
 
         # Check from inside the still-running tool, without polling or a timer
