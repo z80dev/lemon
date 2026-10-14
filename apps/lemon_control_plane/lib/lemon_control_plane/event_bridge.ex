@@ -77,8 +77,6 @@ defmodule LemonControlPlane.EventBridge do
   alias LemonCore.Events
   alias LemonControlPlane.Presence
 
-  @fanout_supervisor LemonControlPlane.EventBridge.FanoutSupervisor
-
   @bus_topics [
     "exec_approvals",
     "channels",
@@ -126,11 +124,8 @@ defmodule LemonControlPlane.EventBridge do
 
   @impl true
   def init(_opts) do
-    # FanoutSupervisor is started by LemonControlPlane.Application supervision tree.
-    # No ad hoc startup needed here.
-
-    # Subscribe to static topics
-    Enum.each([LemonOmp.bus_topic() | @bus_topics], &Bus.subscribe/1)
+    delivery = LemonCore.Bus.Delivery.new(self(), tagged: true)
+    Enum.each([LemonOmp.bus_topic() | @bus_topics], &Bus.subscribe(&1, delivery: delivery))
 
     # Initialize state version counters
     state_versions = Map.new(@state_version_keys, fn key -> {key, 0} end)
@@ -139,7 +134,8 @@ defmodule LemonControlPlane.EventBridge do
      %{
        run_subscriptions: MapSet.new(),
        topic_ref_counts: %{},
-       state_versions: state_versions
+       state_versions: state_versions,
+       delivery: delivery
      }}
   end
 
@@ -163,6 +159,26 @@ defmodule LemonControlPlane.EventBridge do
   end
 
   @impl true
+  def handle_info({:lemon_bus_delivery, gate, message}, state) do
+    if LemonCore.Bus.Delivery.matches?(state.delivery, gate),
+      do: handle_info(message, state),
+      else: {:noreply, state}
+  end
+
+  def handle_info({:stream_resync, :overflow}, state) do
+    # Lost bus deltas cannot be replayed. Fence every affected client and require
+    # authenticated reconnect + owner snapshot recovery, including approvals.
+    for {_id, info} <- get_connected_clients(), general_event_client?(info) do
+      LemonCore.Bus.Delivery.resync(info.delivery)
+    end
+
+    topics = [LemonOmp.bus_topic() | @bus_topics] ++ Map.keys(state.topic_ref_counts)
+    Enum.each(topics, &Bus.unsubscribe/1)
+    delivery = LemonCore.Bus.Delivery.new(self(), tagged: true)
+    Enum.each(topics, &Bus.subscribe(&1, delivery: delivery))
+    {:noreply, %{state | delivery: delivery}}
+  end
+
   def handle_info(%LemonCore.Event{} = event, state) do
     {state, state_version} = maybe_bump_state_version(state, event.type)
     broadcast_event(event, state_version)
@@ -230,45 +246,11 @@ defmodule LemonControlPlane.EventBridge do
       payload_meta
     )
 
-    # FanoutSupervisor is started by the application supervision tree, so it is
-    # guaranteed to be running. If it has crashed and is restarting, fall back to
-    # inline dispatch.
-    case Task.Supervisor.start_child(@fanout_supervisor, fn ->
-           Enum.each(clients, fn {_conn_id, %{pid: pid}} ->
-             send(pid, {:event, event_name, payload, state_version})
-           end)
-         end) do
-      {:ok, _pid} ->
-        :ok
-
-      {:error, reason} ->
-        emit_dispatch_drop(event_name, reason, length(clients))
-        dispatch_inline(clients, event_name, payload, state_version)
-    end
-  rescue
-    error ->
-      emit_dispatch_drop(event_name, {:exception, error}, length(clients))
-      dispatch_inline(clients, event_name, payload, state_version)
-  catch
-    :exit, reason ->
-      emit_dispatch_drop(event_name, {:exit, reason}, length(clients))
-      dispatch_inline(clients, event_name, payload, state_version)
-  end
-
-  defp dispatch_inline(clients, event_name, payload, state_version) do
-    Enum.each(clients, fn {_conn_id, %{pid: pid}} ->
-      send(pid, {:event, event_name, payload, state_version})
+    # Inline admission is nonblocking and preserves event order. A task per event
+    # simply moved an unbounded queue into the task supervisor.
+    Enum.each(clients, fn {_conn_id, info} ->
+      LemonCore.Bus.Delivery.send(info.delivery, {:event, event_name, payload, state_version})
     end)
-  end
-
-  defp emit_dispatch_drop(event_name, reason, recipients) do
-    LemonCore.Telemetry.emit(
-      [:lemon, :control_plane, :event_bridge, :dropped],
-      %{count: 1, recipients: recipients},
-      %{event: event_name, reason: inspect(reason, limit: 80)}
-    )
-  rescue
-    _ -> :ok
   end
 
   defp dynamic_topic?(topic) when is_binary(topic) do
@@ -281,7 +263,7 @@ defmodule LemonControlPlane.EventBridge do
     count = Map.get(state.topic_ref_counts, topic, 0)
 
     if count == 0 do
-      Bus.subscribe(topic)
+      Bus.subscribe(topic, delivery: state.delivery)
     end
 
     ref_counts = Map.put(state.topic_ref_counts, topic, count + 1)
@@ -357,6 +339,15 @@ defmodule LemonControlPlane.EventBridge do
   end
 
   def project(_), do: nil
+
+  defp map_event_type(:stream_resync, _payload, meta) do
+    {"stream.resync",
+     %{
+       "reason" => "overflow",
+       "sessionKey" => meta[:session_key],
+       "runId" => meta[:run_id]
+     }}
+  end
 
   # Run events
   defp map_event_type(:run_started, %Events.RunStarted{} = payload, meta) do

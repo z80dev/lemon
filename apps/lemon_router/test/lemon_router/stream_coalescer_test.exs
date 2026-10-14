@@ -174,8 +174,8 @@ defmodule LemonRouter.StreamCoalescerTest do
 
   @answer_cap 100_000
 
-  # `ingest_delta` casts; `current_text` is a call on the same mailbox, so it
-  # lands behind every queued delta. No sleeping needed to synchronise.
+  # Ingress sends and `current_text` calls from this producer share mailbox
+  # ordering. No sleeping is needed to synchronise admitted deltas.
   defp stream_answer(session_key, run_id, chunk, count, seq_offset \\ 0) do
     for seq <- 1..count do
       assert :ok =
@@ -206,7 +206,7 @@ defmodule LemonRouter.StreamCoalescerTest do
     defp multibyte_unit(:three), do: "中"
     defp multibyte_unit(:four), do: "😀"
 
-    property "current_text is always valid UTF-8 and within the byte cap, for input past it" do
+    property "admitted deltas retain a valid UTF-8 tail within the accumulated byte cap" do
       check all(
               width <- member_of([:two, :three, :four]),
               pad_len <- integer(0..7),
@@ -226,15 +226,80 @@ defmodule LemonRouter.StreamCoalescerTest do
         session_key = "agent:prop-#{suffix}:telegram:bot#{suffix}:dm:user#{suffix}"
         run_id = "run_prop_#{suffix}"
 
-        assert :ok =
-                 StreamCoalescer.ingest_delta(session_key, "telegram", run_id, 1, text)
+        # The accumulated-answer cap is distinct from the per-message ingress
+        # budget. Build independent, codepoint-aligned chunks below that budget;
+        # slicing `text` would retain its oversized backing and require resync.
+        chunk_copies = div(copies, 3)
+
+        chunks = [
+          String.duplicate("a", pad_len) <> String.duplicate(unit, chunk_copies),
+          String.duplicate(unit, chunk_copies),
+          String.duplicate(unit, copies - 2 * chunk_copies)
+        ]
+
+        for {chunk, seq} <- Enum.with_index(chunks, 1) do
+          assert :ok =
+                   StreamCoalescer.ingest_delta(session_key, "telegram", run_id, seq, chunk)
+        end
 
         capped = StreamCoalescer.current_text(session_key, "telegram", run_id)
 
         assert is_binary(capped)
         assert String.valid?(capped), "capped text must be valid UTF-8"
         assert byte_size(capped) <= @answer_cap
+        assert capped == String.duplicate(unit, div(@answer_cap, byte_size(unit)))
+        assert :binary.referenced_byte_size(capped) == byte_size(capped)
       end
+    end
+
+    test "oversized ingress requires the owner answer and fresh deltas recover with UTF-8 caps" do
+      previous_dispatcher = Application.get_env(:lemon_router, :dispatcher)
+      Application.put_env(:lemon_router, :dispatcher, IntentDispatcherStub)
+      :persistent_term.put({IntentDispatcherStub, :test_pid}, self())
+
+      on_exit(fn ->
+        :persistent_term.erase({IntentDispatcherStub, :test_pid})
+
+        if is_nil(previous_dispatcher) do
+          Application.delete_env(:lemon_router, :dispatcher)
+        else
+          Application.put_env(:lemon_router, :dispatcher, previous_dispatcher)
+        end
+      end)
+
+      suffix = System.unique_integer([:positive])
+      session_key = "agent:oversized-#{suffix}:telegram:bot#{suffix}:dm:user#{suffix}"
+      run_id = "run_oversized_#{suffix}"
+      canonical = "Canonical answer: " <> String.duplicate("😀", 30_000)
+
+      assert :ok = StreamCoalescer.ingest_delta(session_key, "telegram", run_id, 1, "partial")
+      assert StreamCoalescer.current_text(session_key, "telegram", run_id) == "partial"
+      assert :ok = StreamCoalescer.ingest_delta(session_key, "telegram", run_id, 2, canonical)
+      assert StreamCoalescer.current_text(session_key, "telegram", run_id) == nil
+
+      assert {:error, :resync_required} =
+               StreamCoalescer.finalize_run(session_key, "telegram", run_id)
+
+      refute_received {:dispatched_intent, %DeliveryIntent{kind: :stream_finalize}}
+
+      assert :ok =
+               StreamCoalescer.finalize_run(session_key, "telegram", run_id,
+                 final_text: canonical
+               )
+
+      assert_receive {:dispatched_intent,
+                      %DeliveryIntent{kind: :stream_finalize, body: %{text: ^canonical}}}
+
+      next_run = "run_recovered_#{suffix}"
+      chunk = String.duplicate("中", 10_000)
+      capped = stream_answer(session_key, next_run, chunk, 4)
+      assert capped == String.duplicate("中", div(@answer_cap, 3))
+      assert String.valid?(capped)
+      assert :binary.referenced_byte_size(capped) == byte_size(capped)
+
+      # A producer from the completed generation cannot overwrite recovered text.
+      assert :ok = StreamCoalescer.ingest_delta(session_key, "telegram", run_id, 3, "late")
+      assert StreamCoalescer.current_text(session_key, "telegram", next_run) == capped
     end
   end
 

@@ -215,7 +215,6 @@ defmodule CodingAgent.Executor.SessionRunner do
 
     case Presentation.start_or_resume_session(resume, session_opts, state) do
       {:ok, session, session_id, state} ->
-        {:ok, _stream} = CodingAgent.Session.subscribe(session, mode: :stream, max_queue: 10_000)
         _unsub = CodingAgent.Session.subscribe(session)
 
         case async_followups do
@@ -299,7 +298,34 @@ defmodule CodingAgent.Executor.SessionRunner do
   end
 
   @impl true
-  def handle_info({:session_event, _session_id, event}, state) do
+  def handle_info({:session_terminal, _, _}, %{translator: %{completed_emitted: true}} = state),
+    do: {:noreply, state}
+
+  def handle_info({:session_terminal, session_id, status}, %{session_id: session_id} = state) do
+    # Transient delivery was fenced, but the owner persisted terminal truth before
+    # this compact notification. Recover the canonical answer, not missed deltas.
+    messages = CodingAgent.Session.get_messages(state.session)
+    translator = state.translator
+
+    translator = %{
+      translator
+      | accumulated_text: Presentation.extract_answer(messages, translator.accumulated_text)
+    }
+
+    event =
+      case status do
+        :completed -> {:agent_end, messages}
+        :canceled -> {:canceled, :assistant_aborted}
+        :error -> {:error, :session_failed, %{messages: messages}}
+      end
+
+    {:noreply, %{state | translator: RunTranslator.handle_event(translator, event)}}
+  end
+
+  def handle_info({:session_event, _, _}, %{translator: %{completed_emitted: true}} = state),
+    do: {:noreply, state}
+
+  def handle_info({:session_event, session_id, event}, %{session_id: session_id} = state) do
     {:noreply, %{state | translator: RunTranslator.handle_event(state.translator, event)}}
   end
 

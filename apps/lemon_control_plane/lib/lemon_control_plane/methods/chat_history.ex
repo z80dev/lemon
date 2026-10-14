@@ -79,7 +79,11 @@ defmodule LemonControlPlane.Methods.ChatHistory do
     end
   end
 
-  defp native_messages(entries, full_text) do
+  @doc false
+  def run_messages(run_id, data), do: extract_messages(run_id, data, true)
+
+  @doc false
+  def native_messages(entries, full_text) do
     {rows, _calls} =
       Enum.reduce(entries, {[], %{}}, fn entry, {rows, calls} ->
         {new_rows, calls} =

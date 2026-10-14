@@ -333,6 +333,10 @@ export class AppShell {
 			sendPrompt: (text) => this.sendPrompt(text),
 			refreshStatus: () => this.#renderStatus(),
 			confirm: (spec) => this.#confirm(spec),
+			onSnapshot: (result, branchChanged) => {
+				if (branchChanged) this.#taskTree.store.clear(result.sessionKey);
+				this.#taskTree.reconcile(result.sessionKey, result.snapshot.children);
+			},
 		});
 		this.#switcher = new SessionSwitcher({
 			store: this.store,
@@ -470,6 +474,8 @@ export class AppShell {
 			// both have moved, and the only one worth spending a request on. It is
 			// also the moment the session's backlog is allowed to move.
 			this.client.events.on("agent", (event: AgentEvent) => {
+				const session = this.store.session(event.sessionKey ?? this.store.focusedKey);
+				if (session.snapshotIdentity) return;
 				this.#taskTree.ingest(event);
 				this.#toolInspector.refresh();
 				if (event?.type !== "completed") return;
@@ -483,7 +489,14 @@ export class AppShell {
 			// A re-handshake means the client's picture of the daemon is stale: which
 			// sessions are live, what landed while the socket was down, and which
 			// approvals are still waiting all have to be re-read.
-			this.client.events.on("resync-needed", () => void this.sessions.resync()),
+			this.client.events.on("resync-needed", ({ sessionKey }) => {
+				if (!sessionKey || sessionKey === this.store.focusedKey) {
+					// Loss/reconnect is itself a race with an in-flight owner read,
+					// even when none of the missed data packets reached this client.
+					this.store.focused.recoveryEventVersion += 1;
+					void this.sessions.resync();
+				}
+			}),
 			this.store.events.on("mode-changed", () => this.#renderStatus()),
 			this.store.events.on("session-changed", () => {
 				this.syncQueuePanel();

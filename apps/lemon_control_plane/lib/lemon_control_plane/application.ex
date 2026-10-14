@@ -17,8 +17,6 @@ defmodule LemonControlPlane.Application do
         LemonControlPlane.Methods.Registry,
         # Presence tracker for connected clients
         LemonControlPlane.Presence,
-        # Fanout task supervisor for EventBridge broadcast dispatch (supervised)
-        {Task.Supervisor, name: LemonControlPlane.EventBridge.FanoutSupervisor},
         # Event bridge for bus -> WebSocket fanout
         LemonControlPlane.EventBridge,
         # Connection supervisor for WebSocket connections

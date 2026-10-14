@@ -540,6 +540,32 @@ defmodule CodingAgent.Coordinator do
   end
 
   defp handle_await_message(
+         {:session_terminal, session_id, status},
+         pending_ids,
+         results,
+         state
+       ) do
+    case find_subagent_by_session(state, session_id) do
+      {id, %{pid: pid}} ->
+        if id in pending_ids do
+          event =
+            case status do
+              :completed -> {:agent_end, Session.get_messages(pid)}
+              :canceled -> {:error, :aborted, nil}
+              :error -> {:error, :session_failed, nil}
+            end
+
+          handle_await_message({:session_event, session_id, event}, pending_ids, results, state)
+        else
+          {:continue, pending_ids, results, state}
+        end
+
+      nil ->
+        {:continue, pending_ids, results, state}
+    end
+  end
+
+  defp handle_await_message(
          {:session_event, session_id, {:agent_end, messages}},
          pending_ids,
          results,

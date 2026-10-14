@@ -42,6 +42,13 @@ defmodule LemonCore.AgentRuntime.Provider do
   @doc "Loads persisted native session messages for replay."
   @callback session_history(session_key(), Path.t()) :: {:ok, [map()]} | {:error, term()}
 
+  @doc "Read selected-branch recovery input; cwd may be nil when the session is live."
+  @callback session_recovery_snapshot(session_key(), Path.t() | nil) ::
+              {:ok, map()} | {:error, term()}
+
+  @doc "Read redacted process receipts for an exact native session owner."
+  @callback session_process_receipts(String.t()) :: {:ok, [map()]} | {:error, term()}
+
   @doc "Forks native session state into an independent destination resume mapping."
   @callback session_fork(session_key(), Path.t(), session_key()) :: :ok | {:error, term()}
 
@@ -144,6 +151,8 @@ defmodule LemonCore.AgentRuntime.Provider do
                       feature_progress: 1,
                       compact_session: 2,
                       session_history: 2,
+                      session_recovery_snapshot: 2,
+                      session_process_receipts: 1,
                       session_fork: 3,
                       session_tree: 3,
                       session_rewind: 4,

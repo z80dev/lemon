@@ -8,6 +8,7 @@ defmodule LemonWeb.ChatLiveTest do
   import LemonWeb.Test.OperatorAuth
 
   alias LemonCore.{Event, ExecApprovals, ExecApprovalStore}
+  alias LemonCore.Events.{ApprovalPending, ApprovalRequested}
 
   setup :configure_operator_token
 
@@ -48,6 +49,9 @@ defmodule LemonWeb.ChatLiveTest do
     do: {:ok, %{"sessionKey" => key, "runId" => nil}}
 
   defp default_stub("chat.history", _), do: {:ok, %{"messages" => []}}
+
+  defp default_stub("sessions.snapshot", _),
+    do: {:error, {:unavailable, "Recovery fixture is not configured", nil}}
 
   defp default_stub("sessions.plan", %{"sessionKey" => key}),
     do:
@@ -661,7 +665,390 @@ defmodule LemonWeb.ChatLiveTest do
     assert_patch(view, "/chat/" <> URI.encode_www_form("agent:default:fork:local:unknown:child1"))
   end
 
+  test "reconnected pane replaces completed tool and approval state from the shared authority", %{
+    conn: conn,
+    stub: stub
+  } do
+    k = key("recovery-terminal")
+    run_id = "run-recovery"
+
+    call = %{
+      "id" => "call-row",
+      "role" => "tool_use",
+      "toolCallId" => "call-recovery",
+      "toolName" => "bash",
+      "phase" => "started",
+      "timestampMs" => 1
+    }
+
+    pending = %{
+      "id" => "approval-recovery",
+      "approvalId" => "approval-recovery",
+      "sessionKey" => k,
+      "tool" => "bash",
+      "action" => %{}
+    }
+
+    active =
+      recovery_snapshot(k, run_id, "running", [call])
+      |> put_in(["snapshot", "approvals", "items"], [pending])
+
+    stub.("sessions.snapshot", {:ok, active})
+    {view, pane} = open(conn, k)
+    _ = render_async(pane)
+    assert has_element?(pane, "details.tool-card[data-status=running]")
+    assert has_element?(pane, "[id^=approvals-]", "Approve")
+    GenServer.stop(view.pid, :normal)
+
+    receipt =
+      Map.merge(call, %{
+        "id" => "result-row",
+        "role" => "tool_result",
+        "phase" => "completed",
+        "ok" => true,
+        "content" => "completed while disconnected",
+        "timestampMs" => 2
+      })
+
+    answer = %{
+      "id" => "answer-row",
+      "role" => "assistant",
+      "content" => "Canonical recovered answer",
+      "timestampMs" => 3
+    }
+
+    done = recovery_snapshot(k, run_id, "completed", [call, receipt, answer])
+    stub.("sessions.snapshot", {:ok, done})
+    {_view, recovered} = open(conn, k)
+    _ = render_async(recovered)
+
+    assert has_element?(
+             recovered,
+             "details.tool-card[data-status=done]",
+             "completed while disconnected"
+           )
+
+    refute has_element?(recovered, "details.tool-card[data-status=running]")
+    refute has_element?(recovered, "[id^=approvals-] button")
+    assert count(recovered, "[data-kind=assistant]") == 1
+    assert has_element?(recovered, "[data-kind=assistant]", "Canonical recovered answer")
+
+    # Delayed transient packets and a stale approval cannot revive owner truth.
+    send(recovered.pid, delta(run_id, 99, "late text"))
+    send(recovered.pid, action(run_id, "call-recovery", :started, %{name: "bash"}))
+    send(recovered.pid, completed(run_id, "duplicate answer"))
+
+    send(recovered.pid, approval_requested(pending["id"], k))
+
+    _ = render(recovered)
+    _ = render_async(recovered)
+    assert count(recovered, "[data-kind=assistant]") == 1
+    refute render(recovered) =~ "late text"
+    refute render(recovered) =~ "duplicate answer"
+    refute has_element?(recovered, "details.tool-card[data-status=running]")
+    refute has_element?(recovered, "[id^=approvals-] button")
+
+    # Even a late/regressed owner response for the same fixed attempt is not
+    # permitted to turn a terminal card back into active work.
+    stub.("sessions.snapshot", {:ok, active})
+    send(recovered.pid, {:stream_resync, :overflow})
+    _ = render(recovered)
+    _ = render_async(recovered)
+    assert has_element?(recovered, "[data-kind=assistant]", "Canonical recovered answer")
+    refute has_element?(recovered, "[id^=run-line-]")
+    refute has_element?(recovered, "details.tool-card[data-status=running]")
+  end
+
+  test "an event racing recovery discards the old branch snapshot and replaces todo plan and owned work",
+       %{
+         conn: conn,
+         stub: stub
+       } do
+    k = key("recovery-race")
+    test_pid = self()
+
+    old =
+      recovery_snapshot(k, "abandoned-run", "running", [
+        %{"id" => "old-answer", "role" => "assistant", "content" => "Abandoned branch"}
+      ])
+
+    stub.("sessions.snapshot", fn _ ->
+      send(test_pid, {:snapshot_waiting, self()})
+
+      receive do
+        :release_snapshot -> {:ok, old}
+      end
+    end)
+
+    {_view, pane} = open(conn, k)
+    assert_receive {:snapshot_waiting, reader}
+    send(pane.pid, delta("abandoned-run", 1, "obsolete flushed text"))
+    send(pane.pid, :flush)
+    send(pane.pid, action("abandoned-run", "obsolete-call", :started, %{name: "bash"}))
+
+    send(pane.pid, approval_requested("obsolete-approval", k))
+
+    _ = render(pane)
+    assert render(pane) =~ "obsolete flushed text"
+    assert has_element?(pane, "details.tool-card[data-status=running]")
+    assert has_element?(pane, "[id^=approvals-] button")
+
+    assert has_element?(
+             pane,
+             ~s([data-approval-id="obsolete-approval"] button[phx-click="resolve-approval"])
+           )
+
+    # Hold an actual handler's coalesced tail until recovery installs its rows.
+    # Cancel inside the channel callback so no timer/render scheduling decides
+    # whether the stale text is already committed or still buffered.
+    :sys.replace_state(pane.pid, fn state ->
+      {:noreply, socket} =
+        LemonWeb.Chat.PaneLive.handle_info(
+          delta("abandoned-run", 2, "obsolete live text"),
+          state.socket
+        )
+
+      Process.cancel_timer(socket.assigns.flush_timer)
+      %{state | socket: socket}
+    end)
+
+    current =
+      recovery_snapshot(k, "current-run", "completed", [
+        %{"id" => "current-answer", "role" => "assistant", "content" => "Current branch answer"}
+      ])
+      |> put_in(["identity", "branchId"], "selected-branch")
+      |> put_in(["identity", "revision"], "selected-revision")
+      |> put_in(["snapshot", "todos", "items"], [
+        %{"id" => "current-todo", "content" => "Current branch todo", "status" => "pending"}
+      ])
+      |> put_in(["snapshot", "plan", "value"], %{
+        "mode" => "plan",
+        "content" => "Current branch plan"
+      })
+      |> put_in(["snapshot", "children", "items"], [
+        %{
+          "taskId" => "fixed-task",
+          "runId" => "fixed-child",
+          "parentRunId" => "current-run",
+          "status" => "completed"
+        }
+      ])
+      |> put_in(["snapshot", "processes", "items"], [
+        %{
+          "identity" => "fixed-process",
+          "classification" => "outcome_unknown",
+          "status" => "lost"
+        }
+      ])
+      |> put_in(["snapshot", "todos", "truncated"], true)
+      |> put_in(["snapshot", "children", "truncated"], true)
+      |> put_in(["snapshot", "processes", "truncated"], true)
+
+    stub.("sessions.snapshot", {:ok, current})
+    send(reader, :release_snapshot)
+    _ = render_async(pane)
+    assert has_element?(pane, "[data-kind=assistant]", "Current branch answer")
+    refute render(pane) =~ "Abandoned branch"
+    refute render(pane) =~ "obsolete live text"
+    refute render(pane) =~ "obsolete flushed text"
+    refute has_element?(pane, "details.tool-card[data-status=running]")
+    refute has_element?(pane, "[id^=approvals-] button")
+
+    # A timer packet already queued before cancellation and delayed old work
+    # cannot bring any part of the abandoned projection back.
+    send(pane.pid, :flush)
+    send(pane.pid, delta("abandoned-run", 3, "late obsolete text"))
+    send(pane.pid, action("abandoned-run", "obsolete-call", :started, %{name: "bash"}))
+
+    send(pane.pid, approval_requested("obsolete-approval", k))
+
+    _ = render(pane)
+    _ = render_async(pane)
+    refute render(pane) =~ "obsolete"
+    refute has_element?(pane, "details.tool-card[data-status=running]")
+    refute has_element?(pane, "[id^=approvals-] button")
+
+    render_click(pane, "inspector-tab", %{"tab" => "plan"})
+    _ = render_async(pane)
+    assert has_element?(pane, "[id^=todo-recovery-]", "Current branch todo")
+    assert has_element?(pane, "[id^=plan-content-]", "Current branch plan")
+    assert has_element?(pane, "[id^=todo-recovery-]", "Todo snapshot truncated")
+
+    render_click(pane, "inspector-tab", %{"tab" => "subagents"})
+    _ = render_async(pane)
+    assert has_element?(pane, "[data-status=completed]", "fixed-child")
+    assert has_element?(pane, "[id^=subagent-tree-truncated-]")
+
+    render_click(pane, "inspector-tab", %{"tab" => "details"})
+    assert has_element?(pane, "[id^=process-recovery-]", "fixed-process")
+    assert has_element?(pane, "[id^=process-recovery-]", "lost")
+    assert has_element?(pane, "[id^=process-recovery-]", "Process snapshot truncated")
+  end
+
+  test "overflow alone racing an in-flight recovery invalidates its pre-loss snapshot", %{
+    conn: conn,
+    stub: stub
+  } do
+    k = key("recovery-overflow-race")
+    test_pid = self()
+
+    before =
+      recovery_snapshot(k, "before-loss", "completed", [
+        %{"id" => "before-answer", "role" => "assistant", "content" => "PRE-LOSS ANSWER"}
+      ])
+
+    stub.("sessions.snapshot", fn _ ->
+      send(test_pid, {:snapshot_waiting, self()})
+
+      receive do
+        :release_snapshot -> {:ok, before}
+      end
+    end)
+
+    {_view, pane} = open(conn, k)
+    assert_receive {:snapshot_waiting, reader}
+    send(pane.pid, {:stream_resync, :overflow})
+    _ = render(pane)
+
+    current =
+      recovery_snapshot(k, "after-loss", "completed", [
+        %{"id" => "after-answer", "role" => "assistant", "content" => "Recovered after overflow"}
+      ])
+
+    stub.("sessions.snapshot", {:ok, current})
+    send(reader, :release_snapshot)
+    _ = render_async(pane)
+    assert has_element?(pane, "[data-kind=assistant]", "Recovered after overflow")
+    refute render(pane) =~ "PRE-LOSS ANSWER"
+    refute has_element?(pane, "[id^=run-line-]")
+  end
+
+  test "terminal recovery without a tool receipt renders outcome unknown, never a spinner", %{
+    conn: conn,
+    stub: stub
+  } do
+    k = key("recovery-unknown")
+
+    snapshot =
+      recovery_snapshot(k, "unknown-run", "completed", [
+        %{
+          "id" => "missing-receipt",
+          "role" => "tool_use",
+          "toolCallId" => "uncertain-call",
+          "toolName" => "write",
+          "phase" => "unknown"
+        }
+      ])
+
+    stub.("sessions.snapshot", {:ok, snapshot})
+    {_view, pane} = open(conn, k)
+    _ = render_async(pane)
+    assert has_element?(pane, "details.tool-card[data-status=unknown]", "outcome unknown")
+    refute has_element?(pane, "details.tool-card[data-status=running]")
+  end
+
+  test "unknown snapshot run authority remains unavailable instead of idle", %{
+    conn: conn,
+    stub: stub
+  } do
+    k = key("snapshot-unavailable")
+    stub.("sessions.snapshot", {:ok, recovery_snapshot(k, nil, "unknown", [])})
+    {_view, pane} = open(conn, k)
+    _ = render_async(pane)
+    assert has_element?(pane, "[id^=run-unavailable-]")
+    assert has_element?(pane, "textarea[id^=composer-][disabled]")
+    assert render(pane) =~ "Current run state is unavailable."
+    refute_received {:rpc, "chat.send", _}
+  end
+
+  test "a suspended pane has bounded fanout and recovers owner completion after overflow", %{
+    conn: conn,
+    stub: stub
+  } do
+    k = key("bounded-recovery")
+    run_id = "burst-run"
+    stub.("sessions.snapshot", {:ok, recovery_snapshot(k, run_id, "running", [])})
+    {_view, pane} = open(conn, k)
+    _ = render_async(pane)
+    :ok = :sys.suspend(pane.pid)
+
+    try do
+      for seq <- 1..1_000 do
+        event =
+          Event.new(:delta, %{run_id: run_id, seq: seq, text: "bounded progress"}, %{
+            run_id: run_id,
+            session_key: k
+          })
+
+        :ok = LemonCore.Bus.broadcast(LemonCore.Bus.session_topic(k), event)
+      end
+
+      {:message_queue_len, queued} = Process.info(pane.pid, :message_queue_len)
+      {:messages, messages} = Process.info(pane.pid, :messages)
+      # 256 admitted events + one overflow marker, with room for LiveView
+      # control/timer messages (which share and conservatively consume capacity).
+      assert queued <= 270
+
+      assert Enum.count(
+               messages,
+               &match?({:lemon_bus_delivery, _, {:stream_resync, :overflow}}, &1)
+             ) == 1
+
+      # Owner completion is independent of the deliberately suspended UI.
+      done =
+        recovery_snapshot(k, run_id, "completed", [
+          %{"id" => "burst-answer", "role" => "assistant", "content" => "Owner completed"}
+        ])
+
+      stub.("sessions.snapshot", {:ok, done})
+    after
+      :ok = :sys.resume(pane.pid)
+    end
+
+    _ = render(pane)
+    _ = render_async(pane)
+    assert has_element?(pane, "[data-kind=assistant]", "Owner completed")
+    assert count(pane, "[data-kind=assistant]") == 1
+    refute has_element?(pane, "[id^=run-line-]")
+  end
+
   # ── Helpers ─────────────────────────────────────────────────────────────
+
+  defp recovery_snapshot(key, run_id, phase, messages) do
+    answer =
+      messages
+      |> Enum.filter(&(&1["role"] == "assistant"))
+      |> Enum.map_join("", &(&1["content"] || ""))
+
+    %{
+      "status" => "ok",
+      "sessionKey" => key,
+      "identity" => %{
+        "sessionKey" => key,
+        "sessionId" => "native-session",
+        "branchId" => "branch",
+        "revision" => "revision",
+        "runId" => run_id,
+        "attempt" => run_id
+      },
+      "snapshot" => %{
+        "phase" => phase,
+        "terminal" => phase in ["completed", "cancelled", "failed"],
+        "answer" => %{
+          "text" => answer,
+          "canonical" => phase in ["completed", "cancelled", "failed"],
+          "truncated" => false
+        },
+        "messages" => Enum.map(messages, &Map.put(&1, "runId", run_id)),
+        "actions" => [],
+        "approvals" => %{"status" => "ok", "items" => []},
+        "children" => %{"status" => "ok", "items" => []},
+        "processes" => %{"status" => "ok", "items" => []},
+        "todos" => %{"status" => "ok", "items" => []},
+        "plan" => %{"status" => "ok", "value" => %{"mode" => "code", "content" => nil}}
+      }
+    }
+  end
 
   defp open(conn, key) do
     {:ok, view, _html} = live(conn, "/chat/#{URI.encode_www_form(key)}")
@@ -691,6 +1078,15 @@ defmodule LemonWeb.ChatLiveTest do
     }
 
     Event.new(:engine_action, payload, %{run_id: run_id})
+  end
+
+  defp approval_requested(id, session_key) do
+    pending = ApprovalPending.new(%{id: id, session_key: session_key, tool: "bash", action: %{}})
+
+    Event.new(
+      :approval_requested,
+      ApprovalRequested.new(%{approval_id: id, pending: pending})
+    )
   end
 
   defp request(id, session_key, tool, action) do

@@ -96,8 +96,15 @@ defmodule LemonControlPlane.Presence do
 
   @impl true
   def handle_call({:register, conn_id, info}, _from, state) do
+    case :ets.lookup(state.table, conn_id) do
+      [{^conn_id, previous}] -> release_client(previous)
+      [] -> :ok
+    end
+
     client_info =
       info
+      |> Map.put(:delivery, Map.get(info, :delivery) || LemonCore.Bus.Delivery.new(info.pid))
+      |> Map.put(:monitor_ref, Process.monitor(info.pid))
       |> Map.put(:connected_at, System.system_time(:millisecond))
 
     :ets.insert(state.table, {conn_id, client_info})
@@ -112,6 +119,11 @@ defmodule LemonControlPlane.Presence do
 
   @impl true
   def handle_call({:unregister, conn_id}, _from, state) do
+    case :ets.lookup(state.table, conn_id) do
+      [{^conn_id, info}] -> release_client(info)
+      [] -> :ok
+    end
+
     :ets.delete(state.table, conn_id)
 
     Logger.debug("Presence: unregistered #{conn_id}")
@@ -169,11 +181,35 @@ defmodule LemonControlPlane.Presence do
     {:noreply, state}
   end
 
+  @impl true
+  def handle_info({:DOWN, ref, :process, pid, _reason}, state) do
+    removed =
+      Enum.reduce(:ets.tab2list(state.table), false, fn
+        {conn_id, %{monitor_ref: ^ref, pid: ^pid} = info}, _removed ->
+          release_client(info)
+          :ets.delete(state.table, conn_id)
+          true
+
+        _, removed ->
+          removed
+      end)
+
+    if removed, do: emit_presence_changed(state.table)
+    {:noreply, state}
+  end
+
+  def handle_info(_message, state), do: {:noreply, state}
+
+  defp release_client(info) do
+    LemonCore.Bus.Delivery.close(info.delivery)
+    Process.demonitor(info.monitor_ref, [:flush])
+  end
+
   defp do_broadcast(table, event_name, payload, filter_fn) do
     clients = :ets.tab2list(table)
 
     for {_conn_id, info} <- clients, filter_fn.(info) do
-      send(info.pid, {:event, event_name, payload})
+      LemonCore.Bus.Delivery.send(info.delivery, {:event, event_name, payload})
     end
 
     :ok

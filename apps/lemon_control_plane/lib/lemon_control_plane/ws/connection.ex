@@ -36,7 +36,9 @@ defmodule LemonControlPlane.WS.Connection do
     :event_seq,
     :local?,
     :state_version,
-    :heartbeat_timer_ref
+    :delivery,
+    :heartbeat_timer_ref,
+    resync_required: false
   ]
 
   @type t :: %__MODULE__{
@@ -46,6 +48,8 @@ defmodule LemonControlPlane.WS.Connection do
           event_seq: non_neg_integer(),
           local?: boolean(),
           state_version: map(),
+          delivery: LemonCore.Bus.Delivery.t() | nil,
+          resync_required: boolean(),
           heartbeat_timer_ref: reference() | nil
         }
 
@@ -69,7 +73,8 @@ defmodule LemonControlPlane.WS.Connection do
       connected: false,
       event_seq: 0,
       local?: local?,
-      state_version: %{}
+      state_version: %{},
+      delivery: LemonCore.Bus.Delivery.new(self())
     }
 
     Logger.debug("WebSocket connection initialized: #{conn_id}")
@@ -115,6 +120,17 @@ defmodule LemonControlPlane.WS.Connection do
   end
 
   @impl WebSock
+  def handle_info({:stream_resync, :overflow}, state) do
+    send(self(), :stream_overflow_disconnect)
+    state = %{state | resync_required: true}
+    push_event("stream.resync", %{"reason" => "overflow"}, increment_event_seq(state))
+  end
+
+  def handle_info(:stream_overflow_disconnect, state), do: {:stop, :normal, state}
+
+  def handle_info({:event, _, _, _}, %{resync_required: true} = state), do: {:ok, state}
+  def handle_info({:event, _, _}, %{resync_required: true} = state), do: {:ok, state}
+
   def handle_info({:node_event, event_name, payload}, state) do
     push_event(event_name, payload, increment_event_seq(state))
   end
@@ -166,6 +182,8 @@ defmodule LemonControlPlane.WS.Connection do
   @impl WebSock
   def terminate(reason, state) do
     Logger.debug("WebSocket connection terminated: #{state.conn_id}, reason: #{inspect(reason)}")
+
+    if state.delivery, do: LemonCore.Bus.Delivery.close(state.delivery)
 
     if is_reference(state.heartbeat_timer_ref),
       do: Process.cancel_timer(state.heartbeat_timer_ref)
@@ -468,7 +486,8 @@ defmodule LemonControlPlane.WS.Connection do
         LemonControlPlane.Presence.register(state.conn_id, %{
           role: state.auth.role,
           client_id: state.auth.client_id,
-          pid: self()
+          pid: self(),
+          delivery: state.delivery
         })
     end
   end

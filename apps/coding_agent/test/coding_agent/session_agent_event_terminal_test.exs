@@ -6,7 +6,7 @@ defmodule CodingAgent.SessionAgentEventTerminalTest do
   alias LemonAi.Types.AssistantMessage
   alias CodingAgent.Session
   alias CodingAgent.SessionManager
-  alias LemonAgent.Types.{AgentTool, AgentToolResult}
+  alias LemonAgent.Types.{AgentTool, AgentToolResult, ToolSchemaSnapshot}
   alias LemonAi.Types.{TextContent, ToolCall, ToolResultMessage}
 
   defp start_session(opts \\ []) do
@@ -35,6 +35,46 @@ defmodule CodingAgent.SessionAgentEventTerminalTest do
     end)
 
     session
+  end
+
+  test "schema snapshot admission accepts nested tool structs but rejects oversized backing" do
+    backing = :binary.copy("x", 2048)
+    description = binary_part(backing, 0, 256)
+    assert :binary.referenced_byte_size(description) == byte_size(backing)
+
+    tool = %AgentTool{
+      name: "schema_read",
+      label: "Schema read",
+      description: description,
+      parameters: %{"type" => "object", "properties" => %{"path" => %{"type" => "string"}}},
+      execute: fn _id, _args, _signal, _on_update ->
+        %AgentToolResult{content: [%TextContent{type: :text, text: "read result"}]}
+      end
+    }
+
+    snapshot = ToolSchemaSnapshot.new([tool])
+
+    message = {:session_event, "schema-session", {:tool_schema_snapshot, snapshot}}
+    delivery = LemonCore.Bus.Delivery.new(self(), tagged: true, max_bytes: 16_384)
+    assert :ok = LemonCore.Bus.Delivery.send(delivery, message)
+    assert_receive {:lemon_bus_delivery, gate, ^message}
+    assert LemonCore.Bus.Delivery.matches?(delivery, gate)
+    refute LemonCore.Bus.Delivery.closed?(delivery)
+
+    oversized_backing = :binary.copy("x", 65_536)
+    oversized_description = binary_part(oversized_backing, 0, 256)
+    assert :binary.referenced_byte_size(oversized_description) == byte_size(oversized_backing)
+    oversized_snapshot = %{snapshot | tools: [%{tool | description: oversized_description}]}
+
+    oversized_message =
+      {:session_event, "schema-session", {:tool_schema_snapshot, oversized_snapshot}}
+
+    assert :erlang.external_size(oversized_message) < delivery.max_bytes
+    assert {:error, :overflow} = LemonCore.Bus.Delivery.send(delivery, oversized_message)
+    assert :ok = LemonCore.Bus.Delivery.terminal(delivery, oversized_message)
+    assert_receive {:lemon_bus_delivery, ^gate, {:stream_resync, :overflow}}
+    refute_received {:lemon_bus_delivery, ^gate, ^oversized_message}
+    assert LemonCore.Bus.Delivery.closed?(delivery)
   end
 
   defp force_streaming(session) do
@@ -130,6 +170,14 @@ defmodule CodingAgent.SessionAgentEventTerminalTest do
 
     native_events =
       for {:session_event, _, event} <- events, do: event
+
+    assert Enum.any?(native_events, fn
+             {:tool_schema_snapshot, %ToolSchemaSnapshot{tools: tools}} ->
+               Enum.any?(tools, &(&1.name == "native_wait"))
+
+             _ ->
+               false
+           end)
 
     assert {:tool_execution_end, ^call_id, "native_wait", result, true} =
              Enum.find(native_events, &match?({:tool_execution_end, ^call_id, _, _, _}, &1))

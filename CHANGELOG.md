@@ -8,7 +8,29 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
-No unreleased changes yet.
+### Added
+
+- A shared, bounded `sessions.snapshot` recovery response for TUI and browser
+  chat, composed from the selected native branch and existing lifecycle owners.
+  Reconnect and overflow recovery replace stale approvals, tools and branch
+  progress without replaying mutations or retaining every text delta.
+
+### Fixed
+
+- Slow session and operator-event consumers are fenced at bounded delivery
+  admission, with an explicit resynchronization signal. Native execution keeps
+  a reconstructable terminal path, and recovered client state cannot be revived
+  by late packets from a terminal or abandoned attempt. Remaining best-effort
+  transport boundaries are documented rather than claimed to be globally bounded.
+- Recovery races now include overflow notifications without any delivered data.
+  Idle live rewinds cannot reuse an abandoned invocation's answer, and cancellation
+  before new assistant output cannot recycle the preceding turn's answer.
+  Delivery admission accounts for oversized sub-binary backing; old bridge epochs
+  and late coalescer finalizers cannot corrupt newer recovered work. Web inspectors
+  disclose truncated todo, child and process recovery previews.
+- Web branch recovery discards pending coalesced text instead of flushing obsolete
+  rows into the replacement stream. TUI recovery also fences replacement session
+  instances when a branch or revision identifier is reused.
 
 ---
 

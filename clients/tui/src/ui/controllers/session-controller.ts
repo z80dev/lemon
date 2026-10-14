@@ -4,18 +4,15 @@
  * The client keeps a {@link SessionStore} per session and shows exactly one of
  * them. Everything that makes that legal lives here:
  *
- *   - **the switch procedure** — park the outgoing draft, move focus, hydrate a
- *     cold session from `chat.history`, rebuild the transcript components from
- *     the block models, clear native scrollback, restore the incoming draft.
- *     A session switch is *the only* sanctioned `clearScrollback` gesture
- *     besides `/clear`: the terminal is holding rows for a transcript we are
- *     about to stop showing, and rows the client can no longer reason about are
- *     worse than no rows at all.
- *   - **hydration** — server-side history synthesized into transcript blocks.
- *     Every synthesized run is finalized, so a rebuilt session never reports a
- *     live region that no stream will ever close.
- *   - **resync** — after a reconnect, re-read what moved while the socket was
- *     down without duplicating anything already on screen.
+ *   - **the switch procedure** — park the outgoing draft, move focus, recover
+ *     through owner snapshots, rebuild the transcript, and restore the draft.
+ *   - **hydration** — stored history for daemons without snapshot support.
+ *     Historical actions remain terminal or outcome-unknown, never live.
+ *   - **resync** — replace the focused projection from bounded owner reads
+ *     after reconnect, overflow, or selection. Replacement clears native
+ *     scrollback: old-branch rows must not survive below the recovered branch.
+ *     Session-instance changes fence cached plan/process state even when a
+ *     replacement owner uses the same branch and revision identifiers.
  *
  * The controller writes stores and asks {@link EventController} to mirror them;
  * it never builds a component itself. That keeps the "one writer of the
@@ -34,6 +31,7 @@ import type {
 	ApprovalRequestedEvent,
 	ChatHistoryMessage,
 	SessionSummary,
+	SessionsSnapshotResult,
 } from "../../protocol/types.ts";
 import { newSessionKey } from "../../session-key.ts";
 import type { AppStore } from "../../store/app-store.ts";
@@ -44,8 +42,8 @@ import type { EventController } from "./event-controller.ts";
 /** How many stored messages a cold session is hydrated with. */
 export const HYDRATE_LIMIT = 100;
 
-/** How far back resync looks for messages that landed while we were away. */
-export const RESYNC_TAIL_LIMIT = 20;
+/** Owner/event races get at most three read-only attempts per recovery. */
+export const SNAPSHOT_RETRY_LIMIT = 3;
 
 /** The slice of the editor a switch needs. */
 export interface DraftEditor {
@@ -65,6 +63,7 @@ export interface SessionControllerOptions {
 	refreshStatus?: () => void;
 	/** Presents a yes/no overlay. Without one, closing needs `confirmed: true`. */
 	confirm?: (spec: ConfirmSpec) => void;
+	onSnapshot?: (result: Extract<SessionsSnapshotResult, { status: "ok" }>, branchChanged: boolean) => void;
 }
 
 export interface ConfirmSpec {
@@ -85,6 +84,10 @@ export class SessionController {
 	readonly #sendPrompt: ((text: string) => void | Promise<void>) | undefined;
 	readonly #refreshStatus: (() => void) | undefined;
 	readonly #confirm: ((spec: ConfirmSpec) => void) | undefined;
+	readonly #onSnapshot: SessionControllerOptions["onSnapshot"];
+	#selectionGeneration = 0;
+	#recoveryGeneration = 0;
+	#recoveryInFlight: { key: string; selection: number; promise: Promise<void> } | undefined;
 
 	/** Sessions whose stored history has been pulled (or never needed pulling). */
 	readonly #hydrated = new Set<string>();
@@ -101,6 +104,7 @@ export class SessionController {
 		this.#sendPrompt = options.sendPrompt;
 		this.#refreshStatus = options.refreshStatus;
 		this.#confirm = options.confirm;
+		this.#onSnapshot = options.onSnapshot;
 	}
 
 	/** Sessions this client has already hydrated (or minted, so never will). */
@@ -118,12 +122,12 @@ export class SessionController {
 	/** Hydrate an explicit launch key before the initial composer is ready. */
 	async initialize(): Promise<void> {
 		const session = this.#store.focused;
-		await Promise.all([
-			this.#hydrateIfCold(session),
-			this.hydrateRouting(session),
-			this.#resyncActive(),
-			this.#resyncApprovals(),
-		]);
+		if (this.#methods.supports(METHOD.sessionsSnapshot)) {
+			await this.resync();
+		} else {
+			await this.#hydrateIfCold(session);
+		}
+		await this.hydrateRouting(session);
 		this.#events.rebuildFocused();
 		this.#refreshStatus?.();
 		void this.seedContext(session);
@@ -148,6 +152,8 @@ export class SessionController {
 		if (target === previousKey) {
 			// Still worth the unread reset and a status repaint: the switcher can
 			// land here from a row the user picked while events were arriving.
+			if (this.#methods.supports(METHOD.sessionsSnapshot)) await this.resync();
+			if (this.#store.focusedKey !== target) return;
 			this.#store.focused.markRead();
 			this.#refreshStatus?.();
 			return;
@@ -155,7 +161,14 @@ export class SessionController {
 
 		this.#store.setDraft(previousKey, this.#editor.getExpandedText());
 		const session = this.#store.setFocused(target);
-		await Promise.all([this.#hydrateIfCold(session), this.hydrateRouting(session)]);
+		const selection = ++this.#selectionGeneration;
+		if (this.#methods.supports(METHOD.sessionsSnapshot)) {
+			await this.resync();
+		} else {
+			await this.#hydrateIfCold(session);
+		}
+		await this.hydrateRouting(session);
+		if (selection !== this.#selectionGeneration || this.#store.focusedKey !== target) return;
 		session.markRead();
 		this.#events.rebuildFocused();
 		this.#editor.setText(this.#store.takeDraft(target));
@@ -253,12 +266,20 @@ export class SessionController {
 
 	/** Replace abandoned history only after the daemon returned its active branch. */
 	async reload(key: string): Promise<void> {
+		if (this.#methods.supports(METHOD.sessionsSnapshot)) {
+			if (key !== this.#store.focusedKey) return;
+			++this.#selectionGeneration;
+			await this.resync();
+			return;
+		}
+		const selection = this.#selectionGeneration;
 		const result = await this.#methods.chatHistory({
 			sessionKey: key,
 			cwd: this.#cwd,
 			limit: HYDRATE_LIMIT,
 			includeFullText: true,
 		});
+		if (selection !== this.#selectionGeneration || key !== this.#store.focusedKey) return;
 		const session = this.#store.session(key);
 		session.resetTranscript();
 		synthesizeHistory(session, result.messages ?? []);
@@ -369,97 +390,183 @@ export class SessionController {
 	// -- reconnect recovery --------------------------------------------------
 
 	/**
-	 * Re-read the world after a reconnect: which sessions are live, whatever
-	 * landed in the focused one while the socket was down, and any approval that
-	 * is still waiting.
-	 *
-	 * Everything here is additive and de-duplicated. A resync that replayed
-	 * history the transcript already shows would be worse than one that missed a
-	 * message: the user cannot tell a duplicate from a repeat.
+	 * Compose only owner truth. Failed reads never mean idle or empty approvals.
+	 * There is no snapshot text cursor: recovered runs refresh instead of
+	 * appending deltas whose relationship to answer-so-far is unknowable.
 	 */
-	async resync(): Promise<void> {
-		await Promise.all([
-			this.#resyncActive(),
-			this.#resyncTail(),
-			this.#resyncApprovals(),
-			this.hydrateRouting(this.#store.focused),
-		]);
-		this.#refreshStatus?.();
-		void this.seedContext(this.#store.focused);
-	}
-
-	async #resyncActive(): Promise<void> {
-		if (!this.#methods.supports(METHOD.sessionsActiveList)) return;
-		const result = await this.#methods.sessionsActiveList().catch(() => undefined);
-		const active = new Set<string>();
-		for (const entry of (result?.sessions ?? []) as SessionSummary[]) {
-			const key = sessionKeyOf(entry);
-			if (key) active.add(key);
-		}
-		// Only sessions this client already knows are touched: materializing every
-		// server-side session would inflate the session count with transcripts
-		// nobody asked for.
-		for (const session of this.#store.sessions.values()) {
-			const busy = active.has(session.key);
-			if (session.busy === busy) continue;
-			session.busy = busy;
-			if (!busy) session.activeRunId = undefined;
-		}
-	}
-
-	/**
-	 * Append the conversation the daemon has that this transcript does not.
-	 *
-	 * The floor is the newest block that *came from the daemon*, never simply the
-	 * last block: reconnecting writes its own notices ("reconnected") stamped
-	 * now, and measuring against one of those would rule out every message that
-	 * landed during the outage — the exact messages this exists to recover.
-	 *
-	 * With no daemon-sourced block at all (a transcript holding nothing but
-	 * connection notices) the floor is zero and this becomes an ordinary
-	 * hydrate. Either way blocks are only ever appended, so no rebuild and no
-	 * scrollback clearing is involved.
-	 */
-	async #resyncTail(): Promise<void> {
-		if (!this.#methods.supports(METHOD.chatHistory)) return;
+	resync(): Promise<void> {
 		const session = this.#store.focused;
-		const since = lastDaemonBlockAt(session);
-		const cold = since === undefined;
-		const result = await this.#methods
-			.chatHistory({
-				sessionKey: session.key,
-				cwd: this.#cwd,
-				limit: cold ? HYDRATE_LIMIT : RESYNC_TAIL_LIMIT,
-				includeFullText: true,
-			})
-			.catch(() => undefined);
-		const messages = (result?.messages ?? []) as ChatHistoryMessage[];
-		// Nothing of the daemon's is on screen, so nothing can be duplicated and
-		// even messages the daemon stored without a timestamp are safe to take.
-		const missed = cold
-			? messages
-			: messages.filter((message) => {
-					const at = message.timestampMs;
-					// A message without a timestamp cannot be placed against what is on
-					// screen, so it is left alone rather than guessed at.
-					return typeof at === "number" && at > since;
-				});
-		if (missed.length > 0) this.#hydrated.add(session.key);
-		if (missed.length === 0) return;
-		synthesizeHistory(session, missed);
-		// The notice is not only for the user: appending a block is what makes the
-		// event controller walk the tail of the block list, so this is also what
-		// puts components under the messages just synthesized. Recovering silently
-		// would leave them in the model and off the screen.
-		this.#events.notice(`recovered ${missed.length} message(s) missed while offline`, "warning");
+		const selection = this.#selectionGeneration;
+		const current = this.#recoveryInFlight;
+		if (current?.key === session.key && current.selection === selection) return current.promise;
+		const promise = this.#recover(session, selection).finally(() => {
+			if (this.#recoveryInFlight?.promise === promise) this.#recoveryInFlight = undefined;
+		});
+		this.#recoveryInFlight = { key: session.key, selection, promise };
+		return promise;
 	}
 
-	async #resyncApprovals(): Promise<void> {
-		if (!this.#methods.supports(METHOD.approvalsGet)) return;
-		const result = await this.#methods.approvalsGet().catch(() => undefined);
-		for (const pending of pendingApprovalsFrom(result)) {
-			if (this.#store.approvals.has(pending.approvalId)) continue;
-			this.#store.addApproval(pending);
+	async #recover(session: SessionStore, selection: number): Promise<void> {
+		if (!this.#methods.supports(METHOD.sessionsSnapshot)) return;
+		const generation = ++this.#recoveryGeneration;
+		for (let attempt = 0; attempt < SNAPSHOT_RETRY_LIMIT; attempt++) {
+			const eventVersion = session.recoveryEventVersion;
+			let result: SessionsSnapshotResult;
+			try {
+				result = await this.#methods.sessionsSnapshot({
+					sessionKey: session.key,
+					cwd: this.#cwd,
+					limit: HYDRATE_LIMIT,
+					...(attempt === 0 && session.snapshotIdentity
+						? { expectedIdentity: session.snapshotIdentity }
+						: {}),
+				});
+			} catch (error) {
+				if (generation !== this.#recoveryGeneration || selection !== this.#selectionGeneration) return;
+				if (error instanceof ControlPlaneError && ["FORBIDDEN", "UNAUTHORIZED"].includes(error.code)) {
+					this.#replaceApprovals(session.key, []);
+				}
+				this.#notice(`could not recover ${session.key}: ${describeError(error)}`, "warning");
+				return;
+			}
+			if (
+				generation !== this.#recoveryGeneration ||
+				selection !== this.#selectionGeneration ||
+				this.#store.focusedKey !== session.key ||
+				result.sessionKey !== session.key ||
+				result.identity.sessionKey !== session.key
+			) return;
+			if (result.status === "retry" || eventVersion !== session.recoveryEventVersion) continue;
+			const snapshot = result.snapshot;
+			if (
+				result.identity.runId &&
+				session.snapshotIdentity?.sessionId === result.identity.sessionId &&
+				session.snapshotIdentity?.branchId === result.identity.branchId &&
+				session.snapshotIdentity?.runId === result.identity.runId &&
+				session.snapshotIdentity?.attempt === result.identity.attempt &&
+				session.isRunTerminal(result.identity.runId) &&
+				!snapshot.terminal
+			) continue;
+			const previousBusy = session.busy;
+			const previousRunId = session.activeRunId;
+			const branchChanged = session.snapshotIdentity?.sessionId !== result.identity.sessionId ||
+				session.snapshotIdentity?.revision !== result.identity.revision ||
+				session.snapshotIdentity?.branchId !== result.identity.branchId;
+			if (branchChanged) {
+				session.planMode = undefined;
+				session.planPath = undefined;
+				session.planWrites += 1;
+				session.ownedProcessStates = [];
+			}
+			session.resetTranscript();
+			if (snapshot.phase === "unknown") {
+				session.busy = previousBusy;
+				session.activeRunId = previousRunId;
+				session.addNotice("run state unknown", "warning");
+			}
+			session.snapshotIdentity = result.identity;
+			session.snapshotRunId = result.identity.runId ?? undefined;
+			const runId = result.identity.runId;
+			synthesizeHistory(
+				session,
+				snapshot.messages.filter((message) =>
+					!(message.role === "assistant" && runId && message.runId === runId),
+				),
+			);
+			synthesizeHistory(session, snapshot.actions);
+			for (const action of snapshot.actions) {
+				const block = action.toolCallId ? session.byActionId.get(action.toolCallId) : undefined;
+				if (block && action.phase === "started" && snapshot.phase === "running") block.historical = false;
+			}
+			if (snapshot.todos.status === "ok") {
+				session.upsertTool(
+					{ id: "snapshot:todos", kind: "tool", title: "todo", detail: { name: "todo", details: { todos: snapshot.todos.items } } },
+					"completed",
+					{ historical: true },
+				);
+			}
+			if (snapshot.plan.status === "ok") {
+				const mode = snapshot.plan.value?.mode;
+				if (mode === "code" || mode === "plan") session.setPlan(mode, null);
+			}
+			if (snapshot.processes.status === "ok") {
+				session.ownedProcessStates = snapshot.processes.items;
+				for (const process of snapshot.processes.items) {
+					if (typeof process.identity !== "string") continue;
+					const active =
+						(process.classification === "queued" || process.classification === "accepted") &&
+						(process.status === "queued" || process.status === "running" || process.status === "killing");
+					const terminal =
+						process.status === "completed" || process.status === "error" || process.status === "killed" ||
+						process.classification === "rejected" || process.classification === "expired" || process.classification === "canceled";
+					session.upsertTool(
+						{
+							id: `snapshot:process:${process.identity}`,
+							kind: "command",
+							title: `process ${process.identity}`,
+							detail: { name: "process", details: process },
+						},
+						terminal ? "completed" : "started",
+						{
+							historical: !active,
+							ok: terminal ? process.status === "completed" : undefined,
+							cancelled: process.status === "killed" || process.classification === "canceled",
+						},
+					);
+				}
+			}
+			for (const [domain, projection] of Object.entries({
+				approvals: snapshot.approvals,
+				children: snapshot.children,
+				processes: snapshot.processes,
+				todos: snapshot.todos,
+				plan: snapshot.plan,
+			})) {
+				if (projection.status !== "ok") session.addNotice(`${domain} state ${projection.status}`, "warning");
+				if (projection.truncated) session.addNotice(`${domain} snapshot truncated`, "warning");
+			}
+			for (const [part, truncated] of Object.entries({
+				messages: snapshot.messagesTruncated,
+				actions: snapshot.actionsTruncated,
+				answer: snapshot.answer.truncated,
+			})) {
+				if (truncated) session.addNotice(`${part} snapshot truncated`, "warning");
+			}
+			if (runId && snapshot.answer.text) {
+				const block = session.appendDelta(runId, Number.NaN, snapshot.answer.text).block;
+				if (snapshot.phase === "unknown") block.status = "done";
+			}
+			if (runId && snapshot.phase !== "unknown") {
+				session.activeRunId = runId;
+				session.busy = !snapshot.terminal;
+				if (snapshot.terminal) {
+					session.finalizeRun(runId, {
+						ok: snapshot.phase !== "failed",
+						interrupted: snapshot.phase === "cancelled",
+					});
+				}
+			}
+			if (snapshot.approvals.status === "ok") this.#replaceApprovals(session.key, snapshot.approvals.items);
+			else this.#replaceApprovals(session.key, []);
+			this.#hydrated.add(session.key);
+			this.#onSnapshot?.(result, branchChanged);
+			this.#events.rebuildFocused();
+			this.#tui.requestRender(true, { clearScrollback: true });
+			this.#refreshStatus?.();
+			void this.seedContext(session);
+			return;
+		}
+		this.#notice(`recovery for ${session.key} raced with live state; refresh again`, "warning");
+	}
+
+	#replaceApprovals(key: string, items: readonly ApprovalRequestedEvent[]): void {
+		const pendingIds = new Set(items.map((item) => item.approvalId));
+		for (const [id, pending] of this.#store.approvals) {
+			if (pending.event.sessionKey === key && !pendingIds.has(id)) this.#events.resolveApproval(id, "unavailable");
+		}
+		for (const item of items) {
+			if (item.sessionKey !== key) continue;
+			this.#store.addApproval(item);
 		}
 	}
 
@@ -549,6 +656,7 @@ export function synthesizeHistory(session: SessionStore, messages: ChatHistoryMe
 				completed ? "completed" : "started",
 				{
 					at: message.timestampMs ?? 0,
+					runId: typeof message.runId === "string" ? message.runId : undefined,
 					historical: true,
 					ok: message.ok,
 					cancelled:
@@ -580,27 +688,6 @@ function historyToolTitle(message: ChatHistoryMessage): string {
 	return "tool";
 }
 
-/**
- * When the daemon last said something in this transcript.
- *
- * Notices and approval records are the client talking to itself; only the
- * conversation blocks can be compared against what the daemon has stored.
- * Undefined means nothing on screen came from the daemon at all.
- */
-export function lastDaemonBlockAt(session: SessionStore): number | undefined {
-	for (let index = session.blocks.length - 1; index >= 0; index--) {
-		const block = session.blocks[index];
-		if (
-			block.kind === "user" ||
-			block.kind === "assistant" ||
-			block.kind === "tool" ||
-			block.kind === "reasoning"
-		) {
-			return block.at;
-		}
-	}
-	return undefined;
-}
 
 /** `sessions.list` entries name their key under one of three spellings. */
 export function sessionKeyOf(summary: SessionSummary | undefined): string | undefined {
@@ -612,27 +699,6 @@ export function sessionKeyOf(summary: SessionSummary | undefined): string | unde
 	return undefined;
 }
 
-/**
- * Pull pending approvals out of an `exec.approvals.get` payload. The method
- * answers with either a bare list or `{approvals: [...]}`, and entries missing
- * an id are not actionable, so they are skipped rather than surfaced.
- */
-export function pendingApprovalsFrom(result: unknown): ApprovalRequestedEvent[] {
-	const list = Array.isArray(result)
-		? result
-		: Array.isArray((result as { approvals?: unknown })?.approvals)
-			? ((result as { approvals: unknown[] }).approvals as unknown[])
-			: [];
-	const approvals: ApprovalRequestedEvent[] = [];
-	for (const entry of list) {
-		if (typeof entry !== "object" || entry === null) continue;
-		const record = entry as Record<string, unknown>;
-		const approvalId = record.approvalId ?? record.approval_id ?? record.id;
-		if (typeof approvalId !== "string" || approvalId.length === 0) continue;
-		approvals.push({ ...(record as object), approvalId } as ApprovalRequestedEvent);
-	}
-	return approvals;
-}
 
 function describeError(error: unknown): string {
 	if (error instanceof ControlPlaneError) return error.code;

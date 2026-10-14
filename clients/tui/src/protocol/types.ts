@@ -14,6 +14,65 @@ import type { EventFrame, HelloOkFrame } from "./frames.ts";
 
 export type Nullable<T> = T | null | undefined;
 
+export interface SessionSnapshotIdentity {
+	sessionKey: string;
+	sessionId: string | null;
+	branchId: string | null;
+	revision: string | null;
+	runId: string | null;
+	attempt: string | null;
+}
+
+export interface SnapshotItems<T> {
+	status: "ok" | "unavailable" | "forbidden";
+	items: T[];
+	truncated?: boolean;
+}
+
+export interface SessionsSnapshotParams {
+	sessionKey: string;
+	cwd?: string;
+	limit?: number;
+	expectedIdentity?: SessionSnapshotIdentity;
+}
+
+export type SessionsSnapshotResult =
+	| {
+			status: "retry";
+			sessionKey: string;
+			identity: SessionSnapshotIdentity;
+			reason: "snapshot_raced" | "identity_changed";
+			retrySafe: true;
+	  }
+	| {
+			status: "ok";
+			sessionKey: string;
+			identity: SessionSnapshotIdentity;
+			consistency: {
+				boundary: "stable_owner_reads";
+				atomic: false;
+				eventCursor: null;
+			};
+			snapshot: {
+				phase: string;
+				terminal: boolean;
+				answer: { text: string; canonical: boolean; truncated: boolean };
+				messages: ChatHistoryMessage[];
+				actions: ChatHistoryMessage[];
+				messagesTruncated?: boolean;
+				actionsTruncated?: boolean;
+				approvals: SnapshotItems<ApprovalRequestedEvent>;
+				children: SnapshotItems<Record<string, unknown>>;
+				processes: SnapshotItems<Record<string, unknown>>;
+				todos: SnapshotItems<Record<string, unknown>> & { revision?: unknown };
+				plan: {
+					status: "ok" | "unavailable" | "forbidden";
+					value: Record<string, unknown> | null;
+					truncated?: boolean;
+				};
+			};
+	  };
+
 // ---------------------------------------------------------------------------
 // chat events
 // ---------------------------------------------------------------------------
@@ -26,6 +85,7 @@ export interface ChatDeltaEvent {
 	/** Monotonic per run. Drop any delta whose seq is <= the last one seen. */
 	seq: number;
 	text: string;
+	identity?: SessionSnapshotIdentity;
 }
 
 export type ChatEvent = ChatDeltaEvent;
@@ -38,6 +98,7 @@ export interface AgentStartedEvent {
 	type: "started";
 	runId: string;
 	sessionKey: Nullable<string>;
+	identity?: SessionSnapshotIdentity;
 	engine?: Nullable<string>;
 	parentRunId?: Nullable<string>;
 	/**
@@ -70,6 +131,7 @@ export interface AgentCompletedEvent {
 	type: "completed";
 	runId: string;
 	sessionKey: Nullable<string>;
+	identity?: SessionSnapshotIdentity;
 	ok: Nullable<boolean>;
 	/** Authoritative terminal cancellation; never inferred from a failed run. */
 	cancelled?: boolean;
@@ -108,6 +170,7 @@ export interface AgentToolUseEvent {
 	type: "tool_use";
 	runId: Nullable<string>;
 	sessionKey: Nullable<string>;
+	identity?: SessionSnapshotIdentity;
 	action: AgentAction;
 	phase: AgentActionPhase | string;
 	ok?: Nullable<boolean>;
@@ -115,6 +178,7 @@ export interface AgentToolUseEvent {
 }
 
 export interface AgentCheckpointEvent {
+	identity?: SessionSnapshotIdentity;
 	type: "checkpoint_created" | "checkpoint_restored" | "checkpoint_deleted";
 	runId: Nullable<string>;
 	sessionKey: Nullable<string>;
@@ -141,6 +205,7 @@ export interface ApprovalRequestedEvent {
 	approvalId: string;
 	runId: Nullable<string>;
 	sessionKey: Nullable<string>;
+	identity?: SessionSnapshotIdentity;
 	agentId: Nullable<string>;
 	tool: Nullable<string>;
 	action: Record<string, unknown>;
@@ -159,6 +224,7 @@ export const PROPOSE_PLAN_TOOL = "propose_plan";
 export type ApprovalDecision = "once" | "session" | "global" | "deny" | string;
 
 export interface ApprovalResolvedEvent {
+	identity?: SessionSnapshotIdentity;
 	approvalId: string;
 	decision: ApprovalDecision;
 	runId: Nullable<string>;
@@ -246,6 +312,7 @@ export interface ChannelDeliveryEvent {
 // ---------------------------------------------------------------------------
 
 export interface ProtocolEventMap {
+	"stream.resync": { reason: "overflow"; sessionKey?: Nullable<string>; runId?: Nullable<string> };
 	chat: ChatEvent;
 	agent: AgentEvent;
 	goal: GoalEvent;
@@ -284,7 +351,7 @@ export interface ClientLifecycleMap {
 	/** A completed handshake. `resumed` is true for every hello-ok after the first. */
 	"hello-ok": { hello: HelloOkFrame; resumed: boolean };
 	/** Emitted after a re-handshake: cached transcript/session state is stale. */
-	"resync-needed": { hello: HelloOkFrame };
+	"resync-needed": { hello: HelloOkFrame; reason?: "overflow"; sessionKey?: string; runId?: string };
 	/** A request was parked because the client is not online. */
 	queued: { id: string; method: string; params: unknown; queueLength: number };
 	/** A parked request was sent after reconnecting. */
@@ -522,7 +589,7 @@ export interface ChatHistoryMessage {
 	title?: string;
 	arguments?: Record<string, unknown>;
 	details?: Record<string, unknown>;
-	phase?: "started" | "completed";
+	phase?: "started" | "completed" | "unknown";
 	ok?: Nullable<boolean>;
 	cancelled?: boolean;
 	/** Persisted duration only; absence is not a zero-length execution. */

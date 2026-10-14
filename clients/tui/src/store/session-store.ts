@@ -11,7 +11,7 @@
  * that produced no deltas at all.
  */
 
-import type { AgentAction, RunUsage } from "../protocol/types.ts";
+import type { AgentAction, RunUsage, SessionSnapshotIdentity } from "../protocol/types.ts";
 import {
 	type ApprovalBlock,
 	type AssistantBlock,
@@ -124,6 +124,26 @@ export class SessionStore {
 	/** Bumped by every {@link setPlan}, so a slower status read cannot undo a newer write. */
 	planWrites = 0;
 
+	/** Last accepted owner snapshot; transient events cannot establish branch ownership. */
+	snapshotIdentity: SessionSnapshotIdentity | undefined;
+	recoveryEventVersion = 0;
+	/** No cursor exists for snapshot text, so this run is refreshed, never appended. */
+	snapshotRunId: string | undefined;
+	ownedProcessStates: readonly Record<string, unknown>[] = [];
+
+	acceptsEvent(runId: string | null | undefined, identity?: SessionSnapshotIdentity): boolean {
+		const current = this.snapshotIdentity;
+		if (!current) return true;
+		if (
+			identity &&
+			(identity.sessionKey !== current.sessionKey ||
+				identity.branchId !== current.branchId ||
+				identity.revision !== current.revision ||
+				identity.attempt !== current.attempt)
+		) return false;
+		return Boolean(runId && runId === current.runId && !this.isRunTerminal(runId));
+	}
+
 	/** runId -> accumulated delta text. */
 	readonly #buffers = new Map<string, string>();
 	/** runId -> highest delta seq accepted. */
@@ -149,6 +169,10 @@ export class SessionStore {
 
 	assistantFor(runId: string): AssistantBlock | undefined {
 		return this.#assistantByRun.get(runId);
+	}
+
+	isRunTerminal(runId: string): boolean {
+		return this.#finishedRuns.has(runId);
 	}
 
 	get lastBlock(): Block | undefined {

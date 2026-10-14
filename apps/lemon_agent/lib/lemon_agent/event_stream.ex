@@ -77,6 +77,7 @@ defmodule LemonAgent.EventStream do
   @default_max_queue 10_000
   @default_timeout 300_000
   @default_task_shutdown_grace_ms 100
+  @resync_retention_ms 30_000
 
   # ============================================================================
   # Event Types
@@ -105,13 +106,14 @@ defmodule LemonAgent.EventStream do
 
   @type t :: pid()
 
-  @type drop_strategy :: :drop_oldest | :drop_newest | :error
+  @type drop_strategy :: :drop_oldest | :drop_newest | :error | :resync
 
   @type option ::
           {:owner, pid()}
           | {:runner, pid()}
           | {:max_queue, pos_integer()}
           | {:drop_strategy, drop_strategy()}
+          | {:overflow_event, term()}
           | {:timeout, timeout()}
 
   # ============================================================================
@@ -127,8 +129,9 @@ defmodule LemonAgent.EventStream do
   - `:runner` - Process producing events (e.g., CLI runner). Stream errors if runner dies.
     This ensures consumers are woken up if the producer crashes.
   - `:max_queue` - Maximum events to buffer. Default: #{@default_max_queue}
-  - `:drop_strategy` - What to do on overflow: `:drop_oldest`, `:drop_newest`, or `:error`.
-    Default: `:error`
+  - `:drop_strategy` - What to do on overflow: `:drop_oldest`, `:drop_newest`, `:error`,
+    or `:resync` (fence the stream with one `:overflow_event`). Default: `:error`.
+    Resync-fenced streams retain their bounded recovery buffer for at most 30s.
   - `:timeout` - Stream timeout in milliseconds. Default: #{@default_timeout}ms.
     Set to `:infinity` to disable timeout.
 
@@ -388,6 +391,7 @@ defmodule LemonAgent.EventStream do
       queue_size: 0,
       max_queue: max_queue,
       drop_strategy: drop_strategy,
+      overflow_event: Keyword.get(opts, :overflow_event, {:stream_resync, %{reason: :overflow}}),
       dropped: 0,
       take_waiters: :queue.new(),
       result_waiters: :queue.new(),
@@ -477,6 +481,10 @@ defmodule LemonAgent.EventStream do
 
     task_ref = Process.monitor(task_pid)
     {:noreply, %{state | task_pid: task_pid, task_ref: task_ref}}
+  end
+
+  def handle_cast(:transport_overflow, state) do
+    {:noreply, resync_overflow(state)}
   end
 
   def handle_cast({:push, event}, state) do
@@ -651,9 +659,13 @@ defmodule LemonAgent.EventStream do
     if state.queue_size >= state.max_queue do
       handle_overflow(event, state, log_on_overflow)
     else
-      state = deliver_or_buffer(event, state)
-      {:ok, state}
+      {:ok, deliver_or_buffer(event, state)}
     end
+  end
+
+  defp push_terminal(event, %{drop_strategy: :resync} = state) do
+    # Reserve one terminal slot instead of silently evicting accepted text.
+    deliver_or_buffer(event, state)
   end
 
   defp push_terminal(event, state) do
@@ -689,6 +701,10 @@ defmodule LemonAgent.EventStream do
     end
   end
 
+  defp handle_overflow(_event, %{drop_strategy: :resync} = state, _log_on_overflow) do
+    {:overflow, resync_overflow(state)}
+  end
+
   defp handle_overflow(event, %{drop_strategy: :drop_oldest} = state, _log_on_overflow) do
     # Drop the oldest event and add the new one
     case :queue.out(state.events) do
@@ -714,6 +730,26 @@ defmodule LemonAgent.EventStream do
     end
 
     {:overflow, %{state | dropped: state.dropped + 1}}
+  end
+
+  defp resync_overflow(%{done: true} = state), do: state
+
+  defp resync_overflow(state) do
+    if state.timeout_ref, do: Process.cancel_timer(state.timeout_ref)
+    state = deliver_or_buffer(state.overflow_event, state)
+    # A consumer that never reads the recovery marker cannot retain a completed
+    # subscription indefinitely. Late terminal casts never extend this deadline.
+    timeout_ref = Process.send_after(self(), :stream_timeout, @resync_retention_ms)
+
+    state = %{
+      state
+      | done: true,
+        result: {:error, :overflow},
+        dropped: state.dropped + 1,
+        timeout_ref: timeout_ref
+    }
+
+    notify_result_waiters(state)
   end
 
   defp deliver_or_buffer(event, state) do

@@ -85,6 +85,7 @@ defmodule LemonControlPlane.Methods.Registry do
     LemonControlPlane.Methods.SessionsList,
     LemonControlPlane.Methods.SessionsGet,
     LemonControlPlane.Methods.SessionsHistory,
+    LemonControlPlane.Methods.SessionsSnapshot,
     LemonControlPlane.Methods.SessionsStats,
     LemonControlPlane.Methods.SessionsPreview,
     LemonControlPlane.Methods.SessionsDelete,

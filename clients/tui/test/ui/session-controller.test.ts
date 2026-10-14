@@ -1,14 +1,11 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { AppShell } from "../../src/app.ts";
-import { FakeControlPlane } from "../../src/dev/fake-server.ts";
+import { DEFAULT_METHODS, FakeControlPlane } from "../../src/dev/fake-server.ts";
 import { ControlPlaneClient } from "../../src/protocol/client.ts";
-import type { ChatHistoryMessage } from "../../src/protocol/types.ts";
+import type { ChatHistoryMessage, SessionsSnapshotResult } from "../../src/protocol/types.ts";
 import { SessionStore } from "../../src/store/session-store.ts";
 import { ToolCardComponent } from "../../src/ui/components/tool-card.ts";
-import {
-	pendingApprovalsFrom,
-	synthesizeHistory,
-} from "../../src/ui/controllers/session-controller.ts";
+import { synthesizeHistory } from "../../src/ui/controllers/session-controller.ts";
 import { initTheme, resetTheme } from "../../src/ui/theme/theme.ts";
 import { invalidateThemeAdapters } from "../../src/ui/theme/tui-adapters.ts";
 import { MemoryTerminal, renderPlain } from "../helpers/memory-terminal.ts";
@@ -31,8 +28,10 @@ interface RenderCall {
 	clearScrollback: boolean;
 }
 
-async function bootApp(sessionKey = "tui-a") {
-	const server = await FakeControlPlane.start();
+async function bootApp(sessionKey = "tui-a", snapshot = false) {
+	const server = await FakeControlPlane.start({
+		methods: snapshot ? [...DEFAULT_METHODS, "sessions.snapshot"] : DEFAULT_METHODS,
+	});
 	teardown.push(() => server.stop());
 	server.onMethod("chat.send", (params: { sessionKey: string }) => ({
 		runId: `run-${params.sessionKey}`,
@@ -43,6 +42,7 @@ async function bootApp(sessionKey = "tui-a") {
 	server.respondWith("sessions.list", { sessions: [] });
 	server.respondWith("sessions.active.list", { sessions: [] });
 	server.respondWith("exec.approvals.get", { approvals: [] });
+	if (snapshot) server.onMethod("sessions.snapshot", ({ sessionKey }: { sessionKey: string }) => recoverySnapshot(sessionKey));
 
 	const terminal = new MemoryTerminal();
 	const client = new ControlPlaneClient({
@@ -59,9 +59,9 @@ async function bootApp(sessionKey = "tui-a") {
 	});
 	teardown.push(() => app.stop());
 	await app.start();
+	if (snapshot) await app.sessions.initialize();
 
-	// Watch the render gestures: a switch is one of only two paths allowed to
-	// clear the terminal's own scrollback.
+	// Track scrollback replacement separately from ordinary repaint requests.
 	const renders: RenderCall[] = [];
 	const original = app.tui.requestRender.bind(app.tui);
 	app.tui.requestRender = (force = false, options?: { clearScrollback?: boolean }) => {
@@ -281,97 +281,294 @@ describe("SessionController.forgetDeleted", () => {
 	});
 });
 
-describe("SessionController.resync", () => {
-	test("appends only messages newer than what is already on screen", async () => {
-		const { app, server } = await bootApp("tui-a");
-		await app.submit("hello");
-		await waitFor(() => app.store.focused.blocks.length > 0, { what: "the echoed prompt" });
-		const lastAt = app.store.focused.lastBlock?.at ?? 0;
-		server.respondWith("chat.history", {
-			messages: [
-				{ id: "old", role: "user", content: "hello", timestampMs: lastAt - 1000 },
-				{
-					id: "new",
-					role: "assistant",
-					content: "answered while offline",
-					timestampMs: lastAt + 1000,
-				},
-			],
+
+function recoverySnapshot(key = "tui-a", runId: string | null = null): Extract<SessionsSnapshotResult, { status: "ok" }> {
+	return {
+		status: "ok",
+		sessionKey: key,
+		identity: { sessionKey: key, sessionId: "native-1", branchId: "branch-a", revision: "rev-a", runId, attempt: runId },
+		consistency: { boundary: "stable_owner_reads", atomic: false, eventCursor: null },
+		snapshot: {
+			phase: runId ? "running" : "idle", terminal: !runId,
+			answer: { text: "", canonical: !runId, truncated: false },
+			messages: [], actions: [],
+			approvals: { status: "ok", items: [] },
+			children: { status: "ok", items: [] },
+			processes: { status: "ok", items: [] },
+			todos: { status: "ok", items: [] },
+			plan: { status: "ok", value: { mode: "code", content: null } },
+		},
+	};
+}
+
+function deferred<T>() {
+	let resolve!: (value: T) => void;
+	const promise = new Promise<T>((done) => { resolve = done; });
+	return { promise, resolve };
+}
+
+describe("SessionController owner recovery", () => {
+	test("unknown phase with a fixed identity preserves prior activity and discloses bounded omissions", async () => {
+		for (const previouslyBusy of [false, true]) {
+			const { app, server } = await bootApp("tui-a", true);
+			if (previouslyBusy) app.events.noteRunStarted("previous-run");
+			const result = recoverySnapshot("tui-a", "fixed-but-unconfirmed-run");
+			result.snapshot.phase = "unknown";
+			result.snapshot.answer = { text: "retained partial answer", canonical: false, truncated: true };
+			result.snapshot.messagesTruncated = true;
+			result.snapshot.actionsTruncated = true;
+			result.snapshot.actions = [{
+				id: "unconfirmed-call", role: "tool_use", content: "", timestampMs: 1,
+				toolCallId: "unconfirmed-call", toolName: "bash", phase: "started",
+			}];
+			server.respondWith("sessions.snapshot", result);
+			await app.sessions.resync();
+			expect(app.store.focused.busy).toBe(previouslyBusy);
+			expect(app.store.focused.activeRunId).toBe(previouslyBusy ? "previous-run" : undefined);
+			expect(app.store.focused.byActionId.get("unconfirmed-call")?.historical).toBe(true);
+			expect(app.store.focused.assistantFor("fixed-but-unconfirmed-run")?.status).not.toBe("streaming");
+			const text = chatText(app);
+			expect(text).toContain("run state unknown");
+			expect(text).toContain("messages snapshot truncated");
+			expect(text).toContain("actions snapshot truncated");
+			expect(text).toContain("answer snapshot truncated");
+		}
+	});
+
+	test("recovers missed tool completion and canonical answer once; terminal cannot revive", async () => {
+		const { app, server } = await bootApp("tui-a", true);
+		app.events.noteRunStarted("run-a");
+		app.store.focused.upsertTool({ id: "call-a", kind: "tool", title: "bash", detail: {} }, "started", { runId: "run-a" });
+		const result = recoverySnapshot("tui-a", "run-a");
+		result.snapshot.terminal = true;
+		result.snapshot.phase = "completed";
+		result.snapshot.answer = { text: "complete canonical answer", canonical: true, truncated: false };
+		result.snapshot.actions = [{
+			id: "result-a", role: "tool_result", content: "exit 0", timestampMs: 2,
+			toolCallId: "call-a", toolName: "bash", phase: "completed", ok: true,
+		}];
+		const offline = app.client.events.waitFor("state");
+		const reconnected = app.client.events.waitFor("resync-needed");
+		server.dropConnections();
+		expect((await offline).state).not.toBe("online");
+		server.respondWith("sessions.snapshot", result);
+		await reconnected;
+		await app.sessions.resync();
+		await app.sessions.resync();
+		expect(app.store.focused.byActionId.get("call-a")).toMatchObject({ phase: "completed", ok: true });
+		expect(app.store.focused.assistantFor("run-a")).toMatchObject({ status: "done", text: "complete canonical answer" });
+		expect(app.store.focused.blocks.filter((block) => block.kind === "tool" && block.actionId === "call-a")).toHaveLength(1);
+		const received = app.client.events.waitFor("agent");
+		server.pushEvent("agent", { type: "started", runId: "run-a", sessionKey: "tui-a" });
+		await received;
+		await app.sessions.resync();
+		expect(app.store.focused.busy).toBe(false);
+	});
+
+	test("replaces pending approvals without reviving disconnected decisions", async () => {
+		const { app, server } = await bootApp("tui-a", true);
+		const old = { approvalId: "old", runId: "run-a", sessionKey: "tui-a", agentId: null, tool: "bash", action: {}, rationale: null, requestedAtMs: null, expiresAtMs: null };
+		app.store.addApproval(old);
+		const result = recoverySnapshot("tui-a", "run-a");
+		result.snapshot.approvals.items = [{ ...old, approvalId: "current" }];
+		server.respondWith("sessions.snapshot", result);
+		await app.sessions.resync();
+		expect([...app.store.approvals.keys()]).toEqual(["current"]);
+		const received = app.client.events.waitFor("exec.approval.requested");
+		server.pushEvent("exec.approval.requested", old);
+		await received;
+		await app.sessions.resync();
+		expect([...app.store.approvals.keys()]).toEqual(["current"]);
+	});
+
+	test("restores child/process identities and replaces rewind todo and plan", async () => {
+		const { app, server } = await bootApp("tui-a", true);
+		app.store.focused.setPlan("plan", "/old/private/plan.md");
+		const result = recoverySnapshot("tui-a", "run-new");
+		result.identity.branchId = "rewound";
+		result.identity.revision = "rev-new";
+		result.snapshot.children.items = [{ taskId: "fixed-child", runId: "child-run", parentRunId: "run-new", status: "completed", terminal: true }];
+		result.snapshot.processes.items = [
+			{ identity: "fixed-process", classification: "outcome_unknown", status: "lost", reason: "owner_lost" },
+			{ identity: "active-process", classification: "accepted", status: "running", reason: null },
+			{ identity: "done-process", classification: "accepted", status: "completed", reason: null },
+		];
+		result.snapshot.todos.items = [{ id: "new-todo", content: "new branch task", status: "pending" }];
+		server.respondWith("sessions.snapshot", result);
+		await app.sessions.resync();
+		expect(app.store.focused.planMode).toBe("code");
+		expect(app.store.focused.planPath).toBeUndefined();
+		expect(app.store.focused.ownedProcessStates).toEqual(result.snapshot.processes.items);
+		expect(app.store.focused.byActionId.get("snapshot:todos")?.detail).toMatchObject({ details: { todos: result.snapshot.todos.items } });
+		expect(app.store.focused.byActionId.get("snapshot:process:fixed-process")).toMatchObject({ historical: true });
+		expect(app.store.focused.byActionId.get("snapshot:process:active-process")).toMatchObject({ phase: "started", historical: false });
+		expect(app.store.focused.byActionId.get("snapshot:process:done-process")).toMatchObject({ phase: "completed", ok: true });
+	});
+
+	test("a replacement session instance clears unavailable cached owner projections", async () => {
+		const { app, server } = await bootApp("tui-a", true);
+		app.store.focused.setPlan("plan", "/old/private/plan.md");
+		app.store.focused.ownedProcessStates = [{ identity: "obsolete-process", status: "running" }];
+		const result = recoverySnapshot();
+		result.identity.sessionId = "replacement-native-session";
+		result.snapshot.plan = { status: "unavailable", value: null };
+		result.snapshot.processes = { status: "unavailable", items: [] };
+		server.respondWith("sessions.snapshot", result);
+		await app.sessions.resync();
+		expect(app.store.focused.snapshotIdentity?.sessionId).toBe("replacement-native-session");
+		expect(app.store.focused.planMode).toBeUndefined();
+		expect(app.store.focused.planPath).toBeUndefined();
+		expect(app.store.focused.ownedProcessStates).toEqual([]);
+	});
+
+	for (const trigger of ["chat", "stream.resync"] as const) {
+		test(`${trigger} racing the RPC retries without appending no-cursor snapshot text`, async () => {
+			const { app, server } = await bootApp("tui-a", true);
+			app.store.focused.appendDelta("run-a", 1, "obsolete live text");
+			app.store.focused.upsertTool({ id: "obsolete-call", kind: "tool", title: "bash", detail: {} }, "started", { runId: "run-a" });
+			app.store.addApproval({ approvalId: "obsolete-approval", runId: "run-a", sessionKey: "tui-a", agentId: null, tool: "bash", action: {}, rationale: null, requestedAtMs: null, expiresAtMs: null });
+			const entered = deferred<void>();
+			const release = deferred<Extract<SessionsSnapshotResult, { status: "ok" }>>();
+			let reads = 0;
+			server.onMethod("sessions.snapshot", () => {
+				reads++;
+				if (reads === 1) { entered.resolve(); return release.promise; }
+				const current = recoverySnapshot("tui-a", "current-run");
+				current.identity.branchId = "selected-branch";
+				current.identity.revision = "selected-revision";
+				current.snapshot.answer.text = "whole latest text";
+				return current;
+			});
+			const recovering = app.sessions.resync();
+			await entered.promise;
+			const received = app.client.events.waitFor(trigger);
+			if (trigger === "chat") {
+				server.pushEvent("chat", { type: "delta", runId: "run-a", sessionKey: "tui-a", seq: 99, text: "must not append" });
+			} else {
+				server.pushEvent("stream.resync", { reason: "overflow", sessionKey: "tui-a" });
+			}
+			await received;
+			release.resolve(recoverySnapshot("tui-a", "run-a"));
+			await recovering;
+			expect(reads).toBe(2);
+			expect(app.store.focused.bufferFor("current-run")).toBe("whole latest text");
+			expect(app.store.focused.assistantFor("run-a")).toBeUndefined();
+			expect(app.store.focused.byActionId.has("obsolete-call")).toBe(false);
+			expect(app.store.approvals.has("obsolete-approval")).toBe(false);
+			expect(app.store.focused.blocks.some((block) => block.kind === "assistant" && block.text.includes("obsolete live text"))).toBe(false);
 		});
+	}
 
-		await app.sessions.resync();
-
-		const text = chatText(app);
-		expect(text).toContain("answered while offline");
-		// "hello" is the prompt already echoed; recovering it again would read as
-		// the user having sent it twice.
-		expect(text.match(/hello/g) ?? []).toHaveLength(1);
-	});
-
-	test("measures against the last daemon message, not the reconnect notice", async () => {
-		const { app, server } = await bootApp("tui-a");
-		await app.submit("hello");
-		await waitFor(() => app.store.focused.blocks.length > 0, { what: "the echoed prompt" });
-		const promptAt = app.store.focused.lastBlock?.at ?? 0;
-		// What a reconnect writes: notices stamped *after* everything the daemon
-		// answered while the socket was down.
-		app.events.notice("reconnected", "warning");
-		server.respondWith("chat.history", {
-			messages: [
-				{ id: "old", role: "user", content: "hello", timestampMs: promptAt - 5000 },
-				{
-					id: "missed",
-					role: "assistant",
-					content: "answered mid-outage",
-					timestampMs: promptAt + 1,
-				},
-			],
+	test("late selected-session promises do not restore abandoned state or draft", async () => {
+		const { app, server } = await bootApp("tui-a", true);
+		const entered = deferred<void>();
+		const release = deferred<Extract<SessionsSnapshotResult, { status: "ok" }>>();
+		server.onMethod("sessions.snapshot", ({ sessionKey }: { sessionKey: string }) => {
+			if (sessionKey === "tui-b") { entered.resolve(); return release.promise; }
+			return recoverySnapshot(sessionKey);
 		});
-
-		await app.sessions.resync();
-
-		expect(chatText(app)).toContain("answered mid-outage");
+		app.editor.setText("keep a draft");
+		const oldSwitch = app.sessions.switch("tui-b");
+		await entered.promise;
+		await app.sessions.switch("tui-a");
+		const old = recoverySnapshot("tui-b", "old-run");
+		old.snapshot.answer.text = "abandoned text";
+		release.resolve(old);
+		await oldSwitch;
+		expect(app.sessionKey).toBe("tui-a");
+		expect(app.editor.getExpandedText()).toBe("keep a draft");
+		expect(app.store.session("tui-b").assistantFor("old-run")).toBeUndefined();
 	});
 
-	test("hydrates a transcript that holds nothing but connection notices", async () => {
-		const { app, server } = await bootApp("tui-a");
-		// The banner's "connected to lemon" notice is the only block on screen.
-		expect(app.store.focused.blocks.every((block) => block.kind === "notice")).toBe(true);
-		server.respondWith("chat.history", {
-			messages: [
-				{ id: "m1", role: "assistant", content: "from before this client", timestampMs: 5 },
-			],
+	test("authority races retry boundedly and owner/auth failures never imply idle", async () => {
+		const { app, server } = await bootApp("tui-a", true);
+		app.events.noteRunStarted("run-a");
+		const before = server.requestsFor("sessions.snapshot").length;
+		server.respondWith("sessions.snapshot", { status: "retry", sessionKey: "tui-a", identity: recoverySnapshot().identity, reason: "snapshot_raced", retrySafe: true });
+		await app.sessions.resync();
+		expect(server.requestsFor("sessions.snapshot").length - before).toBe(3);
+		expect(app.store.focused.busy).toBe(true);
+		server.failWith("sessions.snapshot", "FORBIDDEN", "scope revoked");
+		await app.sessions.resync();
+		expect(app.store.focused.busy).toBe(true);
+		expect(app.store.focused.activeRunId).toBe("run-a");
+		expect(app.client.queued).toHaveLength(0);
+	});
+
+	test("overflow and reconnect use the same authority with no mutation replay", async () => {
+		const { app, server } = await bootApp("tui-a", true);
+		const result = recoverySnapshot("tui-a", "run-a");
+		result.snapshot.terminal = true;
+		result.snapshot.phase = "completed";
+		result.snapshot.answer.text = "finished during outage";
+		server.respondWith("sessions.snapshot", result);
+		const resync = app.client.events.waitFor("resync-needed");
+		server.pushEvent("stream.resync", { reason: "overflow" });
+		await resync;
+		await app.sessions.resync();
+		expect(app.store.focused.assistantFor("run-a")?.text).toBe("finished during outage");
+		const reconnected = app.client.events.waitFor("resync-needed");
+		server.dropConnections();
+		await reconnected;
+		await app.sessions.resync();
+		expect(app.store.focused.busy).toBe(false);
+		expect(server.requestsFor("chat.send")).toHaveLength(0);
+	});
+
+	test("foreign snapshot and obsolete attempt events cannot mutate the selected run", async () => {
+		const { app, server } = await bootApp("tui-a", true);
+		const current = recoverySnapshot("tui-a", "current-run");
+		current.snapshot.answer.text = "current answer";
+		server.respondWith("sessions.snapshot", current);
+		await app.sessions.resync();
+		server.respondWith("sessions.snapshot", recoverySnapshot("foreign", "foreign-run"));
+		await app.sessions.resync();
+		expect(app.store.focused.assistantFor("foreign-run")).toBeUndefined();
+		const received = app.client.events.waitFor("agent");
+		server.pushEvent("agent", {
+			type: "tool_use", sessionKey: "tui-a", runId: "current-run", phase: "started",
+			identity: { ...current.identity, branchId: "abandoned", attempt: "obsolete" },
+			action: { id: "stale-action", kind: "tool", title: "bash", detail: {} },
 		});
-
+		await received;
 		await app.sessions.resync();
-
-		expect(chatText(app)).toContain("from before this client");
+		expect(app.store.focused.byActionId.has("stale-action")).toBe(false);
+		expect(app.store.focused.bufferFor("current-run")).toBe("current answer");
 	});
 
-	test("marks sessions the daemon no longer lists as no longer busy", async () => {
-		const { app, server } = await bootApp("tui-a");
-		const other = app.store.session("tui-b");
-		other.busy = true;
-		other.activeRunId = "run-b";
-		server.respondWith("sessions.active.list", { sessions: [{ sessionKey: "tui-a" }] });
-
+	test("a late nonterminal snapshot cannot reopen a finished attempt", async () => {
+		const { app, server } = await bootApp("tui-a", true);
+		const result = recoverySnapshot("tui-a", "run-a");
+		result.snapshot.terminal = true;
+		result.snapshot.phase = "completed";
+		result.snapshot.answer.text = "finished";
+		server.respondWith("sessions.snapshot", result);
 		await app.sessions.resync();
-
-		expect(other.busy).toBe(false);
-		expect(other.activeRunId).toBeUndefined();
-		expect(app.store.session("tui-a").busy).toBe(true);
+		server.respondWith("sessions.snapshot", recoverySnapshot("tui-a", "run-a"));
+		await app.sessions.resync();
+		expect(app.store.focused.busy).toBe(false);
+		expect(app.store.focused.assistantFor("run-a")?.status).toBe("done");
 	});
 
-	test("re-adds approvals the client missed while disconnected", async () => {
-		const { app, server } = await bootApp("tui-a");
-		server.respondWith("exec.approvals.get", {
-			approvals: [{ approvalId: "ap-1", tool: "bash", sessionKey: "tui-a" }],
+	for (const boundary of ["sessionId", "branchId", "attempt"] as const) {
+		test(`terminal state from another ${boundary} cannot fence the selected attempt`, async () => {
+			const { app, server } = await bootApp("tui-a", true);
+			const previous = recoverySnapshot("tui-a", "run-a");
+			previous.snapshot.phase = "completed";
+			previous.snapshot.terminal = true;
+			previous.snapshot.answer.text = "obsolete terminal answer";
+			server.respondWith("sessions.snapshot", previous);
+			await app.sessions.resync();
+			const current = recoverySnapshot("tui-a", "run-a");
+			current.identity[boundary] = `current-${boundary}`;
+			current.snapshot.answer.text = "current active answer";
+			server.respondWith("sessions.snapshot", current);
+			await app.sessions.resync();
+			expect(app.store.focused.snapshotIdentity?.[boundary]).toBe(`current-${boundary}`);
+			expect(app.store.focused.busy).toBe(true);
+			expect(app.store.focused.bufferFor("run-a")).toBe("current active answer");
 		});
-
-		await app.sessions.resync();
-
-		expect(app.store.approvals.has("ap-1")).toBe(true);
-	});
+	}
 });
 
 describe("synthesizeHistory", () => {
@@ -458,21 +655,6 @@ describe("synthesizeHistory", () => {
 	});
 });
 
-describe("pendingApprovalsFrom", () => {
-	test("reads both payload shapes and skips entries with no id", () => {
-		const fromWrapped = pendingApprovalsFrom({
-			approvals: [{ approvalId: "a" }, { tool: "bash" }],
-		});
-		expect(fromWrapped.map((entry) => entry.approvalId)).toEqual(["a"]);
-
-		// The snake-cased spelling is normalized onto `approvalId` so the store
-		// keys pending approvals the same way live events do.
-		const fromBareList = pendingApprovalsFrom([{ approval_id: "b" }]);
-		expect(fromBareList.map((entry) => entry.approvalId)).toEqual(["b"]);
-
-		expect(pendingApprovalsFrom(undefined)).toEqual([]);
-	});
-});
 
 describe("SessionController routing hydration", () => {
 	test("a switch learns the target session's resolved model", async () => {

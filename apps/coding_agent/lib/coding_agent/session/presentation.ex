@@ -938,6 +938,7 @@ defmodule CodingAgent.Session.Presentation do
     last_assistant =
       messages
       |> Enum.reverse()
+      |> Enum.take_while(&(Map.get(&1, :role) != :user))
       |> Enum.find(fn msg ->
         case msg do
           %{role: :assistant} -> true

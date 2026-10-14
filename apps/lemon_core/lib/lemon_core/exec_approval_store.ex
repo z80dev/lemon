@@ -125,4 +125,7 @@ defmodule LemonCore.ExecApprovalStore do
 
   @spec list_pending() :: list()
   def list_pending, do: Store.list(@pending_table)
+
+  @doc "Read pending requests without interpreting store failure as no approvals."
+  def fetch_pending_list, do: Store.fetch_all(@pending_table)
 end

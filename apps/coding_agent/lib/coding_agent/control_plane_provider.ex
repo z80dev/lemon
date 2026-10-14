@@ -57,6 +57,86 @@ defmodule CodingAgent.ControlPlaneProvider do
     end
   end
 
+  @doc "Read the current native branch, including offline rewind, without starting a session."
+  def session_recovery_snapshot(session_key, cwd) do
+    case live_session(session_key) do
+      nil ->
+        with cwd when is_binary(cwd) <- recovery_cwd(session_key, cwd),
+             {:ok, path} <- native_session_path(session_key, cwd),
+             {:ok, session} <- CodingAgent.SessionManager.load_from_file(path),
+             :ok <- recovery_owner(session_key, session.header.id) do
+          {:ok, CodingAgent.Session.Recovery.snapshot(session)}
+        else
+          nil -> {:error, :unavailable}
+          {:error, _} = error -> error
+        end
+
+      pid ->
+        with {:ok, snapshot} <- CodingAgent.Session.recovery_snapshot(pid) do
+          attempt =
+            {pid, snapshot.run_id}
+            |> :erlang.term_to_binary()
+            |> then(&:crypto.hash(:sha256, &1))
+            |> Base.encode16(case: :lower)
+
+          {:ok, Map.put(snapshot, :attempt, attempt)}
+        end
+    end
+  end
+
+  defp recovery_owner(key, native_id) do
+    case LemonCore.ChatStateStore.get(key) do
+      state when is_map(state) ->
+        token = Map.get(state, :last_resume_token) || Map.get(state, "last_resume_token")
+        if token == native_id, do: :ok, else: {:error, :unavailable}
+
+      _ ->
+        {:error, :unavailable}
+    end
+  end
+
+  defp recovery_cwd(key, cwd) do
+    case LemonCore.ProfileStore.get(LemonCore.SessionKey.agent_id(key) || "default") do
+      {:ok, %{"canonicalSessionKey" => ^key, "paths" => %{"workspace" => workspace}}} ->
+        workspace
+
+      {:error, :not_found} ->
+        cwd || LemonCore.Cwd.default_cwd()
+
+      {:ok, _other_profile} ->
+        cwd || LemonCore.Cwd.default_cwd()
+
+      _ ->
+        # A profile-store failure cannot authorize a caller workspace override.
+        nil
+    end
+  end
+
+  @doc "Return process admission receipts only for an exact native session owner."
+  def session_process_receipts(owner) when is_binary(owner) and owner != "" do
+    manager = CodingAgent.ProcessManager
+
+    if Code.ensure_loaded?(manager) and function_exported?(manager, :receipt, 2) do
+      CodingAgent.ProcessStore.list(:all)
+      |> Enum.filter(fn {_id, record} -> record.owner == owner end)
+      |> Enum.sort_by(&elem(&1, 0))
+      |> Enum.reduce_while({:ok, []}, fn {id, _record}, {:ok, receipts} ->
+        case apply(manager, :receipt, [id, owner]) do
+          {:ok, receipt} -> {:cont, {:ok, [receipt | receipts]}}
+          _ -> {:halt, {:error, :unavailable}}
+        end
+      end)
+      |> case do
+        {:ok, receipts} -> {:ok, Enum.reverse(receipts)}
+        error -> error
+      end
+    else
+      {:error, :unavailable}
+    end
+  end
+
+  def session_process_receipts(_owner), do: {:error, :unavailable}
+
   def session_tree(session_key, cwd, opts) do
     case live_session(session_key) do
       nil ->

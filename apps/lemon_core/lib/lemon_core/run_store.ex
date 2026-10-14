@@ -20,6 +20,9 @@ defmodule LemonCore.RunStore do
   @spec fetch(binary()) :: {:ok, map() | nil} | {:error, :store_unavailable}
   def fetch(run_id), do: Store.fetch_run(run_id)
 
+  @doc "Fetch one durable session index without confusing owner failure with absence."
+  def fetch_session_index(session_key), do: Store.fetch(:sessions_index, session_key)
+
   @spec append_event(term(), term()) :: :ok | {:error, term()}
   def append_event(run_id, event), do: Store.append_run_event(run_id, event)
 

@@ -29,6 +29,177 @@ This document is the canonical catalog for bus topics and payload types.
 > Top-level resume accepts only native tokens; non-native historical state is
 > retained but quarantined from resumption.
 
+## Current delivery and recovery boundary
+
+This section describes the runtime boundary added for #88/#89; the numbered
+catalog below remains the historical typed-event migration audit.
+
+`LemonCore.Bus` still owns publication. Bounded subscribers opt into
+`Bus.subscribe(topic, delivery: handle)` using one `Bus.Delivery` handle across
+their topics. Admission happens **before** `send/2`, not after an unbounded
+mailbox has already accepted the payload. A handle caps queue entries and
+individual encoded Erlang-term size plus excess retained sub-binary backing,
+serializes concurrent admission without waiting on a consumer, and permanently
+fences itself on overflow. It emits one
+small overflow marker. Contended concurrent admission is conservatively treated
+as overflow rather than making authoritative producers wait. Closing/replacing
+the handle or subscriber death releases the transient relationship; no token
+log, second bus, or lifecycle store is created.
+Browser panes additionally request `tagged: true`: every data/control message
+carries a delivery-epoch reference. A recovered pane accepts only its replacement
+handle's reference, so a producer delayed before `send/2` cannot apply an old
+subscription's packet after reconciliation. The EventBridge uses the same tagged
+ingress fencing so an old producer's delayed data or overflow marker cannot reach
+or disconnect a freshly reauthenticated recipient.
+
+These are local-receiver bounds, not a bound on an entire distributed node,
+the socket implementation's OS buffers, or arbitrary messages sent outside the
+handle. The maximum admitted encoded-plus-binary-backing budget is queue limit ×
+per-message limit, plus the compact overflow/terminal controls; it is not a cumulative-byte
+counter. Unrelated messages in the same mailbox conservatively consume capacity.
+
+| Producer → consumer | Supported boundary / recovery |
+| --- | --- |
+| Native session → direct subscribers | Defaults to 256 queued entries and 1 MiB per event; overflow fences that subscription and explicitly signals recovery. At most one compact terminal notification is reserved in addition to the overflow marker, preserving a separate reconstructable completion path. |
+| Native session → executor runner | Uses the bounded direct subscription rather than an unused duplicate stream; terminal recovery rereads the native owner instead of relying on every delta. Session subscription streams also bound mailbox ingress and the existing internal EventStream queue. |
+| Bus → control-plane EventBridge → operator WebSocket | Defaults to 256 queued entries and 1 MiB per event at bridge ingress and each recipient; no task is created for every broadcast. Overflow sends `stream.resync` or disconnects the lagging socket; reconnect reauthenticates before reading snapshots. |
+| Bus → browser chat pane | One shared 256-entry handle across session/approval/system topics, 65,536 bytes per message, and one overflow marker. Live answer segments cap at 65,536 bytes; transcript/tool caches cap at 400 items and terminal tombstones at 128 runs. |
+| Router answer/status coalescers | Tagged pre-mailbox admission defaults to 256 entries / 65,536 bytes per event. Overflow fences transient rendering and signals session resync; answer finalization requires canonical `final_text` after overflow. Status finalization records an interruption hint instead of claiming a complete action stream. Finalized gates reject delayed old envelopes; 128 recent terminal run IDs fence late API calls. The existing distinct-action history is not a fixed-count buffer; the ingress bound is not a claim that a run with arbitrarily many distinct actions retains constant memory. |
+| TUI / browser after dropped progress | Both consume `sessions.snapshot`; active recovered text is replaced from authority, never appended to an uncertain token prefix. No offline mutation is replayed. |
+
+### Reliable truth and consistency
+
+The selected native branch, persisted run completion, current approval owner,
+task/run graph, and session-owned process receipts are the reconstruction
+authorities. A terminal action lacking a receipt is **outcome unknown**, not
+running or invented success. Terminal cancellation remains cancellation. A new
+user turn cannot acquire its predecessor's answer; idle live sessions must match
+the selected branch before reusing a retained invocation's terminal summary.
+Unavailable owner reads stay unavailable; old cards are not evidence of a
+currently actionable approval.
+
+`sessions.snapshot` composes these reads and returns session/branch/revision and
+fixed run-attempt identity, bounded/redacted messages and answer state, actions,
+approvals, children, processes, todos, and plan state. It is explicitly **not**
+an atomic transaction across owners and has no durable event cursor. The server
+checks owner identity before/after composition and requests retry on drift.
+Clients fence late responses by selection/request generation and discard a read
+if relevant events or loss/reconnect indications arrived during it, with bounded retries. Untagged events for
+an unrecognized run request reconciliation rather than acquiring branch
+authority. Recovered active answers remain replacement-only until canonical
+completion, avoiding duplication from delayed pre-snapshot deltas. See
+[the control-plane contract](https://github.com/z80dev/lemon/blob/main/apps/lemon_control_plane/README.md#session-snapshot-and-reconciliation).
+
+### Remaining best-effort paths
+
+`Bus.subscribe/1` remains an unbounded raw subscription. In particular the
+agent-loop → Agent → native Session owner notifications, Session task/approval
+ingress, gateway executor sink, router run-owner ingress, channel adapter
+session/run/approval subscriptions, webhook completion waiters, ACP/SSE streaming,
+and voice/audio bridges do **not** acquire end-to-end mailbox bounds merely
+because operator fanout is bounded. Generic `EventStream.push_async` users also
+retain their existing raw-cast ingress; the bounded Session notifier path is
+not evidence for every stream producer. Channel final-answer delivery and
+native run completion have their existing owner paths; transient status replay
+for those other adapters is not provided by `sessions.snapshot`. Named-node
+live streaming is a separately owned platform contract and is not merged or
+replaced here.
+Process retained-output/artifact quotas belong to #105; admission and stable
+process receipts belong to #103/#104. Neither quota nor model-facing truncation
+is a substitute for pre-mailbox admission.
+Likewise, the snapshot's JSON size limit is not a bound on its source-owner
+read: native branch collection, owner replies and revision hashing remain
+proportional to the retained authoritative transcript.
+
+### Focused acceptance fixtures
+
+The fixtures below are synchronized behavior/security coverage for each
+follow-through checkbox. They are **not a claim that checks were run**: central
+integration must execute them and attach the tested revision plus the observed
+queue/byte assertions to the implementation PR.
+
+| Issue / acceptance | Retained focused coverage |
+| --- | --- |
+| #88 noisy/slow consumer bounds without owner stall | `bus_delivery_test.exs`, `bus_bounded_subscription_test.exs`, `notifier_backpressure_test.exs`, `event_bridge_backpressure_test.exs`, router coalescer tests, and `chat_live_test.exs` suspend consumers before a bounded burst, then assert admission/byte bounds and independent canonical completion. |
+| #88 explicit loss indication; recoverable answer | Native notifier/runner recovery and bridge overflow tests assert resync plus owner-answer recovery; TUI session-controller and connected Web pane tests replace uncertain answer text from `sessions.snapshot`. |
+| #88 approval/cancellation/terminal truth under pressure | Native cancel/failure compact-terminal fixtures, snapshot approval/terminal races, TUI approval replacement, and connected Web remount tests retain owner truth, not stale actionable cards. |
+| #88 late terminal/resources cannot revive work | Delivery death/replacement tests, tagged-epoch rejection (pane and bridge), native runner exactly-once completion, router finalized gates including synchronous late finalizers, socket post-overflow fencing, and client terminal-regression tests. |
+| #88 supported boundaries accurate | Queue inventory and remaining raw owner/adapter paths above; these are intentional nonclaims, not inferred coverage from one stream test. |
+| #89 disconnected tool completion | Snapshot tool/result authority tests, TUI real-socket disconnect fixture, and connected Web pane remount recover the terminal receipt and canonical answer once. |
+| #89 approval decided while disconnected | Snapshot synchronized decision-between-reads retry, TUI stale-request rejection, and Web remount/late-request tests. |
+| #89 owned process/child activity | Snapshot exact-owner filtering/unavailable-read fixtures, TUI task/process replacement, and Web inspector replacement preserve fixed IDs and completed/lost/unknown classifications. |
+| #89 rewind / branch todo-plan replacement | Native selected-branch identity tests, TUI rewind replacement, and Web delayed-read race replace the abandoned branch's transcript/todos/plan. Domain mutation tests remain owned by #102. |
+| #89 stale session/branch/revision/attempt results | Snapshot identity-change retry plus client deferred-response/selection and overflow-without-data races, live idle rewind invocation rejection, obsolete-run event fencing, and same-attempt terminal non-regression. |
+| #89 dropped/coalesced progress | The same bounded fanout → resync → snapshot path above; no durable token replay fixture or new event store. |
+| #89 TUI and Web/remote, access and size | Real TUI WebSocket wrapper tests and connected LiveView tests consume the same RPC contract; snapshot authorization/native-header/owner-filter tests deny foreign access and enforce redacted 131,072-byte responses. Operators intentionally retain global read scope. |
+
+Small-fixture thresholds are explicit: the core eight-entry / 256-byte fixture
+admits eight events plus one resync marker and at most one compact terminal
+notification; encoded retained terms must fit `8 × 256 + encoded_resync + 1024`
+bytes and the frozen-process memory assertion is below 256,000 bytes. The Web
+fixture publishes 1,000 small events to a suspended pane and permits at most
+270 queued messages (256 deliveries, one resync, plus LiveView control allowance).
+These are asserted thresholds to measure centrally, not reported measurements.
+The byte-admission regression also retains a 256-byte slice of a 16,384-byte
+binary and rejects that backing in both data and compact control slots; encoded
+size alone would admit it and pin the larger binary.
+
+Run once from the umbrella worktree after all slices are integrated:
+
+```bash
+mix test \
+  apps/lemon_core/test/lemon_core/bus_delivery_test.exs \
+  apps/lemon_core/test/lemon_core/bus_bounded_subscription_test.exs \
+  apps/lemon_core/test/lemon_core/bus_test.exs \
+  apps/lemon_core/test/lemon_core/bus_registry_fallback_test.exs \
+  apps/lemon_agent/test/lemon_agent/event_stream_test.exs \
+  apps/coding_agent/test/coding_agent/session_backpressure_test.exs \
+  apps/coding_agent/test/coding_agent/session_recovery_test.exs \
+  apps/coding_agent/test/coding_agent/control_plane_provider_test.exs \
+  apps/coding_agent/test/coding_agent/session/notifier_backpressure_test.exs \
+  apps/coding_agent/test/coding_agent/session/session_runner_recovery_test.exs \
+  apps/coding_agent/test/coding_agent/session/run_translator_test.exs \
+  apps/coding_agent/test/coding_agent/tools/task/runner_test.exs \
+  apps/coding_agent/test/coding_agent/coordinator_test.exs \
+  apps/coding_agent/test/coding_agent/session_agent_event_terminal_test.exs \
+  apps/lemon_control_plane/test/lemon_control_plane/event_bridge_backpressure_test.exs \
+  apps/lemon_control_plane/test/lemon_control_plane/methods/sessions_snapshot_test.exs \
+  apps/lemon_control_plane/test/lemon_control_plane/methods/chat_history_tools_test.exs \
+  apps/lemon_control_plane/test/lemon_control_plane/methods/sessions_read_test.exs \
+  apps/lemon_control_plane/test/lemon_control_plane/ws/connection_test.exs \
+  apps/lemon_router/test/lemon_router/coalescer_backpressure_test.exs \
+  apps/lemon_router/test/lemon_router/stream_coalescer_test.exs \
+  apps/lemon_router/test/lemon_router/tool_status_coalescer_test.exs \
+  apps/lemon_web/test/lemon_web/chat_live_test.exs --seed 1
+
+bun --cwd clients/tui test \
+  test/ui/session-controller.test.ts \
+  test/protocol/client.test.ts \
+  test/ui/task-tree.test.ts \
+  test/ui/event-controller.test.ts \
+  test/store/session-store.test.ts \
+  test/store/task-store.test.ts
+```
+
+For a configured runtime, the central interactive smoke entry points are:
+
+```bash
+./bin/lemon web --no-open
+./bin/lemon tui --session agent:default:web:browser:unknown:stream-recovery-smoke
+```
+
+Open `/chat/agent%3Adefault%3Aweb%3Abrowser%3Aunknown%3Astream-recovery-smoke`
+in the authenticated browser. With a small tool/child/process run active, close
+and reopen the TUI or reload the browser while the runtime continues. Confirm
+one terminal answer and no completed action left spinning; decide a pending
+approval in the other client and confirm it does not return on reconnect.
+Repeat after a confirmed rewind and check the selected branch's todo/plan
+projection. Rotate/revoke access and verify reconnect refuses the old
+credential. Do not treat an interactive smoke as a replacement for the
+synchronized overflow/race fixtures above.
+
+
+
 ## 1. Headline recommendations
 
 **R1 — Type the payload, keep the envelope.** `LemonCore.Event` stays exactly as it is; what
