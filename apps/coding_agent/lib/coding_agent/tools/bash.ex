@@ -280,17 +280,29 @@ defmodule CodingAgent.Tools.Bash do
     ]
 
     case ProcessManager.exec(exec_opts) do
-      {:ok, process_id} ->
+      {classification, process_id} when classification in [:ok, :queued] ->
+        status = if classification == :queued, do: :queued, else: :running
+
+        receipt =
+          if classification == :queued,
+            do: "Queued background launch",
+            else: "Started background process"
+
         %AgentToolResult{
           content: [
             %TextContent{
               text:
-                "Started background process #{process_id}. Read its output with " <>
+                "#{receipt} #{process_id}. Read its output with " <>
                   "bash_output (process_id: \"#{process_id}\"); stop it with kill_process."
             }
           ],
-          details: %{process_id: process_id, status: :running, exit_code: nil, background: true}
+          details: %{process_id: process_id, status: status, exit_code: nil, background: true}
         }
+
+      {:error, {:outcome_unknown, process_id}} ->
+        {:error,
+         "Launch outcome unknown for #{process_id}. Reconcile with bash_output; " <>
+           "do not automatically rerun the command."}
 
       {:error, reason} ->
         {:error, "Failed to start background process: #{inspect(reason)}"}

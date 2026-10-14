@@ -53,6 +53,9 @@ remains a legacy client-side alias; it does not configure the daemon.
   Native patch receipts use their actual changed-file list (including Lemon's
   `*** Update File` format). Child task progress has one independently updated
   card per task, separate from the completed parent launch receipt.
+  Background Bash receipts distinguish queued admission from a started process;
+  uncertain outcomes remain explicitly unknown in both expanded cards and compact
+  shelves. A process ID alone never turns those states into a successful start.
   Elapsed time freezes when completion is observed and survives session switches
   and transcript rebuilding. Historical receipts without authoritative timing
   omit duration instead of measuring their age as tool runtime.

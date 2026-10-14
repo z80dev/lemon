@@ -530,7 +530,7 @@ The delegated `agent` tool mirrors each accepted async router run into `RunGraph
 
 Eligible native child sessions receive `ask_parent`. Its request is delivered through `Session.deliver_parent_question/2`: idle parents start processing immediately, and a parent currently inside `task` or `agent` join yields that join with `needs_parent_answer` before processing the visible question. Parent-question creation and terminal transitions are serialized, one child scope may have only one waiting request, resolver credentials must exactly match both parent session and agent, and only the winning answer/timeout/cancel/error transition emits a terminal event.
 
-`LaneQueue` monitors callers while jobs wait, removes abandoned queued jobs, and turns a missing or failing task supervisor into a per-job `task_start_failed` result while continuing to drain. Background process execution catches LaneQueue GenServer exits and uses the documented direct fallback rather than hanging the caller.
+`LaneQueue` monitors callers while jobs wait, removes abandoned queued jobs, and turns a missing or failing task supervisor into a per-job `task_start_failed` result while continuing to drain. Background launch failures never trigger direct fallback: the runtime reconciles the fixed owner-bound identity instead. Launch callback limits are distinct from lifetime capacity; on local Unix, a root shell exit does not release the slot while its owned group has surviving descendants. Unknown workload liveness remains charged until verified termination.
 
 Hermes-compatible background commands use the same native runtime. Call
 `CodingAgent.BackgroundRun.start/2` to receive a durable id immediately, then
@@ -916,9 +916,12 @@ result.
 
 | Key | Default | Description |
 |-----|---------|-------------|
-| `:lane_caps` | `%{main: 4, subagent: 8, background_exec: 2}` | Per-lane concurrency caps for `LaneQueue` |
+| `:lane_caps` | `%{main: 4, subagent: 8, background_exec: 2}` | Per-lane callback concurrency; `background_exec` bounds launches, not live process lifetimes |
 | `:task_max_concurrency` | `8` | Max concurrently executing native `task` children; excess children queue on the monitored semaphore |
 | `:primary_session` | `nil` | Keyword list of opts to auto-start a session on boot |
+
+Live background capacity, bounded pending admission, deadlines, and recovery are
+documented in the [configuration reference](../../docs/config.md#background-process-admission).
 
 ### Workspace Bootstrap Files
 

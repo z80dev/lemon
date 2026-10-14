@@ -348,6 +348,30 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   Capture accounting now serializes record mutations with reclamation, preserves
   live capture state across store-only restart, and rejects unpersisted
   reservations or unknown legacy artifact usage before process launch.
+- Background process launches no longer bypass admission after queue failures.
+  Fixed, owner-bound launch identities reconcile lost acknowledgements and
+  reject conflicting retries instead of risking duplicate external effects.
+- Background execution now holds a validated live-process capacity limit until
+  confirmed termination, bounds pending admission and waiting, prevents canceled
+  or expired queued commands from starting, and retains unknown capacity through
+  restart. Yielded launches remain owner-scoped and inspectable; cancellation
+  receipts no longer claim termination before it is confirmed.
+- Local Unix background capacity now stays held when the root shell exits but
+  descendants survive. Owned process groups are bound before command execution;
+  live members are retained before forwarding stdin that can end the root, so
+  verified cancellation still works after natural root exit. Groups reconcile
+  until confirmed empty; stale ownership and unsupported workload witnesses
+  remain unknown rather than freeing slots or signaling recycled PIDs.
+  Repeated cancellation also requires the backend-aware workload witness:
+  an empty host wrapper group cannot release SSH, container or PTY capacity.
+  TUI tool cards and compact shelves also preserve queued and outcome-unknown
+  receipts instead of presenting them as started or failed.
+- Background launches durably reserve output storage before opening a Port.
+  Known pre-start failures release their claimed lifetime slot once and preserve
+  a fixed receipt tombstone after successful cleanup; failed artifact removal
+  retains its separate storage charge. Late output/status writes cannot revive
+  a cleared launch, and closing capture does not release a surviving or unknown
+  workload's lifetime slot.
 
 ---
 

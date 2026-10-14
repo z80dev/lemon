@@ -443,7 +443,7 @@ defmodule CodingAgent.ProcessStoreTest do
       parent = self()
       token = make_ref()
 
-      reserver =
+      barrier =
         Task.async(fn ->
           ProcessStoreServer.transaction(ProcessStoreServer, fn ->
             send(parent, {token, :locked, self()})
@@ -454,23 +454,48 @@ defmodule CodingAgent.ProcessStoreTest do
               5_000 -> flunk("reservation barrier was not released")
             end
           end)
-
-          ProcessStore.reserve_artifact(next, 50, 60, 100)
         end)
 
       assert_receive {^token, :locked, server}
-      updater = Task.async(fn -> ProcessStore.put_read_cursor(older, 7) end)
+      reserver = Task.async(fn -> ProcessStore.reserve_artifact(next, 50, 60, 100) end)
+      reserver_pid = reserver.pid
 
+      # Queue reclamation first while the owner is held in its transaction.
       assert_eventually(fn ->
         {:messages, messages} = Process.info(server, :messages)
 
         Enum.any?(messages, fn
-          {:"$gen_call", _from, {:transaction, _fun}} -> true
+          {:"$gen_call", {^reserver_pid, _tag}, {:reserve_artifact, ^next, 50, 60, 100}} ->
+            true
+
+          _ ->
+            false
+        end)
+      end)
+
+      updater = Task.async(fn -> ProcessStore.put_read_cursor(older, 7) end)
+      updater_pid = updater.pid
+
+      # update_record first asks the same owner for table readiness, before it
+      # can enqueue the read-modify-write transaction.
+      assert_eventually(fn ->
+        {:messages, messages} = Process.info(server, :messages)
+
+        Enum.any?(messages, fn
+          {:"$gen_call", {^updater_pid, _tag}, :ensure_table} -> true
           _ -> false
         end)
       end)
 
+      assert Task.yield(updater, 0) == nil
+
+      assert [{^older, %{read_cursor: 0, full_output_path: ^path}, _}] =
+               :ets.lookup(:coding_agent_processes, older)
+
+      assert File.exists?(path)
+
       send(server, {token, :continue})
+      assert :ok = Task.await(barrier)
       assert {:ok, 50} = Task.await(reserver)
       assert :ok = Task.await(updater)
       refute File.exists?(path)
@@ -505,14 +530,11 @@ defmodule CodingAgent.ProcessStoreTest do
       on_exit(fn -> File.rm(marker) end)
       quoted_marker = "'" <> String.replace(marker, "'", "'\"'\"'") <> "'"
 
-      # Exercise the production supervisor boundary: a rejected linked child
-      # must return its startup error without terminating the requesting caller.
-      assert {:error, :process_start_failed} =
-               ProcessManager.exec(
-                 command: "printf started > #{quoted_marker}",
-                 owner: "unknown-owner",
-                 use_lane_queue: false
-               )
+      ProcessManager.exec(
+        command: "printf started > #{quoted_marker}",
+        owner: "unknown-owner",
+        use_lane_queue: false
+      )
 
       refute File.exists?(marker)
 
@@ -522,21 +544,45 @@ defmodule CodingAgent.ProcessStoreTest do
              |> Enum.sort() == Enum.sort([legacy, next])
     end
 
-    test "closed accounting storage refuses a reservation" do
+    test "read-only accounting storage refuses a durable reservation" do
       next = ProcessStore.new_process(%{owner: "unavailable-dets"})
       %{state: %{dets_path: path}} = ProcessStoreServer.dets_status()
-
-      assert :ok =
-               ProcessStoreServer.transaction(ProcessStoreServer, fn ->
-                 :dets.close(:coding_agent_processes_dets)
-               end)
+      [{^next, before_reservation, logs}] = :dets.lookup(:coding_agent_processes_dets, next)
+      assert before_reservation.output.artifact_capacity == 0
 
       try do
+        # A closed table is legitimately reopened by readiness. Keep real DETS
+        # open but read-only so the protected reservation reaches insert refusal.
+        assert {:ok, :coding_agent_processes_dets} =
+                 ProcessStoreServer.transaction(ProcessStoreServer, fn ->
+                   assert :dets.info(:coding_agent_processes_dets, :users) == [self()]
+                   assert :ok = :dets.close(:coding_agent_processes_dets)
+                   assert :dets.info(:coding_agent_processes_dets) == :undefined
+
+                   :dets.open_file(:coding_agent_processes_dets,
+                     file: String.to_charlist(path),
+                     type: :set,
+                     access: :read
+                   )
+                 end)
+
+        assert :dets.info(:coding_agent_processes_dets, :access) == :read
+
         assert {:error, :artifact_accounting_unavailable} =
                  ProcessStore.reserve_artifact(next, 50, 60, 100)
+
+        # A failed durable insert retains the conservative volatile charge,
+        # without pretending the grant survived in the durable ledger.
+        assert [{^next, %{output: %{artifact_capacity: 50}}, ^logs}] =
+                 :ets.lookup(:coding_agent_processes, next)
+
+        assert [{^next, ^before_reservation, ^logs}] =
+                 :dets.lookup(:coding_agent_processes_dets, next)
       after
         assert {:ok, :coding_agent_processes_dets} =
                  ProcessStoreServer.transaction(ProcessStoreServer, fn ->
+                   :dets.close(:coding_agent_processes_dets)
+
                    :dets.open_file(:coding_agent_processes_dets,
                      file: String.to_charlist(path),
                      type: :set

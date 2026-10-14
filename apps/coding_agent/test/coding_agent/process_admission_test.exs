@@ -1,0 +1,1181 @@
+defmodule CodingAgent.ProcessAdmissionTest do
+  use ExUnit.Case, async: false
+
+  alias CodingAgent.{LaneQueue, ProcessManager, ProcessSession, ProcessStore, ProcessStoreServer}
+
+  setup do
+    ProcessStore.clear()
+
+    directory =
+      Path.join(System.tmp_dir!(), "lemon-admission-#{System.unique_integer([:positive])}")
+
+    File.mkdir_p!(directory)
+    original_path = Application.fetch_env(:coding_agent, :process_store_path)
+    original_config = Application.fetch_env(:coding_agent, :background_process_limit)
+
+    # Clearing output retains logical launch tombstones. Each test instead owns
+    # a fresh durable ledger, then restores the application's original ledger.
+    on_exit(fn ->
+      ProcessStore.clear()
+      assert :ok = Supervisor.terminate_child(CodingAgent.Supervisor, ProcessStoreServer)
+
+      case original_path do
+        {:ok, value} -> Application.put_env(:coding_agent, :process_store_path, value)
+        :error -> Application.delete_env(:coding_agent, :process_store_path)
+      end
+
+      case original_config do
+        {:ok, value} -> Application.put_env(:coding_agent, :background_process_limit, value)
+        :error -> Application.delete_env(:coding_agent, :background_process_limit)
+      end
+
+      assert {:ok, _} = Supervisor.restart_child(CodingAgent.Supervisor, ProcessStoreServer)
+      File.rm_rf!(directory)
+    end)
+
+    assert :ok = Supervisor.terminate_child(CodingAgent.Supervisor, ProcessStoreServer)
+
+    Application.put_env(
+      :coding_agent,
+      :process_store_path,
+      Path.join(directory, "processes.dets")
+    )
+
+    Application.put_env(:coding_agent, :background_process_limit, 2)
+    assert {:ok, _} = Supervisor.restart_child(CodingAgent.Supervisor, ProcessStoreServer)
+    assert :ok = ProcessStoreServer.ensure_table()
+
+    task_sup = start_supervised!({Task.Supervisor, name: __MODULE__.Tasks})
+
+    queue =
+      start_supervised!(
+        {LaneQueue,
+         name: __MODULE__.Queue,
+         caps: %{background_exec: 2, main: 1},
+         background_pending_limit: 1,
+         task_supervisor: task_sup}
+      )
+
+    {:ok, sessions} = Agent.start(fn -> [] end)
+
+    on_exit(fn ->
+      for {id, pid} <- Agent.get(sessions, & &1) do
+        send(pid, :release_start)
+
+        if Process.alive?(pid) do
+          try do
+            ProcessSession.kill(id, :sigkill)
+          catch
+            :exit, _ -> :ok
+          end
+        end
+
+        case ProcessStore.get(id) do
+          {:ok, %{os_pid: os_pid, status: status}, _}
+          when is_integer(os_pid) and status in [:running, :starting, :killing, :lost] ->
+            {command, _} = System.cmd("ps", ["-p", Integer.to_string(os_pid), "-o", "command="])
+
+            if String.contains?(command, directory),
+              do: CodingAgent.BashExecutor.kill_process_tree(os_pid)
+
+          _ ->
+            :ok
+        end
+      end
+
+      Agent.stop(sessions)
+    end)
+
+    %{queue: queue, task_sup: task_sup, directory: directory, sessions: sessions}
+  end
+
+  defp launch(context, suffix) do
+    id = "admission-#{System.unique_integer([:positive])}-#{suffix}"
+    counter = Path.join(context.directory, "#{suffix}.counter")
+    fifo = Path.join(context.directory, "#{suffix}.fifo")
+    {_, 0} = System.cmd("mkfifo", [fifo])
+    test = self()
+
+    reader =
+      spawn(fn ->
+        # A BEAM file-server FIFO open would block creation of the capture file,
+        # which must precede the shell writer. Keep this observer outside it.
+        case System.cmd("cat", [fifo]) do
+          {"started\n", 0} -> send(test, {:external_started, id})
+          {"", 0} -> :ok
+        end
+      end)
+
+    on_exit(fn ->
+      ref = Process.monitor(reader)
+
+      if Process.alive?(reader) do
+        # O_RDWR unblocks a never-started FIFO fixture without inventing a start.
+        {:ok, unblock} = File.open(fifo, [:read, :write])
+        File.close(unblock)
+      end
+
+      assert_receive {:DOWN, ^ref, :process, ^reader, _}, 5_000
+    end)
+
+    opts = [
+      command:
+        "trap '' TERM; printf x >> '#{counter}'; printf 'started\\n' > '#{fifo}'; read -r release",
+      launch_id: id,
+      owner: "admission-test",
+      lane_queue: context.queue,
+      admission_timeout_ms: 60_000,
+      admission_wait_ms: 60_000,
+      on_start: fn identity ->
+        session = self()
+        Agent.update(context.sessions, &[{identity, session} | &1])
+        send(test, {:start_boundary, identity, session})
+        receive do: (:release_start -> :ok)
+      end,
+      on_exit: fn result -> send(test, {:external_terminated, result.process_id}) end
+    ]
+
+    {id, counter, opts}
+  end
+
+  defp boundary(id) do
+    assert_receive {:start_boundary, ^id, session}, 5_000
+    assert_receive {:external_started, ^id}, 5_000
+    session
+  end
+
+  defp terminate(id) do
+    assert :ok = ProcessManager.kill(id, :sigkill)
+    assert_receive {:external_terminated, ^id}, 5_000
+  end
+
+  defp start_blocking(context, suffix, extra \\ []) do
+    {id, counter, opts} = launch(context, suffix)
+    opts = Keyword.merge(opts, extra)
+    caller = Task.Supervisor.async_nolink(context.task_sup, fn -> ProcessManager.exec(opts) end)
+    session = boundary(id)
+    send(session, :release_start)
+    assert {:ok, ^id} = Task.await(caller)
+    {id, counter, opts, session}
+  end
+
+  defp enqueue(context, suffix, extra \\ []) do
+    {id, counter, opts} = launch(context, suffix)
+    opts = opts |> Keyword.put(:admission_wait_ms, 1) |> Keyword.merge(extra)
+    assert {:queued, ^id} = ProcessManager.exec(opts)
+    assert {:ok, %{classification: :queued}} = ProcessManager.receipt(id, "admission-test")
+    {id, counter, opts}
+  end
+
+  defp accept_queued(id) do
+    session = boundary(id)
+    send(session, :release_start)
+    assert {:ok, _} = ProcessSession.get_state(id)
+    assert {:ok, %{classification: :accepted}} = ProcessManager.receipt(id, "admission-test")
+    session
+  end
+
+  defp unknown_launch(context, suffix) do
+    {id, counter, opts} = launch(context, suffix)
+    fifo = Path.join(context.directory, "#{suffix}.exit.fifo")
+    {_, 0} = System.cmd("mkfifo", [fifo])
+    parent = self()
+
+    observer =
+      spawn(fn ->
+        # The OS reader avoids file_server_2. The fixture never closes fd 3
+        # explicitly, so EOF confirms external termination independently.
+        assert {"", 0} = System.cmd("cat", [fifo])
+        send(parent, {:external_exited, id})
+
+        receive do
+          {:confirm_exit, cleanup} -> send(cleanup, {:exit_confirmed, id})
+        end
+      end)
+
+    on_exit(fn ->
+      case Registry.lookup(CodingAgent.ProcessRegistry, id) do
+        [{pid, _}] ->
+          send(pid, :release_start)
+
+          try do
+            ProcessSession.kill(id, :sigkill)
+          catch
+            :exit, _ -> :ok
+          end
+
+        _ ->
+          :ok
+      end
+
+      # Finish the OS observer even if the test failed before the shell opened
+      # fd 3. An existing shell writer must still close before cat observes EOF.
+      {:ok, unblock} = File.open(fifo, [:read, :write])
+      File.close(unblock)
+
+      ref = Process.monitor(observer)
+      send(observer, {:confirm_exit, self()})
+      assert_receive {:exit_confirmed, ^id}, 5_000
+      assert_receive {:DOWN, ^ref, :process, ^observer, :normal}, 5_000
+
+      case ProcessManager.receipt(id, "admission-test") do
+        {:ok, %{classification: :outcome_unknown}} ->
+          assert :ok = ProcessManager.confirm_external_termination(id, "admission-test")
+
+        _ ->
+          :ok
+      end
+
+      assert :ok = ProcessManager.clear(id)
+    end)
+
+    {id, counter, Keyword.put(opts, :command, "exec 3> '#{fifo}'; " <> opts[:command])}
+  end
+
+  defp refused_launch(context, suffix) do
+    id = "admission-#{System.unique_integer([:positive])}-#{suffix}"
+    marker = Path.join(context.directory, "#{suffix}.marker")
+    parent = self()
+
+    opts = [
+      command: "printf started > '#{marker}'",
+      launch_id: id,
+      owner: "admission-test",
+      lane_queue: context.queue,
+      max_artifact_bytes: 50,
+      max_owner_artifact_bytes: 50,
+      max_runtime_artifact_bytes: 50,
+      before_start: fn -> send(parent, {:before_start, id}) end
+    ]
+
+    {id, marker, opts}
+  end
+
+  defp refuse_dets_reservation(id) do
+    %{state: %{dets_path: path}} = ProcessStoreServer.dets_status()
+    parent = self()
+    token = make_ref()
+
+    # OTP debug events run in the store owner immediately around handle_call.
+    # Change the actual DETS access mode only for the real reserve transaction;
+    # restore write access before startup_failed can be handled durably.
+    trigger = fn
+      :waiting,
+      {:in, {:"$gen_call", _from, {:reserve_artifact, ^id, _requested, _owner, _runtime}}},
+      _extra ->
+        try do
+          [{^id, claimed, _}] = :ets.lookup(:coding_agent_processes, id)
+          assert :dets.info(:coding_agent_processes_dets, :users) == [self()]
+          assert :ok = :dets.close(:coding_agent_processes_dets)
+          assert :dets.info(:coding_agent_processes_dets) == :undefined
+
+          assert {:ok, :coding_agent_processes_dets} =
+                   :dets.open_file(:coding_agent_processes_dets,
+                     file: String.to_charlist(path),
+                     type: :set,
+                     access: :read
+                   )
+
+          assert :dets.info(:coding_agent_processes_dets, :access) == :read
+          send(parent, {token, :reservation_boundary, claimed})
+          :armed
+        catch
+          kind, reason ->
+            # sys removes failing debug callbacks silently; expose fixture failure
+            # instead of allowing an unarmed injector to masquerade as proof.
+            send(parent, {token, :reservation_boundary, {:fixture_error, kind, reason}})
+            :finished
+        end
+
+      :armed, {:out, result, _to, _state}, _extra ->
+        try do
+          [{^id, charged, _}] = :ets.lookup(:coding_agent_processes, id)
+          durable = :dets.lookup(:coding_agent_processes_dets, id)
+          assert :ok = :dets.close(:coding_agent_processes_dets)
+          assert :dets.info(:coding_agent_processes_dets) == :undefined
+
+          assert {:ok, :coding_agent_processes_dets} =
+                   :dets.open_file(:coding_agent_processes_dets,
+                     file: String.to_charlist(path),
+                     type: :set
+                   )
+
+          assert :dets.info(:coding_agent_processes_dets, :access) == :read_write
+          send(parent, {token, :reservation_result, result, charged, durable})
+          :finished
+        catch
+          kind, reason ->
+            send(parent, {token, :reservation_result, {:fixture_error, kind, reason}})
+            :finished
+        end
+
+      state, _event, _extra ->
+        state
+    end
+
+    assert :ok = :sys.install(ProcessStoreServer, {trigger, :waiting})
+
+    on_exit(fn ->
+      :sys.remove(ProcessStoreServer, trigger)
+
+      # Restore the real owner even if an assertion interrupted the fixture.
+      ProcessStoreServer.transaction(ProcessStoreServer, fn ->
+        :dets.close(:coding_agent_processes_dets)
+
+        assert {:ok, :coding_agent_processes_dets} =
+                 :dets.open_file(:coding_agent_processes_dets,
+                   file: String.to_charlist(path),
+                   type: :set
+                 )
+      end)
+    end)
+
+    token
+  end
+
+  defp assert_failed_tombstone(context, id, marker, opts) do
+    assert {:ok,
+            %{identity: ^id, classification: :rejected, reason: :startup_failed, status: :error} =
+              receipt} = ProcessManager.receipt(id, "admission-test")
+
+    case ProcessStore.get(id) do
+      {:ok, _record, _logs} -> assert :ok = ProcessManager.clear(id)
+      {:error, :not_found} -> assert :ok = ProcessStore.delete(id)
+    end
+
+    assert {:error, :not_found} = ProcessStore.get(id)
+    refute Enum.any?(ProcessStore.list(), fn {identity, _} -> identity == id end)
+    assert {:error, :not_found} = ProcessManager.check_owner(id, "admission-test")
+    assert {:error, :not_found} = ProcessManager.receipt(id, "foreign-owner")
+
+    [{^id, tombstone, []}] =
+      ProcessStoreServer.transaction(ProcessStoreServer, fn ->
+        :ets.lookup(:coding_agent_processes, id)
+      end)
+
+    assert %{status: :cleared, capacity_held: false, termination_confirmed: true} = tombstone
+    fingerprint = tombstone.launch_fingerprint
+    assert is_binary(fingerprint)
+
+    late_path = Path.join(context.directory, "#{id}.late-capture")
+    File.write!(late_path, "late capture must not be adopted")
+
+    stale =
+      Map.merge(tombstone, %{
+        status: :running,
+        launch_classification: :accepted,
+        capacity_held: true,
+        termination_confirmed: false,
+        full_output_path: late_path,
+        output: %{artifact_capacity: 50, artifact_bytes: 50, finalized: false}
+      })
+
+    assert :ok = ProcessStore.put_output(id, stale.output)
+    assert :ok = ProcessStore.append_logs(id, ["late"], total_lines: 100, output: stale.output)
+    assert :ok = ProcessStore.put_read_cursor(id, 9)
+    assert :ok = ProcessStore.mark_running(id, 123)
+    assert :ok = ProcessStore.mark_completed(id, 0)
+    assert :ok = ProcessStore.mark_error(id, :late_capture)
+    assert :ok = ProcessStore.classify_launch(id, :accepted)
+    assert :ok = ProcessStore.insert_record(id, stale, ["late"])
+    assert {:error, :not_found} = ProcessStore.reserve_artifact(id, 50, 50, 50)
+
+    assert_raise ArgumentError, fn ->
+      ProcessStore.new_process(stale)
+    end
+
+    missing = "#{id}-missing"
+
+    assert_raise ArgumentError, fn ->
+      ProcessStore.new_process(%{
+        id: missing,
+        owner: "admission-test",
+        launch_fingerprint: fingerprint,
+        full_output_path: late_path
+      })
+    end
+
+    assert {:error, :not_found} = ProcessStore.get(missing)
+    assert {:error, :not_found} = ProcessManager.receipt(missing, "admission-test")
+    assert {:error, :not_found} = ProcessStore.get(id)
+    refute Enum.any?(ProcessManager.list(), fn {identity, _} -> identity == id end)
+    assert {:ok, ^receipt} = ProcessManager.receipt(id, "admission-test")
+    assert {:error, {:rejected, ^id, :startup_failed}} = ProcessManager.exec(opts)
+    assert {:error, {:rejected, ^id, :startup_failed}} = ProcessManager.exec(opts)
+    refute File.exists?(marker)
+    refute_receive {:before_start, ^id}, 0
+
+    assert [{^id, ^tombstone, []}] =
+             ProcessStoreServer.transaction(ProcessStoreServer, fn ->
+               :ets.lookup(:coding_agent_processes, id)
+             end)
+
+    assert [{^id, ^tombstone, []}] =
+             ProcessStoreServer.transaction(ProcessStoreServer, fn ->
+               :dets.lookup(:coding_agent_processes_dets, id)
+             end)
+  end
+
+  test "lost queue reply reconciles the fixed identity without another external start", context do
+    {id, counter, opts} = launch(context, "lost-reply")
+    caller = Task.Supervisor.async_nolink(context.task_sup, fn -> ProcessManager.exec(opts) end)
+    session = boundary(id)
+
+    assert :ok = stop_supervised(LaneQueue)
+    assert {:ok, ^id} = Task.await(caller)
+
+    assert {:ok, %{identity: ^id, classification: :accepted}} =
+             ProcessManager.receipt(id, "admission-test")
+
+    assert {:ok, ^id} = ProcessManager.exec(opts)
+    assert File.read!(counter) == "x"
+    send(session, :release_start)
+    assert {:ok, _} = ProcessSession.get_state(id)
+    terminate(id)
+  end
+
+  test "concurrent same-identity requests start once and conflicts stay owner-scoped", context do
+    {id, counter, opts} = launch(context, "dedupe")
+    first = Task.Supervisor.async_nolink(context.task_sup, fn -> ProcessManager.exec(opts) end)
+    session = boundary(id)
+
+    retries =
+      for _ <- 1..8 do
+        Task.Supervisor.async_nolink(context.task_sup, fn -> ProcessManager.exec(opts) end)
+      end
+
+    for retry <- retries, do: assert({:ok, ^id} = Task.await(retry))
+
+    for changed <- [Keyword.put(opts, :command, "true"), Keyword.put(opts, :owner, "foreign")] do
+      assert {:error, {:rejected, ^id, :identity_conflict}} = ProcessManager.exec(changed)
+    end
+
+    assert {:error, :not_found} = ProcessManager.receipt(id, "foreign")
+    assert File.read!(counter) == "x"
+    send(session, :release_start)
+    assert {:ok, ^id} = Task.await(first)
+    terminate(id)
+
+    # Reissuing the identical command intentionally allocates a fresh identity.
+    parent = self()
+    fifo = Path.join(context.directory, "dedupe.fifo")
+
+    reader =
+      spawn(fn ->
+        assert {"started\n", 0} = System.cmd("cat", [fifo])
+        send(parent, :second_external_started)
+      end)
+
+    on_exit(fn ->
+      ref = Process.monitor(reader)
+
+      if Process.alive?(reader) do
+        {:ok, unblock} = File.open(fifo, [:read, :write])
+        File.close(unblock)
+      end
+
+      # Cleanup only requires closure; an already-finished reader is :noproc.
+      assert_receive {:DOWN, ^ref, :process, ^reader, _}, 5_000
+    end)
+
+    second =
+      Task.Supervisor.async_nolink(context.task_sup, fn ->
+        ProcessManager.exec(Keyword.delete(opts, :launch_id))
+      end)
+
+    assert_receive {:start_boundary, second_id, second_session}, 5_000
+    assert_receive :second_external_started, 5_000
+    refute second_id == id
+    send(second_session, :release_start)
+    assert {:ok, ^second_id} = Task.await(second)
+    assert File.read!(counter) == "xx"
+    terminate(second_id)
+  end
+
+  test "accepted caller death does not relaunch and terminal receipts survive clear", context do
+    {id, counter, opts} = launch(context, "caller-death")
+    caller = spawn(fn -> ProcessManager.exec(opts) end)
+    ref = Process.monitor(caller)
+    session = boundary(id)
+    Process.exit(caller, :kill)
+    assert_receive {:DOWN, ^ref, :process, ^caller, :killed}
+
+    assert {:ok, ^id} = ProcessManager.exec(opts)
+    send(session, :release_start)
+    assert {:ok, _} = ProcessSession.get_state(id)
+    terminate(id)
+    assert :ok = ProcessManager.clear(id)
+    assert {:error, :not_found} = ProcessStore.get(id)
+    assert {:ok, ^id} = ProcessManager.exec(opts)
+
+    assert {:ok, %{classification: :accepted, status: :killed}} =
+             ProcessManager.receipt(id, "admission-test")
+
+    assert File.read!(counter) == "x"
+  end
+
+  test "start-owner loss remains unknown through queue recovery and cannot rerun effects",
+       context do
+    {id, counter, opts} = unknown_launch(context, "unknown")
+    caller = Task.Supervisor.async_nolink(context.task_sup, fn -> ProcessManager.exec(opts) end)
+    session = boundary(id)
+    ref = Process.monitor(session)
+    Process.exit(session, :kill)
+    assert_receive {:DOWN, ^ref, :process, ^session, :killed}
+    assert_receive {:external_exited, ^id}, 5_000
+
+    assert {:error, {:outcome_unknown, ^id}} = Task.await(caller)
+
+    assert {:ok, %{classification: :outcome_unknown}} =
+             ProcessManager.receipt(id, "admission-test")
+
+    assert :ok = stop_supervised(LaneQueue)
+
+    queue =
+      start_supervised!(
+        {LaneQueue,
+         name: __MODULE__.Queue, caps: %{background_exec: 2}, task_supervisor: context.task_sup}
+      )
+
+    assert {:error, {:outcome_unknown, ^id}} =
+             ProcessManager.exec(Keyword.put(opts, :lane_queue, queue))
+
+    assert :ok = ProcessStore.cleanup(0)
+
+    assert {:ok, %{classification: :outcome_unknown}} =
+             ProcessManager.receipt(id, "admission-test")
+
+    assert File.read!(counter) == "x"
+  end
+
+  test "live process cap is held after handles return and while cancellation is unconfirmed",
+       context do
+    {a, _, _, _} = start_blocking(context, "cap-a")
+    {b, _, _, _} = start_blocking(context, "cap-b")
+    {c, counter, _} = enqueue(context, "cap-c")
+
+    assert ProcessManager.admission_counts().occupied == 2
+    refute File.exists?(counter)
+    assert :ok = ProcessManager.kill(a, :sigterm)
+    assert {:ok, %{status: :killing}} = ProcessManager.poll(a, lines: 0)
+    assert ProcessManager.admission_counts().occupied == 2
+    assert {:ok, %{classification: :queued}} = ProcessManager.receipt(c, "admission-test")
+    refute File.exists?(counter)
+
+    terminate(a)
+    accept_queued(c)
+    assert File.read!(counter) == "x"
+    assert ProcessManager.admission_counts().occupied == 2
+    terminate(b)
+    terminate(c)
+  end
+
+  test "a root exit cannot free capacity while its TERM-ignoring child still owns the group",
+       context do
+    for mode <- [:sigterm, :natural] do
+      suffix = "surviving-child-#{mode}"
+      {id, counter, opts} = launch(context, suffix)
+      ready_fifo = Path.join(context.directory, "#{suffix}.fifo")
+      release_fifo = Path.join(context.directory, "#{suffix}.release.fifo")
+      {_, 0} = System.cmd("mkfifo", [release_fifo])
+      parent = self()
+
+      release_child = fn ->
+        # O_RDWR also makes failure cleanup finite if no child was started.
+        {:ok, unblock} = File.open(release_fifo, [:read, :write])
+
+        {_, 0} =
+          System.cmd("/bin/sh", [
+            "-c",
+            "printf 'release\\n' > \"$1\"",
+            "lemon-fixture",
+            release_fifo
+          ])
+
+        File.close(unblock)
+      end
+
+      on_exit(release_child)
+
+      command =
+        "trap 'exit 0' TERM; " <>
+          "(trap '' TERM; printf x >> '#{counter}'; " <>
+          "printf 'started\\n' > '#{ready_fifo}'; read -r release < '#{release_fifo}') " <>
+          "</dev/null >/dev/null 2>&1 & read -r release"
+
+      opts =
+        opts
+        |> Keyword.put(:command, command)
+        |> Keyword.put(:on_root_exit, fn identity -> send(parent, {:root_exited, identity}) end)
+
+      caller = Task.Supervisor.async_nolink(context.task_sup, fn -> ProcessManager.exec(opts) end)
+      session = boundary(id)
+      send(session, :release_start)
+      assert {:ok, ^id} = Task.await(caller)
+      {b, _, _, _} = start_blocking(context, "#{suffix}-other")
+      {c, queued_counter, _} = enqueue(context, "#{suffix}-queued")
+
+      case mode do
+        :sigterm -> assert :ok = ProcessManager.kill(id, :sigterm)
+        :natural -> assert :ok = ProcessManager.write(id, "release\n")
+      end
+
+      # This barrier is after the real Port exit and store reconciliation, not
+      # a timing guess or a fabricated child-termination event.
+      assert_receive {:root_exited, ^id}, 5_000
+
+      assert {:ok, %{status: :lost, root_exited: true, capacity_held: true}, _} =
+               ProcessStore.get(id)
+
+      assert {:ok, %{classification: :outcome_unknown}} =
+               ProcessManager.receipt(id, "admission-test")
+
+      assert ProcessManager.admission_counts().occupied == 2
+      refute File.exists?(queued_counter)
+      assert File.read!(counter) == "x"
+
+      {d, rejected_counter, rejected_opts} = launch(context, "#{suffix}-overflow")
+      assert {:error, {:rejected, ^d, :overloaded}} = ProcessManager.exec(rejected_opts)
+      refute File.exists?(rejected_counter)
+
+      # Both natural and signaled root exits must retain a publicly cancellable
+      # owned group. The fixture FIFO is failure cleanup only, not the repair.
+      terminate(id)
+
+      accept_queued(c)
+      assert File.read!(queued_counter) == "x"
+      assert ProcessManager.admission_counts().occupied == 2
+      assert :ok = ProcessStore.confirm_termination(id)
+      send(session, :reconcile_workload)
+      assert ProcessManager.admission_counts().occupied == 2
+      terminate(b)
+      terminate(c)
+      assert ProcessManager.admission_counts().occupied == 0
+    end
+  end
+
+  test "lost group ownership cannot signal a recycled identity or release its charge", context do
+    parent = self()
+
+    {id, counter, _, session} =
+      start_blocking(context, "lost-group-identity",
+        on_root_exit: fn identity -> send(parent, {:root_exited, identity}) end
+      )
+
+    assert {:ok, state} = ProcessSession.get_state(id)
+    original_identity = state.workload_identity
+    # Fault-inject the stale ownership evidence, not an actual reused system PID.
+    stale_identity = %{original_identity | root_birth: "another workload"}
+    :sys.replace_state(session, &%{&1 | workload_identity: stale_identity})
+    assert {:error, {:outcome_unknown, ^id}} = ProcessManager.kill(id, :sigkill)
+    assert {:alive, _} = CodingAgent.BashExecutor.workload_group_status(original_identity)
+    assert File.read!(counter) == "x"
+    assert ProcessManager.admission_counts().occupied == 1
+    assert {:ok, %{workload_identity: %{ownership_lost: true}}, _} = ProcessStore.get(id)
+
+    # Only independently retained, matching ownership evidence can clean up.
+    assert {:ok, _} = CodingAgent.BashExecutor.signal_workload_group(original_identity, :sigkill)
+    assert_receive {:root_exited, ^id}, 5_000
+    assert :terminated = CodingAgent.BashExecutor.workload_group_status(original_identity, true)
+    assert ProcessManager.admission_counts().occupied == 1
+    assert :ok = ProcessManager.confirm_external_termination(id, "admission-test")
+    assert ProcessManager.admission_counts().occupied == 0
+
+    assert {:ok, %{classification: :outcome_unknown}} =
+             ProcessManager.receipt(id, "admission-test")
+  end
+
+  test "a stopped unsupported wrapper cannot prove workload termination on public kill",
+       context do
+    parent = self()
+    id = "unsupported-witness-#{System.unique_integer([:positive])}"
+
+    assert {:ok, ^id} =
+             ProcessManager.exec(
+               launch_id: id,
+               command: "exit 0",
+               cwd: context.directory,
+               backend: :local_pty,
+               owner: "admission-test",
+               owner_pid: parent,
+               lane_queue: context.queue,
+               admission_wait_ms: 5_000,
+               on_root_exit: fn identity -> send(parent, {:root_exited, identity}) end
+             )
+
+    assert_receive {:root_exited, ^id}, 5_000
+
+    assert {:ok, %{classification: :outcome_unknown}} =
+             ProcessManager.receipt(id, "admission-test")
+
+    assert ProcessManager.admission_counts().occupied == 1
+
+    assert {:error, {:outcome_unknown, ^id}} = ProcessManager.kill(id, :sigkill)
+    assert {:error, {:outcome_unknown, ^id}} = ProcessManager.kill(id, :sigkill)
+    assert {:ok, %{capacity_held: true, root_exited: true}, _} = ProcessStore.get(id)
+    assert ProcessManager.admission_counts().occupied == 1
+
+    assert {:error, :not_found} = ProcessManager.confirm_external_termination(id, "foreign-owner")
+    assert ProcessManager.admission_counts().occupied == 1
+    assert :ok = ProcessManager.confirm_external_termination(id, "admission-test")
+    assert ProcessManager.admission_counts().occupied == 0
+
+    assert {:ok, %{classification: :outcome_unknown}} =
+             ProcessManager.receipt(id, "admission-test")
+  end
+
+  test "pending overflow is rejected promptly without an external start or queue growth",
+       context do
+    {a, _, _, _} = start_blocking(context, "overflow-a")
+    {b, _, _, _} = start_blocking(context, "overflow-b")
+    {c, _, _} = enqueue(context, "overflow-c")
+    {d, counter, opts} = launch(context, "overflow-d")
+
+    assert {:error, {:rejected, ^d, :overloaded}} = ProcessManager.exec(opts)
+    assert :queue.len(GenServer.call(context.queue, :status).lanes.background_exec.q) == 1
+    assert %{active: 2, queued: 1, rejected: 1, occupied: 2} = ProcessManager.admission_counts()
+    refute File.exists?(counter)
+    assert :ok = ProcessManager.cancel(c, "admission-test")
+    terminate(a)
+    terminate(b)
+    refute File.exists?(counter)
+  end
+
+  test "queued cancellation, expiry and abandoned callers can never start after capacity frees",
+       context do
+    {a, _, _, _} = start_blocking(context, "waiting-a")
+    {b, _, _, _} = start_blocking(context, "waiting-b")
+    assert :ok = ProcessStore.subscribe_capacity(self())
+
+    {c, canceled_counter, _} = enqueue(context, "waiting-canceled")
+    assert :ok = ProcessManager.kill(c, :sigkill)
+    send(context.queue, {:background_launch_canceled, c})
+    assert GenServer.call(context.queue, :status).jobs_count == 0
+    assert {:ok, %{classification: :canceled}} = ProcessManager.receipt(c, "admission-test")
+
+    {d, expired_counter, _} = enqueue(context, "waiting-expired")
+    # Inject the deadline event after the queued barrier; no elapsed-time guess.
+    send(CodingAgent.ProcessStoreServer, {:pending_launch_deadline, d})
+    assert_receive {:background_launch_classified, ^d, :expired}, 5_000
+    assert GenServer.call(context.queue, :status).jobs_count == 0
+
+    {e, abandoned_counter, opts} = launch(context, "waiting-abandoned")
+    parent = self()
+
+    caller =
+      spawn(fn ->
+        result = ProcessManager.exec(Keyword.put(opts, :admission_wait_ms, 1))
+        send(parent, {:waiting_receipt, result})
+        receive do: (:stop -> :ok)
+      end)
+
+    assert_receive {:waiting_receipt, {:queued, ^e}}, 5_000
+    ref = Process.monitor(caller)
+    Process.exit(caller, :kill)
+    assert_receive {:DOWN, ^ref, :process, ^caller, :killed}
+    assert_receive {:background_launch_canceled, ^e}, 5_000
+    send(context.queue, {:background_launch_canceled, e})
+    assert GenServer.call(context.queue, :status).jobs_count == 0
+
+    owner = spawn(fn -> receive do: (:stop -> :ok) end)
+    {f, owner_counter, _} = enqueue(context, "waiting-owner", owner_pid: owner)
+    ref = Process.monitor(owner)
+    Process.exit(owner, :kill)
+    assert_receive {:DOWN, ^ref, :process, ^owner, :killed}
+    assert_receive {:background_launch_canceled, ^f}, 5_000
+    send(context.queue, {:background_launch_canceled, f})
+    assert GenServer.call(context.queue, :status).jobs_count == 0
+
+    terminate(a)
+    terminate(b)
+
+    for counter <- [canceled_counter, expired_counter, abandoned_counter, owner_counter],
+        do: refute(File.exists?(counter))
+
+    assert %{queued: 0, canceled: 3, expired: 1, occupied: 0} = ProcessManager.admission_counts()
+  end
+
+  test "confirmed completion, startup failure and owner death release once despite late events",
+       context do
+    owner = spawn(fn -> receive do: (:stop -> :ok) end)
+    on_exit(fn -> if Process.alive?(owner), do: Process.exit(owner, :kill) end)
+    {a, _, _, session} = start_blocking(context, "release-a")
+    {b, _, _, _} = start_blocking(context, "release-b", owner_pid: owner)
+    {c, _, _} = enqueue(context, "release-c")
+    assert {:ok, state} = ProcessSession.get_state(a)
+    assert :ok = ProcessManager.write(a, "release\n")
+    assert_receive {:external_terminated, ^a}, 5_000
+    accept_queued(c)
+
+    for _ <- 1..3, do: send(session, {state.port, {:exit_status, 0}})
+    assert {:ok, %{status: :completed}} = ProcessSession.get_state(a)
+    assert :ok = ProcessStore.confirm_termination(a)
+    assert ProcessManager.admission_counts().occupied == 2
+
+    {d, counter, _} = enqueue(context, "release-d")
+    refute File.exists?(counter)
+    assert :ok = ProcessManager.cancel(d, "admission-test")
+    send(context.queue, {:background_launch_canceled, d})
+    GenServer.call(context.queue, :status)
+    terminate(c)
+
+    failed = "startup-failed-#{System.unique_integer([:positive])}"
+
+    log =
+      ExUnit.CaptureLog.capture_log(fn ->
+        assert {:error, {:rejected, ^failed, :startup_failed}} =
+                 ProcessManager.exec(
+                   command: "true",
+                   launch_id: failed,
+                   lane_queue: context.queue,
+                   before_start: fn -> raise "private startup fixture" end
+                 )
+      end)
+
+    refute log =~ "private startup fixture"
+    assert ProcessManager.admission_counts().occupied == 1
+    assert :ok = ProcessStore.confirm_termination(failed, :startup_failed)
+    assert ProcessManager.admission_counts().occupied == 1
+
+    ref = Process.monitor(owner)
+    Process.exit(owner, :kill)
+    assert_receive {:DOWN, ^ref, :process, ^owner, :killed}
+    assert_receive {:external_terminated, ^b}, 5_000
+    assert ProcessManager.admission_counts().occupied == 0
+  end
+
+  test "legacy unknown-size accounting refusal never starts and keeps a cleared fixed receipt",
+       context do
+    {active, _, _, _} =
+      start_blocking(context, "unknown-accounting-active", max_artifact_bytes: 1)
+
+    legacy_path =
+      Path.join(
+        System.tmp_dir!(),
+        "lemon-process-#{:crypto.strong_rand_bytes(16) |> Base.encode16(case: :lower)}.log"
+      )
+
+    on_exit(fn -> File.rm(legacy_path) end)
+    File.ln_s!(legacy_path, legacy_path)
+
+    legacy =
+      ProcessStore.new_process(%{owner: "admission-test", full_output_path: legacy_path})
+
+    assert :ok = ProcessStore.mark_completed(legacy, 0)
+    assert {:ok, record, logs} = ProcessStore.get(legacy)
+    assert :ok = ProcessStore.insert_record(legacy, Map.delete(record, :output), logs)
+    assert :ok = ProcessStore.subscribe_capacity(self())
+    {id, marker, opts} = refused_launch(context, "unknown-accounting")
+
+    assert {:error, {:rejected, ^id, :startup_failed}} = ProcessManager.exec(opts)
+    assert_receive :background_capacity_changed, 5_000
+    assert ProcessManager.admission_counts().occupied == 1
+    refute File.exists?(marker)
+    refute_receive {:before_start, ^id}, 0
+    assert {:ok, %{full_output_path: ^legacy_path}, _} = ProcessStore.get(legacy)
+    assert {:ok, %{type: :symlink}} = File.lstat(legacy_path)
+
+    assert_failed_tombstone(context, id, marker, opts)
+
+    for _ <- 1..3, do: assert(:ok = ProcessStore.confirm_termination(id, :startup_failed))
+    assert ProcessManager.admission_counts().occupied == 1
+    refute_receive :background_capacity_changed, 0
+
+    File.rm!(legacy_path)
+    assert :ok = ProcessStore.delete(legacy)
+    {next, _, _, _} = start_blocking(context, "unknown-accounting-next")
+    {waiting, waiting_marker, _} = enqueue(context, "unknown-accounting-waiting")
+    assert %{occupied: 2, queued: 1} = ProcessManager.admission_counts()
+    refute File.exists?(waiting_marker)
+    assert :ok = ProcessManager.cancel(waiting, "admission-test")
+    terminate(next)
+    terminate(active)
+  end
+
+  test "actual DETS reservation insert refusal releases once without entering before_start",
+       context do
+    {active, _, _, _} = start_blocking(context, "dets-refusal-active", max_artifact_bytes: 1)
+    assert :ok = ProcessStore.subscribe_capacity(self())
+    {id, marker, opts} = refused_launch(context, "dets-refusal")
+    opts = Keyword.merge(opts, max_owner_artifact_bytes: 51, max_runtime_artifact_bytes: 51)
+    token = refuse_dets_reservation(id)
+
+    caller = Task.Supervisor.async_nolink(context.task_sup, fn -> ProcessManager.exec(opts) end)
+
+    assert_receive {^token, :reservation_boundary,
+                    %{capacity_held: true, termination_confirmed: false} = claimed},
+                   5_000
+
+    assert claimed.owner == "admission-test"
+    assert is_binary(claimed.launch_fingerprint)
+
+    assert_receive {^token, :reservation_result, {:error, :artifact_accounting_unavailable},
+                    %{capacity_held: true, termination_confirmed: false, output: charged},
+                    [{^id, durable, _}]},
+                   5_000
+
+    assert {:error, {:rejected, ^id, :startup_failed}} = Task.await(caller, 5_000)
+
+    assert charged.artifact_capacity == 50
+    assert Map.get(durable.output, :artifact_capacity, 0) == 0
+    assert_receive :background_capacity_changed, 5_000
+    assert ProcessManager.admission_counts().occupied == 1
+    refute File.exists?(marker)
+    refute_receive {:before_start, ^id}, 0
+    assert_failed_tombstone(context, id, marker, opts)
+
+    for _ <- 1..3, do: assert(:ok = ProcessStore.confirm_termination(id, :startup_failed))
+    assert ProcessManager.admission_counts().occupied == 1
+    refute_receive :background_capacity_changed, 0
+
+    {next, _, _, _} = start_blocking(context, "dets-refusal-next")
+    {waiting, waiting_marker, _} = enqueue(context, "dets-refusal-waiting")
+    assert %{occupied: 2, queued: 1} = ProcessManager.admission_counts()
+    refute File.exists?(waiting_marker)
+    assert :ok = ProcessManager.cancel(waiting, "admission-test")
+    terminate(next)
+    terminate(active)
+  end
+
+  test "pre-Port failed unlink releases lifetime capacity but retains the artifact charge",
+       context do
+    {id, marker, opts} = refused_launch(context, "failed-unlink")
+    parent = self()
+
+    opts =
+      Keyword.put(opts, :before_start, fn ->
+        {:ok, %{full_output_path: path, capacity_held: true, output: output}, _} =
+          ProcessStore.get(id)
+
+        send(parent, {:before_start, id})
+        File.rm!(path)
+        File.mkdir!(path)
+        File.write!(Path.join(path, "retained"), "capture cannot be unlinked")
+        send(parent, {:blocked_capture, id, path, output.artifact_capacity})
+        raise "pre-Port cleanup obstruction"
+      end)
+
+    assert :ok = ProcessStore.subscribe_capacity(self())
+    assert {:error, {:rejected, ^id, :startup_failed}} = ProcessManager.exec(opts)
+    assert_receive {:before_start, ^id}, 5_000
+    assert_receive {:blocked_capture, ^id, path, 50}, 5_000
+    on_exit(fn -> File.rm_rf!(path) end)
+    assert_receive :background_capacity_changed, 5_000
+    refute File.exists?(marker)
+    assert ProcessManager.admission_counts().occupied == 0
+
+    assert {:ok,
+            %{
+              full_output_path: ^path,
+              capacity_held: false,
+              termination_confirmed: true,
+              output: %{artifact_capacity: 50}
+            }, _} = ProcessStore.get(id)
+
+    assert :ok = ProcessStore.confirm_termination(id, :startup_failed)
+    assert {:error, :output_cleanup_failed} = ProcessManager.clear(id)
+    assert {:error, {:rejected, ^id, :startup_failed}} = ProcessManager.exec(opts)
+    refute_receive {:before_start, ^id}, 0
+    refute_receive :background_capacity_changed, 0
+
+    limits = [
+      max_artifact_bytes: 50,
+      max_owner_artifact_bytes: 50,
+      max_runtime_artifact_bytes: 50
+    ]
+
+    {next, counter, _, _} = start_blocking(context, "failed-unlink-next", limits)
+    assert File.read!(counter) == "x"
+    assert {:ok, %{output: %{artifact_capacity: 0}}, _} = ProcessStore.get(next)
+    assert {:error, :output_cleanup_failed} = ProcessStore.delete(id)
+
+    assert {:ok, %{full_output_path: ^path, output: %{artifact_capacity: 50}}, _} =
+             ProcessStore.get(id)
+
+    terminate(next)
+    File.rm_rf!(path)
+    assert_failed_tombstone(context, id, marker, opts)
+    {available, _, _, _} = start_blocking(context, "failed-unlink-available", limits)
+    assert {:ok, %{output: %{artifact_capacity: 50}}, _} = ProcessStore.get(available)
+    terminate(available)
+  end
+
+  test "managed unknown capture size stays charged through termination and failed reclamation",
+       context do
+    limits = [
+      max_artifact_bytes: 50,
+      max_owner_artifact_bytes: 50,
+      max_runtime_artifact_bytes: 50
+    ]
+
+    {id, _, opts, session} = start_blocking(context, "unknown-capture", limits)
+
+    assert {:ok, %{port: port, output_file: file, full_output_path: path}} =
+             ProcessSession.get_state(id)
+
+    assert :ok = File.close(file)
+    File.rm!(path)
+    File.ln_s!(path, path)
+    on_exit(fn -> File.rm_rf!(path) end)
+    send(session, {port, {:data, "diagnostic\n"}})
+
+    assert {:ok,
+            %{
+              status: :running,
+              output: %{
+                artifact_capacity: 50,
+                artifact_size_unknown: true,
+                artifact_discarded_bytes: nil
+              }
+            }} = ProcessSession.poll(id)
+
+    send(session, {port, {:data, "tail\n"}})
+
+    assert {:ok, %{output: %{received_bytes: 16, artifact_discarded_bytes: nil}}} =
+             ProcessSession.poll(id)
+
+    terminate(id)
+    assert ProcessManager.admission_counts().occupied == 0
+
+    assert {:ok,
+            %{
+              capacity_held: false,
+              termination_confirmed: true,
+              output: %{
+                finalized: true,
+                artifact_capacity: 50,
+                artifact_size_unknown: true,
+                artifact_discarded_bytes: nil
+              }
+            }, ["diagnostic", "tail"]} = ProcessStore.get(id)
+
+    assert :ok = ProcessSession.stop(id)
+    File.rm!(path)
+    File.mkdir!(path)
+    File.write!(Path.join(path, "retained"), "unknown capture remains charged")
+    assert {:error, :output_cleanup_failed} = ProcessManager.clear(id)
+    assert {:ok, ^id} = ProcessManager.exec(opts)
+
+    {next, _, _, _} = start_blocking(context, "unknown-capture-next", limits)
+    assert {:ok, %{output: %{artifact_capacity: 0}}, _} = ProcessStore.get(next)
+
+    assert {:ok, %{full_output_path: ^path, output: %{artifact_capacity: 50}}, _} =
+             ProcessStore.get(id)
+
+    terminate(next)
+    File.rm_rf!(path)
+    assert :ok = ProcessManager.clear(id)
+    assert {:error, :not_found} = ProcessStore.get(id)
+
+    assert {:ok, %{classification: :accepted, status: :killed}} =
+             ProcessManager.receipt(id, "admission-test")
+
+    {available, _, _, _} = start_blocking(context, "unknown-capture-available", limits)
+    assert {:ok, %{output: %{artifact_capacity: 50}}, _} = ProcessStore.get(available)
+    terminate(available)
+  end
+
+  test "queue and store restart reconcile surviving and unknown processes before admitting",
+       context do
+    {a, counter, opts} = unknown_launch(context, "restart-a")
+    caller = Task.Supervisor.async_nolink(context.task_sup, fn -> ProcessManager.exec(opts) end)
+    session = boundary(a)
+    send(session, :release_start)
+    assert {:ok, ^a} = Task.await(caller)
+    {b, _, _, _} = start_blocking(context, "restart-b")
+    ref = Process.monitor(session)
+    Process.exit(session, :kill)
+    assert_receive {:DOWN, ^ref, :process, ^session, :killed}
+    assert_receive {:external_exited, ^a}, 5_000
+
+    assert {:ok, %{classification: :outcome_unknown}} =
+             ProcessManager.receipt(a, "admission-test")
+
+    assert {:error, :process_not_terminal} = ProcessStore.delete(a)
+
+    assert :ok = stop_supervised(LaneQueue)
+
+    assert :ok =
+             Supervisor.terminate_child(CodingAgent.Supervisor, CodingAgent.ProcessStoreServer)
+
+    assert {:ok, _} =
+             Supervisor.restart_child(CodingAgent.Supervisor, CodingAgent.ProcessStoreServer)
+
+    queue =
+      start_supervised!(
+        {LaneQueue,
+         name: __MODULE__.Queue,
+         caps: %{background_exec: 2},
+         background_pending_limit: 1,
+         task_supervisor: context.task_sup}
+      )
+
+    recovered = %{context | queue: queue}
+    {c, waiting_counter, _} = enqueue(recovered, "restart-c")
+    assert %{occupied: 2, unknown: 1, queued: 1} = ProcessManager.admission_counts()
+
+    assert {:error, {:outcome_unknown, ^a}} =
+             ProcessManager.exec(Keyword.put(opts, :lane_queue, queue))
+
+    refute File.exists?(waiting_counter)
+    assert File.read!(counter) == "x"
+    assert :ok = ProcessManager.cancel(c, "admission-test")
+    terminate(b)
+  end
+
+  test "long-running owned process remains inspectable and cancellable after caller yield",
+       context do
+    {a, _, _, _} = start_blocking(context, "yield-a")
+    {b, _, _, _} = start_blocking(context, "yield-b")
+    {id, counter, opts} = launch(context, "yield")
+    opts = Keyword.merge(opts, owner_pid: self(), admission_wait_ms: 1)
+    caller = Task.Supervisor.async_nolink(context.task_sup, fn -> ProcessManager.exec(opts) end)
+    assert {:queued, ^id} = Task.await(caller)
+    assert {:ok, %{classification: :queued}} = ProcessManager.receipt(id, "admission-test")
+    refute File.exists?(counter)
+
+    terminate(a)
+    accept_queued(id)
+    assert {:ok, %{status: :running}} = ProcessManager.poll(id, lines: 0)
+    assert ProcessManager.admission_counts().occupied == 2
+    assert File.read!(counter) == "x"
+    assert {:ok, ^id} = ProcessManager.exec(opts)
+    terminate(id)
+    terminate(b)
+    assert ProcessManager.admission_counts().occupied == 0
+  end
+
+  test "invalid background limits fail explicitly while unrelated lanes keep callback semantics",
+       context do
+    for {key, value} <- [
+          background_process_limit: 0,
+          background_pending_limit: -1,
+          background_admission_timeout_ms: :infinity,
+          background_admission_wait_ms: "secret-invalid-value"
+        ] do
+      opts = [
+        {key, value},
+        name: __MODULE__.Invalid,
+        caps: %{main: 1},
+        task_supervisor: context.task_sup
+      ]
+
+      for starter <- [&LaneQueue.start_link/1, &CodingAgent.ProcessStoreServer.start_link/1] do
+        result =
+          Task.Supervisor.async_nolink(context.task_sup, fn ->
+            # A rejected start may also send EXIT to its linked caller. Isolate
+            # that startup protocol without changing the lane consumer's flags.
+            Process.flag(:trap_exit, true)
+            starter.(opts)
+          end)
+
+        assert {:error, {:invalid_background_limit, ^key}} = Task.await(result)
+      end
+    end
+
+    assert {:ok, :callback_finished} =
+             LaneQueue.run(context.queue, :main, fn -> :callback_finished end)
+
+    assert {:ok, :next_callback} = LaneQueue.run(context.queue, :main, fn -> :next_callback end)
+  end
+end
