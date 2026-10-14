@@ -232,7 +232,15 @@ defmodule LemonMCP.HTTPPinningTest do
 
   test "OAuth discovery and token exchange independently pin without MCP credentials", ctx do
     Agent.update(ctx.store, &%{&1 | oauth: true})
-    client = start_supervised!({HTTP, oauth_opts(ctx)})
+    # Explicit Authorization headers take precedence over acquired OAuth tokens.
+    # Use a stale cached bearer so the retry can use the newly exchanged token.
+    opts =
+      ctx
+      |> oauth_opts()
+      |> Keyword.put(:headers, [{"x-private", "private-secret"}])
+      |> Keyword.put(:oauth_token_loader, fn -> {:ok, %{access_token: "original"}} end)
+
+    client = start_supervised!({HTTP, opts})
     assert HTTP.state(client) == :ready
     assert {:ok, _tools} = HTTP.list_tools(client)
     observed = events(ctx)
@@ -241,8 +249,15 @@ defmodule LemonMCP.HTTPPinningTest do
       Enum.find(observed, &(elem(&1, 0) == :authorization_metadata))
     assert {{:token, form}, token_headers} =
       Enum.find(observed, &match?({{:token, _}, _}, &1))
-    assert form["grant_type"] == "client_credentials"
-    assert token_headers["authorization"] =~ "Basic "
+    assert form == %{"grant_type" => "client_credentials", "resource" => ctx.origin <> "/mcp"}
+    assert token_headers["authorization"] == "Basic " <> Base.encode64("client:client-secret")
+    mcp_events = Enum.filter(observed, fn {event, _headers} -> is_binary(event) end)
+    assert Enum.map(mcp_events, fn {event, headers} -> {event, headers["authorization"]} end) ==
+      [{"initialize", "Bearer original"}, {"initialize", "Bearer fixture-token"},
+       {"notifications/initialized", "Bearer fixture-token"}, {"tools/list", "Bearer fixture-token"}]
+    assert Enum.all?(mcp_events, fn {_event, headers} ->
+      headers["x-private"] == "private-secret"
+    end)
     for headers <- [metadata_headers, issuer_headers, token_headers] do
       refute Map.has_key?(headers, "x-private")
     end
@@ -280,10 +295,13 @@ defmodule LemonMCP.HTTPPinningTest do
   test "token redirects never forward OAuth client credentials", ctx do
     Agent.update(ctx.store, &%{&1 | oauth: true, token_redirect: true})
     assert {:error, :redirect_forbidden} = GenServer.start(HTTP, oauth_opts(ctx))
-    assert Enum.map(events(ctx), &elem(&1, 0)) ==
+    observed = events(ctx)
+    assert Enum.map(observed, &elem(&1, 0)) ==
       ["initialize", :metadata, :authorization_metadata,
-       {:token, %{"grant_type" => "client_credentials", "client_id" => "client",
-         "resource" => ctx.origin <> "/mcp"}}]
+       {:token, %{"grant_type" => "client_credentials", "resource" => ctx.origin <> "/mcp"}}]
+    assert {{:token, _form}, token_headers} = List.last(observed)
+    assert token_headers["authorization"] == "Basic " <> Base.encode64("client:client-secret")
+    refute Map.has_key?(token_headers, "x-private")
   end
 
   test "policy HTTP status failures do not expose response bodies or URLs", ctx do
