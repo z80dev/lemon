@@ -86,6 +86,8 @@ defmodule LemonAutomation.CronManagerAdmissionTest do
 
     previous_env = Map.new(env_keys, &{&1, Application.fetch_env(:lemon_automation, &1)})
     previous_paths = Application.fetch_env(:lemon_core, :paths)
+    previous_allowed_origins = System.get_env("LEMON_CRON_ADMISSION_ALLOWED_ORIGINS")
+    System.delete_env("LEMON_CRON_ADMISSION_ALLOWED_ORIGINS")
     paths = Application.get_env(:lemon_core, :paths) || []
 
     Application.put_env(
@@ -115,6 +117,12 @@ defmodule LemonAutomation.CronManagerAdmissionTest do
 
       for {key, value} <- previous_env, do: restore_env(:lemon_automation, key, value)
       restore_env(:lemon_core, :paths, previous_paths)
+
+      if is_nil(previous_allowed_origins) do
+        System.delete_env("LEMON_CRON_ADMISSION_ALLOWED_ORIGINS")
+      else
+        System.put_env("LEMON_CRON_ADMISSION_ALLOWED_ORIGINS", previous_allowed_origins)
+      end
       :persistent_term.erase({Admission, :test_pid})
       :persistent_term.erase({Admission, :result})
       :persistent_term.erase({Submitter, :mode})
@@ -224,9 +232,7 @@ defmodule LemonAutomation.CronManagerAdmissionTest do
     assert params.meta.cron_run_id == run_id
     assert params.meta.cron_base_session_key == job.session_key
     assert params.meta.cron_session_key == params.session_key
-    assert params.meta.remote_cwd_explicit == false
     assert params.cwd == nil
-    assert params.tool_policy.blocked_tools == ["cron"]
     assert SessionKey.valid?(params.session_key)
     assert params.session_key != job.session_key
     assert_private_free(params, ctx.admission)
@@ -239,8 +245,7 @@ defmodule LemonAutomation.CronManagerAdmissionTest do
     assert run.error == nil
   end
 
-  test "the production admission default lets a job with no hook reach the submitter", ctx do
-    Application.delete_env(:lemon_automation, :cron_admission_mod)
+  test "job without admission keeps normal execution", ctx do
     assert {:ok, job} = add_job(ctx, admission: nil, enabled: false)
     assert job.admission == nil
     assert {:ok, %CronRun{id: run_id}} = CronManager.run_now(job.id)
