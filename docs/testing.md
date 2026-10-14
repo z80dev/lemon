@@ -96,6 +96,18 @@ Shared Elixir helpers live in `LemonCore.Testing.HermeticEnv`:
 Tests that call `System.put_env/2` or `System.delete_env/1` should be
 `async: false` and restore their changes.
 
+Application environment is shared across umbrella app suites too. Tests that
+replace a runtime executor or dispatcher must snapshot it with
+`Application.fetch_env/2` and restore the exact value (or absence) on exit.
+Cross-app wire tests should explicitly configure the real source-side runtime;
+replace only the destination executor when probing remote execution.
+
+Aggregation/property and per-delta cost tests should use the semantic dispatcher
+seam rather than synchronously rendering every accumulated snapshot through an
+adapter/outbox. Own their coalescers with the test supervisor so pending idle
+flushes cannot outlive the test's dispatcher configuration. Keep adapter delivery
+and live remote-stream assertions in their behavioral suites.
+
 ## Behavior-focused coverage
 
 Keep one canonical test for each consumer-visible contract. Prefer observable
