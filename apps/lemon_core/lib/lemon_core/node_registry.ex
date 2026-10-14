@@ -21,6 +21,9 @@ defmodule LemonCore.NodeRegistry do
   @default_timeout_ms 30 * 60 * 1_000
   @default_control_timeout_ms 5_000
   @max_control_text_bytes 16 * 1_024
+  @max_event_bytes 64 * 1_024
+  @event_types ~w(delta started action checkpoint_created checkpoint_restored checkpoint_deleted approval_requested)
+  @approval_decisions ~w(approve_once approve_session approve_agent approve_global deny)
 
   @type node_info :: %{
           id: String.t(),
@@ -83,6 +86,14 @@ defmodule LemonCore.NodeRegistry do
 
       {:lemon_node_result, invoke_id, {:ok, result}}
       {:lemon_node_result, invoke_id, {:error, reason}}
+
+  Live `coding_agent.run` invocations may also deliver ordered events:
+
+      {:lemon_node_event, invoke_id, seq, event}
+
+  Events are invocation/session-bound, start at sequence 1, and are not replayed
+  after disconnect. Same-session retries at or below the accepted sequence are
+  acknowledged without delivering a second event.
   """
   @spec invoke(String.t(), String.t(), map(), keyword()) ::
           {:ok, String.t()} | {:error, term()}
@@ -151,6 +162,27 @@ defmodule LemonCore.NodeRegistry do
       __MODULE__,
       {:complete_session, node_id, connection_pid, generation, invoke_id, result, error}
     )
+  end
+
+  @doc "Accepts a bounded, ordered event from the authenticated invocation session."
+  @spec event_session(String.t(), pid(), non_neg_integer(), String.t(), pos_integer(), map()) ::
+          {:ok, :accepted | :duplicate} | {:error, term()}
+  def event_session(node_id, connection_pid, generation, invoke_id, seq, event) do
+    GenServer.call(
+      __MODULE__,
+      {:event_session, node_id, connection_pid, generation, invoke_id, seq, event}
+    )
+  end
+
+  @doc """
+  Sends an approval decision to the invocation's original live node session.
+
+  Only the invocation recipient process may call this function. `:ok` means
+  targeted dispatch, not that the destination has resolved a pending approval.
+  """
+  @spec approval(String.t(), String.t(), String.t()) :: :ok | {:error, term()}
+  def approval(invoke_id, approval_id, decision) do
+    GenServer.call(__MODULE__, {:approval, invoke_id, approval_id, decision})
   end
 
   @doc "Completes invocation control only from the authenticated session that received it."
@@ -321,6 +353,7 @@ defmodule LemonCore.NodeRegistry do
               timer_ref: timer_ref,
               method: method,
               run_id: run_id,
+              latest_event_seq: 0,
               max_payload_bytes: max_payload_bytes
             }
 
@@ -452,6 +485,58 @@ defmodule LemonCore.NodeRegistry do
 
       _ ->
         {:reply, {:error, :stale_session}, state}
+    end
+  end
+
+  def handle_call(
+        {:event_session, node_id, connection_pid, generation, invoke_id, seq, event},
+        _from,
+        state
+      ) do
+    with {:ok, invocation} <-
+           event_invocation(state, node_id, connection_pid, generation, invoke_id),
+         :ok <- validate_event(seq, event) do
+      cond do
+        seq <= invocation.latest_event_seq ->
+          {:reply, {:ok, :duplicate}, state}
+
+        seq == invocation.latest_event_seq + 1 ->
+          send(invocation.recipient, {:lemon_node_event, invoke_id, seq, event})
+          invocation = %{invocation | latest_event_seq: seq}
+          state = %{state | invocations: Map.put(state.invocations, invoke_id, invocation)}
+          {:reply, {:ok, :accepted}, state}
+
+        true ->
+          {:reply, {:error, :sequence_gap}, state}
+      end
+    else
+      {:error, reason} -> {:reply, {:error, reason}, state}
+    end
+  end
+
+  def handle_call({:approval, invoke_id, approval_id, decision}, {caller, _tag}, state) do
+    with {:ok, invocation} <- active_control_invocation(state, invoke_id),
+         :ok <- authorize_approval_recipient(invocation, caller),
+         :ok <- validate_approval(approval_id, decision),
+         {:ok, node} <- active_invocation_node(state, invocation) do
+      payload = %{
+        "nodeId" => node.id,
+        "invokeId" => invoke_id,
+        "runId" => invocation.run_id,
+        "approvalId" => approval_id,
+        "decision" => decision
+      }
+
+      case JSONPayload.validate(payload, max_bytes: @max_event_bytes) do
+        {:ok, _stats} ->
+          send(node.pid, {:node_event, "node.invoke.approval", payload})
+          {:reply, :ok, state}
+
+        {:error, reason} ->
+          {:reply, {:error, {:invalid_payload, payload_error_kind(reason)}}, state}
+      end
+    else
+      {:error, reason} -> {:reply, {:error, reason}, state}
     end
   end
 
@@ -736,6 +821,56 @@ defmodule LemonCore.NodeRegistry do
 
       not is_integer(timeout_ms) or timeout_ms <= 0 ->
         {:error, :invalid_timeout}
+
+      true ->
+        :ok
+    end
+  end
+
+  defp event_invocation(state, node_id, connection_pid, generation, invoke_id) do
+    case {Map.get(state.nodes, node_id), Map.get(state.invocations, invoke_id)} do
+      {_node, nil} ->
+        {:error, :terminal}
+
+      {_node, %{node_id: expected_node_id}} when expected_node_id != node_id ->
+        {:error, :wrong_node}
+
+      {%{pid: ^connection_pid, generation: ^generation},
+       %{node_pid: ^connection_pid, node_generation: ^generation}}
+      when is_pid(connection_pid) and is_integer(generation) and generation >= 0 ->
+        active_control_invocation(state, invoke_id)
+
+      _ ->
+        {:error, :stale_session}
+    end
+  end
+
+  defp validate_event(seq, event) do
+    cond do
+      not is_integer(seq) or seq <= 0 ->
+        {:error, :invalid_seq}
+
+      not is_map(event) or Map.get(event, "type") not in @event_types ->
+        {:error, :invalid_event_type}
+
+      true ->
+        case JSONPayload.validate(event, max_bytes: @max_event_bytes) do
+          {:ok, _stats} -> :ok
+          {:error, reason} -> {:error, {:invalid_payload, payload_error_kind(reason)}}
+        end
+    end
+  end
+
+  defp authorize_approval_recipient(%{recipient: recipient}, recipient), do: :ok
+  defp authorize_approval_recipient(_invocation, _caller), do: {:error, :forbidden}
+
+  defp validate_approval(approval_id, decision) do
+    cond do
+      not is_binary(approval_id) or String.trim(approval_id) == "" ->
+        {:error, :invalid_approval_id}
+
+      decision not in @approval_decisions ->
+        {:error, :invalid_decision}
 
       true ->
         :ok

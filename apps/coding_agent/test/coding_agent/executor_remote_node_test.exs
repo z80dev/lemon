@@ -244,6 +244,63 @@ defmodule CodingAgent.ExecutorRemoteNodeTest do
              })
   end
 
+  test "bridges remote approvals through the controller store and returns the decision to the owning node" do
+    :ok = LemonCore.Bus.subscribe("exec_approvals")
+    assert :ok = NodeRegistry.register("node-approval", "approval-worker", self())
+    request = request(%{node: "approval-worker", agent_id: "oracle"})
+    assert {:ok, run_ref, _ctx} = Executor.start_run(request, %{}, self())
+    assert_receive {:node_event, "node.invoke.request", invocation}
+    invoke_id = invocation["invokeId"]
+    worker_id = "worker-approval-id"
+    event = %{"type" => "approval_requested", "approvalId" => worker_id, "tool" => "bash",
+              "action" => %{"command_hash" => "safe-test"}, "expiresAtMs" => LemonCore.Clock.now_ms() + 10_000}
+    assert {:ok, :accepted} = NodeRegistry.event_session("node-approval", self(), 0, invoke_id, 1, event)
+    assert_receive %LemonCore.Event{type: :approval_requested,
+      payload: %{pending: %{id: controller_id, run_id: run_id, session_key: session_key}}}
+    assert run_id == request.run_id
+    assert session_key == request.session_key
+    assert LemonCore.ExecApprovalStore.get_pending(controller_id).tool == "bash"
+    refute controller_id == worker_id
+    assert :ok = LemonCore.ExecApprovals.resolve(controller_id, :approve_once)
+    assert_receive {:node_event, "node.invoke.approval",
+      %{"nodeId" => "node-approval", "invokeId" => ^invoke_id, "runId" => ^run_id,
+        "approvalId" => ^worker_id, "decision" => "approve_once"}}
+    assert :ok = NodeRegistry.complete("node-approval", invoke_id, %{"ok" => true, "answer" => "approved"})
+    assert_receive {:engine_event, ^run_ref, %{__event__: :completed, ok: true, answer: "approved"}}
+  end
+
+  test "disconnect cancels pending controller approvals and cannot grant a late decision" do
+    :ok = LemonCore.Bus.subscribe("exec_approvals")
+    assert :ok = NodeRegistry.register("node-disconnect", "disconnect-worker", self())
+    assert {:ok, run_ref, _ctx} = Executor.start_run(request(%{node: "disconnect-worker"}), %{}, self())
+    assert_receive {:node_event, "node.invoke.request", invocation}
+    invoke_id = invocation["invokeId"]
+    assert {:ok, :accepted} = NodeRegistry.event_session("node-disconnect", self(), 0, invoke_id, 1,
+      %{"type" => "approval_requested", "approvalId" => "disconnect-approval", "tool" => "bash",
+        "action" => %{"command_hash" => "disconnect-test"}})
+    assert_receive %LemonCore.Event{type: :approval_requested, payload: %{pending: %{id: controller_id}}}
+    assert :ok = NodeRegistry.unregister("node-disconnect", self())
+    assert_receive {:engine_event, ^run_ref, %{__event__: :completed, ok: false}}
+    assert_receive %LemonCore.Event{type: :approval_resolved,
+      payload: %{approval_id: ^controller_id, decision: :cancelled}}
+    assert LemonCore.ExecApprovalStore.get_pending(controller_id) == nil
+    assert {:error, :not_pending} = LemonCore.ExecApprovals.resolve(controller_id, :approve_once)
+    refute_receive {:node_event, "node.invoke.approval", %{"decision" => "approve_once"}}
+  end
+
+  test "an expired remote approval returns denial without granting execution" do
+    assert :ok = NodeRegistry.register("node-expired", "expired-worker", self())
+    assert {:ok, _run_ref, ctx} = Executor.start_run(request(%{node: "expired-worker"}), %{}, self())
+    assert_receive {:node_event, "node.invoke.request", invocation}
+    invoke_id = invocation["invokeId"]
+    assert {:ok, :accepted} = NodeRegistry.event_session("node-expired", self(), 0, invoke_id, 1,
+      %{"type" => "approval_requested", "approvalId" => "expired-approval", "tool" => "bash",
+        "action" => %{"command_hash" => "expired-test"}, "expiresAtMs" => LemonCore.Clock.now_ms() - 1})
+    assert_receive {:node_event, "node.invoke.approval",
+      %{"invokeId" => ^invoke_id, "approvalId" => "expired-approval", "decision" => "deny"}}
+    :ok = Executor.cancel(ctx)
+  end
+
   defp request(meta) do
     %ExecutionRequest{
       run_id: "remote-run-#{System.unique_integer([:positive])}",

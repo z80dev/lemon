@@ -109,6 +109,26 @@ Subscribers:
 
 > **Note (2026-09-27):** `LemonAutomation.HeartbeatManager` has since been removed. Heartbeat suppression now runs synchronously in `CronManager` terminalization via `LemonAutomation.Heartbeat`, so rows and findings in this audit that cite `heartbeat_manager.ex` are historical.
 
+#### Named execution-node transport
+
+Named-node `coding_agent.run` executions retain the same run/session Bus contract.
+Workers forward sequenced, bounded JSON frames via the node-only
+`node.invoke.event` method; `NodeRegistry` authorizes the invocation's live
+connection/generation, rejects gaps and deduplicates accepted sequences.
+`CodingAgent.Executor.RemoteSessionRunner` sends deltas and tool actions through
+the usual gateway sink, so the gateway assigns normal delta sequence numbers and
+the router forwards the unchanged typed events to the session topic. Checkpoints
+use the same sink ordering and existing checkpoint event names. The controller
+emits one started event and the terminal `node.invoke.result` still completes the run.
+
+Remote approvals use `LemonCore.ExecApprovals` on the controller, including its
+existing requested/resolved events and store. Controller IDs are separate from
+worker IDs; only the invocation recipient can deliver a decision back to the
+owning node. Pending requests are denied/cancelled on disconnect, timeout or owner
+death. No live-event replay survives a disconnected invocation. Wire envelopes,
+limits and decision shapes are documented in the
+source file `apps/lemon_control_plane/README.md`, under “Live named-node runs”.
+
 ### 2.2 `session:<session_key>` — 4 subscribers
 
 | Event type | Publisher | Payload | Env |

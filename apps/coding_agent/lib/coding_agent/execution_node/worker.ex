@@ -13,12 +13,20 @@ defmodule CodingAgent.ExecutionNode.Worker do
   require Logger
 
   alias CodingAgent.ExecutionNode.{Codec, Socket, TokenStore}
+  alias CodingAgent.Executor.RemoteEventCodec
+  alias LemonCore.{Bus, ExecApprovals}
   alias LemonGateway.ExecutionRequest
 
   @protocol_version 1
   @max_control_text_bytes 16 * 1_024
+  @max_pending_events 64
+  @approval_decisions %{
+    "approve_once" => :approve_once, "approve_session" => :approve_session,
+    "approve_agent" => :approve_agent, "approve_global" => :approve_global, "deny" => :deny
+  }
   @capabilities %{
     "coding_agent.run" => %{"version" => @protocol_version},
+    "node.invoke.event" => %{"version" => @protocol_version, "maxBytes" => 65_536},
     "node.invoke.control" => %{
       "version" => @protocol_version,
       "operations" => ["steer", "redirect"],
@@ -70,6 +78,7 @@ defmodule CodingAgent.ExecutionNode.Worker do
          {:ok, default_cwd} <- existing_directory(Keyword.get(opts, :cwd, File.cwd!())),
          {:ok, state} <- build_state(opts, name, controller, default_cwd),
          {:ok, state} <- connect_initial(state, opts) do
+      :ok = Bus.subscribe("exec_approvals")
       {:ok, state}
     else
       {:error, reason} -> {:stop, reason}
@@ -247,7 +256,8 @@ defmodule CodingAgent.ExecutionNode.Worker do
               }
             end)
 
-          {:noreply, %{state | invocations: invocations}}
+          state = %{state | invocations: invocations}
+          {:noreply, forward_event(state, invoke_id, RemoteEventCodec.encode_delta(text))}
         end
     end
   end
@@ -255,11 +265,44 @@ defmodule CodingAgent.ExecutionNode.Worker do
   def handle_info({:engine_event, run_ref, %{__event__: :completed} = completed}, state) do
     case Map.get(state.run_refs, run_ref) do
       nil -> {:noreply, state}
-      invoke_id -> {:noreply, complete_invocation(state, invoke_id, completed)}
+      invoke_id ->
+        invocation = Map.fetch!(state.invocations, invoke_id)
+        if invocation.monitor_ref, do: Process.demonitor(invocation.monitor_ref, [:flush])
+        invocation = %{invocation | completed: completed, monitor_ref: nil}
+        state = put_invocation(state, invoke_id, invocation)
+        {:noreply, drain_events(state, invoke_id)}
     end
   end
 
-  def handle_info({:engine_event, _run_ref, _event}, state), do: {:noreply, state}
+  def handle_info({:engine_event, run_ref, event}, state) do
+    case Map.get(state.run_refs, run_ref) do
+      nil -> {:noreply, state}
+      invoke_id -> {:noreply, forward_event(state, invoke_id, RemoteEventCodec.encode_engine(event))}
+    end
+  end
+
+  def handle_info(%LemonCore.Event{type: :approval_requested,
+                                  payload: %{pending: %{session_id: session_id}} = payload}, state)
+      when is_binary(session_id) do
+    pending = payload.pending
+    case invocation_for_run(state, pending.run_id) do
+      nil -> {:noreply, state}
+      {invoke_id, invocation} ->
+        invocation = %{invocation | approvals: MapSet.put(invocation.approvals, pending.id)}
+        state = put_invocation(state, invoke_id, invocation)
+        {:noreply, forward_event(state, invoke_id, RemoteEventCodec.encode_approval(pending))}
+    end
+  end
+
+  def handle_info(%LemonCore.Event{type: type, payload: payload, meta: meta}, state)
+      when type in [:checkpoint_created, :checkpoint_restored, :checkpoint_deleted] and
+             is_map(meta) and not is_map_key(meta, :remote_node) do
+    case invocation_for_run(state, meta[:run_id]) do
+      nil -> {:noreply, state}
+      {invoke_id, _invocation} ->
+        {:noreply, forward_event(state, invoke_id, RemoteEventCodec.encode_checkpoint(type, payload))}
+    end
+  end
 
   def handle_info({:DOWN, monitor_ref, :process, _pid, reason}, state) do
     case Enum.find(state.invocations, fn {_id, invocation} ->
@@ -280,6 +323,12 @@ defmodule CodingAgent.ExecutionNode.Worker do
 
   def handle_info({:EXIT, _pid, _reason}, state), do: {:noreply, state}
   def handle_info(_message, state), do: {:noreply, state}
+
+  @impl true
+  def terminate(_reason, state) do
+    _ = cancel_all_invocations(state)
+    :ok
+  end
 
   defp handle_socket_response(:pair_request, {:ok, payload}, state) when is_map(payload) do
     case payload["pairingId"] do
@@ -354,6 +403,20 @@ defmodule CodingAgent.ExecutionNode.Worker do
 
   defp handle_socket_response({:pair_challenge, _node_id}, {:error, reason}, state) do
     handle_pairing_error(reason, state)
+  end
+
+  defp handle_socket_response({:invoke_event, invoke_id, seq}, result, state) do
+    case Map.get(state.invocations, invoke_id) do
+      %{inflight: ^seq} = invocation ->
+        case result do
+          {:ok, %{"received" => true, "seq" => ^seq}} ->
+            state = put_invocation(state, invoke_id, %{invocation | inflight: nil})
+            {:noreply, drain_events(state, invoke_id)}
+          _ ->
+            {:noreply, fail_stream(state, invoke_id, :event_delivery_failed)}
+        end
+      _ -> {:noreply, state}
+    end
   end
 
   defp handle_socket_response(_tag, _result, state), do: {:noreply, state}
@@ -436,12 +499,30 @@ defmodule CodingAgent.ExecutionNode.Worker do
     end
   end
 
+  defp handle_node_event("node.invoke.approval", payload, state) do
+    invoke_id = payload["invokeId"]
+    approval_id = payload["approvalId"]
+    decision = Map.get(@approval_decisions, payload["decision"])
+    case Map.get(state.invocations, invoke_id) do
+      %{run_id: run_id, approvals: approvals} = invocation ->
+        if targeted?(payload, state) and payload["runId"] == run_id and
+             MapSet.member?(approvals, approval_id) and not is_nil(decision) do
+          _ = ExecApprovals.resolve(approval_id, decision)
+          invocation = %{invocation | approvals: MapSet.delete(approvals, approval_id)}
+          {:noreply, put_invocation(state, invoke_id, invocation)}
+        else
+          {:noreply, state}
+        end
+      _ -> {:noreply, state}
+    end
+  end
+
   defp handle_node_event(_event, _payload, state), do: {:noreply, state}
 
   defp start_invocation(state, invoke_id, args) do
     with {:ok, request, run_opts} <- execution_request(args, state, invoke_id),
-         {:ok, run_ref, context} <-
-           state.executor_module.start_run(request, run_opts, self()) do
+         true <- is_nil(invocation_for_run(state, request.run_id)),
+         {:ok, run_ref, context} <- start_local_run(state, request, run_opts) do
       runner_pid = Map.get(context, :runner_pid)
       monitor_ref = if is_pid(runner_pid), do: Process.monitor(runner_pid)
 
@@ -452,7 +533,13 @@ defmodule CodingAgent.ExecutionNode.Worker do
         deltas: [],
         delta_bytes: 0,
         delta_count: 0,
-        run_id: request.run_id
+        run_id: request.run_id,
+        event_seq: 0,
+        event_queue: :queue.new(),
+        pending_events: 0,
+        inflight: nil,
+        completed: nil,
+        approvals: MapSet.new()
       }
 
       %{
@@ -462,6 +549,19 @@ defmodule CodingAgent.ExecutionNode.Worker do
       }
     else
       {:error, reason} -> send_invoke_error(state, invoke_id, reason)
+      false -> send_invoke_error(state, invoke_id, :run_already_active)
+    end
+  end
+
+  defp start_local_run(state, request, run_opts) do
+    topic = Bus.run_topic(request.run_id)
+    :ok = Bus.subscribe(topic)
+    case state.executor_module.start_run(
+           request, Map.put(run_opts, :approval_timeout_ms, 600_000), self()) do
+      {:ok, _run_ref, _context} = result -> result
+      {:error, _reason} = error ->
+        Bus.unsubscribe(topic)
+        error
     end
   end
 
@@ -668,6 +768,8 @@ defmodule CodingAgent.ExecutionNode.Worker do
 
       {invocation, invocations} ->
         if invocation.monitor_ref, do: Process.demonitor(invocation.monitor_ref, [:flush])
+        Bus.unsubscribe(Bus.run_topic(invocation.run_id))
+        Enum.each(invocation.approvals, &ExecApprovals.cancel(&1, "remote invocation ended"))
 
         %{
           state
@@ -1000,15 +1102,67 @@ defmodule CodingAgent.ExecutionNode.Worker do
   defp notify(_state, _message), do: :ok
 
   defp cancel_all_invocations(state) do
-    Enum.each(state.invocations, fn {_invoke_id, invocation} ->
+    Enum.reduce(state.invocations, state, fn {invoke_id, invocation}, current ->
       _ = state.executor_module.cancel(invocation.context)
-
-      if invocation.monitor_ref do
-        Process.demonitor(invocation.monitor_ref, [:flush])
-      end
+      remove_invocation(current, invoke_id)
     end)
+  end
 
-    %{state | invocations: %{}, run_refs: %{}}
+  defp invocation_for_run(state, run_id) when is_binary(run_id) do
+    Enum.find(state.invocations, fn {_id, invocation} -> invocation.run_id == run_id end)
+  end
+  defp invocation_for_run(_state, _run_id), do: nil
+
+  defp put_invocation(state, invoke_id, invocation) do
+    %{state | invocations: Map.put(state.invocations, invoke_id, invocation)}
+  end
+
+  defp forward_event(state, _invoke_id, :ignore), do: state
+  defp forward_event(state, invoke_id, {:error, _reason}),
+    do: fail_stream(state, invoke_id, :event_payload_limit_exceeded)
+
+  defp forward_event(state, invoke_id, {:ok, event}) do
+    invocation = Map.fetch!(state.invocations, invoke_id)
+    if invocation.pending_events >= @max_pending_events do
+      fail_stream(state, invoke_id, :event_backpressure_limit_exceeded)
+    else
+      invocation = %{invocation |
+        event_queue: :queue.in(event, invocation.event_queue),
+        pending_events: invocation.pending_events + 1}
+      state |> put_invocation(invoke_id, invocation) |> drain_events(invoke_id)
+    end
+  end
+
+  defp drain_events(state, invoke_id) do
+    invocation = Map.fetch!(state.invocations, invoke_id)
+    if is_nil(invocation.inflight) do
+      case :queue.out(invocation.event_queue) do
+        {{:value, event}, queue} ->
+          seq = invocation.event_seq + 1
+          params = %{"invokeId" => invoke_id, "seq" => seq, "event" => event}
+          case LemonCore.JSONPayload.validate(params, max_bytes: min(result_content_limit(state), 65_536)) do
+            {:ok, _stats} ->
+              request(state, "node.invoke.event", params, {:invoke_event, invoke_id, seq})
+              put_invocation(state, invoke_id, %{invocation |
+                event_seq: seq, inflight: seq, event_queue: queue,
+                pending_events: invocation.pending_events - 1})
+            {:error, _reason} ->
+              fail_stream(state, invoke_id, :event_payload_limit_exceeded)
+          end
+        {:empty, _queue} ->
+          if invocation.completed,
+            do: complete_invocation(state, invoke_id, invocation.completed),
+            else: state
+      end
+    else
+      state
+    end
+  end
+
+  defp fail_stream(state, invoke_id, reason) do
+    invocation = Map.fetch!(state.invocations, invoke_id)
+    _ = state.executor_module.cancel(invocation.context)
+    state |> send_invoke_error(invoke_id, reason) |> remove_invocation(invoke_id)
   end
 
   defp safe_reason(reason) do

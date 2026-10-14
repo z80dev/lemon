@@ -266,6 +266,7 @@ defmodule LemonControlPlane.Auth.Authorize do
   def node_only_method?(method) do
     method in [
       "node.invoke.result",
+      "node.invoke.event",
       "node.invoke.control.result"
     ]
   end
@@ -346,7 +347,7 @@ defmodule LemonControlPlane.Auth.Authorize do
 
   # Node-only methods
   defp node_method?(method) do
-    method in ["node.invoke.result", "node.invoke.control.result"]
+    method in ["node.invoke.result", "node.invoke.event", "node.invoke.control.result"]
   end
 
   # Write methods - require operator.write

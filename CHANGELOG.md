@@ -8,7 +8,15 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
-No unreleased changes yet.
+### Added
+
+- Named execution-node runs now stream live chat deltas, tool activity and
+  checkpoints through the controller's normal run/session events. Invocation-bound,
+  sequenced `node.invoke.event` frames reject foreign/stale node sessions, ignore
+  duplicates and enforce bounded payload/backpressure limits. Remote tool approvals
+  use the controller approval store and return decisions to the owning worker;
+  disconnects and timeouts fail closed. Terminal results, cancellation and
+  steer/redirect retain their existing semantics.
 
 ---
 

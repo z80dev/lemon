@@ -4,13 +4,13 @@ defmodule CodingAgent.Executor.RemoteSessionRunner do
 
   The source owns gateway lifecycle signaling while `LemonCore.NodeRegistry`
   owns targeting, timeout, disconnect, and cancellation of the remote
-  invocation. The destination returns one JSON-safe terminal result for the
-  `coding_agent.run` method.
+  invocation. Live events traverse the normal gateway sink (and therefore the
+  run/session Bus topics); terminal results remain a separate final outcome.
   """
 
   use GenServer
 
-  alias CodingAgent.Executor.RemoteRequestCodec
+  alias CodingAgent.Executor.{RemoteEventCodec, RemoteRequestCodec}
   alias LemonCore.NodeRegistry
   alias LemonGateway.Event
 
@@ -27,6 +27,11 @@ defmodule CodingAgent.Executor.RemoteSessionRunner do
     :request,
     :timeout_ms,
     :control_timeout_ms,
+    :run_id,
+    :session_key,
+    :agent_id,
+    event_seq: 0,
+    approvals: %{},
     pending_controls: %{}
   ]
 
@@ -61,6 +66,7 @@ defmodule CodingAgent.Executor.RemoteSessionRunner do
     timeout_ms = get_opt(run_opts, :remote_timeout_ms) || @default_timeout_ms
 
     control_timeout_ms = control_timeout(get_opt(run_opts, :remote_control_timeout_ms))
+    meta = request.meta || %{}
 
     {:ok,
      %__MODULE__{
@@ -69,7 +75,10 @@ defmodule CodingAgent.Executor.RemoteSessionRunner do
        timeout_ms: timeout_ms,
        control_timeout_ms: control_timeout_ms,
        sink_pid: sink_pid,
-       run_ref: run_ref
+       run_ref: run_ref,
+       run_id: request.run_id,
+       session_key: request.session_key,
+       agent_id: meta[:agent_id] || meta["agent_id"]
      }, {:continue, :invoke}}
   end
 
@@ -161,7 +170,115 @@ defmodule CodingAgent.Executor.RemoteSessionRunner do
     end
   end
 
+  def handle_info({:lemon_node_event, invoke_id, seq, event}, %{invoke_id: invoke_id} = state)
+      when seq == state.event_seq + 1 do
+    state = %{state | event_seq: seq}
+    case RemoteEventCodec.decode(event) do
+      {:ok, {:delta, text}} ->
+        send(state.sink_pid, {:engine_delta, state.run_ref, text})
+        {:noreply, state}
+      {:ok, {:engine, %{__event__: :started}}} ->
+        # The controller already emitted the gateway started event on dispatch.
+        {:noreply, state}
+      {:ok, {:engine, event}} ->
+        send(state.sink_pid, {:engine_event, state.run_ref, event})
+        {:noreply, state}
+      {:ok, {:checkpoint, type, payload}} ->
+        send(state.sink_pid, {:engine_checkpoint, state.run_ref, type, payload})
+        {:noreply, state}
+      {:ok, {:approval, approval}} ->
+        {:noreply, request_approval(state, approval)}
+      {:error, _reason} ->
+        :ok = NodeRegistry.cancel(state.invoke_id, :invalid_remote_event)
+        emit_error(state, :invalid_remote_event)
+        {:stop, :normal, reply_pending_controls(state, {:error, :terminal})}
+    end
+  end
+
+  def handle_info({ref, result}, state) when is_reference(ref) do
+    case Enum.find(state.approvals, fn {_id, approval} -> approval.task.ref == ref end) do
+      {worker_id, approval} ->
+        Process.demonitor(ref, [:flush])
+        decision = case result do
+          {:ok, :approved, scope}
+              when scope in [:approve_once, :approve_session, :approve_agent, :approve_global] ->
+            Atom.to_string(scope)
+          {:ok, :approved, _persisted_scope} -> "approve_once"
+          _ -> "deny"
+        end
+        _ = NodeRegistry.approval(state.invoke_id, worker_id, decision)
+        {:noreply, %{state | approvals: Map.delete(state.approvals, worker_id)}}
+      nil -> {:noreply, state}
+    end
+  end
+
+  def handle_info({:DOWN, ref, :process, _pid, _reason}, state) do
+    case Enum.find(state.approvals, fn {_id, approval} -> approval.task.ref == ref end) do
+      {worker_id, approval} ->
+        _ = LemonCore.ExecApprovals.cancel(approval.controller_id, "remote approval waiter ended")
+        _ = NodeRegistry.approval(state.invoke_id, worker_id, "deny")
+        {:noreply, %{state | approvals: Map.delete(state.approvals, worker_id)}}
+      nil -> {:noreply, state}
+    end
+  end
+
   def handle_info(_message, state), do: {:noreply, state}
+
+  @impl true
+  def terminate(_reason, state) do
+    Enum.each(state.approvals, fn {_worker_id, approval} ->
+      _ = Task.shutdown(approval.task, :brutal_kill)
+      _ = LemonCore.ExecApprovals.cancel(approval.controller_id, "remote invocation ended")
+    end)
+    :ok
+  end
+
+  defp request_approval(state, approval) do
+    worker_id = approval.approval_id
+    cond do
+      Map.has_key?(state.approvals, worker_id) -> state
+      map_size(state.approvals) >= 32 ->
+        _ = NodeRegistry.approval(state.invoke_id, worker_id, "deny")
+        state
+      true ->
+      controller_id = LemonCore.Id.approval_id()
+      remaining = case approval.expires_at_ms do
+        ms when is_integer(ms) -> max(ms - LemonCore.Clock.now_ms(), 0)
+        _ -> 600_000
+      end
+      params = %{
+        approval_id: controller_id, run_id: state.run_id, session_key: state.session_key,
+        agent_id: state.agent_id, tool: approval.tool, action: approval.action,
+        rationale: approval.rationale, expires_in_ms: min(remaining, 600_000)
+      }
+      owner = self()
+      task = Task.async(fn ->
+        waiter = self()
+        spawn(fn -> guard_approval(owner, waiter, controller_id) end)
+        LemonCore.ExecApprovals.request(params)
+      end)
+      entry = %{task: task, controller_id: controller_id}
+      %{state | approvals: Map.put(state.approvals, worker_id, entry)}
+    end
+  end
+
+  # A brutal owner death skips GenServer.terminate/2. Kill and monitor-confirm
+  # the waiter before cancelling its store row, including registration races.
+  defp guard_approval(owner, waiter, approval_id) do
+    owner_ref = Process.monitor(owner)
+    waiter_ref = Process.monitor(waiter)
+    receive do
+      {:DOWN, ^owner_ref, :process, _pid, _reason} ->
+        Process.exit(waiter, :kill)
+        receive do
+          {:DOWN, ^waiter_ref, :process, _pid, _reason} -> :ok
+        end
+      {:DOWN, ^waiter_ref, :process, _pid, _reason} ->
+        Process.demonitor(owner_ref, [:flush])
+    end
+    _ = LemonCore.ExecApprovals.cancel(approval_id, "remote approval owner ended")
+    :ok
+  end
 
   defp emit_completed(state, completed) do
     event =

@@ -250,6 +250,65 @@ steer/redirect are invocation-bound and require destination acknowledgement.
 Plaintext off loopback requires explicit `--allow-insecure-controller` and a
 verified encrypted overlay; otherwise use TLS.
 
+### Live named-node runs
+
+`coding_agent.run` workers stream live deltas, tool actions and checkpoints through
+the authenticated node socket. The controller's normal executor/gateway/router
+path publishes them on `run:<runId>` and `session:<sessionKey>`; existing `chat`
+and `agent` WebSocket projections are unchanged. A gateway started event is emitted
+once on dispatch, and `node.invoke.result` remains the sole terminal outcome.
+
+**Node-only RPC: `node.invoke.event`** (scope `invoke` or `event`):
+
+```json
+{"invokeId":"invoke-id","seq":1,"event":{"type":"delta","text":"Hello"}}
+```
+
+Success payload:
+
+```json
+{"invokeId":"invoke-id","seq":1,"received":true,"duplicate":false}
+```
+
+Sequence starts at 1 and covers every event in the invocation, not just text.
+Only the node ID, live connection and credential generation owning the invocation
+may submit frames. Already-accepted sequence numbers return `duplicate:true`
+without republishing; a gap is rejected. Supported envelopes:
+
+| `event.type` | Other fields |
+| --- | --- |
+| `delta` | `text` |
+| `started` | `title` (optional; the controller does not emit a second start) |
+| `action` | `action:{id,kind,title,detail}`, `phase:"started"|"updated"|"completed"`, optional `ok,message,level` |
+| `checkpoint_created`, `checkpoint_restored`, `checkpoint_deleted` | `checkpointId,checkpointKind,tool,action,pathCount,paths,restoredCount` |
+| `approval_requested` | `approvalId,tool,action,rationale,expiresAtMs` |
+
+Events are limited to 64 KiB JSON with the normal depth/item limits. Workers send
+one frame awaiting acknowledgement and retain at most 64 queued frames. An
+oversized event, exhausted queue, rejected frame or acknowledgement timeout cancels
+destination execution and returns a failed terminal result rather than dropping
+events. The terminal result waits for all live-frame acknowledgements. Disconnect,
+node replacement, invocation timeout or cancellation ends the invocation; reconnect
+does not resume/replay cancelled work, and old-session frames cannot revive it.
+
+Remote tool approvals enter the controller's existing approval store and emit
+`exec.approval.requested/resolved`; resolve the **controller** approval ID with
+`exec.approval.resolve` as usual. Worker approval IDs are separate and never used
+as controller store keys. The broker sends only the owning worker a targeted event:
+
+```json
+{"event":"node.invoke.approval","payload":{"nodeId":"node-id","invokeId":"invoke-id","runId":"run-id","approvalId":"worker-approval-id","decision":"approve_once"}}
+```
+
+The other decisions are `approve_session`, `approve_agent`, `approve_global` and
+`deny`. Delivery is invocation-bound and callable only by the invocation recipient,
+not by operator or node RPC callers. The worker resolves only an approval it observed
+for that live invocation and run. Approval waits are capped at ten minutes;
+disconnect/timeout/caller death cancels pending requests and never authorizes tools.
+Cancellation and steer/redirect keep their existing terminal and acknowledgement
+semantics.
+
+
 ## Other HTTP surfaces
 
 - `/healthz`: local service health; it does not prove a provider-backed turn.

@@ -134,6 +134,7 @@ defmodule LemonControlPlane.Methods.Registry do
     LemonControlPlane.Methods.NodePairApprove,
     LemonControlPlane.Methods.NodeInvoke,
     LemonControlPlane.Methods.NodeInvokeResult,
+    LemonControlPlane.Methods.NodeInvokeEvent,
     LemonControlPlane.Methods.NodeInvokeControlResult,
     LemonControlPlane.Methods.NodesList,
     LemonControlPlane.Methods.NodesRevoke,

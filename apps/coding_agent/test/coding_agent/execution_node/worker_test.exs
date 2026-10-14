@@ -115,6 +115,17 @@ defmodule CodingAgent.ExecutionNode.WorkerTest do
     send(worker, {:engine_delta, run_ref, "done "})
     send(worker, {:engine_delta, run_ref, "remotely"})
 
+
+    assert_receive {:socket_request, ^socket, "node.invoke.event",
+                    %{"invokeId" => "invoke-1", "seq" => 1,
+                      "event" => %{"type" => "delta", "text" => "done "}}, tag1, 30_000}
+    send(worker, {:execution_node_socket, socket,
+                  {:response, tag1, {:ok, %{"received" => true, "seq" => 1}}}})
+    assert_receive {:socket_request, ^socket, "node.invoke.event",
+                    %{"invokeId" => "invoke-1", "seq" => 2,
+                      "event" => %{"type" => "delta", "text" => "remotely"}}, tag2, 30_000}
+    send(worker, {:execution_node_socket, socket,
+                  {:response, tag2, {:ok, %{"received" => true, "seq" => 2}}}})
     send(worker, {
       :engine_event,
       run_ref,
@@ -708,6 +719,42 @@ defmodule CodingAgent.ExecutionNode.WorkerTest do
              )
 
     assert request.cwd == nested
+  end
+
+  @tag :tmp_dir
+  test "event acknowledgement failure cancels the run instead of silently losing output", %{tmp_dir: tmp_dir} do
+    {:ok, worker} = start_worker(tmp_dir, token: "node-token")
+    assert_receive {:socket_started, socket, _opts}
+    send(worker, {:execution_node_socket, socket,
+                  {:connected, %{"auth" => %{"clientId" => "node-1"}}}})
+    invoke(worker, socket, "invoke-stream-fail", "node-1",
+           %{"version" => 1, "prompt" => "stream", "meta" => %{}})
+    assert_receive {:executor_started, _request, _opts, ^worker, run_ref, context}
+    send(worker, {:engine_delta, run_ref, "live"})
+    assert_receive {:socket_request, ^socket, "node.invoke.event", _params, tag, 30_000}
+    send(worker, {:execution_node_socket, socket, {:response, tag, {:error, :timeout}}})
+    assert_receive {:executor_cancelled, ^context}
+    assert_receive {:socket_request, ^socket, "node.invoke.result",
+                    %{"error" => "event_delivery_failed"}, _, 30_000}
+    Process.exit(context.runner_pid, :kill)
+    GenServer.stop(worker)
+  end
+
+  @tag :tmp_dir
+  test "bounded unacknowledged events fail closed", %{tmp_dir: tmp_dir} do
+    {:ok, worker} = start_worker(tmp_dir, token: "node-token")
+    assert_receive {:socket_started, socket, _opts}
+    send(worker, {:execution_node_socket, socket,
+                  {:connected, %{"auth" => %{"clientId" => "node-1"}}}})
+    invoke(worker, socket, "invoke-stream-bound", "node-1",
+           %{"version" => 1, "prompt" => "stream", "meta" => %{}})
+    assert_receive {:executor_started, _request, _opts, ^worker, run_ref, context}
+    for _ <- 1..66, do: send(worker, {:engine_delta, run_ref, "x"})
+    assert_receive {:executor_cancelled, ^context}
+    assert_receive {:socket_request, ^socket, "node.invoke.result",
+                    %{"error" => "event_backpressure_limit_exceeded"}, _, 30_000}
+    Process.exit(context.runner_pid, :kill)
+    GenServer.stop(worker)
   end
 
   defp start_worker(tmp_dir, extra_opts) do
