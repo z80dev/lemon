@@ -28,6 +28,7 @@ struct SidebarView: View {
     @State private var visibleRows: Set<ID> = []
     @State private var previews: [ID: SidebarPreview] = [:]
     @State private var action = UIActionState()
+    @State private var showConnection = false
     @FocusState private var filterFocused: Bool
     @Environment(\.lbReduceMotion) private var reduceMotion
 
@@ -87,6 +88,14 @@ struct SidebarView: View {
         .toolbar { phoneToolbar }
         #endif
         .task(id: previewKey) { await loadPreviews() }
+        #if os(macOS)
+        .popover(isPresented: $showConnection) { ScrollView { ConnectionStatusView(store: store).padding(12) }.frame(width: 440, height: 520) }
+        #else
+        .sheet(isPresented: $showConnection) {
+            NavigationStack { ScrollView { ConnectionStatusView(store: store).padding() }.navigationTitle("Connection").toolbar { Button("Done") { showConnection = false } } }
+        }
+        #endif
+        .onChange(of: store.connectionIssue) { _, issue in if issue == nil && store.connectionState == "online" { showConnection = false } }
         .onChange(of: filterFocusRequest) { _, _ in
             lbWithAnimation(reduceMotion, LBMotion.snappy) { searching = true }
             filterFocused = true
@@ -147,7 +156,7 @@ struct SidebarView: View {
         .frame(height: 52)
         #else
         // iPhone uses the navigation bar (large "Chats" title, + button) and pull-down search.
-        if !store.isOnline { HStack { Spacer(); connectionPill }.padding(.horizontal, 16).padding(.vertical, 4) }
+        if !store.isOnline || store.connectionIssue != nil { HStack { Spacer(); connectionPill }.padding(.horizontal, 16).padding(.vertical, 4) }
         #endif
     }
 
@@ -169,20 +178,13 @@ struct SidebarView: View {
     #endif
 
     @ViewBuilder private var connectionPill: some View {
-        switch store.connectionState {
-        case "online": EmptyView()
-        case "reconnect_required":
-            Button("Reconnect", action: reconnect).buttonStyle(.pill(.primary(LB.warning, .white), compact: true))
-        default:
-            HStack(spacing: 5) {
-                if store.connectionState == "syncing" { ProgressView().controlSize(.mini) }
-                else { Circle().fill(LB.warning).frame(width: 6, height: 6) }
-                Text(store.connectionState == "syncing" ? "Syncing" : "Offline")
-            }
-            .font(LBFont.chip).foregroundStyle(LB.muted)
-            .padding(.horizontal, 8).padding(.vertical, 4)
-            .background(Capsule().fill(LB.fill))
-            .accessibilityElement(children: .combine)
+        if !store.isOnline || store.connectionIssue != nil {
+            Button { showConnection = true } label: {
+                HStack(spacing: 5) {
+                    Circle().fill(LB.warning).frame(width: 6, height: 6)
+                    Text(store.connectionIssue?.layer == .controllerDown ? "Lemon offline" : store.connectionState == "reconnect_required" ? "Sign in again" : store.connectionState == "syncing" ? "Syncing" : "Offline")
+                }.font(LBFont.chip).foregroundStyle(LB.muted)
+            }.buttonStyle(.pill(.secondary, compact: true)).accessibilityHint("Show connection details and fixes")
         }
     }
 
