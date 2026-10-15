@@ -10,6 +10,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Added
 
+- Expanded the LSP registry from six to 42 primary language servers, with
+  installation hints, unique extension ownership, and case-insensitive
+  `LemonLsp.Servers.language_id/1` lookup.
 - Parallel omp workers: the `omp` tool can start a validated batch concurrently
   with `start_many`, gather all or any worker with `wait` and `ids`, stream
   throttled combined progress, and report per-task failures and total usage.
