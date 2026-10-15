@@ -49,6 +49,7 @@ defmodule LemonChannels.Adapters.Telegram.Config do
     errors
     |> validate_bot_token(Map.get(section, :bot_token))
     |> validate_compaction(Map.get(section, :compaction))
+    |> validate_unauthorized_dm_behavior(Map.get(section, :unauthorized_dm_behavior), "telegram")
   end
 
   def validate(_section, errors), do: ["gateway.telegram: must be a map" | errors]

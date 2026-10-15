@@ -356,7 +356,8 @@ defmodule LemonControlPlane.WS.Connection do
     ctx = %{
       auth: state.auth,
       conn_id: state.conn_id,
-      conn_pid: self()
+      conn_pid: self(),
+      local?: state.local?
     }
 
     case Registry.dispatch_mode(method) do

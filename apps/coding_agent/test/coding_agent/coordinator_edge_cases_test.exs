@@ -455,19 +455,22 @@ defmodule CodingAgent.CoordinatorEdgeCasesTest do
 
     @tag :tmp_dir
     test "handles back-to-back timeouts", %{tmp_dir: tmp_dir} do
-      coordinator = start_coordinator(cwd: tmp_dir)
+      coordinator = start_controlled_coordinator(tmp_dir)
 
       for _ <- 1..3 do
-        specs = [%{prompt: "Task"}]
-        results = Coordinator.run_subagents(coordinator, specs, timeout: 10)
-        assert [result] = results
-        assert result.status in [:timeout, :error]
+        task = Task.async(fn -> Coordinator.run_subagents(coordinator, [%{prompt: "Task"}]) end)
+        assert_receive {:session_prompted, session, "Task"}, 1_000
+        ref = Process.monitor(session)
+        %{batches: batches} = :sys.get_state(coordinator)
+        [batch_ref] = Map.keys(batches)
+        send(coordinator, {:batch_timeout, batch_ref})
+
+        assert [%{status: :timeout, error: :timeout}] = Task.await(task)
+        assert_receive {:DOWN, ^ref, :process, ^session, :shutdown}, 1_000
+        assert Coordinator.list_active(coordinator) == []
       end
 
       assert Process.alive?(coordinator)
-
-      # A terminal batch may return while a late admission is still shutting down.
-      assert_eventually(fn -> Coordinator.list_active(coordinator) == [] end, 10_000)
     end
   end
 
@@ -486,37 +489,37 @@ defmodule CodingAgent.CoordinatorEdgeCasesTest do
 
     @tag :tmp_dir
     test "abort_all during active run clears state properly", %{tmp_dir: tmp_dir} do
-      coordinator = start_coordinator(cwd: tmp_dir, default_timeout: 30_000)
+      coordinator = start_controlled_coordinator(tmp_dir, default_timeout: 30_000)
+      specs = [%{prompt: "Task 1"}, %{prompt: "Task 2"}]
 
-      parent = self()
+      task =
+        Task.async(fn -> Coordinator.run_subagents(coordinator, specs, timeout: 10_000) end)
 
-      # Start long-running subagents
-      Task.start(fn ->
-        results =
-          Coordinator.run_subagents(coordinator, [%{prompt: "Task 1"}, %{prompt: "Task 2"}],
-            timeout: 10_000
-          )
+      # Admission is not readiness: abort only after both real worker protocols
+      # have subscribed and prompted their controlled sessions.
+      sessions =
+        for %{prompt: prompt} <- specs do
+          assert_receive {:session_prompted, session, ^prompt}, 1_000
+          {session, Process.monitor(session)}
+        end
 
-        send(parent, {:results, results})
-      end)
+      assert :ok = Coordinator.abort_all(coordinator)
+      assert [%{status: :aborted}, %{status: :aborted}] = Task.await(task)
 
-      # Abort only once the run is registered; a fixed sleep raced slow runners.
-      assert_eventually(fn -> Coordinator.list_active(coordinator) != [] end)
+      for {session, ref} <- sessions do
+        assert_receive {:DOWN, ^ref, :process, ^session, :shutdown}, 1_000
+      end
 
-      # Abort
-      :ok = Coordinator.abort_all(coordinator)
+      assert Coordinator.list_active(coordinator) == []
 
-      # Active IDs remain visible until admission guardians and sessions exit.
-      assert_eventually(fn -> Coordinator.list_active(coordinator) == [] end, 10_000)
-
-      assert_receive {:results, results}, 10_000
-      assert length(results) == 2
-      assert Enum.all?(results, &(&1.status in [:aborted, :error]))
-
-      # Can start new work
-      specs = [%{prompt: "New task"}]
-      results = Coordinator.run_subagents(coordinator, specs, timeout: 50)
-      assert length(results) == 1
+      # The same coordinator must accept and finish a new batch after abort.
+      next = Task.async(fn -> Coordinator.run_subagents(coordinator, [%{prompt: "New task"}]) end)
+      assert_receive {:session_prompted, session, "New task"}, 1_000
+      ref = Process.monitor(session)
+      send(session, {:complete, "recovered"})
+      assert [%{status: :completed, result: "recovered"}] = Task.await(next)
+      assert_receive {:DOWN, ^ref, :process, ^session, :shutdown}, 1_000
+      assert Coordinator.list_active(coordinator) == []
     end
   end
 

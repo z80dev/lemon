@@ -988,6 +988,8 @@ defmodule CodingAgent.Tools.AgentTest do
   end
 
   test "async completion can recover from missed bus events via run summary store polling" do
+    supervisor = start_supervised!({Task.Supervisor, []})
+
     result =
       AgentTool.execute(
         "call_1",
@@ -1001,6 +1003,7 @@ defmodule CodingAgent.Tools.AgentTest do
         nil,
         "/tmp",
         run_orchestrator: __MODULE__.AgentTestStubRunOrchestrator,
+        task_supervisor: supervisor,
         session_key: "agent:main:main",
         session_id: "sess_main",
         agent_id: "main"
@@ -1008,17 +1011,34 @@ defmodule CodingAgent.Tools.AgentTest do
 
     assert_receive {:router_submit, %RunRequest{}, 1}
 
+    # Force the public poll path to recover without a live watcher. Otherwise
+    # watcher finalization can mask a missing RunGraph transition in poll.
+    assert [watcher] = Task.Supervisor.children(supervisor)
+    assert :ok = Task.Supervisor.terminate_child(supervisor, watcher)
+
     :ok =
       Store.finalize_run(result.details.run_id, %{
         completed: %{ok: true, answer: "hello from store"}
       })
 
-    poll = wait_for_completed(result.details.task_id)
+    poll =
+      AgentTool.execute(
+        "poll_store_only",
+        %{"action" => "poll", "task_id" => result.details.task_id},
+        nil,
+        nil,
+        "/tmp",
+        []
+      )
+
     assert poll.details.status == "completed"
     assert LemonAgent.get_text(poll) == "hello from store"
+    assert {:ok, %{status: :completed}} = RunGraph.get(result.details.run_id)
   end
 
   test "watcher timeout marks tracking lost and reconciles a late successful completion" do
+    supervisor = start_supervised!({Task.Supervisor, []})
+
     result =
       AgentTool.execute(
         "call_late_completion",
@@ -1032,6 +1052,7 @@ defmodule CodingAgent.Tools.AgentTest do
         nil,
         "/tmp",
         run_orchestrator: __MODULE__.AgentTestStubRunOrchestrator,
+        task_supervisor: supervisor,
         session_key: "agent:main:main",
         agent_tool_watcher_timeout_ms: 20,
         agent_tool_reconciliation_timeout_ms: 1_000
@@ -1286,6 +1307,10 @@ defmodule CodingAgent.Tools.AgentTest do
   end
 
   defp complete_delegated_run(run_id, answer) do
+    # Real completion is durable before notification. A Bus-only fixture loses
+    # events in the watcher/reconciliation subscription gap.
+    :ok = Store.finalize_run(run_id, %{completed: %{ok: true, answer: answer}})
+
     Bus.broadcast(
       Bus.run_topic(run_id),
       Event.new(:run_completed, EventsFixtures.run_completed(answer: answer))

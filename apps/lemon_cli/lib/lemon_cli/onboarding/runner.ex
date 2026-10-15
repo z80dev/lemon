@@ -1,12 +1,15 @@
 defmodule LemonCli.Onboarding.Runner do
   @moduledoc false
 
+  alias LemonAgent.ModelRuntime.CustomProviders
   alias LemonAgent.ModelRuntime.ModelCatalog
+  alias LemonAi.Models.Discovery
   alias LemonAi.Models.Presets
   alias LemonCli.CLI
   alias LemonCli.Onboarding.LogSilencer
   alias LemonCli.Onboarding.PromptUI
   alias LemonCli.Onboarding.Provider
+  alias LemonCli.Onboarding.Providers
   alias LemonCore.Config
   alias LemonCore.Config.TomlPatch
   alias LemonCore.OAuth.LocalCallbackListener
@@ -51,11 +54,11 @@ defmodule LemonCli.Onboarding.Runner do
     io = Keyword.get(opts, :io, default_io())
 
     LogSilencer.with_quiet_logs(interactive_prompt_session?(io), fn ->
-      do_run(args, spec, io)
+      do_run(args, spec, io, opts)
     end)
   end
 
-  defp do_run(args, %Provider{} = spec, io) do
+  defp do_run(args, %Provider{} = spec, io, opts) do
     {cli_opts, _positional, _invalid} =
       OptionParser.parse(args,
         switches: @common_switches ++ spec.switches,
@@ -72,7 +75,7 @@ defmodule LemonCli.Onboarding.Runner do
     # Device-code sign-in needs no input: it prints a code and polls.
     if cli_opts[:non_interactive] == true and
          is_nil(normalize_optional_string(cli_opts[:token])) and
-         explicit_auth not in [:codex_cli, :device] do
+         explicit_auth not in [:codex_cli, :device] and not spec.local do
       fail!(
         "Non-interactive provider setup requires --token, --auth device (ChatGPT) or explicit --auth codex-cli. For ChatGPT browser sign-in, run `lemon setup --provider openai-codex` interactively."
       )
@@ -91,7 +94,51 @@ defmodule LemonCli.Onboarding.Runner do
       end
 
     ensure_secrets_ready!()
+    onboard(cli_opts, spec, io, opts)
+  end
 
+  defp onboard(cli_opts, %Provider{local: true} = spec, io, opts) do
+    if spec.custom and cli_opts[:non_interactive],
+      do: fail!("Custom endpoint setup requires an interactive terminal.")
+
+    config_path = cli_opts[:config_path] || Config.global_path()
+    spec = configure_local_endpoint(spec, config_path, io)
+
+    token =
+      normalize_optional_string(cli_opts[:token]) ||
+        if cli_opts[:non_interactive] != true do
+          io.secret.("API key (optional; Enter for no key): ")
+          |> normalize_prompt_input()
+          |> normalize_optional_string()
+        end
+
+    secret_name =
+      require_non_empty!(
+        cli_opts[:secret_name] || spec.default_secret_name,
+        "Invalid secret name."
+      )
+
+    if token, do: store_secret!(secret_name, token, spec.api_key_secret_provider, spec)
+
+    model =
+      if resolve_set_default?(cli_opts[:set_default], spec, io),
+        do: choose_local_model!(cli_opts, spec, io, token, opts)
+
+    content =
+      config_path
+      |> read_existing_config!()
+      |> update_local_config(spec, if(token, do: secret_name))
+      |> maybe_set_defaults(model, spec)
+
+    validate_toml!(content, config_path)
+    write_config!(config_path, content)
+    io.info.("#{spec.display_name} onboarding complete.")
+    io.info.("Config: #{config_path}")
+    if model, do: io.info.("Default model: #{spec.id}:#{model}")
+    :ok
+  end
+
+  defp onboard(cli_opts, spec, io, _opts) do
     auth_mode = resolve_auth_mode!(cli_opts, spec, io)
     {secret_value, secret_provider} = resolve_secret_payload!(cli_opts, spec, auth_mode, io)
 
@@ -543,6 +590,10 @@ defmodule LemonCli.Onboarding.Runner do
       fail!("No models found for #{spec.id}. Pass --model MODEL to choose one by id.")
     end
 
+    select_model!(available, spec, io)
+  end
+
+  defp select_model!(available, spec, io) do
     default_model =
       Enum.find(spec.preferred_models, fn model -> model in available end) || hd(available)
 
@@ -574,6 +625,106 @@ defmodule LemonCli.Onboarding.Runner do
 
         choice = io.prompt.("Choose model number or id [default: #{default_model}]: ")
         parse_model_choice(choice, available, default_model, io)
+    end
+  end
+
+  defp configure_local_endpoint(%Provider{custom: true}, _config_path, io) do
+    id =
+      io.prompt.("Provider name (letters, numbers, underscores or hyphens): ")
+      |> normalize_prompt_input()
+
+    unless String.match?(id, ~r/^[a-z][a-z0-9_-]*$/) and
+             is_nil(Providers.find(id)) and
+             not CustomProviders.builtin?(id) do
+      fail!(
+        "Choose a new provider name using lowercase letters, numbers, underscores or hyphens."
+      )
+    end
+
+    base_url =
+      io.prompt.("OpenAI-compatible base URL (including /v1): ")
+      |> normalize_prompt_input()
+      |> String.trim_trailing("/")
+
+    case URI.parse(base_url) do
+      %URI{scheme: scheme, host: host, userinfo: nil, query: nil, fragment: nil}
+      when scheme in ["http", "https"] and is_binary(host) and host != "" ->
+        :ok
+
+      _ ->
+        fail!("Enter an HTTP or HTTPS base URL without credentials, query or fragment.")
+    end
+
+    Provider.local(id, id, custom: true, base_url: base_url)
+  end
+
+  defp configure_local_endpoint(spec, config_path, _io) do
+    config = config_path |> read_existing_config!() |> then(&Toml.decode!(&1))
+
+    base_url =
+      get_in(config, ["providers", spec.id, "base_url"]) ||
+        Presets.base_url(preset_provider(spec))
+
+    %{spec | base_url: base_url}
+  end
+
+  defp choose_local_model!(cli_opts, spec, io, token, opts) do
+    case normalize_optional_string(cli_opts[:model]) do
+      model when is_binary(model) ->
+        model
+
+      nil ->
+        available =
+          if cli_opts[:non_interactive] != true and
+               prompt_yes_no?("Probe #{spec.base_url}/models for model IDs?", false, io) do
+            discovery = Keyword.get(opts, :discovery, &Discovery.discover/3)
+
+            case discovery.(:openai_models, spec.base_url,
+                   provider: spec.id,
+                   api_key: token,
+                   timeout_ms: 5_000,
+                   force_refresh: true
+                 ) do
+              {:ok, models} ->
+                models |> Enum.map(& &1.id) |> Enum.uniq() |> Enum.sort()
+
+              {:error, _} ->
+                io.info.("Model discovery unavailable. Enter a model ID manually.")
+                []
+            end
+          else
+            []
+          end
+
+        if available == [] do
+          require_non_empty!(
+            io.prompt.("Model ID: ") |> normalize_prompt_input(),
+            "No model selected. Pass --model MODEL to choose one by id."
+          )
+        else
+          select_model!(available, spec, io)
+        end
+    end
+  end
+
+  defp update_local_config(content, spec, secret_name) do
+    content =
+      Enum.reduce(
+        ["api_key", "api_key_env", "api_key_secret", "oauth_secret", "auth_source", "auth"],
+        content,
+        fn key, acc -> TomlPatch.delete_key(acc, spec.provider_table, key) end
+      )
+      |> TomlPatch.upsert_string(spec.provider_table, "base_url", spec.base_url)
+
+    content =
+      if spec.custom,
+        do: TomlPatch.upsert_string(content, spec.provider_table, "api", "openai_completions"),
+        else: content
+
+    if secret_name do
+      TomlPatch.upsert_string(content, spec.provider_table, "api_key_secret", secret_name)
+    else
+      TomlPatch.upsert_string(content, spec.provider_table, "auth", "none")
     end
   end
 

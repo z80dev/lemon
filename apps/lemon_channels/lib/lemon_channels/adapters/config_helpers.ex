@@ -49,6 +49,13 @@ defmodule LemonChannels.Adapters.ConfigHelpers do
   def boolean("false", _default), do: false
   def boolean(_value, default), do: default
 
+  @doc "Validate the opt-in unauthorized DM pairing policy."
+  def validate_unauthorized_dm_behavior(errors, value, platform) do
+    if value in [nil, "pair", "ignore"],
+      do: errors,
+      else: ["gateway.#{platform}.unauthorized_dm_behavior: must be pair or ignore" | errors]
+  end
+
   @doc "Drops every `nil` value from a map."
   @spec reject_nils(map()) :: map()
   def reject_nils(map) when is_map(map) do

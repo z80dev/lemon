@@ -202,6 +202,9 @@ defmodule LemonCli.CLI do
   defp run_command("channels", args), do: run_channels(args)
   defp run_command("providers", args), do: LemonCli.ProvidersCommand.run(args)
 
+  defp run_command("pairing", args),
+    do: with_runtime(fn -> LemonCli.PairingCommand.run(args) end)
+
   defp run_command("blueprints", args),
     do: with_runtime(fn -> LemonCli.BlueprintsCommand.run(args) end)
 

@@ -10,6 +10,11 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Preserve delegated run identity when polling recovers a durable completion, so
+  the task and RunGraph both become terminal even without a live watcher.
+- Make coordinator/session/watcher/environment regressions synchronize with their
+  actual lifecycle and isolate resource discovery from protocol fixtures.
+
 - Assert LSP owner cleanup by the exact managed server ID rather than a global
   active-count delta that races unrelated idle-server cleanup.
 
@@ -33,6 +38,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Added
 
+- Setup offers local inference servers and custom OpenAI-compatible endpoints,
+  optional encrypted keys, and consent-based model discovery with manual fallback.
+
 - TUI startup shows pending setup steps above the prompt, hides them once ready,
   and points empty model lists to `lemon setup provider`; `setup.status` exposes
   read-only, content-free readiness for clients.
@@ -46,6 +54,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 - Inspect per-run lifecycle, tool outcomes, child tasks and usage with
   `lemon runs show <runId>` and TUI `/runs <runId>`, backed by redacted completion events.
+
+- Opt-in, expiring Telegram/Discord DM pairing codes with local-owner approval
+  through `lemon pairing`, replacing manual allowlist edits.
 
 - Discord voice notes and audio attachments can use the shared voice transcription
   settings, with bounded CDN downloads and URL fallback on failure.
