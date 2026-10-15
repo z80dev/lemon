@@ -60,7 +60,9 @@ defmodule LemonControlPlane.OperatorAuthWireE2ETest do
 
     assert_receive {:execution_node_socket, ^missing, {:authentication_error, error}}, 3_000
     assert error["code"] == "UNAUTHORIZED"
-    assert error["message"] == "Operator token is required"
+    assert error["message"] =~ "Operator token is required"
+    assert error["message"] =~ "connect.auth.token"
+    assert error["message"] =~ "LEMON_CONTROL_PLANE_OPERATOR_TOKEN"
     refute inspect(error) =~ "wire-operator-secret"
   end
 

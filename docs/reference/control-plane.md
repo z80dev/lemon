@@ -4,11 +4,34 @@ Connect to the authenticated `/ws` endpoint and discover supported methods in
 `hello-ok.features.methods`. See the [control-plane guide](../../apps/lemon_control_plane/README.md)
 for framing, authentication and the domain-specific method reference.
 
+## HTTP and protocol errors
+
+Non-`/v1` HTTP failures use `{"error":{"code":"UNAUTHORIZED","message":"..."}}`,
+with the same string codes as WebSocket error frames. ACP HTTP authentication
+failures use this HTTP envelope; authenticated ACP method replies retain JSON-RPC
+framing and numeric method-error codes. `/v1/*` retains OpenAI-compatible errors
+(`error.message` and `error.type`), and `/healthz` remains `{"ok":true}`.
+
+HTTP authentication errors name `Authorization: Bearer <token>` and the server's
+token configuration: `LEMON_ACP_API_TOKEN` for `/acp`,
+`LEMON_OPENAI_COMPAT_API_TOKEN` for `/v1/*` (both also accept `x-api-key`), and
+`LEMON_CONTROL_PLANE_OPERATOR_TOKEN` for `/acp/ws`. Managed launchers store the
+operator token at `~/.lemon/run/control-plane-<port>.token`. Native `/ws` clients
+send that token in `connect.params.auth.token`, not an HTTP header.
+Error `details` are optional JSON context; unsupported runtime terms are omitted,
+never inspected into wire responses, so the original code and message survive.
+
+
 ## `status`
 
 Scope: `operator.read`. Parameters: `{}`. Existing runtime, connection, run and
 skill counters remain unchanged. Optional subsystem lookup failures do not fail
-the request; stopped channels return empty configured/connected/details arrays.
+the request. `subsystems` maps `presence`, `router`, `channels`, `skills`, and
+`providers` to `{"status":"available"}` or `{"status":"unavailable"}` for the
+corresponding lookup. Stopped channels still return empty
+configured/connected/details arrays and stopped skills retain zero counts for
+existing clients; consult `subsystems` before interpreting these as real empty
+results. Availability describes a local query, not adapter/provider connectivity.
 
 - `server.version` is the Lemon release CalVer, shared with `hello-ok`: packaged
   runtimes use `RELEASE_VSN`, source checkouts use the umbrella `mix.exs` version.

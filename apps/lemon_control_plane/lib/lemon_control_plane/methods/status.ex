@@ -55,12 +55,20 @@ defmodule LemonControlPlane.Methods.Status do
   @impl true
   def handle(_params, _ctx) do
     server = server_status()
-    connections = connection_status()
-    runs = run_status()
-    channels = channel_status()
-    skills = skills_status()
 
-    providers = optional([], &LemonControlPlane.ProviderStatus.snapshot/0)
+    {connections, presence_state} =
+      snapshot(%{"active" => 0, "operators" => 0, "nodes" => 0}, &connection_status/0)
+
+    {runs, router_state} =
+      snapshot(%{"active" => 0, "queued" => 0, "completed_today" => 0}, &run_status/0)
+
+    {channels, channels_state} =
+      snapshot(%{"configured" => [], "connected" => [], "details" => []}, &channel_status/0)
+
+    {skills, skills_state} =
+      snapshot(%{"installed" => 0, "enabled" => 0}, &skills_status/0)
+
+    {providers, providers_state} = snapshot([], &LemonControlPlane.ProviderStatus.snapshot/0)
 
     {:ok,
      %{
@@ -71,6 +79,13 @@ defmodule LemonControlPlane.Methods.Status do
        "skills" => skills,
        "providers" => providers,
        "lifecycle" => LemonControlPlane.Lifecycle.availability(),
+       "subsystems" => %{
+         "presence" => presence_state,
+         "router" => router_state,
+         "channels" => channels_state,
+         "skills" => skills_state,
+         "providers" => providers_state
+       },
        "summary" => summary(server, connections, runs, channels, skills, providers)
      }}
   end
@@ -193,24 +208,31 @@ defmodule LemonControlPlane.Methods.Status do
   end
 
   defp get_presence_counts do
-    optional(%{total: 0, operators: 0, nodes: 0}, &LemonControlPlane.Presence.counts/0)
+    LemonControlPlane.Presence.counts()
   end
 
-  # LemonRouter.counts/0 always returns the full shape, zeroed when the router
-  # is not running.
-  defp get_run_counts, do: LemonRouter.counts()
+  defp get_run_counts do
+    if LemonRouter.available?(), do: LemonRouter.counts(), else: exit(:unavailable)
+  end
 
   defp get_channel_status do
-    optional(%{configured: [], connected: [], details: []}, &LemonChannels.Registry.status/0)
+    LemonChannels.Registry.status()
   end
 
   defp get_skills_status do
-    optional(%{installed: 0, enabled: 0}, &LemonSkills.Registry.counts/0)
+    LemonSkills.Registry.counts()
   end
 
-  # Presence, channels and skills are reported as empty while their server is
-  # not running. A call to a stopped or restarting GenServer exits rather than
-  # raises, and that exit must not fail the whole status request.
+  # Preserve existing counter/array shapes, while distinguishing unavailable
+  # queries from a successful empty result without exposing raw failure terms.
+  defp snapshot(default, fun) do
+    {fun.(), %{"status" => "available"}}
+  rescue
+    _ -> {default, %{"status" => "unavailable"}}
+  catch
+    :exit, _ -> {default, %{"status" => "unavailable"}}
+  end
+
   defp optional(default, fun) do
     fun.()
   rescue
