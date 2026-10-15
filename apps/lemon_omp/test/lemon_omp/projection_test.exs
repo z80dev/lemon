@@ -674,6 +674,37 @@ defmodule LemonOmp.ProjectionTest do
       assert state.todos == [%{phase: "P", content: "c", status: "pending"}]
     end
 
+    test "full state clears thinking when omp omits an unsupported level" do
+      state =
+        Projection.apply_state(new(thinking: "high"), %{
+          "model" => %{"provider" => "x", "id" => "plain"}
+        })
+
+      assert state.model == "x/plain"
+      assert state.thinking == nil
+    end
+
+    test "an old in-flight model receipt cannot undo a confirmed selection" do
+      state =
+        new()
+        |> Projection.apply_state(%{"model" => %{"provider" => "x", "id" => "cheap"}})
+        |> Projection.apply_event("message_end", %{
+          "message" => %{
+            "role" => "assistant",
+            "provider" => "x",
+            "model" => "old",
+            "content" => []
+          }
+        })
+
+      assert state.model == "x/cheap"
+
+      # A later omp model change invalidates the selection until its next state
+      # or message receipt arrives.
+      changed = Projection.apply_event(state, "model_changed", %{})
+      refute changed.model_confirmed
+    end
+
     test "model_changed and compaction/retry activities" do
       state =
         apply_all(running(), [{"model_changed", %{"model" => %{"provider" => "x", "id" => "y"}}}])

@@ -44,6 +44,7 @@ defmodule LemonOmp do
           | :not_ready
           | :no_active_turn
           | {:rejected, String.t()}
+          | {:partially_applied, [String.t()], String.t(), reason()}
           | {:startup_failed, String.t()}
           | :startup_failed
           | :outcome_unknown
@@ -311,6 +312,56 @@ defmodule LemonOmp do
     end
   end
 
+  @doc """
+  Change a live session's `model` selector (`provider/id`) and/or `thinking`.
+  Model is applied first, then thinking; changes affect the next model call,
+  including during a running turn, without restarting or aborting the session.
+
+  Success returns the snapshot refreshed from omp. If a later step fails after
+  acknowledged changes, returns
+  `{:error, {:partially_applied, applied_fields, failed_step, reason}}`;
+  `failed_step` is `"model"`, `"thinking"` or `"snapshot"`. Nothing is rolled
+  back or automatically retried, including an `:outcome_unknown` result.
+  """
+  @spec configure(String.t(), map(), keyword()) :: {:ok, map()} | {:error, reason()}
+  def configure(id, params, opts \\ [])
+
+  def configure(id, params, opts) when is_map(params) do
+    params = normalize_keys(params)
+
+    with {:ok, model} <- validate_optional(params["model"], @model_pattern),
+         {:ok, thinking} <- validate_thinking(params["thinking"]),
+         {:ok, commands} <- configure_commands(model, thinking),
+         {:ok, pid} <- fetch_live(id, opts) do
+      Session.configure(pid, commands)
+    end
+  end
+
+  def configure(_id, _params, _opts), do: {:error, :invalid_params}
+
+  defp configure_commands(nil, nil), do: {:error, :invalid_params}
+
+  defp configure_commands(model, thinking) do
+    with {:ok, commands} <- model_command(model) do
+      thinking_command =
+        if thinking, do: [{"thinking", "set_thinking_level", %{"level" => thinking}}], else: []
+
+      {:ok, commands ++ thinking_command}
+    end
+  end
+
+  defp model_command(nil), do: {:ok, []}
+
+  defp model_command(selector) do
+    case String.split(selector, "/", parts: 2) do
+      [provider, model_id] when provider != "" and model_id != "" ->
+        {:ok, [{"model", "set_model", %{"provider" => provider, "modelId" => model_id}}]}
+
+      _ ->
+        {:error, :invalid_params}
+    end
+  end
+
   @doc "Abort the in-flight turn. The process stays open for follow-ups."
   @spec cancel(String.t(), keyword()) :: {:ok, map()} | {:error, reason()}
   def cancel(id, opts \\ []) do
@@ -541,6 +592,11 @@ defmodule LemonOmp do
   def error_message({:catalog_failed, message}), do: "omp model catalog failed: #{message}"
   def error_message({:startup_failed, message}), do: "omp failed to start: #{message}"
   def error_message(:startup_failed), do: "omp failed to start."
+
+  def error_message({:partially_applied, applied, step, reason}),
+    do:
+      "Applied #{Enum.join(applied, ", ")}; #{step} failed: " <>
+        error_message(reason) <> " Earlier changes were not rolled back."
 
   def error_message({:outcome_unknown, id}),
     do:

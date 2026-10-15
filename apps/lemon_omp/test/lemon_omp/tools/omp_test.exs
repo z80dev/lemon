@@ -32,15 +32,71 @@ defmodule LemonOmp.Tools.OmpTest do
     assert "action" in tool.parameters["required"]
 
     assert tool.parameters["properties"]["action"]["enum"] ==
-             ~w(models start start_many wait status subagent list send cancel close resume discover)
+             ~w(models start start_many wait status subagent list send configure cancel close resume discover)
 
     assert tool.parameters["properties"]["approval_mode"]["enum"] == ~w(always-ask write yolo)
     assert tool.parameters["properties"]["mode"]["enum"] == ~w(steer follow_up redirect)
     assert tool.parameters["properties"]["mode"]["description"] =~ "going the wrong way"
     assert tool.parameters["properties"]["approval_mode"]["description"] =~ "start, resume"
+    assert tool.description =~ "models + configure"
+    assert tool.description =~ "cheaper model"
 
     assert tool.parameters["properties"]["tasks"]["items"]["properties"]["approval_mode"]["enum"] ==
              ~w(always-ask write yolo)
+  end
+
+  test "configure reports refreshed model and thinking with owner-scoped untrusted output", ctx do
+    started = run(ctx.tool, %{"action" => "start", "prompt" => "HOLD configure"})
+    id = started.details["session"]["id"]
+
+    configured =
+      run(ctx.tool, %{
+        "action" => "configure",
+        "id" => id,
+        "model" => "fake/cheap",
+        "thinking" => "minimal"
+      })
+      |> assert_untrusted()
+
+    refute configured.is_error
+    assert configured.details["action"] == "configure"
+    assert configured.details["session"]["model"] == "fake/cheap"
+    assert configured.details["session"]["thinking"] == "minimal"
+    assert text(configured) =~ "model fake/cheap, thinking minimal"
+    assert text(configured) =~ "next model call"
+
+    foreign = Omp.tool(ctx.ws, session_key: "another-conversation")
+    denied = run(foreign, %{"action" => "configure", "id" => id, "thinking" => "low"})
+    assert denied.is_error
+    assert denied.details["error"] == "not_found"
+
+    invalid = run(ctx.tool, %{"action" => "configure", "id" => id})
+    assert invalid.is_error
+    assert invalid.details["error"] == "invalid_params"
+  end
+
+  test "configure reports applied fields and the second-step rejection", ctx do
+    started = run(ctx.tool, %{"action" => "start", "prompt" => "HOLD configure"})
+    id = started.details["session"]["id"]
+    File.write!(Path.join(ctx.ws, ".fake_omp_thinking_mode"), "reject")
+
+    result =
+      run(ctx.tool, %{
+        "action" => "configure",
+        "id" => id,
+        "model" => "fake/cheap",
+        "thinking" => "low"
+      })
+      |> assert_untrusted()
+
+    assert result.is_error
+    assert result.details["error"] == "partially_applied"
+    assert result.details["applied"] == ["model"]
+    assert result.details["failedStep"] == "thinking"
+    assert result.details["cause"] == "rejected"
+    assert text(result) =~ "Applied model; thinking failed"
+    assert text(result) =~ "Thinking refused"
+    assert text(result) =~ "not rolled back"
   end
 
   test "subagent status, streamed progress and drill-down text are untrusted", ctx do

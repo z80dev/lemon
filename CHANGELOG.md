@@ -26,6 +26,11 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Added
 
+- Live omp workers can change model and/or thinking without restarting through
+  owner-scoped `LemonOmp.configure/3` and the chat tool's `configure` action.
+  Changes apply from the next model call, including during running turns;
+  correlated acknowledgements, refreshed snapshots and partial-application
+  errors preserve truthful outcomes without rollback or automatic retries.
 - omp discovery includes sessions in kept managed Git worktrees, and resume
   automatically reuses a validated worktree in the caller's repository with
   conservative cleanup ownership restored.
