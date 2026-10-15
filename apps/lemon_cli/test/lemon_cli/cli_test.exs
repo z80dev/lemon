@@ -73,6 +73,7 @@ defmodule LemonCli.CLITest do
       capture_io(fn ->
         assert CLI.run([
                  "model",
+                 "--non-interactive",
                  "--provider",
                  "openai",
                  "--token",

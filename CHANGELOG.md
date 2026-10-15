@@ -98,6 +98,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Setup now hides pasted API keys, fails safely without a terminal, re-verifies
+  existing providers before claiming completion, distinguishes pending onboarding
+  from failure, and validates runtime input; packaged remediation, setup flags,
+  diagnostics hints, help errors, and duplicate completion entries are corrected.
 - Provider-ownership probes inspect complete events and logs so large tool
   schemas cannot hide credential refusal or leaked values. Integration tests
   retain committed-output retry fences and drain bounded session subscriptions.

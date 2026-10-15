@@ -78,7 +78,11 @@ defmodule LemonCli.CommandRegistry do
         %{name: "install", summary: "Install the palette plugin and register `tern acp lemon`"}
       ],
       options: [
-        option("--config-dir PATH", ["--config-dir"], "Tern configuration directory")
+        option(
+          "--config-dir PATH",
+          ["--config-dir"],
+          "Tern configuration directory (not a config file)"
+        )
       ]
     },
     %{
@@ -102,24 +106,6 @@ defmodule LemonCli.CommandRegistry do
       ]
     },
     %{
-      name: "acp",
-      summary: "Serve ACP over stdio using the local runtime",
-      usage: "lemon acp",
-      subcommands: [],
-      options: []
-    },
-    %{
-      name: "tern",
-      summary: "Install Lemon's Tern palette plugin and ACP agent",
-      usage: "lemon tern install [--config-dir PATH]",
-      subcommands: [
-        %{name: "install", summary: "Install the palette plugin and register `tern acp lemon`"}
-      ],
-      options: [
-        option("--config-dir PATH", ["--config-dir"], "Tern configuration directory")
-      ]
-    },
-    %{
       name: "setup",
       summary: "Run first-time setup and configuration",
       usage: "lemon setup [provider|runtime|gateway|doctor] [options]",
@@ -127,12 +113,14 @@ defmodule LemonCli.CommandRegistry do
         %{name: "provider", summary: "Configure an AI provider"},
         %{name: "runtime", summary: "Configure runtime profile and port bindings"},
         %{name: "gateway", summary: "Configure gateway adapters"},
-        %{name: "doctor", summary: "Validate config and report health"}
+        %{name: "doctor", summary: "Run diagnostics or write a support bundle (alias for doctor)"}
       ],
       options: [
         option("--non-interactive, -n", ["--non-interactive", "-n"], "Skip prompts"),
         option("--config-path PATH", ["--config-path"], "Config file to read or write"),
         option("--skip-verify", ["--skip-verify"], "Defer live provider verification"),
+        option("--daily-brief HH:MM", ["--daily-brief"], "Daily brief time (non-interactive)"),
+        option("--set-default", ["--set-default"], "Set the provider and model as defaults"),
         option(
           "--provider NAME",
           ["--provider"],
@@ -196,7 +184,7 @@ defmodule LemonCli.CommandRegistry do
     %{
       name: "gateway",
       summary: "Configure a gateway adapter",
-      usage: "lemon gateway setup [transport] [options]",
+      usage: "lemon gateway setup [--transport NAME] [options]",
       subcommands: [%{name: "setup", summary: "Configure Telegram or Discord"}],
       options: [
         option("--transport NAME, -t NAME", ["--transport", "-t"], "Gateway adapter"),
@@ -430,7 +418,7 @@ defmodule LemonCli.CommandRegistry do
         option("--pinned | --unpinned", ["--pinned", "--unpinned"], "Filter pin state"),
         option("--archived | --active", ["--archived", "--active"], "Filter archive state"),
         option("--format json|jsonl|markdown|html", ["--format"], "Redacted export format"),
-        option("--cwd DIR", ["--cwd"], "Project directory for context (default: current)"),
+        option("--cwd PATH", ["--cwd"], "Project directory for context (default: current)"),
         option("--clear", ["--clear"], "Clear a session title"),
         option("--output PATH", ["--output"], "Write export content to a private file"),
         option("--force", ["--force"], "Replace an existing regular export file"),
@@ -666,7 +654,7 @@ defmodule LemonCli.CommandRegistry do
       "Manage installed skills",
       "lemon skill <command> [args]",
       [
-        option("--cwd=PATH", ["--cwd"], "Project workspace"),
+        option("--cwd PATH", ["--cwd"], "Project workspace"),
         option("--local", ["--local"], "Install only in the project"),
         option("--global", ["--global"], "Use global skills"),
         option("--force", ["--force"], "Confirm overwrite or removal"),
@@ -806,6 +794,9 @@ defmodule LemonCli.CommandRegistry do
     Commands:
     #{summary_lines(Enum.filter(@commands, &available?(&1, launcher)))}
 
+    Flags:
+      --version    Print build identity (use alone; for options, use lemon version --verbose).
+
     Run `lemon <command> --help` for command options.
     """
   end
@@ -813,8 +804,12 @@ defmodule LemonCli.CommandRegistry do
   @spec help(String.t()) :: String.t()
   def help(name) do
     case fetch(name) do
-      {:ok, command} -> render_help(command)
-      :error -> help()
+      {:ok, command} ->
+        render_help(command)
+
+      :error ->
+        IO.puts(:stderr, "Unknown command: #{name}. Run `lemon --help` to list commands.")
+        help()
     end
   end
 

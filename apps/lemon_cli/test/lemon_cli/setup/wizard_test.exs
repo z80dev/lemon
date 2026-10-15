@@ -60,32 +60,15 @@ defmodule LemonCli.Setup.WizardTest do
   end
 
   describe "run_runtime/3 — profile input safety" do
-    test "invalid --profile value does not create a new atom" do
-      # An attacker (or fuzzer) passing an arbitrary --profile value must not
-      # cause String.to_atom/1 to intern a new atom.  The fix uses
-      # String.to_existing_atom/1 only after string-level validation.
-      malicious_profile = "definitely_not_a_real_profile_#{System.unique_integer([:positive])}"
+    test "invalid --profile fails without creating a new atom" do
+      invalid_profile = "not_a_profile_#{System.unique_integer([:positive])}"
 
-      atoms_before = :erlang.system_info(:atom_count)
+      assert {:error, :invalid_arguments} =
+               Wizard.run_runtime(["--profile", invalid_profile], silent_io(),
+                 non_interactive: true
+               )
 
-      # run_runtime picks up --profile from parsed args
-      io = silent_io()
-      Wizard.run_runtime(["--profile", malicious_profile], io, non_interactive: true)
-
-      atoms_after = :erlang.system_info(:atom_count)
-
-      refute atoms_after - atoms_before >= 1 and
-               :erlang.system_info(:atom_table)
-               |> Atom.to_string()
-               |> then(fn _ ->
-                 String.to_existing_atom(malicious_profile)
-                 true
-               end),
-             "No new atom should have been created for an invalid profile name"
-    rescue
-      ArgumentError ->
-        # String.to_existing_atom raised — the atom was never created; test passes.
-        :ok
+      assert_raise ArgumentError, fn -> String.to_existing_atom(invalid_profile) end
     end
 
     test "valid profile name is accepted without error" do
@@ -93,9 +76,58 @@ defmodule LemonCli.Setup.WizardTest do
       result = Wizard.run_runtime(["--profile", "runtime_full"], io, non_interactive: true)
       assert result == :ok
     end
+
+    test "invalid port flags fail instead of silently using defaults" do
+      for flag <- ["--control-port", "--web-port", "--sim-port"],
+          value <- ["0", "-1", "65536", "abc"] do
+        io = recording_io()
+
+        assert {:error, :invalid_arguments} =
+                 Wizard.run_runtime([flag, value, "--non-interactive"], io)
+
+        events = drain_events([])
+        assert error_event?(events, &String.contains?(&1, "1 to 65535"))
+        assert prompt_events(events) == []
+        refute info_event?(events, &String.contains?(&1, "To persist"))
+      end
+    end
+
+    test "interactive invalid profiles and ports re-prompt" do
+      io = recording_io(["0", "typo", "999", "runtime_min", "abc", "0", "65536", "5050", "", ""])
+      assert :ok = Wizard.run_runtime([], io)
+      events = drain_events([])
+      assert error_event?(events, &String.contains?(&1, "Invalid profile"))
+      assert error_event?(events, &String.contains?(&1, "Invalid port"))
+      assert info_event?(events, &String.contains?(&1, "Runtime profile: runtime_min"))
+      assert info_event?(events, &String.contains?(&1, "LEMON_CONTROL_PLANE_PORT=5050"))
+      assert Enum.count(prompt_events(events), &String.contains?(&1, "Choose profile")) == 4
+      assert Enum.count(prompt_events(events), &String.contains?(&1, "control-plane port")) == 4
+    end
   end
 
   describe "run_full/3 — fresh state" do
+    test "no terminal fails before creating setup files", %{config_path: path, key_file: key_file} do
+      io = Map.put(recording_io(), :interactive?, fn -> false end)
+
+      assert_raise Mix.Error, ~r/No interactive terminal.*lemon setup --non-interactive/, fn ->
+        Wizard.run_full([], io, config_path: path)
+      end
+
+      refute File.exists?(path)
+      refute File.exists?(key_file)
+      assert prompt_events(drain_events([])) == []
+    end
+
+    test "declining provider onboarding is unfinished, not failed", %{config_path: path} do
+      io = recording_io(["n", "n", "n"])
+      assert {:error, :setup_incomplete} = Wizard.run_full([], io, config_path: path)
+      events = drain_events([])
+      assert info_event?(events, &String.contains?(&1, "Setup unfinished — pending steps"))
+      refute info_event?(events, &String.contains?(&1, "Setup did not complete"))
+      refute info_event?(events, &String.contains?(&1, "Setup complete"))
+      refute error_event?(events, fn _ -> true end)
+    end
+
     test "bootstraps config, auto-initializes the master key, and defers the provider step", %{
       config_path: config_path,
       key_file: key_file
@@ -245,7 +277,8 @@ defmodule LemonCli.Setup.WizardTest do
       # Scripted answers: decline the optional daily brief and runtime configuration.
       io = recording_io(["n", "n"])
 
-      assert Wizard.run_full([], io, config_path: config_path) == :ok
+      assert Wizard.run_full([], io, config_path: config_path, verifier: fn _ -> {:ok, %{}} end) ==
+               :ok
 
       events = drain_events([])
 
@@ -263,7 +296,48 @@ defmodule LemonCli.Setup.WizardTest do
                &(not String.contains?(&1, "Onboard an AI provider"))
              )
 
-      refute info_event?(events, &String.contains?(&1, "Verifying provider"))
+      assert info_event?(events, &String.contains?(&1, "Verifying provider"))
+      assert info_event?(events, &String.contains?(&1, "lemon doctor"))
+      refute info_event?(events, &String.contains?(&1, "lemon setup doctor"))
+    end
+
+    test "rerunning a configured provider performs the live check and reports rejection", %{
+      config_path: path
+    } do
+      configure_ready_provider(path)
+      io = recording_io()
+
+      assert {:error, :verification_failed} =
+               Wizard.run_full([], io,
+                 config_path: path,
+                 non_interactive: true,
+                 verifier: fn input ->
+                   send(self(), {:checked_existing, input.api_key})
+                   {:error, :unauthorized}
+                 end
+               )
+
+      assert_received {:checked_existing, "sk-wizard-existing"}
+      events = drain_events([])
+      assert error_event?(events, &String.contains?(&1, "HTTP 401/403"))
+      refute info_event?(events, &String.contains?(&1, "Setup complete"))
+    end
+
+    test "skipped or unavailable live verification never claims setup complete", %{
+      config_path: path
+    } do
+      configure_ready_provider(path)
+
+      for opts <- [
+            [skip_verify: true, verifier: fn _ -> flunk("skipped check ran") end],
+            [verifier: fn _ -> {:skip, :offline} end]
+          ] do
+        io = recording_io()
+        assert :ok = Wizard.run_full([], io, [config_path: path, non_interactive: true] ++ opts)
+        events = drain_events([])
+        assert info_event?(events, &String.contains?(&1, "not live-verified"))
+        refute info_event?(events, &String.contains?(&1, "Setup complete"))
+      end
     end
   end
 
@@ -285,16 +359,28 @@ defmodule LemonCli.Setup.WizardTest do
 
       # yes to the brief, an invalid time, then 7:30; decline runtime configuration.
       io = recording_io(["y", "7am", "7:30", "n"])
-      assert Wizard.run_full([], io, config_path: config_path) == :ok
+
+      assert Wizard.run_full([], io, config_path: config_path, verifier: fn _ -> {:ok, %{}} end) ==
+               :ok
 
       assert %{"automation" => %{"daily_brief" => "07:30"}} =
                config_path |> File.read!() |> Toml.decode!()
 
       events = drain_events([])
       assert error_event?(events, &String.contains?(&1, "24-hour time"))
+
+      assert Enum.any?(
+               prompt_events(events),
+               &String.contains?(&1, "lemon gateway setup telegram")
+             )
+
       assert info_event?(events, &String.contains?(&1, "Daily brief scheduled for 07:30"))
 
-      assert Wizard.run_full([], recording_io(["n"]), config_path: config_path) == :ok
+      assert Wizard.run_full([], recording_io(["n"]),
+               config_path: config_path,
+               verifier: fn _ -> {:ok, %{}} end
+             ) == :ok
+
       events = drain_events([])
       refute Enum.any?(prompt_events(events), &String.contains?(&1, "daily brief"))
       assert info_event?(events, &String.contains?(&1, "Daily brief: scheduled at 07:30"))
@@ -346,6 +432,7 @@ defmodule LemonCli.Setup.WizardTest do
                    "wizard-test-token",
                    "--model",
                    "gpt-5",
+                   "--set-default",
                    "--skip-verify",
                    "--config-path",
                    path
@@ -362,6 +449,10 @@ defmodule LemonCli.Setup.WizardTest do
                  prefer_env: false,
                  env_fallback: false
                )
+
+      events = drain_events([])
+      assert info_event?(events, &String.contains?(&1, "not live-verified"))
+      refute info_event?(events, &String.contains?(&1, "Setup complete"))
     end
   end
 
@@ -444,6 +535,19 @@ defmodule LemonCli.Setup.WizardTest do
   # ──────────────────────────────────────────────────────────────────────────
   # Helpers
   # ──────────────────────────────────────────────────────────────────────────
+
+  defp configure_ready_provider(path) do
+    set_master_key_env()
+    assert {:ok, _} = Secrets.set("wizard_existing", "sk-wizard-existing")
+
+    File.write!(path, """
+    [defaults]
+    provider = "openai"
+    model = "openai:gpt-5"
+    [providers.openai]
+    api_key_secret = "wizard_existing"
+    """)
+  end
 
   defp set_master_key_env do
     System.put_env("LEMON_SECRETS_MASTER_KEY", Base.encode64(:crypto.strong_rand_bytes(32)))
