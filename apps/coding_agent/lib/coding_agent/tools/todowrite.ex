@@ -33,7 +33,8 @@ defmodule CodingAgent.Tools.TodoWrite do
 
     %AgentTool{
       name: "todowrite",
-      description: "Write the session todo list.",
+      description:
+        "Replace the session todo list, including blocked/abandoned tasks and optional phase/blocker notes. Only the first in_progress item stays active.",
       label: "Write Todos",
       parameters: %{
         "type" => "object",
@@ -59,9 +60,10 @@ defmodule CodingAgent.Tools.TodoWrite do
           "content" => %{"type" => "string", "description" => "Brief description of the task"},
           "status" => %{
             "type" => "string",
-            "enum" => ["pending", "in_progress", "completed"],
+            "enum" => ["pending", "in_progress", "completed", "blocked", "abandoned"],
             "default" => "pending",
-            "description" => "Task status; defaults to pending when omitted"
+            "description" =>
+              "Task status; defaults to pending. Only the first in_progress item stays active."
           },
           "priority" => %{
             "type" => "string",
@@ -73,6 +75,11 @@ defmodule CodingAgent.Tools.TodoWrite do
             "type" => ["string", "null"],
             "description" =>
               "Stable ID returned by a previous write; omit or pass null for new tasks"
+          },
+          "phase" => %{"type" => "string", "description" => "Optional phase/group name"},
+          "blocker" => %{
+            "type" => "string",
+            "description" => "Optional explanation of what blocks the task"
           }
         },
         "required" => ["content"]
@@ -119,7 +126,9 @@ defmodule CodingAgent.Tools.TodoWrite do
                {:ok, prior, revision} <- previous(session),
                {:ok, todos} <- journal(session, assign_ids(todos, prior), revision) do
             output = Jason.encode!(todos, pretty: true)
-            open_count = Enum.count(todos, fn todo -> Map.get(todo, "status") != "completed" end)
+
+            open_count =
+              Enum.count(todos, fn todo -> todo["status"] not in ["completed", "abandoned"] end)
 
             %AgentToolResult{
               content: [%TextContent{text: output}],
@@ -187,13 +196,21 @@ defmodule CodingAgent.Tools.TodoWrite do
     with :ok <- validate_optional_id(todo, idx),
          :ok <- validate_non_empty_string(todo, "content", idx),
          :ok <- validate_status(todo, idx),
-         :ok <- validate_priority(todo, idx) do
+         :ok <- validate_priority(todo, idx),
+         :ok <- validate_optional_string(todo, "phase", idx),
+         :ok <- validate_optional_string(todo, "blocker", idx) do
       :ok
     end
   end
 
   defp validate_optional_id(todo, idx) do
     if Map.has_key?(todo, "id"), do: validate_non_empty_string(todo, "id", idx), else: :ok
+  end
+
+  defp validate_optional_string(todo, key, idx) do
+    if not Map.has_key?(todo, key) or is_binary(Map.get(todo, key)),
+      do: :ok,
+      else: {:error, "Todo #{idx} #{key} must be a string"}
   end
 
   defp validate_non_empty_string(todo, key, idx) do
@@ -211,18 +228,20 @@ defmodule CodingAgent.Tools.TodoWrite do
   end
 
   defp validate_status(todo, idx) do
-    allowed = ["pending", "in_progress", "completed"]
+    allowed = ["pending", "in_progress", "completed", "blocked", "abandoned"]
 
     case Map.get(todo, "status") do
       value when is_binary(value) ->
         if value in allowed do
           :ok
         else
-          {:error, "Todo #{idx} status must be pending, in_progress, or completed"}
+          {:error,
+           "Todo #{idx} status must be pending, in_progress, completed, blocked, or abandoned"}
         end
 
       _ ->
-        {:error, "Todo #{idx} status must be pending, in_progress, or completed"}
+        {:error,
+         "Todo #{idx} status must be pending, in_progress, completed, blocked, or abandoned"}
     end
   end
 

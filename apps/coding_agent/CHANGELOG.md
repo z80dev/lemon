@@ -20,6 +20,11 @@
 
 ### Changed
 
+- Todo plans preserve `blocked` and `abandoned` statuses, optional phase/blocker
+  notes and stable IDs in the journal and client projections. Writes keep only
+  the first in-progress task active; progress reports all statuses, and actionable
+  tasks exclude blocked/abandoned work. Terminal checklists show phases and notes.
+
 - Consolidate memory tools as `remember` (compact USER.md/MEMORY.md facts) and
   `recall` (past conversations and longer workspace notes); remove the former
   search, topic, and session-browse tool surfaces.

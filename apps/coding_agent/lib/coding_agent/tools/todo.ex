@@ -12,8 +12,9 @@ defmodule CodingAgent.Tools.Todo do
   Every successful operation includes the complete normalized state in
   `details.todos` and `details.plan.entries`, even when text content is a progress
   summary or actionable subset. Plan entries are ordered maps with `content`,
-  `status` (pending/in_progress/completed) and `priority` (high/medium/low), all
-  string values. Actionable results additionally expose `details.actionable`.
+  `status` (pending/in_progress/completed/blocked/abandoned), `priority`
+  (high/medium/low) and optional `phase`/`blocker` strings. Actionable results
+  additionally expose `details.actionable` and full status counts.
   State is the owning session's selected-branch journal (`CodingAgent.Session.Todos`),
   so every view agrees with rewind, branch navigation, resume and forks.
   """
@@ -39,6 +40,8 @@ defmodule CodingAgent.Tools.Todo do
         "Manage the session plan. ONLY action='write' changes tasks or statuses: pass the complete todos list. " <>
           "read, progress, and actionable are read-only getters; omit todos or pass null with them. " <>
           "Write entries need content; omit IDs or pass null for generated IDs, status defaults pending, priority defaults medium. " <>
+          "Statuses: pending, in_progress, completed, blocked (optional blocker note), abandoned. Optional phase groups tasks. " <>
+          "Only the first in_progress entry remains active after a write. Blocked and abandoned tasks are not actionable. " <>
           "To mark tasks done, use write with status='completed', then progress to inspect counts.",
       label: "Manage Todos",
       parameters: %{
@@ -132,6 +135,7 @@ defmodule CodingAgent.Tools.Todo do
           details:
             todos
             |> TodoStore.result_details()
+            |> Map.merge(TodoStore.progress(todos))
             |> Map.put(:title, "#{length(actionable)} actionable todos")
             |> Map.put(:actionable, TodoStore.result_details(actionable).todos)
         }
