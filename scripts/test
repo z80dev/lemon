@@ -74,8 +74,11 @@ Usage: scripts/test <lane> [args]
 
 Canonical test lanes:
   fast       CI test lane: compile with warnings as errors, then ExUnit excluding integration (no coverage)
+  changed    Affected apps + data readers: [--base REF] [--focused] [mix test args...]
+             --focused is a quick pre-check only, not a substitute for the app run
+  premerge   Stop-on-failure diff checks: [--base REF] (default: origin/main)
   quality    CI check lane: compile -Werror, format check, credo, skip-tag guard, shellcheck, launcher
-             script tests, skill lint, mix lemon.quality, focused quality tests
+             script tests, changelog guard, selector self-test, skill lint, mix lemon.quality, focused quality tests
   clients    CI client lane: tui (typecheck, lint, bun test) and lemon-browser-node (typecheck, lint, build, vitest)
   coverage   Nightly lane: ExUnit excluding integration with --cover (per-app coverage thresholds)
   eval-fast  Small deterministic eval harness run: mix lemon.eval --iterations ${LEMON_EVAL_ITERATIONS:-3}
@@ -152,7 +155,8 @@ EOF
 
 setup_tmp_env() {
   if [ -z "${LEMON_TEST_TMPDIR:-}" ]; then
-    export LEMON_TEST_TMPDIR="$(mktemp -d "${TMPDIR:-/tmp}/lemon-test.XXXXXX")"
+    LEMON_TEST_TMPDIR="$(mktemp -d "${TMPDIR:-/tmp}/lemon-test.XXXXXX")"
+    export LEMON_TEST_TMPDIR
     trap 'rm -rf "$LEMON_TEST_TMPDIR"' EXIT
   fi
 
@@ -206,6 +210,7 @@ run_shellcheck() {
   shellcheck scripts/verify_install_script
   shellcheck rel/overlays/bin/lemon
   shellcheck bin/lemonup scripts/test_lemonup.sh
+  shellcheck scripts/test
 }
 
 run_quality() {
@@ -215,6 +220,8 @@ run_quality() {
   mix format --check-formatted
   mix credo
   check_skipped_tests
+  scripts/check_changelog
+  python3 scripts/test_changed_tests.py
   run_shellcheck
   bash scripts/test_lemon_tui_auth.sh
   bash scripts/test_lemon_launcher_reuse.sh
@@ -312,9 +319,134 @@ run_path() {
   mix test "$@"
 }
 
+# Keep path transport NUL-delimited: local filenames may contain spaces.
+selection_paths() {
+  python3 -c 'import json, os, sys
+for path in json.load(open(sys.argv[1]))[sys.argv[2]]:
+    sys.stdout.buffer.write(os.fsencode(path) + b"\0")
+' "$1" "$2"
+}
+
+run_changed() {
+  ensure_repo_root
+  setup_test_env
+  local base="origin/main" focused=0 arg scope clients docs selection
+  local mix_args=() paths=()
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --base)
+        if [ "$#" -lt 2 ]; then
+          echo "error: --base requires a ref" >&2
+          return 64
+        fi
+        base="$2"; shift 2 ;;
+      --focused) focused=1; shift ;;
+      --) shift; mix_args+=("$@"); break ;;
+      *) mix_args+=("$1"); shift ;;
+    esac
+  done
+  selection="$(mktemp "$LEMON_TEST_TMPDIR/changed.XXXXXX")"
+  scripts/changed_tests --base "$base" --focused --format json >"$selection"
+  read -r scope clients docs < <(python3 -c 'import json, sys
+s = json.load(open(sys.argv[1]))
+print(s["scope"], str(s["lanes"]["clients"]).lower(), str(s["lanes"]["docs"]).lower())
+' "$selection")
+  python3 -c 'import json, sys
+s = json.load(open(sys.argv[1]))
+print("Test scope: " + s["scope"])
+if s["apps"]:
+    print("Apps: " + " ".join(s["apps"]))
+for reason in s["reasons"]:
+    print("  - " + reason)
+' "$selection"
+  if [ "$focused" -eq 1 ]; then
+    echo "Quick pre-check only: focused files are NOT a substitute for the affected-app run."
+    while IFS= read -r -d '' arg; do paths+=("$arg"); done < <(selection_paths "$selection" focused_test_files)
+    if [ "${#paths[@]}" -eq 0 ]; then
+      echo "No matching focused test files; skipping ExUnit."
+    else
+      mix compile --warnings-as-errors
+      mix test --exclude integration "${paths[@]}" ${mix_args[@]+"${mix_args[@]}"}
+    fi
+  elif [ "$scope" = "none" ]; then
+    echo "No affected app tests; skipping ExUnit."
+  elif [ "$scope" = "full" ]; then
+    run_fast ${mix_args[@]+"${mix_args[@]}"}
+  else
+    while IFS= read -r -d '' arg; do paths+=("$arg"); done < <(selection_paths "$selection" test_paths)
+    mix compile --warnings-as-errors
+    mix test --exclude integration "${paths[@]}" ${mix_args[@]+"${mix_args[@]}"}
+  fi
+  if [ "$clients" = "true" ]; then
+    run_clients
+  fi
+  if [ "$docs" = "true" ]; then
+    scripts/verify_docs_site
+  fi
+  rm -f "$selection"
+}
+
+premerge_step() (
+  set -E
+  local name="$1" started=$SECONDS status
+  shift
+  echo "==> premerge: $name"
+  trap 'status=$?; printf "error: premerge %s failed after %ss (exit %s)\n" "$name" "$((SECONDS - started))" "$status" >&2; exit "$status"' ERR
+  "$@"
+  printf 'premerge: %s passed (%ss)\n' "$name" "$((SECONDS - started))"
+)
+
+run_premerge() {
+  ensure_repo_root
+  setup_test_env
+  local base="origin/main" selection path
+  local formatted=() elixir=() changelogs=()
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --base)
+        if [ "$#" -lt 2 ]; then
+          echo "error: --base requires a ref" >&2
+          return 64
+        fi
+        base="$2"; shift 2 ;;
+      *) echo "error: premerge accepts only --base REF" >&2; return 64 ;;
+    esac
+  done
+  selection="$(mktemp "$LEMON_TEST_TMPDIR/premerge.XXXXXX")"
+  scripts/changed_tests --base "$base" --format json >"$selection"
+  while IFS= read -r -d '' path; do
+    if [ -f "$path" ]; then
+      case "$path" in *.ex|*.exs|*.heex) formatted+=("$path") ;; esac
+      case "$path" in *.ex|*.exs) elixir+=("$path") ;; esac
+    fi
+    case "$path" in CHANGELOG.md|*/CHANGELOG.md) changelogs+=("$path") ;; esac
+  done < <(selection_paths "$selection" changed_files)
+  if [ "${#formatted[@]}" -gt 0 ]; then
+    premerge_step format mix format --check-formatted "${formatted[@]}"
+  else
+    echo "premerge: format skipped (no changed .ex/.exs/.heex files; 0s)"
+  fi
+  if [ "${#elixir[@]}" -gt 0 ]; then
+    premerge_step credo mix credo "${elixir[@]}"
+  else
+    echo "premerge: credo skipped (no changed .ex/.exs files; 0s)"
+  fi
+  premerge_step skip-tag-guard check_skipped_tests
+  if [ "${#changelogs[@]}" -gt 0 ]; then
+    premerge_step changelog scripts/check_changelog "${changelogs[@]}"
+  else
+    echo "premerge: changelog skipped (no changed CHANGELOG.md; 0s)"
+  fi
+  premerge_step changed run_changed --base "$base"
+  rm -f "$selection"
+  echo "Not covered: full suite runs on main after merge; dialyzer/install/sim-bench run in CI."
+}
+
 case "$LANE" in
   help|-h|--help) usage ;;
   fast) run_fast "$@" ;;
+  changed) run_changed "$@" ;;
+  premerge) run_premerge "$@" ;;
   quality) run_quality "$@" ;;
   clients) run_clients "$@" ;;
   coverage) run_coverage "$@" ;;

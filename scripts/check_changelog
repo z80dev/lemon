@@ -1,0 +1,107 @@
+#!/usr/bin/env python3
+"""Check changelog structure without rewriting frozen, published release notes."""
+
+import argparse
+from datetime import date
+from pathlib import Path
+import re
+import sys
+
+
+CATEGORIES = {"Added", "Changed", "Deprecated", "Removed", "Fixed", "Security"}
+VERSION = re.compile(r"^## \[([^\]]+)\](?: - (\d{4}-\d{2}-\d{2}))?\s*$")
+
+
+def validate(path):
+    errors = []
+    versions = []
+    unreleased = False
+    category = None
+    categories = set()
+    dated_releases = set()
+    fence = None
+    for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+        stripped = line.lstrip()
+        marker = re.match(r"(`{3,}|~{3,})", stripped)
+        if marker:
+            token = marker.group(1)
+            if fence is None:
+                fence = token
+            elif token[0] == fence[0] and len(token) >= len(fence):
+                fence = None
+            continue
+        if fence:
+            continue
+        if line.startswith("## "):
+            match = VERSION.fullmatch(line)
+            unreleased = False
+            category = None
+            categories = set()
+            if match:
+                version, released_on = match.groups()
+                versions.append(version)
+                unreleased = version == "Unreleased"
+                if unreleased and released_on:
+                    errors.append((number, "Unreleased must not have a release date"))
+                elif not unreleased:
+                    if not re.fullmatch(r"\d[\w.+-]*", version):
+                        errors.append((number, "invalid version; use ## [X] or ## [X] - YYYY-MM-DD"))
+                    dated_releases.add(bool(released_on))
+                if released_on:
+                    try:
+                        date.fromisoformat(released_on)
+                    except ValueError:
+                        errors.append((number, "invalid release date"))
+            elif line.startswith("## [") or re.match(r"## (?:Unreleased|\d)", line):
+                errors.append((number, "invalid version heading; use ## [Unreleased], ## [X] or ## [X] - YYYY-MM-DD"))
+            continue
+        # Released notes are immutable and include historical product-specific
+        # headings and repeated categories. Enforce the release-preparation
+        # contract on the editable Unreleased section, not that frozen history.
+        if not unreleased:
+            continue
+        if line.startswith("### "):
+            category = line[4:].strip()
+            if category not in CATEGORIES:
+                errors.append((number, f"invalid Unreleased subsection: {category}"))
+                category = None
+            elif category in categories:
+                errors.append((number, f"duplicate Unreleased subsection: {category}"))
+            else:
+                categories.add(category)
+        elif re.match(r"\s*(?:[-+*]|\d+[.)])\s+\S", line) and category is None:
+            errors.append((number, "Unreleased bullet must be under a ### Added/Changed/Deprecated/Removed/Fixed/Security heading"))
+    if versions.count("Unreleased") != 1:
+        errors.append((1, "exactly one ## [Unreleased] section is required"))
+    if versions and versions[0] != "Unreleased":
+        errors.append((1, "## [Unreleased] must be the first version section"))
+    if len(dated_releases) > 1:
+        errors.append((1, "release version headings must consistently include or omit dates within a file"))
+    return errors
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("files", nargs="*", help="default: root, apps/* and installer CHANGELOG.md")
+    args = parser.parse_args()
+    root = Path(__file__).resolve().parent.parent
+    files = [Path(path) for path in args.files] if args.files else [
+        root / "CHANGELOG.md", *sorted(root.glob("apps/*/CHANGELOG.md")), root / "installer/CHANGELOG.md",
+    ]
+    failed = False
+    for path in files:
+        try:
+            errors = validate(path)
+        except OSError as error:
+            errors = [(1, str(error))]
+        for line, error in errors:
+            print(f"{path}:{line}: {error}", file=sys.stderr)
+            failed = True
+    if failed:
+        return 1
+    print(f"Changelog check passed ({len(files)} files; strict Unreleased, frozen release history).")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -7,6 +7,9 @@ lane that passes locally runs the same commands in CI.
 
 ```bash
 scripts/test help
+scripts/test premerge    # diff format/credo/guards, then affected app tests
+scripts/test changed     # affected app tests plus relevant clients/docs checks
+scripts/test changed --focused  # quick matching-file pre-check only
 scripts/test fast        # what CI's `test` job runs
 scripts/test quality     # what CI's `check` job runs
 scripts/test clients     # what CI's `clients` job runs
@@ -23,7 +26,9 @@ scripts/test path apps/lemon_core/test/lemon_core/quality --seed 1
 | Lane | Runs |
 | --- | --- |
 | `fast` | `mix compile --warnings-as-errors`, then `mix test --exclude integration` (no coverage). |
-| `quality` | `mix compile --warnings-as-errors`, `mix format --check-formatted`, `mix credo`, the skip-tag guard, `shellcheck` on `install.sh` / `scripts/verify_install_script` / `rel/overlays/bin/lemon` / `bin/lemonup`, `scripts/test_lemon_tui_auth.sh`, `scripts/test_lemon_launcher_reuse.sh`, `scripts/test_lemonup.sh`, `mix lemon.skill.lint`, `mix lemon.quality`, and the quality/eval-harness tests. |
+| `changed` | Selects the merge-base-to-working-tree diff (including untracked non-ignored files), compiles with warnings as errors, then runs affected apps and reverse dependencies excluding integration; full scope falls back to `fast`. Runs client checks and docs verification when selected. |
+| `premerge` | Changed-file format check, changed-file `mix credo` with quality's default configuration, skip-tag guard, changed changelog validation, then `changed`; stops at the first failure and prints step timings. |
+| `quality` | `mix compile --warnings-as-errors`, `mix format --check-formatted`, `mix credo`, the skip-tag guard, `scripts/check_changelog`, `python3 scripts/test_changed_tests.py`, `shellcheck` on the test/install/update/launcher scripts, `scripts/test_lemon_tui_auth.sh`, `scripts/test_lemon_launcher_reuse.sh`, `scripts/test_lemonup.sh`, `mix lemon.skill.lint`, `mix lemon.quality`, and the quality/eval-harness tests. |
 | `clients` | `clients/tui`: `bun install --frozen-lockfile`, `bun run check`, `bun run lint`, `bun test`. `clients/lemon-browser-node`: `npm ci`, `typecheck`, `lint`, `build`, `npm test`. |
 | `coverage` | `mix compile --warnings-as-errors`, then `mix test --exclude integration --cover` with each app's `test_coverage` threshold. |
 | `eval-fast` | `mix lemon.eval --iterations ${LEMON_EVAL_ITERATIONS:-3}` (deterministic eval harness). |
@@ -56,6 +61,46 @@ valid, test-only 32-byte secrets keys; no live provider credential is needed.
 For packaged CLI coverage, run `scripts/verify_release_runtime_boot` in
 `--single TARBALL --profile PROFILE` mode against both locally assembled
 `lemon_runtime_min` and `lemon_runtime_full` tarballs.
+
+## Which checks for my diff
+
+Run `scripts/test premerge` before merging a small change. It checks changed
+Elixir/HEEx formatting, changed Elixir files with the same Credo settings as
+`quality`, skip tags, changed changelogs, and the affected-app test run in that
+order. Each step reports elapsed time and stops on failure. Both `premerge` and
+`changed` accept `--base REF` (default `origin/main`); selection compares the
+merge base with the working tree, including untracked non-ignored files.
+
+Use `scripts/test changed [--base REF] [mix test args...]` to repeat just the
+affected work. App changes include transitive reverse dependencies, including
+test-only/conditional umbrella dependencies. Shared build/config/tooling inputs
+and unknown paths conservatively select the full fast suite and clients.
+Documentation/client/product/showcase data changes select apps whose lib, test
+or priv files reference the exact path or an ancestor of at least two segments;
+these data readers do not pull in reverse dependencies. Client changes also run
+`clients`; docs changes run `scripts/verify_docs_site` (Node and Python required).
+
+For an inner loop, `scripts/test changed --focused` runs only existing changed
+`*_test.exs` files and conventional `lib/a/b.ex` → `test/a/b_test.exs` matches.
+This is a **quick pre-check, not a substitute for the affected-app run**; it can
+find no matching tests. Selected client/docs checks still run.
+Preview the selection with `scripts/changed_tests --focused`; `--format json`
+is machine-readable. `--format github` appends `scope`, `apps`, `test_paths`,
+`clients`, `wasm`, and `docs` to `$GITHUB_OUTPUT`, and a selection summary to
+`$GITHUB_STEP_SUMMARY` when set. The WASM flag is for CI's dedicated runtime
+lane; `changed` itself does not invoke that toolchain.
+
+Keep `quality` for repository-wide checks. `scripts/check_changelog` checks
+root/app/installer changelogs by default, or named files; Unreleased must be the
+first version section, and its bullets must sit under unique Keep a Changelog
+subsections. Published release bodies are frozen and retain historical headings.
+Version headings must consistently include or omit dates within each file.
+
+Diff checks do not replace the full suite on main after merge, nightly coverage
+and repeated regression/eval runs, or release assembly/boot/package checks.
+Dialyzer, install verification, sim-bench, and the dedicated WASM lane remain CI
+responsibilities. No live provider calls are needed for `premerge` or `changed`.
+
 
 ## CI mapping
 
