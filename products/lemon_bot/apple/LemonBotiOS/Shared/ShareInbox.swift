@@ -33,8 +33,15 @@ enum ShareInbox {
     static let groupID = "group.org.lemonbot.shared"
 
     static func root() throws -> URL {
-        guard let container = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: groupID) else {
-            throw CaptureError.message("App Group \(groupID) is unavailable. Sign both the app and share extension with this App Group entitlement.")
+        let container: URL
+        if let group = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: groupID) {
+            container = group
+        } else if !Bundle.main.bundlePath.hasSuffix(".appex") {
+            // Personal-team builds cannot sign App Groups. The app keeps camera/photo/file
+            // staging in its own container; only the share extension handoff is unavailable.
+            container = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
+        } else {
+            throw CaptureError.message("Sharing into Lemon Bot needs the App Group \(groupID), which this build is not signed with. Open Lemon Bot and attach the file there instead.")
         }
         let root = container.appendingPathComponent("ShareInbox", isDirectory: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
