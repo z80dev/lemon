@@ -390,6 +390,7 @@ defmodule CodingAgent.Tools.Agent do
 
             if completion do
               finalize_task_from_completion(task_id, completion, %{
+                run_id: run_id,
                 agent_id: Map.get(record, :agent_id),
                 delegated_session_key: Map.get(record, :delegated_session_key),
                 role: Map.get(record, :role)
@@ -1105,10 +1106,8 @@ defmodule CodingAgent.Tools.Agent do
   end
 
   defp await_run_completion(run_id, timeout_ms, opts \\ []) do
-    # Subscribe BEFORE checking the store to avoid race condition:
-    # if the run completes between our store check and subscribe call,
-    # we'd miss the Bus event and the store might not be finalized yet
-    # (Store.finalize_run is an async cast).
+    # Subscribe before reading the durable summary so a completion between the
+    # store check and entering the receive loop is still observable.
     topic = Bus.run_topic(run_id)
     :ok = Bus.subscribe(topic)
     on_subscribed = Keyword.get(opts, :on_subscribed)

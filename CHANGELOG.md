@@ -10,6 +10,11 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Preserve delegated run identity when polling recovers a durable completion, so
+  the task and RunGraph both become terminal even without a live watcher.
+- Make coordinator/session/watcher/environment regressions synchronize with their
+  actual lifecycle and isolate resource discovery from protocol fixtures.
+
 - Assert LSP owner cleanup by the exact managed server ID rather than a global
   active-count delta that races unrelated idle-server cleanup.
 

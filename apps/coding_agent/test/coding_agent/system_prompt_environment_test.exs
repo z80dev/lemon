@@ -1,5 +1,6 @@
 defmodule CodingAgent.SystemPromptEnvironmentTest do
-  use ExUnit.Case, async: true
+  # The large filesystem fixture must not contend with async file_server users.
+  use ExUnit.Case, async: false
 
   alias CodingAgent.SystemPrompt.Environment
 
@@ -140,6 +141,26 @@ defmodule CodingAgent.SystemPromptEnvironmentTest do
       refute missing =~ "Git repository: no"
     end
 
+    test "filesystem probe unavailability stays distinct from an empty completed scan", %{
+      tmp_dir: tmp_dir
+    } do
+      opts = [git_executable: nil, shell: "/bin/sh", date: ~D[2026-01-02]]
+
+      unavailable =
+        Environment.capture(tmp_dir, Keyword.put(opts, :filesystem_probe, fn _scan -> nil end))
+
+      completed =
+        Environment.capture(
+          tmp_dir,
+          Keyword.put(opts, :filesystem_probe, fn scan -> {:ok, scan.()} end)
+        )
+
+      assert unavailable =~ "filesystem scan unavailable"
+      assert unavailable =~ "instruction index unavailable"
+      refute completed =~ "filesystem scan unavailable"
+      refute completed =~ "instruction index unavailable"
+    end
+
     test "instruction and layout caps are labelled and capture ordering is stable", %{
       tmp_dir: tmp_dir
     } do
@@ -148,7 +169,15 @@ defmodule CodingAgent.SystemPromptEnvironmentTest do
         write_guide(tmp_dir, "#{dir}/AGENTS.md", "rules")
       end
 
-      opts = [git_executable: nil, shell: "/bin/zsh", date: ~D[2026-01-02]]
+      opts = [
+        git_executable: nil,
+        shell: "/bin/zsh",
+        date: ~D[2026-01-02],
+        # Exercise the real traversal and rendering, not a race against the
+        # production probe deadline (whose unavailable result is valid).
+        filesystem_probe: fn scan -> {:ok, scan.()} end
+      ]
+
       block = Environment.capture(tmp_dir, opts)
 
       assert Environment.capture(tmp_dir, opts) == block
@@ -170,7 +199,7 @@ defmodule CodingAgent.SystemPromptEnvironmentTest do
   defp write_guide(root, relative_path, content) do
     path = Path.join(root, relative_path)
     File.mkdir_p!(Path.dirname(path))
-    File.write!(path, content)
+    File.write!(path, content, [:raw])
     path
   end
 end

@@ -34,6 +34,7 @@ defmodule CodingAgent.SystemPrompt.Environment do
           | {:shell, String.t() | nil}
           | {:git_executable, String.t() | nil}
           | {:git_timeout_ms, pos_integer()}
+          | {:filesystem_probe, ((-> map()) -> term())}
 
   @doc """
   Capture and render the environment block for `cwd`.
@@ -45,6 +46,9 @@ defmodule CodingAgent.SystemPrompt.Environment do
     * `:git_executable` - Git executable path (default: resolve `git` on PATH);
       explicit `nil` reports Git unavailable and uses filesystem discovery
     * `:git_timeout_ms` - deadline per Git command (default: 2,000 milliseconds)
+    * `:filesystem_probe` - executes a zero-arity filesystem scan and returns
+      `{:ok, snapshot}` or an unavailable result. Defaults to a monitored task
+      with a 2-second deadline; controlled callers can inject its execution.
 
   Git output is capped at 256 KiB per command. The instruction index displays
   at most 200 paths and layout at most 24 top-level entries. Filesystem fallback
@@ -57,7 +61,8 @@ defmodule CodingAgent.SystemPrompt.Environment do
     shell = Keyword.get(opts, :shell) || default_shell()
     git = Keyword.get_lazy(opts, :git_executable, fn -> System.find_executable("git") end)
     timeout = Keyword.get(opts, :git_timeout_ms, @git_timeout_ms)
-    {git_lines, root, snapshot} = repository_snapshot(cwd, git, timeout)
+    filesystem_probe = Keyword.get(opts, :filesystem_probe, &bounded_filesystem_probe/1)
+    {git_lines, root, snapshot} = repository_snapshot(cwd, git, timeout, filesystem_probe)
 
     [
       "## Environment",
@@ -86,12 +91,12 @@ defmodule CodingAgent.SystemPrompt.Environment do
     "#{os} (#{:erlang.system_info(:system_architecture)})"
   end
 
-  defp repository_snapshot(cwd, nil, _timeout) do
+  defp repository_snapshot(cwd, nil, _timeout, probe) do
     {["Git repository: unavailable (Git executable not found)"], cwd,
-     filesystem_snapshot(cwd, "Git ignore rules unavailable")}
+     filesystem_snapshot(cwd, "Git ignore rules unavailable", probe)}
   end
 
-  defp repository_snapshot(cwd, git, timeout) do
+  defp repository_snapshot(cwd, git, timeout, probe) do
     case git_command(git, cwd, ["rev-parse", "--show-toplevel"], timeout) do
       {:ok, output, 0} ->
         root = String.trim(output)
@@ -99,27 +104,27 @@ defmodule CodingAgent.SystemPrompt.Environment do
         if root != "" and File.dir?(root) do
           {repository_lines(cwd, root, git, timeout), root, git_snapshot(root, git, timeout)}
         else
-          unavailable_snapshot(cwd, :invalid_root)
+          unavailable_snapshot(cwd, :invalid_root, probe)
         end
 
       {:ok, output, _status} ->
         if String.contains?(output, "not a git repository") do
-          {["Git repository: no"], cwd, filesystem_snapshot(cwd, "non-Git traversal")}
+          {["Git repository: no"], cwd, filesystem_snapshot(cwd, "non-Git traversal", probe)}
         else
-          unavailable_snapshot(cwd, :command_failed)
+          unavailable_snapshot(cwd, :command_failed, probe)
         end
 
       {:truncated, _output, :unknown} ->
-        unavailable_snapshot(cwd, :output_limit)
+        unavailable_snapshot(cwd, :output_limit, probe)
 
       {:error, reason} ->
-        unavailable_snapshot(cwd, reason)
+        unavailable_snapshot(cwd, reason, probe)
     end
   end
 
-  defp unavailable_snapshot(cwd, reason) do
+  defp unavailable_snapshot(cwd, reason, probe) do
     {["Git repository: unavailable (#{reason})"], cwd,
-     filesystem_snapshot(cwd, "Git ignore rules unavailable")}
+     filesystem_snapshot(cwd, "Git ignore rules unavailable", probe)}
   end
 
   defp repository_lines(cwd, root, git, timeout) do
@@ -213,10 +218,13 @@ defmodule CodingAgent.SystemPrompt.Environment do
     match?({:ok, %{type: :regular}}, File.lstat(path))
   end
 
-  defp filesystem_snapshot(root, source) do
-    task = Task.async(fn -> walk([{root, 0}], root, @max_walk_entries, [], [], false) end)
+  defp bounded_filesystem_probe(scan) do
+    task = Task.async(scan)
+    Task.yield(task, @git_timeout_ms) || Task.shutdown(task, :brutal_kill)
+  end
 
-    case Task.yield(task, @git_timeout_ms) || Task.shutdown(task, :brutal_kill) do
+  defp filesystem_snapshot(root, source, probe) do
+    case probe.(fn -> walk([{root, 0}], root, @max_walk_entries, [], [], false) end) do
       {:ok, snapshot} ->
         Map.merge(snapshot, %{source: source, unavailable: false})
 

@@ -227,6 +227,17 @@ Coordinator cancellation fixtures wait for tracked admission guardians and sessi
 to exit before asserting an empty active set: a bounded batch result is not a
 synchronous shutdown receipt.
 
+Coordinator timeout/abort protocol fixtures use controlled sessions, wait for
+prompt acknowledgements, deliver timeout messages explicitly and monitor cleanup.
+Terminal-event fixtures supply empty tools, extension inventory and MCP tools;
+they exercise event handling rather than unrelated resource discovery.
+Delegated completion fixtures finalize the durable run summary before publishing
+the Bus event, including late reconciliation and store-only poll recovery.
+Environment cap/ordering fixtures keep the full filesystem traversal but inject
+its probe execution; they must not mistake the valid production deadline result
+for deterministic rendering. Large file fixtures run synchronously and use raw
+writes to avoid contending with async tests through the shared file server.
+
 LSP owner-lifecycle fixtures monitor the scoped client through exit, then assert
 that its exact managed server ID is gone. Unrelated idle-server cleanup can change
 the shared manager's active count concurrently; global count deltas are not an
