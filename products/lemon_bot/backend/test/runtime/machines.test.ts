@@ -10,10 +10,10 @@ describe('privileged destination machine boundary', () => {
     const f = fixture();
     f.rpc = async method => {
       if (method !== 'node.runtime.features') throw new Error('Unexpected RPC');
-      return { ...compatibleFeatures('node_1'), capabilities: { 'coding_agent.run': { version: 1, nativePrivacyContext: { version: 1 } } }, nativePrivacyContext: { version: 1 } };
+      return { ...compatibleFeatures('node_1'), capabilities: { 'coding_agent.run': { version: 2, executionContext: { version: 1 }, nativePrivacyContext: { version: 1 } } }, nativePrivacyContext: { version: 1 } };
     };
     try {
-      expect(await ensureMachineRuntimeReady(f.services, f.machine, true)).toMatchObject({ botReady: true, nativePrivacyContext: { version: 1 }, capabilities: { 'coding_agent.run': { version: 1 } } });
+      expect(await ensureMachineRuntimeReady(f.services, f.machine, true)).toMatchObject({ botReady: true, nativePrivacyContext: { version: 1 }, capabilities: { 'coding_agent.run': { version: 2, executionContext: { version: 1 } } } });
       expect(f.store.list('botGrants')).toEqual([]);
     } finally { f.store.close(); }
   });
