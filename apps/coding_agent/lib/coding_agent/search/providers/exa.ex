@@ -14,6 +14,13 @@ defmodule CodingAgent.Search.Providers.Exa do
   def capabilities, do: [:search, :extract]
 
   @impl true
+  def search_features,
+    do: %{
+      mapped_operators: [:site, :exclude_site, :after, :before],
+      freshness: [:relative, :range]
+    }
+
+  @impl true
   def available?(capability, %{api_key: key})
       when capability in [:search, :extract] and is_binary(key) and key != "",
       do: :ok
@@ -43,6 +50,29 @@ defmodule CodingAgent.Search.Providers.Exa do
         }
       }
     }
+
+    {first, last} = CodingAgent.Search.Operators.dates(request)
+
+    body =
+      body
+      |> CodingAgent.Search.Operators.put_if(
+        "startPublishedDate",
+        if(first, do: first <> "T00:00:00Z")
+      )
+      |> CodingAgent.Search.Operators.put_if(
+        "endPublishedDate",
+        if(last, do: last <> "T00:00:00Z")
+      )
+
+    tokens = Map.get(request, :operator_tokens, [])
+
+    body =
+      Enum.reduce([{:site, "includeDomains"}, {:exclude_site, "excludeDomains"}], body, fn {kind,
+                                                                                            key},
+                                                                                           acc ->
+        domains = Enum.filter(tokens, &(&1.kind == kind)) |> Enum.map(& &1.value)
+        if domains == [], do: acc, else: Map.put(acc, key, domains)
+      end)
 
     case post(context, "/search", body) do
       {:ok, decoded} ->

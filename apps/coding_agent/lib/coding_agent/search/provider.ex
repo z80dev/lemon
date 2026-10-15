@@ -20,6 +20,13 @@ defmodule CodingAgent.Search.Provider do
   @doc "Capabilities implemented by this provider."
   @callback capabilities() :: [capability()]
 
+  @doc "Optional query syntax, mapped operators, and freshness support."
+  @callback search_features() :: map()
+
+  def search_features(module) do
+    if function_exported?(module, :search_features, 0), do: module.search_features(), else: %{}
+  end
+
   @doc "Checks resolved configuration without making a network request."
   @callback available?(capability(), context()) :: :ok | {:error, term()}
 
@@ -29,7 +36,7 @@ defmodule CodingAgent.Search.Provider do
   @doc "Extracts readable content from a URL."
   @callback extract(request(), context()) :: result()
 
-  @optional_callbacks search: 2, extract: 2
+  @optional_callbacks search: 2, extract: 2, search_features: 0
 
   @doc false
   @spec valid_capability?(term()) :: boolean()

@@ -311,6 +311,7 @@ allow_tools = []
 # enabled = true
 # max_chars = 50000
 # timeout_seconds = 30
+# max_body_bytes = 5242880 # Streaming response cap (5 MiB).
 
 # [runtime.tools.web.fetch.firecrawl]
 # enabled = true

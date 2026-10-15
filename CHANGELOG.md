@@ -8,10 +8,15 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
+- Web search parses common query operators, reports dropped constraints, and
+  preserves freshness across capable fallback providers. Guarded web fetches
+  halt oversized response streams at a configurable 5 MiB default.
+
 - Add opt-in `memory.write_approval` and `skills.write_approval` for human review
   of agent-authored durable facts and skills through existing execution approvals.
   Previews are bounded, escaped and redacted; denied/unavailable approval writes
   nothing, and unattended background review, cron and unsupported channels fail closed.
+
 - Add `lemon learning`: a bounded, redacted, profile-isolated timeline over
   existing memory and skill timestamps, with kind filters and JSON output.
 
