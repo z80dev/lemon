@@ -17,6 +17,7 @@ defmodule LemonChannels.PortableCommand do
   )
 
   @type context :: %{
+          optional(:surface) => binary(),
           optional(:session_key) => binary(),
           optional(:cwd) => binary(),
           optional(:model) => binary(),
@@ -29,15 +30,32 @@ defmodule LemonChannels.PortableCommand do
     args = String.trim(args || "")
 
     case CommandCatalog.find(command) do
-      {:ok, %{"name" => "status"}} -> {:ok, render_status(context)}
-      {:ok, %{"name" => "usage"}} -> {:ok, render_usage()}
-      {:ok, %{"name" => "agents"}} -> {:ok, render_tasks()}
-      {:ok, %{"name" => "compress"}} -> compact(context)
-      {:ok, %{"name" => name}} when name in ["commands", "help"] -> {:ok, render_help(args)}
-      {:ok, %{"name" => "bg"}} -> background(args, context)
-      {:ok, %{"name" => "btw"}} -> ask_side_question(args, context)
-      {:ok, command_meta} -> {:error, usage(command_meta)}
-      :error -> {:error, "Unknown command. Use /commands to see the portable Lemon commands."}
+      {:ok, %{"name" => "status"}} ->
+        {:ok, render_status(context)}
+
+      {:ok, %{"name" => "usage"}} ->
+        {:ok, render_usage()}
+
+      {:ok, %{"name" => "agents"}} ->
+        {:ok, render_tasks()}
+
+      {:ok, %{"name" => "compress"}} ->
+        compact(context)
+
+      {:ok, %{"name" => name}} when name in ["commands", "help"] ->
+        {:ok, render_help(args, context[:surface])}
+
+      {:ok, %{"name" => "bg"}} ->
+        background(args, context)
+
+      {:ok, %{"name" => "btw"}} ->
+        ask_side_question(args, context)
+
+      {:ok, command_meta} ->
+        {:error, usage(command_meta)}
+
+      :error ->
+        {:error, "Unknown command. Use /commands to see the portable Lemon commands."}
     end
   rescue
     _ -> {:error, "Command failed safely. Check the Lemon runtime logs for details."}
@@ -152,9 +170,9 @@ defmodule LemonChannels.PortableCommand do
     end
   end
 
-  defp render_help(filter) do
+  defp render_help(filter, surface) do
     commands =
-      CommandCatalog.catalog()
+      CommandCatalog.catalog(surface)
       |> Enum.filter(fn command ->
         filter == "" or
           String.contains?(String.downcase(command["name"]), String.downcase(filter)) or

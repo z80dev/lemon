@@ -121,7 +121,9 @@ defmodule LemonChannels.UserPromptSurface do
           RemoteApproval.enqueue(
             prompt.target,
             "More than one question is waiting for you here. Please use the question's buttons.",
-            %{plain_text: true}, enqueue: state.enqueue)
+            %{plain_text: true},
+            enqueue: state.enqueue
+          )
 
         {:reply, true, state}
     end

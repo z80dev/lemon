@@ -20,7 +20,7 @@ defmodule LemonWeb.SessionCwd do
   alias LemonCore.Introspection
 
   @doc "The workspace recorded by the session's latest start, if any."
-  @spec recorded(String.t()) :: {:ok, String.t()} | :error
+  @spec recorded(String.t()) :: {:ok, String.t()} | :error | {:error, :unavailable}
   def recorded(session_key) when is_binary(session_key) and session_key != "" do
     case Introspection.list(session_key: session_key, event_type: :session_started, limit: 1) do
       [event | _] ->
@@ -29,13 +29,16 @@ defmodule LemonWeb.SessionCwd do
           _ -> :error
         end
 
-      _ ->
+      {:error, _} ->
+        {:error, :unavailable}
+
+      [] ->
         remembered(session_key)
     end
   rescue
-    _ -> :error
+    _ -> {:error, :unavailable}
   catch
-    :exit, _ -> :error
+    :exit, _ -> {:error, :unavailable}
   end
 
   def recorded(_session_key), do: :error
@@ -63,11 +66,12 @@ defmodule LemonWeb.SessionCwd do
   end
 
   @doc "The recorded workspace, else the default workspace for operator runs."
-  @spec resolve(String.t()) :: String.t()
+  @spec resolve(String.t()) :: String.t() | {:error, :unavailable}
   def resolve(session_key) do
     case recorded(session_key) do
       {:ok, cwd} -> cwd
       :error -> default()
+      {:error, :unavailable} = error -> error
     end
   end
 

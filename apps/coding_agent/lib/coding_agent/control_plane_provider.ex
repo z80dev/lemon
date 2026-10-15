@@ -114,7 +114,10 @@ defmodule CodingAgent.ControlPlaneProvider do
         cwd = Map.get(payload, :cwd) || Map.get(payload, "cwd")
         if is_binary(cwd) and cwd != "", do: {:ok, cwd}, else: {:error, :session_not_found}
 
-      _ ->
+      {:error, _} ->
+        {:error, :introspection_unavailable}
+
+      [] ->
         {:error, :session_not_found}
     end
   end

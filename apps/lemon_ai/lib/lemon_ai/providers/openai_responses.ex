@@ -425,7 +425,12 @@ defmodule LemonAi.Providers.OpenAIResponses do
 
         retry_delay =
           if retry_allowed? and RetryHelper.retryable_http_error?(status, response_body) do
-            RetryHelper.http_retry_delay_ms(attempt, response_headers, policy)
+            RetryHelper.http_retry_delay_ms(
+              attempt,
+              response_headers,
+              policy,
+              {:http_error, status, response_body}
+            )
           else
             :give_up
           end

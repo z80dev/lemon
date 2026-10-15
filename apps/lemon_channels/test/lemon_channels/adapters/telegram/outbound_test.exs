@@ -4,6 +4,83 @@ defmodule LemonChannels.Adapters.Telegram.OutboundTest do
   alias LemonChannels.Adapters.Telegram.Outbound
   alias LemonChannels.OutboundPayload
 
+  defmodule ScriptedApi do
+    def send_message(_, _, _, _, _), do: attempt(:send_message)
+    def send_photo(_, _, _, _), do: attempt(:send_photo)
+    def send_document(_, _, _, _), do: attempt(:send_document)
+    def send_media_group(_, _, _, _), do: attempt(:send_media_group)
+
+    defp attempt(method) do
+      send(self(), {:accepted_write, method, System.monotonic_time(:millisecond)})
+      [result | rest] = Process.get(:send_results)
+      Process.put(:send_results, rest)
+      result
+    end
+  end
+
+  test "ambiguous text sends are attempted once and reported unknown" do
+    put_telegram_config(%{bot_token: "token", api_mod: ScriptedApi})
+
+    for reason <- [:timeout, {:closed, :socket}, {:http_error, 502, ""}] do
+      Process.put(:send_results, [{:error, reason}, {:ok, %{}}])
+
+      payload =
+        OutboundPayload.text("telegram", "acct", %{kind: :dm, id: "123", thread_id: nil}, "hello")
+
+      assert {:error, {:outcome_unknown, ^reason}} = Outbound.deliver(payload)
+      assert_receive {:accepted_write, :send_message, _}
+      refute_receive {:accepted_write, _, _}, 0
+    end
+  end
+
+  test "pre-write failures and rate limits retry with their delay" do
+    put_telegram_config(%{bot_token: "token", api_mod: ScriptedApi})
+
+    payload =
+      OutboundPayload.text("telegram", "acct", %{kind: :dm, id: "123", thread_id: nil}, "hello")
+
+    for {reason, delay} <- [
+          {{:failed_connect, :econnrefused}, 400},
+          {{:http_error, 429, ~s({"parameters":{"retry_after":1.2}})}, 1200}
+        ] do
+      Process.put(:send_results, [{:error, reason}, {:ok, %{}}])
+      assert {:ok, _} = Outbound.deliver(payload)
+      assert_receive {:accepted_write, :send_message, first}
+      assert_receive {:accepted_write, :send_message, second}
+      assert second - first >= delay
+      refute_receive {:accepted_write, _, _}, 0
+    end
+  end
+
+  test "ambiguous media sends never retry or fall back to individual photos" do
+    put_telegram_config(%{bot_token: "token", api_mod: ScriptedApi})
+    png = Path.join(System.tmp_dir!(), "unknown-#{System.unique_integer([:positive])}.png")
+    txt = Path.rootname(png) <> ".txt"
+    File.write!(png, "image")
+    File.write!(txt, "document")
+    on_exit(fn -> Enum.each([png, txt], &File.rm/1) end)
+
+    for {content, method} <- [
+          {%{path: png}, :send_photo},
+          {%{path: txt}, :send_document},
+          {%{files: [%{path: png}, %{path: png}]}, :send_media_group}
+        ] do
+      Process.put(:send_results, [{:error, :timeout}, {:ok, %{}}])
+
+      payload = %OutboundPayload{
+        channel_id: "telegram",
+        account_id: "acct",
+        peer: %{kind: :dm, id: "123", thread_id: nil},
+        kind: :file,
+        content: content
+      }
+
+      assert {:error, {:outcome_unknown, :timeout}} = Outbound.deliver(payload)
+      assert_receive {:accepted_write, ^method, _}
+      refute_receive {:accepted_write, _, _}, 0
+    end
+  end
+
   defmodule MockApiCapture do
     def send_message(_token, chat_id, text, reply_to_or_opts \\ nil, parse_mode \\ nil) do
       send(self(), {:send_message, chat_id, text, reply_to_or_opts, parse_mode})

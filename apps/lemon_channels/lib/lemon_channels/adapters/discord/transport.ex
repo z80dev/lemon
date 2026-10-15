@@ -25,6 +25,7 @@ defmodule LemonChannels.Adapters.Discord.Transport do
   alias LemonChannels.BindingResolver
   alias LemonChannels.Cwd
   alias LemonChannels.Discord.KnownTargetStore
+  alias LemonChannels.ImageDownload
   alias LemonChannels.SubmissionOutcome
   alias LemonChannels.Telegram.TransportShared
   alias LemonCore.ChatScope
@@ -297,6 +298,7 @@ defmodule LemonChannels.Adapters.Discord.Transport do
          true <- binding_allowed?(inbound, state),
          {:new, dedupe_ref} <- check_dedupe(inbound, state) do
       inbound = put_submission_dedupe_ref(inbound, dedupe_ref)
+      inbound = Inbound.attach_images(inbound)
       _ = maybe_index_known_target(state, inbound, message)
 
       if LemonChannels.UserPromptSurface.capture(inbound) == true,
@@ -420,12 +422,12 @@ defmodule LemonChannels.Adapters.Discord.Transport do
 
   defp enqueue_buffer(state, inbound) do
     scope_key = buffer_scope_key(inbound)
+    existing = Map.get(state.buffers, scope_key)
+    inbound = if existing, do: ImageDownload.merge(inbound, existing.inbound), else: inbound
     msg_entry = %{text: inbound.message.text || "", reply_to_id: inbound.message.reply_to_id}
 
     debounce_ref = make_ref()
     Process.send_after(self(), {:debounce_flush, scope_key, debounce_ref}, state.debounce_ms)
-
-    existing = Map.get(state.buffers, scope_key)
 
     buffer =
       if existing do
@@ -952,6 +954,7 @@ defmodule LemonChannels.Adapters.Discord.Transport do
       scope = %ChatScope{transport: :discord, chat_id: channel_id, topic_id: thread_id}
 
       context = %{
+        surface: "discord",
         session_key: session_key,
         cwd: BindingResolver.resolve_cwd(scope)
       }

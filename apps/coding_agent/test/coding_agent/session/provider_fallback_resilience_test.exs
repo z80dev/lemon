@@ -4,6 +4,7 @@ defmodule CodingAgent.Session.ProviderFallbackResilienceTest do
   alias CodingAgent.Session.ProviderFallback
   alias CodingAgent.SettingsManager
   alias LemonAgent.ModelRuntime.{CredentialHealth, SessionPins}
+  alias LemonAi.Providers.RetryHelper
 
   alias LemonAi.Types.{
     AssistantMessage,
@@ -14,6 +15,63 @@ defmodule CodingAgent.Session.ProviderFallbackResilienceTest do
     ToolCall,
     Usage
   }
+
+  test "single-candidate routing does not enable early rate-limit rotation" do
+    parent = self()
+    settings = model_settings()
+    settings = %{settings | provider_routing: %{settings.provider_routing | fallback_models: []}}
+
+    stream_fn = fn model, _, options ->
+      send(parent, {:alternate, options.provider_retry.alternate_available})
+      {:ok, terminal_stream(model, :stop, [%TextContent{text: "ok"}])}
+    end
+
+    assert {:ok, _} = result(wrap(stream_fn, settings), primary())
+    assert_receive {:alternate, false}
+  end
+
+  test "two healthy credentials rotate on rate limits before any provider sleep" do
+    parent = self()
+    previous = Application.get_env(:lemon_ai, :provider_retry)
+
+    Application.put_env(:lemon_ai, :provider_retry,
+      sleep_fun: fn ms -> send(parent, {:sleep, ms}) end
+    )
+
+    on_exit(fn ->
+      if previous,
+        do: Application.put_env(:lemon_ai, :provider_retry, previous),
+        else: Application.delete_env(:lemon_ai, :provider_retry)
+    end)
+
+    stream_fn = fn model, _, options ->
+      send(parent, {:attempt, options.api_key, options.provider_retry.alternate_available})
+
+      if options.api_key == "fake-key-a" do
+        policy = RetryHelper.policy(options)
+
+        delay =
+          RetryHelper.http_retry_delay_ms(
+            0,
+            %{"retry-after" => "30"},
+            policy,
+            {:http_error, 429, "rate limited"}
+          )
+
+        if is_integer(delay), do: RetryHelper.sleep(delay)
+        failure(model, 429, "insufficient_quota", :request)
+      else
+        {:ok, terminal_stream(model, :stop, [%TextContent{text: "ok"}])}
+      end
+    end
+
+    before = System.monotonic_time(:millisecond)
+    assert {:ok, _} = result(wrap(stream_fn, settings()), primary())
+    assert_receive {:attempt, "fake-key-a", true}
+    assert_receive {:attempt, "fake-key-b", _}
+    refute_receive {:sleep, _}, 0
+    assert CredentialHealth.cooldown_until(:openai, "env:PF_RESILIENCE_A") >= before + 900_000
+  end
 
   test "pre-commit event buffering is bounded and does not replay overflow" do
     parent = self()

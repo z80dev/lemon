@@ -39,6 +39,9 @@ defmodule LemonChannels.Adapters.Telegram.Transport.Commands do
 
   @portable_execution_commands ~w(status usage agents tasks compress compact commands help bg btw queue q steer)
 
+  @doc "Returns command names dispatched through the portable command handler."
+  def portable_commands, do: @portable_execution_commands
+
   def portable_command?(text, bot_username) do
     Enum.any?(@portable_execution_commands, &telegram_command?(text, &1, bot_username))
   end

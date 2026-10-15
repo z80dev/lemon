@@ -105,6 +105,14 @@ the existing router, session, task, and control-plane owners. In particular,
 Lemon `/stop` means cancelling the active conversation run, not killing every
 runtime process.
 
+Catalog entries include `surfaces`; `CommandCatalog.catalog("telegram")` and
+`catalog("discord")` return only that platform's accepted commands and aliases.
+Channel `/help` and `/commands` use this scoped view, including native model,
+resume, file, checkpoint, and goal commands. Telegram startup asynchronously
+registers `CommandCatalog.telegram_menu()` with Bot API `setMyCommands` in the
+default scope, excluding admin-only controls. Registration failures are logged
+without preventing polling or typed commands.
+
 Telegram and Discord execute the portable information/session commands through
 `LemonChannels.PortableCommand`. Queue and steer remain router-owned submission
 modes; reset/reasoning/stop reuse the native new/thinking/cancel handlers;
@@ -369,6 +377,10 @@ payload = OutboundPayload.text(
 {:ok, ref} = Outbox.enqueue(payload)
 ```
 
+If enqueue returns `{:error, {:outcome_unknown, :enqueue_timeout}}`, admission
+may still finish and deliver the message. Do not resend automatically; retain
+any notification reference and reconcile a late delivery acknowledgement.
+
 ### Payload Kinds
 
 | Kind | Constructor | Description |
@@ -404,9 +416,19 @@ end
 
 ### Retry Behavior
 
-- Exponential backoff: 1s, 2s, 4s (3 max attempts by default)
-- 429 responses: parses `retry_after` from JSON `parameters.retry_after` or body text
-- Non-retryable errors: `:unknown_channel`, 4xx HTTP errors (except 429), worker exits
+- Exponential backoff: 1s, 2s, 4s (3 retries by default).
+- Only explicit pre-write failures (`failed_connect`, connection refused, DNS)
+  and HTTP 429 responses are retryable; rate limits honor `retry_after`.
+- Telegram sends, uploads and media groups with a receive timeout, closed
+  connection or HTTP 5xx return `{:error, {:outcome_unknown, reason}}` without
+  retrying or falling back to another send. Edits conservatively use the same
+  policy. Other unrecognized errors, adapter exceptions and worker exits are
+  terminal, never automatically requeued.
+- Discord creates include a delivery-stable nonce and `enforce_nonce` so
+  Nostrum's internal stream retries are idempotent. Returned ambiguous errors
+  are terminal/unknown rather than retried by the outbox.
+- An unknown outcome is not proof of failure: the platform may already display
+  the reply. Inspect it before explicitly sending again.
 - Max queue size: 5000 (configurable)
 
 ### Stats
