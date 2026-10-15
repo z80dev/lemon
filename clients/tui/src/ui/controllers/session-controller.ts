@@ -39,6 +39,7 @@ import type {
 import { assertSessionDirectory, newSessionKey } from "../../session-key.ts";
 import type { AppStore } from "../../store/app-store.ts";
 import type { SessionStore } from "../../store/session-store.ts";
+import { refreshSetupStatus } from "../../store/setup.ts";
 import type { NoticeLevel } from "../../store/transcript-model.ts";
 import type { EventController } from "./event-controller.ts";
 
@@ -146,6 +147,7 @@ export class SessionController {
 			await this.#hydrateIfCold(session);
 		}
 		await this.hydrateRouting(session);
+		await refreshSetupStatus(this.#store, this.#methods);
 		this.#events.rebuildFocused();
 		this.#refreshStatus?.();
 		void this.seedContext(session);

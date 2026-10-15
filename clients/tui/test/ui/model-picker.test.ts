@@ -125,6 +125,7 @@ describe("stages", () => {
 		await picker.open();
 		expect(overlays).toHaveLength(0);
 		expect(harness.host.text).toContain("no models");
+		expect(harness.host.text).toContain("run `lemon setup provider` to add a provider");
 	});
 
 	test("cycling uses the cached model order and wraps without opening a picker", async () => {
@@ -150,6 +151,7 @@ describe("stages", () => {
 		harness.server.respondWith("models.list", { models: [] });
 		await makePicker().cycle();
 		expect(harness.host.text).toContain("no models");
+		expect(harness.host.text).toContain("run `lemon setup provider` to add a provider");
 		expect(harness.server.requestsFor("sessions.patch")).toHaveLength(0);
 	});
 

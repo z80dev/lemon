@@ -33,6 +33,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Added
 
+- TUI startup shows pending setup steps above the prompt, hides them once ready,
+  and points empty model lists to `lemon setup provider`; `setup.status` exposes
+  read-only, content-free readiness for clients.
+
 - Lemon Bot for Mac has an optional desktop pet: an original pixel lemon that
   floats above all windows and Spaces, reacts to thinking, tool work, approvals
   and questions, completions, failures and disconnects, and opens the relevant

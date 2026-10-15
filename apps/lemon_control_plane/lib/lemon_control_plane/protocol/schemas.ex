@@ -25,6 +25,7 @@ defmodule LemonControlPlane.Protocol.Schemas do
     "system.restart" => %{optional: %{}},
     "system.stop" => %{optional: %{}},
     "doctor.run" => %{optional: %{}},
+    "setup.status" => %{optional: %{}},
     "logs.tail" => %{
       optional: %{
         "limit" => :integer,

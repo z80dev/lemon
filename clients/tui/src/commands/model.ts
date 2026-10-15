@@ -9,6 +9,7 @@
 
 import { METHOD } from "../protocol/methods.ts";
 import type { ModelsListResult } from "../protocol/types.ts";
+import { refreshSetupStatus } from "../store/setup.ts";
 import { asArray, pickBoolean, pickNumber, pickString } from "./format.ts";
 import type { CommandContext, SlashCommand } from "./registry.ts";
 
@@ -76,6 +77,7 @@ export async function ensureModels(
 	ctx: Pick<CommandContext, "store" | "methods">,
 	nowMs = Date.now(),
 ): Promise<ModelEntry[]> {
+	await refreshSetupStatus(ctx.store, ctx.methods);
 	const cached = ctx.store.models ?? [];
 	const fresh = nowMs - ctx.store.modelsFetchedAtMs < MODELS_CACHE_TTL_MS;
 	if (cached.length > 0 && fresh) return toModelEntries({ models: cached });
@@ -125,6 +127,7 @@ export async function applyModel(ctx: CommandContext, modelId: string): Promise<
 		{ model: modelId, contextWindow: contextWindowFromCache(ctx.store.models, modelId) },
 		"local",
 	);
+	await refreshSetupStatus(ctx.store, ctx.methods);
 	ctx.ui.refreshStatus();
 	ctx.ui.notice(`model: ${modelId} (session ${ctx.session.key})`);
 }
@@ -145,7 +148,7 @@ export const modelCommand: SlashCommand = {
 			const entries = await ensureModels(ctx);
 			if (entries.length === 0) {
 				ctx.ui.notice(
-					`model: ${ctx.session.model ?? "(daemon default)"} · no model list available`,
+					`model: ${ctx.session.model ?? "(daemon default)"} · no model list available — run \`lemon setup provider\` to add a provider`,
 				);
 				return;
 			}

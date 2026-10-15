@@ -35,6 +35,7 @@ defmodule LemonControlPlane.Methods.Registry do
     LemonControlPlane.Methods.SystemRestart,
     LemonControlPlane.Methods.SystemStop,
     LemonControlPlane.Methods.DoctorRun,
+    LemonControlPlane.Methods.SetupStatus,
     LemonControlPlane.Methods.Agent,
     LemonControlPlane.Methods.AgentWait,
     LemonControlPlane.Methods.AgentDirectoryList,
