@@ -8,7 +8,12 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
-No unreleased changes yet.
+### Changed
+
+- Clarify Lemon Bot web notification setup and browser registration, distinguish
+  server and browser voice samples, and use plain-language microphone guidance.
+  Owner settings now name Network access, Startup scripts and Spend limits
+  consistently.
 
 ---
 
