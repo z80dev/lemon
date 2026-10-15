@@ -13,11 +13,11 @@ defmodule CodingAgent.Tools.Ls do
 
   import Bitwise
 
-  alias LemonAgent.Types.{AgentTool, AgentToolResult}
-  alias LemonAgent.Security.ToolResultTrust
-  alias LemonAi.Types.TextContent
   alias CodingAgent.Tools.FileValidation
   alias CodingAgent.Tools.PathHelpers
+  alias LemonAgent.Security.ToolResultTrust
+  alias LemonAgent.Types.{AgentTool, AgentToolResult}
+  alias LemonAi.Types.TextContent
 
   import LemonAgent.Tools.AbortHelpers, only: [aborted?: 1, check_abort: 1]
 
