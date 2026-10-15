@@ -1,5 +1,6 @@
 defmodule LemonSkills.McpSourceLifecycleTest do
   use ExUnit.Case, async: false
+  alias LemonMCP.Client.SSE
   alias LemonSkills.McpSource
 
   test "legacy SSE loss exits the client so the host observes transport loss" do
@@ -12,7 +13,7 @@ defmodule LemonSkills.McpSourceLifecycleTest do
           {:mcp_stream_closed, id}
         ] do
       assert {:stop, :normal, %{state: :disconnected, stream_request_id: nil}} =
-               LemonMCP.Client.SSE.handle_info(event, state)
+               SSE.handle_info(event, state)
     end
   end
 

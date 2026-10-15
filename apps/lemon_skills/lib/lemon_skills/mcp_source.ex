@@ -1261,7 +1261,7 @@ defmodule LemonSkills.McpSource do
   end
 
   defp start_ready_client(client_mod, opts, timeout) do
-    with {:ok, client} <- apply(client_mod, :start_link, [opts]) do
+    with {:ok, client} <- client_mod.start_link(opts) do
       case await_ready(client_mod, client, timeout) do
         :ok ->
           {:ok, client}
