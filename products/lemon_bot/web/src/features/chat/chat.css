@@ -161,6 +161,9 @@
 .chat-send { width: 32px; height: 32px; min-height: 0; padding: 0; display: inline-flex; align-items: center; justify-content: center; border-radius: 50%; border: 0; background: var(--bot-tint); color: var(--bot-on-tint); flex-shrink: 0; }
 .chat-send:hover:not(:disabled) { background: var(--bot-tint); filter: brightness(1.06); }
 .chat-send:disabled { opacity: .4; }
+.chat-send-control { position: relative; display: inline-flex; flex-shrink: 0; }
+.chat-send-tooltip { display: none; position: absolute; bottom: calc(100% + 8px); right: 0; white-space: nowrap; border-radius: 8px; padding: 5px 9px; background: var(--ink); color: var(--canvas); font-size: 12px; pointer-events: none; }
+.chat-send-control:hover .chat-send-tooltip, .chat-send-control:focus-within .chat-send-tooltip { display: block; }
 .chat-more { position: relative; }
 .chat-more-menu { bottom: 44px; left: -2px; width: 260px; }
 .chat-more-menu .menu-item { position: relative; cursor: pointer; }
@@ -168,7 +171,8 @@
 .chat-file-input { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; }
 .chat-status-line { margin: 0; text-align: center; font-size: 12px; color: var(--muted); }
 .chat-popover { background: var(--raised); border-radius: 16px; box-shadow: var(--menu-shadow); padding: 12px; }
-.chat-reply-chip { align-self: flex-start; display: inline-flex; align-items: center; gap: 6px; padding: 3px 4px 3px 12px; font-size: 12px; color: var(--ink); background: var(--fill); border-radius: 999px; }
+.chat-reply-chip { align-self: flex-start; display: inline-flex; align-items: center; gap: 6px; max-width: 100%; min-width: 0; padding: 3px 4px 3px 12px; font-size: 12px; color: var(--ink); background: var(--fill); border-radius: 999px; }
+.chat-reply-chip > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chat-reply-chip .icon-button { min-width: 22px; min-height: 22px; }
 .chat-staged { display: flex; gap: 6px; flex-wrap: wrap; }
 .chat-staged-item { display: flex; align-items: center; gap: 2px; background: var(--fill); border-radius: 14px; padding: 2px 2px 2px 8px; max-width: 100%; }

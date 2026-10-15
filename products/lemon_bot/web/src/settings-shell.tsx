@@ -2,12 +2,7 @@ import type { ComponentType, CSSProperties } from 'react';
 import { BarChart3, Briefcase, ChevronLeft, ChevronRight, Globe, Info, LayoutGrid, Library, Monitor, ShieldCheck, SlidersHorizontal, Smartphone, UserCircle, type LucideProps } from 'lucide-react';
 import { useApp, type Route } from './app';
 import { AccountAvatar } from './ui';
-import { BotsScreen } from './features/bots';
-import { OwnerControlsScreen } from './features/enterprise';
-import { MachinesScreen } from './features/machines';
-import { PairingScreen } from './features/pairing';
-import { SettingsScreen } from './features/settings';
-import { WorkScreen } from './features/work';
+import { BotsScreen, OwnerControlsScreen, MachinesScreen, PairingScreen, SettingsScreen, WorkScreen } from './route-components';
 import './settings-shell.css';
 
 type PaneId = 'account' | 'devices' | 'machines' | 'apps' | 'library' | 'policies' | 'usage' | 'network' | 'workspace' | 'preferences' | 'instance' | 'about';
@@ -17,7 +12,7 @@ interface Pane { id: PaneId; title: string; subtitle: string; icon: ComponentTyp
 const panes: Pane[] = [
   { id: 'account', title: 'Account', subtitle: 'Your profile, saved accounts and sign-in.', icon: UserCircle, color: '#8A9A5B', segments: [{ screen: 'settings.account', label: 'Account' }] },
   { id: 'devices', title: 'Devices', subtitle: 'Connect a phone and manage devices signed in to your account.', icon: Smartphone, color: '#3F6FA3', segments: [{ screen: 'device.pairing', label: 'Devices' }] },
-  { id: 'machines', title: 'Computers', subtitle: 'The computers your Bots work on.', icon: Monitor, color: '#5F6B73', segments: [{ screen: 'machines', label: 'Computers', match: screen => screen.startsWith('machine') }, { screen: 'settings.setup', label: 'Host setup' }] },
+  { id: 'machines', title: 'Computers', subtitle: 'The computers your Bots work on.', icon: Monitor, color: '#5F6B73', segments: [{ screen: 'machines', label: 'Computers', match: screen => screen.startsWith('machine') }, { screen: 'settings.setup', label: 'Startup scripts' }] },
   { id: 'apps', title: 'Connections', subtitle: 'Connected apps, channels, email and X.', icon: LayoutGrid, color: '#6A5CA8', segments: [{ screen: 'connect.apps', label: 'Apps', match: screen => screen === 'connect.apps' || screen === 'connector.setup' }, { screen: 'integrations.channels', label: 'Channels' }, { screen: 'integrations.email', label: 'Email' }, { screen: 'integrations.x', label: 'X' }] },
   { id: 'library', title: 'Library', subtitle: 'Skills, routines, templates and Bot memory.', icon: Library, color: '#B0643A', segments: [{ screen: 'skills', label: 'Skills' }, { screen: 'routines', label: 'Routines' }, { screen: 'templates', label: 'Templates' }] },
   { id: 'policies', title: 'Policies', subtitle: 'What Bots may do on their own and when they ask first.', icon: ShieldCheck, color: '#4F7D55', segments: [{ screen: 'settings.policies', label: 'Policies' }] },

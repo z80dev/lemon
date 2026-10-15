@@ -18,7 +18,7 @@ Production assets are emitted to `web/dist`; the backend serves them outside `/v
 ## First use
 
 1. Connect to your product backend. An empty deployment requests the one-time owner setup code printed in its operator terminal. Otherwise sign in to your owner account.
-2. Attach your host using its **server-issued**, one-use join command. Run it on the destination and wait for verified online status. Configure the host's actual provider authentication and supervise its worker. Copying a command does not prove enrollment.
+2. **Connect a computer** using its **server-issued**, one-use join command. Run it on the destination and wait for verified online status. Configure the computer's actual provider authentication and supervise its worker. Copying a command does not prove enrollment.
 3. Create a named Bot with a focused job on that host, or review a template to create a separate owned copy. Co-resident Bots share the OS user's files, browser sessions and CLI credentials; personas are not host isolation.
 4. Open its chat and give it a concrete task. Text, references, real files and explicit voice input use placed conversations. Stop requests cancel a real run; only its terminal cancelled state proves it stopped, and prior external effects are not undone.
 
@@ -53,6 +53,14 @@ On touch screens, tap a message to show its 44px copy, reply and reaction contro
 **Copy link to message** opens the selected message after sign-in; it contains no
 session credential. Failed message history loads offer **Try again**, and active
 work is never represented as an empty conversation.
+
+Reply chips identify the original author and show a 40-character message preview.
+The Send button shows its keyboard hint on hover and keyboard focus.
+
+Feature destinations load on demand, including computer/terminal, Bot, settings,
+library and conversation screens. The web version comes from `package.json` at
+build time; device registration, About and minimum-version checks use that same
+version, with semantic-version precedence (including prereleases).
 
 User-facing copy calls the account container a **workspace** and the execution
 device a **machine**. **Computer user** means the machine's operating-system
