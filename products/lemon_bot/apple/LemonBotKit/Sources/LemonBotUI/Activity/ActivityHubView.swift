@@ -152,7 +152,7 @@ struct ReminderCreateView: View {
             Button("Schedule reminder") { Task { await action.perform {
                 let _: Reminder = try await store.mutate("POST", "/reminders", body: ["botId": .string(botID), "conversationId": .string(conversationID), "text": .string(text), "dueAtMs": .number(due.timeIntervalSince1970 * 1000), "timezone": .string(timezone)]); dismiss()
             } } }.disabled(botID.isEmpty || conversationID.isEmpty || text.isEmpty || action.busy || action.uncertain || store.connectionState != "online")
-        }.navigationTitle("New reminder").toolbar { Button("Cancel") { dismiss() } }
+        }.formStyle(.grouped).navigationTitle("New reminder").toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } } }
     }
 }
 @MainActor func hubNavigate(store: LemonBotStore, machineID: ID? = nil, botID: ID? = nil, conversationID: ID? = nil, taskID: ID? = nil, entryID: ID? = nil, approvalID: ID? = nil) async throws {

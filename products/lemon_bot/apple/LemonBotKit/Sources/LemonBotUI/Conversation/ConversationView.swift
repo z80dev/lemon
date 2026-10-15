@@ -254,7 +254,7 @@ public struct ConversationView: View {
         case .tools(let tools):
             ToolActivityRow(tools: tools).onAppear { Task { await markRendered(row.seq) } }
         case .failure(let run):
-            RunFailureRow(run: run, retry: { retry(run) }, loadError: runsError)
+            RunFailureRow(run: run, retry: { retry(run) }, loadError: runsError, refresh: { Task { await loadRuns() } })
         }
     }
 
@@ -340,7 +340,7 @@ public struct ConversationView: View {
 
     private var actionsMenu: some View {
         Menu {
-            Button { details = true } label: { Label("Details, media and my export consent", systemImage: "info.circle") }
+            Button { details = true } label: { Label("Details and privacy", systemImage: "info.circle") }
             Button { openFind() } label: { Label("Find in chat", systemImage: "magnifyingglass") }
             Button { searchChat = true } label: { Label("Search this chat…", systemImage: "text.magnifyingglass") }
             Divider()
@@ -467,15 +467,15 @@ public struct ConversationView: View {
         guard !action.busy else { return }
         toast = StatusToast(text: "Stopping…")
         await action.perform {
-            var statuses: [String] = []
+            var requestedCount = 0
             var allCancelled = true
             for run in activeRuns {
                 let receipt: Run = try await store.mutate("POST", resourcePath("runs", run.id, "/cancel"), body: ["reason": .string("Explicit user Stop")])
                 if let index = store.runs.firstIndex(where: { $0.id == receipt.id }) { store.runs[index] = receipt }
                 if receipt.status != "cancelled" { allCancelled = false }
-                statuses.append("\(receipt.id): \(receipt.status == "cancelled" ? "Cancelled" : "Stop requested · \(receipt.status)")")
+                requestedCount += 1
             }
-            toast = StatusToast(text: allCancelled ? "Stopped" : "Stopping…", detail: statuses.joined(separator: " · ") + ". Completed external effects are not rolled back.")
+            toast = StatusToast(text: allCancelled ? "Stopped" : "Stop requested", detail: allCancelled ? "\(requestedCount) \(requestedCount == 1 ? "task" : "tasks") stopped. Work already completed elsewhere isn't undone." : "Stop requests sent. Check Activity for the current status. Work already completed elsewhere isn't undone.")
         }
         if action.error != nil { toast = nil }
     }
@@ -545,7 +545,7 @@ struct TranscriptEntryView: View {
             case .notice(let notice): NoticeRow(notice: notice)
             case .event(let event): TranscriptEventView(store: store, event: event.event)
             case .feedback(let value):
-                Text("Feedback: \(value.feedback.sentiment)\(value.feedback.reasons.isEmpty ? "" : " · " + value.feedback.reasons.map(humanizedStatus).joined(separator: ", "))\(value.feedback.comment.isEmpty ? "" : " · " + value.feedback.comment)")
+                Text("Feedback: \(humanizedStatus(value.feedback.sentiment))\(value.feedback.reasons.isEmpty ? "" : " · " + value.feedback.reasons.map(humanizedStatus).joined(separator: ", "))\(value.feedback.comment.isEmpty ? "" : " · " + value.feedback.comment)")
                     .font(LBFont.meta).foregroundStyle(LB.muted).multilineTextAlignment(.center).textSelection(.enabled).frame(maxWidth: .infinity)
             default: bubbleRow
             }
@@ -645,7 +645,7 @@ struct TranscriptEntryView: View {
 
     // MARK: Actions
 
-    /// macOS: a small floating row beside the bubble, visible only on hover. iOS uses the context menu.
+    /// Keep actions visible to keyboard and pointer users. iOS uses the context menu.
     @ViewBuilder private var hoverActions: some View {
         #if os(macOS)
         HStack(spacing: 1) {
@@ -665,9 +665,7 @@ struct TranscriptEntryView: View {
         .background(Capsule().fill(LB.raised))
         .shadow(color: scheme == .light ? LB.shadow : .clear, radius: 8, y: 2)
         .disabled(action.busy)
-        .opacity(hovering ? 1 : 0)
-        .allowsHitTesting(hovering)
-        .accessibilityHidden(!hovering)
+        .opacity(hovering ? 1 : 0.65)
         .lbAnimation(LBMotion.fade, value: hovering)
         #else
         EmptyView()
@@ -734,7 +732,7 @@ struct TranscriptEventView: View {
             case .channelConnected: Text("Channel connected")
             case .channelDisconnected: Text("Channel disconnected")
             case .routineChanged(let value):
-                Text("Routine \(value.action)")
+                Text("Routine \(humanizedStatus(value.action).lowercased())")
                 link("Open routine") { RoutineDetailView(store: store, routineID: value.routineId) }
             case .taskChanged(let value):
                 Text("Task \(humanizedStatus(value.status).lowercased())")

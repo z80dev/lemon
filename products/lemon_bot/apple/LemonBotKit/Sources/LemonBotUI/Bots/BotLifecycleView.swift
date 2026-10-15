@@ -19,6 +19,15 @@ struct BotLifecycleView: View {
         _operation = State(initialValue: "duplicate")
     }
     private var owner: Bool { bot.ownerUserId == store.user?.id }
+    private var cannotSubmit: Bool {
+        if action.busy || !store.isOnline { return true }
+        switch operation {
+        case "duplicate": return name.isEmpty || machineID.isEmpty || !sharedHostConsent
+        case "move": return machineID.isEmpty || !sharedHostConsent || !bot.activeRunIds.isEmpty
+        case "reset": return resetScopes.isEmpty
+        default: return false
+        }
+    }
     var body: some View {
         NavigationStack {
             Form {
@@ -49,47 +58,65 @@ struct BotLifecycleView: View {
                         Toggle("Include installed skills", isOn: $includeSkills)
                         Toggle("Copy routines as paused", isOn: $includeRoutines)
                         Text("Settings are copied. No memory, chat, attachments, secrets, browser logins or connector tokens are copied.")
-                        Button("Create separate duplicate") { Task { await copyBot() } }.disabled(name.isEmpty || machineID.isEmpty || !sharedHostConsent)
                     }
                 case "move":
                     SwiftUI.Section("Move to another machine") {
                         Text("The Bot must be idle and its new machine online. Review what the preview will carry over before confirming. Chat history stays. Files, browser logins, credentials and terminals don't move automatically.")
                         if !bot.activeRunIds.isEmpty { Text("Active or unconfirmed runs block moving this Bot.").foregroundStyle(LB.warning) }
-                        Button("Preview move") { Task { await preview() } }.disabled(machineID.isEmpty || !sharedHostConsent || !bot.activeRunIds.isEmpty)
                     }
                 case "reset":
                     SwiftUI.Section("Choose what to reset") {
                         ForEach(["conversations", "memory", "job", "routines", "connectors", "attachments"], id: \.self) { scope in Toggle(scope == "connectors" ? "Connected apps" : scope.capitalized, isOn: selection(scope, set: $resetScopes)) }
                         Text("The Bot's identity, owner and machine stay, along with anything you don't select. Machine files and outside logins aren't deleted unless the preview says so.")
-                        Button("Preview selected reset") { Task { await preview() } }.disabled(resetScopes.isEmpty)
                     }
                 default:
                     SwiftUI.Section("Permanent deletion") {
                         Text("Deleting removes this Bot and the data listed in the preview. Files on the machine, OS accounts, browser logins, backups and provider logins aren't deleted unless the preview says they are.")
-                        Button("Preview permanent deletion", role: .destructive) { Task { await preview() } }
                     }
                 }
                 ActionErrorView(message: action.error)
                 if let receipt = action.receipt { Text(receipt).font(LBFont.meta) }
-            }.disabled(action.busy || store.connectionState != "online")
-                .navigationTitle("\(bot.name) · lifecycle")
+            }.formStyle(.grouped)
+                .scrollContentBackground(.hidden)
+                .frame(maxWidth: 760)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                .background(LB.canvas)
+                .disabled(action.busy || !store.isOnline)
+                .navigationTitle("\(bot.name) · Manage Bot")
                 .toolbar {
-                    Button("Close") { dismiss() }
-                    if action.uncertain {
-                        Button("Check current state") {
-                            Task { await action.perform {
-                                let _: Bot = try await store.read(resourcePath("bots", bot.id))
-                                try await store.refresh()
-                                action.uncertain = false
-                                action.receipt = "Current Bot state loaded. Review it before resetting again."
-                            } }
-                        }.disabled(action.inFlight || store.connectionState != "online")
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Cancel") { dismiss() }.buttonStyle(.pill(.secondary, compact: true)).keyboardShortcut(.cancelAction)
+                    }
+                    ToolbarItem(placement: .confirmationAction) {
+                        if owner {
+                            Button(operation == "duplicate" ? "Duplicate Bot" : "Review \(operation)", role: operation == "delete" ? .destructive : nil) {
+                                Task { if operation == "duplicate" { await copyBot() } else { await preview() } }
+                            }.buttonStyle(.pill(operation == "delete" ? .destructive : .primary(LB.lemon, LB.lemonInk), compact: true))
+                                .keyboardShortcut(.defaultAction).disabled(cannotSubmit)
+                        }
+                    }
+                    ToolbarItem(placement: .automatic) {
+                        if action.uncertain {
+                            Button("Check current state") {
+                                Task { await action.perform {
+                                    let _: Bot = try await store.read(resourcePath("bots", bot.id))
+                                    try await store.refresh()
+                                    action.uncertain = false
+                                    action.receipt = "Current Bot state loaded. Review it before resetting again."
+                                } }
+                            }.disabled(action.inFlight || !store.isOnline)
+                        }
                     }
                 }
                 .sheet(isPresented: Binding(get: { confirmation != nil }, set: { if !$0 { confirmation = nil } })) {
                     if let confirmation { ScopeConfirmationView(store: store, confirmation: confirmation, title: operation.capitalized + " Bot") { body in try await confirm(body) } }
                 }
-        }.frame(minWidth: 340, minHeight: 520)
+        }
+        #if os(macOS)
+        .frame(minWidth: 560, minHeight: 600)
+        #else
+        .frame(minWidth: 320, minHeight: 520)
+        #endif
     }
     private func selection(_ id: ID, set: Binding<Set<ID>>) -> Binding<Bool> { Binding(get: { set.wrappedValue.contains(id) }, set: { if $0 { set.wrappedValue.insert(id) } else { set.wrappedValue.remove(id) } }) }
     private func copyBot() async {

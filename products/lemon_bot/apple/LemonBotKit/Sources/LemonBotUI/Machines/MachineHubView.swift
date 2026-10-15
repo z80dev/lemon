@@ -62,7 +62,7 @@ struct MachineAttachView: View {
                     result = try await store.mutate("POST", "/machines", body: body)
                 } } }.disabled(!accepted || name.isEmpty || nodeName.isEmpty || action.busy || action.uncertain || store.connectionState != "online")
             }
-        }.navigationTitle("Attach a machine").toolbar { Button("Close") { dismiss() } }
+        }.formStyle(.grouped).navigationTitle("Attach a machine").toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } } }
     }
 }
 struct MachineEnrollmentView: View {
@@ -195,7 +195,7 @@ public struct MachineDetailView: View {
                     let _: HubDeleted = try await store.mutate("DELETE", "/machines/\(hubID(machineID))", body: preview.body(name: name)); self.preview = nil; try await load()
                 } } }
             }
-        }.navigationTitle(machine?.name ?? "Machine").toolbar { Button("Refresh") { Task { await action.checkStatus(store) { try await load() } } } }
+        }.formStyle(.grouped).navigationTitle(machine?.name ?? "Machine").toolbar { Button("Refresh") { Task { await action.checkStatus(store) { try await load() } } } }
             .task { await action.perform(readOnly: true) { try await load() } }
     }
     private func load() async throws {
@@ -249,7 +249,7 @@ struct HostOperationsView: View {
                 }
                 if cursor != nil { Button("More operations") { Task { await load(more: true) } } }
             }
-        }.navigationTitle("Host operations").toolbar { Button("Refresh results") { Task { await load() } } }
+        }.formStyle(.grouped).navigationTitle("Host operations").toolbar { Button("Refresh results") { Task { await load() } } }
             .task { if let machineID { selected = [machineID] }; if let first = supported.first { hostAction = first }; await load() }
     }
     private func load(more: Bool = false) async { await action.perform(readOnly: true) {

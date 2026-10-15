@@ -200,11 +200,11 @@ struct SectionEditorView: View {
                 }
                 Text("Deleting a section unassigns your Bots; it does not delete them.").font(.caption)
                 ActionErrorView(message: action.error)
-            }.disabled(action.busy || store.connectionState != "online").navigationTitle("Organize Bots")
+            }.formStyle(.grouped).disabled(action.busy || store.connectionState != "online").navigationTitle("Organize Bots")
                 .toolbar {
-                    Button("Close") { dismiss() }
+                    ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } }
                     #if os(iOS)
-                    EditButton()
+                    ToolbarItem(placement: .primaryAction) { EditButton() }
                     #endif
                 }
                 .confirmationDialog("Delete section \(deleteSection?.name ?? "")? Bots will be unassigned, not deleted.", isPresented: Binding(get: { deleteSection != nil }, set: { if !$0 { deleteSection = nil } })) {
