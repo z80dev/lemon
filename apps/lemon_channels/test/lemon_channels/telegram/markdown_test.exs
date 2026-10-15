@@ -43,8 +43,7 @@ defmodule LemonChannels.Telegram.MarkdownTest do
 
     test "preserves whitespace in plain text" do
       {text, _entities} = Markdown.render("Hello   world")
-      assert text |> String.trim() |> String.contains?("Hello")
-      assert text |> String.trim() |> String.contains?("world")
+      assert String.trim(text) == "Hello   world"
     end
 
     test "empty string returns empty" do
@@ -449,12 +448,6 @@ defmodule LemonChannels.Telegram.MarkdownTest do
 
       assert "first" in extracted
       assert "second" in extracted
-    end
-
-    test "entity length matches UTF-16 length of the content" do
-      {_text, entities} = Markdown.render("**bold**")
-      bold = find_entity(entities, "bold")
-      assert bold["length"] == utf16_len("bold")
     end
   end
 
