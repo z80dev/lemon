@@ -77,7 +77,7 @@ defmodule CodingAgent.Tools.Task.Runner do
       result =
         with :ok <- attach_control_session(opts[:task_id], session, session_id),
              :ok <- prompt_idle_session(session, prompt) do
-          await = fn ->
+          await = fn budget ->
             await_result(
               session,
               session_ref,
@@ -90,7 +90,8 @@ defmodule CodingAgent.Tools.Task.Runner do
               role_id,
               timeout_ms,
               deadline_ms,
-              task_session_poll_ms(opts)
+              task_session_poll_ms(opts),
+              budget
             )
           end
 
@@ -101,7 +102,20 @@ defmodule CodingAgent.Tools.Task.Runner do
             role: role_id
           }
 
-          await_valid_result(session, await, details, opts[:validate_output], @output_retries)
+          budget = %{
+            limit: Keyword.get(opts, :request_budget, 200),
+            notice: Keyword.get(opts, :request_budget_notice, true),
+            count: 0
+          }
+
+          await_valid_result(
+            session,
+            await,
+            details,
+            opts[:validate_output],
+            @output_retries,
+            budget
+          )
         end
 
       unless retain_session(result, session, start_opts, description, role_id, opts),
@@ -146,17 +160,17 @@ defmodule CodingAgent.Tools.Task.Runner do
   # Re-prompts the same child session when its final output fails the caller's
   # validator. After the retries are spent, the last result is returned and the
   # caller decides whether invalid output fails the task.
-  defp await_valid_result(session, await, details, validator, retries_left) do
-    with {:ok, %{text: text, thinking: thinking}} <- await.() do
+  defp await_valid_result(session, await, details, validator, retries_left, budget) do
+    with {:ok, %{text: text, thinking: thinking} = payload, budget} <- await.(budget) do
       result = %AgentToolResult{
         content: Result.build_update_content(text, thinking),
-        details: details
+        details: Map.merge(details, Map.get(payload, :details, %{}))
       }
 
-      case validate_result(validator, result) do
-        {:error, reason} when retries_left > 0 ->
+      case {result.details[:budget_exhausted], validate_result(validator, result)} do
+        {exhausted, {:error, reason}} when exhausted != true and retries_left > 0 ->
           with :ok <- prompt_idle_session(session, correction_prompt(reason)) do
-            await_valid_result(session, await, details, validator, retries_left - 1)
+            await_valid_result(session, await, details, validator, retries_left - 1, budget)
           end
 
         _ ->
@@ -216,11 +230,12 @@ defmodule CodingAgent.Tools.Task.Runner do
          role_id,
          timeout_ms,
          deadline_ms,
-         poll_ms
+         poll_ms,
+         budget
        ) do
     receive do
       {:session_terminal, ^session_id, :completed} ->
-        completed_result(Session.get_messages(session), signal, last_text, last_thinking)
+        completed_result(Session.get_messages(session), signal, last_text, last_thinking, budget)
 
       {:session_terminal, ^session_id, :canceled} ->
         {:error, "Task aborted"}
@@ -253,7 +268,8 @@ defmodule CodingAgent.Tools.Task.Runner do
           role_id,
           timeout_ms,
           deadline_ms,
-          poll_ms
+          poll_ms,
+          budget
         )
 
       {:session_event, ^session_id, {:tool_execution_update, _id, name, args, partial_result}} ->
@@ -280,7 +296,8 @@ defmodule CodingAgent.Tools.Task.Runner do
           role_id,
           timeout_ms,
           deadline_ms,
-          poll_ms
+          poll_ms,
+          budget
         )
 
       {:session_event, ^session_id, {:tool_execution_end, _id, name, result, is_error}} ->
@@ -305,7 +322,8 @@ defmodule CodingAgent.Tools.Task.Runner do
           role_id,
           timeout_ms,
           deadline_ms,
-          poll_ms
+          poll_ms,
+          budget
         )
 
       {:session_event, ^session_id,
@@ -337,7 +355,8 @@ defmodule CodingAgent.Tools.Task.Runner do
           role_id,
           timeout_ms,
           deadline_ms,
-          poll_ms
+          poll_ms,
+          budget
         )
 
       {:session_event, ^session_id, {:message_end, %LemonAi.Types.AssistantMessage{} = msg}} ->
@@ -356,23 +375,52 @@ defmodule CodingAgent.Tools.Task.Runner do
             role_id
           )
 
-        await_result(
-          session,
-          session_ref,
-          session_id,
-          signal,
-          on_update,
-          description,
-          last_text,
-          last_thinking,
-          role_id,
-          timeout_ms,
-          deadline_ms,
-          poll_ms
-        )
+        budget = %{budget | count: budget.count + 1}
+
+        if budget.limit > 0 and budget.count >= div(3 * budget.limit + 1, 2) do
+          Session.abort(session)
+          drain_session(session, session_ref, session_id)
+
+          {:ok,
+           %{
+             text: text <> "\n\nTask stopped at request budget #{budget.count} (partial output).",
+             thinking: thinking,
+             details: %{
+               budget_exhausted: true,
+               partial: true,
+               partial_output: text,
+               request_count: budget.count,
+               request_budget: budget.limit
+             }
+           }, budget}
+        else
+          if budget.limit > 0 and budget.count == budget.limit and budget.notice do
+            Session.steer(
+              session,
+              "You have reached your request budget (#{budget.limit}). Wrap up now: " <>
+                "summarize your findings and return your final answer; avoid further exploration."
+            )
+          end
+
+          await_result(
+            session,
+            session_ref,
+            session_id,
+            signal,
+            on_update,
+            description,
+            last_text,
+            last_thinking,
+            role_id,
+            timeout_ms,
+            deadline_ms,
+            poll_ms,
+            budget
+          )
+        end
 
       {:session_event, ^session_id, {:agent_end, messages}} ->
-        completed_result(messages, signal, last_text, last_thinking)
+        completed_result(messages, signal, last_text, last_thinking, budget)
 
       {:session_event, ^session_id, {:error, reason, _partial_state}} ->
         {:error, reason}
@@ -393,7 +441,8 @@ defmodule CodingAgent.Tools.Task.Runner do
           role_id,
           timeout_ms,
           deadline_ms,
-          poll_ms
+          poll_ms,
+          budget
         )
     after
       await_timeout(deadline_ms, poll_ms) ->
@@ -419,14 +468,15 @@ defmodule CodingAgent.Tools.Task.Runner do
                 role_id,
                 timeout_ms,
                 deadline_ms,
-                poll_ms
+                poll_ms,
+                budget
               )
           end
         end
     end
   end
 
-  defp completed_result(messages, signal, last_text, last_thinking) do
+  defp completed_result(messages, signal, last_text, last_thinking, budget) do
     last = messages |> Enum.filter(&match?(%LemonAi.Types.AssistantMessage{}, &1)) |> List.last()
 
     cond do
@@ -437,7 +487,7 @@ defmodule CodingAgent.Tools.Task.Runner do
         {:error, last.error_message || "Task stopped: #{last.stop_reason}"}
 
       true ->
-        {:ok, Result.extract_final_payload(messages, last_text, last_thinking)}
+        {:ok, Result.extract_final_payload(messages, last_text, last_thinking), budget}
     end
   end
 

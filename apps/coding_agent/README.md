@@ -523,6 +523,15 @@ Use `agent_message` with `{to: "agent://Worker", message: "..."}`, or `write` wi
 
 Sender identity is authenticated from captured session options, never supplied message fields. Messages are labeled untrusted peer content. Running recipients use the steering queue; completed children start a new turn, waking their live idle session or reviving the persisted conversation after parking. The write receipt reports `delivery: injected`, `woken`, `revived`, or `failed`; replies use async auto-delivery. Unattached children retain FIFO messages, capped at 64 messages / 256 KiB including envelopes; individual UTF-8 message bodies are capped at 32 KiB. Broadcast checks all live recipient queue capacities before sending and never wakes idle/parked children. See [native task settings](../../docs/config.md#native-task-subagents-runtimetask) for TTL, cancellation and workspace-retention rules. Acceptance is not a completed answer or permission to override system/tool restrictions.
 
+Native tasks default to a soft budget of 200 completed assistant requests per run.
+Set `[runtime.task] request_budget` globally or task `request_budget` per item
+(`0` disables). At the soft limit, one wrap-up steer is sent unless
+`request_budget_notice = false`; at `ceil(1.5 × budget)` the child stops gracefully
+and yields its latest output with `details.budget_exhausted: true` and a partial
+annotation. Schema corrections consume the same budget; invalid structured
+output at exhaustion returns an error result retaining partial text. Waking or
+reviving a child resets its request count.
+
 The `wait` tool (also `task action=wait`) blocks until the first owned native child returns a result, including failure or cancellation, without stopping siblings. With no `task_ids`, it includes already-finished but unobserved children, then marks only the returned winner observed; the next implicit wait consumes the next result. Explicit `task_ids` restrict the set and may revisit an earlier result. No outstanding/unobserved children is an immediate error. Waiting uses existing join cancellation, parent-question yielding, and winner-only followup suppression; this primitive does not wait on shell/background-process jobs.
 Wait has a 30-minute safety cap: it returns `timed_out: true` with a snapshot of child statuses, leaving children running and eligible for the next wait. Pending steering or peer messages in the current invocation return `interrupted: true` instead, without consuming the message. A yielded wait releases followup reservations and does not mark any child observed.
 

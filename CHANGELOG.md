@@ -13,6 +13,14 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 - Add opt-in `[runtime.tools.bash.interceptor]` dedicated-tool routing with
   configurable rules, session-tool availability checks and piped-stdin exemptions,
   applied before foreground, background and named-service launches.
+- Layer language-server defaults with global/project
+  `[runtime.tools.lsp.servers.<id>]` overrides, custom servers, disabling,
+  initialization options and environment settings across catalog consumers.
+
+- Native task subagents now have a configurable soft assistant-request budget
+  (default 200, per-item override, `0` disables), one optional wrap-up steer, and
+  a graceful hard stop at 1.5x that auto-delivers partial findings. Revived runs
+  receive fresh budgets, including structured-output correction requests.
 
 - Ask `read` image questions with `?q=` (including SVG `:img?q=`), using a
   configured vision model role or the active image-capable model and returning

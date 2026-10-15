@@ -346,6 +346,31 @@ defmodule CodingAgent.Tools.LspTest do
     assert LemonLsp.ServerManager.status().active_count == before - 1
   end
 
+  test "custom project catalog reaches the spawned process and initialization", ctx do
+    File.mkdir_p!(Path.join(ctx.tmp, ".lemon"))
+
+    File.write!(Path.join(ctx.tmp, ".lemon/config.toml"), """
+    [runtime.tools.lsp.servers.custom_test]
+    command = #{Jason.encode!(Path.join(ctx.tmp, "fake_lsp_server.exs"))}
+    args = ["custom-argument"]
+    extensions = [".custom"]
+    language_id = "custom-language"
+    env = { LSP_CUSTOM_TEST = "configured" }
+    initialization_options = { custom = true }
+    """)
+
+    File.write!(Path.join(ctx.tmp, "src/main.custom"), "custom content\n")
+
+    result =
+      run(ctx, %{"action" => "request", "file" => "src/main.custom", "query" => "fake/config"})
+
+    [_header, json] = String.split(text!(result), "\n", parts: 2)
+    response = Jason.decode!(json)
+    assert response["args"] == ["custom-argument"]
+    assert response["env"] == "configured"
+    assert response["options"] == %{"custom" => true}
+  end
+
   defp fake_server_script do
     ~S"""
     #!/usr/bin/env elixir
@@ -412,7 +437,12 @@ defmodule CodingAgent.Tools.LspTest do
         end
       end
 
-      def handle(%{"method" => "initialize", "id" => id}, state) do
+      def handle(%{"method" => "fake/config", "id" => id}, state) do
+        reply(id, %{"args" => System.argv(), "env" => System.get_env("LSP_CUSTOM_TEST"), "options" => state[:options]})
+        state
+      end
+
+      def handle(%{"method" => "initialize", "id" => id, "params" => params}, state) do
         reply(id, %{
           "capabilities" => %{
             "workspace" => %{"fileOperations" => %{"willRename" => %{}, "didRename" => %{}}},
@@ -422,7 +452,7 @@ defmodule CodingAgent.Tools.LspTest do
           }
         })
 
-        state
+        Map.put(state, :options, params["initializationOptions"])
       end
 
       def handle(%{"method" => "textDocument/didOpen", "params" => %{"textDocument" => doc}}, state) do

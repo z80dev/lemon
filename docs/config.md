@@ -329,6 +329,8 @@ global → project; every key is optional:
 max_depth = 2              # -1 unlimited; 0 = the main session cannot delegate
 max_runtime_ms = 0         # per-child wall-clock limit; 0 disables it
 idle_ttl_ms = 300000       # park a completed live child after 5 min; 0 keeps it idle
+request_budget = 200       # soft assistant-request budget per run; 0 disables it
+request_budget_notice = true # send one wrap-up steer at the soft budget
 worktree_merge = "none"    # default merge for worktree: true tasks: none | patch | branch
 disabled_agents = ["sonic"]
 
@@ -341,6 +343,16 @@ reviewer = "@slow"         # model or @role per persona ID
   children created at the cap never receive the `task` tool.
 - `max_runtime_ms`: wall-clock limit for each child session; the child fails
   with a timeout error when it is exceeded.
+- `request_budget`: completed assistant requests per child run, including schema
+  correction requests. At the soft limit, the child receives one concise wrap-up
+  steering message (unless `request_budget_notice = false`). At `ceil(1.5 × budget)`
+  it is gracefully stopped and returns its latest visible output as partial,
+  with `details.budget_exhausted = true`, `request_count`, and a stop annotation.
+  `0` disables both thresholds. The task's optional `request_budget` parameter
+  overrides this default per item, including batch/swarm children. Woken and
+  revived children start a fresh count. Invalid structured output at exhaustion
+  returns an explicit error result with the partial text, without correction
+  retries; valid JSON is still decoded into `structured_output`.
 - `idle_ttl_ms`: how long a successfully completed child stays live and idle.
   After the TTL, Lemon releases its session but retains its transcript and
   address. `0` keeps it idle until the parent session ends. A direct
@@ -1620,6 +1632,32 @@ boolean; default false preserves clients that construct tags without tracked
 reads. Tool hosts can explicitly override it with the `:enforce_seen_lines` option.
 See [file tools](tools/files-and-search.md#anchored-edit-recovery-and-formatting)
 for visibility and snapshot-retention details.
+
+## Language Servers
+
+Configure `[runtime.tools.lsp.servers.<id>]` in user or project config. The
+effective catalog merges built-ins, user values, then project values. Known ids
+override fields; custom ids require `command` and a non-empty `extensions` list
+(`file_types` is an alias).
+
+```toml
+[runtime.tools.lsp.servers.clangd]
+command = "/opt/llvm/bin/clangd"
+args = ["--background-index"]
+root_markers = ["compile_commands.json", ".git"]
+extensions = [".c", ".h"]
+language_id = "c"
+initialization_options = { clangdFileStatus = true }
+env = { CLANGD_FLAGS = "" }
+disabled = false
+```
+
+`command` and `language_id` are non-empty strings; `args`, `root_markers`,
+`extensions`/`file_types` are string arrays; `env` is a string-to-string table;
+`initialization_options` is a table; `disabled` is boolean. Lists replace
+inherited values; nested tables merge. Command environment variables take
+priority over TOML. Disabled servers are excluded from all catalog lookups.
+See [LSP tools](tools/lsp.md#server-configuration) for custom servers and scope.
 
 ## Web Tools (`websearch` / `webfetch`)
 

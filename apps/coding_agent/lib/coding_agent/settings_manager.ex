@@ -22,6 +22,8 @@ defmodule CodingAgent.SettingsManager do
           max_depth: integer(),
           max_runtime_ms: non_neg_integer(),
           idle_ttl_ms: non_neg_integer(),
+          request_budget: non_neg_integer(),
+          request_budget_notice: boolean(),
           worktree_merge: String.t(),
           disabled_agents: [String.t()],
           agent_models: %{optional(String.t()) => String.t()}
@@ -129,6 +131,8 @@ defmodule CodingAgent.SettingsManager do
       max_depth: 2,
       max_runtime_ms: 0,
       idle_ttl_ms: 300_000,
+      request_budget: 200,
+      request_budget_notice: true,
       worktree_merge: "none",
       disabled_agents: [],
       agent_models: %{}
@@ -220,6 +224,16 @@ defmodule CodingAgent.SettingsManager do
         case Map.get(task, :idle_ttl_ms) do
           ms when is_integer(ms) and ms >= 0 -> ms
           _ -> defaults.idle_ttl_ms
+        end,
+      request_budget:
+        case Map.get(task, :request_budget) do
+          budget when is_integer(budget) and budget >= 0 -> budget
+          _ -> defaults.request_budget
+        end,
+      request_budget_notice:
+        case Map.get(task, :request_budget_notice) do
+          notice when is_boolean(notice) -> notice
+          _ -> defaults.request_budget_notice
         end,
       worktree_merge:
         case Map.get(task, :worktree_merge) do

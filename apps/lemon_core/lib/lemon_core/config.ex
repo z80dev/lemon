@@ -244,6 +244,7 @@ defmodule LemonCore.Config do
       approval_mode: tools.approval_mode,
       edit: tools.edit,
       bash: tools.bash,
+      lsp: tools.lsp,
       intent_tracing: tools.intent_tracing,
       web: tools.web,
       wasm: tools.wasm,
