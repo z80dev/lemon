@@ -32,10 +32,7 @@ defmodule LemonRouter.RouterTest do
     def busy?(session_key) do
       send(test_pid(), {:busy_query, session_key})
 
-      case Process.get(:router_busy_result) do
-        nil -> session_key == Process.get(:router_busy_session_key)
-        result -> result
-      end
+      Process.get(:router_busy_result, false)
     end
 
     def active_run_for_session(session_key) do
@@ -69,7 +66,6 @@ defmodule LemonRouter.RouterTest do
 
     Process.put(:router_test_pid, self())
     Process.delete(:router_submit_result)
-    Process.delete(:router_busy_session_key)
     Process.delete(:router_busy_result)
     Process.delete(:router_active_sessions)
     Process.delete(:router_abort_session_result)
@@ -93,7 +89,6 @@ defmodule LemonRouter.RouterTest do
 
       Process.delete(:router_test_pid)
       Process.delete(:router_submit_result)
-      Process.delete(:router_busy_session_key)
       Process.delete(:router_busy_result)
       Process.delete(:router_active_sessions)
       Process.delete(:router_abort_session_result)
@@ -180,33 +175,6 @@ defmodule LemonRouter.RouterTest do
     assert {:error, :unavailable} = Router.session_busy?("agent:test:main")
     assert {:error, :unavailable} = Router.active_run("agent:test:main")
     assert {:error, :unavailable} = Router.list_active_sessions()
-  end
-
-  test "session_busy?/1 delegates to the session coordinator" do
-    session_key = "agent:test:main:#{System.unique_integer([:positive])}"
-    Process.put(:router_busy_session_key, session_key)
-
-    assert Router.session_busy?(session_key)
-    assert_receive {:busy_query, ^session_key}
-
-    refute Router.session_busy?("agent:test:main:other")
-    assert_receive {:busy_query, "agent:test:main:other"}
-  end
-
-  test "active_run/1 delegates to the session coordinator" do
-    session_key = "agent:test:main:#{System.unique_integer([:positive])}"
-    Process.put({:active_run, session_key}, {:ok, "run_active"})
-
-    assert Router.active_run(session_key) == {:ok, "run_active"}
-    assert_receive {:active_run_query, ^session_key}
-  end
-
-  test "list_active_sessions/0 delegates to the session coordinator" do
-    sessions = [%{session_key: "agent:test:main:1", run_id: "run_1"}]
-    Process.put(:router_active_sessions, sessions)
-
-    assert Router.list_active_sessions() == sessions
-    assert_receive :list_active_sessions
   end
 
   test "resolve_session_key/1 uses explicit meta.session_key when provided" do

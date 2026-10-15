@@ -457,8 +457,8 @@ describe("grepFormatter", () => {
 				content: [{ type: "text", text: "/project/app.ts:1:hello" }],
 			});
 
-			// Should not crash, pattern will be empty
-			expect(result.summary).toBeDefined();
+			expect(result.summary).toContain("1 match");
+			expect(result.details.some((line) => line.includes("hello"))).toBe(true);
 		});
 
 		it("handles string result directly", () => {
@@ -495,8 +495,8 @@ describe("grepFormatter", () => {
 				{ pattern: ".map(" },
 			);
 
-			// Should not crash due to regex special chars
-			expect(result.summary).toBeDefined();
+			expect(result.summary).toContain("1 match");
+			expect(result.details.some((line) => line.includes("items[.map(]x => x)"))).toBe(true);
 		});
 
 		it("handles empty pattern gracefully", () => {
@@ -519,8 +519,8 @@ describe("grepFormatter", () => {
 				{ pattern: "windows" },
 			);
 
-			// Should handle the path (may or may not parse correctly, but shouldn't crash)
-			expect(result.summary).toBeDefined();
+			expect(result.summary).toContain("1 match");
+			expect(result.details.some((line) => line.includes("[windows] path match"))).toBe(true);
 		});
 	});
 });

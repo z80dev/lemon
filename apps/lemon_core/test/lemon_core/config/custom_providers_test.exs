@@ -75,22 +75,26 @@ defmodule LemonCore.Config.CustomProvidersTest do
     assert {:error, errors} = Modular.validate_settings(settings)
 
     expected = [
-      "providers.providers.broken.api: invalid value \"carrier-pigeon\"",
-      "providers.providers.broken.auth: invalid value \"maybe\"",
-      "providers.providers.broken.discovery: invalid value \"proxy\"",
-      "providers.providers.broken.base_url: is required",
-      "providers.providers.broken.headers: header values must be strings",
-      "providers.providers.broken.models[0].id: is required",
-      "providers.providers.broken.models[0].context_window: must be a positive integer",
-      "providers.providers.broken.models[0].input: must list",
-      "providers.providers.broken.models[1].reasoning: must be a boolean",
-      "providers.providers.broken.models[1].cost: prices must be non-negative numbers",
-      "providers.providers.keyless.base_url: is required"
+      "providers.broken.api: invalid value",
+      "providers.broken.auth: invalid value",
+      "providers.broken.discovery: invalid value",
+      "providers.broken.base_url: required when api or discovery is set",
+      "providers.broken.headers: header values must be strings",
+      "providers.broken.models[0].id: is required",
+      "providers.broken.models[0].context_window: must be a positive integer",
+      "providers.broken.models[0].input: must list",
+      "providers.broken.models[1].reasoning: must be a boolean",
+      "providers.broken.models[1].cost: prices must be non-negative numbers",
+      "providers.keyless.base_url: required when api or discovery is set"
     ]
 
     for message <- expected do
       assert Enum.any?(errors, &String.starts_with?(&1, message)),
              "missing #{inspect(message)} in #{inspect(errors)}"
+    end
+
+    for value <- ~w(carrier-pigeon maybe proxy) do
+      refute Enum.any?(errors, &String.contains?(&1, value))
     end
   end
 end

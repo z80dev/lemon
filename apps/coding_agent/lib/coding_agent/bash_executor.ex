@@ -4,8 +4,8 @@ defmodule CodingAgent.BashExecutor do
   truncation, and abort signal support. A Port-owning guardian kills shell
   descendants if the tool worker exits, including forced cancellation/crashes.
   UTF-8 is decoded across stream chunks; invalid bytes do not discard later
-  output. Large output is archived privately, and only its bounded tail is
-  read back into memory when execution completes.
+  output. Large output is archived privately, and only bounded head and tail
+  windows are read back into memory when execution completes.
   """
 
   alias LemonAgent.AbortSignal
@@ -21,6 +21,7 @@ defmodule CodingAgent.BashExecutor do
       :truncated,
       :full_output_path,
       timed_out: false,
+      pty_fallback: false,
       terminal_id: nil,
       client_output_truncated: false
     ]
@@ -32,6 +33,7 @@ defmodule CodingAgent.BashExecutor do
             truncated: boolean(),
             full_output_path: String.t() | nil,
             timed_out: boolean(),
+            pty_fallback: boolean(),
             terminal_id: String.t() | nil,
             client_output_truncated: boolean()
           }
@@ -82,11 +84,11 @@ defmodule CodingAgent.BashExecutor do
 
     command = wrap_command_with_cwd(command, cwd)
 
-    {spawn_path, spawn_args} =
+    {spawn_path, spawn_args, pty_fallback} =
       if use_pty do
         wrap_with_pty(shell_path, shell_args, command)
       else
-        {shell_path, shell_args ++ [command]}
+        {shell_path, shell_args ++ [command], false}
       end
 
     port_opts =
@@ -125,6 +127,7 @@ defmodule CodingAgent.BashExecutor do
           signal: signal,
           on_chunk: on_chunk,
           max_bytes: max_bytes,
+          pty_fallback: pty_fallback,
           temp_file_threshold: temp_file_threshold,
           output_buffer: [],
           utf8_tail: "",
@@ -330,20 +333,20 @@ defmodule CodingAgent.BashExecutor do
       case :os.type() do
         {:unix, :darwin} ->
           # macOS: script -q /dev/null <shell> -c <command>
-          {script_path, ["-q", "/dev/null", shell_path] ++ shell_args ++ [command]}
+          {script_path, ["-q", "/dev/null", shell_path] ++ shell_args ++ [command], false}
 
         {:unix, _} ->
           # Linux: script -qc '<shell> -c <command>' /dev/null
           inner = Enum.join([shell_path] ++ shell_args ++ [shell_escape(command)], " ")
-          {script_path, ["-qc", inner, "/dev/null"]}
+          {script_path, ["-qc", inner, "/dev/null"], false}
 
         _ ->
           # Fallback: no PTY wrapping available
-          {shell_path, shell_args ++ [command]}
+          {shell_path, shell_args ++ [command], true}
       end
     else
       # script not available, fall back to normal execution
-      {shell_path, shell_args ++ [command]}
+      {shell_path, shell_args ++ [command], true}
     end
   end
 
@@ -374,7 +377,7 @@ defmodule CodingAgent.BashExecutor do
       File.close(state.temp_file)
     end
 
-    # A spilled command may have emitted gigabytes. Read only its tail back;
+    # A spilled command may have emitted gigabytes. Read bounded windows only;
     # the full stream stays in the retrievable artifact, not in BEAM memory.
     full_output =
       if state.temp_file_path do
@@ -383,14 +386,15 @@ defmodule CodingAgent.BashExecutor do
         IO.iodata_to_binary(Enum.reverse(state.output_buffer))
       end
 
-    # Apply tail truncation
-    {truncated_output, tail_truncated?, _info} =
-      truncate_tail(full_output,
-        max_bytes: state.max_bytes,
-        max_lines: @default_max_lines
-      )
+    was_truncated =
+      state.total_bytes > state.max_bytes or
+        length(:binary.matches(full_output, "\n")) >= @default_max_lines
 
-    was_truncated = tail_truncated? or state.total_bytes > state.max_bytes
+    output =
+      if was_truncated,
+        do: head_tail_output(state, full_output),
+        else: full_output
+
     # Determine full_output_path
     full_output_path =
       cond do
@@ -412,12 +416,45 @@ defmodule CodingAgent.BashExecutor do
       end
 
     %Result{
-      output: truncated_output,
+      output: output,
       exit_code: state.exit_code,
       cancelled: state.cancelled,
       truncated: was_truncated,
+      pty_fallback: state.pty_fallback,
       full_output_path: full_output_path
     }
+  end
+
+  defp head_tail_output(state, buffered) do
+    head_bytes = min(20 * 1024, div(state.max_bytes, 2))
+    tail_bytes = state.max_bytes - head_bytes
+    head_lines = div(@default_max_lines * 2, 5)
+
+    head =
+      if state.temp_file_path do
+        {:ok, bytes} =
+          File.open(state.temp_file_path, [:read, :binary], &IO.binread(&1, head_bytes))
+
+        if bytes == :eof, do: "", else: LemonAi.Text.trim_to_valid_utf8(bytes)
+      else
+        LemonAi.Text.truncate_bytes_utf8(buffered, head_bytes, marker: "")
+      end
+
+    head = head |> String.split("\n") |> Enum.take(head_lines) |> Enum.join("\n")
+
+    {tail, _truncated, _info} =
+      truncate_tail(buffered,
+        max_bytes: tail_bytes,
+        max_lines: @default_max_lines - head_lines,
+        notice: ""
+      )
+
+    tail = trim_utf8_start(tail)
+    omitted = state.total_bytes - byte_size(head) - byte_size(tail)
+
+    head <>
+      "\n[Output truncated. #{omitted} bytes elided; showing head and tail, up to #{@default_max_lines} lines]\n" <>
+      tail
   end
 
   defp read_output_tail(path, max_bytes) do

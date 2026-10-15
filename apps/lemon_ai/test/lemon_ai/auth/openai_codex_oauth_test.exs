@@ -69,11 +69,13 @@ defmodule LemonAi.Auth.OpenAICodexOAuthTest do
   end
 
   test "resolve_api_key_from_secret returns stored access token" do
+    jwt = make_jwt("acc_test", 3_600)
+
     payload =
       Jason.encode!(%{
         "type" => "openai_codex_oauth",
         "refresh_token" => "refresh-token",
-        "access_token" => make_jwt("acc_test", 3_600),
+        "access_token" => jwt,
         "expires_at_ms" => System.system_time(:millisecond) + 3_600_000,
         "account_id" => "acc_test",
         "created_at_ms" => System.system_time(:millisecond),
@@ -83,16 +85,19 @@ defmodule LemonAi.Auth.OpenAICodexOAuthTest do
     assert {:ok, token} =
              OpenAICodexOAuth.resolve_api_key_from_secret("llm_openai_codex_api_key", payload)
 
+    assert token == jwt
     assert is_binary(token)
     assert String.split(token, ".") |> length() == 3
   end
 
   test "resolve_api_key_from_secret accepts legacy onboarding payloads" do
+    jwt = make_jwt("acc_legacy", 3_600)
+
     payload =
       Jason.encode!(%{
         "type" => "onboarding_openai_codex_oauth",
         "refresh_token" => "refresh-token",
-        "access_token" => make_jwt("acc_legacy", 3_600),
+        "access_token" => jwt,
         "expires_at_ms" => System.system_time(:millisecond) + 3_600_000,
         "account_id" => "acc_legacy",
         "created_at_ms" => System.system_time(:millisecond),
@@ -102,6 +107,7 @@ defmodule LemonAi.Auth.OpenAICodexOAuthTest do
     assert {:ok, token} =
              OpenAICodexOAuth.resolve_api_key_from_secret("llm_openai_codex_api_key", payload)
 
+    assert token == jwt
     assert is_binary(token)
     assert String.split(token, ".") |> length() == 3
   end

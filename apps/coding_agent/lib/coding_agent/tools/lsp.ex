@@ -25,7 +25,7 @@ defmodule CodingAgent.Tools.Lsp do
   alias LemonAi.Types.TextContent
   alias LemonLsp.ServerManager
 
-  @actions ~w(diagnostics definition type_definition implementation references hover symbols rename code_actions status request)
+  @actions ~w(diagnostics definition type_definition implementation references hover symbols rename rename_file reload capabilities code_actions status request)
   @position_actions ~w(definition type_definition implementation references hover rename code_actions)
   @default_timeout_s 20
   @reference_context_limit 50
@@ -48,6 +48,10 @@ defmodule CodingAgent.Tools.Lsp do
   - `rename`: previews the edits by default; pass `apply: true` with `new_name` to write them.
   - `code_actions`: lists actions at the position (whole line without `symbol`/`column`); apply ONE with `apply: true` + `query` (index or title substring).
   - `diagnostics`: errors and warnings for `file`.
+  - `rename_file`: `file` + `new_name` destination path; previews server edits and the move, writes only with `apply: true`.
+  - `reload`: restart the server for `file`, or all running servers in the scope without `file`.
+  - `capabilities`: advertised capabilities for the server selected by `file`.
+  - `diagnostics` with `file: "*"`: bounded published diagnostics across running workspace clients.
   - `symbols`: `file` lists that file's symbols; `query` without `file` searches the workspace.
   - `status`: language servers known, installed and running for this session.
   - `request`: raw LSP call; `query` = method, `payload` = JSON params (else built from file/line/symbol).
@@ -84,11 +88,14 @@ defmodule CodingAgent.Tools.Lsp do
             "description" =>
               "Workspace symbol query, code action index/title to apply, or method for `request`"
           },
-          "new_name" => %{"type" => "string", "description" => "New name for `rename`"},
+          "new_name" => %{
+            "type" => "string",
+            "description" => "New symbol name for `rename` or destination path for `rename_file`"
+          },
           "apply" => %{
             "type" => "boolean",
             "description" =>
-              "Write `rename`/`code_actions` edits to disk (default false: preview)"
+              "Write `rename`/`rename_file`/`code_actions` edits to disk (default false: preview)"
           },
           "timeout" => %{
             "type" => "number",
@@ -159,7 +166,7 @@ defmodule CodingAgent.Tools.Lsp do
          {:ok, payload} <- payload(params["payload"]) do
       req = %{
         action: action,
-        file: if(file == "*", do: nil, else: file),
+        file: file,
         line: line,
         column: column,
         symbol: symbol,
@@ -271,7 +278,14 @@ defmodule CodingAgent.Tools.Lsp do
   end
 
   defp check_required(%{action: "diagnostics", file: nil}),
-    do: {:error, "diagnostics requires `file`; workspace-wide diagnostics are not supported"}
+    do: {:error, "diagnostics requires `file` (use `*` for the workspace)"}
+
+  defp check_required(%{action: action, file: nil})
+       when action in ["rename_file", "capabilities"],
+       do: {:error, "#{action} requires `file`"}
+
+  defp check_required(%{action: "rename_file", new_name: nil}),
+    do: {:error, "rename_file requires `new_name` (destination path)"}
 
   defp check_required(%{action: "symbols", file: nil, query: nil}),
     do: {:error, "symbols requires `file` (document symbols) or `query` (workspace symbols)"}
@@ -284,6 +298,9 @@ defmodule CodingAgent.Tools.Lsp do
   # -- Actions ----------------------------------------------------------------
 
   defp run("status", ctx), do: status(ctx)
+  defp run("rename_file", ctx), do: rename_file(ctx)
+  defp run("reload", ctx), do: reload(ctx)
+  defp run("capabilities", ctx), do: capabilities(ctx)
   defp run("diagnostics", ctx), do: diagnostics(ctx)
   defp run("definition", ctx), do: locations(ctx, "textDocument/definition", "definition")
 
@@ -951,6 +968,143 @@ defmodule CodingAgent.Tools.Lsp do
 
   defp checkpoint_ids(details),
     do: Map.get(details, :checkpoint_ids, List.wrap(Map.get(details, :checkpoint_id)))
+
+  defp capabilities(ctx) do
+    with_file(ctx, fn conn ->
+      {:ok, "#{conn.server.id} capabilities:\n" <> Jason.encode!(conn.capabilities, pretty: true),
+       %{server: to_string(conn.server.id), capabilities: conn.capabilities}}
+    end)
+  end
+
+  defp reload(%{req: %{file: file}} = ctx) when file in [nil, "*"] do
+    clients = Client.list(ctx.scope)
+    servers = Map.new(LemonLsp.Servers.list(), &{&1.id, &1})
+
+    Enum.reduce_while(
+      clients,
+      {:ok, "Reloaded #{length(clients)} language server(s)", %{count: length(clients)}},
+      fn client, result ->
+        Client.stop(client.pid)
+
+        case attempt(
+               ctx,
+               servers[client.server_id],
+               client.root,
+               nil,
+               fn _ ->
+                 {:ok, "", %{}}
+               end,
+               0
+             ) do
+          {:ok, _, _} -> {:cont, result}
+          error -> {:halt, error}
+        end
+      end
+    )
+  end
+
+  defp reload(ctx) do
+    with_file(ctx, fn conn ->
+      Client.stop(conn.pid)
+
+      attempt(
+        ctx,
+        conn.server,
+        conn.root,
+        conn.path,
+        fn _ ->
+          {:ok, "Reloaded #{conn.server.id}", %{server: to_string(conn.server.id)}}
+        end,
+        0
+      )
+    end)
+  end
+
+  defp rename_file(ctx) do
+    with_file(ctx, fn conn ->
+      destination = PathHelpers.resolve_path(ctx.req.new_name, ctx.cwd)
+      files = [%{"oldUri" => conn.uri, "newUri" => Text.path_to_uri(destination)}]
+      operations = get_in(conn.capabilities, ["workspace", "fileOperations"]) || %{}
+
+      edit =
+        if operations["willRename"],
+          do: request(ctx, conn, "workspace/willRenameFiles", %{"files" => files}),
+          else: {:ok, nil}
+
+      with {:ok, edit} <- edit,
+           {:ok, ops} <- WorkspaceEdit.plan(edit) do
+        ops = ops ++ [%{kind: :rename, from: conn.path, to: destination, options: %{}}]
+
+        if ctx.req.apply do
+          case apply_ops(ctx, conn, ops, "rename_file", "Renamed file") do
+            {:ok, text, details} ->
+              if operations["didRename"] do
+                case ServerManager.notify_session(conn.session_id, "workspace/didRenameFiles", %{
+                       "files" => files
+                     }) do
+                  :ok ->
+                    {:ok, text, details}
+
+                  {:error, _} ->
+                    {:partial_error,
+                     text <> "\nFile moved, but didRenameFiles notification failed", details}
+                end
+              else
+                {:ok, text, details}
+              end
+
+            other ->
+              other
+          end
+        else
+          {:ok,
+           "File rename preview (pass apply: true to write):\n" <>
+             Enum.join(WorkspaceEdit.describe(ops, ctx.cwd), "\n"),
+           %{applied: false, change_count: length(ops)}}
+        end
+      end
+    end)
+  end
+
+  defp diagnostics(%{req: %{file: "*"}} = ctx) do
+    entries =
+      ctx.scope
+      |> Client.list()
+      |> Enum.take(32)
+      |> Enum.flat_map(fn client ->
+        with {:ok, conn} <- Client.sync(client.pid, nil, remaining(ctx)),
+             {:ok, entries} <- ServerManager.workspace_diagnostics(conn.session_id) do
+          entries
+        else
+          _ -> []
+        end
+      end)
+      |> Enum.flat_map(fn {uri, diagnostics} ->
+        case Text.uri_to_path(uri) do
+          {:ok, path} ->
+            if path == ctx.cwd or String.starts_with?(path, ctx.cwd <> "/"),
+              do: Enum.map(diagnostics, &{path, &1}),
+              else: []
+
+          _ ->
+            []
+        end
+      end)
+      |> Enum.uniq()
+      |> Enum.sort()
+      |> Enum.take(@diagnostic_limit)
+
+    text =
+      entries
+      |> Enum.group_by(&elem(&1, 0), &elem(&1, 1))
+      |> Enum.sort()
+      |> Enum.map_join("\n", fn {path, list} ->
+        format_diagnostics(list, path, Text.display_path(path, ctx.cwd))
+      end)
+
+    {:ok, if(text == "", do: "No published workspace diagnostics", else: text),
+     %{count: length(entries), limit: @diagnostic_limit}}
+  end
 
   defp diagnostics(ctx) do
     with_file(ctx, fn conn ->

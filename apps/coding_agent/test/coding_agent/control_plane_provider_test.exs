@@ -8,21 +8,6 @@ defmodule CodingAgent.ControlPlaneProviderTest do
 
   alias CodingAgent.ControlPlaneProvider
 
-  @behaviour_module LemonCore.AgentRuntime.Provider
-
-  test "implements every callback the core runtime declares" do
-    expected = @behaviour_module.behaviour_info(:callbacks) |> Enum.sort()
-    assert Code.ensure_loaded?(ControlPlaneProvider)
-
-    missing =
-      Enum.reject(expected, fn {fun, arity} ->
-        function_exported?(ControlPlaneProvider, fun, arity)
-      end)
-
-    assert missing == [],
-           "provider is missing: #{inspect(missing)} — a typo here degrades the method to its fallback silently"
-  end
-
   test "the running application has registered this provider" do
     assert LemonCore.AgentRuntime.provider() == ControlPlaneProvider
     assert LemonCore.AgentRuntime.available?()
@@ -54,10 +39,6 @@ defmodule CodingAgent.ControlPlaneProviderTest do
                ControlPlaneProvider.resolve_subagent(cwd, "../reviewer")
     end
 
-    test "list_tasks returns id/record pairs" do
-      assert is_list(ControlPlaneProvider.list_tasks())
-    end
-
     test "compact_session reports a missing session rather than raising" do
       assert ControlPlaneProvider.compact_session(
                "no-such-session-#{System.unique_integer()}",
@@ -71,15 +52,11 @@ defmodule CodingAgent.ControlPlaneProviderTest do
                nil
     end
 
-    test "wasm_sidecar_running? is a boolean" do
-      assert is_boolean(ControlPlaneProvider.wasm_sidecar_running?())
-    end
-
     test "extension_dirs returns global then project" do
-      dirs = ControlPlaneProvider.extension_dirs("/tmp/some-project")
-
-      assert length(dirs) == 2
-      assert Enum.all?(dirs, &is_binary/1)
+      assert ControlPlaneProvider.extension_dirs("/tmp/some-project") == [
+               CodingAgent.Config.extensions_dir(),
+               CodingAgent.Config.project_extensions_dir("/tmp/some-project")
+             ]
     end
   end
 

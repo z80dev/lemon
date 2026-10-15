@@ -4,6 +4,21 @@
 
 ### Added
 
+- LSP supports preview/apply file renames, server reload, advertised capabilities,
+  and bounded workspace diagnostics from running clients. Document language IDs
+  now come from the shared LemonLsp server catalog.
+
+- Bare reads of source files with at least 300 lines and at most 2 MiB now return
+  bounded structural summaries with declarations and explicit omitted ranges.
+  Summaries are immutable, omit edit snapshots, and are rejected by overwrite
+  safety checks. Selectors, offset/limit, `summary: false`, or the host's
+  `structural_summary: false` option retain full reads; ACP unsaved buffers use
+  the same outline behavior.
+
+- Foreground bash previews retain a 20 KiB head plus tail with an explicit middle
+  elision marker. Spill notices prefer session artifact handles over raw paths,
+  and unavailable PTYs report their fallback in both output and result details.
+
 - Local edit and patch support the same opt-in formatting as write and return
   post-format snapshot tags. Anchored edits recover recent session/path tags
   only when every referenced original range remains byte-identical and unique;
@@ -12,6 +27,9 @@
 - Session-scoped `local://name` scratch files support read, write and bash URL
   expansion. `proc://` lists owned processes; process URLs peek output, write
   stdin or terminate through `/kill`.
+- Read supports GitHub `issue://` and `pr://` views and indexed PR diffs, preferring
+  authenticated `gh` for private repositories. `history://task_id` shows a bounded
+  visible transcript of an owned child task without hidden reasoning.
 
 - Find sorts the complete candidate set before applying `max_results`, with
   `sort: "mtime"` for newest-first (path tie-breaks) or the existing default

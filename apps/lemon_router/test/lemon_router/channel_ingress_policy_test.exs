@@ -89,10 +89,17 @@ defmodule LemonRouter.ChannelIngressPolicyTest do
         peer_kind: :dm,
         peer_id: "4244",
         sender: %{id: "99", bot: true},
-        meta: %{channel_identity: %{channel_id: "forged", sender_id: "another", is_bot: false}}
+        meta: %{
+          channel_identity: %{
+            channel_id: "forged",
+            sender_id: "another",
+            is_bot: false,
+            owner?: true
+          }
+        }
       )
 
-    identity = %{channel_id: "telegram", sender_id: "99", is_bot: true}
+    identity = %{channel_id: "telegram", sender_id: "99", is_bot: true, owner?: false}
     assert command.meta.channel_identity == identity
 
     doc =
@@ -103,6 +110,13 @@ defmodule LemonRouter.ChannelIngressPolicyTest do
       })
 
     assert doc.meta.channel_identity == identity
+  end
+
+  test "transport owner attestation reaches execution while channel access alone does not" do
+    owner = build_submission(peer_kind: :dm, peer_id: "4245", sender: %{id: "99", owner?: true})
+    assert owner.meta.channel_identity.owner? == true
+    non_owner = build_submission(peer_kind: :group, peer_id: "-4245", sender: %{id: "100"})
+    assert non_owner.meta.channel_identity.owner? == false
   end
 
   defp build_submission(opts) do

@@ -25,6 +25,18 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   Connection failures and `/reconnect` report actionable outcomes; `/status`
   includes profile/model, theme changes say whether they were saved, and
   command suggestions no longer mistake `/faq` for the `/q` queue alias.
+- Make source and packaged launcher lifecycle results truthful: foreground health
+  is visible to status, unreachable runtimes fail status, foreign listeners fail
+  stop/restart, and failed daemon health waits clean up their processes. Validate
+  lifecycle ports, explain missing Mix/curl, show selected home/ports/logs, and
+  render source help without compiling or creating credentials. Status RPC adds
+  the runtime profile and configured default model ID without exposing home paths.
+- Configuration loads now reject invalid resolved values, report expected types
+  without echoing supplied values, and name input files. CLI and Mix summaries
+  agree on unset/false values and identify environment overrides.
+- Remove obsolete runtime-theme and vendor-CLI environment documentation, refresh
+  the generated environment registry, make example credentials/bindings opt-in,
+  and resolve XMTP wallet environment references before connecting.
 - Normalize non-OpenAI control-plane HTTP errors to code/message envelopes,
   name authentication headers and credential sources, omit non-JSON error
   details safely, and distinguish unavailable status subsystems from empty results.
@@ -45,6 +57,13 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Changed
 
+- **Honcho behavior change:** unaliased non-owner gateway senders now get their
+  own platform-qualified peer even without a runtime prefix. Explicitly paired
+  Telegram owners retain `user_peer`; use `pin_user_peer = true` or aliases to
+  restore pooled memory. CLI/TUI/web identity is unchanged.
+- Add opt-in bounded background learning reviews, with private-memory ownership,
+  draft-only skill creation, restricted tools, per-session rate/concurrency
+  limits and no conversation/channel delivery; reminders remain the default.
 - Honcho channel turns support pinned users, many-to-one sender aliases and
   platform-qualified peer prefixes. Per-peer context follows each sender,
   bot-authored turns are not uploaded, and Hermes migration imports these settings.

@@ -169,6 +169,9 @@ defmodule LemonChannels.PresentationStateTest do
     test "silently drops notification for unknown ref" do
       run_id = "run_unknown_#{System.unique_integer()}"
       unknown_ref = make_ref()
+      registered_ref = make_ref()
+      pid = Process.whereis(PresentationState)
+      PresentationState.register_pending_create(@route, run_id, :answer, registered_ref, 1, 111)
 
       # Send notification for a ref that was never registered
       send(
@@ -178,10 +181,11 @@ defmodule LemonChannels.PresentationStateTest do
 
       flush_presentation_state()
 
-      # Should not crash, and no entry should exist
+      # An unknown notification must neither restart the server nor settle another delivery.
       entry = PresentationState.get(@route, run_id, :answer)
       assert is_nil(entry.platform_message_id)
-      assert is_nil(entry.pending_create_ref)
+      assert entry.pending_create_ref == registered_ref
+      assert Process.whereis(PresentationState) == pid
     end
 
     test "clears pending_create_at on successful notification" do
