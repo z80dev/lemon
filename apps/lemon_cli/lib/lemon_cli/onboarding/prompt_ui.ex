@@ -19,7 +19,15 @@ defmodule LemonCli.Onboarding.PromptUI do
         }
 
   @spec available?() :: boolean()
-  def available?, do: not test_env?()
+  def available?, do: not test_env?() and terminal?()
+
+  @spec terminal?() :: boolean()
+  def terminal? do
+    case :io.getopts(:standard_io) do
+      options when is_list(options) -> Keyword.get(options, :terminal, false)
+      _ -> false
+    end
+  end
 
   @spec select(select_params()) :: {:ok, term()} | :cancel | {:error, term()}
   def select(params), do: select(params, [])
@@ -64,10 +72,10 @@ defmodule LemonCli.Onboarding.PromptUI do
   defp prompt_for_choice(options, default_index, io) do
     case io.prompt.("Select [default: #{default_index + 1}, q to cancel]: ") do
       nil ->
-        :cancel
+        {:error, :end_of_input}
 
       :eof ->
-        :cancel
+        {:error, :end_of_input}
 
       input ->
         choose_input(normalize_input(input), options, default_index, io)

@@ -59,6 +59,15 @@ the authenticated destination WebSocket. The destination starts the same native
 executor/session path and returns one JSON-safe terminal result; no vendor CLI
 or subprocess agent runner is involved.
 
+Optional context contributors can observe content-free lifecycle telemetry:
+`[:coding_agent, :session, :tool_dispatched]` carries `session_pid`,
+`session_scope`, and `tool_name`; `[:coding_agent, :session, :run_completed]`
+carries only `session_pid` and `session_scope`. Measurements are empty maps.
+The contributor request includes the live `session_pid`, allowing volatile
+per-session counters without transcript copies or a dependency from the session
+runtime on the observer. LemonSkills uses this seam for
+[learning reminders](../../docs/user-guide/skills.md#learning-reminders).
+
 ### Supervision Tree
 
 ```
@@ -139,7 +148,7 @@ CodingAgent.Supervisor (one_for_one)
 | Search | `grep`, `find`, `ast_grep` (when the real ast-grep CLI is installed) |
 | Execution | `bash`, `bash_output`, `kill_process`, `process_input` (see [shell and background processes](../../docs/tools/shell.md)), `debug` (DAP debugger; see [debugger](../../docs/tools/debug.md)) |
 | Web / Browser / Media | `websearch`, `webfetch`, `browser_tabs`, `browser_tab_open`, `browser_tab_activate`, `browser_tab_close`, `browser_navigate`, `browser_snapshot`, `browser_get_content`, `browser_click`, `browser_type`, `browser_hover`, `browser_select_option`, `browser_upload_file`, `browser_download`, `browser_press`, `browser_scroll`, `browser_back`, `browser_wait_for_selector`, `browser_evaluate`, `browser_events`, `browser_get_cookies`, `browser_set_cookies`, `browser_clear_state`, `browser_screenshot`, `browser_analyze`, `media_status`, `media_generate_image`, `media_generate_speech`, `media_transcribe_audio`, `media_analyze_image`, `media_generate_video` |
-| Task / Agent | `task`, `agent`, `parent_question`, `todo`, `kanban` |
+| Task / Agent | `task`, `agent`, `parent_question`, [`todo`](../../docs/tools/todo.md), `kanban` |
 | System | `tool_auth`, `extensions_status` |
 
 **Snapshot-anchored edits.** A local text `read` returns numbered physical lines

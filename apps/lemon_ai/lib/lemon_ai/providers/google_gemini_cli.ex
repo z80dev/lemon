@@ -539,7 +539,7 @@ defmodule LemonAi.Providers.GoogleGeminiCli do
           handle_error(
             stream,
             output,
-            GoogleShared.safe_http_error(status, error_text, response_headers)
+            GoogleShared.safe_http_error(status, error_text, response_headers, model.provider)
           )
 
         {:error, reason} ->

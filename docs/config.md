@@ -2017,3 +2017,31 @@ slash command. Direct messages always run.
 
 Forum topic management:
 - `/topic <name>`: create a new topic in the current Telegram forum supergroup.
+
+## Learning Reminders (skills.json)
+
+Learning reminder settings use the existing skills configuration, **not**
+`config.toml`: global `~/.lemon/agent/skills.json` (or `LEMON_AGENT_DIR/skills.json`)
+and project `<cwd>/.lemon/skills.json`. Project keys override global keys.
+
+```json
+{
+  "learning_nudge": {
+    "enabled": true,
+    "memory_turn_interval": 10,
+    "skill_tool_threshold": 15
+  }
+}
+```
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `enabled` | `true` | Enable main-session in-band reminders; `false` skips reminders and forgets that session's counters on its next turn. |
+| `memory_turn_interval` | `10` | User turns without `remember` before suggesting a save; repeats at this interval if no save is made. |
+| `skill_tool_threshold` | `15` | Tool dispatches in the previous completed run, without `skill_manage`, before a one-turn skill creation/patch suggestion. |
+
+Thresholds must be positive integers; invalid values fall back to the defaults.
+Configuration is read at the next user turn. The fixed text is bounded volatile
+context: no extra model calls, memory reads, automatic saves or transcript scans.
+Subagents are excluded, and live-session counters disappear on session exit or
+runtime restart. See [learning reminders](user-guide/skills.md#learning-reminders).

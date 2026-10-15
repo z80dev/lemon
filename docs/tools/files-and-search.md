@@ -12,8 +12,10 @@ reads (archives, PDFs, notebooks, images) are described in the
 
 | Selector | Meaning |
 | --- | --- |
-| `file:50-80` | lines 50 through 80 |
-| `file:50+20` | 20 lines starting at line 50 |
+| `file:50-80` | lines 50 through 80, plus 1 preceding / 3 following context lines |
+| `file:50+20` | 20 lines starting at line 50, plus the same context |
+| `file:5-16,960-973` | exact disjoint line windows |
+| `file:5,19,59` or `file:5,19-25,59+2` | exact individual lines, ranges, or counts in one read |
 | `file:50` or `file:50-` | from line 50 to the end (still capped at 2000 lines / 50 KB) |
 | `file:-30` | the last 30 lines |
 | `file:raw`, `file:50-80:raw`, `file:raw:50-80` | unnumbered text without the snapshot header |
@@ -25,14 +27,35 @@ exist, so a file really named `notes:12` is still read as-is. A selector cannot
 be combined with `offset`/`limit`. `:raw` output omits the snapshot tag, so use
 a numbered read before a snapshot-anchored `edit`.
 
+A comma list is sorted and overlapping or adjacent windows are merged. Each
+window keeps its original line numbers, with a standalone `…` separator between
+windows and only one snapshot header for editable files. Comma-list numbers
+select individual lines (unlike the standalone open-ended `:50` selector).
+Comma windows must be bounded; tail and open-ended forms cannot be mixed into
+a list. All windows share the 2000-line / 50 KB output budget.
+
+Context for a single bounded range is clamped to the source boundaries. Raw
+selectors (`:raw:50-80` or `:50-80:raw`) remain exact, without context, line
+numbers, or a snapshot header. Raw comma lists also stay exact and retain the
+`…` separators. `offset`/`limit`, open-ended and tail selectors do not add context.
+
+## Patch hunk matching
+
+Patch hunk context must identify a unique location. Exact matches take precedence;
+on an exact miss, `patch` tolerates indentation, horizontal whitespace, and smart
+quote/dash differences using the same normalization as text `edit`. Multiple
+normalized matches are rejected. Unchanged context keeps its original text.
+
 ## Safe overwrites
 
 `write` refuses to overwrite an existing file with content containing a read
-continuation or long-line budget notice. Re-read the omitted range or use `edit`
-instead. New files are not subject to this check. Existing UTF-8 BOMs and dominant
+continuation, long-line budget notice, or standalone `…` selector-elision marker.
+Re-read the omitted range or use `edit` instead. New files are not subject to this
+check. Existing UTF-8 BOMs and dominant
 CRLF line endings are preserved when incoming text omits them; explicitly supplied
 CRLF text is left intact. The same safeguards apply to ACP writes when the prior
-contents are available.
+contents are available. Local overwrite format detection samples only the first
+64 KiB, keeping memory bounded even when replacing very large files.
 
 Local `patch` updates, deletes, and move sources check the session's last read
 against the current raw file bytes before any patch writes. If the file changed,
@@ -71,6 +94,14 @@ that limit is reached. A final page may therefore be empty. The notice and
 ```json
 {"pattern": "TODO", "max_results": 50, "skip": 50}
 ```
+
+`output_mode` defaults to `"content"`. `"files"` returns each matching path once;
+`"count"` returns per-file matching-line counts and the total across searched files
+(also in `details.counts` and `details.match_count`). In these modes `skip` and
+`max_results` page files, not individual matches. Count mode scans all files within
+the fallback's deadline and per-file byte bound, rather than stopping at a page.
+Patterns containing a literal newline or `\n` enable multiline search (`rg -U` or
+whole-file fallback matching); results identify the start line of each matching span.
 
 Hidden files and files ignored by `.gitignore`/`.ignore` are skipped by default,
 with ripgrep or the Elixir fallback (which uses `git check-ignore` inside a work

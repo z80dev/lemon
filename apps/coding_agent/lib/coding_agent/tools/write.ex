@@ -334,10 +334,23 @@ defmodule CodingAgent.Tools.Write do
   end
 
   defp existing_content(path) do
-    case File.read(path) do
-      {:ok, text} -> {:ok, text}
-      {:error, :enoent} -> {:ok, nil}
-      {:error, reason} -> {:error, "Failed to read existing file: #{:file.format_error(reason)}"}
+    result = File.open(path, [:read, :binary], &IO.binread(&1, 65_536))
+
+    case result do
+      {:ok, text} when is_binary(text) ->
+        {:ok, text}
+
+      {:ok, :eof} ->
+        {:ok, ""}
+
+      {:ok, {:error, reason}} ->
+        {:error, "Failed to read existing file: #{:file.format_error(reason)}"}
+
+      {:error, :enoent} ->
+        {:ok, nil}
+
+      {:error, reason} ->
+        {:error, "Failed to read existing file: #{:file.format_error(reason)}"}
     end
   end
 

@@ -27,7 +27,8 @@ defmodule LemonCli.Onboarding.Runner do
           required(:error) => (String.t() -> any()),
           required(:prompt) => (String.t() -> String.t() | charlist() | nil),
           required(:secret) => (String.t() -> String.t() | charlist() | nil),
-          optional(:select) => (map() -> any())
+          optional(:select) => (map() -> any()),
+          optional(:interactive?) => (-> boolean())
         }
 
   @spec default_io() :: io_callbacks()
@@ -39,7 +40,8 @@ defmodule LemonCli.Onboarding.Runner do
       error: fn message -> IO.puts(:stderr, message) end,
       prompt: fn prompt -> IO.gets(prompt) end,
       secret: &read_secret/1,
-      select: &PromptUI.select/1
+      select: &PromptUI.select/1,
+      interactive?: &PromptUI.terminal?/0
     }
   end
 
@@ -53,10 +55,11 @@ defmodule LemonCli.Onboarding.Runner do
   end
 
   defp do_run(args, %Provider{} = spec, io) do
-    ensure_required_apps!()
-
     {cli_opts, _positional, _invalid} =
-      OptionParser.parse(args, switches: @common_switches ++ spec.switches)
+      OptionParser.parse(args,
+        switches: @common_switches ++ spec.switches,
+        aliases: [n: :non_interactive]
+      )
 
     explicit_auth =
       if value = normalize_optional_string(cli_opts[:auth]), do: parse_auth_mode!(value, spec)
@@ -73,6 +76,9 @@ defmodule LemonCli.Onboarding.Runner do
         "Non-interactive provider setup requires --token, --auth device (ChatGPT) or explicit --auth codex-cli. For ChatGPT browser sign-in, run `lemon setup --provider openai-codex` interactively."
       )
     end
+
+    unless cli_opts[:non_interactive], do: ensure_interactive!(io)
+    ensure_required_apps!()
 
     io =
       if cli_opts[:non_interactive] do
@@ -135,8 +141,10 @@ defmodule LemonCli.Onboarding.Runner do
         {:ok, _started} ->
           :ok
 
-        {:error, reason} ->
-          fail!("Failed to start required app #{inspect(app)}: #{inspect(reason)}")
+        {:error, _reason} ->
+          fail!(
+            "Could not start a required Lemon application. Run `lemon doctor` for diagnostics."
+          )
       end
     end)
 
@@ -165,7 +173,7 @@ defmodule LemonCli.Onboarding.Runner do
     status = Secrets.status()
 
     unless status.configured do
-      fail!("Encrypted secrets are not configured. Run mix lemon.secrets.init first, then retry.")
+      fail!("Encrypted secrets are not configured. Run `lemon secrets init`, then retry.")
     end
   end
 
@@ -199,28 +207,51 @@ defmodule LemonCli.Onboarding.Runner do
   defp parse_auth_mode!(value, %Provider{} = spec) do
     mode =
       case String.downcase(value) do
-        "oauth" -> :oauth
-        "device" -> :device
-        "device-code" -> :device
-        "device_code" -> :device
-        "api_key" -> :api_key
-        "api-key" -> :api_key
-        "codex-cli" -> :codex_cli
-        "codex_cli" -> :codex_cli
-        other -> fail!("Unknown auth mode #{inspect(other)} for #{spec.id}.")
+        "oauth" ->
+          :oauth
+
+        "device" ->
+          :device
+
+        "device-code" ->
+          :device
+
+        "device_code" ->
+          :device
+
+        "api_key" ->
+          :api_key
+
+        "api-key" ->
+          :api_key
+
+        "codex-cli" ->
+          :codex_cli
+
+        "codex_cli" ->
+          :codex_cli
+
+        _other ->
+          fail!("Unknown authentication mode for #{spec.id}. #{auth_mode_hint(spec)}")
       end
 
     if mode in spec.auth_modes do
       mode
     else
-      supported =
-        spec.auth_modes
-        |> Enum.map(&Atom.to_string/1)
-        |> Enum.join(", ")
-
-      fail!("#{spec.display_name} does not support #{mode}. Supported auth modes: #{supported}")
+      fail!(
+        "#{spec.display_name} does not support that authentication mode. #{auth_mode_hint(spec)}"
+      )
     end
   end
+
+  defp auth_mode_hint(spec) do
+    supported = Enum.map_join(spec.auth_modes, ", ", &auth_mode_flag/1)
+    "Use --auth with one of: #{supported}. Run `lemon model --help` for options."
+  end
+
+  defp auth_mode_flag(:api_key), do: "api-key"
+  defp auth_mode_flag(:codex_cli), do: "codex-cli"
+  defp auth_mode_flag(mode), do: Atom.to_string(mode)
 
   defp prompt_for_auth_mode!(%Provider{} = spec, io) do
     default_mode = spec.default_auth_mode || hd(spec.auth_modes)
@@ -395,7 +426,9 @@ defmodule LemonCli.Onboarding.Runner do
           apply(oauth_module, :login_device_code, [oauth_opts])
 
         auth_mode == :device ->
-          fail!("#{inspect(oauth_module)} does not expose login_device_code/1.")
+          fail!(
+            "Device sign-in is unavailable for this provider. Run `lemon model --help` to choose another authentication mode."
+          )
 
         function_exported?(oauth_module, :login_device_flow, 1) ->
           apply(oauth_module, :login_device_flow, [oauth_opts])
@@ -408,7 +441,7 @@ defmodule LemonCli.Onboarding.Runner do
 
         true ->
           fail!(
-            "#{inspect(oauth_module)} does not expose a supported OAuth entrypoint. Expected login_device_flow/1 or resolve_access_token/0."
+            "Browser sign-in is unavailable for this provider. Run `lemon model --help` to choose another authentication mode."
           )
       end
 
@@ -459,9 +492,7 @@ defmodule LemonCli.Onboarding.Runner do
         metadata
 
       {:error, :missing_master_key} ->
-        fail!(
-          "Missing secrets master key. Run mix lemon.secrets.init or set LEMON_SECRETS_MASTER_KEY."
-        )
+        fail!("Missing secrets master key. Run `lemon secrets init`, then retry.")
 
       {:error, reason} ->
         fail!(
@@ -499,9 +530,7 @@ defmodule LemonCli.Onboarding.Runner do
       if requested_model in available do
         requested_model
       else
-        fail!(
-          "Unknown model #{inspect(requested_model)} for #{spec.id}. Available: #{Enum.join(available, ", ")}"
-        )
+        fail!(model_selection_error(requested_model, spec, available))
       end
     end
   end
@@ -547,6 +576,24 @@ defmodule LemonCli.Onboarding.Runner do
     end
   end
 
+  defp model_selection_error(requested_model, spec, available) do
+    guidance =
+      case Enum.take(available, 3) do
+        [] ->
+          "No model ids are available for this provider. Run `lemon models` to inspect models."
+
+        examples ->
+          "Use a bare model id, for example: #{Enum.join(examples, ", ")}."
+      end
+
+    problem =
+      if String.contains?(requested_model, ":"),
+        do: "The model id must not include a provider prefix.",
+        else: "Unknown model for #{spec.id}."
+
+    "#{problem} #{guidance} Run `lemon model --help` for options."
+  end
+
   defp parse_model_choice(choice, available, default_model, io) do
     trimmed = normalize_prompt_input(choice)
 
@@ -570,7 +617,7 @@ defmodule LemonCli.Onboarding.Runner do
         trimmed
 
       true ->
-        io.error.("Unknown model #{inspect(trimmed)}.")
+        io.error.("Unknown model. Use a bare model id from the list above.")
         parse_model_choice(io.prompt.("Choose model: "), available, default_model, io)
     end
   end
@@ -704,8 +751,10 @@ defmodule LemonCli.Onboarding.Runner do
       {:error, :enoent} ->
         ""
 
-      {:error, reason} ->
-        fail!("Failed to read config file #{expanded}: #{inspect(reason)}")
+      {:error, _reason} ->
+        fail!(
+          "Could not read the config file. Check permissions, then run `lemon config validate --verbose`."
+        )
     end
   end
 
@@ -714,20 +763,25 @@ defmodule LemonCli.Onboarding.Runner do
     File.mkdir_p!(Path.dirname(expanded))
 
     case File.write(expanded, content) do
-      :ok -> :ok
-      {:error, reason} -> fail!("Failed to write config file #{expanded}: #{inspect(reason)}")
+      :ok ->
+        :ok
+
+      {:error, _reason} ->
+        fail!("Could not save the config file. Check permissions, then run `lemon setup`.")
     end
   end
 
   defp validate_toml!("", _path), do: :ok
 
-  defp validate_toml!(content, path) do
+  defp validate_toml!(content, _path) do
     case Toml.decode(content) do
       {:ok, _} ->
         :ok
 
-      {:error, reason} ->
-        fail!("Config file #{path} is not valid TOML: #{inspect(reason)}")
+      {:error, _reason} ->
+        fail!(
+          "The config file is not valid TOML. Run `lemon config validate --verbose` for guidance."
+        )
     end
   end
 
@@ -776,8 +830,10 @@ defmodule LemonCli.Onboarding.Runner do
         :ok ->
           io.info.("Opened browser.")
 
-        {:error, reason} ->
-          io.error.("Could not open browser automatically: #{inspect(reason)}")
+        {:error, _reason} ->
+          io.error.(
+            "Could not open the browser. Open the sign-in URL shown above, or run `lemon model --help` for other sign-in options."
+          )
       end
     end
   end
@@ -821,8 +877,55 @@ defmodule LemonCli.Onboarding.Runner do
     System.find_executable(command) != nil
   end
 
-  defp read_secret(prompt) do
-    IO.gets(prompt)
+  @doc false
+  def ensure_interactive!(io) do
+    if check = Map.get(io, :interactive?) do
+      unless check.(), do: no_terminal!()
+    end
+
+    :ok
+  end
+
+  @doc false
+  def no_terminal! do
+    fail!(
+      "No interactive terminal is available. Run `lemon setup --non-interactive`, " <>
+        "or use `lemon model --non-interactive --provider NAME --token TOKEN --set-default --model MODEL`."
+    )
+  end
+
+  @doc false
+  def read_secret(prompt, callbacks \\ %{}) do
+    getopts = Map.get(callbacks, :getopts, fn -> :io.getopts(:standard_io) end)
+    setopts = Map.get(callbacks, :setopts, fn opts -> :io.setopts(:standard_io, opts) end)
+    gets = Map.get(callbacks, :gets, &IO.gets/1)
+    puts = Map.get(callbacks, :puts, &IO.puts/1)
+    options = getopts.()
+
+    unless is_list(options) and Keyword.get(options, :terminal, false), do: no_terminal!()
+    previous_echo = Keyword.get(options, :echo, true)
+
+    case setopts.(echo: false) do
+      :ok ->
+        try do
+          gets.(prompt)
+        after
+          case setopts.(echo: previous_echo) do
+            :ok ->
+              puts.("")
+
+            _ ->
+              fail!(
+                "Could not restore terminal echo. Reset the terminal, then run `lemon setup`."
+              )
+          end
+        end
+
+      _ ->
+        fail!(
+          "Could not hide secret input. Run `lemon model --non-interactive --help` for flag-based setup."
+        )
+    end
   end
 
   defp select_value(io, params) do
@@ -841,6 +944,8 @@ defmodule LemonCli.Onboarding.Runner do
             :fallback
 
           {:error, reason} ->
+            if reason == :end_of_input, do: no_terminal!()
+
             io.error.(
               "Interactive onboarding UI unavailable (#{format_selector_error(reason)}). Falling back to prompt mode."
             )
@@ -856,10 +961,9 @@ defmodule LemonCli.Onboarding.Runner do
     end
   end
 
-  defp format_selector_error(:not_available), do: "no interactive terminal detected"
   defp format_selector_error(:no_selection), do: "selector exited before a choice was made"
   defp format_selector_error(:invalid_selector_params), do: "invalid selector parameters"
-  defp format_selector_error(reason), do: inspect(reason)
+  defp format_selector_error(_reason), do: "the selector could not be started"
 
   defp auth_mode_choice_label(%Provider{} = spec, :oauth) do
     spec.oauth_choice_label || "Browser sign-in (OAuth)"
@@ -892,8 +996,8 @@ defmodule LemonCli.Onboarding.Runner do
 
   defp normalize_optional_string(_), do: nil
 
-  defp normalize_prompt_input(nil), do: ""
-  defp normalize_prompt_input(:eof), do: ""
+  defp normalize_prompt_input(nil), do: no_terminal!()
+  defp normalize_prompt_input(:eof), do: no_terminal!()
 
   defp normalize_prompt_input(value) when is_binary(value) do
     String.trim(value)

@@ -193,13 +193,16 @@ defmodule LemonCli.MigrateCommand do
       archived  : #{summary["archived"]}
       skipped   : #{summary["skipped"]}
       conflicts : #{summary["conflict"]}
+      unsupported : #{summary["unsupported"]}
+      gated       : #{summary["gated"]}
       errors    : #{summary["error"]}\
     """)
 
     report["items"]
-    |> Enum.filter(&(&1["status"] in ["conflict", "error"]))
+    |> Enum.filter(&(&1["status"] in ["conflict", "error", "unsupported", "gated"]))
     |> Enum.each(fn item ->
-      IO.puts("  #{item["status"]}: #{item["kind"]} #{item["source"]} -> #{item["reason"]}")
+      key = if item["details"]["key"], do: " (#{item["details"]["key"]})", else: ""
+      IO.puts("  #{item["status"]}: #{item["kind"]}#{key} #{item["source"]} -> #{item["reason"]}")
     end)
   end
 

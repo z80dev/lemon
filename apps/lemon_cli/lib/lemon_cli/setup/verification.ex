@@ -178,9 +178,10 @@ defmodule LemonCli.Setup.Verification do
       "The configured default model does not belong to the default provider. " <>
         "Run `lemon setup provider --set-default` to align them."
 
-  defp provider_failure_message(provider, reason),
+  defp provider_failure_message(provider, _reason),
     do:
-      "Provider configuration for #{provider || "the default provider"} is incomplete (#{inspect(reason)})."
+      "Provider configuration for #{provider || "the default provider"} is incomplete. " <>
+        "Run `lemon setup provider --set-default` to configure it."
 
   defp run_live_check(%{provider: provider, model: model}, opts) do
     skip_verify? = Keyword.get(opts, :skip_verify, false)
@@ -396,9 +397,17 @@ defmodule LemonCli.Setup.Verification do
       "Re-run `lemon setup provider` to fix the configuration, or use --skip-verify to defer."
   end
 
-  defp format_live_reason(reason) when is_atom(reason), do: Atom.to_string(reason)
-  defp format_live_reason({tag, detail}), do: "#{tag}: #{inspect(detail)}"
-  defp format_live_reason(reason), do: inspect(reason)
+  defp format_live_reason(:unknown_model), do: "the configured model could not be resolved"
+  defp format_live_reason(:offline), do: "the provider is offline"
+  defp format_live_reason(:no_reference), do: "no saved key is configured for this provider"
+
+  defp format_live_reason({:credential_unavailable, _}),
+    do: "the provider credential is unavailable"
+
+  defp format_live_reason({:unsupported_api, _}),
+    do: "this provider does not support a lightweight live check"
+
+  defp format_live_reason(_), do: "the live check is unavailable"
 
   # ──────────────────────────────────────────────────────────────────────────
   # Shared helpers

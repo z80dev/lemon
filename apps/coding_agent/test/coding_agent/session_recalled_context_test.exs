@@ -186,6 +186,40 @@ defmodule CodingAgent.SessionRecalledContextTest do
     |> Enum.map(&Map.get(&1, "content"))
   end
 
+  test "learning reminder reaches the next model turn but not the user's transcript" do
+    ContextRegistry.register(:learning_nudge, LemonSkills.LearningNudge)
+    session = start_session()
+    cwd = Session.get_state(session).cwd
+
+    :ok =
+      LemonSkills.Config.save_config(
+        %{"learning_nudge" => %{"memory_turn_interval" => 2}},
+        false,
+        cwd
+      )
+
+    unsubscribe = Session.subscribe(session)
+    :ok = Session.prompt(session, "first")
+    {messages, _} = await_sent()
+    refute last_user_content(messages) =~ "Learning reminder"
+    assert_receive {:session_event, _, {:agent_end, _}}, 2_000
+
+    :ok = Session.prompt(session, "second")
+    {messages, system_prompt} = await_sent()
+    assert last_user_content(messages) =~ "Learning reminder"
+    assert last_user_content(messages) =~ "durable facts/preferences with remember"
+    refute system_prompt =~ "Learning reminder"
+    assert_receive {:session_event, _, {:agent_end, _}}, 2_000
+    assert transcript_contents(session) == ["first", "second"]
+
+    assert session
+           |> Session.get_messages()
+           |> Enum.filter(&match?(%UserMessage{}, &1))
+           |> Enum.map(& &1.content) == ["first", "second"]
+
+    unsubscribe.()
+  end
+
   describe "prompt" do
     test "attaches the volatile half to the outgoing message and not to the system prompt" do
       Contributor.answer([@stable, @volatile])

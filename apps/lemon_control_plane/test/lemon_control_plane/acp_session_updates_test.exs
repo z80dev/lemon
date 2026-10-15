@@ -81,7 +81,8 @@ defmodule LemonControlPlane.ACP.SessionUpdatesTest do
 
     todos = [
       %{content: "Ship", status: "in_progress"},
-      %{content: "Removed", status: "abandoned"}
+      %{content: "Removed", status: "abandoned"},
+      %{content: "Credentials", status: "blocked", phase: "Release", blocker: "Need access"}
     ]
 
     {_, state} =
@@ -103,7 +104,14 @@ defmodule LemonControlPlane.ACP.SessionUpdatesTest do
              "sessionUpdate" => "plan",
              "entries" => [
                %{"content" => "Ship", "priority" => "medium", "status" => "in_progress"},
-               %{"content" => "Removed", "priority" => "medium", "status" => "completed"}
+               %{"content" => "Removed", "priority" => "medium", "status" => "abandoned"},
+               %{
+                 "content" => "Credentials",
+                 "priority" => "medium",
+                 "status" => "blocked",
+                 "phase" => "Release",
+                 "blocker" => "Need access"
+               }
              ]
            }
   end
