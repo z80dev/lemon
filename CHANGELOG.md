@@ -8,6 +8,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
+- Add `report_issue` for short tool-misbehavior notes in a private, bounded
+  session-local JSONL log, with timestamp and optional tool name. It requires
+  no approval by default and makes no network requests.
+
 - Opt-in model `checkpoint(goal)` / `rewind(report)` retain exploration findings
   as branch context without restoring files or prompting for confirmation.
   Enable `[runtime.tools.checkpoint] enabled = true` (default off). The former
