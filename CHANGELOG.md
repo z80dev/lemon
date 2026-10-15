@@ -8,10 +8,27 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
+### Changed
+
 - Extend the omp operator API with bounded parallel starts, model discovery,
   child transcripts, live configuration, approval overrides, isolated starts,
   interrupted-session continuation and redirect delivery; preserve actionable
   partial-application and outcome-unknown errors.
+- Remember supports exact-entry or unique-substring edits consistently across scoped
+  and legacy memory, with actionable ambiguity, safety, and capacity feedback.
+
+### Added
+
+- Computer use can be configured in `[runtime.tools.computer_use]` (`enabled`,
+  `chrome`, `lcu_root`, `node`, `declined_origins`); environment variables still
+  take precedence. Execution-node capability inspection reports a
+  `computer_use` item, and tool cards and approvals name the computer-use
+  action, app or site.
+- omp tool cards show parallel worker grids, combined usage and task errors,
+  approval waits, isolated worktrees, child activity, model prices and transcript tails.
+- TUI omp delegates support redirect, interrupted-session continuation, approval
+  mode and isolated starts; the typed control-plane client exposes batch starts,
+  model discovery, configuration and subagent transcripts.
 
 ---
 

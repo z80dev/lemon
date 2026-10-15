@@ -33,6 +33,61 @@ defmodule LemonSkills.Tools.RememberTest do
 
   defp run(tool, params), do: tool.execute.("call", params, nil, nil)
 
+  test "scoped usage and capacity feedback preserve kind and session boundaries",
+       %{context: context, store: store} do
+    context =
+      Map.merge(context, %{
+        invocation_context_key: "invocation-test",
+        memory_context_key: "memory-test",
+        memory_context_verified: true
+      })
+
+    opts = context |> Map.delete(:cwd) |> Map.to_list() |> Keyword.put(:store, store)
+    tool = Remember.tool(context.cwd, opts)
+    text = String.duplicate("a", 1_370)
+    assert %{details: %{changed: true}} = run(tool, %{"target" => "user", "text" => text})
+
+    assert {:ok, %{used: 1_370, cap: 1_375, facts: [^text]}} =
+             LemonMemory.Preferences.usage(context, "user", store: store)
+
+    assert {:error, message} = run(tool, %{"target" => "user", "text" => "tenletters"})
+    assert message =~ "1370/1375 chars"
+    assert message =~ "10 chars"
+    assert message =~ "by 5 chars"
+
+    assert {:error, :subagent} =
+             LemonMemory.Preferences.usage(%{context | session_scope: :subagent}, "user",
+               store: store
+             )
+
+    assert {:ok, %{used: 0, cap: 24, bytes: 0, byte_cap: 2_000}} =
+             Project.usage(context, store: store)
+
+    for target <- ["memory", "project"] do
+      secret = "api_key = sk-secret"
+      assert {:error, refusal} = run(tool, %{"target" => target, "text" => secret})
+      assert refusal =~ "secret"
+      refute refusal =~ secret
+    end
+  end
+
+  test "legacy substring deletion removes the whole entry", %{tool: tool, workspace_dir: home} do
+    run(tool, %{"text" => "Deploys on Fridays"})
+    run(tool, %{"replaces" => "Fridays", "text" => "Tuesdays"})
+    assert File.read!(Path.join(home, "MEMORY.md")) =~ "Deploys on Tuesdays"
+    run(tool, %{"replaces" => "Tuesdays"})
+    refute File.read!(Path.join(home, "MEMORY.md")) =~ "Deploys"
+  end
+
+  test "project capacity errors include usage and entries", %{tool: tool} do
+    for n <- 1..24, do: run(tool, %{"target" => "project", "text" => "Fact number #{n}"})
+    assert {:error, message} = run(tool, %{"target" => "project", "text" => "One more fact"})
+    assert message =~ "24/24 facts"
+    assert message =~ "attempted entry"
+    assert message =~ "Remove or shorten"
+    assert message =~ "Fact number 1"
+  end
+
   test "saves a fact to MEMORY.md by default and does not duplicate it", %{
     tool: tool,
     workspace_dir: workspace_dir
@@ -83,13 +138,13 @@ defmodule LemonSkills.Tools.RememberTest do
   end
 
   test "replaces must match exactly one passage", %{tool: tool, workspace_dir: workspace_dir} do
-    File.write!(Path.join(workspace_dir, "MEMORY.md"), "same\nsame\n")
+    File.write!(Path.join(workspace_dir, "MEMORY.md"), "- same one\n- same two\n")
 
     assert {:error, message} = run(tool, %{"replaces" => "same", "text" => "other"})
-    assert message =~ "must match exactly one occurrence"
+    assert message =~ "longer unique text"
 
     assert {:error, message} = run(tool, %{"replaces" => "same"})
-    assert message =~ "must match exactly one occurrence"
+    assert message =~ "longer unique text"
 
     assert {:error, message} = run(tool, %{"replaces" => "absent"})
     assert message =~ "replaces was not found"
@@ -99,10 +154,10 @@ defmodule LemonSkills.Tools.RememberTest do
     assert {:error, message} =
              run(tool, %{"target" => "user", "text" => String.duplicate("x", 1_400)})
 
-    assert message =~ "USER.md would exceed 1375 characters"
+    assert message =~ "/1375 chars"
 
     assert {:error, message} = run(tool, %{"text" => String.duplicate("x", 2_300)})
-    assert message =~ "MEMORY.md would exceed 2200 characters"
+    assert message =~ "/2200 chars"
   end
 
   test "refuses secrets, prompt injection, and invisible controls", %{tool: tool} do

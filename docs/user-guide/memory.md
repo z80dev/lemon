@@ -28,10 +28,12 @@ in the existing durable memory database, without modifying those files:
 
 The tool accepts `text`, `target` (`user`, `memory`, or `project`; default `memory`), and `replaces`.
 Providing `text` adds a bullet; an existing duplicate is not added again. Providing both `text`
-and `replaces` replaces the unique exact passage. Providing only `replaces` removes that exact
-passage. Writes that exceed the file limit, ambiguous or missing replacement text, and invalid
-targets are rejected. Content is screened for common secrets, prompt-injection phrases, NUL bytes,
-and invisible or bidirectional control characters.
+and `replaces` patches an exact entry or a unique substring (exact whole entries win).
+Providing only `replaces` deletes the whole matched entry. Ambiguous matches require
+longer unique text. Capacity errors show usage, attempted size, required space, and
+current entries: remove or shorten entries before retrying. Content is screened for
+common secrets, prompt injection, NUL bytes, and invisible/bidirectional controls;
+refusals name the reason without repeating rejected content.
 
 When adding a new fact, omit `replaces` or set it to JSON `null`—never use an
 empty string or a placeholder. For deletion, omit `text` or set it to `null`.
