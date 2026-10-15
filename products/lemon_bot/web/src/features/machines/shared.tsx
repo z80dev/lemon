@@ -71,7 +71,7 @@ export function usePoll(reload: () => Promise<unknown>, enabled = true, millisec
 }
 
 export function PrivilegeWarning() {
-  return <aside className="machine-warning"><strong>Trusted host · full OS-user privileges</strong><p>Bots on this machine share its files, browser sessions and CLI credentials. Product access and Bot-scoped secrets are not OS sandboxes. Use separate machines, users or containers for isolation. Your SSH and host ownership remain yours.</p></aside>;
+  return <aside className="machine-warning"><strong>Trusted machine · full access as its computer user</strong><p>Bots on this machine share its files, browser sessions and command-line sign-ins. Product access and Bot-specific secrets do not isolate Bots from one another. Use separate machines, users or containers to keep their access apart. You keep ownership and SSH access to your machine.</p></aside>;
 }
 
 export function MachineTabs({ machine, selected }: { machine: Machine; selected: string }) {
