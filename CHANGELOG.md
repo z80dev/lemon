@@ -22,6 +22,8 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Changed
 
+- Bring Lemon Web's omp controls to parity with approval decisions and overrides,
+  isolated starts, interrupted continuation, redirect, and worktree/discovery details.
 - Expand `lemon omp` with approval modes, isolated and parallel starts, explicit
   interrupted-session continuation, redirect, model browsing/configuration,
   subagent transcripts, and richer approval/worktree/discovery output.

@@ -3,8 +3,8 @@ defmodule LemonWeb.OmpComponents do
   Function components and formatting for `LemonWeb.OmpLive`.
 
   Inputs are `omp.*` control-plane session wires (camelCase string keys).
-  Every string in them is omp output and untrusted: it is rendered escaped,
-  and assistant text only through `LemonWeb.Markdown`.
+  Every string in them is omp output and untrusted: it is rendered as escaped
+  plain text, never Markdown.
   """
 
   use Phoenix.Component
@@ -149,6 +149,9 @@ defmodule LemonWeb.OmpComponents do
             <span :if={usage_text(session)} class="tabular-nums">{usage_text(session)}</span>
           </div>
           <p :if={session["activity"]} class="mt-1 truncate pl-4 text-xs text-fg/80">{session["activity"]}</p>
+          <p :for={approval <- Enum.take(list(session["pendingApprovals"]), 3)} class="mt-1 pl-4 text-xs font-medium text-warning">
+            Waiting for approval: {approval["tool"]}
+          </p>
           <p :if={todo_progress(session)} class="mt-1 pl-4 text-2xs text-subtle">
             todos {todo_progress(session)}
           </p>
@@ -250,6 +253,40 @@ defmodule LemonWeb.OmpComponents do
 
       <div class="min-h-0 flex-1 overflow-y-auto px-4 py-4 sm:px-5 scroll-thin" id="omp-detail-scroll">
         <div class="space-y-4">
+          <section :if={list(@session["pendingApprovals"]) != []} class="card border-warning/40" id="omp-approvals" aria-labelledby="omp-approvals-title">
+            <div class="card-header">
+              <h3 id="omp-approvals-title" class="text-[13px] font-semibold text-warning">Waiting for approval</h3>
+            </div>
+            <ul class="divide-y divide-line">
+              <li :for={approval <- Enum.take(list(@session["pendingApprovals"]), 20)} class="space-y-2 px-4 py-3">
+                <p class="break-words font-mono text-xs text-fg">{approval["tool"]}</p>
+                <pre :if={approval["details"]} class="max-h-40 overflow-auto whitespace-pre-wrap break-words text-xs text-muted">{approval_details(approval["details"])}</pre>
+                <div class="flex flex-wrap gap-2">
+                  <.button size="sm" phx-click="resolve_approval" phx-value-id={approval["id"]} phx-value-decision="approve" mutation disabled={@ended?} id={"omp-approve-#{approval["id"]}"}>Approve once</.button>
+                  <.button size="sm" variant="danger-soft" phx-click="resolve_approval" phx-value-id={approval["id"]} phx-value-decision="deny" mutation disabled={@ended?} id={"omp-deny-#{approval["id"]}"}>Deny</.button>
+                </div>
+              </li>
+            </ul>
+          </section>
+          <section :if={is_map(@session["worktree"])} class="card" id="omp-worktree" aria-labelledby="omp-worktree-title">
+            <div class="card-header"><h3 id="omp-worktree-title" class="text-[13px] font-semibold text-fg">Isolated worktree</h3></div>
+            <div class="card-body space-y-2">
+              <p class="break-all font-mono text-xs text-fg">{@session["worktree"]["branch"]}</p>
+              <p class="break-all font-mono text-xs text-muted">{@session["worktree"]["path"]}</p>
+              <p class="break-all font-mono text-xs text-muted">Base: {@session["worktree"]["base"] || "unknown"}</p>
+              <p class="text-xs text-muted">
+                Kept: {inspect(@session["worktree"]["kept"])} ·
+                Dirty: {inspect(@session["worktree"]["dirty"])} ·
+                Commits: {@session["worktree"]["commits"] || "unknown"}
+              </p>
+              <p :if={@session["worktree"]["branch"]} class="break-all font-mono text-xs">git merge {@session["worktree"]["branch"]}</p>
+              <div class="flex flex-wrap gap-2">
+                <.badge :if={@session["worktree"]["kept"] == true} tone="warning">Kept</.badge>
+                <.badge :if={@session["worktree"]["dirty"] == true} tone="warning">Uncommitted changes</.badge>
+              </div>
+              <p class="text-xs text-muted">Clean worktrees are removed when the worker closes. Worktrees with changes are kept for review.</p>
+            </div>
+          </section>
           <.callout :if={@session["error"]} tone="danger" title="omp reported an error" id="omp-detail-error">
             <span class="whitespace-pre-wrap break-words">{@session["error"]}</span>
           </.callout>
@@ -393,6 +430,12 @@ defmodule LemonWeb.OmpComponents do
                     <span class="font-mono text-xs">{@session["model"] || "omp default"}</span>
                     <span :if={@session["thinking"]} class="ml-1 text-xs text-muted">· thinking {@session["thinking"]}</span>
                   </:item>
+                  <:item label="Approval mode">{@session["approvalMode"] || "omp default"}</:item>
+                  <:item label="Approvals">
+                    Approved {get_in(@session, ["approvals", "approved"]) || 0} ·
+                    Denied {get_in(@session, ["approvals", "denied"]) || 0} ·
+                    Expired {get_in(@session, ["approvals", "expired"]) || 0}
+                  </:item>
                   <:item label="Started">{relative_time(@session["startedAt"], @now)}</:item>
                   <:item :if={@session["endedAt"]} label="Ended">{relative_time(@session["endedAt"], @now)}</:item>
                   <:item label="Owner">
@@ -419,9 +462,7 @@ defmodule LemonWeb.OmpComponents do
               <span class="text-xs text-subtle">untrusted omp output</span>
             </div>
             <div class="card-body">
-              <div :if={elem(@output, 1)} class="md max-h-[32rem] overflow-y-auto scroll-thin" id="omp-output-body" phx-hook="Highlight">
-                {LemonWeb.Markdown.to_html(elem(@output, 1))}
-              </div>
+              <pre :if={elem(@output, 1)} class="max-h-[32rem] overflow-y-auto whitespace-pre-wrap break-words text-[13px] text-fg scroll-thin" id="omp-output-body">{elem(@output, 1)}</pre>
               <p :if={!elem(@output, 1)} class="text-[13px] text-muted">No output yet.</p>
             </div>
           </section>
@@ -440,7 +481,7 @@ defmodule LemonWeb.OmpComponents do
             <div class="flex flex-wrap items-center justify-between gap-2">
               <div class="segmented" role="radiogroup" aria-label="Delivery">
                 <label
-                  :for={{mode, text, key} <- [{"steer", "Steer", "s"}, {"followUp", "Follow-up", "f"}]}
+                  :for={{mode, text, key} <- [{"steer", "Steer", "s"}, {"followUp", "Follow-up", "f"}, {"redirect", "Redirect", "r"}]}
                   class={[
                     "inline-flex h-7 cursor-pointer items-center gap-1.5 rounded px-2.5 text-xs font-medium transition-colors has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-ring/50",
                     if(@compose.mode == mode, do: "bg-surface text-fg shadow-sm", else: "text-muted hover:text-fg")
@@ -461,7 +502,7 @@ defmodule LemonWeb.OmpComponents do
                 name="compose[text]"
                 rows="2"
                 maxlength="16384"
-                placeholder={if @compose.mode == "steer", do: "Steer omp…", else: "Queue a follow-up…"}
+                placeholder={case @compose.mode do "steer" -> "Steer omp…"; "redirect" -> "Stop and redirect omp…"; _ -> "Queue a follow-up…" end}
                 phx-debounce="200"
                 class="input min-h-[2.75rem] flex-1 resize-y"
               >{@compose.text}</textarea>
@@ -559,6 +600,20 @@ defmodule LemonWeb.OmpComponents do
             errors={List.wrap(@form["errors"]["thinking"])}
           />
         </div>
+        <.input
+          id="omp-start-approval-mode"
+          name="start[approvalMode]"
+          type="select"
+          label="Tool approval mode"
+          value={@form["approvalMode"] || ""}
+          options={[{"omp default", ""}, {"Always ask", "always-ask"}, {"Ask before execution (write)", "write"}, {"Allow without asking (yolo)", "yolo"}]}
+          errors={List.wrap(@form["errors"]["approvalMode"])}
+        />
+        <label class="flex items-start gap-2 text-[13px] text-fg" for="omp-start-isolate">
+          <input type="hidden" name="start[isolate]" value="false" />
+          <input id="omp-start-isolate" type="checkbox" name="start[isolate]" value="true" checked={@form["isolate"] in [true, "true"]} class="mt-1" />
+          <span>Use an isolated git worktree <span class="block text-xs text-muted">Requires a git repository. Clean worktrees are removed on close; changed worktrees are kept.</span></span>
+        </label>
         <.callout :if={@form["error"]} tone="danger" id="omp-start-error">{@form["error"]}</.callout>
         <div class="flex items-center justify-end gap-2">
           <.button phx-click="cancel_start" disabled={@starting?}>Cancel</.button>
@@ -585,7 +640,7 @@ defmodule LemonWeb.OmpComponents do
     ~H"""
     <.modal id="omp-resume-dialog" show size="lg" title="Resume an omp session" description="Lists omp's stored sessions for a workspace. Reading them never modifies them." on_cancel={JS.push("cancel_resume")}>
       <%= if @resume.target do %>
-        <form id="omp-resume-form" phx-submit="resume" class="space-y-4">
+        <form id="omp-resume-form" phx-submit="resume" phx-change="resume_change" class="space-y-4">
           <div class="rounded-lg border border-line bg-surface-2/50 px-3 py-2.5">
             <p class="text-[13px] font-medium text-fg">{@resume.target.title}</p>
             <p class="mt-0.5 font-mono text-xs text-muted">omp {@resume.target.omp_session_id}</p>
@@ -604,6 +659,19 @@ defmodule LemonWeb.OmpComponents do
             placeholder="Continue with the tests"
             hint="Leave empty to reopen the session idle."
           />
+          <.input
+            id="omp-resume-approval-mode"
+            name="resume[approvalMode]"
+            type="select"
+            label="Tool approval mode"
+            value={Map.get(@resume, :approval_mode, "")}
+            options={[{"omp default", ""}, {"Always ask", "always-ask"}, {"Ask before execution (write)", "write"}, {"Allow without asking (yolo)", "yolo"}]}
+          />
+          <label :if={Map.get(@resume.target, :interrupted, false) && String.trim(@resume.message || "") == ""} class="flex items-start gap-2 text-[13px] text-fg" for="omp-resume-continue">
+            <input type="hidden" name="resume[continue]" value="false" />
+            <input id="omp-resume-continue" type="checkbox" name="resume[continue]" value="true" checked={Map.get(@resume, :continue, false) in [true, "true"]} class="mt-1" />
+            <span>Continue the interrupted turn without a new message</span>
+          </label>
           <.callout :if={@resume.error} tone="danger" id="omp-resume-error">{@resume.error}</.callout>
           <div class="flex items-center justify-between gap-2">
             <.button :if={!@resume.direct?} phx-click="unpick_resume" variant="ghost" icon="chevron-left" disabled={@resuming?}>Back</.button>
@@ -650,6 +718,9 @@ defmodule LemonWeb.OmpComponents do
                     <p class="truncate text-[13px] font-medium text-fg">{row["title"] || "(untitled)"}</p>
                     <p class="mt-0.5 flex flex-wrap items-center gap-x-2 text-xs text-muted">
                       <span>{row["lastStatus"]}</span>
+                      <span :if={row["source"]}>{row["source"]}</span>
+                      <span :if={row["interrupted"] == true} class="text-warning">Interrupted</span>
+                      <span :if={get_in(row, ["worktree", "branch"])} class="font-mono text-2xs">{row["worktree"]["branch"]}</span>
                       <span>{relative_time(row["updatedAt"] || row["createdAt"], @now)}</span>
                       <span :if={row["model"]} class="font-mono text-2xs">{row["model"]}</span>
                       <span class="font-mono text-2xs text-subtle">{String.slice(row["ompSessionId"], 0, 13)}</span>
@@ -757,6 +828,12 @@ defmodule LemonWeb.OmpComponents do
       true -> "Idle — open for follow-ups."
     end
   end
+
+  defp approval_details(value) when is_binary(value), do: String.slice(value, 0, 4096)
+  defp approval_details(value), do: inspect(value, limit: 30, printable_limit: 4096)
+
+  defp compose_hint(true, "redirect"),
+    do: "Redirect stops the running turn and starts over with this message."
 
   defp compose_hint(true, "steer"), do: "Steer redirects the running turn."
   defp compose_hint(true, _mode), do: "Follow-up is queued for after the running turn."

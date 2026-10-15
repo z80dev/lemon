@@ -13,7 +13,7 @@ defmodule LemonWeb.OmpLive do
     * `omp.sessions.list` seeds a bounded session store (live first, then
       ended, newest activity first); `omp.session` events upsert it and a
       stale event never rewinds a newer snapshot.
-    * Start, resume, send (steer / follow-up), cancel and close run in
+    * Start, resume, send (steer / follow-up / redirect), cancel and close run in
       `start_async` because the control plane dispatches them async. Each
       runs at most once per target at a time. A result that may already have
       taken effect (`OMP_OUTCOME_UNKNOWN`, `retrySafe: false`) is reported and
@@ -22,7 +22,7 @@ defmodule LemonWeb.OmpLive do
       target is held server-side; the confirm event carries no id.
 
   omp text (titles, activity, todos, output, errors) is untrusted: it is
-  rendered escaped, and assistant output only through `LemonWeb.Markdown`.
+  rendered as escaped plain text, never raw HTML or Markdown.
   """
 
   use LemonWeb, :live_view
@@ -158,6 +158,8 @@ defmodule LemonWeb.OmpLive do
         "cwd" => cwd,
         "model" => "",
         "thinking" => "",
+        "approvalMode" => "",
+        "isolate" => false,
         "errors" => %{},
         "error" => nil
       }
@@ -197,6 +199,8 @@ defmodule LemonWeb.OmpLive do
           %{"prompt" => form["prompt"], "cwd" => String.trim(form["cwd"])}
           |> put_present("model", String.trim(form["model"]))
           |> put_present("thinking", form["thinking"])
+          |> put_present("approvalMode", form["approvalMode"])
+          |> Map.put("isolate", form["isolate"])
 
         {:noreply,
          socket
@@ -257,6 +261,31 @@ defmodule LemonWeb.OmpLive do
     {:noreply, update_resume(socket, target: nil, error: nil)}
   end
 
+  def handle_event("resume_change", %{"resume" => params}, socket) do
+    {:noreply,
+     update_resume(socket,
+       message: to_string(params["message"] || ""),
+       approval_mode: approval_mode(params["approvalMode"]),
+       continue: params["continue"] in [true, "true"]
+     )}
+  end
+
+  def handle_event("resolve_approval", %{"id" => id, "decision" => decision}, socket)
+      when decision in ["approve", "deny"] do
+    approvals = (selected(socket) || %{})["pendingApprovals"] || []
+
+    if Enum.any?(approvals, &(&1["id"] == id)) do
+      decision = if decision == "approve", do: "approve_once", else: "deny"
+
+      case LemonWeb.Chat.Backend.resolve_approval(id, decision) do
+        :ok -> {:noreply, put_flash(socket, :info, "Approval resolved.")}
+        {:error, error} -> {:noreply, put_flash(socket, :error, Rpc.message(error))}
+      end
+    else
+      {:noreply, socket}
+    end
+  end
+
   def handle_event("resume", %{"resume" => params}, socket) do
     resume = socket.assigns.resume
 
@@ -270,6 +299,12 @@ defmodule LemonWeb.OmpLive do
         payload =
           %{"ompSessionId" => resume.target.omp_session_id, "cwd" => resume.cwd}
           |> put_present("prompt", if(String.trim(message) == "", do: "", else: message))
+          |> put_present("approvalMode", approval_mode(params["approvalMode"]))
+          |> Map.put(
+            "continue",
+            String.trim(message) == "" and
+              Map.get(resume.target, :interrupted, false) and params["continue"] in [true, "true"]
+          )
 
         {:noreply,
          socket
@@ -281,7 +316,8 @@ defmodule LemonWeb.OmpLive do
 
   # ── Events: steer / follow-up / cancel / close ──────────────────────────
 
-  def handle_event("compose_mode", %{"mode" => mode}, socket) when mode in ~w(steer followUp) do
+  def handle_event("compose_mode", %{"mode" => mode}, socket)
+      when mode in ~w(steer followUp redirect) do
     case actionable(socket, if(mode == "steer", do: "steer", else: "follow up")) do
       {:ok, _session} ->
         {:reply, %{ok: true}, update(socket, :compose, &%{&1 | mode: mode})}
@@ -293,13 +329,13 @@ defmodule LemonWeb.OmpLive do
 
   def handle_event("compose_change", %{"compose" => params}, socket) do
     text = to_string(params["text"] || "")
-    mode = if params["mode"] == "followUp", do: "followUp", else: "steer"
+    mode = compose_mode(params["mode"])
     {:noreply, update(socket, :compose, &%{&1 | text: text, mode: mode})}
   end
 
   def handle_event("send", %{"compose" => params}, socket) do
     text = to_string(params["text"] || "")
-    mode = if params["mode"] == "followUp", do: "followUp", else: "steer"
+    mode = compose_mode(params["mode"])
     socket = update(socket, :compose, &%{&1 | text: text, mode: mode})
 
     with {:ok, session} <- actionable(socket, "message"),
@@ -482,7 +518,14 @@ defmodule LemonWeb.OmpLive do
 
   def handle_async({:send, id, mode}, result, socket) do
     socket = remove_pending(socket, {:send, id})
-    verb = if mode == "steer", do: "Steer", else: "Follow-up"
+
+    verb =
+      case mode do
+        "steer" -> "Steer"
+        "redirect" -> "Redirect"
+        _ -> "Follow-up"
+      end
+
     current? = socket.assigns.selected_id == id
 
     case result do
@@ -1089,11 +1132,18 @@ defmodule LemonWeb.OmpLive do
 
   defp async_error(result), do: Rpc.message(result_error(result))
 
+  defp compose_mode(mode) when mode in ~w(steer followUp redirect), do: mode
+  defp compose_mode(_), do: "steer"
+  defp approval_mode(mode) when mode in ~w(always-ask write yolo), do: mode
+  defp approval_mode(_), do: ""
+
   defp start_fields(params) do
     %{
       "prompt" => to_string(params["prompt"] || ""),
       "cwd" => to_string(params["cwd"] || ""),
       "model" => to_string(params["model"] || ""),
+      "approvalMode" => approval_mode(params["approvalMode"]),
+      "isolate" => params["isolate"] in [true, "true"],
       "thinking" => if(params["thinking"] in thinking_levels(), do: params["thinking"], else: "")
     }
   end
@@ -1118,7 +1168,16 @@ defmodule LemonWeb.OmpLive do
   defp put_present(map, key, value), do: Map.put(map, key, value)
 
   defp resume_state(socket, id) do
-    base = %{cwd: "", scan: :idle, target: nil, message: "", error: nil, direct?: false}
+    base = %{
+      cwd: "",
+      scan: :idle,
+      target: nil,
+      message: "",
+      error: nil,
+      direct?: false,
+      approval_mode: "",
+      continue: false
+    }
 
     case is_binary(id) && Map.get(socket.assigns.sessions, id) do
       %{"ompSessionId" => omp_id, "cwd" => cwd} = session
@@ -1127,7 +1186,12 @@ defmodule LemonWeb.OmpLive do
           base
           | cwd: cwd,
             direct?: true,
-            target: %{omp_session_id: omp_id, title: label(session), active_elsewhere: false}
+            target: %{
+              omp_session_id: omp_id,
+              title: label(session),
+              active_elsewhere: false,
+              interrupted: session["interrupted"] == true
+            }
         }
 
       _ ->
@@ -1145,6 +1209,7 @@ defmodule LemonWeb.OmpLive do
     %{
       omp_session_id: row["ompSessionId"],
       title: row["title"] || "(untitled)",
+      interrupted: row["interrupted"] == true,
       active_elsewhere: row["activeElsewhere"] == true
     }
   end

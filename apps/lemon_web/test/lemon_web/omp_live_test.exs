@@ -97,7 +97,7 @@ defmodule LemonWeb.OmpLiveTest do
 
       assert has_element?(view, "#omp-detail-title", "Summarize the repo")
       assert has_element?(view, "#omp-detail-status", "idle")
-      assert has_element?(view, "#omp-output .md", "Done: Summarize the repo")
+      assert has_element?(view, "#omp-output-body", "Done: Summarize the repo")
       assert has_element?(view, "#omp-output h3", "Result")
       assert has_element?(view, "#omp-todos", "1/2")
       assert has_element?(view, "#omp-todos", "Write tests")
@@ -113,7 +113,7 @@ defmodule LemonWeb.OmpLiveTest do
       assert render(view) =~ "Session not found"
     end
 
-    test "omp output renders as sanitized markdown", %{conn: conn} do
+    test "omp output remains escaped plain text", %{conn: conn} do
       {:ok, view, _html} = live(conn, "/omp")
       render_async(view, @async_timeout)
 
@@ -128,8 +128,11 @@ defmodule LemonWeb.OmpLiveTest do
       view |> element("#omp-row-omp_aaaaaaaaaaaa a") |> render_click()
 
       html = view |> element("#omp-output-body") |> render()
-      assert html =~ "<h2>Done</h2>"
-      assert html =~ "<strong>bold</strong>"
+      assert html =~ "## Done"
+      assert html =~ "**bold**"
+      assert html =~ "&lt;script&gt;alert(1)&lt;/script&gt;"
+      refute html =~ "<h2>Done</h2>"
+      refute html =~ "<strong>"
       refute html =~ "<script>"
     end
   end
@@ -268,7 +271,7 @@ defmodule LemonWeb.OmpLiveTest do
       render_async(view, @async_timeout)
       assert render(view) =~ "Steer accepted by #{id}."
       assert eventually(fn -> has_element?(view, "#omp-detail-status", "idle") end)
-      assert has_element?(view, "#omp-output .md", "Steered: focus on errors")
+      assert has_element?(view, "#omp-output-body", "Steered: focus on errors")
 
       # A new held turn, cancelled with the button.
       view
@@ -296,6 +299,85 @@ defmodule LemonWeb.OmpLiveTest do
       assert eventually(fn -> has_element?(view, "#omp-detail-status", "closed") end)
       assert LemonOmp.list(include_ended: false) == []
       assert has_element?(view, "#omp-resume-session")
+    end
+
+    test "start passes approval mode and creates an isolated worktree", %{
+      conn: conn,
+      workspace: workspace
+    } do
+      for args <- [
+            ["init", "--quiet"],
+            [
+              "-c",
+              "user.name=Lemon Test",
+              "-c",
+              "user.email=test@example.invalid",
+              "commit",
+              "--quiet",
+              "--allow-empty",
+              "-m",
+              "Initial"
+            ]
+          ] do
+        assert {_output, 0} = System.cmd("git", args, cd: workspace, stderr_to_stdout: true)
+      end
+
+      {:ok, view, _html} = live(conn, "/omp")
+      render_async(view, @async_timeout)
+      view |> element("#omp-open-start") |> render_click()
+      assert has_element?(view, "#omp-start-approval-mode")
+      assert has_element?(view, "#omp-start-isolate")
+
+      pending =
+        view
+        |> form("#omp-start-form",
+          start: %{
+            prompt: "HOLD isolated work",
+            cwd: workspace,
+            approvalMode: "always-ask",
+            isolate: "true"
+          }
+        )
+        |> render_submit()
+
+      assert pending
+             |> LazyHTML.from_fragment()
+             |> LazyHTML.query("#omp-start-submit[aria-busy]")
+             |> Enum.count() == 1
+
+      render_async(view, @async_timeout)
+      [session] = LemonOmp.list(include_ended: false)
+      assert session["approvalMode"] == "always-ask"
+      assert is_map(session["worktree"])
+      assert session["cwd"] == session["worktree"]["path"]
+      refute session["cwd"] == workspace
+      assert session["worktree"]["branch"] == "lemon-omp/#{session["id"]}"
+      assert has_element?(view, "#omp-worktree", session["worktree"]["path"])
+      assert has_element?(view, "#omp-worktree", session["worktree"]["branch"])
+      args = session["cwd"] |> Path.join(".fake_omp.args") |> File.read!()
+      assert args =~ "--approval-mode always-ask"
+    end
+
+    test "redirect reports its own receipt and sends the atomic redirect command", %{
+      conn: conn,
+      workspace: workspace
+    } do
+      id = start_session!(workspace, "HOLD old task")
+      await_status(id, "running")
+      {:ok, view, _html} = live(conn, "/omp/#{id}")
+      render_async(view, @async_timeout)
+      assert has_element?(view, ~s(input[name="compose[mode]"][value="redirect"]))
+
+      view
+      |> form("#omp-composer", compose: %{mode: "redirect", text: "Do the replacement"})
+      |> render_submit()
+
+      html = render_async(view, @async_timeout)
+      assert html =~ "Redirect accepted by #{id}."
+      refute html =~ "Steer accepted by #{id}."
+      commands = workspace |> Path.join(".fake_omp.log") |> File.read!()
+      assert commands =~ ~s("type":"abort_and_prompt")
+      assert commands =~ "Do the replacement"
     end
 
     test "closing requires confirming the server-held preview", %{
@@ -399,6 +481,78 @@ defmodule LemonWeb.OmpLiveTest do
       assert render(view) =~ "Select an omp session to steer."
     end
 
+    test "approve once and deny use the shared approval resolver", %{
+      conn: conn,
+      workspace: workspace
+    } do
+      LemonCore.Bus.subscribe("omp")
+
+      for {decision, counter} <- [{"approve", "approved"}, {"deny", "denied"}] do
+        id = start_session!(workspace, "APPROVAL requested")
+
+        session =
+          receive_snapshot(id, fn session -> (session["pendingApprovals"] || []) != [] end)
+
+        [approval] = session["pendingApprovals"]
+        {:ok, view, _html} = live(conn, "/omp/#{id}")
+        render_async(view, @async_timeout)
+        assert has_element?(view, "#omp-approvals")
+        view |> element("#omp-#{decision}-#{approval["id"]}") |> render_click()
+
+        resolved =
+          receive_snapshot(id, fn session ->
+            get_in(session, ["approvals", counter]) == 1
+          end)
+
+        assert resolved["pendingApprovals"] == []
+        assert render(view) =~ "Approval resolved."
+        GenServer.stop(view.pid)
+      end
+    end
+
+    test "pending approvals and worktree details escape external text", %{conn: conn} do
+      id = "omp_cccccccccccc"
+      {:ok, view, _html} = live(conn, "/omp/#{id}")
+      render_async(view, @async_timeout)
+
+      session =
+        wire(id, %{
+          "approvalMode" => "write",
+          "pendingApprovals" => [
+            %{
+              "id" => "approval_child",
+              "tool" => "<script>tool</script>",
+              "details" => "<img src=x onerror=alert(1)>",
+              "requestedAt" => 1
+            }
+          ],
+          "worktree" => %{
+            "path" => "/tmp/<script>tree</script>",
+            "branch" => "lemon-omp/<img>",
+            "kept" => true,
+            "dirty" => 2,
+            "commits" => 3
+          }
+        })
+
+      broadcast("updated", session)
+      # The render request follows the broadcast from this test process.
+      html = render(view)
+      assert has_element?(view, "#omp-approvals", "<script>tool</script>")
+      assert has_element?(view, "#omp-approvals", "<img src=x onerror=alert(1)>")
+      assert has_element?(view, "#omp-approve-approval_child")
+      assert has_element?(view, "#omp-deny-approval_child")
+      assert has_element?(view, "#omp-worktree", "/tmp/<script>tree</script>")
+      assert has_element?(view, "#omp-worktree", "lemon-omp/<img>")
+      assert has_element?(view, "#omp-worktree", "Commits: 3")
+      assert has_element?(view, "#omp-worktree", "git merge lemon-omp/<img>")
+      assert has_element?(view, "#omp-info", "Approval mode")
+      assert has_element?(view, "#omp-info", "Approved 0")
+      refute html =~ "<script>tool</script>"
+      refute html =~ "<img src=x"
+      assert html =~ "&lt;script&gt;tool&lt;/script&gt;"
+    end
+
     test "discover stored sessions and resume one", %{
       conn: conn,
       workspace: workspace,
@@ -415,16 +569,45 @@ defmodule LemonWeb.OmpLiveTest do
       render_async(view, @async_timeout)
 
       assert has_element?(view, "#omp-discovered-#{omp_session_id}", "Fix the flaky test")
+      assert has_element?(view, "#omp-discovered-#{omp_session_id}", "Interrupted")
+      assert has_element?(view, "#omp-discovered-#{omp_session_id}", "omp")
 
       view
       |> element("#omp-discovered-#{omp_session_id} button", "Resume")
       |> render_click()
 
-      view |> form("#omp-resume-form", resume: %{message: ""}) |> render_submit()
+      assert has_element?(view, "#omp-resume-approval-mode")
+      assert has_element?(view, "#omp-resume-continue")
+
+      view
+      |> form("#omp-resume-form", resume: %{message: "A new prompt", approvalMode: "write"})
+      |> render_change()
+
+      refute has_element?(view, "#omp-resume-continue")
+
+      view
+      |> form("#omp-resume-form", resume: %{message: "", approvalMode: "write"})
+      |> render_change()
+
+      assert has_element?(view, "#omp-resume-continue")
+
+      pending =
+        view
+        |> form("#omp-resume-form",
+          resume: %{message: "", approvalMode: "write", continue: "true"}
+        )
+        |> render_submit()
+
+      assert pending
+             |> LazyHTML.from_fragment()
+             |> LazyHTML.query("#omp-resume-submit[aria-busy]")
+             |> Enum.count() == 1
+
       render_async(view, @async_timeout)
 
       [session] = LemonOmp.list(include_ended: false)
       assert_patch(view, "/omp/#{session["id"]}")
+      assert session["approvalMode"] == "write"
 
       assert eventually(fn ->
                match?({:ok, %{"ompSessionId" => ^omp_session_id}}, LemonOmp.get(session["id"]))
@@ -434,10 +617,28 @@ defmodule LemonWeb.OmpLiveTest do
 
       args = workspace |> Path.join(".fake_omp.args") |> File.read!()
       assert args =~ "--resume #{omp_session_id}"
+      assert args =~ "--approval-mode write"
+      commands = workspace |> Path.join(".fake_omp.log") |> File.read!()
+      assert commands =~ "Review the conversation and the workspace state"
     end
   end
 
   # ── Helpers ───────────────────────────────────────────────────────────────
+
+  defp receive_snapshot(id, predicate) do
+    receive do
+      %LemonCore.Event{} = event ->
+        case LemonControlPlane.EventBridge.project(event) do
+          {"omp.session", %{"session" => %{"id" => ^id} = session}} ->
+            if predicate.(session), do: session, else: receive_snapshot(id, predicate)
+
+          _ ->
+            receive_snapshot(id, predicate)
+        end
+    after
+      5_000 -> flunk("Expected omp snapshot for #{id}")
+    end
+  end
 
   defp start_session!(workspace, prompt) do
     {:ok, %{"session" => %{"id" => id}}} =
