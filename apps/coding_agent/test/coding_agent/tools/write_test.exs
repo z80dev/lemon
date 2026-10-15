@@ -105,7 +105,9 @@ defmodule CodingAgent.Tools.WriteTest do
                  },
                  nil,
                  nil,
-                 cwd, acp_client_fs_write_text_file: true)
+                 cwd,
+                 acp_client_fs_write_text_file: true
+               )
 
       assert message =~ "truncated read output"
       assert File.read!(path) == "keep"
@@ -129,6 +131,23 @@ defmodule CodingAgent.Tools.WriteTest do
 
         assert File.read!(path) == bom <> "new\r\ntext\r\n"
       end
+    end
+
+    test "preserves CRLF when overwriting a file larger than the format window", %{tmp_dir: cwd} do
+      path = Path.join(cwd, "large.txt")
+      File.write!(path, String.duplicate("existing line\r\n", 100_000))
+
+      assert %AgentToolResult{} =
+               Write.execute(
+                 "write",
+                 %{"path" => path, "content" => "new\ntext\n"},
+                 nil,
+                 nil,
+                 cwd,
+                 []
+               )
+
+      assert File.read!(path) == "new\r\ntext\r\n"
     end
 
     test "rejects actual truncated read output only for existing targets", %{tmp_dir: cwd} do

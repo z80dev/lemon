@@ -21,6 +21,9 @@
 
 ### Fixed
 
+- Local overwrite format detection reads only a 64 KiB leading window rather
+  than loading the entire existing file.
+
 - Local patches refuse stale updates, deletes, and move sources before writing
   any operation; filesystem errors now use actionable messages without raw terms.
 
