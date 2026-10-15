@@ -5,9 +5,9 @@ defmodule CodingAgent.Tools.Lsp do
 
   A server is chosen by file extension from `LemonLsp.Servers`; its workspace
   root is the nearest ancestor of the file (within the cwd) holding one of the
-  server's root markers, else the cwd. One initialized server per (coding
-  session, server, root) is reused across calls through
-  `CodingAgent.Tools.Lsp.Client` and stopped when the session ends.
+  server's root markers, else the cwd. Session-scoped
+  `CodingAgent.Tools.Lsp.Client` leases share one initialized server per
+  (server, root, configuration) through `LemonLsp.ServerManager`.
 
   Positions are `line` (1-based) plus `symbol` (text located on that line) or
   `column` (1-based); they are converted to LSP UTF-16 offsets. Results are
@@ -319,7 +319,7 @@ defmodule CodingAgent.Tools.Lsp do
   defp run("request", ctx), do: raw_request(ctx)
 
   defp status(ctx) do
-    running = Enum.group_by(Client.list(ctx.scope), & &1.server_id)
+    running = Enum.group_by(current_clients(ctx), & &1.server_id)
 
     lines =
       Enum.map(LemonLsp.Servers.list(ctx.cwd), fn server ->
@@ -977,14 +977,14 @@ defmodule CodingAgent.Tools.Lsp do
   end
 
   defp reload(%{req: %{file: file}} = ctx) when file in [nil, "*"] do
-    clients = Client.list(ctx.scope)
+    clients = current_clients(ctx)
     servers = Map.new(LemonLsp.Servers.list(ctx.cwd), &{&1.id, &1})
 
     Enum.reduce_while(
       clients,
       {:ok, "Reloaded #{length(clients)} language server(s)", %{count: length(clients)}},
       fn client, result ->
-        Client.stop(client.pid)
+        Client.stop(client.pid, restart: true)
 
         case attempt(
                ctx,
@@ -1005,7 +1005,7 @@ defmodule CodingAgent.Tools.Lsp do
 
   defp reload(ctx) do
     with_file(ctx, fn conn ->
-      Client.stop(conn.pid)
+      Client.stop(conn.pid, restart: true)
 
       attempt(
         ctx,
@@ -1068,8 +1068,8 @@ defmodule CodingAgent.Tools.Lsp do
 
   defp diagnostics(%{req: %{file: "*"}} = ctx) do
     entries =
-      ctx.scope
-      |> Client.list()
+      ctx
+      |> current_clients()
       |> Enum.take(32)
       |> Enum.flat_map(fn client ->
         with {:ok, conn} <- Client.sync(client.pid, nil, remaining(ctx)),
@@ -1352,12 +1352,27 @@ defmodule CodingAgent.Tools.Lsp do
     end
   end
 
+  defp current_clients(ctx) do
+    servers = Map.new(LemonLsp.Servers.list(ctx.cwd), &{&1.id, &1.config_hash})
+
+    Enum.filter(Client.list(ctx.scope), fn client ->
+      case {servers[client.server_id], Client.info(client.pid)} do
+        {hash, {:ok, %{config_hash: hash}}} when is_binary(hash) ->
+          true
+
+        _ ->
+          Client.stop(client.pid)
+          false
+      end
+    end)
+  end
+
   # Running clients for this scope, else servers whose root marker sits in
   # the working directory itself (started on demand at the cwd).
   defp workspace_clients(ctx) do
     servers = Map.new(LemonLsp.Servers.list(ctx.cwd), &{&1.id, &1})
 
-    case Client.list(ctx.scope) do
+    case current_clients(ctx) do
       [] ->
         servers
         |> Map.values()
@@ -1489,7 +1504,11 @@ defmodule CodingAgent.Tools.Lsp do
   end
 
   defp response({:error, reason}, _ctx, _conn, _method)
-       when reason in [:unknown_lsp_session, :session_exited, :session_stopped, :session_lost],
+       when reason in [:session_exited, :session_stopped],
+       do: {:error, "Language server exited while this request was in flight; retry the request"}
+
+  defp response({:error, reason}, _ctx, _conn, _method)
+       when reason in [:unknown_lsp_session, :session_lost],
        do: {:error, :session_lost}
 
   defp response({:error, reason}, _ctx, _conn, method) when is_binary(reason),

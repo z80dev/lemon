@@ -59,20 +59,22 @@ defmodule LemonLsp.ConfigTest do
   end
 
   test "custom servers use string ids and normalized file types", ctx do
-    write_project(ctx, """
-    [runtime.tools.lsp.servers.my_language]
-    command = "/bin/cat"
-    file_types = ["NEWLANG"]
-    language_id = "new-language"
-    args = ["--stdio"]
-    """)
+    for id <- ["my_language", "my-language"] do
+      write_project(ctx, """
+      [runtime.tools.lsp.servers.#{id}]
+      command = "/bin/cat"
+      file_types = ["NEWLANG"]
+      language_id = "new-language"
+      args = ["--stdio"]
+      """)
 
-    assert {:ok, server} = Servers.get("my_language", ctx.project)
-    assert server.id == "my_language"
-    assert server.extensions == [".newlang"]
-    assert Servers.language_id("file.NEWLANG", ctx.project) == "new-language"
-    assert {:ok, "my_language"} = Servers.validate("my_language", ctx.project)
-    assert {:ok, %{args: ["--stdio"]}} = Servers.resolve_command("my_language", ctx.project)
+      assert {:ok, server} = Servers.get(id, ctx.project)
+      assert server.id == id
+      assert server.extensions == [".newlang"]
+      assert Servers.language_id("file.NEWLANG", ctx.project) == "new-language"
+      assert {:ok, ^id} = Servers.validate(id, ctx.project)
+      assert {:ok, %{args: ["--stdio"]}} = Servers.resolve_command(id, ctx.project)
+    end
   end
 
   test "invalid field types are rejected by the config validator", ctx do
@@ -99,6 +101,16 @@ defmodule LemonLsp.ConfigTest do
 
     assert_raise ValidationError, ~r/custom servers require command and extensions/, fn ->
       Config.reload(ctx.project)
+    end
+  end
+
+  test "idle timeout requires a non-negative integer", ctx do
+    for value <- ["-1", "\"short\""] do
+      write_project(ctx, "[runtime.tools.lsp]\nidle_timeout_ms = #{value}\n")
+
+      assert_raise ValidationError, ~r/runtime.tools.lsp.idle_timeout_ms/, fn ->
+        Config.reload(ctx.project)
+      end
     end
   end
 

@@ -10,6 +10,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Added
 
+- Share one initialized language-server process per server/workspace/config
+  across sessions, with reference-counted owners, configurable idle shutdown,
+  central document versions, diagnostic fan-out and next-use crash recovery.
+
 - Layer language-server defaults with global/project
   `[runtime.tools.lsp.servers.<id>]` overrides, custom servers, disabling,
   initialization options and environment settings across catalog consumers.

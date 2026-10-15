@@ -733,6 +733,9 @@ defmodule LemonLsp.Servers do
 
     %{
       id: server.id,
+      config_hash:
+        :crypto.hash(:sha256, :erlang.term_to_binary({server, configured_command}))
+        |> Base.encode16(case: :lower),
       label: server.label,
       language: server.language,
       command: command_label(configured_command || server.command),
@@ -891,7 +894,7 @@ defmodule LemonLsp.Servers do
 
     @servers
     |> Enum.map(& &1.id)
-    |> Enum.find(normalized, &(Atom.to_string(&1) == normalized))
+    |> Enum.find(String.trim(id), &(Atom.to_string(&1) == normalized))
   end
 
   defp normalize_id(_), do: :unknown

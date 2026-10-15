@@ -64,6 +64,8 @@ defmodule LemonCore.Config.Tools do
 
   alias LemonCore.Env
 
+  @lsp_defaults %{"servers" => %{}, "idle_timeout_ms" => 30_000}
+
   defstruct [
     :auto_resize_images,
     :approval_mode,
@@ -173,7 +175,7 @@ defmodule LemonCore.Config.Tools do
       auto_resize_images: resolve_auto_resize(tools_settings),
       approval_mode: Map.get(tools_settings, "approval_mode"),
       edit: resolve_edit(tools_settings),
-      lsp: Map.get(tools_settings, "lsp", %{"servers" => %{}}),
+      lsp: resolve_lsp(tools_settings),
       intent_tracing: Map.get(tools_settings, "intent_tracing", true),
       web: resolve_web(tools_settings),
       wasm: resolve_wasm(tools_settings),
@@ -197,6 +199,13 @@ defmodule LemonCore.Config.Tools do
       node: section["node"],
       declined_origins: section["declined_origins"]
     }
+  end
+
+  defp resolve_lsp(settings) do
+    case Map.get(settings, "lsp", %{}) do
+      section when is_map(section) -> Map.merge(@lsp_defaults, section)
+      invalid -> invalid
+    end
   end
 
   # Private functions for resolving each config section
@@ -488,7 +497,7 @@ defmodule LemonCore.Config.Tools do
       "auto_resize_images" => true,
       "checkpoint" => %{"enabled" => false},
       "edit" => %{"enforce_seen_lines" => false},
-      "lsp" => %{"servers" => %{}},
+      "lsp" => @lsp_defaults,
       "web" => %{
         "search" => %{
           "enabled" => true,
