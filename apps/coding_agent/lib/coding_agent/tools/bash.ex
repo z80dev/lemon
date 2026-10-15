@@ -2,12 +2,13 @@ defmodule CodingAgent.Tools.Bash do
   @moduledoc """
   Bash command execution tool for the coding agent.
 
-  Foreground commands stream output, honour abort signals, and are killed
-  (with their whole process tree) after `timeout` milliseconds (default
-  120 s, max 10 min). A timeout or an execution failure is returned as an
-  error tool result. Streaming replacement snapshots retain at most 50,000
-  output bytes plus a fixed omission marker; the executor's final result and
-  full-output spill file remain authoritative, including timeout/cancellation results.
+  Ordinary foreground commands run under `CodingAgent.ProcessManager`. After
+  `timeout` milliseconds (default 120 s, max 10 min), the caller detaches and
+  receives the same process ID; the command continues without re-execution.
+  Output capture remains subject to the manager's explicit memory/artifact
+  quotas. PTY and ACP-client terminals still use their terminal executor and
+  are killed on timeout; those terminal handles cannot be adopted by the local
+  process manager. Abort signals still stop foreground work.
 
   `run_in_background: true` starts the command under
   `CodingAgent.ProcessManager` and returns a `process_id` immediately; read
@@ -66,9 +67,9 @@ defmodule CodingAgent.Tools.Bash do
       timeout_ms: :infinity,
       description:
         "Execute a bash command in the project root (or `cwd`). Foreground commands time out after " <>
-          "`timeout` ms (default #{@default_timeout_ms}, max #{@max_timeout_ms}). For servers, " <>
-          "watchers, or builds that may run longer, set run_in_background: true, then poll with " <>
-          "bash_output and stop with kill_process. Set `cwd` instead of `cd`; pass multiline or " <>
+          "`timeout` ms (default #{@default_timeout_ms}, max #{@max_timeout_ms}), then continue " <>
+          "in the background with a process_id (PTY/ACP terminals are killed instead). Use " <>
+          "bash_output to read output and kill_process to stop. Set `cwd` instead of `cd`; " <>
           "quote-heavy values through `env`. skill:// and artifact:// references in the command " <>
           "are replaced with their absolute file paths.",
       label: "Run Command",
@@ -93,7 +94,7 @@ defmodule CodingAgent.Tools.Bash do
             "maximum" => @max_timeout_ms,
             "description" =>
               "Foreground timeout in milliseconds (default #{@default_timeout_ms}, " <>
-                "max #{@max_timeout_ms}). The command and its children are killed when it expires."
+                "max #{@max_timeout_ms}). Detaches ordinary commands; kills PTY/ACP terminals."
           },
           "run_in_background" => %{
             "type" => "boolean",
@@ -299,9 +300,11 @@ defmodule CodingAgent.Tools.Bash do
       ]
 
     executor =
-      if Keyword.get(opts, :acp_client_terminal) == true and not use_pty,
-        do: CodingAgent.ACPTerminalExecutor,
-        else: BashExecutor
+      cond do
+        use_pty -> BashExecutor
+        Keyword.get(opts, :acp_client_terminal) == true -> CodingAgent.ACPTerminalExecutor
+        true -> CodingAgent.Tools.Bash.Managed
+      end
 
     executor_opts =
       executor_opts
@@ -312,10 +315,33 @@ defmodule CodingAgent.Tools.Bash do
         end
       end)
 
+    executor_opts =
+      Keyword.merge(executor_opts, Keyword.take(opts, [:session_id, :session_pid]))
+
     try do
       case executor.execute(command, cwd, executor_opts) do
         {:ok, result} ->
           format_result(result, timeout_ms, cwd, opts)
+
+        {:detached, id, snapshot, output} ->
+          %AgentToolResult{
+            content: [
+              %TextContent{
+                text:
+                  output <>
+                    "\n\nForeground wait timed out after #{timeout_ms} ms; " <>
+                    "command continues as #{id}. Read with bash_output; stop with kill_process. " <>
+                    "Do not rerun the command."
+              }
+            ],
+            details: %{
+              process_id: id,
+              status: snapshot.status,
+              exit_code: nil,
+              background: true,
+              timed_out: true
+            }
+          }
 
         {:error, reason} ->
           %AgentToolResult{

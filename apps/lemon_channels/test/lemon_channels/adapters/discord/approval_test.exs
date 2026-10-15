@@ -2,10 +2,11 @@ defmodule LemonChannels.Adapters.Discord.ApprovalTest do
   use ExUnit.Case, async: false
 
   alias LemonChannels.Adapters.Discord.Approval
-  alias LemonChannels.{OutboundPayload, RemoteApproval, Supervision}
+  alias LemonChannels.Adapters.Discord.Transport
   alias LemonChannels.Discord.KnownTargetStore
-  alias LemonCore.ExecApprovalStore
+  alias LemonChannels.{OutboundPayload, RemoteApproval, Supervision}
   alias LemonCore.Events.ApprovalPending
+  alias LemonCore.ExecApprovalStore
 
   setup do
     id = LemonCore.Id.approval_id()
@@ -187,7 +188,7 @@ defmodule LemonChannels.Adapters.Discord.ApprovalTest do
     interaction = c.interaction |> Map.put(:type, 3) |> Map.put(:channel_id, "999")
 
     assert {:noreply, state} =
-             LemonChannels.Adapters.Discord.Transport.handle_info(
+             Transport.handle_info(
                {:discord_event, {:INTERACTION_CREATE, interaction, nil}},
                c.state
              )

@@ -5,6 +5,7 @@ defmodule LemonCore.Config.TUITest do
   use LemonCore.Testing.Case, async: false
 
   alias LemonCore.Config.TUI
+  alias LemonCore.Config.Validator
 
   setup do
     # Store original env vars to restore later
@@ -45,6 +46,22 @@ defmodule LemonCore.Config.TUITest do
 
       assert config.theme == "dark"
       assert config.debug == true
+    end
+
+    test "client-owned keybindings are accepted without daemon action validation" do
+      settings =
+        Toml.decode!("""
+        [tui.keys]
+        "lemon.plan.toggle" = "alt+shift+p"
+        "lemon.model.cycle" = ["alt+v", "ctrl+shift+m"]
+        "lemon.palette.open" = []
+        """)
+
+      config = TUI.resolve(settings)
+
+      assert Validator.validate_deprecated_sections(settings) == :ok
+      assert Validator.validate_tui(Map.from_struct(config), []) == []
+      assert Validator.deprecation_warnings(settings) == []
     end
 
     test "environment variables override settings" do

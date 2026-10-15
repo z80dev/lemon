@@ -9,10 +9,10 @@ defmodule LemonChannels.Adapters.Telegram.Transport.UpdateProcessor do
 
   require Logger
 
+  alias LemonChannels.Telegram.KnownTargetStore
   alias LemonChannels.Telegram.TransportShared
   alias LemonCore.ChatScope
   alias LemonCore.MapHelpers
-  alias LemonChannels.Telegram.KnownTargetStore
 
   @known_target_write_interval_ms 30_000
 

@@ -9,11 +9,12 @@ defmodule LemonChannels.Adapters.Telegram.Transport.CallbackHandler do
   """
 
   alias LemonAgent.ModelRuntime.ModelCatalog
-  alias LemonChannels.BindingResolver
   alias LemonChannels.Adapters.Telegram.ModelPolicyAdapter
+  alias LemonChannels.Adapters.Telegram.Transport.ApprovalRequest
   alias LemonChannels.Adapters.Telegram.Transport.PerChatState
   alias LemonChannels.Adapters.Telegram.Transport.SessionRouting
   alias LemonChannels.Adapters.Telegram.UserPrompt
+  alias LemonChannels.BindingResolver
   alias LemonChannels.SubmissionOutcome
   alias LemonCore.ChatScope
   alias LemonCore.SessionKey
@@ -99,7 +100,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport.CallbackHandler do
         :ok
 
       true ->
-        _ = LemonChannels.Adapters.Telegram.Transport.ApprovalRequest.handle_callback(state, cb)
+        _ = ApprovalRequest.handle_callback(state, cb)
 
         :ok
     end

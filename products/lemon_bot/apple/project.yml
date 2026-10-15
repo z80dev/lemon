@@ -99,11 +99,29 @@ targets:
         TARGETED_DEVICE_FAMILY: "1,2"
         APPLICATION_EXTENSION_API_ONLY: YES
         SKIP_INSTALL: YES
+  LemonBotShareTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: ShareTests
+      - path: LemonBotiOS/Shared
+      - path: LemonBotiOS/ShareExtension/ShareViewController.swift
+    dependencies:
+      - target: LemonBotiOS
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: org.lemonbot.share.tests
+        GENERATE_INFOPLIST_FILE: YES
+        ENABLE_HARDENED_RUNTIME: NO
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Lemon Bot.app/Lemon Bot"
+        BUNDLE_LOADER: "$(TEST_HOST)"
   LemonBotNativeTests:
     type: bundle.unit-test
     platform: macOS
     sources:
       - path: Tests
+      - path: LemonBotMac/MacGlobalHotkeys.swift
+      - path: LemonBotMac/MacShortcutRecorder.swift
     dependencies:
       - package: LemonBotKit
         product: LemonBotKit
@@ -143,6 +161,16 @@ targets:
         GENERATE_INFOPLIST_FILE: YES
         ENABLE_HARDENED_RUNTIME: NO
 schemes:
+  LemonBotShareReview:
+    build:
+      targets:
+        LemonBotiOS: all
+        LemonBotShareTests: [test]
+    test:
+      config: Debug
+      commandLineArguments:
+        "-LBFixtures": true
+      targets: [LemonBotShareTests]
   LemonBotKeyboard:
     build:
       targets:

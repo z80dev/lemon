@@ -4,6 +4,7 @@ defmodule CodingAgent.Tools.ReadSummary do
   # This is deliberately a conservative outline, not a parser or an edit snapshot.
   # Keep declarations and shallow/top-level code; never infer omitted bodies.
   alias CodingAgent.Tools.AnchoredEdit
+  alias LemonAgent.Tools.AbortHelpers
 
   @max_bytes 2 * 1024 * 1024
   @min_lines 300
@@ -13,9 +14,9 @@ defmodule CodingAgent.Tools.ReadSummary do
 
   def read(path, stat, signal, opts) do
     if eligible?(path, stat.size) do
-      with :ok <- LemonAgent.Tools.AbortHelpers.check_abort(signal),
+      with :ok <- AbortHelpers.check_abort(signal),
            {:ok, content} <- File.open(path, [:read, :binary], &IO.binread(&1, @max_bytes + 1)),
-           :ok <- LemonAgent.Tools.AbortHelpers.check_abort(signal) do
+           :ok <- AbortHelpers.check_abort(signal) do
         if is_binary(content), do: from_content(path, content, opts), else: :not_applicable
       else
         {:error, "Operation aborted"} = error -> error

@@ -28,6 +28,7 @@ defmodule LemonWeb.OmpLive do
   use LemonWeb, :live_view
 
   alias LemonControlPlane.EventBridge
+  alias LemonWeb.Chat.Backend
   alias LemonWeb.Rpc
 
   import LemonWeb.OmpComponents
@@ -418,7 +419,7 @@ defmodule LemonWeb.OmpLive do
     if Enum.any?(approvals, &(&1["id"] == id)) do
       decision = if decision == "approve", do: "approve_once", else: "deny"
 
-      case LemonWeb.Chat.Backend.resolve_approval(id, decision) do
+      case Backend.resolve_approval(id, decision) do
         :ok -> {:noreply, put_flash(socket, :info, "Approval resolved.")}
         {:error, error} -> {:noreply, put_flash(socket, :error, Rpc.message(error))}
       end
