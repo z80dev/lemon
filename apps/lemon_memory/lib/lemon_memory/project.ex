@@ -186,7 +186,7 @@ defmodule LemonMemory.Project do
     with {:ok, identity} <- scope(context),
          {:ok, owner} <- ContextScope.scope(context),
          {:ok, text} <- optional_fact(text),
-         {:ok, replaces} <- optional_fact(replaces),
+         {:ok, replaces} <- optional_fact(replaces, screen_exfiltration: false),
          true <- text != nil or replaces != nil do
       owner = if ContextScope.shared_grant?(context), do: :shared, else: owner
 
@@ -329,7 +329,7 @@ defmodule LemonMemory.Project do
         if doc.agent_id == scope.agent_id and doc.workspace_key == scope.root and
              doc.meta["home_digest"] == scope.home_digest and
              matches_owner?(doc, scope.owner) and fits?(facts) and
-             Enum.all?(facts, &(normalize_fact(&1) == {:ok, &1})) do
+             Enum.all?(facts, &(normalize_fact(&1, screen_exfiltration: false) == {:ok, &1})) do
           {:ok, facts}
         else
           {:error, :invalid_document}
@@ -386,11 +386,14 @@ defmodule LemonMemory.Project do
     end
   end
 
-  defp optional_fact(nil), do: {:ok, nil}
-  defp optional_fact(fact), do: normalize_fact(fact)
+  defp optional_fact(fact, opts \\ [])
+  defp optional_fact(nil, _opts), do: {:ok, nil}
+  defp optional_fact(fact, opts), do: normalize_fact(fact, opts)
 
-  defp normalize_fact(fact) when is_binary(fact) do
-    case Safety.validate_note(fact, max_bytes: @max_bytes) do
+  defp normalize_fact(fact, opts \\ [])
+
+  defp normalize_fact(fact, opts) when is_binary(fact) do
+    case Safety.validate_note(fact, Keyword.put(opts, :max_bytes, @max_bytes)) do
       :ok ->
         fact = fact |> String.split() |> Enum.join(" ")
 
@@ -411,7 +414,7 @@ defmodule LemonMemory.Project do
     end
   end
 
-  defp normalize_fact(_), do: {:error, :invalid_fact}
+  defp normalize_fact(_, _), do: {:error, :invalid_fact}
 
   defp bounded(facts) do
     facts
