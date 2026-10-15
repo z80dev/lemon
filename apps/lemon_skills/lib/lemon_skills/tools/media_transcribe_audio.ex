@@ -67,6 +67,7 @@ defmodule LemonSkills.Tools.MediaTranscribeAudio do
   def tool(cwd, opts \\ []) do
     %AgentTool{
       name: "media_transcribe_audio",
+      timeout_ms: :infinity,
       description:
         "Transcribe a local audio artifact through Lemon's BEAM media worker path. Supports deterministic local transcript previews, OpenAI speech-to-text, and Deepgram speech-to-text, records redacted media-job metadata, and can opt into final Telegram/Discord transcript delivery.",
       label: "Media Transcribe Audio",

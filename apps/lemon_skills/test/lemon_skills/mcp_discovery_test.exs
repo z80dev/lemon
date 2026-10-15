@@ -487,6 +487,7 @@ defmodule LemonSkills.McpDiscoveryTest do
     assert :ok = McpSession.open_http(ctx.id, ctx.cwd, [ctx.server], self())
     tools = McpSession.tools(ctx.id)
     assert length(tools) == 8
+    assert Enum.all?(tools, &(&1.timeout_ms == :infinity))
     assert McpSession.approvals(ctx.id) == Map.new(tools, &{&1.name, :never})
     [echo] = Enum.filter(tools, &String.starts_with?(&1.name, "mcp_fixture_echo_"))
     assert {:ok, result} = echo.execute.("echo", %{}, nil, nil)

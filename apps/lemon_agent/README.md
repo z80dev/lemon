@@ -174,6 +174,13 @@ millisecond override, or `:infinity` for a tool that owns its deadline or must
 legitimately wait. `nil` inherits the loop setting. Native task/wait and agent
 delegation, bash/process waits, eval, debug, ask/ask_parent and browser tools
 declare exemptions and retain their own cancellation/deadline semantics.
+The same applies to external omp waits, media workers, A2A peer requests, MCP
+calls, SMS verification, computer-use cells and configurable Honcho requests.
+These exemptions disable only the generic wrapper timer, not the tool/client's
+own deadline. Goal/kanban/cron dispatch and local management tools still inherit
+the default; they enqueue work rather than wait for its execution. WASM invokes
+retain their existing 120-second sidecar bound. Extension wrappers preserve the
+extension's declared `AgentTool.timeout_ms`, otherwise inheriting the default.
 
 
 ### Registry Pattern

@@ -52,6 +52,7 @@ defmodule LemonSkills.Tools.MediaGenerateImage do
   def tool(cwd, opts \\ []) do
     %AgentTool{
       name: "media_generate_image",
+      timeout_ms: :infinity,
       description:
         "Generate a supervised image through Lemon's BEAM media worker path. Supports deterministic local SVG previews, OpenAI image generation, and Vertex AI Imagen, records redacted media-job metadata, and can opt into final Telegram/Discord attachment delivery.",
       label: "Media Generate Image",

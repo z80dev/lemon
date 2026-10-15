@@ -45,6 +45,39 @@ defmodule LemonOmp.Tools.OmpTest do
              ~w(always-ask write yolo)
   end
 
+  test "default 600-second wait survives a shorter generic tool deadline", ctx do
+    assert ctx.tool.timeout_ms == :infinity
+    started = run(ctx.tool, %{"action" => "start", "prompt" => "HOLD deadline"})
+    id = started.details["session"]["id"]
+    {:ok, stream} = LemonAgent.EventStream.start_link(timeout: :infinity)
+    context = %LemonAgent.Types.AgentContext{tools: [ctx.tool]}
+
+    call = %LemonAi.Types.ToolCall{
+      id: "long-wait",
+      name: "omp",
+      arguments: %{"action" => "wait", "id" => id}
+    }
+
+    runner =
+      Task.async(fn ->
+        LemonAgent.Loop.ToolCalls.execute_and_collect_tools(
+          context,
+          [],
+          [call],
+          %LemonAgent.Types.AgentLoopConfig{tool_timeout_ms: 10},
+          nil,
+          stream
+        )
+      end)
+
+    assert Task.yield(runner, 100) == nil
+    assert {:ok, _} = LemonOmp.send_message(id, "finish after generic deadline", :steer)
+    {[message], _, _, _} = Task.await(runner, 2_000)
+    refute message.is_error
+    assert Enum.any?(message.content, &(&1.text =~ "finish after generic deadline"))
+    LemonAgent.EventStream.complete(stream, [])
+  end
+
   test "configure reports refreshed model and thinking with owner-scoped untrusted output", ctx do
     started = run(ctx.tool, %{"action" => "start", "prompt" => "HOLD configure"})
     id = started.details["session"]["id"]
