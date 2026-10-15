@@ -14,6 +14,14 @@ defmodule CodingAgent.Search.Providers.Brave do
   def capabilities, do: [:search]
 
   @impl true
+  def search_features,
+    do: %{
+      operators: CodingAgent.Search.Operators.syntax(),
+      mapped_operators: [:after, :before],
+      freshness: [:relative, :range]
+    }
+
+  @impl true
   def available?(:search, %{api_key: key}) when is_binary(key) and key != "", do: :ok
 
   def available?(:search, _context) do
@@ -35,7 +43,7 @@ defmodule CodingAgent.Search.Providers.Brave do
       |> maybe_put("country", Map.get(request, :country))
       |> maybe_put("search_lang", Map.get(request, :search_lang))
       |> maybe_put("ui_lang", Map.get(request, :ui_lang))
-      |> maybe_put("freshness", Map.get(request, :freshness))
+      |> maybe_put("freshness", freshness(request))
 
     url = @endpoint <> "?" <> URI.encode_query(params)
 
@@ -83,6 +91,17 @@ defmodule CodingAgent.Search.Providers.Brave do
   end
 
   defp map_result(_, _request), do: nil
+
+  defp freshness(request) do
+    tokens = Map.get(request, :operator_tokens, [])
+
+    if Enum.any?(tokens, &(&1.kind in [:after, :before])) do
+      {first, last} = CodingAgent.Search.Operators.dates(request)
+      "#{first || "1970-01-01"}to#{last || Date.to_iso8601(Date.utc_today())}"
+    else
+      Map.get(request, :freshness)
+    end
+  end
 
   defp maybe_put(params, _key, value) when value in [nil, ""], do: params
   defp maybe_put(params, key, value), do: params ++ [{key, value}]

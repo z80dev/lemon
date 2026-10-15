@@ -278,6 +278,7 @@ max_chars = 50000
 timeout_seconds = 30
 cache_ttl_minutes = 15
 max_redirects = 3
+max_body_bytes = 5242880
 readability = true
 allow_private_network = false
 allowed_hostnames = []
@@ -326,10 +327,29 @@ Config knobs:
 
 - `missing_brave_api_key`: set `BRAVE_API_KEY` or `runtime.tools.web.search.api_key`.
 - `missing_perplexity_api_key`: set `PERPLEXITY_API_KEY` or `OPENROUTER_API_KEY` (or config key).
-- `freshness is only supported by the Brave websearch provider`: remove `freshness` when using `provider = "perplexity"`.
+- `No provider in the search chain supports the requested freshness filter`: select a capable provider (Brave, Exa, Tavily, Kagi, DuckDuckGo or SearXNG). DuckDuckGo/SearXNG accept relative filters only.
 - `Invalid URL: must be http or https`: use a valid HTTP(S) URL.
 - `Blocked hostname` / `resolves to private/internal IP`: target is blocked by SSRF guards; use safer public host, or explicitly allow only what you trust.
 - `Web fetch failed ... (Firecrawl fallback failed ...)`: verify `FIRECRAWL_API_KEY`, `base_url`, and network reachability.
+
+## Query operators and response bounds
+
+`websearch` parses `site:`, `-site:`, `inurl:`, `intitle:`, `filetype:`,
+`after:YYYY-MM-DD`, `before:YYYY-MM-DD`, quoted phrases, `-term`, and `OR`.
+Providers declare supported syntax and mapped filters. Unsupported URL constraints
+are applied to returned results; operators that cannot be enforced are returned
+in `dropped_operators`. `query_rewritten` shows the actual provider query. Boolean
+queries are not approximated with conjunctive URL filters.
+
+`freshness` accepts `pd`, `pw`, `pm`, `py`, or a date range.
+`recency` accepts `day`, `week`, `month`, or `year`. Freshness takes precedence.
+The chain skips providers without the required time-filter capability rather
+than silently dropping the filter; fallback between capable providers is retained.
+
+Guarded fetches stream at most `runtime.tools.web.fetch.max_body_bytes` bytes
+(default 5 MiB) per response, including redirect hops. Oversized bodies halt
+early with `body_too_large`; this is terminal and does not trigger extraction fallback.
+
 - `Local browser driver not built`: run `npm install && npm run build` in
   `clients/lemon-browser-node`.
 - `Could not find Chrome/Chromium executable`: install Chrome/Chromium or set

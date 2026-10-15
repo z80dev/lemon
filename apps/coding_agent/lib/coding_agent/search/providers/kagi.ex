@@ -19,12 +19,27 @@ defmodule CodingAgent.Search.Providers.Kagi do
   def capabilities, do: [:search]
 
   @impl true
+  def search_features,
+    do: %{
+      operators: CodingAgent.Search.Operators.syntax() ++ [:after, :before],
+      freshness: [:relative, :range]
+    }
+
+  @impl true
   def available?(:search, context), do: KeyedHttp.available?(id(), "KAGI_API_KEY", context)
 
   @impl true
   def search(request, context) do
     started_ms = System.monotonic_time(:millisecond)
     body = %{"query" => request.query, "limit" => request.count}
+    {first, last} = CodingAgent.Search.Operators.dates(request)
+
+    filters =
+      %{}
+      |> CodingAgent.Search.Operators.put_if("after", first)
+      |> CodingAgent.Search.Operators.put_if("before", last)
+
+    body = if filters == %{}, do: body, else: Map.put(body, "filters", filters)
 
     opts =
       KeyedHttp.request_opts(context, [

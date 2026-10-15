@@ -8,6 +8,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
+- Web search parses common query operators, reports dropped constraints, and
+  preserves freshness across capable fallback providers. Guarded web fetches
+  halt oversized response streams at a configurable 5 MiB default.
+
 - Lemon Web omp adds parallel worker starts and a live usage grid, searchable
   free-marked model selection, live model/thinking configuration with explicit
   partial-failure receipts, and bounded subagent transcript drill-down.

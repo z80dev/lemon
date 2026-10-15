@@ -12,6 +12,9 @@ defmodule CodingAgent.Search.Providers.Searxng do
   def capabilities, do: [:search]
 
   @impl true
+  def search_features, do: %{freshness: [:relative]}
+
+  @impl true
   def available?(:search, %{base_url: base_url}) when is_binary(base_url) and base_url != "",
     do: :ok
 
@@ -22,6 +25,18 @@ defmodule CodingAgent.Search.Providers.Searxng do
     started_ms = System.monotonic_time(:millisecond)
 
     query = %{"q" => request.query, "format" => "json"}
+
+    query =
+      CodingAgent.Search.Operators.put_if(
+        query,
+        "time_range",
+        CodingAgent.Search.Operators.relative(request,
+          day: "day",
+          week: "month",
+          month: "month",
+          year: "year"
+        )
+      )
 
     query =
       if request.search_lang, do: Map.put(query, "language", request.search_lang), else: query

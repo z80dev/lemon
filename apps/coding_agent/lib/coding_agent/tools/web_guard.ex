@@ -10,11 +10,13 @@ defmodule CodingAgent.Tools.WebGuard do
           | {:ssrf_blocked, String.t()}
           | {:redirect_error, String.t()}
           | {:network_error, String.t()}
+          | {:body_too_large, %{max_body_bytes: pos_integer()}}
 
   @redirect_statuses [301, 302, 303, 307, 308]
   @blocked_hostnames MapSet.new(["localhost", "metadata.google.internal"])
   @always_blocked_hostnames MapSet.new(["metadata.google.internal"])
   @always_blocked_addresses MapSet.new([{169, 254, 169, 254}])
+  @default_max_body_bytes 5 * 1024 * 1024
 
   @spec guarded_get(String.t(), keyword()) ::
           {:ok, Req.Response.t(), String.t()} | {:error, fetch_error()}
@@ -107,12 +109,19 @@ defmodule CodingAgent.Tools.WebGuard do
     headers = Keyword.get(opts, :headers, []) |> put_header("host", target.host_header)
     custom = Keyword.get(opts, :http_get)
 
+    limit =
+      opts
+      |> Keyword.get(:max_body_bytes, @default_max_body_bytes)
+      |> normalize_integer(@default_max_body_bytes)
+      |> max(1)
+
     request_opts = [
       headers: headers,
       decode_body: false,
       redirect: false,
       connect_options: build_connect_options(target, timeout_ms, opts),
-      receive_timeout: timeout_ms
+      receive_timeout: timeout_ms,
+      into: body_accumulator(limit)
     ]
 
     result =
@@ -126,16 +135,59 @@ defmodule CodingAgent.Tools.WebGuard do
 
     case result do
       {:ok, %Req.Response{} = response} ->
-        {:ok, response}
+        finish_body(response, limit)
 
       %Req.Response{} = response ->
-        {:ok, response}
+        finish_body(response, limit)
 
       {:error, reason} ->
         {:error, {:network_error, format_reason(reason)}}
 
       other ->
         {:error, {:network_error, "Unexpected HTTP result: #{inspect(other)}"}}
+    end
+  end
+
+  defp body_accumulator(limit) do
+    fn {:data, chunk}, {request, response} ->
+      {size, chunks} = Req.Response.get_private(response, :lemon_web_body, {0, []})
+
+      if size + byte_size(chunk) > limit do
+        response = Req.Response.put_private(response, :lemon_web_body_too_large, true)
+        {:halt, {request, %{response | body: ""}}}
+      else
+        response =
+          Req.Response.put_private(
+            response,
+            :lemon_web_body,
+            {size + byte_size(chunk), [chunk | chunks]}
+          )
+
+        {:cont, {request, response}}
+      end
+    end
+  end
+
+  defp finish_body(response, limit) do
+    cond do
+      Req.Response.get_private(response, :lemon_web_body_too_large, false) ->
+        {:error, {:body_too_large, %{max_body_bytes: limit}}}
+
+      state = Req.Response.get_private(response, :lemon_web_body) ->
+        {_size, chunks} = state
+
+        {:ok,
+         %{
+           response
+           | body: chunks |> Enum.reverse() |> IO.iodata_to_binary(),
+             private: Map.delete(response.private, :lemon_web_body)
+         }}
+
+      is_binary(response.body) and byte_size(response.body) > limit ->
+        {:error, {:body_too_large, %{max_body_bytes: limit}}}
+
+      true ->
+        {:ok, response}
     end
   end
 

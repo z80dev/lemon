@@ -1559,6 +1559,7 @@ max_chars = 50000
 timeout_seconds = 30
 cache_ttl_minutes = 15
 max_redirects = 3
+max_body_bytes = 5242880 # Streaming response limit (5 MiB); body_too_large is terminal.
 readability = true
 allow_private_network = false
 allowed_hostnames = []
