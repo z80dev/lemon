@@ -41,10 +41,13 @@ defmodule LemonAi.Providers.OpenAIResponses do
   }
 
   alias LemonAi.EventStream
+  alias LemonAi.Models.Presets
   alias LemonAi.Providers.HttpTrace
   alias LemonAi.Providers.OpenAIResponsesShared
+  alias LemonAi.Providers.RequestHeaders
   alias LemonAi.Providers.RetryHelper
   alias LemonAi.Providers.SSEParser
+  alias LemonAi.Providers.StreamingHelper
   import LemonAi.Providers.AssistantMessageHelper
 
   # Providers that use OpenAI-style tool call IDs
@@ -67,7 +70,7 @@ defmodule LemonAi.Providers.OpenAIResponses do
 
   @impl true
   def stream(%Model{} = model, %Context{} = context, %StreamOptions{} = opts) do
-    LemonAi.Providers.StreamingHelper.start_streaming(model, context, opts, &do_stream/4)
+    StreamingHelper.start_streaming(model, context, opts, &do_stream/4)
   end
 
   defp do_stream(stream, model, context, opts) do
@@ -194,7 +197,7 @@ defmodule LemonAi.Providers.OpenAIResponses do
         _ -> nil
       end
 
-    env_vars = if env_var, do: [env_var], else: LemonAi.Models.Presets.env_vars(provider)
+    env_vars = if env_var, do: [env_var], else: Presets.env_vars(provider)
 
     Enum.find_value(env_vars, fn var ->
       value = System.get_env(var)
@@ -282,7 +285,7 @@ defmodule LemonAi.Providers.OpenAIResponses do
       end)
 
     # Add model-specific headers
-    headers = LemonAi.Providers.RequestHeaders.merge(base_headers, model.headers)
+    headers = RequestHeaders.merge(base_headers, model.headers)
 
     # Add GitHub Copilot specific headers if applicable
     headers =
@@ -319,13 +322,13 @@ defmodule LemonAi.Providers.OpenAIResponses do
             copilot_headers
           end
 
-        LemonAi.Providers.RequestHeaders.merge(headers, copilot_headers)
+        RequestHeaders.merge(headers, copilot_headers)
       else
         headers
       end
 
     # Add user-provided headers last
-    LemonAi.Providers.RequestHeaders.merge(headers, opts.headers)
+    RequestHeaders.merge(headers, opts.headers)
   end
 
   defp add_reasoning_config(params, model, opts, _messages) do
