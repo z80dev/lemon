@@ -55,6 +55,11 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   healthy credential-pool principal, keeping picker and native request authority
   aligned without exposing another pool or ambient provider credentials.
 
+### Removed
+
+- The broken `bin/lemon-dev` launcher, which passed flags the TUI no longer
+  accepts. Use `./bin/lemon` (source runtime plus TUI) or `./bin/lemon-tui`.
+
 ---
 
 ## [2026.10.9]
