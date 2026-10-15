@@ -5,6 +5,7 @@ import LemonBotKit
 /// The key screens captured by the macOS snapshot test (and previewable on any platform).
 public enum LemonBotSnapshotScene: String, CaseIterable {
     case sidebarConversation, inspectorActivity, composerActiveRun, failedRun, settings, emptyState
+    case backendDown, controllerDown, reconnectRequired
 
     /// `sidebar-conversation`, used for output file names.
     public var slug: String {
@@ -17,6 +18,9 @@ public enum LemonBotSnapshotScene: String, CaseIterable {
         case .failedRun: return .failedRun
         case .settings: return .chiefOfStaff
         case .emptyState: return .noSelection
+        case .backendDown: return .backendDown
+        case .controllerDown: return .controllerDown
+        case .reconnectRequired: return .reconnectRequired
         }
     }
     /// Point size of the offscreen window the scene is rendered into.

@@ -12,6 +12,7 @@ public enum LemonBotFixtureScenario: Hashable {
     case failedRun
     /// Workspace loaded, nothing selected.
     case noSelection
+    case backendDown, controllerDown, reconnectRequired
 
     public var conversationID: ID? {
         switch self {
@@ -19,6 +20,7 @@ public enum LemonBotFixtureScenario: Hashable {
         case .activeRun: return LemonBotFixtureID.atlasMain
         case .failedRun: return LemonBotFixtureID.marlowMain
         case .noSelection: return nil
+        case .backendDown, .controllerDown, .reconnectRequired: return LemonBotFixtureID.zestMain
         }
     }
 }
@@ -39,22 +41,22 @@ public enum LemonBotFixtures {
     /// Returns immediately; the workspace finishes loading asynchronously (the root shows onboarding for a moment).
     /// Used by the iOS `-LBFixtures` launch mode.
     @MainActor public static func makeStore(scenario: LemonBotFixtureScenario = .chiefOfStaff) -> LemonBotStore {
-        let store = newStore()
+        let store = newStore(scenario: scenario)
         Task { @MainActor in await populate(store, scenario: scenario) }
         return store
     }
 
     /// Returns once the workspace is fully loaded, selected, and pinned online. Used by the snapshot tests.
     @MainActor public static func loadStore(scenario: LemonBotFixtureScenario = .chiefOfStaff) async -> LemonBotStore {
-        let store = newStore()
+        let store = newStore(scenario: scenario)
         await populate(store, scenario: scenario)
         return store
     }
 
-    @MainActor private static func newStore() -> LemonBotStore {
+    @MainActor private static func newStore(scenario: LemonBotFixtureScenario) -> LemonBotStore {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("LemonBotFixtures-\(UUID().uuidString)", isDirectory: true)
         let store = LemonBotStore(keychain: FixtureCredentialStore(), persistence: ClientPersistence(root: root))
-        store.installFixtureSession(FixtureURLProtocol.makeSession())
+        store.installFixtureSession(FixtureURLProtocol.makeSession(controllerDown: scenario == .controllerDown))
         return store
     }
 
@@ -78,6 +80,16 @@ public enum LemonBotFixtures {
         } catch { store.errorMessage = "Fixture workspace failed to load: \(error.localizedDescription)" }
         store.selectedConversationID = scenario.conversationID
         store.pinFixtureOnline()
+        switch scenario {
+        case .backendDown:
+            store.pinFixtureConnectionFailure(URLError(.cannotConnectToHost), nextRetry: Date().addingTimeInterval(12))
+        case .controllerDown:
+            if let status = try? JSONDecoder().decode(InstanceStatus.self, from: JSONSerialization.data(withJSONObject: world.instance(controllerDown: true))) { store.pinFixtureControllerDown(status) }
+        case .reconnectRequired:
+            store.connectionState = "reconnect_required"
+            store.connectionIssue = ConnectionIssue.classify(ClientError.signedOut, baseURL: account.baseURL, email: account.email)
+        default: break
+        }
     }
 }
 #endif

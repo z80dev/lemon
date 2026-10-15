@@ -88,10 +88,15 @@ public struct LemonBotRootView: View {
             .navigationTitle("Chats")
             #endif
         } detail: {
-            NavigationStack { detail }
+            VStack(spacing: 0) {
                 #if os(macOS)
-                .navigationSplitViewColumnWidth(min: 460, ideal: 760)
+                if store.connectionIssue != nil { ConnectionStatusView(store: store).padding(12) }
                 #endif
+                NavigationStack { detail }.frame(maxHeight: .infinity)
+            }
+            #if os(macOS)
+            .navigationSplitViewColumnWidth(min: 460, ideal: 760)
+            #endif
         }
         .navigationSplitViewStyle(.balanced)
         .background { shortcuts }

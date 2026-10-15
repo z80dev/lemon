@@ -14,7 +14,9 @@ private struct PublicOIDCProvider: Decodable, Identifiable {
 public struct OnboardingView: View {
     private let store: LemonBotStore
     @Environment(\.dismiss) private var dismiss
-    @State private var backend = "http://127.0.0.1:4080"
+    @State private var backend: String
+    @State private var connectionIssue: ConnectionIssue?
+    @State private var findBackend = false
     @State private var mode = "login"
     @State private var email = ""
     @State private var password = ""
@@ -30,7 +32,14 @@ public struct OnboardingView: View {
     #if os(iOS)
     @State private var showPairing = false
     #endif
-    public init(store: LemonBotStore) { self.store = store }
+    public init(store: LemonBotStore, initialURL: URL? = nil) {
+        self.store = store
+        #if os(iOS) && !targetEnvironment(simulator)
+        _backend = State(initialValue: initialURL.map(ConnectionIssue.origin(for:)) ?? "")
+        #else
+        _backend = State(initialValue: initialURL.map(ConnectionIssue.origin(for:)) ?? "http://127.0.0.1:4080")
+        #endif
+    }
     public var body: some View {
         NavigationStack {
             Form {
@@ -59,11 +68,25 @@ public struct OnboardingView: View {
                     }
                 }
                 SwiftUI.Section("Product backend") {
-                    TextField("https://bot.example", text: $backend).autocorrectionDisabled()
+                    TextField("https://your-desktop.your-tailnet.ts.net", text: $backend).autocorrectionDisabled()
                     Button("Check setup and sign-in methods · read only") { Task { await discover() } }.disabled(action.inFlight)
                     if checkedURL != nil {
                         Text(setupRequired ? "Owner setup required. Obtain the one-use setup code from the backend operator terminal." : "Use your local account or configured identity provider.").font(.caption)
                     }
+                    if let issue = connectionIssue {
+                        Text(issue.title).font(LBFont.rowTitle).foregroundStyle(LB.warning)
+                        Text(issue.reason).font(LBFont.body)
+                        #if os(macOS)
+                        if let url = URL(string: backend), ConnectionIssue.isLoopback(url) { LocalLemonStartHelp() }
+                        #endif
+                        DisclosureGroup("Details") {
+                            Text(issue.detail).font(LBFont.code).textSelection(.enabled)
+                            Button("Copy details") { copyText(issue.detail) }
+                        }
+                    }
+                    #if os(macOS)
+                    Button("Find Lemon Bot on this Mac") { findBackend = true }
+                    #endif
                 }
                 if checkedURL != nil {
                     SwiftUI.Section("Account") {
@@ -101,12 +124,28 @@ public struct OnboardingView: View {
                         Button("Clear local diagnostic copy") { cleanupDiagnostics = "" }
                     }
                 }
-                ActionErrorView(message: action.error)
+                if connectionIssue == nil { ActionErrorView(message: action.error) }
                 if action.inFlight { ProgressView("Connecting…") }
             }.formStyle(.grouped).navigationTitle("Welcome to Lemon Bot")
                 .frame(maxWidth: 700)
                 .toolbar { if store.account != nil { Button("Close") { dismiss() } } }
-                .onChange(of: backend) { _, _ in checkedURL = nil; providers = [] }
+                .onChange(of: backend) { _, _ in checkedURL = nil; providers = []; connectionIssue = nil }
+                .sheet(isPresented: $findBackend) { ChooseLemonBotView(store: store) }
+                .task(id: connectionIssue?.origin) {
+                    #if os(macOS)
+                    guard connectionIssue != nil, let url = URL(string: backend), ConnectionIssue.isLoopback(url) else { return }
+                    while !Task.isCancelled, connectionIssue != nil {
+                        do {
+                            try await Task.sleep(for: .seconds(3))
+                            let setup: SetupStatus = try await HTTPTransport(baseURL: url).read("/setup", timeout: 2)
+                            setupRequired = setup.setupRequired; mode = setup.setupRequired ? "setup" : "login"
+                            checkedURL = try HTTPTransport.normalizeBaseURL(url); connectionIssue = nil; action.error = nil
+                            providers = try await publicRequest(url, "/auth/oidc/providers")
+                        } catch is CancellationError { return }
+                        catch { /* Continue credential-free discovery until the service answers. */ }
+                    }
+                    #endif
+                }
                 #if os(iOS)
                 .sheet(isPresented: $showPairing) {
                     NavigationStack {
@@ -134,12 +173,18 @@ public struct OnboardingView: View {
     private func discover() async {
         await action.perform {
             let url = try validatedURL()
-            let setup: SetupStatus = try await publicRequest(url, "/setup")
-            setupRequired = setup.setupRequired
-            if !setup.setupRequired { action.uncertain = false }
-            mode = setup.setupRequired ? "setup" : "login"
-            checkedURL = url
-            providers = try await publicRequest(url, "/auth/oidc/providers")
+            do {
+                let setup: SetupStatus = try await HTTPTransport(baseURL: url).read("/setup", timeout: 2)
+                setupRequired = setup.setupRequired
+                connectionIssue = nil
+                if !setup.setupRequired { action.uncertain = false }
+                mode = setup.setupRequired ? "setup" : "login"
+                checkedURL = url
+                providers = try await publicRequest(url, "/auth/oidc/providers")
+            } catch {
+                connectionIssue = ConnectionIssue.classify(error, baseURL: url)
+                throw error
+            }
         }
     }
     private func localLogin() async {
