@@ -30,11 +30,16 @@ defmodule LemonCore.Config.Tools.Bash do
     }
   ]
 
-  def defaults, do: %{"interceptor" => %{"enabled" => false, "rules" => @rules}}
+  def defaults,
+    do: %{"git_guard" => true, "interceptor" => %{"enabled" => false, "rules" => @rules}}
 
   def resolve(section) when is_map(section) do
     interceptor = Map.get(section, "interceptor", %{})
-    %{interceptor: resolve_interceptor(interceptor)}
+
+    %{
+      git_guard: Map.get(section, "git_guard", true),
+      interceptor: resolve_interceptor(interceptor)
+    }
   end
 
   def resolve(invalid), do: invalid
@@ -46,11 +51,16 @@ defmodule LemonCore.Config.Tools.Bash do
 
   def validate(errors, nil), do: errors
 
-  def validate(errors, %{interceptor: %{enabled: enabled, rules: rules}}) do
+  def validate(errors, %{git_guard: guard, interceptor: %{enabled: enabled, rules: rules}}) do
     errors =
       if is_boolean(enabled),
         do: errors,
         else: ["runtime.tools.bash.interceptor.enabled: must be a boolean" | errors]
+
+    errors =
+      if is_boolean(guard),
+        do: errors,
+        else: ["runtime.tools.bash.git_guard: must be a boolean" | errors]
 
     validate_rules(errors, rules)
   end

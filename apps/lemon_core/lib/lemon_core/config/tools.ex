@@ -150,7 +150,7 @@ defmodule LemonCore.Config.Tools do
           auto_resize_images: boolean(),
           approval_mode: String.t() | nil,
           edit: %{enforce_seen_lines: boolean()},
-          bash: %{interceptor: %{enabled: boolean(), rules: [map()]}},
+          bash: %{git_guard: boolean(), interceptor: %{enabled: boolean(), rules: [map()]}},
           lsp: map(),
           intent_tracing: boolean(),
           web: %{

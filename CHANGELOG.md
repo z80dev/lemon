@@ -10,6 +10,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Added
 
+- Add default-on `[runtime.tools.bash] git_guard` checks for destructive Git
+  commands before all shell launch modes, with a verified task-isolation worktree
+  exemption and actionable refusal messages.
+
 - Add opt-in `[runtime.tools.bash.interceptor]` dedicated-tool routing with
   configurable rules, session-tool availability checks and piped-stdin exemptions,
   applied before foreground, background and named-service launches.
