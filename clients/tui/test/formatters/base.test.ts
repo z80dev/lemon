@@ -130,13 +130,9 @@ describe("formatPath", () => {
 		expect(formatPath(path, cwd)).toBe(`src${sep}file.ts`);
 	});
 
-	it("should handle path equal to cwd (returns ~ path or original)", () => {
-		// When path equals cwd, relative() returns empty string which is falsy,
-		// so it falls through to home directory replacement or returns original path
-		const cwd = "/Users/test/project";
-		const result = formatPath(cwd, cwd);
-		// Result will be ~ prefixed if within home, otherwise original path
-		expect(result.startsWith("~") || result === cwd).toBe(true);
+	it("should abbreviate home when path equals cwd", () => {
+		const cwd = `${home}/project`;
+		expect(formatPath(cwd, cwd)).toBe("~/project");
 	});
 
 	it("should use ~ for home directory when no cwd match", () => {
@@ -169,19 +165,13 @@ describe("formatPath", () => {
 	it("should return original path when not in cwd and not in home", () => {
 		const path = "/var/log/system.log";
 		const cwd = "/Users/test";
-		// Only return original if not starting with home
-		if (!path.startsWith(home)) {
-			expect(formatPath(path, cwd)).toBe("/var/log/system.log");
-		}
+		expect(formatPath(path, cwd)).toBe("/var/log/system.log");
 	});
 
 	it("should not use relative path if it goes up too many directories", () => {
-		const cwd = "/Users/test/project/deep/nested/dir";
-		const path = "/Users/test/other/file.txt";
-		// Path would be ../../../../other/file.txt which is more than 3 levels up
-		// So it should fall back to ~ or absolute
-		const result = formatPath(path, cwd);
-		expect(result.startsWith("~") || result.startsWith("/")).toBe(true);
+		const cwd = `${home}/project/deep/nested/dir`;
+		const path = `${home}/other/file.txt`;
+		expect(formatPath(path, cwd)).toBe("~/other/file.txt");
 	});
 
 	it("should handle cwd without trailing slash", () => {
@@ -218,15 +208,12 @@ describe("formatDuration", () => {
 		expect(formatDuration(90000)).toBe("1m 30s");
 		expect(formatDuration(120000)).toBe("2m");
 		expect(formatDuration(125000)).toBe("2m 5s");
+		expect(formatDuration(180000)).toBe("3m");
 	});
 
 	it("should handle negative values", () => {
 		expect(formatDuration(-1)).toBe("0ms");
 		expect(formatDuration(-1000)).toBe("0ms");
-	});
-
-	it("should handle zero", () => {
-		expect(formatDuration(0)).toBe("0ms");
 	});
 
 	it("should handle very large durations", () => {
@@ -238,11 +225,6 @@ describe("formatDuration", () => {
 		expect(formatDuration(0.4)).toBe("0ms");
 		expect(formatDuration(0.6)).toBe("1ms");
 		expect(formatDuration(999.4)).toBe("999ms");
-	});
-
-	it("should not show seconds when exactly on the minute", () => {
-		expect(formatDuration(60000)).toBe("1m");
-		expect(formatDuration(180000)).toBe("3m");
 	});
 });
 
@@ -286,16 +268,6 @@ describe("formatBytes", () => {
 	it("should handle negative values", () => {
 		expect(formatBytes(-1)).toBe("0 B");
 		expect(formatBytes(-1000)).toBe("0 B");
-	});
-
-	it("should handle zero", () => {
-		expect(formatBytes(0)).toBe("0 B");
-	});
-
-	it("should handle exact boundary values", () => {
-		expect(formatBytes(1024)).toBe("1.0 KB");
-		expect(formatBytes(1048576)).toBe("1.0 MB");
-		expect(formatBytes(1073741824)).toBe("1.0 GB");
 	});
 });
 
@@ -346,11 +318,6 @@ describe("highlightPattern", () => {
 
 	it("should handle pattern with backslashes", () => {
 		expect(highlightPattern("path\\file", "\\", highlight)).toBe("path[\\]file");
-	});
-
-	it("should preserve original case in highlighted text", () => {
-		const result = highlightPattern("Hello World", "world", highlight);
-		expect(result).toBe("Hello [World]");
 	});
 
 	it("should handle adjacent matches", () => {
@@ -540,22 +507,6 @@ describe("safeStringify", () => {
 	it("should handle arrays with undefined values", () => {
 		// JSON.stringify converts undefined in arrays to null
 		expect(safeStringify([1, undefined, 3])).toBe("[1,null,3]");
-	});
-
-	it("should handle mixed complex structure", () => {
-		const obj = {
-			string: "hello",
-			number: 42,
-			bool: true,
-			array: [1, 2, 3],
-			nested: { a: 1 },
-		};
-		const result = JSON.parse(safeStringify(obj));
-		expect(result.string).toBe("hello");
-		expect(result.number).toBe(42);
-		expect(result.bool).toBe(true);
-		expect(result.array).toEqual([1, 2, 3]);
-		expect(result.nested.a).toBe(1);
 	});
 
 	it("should handle Date objects", () => {

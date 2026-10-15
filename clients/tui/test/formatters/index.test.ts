@@ -459,10 +459,6 @@ describe("FormatterRegistry", () => {
 	});
 
 	describe("defaultRegistry", () => {
-		it("should be a FormatterRegistry instance", () => {
-			expect(defaultRegistry).toBeInstanceOf(FormatterRegistry);
-		});
-
 		it("registers exactly Lemon's native tool names", () => {
 			const expected = [
 				"agent",
@@ -591,7 +587,7 @@ describe("FormatterRegistry", () => {
 		it("should handle whitespace-only result", () => {
 			const result = registry.formatResult("unknown", "   \n\t  ");
 
-			expect(result.summary).toBeDefined();
+			expect(result.summary).toBe("   ");
 		});
 
 		it("should handle array results", () => {

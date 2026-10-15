@@ -136,7 +136,6 @@ defmodule CodingAgent.Tools.Bash do
     else
       params
       |> do_execute(signal, on_update, cwd, opts)
-      |> CodingAgent.Artifacts.attach(cwd, opts)
       |> ToolResultTrust.untrusted(:shell)
     end
   end
@@ -256,7 +255,7 @@ defmodule CodingAgent.Tools.Bash do
     try do
       case executor.execute(command, cwd, executor_opts) do
         {:ok, result} ->
-          format_result(result, timeout_ms)
+          format_result(result, timeout_ms, cwd, opts)
 
         {:error, reason} ->
           %AgentToolResult{
@@ -346,66 +345,62 @@ defmodule CodingAgent.Tools.Bash do
     {accumulator, callback}
   end
 
-  defp format_result(%BashExecutor.Result{} = result, timeout_ms) do
-    cond do
-      result.timed_out ->
-        output = output_with_spill(result)
+  defp format_result(%BashExecutor.Result{} = result, timeout_ms, cwd, opts) do
+    {reference, artifact_uri} =
+      if result.full_output_path do
+        case CodingAgent.Artifacts.register(result.full_output_path, cwd, opts) do
+          {:ok, uri} -> {uri, uri}
+          {:error, _} -> {result.full_output_path, nil}
+        end
+      else
+        {nil, nil}
+      end
 
-        notice =
-          "Command timed out after #{timeout_ms} ms and was killed. Pass a larger timeout " <>
-            "(max #{@max_timeout_ms} ms) or use run_in_background: true."
+    output = output_with_spill(result, reference)
 
-        text = if output != "", do: "#{output}\n\n#{notice}", else: notice
+    {text, is_error} =
+      cond do
+        result.timed_out ->
+          notice =
+            "Command timed out after #{timeout_ms} ms and was killed. Pass a larger timeout " <>
+              "(max #{@max_timeout_ms} ms) or use run_in_background: true."
 
-        %AgentToolResult{
-          content: [%TextContent{text: text}],
-          details: result |> build_details() |> Map.put(:timed_out, true),
-          is_error: true
-        }
+          {if(output != "", do: "#{output}\n\n#{notice}", else: notice), true}
 
-      result.cancelled ->
-        # Cancelled via abort signal
-        output = output_with_spill(result)
+        result.cancelled ->
+          {if(output != "", do: "Command cancelled.\n\n#{output}", else: "Command cancelled."),
+           true}
 
-        output_text =
-          if output != "", do: "Command cancelled.\n\n#{output}", else: "Command cancelled."
+        result.exit_code == 0 ->
+          {output, false}
 
-        %AgentToolResult{
-          content: [%TextContent{text: output_text}],
-          details: build_details(result),
-          is_error: true
-        }
+        true ->
+          notice = "Command exited with code #{result.exit_code}"
+          {if(output != "", do: "#{output}\n\n#{notice}", else: notice), true}
+      end
 
-      result.exit_code == 0 ->
-        text = output_with_spill(result)
+    text =
+      if result.pty_fallback,
+        do: "pty requested but unavailable; ran without a terminal\n\n" <> text,
+        else: text
 
-        %AgentToolResult{
-          content: [%TextContent{text: text}],
-          details: build_details(result)
-        }
+    details = build_details(result)
+    details = if artifact_uri, do: Map.put(details, :artifact_uri, artifact_uri), else: details
+    details = if result.timed_out, do: Map.put(details, :timed_out, true), else: details
 
-      true ->
-        output = output_with_spill(result)
-
-        text =
-          if output != "",
-            do: "#{output}\n\nCommand exited with code #{result.exit_code}",
-            else: "Command exited with code #{result.exit_code}"
-
-        %AgentToolResult{
-          content: [%TextContent{text: text}],
-          details: build_details(result),
-          is_error: true
-        }
-    end
+    %AgentToolResult{
+      content: [%TextContent{text: text}],
+      details: details,
+      is_error: is_error
+    }
   end
 
-  defp output_with_spill(result) do
+  defp output_with_spill(result, reference) do
     output = result.output || ""
 
     cond do
-      result.truncated && result.full_output_path ->
-        "#{output}\n\n[Full output saved to: #{result.full_output_path}. Use read with offset/limit to retrieve it.]"
+      result.truncated && reference ->
+        "#{output}\n\n[Full output saved to: #{reference}. Use read with offset/limit to retrieve it.]"
 
       result.client_output_truncated ->
         "#{output}\n\n[The ACP client discarded earlier terminal output; only its retained output tail is available.]"
@@ -418,7 +413,8 @@ defmodule CodingAgent.Tools.Bash do
   defp build_details(%BashExecutor.Result{} = result) do
     details = %{
       exit_code: result.exit_code,
-      truncated: result.truncated
+      truncated: result.truncated,
+      pty_fallback: result.pty_fallback
     }
 
     details =

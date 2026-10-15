@@ -151,16 +151,40 @@ defmodule LemonCore.Config.ValidatorTest do
 
       assert {:error, errors} = Validator.validate(config)
 
-      assert Enum.any?(errors, &String.contains?(&1, "providers.providers.openai.api_key_secret"))
-      assert Enum.any?(errors, &String.contains?(&1, "providers.providers.openai.oauth_secret"))
+      assert Enum.any?(errors, &String.contains?(&1, "providers.openai.api_key_secret"))
+      assert Enum.any?(errors, &String.contains?(&1, "providers.openai.oauth_secret"))
 
       assert Enum.any?(
                errors,
-               &String.contains?(&1, "providers.providers.amazon_bedrock.access_key_id_secret")
+               &String.contains?(&1, "providers.amazon_bedrock.access_key_id_secret")
              )
 
       refute Enum.any?(errors, &String.contains?(&1, "project_secret"))
       refute Enum.any?(errors, &String.contains?(&1, "secret_access_key_secret"))
+    end
+
+    test "provider paths match TOML and values never appear in diagnostics" do
+      secret = "credential-that-must-not-be-echoed"
+
+      for value <- [secret, %{secret => secret}, [secret], false, 123] do
+        errors =
+          Validator.validate_providers(
+            %{
+              providers: %{
+                "custom" => %{api: value},
+                "openai-codex" => %{auth_source: value, api_key_secret: [secret]},
+                "anthropic" => %{auth_source: value, base_url: "ftp://invalid"}
+              }
+            },
+            []
+          )
+
+        assert Enum.any?(errors, &String.starts_with?(&1, "providers.custom.api:"))
+        assert Enum.any?(errors, &String.starts_with?(&1, "providers.anthropic.base_url:"))
+        refute Enum.any?(errors, &String.contains?(&1, "providers.providers."))
+        refute Enum.any?(errors, &String.contains?(&1, secret))
+        refute Enum.any?(errors, &String.contains?(&1, "%{"))
+      end
     end
   end
 
@@ -271,10 +295,10 @@ defmodule LemonCore.Config.ValidatorTest do
 
     test "validates default_thinking_level" do
       errors = Validator.validate_agent(%{default_thinking_level: ""}, [])
-      assert Enum.any?(errors, &String.contains?(&1, "agent.default_thinking_level"))
+      assert Enum.any?(errors, &String.contains?(&1, "defaults.thinking_level"))
 
       errors = Validator.validate_agent(%{default_thinking_level: "medium"}, [])
-      refute Enum.any?(errors, &String.contains?(&1, "agent.default_thinking_level"))
+      refute Enum.any?(errors, &String.contains?(&1, "defaults.thinking_level"))
     end
 
     test "validates compaction thresholds" do

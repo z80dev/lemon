@@ -29,6 +29,23 @@ defmodule LemonCore.EnvTest do
     :ok
   end
 
+  test "generated registry tables match the loaded declarations and removed switches stay absent" do
+    path = Path.expand("../../../../docs/config-registry.md", __DIR__)
+    document = File.read!(path)
+    documented = Regex.scan(~r/^\| `([^`]+)`/m, document, capture: :all_but_first)
+    documented = MapSet.new(documented, &hd/1)
+    declared = MapSet.new(Env.all_declared(), & &1.env_var)
+
+    assert documented == declared
+
+    for removed <-
+          ~w(LEMON_CLAUDE_YOLO LEMON_CODEX_AUTO_APPROVE LEMON_CODEX_EXTRA_ARGS LEMON_THEME) do
+      refute MapSet.member?(declared, removed)
+    end
+
+    assert Env.describe(:pi_debug).apps == [:coding_agent]
+  end
+
   defmodule TestRegistry do
     @moduledoc false
     use LemonCore.Env.Registry

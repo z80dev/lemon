@@ -658,54 +658,7 @@ defmodule LemonCli.CLI do
   end
 
   defp print_config_summary(config) do
-    IO.puts("")
-    IO.puts("Agent:")
-    IO.puts("  Default model: #{config.agent.default_model}")
-    IO.puts("  Default provider: #{config.agent.default_provider}")
-    IO.puts("  Thinking level: #{config.agent.default_thinking_level}")
-
-    IO.puts("")
-    IO.puts("Gateway:")
-    IO.puts("  Max concurrent runs: #{config.gateway.max_concurrent_runs}")
-    IO.puts("  Auto resume: #{config.gateway.auto_resume}")
-    IO.puts("  Channels enabled: #{enabled_channels(config.gateway)}")
-
-    IO.puts("")
-    IO.puts("Logging:")
-    IO.puts("  Level: #{config.logging.level}")
-    IO.puts("  File: #{format_config_value(config.logging.file)}")
-
-    IO.puts("")
-    IO.puts("TUI:")
-    IO.puts("  Theme: #{config.tui.theme}")
-    IO.puts("  Debug: #{config.tui.debug}")
-
-    IO.puts("")
-    IO.puts("Providers:")
-
-    if map_size(config.providers.providers) > 0 do
-      Enum.each(config.providers.providers, fn {name, provider_config} ->
-        has_key = if provider_config.api_key, do: "✓", else: "✗"
-        IO.puts("  #{name}: API key #{has_key}")
-      end)
-    else
-      IO.puts("  (none configured)")
-    end
-  end
-
-  defp format_config_value(nil), do: "(not set)"
-  defp format_config_value(value), do: to_string(value)
-
-  defp enabled_channels(gateway) do
-    gateway
-    |> Map.get(:enabled_channels, %{})
-    |> Enum.filter(fn {_id, enabled?} -> enabled? end)
-    |> Enum.map(fn {id, _enabled?} -> to_string(id) end)
-    |> Enum.sort()
-    |> case do
-      [] -> "(none)"
-      ids -> Enum.join(ids, ", ")
-    end
+    Enum.each(LemonCore.Config.Summary.lines(config), &IO.puts/1)
   end
 
   defp print_config_usage(device) do

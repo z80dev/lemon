@@ -19,6 +19,22 @@ not shared automatically with child sessions.
 `write proc://<id>/kill` sends SIGTERM with the normal kill-process fallback.
 Foreign process IDs are not accessible.
 
+`read issue://42` and `read pr://42` resolve the GitHub repository from the cwd's
+git `origin` remote (HTTPS or SSH). Explicit forms such as
+`issue://owner/repo/42` and `pr://owner/repo/42` work outside a checkout.
+Lemon prefers an installed, authenticated `gh` CLI; if unavailable or unsuccessful,
+it uses public GitHub REST without handling tokens itself. Issue/PR descriptions
+include the first 100 comments. `pr://42/diff` lists files with zero-based indexes,
+`pr://42/diff/0` shows one patch, and `pr://42/diff/all` shows all returned patches.
+Diff enumeration is capped at 1000 files; GitHub may omit large or binary patches.
+Views are capped at 50 KB and marked untrusted.
+
+`read history://<task_id>` shows the owned child's assignment, status, up to ten
+recent visible progress updates, and final visible answer retained by TaskStore.
+It is a concise transcript, not raw session events: hidden reasoning, tool-call
+internals and foreign tasks are excluded. History is capped at 12,000 Unicode
+characters and tagged untrusted. Expired TaskStore entries are unavailable.
+
 ## Read line selectors
 
 `read` pages text with `offset`/`limit`, or with a selector appended to `path`:
@@ -52,6 +68,27 @@ selectors (`:raw:50-80` or `:50-80:raw`) remain exact, without context, line
 numbers, or a snapshot header. Raw comma lists also stay exact and retain the
 `…` separators. `offset`/`limit`, open-ended and tail selectors do not add context.
 
+## Structural code summaries
+
+A bare `read` of a recognized source-code file with at least 300 lines and at
+most 2 MiB returns a structural outline. A conservative indentation/brace scanner
+keeps declarations, continued signatures, and top-level lines; strings and
+comments do not contribute brace depth. Function bodies are replaced by
+`… [lines a-b elided]` markers using original line numbers. This is an outline,
+not a parsed AST: re-read the marked source ranges before changing code.
+
+The header explicitly labels the view partial and immutable, with no snapshot
+tag. The footer gives concrete `path:a-b` examples for omitted ranges; an explicit
+numbered range read supplies the normal editable snapshot. `write` refuses both
+summary elision markers and the summary header/footer on existing targets.
+
+Any path selector (including `:raw`), explicit `offset`/`limit`, or
+`"summary": false` bypasses outlining. Tool hosts can set `structural_summary: false`
+option to disable it by default. Full-text reads still obey the usual 2000-line /
+50 KB budget. Non-code, smaller, and larger-than-2-MiB files retain normal read
+behavior; if there is nothing to elide, the normal view is returned. The outline
+also applies to authoritative ACP unsaved buffers, not their on-disk contents.
+
 ## Anchored edit recovery and formatting
 
 Session-scoped anchored edits can recover an older snapshot tag after unrelated
@@ -80,7 +117,7 @@ normalized matches are rejected. Unchanged context keeps its original text.
 ## Safe overwrites
 
 `write` refuses to overwrite an existing file with content containing a read
-continuation, long-line budget notice, or standalone `…` selector-elision marker.
+continuation, long-line budget notice, selector-elision marker, or structural summary.
 Re-read the omitted range or use `edit` instead. New files are not subject to this
 check. Existing UTF-8 BOMs and dominant
 CRLF line endings are preserved when incoming text omits them; explicitly supplied
