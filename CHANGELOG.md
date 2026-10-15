@@ -8,7 +8,11 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
-No unreleased changes yet.
+### Fixed
+
+- Resolve qualified model selectors against their own provider when a preset or
+  default provider was inherited, while preserving native colon IDs for explicit
+  provider/model pairs.
 
 ---
 
