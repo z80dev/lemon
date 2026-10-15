@@ -42,7 +42,10 @@ defmodule CodingAgent.Tools.ReadFormatText do
           shown = length(window.lines)
           next = offset + shown
           remaining = next <= total
-          reason = window.truncation || if(remaining, do: "limit", else: nil)
+
+          reason =
+            window.truncation ||
+              if(remaining and not Keyword.get(opts, :selector_window, false), do: "limit")
 
           truncation =
             if reason do
