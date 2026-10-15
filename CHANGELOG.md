@@ -8,7 +8,8 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
-No unreleased changes yet.
+- omp tool cards show parallel worker grids, combined usage and task errors,
+  approval waits, isolated worktrees, child activity, model prices and transcript tails.
 
 ---
 

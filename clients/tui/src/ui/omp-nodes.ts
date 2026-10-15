@@ -13,7 +13,7 @@ import { node, span, text } from "@oh-my-pi/pi-tui/native/describe";
 import type { NativeChild, NativeNode } from "@oh-my-pi/pi-tui/native/node";
 import { type TodoItem, type TodoStatus, todoChecklistPhases } from "@oh-my-pi/pi-tui/tools/todo";
 import { safeLine, safeText } from "../formatters/base.ts";
-import { ompSessionLabel, ompUsageText } from "../formatters/omp.ts";
+import { ompExtraLines, ompSessionLabel, ompUsageText } from "../formatters/omp.ts";
 import { isOmpSessionEnded, type OmpSession } from "../protocol/omp.ts";
 
 /** The `agent` node's props, via pi-tui's node type (pi-wire is not a direct dependency). */
@@ -86,6 +86,9 @@ export function ompAgentNode(session: OmpSession, options: OmpAgentNodeOptions):
 	if (session.declinedPrompts > 0) {
 		badges.push({ text: `${session.declinedPrompts} declined`, tone: "warning" });
 	}
+	for (const line of ompExtraLines(session)) {
+		if (line.startsWith("waiting for approval:")) badges.push({ text: line, tone: "warning" });
+	}
 	const props: AgentProps = {
 		name: ompSessionLabel(session, 80),
 		agent: "omp",
@@ -153,7 +156,12 @@ function textBlock(label: string, value: string, tone: string, key: string): Nat
 
 /** The detail body of one session: tools, todos, subagents, usage and its latest words. */
 export function ompDetailNodes(session: OmpSession): NativeNode[] {
-	const nodes: NativeNode[] = [];
+	const nodes: NativeNode[] = ompExtraLines(session).map((line, index) =>
+		text([span(line, line.startsWith("waiting for approval:") ? "warning" : "muted")], {
+			key: `extra:${index}`,
+			wrap: "word",
+		}),
+	);
 	const facts = [
 		session.cwd ? `cwd ${safeLine(session.cwd, 120)}` : undefined,
 		session.ompSessionId ? `omp ${safeLine(session.ompSessionId, 40)}` : undefined,
@@ -180,14 +188,17 @@ export function ompDetailNodes(session: OmpSession): NativeNode[] {
 	}
 	const checklist = ompTodoChecklist(session);
 	if (checklist) nodes.push(checklist);
-	for (const [index, agent] of session.subagents.entries()) {
+	for (const [index, agent] of session.subagents.slice(0, 8).entries()) {
+		const activity = (agent as typeof agent & { activity?: string | null }).activity;
 		nodes.push(
 			node(
 				"agent",
 				{
 					name: safeLine(agent.id ?? `subagent ${index + 1}`, 60),
 					...(agent.agent ? { agent: safeLine(agent.agent, 40) } : {}),
-					...(agent.description ? { task: safeLine(agent.description) } : {}),
+					...(activity || agent.description
+						? { task: safeLine(activity || agent.description || "") }
+						: {}),
 					status:
 						agent.status && Object.hasOwn(SUBAGENT_STATUS, agent.status)
 							? (SUBAGENT_STATUS[agent.status] ?? "idle")
