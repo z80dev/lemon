@@ -12,6 +12,15 @@ defmodule CodingAgent.SessionMemoryRecallTest do
   alias LemonAi.Types.UserMessage
 
   setup do
+    previous_feature = System.get_env("LEMON_FEATURE_SESSION_SEARCH")
+    System.put_env("LEMON_FEATURE_SESSION_SEARCH", "default-on")
+
+    on_exit(fn ->
+      if previous_feature,
+        do: System.put_env("LEMON_FEATURE_SESSION_SEARCH", previous_feature),
+        else: System.delete_env("LEMON_FEATURE_SESSION_SEARCH")
+    end)
+
     memory_store = Process.whereis(LemonMemory.Store)
     assert is_pid(memory_store), "durable memory store must be running"
 
