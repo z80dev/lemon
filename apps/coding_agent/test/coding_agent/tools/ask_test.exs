@@ -208,6 +208,59 @@ defmodule CodingAgent.Tools.AskTest do
     assert multi["selectedOptions"] == ["B"]
   end
 
+  test "native registry calls stay read-tier, serialize unanswered forms and reject invented answers" do
+    key = "native-ask-registry-#{System.unique_integer([:positive])}"
+    :ok = LemonCore.Bus.subscribe("user_prompts")
+    :ok = UserPrompt.bind(key, self())
+
+    {:ok, tool} =
+      CodingAgent.ToolRegistry.get_tool(File.cwd!(), "ask",
+        session_key: key,
+        settings_manager: %{tools: %{}},
+        include_extensions: false,
+        include_mcp: false,
+        enabled_only: ["ask"],
+        tool_policy: LemonCore.ToolPolicy.parse!(%{approval_mode: :ask}),
+        approval_request_fun: fn _ -> flunk("ask must not request execution approval") end
+      )
+
+    params = %{
+      "questions" => [
+        %{
+          "id" => "q",
+          "question" => "Choose",
+          "options" => [%{"label" => "A"}],
+          "recommended" => 0
+        }
+      ]
+    }
+
+    task = Task.async(fn -> tool.execute.("first", params, nil, nil) end)
+
+    assert_receive %LemonCore.Event{
+      type: :user_prompt_requested,
+      payload: %{"sessionKey" => ^key, "promptId" => id}
+    }
+
+    duplicate = tool.execute.("second", params, nil, nil)
+    assert duplicate.is_error
+    assert duplicate.details.error_type == "prompt_pending"
+
+    assert :ok =
+             UserPrompt.resolve(
+               id,
+               key,
+               nil,
+               %{"action" => "accept", "content" => %{"q0" => "invented"}},
+               self()
+             )
+
+    result = Task.await(task)
+    assert result.is_error
+    assert result.details.error_type == "invalid_client_response"
+    refute Map.has_key?(result.details, :results)
+  end
+
   test "decline, timeout, cancellation and surface disconnect fail closed" do
     for outcome <- [:decline, :timeout, :cancelled, :client_down] do
       key = "native-ask-#{outcome}-#{System.unique_integer([:positive])}"
