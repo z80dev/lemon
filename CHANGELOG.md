@@ -41,6 +41,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Added
 
+- Manage scheduled jobs with `lemon cron` and TUI `/cron`: inspect failures,
+  pause/resume, trigger manually, and remove with confirmation by ID or exact name.
+
 - Setup offers local inference servers and custom OpenAI-compatible endpoints,
   optional encrypted keys, and consent-based model discovery with manual fallback.
 

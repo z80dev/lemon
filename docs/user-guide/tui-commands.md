@@ -51,6 +51,12 @@ Regenerate from the repository root with `bun clients/tui/scripts/generate-comma
 | /reconnect | — | — | drop the control-plane socket and dial again |
 | /debug | — | [count] | show the last protocol frames |
 
+## cron
+
+| Command | Aliases | Arguments | Description |
+| --- | --- | --- | --- |
+| /cron | — | [list [--failing] [--json] &#124; pause&#124;resume&#124;run &lt;id&#124;name&gt; &#124; remove &lt;id&#124;name&gt;] | list, pause, resume, trigger, or remove scheduled jobs |
+
 ## diagnostics
 
 | Command | Aliases | Arguments | Description |
