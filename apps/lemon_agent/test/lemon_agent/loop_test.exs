@@ -318,7 +318,7 @@ defmodule LemonAgent.LoopTest do
       stream = Loop.agent_loop_continue(context, config, nil, nil)
 
       {:ok, messages} = EventStream.result(stream)
-      assert is_list(messages)
+      assert List.last(messages) == response
     end
   end
 
@@ -334,7 +334,8 @@ defmodule LemonAgent.LoopTest do
 
       events = Loop.stream_continue(context, config) |> Enum.to_list()
 
-      assert is_list(events)
+      assert {:message_end, response} in events
+      assert {:agent_end, [response]} in events
     end
   end
 

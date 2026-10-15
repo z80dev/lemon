@@ -603,7 +603,7 @@ defmodule LemonAgent.LoopAdditionalEdgeCasesTest do
                       %{duration: duration, system_time: _}, %{model: ^model_id} = end_metadata},
                      5_000
 
-      assert is_integer(duration) or is_nil(duration)
+      assert is_integer(duration) and duration >= 0
       assert end_metadata.status == :completed
     end
 

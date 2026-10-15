@@ -120,9 +120,7 @@ defmodule LemonAgent.ModuleTest do
       assert state.system_prompt == "Override"
     end
 
-    test "returns error tuple for invalid options" do
-      # This might not fail depending on implementation, but good to test
-      # that it doesn't crash
+    test "accepts a non-map initial_state" do
       {:ok, agent} = start_agent(initial_state: "invalid")
       assert is_pid(agent)
     end
@@ -133,14 +131,6 @@ defmodule LemonAgent.ModuleTest do
   # ============================================================================
 
   describe "start_link/1" do
-    test "is an alias for new_agent/1" do
-      {:ok, agent1} = LemonAgent.new_agent(model: Mocks.mock_model())
-      {:ok, agent2} = LemonAgent.start_link(model: Mocks.mock_model())
-
-      assert is_pid(agent1)
-      assert is_pid(agent2)
-    end
-
     test "accepts name option" do
       name = :"start_link_named_#{:rand.uniform(100_000)}"
 
@@ -1132,18 +1122,6 @@ defmodule LemonAgent.ModuleTest do
   # ============================================================================
 
   describe "type aliases" do
-    test "agent type is defined" do
-      # Can't directly test types, but we can verify the module compiles
-      # and the documented types work
-      {:ok, agent} = start_agent()
-      assert is_pid(agent)
-    end
-
-    test "context type works" do
-      context = LemonAgent.new_context(system_prompt: "Test")
-      assert %AgentContext{} = context
-    end
-
     test "tool type works" do
       execute_fn = fn _id, _params, _signal, _on_update ->
         %AgentToolResult{content: []}
