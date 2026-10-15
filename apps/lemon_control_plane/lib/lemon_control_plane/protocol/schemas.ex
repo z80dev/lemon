@@ -137,6 +137,9 @@ defmodule LemonControlPlane.Protocol.Schemas do
       required: %{"profileId" => :string, "url" => :string, "token" => :string},
       optional: %{}
     },
+    "learning.timeline" => %{
+      optional: %{"profileId" => :string, "kind" => :string, "limit" => :integer}
+    },
 
     # Profile-scoped memory (destination-local for named-node profiles)
     "memory.list" => %{
@@ -678,6 +681,14 @@ defmodule LemonControlPlane.Protocol.Schemas do
         "runId" => :string
       }
     },
+    "sessions.prompt.bind" => %{
+      required: %{"sessionKey" => :string},
+      optional: %{"enabled" => :boolean}
+    },
+    "sessions.prompt.resolve" => %{
+      required: %{"promptId" => :string, "sessionKey" => :string, "action" => :string},
+      optional: %{"runId" => :string, "content" => :map}
+    },
 
     # Execution/approval methods
     "exec.approvals.get" => %{
@@ -945,6 +956,14 @@ defmodule LemonControlPlane.Protocol.Schemas do
   }
 
   @event_schemas %{
+    "session.prompt.requested" => %{
+      required: %{"promptId" => :string, "sessionKey" => :string, "questions" => :list},
+      optional: %{"runId" => :string, "requestedAtMs" => :integer, "expiresAtMs" => :integer}
+    },
+    "session.prompt.resolved" => %{
+      required: %{"promptId" => :string, "sessionKey" => :string, "status" => :string},
+      optional: %{"runId" => :string}
+    },
     "exec.approval.requested" => %{
       required: %{
         "approvalId" => :string,

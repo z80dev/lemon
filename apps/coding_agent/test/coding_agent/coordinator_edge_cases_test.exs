@@ -445,7 +445,9 @@ defmodule CodingAgent.CoordinatorEdgeCasesTest do
       end
 
       assert Process.alive?(coordinator)
-      assert Coordinator.list_active(coordinator) == []
+
+      # A terminal batch may return while a late admission is still shutting down.
+      assert_eventually(fn -> Coordinator.list_active(coordinator) == [] end, 10_000)
     end
   end
 
@@ -484,10 +486,12 @@ defmodule CodingAgent.CoordinatorEdgeCasesTest do
       # Abort
       :ok = Coordinator.abort_all(coordinator)
 
-      # Verify state is clean
-      assert_eventually(fn ->
-        Coordinator.list_active(coordinator) == []
-      end)
+      # Active IDs remain visible until admission guardians and sessions exit.
+      assert_eventually(fn -> Coordinator.list_active(coordinator) == [] end, 10_000)
+
+      assert_receive {:results, results}, 10_000
+      assert length(results) == 2
+      assert Enum.all?(results, &(&1.status in [:aborted, :error]))
 
       # Can start new work
       specs = [%{prompt: "New task"}]

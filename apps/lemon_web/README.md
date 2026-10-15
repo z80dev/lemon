@@ -39,8 +39,8 @@ unauthenticated operator requests return 401.
 `GET /healthz` is the unauthenticated health endpoint. See the
 [browser user guide](../../docs/user-guide/web.md) for sign-in and page workflows.
 
-Learning uses the shared `LemonSkills.Timeline` lifecycle read model directly,
-like Memory uses its owning lifecycle service. It displays only bounded,
+Learning calls the authenticated `learning.timeline` control-plane method, which
+uses the same `LemonSkills.Timeline` read model as the CLI. It displays only bounded,
 redacted projections for the selected local profile; previews remain escaped
 untrusted text. It has no separate store or mutation implementation.
 

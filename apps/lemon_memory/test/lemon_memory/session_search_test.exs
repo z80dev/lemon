@@ -302,6 +302,8 @@ defmodule LemonMemory.SessionSearchTest do
     test "renders numbered entries in order with timestamp, session and summaries" do
       docs = [
         doc(
+          doc_id: "mem_format_main",
+          run_id: "run_format_main",
           session_key: "agent:fmt:main",
           # 2023-11-14 22:13 UTC
           ingested_at_ms: 1_700_000_000_000,
@@ -310,6 +312,8 @@ defmodule LemonMemory.SessionSearchTest do
         ),
         doc(
           session_key: "agent:fmt:side",
+          doc_id: "mem_format_side",
+          run_id: "run_format_side",
           ingested_at_ms: 1_700_000_060_000,
           prompt_summary: "deploy the api",
           answer_summary: "deployed"
@@ -318,11 +322,11 @@ defmodule LemonMemory.SessionSearchTest do
 
       assert SessionSearch.format_results(docs) ==
                """
-               [1] 2023-11-14 22:13 UTC | session: agent:fmt:main
+               [1] 2023-11-14 22:13 UTC | session: agent:fmt:main | doc: mem_format_main | run: run_format_main
                Q: fix the login bug
                A: swapped the token check
 
-               [2] 2023-11-14 22:14 UTC | session: agent:fmt:side
+               [2] 2023-11-14 22:14 UTC | session: agent:fmt:side | doc: mem_format_side | run: run_format_side
                Q: deploy the api
                A: deployed
                """
