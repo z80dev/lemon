@@ -23,6 +23,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Added
 
+- Add offline `lemon usage` date ranges and day/provider/model/session reports,
+  plus TUI `/cost --by` breakdowns with explicit completeness and session omissions.
+
 - Add read-only `lemon runs`, `lemon runs active`, `lemon cron runs`, and
   `lemon logs` for headless operators, with bounded redacted offline launcher
   logs and interruptible two-second follow polling.

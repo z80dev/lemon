@@ -365,6 +365,50 @@ describe("diagnostics", () => {
 		expect(harness.host.text).toContain("unrecognized range");
 	});
 
+	for (const [by, section, identity] of [
+		["day", "dailyUsage", { date: "2026-10-01" }],
+		["provider", "providers", { provider: "openai" }],
+		["model", "models", { provider: "openai", model: "gpt-test" }],
+		["session", "sessions", { sessionKey: "agent:test:one" }],
+	] as const) {
+		test(`/cost 7d --by ${by} renders the selected breakdown and omissions`, async () => {
+			harness.server.respondWith("usage.cost", {
+				incomplete: true,
+				sessionsOmitted: 9,
+				totalCost: 0,
+				[section]: [{ ...identity, cost: 0, requests: 2, inputTokens: 30, outputTokens: 4 }],
+			});
+			await harness.run(`/cost 7d --by ${by}`);
+			expect(harness.server.requestsFor("usage.cost")[0].params).toMatchObject({ groupBy: by });
+			expect(harness.host.text).toContain(Object.values(identity).at(-1)!);
+			expect(harness.host.text).toContain("30 in");
+			expect(harness.host.text).toContain("4 out");
+			expect(harness.host.text).toContain("incomplete: true");
+			expect(harness.host.text).toContain("sessions omitted: 9");
+			expect(harness.host.text).toContain("unknown pricing");
+		});
+	}
+
+	test("/cost refuses invalid grouping and extra arguments without RPC", async () => {
+		for (const args of ["--by", "--by invalid", "7d extra", "--wat"]) {
+			await harness.run(`/cost ${args}`);
+		}
+		expect(harness.server.requestsFor("usage.cost")).toHaveLength(0);
+	});
+
+	test("/cost complete reports do not label known zero prices as unknown", async () => {
+		harness.server.respondWith("usage.cost", {
+			incomplete: false,
+			sessionsOmitted: 0,
+			totalCost: 0,
+			dailyUsage: [],
+		});
+		await harness.run("/cost --by day");
+		expect(harness.host.text).toContain("incomplete: false");
+		expect(harness.host.text).toContain("none");
+		expect(harness.host.text).not.toContain("unknown pricing");
+	});
+
 	test("/logs tails with a limit and a level", async () => {
 		harness.server.respondWith("logs.tail", {
 			logs: [{ level: "error", message: "boom", timestampMs: 1_700_000_000_000 }],

@@ -226,6 +226,38 @@ error JSON is supported by the profile, session, blueprint, provider, learning,
 and secret-source command families; other commands report errors as text on
 stderr. Invalid arguments remain human-readable usage errors.
 
+### Usage and cost reports
+
+`lemon usage` reads the local usage store directly and starts only `lemon_core`,
+not the runtime, router, or control plane. With no range or grouping options it
+keeps the current diagnostics (today, summary, quotas, and providers).
+
+```bash
+lemon usage --days 7 --by model
+lemon usage --since 2026-10-01 --until 2026-10-07 --by session
+lemon usage --days 7 --by day --json
+```
+
+`--days N` includes today and the preceding N−1 UTC dates (1–366, default 1).
+`--since` and `--until` are inclusive UTC dates; omitted `--until` is today,
+and an omitted `--since` is the end date. Do not combine `--days` with date
+boundaries. `--by day|provider|model|session` defaults to provider.
+Range/group JSON is the same bounded projection used by `usage.cost`; default
+diagnostics JSON retains its fields and adds `report` with that projection.
+
+In the TUI, `/cost 7d --by day` renders daily rows; `/cost month --by model`
+and `/cost --by session` show the other breakdowns. Existing `today`, `week`,
+`month`, and `Nd` ranges remain supported. The TUI requires a running runtime.
+
+Reports always show `incomplete` and omitted-session counts. Costs are known-cost
+subtotals: when pricing is unknown or historical costs lack attribution, a zero
+subtotal does **not** mean free execution. The wire projection cannot attribute
+unknown pricing to individual breakdown rows, so incomplete reports label all
+rows conservatively. Models are capped at 50 and sessions at the top 20 by cost;
+session omissions also include the daily ledger's bounded-session omissions.
+These summaries are for diagnostics, not exhaustive spend accounting.
+
+
 ## Setup
 
 `lemon setup` prepares configuration and encrypted secrets, onboards a default

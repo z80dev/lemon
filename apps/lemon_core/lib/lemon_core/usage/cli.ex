@@ -9,27 +9,122 @@ defmodule LemonCore.Usage.CLI do
 
   ## Options
 
-    * `--json` - Emit the raw redacted usage diagnostics JSON.
+    * `--days N` - Report the last N UTC dates, including today (1–366).
+    * `--since/--until YYYY-MM-DD` - Inclusive UTC date boundaries.
+    * `--by day|provider|model|session` - Breakdown (default provider).
+    * `--json` - Emit redacted JSON, including completeness and omissions.
   """
 
   alias LemonCore.UsageDiagnostics
 
   def run(args) do
-    {opts, rest, invalid} = OptionParser.parse(args, strict: [json: :boolean])
-
-    if invalid != [] or rest != [] do
-      LemonCore.CLI.fail!("Invalid arguments. Run `lemon usage --help`.", 2)
-    end
+    {opts, params} = parse_args!(args)
 
     LemonCore.CLI.start!(:lemon_core)
 
-    status = UsageDiagnostics.status()
+    report =
+      case LemonCore.UsageReport.query(params) do
+        {:ok, report} -> report
+        {:error, _} -> LemonCore.CLI.fail!("Usage ledger unavailable", 1)
+      end
 
-    if opts[:json] do
-      LemonCore.CLI.info(Jason.encode!(status, pretty: true))
+    if Enum.any?([:days, :since, :until, :by], &Keyword.has_key?(opts, &1)) do
+      if opts[:json],
+        do: LemonCore.CLI.info(Jason.encode!(report, pretty: true)),
+        else: print_report(report, opts[:by] || "provider")
     else
-      print_text(status)
+      status = Map.put(UsageDiagnostics.status(), :report, report)
+
+      if opts[:json] do
+        LemonCore.CLI.info(Jason.encode!(status, pretty: true))
+      else
+        print_text(status)
+        print_completeness(report)
+      end
     end
+  end
+
+  @doc false
+  def parse_args!(args) do
+    {opts, rest, invalid} =
+      OptionParser.parse(args,
+        strict: [json: :boolean, days: :integer, since: :string, until: :string, by: :string]
+      )
+
+    days = opts[:days] || 1
+    by = opts[:by] || "provider"
+
+    if invalid != [] or rest != [] or days < 1 or days > 366 or
+         by not in ["day", "provider", "model", "session"] or
+         (Keyword.has_key?(opts, :days) and
+            (Keyword.has_key?(opts, :since) or Keyword.has_key?(opts, :until))) do
+      LemonCore.CLI.fail!("Invalid arguments. Run `lemon usage --help`.", 2)
+    end
+
+    until = parse_date!(opts[:until], Date.utc_today())
+    since = parse_date!(opts[:since], Date.add(until, 1 - days))
+
+    if Date.compare(since, until) == :gt or Date.diff(until, since) >= 366 do
+      LemonCore.CLI.fail!("Usage range must contain 1–366 days in chronological order.", 2)
+    end
+
+    {opts,
+     %{
+       "startDate" => Date.to_iso8601(since),
+       "endDate" => Date.to_iso8601(until),
+       "groupBy" => by
+     }}
+  end
+
+  defp parse_date!(nil, default), do: default
+
+  defp parse_date!(value, _default) do
+    case Date.from_iso8601(value) do
+      {:ok, date} -> date
+      _ -> LemonCore.CLI.fail!("Expected a date in YYYY-MM-DD format.", 2)
+    end
+  end
+
+  defp print_report(report, by) do
+    LemonCore.CLI.info("Lemon Usage")
+    LemonCore.CLI.info("Period: #{report["startDate"]} → #{report["endDate"]}")
+    LemonCore.CLI.info("Requests: #{report["totalRequests"]}")
+    LemonCore.CLI.info("Known cost subtotal: #{format_money(report["totalCost"])} USD")
+    print_completeness(report)
+
+    {key, label} =
+      case by do
+        "day" -> {"dailyUsage", "date"}
+        "provider" -> {"providers", "provider"}
+        "model" -> {"models", "model"}
+        "session" -> {"sessions", "sessionKey"}
+      end
+
+    LemonCore.CLI.info("#{by}:")
+
+    Enum.each(report[key], fn row ->
+      name = if by == "model", do: "#{row["provider"]}:#{row[label]}", else: row[label]
+
+      cost =
+        if report["incomplete"],
+          do: "known subtotal #{format_money(row["cost"])} (unknown pricing may be present)",
+          else: format_money(row["cost"])
+
+      LemonCore.CLI.info(
+        "  #{name}: requests=#{row["requests"]} cost=#{cost} input_tokens=#{row["inputTokens"]} output_tokens=#{row["outputTokens"]}"
+      )
+    end)
+  end
+
+  defp print_completeness(report) do
+    LemonCore.CLI.info("Incomplete: #{report["incomplete"]}")
+    LemonCore.CLI.info("Sessions omitted: #{report["sessionsOmitted"]}")
+
+    if report["incomplete"],
+      do:
+        LemonCore.CLI.info(
+          "Unknown pricing or unattributed historical costs: totals are known-cost subtotals, not free execution."
+        )
   end
 
   defp print_text(status) do
