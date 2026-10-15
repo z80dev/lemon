@@ -11,6 +11,10 @@
 - Local Go diagnostics run `go vet ./...` rather than executing tests. External
   diagnostic checker deadlines now terminate the OS process tree on timeout.
 
+- Debug adds js-debug, CodeLLDB, netcoredbg and Ruby rdbg adapters, loopback
+  listening-adapter transport, capability-gated log points, data/instruction
+  breakpoints, memory reads and disassembly (128 KiB cap). Timeouts clamp to 5..300s.
+
 - Bare reads of source files with at least 300 lines and at most 2 MiB now return
   bounded structural summaries with declarations and explicit omitted ranges.
   Summaries are immutable, omit edit snapshots, and are rejected by overwrite

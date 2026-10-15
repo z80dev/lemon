@@ -23,6 +23,17 @@ defmodule CodingAgent.Tools.DebugTest do
         file_types: [".fake"],
         launch_defaults: %{"stopOnEntry" => true}
       },
+      "no-capabilities" => %{
+        command: @python || "python3",
+        args: [@fake_adapter, log, "--no-capabilities"],
+        launch_defaults: %{"stopOnEntry" => true}
+      },
+      "socket-fake" => %{
+        command: @python || "python3",
+        args: [@fake_adapter, log, "--listen", "{port}"],
+        connect_mode: :socket_server,
+        launch_defaults: %{"stopOnEntry" => true}
+      },
       "absent" => %{command: "/nonexistent/absent-dap", install_hint: "install absent-dap"}
     }
 
@@ -47,7 +58,7 @@ defmodule CodingAgent.Tools.DebugTest do
     end)
 
     {:ok, tool} = ToolRegistry.get_tool(tmp_dir, "debug", opts)
-    %{tool: tool, cwd: tmp_dir}
+    %{tool: tool, cwd: tmp_dir, log: log, session_id: session_id}
   end
 
   defp run(tool, params), do: tool.execute.("call", params, nil, nil)
@@ -83,6 +94,124 @@ defmodule CodingAgent.Tools.DebugTest do
 
     assert {:error, "unknown debug adapter 'zzz'" <> _} =
              run(tool, %{"action" => "launch", "program" => "prog.fake", "adapter" => "zzz"})
+  end
+
+  test "advanced requests forward DAP fields, clamp reads and reject oversized responses", %{
+    tool: tool,
+    log: log
+  } do
+    assert %AgentToolResult{is_error: false} =
+             run(tool, %{
+               "action" => "launch",
+               "program" => "prog.fake",
+               "adapter" => "socket-fake"
+             })
+
+    assert %AgentToolResult{is_error: false} =
+             run(tool, %{
+               "action" => "set_breakpoint",
+               "file" => "main.c",
+               "line" => 2,
+               "log_message" => "value={value}"
+             })
+
+    requests = File.read!(log) |> String.split("\n", trim: true) |> Enum.map(&Jason.decode!/1)
+    breakpoint = Enum.find(requests, &(&1["request"] == "setBreakpoints"))
+    assert hd(breakpoint["arguments"]["breakpoints"])["logMessage"] == "value={value}"
+
+    info =
+      run(tool, %{
+        "action" => "data_breakpoint_info",
+        "arguments" => %{"name" => "value", "variablesReference" => 1}
+      })
+
+    assert info.details.body["dataId"] == "data-1"
+
+    data =
+      run(tool, %{
+        "action" => "set_data_breakpoints",
+        "arguments" => %{"breakpoints" => [%{"dataId" => "data-1", "accessType" => "write"}]}
+      })
+
+    assert hd(data.details.body["breakpoints"])["verified"]
+
+    instruction =
+      run(tool, %{
+        "action" => "set_instruction_breakpoints",
+        "arguments" => %{"breakpoints" => [%{"instructionReference" => "0x10"}]}
+      })
+
+    assert hd(instruction.details.body["breakpoints"])["verified"]
+
+    memory =
+      run(tool, %{
+        "action" => "read_memory",
+        "arguments" => %{"memoryReference" => "0x10", "count" => 999_999}
+      })
+
+    assert memory.details.body["data"] == "AQID"
+    assert memory.details.body["requestedCount"] == 128 * 1024
+
+    disassembly =
+      run(tool, %{
+        "action" => "disassemble",
+        "arguments" => %{"memoryReference" => "0x10", "instructionCount" => 999_999}
+      })
+
+    assert hd(disassembly.details.body["instructions"])["instruction"] == "nop"
+    assert disassembly.details.body["requestedCount"] == 128 * 1024
+
+    assert {:error, message} =
+             run(tool, %{
+               "action" => "disassemble",
+               "arguments" => %{"memoryReference" => "oversized", "instructionCount" => 1}
+             })
+
+    assert message =~ "128 KB limit"
+  end
+
+  test "advanced operations require advertised capabilities", %{tool: tool, log: log} do
+    run(tool, %{"action" => "launch", "program" => "prog.fake", "adapter" => "no-capabilities"})
+
+    for action <- [
+          "data_breakpoint_info",
+          "set_data_breakpoints",
+          "set_instruction_breakpoints",
+          "read_memory",
+          "disassemble"
+        ] do
+      assert {:error, message} = run(tool, %{"action" => action, "arguments" => %{}})
+      assert message =~ "does not advertise"
+    end
+
+    assert {:error, message} =
+             run(tool, %{
+               "action" => "set_breakpoint",
+               "file" => "main.c",
+               "line" => 2,
+               "log_message" => "hello"
+             })
+
+    assert message =~ "supportsLogPoints"
+    refute File.read!(log) =~ "readMemory"
+    refute File.read!(log) =~ "setBreakpoints"
+  end
+
+  test "tool deadlines clamp to five through three hundred seconds", %{
+    tool: tool,
+    session_id: key
+  } do
+    run(tool, %{"action" => "set_breakpoint", "file" => "main.c", "line" => 2})
+    server = SessionServer.whereis(key)
+    :erlang.trace(server, true, [:receive])
+    on_exit(fn -> if Process.alive?(server), do: :erlang.trace(server, false, [:receive]) end)
+
+    for {input, expected} <- [{-1, 5_000}, {1_000, 300_000}] do
+      run(tool, %{"action" => "status", "timeout" => input})
+
+      assert_receive {:trace, ^server, :receive,
+                      {:"$gen_call", _, {:op, %{action: "status"}, %{timeout_ms: ^expected}}}}
+    end
   end
 
   test "status without a session is not an error", %{tool: tool} do

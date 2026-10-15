@@ -17,10 +17,15 @@ language:
 | `gdb` | Native binaries, C/C++, Rust | `gdb -i dap` | GDB 14 or newer |
 | `debugpy` | `.py` scripts | `python3 -m debugpy.adapter` | `pip install debugpy` |
 | `dlv` | `.go` files, Go package directories, Go binaries | `dlv dap --client-addr=…` (Delve dials back over loopback TCP) | `go install github.com/go-delve/delve/cmd/dlv@latest` |
+| `js-debug` | JavaScript/TypeScript | `js-debug-adapter <port> 127.0.0.1` (loopback TCP) | Standalone vscode-js-debug adapter |
+| `codelldb` | C/C++, Rust, Zig | `codelldb --port <port>` (loopback TCP) | Standalone CodeLLDB adapter |
+| `netcoredbg` | C#/F# | `netcoredbg --interpreter=vscode` | Samsung netcoredbg |
+| `rdbg` | Ruby | `rdbg --open --host 127.0.0.1 --port <port> --command -- ruby <program> …` | `gem install debug` |
 
 A missing adapter produces an error with the install hint above.
-JavaScript/TypeScript (`vscode-js-debug`) is not supported: it requires child
-debug sessions (`startDebugging`), which Lemon does not implement.
+JavaScript sessions that request child debug sessions (`startDebugging`) remain
+unsupported and return a clear reverse-request error; single-session DAP requests
+and explicit remote DAP attachment use the normal transport.
 
 ## Adapter selection
 
@@ -53,10 +58,22 @@ compiled binaries (`mode=exec`).
 | `status` / `sessions` | — | Current session, stop location and breakpoints |
 | `terminate` | — | Ends the debug session and kills the debuggee |
 | `custom_request` | `command`, `arguments` (object) | Sends any DAP request and returns its raw body |
+| `data_breakpoint_info` | `arguments`: DAP `name`, `variablesReference` / `frameId` | `dataBreakpointInfo` response including `dataId` |
+| `set_data_breakpoints` | `arguments.breakpoints`: DAP data-breakpoint list (`dataId`, `accessType`, optional conditions) | Replaces data breakpoints; empty list clears them |
+| `set_instruction_breakpoints` | `arguments.breakpoints`: DAP instruction-breakpoint list | Replaces instruction breakpoints |
+| `read_memory` | `arguments`: `memoryReference`, positive `count`, optional `offset` | DAP `readMemory` body with base64 data |
+| `disassemble` | `arguments`: `memoryReference`, positive `instructionCount`, optional offsets | DAP instructions |
 
-Every action accepts `timeout` in seconds (default 30, max 600). Execution
+Every action accepts `timeout` in seconds (default 30, clamped to 5..300). Execution
 actions that do not stop within the timeout return "still running" rather than
 an error; use `pause` to interrupt.
+
+Source breakpoints accept `log_message` (DAP `logMessage`) instead of stopping.
+Log points and advanced breakpoint/memory/disassembly actions require the matching
+advertised adapter capability; unsupported operations fail without sending a request.
+Advanced DAP arguments and responses are limited to 128 KiB; read counts are
+clamped to 131,072, and oversized responses return a clear error rather than a
+partial JSON body. `custom_request` remains the explicit unrestricted DAP escape hatch.
 
 ## Example
 
