@@ -8,7 +8,11 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
-No unreleased changes yet.
+### Changed
+
+- Add short, availability-gated system prompt guidance for questions, conversation
+  and filesystem checkpoints, structural code rewrites, language servers, debugging
+  and external agent delegation, with stable ordering for prompt caching.
 
 ---
 
