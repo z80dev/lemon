@@ -53,6 +53,21 @@ before execution, and `yolo` auto-approves ordinary tool calls. Omitting it
 leaves omp's own configured mode unchanged. Explicit omp tool policies still
 apply. Lemon passes an explicit mode as `--approval-mode <mode>`.
 
+## Choosing a model
+
+Ask Lemon to list omp models (`{"action":"models","free_only":true}`), then
+pass a returned `selector` as `model` on `start` or a `start_many` task.
+For simple mechanical work, prefer cheap/free models unless you specified one.
+Operators using Elixir can call `LemonOmp.models(free_only: true, limit: 30)`.
+The catalog supports case-insensitive `query` (selector/name), `provider`,
+`free_only`, and `limit` (default 30, maximum 200), sorted cheapest first.
+It runs `omp models --json` with a 20-second timeout and caches results for ten
+minutes per executable/mtime. Displayed costs are per million tokens.
+
+Prices are omp's catalog data, not a guarantee: OpenRouter `:free` routes can
+be withdrawn upstream; several have returned 404 “unavailable for free”.
+Be ready to select a fallback. Listing models does not make a model call.
+
 ## Parallel workers
 
 Ask Lemon to split independent work across several omp workers. The `omp`
@@ -159,13 +174,14 @@ another omp).
   conversation's Lemon approval prompts and channel buttons (Telegram/Discord),
   including native coding-session approval UI when the session identity is
   available. Operators can resolve them with `exec.approval.resolve` using the
-  approval id in the snapshot's `pendingApprovals`. The session stays responsive
-  while it waits. Approve/deny decisions return to omp; expiry cancels the
-  prompt. Cancelling an omp dialog or closing/exiting its session removes the
-  corresponding Lemon approval too. `LEMON_OMP_APPROVALS=decline` restores
-  headless cancellation of tool approvals. Other blocking dialogs (confirm,
-  input, editor, unrelated selects) are still declined and counted in
-  `declinedPrompts`.
+  approval id in the snapshot's `pendingApprovals`. Session-scoped grants for
+  operator sessions apply only to that omp session, never another invocation.
+  The session stays responsive while it waits. Approve/deny decisions return to
+  omp; expiry cancels the prompt. Cancelling an omp dialog or closing/exiting its
+  session removes the corresponding Lemon approval too.
+  `LEMON_OMP_APPROVALS=decline` restores headless cancellation of tool approvals.
+  Other blocking dialogs (confirm, input, editor, unrelated selects) are still
+  declined and counted in `declinedPrompts`.
 - **Control fails closed.** Steering, follow-ups and cancellation go to one
   process invocation and are acknowledged only after omp accepts them. A
   closed or crashed session refuses them; resume it to continue (resuming is a

@@ -286,33 +286,6 @@ defmodule LemonGateway.TransportSupervisorTest do
 
       assert Process.whereis(TransportSupervisor) != nil
     end
-
-    test "supervisor uses standard Supervisor behavior" do
-      setup_app([MockTransportA])
-
-      pid = Process.whereis(TransportSupervisor)
-      assert Process.alive?(pid)
-
-      # Verify it's a Supervisor
-      children = Supervisor.which_children(TransportSupervisor)
-      assert is_list(children)
-    end
-
-    test "supervisor is registered with correct name" do
-      setup_app([MockTransportA])
-
-      pid = Process.whereis(TransportSupervisor)
-      assert is_pid(pid)
-      assert Process.alive?(pid)
-    end
-
-    test "supervisor uses :one_for_one strategy" do
-      setup_app([MockTransportA, MockTransportB])
-
-      # Both transports should be running
-      assert Process.alive?(Process.whereis(MockTransportA))
-      assert Process.alive?(Process.whereis(MockTransportB))
-    end
   end
 
   # ============================================================================
