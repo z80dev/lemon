@@ -103,7 +103,7 @@ provider setup, use explicit values:
 ```bash
 lemon setup --non-interactive
 lemon model --provider anthropic --token "$ANTHROPIC_API_KEY" \
-  --model anthropic:claude-sonnet-4-20250514 --set-default
+  --model claude-sonnet-4-20250514 --set-default
 lemon doctor
 ```
 
@@ -113,7 +113,7 @@ use the corresponding provider setup command instead:
 
 ```bash
 lemon setup provider --provider anthropic --token "$ANTHROPIC_API_KEY" \
-  --model anthropic:claude-sonnet-4-20250514 --set-default
+  --model claude-sonnet-4-20250514 --set-default
 ```
 
 Append `--skip-verify` to that command to defer only the live check.
@@ -244,7 +244,7 @@ For non-interactive source configuration, use the same wrapper forms:
 ```bash
 ./bin/lemon setup --non-interactive
 ./bin/lemon model --provider anthropic --token "$ANTHROPIC_API_KEY" \
-  --model anthropic:claude-sonnet-4-20250514 --set-default
+  --model claude-sonnet-4-20250514 --set-default
 ```
 
 `./bin/lemon-tui` is the source-development TUI entry point once the source

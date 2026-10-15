@@ -24,6 +24,8 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 - New memory backdoor/exfiltration screening no longer invalidates retained facts
   or prevents editing/deleting them; new text and patched results remain screened.
+- Correct stale install, quickstart, browser authentication/routes, and TUI
+  instructions, provider-model examples, and documentation navigation.
 - Durable preference/project memory supports exact-first unique-substring
   patch/delete and rejects persistent backdoor/exfiltration instructions.
 - Honcho tool schemas now register only when the integration is configured and

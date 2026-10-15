@@ -102,8 +102,8 @@ on another machine with that machine's own workspace and credentials.
 | Browser | `lemon web` | Diffs, tool cards, automation boards, usage, ⌘K palette, phone layout |
 | Scripts & CI | `lemon -p "…" --output json` | One-shot runs that return machine-readable results and exit nonzero on failure |
 | Tern | `lemon` in a pane, or `lemon tern install` | Native Tern surfaces and ACP chat |
-| Telegram | `lemon setup`, then message the bot | `/new`, `/resume`, `/model`, `/steer`, `/cancel`, `/file`, approval buttons |
-| Discord | `lemon setup`, then mention the bot | Mention-triggered runs, threads, file delivery |
+| Telegram | `lemon gateway setup telegram`, then message the bot | `/new`, `/resume`, `/model`, `/steer`, `/cancel`, `/file`, approval buttons |
+| Discord | `lemon gateway setup discord`, then mention the bot | Mention-triggered runs, threads, file delivery |
 
 Sessions persist across every surface. One run can start from Telegram and you
 can review it later in the web UI.
@@ -174,7 +174,7 @@ local-only: your configured providers receive the data their requests need.
 lemon                 # TUI in the current directory (starts or reuses the daemon)
 lemon -p "…"          # one-shot run; add --output json|stream-json
 lemon web             # browser workspace
-lemon setup           # providers, channels, defaults (safe to re-run)
+lemon setup           # providers and defaults (safe to re-run)
 lemon model           # switch provider or model
 lemon doctor          # diagnose config, credentials, and runtime health
 lemon sessions        # list and manage stored sessions
