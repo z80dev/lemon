@@ -227,6 +227,7 @@ defmodule CodingAgent.Executor.SessionRunner do
         profile_instructions: get_in(meta, [:profile_instructions]),
         stream_fn: stream_fn,
         tool_policy: tool_policy,
+        channel_identity: LemonCore.MapHelpers.get_key(meta, :channel_identity),
         invocation_context_key: LemonCore.MapHelpers.get_key(meta, :invocation_context_key),
         memory_context_key: LemonCore.MapHelpers.get_key(meta, :memory_context_key),
         memory_context_verified:

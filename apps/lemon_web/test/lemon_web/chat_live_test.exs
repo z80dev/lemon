@@ -63,6 +63,56 @@ defmodule LemonWeb.ChatLiveTest do
 
   defp default_stub(_method, _params), do: :passthrough
 
+  test "model and compaction failures show next steps without raw terms" do
+    socket = %Phoenix.LiveView.Socket{assigns: %{__changed__: %{}, compacting: true}}
+
+    for result <- [
+          {:ok, {:error, {:unavailable, "PRIVATE_FAILURE", nil}}},
+          {:exit, :PRIVATE_FAILURE}
+        ] do
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert {:noreply, models} = LemonWeb.Chat.PaneLive.handle_async(:models, result, socket)
+
+          assert models.assigns.models ==
+                   {:error, "Models are unavailable. Try again, or check /diagnostics."}
+
+          assert {:noreply, compact} =
+                   LemonWeb.Chat.PaneLive.handle_async(:compact, result, socket)
+
+          refute compact.assigns.compacting
+
+          assert compact.assigns.toast.text ==
+                   "Compaction did not complete. Try again, or check /diagnostics."
+        end)
+
+      assert log =~ "PRIVATE_FAILURE"
+    end
+  end
+
+  test "a refused first submission shows diagnostics rather than the service error", %{
+    conn: conn,
+    stub: stub
+  } do
+    stub.("chat.send", {:error, {:unavailable, "PRIVATE_FAILURE", nil}})
+    {_view, pane} = open(conn, key("submit-error"))
+
+    log =
+      ExUnit.CaptureLog.capture_log(fn ->
+        render_submit(pane, "send", %{"chat" => %{"prompt" => "hello", "mode" => "collect"}})
+      end)
+
+    assert log =~ "PRIVATE_FAILURE"
+
+    assert has_element?(
+             pane,
+             "[id^=submit-error-]",
+             "Lemon could not start that run. Check /diagnostics and try again."
+           )
+
+    refute render(pane) =~ "PRIVATE_FAILURE"
+  end
+
   # ── Mounting, routes and validation ─────────────────────────────────────
 
   test "home renders the new-session form, and starting a session sends chat.send then opens it",

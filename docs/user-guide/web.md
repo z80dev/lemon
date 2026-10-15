@@ -183,6 +183,8 @@ activation requires retyping the fresh digest.
   readiness, the same read-only checks as `lemon doctor`, and the last 200 log
   lines with secrets and paths hidden. Use `lemon doctor --bundle` for a
   support bundle.
+  Chat model-list and compaction failures suggest retrying or checking this page;
+  service error details stay out of the chat message.
 - **Settings** (`/settings`): theme, notifications, default model and thinking
   level for new sessions (written to `[defaults]` in `config.toml`), the
   shortcut reference and the operator section. Theme and notification choices

@@ -83,6 +83,28 @@ defmodule LemonRouter.ChannelIngressPolicyTest do
     refute execution.cwd == System.user_home()
   end
 
+  test "transport sender identity overrides caller metadata and reaches run memory" do
+    command =
+      build_submission(
+        peer_kind: :dm,
+        peer_id: "4244",
+        sender: %{id: "99", bot: true},
+        meta: %{channel_identity: %{channel_id: "forged", sender_id: "another", is_bot: false}}
+      )
+
+    identity = %{channel_id: "telegram", sender_id: "99", is_bot: true}
+    assert command.meta.channel_identity == identity
+
+    doc =
+      LemonMemory.Document.from_run(command.run_id, %{}, %{
+        session_key: command.session_key,
+        agent_id: command.meta.agent_id,
+        meta: command.meta
+      })
+
+    assert doc.meta.channel_identity == identity
+  end
+
   defp build_submission(opts) do
     msg = %InboundMessage{
       channel_id: "telegram",
@@ -92,7 +114,7 @@ defmodule LemonRouter.ChannelIngressPolicyTest do
         thread_id: nil
       },
       account_id: "default",
-      sender: %{id: "99"},
+      sender: Keyword.get(opts, :sender, %{id: "99"}),
       message: %{id: "1", text: "please edit the file", timestamp: nil, reply_to_id: nil},
       raw: %{},
       meta: Map.merge(%{agent_id: "default"}, Keyword.get(opts, :meta, %{}))

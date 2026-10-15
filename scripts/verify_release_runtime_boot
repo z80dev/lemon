@@ -302,17 +302,16 @@ if missing:
 PY
 }
 
+CLEANUP_RELEASE=""
+CLEANUP_ENV=()
+
 cleanup_work_dir() {
   local work_dir="$1"
-  local bin
-
-  # Stop through each profile executable, never the launcher: the launcher
-  # resolves the caller's real ~/.lemon/run state during cleanup.
-  for bin in "$work_dir"/*/extract/bin/*; do
-    if [ -x "$bin" ] && [ "$(basename "$bin")" != "lemon" ]; then
-      "$bin" stop >/dev/null 2>&1 || true
-    fi
-  done
+  # Cleanup must use the same isolated HOME, node and cookie as the boot.
+  # A bare release stop could address an unrelated installed runtime instead.
+  if [[ "$CLEANUP_RELEASE" == "$work_dir"/*/extract/bin/* ]] && [ -x "$CLEANUP_RELEASE" ]; then
+    env "${CLEANUP_ENV[@]}" "$CLEANUP_RELEASE" stop >/dev/null 2>&1 || true
+  fi
 
   rm -rf "$work_dir"
 }
@@ -545,6 +544,7 @@ boot_one_profile() {
     "LEMON_GATEWAY_HEALTH_PORT=0"
     "RELEASE_NODE=lemon_release_boot_$control_port"
     "RELEASE_DISTRIBUTION=sname"
+    "RELEASE_COOKIE=runtime-boot-cookie-$profile"
     "LEMON_WEB_SECRET_KEY_BASE=runtime_boot_secret_key_base_runtime_boot_secret_key_base_runtime_boot"
     "LEMON_GATEWAY_NODE_COOKIE=runtime-boot-cookie-$profile"
     "PHX_SERVER=true"
@@ -558,6 +558,8 @@ boot_one_profile() {
       "LEMON_ARENA_LEAGUE_ROOT=$profile_dir/leagues"
     )
   fi
+  CLEANUP_RELEASE="$release_bin"
+  CLEANUP_ENV=("${env_vars[@]}")
 
   run_with_env() {
     (

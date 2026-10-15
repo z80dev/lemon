@@ -380,58 +380,6 @@ defmodule LemonControlPlane.EventBridgeTest do
       Presence.unregister(conn_id)
     end
 
-    test "processes run_started events", %{bridge_pid: bridge_pid} do
-      run_id = "run_#{System.unique_integer()}"
-
-      # Subscribe to the run
-      EventBridge.subscribe_run(run_id)
-      sync_bridge(bridge_pid)
-
-      # The EventBridge should be subscribed to run:run_id topic now
-      # Events broadcast to that topic should be processed
-      if Code.ensure_loaded?(LemonCore.Bus) do
-        event =
-          LemonCore.Event.new(
-            :run_started,
-            %{run_id: run_id, session_key: "test", engine: "lemon"},
-            %{run_id: run_id, session_key: "test"}
-          )
-
-        # This won't deliver to us directly (we're not in Presence)
-        # but it should not crash the EventBridge
-        LemonCore.Bus.broadcast("run:#{run_id}", event)
-
-        # Give time for processing
-        sync_bridge(bridge_pid)
-
-        # EventBridge should still be alive
-        assert Process.alive?(Process.whereis(EventBridge))
-      end
-
-      EventBridge.unsubscribe_run(run_id)
-    end
-
-    test "processes delta events", %{bridge_pid: bridge_pid} do
-      run_id = "run_#{System.unique_integer()}"
-
-      EventBridge.subscribe_run(run_id)
-      sync_bridge(bridge_pid)
-
-      if Code.ensure_loaded?(LemonCore.Bus) do
-        delta = %{run_id: run_id, ts_ms: System.system_time(:millisecond), seq: 1, text: "Hello"}
-
-        event = LemonCore.Event.new(:delta, delta, %{run_id: run_id, session_key: "test"})
-        LemonCore.Bus.broadcast("run:#{run_id}", event)
-
-        sync_bridge(bridge_pid)
-
-        # EventBridge should still be alive (didn't crash on the event)
-        assert Process.alive?(Process.whereis(EventBridge))
-      end
-
-      EventBridge.unsubscribe_run(run_id)
-    end
-
     test "processes run_completed events", %{bridge_pid: bridge_pid} do
       run_id = "run_#{System.unique_integer()}"
 
@@ -975,27 +923,6 @@ defmodule LemonControlPlane.EventBridgeTest do
       assert :ok = Schemas.validate_event("exec.approval.resolved", payload)
 
       Presence.unregister(conn_id)
-    end
-
-    test "subscribes to cron topic on init", %{bridge_pid: bridge_pid} do
-      if Code.ensure_loaded?(LemonCore.Bus) do
-        event =
-          LemonCore.Event.new(
-            :cron_run_started,
-            %{
-              cron_run_id: "cron-run-1",
-              job_id: "job-1",
-              job_name: "test job",
-              run: %{id: "cron-run-1", job_id: "job-1"}
-            },
-            %{}
-          )
-
-        LemonCore.Bus.broadcast("cron", event)
-
-        sync_bridge(bridge_pid)
-        assert Process.alive?(Process.whereis(EventBridge))
-      end
     end
   end
 

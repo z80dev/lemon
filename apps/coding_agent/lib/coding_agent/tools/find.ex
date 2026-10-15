@@ -15,13 +15,14 @@ defmodule CodingAgent.Tools.Find do
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonAgent.Security.ToolResultTrust
   alias LemonAi.Types.TextContent
-  alias CodingAgent.Tools.{FileValidation, IgnoreFilter}
+  alias CodingAgent.Tools.IgnoreFilter
   alias CodingAgent.Tools.PathHelpers
 
   import LemonAgent.Tools.AbortHelpers, only: [aborted?: 1, check_abort: 1]
 
   @default_max_results 100
   @elixir_find_timeout_ms 30_000
+  @max_candidates 100_000
 
   @doc """
   Returns the Find tool definition.
@@ -45,12 +46,12 @@ defmodule CodingAgent.Tools.Find do
           "pattern" => %{
             "type" => "string",
             "description" =>
-              "Case-sensitive file name glob (e.g., '*.ex', 'test_*.exs'). Plain names match exactly."
+              "Case-sensitive basename glob, or a path glob when it contains '/' (e.g., 'lib/*.ex'). Plain names match exactly."
           },
           "path" => %{
             "type" => "string",
             "description" =>
-              "Directory to search in (relative to cwd or absolute). Defaults to current working directory."
+              "Directory roots separated by semicolons (relative to cwd or absolute). Defaults to cwd."
           },
           "type" => %{
             "type" => "string",
@@ -61,6 +62,12 @@ defmodule CodingAgent.Tools.Find do
           "max_depth" => %{
             "type" => "integer",
             "description" => "Maximum directory depth to search"
+          },
+          "sort" => %{
+            "type" => "string",
+            "enum" => ["mtime", "path"],
+            "description" =>
+              "Sort all candidates by path (default) or newest modification time first"
           },
           "max_results" => %{
             "type" => "integer",
@@ -122,6 +129,7 @@ defmodule CodingAgent.Tools.Find do
     search_path = Map.get(params, "path", ".")
     entry_type = Map.get(params, "type", "all")
     max_depth = Map.get(params, "max_depth")
+    sort = Map.get(params, "sort", "path")
 
     max_results =
       Map.get(params, "max_results", Keyword.get(opts, :max_results, @default_max_results))
@@ -131,43 +139,42 @@ defmodule CodingAgent.Tools.Find do
       no_ignore: Map.get(params, "no_ignore", false) == true
     }
 
-    with {:ok, resolved_path} <- resolve_path(search_path, cwd),
-         :ok <- check_directory(resolved_path),
-         :ok <- check_abort(signal) do
-      find_files(
-        pattern,
-        resolved_path,
-        entry_type,
-        max_depth,
-        max_results,
-        flags,
-        signal,
-        cwd,
-        opts
-      )
+    with :ok <- validate_sort(sort),
+         {:ok, paths, missing} <-
+           PathHelpers.resolve_search_paths(search_path, cwd, [:directory]),
+         :ok <- check_abort(signal),
+         {:ok, files} <-
+           Enum.reduce_while(paths, {:ok, []}, fn path, {:ok, files} ->
+             case find_files(
+                    pattern,
+                    path,
+                    entry_type,
+                    max_depth,
+                    max_results,
+                    flags,
+                    signal,
+                    cwd,
+                    opts
+                  ) do
+               {:ok, found} -> {:cont, {:ok, found ++ files}}
+               {:error, _} = error -> {:halt, error}
+             end
+           end),
+         files = Enum.uniq(files),
+         :ok <- check_candidate_limit(files) do
+      files
+      |> format_results(cwd, max_results, sort)
+      |> PathHelpers.with_missing_paths(missing)
     end
   end
 
-  # ============================================================================
-  # Path Resolution
-  # ============================================================================
+  defp validate_sort(sort) when sort in ["mtime", "path"], do: :ok
+  defp validate_sort(_), do: {:error, "sort must be mtime or path"}
 
-  defp resolve_path("", cwd), do: {:ok, cwd}
-  defp resolve_path(".", cwd), do: {:ok, cwd}
-
-  defp resolve_path(path, cwd) do
-    {:ok, PathHelpers.resolve_path(path, cwd)}
-  end
-
-  # ============================================================================
-  # Directory Check
-  # ============================================================================
-
-  defp check_directory(path) do
-    case FileValidation.check_path_access(path, [:directory]) do
-      {:ok, _stat} -> :ok
-      {:error, _} = error -> error
-    end
+  defp check_candidate_limit(files) do
+    if length(files) > @max_candidates,
+      do: {:error, "Find exceeds #{@max_candidates} candidates; narrow path or pattern"},
+      else: :ok
   end
 
   # ============================================================================
@@ -236,15 +243,16 @@ defmodule CodingAgent.Tools.Find do
          cwd,
          opts
        ) do
-    args = build_fd_args(pattern, search_path, entry_type, max_depth, max_results, flags)
+    args = build_fd_args(pattern, search_path, entry_type, max_depth, flags)
+    run = Keyword.get(opts, :fd_run_fun, &run_fd/3)
 
-    case run_fd(args, cwd, signal) do
+    case run.(args, cwd, signal) do
       {:ok, output} ->
         results =
           output
           |> String.split("\n", trim: true)
 
-        format_results(results, cwd, max_results)
+        {:ok, results}
 
       {:error, reason} ->
         # Fall back to Elixir if fd fails
@@ -265,7 +273,7 @@ defmodule CodingAgent.Tools.Find do
     end
   end
 
-  defp build_fd_args(pattern, search_path, entry_type, max_depth, max_results, flags) do
+  defp build_fd_args(pattern, search_path, entry_type, max_depth, flags) do
     # Follow symlinked directories (matches the Elixir fallback). fd respects
     # .gitignore/.ignore rules unless the caller opts out.
     args =
@@ -289,8 +297,11 @@ defmodule CodingAgent.Tools.Find do
         args
       end
 
-    # Max results (fd uses --max-results)
-    args = args ++ ["--max-results", to_string(max_results + 1)]
+    # This is a safety ceiling, never a result page. Exceeding it fails rather
+    # than presenting an arbitrary traversal-order subset as sorted results.
+    args = args ++ ["--max-results", to_string(@max_candidates + 1)]
+    args = if String.contains?(pattern, "/"), do: args ++ ["--full-path"], else: args
+    pattern = if String.contains?(pattern, "/"), do: "**/" <> pattern, else: pattern
 
     # Hidden files
     args =
@@ -355,10 +366,10 @@ defmodule CodingAgent.Tools.Find do
          search_path,
          entry_type,
          max_depth,
-         max_results,
+         _max_results,
          flags,
          signal,
-         cwd,
+         _cwd,
          opts
        ) do
     glob_patterns = build_glob_patterns(pattern, search_path, max_depth)
@@ -382,7 +393,7 @@ defmodule CodingAgent.Tools.Find do
         |> reject_ignored(search_path, flags.no_ignore)
         |> Enum.sort()
 
-      format_results(results, cwd, max_results)
+      {:ok, results}
     end
   rescue
     e ->
@@ -461,12 +472,12 @@ defmodule CodingAgent.Tools.Find do
   # Result Formatting
   # ============================================================================
 
-  defp format_results(results, cwd, max_results) do
+  defp format_results(results, cwd, max_results, sort) do
     # Make paths relative to cwd
     relative_results =
       results
+      |> sort_results(cwd, sort)
       |> Enum.map(&make_relative(&1, cwd))
-      |> Enum.sort()
 
     truncated = length(relative_results) > max_results
     relative_results = Enum.take(relative_results, max_results)
@@ -496,6 +507,24 @@ defmodule CodingAgent.Tools.Find do
         files: relative_results
       }
     }
+  end
+
+  defp sort_results(results, cwd, "path"),
+    do: Enum.sort_by(results, &make_relative(&1, cwd))
+
+  defp sort_results(results, cwd, "mtime") do
+    results
+    |> Enum.map(fn path ->
+      mtime =
+        case File.stat(Path.expand(path, cwd), time: :posix) do
+          {:ok, stat} -> stat.mtime
+          _ -> 0
+        end
+
+      {path, mtime}
+    end)
+    |> Enum.sort_by(fn {path, mtime} -> {-mtime, make_relative(path, cwd)} end)
+    |> Enum.map(&elem(&1, 0))
   end
 
   defp make_relative(path, cwd), do: Path.relative_to(path, cwd)

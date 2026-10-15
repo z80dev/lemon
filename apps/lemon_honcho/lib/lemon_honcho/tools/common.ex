@@ -103,14 +103,25 @@ defmodule LemonHoncho.Tools.Common do
   """
   @spec scope(Config.t(), keyword()) :: scope()
   def scope(%Config{} = config, opts) do
+    identity =
+      LemonHoncho.UserPeer.identity(
+        Keyword.get(opts, :session_key),
+        Keyword.get(opts, :channel_identity)
+      )
+
     key = session_key(opts) || latest_session_key()
+    key = key && LemonHoncho.UserPeer.cache_key(key, config, identity)
 
     case key && SessionManager.honcho_session_id(key) do
       {:ok, session_id} ->
         %{session_id: session_id, mapped?: true, peers: peers(config, key)}
 
       _other ->
-        %{session_id: derived_session_id(config, opts), mapped?: false, peers: peers(config, nil)}
+        %{
+          session_id: derived_session_id(config, opts),
+          mapped?: false,
+          peers: %{user: LemonHoncho.UserPeer.resolve(config, identity), ai: config.ai_peer}
+        }
     end
   end
 

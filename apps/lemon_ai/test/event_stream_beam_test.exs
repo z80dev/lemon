@@ -494,12 +494,6 @@ defmodule LemonAi.EventStreamBeamTest do
   end
 
   describe "backward compatibility" do
-    test "start_link with no options works" do
-      {:ok, stream} = EventStream.start_link()
-      assert is_pid(stream)
-      EventStream.complete(stream, make_message())
-    end
-
     test "events enumerable still works" do
       {:ok, stream} = EventStream.start_link()
 

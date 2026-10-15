@@ -63,6 +63,13 @@ defmodule LemonWeb.OmpLive do
         notice: nil,
         start_form: nil,
         close_preview: nil,
+        batch_results: [],
+        models: nil,
+        model_target: nil,
+        model_query: "",
+        model_free: false,
+        configure_form: nil,
+        child_transcript: nil,
         resume: nil
       )
 
@@ -160,6 +167,7 @@ defmodule LemonWeb.OmpLive do
         "thinking" => "",
         "approvalMode" => "",
         "isolate" => false,
+        "batch" => false,
         "errors" => %{},
         "error" => nil
       }
@@ -202,13 +210,146 @@ defmodule LemonWeb.OmpLive do
           |> put_present("approvalMode", form["approvalMode"])
           |> Map.put("isolate", form["isolate"])
 
+        batch? = form["batch"]
+
+        payload =
+          if batch?,
+            do: %{
+              "tasks" =>
+                Enum.map(
+                  String.split(form["prompt"], ~r/\n\s*\n/, trim: true),
+                  &Map.put(payload, "prompt", &1)
+                ),
+              "isolate" => form["isolate"]
+            },
+            else: payload
+
+        method = if batch?, do: "omp.sessions.startMany", else: "omp.sessions.start"
+
         {:noreply,
          socket
          |> assign(start_form: %{form | "errors" => %{}, "error" => nil})
          |> add_pending(:start)
-         |> start_async(:start, fn -> Rpc.call("omp.sessions.start", payload) end)}
+         |> start_async(if(batch?, do: :start_many, else: :start), fn ->
+           Rpc.call(method, payload)
+         end)}
     end
   end
+
+  def handle_event("open_models", params, socket) do
+    target = if params["target"] == "start", do: :start, else: socket.assigns.selected_id
+
+    {:noreply,
+     socket
+     |> assign(model_target: target, models: :loading, model_query: "", model_free: false)
+     |> start_async(:models, fn -> Rpc.call("omp.models", %{"limit" => 100}) end)}
+  end
+
+  def handle_event("models_search", params, socket) do
+    query = String.slice(to_string(params["query"] || ""), 0, 200)
+    free = params["freeOnly"] == "true"
+
+    {:noreply,
+     socket
+     |> assign(model_query: query, model_free: free, models: :loading)
+     |> start_async(:models, fn ->
+       Rpc.call("omp.models", %{"query" => query, "freeOnly" => free, "limit" => 100})
+     end)}
+  end
+
+  def handle_event("close_models", _, socket), do: {:noreply, assign(socket, models: nil)}
+
+  def handle_event("choose_model", %{"selector" => selector}, socket) do
+    allowed? =
+      is_list(socket.assigns.models) and
+        Enum.any?(socket.assigns.models, &(&1["selector"] == selector))
+
+    socket =
+      cond do
+        !allowed? ->
+          socket
+
+        socket.assigns.model_target == :start and socket.assigns.start_form != nil ->
+          assign(socket,
+            start_form: Map.put(socket.assigns.start_form, "model", selector),
+            models: nil
+          )
+
+        is_map(socket.assigns.configure_form) ->
+          assign(socket,
+            configure_form: Map.put(socket.assigns.configure_form, "model", selector),
+            models: nil
+          )
+
+        true ->
+          socket
+      end
+
+    {:noreply, socket}
+  end
+
+  def handle_event("open_configure", _, socket) do
+    case actionable(socket, "configure") do
+      {:ok, session} ->
+        {:noreply,
+         assign(socket, configure_form: %{"id" => session["id"], "model" => "", "thinking" => ""})}
+
+      {:error, socket} ->
+        {:noreply, socket}
+    end
+  end
+
+  def handle_event("close_configure", _, socket),
+    do: {:noreply, assign(socket, configure_form: nil)}
+
+  def handle_event("configure", %{"configure" => params}, socket) do
+    case socket.assigns.configure_form do
+      %{"id" => id} = form ->
+        payload =
+          %{"id" => id}
+          |> put_present("model", String.trim(to_string(params["model"] || "")))
+          |> put_present("thinking", params["thinking"])
+
+        if map_size(payload) > 1 and !MapSet.member?(socket.assigns.pending, {:configure, id}) do
+          {:noreply,
+           socket
+           |> assign(configure_form: Map.merge(form, Map.take(params, ["model", "thinking"])))
+           |> add_pending({:configure, id})
+           |> start_async({:configure, id}, fn -> Rpc.call("omp.sessions.configure", payload) end)}
+        else
+          {:noreply, put_flash(socket, :error, "Choose a model or thinking setting.")}
+        end
+
+      _ ->
+        {:noreply, socket}
+    end
+  end
+
+  def handle_event("subagent", %{"id" => child_id}, socket) do
+    case selected(socket) do
+      %{"id" => id, "subagents" => children} when is_list(children) ->
+        if Enum.any?(children, &(&1["id"] == child_id)) do
+          {:noreply,
+           socket
+           |> assign(child_transcript: %{id: child_id, state: :loading})
+           |> start_async({:subagent, id, child_id}, fn ->
+             Rpc.call("omp.sessions.subagent", %{
+               "id" => id,
+               "subagentId" => child_id,
+               "limit" => 50
+             })
+           end)}
+        else
+          {:noreply, socket}
+        end
+
+      _ ->
+        {:noreply, socket}
+    end
+  end
+
+  def handle_event("close_subagent", _, socket),
+    do: {:noreply, assign(socket, child_transcript: nil)}
 
   # ── Events: resume / discover ───────────────────────────────────────────
 
@@ -430,6 +571,94 @@ defmodule LemonWeb.OmpLive do
   # ── Async results ───────────────────────────────────────────────────────
 
   @impl true
+  def handle_async(:start_many, {:ok, {:ok, %{"results" => results}}}, socket)
+      when is_list(results) do
+    socket =
+      Enum.reduce(results, socket, fn
+        %{"session" => session}, acc when is_map(session) -> upsert(acc, session)
+        _, acc -> acc
+      end)
+
+    {:noreply,
+     socket
+     |> remove_pending(:start)
+     |> assign(start_form: nil, batch_results: Enum.take(results, 8))
+     |> load_status()}
+  end
+
+  def handle_async(:start_many, result, socket) do
+    error = result_error(result)
+    details = error[:details] || %{}
+
+    message =
+      if details["code"] == "OMP_INVALID_TASK",
+        do: "Task index #{details["index"]}: #{Rpc.message(error)}",
+        else: Rpc.message(error)
+
+    {:noreply,
+     socket
+     |> remove_pending(:start)
+     |> assign(
+       start_form: nil,
+       notice: %{
+         tone: "warning",
+         title: "Batch not confirmed",
+         text: message <> " Not retried.",
+         id: nil
+       }
+     )}
+  end
+
+  def handle_async(:models, {:ok, {:ok, %{"models" => models}}}, socket) when is_list(models),
+    do: {:noreply, assign(socket, models: Enum.take(models, 100))}
+
+  def handle_async(:models, result, socket),
+    do: {:noreply, assign(socket, models: {:error, async_error(result)})}
+
+  def handle_async({:configure, id}, {:ok, {:ok, %{"session" => session}}}, socket) do
+    {:noreply,
+     socket
+     |> remove_pending({:configure, id})
+     |> upsert(session)
+     |> assign(configure_form: nil)
+     |> put_flash(:info, "Configuration applied to #{id}.")}
+  end
+
+  def handle_async({:configure, id}, result, socket) do
+    error = result_error(result)
+    details = error[:details] || %{}
+
+    text =
+      if details["code"] == "OMP_PARTIALLY_APPLIED",
+        do:
+          "Partially applied: #{Enum.join(details["applied"] || [], ", ")}. Failed step: #{details["failedStep"]}. Changes were not rolled back. Not retried.",
+        else: Rpc.message(error) <> " Not retried."
+
+    {:noreply,
+     socket
+     |> remove_pending({:configure, id})
+     |> assign(
+       configure_form: nil,
+       notice: %{tone: "warning", title: "Configuration not fully applied", text: text, id: id}
+     )
+     |> load_sessions()}
+  end
+
+  def handle_async({:subagent, id, child_id}, result, socket) do
+    if socket.assigns.selected_id == id and socket.assigns.child_transcript != nil and
+         socket.assigns.child_transcript.id == child_id do
+      state =
+        case result do
+          {:ok, {:ok, %{"transcript" => transcript}}} -> {:ok, transcript}
+          other -> {:error, async_error(other)}
+        end
+
+      {:noreply, assign(socket, child_transcript: %{id: child_id, state: state})}
+    else
+      {:noreply, socket}
+    end
+  end
+
   def handle_async(:status, {:ok, {:ok, status}}, socket) when is_map(status) do
     {:noreply, socket |> assign(status: status, status_state: :ok) |> remove_pending(:status)}
   end
@@ -696,6 +925,7 @@ defmodule LemonWeb.OmpLive do
           </:actions>
         </.callout>
       </div>
+      <.worker_grid results={@batch_results} sessions={@sessions} />
 
       <div :if={@status_state != :loading && !@available} class="min-h-0 flex-1 overflow-y-auto px-4 py-6 sm:px-6 scroll-thin">
         <.unavailable status={@status} status_state={@status_state} />
@@ -791,6 +1021,9 @@ defmodule LemonWeb.OmpLive do
           aria-label="omp session detail"
           class={["min-h-0 flex-col", if(@selected_id, do: "flex", else: "hidden lg:flex")]}
         >
+          <div :if={@selected && !ended?(@selected)} class="p-3">
+            <.button id="omp-configure-open" phx-click="open_configure">Configure model / thinking</.button>
+          </div>
           <.detail
             :if={@selected}
             session={@selected}
@@ -830,6 +1063,39 @@ defmodule LemonWeb.OmpLive do
       </div>
 
       <.start_dialog :if={@start_form} form={@start_form} sessions={@sessions} starting?={MapSet.member?(@pending, :start)} />
+      <.modal :if={@configure_form} id="omp-configure-dialog" show title="Configure omp session" on_cancel={Phoenix.LiveView.JS.push("close_configure")}>
+        <form id="omp-configure-form" phx-submit="configure" class="space-y-3">
+          <.input name="configure[model]" label="Model (optional)" value={@configure_form["model"]} />
+          <.button phx-click="open_models">Browse omp models</.button>
+          <.input name="configure[thinking]" type="select" label="Thinking (optional)" value={@configure_form["thinking"]} options={[{"Leave unchanged", ""} | Enum.map(thinking_levels(), &{&1, &1})]} />
+          <.button type="submit" id="omp-configure-submit" loading={MapSet.member?(@pending, {:configure, @configure_form["id"]})} mutation>Apply settings</.button>
+        </form>
+      </.modal>
+      <.modal :if={@models != nil} id="omp-models-dialog" show title="omp models" on_cancel={Phoenix.LiveView.JS.push("close_models")}>
+        <form id="omp-models-search" phx-submit="models_search" class="space-y-3">
+          <.input name="query" label="Search models" value={@model_query} />
+          <label><input type="checkbox" name="freeOnly" value="true" checked={@model_free} /> Free models only</label>
+          <.button type="submit">Search</.button>
+        </form>
+        <p :if={@models == :loading}>Loading models…</p>
+        <p :if={match?({:error, _}, @models)}>{elem(@models, 1)}</p>
+        <div :if={is_list(@models)} class="max-h-96 overflow-y-auto">
+          <p :if={@models == []}>No matching models.</p>
+          <button :for={model <- @models} type="button" class="block w-full border-b border-line p-2 text-left" phx-click="choose_model" phx-value-selector={model["selector"]}>
+            {model["selector"]} <.badge :if={model["free"]} tone="success">FREE</.badge> · input ${model["costInput"] || "unknown"} / output ${model["costOutput"] || "unknown"} per million tokens
+          </button>
+        </div>
+      </.modal>
+      <.modal :if={@child_transcript} id="omp-child-transcript" show title={"Subagent #{@child_transcript.id} · transcript tail"} on_cancel={Phoenix.LiveView.JS.push("close_subagent")}>
+        <p :if={@child_transcript.state == :loading}>Loading transcript…</p>
+        <p :if={match?({:error, _}, @child_transcript.state)}>{elem(@child_transcript.state, 1)}</p>
+        <div :if={match?({:ok, _}, @child_transcript.state)} class="max-h-96 overflow-y-auto">
+          <article :for={message <- Enum.take(elem(@child_transcript.state, 1)["messages"] || [], -50)}>
+            <p class="text-xs font-semibold">{message["role"]} {message["toolName"]}</p>
+            <pre class="whitespace-pre-wrap break-words text-xs">{String.slice(message["text"] || "", 0, 16_384)}</pre>
+          </article>
+        </div>
+      </.modal>
       <.resume_dialog :if={@resume} resume={@resume} pending={@pending} now={@now} />
       <.confirm_dialog
         :if={@close_preview}
@@ -1091,7 +1357,10 @@ defmodule LemonWeb.OmpLive do
     if socket.assigns.selected_id != previous,
       do:
         assign(socket,
-          compose: %{mode: socket.assigns.compose.mode, text: "", unconfirmed: false}
+          compose: %{mode: socket.assigns.compose.mode, text: "", unconfirmed: false},
+          child_transcript: nil,
+          configure_form: nil,
+          models: nil
         ),
       else: socket
   end
@@ -1144,12 +1413,19 @@ defmodule LemonWeb.OmpLive do
       "model" => to_string(params["model"] || ""),
       "approvalMode" => approval_mode(params["approvalMode"]),
       "isolate" => params["isolate"] in [true, "true"],
+      "batch" => params["batch"] in [true, "true"],
       "thinking" => if(params["thinking"] in thinking_levels(), do: params["thinking"], else: "")
     }
   end
 
   defp start_errors(form) do
     %{}
+    |> then(
+      &if(form["batch"] && length(String.split(form["prompt"], ~r/\n\s*\n/, trim: true)) > 8,
+        do: Map.put(&1, "prompt", "Use one to eight prompts, separated by blank lines."),
+        else: &1
+      )
+    )
     |> then(
       &if(String.trim(form["prompt"]) == "",
         do: Map.put(&1, "prompt", "Write a prompt for omp."),
