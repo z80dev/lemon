@@ -910,6 +910,7 @@ defmodule LemonControlPlane.Methods.SessionsSnapshotTest do
       id: id,
       run_id: c.id,
       session_key: c.key,
+      agent_id: LemonCore.SessionKey.agent_id(c.key),
       tool: "bash",
       action: %{command_hash: "hash", cwd_hash: "hash"},
       requested_at_ms: 1,
