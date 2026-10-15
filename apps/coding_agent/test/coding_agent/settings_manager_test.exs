@@ -298,6 +298,8 @@ defmodule CodingAgent.SettingsManagerTest do
             max_depth: 1,
             max_runtime_ms: "soon",
             idle_ttl_ms: -1,
+            request_budget: -1,
+            request_budget_notice: "yes",
             worktree_merge: "patch",
             disabled_agents: ["reviewer", 7],
             agent_models: %{"scout" => " @smol ", "reviewer" => ""}
@@ -313,6 +315,8 @@ defmodule CodingAgent.SettingsManagerTest do
                max_depth: 1,
                max_runtime_ms: 0,
                idle_ttl_ms: 300_000,
+               request_budget: 200,
+               request_budget_notice: true,
                worktree_merge: "patch",
                disabled_agents: ["reviewer"],
                agent_models: %{"scout" => "@smol"}

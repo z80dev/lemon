@@ -43,7 +43,10 @@ a new turn (`woken`), and parked children reload their saved conversation
 receipt. Failed worker admission reports `failed`. Cancelled/killed children
 and removed workspaces cannot revive; their error points to `history://<id>`.
 See [native task settings](../config.md#native-task-subagents-runtimetask) for
-the idle TTL and retention rules.
+the idle TTL and retention rules. Each woken/revived run receives a fresh
+assistant request budget (default 200, task `request_budget` overrides it,
+`0` disables). One wrap-up steer precedes a graceful stop at `ceil(1.5 × budget)`;
+partial findings are auto-delivered with `budget_exhausted: true`.
 
 ## Directory trees
 
