@@ -38,6 +38,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Added
 
+- Admin-only control-plane `system.restart` and `system.stop` acknowledge before
+  acting, serialize runtime lifecycle requests, and preserve launcher ports and
+  source distribution identity across a detached restart.
 - Control-plane status reports the real Lemon release version, build identity,
   offline provider credential presence, timestamped redacted channel health,
   lifecycle availability and safe summary counts.

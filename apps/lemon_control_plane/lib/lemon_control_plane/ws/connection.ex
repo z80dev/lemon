@@ -189,6 +189,11 @@ defmodule LemonControlPlane.WS.Connection do
     {:push, {:text, encode_response(id, result)}, state}
   end
 
+  def handle_info({:lifecycle_after_reply, ref}, state) do
+    LemonControlPlane.Lifecycle.after_reply(ref)
+    {:ok, state}
+  end
+
   def handle_info({:node_session_revoked, node_id, generation}, state) do
     Logger.info(
       "Closing superseded node session #{state.conn_id} for #{node_id} before generation #{generation}"
