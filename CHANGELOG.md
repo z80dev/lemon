@@ -10,6 +10,8 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Added
 
+- MCP clients accept an optional asynchronous `notification_handler` callback for
+  server notifications, including tool, resource and prompt list changes.
 - Expanded the LSP registry from six to 42 primary language servers, with
   installation hints, unique extension ownership, and case-insensitive
   `LemonLsp.Servers.language_id/1` lookup.

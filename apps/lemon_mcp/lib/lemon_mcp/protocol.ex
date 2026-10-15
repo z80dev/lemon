@@ -417,6 +417,36 @@ defmodule LemonMCP.Protocol do
     }
   end
 
+  @doc false
+  def notification_handler(opts) do
+    case Keyword.get(opts, :notification_handler) do
+      handler when is_nil(handler) or is_function(handler, 1) -> handler
+      _ -> raise ArgumentError, "notification_handler must be a function of arity 1 or nil"
+    end
+  end
+
+  @doc false
+  def dispatch_notification(%{"method" => method} = message, handler)
+      when is_binary(method) and not is_map_key(message, "id") do
+    params = Map.get(message, "params", %{})
+
+    if is_function(handler, 1) and is_map(params) do
+      Task.start(fn ->
+        try do
+          handler.(%{method: method, params: params})
+        rescue
+          _ -> :ok
+        catch
+          _, _ -> :ok
+        end
+      end)
+    end
+
+    :ok
+  end
+
+  def dispatch_notification(_message, _handler), do: :ok
+
   # ============================================================================
   # Encoding / Decoding
   # ============================================================================
