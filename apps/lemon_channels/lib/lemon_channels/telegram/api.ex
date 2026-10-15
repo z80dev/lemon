@@ -25,6 +25,15 @@ defmodule LemonChannels.Telegram.API do
     request(token, "getMe", %{}, @default_timeout)
   end
 
+  def set_my_commands(token, commands) when is_list(commands) do
+    request(
+      token,
+      "setMyCommands",
+      %{"commands" => commands, "scope" => %{"type" => "default"}},
+      @default_timeout
+    )
+  end
+
   def delete_webhook(token, opts \\ %{}) do
     opts = if is_map(opts), do: opts, else: Enum.into(opts, %{})
 

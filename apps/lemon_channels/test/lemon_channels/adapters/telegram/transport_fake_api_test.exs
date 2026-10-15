@@ -159,6 +159,28 @@ defmodule LemonChannels.Adapters.Telegram.TransportFakeApiTest do
   end
 
   describe "transport round trip" do
+    test "startup registers the public catalog menu without admin commands" do
+      assert {:ok, _pid} = start_transport(%{})
+      assert {:ok, %{args: [commands]}} = FakeAPI.await_send(:set_my_commands, 2_000)
+      assert commands == LemonChannels.CommandCatalog.telegram_menu()
+      names = Enum.map(commands, & &1["command"])
+      assert "model" in names
+      assert "resume" in names
+      assert "new" in names
+      assert "cancel" in names
+      refute "reload" in names
+      refute "trigger" in names
+      assert "topic" in names
+    end
+
+    test "menu registration failure does not stop polling" do
+      FakeAPI.stub(:set_my_commands, fn _ -> {:error, :unavailable} end)
+      assert {:ok, pid} = start_transport(%{})
+      assert {:ok, _} = FakeAPI.await_send(:set_my_commands, 2_000)
+      assert Process.alive?(pid)
+      assert {:ok, _} = FakeAPI.await_send(:get_updates, 2_000)
+    end
+
     test "portable /commands is handled by the running transport and delivered through Telegram" do
       chat_id = 310_000
       gateway_config_key = :"Elixir.LemonGateway.Config"

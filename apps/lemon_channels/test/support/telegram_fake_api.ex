@@ -235,6 +235,15 @@ defmodule LemonChannels.Telegram.FakeAPI do
     end)
   end
 
+  @doc "setMyCommands: records the default-scope public command menu."
+  def set_my_commands(_token, commands) do
+    record(:set_my_commands, [commands])
+
+    stubbed(:set_my_commands, [commands], fn ->
+      {:ok, %{"ok" => true, "result" => true}}
+    end)
+  end
+
   @doc "sendChatAction: always succeeds (Bot API parity; no transport call site today)."
   def send_chat_action(_token, chat_id, action) do
     record(:send_chat_action, [chat_id, action])

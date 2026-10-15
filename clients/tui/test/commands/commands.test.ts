@@ -891,12 +891,18 @@ describe("client-local commands", () => {
 					description: "queue work",
 					aliases: ["/q"],
 				},
+				{
+					name: "file",
+					description: "channel-only file operations",
+					surfaces: ["telegram", "discord"],
+				},
 			],
 		});
 		await harness.run("/commands");
 		expect(harness.host.text).toContain("daemon catalog");
 		expect(harness.host.text).toContain("/queue <prompt>");
 		expect(harness.host.text).toContain("aliases: /q");
+		expect(harness.host.text).not.toContain("channel-only file operations");
 	});
 
 	test("/reconnect asks the client to redial", async () => {
