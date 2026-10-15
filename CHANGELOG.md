@@ -8,6 +8,13 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
+### Added
+
+- Parallel omp workers: the `omp` tool can start a validated batch concurrently
+  with `start_many`, gather all or any worker with `wait` and `ids`, stream
+  throttled combined progress, and report per-task failures and total usage.
+  The Elixir facade exposes `start_many/2` and `wait_many/3` with owner scoping.
+
 ### Fixed
 
 - Native dynamic-preset resolution binds discovered context, output limits,

@@ -30,6 +30,8 @@
 #               the turn completes once the confirm reply arrives
 #   BIGTEXT     complete the turn with a ~100 KB assistant text
 #   LATE_ACK    finish the whole turn before acknowledging the prompt
+#   ACK_GATE    wait for DIR/.fake_omp_release before acknowledging the prompt
+#   REJECT      reject the prompt without starting a turn
 #   anything else completes the turn at once.
 
 all_args="$*"
@@ -170,6 +172,13 @@ while IFS= read -r line; do
     prompt)
       msg=$(field message)
       case "$msg" in
+        *REJECT*)
+          emit '{"type":"response","id":"'"$id"'","command":"prompt","success":false,"error":"Task refused"}'
+          continue
+          ;;
+        *ACK_GATE*)
+          while [ ! -f "$cwd/.fake_omp_release" ]; do sleep 0.02; done
+          ;;
         *LATE_ACK*)
           # omp may stream and finish a turn before acknowledging its prompt.
           start_turn
