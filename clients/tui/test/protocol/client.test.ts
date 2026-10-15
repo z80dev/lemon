@@ -313,6 +313,19 @@ describe("reconnect", () => {
 		const error: any = await pending;
 		expect(error).toBeInstanceOf(NotConnectedError);
 	});
+
+	test("overflow routes through reconnect recovery without replaying a mutation", async () => {
+		const server = await withServer();
+		const client = makeClient(server.url);
+		await client.connect();
+		const recovery = new Promise<{ reason?: string }>((resolve) =>
+			client.events.once("resync-needed", resolve),
+		);
+		server.pushEvent("stream.resync", { reason: "overflow" });
+		expect(await recovery).toMatchObject({ reason: "overflow" });
+		expect(client.queued).toHaveLength(0);
+		expect(server.requestsFor("chat.send")).toHaveLength(0);
+	});
 });
 
 describe("method gating", () => {
@@ -415,4 +428,59 @@ describe("slow mutations", () => {
 		).resolves.toMatchObject({ installed: true, skillKey: "codex" });
 		expect(SKILL_MUTATION_REQUEST_TIMEOUT_MS).toBeGreaterThan(300_000);
 	});
+});
+
+describe("session snapshot authority", () => {
+	test("snapshot reads are never queued offline", async () => {
+		const client = makeClient("ws://127.0.0.1:1/ws");
+		const methods = new ControlPlaneMethods(client);
+		await expect(
+			methods.sessionsSnapshot({ sessionKey: "owned" }, { queueIfOffline: true }),
+		).rejects.toBeInstanceOf(NotConnectedError);
+		expect(client.queued).toHaveLength(0);
+	});
+
+	test("the real RPC wrapper preserves authorization refusal and exact identity", async () => {
+		const server = await withServer({ methods: ["sessions.snapshot"] });
+		const client = makeClient(server.url);
+		const methods = new ControlPlaneMethods(client);
+		await client.connect();
+		server.failWith("sessions.snapshot", "FORBIDDEN", "cross-session read refused");
+		const identity = {
+			sessionKey: "other",
+			sessionId: null,
+			branchId: "branch",
+			revision: "revision",
+			runId: "run",
+			attempt: "run",
+		};
+		const error = await methods
+			.sessionsSnapshot({ sessionKey: "other", expectedIdentity: identity })
+			.catch((failure) => failure);
+		expect(error).toBeInstanceOf(ControlPlaneError);
+		expect(error.code).toBe("FORBIDDEN");
+		expect(server.requestsFor("sessions.snapshot")[0].params).toEqual({
+			sessionKey: "other",
+			expectedIdentity: identity,
+		});
+		expect(client.queued).toHaveLength(0);
+	});
+});
+
+test("owner-scoped overflow preserves session and run identity on the recovery notification", async () => {
+	const server = await withServer();
+	const client = makeClient(server.url);
+	await client.connect();
+	const recovery = client.events.waitFor("resync-needed");
+	server.pushEvent("stream.resync", {
+		reason: "overflow",
+		sessionKey: "owned-session",
+		runId: "owned-run",
+	});
+	expect(await recovery).toMatchObject({
+		reason: "overflow",
+		sessionKey: "owned-session",
+		runId: "owned-run",
+	});
+	expect(client.queued).toHaveLength(0);
 });

@@ -1,7 +1,7 @@
 defmodule LemonRouter.SubmissionBuilderTest do
   use ExUnit.Case, async: false
 
-  alias LemonCore.{ExecutionCommand, ResumeToken}
+  alias LemonCore.{ExecutionCommand, ExecutionContext, ResumeToken}
   alias LemonRouter.{PendingCompactionStore, ResumeResolver, Submission, SubmissionBuilder}
 
   setup do
@@ -36,6 +36,65 @@ defmodule LemonRouter.SubmissionBuilderTest do
     assert submission.queue_mode == :collect
     assert submission.meta[:origin] == :control_plane
     assert submission.execution_request.meta[:origin] == :control_plane
+  end
+
+  test "delegated context remains an additional monotonic authority" do
+    cwd = LemonCore.Cwd.default_cwd()
+
+    assert {:ok, parent} =
+             ExecutionContext.new(
+               run_id: "parent_#{System.unique_integer([:positive])}",
+               agent_id: "source",
+               origin: :control_plane,
+               cwd: cwd,
+               tool_policy: %{allow: ["read", "write"], require_approval: ["read"]},
+               capabilities: ["read"],
+               limits: %{max_steps: 4}
+             )
+
+    incoming =
+      request(unique_session_key("delegated"), %{
+        agent_id: "test",
+        cwd: cwd,
+        tool_policy: %{allow: :all, require_approval: []},
+        execution_context: parent
+      })
+
+    assert {:ok, submission} = SubmissionBuilder.build(incoming, orchestrator_state())
+    command = submission.execution_request
+    child = command.execution_context
+
+    assert child.run_id == incoming.run_id
+    assert child.parent_run_id == parent.run_id
+    assert child.principal == %{type: "agent", id: "test"}
+    assert child.provenance.delegated_by == ExecutionContext.identity(parent)
+    assert ExecutionContext.subset?(child, parent)
+    assert child.capabilities == ["read"]
+    assert child.limits.max_steps == 4
+    assert command.tool_policy == child.tool_policy
+    assert command.tool_policy.allow == ["read"]
+    assert "read" in command.tool_policy.require_approval
+  end
+
+  @tag :tmp_dir
+  test "delegated workspace escapes and malformed contexts reject admission", %{tmp_dir: root} do
+    assert {:ok, parent} =
+             ExecutionContext.new(run_id: "parent", cwd: Path.join(root, "workspace"))
+
+    incoming =
+      request(unique_session_key("context-refusal"), %{
+        agent_id: "test",
+        cwd: Path.join(root, "outside"),
+        execution_context: parent
+      })
+
+    assert {:error, _reason} = SubmissionBuilder.build(incoming, orchestrator_state())
+
+    assert {:error, :invalid_execution_context} =
+             SubmissionBuilder.build(
+               %{incoming | execution_context: %{"runId" => "untrusted"}},
+               orchestrator_state()
+             )
   end
 
   test "conversation_key is present on submission and execution_request" do
@@ -111,9 +170,10 @@ defmodule LemonRouter.SubmissionBuilderTest do
 
     tool_policy = submission.execution_request.tool_policy
 
-    assert get_in(tool_policy, [:approvals, "bash"]) == :always
-    assert "bash" in (tool_policy[:blocked_tools] || [])
-    assert "rm" in (tool_policy[:blocked_tools] || [])
+    assert tool_policy.approvals["bash"] == :always
+    assert "bash" in tool_policy.blocked_tools
+    assert "rm" in tool_policy.blocked_tools
+    assert %LemonCore.ExecutionContext{} = submission.execution_request.execution_context
   end
 
   test "unknown agent returns {:error, {:unknown_agent_id, ...}}" do
@@ -172,6 +232,35 @@ defmodule LemonRouter.SubmissionBuilderTest do
              )
 
     assert submission.execution_request.cwd == "/worker/project"
+  end
+
+  test "named delegation relocates only workspace binding, not parent authority" do
+    assert {:ok, parent} =
+             ExecutionContext.new(
+               run_id: "remote-parent",
+               cwd: "/controller/workspace",
+               tool_policy: %{allow: ["read"], deny: ["bash"]},
+               limits: %{max_steps: 3}
+             )
+
+    assert {:ok, submission} =
+             SubmissionBuilder.build(
+               request(unique_session_key("remote-context"), %{
+                 agent_id: "test",
+                 cwd: "/worker/project",
+                 execution_context: parent,
+                 meta: %{node: "worker-one", remote_cwd_explicit: true}
+               }),
+               orchestrator_state()
+             )
+
+    command = submission.execution_request
+    assert command.cwd == "/worker/project"
+    assert command.execution_context.workspace_scope.root == nil
+    assert command.execution_context.parent_run_id == parent.run_id
+    assert command.execution_context.limits.max_steps == 3
+    assert command.tool_policy.allow == ["read"]
+    assert "bash" in command.tool_policy.deny
   end
 
   test "local placement continues resolving the controller cwd default" do
@@ -340,6 +429,21 @@ defmodule LemonRouter.SubmissionBuilderTest do
     assert fresh.execution_request.resume == nil
     assert fresh.execution_request.prompt == same.prompt
     assert "read" in fresh.execution_request.tool_policy.blocked_tools
+
+    assert {:ok, parent} =
+             ExecutionContext.new(
+               run_id: "history-parent",
+               cwd: owner.execution_request.cwd,
+               tool_policy: %{blocked_tools: ["read"]}
+             )
+
+    context_restricted = %{same | execution_context: parent}
+    assert {:ok, fresh} = SubmissionBuilder.build(context_restricted, orchestrator_state())
+    assert fresh.execution_request.resume == nil
+    assert fresh.execution_request.prompt == same.prompt
+    assert fresh.pending_compaction_marker == nil
+    assert "read" in fresh.execution_request.tool_policy.blocked_tools
+    assert PendingCompactionStore.get(session_key) == marker
   end
 
   test "legacy unknown journals retain default policy resume but explicit overrides start fresh" do
@@ -363,8 +467,11 @@ defmodule LemonRouter.SubmissionBuilderTest do
     assert is_map(legacy.execution_request.tool_policy)
     assert legacy.execution_request.resume == token
 
+    assert {:ok, parent} = ExecutionContext.new(run_id: "legacy-parent")
+
     for attrs <- [
           %{agent_id: "test", tool_policy: %{blocked_tools: ["bash"]}},
+          %{agent_id: "test", execution_context: parent},
           %{agent_id: "test", meta: %{mcp_servers: []}},
           %{agent_id: "test", meta: %{invocation_context_key: "scoped"}},
           %{agent_id: "test", meta: %{memory_context_key: "shared-room"}}
@@ -501,6 +608,19 @@ defmodule LemonRouter.SubmissionBuilderTest do
       invocation_proof: proof,
       mcp_servers: servers
     }
+  end
+
+  test "malformed supplied policy rejects admission instead of broadening authority" do
+    session_key = unique_session_key("invalid-tool-policy")
+
+    assert {:error, {:invalid_policy_field, :allow}} =
+             SubmissionBuilder.build(
+               request(session_key, %{
+                 agent_id: "test",
+                 tool_policy: %{"allow" => %{"unexpected" => true}}
+               }),
+               orchestrator_state()
+             )
   end
 
   defp request(session_key, attrs) do

@@ -80,7 +80,7 @@ defmodule CodingAgent.Wasm.SidecarSession do
           build_report: map() | nil,
           port: port() | nil,
           buffer: String.t(),
-          host_invoke_fun: (String.t(), String.t() -> {:ok, String.t()} | {:error, term()}),
+          host_invoke_fun: function(),
           hello_ok: boolean(),
           inflight_invoke_id: String.t() | nil,
           discovered: [discovered_tool()],
@@ -99,10 +99,18 @@ defmodule CodingAgent.Wasm.SidecarSession do
     GenServer.call(pid, :discover, timeout)
   end
 
-  @spec invoke(pid(), String.t(), String.t(), String.t() | nil, timeout()) ::
+  @spec invoke(pid(), String.t(), String.t(), String.t() | nil, timeout(), reference() | nil) ::
           {:ok, invoke_result()} | {:error, term()}
-  def invoke(pid, tool, params_json, context_json \\ nil, timeout \\ @invoke_timeout) do
-    GenServer.call(pid, {:invoke, tool, params_json, context_json}, timeout)
+  def invoke(
+        pid,
+        tool,
+        params_json,
+        context_json \\ nil,
+        timeout \\ @invoke_timeout,
+        signal \\ nil
+      ) do
+    deadline = now_ms() + if(is_integer(timeout), do: timeout, else: @invoke_timeout)
+    GenServer.call(pid, {:invoke, tool, params_json, context_json, deadline, signal}, timeout)
   end
 
   @spec status(pid()) :: status()
@@ -199,7 +207,7 @@ defmodule CodingAgent.Wasm.SidecarSession do
   end
 
   def handle_call(
-        {:invoke, _tool, _params_json, _context_json},
+        {:invoke, _tool, _params_json, _context_json, _deadline, _signal},
         _from,
         %{inflight_invoke_id: id} = state
       )
@@ -207,25 +215,41 @@ defmodule CodingAgent.Wasm.SidecarSession do
     {:reply, {:error, :busy}, state}
   end
 
-  def handle_call({:invoke, tool, params_json, context_json}, from, state) do
-    if not is_port(state.port) do
-      {:reply, {:error, :runtime_not_running}, state}
-    else
-      payload = %{
-        "tool" => tool,
-        "params_json" => params_json,
-        "context_json" => context_json
-      }
+  def handle_call({:invoke, tool, params_json, context_json, deadline, signal}, from, state) do
+    cond do
+      not Process.alive?(elem(from, 0)) or LemonAgent.AbortSignal.aborted?(signal) ->
+        {:reply, {:error, :aborted}, state}
 
-      LemonCore.Telemetry.emit([:lemon, :wasm, :invoke, :start], %{count: 1}, %{
-        host: :wasm,
-        session_hash: hash_value(state.session_id),
-        cwd_hash: hash_value(state.cwd),
-        tool_hash: hash_value(tool)
-      })
+      now_ms() >= deadline ->
+        {:reply, {:error, :timeout}, state}
 
-      {state, request_id} = send_request_with_id(state, "invoke", payload, from, {:invoke, tool})
-      {:noreply, %{state | inflight_invoke_id: request_id}}
+      not is_port(state.port) ->
+        {:reply, {:error, :runtime_not_running}, state}
+
+      true ->
+        payload = %{
+          "tool" => tool,
+          "params_json" => params_json,
+          "context_json" => context_json
+        }
+
+        LemonCore.Telemetry.emit([:lemon, :wasm, :invoke, :start], %{count: 1}, %{
+          host: :wasm,
+          session_hash: hash_value(state.session_id),
+          cwd_hash: hash_value(state.cwd),
+          tool_hash: hash_value(tool)
+        })
+
+        {state, request_id} =
+          send_request_with_id(state, "invoke", payload, from, {:invoke, tool})
+
+        request =
+          Map.fetch!(state.pending, request_id)
+          |> Map.put(:deadline, deadline)
+          |> Map.put(:signal, signal)
+
+        state = %{state | pending: Map.put(state.pending, request_id, request)}
+        {:noreply, %{state | inflight_invoke_id: request_id}}
     end
   end
 
@@ -439,12 +463,16 @@ defmodule CodingAgent.Wasm.SidecarSession do
   defp handle_response(state, _msg), do: state
 
   defp handle_host_call_event(state, %{
+         "request_id" => request_id,
          "call_id" => call_id,
          "tool" => tool,
          "params_json" => params_json
-       }) do
+       })
+       when request_id == state.inflight_invoke_id do
+    invocation = Map.get(state.pending, state.inflight_invoke_id)
+
     response_payload =
-      case safe_host_invoke(state.host_invoke_fun, tool, params_json) do
+      case invoke_host_for_request(state.host_invoke_fun, invocation, tool, params_json) do
         {:ok, output_json} ->
           %{
             "call_id" => call_id,
@@ -458,7 +486,7 @@ defmodule CodingAgent.Wasm.SidecarSession do
             "call_id" => call_id,
             "ok" => false,
             "output_json" => nil,
-            "error" => to_string(reason)
+            "error" => host_error_text(reason)
           }
       end
 
@@ -466,6 +494,29 @@ defmodule CodingAgent.Wasm.SidecarSession do
   end
 
   defp handle_host_call_event(state, _msg), do: state
+
+  defp invoke_host_for_request(_fun, nil, _tool, _params_json),
+    do: {:error, :no_active_invocation}
+
+  defp invoke_host_for_request(fun, invocation, tool, params_json) do
+    context = %{
+      owner: elem(invocation.from, 0),
+      deadline: invocation.deadline,
+      signal: invocation.signal
+    }
+
+    safe_host_invoke(
+      fn name, params ->
+        if is_function(fun, 3), do: fun.(name, params, context), else: fun.(name, params)
+      end,
+      tool,
+      params_json
+    )
+  end
+
+  defp host_error_text(reason) when is_binary(reason), do: reason
+  defp host_error_text(reason) when is_atom(reason), do: Atom.to_string(reason)
+  defp host_error_text(_reason), do: "host_tool_failed"
 
   defp safe_host_invoke(fun, tool, params_json) when is_function(fun, 2) do
     try do
@@ -477,10 +528,10 @@ defmodule CodingAgent.Wasm.SidecarSession do
       end
     rescue
       error -> {:error, error}
+    catch
+      :exit, _ -> {:error, :host_invoke_unavailable}
     end
   end
-
-  defp safe_host_invoke(_fun, _tool, _params_json), do: {:error, :host_invoke_unavailable}
 
   defp normalize_discover_result(result) when is_map(result) do
     tools =

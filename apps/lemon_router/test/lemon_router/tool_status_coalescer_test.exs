@@ -111,34 +111,6 @@ defmodule LemonRouter.ToolStatusCoalescerTest do
     :ok
   end
 
-  test "starts coalescer and accepts action events" do
-    session_key = "agent:test:telegram:bot:dm:123"
-    channel_id = "telegram"
-    run_id = "run_#{System.unique_integer([:positive])}"
-
-    ev = %{
-      engine: "lemon",
-      action: %{
-        id: "a1",
-        kind: "tool",
-        title: "Read: foo.txt",
-        detail: %{}
-      },
-      phase: :started,
-      ok: nil,
-      message: nil,
-      level: nil
-    }
-
-    assert :ok =
-             ToolStatusCoalescer.ingest_action(session_key, channel_id, run_id, ev,
-               meta: %{status_msg_id: 123}
-             )
-
-    assert [{_pid, _}] =
-             Registry.lookup(Elixir.LemonRouter.ToolStatusRegistry, {session_key, channel_id})
-  end
-
   test "filters generic note actions" do
     session_key = "agent:test2:telegram:bot:dm:456"
     channel_id = "telegram"

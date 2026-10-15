@@ -64,7 +64,11 @@ defmodule LemonCore.NodeRegistryDurableIDTest do
 
     capable = %{
       capabilities: %{
-        "coding_agent.run" => %{"version" => 1, "nativePrivacyContext" => %{"version" => 1}}
+        "coding_agent.run" => %{
+          "version" => 2,
+          "executionContext" => %{"version" => 1},
+          "nativePrivacyContext" => %{"version" => 1}
+        }
       }
     }
 
@@ -80,7 +84,8 @@ defmodule LemonCore.NodeRegistryDurableIDTest do
     assert NodeRegistry.native_privacy_context_supported?(%{
              "capabilities" => %{
                "coding_agent.run" => %{
-                 "version" => 1,
+                 "version" => 2,
+                 "executionContext" => %{"version" => 1},
                  "nativePrivacyContext" => %{"version" => 1}
                }
              }
@@ -93,6 +98,18 @@ defmodule LemonCore.NodeRegistryDurableIDTest do
     refute NodeRegistry.native_privacy_context_supported?(%{
              capabilities: %{"coding_agent.run" => %{"version" => 1}}
            })
+
+    for context_version <- [nil, 0, 2] do
+      refute NodeRegistry.native_privacy_context_supported?(%{
+               capabilities: %{
+                 "coding_agent.run" => %{
+                   "version" => 2,
+                   "executionContext" => %{"version" => context_version},
+                   "nativePrivacyContext" => %{"version" => 1}
+                 }
+               }
+             })
+    end
 
     refute NodeRegistry.native_privacy_context_supported?(%{})
     refute NodeRegistry.native_privacy_context_supported?(nil)
@@ -130,7 +147,11 @@ defmodule LemonCore.NodeRegistryDurableIDTest do
 
     capable = %{
       capabilities: %{
-        "coding_agent.run" => %{"version" => 1, "nativePrivacyContext" => %{"version" => 1}}
+        "coding_agent.run" => %{
+          "version" => 2,
+          "executionContext" => %{"version" => 1},
+          "nativePrivacyContext" => %{"version" => 1}
+        }
       }
     }
 
@@ -165,7 +186,7 @@ defmodule LemonCore.NodeRegistryDurableIDTest do
     refute_receive {:attacker_received, {:node_event, "node.invoke.request", _}}
     refute_receive {:node_event, "node.invoke.request", _}
 
-    for version <- [nil, 0, 2] do
+    for version <- [nil, 0, 1, 2, 3] do
       unknown = %{
         capabilities: %{
           "coding_agent.run" => %{
@@ -242,7 +263,11 @@ defmodule LemonCore.NodeRegistryDurableIDTest do
 
     capable = %{
       capabilities: %{
-        "coding_agent.run" => %{"version" => 1, "nativePrivacyContext" => %{"version" => 1}}
+        "coding_agent.run" => %{
+          "version" => 2,
+          "executionContext" => %{"version" => 1},
+          "nativePrivacyContext" => %{"version" => 1}
+        }
       }
     }
 

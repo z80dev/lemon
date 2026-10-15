@@ -140,6 +140,7 @@ defmodule LemonAi.Providers.Anthropic do
           blocks: [],
           sse_buffer: "",
           terminal?: false,
+          committed?: false,
           cache_creation: %{},
           model: model,
           oauth_request?: anthropic_oauth_request?(model.provider, api_key)
@@ -152,7 +153,7 @@ defmodule LemonAi.Providers.Anthropic do
             body,
             initial_state,
             trace_id,
-            RetryHelper.policy(),
+            RetryHelper.policy(opts),
             0
           )
 
@@ -254,21 +255,29 @@ defmodule LemonAi.Providers.Anthropic do
     |> Enum.find_value(&env_value/1)
   end
 
-  defp provider_env_vars(:kimi), do: ["KIMI_API_KEY", "MOONSHOT_API_KEY", "ANTHROPIC_API_KEY"]
-  defp provider_env_vars("kimi"), do: ["KIMI_API_KEY", "MOONSHOT_API_KEY", "ANTHROPIC_API_KEY"]
-  defp provider_env_vars(:opencode), do: ["OPENCODE_API_KEY", "ANTHROPIC_API_KEY"]
-  defp provider_env_vars("opencode"), do: ["OPENCODE_API_KEY", "ANTHROPIC_API_KEY"]
-  defp provider_env_vars(:minimax), do: ["MINIMAX_API_KEY", "ANTHROPIC_API_KEY"]
-  defp provider_env_vars("minimax"), do: ["MINIMAX_API_KEY", "ANTHROPIC_API_KEY"]
+  defp provider_env_vars(provider)
+       when provider in [:kimi, :kimi_coding, "kimi", "kimi_coding"],
+       do: ["KIMI_API_KEY", "MOONSHOT_API_KEY"]
 
-  defp provider_env_vars(:minimax_cn),
-    do: ["MINIMAX_CN_API_KEY", "MINIMAX_API_KEY", "ANTHROPIC_API_KEY"]
+  defp provider_env_vars(provider)
+       when provider in [:opencode, :opencode_go, "opencode", "opencode_go"],
+       do: ["OPENCODE_API_KEY"]
 
-  defp provider_env_vars("minimax_cn"),
-    do: ["MINIMAX_CN_API_KEY", "MINIMAX_API_KEY", "ANTHROPIC_API_KEY"]
+  defp provider_env_vars(provider) when provider in [:minimax, "minimax"],
+    do: ["MINIMAX_API_KEY"]
 
-  defp provider_env_vars("anthropic"), do: ["ANTHROPIC_API_KEY"]
-  defp provider_env_vars(provider) when is_atom(provider), do: ["ANTHROPIC_API_KEY"]
+  defp provider_env_vars(provider) when provider in [:minimax_cn, "minimax_cn"],
+    do: ["MINIMAX_CN_API_KEY", "MINIMAX_API_KEY"]
+
+  defp provider_env_vars(provider) when provider in [:github_copilot, "github_copilot"],
+    do: ["GITHUB_COPILOT_API_KEY"]
+
+  defp provider_env_vars(provider) when provider in [:anthropic, "anthropic"],
+    do: ["ANTHROPIC_API_KEY"]
+
+  defp provider_env_vars(provider) when is_atom(provider),
+    do: LemonAi.Models.Presets.env_vars(provider)
+
   # Other binary providers are user-configured custom endpoints: they only get
   # their own credential, never the ambient Anthropic key.
   defp provider_env_vars(_provider), do: []
@@ -363,24 +372,24 @@ defmodule LemonAi.Providers.Anthropic do
          policy,
          attempt
        ) do
-    chunk_key = {__MODULE__, :chunk_seen, make_ref()}
-    output_seen_key = {__MODULE__, :meaningful_output_seen, make_ref()}
-    Process.put(chunk_key, false)
-    Process.put(output_seen_key, false)
+    # Req discards the partial response on transport failure. Retain whether an
+    # output event was emitted independently of the terminal message's content.
+    committed_key = {__MODULE__, :output_committed, make_ref()}
+    Process.put(committed_key, false)
 
     result =
       Req.post(url,
         headers: headers,
         json: body,
+        retry: false,
         into: fn {:data, data}, {req, resp} ->
           if resp.status == 200 do
-            Process.put(chunk_key, true)
             debug_log("sse_chunk", data)
             acc_state = resp.private[:sse_state] || initial_state
             new_state = process_sse_chunk(data, acc_state)
 
-            if meaningful_output_transition?(acc_state, new_state) do
-              Process.put(output_seen_key, true)
+            if new_state.committed? do
+              Process.put(committed_key, true)
             end
 
             resp = put_in(resp.private[:sse_state], new_state)
@@ -393,10 +402,8 @@ defmodule LemonAi.Providers.Anthropic do
         receive_timeout: 300_000
       )
 
-    _saw_chunk = Process.get(chunk_key, false)
-    saw_meaningful_output = Process.get(output_seen_key, false)
-    Process.delete(chunk_key)
-    Process.delete(output_seen_key)
+    committed = Process.get(committed_key, false)
+    Process.delete(committed_key)
 
     case result do
       {:ok, %Req.Response{status: status}} when status in 200..299 ->
@@ -431,7 +438,7 @@ defmodule LemonAi.Providers.Anthropic do
         end
 
       {:error, reason} = error ->
-        if RetryHelper.retry_allowed?(attempt, policy) and not saw_meaningful_output and
+        if RetryHelper.retry_allowed?(attempt, policy) and not committed and
              RetryHelper.retryable_transport_error?(reason) do
           delay_ms = RetryHelper.backoff_delay_ms(attempt, policy)
 
@@ -472,17 +479,6 @@ defmodule LemonAi.Providers.Anthropic do
     debug_log(tag, payload)
     HttpTrace.log("anthropic", tag, Map.put(payload, :trace_id, trace_id))
   end
-
-  defp meaningful_output_transition?(acc_state, new_state) do
-    acc_size = content_size(acc_state)
-    new_size = content_size(new_state)
-    new_size > acc_size
-  rescue
-    _ -> false
-  end
-
-  defp content_size(%{output: %{content: content}}) when is_list(content), do: length(content)
-  defp content_size(_), do: 0
 
   defp retryable_http_response?(%Req.Response{status: status} = response, model) do
     RetryHelper.retryable_http_error?(status, response.body) or
@@ -603,7 +599,7 @@ defmodule LemonAi.Providers.Anthropic do
         blocks = state.blocks ++ [{index, text_block}]
         output = %{state.output | content: state.output.content ++ [text_block]}
         EventStream.push_async(state.stream, {:text_start, content_index, output})
-        %{state | blocks: blocks, output: output}
+        %{state | blocks: blocks, output: output, committed?: true}
 
       "thinking" ->
         thinking_block = %ThinkingContent{
@@ -616,7 +612,7 @@ defmodule LemonAi.Providers.Anthropic do
         blocks = state.blocks ++ [{index, thinking_block}]
         output = %{state.output | content: state.output.content ++ [thinking_block]}
         EventStream.push_async(state.stream, {:thinking_start, content_index, output})
-        %{state | blocks: blocks, output: output}
+        %{state | blocks: blocks, output: output, committed?: true}
 
       "tool_use" ->
         tool_call = %ToolCall{
@@ -630,7 +626,7 @@ defmodule LemonAi.Providers.Anthropic do
         blocks = state.blocks ++ [{index, tool_call, ""}]
         output = %{state.output | content: state.output.content ++ [tool_call]}
         EventStream.push_async(state.stream, {:tool_call_start, content_index, output})
-        %{state | blocks: blocks, output: output}
+        %{state | blocks: blocks, output: output, committed?: true}
 
       _ ->
         state
@@ -664,7 +660,7 @@ defmodule LemonAi.Providers.Anthropic do
     case find_block_by_index(state.blocks, index) do
       {content_index, %TextContent{} = block} ->
         EventStream.push_async(state.stream, {:text_end, content_index, block.text, state.output})
-        state
+        %{state | committed?: true}
 
       {content_index, %ThinkingContent{} = block} ->
         EventStream.push_async(
@@ -672,11 +668,11 @@ defmodule LemonAi.Providers.Anthropic do
           {:thinking_end, content_index, block.thinking, state.output}
         )
 
-        state
+        %{state | committed?: true}
 
       {content_index, %ToolCall{} = block, _partial_json} ->
         EventStream.push_async(state.stream, {:tool_call_end, content_index, block, state.output})
-        state
+        %{state | committed?: true}
 
       _ ->
         state
@@ -847,7 +843,7 @@ defmodule LemonAi.Providers.Anthropic do
         blocks = update_block_at_index(state.blocks, index, updated_block)
         output = update_content_at_index(state.output, content_index, updated_block)
         EventStream.push_async(state.stream, {:text_delta, content_index, delta_text, output})
-        %{state | blocks: blocks, output: output}
+        %{state | blocks: blocks, output: output, committed?: true}
 
       _ ->
         state
@@ -866,7 +862,7 @@ defmodule LemonAi.Providers.Anthropic do
           {:thinking_delta, content_index, delta_thinking, output}
         )
 
-        %{state | blocks: blocks, output: output}
+        %{state | blocks: blocks, output: output, committed?: true}
 
       _ ->
         state
@@ -902,7 +898,7 @@ defmodule LemonAi.Providers.Anthropic do
           {:tool_call_delta, content_index, partial_json, output}
         )
 
-        %{state | blocks: blocks, output: output}
+        %{state | blocks: blocks, output: output, committed?: true}
 
       _ ->
         state

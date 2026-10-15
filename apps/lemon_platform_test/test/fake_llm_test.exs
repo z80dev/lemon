@@ -187,10 +187,10 @@ defmodule LemonPlatformTest.FakeLLMTest do
     assert assistant_text(messages) == "verbatim"
   end
 
-  test "typed transient provider errors recover even when their display message is opaque" do
+  test "typed transient errors recover before output even with an opaque display message" do
     failed = %LemonAi.Types.AssistantMessage{
       role: :assistant,
-      content: [%TextContent{type: :text, text: "unfinished"}],
+      content: [],
       stop_reason: :error,
       error_message: "Request failed",
       error_details: %{
@@ -215,6 +215,43 @@ defmodule LemonPlatformTest.FakeLLMTest do
     assert {:ok, messages} = EventStream.result(stream)
     assert assistant_text(messages) == "recovered"
     refute Enum.any?(events, &match?({:message_end, %{stop_reason: :error}}, &1))
+  end
+
+  test "typed transient provider errors after text preserve partial output without replay" do
+    failed = %LemonAi.Types.AssistantMessage{
+      role: :assistant,
+      content: [%TextContent{type: :text, text: "unfinished"}],
+      stop_reason: :error,
+      error_message: "Request failed",
+      error_details: %{
+        category: :transient,
+        retryable: true,
+        rate_limit_info: %{retry_after: 1}
+      },
+      model: "custom",
+      timestamp: 0
+    }
+
+    stream_fn = FakeLLM.script([failed, {:text, "must not replay"}], on_exhaust: :raise)
+    retry_config = %{config(stream_fn) | max_retries: 1, retry_base_delay_ms: 0}
+    context = AgentContext.new(system_prompt: "You are helpful.")
+    stream = Loop.agent_loop([user("go")], context, retry_config, nil, nil)
+    events = Enum.to_list(EventStream.events(stream))
+
+    refute Enum.any?(events, &match?({:provider_retry, _}, &1))
+    refute Enum.any?(events, &match?({:provider_retry_end, _}, &1))
+
+    assert {:error, {:assistant_error, "Request failed"}, %{new_messages: messages}} =
+             EventStream.result(stream)
+
+    assert assistant_text(messages) == "unfinished"
+    assistant = Enum.find(messages, &(Map.get(&1, :role) == :assistant))
+    assert assistant.stop_reason == :error
+
+    assert %{category: :transient, retryable: true, output_committed: true} =
+             assistant.error_details
+
+    assert {:message_end, assistant} in events
   end
 
   test "on_exhaust: :stop (default) lets an over-run loop end cleanly" do

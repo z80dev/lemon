@@ -275,6 +275,23 @@ defmodule CodingAgent.Executor.ProfileExecutionTest do
       assert {:ok, ^run_id} = RunOrchestrator.submit(request)
       assert_receive {:profile_dispatch, command}
       request = ExecutionRequest.from_command(command)
+
+      context_result =
+        case request.execution_context do
+          nil ->
+            LemonCore.ExecutionContext.new(
+              run_id: request.run_id,
+              cwd: request.cwd,
+              tool_policy: request.tool_policy
+            )
+
+          context ->
+            LemonCore.ExecutionContext.validate(context)
+        end
+
+      assert {:ok, execution_context} = context_result
+
+      request = %{request | execution_context: execution_context}
       meta = request.meta
       refute inspect(meta) =~ "runtime-secret"
       assert {:ok, outbound} = RemoteRequestCodec.encode(request)
@@ -292,7 +309,7 @@ defmodule CodingAgent.Executor.ProfileExecutionTest do
             assert {:ok, decoded, _opts} =
                      Worker.execution_request(
                        outbound,
-                       %{default_cwd: root, name: "profile-fixture"},
+                       %Worker{default_cwd: root, name: "profile-fixture"},
                        run_id
                      )
 

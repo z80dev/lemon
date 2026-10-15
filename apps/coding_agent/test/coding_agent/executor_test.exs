@@ -14,7 +14,7 @@ defmodule CodingAgent.ExecutorTest do
 
   alias CodingAgent.Executor
   alias CodingAgent.Executor.SessionRunner, as: ExecutorSessionRunner
-  alias LemonCore.{NodeRegistry, ResumeToken}
+  alias LemonCore.{ExecutionContext, NodeRegistry, ResumeToken, ToolPolicy}
   alias LemonGateway.ExecutionRequest
 
   @tag :tmp_dir
@@ -178,10 +178,130 @@ defmodule CodingAgent.ExecutorTest do
 
   describe "start_run/3 direct session runner" do
     @tag :tmp_dir
+    test "validates supplied authority before starting a local session", %{tmp_dir: tmp_dir} do
+      req =
+        request(tmp_dir,
+          prompt: "must not start",
+          run_id: "authority-validation",
+          stream_fn: fn _, _, _ -> flunk("invalid authority must not invoke a provider") end
+        )
+
+      for invalid <- [false, %{"runId" => req.run_id}] do
+        assert {:error, :invalid_execution_context} =
+                 Executor.start_run(%{req | execution_context: invalid}, %{}, self())
+      end
+
+      assert {:ok, context} = ExecutionContext.new(run_id: "other-run", cwd: tmp_dir)
+
+      assert {:error, :execution_context_run_id_mismatch} =
+               Executor.start_run(%{req | execution_context: context}, %{}, self())
+
+      assert {:error, :invalid_execution_context} =
+               Executor.start_run(req, %{execution_context: false}, self())
+
+      refute_receive {:engine_event, _, _}, 50
+    end
+
+    @tag :tmp_dir
+    test "field and option authority preserve invocation ownership and destination policy floors",
+         %{
+           tmp_dir: tmp_dir
+         } do
+      parent = self()
+
+      for placement <- [:field, :option] do
+        run_id = "bounded-authority-#{placement}"
+        native = mock_stream_fn([assistant_message("bounded native run")])
+
+        stream = fn model, context, options ->
+          send(parent, {:authority_provider, self()})
+
+          receive do
+            :continue_authority -> native.(model, context, options)
+          after
+            5_000 -> raise "authority provider was not released"
+          end
+        end
+
+        assert {:ok, authority} =
+                 ExecutionContext.new(
+                   run_id: run_id,
+                   cwd: tmp_dir,
+                   principal: %{type: "actor", id: "authority-principal"},
+                   tool_policy: %{allow: ["read", "write"]},
+                   capabilities: ["read", "write"],
+                   limits: %{max_steps: 7}
+                 )
+
+        req =
+          request(tmp_dir,
+            run_id: run_id,
+            prompt: "inspect authority",
+            stream_fn: stream,
+            meta: %{agent_id: "invocation-owner", invocation_context_key: "invocation-binding"}
+          )
+
+        req = %{req | tool_policy: %{allow: :all}}
+        opts = %{stream_fn: stream, tool_policy: %{allow: ["read"]}}
+
+        {req, opts} =
+          if placement == :field,
+            do: {%{req | execution_context: authority}, opts},
+            else: {req, Map.put(opts, :execution_context, authority)}
+
+        assert {:ok, run_ref, %{runner_pid: runner}} = Executor.start_run(req, opts, self())
+        assert_receive {:authority_provider, provider}, 5_000
+        on_exit(fn -> send(provider, :continue_authority) end)
+        session = :sys.get_state(runner).session
+        state = CodingAgent.Session.get_state(session)
+
+        assert state.execution_context.run_id == run_id
+        assert state.execution_context.principal == authority.principal
+        assert state.execution_context.limits.max_steps == 7
+        assert ExecutionContext.subset?(state.execution_context, authority)
+        assert ToolPolicy.allowed?(state.execution_context.tool_policy, "read")
+        refute ToolPolicy.allowed?(state.execution_context.tool_policy, "write")
+        assert state.approval_context.invocation_context_key == "invocation-binding"
+        assert state.approval_context.agent_id == "invocation-owner"
+        assert state.approval_context.run_id == run_id
+        assert state.approval_context.session_key == req.session_key
+
+        send(provider, :continue_authority)
+
+        assert {:engine_event, ^run_ref, %{__event__: :completed, ok: true}} =
+                 List.last(collect_until_completed(run_ref))
+      end
+    end
+
+    @tag :tmp_dir
+    test "rejects malformed supplied policy before starting a session", %{tmp_dir: tmp_dir} do
+      request =
+        request(tmp_dir,
+          prompt: "must not start",
+          run_id: "run-invalid-policy",
+          stream_fn: mock_stream_fn([assistant_message("unexpected")])
+        )
+
+      request = %{request | tool_policy: %{"allow" => 123}}
+
+      assert {:error, {:invalid_policy_field, :allow}} =
+               Executor.start_run(request, %{stream_fn: request.meta[:stream_fn]}, self())
+
+      refute_receive {:engine_event, _, _}, 50
+    end
+
+    @tag :tmp_dir
     test "emits started, delta, tool action, and completed events", %{tmp_dir: tmp_dir} do
       tool_response =
         assistant_message_with_tool_calls([
-          tool_call("bash", %{"command" => "printf executor-tool"}, id: "call_executor")
+          tool_call(
+            "bash",
+            %{
+              "command" => "printf executor-tool",
+              "env" => %{"FOO" => "opaque-env-value-never-log"}
+            },
+            id: "call_executor"
+          )
         ])
 
       final_response = assistant_message("executor done")
@@ -256,9 +376,177 @@ defmodule CodingAgent.ExecutorTest do
                 resume: %ResumeToken{engine: "lemon", value: ^session_id}
               }} = List.last(messages)
 
+      refute inspect(messages) =~ "opaque-env-value-never-log"
+
+      started =
+        Enum.find(
+          messages,
+          &match?(
+            {:engine_event, ^run_ref, %{__event__: :action_event, phase: :started}},
+            &1
+          )
+        )
+
+      {:engine_event, _, action} = started
+      assert action.action.detail.args["env_keys"] == ["FOO"]
+
       assert File.regular?(
                CodingAgent.Session.Presentation.session_file_path(session_id, tmp_dir)
              )
+    end
+
+    @tag :tmp_dir
+    @tag :python3
+    test "completed native turns hand off eval and debugger state; logical reset kills descendants",
+         %{tmp_dir: tmp_dir} do
+      parent = self()
+      File.write!(Path.join(tmp_dir, "prog.fake"), "")
+      adapter = Path.expand("../support/fake_dap_adapter.py", __DIR__)
+      log = Path.join(tmp_dir, "dap.jsonl")
+
+      code = """
+      import subprocess
+      value = 41
+      child = subprocess.Popen(['sleep', '60'], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+      child.pid
+      """
+
+      native =
+        mock_stream_fn([
+          assistant_message_with_tool_calls([
+            tool_call("eval", %{"language" => "py", "code" => code}, id: "eval-init")
+          ]),
+          assistant_message("first turn")
+        ])
+
+      stream = fn model, context, options ->
+        if Enum.any?(context.messages, &(Map.get(&1, :tool_call_id) == "eval-init")) do
+          send(parent, {:finish_ready, self()})
+
+          receive do
+            :finish_turn -> :ok
+          after
+            20_000 -> raise "turn was not released"
+          end
+        end
+
+        native.(model, context, options)
+      end
+
+      first =
+        request(tmp_dir, run_id: "handoff-first", prompt: "initialize kernel", stream_fn: stream)
+
+      {:ok, first_ref, %{runner_pid: runner}} =
+        Executor.start_run(first, %{stream_fn: stream}, self())
+
+      assert_receive {:finish_ready, provider}, 20_000
+      session = :sys.get_state(runner).session
+      id = CodingAgent.Session.get_state(session).session_manager.header.id
+      resume = ResumeToken.new("lemon", id)
+
+      opts = [
+        session_id: id,
+        session_pid: session,
+        session_key: first.session_key,
+        debug_adapters: %{
+          "fake" => %{
+            command: System.find_executable("python3"),
+            args: [adapter, log],
+            launch_defaults: %{"stopOnEntry" => true}
+          }
+        }
+      ]
+
+      debugger =
+        CodingAgent.Tools.Debug.execute(
+          "launch",
+          %{"action" => "launch", "program" => "prog.fake", "adapter" => "fake"},
+          nil,
+          nil,
+          tmp_dir,
+          opts
+        )
+
+      refute debugger.is_error
+      debuggee = debugger.details.snapshot.process_id
+      debug_server = CodingAgent.Debug.SessionServer.whereis(id)
+      {:ok, kernel} = CodingAgent.Eval.KernelSupervisor.lookup({id, "py"})
+
+      eval_result =
+        Enum.find(
+          CodingAgent.Session.get_messages(session),
+          &(Map.get(&1, :tool_call_id) == "eval-init")
+        )
+
+      child = eval_result.content |> hd() |> Map.fetch!(:text) |> String.to_integer()
+      on_exit(fn -> CodingAgent.ToolResources.stop(id) end)
+      send(provider, :finish_turn)
+
+      assert {:engine_event, ^first_ref, %{__event__: :completed, ok: true}} =
+               List.last(collect_until_completed(first_ref))
+
+      refute Process.alive?(session)
+      assert Process.alive?(kernel)
+      assert Process.alive?(debug_server)
+
+      next_stream =
+        mock_stream_fn([
+          assistant_message_with_tool_calls([
+            tool_call("eval", %{"language" => "py", "code" => "value + 1"}, id: "eval-next"),
+            tool_call("debug", %{"action" => "status"}, id: "debug-next")
+          ]),
+          assistant_message("second turn")
+        ])
+
+      capture = fn model, context, options ->
+        send(parent, {:next_context, context.messages})
+        next_stream.(model, context, options)
+      end
+
+      second = %{
+        request(tmp_dir,
+          run_id: "handoff-second",
+          prompt: "reuse resources",
+          resume: resume,
+          stream_fn: capture
+        )
+        | session_key: first.session_key
+      }
+
+      {:ok, second_ref, _} = Executor.start_run(second, %{stream_fn: capture}, self())
+
+      assert {:engine_event, ^second_ref, %{__event__: :completed, ok: true}} =
+               List.last(collect_until_completed(second_ref))
+
+      assert_receive {:next_context, _initial}
+      assert_receive {:next_context, messages}
+      result = Enum.find(messages, &(Map.get(&1, :tool_call_id) == "eval-next"))
+      assert Enum.any?(result.content, &Regex.match?(~r/(?:^|\n)42(?:\n|$)/, &1.text))
+      status = Enum.find(messages, &(Map.get(&1, :tool_call_id) == "debug-next"))
+      assert status.details.snapshot.process_id == debuggee
+      assert status.details.snapshot.status == :stopped
+      assert {:ok, ^kernel} = CodingAgent.Eval.KernelSupervisor.lookup({id, "py"})
+      assert CodingAgent.Debug.SessionServer.whereis(id) == debug_server
+
+      kernel_ref = Process.monitor(kernel)
+      debug_ref = Process.monitor(debug_server)
+      :ok = LemonCore.RunStore.delete_history(first.session_key)
+      assert_receive {:DOWN, ^kernel_ref, :process, ^kernel, _}, 10_000
+      assert_receive {:DOWN, ^debug_ref, :process, ^debug_server, _}, 10_000
+
+      for pid <- [child, debuggee] do
+        CodingAgent.AsyncHelpers.assert_eventually(
+          fn ->
+            case System.cmd("ps", ["-o", "stat=", "-p", Integer.to_string(pid)],
+                   stderr_to_stdout: true
+                 ) do
+              {stat, 0} -> String.starts_with?(String.trim(stat), "Z")
+              _ -> true
+            end
+          end,
+          timeout: 5_000
+        )
+      end
     end
 
     @tag :tmp_dir
@@ -641,6 +929,68 @@ defmodule CodingAgent.ExecutorTest do
       assert {:engine_event, ^run_ref,
               %{__event__: :completed, ok: true, answer: "fresh after stale auto resume"}} =
                List.last(messages)
+    end
+
+    @tag :tmp_dir
+    test "auto resume in another directory refuses to replace a mapped native history", %{
+      tmp_dir: tmp_dir
+    } do
+      source = Path.join(tmp_dir, "source")
+      destination = Path.join(tmp_dir, "destination")
+      File.mkdir_p!(source)
+      File.mkdir_p!(destination)
+
+      manager =
+        source
+        |> CodingAgent.SessionManager.new()
+        |> CodingAgent.SessionManager.append_message(%{"role" => "user", "content" => "keep"})
+
+      path = CodingAgent.Session.Presentation.session_file_path(manager.header.id, source)
+      :ok = CodingAgent.SessionManager.save_to_file(path, manager)
+      original = File.read!(path)
+
+      req =
+        request(destination,
+          prompt: "continue",
+          run_id: "cross-directory-resume",
+          resume: ResumeToken.new("lemon", manager.header.id),
+          meta: %{"resume_source" => :auto},
+          stream_fn: fn _, _, _ -> flunk("missing mapped history must not invoke a provider") end
+        )
+
+      chat_state = %LemonCore.ChatState{
+        last_engine: "lemon",
+        last_resume_token: manager.header.id,
+        updated_at: System.system_time(:millisecond)
+      }
+
+      :ok = LemonCore.ChatStateStore.put(req.session_key, chat_state)
+
+      on_exit(fn ->
+        LemonCore.ChatStateStore.delete(req.session_key)
+        File.rm_rf!(CodingAgent.SessionManager.get_session_dir(source))
+        File.rm_rf!(CodingAgent.SessionManager.get_session_dir(destination))
+      end)
+
+      id = manager.header.id
+
+      assert {:error, {:resume_session_missing, ^id}} =
+               Executor.start_run(req, %{stream_fn: req.meta[:stream_fn]}, self())
+
+      # The preflight and actual start both fail closed, including a file disappearing
+      # between validation and startup.
+      assert {:error, {:resume_session_missing, ^id}} =
+               CodingAgent.Session.Presentation.start_or_resume_session(
+                 req.resume,
+                 [resume_source: :auto, session_key: req.session_key],
+                 %{cwd: destination}
+               )
+
+      assert %{last_engine: "lemon", last_resume_token: ^id} =
+               LemonCore.ChatStateStore.get(req.session_key)
+
+      assert File.read!(path) == original
+      refute File.exists?(CodingAgent.Session.Presentation.session_file_path(id, destination))
     end
 
     @tag :tmp_dir

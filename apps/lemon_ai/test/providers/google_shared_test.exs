@@ -698,22 +698,158 @@ defmodule LemonAi.Providers.GoogleSharedComprehensiveTest do
       assert GoogleShared.normalize_http_error_body(body) == Jason.encode!(body)
     end
 
-    test "collects Req.Response.Async chunks into a string body" do
-      ref = make_ref()
-      async = %Req.Response.Async{ref: ref, pid: self()}
+    test "collects async chunks and closes the transport after completion" do
+      async = error_body_transport()
+      ref = async.ref
 
       send(self(), {ref, {:data, "{\"error\":{"}})
-      send(self(), {ref, {:data, "\"message\":\"No access\"}}"}})
+      send(self(), {ref, {:data, "\"message\":\"Prompt is too long\"}}"}})
       send(self(), {ref, :done})
 
-      assert GoogleShared.normalize_http_error_body(async, 50) ==
-               ~s({"error":{"message":"No access"}})
+      text = GoogleShared.normalize_http_error_body(async, 50)
+
+      assert %{status: 400, category: :context_length, retryable: false} =
+               GoogleShared.safe_http_error(400, text)
+
+      assert_receive {:transport_canceled, ^ref}
+      refute_receive {^ref, _}
     end
 
-    test "falls back to async inspect when no chunks arrive before timeout" do
-      async = %Req.Response.Async{ref: make_ref(), pid: self()}
+    test "timeout closes the transport without inspecting or exposing its state" do
+      async = error_body_transport()
+      ref = async.ref
+      send(self(), :unrelated_message)
+
       text = GoogleShared.normalize_http_error_body(async, 0)
-      assert String.contains?(text, "Req.Response.Async")
+      assert byte_size(text) <= 16_384
+      details = GoogleShared.safe_http_error(401, text)
+      assert %{status: 401, category: :auth, retryable: false} = details
+      assert byte_size(details.message) in 1..512
+      assert details.provider_message == nil
+      refute Jason.encode!(details) =~ "Req.Response"
+      assert_receive {:transport_canceled, ^ref}
+      assert_receive :unrelated_message
+    end
+
+    test "oversized bodies stop at the byte bound and clean remaining response messages" do
+      async = error_body_transport()
+      ref = async.ref
+      send(self(), {ref, {:data, "Prompt is too long. " <> String.duplicate("x", 32_768)}})
+      send(self(), {ref, {:data, "credential-that-must-not-be-collected"}})
+      send(self(), {ref, :done})
+
+      text = GoogleShared.normalize_http_error_body(async, 50)
+      assert byte_size(text) <= 16_384
+      refute text =~ "credential-that-must-not-be-collected"
+      assert %{status: 400, category: :context_length} = GoogleShared.safe_http_error(400, text)
+      assert_receive {:transport_canceled, ^ref}
+      refute_receive {^ref, _}
+    end
+
+    test "transport failure stops collection and closes without inspecting the failure" do
+      async = error_body_transport()
+      ref = async.ref
+      send(self(), {ref, {:data, "Invalid request"}})
+      send(self(), {ref, {:error, %{credentials: "private-upstream-token"}}})
+      send(self(), {ref, {:data, "private-upstream-token"}})
+
+      text = GoogleShared.normalize_http_error_body(async, 50)
+      details = GoogleShared.safe_http_error(400, text)
+      assert %{status: 400, category: :client, retryable: false} = details
+      refute Jason.encode!(details) =~ "private-upstream-token"
+      assert_receive {:transport_canceled, ^ref}
+      refute_receive {^ref, _}
+    end
+
+    test "the total deadline is not extended by incoming chunks" do
+      async = error_body_transport()
+      ref = async.ref
+      parser = async.stream_fun
+
+      async = %{
+        async
+        | stream_fun: fn message_ref, message ->
+            # Advance beyond the deadline while processing the first chunk.
+            # A per-chunk timeout would incorrectly read the queued suffix.
+            Process.sleep(100)
+            parser.(message_ref, message)
+          end
+      }
+
+      send(self(), {ref, {:data, "Prompt is too long"}})
+      send(self(), {ref, {:data, "suffix-after-deadline"}})
+      send(self(), {ref, :done})
+
+      text = GoogleShared.normalize_http_error_body(async, 50)
+      refute text =~ "suffix-after-deadline"
+      assert %{status: 400, category: :context_length} = GoogleShared.safe_http_error(400, text)
+      assert_receive {:transport_canceled, ^ref}
+      refute_receive {^ref, _}
+    end
+
+    test "byte truncation preserves valid UTF-8 for error classification" do
+      text =
+        "Prompt is too long. " <>
+          String.duplicate("x", 16_364) <> "🌍" <> String.duplicate("x", 32_768)
+
+      normalized = GoogleShared.normalize_http_error_body(text)
+      assert byte_size(normalized) <= 16_384
+      assert String.valid?(normalized)
+
+      assert %{status: 400, category: :context_length} =
+               GoogleShared.safe_http_error(400, normalized)
+    end
+
+    test "unknown response structs never become public error details" do
+      body = %Req.Response{body: "private-response-credential"}
+      normalized = GoogleShared.normalize_http_error_body(body)
+      details = GoogleShared.safe_http_error(403, normalized)
+      assert %{status: 403, category: :auth, retryable: false} = details
+      assert byte_size(details.message) in 1..512
+      refute Jason.encode!(details) =~ "private-response-credential"
+      refute Jason.encode!(details) =~ "Req.Response"
+    end
+
+    test "safe errors preserve rate-limit hints and permanent quota classification" do
+      for {body, retryable} <- [
+            {"Rate limit exceeded. token=private-retry-token", true},
+            {"insufficient_quota. token=private-quota-token", false}
+          ] do
+        details = GoogleShared.safe_http_error(429, body, %{"retry-after" => ["2"]})
+        assert %{status: 429, category: :rate_limit, retryable: ^retryable} = details
+        assert details.rate_limit_info.retry_after == 2_000
+        assert LemonAi.Error.failover_action(details) == :next_credential
+        assert byte_size(details.message) in 1..512
+        assert details.provider_message == nil
+        refute Jason.encode!(details) =~ "private-"
+      end
+    end
+  end
+
+  defp error_body_transport do
+    ref = make_ref()
+
+    %Req.Response.Async{
+      ref: ref,
+      pid: self(),
+      stream_fun: fn
+        ^ref, {^ref, {:data, data}} -> {:ok, [data: data]}
+        ^ref, {^ref, :done} -> {:ok, [:done]}
+        ^ref, {^ref, {:error, reason}} -> {:error, reason}
+      end,
+      cancel_fun: fn ^ref ->
+        drain_error_body(ref)
+        send(self(), {:transport_canceled, ref})
+        :ok
+      end
+    }
+  end
+
+  defp drain_error_body(ref) do
+    receive do
+      {^ref, _} -> drain_error_body(ref)
+    after
+      0 -> :ok
     end
   end
 

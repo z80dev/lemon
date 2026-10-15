@@ -312,3 +312,42 @@ test("completed receipt overrides a retained partial update and supports agent r
 	expect(tree.store.find("chat", "one")?.progress).toBe("final result");
 	expect(tree.store.find("chat", "one")?.agent).toBe("reviewer");
 });
+
+test("snapshot replacement converges child terminal and unknown identities without a ticker", () => {
+	const { tree } = controller();
+	tree.toggle();
+	tree.ingest(progress("fixed", "running", { run_id: "child-run" }));
+	tree.reconcile("chat", {
+		status: "ok",
+		items: [
+			{
+				taskId: "fixed",
+				runId: "child-run",
+				parentRunId: "parent-run",
+				status: "completed",
+				terminal: true,
+			},
+			{
+				taskId: "lost",
+				runId: null,
+				sessionId: "child-session",
+				status: "unknown",
+				terminal: false,
+				answer: `\u001b[31m${"x".repeat(1024)}\u001b[0m`,
+			},
+		],
+	});
+	expect(tree.store.items("chat").map((task) => [task.taskId, task.status])).toEqual([
+		["fixed", "completed"],
+		["lost", "unknown"],
+	]);
+	expect(tree.ticking).toBe(false);
+	expect(tree.panel.render(120).join("\n")).toContain("0 active");
+	expect(tree.store.find("chat", "lost")?.sessionId).toBe("child-session");
+	expect(tree.store.find("chat", "lost")?.progress?.length).toBe(TASK_PROGRESS_LIMIT);
+	expect(tree.store.find("chat", "lost")?.progress).not.toContain("\u001b");
+	tree.reconcile("chat", { status: "unavailable", items: [] });
+	expect(tree.store.items("chat")).toHaveLength(2);
+	tree.reconcile("chat", { status: "ok", items: [] });
+	expect(tree.store.items("chat")).toHaveLength(0);
+});

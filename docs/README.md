@@ -34,7 +34,7 @@ with the workflow you need; source modules and tests define implementation APIs.
 ## Tools and skills
 
 - [Skill implementation/reference](skills.md) and [manifest schema](reference/skill-manifest-v2.md)
-- [Web/browser](tools/web.md), [browser tool](tools/browser.md), [Firecrawl](tools/firecrawl.md), [media](tools/media.md), [LSP](tools/lsp.md) and the [omp delegate](tools/omp.md)
+- [File and search tools](tools/files-and-search.md), [Web/browser](tools/web.md), [browser tool](tools/browser.md), [Firecrawl](tools/firecrawl.md), [media](tools/media.md), [LSP](tools/lsp.md), [eval kernels](tools/eval.md), [debugger](tools/debug.md) and the [omp delegate](tools/omp.md)
 - [ACP](tools/acp.md), [OpenAI-compatible API](tools/openai-compatible-api.md),
   [extensions/MCP clients](extensions.md) and [WASM](tools/wasm.md)
 
@@ -48,6 +48,7 @@ overview and the app guides below, rather than keeping a second runtime catalog.
   [add a channel](getting-started/add-a-channel.md) and [persist memory](getting-started/persist-memory.md)
 - [App boundaries](architecture_boundaries.md), [BEAM lifecycle invariants](beam_agents.md),
   [bus events](platform/bus-events.md) and [model selection](model-selection-decoupling.md)
+- [Execution policy and inherited authority](execution-policy.md)
 - [Context](context.md), [bootstrap](assistant_bootstrap_contract.md),
   [long-running harnesses](long-running-agent-harnesses.md) and [parent questions](subagent-parent-questions.md)
 - [Hot reload](runtime-hot-reload.md), [telemetry](telemetry.md) and [error reporting](error-reporting.md)

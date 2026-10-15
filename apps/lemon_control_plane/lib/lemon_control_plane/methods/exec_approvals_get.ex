@@ -62,7 +62,8 @@ defmodule LemonControlPlane.Methods.ExecApprovalsGet do
     end
   end
 
-  defp format_pending(pending) do
+  @doc false
+  def format_pending(pending) do
     %{
       "id" => get_value(pending, :id),
       "runId" => get_value(pending, :run_id),

@@ -20,6 +20,9 @@ defmodule LemonCore.RunStore do
   @spec fetch(binary()) :: {:ok, map() | nil} | {:error, :store_unavailable}
   def fetch(run_id), do: Store.fetch_run(run_id)
 
+  @doc "Fetch one durable session index without confusing owner failure with absence."
+  def fetch_session_index(session_key), do: Store.fetch(:sessions_index, session_key)
+
   @spec append_event(term(), term()) :: :ok | {:error, term()}
   def append_event(run_id, event), do: Store.append_run_event(run_id, execution_projection(event))
 
@@ -68,7 +71,17 @@ defmodule LemonCore.RunStore do
 
   @spec delete_history(term()) :: :ok
   def delete_history(session_key) do
-    RunHistoryStore.delete_session(session_key)
+    cutoff = System.monotonic_time()
+    result = RunHistoryStore.delete_session(session_key)
+
+    if result == :ok,
+      do:
+        LemonCore.Bus.broadcast(
+          "sessions:lifecycle",
+          {:session_history_deleted, session_key, cutoff}
+        )
+
+    result
   end
 
   @spec delete_session(term()) :: :ok

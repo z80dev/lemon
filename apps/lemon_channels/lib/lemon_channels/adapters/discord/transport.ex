@@ -47,7 +47,7 @@ defmodule LemonChannels.Adapters.Discord.Transport do
   @idle_keepalive_continue_prefix "lemon:idle:c:"
   @idle_keepalive_stop_prefix "lemon:idle:k:"
 
-  @thinking_levels ~w(off minimal low medium high xhigh)
+  @thinking_levels ~w(off minimal low medium high xhigh auto)
   @debounce_ms 1_000
   @default_dedupe_ttl 600_000
   @dedupe_table :lemon_channels_discord_dedupe
@@ -2139,7 +2139,8 @@ defmodule LemonChannels.Adapters.Discord.Transport do
 
   defp thinking_scope_label(_), do: "this channel"
 
-  defp thinking_usage, do: "Usage: `/thinking [off|minimal|low|medium|high|xhigh|clear|status]`"
+  defp thinking_usage,
+    do: "Usage: `/thinking [off|minimal|low|medium|high|xhigh|auto|clear|status]`"
 
   defp normalize_thinking_arg(arg) when is_binary(arg) do
     case String.downcase(String.trim(arg)) do

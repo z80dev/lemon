@@ -1,6 +1,6 @@
 defmodule LemonCore.UUIDPropertyTest do
   @moduledoc """
-  Property-based structural invariants for `LemonCore.UUID`.
+  Property-based structural invariants for `LemonCore.Id`.
 
   The example test pins a handful of cases; these assert the RFC 9562 bit
   layout holds for *every* generated id, not just the ones we thought to write
@@ -9,7 +9,7 @@ defmodule LemonCore.UUIDPropertyTest do
   use ExUnit.Case, async: true
   use ExUnitProperties
 
-  alias LemonCore.UUID
+  alias LemonCore.Id, as: UUID
 
   @canonical ~r/\A[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\z/
 

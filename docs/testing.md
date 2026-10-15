@@ -85,6 +85,15 @@ Every app's `test_helper.exs` starts ExUnit with `capture_log: true`: log
 output is printed only for failing tests. Assert on logs with
 `ExUnit.CaptureLog.capture_log/2`.
 
+The `coding_agent` helper disables `[features] session_search` in its isolated
+home: mocking a session's stream does not mock background project-fact extraction.
+Memory fixtures opt in with project config and control extraction explicitly.
+Recall-only fixtures omit the capture session key; capacity fixtures monitor their
+admitted workers through exit before asserting reuse of stale registry entries.
+Recall ingest fixtures also give their supervised ingest worker an explicit
+project-config loader and use a server barrier before querying persisted facts,
+rather than polling for global ingest to pick up changed feature flags.
+
 Shared Elixir helpers live in `LemonCore.Testing.HermeticEnv`:
 
 - `credential_env_vars/0` returns the canonical scrub list.
@@ -122,6 +131,26 @@ that exercise different branches. Stream and loop coverage must retain terminal
 ordering, cancellation, monitoring, and tool-result accounting—not just a
 successful return or a nonempty event list.
 
+For pruning measurements, distinguish literal source test definitions from
+executed tests: parameterized cases, properties, doctests, tags, and moved cases
+make those counts differ. Record the baseline revision, exact lane command,
+failures, and whether slowest-test reporting serialized the run. Compare timings
+only under the same options; a smaller source diff alone does not establish
+faster or green CI.
+
+Do not replace an elapsed-time regression with an assertion on its configured
+timeout: that no longer exercises waiting past the failure boundary. Likewise,
+an immediate mailbox check is not a barrier for work sent by another process.
+Keep unique stress, restart, queue-race, and UTF-8 boundary scenarios even when
+they are slow; shorten them only when the same observable invariant is retained.
+
+Channel chunking tests assert the payloads delivered to the adapter: content and
+ordering, continuation metadata, and first-chunk-only reply, idempotency and
+notification identity. A successful enqueue or a live outbox process alone does
+not prove these contracts. Keep formatting boundary coverage (UTF-16 entities,
+table cells, Unicode splits and resume lines) and cold-start/restart regressions
+when trimming slower channel suites.
+
 ## Tags
 
 - `:integration` is excluded by default. It is for tests that need a real
@@ -129,6 +158,8 @@ successful return or a nonempty event list.
   tests.
 - `:python3` (`coding_agent`) marks tests that need a `python3` interpreter.
   The app's `test_helper.exs` excludes the tag only when `python3` is missing.
+- `:lldb_dap` (`coding_agent`) marks the real debugger smoke. The app excludes
+  it only when `lldb-dap` or a C compiler is missing.
 - `:ast_grep` (`coding_agent`) marks tests that need the optional ast-grep CLI.
   The app excludes the tag only when backend discovery fails; set
   `LEMON_AST_GREP_EXECUTABLE` to select an installed release binary.

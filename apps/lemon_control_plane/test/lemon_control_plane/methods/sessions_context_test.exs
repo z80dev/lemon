@@ -101,7 +101,11 @@ defmodule LemonControlPlane.Methods.SessionsContextTest do
 
     assert result["top"] == [
              %{"category" => "tool_results", "label" => "read result #12", "tokens" => 9_000},
-             %{"category" => "context_files", "label" => "AGENTS.md (project)", "tokens" => 2_000},
+             %{
+               "category" => "context_files",
+               "label" => "AGENTS.md (project)",
+               "tokens" => 2_000
+             },
              %{"category" => "tool_results", "label" => "Item", "tokens" => 1_000},
              %{"category" => "memory", "label" => "Recalled memory #3", "tokens" => 400}
            ]
@@ -119,6 +123,23 @@ defmodule LemonControlPlane.Methods.SessionsContextTest do
     assert result["percentUsed"] == nil
     assert result["autoCompaction"] == nil
     assert Enum.all?(result["categories"], &is_nil(&1["percent"]))
+  end
+
+  test "projects numeric-only session usage and tolerates a missing block" do
+    assert {:ok, without} = SessionsContext.handle(@params, %{})
+    assert without["usage"] == nil
+
+    usage = %{tokens: 12_345, cost_usd: 0.4231, input: 9_000, assistant_messages: 7}
+    Process.put(:context_result, {:ok, report(%{usage: Map.put(usage, :prompt, "leaked")})})
+    assert {:ok, result} = SessionsContext.handle(@params, %{})
+    assert %{"tokens" => 12_345, "costUsd" => 0.4231, "assistantMessages" => 7} = result["usage"]
+    refute inspect(result) =~ "leaked"
+
+    bad = %{tokens: -1, cost_usd: "free", input: nil, output: 1.5}
+    Process.put(:context_result, {:ok, report(%{usage: bad})})
+    assert {:ok, bounded} = SessionsContext.handle(@params, %{})
+
+    assert %{"tokens" => 0, "costUsd" => +0.0, "input" => 0, "output" => 0} = bounded["usage"]
   end
 
   test "an unattributed overhead row is labelled and still sums to the total" do
@@ -157,7 +178,9 @@ defmodule LemonControlPlane.Methods.SessionsContextTest do
     assert "sessions.context" in Registry.list_methods()
 
     assert {:error, _} =
-             Registry.dispatch("sessions.context", @params, %{auth: %{role: :node, scopes: [:node]}})
+             Registry.dispatch("sessions.context", @params, %{
+               auth: %{role: :node, scopes: [:node]}
+             })
 
     assert {:error, {:invalid_params, _, _}} =
              SessionsContext.handle(%{"sessionKey" => "agent:x:main"}, %{})

@@ -1,7 +1,7 @@
 defmodule CodingAgent.Tools.AstGrep.Backend do
   @moduledoc false
 
-  import CodingAgent.Tools.AbortHelpers, only: [aborted?: 1]
+  import LemonAgent.Tools.AbortHelpers, only: [aborted?: 1]
 
   @max_output_bytes 16 * 1024 * 1024
 

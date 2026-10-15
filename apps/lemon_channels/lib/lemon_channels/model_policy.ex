@@ -356,7 +356,7 @@ defmodule LemonChannels.ModelPolicy do
   defp normalize_thinking_level(nil), do: nil
 
   defp normalize_thinking_level(level) when is_atom(level) do
-    if level in [:off, :minimal, :low, :medium, :high, :xhigh] do
+    if level in [:off, :minimal, :low, :medium, :high, :xhigh, :auto] do
       level
     else
       nil
@@ -371,6 +371,7 @@ defmodule LemonChannels.ModelPolicy do
       "medium" -> :medium
       "high" -> :high
       "xhigh" -> :xhigh
+      "auto" -> :auto
       _ -> nil
     end
   end

@@ -669,19 +669,8 @@ defmodule LemonAgent.ModelRuntime.CredentialsTest do
       refute_received :token_request
     end
 
-    test "with auth_source = oauth an ambient env key does not block refreshing the sign-in" do
+    test "configured OAuth resolution and refresh retain the selected account despite ambient keys" do
       System.put_env("GITHUB_COPILOT_API_KEY", "ambient-key")
-
-      assert {:ok, _} =
-               Secrets.set(
-                 "llm_github_copilot_api_key",
-                 Jason.encode!(%{
-                   "type" => "github_copilot_oauth",
-                   "refresh_token" => "github-token",
-                   "access_token" => "copilot-rejected",
-                   "expires_at_ms" => System.system_time(:millisecond) + 3_600_000
-                 })
-               )
 
       Req.Test.stub(__MODULE__, fn conn ->
         Req.Test.json(conn, %{
@@ -690,15 +679,42 @@ defmodule LemonAgent.ModelRuntime.CredentialsTest do
         })
       end)
 
-      providers = %{"github_copilot" => %{auth_source: "oauth"}}
+      for {secret_name, selection} <- [
+            {"llm_github_copilot_api_key", %{}},
+            {"copilot_api_login", %{api_key_secret: "copilot_api_login"}},
+            {"copilot_selected_login",
+             %{oauth_secret: "copilot_selected_login", api_key_secret: "copilot_api_login"}}
+          ] do
+        assert {:ok, _} =
+                 Secrets.set(
+                   secret_name,
+                   Jason.encode!(%{
+                     "type" => "github_copilot_oauth",
+                     "refresh_token" => "github-token",
+                     "access_token" => "copilot-rejected",
+                     "expires_at_ms" => System.system_time(:millisecond) + 3_600_000
+                   })
+                 )
 
-      assert {:ok, "copilot-forced"} =
-               Credentials.refresh_provider_api_key(
-                 providers,
-                 :github_copilot,
-                 "default",
-                 "copilot-rejected"
-               )
+        config = %{
+          "github_copilot" => Map.merge(selection, %{auth_source: "oauth", api_key: "inline-key"})
+        }
+
+        assert [%{ref: "default", api_key: "copilot-rejected"}] =
+                 Credentials.list_provider_api_keys(config, :github_copilot)
+
+        assert {:ok, "copilot-forced"} =
+                 Credentials.refresh_provider_api_key(
+                   config,
+                   :github_copilot,
+                   "default",
+                   "copilot-rejected"
+                 )
+
+        assert {:ok, stored} = Secrets.get(secret_name)
+        assert Jason.decode!(stored)["access_token"] == "copilot-forced"
+        assert Credentials.resolve_provider_api_key(:github_copilot, config) == "copilot-forced"
+      end
 
       assert {:error, :not_refreshable} =
                Credentials.refresh_provider_api_key(
@@ -707,6 +723,37 @@ defmodule LemonAgent.ModelRuntime.CredentialsTest do
                  "default",
                  "ambient-key"
                )
+    end
+
+    test "a missing explicitly selected OAuth login never falls back to another account or env" do
+      System.put_env("GITHUB_COPILOT_API_KEY", "ambient-key")
+      System.put_env("COPILOT_SELECTED_LOGIN", "secret-name-env-key")
+      on_exit(fn -> System.delete_env("COPILOT_SELECTED_LOGIN") end)
+      assert {:ok, _} = Secrets.set("llm_github_copilot_api_key", "other-account-key")
+
+      config = %{
+        "github_copilot" => %{
+          auth_source: "oauth",
+          oauth_secret: "COPILOT_SELECTED_LOGIN",
+          api_key_secret: "llm_github_copilot_api_key",
+          api_key: "inline-key"
+        }
+      }
+
+      assert Credentials.resolve_provider_api_key(:github_copilot, config) == ""
+      assert Credentials.build_get_api_key(config).(:github_copilot) == ""
+      assert Credentials.list_provider_api_keys(config, :github_copilot) == []
+      refute Credentials.provider_has_credentials?(:github_copilot, config)
+
+      assert {:error, :not_found} =
+               Credentials.refresh_provider_api_key(
+                 config,
+                 :github_copilot,
+                 "default",
+                 "rejected"
+               )
+
+      refute_received :token_request
     end
 
     test "a rejected refresh fails with a bare reason and never returns the old key" do
@@ -725,6 +772,46 @@ defmodule LemonAgent.ModelRuntime.CredentialsTest do
                  "default",
                  "sk-ant-oat01-stored"
                )
+    end
+
+    test "Codex resolution fails closed without logging provider response secrets" do
+      assert {:ok, _} =
+               Secrets.set(
+                 "llm_openai_codex_api_key",
+                 Jason.encode!(%{
+                   "type" => "openai_codex_oauth",
+                   "access_token" => "expired-codex-token",
+                   "refresh_token" => "codex-refresh",
+                   "expires_at_ms" => System.system_time(:millisecond) - 1
+                 })
+               )
+
+      parent = self()
+
+      Req.Test.stub(__MODULE__, fn conn ->
+        send(parent, :token_request)
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(
+          400,
+          ~s({"error":"invalid_grant","secret":"private-response-value"})
+        )
+      end)
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert Credentials.resolve_provider_api_key(
+                   :"openai-codex",
+                   %{"openai-codex" => %{auth_source: "oauth"}}
+                 ) == ""
+        end)
+
+      assert_received :token_request
+      assert log =~ "reauth_required"
+      refute log =~ "private-response-value"
+      refute log =~ "expired-codex-token"
+      refute log =~ "codex-refresh"
     end
   end
 
@@ -817,24 +904,6 @@ defmodule LemonAgent.ModelRuntime.CredentialsTest do
            )
   end
 
-  test "oauth secret dispatcher resolves provider oauth payloads" do
-    secret_name = "llm_github_copilot_api_key"
-
-    assert {:ok, _} =
-             Secrets.set(
-               secret_name,
-               Jason.encode!(%{
-                 "type" => "github_copilot_oauth",
-                 "refresh_token" => "github-refresh-token",
-                 "access_token" => "copilot-access-token",
-                 "expires_at_ms" => System.system_time(:millisecond) + 3_600_000
-               })
-             )
-
-    assert LemonAgent.ModelRuntime.Credentials.resolve_secret_api_key(secret_name) ==
-             "copilot-access-token"
-  end
-
   test "opencode go shares the opencode environment credential" do
     System.put_env("OPENCODE_API_KEY", "opencode-go-token")
 
@@ -892,6 +961,42 @@ defmodule LemonAgent.ModelRuntime.CredentialsTest do
       assert LemonAgent.ModelRuntime.Credentials.list_provider_api_keys(config, :openai) == [
                %{ref: "default", api_key: "default-key"}
              ]
+    end
+
+    test "an unresolved OAuth default refuses fallback without blocking usable pool credentials" do
+      alias LemonAgent.ModelRuntime.Credentials
+      System.put_env("OPENAI_API_KEY", "ambient-key")
+
+      config =
+        pool_config(%{
+          "openai" => %{
+            auth_source: "oauth",
+            oauth_secret: "missing_selected_login",
+            api_key: "inline-key"
+          }
+        })
+
+      get_api_key = Credentials.build_get_api_key(config)
+
+      assert Credentials.resolve_provider_api_key(:openai, config) == ""
+      assert get_api_key.(:openai) == ""
+      assert Credentials.list_provider_api_keys(config, :openai) == []
+
+      refute Credentials.provider_has_credentials?(:openai, config,
+               provider_routing: config.provider_routing
+             )
+
+      assert {:ok, _} = Secrets.set("pool_key_one", "key-one")
+
+      assert Credentials.list_provider_api_keys(config, :openai) == [
+               %{ref: "secret:pool_key_one", api_key: "key-one"}
+             ]
+
+      assert get_api_key.(:openai) == "key-one"
+
+      assert Credentials.provider_has_credentials?(:openai, config,
+               provider_routing: config.provider_routing
+             )
     end
 
     test "list_provider_api_keys selects the pool through the default profile" do
@@ -1064,6 +1169,19 @@ defmodule LemonAgent.ModelRuntime.CredentialsTest do
 
     try do
       assert LemonAgent.ModelRuntime.Credentials.resolve_secret_api_key(secret_name) == nil
+
+      providers = %{
+        "github_copilot" => %{auth_source: "oauth", oauth_secret: secret_name}
+      }
+
+      assert LemonAgent.ModelRuntime.Credentials.resolve_provider_api_key(
+               :github_copilot,
+               providers
+             ) == ""
+
+      assert LemonAgent.ModelRuntime.Credentials.build_get_api_key(providers).(:github_copilot) ==
+               ""
+
       # The refreshed payload was not stored, and nothing claimed it was.
       assert {:ok, ^stored} = Secrets.get(secret_name)
     after

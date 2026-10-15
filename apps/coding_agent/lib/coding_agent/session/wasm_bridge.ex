@@ -13,6 +13,10 @@ defmodule CodingAgent.Session.WasmBridge do
   alias CodingAgent.Wasm.SidecarSession
   alias CodingAgent.Wasm.SidecarSupervisor
   alias CodingAgent.Wasm.ToolFactory
+  alias LemonAgent.AbortSignal
+  alias LemonAgent.Types.AgentToolResult
+
+  @host_timeout_ms 120_000
 
   @secret_exists_target "__lemon.secret.exists"
   @secret_resolve_target "__lemon.secret.resolve"
@@ -34,8 +38,8 @@ defmodule CodingAgent.Session.WasmBridge do
     if wasm_config.enabled do
       session_pid = self()
 
-      host_invoke_fun = fn tool_name, params_json ->
-        GenServer.call(session_pid, {:wasm_host_tool_invoke, tool_name, params_json}, :infinity)
+      host_invoke_fun = fn tool_name, params_json, context ->
+        invoke_host_request(session_pid, tool_name, params_json, context)
       end
 
       sidecar_opts = [
@@ -206,6 +210,209 @@ defmodule CodingAgent.Session.WasmBridge do
   # ============================================================================
   # Host Tool Handling
   # ============================================================================
+  @doc false
+  def invoke_host_tool(session, tool_name, params_json, timeout_ms \\ @host_timeout_ms)
+      when is_integer(timeout_ms) and timeout_ms > 0 do
+    context = %{
+      deadline: System.monotonic_time(:millisecond) + min(timeout_ms, @host_timeout_ms),
+      owner: self(),
+      signal: nil
+    }
+
+    invoke_host_request(session, tool_name, params_json, context)
+  end
+
+  @doc false
+  def invoke_host_request(session, tool_name, params_json, context) do
+    GenServer.call(session, {:wasm_host_tool_invoke, tool_name, params_json, context}, :infinity)
+  catch
+    :exit, _ -> {:error, :session_unavailable}
+  end
+
+  @doc false
+  def start_host_call(state, from, tool_name, params_json, context) do
+    deadline = min(context.deadline, System.monotonic_time(:millisecond) + @host_timeout_ms)
+    signal = context.signal
+    request = %{from: from, owner: context.owner, signal: signal, deadline: deadline}
+
+    case host_request_status(request) do
+      {:error, _} = error ->
+        {:reply, error, state}
+
+      :ok ->
+        # Capture the already policy/approval/plan-wrapped closure, never a fresh
+        # registry lookup. Execution must not occupy the journal-owning GenServer.
+        tool = find_host_tool(state, tool_name)
+
+        case start_host_worker(tool_name, params_json, tool, signal) do
+          {:ok, task} ->
+            caller_ref = Process.monitor(elem(from, 0))
+            owner_ref = Process.monitor(request.owner)
+            timer = host_check_timer(task.ref, deadline)
+
+            request =
+              Map.merge(request, %{
+                task: task,
+                caller_ref: caller_ref,
+                owner_ref: owner_ref,
+                timer: timer
+              })
+
+            {:noreply,
+             %{state | wasm_host_calls: Map.put(state.wasm_host_calls, task.ref, request)}}
+
+          {:error, _} ->
+            {:reply, {:error, :host_worker_unavailable}, state}
+        end
+    end
+  end
+
+  @doc false
+  def finish_host_call(state, ref, result) do
+    case Map.fetch(state.wasm_host_calls, ref) do
+      {:ok, request} ->
+        result =
+          case host_request_status(request) do
+            :ok -> result
+            {:error, _} = error -> error
+          end
+
+        cleanup_host_call(request, result)
+        GenServer.reply(request.from, result)
+        %{state | wasm_host_calls: Map.delete(state.wasm_host_calls, ref)}
+
+      :error ->
+        state
+    end
+  end
+
+  @doc false
+  def check_host_call(state, ref) do
+    case Map.fetch(state.wasm_host_calls, ref) do
+      {:ok, request} ->
+        case host_request_status(request) do
+          :ok ->
+            timer = host_check_timer(ref, request.deadline)
+            request = %{request | timer: timer}
+            %{state | wasm_host_calls: Map.put(state.wasm_host_calls, ref, request)}
+
+          {:error, _} = error ->
+            finish_host_call(state, ref, error)
+        end
+
+      :error ->
+        state
+    end
+  end
+
+  @doc false
+  def host_call_down(state, ref) do
+    case Enum.find(state.wasm_host_calls, fn {task_ref, request} ->
+           task_ref == ref or request.caller_ref == ref or request.owner_ref == ref
+         end) do
+      {task_ref, _request} ->
+        {:handled, finish_host_call(state, task_ref, {:error, :host_tool_failed})}
+
+      nil ->
+        :unhandled
+    end
+  end
+
+  @doc false
+  def cancel_host_calls(state, reason) do
+    Enum.reduce(Map.keys(state.wasm_host_calls), state, fn ref, state ->
+      finish_host_call(state, ref, {:error, reason})
+    end)
+  end
+
+  @doc false
+  def host_mutation_allowed?(state, {pid, _tag}) do
+    # A timed-out/killed worker may already have queued its journal call.
+    # Reject it even when the timeout/DOWN cleanup ran before this message.
+    Process.alive?(pid) and
+      Enum.all?(state.wasm_host_calls, fn {_ref, request} ->
+        request.task.pid != pid or host_request_status(request) == :ok
+      end)
+  end
+
+  defp host_request_status(request) do
+    cond do
+      not Process.alive?(elem(request.from, 0)) -> {:error, :caller_down}
+      not Process.alive?(request.owner) -> {:error, :caller_down}
+      System.monotonic_time(:millisecond) >= request.deadline -> {:error, :timeout}
+      AbortSignal.aborted?(request.signal) -> {:error, :aborted}
+      true -> :ok
+    end
+  end
+
+  defp host_check_timer(ref, deadline) do
+    delay = min(25, max(0, deadline - System.monotonic_time(:millisecond)))
+    Process.send_after(self(), {:wasm_host_check, ref}, delay)
+  end
+
+  defp start_host_worker(tool_name, params_json, tool, signal) do
+    # Linked as well as supervised: abnormal Session death kills the worker;
+    # normal shutdown explicitly cancels all requests in Session.terminate/2.
+    {:ok,
+     Task.Supervisor.async(CodingAgent.TaskSupervisor, fn ->
+       try do
+         case maybe_handle_reserved_host_target(tool_name, params_json) do
+           :not_reserved -> execute_host_tool(tool, params_json, signal)
+           result -> result
+         end
+       rescue
+         _ -> {:error, :host_tool_failed}
+       catch
+         _, _ -> {:error, :host_tool_failed}
+       end
+     end)}
+  catch
+    :exit, _ -> {:error, :host_worker_unavailable}
+  end
+
+  defp execute_host_tool(nil, _params_json, _signal), do: {:error, :tool_not_found}
+
+  defp execute_host_tool(tool, params_json, signal) do
+    params = decode_wasm_params(params_json)
+    call_id = "wasm_host_#{System.unique_integer([:positive, :monotonic])}"
+
+    case tool.execute.(call_id, params, signal, nil) do
+      %AgentToolResult{} = result -> host_tool_result(result)
+      {:ok, %AgentToolResult{} = result} -> host_tool_result(result)
+      {:error, reason} -> {:error, reason}
+      _ -> {:error, :invalid_host_tool_result}
+    end
+  end
+
+  defp host_tool_result(%AgentToolResult{is_error: true} = result),
+    do: {:error, encode_wasm_host_output(result)}
+
+  defp host_tool_result(%AgentToolResult{} = result),
+    do: {:ok, encode_wasm_host_output(result)}
+
+  defp cleanup_host_call(request, result) do
+    if is_reference(request.signal) and
+         result in [
+           {:error, :timeout},
+           {:error, :aborted},
+           {:error, :caller_down},
+           {:error, :session_unavailable}
+         ] do
+      AbortSignal.abort(request.signal)
+    end
+
+    monitor = Process.monitor(request.task.pid)
+    Process.exit(request.task.pid, :kill)
+
+    receive do
+      {:DOWN, ^monitor, :process, _pid, _reason} -> :ok
+    end
+
+    Process.demonitor(request.task.ref, [:flush])
+    Process.demonitor(request.caller_ref, [:flush])
+    Process.demonitor(request.owner_ref, [:flush])
+    Process.cancel_timer(request.timer)
+  end
 
   @spec maybe_handle_reserved_host_target(String.t(), String.t()) ::
           {:ok, String.t()} | {:error, term()} | :not_reserved

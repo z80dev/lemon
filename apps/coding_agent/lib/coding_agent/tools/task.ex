@@ -221,6 +221,7 @@ defmodule CodingAgent.Tools.Task do
 
   defp do_execute(tool_call_id, params, signal, on_update, cwd, opts) do
     with {:ok, validated} <- Params.validate_run_params(params, cwd, opts),
+         {:ok, validated} <- Params.restrict_to_parent(validated, cwd, opts),
          :ok <- Params.check_budget_and_policy(validated, opts) do
       Execution.run(tool_call_id, validated, signal, on_update, cwd, opts)
     end
@@ -328,7 +329,8 @@ defmodule CodingAgent.Tools.Task do
          :ok <- unique_task_names(validated) do
       results =
         Enum.map(validated, fn {:ok, child} ->
-          with :ok <- Params.check_budget_and_policy(child, opts) do
+          with {:ok, child} <- Params.restrict_to_parent(child, cwd, opts),
+               :ok <- Params.check_budget_and_policy(child, opts) do
             Execution.run(tool_call_id, child, signal, on_update, cwd, opts)
           end
         end)

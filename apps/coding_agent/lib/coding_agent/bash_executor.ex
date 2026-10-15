@@ -56,6 +56,8 @@ defmodule CodingAgent.BashExecutor do
     * `:timeout` - Timeout in milliseconds, or `:infinity` for no timeout (default: #{@default_timeout})
     * `:max_bytes` - Maximum output bytes before truncation (default: #{@default_max_bytes})
     * `:pty` - When `true`, run the command in a pseudo-terminal (default: `false`)
+    * `:env` - Extra environment variables (`%{name => value}`) layered over the
+      inherited environment (default: `%{}`)
 
   ## Returns
 
@@ -71,6 +73,7 @@ defmodule CodingAgent.BashExecutor do
     timeout = Keyword.get(opts, :timeout, @default_timeout)
     max_bytes = Keyword.get(opts, :max_bytes, @default_max_bytes)
     use_pty = Keyword.get(opts, :pty, false)
+    env = Keyword.get(opts, :env, %{})
 
     # Threshold for writing to temp file (2x max_bytes)
     temp_file_threshold = max_bytes * 2
@@ -86,14 +89,15 @@ defmodule CodingAgent.BashExecutor do
         {shell_path, shell_args ++ [command]}
       end
 
-    port_opts = [
-      :stream,
-      :binary,
-      :exit_status,
-      :use_stdio,
-      :stderr_to_stdout,
-      {:args, spawn_args}
-    ]
+    port_opts =
+      [
+        :stream,
+        :binary,
+        :exit_status,
+        :use_stdio,
+        :stderr_to_stdout,
+        {:args, spawn_args}
+      ] ++ port_env(env)
 
     try do
       {port, os_pid, guardian} = start_guarded_port(spawn_path, port_opts)
@@ -355,6 +359,12 @@ defmodule CodingAgent.BashExecutor do
 
   defp shell_escape(path) do
     "'" <> String.replace(path, "'", "'\"'\"'") <> "'"
+  end
+
+  defp port_env(env) when map_size(env) == 0, do: []
+
+  defp port_env(env) do
+    [{:env, Enum.map(env, fn {k, v} -> {String.to_charlist(k), String.to_charlist(v)} end)}]
   end
 
   defp finalize_result(state) do

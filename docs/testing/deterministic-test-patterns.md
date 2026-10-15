@@ -14,6 +14,11 @@ This guide captures the patterns Lemon uses to keep CI signal deterministic and 
 - Use mailbox assertions (`assert_receive`/`refute_receive`) with clear timeouts.
 - Use latch/poll helpers (for example `AsyncHelpers`) when coordination is required.
 - Wait for concrete state transitions/events, not elapsed time.
+- For transient LiveView states such as an async submit button's busy indicator,
+  assert against the HTML returned by the triggering `render_submit` or
+  `render_click`. A later `has_element?` request races the async completion.
+  Use `render_async` before checking the settled UI; the captured event-reply
+  snapshot remains valid even after that completion barrier.
 
 ## 3) Reset global/shared test state
 

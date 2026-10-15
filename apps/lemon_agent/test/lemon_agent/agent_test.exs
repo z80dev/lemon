@@ -107,7 +107,7 @@ defmodule LemonAgent.AgentTest do
     end
 
     test "starts an agent with name" do
-      name = :"test_agent_#{:rand.uniform(10000)}"
+      name = :"test_agent_#{:rand.uniform(10_000)}"
       {:ok, _agent} = start_agent(name: name)
 
       # Should be able to reference by name
@@ -309,6 +309,66 @@ defmodule LemonAgent.AgentTest do
       state = Agent.get_state(agent)
       assert state.model.id == "new-model-id"
     end
+
+    test "idle selection binds options in the loop task before auto classification" do
+      parent = self()
+      original = Mocks.mock_model(id: "original")
+      selected = Mocks.mock_model(id: "selected", provider: :selected_provider, reasoning: true)
+      response = Mocks.mock_stream_fn_single(Mocks.assistant_message("bound answer"))
+
+      resolve_options = fn next, previous, options ->
+        send(parent, {:switch_stage, {:bound, next.id, previous.id, self()}})
+        %{options | api_key_authoritative: true}
+      end
+
+      classify = fn model, _, _ ->
+        send(parent, {:switch_stage, {:classified, model.id}})
+        {:ok, :high}
+      end
+
+      stream = fn model, context, options ->
+        if model.id == selected.id,
+          do: send(parent, {:switch_stage, {:submitted, model.id, options.api_key_authoritative}})
+
+        response.(model, context, options)
+      end
+
+      {:ok, agent} =
+        start_agent(
+          model: original,
+          stream_fn: stream,
+          resolve_stream_options: resolve_options,
+          resolve_thinking: classify,
+          max_retries: 0
+        )
+
+      assert :ok = Agent.prompt(agent, "Complete the first prompt.")
+      assert :ok = Agent.wait_for_idle(agent, 5_000)
+      assert :ok = Agent.set_thinking_level(agent, :auto)
+      assert :ok = Agent.set_model(agent, selected)
+      refute_receive {:switch_stage, _}, 0
+      assert :ok = Agent.prompt(agent, "Classify only after binding the selected model.")
+      assert :ok = Agent.wait_for_idle(agent, 5_000)
+
+      stages =
+        for _ <- 1..3 do
+          receive do
+            {:switch_stage, stage} -> stage
+          after
+            1_000 -> flunk("expected binding, classification and submission")
+          end
+        end
+
+      assert [
+               {:bound, "selected", "original", loop_task},
+               {:classified, "selected"},
+               {:submitted, "selected", true}
+             ] = stages
+
+      refute loop_task == agent
+      refute loop_task == self()
+      assert Agent.get_state(agent).error == nil
+    end
   end
 
   describe "set_thinking_level/2" do
@@ -324,7 +384,7 @@ defmodule LemonAgent.AgentTest do
     test "accepts all valid thinking levels" do
       {:ok, agent} = start_agent()
 
-      for level <- [:off, :minimal, :low, :medium, :high, :xhigh] do
+      for level <- [:off, :minimal, :low, :medium, :high, :xhigh, :auto] do
         :ok = Agent.set_thinking_level(agent, level)
         state = Agent.get_state(agent)
         assert state.thinking_level == level

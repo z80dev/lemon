@@ -6,8 +6,10 @@ defmodule LemonControlPlane.Methods.NativeSessionMethodsTest do
   alias LemonControlPlane.Methods.{
     Registry,
     SessionsFork,
+    SessionsLabel,
     SessionsList,
     SessionsMetadataPatch,
+    SessionsNavigate,
     SessionsRewind,
     SessionsTree
   }
@@ -30,9 +32,37 @@ defmodule LemonControlPlane.Methods.NativeSessionMethodsTest do
     end
 
     @impl true
+    def session_navigate(key, cwd, entry, opts) do
+      send(self(), {:navigate, key, cwd, entry, opts})
+      mutation_result(:navigate_result, {:navigate, key, entry})
+    end
+
+    @impl true
+    def session_label(key, cwd, entry, label) do
+      send(self(), {:label, key, cwd, entry, label})
+      mutation_result(:label_result, {:label, key, entry, label})
+    end
+
+    @impl true
     def session_rewind(key, cwd, entry, opts) do
       send(self(), {:rewind, key, cwd, entry, opts})
-      Process.get(:rewind_result)
+      mutation_result(:rewind_result, {:rewind, key, entry})
+    end
+
+    defp mutation_result(key, mutation) do
+      case Process.get(key) do
+        {:committed, failure} ->
+          Process.put(:committed_mutation, mutation)
+
+          case failure do
+            :exit -> exit(:receipt_lost)
+            :raise -> raise "receipt lost"
+            :invalid -> :invalid_receipt
+          end
+
+        result ->
+          result
+      end
     end
 
     @impl true
@@ -163,10 +193,106 @@ defmodule LemonControlPlane.Methods.NativeSessionMethodsTest do
     refute_received {:rewind, _, _, _, _}
   end
 
+  @tag :tmp_dir
+  test "real stopped journal previews preserve media safety through the method boundary", %{
+    tmp_dir: cwd
+  } do
+    alias CodingAgent.SessionManager
+    Application.put_env(:lemon_core, :agent_runtime_provider, CodingAgent.ControlPlaneProvider)
+    key = "agent:native_methods:media-#{LemonCore.Id.uuid()}"
+
+    image = %{
+      "type" => "image",
+      "data" => Base.encode64("original bytes"),
+      "mime_type" => "image/png"
+    }
+
+    on_exit(fn ->
+      LemonCore.ChatStateStore.delete(key)
+      File.rm_rf!(CodingAgent.Config.sessions_dir(cwd))
+    end)
+
+    for {content, images, contains_non_text} <- [
+          {"text-only prompt", [], false},
+          {[%{"type" => "text", "text" => "same text"}, image], [], true},
+          {"same text", [image], true},
+          {[%{"type" => "text", "text" => "same text"}, %{"type" => "future_media"}], [], true}
+        ] do
+      target =
+        SessionManager.new(cwd)
+        |> SessionManager.append_message(%{
+          "role" => "user",
+          "content" => content,
+          "images" => images
+        })
+
+      full =
+        SessionManager.append_message(target, %{"role" => "assistant", "content" => "failed"})
+
+      path = CodingAgent.Session.Presentation.session_file_path(full.header.id, cwd)
+      :ok = SessionManager.save_to_file(path, full)
+
+      :ok =
+        LemonCore.ChatStateStore.put(key, %LemonCore.ChatState{
+          last_engine: "lemon",
+          last_resume_token: full.header.id
+        })
+
+      params = %{"sessionKey" => key, "cwd" => cwd, "entryId" => target.leaf_id}
+      before = File.read!(path)
+      assert {:ok, preview} = SessionsRewind.handle(params, %{})
+      assert preview["promptContainsNonText"] == contains_non_text
+      assert File.read!(path) == before
+      assert {:ok, resumed} = SessionManager.load_from_file(path)
+      assert resumed.leaf_id == full.leaf_id
+
+      assert SessionManager.get_entry(resumed, target.leaf_id).message == %{
+               "role" => "user",
+               "content" => content,
+               "images" => images
+             }
+
+      if contains_non_text do
+        changed =
+          resumed
+          |> Map.put(:file_path, path)
+          |> SessionManager.append_message(%{"role" => "user", "content" => "later turn"})
+
+        assert {:error, {:conflict, _, %{"reason" => "stale_confirmation"}}} =
+                 SessionsRewind.handle(
+                   Map.merge(params, %{
+                     "dryRun" => false,
+                     "confirmationToken" => preview["confirmationToken"]
+                   }),
+                   %{}
+                 )
+
+        assert {:ok, still_changed} = SessionManager.load_from_file(path)
+        assert still_changed.leaf_id == changed.leaf_id
+      else
+        assert {:ok, result} =
+                 SessionsRewind.handle(
+                   Map.merge(params, %{
+                     "dryRun" => false,
+                     "confirmationToken" => preview["confirmationToken"]
+                   }),
+                   %{}
+                 )
+
+        assert result["prompt"] == content
+        assert {:ok, rewound} = SessionManager.load_from_file(path)
+        assert rewound.leaf_id == nil
+      end
+
+      LemonCore.Store.delete(:session_rewinds, full.header.id)
+    end
+  end
+
   test "rewind defaults to preview and requires a bounded confirmation for execution" do
     preview = %{
       "confirmationToken" => "preview-token",
       "prompt" => "edit this",
+      "promptContainsNonText" => true,
       "discardedMessages" => 2,
       "restorePaths" => [],
       "unrestorableTools" => [],
@@ -352,6 +478,115 @@ defmodule LemonControlPlane.Methods.NativeSessionMethodsTest do
     assert SessionLifecycle.get(child) == nil
   end
 
+  test "navigate needs write scope, validates input and maps runtime refusals" do
+    assert {:error, {:forbidden, _}} =
+             Registry.dispatch("sessions.navigate", navigate_target(), ctx([:read]))
+
+    receipt = %{
+      "sessionId" => "native",
+      "entryId" => "e2",
+      "leafId" => "e1",
+      "prompt" => "edit me",
+      "summarizing" => false
+    }
+
+    Process.put(:navigate_result, {:ok, Map.put(receipt, "private", "hidden")})
+
+    assert {:ok, result} =
+             Registry.dispatch("sessions.navigate", navigate_target(), ctx([:write]))
+
+    assert result == Map.put(receipt, "sessionKey", target()["sessionKey"])
+    assert_receive {:navigate, _, _, "e2", _}
+
+    for params <- [
+          Map.put(navigate_target(), "entryId", ""),
+          Map.put(navigate_target(), "entryId", String.duplicate("x", 257)),
+          Map.put(navigate_target(), "summarize", "yes"),
+          Map.delete(navigate_target(), "entryId")
+        ] do
+      assert {:error, {:invalid_params, _, nil}} = SessionsNavigate.handle(params, %{})
+    end
+
+    refute_received {:navigate, _, _, _, _}
+
+    Process.put(:navigate_result, {:error, :busy})
+
+    assert {:error, {:conflict, _, %{"reason" => "busy"}}} =
+             SessionsNavigate.handle(navigate_target(), %{})
+
+    Process.put(:navigate_result, {:error, :entry_not_found})
+
+    assert {:error, {:not_found, _, %{"reason" => "entry_not_found"}}} =
+             SessionsNavigate.handle(navigate_target(), %{})
+
+    Process.put(:navigate_result, {:error, {:file_error, "/private/secret"}})
+    assert {:error, {:internal_error, _, nil}} = SessionsNavigate.handle(navigate_target(), %{})
+  end
+
+  test "label needs write scope, sanitizes and bounds text, and clears on empty" do
+    assert {:error, {:forbidden, _}} =
+             Registry.dispatch("sessions.label", label_target("x"), ctx([:read]))
+
+    Process.put(:label_result, {:ok, %{"sessionId" => "native", "entryId" => "e2"}})
+    assert {:ok, _} = SessionsLabel.handle(label_target("  keep\u0000\n this\tone \u202E "), %{})
+    assert_receive {:label, _, "/workspace", "e2", "keep this one"}
+
+    for cleared <- [nil, "", "   ", "\n\t"] do
+      assert {:ok, _} = SessionsLabel.handle(label_target(cleared), %{})
+      assert_receive {:label, _, _, "e2", nil}
+    end
+
+    for bad <- [String.duplicate("x", 121), 7, %{}, <<255>>] do
+      assert {:error, {:invalid_params, _, nil}} = SessionsLabel.handle(label_target(bad), %{})
+    end
+
+    assert {:error, {:invalid_params, _, nil}} =
+             SessionsLabel.handle(Map.delete(label_target("x"), "label"), %{})
+
+    refute_received {:label, _, _, _, _}
+
+    Process.put(:label_result, {:error, :entry_not_found})
+
+    assert {:error, {:not_found, _, %{"reason" => "entry_not_found"}}} =
+             SessionsLabel.handle(label_target("x"), %{})
+  end
+
+  test "lost or invalid navigate and label receipts are uncertain after a committed mutation" do
+    for failure <- [:exit, :raise, :invalid] do
+      Process.put(:navigate_result, {:committed, failure})
+
+      assert {:error, {:unavailable, _, %{"reason" => "outcome_unknown", "retrySafe" => false}}} =
+               SessionsNavigate.handle(navigate_target(), %{})
+
+      assert Process.get(:committed_mutation) ==
+               {:navigate, target()["sessionKey"], "e2"}
+
+      Process.put(:label_result, {:committed, failure})
+
+      assert {:error, {:unavailable, _, %{"reason" => "outcome_unknown", "retrySafe" => false}}} =
+               SessionsLabel.handle(label_target("accepted label"), %{})
+
+      assert Process.get(:committed_mutation) ==
+               {:label, target()["sessionKey"], "e2", "accepted label"}
+    end
+  end
+
+  test "lost confirmed rewind receipts are uncertain while preview failures remain definite" do
+    Process.put(:rewind_result, {:committed, :exit})
+    params = target() |> Map.put("entryId", "e2") |> Map.put("dryRun", false)
+    params = Map.put(params, "confirmationToken", "confirmed")
+
+    assert {:error, {:unavailable, _, %{"reason" => "outcome_unknown", "retrySafe" => false}}} =
+             SessionsRewind.handle(params, %{})
+
+    assert Process.get(:committed_mutation) == {:rewind, target()["sessionKey"], "e2"}
+
+    assert {:error, {:unavailable, _, %{"reason" => "unavailable"} = data}} =
+             SessionsRewind.handle(Map.put(params, "dryRun", true), %{})
+
+    refute Map.has_key?(data, "retrySafe")
+  end
+
   test "native history is authoritative after rewind, including an empty active branch" do
     key = "agent:history_rewind_#{System.unique_integer([:positive])}:main"
     params = Map.put(target(), "sessionKey", key)
@@ -519,5 +754,10 @@ defmodule LemonControlPlane.Methods.NativeSessionMethodsTest do
 
   defp target, do: %{"sessionKey" => "agent:native_methods:main", "cwd" => "/workspace"}
   defp rewind_target, do: Map.put(target(), "entryId", "u1")
+  defp navigate_target, do: Map.put(target(), "entryId", "e2")
+
+  defp label_target(label),
+    do: target() |> Map.put("entryId", "e2") |> Map.put("label", label)
+
   defp ctx(scopes), do: %{auth: %{role: :operator, scopes: scopes}}
 end

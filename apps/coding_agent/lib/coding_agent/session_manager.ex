@@ -395,6 +395,23 @@ defmodule CodingAgent.SessionManager do
     end
   end
 
+  @doc "Restores durable execution authority independently of the selected history branch."
+  def execution_context(session) do
+    case Enum.find(Enum.reverse(entries(session)), fn entry ->
+           entry.type == :custom and entry.custom_type == "lemon.execution_context"
+         end) do
+      nil -> {:ok, nil}
+      entry -> LemonCore.ExecutionContext.decode(entry.data)
+    end
+  end
+
+  @doc "Journals validated execution authority without adding model-visible content."
+  def append_execution_context(session, context) do
+    with {:ok, encoded} <- LemonCore.ExecutionContext.encode(context) do
+      {:ok, append_entry(session, SessionEntry.custom("lemon.execution_context", encoded))}
+    end
+  end
+
   @doc """
   Fork the selected branch into an independent session file, preserving model,
   thinking level and compaction history. A separate cumulative-spend snapshot
@@ -430,9 +447,10 @@ defmodule CodingAgent.SessionManager do
             CodingAgent.Session.BudgetLedger.restore(source)
           )
 
-        case save_to_file(destination_path, child) do
-          :ok -> {:ok, child}
-          {:error, _} = error -> error
+        with {:ok, context} <- execution_context(source),
+             {:ok, child} <- inherit_fork_execution_context(child, context),
+             :ok <- save_to_file(destination_path, child) do
+          {:ok, child}
         end
       else
         {:error, :entry_not_found}
@@ -440,6 +458,22 @@ defmodule CodingAgent.SessionManager do
     else
       true -> {:error, :eexist}
       {:error, _} = error -> error
+    end
+  end
+
+  defp inherit_fork_execution_context(child, nil), do: {:ok, child}
+
+  defp inherit_fork_execution_context(child, parent) do
+    with {:ok, context} <-
+           LemonCore.ExecutionContext.child(parent,
+             run_id: child.header.id,
+             cwd: child.header.cwd,
+             provenance: %{
+               origin: "fork",
+               delegated_by: LemonCore.ExecutionContext.identity(parent)
+             }
+           ) do
+      append_execution_context(child, context)
     end
   end
 
@@ -561,6 +595,34 @@ defmodule CodingAgent.SessionManager do
     append_entry(session, entry)
   end
 
+  @doc """
+  Append a label entry bookmarking `target_id`. A nil or empty label clears it.
+  The entry follows the current leaf like any other entry; labels never change
+  the model-visible context.
+  """
+  @spec append_label(Session.t(), String.t(), String.t() | nil) :: Session.t()
+  def append_label(%Session{} = session, target_id, label) do
+    label = if label in [nil, ""], do: nil, else: label
+    append_entry(session, SessionEntry.label(target_id, label))
+  end
+
+  @doc """
+  Current label of every labelled entry, resolved across the whole tree: the
+  latest label entry for an id wins and a cleared label removes it.
+  """
+  @spec labels(Session.t()) :: %{String.t() => String.t()}
+  def labels(%Session{} = session) do
+    session
+    |> entries()
+    |> Enum.reduce(%{}, fn
+      %{type: :label, target_id: id, label: label}, acc when is_binary(id) ->
+        if label in [nil, ""], do: Map.delete(acc, id), else: Map.put(acc, id, label)
+
+      _entry, acc ->
+        acc
+    end)
+  end
+
   # ============================================================================
   # Tree Operations
   # ============================================================================
@@ -614,6 +676,25 @@ defmodule CodingAgent.SessionManager do
     session
     |> entries()
     |> Enum.filter(fn entry -> entry.parent_id == parent_id end)
+  end
+
+  @doc """
+  Nearest `custom_type` custom entry on the selected branch, walking from the
+  leaf toward the root, or `nil`. Branch-derived state journaled as custom
+  entries (plan mode, todos) is read through this.
+  """
+  @spec latest_custom_entry(Session.t(), String.t()) :: SessionEntry.t() | nil
+  def latest_custom_entry(%Session{by_id: by_id, leaf_id: leaf_id}, custom_type),
+    do: find_custom_entry(by_id, leaf_id, custom_type)
+
+  defp find_custom_entry(_by_id, nil, _custom_type), do: nil
+
+  defp find_custom_entry(by_id, id, custom_type) do
+    case Map.get(by_id, id) do
+      %SessionEntry{type: :custom, custom_type: ^custom_type} = entry -> entry
+      %SessionEntry{parent_id: parent_id} -> find_custom_entry(by_id, parent_id, custom_type)
+      nil -> nil
+    end
   end
 
   # ============================================================================
@@ -880,6 +961,7 @@ defmodule CodingAgent.SessionManager do
   defp parse_thinking_level("medium"), do: :medium
   defp parse_thinking_level("high"), do: :high
   defp parse_thinking_level("xhigh"), do: :xhigh
+  defp parse_thinking_level("auto"), do: :auto
   defp parse_thinking_level(level) when is_atom(level), do: level
   defp parse_thinking_level(_), do: :off
 
@@ -1156,6 +1238,7 @@ defmodule CodingAgent.SessionManager do
   defp encode_thinking_level(:medium), do: "medium"
   defp encode_thinking_level(:high), do: "high"
   defp encode_thinking_level(:xhigh), do: "xhigh"
+  defp encode_thinking_level(:auto), do: "auto"
 
   defp reject_nil_values(map) do
     map

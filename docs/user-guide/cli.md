@@ -11,6 +11,15 @@ This behavior is identical in source checkouts and packaged installs:
 - In an interactive terminal (stdin and stdout are TTYs), including a Tern pane, `lemon` opens the TUI, the same as `lemon tui`. Tern's native ACP chat is opened explicitly with `tern acp lemon` after [registration](tern.md).
 - Without a TTY, `lemon` fails immediately with status 2 and points to `lemon -p`, `lemon daemon`, and `lemon --help`. It does not compile, initialize HOME state, or start a daemon.
 - `lemon start` starts the runtime in the foreground; `lemon run` runs a prompt.
+- `lemon -c` (`--continue`) opens the TUI on the most recently updated TUI session started from this directory (a new session when there is none); `lemon -r [key]` (`--resume [key]`) opens it on `key`, or on the session switcher without a key. `lemon tui --continue`/`--resume`/`--session KEY` are equivalent, and the three are mutually exclusive. Inside the TUI, `/retry` resends the last failed or aborted prompt after a history-only rewind. `lemon run --continue` is separate: it continues the latest *CLI* session for `--cwd`.
+
+Exact TUI resume checks the durable lifecycle key, not a truncated search page.
+Local TUI sessions are directory-bound: reopen them from their original directory;
+foreign or untagged local TUI keys are safely refused instead of starting fresh
+native history under the old key. `/retry` keeps its recovery draft until the
+resend is acknowledged. If its outcome is unknown, inspect the session and
+explicitly review the fixed request/run identity in Ctrl+Q before sending again;
+it is never automatically replayed.
 
 Use `./bin/lemon` instead of `lemon` in the examples below when running from a
 source checkout.
@@ -229,6 +238,16 @@ only it and changes provider settings only when they select that exact secret.
 Missing/deleted pool secrets are skipped. Sign-in errors report safe error
 kinds rather than provider response bodies or credential payloads.
 
+Status and logout distinguish a confirmed missing secret from an unreadable
+login. If the encrypted store is unavailable, its journal is corrupt, or the
+master key cannot decrypt the login, both commands fail with exit `1` and a
+bounded error; they do not delete credentials or edit provider settings.
+The selected OAuth authority remains in effect instead of falling back to an
+ambient API key. Repair the store or restore its master key before retrying.
+A confirmed missing secret still allows logout to remove stale settings for
+that selected account; a missing named account never clears another account's
+settings.
+
 ## Non-interactive coding
 
 ```bash
@@ -438,6 +457,12 @@ turn ended. Output contains counts and bounded labels only—no prompt text, too
 arguments or absolute paths. The TUI `/context` and ACP `/context` commands use
 the same `sessions.context` control-plane method.
 
+The reply also carries a numeric `usage` block: cumulative `tokens` and
+catalog-estimated `costUsd` from the session's spend ledger (every branch), and
+`input`/`output`/`cacheRead`/`cacheWrite` token sums plus `assistantMessages`
+for the active branch. The TUI prints it as a `tokens … in / … out / … cache ·
+cost $… (estimate)` line under `/context` and `/session info`.
+
 ### Title, pin, and archive state
 
 ```bash
@@ -455,11 +480,13 @@ success.
 
 ### Redacted export
 
-Print an always-redacted JSON or Markdown export:
+Print an always-redacted export as JSON, JSON Lines, Markdown or a self-contained HTML page:
 
 ```bash
 lemon sessions export agent:research:main --format json
+lemon sessions export agent:research:main --format jsonl
 lemon sessions export agent:research:main --format markdown
+lemon sessions export agent:research:main --format html --output research-session.html
 ```
 
 Write the selected export to an owner-only file:
@@ -477,6 +504,11 @@ metadata and only the output basename; the exported content stays in the file.
 Without `--output`, `--json` returns the redacted content in its JSON envelope.
 Exports contain selected session/run/tool fields, SHA-256 integrity metadata,
 and omission counts. They never contain raw run records or raw event payloads.
+`jsonl` emits one compact JSON object per line: a `{"type":"session",...}`
+record followed by one `{"type":"run",...}` record per run. `html` is a single
+file with inline CSS only (no scripts or external resources) and every value
+escaped. The TUI `/session export [key] [json|jsonl|markdown|html]` uses the same
+method.
 
 ### Preview-confirm prune
 

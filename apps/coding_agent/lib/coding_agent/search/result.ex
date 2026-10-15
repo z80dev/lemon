@@ -1,7 +1,7 @@
 defmodule CodingAgent.Search.Result do
   @moduledoc false
 
-  alias CodingAgent.Security.ExternalContent
+  alias LemonAgent.Security.ExternalContent
 
   def decode_json(body) when is_map(body), do: body
 

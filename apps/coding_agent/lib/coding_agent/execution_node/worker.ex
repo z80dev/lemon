@@ -7,6 +7,8 @@ defmodule CodingAgent.ExecutionNode.Worker do
   supervised tasks bound to their invocation and this worker. Native runs execute
   through `CodingAgent.Executor` without forwarding the node selector into the
   local session, preventing recursive remote routing.
+  Incoming execution capabilities are intersected with the destination-local
+  `:execution_capabilities` ceiling before a session starts.
   """
 
   use GenServer
@@ -15,11 +17,12 @@ defmodule CodingAgent.ExecutionNode.Worker do
 
   alias CodingAgent.ExecutionNode.{Codec, Socket, TokenStore}
   alias CodingAgent.Executor.RemoteEventCodec
-  alias LemonCore.{Bus, ExecApprovals}
+  alias LemonCore.{Bus, ExecApprovals, ExecutionContext, ToolPolicy}
   alias LemonGateway.ExecutionRequest
   alias LemonMemory.{ContextScope, Document, Ingest, Project}
 
   @protocol_version 1
+  @execution_protocol_version 2
   @max_control_text_bytes 16 * 1_024
   @max_pending_events 64
   @approval_decisions %{
@@ -55,8 +58,9 @@ defmodule CodingAgent.ExecutionNode.Worker do
   }
   @capabilities %{
     "coding_agent.run" => %{
-      "version" => @protocol_version,
-      "nativePrivacyContext" => %{"version" => 1}
+      "version" => @execution_protocol_version,
+      "nativePrivacyContext" => %{"version" => 1},
+      "executionContext" => %{"version" => 1}
     },
     "node.invoke.event" => %{"version" => @protocol_version, "maxBytes" => 65_536},
     "node.enrollment" => %{"version" => 1, "inviteCodes" => true, "repairInvites" => true},
@@ -139,6 +143,7 @@ defmodule CodingAgent.ExecutionNode.Worker do
     :max_payload_bytes,
     shells: %{},
     process_tasks: %{},
+    execution_capabilities: :all,
     invocations: %{},
     run_refs: %{}
   ]
@@ -189,7 +194,8 @@ defmodule CodingAgent.ExecutionNode.Worker do
        notify_pid: Keyword.get(opts, :notify_pid),
        requested_node_id: Keyword.get(opts, :node_id),
        repair: Keyword.get(opts, :repair, false),
-       max_payload_bytes: LemonCore.JSONPayload.default_max_bytes()
+       max_payload_bytes: LemonCore.JSONPayload.default_max_bytes(),
+       execution_capabilities: Keyword.get(opts, :execution_capabilities, :all)
      }}
   end
 
@@ -1266,7 +1272,17 @@ defmodule CodingAgent.ExecutionNode.Worker do
          {:ok, prompt} <- invocation_prompt(prompt, images),
          {:ok, cwd} <- invocation_cwd(requested_cwd, state.default_cwd),
          {:ok, meta} <-
-           args |> value("meta") |> normalize_meta() |> normalize_invocation_proof(run_id) do
+           args |> value("meta") |> normalize_meta() |> normalize_invocation_proof(run_id),
+         {:ok, execution_context} <- ExecutionContext.decode(value(args, "executionContext")),
+         :ok <- validate_context_run_id(execution_context, run_id),
+         {:ok, execution_context} <-
+           ExecutionContext.restrict_capabilities(execution_context, state.execution_capabilities),
+         {:ok, execution_context} <- ExecutionContext.bind_workspace(execution_context, cwd),
+         {:ok, requested_policy} <-
+           ToolPolicy.resolve(value(args, "toolPolicy"), execution_context.tool_policy),
+         {:ok, policy} <- ToolPolicy.restrict(execution_context.tool_policy, requested_policy),
+         {:ok, execution_context} <-
+           ExecutionContext.validate(%{execution_context | tool_policy: policy}) do
       request = %ExecutionRequest{
         run_id: run_id,
         session_key: session_key,
@@ -1275,7 +1291,8 @@ defmodule CodingAgent.ExecutionNode.Worker do
         cwd: cwd,
         resume: normalize_resume(value(args, "resume")),
         lane: value(args, "lane"),
-        tool_policy: normalize_tool_policy(value(args, "toolPolicy")),
+        tool_policy: ToolPolicy.to_map(policy),
+        execution_context: execution_context,
         meta: meta
       }
 
@@ -1655,7 +1672,7 @@ defmodule CodingAgent.ExecutionNode.Worker do
     end
   end
 
-  defp validate_version(@protocol_version), do: :ok
+  defp validate_version(@execution_protocol_version), do: :ok
   defp validate_version(_), do: {:error, :unsupported_protocol_version}
 
   defp invocation_cwd(nil, default_cwd), do: existing_directory(default_cwd)
@@ -1840,7 +1857,8 @@ defmodule CodingAgent.ExecutionNode.Worker do
       "low" => :low,
       "medium" => :medium,
       "high" => :high,
-      "xhigh" => :xhigh
+      "xhigh" => :xhigh,
+      "auto" => :auto
     }
 
     case meta[:thinking_level] do
@@ -1857,18 +1875,10 @@ defmodule CodingAgent.ExecutionNode.Worker do
     end
   end
 
-  defp normalize_tool_policy(policy) when is_map(policy) do
-    atomize_known_keys(policy, [
-      :allow,
-      :deny,
-      :require_approval,
-      :approvals,
-      :no_reply,
-      :profile
-    ])
-  end
+  defp validate_context_run_id(%ExecutionContext{run_id: run_id}, run_id), do: :ok
 
-  defp normalize_tool_policy(_), do: nil
+  defp validate_context_run_id(_context, _run_id),
+    do: {:error, :execution_context_run_id_mismatch}
 
   defp atomize_known_keys(map, keys) do
     Enum.reduce(keys, map, fn key, acc ->
@@ -1938,6 +1948,7 @@ defmodule CodingAgent.ExecutionNode.Worker do
   defp key_atom("resume"), do: :resume
   defp key_atom("lane"), do: :lane
   defp key_atom("toolPolicy"), do: :tool_policy
+  defp key_atom("executionContext"), do: :execution_context
   defp key_atom("meta"), do: :meta
 
   defp notify(%{notify_pid: pid}, message) when is_pid(pid) do

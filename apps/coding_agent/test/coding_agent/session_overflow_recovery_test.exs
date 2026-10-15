@@ -6,6 +6,15 @@ defmodule CodingAgent.SessionOverflowRecoveryTest do
   alias CodingAgent.Session.OverflowRecovery
   alias CodingAgent.SessionManager
 
+  defmodule SummaryProvider do
+    def stream(_model, _context, _opts) do
+      send(Application.fetch_env!(:coding_agent, :overflow_recovery_test_owner), :summary_request)
+      {:ok, stream} = LemonAi.EventStream.start_link()
+      LemonAi.EventStream.complete(stream, Mocks.assistant_message("previous work summarized"))
+      {:ok, stream}
+    end
+  end
+
   defp start_session(opts \\ []) do
     cwd =
       Path.join(
@@ -14,14 +23,31 @@ defmodule CodingAgent.SessionOverflowRecoveryTest do
       )
 
     File.mkdir_p!(cwd)
+    File.mkdir_p!(Path.join(cwd, ".lemon"))
+
+    # Memory extraction shares the summary model but is not overflow compaction.
+    # Keep it out of this provider-call regression, regardless of host config.
+    File.write!(Path.join(cwd, ".lemon/config.toml"), "[features]\nsession_search = \"off\"\n")
 
     defaults = [
       cwd: cwd,
+      workspace_dir: Path.join(cwd, "workspace"),
       model: Mocks.mock_model(),
       stream_fn: Mocks.mock_stream_fn_single(Mocks.assistant_message("ok"))
     ]
 
-    {:ok, session} = Session.start_link(Keyword.merge(defaults, opts))
+    session =
+      start_supervised!(
+        {Session, Keyword.merge(defaults, opts)},
+        id: make_ref(),
+        restart: :temporary
+      )
+
+    on_exit(fn ->
+      File.rm_rf!(cwd)
+      File.rm_rf!(SessionManager.get_session_dir(cwd))
+    end)
+
     session
   end
 
@@ -58,6 +84,140 @@ defmodule CodingAgent.SessionOverflowRecoveryTest do
           }
       }
     end)
+  end
+
+  test "typed pre-output overflow compacts once, but committed output is never replayed" do
+    previous_owner = Application.get_env(:coding_agent, :overflow_recovery_test_owner)
+    Application.put_env(:coding_agent, :overflow_recovery_test_owner, self())
+    LemonAi.ProviderRegistry.register(:session_overflow_recovery_test, SummaryProvider)
+
+    on_exit(fn ->
+      LemonAi.ProviderRegistry.unregister(:session_overflow_recovery_test)
+
+      if previous_owner == nil do
+        Application.delete_env(:coding_agent, :overflow_recovery_test_owner)
+      else
+        Application.put_env(:coding_agent, :overflow_recovery_test_owner, previous_owner)
+      end
+    end)
+
+    for committed <- [false, true] do
+      parent = self()
+      calls = :atomics.new(1, [])
+
+      model = %{
+        Mocks.mock_model()
+        | api: :session_overflow_recovery_test,
+          provider: :session_overflow_recovery_test
+      }
+
+      stream_fn = fn model, context, opts ->
+        attempt = :atomics.add_get(calls, 1, 1)
+        send(parent, {:prompt_request, committed, attempt, context.messages})
+
+        response =
+          if attempt == 2 do
+            %{
+              Mocks.assistant_message(if(committed, do: "already visible", else: ""))
+              | stop_reason: :error,
+                content:
+                  if(committed,
+                    do: [%LemonAi.Types.TextContent{text: "already visible"}],
+                    else: []
+                  ),
+                error_message: "opaque provider rejection",
+                error_details: %{category: :context_length, output_committed: committed}
+            }
+          else
+            Mocks.assistant_message(if(attempt == 1, do: "seed answer", else: "recovered"))
+          end
+
+        Mocks.mock_stream_fn_single(response).(model, context, opts)
+      end
+
+      settings = %CodingAgent.SettingsManager{
+        compaction_enabled: false,
+        keep_recent_tokens: 1,
+        model_roles: %{},
+        providers: %{session_overflow_recovery_test: %{api_key: "fake-key"}},
+        extension_auto_load_default_paths: false
+      }
+
+      session =
+        start_session(
+          model: model,
+          stream_fn: stream_fn,
+          settings_manager: settings,
+          system_prompt: "isolated overflow regression",
+          tools: []
+        )
+
+      Session.subscribe(session)
+      assert :ok = Session.prompt(session, String.duplicate("old history ", 200))
+      assert_receive {:session_event, _, {:agent_end, _}}, 5_000
+      assert :ok = Session.prompt(session, "retry me")
+
+      if committed do
+        assert_receive {:session_event, _,
+                        {:error, {:assistant_error, "opaque provider rejection"}, partial_state}},
+                       5_000
+
+        assert %{
+                 error_message: "opaque provider rejection",
+                 error_details: %{category: :context_length, output_committed: true},
+                 content: [%LemonAi.Types.TextContent{text: "already visible"}]
+               } = List.last(partial_state.new_messages)
+
+        state = Session.get_state(session)
+        assert :atomics.get(calls, 1) == 2
+        refute Enum.any?(SessionManager.entries(state.session_manager), &(&1.type == :compaction))
+        refute_received :summary_request
+        refute_received {:session_event, _, {:compaction_start, _}}
+        refute state.is_streaming
+      else
+        assert_receive :summary_request, 5_000
+        assert_receive {:session_event, _, {:compaction_start, %{reason: :overflow}}}, 5_000
+        assert_receive {:session_event, _, {:compaction_complete, _}}, 5_000
+        assert_receive {:prompt_request, false, 3, messages}, 5_000
+
+        assert Enum.any?(messages, fn
+                 %{role: :user, content: "retry me"} -> true
+                 _ -> false
+               end)
+
+        assert_receive {:session_event, _, {:agent_end, _}}, 5_000
+        state = Session.get_state(session)
+        assert :atomics.get(calls, 1) == 3
+
+        assert Enum.count(
+                 SessionManager.entries(state.session_manager),
+                 &(&1.type == :compaction)
+               ) == 1
+
+        refute state.auto_compaction.in_progress
+        refute state.overflow_recovery.in_progress
+        refute state.is_streaming
+        refute_received {:session_event, _, {:compaction_start, _}}
+        refute_received {:session_event, _, {:compaction_complete, _}}
+        refute_received :summary_request
+      end
+
+      assert :ok = GenServer.stop(session)
+    end
+  end
+
+  test "budget and cancellation failures cannot recover from an earlier typed overflow" do
+    failed = %{
+      Mocks.assistant_message("")
+      | stop_reason: :error,
+        error_details: %{category: :context_length, output_committed: false}
+    }
+
+    state = %{is_streaming: true, overflow_recovery: %OverflowRecovery.State{}}
+
+    for reason <- [{:budget_exceeded, %{message: "context window"}}, {:canceled, :user}] do
+      assert :no_recovery = OverflowRecovery.maybe_start(state, reason, [failed], self())
+    end
   end
 
   test "stale overflow recovery result is ignored while recovery remains in progress" do
@@ -167,7 +327,14 @@ defmodule CodingAgent.SessionOverflowRecoveryTest do
     session = start_session()
     state = Session.get_state(session)
     signature = current_signature(state)
-    task_pid = spawn(fn -> Process.sleep(:infinity) end)
+
+    task_pid =
+      spawn(fn ->
+        receive do
+          :stop -> :ok
+        end
+      end)
+
     monitor_ref = Process.monitor(task_pid)
     mark_overflow_recovery_state(session, signature, task_pid: task_pid, monitor_ref: monitor_ref)
 
@@ -178,12 +345,23 @@ defmodule CodingAgent.SessionOverflowRecoveryTest do
     assert state_after.overflow_recovery.task_pid == nil
     assert state_after.overflow_recovery.task_monitor_ref == nil
     refute state_after.is_streaming
+
+    assert_receive {:DOWN, ^monitor_ref, :process, ^task_pid,
+                    {:shutdown, :overflow_recovery_timeout}},
+                   1_000
   end
 
   test "reset cancels overflow recovery and makes late task messages stale" do
     session = start_session()
     state = Session.get_state(session)
-    task_pid = spawn(fn -> Process.sleep(:infinity) end)
+
+    task_pid =
+      spawn(fn ->
+        receive do
+          :stop -> :ok
+        end
+      end)
+
     task_monitor = Process.monitor(task_pid)
     stale_monitor_ref = make_ref()
 
@@ -215,7 +393,14 @@ defmodule CodingAgent.SessionOverflowRecoveryTest do
 
   test "session termination cancels an active overflow recovery task" do
     session = start_session()
-    task_pid = spawn(fn -> Process.sleep(:infinity) end)
+
+    task_pid =
+      spawn(fn ->
+        receive do
+          :stop -> :ok
+        end
+      end)
+
     task_monitor = Process.monitor(task_pid)
 
     :sys.replace_state(session, fn state ->

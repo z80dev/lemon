@@ -7,12 +7,14 @@
  * no longer editable, and the editable queue is the feature — the user can
  * reorder their mind before the agent gets a chance to read it.
  *
- * Two states are distinguished because they fail differently:
+ * Three states are distinguished because they fail differently:
  *   `queued-local`       waiting for the session's run to finish; ours to send.
  *   `waiting-connection` mirror of a `chat.send` the protocol client parked
  *                        while offline (see {@link ControlPlaneClient.queued}).
  *                        That one is already out of our hands — the client
  *                        flushes it on reconnect — so it is shown, not edited.
+ *   `needs-review`       a send may already have taken effect; requires an
+ *                        explicit edit/review and is never automatically drained.
  *
  * The store is per session key: switching sessions must not hand one session's
  * backlog to another, and a background session whose run finishes drains its
@@ -29,6 +31,8 @@ export interface QueueItem {
 	id: string;
 	text: string;
 	attachments?: readonly PendingImage[];
+	/** A possibly committed send: inspect this identity, never auto-replay it. */
+	submission?: { requestId: string; runId?: string };
 	state: QueueItemState;
 	/** Wall-clock ms when the item was queued. */
 	at: number;

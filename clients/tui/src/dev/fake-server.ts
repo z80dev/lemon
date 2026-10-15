@@ -81,6 +81,7 @@ export const DEFAULT_METHODS = [
 	"profiles.roster",
 	"profile.chat",
 	"sessions.list",
+	"sessions.get",
 	"sessions.preview",
 	"sessions.active",
 	"sessions.active.list",

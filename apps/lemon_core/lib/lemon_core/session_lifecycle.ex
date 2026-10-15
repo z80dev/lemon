@@ -163,6 +163,15 @@ defmodule LemonCore.SessionLifecycle do
     end)
   end
 
+  @doc "Fetch one lifecycle row with an explicit owner-unavailable receipt."
+  def fetch(session_key) when is_binary(session_key) do
+    case RunStore.fetch_session_index(session_key) do
+      {:ok, nil} -> {:ok, nil}
+      {:ok, session} when is_map(session) -> {:ok, merge_metadata(session)}
+      _ -> {:error, :session_store_unavailable}
+    end
+  end
+
   @doc "Resolve a fork source's agent from its canonical key or durable session index."
   @spec fork_agent_id(String.t()) :: {:ok, String.t()} | {:error, atom()}
   def fork_agent_id(session_key) when is_binary(session_key) do
@@ -249,7 +258,7 @@ defmodule LemonCore.SessionLifecycle do
     |> Enum.sort_by(&(&1.started_at_ms || 0), :asc)
   end
 
-  @doc "Build an always-redacted JSON or Markdown export with integrity metadata."
+  @doc "Build an always-redacted JSON, JSONL, Markdown or HTML export with integrity metadata."
   @spec export(String.t(), keyword()) :: {:ok, map()} | {:error, term()}
   def export(session_key, opts \\ []) when is_binary(session_key) do
     with %{} = session <- get(session_key),
@@ -671,6 +680,93 @@ defmodule LemonCore.SessionLifecycle do
     |> Kernel.<>("\n")
   end
 
+  defp encode_export(payload, :jsonl) do
+    header =
+      payload
+      |> Map.delete("runs")
+      |> Map.put("type", "session")
+
+    lines =
+      Enum.map([header | Enum.map(payload["runs"], &Map.put(&1, "type", "run"))], fn record ->
+        Jason.encode!(record)
+      end)
+
+    Enum.join(lines, "\n") <> "\n"
+  end
+
+  # Self-contained document: inline CSS only, no scripts or external resources.
+  # Every interpolated value is HTML-escaped.
+  defp encode_export(payload, :html) do
+    session = payload["session"]
+    title = session["title"] || session["sessionKey"]
+
+    runs =
+      Enum.map_join(payload["runs"], "\n", fn run ->
+        tools =
+          case run["tools"] do
+            [] ->
+              "<p class=\"empty\">No tool calls recorded.</p>"
+
+            tools ->
+              items =
+                Enum.map_join(tools, "\n", fn tool ->
+                  "<li><code>#{html_escape(tool["kind"] || "tool")}</code> #{html_escape(tool["title"] || "Tool call")} (#{html_escape(tool["phase"] || "unknown")})</li>"
+                end)
+
+              "<ul>\n#{items}\n</ul>"
+          end
+
+        status =
+          case run["ok"] do
+            true -> "ok"
+            false -> "failed"
+            _ -> "unknown"
+          end
+
+        """
+        <section class="run">
+        <h2>Run #{html_escape(run["runId"])}</h2>
+        <p class="meta">Status: #{status}#{if run["error"], do: " - " <> html_escape(run["error"]), else: ""}</p>
+        <h3>Prompt</h3>
+        #{html_block(run["prompt"])}
+        <h3>Answer</h3>
+        #{html_block(run["answer"])}
+        <h3>Tools</h3>
+        #{tools}
+        </section>
+        """
+      end)
+
+    """
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>#{html_escape(title)}</title>
+    <style>
+    body{font-family:system-ui,sans-serif;max-width:60rem;margin:2rem auto;padding:0 1rem;line-height:1.5;color:#1d1d1f;background:#fff}
+    h1{font-size:1.6rem}h2{font-size:1.2rem;margin-top:0}h3{font-size:1rem;margin-bottom:.25rem}
+    .meta,.empty{color:#6e6e73}
+    .run{border:1px solid #d2d2d7;border-radius:.5rem;padding:1rem;margin:1rem 0}
+    pre{white-space:pre-wrap;word-break:break-word;background:#f5f5f7;padding:.75rem;border-radius:.375rem;margin:0}
+    code{background:#f5f5f7;padding:0 .25rem;border-radius:.25rem}
+    </style>
+    </head>
+    <body>
+    <h1>#{html_escape(title)}</h1>
+    <ul class="meta">
+    <li>Session: <code>#{html_escape(session["sessionKey"])}</code></li>
+    <li>Agent: <code>#{html_escape(session["agentId"] || "unknown")}</code></li>
+    <li>Runs: #{length(payload["runs"])}</li>
+    <li>Redacted export: yes</li>
+    </ul>
+    #{runs}
+    </body>
+    </html>
+    """
+  end
+
   defp fit_export(session, runs, exported_at_ms, format) do
     do_fit_export(session, Enum.map(runs, &export_run/1), exported_at_ms, format, 0)
   end
@@ -877,6 +973,8 @@ defmodule LemonCore.SessionLifecycle do
   defp stringify_keys(map), do: Map.new(map, fn {key, value} -> {to_string(key), value} end)
 
   defp normalize_export_format(value) when value in [:json, "json"], do: {:ok, :json}
+  defp normalize_export_format(value) when value in [:jsonl, "jsonl", "ndjson"], do: {:ok, :jsonl}
+  defp normalize_export_format(value) when value in [:html, "html"], do: {:ok, :html}
 
   defp normalize_export_format(value) when value in [:markdown, "markdown", "md"],
     do: {:ok, :markdown}
@@ -900,9 +998,33 @@ defmodule LemonCore.SessionLifecycle do
 
   defp export_filename(session_key, format) do
     safe = String.replace(session_key, ~r/[^A-Za-z0-9._-]+/, "-")
-    extension = if format == :json, do: "json", else: "md"
+    extension = export_extension(format)
     "lemon-session-#{safe}.#{extension}"
   end
+
+  defp export_extension(:json), do: "json"
+  defp export_extension(:jsonl), do: "jsonl"
+  defp export_extension(:markdown), do: "md"
+  defp export_extension(:html), do: "html"
+
+  defp html_escape(nil), do: ""
+
+  defp html_escape(value) do
+    value
+    |> html_text()
+    |> String.replace("&", "&amp;")
+    |> String.replace("<", "&lt;")
+    |> String.replace(">", "&gt;")
+    |> String.replace("\"", "&quot;")
+    |> String.replace("'", "&#39;")
+  end
+
+  defp html_text(value) when is_binary(value), do: value
+  defp html_text(value) when is_atom(value) or is_number(value), do: to_string(value)
+  defp html_text(value), do: inspect(value, limit: 20, printable_limit: 500)
+
+  defp html_block(nil), do: "<p class=\"empty\">Not recorded.</p>"
+  defp html_block(value), do: "<pre>#{html_escape(value)}</pre>"
 
   defp markdown_block(nil), do: "_Not recorded._"
 

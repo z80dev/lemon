@@ -4,21 +4,25 @@ defmodule CodingAgent.Tools.WebFetch do
 
   Fetches content from a URL with SSRF protections, readability extraction,
   optional Firecrawl fallback, and structured JSON output.
-  Binary responses are rejected instead of being treated as readable text.
+  PDF responses use system PDF backends or an operator-selected `:pdf_python`;
+  project/ancestor virtual environments are never auto-discovered or probed.
+  GitHub blob URLs fetch raw file contents; issue and pull request URLs render
+  through the public REST API (see `CodingAgent.Tools.WebFetchGitHub`).
+  Other binary responses are rejected instead of being treated as readable text.
   Raise `maxChars` to recover truncated text; omission uses the configured default.
   """
 
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
-  alias CodingAgent.Security.ExternalContent
+  alias LemonAgent.Security.ExternalContent
   alias CodingAgent.Search.Dispatcher, as: SearchDispatcher
   alias CodingAgent.Search.Registry, as: SearchRegistry
   alias CodingAgent.Search.SingleFlight
-  alias CodingAgent.Tools.WebCache
+  alias CodingAgent.Tools.{ReadPdf, WebCache, WebFetchGitHub}
   alias CodingAgent.Tools.WebGuard
   alias CodingAgent.Utils.Http
   alias LemonCore.Secrets
 
-  import CodingAgent.Tools.AbortHelpers, only: [check_abort: 1]
+  import LemonAgent.Tools.AbortHelpers, only: [check_abort: 1]
 
   @default_fetch_max_chars 20_000
   @default_fetch_max_redirects 3
@@ -35,13 +39,13 @@ defmodule CodingAgent.Tools.WebFetch do
   Returns the WebFetch tool definition.
   """
   @spec tool(cwd :: String.t(), opts :: keyword()) :: AgentTool.t()
-  def tool(_cwd, opts \\ []) do
-    runtime = build_runtime(opts)
+  def tool(cwd, opts \\ []) do
+    runtime = build_runtime(Keyword.put(opts, :cwd, cwd))
 
     %AgentTool{
       name: "webfetch",
       description:
-        "Fetch and extract readable content from a URL (HTML -> markdown/text). Returns structured JSON.",
+        "Fetch and extract readable content from a URL (HTML -> markdown/text, PDF -> text, GitHub files/issues/PRs). Returns structured JSON.",
       label: "Web Fetch",
       parallel_safe: true,
       parameters: %{
@@ -124,7 +128,7 @@ defmodule CodingAgent.Tools.WebFetch do
   defp run_cached_fetch(url, extract_mode, max_chars, runtime, providers) do
     cache_key =
       WebCache.normalize_cache_key(
-        "fetch:text-v1:#{Enum.join(providers, ",")}:#{url}:#{Atom.to_string(extract_mode)}:#{max_chars}"
+        "fetch:text-v2:#{Enum.join(providers, ",")}:#{url}:#{Atom.to_string(extract_mode)}:#{max_chars}"
       )
 
     case WebCache.read_cache(@fetch_cache_table, cache_key, runtime.cache_opts) do
@@ -201,7 +205,38 @@ defmodule CodingAgent.Tools.WebFetch do
   defp perform_direct_fetch(url, extract_mode, max_chars, runtime) do
     started_ms = System.monotonic_time(:millisecond)
 
-    guard_opts = [
+    case WebFetchGitHub.route(url) do
+      {:raw, raw_url} ->
+        direct_get(raw_url, url, extract_mode, max_chars, runtime, started_ms)
+
+      {:issue, owner, repo, number} ->
+        perform_github_issue_fetch(url, {owner, repo, number}, extract_mode, max_chars, runtime)
+
+      :none ->
+        direct_get(url, url, extract_mode, max_chars, runtime, started_ms)
+    end
+  end
+
+  defp direct_get(fetch_url, original_url, extract_mode, max_chars, runtime, started_ms) do
+    case WebGuard.guarded_get(fetch_url, guard_opts(runtime)) do
+      {:ok, response, final_url} ->
+        handle_guarded_response(
+          response,
+          original_url,
+          final_url,
+          extract_mode,
+          max_chars,
+          runtime,
+          started_ms
+        )
+
+      {:error, reason} ->
+        guard_failure(reason)
+    end
+  end
+
+  defp guard_opts(runtime) do
+    [
       headers: [
         {"accept", "*/*"},
         {"user-agent", runtime.user_agent},
@@ -211,27 +246,59 @@ defmodule CodingAgent.Tools.WebFetch do
       max_redirects: runtime.max_redirects,
       allow_private_network: runtime.allow_private_network,
       allowed_hostnames: runtime.allowed_hostnames,
+      resolve_host: runtime.resolve_host,
       http_get: runtime.http_get
     ]
+  end
 
-    case WebGuard.guarded_get(url, guard_opts) do
-      {:ok, response, final_url} ->
-        handle_guarded_response(
-          response,
-          url,
-          final_url,
-          extract_mode,
-          max_chars,
-          runtime,
-          started_ms
-        )
+  defp guard_failure(reason) do
+    if WebGuard.ssrf_blocked?(reason) or direct_guard_error?(reason) do
+      {:error, {:terminal, format_guard_error(reason)}}
+    else
+      {:error, format_primary_error(reason)}
+    end
+  end
+
+  defp perform_github_issue_fetch(url, {owner, repo, number}, extract_mode, max_chars, runtime) do
+    started_ms = System.monotonic_time(:millisecond)
+    {issue_url, comments_url} = WebFetchGitHub.issue_api_urls(owner, repo, number)
+
+    with {:ok, issue} <- github_json(issue_url, runtime),
+         {:ok, comments} <- github_json(comments_url, runtime) do
+      {title, markdown} = WebFetchGitHub.render_issue(issue, List.wrap(comments))
+      text = if extract_mode == :text, do: markdown_to_text(markdown), else: markdown
+
+      {:ok,
+       success_payload(
+         %{
+           url: url,
+           final_url: issue["html_url"] || url,
+           status: 200,
+           content_type: "text/markdown",
+           title: title,
+           extractor: "github_api"
+         },
+         text,
+         extract_mode,
+         max_chars,
+         started_ms
+       )}
+    end
+  end
+
+  defp github_json(api_url, runtime) do
+    case WebGuard.guarded_get(api_url, guard_opts(runtime)) do
+      {:ok, %{status: status, body: body}, _final_url} when status in 200..299 ->
+        case Jason.decode(to_string_safe(body)) do
+          {:ok, decoded} when is_map(decoded) or is_list(decoded) -> {:ok, decoded}
+          _ -> {:error, "GitHub API returned invalid JSON"}
+        end
+
+      {:ok, response, _final_url} ->
+        {:error, format_primary_error({:http_error, response.status, response})}
 
       {:error, reason} ->
-        if WebGuard.ssrf_blocked?(reason) or direct_guard_error?(reason) do
-          {:error, {:terminal, format_guard_error(reason)}}
-        else
-          {:error, format_primary_error(reason)}
-        end
+        guard_failure(reason)
     end
   end
 
@@ -275,32 +342,48 @@ defmodule CodingAgent.Tools.WebFetch do
 
     case extract_content(body, content_type, extract_mode, final_url, runtime) do
       {:ok, %{text: text, title: title, extractor: extractor}} ->
-        wrapped = wrap_web_fetch_content(text, max_chars)
-        wrapped_title = wrap_web_fetch_field(title)
-        trust_metadata = web_fetch_trust_metadata(wrapped, wrapped_title)
-
         {:ok,
-         %{
-           "url" => original_url,
-           "finalUrl" => final_url,
-           "status" => response.status,
-           "contentType" => content_type || "application/octet-stream",
-           "title" => wrapped_title,
-           "extractMode" => Atom.to_string(extract_mode),
-           "extractor" => extractor,
-           "truncated" => wrapped.truncated,
-           "length" => wrapped.wrapped_length,
-           "rawLength" => wrapped.raw_length,
-           "wrappedLength" => wrapped.wrapped_length,
-           "fetchedAt" => DateTime.utc_now() |> DateTime.to_iso8601(),
-           "tookMs" => elapsed_ms(started_ms),
-           "text" => wrapped.text,
-           "trustMetadata" => trust_metadata
-         }}
+         success_payload(
+           %{
+             url: original_url,
+             final_url: final_url,
+             status: response.status,
+             content_type: content_type || "application/octet-stream",
+             title: title,
+             extractor: extractor
+           },
+           text,
+           extract_mode,
+           max_chars,
+           started_ms
+         )}
 
       {:error, reason} ->
         {:error, format_primary_error({:extract_error, reason})}
     end
+  end
+
+  defp success_payload(source, text, extract_mode, max_chars, started_ms) do
+    wrapped = wrap_web_fetch_content(text, max_chars)
+    wrapped_title = wrap_web_fetch_field(source.title)
+
+    %{
+      "url" => source.url,
+      "finalUrl" => source.final_url,
+      "status" => source.status,
+      "contentType" => source.content_type,
+      "title" => wrapped_title,
+      "extractMode" => Atom.to_string(extract_mode),
+      "extractor" => source.extractor,
+      "truncated" => wrapped.truncated,
+      "length" => wrapped.wrapped_length,
+      "rawLength" => wrapped.raw_length,
+      "wrappedLength" => wrapped.wrapped_length,
+      "fetchedAt" => DateTime.utc_now() |> DateTime.to_iso8601(),
+      "tookMs" => elapsed_ms(started_ms),
+      "text" => wrapped.text,
+      "trustMetadata" => web_fetch_trust_metadata(wrapped, wrapped_title)
+    }
   end
 
   defp perform_firecrawl_fetch(url, extract_mode, max_chars, runtime) do
@@ -416,6 +499,9 @@ defmodule CodingAgent.Tools.WebFetch do
 
   defp extract_content(body, content_type, extract_mode, url, runtime) do
     cond do
+      pdf?(body, content_type) ->
+        extract_pdf(body, extract_mode, runtime)
+
       not readable_body?(body, content_type) ->
         {:error, "Unsupported binary response: #{content_type || "unknown content type"}"}
 
@@ -441,6 +527,31 @@ defmodule CodingAgent.Tools.WebFetch do
       not (is_binary(content_type) and
              (String.starts_with?(content_type, ["image/", "audio/", "video/"]) or
                 content_type in ["application/pdf", "application/zip", "application/gzip"]))
+  end
+
+  defp pdf?(body, content_type),
+    do: content_type == "application/pdf" or String.starts_with?(body, "%PDF-")
+
+  # Backends read files, so the response is staged in a private temp file
+  # that is removed whether or not extraction succeeds.
+  defp extract_pdf(body, _extract_mode, runtime) do
+    dir = Path.join(System.tmp_dir!(), "lemon-webfetch-#{System.unique_integer([:positive])}")
+    path = Path.join(dir, "document.pdf")
+
+    try do
+      with :ok <- File.mkdir_p(dir),
+           :ok <- File.chmod(dir, 0o700),
+           :ok <- File.write(path, body),
+           {:ok, %{text: text, backend: backend}} <-
+             ReadPdf.extract_text(path, runtime.cwd, runtime.pdf_opts, nil) do
+        {:ok, %{text: text, title: nil, extractor: "pdf:#{backend}"}}
+      else
+        {:error, reason} when is_binary(reason) -> {:error, reason}
+        {:error, reason} -> {:error, "Could not stage PDF: #{format_reason(reason)}"}
+      end
+    after
+      File.rm_rf(dir)
+    end
   end
 
   defp extract_html_content(html, extract_mode, url, runtime) do
@@ -1035,6 +1146,8 @@ defmodule CodingAgent.Tools.WebFetch do
       end
 
     %{
+      cwd: Keyword.get_lazy(opts, :cwd, &File.cwd!/0),
+      pdf_opts: Keyword.take(opts, [:pdf_python]),
       enabled: truthy?(get_map_value(fetch_cfg, :enabled, true)),
       max_chars:
         get_map_value(fetch_cfg, :max_chars, @default_fetch_max_chars)
@@ -1081,6 +1194,7 @@ defmodule CodingAgent.Tools.WebFetch do
             "https://api.exa.ai"
       },
       http_get: Keyword.get(opts, :http_get, &Req.get/2),
+      resolve_host: Keyword.get(opts, :resolve_host),
       http_post: Keyword.get(opts, :http_post, &Req.post/2)
     }
   end

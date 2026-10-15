@@ -33,11 +33,18 @@ defmodule LemonCore.Config.Agent do
       enabled = true
       reserve_tokens = 16384
       keep_recent_tokens = 20000
+      # threshold_percent = 80     # optional: compact at this % of the context window
+      # threshold_tokens = 150000  # optional: fixed token threshold, overrides percent
 
       [runtime.retry]
       enabled = true
       max_retries = 3
       base_delay_ms = 1000
+
+      [runtime.provider_routing]
+      # Ordered model alternatives, expanded through [model_roles], precede
+      # the existing provider fallback plan. Same-provider models are retained.
+      fallback_models = ["openai:gpt-4o", "@smol"]
 
       [runtime.shell]
       path = "/bin/zsh"
@@ -93,7 +100,9 @@ defmodule LemonCore.Config.Agent do
           compaction: %{
             enabled: boolean(),
             reserve_tokens: integer(),
-            keep_recent_tokens: integer()
+            keep_recent_tokens: integer(),
+            threshold_percent: 1..100 | nil,
+            threshold_tokens: pos_integer() | nil
           },
           retry: %{
             enabled: boolean(),
@@ -195,7 +204,11 @@ defmodule LemonCore.Config.Agent do
       keep_recent_tokens:
         Env.get(:lemon_compaction_keep_recent_tokens,
           default: compaction["keep_recent_tokens"] || 20_000
-        )
+        ),
+      # Optional; `nil` keeps the reserve-based threshold. Out-of-range values
+      # are reported by `Config.Validator.validate_agent/2`.
+      threshold_percent: compaction["threshold_percent"],
+      threshold_tokens: compaction["threshold_tokens"]
     }
   end
 
@@ -242,6 +255,7 @@ defmodule LemonCore.Config.Agent do
         Env.get(:lemon_provider_fallback_providers,
           default: normalize_string_list(routing["fallback_providers"])
         ),
+      fallback_models: normalize_fallback_models(routing["fallback_models"]),
       default_pool:
         Env.get(:lemon_provider_routing_default_pool,
           default: normalize_optional_string(routing["default_pool"])
@@ -360,6 +374,34 @@ defmodule LemonCore.Config.Agent do
   end
 
   defp normalize_string_list(_), do: []
+
+  # Keep the ordered chain bounded, and reject malformed selectors at config
+  # resolution rather than silently changing the operator's fallback order.
+  defp normalize_fallback_models(nil), do: []
+
+  defp normalize_fallback_models(values) when is_list(values) and length(values) <= 64 do
+    Enum.map(values, fn
+      value when is_binary(value) and byte_size(value) <= 512 ->
+        selector = String.trim(value)
+
+        if Regex.match?(~r/^@[^@\s]+$/u, selector) or
+             Regex.match?(~r/^[A-Za-z0-9_-]+:[^\s]+$/u, selector) do
+          selector
+        else
+          raise ArgumentError,
+                "runtime.provider_routing.fallback_models contains an invalid selector"
+        end
+
+      _ ->
+        raise ArgumentError,
+              "runtime.provider_routing.fallback_models must contain model selectors"
+    end)
+  end
+
+  defp normalize_fallback_models(_) do
+    raise ArgumentError,
+          "runtime.provider_routing.fallback_models must be an array of at most 64 selectors"
+  end
 
   # Credential pools carry a provider list plus optional per-provider
   # credential refs:

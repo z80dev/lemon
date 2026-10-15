@@ -15,6 +15,10 @@ defmodule LemonCli.Setup.ProviderAuth do
   status reports whether that key is stored and logout deletes it. Logout does
   not revoke the grant or key at the provider and leaves external logins
   (Claude Code, Codex CLI) and environment tokens alone.
+
+  Status and logout fail closed when the encrypted login cannot be read.
+  Only confirmed absence permits removing stale sign-in settings; storage,
+  key and decryption failures leave the login and its configuration unchanged.
   """
 
   alias LemonAgent.ModelRuntime.{Credentials, ProviderNames}
@@ -23,7 +27,9 @@ defmodule LemonCli.Setup.ProviderAuth do
   alias LemonCore.Config.TomlPatch
   alias LemonCore.Secrets
 
-  @spec status(Provider.t(), String.t(), map(), keyword()) :: :ok
+  @type auth_error :: :login_read_failed | :login_delete_failed
+
+  @spec status(Provider.t(), String.t(), map(), keyword()) :: :ok | {:error, auth_error()}
   def status(%Provider{} = spec, config_path, io, opts \\ []) do
     ensure_oauth_provider!(spec)
     config = read_config(config_path)
@@ -31,28 +37,34 @@ defmodule LemonCli.Setup.ProviderAuth do
     auth_source = normalize(provider_cfg["auth_source"])
     secret_name = normalize(opts[:secret_name]) || oauth_secret_name(spec, provider_cfg)
 
-    io.info.("#{spec.display_name} authentication")
-    io.info.("  Config: #{Path.expand(config_path)}")
-    io.info.("  Auth source: #{auth_source_label(auth_source)}")
+    case stored_login(spec, secret_name) do
+      {:ok, login} ->
+        io.info.("#{spec.display_name} authentication")
+        io.info.("  Config: #{Path.expand(config_path)}")
+        io.info.("  Auth source: #{auth_source_label(auth_source)}")
 
-    login_lines(spec, secret_name)
-    |> Enum.each(&io.info.("  " <> &1))
+        login_lines(spec, secret_name, login)
+        |> Enum.each(&io.info.("  " <> &1))
 
-    api_key_env_lines(spec, auth_source)
-    |> Enum.each(&io.info.("  " <> &1))
+        api_key_env_lines(spec, auth_source)
+        |> Enum.each(&io.info.("  " <> &1))
 
-    ready? =
-      if opts[:secret_name] do
-        present?(Credentials.resolve_secret_api_key(secret_name, env_fallback: false))
-      else
-        Credentials.provider_has_credentials?(spec.id, Map.get(config, "providers", %{}))
-      end
+        ready? =
+          if opts[:secret_name] do
+            present?(Credentials.resolve_secret_api_key(secret_name, env_fallback: false))
+          else
+            Credentials.provider_has_credentials?(spec.id, Map.get(config, "providers", %{}))
+          end
 
-    io.info.("  Credentials usable: #{if ready?, do: "yes", else: "no"}")
-    :ok
+        io.info.("  Credentials usable: #{if ready?, do: "yes", else: "no"}")
+        :ok
+
+      {:error, _} = error ->
+        auth_failure(error, io)
+    end
   end
 
-  @spec logout(Provider.t(), String.t(), map(), keyword()) :: :ok
+  @spec logout(Provider.t(), String.t(), map(), keyword()) :: :ok | {:error, auth_error()}
   def logout(%Provider{} = spec, config_path, io, opts \\ []) do
     ensure_oauth_provider!(spec)
     expanded = Path.expand(config_path)
@@ -61,64 +73,82 @@ defmodule LemonCli.Setup.ProviderAuth do
     configured_secret = oauth_secret_name(spec, provider_cfg)
     secret_name = normalize(opts[:secret_name]) || configured_secret
 
-    deleted? =
-      case stored_login(spec, secret_name) do
-        {:ok, _secret} ->
-          :ok = Secrets.delete(secret_name)
-          io.info.("Deleted the stored #{spec.display_name} login (secret #{secret_name}).")
-          true
+    with {:ok, login} <- stored_login(spec, secret_name),
+         {:ok, deleted?} <- delete_login(spec, secret_name, login, io) do
+      stale_api_key_secret? =
+        deleted? and normalize(provider_cfg["api_key_secret"]) == secret_name
 
-        :api_key ->
-          :ok = Secrets.delete(secret_name)
+      if secret_name == configured_secret and
+           (normalize(provider_cfg["auth_source"]) == "oauth" or
+              is_binary(provider_cfg["oauth_secret"]) or stale_api_key_secret?) do
+        updated =
+          content
+          |> TomlPatch.delete_key(spec.provider_table, "auth_source")
+          |> TomlPatch.delete_key(spec.provider_table, "oauth_secret")
+          |> then(fn patched ->
+            if stale_api_key_secret?,
+              do: TomlPatch.delete_key(patched, spec.provider_table, "api_key_secret"),
+              else: patched
+          end)
 
+        # Refuse to write a patch that no longer parses.
+        _ = decode!(updated, expanded)
+        File.write!(expanded, updated)
+        io.info.("Removed sign-in settings from [#{spec.provider_table}] in #{expanded}.")
+      end
+
+      io.info.(
+        if deleted? do
+          "This stored login was deleted. Run `lemon model #{spec.id}` to sign in again. " <>
+            "Other stored logins are unchanged."
+        else
+          "No stored login was deleted. Other stored logins are unchanged."
+        end
+      )
+
+      :ok
+    else
+      {:error, _} = error -> auth_failure(error, io)
+    end
+  end
+
+  defp delete_login(spec, secret_name, login, io) when login == :api_key or is_tuple(login) do
+    case Secrets.delete(secret_name) do
+      :ok ->
+        if login == :api_key do
           io.info.(
             "Deleted the stored #{spec.display_name} API key (secret #{secret_name}). " <>
               "Revoke it in the provider's dashboard if it should stop working everywhere."
           )
+        else
+          io.info.("Deleted the stored #{spec.display_name} login (secret #{secret_name}).")
+        end
 
-          true
+        {:ok, true}
 
-        :not_oauth ->
-          io.info.("Secret #{secret_name} does not hold an OAuth login; left unchanged.")
-          false
-
-        :missing ->
-          io.info.("No stored #{spec.display_name} login in secret #{secret_name}.")
-          false
-      end
-
-    stale_api_key_secret? =
-      deleted? and normalize(provider_cfg["api_key_secret"]) == secret_name
-
-    if secret_name == configured_secret and
-         (normalize(provider_cfg["auth_source"]) == "oauth" or
-            is_binary(provider_cfg["oauth_secret"]) or stale_api_key_secret?) do
-      updated =
-        content
-        |> TomlPatch.delete_key(spec.provider_table, "auth_source")
-        |> TomlPatch.delete_key(spec.provider_table, "oauth_secret")
-        |> then(fn patched ->
-          if stale_api_key_secret?,
-            do: TomlPatch.delete_key(patched, spec.provider_table, "api_key_secret"),
-            else: patched
-        end)
-
-      # Refuse to write a patch that no longer parses.
-      _ = decode!(updated, expanded)
-      File.write!(expanded, updated)
-      io.info.("Removed sign-in settings from [#{spec.provider_table}] in #{expanded}.")
+      {:error, _reason} ->
+        {:error, :login_delete_failed}
     end
+  end
 
-    io.info.(
-      if deleted? do
-        "This stored login was deleted. Run `lemon model #{spec.id}` to sign in again. " <>
-          "Other stored logins are unchanged."
-      else
-        "No stored login was deleted. Other stored logins are unchanged."
-      end
-    )
+  defp delete_login(_spec, secret_name, :not_oauth, io) do
+    io.info.("Secret #{secret_name} does not hold an OAuth login; left unchanged.")
+    {:ok, false}
+  end
 
-    :ok
+  defp delete_login(spec, secret_name, :missing, io) do
+    io.info.("No stored #{spec.display_name} login in secret #{secret_name}.")
+    {:ok, false}
+  end
+
+  defp auth_failure({:error, :login_read_failed} = error, io) do
+    io.error.("The stored login could not be read. Sign-in settings were left unchanged.")
+    error
+  end
+
+  defp auth_failure({:error, :login_delete_failed} = error, io) do
+    io.error.("The stored login could not be deleted. Sign-in settings were left unchanged.")
+    error
   end
 
   defp ensure_oauth_provider!(%Provider{} = spec) do
@@ -139,8 +169,10 @@ defmodule LemonCli.Setup.ProviderAuth do
 
   defp stored_login(%Provider{oauth_result: :api_key}, secret_name) do
     case Secrets.get(secret_name) do
-      {:ok, value} when is_binary(value) and value != "" -> :api_key
-      _ -> :missing
+      {:ok, value} when is_binary(value) and value != "" -> {:ok, :api_key}
+      {:ok, _value} -> {:ok, :not_oauth}
+      {:error, :not_found} -> {:ok, :missing}
+      {:error, _reason} -> {:error, :login_read_failed}
     end
   end
 
@@ -148,18 +180,21 @@ defmodule LemonCli.Setup.ProviderAuth do
     case Secrets.get(secret_name) do
       {:ok, value} ->
         case module.decode_secret(value) do
-          {:ok, secret} -> {:ok, secret}
-          _ -> :not_oauth
+          {:ok, secret} -> {:ok, {:oauth, secret}}
+          _ -> {:ok, :not_oauth}
         end
 
-      {:error, _} ->
-        :missing
+      {:error, :not_found} ->
+        {:ok, :missing}
+
+      {:error, _reason} ->
+        {:error, :login_read_failed}
     end
   end
 
-  defp login_lines(%Provider{} = spec, secret_name) do
-    case stored_login(spec, secret_name) do
-      {:ok, secret} ->
+  defp login_lines(%Provider{} = spec, secret_name, login) do
+    case login do
+      {:oauth, secret} ->
         info = describe(spec.oauth_module, secret)
         now = System.system_time(:millisecond)
 

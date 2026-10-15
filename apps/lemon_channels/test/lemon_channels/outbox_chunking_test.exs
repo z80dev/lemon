@@ -1,238 +1,117 @@
 defmodule LemonChannels.OutboxChunkingTest do
   use ExUnit.Case, async: false
 
-  alias LemonChannels.{Outbox, OutboundPayload}
-  alias LemonChannels.Outbox.Chunker
+  alias LemonChannels.{Outbox, OutboundPayload, Registry}
+  alias LemonChannels.Outbox.{Chunker, Dedupe, RateLimiter}
 
-  @moduledoc """
-  Tests for outbox chunking functionality.
-  """
+  defmodule TrackingPlugin do
+    @behaviour LemonChannels.Plugin
+
+    @impl true
+    def id, do: "outbox-chunk-contract"
+
+    @impl true
+    def meta do
+      %{label: "Chunk contract", capabilities: %{chunk_limit: 100}, docs: nil}
+    end
+
+    @impl true
+    def child_spec(_opts), do: %{id: __MODULE__, start: {Agent, :start_link, [fn -> [] end]}}
+
+    @impl true
+    def normalize_inbound(_raw), do: {:error, :not_supported}
+
+    @impl true
+    def deliver(payload) do
+      send(payload.meta.test_pid, {:chunk_payload, payload})
+      {:ok, make_ref()}
+    end
+
+    @impl true
+    def gateway_methods, do: []
+  end
 
   setup do
-    # Start dependencies if not running
-    ensure_started(LemonChannels.Registry)
-    ensure_started(LemonChannels.Outbox.RateLimiter)
-    ensure_started(LemonChannels.Outbox.Dedupe)
-
-    case Process.whereis(Outbox) do
-      nil ->
-        {:ok, pid} = Outbox.start_link([])
-        on_exit(fn ->
-          if Process.alive?(pid), do: GenServer.stop(pid)
-        end)
-        {:ok, outbox_pid: pid}
-
-      pid ->
-        {:ok, outbox_pid: pid}
+    for module <- [Registry, RateLimiter, Dedupe, Outbox] do
+      if is_nil(Process.whereis(module)), do: start_supervised!(module)
     end
+
+    :ok = Registry.register(TrackingPlugin)
+    on_exit(fn -> Registry.unregister(TrackingPlugin.id()) end)
+
+    %{account: "chunk-account-#{System.unique_integer([:positive])}"}
   end
 
-  defp ensure_started(module) do
-    case Process.whereis(module) do
-      nil ->
-        {:ok, _} = module.start_link([])
+  test "delivers every chunk with only the first carrying reply, dedupe and notification identity",
+       %{
+         account: account
+       } do
+    content = String.duplicate("0123456789 ", 22)
+    chunks = Chunker.chunk(content, chunk_size: 100)
+    assert length(chunks) in 2..5
+    notify_ref = make_ref()
+    idempotency_key = "chunk-key-#{System.unique_integer([:positive])}"
 
-      _ ->
-        :ok
+    payload = %OutboundPayload{
+      channel_id: TrackingPlugin.id(),
+      account_id: account,
+      peer: %{kind: :dm, id: "chunk-peer", thread_id: nil},
+      kind: :text,
+      content: content,
+      reply_to: "original-message",
+      idempotency_key: idempotency_key,
+      notify_pid: self(),
+      notify_ref: notify_ref,
+      meta: %{test_pid: self(), notify_tag: :chunk_delivered}
+    }
+
+    assert {:ok, _ref} = Outbox.enqueue(payload)
+
+    for {content, index} <- Enum.with_index(chunks) do
+      assert_receive {:chunk_payload, delivered}, 1_000
+      assert delivered.content == content
+      assert delivered.meta.chunk_index == index
+      assert delivered.meta.chunk_count == length(chunks)
+      assert delivered.meta.is_continuation == index > 0
+      assert delivered.account_id == account
+      assert delivered.peer == payload.peer
+
+      if index == 0 do
+        assert delivered.reply_to == payload.reply_to
+        assert delivered.idempotency_key == idempotency_key
+        assert delivered.notify_pid == self()
+        assert delivered.notify_ref == notify_ref
+      else
+        assert delivered.reply_to == nil
+        assert delivered.idempotency_key == nil
+        assert delivered.notify_pid == nil
+        assert delivered.notify_ref == nil
+      end
     end
-  rescue
-    _ -> :ok
+
+    assert_receive {:chunk_delivered, ^notify_ref, {:ok, _}}, 1_000
+    assert {:error, :duplicate} = Outbox.enqueue(payload)
+    refute_receive {:chunk_delivered, ^notify_ref, _}, 100
+    refute_receive {:chunk_payload, _}, 0
   end
 
-  describe "Chunker.chunk/2" do
-    test "returns single chunk when text is under limit" do
-      text = "Short text"
-      chunks = Chunker.chunk(text, chunk_size: 100)
+  test "delivers non-text content unchanged without continuation metadata", %{account: account} do
+    notify_ref = make_ref()
 
-      assert length(chunks) == 1
-      assert hd(chunks) == text
-    end
+    payload = %OutboundPayload{
+      channel_id: TrackingPlugin.id(),
+      account_id: account,
+      peer: %{kind: :dm, id: "image-peer", thread_id: nil},
+      kind: :image,
+      content: {:file, "/test/image.png"},
+      notify_pid: self(),
+      notify_ref: notify_ref,
+      meta: %{test_pid: self(), notify_tag: :chunk_delivered}
+    }
 
-    test "splits text into multiple chunks when over limit" do
-      # Create text that's definitely over the limit
-      text = String.duplicate("Hello world! ", 100)  # ~1300 chars
-      chunks = Chunker.chunk(text, chunk_size: 200)
-
-      assert length(chunks) > 1
-      # All chunks should be under the limit
-      Enum.each(chunks, fn chunk ->
-        assert String.length(chunk) <= 200
-      end)
-    end
-
-    test "preserves sentence boundaries when possible" do
-      text = "This is sentence one. This is sentence two. This is sentence three."
-      chunks = Chunker.chunk(text, chunk_size: 30, preserve_sentences: true)
-
-      # Should try to break at sentence boundaries
-      assert length(chunks) > 1
-    end
-
-    test "preserves word boundaries when possible" do
-      text = "Hello wonderful beautiful world of programming and code"
-      chunks = Chunker.chunk(text, chunk_size: 20, preserve_words: true, preserve_sentences: false)
-
-      # Should produce multiple chunks
-      assert length(chunks) > 1
-
-      # All chunks combined should equal original text
-      rejoined = Enum.join(chunks, "")
-      assert rejoined == text
-    end
-
-    test "handles empty string" do
-      chunks = Chunker.chunk("", chunk_size: 100)
-      assert chunks == [""]
-    end
-  end
-
-  describe "Chunker.chunk_size_for/1" do
-    test "returns default chunk size for unknown channel" do
-      size = Chunker.chunk_size_for("unknown-channel")
-      assert is_integer(size)
-      assert size > 0
-    end
-
-    test "returns channel-specific size when available" do
-      # Register a test channel with specific chunk limit
-      # For now, test with unknown channel (should return default)
-      size = Chunker.chunk_size_for("telegram")
-      assert is_integer(size)
-      assert size > 0
-    end
-  end
-
-  describe "Outbox chunking integration" do
-    test "enqueues short message as single payload" do
-      payload = %OutboundPayload{
-        channel_id: "test-channel",
-        account_id: "account-1",
-        peer: %{id: "peer-1", kind: :dm},
-        kind: :text,
-        content: "Short message",
-        meta: %{}
-      }
-
-      {:ok, ref} = Outbox.enqueue(payload)
-      assert is_reference(ref)
-    end
-
-    test "enqueues long message and chunks it" do
-      # Create a message that exceeds typical chunk size
-      long_content = String.duplicate("This is a very long message that should be chunked. ", 200)
-
-      payload = %OutboundPayload{
-        channel_id: "test-channel",
-        account_id: "account-1",
-        peer: %{id: "peer-1", kind: :dm},
-        kind: :text,
-        content: long_content,
-        meta: %{}
-      }
-
-      {:ok, ref} = Outbox.enqueue(payload)
-      assert is_reference(ref)
-    end
-
-    test "preserves idempotency_key only for first chunk" do
-      long_content = String.duplicate("This is a test message. ", 200)
-
-      payload = %OutboundPayload{
-        channel_id: "test-channel",
-        account_id: "account-1",
-        peer: %{id: "peer-1", kind: :dm},
-        kind: :text,
-        content: long_content,
-        idempotency_key: "unique-key-123",
-        meta: %{}
-      }
-
-      # Should not error even with idempotency key
-      {:ok, ref} = Outbox.enqueue(payload)
-      assert is_reference(ref)
-    end
-
-    test "adds chunk metadata to payloads" do
-      long_content = String.duplicate("Chunk test message. ", 200)
-
-      payload = %OutboundPayload{
-        channel_id: "test-channel",
-        account_id: "account-1",
-        peer: %{id: "peer-1", kind: :dm},
-        kind: :text,
-        content: long_content,
-        meta: %{}
-      }
-
-      {:ok, _ref} = Outbox.enqueue(payload)
-
-      # The chunking happens internally; we can verify the outbox processes without error
-      Process.sleep(50)
-
-      assert Process.alive?(Process.whereis(Outbox))
-    end
-
-    test "handles non-text content without chunking" do
-      # Binary content shouldn't be chunked
-      payload = %OutboundPayload{
-        channel_id: "test-channel",
-        account_id: "account-1",
-        peer: %{id: "peer-1", kind: :dm},
-        kind: :image,
-        content: {:file, "/path/to/image.png"},
-        meta: %{}
-      }
-
-      {:ok, ref} = Outbox.enqueue(payload)
-      assert is_reference(ref)
-    end
-
-    test "only first chunk retains notify_pid and notify_ref" do
-      long_content = String.duplicate("Chunk notify test. ", 200)
-
-      notify_pid = self()
-      notify_ref = make_ref()
-
-      payload = %OutboundPayload{
-        channel_id: "test-channel",
-        account_id: "account-1",
-        peer: %{id: "peer-1", kind: :dm},
-        kind: :text,
-        content: long_content,
-        idempotency_key: "notify-test-key",
-        meta: %{notify_tag: :test_tag},
-        notify_pid: notify_pid,
-        notify_ref: notify_ref
-      }
-
-      {:ok, _ref} = Outbox.enqueue(payload)
-      Process.sleep(100)
-
-      # We can't inspect the internal queue directly, but we verify the
-      # Outbox didn't crash and the payload was processed successfully.
-      assert Process.alive?(Process.whereis(Outbox))
-    end
-  end
-
-  describe "duplicate detection with chunking" do
-    test "first chunk respects idempotency" do
-      content = String.duplicate("Test message. ", 100)
-
-      payload = %OutboundPayload{
-        channel_id: "test-channel",
-        account_id: "account-1",
-        peer: %{id: "peer-1", kind: :dm},
-        kind: :text,
-        content: content,
-        idempotency_key: "dedup-test-key",
-        meta: %{}
-      }
-
-      {:ok, _ref1} = Outbox.enqueue(payload)
-
-      # Note: Duplicate detection happens in the Dedupe module
-      # Second enqueue with same key might be rejected
-      # depending on Dedupe state
-    end
+    assert {:ok, _ref} = Outbox.enqueue(payload)
+    assert_receive {:chunk_payload, ^payload}, 1_000
+    assert_receive {:chunk_delivered, ^notify_ref, {:ok, _}}, 1_000
+    refute_receive {:chunk_payload, _}, 100
   end
 end

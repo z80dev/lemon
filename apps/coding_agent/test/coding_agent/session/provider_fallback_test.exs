@@ -32,7 +32,7 @@ defmodule CodingAgent.Session.ProviderFallbackTest do
       end
     end
 
-    wrapped = ProviderFallback.maybe_wrap(stream_fn, primary, settings, File.cwd!())
+    wrapped = ProviderFallback.maybe_wrap(stream_fn, settings, File.cwd!())
     {:ok, stream} = wrapped.(primary, %Context{}, %StreamOptions{})
 
     assert {:ok, message} = LemonAi.EventStream.result(stream, 1_000)
@@ -61,7 +61,7 @@ defmodule CodingAgent.Session.ProviderFallbackTest do
       end
     end
 
-    wrapped = ProviderFallback.maybe_wrap(stream_fn, primary, settings, File.cwd!())
+    wrapped = ProviderFallback.maybe_wrap(stream_fn, settings, File.cwd!())
     {:ok, stream} = wrapped.(primary, %Context{}, %StreamOptions{})
 
     assert {:error, message} = LemonAi.EventStream.result(stream, 1_000)
@@ -90,7 +90,7 @@ defmodule CodingAgent.Session.ProviderFallbackTest do
       end
     end
 
-    wrapped = ProviderFallback.maybe_wrap(stream_fn, primary, settings, File.cwd!())
+    wrapped = ProviderFallback.maybe_wrap(stream_fn, settings, File.cwd!())
     {:ok, stream} = wrapped.(primary, %Context{}, %StreamOptions{})
 
     assert {:error, message} = LemonAi.EventStream.result(stream, 1_000)
@@ -118,7 +118,7 @@ defmodule CodingAgent.Session.ProviderFallbackTest do
       end
     end
 
-    wrapped = ProviderFallback.maybe_wrap(stream_fn, primary, settings, File.cwd!())
+    wrapped = ProviderFallback.maybe_wrap(stream_fn, settings, File.cwd!())
     {:ok, stream} = wrapped.(primary, %Context{}, %StreamOptions{})
 
     assert {:ok, message} = LemonAi.EventStream.result(stream, 1_000)
@@ -146,7 +146,7 @@ defmodule CodingAgent.Session.ProviderFallbackTest do
       end
     end
 
-    wrapped = ProviderFallback.maybe_wrap(stream_fn, primary, settings, File.cwd!())
+    wrapped = ProviderFallback.maybe_wrap(stream_fn, settings, File.cwd!())
     {:ok, stream} = wrapped.(primary, %Context{}, %StreamOptions{})
 
     assert {:ok, message} = LemonAi.EventStream.result(stream, 1_000)
@@ -178,7 +178,7 @@ defmodule CodingAgent.Session.ProviderFallbackTest do
       {:ok, content_then_error_stream(model)}
     end
 
-    wrapped = ProviderFallback.maybe_wrap(stream_fn, primary, settings, File.cwd!())
+    wrapped = ProviderFallback.maybe_wrap(stream_fn, settings, File.cwd!())
     {:ok, stream} = wrapped.(primary, %Context{}, %StreamOptions{})
 
     assert {:error, message} = LemonAi.EventStream.result(stream, 1_000)
@@ -198,7 +198,7 @@ defmodule CodingAgent.Session.ProviderFallbackTest do
       {:ok, delayed_success_stream(model, "streamed", parent)}
     end
 
-    wrapped = ProviderFallback.maybe_wrap(stream_fn, primary, settings, File.cwd!())
+    wrapped = ProviderFallback.maybe_wrap(stream_fn, settings, File.cwd!())
     {:ok, stream} = wrapped.(primary, %Context{}, %StreamOptions{})
 
     assert_receive {:delta_pushed, producer}, 1_000
@@ -303,7 +303,7 @@ defmodule CodingAgent.Session.ProviderFallbackTest do
         end
       end
 
-      wrapped = ProviderFallback.maybe_wrap(stream_fn, primary, settings, File.cwd!())
+      wrapped = ProviderFallback.maybe_wrap(stream_fn, settings, File.cwd!())
       {:ok, stream} = wrapped.(primary, %Context{}, %StreamOptions{})
 
       assert {:ok, message} = LemonAi.EventStream.result(stream, 1_000)
@@ -338,7 +338,7 @@ defmodule CodingAgent.Session.ProviderFallbackTest do
         end
       end
 
-      wrapped = ProviderFallback.maybe_wrap(stream_fn, primary, settings, File.cwd!())
+      wrapped = ProviderFallback.maybe_wrap(stream_fn, settings, File.cwd!())
       {:ok, stream} = wrapped.(primary, %Context{}, %StreamOptions{})
 
       assert {:ok, message} = LemonAi.EventStream.result(stream, 1_000)
@@ -362,7 +362,7 @@ defmodule CodingAgent.Session.ProviderFallbackTest do
         {:ok, error_stream(model, "Invalid request (HTTP 400): messages must be non-empty")}
       end
 
-      wrapped = ProviderFallback.maybe_wrap(stream_fn, primary, settings, File.cwd!())
+      wrapped = ProviderFallback.maybe_wrap(stream_fn, settings, File.cwd!())
       {:ok, stream} = wrapped.(primary, %Context{}, %StreamOptions{})
 
       assert {:error, message} = LemonAi.EventStream.result(stream, 1_000)
@@ -394,9 +394,7 @@ defmodule CodingAgent.Session.ProviderFallbackTest do
       end
 
       wrapped =
-        ProviderFallback.maybe_wrap(stream_fn, primary, settings, File.cwd!(),
-          session_id: session_id
-        )
+        ProviderFallback.maybe_wrap(stream_fn, settings, File.cwd!(), session_id: session_id)
 
       {:ok, stream} = wrapped.(primary, %Context{}, %StreamOptions{})
       assert {:ok, _message} = LemonAi.EventStream.result(stream, 1_000)
@@ -406,6 +404,7 @@ defmodule CodingAgent.Session.ProviderFallbackTest do
 
       assert LemonAgent.ModelRuntime.SessionPins.get(session_id) == %{
                provider: "azure_openai_responses",
+               model_id: "gpt-4",
                credential_ref: "default"
              }
 
@@ -437,9 +436,7 @@ defmodule CodingAgent.Session.ProviderFallbackTest do
       end
 
       wrapped =
-        ProviderFallback.maybe_wrap(stream_fn, primary, settings, File.cwd!(),
-          session_id: session_id
-        )
+        ProviderFallback.maybe_wrap(stream_fn, settings, File.cwd!(), session_id: session_id)
 
       {:ok, stream} = wrapped.(primary, %Context{}, %StreamOptions{})
       assert {:ok, _message} = LemonAi.EventStream.result(stream, 1_000)
@@ -449,6 +446,7 @@ defmodule CodingAgent.Session.ProviderFallbackTest do
 
       assert LemonAgent.ModelRuntime.SessionPins.get(session_id) == %{
                provider: "openai",
+               model_id: "gpt-4",
                credential_ref: "env:PF_KEY_B"
              }
 
@@ -489,6 +487,7 @@ defmodule CodingAgent.Session.ProviderFallbackTest do
 
       assert LemonAgent.ModelRuntime.SessionPins.get(session_id) == %{
                provider: "azure_openai_responses",
+               model_id: "gpt-4",
                credential_ref: "default"
              }
     end
@@ -578,7 +577,7 @@ defmodule CodingAgent.Session.ProviderFallbackTest do
         {:ok, stream}
       end
 
-      wrapped = ProviderFallback.maybe_wrap(stream_fn, primary, settings, File.cwd!())
+      wrapped = ProviderFallback.maybe_wrap(stream_fn, settings, File.cwd!())
       {:ok, output} = wrapped.(primary, %Context{}, %StreamOptions{})
 
       assert_receive {:http_task, http_task}, 1_000
@@ -605,7 +604,7 @@ defmodule CodingAgent.Session.ProviderFallbackTest do
         end
       end
 
-      wrapped = ProviderFallback.maybe_wrap(stream_fn, primary, settings, File.cwd!())
+      wrapped = ProviderFallback.maybe_wrap(stream_fn, settings, File.cwd!())
       {:ok, stream} = wrapped.(primary, %Context{}, %StreamOptions{})
 
       # The outer stream carries no fixed wall-clock timer; serial attempts
@@ -619,9 +618,8 @@ defmodule CodingAgent.Session.ProviderFallbackTest do
       assert_receive {:attempt, :azure_openai_responses}
     end
 
-    test "fallback candidates track the per-call primary model, not the wrap-time model" do
-      wrap_model = LemonAi.Models.get_model(:openai, "gpt-4")
-      switched_model = LemonAi.Models.get_model(:openai, "gpt-4o")
+    test "fallback candidates track the current invocation's primary model" do
+      invocation_model = LemonAi.Models.get_model(:openai, "gpt-4o")
       settings = routing_settings()
       parent = self()
 
@@ -634,12 +632,9 @@ defmodule CodingAgent.Session.ProviderFallbackTest do
         end
       end
 
-      wrapped = ProviderFallback.maybe_wrap(stream_fn, wrap_model, settings, File.cwd!())
+      wrapped = ProviderFallback.maybe_wrap(stream_fn, settings, File.cwd!())
 
-      # Simulates Session.switch_model/2: the loop passes the CURRENT model to
-      # the wrapper; the fallback tail must be rebuilt for it, not serve the
-      # stale wrap-time model id.
-      {:ok, stream} = wrapped.(switched_model, %Context{}, %StreamOptions{})
+      {:ok, stream} = wrapped.(invocation_model, %Context{}, %StreamOptions{})
 
       assert {:ok, message} = LemonAi.EventStream.result(stream, 1_000)
       assert message.provider == :azure_openai_responses

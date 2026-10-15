@@ -227,14 +227,21 @@ defmodule LemonWeb.OmpLiveTest do
       view |> element("#omp-open-start") |> render_click()
       assert has_element?(view, "#omp-start-dialog")
 
-      view
-      |> form("#omp-start-form",
-        start: %{prompt: "HOLD the parser work", cwd: workspace, thinking: "low"}
-      )
-      |> render_submit()
+      pending_html =
+        view
+        |> form("#omp-start-form",
+          start: %{prompt: "HOLD the parser work", cwd: workspace, thinking: "low"}
+        )
+        |> render_submit()
 
-      assert has_element?(view, "#omp-start-submit[aria-busy]")
       render_async(view, @async_timeout)
+
+      # The real start can finish before a later LiveView query. Its event reply
+      # is the causal snapshot of the pending state, even after completion.
+      assert pending_html
+             |> LazyHTML.from_fragment()
+             |> LazyHTML.query("#omp-start-submit[aria-busy]")
+             |> Enum.count() == 1
 
       [session] = LemonOmp.list(include_ended: false)
       id = session["id"]

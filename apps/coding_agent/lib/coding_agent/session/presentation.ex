@@ -65,13 +65,14 @@ defmodule CodingAgent.Session.Presentation do
         nil
       end
 
-    [cwd: cwd]
+    [cwd: cwd, register: true]
     |> maybe_add_opt(:model, Keyword.get(opts, :model))
     |> maybe_add_opt(:thinking_level, Keyword.get(opts, :thinking_level))
     |> maybe_add_opt(:system_prompt, Keyword.get(opts, :system_prompt))
     |> maybe_add_opt(:profile_instructions, Keyword.get(opts, :profile_instructions))
     |> maybe_add_opt(:stream_fn, Keyword.get(opts, :stream_fn))
     |> maybe_add_opt(:tool_policy, tool_policy)
+    |> maybe_add_opt(:execution_context, Keyword.get(opts, :execution_context))
     |> maybe_add_opt(:approval_context, approval_context)
     |> maybe_add_opt(:invocation_context_key, Keyword.get(opts, :invocation_context_key))
     |> maybe_add_opt(:memory_context_key, Keyword.get(opts, :memory_context_key))
@@ -129,9 +130,9 @@ defmodule CodingAgent.Session.Presentation do
   @doc """
   Validates an explicit resume before starting a linked session runner.
 
-  Auto-resume (`resume_source: :auto`) may fall back to a fresh session when the
-  file is missing, so this returns `:ok`. Explicit resumes must reference a
-  loadable native session file.
+  Auto-resume (`resume_source: :auto`) may fall back to a fresh session only for
+  an unbound native token. A token mapped to an existing logical session must
+  remain loadable in the supplied cwd; never replace that session's history.
   """
   @spec validate_resume_for_start(ResumeToken.t() | nil, keyword(), binary()) ::
           :ok | {:error, term()}
@@ -147,7 +148,7 @@ defmodule CodingAgent.Session.Presentation do
         :ok
 
       {:error, reason} ->
-        if resume_source(session_opts) == :auto do
+        if fresh_resume_fallback?(session_id, session_opts) do
           :ok
         else
           {:error, explicit_resume_error(session_id, reason)}
@@ -180,7 +181,7 @@ defmodule CodingAgent.Session.Presentation do
         start_existing_session(session_id, session_file, session_opts, state)
 
       {:error, reason} ->
-        if resume_source(session_opts) == :auto do
+        if fresh_resume_fallback?(session_id, session_opts) do
           Logger.warning(
             "LemonRunner auto-resume unavailable for session #{inspect(session_id)}: " <>
               "#{inspect(reason)}; starting a fresh session"
@@ -238,6 +239,20 @@ defmodule CodingAgent.Session.Presentation do
     end
   end
 
+  defp fresh_resume_fallback?(session_id, session_opts) do
+    resume_source(session_opts) == :auto and
+      not mapped_resume?(Keyword.get(session_opts, :session_key), session_id)
+  end
+
+  defp mapped_resume?(key, session_id) when is_binary(key) do
+    case LemonCore.ChatStateStore.get(key) do
+      %{last_engine: @engine, last_resume_token: ^session_id} -> true
+      _ -> false
+    end
+  end
+
+  defp mapped_resume?(_key, _session_id), do: false
+
   defp resume_source(session_opts) do
     case Keyword.get(session_opts, :resume_source) do
       :auto -> :auto
@@ -263,12 +278,13 @@ defmodule CodingAgent.Session.Presentation do
     CodingAgent.SessionManager.session_file_path(cwd, session_id)
   end
 
-  def finalize_session(state) do
+  def finalize_session(state, preserve_tool_resources \\ false) do
     session = state.session
 
     if is_pid(session) and Process.alive?(session) do
       case safe_save_session(session) do
         :ok ->
+          if preserve_tool_resources, do: CodingAgent.Session.handoff_tool_resources(session)
           :ok
 
         {:error, reason} ->
@@ -459,6 +475,8 @@ defmodule CodingAgent.Session.Presentation do
       "bash" -> :command
       "bash_output" -> :command
       "kill_process" -> :command
+      "eval" -> :command
+      "debug" -> :command
       "read" -> :tool
       "write" -> :file_change
       "edit" -> :file_change
@@ -490,6 +508,15 @@ defmodule CodingAgent.Session.Presentation do
 
       "kill_process" ->
         "kill: #{a["process_id"] || ""}"
+
+      "eval" ->
+        label = a["title"] || (a["code"] || "") |> String.split("\n") |> hd()
+        "eval #{a["language"] || ""}: `#{String.slice(label, 0, 60)}`"
+
+      "debug" ->
+        target = a["program"] || a["expression"] || a["function"] || a["command"]
+        target = target || if(a["file"], do: "#{path_label(a["file"])}:#{a["line"]}")
+        String.trim("debug: #{a["action"] || ""} #{String.slice(target || "", 0, 60)}")
 
       "read" ->
         path = a["path"] || a["file_path"] || ""
@@ -983,6 +1010,7 @@ defmodule CodingAgent.Session.Presentation do
     last_assistant =
       messages
       |> Enum.reverse()
+      |> Enum.take_while(&(Map.get(&1, :role) != :user))
       |> Enum.find(fn msg ->
         case msg do
           %{role: :assistant} -> true

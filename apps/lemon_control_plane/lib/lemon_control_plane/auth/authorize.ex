@@ -397,6 +397,8 @@ defmodule LemonControlPlane.Auth.Authorize do
       "chat.send",
       "chat.abort",
       "sessions.rewind",
+      "sessions.navigate",
+      "sessions.label",
       "sessions.plan",
       "sessions.fork",
       "node.invoke",

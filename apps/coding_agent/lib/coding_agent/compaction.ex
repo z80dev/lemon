@@ -61,8 +61,9 @@ defmodule CodingAgent.Compaction do
   @doc """
   Check if compaction should be triggered.
 
-  Compaction is triggered when the context tokens exceed the context window
-  minus the reserve tokens (space for the model's response).
+  Compaction is triggered when the context tokens exceed `context_threshold/2`:
+  the context window minus the reserve tokens (space for the model's response),
+  optionally lowered by `:threshold_tokens` / `:threshold_percent`.
 
   ## Parameters
 
@@ -71,6 +72,8 @@ defmodule CodingAgent.Compaction do
   - `settings` - Optional settings map with:
     - `:enabled` - Whether compaction is enabled (default: true)
     - `:reserve_tokens` - Tokens to reserve for output (default: 16384)
+    - `:threshold_tokens` - Optional fixed token threshold; overrides `:threshold_percent`
+    - `:threshold_percent` - Optional threshold as a percent (1..100) of the window
 
   ## Returns
 
@@ -84,14 +87,32 @@ defmodule CodingAgent.Compaction do
   end
 
   @doc """
-  Return the context-window threshold after reserving space for the response.
+  Return the context-window threshold above which automatic compaction runs.
 
-  Uses the same reserve as automatic compaction, including the default when
-  `:reserve_tokens` is absent from settings.
+  The reserve-based limit (`window - reserve_tokens`, default reserve when
+  `:reserve_tokens` is absent) is always the ceiling. An optional
+  `:threshold_tokens` (fixed count) or, when absent, `:threshold_percent`
+  (1..100 of the window) lowers it, never raises it. Invalid values are ignored.
   """
   @spec context_threshold(non_neg_integer(), map()) :: integer()
   def context_threshold(context_window, settings \\ %{}) do
-    context_window - Map.get(settings, :reserve_tokens, @default_reserve_tokens)
+    ceiling = context_window - Map.get(settings, :reserve_tokens, @default_reserve_tokens)
+
+    case configured_threshold(context_window, settings) do
+      nil -> ceiling
+      configured -> min(configured, ceiling)
+    end
+  end
+
+  defp configured_threshold(context_window, settings) do
+    tokens = Map.get(settings, :threshold_tokens)
+    percent = Map.get(settings, :threshold_percent)
+
+    cond do
+      is_integer(tokens) and tokens > 0 -> tokens
+      is_integer(percent) and percent in 1..100 -> div(context_window * percent, 100)
+      true -> nil
+    end
   end
 
   @doc """

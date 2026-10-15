@@ -162,6 +162,17 @@ defmodule LemonWeb.Chat.Inspector do
           do: "The agent has not written a plan yet. It drafts one read-only, then asks you to approve it.",
           else: "Turn on plan mode to have the agent research read-only and propose a plan for approval."}
       </p>
+      <section :if={is_map(@todos)} id={"todo-recovery-#{@dom_key}"} aria-label="Current branch todos" class="space-y-2">
+        <h3 class="text-2xs font-semibold uppercase tracking-wide text-subtle">Current branch todos</h3>
+        <p :if={@todos["status"] != "ok"} class="text-xs text-warning">Todo status is unavailable.</p>
+        <p :if={@todos["truncated"] == true} class="text-xs text-warning">Todo snapshot truncated; some owned state is omitted.</p>
+        <ul :if={@todos["status"] == "ok"} class="space-y-1 text-xs">
+          <li :for={todo <- @todos["items"] || []} data-todo-id={todo["id"]}>
+            <span class="font-mono text-subtle">{todo["status"]}</span>
+            {todo["content"] || todo["title"]}
+          </li>
+        </ul>
+      </section>
       <div class="flex gap-2">
         <.button size="sm" icon={if @plan.mode == "plan", do: "x", else: "list-checks"} mutation phx-click="toggle-plan">
           {if @plan.mode == "plan", do: "Exit plan mode", else: "Enter plan mode"}
@@ -230,6 +241,18 @@ defmodule LemonWeb.Chat.Inspector do
       <.detail_row :if={@meta.thinking_level} id={"detail-thinking-#{@dom_key}"} label="Thinking" value={@meta.thinking_level} />
       <.detail_row :if={@run.run_id} id={"detail-run-#{@dom_key}"} label="Active run" value={@run.run_id} />
       <.detail_row :if={@last_run_id} id={"detail-last-run-#{@dom_key}"} label="Last run" value={@last_run_id} />
+      <section :if={is_map(@processes)} id={"process-recovery-#{@dom_key}"} aria-label="Owned background processes" class="space-y-2 border-t border-line pt-3">
+        <h3 class="text-2xs font-semibold uppercase tracking-wide text-subtle">Owned background processes</h3>
+        <p :if={@processes["status"] != "ok"} class="text-xs text-warning">Process status is unavailable.</p>
+        <p :if={@processes["truncated"] == true} class="text-xs text-warning">Process snapshot truncated; some owned state is omitted.</p>
+        <ul :if={@processes["status"] == "ok"} class="space-y-1">
+          <li :for={process <- @processes["items"] || []} class="break-all">
+            <code>{process["identity"]}</code>
+            <span class="badge badge-neutral">{process["status"] || process["classification"]}</span>
+            <span :if={process["reason"]} class="text-subtle">{process["reason"]}</span>
+          </li>
+        </ul>
+      </section>
       <div class="flex flex-wrap gap-2 border-t border-line pt-3">
         <.button size="sm" icon="download" href={"/sessions/#{URI.encode_www_form(@session_key)}/export/markdown"}>
           Markdown

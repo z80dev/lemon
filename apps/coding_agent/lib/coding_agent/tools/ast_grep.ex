@@ -52,7 +52,7 @@ defmodule CodingAgent.Tools.AstGrep do
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonAi.Types.TextContent
 
-  import CodingAgent.Tools.AbortHelpers, only: [check_abort: 1]
+  import LemonAgent.Tools.AbortHelpers, only: [check_abort: 1]
 
   @install "Install ast-grep with `brew install ast-grep` or `npm install -g @ast-grep/cli`, or download a platform binary from https://github.com/ast-grep/ast-grep/releases. Put ast-grep on PATH or set :ast_grep_executable to its absolute path."
   @capture ~r/\${1,3}([A-Z_][A-Z_0-9]*)/

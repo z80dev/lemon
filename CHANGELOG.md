@@ -8,6 +8,12 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
+### Changed
+
+- Internal callers use canonical agent trust/abort helpers and `LemonCore.Id`;
+  obsolete wrappers, unused renderer/coalescer behaviours and unused translation
+  backends are removed without changing active tool or simulation behavior.
+
 ### Lemon Bot
 
 - Apple Mac message actions appear only on hover or keyboard focus, with matching VoiceOver actions and context menus instead of permanent transcript toolbars.
@@ -92,6 +98,28 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Provider-ownership probes inspect complete events and logs so large tool
+  schemas cannot hide credential refusal or leaked values. Integration tests
+  retain committed-output retry fences and drain bounded session subscriptions.
+- Native config-watcher crashes fall back to polling instead of shutting down
+  the core application and its dependants.
+- Execution admission validates supplied tool policies and intersects inherited
+  restrictions instead of accepting malformed or authority-widening overrides.
+  Root and delegated execution contexts bind identity, workspace, capabilities
+  and limits; named nodes apply their destination-local capability ceiling.
+- Failed selected OAuth logins cannot borrow static or environment credentials
+  or transmit encoded OAuth records. Public selected-credential callbacks preserve
+  `nil` refusal rather than reviving a cached token; successful access-token
+  authority and explicit credential-pool/default fallback remain supported.
+- Anthropic-compatible providers no longer implicitly send another provider's
+  `ANTHROPIC_API_KEY`; exact-target API-key and keyless behavior remain supported.
+- Stopped native plan transitions journal the configured `@plan` model and
+  preserve the prior execution model. Restart uses that journal, and exit or
+  approval restores the prior model without rewriting invalid transitions.
+- Provider sign-in status and logout distinguish missing credentials from
+  encrypted-store, journal and master-key failures. Failed reads refuse the
+  command without deleting logins or clearing the selected OAuth authority;
+  logout also reports deletion failures without changing provider settings.
 - Keep omp worktree cleanup ownership until the Session monitor and pending
   cleanup finish, even when ended-session cache eviction runs after an early
   terminal snapshot.
@@ -120,6 +148,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 - Custom-provider discovery and cache-only model resolution use the selected
   healthy credential-pool principal, keeping picker and native request authority
   aligned without exposing another pool or ambient provider credentials.
+- Native provider routing preserves credential-rejection sentinels instead of
+  clearing them, so Codex cannot fall back to ambient tokens without a valid
+  `auth_source`.
 
 ### Removed
 
@@ -745,7 +776,6 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 ## [2026.10.4]
 
 ### Added
-
 - Opt-in `runtime.tools.disclosure.profile = "coding"` keeps a coding core
   directly exposed and defers optional registry-resolved built-ins behind
   `tool_search` / `tool_invoke`. Explicit pins and per-session overrides support
@@ -770,6 +800,88 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   Capture accounting now serializes record mutations with reclamation, preserves
   live capture state across store-only restart, and rejects unpersisted
   reservations or unknown legacy artifact usage before process launch.
+- Native idle and live model switches bind provider-owned request options before
+  classification or completion. Selected-login refusal and keyless transitions
+  retain their intended authority; fallback credentials and headers use the
+  current invocation rather than the session's startup provider.
+  Same-provider rebinding replaces source-model header defaults while preserving
+  genuine caller overrides; generated headers are not promoted to caller authority.
+- Setup verification resolves canonical credential authority and effective
+  endpoint/model settings, preventing OAuth-record disclosure and false successful
+  skips for unavailable selected logins. Offline, keyless and credential-pool
+  behavior remain supported.
+- **Todos follow the selected branch.** The `todo` tool's list is now journaled
+  in the session history instead of living only in memory, so rewind, branch
+  navigation, restart/resume and forks show the list that branch last wrote,
+  with stable IDs, and plan mode/approved plan and todos always agree. A todo
+  write is reported as saved only after its journal entry is recorded, and a
+  write prepared before a branch switch is rejected. Sessions saved before this
+  change recover the latest successful todo write recorded on each branch;
+  checkpoint resume no longer copies a session-wide todo snapshot onto the
+  current branch. ACP load/resume and branch changes replace the client plan
+  from the same journal, including cleared lists; progress survives cache loss.
+  Restoring a branch never refunds spend, restores revoked policy or reruns tools.
+  WASM host calls now execute the same wrapped tools in supervised, Session-owned
+  workers, avoiding a todo journal self-call. Host requests retain invocation
+  ownership, abort signals and deadlines; cancellation/disposal kills pending
+  work, rejects queued late writes and preserves policy/approval failures as errors.
+### Added
+
+- A shared, bounded `sessions.snapshot` recovery response for TUI and browser
+  chat, composed from the selected native branch and existing lifecycle owners.
+  Reconnect and overflow recovery replace stale approvals, tools and branch
+  progress without replaying mutations or retaining every text delta.
+
+### Fixed
+
+- TUI snapshot recovery preserves the real IDs of multiple pending approvals and
+  resolves each independently without changing the public approval-method contract.
+  Invalid, unavailable and truncated approval reads cannot revoke omitted requests;
+  foreign-session resolution events cannot clear another session's approval.
+
+- Slow session and operator-event consumers are fenced at bounded delivery
+  admission, with an explicit resynchronization signal. Native execution keeps
+  a reconstructable terminal path, and recovered client state cannot be revived
+  by late packets from a terminal or abandoned attempt. Remaining best-effort
+  transport boundaries are documented rather than claimed to be globally bounded.
+- Recovery races now include overflow notifications without any delivered data.
+  Idle live rewinds cannot reuse an abandoned invocation's answer, and cancellation
+  before new assistant output cannot recycle the preceding turn's answer.
+  Delivery admission accounts for oversized sub-binary backing; old bridge epochs
+  and late coalescer finalizers cannot corrupt newer recovered work. Web inspectors
+  disclose truncated todo, child and process recovery previews.
+- Web branch recovery discards pending coalesced text instead of flushing obsolete
+  rows into the replacement stream. TUI recovery also fences replacement session
+  instances when a branch or revision identifier is reused.
+- Recovered TUI runs now release one known-unsent local followup after a verified
+  canonical terminal snapshot. Owner-proven native branch/attempt continuity and
+  current client projection fences prevent old snapshots, focus races or repeated
+  completion previews from advancing newer work or replaying uncertain sends.
+  Background recovered sessions retain this behavior without switching focus or
+  replacing another session's transcript; per-session owner reads survive unrelated
+  focus changes while stale selection/deletion responses remain fenced.
+- Fresh router-admitted native runs register their live recovery owner before
+  their first durable lifecycle index. Owner-written invocation provenance in
+  existing native user entries preserves exact terminal/branch association when
+  start-event receipt follows prompt creation, including repeated prompts and
+  rewind; malformed declared bindings never fall back to timing guesses.
+### Added
+
+- Repeated paired disclosure trials in the production coding benchmark, with
+  seeded counterbalanced ordering, fresh per-attempt runtimes and fixtures,
+  exact experiment/approval digests, bounded deadlines, and an explicit
+  operator-approved spend plan backed by a hard external provider/account cap.
+  Plan-only mode makes no model calls. Sanitized reports retain failed/timed-out
+  attempts, incomplete cost data, and exploratory task-cluster uncertainty,
+  separately from schema-size diagnostics. Negated paired authorization cannot
+  fall through to the paid legacy lane; deadline-owned process groups are cleaned
+  up even after their leaders exit. Missing, unmatched, or nested usage
+  observations cannot certify parent-only cost as complete spend. Only baseline
+  versus opt-in coding is supported: ineffective schema-budget variants were
+  removed and `--schema-budgets` is rejected before any model call, because coding
+  intentionally ignores `budget_tokens`. Defaults remain unchanged and the
+  coding profile remains opt-in; rollout awaits authorized live evidence.
+  See [the paired workflow](docs/benchmarks/paired-disclosure.md).
 
 ---
 
@@ -777,6 +889,50 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Added
 
+- Provider resilience now supports ordered model fallback chains (including
+  same-provider alternatives), one OAuth refresh on HTTP 401 before credential
+  rotation, retry-after-aware credential cooldowns, and model-aware session
+  pinning. Fatal requests and context overflow do not walk fallback chains;
+  no automatic recovery replays committed text, thinking, or tool-call output.
+- Generic OAuth provider selection now keeps the same stored account through
+  initial resolution and 401 refresh, honoring `oauth_secret` without falling
+  back to ambient or inline keys when that login is missing. Codex refresh
+  failures no longer log raw provider error bodies.
+- Opt-in `thinking_level = "auto"` classifies each user prompt with an explicitly
+  configured tiny/smol model and maps its effort to the active provider's
+  supported levels. `@plan` and `@commit` join the built-in model role selectors.
+- **Session lifecycle parity.** `lemon sessions export` and `/session export`
+  gain `html` (self-contained, escaped, no scripts) and `jsonl` formats;
+  `sessions.context` returns session usage (tokens, estimated cost, input/output/
+  cache) shown by `/context` and `/session info`; `[runtime.compaction]` accepts
+  `threshold_percent` and `threshold_tokens`; context-overflow recovery now uses
+  the structured provider error classification before text matching.
+  Recovery retries only pre-output provider failures; an overflow after visible
+  output or tool commitment is not silently replayed.
+
+- `bash` tool: per-command `cwd` and validated `env` parameters (foreground,
+  PTY, background and ACP terminals; approvals show env names only), and
+  `skill://`/`artifact://` references in commands expand to absolute file paths.
+- `eval` coding tool: persistent per-session Python (`python3`) and JavaScript
+  (Bun, or Node) kernels with streamed output, trailing-expression display,
+  top-level `await`, `reset`, and timeout/abort that kill the kernel tree.
+  Output follows the `bash` cap and spill handle. See [Eval](docs/tools/eval.md).
+- **`lsp` coding tool.** Agents can ask a real language server for diagnostics,
+  definitions, type definitions, implementations, references, hover, document
+  and workspace symbols, renames (previewed unless `apply: true`), code actions
+  (listed, or one applied including server commands) and raw requests. Servers
+  are chosen by file extension, reused per session and workspace root, and stop
+  with the session; applied edits are locked, checkpointed and written
+  atomically. Server edit acknowledgements follow actual application, and
+  multi-batch actions retain all checkpoints on success, partial failure or
+  cancellation for complete rewind. `status` shows which servers are installed
+  or running. See [LSP tools](docs/tools/lsp.md).
+- `debug` coding tool: a Debug Adapter Protocol client for `lldb-dap`, `gdb`,
+  `debugpy` and `dlv` with breakpoints (source, conditional, function), launch
+  and attach, stepping, stack/scope/variable inspection, expression
+  evaluation, captured program output and raw `custom_request`. Debug sessions
+  are owned by the coding session and killed with it. See
+  [Debugger](docs/tools/debug.md).
 - **Lemon Web, rebuilt.** The browser UI is now a full workspace on the same
   control-plane methods and events as the TUI. Chat streams Markdown with
   highlighted code, thinking blocks and rich tool cards (shell output and exit
@@ -855,6 +1011,58 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   meter also use the measurement for resumed sessions before their first run.
   All surfaces read the new read-scoped `sessions.context` control-plane method;
   category splits are estimates scaled to the provider-reported total.
+- **Continue and resume sessions from the command line.** `lemon -c` /
+  `--continue` reopens the most recently updated TUI session started from this
+  directory (a new session when there is none), and `lemon -r [key]` /
+  `--resume [key]` attaches to a known session or, without a key, opens the
+  session switcher; `lemon tui --continue` works too. New TUI sessions carry a
+  short directory tag in their key so `--continue` can find the current
+  project's sessions. `--continue`, `--session` and `--resume` are mutually
+  exclusive.
+  A bare `--resume` waits for the switcher's rows and mounted picker before
+  startup completes, rather than opening it in a detached background task.
+- **`/retry` in the TUI.** After a failed or aborted turn, `/retry` rewinds
+  history (never files) to the last prompt, keeps the discarded turn in `/tree`,
+  and resends the prompt; `/retry --force` also retries a completed turn.
+  Retry now checks authoritative original-message replay metadata and refuses
+  stored images or other non-text content before confirming any rewind; it
+  never silently resends just their text projection, including after resume or
+  with `--force`. Missing replay metadata also refuses without history mutation.
+  Recovery drafts now clear only after a concrete run acknowledgment. Rejected
+  sends retain the draft; uncertain sends keep their fixed request/run identity
+  for explicit queue review and never automatically replay. Exact resume uses
+  the durable lifecycle lookup, not a truncated history-search page, and local
+  TUI navigation refuses foreign-directory or untagged keys rather than replace
+  their native history.
+- **Switch branches, label entries and fork from any point in `/tree`.**
+  Selecting an entry in the TUI's `/tree` now opens its actions: inspect it,
+  switch the active branch to it (optionally summarizing the abandoned branch in
+  the background), bookmark it with a label (`/tree label <entryId> <text>`,
+  `/tree unlabel <entryId>`), or fork a new session whose history ends at it.
+  New write-scoped control-plane methods `sessions.navigate` and
+  `sessions.label`, an optional `entryId` on `sessions.fork`, and a `label` on
+  `sessions.tree` entries back it. Switching never deletes the old branch and is
+  refused while a run is active.
+  Background summaries apply only to their unchanged destination revision and
+  update live and resumed context together; stale results never move another
+  branch. Automatic resume also refuses an unavailable journal already mapped
+  to a logical session instead of silently replacing its history.
+  Native startup shares journal admission with stopped branch/label/rewind
+  mutations, and live navigation/label receipts capture their own mutation
+  atomically. Lost mutation receipts report an unknown outcome with automatic
+  retries disabled, rather than implying nothing changed.
+  Duplicate native startup returns an `already_started` error without sending an
+  abnormal linked exit to its caller or rewriting the live owner's journal.
+- `read` accepts path line selectors (`file:50-80`, `file:50+20`, `file:50`,
+  `file:-30`, `:raw`) on files, archive members and internal references, and
+  opens SQLite databases read-only (`app.db`, `app.db:table`,
+  `app.db:table:key`, `app.db:table?limit=&offset=&where=&order=`,
+  `app.db?q=SELECT ...`).
+- `grep` gains `skip` paging plus `hidden`/`no_ignore`; ignored and hidden files
+  are now skipped by the Elixir fallback too, matching ripgrep.
+- `webfetch` converts PDF responses to page text and handles GitHub blob URLs
+  (raw file) and issue/pull request URLs (REST API rendering).
+- `websearch` providers: Tavily, Kagi (V1 API) and Jina.
 
 ### Changed
 

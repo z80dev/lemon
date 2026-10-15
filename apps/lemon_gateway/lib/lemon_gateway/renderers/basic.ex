@@ -1,15 +1,12 @@
 defmodule LemonGateway.Renderers.Basic do
   @moduledoc """
-  Basic plain-text renderer implementing the `LemonGateway.Renderer` behaviour.
-
-  Renders run lifecycle events (started, action, completed) into simple textual
-  status messages with action lists and resume information.
+  Basic plain-text renderer for run lifecycle events (started, action,
+  completed): init/1 builds state, apply_event/2 emits {:render, %{text, status}}
+  actions with action lists and resume information.
   """
-  @behaviour LemonGateway.Renderer
 
   alias LemonCore.ResumeToken
 
-  @impl true
   def init(meta) do
     %{
       engine: meta[:engine],
@@ -22,7 +19,6 @@ defmodule LemonGateway.Renderers.Basic do
     }
   end
 
-  @impl true
   def apply_event(state, %{__event__: :started, resume: resume}) do
     resume_line = format_resume(state.engine, resume)
     state = %{state | resume_line: resume_line}

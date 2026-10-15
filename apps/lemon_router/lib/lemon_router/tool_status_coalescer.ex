@@ -37,7 +37,9 @@ defmodule LemonRouter.ToolStatusCoalescer do
     :meta,
     :seq,
     :finalized,
-    :run_started_at
+    :run_started_at,
+    :delivery,
+    overflowed: false
   ]
 
   def start_link(opts) do
@@ -79,8 +81,13 @@ defmodule LemonRouter.ToolStatusCoalescer do
 
   defp start_action_coalescer(session_key, channel_id, run_id, action_event, meta, surface) do
     case get_or_start_coalescer(session_key, channel_id, surface, meta) do
-      {:ok, pid} ->
-        GenServer.cast(pid, {:action, run_id, action_event, meta})
+      {:ok, _pid} ->
+        LemonRouter.CoalescerIngress.push(
+          LemonRouter.ToolStatusRegistry,
+          registry_key(session_key, channel_id, surface),
+          run_id,
+          {:action, run_id, action_event, meta}
+        )
 
       {:error, reason} ->
         Logger.warning("Failed to start tool status coalescer: #{inspect(reason)}")
@@ -121,8 +128,16 @@ defmodule LemonRouter.ToolStatusCoalescer do
            LemonRouter.ToolStatusRegistry,
            registry_key(session_key, channel_id, surface)
          ) do
-      [{pid, _}] -> GenServer.cast(pid, :flush)
-      _ -> :ok
+      [{_pid, _}] ->
+        LemonRouter.CoalescerIngress.push(
+          LemonRouter.ToolStatusRegistry,
+          registry_key(session_key, channel_id, surface),
+          nil,
+          :flush
+        )
+
+      _ ->
+        :ok
     end
   end
 
@@ -272,6 +287,13 @@ defmodule LemonRouter.ToolStatusCoalescer do
       max_latency_ms: Keyword.get(opts, :max_latency_ms, @default_max_latency_ms)
     }
 
+    delivery =
+      LemonRouter.CoalescerIngress.register(
+        LemonRouter.ToolStatusRegistry,
+        registry_key(session_key, channel_id, surface),
+        opts
+      )
+
     state = %__MODULE__{
       session_key: session_key,
       channel_id: channel_id,
@@ -288,6 +310,7 @@ defmodule LemonRouter.ToolStatusCoalescer do
       meta: Keyword.get(opts, :meta, %{}),
       seq: 0,
       finalized: false,
+      delivery: delivery,
       run_started_at: nil
     }
 
@@ -295,6 +318,8 @@ defmodule LemonRouter.ToolStatusCoalescer do
   end
 
   @impl true
+  def handle_cast({:action, _, _, _}, %{overflowed: true} = state), do: {:noreply, state}
+
   def handle_cast({:action, run_id, action_event, meta}, state) do
     now = System.system_time(:millisecond)
 
@@ -359,6 +384,9 @@ defmodule LemonRouter.ToolStatusCoalescer do
   end
 
   @impl true
+  def handle_call({:anchor_segment, _, _, _}, _from, %{overflowed: true} = state),
+    do: {:reply, :ok, state}
+
   def handle_call({:anchor_segment, run_id, prefix_text, meta}, _from, state) do
     state =
       cond do
@@ -396,6 +424,9 @@ defmodule LemonRouter.ToolStatusCoalescer do
     {:reply, :ok, state}
   end
 
+  def handle_call({:commit_segment, _, _}, _from, %{overflowed: true} = state),
+    do: {:reply, :ok, state}
+
   def handle_call({:commit_segment, run_id, meta}, _from, state) do
     state =
       if state.run_id == run_id do
@@ -412,6 +443,18 @@ defmodule LemonRouter.ToolStatusCoalescer do
 
   @impl true
   def handle_call({:finalize_run, run_id, ok?, meta}, _from, state) do
+    if LemonRouter.CoalescerIngress.completed?(
+         LemonRouter.ToolStatusRegistry,
+         registry_key(state.session_key, state.channel_id, state.surface),
+         run_id
+       ) do
+      {:reply, :ok, state}
+    else
+      finalize_run_state(run_id, ok?, meta, state)
+    end
+  end
+
+  defp finalize_run_state(run_id, ok?, meta, state) do
     state =
       cond do
         state.run_id == nil ->
@@ -456,14 +499,39 @@ defmodule LemonRouter.ToolStatusCoalescer do
 
     state =
       state
+      |> LemonRouter.CoalescerIngress.observe_overflow()
       |> Map.put(:finalized, true)
       |> finalize_running_actions(ok?)
       |> do_flush()
+
+    delivery =
+      LemonRouter.CoalescerIngress.complete(
+        LemonRouter.ToolStatusRegistry,
+        registry_key(state.session_key, state.channel_id, state.surface),
+        state.delivery,
+        run_id
+      )
+
+    state = %{state | delivery: delivery, overflowed: false}
 
     {:reply, :ok, state}
   end
 
   @impl true
+  def handle_info({:lemon_bus_delivery, gate, message}, state) do
+    if LemonCore.Bus.Delivery.matches?(state.delivery, gate) do
+      case message do
+        {:stream_resync, :overflow} ->
+          {:noreply, LemonRouter.CoalescerIngress.observe_overflow(state)}
+
+        _ ->
+          handle_cast(message, state)
+      end
+    else
+      {:noreply, state}
+    end
+  end
+
   def handle_info(:idle_timeout, state) do
     state = do_flush(state)
     {:noreply, state}
@@ -493,6 +561,8 @@ defmodule LemonRouter.ToolStatusCoalescer do
     end
   end
 
+  defp do_flush(%{overflowed: true, finalized: false} = state), do: state
+
   defp do_flush(state) do
     cancel_timer(state.flush_timer)
 
@@ -502,16 +572,20 @@ defmodule LemonRouter.ToolStatusCoalescer do
     }
 
     text =
-      state.channel_id
-      |> LemonRouter.ToolStatusRenderer.render(state.actions, state.order, opts)
-      |> maybe_prefix_running(state)
-      |> maybe_prefix_text(state)
+      if state.overflowed do
+        "Progress updates were interrupted. Refresh session state for current tool results."
+      else
+        state.channel_id
+        |> LemonRouter.ToolStatusRenderer.render(state.actions, state.order, opts)
+        |> maybe_prefix_running(state)
+        |> maybe_prefix_text(state)
+      end
 
     kind = if state.finalized == true, do: :tool_status_finalize, else: :tool_status_snapshot
 
     state =
       cond do
-        state.order == [] ->
+        state.order == [] and not state.overflowed ->
           state
 
         text == state.last_text and kind == state.last_kind ->

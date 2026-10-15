@@ -169,6 +169,15 @@ defmodule CodingAgent.Tools.Task.Runner do
          poll_ms
        ) do
     receive do
+      {:session_terminal, ^session_id, :completed} ->
+        completed_result(Session.get_messages(session), signal, last_text, last_thinking)
+
+      {:session_terminal, ^session_id, :canceled} ->
+        {:error, "Task aborted"}
+
+      {:session_terminal, ^session_id, :error} ->
+        {:error, "Task session failed"}
+
       {:DOWN, ^session_ref, :process, _pid, reason} ->
         {:error, format_session_exit(reason)}
 
@@ -313,19 +322,7 @@ defmodule CodingAgent.Tools.Task.Runner do
         )
 
       {:session_event, ^session_id, {:agent_end, messages}} ->
-        last =
-          messages |> Enum.filter(&match?(%LemonAi.Types.AssistantMessage{}, &1)) |> List.last()
-
-        cond do
-          AbortSignal.aborted?(signal) ->
-            {:error, "Task aborted"}
-
-          last && last.stop_reason in [:error, :aborted, :length] ->
-            {:error, last.error_message || "Task stopped: #{last.stop_reason}"}
-
-          true ->
-            {:ok, Result.extract_final_payload(messages, last_text, last_thinking)}
-        end
+        completed_result(messages, signal, last_text, last_thinking)
 
       {:session_event, ^session_id, {:error, reason, _partial_state}} ->
         {:error, reason}
@@ -376,6 +373,21 @@ defmodule CodingAgent.Tools.Task.Runner do
               )
           end
         end
+    end
+  end
+
+  defp completed_result(messages, signal, last_text, last_thinking) do
+    last = messages |> Enum.filter(&match?(%LemonAi.Types.AssistantMessage{}, &1)) |> List.last()
+
+    cond do
+      AbortSignal.aborted?(signal) ->
+        {:error, "Task aborted"}
+
+      last && last.stop_reason in [:error, :aborted, :length] ->
+        {:error, last.error_message || "Task stopped: #{last.stop_reason}"}
+
+      true ->
+        {:ok, Result.extract_final_payload(messages, last_text, last_thinking)}
     end
   end
 
@@ -519,6 +531,7 @@ defmodule CodingAgent.Tools.Task.Runner do
 
     receive do
       {:DOWN, ^session_ref, :process, _, _} -> :ok
+      {:session_terminal, ^session_id, _status} -> :ok
       {:session_event, ^session_id, {:agent_end, _}} -> :ok
       {:session_event, ^session_id, {:canceled, _}} -> :ok
       {:session_event, ^session_id, {:error, _, _}} -> :ok

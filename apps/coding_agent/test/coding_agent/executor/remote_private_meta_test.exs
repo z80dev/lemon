@@ -245,10 +245,13 @@ defmodule CodingAgent.Executor.RemotePrivateMetaTest do
   end
 
   defp encode(meta) do
+    {:ok, context} = LemonCore.ExecutionContext.new(run_id: "private-boundary")
+
     RemoteRequestCodec.encode(%ExecutionRequest{
       run_id: "private-boundary",
       session_key: "agent:private:main",
       prompt: "hello",
+      execution_context: context,
       meta: meta
     })
   end

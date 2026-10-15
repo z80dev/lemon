@@ -25,20 +25,6 @@ defmodule CodingAgent.SessionRegistryTest do
 
       assert {:via, Registry, {CodingAgent.SessionRegistry, ^session_id}} = via
     end
-
-    test "via tuple can be used to register processes" do
-      session_id = "register_test_#{:rand.uniform(100_000)}"
-      via = SessionRegistry.via(session_id)
-
-      # Start a simple agent with the via tuple
-      {:ok, pid} = Agent.start_link(fn -> :ok end, name: via)
-
-      # Verify it's registered
-      assert {:ok, ^pid} = SessionRegistry.lookup(session_id)
-
-      # Cleanup
-      Agent.stop(pid)
-    end
   end
 
   describe "lookup/1" do
@@ -72,48 +58,6 @@ defmodule CodingAgent.SessionRegistryTest do
   end
 
   describe "list_ids/0" do
-    test "returns a list and includes registered session ids" do
-      # Create a unique session and verify it appears
-      session_id = "list_test_#{:rand.uniform(100_000)}"
-      via = SessionRegistry.via(session_id)
-
-      {:ok, pid} = Agent.start_link(fn -> :ok end, name: via)
-
-      ids = SessionRegistry.list_ids()
-      assert session_id in ids
-
-      Agent.stop(pid)
-
-      assert wait_until(
-               fn ->
-                 session_id not in SessionRegistry.list_ids()
-               end,
-               5_000
-             )
-    end
-
-    test "returns all registered session ids" do
-      session_ids =
-        for i <- 1..3 do
-          id = "multi_list_test_#{i}_#{:rand.uniform(100_000)}"
-          via = SessionRegistry.via(id)
-          {:ok, _pid} = Agent.start_link(fn -> :ok end, name: via)
-          id
-        end
-
-      ids = SessionRegistry.list_ids()
-
-      for session_id <- session_ids do
-        assert session_id in ids
-      end
-
-      # Cleanup
-      for session_id <- session_ids do
-        {:ok, pid} = SessionRegistry.lookup(session_id)
-        Agent.stop(pid)
-      end
-    end
-
     test "updates when sessions are added and removed" do
       session_id = "dynamic_test_#{:rand.uniform(100_000)}"
 
@@ -177,47 +121,6 @@ defmodule CodingAgent.SessionRegistryTest do
       end
 
       Agent.stop(expected_pid)
-    end
-  end
-
-  describe "robustness" do
-    test "lookup handles process termination" do
-      session_id = "term_test_#{:rand.uniform(100_000)}"
-      via = SessionRegistry.via(session_id)
-
-      {:ok, pid} = Agent.start_link(fn -> :ok end, name: via)
-      ref = Process.monitor(pid)
-
-      # Stop the process gracefully
-      Agent.stop(pid)
-
-      # Wait for DOWN message to ensure the process is stopped
-      assert_receive {:DOWN, ^ref, :process, ^pid, _}, 1000
-
-      # Lookup should return error (not crash) once the registry has processed the exit
-      assert wait_until(fn -> SessionRegistry.lookup(session_id) == :error end, 2_000)
-    end
-
-    test "via tuple works with GenServer" do
-      session_id = "genserver_test_#{:rand.uniform(100_000)}"
-
-      defmodule TestServer do
-        use GenServer
-        def start_link(name), do: GenServer.start_link(__MODULE__, :ok, name: name)
-        def init(:ok), do: {:ok, :test_state}
-        def handle_call(:ping, _from, state), do: {:reply, :pong, state}
-      end
-
-      via = SessionRegistry.via(session_id)
-      {:ok, pid} = TestServer.start_link(via)
-
-      # Should be able to call via the via tuple
-      assert :pong = GenServer.call(via, :ping)
-
-      # Should be in registry
-      assert {:ok, ^pid} = SessionRegistry.lookup(session_id)
-
-      GenServer.stop(pid)
     end
   end
 

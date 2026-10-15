@@ -10,6 +10,18 @@ exclude_tags =
     {:error, _} -> [:integration, :ast_grep]
   end
 
+exclude_tags =
+  if System.find_executable("python3"), do: exclude_tags, else: [:python3 | exclude_tags]
+
+exclude_tags =
+  case {
+    CodingAgent.Debug.Adapters.select_launch("/x/a.c", "/", "lldb-dap", :file),
+    System.find_executable("clang") || System.find_executable("cc")
+  } do
+    {{:ok, _}, compiler} when is_binary(compiler) -> exclude_tags
+    _ -> [:lldb_dap | exclude_tags]
+  end
+
 ExUnit.configure(exclude: exclude_tags)
 ExUnit.start(capture_log: true)
 
@@ -48,6 +60,13 @@ end
 
 # Ensure agent directories exist under the isolated HOME
 CodingAgent.Config.ensure_dirs!()
+
+# Ordinary session fixtures mock the agent stream, not project-fact extraction.
+# Keep their completed turns/compactions from starting unrelated provider jobs.
+# Memory tests opt in through their project config and control extraction themselves.
+config_path = LemonCore.Config.Modular.global_path()
+File.mkdir_p!(Path.dirname(config_path))
+File.write!(config_path, "[features]\nsession_search = \"off\"\n")
 
 # Skills are now managed by lemon_skills (registry + installer).
 Application.ensure_all_started(:lemon_skills)

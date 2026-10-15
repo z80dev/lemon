@@ -7,7 +7,7 @@ defmodule CodingAgent.Security.UntrustedToolBoundary do
   """
 
   alias LemonAi.Types.{TextContent, ToolResultMessage}
-  alias CodingAgent.Security.ExternalContent
+  alias LemonAgent.Security.ExternalContent
 
   # This opaque marker is attached only to the ephemeral pre-LLM copy. Tool
   # result details are data and may claim any public trust-metadata shape, so
@@ -18,6 +18,8 @@ defmodule CodingAgent.Security.UntrustedToolBoundary do
   @tool_sources %{
     "bash" => :shell,
     "bash_output" => :shell,
+    "eval" => :shell,
+    "debug" => :shell,
     "find" => :local_search,
     "grep" => :local_search,
     "read" => :local_file,

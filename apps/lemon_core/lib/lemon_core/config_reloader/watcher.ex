@@ -52,6 +52,8 @@ defmodule LemonCore.ConfigReloader.Watcher do
 
   @impl true
   def init(opts) do
+    Process.flag(:trap_exit, true)
+
     cwd = Keyword.get(opts, :cwd)
     debounce_ms = Keyword.get(opts, :debounce_ms, @debounce_ms)
     poll_interval_ms = Keyword.get(opts, :poll_interval_ms, @poll_interval_ms)
@@ -89,6 +91,14 @@ defmodule LemonCore.ConfigReloader.Watcher do
 
   def handle_info({:file_event, _watcher_pid, :stop}, state) do
     Logger.warning("[ConfigReloader.Watcher] File watcher stopped, falling back to polling")
+    {:noreply, %{state | watcher_pid: nil, mode: :polling}}
+  end
+
+  def handle_info({:EXIT, watcher_pid, reason}, %{watcher_pid: watcher_pid} = state) do
+    Logger.warning(
+      "[ConfigReloader.Watcher] File watcher exited: #{inspect(reason)}, falling back to polling"
+    )
+
     {:noreply, %{state | watcher_pid: nil, mode: :polling}}
   end
 

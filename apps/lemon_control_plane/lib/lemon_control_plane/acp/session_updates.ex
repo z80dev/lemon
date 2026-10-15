@@ -27,6 +27,7 @@ defmodule LemonControlPlane.ACP.SessionUpdates do
     :session_id,
     :cwd,
     :context_window,
+    plan_from_tools: true,
     tools: %{},
     thoughts: %{},
     message_id: nil,
@@ -41,6 +42,7 @@ defmodule LemonControlPlane.ACP.SessionUpdates do
       session_id: session_id,
       cwd: Keyword.get(opts, :cwd),
       context_window: Keyword.get(opts, :context_window),
+      plan_from_tools: Keyword.get(opts, :plan_from_tools, true),
       message_id: "message_#{System.unique_integer([:positive, :monotonic])}"
     }
   end
@@ -70,6 +72,7 @@ defmodule LemonControlPlane.ACP.SessionUpdates do
       "delete" -> "delete"
       "move" -> "move"
       n when n in ["bash", "bash_output", "kill_process", "shell", "exec", "eval"] -> "execute"
+      "debug" -> "execute"
       n when n in ["grep", "glob", "find", "ast_grep"] -> "search"
       n when n in ["web_search", "websearch", "webfetch", "fetch"] -> "fetch"
       "todo" -> "think"
@@ -122,6 +125,9 @@ defmodule LemonControlPlane.ACP.SessionUpdates do
     {_name, args} = Map.get(state.tools, id, {name, %{}})
     tool_result(state, id, name, args, result, if(is_error, do: "failed", else: "completed"))
   end
+
+  def map_event(state, {:todos_changed, todos}),
+    do: emit(%{state | plan_from_tools: false}, plan(todos))
 
   def map_event(state, {:todo_reminder, todos}), do: emit(state, plan(todos))
   def map_event(state, {:todo_auto_clear}), do: emit(state, plan([]))
@@ -203,6 +209,9 @@ defmodule LemonControlPlane.ACP.SessionUpdates do
     )
   end
 
+  defp map_named_event(state, "todos_changed", event),
+    do: map_event(state, {:todos_changed, get(event, :todos) || []})
+
   defp map_named_event(state, "todo_reminder", event),
     do: emit(state, plan(get(event, :todos) || []))
 
@@ -271,6 +280,9 @@ defmodule LemonControlPlane.ACP.SessionUpdates do
     phase = to_string(get(payload, :phase) || "")
 
     cond do
+      get(detail, :type) in [:todos_changed, "todos_changed"] ->
+        map_event(state, {:todos_changed, get(detail, :todos) || []})
+
       kind == "reasoning" ->
         reasoning_update(state, id, get(detail, :reasoning) || %{})
 
@@ -380,6 +392,7 @@ defmodule LemonControlPlane.ACP.SessionUpdates do
     updates =
       cond do
         status != "completed" -> updates
+        not state.plan_from_tools -> updates
         is_list(plan_entries) -> updates ++ [plan(plan_entries)]
         is_list(todos) -> updates ++ [plan(todos)]
         true -> updates

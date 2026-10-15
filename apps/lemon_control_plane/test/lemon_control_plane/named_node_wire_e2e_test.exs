@@ -5,6 +5,7 @@ defmodule LemonControlPlane.NamedNodeWireE2ETest do
   alias LemonControlPlane.Auth.TokenStore
   alias LemonControlPlane.Methods.ConnectChallenge
   alias LemonControlPlane.NodeStore
+  alias LemonCore.ExecutionContext
   alias LemonGateway.ExecutionRequest
 
   defmodule NamedNodeWireExecutor do
@@ -264,6 +265,7 @@ defmodule LemonControlPlane.NamedNodeWireE2ETest do
                token: token,
                notify_pid: self(),
                executor_module: NamedNodeWireExecutor,
+               execution_capabilities: ["read"],
                socket_opts: [reconnect_delay_ms: 10]
              ]
            ]},
@@ -279,11 +281,17 @@ defmodule LemonControlPlane.NamedNodeWireE2ETest do
     assert connection_pid != worker
     connection_ref = Process.monitor(connection_pid)
 
+    run_id = "wire-run-#{suffix}"
+    assert {:ok, execution_context} = ExecutionContext.new(run_id: run_id, cwd: tmp_dir)
+    assert {:ok, execution_context} = ExecutionContext.for_remote(execution_context, tmp_dir)
+    assert {:ok, encoded_context} = ExecutionContext.encode(execution_context)
+
     invoke_args = %{
-      "version" => 1,
-      "runId" => "wire-run-#{suffix}",
+      "version" => 2,
+      "runId" => run_id,
       "prompt" => "cross the wire",
       "cwd" => tmp_dir,
+      "executionContext" => encoded_context,
       "meta" => %{}
     }
 
@@ -298,6 +306,11 @@ defmodule LemonControlPlane.NamedNodeWireE2ETest do
     assert_receive {:fake_executor_started, request, run_opts, ^worker, run_ref, context}, 3_000
     assert request.prompt == "cross the wire"
     assert request.cwd == tmp_dir
+    assert request.execution_context.run_id == run_id
+    assert request.execution_context.capabilities == ["read"]
+    assert LemonCore.ToolPolicy.allowed?(request.execution_context.tool_policy, "read")
+    refute LemonCore.ToolPolicy.allowed?(request.execution_context.tool_policy, "write")
+    assert request.execution_context.workspace_scope.root == tmp_dir
 
     assert Map.drop(run_opts, [:native_followup_submit, :native_source_floor_fun]) == %{
              cwd: tmp_dir,
@@ -506,11 +519,20 @@ defmodule LemonControlPlane.NamedNodeWireE2ETest do
     assert_receive {:DOWN, ^route_ref, :process, ^route_pid, :normal}, 3_000
     send(live_context.runner_pid, :stop)
 
+    cancel_run_id = "wire-cancel-#{suffix}"
+
+    assert {:ok, cancel_context_wire} =
+             ExecutionContext.reidentify(execution_context, cancel_run_id)
+
+    assert {:ok, encoded_cancel_context} = ExecutionContext.encode(cancel_context_wire)
+
     assert {:ok, cancel_id} =
              LemonCore.NodeRegistry.invoke(
                node_name,
                "coding_agent.run",
-               Map.put(invoke_args, "runId", "wire-cancel-#{suffix}"),
+               invoke_args
+               |> Map.put("runId", cancel_run_id)
+               |> Map.put("executionContext", encoded_cancel_context),
                recipient: self(),
                timeout_ms: 3_000
              )
@@ -681,7 +703,7 @@ defmodule LemonControlPlane.NamedNodeWireE2ETest do
       id: node_id,
       name: name,
       type: "coding_agent",
-      capabilities: %{"coding_agent.run" => %{"version" => 1}},
+      capabilities: Worker.capabilities(),
       status: :offline
     })
   end

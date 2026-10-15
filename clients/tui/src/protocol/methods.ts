@@ -32,6 +32,10 @@ import {
 	parseOmpStatus,
 } from "./omp.ts";
 import type {
+	SessionLabelParams,
+	SessionLabelResult,
+	SessionNavigateParams,
+	SessionNavigateResult,
 	SessionRewindPreview,
 	SessionRewindResult,
 	SessionRewindTarget,
@@ -85,6 +89,8 @@ import type {
 	SessionsPreviewResult,
 	SessionsPruneParams,
 	SessionsPruneResult,
+	SessionsSnapshotParams,
+	SessionsSnapshotResult,
 	UsageStatusResult,
 } from "./types.ts";
 
@@ -102,11 +108,13 @@ export const METHOD = {
 	profilesRoster: "profiles.roster",
 	profileChat: "profile.chat",
 	sessionsList: "sessions.list",
+	sessionsGet: "sessions.get",
 	sessionsCreate: "sessions.create",
 	sessionsFork: "sessions.fork",
 	sessionsPreview: "sessions.preview",
 	sessionsActive: "sessions.active",
 	sessionsActiveList: "sessions.active.list",
+	sessionsSnapshot: "sessions.snapshot",
 	sessionsPatch: "sessions.patch",
 	sessionsMetadataPatch: "sessions.metadata.patch",
 	sessionsExport: "sessions.export",
@@ -118,6 +126,8 @@ export const METHOD = {
 	sessionsContext: "sessions.context",
 	sessionsTree: "sessions.tree",
 	sessionsRewind: "sessions.rewind",
+	sessionsNavigate: "sessions.navigate",
+	sessionsLabel: "sessions.label",
 	sessionDetail: "session.detail",
 	commandsCatalog: "commands.catalog",
 	agentsList: "agents.list",
@@ -287,6 +297,14 @@ export class ControlPlaneMethods {
 		return this.#call<SessionsListResult>(METHOD.sessionsList, params, options);
 	}
 
+	/** Exact durable lifecycle lookup; never a substring/history search. */
+	sessionsGet(
+		params: { sessionKey: string },
+		options?: RequestOptions,
+	): Promise<{ session: SessionSummary }> {
+		return this.#call(METHOD.sessionsGet, params, { ...options, queueIfOffline: false });
+	}
+
 	sessionsFork(params: SessionsForkParams, options?: RequestOptions): Promise<SessionsForkResult> {
 		return this.#call<SessionsForkResult>(METHOD.sessionsFork, params, {
 			...options,
@@ -313,6 +331,16 @@ export class ControlPlaneMethods {
 		options?: RequestOptions,
 	): Promise<SessionsListResult> {
 		return this.#call<SessionsListResult>(METHOD.sessionsActiveList, params, options);
+	}
+
+	sessionsSnapshot(
+		params: SessionsSnapshotParams,
+		options?: RequestOptions,
+	): Promise<SessionsSnapshotResult> {
+		return this.#call<SessionsSnapshotResult>(METHOD.sessionsSnapshot, params, {
+			...options,
+			queueIfOffline: false,
+		});
 	}
 
 	sessionsPatch(params: SessionsPatchParams, options?: RequestOptions): Promise<unknown> {
@@ -352,6 +380,23 @@ export class ControlPlaneMethods {
 				queueIfOffline: false,
 			},
 		);
+	}
+
+	sessionsNavigate(
+		params: SessionNavigateParams,
+		options?: RequestOptions,
+	): Promise<SessionNavigateResult> {
+		return this.#call<SessionNavigateResult>(METHOD.sessionsNavigate, params, {
+			...options,
+			queueIfOffline: false,
+		});
+	}
+
+	sessionsLabel(params: SessionLabelParams, options?: RequestOptions): Promise<SessionLabelResult> {
+		return this.#call<SessionLabelResult>(METHOD.sessionsLabel, params, {
+			...options,
+			queueIfOffline: false,
+		});
 	}
 
 	sessionsCreate(

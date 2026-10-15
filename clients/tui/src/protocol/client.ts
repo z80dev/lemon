@@ -61,6 +61,8 @@ export interface RequestOptions {
 	queueIfOffline?: boolean;
 	/** Bypass the offline gate — used internally for `connect`. */
 	allowWhileConnecting?: boolean;
+	/** Fixed correlation identity retained by a submission awaiting reconciliation. */
+	requestId?: string;
 }
 
 export interface ControlPlaneClientOptions {
@@ -254,9 +256,9 @@ export class ControlPlaneClient {
 		if (this.#state !== "online" && !options.allowWhileConnecting) {
 			const queueable = options.queueIfOffline ?? this.#queueableMethods.has(method);
 			if (!queueable) return Promise.reject(new NotConnectedError(method));
-			return this.#enqueue(method, params, timeoutMs);
+			return this.#enqueue(method, params, timeoutMs, options.requestId);
 		}
-		return this.#dispatch(method, params, timeoutMs);
+		return this.#dispatch(method, params, timeoutMs, options.requestId);
 	}
 
 	// -- internals ----------------------------------------------------------
@@ -435,6 +437,15 @@ export class ControlPlaneClient {
 
 	#onEvent(frame: EventFrame): void {
 		this.events.emit("frame", frame);
+		if (frame.event === "stream.resync" && this.#helloOk) {
+			const payload = frame.payload as ProtocolEventMap["stream.resync"] | undefined;
+			this.events.emit("resync-needed", {
+				hello: this.#helloOk,
+				reason: "overflow",
+				...(typeof payload?.sessionKey === "string" ? { sessionKey: payload.sessionKey } : {}),
+				...(typeof payload?.runId === "string" ? { runId: payload.runId } : {}),
+			});
+		}
 		const name = frame.event as ProtocolEventName;
 		if (this.events.listenerCount(name) > 0 || isKnownEvent(name)) {
 			this.events.emit(name, frame.payload as ProtocolEventMap[ProtocolEventName]);
@@ -464,10 +475,10 @@ export class ControlPlaneClient {
 		});
 	}
 
-	#enqueue<T>(method: string, params: unknown, timeoutMs: number): Promise<T> {
+	#enqueue<T>(method: string, params: unknown, timeoutMs: number, id?: string): Promise<T> {
 		return new Promise<T>((resolve, reject) => {
 			const entry: QueuedRequest = {
-				id: crypto.randomUUID(),
+				id: id ?? crypto.randomUUID(),
 				method,
 				params,
 				timeoutMs,
@@ -550,6 +561,7 @@ const KNOWN_EVENTS = new Set<string>([
 	"exec.approval.resolved",
 	"channel.delivery",
 	"omp.session",
+	"stream.resync",
 ]);
 
 function isKnownEvent(name: string): boolean {

@@ -430,17 +430,18 @@ defmodule LemonMCP.Protocol do
       when is_binary(method) and not is_map_key(message, "id") do
     params = Map.get(message, "params", %{})
 
-    if is_function(handler, 1) and is_map(params) do
-      Task.start(fn ->
-        try do
-          handler.(%{method: method, params: params})
-        rescue
-          _ -> :ok
-        catch
-          _, _ -> :ok
-        end
-      end)
-    end
+    _ =
+      if is_function(handler, 1) and is_map(params) do
+        Task.start(fn ->
+          try do
+            handler.(%{method: method, params: params})
+          rescue
+            _ -> :ok
+          catch
+            _, _ -> :ok
+          end
+        end)
+      end
 
     :ok
   end

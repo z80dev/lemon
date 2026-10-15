@@ -12,7 +12,7 @@ defmodule LemonAgent.ModelRuntime.ProviderConfiguration do
 
   Actions: `fallback.add|remove|clear`, `pool.upsert|delete`,
   `pool.credential.add|remove|clear`, `defaults.model` (`provider`, `model`) and
-  `defaults.thinking_level` (`thinkingLevel`: #{Enum.join(~w(off minimal low medium high xhigh), ", ")}).
+  `defaults.thinking_level` (`thinkingLevel`: #{Enum.join(~w(off minimal low medium high xhigh auto), ", ")}).
 
   Mutations default to preview-only. Callers must pass `apply: true`; destructive
   actions additionally require the operation-specific confirmation value
@@ -31,7 +31,7 @@ defmodule LemonAgent.ModelRuntime.ProviderConfiguration do
   @secret_ref_regex ~r/^secret:[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$/
   @env_ref_regex ~r/^env:[A-Za-z_][A-Za-z0-9_]{0,127}$/
   @strategies ~w(priority round_robin)
-  @thinking_levels ~w(off minimal low medium high xhigh)
+  @thinking_levels ~w(off minimal low medium high xhigh auto)
   @model_regex ~r/^[A-Za-z0-9][A-Za-z0-9._:\/@+-]{0,127}$/
   @defaults_table "defaults"
 

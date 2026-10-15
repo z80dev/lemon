@@ -45,6 +45,10 @@ export function isTaskTerminal(status: TaskStatus): boolean {
 	return status === "completed" || status === "error" || status === "aborted";
 }
 
+export function isTaskActive(status: TaskStatus): boolean {
+	return status === "queued" || status === "running" || status === "cancelling";
+}
+
 export function taskElapsedMs(task: TaskRecord, now: number): number {
 	return Math.max(0, (task.finishedAt ?? now) - task.observedAt);
 }

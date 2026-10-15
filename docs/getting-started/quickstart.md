@@ -65,8 +65,14 @@ To revisit an earlier prompt, enter:
 
 Pick a prompt and inspect the preview. Confirmation is required and cancellation
 is the default. Ordinary rewind changes conversation history, **not your files**;
-the explicit file-restoration option and session tree are described in the
+plan mode and the agent's todo list return to that point too, while spend is never
+refunded. The explicit file-restoration option and session tree (`/tree` also
+switches branches, labels entries and forks from any point) are described in the
 [TUI guide](https://github.com/z80dev/lemon/blob/main/clients/tui/README.md).
+
+If a turn fails or you stop it, `/retry` rewinds that turn (history only) and
+resends the prompt. To pick up where you left off next time, start the TUI with
+`lemon -c` (latest session) or `lemon -r` (session picker).
 
 ## 3. Choose your interface
 

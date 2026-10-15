@@ -63,6 +63,37 @@ defmodule LemonWeb.Chat.Backend do
     end
   end
 
+  @doc """
+  The shared bounded recovery authority. `:retry` is a raced owner read, not
+  an empty session; callers retain their last known state and reconcile again.
+  """
+  @spec snapshot(String.t(), String.t() | nil) ::
+          {:ok, map()} | :retry | {:error, error()}
+  def snapshot(session_key, cwd) do
+    params = put_present(%{"sessionKey" => session_key, "limit" => 100}, "cwd", cwd)
+
+    case call("sessions.snapshot", params) do
+      {:ok,
+       %{
+         "status" => "ok",
+         "sessionKey" => ^session_key,
+         "identity" => %{"sessionKey" => ^session_key},
+         "snapshot" => snapshot
+       } = result}
+      when is_map(snapshot) ->
+        {:ok, result}
+
+      {:ok, %{"status" => "retry"}} ->
+        :retry
+
+      {:error, error} ->
+        {:error, error}
+
+      _ ->
+        {:error, unavailable()}
+    end
+  end
+
   @doc "Submits a prompt with `chat.send`. `opts`: `:cwd`, `:agent_id`, `:images`, `:queue_mode`."
   @spec send_prompt(String.t(), String.t(), keyword()) ::
           {:ok, String.t()} | {:error, :outcome_unknown | error()}

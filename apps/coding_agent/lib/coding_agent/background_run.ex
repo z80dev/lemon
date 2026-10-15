@@ -171,27 +171,33 @@ defmodule CodingAgent.BackgroundRun do
     }
 
     id = TaskStore.new_task(attrs)
-    session_opts = build_session_opts(id, session_id, source, opts)
 
-    worker_opts = [
-      id: id,
-      prompt: prompt,
-      session_id: session_id,
-      session_opts: session_opts,
-      timeout_ms: timeout_ms(opts),
-      runner: Keyword.get(opts, :runner),
-      task_supervisor: Keyword.get(opts, :task_supervisor, CodingAgent.TaskSupervisor)
-    ]
+    case build_session_opts(id, session_id, source, opts) do
+      {:ok, session_opts} ->
+        worker_opts = [
+          id: id,
+          prompt: prompt,
+          session_id: session_id,
+          session_opts: session_opts,
+          timeout_ms: timeout_ms(opts),
+          runner: Keyword.get(opts, :runner),
+          task_supervisor: Keyword.get(opts, :task_supervisor, CodingAgent.TaskSupervisor)
+        ]
 
-    worker_opts = Enum.reject(worker_opts, fn {_key, value} -> is_nil(value) end)
+        worker_opts = Enum.reject(worker_opts, fn {_key, value} -> is_nil(value) end)
 
-    case Supervisor.start_run(worker_opts) do
-      {:ok, _pid} ->
-        {:ok, %{id: id, status: :queued}}
+        case Supervisor.start_run(worker_opts) do
+          {:ok, _pid} ->
+            {:ok, %{id: id, status: :queued}}
 
-      {:error, reason} ->
-        TaskStore.fail(id, {:start_failed, reason})
-        {:error, :start_failed}
+          {:error, reason} ->
+            TaskStore.fail(id, {:start_failed, reason})
+            {:error, :start_failed}
+        end
+
+      {:error, _reason} ->
+        TaskStore.fail(id, :invalid_execution_context)
+        {:error, :invalid_execution_context}
     end
   end
 
@@ -203,53 +209,71 @@ defmodule CodingAgent.BackgroundRun do
     inherited_context = CodingAgent.Tools.Task.Params.inherited_execution_context(opts)
     parent_policy = Map.get(source, :tool_policy, inherited_context.tool_policy)
 
-    tool_policy =
-      case {parent_policy, Keyword.get(opts, :tool_policy)} do
-        {nil, requested} -> requested
-        {parent, nil} -> parent
-        {parent, requested} -> LemonCore.ToolPolicy.intersect(parent, requested)
+    tool_policy = Keyword.get(opts, :tool_policy) || parent_policy
+
+    parent_context = source[:execution_context] || inherited_context.execution_context
+
+    parent =
+      if is_nil(parent_context) do
+        LemonCore.ExecutionContext.new(cwd: source[:cwd] || cwd, tool_policy: parent_policy)
+      else
+        LemonCore.ExecutionContext.validate(parent_context)
       end
 
-    [
-      cwd: cwd,
-      model: model,
-      thinking_level: thinking_level,
-      system_prompt: system_prompt,
-      settings_manager: source[:settings_manager],
-      workspace_dir: source[:workspace_dir],
-      tool_policy: tool_policy,
-      invocation_context_key:
-        source[:invocation_context_key] ||
-          inherited_context.invocation_context_key,
-      memory_context_key:
-        Map.get(source, :memory_context_key, inherited_context.memory_context_key),
-      memory_context_verified:
-        Map.get(source, :memory_context_verified, inherited_context.memory_context_verified) ==
-          true,
-      shared_memory_grant:
-        Map.get(source, :shared_memory_grant, inherited_context.shared_memory_grant) == true,
-      invocation_mcp_servers:
-        Map.get(source, :invocation_mcp_servers, inherited_context.invocation_mcp_servers),
-      mcp_session_id: source[:mcp_session_id],
-      acp_mcp_session_id: source[:acp_mcp_session_id],
-      stream_fn: Keyword.get(opts, :stream_fn),
-      get_api_key: Keyword.get(opts, :get_api_key),
-      session_id: session_id,
-      session_key: "background:#{id}",
-      agent_id: Keyword.get(opts, :agent_id) || source[:agent_id] || "default",
-      run_id: id,
-      session_scope: :main,
-      register: true
-    ]
-    |> Keyword.merge(
-      Map.to_list(
-        Map.merge(
-          Map.take(inherited_context, CodingAgent.Tools.Task.Params.private_native_fields()),
-          Map.take(source, CodingAgent.Tools.Task.Params.private_native_fields())
+    with {:ok, parent} <- parent,
+         {:ok, context} <-
+           LemonCore.ExecutionContext.child(parent,
+             run_id: id,
+             cwd: cwd,
+             tool_policy: tool_policy,
+             provenance: %{
+               origin: "background",
+               delegated_by: LemonCore.ExecutionContext.identity(parent)
+             }
+           ) do
+      [
+        cwd: cwd,
+        model: model,
+        thinking_level: thinking_level,
+        system_prompt: system_prompt,
+        settings_manager: source[:settings_manager],
+        workspace_dir: source[:workspace_dir],
+        tool_policy: tool_policy,
+        execution_context: context,
+        invocation_context_key:
+          source[:invocation_context_key] ||
+            inherited_context.invocation_context_key,
+        memory_context_key:
+          Map.get(source, :memory_context_key, inherited_context.memory_context_key),
+        memory_context_verified:
+          Map.get(source, :memory_context_verified, inherited_context.memory_context_verified) ==
+            true,
+        shared_memory_grant:
+          Map.get(source, :shared_memory_grant, inherited_context.shared_memory_grant) == true,
+        invocation_mcp_servers:
+          Map.get(source, :invocation_mcp_servers, inherited_context.invocation_mcp_servers),
+        mcp_session_id: source[:mcp_session_id],
+        acp_mcp_session_id: source[:acp_mcp_session_id],
+        stream_fn: Keyword.get(opts, :stream_fn),
+        get_api_key: Keyword.get(opts, :get_api_key),
+        session_id: session_id,
+        session_key: "background:#{id}",
+        agent_id: Keyword.get(opts, :agent_id) || source[:agent_id] || "default",
+        run_id: id,
+        session_scope: :main,
+        register: true
+      ]
+      |> Keyword.merge(
+        Map.to_list(
+          Map.merge(
+            Map.take(inherited_context, CodingAgent.Tools.Task.Params.private_native_fields()),
+            Map.take(source, CodingAgent.Tools.Task.Params.private_native_fields())
+          )
         )
       )
-    )
-    |> Enum.reject(fn {_key, value} -> is_nil(value) end)
+      |> Enum.reject(fn {_key, value} -> is_nil(value) end)
+      |> then(&{:ok, &1})
+    end
   end
 
   defp resolve_parent(pid) when is_pid(pid), do: snapshot_parent(pid)
@@ -275,6 +299,7 @@ defmodule CodingAgent.BackgroundRun do
       settings_manager: state.settings_manager,
       workspace_dir: state.workspace_dir,
       tool_policy: state.tool_policy,
+      execution_context: state.execution_context,
       agent_id: state.agent_id,
       invocation_context_key:
         LemonCore.MapHelpers.get_key(state.approval_context, :invocation_context_key),

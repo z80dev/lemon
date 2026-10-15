@@ -953,8 +953,7 @@ function todoView(f: ToolFacts): NativeToolView {
 			body: [errorText(failureMessage(f))],
 		};
 	}
-	const items =
-		todoItems(f.details.todos).length > 0 ? todoItems(f.details.todos) : todoItems(f.args.todos);
+	const items = todoItems(Array.isArray(f.details.todos) ? f.details.todos : f.args.todos);
 	if (items.length === 0) {
 		return {
 			tool: {

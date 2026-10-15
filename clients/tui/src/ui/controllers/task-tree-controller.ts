@@ -1,7 +1,7 @@
-import type { AgentEvent } from "../../protocol/types.ts";
-import { isTaskTerminal, TaskStore } from "../../store/task-store.ts";
+import type { AgentEvent, SnapshotItems } from "../../protocol/types.ts";
+import { isTaskActive, TaskStore, type TaskUpdate } from "../../store/task-store.ts";
 import { TaskTreeComponent } from "../components/task-tree.ts";
-import { taskUpdatesFromEvent } from "../task-progress.ts";
+import { taskDisplayText, taskUpdatesFromEvent } from "../task-progress.ts";
 
 export interface TaskTreeControllerOptions {
 	requestRender: () => void;
@@ -55,6 +55,35 @@ export class TaskTreeController {
 		return true;
 	}
 
+	reconcile(sessionKey: string, projection: SnapshotItems<Record<string, unknown>>): void {
+		if (this.#disposed || projection.status !== "ok") return;
+		const updates: TaskUpdate[] = [];
+		for (const item of projection.items) {
+			if (typeof item.taskId !== "string" || !item.taskId) continue;
+			const status = item.status;
+			updates.push({
+				taskId: item.taskId,
+				runId: typeof item.runId === "string" ? item.runId : undefined,
+				sessionId: typeof item.sessionId === "string" ? item.sessionId : undefined,
+				parentRunId: typeof item.parentRunId === "string" ? item.parentRunId : undefined,
+				status:
+					status === "completed" ||
+					status === "error" ||
+					status === "aborted" ||
+					status === "queued" ||
+					status === "running" ||
+					status === "cancelling"
+						? status
+						: status === "cancelled"
+							? "aborted"
+							: "unknown",
+				progress: typeof item.answer === "string" ? taskDisplayText(item.answer, true) : undefined,
+			});
+		}
+		this.store.clear(sessionKey);
+		this.store.upsert(sessionKey, updates, this.#options.now?.() ?? Date.now());
+	}
+
 	setSession(sessionKey: string | null): void {
 		if (this.#disposed || this.#sessionKey === sessionKey) return;
 		this.#sessionKey = sessionKey;
@@ -84,7 +113,7 @@ export class TaskTreeController {
 	#present(): void {
 		const rows = this.#sessionKey ? this.store.tree(this.#sessionKey) : [];
 		this.panel.update(rows);
-		const active = this.panel.visible && rows.some((row) => !isTaskTerminal(row.task.status));
+		const active = this.panel.visible && rows.some((row) => isTaskActive(row.task.status));
 		if (active && this.#timer === undefined) {
 			this.#timer = setInterval(this.#options.requestRender, this.#options.tickMs ?? 1000);
 			this.#timer.unref?.();

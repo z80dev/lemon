@@ -101,6 +101,22 @@ export function humanCost(value: number | undefined): string | undefined {
 	return `$${value.toFixed(2)}`;
 }
 
+/** One line of `sessions.context` usage: `tokens in/out/cache · cost $x (estimate)`. */
+export function sessionUsageLine(usage: {
+	input: number;
+	output: number;
+	cacheRead: number;
+	cacheWrite: number;
+	costUsd: number;
+}): string {
+	const cache = usage.cacheRead + usage.cacheWrite;
+	const cacheDetail =
+		cache > 0
+			? ` (${humanNumber(usage.cacheRead)} read, ${humanNumber(usage.cacheWrite)} write)`
+			: "";
+	return `tokens ${humanNumber(usage.input)} in / ${humanNumber(usage.output)} out / ${humanNumber(cache)} cache${cacheDetail} · cost ${humanCost(usage.costUsd) ?? "$0"} (estimate)`;
+}
+
 /** `label: value` lines, skipping every entry whose value is absent. */
 export function keyValueLines(entries: Array<[string, unknown]>): string[] {
 	const lines: string[] = [];

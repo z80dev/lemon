@@ -64,7 +64,7 @@ defmodule CodingAgent.Tools.Task.Execution do
     surface = Keyword.get(opts, :surface) || default_surface(root_action_id)
 
     run_id =
-      RunGraph.new_run(%{
+      Keyword.get(opts, :run_graph_module, RunGraph).new_run(%{
         type: :task,
         description: description,
         parent: parent_run_id,
@@ -74,104 +74,112 @@ defmodule CodingAgent.Tools.Task.Execution do
 
     child_scope_id = run_id
 
-    task_id =
-      TaskStore.new_task(%{
-        description: description,
-        name: validated[:name],
-        prompt: prompt,
-        run_id: run_id,
-        parent_run_id: parent_run_id,
-        parent_session_id: parent_session_id,
-        session_key: parent_session_key,
-        agent_id: parent_agent_id,
-        owner: Control.owner(opts),
-        orchestration_worker: Keyword.get(opts, :orchestration_worker, false),
-        role: role_id,
-        queue_mode: validated.queue_mode,
-        meta: validated.meta
-      })
+    case LemonCore.ExecutionContext.reidentify(validated.execution_context, run_id) do
+      {:ok, context} ->
+        validated = Map.put(validated, :execution_context, context)
 
-    lifecycle_context = %{
-      task_id: task_id,
-      run_id: run_id,
-      parent_run_id: parent_run_id,
-      parent_session_id: parent_session_id,
-      session_key: parent_session_key,
-      agent_id: parent_agent_id,
-      root_action_id: root_action_id,
-      surface: surface,
-      description: description,
-      name: validated[:name],
-      role: role_id,
-      queue_mode: validated.resolved_queue_mode,
-      meta: validated.meta,
-      parent_session_pid: Keyword.get(opts, :session_pid),
-      task_owner_pid: Keyword.get(opts, :task_owner_pid),
-      orchestration_worker: Keyword.get(opts, :orchestration_worker, false),
-      direct_progress: Keyword.get(opts, :session_module, Session) == Session,
-      task_supervisor: Keyword.get(opts, :task_supervisor, CodingAgent.TaskSupervisor)
-    }
+        task_id =
+          TaskStore.new_task(%{
+            description: description,
+            name: validated[:name],
+            prompt: prompt,
+            run_id: run_id,
+            parent_run_id: parent_run_id,
+            parent_session_id: parent_session_id,
+            session_key: parent_session_key,
+            agent_id: parent_agent_id,
+            owner: Control.owner(opts),
+            orchestration_worker: Keyword.get(opts, :orchestration_worker, false),
+            role: role_id,
+            queue_mode: validated.queue_mode,
+            meta: validated.meta
+          })
 
-    if run_id do
-      BudgetEnforcer.on_run_start(run_id, opts)
-    end
+        lifecycle_context = %{
+          task_id: task_id,
+          run_id: run_id,
+          parent_run_id: parent_run_id,
+          parent_session_id: parent_session_id,
+          session_key: parent_session_key,
+          agent_id: parent_agent_id,
+          root_action_id: root_action_id,
+          surface: surface,
+          description: description,
+          name: validated[:name],
+          role: role_id,
+          queue_mode: validated.resolved_queue_mode,
+          meta: validated.meta,
+          parent_session_pid: Keyword.get(opts, :session_pid),
+          task_owner_pid: Keyword.get(opts, :task_owner_pid),
+          orchestration_worker: Keyword.get(opts, :orchestration_worker, false),
+          direct_progress: Keyword.get(opts, :session_module, Session) == Session,
+          task_supervisor: Keyword.get(opts, :task_supervisor, CodingAgent.TaskSupervisor)
+        }
 
-    followup_context =
-      %{
-        auto_followup: validated.async and validated.auto_followup,
-        description: description,
-        cwd: cwd,
-        parent_session_key: parent_session_key,
-        parent_agent_id: parent_agent_id,
-        queue_mode: validated.resolved_queue_mode,
-        meta: validated.meta,
-        invocation_context_key: Keyword.get(opts, :invocation_context_key),
-        memory_context_key: Keyword.get(opts, :memory_context_key),
-        memory_context_verified: Keyword.get(opts, :memory_context_verified) == true,
-        shared_memory_grant: Keyword.get(opts, :shared_memory_grant) == true,
-        tool_policy: Keyword.get(opts, :tool_policy),
-        invocation_mcp_servers: Keyword.get(opts, :invocation_mcp_servers),
-        role: role_id,
-        model: validated.model,
-        session_pid: Keyword.get(opts, :session_pid),
-        session_module: Keyword.get(opts, :session_module, Session),
-        run_orchestrator:
-          Keyword.get(opts, :run_orchestrator, Followup.default_run_orchestrator())
-      }
-      |> Map.merge(Map.new(Keyword.take(opts, Params.private_native_fields())))
-
-    execution = %{
-      description: description,
-      prompt: prompt,
-      role_id: role_id,
-      async?: async?,
-      effective_cwd: effective_cwd,
-      run_id: run_id,
-      task_id: task_id,
-      child_scope_id: child_scope_id,
-      lifecycle_context: lifecycle_context,
-      followup_context: followup_context,
-      validated: validated
-    }
-
-    case reserve_parent_budget(run_id, parent_run_id, opts) do
-      :ok ->
-        if run_id && parent_run_id do
-          RunGraph.add_child(parent_run_id, run_id)
+        if run_id do
+          BudgetEnforcer.on_run_start(run_id, opts)
         end
 
-        maybe_create_progress_binding(task_id, run_id, lifecycle_context)
-        {:ok, execution}
+        followup_context =
+          %{
+            auto_followup: validated.async and validated.auto_followup,
+            description: description,
+            cwd: cwd,
+            parent_session_key: parent_session_key,
+            parent_agent_id: parent_agent_id,
+            queue_mode: validated.resolved_queue_mode,
+            meta: validated.meta,
+            invocation_context_key: Keyword.get(opts, :invocation_context_key),
+            memory_context_key: Keyword.get(opts, :memory_context_key),
+            memory_context_verified: Keyword.get(opts, :memory_context_verified) == true,
+            shared_memory_grant: Keyword.get(opts, :shared_memory_grant) == true,
+            tool_policy: Keyword.get(opts, :tool_policy),
+            invocation_mcp_servers: Keyword.get(opts, :invocation_mcp_servers),
+            role: role_id,
+            model: validated.model,
+            session_pid: Keyword.get(opts, :session_pid),
+            session_module: Keyword.get(opts, :session_module, Session),
+            run_orchestrator:
+              Keyword.get(opts, :run_orchestrator, Followup.default_run_orchestrator())
+          }
+          |> Map.merge(Map.new(Keyword.take(opts, Params.private_native_fields())))
 
-      {:error, _kind, _details} = reason ->
-        if task_id, do: TaskStore.fail(task_id, reason)
-        RunGraph.fail(run_id, reason)
-        {:error, budget_reservation_error(reason)}
+        execution = %{
+          description: description,
+          prompt: prompt,
+          role_id: role_id,
+          async?: async?,
+          effective_cwd: effective_cwd,
+          run_id: run_id,
+          task_id: task_id,
+          child_scope_id: child_scope_id,
+          lifecycle_context: lifecycle_context,
+          followup_context: followup_context,
+          validated: validated
+        }
 
-      {:error, _kind} = reason ->
-        if task_id, do: TaskStore.fail(task_id, reason)
-        RunGraph.fail(run_id, reason)
-        {:error, budget_reservation_error(reason)}
+        case reserve_parent_budget(run_id, parent_run_id, opts) do
+          :ok ->
+            if run_id && parent_run_id do
+              RunGraph.add_child(parent_run_id, run_id)
+            end
+
+            maybe_create_progress_binding(task_id, run_id, lifecycle_context)
+            {:ok, execution}
+
+          {:error, _kind, _details} = reason ->
+            if task_id, do: TaskStore.fail(task_id, reason)
+            RunGraph.fail(run_id, reason)
+            {:error, budget_reservation_error(reason)}
+
+          {:error, _kind} = reason ->
+            if task_id, do: TaskStore.fail(task_id, reason)
+            RunGraph.fail(run_id, reason)
+            {:error, budget_reservation_error(reason)}
+        end
+
+      {:error, reason} ->
+        {:error, "Task execution identity is invalid: #{inspect(reason)}"}
     end
   end
 
@@ -203,14 +211,17 @@ defmodule CodingAgent.Tools.Task.Execution do
             run_override.(
               on_update_safe,
               signal,
-              Map.put(execution.lifecycle_context, :prompt, execution.prompt)
+              execution.lifecycle_context
+              |> Map.put(:prompt, execution.prompt)
+              |> Map.put(:execution_context, execution.validated.execution_context)
             )
 
           is_function(run_override, 2) ->
             run_override.(on_update_safe, signal)
 
           true ->
-            with {:ok, workspace} <- prepare_workspace(execution, opts) do
+            with {:ok, workspace} <- prepare_workspace(execution, opts),
+                 {:ok, validated} <- workspace_execution_context(execution.validated, workspace) do
               CodingAgent.TaskStoreServer.update_record(execution.task_id, fn record ->
                 Map.put(record, :workspace, workspace)
               end)
@@ -231,7 +242,7 @@ defmodule CodingAgent.Tools.Task.Execution do
                   CodingAgent.Tools.Task.Params.build_session_opts(
                     workspace.cwd,
                     build_child_session_opts(opts, execution),
-                    execution.validated
+                    validated
                   ),
                   execution.prompt,
                   execution.description,
@@ -414,6 +425,16 @@ defmodule CodingAgent.Tools.Task.Execution do
         error
     end
   end
+
+  defp workspace_execution_context(validated, %{worktree_path: path, cwd: cwd})
+       when is_binary(path) and path == cwd do
+    with {:ok, context} <-
+           LemonCore.ExecutionContext.for_owned_worktree(validated.execution_context, cwd) do
+      {:ok, Map.put(validated, :execution_context, context)}
+    end
+  end
+
+  defp workspace_execution_context(validated, _workspace), do: {:ok, validated}
 
   defp build_child_session_opts(opts, execution) do
     opts

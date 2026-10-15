@@ -10,6 +10,7 @@
 # Run `./bin/lemon --help` for the command list.
 #
 #   ./bin/lemon                    # interactive terminal: TUI (starts the runtime if needed)
+#   ./bin/lemon -c | -r [key]      # TUI: continue the latest session / resume a session
 #   ./bin/lemon start [opts]       # foreground runtime (see `./bin/lemon start --help`)
 #   ./bin/lemon daemon|stop|restart|status
 #   ./bin/lemon <command> [args]   # setup, doctor, sessions, send, node, ... via LemonCli.CLI
@@ -378,6 +379,13 @@ if [ -z "$COMMAND" ]; then
   COMMAND="tui"
   set -- tui
 fi
+# Session-resume flags open the TUI: `lemon -c`, `lemon --continue`, `lemon -r [key]`.
+case "$COMMAND" in
+  -c|--continue|-r|--resume)
+    COMMAND="tui"
+    set -- tui "$@"
+    ;;
+esac
 
 case "$COMMAND" in
   --version|version) run_cli "$@" ;;

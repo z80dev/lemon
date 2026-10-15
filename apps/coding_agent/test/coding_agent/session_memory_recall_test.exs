@@ -12,7 +12,17 @@ defmodule CodingAgent.SessionMemoryRecallTest do
   alias LemonAi.Types.UserMessage
 
   setup do
-    assert is_pid(Process.whereis(LemonMemory.Store)), "durable memory store must be running"
+    previous_feature = System.get_env("LEMON_FEATURE_SESSION_SEARCH")
+    System.put_env("LEMON_FEATURE_SESSION_SEARCH", "default-on")
+
+    on_exit(fn ->
+      if previous_feature,
+        do: System.put_env("LEMON_FEATURE_SESSION_SEARCH", previous_feature),
+        else: System.delete_env("LEMON_FEATURE_SESSION_SEARCH")
+    end)
+
+    memory_store = Process.whereis(LemonMemory.Store)
+    assert is_pid(memory_store), "durable memory store must be running"
 
     agent_id = "recall_e2e_#{System.unique_integer([:positive])}"
     cwd = tmp_cwd()
@@ -28,9 +38,19 @@ defmodule CodingAgent.SessionMemoryRecallTest do
         session_scope: :main
       })
 
+    # Ingest resolves features independently of the session's project config.
+    # Give this fixture its own worker with the same explicit project opt-in.
+    ingest =
+      start_supervised!(
+        {LemonMemory.Ingest,
+         name: __MODULE__.Ingest,
+         memory_store: memory_store,
+         config_loader: fn -> LemonCore.Config.Modular.load(project_dir: cwd) end}
+      )
+
     # Run N: finished in another session and ingested like any finalized run.
     :ok =
-      LemonMemory.Ingest.handle_finalize_run(%{
+      LemonMemory.Ingest.handle_finalize_run(ingest, %{
         run_id: "run-#{agent_id}",
         record: %{events: [], started_at: System.system_time(:millisecond)},
         summary: %{
@@ -43,12 +63,12 @@ defmodule CodingAgent.SessionMemoryRecallTest do
         }
       })
 
-    assert eventually(fn ->
-             LemonMemory.Store.search("priya", scope: :agent, scope_key: agent_id) != []
-           end),
-           "run N was never ingested"
+    # The cast precedes this system call from the same sender. Once ingest has
+    # drained, the store query observes its queued write without polling.
+    _ = :sys.get_state(ingest)
+    assert [_ | _] = LemonMemory.Store.search("priya", scope: :agent, scope_key: agent_id)
 
-    %{agent_id: agent_id}
+    %{agent_id: agent_id, ingest: ingest}
   end
 
   defp start_session(agent_id, cwd, extra_opts \\ []) do
@@ -86,6 +106,13 @@ defmodule CodingAgent.SessionMemoryRecallTest do
   defp tmp_cwd do
     cwd = Path.join(System.tmp_dir!(), "memory_recall_e2e_#{System.unique_integer([:positive])}")
     File.mkdir_p!(cwd)
+    File.mkdir_p!(Path.join(cwd, ".lemon"))
+
+    File.write!(
+      Path.join(cwd, ".lemon/config.toml"),
+      "[features]\nsession_search = \"default-on\"\n"
+    )
+
     on_exit(fn -> File.rm_rf(cwd) end)
     cwd
   end
@@ -119,7 +146,11 @@ defmodule CodingAgent.SessionMemoryRecallTest do
   test "[memory] auto_recall = false attaches nothing", %{agent_id: agent_id} do
     cwd = Process.get(:recall_cwd)
     File.mkdir_p!(Path.join(cwd, ".lemon"))
-    File.write!(Path.join([cwd, ".lemon", "config.toml"]), "[memory]\nauto_recall = false\n")
+
+    File.write!(
+      Path.join([cwd, ".lemon", "config.toml"]),
+      "[memory]\nauto_recall = false\n[features]\nsession_search = \"default-on\"\n"
+    )
 
     session = start_session(agent_id, cwd)
 
@@ -154,7 +185,7 @@ defmodule CodingAgent.SessionMemoryRecallTest do
   end
 
   test "actual session recall carries admitted private ownership through volatile and static prompt paths",
-       %{agent_id: agent_id} do
+       %{agent_id: agent_id, ingest: ingest} do
     cwd = Process.get(:recall_cwd)
     workspace = Process.get(:recall_workspace)
     File.mkdir_p!(workspace)
@@ -188,7 +219,7 @@ defmodule CodingAgent.SessionMemoryRecallTest do
         |> Map.put("home_digest", identity.home_digest)
 
       :ok =
-        LemonMemory.Ingest.handle_finalize_run(%{
+        LemonMemory.Ingest.handle_finalize_run(ingest, %{
           run_id: "#{agent_id}-#{run}",
           record: %{events: [], started_at: System.system_time(:millisecond)},
           summary: %{
@@ -202,7 +233,7 @@ defmodule CodingAgent.SessionMemoryRecallTest do
         })
     end
 
-    :sys.get_state(LemonMemory.Ingest)
+    :sys.get_state(ingest)
 
     assert {:ok, _} =
              LemonMemory.Preferences.remember(
@@ -245,17 +276,5 @@ defmodule CodingAgent.SessionMemoryRecallTest do
 
     assert File.read!(Path.join(workspace, "USER.md")) ==
              "Unproven birthday gift obsidian preference."
-  end
-
-  defp eventually(fun, attempts \\ 500)
-  defp eventually(_fun, 0), do: false
-
-  defp eventually(fun, attempts) do
-    if fun.() do
-      true
-    else
-      Process.sleep(20)
-      eventually(fun, attempts - 1)
-    end
   end
 end

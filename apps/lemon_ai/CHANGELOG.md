@@ -41,6 +41,10 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 - Correct uppercase Base64 alphabet values when validating padded image blocks;
   valid JPEG, GIF and WebP inputs no longer fail canonical-padding checks.
+- Gemini CLI / Cloud Code Assist now consumes bounded non-success streaming
+  response bodies and closes their transports before classifying or retrying.
+  Failures retain typed HTTP status, retry metadata and actionable classification
+  without exposing upstream body text, credentials or Req transport structs.
 
 ## [0.2.0] - 2026-10-13
 

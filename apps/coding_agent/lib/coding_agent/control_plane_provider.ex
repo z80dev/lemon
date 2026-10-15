@@ -20,9 +20,92 @@ defmodule CodingAgent.ControlPlaneProvider do
   def get_task(task_id), do: CodingAgent.TaskStore.get(task_id)
 
   def todo_progress(session_key) do
-    progress = CodingAgent.Tools.TodoStore.get_progress(session_key)
-    actionable_count = session_key |> CodingAgent.Tools.TodoStore.get_actionable() |> length()
-    Map.put(progress, :actionable_count, actionable_count)
+    case session_todos(session_key, nil) do
+      {:ok, todos, _revision} ->
+        todos
+        |> CodingAgent.Tools.TodoStore.progress()
+        |> Map.put(:actionable_count, length(CodingAgent.Tools.TodoStore.actionable(todos)))
+
+      {:error, _} ->
+        nil
+    end
+  end
+
+  @doc "Read the authoritative selected-branch list from a live session or its journal."
+  def session_todos(session_key, cwd) do
+    case live_session(session_key) do
+      nil ->
+        with {:ok, cwd} <- session_cwd(session_key, cwd),
+             {:ok, path} <- native_session_path(session_key, cwd),
+             {:ok, session} <- load_native_session(path) do
+          materialized_todos(session)
+        end
+
+      pid ->
+        live_todos(pid)
+    end
+  end
+
+  @doc "Read journal todos by native session ID for the progress snapshot API."
+  def native_session_todos(session_id, cwd)
+      when is_binary(session_id) and session_id != "" and is_binary(cwd) do
+    pid =
+      if Process.whereis(CodingAgent.SessionRegistry) do
+        case Registry.lookup(CodingAgent.SessionRegistry, session_id) do
+          [{pid, _}] -> pid
+          [] -> nil
+        end
+      end
+
+    if pid do
+      live_todos(pid)
+    else
+      path = CodingAgent.SessionManager.session_file_path(cwd, session_id)
+
+      with {:ok, session} <- load_native_session(path),
+           true <- session.header.id == session_id do
+        materialized_todos(session)
+      else
+        false -> {:error, :session_not_found}
+        {:error, _} = error -> error
+      end
+    end
+  end
+
+  def native_session_todos(_session_id, _cwd), do: {:error, :invalid_session_id}
+
+  defp live_todos(pid) do
+    case CodingAgent.Session.todos(pid) do
+      {:ok, _todos, _revision} = result -> result
+      {:error, reason, _revision} -> {:error, reason}
+    end
+  end
+
+  defp materialized_todos(session) do
+    {result, head} = CodingAgent.Session.Todos.materialize(session)
+
+    case result do
+      {:ok, todos} -> {:ok, todos, {0, head}}
+      {:error, _} = error -> error
+    end
+  end
+
+  defp session_cwd(_session_key, cwd) when is_binary(cwd), do: {:ok, cwd}
+
+  defp session_cwd(session_key, nil) do
+    case LemonCore.Introspection.list(
+           session_key: session_key,
+           event_type: :session_started,
+           limit: 1
+         ) do
+      [event | _] ->
+        payload = Map.get(event, :payload) || Map.get(event, "payload") || %{}
+        cwd = Map.get(payload, :cwd) || Map.get(payload, "cwd")
+        if is_binary(cwd) and cwd != "", do: {:ok, cwd}, else: {:error, :session_not_found}
+
+      _ ->
+        {:error, :session_not_found}
+    end
   end
 
   def feature_progress(cwd), do: CodingAgent.Tools.FeatureRequirements.get_progress(cwd)
@@ -57,6 +140,92 @@ defmodule CodingAgent.ControlPlaneProvider do
     end
   end
 
+  @doc "Read the current native branch, including offline rewind, without starting a session."
+  def session_recovery_snapshot(session_key, cwd) do
+    case live_session(session_key) do
+      nil ->
+        with cwd when is_binary(cwd) <- recovery_cwd(session_key, cwd),
+             {:ok, path} <- native_session_path(session_key, cwd),
+             {:ok, session} <- CodingAgent.SessionManager.load_from_file(path),
+             :ok <- recovery_owner(session_key, session.header.id) do
+          {:ok, CodingAgent.Session.Recovery.snapshot(session)}
+        else
+          nil -> {:error, :unavailable}
+          {:error, _} = error -> error
+        end
+
+      pid ->
+        with {:ok, snapshot} <- CodingAgent.Session.recovery_snapshot(pid) do
+          attempt =
+            {pid, snapshot.run_id}
+            |> :erlang.term_to_binary()
+            |> then(&:crypto.hash(:sha256, &1))
+            |> Base.encode16(case: :lower)
+
+          {:ok, Map.put(snapshot, :attempt, attempt)}
+        end
+    end
+  end
+
+  defp recovery_owner(key, native_id) do
+    case LemonCore.ChatStateStore.get(key) do
+      state when is_map(state) ->
+        token = Map.get(state, :last_resume_token) || Map.get(state, "last_resume_token")
+        if token == native_id, do: :ok, else: {:error, :unavailable}
+
+      _ ->
+        {:error, :unavailable}
+    end
+  end
+
+  defp recovery_cwd(key, cwd) do
+    case LemonCore.ProfileStore.get(LemonCore.SessionKey.agent_id(key) || "default") do
+      {:ok, %{"canonicalSessionKey" => ^key, "paths" => %{"workspace" => workspace}}} ->
+        workspace
+
+      {:error, :not_found} ->
+        cwd || LemonCore.Cwd.default_cwd()
+
+      {:ok, _other_profile} ->
+        cwd || LemonCore.Cwd.default_cwd()
+
+      _ ->
+        # A profile-store failure cannot authorize a caller workspace override.
+        nil
+    end
+  end
+
+  @doc "Return process admission receipts only for an exact native session owner."
+  def session_process_receipts(owner) when is_binary(owner) and owner != "" do
+    manager = CodingAgent.ProcessManager
+
+    if Code.ensure_loaded?(manager) and function_exported?(manager, :receipt, 2) do
+      CodingAgent.ProcessStore.list(:all)
+      |> Enum.filter(fn {_id, record} -> record.owner == owner end)
+      |> Enum.sort_by(&elem(&1, 0))
+      |> Enum.reduce_while({:ok, []}, fn {id, record}, {:ok, receipts} ->
+        case apply(manager, :receipt, [id, owner]) do
+          {:ok, receipt} ->
+            {:cont, {:ok, [receipt | receipts]}}
+
+          {:error, :not_found} when not is_map_key(record, :launch_fingerprint) ->
+            {:cont, {:ok, [CodingAgent.ProcessStore.receipt(record) | receipts]}}
+
+          _ ->
+            {:halt, {:error, :unavailable}}
+        end
+      end)
+      |> case do
+        {:ok, receipts} -> {:ok, Enum.reverse(receipts)}
+        error -> error
+      end
+    else
+      {:error, :unavailable}
+    end
+  end
+
+  def session_process_receipts(_owner), do: {:error, :unavailable}
+
   def session_tree(session_key, cwd, opts) do
     case live_session(session_key) do
       nil ->
@@ -71,33 +240,117 @@ defmodule CodingAgent.ControlPlaneProvider do
   end
 
   def session_rewind(session_key, cwd, entry_id, opts) do
+    mutate_native_session(
+      session_key,
+      cwd,
+      &CodingAgent.Session.rewind(&1, entry_id, opts),
+      fn path ->
+        with {:ok, session} <- load_native_session(path),
+             {:ok, result, _session} <-
+               CodingAgent.Session.Rewind.run(%{session | file_path: path}, entry_id, opts) do
+          {:ok, result}
+        end
+      end
+    )
+  end
+
+  @doc """
+  Switch the active branch to `entry_id`. Navigation keeps the abandoned branch
+  in the tree. Selecting a user message lands before it and returns its text as
+  `"prompt"`, as rewind does; any other entry becomes the leaf.
+
+  Options: `:summarize` (default `false`) asks a *live* session to summarize the
+  abandoned branch in the background. A stopped session has no model runtime to
+  do that, so it only moves the leaf (`"summarizing" => false`). A streaming
+  session answers `{:error, :busy}`.
+  """
+  def session_navigate(session_key, cwd, entry_id, opts) do
+    mutate_native_session(
+      session_key,
+      cwd,
+      &CodingAgent.Session.navigate_entry(&1, entry_id, opts),
+      fn path ->
+        with {:ok, session} <- load_native_session(path),
+             {:ok, target} <- CodingAgent.Session.Rewind.navigation_target(session, entry_id) do
+          session =
+            CodingAgent.SessionManager.set_leaf_id(%{session | file_path: path}, target.leaf)
+
+          {:ok, CodingAgent.Session.Rewind.navigation_receipt(session, entry_id, target, false)}
+        end
+      end
+    )
+  end
+
+  @doc "Set (or clear with `nil`) the bookmark label of an entry, for a live or stopped session."
+  def session_label(session_key, cwd, entry_id, label) do
+    mutate_native_session(
+      session_key,
+      cwd,
+      &CodingAgent.Session.label_entry_receipt(&1, entry_id, label),
+      fn path ->
+        with {:ok, session} <- load_native_session(path),
+             %{} <- CodingAgent.SessionManager.get_entry(session, entry_id) || :missing do
+          session =
+            CodingAgent.SessionManager.append_label(%{session | file_path: path}, entry_id, label)
+
+          {:ok, CodingAgent.Session.Rewind.label_receipt(session, entry_id)}
+        else
+          :missing -> {:error, :entry_not_found}
+          {:error, _} = error -> error
+        end
+      end
+    )
+  end
+
+  defp mutate_native_session(session_key, cwd, live_mutation, stopped_mutation) do
     case live_session(session_key) do
+      pid when is_pid(pid) ->
+        live_mutation.(pid)
+
       nil ->
         with {:ok, path} <- native_session_path(session_key, cwd) do
-          :global.trans({{__MODULE__, path}, self()}, fn ->
-            with {:ok, session} <- CodingAgent.SessionManager.load_from_file(path),
-                 {:ok, result, _session} <-
-                   CodingAgent.Session.Rewind.run(%{session | file_path: path}, entry_id, opts) do
-              {:ok, result}
-            end
-          end)
-        end
+          decision =
+            CodingAgent.Session.Ownership.with_file(path, fn ->
+              case CodingAgent.Session.Ownership.owner(path) || live_session(session_key) do
+                nil -> {:stopped, stopped_mutation.(path)}
+                pid -> {:live, pid}
+              end
+            end)
 
-      pid ->
-        CodingAgent.Session.rewind(pid, entry_id, opts)
+          # Do not hold file admission while calling a live process: its reset or
+          # shutdown may itself need admission. Ownership was published before
+          # startup released admission, so a stopped writer cannot race loading.
+          case decision do
+            {:stopped, result} -> result
+            {:live, pid} -> live_mutation.(pid)
+          end
+        end
     end
   end
 
   @doc "Fork native history and bind the independent resume token to a new logical session."
-  def session_fork(source_key, cwd, destination_key) do
+  def session_fork(source_key, cwd, destination_key),
+    do: session_fork(source_key, cwd, destination_key, [])
+
+  @doc """
+  Like `session_fork/3`; `:entry_id` ends the child's history at that entry
+  (inclusive) instead of the source's current leaf.
+  """
+  def session_fork(source_key, cwd, destination_key, opts) do
     with :ok <- ensure_idle(source_key),
          nil <- LemonCore.ChatStateStore.get(destination_key),
          {:ok, source_path} <- native_session_path(source_key, cwd) do
       id = LemonCore.Id.uuid()
       destination_path = CodingAgent.Session.Presentation.session_file_path(id, cwd)
 
+      fork_opts =
+        case Keyword.get(opts, :entry_id) do
+          nil -> [id: id]
+          entry_id -> [id: id, leaf_id: entry_id]
+        end
+
       with {:ok, _session} <-
-             CodingAgent.SessionManager.fork_file(source_path, destination_path, id: id) do
+             CodingAgent.SessionManager.fork_file(source_path, destination_path, fork_opts) do
         LemonCore.ChatStateStore.put(destination_key, %LemonCore.ChatState{
           last_engine: "lemon",
           last_resume_token: id,
@@ -204,25 +457,30 @@ defmodule CodingAgent.ControlPlaneProvider do
       nil ->
         :global.trans({{__MODULE__, :native_session, session_key}, self()}, fn ->
           case native_session_path(session_key, cwd) do
-            {:ok, path} ->
-              :global.trans({{__MODULE__, path}, self()}, fn ->
-                with {:ok, session} <- CodingAgent.SessionManager.load_from_file(path),
-                     {:ok, plan, _} <-
-                       CodingAgent.Session.Planning.transition(
-                         %{session | file_path: path},
-                         action,
-                         opts
-                       ) do
-                  {:ok, plan}
+            {:ok, _path} ->
+              mutate_native_session(
+                session_key,
+                cwd,
+                &CodingAgent.Session.plan(&1, action, opts),
+                fn path ->
+                  with {:ok, session} <- load_native_session(path),
+                       {:ok, plan, _} <-
+                         CodingAgent.Session.Planning.transition(
+                           %{session | file_path: path},
+                           action,
+                           opts
+                         ) do
+                    {:ok, plan}
+                  end
                 end
-              end)
+              )
 
             {:error, :session_not_found} when action in [:status, :exit] ->
               {:ok, CodingAgent.Session.Planning.status(nil)}
 
             {:error, :session_not_found} when action == :enter ->
-              with {:ok, session} <- create_native_session(session_key, cwd),
-                   {:ok, plan, _} <- CodingAgent.Session.Planning.transition(session, :enter, []) do
+              with {:ok, session} <- create_native_session(session_key, cwd, :enter) do
+                plan = CodingAgent.Session.Planning.status(session)
                 {:ok, plan}
               end
 
@@ -236,19 +494,24 @@ defmodule CodingAgent.ControlPlaneProvider do
     end
   end
 
-  defp create_native_session(session_key, cwd) do
+  defp create_native_session(session_key, cwd, action \\ :status) do
     session = CodingAgent.SessionManager.new(cwd)
-    path = CodingAgent.SessionManager.session_file_path(cwd, session.header.id)
-    session = CodingAgent.SessionManager.persist(session, path)
 
-    with :ok <-
-           LemonCore.ChatStateStore.put(session_key, %LemonCore.ChatState{
-             last_engine: "lemon",
-             last_resume_token: session.header.id,
-             updated_at: System.system_time(:millisecond)
-           }),
-         :ok <- register_native_index(session_key) do
-      {:ok, session}
+    # Resolve the initial planning role before publishing a resume token or
+    # creating a journal. Invalid configuration leaves creation untouched.
+    with {:ok, _plan, session} <- CodingAgent.Session.Planning.transition(session, action, []) do
+      path = CodingAgent.SessionManager.session_file_path(cwd, session.header.id)
+      session = CodingAgent.SessionManager.persist(session, path)
+
+      with :ok <-
+             LemonCore.ChatStateStore.put(session_key, %LemonCore.ChatState{
+               last_engine: "lemon",
+               last_resume_token: session.header.id,
+               updated_at: System.system_time(:millisecond)
+             }),
+           :ok <- register_native_index(session_key) do
+        {:ok, session}
+      end
     end
   end
 
@@ -335,12 +598,12 @@ defmodule CodingAgent.ControlPlaneProvider do
     if Process.whereis(CodingAgent.SessionRegistry) do
       case Registry.lookup(CodingAgent.SessionRegistry, session_key) do
         [{pid, _}] ->
-          pid
+          if Process.alive?(pid), do: pid
 
         [] ->
           CodingAgent.SessionRegistry
           |> Registry.select([{{:_, :"$1", %{session_key: session_key}}, [], [:"$1"]}])
-          |> List.first()
+          |> Enum.find(&Process.alive?/1)
       end
     end
   end

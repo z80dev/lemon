@@ -948,6 +948,9 @@ defmodule CodingAgent.SessionBranchTest do
         :ok = Session.prompt(session, "Hello!")
         wait_for_streaming_complete(session)
         :ok = Session.reset(session)
+        state = Session.get_state(session)
+        assert File.regular?(state.session_file)
+        assert CodingAgent.Session.Ownership.owner(state.session_file) == session
       end
 
       # Should end in clean state

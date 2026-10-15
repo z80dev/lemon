@@ -88,6 +88,11 @@ config = %LemonAgent.Types.AgentLoopConfig{stream_fn: stream_fn, ...}
 Steps cover a plain answer, one or many tool calls, a model refusal, and a transport
 error. See the `LemonPlatformTest.FakeLLM` moduledoc for the full worked example.
 
+Verbatim `AssistantMessage` steps retain their typed error details. To exercise
+transient retries, give the failed step `content: []`: text, thinking or tool-call
+output commits the attempt and prevents automatic replay. A failed step with
+partial output instead surfaces that output and the original error.
+
 ## In this repo
 
 `test/compliance/` runs the kit against the platform's own implementations — three

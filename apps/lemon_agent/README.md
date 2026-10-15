@@ -141,9 +141,22 @@ Both queues support two consumption modes: `:one_at_a_time` (default) or `:all`.
 
 ### Provider Recovery
 
-The loop retries transient provider failures with capped exponential backoff, including failures after partial text or tool-call output. A retry reuses the pre-attempt context, re-resolves credentials, and never executes tools from a failed response. Failed attempts are not committed as assistant messages. The loop emits `{:provider_retry, details}` before each wait and `{:provider_retry_end, details}` on success, exhaustion, or cancellation; clients can show the attempt count and delay without treating a retry as a terminal failure.
+The loop retries transient provider failures with capped exponential backoff only
+before output commits. Any emitted text, thinking or tool update permanently
+commits that attempt, including whitespace, an empty tool-call start or output
+later erased by a partial/terminal message. Nonempty terminal text, thinking or
+tool content also blocks replay when the provider sent no deltas. A retry reuses
+the pre-attempt context, re-resolves credentials, and never executes tools from a
+failed response. Metadata-only failed attempts leave no dangling transcript
+start/end; reported usage from every attempt still counts against the cumulative
+budget. The loop emits `{:provider_retry, details}` before each wait and
+`{:provider_retry_end, details}` on success, exhaustion, or cancellation.
 
-Retry decisions and retry-after delays use the provider's structured `AssistantMessage.error_details` when available, not only the user-facing error string. Opaque transport messages can therefore recover without making authentication or quota failures retryable.
+Retry decisions and retry-after delays use structured `AssistantMessage.error_details`
+when available, then explicit `retry_after_ms`, top-level rate-limit metadata or
+headers, and finally error text. Missing nested hints fall through without hiding
+an explicit delay. Timing hints never make authentication, client, context-overflow
+or account-quota failures retryable.
 
 Direct agents default to three retries, starting at 2 seconds and capped at 30 seconds (`max_retries`, `retry_base_delay_ms`, `retry_max_delay_ms`). `max_retries: 0` disables retries. Explicit provider retry-after hints are honored up to 120 seconds rather than shortened to the backoff cap. Coding sessions use their existing `[runtime.retry]` settings, with one session-level retry budget rather than stacked retry wrappers.
 

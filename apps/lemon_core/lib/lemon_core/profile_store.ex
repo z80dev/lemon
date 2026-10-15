@@ -906,7 +906,6 @@ defmodule LemonCore.ProfileStore do
 
   defp decode_tool_policy(raw) do
     policy = LemonCore.Config.parse_tool_policy(raw["tool_policy"]) || %{}
-    policy = Map.reject(policy, fn {_key, value} -> is_nil(value) end)
     LemonCore.ToolPolicy.normalize(policy)
   end
 

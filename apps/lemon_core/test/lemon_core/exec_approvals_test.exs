@@ -652,6 +652,9 @@ defmodule LemonCore.ExecApprovalsTest do
 
       refute_receive %LemonCore.Event{type: :approval_resolved}
       assert ExecApprovalStore.get_pending(pending.id) == nil
+      refute Enum.any?(ExecApprovalStore.list_pending(), &(elem(&1, 0) == pending.id))
+      assert {:ok, pending_rows} = ExecApprovalStore.fetch_pending_list()
+      refute Enum.any?(pending_rows, &(elem(&1, 0) == pending.id))
 
       assert {:error, :already_resolved} = ExecApprovals.resolve(pending.id, :approve_session)
 

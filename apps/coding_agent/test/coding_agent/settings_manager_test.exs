@@ -372,6 +372,34 @@ defmodule CodingAgent.SettingsManagerTest do
       assert settings.keep_recent_tokens == 10_000
     end
 
+    test "valid compaction thresholds are read; invalid ones are dropped, not clamped" do
+      build = fn compaction ->
+        SettingsManager.from_config(%LemonConfig{
+          providers: %{},
+          agent: %{compaction: compaction},
+          tui: %{},
+          logging: %{},
+          gateway: %{},
+          agents: %{}
+        })
+      end
+
+      assert %{threshold_percent: 75, threshold_tokens: 120_000} =
+               SettingsManager.get_compaction_settings(
+                 build.(%{threshold_percent: 75, threshold_tokens: 120_000})
+               )
+
+      for bad <- [
+            %{threshold_percent: 0, threshold_tokens: -5},
+            %{threshold_percent: 101},
+            %{threshold_percent: "50", threshold_tokens: 1.5}
+          ] do
+        settings = build.(bad)
+        assert settings.compaction_threshold_percent == nil
+        assert settings.compaction_threshold_tokens == nil
+      end
+    end
+
     test "extracts retry settings from agent config" do
       config = %LemonConfig{
         providers: %{},
@@ -896,7 +924,7 @@ defmodule CodingAgent.SettingsManagerTest do
     end
 
     test "handles all thinking level values" do
-      levels = [:off, :minimal, :low, :medium, :high, :xhigh]
+      levels = [:off, :minimal, :low, :medium, :high, :xhigh, :auto]
 
       for level <- levels do
         config = %LemonConfig{
@@ -919,8 +947,8 @@ defmodule CodingAgent.SettingsManagerTest do
       # Note: LemonCore.Config parser converts string thinking levels to atoms
       # When passing strings directly to from_config, they may remain as strings
       # depending on the actual LemonCore.Config parsing behavior
-      levels = ["off", "minimal", "low", "medium", "high", "xhigh"]
-      expected = [:off, :minimal, :low, :medium, :high, :xhigh]
+      levels = ["off", "minimal", "low", "medium", "high", "xhigh", "auto"]
+      expected = [:off, :minimal, :low, :medium, :high, :xhigh, :auto]
 
       for {level, expected_atom} <- Enum.zip(levels, expected) do
         config = %LemonConfig{

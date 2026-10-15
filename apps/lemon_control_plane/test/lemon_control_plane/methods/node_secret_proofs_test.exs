@@ -10,7 +10,11 @@ defmodule LemonControlPlane.Methods.NodeSecretProofsTest do
 
     metadata = %{
       capabilities: %{
-        "coding_agent.run" => %{"version" => 1, "nativePrivacyContext" => %{"version" => 1}}
+        "coding_agent.run" => %{
+          "version" => 2,
+          "executionContext" => %{"version" => 1},
+          "nativePrivacyContext" => %{"version" => 1}
+        }
       }
     }
 

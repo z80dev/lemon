@@ -161,6 +161,25 @@ defmodule LemonWeb.ChatSubagentsLiveTest do
     assert has_element?(view, "[id^=subagent-tree-truncated-]")
   end
 
+  test "recovered parent chains keep exact depths and stop at cycles" do
+    rows =
+      [
+        {"root", nil},
+        {"child", "root"},
+        {"cycle-a", "cycle-b"},
+        {"cycle-b", "cycle-a"}
+      ]
+      |> Enum.map(fn {id, parent} ->
+        %{"runId" => id, "parentRunId" => parent, "status" => "completed"}
+      end)
+
+    projection = LemonWeb.Chat.Subagents.from_recovery(%{"status" => "ok", "items" => rows})
+    depths = Map.new(projection.nodes, &{&1.id, &1.depth})
+
+    assert projection.status == :available
+    assert depths == %{"root" => 0, "child" => 1, "cycle-a" => 1, "cycle-b" => 1}
+  end
+
   test "unavailable runtime stays distinct from empty and recovers on connected refresh", ctx do
     Application.delete_env(:lemon_core, :agent_runtime_provider)
     {:ok, view, _} = open(ctx.conn, session_key("unavailable"))

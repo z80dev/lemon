@@ -138,7 +138,7 @@ defmodule CodingAgent.CoordinatorEdgeCasesTest do
       # Coordinator should start even with nonexistent directory
       # Error occurs when actually running subagents
       coordinator =
-        start_coordinator(cwd: "/nonexistent/path/that/does/not/exist/#{:rand.uniform(10000)}")
+        start_coordinator(cwd: "/nonexistent/path/that/does/not/exist/#{:rand.uniform(10_000)}")
 
       assert Process.alive?(coordinator)
       GenServer.stop(coordinator)

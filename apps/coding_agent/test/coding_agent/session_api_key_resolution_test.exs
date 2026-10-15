@@ -16,6 +16,10 @@ defmodule CodingAgent.SessionApiKeyResolutionTest do
 
     home_dir = Path.join(tmp_dir, "home")
     File.mkdir_p!(home_dir)
+    # Session init scans its cwd; System.tmp_dir!() can be arbitrarily large.
+    session_cwd = Path.join(tmp_dir, "cwd")
+    File.mkdir_p!(session_cwd)
+    Process.put(:session_cwd, session_cwd)
 
     master_key = :crypto.strong_rand_bytes(32) |> Base.encode64()
     original_home = System.get_env("HOME")
@@ -195,6 +199,9 @@ defmodule CodingAgent.SessionApiKeyResolutionTest do
   end
 
   test "openai-codex requires auth_source" do
+    System.put_env("OPENAI_CODEX_API_KEY", "codex-from-env")
+    System.put_env("CHATGPT_TOKEN", "chatgpt-from-env")
+
     settings =
       settings(%{
         "openai-codex" => %{api_key: "codex-from-plain"}
@@ -667,7 +674,7 @@ defmodule CodingAgent.SessionApiKeyResolutionTest do
   defp start_session(test_pid, settings_manager, model \\ mock_model()) do
     {:ok, session} =
       Session.start_link(
-        cwd: System.tmp_dir!(),
+        cwd: Process.get(:session_cwd),
         model: model,
         settings_manager: settings_manager,
         stream_fn: stream_fn(test_pid)

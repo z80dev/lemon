@@ -45,9 +45,12 @@ defmodule CodingAgent.ToolRegistry do
     {:edit, Tools.Edit},
     {:patch, Tools.Patch},
     {:lsp_diagnostics, Tools.LspDiagnostics},
+    {:lsp, Tools.Lsp},
     {:bash, Tools.Bash},
     {:bash_output, Tools.BashOutput},
     {:kill_process, Tools.KillProcess},
+    {:eval, Tools.Eval},
+    {:debug, Tools.Debug},
     {:grep, Tools.Grep},
     {:ast_grep, Tools.AstGrep},
     {:find, Tools.Find},
@@ -100,6 +103,9 @@ defmodule CodingAgent.ToolRegistry do
 
   @doc """
   Get all enabled tools for a working directory.
+
+  An omitted or `nil` optional `:tool_policy` uses the full-access baseline.
+  Supplied policies still pass through canonical validation and approval gating.
   """
   @spec get_tools(String.t(), tool_opts()) :: [AgentTool.t()]
   def get_tools(cwd, opts \\ []) do
@@ -125,6 +131,12 @@ defmodule CodingAgent.ToolRegistry do
     enabled_only = Keyword.get(opts, :enabled_only, nil)
     include_extensions = Keyword.get(opts, :include_extensions, true)
     include_mcp = Keyword.get(opts, :include_mcp, true)
+
+    tool_policy =
+      case Keyword.get(opts, :tool_policy) do
+        nil -> ToolPolicy.from_profile(:full_access)
+        policy -> policy
+      end
 
     builtin = builtin_tool_tuples(cwd, opts)
     wasm_tools = normalize_wasm_tools(Keyword.get(opts, :wasm_tools, []))
@@ -152,9 +164,9 @@ defmodule CodingAgent.ToolRegistry do
 
     resolved_tools
     |> filter_tools(disabled, enabled_only)
-    |> filter_policy_blocked(Keyword.get(opts, :tool_policy))
+    |> filter_policy_blocked(tool_policy)
     |> maybe_wrap_approval(
-      Keyword.get(opts, :tool_policy),
+      tool_policy,
       Keyword.get(opts, :approval_context) ||
         Map.new(
           Keyword.take(opts, [
@@ -393,7 +405,7 @@ defmodule CodingAgent.ToolRegistry do
   # batch of tool calls concurrently, and two writers interleaving on the
   # workspace (an edit racing a `bash` rewrite of the same file) lose updates.
   # Read-only tools stay parallel. File tools additionally lock per path.
-  @mutating_builtins ~w(write edit patch ast_grep bash checkpoint)
+  @mutating_builtins ~w(write edit patch ast_grep bash eval debug checkpoint lsp)
 
   defp maybe_serialize_mutation(%AgentTool{} = tool, name, cwd, opts)
        when name in @mutating_builtins do
@@ -403,12 +415,22 @@ defmodule CodingAgent.ToolRegistry do
     %{
       tool
       | execute: fn tool_call_id, params, signal, on_update ->
-          MutationLock.with_lock(key, fn -> execute.(tool_call_id, params, signal, on_update) end)
+          if mutating_call?(name, params) do
+            MutationLock.with_lock(key, fn ->
+              execute.(tool_call_id, params, signal, on_update)
+            end)
+          else
+            execute.(tool_call_id, params, signal, on_update)
+          end
         end
     }
   end
 
   defp maybe_serialize_mutation(tool, _name, _cwd, _opts), do: tool
+
+  # `lsp` only writes files when asked to apply a rename or code action.
+  defp mutating_call?("lsp", params), do: is_map(params) and params["apply"] == true
+  defp mutating_call?(_name, _params), do: true
 
   defp mcp_tool_tuples(_cwd, _opts, false), do: []
 
@@ -857,8 +879,6 @@ defmodule CodingAgent.ToolRegistry do
       MapSet.member?(enabled_set, name)
     end)
   end
-
-  defp filter_policy_blocked(tools, nil), do: tools
 
   defp filter_policy_blocked(tools, tool_policy) do
     Enum.filter(tools, fn {name, _tool, _source} ->

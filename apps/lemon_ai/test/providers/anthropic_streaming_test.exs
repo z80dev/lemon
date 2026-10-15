@@ -208,17 +208,12 @@ defmodule LemonAi.Providers.AnthropicStreamingTest do
     )
   end
 
-  test "kimi model can fall back to ANTHROPIC_API_KEY for compatibility" do
-    body =
-      sse_event("message_start", %{"message" => %{"usage" => %{}}}) <>
-        sse_event("message_delta", %{"delta" => %{"stop_reason" => "end_turn"}, "usage" => %{}}) <>
-        sse_event("message_stop", %{})
-
+  test "Kimi never borrows ANTHROPIC_API_KEY from another principal" do
     test_pid = self()
 
     Req.Test.stub(__MODULE__, fn conn ->
-      send(test_pid, {:kimi_req_headers, conn.req_headers})
-      Plug.Conn.send_resp(conn, 200, body)
+      send(test_pid, :wrong_principal_request)
+      Plug.Conn.send_resp(conn, 500, "unexpected request")
     end)
 
     with_env(
@@ -230,12 +225,11 @@ defmodule LemonAi.Providers.AnthropicStreamingTest do
       fn ->
         context = Context.new(messages: [%UserMessage{content: "Hi"}])
         {:ok, stream} = Anthropic.stream(kimi_model(), context, %StreamOptions{})
-        assert {:ok, _result} = EventStream.result(stream, 1_000)
+        assert {:error, _result} = EventStream.result(stream, 1_000)
       end
     )
 
-    assert_receive {:kimi_req_headers, headers}, 1_000
-    assert {"x-api-key", "anthropic-fallback-key"} in headers
+    refute_received :wrong_principal_request
   end
 
   test "custom (binary) providers never receive the ambient ANTHROPIC_API_KEY" do

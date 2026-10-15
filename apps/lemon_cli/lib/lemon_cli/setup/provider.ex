@@ -30,7 +30,7 @@ defmodule LemonCli.Setup.Provider do
   @doc """
   Runs provider onboarding within the setup context.
 
-  Pre-checks:
+  Onboarding pre-checks:
   1. Required apps (`:lemon_core`, `:lemon_ai`) are started.
   2. Secrets must be initialized — if not, prints guidance and returns
      `{:error, :secrets_not_configured}`.
@@ -49,6 +49,10 @@ defmodule LemonCli.Setup.Provider do
   shares this module without a network round-trip. `--skip-verify` defers
   the live check when offline.
 
+  `--status` and `--logout` instead use the selected login's strict read:
+  confirmed absence is not a key-initialization error, while storage or key
+  failures refuse the action without changing provider settings.
+
   ## Options
 
     * `:live_verify` - run the live credential check after onboarding
@@ -65,9 +69,7 @@ defmodule LemonCli.Setup.Provider do
         run_onboarding(args, io, opts)
 
       [flag] ->
-        with :ok <- ensure_secrets_ready(io) do
-          run_auth_action(flag, List.delete(args, flag), io)
-        end
+        run_auth_action(flag, List.delete(args, flag), io)
 
       _ ->
         Runner.fail!("Use only one of --status or --logout.")
@@ -135,16 +137,20 @@ defmodule LemonCli.Setup.Provider do
 
   defp verify_onboarded_config(args, skip_verify?, io, opts) do
     config_path = extract_config_path(args)
+    provider_state = Verification.setup_state(config_path: config_path).provider
 
-    if Verification.setup_state(config_path: config_path).provider.complete do
+    if provider_state.provider && provider_state.model do
       io.info.("")
       io.info.("Verifying provider configuration...")
 
-      case Verification.verify_provider(
-             config_path: config_path,
-             verifier: Keyword.get(opts, :verifier),
-             skip_verify: skip_verify?
-           ) do
+      verification_opts =
+        opts
+        |> Keyword.take([:verifier, :config, :verification_model, :cwd])
+        |> Keyword.put(:config_path, config_path)
+        |> Keyword.put(:skip_verify, skip_verify?)
+        |> Verification.verification_options()
+
+      case Verification.verify_provider(verification_opts) do
         {:ok, %{provider: provider, model: model, live: live} = result} ->
           io.info.(
             "Provider configuration verified: #{provider} / #{model} " <>

@@ -38,6 +38,16 @@ defmodule LemonLsp.ServerManager do
       Map.merge(unavailable_status(), %{error: inspect(reason)})
   end
 
+  @doc """
+  Start a supervised language-server session.
+
+  Options:
+
+    * `:cwd` - workspace root the server process starts in
+    * `:session_id` - caller-chosen session id (generated when omitted)
+    * `:owner` - pid whose exit stops the session, so a crashed or finished
+      consumer cannot leak a language server
+  """
   @spec start_session(atom() | String.t(), keyword()) :: {:ok, map()} | {:error, atom()}
   def start_session(server_id, opts \\ []) do
     GenServer.call(@name, {:start_session, server_id, opts}, 5_000)
@@ -48,6 +58,15 @@ defmodule LemonLsp.ServerManager do
     GenServer.call(@name, {:stop_session, session_id}, 5_000)
   end
 
+  @doc """
+  Send a JSON-RPC request and wait for its response.
+
+  Options:
+
+    * `:timeout_ms` - response deadline, 50..300_000 (default 5_000)
+    * `:on_timeout` - `:terminate` (default) treats the server as stuck and
+      stops the session; `:cancel` sends `$/cancelRequest` and keeps it running
+  """
   @spec request_session(String.t(), String.t(), map() | list() | nil, keyword()) ::
           request_result()
   def request_session(session_id, method, params \\ %{}, opts \\ [])
@@ -56,9 +75,138 @@ defmodule LemonLsp.ServerManager do
 
     GenServer.call(
       @name,
-      {:request_session, session_id, method, params, timeout_ms},
-      timeout_ms + 1_000
+      {:request_session, session_id, method, params, timeout_ms, request_opts(opts, false)},
+      call_timeout(timeout_ms)
     )
+  end
+
+  @doc """
+  Send a request while accepting server-initiated `workspace/applyEdit` requests.
+
+  Servers commonly implement code-action commands by sending the client a
+  `workspace/applyEdit` request before answering `workspace/executeCommand`.
+  `:apply_edit` is a required callback returning `{:ok, receipt}` or
+  `{:error, reason}`. It runs in a caller-owned task, not the manager, and the
+  server is acknowledged only after it completes. Receipts are returned in
+  application order. Outside such a request the manager declines server edits.
+  """
+  @spec request_with_edits(String.t(), String.t(), map() | list() | nil, keyword()) ::
+          {:ok, map(), [term()]} | {:error, atom()}
+  def request_with_edits(session_id, method, params \\ %{}, opts \\ [])
+      when is_binary(session_id) and is_binary(method) do
+    case Keyword.get(opts, :apply_edit) do
+      apply_edit when is_function(apply_edit, 1) ->
+        timeout_ms = Keyword.get(opts, :timeout_ms, 5_000)
+        owner = self()
+
+        task =
+          Task.async(fn ->
+            owner_ref = Process.monitor(owner)
+
+            request =
+              :gen_server.send_request(
+                @name,
+                {:request_session, session_id, method, params, timeout_ms,
+                 request_opts(opts, true)}
+              )
+
+            deadline = System.monotonic_time(:millisecond) + call_timeout(timeout_ms)
+            await_edit_response(request, session_id, apply_edit, deadline, owner_ref)
+          end)
+
+        Task.await(task, call_timeout(timeout_ms) + 1_000)
+
+      _ ->
+        {:error, :missing_edit_handler}
+    end
+  end
+
+  defp await_edit_response(request, session_id, apply_edit, deadline, owner_ref) do
+    receive do
+      {__MODULE__, :apply_edit, token, edit} ->
+        task = Task.async(fn -> apply_edit_result(apply_edit, edit) end)
+
+        case await_edit_callback(task, request, deadline, owner_ref) do
+          {:applied, result} ->
+            _ = GenServer.call(@name, {:apply_edit_result, session_id, token, result})
+            await_edit_response(request, session_id, apply_edit, deadline, owner_ref)
+
+          {:finished, reply} ->
+            reply
+        end
+
+      {:DOWN, ^owner_ref, :process, _pid, _reason} ->
+        exit(:caller_exited)
+
+      message ->
+        case :gen_server.check_response(message, request) do
+          {:reply, reply} -> reply
+          {:error, reason} -> exit(reason)
+          :no_reply -> await_edit_response(request, session_id, apply_edit, deadline, owner_ref)
+        end
+    after
+      max(deadline - System.monotonic_time(:millisecond), 0) -> {:error, :request_timeout}
+    end
+  end
+
+  defp apply_edit_result(apply_edit, edit) do
+    try do
+      case apply_edit.(edit) do
+        {:ok, receipt} -> {:ok, receipt}
+        {:error, reason} when is_binary(reason) -> {:error, reason}
+        _ -> {:error, "Workspace edit failed"}
+      end
+    catch
+      _, _ -> {:error, "Workspace edit failed"}
+    end
+  end
+
+  defp await_edit_callback(%Task{ref: ref} = task, request, deadline, owner_ref) do
+    receive do
+      {^ref, result} ->
+        _ = Task.ignore(task)
+        {:applied, result}
+
+      {:DOWN, ^ref, :process, _pid, _reason} ->
+        {:applied, {:error, "Workspace edit failed"}}
+
+      {:DOWN, ^owner_ref, :process, _pid, _reason} ->
+        _ = Task.shutdown(task, :brutal_kill)
+        exit(:caller_exited)
+
+      message
+      when not (is_tuple(message) and tuple_size(message) == 4 and
+                  elem(message, 0) == __MODULE__ and elem(message, 1) == :apply_edit) ->
+        case :gen_server.check_response(message, request) do
+          {:reply, reply} ->
+            _ = Task.shutdown(task, :brutal_kill)
+            {:finished, reply}
+
+          {:error, reason} ->
+            _ = Task.shutdown(task, :brutal_kill)
+            exit(reason)
+
+          :no_reply ->
+            await_edit_callback(task, request, deadline, owner_ref)
+        end
+    after
+      max(deadline - System.monotonic_time(:millisecond), 0) ->
+        _ = Task.shutdown(task, :brutal_kill)
+        {:finished, {:error, :request_timeout}}
+    end
+  end
+
+  @doc """
+  Return the latest raw diagnostics the server reported for `uri`.
+
+  `seq` increases with every diagnostics batch the session receives, so a
+  caller can capture it before syncing a document and wait for a newer entry.
+  Raw diagnostics stay in-process; status projections keep only counts.
+  """
+  @spec document_diagnostics(String.t(), String.t()) ::
+          {:ok, %{seq: non_neg_integer(), entry: map() | nil}} | {:error, atom()}
+  def document_diagnostics(session_id, uri) when is_binary(session_id) and is_binary(uri) do
+    GenServer.call(@name, {:document_diagnostics, session_id, uri}, 5_000)
   end
 
   @spec initialize_session(String.t(), map() | list() | nil, keyword()) :: request_result()
@@ -134,7 +282,11 @@ defmodule LemonLsp.ServerManager do
       true ->
         case start_port(server_id, opts) do
           {:ok, session} ->
-            session = Map.put(session, :session_id, session_id)
+            session =
+              session
+              |> Map.put(:session_id, session_id)
+              |> Map.put(:owner_ref, monitor_owner(Keyword.get(opts, :owner)))
+
             state = put_in(state.sessions[session_id], session)
             {:reply, {:ok, session_info(session, include_session_id: true)}, state}
 
@@ -150,13 +302,7 @@ defmodule LemonLsp.ServerManager do
         {:reply, {:error, :unknown_lsp_session}, state}
 
       {session, sessions} ->
-        terminate_port(session)
-        reply_pending(session, {:error, :session_stopped})
-
-        info =
-          session
-          |> Map.merge(%{status: :stopped, stopped_at: now_iso8601()})
-          |> session_info(include_session_id: true)
+        info = stopped_session_info(session, :stopped)
 
         state =
           state
@@ -167,8 +313,13 @@ defmodule LemonLsp.ServerManager do
     end
   end
 
-  def handle_call({:request_session, session_id, method, params, timeout_ms}, from, state) do
+  def handle_call(
+        {:request_session, session_id, method, params, timeout_ms, request_opts},
+        from,
+        state
+      ) do
     with {:ok, session} <- fetch_session(state, session_id),
+         :ok <- edit_capture_available(session, request_opts),
          :ok <- validate_method(method),
          {:ok, params} <- validate_params(params),
          {:ok, timeout_ms} <- validate_timeout(timeout_ms) do
@@ -186,6 +337,10 @@ defmodule LemonLsp.ServerManager do
           timer: timer,
           method: method,
           params: params,
+          on_timeout: request_opts.on_timeout,
+          capture_edits: request_opts.capture_edits,
+          caller_ref: Process.monitor(elem(from, 0)),
+          edits: [],
           started_at: now_iso8601()
         })
 
@@ -202,6 +357,31 @@ defmodule LemonLsp.ServerManager do
       {:noreply, state}
     else
       {:error, reason} -> {:reply, {:error, reason}, state}
+    end
+  end
+
+  def handle_call({:apply_edit_result, session_id, token, result}, {caller, _}, state) do
+    with {:ok, session} <- fetch_session(state, session_id),
+         {pending_id, server_id} <- Map.get(Map.get(session, :applying_edits, %{}), token),
+         %{from: {^caller, _}} = pending <- Map.get(session.pending, pending_id) do
+      response =
+        case result do
+          {:ok, _} -> %{"applied" => true}
+          {:error, reason} -> %{"applied" => false, "failureReason" => reason}
+        end
+
+      pending = Map.update!(pending, :edits, &[result | &1])
+
+      session =
+        session
+        |> put_in([:pending, pending_id], pending)
+        |> Map.update!(:applying_edits, &Map.delete(&1, token))
+        |> send_lsp_response(server_id, response)
+        |> finish_deferred_request(pending_id)
+
+      {:reply, :ok, put_in(state.sessions[session_id], session)}
+    else
+      _ -> {:reply, {:error, :request_expired}, state}
     end
   end
 
@@ -313,6 +493,16 @@ defmodule LemonLsp.ServerManager do
     end
   end
 
+  def handle_call({:document_diagnostics, session_id, uri}, _from, state) do
+    with {:ok, session} <- fetch_session(state, session_id),
+         {:ok, uri} <- validate_document_uri(uri) do
+      entry = get_in(session, [:diagnostics_by_uri, uri])
+      {:reply, {:ok, %{seq: Map.get(session, :diagnostic_seq, 0), entry: entry}}, state}
+    else
+      {:error, reason} -> {:reply, {:error, reason}, state}
+    end
+  end
+
   @impl true
   def handle_info({port, {:data, data}}, state) when is_port(port) do
     case find_session_by_port(state.sessions, port) do
@@ -337,6 +527,7 @@ defmodule LemonLsp.ServerManager do
         {:noreply, state}
 
       {session, sessions} ->
+        demonitor_owner(session)
         reply_pending(session, {:error, :session_exited})
 
         info =
@@ -357,6 +548,42 @@ defmodule LemonLsp.ServerManager do
     {:noreply, state}
   end
 
+  def handle_info({:DOWN, ref, :process, _pid, _reason}, state) do
+    case Enum.find(state.sessions, fn {_id, session} -> Map.get(session, :owner_ref) == ref end) do
+      nil ->
+        sessions =
+          Map.new(state.sessions, fn {session_id, session} ->
+            pending_ids =
+              for {id, pending} <- session.pending, pending.caller_ref == ref, do: id
+
+            session =
+              Enum.reduce(pending_ids, session, fn id, session ->
+                {pending, remaining} = Map.pop(session.pending, id)
+                _ = Process.cancel_timer(pending.timer)
+
+                session
+                |> Map.put(:pending, remaining)
+                |> send_lsp_notification("$/cancelRequest", %{"id" => id})
+                |> expire_edits(id)
+              end)
+
+            {session_id, session}
+          end)
+
+        {:noreply, %{state | sessions: sessions}}
+
+      {session_id, session} ->
+        info = stopped_session_info(session, :owner_exited)
+
+        state =
+          state
+          |> update_in([:sessions], &Map.delete(&1, session_id))
+          |> remember_session(Map.delete(info, :session_id))
+
+        {:noreply, state}
+    end
+  end
+
   def handle_info({:lsp_request_timeout, session_id, request_id}, state) do
     case Map.get(state.sessions, session_id) do
       nil ->
@@ -367,9 +594,24 @@ defmodule LemonLsp.ServerManager do
           {nil, _pending} ->
             {:noreply, state}
 
+          {%{on_timeout: :cancel} = pending, remaining_pending} ->
+            _ = Process.cancel_timer(pending.timer)
+            Process.demonitor(pending.caller_ref, [:flush])
+            GenServer.reply(pending.from, {:error, :request_timeout})
+
+            session =
+              session
+              |> Map.put(:pending, remaining_pending)
+              |> send_lsp_notification("$/cancelRequest", %{"id" => request_id})
+              |> expire_edits(request_id)
+
+            {:noreply, put_in(state, [:sessions, session_id], session)}
+
           {pending, remaining_pending} ->
             _ = Process.cancel_timer(pending.timer)
+            Process.demonitor(pending.caller_ref, [:flush])
             GenServer.reply(pending.from, {:error, :request_timeout})
+            demonitor_owner(session)
 
             session =
               session
@@ -433,6 +675,8 @@ defmodule LemonLsp.ServerManager do
         :redacted_diagnostic_pull_responses,
         :stderr_containment,
         :launcher_child_cleanup,
+        :server_request_responses,
+        :owner_scoped_sessions,
         :redacted_health_status
       ],
       cleanup: %{
@@ -479,12 +723,14 @@ defmodule LemonLsp.ServerManager do
   defp start_port(server_id, opts) do
     with {:ok, command} <- LemonLsp.Servers.resolve_command(server_id),
          {:ok, cwd} <- validate_cwd(Keyword.get(opts, :cwd)) do
+      {executable, args} = launch_spec(command)
+
       port_opts =
-        [:binary, :exit_status, :stderr_to_stdout, {:args, command.args}]
+        [:binary, :exit_status, :stderr_to_stdout, {:args, args}]
         |> maybe_env(command.env)
         |> maybe_cd(cwd)
 
-      port = Port.open({:spawn_executable, command.executable}, port_opts)
+      port = Port.open({:spawn_executable, executable}, port_opts)
       os_pid = port_os_pid(port)
 
       {:ok,
@@ -500,6 +746,9 @@ defmodule LemonLsp.ServerManager do
          diagnostic_batch_count: 0,
          last_diagnostics: [],
          documents: %{},
+         diagnostics_by_uri: %{},
+         diagnostic_seq: 0,
+         root: cwd,
          initialized: false,
          server_id: command.server.id,
          label: command.server.label,
@@ -513,6 +762,52 @@ defmodule LemonLsp.ServerManager do
        }}
     end
   end
+
+  # Language servers log heavily to stderr. Sharing the stdout pipe lets those
+  # writes land inside a JSON-RPC frame, so the launcher discards stderr and the
+  # port carries protocol output only. `exec` keeps the server's own pid.
+  defp launch_spec(command) do
+    case System.find_executable("sh") do
+      nil ->
+        {command.executable, command.args}
+
+      sh ->
+        {sh, ["-c", ~S(exec "$0" "$@" 2>/dev/null), command.executable | command.args]}
+    end
+  end
+
+  defp monitor_owner(owner) when is_pid(owner), do: Process.monitor(owner)
+  defp monitor_owner(_owner), do: nil
+
+  defp demonitor_owner(%{owner_ref: ref}) when is_reference(ref),
+    do: Process.demonitor(ref, [:flush])
+
+  defp demonitor_owner(_session), do: true
+
+  defp stopped_session_info(session, status) do
+    demonitor_owner(session)
+    terminate_port(session)
+    reply_pending(session, {:error, :session_stopped})
+
+    session
+    |> Map.merge(%{status: status, stopped_at: now_iso8601()})
+    |> session_info(include_session_id: true)
+  end
+
+  defp request_opts(opts, capture_edits?) do
+    %{on_timeout: Keyword.get(opts, :on_timeout, :terminate), capture_edits: capture_edits?}
+  end
+
+  defp edit_capture_available(session, %{capture_edits: true}) do
+    if capturing_request(session),
+      do: {:error, :edit_request_in_progress},
+      else: :ok
+  end
+
+  defp edit_capture_available(_session, _opts), do: :ok
+
+  defp call_timeout(timeout_ms) when is_integer(timeout_ms), do: max(timeout_ms, 0) + 1_000
+  defp call_timeout(_timeout_ms), do: 6_000
 
   defp validate_cwd(nil), do: {:ok, nil}
 
@@ -670,7 +965,7 @@ defmodule LemonLsp.ServerManager do
   defp validate_params(params) when is_map(params) or is_list(params), do: {:ok, params}
   defp validate_params(_params), do: {:error, :invalid_params}
 
-  defp validate_timeout(timeout_ms) when is_integer(timeout_ms) and timeout_ms in 50..60_000,
+  defp validate_timeout(timeout_ms) when is_integer(timeout_ms) and timeout_ms in 50..300_000,
     do: {:ok, timeout_ms}
 
   defp validate_timeout(_timeout_ms), do: {:error, :invalid_timeout}
@@ -785,6 +1080,11 @@ defmodule LemonLsp.ServerManager do
 
   defp handle_messages(session, messages) do
     Enum.reduce(messages, session, fn
+      # Server-initiated requests carry both an id and a method. Their ids live
+      # in the server's id space and may collide with pending client requests.
+      {:ok, %{"id" => request_id, "method" => method} = message}, session ->
+        handle_server_request(session, request_id, method, Map.get(message, "params"))
+
       {:ok, %{"id" => request_id} = message}, session ->
         complete_request(session, request_id, message)
 
@@ -796,6 +1096,104 @@ defmodule LemonLsp.ServerManager do
     end)
   end
 
+  # The manager is a headless client: it acknowledges progress and capability
+  # registration, answers configuration with defaults, and accepts edits only
+  # on behalf of a caller that asked for them via `request_with_edits/4`.
+  defp handle_server_request(session, request_id, "workspace/applyEdit", params) do
+    case capturing_request(session) do
+      {pending_id, pending} when is_map(params) and is_map_key(params, "edit") ->
+        token = make_ref()
+        send(elem(pending.from, 0), {__MODULE__, :apply_edit, token, params["edit"]})
+
+        Map.update(
+          session,
+          :applying_edits,
+          %{token => {pending_id, request_id}},
+          &Map.put(&1, token, {pending_id, request_id})
+        )
+
+      _ ->
+        send_lsp_response(session, request_id, %{
+          "applied" => false,
+          "failureReason" => "client applies edits only while executing a requested command"
+        })
+    end
+  end
+
+  defp handle_server_request(session, request_id, "workspace/configuration", params) do
+    items =
+      case params do
+        %{"items" => items} when is_list(items) -> items
+        _ -> []
+      end
+
+    send_lsp_response(session, request_id, Enum.map(items, fn _item -> nil end))
+  end
+
+  defp handle_server_request(session, request_id, "workspace/workspaceFolders", _params) do
+    folders =
+      case session.root do
+        root when is_binary(root) ->
+          [%{"uri" => "file://" <> URI.encode(root), "name" => Path.basename(root)}]
+
+        _ ->
+          nil
+      end
+
+    send_lsp_response(session, request_id, folders)
+  end
+
+  defp handle_server_request(session, request_id, "window/showDocument", _params) do
+    send_lsp_response(session, request_id, %{"success" => false})
+  end
+
+  defp handle_server_request(session, request_id, method, _params)
+       when method in [
+              "window/workDoneProgress/create",
+              "client/registerCapability",
+              "client/unregisterCapability",
+              "window/showMessageRequest"
+            ] do
+    send_lsp_response(session, request_id, nil)
+  end
+
+  defp handle_server_request(session, request_id, "workspace/" <> rest, _params) do
+    if String.ends_with?(rest, "/refresh") do
+      send_lsp_response(session, request_id, nil)
+    else
+      send_lsp_error(session, request_id, -32_601, "Method not found")
+    end
+  end
+
+  defp handle_server_request(session, request_id, _method, _params) do
+    send_lsp_error(session, request_id, -32_601, "Method not found")
+  end
+
+  defp capturing_request(session) do
+    session.pending
+    |> Enum.filter(fn {_id, pending} -> Map.get(pending, :capture_edits, false) end)
+    |> Enum.max_by(fn {id, _pending} -> id end, fn -> nil end)
+  end
+
+  defp send_lsp_response(session, request_id, result) do
+    payload = %{"jsonrpc" => "2.0", "id" => request_id, "result" => result}
+    true = Port.command(session.port, frame_message(payload))
+    session
+  end
+
+  defp send_lsp_error(session, request_id, code, message) do
+    payload = %{
+      "jsonrpc" => "2.0",
+      "id" => request_id,
+      "error" => %{"code" => code, "message" => message}
+    }
+
+    true = Port.command(session.port, frame_message(payload))
+    session
+  end
+
+  @max_diagnostic_documents 256
+
   defp capture_diagnostics(session, params) when is_map(params) do
     summary = diagnostic_summary(params)
 
@@ -806,9 +1204,47 @@ defmodule LemonLsp.ServerManager do
     |> Map.update(:last_diagnostics, [summary], fn summaries ->
       [summary | summaries] |> Enum.take(5)
     end)
+    |> store_raw_diagnostics(params)
   end
 
   defp capture_diagnostics(session, _params), do: session
+
+  # Raw diagnostics stay inside the manager for `document_diagnostics/2`;
+  # status projections only ever see the redacted summaries above.
+  defp store_raw_diagnostics(session, %{"uri" => uri} = params) when is_binary(uri) do
+    seq = Map.get(session, :diagnostic_seq, 0) + 1
+
+    diagnostics =
+      case Map.get(params, "diagnostics") do
+        list when is_list(list) -> Enum.filter(list, &is_map/1)
+        _ -> []
+      end
+
+    entry = %{
+      diagnostics: diagnostics,
+      version: numeric_value(Map.get(params, "version")),
+      seq: seq
+    }
+
+    by_uri =
+      session
+      |> Map.get(:diagnostics_by_uri, %{})
+      |> Map.put(uri, entry)
+      |> bound_diagnostic_documents()
+
+    session
+    |> Map.put(:diagnostic_seq, seq)
+    |> Map.put(:diagnostics_by_uri, by_uri)
+  end
+
+  defp store_raw_diagnostics(session, _params), do: session
+
+  defp bound_diagnostic_documents(by_uri) when map_size(by_uri) > @max_diagnostic_documents do
+    {oldest_uri, _entry} = Enum.min_by(by_uri, fn {_uri, entry} -> entry.seq end)
+    Map.delete(by_uri, oldest_uri)
+  end
+
+  defp bound_diagnostic_documents(by_uri), do: by_uri
 
   defp diagnostic_summary(params) do
     diagnostics = Map.get(params, "diagnostics", [])
@@ -898,14 +1334,62 @@ defmodule LemonLsp.ServerManager do
     |> Enum.count(&(&1.status in [:open, :changed]))
   end
 
+  defp expire_edits(session, pending_id) do
+    {expired, remaining} =
+      Map.get(session, :applying_edits, %{})
+      |> Enum.split_with(fn {_token, {id, _server_id}} -> id == pending_id end)
+
+    Enum.reduce(expired, Map.put(session, :applying_edits, Map.new(remaining)), fn
+      {_token, {_id, server_id}}, session ->
+        send_lsp_response(session, server_id, %{
+          "applied" => false,
+          "failureReason" => "Request expired"
+        })
+    end)
+  end
+
+  defp edits_pending?(session, pending_id),
+    do:
+      Enum.any?(Map.get(session, :applying_edits, %{}), fn {_token, {id, _}} ->
+        id == pending_id
+      end)
+
+  defp finish_deferred_request(session, pending_id) do
+    case Map.get(session.pending, pending_id) do
+      %{deferred_response: response} ->
+        if edits_pending?(session, pending_id),
+          do: session,
+          else: complete_request(session, pending_id, response)
+
+      _ ->
+        session
+    end
+  end
+
   defp complete_request(session, request_id, message) do
+    if edits_pending?(session, request_id) do
+      pending = Map.put(Map.fetch!(session.pending, request_id), :deferred_response, message)
+      put_in(session.pending[request_id], pending)
+    else
+      complete_ready_request(session, request_id, message)
+    end
+  end
+
+  defp complete_ready_request(session, request_id, message) do
     case Map.pop(session.pending, request_id) do
       {nil, pending} ->
         Map.put(session, :pending, pending)
 
       {request, pending} ->
         _ = Process.cancel_timer(request.timer)
-        GenServer.reply(request.from, {:ok, message})
+        Process.demonitor(request.caller_ref, [:flush])
+
+        reply =
+          if Map.get(request, :capture_edits, false),
+            do: {:ok, message, Enum.reverse(request.edits)},
+            else: {:ok, message}
+
+        GenServer.reply(request.from, reply)
 
         session
         |> Map.put(:pending, pending)
@@ -1024,6 +1508,7 @@ defmodule LemonLsp.ServerManager do
     |> Map.values()
     |> Enum.each(fn pending ->
       _ = Process.cancel_timer(pending.timer)
+      Process.demonitor(pending.caller_ref, [:flush])
       GenServer.reply(pending.from, response)
     end)
   end

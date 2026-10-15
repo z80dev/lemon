@@ -328,15 +328,29 @@ defmodule LemonAi.Types do
     run in the provider worker; their return values are ignored and observer
     errors fail the stream. Bodies can contain private conversation content;
     observers must keep them in memory and persist only safe measurements.
+
+    `provider_retry` overrides the local HTTP retry policy for this request.
+    `LemonAi.complete/3` sets one HTTP attempt because its oneshot policy owns
+    the total attempt budget; ordinary streams retain the provider defaults.
+
+    `api_key_authoritative` marks caller-resolved credential authority. A missing
+    or empty key then fails before provider fallback or HTTP, even on a keyless
+    model. Leave it false for ordinary low-level environment/keyless resolution.
+
+    `caller_headers` retains the original caller override layer when Lemon-owned
+    options are rebuilt for another model. Derived provider/model headers must
+    not become caller overrides on the next request.
     """
     @type thinking_level :: :minimal | :low | :medium | :high | :xhigh
     @type t :: %__MODULE__{
             temperature: float() | nil,
             max_tokens: non_neg_integer() | nil,
             api_key: String.t() | nil,
+            api_key_authoritative: boolean(),
             session_id: String.t() | nil,
             cwd: String.t() | nil,
             headers: map(),
+            caller_headers: map() | nil,
             reasoning: thinking_level() | nil,
             thinking_budgets: map(),
             stream_timeout: timeout(),
@@ -346,15 +360,18 @@ defmodule LemonAi.Types do
             access_token: String.t() | nil,
             service_account_json: String.t() | nil,
             provider_options: map(),
+            provider_retry: map() | nil,
             on_payload: (map(), map() -> term()) | nil,
             on_usage: (map(), map() -> term()) | nil
           }
     defstruct temperature: nil,
               max_tokens: nil,
               api_key: nil,
+              api_key_authoritative: false,
               session_id: nil,
               cwd: nil,
               headers: %{},
+              caller_headers: nil,
               reasoning: nil,
               thinking_budgets: %{},
               stream_timeout: 300_000,
@@ -364,6 +381,7 @@ defmodule LemonAi.Types do
               access_token: nil,
               service_account_json: nil,
               provider_options: %{},
+              provider_retry: nil,
               on_payload: nil,
               on_usage: nil
   end

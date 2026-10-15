@@ -1470,7 +1470,7 @@ defmodule CodingAgent.ToolDisclosureAdversarialTest do
             end
           )
 
-        assert {:ok, payload} = host_call(session, "browser_tabs")
+        assert {:error, payload} = host_call(session, "browser_tabs")
         assert Jason.decode!(payload)["reason"] == "approval_denied"
         assert_received {:host_approval, ^profile, "browser_tabs"}
         refute_received {:unapproved_browser_request, _}
@@ -1492,15 +1492,13 @@ defmodule CodingAgent.ToolDisclosureAdversarialTest do
           )
 
         assert {:ok, %{"mode" => "plan"}} = Session.plan(session, :enter)
-        assert {:ok, payload} = host_call(session, "browser_tabs")
-        assert Jason.decode!(payload)["text"] =~ "Plan mode is active"
+        assert {:error, _payload} = host_call(session, "browser_tabs")
         refute_received {:planned_browser_request, _}
 
         # The public reload boundary must refresh catalog and plan wrappers
         # together, not fall back to the previously disclosed schema list.
         assert {:ok, _report} = Session.reload_extensions(session)
-        assert {:ok, payload} = host_call(session, "browser_tabs")
-        assert Jason.decode!(payload)["text"] =~ "Plan mode is active"
+        assert {:error, _payload} = host_call(session, "browser_tabs")
         assert {:error, :tool_not_found} = host_call(session, "browser_click")
 
         assert {:error, :tool_not_found} =

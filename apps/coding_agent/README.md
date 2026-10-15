@@ -14,7 +14,7 @@ CodingAgent is an umbrella app within the Lemon AI assistant platform. It turns 
 - **Subagent orchestration** -- Concurrent subagent sessions via a Coordinator with timeout management
 - **Named execution nodes** -- Native delegated sessions can run on an authenticated destination selected by name, with destination-local credentials and working-directory defaults
 - **Workspace and prompt composition** -- Layered system prompt from bootstrap files, skills, commands, and project-local CLAUDE.md/AGENTS.md
-- **Provider routing** -- Default model selection can fall back through configured fallback providers, routing profiles, and credential pools before starting the supervised agent loop, and default-model streams retry another ready provider when the first provider fails before useful output starts; explicit model specs stay fixed.
+- **Provider routing** -- Default model resolution can select a ready configured fallback before starting the agent loop; explicit model specs are not rewritten at resolution. Both default and explicit sessions can then walk configured provider/model and credential candidates before output commits, including a single refresh of the selected OAuth account on 401. Committed terminal text, thinking, or tool content prevents replay even when returned as a direct provider error.
 
 ## Architecture
 
@@ -137,7 +137,7 @@ CodingAgent.Supervisor (one_for_one)
 |----------|-------|
 | File I/O / Skills / Memory | `read`, `read_skill`, `skill_manage`, `remember`, `recall`, `checkpoint`, `write`, `edit`, `patch`, `lsp_diagnostics`, `ls` |
 | Search | `grep`, `find`, `ast_grep` (when the real ast-grep CLI is installed) |
-| Execution | `bash`, `bash_output`, `kill_process` |
+| Execution | `bash`, `bash_output`, `kill_process`, `debug` (DAP debugger; see [debugger](../../docs/tools/debug.md)) |
 | Web / Browser / Media | `websearch`, `webfetch`, `browser_tabs`, `browser_tab_open`, `browser_tab_activate`, `browser_tab_close`, `browser_navigate`, `browser_snapshot`, `browser_get_content`, `browser_click`, `browser_type`, `browser_hover`, `browser_select_option`, `browser_upload_file`, `browser_download`, `browser_press`, `browser_scroll`, `browser_back`, `browser_wait_for_selector`, `browser_evaluate`, `browser_events`, `browser_get_cookies`, `browser_set_cookies`, `browser_clear_state`, `browser_screenshot`, `browser_analyze`, `media_status`, `media_generate_image`, `media_generate_speech`, `media_transcribe_audio`, `media_analyze_image`, `media_generate_video` |
 | Task / Agent | `task`, `agent`, `parent_question`, `todo`, `kanban` |
 | System | `tool_auth`, `extensions_status` |
@@ -171,6 +171,31 @@ actionable error, not fabricated text. On macOS, `sips` supplies proportional
 image previews (maximum dimension 1568 by default) with original/preview
 dimensions and an animation first-frame notice; original bytes remain untouched.
 Input, extraction, preview, and displayed-output limits bound memory use.
+
+**SQLite reads.** `read` opens `.db`/`.sqlite`/`.sqlite3`/`.db3` files that carry
+the SQLite header read-only (`SQLITE_OPEN_READONLY` plus `PRAGMA query_only`):
+`app.db` lists tables and views with row counts, `app.db:users` shows the schema
+and five sample rows, `app.db:users?limit=20&offset=40&where=age>30&order=name`
+pages rows (limit ≤ 500), `app.db:users:42` shows one row by single-column
+primary key or rowid, and `app.db?q=SELECT ...` runs one query capped at 1000
+rows. `where`/`order`/`q` reject comments, extra statements and write/attach/
+pragma keywords; queries are interrupted after 10 seconds.
+
+**Path line selectors.** `read` also accepts a trailing selector in `path`:
+`file:50-80` (inclusive), `file:50+20` (20 lines from 50), `file:50` or
+`file:50-` (from line 50), `file:-30` (last 30 lines), and `:raw` alone or
+combined (`file:50-80:raw`) for unnumbered text without a snapshot header.
+Selectors work on archive members and internal references
+(`bundle.zip:src/a.ex:10-20`, `artifact://<id>:100+50`). They apply only when
+the literal path does not exist, so names containing colons keep their meaning,
+and they cannot be combined with `offset`/`limit`.
+
+**Search paging and ignores.** `grep` and `find` skip `.gitignore`/`.ignore`d
+and hidden files by default, with ripgrep/fd or the Elixir fallback alike
+(`git check-ignore` inside a work tree). Pass `no_ignore: true` or
+`hidden: true` to include them. `grep` reports the total match count; when
+`max_results` is exceeded, pass the advertised `skip` (also `details.next_skip`)
+to fetch the next page.
 
 **Structural search and replacement.** Install the genuine ast-grep CLI (for
 example `brew install ast-grep`) to enable `ast_grep`. It matches syntax trees,
@@ -221,6 +246,18 @@ access to the file, duplicate large output, or change its untrusted status.
 They are for `read`, not mutation tools or remote ACP filesystem operations.
 When registration is unavailable, results retain the existing absolute output
 path instead of advertising a nonexistent handle.
+
+**`bash` cwd, env and internal references.** `cwd` runs one command in another
+existing directory (relative paths resolve against the session cwd); a missing
+directory is an error. `env` adds string variables over the inherited
+environment; names must match `^[A-Za-z_][A-Za-z0-9_]*$` and values must not
+contain NUL bytes. Both apply to foreground, `pty`, `run_in_background` and ACP
+client-terminal runs. Approval requests for `bash` carry `env_keys`, never env
+values. Bare or whole-word quoted `skill://…` and `artifact://<id>` references in
+`command` are replaced with shell-quoted absolute paths (e.g.
+`wc -l artifact://<id>`); an unresolvable reference fails the call before
+anything runs. Mentions inside larger quoted strings and other schemes
+(`https://`, `git://`) are left as written.
 
 The `agent` tool accepts an optional `node` string for delegated runs. Omit it
 or pass `"local"` to use the controller host. A named value must resolve to a
@@ -416,6 +453,8 @@ A top-level `context` string (at most 64 KiB; not allowed per item) is shared ba
 
 Use `action: "swarm"` for a dependency graph of up to 32 named tasks. Each node has a unique `name`, its normal task options, and optional `depends_on: ["OtherName"]`. The entire graph, names, native task parameters, and dependency edges are validated before any work starts; cycles, self-dependencies and unknown names are errors. Ready nodes are admitted in declaration order up to `concurrency` (1–32, default 8), including children waiting for global model capacity. Busy native child-budget slots also apply backpressure rather than turning ready nodes into failures. The coordinator consumes no model slot, so a cap of one still works.
 
+The coordinator inherits the caller's canonical execution authority rather than a model worker's default leaf policy. Every node is restricted to that authority during graph validation and bound to the admitted coordinator's run identity at launch. Explicit node policies cannot widen inherited tool/approval restrictions, capabilities, workspace scope, or numeric limits; allowed node delegation is not removed merely because the coordinator has no model session. Top-level `cwd`, like worktree and persona options, is a node default and does not narrow the coordinator's workspace to one child's directory.
+
 ```json
 {
   "action": "swarm",
@@ -596,7 +635,7 @@ The eval harness is intentionally lightweight and deterministic. It should catch
 
 | Module | Description |
 |--------|-------------|
-| `LemonAgent.Security.ExternalContent` | External content sanitization; `CodingAgent.Security.ExternalContent` remains a compatibility wrapper |
+| `LemonAgent.Security.ExternalContent` | External content sanitization, imported directly by coding-agent tools |
 | `CodingAgent.Security.UntrustedToolBoundary` | Pre-LLM boundary for untrusted tool output; composed with `ContextGuardrails` |
 
 Named-node execution does not serialize source-side provider credentials,
@@ -651,6 +690,15 @@ Sessions are started under `SessionSupervisor` (dynamic) and registered in
 `SessionRegistry` by their persisted UUID. Registry metadata also retains the
 logical runtime session key used by clients.
 
+Journal ownership is separate from optional public discovery. Every native
+session, including `register: false` sessions, takes file admission before
+loading or persisting and publishes its live file owner before releasing it.
+Stopped navigation, labels and rewind decide and mutate under the same admission,
+so they cannot overwrite a starting session's snapshot. A second startup for an
+owned file returns `{:error, {:already_started, owner_pid}}` before loading it,
+without an abnormal linked exit to the caller. Reset transfers ownership to the
+new journal. The owning process's exit releases its registration.
+
 Live sessions synchronously append completed messages, tool calls/results, model
 changes and compaction entries to their JSONL file. They do not depend on a
 graceful shutdown or an explicit `Session.save/1`. Resuming with `:session_file`
@@ -665,6 +713,10 @@ identities use deterministic portable journal filenames inside the session direc
 Usage checkpoints preserve response costs and cache-write durations as well as
 token counts, so reopening a session does not reset its recorded cost. Rewinding
 a live branch preserves the selected provider API, including ChatGPT/Codex models.
+A logical session's mapped native resume token must remain loadable in its
+working directory. Automatic resume refuses a missing or corrupt mapped journal
+instead of replacing that session's history with a fresh conversation. Unbound
+automatic native tokens retain their fresh-session fallback.
 
 `SessionManager.list_sessions/1` lists most recently modified sessions first.
 `Session.navigate_tree/3` persists branch selection even before another message
@@ -682,9 +734,56 @@ RPC (`status`, `enter`, `exit`) append branch-aware `"lemon.plan"` journal
 entries, so restart, branch navigation and compaction keep the mode, the current
 plan file and any approved plan. Toggling is refused while a turn runs.
 
+The `todo` tool's list is branch state too. The owning session appends a
+versioned `"lemon.todo"` entry with the complete list on each successful write
+(`CodingAgent.Session.Todos`); a write that cannot be journaled, or that was
+prepared before a branch switch, reports failure. Startup/resume (including
+forked files), rewind, tree navigation and reset all restore plan mode and todos
+through `CodingAgent.Session.BranchState.restore/1`; `Tools.TodoStore` is only an
+ETS projection, not a recovery source. Live and stopped-session progress readers
+materialize the journal rather than treating a missing cache as an empty list.
+Branches saved before the journal
+use their latest successful todo-write result; otherwise they start empty, and
+an unsupported entry version makes reads fail rather than show older state.
+
+The ACP plan projection is refreshed from this same selected-branch list on
+load/resume and branch restoration, including an empty list. Todo read, progress
+and actionable views remain read-only in plan mode; todo writes remain gated.
+Neither a read/progress result nor a global checkpoint is legacy write evidence.
+Unsupported or malformed journal entries can be replaced by a complete new write,
+but are never silently skipped in favor of an older list.
+
+WASM host calls use the same wrapped session tools, including todo's journal
+owner; they execute in supervised, Session-linked workers rather than inside
+the Session's request handler. The host request inherits the invoking task,
+abort signal and absolute invocation deadline (at most 120 seconds for one host
+call). Caller death, timeout, abort, reset and Session shutdown cancel the worker,
+release their monitors/timer and discard late results without clearing the
+invoker-owned signal. A queued todo mutation rechecks ownership and deadline
+before journaling. Tool-error
+results stay errors over the host protocol, including plan/approval refusals;
+host routing never constructs an unwrapped tool or makes ETS authoritative.
+Cancellation is not a rollback of effects already committed before it was
+accepted; reconcile the selected journal before attempting a new write.
+
+Focused regression coverage lives in
+[`session/todo_journal_test.exs`](test/coding_agent/session/todo_journal_test.exs):
+
+| Issue #102 acceptance | Production-path regression |
+| --- | --- |
+| Writes, stable IDs, rewind/navigation, save/restart | Real loop writes followed by both preserved branches and durable process restart |
+| Selected-point fork and privacy | Forked parent/child writes, unchanged cumulative spend, and an empty ordinary subagent |
+| ETS loss without abandoned-branch leakage | Poisoned/cleared cache and supervised ETS-owner restart |
+| Planning and client-visible plan agreement | Approved-plan proposal, rewind/navigation/resume/fork, and complete read/progress/actionable projections |
+| Persistence failure and stale revisions | Failed journal append and prepared writes invalidated by list changes or switch-away-and-back |
+| Spend, policy and external-effect invariants | Charged real loop, current restricted policy on resume, and externally changed file bytes retained through restoration |
+| Legacy and version behavior | Branch-scoped successful-write evidence, ignored read/error results, and fail-closed unknown/malformed entries |
+| WASM host journal ownership and cancellation | Live host read/progress/actionable/write, durable branch restart, approval-wait timeout/abort/disposal, and production sidecar callback ownership/signal propagation without compiling WASM |
+
 In plan mode every tool still appears, but a shared gate blocks execution of
 anything outside `read`, `read_skill`, `recall`, `grep`, `find`, `ls`,
-`websearch`, `webfetch` and `ask` (themselves subject to the session policy).
+`websearch`, `webfetch`, `ask` and todo getter actions (themselves subject to
+the session policy).
 `write`/`edit` are allowed only for Markdown files in the session-private plan
 directory (under native session storage, written locally even for ACP clients);
 plan-only instances are added when the policy removed the file tools. The agent
@@ -754,6 +853,12 @@ When conversations grow large, auto-compaction kicks in:
 3. An LLM summary of compacted messages is generated
 4. A compaction entry is appended to the session tree
 5. Overflow recovery handles cases where the context window is exhausted mid-run
+
+Recovery is admitted only for provider/assistant failures before any output was
+committed. It classifies the failed assistant's structured error details even
+when the displayed error is opaque; budget and cancellation failures do not
+trigger compaction. A post-output overflow remains a failed turn rather than
+silently repeating output or tool effects.
 
 Auto-compaction runs in a tracked background worker after a completed turn and
 before dispatching a new prompt that would exceed the reserve threshold. A new
@@ -903,16 +1008,36 @@ see [`docs/user-guide/reminders-and-heartbeats.md`](../../docs/user-guide/remind
 ### Subscribing to Events
 
 ```elixir
-# Direct mode (default)
-unsubscribe = CodingAgent.Session.subscribe(session)
+# Bounded direct mode (default)
+unsubscribe = CodingAgent.Session.subscribe(session, max_queue: 1000)
 receive do
+  {:session_event, session_id, {:stream_resync, %{reason: :overflow}}} ->
+    IO.puts("recover from the session owner")
   {:session_event, session_id, event} -> IO.inspect(event)
+  {:session_terminal, session_id, status} -> IO.inspect({:owner_terminal, status})
 end
 unsubscribe.()
 
-# Stream mode (backpressure-aware)
-{:ok, stream_pid} = CodingAgent.Session.subscribe(session, mode: :stream)
+# Existing EventStream, with bounded mailbox ingress and explicit resync
+{:ok, stream_pid} = CodingAgent.Session.subscribe(session, mode: :stream, max_queue: 1000)
 ```
+
+Both subscription modes bound delivery before the subscriber mailbox accepts an
+event. Overflow fences that subscription and explicitly requests recovery; it
+does not silently drop answer text and continue pretending the stream is whole.
+Consumers must continuously drain session events: selectively waiting only for
+`agent_end` leaves progress queued and can itself overflow the subscription.
+Session stream overflow always uses the resync strategy, not caller-selectable
+silent `drop_oldest`/`drop_newest` behavior. At most one compact
+`{:session_terminal, session_id, status}` notification is reserved after a direct
+subscription overflows. A runtime consumer must reread the owner's canonical
+messages/terminal state and finish exactly once; it must not infer success from
+that compact notification alone. Public clients reconcile through
+[`sessions.snapshot`](../lemon_control_plane/README.md#session-snapshot-and-reconciliation).
+See the [delivery inventory](../../docs/platform/bus-events.md#current-delivery-and-recovery-boundary)
+for exact defaults and the preceding owner/adapter paths that remain best effort.
+An unread resync-fenced Session stream expires after 30 seconds, including when
+a late terminal arrives; the terminal does not reopen or extend that buffer.
 
 ### Using Tool Policies
 

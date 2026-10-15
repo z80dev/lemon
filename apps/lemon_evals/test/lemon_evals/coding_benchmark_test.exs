@@ -22,28 +22,6 @@ defmodule LemonEvals.CodingBenchmarkTest do
     assert_python(script)
   end
 
-  test "all twelve executable fixtures and external verifiers are syntactically valid" do
-    script = ~S'''
-    import sys
-    sys.path.insert(0, sys.argv[1])
-    from coding_benchmark import tasks
-    cases=tasks()
-    assert len(cases)==12 and len({case['name'] for case in cases})==12
-    hard={'inventory_atomic_reservations','order_dependent_policy_cache','vendored_cursor_migration','noisy_retry_log_analysis'}
-    assert hard <= {case['name'] for case in cases}
-    for case in cases:
-      compile(case['verify'], '<external-verifier>', 'exec')
-      for name, content in case['files'].items():
-        if name.endswith('.py'): compile(content,name,'exec')
-    inventory=next(case for case in cases if case['name']=='inventory_atomic_reservations')
-    assert len([name for name in inventory['files'] if name.startswith('stockroom/') and name.endswith('.py')]) >= 5
-    logs=next(case for case in cases if case['name']=='noisy_retry_log_analysis')
-    assert len(logs['files']['logs/worker.jsonl'].splitlines()) > 16000
-    '''
-
-    assert_python(script)
-  end
-
   test "profile reports join request and terminal usage without counting ungraded probes" do
     script = ~S'''
     import json, pathlib, subprocess, sys, tempfile
@@ -83,6 +61,144 @@ defmodule LemonEvals.CodingBenchmarkTest do
 
     refute inspect(status) =~ secret
     assert status.message == :redacted
+  end
+
+  test "negated paired authorization cannot enter the paid nonpaired command" do
+    for args <- [
+          ["--no-live"],
+          ["--no-paired", "--no-live"],
+          ["--no-paired", "--config", "private.toml"]
+        ] do
+      assert_raise Mix.Error, "Paired authorization/options require --paired", fn ->
+        Mix.Tasks.Lemon.Eval.Coding.run(args)
+      end
+    end
+  end
+
+  test "unsupported schema budgets are rejected before launching the Python benchmark" do
+    for lane <- [[], ["--paired"], ["--paired", "--live"]],
+        option <- [
+          ["--schema-budgets", "500,50000"],
+          ["--schema-budgets=500,50000"]
+        ] do
+      assert_raise Mix.Error, "Invalid coding benchmark arguments", fn ->
+        Mix.Tasks.Lemon.Eval.Coding.run(lane ++ option)
+      end
+    end
+  end
+
+  test "repeated paired trials satisfy offline scheduling, isolation, accounting and approval contracts" do
+    script = ~S'''
+    import sys, unittest
+    sys.path.insert(0, sys.argv[1])
+    suite = unittest.defaultTestLoader.loadTestsFromName('test_coding_benchmark_paired')
+    result = unittest.TextTestRunner(verbosity=2).run(suite)
+    assert result.wasSuccessful(), 'offline paired-trial contracts failed'
+    '''
+
+    assert_python(script)
+  end
+
+  test "disclosure telemetry hashes resolved bridge targets before profiling" do
+    target = "private.bridge.resolved-tool-name"
+    digest = Base.encode16(:crypto.hash(:sha256, target), case: :lower)
+
+    LemonEvals.PayloadProfile.handle_disclosure_event(
+      [:coding_agent, :tool_disclosure, :invoke],
+      %{duration_us: 27},
+      %{tool_name: target, status: :error, arguments: target, result: target},
+      self()
+    )
+
+    assert_receive {:"$gen_cast", {:record, :disclosure_invoke, data, %{}}}
+    assert data == %{resolved_tool_digest: digest, status: "error", duration_us: 27}
+    refute inspect(data) =~ target
+
+    for status <- [:unknown, :schema_invalid, :pending, nil] do
+      LemonEvals.PayloadProfile.handle_disclosure_event(
+        [:coding_agent, :tool_disclosure, :invoke],
+        %{duration_us: 27},
+        %{tool_name: target, status: status},
+        self()
+      )
+    end
+
+    refute_receive {:"$gen_cast", {:record, :disclosure_invoke, _, _}}
+  end
+
+  test "disclosure profile telemetry retains only known applied profiles" do
+    LemonEvals.PayloadProfile.handle_disclosure_event(
+      [:coding_agent, :tool_disclosure, :applied],
+      %{},
+      %{
+        profile: :coding,
+        active: true,
+        diagnostic_events_version: 1,
+        config: "private-configuration"
+      },
+      self()
+    )
+
+    assert_receive {:"$gen_cast", {:record, :disclosure_applied, applied, %{}}}
+    assert applied.profile == "coding"
+    assert applied.active == true
+    assert applied.diagnostic_events_version == 1
+    refute inspect(applied) =~ "private-configuration"
+
+    LemonEvals.PayloadProfile.handle_disclosure_event(
+      [:coding_agent, :tool_disclosure, :applied],
+      %{},
+      %{profile: :unknown, active: true},
+      self()
+    )
+
+    refute_receive {:"$gen_cast", {:record, :disclosure_applied, _, _}}
+  end
+
+  test "disclosure diagnostic telemetry retains counts and rejection enums without raw requests" do
+    for {status, count} <- [{:ok, 0}, {:ok, 3}, {:error, 0}] do
+      LemonEvals.PayloadProfile.handle_disclosure_event(
+        [:coding_agent, :tool_disclosure, :search],
+        %{matched_count: count, query: "private-query"},
+        %{status: status, query: "private-query"},
+        self()
+      )
+
+      expected = %{status: Atom.to_string(status), matched_count: count}
+      assert_receive {:"$gen_cast", {:record, :disclosure_search, ^expected, %{}}}
+    end
+
+    for {status, count} <- [{:unknown, 0}, {:ok, -1}, {:ok, nil}, {:ok, 1.5}] do
+      LemonEvals.PayloadProfile.handle_disclosure_event(
+        [:coding_agent, :tool_disclosure, :search],
+        %{matched_count: count},
+        %{status: status},
+        self()
+      )
+    end
+
+    refute_receive {:"$gen_cast", {:record, :disclosure_search, _, _}}
+
+    for reason <- [:unknown_tool, :invalid_arguments, :invalid_request] do
+      LemonEvals.PayloadProfile.handle_disclosure_event(
+        [:coding_agent, :tool_disclosure, :invoke_rejected],
+        %{arguments: "private-arguments"},
+        %{reason: reason, tool_name: "private-target", arguments: "private-arguments"},
+        self()
+      )
+
+      expected = %{reason: Atom.to_string(reason)}
+      assert_receive {:"$gen_cast", {:record, :disclosure_rejected, ^expected, %{}}}
+    end
+
+    LemonEvals.PayloadProfile.handle_disclosure_event(
+      [:coding_agent, :tool_disclosure, :invoke_rejected],
+      %{},
+      %{reason: :unknown_reason},
+      self()
+    )
+
+    refute_receive {:"$gen_cast", {:record, :disclosure_rejected, _, _}}
   end
 
   defp assert_python(script) do

@@ -28,6 +28,15 @@ defmodule CodingAgent.Session.Lifecycle do
   @spec initialize(keyword(), pid()) ::
           {:ok, Session.t(), Extensions.extension_status_report() | nil}
   def initialize(opts, session_pid) when is_list(opts) and is_pid(session_pid) do
+    opts =
+      case Session.validate_execution_options(opts) do
+        {:ok, opts} ->
+          opts
+
+        {:error, reason} ->
+          raise ArgumentError, "invalid session execution authority: #{inspect(reason)}"
+      end
+
     cwd = Keyword.fetch!(opts, :cwd)
     explicit_system_prompt = Keyword.get(opts, :system_prompt)
     prompt_template = Keyword.get(opts, :prompt_template)
@@ -47,6 +56,13 @@ defmodule CodingAgent.Session.Lifecycle do
 
     session_manager = load_or_create_session(cwd, session_file, session_id, parent_session)
     cwd = session_manager.header.cwd
+
+    {:ok, session_manager} =
+      SessionManager.append_execution_context(
+        session_manager,
+        Keyword.fetch!(opts, :execution_context)
+      )
+
     restored_context = SessionManager.build_session_context(session_manager)
 
     session_scope =
@@ -76,15 +92,17 @@ defmodule CodingAgent.Session.Lifecycle do
       )
 
     thinking_level =
-      Keyword.get(opts, :thinking_level) ||
-        if(
-          Enum.any?(
-            SessionManager.get_branch(session_manager),
-            &(&1.type == :thinking_level_change)
-          ),
-          do: restored_context.thinking_level,
-          else: settings_manager.default_thinking_level
-        )
+      LemonAgent.AutoThinking.normalize_level(
+        Keyword.get(opts, :thinking_level) ||
+          if(
+            Enum.any?(
+              SessionManager.get_branch(session_manager),
+              &(&1.type == :thinking_level_change)
+            ),
+            do: restored_context.thinking_level,
+            else: settings_manager.default_thinking_level
+          )
+      )
 
     session_file =
       session_file ||
@@ -101,6 +119,7 @@ defmodule CodingAgent.Session.Lifecycle do
       |> SessionManager.persist(session_file)
 
     tool_policy = Keyword.get(opts, :tool_policy)
+    execution_context = Keyword.fetch!(opts, :execution_context)
 
     approval_context =
       resolve_approval_context(opts, session_manager.header.id, tool_policy)
@@ -132,6 +151,7 @@ defmodule CodingAgent.Session.Lifecycle do
       |> Keyword.put(:session_scope, session_scope)
       |> Keyword.put(:task_child, task_child)
       |> Keyword.put(:tool_policy, tool_policy)
+      |> Keyword.put(:execution_context, execution_context)
       |> Keyword.put(:approval_context, approval_context)
       |> Keyword.put(:invocation_context_key, (approval_context || %{})[:invocation_context_key])
       |> Keyword.put(:invocation_mcp_servers, (approval_context || %{})[:invocation_mcp_servers])
@@ -259,6 +279,60 @@ defmodule CodingAgent.Session.Lifecycle do
         cwd
       )
 
+    resolve_stream_options = fn next_model, previous_model, options ->
+      options =
+        if next_model.provider == previous_model.provider do
+          options
+        else
+          LemonAgent.ModelRuntime.StreamOptions.sanitize_for_provider_switch(options)
+        end
+
+      options = ModelResolver.build_stream_options(next_model, settings_manager, options, cwd)
+      provider = next_model.provider
+
+      api_key =
+        get_api_key.(provider) ||
+          if(is_atom(provider), do: get_api_key.(Atom.to_string(provider))) ||
+          options.api_key
+
+      %{options | api_key: api_key}
+    end
+
+    strip_recalled_context = Session.recalled_context_stripper()
+
+    # Prepare only closures here. Model/credential resolution and completion
+    # happen inside AutoThinking's bounded task when the loop sees a user turn.
+    resolve_thinking = fn active_model, message, signal ->
+      resolve_classifier = fn ->
+        case ModelResolver.resolve_auto_thinking_model(settings_manager) do
+          nil ->
+            nil
+
+          classifier_model ->
+            options =
+              ModelResolver.build_stream_options(classifier_model, settings_manager, nil, cwd)
+
+            provider = classifier_model.provider
+
+            api_key =
+              get_api_key.(provider) ||
+                if(is_atom(provider), do: get_api_key.(Atom.to_string(provider))) ||
+                options.api_key
+
+            {classifier_model, %{options | api_key: api_key}}
+        end
+      end
+
+      LemonAgent.AutoThinking.resolve(
+        active_model,
+        strip_recalled_context.(message),
+        signal,
+        resolve_classifier: resolve_classifier,
+        complete_fn: Keyword.get(opts, :complete_fn, &LemonAi.complete/3),
+        timeout_ms: Keyword.get(opts, :auto_thinking_timeout_ms, 5_000)
+      )
+    end
+
     # The persisted session id (SessionManager.header.id) is the session
     # identity for provider failover: it is stable across turns and process
     # restarts of the same session file, unlike run_id (per run) or
@@ -268,9 +342,7 @@ defmodule CodingAgent.Session.Lifecycle do
     stream_fn =
       opts
       |> Keyword.get(:stream_fn)
-      |> ProviderFallback.maybe_wrap(model, settings_manager, cwd,
-        session_id: session_manager.header.id
-      )
+      |> ProviderFallback.maybe_wrap(settings_manager, cwd, session_id: session_manager.header.id)
 
     agent_registry_key = {session_manager.header.id, :main, 0}
     retry_settings = SettingsManager.get_retry_settings(settings_manager)
@@ -289,6 +361,8 @@ defmodule CodingAgent.Session.Lifecycle do
         stream_options: stream_options,
         transform_context: transform_context,
         get_api_key: get_api_key,
+        resolve_stream_options: resolve_stream_options,
+        resolve_thinking: resolve_thinking,
         session_id: session_manager.header.id,
         budget_limits: budget_limits,
         budget_usage: budget_usage,
@@ -369,6 +443,7 @@ defmodule CodingAgent.Session.Lifecycle do
       convert_to_llm: convert_to_llm,
       transform_context: transform_context,
       tool_policy: tool_policy,
+      execution_context: execution_context,
       approval_context: approval_context,
       secret_obfuscator: secret_obfuscator,
       extensions: lifecycle.extensions,
@@ -419,6 +494,7 @@ defmodule CodingAgent.Session.Lifecycle do
         task_depth: state.task_depth,
         task_allowed_agents: state.task_allowed_agents,
         tool_policy: state.tool_policy,
+        execution_context: state.execution_context,
         approval_context: state.approval_context,
         invocation_context_key: (state.approval_context || %{})[:invocation_context_key],
         invocation_mcp_servers: (state.approval_context || %{})[:invocation_mcp_servers],
@@ -517,11 +593,12 @@ defmodule CodingAgent.Session.Lifecycle do
           )
           |> CodingAgent.Session.BudgetLedger.append(state.budget_usage)
 
+        new_path = SessionManager.session_file_path(state.cwd, new_session_manager.header.id)
+
         new_session_manager =
-          SessionManager.persist(
-            new_session_manager,
-            SessionManager.session_file_path(state.cwd, new_session_manager.header.id)
-          )
+          CodingAgent.Session.Ownership.transfer(state.session_file, new_path, fn ->
+            SessionManager.persist(new_session_manager, new_path)
+          end)
 
         Persistence.maybe_unregister_session(
           previous_session_id,
@@ -539,7 +616,8 @@ defmodule CodingAgent.Session.Lifecycle do
 
         state =
           State.reset_runtime(state, new_session_manager, System.system_time(:millisecond))
-          |> CodingAgent.Session.Planning.refresh()
+          |> Map.put(:session_file, new_path)
+          |> CodingAgent.Session.BranchState.restore()
 
         {:ok, state}
 

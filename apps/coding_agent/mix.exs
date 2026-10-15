@@ -37,6 +37,7 @@ defmodule CodingAgent.MixProject do
       # MCP is loaded explicitly by the release; consumers own client supervision.
       {:lemon_mcp, in_umbrella: true, runtime: false},
       {:lemon_browser, in_umbrella: true},
+      {:lemon_lsp, in_umbrella: true},
       {:lemon_platform_test, in_umbrella: true, only: :test, runtime: false},
       {:jason, "~> 1.4"},
       {:mime, "~> 2.0"},
@@ -44,6 +45,7 @@ defmodule CodingAgent.MixProject do
       {:websockex, "~> 0.4"},
       {:req, "~> 0.5"},
       {:readability, "~> 0.12"},
+      {:exqlite, "~> 0.34.0"},
       {:floki, "~> 0.38"},
       {:httpoison, "~> 3.0", override: true}
     ]

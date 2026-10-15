@@ -42,11 +42,44 @@ defmodule LemonCore.AgentRuntime.Provider do
   @doc "Loads persisted native session messages for replay."
   @callback session_history(session_key(), Path.t()) :: {:ok, [map()]} | {:error, term()}
 
+  @doc """
+  Materializes the selected native branch's complete todo list, never its cache.
+  The revision is `{branch_generation, governing_entry_id}`; stopped sessions
+  have generation zero. It is not a cross-session identity or replay cursor.
+  """
+  @callback session_todos(session_key(), Path.t()) ::
+              {:ok, [map()], {non_neg_integer(), String.t() | nil}} | {:error, term()}
+  @doc "Read selected-branch recovery input; cwd may be nil when the session is live."
+  @callback session_recovery_snapshot(session_key(), Path.t() | nil) ::
+              {:ok, map()} | {:error, term()}
+
+  @doc "Read redacted process receipts for an exact native session owner."
+  @callback session_process_receipts(String.t()) :: {:ok, [map()]} | {:error, term()}
+
   @doc "Forks native session state into an independent destination resume mapping."
   @callback session_fork(session_key(), Path.t(), session_key()) :: :ok | {:error, term()}
 
+  @doc """
+  Like `c:session_fork/3`, with options. `:entry_id` forks the history ending at
+  that entry instead of at the current leaf.
+  """
+  @callback session_fork(session_key(), Path.t(), session_key(), keyword()) ::
+              :ok | {:error, term()}
+
   @doc "Returns a bounded native tree page with string-keyed entries and branch summaries."
   @callback session_tree(session_key(), Path.t(), keyword()) :: {:ok, map()} | {:error, term()}
+
+  @doc """
+  Switches the active branch of a native session to an entry. Options:
+  `:summarize` (default false) asks a live session to summarize the abandoned
+  branch in the background. Refuses a streaming session with `{:error, :busy}`.
+  """
+  @callback session_navigate(session_key(), Path.t(), String.t(), keyword()) ::
+              {:ok, map()} | {:error, term()}
+
+  @doc "Sets (binary) or clears (nil) the bookmark label of a native session entry."
+  @callback session_label(session_key(), Path.t(), String.t(), String.t() | nil) ::
+              {:ok, map()} | {:error, term()}
 
   @doc """
   Previews or executes a confirmation-bound native session rewind.
@@ -157,8 +190,14 @@ defmodule LemonCore.AgentRuntime.Provider do
                       feature_progress: 1,
                       compact_session: 2,
                       session_history: 2,
+                      session_todos: 2,
+                      session_recovery_snapshot: 2,
+                      session_process_receipts: 1,
                       session_fork: 3,
+                      session_fork: 4,
                       session_tree: 3,
+                      session_navigate: 4,
+                      session_label: 4,
                       session_rewind: 4,
                       session_create: 2,
                       session_plan: 4,

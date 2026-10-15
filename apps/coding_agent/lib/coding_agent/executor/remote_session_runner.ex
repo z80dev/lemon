@@ -92,6 +92,7 @@ defmodule CodingAgent.Executor.RemoteSessionRunner do
     max_payload = protocol_max_payload()
 
     with {:ok, destination} <- privacy_destination(state.request, state.node),
+         :ok <- validate_destination_protocol(destination, state.node),
          {:ok, payload} <-
            RemoteRequestCodec.encode(canonical_request(state.request), max_bytes: max_payload),
          {:ok, invoke_id} <- invoke_destination(destination, state, payload, max_payload) do
@@ -187,18 +188,19 @@ defmodule CodingAgent.Executor.RemoteSessionRunner do
         _ -> {:error, {:native_privacy_context_unsupported, selector}}
       end
     else
-      {:ok, :legacy}
+      case NodeRegistry.resolve(selector) do
+        {:ok, node} -> {:ok, node}
+        {:error, _} -> {:error, {:node_offline, selector}}
+      end
     end
   catch
     _, _ -> {:error, :native_privacy_context_unavailable}
   end
 
-  defp invoke_destination(:legacy, state, payload, max_payload) do
-    NodeRegistry.invoke(state.node, @method, payload,
-      recipient: self(),
-      timeout_ms: state.timeout_ms,
-      max_payload_bytes: max_payload
-    )
+  defp validate_destination_protocol(node, selector) do
+    if NodeRegistry.native_privacy_context_supported?(node.metadata),
+      do: :ok,
+      else: {:error, {:execution_context_unsupported, selector}}
   end
 
   defp invoke_destination(node, state, payload, max_payload) do

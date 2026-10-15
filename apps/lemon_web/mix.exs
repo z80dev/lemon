@@ -42,7 +42,6 @@ defmodule LemonWeb.MixProject do
       {:phoenix_live_view, "~> 1.0"},
       {:phoenix_live_reload, "~> 1.5", only: :dev},
       {:earmark_parser, "~> 1.4"},
-      {:gettext, "~> 0.26"},
       {:jason, "~> 1.4"},
       {:bandit, "~> 1.5"},
       {:lazy_html, "~> 0.1", only: :test}

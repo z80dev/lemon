@@ -123,6 +123,9 @@ defmodule CodingAgent.Tools.FileValidation do
 
   Pass `allow_symlinks: true` only for an explicitly trusted caller that needs the
   legacy follow-symlink behavior.
+
+  Resource operations may pass `allow_directories: true` to validate directories
+  with the same parent/symlink rules without treating them as writable files.
   """
   @spec check_mutation_target(String.t(), keyword()) :: :ok | {:error, String.t()}
   def check_mutation_target(path, opts \\ [])
@@ -147,7 +150,9 @@ defmodule CodingAgent.Tools.FileValidation do
           {:error, "Cannot write through symlink: #{path}"}
 
         {:ok, %File.Stat{type: :directory}} ->
-          {:error, "Cannot write to directory: #{path}"}
+          if Keyword.get(opts, :allow_directories, false),
+            do: validate_mutation_parent(Path.dirname(path), allow_symlinks, boundary),
+            else: {:error, "Cannot write to directory: #{path}"}
 
         {:ok, %File.Stat{type: type}} ->
           {:error, "Cannot write to special file (#{type}): #{path}"}

@@ -11,7 +11,7 @@
  * that produced no deltas at all.
  */
 
-import type { AgentAction, RunUsage } from "../protocol/types.ts";
+import type { AgentAction, RunUsage, SessionSnapshotIdentity } from "../protocol/types.ts";
 import {
 	type ApprovalBlock,
 	type AssistantBlock,
@@ -87,6 +87,12 @@ export class SessionStore {
 	 * rather than being nonsense, and says so instead of failing silently.
 	 */
 	lastRunEndedAtMs = 0;
+	/**
+	 * How this client's most recent live run ended; undefined before any run, after
+	 * a transcript reset, and for runs only replayed from stored history. `/retry`
+	 * reads it: only an errored or aborted turn is retried without `--force`.
+	 */
+	lastRunOutcome: "done" | "error" | "aborted" | undefined;
 	/** Last engine reported by `agent started`, for the status line. */
 	engine: string | undefined;
 	/** Server-confirmed user label, separate from the durable routing key. */
@@ -124,6 +130,27 @@ export class SessionStore {
 	/** Bumped by every {@link setPlan}, so a slower status read cannot undo a newer write. */
 	planWrites = 0;
 
+	/** Last accepted owner snapshot; transient events cannot establish branch ownership. */
+	snapshotIdentity: SessionSnapshotIdentity | undefined;
+	recoveryEventVersion = 0;
+	/** No cursor exists for snapshot text, so this run is refreshed, never appended. */
+	snapshotRunId: string | undefined;
+	ownedProcessStates: readonly Record<string, unknown>[] = [];
+
+	acceptsEvent(runId: string | null | undefined, identity?: SessionSnapshotIdentity): boolean {
+		const current = this.snapshotIdentity;
+		if (!current) return true;
+		if (
+			identity &&
+			(identity.sessionKey !== current.sessionKey ||
+				identity.branchId !== current.branchId ||
+				identity.revision !== current.revision ||
+				identity.attempt !== current.attempt)
+		)
+			return false;
+		return Boolean(runId && runId === current.runId && !this.isRunTerminal(runId));
+	}
+
 	/** runId -> accumulated delta text. */
 	readonly #buffers = new Map<string, string>();
 	/** runId -> highest delta seq accepted. */
@@ -149,6 +176,10 @@ export class SessionStore {
 
 	assistantFor(runId: string): AssistantBlock | undefined {
 		return this.#assistantByRun.get(runId);
+	}
+
+	isRunTerminal(runId: string): boolean {
+		return this.#finishedRuns.has(runId);
 	}
 
 	get lastBlock(): Block | undefined {
@@ -261,6 +292,7 @@ export class SessionStore {
 		this.#answerOnly.clear();
 		this.activeRunId = undefined;
 		this.busy = false;
+		this.lastRunOutcome = undefined;
 		this.usage = undefined;
 		this.contextMeasurement = undefined;
 		this.unread = 0;
@@ -494,6 +526,11 @@ export class SessionStore {
 			this.activeRunId = undefined;
 			this.busy = false;
 			this.lastRunEndedAtMs = Date.now();
+			this.lastRunOutcome = options.interrupted
+				? "aborted"
+				: options.ok === false
+					? "error"
+					: "done";
 		}
 		// Thinking the run never closed (an abort, a dropped `thinking_end`) is
 		// over too: a live reasoning block would pin the commit seam forever.

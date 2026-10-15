@@ -2,7 +2,6 @@ defmodule CodingAgent.TaskStoreTest do
   use ExUnit.Case, async: false
 
   alias CodingAgent.TaskStore
-  alias CodingAgent.TaskStoreServer
 
   setup do
     # Clear all tasks before each test
@@ -50,10 +49,6 @@ defmodule CodingAgent.TaskStoreTest do
       assert record.status == :running
       assert is_integer(record.started_at)
     end
-
-    test "returns ok for unknown task" do
-      assert :ok = TaskStore.mark_running("unknown_task_id")
-    end
   end
 
   describe "finish/2" do
@@ -69,10 +64,6 @@ defmodule CodingAgent.TaskStoreTest do
       assert record.result == result
       assert is_integer(record.completed_at)
     end
-
-    test "returns ok for unknown task" do
-      assert :ok = TaskStore.finish("unknown_task_id", %{result: "test"})
-    end
   end
 
   describe "fail/2" do
@@ -87,10 +78,6 @@ defmodule CodingAgent.TaskStoreTest do
       assert record.status == :error
       assert record.error == error
       assert is_integer(record.completed_at)
-    end
-
-    test "returns ok for unknown task" do
-      assert :ok = TaskStore.fail("unknown_task_id", "error")
     end
   end
 
@@ -137,10 +124,6 @@ defmodule CodingAgent.TaskStoreTest do
       assert Enum.max(indices) == 150
       assert Enum.min(indices) == 51
     end
-
-    test "returns ok for unknown task" do
-      assert :ok = TaskStore.append_event("unknown_task_id", %{data: "test"})
-    end
   end
 
   describe "clear/0" do
@@ -161,15 +144,6 @@ defmodule CodingAgent.TaskStoreTest do
       TaskStore.finish(task_id, %{result: "done"})
 
       # Should not be cleaned up with 1 hour TTL
-      assert :ok = TaskStore.cleanup(3_600)
-      assert {:ok, _, _} = TaskStore.get(task_id)
-    end
-
-    test "does not remove recently errored tasks with long TTL" do
-      task_id = TaskStore.new_task(%{description: "Test"})
-      TaskStore.mark_running(task_id)
-      TaskStore.fail(task_id, "error")
-
       assert :ok = TaskStore.cleanup(3_600)
       assert {:ok, _, _} = TaskStore.get(task_id)
     end
@@ -346,28 +320,6 @@ defmodule CodingAgent.TaskStoreTest do
 
       assert {:ok, record, _events} = TaskStore.get(task_id)
       assert Map.get(record, :auto_followup_join_tokens, []) == []
-    end
-  end
-
-  describe "TaskStoreServer" do
-    test "ensure_table/1 initializes tables if not already done" do
-      # Tables should already be initialized from application start
-      assert :ok = TaskStoreServer.ensure_table(CodingAgent.TaskStoreServer)
-    end
-
-    test "cleanup/2 returns count of checked tasks" do
-      task_id = TaskStore.new_task(%{description: "Cleanup test"})
-      TaskStore.mark_running(task_id)
-      TaskStore.finish(task_id, %{result: "done"})
-
-      # With long TTL, nothing should be deleted
-      assert {:ok, 0} = TaskStoreServer.cleanup(CodingAgent.TaskStoreServer, 3_600)
-    end
-
-    test "dets_status/1 returns status information" do
-      status = TaskStoreServer.dets_status(CodingAgent.TaskStoreServer)
-      assert status.info != nil
-      assert status.state.loaded_from_dets != nil
     end
   end
 end

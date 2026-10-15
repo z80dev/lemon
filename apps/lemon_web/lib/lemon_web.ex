@@ -21,8 +21,6 @@ defmodule LemonWeb do
         formats: [:html, :json],
         layouts: [html: LemonWeb.Layouts]
 
-      use Gettext, backend: LemonWeb.Gettext
-
       import Plug.Conn
       unquote(verified_routes())
     end
@@ -57,8 +55,6 @@ defmodule LemonWeb do
 
   defp html_helpers do
     quote do
-      use Gettext, backend: LemonWeb.Gettext
-
       import Phoenix.HTML
       import LemonWeb.UI
 

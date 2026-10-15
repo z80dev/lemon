@@ -229,6 +229,30 @@ defmodule CodingAgent.Tools.BashBackgroundTest do
       assert output =~ "killed"
     end
 
+    test "background commands honor cwd and env", %{tmp_dir: tmp_dir, session_id: session_id} do
+      opts = [session_id: session_id]
+      File.mkdir_p!(Path.join(tmp_dir, "work"))
+
+      result =
+        Bash.execute(
+          "bg",
+          %{
+            "command" => "echo \"$(pwd)|$BG_VALUE\"",
+            "run_in_background" => true,
+            "cwd" => "work",
+            "env" => %{"BG_VALUE" => "from env"}
+          },
+          nil,
+          nil,
+          tmp_dir,
+          opts
+        )
+
+      assert %AgentToolResult{details: %{process_id: process_id}} = result
+      output = await_output(process_id, opts, &(&1 =~ "completed"))
+      assert output =~ Path.join(tmp_dir, "work") <> "|from env"
+    end
+
     test "pty is rejected for background commands", %{tmp_dir: tmp_dir} do
       assert {:error, message} =
                Bash.execute(

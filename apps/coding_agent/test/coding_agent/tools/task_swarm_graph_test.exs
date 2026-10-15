@@ -4,6 +4,7 @@ defmodule CodingAgent.Tools.TaskSwarmGraphTest do
   alias CodingAgent.Tools.Task.Swarm.Graph
   alias LemonAgent.Types.AgentToolResult
   alias LemonAi.Types.TextContent
+  alias LemonCore.{ExecutionContext, ToolPolicy}
 
   @tag :tmp_dir
   test "prepares forward references in declaration order and inherits native defaults", %{
@@ -48,6 +49,79 @@ defmodule CodingAgent.Tools.TaskSwarmGraphTest do
       refute Map.has_key?(node.validated, :tasks)
       refute Map.has_key?(node.validated, :concurrency)
     end
+  end
+
+  @tag :tmp_dir
+  test "prepared nodes carry canonical parent restrictions despite broader launch policies", %{
+    tmp_dir: cwd
+  } do
+    assert {:ok, parent} =
+             ExecutionContext.new(
+               run_id: "graph-parent",
+               agent_id: "graph-owner",
+               cwd: cwd,
+               tool_policy:
+                 ToolPolicy.custom(
+                   allow: ["read", "task"],
+                   require_approval: ["read"],
+                   max_file_size: 64
+                 ),
+               workspace_scope: %{root: cwd, mode: :read_only},
+               capabilities: ["read", "task"],
+               limits: %{max_steps: 4, max_tokens: 2_048}
+             )
+
+    assert {:ok, graph} =
+             Graph.prepare(
+               %{
+                 "tool_policy" => %{
+                   "profile" => "full_access",
+                   "approvals" => %{"read" => "never"}
+                 },
+                 "tasks" => [task("Producer"), task("Consumer", ["Producer"])]
+               },
+               cwd,
+               execution_context: parent,
+               tool_policy: ToolPolicy.from_profile(:full_access)
+             )
+
+    for node <- graph.nodes do
+      context = node.validated.execution_context
+      assert ExecutionContext.subset?(context, parent)
+      assert context.parent_run_id == parent.run_id
+      assert context.provenance.delegated_by == ExecutionContext.identity(parent)
+      assert context.principal == parent.principal
+      assert context.workspace_scope == parent.workspace_scope
+      assert context.capabilities == parent.capabilities
+      assert context.limits == parent.limits
+      assert node.validated.tool_policy == context.tool_policy
+      assert ToolPolicy.requires_approval?(context.tool_policy, "read")
+      assert ToolPolicy.allowed?(context.tool_policy, "task")
+      refute ToolPolicy.allowed?(context.tool_policy, "write")
+      refute ToolPolicy.allowed?(context.tool_policy, "bash")
+    end
+  end
+
+  @tag :tmp_dir
+  test "authority validation rejects an escaping last node before preparation succeeds", %{
+    tmp_dir: cwd
+  } do
+    assert {:ok, parent} = ExecutionContext.new(run_id: "graph-parent", cwd: cwd)
+
+    assert {:error, message} =
+             Graph.prepare(
+               %{
+                 "tasks" => [
+                   task("Good"),
+                   Map.put(task("Escape"), "cwd", Path.dirname(cwd))
+                 ]
+               },
+               cwd,
+               execution_context: parent
+             )
+
+    assert message =~ "swarm task 2:"
+    assert message =~ "workspace_scope_escalation"
   end
 
   @tag :tmp_dir

@@ -38,6 +38,8 @@ defmodule CodingAgent.Coordinator do
   admission guardians clean up late-starting sessions even if an execution worker
   dies before admission returns. Active IDs remain tracked until their workers,
   guardians and sessions have exited.
+  Fenced subscriptions still wake on compact terminal notifications; completed
+  answers are recovered from the owning session before cleanup.
 
   Execution deadlines include startup. Remaining subagents are aborted and stopped
   on timeout or cancellation.
@@ -489,12 +491,20 @@ defmodule CodingAgent.Coordinator do
         params = %{
           "prompt" => spec.prompt,
           "agent" => spec[:subagent],
-          "description" => spec[:description] || "Subagent #{id}"
+          "description" => spec[:description] || "Subagent #{id}",
+          "tool_policy" => spec[:tool_policy]
         }
 
         with {:ok, validated} <-
                Params.validate_run_params(params, state.cwd,
-                 settings_manager: state.settings_manager
+                 settings_manager: state.settings_manager,
+                 parent_session: state.parent_session,
+                 execution_context: spec[:execution_context]
+               ),
+             {:ok, validated} <-
+               Params.restrict_to_parent(validated, state.cwd,
+                 parent_session: state.parent_session,
+                 execution_context: spec[:execution_context]
                ),
              :ok <- check_cancelled(owner_ref),
              {:ok, pid} <- admit_session(guardian, build_session_opts(state, validated)) do
@@ -544,7 +554,7 @@ defmodule CodingAgent.Coordinator do
         try do
           with :ok <- check_cancelled(owner_ref),
                :ok <- Session.prompt(pid, prompt) do
-            await_session_result(id, session_id, session_ref, owner_ref)
+            await_session_result(pid, id, session_id, session_ref, owner_ref)
           else
             {:cancelled, status} -> terminal_result(id, session_id, status)
             {:error, reason} -> build_error_result(id, session_id, reason)
@@ -569,8 +579,17 @@ defmodule CodingAgent.Coordinator do
     end
   end
 
-  defp await_session_result(id, session_id, session_ref, owner_ref) do
+  defp await_session_result(pid, id, session_id, session_ref, owner_ref) do
     receive do
+      {:session_terminal, ^session_id, :completed} ->
+        build_completed_result(id, session_id, Session.get_messages(pid))
+
+      {:session_terminal, ^session_id, :canceled} ->
+        build_error_result(id, session_id, :aborted)
+
+      {:session_terminal, ^session_id, :error} ->
+        build_error_result(id, session_id, :session_failed)
+
       {:session_event, ^session_id, {:agent_end, messages}} ->
         build_completed_result(id, session_id, messages)
 
@@ -587,7 +606,7 @@ defmodule CodingAgent.Coordinator do
         terminal_result(id, session_id, status)
 
       _event ->
-        await_session_result(id, session_id, session_ref, owner_ref)
+        await_session_result(pid, id, session_id, session_ref, owner_ref)
     end
   end
 

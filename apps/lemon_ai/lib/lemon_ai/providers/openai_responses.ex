@@ -93,7 +93,7 @@ defmodule LemonAi.Providers.OpenAIResponses do
       EventStream.push_async(stream, {:start, output})
 
       # Make streaming request (retries 429/5xx/transport failures in place)
-      case stream_request(url, headers, body, trace_id, RetryHelper.policy(), 0) do
+      case stream_request(url, headers, body, trace_id, RetryHelper.policy(opts), 0) do
         {:ok, event_stream} ->
           # Process stream events
           case OpenAIResponsesShared.process_stream(

@@ -15,10 +15,10 @@ defmodule CodingAgent.Tools.Find do
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonAgent.Security.ToolResultTrust
   alias LemonAi.Types.TextContent
-  alias CodingAgent.Tools.FileValidation
+  alias CodingAgent.Tools.{FileValidation, IgnoreFilter}
   alias CodingAgent.Tools.PathHelpers
 
-  import CodingAgent.Tools.AbortHelpers, only: [aborted?: 1, check_abort: 1]
+  import LemonAgent.Tools.AbortHelpers, only: [aborted?: 1, check_abort: 1]
 
   @default_max_results 100
   @elixir_find_timeout_ms 30_000
@@ -443,50 +443,9 @@ defmodule CodingAgent.Tools.Find do
   defp build_glob_patterns(pattern, search_path, _), do: [Path.join(search_path, pattern)]
 
   defp reject_ignored(paths, _search_path, true), do: paths
-  defp reject_ignored([], _search_path, _no_ignore), do: []
 
-  defp reject_ignored(paths, search_path, false) do
-    case git_ignored(paths, search_path) do
-      {:ok, ignored} -> Enum.reject(paths, &MapSet.member?(ignored, &1))
-      :unavailable -> paths
-    end
-  end
-
-  # `git check-ignore` prints the ignored subset of its arguments (exit 0),
-  # nothing (exit 1), or fails outside a work tree (exit 128). Like fd, a
-  # search rooted inside an ignored directory is not filtered at all.
-  @check_ignore_chunk 200
-
-  defp git_ignored(paths, search_path) do
-    with git when is_binary(git) <- System.find_executable("git"),
-         {:ok, root_ignored} <- check_ignore(git, search_path, [search_path]),
-         true <- MapSet.size(root_ignored) == 0 do
-      paths
-      |> Enum.chunk_every(@check_ignore_chunk)
-      |> Enum.reduce_while({:ok, MapSet.new()}, fn chunk, {:ok, acc} ->
-        case check_ignore(git, search_path, chunk) do
-          {:ok, ignored} -> {:cont, {:ok, MapSet.union(acc, ignored)}}
-          :unavailable -> {:halt, :unavailable}
-        end
-      end)
-    else
-      _ -> :unavailable
-    end
-  end
-
-  defp check_ignore(git, search_path, paths) do
-    args = ["-C", search_path, "check-ignore", "--" | paths]
-
-    case System.cmd(git, args, stderr_to_stdout: false) do
-      {output, status} when status in [0, 1] ->
-        {:ok, output |> String.split("\n", trim: true) |> MapSet.new()}
-
-      _ ->
-        :unavailable
-    end
-  rescue
-    _ -> :unavailable
-  end
+  defp reject_ignored(paths, search_path, false),
+    do: IgnoreFilter.reject_ignored(paths, search_path)
 
   defp filter_by_type(paths, "file") do
     Enum.filter(paths, &File.regular?/1)

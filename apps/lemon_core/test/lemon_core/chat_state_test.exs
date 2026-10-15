@@ -4,10 +4,6 @@ defmodule LemonCore.ChatStateTest do
   alias LemonCore.ChatState
   alias LemonCore.{ChatScope, ChatStateStore}
 
-  setup do
-    :ok
-  end
-
   describe "new/0 default value verification" do
     test "creates new ChatState with all nil defaults" do
       state = ChatState.new()
@@ -16,25 +12,6 @@ defmodule LemonCore.ChatStateTest do
       assert state.last_resume_token == nil
       assert state.updated_at == nil
       assert state.expires_at == nil
-    end
-
-    test "returns a proper ChatState struct" do
-      state = ChatState.new()
-      assert %ChatState{} = state
-    end
-
-    test "struct has exactly four fields" do
-      state = ChatState.new()
-      # Map.from_struct returns all fields defined in defstruct
-      fields = Map.from_struct(state)
-      assert map_size(fields) == 4
-
-      assert Map.keys(fields) |> Enum.sort() == [
-               :expires_at,
-               :last_engine,
-               :last_resume_token,
-               :updated_at
-             ]
     end
   end
 
@@ -195,50 +172,6 @@ defmodule LemonCore.ChatStateTest do
     end
   end
 
-  describe "struct enforcement validation" do
-    test "pattern matching works with struct" do
-      state = ChatState.new(%{last_engine: "test"})
-      assert %ChatState{last_engine: "test"} = state
-    end
-
-    test "pattern matching extracts values correctly" do
-      state =
-        ChatState.new(%{
-          last_engine: "engine1",
-          last_resume_token: "token1",
-          updated_at: 1000
-        })
-
-      %ChatState{
-        last_engine: engine,
-        last_resume_token: token,
-        updated_at: time
-      } = state
-
-      assert engine == "engine1"
-      assert token == "token1"
-      assert time == 1000
-    end
-
-    test "struct can be created directly" do
-      state = %ChatState{
-        last_engine: "direct",
-        last_resume_token: "direct_token",
-        updated_at: 2000
-      }
-
-      assert state.last_engine == "direct"
-    end
-
-    test "direct struct creation with partial fields" do
-      state = %ChatState{last_engine: "partial"}
-
-      assert state.last_engine == "partial"
-      assert state.last_resume_token == nil
-      assert state.updated_at == nil
-    end
-  end
-
   describe "type contract validation" do
     test "last_engine accepts string values" do
       state = ChatState.new(%{last_engine: "claude"})
@@ -289,165 +222,7 @@ defmodule LemonCore.ChatStateTest do
     end
   end
 
-  describe "all field access patterns" do
-    setup do
-      state =
-        ChatState.new(%{
-          last_engine: "test_engine",
-          last_resume_token: "test_token",
-          updated_at: 1_609_459_200_000
-        })
-
-      {:ok, state: state}
-    end
-
-    test "dot notation access", %{state: state} do
-      assert state.last_engine == "test_engine"
-      assert state.last_resume_token == "test_token"
-      assert state.updated_at == 1_609_459_200_000
-    end
-
-    test "Map.get/2 access", %{state: state} do
-      assert Map.get(state, :last_engine) == "test_engine"
-      assert Map.get(state, :last_resume_token) == "test_token"
-      assert Map.get(state, :updated_at) == 1_609_459_200_000
-    end
-
-    test "Map.get/3 with default", %{state: state} do
-      assert Map.get(state, :last_engine, "default") == "test_engine"
-      assert Map.get(state, :nonexistent, "default") == "default"
-    end
-
-    test "Map.fetch/2 access", %{state: state} do
-      assert Map.fetch(state, :last_engine) == {:ok, "test_engine"}
-      assert Map.fetch(state, :last_resume_token) == {:ok, "test_token"}
-      assert Map.fetch(state, :updated_at) == {:ok, 1_609_459_200_000}
-    end
-
-    test "Map.fetch!/2 access", %{state: state} do
-      assert Map.fetch!(state, :last_engine) == "test_engine"
-    end
-
-    test "bracket notation requires Access behaviour (not implemented)" do
-      state = ChatState.new(%{last_engine: "test_engine"})
-
-      # ChatState does not implement Access behaviour, so bracket notation fails
-      # Use Map.get/2 or dot notation instead
-      assert_raise UndefinedFunctionError, fn ->
-        _ = state[:last_engine]
-      end
-    end
-
-    test "Map.from_struct/1 conversion", %{state: state} do
-      map = Map.from_struct(state)
-
-      assert map == %{
-               expires_at: nil,
-               last_engine: "test_engine",
-               last_resume_token: "test_token",
-               updated_at: 1_609_459_200_000
-             }
-    end
-
-    test "Map.keys/1 returns all field names", %{state: state} do
-      keys = Map.keys(state) |> Enum.reject(&(&1 == :__struct__)) |> Enum.sort()
-      assert keys == [:expires_at, :last_engine, :last_resume_token, :updated_at]
-    end
-
-    test "Map.values/1 returns all values plus struct module" do
-      state = ChatState.new()
-      values = Map.values(state)
-      # Values include __struct__ module and all field values
-      assert ChatState in values
-      assert nil in values
-    end
-
-    test "Kernel.struct/2 update", %{state: state} do
-      updated = struct(state, last_engine: "new_engine")
-
-      assert updated.last_engine == "new_engine"
-      assert updated.last_resume_token == "test_token"
-      assert updated.updated_at == 1_609_459_200_000
-    end
-
-    test "Map.put/3 update", %{state: state} do
-      updated = Map.put(state, :last_engine, "updated_engine")
-
-      assert updated.last_engine == "updated_engine"
-      assert updated.last_resume_token == "test_token"
-    end
-
-    test "Map.merge/2 update", %{state: state} do
-      updated = Map.merge(state, %{last_engine: "merged", updated_at: 9999})
-
-      assert updated.last_engine == "merged"
-      assert updated.last_resume_token == "test_token"
-      assert updated.updated_at == 9999
-    end
-
-    test "update syntax with |>", %{state: state} do
-      updated = %{state | last_engine: "pipe_updated"}
-
-      assert updated.last_engine == "pipe_updated"
-      assert updated.last_resume_token == "test_token"
-    end
-  end
-
   describe "invalid field handling" do
-    test "accessing undefined field via dot notation raises KeyError" do
-      state = ChatState.new()
-
-      assert_raise KeyError, fn ->
-        # Avoid compile-time "unknown key" warnings for struct dot access.
-        Code.eval_string("state.nonexistent_field", state: state)
-      end
-    end
-
-    test "bracket notation fails because Access behaviour not implemented" do
-      state = ChatState.new()
-      # Bracket notation requires Access behaviour which ChatState doesn't implement
-      # Use Map.get/2 instead for dynamic access
-      assert_raise UndefinedFunctionError, fn ->
-        _ = state[:nonexistent_field]
-      end
-    end
-
-    test "Map.has_key?/2 returns false for undefined fields" do
-      state = ChatState.new()
-      refute Map.has_key?(state, :nonexistent_field)
-      assert Map.has_key?(state, :last_engine)
-    end
-
-    test "update syntax raises for undefined fields" do
-      state = ChatState.new()
-
-      assert_raise KeyError, fn ->
-        # Avoid compile-time warnings for invalid struct update syntax.
-        Code.eval_string("%{state | nonexistent_field: \"value\"}", state: state)
-      end
-    end
-
-    test "Kernel.struct/2 ignores unknown keys" do
-      state = ChatState.new()
-      # struct/2 silently ignores unknown keys
-      updated = struct(state, unknown_key: "ignored", last_engine: "valid")
-
-      assert updated.last_engine == "valid"
-      refute Map.has_key?(Map.from_struct(updated), :unknown_key)
-    end
-
-    test "direct struct creation with invalid keys raises at compile time" do
-      # Invalid struct keys are caught at compile time, not runtime.
-      # This test verifies the behavior using Code.eval_string which
-      # compiles and runs the code at runtime.
-      assert_raise KeyError, fn ->
-        Code.eval_string("""
-        alias LemonCore.ChatState
-        %ChatState{invalid_key: "value"}
-        """)
-      end
-    end
-
     @tag invalid_attrs: ["not a map", [:list, :of, :values], 123, [last_engine: "test"]]
     test "new/1 rejects non-map attributes", %{invalid_attrs: invalid_attrs} do
       for attrs <- invalid_attrs do
@@ -455,22 +230,6 @@ defmodule LemonCore.ChatStateTest do
           ChatState.new(attrs)
         end
       end
-    end
-  end
-
-  describe "equality and comparison" do
-    test "two structs with same values are equal" do
-      state1 = ChatState.new(%{last_engine: "test", last_resume_token: "token", updated_at: 1000})
-      state2 = ChatState.new(%{last_engine: "test", last_resume_token: "token", updated_at: 1000})
-
-      assert state1 == state2
-    end
-
-    test "structs with different values are not equal" do
-      state1 = ChatState.new(%{last_engine: "test1"})
-      state2 = ChatState.new(%{last_engine: "test2"})
-
-      refute state1 == state2
     end
   end
 

@@ -94,7 +94,8 @@ defmodule LemonCore.NodeRegistry do
 
   @doc """
   Whether live node metadata carries the native run privacy descriptor:
-  `coding_agent.run` version 1 with `nativePrivacyContext` version 1. Admission
+  `coding_agent.run` version 2 with `executionContext` and `nativePrivacyContext`
+  version 1. Admission
   and pinned private dispatch share this predicate.
   """
   @spec native_privacy_context_supported?(term()) :: boolean()
@@ -102,14 +103,22 @@ defmodule LemonCore.NodeRegistry do
     case metadata do
       %{
         capabilities: %{
-          "coding_agent.run" => %{"version" => 1, "nativePrivacyContext" => %{"version" => 1}}
+          "coding_agent.run" => %{
+            "version" => 2,
+            "executionContext" => %{"version" => 1},
+            "nativePrivacyContext" => %{"version" => 1}
+          }
         }
       } ->
         true
 
       %{
         "capabilities" => %{
-          "coding_agent.run" => %{"version" => 1, "nativePrivacyContext" => %{"version" => 1}}
+          "coding_agent.run" => %{
+            "version" => 2,
+            "executionContext" => %{"version" => 1},
+            "nativePrivacyContext" => %{"version" => 1}
+          }
         }
       } ->
         true

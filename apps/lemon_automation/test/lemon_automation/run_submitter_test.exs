@@ -87,10 +87,9 @@ defmodule LemonAutomation.RunSubmitterTest do
 
   defp sample_job(attrs \\ %{}) do
     memory_file =
-      Path.join(
-        System.tmp_dir!(),
+      LemonCore.Paths.home_path([
         "lemon_cron_memory_run_submitter_#{System.unique_integer([:positive])}.md"
-      )
+      ])
 
     base = %{
       id: "cron_1",
@@ -317,7 +316,7 @@ defmodule LemonAutomation.RunSubmitterTest do
     assert params.tool_policy.blocked_tools == ["cron"]
     assert params.tool_policy.deny == ["bash"]
     assert params.tool_policy.require_approval == ["write"]
-    assert params.tool_policy.approvals["write"] == "always"
+    assert params.tool_policy.approvals["write"] == :always
     assert SessionKey.valid?(params.session_key)
     assert params.session_key != job.session_key
     assert job.deliver_to == "none"

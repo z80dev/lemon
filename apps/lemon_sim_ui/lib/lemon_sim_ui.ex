@@ -21,8 +21,6 @@ defmodule LemonSimUi do
         formats: [:html, :json],
         layouts: [html: LemonSimUi.Layouts]
 
-      use Gettext, backend: LemonSimUi.Gettext
-
       import Plug.Conn
       unquote(verified_routes())
     end
@@ -58,8 +56,6 @@ defmodule LemonSimUi do
 
   defp html_helpers do
     quote do
-      use Gettext, backend: LemonSimUi.Gettext
-
       import Phoenix.HTML
       import LemonSimUi.CoreComponents
 

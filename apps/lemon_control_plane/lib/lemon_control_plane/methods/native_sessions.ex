@@ -98,6 +98,12 @@ defmodule LemonControlPlane.Methods.NativeSessions do
      {:unavailable, "Native session runtime unavailable", %{"reason" => Atom.to_string(reason)}}}
   end
 
+  def failure(:outcome_unknown) do
+    {:error,
+     {:unavailable, "Native session mutation outcome is unknown; reconcile before retrying",
+      %{"reason" => "outcome_unknown", "retrySafe" => false}}}
+  end
+
   def failure(:restore_failed) do
     {:error,
      {:internal_error, "Native session file restore failed", %{"reason" => "restore_failed"}}}

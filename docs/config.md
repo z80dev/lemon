@@ -52,10 +52,12 @@ thinking_level = "medium"
 enabled = true
 reserve_tokens = 16384
 keep_recent_tokens = 20000
+# threshold_percent = 80      # optional: compact above 80% of the context window
+# threshold_tokens = 150000   # optional: fixed token threshold (overrides percent)
 
 [runtime.retry]
 # Session-level retry of transient provider failures (429, 5xx, overloaded,
-# network) that happen before any output. Exponential backoff with jitter from
+# network) that happen before any output. Exponential backoff from
 # base_delay_ms; a retry-after hint from the provider replaces the backoff.
 enabled = true
 max_retries = 3
@@ -191,6 +193,12 @@ chat_id = 12345678
 agent_id = "default"
 ```
 
+Tool policies are parsed strictly by `LemonCore.ToolPolicy`. Unknown profiles,
+unknown or conflicting keys, malformed allow/deny/block/approval values, and
+unsupported approval modes fail closed rather than falling back to full
+access. Omitting `[profiles.<id>.tool_policy]` retains the explicit runtime
+default; supplying an invalid table produces a deny-all policy.
+
 `LemonCore.ProfileStore` is the lifecycle owner for user-managed profiles.
 Commands such as `lemon profile create research` patch only the selected
 `[profiles.<id>]` table, preserving unrelated global-config keys and comments.
@@ -270,25 +278,39 @@ model = "@default"
 default = "openai:gpt-4o"
 smol = "openai:gpt-4o-mini"
 slow = "@review"
+plan = "@slow"
+commit = "@smol"
 review = "anthropic:claude-sonnet-4-20250514"
 task = "@smol"          # Optional: omitted task.model otherwise inherits its parent
 compaction = "@smol"    # Optional: takes precedence over configured smol
 ```
 
 Native session model overrides and explicit `task.model` accept `@default`,
-`@smol`, `@slow`, and any configured custom role. Aliases expand recursively.
+`@smol`, `@slow`, `@plan`, `@commit`, and any configured custom role. Aliases expand recursively.
 Concrete model specs retain their existing behavior; bare `smol` is still a model
 ID, not the `@smol` role. Role names remain strings and are never converted into
 atoms. Empty/non-string mappings, unknown custom aliases, and alias cycles
 produce configuration/model-resolution errors rather than silently ignoring an
 override. A configured role still needs to resolve to a valid concrete model.
 
-Without a mapping, the three built-ins use the configured default for a native
+Without a mapping, these built-ins use the configured default for a native
 session and the current parent model for a task. They do not select a new provider
 or a hard-coded small/slow model. A default of `@default` requires a role mapping
 that ultimately reaches a concrete model; it cannot fall back to itself.
 Omitting `task.model` preserves parent inheritance unless `model_roles.task` is
 configured; an explicit task model takes precedence.
+
+Entering plan mode automatically selects `model_roles.plan` only when configured,
+whether the native session is live, stopped, or being created before its first run.
+The stopped path uses the saved session's project configuration and journals the
+planning model without starting an agent or requesting a model response. Project
+overrides still take precedence over user-global roles; a profile's bootstrap
+workspace does not replace the session's project configuration.
+Exiting or approving a plan restores the execution model recorded on entry,
+including after durable session resume. Invalid planning models fail before the
+mode, selected model, branch, or new-session resume binding changes. `@commit` is
+available to explicit model selectors and delegated tasks; it does not
+automatically invoke a commit tool.
 
 Compaction and abandoned-branch summaries choose `model_roles.compaction` first,
 then `model_roles.smol` **only if configured**, otherwise the active session model.
@@ -325,6 +347,25 @@ reviewer = "@slow"         # model or @role per persona ID
   at launch.
 - `agent_models`: per-persona model or `@role` that replaces the persona's own
   `model`/`role`; an explicit task `model` still wins.
+
+### Automatic Thinking
+
+Set `[defaults] thinking_level = "auto"` to classify each user prompt before its
+model turn. Configure `model_roles.tiny` or `model_roles.smol` explicitly for the
+classifier; `tiny` takes precedence. The classifier receives bounded latest-user
+text with no tools, and selects `low`, `medium`, `high`, or `xhigh`. Its effort is
+mapped to the active model's declared supported levels, so `auto` is never sent
+to a provider. Models without reasoning support receive no reasoning option.
+
+Classification runs in the supervised agent task, not the session server, with a
+five-second deadline. A missing classifier, failure, timeout, or invalid answer
+uses supported `medium` effort and continues the turn. An explicit `ultrathink`
+request selects the active model's highest supported effort without a classifier
+call. The configured `auto` selector persists across turns and session resumes;
+the internal classifier response is not appended to the conversation.
+Classifier calls are separate maintenance usage, not part of the main agent-turn
+budget ledger. An already-exhausted main-response budget prevents classification.
+
 
 ### Named Execution Nodes
 
@@ -374,6 +415,11 @@ pairing. `LEMON_NODE_TOKEN` supplies an existing session token. Prefer these
 environment variables to `--operator-token` / `--token` so credentials do not
 enter shell history. These values are runtime CLI inputs, not `config.toml`
 keys.
+
+`LEMON_NODE_CAPABILITIES` (or `--capabilities`) sets the destination-local tool
+ceiling to `all` or a comma-separated list such as `read,write,bash`. Every
+remote execution context is intersected with this ceiling before the local
+executor starts.
 
 Non-loopback controllers require `wss://` by default. Plaintext `ws://` needs
 `--allow-insecure-controller` or
@@ -464,7 +510,7 @@ place the shared server token in `VITE_*` configuration.
 - `LEMON_DOCKER_TERMINAL_READ_ONLY_ROOTFS`, `LEMON_DOCKER_TERMINAL_TMPFS_SIZE`, `LEMON_DOCKER_TERMINAL_ALLOWED_IMAGES`
 - `LEMON_SSH_TERMINAL_TARGET`, `LEMON_SSH_TERMINAL_WORKDIR`, `LEMON_SSH_TERMINAL_PORT`, `LEMON_SSH_TERMINAL_CONNECT_TIMEOUT`, `LEMON_SSH_TERMINAL_STRICT_HOST_KEY_CHECKING`, `LEMON_SSH_TERMINAL_ALLOWED_TARGETS`
 - `LEMON_GATEWAY_HEALTH_PORT`, `LEMON_ROUTER_HEALTH_PORT`
-- `LEMON_NODE_OPERATOR_TOKEN`, `LEMON_NODE_TOKEN`, `LEMON_NODE_ALLOW_INSECURE_CONTROLLER`
+- `LEMON_NODE_OPERATOR_TOKEN`, `LEMON_NODE_TOKEN`, `LEMON_NODE_ALLOW_INSECURE_CONTROLLER`, `LEMON_NODE_CAPABILITIES`
 - `LEMON_LOG_FILE`, `LEMON_LOG_LEVEL`
 - `BRAVE_API_KEY`, `PERPLEXITY_API_KEY`, `OPENROUTER_API_KEY`, `FIRECRAWL_API_KEY`
 
@@ -1029,6 +1075,11 @@ selected as `<id>:<model>` or `<id>/<model>` in `default_model`, `/model`,
 `model_roles`, task/compaction selectors and `provider_routing.fallback_providers`,
 and they appear in the TUI `/model` picker once the provider has a credential.
 
+Qualified `[defaults] model` selectors resolve their provider before default
+provider routing, including when no `[defaults] provider` is set. Provider-native
+IDs such as `qwen3:32b`, and models explicitly listed under the selected provider,
+remain that provider's model IDs rather than being split as new selectors.
+
 ```toml
 [providers.my-gateway]
 api = "openai_completions"        # openai_completions | openai_responses |
@@ -1228,6 +1279,7 @@ Provider route previews are controlled by `runtime.provider_routing`:
 [runtime.provider_routing]
 enabled = true
 fallback_providers = ["zai", "anthropic"]
+fallback_models = ["openai:gpt-4o-mini", "@slow"]
 default_pool = "burst"
 default_profile = "ops"
 require_credentials = true
@@ -1259,14 +1311,65 @@ pool's starting provider through `LemonAgent.ModelRuntime.ProviderPoolRotator`,
 a supervised BEAM process. Explicit user model specs are never rewritten at
 resolution time.
 
-The supervised coding-agent loop also wraps streams — default-model and
-explicit-model sessions alike — with the same fallback ordering (for an
-explicit model, candidates are other credential-ready providers hosting the
-same model id; the wrapper is a no-op when there are none). If a provider returns a terminal stream error before useful
-assistant content or tool calls are emitted, Lemon retries the same turn against
-the next credential-ready fallback provider with the same model id. Once visible
-content or a tool call has started, the error is surfaced instead of replayed so
-the transcript cannot duplicate partial output.
+The supervised coding-agent loop also wraps streams for default-model and
+explicit-model sessions. `fallback_models` selects an ordered chain of concrete
+`provider:model` selectors or `@role` aliases; alternatives on the same provider
+are allowed. Existing `fallback_providers` routes remain useful when providers
+host the same model id. Each candidate resolves its own provider options and
+credentials; credentials from one provider are never reused for another.
+
+The wrapper preserves explicit authentication-refusal results instead of
+converting them into unset API keys. In particular, missing or invalid Codex
+`auth_source` cannot enable provider-level fallback to ambient tokens.
+
+Idle and live model switches bind request options to their actual owning model
+before classification or completion. Selected-login refusal stays authoritative
+after a switch; switching to a keyless provider clears the previous authority.
+Fallback sanitation uses the current invocation's options owner, not the session's
+startup provider. Same-provider explicit headers and pool precedence are preserved.
+Same-provider rebinding retains the original caller header layer separately:
+provider defaults remain below the destination model's headers, and only genuine
+caller overrides take precedence. Headers derived from the source model never
+become caller overrides on a later request.
+
+Before output is committed, provider failures can move to the next model and
+rate/usage limits can rotate through configured credential-pool entries.
+Authentication failures refresh the same OAuth credential once on HTTP 401, then
+rotate if refresh fails or the refreshed token is rejected. Static keys and
+environment references cannot refresh. Provider retry hints are retained for
+credential cooldowns. The model/credential that commits is pinned for subsequent
+turns in that session, preserving provider caches.
+
+For generic OAuth providers, `auth_source = "oauth"` makes the selected stored
+login authoritative for both initial resolution and 401 refresh:
+`oauth_secret`, then `api_key_secret`, then the provider's default secret name.
+A missing selected login fails closed rather than using an ambient environment
+key, inline key, or another account's default login. Other auth modes keep their
+existing environment-first API-key precedence.
+
+Malformed requests (for example HTTP 400) are terminal, including failures before
+a stream starts. Context overflow reaches the existing once-per-turn compaction
+recovery instead of replaying an unchanged prompt on another provider.
+
+No automatic retry, credential rotation, or model fallback occurs after text,
+thinking, or a tool-call event is committed, including whitespace text and
+content carried only by a terminal message. The failure is surfaced with its
+partial output, without executing unfinished tool calls. Caller cancellation
+stays cancellation. This rule also applies to `[runtime.retry]` transient retries.
+
+For a manual source-checkout smoke run without live credentials, run
+`MIX_ENV=test mix run --no-start scripts/provider_fallback_smoke.exs`. It starts
+an isolated native session and loopback fixture endpoint, rejects the primary
+model with HTTP 503, and verifies the configured alternate model answers and
+the session is persisted. The smoke script is not part of the CI test lane.
+
+`MIX_ENV=test mix run --no-start scripts/live_provider_ownership_smoke.exs`
+exercises public native Session and Agent model switches, missing-selected-login
+refusal (including plan-role selection), successful keyless transitions,
+switch-then-fallback header isolation and same-provider rebinding with no caller
+headers and with genuine caller overrides, using fixture credentials and loopback
+HTTP only. Its refusal and credential-leak checks scan complete captured events
+and logs, including large tool-schema snapshots.
 
 Google Gemini CLI onboarding (`lemon model --provider gemini`, or
 `./bin/lemon model --provider gemini` from a checkout) resolves OAuth
@@ -1392,7 +1495,7 @@ Lemon includes web tools under `runtime.tools.web`. For full setup and troublesh
 ```toml
 [runtime.tools.web.search]
 enabled = true
-provider = "brave"   # brave | exa | perplexity | duckduckgo | searxng | extension id
+provider = "brave"   # brave | exa | perplexity | tavily | kagi | jina | duckduckgo | searxng | extension id
 max_results = 5
 timeout_seconds = 30
 cache_ttl_minutes = 15
@@ -1416,6 +1519,11 @@ api_key_secret = "SEARXNG_API_KEY"
 [runtime.tools.web.search.providers.exa]
 # Optional if EXA_API_KEY is set.
 api_key = "<exa-api-key>"
+
+# tavily, kagi and jina take the same shape (api_key or api_key_secret);
+# TAVILY_API_KEY / KAGI_API_KEY / JINA_API_KEY are used when unset.
+[runtime.tools.web.search.providers.tavily]
+api_key_secret = "TAVILY_API_KEY"
 
 [runtime.tools.web.fetch]
 enabled = true
@@ -1534,6 +1642,12 @@ plan-mode gate; reload replaces that inventory so removed authority is not kept
 alive by an old host lookup. Neither WASM tools nor the disclosure bridge tools
 can be host targets, preventing recursive calls through the deferred catalog.
 
+Target closures are wrapped before disclosure partitions the catalog. Direct,
+bridged and host execution restore secret arguments before target hooks and
+approval checks. Plan-mode bridge and host writes reuse the session's restricted
+write/edit wrappers, including the final directory check after hook replacement;
+schema deferral does not create another execution authority.
+
 The tool list is computed at session start and on extension reload, never per
 turn. `extensions_status` reports the active profile, the exposed and deferred
 tool names, estimated schema tokens before and after disclosure, and a
@@ -1569,7 +1683,11 @@ programmatically with `CodingAgent.Session.start_link(tool_disclosure: [profile:
 - `runtime.tools.wasm`: WASM sidecar runtime controls and discovery paths.
 - `runtime.tools.disclosure`: deferring tool schemas behind `tool_search` / `tool_invoke` (see [Tool Disclosure](#tool-disclosure)).
 - `profiles.<agent_id>`: assistant profiles (identity + defaults) used by gateway/control-plane.
-- `runtime.compaction`: context compaction settings.
+- `runtime.compaction`: context compaction settings. Automatic compaction runs when the request
+  exceeds the context window minus `reserve_tokens`. Optional `threshold_percent` (integer 1–100,
+  percent of the window) or `threshold_tokens` (positive integer; wins over the percent) lower that
+  threshold; they never raise it above the reserve limit. Invalid values fail config validation.
+  `/context` and `sessions.context` report the effective threshold.
 - `runtime.retry`: session retry of transient provider failures (backoff + retry-after).
 - `runtime.max_tool_turns`: optional per-prompt cap on tool-using turns (default unlimited).
 - `runtime.secret_obfuscation`: opt-in placeholder obfuscation of secrets in provider-visible text ([details](security/secret-obfuscation.md)).

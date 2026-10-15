@@ -40,6 +40,7 @@ import {
 	goalCommand,
 	queueCommand,
 	redirectCommand,
+	retryCommand,
 	runsCommand,
 	steerCommand,
 } from "./run.ts";
@@ -104,6 +105,7 @@ export function createCommandRegistry(options: RegistryOptions = {}): CommandReg
 		queueCommand,
 		steerCommand,
 		redirectCommand,
+		retryCommand,
 		backgroundCommand,
 		btwCommand,
 		runsCommand,

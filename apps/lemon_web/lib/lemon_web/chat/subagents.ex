@@ -15,7 +15,7 @@ defmodule LemonWeb.Chat.Subagents do
 
   @max_nodes 50
   @max_depth 8
-  @statuses ~w(queued running completed error killed cancelled lost tracking_lost)
+  @statuses ~w(queued running completed error failed killed cancelled canceled timeout aborted lost tracking_lost)
 
   def snapshot(session_key, run_id) do
     case runtime(:list_tasks, []) do
@@ -26,6 +26,56 @@ defmodule LemonWeb.Chat.Subagents do
     _ -> unavailable()
   catch
     _, _ -> unavailable()
+  end
+
+  @doc "Renders the shared recovery authority without keeping another task store."
+  def from_recovery(%{"status" => "ok", "items" => items} = projection) when is_list(items) do
+    truncated? = projection["truncated"] == true or length(items) > @max_nodes
+    items = Enum.take(items, @max_nodes)
+    parents = Map.new(items, &{&1["runId"], &1["parentRunId"]})
+
+    nodes =
+      Enum.flat_map(items, fn row ->
+        case identifier(row["runId"]) do
+          nil ->
+            []
+
+          id ->
+            [
+              %{
+                id: id,
+                dom_id:
+                  "subagent-" <> Base.url_encode64(:crypto.hash(:sha256, id), padding: false),
+                parent_id: identifier(row["parentRunId"]),
+                task_id: identifier(row["taskId"]),
+                depth: recovery_depth(id, parents, %{}, 0),
+                label: "Child agent",
+                status: status(row["status"]),
+                event_count: 0,
+                tools: [],
+                session_path: nil
+              }
+            ]
+        end
+      end)
+
+    %{
+      status: :available,
+      nodes: nodes,
+      truncated?: truncated?,
+      active_count: Enum.count(nodes, &(&1.status in ["queued", "running", "tracking_lost"]))
+    }
+  end
+
+  def from_recovery(_), do: unavailable()
+
+  defp recovery_depth(id, parents, seen, depth) do
+    parent = parents[id]
+
+    if depth < @max_depth - 1 and is_binary(parent) and Map.has_key?(parents, parent) and
+         not Map.has_key?(seen, parent),
+       do: recovery_depth(parent, parents, Map.put(seen, id, true), depth + 1),
+       else: depth
   end
 
   defp project(tasks, session_key, run_id) do

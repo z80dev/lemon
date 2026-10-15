@@ -15,6 +15,7 @@ defmodule LemonControlPlane.Methods.SessionsFork do
   @impl true
   def handle(params, _ctx) do
     with {:ok, source, cwd} <- NativeSessions.target(params),
+         {:ok, entry_id} <- entry_id(params),
          {:ok, agent_id} <- SessionLifecycle.fork_agent_id(source) do
       destination =
         SessionKey.channel_peer(%{
@@ -26,11 +27,12 @@ defmodule LemonControlPlane.Methods.SessionsFork do
         })
 
       with {:ok, _} <- NativeSessions.string(%{"sessionKey" => destination}, "sessionKey", 1024) do
-        case AgentRuntime.call(
-               :session_fork,
-               [source, cwd, destination],
-               {:error, :outcome_unknown}
-             ) do
+        args =
+          if entry_id,
+            do: [source, cwd, destination, [entry_id: entry_id]],
+            else: [source, cwd, destination]
+
+        case AgentRuntime.call(:session_fork, args, {:error, :outcome_unknown}) do
           :ok ->
             case SessionLifecycle.register_fork(source, destination) do
               :ok -> {:ok, %{"sessionKey" => destination, "sourceSessionKey" => source}}
@@ -52,6 +54,9 @@ defmodule LemonControlPlane.Methods.SessionsFork do
       {:error, reason} -> NativeSessions.failure(reason)
     end
   end
+
+  defp entry_id(%{"entryId" => _} = params), do: NativeSessions.string(params, "entryId", 256)
+  defp entry_id(_params), do: {:ok, nil}
 
   defp uncertain(destination, source) do
     {:error,

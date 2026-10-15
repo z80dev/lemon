@@ -14,7 +14,6 @@ defmodule LemonSim do
 
   - storing normalized simulation state (`LemonSim.Kernel.State`)
   - ingesting events with decision gating (`LemonSim.Kernel.Updater`)
-  - coalescing high-frequency event streams (`LemonSim.Kernel.EventCoalescer`)
   - projecting state into per-decision context (`LemonSim.Kernel.Projector`)
   - generating the tools exposed for the current decision turn
     (`LemonSim.Kernel.ActionSpace`)

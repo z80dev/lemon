@@ -104,9 +104,22 @@ A session opens at `/chat/<session-key>`:
 - **Split view:** ⌘\\ or "Open in split" shows two sessions side by side
   (`/chat/<key>?split=<other-key>`); each pane runs independently.
 
-After a reconnect the page re-checks the active run and continues streaming
-without repeating the final answer. Controls that change state are disabled
-while the connection is down; nothing is queued offline.
+After reconnecting, the page uses the same bounded `sessions.snapshot` authority
+as the TUI. It replaces the selected branch's transcript, tool states, current
+approvals, todo/plan projection, and owned child/process status rather than
+replaying missed mutations. An approval answered elsewhere does not remain
+actionable. Unknown process/tool outcomes stay unknown; recovery never reruns them.
+
+If the event queue overflows, live delivery is fenced until reconciliation
+succeeds. Events racing a snapshot cause a bounded retry; a failed owner read
+shows recovery as unavailable, not as proof that a run finished. Recovered active
+answers are refreshed as replacement snapshots (on the existing status cadence)
+rather than appended to uncertain old deltas. Terminal state comes from the same
+authority, so the final answer is shown once. Recovery responses are bounded and
+credential-redacted; an omitted tail is not proof of a complete transcript.
+Controls that change state remain disabled while disconnected; nothing is
+queued offline. See the [delivery boundary](../platform/bus-events.md#current-delivery-and-recovery-boundary)
+for paths that remain best effort.
 
 ## Sessions and profiles
 

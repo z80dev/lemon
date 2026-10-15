@@ -112,6 +112,12 @@ api_key_secret = "google_api_key"
 provider = "anthropic"
 model = "claude-sonnet-5"
 thinking_level = "medium"
+# Use "auto" for per-prompt effort selection; configure a classifier role below.
+#
+# [model_roles]
+# smol = "openai:gpt-4o-mini"  # auto-thinking classifier (tiny takes precedence)
+# plan = "anthropic:claude-sonnet-5"
+# commit = "@smol"
 
 [runtime]
 theme = "default"
@@ -128,6 +134,7 @@ extension_paths = []
 # [runtime.provider_routing]
 # enabled = true
 # fallback_providers = ["zai"]
+# fallback_models = ["openai:gpt-4o-mini", "@plan"] # ordered provider:model or @role selectors
 # default_pool = "burst"
 # require_credentials = true
 #
@@ -142,6 +149,10 @@ extension_paths = []
 enabled = true
 reserve_tokens = 16384
 keep_recent_tokens = 20000
+# Optional earlier trigger. threshold_tokens (fixed count) overrides threshold_percent
+# (1-100% of the model's context window); both are capped by window - reserve_tokens.
+# threshold_percent = 80
+# threshold_tokens = 150000
 
 [runtime.retry]
 enabled = true
@@ -278,7 +289,7 @@ queue_mode = "collect"
 
 # [runtime.tools.web.search]
 # enabled = true
-# provider = "brave"      # brave | exa | perplexity | duckduckgo | searxng | extension id
+# provider = "brave"      # brave | exa | perplexity | tavily | kagi | jina | duckduckgo | searxng | extension id
 # max_results = 5
 # timeout_seconds = 30
 # cache_ttl_minutes = 15
@@ -293,6 +304,9 @@ queue_mode = "collect"
 
 # [runtime.tools.web.search.providers.exa]
 # api_key = "<exa-api-key>" # optional if EXA_API_KEY is set
+
+# [runtime.tools.web.search.providers.tavily]   # also: kagi, jina
+# api_key = "<tavily-api-key>" # optional if TAVILY_API_KEY / KAGI_API_KEY / JINA_API_KEY is set
 
 # [runtime.tools.web.fetch]
 # enabled = true

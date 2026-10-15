@@ -333,6 +333,15 @@ defmodule LemonControlPlane.Protocol.Schemas do
       required: %{"sessionKey" => :string},
       optional: %{"limit" => :integer}
     },
+    "sessions.snapshot" => %{
+      required: %{"sessionKey" => :string},
+      optional: %{
+        "cwd" => :string,
+        "limit" => :integer,
+        "expectedIdentity" => :map,
+        "continuationFrom" => :map
+      }
+    },
     "sessions.create" => %{
       required: %{"sessionKey" => :string, "cwd" => :string},
       optional: %{}
@@ -361,8 +370,17 @@ defmodule LemonControlPlane.Protocol.Schemas do
         "confirmationToken" => :string
       }
     },
+    "sessions.navigate" => %{
+      required: %{"sessionKey" => :string, "cwd" => :string, "entryId" => :string},
+      optional: %{"summarize" => :boolean}
+    },
+    "sessions.label" => %{
+      required: %{"sessionKey" => :string, "cwd" => :string, "entryId" => :string},
+      optional: %{"label" => :any}
+    },
     "sessions.fork" => %{
-      required: %{"sessionKey" => :string, "cwd" => :string}
+      required: %{"sessionKey" => :string, "cwd" => :string},
+      optional: %{"entryId" => :string}
     },
     "sessions.stats" => %{
       optional: %{

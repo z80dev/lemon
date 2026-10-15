@@ -5,6 +5,7 @@ defmodule LemonControlPlane.RemoteImageExecutionTest do
   alias CodingAgent.Executor.RemoteRequestCodec
   alias LemonAi.Types.{ImageContent, TextContent}
   alias LemonControlPlane.ImageInputs
+  alias LemonCore.ExecutionContext
   alias LemonGateway.ExecutionRequest
 
   @tag :tmp_dir
@@ -13,11 +14,13 @@ defmodule LemonControlPlane.RemoteImageExecutionTest do
   } do
     wire = [%{"type" => "image", "mime_type" => "image/png", "data" => png()}]
     assert {:ok, [%ImageContent{}] = images} = ImageInputs.validate(wire)
+    assert {:ok, context} = ExecutionContext.new(run_id: "image-only")
 
     request = %ExecutionRequest{
       run_id: "image-only",
       session_key: "agent:vision:main",
       prompt: "",
+      execution_context: context,
       images: images
     }
 
@@ -49,7 +52,18 @@ defmodule LemonControlPlane.RemoteImageExecutionTest do
   @tag :tmp_dir
   test "neither malformed content nor empty requests bypass image admission", %{tmp_dir: cwd} do
     state = %Worker{name: "vision-node", default_cwd: cwd}
-    base = %{"version" => 1, "prompt" => "", "images" => []}
+    assert {:ok, context} = ExecutionContext.new(run_id: "image-invalid")
+    assert {:ok, context} = ExecutionContext.for_remote(context, nil)
+    assert {:ok, encoded_context} = ExecutionContext.encode(context)
+
+    base = %{
+      "version" => 2,
+      "runId" => "image-invalid",
+      "executionContext" => encoded_context,
+      "prompt" => "",
+      "images" => []
+    }
+
     assert {:error, :missing_prompt} = Worker.execution_request(base, state, "empty")
 
     assert {:error, :missing_prompt} =
@@ -78,8 +92,10 @@ defmodule LemonControlPlane.RemoteImageExecutionTest do
         run_id: "image-invalid",
         session_key: "agent:vision:main",
         prompt: "hello",
+        execution_context: context,
         images: bad
       }
+
       assert {:error, _} = RemoteRequestCodec.encode(request)
     end
   end

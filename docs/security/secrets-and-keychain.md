@@ -14,7 +14,36 @@ environment fallback paths.
 | Encrypted secret store | `LemonCore.Secrets.set/3` (AES-256-GCM at rest) | `LemonCore.Secrets.get/2`, `resolve/2`, `exists?/2` | `resolve/2` uses store, enabled external sources, then same-name env when `env_fallback: true` | `apps/lemon_core/lib/lemon_core/secrets.ex` |
 | External secret sources | Read-only; no external result is persisted | `LemonCore.Secrets.External` invokes 1Password, Bitwarden, or argv-only command adapters under shared supervision | Ordered by priority/id; a source miss continues, but any enabled-source failure stops before env fallback | `apps/lemon_core/lib/lemon_core/secrets/external.ex`, `apps/lemon_core/lib/lemon_core/secrets/source_runner.ex` |
 | External bootstrap credentials | Existing Lemon encrypted secret or same-name env only | `LemonCore.Secrets.resolve_local/2` from a source adapter | Never invokes an external source, preventing recursion | `apps/lemon_core/lib/lemon_core/secrets.ex`, `apps/lemon_core/lib/lemon_core/secrets/source/` |
-| Coding Agent provider secret refs | Configured `api_key_secret` names in provider config | `CodingAgent.Session.resolve_secret_api_key/1` -> `LemonCore.Secrets.resolve/2` | Store first, enabled external sources second, env fallback last | `apps/coding_agent/lib/coding_agent/session.ex` |
+| Coding Agent provider secret refs | Configured `api_key_secret` / `oauth_secret` names in provider config | `LemonAgent.ModelRuntime.Credentials` -> credential-aware OAuth resolution | Ordinary API-key refs use store, enabled external sources, then env; selected OAuth refs never use same-name env fallback | `apps/lemon_agent/lib/lemon_agent/model_runtime/credentials.ex` |
+
+## Selected Login Authority
+
+With `auth_source = "oauth"`, the selected login is authoritative for model
+requests. A missing, expired or rejected login fails before provider HTTP; static
+keys, ambient API-key variables and legacy/default secrets cannot replace it.
+Encoded OAuth records are resolved to access credentials, not sent as raw JSON.
+This refusal also applies when the model otherwise allows keyless requests.
+
+Runtime options mark this selection with `api_key_authoritative`. The per-request
+credential callback supplies the concrete token. A `nil` or empty-string refusal
+cannot revive an earlier authoritative token; ordinary non-authoritative callbacks
+retain their cached-key fallback. The options builder does not fetch the login again.
+API-key fields returned by `ProviderConfigResolver` retain the same authority
+marker and use credential-aware secret resolution; project/service-account
+secret fields retain their existing raw-data contract.
+
+Explicit credential-pool/default routing policy is unchanged: an unavailable
+pool entry may still use the separately configured usable default credential.
+Normal API-key and keyless requests keep their existing resolution behavior.
+Low-level Anthropic-protocol calls use only the target provider's environment
+variables; `ANTHROPIC_API_KEY` is not an implicit key for Kimi or another provider.
+
+Setup verification uses the same credential resolver and effective provider/model
+configuration as native requests. Its lightweight models request sends the resolved
+access credential, never the stored OAuth record or refresh token. An unavailable
+selected login fails verification before HTTP; it is not a successful skipped check.
+Explicit offline verification and legitimate keyless endpoints remain supported.
+Credential-pool/default policy and provider/model header precedence are unchanged.
 
 ## Keychain Error Semantics (Current Contract)
 

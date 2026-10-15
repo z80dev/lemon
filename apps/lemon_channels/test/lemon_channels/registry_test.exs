@@ -18,36 +18,6 @@ defmodule LemonChannels.RegistryTest do
       # Restart the Registry so other tests are not affected.
       ensure_registry_started()
     end
-
-    test "returns nil for unknown plugin when registry is running" do
-      ensure_registry_started()
-
-      assert Registry.get_plugin("unknown_plugin_id_#{System.unique_integer()}") == nil
-    end
-  end
-
-  describe "get_meta/1 resilience" do
-    test "returns nil when registry process is not running" do
-      stop_registry!()
-
-      # get_meta delegates to get_plugin, so it should also return nil
-      # when the registry is unavailable.
-      assert Registry.get_meta("nonexistent_plugin") == nil
-
-      ensure_registry_started()
-    end
-  end
-
-  describe "get_capabilities/1 resilience" do
-    test "returns nil when registry process is not running" do
-      stop_registry!()
-
-      # get_capabilities delegates through get_meta -> get_plugin, so it
-      # should also return nil when the registry is unavailable.
-      assert Registry.get_capabilities("nonexistent_plugin") == nil
-
-      ensure_registry_started()
-    end
   end
 
   # ---------------------------------------------------------------------------

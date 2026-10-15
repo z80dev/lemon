@@ -101,7 +101,7 @@ defmodule LemonAi.Providers.OpenAICompletions do
 
       output =
         stream
-        |> stream_request_with_retries(output, url, headers, params, RetryHelper.policy(), 0)
+        |> stream_request_with_retries(output, url, headers, params, RetryHelper.policy(opts), 0)
         |> with_cost(model)
 
       if output.stop_reason in [:error, :aborted] do
@@ -919,14 +919,23 @@ defmodule LemonAi.Providers.OpenAICompletions do
       {:ok, response} ->
         cond do
           response.status in 200..299 ->
-            output = process_sse_stream(stream, initial_output, response)
+            {output, committed} = process_sse_stream(stream, initial_output, response)
 
-            if RetryHelper.retry_allowed?(attempt, policy) and
-                 retryable_stream_output_error?(output) do
-              RetryHelper.sleep(retry_delay_ms(attempt, policy, output.error_message))
-              retry.()
-            else
-              output
+            retry_delay =
+              if RetryHelper.retry_allowed?(attempt, policy) and not committed and
+                   retryable_stream_output_error?(output) do
+                http_retry_delay_ms(attempt, policy, output.error_message, %{})
+              else
+                :give_up
+              end
+
+            case retry_delay do
+              :give_up ->
+                output
+
+              delay_ms ->
+                RetryHelper.sleep(delay_ms)
+                retry.()
             end
 
           true ->
@@ -988,6 +997,7 @@ defmodule LemonAi.Providers.OpenAICompletions do
       url: url,
       headers: headers,
       json: params,
+      retry: false,
       receive_timeout: 120_000,
       into: :self
     )
@@ -1001,15 +1011,18 @@ defmodule LemonAi.Providers.OpenAICompletions do
       output: output,
       current_block: nil,
       buffer: "",
+      committed?: false,
       tool_call_blocks: %{}
     }
 
     state = receive_sse_chunks(stream, state, pid, ref)
 
-    state
-    |> finalize_current_block(stream)
-    |> finalize_tool_call_blocks(stream)
-    |> Map.get(:output)
+    state =
+      state
+      |> finalize_current_block(stream)
+      |> finalize_tool_call_blocks(stream)
+
+    {state.output, state.committed?}
   end
 
   defp materialize_response_body(%Req.Response{body: %Req.Response.Async{}} = response) do
@@ -1067,7 +1080,8 @@ defmodule LemonAi.Providers.OpenAICompletions do
             | output: %{
                 state.output
                 | stop_reason: :error,
-                  error_message: "Stream ended unexpectedly: #{inspect(reason)}"
+                  error_message: "Stream ended unexpectedly: #{inspect(reason)}",
+                  error_details: LemonAi.Error.to_error_details(reason)
               }
           }
         else
@@ -1077,7 +1091,12 @@ defmodule LemonAi.Providers.OpenAICompletions do
       120_000 ->
         %{
           state
-          | output: %{state.output | stop_reason: :error, error_message: "Stream timeout"}
+          | output: %{
+              state.output
+              | stop_reason: :error,
+                error_message: "Stream timeout",
+                error_details: LemonAi.Error.to_error_details(:timeout)
+            }
         }
     end
   end
@@ -1137,38 +1156,10 @@ defmodule LemonAi.Providers.OpenAICompletions do
     end
   end
 
-  defp retry_delay_ms(attempt, policy, error_text) when is_binary(error_text) do
-    RetryHelper.extract_retry_delay_ms(error_text) ||
-      RetryHelper.backoff_delay_ms(attempt, policy)
-  end
-
-  defp retryable_stream_output_error?(
-         %AssistantMessage{
-           stop_reason: :error,
-           error_message: error_message
-         } = output
-       )
-       when is_binary(error_message) do
-    not meaningful_output?(output) and retryable_stream_error_message?(error_message)
-  end
+  defp retryable_stream_output_error?(%AssistantMessage{stop_reason: :error} = output),
+    do: output.content in [nil, []] and LemonAi.Error.retryable?(output)
 
   defp retryable_stream_output_error?(_), do: false
-
-  defp meaningful_output?(%AssistantMessage{content: content}) when is_list(content),
-    do: content != []
-
-  defp meaningful_output?(_), do: false
-
-  defp retryable_stream_error_message?(message) when is_binary(message) do
-    downcased = String.downcase(message)
-
-    String.contains?(downcased, "timeout") or
-      String.contains?(downcased, ":closed") or
-      String.contains?(downcased, "econnrefused") or
-      String.contains?(downcased, "econnreset") or
-      String.contains?(downcased, "nxdomain") or
-      String.contains?(downcased, "unreachable")
-  end
 
   defp process_event_data(stream, state, data) do
     state = process_usage(state, data)
@@ -1240,7 +1231,7 @@ defmodule LemonAi.Providers.OpenAICompletions do
       # Push delta event
       EventStream.push_async(stream, {:text_delta, block_index, content, state.output})
 
-      state
+      %{state | committed?: true}
     else
       state
     end
@@ -1273,7 +1264,7 @@ defmodule LemonAi.Providers.OpenAICompletions do
         # Push delta event
         EventStream.push_async(stream, {:thinking_delta, block_index, text, state.output})
 
-        state
+        %{state | committed?: true}
 
       nil ->
         state
@@ -1337,7 +1328,7 @@ defmodule LemonAi.Providers.OpenAICompletions do
 
     EventStream.push_async(stream, {:tool_call_delta, info.block_index, func_args, state.output})
 
-    state
+    %{state | committed?: true}
   end
 
   defp process_reasoning_details(state, delta) do
@@ -1402,7 +1393,7 @@ defmodule LemonAi.Providers.OpenAICompletions do
         # Push start event
         EventStream.push_async(stream, {:text_start, block_index, state.output})
 
-        {state, block_index}
+        {%{state | committed?: true}, block_index}
     end
   end
 
@@ -1425,7 +1416,7 @@ defmodule LemonAi.Providers.OpenAICompletions do
         # Push start event
         EventStream.push_async(stream, {:thinking_start, block_index, state.output})
 
-        {state, block_index}
+        {%{state | committed?: true}, block_index}
     end
   end
 
@@ -1434,12 +1425,12 @@ defmodule LemonAi.Providers.OpenAICompletions do
       %TextContent{text: text} ->
         block_index = length(state.output.content) - 1
         EventStream.push_async(stream, {:text_end, block_index, text, state.output})
-        %{state | current_block: nil}
+        %{state | current_block: nil, committed?: true}
 
       %ThinkingContent{thinking: thinking} ->
         block_index = length(state.output.content) - 1
         EventStream.push_async(stream, {:thinking_end, block_index, thinking, state.output})
-        %{state | current_block: nil}
+        %{state | current_block: nil, committed?: true}
 
       nil ->
         state
@@ -1469,7 +1460,7 @@ defmodule LemonAi.Providers.OpenAICompletions do
         info = %{block_index: block_index, block: new_block, partial_args: ""}
         tool_call_blocks = Map.put(state.tool_call_blocks, index, info)
 
-        {%{state | output: output, tool_call_blocks: tool_call_blocks}, info}
+        {%{state | output: output, tool_call_blocks: tool_call_blocks, committed?: true}, info}
 
       info ->
         {state, info}
@@ -1549,7 +1540,7 @@ defmodule LemonAi.Providers.OpenAICompletions do
 
         EventStream.push_async(stream, {:tool_call_end, info.block_index, final_block, output})
 
-        %{acc_state | output: output}
+        %{acc_state | output: output, committed?: true}
       end)
 
     %{final_state | tool_call_blocks: %{}}

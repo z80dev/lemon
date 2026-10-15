@@ -38,7 +38,7 @@ export function productExecutionProjection() {
 
 export function compatibleFeatures(nodeId: string): MachineRuntimeFeatures {
   const capabilities: P.JSONObject = {
-    'coding_agent.run': { version: 1, nativePrivacyContext: { version: 1 } },
+    'coding_agent.run': { version: 2, executionContext: { version: 1 }, nativePrivacyContext: { version: 1 } },
     'node.invoke.event': { version: 1, maxBytes: 65_536 },
     'node.invoke.control': { version: 1, operations: ['steer', 'redirect'], maxTextBytes: 16_384 },
     'node.invoke.cancel': true,

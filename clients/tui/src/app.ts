@@ -48,8 +48,8 @@ import {
 } from "./composer/drafts.ts";
 import { editInExternalEditor } from "./external-editor.ts";
 import { getGitModeline } from "./git-utils.ts";
-import { ControlPlaneClient } from "./protocol/client.ts";
-import { ControlPlaneError } from "./protocol/errors.ts";
+import { ControlPlaneClient, type RequestOptions } from "./protocol/client.ts";
+import { ControlPlaneError, MethodUnavailableError } from "./protocol/errors.ts";
 import { ControlPlaneMethods, METHOD } from "./protocol/methods.ts";
 import {
 	type AgentCompletedEvent,
@@ -59,7 +59,8 @@ import {
 	PROPOSE_PLAN_TOOL,
 	type QueueMode,
 } from "./protocol/types.ts";
-import { newSessionKey } from "./session-key.ts";
+import { assertSessionDirectory, newSessionKey } from "./session-key.ts";
+import { resolveStartup, type StartupRequest, type StartupResolution } from "./startup-session.ts";
 import { AppStore, type SubmissionMode } from "./store/app-store.ts";
 import type { QueueItem } from "./store/queue-store.ts";
 import type { SessionStore } from "./store/session-store.ts";
@@ -108,6 +109,8 @@ export interface AppShellOptions {
 	operatorToken?: string;
 	/** Session to talk to. Defaults to a fresh canonical TUI channel-peer key. */
 	sessionKey?: string;
+	/** Startup session selection (`--continue`, `--resume`); ignored when `sessionKey` is set. */
+	startup?: StartupRequest;
 	version?: string;
 	/** Injection points for tests. */
 	client?: ControlPlaneClient;
@@ -187,6 +190,8 @@ export class AppShell {
 	#started = false;
 	#sessionReady = false;
 	#initialSessionLoad: Promise<void> | undefined;
+	/** `--continue` / `--resume` request, consumed by the first handshake. */
+	#startup: StartupRequest | undefined;
 	#queueMounted = false;
 	/** True while the queue panel, rather than the editor, owns the keyboard. */
 	#queueFocused = false;
@@ -208,7 +213,8 @@ export class AppShell {
 			options.client ?? new ControlPlaneClient({ url: options.url, token: options.operatorToken });
 		this.methods = new ControlPlaneMethods(this.client);
 		this.tui = options.tui ?? new TUI(options.terminal ?? new ProcessTerminal());
-		this.store = new AppStore(options.sessionKey ?? newSessionKey());
+		this.#startup = options.sessionKey === undefined ? options.startup : undefined;
+		this.store = new AppStore(options.sessionKey ?? newSessionKey(this.#cwd));
 		this.#terminalIntegration = new TerminalIntegration(
 			this.tui.terminal,
 			this.store,
@@ -222,7 +228,9 @@ export class AppShell {
 		// Editor construction needs a theme: pi-tui ships no defaults.
 		this.#editor = new CustomEditor({
 			theme: getEditorTheme(),
-			onSubmit: (text) => this.submit(text),
+			onSubmit: async (text) => {
+				await this.submit(text);
+			},
 			canSubmit: () =>
 				this.#sessionReady &&
 				this.client.online &&
@@ -340,6 +348,13 @@ export class AppShell {
 			sendPrompt: (text) => this.sendPrompt(text),
 			refreshStatus: () => this.#renderStatus(),
 			confirm: (spec) => this.#confirm(spec),
+			onSnapshot: (result, branchChanged, terminalAdvance) => {
+				if (branchChanged) this.#taskTree.store.clear(result.sessionKey);
+				this.#taskTree.reconcile(result.sessionKey, result.snapshot.children);
+				// Events for recovered runs only request owner reconciliation. Advance
+				// known-unsent work on its verified terminal transition, never a preview.
+				if (terminalAdvance && this.client.online) void this.drainQueue(result.sessionKey);
+			},
 		});
 		this.#switcher = new SessionSwitcher({
 			store: this.store,
@@ -400,7 +415,9 @@ export class AppShell {
 			// from under a question the daemon is blocked on.
 			hasOverlay: () => this.selectors.isOpen || this.approvals.panel.visible,
 			openModelPicker: () => this.#modelPicker.open(),
-			openThinkingPicker: () => this.submit("/think"),
+			openThinkingPicker: async () => {
+				await this.submit("/think");
+			},
 			openSessionSwitcher: () => this.#switcher.open(),
 			openExternalEditor: () => this.openExternalEditor(),
 			clearTranscript: () => this.#host.clearTranscript(),
@@ -440,6 +457,26 @@ export class AppShell {
 		return this.#host;
 	}
 
+	/**
+	 * Resolve `--continue` / `--resume` once connected and refocus before the first
+	 * hydration. The key minted at construction was never shown or sent, so it is
+	 * forgotten rather than left behind as an empty session.
+	 */
+	async #applyStartup(request: StartupRequest | undefined): Promise<StartupResolution | undefined> {
+		if (!request) return undefined;
+		const initialKey = this.store.focusedKey;
+		const resolution = await resolveStartup(request, {
+			methods: this.methods,
+			cwd: this.#cwd,
+			currentKey: initialKey,
+		});
+		if (resolution.sessionKey && resolution.sessionKey !== initialKey) {
+			this.store.setFocused(resolution.sessionKey);
+			this.store.forgetSession(initialKey);
+		}
+		return resolution;
+	}
+
 	/** Build the UI, start rendering, and connect. */
 	async start(): Promise<void> {
 		if (this.#started) return;
@@ -454,13 +491,22 @@ export class AppShell {
 			this.client.events.on("state", () => this.#renderConnection()),
 			this.client.events.on("hello-ok", () => {
 				// Every handshake, resumed or not: plan mode may have moved while away.
-				void this.refreshPlanMode();
+				// A pending startup request refreshes after it has picked the session.
+				if (!this.#startup) void this.refreshPlanMode();
 				if (this.#sessionReady || this.#initialSessionLoad) return;
-				this.#initialSessionLoad = this.sessions
-					.initialize()
-					.then(() => {
-						this.#sessionReady = true;
-					})
+				const startup = this.#startup;
+				this.#startup = undefined;
+				this.#initialSessionLoad = this.#applyStartup(startup)
+					.then((resolution) =>
+						this.sessions.initialize().then(async () => {
+							this.#sessionReady = true;
+							if (startup) void this.refreshPlanMode();
+							if (resolution?.notice) {
+								this.events.notice(resolution.notice.text, resolution.notice.level);
+							}
+							if (resolution?.openSwitcher) await this.#switcher.open();
+						}),
+					)
 					.catch((error: unknown) =>
 						this.events.notice(`could not load session: ${describeError(error)}`, "error"),
 					)
@@ -481,6 +527,18 @@ export class AppShell {
 			// both have moved, and the only one worth spending a request on. It is
 			// also the moment the session's backlog is allowed to move.
 			this.client.events.on("agent", (event: AgentEvent) => {
+				const session = this.store.session(event.sessionKey ?? this.store.focusedKey);
+				if (session.snapshotIdentity) {
+					// Background recovered runs still own their local queue. Their
+					// completion preview requests owner truth; it never drains directly.
+					if (
+						event.type === "completed" &&
+						session !== this.store.focused &&
+						this.store.queue.items(session.key)[0]?.state === "queued-local"
+					)
+						void this.sessions.resync(session.key);
+					return;
+				}
 				this.#taskTree.ingest(event);
 				this.#toolInspector.refresh();
 				if (event?.type !== "completed") return;
@@ -494,7 +552,21 @@ export class AppShell {
 			// A re-handshake means the client's picture of the daemon is stale: which
 			// sessions are live, what landed while the socket was down, and which
 			// approvals are still waiting all have to be re-read.
-			this.client.events.on("resync-needed", () => void this.sessions.resync()),
+			this.client.events.on("resync-needed", ({ sessionKey }) => {
+				for (const session of this.store.sessions.values()) {
+					if (sessionKey && session.key !== sessionKey) continue;
+					if (
+						session !== this.store.focused &&
+						(!session.snapshotIdentity ||
+							!session.busy ||
+							this.store.queue.items(session.key)[0]?.state !== "queued-local")
+					)
+						continue;
+					// Loss/reconnect also races an owner read when no data packet landed.
+					session.recoveryEventVersion += 1;
+					void this.sessions.resync(session.key);
+				}
+			}),
 			this.store.events.on("mode-changed", () => this.#renderStatus()),
 			this.store.events.on("session-changed", () => {
 				this.syncQueuePanel();
@@ -998,8 +1070,8 @@ export class AppShell {
 	 * from a rerun. Slash commands and shell escapes are peeled off first; what
 	 * remains reaches {@link sendPrompt}.
 	 */
-	async submit(value: string): Promise<void> {
-		await this.commandController.handleSubmit(value);
+	async submit(value: string): Promise<SubmissionDisposition> {
+		return await this.commandController.handleSubmit(value);
 	}
 
 	async #submitAttachments(
@@ -1008,10 +1080,16 @@ export class AppShell {
 	): Promise<SubmissionDisposition> {
 		const session = this.store.sessions.get(submission.sessionKey);
 		if (!session) return "rejected";
+		if (this.#hasUncertainSubmission(session)) return "uncertain";
+		try {
+			assertSessionDirectory(session.key, this.#cwd);
+		} catch (error) {
+			this.events.notice(describeError(error), "error", session);
+			return "rejected";
+		}
 		if (!submission.images.length) {
 			if (session !== this.store.focused) return "rejected";
-			await this.submit(submission.text);
-			return "accepted";
+			return await this.submit(submission.text);
 		}
 		if (/^[!/]/.test(submission.text.trim())) {
 			this.events.notice(
@@ -1044,12 +1122,14 @@ export class AppShell {
 		}
 		const priorRun = session.activeRunId;
 		const queueMode = session.busy && mode !== "queue" ? mode : undefined;
+		const requestId = crypto.randomUUID();
 		try {
 			const result = await this.#dispatchPrompt(
 				session.key,
 				submission.text,
 				queueMode,
 				submission.images,
+				{ requestId, queueIfOffline: false },
 			);
 			if (typeof result?.runId !== "string" || !result.runId.trim()) {
 				throw new Error("unverified send receipt; inspect the session before retrying");
@@ -1078,7 +1158,13 @@ export class AppShell {
 				"error",
 				session,
 			);
-			return "rejected";
+			return this.#submissionFailure(
+				session,
+				submission.text,
+				requestId,
+				error,
+				submission.attachments,
+			);
 		}
 	}
 
@@ -1098,10 +1184,25 @@ export class AppShell {
 	 * leaves the prompt in the queue, where the user can still get at it, instead
 	 * of dropping it on the floor.
 	 */
-	async sendPrompt(text: string, options: DeliverOptions = {}): Promise<void> {
+	async sendPrompt(text: string, options: DeliverOptions = {}): Promise<SubmissionDisposition> {
 		const prompt = text.trim();
-		if (prompt.length === 0) return;
+		if (prompt.length === 0) return "rejected";
 		const session = this.store.focused;
+		if (this.#hasUncertainSubmission(session)) return "uncertain";
+		try {
+			assertSessionDirectory(session.key, this.#cwd);
+		} catch (error) {
+			this.events.notice(describeError(error), "error", session);
+			return "rejected";
+		}
+		if (!this.client.online && options.queueIfOffline === false) {
+			this.events.notice(
+				"offline — prompt draft kept; reconnect before sending",
+				"warning",
+				session,
+			);
+			return "rejected";
+		}
 		const mode = options.mode ?? this.#takeModeOverride();
 		this.#editor.disarm();
 
@@ -1109,8 +1210,7 @@ export class AppShell {
 			if (mode !== "queue" && justFinished(session)) {
 				this.events.notice(`the run finished first — sending as a new turn`, "warning", session);
 			}
-			await this.#send(prompt, session);
-			return;
+			return await this.#send(prompt, session, undefined, options.queueIfOffline);
 		}
 		if (mode === "queue") {
 			this.store.queue.push(session.key, prompt);
@@ -1119,19 +1219,33 @@ export class AppShell {
 				"info",
 				session,
 			);
-			return;
+			return "queued";
 		}
-		await this.#sendWhileBusy(prompt, session, mode);
+		return await this.#sendWhileBusy(prompt, session, mode, options.queueIfOffline);
 	}
 
 	/** A plain send: echo, dispatch through the session's authoritative route, remember the run. */
-	async #send(prompt: string, session: SessionStore, queueMode?: QueueMode): Promise<void> {
+	async #send(
+		prompt: string,
+		session: SessionStore,
+		queueMode?: QueueMode,
+		queueIfOffline?: boolean,
+	): Promise<SubmissionDisposition> {
 		this.events.addUserBlock(prompt, session);
+		const requestId = crypto.randomUUID();
 		try {
-			const result = await this.#dispatchPrompt(session.key, prompt, queueMode);
-			if (result?.runId) this.events.noteRunStarted(result.runId, session);
+			const result = await this.#dispatchPrompt(session.key, prompt, queueMode, undefined, {
+				requestId,
+				queueIfOffline,
+			});
+			if (typeof result?.runId !== "string" || !result.runId.trim()) {
+				throw new Error("unverified send receipt; inspect the session before retrying");
+			}
+			this.events.noteRunStarted(result.runId, session);
+			return "accepted";
 		} catch (error) {
 			this.events.notice(`send failed: ${describeError(error)}`, "error", session);
+			return this.#submissionFailure(session, prompt, requestId, error);
 		}
 	}
 
@@ -1147,23 +1261,80 @@ export class AppShell {
 		prompt: string,
 		session: SessionStore,
 		mode: Exclude<SubmissionMode, "queue">,
-	): Promise<void> {
+		queueIfOffline?: boolean,
+	): Promise<SubmissionDisposition> {
 		const runId = session.activeRunId;
+		const requestId = crypto.randomUUID();
 		try {
-			const result = await this.#dispatchPrompt(session.key, prompt, mode);
+			const result = await this.#dispatchPrompt(session.key, prompt, mode, undefined, {
+				requestId,
+				queueIfOffline,
+			});
+			if (typeof result?.runId !== "string" || !result.runId.trim()) {
+				throw new Error("unverified send receipt; inspect the session before retrying");
+			}
 			if (mode === "interrupt" && runId) this.events.markInterrupted(runId, session);
 			this.events.addUserBlock(prompt, session, { delivery: mode });
-			if (result?.runId) this.events.noteRunStarted(result.runId, session);
+			this.events.noteRunStarted(result.runId, session);
+			return "accepted";
 		} catch (error) {
+			const disposition = this.#submissionFailure(session, prompt, requestId, error);
+			if (disposition === "uncertain") return disposition;
 			this.store.queue.push(session.key, prompt);
 			this.events.notice(
 				`${mode} refused (${describeError(error)}) — queued instead, ctrl+q to edit`,
 				"warning",
 				session,
 			);
+			return "queued";
 		}
 	}
 
+	#hasUncertainSubmission(session: SessionStore): boolean {
+		if (!this.store.queue.items(session.key).some((item) => item.submission)) return false;
+		this.events.notice(
+			"submission outcome unknown — inspect the session and review ctrl+q before sending again",
+			"warning",
+			session,
+		);
+		return true;
+	}
+
+	#submissionFailure(
+		session: SessionStore,
+		prompt: string,
+		requestId: string,
+		error: unknown,
+		attachments: QueueItem["attachments"] = [],
+	): SubmissionDisposition {
+		const details = error instanceof ControlPlaneError ? error.details : undefined;
+		const unsafe =
+			details !== null &&
+			typeof details === "object" &&
+			"retrySafe" in details &&
+			details.retrySafe === false;
+		if (
+			(error instanceof ControlPlaneError && !unsafe) ||
+			error instanceof MethodUnavailableError
+		) {
+			return "rejected";
+		}
+		const runId = pickString(details, "runId");
+		this.store.queue.restoreForReview(session.key, {
+			id: requestId,
+			text: prompt,
+			at: Date.now(),
+			state: "needs-review",
+			attachments,
+			submission: { requestId, ...(runId ? { runId } : {}) },
+		});
+		this.events.notice(
+			`submission outcome unknown${runId ? ` · ${runId}` : ""} — draft retained; inspect the session and review ctrl+q before retrying`,
+			"warning",
+			session,
+		);
+		return "uncertain";
+	}
 	/**
 	 * Resolve canonical `agent:<id>:main` sessions through the profile API.
 	 *
@@ -1178,9 +1349,11 @@ export class AppShell {
 		prompt: string,
 		queueMode?: QueueMode,
 		images?: readonly ImageContent[],
+		options: RequestOptions = {},
 	) {
+		assertSessionDirectory(sessionKey, this.#cwd);
 		const media = images?.length ? { images } : undefined;
-		const requestOptions = media ? { queueIfOffline: false } : undefined;
+		const requestOptions = { ...options, ...(media ? { queueIfOffline: false } : {}) };
 		const remembered = this.#profileSessions.get(sessionKey);
 		if (remembered) {
 			return await this.methods.profileChat(
@@ -1384,7 +1557,8 @@ export class AppShell {
 			},
 			reloadSession: (sessionKey: string) => this.sessions.reload(sessionKey),
 			focusQueue: () => this.focusQueue(),
-			deliverPrompt: (text: string, mode?: SubmissionMode) => this.sendPrompt(text, { mode }),
+			deliverPrompt: (text: string, mode?: SubmissionMode) =>
+				this.sendPrompt(text, { mode, queueIfOffline: false }),
 			queuedPrompts: () => this.store.queue.items(this.store.focusedKey).map((item) => item.text),
 			resolveApproval: (approvalId: string, decision: string) =>
 				this.approvals.resolve(approvalId, decision),

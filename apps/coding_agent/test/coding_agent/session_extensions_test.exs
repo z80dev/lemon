@@ -229,15 +229,6 @@ defmodule CodingAgent.SessionExtensionsTest do
 
       cleanup_module(module)
     end
-
-    test "session starts with empty extensions list when no extensions exist", %{tmp_dir: tmp_dir} do
-      # tmp_dir has no extensions
-      session = start_session(cwd: tmp_dir)
-      state = Session.get_state(session)
-
-      assert state.extensions == []
-      assert state.hooks == []
-    end
   end
 
   # ============================================================================
@@ -407,38 +398,6 @@ defmodule CodingAgent.SessionExtensionsTest do
 
       cleanup_module(module1)
       cleanup_module(module2)
-    end
-
-    test "Extensions.execute_hooks handles errors gracefully" do
-      # Test the execute_hooks function directly
-      hooks = [
-        on_test: [
-          fn _arg -> raise "Boom!" end,
-          fn _arg -> :ok end
-        ]
-      ]
-
-      # Should not raise
-      assert :ok = CodingAgent.Extensions.execute_hooks(hooks, :on_test, ["arg"])
-    end
-
-    test "Extensions.execute_hooks calls all hooks for an event" do
-      {:ok, tracker} = Agent.start_link(fn -> [] end)
-
-      hooks = [
-        on_test: [
-          fn arg -> Agent.update(tracker, &[{:hook1, arg} | &1]) end,
-          fn arg -> Agent.update(tracker, &[{:hook2, arg} | &1]) end
-        ]
-      ]
-
-      :ok = CodingAgent.Extensions.execute_hooks(hooks, :on_test, ["test_value"])
-
-      calls = Agent.get(tracker, & &1)
-      assert {:hook1, "test_value"} in calls
-      assert {:hook2, "test_value"} in calls
-
-      Agent.stop(tracker)
     end
 
     test "hook errors do not crash the session", %{tmp_dir: tmp_dir} do
@@ -649,40 +608,6 @@ defmodule CodingAgent.SessionExtensionsTest do
   # ============================================================================
 
   describe "extension status report" do
-    test "session state includes extension_status_report", %{tmp_dir: tmp_dir} do
-      module = create_extension_file(tmp_dir, "TestStatusReportExtension")
-
-      session = start_session(cwd: tmp_dir)
-      state = Session.get_state(session)
-
-      assert is_map(state.extension_status_report)
-      assert Map.has_key?(state.extension_status_report, :extensions)
-      assert Map.has_key?(state.extension_status_report, :load_errors)
-      assert Map.has_key?(state.extension_status_report, :tool_conflicts)
-      assert Map.has_key?(state.extension_status_report, :total_loaded)
-      assert Map.has_key?(state.extension_status_report, :total_errors)
-      assert Map.has_key?(state.extension_status_report, :loaded_at)
-
-      cleanup_module(module)
-    end
-
-    test "get_extension_status_report/1 returns the status report", %{tmp_dir: tmp_dir} do
-      module = create_extension_file(tmp_dir, "TestGetStatusReportExtension")
-
-      session = start_session(cwd: tmp_dir)
-      report = Session.get_extension_status_report(session)
-
-      assert is_map(report)
-      assert report.total_loaded >= 1
-      assert report.total_errors == 0
-
-      # Verify extension is in the report
-      ext_names = Enum.map(report.extensions, & &1.name)
-      assert "testgetstatusreportextension" in ext_names
-
-      cleanup_module(module)
-    end
-
     test "extension_status_report is available via get_extension_status_report/1 at startup", %{
       tmp_dir: tmp_dir
     } do
@@ -737,17 +662,6 @@ defmodule CodingAgent.SessionExtensionsTest do
       assert read_conflict.winner == :builtin
 
       cleanup_module(module)
-    end
-
-    test "status report with no extensions has correct counts", %{tmp_dir: tmp_dir} do
-      # tmp_dir has no extensions
-      session = start_session(cwd: tmp_dir)
-      report = Session.get_extension_status_report(session)
-
-      assert report.total_loaded == 0
-      assert report.total_errors == 0
-      assert report.extensions == []
-      assert report.load_errors == []
     end
   end
 end

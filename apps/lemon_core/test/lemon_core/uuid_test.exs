@@ -1,9 +1,9 @@
 defmodule LemonCore.UUIDTest do
   use ExUnit.Case, async: true
 
-  alias LemonCore.UUID
+  alias LemonCore.Id, as: UUID
 
-  doctest LemonCore.UUID
+  doctest LemonCore.Id
 
   @canonical ~r/\A[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\z/
 

@@ -448,13 +448,133 @@ Job events, management projections, audit records, run history, and router
 requests never include its token or secret reference.
 
 
+## Session snapshot and reconciliation
+
+`sessions.snapshot` is the read-scoped recovery authority used by TUI and
+browser chat. It composes existing owners; it does not persist deltas, schedule
+work, or create another session store.
+
+Fresh managed native runs register their existing live owner before execution,
+so recovery does not require a lifecycle index created by the first finalized
+run. Managed user entries carry owner-written `lemonRun` provenance in the
+existing native journal: logical run ID, logical session key and native UUID.
+Terminal association follows the selected user entry's exact owned binding,
+not the order in which start events reach storage. Declared malformed or
+foreign bindings remain unknown; legacy untagged journals retain conservative
+prompt/time matching. This metadata does not enter provider input or create
+another ownership store.
+
+Requests accept:
+
+```json
+{"type":"req","id":"recover-1","method":"sessions.snapshot","params":{"sessionKey":"agent:default:main","cwd":"/srv/project","limit":50}}
+```
+
+`sessionKey` is required (at most 1,024 bytes); optional native workspace `cwd`
+is bounded to 4,096 bytes, and `limit` is 1–100 messages. The workspace locates
+the native session; it grants no additional authority. The native header must
+match the logical session's stored resume identity.
+
+A successful payload contains:
+
+- `status: "ok"` and the requested `sessionKey`;
+- `identity: {sessionKey, sessionId, branchId, revision, runId, attempt}`;
+- `consistency: {boundary: "stable_owner_reads", atomic: false, eventCursor: null}`;
+- `snapshot`: `phase`, boolean `terminal`, bounded
+  `answer: {text, canonical, truncated}`, history-compatible `messages`,
+  current `actions`, `approvals`, `children`, `processes`, `todos`, and `plan`.
+
+Collection projections report `status: "ok"` with `items` and `truncated`,
+or `unavailable`/`forbidden`; they never substitute an empty collection for an
+unavailable owner. Plan reports `status` plus bounded `value` when available.
+Phases are `running`, `completed`, `failed`, `cancelled`, `idle`, or `unknown`.
+`unknown` is not idle. A missing terminal tool receipt is outcome-unknown, not
+a permanently running tool or fabricated success. Process receipts retain their
+fixed identities and never cause a launch retry. Legacy process records without
+launch provenance retain their owner-scoped identity and status but report an
+outcome-unknown classification, never confirmed launch admission. Todo and
+process projections require the corresponding domain-owner read APIs; their
+absence is explicit `unavailable`.
+
+The encoded response is capped at 131,072 bytes. Message rows use a 40,960-byte
+collection budget, actions 16,384, answer text 16,384, each other collection
+8,192, and plan text 8,192. Nested values and item counts have additional caps.
+These are credential-redacted recovery previews, not private full exports.
+Clients must display omission/unavailability rather than treating a bounded
+preview as a complete answer or proof that a process stopped.
+The bound applies to the JSON recovery response, **not** the underlying native
+journal/agent owner read. Selected-branch collection and revision hashing still
+work on the retained native transcript; their working set and owner-to-handler
+reply can grow with that authoritative transcript. This change does not claim
+constant-memory source reads or replace journal retention with another store.
+
+Revision and attempt are opaque equality tokens, **not ordered counters**.
+A live attempt identifies the native execution instance; a retained attempt
+uses its fixed run ID when that association is known. The selected native
+branch, not simply the newest session run or an idle live session's retained
+invocation ID, determines completion. Ambiguous prompt/start-interval association
+remains unknown. Answer-so-far belongs only to the current selected user turn;
+before that turn produces text, it is empty rather than the previous answer.
+
+The server compares two complete owner-read collections. If they differ, it
+returns `status: "retry", reason: "snapshot_raced"` with no snapshot. Optional
+`expectedIdentity` must contain the complete prior identity; mismatch returns
+`identity_changed`, also without a snapshot. There is no atomic cross-owner
+transaction or global durable cursor.
+
+Queue consumers may additionally request
+`continuationFrom: {identity: <complete prior accepted identity>, runId: <acknowledged active run>}`.
+The successful response's boolean `continuation` is true only for a canonical
+terminal of that fixed run on the same native session, with the prior leaf
+present in the full selected journal. A same-run live execution token must match;
+known retained-owner handoff may use the fixed run ID instead. Unknown attempt
+provenance, another owner/run or a non-descendant branch returns false. The proof
+uses the existing full owner read, not bounded message previews, and adds no
+history export or replay cursor. Normal completion may change leaf and revision.
+`expectedIdentity` retains its retry semantics independently of this optional
+request; absent a continuation request the response reports false.
+
+The TUI also fences the pre-read projection and active run, not only delivered
+events and selection. It uses a newly verified terminal transition to advance at
+most one `queued-local` head through its existing drain guard. Repeated terminal
+reads, a newer acknowledged send and uncertain/in-flight queue entries cannot
+authorize another submission. This is not retry permission for any prior send.
+
+
+Clients bind reads to their selected session/request generation, discard late
+responses, and retry when relevant events or overflow/reconnect indications arrive
+while a read is pending, even when no missed data packet was delivered.
+Retries are bounded; persistent races/unavailability retain honest known state
+and expose recovery failure. After a replacement snapshot, untagged events for
+an unknown run request another reconciliation instead of assuming branch
+ownership. Recovered active answer text stays replacement-only: uncertain
+pre-snapshot deltas must not be appended to it. Terminal completion replaces
+partial text once and cannot be revived by a late start/progress packet.
+
+Transport overflow emits WebSocket `stream.resync` and fences/disconnects the
+lagging connection. Reconnect and authenticate again, then use the same snapshot
+path. A router rendering-loss indication also uses `stream.resync`, but requests
+reconciliation without requiring the healthy socket to disconnect. Do not replay
+offline mutations. Browser panes and the EventBridge use bounded tagged Bus
+delivery epochs so queued messages from a replaced subscription cannot mutate
+the recovered view or fence newly connected recipients.
+
+Authorization is checked on each snapshot read. Operators intentionally have
+global session inspection through `operator.read`; paired nodes have no such
+privilege. Approval payloads additionally require `operator.approvals`.
+Reconnect authentication uses the current credential, never the previous
+socket's privileges. Process/child projections use exact session ownership,
+and foreign native headers are rejected. This is not a new per-session
+operator authorization model.
 
 ## Durable session inspection
 
 `sessions.get` (`operator.read`) accepts `{sessionKey}` and returns `{session}`
 from the daemon's canonical lifecycle index, including title, pin/archive state
-and run counts. `sessions.history` accepts `{sessionKey, limit}` (1–200, default
-50) and returns `{session, history}` with redacted structured **run history**.
+and run counts, using the same camelCase session projection as `sessions.list`
+(`sessionKey`, `runCount`, `updatedAtMs`, etc.). `sessions.history` accepts
+`{sessionKey, limit}` (1–200, default 50) and returns `{session, history}` with
+redacted structured **run history**.
 Unknown keys return `not_found`; these methods do not invent an empty session or
 read a separate client-local store. Keys are non-empty and bounded to 1,024 bytes.
 
@@ -476,8 +596,42 @@ so clients can reject stale or mismatched targets before applying their results.
 100); `offset` is 0–1,000,000 (default 0). The result contains `sessionId`,
 `leafId`, `entries`, `branches`, `totalEntries`, `offset`, and `hasMore`.
 Each entry contains `id`, `parentId`, `type`, `role`, `text`, `timestamp`,
-`isActive`, `isLeaf`, and `rewindable`. Text is a redacted native preview, not
-thoughts or tool-result bodies. Branch summaries contain `leafId` and `active`.
+`isActive`, `isLeaf`, `rewindable`, and `label` (the entry's current bookmark
+label, `null` when none). Text is a redacted native preview, not thoughts or
+tool-result bodies. Branch summaries contain `leafId` and `active`.
+
+`sessions.navigate` requires `operator.write`. It switches the active branch to
+`entryId` (at most 256 bytes) and returns `sessionId`, `entryId`, `leafId`,
+`prompt`, and `summarizing`. The abandoned branch stays in the tree, so no
+preview or confirmation is required; a streaming session is refused with a
+`busy` conflict. Selecting a user message lands the leaf *before* it and returns
+its text as `prompt` (the same convention as rewind; `null` for other entries).
+Optional `summarize` (default `false`) asks a *live* session to summarize the
+abandoned branch in the background. `summarizing` is `true` only when a summary
+was actually started: a live session leaving a branch of at least two messages
+for a different one. A stopped session has no model runtime, so it only moves
+the leaf. The next prompt, live or after resume, sees the new branch's history,
+model and thinking state.
+A background summary is bound to the destination revision. If another prompt,
+branch switch or journal change wins the race, the stale result is discarded
+without changing the active branch. An accepted result updates both the journal
+and the live model context, so continuing and resuming see the same summary.
+
+`sessions.label` requires `operator.write`. It appends a label entry bookmarking
+`entryId` with `label`: a string of at most 120 characters (control characters
+and whitespace runs become one space) or `null`/empty to clear it. Labels never
+change the model-visible context and are resolved across the whole tree, so any
+entry — including one on a preserved branch — can be bookmarked. The result is
+`sessionId`, `entryId`, and the resulting `label`. Labels in this result and in
+`sessions.tree` are strictly redacted, like tree text.
+
+Native startup and stopped navigation, labeling and rewind share journal
+admission: a mutation either completes before resume loads the file or is sent
+to its published live owner. Live navigation/label receipts are captured in the
+same session turn as the mutation. A lost or invalid mutation receipt returns
+`reason: "outcome_unknown"` with `retrySafe: false`; inspect the session before
+retrying. Confirmed rewind has the same uncertain-outcome contract. Definite
+refusals such as `busy` or `entry_not_found` remain ordinary failures.
 
 `sessions.rewind` requires `operator.write`, including previews. Supply an
 `entryId` of at most 256 bytes identifying a rewindable user message.
@@ -513,8 +667,9 @@ rewrites require checkpoints even after interruption or failure; AST search and
 dry-run previews remain read-only. Other shell effects are never undone or
 represented as restored.
 
-`sessions.fork` requires `operator.write` and accepts only the source
-`sessionKey` and `cwd`. The server generates an independent canonical child key,
+`sessions.fork` requires `operator.write` and accepts the source `sessionKey`
+and `cwd`, plus an optional `entryId` (at most 256 bytes) that ends the child's
+history at that entry (inclusive) instead of the source's current leaf. The server generates an independent canonical child key,
 copies native resume state through the runtime, and registers the child in the
 durable session index with independent lifecycle metadata. The result is
 `{sessionKey: "<child>", sourceSessionKey: "<source>"}`. It is discoverable in
@@ -850,11 +1005,11 @@ Internal callers inspecting a node before dispatch can pin that live connection
 with `NodeRegistry.invoke_node(..., expected_pid: inspected.pid,
 expected_generation: inspected.generation)`. PID replacement or credential
 generation change returns the definite pre-dispatch error `{:node_connection_changed,nodeId}`.
-Private native requests also require `required_native_privacy_context: 1`, which
-checks the actual resolved connection's nested
-`capabilities["coding_agent.run"]["nativePrivacyContext"] == {"version":1}`
-inside the registry owner before invocation allocation or delivery. An absent/
-unsupported marker returns `{:native_privacy_context_unsupported,nodeId}`.
+Native requests also require `required_native_privacy_context: 1`, which checks
+the actual resolved connection's complete native descriptor inside the registry
+owner before invocation allocation or delivery: `coding_agent.run` version 2,
+`executionContext` version 1, and `nativePrivacyContext` version 1. An absent or
+unsupported descriptor returns `{:native_privacy_context_unsupported,nodeId}`.
 These are internal admission options, not remotely supplied PID values or a
 post-response privacy check.
 

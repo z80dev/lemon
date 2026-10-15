@@ -44,9 +44,7 @@ defmodule CodingAgent.CheckpointTest do
       assert checkpoint.metadata.tag == "test"
       assert length(checkpoint.todos) == 2
 
-      # Clear todos
       TodoStore.put(session_id, [])
-      assert TodoStore.get(session_id) == []
 
       # Resume from checkpoint
       {:ok, state} = Checkpoint.resume(checkpoint.id)
@@ -54,10 +52,11 @@ defmodule CodingAgent.CheckpointTest do
       assert state.session_id == session_id
       assert state.context.step == 5
       assert state.resumed_from == checkpoint.id
+      assert length(state.todos) == 2
 
-      # Task entries should be restored
-      restored_todos = TodoStore.get(session_id)
-      assert length(restored_todos) == 2
+      # A session-global checkpoint is data only; it is never copied onto the
+      # session's selected-branch todo projection.
+      assert TodoStore.get(session_id) == []
     end
 
     test "returns error for non-existent checkpoint" do

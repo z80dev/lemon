@@ -25,6 +25,7 @@ defmodule CodingAgent.Session.Planning do
   alias CodingAgent.Security.SecretObfuscator
   alias CodingAgent.Messages.CustomMessage
   alias CodingAgent.SessionManager
+  alias CodingAgent.Session.ModelResolver
   alias CodingAgent.SessionManager.SessionEntry
   alias CodingAgent.Tools.{Edit, Write}
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
@@ -46,7 +47,8 @@ defmodule CodingAgent.Session.Planning do
   @doc "Shared gate read by plan-mode tool wrappers (1 = plan mode active)."
   def new_gate, do: :atomics.new(1, signed: false)
 
-  defp empty, do: %{"mode" => "code", "path" => nil, "approved" => nil}
+  defp empty,
+    do: %{"mode" => "code", "path" => nil, "approved" => nil, "execution_model" => nil}
 
   @doc "Public plan state: mode, current plan file and its Markdown (when readable)."
   def status(session) do
@@ -61,52 +63,164 @@ defmodule CodingAgent.Session.Planning do
 
   def transition(session, :status, _opts), do: {:ok, status(session), session}
 
-  def transition(session, :enter, _opts) do
-    case stored(session) do
-      %{"mode" => "plan"} -> {:ok, status(session), session}
-      plan -> append(session, %{plan | "mode" => "plan"})
-    end
-  end
+  def transition(session, action, _opts) when action in [:enter, :exit] do
+    plan = stored(session)
 
-  def transition(session, :exit, _opts) do
-    case stored(session) do
-      %{"mode" => "plan"} = plan -> append(session, %{plan | "mode" => "code"})
-      _ -> {:ok, status(session), session}
+    if changes_mode?(action, plan) do
+      settings = CodingAgent.SettingsManager.load(session.header.cwd)
+      context = SessionManager.build_session_context(session)
+
+      with {:ok, model} <- current_model(context.model, settings),
+           {:ok, _model, manager} <- transition_model(session, action, settings, model) do
+        {:ok, status(manager), manager}
+      end
+    else
+      {:ok, status(session), session}
     end
+  rescue
+    ArgumentError -> {:error, :invalid_plan_model}
   end
 
   def transition(_session, _action, _opts), do: {:error, :invalid_plan_action}
+
+  @doc """
+  Transitions a live session using the same model-role journal as stopped sessions.
+
+  Resolve all models before mutation. The journal stores the previous execution
+  model and the selected model, so restart needs no runtime-only plan state.
+  """
+  def transition_session(state, action, _opts) when action in [:enter, :exit] do
+    with {:ok, model, manager} <-
+           transition_model(state.session_manager, action, state.settings_manager, state.model) do
+      state =
+        if manager == state.session_manager,
+          do: state,
+          else: change_model(%{state | session_manager: manager}, model) |> refresh()
+
+      {:ok, status(manager), state}
+    end
+  end
+
+  def transition_session(state, action, opts) do
+    case transition(state.session_manager, action, opts) do
+      {:ok, plan, manager} -> {:ok, plan, %{state | session_manager: manager}}
+      error -> error
+    end
+  end
+
+  defp changes_mode?(:enter, plan), do: plan["mode"] == "code"
+  defp changes_mode?(:exit, plan), do: plan["mode"] == "plan"
+
+  defp transition_model(session, action, settings, current) do
+    plan = stored(session)
+
+    case {action, plan["mode"]} do
+      {:enter, "code"} ->
+        with {:ok, model} <- planning_model(current, settings) do
+          next = %{
+            plan
+            | "mode" => "plan",
+              "execution_model" =>
+                if(different_model?(current, model), do: model_descriptor(current))
+          }
+
+          {:ok, model, append_model_transition(session, next, current, model)}
+        end
+
+      {:exit, "plan"} ->
+        with {:ok, model} <- execution_model(current, settings, plan) do
+          {:ok, model,
+           append_model_transition(session, %{plan | "mode" => "code"}, current, model)}
+        end
+
+      _ ->
+        {:ok, current, session}
+    end
+  end
+
+  defp current_model(nil, %{default_model: nil, model_roles: roles})
+       when not is_map_key(roles, "plan"),
+       do: {:ok, nil}
+
+  defp current_model(selector, settings), do: resolve_model(selector, settings)
+
+  defp planning_model(current, settings) do
+    if Map.has_key?(settings.model_roles, "plan"),
+      do: resolve_model("@plan", settings),
+      else: {:ok, current}
+  end
+
+  defp execution_model(_current, settings, %{"execution_model" => %{} = spec}),
+    do: resolve_model(spec, settings)
+
+  defp execution_model(current, _settings, _plan), do: {:ok, current}
+
+  defp resolve_model(selector, settings) do
+    {:ok, ModelResolver.resolve_session_model(selector, settings)}
+  rescue
+    ArgumentError -> {:error, :invalid_plan_model}
+  end
+
+  defp model_descriptor(model),
+    do: %{"provider" => to_string(model.provider), "model" => model.id}
+
+  defp different_model?(nil, nil), do: false
+  defp different_model?(nil, _model), do: true
+
+  defp different_model?(current, model),
+    do: {current.provider, current.id} != {model.provider, model.id}
+
+  defp append_model_transition(session, plan, current, model) do
+    {:ok, _status, session} = append(session, plan)
+
+    if different_model?(current, model) do
+      session =
+        SessionManager.append_entry(session, SessionEntry.model_change(model.provider, model.id))
+
+      LemonAgent.ModelRuntime.SessionPins.clear(session.header.id)
+      session
+    else
+      session
+    end
+  end
+
+  defp change_model(state, model) do
+    if different_model?(state.model, model) do
+      :ok = LemonAgent.Agent.set_model(state.agent, model)
+      %{state | model: model}
+    else
+      state
+    end
+  end
 
   defp append(session, plan) do
     session = SessionManager.append_entry(session, SessionEntry.custom(@entry_type, plan))
     {:ok, status(session), session}
   end
 
-  defp stored(%{by_id: entries, leaf_id: leaf}), do: stored_entry(entries, leaf)
-  defp stored(_), do: empty()
-
-  defp stored_entry(_entries, nil), do: empty()
-
-  defp stored_entry(entries, id) do
-    case Map.get(entries, id) do
-      %SessionEntry{type: :custom, custom_type: @entry_type, data: data} when is_map(data) ->
-        normalize(data)
-
-      %SessionEntry{parent_id: parent} ->
-        stored_entry(entries, parent)
-
-      _ ->
-        empty()
+  defp stored(%SessionManager.Session{} = session) do
+    case SessionManager.latest_custom_entry(session, @entry_type) do
+      %SessionEntry{data: data} when is_map(data) -> normalize(data)
+      _ -> empty()
     end
   end
+
+  defp stored(_), do: empty()
 
   defp normalize(data) do
     %{
       "mode" => if(data["mode"] == "plan", do: "plan", else: "code"),
       "path" => if(is_binary(data["path"]), do: data["path"]),
-      "approved" => approved(data)
+      "approved" => approved(data),
+      "execution_model" => normalize_model_descriptor(data["execution_model"])
     }
   end
+
+  defp normalize_model_descriptor(%{"provider" => provider, "model" => model})
+       when is_binary(provider) and is_binary(model),
+       do: %{"provider" => provider, "model" => model}
+
+  defp normalize_model_descriptor(_), do: nil
 
   defp approved(%{"approved" => %{"content" => content} = approved}) when is_binary(content),
     do: Map.take(approved, ["path", "title", "content"])
@@ -244,21 +358,28 @@ defmodule CodingAgent.Session.Planning do
             %{plan | "path" => path}
         end
 
-      state =
-        if next == plan do
-          state
-        else
-          {:ok, _status, manager} = append(state.session_manager, next)
-          refresh(%{state | session_manager: manager})
+      result =
+        if decision == :approve,
+          do: execution_model(state.model, state.settings_manager, plan),
+          else: {:ok, state.model}
+
+      with {:ok, model} <- result do
+        state =
+          if next == plan do
+            state
+          else
+            manager = append_model_transition(state.session_manager, next, state.model, model)
+            change_model(%{state | session_manager: manager}, model) |> refresh()
+          end
+
+        if decision == :approve and state.is_streaming do
+          LemonAgent.Agent.steer(state.agent, approved_message(path),
+            system_prompt: state.system_prompt
+          )
         end
 
-      if decision == :approve and state.is_streaming do
-        LemonAgent.Agent.steer(state.agent, approved_message(path),
-          system_prompt: state.system_prompt
-        )
+        {:ok, state}
       end
-
-      {:ok, state}
     end
   end
 
@@ -317,7 +438,7 @@ defmodule CodingAgent.Session.Planning do
         not planning?(context.gate) ->
           execute.(id, params, signal, on_update)
 
-        target in @read_only_tools ->
+        target in @read_only_tools or todo_read?(target, args) ->
           execute.(id, params, signal, on_update)
 
         target in @plan_write_tools and Map.has_key?(private_writes, target) ->
@@ -339,6 +460,9 @@ defmodule CodingAgent.Session.Planning do
         not planning?(context.gate) ->
           execute.(id, params, signal, on_update)
 
+        todo_read?(name, params) ->
+          execute.(id, params, signal, on_update)
+
         name in @plan_write_tools and Map.has_key?(private_writes, name) ->
           private_writes[name].execute.(id, params, signal, on_update)
 
@@ -349,6 +473,12 @@ defmodule CodingAgent.Session.Planning do
 
     %{tool | execute: wrapped}
   end
+
+  defp todo_read?("todo", %{"action" => action}),
+    do: action in ["read", "progress", "actionable"]
+
+  defp todo_read?("todoread", _params), do: true
+  defp todo_read?(_name, _params), do: false
 
   defp plan_only_tool(name, context) do
     tool =

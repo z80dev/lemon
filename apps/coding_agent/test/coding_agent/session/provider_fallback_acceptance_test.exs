@@ -60,9 +60,7 @@ defmodule CodingAgent.Session.ProviderFallbackAcceptanceTest do
     end
 
     wrapped =
-      ProviderFallback.maybe_wrap(stream_fn, primary, pool_settings(), File.cwd!(),
-        session_id: session_id
-      )
+      ProviderFallback.maybe_wrap(stream_fn, pool_settings(), File.cwd!(), session_id: session_id)
 
     {:ok, stream} = wrapped.(primary, %Context{}, %StreamOptions{})
 
@@ -81,6 +79,7 @@ defmodule CodingAgent.Session.ProviderFallbackAcceptanceTest do
     # clears the pin, a later entry pins its ref.
     assert SessionPins.get(session_id) == %{
              provider: "openai",
+             model_id: "gpt-4",
              credential_ref: "env:#{@good_env}"
            }
 
@@ -100,9 +99,7 @@ defmodule CodingAgent.Session.ProviderFallbackAcceptanceTest do
     end
 
     wrapped =
-      ProviderFallback.maybe_wrap(stream_fn, primary, pool_settings(), File.cwd!(),
-        session_id: session_id
-      )
+      ProviderFallback.maybe_wrap(stream_fn, pool_settings(), File.cwd!(), session_id: session_id)
 
     {:ok, stream} = wrapped.(primary, %Context{}, %StreamOptions{})
 

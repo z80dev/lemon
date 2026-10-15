@@ -112,24 +112,7 @@ defmodule LemonControlPlane.NodeSecretProofs do
   defp current_destination?(node_id, pid, generation) do
     case LemonCore.NodeRegistry.resolve_id(node_id) do
       {:ok, %{id: ^node_id, pid: ^pid, generation: ^generation, metadata: metadata}} ->
-        case metadata do
-          %{
-            capabilities: %{
-              "coding_agent.run" => %{"version" => 1, "nativePrivacyContext" => %{"version" => 1}}
-            }
-          } ->
-            true
-
-          %{
-            "capabilities" => %{
-              "coding_agent.run" => %{"version" => 1, "nativePrivacyContext" => %{"version" => 1}}
-            }
-          } ->
-            true
-
-          _ ->
-            false
-        end
+        LemonCore.NodeRegistry.native_privacy_context_supported?(metadata)
 
       _ ->
         false

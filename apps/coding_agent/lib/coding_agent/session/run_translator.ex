@@ -80,7 +80,12 @@ defmodule CodingAgent.Session.RunTranslator do
     action_id = "tool_#{id}"
     kind = Presentation.tool_kind(name)
     title = Presentation.tool_title(name, args)
-    detail = %{name: name, args: args, tool_call_id: id}
+
+    detail = %{
+      name: name,
+      args: CodingAgent.ToolExecutor.project_action(name, args),
+      tool_call_id: id
+    }
 
     action = %{id: action_id, kind: kind, title: title, detail: detail}
 
@@ -283,6 +288,17 @@ defmodule CodingAgent.Session.RunTranslator do
         {:approval_resolved, _approval_id, _decision, _pending} = event
       ) do
     emit_approval_action(t, event)
+  end
+
+  def handle_event(%__MODULE__{} = t, {:todos_changed, todos}) do
+    emit_action_event(t, %{
+      id: "todos",
+      kind: :note,
+      title: "Todo plan updated",
+      detail: %{type: :todos_changed, todos: todos},
+      phase: :completed,
+      ok: true
+    })
   end
 
   def handle_event(%__MODULE__{} = t, {:provider_retry, details}) when is_map(details) do

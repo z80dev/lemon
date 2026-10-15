@@ -114,6 +114,56 @@ defmodule LemonAi.Providers.RetryHelperTest do
     end
   end
 
+  describe "error_retry_after_ms/1" do
+    test "structured timing retains priority and missing nested hints fall through" do
+      message = %LemonAi.Types.AssistantMessage{
+        error_details: %{rate_limit_info: %{retry_after: 1200}},
+        retry_after_ms: 2300,
+        error_message: "Please retry in 5s"
+      }
+
+      assert RetryHelper.error_retry_after_ms(message) == 1200
+
+      assert RetryHelper.error_retry_after_ms(%{message | error_details: %{rate_limit_info: nil}}) ==
+               2300
+
+      assert RetryHelper.error_retry_after_ms(%{
+               message
+               | error_details: nil,
+                 retry_after_ms: nil
+             }) ==
+               6000
+    end
+
+    test "explicit and rate-limit metadata handle zero and serialized maps" do
+      assert RetryHelper.error_retry_after_ms(%{
+               retry_after_ms: 0,
+               error_message: "Please retry in 2s"
+             }) == 0
+
+      assert RetryHelper.error_retry_after_ms(%{
+               "error_details" => %{"rate_limit_info" => %{"retry_after" => 17}},
+               "retry_after_ms" => 42
+             }) == 17
+
+      assert RetryHelper.error_retry_after_ms(%{
+               retry_after_ms: -1,
+               rate_limit_info: %{retry_after: 42}
+             }) == 42
+    end
+
+    test "HTTP headers win over body hints and preserve header precedence" do
+      error =
+        {:http_error, 429, %{"retry_after_ms" => 5000},
+         [{"retry-after", "2"}, {"retry-after-ms", "3000"}]}
+
+      assert RetryHelper.error_retry_after_ms(error) == 2000
+
+      assert RetryHelper.error_retry_after_ms({:http_error, 429, %{"retry_after_ms" => 5000}, []}) ==
+               5000
+    end
+  end
+
   describe "retry policy" do
     @policy %{
       max_attempts: 4,

@@ -14,6 +14,13 @@ defmodule LemonRouter.StreamCoalescer do
   Produces semantic `LemonCore.DeliveryIntent` snapshots/finalization and
   hands them to `LemonChannels.Dispatcher`. Channel-specific presentation lives
   entirely in `lemon_channels`.
+
+  Each delta must fit the bounded ingress envelope. An oversized delta or a
+  full ingress queue fences transient output: `current_text/3` returns `nil`
+  while resync is required. Recovery requires authoritative `:final_text`
+  from the owner via `finalize_run/4`.
+  Admitted deltas retain a valid UTF-8 answer tail of at most 100,000 bytes;
+  this transient cap does not truncate the owner's final answer.
   """
 
   use GenServer
@@ -43,7 +50,9 @@ defmodule LemonRouter.StreamCoalescer do
     :meta,
     :last_sent_text,
     :finalized,
-    :pending_clear
+    :pending_clear,
+    :delivery,
+    overflowed: false
   ]
 
   def start_link(opts) do
@@ -76,8 +85,13 @@ defmodule LemonRouter.StreamCoalescer do
     meta = Keyword.get(opts, :meta, %{})
 
     case get_or_start_coalescer(session_key, channel_id, meta) do
-      {:ok, pid} ->
-        GenServer.cast(pid, {:delta, run_id, seq, text, meta})
+      {:ok, _pid} ->
+        LemonRouter.CoalescerIngress.push(
+          LemonRouter.CoalescerRegistry,
+          {session_key, channel_id},
+          run_id,
+          {:delta, run_id, seq, text, meta}
+        )
 
       {:error, reason} ->
         Logger.warning("Failed to start coalescer: #{inspect(reason)}")
@@ -199,8 +213,16 @@ defmodule LemonRouter.StreamCoalescer do
   @spec flush(session_key :: binary(), channel_id :: binary()) :: :ok
   def flush(session_key, channel_id) do
     case Registry.lookup(LemonRouter.CoalescerRegistry, {session_key, channel_id}) do
-      [{pid, _}] -> GenServer.cast(pid, :flush)
-      _ -> :ok
+      [{_pid, _}] ->
+        LemonRouter.CoalescerIngress.push(
+          LemonRouter.CoalescerRegistry,
+          {session_key, channel_id},
+          nil,
+          :flush
+        )
+
+      _ ->
+        :ok
     end
   end
 
@@ -231,6 +253,13 @@ defmodule LemonRouter.StreamCoalescer do
       max_latency_ms: Keyword.get(opts, :max_latency_ms, @default_max_latency_ms)
     }
 
+    delivery =
+      LemonRouter.CoalescerIngress.register(
+        LemonRouter.CoalescerRegistry,
+        {session_key, channel_id},
+        opts
+      )
+
     state = %__MODULE__{
       session_key: session_key,
       channel_id: channel_id,
@@ -245,6 +274,7 @@ defmodule LemonRouter.StreamCoalescer do
       meta: Keyword.get(opts, :meta, %{}),
       last_sent_text: nil,
       finalized: false,
+      delivery: delivery,
       pending_clear: false
     }
 
@@ -252,6 +282,8 @@ defmodule LemonRouter.StreamCoalescer do
   end
 
   @impl true
+  def handle_cast({:delta, _, _, _, _}, %{overflowed: true} = state), do: {:noreply, state}
+
   def handle_cast({:delta, run_id, seq, text, meta}, state) do
     now = System.system_time(:millisecond)
 
@@ -324,6 +356,93 @@ defmodule LemonRouter.StreamCoalescer do
 
   @impl true
   def handle_call({:finalize, run_id, meta, final_text, dispatch?}, _from, state) do
+    if LemonRouter.CoalescerIngress.completed?(
+         LemonRouter.CoalescerRegistry,
+         {state.session_key, state.channel_id},
+         run_id
+       ) do
+      {:reply, :ok, state}
+    else
+      finalize_run_state(run_id, meta, final_text, dispatch?, state)
+    end
+  end
+
+  def handle_call({:current_text, run_id}, _from, state) do
+    state = LemonRouter.CoalescerIngress.observe_overflow(state)
+
+    reply =
+      if not state.overflowed and state.run_id == run_id and is_binary(state.full_text) and
+           state.full_text != "" do
+        state.full_text
+      end
+
+    {:reply, reply, state}
+  end
+
+  def handle_call({:commit_turn, run_id}, _from, state) do
+    state = LemonRouter.CoalescerIngress.observe_overflow(state)
+
+    state =
+      if not state.overflowed and state.run_id == run_id and is_binary(state.full_text) and
+           state.full_text != "" do
+        # Finalize the current answer message (handles pending creates, deferred
+        # edits, and ensures the full text is delivered before we detach).
+        state = do_finalize(state, state.full_text)
+
+        cancel_timer(state.flush_timer)
+
+        # Defer the PresentationState clear until the next delta arrives.
+        # This avoids a race where the outbox hasn't delivered the finalize
+        # edit yet (pending_create_ref still set) and clearing would discard
+        # the deferred text update.
+        %{
+          state
+          | buffer: "",
+            full_text: "",
+            last_sent_text: nil,
+            flush_timer: nil,
+            first_delta_ts: nil,
+            finalized: false,
+            pending_clear: true
+        }
+      else
+        state
+      end
+
+    {:reply, :ok, state}
+  end
+
+  def handle_call({:handoff_turn, run_id, target_surface}, _from, state) do
+    state = LemonRouter.CoalescerIngress.observe_overflow(state)
+
+    {reply, state} =
+      if not state.overflowed and state.run_id == run_id and is_binary(state.full_text) and
+           state.full_text != "" do
+        text = state.full_text
+        state = do_finalize(state, text)
+        move_presentation_state_answer(state, target_surface)
+        cancel_timer(state.flush_timer)
+
+        state = %{
+          state
+          | buffer: "",
+            full_text: "",
+            last_sent_text: nil,
+            flush_timer: nil,
+            first_delta_ts: nil,
+            finalized: false,
+            pending_clear: false
+        }
+
+        {{:ok, text}, state}
+      else
+        {:noop, state}
+      end
+
+    {:reply, reply, state}
+  end
+
+  defp finalize_run_state(run_id, meta, final_text, dispatch?, state) do
     state =
       cond do
         state.run_id == nil ->
@@ -354,82 +473,44 @@ defmodule LemonRouter.StreamCoalescer do
           %{state | meta: Map.merge(state.meta || %{}, compact_meta(meta))}
       end
 
-    case do_finalize_with_result(state, final_text, dispatch?) do
-      {:ok, state} ->
-        {:reply, :ok, state}
+    state = LemonRouter.CoalescerIngress.observe_overflow(state)
 
-      {:error, reason, state} ->
-        {:reply, {:error, reason}, state}
+    if state.overflowed and not is_binary(final_text) do
+      {:reply, {:error, :resync_required}, state}
+    else
+      case do_finalize_with_result(state, final_text, dispatch?) do
+        {:ok, state} ->
+          delivery =
+            LemonRouter.CoalescerIngress.complete(
+              LemonRouter.CoalescerRegistry,
+              {state.session_key, state.channel_id},
+              state.delivery,
+              run_id
+            )
+
+          {:reply, :ok, %{state | delivery: delivery, overflowed: false}}
+
+        {:error, reason, state} ->
+          {:reply, {:error, reason}, state}
+      end
     end
   end
 
-  def handle_call({:current_text, run_id}, _from, state) do
-    reply =
-      if state.run_id == run_id and is_binary(state.full_text) and state.full_text != "" do
-        state.full_text
-      end
-
-    {:reply, reply, state}
-  end
-
-  def handle_call({:commit_turn, run_id}, _from, state) do
-    state =
-      if state.run_id == run_id and is_binary(state.full_text) and state.full_text != "" do
-        # Finalize the current answer message (handles pending creates, deferred
-        # edits, and ensures the full text is delivered before we detach).
-        state = do_finalize(state, state.full_text)
-
-        cancel_timer(state.flush_timer)
-
-        # Defer the PresentationState clear until the next delta arrives.
-        # This avoids a race where the outbox hasn't delivered the finalize
-        # edit yet (pending_create_ref still set) and clearing would discard
-        # the deferred text update.
-        %{
-          state
-          | buffer: "",
-            full_text: "",
-            last_sent_text: nil,
-            flush_timer: nil,
-            first_delta_ts: nil,
-            finalized: false,
-            pending_clear: true
-        }
-      else
-        state
-      end
-
-    {:reply, :ok, state}
-  end
-
-  def handle_call({:handoff_turn, run_id, target_surface}, _from, state) do
-    {reply, state} =
-      if state.run_id == run_id and is_binary(state.full_text) and state.full_text != "" do
-        text = state.full_text
-        state = do_finalize(state, text)
-        move_presentation_state_answer(state, target_surface)
-        cancel_timer(state.flush_timer)
-
-        state = %{
-          state
-          | buffer: "",
-            full_text: "",
-            last_sent_text: nil,
-            flush_timer: nil,
-            first_delta_ts: nil,
-            finalized: false,
-            pending_clear: false
-        }
-
-        {{:ok, text}, state}
-      else
-        {:noop, state}
-      end
-
-    {:reply, reply, state}
-  end
-
   @impl true
+  def handle_info({:lemon_bus_delivery, gate, message}, state) do
+    if LemonCore.Bus.Delivery.matches?(state.delivery, gate) do
+      case message do
+        {:stream_resync, :overflow} ->
+          {:noreply, LemonRouter.CoalescerIngress.observe_overflow(state)}
+
+        _ ->
+          handle_cast(message, state)
+      end
+    else
+      {:noreply, state}
+    end
+  end
+
   def handle_info(:idle_timeout, state) do
     state = do_flush(state)
     {:noreply, state}
@@ -460,6 +541,8 @@ defmodule LemonRouter.StreamCoalescer do
         %{state | flush_timer: timer}
     end
   end
+
+  defp do_flush(%{overflowed: true} = state), do: state
 
   defp do_flush(%{buffer: ""} = state), do: state
 
@@ -643,6 +726,7 @@ defmodule LemonRouter.StreamCoalescer do
     text
     |> binary_part(byte_size(text) - @max_full_text, @max_full_text)
     |> drop_partial_codepoint()
+    |> :binary.copy()
   end
 
   defp cap_full_text(text), do: text

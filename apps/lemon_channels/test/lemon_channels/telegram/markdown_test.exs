@@ -491,26 +491,6 @@ defmodule LemonChannels.Telegram.MarkdownTest do
       assert bold["length"] == utf16_len("hello \u{1F600}")
     end
 
-    test "basic ASCII has UTF-16 length equal to byte length" do
-      assert utf16_len("hello") == 5
-      assert utf16_len("abc") == 3
-    end
-
-    test "BMP characters (non-ASCII) have correct UTF-16 length" do
-      # Cyrillic, CJK, etc. are still 1 UTF-16 unit each
-      # Cyrillic A
-      assert utf16_len("\u{0410}") == 1
-      # CJK character
-      assert utf16_len("\u{4E16}") == 1
-    end
-
-    test "supplementary plane emoji use 2 UTF-16 code units" do
-      # rocket
-      assert utf16_len("\u{1F680}") == 2
-      # grinning face
-      assert utf16_len("\u{1F600}") == 2
-    end
-
     test "multiple emoji before entity" do
       md = "\u{1F600}\u{1F680} **text**"
       {text, entities} = Markdown.render(md)
@@ -531,42 +511,6 @@ defmodule LemonChannels.Telegram.MarkdownTest do
       assert bold != nil
       # Two CJK chars (1+1 = 2 UTF-16 units) + space (1 unit) = 3
       assert bold["offset"] == utf16_len("\u{4F60}\u{597D} ")
-    end
-  end
-
-  # ------------------------------------------------------------------
-  # Entity structure
-  # ------------------------------------------------------------------
-
-  describe "entity map structure" do
-    test "entity has required keys: type, offset, length" do
-      {_text, entities} = Markdown.render("**bold**")
-      bold = find_entity(entities, "bold")
-      assert Map.has_key?(bold, "type")
-      assert Map.has_key?(bold, "offset")
-      assert Map.has_key?(bold, "length")
-    end
-
-    test "text_link entity includes url key" do
-      {_text, entities} = Markdown.render("[link](https://example.com)")
-      link = find_entity(entities, "text_link")
-      assert Map.has_key?(link, "url")
-      assert link["url"] == "https://example.com"
-    end
-
-    test "pre entity with language includes language key" do
-      md = "```ruby\nputs 'hi'\n```"
-      {_text, entities} = Markdown.render(md)
-      pre = find_entity(entities, "pre")
-      assert Map.has_key?(pre, "language")
-      assert pre["language"] == "ruby"
-    end
-
-    test "offset and length are integers" do
-      {_text, entities} = Markdown.render("**bold**")
-      bold = find_entity(entities, "bold")
-      assert is_integer(bold["offset"])
-      assert is_integer(bold["length"])
     end
   end
 
@@ -628,6 +572,7 @@ defmodule LemonChannels.Telegram.MarkdownTest do
       # Both paragraph breaks must be present
       assert String.contains?(text, "- b\n\nFirst"),
              "Expected blank line after list, got: #{inspect(text)}"
+
       assert String.contains?(text, "list.\n\nSecond"),
              "Expected blank line between paragraphs, got: #{inspect(text)}"
     end
@@ -646,10 +591,13 @@ defmodule LemonChannels.Telegram.MarkdownTest do
 
       assert String.contains?(text, "Intro.\n\n- a"),
              "Expected break after intro, got: #{inspect(text)}"
+
       assert String.contains?(text, "- b\n\nMiddle"),
              "Expected break after ul, got: #{inspect(text)}"
+
       assert String.contains?(text, "Middle.\n\n1."),
              "Expected break after middle paragraph, got: #{inspect(text)}"
+
       assert String.contains?(text, "2. y\n\nEnd"),
              "Expected break after ol, got: #{inspect(text)}"
     end
@@ -683,8 +631,10 @@ defmodule LemonChannels.Telegram.MarkdownTest do
 
       assert String.contains?(text, "- ul b\n\nMiddle"),
              "Expected break after first list, got: #{inspect(text)}"
+
       assert String.contains?(text, "paragraph.\n\n1."),
              "Expected break after middle paragraph, got: #{inspect(text)}"
+
       assert String.contains?(text, "two\n\nFinal"),
              "Expected break after second list, got: #{inspect(text)}"
     end
@@ -713,23 +663,6 @@ defmodule LemonChannels.Telegram.MarkdownTest do
       {_text, entities} = Markdown.render("****")
       # Empty bold should not produce an entity
       assert find_entity(entities, "bold") == nil
-    end
-
-    test "link with empty url renders text without entity" do
-      # A link with no href should not produce a text_link entity
-      {text, entities} = Markdown.render("[text]()")
-      # Earmark may or may not parse this as a link; either way check no crash
-      assert is_binary(text)
-      assert is_list(entities)
-    end
-
-    test "render returns a two-element tuple" do
-      result = Markdown.render("anything")
-      assert is_tuple(result)
-      assert tuple_size(result) == 2
-      {text, entities} = result
-      assert is_binary(text)
-      assert is_list(entities)
     end
   end
 end

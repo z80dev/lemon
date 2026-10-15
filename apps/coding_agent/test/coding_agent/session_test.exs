@@ -387,24 +387,96 @@ defmodule CodingAgent.SessionTest do
       assert excerpt =~ "line"
     end
 
-    test "fails without cwd" do
-      # Session.start_link crashes the spawned process, so we need to catch the exit
-      Process.flag(:trap_exit, true)
-      result = Session.start_link(model: mock_model())
+    test "defaults cwd for direct session starts" do
+      {:ok, session} =
+        Session.start_link(
+          model: mock_model(),
+          stream_fn: mock_stream_fn_single(assistant_message("Hello!"))
+        )
 
-      case result do
-        {:error, {:key_not_found, :cwd}} ->
-          :ok
+      state = Session.get_state(session)
+      assert state.cwd == File.cwd!()
+      assert state.execution_context.workspace_scope.root == File.cwd!()
+      GenServer.stop(session)
+    end
 
-        {:error, _reason} ->
-          :ok
+    test "rejects malformed execution authority before starting a session" do
+      assert {:error, :invalid_execution_context} =
+               Session.start_link(execution_context: %{}, model: mock_model())
+    end
 
-        {:ok, pid} ->
-          # Should receive EXIT if process crashed during init
-          assert_receive {:EXIT, ^pid, _reason}, 2_000
-      end
+    test "direct lifecycle initialization cannot bypass execution authority validation" do
+      assert_raise ArgumentError,
+                   "invalid session execution authority: :invalid_execution_context",
+                   fn ->
+                     CodingAgent.Session.Lifecycle.initialize(
+                       default_opts(execution_context: %{}),
+                       self()
+                     )
+                   end
+    end
 
-      Process.flag(:trap_exit, false)
+    test "intersects a supplied policy floor with execution authority" do
+      alias LemonCore.{ExecutionContext, ToolPolicy}
+      cwd = System.tmp_dir!()
+      {:ok, context} = ExecutionContext.new(run_id: "session-floor", cwd: cwd)
+
+      session =
+        start_session(
+          cwd: cwd,
+          execution_context: context,
+          tool_policy: ToolPolicy.from_profile(:read_only)
+        )
+
+      state = Session.get_state(session)
+      assert ExecutionContext.subset?(state.execution_context, context)
+      assert state.execution_context.tool_policy == state.tool_policy
+      refute ToolPolicy.allowed?(state.tool_policy, "write")
+      GenServer.stop(session)
+    end
+
+    @tag :tmp_dir
+    test "forks inherit durable authority even from an earlier history leaf", %{tmp_dir: tmp_dir} do
+      alias LemonCore.{ExecutionContext, ToolPolicy}
+
+      {:ok, context} =
+        ExecutionContext.new(
+          run_id: "fork-source",
+          cwd: tmp_dir,
+          tool_policy: ToolPolicy.from_profile(:read_only),
+          limits: %{max_steps: 5}
+        )
+
+      source =
+        SessionManager.new(tmp_dir)
+        |> SessionManager.append_message(%{
+          "role" => "user",
+          "content" => "Inspect only",
+          "timestamp" => 1
+        })
+
+      leaf_id = source.leaf_id
+      {:ok, source} = SessionManager.append_execution_context(source, context)
+      source_path = Path.join(tmp_dir, "source.jsonl")
+      child_path = Path.join(tmp_dir, "child.jsonl")
+      :ok = SessionManager.save_to_file(source_path, source)
+      {:ok, child} = SessionManager.fork_file(source_path, child_path, leaf_id: leaf_id)
+      {:ok, inherited} = SessionManager.execution_context(child)
+      assert ExecutionContext.subset?(inherited, context)
+      assert inherited.parent_run_id == context.run_id
+
+      session =
+        start_session(
+          cwd: tmp_dir,
+          session_file: child_path,
+          tool_policy: ToolPolicy.from_profile(:full_access)
+        )
+
+      state = Session.get_state(session)
+      assert ExecutionContext.subset?(state.execution_context, context)
+      refute ToolPolicy.allowed?(state.tool_policy, "write")
+      assert state.execution_context.limits.max_steps == 5
+      GenServer.stop(session)
     end
 
     test "fails without model" do
@@ -1283,7 +1355,7 @@ defmodule CodingAgent.SessionTest do
     end
 
     @tag :tmp_dir
-    test "reset clears prior session file path and saves under new session id", %{
+    test "reset owns a new session file path and saves under the new session id", %{
       tmp_dir: tmp_dir
     } do
       explicit_path = Path.join(tmp_dir, "existing_session.jsonl")
@@ -1301,7 +1373,10 @@ defmodule CodingAgent.SessionTest do
       reset_state = Session.get_state(session)
       reset_id = reset_state.session_manager.header.id
       refute reset_id == initial_id
-      assert reset_state.session_file == nil
+      expected_path = CodingAgent.Session.Presentation.session_file_path(reset_id, tmp_dir)
+      assert reset_state.session_file == expected_path
+      assert reset_state.session_manager.file_path == expected_path
+      assert File.exists?(expected_path)
 
       :ok = Session.save(session)
       saved_state = Session.get_state(session)

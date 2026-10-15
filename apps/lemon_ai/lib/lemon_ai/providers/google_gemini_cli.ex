@@ -399,19 +399,26 @@ defmodule LemonAi.Providers.GoogleGeminiCli do
   end
 
   defp make_request_with_retry(endpoints, headers, body, opts, attempt) do
+    max_retries = request_max_retries(opts, @max_retries)
     endpoint = Enum.at(endpoints, min(attempt, length(endpoints) - 1))
     url = "#{endpoint}/v1internal:streamGenerateContent?alt=sse"
 
     headers_list = Enum.map(headers, fn {k, v} -> {k, v} end)
 
-    case Req.post(url, headers: headers_list, json: body, receive_timeout: 300_000, into: :self) do
+    case Req.post(url,
+           headers: headers_list,
+           json: body,
+           retry: false,
+           receive_timeout: 300_000,
+           into: :self
+         ) do
       {:ok, %Req.Response{status: status} = resp} when status in 200..299 ->
         {:ok, {url, resp}}
 
-      {:ok, %Req.Response{status: status, body: error_body}} ->
-        error_text = if is_binary(error_body), do: error_body, else: inspect(error_body)
+      {:ok, %Req.Response{status: status, body: error_body, headers: response_headers}} ->
+        error_text = GoogleShared.normalize_http_error_body(error_body)
 
-        if attempt < @max_retries and GoogleShared.retryable_error?(status, error_text) do
+        if attempt < max_retries and GoogleShared.retryable_error?(status, error_text) do
           delay =
             case GoogleShared.extract_retry_delay(error_text) do
               nil -> retry_delay_with_jitter(@base_delay_ms, attempt)
@@ -421,12 +428,11 @@ defmodule LemonAi.Providers.GoogleGeminiCli do
           Process.sleep(delay)
           make_request_with_retry(endpoints, headers, body, opts, attempt + 1)
         else
-          {:error,
-           "Cloud Code Assist API error (#{status}): #{GoogleShared.extract_error_message(error_text)}"}
+          {:error, GoogleShared.safe_http_error(status, error_text, response_headers)}
         end
 
       {:error, %Req.TransportError{reason: reason}} ->
-        if attempt < @max_retries do
+        if attempt < max_retries do
           delay = retry_delay_with_jitter(@base_delay_ms, attempt)
           Process.sleep(delay)
           make_request_with_retry(endpoints, headers, body, opts, attempt + 1)
@@ -435,7 +441,7 @@ defmodule LemonAi.Providers.GoogleGeminiCli do
         end
 
       {:error, reason} ->
-        if attempt < @max_retries do
+        if attempt < max_retries do
           delay = retry_delay_with_jitter(@base_delay_ms, attempt)
           Process.sleep(delay)
           make_request_with_retry(endpoints, headers, body, opts, attempt + 1)
@@ -444,6 +450,12 @@ defmodule LemonAi.Providers.GoogleGeminiCli do
         end
     end
   end
+
+  defp request_max_retries(%{provider_retry: %{max_attempts: attempts}}, default)
+       when is_integer(attempts) and attempts > 0,
+       do: min(attempts - 1, default)
+
+  defp request_max_retries(_opts, default), do: default
 
   defp process_response_stream(
          stream,
@@ -491,14 +503,21 @@ defmodule LemonAi.Providers.GoogleGeminiCli do
 
     final_state = receive_sse_events(stream, state, model)
 
-    if not final_state.has_content and empty_attempt < @max_empty_stream_retries do
+    if not final_state.has_content and
+         empty_attempt < request_max_retries(opts, @max_empty_stream_retries) do
       # Retry on empty response
       delay = retry_delay_with_jitter(@empty_stream_base_delay_ms, empty_attempt)
       Process.sleep(delay)
 
       headers_list = Enum.map(headers, fn {k, v} -> {k, v} end)
 
-      case Req.post(url, headers: headers_list, json: body, receive_timeout: 300_000, into: :self) do
+      case Req.post(url,
+             headers: headers_list,
+             json: body,
+             retry: false,
+             receive_timeout: 300_000,
+             into: :self
+           ) do
         {:ok, %Req.Response{status: status} = new_resp} when status in 200..299 ->
           # Reset output for retry
           new_output = %{output | content: [], timestamp: System.system_time(:millisecond)}
@@ -514,11 +533,13 @@ defmodule LemonAi.Providers.GoogleGeminiCli do
             empty_attempt + 1
           )
 
-        {:ok, %Req.Response{status: status, body: error_body}} ->
+        {:ok, %Req.Response{status: status, body: error_body, headers: response_headers}} ->
+          error_text = GoogleShared.normalize_http_error_body(error_body)
+
           handle_error(
             stream,
             output,
-            "Cloud Code Assist API error (#{status}): #{inspect(error_body)}"
+            GoogleShared.safe_http_error(status, error_text, response_headers)
           )
 
         {:error, reason} ->
@@ -828,11 +849,7 @@ defmodule LemonAi.Providers.GoogleGeminiCli do
   end
 
   defp handle_error(stream, output, reason) do
-    error_output = %{
-      output
-      | stop_reason: :error,
-        error_message: reason
-    }
+    error_output = error_assistant_message(output, reason)
 
     EventStream.error(stream, error_output)
   end

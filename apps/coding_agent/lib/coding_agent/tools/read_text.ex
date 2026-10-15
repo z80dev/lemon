@@ -53,7 +53,7 @@ defmodule CodingAgent.Tools.ReadText do
   end
 
   defp scan(file, state, signal) do
-    with :ok <- CodingAgent.Tools.AbortHelpers.check_abort(signal) do
+    with :ok <- LemonAgent.Tools.AbortHelpers.check_abort(signal) do
       case IO.binread(file, @chunk_bytes) do
         :eof ->
           if state.utf8_tail == "" do

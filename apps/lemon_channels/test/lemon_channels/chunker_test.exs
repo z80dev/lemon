@@ -25,19 +25,12 @@ defmodule LemonChannels.Outbox.ChunkerTest do
       end
     end
 
-    test "splits at sentence boundaries when possible" do
-      text = "First sentence. Second sentence. Third sentence."
-      chunks = Chunker.chunk(text, chunk_size: 30)
-
-      # Should try to keep sentences together
-      assert chunks != []
-    end
-
     test "handles text without spaces" do
       text = String.duplicate("a", 50)
       chunks = Chunker.chunk(text, chunk_size: 20)
 
-      assert length(chunks) == 3  # 20 + 20 + 10
+      # 20 + 20 + 10
+      assert length(chunks) == 3
     end
 
     test "preserves all content when chunking" do
@@ -48,11 +41,24 @@ defmodule LemonChannels.Outbox.ChunkerTest do
       # Allow for trimmed whitespace
       assert String.replace(rejoined, " ", "") == String.replace(text, " ", "")
     end
-  end
 
-  describe "chunk_size_for/1" do
-    test "returns default for unknown channel" do
-      assert Chunker.chunk_size_for("unknown") == 4096
+    test "preserves word boundaries when possible" do
+      text = "Hello wonderful beautiful world of programming and code"
+
+      chunks =
+        Chunker.chunk(text, chunk_size: 20, preserve_words: true, preserve_sentences: false)
+
+      # Should produce multiple chunks
+      assert length(chunks) > 1
+
+      # All chunks combined should equal original text
+      rejoined = Enum.join(chunks, "")
+      assert rejoined == text
+    end
+
+    test "handles empty string" do
+      chunks = Chunker.chunk("", chunk_size: 100)
+      assert chunks == [""]
     end
   end
 end

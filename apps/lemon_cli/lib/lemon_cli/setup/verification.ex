@@ -12,10 +12,8 @@ defmodule LemonCli.Setup.Verification do
      and credential with the strongest runtime-safe checks available:
 
        - the config resolves a default provider and a default model
-       - the referenced credential source is usable — an inline `api_key`, or
-         a secret reference that is actually decryptable from the encrypted
-         store (falling back to a same-named environment variable, matching
-         `LemonCore.Secrets.resolve/2`)
+       - live credentials resolve through the native credential owner, including
+         selected-login authority and credential-pool/default policy
        - optionally a lightweight live request against the provider's
          OpenAI-compatible `GET {base_url}/models` endpoint
 
@@ -27,9 +25,12 @@ defmodule LemonCli.Setup.Verification do
   instead of a second implementation.
   """
 
+  alias LemonAgent.ModelRuntime.{Credentials, CustomProviders, ProviderNames}
   alias LemonAi.Models
+  alias LemonAi.Providers.RequestHeaders
+  alias LemonCore.Config
+  alias LemonCore.Config.{Agent, LegacyAgentMigration, Providers}
   alias LemonCore.Httpc
-  alias LemonCore.Secrets
   alias LemonCore.Setup.Readiness
 
   @live_timeout_ms 5_000
@@ -91,6 +92,9 @@ defmodule LemonCli.Setup.Verification do
   ## Options
 
     * `:config_path` - config file to inspect (default: the global config)
+    * `:config` - full effective runtime config (including credential routing);
+      otherwise loaded from the selected file with canonical environment overrides
+    * `:verification_model` - resolved model for that config and default identity
     * `:verifier` - injectable live-check function of one map argument
       (`%{provider:, model:, base_url:, api_key:}`) returning `{:ok, map}`,
       `{:error, reason}`, or `{:skip, reason}`. Defaults to the built-in
@@ -99,17 +103,57 @@ defmodule LemonCli.Setup.Verification do
   """
   @spec verify_provider(keyword()) :: {:ok, verify_ok()} | {:error, verify_failure()}
   def verify_provider(opts \\ []) do
-    state = setup_state(opts)
-    provider_state = state.provider
+    config = Keyword.get(opts, :config) || effective_config(opts)
+    provider_state = effective_provider_state(setup_state(opts).provider, config)
+    opts = bind_verification_options(opts, config, provider_state)
 
-    with :ok <- assert_provider_complete(provider_state) do
+    with :ok <- assert_provider_complete(provider_state, opts) do
       run_live_check(provider_state, opts)
     end
   end
 
-  defp assert_provider_complete(%{complete: true}), do: :ok
+  @doc """
+  Binds setup verification to the effective config and concrete default model.
 
-  defp assert_provider_complete(%{provider: provider, reason: reason}) do
+  Setup callers use this after onboarding has written its config. A custom
+  `:config_path` selects that file; the global path uses the normal global/project
+  merge. Both paths apply the canonical environment overrides. This does not
+  discover models or resolve credentials for an explicitly skipped live check.
+  """
+  @spec verification_options(keyword()) :: keyword()
+  def verification_options(opts \\ []) do
+    config = Keyword.get(opts, :config) || effective_config(opts)
+    provider_state = effective_provider_state(setup_state(opts).provider, config)
+    bind_verification_options(opts, config, provider_state)
+  end
+
+  defp bind_verification_options(opts, config, provider_state) do
+    model =
+      unless Keyword.get(opts, :skip_verify, false) do
+        Keyword.get(opts, :verification_model) ||
+          effective_model(config, provider_state.provider, provider_state.model)
+      end
+
+    opts
+    |> Keyword.put(:config, config)
+    |> Keyword.put(:verification_model, model)
+  end
+
+  # Local readiness only proves storage availability. Live verification must
+  # resolve the selected credential even when local readiness has no usable ref.
+  defp assert_provider_complete(%{provider: provider, reason: :credential_not_usable}, opts) do
+    if Keyword.get(opts, :skip_verify, false),
+      do: provider_failure(provider, :credential_not_usable),
+      else: :ok
+  end
+
+  defp assert_provider_complete(%{complete: true}, _opts), do: :ok
+
+  defp assert_provider_complete(%{provider: provider, reason: reason}, _opts) do
+    provider_failure(provider, reason)
+  end
+
+  defp provider_failure(provider, reason) do
     {:error,
      %{
        step: :provider,
@@ -178,6 +222,9 @@ defmodule LemonCli.Setup.Verification do
              live: :skipped,
              live_note: "live check not available (#{format_live_reason(reason)})"
            }}
+
+        {:error, reason} ->
+          provider_failure(provider, reason)
       end
     end
   end
@@ -192,73 +239,107 @@ defmodule LemonCli.Setup.Verification do
   defp live_note(_), do: "live check passed"
 
   defp build_live_input(opts, provider, model) do
-    settings = opts |> config_path() |> read_settings()
-    provider_cfg = get_in(settings, ["providers", provider]) || %{}
+    config = Keyword.fetch!(opts, :config)
+    provider_cfg = provider_config(config, provider)
+    resolved_model = Keyword.get(opts, :verification_model)
 
-    with {:ok, api_key} <- fetch_live_credential(provider_cfg),
-         {:ok, registry_model} <- fetch_registry_model(provider, model) do
-      {:ok,
-       %{
-         provider: provider,
-         model: model,
-         api: registry_model.api,
-         base_url: registry_model.base_url,
-         api_key: api_key
-       }}
+    with {:ok, api_key} <- fetch_live_credential(config, provider, provider_cfg),
+         {:ok, resolved_model} <- fetch_effective_model(resolved_model, provider, model) do
+      keyless? =
+        CustomProviders.keyless?(provider_cfg) ||
+          Map.get(resolved_model.compat || %{}, :allow_missing_api_key, false)
+
+      if is_nil(api_key) and not keyless? do
+        {:error, :credential_not_usable}
+      else
+        {:ok,
+         %{
+           provider: provider,
+           model: model,
+           api: resolved_model.api,
+           base_url: resolved_model.base_url,
+           api_key: api_key,
+           headers: resolved_model.headers || %{}
+         }}
+      end
     end
   end
 
-  defp fetch_live_credential(provider_cfg) when is_map(provider_cfg) do
+  defp fetch_live_credential(config, provider, provider_cfg) do
+    key = Credentials.build_get_api_key(config).(provider)
+
     cond do
-      inline = normalize_optional_string(provider_cfg["api_key"]) ->
-        {:ok, inline}
-
-      name =
-          normalize_optional_string(
-            provider_cfg["oauth_secret"] || provider_cfg["api_key_secret"]
-          ) ->
-        case Secrets.resolve(name, prefer_env: false) do
-          {:ok, value, _source} -> {:ok, value}
-          {:error, reason} -> {:skip, {:credential_unavailable, reason}}
-        end
-
-      true ->
-        {:skip, {:credential_unavailable, :no_reference}}
+      normalize_optional_string(key) -> {:ok, key}
+      Credentials.oauth_selected?(provider_cfg) -> {:error, :credential_not_usable}
+      true -> {:ok, nil}
     end
   end
 
-  defp fetch_registry_model(provider, model) do
+  defp fetch_effective_model(nil, _provider, _model), do: {:skip, :unknown_model}
+
+  defp fetch_effective_model(resolved_model, provider, model) do
     model_id = model |> String.split(":", parts: 2) |> List.last()
 
-    case registry_provider_atom(provider) do
-      nil ->
-        {:skip, {:unknown_provider, provider}}
+    if normalize_provider_name(to_string(resolved_model.provider)) ==
+         normalize_provider_name(provider) and resolved_model.id == model_id,
+       do: {:ok, resolved_model},
+       else: {:error, :model_provider_mismatch}
+  end
 
-      provider_atom ->
-        case Models.get_model(provider_atom, model_id) do
-          nil -> {:skip, {:unknown_model, model_id}}
-          registry_model -> {:ok, registry_model}
-        end
+  defp effective_model(_config, nil, _model), do: nil
+  defp effective_model(_config, _provider, nil), do: nil
+
+  defp effective_model(config, provider, model) do
+    model_id = model |> String.split(":", parts: 2) |> List.last()
+    registry_provider = registry_provider_atom(provider)
+
+    resolved_model =
+      CustomProviders.lookup(config, provider, model_id) ||
+        (registry_provider && Models.get_model(registry_provider, model_id))
+
+    if resolved_model do
+      provider_cfg = provider_config(config, provider)
+
+      %{
+        resolved_model
+        | base_url: CustomProviders.base_url(provider_cfg) || resolved_model.base_url,
+          headers:
+            CustomProviders.headers(provider_cfg)
+            |> RequestHeaders.merge(resolved_model.headers)
+      }
     end
+  end
+
+  defp provider_config(config, provider) do
+    ProviderNames.provider_config(config, provider) ||
+      CustomProviders.config_for(config, provider) || %{}
   end
 
   defp registry_provider_atom(provider) do
-    normalized = normalize_provider_name(provider)
-
-    Models.get_providers()
-    |> Enum.find(fn registry_provider ->
-      registry_provider |> Atom.to_string() |> normalize_provider_name() == normalized
-    end)
+    ProviderNames.provider_atom(provider) ||
+      Enum.find(Models.get_providers(), fn registry_provider ->
+        normalize_provider_name(Atom.to_string(registry_provider)) ==
+          normalize_provider_name(provider)
+      end)
   end
 
   # Default live verifier: one lightweight GET against the provider's
   # OpenAI-compatible models endpoint. 2xx proves the credential is accepted;
   # 401/403 proves it is not; anything else is reported, never guessed.
-  defp default_live_check(%{api: api, base_url: base_url, api_key: api_key}) do
+  defp default_live_check(%{api: api, base_url: base_url, api_key: api_key, headers: headers}) do
     if api in @live_check_apis do
       url = String.trim_trailing(base_url, "/") <> "/models"
 
-      request = {String.to_charlist(url), [{~c"authorization", ~c"Bearer #{api_key}"}]}
+      auth_headers = if api_key, do: %{"authorization" => "Bearer " <> api_key}, else: %{}
+
+      request_headers =
+        auth_headers
+        |> RequestHeaders.merge(headers)
+        |> Enum.map(fn {name, value} ->
+          {String.to_charlist(name), String.to_charlist(value)}
+        end)
+
+      request = {String.to_charlist(url), request_headers}
       ssl_opts = [verify: :verify_peer] |> maybe_put_cacerts()
 
       case Httpc.request(:get, request, [{:ssl, ssl_opts}, {:timeout, @live_timeout_ms}], []) do
@@ -271,8 +352,8 @@ defmodule LemonCli.Setup.Verification do
         {:ok, {{_vsn, status, _phrase}, _headers, _body}} ->
           {:error, {:http_status, status}}
 
-        {:error, reason} ->
-          {:error, {:unreachable, reason}}
+        {:error, _reason} ->
+          {:error, :unreachable}
       end
     else
       {:skip, {:unsupported_api, api}}
@@ -300,7 +381,7 @@ defmodule LemonCli.Setup.Verification do
       "to store a valid credential, or use --skip-verify to defer this check."
   end
 
-  defp live_failure_message(_live_input, {:unreachable, _reason}) do
+  defp live_failure_message(_live_input, :unreachable) do
     "Could not reach the provider's models endpoint. Check your network and retry, " <>
       "or re-run with --skip-verify when offline."
   end
@@ -335,6 +416,49 @@ defmodule LemonCli.Setup.Verification do
     end
   end
 
+  defp effective_config(opts) do
+    path = config_path(opts)
+    cwd = Keyword.get(opts, :cwd, File.cwd!())
+
+    if Path.expand(path) == Path.expand(LemonCore.Config.Modular.global_path()) do
+      Config.load(cwd, cache: false)
+    else
+      settings = path |> read_settings() |> LegacyAgentMigration.migrate_settings()
+
+      %{
+        providers: Providers.resolve(settings).providers,
+        agent: settings |> Agent.resolve() |> Map.from_struct()
+      }
+    end
+  end
+
+  defp effective_provider_state(state, config) do
+    agent = Map.get(config, :agent) || %{}
+
+    # Do not turn implicit runtime defaults into newly completed setup steps.
+    provider =
+      state.provider && (normalize_optional_string(agent[:default_provider]) || state.provider)
+
+    model = state.model && (normalize_optional_string(agent[:default_model]) || state.model)
+
+    mismatch? =
+      case provider && model && String.split(model, ":", parts: 2) do
+        [prefix, _id] -> normalize_provider_name(prefix) != normalize_provider_name(provider)
+        _ -> false
+      end
+
+    reason =
+      cond do
+        is_nil(provider) -> :missing_default_provider
+        is_nil(model) -> :missing_default_model
+        mismatch? -> :model_provider_mismatch
+        not state.credential_ready -> :credential_not_usable
+        true -> nil
+      end
+
+    %{state | provider: provider, model: model, reason: reason, complete: is_nil(reason)}
+  end
+
   defp normalize_optional_string(value) when is_binary(value) do
     value = String.trim(value)
     if value == "", do: nil, else: value
@@ -343,6 +467,8 @@ defmodule LemonCli.Setup.Verification do
   defp normalize_optional_string(_), do: nil
 
   defp normalize_provider_name(value) when is_binary(value) do
-    value |> String.downcase() |> String.replace("_", "-")
+    (ProviderNames.config_name(value) || value)
+    |> String.downcase()
+    |> String.replace("_", "-")
   end
 end
