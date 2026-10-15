@@ -10,6 +10,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Escape angle-bracket placeholders in generated configuration registry prose so
+  VitePress treats paths such as `<root>/agent-tools/node/bin/node` as text, not
+  unclosed HTML tags, while preserving existing inline code and alias line breaks.
+
 - Make injected SVG rasterizer fixtures portable across BSD and GNU base64, and
   explicitly exclude only the named real-rasterizer test when librsvg is absent.
 
