@@ -13,6 +13,23 @@ defmodule LemonCli.CLITest do
   alias LemonCore.Setup.Readiness
   alias Mix.Tasks.Lemon.Config
 
+  defmodule LiveDoctorProbe do
+    alias LemonCore.Doctor.Check
+
+    def run(_opts), do: []
+
+    def live_checks(_opts) do
+      send(self(), :live_jobs_requested)
+
+      [
+        {"providers.live",
+         fn ->
+           Check.fail("providers.live", "Injected auth rejection.")
+         end}
+      ]
+    end
+  end
+
   setup do
     tmp_dir =
       Path.join(
@@ -342,6 +359,33 @@ defmodule LemonCli.CLITest do
 
     assert error =~ "Usage: lemon <command> [options]"
     assert error =~ "Run `lemon <command> --help` for command options."
+  end
+
+  test "doctor --live includes injected live failures in JSON and exits one", %{tmp_dir: tmp_dir} do
+    previous = Application.get_env(:lemon_core, :doctor_checks)
+    Application.put_env(:lemon_core, :doctor_checks, [LiveDoctorProbe])
+    on_exit(fn -> Application.put_env(:lemon_core, :doctor_checks, previous) end)
+
+    output =
+      capture_io(fn ->
+        capture_io(:stderr, fn ->
+          assert CLI.run(["doctor", "--live", "--json", "--project-dir", tmp_dir]) == 1
+        end)
+      end)
+
+    assert_received :live_jobs_requested
+    assert output =~ "providers.live"
+    assert output =~ "Injected auth rejection."
+
+    offline =
+      capture_io(fn ->
+        capture_io(:stderr, fn ->
+          CLI.run(["doctor", "--json", "--project-dir", tmp_dir])
+        end)
+      end)
+
+    refute_received :live_jobs_requested
+    refute offline =~ "providers.live"
   end
 
   test "rejects unknown doctor options before running diagnostics" do

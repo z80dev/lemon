@@ -1,41 +1,7 @@
+Code.require_file("../../support/process_service_case.ex", __DIR__)
+
 defmodule CodingAgent.ExecutionNode.ProcessServiceTest do
-  use ExUnit.Case, async: false
-
-  alias CodingAgent.ExecutionNode.ProcessService
-  alias LemonCore.Store
-
-  @moduletag :tmp_dir
-  @store :node_process_test_store
-  @server :node_process_test_service
-
-  setup %{tmp_dir: root} do
-    start_supervised!(
-      Supervisor.child_spec(
-        {Store,
-         name: @store,
-         backend: LemonCore.Store.SqliteBackend,
-         backend_opts: [path: Path.join(root, "receipts.sqlite3"), ephemeral_tables: []]},
-        id: @store
-      )
-    )
-
-    start_service()
-    python = System.find_executable("python3")
-    assert is_binary(python), "python3 is required for destination process execution"
-    fixture = Path.expand("../../support/node_process_fixture.py", __DIR__)
-
-    opts = [
-      server: @server,
-      node_id: "process-node",
-      session_generation: 11,
-      invoke_id: "original-invocation",
-      owner: self(),
-      default_cwd: root,
-      allowed_roots: [root]
-    ]
-
-    %{root: root, python: python, fixture: fixture, opts: opts}
-  end
+  use CodingAgent.ExecutionNode.ProcessServiceCase, async: true
 
   test "literal Unicode, quoted 21kB argv, raw stdin EOF, non-TTY pipes, independent streams and real exit",
        ctx do
@@ -62,7 +28,7 @@ defmodule CodingAgent.ExecutionNode.ProcessServiceTest do
              run(Map.put(args, "stdinBase64", Base.encode64("different")), ctx.opts)
 
     assert {:ok, metadata} =
-             Store.fetch(@store, :node_process_receipts, {"process-node", "literal"})
+             Store.fetch(ctx.store, :node_process_receipts, {"process-node", "literal"})
 
     refute Map.has_key?(metadata, :argv)
     refute Map.has_key?(metadata, :stdin)
@@ -79,7 +45,7 @@ defmodule CodingAgent.ExecutionNode.ProcessServiceTest do
     assert {:ok, ^tombstone} = run(args(ctx, "missing", ["touch", marker]), ctx.opts)
     refute File.exists?(marker)
     stop_supervised!(ProcessService)
-    start_service()
+    start_service(ctx)
     assert {:ok, ^tombstone} = run(args(ctx, "missing", ["touch", marker]), ctx.opts)
     refute File.exists?(marker)
   end
@@ -113,38 +79,6 @@ defmodule CodingAgent.ExecutionNode.ProcessServiceTest do
     assert {:ok, ^cancelled} = Task.await(task, 5_000)
   end
 
-  test "timeout, explicit and original-invocation cancellation kill descendants", ctx do
-    for {id, action} <- [
-          {"timeout-tree", :timeout},
-          {"cancel-tree", :cancel},
-          {"invocation-tree", :invocation}
-        ] do
-      ready = Path.join(ctx.root, id <> "-ready")
-      survived = Path.join(ctx.root, id <> "-survived")
-      timeout = if action == :timeout, do: 1_000, else: 10_000
-      args = args(ctx, id, ["tree", ready, survived]) |> Map.put("timeoutMs", timeout)
-      task = Task.async(fn -> run(args, ctx.opts) end)
-      await_file(ready)
-
-      case action do
-        :timeout ->
-          :ok
-
-        :cancel ->
-          assert {:ok, %{"state" => "cancelled"}} = cancel(id, ctx.opts)
-
-        :invocation ->
-          assert :ok = ProcessService.cancel_invocation(self(), "original-invocation", @server)
-      end
-
-      assert {:ok, result} = Task.await(task, 5_000)
-      assert result["state"] == "cancelled"
-      assert is_integer(result["exitCode"])
-      Process.sleep(2_100)
-      refute File.exists?(survived)
-    end
-  end
-
   test "combined overflow is bounded and terminalizes instead of draining unbounded output",
        ctx do
     args = args(ctx, "overflow", ["overflow"]) |> Map.put("maxOutputBytes", 257)
@@ -155,25 +89,6 @@ defmodule CodingAgent.ExecutionNode.ProcessServiceTest do
 
     assert byte_size(Base.decode64!(result["stdoutBase64"])) +
              byte_size(Base.decode64!(result["stderrBase64"])) == 257
-  end
-
-  test "caller and authenticated owner death cancel actual work", ctx do
-    for which <- [:caller, :owner] do
-      id = Atom.to_string(which)
-      ready = Path.join(ctx.root, id <> "-ready")
-      survived = Path.join(ctx.root, id <> "-survived")
-      owner = spawn(fn -> Process.sleep(:infinity) end)
-      opts = Keyword.put(ctx.opts, :owner, owner)
-      caller = spawn(fn -> run(args(ctx, id, ["tree", ready, survived]), opts) end)
-      await_file(ready)
-      Process.exit(if(which == :owner, do: owner, else: caller), :kill)
-      result = await_state(id, "cancelled", ctx.opts)
-      assert is_integer(result["exitCode"])
-      Process.exit(owner, :kill)
-      Process.exit(caller, :kill)
-      Process.sleep(2_100)
-      refute File.exists?(survived)
-    end
   end
 
   test "service restart reports unknown without fake bytes, exit or replay; durable final exit survives",
@@ -187,7 +102,7 @@ defmodule CodingAgent.ExecutionNode.ProcessServiceTest do
     await_file(ready)
     stop_supervised!(ProcessService)
     assert {:error, :process_outcome_unknown} = Task.await(task, 5_000)
-    start_service()
+    start_service(ctx)
     assert {:ok, unknown} = get("restart", ctx.opts)
     assert unknown == unavailable("restart", "outcome_unknown")
     assert {:ok, ^unknown} = run(active, ctx.opts)
@@ -223,7 +138,7 @@ defmodule CodingAgent.ExecutionNode.ProcessServiceTest do
              ProcessService.handle(
                "node.process.get",
                %{"nodeId" => "process-node", "processId" => "missing"},
-               Keyword.put(ctx.opts, :server, start_unavailable_service())
+               Keyword.put(ctx.opts, :server, start_unavailable_service(ctx))
              )
   end
 
@@ -244,14 +159,14 @@ defmodule CodingAgent.ExecutionNode.ProcessServiceTest do
 
       assert :ok =
                Store.put(
-                 @store,
+                 ctx.store,
                  :node_process_receipts,
                  {"process-node", receipt.process_id},
                  receipt
                )
     end
 
-    start_service()
+    start_service(ctx)
     assert {:error, :process_receipt_limit} = run(args(ctx, "over-limit", ["report"]), ctx.opts)
     assert {:error, :process_receipt_limit} = cancel("over-limit", ctx.opts)
     assert {:ok, %{"state" => "outcome_unknown"}} = get("reserved-1", ctx.opts)
@@ -267,7 +182,7 @@ defmodule CodingAgent.ExecutionNode.ProcessServiceTest do
       end
 
     assert {:error, :process_limit} = run(args(ctx, "seventeenth", ["report"]), ctx.opts)
-    assert :ok = ProcessService.cancel_owner(self(), @server)
+    assert :ok = ProcessService.cancel_owner(self(), ctx.server)
     for task <- tasks, do: assert({:ok, %{"state" => "cancelled"}} = Task.await(task, 5_000))
     newer = Keyword.put(ctx.opts, :session_generation, 12)
     assert {:ok, _} = cancel("new-generation", newer)
@@ -282,7 +197,7 @@ defmodule CodingAgent.ExecutionNode.ProcessServiceTest do
                run(args(ctx, "cached-#{index}", ["report"]), ctx.opts)
     end
 
-    assert map_size(:sys.get_state(@server).cache) == 16
+    assert map_size(:sys.get_state(ctx.server).cache) == 16
 
     assert {:ok,
             %{
@@ -296,58 +211,58 @@ defmodule CodingAgent.ExecutionNode.ProcessServiceTest do
     assert {:ok, newest} = get("cached-17", ctx.opts)
     assert is_binary(newest["stdoutBase64"])
     key = {"process-node", "cached-17"}
-    assert {:ok, receipt} = Store.fetch(@store, :node_process_receipts, key)
+    assert {:ok, receipt} = Store.fetch(ctx.store, :node_process_receipts, key)
     old = System.system_time(:millisecond) - 86_400_001
-    assert :ok = Store.put(@store, :node_process_receipts, key, %{receipt | created_at: old})
+    assert :ok = Store.put(ctx.store, :node_process_receipts, key, %{receipt | created_at: old})
     stop_supervised!(ProcessService)
-    start_service()
+    start_service(ctx)
     assert {:ok, %{"state" => "completed", "exitCode" => 17}} = get("cached-17", ctx.opts)
 
     assert :ok =
-             Store.put(@store, :node_process_receipts, key, %{
+             Store.put(ctx.store, :node_process_receipts, key, %{
                receipt
                | created_at: old,
                  finished_at: old
              })
 
     stop_supervised!(ProcessService)
-    start_service()
+    start_service(ctx)
     assert {:ok, restored} = get("cached-17", ctx.opts)
     assert restored == Map.put(unavailable("cached-17", "completed"), "exitCode", 17)
     assert {:ok, ^restored} = run(args(ctx, "cached-17", ["report"]), ctx.opts)
     assert {:ok, tombstone} = cancel("old-tombstone", ctx.opts)
 
     assert {:ok, cancelled} =
-             Store.fetch(@store, :node_process_receipts, {"process-node", "old-tombstone"})
+             Store.fetch(ctx.store, :node_process_receipts, {"process-node", "old-tombstone"})
 
     assert :ok =
-             Store.put(@store, :node_process_receipts, {"process-node", "old-tombstone"}, %{
+             Store.put(ctx.store, :node_process_receipts, {"process-node", "old-tombstone"}, %{
                cancelled
                | created_at: 0
              })
 
     stop_supervised!(ProcessService)
-    start_service()
+    start_service(ctx)
     marker = Path.join(ctx.root, "must-not-run-old-id")
     assert {:ok, ^tombstone} = run(args(ctx, "old-tombstone", ["touch", marker]), ctx.opts)
     assert {:ok, _} = run(args(ctx, "cache-expiry", ["report"]), ctx.opts)
     refute File.exists?(marker)
 
-    :sys.replace_state(@server, fn state ->
+    :sys.replace_state(ctx.server, fn state ->
       cache =
         Map.new(state.cache, fn {key, {time, output}} -> {key, {time - 86_400_001, output}} end)
 
       %{state | cache: cache}
     end)
 
-    send(Process.whereis(@server), :sweep)
-    assert map_size(:sys.get_state(@server).cache) == 0
+    send(Process.whereis(ctx.server), :sweep)
+    assert map_size(:sys.get_state(ctx.server).cache) == 0
   end
 
   test "real JSONL backend reload preserves intent, terminal exit and missing-cancel fences",
        ctx do
-    store = :node_process_jsonl_test_store
-    service = :node_process_jsonl_test_service
+    store = scoped_name(ctx.test, :jsonl_store)
+    service = scoped_name(ctx.test, :jsonl_service)
 
     store_spec =
       Supervisor.child_spec(
@@ -386,123 +301,99 @@ defmodule CodingAgent.ExecutionNode.ProcessServiceTest do
        ctx do
     assert {:ok, tombstone} = cancel("string-map", ctx.opts)
     key = {"process-node", "string-map"}
-    assert {:ok, receipt} = Store.fetch(@store, :node_process_receipts, key)
+    assert {:ok, receipt} = Store.fetch(ctx.store, :node_process_receipts, key)
     strings = Map.new(receipt, fn {key, value} -> {Atom.to_string(key), value} end)
-    assert :ok = Store.put(@store, :node_process_receipts, key, strings)
+    assert :ok = Store.put(ctx.store, :node_process_receipts, key, strings)
     stop_supervised!(ProcessService)
-    start_service()
+    start_service(ctx)
     assert {:ok, ^tombstone} = get("string-map", ctx.opts)
     assert {:ok, ^tombstone} = run(args(ctx, "string-map", ["report"]), ctx.opts)
     invalid = Map.put(strings, "state", "completed")
-    assert :ok = Store.put(@store, :node_process_receipts, key, invalid)
+    assert :ok = Store.put(ctx.store, :node_process_receipts, key, invalid)
     assert {:error, :store_unavailable} = get("string-map", ctx.opts)
     assert {:error, :store_unavailable} = run(args(ctx, "string-map", ["report"]), ctx.opts)
-    assert Process.alive?(Process.whereis(@server))
+    assert Process.alive?(Process.whereis(ctx.server))
     stop_supervised!(ProcessService)
-    start_service()
+    start_service(ctx)
 
     assert {:error, :store_unavailable} =
              run(args(ctx, "new-untrusted-store", ["report"]), ctx.opts)
 
-    assert {:ok, ^invalid} = Store.fetch(@store, :node_process_receipts, key)
+    assert {:ok, ^invalid} = Store.fetch(ctx.store, :node_process_receipts, key)
   end
 
   test "completed helper packets without an observed OS exit are never accepted", ctx do
     ready = Path.join(ctx.root, "invalid-packet-ready")
     task = Task.async(fn -> run(args(ctx, "invalid-packet", ["hold", ready]), ctx.opts) end)
     await_file(ready)
-    job = :sys.get_state(@server).jobs[{"process-node", "invalid-packet"}]
+    job = :sys.get_state(ctx.server).jobs[{"process-node", "invalid-packet"}]
 
     packet =
       unavailable("invalid-packet", "completed")
       |> Map.merge(%{"stdoutBase64" => "", "stderrBase64" => "", "outputTruncated" => false})
 
-    send(Process.whereis(@server), {job.port, {:data, Jason.encode!(%{"ok" => packet})}})
+    send(Process.whereis(ctx.server), {job.port, {:data, Jason.encode!(%{"ok" => packet})}})
     assert {:error, :process_outcome_unknown} = Task.await(task, 5_000)
     assert {:ok, unknown} = get("invalid-packet", ctx.opts)
     assert unknown == unavailable("invalid-packet", "outcome_unknown")
   end
+end
 
-  defp start_service do
-    start_supervised!({ProcessService, name: @server, store: @store})
+defmodule CodingAgent.ExecutionNode.ProcessServiceCancellationTest do
+  use CodingAgent.ExecutionNode.ProcessServiceCase, async: true
+
+  test "timeout, explicit and original-invocation cancellation kill descendants", ctx do
+    for {id, action} <- [
+          {"timeout-tree", :timeout},
+          {"cancel-tree", :cancel},
+          {"invocation-tree", :invocation}
+        ] do
+      ready = Path.join(ctx.root, id <> "-ready")
+      survived = Path.join(ctx.root, id <> "-survived")
+      timeout = if action == :timeout, do: 1_000, else: 10_000
+      args = args(ctx, id, ["tree", ready, survived]) |> Map.put("timeoutMs", timeout)
+      task = Task.async(fn -> run(args, ctx.opts) end)
+      await_file(ready)
+
+      case action do
+        :timeout ->
+          :ok
+
+        :cancel ->
+          assert {:ok, %{"state" => "cancelled"}} = cancel(id, ctx.opts)
+
+        :invocation ->
+          assert :ok = ProcessService.cancel_invocation(self(), "original-invocation", ctx.server)
+      end
+
+      assert {:ok, result} = Task.await(task, 5_000)
+      assert result["state"] == "cancelled"
+      assert is_integer(result["exitCode"])
+      Process.sleep(2_100)
+      refute File.exists?(survived)
+    end
   end
+end
 
-  defp start_unavailable_service do
-    name = :unavailable_process_test_service
+defmodule CodingAgent.ExecutionNode.ProcessServiceOwnerDeathTest do
+  use CodingAgent.ExecutionNode.ProcessServiceCase, async: true
 
-    start_supervised!(
-      Supervisor.child_spec({ProcessService, name: name, store: :missing_process_test_store},
-        id: name
-      )
-    )
-
-    name
-  end
-
-  defp args(ctx, id, extra),
-    do: %{
-      "nodeId" => "process-node",
-      "processId" => id,
-      "cwd" => ctx.root,
-      "argv" => [ctx.python, ctx.fixture | extra],
-      "stdinBase64" => "",
-      "timeoutMs" => 10_000,
-      "maxOutputBytes" => 1_048_576
-    }
-
-  defp run(args, opts), do: ProcessService.handle("node.process.run", args, opts)
-
-  defp get(id, opts),
-    do:
-      ProcessService.handle(
-        "node.process.get",
-        %{"nodeId" => "process-node", "processId" => id},
-        opts
-      )
-
-  defp cancel(id, opts),
-    do:
-      ProcessService.handle(
-        "node.process.cancel",
-        %{"nodeId" => "process-node", "processId" => id},
-        opts
-      )
-
-  defp unavailable(id, state),
-    do: %{
-      "nodeId" => "process-node",
-      "processId" => id,
-      "state" => state,
-      "exitCode" => nil,
-      "stdoutBase64" => nil,
-      "stderrBase64" => nil,
-      "outputTruncated" => true
-    }
-
-  defp await_file(path, attempts \\ 200)
-  defp await_file(path, 0), do: flunk("fixture did not become ready: #{path}")
-
-  defp await_file(path, attempts) do
-    if File.exists?(path),
-      do: :ok,
-      else:
-        (
-          Process.sleep(10)
-          await_file(path, attempts - 1)
-        )
-  end
-
-  defp await_state(id, expected, opts, attempts \\ 200)
-  defp await_state(_id, _expected, _opts, 0), do: flunk("process did not terminalize")
-
-  defp await_state(id, expected, opts, attempts) do
-    case get(id, opts) do
-      {:ok, %{"state" => ^expected} = receipt} ->
-        receipt
-
-      _ ->
-        Process.sleep(10)
-        await_state(id, expected, opts, attempts - 1)
+  test "caller and authenticated owner death cancel actual work", ctx do
+    for which <- [:caller, :owner] do
+      id = Atom.to_string(which)
+      ready = Path.join(ctx.root, id <> "-ready")
+      survived = Path.join(ctx.root, id <> "-survived")
+      owner = spawn(fn -> Process.sleep(:infinity) end)
+      opts = Keyword.put(ctx.opts, :owner, owner)
+      caller = spawn(fn -> run(args(ctx, id, ["tree", ready, survived]), opts) end)
+      await_file(ready)
+      Process.exit(if(which == :owner, do: owner, else: caller), :kill)
+      result = await_state(id, "cancelled", ctx.opts)
+      assert is_integer(result["exitCode"])
+      Process.exit(owner, :kill)
+      Process.exit(caller, :kill)
+      Process.sleep(2_100)
+      refute File.exists?(survived)
     end
   end
 end

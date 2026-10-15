@@ -1,6 +1,7 @@
 defmodule CodingAgent.InternalGitHubHistoryUrlsTest do
   use ExUnit.Case, async: false
   alias CodingAgent.{TaskStore, Tools.Read}
+  alias CodingAgent.Tools.Task.Control
   alias LemonAgent.Types.AgentToolResult
   alias LemonAi.Types.TextContent
   @moduletag :tmp_dir
@@ -124,7 +125,7 @@ defmodule CodingAgent.InternalGitHubHistoryUrlsTest do
 
     id =
       TaskStore.new_task(%{
-        owner: CodingAgent.Tools.Task.Control.owner(opts),
+        owner: Control.owner(opts),
         description: "Long task"
       })
 
@@ -150,7 +151,7 @@ defmodule CodingAgent.InternalGitHubHistoryUrlsTest do
 
     id =
       TaskStore.new_task(%{
-        owner: CodingAgent.Tools.Task.Control.owner(opts),
+        owner: Control.owner(opts),
         description: "Child assignment"
       })
 

@@ -10,6 +10,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Keep bash streaming previews advancing after the first 50 KB, including delayed
+  output, while preserving bounded replacement snapshots and managed capture.
+
 - Resolve qualified model selectors against their own provider when a preset or
   default provider was inherited, while preserving native colon IDs for explicit
   provider/model pairs.
@@ -20,6 +23,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   bounded pasted-filename previews and appearance-aware code inset colors.
 
 ### Added
+
+- Add opt-in `lemon doctor --live` for bounded, redacted provider models-list and
+  Telegram/Discord bot identity checks without generating completions.
 
 - Provider status exposes circuit-breaker state, failure counts and recovery delay
   without starting breakers; CLI and TUI status views surface open circuits.

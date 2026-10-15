@@ -9,6 +9,7 @@ defmodule LemonGateway.Tools.SmsWaitForCode do
 
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonAi.Types.TextContent
+  alias LemonGateway.Sms.Inbox
 
   @spec tool(String.t(), keyword()) :: AgentTool.t()
   def tool(_cwd, opts \\ []) do
@@ -80,7 +81,7 @@ defmodule LemonGateway.Tools.SmsWaitForCode do
       |> maybe_put(:regex, regex)
       |> maybe_put(:claim, claim)
 
-    case LemonGateway.Sms.Inbox.wait_for_code(session_key, opts) do
+    case Inbox.wait_for_code(session_key, opts) do
       {:ok, %{code: code, message: msg}} ->
         from = msg["from"] || msg[:from]
         to = msg["to"] || msg[:to]

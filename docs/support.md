@@ -366,6 +366,18 @@ Run:
 lemon doctor
 ```
 
+Doctor is offline unless you pass `--live`. Use `lemon doctor --live --verbose`
+for real, non-generating connectivity checks: the default provider's models list,
+Telegram `getMe`, and Discord `/users/@me`. Bot checks report the public username
+on success. OpenAI-compatible endpoints (including keyless local servers),
+Anthropic and Gemini are supported; OAuth-only/unsupported endpoints, channels
+without a probe, and missing credentials are explicitly skipped.
+Each request has a five-second timeout; concurrent live checks share a six-second
+overall deadline. Authentication, reachability, timeout and unexpected HTTP
+failures count as `FAIL` (exit `1`). `--json` and support bundles include live
+results, but not tokens, raw provider bodies or endpoint URLs. A successful
+models-list request is not proof that a generation request will succeed.
+
 For source-dev installs, generate a reviewed redacted bundle:
 
 ```bash

@@ -50,6 +50,7 @@ defmodule LemonAgent.Loop do
 
   alias LemonAgent.{AbortSignal, AutoThinking, Budget, EventStream}
   alias LemonAgent.Loop.{StateMachine, Streaming, ToolCalls}
+  alias LemonAgent.ModelRuntime.StreamOptions
   alias LemonAgent.Types.{AgentContext, AgentLoopConfig, AgentToolResult, ToolSchemaSnapshot}
 
   alias LemonAi.Types.{
@@ -736,9 +737,7 @@ defmodule LemonAgent.Loop do
             config.resolve_stream_options.(model, options_model, config.stream_options)
 
           model.provider != options_model.provider ->
-            LemonAgent.ModelRuntime.StreamOptions.sanitize_for_provider_switch(
-              config.stream_options
-            )
+            StreamOptions.sanitize_for_provider_switch(config.stream_options)
 
           true ->
             config.stream_options

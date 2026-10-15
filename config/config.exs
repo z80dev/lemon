@@ -80,6 +80,7 @@ config :lemon_core, :doctor_runtime,
 # Diagnostics owned by apps that depend on lemon_core register themselves here.
 # Modules missing from a given build are skipped (see LemonCore.Doctor).
 config :lemon_core, :doctor_checks, [
+  LemonCli.Doctor.Providers,
   LemonMemory.Doctor.Checks.Memory,
   LemonSkills.Doctor.Checks.Skills,
   LemonAutomation.Doctor.Checks.Synthesis,

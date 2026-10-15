@@ -365,6 +365,7 @@ defmodule LemonCli.CLI do
         strict: [
           verbose: :boolean,
           json: :boolean,
+          live: :boolean,
           project_dir: :string,
           bundle: :boolean,
           bundle_path: :string
@@ -392,7 +393,7 @@ defmodule LemonCli.CLI do
 
         report =
           opts
-          |> Keyword.take([:project_dir])
+          |> Keyword.take([:project_dir, :live])
           |> Keyword.put(:external_runtime?, external_runtime?)
           |> Doctor.report()
 
