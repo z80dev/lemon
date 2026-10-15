@@ -1,0 +1,196 @@
+#!/usr/bin/env python3
+"""Select safe umbrella test work from a merge-base-to-working-tree diff."""
+
+import argparse
+import json
+import os
+from pathlib import Path, PurePosixPath
+import re
+import subprocess
+import sys
+
+
+FULL_FILES = {"mix.exs", "mix.lock", ".formatter.exs", ".credo.exs"}
+FULL_DIRS = {
+    "config", "scripts", ".github", "bin", "rel", "installer", "examples",
+    "tools", "bench", "docker", "native",
+}
+DATA_DIRS = {"docs", "clients", "products", "showcase"}
+DEPENDENCY = re.compile(r"\{\s*:([a-zA-Z0-9_]+)\s*,([^{}]*)\}", re.DOTALL)
+
+
+def git(root, *args, check=True):
+    return subprocess.run(
+        ["git", "-C", str(root), *args], stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE, check=check,
+    )
+
+
+def paths_from(output):
+    return [os.fsdecode(path) for path in output.split(b"\0") if path]
+
+
+def changed_files(root, base):
+    result = git(root, "merge-base", base, "HEAD", check=False)
+    reason = None
+    if result.returncode:
+        revision = "HEAD"
+        reason = f"Cannot resolve merge-base({base}, HEAD); running full scope"
+    else:
+        revision = result.stdout.decode().strip()
+    tracked = git(root, "diff", "--name-only", "--no-renames", "-z", revision, "--")
+    untracked = git(root, "ls-files", "--others", "--exclude-standard", "-z")
+    return sorted(set(paths_from(tracked.stdout) + paths_from(untracked.stdout))), reason
+
+
+def umbrella_graph(root):
+    graph = {}
+    # Read declarations, not Mix's active environment: conditional and test-only
+    # dependencies matter too (notably lemon_platform_test's channels dependency).
+    for mix_file in sorted(root.glob("apps/*/mix.exs")):
+        dependencies = set()
+        for name, options in DEPENDENCY.findall(mix_file.read_text(encoding="utf-8")):
+            if re.search(r"\bin_umbrella:\s*true\b", options):
+                dependencies.add(name)
+        graph[mix_file.parent.name] = dependencies
+    return graph
+
+
+def reverse_dependencies(graph, touched):
+    affected = set(touched)
+    while True:
+        consumers = {app for app, deps in graph.items() if deps & affected}
+        if consumers <= affected:
+            return affected
+        affected.update(consumers)
+
+
+def referencing_apps(root, path):
+    parts = PurePosixPath(path).parts
+    patterns = [path] + ["/".join(parts[:n]) for n in range(len(parts) - 1, 1, -1)]
+    args = ["grep", "-l", "-z", "-F"]
+    for pattern in patterns:
+        args.extend(["-e", pattern])
+    args.extend(["--", *[f":(glob)apps/*/{directory}/**" for directory in ("lib", "test", "priv")]])
+    result = git(root, *args, check=False)
+    if result.returncode not in (0, 1):
+        raise RuntimeError(result.stderr.decode(errors="replace").strip())
+    return {PurePosixPath(match).parts[1] for match in paths_from(result.stdout)}
+
+
+def focused_tests(root, files):
+    tests = set()
+    for path in files:
+        parts = PurePosixPath(path).parts
+        if len(parts) < 4 or parts[0] != "apps":
+            continue
+        candidate = None
+        if parts[2] == "test" and path.endswith("_test.exs"):
+            candidate = path
+        elif parts[2] == "lib" and path.endswith(".ex"):
+            candidate = "/".join((*parts[:2], "test", *parts[3:]))[:-3] + "_test.exs"
+        if candidate and (root / candidate).is_file():
+            tests.add(candidate)
+    return sorted(tests)
+
+
+def select(root, base="origin/main", focused=False):
+    files, base_reason = changed_files(root, base)
+    graph = umbrella_graph(root)
+    touched, readers = set(), set()
+    reasons = [base_reason] if base_reason else []
+    full = bool(base_reason)
+    lanes = {"clients": False, "wasm": False, "docs": False}
+    for path in files:
+        parts = PurePosixPath(path).parts
+        top = parts[0]
+        lanes["clients"] |= top == "clients" or path == "scripts/test"
+        lanes["docs"] |= top == "docs"
+        lanes["wasm"] |= (
+            top == "native" or path.startswith("apps/coding_agent/lib/coding_agent/wasm/")
+            or path == "apps/coding_agent/test/coding_agent/wasm_integration_test.exs"
+        )
+        app = parts[1] if top == "apps" and len(parts) >= 3 else None
+        global_app_file = app and (
+            parts[2] in {"mix.exs", ".formatter.exs"} or parts[2] == "config"
+        )
+        if path in FULL_FILES or top in FULL_DIRS or global_app_file:
+            full = True
+            reasons.append(f"{path}: shared build/runtime/tooling input (full scope)")
+        elif app in graph:
+            touched.add(app)
+            reasons.append(f"{path}: {app} and its reverse dependencies")
+        elif top in DATA_DIRS or (top != "apps" and path.endswith(".md")):
+            matches = referencing_apps(root, path)
+            readers.update(matches)
+            reasons.append(f"{path}: data readers: {' '.join(sorted(matches)) or 'none'}")
+        else:
+            full = True
+            reasons.append(f"{path}: no explicit narrow rule (full scope)")
+    affected = set(graph) if full else reverse_dependencies(graph, touched) | readers
+    lanes["clients"] |= full
+    apps = sorted(affected)
+    return {
+        "scope": "full" if full else "apps" if apps else "none",
+        "apps": apps,
+        "test_paths": [f"apps/{app}/test" for app in apps],
+        "lanes": lanes,
+        "reasons": reasons,
+        "changed_files": files,
+        "focused_test_files": focused_tests(root, files) if focused else [],
+    }
+
+
+def human(selection, focused=False):
+    print(f"Test scope: {selection['scope']}")
+    if selection["apps"]:
+        print("Apps: " + " ".join(selection["apps"]))
+        print("Test paths: " + " ".join(selection["test_paths"]))
+    print("Extra lanes: " + (", ".join(key for key, enabled in selection["lanes"].items() if enabled) or "none"))
+    for reason in selection["reasons"]:
+        print(f"  - {reason}")
+    if focused:
+        print("Quick pre-check only (not a substitute for the affected-app run):")
+        print("  " + (" ".join(selection["focused_test_files"]) or "No matching focused test files."))
+
+
+def github(selection):
+    values = {"scope": selection["scope"], "apps": " ".join(selection["apps"]),
+              "test_paths": " ".join(selection["test_paths"])}
+    values.update({key: str(value).lower() for key, value in selection["lanes"].items()})
+    if os.environ.get("GITHUB_OUTPUT"):
+        with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+            for key, value in values.items():
+                output.write(f"{key}={value}\n")
+    if os.environ.get("GITHUB_STEP_SUMMARY"):
+        with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
+            summary.write(f"### Changed test selection\n\nScope: **{selection['scope']}**\n\n")
+            summary.write(f"Apps: {values['apps'] or 'none'}\n\n")
+            summary.write("Lanes: " + ", ".join(f"{key}={values[key]}" for key in selection["lanes"]) + "\n\n")
+            for reason in selection["reasons"]:
+                summary.write(f"- {reason}\n")
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--base", default="origin/main")
+    parser.add_argument("--format", choices=("human", "github", "json"), default="human")
+    parser.add_argument("--focused", action="store_true")
+    args = parser.parse_args()
+    root = Path(__file__).resolve().parent.parent
+    try:
+        selection = select(root, args.base, args.focused)
+        if args.format == "json":
+            print(json.dumps(selection))
+        else:
+            human(selection, args.focused)
+            if args.format == "github":
+                github(selection)
+    except (OSError, subprocess.CalledProcessError, RuntimeError) as error:
+        print(f"changed_tests: {error}", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

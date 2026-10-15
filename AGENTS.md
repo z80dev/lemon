@@ -33,6 +33,7 @@ mix compile
 ./bin/lemon             # Interactive terminal: TUI, starting a daemon if needed
 ./bin/lemon start       # Explicit foreground runtime
 scripts/test help
+scripts/test premerge   # Changed-file checks + affected tests before merging
 scripts/test fast       # Warnings-as-errors compilation and fast ExUnit lane
 scripts/test quality    # Quality and architecture checks
 scripts/test clients   # Retained client checks

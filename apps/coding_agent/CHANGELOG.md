@@ -1,6 +1,6 @@
 # CodingAgent changelog
 
-## Unreleased
+## [Unreleased]
 
 ### Added
 
