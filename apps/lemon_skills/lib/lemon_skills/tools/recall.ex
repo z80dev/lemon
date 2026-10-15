@@ -86,6 +86,20 @@ defmodule LemonSkills.Tools.Recall do
               "Keywords to look for (e.g. \"deploy staging\", \"sister birthday\"). " <>
                 "Any keyword may match; more matches rank higher."
           },
+          "session" => %{
+            "type" => "string",
+            "description" => "Session key from a prior recall result; read its run summaries."
+          },
+          "around" => %{
+            "type" => "string",
+            "description" => "Document or run ID to center the session window on."
+          },
+          "window" => %{
+            "type" => "integer",
+            "minimum" => 1,
+            "maximum" => 20,
+            "description" => "Runs or sessions to return (default 5)."
+          },
           "scope" => %{
             "type" => "string",
             "enum" => ["agent", "project"],
@@ -98,7 +112,7 @@ defmodule LemonSkills.Tools.Recall do
             "description" => "Maximum results per source (default #{@default_limit})."
           }
         },
-        "required" => ["query"]
+        "required" => []
       },
       execute: &execute(&1, &2, &3, &4, context)
     }
@@ -124,6 +138,49 @@ defmodule LemonSkills.Tools.Recall do
           (AgentToolResult.t() -> :ok) | nil,
           map()
         ) :: AgentToolResult.t() | {:error, String.t()}
+  def execute(_id, params, _signal, _update, context)
+      when not is_map_key(params, "query") or is_map_key(params, "session") do
+    with :ok <- validate_context(context),
+         {:ok, _} <- ContextScope.scope(context),
+         {:ok, scope} <- parse_scope(Map.get(params, "scope", "agent")) do
+      opts =
+        context.store_opts ++
+          [
+            window: Map.get(params, "window", 5),
+            around: Map.get(params, "around"),
+            scope: history_scope(scope)
+          ]
+
+      result =
+        case Map.get(params, "session") do
+          session when is_binary(session) and session != "" ->
+            with {:ok, docs} <- SessionSearch.session(context, session, opts),
+                 do: {:ok, SessionSearch.format_results(docs)}
+
+          nil ->
+            with {:ok, sessions} <- SessionSearch.recent_sessions(context, opts) do
+              {:ok, SessionSearch.format_sessions(sessions)}
+            end
+
+          _ ->
+            {:error, :invalid_session}
+        end
+
+      case result do
+        {:ok, text} ->
+          %AgentToolResult{
+            content: [%TextContent{text: "Untrusted recalled conversation data:\n\n" <> text}],
+            details: %{trust: :untrusted}
+          }
+
+        {:error, _} ->
+          {:error, "Scoped memory is unavailable"}
+      end
+    else
+      _ -> {:error, "recall requires a main session and verified assistant workspace"}
+    end
+  end
+
   def execute(_tool_call_id, params, _signal, _on_update, context) do
     query = params |> Map.get("query", "") |> to_string() |> String.trim()
     limit = parse_limit(Map.get(params, "limit"))

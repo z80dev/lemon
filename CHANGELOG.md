@@ -8,6 +8,28 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
+### Fixed
+
+- Skill usage recording no longer depends on the introspection handler. Pinned
+  skills reject content edits, never-used skills retain a stale-age grace floor,
+  and background curation preserves skills referenced by disabled or active cron jobs.
+
+### Changed
+
+- Expand `lemon omp` with approval modes, isolated and parallel starts, explicit
+  interrupted-session continuation, redirect, model browsing/configuration,
+  subagent transcripts, and richer approval/worktree/discovery output.
+- Extend the omp operator API with bounded parallel starts, model discovery,
+  child transcripts, live configuration, approval overrides, isolated starts,
+  interrupted-session continuation and redirect delivery; preserve actionable
+  partial-application and outcome-unknown errors.
+- Preserve portable Agent Skills string-valued metadata (including `metadata.lemon`)
+  and support 1024-character Unicode descriptions. Add conformance/discovery
+  coverage for spec fields and bundled resources; document legacy leniency and
+  clarify that synthesized skills remain drafts until promotion.
+- Remember supports exact-entry or unique-substring edits consistently across scoped
+  and legacy memory, with actionable ambiguity, safety, and capacity feedback.
+
 ### Added
 
 - Computer use can be configured in `[runtime.tools.computer_use]` (`enabled`,
@@ -15,6 +37,15 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   take precedence. Execution-node capability inspection reports a
   `computer_use` item, and tool cards and approvals name the computer-use
   action, app or site.
+- omp tool cards show parallel worker grids, combined usage and task errors,
+  approval waits, isolated worktrees, child activity, model prices and transcript tails.
+- TUI omp delegates support redirect, interrupted-session continuation, approval
+  mode and isolated starts; the typed control-plane client exposes batch starts,
+  model discovery, configuration and subagent transcripts.
+- `recall` can browse owned recent sessions and scroll chronological, bounded
+  run summaries around a document/run ID without crossing owner/profile boundaries.
+- The omp panel resolves pending approvals through the shared approval controller,
+  selects free-marked omp models, and drills into subagent transcript tails.
 
 ---
 

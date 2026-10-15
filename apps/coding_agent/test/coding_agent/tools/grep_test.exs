@@ -6,6 +6,194 @@ defmodule CodingAgent.Tools.GrepTest do
   alias LemonAi.Types.TextContent
 
   @moduletag :tmp_dir
+
+  describe "deterministic engines and bounded fallback" do
+    test "rg sorts before paging even when output order changes", %{tmp_dir: root} do
+      a = Path.join(root, "a.txt")
+      b = Path.join(root, "b.txt")
+      File.write!(a, "needle a1\nneedle a2")
+      File.write!(b, "needle b1\nneedle b2")
+      refs = [{b, 2}, {a, 2}, {b, 1}, {a, 1}]
+      first = injected_grep(root, %{"max_results" => 2}, rg_output(refs), 0)
+
+      last =
+        injected_grep(root, %{"skip" => 2, "max_results" => 2}, rg_output(Enum.reverse(refs)), 0)
+
+      assert first.details.next_skip == 2
+      assert result_text(first) =~ "a.txt:1: needle a1\na.txt:2: needle a2"
+      refute result_text(first) =~ "b.txt:"
+      assert result_text(last) =~ "b.txt:1: needle b1\nb.txt:2: needle b2"
+      refute result_text(last) =~ "a.txt:"
+      refute Map.has_key?(last.details, :next_skip)
+    end
+
+    test "rg preserves partial matches and first warning, but errors without matches", %{
+      tmp_dir: root
+    } do
+      file = Path.join(root, "a.txt")
+      File.write!(file, "needle")
+      output = rg_output([{file, 1}]) <> "\nrg: denied: Permission denied\nsecond warning"
+      result = injected_grep(root, %{}, output, 2)
+      assert result_text(result) =~ "a.txt:1: needle"
+      assert result_text(result) =~ "warnings: rg: denied: Permission denied"
+      assert result.details.warnings == ["rg: denied: Permission denied"]
+
+      assert {:error, "Search error: rg: denied"} =
+               injected_grep(root, %{}, "rg: denied\nanother error", 2)
+    end
+
+    test "lookarounds and backreferences select PCRE2 or explain unavailable engine", %{
+      tmp_dir: root
+    } do
+      for {pattern, construct} <- [
+            {"needle(?=!)", "lookaround"},
+            {"(needle)\\1", "backreferences"}
+          ] do
+        assert %AgentToolResult{} =
+                 Grep.execute("pcre", %{"pattern" => pattern}, nil, nil, root,
+                   ripgrep_available?: true,
+                   pcre2_available?: true,
+                   rg_cmd_fun: fn "rg", args, _ ->
+                     assert "--pcre2" in args
+                     {"", 1}
+                   end
+                 )
+
+        assert {:error, message} =
+                 Grep.execute("pcre", %{"pattern" => pattern}, nil, nil, root,
+                   ripgrep_available?: true,
+                   pcre2_available?: false,
+                   rg_cmd_fun: fn _, _, _ -> flunk("must not run unsupported pattern") end
+                 )
+
+        assert message =~ construct
+        assert message =~ "rg uses Rust regex"
+      end
+    end
+
+    test "escaped constructs and literal patterns do not require PCRE2", %{tmp_dir: root} do
+      for {pattern, literal?} <- [
+            {"\\(\\?=needle\\)", false},
+            {"needle(?=!)", true},
+            {"[(?=)]", false},
+            {"\\\\1", false}
+          ] do
+        assert %AgentToolResult{} =
+                 Grep.execute(
+                   "rust",
+                   %{"pattern" => pattern, "literal" => literal?},
+                   nil,
+                   nil,
+                   root,
+                   ripgrep_available?: true,
+                   pcre2_available?: fn -> flunk("no probe needed") end,
+                   rg_cmd_fun: fn _, args, _ ->
+                     refute "--pcre2" in args
+                     {"", 1}
+                   end
+                 )
+      end
+    end
+
+    test "fallback sorts files and stops matching at skip plus max_results", %{tmp_dir: root} do
+      files =
+        for name <- ["c", "b", "a"] do
+          file = Path.join(root, name <> ".txt")
+          File.write!(file, "needle #{name}")
+          file
+        end
+
+      owner = self()
+
+      result =
+        Grep.execute(
+          "bounded",
+          %{"pattern" => "needle", "skip" => 1, "max_results" => 1},
+          nil,
+          nil,
+          root,
+          ripgrep_available?: false,
+          fallback_files_fun: fn _, _ -> files end,
+          fallback_match_fun: fn line, _ ->
+            send(owner, {:matched, line})
+            true
+          end
+        )
+
+      assert result_text(result) =~ "b.txt:1: needle b"
+      assert result.details.incomplete
+      assert result.details.next_skip == 2
+      assert_receive {:matched, "needle a"}
+      assert_receive {:matched, "needle b"}
+      refute_receive {:matched, "needle c"}
+    end
+
+    test "fallback deadline includes enumeration and matching", %{tmp_dir: root} do
+      file = Path.join(root, "a.txt")
+      File.write!(file, "needle")
+
+      for injection <- [
+            [
+              fallback_files_fun: fn _, _ ->
+                Process.sleep(10_000)
+                [file]
+              end
+            ],
+            [
+              fallback_match_fun: fn _, _ ->
+                Process.sleep(10_000)
+                true
+              end
+            ]
+          ] do
+        assert {:error, "Search timed out after 20ms"} =
+                 Grep.execute(
+                   "timeout",
+                   %{"pattern" => "needle"},
+                   nil,
+                   nil,
+                   root,
+                   [ripgrep_available?: false, fallback_timeout_ms: 20] ++ injection
+                 )
+      end
+    end
+
+    test "fallback reads only the leading 4 MiB and counts oversized files", %{tmp_dir: root} do
+      file = Path.join(root, "large.txt")
+      prefix = "needle\n" <> String.duplicate("x", 4 * 1024 * 1024 - 7)
+      File.write!(file, prefix <> "\nneedle beyond window")
+
+      result =
+        Grep.execute("large", %{"pattern" => "needle"}, nil, nil, root, ripgrep_available?: false)
+
+      assert result.details.match_count == 1
+      assert result.details.skipped_oversized == 1
+      assert result_text(result) =~ "large.txt:1: needle"
+      refute result_text(result) =~ "beyond window"
+    end
+  end
+
+  defp rg_output(refs) do
+    Enum.map_join(refs, "\n", fn {path, line} ->
+      Jason.encode!(%{
+        "type" => "match",
+        "data" => %{
+          "path" => %{"text" => path},
+          "line_number" => line
+        }
+      })
+    end)
+  end
+
+  defp injected_grep(root, params, output, code) do
+    Grep.execute("injected", Map.put_new(params, "pattern", "needle"), nil, nil, root,
+      ripgrep_available?: true,
+      rg_cmd_fun: fn _, _, _ -> {output, code} end
+    )
+  end
+
+  defp result_text(result), do: Enum.map_join(result.content, "\n", & &1.text)
+
   test "fallback skips explicitly targeted binary files", %{tmp_dir: tmp_dir} do
     File.write!(Path.join(tmp_dir, "binary.dat"), <<"needle", 0, 255>>)
 

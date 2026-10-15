@@ -33,7 +33,12 @@ defmodule LemonAutomation.SkillCurator do
         {:skip, :not_due}
 
       true ->
-        case curator_mod.run(curator_opts(cfg, opts)) do
+        run_opts = curator_opts(cfg, opts)
+        jobs = Keyword.get(opts, :cron_jobs_fun, &LemonAutomation.CronStore.list_jobs/0).()
+        names = LemonSkills.Usage.report(run_opts) |> Enum.map(& &1.name)
+        exempt = referenced_skills(jobs, names)
+
+        case curator_mod.run(Keyword.put(run_opts, :exempt_skills, exempt)) do
           {:ok, %{review_required: true, review_prompt: prompt} = result} ->
             submit_review(prompt, result, cfg, opts)
 
@@ -170,6 +175,32 @@ defmodule LemonAutomation.SkillCurator do
       _ ->
         true
     end
+  end
+
+  @doc """
+  Find skill references in all persisted cron jobs, including disabled jobs.
+
+  Cron has no dedicated skill field. Match complete skill names in prompt text
+  and explicit `skill` / `skills` metadata fields conservatively.
+  """
+  def referenced_skills(jobs, names) do
+    Enum.filter(names, fn name ->
+      pattern =
+        Regex.compile!(
+          "(?<![\\p{L}\\p{N}_-])" <> Regex.escape(name) <> "(?![\\p{L}\\p{N}_-])",
+          "u"
+        )
+
+      Enum.any?(jobs, fn job ->
+        meta = Map.get(job, :meta) || Map.get(job, "meta") || %{}
+
+        explicit =
+          Enum.flat_map([:skill, "skill", :skills, "skills"], &List.wrap(Map.get(meta, &1)))
+
+        prompt = Map.get(job, :prompt) || Map.get(job, "prompt")
+        name in explicit or (is_binary(prompt) and Regex.match?(pattern, prompt))
+      end)
+    end)
   end
 
   defp curator_opts(cfg, opts) do
