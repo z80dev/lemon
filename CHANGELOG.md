@@ -8,7 +8,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
-No unreleased changes yet.
+- Make coordinator active-session lifecycle tests deterministic with per-test
+  admission and explicit completion, timeout, cancellation and process-down fences
+  instead of racing short deadlines against shared session startup.
 
 ---
 
