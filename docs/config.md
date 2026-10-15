@@ -328,6 +328,7 @@ global → project; every key is optional:
 [runtime.task]
 max_depth = 2              # -1 unlimited; 0 = the main session cannot delegate
 max_runtime_ms = 0         # per-child wall-clock limit; 0 disables it
+idle_ttl_ms = 300000       # park a completed live child after 5 min; 0 keeps it idle
 worktree_merge = "none"    # default merge for worktree: true tasks: none | patch | branch
 disabled_agents = ["sonic"]
 
@@ -340,6 +341,18 @@ reviewer = "@slow"         # model or @role per persona ID
   children created at the cap never receive the `task` tool.
 - `max_runtime_ms`: wall-clock limit for each child session; the child fails
   with a timeout error when it is exceeded.
+- `idle_ttl_ms`: how long a successfully completed child stays live and idle.
+  After the TTL, Lemon releases its session but retains its transcript and
+  address. `0` keeps it idle until the parent session ends. A direct
+  `write agent://<id-or-name>` wakes an idle child or revives a parked child with
+  the same session ID, prior conversation, cwd/worktree, tools and model.
+  The receipt's `delivery` is `woken`, `revived`, or `injected` (already running);
+  a failed worker launch reports `failed`. Replies use async auto-delivery,
+  including children originally launched synchronously. Concurrent messages
+  share one revival. Broadcasts still target only running/queued relatives.
+  Cancelled/killed children, failed children, and children whose cwd/worktree or
+  transcript was removed refuse revival and point to `history://<id>`.
+  Revival is scoped to the existing parent task family, not daemon restart.
 - `worktree_merge`: what a successful `worktree: true` child does when the call
   omits `merge`: `none` keeps the worktree, `patch` applies the child's changes
   to the parent checkout, `branch` commits them to a kept review branch.
@@ -1565,6 +1578,25 @@ The existing `approvals` map (`always`/`never`) overrides tier defaults in every
 mode; `require_approval`, parent floors, and explicitly configured MCP approval
 requirements remain mandatory. An `on_tool_call` hook's revised arguments are
 used for approval resolution and the approval preview, not the original input.
+
+## Anchored Edit Visibility
+
+Enable seen-line enforcement in user or project `.lemon/config.toml`:
+
+```toml
+[runtime.tools.edit]
+enforce_seen_lines = true # default false
+```
+
+Every replaced/deleted line and insertion anchor must have been displayed by a
+numbered read of that snapshot in the current session. Omitted summary bodies and
+window gaps do not count; refusals provide a range-read hint without writing.
+Historical recovery checks visibility before translating unchanged anchors.
+Plain `old_text`/`new_text` replacements are unaffected. The setting must be a
+boolean; default false preserves clients that construct tags without tracked
+reads. Tool hosts can explicitly override it with the `:enforce_seen_lines` option.
+See [file tools](tools/files-and-search.md#anchored-edit-recovery-and-formatting)
+for visibility and snapshot-retention details.
 
 ## Web Tools (`websearch` / `webfetch`)
 

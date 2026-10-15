@@ -144,6 +144,18 @@ defmodule CodingAgent.ToolRegistry do
 
     settings = Keyword.get(opts, :settings_manager) || %{}
     tools_config = Map.get(settings, :tools, %{}) || %{}
+    edit_config = Map.get(tools_config, :edit, Map.get(tools_config, "edit", %{}))
+
+    opts =
+      Keyword.put_new(
+        opts,
+        :enforce_seen_lines,
+        Map.get(
+          edit_config,
+          :enforce_seen_lines,
+          Map.get(edit_config, "enforce_seen_lines", false)
+        )
+      )
 
     tool_policy =
       case ToolPolicy.parse(tool_policy) do

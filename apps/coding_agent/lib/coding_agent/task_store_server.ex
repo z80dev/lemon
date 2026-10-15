@@ -65,6 +65,11 @@ defmodule CodingAgent.TaskStoreServer do
     GenServer.call(server, {:transition, task_id, target_status, update_fn}, 10_000)
   end
 
+  @doc "Start another turn only on a successfully completed idle or parked child."
+  def begin_agent_turn(task_id) do
+    GenServer.call(__MODULE__, {:begin_agent_turn, task_id}, 10_000)
+  end
+
   @doc "Atomically reserve task followups for a join owned by the calling process."
   @spec begin_auto_followup_join([String.t()], reference(), GenServer.server()) :: :ok
   def begin_auto_followup_join(task_ids, join_token, server \\ __MODULE__) do
@@ -214,6 +219,40 @@ defmodule CodingAgent.TaskStoreServer do
     end
   end
 
+  def handle_call({:begin_agent_turn, task_id}, _from, state) do
+    state = ensure_tables(state)
+
+    case :ets.lookup(@table, task_id) do
+      [{^task_id, %{status: :completed, agent_state: phase} = record, events}]
+      when phase in [:idle, :parked] ->
+        now = System.system_time(:second)
+
+        record =
+          record
+          |> Map.drop([
+            :result,
+            :error,
+            :completed_at,
+            :auto_followup_suppressed_at,
+            :wait_observed_at,
+            :auto_followup_join_tokens
+          ])
+          |> Map.merge(%{
+            status: :running,
+            agent_state: :running,
+            started_at: now,
+            updated_at: now
+          })
+          |> Map.update(:agent_turn, 1, &(&1 + 1))
+
+        do_insert_record(task_id, record, events)
+        {:reply, :ok, state}
+
+      _ ->
+        {:reply, {:error, "Child cannot start another turn; read history://#{task_id}"}, state}
+    end
+  end
+
   def handle_call({:begin_auto_followup_join, task_ids, join_token}, {owner, _tag}, state) do
     state = ensure_tables(state)
     task_ids = Enum.uniq(task_ids)
@@ -239,9 +278,10 @@ defmodule CodingAgent.TaskStoreServer do
 
     Enum.each(Enum.uniq(task_ids), fn task_id ->
       update_task_record(task_id, fn record ->
+        current_turn? = join_token in Map.get(record, :auto_followup_join_tokens, [])
         record = remove_join_token(record, join_token)
 
-        if MapSet.member?(suppressed, task_id) do
+        if current_turn? and MapSet.member?(suppressed, task_id) do
           Map.put(record, :auto_followup_suppressed_at, System.system_time(:second))
         else
           record
@@ -404,6 +444,11 @@ defmodule CodingAgent.TaskStoreServer do
             record
             |> Map.delete(:auto_followup_join_tokens)
             |> then(fn record ->
+              if record[:agent_state] in [:running, :idle, :parked],
+                do: Map.put(record, :agent_state, :aborted),
+                else: record
+            end)
+            |> then(fn record ->
               status = Map.get(record, :status)
 
               if status in [:running, :tracking_lost] or
@@ -556,7 +601,7 @@ defmodule CodingAgent.TaskStoreServer do
   defp expired_record?(record, now, ttl_seconds) do
     status = Map.get(record, :status)
 
-    if status in @terminal_statuses do
+    if status in @terminal_statuses and record[:agent_state] != :idle do
       completed_at =
         Map.get(record, :completed_at) || Map.get(record, :updated_at) ||
           Map.get(record, :inserted_at)

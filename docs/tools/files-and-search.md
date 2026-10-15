@@ -35,6 +35,16 @@ It is a concise transcript, not raw session events: hidden reasoning, tool-call
 internals and foreign tasks are excluded. History is capped at 12,000 Unicode
 characters and tagged untrusted. Expired TaskStore entries are unavailable.
 
+`read agent://` lists the scoped native task family, including idle and parked
+children. `write agent://<task-id-or-name>` sends peer content: running children
+receive steering input (`delivery: injected`), completed live children begin
+a new turn (`woken`), and parked children reload their saved conversation
+(`revived`). Replies arrive through task async auto-delivery, not in the write
+receipt. Failed worker admission reports `failed`. Cancelled/killed children
+and removed workspaces cannot revive; their error points to `history://<id>`.
+See [native task settings](../config.md#native-task-subagents-runtimetask) for
+the idle TTL and retention rules.
+
 ## Directory trees
 
 `ls` with `tree: true` shows a depth-limited directory tree (default
@@ -82,6 +92,20 @@ Context for a single bounded range is clamped to the source boundaries. Raw
 selectors (`:raw:50-80` or `:50-80:raw`) remain exact, without context, line
 numbers, or a snapshot header. Raw comma lists also stay exact and retain the
 `…` separators. `offset`/`limit`, open-ended and tail selectors do not add context.
+
+## SVG previews
+
+`read drawing.svg` reads SVG markup as ordinary editable text. `.svgz` files
+are gunzipped into bounded, immutable text views; line selectors work on the
+decoded markup. Use `read drawing.svg:img` (also `.svgz:img`) when visual layout
+matters: it returns a PNG image block instead of XML.
+
+PNG rendering requires `rsvg-convert` from librsvg (`brew install librsvg` or
+`apt install librsvg2-bin`). Rendering has a 30-second timeout, a 1568-pixel
+bounding box and a 4 MiB output cap; the source is never overwritten. Tool
+constructors can set `:svg_rasterizer`, `:svg_timeout_ms`, `:image_max_dimension`
+and `:image_max_bytes`. `:img` is SVG-only and cannot be combined with text
+selectors or offset/limit. Existing literal filenames still take precedence.
 
 ## Merge conflicts
 
@@ -135,9 +159,11 @@ still reject changes since the last read. The session retains up to eight
 snapshots per path, each at most 256 KiB and 10,000 lines; larger files still
 support fresh-tag edits, but not historical recovery.
 
-Tool hosts can set `enforce_seen_lines: true` in the shared coding-tool options
-(alongside `session_id`) to require every replaced/deleted line and each insertion
-anchor to have appeared in a numbered read of that exact snapshot. The default is
+Set `[runtime.tools.edit] enforce_seen_lines = true` in user/project
+`.lemon/config.toml` to require every replaced/deleted line and each insertion
+anchor to have appeared in a numbered read of that exact snapshot. Tool hosts
+can explicitly override this with `:enforce_seen_lines` in shared tool options
+(alongside `session_id`). The default is
 false, matching omp and preserving existing clients that construct anchored edits
 without session-tracked reads. Plain `old_text`/`new_text` edits are unaffected.
 Unknown or evicted visibility records fail closed when enforcement is enabled.

@@ -101,6 +101,7 @@ defmodule LemonCore.Config.AgentTest do
             "task" => %{
               "max_depth" => 1,
               "max_runtime_ms" => 60_000,
+              "idle_ttl_ms" => 5_000,
               "worktree_merge" => "patch",
               "disabled_agents" => ["reviewer"],
               "agent_models" => %{"scout" => "@smol"}
@@ -111,6 +112,7 @@ defmodule LemonCore.Config.AgentTest do
       assert config.task == %{
                max_depth: 1,
                max_runtime_ms: 60_000,
+               idle_ttl_ms: 5_000,
                worktree_merge: "patch",
                disabled_agents: ["reviewer"],
                agent_models: %{"scout" => "@smol"}
