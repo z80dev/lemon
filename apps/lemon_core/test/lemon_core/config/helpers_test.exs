@@ -384,7 +384,9 @@ defmodule LemonCore.Config.HelpersTest do
     test "returns default when feature enabled but key not set" do
       System.put_env("FEATURE_DEFAULT", "true")
       System.delete_env("FEATURE_DEFAULT_KEY")
-      assert Helpers.get_feature_env("FEATURE_DEFAULT", "FEATURE_DEFAULT_KEY", "default") == "default"
+
+      assert Helpers.get_feature_env("FEATURE_DEFAULT", "FEATURE_DEFAULT_KEY", "default") ==
+               "default"
     end
 
     test "returns nil when feature enabled but key not set and no default" do
