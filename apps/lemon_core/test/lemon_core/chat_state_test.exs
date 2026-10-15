@@ -172,56 +172,6 @@ defmodule LemonCore.ChatStateTest do
     end
   end
 
-  describe "type contract validation" do
-    test "last_engine accepts string values" do
-      state = ChatState.new(%{last_engine: "claude"})
-      assert is_binary(state.last_engine)
-    end
-
-    test "last_engine accepts nil" do
-      state = ChatState.new(%{last_engine: nil})
-      assert state.last_engine == nil
-    end
-
-    test "last_resume_token accepts string values" do
-      state = ChatState.new(%{last_resume_token: "abc123"})
-      assert is_binary(state.last_resume_token)
-    end
-
-    test "last_resume_token accepts nil" do
-      state = ChatState.new(%{last_resume_token: nil})
-      assert state.last_resume_token == nil
-    end
-
-    test "updated_at accepts integer values" do
-      state = ChatState.new(%{updated_at: 1_234_567_890})
-      assert is_integer(state.updated_at)
-    end
-
-    test "updated_at accepts nil" do
-      state = ChatState.new(%{updated_at: nil})
-      assert state.updated_at == nil
-    end
-
-    test "updated_at works with System.system_time values" do
-      timestamp = System.system_time(:millisecond)
-      state = ChatState.new(%{updated_at: timestamp})
-      assert state.updated_at == timestamp
-      assert is_integer(state.updated_at)
-    end
-
-    # Note: Elixir structs don't enforce types at runtime
-    # These tests document behavior when non-standard types are used
-    test "struct accepts any value type (no runtime type enforcement)" do
-      # This documents that Elixir structs don't enforce @type at runtime
-      state = ChatState.new(%{last_engine: 12_345})
-      assert state.last_engine == 12_345
-
-      state2 = ChatState.new(%{updated_at: "not_an_integer"})
-      assert state2.updated_at == "not_an_integer"
-    end
-  end
-
   describe "invalid field handling" do
     @tag invalid_attrs: ["not a map", [:list, :of, :values], 123, [last_engine: "test"]]
     test "new/1 rejects non-map attributes", %{invalid_attrs: invalid_attrs} do

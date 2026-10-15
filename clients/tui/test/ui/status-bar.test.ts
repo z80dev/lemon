@@ -120,7 +120,7 @@ describe("model naming", () => {
 	});
 
 	test("says so when there is no model", () => {
-		expect(shortModel(undefined)).toBe("no model");
+		expect(shortModel(undefined)).toBe("no model — /model to choose");
 	});
 });
 
@@ -153,7 +153,7 @@ describe("breakpoints", () => {
 
 	test("a broken connection outranks the optional segments", () => {
 		const plain = stripAnsi(renderStatusLine(data({ connection: "reconnecting", queued: 2 }), 60));
-		expect(plain).toContain("reconnecting +2");
+		expect(plain).toContain("reconnecting… · 2 queued");
 	});
 
 	test("pending approvals are shown even when the row is tight", () => {

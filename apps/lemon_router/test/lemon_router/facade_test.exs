@@ -12,12 +12,18 @@ defmodule LemonRouter.FacadeTest do
       assert LemonRouter.available?()
     end
 
-    test "counts/0 returns the full shape" do
-      counts = LemonRouter.counts()
+    test "counts/0 reflects a newly supervised run without changing other counters" do
+      before = LemonRouter.counts()
 
-      assert is_integer(counts.active)
-      assert is_integer(counts.queued)
-      assert is_integer(counts.completed_today)
+      {:ok, pid} =
+        DynamicSupervisor.start_child(
+          LemonRouter.RunSupervisor,
+          {Task, fn -> receive do: (:stop -> :ok) end}
+        )
+
+      on_exit(fn -> DynamicSupervisor.terminate_child(LemonRouter.RunSupervisor, pid) end)
+
+      assert LemonRouter.counts() == %{before | active: before.active + 1}
     end
 
     test "active_runs/0 returns run summaries without leaking pids" do
@@ -125,7 +131,19 @@ defmodule LemonRouter.FacadeTest do
     end
 
     test "active_run_count/0 counts supervised runs" do
-      assert LemonRouter.active_run_count() >= 0
+      before = LemonRouter.active_run_count()
+
+      {:ok, pid} =
+        DynamicSupervisor.start_child(
+          LemonRouter.RunSupervisor,
+          {Task, fn -> receive do: (:stop -> :ok) end}
+        )
+
+      on_exit(fn -> DynamicSupervisor.terminate_child(LemonRouter.RunSupervisor, pid) end)
+
+      assert LemonRouter.active_run_count() == before + 1
+      assert :ok = DynamicSupervisor.terminate_child(LemonRouter.RunSupervisor, pid)
+      assert LemonRouter.active_run_count() == before
     end
 
     test "run_active?/1 is false for an unknown run and for non-binaries" do

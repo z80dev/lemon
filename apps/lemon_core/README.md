@@ -331,8 +331,8 @@ verification remains in `lemon_cli` and doctor diagnostics.
 | `LEMON_PROVIDER_ROUTING_ENABLED` | `runtime.provider_routing.enabled` |
 | `LEMON_PROVIDER_FALLBACK_PROVIDERS` | `runtime.provider_routing.fallback_providers` |
 | `LEMON_PROVIDER_ROUTING_REQUIRE_CREDENTIALS` | `runtime.provider_routing.require_credentials` |
-| `LEMON_DEBUG` | `tui.debug` |
-| `LEMON_THEME` | `tui.theme` |
+| `LEMON_TUI_DEBUG` | `tui.debug` |
+| `LEMON_TUI_THEME` | `tui.theme` |
 | `LEMON_LOG_FILE` | `logging.file` |
 | `LEMON_LOG_LEVEL` | `logging.level` |
 | `LEMON_WASM_ENABLED` | `runtime.tools.wasm.enabled` |

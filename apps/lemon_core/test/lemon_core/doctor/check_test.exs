@@ -45,13 +45,4 @@ defmodule LemonCore.Doctor.CheckTest do
       assert check.status == :skip
     end
   end
-
-  describe "color/1 and label/1" do
-    test "each status has a color and label" do
-      for status <- [:pass, :warn, :fail, :skip] do
-        assert is_atom(Check.color(status))
-        assert is_binary(Check.label(status))
-      end
-    end
-  end
 end

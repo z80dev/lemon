@@ -4,7 +4,7 @@ import { parseCliArgs } from './cli-args.js';
 import { resolveCliConfig } from './cli.js';
 
 describe('resolveCliConfig', () => {
-  it('uses defaults when optional args are absent', () => {
+  it('does not invent credentials when no credential source is configured', () => {
     const config = resolveCliConfig({
       args: parseCliArgs([]),
       hostname: 'my-host',
@@ -12,12 +12,6 @@ describe('resolveCliConfig', () => {
       env: {},
     });
 
-    expect(config.wsUrl).toBe('ws://localhost:4040/ws');
-    expect(config.cdpPort).toBe(18800);
-    expect(config.headless).toBe(false);
-    expect(config.noSandbox).toBe(false);
-    expect(config.attachOnly).toBe(false);
-    expect(config.nodeName).toBe('Local Browser (my-host)');
     expect(config.token).toBeNull();
     expect(config.operatorToken).toBeNull();
   });

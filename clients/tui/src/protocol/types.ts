@@ -381,7 +381,12 @@ export interface ClientLifecycleMap {
 
 export type ClientEventMap = ProtocolEventMap & ClientLifecycleMap;
 
-export type ConnectionState = "connecting" | "online" | "offline" | "reconnecting";
+export type ConnectionState =
+	| "connecting"
+	| "online"
+	| "offline"
+	| "reconnecting"
+	| "auth-rejected";
 
 // ---------------------------------------------------------------------------
 // method params / results

@@ -87,7 +87,11 @@ defmodule LemonCore.Config.Logging do
       "warning" -> :warning
       "warn" -> :warning
       "error" -> :error
-      _ -> nil
+      "notice" -> :notice
+      "critical" -> :critical
+      "alert" -> :alert
+      "emergency" -> :emergency
+      _ -> level
     end
   end
 
@@ -95,7 +99,7 @@ defmodule LemonCore.Config.Logging do
     level
   end
 
-  defp parse_log_level(_), do: nil
+  defp parse_log_level(level), do: level
 
   defp resolve_max_no_bytes(settings),
     do: Env.get(:lemon_log_max_no_bytes, default: settings["max_no_bytes"])

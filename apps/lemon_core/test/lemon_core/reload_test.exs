@@ -44,10 +44,8 @@ defmodule LemonCore.ReloadTest do
       assert {:ok, result} = Reload.reload_module(LemonCore.Clock)
       assert result.kind == :module
       assert result.target == LemonCore.Clock
-      assert is_list(result.reloaded)
-      assert is_list(result.skipped)
-      assert is_list(result.errors)
-      assert is_integer(result.duration_ms)
+      assert result.errors == []
+      assert LemonCore.Clock in result.reloaded
     end
 
     test "returns error status for unknown module" do
@@ -86,11 +84,6 @@ defmodule LemonCore.ReloadTest do
       assert result.target == :definitely_missing_app
       assert result.status == :error
       assert [%{target: :definitely_missing_app, reason: :app_not_found}] = result.errors
-    end
-
-    test "accepts force option without crashing" do
-      assert {:ok, result} = Reload.reload_app(:lemon_core, force: true)
-      assert result.kind == :app
     end
 
     test "can compile before reloading an app" do

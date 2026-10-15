@@ -96,7 +96,7 @@ defmodule LemonCore.Config.ModularIntegrationTest do
   end
 
   describe "load/1 with validation" do
-    test "loads config without validation by default", %{mock_home: mock_home} do
+    test "loads valid config with validation by default", %{mock_home: mock_home} do
       # Create a minimal valid config using canonical sections
       global_config = Path.join(mock_home, ".lemon")
       File.mkdir_p!(global_config)
@@ -113,7 +113,7 @@ defmodule LemonCore.Config.ModularIntegrationTest do
     end
 
     test "validates config when validate: true", %{mock_home: mock_home} do
-      # Create a config with empty model (validation warning)
+      # An empty model must not reach runtime consumers.
       global_config = Path.join(mock_home, ".lemon")
       File.mkdir_p!(global_config)
 
@@ -122,10 +122,11 @@ defmodule LemonCore.Config.ModularIntegrationTest do
       model = ""
       """)
 
-      # Should still return config but log warning
-      config = Modular.load(validate: true)
-
-      assert is_struct(config, Modular)
+      error = assert_raise ValidationError, fn -> Modular.load(validate: true) end
+      assert Exception.message(error) =~ Path.join(global_config, "config.toml")
+      assert Exception.message(error) =~ "agent.default_model"
+      assert_raise ValidationError, fn -> Modular.load() end
+      assert Modular.load(validate: false).agent.default_model == ""
     end
 
     test "returns valid config when validation passes", %{mock_home: mock_home} do
@@ -156,8 +157,6 @@ defmodule LemonCore.Config.ModularIntegrationTest do
       model = "openai:gpt-5"
       thinking_level = "high"
 
-      [runtime]
-      theme = "ocean"
       """)
 
       config = Modular.load(validate: true)
@@ -166,7 +165,6 @@ defmodule LemonCore.Config.ModularIntegrationTest do
       assert config.agent.default_provider == "openai"
       assert config.agent.default_model == "openai:gpt-5"
       assert config.agent.default_thinking_level == "high"
-      assert config.agent.theme == "ocean"
     end
   end
 

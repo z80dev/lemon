@@ -24,9 +24,11 @@ with the TUI, including when `LEMON_CONTROL_PLANE_OPERATOR_TOKEN` was already
 set. The source `../../bin/lemon daemon` and installed `lemon daemon` launchers
 instead create a port-scoped operator credential at
 `~/.lemon/run/control-plane-<port>.token`, with a mode-0700 parent and mode-0600
-file, and pass it to the persistent runtime. A later TUI validates the file is
-regular, owned by the current user, mode 0600, and a full 256-bit token before
-loading it automatically.
+file, and pass it to the persistent runtime. The `lemon` and `bin/lemon-tui`
+launchers validate that file is regular, owned by the current user, mode 0600,
+and a full 256-bit token, then pass it via `LEMON_CONTROL_PLANE_OPERATOR_TOKEN`.
+The bare `lemon-tui` binary reads only environment credentials; it does not
+load token files.
 
 Explicit `LEMON_CONTROL_PLANE_OPERATOR_TOKEN` values remain caller-owned and
 are never written to the managed credential file. Attaching to a runtime
@@ -34,6 +36,18 @@ started with an explicit token therefore still requires the same environment
 value. The client sends credentials only inside the WebSocket `connect.auth`
 envelope and does not include them in debug frame summaries. `LEMON_WS_TOKEN`
 remains a legacy client-side alias; it does not configure the daemon.
+
+If Lemon is offline, prompts and images stay in the editor rather than being
+queued for a later, unexpected send. Start the runtime with `lemon start` (use
+the same control-plane port), then `/reconnect`; the command reports success
+or failure. Check `--url` / `LEMON_WS_URL` for a remote runtime.
+
+An **auth rejected** state stops automatic retries and refuses prompt queueing.
+Set `LEMON_CONTROL_PLANE_OPERATOR_TOKEN` to the runtime's credential and restart
+the TUI, or use the `lemon` launcher to load its port-scoped token file.
+`LEMON_WS_TOKEN` is only a client alias, not a server configuration option.
+Use `/status` for the focused chat's profile and model, and `/model` to choose
+a model when none is selected.
 
 ## Features
 

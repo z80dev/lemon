@@ -105,6 +105,32 @@ defmodule CodingAgent.Tools.Lsp.WorkspaceEditTest do
     assert :ok = FileReadTracker.check(opts, Path.join(tmp, "b.c"), "BBB\n")
   end
 
+  test "file rename refuses an existing destination without overwriting it", %{tmp: tmp} do
+    File.write!(Path.join(tmp, "source.c"), "source\n")
+    File.write!(Path.join(tmp, "target.c"), "target\n")
+
+    {:ok, ops} =
+      WorkspaceEdit.plan(%{
+        "documentChanges" => [
+          %{
+            "kind" => "rename",
+            "oldUri" => uri(tmp, "source.c"),
+            "newUri" => uri(tmp, "target.c")
+          }
+        ]
+      })
+
+    assert {:error, message} =
+             WorkspaceEdit.apply(ops, tmp, [filesystem_checkpoints: false], nil, %{
+               tool: "lsp",
+               action: "rename_file"
+             })
+
+    assert message =~ "already exists"
+    assert File.read!(Path.join(tmp, "source.c")) == "source\n"
+    assert File.read!(Path.join(tmp, "target.c")) == "target\n"
+  end
+
   test "rejects invalid edits before writing any file", %{tmp: tmp} do
     File.write!(Path.join(tmp, "a.c"), "abcdef\n")
     File.write!(Path.join(tmp, "b.c"), "xyz\n")

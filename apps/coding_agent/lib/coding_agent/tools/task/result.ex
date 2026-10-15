@@ -45,8 +45,8 @@ defmodule CodingAgent.Tools.Task.Result do
     end
   end
 
-  @spec do_join(map(), reference() | nil) :: AgentToolResult.t() | {:error, String.t()}
-  def do_join(params, signal \\ nil) do
+  @spec do_join(map(), reference() | nil, keyword()) :: AgentToolResult.t() | {:error, String.t()}
+  def do_join(params, signal \\ nil, opts \\ []) do
     with {:ok, task_ids} <- validate_join_task_ids(params),
          {:ok, mode} <- validate_join_mode(params),
          {:ok, run_ids} <- resolve_run_ids(task_ids) do
@@ -55,7 +55,7 @@ defmodule CodingAgent.Tools.Task.Result do
       try do
         TaskStore.begin_auto_followup_join(task_ids, join_token)
 
-        case JoinAwait.await(run_ids, task_ids, mode, signal) do
+        case JoinAwait.await(run_ids, task_ids, mode, signal, opts) do
           {:ok, join_result} ->
             suppressed = joined_completion_task_ids(task_ids, join_result)
             TaskStore.finish_auto_followup_join(task_ids, suppressed, join_token)
@@ -63,6 +63,9 @@ defmodule CodingAgent.Tools.Task.Result do
 
           {:parent_question, request} ->
             build_parent_question_result(task_ids, mode, request)
+
+          {:yield, reason} ->
+            build_wait_snapshot(task_ids, reason)
 
           {:error, :aborted} ->
             {:error, "Operation aborted"}
@@ -79,6 +82,31 @@ defmodule CodingAgent.Tools.Task.Result do
     else
       {:error, reason} -> {:error, reason}
     end
+  end
+
+  defp build_wait_snapshot(task_ids, reason) do
+    tasks =
+      Enum.map(task_ids, fn id ->
+        case TaskStore.get_record(id) do
+          {:ok, record} -> %{task_id: id, status: to_string(record[:status] || :unknown)}
+          _ -> %{task_id: id, status: "unknown"}
+        end
+      end)
+
+    %AgentToolResult{
+      content: [
+        %TextContent{
+          text: "Wait yielded (#{reason}); children continue running.\n" <> Jason.encode!(tasks)
+        }
+      ],
+      details: %{
+        status: "running",
+        tasks: tasks,
+        task_ids: task_ids,
+        interrupted: reason == :interrupted,
+        timed_out: reason == :timeout
+      }
+    }
   end
 
   defp release_join_reservation(task_ids, join_token) do

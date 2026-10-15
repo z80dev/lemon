@@ -32,7 +32,7 @@ defmodule Mix.Tasks.Lemon.ChannelsTest do
       [gateway.discord]
       bot_token_secret = "private-discord-secret-name"
       message_content_intent_enabled = true
-      allowed_channel_ids = ["111222333"]
+      allowed_channel_ids = [111222333]
       """
     )
 

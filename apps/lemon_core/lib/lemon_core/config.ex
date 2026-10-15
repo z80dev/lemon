@@ -448,15 +448,21 @@ defmodule LemonCore.Config do
 
   defp deep_merge_values(_base, override), do: override
 
-  # Convert string keys to atoms for merging into atom-keyed config maps
+  # Only reuse existing atoms; arbitrary override keys remain strings.
   defp atomize_keys(map) when is_map(map) do
     Map.new(map, fn
-      {k, v} when is_binary(k) -> {String.to_atom(k), atomize_keys(v)}
+      {k, v} when is_binary(k) -> {existing_atom_or_string(k), atomize_keys(v)}
       {k, v} -> {k, atomize_keys(v)}
     end)
   end
 
   defp atomize_keys(value), do: value
+
+  defp existing_atom_or_string(key) do
+    String.to_existing_atom(key)
+  rescue
+    ArgumentError -> key
+  end
 
   # ============================================================================
   # Helpers
@@ -484,7 +490,7 @@ defmodule LemonCore.Config do
   defp parse_thinking_level("xhigh"), do: :xhigh
   defp parse_thinking_level("auto"), do: :auto
   defp parse_thinking_level(level) when is_atom(level), do: level
-  defp parse_thinking_level(_), do: :medium
+  defp parse_thinking_level(level), do: level
 
   defp normalize_optional_string(value) when is_binary(value) do
     trimmed = String.trim(value)

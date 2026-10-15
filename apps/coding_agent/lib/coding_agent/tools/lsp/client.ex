@@ -81,6 +81,7 @@ defmodule CodingAgent.Tools.Lsp.Client do
       },
       "configuration" => true,
       "workspaceFolders" => true,
+      "fileOperations" => %{"willRename" => true, "didRename" => true},
       "executeCommand" => %{"dynamicRegistration" => false},
       "symbol" => %{
         "dynamicRegistration" => false,
@@ -185,22 +186,7 @@ defmodule CodingAgent.Tools.Lsp.Client do
 
   @doc "LSP `languageId` for a path."
   @spec language_id(String.t()) :: String.t()
-  def language_id(path) do
-    case path |> Path.extname() |> String.downcase() do
-      ext when ext in [".ex", ".exs"] -> "elixir"
-      ".heex" -> "phoenix-heex"
-      ".ts" -> "typescript"
-      ".tsx" -> "typescriptreact"
-      ".jsx" -> "javascriptreact"
-      ext when ext in [".js", ".mjs", ".cjs"] -> "javascript"
-      ".py" -> "python"
-      ".rs" -> "rust"
-      ".go" -> "go"
-      ext when ext in [".c", ".h"] -> "c"
-      ext when ext in [".cc", ".cpp", ".cxx", ".hh", ".hpp", ".hxx"] -> "cpp"
-      _ -> "plaintext"
-    end
-  end
+  def language_id(path), do: LemonLsp.Servers.language_id(path)
 
   # Server
 

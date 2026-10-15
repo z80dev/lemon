@@ -10,6 +10,18 @@ defmodule CodingAgent.Env do
 
   @declarations [
     %{
+      name: :pi_debug,
+      env_var: "PI_DEBUG",
+      aliases: [],
+      type: :string,
+      default: nil,
+      doc: "Set to 1 to enable CodingAgent.Config debug mode (DEBUG=1 also enables it).",
+      secret?: false,
+      required?: false,
+      area: :runtime,
+      apps: [:coding_agent]
+    },
+    %{
       name: :exa_api_key,
       env_var: "EXA_API_KEY",
       aliases: [],

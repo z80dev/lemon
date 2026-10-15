@@ -302,17 +302,16 @@ if missing:
 PY
 }
 
+CLEANUP_RELEASE=""
+CLEANUP_ENV=()
+
 cleanup_work_dir() {
   local work_dir="$1"
-  local bin
-
-  # Stop through each profile executable, never the launcher: the launcher
-  # resolves the caller's real ~/.lemon/run state during cleanup.
-  for bin in "$work_dir"/*/extract/bin/*; do
-    if [ -x "$bin" ] && [ "$(basename "$bin")" != "lemon" ]; then
-      "$bin" stop >/dev/null 2>&1 || true
-    fi
-  done
+  # Cleanup must use the same isolated HOME, node and cookie as the boot.
+  # A bare release stop could address an unrelated installed runtime instead.
+  if [[ "$CLEANUP_RELEASE" == "$work_dir"/*/extract/bin/* ]] && [ -x "$CLEANUP_RELEASE" ]; then
+    env "${CLEANUP_ENV[@]}" "$CLEANUP_RELEASE" stop >/dev/null 2>&1 || true
+  fi
 
   rm -rf "$work_dir"
 }
@@ -541,6 +540,11 @@ boot_one_profile() {
     "LEMON_CONTROL_PLANE_PORT=$control_port"
     "LEMON_WEB_PORT=$web_port"
     "LEMON_SIM_UI_PORT=$sim_port"
+    "LEMON_ROUTER_HEALTH_PORT=0"
+    "LEMON_GATEWAY_HEALTH_PORT=0"
+    "RELEASE_NODE=lemon_release_boot_$control_port"
+    "RELEASE_DISTRIBUTION=sname"
+    "RELEASE_COOKIE=runtime-boot-cookie-$profile"
     "LEMON_WEB_SECRET_KEY_BASE=runtime_boot_secret_key_base_runtime_boot_secret_key_base_runtime_boot"
     "LEMON_GATEWAY_NODE_COOKIE=runtime-boot-cookie-$profile"
     "PHX_SERVER=true"
@@ -554,6 +558,8 @@ boot_one_profile() {
       "LEMON_ARENA_LEAGUE_ROOT=$profile_dir/leagues"
     )
   fi
+  CLEANUP_RELEASE="$release_bin"
+  CLEANUP_ENV=("${env_vars[@]}")
 
   run_with_env() {
     (
@@ -749,6 +755,22 @@ PY
     fi
 
     run_launcher stop
+    if run_launcher status; then
+      echo "$profile: status succeeded after stop" >&2
+      exit 1
+    fi
+
+    # Foreground start must be observable and stoppable from another launcher.
+    run_launcher start > "$profile_dir/foreground.log" 2>&1 &
+    local foreground_pid=$!
+    wait_for_health "http://127.0.0.1:$control_port/healthz" "$profile foreground control-plane"
+    run_launcher status
+    run_launcher stop
+    wait "$foreground_pid" || true
+    if run_launcher status; then
+      echo "$profile: status succeeded after foreground stop" >&2
+      exit 1
+    fi
     run_release eval "LemonCore.Doctor.CLI.bundle!(bundle_path: \"$bundle_path\")"
 
     if [ ! -f "$bundle_path" ]; then

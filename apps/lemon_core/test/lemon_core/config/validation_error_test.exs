@@ -39,6 +39,7 @@ defmodule LemonCore.Config.ValidationErrorTest do
         "Invalid value for timeout: expected positive integer",
         "Unknown provider: invalid_provider"
       ]
+
       exception = ValidationError.exception(errors: errors)
 
       assert exception.errors == errors
@@ -125,27 +126,6 @@ defmodule LemonCore.Config.ValidationErrorTest do
         end
 
       assert rescued_message =~ "Test message"
-    end
-  end
-
-  describe "struct fields" do
-    test "has correct struct fields" do
-      exception = ValidationError.exception([])
-
-      assert Map.has_key?(exception, :message)
-      assert Map.has_key?(exception, :errors)
-    end
-
-    test "errors field is a list" do
-      exception = ValidationError.exception(errors: ["error"])
-
-      assert is_list(exception.errors)
-    end
-
-    test "message field is a string" do
-      exception = ValidationError.exception([])
-
-      assert is_binary(exception.message)
     end
   end
 

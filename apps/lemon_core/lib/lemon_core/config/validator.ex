@@ -274,9 +274,26 @@ defmodule LemonCore.Config.Validator do
     errors
     |> validate_non_empty_string(Map.get(agent, :default_model), "agent.default_model")
     |> validate_non_empty_string(Map.get(agent, :default_provider), "agent.default_provider")
-    |> validate_non_empty_string(
+    |> validate_custom_enum(
       Map.get(agent, :default_thinking_level),
-      "agent.default_thinking_level"
+      "defaults.thinking_level",
+      &(&1 in [
+          "off",
+          "minimal",
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "auto",
+          :off,
+          :minimal,
+          :low,
+          :medium,
+          :high,
+          :xhigh,
+          :auto
+        ]),
+      "off | minimal | low | medium | high | xhigh | auto"
     )
     |> validate_task_config(Map.get(agent, :task))
     |> validate_compaction_thresholds(Map.get(agent, :compaction))
@@ -608,7 +625,7 @@ defmodule LemonCore.Config.Validator do
       errors
     else
       [
-        "gateway.queue.mode: invalid mode '#{mode}'. Valid: #{Enum.join(valid_modes, ", ")}"
+        "gateway.queue.mode: invalid mode. Valid: #{Enum.join(valid_modes, ", ")}"
         | errors
       ]
     end
@@ -625,7 +642,7 @@ defmodule LemonCore.Config.Validator do
       errors
     else
       [
-        "gateway.queue.drop: invalid drop policy '#{drop}'. Valid: #{Enum.join(valid_drops, ", ")}"
+        "gateway.queue.drop: invalid drop policy. Valid: #{Enum.join(valid_drops, ", ")}"
         | errors
       ]
     end
@@ -856,13 +873,14 @@ defmodule LemonCore.Config.Validator do
       errors
     else
       valid_levels = Enum.join(@valid_log_levels, ", ")
-      ["#{path}: invalid level '#{value}'. Valid: #{valid_levels}" | errors]
+      ["#{path}: invalid level. Valid: #{valid_levels}" | errors]
     end
   end
 
   defp validate_log_level(errors, value, path) when is_binary(value) do
-    atom_value = String.downcase(value) |> String.to_atom()
-    validate_log_level(errors, atom_value, path)
+    if String.downcase(value) in Enum.map(@valid_log_levels, &Atom.to_string/1),
+      do: errors,
+      else: ["#{path}: invalid level. Valid: #{Enum.join(@valid_log_levels, ", ")}" | errors]
   end
 
   defp validate_log_level(errors, _value, path) do
@@ -890,13 +908,14 @@ defmodule LemonCore.Config.Validator do
       errors
     else
       valid_themes = Enum.join(@valid_themes, ", ")
-      ["#{path}: invalid theme '#{value}'. Valid: #{valid_themes}" | errors]
+      ["#{path}: invalid theme. Valid: #{valid_themes}" | errors]
     end
   end
 
   defp validate_theme(errors, value, path) when is_binary(value) do
-    atom_value = String.downcase(value) |> String.to_atom()
-    validate_theme(errors, atom_value, path)
+    if String.downcase(value) in Enum.map(@valid_themes, &Atom.to_string/1),
+      do: errors,
+      else: ["#{path}: invalid theme. Valid: #{Enum.join(@valid_themes, ", ")}" | errors]
   end
 
   defp validate_theme(errors, _value, path) do
@@ -912,7 +931,7 @@ defmodule LemonCore.Config.Validator do
   end
 
   defp validate_providers_map(errors, _value) do
-    ["providers.providers: must be a map" | errors]
+    ["providers: must be a table" | errors]
   end
 
   @doc """
@@ -921,13 +940,13 @@ defmodule LemonCore.Config.Validator do
   @spec validate_legacy_providers(map(), [String.t()]) :: [String.t()]
   def validate_legacy_providers(providers, errors) when is_map(providers) do
     Enum.reduce(providers, errors, fn {name, config}, acc ->
-      validate_legacy_provider_config(acc, name, config)
+      validate_provider_config(acc, name, config)
     end)
   end
 
   def validate_legacy_providers(_providers, errors), do: errors
 
-  defp validate_legacy_provider_config(errors, name, config) when is_map(config) do
+  defp validate_provider_config(errors, name, config) when is_map(config) do
     # Validate API key if present
     errors =
       case Map.get(config, :api_key) do
@@ -963,48 +982,8 @@ defmodule LemonCore.Config.Validator do
     |> validate_custom_provider(name, config, "providers")
   end
 
-  defp validate_legacy_provider_config(errors, name, _config) do
-    ["providers.#{name}: must be a map" | errors]
-  end
-
-  defp validate_provider_config(errors, name, config) when is_map(config) do
-    # Validate API key if present
-    errors =
-      case Map.get(config, :api_key) do
-        nil -> errors
-        "" -> ["providers.providers.#{name}.api_key: cannot be empty" | errors]
-        _ -> errors
-      end
-
-    # Validate base URL if present
-    errors =
-      case Map.get(config, :base_url) do
-        nil ->
-          errors
-
-        "" ->
-          ["providers.providers.#{name}.base_url: cannot be empty" | errors]
-
-        url when is_binary(url) ->
-          if String.starts_with?(url, ["http://", "https://"]) do
-            errors
-          else
-            ["providers.providers.#{name}.base_url: must start with http:// or https://" | errors]
-          end
-
-        _ ->
-          ["providers.providers.#{name}.base_url: must be a string" | errors]
-      end
-
-    errors
-    |> validate_provider_secret_refs(name, config, "providers.providers")
-    |> validate_openai_codex_auth_source(name, config, "providers.providers")
-    |> validate_anthropic_auth_source(name, config, "providers.providers")
-    |> validate_custom_provider(name, config, "providers.providers")
-  end
-
   defp validate_provider_config(errors, name, _config) do
-    ["providers.providers.#{name}: must be a map" | errors]
+    ["providers.#{name}: must be a table" | errors]
   end
 
   # Custom provider/model definitions parsed by `LemonCore.Config.Providers`:
@@ -1045,7 +1024,7 @@ defmodule LemonCore.Config.Validator do
     if canonical.(value) do
       errors
     else
-      ["#{path}: invalid value #{inspect(value)} (expected #{choices})" | errors]
+      ["#{path}: invalid value (#{describe_type(value)}; expected #{choices})" | errors]
     end
   end
 
@@ -1053,7 +1032,10 @@ defmodule LemonCore.Config.Validator do
 
   defp validate_custom_base_url(errors, path, config, _custom) do
     if is_nil(Map.get(config, :base_url)) do
-      ["#{path}.base_url: is required for a custom provider (api/discovery set)" | errors]
+      [
+        "#{path}.base_url: required when api or discovery is set; add base_url = \"https://...\" to this provider"
+        | errors
+      ]
     else
       errors
     end
@@ -1158,7 +1140,7 @@ defmodule LemonCore.Config.Validator do
   end
 
   defp validate_provider_secret_ref(errors, name, config, path_prefix, field) do
-    case Map.get(config, field) || Map.get(config, Atom.to_string(field)) do
+    case Map.get(config, field, Map.get(config, Atom.to_string(field))) do
       nil ->
         errors
 
@@ -1170,15 +1152,21 @@ defmodule LemonCore.Config.Validator do
         end
 
       other ->
-        ["#{path_prefix}.#{name}.#{field}: must be a string (got #{inspect(other)})" | errors]
+        [
+          "#{path_prefix}.#{name}.#{field}: must be a string (got #{describe_type(other)})"
+          | errors
+        ]
     end
   end
 
   defp validate_openai_codex_auth_source(errors, name, config, path_prefix) do
     if to_string(name) == "openai-codex" do
-      case Map.get(config, :auth_source) || Map.get(config, "auth_source") do
+      case Map.get(config, :auth_source, Map.get(config, "auth_source")) do
         nil ->
-          ["#{path_prefix}.openai-codex.auth_source: is required (oauth | api_key)" | errors]
+          [
+            "#{path_prefix}.openai-codex.auth_source: required; set auth_source = \"oauth\" or \"api_key\""
+            | errors
+          ]
 
         source when is_binary(source) ->
           normalized = source |> String.trim() |> String.downcase()
@@ -1187,14 +1175,14 @@ defmodule LemonCore.Config.Validator do
             errors
           else
             [
-              "#{path_prefix}.openai-codex.auth_source: invalid value '#{source}' (expected oauth | api_key)"
+              "#{path_prefix}.openai-codex.auth_source: invalid value (expected oauth | api_key)"
               | errors
             ]
           end
 
         other ->
           [
-            "#{path_prefix}.openai-codex.auth_source: must be a string (got #{inspect(other)})"
+            "#{path_prefix}.openai-codex.auth_source: must be a string (got #{describe_type(other)})"
             | errors
           ]
       end
@@ -1205,7 +1193,7 @@ defmodule LemonCore.Config.Validator do
 
   defp validate_anthropic_auth_source(errors, name, config, path_prefix) do
     if to_string(name) == "anthropic" do
-      case Map.get(config, :auth_source) || Map.get(config, "auth_source") do
+      case Map.get(config, :auth_source, Map.get(config, "auth_source")) do
         nil ->
           errors
 
@@ -1216,14 +1204,14 @@ defmodule LemonCore.Config.Validator do
             errors
           else
             [
-              "#{path_prefix}.anthropic.auth_source: invalid value '#{source}' (expected oauth | api_key)"
+              "#{path_prefix}.anthropic.auth_source: invalid value (expected oauth | api_key)"
               | errors
             ]
           end
 
         other ->
           [
-            "#{path_prefix}.anthropic.auth_source: must be a string (got #{inspect(other)})"
+            "#{path_prefix}.anthropic.auth_source: must be a string (got #{describe_type(other)})"
             | errors
           ]
       end
@@ -1231,4 +1219,12 @@ defmodule LemonCore.Config.Validator do
       errors
     end
   end
+
+  defp describe_type(value) when is_binary(value), do: "string"
+  defp describe_type(value) when is_boolean(value), do: "boolean"
+  defp describe_type(value) when is_integer(value), do: "integer"
+  defp describe_type(value) when is_float(value), do: "float"
+  defp describe_type(value) when is_map(value), do: "table"
+  defp describe_type(value) when is_list(value), do: "array"
+  defp describe_type(_value), do: "unsupported type"
 end

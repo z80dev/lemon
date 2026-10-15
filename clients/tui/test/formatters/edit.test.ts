@@ -274,8 +274,9 @@ describe("editFormatter", () => {
 				path: "/Users/test/project/src/app.ts",
 			});
 
-			// Should not crash
-			expect(result.summary).toBeDefined();
+			expect(result.summary).toContain("src/app.ts");
+			expect(result.details).toEqual([]);
+			expect(result.isError).toBe(false);
 		});
 
 		it("handles undefined result", () => {
@@ -283,7 +284,9 @@ describe("editFormatter", () => {
 				path: "/Users/test/project/src/app.ts",
 			});
 
-			expect(result.summary).toBeDefined();
+			expect(result.summary).toContain("src/app.ts");
+			expect(result.details).toEqual([]);
+			expect(result.isError).toBe(false);
 		});
 
 		it("handles empty content array", () => {

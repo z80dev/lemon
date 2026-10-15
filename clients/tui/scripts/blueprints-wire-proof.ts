@@ -32,7 +32,7 @@ class ProofHost implements CommandHost {
 	}
 	clearTranscript(): void {}
 	requestExit(_code: number): void {}
-	reconnect(): void {}
+	async reconnect(): Promise<void> {}
 	refreshStatus(): void {}
 	getDraft(): string {
 		return "";

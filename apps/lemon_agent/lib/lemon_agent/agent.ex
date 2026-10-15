@@ -480,6 +480,12 @@ defmodule LemonAgent.Agent do
     GenServer.call(agent, :get_state)
   end
 
+  @doc "Non-consuming steering queue peek bound to the active invocation signal."
+  @spec has_steering_messages?(GenServer.server(), reference() | nil) :: boolean()
+  def has_steering_messages?(agent, signal) do
+    GenServer.call(agent, {:has_steering_messages, signal}, 1_000)
+  end
+
   @doc """
   Gets the current session ID.
   """

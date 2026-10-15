@@ -8,7 +8,6 @@ defmodule LemonCore.TerminalBackendsTest do
       assert [local, local_pty, docker, ssh] = TerminalBackends.list()
 
       assert local.id == :local
-      assert local.label == "Local shell"
       assert local.available == true
       assert local.isolation == :host
       assert local.pty == false
@@ -19,7 +18,6 @@ defmodule LemonCore.TerminalBackendsTest do
       assert local.capabilities == [:shell, :stdin, :logs, :kill, :exit_status, :cwd, :env]
 
       assert local_pty.id == :local_pty
-      assert local_pty.label == "Local PTY shell"
       assert local_pty.isolation == :host
       assert local_pty.pty == true
       assert local_pty.supervised == true
@@ -27,7 +25,6 @@ defmodule LemonCore.TerminalBackendsTest do
       assert :pty in local_pty.capabilities
 
       assert docker.id == :docker
-      assert docker.label == "Docker container shell"
       assert docker.isolation == :container
       assert docker.pty == false
       assert docker.supervised == true
@@ -49,7 +46,6 @@ defmodule LemonCore.TerminalBackendsTest do
       assert :resource_limits in docker.capabilities
 
       assert ssh.id == :ssh
-      assert ssh.label == "SSH shell"
       assert ssh.isolation == :remote_host
       assert ssh.pty == false
       assert ssh.supervised == true

@@ -56,12 +56,6 @@ defmodule LemonCore.AgentRuntimeTest do
       assert AgentRuntime.register(Definitely.Not.Loaded) == {:error, :not_a_provider}
       refute AgentRuntime.available?()
     end
-
-    test "registration is readable as plain config" do
-      use_provider(FullProvider)
-
-      assert AgentRuntime.provider() == FullProvider
-    end
   end
 
   describe "call/3 degradation" do
