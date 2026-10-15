@@ -41,12 +41,15 @@ gh workflow run release.yml --ref main -f channel=stable -f draft=false
 
 The workflow serializes release cuts and performs the complete operation:
 
-1. The canonical fast, quality, deterministic eval, install and client lanes
-   gate the dispatch's exact source commit **before** any version/changelog
-   mutation, release commit, tag or push. Existing successful `ci.yml` coverage
-   is reused through `scripts/ci_verified_commit`; otherwise the lanes run on
-   that source commit. `skip_preflight=true` explicitly bypasses these lanes;
-   artifact, manifest and container verification still run.
+1. The full `ci.yml` gate set (fast x4, quality, deterministic eval, install,
+   clients, Dialyzer gate, sim bench, WASM) gates the dispatch's exact source
+   commit **before** any version/changelog mutation, release commit, tag or
+   push. A green `ci.yml` push run of that commit is reused through
+   `scripts/ci_verified_commit`, which also waits up to 30 minutes for one that
+   is still running; otherwise the release calls `ci.yml` as a reusable
+   workflow, so the same parallel jobs run on that source commit.
+   `skip_preflight=true` explicitly bypasses these lanes; artifact, manifest and
+   container verification still run.
 2. `scripts/prepare_product_release --auto` validates the Unreleased notes,
    chooses the next unused version, updates product version metadata, and moves
    the notes into the new version section. Automatic selection skips existing

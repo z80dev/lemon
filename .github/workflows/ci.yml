@@ -4,7 +4,7 @@ name: CI
 # runners. Each job runs a `scripts/test` lane or repository script, so local
 # runs and CI execute the same commands.
 #
-#   changes      decides what a pull request can skip (pushes to main run all)
+#   changes      decides what a pull request can skip (every other event runs all)
 #   check        scripts/test quality + scripts/test eval-fast (always)
 #   test (1..4)  scripts/test fast split with ExUnit --partitions 4
 #   dialyzer     full advisory run + allowlist gate (scripts/dialyzer_gate.sh)
@@ -13,10 +13,16 @@ name: CI
 #   clients      scripts/test clients (TUI + lemon-browser-node)
 #   wasm-runtime cargo tests + WASM integration test
 #   history      pull requests only: reject unrelated Git history
-#   result       single required status; fails if any job failed or was cancelled
+#   result       single required status; fails if any job failed or was cancelled,
+#                summarizes failing jobs/tests, and on main pushes keeps the
+#                `main-red` issue open while main is failing
 #
 # Every push to main runs every job, so a green run on a main commit means the
-# commit was fully verified; release.yml relies on that (scripts/ci_verified_commit).
+# commit was fully verified; release.yml relies on that (scripts/ci_verified_commit)
+# and, when no such run exists, calls this workflow (workflow_call) as its
+# preflight. nightly.yml calls it too. Pushes to main are serialized: one run in
+# progress plus the newest pending one, so a burst of merges coalesces into the
+# latest commit instead of queueing every intermediate commit.
 #
 # Caches: one deps/_build entry per MIX_ENV family and commit, saved only by
 # pushes to main. Pull requests restore main's newest entry and compile
@@ -27,12 +33,16 @@ on:
   push:
     branches:
       - main
+  workflow_call:
+  workflow_dispatch:
 
 permissions:
   contents: read
 
+# github.workflow is the caller's name under workflow_call, so a release or
+# nightly preflight never shares (or cancels) the group of main's push runs.
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 # ExUnit fixture names and Lemon's Unicode path contracts need a UTF-8 locale.
@@ -45,9 +55,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
-      code: ${{ github.event_name == 'push' || steps.code.outputs.code == 'true' }}
-      clients: ${{ github.event_name == 'push' || steps.paths.outputs.clients == 'true' }}
-      wasm: ${{ github.event_name == 'push' || steps.paths.outputs.wasm == 'true' }}
+      code: ${{ github.event_name != 'pull_request' || steps.code.outputs.code == 'true' }}
+      clients: ${{ github.event_name != 'pull_request' || steps.paths.outputs.clients == 'true' }}
+      wasm: ${{ github.event_name != 'pull_request' || steps.paths.outputs.wasm == 'true' }}
 
     steps:
       - name: Checkout
@@ -56,6 +66,7 @@ jobs:
       # Anything but prose and the docs site can change BEAM behaviour. The TUI
       # counts: control-plane wire tests execute the compiled client.
       - name: Detect code changes
+        if: github.event_name == 'pull_request'
         uses: dorny/paths-filter@v4
         id: code
         with:
@@ -69,6 +80,7 @@ jobs:
               - '!.github/workflows/docs-site.yml'
 
       - name: Detect client and WASM changes
+        if: github.event_name == 'pull_request'
         uses: dorny/paths-filter@v4
         id: paths
         with:
@@ -368,20 +380,65 @@ jobs:
           echo "::notice::Common ancestor with ${GITHUB_BASE_REF}: $BASE"
 
   # One status to require. Skipped jobs (unchanged paths) are fine; failed or
-  # cancelled ones are not.
+  # cancelled ones are not. Failing jobs and ExUnit failures are summarized on
+  # the run page; on main pushes the `main-red` issue opens on the first red
+  # run and closes on the next green one, so breakage surfaces right after the
+  # merge that caused it rather than at release time.
   result:
     name: CI result
     if: always()
     needs: [changes, check, test, dialyzer, sim-bench, install, clients, wasm-runtime, history]
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+      issues: write
 
     steps:
-      - name: Require every job to pass or skip
+      - name: Classify job results
+        id: status
         env:
           RESULTS: ${{ join(needs.*.result, ' ') }}
         run: |
           echo "job results: $RESULTS"
+          status=success
+          for result in $RESULTS; do
+            case "$result" in
+              success|skipped) ;;
+              *) status=failure ;;
+            esac
+          done
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout report script
+        if: steps.status.outputs.status == 'failure' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: scripts/ci_failure_report
+          sparse-checkout-cone-mode: false
+
+      - name: Summarize failures
+        if: steps.status.outputs.status == 'failure' && contains(needs.*.result, 'failure')
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: scripts/ci_failure_report summary --run-id "$GITHUB_RUN_ID" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Track main health (main-red issue)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && !cancelled()
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          scripts/ci_failure_report track --run-id "$GITHUB_RUN_ID" \
+            --label main-red --title "main CI is failing" \
+            --status "${{ steps.status.outputs.status }}"
+
+      - name: Require every job to pass or skip
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
           for result in $RESULTS; do
             case "$result" in
               success|skipped) ;;

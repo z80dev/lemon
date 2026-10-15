@@ -2,6 +2,7 @@
 # Find whether a commit is already covered by a green CI run on main.
 #
 # Usage: scripts/ci_verified_commit <commit> [--repo OWNER/NAME] [--max-depth N]
+#                                   [--wait-minutes N]
 #
 # Walks first-parent history from <commit>. A commit with a successful `CI`
 # (ci.yml) push run is verified: pushes to main run every CI job, so that run
@@ -11,18 +12,25 @@
 # release metadata (changelogs and version fields), so its tested ancestor
 # still describes the same code.
 #
+# With --wait-minutes, a CI push run that is still queued or running for the
+# commit being checked is awaited (up to N minutes) instead of being treated
+# as missing: a release dispatched right after a merge reuses that run rather
+# than repeating every gate.
+#
 # Prints `verified <sha>` and exits 0, or prints the reason and exits 1.
 # Needs git history (fetch-depth > max-depth) and `gh` with actions:read.
 set -euo pipefail
 
-commit="${1:?usage: scripts/ci_verified_commit <commit> [--repo OWNER/NAME] [--max-depth N]}"
+commit="${1:?usage: scripts/ci_verified_commit <commit> [--repo OWNER/NAME] [--max-depth N] [--wait-minutes N]}"
 shift
 repo="${GITHUB_REPOSITORY:-}"
 max_depth=25
+wait_minutes=0
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --repo) repo="$2"; shift 2 ;;
     --max-depth) max_depth="$2"; shift 2 ;;
+    --wait-minutes) wait_minutes="$2"; shift 2 ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
 done
@@ -54,6 +62,28 @@ ci_green() {
   [ "${count:-0}" -gt 0 ]
 }
 
+ci_unfinished() {
+  local count
+  count="$(gh api "repos/${repo}/actions/workflows/ci.yml/runs?head_sha=$1&event=push&per_page=20" \
+    --jq '[.workflow_runs[] | select(.status != "completed")] | length')"
+  [ "${count:-0}" -gt 0 ]
+}
+
+# Poll an unfinished CI push run for <sha> until it completes or the deadline
+# passes. Returns 0 once the commit has a green run.
+await_ci() {
+  local sha="$1" deadline=$((SECONDS + wait_minutes * 60))
+  while ci_unfinished "$sha"; do
+    if [ "$SECONDS" -ge "$deadline" ]; then
+      echo "CI for $sha still running after ${wait_minutes}m; not waiting longer" >&2
+      return 1
+    fi
+    echo "waiting for the CI push run of $sha to finish..." >&2
+    sleep 30
+  done
+  ci_green "$sha"
+}
+
 sha="$(git rev-parse "${commit}^{commit}")"
 for _ in $(seq 1 "$max_depth"); do
   if ci_green "$sha"; then
@@ -61,6 +91,10 @@ for _ in $(seq 1 "$max_depth"); do
     exit 0
   fi
   if ! git rev-parse -q --verify "${sha}^" >/dev/null || ! metadata_only "$sha"; then
+    if [ "$wait_minutes" -gt 0 ] && await_ci "$sha"; then
+      echo "verified $sha"
+      exit 0
+    fi
     echo "unverified: $sha has no green CI push run and changes more than release metadata"
     exit 1
   fi
