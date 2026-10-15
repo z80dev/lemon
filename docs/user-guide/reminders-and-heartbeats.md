@@ -36,8 +36,41 @@ this order:
 | Created anywhere else (TUI, browser, CLI) | Your **paired owner chat**: the first `gateway.telegram.allowed_chat_ids` entry when Telegram is enabled, otherwise `gateway.discord.default_channel_id` when Discord is enabled. |
 | No owner chat configured | Nowhere. |
 
-The message is the job name followed by the agent's reply. A failed or
-timed-out run sends `<job name> (<status>): <reason>` instead.
+Successful results contain the job name and the agent's reply. Failures use the
+job's delivery route first, falling back to the paired owner chat if there is
+no job route (including `deliverTo: "none"` and command jobs without a target).
+This fallback is only for failure/recovery alerts; it does not change ordinary
+command-result delivery.
+
+### Failure alerts and recovery
+
+Lemon persists each job's failure streak and last terminal status. Every failed
+or timed-out terminal run increments the streak; success resets it to zero.
+The cron tool and `cron.list` return `failureStreak` and `lastStatus`; list with
+`failing: true` to see jobs with a nonzero streak. `lemon cron status` and
+`cron.status` include the `failingJobs` count.
+
+The first failure in an incident alerts immediately. Repeated failures with the
+same normalized error class are quiet for six hours; a new error class alerts
+immediately. Incident cooldowns survive restart. Configure the non-negative
+`[cron] failure_alert_cooldown_ms` setting (default `21600000`) to change the
+interval; `0` alerts on every failure. Alerts contain a bounded, credential-
+redacted job name, streak, safe error label, and an inspection command:
+
+```bash
+lemon cron runs --job <id>
+```
+
+A previously alerted job sends one recovery notice on its next successful,
+non-suppressed run, instead of a second ordinary result message. Exact
+`[SILENT]` and healthy heartbeat `HEARTBEAT_OK` successes never notify, even on
+recovery; failures always enter the alert policy.
+
+If no route exists, or alert admission fails, Lemon durably records the latest
+undelivered alert per job (up to 200 jobs). `lemon doctor` warns about unread
+failing jobs; redacted cron diagnostics include their streaks and last statuses.
+Recovery or successful alert admission resolves that local notice. Run history
+remains available whether or not a chat is paired.
 
 Most people only need the owner chat. Pair Telegram once and every reminder,
 heartbeat, and brief reaches your phone:
