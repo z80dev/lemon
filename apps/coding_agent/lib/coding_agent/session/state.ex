@@ -19,14 +19,20 @@ defmodule CodingAgent.Session.State do
   @spec build_transform_context(
           nil | (list(), reference() | nil -> term()),
           map(),
-          SecretObfuscator.t() | nil
+          SecretObfuscator.t() | nil,
+          (String.t() -> {:ok, list()} | {:error, term()}) | nil
         ) ::
           (list(), reference() | nil -> {:ok, list()} | {:error, term()})
-  def build_transform_context(transform_fn, context_guardrail_opts, secret_obfuscator \\ nil)
+  def build_transform_context(
+        transform_fn,
+        context_guardrail_opts,
+        secret_obfuscator \\ nil,
+        checkpoint_resolver \\ nil
+      )
 
-  def build_transform_context(nil, context_guardrail_opts, secret_obfuscator) do
+  def build_transform_context(nil, context_guardrail_opts, secret_obfuscator, checkpoint_resolver) do
     fn messages, signal ->
-      messages = CodingAgent.Session.ContextCheckpoint.project(messages)
+      messages = CodingAgent.Session.ContextCheckpoint.project(messages, checkpoint_resolver)
 
       with {:ok, guarded} <-
              normalize_transform_result(
@@ -41,10 +47,15 @@ defmodule CodingAgent.Session.State do
     end
   end
 
-  def build_transform_context(transform_fn, context_guardrail_opts, secret_obfuscator)
+  def build_transform_context(
+        transform_fn,
+        context_guardrail_opts,
+        secret_obfuscator,
+        checkpoint_resolver
+      )
       when is_function(transform_fn, 2) do
     fn messages, signal ->
-      messages = CodingAgent.Session.ContextCheckpoint.project(messages)
+      messages = CodingAgent.Session.ContextCheckpoint.project(messages, checkpoint_resolver)
 
       with {:ok, guarded} <-
              normalize_transform_result(

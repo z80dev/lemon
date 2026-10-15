@@ -118,7 +118,13 @@ defmodule CodingAgent.Session.ContextCheckpoint do
                 session,
                 data.boundary,
                 data.report,
-                %{context_rewind: true, checkpoint_call_id: data.call_id, goal: data.goal},
+                %{
+                  context_rewind: true,
+                  checkpoint_call_id: data.call_id,
+                  rewind_call_id: rewind_id,
+                  boundary: data.boundary,
+                  goal: data.goal
+                },
                 retained
               )
 
@@ -155,54 +161,112 @@ defmodule CodingAgent.Session.ContextCheckpoint do
     end
   end
 
-  # Project from authenticated tool receipts rather than names. A tool_invoke
-  # bridge keeps those receipts and the outer call ID unchanged.
-  def project(messages) do
-    if Enum.any?(messages, &success?(&1, :context_rewind)) do
-      messages
-      |> Enum.reduce([], fn message, reversed ->
-        if success?(message, :context_rewind) do
-          acc = Enum.reverse(reversed)
-          details = field(message, :details)
-          checkpoint_id = field(details, :checkpoint_call_id)
-          {before, suffix} = Enum.split_while(acc, &(not checkpoint_result?(&1, checkpoint_id)))
+  @doc false
+  def retained_context(session, rewind_id) do
+    data =
+      case active(session) do
+        %{data: %{status: "pending", rewind_call_id: ^rewind_id} = data} ->
+          data
 
-          case suffix do
-            [] ->
-              [message | reversed]
-
-            [checkpoint | after_checkpoint] ->
-              {batch, _exploration} =
-                Enum.split_while(
-                  after_checkpoint,
-                  &(field(&1, :role) in [:tool_result, "tool_result"])
-                )
-
-              {assistant, results} = current_batch(acc)
-              retained = siblings(assistant, results ++ [message], field(message, :tool_call_id))
-
-              Enum.reverse(
-                before ++ [checkpoint] ++ batch ++ [summary(field(details, :report))] ++ retained
-              )
+        _ ->
+          session
+          |> SessionManager.get_branch()
+          |> Enum.reverse()
+          |> Enum.find(fn entry ->
+            entry.type == :branch_summary and field(entry.details, :context_rewind) == true and
+              field(entry.details, :rewind_call_id) == rewind_id
+          end)
+          |> case do
+            nil -> nil
+            entry -> %{boundary: field(entry.details, :boundary), report: entry.summary}
           end
-        else
-          [message | reversed]
-        end
-      end)
-      |> Enum.reverse()
+      end
+
+    if data && SessionManager.get_entry(session, data.boundary) do
+      prefix =
+        CodingAgent.Session.Persistence.restore_messages_from_session(%{
+          session
+          | leaf_id: data.boundary
+        })
+
+      report =
+        if Map.get(data, :status) == "pending",
+          do: summary(data.report),
+          else: %BranchSummaryMessage{summary: data.report}
+
+      {:ok, prefix ++ [report]}
     else
-      messages
+      {:error, :checkpoint_not_found}
     end
   end
 
-  defp checkpoint_result?(message, id),
-    do: success?(message, :context_checkpoint) and field(message, :tool_call_id) == id
+  # Only the session owner supplies the retained prefix. Tool metadata can
+  # identify a candidate receipt, never authorize a context rewrite by itself.
+  def project(messages, nil), do: messages
 
-  defp current_batch(messages) do
+  def project(messages, resolve) when is_function(resolve, 1) do
+    if Enum.any?(messages, &success?(&1, :context_rewind)),
+      do: project_reversed(Enum.reverse(messages), [], messages, resolve),
+      else: messages
+  end
+
+  defp project_reversed([], _after, original, _resolve), do: original
+
+  defp project_reversed([message | before], after_messages, original, resolve) do
+    projection =
+      if success?(message, :context_rewind),
+        do: project_candidate(message, before, after_messages, resolve)
+
+    case projection do
+      {:ok, messages} -> messages
+      _ -> project_reversed(before, [message | after_messages], original, resolve)
+    end
+  end
+
+  defp project_candidate(message, before, after_messages, resolve) do
+    {assistant, results} = current_batch_from_reversed(before)
+    id = field(message, :tool_call_id)
+
+    if rewind_call?(message, assistant) do
+      case resolve.(id) do
+        {:ok, prefix} ->
+          {later_results, tail} =
+            Enum.split_while(after_messages, &(field(&1, :role) in [:tool_result, "tool_result"]))
+
+          {:ok, prefix ++ siblings(assistant, results ++ [message] ++ later_results, id) ++ tail}
+
+        {:error, _} ->
+          :skip
+      end
+    else
+      :skip
+    end
+  end
+
+  defp rewind_call?(message, assistant) do
+    content = field(assistant, :content)
+    id = field(message, :tool_call_id)
+    outer_name = field(message, :tool_name)
+
+    is_list(content) and
+      Enum.any?(content, fn call ->
+        field(call, :id) == id and
+          case {outer_name, field(call, :name)} do
+            {"rewind", "rewind"} ->
+              true
+
+            {"tool_invoke", "tool_invoke"} ->
+              field(field(call, :arguments), :name) == "rewind"
+
+            _ ->
+              false
+          end
+      end)
+  end
+
+  defp current_batch_from_reversed(messages) do
     {results, rest} =
-      messages
-      |> Enum.reverse()
-      |> Enum.split_while(&(field(&1, :role) in [:tool_result, "tool_result"]))
+      Enum.split_while(messages, &(field(&1, :role) in [:tool_result, "tool_result"]))
 
     {List.first(rest), Enum.reverse(results)}
   end

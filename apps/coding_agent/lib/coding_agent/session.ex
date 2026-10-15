@@ -1141,6 +1141,13 @@ defmodule CodingAgent.Session do
     end
   end
 
+  def handle_call({:context_checkpoint_projection, rewind_id}, _from, state) do
+    projection =
+      CodingAgent.Session.ContextCheckpoint.retained_context(state.session_manager, rewind_id)
+
+    {:reply, projection, state}
+  end
+
   def handle_call({:rewind, _entry_id, _opts}, _from, %{is_streaming: true} = state),
     do: {:reply, {:error, :busy}, state}
 
