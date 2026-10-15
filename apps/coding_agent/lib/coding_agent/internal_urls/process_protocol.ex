@@ -1,6 +1,7 @@
 defmodule CodingAgent.InternalUrls.ProcessProtocol do
   @moduledoc "Session-scoped process URL operations using the background process tools."
   alias CodingAgent.ProcessManager
+  alias CodingAgent.Tools.Bash.Service
   alias CodingAgent.Tools.{BashOutput, KillProcess, ProcessInput}
   alias LemonAgent.Types.AgentToolResult
   alias LemonAi.Types.TextContent
@@ -28,7 +29,7 @@ defmodule CodingAgent.InternalUrls.ProcessProtocol do
 
   def read("proc://" <> reference, signal, cwd, opts) do
     if valid_session?(opts) and valid_id?(reference) do
-      id = CodingAgent.Tools.Bash.Service.resolve(reference, cwd, opts)
+      id = Service.resolve(reference, cwd, opts)
       BashOutput.execute("proc", %{"process_id" => id, "peek" => true}, signal, nil, cwd, opts)
     else
       {:error, "Malformed process URL"}
@@ -38,11 +39,11 @@ defmodule CodingAgent.InternalUrls.ProcessProtocol do
   def write("proc://" <> reference, params, signal, cwd, opts) do
     case {valid_session?(opts), String.split(reference, "/")} do
       {true, [id, "kill"]} when id != "" ->
-        id = CodingAgent.Tools.Bash.Service.resolve(id, cwd, opts)
+        id = Service.resolve(id, cwd, opts)
         KillProcess.execute("proc", %{"process_id" => id}, signal, nil, cwd, opts)
 
       {true, [id]} when id != "" ->
-        id = CodingAgent.Tools.Bash.Service.resolve(id, cwd, opts)
+        id = Service.resolve(id, cwd, opts)
 
         ProcessInput.execute(
           "proc",

@@ -48,6 +48,7 @@ defmodule CodingAgent.ProcessSession do
 
   alias CodingAgent.{BashExecutor, ProcessStore}
   alias LemonCore.TerminalBackends
+  alias LemonCore.TerminalBackends.{Docker, Ssh}
 
   @default_max_log_lines 1000
   # A line longer than this (for example `\r` progress output with no
@@ -748,12 +749,10 @@ defmodule CodingAgent.ProcessSession do
            false}
 
         :docker ->
-          {LemonCore.TerminalBackends.Docker.docker_path() || "docker",
-           docker_args(command, cwd, env), true}
+          {Docker.docker_path() || "docker", docker_args(command, cwd, env), true}
 
         :ssh ->
-          {LemonCore.TerminalBackends.Ssh.ssh_path() || "ssh",
-           LemonCore.TerminalBackends.Ssh.args(command, env), true}
+          {Ssh.ssh_path() || "ssh", Ssh.args(command, env), true}
 
         _ ->
           wrapped_command = command_with_cwd(command, cwd)
@@ -832,13 +831,13 @@ defmodule CodingAgent.ProcessSession do
       "--pull",
       "never",
       "--network",
-      LemonCore.TerminalBackends.Docker.network(),
+      Docker.network(),
       "--memory",
-      LemonCore.TerminalBackends.Docker.memory(),
+      Docker.memory(),
       "--cpus",
-      LemonCore.TerminalBackends.Docker.cpus(),
+      Docker.cpus(),
       "--pids-limit",
-      LemonCore.TerminalBackends.Docker.pids_limit(),
+      Docker.pids_limit(),
       "--cap-drop",
       "ALL",
       "--security-opt",
@@ -852,7 +851,7 @@ defmodule CodingAgent.ProcessSession do
       docker_tmpfs_args() ++
       docker_env_args(env) ++
       [
-        LemonCore.TerminalBackends.Docker.image(),
+        Docker.image(),
         "/bin/sh",
         "-lc",
         command
@@ -864,11 +863,11 @@ defmodule CodingAgent.ProcessSession do
   defp docker_workspace(cwd), do: Path.expand(cwd)
 
   defp docker_read_only_args do
-    if LemonCore.TerminalBackends.Docker.read_only_rootfs?(), do: ["--read-only"], else: []
+    if Docker.read_only_rootfs?(), do: ["--read-only"], else: []
   end
 
   defp docker_tmpfs_args do
-    Enum.flat_map(LemonCore.TerminalBackends.Docker.tmpfs_mounts(), fn mount ->
+    Enum.flat_map(Docker.tmpfs_mounts(), fn mount ->
       ["--tmpfs", mount]
     end)
   end

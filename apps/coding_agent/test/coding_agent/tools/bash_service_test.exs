@@ -4,6 +4,7 @@ defmodule CodingAgent.Tools.BashServiceTest do
   alias CodingAgent.InternalUrls.ProcessProtocol
   alias CodingAgent.ProcessManager
   alias CodingAgent.Tools.{Bash, KillProcess}
+  alias CodingAgent.Tools.Bash.Service
   alias LemonAgent.Types.AgentToolResult
 
   @moduletag :tmp_dir
@@ -40,8 +41,7 @@ defmodule CodingAgent.Tools.BashServiceTest do
                before_start: fn ->
                  send(
                    owner,
-                   {:registered_before_start,
-                    CodingAgent.Tools.Bash.Service.resolve("atomic", cwd, opts)}
+                   {:registered_before_start, Service.resolve("atomic", cwd, opts)}
                  )
                end
              )

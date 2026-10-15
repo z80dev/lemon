@@ -24,14 +24,14 @@ defmodule CodingAgent.Tools.Bash do
   the call without running anything.
   """
 
-  alias LemonAgent.Types.{AgentTool, AgentToolResult}
-  alias LemonAgent.AbortSignal
-  alias LemonAgent.Security.ToolResultTrust
-  alias LemonAi.Types.TextContent
   alias CodingAgent.BashExecutor
   alias CodingAgent.ProcessManager
-  alias CodingAgent.Tools.Bash.{InternalUrlExpansion, StreamingPreview}
+  alias CodingAgent.Tools.Bash.{InternalUrlExpansion, Service, StreamingPreview}
   alias CodingAgent.Tools.PathHelpers
+  alias LemonAgent.AbortSignal
+  alias LemonAgent.Security.ToolResultTrust
+  alias LemonAgent.Types.{AgentTool, AgentToolResult}
+  alias LemonAi.Types.TextContent
 
   @default_timeout_ms 120_000
   @max_timeout_ms 600_000
@@ -187,7 +187,7 @@ defmodule CodingAgent.Tools.Bash do
              {:ok, command} <- InternalUrlExpansion.expand(command, Keyword.put(opts, :cwd, cwd)) do
           cond do
             Map.has_key?(params, "name") ->
-              CodingAgent.Tools.Bash.Service.execute(
+              Service.execute(
                 params,
                 command,
                 run_cwd,

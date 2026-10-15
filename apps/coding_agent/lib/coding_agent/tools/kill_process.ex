@@ -5,10 +5,11 @@ defmodule CodingAgent.Tools.KillProcess do
   only kill processes it started.
   """
 
+  alias CodingAgent.ProcessManager
+  alias CodingAgent.Tools.Bash.Service
+  alias CodingAgent.Tools.BashOutput
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonAi.Types.TextContent
-  alias CodingAgent.ProcessManager
-  alias CodingAgent.Tools.BashOutput
 
   @spec tool(String.t(), keyword()) :: AgentTool.t()
   def tool(cwd, opts \\ []) do
@@ -41,7 +42,7 @@ defmodule CodingAgent.Tools.KillProcess do
           AgentToolResult.t() | {:error, String.t()}
   def execute(_tool_call_id, params, _signal, _on_update, cwd, opts) do
     with {:ok, reference} <- BashOutput.fetch_process_id(params),
-         process_id = CodingAgent.Tools.Bash.Service.resolve(reference, cwd, opts),
+         process_id = Service.resolve(reference, cwd, opts),
          :ok <- BashOutput.authorize(process_id, opts),
          {:ok, signal} <- fetch_signal(params) do
       kill(process_id, signal)
