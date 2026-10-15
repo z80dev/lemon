@@ -1109,44 +1109,29 @@ defmodule LemonRouter.RunOrchestratorTest do
     end
 
     test "generates run_id" do
-      # Note: This will fail to start the actual run since we don't have
-      # the full infrastructure running, but we can test the orchestrator logic
-      # by verifying it doesn't crash and returns an appropriate response
-
-      # We expect this to fail since RunSupervisor isn't started
-      result =
-        RunOrchestrator.submit(
+      {run_id, command} =
+        capture_submission(
           request(%{
             origin: :control_plane,
-            session_key: "agent:test:main",
             agent_id: "test",
             prompt: "Hello",
             queue_mode: :collect
           })
         )
 
-      # Either succeeds with run_id or fails with meaningful error
-      case result do
-        {:ok, run_id} ->
-          assert is_binary(run_id)
-          assert String.starts_with?(run_id, "run_")
-
-        {:error, reason} ->
-          # Expected when RunSupervisor isn't running
-          assert reason != nil
-      end
+      assert String.starts_with?(run_id, "run_")
+      assert command.run_id == run_id
     end
 
     test "accepts map input and normalizes to RunRequest" do
-      result =
-        RunOrchestrator.submit(%{
+      {_run_id, command} =
+        capture_submission(%{
           origin: :control_plane,
-          session_key: "agent:test:main",
           agent_id: "test",
           prompt: "Hello from map input"
         })
 
-      assert match?({:ok, _}, result) or match?({:error, _}, result)
+      assert command.prompt == "Hello from map input"
     end
 
     test "returns unknown_agent_id error for unconfigured agent" do
@@ -1755,9 +1740,6 @@ defmodule LemonRouter.RunOrchestratorTest do
   end
 
   describe "cwd override handling" do
-    # These tests verify the cwd parameter is properly extracted and passed
-    # We test the logic flow rather than the full integration
-
     test "cwd from meta is used when no override provided" do
       params = %{
         origin: :control_plane,
@@ -1767,8 +1749,8 @@ defmodule LemonRouter.RunOrchestratorTest do
         meta: %{cwd: "/meta/working/dir"}
       }
 
-      result = RunOrchestrator.submit(request(params))
-      assert match?({:ok, _}, result) or match?({:error, _}, result)
+      {_run_id, command} = capture_submission(request(params))
+      assert command.cwd == "/meta/working/dir"
     end
 
     test "cwd override takes precedence over meta cwd" do
@@ -1781,8 +1763,8 @@ defmodule LemonRouter.RunOrchestratorTest do
         meta: %{cwd: "/meta/dir"}
       }
 
-      result = RunOrchestrator.submit(request(params))
-      assert match?({:ok, _}, result) or match?({:error, _}, result)
+      {_run_id, command} = capture_submission(request(params))
+      assert command.cwd == "/override/dir"
     end
   end
 
@@ -1793,11 +1775,11 @@ defmodule LemonRouter.RunOrchestratorTest do
         session_key: "agent:test:main",
         agent_id: "test",
         prompt: "Hello",
-        tool_policy: %{sandbox: true}
+        tool_policy: %{blocked_tools: ["bash"]}
       }
 
-      result = RunOrchestrator.submit(request(params))
-      assert match?({:ok, _}, result) or match?({:error, _}, result)
+      {_run_id, command} = capture_submission(request(params))
+      assert "bash" in command.tool_policy.blocked_tools
     end
 
     test "empty tool_policy override does not change resolved policy" do
@@ -1809,8 +1791,16 @@ defmodule LemonRouter.RunOrchestratorTest do
         tool_policy: %{}
       }
 
-      result = RunOrchestrator.submit(request(params))
-      assert match?({:ok, _}, result) or match?({:error, _}, result)
+      {_run_id, command} = capture_submission(request(params))
+
+      assert {:ok, expected} =
+               LemonRouter.Policy.resolve_validated_for_run(%{
+                 agent_id: "test",
+                 session_key: command.session_key,
+                 origin: :control_plane
+               })
+
+      assert command.tool_policy == expected
     end
   end
 
@@ -1974,6 +1964,29 @@ defmodule LemonRouter.RunOrchestratorTest do
       assert_receive {:captured_job, _job}
       assert LemonCore.PolicyStore.get_session(session_key) == session_policy
     end
+  end
+
+  # Submission-shape tests must not launch real gateway work that can finish
+  # during a later test's global active/completion count assertions.
+  defp capture_submission(input) do
+    run_supervisor = start_supervised!({DynamicSupervisor, strategy: :one_for_one})
+
+    orchestrator =
+      start_supervised!(
+        {RunOrchestrator,
+         name: nil,
+         run_supervisor: run_supervisor,
+         run_process_module: CapturingRunProcess,
+         run_process_opts: %{notify_pid: self()}}
+      )
+
+    session_key = "agent:test:main:sub:#{System.unique_integer([:positive])}"
+
+    assert {:ok, run_id} =
+             RunOrchestrator.submit(orchestrator, Map.put(input, :session_key, session_key))
+
+    assert_receive {:captured_job, command}
+    {run_id, command}
   end
 
   defp request(attrs), do: RunRequest.new(attrs)
