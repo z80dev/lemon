@@ -2288,6 +2288,9 @@ defmodule LemonRouter.SessionCoordinatorTest do
         coordinator_pid(key)
       )
 
+    # Registry processes the child's DOWN asynchronously after supervisor termination.
+    assert eventually(fn -> Registry.lookup(LemonRouter.ConversationRegistry, key) == [] end)
+
     second =
       context_submission(key, receipt_run_id(), "second", :collect, supervisor, meta, policy)
 
@@ -2303,6 +2306,8 @@ defmodule LemonRouter.SessionCoordinatorTest do
         LemonRouter.SessionCoordinatorSupervisor,
         coordinator_pid(key)
       )
+
+    assert eventually(fn -> Registry.lookup(LemonRouter.ConversationRegistry, key) == [] end)
 
     for changed <- [
           %{meta | invocation_context_key: "changed"},
@@ -2326,6 +2331,8 @@ defmodule LemonRouter.SessionCoordinatorTest do
           LemonRouter.SessionCoordinatorSupervisor,
           coordinator_pid(key)
         )
+
+      assert eventually(fn -> Registry.lookup(LemonRouter.ConversationRegistry, key) == [] end)
     end
   end
 

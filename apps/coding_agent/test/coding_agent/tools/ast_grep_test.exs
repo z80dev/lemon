@@ -41,6 +41,87 @@ defmodule CodingAgent.Tools.AstGrepTest do
     end
   end
 
+  test "refuses oversized scopes before backend execution and validates max_files", %{
+    tmp_dir: cwd
+  } do
+    for n <- 1..1001, do: File.write!(Path.join(cwd, "#{n}.ts"), "oldApi(1)")
+    base = %{"action" => "search", "pattern" => "oldApi($X)"}
+    assert {:error, message} = execute(cwd, base)
+    assert message =~ "exceeds max_files=1000"
+    assert {:error, message} = execute(cwd, Map.put(base, "max_files", 2))
+    assert message =~ "max_files=2"
+    assert {:error, message} = execute(cwd, Map.put(base, "max_files", 0))
+    assert message =~ "positive integer"
+  end
+
+  test "collects at most twenty per-file CLI errors while retaining successful matches", %{
+    tmp_dir: cwd
+  } do
+    backend = fake_backend(cwd)
+    File.write!(Path.join(cwd, "good.ts"), "oldApi(1)")
+    for n <- 1..25, do: File.write!(Path.join(cwd, "bad#{n}.ts"), "broken")
+
+    assert %AgentToolResult{details: details, content: content} =
+             execute(cwd, %{"action" => "search", "pattern" => "oldApi($X)", "paths" => ["*.ts"]},
+               ast_grep_executable: backend
+             )
+
+    assert details.match_count == 1
+    assert length(details.parse_errors) == 20
+    assert details.parse_errors_total == 25
+    assert Enum.all?(details.parse_errors, &String.contains?(&1.path, "bad"))
+    assert Enum.any?(content, &String.contains?(&1.text, "Skipped 25 files"))
+  end
+
+  test "spills expose a session-scoped artifact handle", %{tmp_dir: cwd} do
+    backend = fake_backend(cwd)
+    for name <- ["a.ts", "b.ts"], do: File.write!(Path.join(cwd, name), "oldApi(1)")
+
+    opts = [
+      ast_grep_executable: backend,
+      spill_dir: cwd,
+      session_id: "ast-artifact",
+      context_guardrails: %{spill_dir: Path.join(cwd, "artifacts")}
+    ]
+
+    assert %AgentToolResult{
+             details: %{artifact_uri: uri, full_output_path: path},
+             content: [%{text: text}]
+           } =
+             execute(
+               cwd,
+               %{
+                 "action" => "search",
+                 "pattern" => "oldApi($X)",
+                 "paths" => ["*.ts"],
+                 "max_results" => 1
+               },
+               opts
+             )
+
+    assert uri =~ "artifact://"
+    assert text =~ uri
+    assert {:ok, ^path} = CodingAgent.Artifacts.resolve(uri, cwd, opts)
+    assert length(String.split(File.read!(path), "\n", trim: true)) == 2
+  end
+
+  defp fake_backend(cwd) do
+    path = Path.join(cwd, "fake-ast-grep")
+
+    File.write!(path, """
+    #!/bin/sh
+    if [ "$1" = "--version" ]; then printf 'ast-grep 0.1.0\\n'; exit 0; fi
+    for file; do :; done
+    case "$file" in
+      *bad*.ts) printf 'cannot parse source\\n' >&2; exit 2 ;;
+    esac
+    printf '{"file":"%s","text":"oldApi(1)","language":"TypeScript","range":{"byteOffset":{"start":0,"end":9},"start":{"line":0,"column":0},"end":{"line":0,"column":9}}}\\n' "$file"
+    """)
+
+    File.chmod!(path, 0o700)
+    path
+  end
+
   # These are real CLI integration tests, not a mocked AST implementation.
   # CI without this optional backend skips them explicitly; the pure contracts
   # above always run. Set LEMON_AST_GREP_EXECUTABLE to run against a release binary.

@@ -887,6 +887,7 @@ defmodule LemonCli.Onboarding.Runner do
   end
 
   @doc false
+  @spec no_terminal!() :: no_return()
   def no_terminal! do
     fail!(
       "No interactive terminal is available. Run `lemon setup --non-interactive`, " <>
