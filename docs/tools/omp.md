@@ -20,10 +20,14 @@ installed”). For the workflow, see [Delegating to omp](../user-guide/omp.md).
 | `cancel` | `id` | Aborts the running turn; the process stays open. |
 | `close` | `id` | Ends the omp process; its session can be resumed. |
 | `discover` | optional `cwd` | omp's stored sessions for the workspace (read-only). |
-| `resume` | `omp_session_id` (id or unique prefix from `discover`); optional `prompt`, `cwd`, `model`, `thinking`, `approval_mode`, `wait` | Reopens a stored omp session as a new invocation. |
+| `resume` | `omp_session_id` (id or unique prefix from `discover`); optional `prompt`, `continue` (boolean), `cwd`, `model`, `thinking`, `approval_mode`, `wait` | Reopens a stored omp session as a new invocation. After a crash/kill, `continue: true` sends a fixed request to review state and finish unfinished work; requires an id and no prompt. It does not restore subagents: omp 18.11's `--restore` rejects RPC mode. |
 
 `id` is Lemon's invocation id (`omp_…`); `omp_session_id` is omp's own
 session id.
+
+`discover` includes an `interrupted` boolean and marks unfinished last turns in
+its text. This bounded-tail hint can also describe a still-running session;
+check `liveId` and `activeElsewhere` before explicitly continuing it.
 
 `approval_mode` is `always-ask` (ask before writes and execution), `write`
 (ask before execution), or `yolo` (auto-approve ordinary tool calls). It overrides

@@ -159,6 +159,7 @@ defmodule LemonOmp.SessionFiles do
       "updatedAt" => mtime_ms,
       "model" => latest_model(head_entries ++ tail_entries),
       "lastStatus" => last_status(entries, last),
+      "interrupted" => last_status(entries, last) == "interrupted",
       "activeElsewhere" => active_elsewhere?(last, mtime_ms),
       "liveId" => nil
     }
