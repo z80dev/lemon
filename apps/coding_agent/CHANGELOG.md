@@ -17,6 +17,9 @@
 
 ### Fixed
 
+- Local patches refuse stale updates, deletes, and move sources before writing
+  any operation; filesystem errors now use actionable messages without raw terms.
+
 - File overwrites reject truncated read output and preserve existing UTF-8 BOMs
   and dominant CRLF endings, including ACP writes with available prior content.
 

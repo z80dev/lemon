@@ -34,6 +34,11 @@ CRLF line endings are preserved when incoming text omits them; explicitly suppli
 CRLF text is left intact. The same safeguards apply to ACP writes when the prior
 contents are available.
 
+Local `patch` updates, deletes, and move sources check the session's last read
+against the current raw file bytes before any patch writes. If the file changed,
+re-read it before applying the patch. Files not previously read in the session
+can still be patched.
+
 
 ## SQLite databases
 
