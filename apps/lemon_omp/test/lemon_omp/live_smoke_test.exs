@@ -32,6 +32,11 @@ defmodule LemonOmp.LiveSmokeTest do
     {:ok, cwd: cwd, model: model, agent_dir: agent_dir}
   end
 
+  test "real omp catalog includes the free smoke model" do
+    assert {:ok, models} = LemonOmp.models(free_only: true, limit: 200)
+    assert Enum.any?(models, &(&1["selector"] == @free_model and &1["free"]))
+  end
+
   test "real omp writes, follows up, cancels, closes, discovers and resumes", ctx do
     assert {:ok, started} =
              LemonOmp.start(%{

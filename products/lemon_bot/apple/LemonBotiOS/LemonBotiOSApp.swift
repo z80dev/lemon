@@ -17,7 +17,12 @@ struct LemonBotiOSApp: App {
     private static func makeStore() -> LemonBotStore {
         #if DEBUG
         // Design review: `-LBFixtures` launches into an in-memory fixture workspace (no network, no Keychain).
-        if ProcessInfo.processInfo.arguments.contains("-LBFixtures") { return LemonBotFixtures.makeStore(scenario: .chiefOfStaff) }
+        if ProcessInfo.processInfo.arguments.contains("-LBFixtures") {
+            let arguments = ProcessInfo.processInfo.arguments
+            let scene = arguments.firstIndex(of: "-LBFixtureScene").flatMap { arguments.indices.contains($0 + 1) ? arguments[$0 + 1] : nil }
+            let scenario = LemonBotSnapshotScene.allCases.first { $0.slug == scene }?.scenario ?? .chiefOfStaff
+            return LemonBotFixtures.makeStore(scenario: scenario)
+        }
         #endif
         return LemonBotStore()
     }
@@ -158,7 +163,7 @@ struct NativeLemonBotView: View {
                     reloadShares()
                     Task {
                         guard store.account != nil, store.connectionState != "online", store.connectionState != "reconnect_required" else { return }
-                        do { try await store.refresh() } catch { localError = error.localizedDescription }
+                        do { try await store.refresh() } catch { if store.connectionIssue == nil { localError = error.localizedDescription } }
                     }
                     Task { await delegate.inspectPermission(); await voice.reconcile(); await delegate.publishPresence() }
                 } else {
@@ -195,7 +200,7 @@ struct NativeLemonBotView: View {
             }
             .task {
                 if store.account == nil {
-                    do { try await store.restoreSavedAccount() } catch { localError = error.localizedDescription }
+                    do { try await store.restoreSavedAccount() } catch { if store.connectionIssue == nil { localError = error.localizedDescription } }
                 }
                 delegate.store = store
                 reloadShares()

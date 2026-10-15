@@ -59,8 +59,10 @@ public struct HTTPTransport {
             throw ClientError.http(http.statusCode)
         }
     }
-    public func read<T: Decodable>(_ path: String, query: [String: String] = [:], as: T.Type = T.self) async throws -> T {
-        let (data, response) = try await session.data(for: request("GET", path, query: query))
+    public func read<T: Decodable>(_ path: String, query: [String: String] = [:], timeout: TimeInterval? = nil, as: T.Type = T.self) async throws -> T {
+        var request = try request("GET", path, query: query)
+        if let timeout { request.timeoutInterval = timeout }
+        let (data, response) = try await session.data(for: request)
         try validate(data, response)
         return try JSONDecoder().decode(T.self, from: data)
     }

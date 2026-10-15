@@ -61,7 +61,7 @@ struct LemonBotMacApp: App {
             .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
                 Task {
                     if store.account != nil, store.connectionState != "online", store.connectionState != "reconnect_required" {
-                        do { try await store.refresh() } catch { platform.errorMessage = error.localizedDescription }
+                        do { try await store.refresh() } catch { if store.connectionIssue == nil { platform.errorMessage = error.localizedDescription } }
                     }
                     await platform.publishPresence()
                 }
@@ -157,7 +157,7 @@ private struct MacMenuBarView: View {
             Menu("Switch account") {
                 ForEach(controller.store.accounts, id: \.id) { account in
                     Button("\(account.displayName) — \(account.baseURL.host ?? "")") {
-                        Task { do { try await controller.store.restoreAccount(account) } catch { controller.errorMessage = error.localizedDescription } }
+                        Task { do { try await controller.store.restoreAccount(account) } catch { if controller.store.connectionIssue == nil { controller.errorMessage = error.localizedDescription } } }
                     }.disabled(account.id == controller.store.account?.id)
                 }
             }

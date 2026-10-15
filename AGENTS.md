@@ -70,6 +70,7 @@ is independent of its Phoenix dashboard; keep game rules in `lemon_sim`.
 | Media jobs | [lemon_media](apps/lemon_media/README.md) |
 | Language-server driver | [lemon_lsp](apps/lemon_lsp/README.md) |
 | omp delegate driver (external agent sessions) | [lemon_omp](apps/lemon_omp/AGENTS.md) |
+| Native app control through LCU (`cua_js`) | [lemon_computer_use](apps/lemon_computer_use/AGENTS.md) |
 | Assistant Phoenix interface | [lemon_web](apps/lemon_web/AGENTS.md) |
 | Simulation kernel, scenarios and benchmark artifacts | [lemon_sim](apps/lemon_sim/AGENTS.md) |
 | Simulation dashboard and hosted rooms | [lemon_sim_ui](apps/lemon_sim_ui/AGENTS.md) |

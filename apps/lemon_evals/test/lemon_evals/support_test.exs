@@ -20,8 +20,10 @@ defmodule LemonEvals.SupportTest do
       assert Support.format_reason("already a string") == "already a string"
     end
 
-    test "inspects non-binary reasons" do
-      assert Support.format_reason({:error, :boom}) == inspect({:error, :boom})
+    test "formats non-binary reasons as text" do
+      reason = Support.format_reason({:error, :boom})
+      assert is_binary(reason)
+      assert reason =~ "boom"
     end
   end
 

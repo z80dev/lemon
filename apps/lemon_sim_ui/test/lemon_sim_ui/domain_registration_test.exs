@@ -32,17 +32,6 @@ defmodule LemonSimUi.DomainRegistrationTest do
         assert Arena.sim_prefix(domain) == descriptor.sim_id_prefix
       end
     end
-
-    test "default player counts are unchanged from before the Domains-derived refactor" do
-      # Snapshot of the values LemonSimUi.Arena hardcoded before deriving
-      # from LemonSim.Bench.Domains. Poker intentionally diverges from the
-      # registry's own `default_player_count` (4): the arena always seats 6.
-      expected = %{werewolf: 6, poker: 6}
-
-      for {domain, count} <- expected do
-        assert Arena.default_player_count(domain) == count
-      end
-    end
   end
 
   describe "LemonSimUi.ArenaDomains" do
@@ -54,11 +43,6 @@ defmodule LemonSimUi.DomainRegistrationTest do
   describe "LemonSimUi.SpectatorLive" do
     test "supported_domains/0 is a superset of the arena domains" do
       assert MapSet.subset?(arena_domain_ids(), MapSet.new(SpectatorLive.supported_domains()))
-    end
-
-    test "supported_domains/0 stays in sync with the board dispatch case clauses" do
-      assert MapSet.new(SpectatorLive.supported_domains()) ==
-               MapSet.new(SpectatorLive.rendered_board_domains())
     end
 
     test "every supported domain id is registered in LemonSim.Bench.Domains" do

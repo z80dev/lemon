@@ -353,6 +353,7 @@ public struct ComposerView: View {
     }
     private func platform(_ action: String) { NotificationCenter.default.post(name: Notification.Name("LemonBot.platformComposerRequest"), object: nil, userInfo: ["conversationID": conversationID, "action": action]) }
     private func loadReferences() async {
+        guard store.connectionState != "reconnect_required" else { return }
         await action.perform {
             skills = try await allResources(store, "/skills")
             routines = try await allResources(store, "/routines")

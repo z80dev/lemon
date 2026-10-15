@@ -23,14 +23,17 @@ defmodule LemonOmp.Tools.Omp do
   alias LemonAi.Types.TextContent
   alias LemonOmp.Projection
 
-  @actions ~w(start start_many wait status list send cancel close resume discover)
+  @actions ~w(models start start_many wait status list send cancel close resume discover)
   @default_wait_seconds 600
   @max_wait_seconds 3_600
 
   @description """
   Delegate a coding task to omp (oh-my-pi), an external coding agent that runs as a separate process in a \
-  workspace, and observe or control it. Use it when the user asks to run something "in omp" or to hand work \
-  to omp. Actions: start (prompt, optional cwd/model/thinking/approval_mode/isolate; returns the session id at once — set wait=true \
+  workspace, and observe or control it. Use it when the user asks to run something "in omp". \
+  Use models to find a selector, then pass it as model on start/start_many. Prefer cheap/free models for \
+  simple mechanical tasks when the user has not specified a model. models accepts query, free_only, \
+  provider, limit (default 30, max 200). \
+  Actions: start (prompt, optional cwd/model/thinking/approval_mode/isolate; returns the session id at once — set wait=true \
   to block and stream progress until the turn ends), start_many (tasks: array of {prompt, optional \
   cwd/model/thinking/approval_mode/isolate}; starts parallel workers, wait=true gathers them all), wait (id, or ids with wait_for \
   "all" (default) or "any"; block until the turn(s) end), status (id; what the session is doing now: \
@@ -57,6 +60,13 @@ defmodule LemonOmp.Tools.Omp do
             "description" => "What to do; see the tool description."
           },
           "prompt" => %{"type" => "string", "description" => "Task for omp (start, resume)."},
+          "query" => %{"type" => "string", "description" => "models: selector/name substring."},
+          "provider" => %{"type" => "string", "description" => "models: provider filter."},
+          "free_only" => %{"type" => "boolean", "description" => "models: only zero-cost models."},
+          "limit" => %{
+            "type" => "integer",
+            "description" => "models: result count (default 30, max 200)."
+          },
           "tasks" => %{
             "type" => "array",
             "minItems" => 1,
@@ -163,6 +173,33 @@ defmodule LemonOmp.Tools.Omp do
     |> Map.get("action")
     |> run(params, scope, owner_key, signal, on_update, opts)
     |> ToolResultTrust.untrusted(:api)
+  end
+
+  defp run("models", params, _scope, _owner, _signal, _on_update, _opts) do
+    opts =
+      for key <- [:query, :provider, :free_only, :limit], do: {key, params[Atom.to_string(key)]}
+
+    case LemonOmp.models(opts) do
+      {:ok, models} ->
+        lines =
+          Enum.map(models, fn m ->
+            price =
+              if m["free"], do: "FREE", else: "$#{m["costInput"]}/$#{m["costOutput"]} per Mtok"
+
+            "#{m["selector"]} — #{m["name"]}, ctx #{m["contextWindow"] || "unknown"}, #{price}"
+          end)
+
+        warning =
+          "Warning: prices are omp's catalog data. OpenRouter :free routes can be withdrawn upstream (some return 404 'unavailable for free'); be ready to fall back."
+
+        %AgentToolResult{
+          content: [%TextContent{text: Enum.join(lines ++ [warning], "\n")}],
+          details: %{"action" => "models", "models" => models}
+        }
+
+      {:error, reason} ->
+        error_result("models", reason)
+    end
   end
 
   defp run("start", params, scope, owner_key, signal, on_update, opts) do

@@ -524,6 +524,8 @@ defmodule LemonOmp.Session do
     params =
       state.projection.owner
       |> Map.take([:session_key, :session_id, :run_id, :agent_id])
+      # Operators have no conversation key; bind their grants to this invocation.
+      |> Map.put_new(:session_key, "omp:operator:" <> state.id)
       |> Map.merge(%{
         approval_id: approval_id,
         tool: if(tool == "", do: "omp", else: "omp:" <> tool),

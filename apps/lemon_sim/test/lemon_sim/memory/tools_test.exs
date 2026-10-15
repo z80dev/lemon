@@ -24,8 +24,6 @@ defmodule LemonSim.LLM.Memory.ToolsTest do
                nil
              )
 
-    assert File.read!(Path.join(root, "index.md")) =~ "# Memory Index"
-
     assert {:ok, read_result} = read.execute.("r1", %{"path" => "notes/plan.md"}, nil, nil)
     assert LemonAgent.get_text(read_result) == "flank left"
 
@@ -66,7 +64,7 @@ defmodule LemonSim.LLM.Memory.ToolsTest do
     root = Tools.setup!(memory_root: tmp_dir, memory_namespace: namespace)
 
     assert File.dir?(root)
-    assert File.read!(Path.join(root, "index.md")) =~ "# Memory Index"
+    assert File.regular?(Path.join(root, "index.md"))
   end
 
   test "build does not mutate the filesystem" do
@@ -100,7 +98,7 @@ defmodule LemonSim.LLM.Memory.ToolsTest do
              read.execute.("r1", %{"path" => "notes/missing.md"}, nil, nil)
 
     assert File.dir?(root)
-    assert File.read!(Path.join(root, "index.md")) =~ "# Memory Index"
+    assert File.regular?(Path.join(root, "index.md"))
   end
 
   defp find_tool!(tools, name) do

@@ -182,11 +182,11 @@ struct StatusBadge: View {
 enum StatusTone {
     case good, active, attention, bad, neutral
     init(_ status: String) {
-        let s = status.lowercased()
-        if ["online", "connected", "succeeded", "completed", "approved", "active", "enabled", "idle", "available", "applied", "sent", "verified"].contains(where: { s.hasSuffix($0) }) { self = .good }
-        else if ["working", "running", "making", "queued", "reserved", "started", "syncing", "pending", "scheduled", "in_flight"].contains(where: { s.hasSuffix($0) }) { self = .active }
-        else if ["needs_input", "awaiting_input", "outcome_unknown", "expired", "stale", "reconnect_required", "unknown"].contains(where: { s.hasSuffix($0) }) { self = .attention }
-        else if ["failed", "error", "denied", "declined", "offline", "disconnected", "revoked", "rejected", "cancelled"].contains(where: { s.hasSuffix($0) }) { self = .bad }
+        let s = status.lowercased().components(separatedBy: ": ").last ?? status.lowercased()
+        if ["online", "connected", "succeeded", "completed", "approved", "active", "enabled", "idle", "available", "applied", "sent", "verified"].contains(s) { self = .good }
+        else if ["working", "running", "making", "queued", "reserved", "started", "syncing", "pending", "scheduled", "in_flight"].contains(s) { self = .active }
+        else if ["needs_input", "awaiting_input", "outcome_unknown", "expired", "stale", "reconnect_required", "unknown"].contains(s) { self = .attention }
+        else if ["failed", "error", "denied", "declined", "offline", "disconnected", "revoked", "rejected", "cancelled"].contains(s) { self = .bad }
         else { self = .neutral }
     }
     var color: Color {

@@ -2,6 +2,7 @@ defmodule LemonAutomation.GoalJudgeRouterLiveTest do
   use ExUnit.Case, async: false
 
   @moduletag :integration
+  @moduletag :automation_live
 
   alias LemonAutomation.GoalLoop
   alias LemonAgent.Workspace.GoalStore
@@ -9,8 +10,7 @@ defmodule LemonAutomation.GoalJudgeRouterLiveTest do
   test "provider-backed router judge completes a persisted goal" do
     case live_config() do
       {:skip, reason} ->
-        IO.puts("[GoalJudgeRouterLiveTest] Skipping: #{reason}")
-        assert true
+        flunk(reason)
 
       {:ok, model} ->
         session_key = "goal-live-judge-#{System.unique_integer([:positive])}"

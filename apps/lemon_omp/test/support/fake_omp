@@ -41,6 +41,25 @@
 #   WRITE_FILE  create worker.txt in cwd before completing the turn
 #   anything else completes the turn at once.
 
+if [ "$1" = models ]; then
+  [ -z "$FAKE_OMP_MODELS_COUNT" ] || printf 'call\n' >>"$FAKE_OMP_MODELS_COUNT"
+  case "$FAKE_OMP_MODELS_MODE" in
+    malformed) printf 'not json\n'; exit 0 ;;
+    fail) exit 7 ;;
+    timeout) exec sleep 5 ;;
+  esac
+  [ -z "$LEMON_CATALOG_SECRET" ] || exit 9
+  printf '{"models":['
+  i=0
+  while [ "$i" -lt 205 ]; do
+    [ "$i" -eq 0 ] || printf ','
+    printf '{"provider":"paid","id":"m%s","selector":"paid/m%s","name":"Paid %s","contextWindow":1000,"reasoning":true,"cost":{"input":2,"output":3}}' "$i" "$i" "$i"
+    i=$((i + 1))
+  done
+  printf ',{"provider":"free","id":"z","selector":"free/z","name":"\\u001b[31mZed","contextWindow":2000,"cost":{"input":0,"output":0}},{"provider":"free","id":"a","selector":"free/a","name":"Alpha","contextWindow":3000,"cost":{"input":0,"output":0}},{"provider":"cheap","id":"c","selector":"cheap/c","name":"Cheap","cost":{"input":0.1,"output":0.2}}]}\n'
+  exit 0
+fi
+
 all_args="$*"
 cwd=
 resume=

@@ -77,21 +77,16 @@ defmodule LemonAutomation.CronJobTest do
       assert job.updated_at_ms == job.created_at_ms
       assert job.last_run_at_ms == nil
       assert job.next_run_at_ms == nil
-    end
-
-    test "uses explicit id when provided" do
-      job = new_job(%{id: "cron_custom_id"})
-      assert job.id == "cron_custom_id"
-    end
-
-    test "defaults the job-quality fields" do
-      job = new_job()
-
       assert job.monitor == false
       assert job.monitor_notify_first_run == true
       assert job.context_from == nil
       assert job.model == nil
       assert job.captured_default_model == nil
+    end
+
+    test "uses explicit id when provided" do
+      job = new_job(%{id: "cron_custom_id"})
+      assert job.id == "cron_custom_id"
     end
 
     test "accepts the job-quality fields from atom and string keys" do
