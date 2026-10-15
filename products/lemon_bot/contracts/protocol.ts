@@ -263,6 +263,9 @@ export interface TranscriptionRequest extends Mutation { attachmentId: ID; langu
 export interface Transcription { text: string; language: string | null; durationMs: number; segments: { text: string; startMs: number; endMs: number }[] }
 export interface SpeechRequest extends Mutation { text: string; voice: VoiceSettings; conversationId?: ID; voiceSessionId?: ID }
 export interface SpeechResult { attachment: Attachment; download: Download }
+/** Curated built-in choices, not a live provider-account inventory. Empty languages means multilingual. */
+export interface ProviderVoice { id: string; name: string; languages: string[] }
+export interface VoiceCatalog { provider: 'openai' | 'elevenlabs' | 'google' | null; configured: boolean; voices: ProviderVoice[] }
 export interface ScopeEffect { resourceType: string; id: ID; machineId: ID | null; operation: 'delete' | 'revoke' | 'reset' | 'move' | 'retain'; explanation: string }
 export interface BotPresence { botId: ID; status: 'idle' | 'working' | 'making' | 'needs_input' | 'offline'; machineId: ID; machineLabel: string; machineStatus: Machine['status']; currentRunId: ID | null; taskConversationId: ID | null; summary: string; evidenceEntryId: ID | null; measuredAtMs: TimestampMs; stale: boolean }
 export type AccessLevel = 'off' | 'read_only' | 'read_interact';
@@ -787,6 +790,7 @@ export interface RestEndpoints {
   'GET /voice/sessions/:id': Endpoint<undefined, VoiceSession>;
   'PATCH /voice/sessions/:id': Endpoint<VoiceUpdate, VoiceSession>;
   'POST /voice/sessions/:id/end': Endpoint<Mutation, VoiceSession>;
+  'GET /audio/voices': Endpoint<undefined, VoiceCatalog>;
   'POST /audio/transcriptions': Endpoint<TranscriptionRequest, Transcription>;
   'POST /audio/speech': Endpoint<SpeechRequest, SpeechResult>;
 }

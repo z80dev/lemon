@@ -44,7 +44,7 @@ export function UsageSettings() {
         <div className="row">
           <button className="primary">Apply range & grouping</button>
           <button type="button" disabled={report.loading} onClick={() => void report.reload().catch(reportError)}>Refresh from provider</button>
-          <button type="button" onClick={() => navigate({ screen: 'settings.usage.limit' })}>Spend ceilings & status</button>
+          <button type="button" onClick={() => navigate({ screen: 'settings.usage.limit' })}>Spend limits</button>
         </div>
       </form>
     </section>
