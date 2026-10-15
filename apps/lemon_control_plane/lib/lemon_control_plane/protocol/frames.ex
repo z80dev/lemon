@@ -296,6 +296,8 @@ defmodule LemonControlPlane.Protocol.Frames do
       # Approval events
       "exec.approval.requested",
       "exec.approval.resolved",
+      "session.prompt.requested",
+      "session.prompt.resolved",
       # Channel delivery events
       "channel.delivery",
       # omp delegate session snapshots

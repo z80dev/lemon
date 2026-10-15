@@ -194,7 +194,10 @@ defmodule LemonChannels.Adapters.Discord.ApprovalTest do
 
     assert state == c.state
     assert_receive {:response, ^interaction, %{type: 4, data: %{content: text, flags: 64}}}
-    assert text =~ "rejected"
+
+    assert text ==
+             "This approval cannot be used here; nothing changed. Open the approval in its original conversation."
+
     assert {:ok, pending} = ExecApprovalStore.fetch_pending(c.pending.id)
     assert pending == c.pending
   end
