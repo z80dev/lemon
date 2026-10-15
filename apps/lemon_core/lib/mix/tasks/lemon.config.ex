@@ -25,6 +25,7 @@ defmodule Mix.Tasks.Lemon.Config do
   use Mix.Task
 
   alias LemonCore.Config.Modular
+  alias LemonCore.Config.Summary
 
   @impl true
   def run(args) do
@@ -123,6 +124,6 @@ defmodule Mix.Tasks.Lemon.Config do
   end
 
   defp print_config_summary(config) do
-    Enum.each(LemonCore.Config.Summary.lines(config), fn line -> Mix.shell().info(line) end)
+    Enum.each(Summary.lines(config), fn line -> Mix.shell().info(line) end)
   end
 end

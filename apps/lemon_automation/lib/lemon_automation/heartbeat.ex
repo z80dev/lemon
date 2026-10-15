@@ -25,6 +25,7 @@ defmodule LemonAutomation.Heartbeat do
 
   alias LemonAutomation.{CronJob, CronManager, CronRun, Events}
   alias LemonCore.Config.Automation
+  alias LemonCore.Config.Modular
   alias LemonCore.SessionKey
 
   require Logger
@@ -115,7 +116,7 @@ defmodule LemonAutomation.Heartbeat do
   """
   @spec sync_daily_brief() :: :ok | {:error, term()}
   def sync_daily_brief do
-    sync_daily_brief(LemonCore.Config.Modular.load().automation.daily_brief)
+    sync_daily_brief(Modular.load().automation.daily_brief)
   rescue
     error ->
       Logger.warning("[Heartbeat] Daily brief sync skipped: #{Exception.message(error)}")

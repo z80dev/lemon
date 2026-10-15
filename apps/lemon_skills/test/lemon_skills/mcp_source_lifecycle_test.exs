@@ -1,5 +1,6 @@
 defmodule LemonSkills.McpSourceLifecycleTest do
   use ExUnit.Case, async: false
+  alias LemonMCP.Client.SSE
   alias LemonSkills.McpSource
 
   test "legacy SSE loss exits the client so the host observes transport loss" do
@@ -12,7 +13,7 @@ defmodule LemonSkills.McpSourceLifecycleTest do
           {:mcp_stream_closed, id}
         ] do
       assert {:stop, :normal, %{state: :disconnected, stream_request_id: nil}} =
-               LemonMCP.Client.SSE.handle_info(event, state)
+               SSE.handle_info(event, state)
     end
   end
 
@@ -26,9 +27,10 @@ defmodule LemonSkills.McpSourceLifecycleTest do
     script = Path.join(root, "server.exs")
     File.write!(script, fixture())
 
+    # The fixture server is a fresh Erlang VM; its boot is not under test, so
+    # keep the product's ready deadline instead of racing boot under load.
     config =
-      {:stdio, System.find_executable("elixir"), ["--erl", "+S 1:1", script],
-       name: "lifecycle", ready_timeout_ms: 500}
+      {:stdio, System.find_executable("elixir"), ["--erl", "+S 1:1", script], name: "lifecycle"}
 
     source =
       start_supervised!({McpSource, name: nil, configs: [config], refresh_interval_ms: 60_000})

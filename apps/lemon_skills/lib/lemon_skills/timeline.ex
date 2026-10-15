@@ -12,10 +12,10 @@ defmodule LemonSkills.Timeline do
   """
 
   alias LemonMemory.{Lifecycle, Project, Safety}
-  alias LemonSkills.{Config, Usage, WorkspacePreferences}
-  alias LemonSkills.Synthesis.DraftStore
   alias LemonSkills.Audit.State
-  alias LemonSkills.Lockfile
+  alias LemonSkills.{Config, Lockfile}
+  alias LemonSkills.Synthesis.DraftStore
+  alias LemonSkills.{Usage, WorkspacePreferences}
 
   @kinds ~w(memory user project skill)
   @max_records 200

@@ -1,7 +1,7 @@
 defmodule CodingAgent.Debug.LldbDapIntegrationTest do
   @moduledoc false
   # Drives the real `lldb-dap` adapter against a tiny C program. The app helper
-  # excludes :lldb_dap only when the adapter or a C compiler is unavailable.
+  # excludes :lldb_dap when a real debugger launch is unavailable on this host.
   use ExUnit.Case, async: false
 
   alias CodingAgent.Debug.SessionServer

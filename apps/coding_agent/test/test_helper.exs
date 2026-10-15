@@ -24,13 +24,16 @@ exclude_tags =
     do: exclude_tags,
     else: [:rsvg_convert | exclude_tags]
 
+Code.require_file("support/host_capabilities.ex", __DIR__)
+
 exclude_tags =
-  case {
-    CodingAgent.Debug.Adapters.select_launch("/x/a.c", "/", "lldb-dap", :file),
-    System.find_executable("clang") || System.find_executable("cc")
-  } do
-    {{:ok, _}, compiler} when is_binary(compiler) -> exclude_tags
-    _ -> [:lldb_dap | exclude_tags]
+  case CodingAgent.TestHostCapabilities.lldb_launch() do
+    :ok ->
+      exclude_tags
+
+    {:error, reason} ->
+      IO.puts(:stderr, "Excluding :lldb_dap: host launch capability unavailable (#{reason})")
+      [:lldb_dap | exclude_tags]
   end
 
 ExUnit.configure(exclude: exclude_tags)

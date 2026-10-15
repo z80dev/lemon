@@ -94,7 +94,52 @@ def focused_tests(root, files):
     return sorted(tests)
 
 
-def select(root, base="origin/main", focused=False):
+MODULE = re.compile(r"^\s*defmodule\s+([A-Z][\w.]*)", re.MULTILINE)
+
+
+def changed_modules(root, base_revision, files, touched):
+    """Modules defined by changed lib/priv code of touched apps, or None when
+    a changed file's modules cannot be known (deleted, or no defmodule)."""
+    modules, code_changed = set(), False
+    for path in files:
+        parts = PurePosixPath(path).parts
+        if len(parts) < 4 or parts[0] != "apps" or parts[1] not in touched or parts[2] == "test":
+            continue
+        if not path.endswith((".ex", ".exs")):
+            return None
+        code_changed = True
+        sources = []
+        if (root / path).is_file():
+            sources.append((root / path).read_text(encoding="utf-8", errors="replace"))
+        old = git(root, "show", f"{base_revision}:{path}", check=False)
+        if old.returncode == 0:
+            sources.append(old.stdout.decode(errors="replace"))
+        found = {name for source in sources for name in MODULE.findall(source)}
+        if not found:
+            return None
+        modules |= found
+    return modules if code_changed else set()
+
+
+def referencing_tests(root, app, modules):
+    """Test files of APP naming any of MODULES, or None when shared test
+    support references them (then the whole app must run)."""
+    if not modules:
+        return []
+    args = ["grep", "-l", "-z", "-F"]
+    for module in sorted(modules):
+        args.extend(["-e", module])
+    args.extend(["--", f"apps/{app}/test"])
+    result = git(root, *args, check=False)
+    if result.returncode not in (0, 1):
+        raise RuntimeError(result.stderr.decode(errors="replace").strip())
+    matches = paths_from(result.stdout)
+    if any(not path.endswith("_test.exs") for path in matches):
+        return None
+    return sorted(matches)
+
+
+def select(root, base="origin/main", focused=False, narrow=False):
     files, base_reason = changed_files(root, base)
     graph = umbrella_graph(root)
     touched, readers = set(), set()
@@ -130,10 +175,37 @@ def select(root, base="origin/main", focused=False):
     affected = set(graph) if full else reverse_dependencies(graph, touched) | readers
     lanes["clients"] |= full
     apps = sorted(affected)
+    test_paths = [f"apps/{app}/test" for app in apps]
+
+    # --narrow (local premerge only): touched apps and data readers run whole;
+    # downstream apps run only the test files that name a changed module. A
+    # behaviour change reaching them through an intermediate module is left to
+    # PR CI, which keeps the app-level selection.
+    if narrow and not full and apps:
+        merge_base = git(root, "merge-base", base, "HEAD").stdout.decode().strip()
+        modules = changed_modules(root, merge_base, files, touched)
+        if modules is None:
+            reasons.append("narrow: a changed file's modules are unknown; downstream apps run whole")
+        else:
+            test_paths = []
+            for app in apps:
+                if app in touched or app in readers:
+                    test_paths.append(f"apps/{app}/test")
+                    continue
+                tests = referencing_tests(root, app, modules)
+                if tests is None:
+                    test_paths.append(f"apps/{app}/test")
+                    reasons.append(f"narrow: {app} test support names a changed module; whole app")
+                else:
+                    test_paths.extend(tests)
+            reasons.append(
+                f"narrow: downstream apps limited to tests naming {len(modules)} changed module(s)"
+            )
+
     return {
         "scope": "full" if full else "apps" if apps else "none",
         "apps": apps,
-        "test_paths": [f"apps/{app}/test" for app in apps],
+        "test_paths": test_paths,
         "lanes": lanes,
         "reasons": reasons,
         "changed_files": files,
@@ -176,10 +248,14 @@ def main():
     parser.add_argument("--base", default="origin/main")
     parser.add_argument("--format", choices=("human", "github", "json"), default="human")
     parser.add_argument("--focused", action="store_true")
+    parser.add_argument(
+        "--narrow", action="store_true",
+        help="local premerge: downstream apps run only tests naming a changed module",
+    )
     args = parser.parse_args()
     root = Path(__file__).resolve().parent.parent
     try:
-        selection = select(root, args.base, args.focused)
+        selection = select(root, args.base, args.focused, args.narrow)
         if args.format == "json":
             print(json.dumps(selection))
         else:

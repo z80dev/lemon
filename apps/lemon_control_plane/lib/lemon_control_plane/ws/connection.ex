@@ -22,10 +22,11 @@ defmodule LemonControlPlane.WS.Connection do
 
   require Logger
 
-  alias LemonControlPlane.Protocol.{Frames, Errors}
   alias LemonControlPlane.Auth.Authorize
   alias LemonControlPlane.Methods.{NodeInvokeResult, Registry}
   alias LemonControlPlane.NodeStore
+  alias LemonControlPlane.Protocol.{Errors, Frames}
+  alias LemonCore.Bus.Delivery
 
   @heartbeat_interval_ms 25_000
 
@@ -48,7 +49,7 @@ defmodule LemonControlPlane.WS.Connection do
           event_seq: non_neg_integer(),
           local?: boolean(),
           state_version: map(),
-          delivery: LemonCore.Bus.Delivery.t() | nil,
+          delivery: Delivery.t() | nil,
           resync_required: boolean(),
           heartbeat_timer_ref: reference() | nil
         }
@@ -74,7 +75,7 @@ defmodule LemonControlPlane.WS.Connection do
       event_seq: 0,
       local?: local?,
       state_version: %{},
-      delivery: LemonCore.Bus.Delivery.new(self())
+      delivery: Delivery.new(self())
     }
 
     Logger.debug("WebSocket connection initialized: #{conn_id}")
@@ -218,7 +219,7 @@ defmodule LemonControlPlane.WS.Connection do
   def terminate(reason, state) do
     Logger.debug("WebSocket connection terminated: #{state.conn_id}, reason: #{inspect(reason)}")
 
-    if state.delivery, do: LemonCore.Bus.Delivery.close(state.delivery)
+    if state.delivery, do: Delivery.close(state.delivery)
 
     if is_reference(state.heartbeat_timer_ref),
       do: Process.cancel_timer(state.heartbeat_timer_ref)
@@ -547,7 +548,7 @@ defmodule LemonControlPlane.WS.Connection do
   # default. Direct callers of Authorize.from_params/1 retain their separate
   # in-process compatibility behavior.
   defp local_peer?(nil), do: true
-  defp local_peer?(peer), do: LemonControlPlane.Auth.Authorize.loopback_address?(peer)
+  defp local_peer?(peer), do: Authorize.loopback_address?(peer)
 
   defp get_field(map, key) when is_map(map) and is_atom(key) do
     Map.get(map, key) || Map.get(map, Atom.to_string(key))
