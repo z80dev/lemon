@@ -105,6 +105,10 @@ defmodule CodingAgent.ToolRegistry do
     {:extensions_status, Tools.ExtensionsStatus}
   ]
 
+  @browser_tool_names @builtin_tools
+                      |> Enum.map(&elem(&1, 0))
+                      |> Enum.filter(&String.starts_with?(Atom.to_string(&1), "browser_"))
+
   @doc """
   Get all enabled tools for a working directory.
 
@@ -440,6 +444,13 @@ defmodule CodingAgent.ToolRegistry do
   end
 
   defp builtin_tool_tuples(cwd, opts) do
+    opts =
+      Keyword.put_new_lazy(
+        opts,
+        :browser_provider_resolution,
+        &LemonCore.BrowserProvider.resolve/0
+      )
+
     builtin_tools()
     |> Enum.filter(fn
       {:ask, _module} ->
@@ -450,6 +461,9 @@ defmodule CodingAgent.ToolRegistry do
 
       {:ast_grep, _module} ->
         match?({:ok, _}, Tools.AstGrep.availability(opts))
+
+      {name, _module} when name in @browser_tool_names ->
+        opts[:browser_provider_resolution].provider != "lcu"
 
       _tool ->
         true

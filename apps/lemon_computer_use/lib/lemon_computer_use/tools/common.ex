@@ -3,8 +3,8 @@ defmodule LemonComputerUse.Tools.Common do
   Builds the `cua_js` and `cua_js_reset` agent tools from the original
   computer-use server's `js` and `js_reset` descriptors.
 
-  The description and input schema are the runtime's own, unchanged, followed
-  by one line mapping its `cua_repl` names onto Lemon's tool names. Results are
+  The input schema is the runtime's own, unchanged. Its description is followed
+  by Lemon's tool-name mapping and the resolved browser surface. Results are
   forwarded as the runtime returned them — text and images, with its error flag
   — and marked untrusted: they carry window titles, UI text and screenshots of
   arbitrary apps, so instructions inside them are data.
@@ -50,10 +50,22 @@ defmodule LemonComputerUse.Tools.Common do
       name: Map.fetch!(@names, original),
       timeout_ms: :infinity,
       label: Map.fetch!(@labels, original),
-      description: description,
+      description: description <> "\n\n" <> browser_surface(),
       parameters: parameters,
       execute: &execute(original, &1, &2, &3, &4, opts)
     }
+  end
+
+  defp browser_surface do
+    resolution = LemonCore.BrowserProvider.resolve()
+    provider = resolution.provider || "none"
+
+    surface =
+      if provider == "lcu",
+        do: "Use this computer-use runtime for Chrome.",
+        else: "Chrome is not exposed in this runtime; use the browser_* tools instead."
+
+    "Browser provider: #{resolution.requested} -> #{provider}. #{resolution.reason} #{surface}"
   end
 
   defp catalog do

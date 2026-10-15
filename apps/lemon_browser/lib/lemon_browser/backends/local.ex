@@ -14,7 +14,7 @@ defmodule LemonBrowser.Backends.Local do
   @impl true
   def request(method, args, timeout_ms, opts) do
     server = Keyword.get(opts, :server, LocalServer)
-    LocalServer.request(server, method, args, timeout_ms)
+    LocalServer.request(server, method, args, timeout_ms, opts)
   end
 
   @impl true

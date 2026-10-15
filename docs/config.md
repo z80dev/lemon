@@ -1833,11 +1833,25 @@ max_entries = 100
 
 ## Browser backends and existing Chrome
 
-Browser tools default to Lemon's managed local Chromium backend. These
-environment variables select an existing CDP browser or the opt-in MV3 relay:
+Browser provider selection is shared by tool availability, doctor, and
+control-plane status. See [Choosing a browser provider](tools/browser.md#choosing-a-browser-provider)
+for the auto order, fail-closed behavior, LCU prerequisites and connector rollback.
+
+```toml
+[runtime.tools.browser]
+provider = "auto" # lcu, relay, local, cdp, browserbase, browser_use,
+                  # firecrawl, camofox, controller, hybrid
+```
+
+`LEMON_BROWSER_PROVIDER` takes precedence over TOML. `auto` checks LCU, then the
+authenticated relay, then managed local Chrome; it never installs a connector.
+Explicit providers never fall back to another browser identity.
+Provider credentials remain in the secret store/environment, not this selector.
+The following environment variables configure individual backends:
 
 | Variable | Default | Purpose |
 |---|---|---|
+| `LEMON_BROWSER_PROVIDER` | `auto` | Unified provider id (see above) |
 | `LEMON_BROWSER_DRIVER_PATH` | auto | Browser Node driver path |
 | `LEMON_BROWSER_CDP_ENDPOINT` | none | HTTP discovery or direct `ws`/`wss` CDP endpoint |
 | `LEMON_BROWSER_ATTACH_ONLY` | `false` | Never launch a replacement browser |
@@ -1879,14 +1893,15 @@ max_tool_invoke_depth = 4
 
 ## Computer Use
 
-Native app control through LCU is off by default. See
+The explicit native computer-use switch defaults to off. Resolving browser
+provider `lcu` also starts the same runtime, including native app APIs protected
+by the existing approval policy. See
 [`docs/tools/computer-use.md`](tools/computer-use.md) for requirements and
 approvals. `LEMON_COMPUTER_USE_*` environment variables override these keys.
 
 ```toml
 [runtime.tools.computer_use]
 enabled = false
-chrome = false
 # lcu_root = "~/.local/share/lcu/current"
 # node = "<lcu_root>/agent-tools/node/bin/node"
 declined_origins = []

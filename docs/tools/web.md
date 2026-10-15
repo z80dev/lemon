@@ -104,12 +104,12 @@ Extensions may register additional providers with `type: :search`; the module
 must implement `CodingAgent.Search.Provider`. Built-ins win identifier
 conflicts, and extension providers are removed during extension reload.
 
-Browser tools use the backend-neutral `LemonBrowser` facade. The default
-`:local` backend dispatches to `LemonBrowser.LocalServer`, an OTP-supervised
-Node/Playwright helper; `:controller` dispatches only to an exactly bound,
-authenticated controller. Unknown, unavailable, offline, or mismatched
-backends fail closed and never switch browser identity or profile implicitly.
-The local backend requires the browser node client to be built:
+Browser tools use the unified [browser provider](browser.md#choosing-a-browser-provider).
+The default `auto` selection checks connected LCU, the authenticated Lemon MV3
+relay, then managed local Chrome. LCU exposes Chrome through `cua_js`; other
+providers use the backend-neutral `LemonBrowser` facade. Explicit providers fail
+closed and never switch browser identity or profile. The local/CDP driver needs
+the browser node client built:
 
 ```bash
 cd clients/lemon-browser-node
@@ -128,12 +128,11 @@ uses snapshot refs such as `@e5` as selectors. Hybrid requires
 backend, public URLs use that configured backend, and provider failure never
 falls back across identities.
 
-By default the helper launches local Chrome/Chromium and connects over CDP on
-`127.0.0.1`. Set `LEMON_BROWSER_CDP_ENDPOINT` or pass `--cdp-endpoint` to the
-local driver to attach to an already-running local or managed CDP endpoint
-instead. Endpoint attach mode is attach-only: Lemon will not try to launch a
-replacement browser if that endpoint is unreachable, and connection errors
-redact endpoint credentials before surfacing to operators.
+The `local` provider manages Chrome/Chromium over loopback CDP. To attach an
+existing CDP browser instead, set `LEMON_BROWSER_PROVIDER=cdp` and
+`LEMON_BROWSER_CDP_ENDPOINT` (or pass `--cdp-endpoint` when using the driver
+directly). CDP attachment never launches a replacement if the endpoint is
+unreachable, and connection errors redact endpoint credentials.
 
 Every page-scoped browser tool accepts optional `targetId`. When omitted it
 uses the session's active target; `browser_tab_activate` changes that active
@@ -152,8 +151,7 @@ export LEMON_BROWSER_RELAY_TOKEN="$(openssl rand -hex 32)"
 ./bin/lemon-browser-relay start
 ./bin/lemon-browser-relay install
 
-export LEMON_BROWSER_CDP_ENDPOINT="ws://127.0.0.1:9224/cdp?token=$LEMON_BROWSER_RELAY_TOKEN"
-export LEMON_BROWSER_ATTACH_ONLY=true
+export LEMON_BROWSER_PROVIDER=relay
 ```
 
 Load the directory printed by `install` through Chrome's **Load unpacked** UI,

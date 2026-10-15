@@ -4,22 +4,22 @@ defmodule LemonComputerUse.Config do
 
   Precedence for each value is the environment variable declared in
   `LemonComputerUse.Env`, then the `[runtime.tools.computer_use]` section of
-  Lemon's config (`enabled`, `chrome`, `lcu_root`, `node`, `declined_origins`),
+  Lemon's config (`enabled`, `lcu_root`, `node`, `declined_origins`),
   then `config :lemon_computer_use`, then the built-in default. Nothing here
   raises: an unusable value falls back to the next source.
 
-    * `:enabled` / `LEMON_COMPUTER_USE_ENABLED` — the opt-in switch (default
-      `false`). Disabled, the app registers no tools and no prompt section and
-      never starts LCU.
+    * `:enabled` / `LEMON_COMPUTER_USE_ENABLED` — the native-app opt-in switch
+      (default `false`). The bridge also starts when the unified browser provider
+      resolves to `lcu`; otherwise a disabled app starts no LCU runtime.
     * `:lcu_root` / `LEMON_COMPUTER_USE_LCU_ROOT` — the installed LCU release
       (default `~/.local/share/lcu/current`, or `/opt/lcu/current` when only that
       exists). Lemon runs `<root>/bin/lcu` as the computer-use MCP server and
       imports LCU's shared harness client from `<root>/adapters/client.mjs`.
     * `:node` / `LEMON_COMPUTER_USE_NODE` — Node runtime for the bridge (default
       `<root>/agent-tools/node/bin/node`, the runtime LCU selected at setup).
-    * `:chrome` / `LEMON_COMPUTER_USE_CHROME` — also enable the runtime's
-      browser surface (`lcu --chrome`): Chrome tabs through the official
-      ChatGPT extension (default `false`). Requires `lcu browser install`.
+    * Chrome is controlled exclusively by `[runtime.tools.browser] provider` /
+      `LEMON_BROWSER_PROVIDER`. The LCU Chrome surface is included only when
+      the read-only provider resolver confirms a connected LCU extension.
     * `:connect_timeout_ms` — how long tool construction waits for the first
       connection (default 30 seconds).
 
@@ -30,21 +30,19 @@ defmodule LemonComputerUse.Config do
   @app :lemon_computer_use
   @default_connect_timeout_ms 30_000
 
-  @spec enabled?() :: boolean()
-  def enabled? do
-    case parse_bool(env("LEMON_COMPUTER_USE_ENABLED")) do
-      value when is_boolean(value) -> value
-      nil -> boolean(toml(:enabled), Application.get_env(@app, :enabled, false))
-    end
+  @spec enabled?(keyword()) :: boolean()
+  def enabled?(opts \\ []) do
+    native_enabled =
+      case parse_bool(env("LEMON_COMPUTER_USE_ENABLED")) do
+        value when is_boolean(value) -> value
+        nil -> boolean(toml(:enabled), Application.get_env(@app, :enabled, false))
+      end
+
+    native_enabled or chrome?(opts)
   end
 
-  @spec chrome?() :: boolean()
-  def chrome? do
-    case parse_bool(env("LEMON_COMPUTER_USE_CHROME")) do
-      value when is_boolean(value) -> value
-      nil -> boolean(toml(:chrome), Application.get_env(@app, :chrome, false))
-    end
-  end
+  @spec chrome?(keyword()) :: boolean()
+  def chrome?(opts \\ []), do: LemonCore.BrowserProvider.resolve(opts).provider == "lcu"
 
   @spec lcu_root() :: String.t()
   def lcu_root do
@@ -70,11 +68,11 @@ defmodule LemonComputerUse.Config do
   end
 
   @doc "argv of the original computer-use MCP server."
-  @spec command() :: [String.t()]
-  def command do
+  @spec command(keyword()) :: [String.t()]
+  def command(opts \\ []) do
     case Application.get_env(@app, :command) do
       [_ | _] = argv -> argv
-      _ -> [Path.join(lcu_root(), "bin/lcu") | if(chrome?(), do: ["--chrome"], else: [])]
+      _ -> [Path.join(lcu_root(), "bin/lcu") | if(chrome?(opts), do: ["--chrome"], else: [])]
     end
   end
 

@@ -4,7 +4,13 @@ Lemon agents can operate native apps on the machine that runs Lemon: read a
 window's accessibility tree, take screenshots, click, type and press keys. The
 capability comes from the computer-use runtime inside the official ChatGPT
 desktop app, run through [LCU](https://github.com/amontlabs/lcu). It is
-contributed by the `lemon_computer_use` app and is **off by default**.
+contributed by the `lemon_computer_use` app. The explicit native computer-use
+switch defaults to **off**. Selecting the `lcu` browser provider also starts this
+same runtime, including its native app APIs; existing app approvals still apply.
+
+For Chrome provider selection and the shared connector's impact on
+Codex/ChatGPT, read [Choosing a browser provider](browser.md#choosing-a-browser-provider),
+including the backup and rollback guidance **before installing a connector**.
 
 ## Requirements
 
@@ -31,7 +37,6 @@ Or set it in `~/.lemon/config.toml`:
 ```toml
 [runtime.tools.computer_use]
 enabled = true
-chrome = false                 # Chrome tabs; see below
 # lcu_root = "/opt/lcu/current"
 # node = "/path/to/node"
 declined_origins = []          # extra origins never approved
@@ -42,10 +47,9 @@ Environment variables take precedence over the file, and the file over
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `LEMON_COMPUTER_USE_ENABLED` | `false` | Opt-in switch. Off, nothing is registered and LCU never starts. |
+| `LEMON_COMPUTER_USE_ENABLED` | `false` | Enable computer use independently of browser selection; resolved `lcu` also enables the shared runtime. |
 | `LEMON_COMPUTER_USE_LCU_ROOT` | `~/.local/share/lcu/current` (or `/opt/lcu/current`) | Installed LCU release. |
 | `LEMON_COMPUTER_USE_NODE` | `<root>/agent-tools/node/bin/node` | Node runtime for Lemon's bridge. |
-| `LEMON_COMPUTER_USE_CHROME` | `false` | Also control Chrome tabs (`lcu --chrome`); see [Chrome](#chrome). |
 | `LEMON_COMPUTER_USE_DECLINED_ORIGINS` | – | Extra website origins never approved, comma-separated. |
 
 When enabled, the runtime starts one bridge process at boot. Every session then
@@ -60,8 +64,10 @@ the tools stay listed and their description and results say why.
 | `cua_js` | `code` (JavaScript); optional `timeout_ms`, `title` | Runs code against the runtime's `cua` API, for example `const app = await cua.getApp("Calculator")`, then `await app.click(10)` and `await app.getAXState()`. State persists between calls. |
 | `cua_js_reset` | – | Resets the JavaScript session. Apps and windows are left as they are. |
 
-The descriptions and schemas are the runtime's own, unchanged; the first
-`cua_js` call returns the full API guide and confirmation policy. Results
+Schemas are the runtime's own, unchanged. Lemon appends its tool-name mapping
+and the resolved browser provider and redacted reason to the runtime descriptions,
+so the agent can discover the available surface. The first `cua_js` call returns
+the full API guide and confirmation policy. Results
 (text and screenshots) are forwarded as the runtime returned them and marked
 untrusted: window titles, UI text and screenshots from other apps are data,
 never instructions.
@@ -101,14 +107,17 @@ require_approval = ["bash", "write", "edit", "cua_js"]
 
 ## Chrome
 
-With `LEMON_COMPUTER_USE_CHROME=true` the runtime also gets its browser surface:
-`cua.listBrowsers()`, `cua.getBrowser()`, `cua.createBrowserTab(browserId, url)`,
-`cua.getTab(...)` and per-tab observation and input. It drives your own Chrome
-through the official ChatGPT extension, which must be enabled in the Chrome
-profile; `lcu browser status` reports whether it is connected. If it is not, LCU
-documents `lcu browser install` (it repoints the extension's native-messaging
-host at LCU's relay, which other apps using that extension share), followed by
-a Chrome restart or toggling the extension.
+When the unified browser provider resolves to `lcu`, the runtime gets its browser
+surface: `cua.listBrowsers()`, `cua.getBrowser()`,
+`cua.createBrowserTab(browserId, url)`, `cua.getTab(...)` and per-tab observation
+and input. Set `[runtime.tools.browser].provider = "lcu"` to require it, or use
+`auto` to choose it when ready. This starts the same computer-use bridge, whose
+native app APIs remain available under the existing approval policy; LCU has no
+browser-only mode. It drives your own Chrome through the
+official ChatGPT extension, which must be enabled in the Chrome profile;
+`lcu browser status` reports connector setup without changing it. See the canonical
+[provider and rollback guide](browser.md#choosing-a-browser-provider) before
+considering `lcu browser install`.
 
 The runtime asks before it first uses each website. Lemon turns that into a
 Lemon approval for tool `computer_use` with action `{"origin": "<origin>"}`.

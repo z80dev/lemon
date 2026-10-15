@@ -388,6 +388,38 @@ defmodule LemonCli.CLITest do
     refute offline =~ "providers.live"
   end
 
+  test "doctor shows passing browser selection without verbose", %{tmp_dir: tmp_dir} do
+    keys = [:browser_provider_probe, :browser_provider_lcu_probe]
+    previous = Map.new(keys, &{&1, Application.fetch_env(:lemon_core, &1)})
+    Application.put_env(:lemon_core, :browser_provider_lcu_probe, fn -> {:error, "missing"} end)
+
+    Application.put_env(:lemon_core, :browser_provider_probe, fn
+      "local" -> {:ok, "ready"}
+      _ -> {:error, "missing"}
+    end)
+
+    on_exit(fn ->
+      Enum.each(previous, fn
+        {key, {:ok, value}} -> Application.put_env(:lemon_core, key, value)
+        {key, :error} -> Application.delete_env(:lemon_core, key)
+      end)
+    end)
+
+    expected = LemonCore.BrowserProvider.resolve()
+    assert expected.provider == "local"
+
+    output =
+      capture_io(fn ->
+        capture_io(:stderr, fn ->
+          CLI.run(["doctor", "--project-dir", tmp_dir])
+        end)
+      end)
+
+    assert output =~ "[pass]"
+    assert output =~ "browser.provider"
+    assert output =~ "auto -> local: #{expected.reason}"
+  end
+
   test "rejects unknown doctor options before running diagnostics" do
     error =
       capture_io(:stderr, fn ->

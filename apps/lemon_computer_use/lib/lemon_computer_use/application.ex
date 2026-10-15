@@ -16,9 +16,8 @@ defmodule LemonComputerUse.Application do
   def start(_type, _args) do
     enabled? = Config.enabled?()
 
-    # Opt-in: a disabled runtime starts nothing, registers nothing and never
-    # launches LCU. Enabled, the bridge connects at boot so the first session
-    # already has the runtime's instructions and tool descriptors.
+    # Native apps remain opt-in. A connected, selected LCU browser also needs
+    # this bridge; no Chrome surface is added for any other resolved provider.
     children =
       if enabled?, do: [{LemonComputerUse.Server, connect: true}], else: []
 

@@ -703,6 +703,7 @@ defmodule LemonCore.Config.Validator do
     |> validate_tool_approval_mode(Map.get(tools, :approval_mode))
     |> validate_edit(Map.get(tools, :edit))
     |> Bash.validate(Map.get(tools, :bash))
+    |> validate_browser(Map.get(tools, :browser))
     |> validate_lsp(Map.get(tools, :lsp))
     |> validate_positive_integer(
       get_in(tools, [Access.key(:web, %{}), :fetch, :max_body_bytes]),
@@ -714,6 +715,21 @@ defmodule LemonCore.Config.Validator do
     )
     |> validate_computer_use(Map.get(tools, :computer_use))
   end
+
+  defp validate_browser(errors, nil), do: errors
+
+  defp validate_browser(errors, %{} = browser) do
+    if browser[:provider] in LemonCore.BrowserProvider.providers() do
+      errors
+    else
+      [
+        "runtime.tools.browser.provider: must be one of #{Enum.join(LemonCore.BrowserProvider.providers(), ", ")}"
+        | errors
+      ]
+    end
+  end
+
+  defp validate_browser(errors, _), do: ["runtime.tools.browser: must be a table" | errors]
 
   defp validate_edit(errors, nil), do: errors
 
@@ -803,7 +819,6 @@ defmodule LemonCore.Config.Validator do
   defp validate_computer_use(errors, %{} = computer_use) do
     errors
     |> validate_boolean(computer_use[:enabled], "tools.computer_use.enabled")
-    |> validate_boolean(computer_use[:chrome], "tools.computer_use.chrome")
     |> validate_non_empty_string(computer_use[:lcu_root], "tools.computer_use.lcu_root")
     |> validate_non_empty_string(computer_use[:node], "tools.computer_use.node")
     |> validate_origin_list(computer_use[:declined_origins])

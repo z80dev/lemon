@@ -2,10 +2,9 @@ defmodule LemonBrowser do
   @moduledoc """
   Backend-neutral browser execution facade.
 
-  Callers select a backend explicitly with `:backend` or use the configured
-  `:lemon_browser, :backend` value (default `:local`). Unknown or unavailable
-  backends fail closed; Lemon never silently switches into a different browser
-  identity or profile.
+  The unified `runtime.tools.browser.provider` setting selects a browser surface.
+  Auto resolution is read-only; explicit providers fail closed. Internal callers
+  may still select a backend with `:backend` for exact-session routing.
   """
 
   alias LemonBrowser.BackendRegistry
@@ -15,7 +14,7 @@ defmodule LemonBrowser do
   def request(method, args \\ %{}, timeout_ms \\ 30_000, opts \\ [])
       when is_binary(method) and is_map(args) and is_integer(timeout_ms) do
     with :ok <- authorize_method(method, args, opts),
-         {:ok, backend} <- resolve_backend(opts),
+         {:ok, backend, opts} <- resolve_backend(opts),
          true <- backend_available?(backend, opts) do
       backend.request(method, args, timeout_ms, opts)
     else
@@ -46,24 +45,49 @@ defmodule LemonBrowser do
 
   @spec status(keyword()) :: map()
   def status(opts \\ []) do
-    case resolve_backend(opts) do
-      {:ok, backend} ->
-        backend.status(opts)
-        |> Map.put_new(:backend, backend.id())
-        |> Map.put_new(:available, backend_available?(backend, opts))
+    resolution =
+      Keyword.get_lazy(opts, :provider_resolution, &LemonCore.BrowserProvider.resolve/0)
 
-      {:error, reason} ->
-        %{available: false, running: false, error: inspect(reason)}
-    end
+    status =
+      case resolve_backend(Keyword.put(opts, :provider_resolution, resolution)) do
+        {:ok, backend, backend_opts} ->
+          backend.status(backend_opts)
+          |> Map.put_new(:backend, backend.id())
+          |> Map.put_new(:available, backend_available?(backend, backend_opts))
+
+        {:error, _reason} ->
+          %{available: resolution.provider == "lcu", running: false}
+      end
+
+    Map.put(status, :provider_resolution, resolution)
   end
 
   defp resolve_backend(opts) do
-    id =
-      Keyword.get(opts, :backend) || System.get_env("LEMON_BROWSER_BACKEND") ||
-        Application.get_env(:lemon_browser, :backend, :local)
+    case Keyword.get(opts, :backend) do
+      nil ->
+        resolution =
+          Keyword.get_lazy(opts, :provider_resolution, &LemonCore.BrowserProvider.resolve/0)
 
+        case resolution.provider do
+          nil ->
+            {:error, resolution.reason}
+
+          "lcu" ->
+            {:error, "Browser provider is lcu; use the cua_js computer-use Chrome surface."}
+
+          provider ->
+            id = if provider in ["local", "relay", "cdp"], do: "local", else: provider
+            fetch_backend(id, Keyword.put(opts, :browser_provider, provider))
+        end
+
+      id ->
+        fetch_backend(id, opts)
+    end
+  end
+
+  defp fetch_backend(id, opts) do
     case BackendRegistry.fetch(id) do
-      {:ok, backend} -> {:ok, backend}
+      {:ok, backend} -> {:ok, backend, opts}
       :error -> {:error, {:unknown_browser_backend, id}}
     end
   end

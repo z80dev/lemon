@@ -35,19 +35,6 @@ defmodule LemonComputerUse.Env do
       apps: [:lemon_computer_use]
     },
     %{
-      name: :computer_use_chrome,
-      env_var: "LEMON_COMPUTER_USE_CHROME",
-      aliases: [],
-      type: :boolean,
-      default: false,
-      doc:
-        "Also control Chrome tabs (lcu --chrome) through the official ChatGPT extension; requires `lcu browser install`.",
-      secret?: false,
-      required?: false,
-      area: :computer_use,
-      apps: [:lemon_computer_use]
-    },
-    %{
       name: :computer_use_node,
       env_var: "LEMON_COMPUTER_USE_NODE",
       aliases: [],

@@ -103,6 +103,9 @@ config :lemon_core, :gateway_channels, [
 # compile-time dependency on the language-server driver.
 config :lemon_core, :lsp_catalog, LemonLsp.Servers
 
+# Passive browser availability is supplied by the optional browser driver.
+config :lemon_core, :browser_provider_probe, LemonBrowser.ProviderProbe
+
 # Environment-variable declarations live with the app that reads them; the
 # framework in LemonCore.Env aggregates whatever is loaded. Apps missing from a
 # given build are skipped, so this list is a superset, not a requirement.

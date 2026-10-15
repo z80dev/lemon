@@ -12,13 +12,13 @@ defmodule CodingAgent.ExecutionNode.BrowserInspectionTest do
     File.chmod!(executable, 0o700)
     File.write!(Path.join(root, "package.json"), ~s({"type":"module"}))
 
-    File.write!(Path.join(root, "chrome.js"), """
+    File.write!(Path.join(root, "index.js"), """
     delete process.env.LEMON_BROWSER_EXECUTABLE;
     export function defaultChromeExecutable() { return #{Jason.encode!(executable)}; }
     export function cdpDiscoveryUrl(endpoint) { return new URL('/json/version', endpoint).toString(); }
     """)
 
-    helper = Path.join(to_string(:code.priv_dir(:coding_agent)), "node_browser_inspect.mjs")
+    helper = Path.join(to_string(:code.priv_dir(:lemon_browser)), "node_browser_inspect.mjs")
 
     config = %{
       "driverPath" => Path.join(root, "local-driver.js"),
@@ -40,7 +40,7 @@ defmodule CodingAgent.ExecutionNode.BrowserInspectionTest do
   end
 
   test "inspection failures return a classification rather than echoing credentials" do
-    helper = Path.join(to_string(:code.priv_dir(:coding_agent)), "node_browser_inspect.mjs")
+    helper = Path.join(to_string(:code.priv_dir(:lemon_browser)), "node_browser_inspect.mjs")
 
     config = %{
       "driverPath" => "/missing/local-driver.js",

@@ -39,11 +39,12 @@ defmodule LemonBrowser.BackendRegistryTest do
     assert result.timeout_ms == 123
     assert result.opts[:marker] == :ok
 
-    assert LemonBrowser.status(backend: :test_browser_backend) == %{
+    assert %{
              available: true,
              backend: :test_browser_backend,
-             running: true
-           }
+             running: true,
+             provider_resolution: %{requested: _, provider: _, reason: _}
+           } = LemonBrowser.status(backend: :test_browser_backend)
 
     assert :ok = BackendRegistry.unregister(:test_browser_backend)
 

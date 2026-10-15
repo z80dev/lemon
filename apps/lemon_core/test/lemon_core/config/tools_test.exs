@@ -72,6 +72,7 @@ defmodule LemonCore.Config.ToolsTest do
       # Clear test env vars
       [
         "LEMON_AUTO_RESIZE_IMAGES",
+        "LEMON_BROWSER_PROVIDER",
         "LEMON_WEB_SEARCH_ENABLED",
         "LEMON_WEB_SEARCH_PROVIDER",
         "LEMON_WEB_SEARCH_API_KEY",
@@ -200,7 +201,6 @@ defmodule LemonCore.Config.ToolsTest do
     test "is unset by default and kept as written" do
       assert Tools.resolve(%{}).computer_use == %{
                enabled: nil,
-               chrome: nil,
                lcu_root: nil,
                node: nil,
                declined_origins: nil
@@ -211,13 +211,12 @@ defmodule LemonCore.Config.ToolsTest do
           "tools" => %{
             "computer_use" => %{
               "enabled" => true,
-              "chrome" => true,
               "declined_origins" => ["https://bot.example.ts.net"]
             }
           }
         })
 
-      assert %{enabled: true, chrome: true, declined_origins: ["https://bot.example.ts.net"]} =
+      assert %{enabled: true, declined_origins: ["https://bot.example.ts.net"]} =
                config.computer_use
     end
   end

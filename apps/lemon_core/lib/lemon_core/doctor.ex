@@ -20,6 +20,7 @@ defmodule LemonCore.Doctor do
   Jobs must return a Check and must never generate completions or send messages.
   """
   alias LemonCore.Doctor.Checks.{
+    Browser,
     Config,
     NodeTools,
     Providers,
@@ -33,6 +34,7 @@ defmodule LemonCore.Doctor do
   @builtin_checks [
     Config,
     Secrets,
+    Browser,
     Runtime,
     Providers,
     Usage,

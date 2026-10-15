@@ -13,11 +13,18 @@ defmodule LemonComputerUse.ApplicationTest do
     assert LemonComputerUse.status() == %{enabled: false, running: false}
   end
 
-  test "the Chrome switch adds the browser surface to the LCU command" do
-    on_exit(fn -> System.delete_env("LEMON_COMPUTER_USE_CHROME") end)
-    refute "--chrome" in LemonComputerUse.Config.command()
-    System.put_env("LEMON_COMPUTER_USE_CHROME", "1")
-    assert List.last(LemonComputerUse.Config.command()) == "--chrome"
+  test "only the resolved LCU provider adds the Chrome surface" do
+    connected = [provider: "lcu", lcu_probe: fn -> {:ok, :connected} end]
+    unavailable = [provider: "lcu", lcu_probe: fn -> {:error, :disconnected} end]
+    local = [provider: "local", probe: fn "local" -> {:ok, :installed} end]
+
+    assert LemonComputerUse.Config.chrome?(connected)
+    assert LemonComputerUse.Config.enabled?(connected)
+    assert List.last(LemonComputerUse.Config.command(connected)) == "--chrome"
+    refute LemonComputerUse.Config.chrome?(unavailable)
+    refute "--chrome" in LemonComputerUse.Config.command(unavailable)
+    refute LemonComputerUse.Config.chrome?(local)
+    refute "--chrome" in LemonComputerUse.Config.command(local)
   end
 
   test "the config file section is read below the environment" do
@@ -41,14 +48,13 @@ defmodule LemonComputerUse.ApplicationTest do
     File.write!(path, """
     [runtime.tools.computer_use]
     enabled = true
-    chrome = true
     declined_origins = ["https://bot.example.ts.net"]
     """)
 
     LemonCore.Config.reload()
 
     assert LemonComputerUse.Config.enabled?()
-    assert LemonComputerUse.Config.chrome?()
+    refute LemonComputerUse.Config.chrome?(provider: "local", probe: fn _ -> {:ok, :ready} end)
     assert "https://bot.example.ts.net" in LemonComputerUse.Config.declined_origins()
 
     System.put_env("LEMON_COMPUTER_USE_ENABLED", "false")

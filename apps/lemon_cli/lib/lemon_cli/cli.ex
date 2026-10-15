@@ -463,7 +463,7 @@ defmodule LemonCli.CLI do
     IO.puts("────────────")
 
     Enum.each(report.checks, fn check ->
-      if verbose? or check.status in [:warn, :fail] do
+      if verbose? or check.status in [:warn, :fail] or check.name == "browser.provider" do
         status_label = String.pad_trailing("[#{Check.label(check.status)}]", 7)
 
         IO.puts(

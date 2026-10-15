@@ -19,6 +19,9 @@ defmodule CodingAgent.Tools.Browser do
 
   @spec tool(String.t(), keyword(), map()) :: AgentTool.t()
   def tool(cwd, opts, spec) do
+    resolution =
+      Keyword.get_lazy(opts, :browser_provider_resolution, &LemonCore.BrowserProvider.resolve/0)
+
     runtime = %{
       browser_request:
         Keyword.get_lazy(opts, :browser_request, fn ->
@@ -42,6 +45,7 @@ defmodule CodingAgent.Tools.Browser do
               {:browser_hybrid_public_backend, value} -> {:hybrid_public_backend, value}
               pair -> pair
             end)
+            |> Keyword.put(:provider_resolution, resolution)
 
           fn method, args, timeout_ms ->
             LemonBrowser.request(method, args, timeout_ms, browser_opts)
@@ -54,7 +58,10 @@ defmodule CodingAgent.Tools.Browser do
     %AgentTool{
       name: spec.name,
       timeout_ms: :infinity,
-      description: spec.description,
+      description:
+        spec.description <>
+          "\n\nBrowser provider: #{resolution.requested} -> #{resolution.provider || "none"}. " <>
+          resolution.reason,
       label: spec.label,
       parameters: maybe_add_target_parameter(spec.parameters, spec),
       execute: fn tool_call_id, params, signal, on_update ->

@@ -8,6 +8,15 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
+### Added
+
+- Unified configurable browser provider selection across browser tools, LCU Chrome
+  control, doctor and control-plane browser status. Auto selection prefers ready
+  LCU, then an authenticated relay, then local Chrome; explicit providers fail
+  closed. Diagnostics expose fixed redacted reasons without starting browsers.
+  Document provider configuration and the shared LCU native-host connector's
+  Codex/ChatGPT impact, backup requirements and rollback limitations.
+
 ### Fixed
 
 - Probe real LLDB launch capability before enabling host-backed debugger tests,

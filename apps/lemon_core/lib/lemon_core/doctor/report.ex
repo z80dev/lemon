@@ -70,7 +70,7 @@ defmodule LemonCore.Doctor.Report do
     shell.info("────────────")
 
     Enum.each(report.checks, fn check ->
-      if verbose? or check.status in [:warn, :fail] do
+      if verbose? or check.status in [:warn, :fail] or check.name == "browser.provider" do
         print_check(shell, check, verbose?)
       end
     end)
@@ -114,7 +114,7 @@ defmodule LemonCore.Doctor.Report do
 
     shell.info([color, status_label, :reset, " #{check.name}"])
 
-    if verbose? or check.status in [:warn, :fail] do
+    if verbose? or check.status in [:warn, :fail] or check.name == "browser.provider" do
       if check.message && check.message != "OK" do
         shell.info("        #{check.message}")
       end
@@ -129,6 +129,7 @@ defmodule LemonCore.Doctor.Report do
     color = Check.color(overall(report))
 
     shell.info("")
+
     shell.info([
       color,
       "#{report.pass} passed  #{report.warn} warnings  #{report.fail} failed  #{report.skip} skipped",
