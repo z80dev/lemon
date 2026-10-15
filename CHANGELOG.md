@@ -20,6 +20,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 - Add `lemon learning`: a bounded, redacted, profile-isolated timeline over
   existing memory and skill timestamps, with kind filters and JSON output.
 
+- MCP hosts refresh cached tools, resources and prompts on server list-change
+  notifications, reconnect dropped clients with bounded backoff, and suspend
+  crash storms with redacted unavailable status.
+
 - Lemon Web omp adds parallel worker starts and a live usage grid, searchable
   free-marked model selection, live model/thinking configuration with explicit
   partial-failure receipts, and bounded subagent transcript drill-down.

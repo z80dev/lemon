@@ -48,6 +48,13 @@ defmodule LemonSkills.McpSource do
   @client_ready_timeout_ms 5_000
   @client_request_timeout_ms 10_000
   @oauth_authorization_timeout_ms :timer.minutes(5)
+  @reconnect_delays [500, 1_000, 2_000, 4_000]
+  @crash_window_ms 30_000
+  @list_changed_methods [
+    "notifications/tools/list_changed",
+    "notifications/resources/list_changed",
+    "notifications/prompts/list_changed"
+  ]
 
   @typedoc "MCP server configuration"
   @type server_config ::
@@ -524,7 +531,22 @@ defmodule LemonSkills.McpSource do
 
   @impl true
   def handle_call(:refresh, _from, state) do
-    {_tools, state} = state |> maybe_reload_servers([]) |> refresh_tools()
+    servers =
+      Map.new(state.servers, fn {name, server} ->
+        if server.reconnect_timer, do: Process.cancel_timer(server.reconnect_timer)
+
+        {name,
+         %{
+           server
+           | reconnect_timer: nil,
+             reconnect_token: nil,
+             reconnect_attempt: 0,
+             crashes: [],
+             unavailable: false
+         }}
+      end)
+
+    {_tools, state} = %{state | servers: servers} |> maybe_reload_servers([]) |> refresh_tools()
     {:reply, :ok, state}
   end
 
@@ -611,13 +633,60 @@ defmodule LemonSkills.McpSource do
     servers =
       Map.new(state.servers, fn {name, server} ->
         if server.client == client do
-          {name, %{server | client: nil, connected: false, last_error: "client disconnected"}}
+          now = System.monotonic_time(:millisecond)
+          crashes = [now | Enum.filter(server.crashes, &(now - &1 < @crash_window_ms))]
+          server = %{server | client: nil, connected: false, crashes: crashes}
+
+          server =
+            if length(crashes) > 5 do
+              %{server | unavailable: true, last_error: "server unavailable: crash storm"}
+            else
+              schedule_reconnect(name, server)
+            end
+
+          {name, server}
         else
           {name, server}
         end
       end)
 
     {:noreply, %{state | servers: servers}}
+  end
+
+  def handle_info({:mcp_notification, name, token, %{method: method}}, state)
+      when method in @list_changed_methods do
+    case state.servers[name] do
+      %{notification_token: ^token, connected: true} ->
+        {_tools, state} = refresh_tools(state, [name])
+        {:noreply, state}
+
+      _ ->
+        {:noreply, state}
+    end
+  end
+
+  def handle_info({:mcp_notification, _, _, _}, state), do: {:noreply, state}
+
+  def handle_info({:mcp_reconnect, name, token}, state) do
+    case state.servers[name] do
+      %{reconnect_token: ^token, unavailable: false} = server ->
+        server = %{server | reconnect_timer: nil, reconnect_token: nil}
+
+        {_tools, state} =
+          refresh_tools(%{state | servers: Map.put(state.servers, name, server)}, [name])
+
+        server = state.servers[name]
+
+        server =
+          if server.connected,
+            do: %{server | reconnect_attempt: 0},
+            else: schedule_reconnect(name, server)
+
+        {:noreply, %{state | servers: Map.put(state.servers, name, server)}}
+
+      _ ->
+        {:noreply, state}
+    end
   end
 
   @impl true
@@ -628,6 +697,40 @@ defmodule LemonSkills.McpSource do
   # ============================================================================
   # Private Functions
   # ============================================================================
+
+  defp schedule_reconnect(_name, %{unavailable: true} = server), do: server
+
+  defp schedule_reconnect(name, server) do
+    case Enum.at(@reconnect_delays, server.reconnect_attempt) do
+      nil ->
+        %{server | unavailable: true, last_error: "server unavailable: reconnect exhausted"}
+
+      delay ->
+        token = make_ref()
+        timer = Process.send_after(self(), {:mcp_reconnect, name, token}, delay)
+
+        %{
+          server
+          | reconnect_token: token,
+            reconnect_timer: timer,
+            reconnect_attempt: server.reconnect_attempt + 1,
+            last_error: "client disconnected; reconnecting"
+        }
+    end
+  end
+
+  defp notification_opts(server) do
+    owner = self()
+    name = server_name(server.config)
+    token = server.notification_token
+
+    [
+      notification_handler: fn notification ->
+        send(owner, {:mcp_notification, name, token, notification})
+        :ok
+      end
+    ]
+  end
 
   defp approval_selector({:tool, raw_name}), do: raw_name
   defp approval_selector({:utility, :list_resources, _}), do: "resources/list"
@@ -734,11 +837,20 @@ defmodule LemonSkills.McpSource do
     String.slice(prefix, 0, 47) <> "_" <> digest
   end
 
-  defp refresh_tools(state) do
+  defp refresh_tools(state, names \\ nil) do
     source = self()
 
     {servers, tool_cache} =
-      Enum.reduce(state.servers, {%{}, %{}}, fn {server_name, server}, {servers_acc, cache_acc} ->
+      state.servers
+      |> Enum.filter(fn {name, server} ->
+        (is_nil(names) or name in names) and not server.unavailable and
+          is_nil(server.reconnect_timer)
+      end)
+      |> Enum.reduce({state.servers, state.tool_cache}, fn {server_name, server},
+                                                           {servers_acc, cache_acc} ->
+        cache_acc =
+          Map.reject(cache_acc, fn {_name, entry} -> entry.server_name == server_name end)
+
         {server, tools} = refresh_server(server_name, server)
 
         tools =
@@ -852,7 +964,13 @@ defmodule LemonSkills.McpSource do
           tools: [],
           resources: [],
           prompts: [],
-          capabilities: %{}
+          capabilities: %{},
+          notification_token: make_ref(),
+          reconnect_timer: nil,
+          reconnect_token: nil,
+          reconnect_attempt: 0,
+          crashes: [],
+          unavailable: false
         })
       end)
 
@@ -865,7 +983,17 @@ defmodule LemonSkills.McpSource do
     %{state | servers: servers, scopes: scopes, tool_cache: cache}
   end
 
-  defp refresh_server(_server_name, %{config: config} = server) when elem(config, 0) == :stdio do
+  defp refresh_server(name, server) do
+    server =
+      if is_pid(server.client) and Process.alive?(server.client),
+        do: server,
+        else: %{server | notification_token: make_ref()}
+
+    do_refresh_server(name, server)
+  end
+
+  defp do_refresh_server(_server_name, %{config: config} = server)
+       when elem(config, 0) == :stdio do
     {command, _args, opts} = stdio_parts(config)
     command = Keyword.get(opts, :name, command)
     filters = filter_config(opts)
@@ -932,7 +1060,8 @@ defmodule LemonSkills.McpSource do
     end
   end
 
-  defp refresh_server(_server_name, %{config: config} = server) when elem(config, 0) == :http do
+  defp do_refresh_server(_server_name, %{config: config} = server)
+       when elem(config, 0) == :http do
     {url, opts} = http_parts(config)
     url = Keyword.get(opts, :name, url)
     filters = filter_config(opts)
@@ -999,7 +1128,7 @@ defmodule LemonSkills.McpSource do
     end
   end
 
-  defp refresh_server(_server_name, %{config: config} = server) when elem(config, 0) == :sse do
+  defp do_refresh_server(_server_name, %{config: config} = server) when elem(config, 0) == :sse do
     {url, opts} = http_parts(config)
     url = Keyword.get(opts, :name, url)
     filters = filter_config(opts)
@@ -1077,7 +1206,7 @@ defmodule LemonSkills.McpSource do
     end
   end
 
-  defp ensure_client(%{config: config}, :stdio) do
+  defp ensure_client(%{config: config} = server, :stdio) do
     {command, args, source_opts} = stdio_parts(config)
 
     opts =
@@ -1087,19 +1216,14 @@ defmodule LemonSkills.McpSource do
         cwd: Keyword.get(source_opts, :cwd),
         env: Keyword.get(source_opts, :env, []),
         timeout_ms: Keyword.get(source_opts, :timeout_ms, @client_request_timeout_ms)
-      ] ++ sampling_client_opts(command, source_opts)
+      ] ++ sampling_client_opts(command, source_opts) ++ notification_opts(server)
 
-    with {:ok, client_mod} <- stdio_client_module(),
-         {:ok, client} <- apply(client_mod, :start_link, [opts]),
-         :ok <- await_ready(client_mod, client, client_ready_timeout_ms(source_opts)) do
-      {:ok, client}
-    else
-      {:error, reason} -> {:error, reason}
-      other -> {:error, other}
+    with {:ok, client_mod} <- stdio_client_module() do
+      start_ready_client(client_mod, opts, client_ready_timeout_ms(source_opts))
     end
   end
 
-  defp ensure_client(%{config: config}, :http) do
+  defp ensure_client(%{config: config} = server, :http) do
     {url, opts} = http_parts(config)
     oauth = resolved_http_oauth(Keyword.get(opts, :oauth, []))
 
@@ -1112,36 +1236,40 @@ defmodule LemonSkills.McpSource do
         timeout_ms: Keyword.get(opts, :timeout_ms, @client_request_timeout_ms)
       ] ++
         Keyword.take(opts, [:origin_policy, :destination_pin]) ++
-        oauth_token_cache_opts(url, opts)
+        oauth_token_cache_opts(url, opts) ++ notification_opts(server)
 
-    with {:ok, client_mod} <- http_client_module(),
-         {:ok, client} <- apply(client_mod, :start_link, [client_opts]),
-         :ok <- await_ready(client_mod, client, client_ready_timeout_ms(opts)) do
-      {:ok, client}
-    else
-      {:error, reason} -> {:error, reason}
-      other -> {:error, other}
+    with {:ok, client_mod} <- http_client_module() do
+      start_ready_client(client_mod, client_opts, client_ready_timeout_ms(opts))
     end
   end
 
-  defp ensure_client(%{config: config}, :sse) do
+  defp ensure_client(%{config: config} = server, :sse) do
     {url, opts} = http_parts(config)
     ready_timeout_ms = client_ready_timeout_ms(opts)
 
-    client_opts = [
-      url: url,
-      headers: Keyword.get(opts, :headers, []),
-      timeout: ready_timeout_ms,
-      timeout_ms: Keyword.get(opts, :timeout_ms, @client_request_timeout_ms)
-    ]
+    client_opts =
+      [
+        url: url,
+        headers: Keyword.get(opts, :headers, []),
+        timeout: ready_timeout_ms,
+        timeout_ms: Keyword.get(opts, :timeout_ms, @client_request_timeout_ms)
+      ] ++ notification_opts(server)
 
-    with {:ok, client_mod} <- sse_client_module(),
-         {:ok, client} <- apply(client_mod, :start_link, [client_opts]),
-         :ok <- await_ready(client_mod, client, ready_timeout_ms) do
-      {:ok, client}
-    else
-      {:error, reason} -> {:error, reason}
-      other -> {:error, other}
+    with {:ok, client_mod} <- sse_client_module() do
+      start_ready_client(client_mod, client_opts, ready_timeout_ms)
+    end
+  end
+
+  defp start_ready_client(client_mod, opts, timeout) do
+    with {:ok, client} <- apply(client_mod, :start_link, [opts]) do
+      case await_ready(client_mod, client, timeout) do
+        :ok ->
+          {:ok, client}
+
+        error ->
+          close_client(%{client: client, client_module: client_mod})
+          error
+      end
     end
   end
 
