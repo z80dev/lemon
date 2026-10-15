@@ -12,7 +12,7 @@ struct AuditLogSettingsView: View {
     @State private var to = Date()
     var body: some View {
         Form {
-            AdminStatus(control: control, store: store)
+            AdminStatus(control: control, store: store, refresh: { await control.perform { try await load() } })
             Section("Sanitized management metadata — not private transcripts") {
                 TextField("Actor ID (optional)", text: $actor); TextField("Resource ID (optional)", text: $resource)
                 DatePicker("From", selection: $from); DatePicker("To", selection: $to)

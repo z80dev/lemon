@@ -72,6 +72,7 @@ struct InspectorActivityTab: View {
                 }
             }
         }
+        .onChange(of: runs) { _, _ in action.receipt = nil }
     }
 
     // MARK: Now card
@@ -131,12 +132,13 @@ struct InspectorActivityTab: View {
     }
 
     private func stop() async {
+        action.receipt = nil
         await action.perform {
             for run in liveRuns where stoppableRunStatuses.contains(run.status) {
                 let receipt: Run = try await store.mutate("POST", resourcePath("runs", run.id, "/cancel"), body: ["reason": .string("Explicit user Stop")])
                 if let index = store.runs.firstIndex(where: { $0.id == receipt.id }) { store.runs[index] = receipt }
             }
-            action.receipt = "Stop requested. Completed external effects are not rolled back."
+            action.receipt = "Stop sent. Anything the Bot already did outside the app stays done."
         }
     }
 }
@@ -201,6 +203,9 @@ private struct RunRow: View {
                     if expandable { Image(systemName: "chevron.right").font(.system(size: 11, weight: .semibold)).foregroundStyle(LB.faint).rotationEffect(.degrees(expanded ? 90 : 0)) }
                 }.contentShape(Rectangle())
             }.buttonStyle(.plain)
+            if run.status == "outcome_unknown" {
+                Text("We couldn't confirm the result. Check before running it again.").font(LBFont.meta).foregroundStyle(LB.warning)
+            }
             if expanded, let error = run.error {
                 VStack(alignment: .leading, spacing: 6) {
                     Text(error.message).font(LBFont.rowSubtitle).foregroundStyle(LB.ink).textSelection(.enabled)

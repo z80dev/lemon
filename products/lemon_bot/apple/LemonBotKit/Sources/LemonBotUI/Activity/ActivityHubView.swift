@@ -25,7 +25,7 @@ public struct ActivityHubView: View {
             else if tab == "search" { SearchHubView(store: store) }
             else {
                 List {
-                    HubError(action: action)
+                    HubError(action: action, store: store)
                     Section("Filters") {
                         HubBotPicker(store: store, selection: $botID).onChange(of: botID) { Task { await load() } }
                         if ["activity", "upcoming"].contains(tab) {
@@ -142,7 +142,7 @@ struct ReminderCreateView: View {
     @State private var action = HubAction()
     var body: some View {
         Form {
-            HubError(action: action)
+            HubError(action: action, store: store)
             HubBotPicker(store: store, selection: $botID).onChange(of: botID) { conversationID = "" }
             Picker("Exact conversation", selection: $conversationID) { Text("Select conversation").tag(""); ForEach(store.conversations.filter { $0.botIds.contains(botID) }) { Text($0.name).tag($0.id) } }
             TextField("Reminder text", text: $text, axis: .vertical)
@@ -186,6 +186,6 @@ public struct RoutineDetailView: View {
     @State private var routine: Routine?
     @State private var action = HubAction()
     public init(store: LemonBotStore, routineID: ID) { self.store = store; self.routineID = routineID }
-    public var body: some View { Group { if let routine { RoutineEditorView(store: store, initial: routine) } else { VStack { HubError(action: action); Button("Reload exact routine") { Task { await load() } } } } }.task { await load() } }
+    public var body: some View { Group { if let routine { RoutineEditorView(store: store, initial: routine) } else { VStack { HubError(action: action, store: store); Button("Reload exact routine") { Task { await load() } } } } }.task { await load() } }
     private func load() async { await action.perform(readOnly: true) { routine = try await store.read("/routines/\(hubID(routineID))") } }
 }

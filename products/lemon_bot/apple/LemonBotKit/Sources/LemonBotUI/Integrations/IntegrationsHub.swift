@@ -27,7 +27,7 @@ struct ProviderCatalogView: View {
     @State private var sources: [ExternalSource] = []
     var body: some View {
         Form {
-            AdminStatus(control: control, store: store)
+            AdminStatus(control: control, store: store, refresh: { await control.perform { try await load() } })
             Section("Eligible registered providers") {
                 ForEach(providers, id: \.id) { provider in
                     ProviderPrerequisites(label: provider.label, kind: provider.kind, configured: provider.configured, prerequisites: provider.prerequisites, capabilities: provider.capabilities)

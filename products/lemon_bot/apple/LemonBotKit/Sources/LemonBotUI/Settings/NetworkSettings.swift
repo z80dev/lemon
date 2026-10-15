@@ -46,7 +46,7 @@ struct NetworkSettingsView: View {
     @State private var enabled = false
     var body: some View {
         Form {
-            AdminStatus(control: control, store: store)
+            AdminStatus(control: control, store: store, refresh: { await control.perform { try await load() } })
             Section("Desired policies") {
                 Text("Desired rules are not proof of host enforcement. Apply requires configured destination HostDriverConfig.networkApply, node.shell support and explicit authority. Bot admission is blocked until required policy is actually applied. MCP-origin blocks are distinct from website network restrictions.")
                 ForEach(policies) { policy in NavigationLink("\(policy.scope) · \(policy.mode) · desired revision \(policy.revision)") { NetworkPolicySettingsView(store: store, policy: policy) } }

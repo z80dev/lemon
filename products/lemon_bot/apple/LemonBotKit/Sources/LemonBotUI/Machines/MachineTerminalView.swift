@@ -67,7 +67,7 @@ public struct MachineTerminalView: View {
     public init(store: LemonBotStore, machineID: ID) { self.store = store; self.machineID = machineID; _session = State(initialValue: NativePTYSession(store: store)) }
     public var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HubError(action: action)
+            HubError(action: action, store: store)
             if let error = session.error { Text(error).foregroundStyle(.red).textSelection(.enabled) }
             Text("\(session.title) · \(store.connectionState) · device-owned shell").font(.headline)
             if let terminal = session.terminal {

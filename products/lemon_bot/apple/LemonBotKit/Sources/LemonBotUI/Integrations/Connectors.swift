@@ -42,7 +42,7 @@ struct ConnectorSettingsView: View {
     private var bot: Bot? { store.bots.first { $0.id == botID } }
     var body: some View {
         Form {
-            AdminStatus(control: control, store: store)
+            AdminStatus(control: control, store: store, refresh: { await control.perform { try await loadBot() } })
             Section("Assigned Bot and account inventory") {
                 AdminBotPicker(store: store, value: $botID)
                 Button("Load selected Bot connectors and destination secret names") { Task { await control.perform { try await loadBot() } } }.disabled(botID.isEmpty || control.busy)

@@ -21,7 +21,7 @@ struct AccountSettingsView: View {
     @AppStorage("LemonBot.safeAccountCleanupDiagnostics") private var cleanupDiagnostics = ""
     var body: some View {
         Form {
-            AdminStatus(control: control, store: store)
+            AdminStatus(control: control, store: store, refresh: { await control.perform { try await load() } })
             Section("Your account") {
                 TextField("Display name", text: $name)
                 TextField("Email", text: $email)
@@ -333,7 +333,7 @@ struct AboutSettingsView: View {
     @State private var hosts: [AdminHostVersion] = []
     var body: some View {
         Form {
-            AdminStatus(control: control, store: store)
+            AdminStatus(control: control, store: store, refresh: { await control.perform { try await load() } })
             Section("Client") {
                 Text("Lemon Bot · \(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "Unknown client version")")
                 Text("Platform: \(ProcessInfo.processInfo.operatingSystemVersionString)")

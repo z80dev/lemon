@@ -7,6 +7,7 @@ public enum LemonBotSnapshotScene: String, CaseIterable {
     case sidebarConversation, inspectorActivity, composerActiveRun, failedRun, settings, emptyState
     case backendDown, controllerDown, reconnectRequired
     case instancePane, instanceRunning
+    case actionRecovery
 
     /// `sidebar-conversation`, used for output file names.
     public var slug: String {
@@ -17,7 +18,7 @@ public enum LemonBotSnapshotScene: String, CaseIterable {
         case .sidebarConversation: return .chiefOfStaff
         case .inspectorActivity, .composerActiveRun: return .activeRun
         case .failedRun: return .failedRun
-        case .settings: return .chiefOfStaff
+        case .settings, .actionRecovery: return .chiefOfStaff
         case .emptyState: return .noSelection
         case .backendDown: return .backendDown
         case .controllerDown: return .controllerDown
@@ -36,6 +37,13 @@ public enum LemonBotSnapshotScene: String, CaseIterable {
         store.selectedConversationID = scene.scenario.conversationID
         switch scene {
         case .inspectorActivity: return AnyView(LemonBotRootView(store: store, inspector: InspectorPresentation(isPresented: true, tab: .activity)))
+        case .actionRecovery:
+            return AnyView(VStack(alignment: .leading, spacing: 20) {
+                Text("Unconfirmed actions").font(LBFont.title)
+                ActionErrorView(message: humanErrorText(ClientError.outcomeUnknown("support-reference")))
+                Text("Reconnect to check this action.").font(LBFont.meta).foregroundStyle(LB.muted)
+                Text(pairingStatusLabel("pending_approval")).font(LBFont.body)
+            }.padding(32).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading).background(LB.canvas))
         case .settings:
             SettingsRouter.shared.pane = .account
             return AnyView(LemonBotSettingsView(store: store))
