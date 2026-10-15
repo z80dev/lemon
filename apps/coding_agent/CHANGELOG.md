@@ -4,6 +4,9 @@
 
 ### Added
 
+- Grep supports `output_mode: content|files|count`, with paged paths or per-file
+  matching-line counts and a total. Newline patterns search across lines in both backends.
+
 - Background process controls now support exact stdin writes and EOF through
   `process_input`, non-consuming `bash_output` peeks, and graceful `kill_process`
   SIGTERM with a two-second SIGKILL fallback (or explicit immediate kill).
