@@ -8,7 +8,11 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
-No unreleased changes yet.
+### Added
+
+- Control-plane status reports the real Lemon release version, build identity,
+  offline provider credential presence, timestamped redacted channel health,
+  lifecycle availability and safe summary counts.
 
 ---
 

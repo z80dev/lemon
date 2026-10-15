@@ -3,7 +3,8 @@ defmodule LemonControlPlane.Methods.Status do
   System status method.
 
   Returns comprehensive status information about the Lemon system including
-  active runs, connected clients, channels, and skills status.
+  active runs, connected clients, release/build identity, offline provider
+  credential presence, channel health, lifecycle availability, and skills status.
 
   Requires `read` scope.
 
@@ -11,7 +12,8 @@ defmodule LemonControlPlane.Methods.Status do
 
       %{
         "server" => %{
-          "version" => "0.1.0",
+          "version" => "2026.10.10",
+          "build" => %{"runtimeMode" => "source-dev", "channel" => nil, "commit" => nil},
           "uptime_ms" => 12345,
           "memory_mb" => 256.5
         },
@@ -27,8 +29,14 @@ defmodule LemonControlPlane.Methods.Status do
         },
         "channels" => %{
           "configured" => ["telegram"],
-          "connected" => ["telegram"]
+          "connected" => ["telegram"],
+          "details" => [%{"id" => "telegram", "state" => "connected", "lastError" => nil}]
         },
+        "providers" => [
+          %{"id" => "openai", "configured" => true, "credential" => "missing",
+            "default" => true, "lastError" => nil}
+        ],
+        "lifecycle" => %{"restart" => true, "stop" => true, "reason" => nil},
         "skills" => %{
           "installed" => 10,
           "enabled" => 8
@@ -52,6 +60,8 @@ defmodule LemonControlPlane.Methods.Status do
     channels = channel_status()
     skills = skills_status()
 
+    providers = optional([], &LemonControlPlane.ProviderStatus.snapshot/0)
+
     {:ok,
      %{
        "server" => server,
@@ -59,11 +69,13 @@ defmodule LemonControlPlane.Methods.Status do
        "runs" => runs,
        "channels" => channels,
        "skills" => skills,
-       "summary" => summary(server, connections, runs, channels, skills)
+       "providers" => providers,
+       "lifecycle" => LemonControlPlane.Lifecycle.availability(),
+       "summary" => summary(server, connections, runs, channels, skills, providers)
      }}
   end
 
-  defp summary(server, connections, runs, channels, skills) do
+  defp summary(server, connections, runs, channels, skills, providers) do
     beam = server["beam"] || %{}
 
     %{
@@ -87,6 +99,9 @@ defmodule LemonControlPlane.Methods.Status do
       "completedTodayCount" => runs["completed_today"],
       "configuredChannelCount" => length(channels["configured"] || []),
       "connectedChannelCount" => length(channels["connected"] || []),
+      "channelErrorCount" => Enum.count(channels["details"] || [], &(&1["state"] == "error")),
+      "providerCount" => length(providers),
+      "providersMissingCredentials" => Enum.count(providers, &(&1["credential"] == "missing")),
       "installedSkillCount" => skills["installed"],
       "enabledSkillCount" => skills["enabled"],
       "cleanup" => %{
@@ -104,6 +119,16 @@ defmodule LemonControlPlane.Methods.Status do
 
     %{
       "version" => LemonControlPlane.server_version(),
+      "build" =>
+        optional(%{"runtimeMode" => "source-dev", "channel" => nil, "commit" => nil}, fn ->
+          info = LemonCore.BuildInfo.current(include_git: false)
+
+          %{
+            "runtimeMode" => info.runtime_mode,
+            "channel" => info.release_channel,
+            "commit" => info.git.commit
+          }
+        end),
       "uptime_ms" => uptime,
       "memory_mb" => Float.round(memory_bytes / 1_048_576, 2),
       "otp_release" => to_string(:erlang.system_info(:otp_release)),
@@ -152,7 +177,8 @@ defmodule LemonControlPlane.Methods.Status do
 
     %{
       "configured" => channels.configured,
-      "connected" => channels.connected
+      "connected" => channels.connected,
+      "details" => Map.get(channels, :details, [])
     }
   end
 
@@ -175,7 +201,7 @@ defmodule LemonControlPlane.Methods.Status do
   defp get_run_counts, do: LemonRouter.counts()
 
   defp get_channel_status do
-    optional(%{configured: [], connected: []}, &LemonChannels.Registry.status/0)
+    optional(%{configured: [], connected: [], details: []}, &LemonChannels.Registry.status/0)
   end
 
   defp get_skills_status do
