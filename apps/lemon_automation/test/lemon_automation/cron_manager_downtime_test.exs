@@ -39,6 +39,41 @@ defmodule LemonAutomation.CronManagerDowntimeTest do
            end)
   end
 
+  test "a stored slot with no following occurrence in the search horizon uses maximum grace", %{
+    id: id
+  } do
+    due = LemonCore.Clock.now_ms() - 1_800_000
+    schedule = "0 9 29 2 1"
+
+    assert CronSchedule.next_run_ms(schedule, "UTC", from: DateTime.from_unix!(due, :millisecond)) ==
+             nil
+
+    job = store_job(id, schedule: schedule, next_run_at_ms: due)
+    {:ok, state} = CronManager.init([])
+    assert state.jobs[id].next_run_at_ms == job.next_run_at_ms
+    assert state.catch_up_slots[id] == due
+  end
+
+  test "catch-up can be disabled in automation config", %{id: id} do
+    home = Path.join(System.tmp_dir!(), "#{id}_home")
+    config_dir = Path.join(home, ".lemon")
+    File.mkdir_p!(config_dir)
+    File.write!(Path.join(config_dir, "config.toml"), "[automation]\ncatch_up_missed = false\n")
+    previous_home = System.fetch_env!("HOME")
+    System.put_env("HOME", home)
+
+    on_exit(fn ->
+      System.put_env("HOME", previous_home)
+      File.rm_rf!(home)
+    end)
+
+    store_job(id, next_run_at_ms: LemonCore.Clock.now_ms() - 1_000)
+    {:ok, state} = CronManager.init([])
+    assert state.jobs[id].next_run_at_ms > LemonCore.Clock.now_ms()
+    refute state.catch_up_slots[id]
+    assert CronStore.list_runs(id) == []
+  end
+
   test "missed one-shot retires outside grace instead of moving to next year", %{id: id} do
     due = LemonCore.Clock.now_ms() - 7_200_001
     date = DateTime.from_unix!(due, :millisecond)

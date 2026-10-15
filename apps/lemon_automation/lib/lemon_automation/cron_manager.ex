@@ -805,7 +805,9 @@ defmodule LemonAutomation.CronManager do
         from: DateTime.from_unix!(due, :millisecond)
       )
 
-    period = if is_integer(following), do: following - due, else: 240_000
+    # Sparse schedules (for example leap day) may have no following slot within
+    # the scheduler's 366-day search horizon; their grace is already at the cap.
+    period = if is_integer(following), do: following - due, else: 14_400_000
     grace = period |> div(2) |> max(120_000) |> min(7_200_000)
 
     if catch_up and now - due <= grace do
