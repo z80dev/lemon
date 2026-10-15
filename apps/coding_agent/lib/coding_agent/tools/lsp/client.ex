@@ -104,8 +104,9 @@ defmodule CodingAgent.Tools.Lsp.Client do
   end
 
   @doc "Find or start the client for `key`."
-  @spec ensure(key(), map(), pid() | nil, String.t() | nil) :: {:ok, pid()} | {:error, term()}
-  def ensure({_scope, _server_id, _root} = key, server, owner, session_key) do
+  @spec ensure(key(), map(), pid() | nil, String.t() | nil, String.t()) ::
+          {:ok, pid()} | {:error, term()}
+  def ensure({_scope, _server_id, _root} = key, server, owner, session_key, config_root) do
     case Registry.lookup(@registry, key) do
       [{pid, _value}] ->
         with :ok <- CodingAgent.ToolResources.bind(pid, owner), do: {:ok, pid}
@@ -113,7 +114,14 @@ defmodule CodingAgent.Tools.Lsp.Client do
       [] ->
         case DynamicSupervisor.start_child(
                @supervisor,
-               {__MODULE__, %{key: key, server: server, owner: owner, session_key: session_key}}
+               {__MODULE__,
+                %{
+                  key: key,
+                  server: server,
+                  owner: owner,
+                  session_key: session_key,
+                  config_root: config_root
+                }}
              ) do
           {:ok, pid} ->
             {:ok, pid}
@@ -191,7 +199,7 @@ defmodule CodingAgent.Tools.Lsp.Client do
   # Server
 
   @impl true
-  def init(%{key: {_scope, _server_id, root} = key, server: server, owner: owner}) do
+  def init(%{key: {_scope, _server_id, root} = key, server: server, owner: owner} = args) do
     Process.flag(:trap_exit, true)
 
     {:ok,
@@ -199,6 +207,7 @@ defmodule CodingAgent.Tools.Lsp.Client do
        key: key,
        server: server,
        root: root,
+       config_root: args.config_root,
        owner_ref: if(is_pid(owner), do: Process.monitor(owner)),
        owner_pid: owner,
        session_id: nil,
@@ -317,7 +326,11 @@ defmodule CodingAgent.Tools.Lsp.Client do
   end
 
   defp start_session(state) do
-    ServerManager.start_session(state.server.id, cwd: state.root, owner: self())
+    ServerManager.start_session(state.server.id,
+      cwd: state.root,
+      config_root: state.config_root,
+      owner: self()
+    )
   end
 
   defp initialize_params(root) do
@@ -382,7 +395,17 @@ defmodule CodingAgent.Tools.Lsp.Client do
         uri = Text.path_to_uri(path)
 
         notify!(
-          ServerManager.open_document(state.session_id, uri, language_id(path), text, version: 1)
+          ServerManager.open_document(
+            state.session_id,
+            uri,
+            Map.get(
+              state.server.language_ids,
+              Path.extname(path) |> String.downcase(),
+              "plaintext"
+            ),
+            text,
+            version: 1
+          )
         )
 
         doc = %{uri: uri, version: 1, digest: digest, used_at: now}

@@ -695,6 +695,7 @@ defmodule LemonCore.Config.Validator do
     |> validate_boolean(Map.get(tools, :intent_tracing), "tools.intent_tracing")
     |> validate_tool_approval_mode(Map.get(tools, :approval_mode))
     |> validate_edit(Map.get(tools, :edit))
+    |> validate_lsp(Map.get(tools, :lsp))
     |> validate_positive_integer(
       get_in(tools, [Access.key(:web, %{}), :fetch, :max_body_bytes]),
       "tools.web.fetch.max_body_bytes"
@@ -713,6 +714,68 @@ defmodule LemonCore.Config.Validator do
   end
 
   defp validate_edit(errors, _), do: ["runtime.tools.edit: must be a table" | errors]
+
+  defp validate_lsp(errors, nil), do: errors
+
+  defp validate_lsp(errors, %{} = lsp) do
+    case Map.get(lsp, "servers", %{}) do
+      servers when is_map(servers) ->
+        Enum.reduce(servers, errors, fn {id, entry}, errors ->
+          path = "runtime.tools.lsp.servers.#{id}"
+          errors = validate_lsp_server(errors, entry, path)
+
+          if is_map(entry) and id not in lsp_builtin_ids() and
+               (not is_binary(entry["command"]) or
+                  Map.get(entry, "extensions", Map.get(entry, "file_types", [])) == []) do
+            ["#{path}: custom servers require command and extensions" | errors]
+          else
+            errors
+          end
+        end)
+
+      _ ->
+        ["runtime.tools.lsp.servers: must be a table" | errors]
+    end
+  end
+
+  defp validate_lsp(errors, _), do: ["runtime.tools.lsp: must be a table" | errors]
+
+  defp lsp_builtin_ids do
+    catalog = Application.get_env(:lemon_core, :lsp_catalog)
+
+    if is_atom(catalog) and not is_nil(catalog) and Code.ensure_loaded?(catalog),
+      do: catalog.builtin_ids(),
+      else: []
+  end
+
+  defp validate_lsp_server(errors, %{} = entry, path) do
+    Enum.reduce(entry, errors, fn {field, value}, errors ->
+      valid? =
+        case field do
+          key when key in ["command", "language_id"] ->
+            is_binary(value) and String.trim(value) != ""
+
+          key when key in ["args", "root_markers", "extensions", "file_types"] ->
+            is_list(value) and Enum.all?(value, &is_binary/1)
+
+          "disabled" ->
+            is_boolean(value)
+
+          "initialization_options" ->
+            is_map(value)
+
+          "env" ->
+            is_map(value) and Enum.all?(value, fn {k, v} -> is_binary(k) and is_binary(v) end)
+
+          _ ->
+            false
+        end
+
+      if valid?, do: errors, else: ["#{path}.#{field}: invalid type or unknown field" | errors]
+    end)
+  end
+
+  defp validate_lsp_server(errors, _, path), do: ["#{path}: must be a table" | errors]
 
   defp validate_tool_approval_mode(errors, mode) when mode in [nil, "ask", "write", "yolo"],
     do: errors

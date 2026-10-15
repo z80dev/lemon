@@ -10,6 +10,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Added
 
+- Layer language-server defaults with global/project
+  `[runtime.tools.lsp.servers.<id>]` overrides, custom servers, disabling,
+  initialization options and environment settings across catalog consumers.
+
 - Extension tool-call, tool-result and session-start hooks can return bounded,
   ordered `additional_context` for the model, including blocked tool calls,
   without changing result trust, error status or mutation receipts.

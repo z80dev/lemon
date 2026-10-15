@@ -328,6 +328,11 @@ defmodule LemonLsp.ServerManager do
          :ok <- validate_method(method),
          {:ok, params} <- validate_params(params),
          {:ok, timeout_ms} <- validate_timeout(timeout_ms) do
+      params =
+        if method == "initialize" and is_map(params),
+          do: Map.put(params, "initializationOptions", session.initialization_options),
+          else: params
+
       request_id = state.next_request_id + 1
       payload = %{"jsonrpc" => "2.0", "id" => request_id, "method" => method, "params" => params}
 
@@ -743,7 +748,11 @@ defmodule LemonLsp.ServerManager do
   end
 
   defp start_port(server_id, opts) do
-    with {:ok, command} <- LemonLsp.Servers.resolve_command(server_id),
+    with {:ok, command} <-
+           LemonLsp.Servers.resolve_command(
+             server_id,
+             Keyword.get(opts, :config_root, opts[:cwd])
+           ),
          {:ok, cwd} <- validate_cwd(Keyword.get(opts, :cwd)) do
       {executable, args} = launch_spec(command)
 
@@ -771,6 +780,7 @@ defmodule LemonLsp.ServerManager do
          diagnostics_by_uri: %{},
          diagnostic_seq: 0,
          root: cwd,
+         initialization_options: command.initialization_options,
          initialized: false,
          server_id: command.server.id,
          label: command.server.label,

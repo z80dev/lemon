@@ -97,6 +97,10 @@ config :lemon_core, :gateway_channels, [
   LemonControlPlane.A2A.Config
 ]
 
+# Optional catalog metadata lets core validate custom LSP entries without a
+# compile-time dependency on the language-server driver.
+config :lemon_core, :lsp_catalog, LemonLsp.Servers
+
 # Environment-variable declarations live with the app that reads them; the
 # framework in LemonCore.Env aggregates whatever is loaded. Apps missing from a
 # given build are skipped, so this list is a superset, not a requirement.

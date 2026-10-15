@@ -322,7 +322,7 @@ defmodule CodingAgent.Tools.Lsp do
     running = Enum.group_by(Client.list(ctx.scope), & &1.server_id)
 
     lines =
-      Enum.map(LemonLsp.Servers.list(), fn server ->
+      Enum.map(LemonLsp.Servers.list(ctx.cwd), fn server ->
         exts = Enum.join(server.extensions, " ")
 
         state =
@@ -348,7 +348,7 @@ defmodule CodingAgent.Tools.Lsp do
     {:ok, text,
      %{
        servers:
-         Enum.map(LemonLsp.Servers.list(), fn server ->
+         Enum.map(LemonLsp.Servers.list(ctx.cwd), fn server ->
            %{
              id: server.id,
              available: server.available,
@@ -978,7 +978,7 @@ defmodule CodingAgent.Tools.Lsp do
 
   defp reload(%{req: %{file: file}} = ctx) when file in [nil, "*"] do
     clients = Client.list(ctx.scope)
-    servers = Map.new(LemonLsp.Servers.list(), &{&1.id, &1})
+    servers = Map.new(LemonLsp.Servers.list(ctx.cwd), &{&1.id, &1})
 
     Enum.reduce_while(
       clients,
@@ -1304,7 +1304,7 @@ defmodule CodingAgent.Tools.Lsp do
     path = PathHelpers.resolve_path(ctx.req.file, ctx.cwd)
 
     with :ok <- regular_file(path),
-         {:ok, server} <- server_for(path) do
+         {:ok, server} <- server_for(path, ctx.cwd) do
       root = workspace_root(path, ctx.cwd, server.root_markers)
       attempt(ctx, server, root, path, fun, 1)
     end
@@ -1319,7 +1319,8 @@ defmodule CodingAgent.Tools.Lsp do
                key,
                server,
                Keyword.get(ctx.opts, :session_pid),
-               Keyword.get(ctx.opts, :session_key)
+               Keyword.get(ctx.opts, :session_key),
+               ctx.cwd
              ),
            {:ok, conn} <- Client.sync(pid, path, remaining(ctx)) do
         case fun.(Map.merge(conn, %{pid: pid, root: root, path: path})) do
@@ -1354,7 +1355,7 @@ defmodule CodingAgent.Tools.Lsp do
   # Running clients for this scope, else servers whose root marker sits in
   # the working directory itself (started on demand at the cwd).
   defp workspace_clients(ctx) do
-    servers = Map.new(LemonLsp.Servers.list(), &{&1.id, &1})
+    servers = Map.new(LemonLsp.Servers.list(ctx.cwd), &{&1.id, &1})
 
     case Client.list(ctx.scope) do
       [] ->
@@ -1370,7 +1371,8 @@ defmodule CodingAgent.Tools.Lsp do
                  {ctx.scope, server.id, ctx.cwd},
                  server,
                  Keyword.get(ctx.opts, :session_pid),
-                 Keyword.get(ctx.opts, :session_key)
+                 Keyword.get(ctx.opts, :session_key),
+                 ctx.cwd
                ) do
             {:ok, pid} -> [{server, pid}]
             {:error, _} -> []
@@ -1387,9 +1389,9 @@ defmodule CodingAgent.Tools.Lsp do
     end
   end
 
-  defp server_for(path) do
+  defp server_for(path, cwd) do
     ext = path |> Path.extname() |> String.downcase()
-    servers = LemonLsp.Servers.list()
+    servers = LemonLsp.Servers.list(cwd)
 
     case Enum.find(servers, &(ext in &1.extensions)) do
       nil ->
