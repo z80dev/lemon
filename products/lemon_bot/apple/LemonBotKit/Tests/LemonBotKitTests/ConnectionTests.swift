@@ -133,6 +133,46 @@ private final class ConnectionCredentials: AccountCredentialStore {
         do { try await value.performRuntimeAction(.start); XCTFail("Must not create a second start intent") } catch ClientError.unresolvedMutation(let intent) { XCTAssertEqual(intent.clientNonce, nonce) }
         XCTAssertEqual(TestHTTPProtocol.requests.count, count)
     }
+    func testRuntimePollingObservesReceiptAndRefreshesWithoutReplayingCommands() async throws {
+        let value = try store()
+        var snapshot = try JSONDecoder().decode(Snapshot.self, from: WireFixtures.snapshot)
+        snapshot.hasMore.bots = false; snapshot.hasMore.machines = false; snapshot.hasMore.conversations = false; snapshot.hasMore.notifications = false
+        let sync = try JSONEncoder().encode(snapshot)
+        let kit = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        var instance = try JSONDecoder().decode(InstanceStatus.self, from: Data(contentsOf: kit.appendingPathComponent("../../sdk/ts/test/fixtures/instance-status.json").standardizedFileURL))
+        instance.runtime.operation = try JSONDecoder().decode(RuntimeOperation.self, from: Data(#"{"id":"operation","action":"restart","state":"running","startedAtMs":1,"completedAtMs":null,"exitCode":null,"output":"Starting…"}"#.utf8))
+        value.instanceStatus = instance
+        instance.runtime.operation?.state = .succeeded
+        instance.runtime.operation?.completedAtMs = 2
+        instance.runtime.operation?.exitCode = 0
+        instance.runtime.operation?.output = "Lemon is running."
+        let completed = try JSONEncoder().encode(instance)
+        TestHTTPProtocol.handler = { request in
+            XCTAssertEqual(request.httpMethod, "GET")
+            if request.url?.path == "/v1/instance" { return (200, [:], completed) }
+            XCTAssertEqual(request.url?.path, "/v1/sync")
+            return (200, [:], sync)
+        }
+        try await value.waitForRuntimeOperation()
+        value.stopSocket()
+        XCTAssertEqual(value.instanceStatus?.runtime.operation?.state, .succeeded)
+        XCTAssertEqual(value.instanceStatus?.runtime.operation?.output, "Lemon is running.")
+        XCTAssertEqual(TestHTTPProtocol.requests.map { $0.url!.path }, ["/v1/instance", "/v1/sync"])
+        XCTAssertTrue(value.pendingIntents.isEmpty)
+    }
+    func testInstanceRoleCeilingsKeepAdminReadOnlyAndMembersOut() throws {
+        let value = try store()
+        value.member = try JSONDecoder().decode(Snapshot.self, from: WireFixtures.snapshot).member
+        let kit = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        value.instanceStatus = try JSONDecoder().decode(InstanceStatus.self, from: Data(contentsOf: kit.appendingPathComponent("../../sdk/ts/test/fixtures/instance-status.json").standardizedFileURL))
+        value.instanceStatus?.runtime.controllable = true
+        value.member?.role = "owner"
+        XCTAssertTrue(value.canViewInstance); XCTAssertTrue(value.canControlInstance)
+        value.member?.role = "admin"
+        XCTAssertTrue(value.canViewInstance); XCTAssertFalse(value.canControlInstance)
+        value.member?.role = "member"
+        XCTAssertFalse(value.canViewInstance); XCTAssertFalse(value.canControlInstance)
+    }
     func testDiscoveryUsesOnlyPublicSetupWithShortTimeoutAndDeduplicatesOrigins() async throws {
         let value = try store()
         value.accounts = [value.account!, value.account!]

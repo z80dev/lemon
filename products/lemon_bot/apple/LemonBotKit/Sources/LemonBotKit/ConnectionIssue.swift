@@ -78,6 +78,7 @@ extension LemonBotStore {
     public var canControlInstance: Bool { member?.role == "owner" && instanceStatus?.runtime.controllable == true }
     public func retryNow() async throws {
         nextRetryAt = nil
+        connectionIssue?.nextRetryAt = nil
         try await refresh()
     }
     func recordConnectionFailure(_ error: Error) {
@@ -93,6 +94,7 @@ extension LemonBotStore {
     }
     @discardableResult public func refreshInstance() async throws -> InstanceStatus {
         let status: InstanceStatus = try await read("/instance")
+        try Task.checkCancellation()
         instanceStatus = status
         capabilities?.controlConnected = status.controller.state == .connected
         updateControllerIssue()

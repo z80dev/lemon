@@ -13,6 +13,7 @@ public enum LemonBotFixtureScenario: Hashable {
     /// Workspace loaded, nothing selected.
     case noSelection
     case backendDown, controllerDown, reconnectRequired
+    case instanceRunning
 
     public var conversationID: ID? {
         switch self {
@@ -20,7 +21,7 @@ public enum LemonBotFixtureScenario: Hashable {
         case .activeRun: return LemonBotFixtureID.atlasMain
         case .failedRun: return LemonBotFixtureID.marlowMain
         case .noSelection: return nil
-        case .backendDown, .controllerDown, .reconnectRequired: return LemonBotFixtureID.zestMain
+        case .backendDown, .controllerDown, .reconnectRequired, .instanceRunning: return LemonBotFixtureID.zestMain
         }
     }
 }
@@ -56,7 +57,7 @@ public enum LemonBotFixtures {
     @MainActor private static func newStore(scenario: LemonBotFixtureScenario) -> LemonBotStore {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("LemonBotFixtures-\(UUID().uuidString)", isDirectory: true)
         let store = LemonBotStore(keychain: FixtureCredentialStore(), persistence: ClientPersistence(root: root))
-        store.installFixtureSession(FixtureURLProtocol.makeSession(controllerDown: scenario == .controllerDown))
+        store.installFixtureSession(FixtureURLProtocol.makeSession(controllerDown: scenario == .controllerDown, runtimeRunning: scenario == .instanceRunning))
         return store
     }
 
@@ -89,6 +90,8 @@ public enum LemonBotFixtures {
         case .reconnectRequired:
             store.connectionState = "reconnect_required"
             store.connectionIssue = ConnectionIssue.classify(ClientError.signedOut, baseURL: account.baseURL, email: account.email)
+        case .instanceRunning:
+            store.instanceStatus = try? JSONDecoder().decode(InstanceStatus.self, from: JSONSerialization.data(withJSONObject: world.instance(runtimeRunning: true)))
         default: break
         }
     }
