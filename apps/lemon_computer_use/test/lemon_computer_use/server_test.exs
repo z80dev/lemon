@@ -7,6 +7,7 @@ defmodule LemonComputerUse.ServerTest do
   alias LemonAi.Types.{ImageContent, TextContent}
   alias LemonComputerUse.{ContextContributor, Server}
   alias LemonComputerUse.Tools.{Js, JsReset}
+  alias LemonCore.Events.RunCompleted
 
   setup context do
     start_fake_server(context)
@@ -93,7 +94,7 @@ defmodule LemonComputerUse.ServerTest do
     event =
       LemonCore.Event.new(
         :run_completed,
-        LemonCore.Events.RunCompleted.new(%{completed: %{ok: true}}),
+        RunCompleted.new(%{completed: %{ok: true}}),
         %{run_id: "run-done"}
       )
 
