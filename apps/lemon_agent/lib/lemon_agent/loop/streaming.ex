@@ -4,6 +4,7 @@ defmodule LemonAgent.Loop.Streaming do
   alias LemonAgent.AbortSignal
   alias LemonAgent.EventStream
   alias LemonAgent.Loop
+  alias LemonAgent.Loop.ToolCalls
   alias LemonAgent.Loop.TranscriptValidator
   alias LemonAgent.Types.{AgentLoopConfig, AgentTool}
 
@@ -20,6 +21,15 @@ defmodule LemonAgent.Loop.Streaming do
   }
 
   @max_retry_after_ms 120_000
+  @max_continuations 3
+  @continuation_key {__MODULE__, :continuation}
+
+  defp continuation_state(stream) do
+    case Process.get(@continuation_key) do
+      {^stream, count} -> count
+      _ -> 0
+    end
+  end
 
   @spec stream_assistant_response(
           LemonAgent.Types.AgentContext.t(),
@@ -29,7 +39,13 @@ defmodule LemonAgent.Loop.Streaming do
           EventStream.t()
         ) :: {:ok, AssistantMessage.t(), LemonAgent.Types.AgentContext.t()} | {:error, term()}
   def stream_assistant_response(context, config, signal, stream_fn, stream) do
-    retry_response(context, config, signal, stream_fn, stream, 0)
+    system_prompt = context.system_prompt
+    result = retry_response(context, config, signal, stream_fn, stream, 0)
+
+    case result do
+      {:ok, message, updated} -> {:ok, message, %{updated | system_prompt: system_prompt}}
+      other -> other
+    end
   end
 
   defp retry_response(context, config, signal, stream_fn, stream, retries_done) do
@@ -40,6 +56,21 @@ defmodule LemonAgent.Loop.Streaming do
       end
 
     case result do
+      {:failed, %{error_message: reason} = message, failed_context, added, committed}
+      when reason in ["empty_assistant_response", "malformed_tool_arguments"] ->
+        continue_response(
+          context,
+          config,
+          signal,
+          stream_fn,
+          stream,
+          retries_done,
+          message,
+          failed_context,
+          added,
+          committed
+        )
+
       {:failed, message, failed_context, added, committed} ->
         committed = committed or committed_content?(message)
         details = message.error_details || LemonAi.Error.to_error_details(error_text(message))
@@ -115,6 +146,106 @@ defmodule LemonAgent.Loop.Streaming do
         )
 
         result
+    end
+  end
+
+  defp continue_response(
+         context,
+         config,
+         signal,
+         stream_fn,
+         stream,
+         retries_done,
+         message,
+         failed_context,
+         added,
+         committed
+       ) do
+    count = continuation_state(stream)
+
+    if count < @max_continuations and
+         is_nil(Loop.budget_check(config)) and not aborted?(signal) and
+         not redirect_requested?(signal) do
+      attempt = count + 1
+      Process.put(@continuation_key, {stream, attempt})
+      empty = message.error_message == "empty_assistant_response"
+      reason = if empty, do: "empty reply", else: "malformed tool arguments"
+
+      EventStream.push(
+        stream,
+        {:provider_retry,
+         %{
+           attempt: attempt,
+           max_retries: @max_continuations,
+           delay_ms: 0,
+           category: :continuation,
+           reason: "#{reason}, continuing (#{attempt}/#{@max_continuations})",
+           provider: config.model.provider,
+           model: config.model.id
+         }}
+      )
+
+      # Close committed output once and retain it in provider context. Never
+      # replay an earlier request or leave an unpaired malformed tool call.
+      context =
+        if committed do
+          previous = if added, do: List.last(failed_context.messages), else: message
+
+          retained = %{
+            strip_tool_calls(previous)
+            | stop_reason: :stop,
+              error_message: nil,
+              error_details: nil
+          }
+
+          {_retained, updated} = finalize_message(retained, failed_context, added, stream)
+          updated
+        else
+          context
+        end
+
+      nudge =
+        if empty do
+          "Your previous reply was empty. Continue from where you left off."
+        else
+          "Your previous tool call had invalid arguments: #{message.error_details[:argument_errors]}. " <>
+            "Re-issue the tool call with valid JSON arguments matching its schema."
+        end
+
+      # Request-local system guidance is neither a human message nor persisted
+      # transcript content. Committed text remains in the assistant history.
+      context = %{
+        context
+        | system_prompt:
+            (context.system_prompt || "") <>
+              "\n\n[Internal continuation]\n" <>
+              nudge <>
+              "\nAppend to any previous output; do not repeat it."
+      }
+
+      result = retry_response(context, config, signal, stream_fn, stream, retries_done)
+
+      finish_retry(
+        stream,
+        attempt,
+        match?(
+          {:ok, %{stop_reason: reason}, _}
+          when reason not in [:error, :aborted, :redirected],
+          result
+        ),
+        false
+      )
+
+      result
+    else
+      message =
+        case message.error_message do
+          "malformed_tool_arguments" -> message.error_details.original_message
+          _ -> strip_tool_calls(message)
+        end
+
+      {message, context} = finalize_message(message, failed_context, added, stream)
+      {:ok, message, context}
     end
   end
 
@@ -333,8 +464,11 @@ defmodule LemonAgent.Loop.Streaming do
     result =
       Enum.reduce_while(
         ai_events(response_stream, signal),
-        {nil, context, false, false},
-        fn event, {partial, ctx, added, committed} ->
+        {nil, context, false, false, %{}},
+        fn event, {partial, ctx, added, committed, raw_arguments} ->
+          raw_arguments = accumulate_arguments(event, raw_arguments)
+          event = validate_terminal_arguments(event, partial, ctx.tools, raw_arguments)
+
           cond do
             aborted?(signal) ->
               LemonAi.EventStream.cancel(response_stream, :aborted)
@@ -361,7 +495,7 @@ defmodule LemonAgent.Loop.Streaming do
               case process_stream_event(event, partial, ctx, added, stream, config) do
                 {:continue, new_partial, new_ctx, new_added} ->
                   committed = committed or output_event?(event)
-                  {:cont, {new_partial, new_ctx, new_added, committed}}
+                  {:cont, {new_partial, new_ctx, new_added, committed, raw_arguments}}
 
                 {:done, final_message, final_ctx} ->
                   {:halt, {:done, final_message, final_ctx}}
@@ -389,8 +523,9 @@ defmodule LemonAgent.Loop.Streaming do
         _ = LemonAi.PromptDiagnostics.record_llm_call(config.model, llm_context, options, message)
         {:failed, message, ctx, added, committed}
 
-      {partial, ctx, added, committed} when partial != nil ->
+      {partial, ctx, added, committed, raw_arguments} when partial != nil ->
         # Stream ended without done/error event - finalize with partial
+        partial = normalize_arguments(partial, ctx.tools, raw_arguments)
         partial = normalize_terminal_message(partial)
         Loop.record_budget_usage(config, partial, stream)
 
@@ -497,6 +632,50 @@ defmodule LemonAgent.Loop.Streaming do
   defp process_stream_event(_event, partial, context, added, _stream, _config) do
     {:continue, partial, context, added}
   end
+
+  defp accumulate_arguments({:tool_call_delta, index, delta, _partial}, arguments)
+       when is_binary(delta),
+       do: Map.update(arguments, index, delta, &(&1 <> delta))
+
+  defp accumulate_arguments(_event, arguments), do: arguments
+
+  defp validate_terminal_arguments({:done, reason, message}, partial, tools, raw) do
+    message = reconcile_final_message(message, partial)
+    {:done, reason, normalize_arguments(message, tools, raw)}
+  end
+
+  defp validate_terminal_arguments(event, _partial, _tools, _raw), do: event
+
+  defp normalize_arguments(%AssistantMessage{stop_reason: reason} = message, tools, raw)
+       when reason not in [:error, :aborted, :redirected] do
+    calls = Enum.filter(message.content || [], &match?(%ToolCall{}, &1))
+    errors = ToolCalls.argument_errors(calls, tools)
+
+    errors =
+      Enum.reduce(raw, errors, fn {_index, json}, errors ->
+        case Jason.decode(json) do
+          {:ok, value} when is_map(value) -> errors
+          {:error, error} -> [Exception.message(error) | errors]
+          _ -> ["expected JSON object" | errors]
+        end
+      end)
+
+    if errors == [] do
+      message
+    else
+      %{
+        message
+        | stop_reason: :error,
+          error_message: "malformed_tool_arguments",
+          error_details: %{
+            argument_errors: Enum.join(errors, "; "),
+            original_message: message
+          }
+      }
+    end
+  end
+
+  defp normalize_arguments(message, _tools, _raw), do: message
 
   # Once an update is emitted, later empty partials/terminals cannot uncommit it.
   defp output_event?(event) do

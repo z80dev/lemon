@@ -31,7 +31,7 @@ The backend stores accounts, sessions, device pairing, Bot groups, transcripts, 
 | TypeScript SDK | `sdk/ts/` | Typed HTTP, nonces, cursor reconnect and discriminated events; no operator credential |
 | Web | `web/` | React/Vite responsive Bot-centric workspace and command palette; served by backend in production |
 | Shared Apple kit | `apple/LemonBotKit/` | Swift models, authenticated API/socket, secure sessions/cache, deep-link routing |
-| macOS | `apple/LemonBotMac/` | SwiftUI workspace, optional selected-bot compact companion and configurable global summon/PTT mini-composer |
+| macOS | `apple/LemonBotMac/` | SwiftUI workspace, optional selected-bot compact companion, optional Codex-compatible [desktop pet](apple/LemonBotMac/DesktopPet.md) and configurable global summon/PTT mini-composer |
 | iOS | `apple/LemonBotiOS/` | SwiftUI own-Bot workspace, QR scanner/paste-link pairing, Keychain connection restore, camera/files, explicit voice and share extension |
 
 Every Bot has an assigned machine, a Lemon profile and an owner conversation. Tasks use independent sessions; groups coordinate 2–6 Bots owned by the same person. Identity, Job and Memory can be reviewed separately, including preference changes and undo. Workspace/Public templates create reviewed copies owned by the recipient.

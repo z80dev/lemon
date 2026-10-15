@@ -122,15 +122,46 @@ export const redirectCommand: SlashCommand = {
 
 export const runsCommand: SlashCommand = {
 	name: "runs",
-	summary: "list active and recent runs",
-	usage: "[count]",
+	summary: "list active and recent runs, or show a run timeline",
+	usage: "[count | runId]",
 	group: "runs",
 	availableWhen(ctx) {
 		if (ctx.methods.supports(METHOD.runsActiveList)) return true;
 		if (ctx.methods.supports(METHOD.runsRecentList)) return true;
+		if (ctx.methods.supports(METHOD.runsTimelineGet)) return true;
 		return "daemon exposes neither runs.active.list nor runs.recent.list";
 	},
 	async run(ctx, argv) {
+		if (argv.length > 1) {
+			ctx.ui.notice("usage: /runs [count | runId]", "error");
+			return;
+		}
+		if (argv[0] && !/^\d+$/.test(argv[0])) {
+			const timeline = await ctx.methods.runsTimelineGet({ runId: argv[0] });
+			const entries = asArray(timeline.entries);
+			const origin = pickNumber(entries[0], "atMs") ?? 0;
+			const lines = [`run ${argv[0]}`];
+			for (const entry of entries) {
+				const ok = pickBoolean(entry, "ok");
+				const status = pickString(entry, "status") ?? "unknown";
+				const marker = ok === true ? "[ok]" : ok === false ? "[fail]" : `[${status}]`;
+				const relative = ((pickNumber(entry, "atMs") ?? origin) - origin) / 1_000;
+				const duration = humanDuration(pickNumber(entry, "durationMs"));
+				lines.push(
+					`  +${relative.toFixed(1)}s ${marker} ${pickString(entry, "label") ?? "event"} · ${status}${duration ? ` · ${duration}` : ""}`,
+				);
+			}
+			const total = pickNumber(timeline, "usage.tokens.total");
+			if (total !== undefined) {
+				lines.push(
+					`usage: ${humanNumber(total)} tokens · ${humanCost(pickNumber(timeline, "usage.costUsd")) ?? "cost unknown"} · ${pickString(timeline, "usage.model") ?? "model unknown"}`,
+				);
+			}
+			if (timeline.truncated === true)
+				lines.push("timeline truncated: latest 500 entries from bounded history");
+			ctx.ui.noticeBlock(lines);
+			return;
+		}
 		const requested = Number.parseInt(argv[0] ?? "", 10);
 		const limit = Number.isFinite(requested) && requested > 0 ? Math.min(requested, 50) : 10;
 		const lines: string[] = [];

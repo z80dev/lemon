@@ -12,12 +12,35 @@ defmodule CodingAgent.SessionSupervisorComprehensiveTest do
   - Concurrent session creation
   - Supervisor restart strategies
   """
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
 
   alias CodingAgent.Session
   alias CodingAgent.SessionManager
-  alias CodingAgent.SessionRegistry
-  alias CodingAgent.SessionSupervisor
+  alias __MODULE__.IsolatedRegistry, as: SessionRegistry
+  alias __MODULE__.IsolatedSupervisor, as: SessionSupervisor
+
+  # Keep fixture routing process-local, and explicitly copy it into child tasks.
+  # Neither these adapters nor the test touch the application's session tree.
+  defmodule IsolatedRegistry do
+    def lookup(id) do
+      scope = CodingAgent.SessionSupervisorComprehensiveTest.IsolatedSupervisor.scope()
+      CodingAgent.SessionSupervisor.lookup(id, scope)
+    end
+  end
+
+  defmodule IsolatedSupervisor do
+    @scope_key {CodingAgent.SessionSupervisorComprehensiveTest, :scope}
+
+    def scope, do: Process.get(@scope_key)
+    def put_scope(scope), do: Process.put(@scope_key, scope)
+    def pid, do: Process.whereis(Keyword.fetch!(scope(), :supervisor))
+    def start_session(opts), do: CodingAgent.SessionSupervisor.start_session(opts, scope())
+    def stop_session(session), do: CodingAgent.SessionSupervisor.stop_session(session, scope())
+    def lookup(id), do: CodingAgent.SessionSupervisor.lookup(id, scope())
+    def list_sessions, do: CodingAgent.SessionSupervisor.list_sessions(scope())
+    def health_all, do: CodingAgent.SessionSupervisor.health_all(scope())
+    def health_summary, do: CodingAgent.SessionSupervisor.health_summary(scope())
+  end
 
   import CodingAgent.AsyncHelpers
 
@@ -113,6 +136,10 @@ defmodule CodingAgent.SessionSupervisorComprehensiveTest do
     Keyword.merge(
       [
         cwd: session_cwd(),
+        workspace_dir: Path.join(session_cwd(), "workspace"),
+        tools: [],
+        extension_inventory: {[], []},
+        mcp_tools: [],
         model: mock_model(),
         stream_fn: mock_stream_fn()
       ],
@@ -120,23 +147,20 @@ defmodule CodingAgent.SessionSupervisorComprehensiveTest do
     )
   end
 
-  # Session init scans the working directory; a shared, empty directory keeps
-  # every session start cheap (System.tmp_dir!() can be arbitrarily large).
-  defp session_cwd, do: :persistent_term.get({__MODULE__, :cwd})
+  defp session_cwd, do: Keyword.fetch!(SessionSupervisor.scope(), :cwd)
+
+  defp async(fun) do
+    scope = SessionSupervisor.scope()
+
+    Task.async(fn ->
+      SessionSupervisor.put_scope(scope)
+      fun.()
+    end)
+  end
 
   defp start_test_session(opts \\ []) do
     opts = default_session_opts(opts)
     SessionSupervisor.start_session(opts)
-  end
-
-  defp cleanup_all_sessions do
-    for pid <- SessionSupervisor.list_sessions() do
-      SessionSupervisor.stop_session(pid)
-    end
-
-    assert_eventually(fn -> SessionSupervisor.list_sessions() == [] end,
-      message: "sessions were not cleaned up"
-    )
   end
 
   # Kills `pid` and waits until it is actually down.
@@ -184,43 +208,17 @@ defmodule CodingAgent.SessionSupervisorComprehensiveTest do
     end
   end
 
-  setup_all do
-    cwd =
-      Path.join(
-        System.tmp_dir!(),
-        "session_supervisor_comprehensive_#{System.unique_integer([:positive])}"
-      )
-
-    File.mkdir_p!(cwd)
-    :persistent_term.put({__MODULE__, :cwd}, cwd)
-
-    on_exit(fn ->
-      :persistent_term.erase({__MODULE__, :cwd})
-      File.rm_rf(cwd)
-    end)
-
-    :ok
-  end
-
   setup do
-    # Ensure registry is started
-    unless Process.whereis(SessionRegistry) do
-      start_supervised!({Registry, keys: :unique, name: SessionRegistry})
-    end
-
-    # Ensure supervisor is started
-    unless Process.whereis(SessionSupervisor) do
-      start_supervised!(SessionSupervisor)
-    end
-
-    # Cleanup any existing sessions before each test
-    cleanup_all_sessions()
-
-    on_exit(fn ->
-      cleanup_all_sessions()
-    end)
-
-    :ok
+    unique = System.unique_integer([:positive])
+    tmp_dir = Path.join(System.tmp_dir!(), "#{__MODULE__}_#{unique}")
+    File.mkdir_p!(tmp_dir)
+    on_exit(fn -> File.rm_rf!(tmp_dir) end)
+    registry = :"#{__MODULE__}.Registry.#{unique}"
+    supervisor = :"#{__MODULE__}.Supervisor.#{unique}"
+    start_supervised!({Registry, keys: :unique, name: registry})
+    start_supervised!({CodingAgent.SessionSupervisor, name: supervisor})
+    SessionSupervisor.put_scope(supervisor: supervisor, registry: registry, cwd: tmp_dir)
+    {:ok, tmp_dir: tmp_dir}
   end
 
   # ============================================================================
@@ -228,6 +226,43 @@ defmodule CodingAgent.SessionSupervisorComprehensiveTest do
   # ============================================================================
 
   describe "multi-session management" do
+    test "scoped admission, lookup, health and termination stay inside their tree" do
+      unique = System.unique_integer([:positive])
+      registry = :"#{__MODULE__}.OtherRegistry.#{unique}"
+      supervisor_name = :"#{__MODULE__}.OtherSupervisor.#{unique}"
+      start_supervised!({Registry, keys: :unique, name: registry})
+
+      supervisor =
+        start_supervised!(
+          Supervisor.child_spec(
+            {CodingAgent.SessionSupervisor, name: supervisor_name},
+            id: supervisor_name
+          )
+        )
+
+      scope = [supervisor: supervisor, registry: registry]
+      {:ok, primary} = start_test_session()
+      primary_id = Session.get_stats(primary).session_id
+
+      {:ok, other} =
+        CodingAgent.SessionSupervisor.start_session(default_session_opts([]), scope)
+
+      other_id = Session.get_stats(other).session_id
+      assert CodingAgent.SessionSupervisor.list_sessions(scope) == [other]
+      assert SessionSupervisor.list_sessions() == [primary]
+      assert CodingAgent.SessionSupervisor.lookup(primary_id, scope) == :error
+      assert SessionSupervisor.lookup(other_id) == :error
+      assert CodingAgent.SessionRegistry.lookup(other_id, registry) == {:ok, other}
+      assert CodingAgent.SessionSupervisor.health_summary(scope).total == 1
+      assert SessionSupervisor.health_summary().total == 1
+
+      assert CodingAgent.SessionSupervisor.stop_session(primary_id, scope) == {:error, :not_found}
+      assert Process.alive?(primary)
+      assert :ok = CodingAgent.SessionSupervisor.stop_session(other_id, scope)
+      assert CodingAgent.SessionSupervisor.health_all(scope) == []
+      assert SessionSupervisor.list_sessions() == [primary]
+    end
+
     test "can start multiple sessions simultaneously" do
       {:ok, pid1} = start_test_session()
       {:ok, pid2} = start_test_session()
@@ -291,7 +326,7 @@ defmodule CodingAgent.SessionSupervisorComprehensiveTest do
 
     test "sessions can have different working directories" do
       dir1 = session_cwd()
-      dir2 = Path.join(System.tmp_dir!(), "test_subdir_#{:erlang.unique_integer([:positive])}")
+      dir2 = Path.join(session_cwd(), "subdir")
       File.mkdir_p!(dir2)
 
       {:ok, pid1} = start_test_session(cwd: dir1)
@@ -302,8 +337,6 @@ defmodule CodingAgent.SessionSupervisorComprehensiveTest do
 
       assert state1.cwd == dir1
       assert state2.cwd == dir2
-
-      File.rm_rf!(dir2)
     end
 
     test "can manage 10+ sessions concurrently" do
@@ -475,8 +508,8 @@ defmodule CodingAgent.SessionSupervisorComprehensiveTest do
       kill_and_await(pid)
       await_session_removed(pid)
 
-      assert Process.whereis(SessionSupervisor)
-      assert Process.alive?(Process.whereis(SessionSupervisor))
+      assert SessionSupervisor.pid()
+      assert Process.alive?(SessionSupervisor.pid())
     end
 
     test "other sessions are unaffected by one session crashing" do
@@ -564,7 +597,7 @@ defmodule CodingAgent.SessionSupervisorComprehensiveTest do
       Enum.each(pids, &await_session_removed/1)
 
       # Supervisor should still be alive
-      assert Process.alive?(Process.whereis(SessionSupervisor))
+      assert Process.alive?(SessionSupervisor.pid())
     end
 
     test "rapid session creation and termination is handled gracefully" do
@@ -578,7 +611,7 @@ defmodule CodingAgent.SessionSupervisorComprehensiveTest do
       Enum.each(pids, &await_session_removed/1)
 
       # Supervisor should still be alive and functional
-      assert Process.alive?(Process.whereis(SessionSupervisor))
+      assert Process.alive?(SessionSupervisor.pid())
 
       # Should be able to start new sessions
       {:ok, new_pid} = start_test_session()
@@ -597,7 +630,7 @@ defmodule CodingAgent.SessionSupervisorComprehensiveTest do
       Enum.each(pids, &await_session_removed/1)
 
       # Supervisor should still be functional
-      assert Process.alive?(Process.whereis(SessionSupervisor))
+      assert Process.alive?(SessionSupervisor.pid())
       {:ok, new_pid} = start_test_session()
       assert Process.alive?(new_pid)
     end
@@ -744,7 +777,7 @@ defmodule CodingAgent.SessionSupervisorComprehensiveTest do
 
       tasks =
         for i <- 1..10 do
-          Task.async(fn ->
+          async(fn ->
             result =
               start_test_session(
                 session_id: "concurrent-#{i}-#{:erlang.unique_integer([:positive])}"
@@ -767,7 +800,7 @@ defmodule CodingAgent.SessionSupervisorComprehensiveTest do
     test "concurrent creation produces unique session IDs" do
       tasks =
         for _ <- 1..10 do
-          Task.async(fn ->
+          async(fn ->
             {:ok, pid} = start_test_session()
             Session.get_stats(pid).session_id
           end)
@@ -790,14 +823,14 @@ defmodule CodingAgent.SessionSupervisorComprehensiveTest do
       # Concurrently stop half and create new ones
       stop_tasks =
         for pid <- Enum.take(pids, 5) do
-          Task.async(fn ->
+          async(fn ->
             SessionSupervisor.stop_session(pid)
           end)
         end
 
       create_tasks =
         for _ <- 1..5 do
-          Task.async(fn ->
+          async(fn ->
             start_test_session()
           end)
         end
@@ -805,14 +838,14 @@ defmodule CodingAgent.SessionSupervisorComprehensiveTest do
       Task.await_many(stop_tasks ++ create_tasks, 30_000)
 
       # Supervisor should still be functional
-      assert Process.alive?(Process.whereis(SessionSupervisor))
+      assert Process.alive?(SessionSupervisor.pid())
     end
 
     test "high contention does not cause race conditions" do
       # Start and stop many sessions rapidly with high concurrency
       tasks =
         for i <- 1..50 do
-          Task.async(fn ->
+          async(fn ->
             {:ok, pid} = start_test_session()
             Process.sleep(:rand.uniform(10))
 
@@ -892,8 +925,6 @@ defmodule CodingAgent.SessionSupervisorComprehensiveTest do
 
   describe "health monitoring across sessions" do
     test "health_all returns empty list when no sessions" do
-      cleanup_all_sessions()
-
       assert SessionSupervisor.health_all() == []
     end
 
@@ -941,8 +972,6 @@ defmodule CodingAgent.SessionSupervisorComprehensiveTest do
     end
 
     test "health_summary returns :no_sessions when empty" do
-      cleanup_all_sessions()
-
       summary = SessionSupervisor.health_summary()
 
       assert summary.total == 0
@@ -1030,7 +1059,9 @@ defmodule CodingAgent.SessionSupervisorComprehensiveTest do
     end
 
     test "sessions with very long session IDs are handled" do
-      long_id = String.duplicate("a", 256)
+      long_id =
+        String.duplicate("a", 256) <> Integer.to_string(System.unique_integer([:positive]))
+
       {:ok, pid} = start_test_session(session_id: long_id)
 
       stats = Session.get_stats(pid)
@@ -1087,7 +1118,7 @@ defmodule CodingAgent.SessionSupervisorComprehensiveTest do
 
       tasks =
         for _ <- 1..50 do
-          Task.async(fn ->
+          async(fn ->
             SessionSupervisor.health_all()
             SessionSupervisor.health_summary()
           end)

@@ -109,7 +109,7 @@ defmodule LemonAgent.LoopAdditionalEdgeCasesTest do
                assistant.content
     end
 
-    test "turns terminal thinking-only stop response into assistant error" do
+    test "turns terminal thinking-only stop response into assistant error after continuations exhaust" do
       context = simple_context()
 
       response = %{
@@ -125,7 +125,9 @@ defmodule LemonAgent.LoopAdditionalEdgeCasesTest do
       assert {:error, {:assistant_error, "empty_assistant_response"}, %{new_messages: messages}} =
                EventStream.result(stream)
 
-      assistant = Enum.find(messages, &match?(%AssistantMessage{role: :assistant}, &1))
+      assistants = Enum.filter(messages, &match?(%AssistantMessage{role: :assistant}, &1))
+      assert length(assistants) == 4
+      assistant = List.last(assistants)
       assert assistant.stop_reason == :error
       assert assistant.error_message == "empty_assistant_response"
     end

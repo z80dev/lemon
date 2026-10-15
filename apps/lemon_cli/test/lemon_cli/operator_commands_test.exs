@@ -77,6 +77,9 @@ defmodule LemonCli.OperatorCommandsTest do
           ~w(runs --limit 201),
           ~w(runs --limit nope),
           ~w(runs wat),
+          ~w(runs show),
+          ~w(runs show one two),
+          ~w(runs show one --limit 5),
           ~w(runs active --since 1h),
           ~w(cron list),
           ~w(cron runs --status error),
@@ -90,6 +93,54 @@ defmodule LemonCli.OperatorCommandsTest do
           ~w(logs extra)
         ] do
       assert capture_io(:stderr, fn -> assert CLI.run(args) == 2 end) != ""
+    end
+  end
+
+  test "runs show renders relative timeline times, durations, outcomes and truncation" do
+    timeline = %{
+      "runId" => "run-detail",
+      "entries" => [
+        %{"atMs" => 1000, "label" => "run started", "ok" => nil, "status" => "active"},
+        %{
+          "atMs" => 2500,
+          "label" => "read",
+          "durationMs" => 250,
+          "ok" => true,
+          "status" => "completed"
+        },
+        %{
+          "atMs" => 3000,
+          "label" => "bash",
+          "durationMs" => 500,
+          "ok" => false,
+          "status" => "error"
+        },
+        %{"atMs" => 4000, "label" => "task", "ok" => nil, "status" => "pending"}
+      ],
+      "truncated" => true,
+      "usage" => %{"tokens" => %{"total" => 5}, "costUsd" => 0.0, "model" => "fixture"}
+    }
+
+    Process.put(:operator_response, fn "runs.timeline.get", %{"runId" => "run-detail"} ->
+      {:ok, timeline}
+    end)
+
+    output = capture_io(fn -> assert CLI.run(~w(runs show run-detail)) == 0 end)
+    assert output =~ "+1.5s [ok] read · completed · 0.3s"
+    assert output =~ "+2.0s [fail] bash"
+    assert output =~ "[pending] task"
+    assert output =~ "Timeline truncated"
+    assert output =~ "5 tokens"
+    assert_received {:operator_request, "runs.timeline.get", %{"runId" => "run-detail"}}
+
+    assert capture_io(fn -> assert CLI.run(~w(runs show run-detail --json)) == 0 end)
+           |> Jason.decode!() == timeline
+  end
+
+  test "runs show surfaces not-found and unavailable runtime as failures" do
+    for reason <- [{:not_found, "Run not found", nil}, {:control_plane_unavailable, :offline}] do
+      Process.put(:operator_response, fn _, _ -> {:error, reason} end)
+      assert capture_io(:stderr, fn -> assert CLI.run(~w(runs show absent)) == 1 end) != ""
     end
   end
 

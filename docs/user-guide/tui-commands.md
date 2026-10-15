@@ -114,7 +114,7 @@ Regenerate from the repository root with `bun clients/tui/scripts/generate-comma
 | /steer | — | &lt;prompt&gt; | send guidance into the active run |
 | /redirect | — | &lt;prompt&gt; | replace the active run's pending direction |
 | /retry | — | [--force] | retry the last failed or aborted turn (history-only rewind, then resend) |
-| /runs | — | [count] | list active and recent runs |
+| /runs | — | [count &#124; runId] | list active and recent runs, or show a run timeline |
 | /goal | — | &lt;set &lt;text&gt; &#124; status &#124; pause &#124; resume &#124; clear&gt; | standing objective for this session |
 
 ## session

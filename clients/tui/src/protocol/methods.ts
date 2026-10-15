@@ -158,6 +158,7 @@ export const METHOD = {
 	usageCost: "usage.cost",
 	runsActiveList: "runs.active.list",
 	runsRecentList: "runs.recent.list",
+	runsTimelineGet: "runs.timeline.get",
 	tasksActiveList: "tasks.active.list",
 	tasksRecentList: "tasks.recent.list",
 	goalSet: "goal.set",
@@ -653,6 +654,13 @@ export class ControlPlaneMethods {
 		options?: RequestOptions,
 	): Promise<RunsRecentListResult> {
 		return this.#call<RunsRecentListResult>(METHOD.runsRecentList, params, options);
+	}
+
+	runsTimelineGet(
+		params: { runId: string },
+		options?: RequestOptions,
+	): Promise<Record<string, unknown>> {
+		return this.#call<Record<string, unknown>>(METHOD.runsTimelineGet, params, options);
 	}
 
 	tasksActiveList(params?: Record<string, unknown>, options?: RequestOptions): Promise<unknown> {

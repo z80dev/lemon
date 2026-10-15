@@ -129,6 +129,7 @@ defmodule LemonControlPlane.Methods.Registry do
     # Runs
     LemonControlPlane.Methods.RunsActiveList,
     LemonControlPlane.Methods.RunsRecentList,
+    LemonControlPlane.Methods.RunsTimelineGet,
     LemonControlPlane.Methods.RunsFollowupLineageGet,
     # Tasks
     LemonControlPlane.Methods.TasksActiveList,

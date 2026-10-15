@@ -178,6 +178,22 @@ Recall ingest fixtures also give their supervised ingest worker an explicit
 project-config loader and use a server barrier before querying persisted facts,
 rather than polling for global ingest to pick up changed feature flags.
 
+Session fixtures pass a per-test `workspace_dir` as well as a temporary working
+directory: the isolated test HOME is still shared by concurrent modules.
+`CodingAgent.SessionSupervisor` accepts a second scope-options argument with
+`:supervisor` and `:registry` targets for isolated session trees. Start those
+targets under the test supervisor, and query/stop only that tree rather than
+enumerating or clearing the application's global sessions.
+
+Session/branch/lifecycle fixtures inject `extension_inventory: {[], []}` and
+`mcp_tools: []` when discovery is not under test, avoiding shared extension
+loader/cache state and configured MCP services. Their ordinary sessions use
+explicit tools; the default-tool assertions still request the real built-in
+toolset. Temporary working roots live outside the checkout so session discovery
+does not inherit repository-local resources.
+The two approval-event broadcast cases remain in the small synchronous
+`SessionApprovalEventsTest` module because they publish to a shared Bus topic.
+
 Shared Elixir helpers live in `LemonCore.Testing.HermeticEnv`:
 
 - `credential_env_vars/0` returns the canonical scrub list.
@@ -210,6 +226,11 @@ the underlying table also retains terminal resolution receipts.
 Coordinator cancellation fixtures wait for tracked admission guardians and sessions
 to exit before asserting an empty active set: a bounded batch result is not a
 synchronous shutdown receipt.
+
+LSP owner-lifecycle fixtures monitor the scoped client through exit, then assert
+that its exact managed server ID is gone. Unrelated idle-server cleanup can change
+the shared manager's active count concurrently; global count deltas are not an
+ownership assertion.
 
 Submission-shape fixtures use per-test run supervisors and capturing run processes,
 not real gateway work that can finish during another test's global count assertions.

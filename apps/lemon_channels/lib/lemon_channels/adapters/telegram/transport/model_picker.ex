@@ -4,7 +4,8 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ModelPicker do
 
   This module owns the `/model` reply-keyboard conversation, provider/model
   pagination, selection state transitions, and model catalog lookup used by the
-  Telegram adapter.
+  Telegram adapter. Each reply-keyboard conversation retains its opening catalog:
+  navigation neither repeats credential discovery nor changes model indices.
   """
 
   alias LemonAgent.ModelRuntime.ModelCatalog
@@ -33,7 +34,8 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ModelPicker do
     if not is_integer(chat_id) do
       state
     else
-      providers = available_model_providers()
+      catalog = ModelCatalog.available_catalog()
+      providers = ModelCatalog.providers(catalog)
 
       session_key =
         build_session_key(state, inbound, %ChatScope{
@@ -64,6 +66,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ModelPicker do
           picker_key ->
             picker = %{
               step: :provider,
+              catalog: catalog,
               provider_page: 0,
               provider: nil,
               model_page: 0,
@@ -179,7 +182,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ModelPicker do
 
     case picker[:step] do
       :provider ->
-        providers = available_model_providers()
+        providers = available_model_providers(picker)
 
         text =
           invalid_picker_selection_text(
@@ -199,7 +202,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ModelPicker do
 
       :model ->
         provider = picker[:provider]
-        models = models_for_provider(provider)
+        models = models_for_provider(picker, provider)
 
         text =
           invalid_picker_selection_text(
@@ -219,7 +222,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ModelPicker do
 
       :scope ->
         provider = picker[:provider]
-        model = model_at_index(provider, picker[:model_index] || -1)
+        model = model_at_index(picker, provider, picker[:model_index] || -1)
 
         text =
           invalid_picker_selection_text(
@@ -246,7 +249,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ModelPicker do
 
   defp handle_model_picker_input(state, inbound, key, picker, input) do
     {chat_id, thread_id, user_msg_id} = extract_message_ids(inbound)
-    providers = available_model_providers()
+    providers = available_model_providers(picker)
 
     case picker[:step] do
       :provider ->
@@ -337,7 +340,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ModelPicker do
         {state, true}
 
       input in providers ->
-        models = models_for_provider(input)
+        models = models_for_provider(picker, input)
 
         if models == [] do
           _ =
@@ -397,7 +400,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ModelPicker do
   defp handle_model_picker_model_step(state, key, picker, chat_id, thread_id, user_msg_id, input) do
     provider = picker[:provider]
     page = picker[:model_page] || 0
-    models = models_for_provider(provider)
+    models = models_for_provider(picker, provider)
 
     cond do
       model_picker_close?(input) ->
@@ -417,7 +420,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ModelPicker do
 
       model_picker_back?(input) ->
         provider_page = picker[:provider_page] || 0
-        providers = available_model_providers()
+        providers = available_model_providers(picker)
 
         picker =
           picker
@@ -496,7 +499,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ModelPicker do
             {state, true}
 
           index ->
-            case model_at_index(provider, index) do
+            case model_at_index(picker, provider, index) do
               nil ->
                 text =
                   invalid_picker_selection_text(
@@ -562,7 +565,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ModelPicker do
         {state, true}
 
       model_picker_back?(input) ->
-        models = models_for_provider(provider)
+        models = models_for_provider(picker, provider)
 
         picker =
           picker
@@ -606,7 +609,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ModelPicker do
         )
 
       true ->
-        model = model_at_index(provider, picker[:model_index])
+        model = model_at_index(picker, provider, picker[:model_index])
 
         text =
           invalid_picker_selection_text(
@@ -632,7 +635,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ModelPicker do
     provider = picker[:provider]
     index = picker[:model_index]
 
-    case model_at_index(provider, index) do
+    case model_at_index(picker, provider, index) do
       nil ->
         {drop_model_picker(state, key), false}
 
@@ -918,23 +921,21 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ModelPicker do
     {slice, has_prev, has_next}
   end
 
-  defp available_model_providers do
-    ModelCatalog.providers(available_model_catalog())
+  defp available_model_providers(picker) do
+    ModelCatalog.providers(picker.catalog)
   end
 
-  defp models_for_provider(provider) when is_binary(provider) do
-    ModelCatalog.models_for_provider(available_model_catalog(), provider)
+  defp models_for_provider(picker, provider) when is_binary(provider) do
+    ModelCatalog.models_for_provider(picker.catalog, provider)
   end
 
-  defp model_at_index(provider, index) do
-    ModelCatalog.model_at_index(available_model_catalog(), provider, index)
+  defp model_at_index(picker, provider, index) do
+    ModelCatalog.model_at_index(picker.catalog, provider, index)
   end
 
   defp model_spec(model), do: ModelCatalog.model_spec(model)
 
   defp model_label(model), do: ModelCatalog.model_label(model)
-
-  defp available_model_catalog, do: ModelCatalog.available_catalog()
 
   defp session_model_override(session_key),
     do: ModelPolicyAdapter.session_model_override(session_key)
