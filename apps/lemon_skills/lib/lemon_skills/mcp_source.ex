@@ -1693,17 +1693,24 @@ defmodule LemonSkills.McpSource do
     end
   end
 
+  # A client that exits before its handshake (e.g. the stdio server process
+  # failed to start) cannot become ready; report that now instead of blocking
+  # this server for the rest of the ready deadline.
   defp await_ready_until(client_mod, client, deadline) do
-    cond do
-      client_call(client_mod, :state, [client]) == :ready ->
+    case client_call(client_mod, :state, [client]) do
+      :ready ->
         :ok
 
-      System.monotonic_time(:millisecond) >= deadline ->
-        {:error, :ready_timeout}
+      {:error, :not_connected} = error ->
+        error
 
-      true ->
-        Process.sleep(50)
-        await_ready_until(client_mod, client, deadline)
+      _starting ->
+        if System.monotonic_time(:millisecond) >= deadline do
+          {:error, :ready_timeout}
+        else
+          Process.sleep(50)
+          await_ready_until(client_mod, client, deadline)
+        end
     end
   end
 
