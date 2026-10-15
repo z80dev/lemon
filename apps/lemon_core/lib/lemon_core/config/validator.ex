@@ -668,7 +668,34 @@ defmodule LemonCore.Config.Validator do
   def validate_tools(tools, errors) do
     errors
     |> validate_boolean(Map.get(tools, :auto_resize_images), "tools.auto_resize_images")
+    |> validate_computer_use(Map.get(tools, :computer_use))
   end
+
+  defp validate_computer_use(errors, nil), do: errors
+
+  defp validate_computer_use(errors, %{} = computer_use) do
+    errors
+    |> validate_boolean(computer_use[:enabled], "tools.computer_use.enabled")
+    |> validate_boolean(computer_use[:chrome], "tools.computer_use.chrome")
+    |> validate_non_empty_string(computer_use[:lcu_root], "tools.computer_use.lcu_root")
+    |> validate_non_empty_string(computer_use[:node], "tools.computer_use.node")
+    |> validate_origin_list(computer_use[:declined_origins])
+  end
+
+  defp validate_computer_use(errors, _), do: ["tools.computer_use: must be a table" | errors]
+
+  defp validate_origin_list(errors, nil), do: errors
+
+  defp validate_origin_list(errors, origins) when is_list(origins) do
+    if Enum.all?(origins, &(is_binary(&1) and String.match?(&1, ~r{\Ahttps?://[^/\s]+/?\z}))),
+      do: errors,
+      else: [
+        "tools.computer_use.declined_origins: must be a list of http(s) origins" | errors
+      ]
+  end
+
+  defp validate_origin_list(errors, _),
+    do: ["tools.computer_use.declined_origins: must be a list of http(s) origins" | errors]
 
   @doc """
   Validates feature flag configuration.
