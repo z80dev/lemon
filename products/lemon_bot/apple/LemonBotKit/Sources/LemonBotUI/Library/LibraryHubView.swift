@@ -7,8 +7,8 @@ public struct LibraryHubView: View {
     public init(store: LemonBotStore) { self.store = store }
     public var body: some View {
         List {
-            NavigationLink("Skills · written methods and explicit host provisioning") { SkillLibraryView(store: store) }
-            NavigationLink("Routines · schedules and verified events") { RoutineLibraryView(store: store) }
+            NavigationLink("Skills · reusable instructions") { SkillLibraryView(store: store) }
+            NavigationLink("Routines · schedules and events") { RoutineLibraryView(store: store) }
             Section("Bot profile memory") {
                 ForEach(store.bots) { bot in NavigationLink(bot.name) { MemoryHubView(store: store, botID: bot.id) } }
             }
@@ -32,9 +32,9 @@ struct SkillLibraryView: View {
             ForEach(skills) { skill in NavigationLink { SkillEditorView(store: store, initial: skill) } label: {
                 VStack(alignment: .leading) {
                     Text(skill.name).font(.headline)
-                    Text("\(skill.enabled ? "Enabled" : "Disabled") · \(skill.machineIds.count) provisioned hosts")
+                    Text("\(skill.enabled ? "Enabled" : "Disabled") · Installed on \(skill.machineIds.count) machines")
                     Text(skill.description)
-                    Text("Publisher: \(skill.provenance.publisher) · \(skill.provenance.trusted ? "Trusted source" : "Untrusted instructions")").font(.caption)
+                    Text("Publisher: \(skill.provenance.publisher) · \(skill.provenance.trusted ? "Trusted source" : "Untrusted instructions")").font(LBFont.meta)
                 }
             } }
             if cursor != nil { Button("More skills") { Task { await load(more: true) } } }
@@ -66,18 +66,18 @@ struct SkillEditorView: View {
     var body: some View {
         Form {
             HubError(action: action, store: store)
-            if acknowledged { Text(machines.isEmpty ? "Saved in the library; no hosts were selected for installation." : "Saved after selected destination hosts acknowledged provisioning. Installation does not execute these instructions.").foregroundStyle(.green) }
+            if acknowledged { Text(machines.isEmpty ? "Saved in the library. No machines were selected for installation." : "Saved and installed on the selected machines. Installing doesn't run the skill.").foregroundStyle(LB.success) }
             TextField("Name", text: $name)
             TextField("Description", text: $description)
             Text("Specify inputs, steps, decisions, validation, output and required human approvals. Third-party skill text is untrusted, not authorization.")
-            TextEditor(text: $markdown).frame(minHeight: 250).font(.system(.body, design: .monospaced))
-            Button("Import selected text into editor") { importFile = true }
+            TextEditor(text: $markdown).frame(minHeight: 250).font(LBFont.code)
+            Button("Load text from file…") { importFile = true }
             if saved == nil { HubBotPicker(store: store, selection: $botID) }
             else { Toggle("Enabled", isOn: $enabled) }
-            Section("Explicit installation hosts") {
+            Section("Install on machines") {
                 ForEach(store.machines) { machine in Toggle("\(machine.name) · \(machine.status)", isOn: Binding(get: { machines.contains(machine.id) }, set: { if $0 { machines.insert(machine.id) } else { machines.remove(machine.id) }; acknowledged = false })) }
             }
-            Button("Save and provision to selected hosts") { Task { await action.perform {
+            Button(machines.isEmpty ? "Save to library" : "Save and install on selected machines") { Task { await action.perform {
                 var body: JSONObject = ["name": .string(name), "description": .string(description), "markdown": .string(markdown), "machineIds": .array(machines.sorted().map(JSONValue.string))]
                 if let saved { body["revision"] = .number(Double(saved.revision)); body["enabled"] = .bool(enabled); self.saved = try await store.mutate("PATCH", "/skills/\(hubID(saved.id))", body: body) }
                 else { if !botID.isEmpty { body["botId"] = .string(botID) }; self.saved = try await store.mutate("POST", "/skills", body: body) }
@@ -96,19 +96,23 @@ struct SkillEditorView: View {
                     let ids = Array(Set(bot.skillIds + [saved.id])).sorted()
                     let _: Bot = try await store.mutate("PATCH", "/bots/\(hubID(bot.id))", body: ["revision": .number(Double(bot.revision)), "skillIds": .array(ids.map(JSONValue.string))])
                 } } }.disabled(!saved.enabled || targetBotID.isEmpty || action.busy || action.uncertain || store.connectionState != "online")
-                Button("Delete skill and managed host files", role: .destructive) { deletePresented = true }
+                Button("Delete skill and its installed files", role: .destructive) { deletePresented = true }
             }
         }.navigationTitle(saved?.name ?? "New skill").toolbar { Button("Close") { dismiss() } }
             .task { if let initial { saved = initial; name = initial.name; description = initial.description; markdown = initial.markdown; enabled = initial.enabled; botID = initial.botId ?? ""; machines = Set(initial.machineIds) } }
             .fileImporter(isPresented: $importFile, allowedContentTypes: [.plainText, .text]) { result in
                 do {
                     let url = try result.get(); let scoped = url.startAccessingSecurityScopedResource(); defer { if scoped { url.stopAccessingSecurityScopedResource() } }
-                    let data = try Data(contentsOf: url); guard data.count <= 262_144, let text = String(data: data, encoding: .utf8) else { throw CocoaError(.fileReadInapplicableStringEncoding) }; markdown = text
-                } catch { action.error = String(describing: error) }
+                    let data = try Data(contentsOf: url); guard data.count <= 262_144, let text = String(data: data, encoding: .utf8) else { throw SkillImportError.invalidText }; markdown = text
+                } catch { action.error = humanErrorText(error) }
             }
-            .confirmationDialog("Delete this skill and its managed host files? Other user files and history remain.", isPresented: $deletePresented) {
+            .confirmationDialog("Delete this skill and its installed files? Other files and history are kept.", isPresented: $deletePresented) {
                 Button("Delete skill", role: .destructive) { guard let saved else { return }; Task { await action.perform { let _: HubDeleted = try await store.mutate("DELETE", "/skills/\(hubID(saved.id))", body: ["revision": .number(Double(saved.revision))]); dismiss() } } }.disabled(action.busy || action.uncertain || store.connectionState != "online")
             }
     }
 }
-private enum SkillHostError: LocalizedError { case notProvisioned; var errorDescription: String? { "This skill is not acknowledged on the Bot's assigned machine. Provision it there before adding it to the Bot." } }
+private enum SkillHostError: LocalizedError { case notProvisioned; var errorDescription: String? { "Install this skill on the Bot's machine before adding it to the Bot." } }
+private enum SkillImportError: LocalizedError {
+    case invalidText
+    var errorDescription: String? { "Skill text must be UTF-8 text no larger than 256 KB." }
+}

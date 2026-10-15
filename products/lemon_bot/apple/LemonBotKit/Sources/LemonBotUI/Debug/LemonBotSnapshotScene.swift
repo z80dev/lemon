@@ -7,7 +7,8 @@ public enum LemonBotSnapshotScene: String, CaseIterable {
     case sidebarConversation, inspectorActivity, composerActiveRun, failedRun, settings, emptyState
     case backendDown, controllerDown, reconnectRequired
     case instancePane, instanceRunning
-    case actionRecovery
+    case actionRecovery, newBotNoMachine, inboxEmpty
+    case appsAndChannels, groupEditor, botLifecycle
 
     /// `sidebar-conversation`, used for output file names.
     public var slug: String {
@@ -18,7 +19,7 @@ public enum LemonBotSnapshotScene: String, CaseIterable {
         case .sidebarConversation: return .chiefOfStaff
         case .inspectorActivity, .composerActiveRun: return .activeRun
         case .failedRun: return .failedRun
-        case .settings, .actionRecovery: return .chiefOfStaff
+        case .settings, .actionRecovery, .newBotNoMachine, .inboxEmpty, .appsAndChannels, .groupEditor, .botLifecycle: return .chiefOfStaff
         case .emptyState: return .noSelection
         case .backendDown: return .backendDown
         case .controllerDown: return .controllerDown
@@ -37,6 +38,19 @@ public enum LemonBotSnapshotScene: String, CaseIterable {
         store.selectedConversationID = scene.scenario.conversationID
         switch scene {
         case .inspectorActivity: return AnyView(LemonBotRootView(store: store, inspector: InspectorPresentation(isPresented: true, tab: .activity)))
+        case .appsAndChannels:
+            return AnyView(NavigationStack { IntegrationsHubView(store: store) })
+        case .groupEditor:
+            return AnyView(GroupEditorView(store: store))
+        case .botLifecycle:
+            if let bot = store.bots.first { return AnyView(BotLifecycleView(store: store, bot: bot)) }
+            return AnyView(EmptySelectionView())
+        case .newBotNoMachine:
+            store.machines = []
+            return AnyView(BotEditorView(store: store))
+        case .inboxEmpty:
+            store.notifications = []
+            return AnyView(NavigationStack { InboxView(store: store) })
         case .actionRecovery:
             return AnyView(VStack(alignment: .leading, spacing: 20) {
                 Text("Unconfirmed actions").font(LBFont.title)

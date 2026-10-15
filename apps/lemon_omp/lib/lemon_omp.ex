@@ -44,6 +44,7 @@ defmodule LemonOmp do
           | :not_ready
           | :no_active_turn
           | {:rejected, String.t()}
+          | {:partially_applied, [String.t()], String.t(), reason()}
           | {:startup_failed, String.t()}
           | :startup_failed
           | :outcome_unknown
@@ -133,8 +134,8 @@ defmodule LemonOmp do
   requires `resume` and no prompt; it sends a fixed request to review state and
   finish unfinished work, not omp's interactive-only `--restore` or subagent
   recovery. Isolation creates a managed git worktree from HEAD, leaving changed
-  or committed work available on close. Resume uses the supplied cwd; use a kept
-  worktree's path to continue its work. Approval mode is `always-ask`, `write`
+  or committed work available on close. Resume finds registered kept Lemon
+  worktrees belonging to the cwd's repository. Approval mode is `always-ask`, `write`
   or `yolo`; omitting it keeps omp's configured mode. Returns once omp
   acknowledged the prompt, or once it is ready when resuming without one.
   """
@@ -218,7 +219,9 @@ defmodule LemonOmp do
   defp start_validated(params, executable, opts) do
     id = "omp_" <> Base.encode16(:crypto.strong_rand_bytes(6), case: :lower)
 
-    with {:ok, worktree} <- Worktree.create(params[:isolation], id) do
+    params = resolve_resume_worktree(params)
+
+    with {:ok, worktree} <- resume_or_create_worktree(params, id) do
       case start_in_worktree(params, executable, opts, id, worktree) do
         {:error, reason} = error when reason not in [:outcome_unknown] ->
           # Admission/spawn can fail before a Session owns cleanup.
@@ -228,6 +231,39 @@ defmodule LemonOmp do
         result ->
           result
       end
+    end
+  end
+
+  defp resolve_resume_worktree(params) do
+    if params[:resume] && is_nil(params[:isolation]) do
+      matches =
+        case SessionFiles.discover(params[:cwd], limit: 100) do
+          {:ok, sessions} ->
+            Enum.filter(sessions, &String.starts_with?(&1["ompSessionId"], params[:resume]))
+
+          _ ->
+            []
+        end
+
+      case matches do
+        [%{"worktree" => %{"path" => path}}] ->
+          case Enum.find(Worktree.kept(params[:cwd]), &(&1.path == path)) do
+            nil -> params
+            worktree -> Keyword.put(params, :resumed_worktree, worktree)
+          end
+
+        _ ->
+          params
+      end
+    else
+      params
+    end
+  end
+
+  defp resume_or_create_worktree(params, id) do
+    case params[:resumed_worktree] do
+      nil -> Worktree.create(params[:isolation], id)
+      worktree -> {:ok, worktree}
     end
   end
 
@@ -273,6 +309,56 @@ defmodule LemonOmp do
     with {:ok, message} <- validate_message(message),
          {:ok, pid} <- fetch_live(id, opts) do
       Session.send_message(pid, message, mode)
+    end
+  end
+
+  @doc """
+  Change a live session's `model` selector (`provider/id`) and/or `thinking`.
+  Model is applied first, then thinking; changes affect the next model call,
+  including during a running turn, without restarting or aborting the session.
+
+  Success returns the snapshot refreshed from omp. If a later step fails after
+  acknowledged changes, returns
+  `{:error, {:partially_applied, applied_fields, failed_step, reason}}`;
+  `failed_step` is `"model"`, `"thinking"` or `"snapshot"`. Nothing is rolled
+  back or automatically retried, including an `:outcome_unknown` result.
+  """
+  @spec configure(String.t(), map(), keyword()) :: {:ok, map()} | {:error, reason()}
+  def configure(id, params, opts \\ [])
+
+  def configure(id, params, opts) when is_map(params) do
+    params = normalize_keys(params)
+
+    with {:ok, model} <- validate_optional(params["model"], @model_pattern),
+         {:ok, thinking} <- validate_thinking(params["thinking"]),
+         {:ok, commands} <- configure_commands(model, thinking),
+         {:ok, pid} <- fetch_live(id, opts) do
+      Session.configure(pid, commands)
+    end
+  end
+
+  def configure(_id, _params, _opts), do: {:error, :invalid_params}
+
+  defp configure_commands(nil, nil), do: {:error, :invalid_params}
+
+  defp configure_commands(model, thinking) do
+    with {:ok, commands} <- model_command(model) do
+      thinking_command =
+        if thinking, do: [{"thinking", "set_thinking_level", %{"level" => thinking}}], else: []
+
+      {:ok, commands ++ thinking_command}
+    end
+  end
+
+  defp model_command(nil), do: {:ok, []}
+
+  defp model_command(selector) do
+    case String.split(selector, "/", parts: 2) do
+      [provider, model_id] when provider != "" and model_id != "" ->
+        {:ok, [{"model", "set_model", %{"provider" => provider, "modelId" => model_id}}]}
+
+      _ ->
+        {:error, :invalid_params}
     end
   end
 
@@ -506,6 +592,11 @@ defmodule LemonOmp do
   def error_message({:catalog_failed, message}), do: "omp model catalog failed: #{message}"
   def error_message({:startup_failed, message}), do: "omp failed to start: #{message}"
   def error_message(:startup_failed), do: "omp failed to start."
+
+  def error_message({:partially_applied, applied, step, reason}),
+    do:
+      "Applied #{Enum.join(applied, ", ")}; #{step} failed: " <>
+        error_message(reason) <> " Earlier changes were not rolled back."
 
   def error_message({:outcome_unknown, id}),
     do:

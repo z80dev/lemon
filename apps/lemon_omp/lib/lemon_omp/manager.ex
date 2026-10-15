@@ -117,7 +117,7 @@ defmodule LemonOmp.Manager do
 
   @impl true
   def handle_cast({:ended, _id}, state) do
-    evict_ended()
+    evict_ended(state.monitors)
     {:noreply, state}
   end
 
@@ -160,6 +160,8 @@ defmodule LemonOmp.Manager do
       end
     end
 
+    evict_ended(monitors)
+
     {:noreply, %{state | monitors: monitors}}
   end
 
@@ -170,12 +172,19 @@ defmodule LemonOmp.Manager do
   defp down_reason({:shutdown, _}), do: "shutdown"
   defp down_reason(_reason), do: "crashed"
 
-  defp evict_ended do
+  defp evict_ended(monitors) do
+    owned_ids = MapSet.new(monitors, fn {_ref, {id, _worktree}} -> id end)
+    # Terminal publication can precede DOWN or asynchronous worktree cleanup;
+    # the snapshot is still required to finish that ownership lifecycle.
+
     ended =
       @table
       |> :ets.tab2list()
-      |> Enum.filter(fn {_id, _pid, wire} -> wire["status"] in ["closed", "failed"] end)
-      |> Enum.sort_by(fn {_id, _pid, wire} -> -(wire["endedAt"] || 0) end)
+      |> Enum.filter(fn {id, _pid, wire} ->
+        wire["status"] in ["closed", "failed"] and not MapSet.member?(owned_ids, id) and
+          (is_nil(wire["worktree"]) or Map.has_key?(wire["worktree"], "kept"))
+      end)
+      |> Enum.sort_by(fn {_id, _pid, wire} -> -(wire["endedAt"] || wire["startedAt"] || 0) end)
 
     ended
     |> Enum.drop(@max_ended)

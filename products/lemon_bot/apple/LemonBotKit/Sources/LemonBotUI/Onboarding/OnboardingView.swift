@@ -45,8 +45,8 @@ public struct OnboardingView: View {
             Form {
                 #if os(iOS)
                 SwiftUI.Section("Connect to your desktop") {
-                    Text("Your iPhone connects to your own desktop cluster. Scan its one-use QR or paste a pairing link, compare verification codes, then approve on the Mac. No desktop password required.")
-                    Button(store.pendingPairing == nil ? "Scan or paste desktop pairing link" : "Resume pending desktop connection") { showPairing = true }
+                    Text("Connect to your Mac's workspace. Scan its QR code or paste the link, then compare verification codes before approving on your Mac.")
+                    Button(store.pendingPairing == nil ? "Scan QR code or paste link" : "Check my request") { showPairing = true }
                 }
                 #endif
                 SwiftUI.Section("Your persistent assistant") {
@@ -67,9 +67,9 @@ public struct OnboardingView: View {
                         }
                     }
                 }
-                SwiftUI.Section("Product backend") {
+                SwiftUI.Section("Lemon Bot server") {
                     TextField("https://your-desktop.your-tailnet.ts.net", text: $backend).autocorrectionDisabled()
-                    Button("Check setup and sign-in methods · read only") { Task { await discover() } }.disabled(action.inFlight)
+                    Button("Check setup and sign-in methods") { Task { await discover() } }.disabled(action.inFlight)
                     if checkedURL != nil {
                         Text(setupRequired ? "Owner setup required. Obtain the one-use setup code from the backend operator terminal." : "Use your local account or configured identity provider.").font(.caption)
                     }
@@ -92,10 +92,11 @@ public struct OnboardingView: View {
                     SwiftUI.Section("Account") {
                         Picker("Sign in method", selection: $mode) {
                             Text("Sign in").tag("login")
-                            if setupRequired { Text("Create owner").tag("setup") }
+                            if setupRequired { Text("Create workspace").tag("setup") }
                         }
                         TextField("Email", text: $email).autocorrectionDisabled()
-                        SecureField("Password (at least 12 bytes for a new account)", text: $password)
+                        SecureField("Password", text: $password)
+                        if mode == "setup" { Text("Use at least 12 letters, numbers or symbols.").font(LBFont.meta) }
                         if mode != "login" { TextField("Display name", text: $displayName) }
                         if mode == "setup" {
                             SecureField("One-use setup code", text: $setupCode)
@@ -112,7 +113,7 @@ public struct OnboardingView: View {
                                     Task { await oidcLogin(provider) }
                                 }.disabled(action.busy || !provider.enabled)
                             }
-                            Text("The system browser verifies your identity. PKCE protects the one-use completion code; no password is shared with this app.").font(.caption)
+                            Text("Your browser confirms your identity. Your sign-in password isn't shared with this app.").font(LBFont.meta)
                         }
                     }
                 }
@@ -164,7 +165,7 @@ public struct OnboardingView: View {
         }
     }
     private func validatedURL() throws -> URL {
-        guard let url = URL(string: backend) else { throw LoginError.message("Enter a product backend URL, not controller credentials.") }
+        guard let url = URL(string: backend) else { throw LoginError.message("Enter your Lemon Bot server address, for example https://bot.example.") }
         return try HTTPTransport.normalizeBaseURL(url)
     }
     private func publicRequest<T: Decodable>(_ base: URL, _ path: String, body: JSONObject? = nil) async throws -> T {

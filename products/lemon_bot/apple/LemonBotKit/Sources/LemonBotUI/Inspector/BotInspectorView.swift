@@ -70,8 +70,11 @@ struct BotInspectorView: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .id(presentation.tab)
                         .transition(.opacity.combined(with: .offset(y: 6)))
+                    } else if loadError != nil {
+                        ContentUnavailableView("Couldn't load this Bot", systemImage: "exclamationmark.triangle", description: Text("It may have been removed, or the connection failed."))
+                        Button("Try again") { Task { await load() } }
                     } else {
-                        ProgressView().padding(.top, 80)
+                        ProgressView("Loading Bot…").padding(.top, 80)
                     }
                     ActionErrorView(message: loadError)
                 }
@@ -133,8 +136,9 @@ struct BotInspectorView: View {
 
     private func load() async {
         guard preview == nil else { return }
+        loadError = nil
         var failure: String?
-        do { loadedOverview = try await store.read(resourcePath("bots", botID, "/overview")) } catch { failure = error.localizedDescription }
+        do { loadedOverview = try await store.read(resourcePath("bots", botID, "/overview")) } catch { failure = humanErrorText(error) }
         do { loadedRuns = try await allResources(store, "/runs", query: ["botId": botID]).sorted { $0.createdAtMs > $1.createdAtMs } } catch { failure = failure ?? error.localizedDescription }
         do { skills = try await allResources(store, "/skills") } catch { failure = failure ?? error.localizedDescription }
         do { routines = try await allResources(store, "/routines").filter { $0.botId == botID } } catch { failure = failure ?? error.localizedDescription }

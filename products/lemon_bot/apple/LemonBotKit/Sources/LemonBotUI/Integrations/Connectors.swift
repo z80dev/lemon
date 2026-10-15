@@ -45,13 +45,13 @@ struct ConnectorSettingsView: View {
             AdminStatus(control: control, store: store, refresh: { await control.perform { try await loadBot() } })
             Section("Assigned Bot and account inventory") {
                 AdminBotPicker(store: store, value: $botID)
-                Button("Load selected Bot connectors and destination secret names") { Task { await control.perform { try await loadBot() } } }.disabled(botID.isEmpty || control.busy)
+                Button("Load this Bot's connectors") { Task { await control.perform { try await loadBot() } } }.disabled(botID.isEmpty || control.busy)
                 if let bot { Text("\(bot.name) · machine \(store.machines.first { $0.id == bot.machineId }?.name ?? bot.machineId)") }
                 ForEach(connectors) { connector in
                     NavigationLink("\(connector.name) · \(connector.accountLabel) · \(connector.state)") { ConnectorDetailSettingsView(store: store, connector: connector) }
-                    if let error = connector.lastError { Text(error).foregroundStyle(.red).textSelection(.enabled) }
+                    if let error = connector.lastError { Text(error).foregroundStyle(LB.danger).textSelection(.enabled) }
                 }
-                Text("Added is not connected. Labeled accounts are separate and retain actual account-owner authority; tools discovered from a server remain subject to its permissions and account consent.")
+                Text("Adding an app doesn't finish connecting it. Each account keeps its own permissions. You may need to sign in and approve access before its tools are available.")
             }
             Section("Real eligible provider prerequisites") {
                 ForEach(providers.filter { $0.kind == "connector" }, id: \.id) { value in
@@ -64,13 +64,14 @@ struct ConnectorSettingsView: View {
                 AdminChoice(label: "Requested access", value: $level, options: ["off", "read_only", "read_interact"])
                 if auth == "secret_headers" { SecretBindingEditor(secrets: secrets, bindings: $bindings) }
                 if let bot { NavigationLink("Manage write-only named secrets on this host") { MachineDetailView(store: store, machineID: bot.machineId) } }
-                Text("Only secret names are sent. Values stay encrypted on the destination, expanded as ${LEMON_SECRET:NAME}; missing references fail closed. Co-resident Bots share this OS user's files/browser/CLI identities. Separate OS users/machines are required for hard isolation.")
-                Toggle("I reviewed the Bot, assigned host, account and requested access", isOn: $acceptedSharedHost)
-                AdminAction(title: "Set up connector with effective host grants", store: store, control: control) {
+                Text("Only secret names are sent. Values stay encrypted on the Bot's machine and aren't shown again. If a secret is missing, the connection won't start. Other Bots using the same computer user share files and logins. Use a separate computer user or machine to keep them apart.")
+                Toggle("I've checked the Bot, machine, account and requested access", isOn: $acceptedSharedHost)
+                AdminAction(title: "Set up connected app", store: store, control: control) {
                     guard let bot else { throw AdminFormError("Select a Bot first.") }
                     setupResult = try await store.mutate("POST", "/bots/\(adminPath(bot.id))/connectors/setup", body: ["machineId": .string(bot.machineId), "name": .string(name), "url": .string(url), "accountLabel": .string(account), "authKind": .string(auth), "secretBindings": .array(auth == "secret_headers" ? bindings.map(\.body) : []), "requestedLevel": .string(level)], as: ConnectorSetupResult.self)
                     acceptedSharedHost = false; try await loadBot()
                 }.disabled(bot == nil || botID != selectedLoadedBot || !acceptedSharedHost || (auth == "secret_headers" && bindings.contains { $0.secretName.isEmpty }))
+                if !botID.isEmpty && botID != selectedLoadedBot { Text("Load this Bot's connectors to continue.").font(LBFont.meta).foregroundStyle(LB.muted) }
                 if let result = setupResult {
                     Text("Acknowledged connector \(result.connector.name) · \(result.connector.state) · machine \(result.machineId)")
                     ForEach(result.grants) { Text("\($0.capabilityId): requested \($0.requestedLevel), effective \($0.effectiveLevel) · \($0.reasons.joined(separator: "; "))") }
@@ -111,7 +112,7 @@ struct ConnectorDetailSettingsView: View {
             Section("Actual account and server") {
                 Text("\(value.state) · owner \(value.ownerUserId)")
                 Text(value.url).textSelection(.enabled)
-                if let error = value.lastError { Text(error).foregroundStyle(.red).textSelection(.enabled) }
+                if let error = value.lastError { Text(error).foregroundStyle(LB.danger).textSelection(.enabled) }
                 TextField("Connection name", text: $name); TextField("Account label", text: $label)
                 ForEach($tools) { $tool in Toggle(tool.name, isOn: $tool.enabled) }
                 Toggle("Replace destination secret header bindings", isOn: $replaceBindings)

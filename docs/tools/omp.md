@@ -10,7 +10,7 @@ installed”). For the workflow, see [Delegating to omp](../user-guide/omp.md).
 
 | Action | Parameters | Result |
 | --- | --- | --- |
-| `models` | optional `query` (case-insensitive selector/name substring), `provider`, `free_only`, `limit` (default 30, max 200) | Cheapest-first catalog: selector, name, context window and input/output cost per million tokens or FREE. Pass a selector as `model` on start/start_many; prefer cheap/free models for simple tasks unless the user specified one. Prices are omp catalog data; OpenRouter `:free` routes may be withdrawn (404 “unavailable for free”), so be ready to fall back. |
+| `models` | optional `query` (case-insensitive selector/name substring), `provider`, `free_only`, `limit` (default 30, max 200) | Cheapest-first catalog: selector, name, context window and input/output cost per million tokens or FREE. Pass a selector as `model` on start/start_many or use `models` + `configure` to move an existing worker to a cheaper model. Prefer cheap/free models for simple tasks unless the user specified one. Prices are omp catalog data; OpenRouter `:free` routes may be withdrawn (404 “unavailable for free”), so be ready to fall back. |
 | `start` | `prompt`; optional `cwd` (default: the conversation's cwd), `model`, `thinking`, `approval_mode`, `isolate` (boolean, default false), `wait` | Starts `omp --mode rpc` and returns once omp accepted the prompt. `isolate: true` creates a managed Git worktree/branch from HEAD; requires a Git cwd. With `wait: true`, blocks and streams progress until the turn ends, including pending approvals. |
 | `start_many` | `tasks` (array of start maps); optional `cwd`, `isolate` (batch defaults, each task can override), `wait`, `timeout_seconds` | Validates all tasks before creating any worktrees, then starts workers concurrently. Returns ordered sessions and per-task errors. With `wait: true`, gathers all successful workers and streams combined progress. |
 | `wait` | `id` or `ids` (array); optional `wait_for` (`all` default, `any`, for `ids`), `timeout_seconds` (default 600, max 3600) | Blocks until the current turn ends, or all/any selected workers settle, streaming progress. Timeout or a Lemon abort stops waiting only; omp keeps working. |
@@ -18,6 +18,7 @@ installed”). For the workflow, see [Delegating to omp](../user-guide/omp.md).
 | `subagent` | `id`, `subagent_id`; optional `limit` (default 20, max 50) | Sanitized transcript tail for an omp task child, while its parent process is open. Each message has role, text (max 2000 characters), and optional tool name; cursor metadata is retained. |
 | `list` | – | Sessions this conversation started (live and recently ended). |
 | `send` | `id`, `message`; optional `mode` (`steer` default, `follow_up`, or `redirect`) | Steers the running turn, queues a follow-up, or redirects: stops the current turn and starts over with this message atomically in omp. Use redirect when omp is going the wrong way. An idle session starts a new turn with the message in every mode. |
+| `configure` | `id`; `model` (full `provider/id` selector) and/or `thinking` | Changes a live worker without restarting or aborting it, including during a running turn. Applies from the next model call. Sets model first, then thinking, and returns a refreshed snapshot plus text with the effective model/thinking. |
 | `cancel` | `id` | Aborts the running turn; the process stays open. |
 | `close` | `id` | Ends the omp process; its session can be resumed. |
 | `discover` | optional `cwd` | omp's stored sessions for the workspace (read-only). |
@@ -53,14 +54,34 @@ abort-and-prompt command, not when the replacement turn finishes. Existing
 after acceptance, the session reports `lastTurn: "error"` and its bounded
 `error`; the accepted command is not replied to again or retried.
 
+`configure` accepts the same model characters/length and thinking levels as
+`start`, but requires a parseable `provider/id` selector (split on the first
+`/`, preserving slashes within model ids) and at least one non-empty setting.
+omp clamps thinking to the chosen model's capabilities. A model-only switch may
+therefore change thinking too. The result comes from `get_state` after omp's
+correlated success responses; `model_changed` has no model payload in omp
+18.11. An in-flight model call is not restarted; later calls use the new settings.
+
+If a later configure step fails, earlier acknowledged changes remain applied:
+the tool error includes `applied` (field names), `failedStep` (`thinking` or
+`snapshot`), and `cause` (`rejected`, `outcome_unknown`, or `not_running`).
+A timeout does not prove a setting was unchanged; only acknowledged changes
+appear in `applied`. A failed snapshot refresh is not reported as success.
+Elixir returns
+`{:error, {:partially_applied, applied_fields, failed_step, reason}}` in these
+cases; otherwise errors retain their usual shape. There is no rollback or
+automatic mutation retry.
+
 Isolated workers run in `<git common dir>/lemon-omp-worktrees/<id>` on branch
 `lemon-omp/<id>`. Reports include the path and merge/cherry-pick instructions.
 Closing removes only worktrees with no uncommitted changes and no new commits;
 others remain available with `worktree.kept`, `dirty` and `commits` counts
 (`null` if Git could not determine a count within the cleanup budget). Inspect
-and commit uncommitted work before merging. Resume uses the supplied `cwd`;
-to reuse kept work, pass its path without `isolate`. See
-[Parallel workers](../user-guide/omp.md#parallel-workers).
+and commit uncommitted work before merging. Resume automatically reuses an
+existing registered kept Lemon worktree belonging to the supplied cwd's repo;
+otherwise it uses cwd and reports the fallback. Discovery includes kept worker
+sessions and their branch names. Resumed worktrees receive the same conservative
+cleanup as isolated starts. See [Parallel workers](../user-guide/omp.md#parallel-workers).
 
 ## Scope and trust
 
@@ -82,7 +103,8 @@ Multi-worker results include combined `usage`; `start_many` also includes
 `errors` with a zero-based task index and safe error message. The session
 object is the same snapshot the control plane returns
 from `omp.sessions.get`: `id`, `ompSessionId`, `title`, `cwd`, `model`,
-`worktree` (null or `path`, `branch`, `base` short SHA, `repo` main checkout root;
+`worktree` (null or `path`, `branch`, `base` short SHA or null when the original
+creation reflog is unavailable, `repo` main checkout root;
 after cleanup also `kept`, `dirty`, `commits`),
 `thinking`, `approvalMode` (the requested override, or `null` for omp's own
 configured mode), `status`, `lastTurn`, `activity`, `activeTools`, `recentTools`,

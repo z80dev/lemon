@@ -44,6 +44,8 @@ session id (for example `omp_3f9a1c2b7d4e`). Then:
 - “Stop that; instead, fix the parser” — redirects omp: aborts its current turn
   and starts over with the new message in one omp command. A wait already in
   progress follows the redirected turn, rather than ending at the aborted turn.
+- “Move that worker to a cheaper model” — uses `models` and `configure` to
+  change its model and/or thinking level without restarting it.
 - “Cancel the omp run” — aborts the current turn; the session stays open.
 - “Close it” — ends the omp process. Its history stays on disk.
 - “Which omp sessions exist here?” / “resume the last one” — lists omp's stored
@@ -90,6 +92,42 @@ minutes per executable/mtime. Displayed costs are per million tokens.
 Prices are omp's catalog data, not a guarantee: OpenRouter `:free` routes can
 be withdrawn upstream; several have returned 404 “unavailable for free”.
 Be ready to select a fallback. Listing models does not make a model call.
+
+### Switching a live worker
+
+Use `models` to choose a cheaper selector, then configure the existing worker:
+
+```json
+{"action":"configure","id":"omp_3f9a1c2b7d4e","model":"openrouter/nvidia/nemotron-3-super-120b-a12b:free","thinking":"low"}
+```
+
+Supply `model`, `thinking`, or both. `model` must be a full `provider/id`
+selector, not a fuzzy name; model ids may contain further `/` characters.
+Thinking levels are `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`,
+or `auto`. omp may clamp the level for the chosen model; the result reports
+omp's actual model and effective thinking level, not just the requested values.
+
+Switching is allowed while idle **or running**. It does not restart the
+process or abort the current turn: the new settings apply from the next model
+call, including later calls in the same turn. An already in-flight model call
+is not restarted. A model switch may also change the effective thinking level;
+if both are supplied, Lemon sets the model first and thinking second.
+
+Elixir callers use
+`LemonOmp.configure(id, %{model: selector, thinking: "low"}, owner: scope)`.
+Success is `{:ok, refreshed_snapshot}` after correlated command success and
+`get_state`. An omp rejection is `{:error, {:rejected, message}}`; silence is
+`{:error, :outcome_unknown}`. If an acknowledged change precedes a later failure,
+the error is
+`{:error, {:partially_applied, applied_fields, failed_step, reason}}`, where
+fields are strings such as `["model"]`, and the failed step is `"thinking"`
+or `"snapshot"` (refresh). Earlier changes are not rolled back. Neither
+mutations nor unknown outcomes are retried automatically.
+
+Only live sessions can be configured, with the same ownership rules as sending
+a message. This is available through the chat tool and Elixir API; control-plane
+`omp.sessions.configure`, CLI `lemon omp configure`, and a TUI model switch are
+not yet exposed.
 
 ## Parallel workers
 
@@ -150,10 +188,21 @@ It never force-removes dirty worktrees. Only Lemon-created worktrees are eligibl
 for automatic cleanup. Remove kept work manually with `git worktree remove <path>`
 and `git branch -d <branch>` once integrated.
 
-Resume uses the **given cwd**, not automatic worktree lookup by omp session id.
-To continue kept isolated work, pass its `worktree.path` as `cwd` when resuming,
-without `isolate`; this reuses the directory without claiming ownership or
-automatically deleting it on close. `isolate: true` always creates a fresh worktree.
+Resume from the main checkout or any worktree in the same repository: Lemon
+finds the stored session's recorded cwd and automatically reuses an existing,
+registered Lemon worktree. Its snapshot carries `worktree` metadata again, so
+the same conservative cleanup applies on close. Discovery includes these kept
+workers and their branch names. No arbitrary session-header path is trusted:
+the directory must be directly under this repository's managed worktree root
+and registered with Git on its matching `lemon-omp/…` branch.
+
+If the worktree was deleted or cannot be validated, resume uses the supplied
+`cwd` instead; the agent tool reports this fallback. `isolate: true` still
+explicitly creates a fresh worktree rather than reusing one. Discovery checks
+at most 32 managed worktrees and 2,000 filenames per candidate session directory,
+reading bounded headers/tails from at most twice the requested limit per workspace.
+If the original branch creation reflog is unavailable, the resumed snapshot's
+base is `null` and cleanup keeps the worktree rather than guessing its base.
 
 
 Elixir callers can use `LemonOmp.start_many(tasks, owner: owner)` and

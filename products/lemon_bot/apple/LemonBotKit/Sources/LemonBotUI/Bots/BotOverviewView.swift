@@ -40,7 +40,7 @@ public struct BotOverviewView: View {
                     NavigationLink("Assigned machine") { MachineDetailView(store: store, machineID: bot.machineId) }
                 } else if action.inFlight { ProgressView("Loading Bot overview…") }
                 ActionErrorView(message: action.error)
-                if let receipt = action.receipt { Text(receipt).font(.caption) }
+                if let receipt = action.receipt { Text(receipt).font(LBFont.meta) }
                 Button("Reload current facts") { Task { await load() } }.disabled(action.busy)
             }.padding().frame(maxWidth: 900, alignment: .leading).frame(maxWidth: .infinity)
         }.navigationTitle(bot?.name ?? "Bot overview")
@@ -51,12 +51,12 @@ public struct BotOverviewView: View {
     private func identity(_ bot: Bot) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(bot.title).font(.title3)
-            Text("Owner: \(bot.ownerUserId)").font(.caption)
+            Text("Owner: \(bot.ownerUserId)").font(LBFont.meta)
             Text("Voice: \(bot.voice.voiceId) · speed \(bot.voice.speed) · language \(bot.voice.language ?? "auto")")
             Text("Reply language: \(bot.language ?? "automatic")")
             Button("Preview real voice sample") { Task { await action.perform { voiceSample = try await store.mutate("POST", resourcePath("bots", bot.id, "/voice/preview"), body: [:]) } } }.disabled(action.busy || store.connectionState != "online")
             if let voiceSample { VoiceMemoView(store: store, attachmentID: voiceSample.attachment.id, transcript: "Hello, I’m your Lemon Bot teammate. Ready when you are.", durationMs: voiceSample.attachment.durationMs.map { Double($0) }, peaks: []) }
-            Text("Voice preview does not start a run or conversation. Missing provider configuration is shown verbatim above; device speech is a separate platform option.").font(.caption)
+            Text("Voice preview does not start a run or conversation. Missing provider configuration is shown verbatim above; device speech is a separate platform option.").font(LBFont.meta)
             ForEach(bot.referenceAttachmentIds, id: \.self) { id in AttachmentView(store: store, attachmentID: id) }
         }
     }
@@ -64,13 +64,13 @@ public struct BotOverviewView: View {
         VStack(alignment: .leading, spacing: 16) {
             if let overview {
                 Text(overview.presence.summary)
-                if overview.presence.stale || store.connectionState != "online" { Label("Last measured status is stale or realtime is disconnected; not proof work is still running.", systemImage: "clock.badge.exclamationmark").foregroundStyle(.orange) }
-                Text("Machine: \(overview.presence.machineLabel) · \(overview.presence.machineStatus) · measured \(timestamp(Double(overview.presence.measuredAtMs)).formatted())").font(.caption)
+                if overview.presence.stale || store.connectionState != "online" { Label("Last measured status is stale or realtime is disconnected; not proof work is still running.", systemImage: "clock.badge.exclamationmark").foregroundStyle(LB.warning) }
+                Text("Machine: \(overview.presence.machineLabel) · \(overview.presence.machineStatus) · measured \(timestamp(Double(overview.presence.measuredAtMs)).formatted())").font(LBFont.meta)
                 if let task = overview.presence.taskConversationId { NavigationLink("Open current task") { ConversationView(store: store, conversationID: task) } }
-                if let run = overview.presence.currentRunId { Text("Current run: \(run)").font(.caption).textSelection(.enabled) }
-                if let evidence = overview.presence.evidenceEntryId { Text("Making evidence: \(evidence)").font(.caption).textSelection(.enabled) }
+                if let run = overview.presence.currentRunId { Text("Current run: \(run)").font(LBFont.meta).textSelection(.enabled) }
+                if let evidence = overview.presence.evidenceEntryId { Text("Making evidence: \(evidence)").font(LBFont.meta).textSelection(.enabled) }
                 DisclosureGroup("Bot authorization · distinct from machine permissions") {
-                    Text("Effective access is bounded by host configuration, measured OS grants and required policy. A requested level is not proof of authorization.").font(.caption)
+                    Text("Effective access is bounded by host configuration, measured OS grants and required policy. A requested level is not proof of authorization.").font(LBFont.meta)
                     ForEach(overview.grants) { grant in BotGrantRow(store: store, grant: grant, manages: manages) }
                 }
                 Text("Recent Activity").font(.headline)
@@ -78,13 +78,13 @@ public struct BotOverviewView: View {
                     VStack(alignment: .leading) {
                         HStack { Text(item.title); StatusBadge(text: item.status) }
                         Text(item.summary)
-                        Text("\(item.machineLabel) · \(timestamp(Double(item.occurredAtMs)).formatted())").font(.caption)
+                        Text("\(item.machineLabel) · \(timestamp(Double(item.occurredAtMs)).formatted())").font(LBFont.meta)
                         if let room = item.taskConversationId ?? item.conversationId { NavigationLink("Open exact work context") { ConversationView(store: store, conversationID: room) } }
                     }
                 }
                 Text("Upcoming").font(.headline)
                 ForEach(overview.upcoming.items, id: \.id) { item in
-                    VStack(alignment: .leading) { Text(item.title); Text("\(zonedTimestamp(Double(item.dueAtMs), timezone: item.timezone)) · \(item.timezone) · \(item.machineLabel) · \(item.machineStatus)").font(.caption); if let blocked = item.blockedReason { Text(blocked).foregroundStyle(.orange) }; if let outcome = item.lastRunStatus { Text("Last outcome: \(outcome)").font(.caption) } }
+                    VStack(alignment: .leading) { Text(item.title); Text("\(zonedTimestamp(Double(item.dueAtMs), timezone: item.timezone)) · \(item.timezone) · \(item.machineLabel) · \(item.machineStatus)").font(LBFont.meta); if let blocked = item.blockedReason { Text(blocked).foregroundStyle(LB.warning) }; if let outcome = item.lastRunStatus { Text("Last outcome: \(outcome)").font(LBFont.meta) } }
                 }
                 NavigationLink("All Activity and Upcoming") { ActivityHubView(store: store) }
             }
@@ -93,13 +93,13 @@ public struct BotOverviewView: View {
                 VStack(alignment: .leading, spacing: 5) {
                     Text(idea.title).font(.headline)
                     Text(idea.expectedOutput)
-                    Text("Skills: \(idea.requiredSkillIds.joined(separator: ", ")) · apps: \(idea.requiredConnectorIds.joined(separator: ", ")) · capabilities: \(idea.requiredCapabilityIds.joined(separator: ", "))").font(.caption)
-                    ForEach(idea.blockedReasons, id: \.self) { reason in Text(reason).foregroundStyle(.orange) }
+                    Text("Skills: \(idea.requiredSkillIds.joined(separator: ", ")) · apps: \(idea.requiredConnectorIds.joined(separator: ", ")) · capabilities: \(idea.requiredCapabilityIds.joined(separator: ", "))").font(LBFont.meta)
+                    ForEach(idea.blockedReasons, id: \.self) { reason in Text(reason).foregroundStyle(LB.warning) }
                     Button("Draft this prompt") { Task { await draftIdea(idea, bot: bot) } }.disabled(action.inFlight)
                 }
             }
             ForEach(milestones.filter { $0.acknowledgedAtMs == nil }) { milestone in
-                HStack { Label(milestone.kind.replacingOccurrences(of: "_", with: " ").capitalized, systemImage: "checkmark.seal"); Text("Verified evidence: \(milestone.evidenceId)").font(.caption); Button("Acknowledge") { Task { await acknowledge(milestone) } } }
+                HStack { Label(milestone.kind.replacingOccurrences(of: "_", with: " ").capitalized, systemImage: "checkmark.seal"); Text("Verified evidence: \(milestone.evidenceId)").font(LBFont.meta); Button("Acknowledge") { Task { await acknowledge(milestone) } } }
             }
         }
     }
@@ -108,7 +108,7 @@ public struct BotOverviewView: View {
             ForEach(preferences) { change in
                 VStack(alignment: .leading, spacing: 5) {
                     Text("\(change.scope.capitalized) · \(change.state)").font(.headline)
-                    Text("By \(change.userId) · machine \(change.machineId) · source \(change.sourceEntryId ?? "manual edit")").font(.caption)
+                    Text("By \(change.userId) · machine \(change.machineId) · source \(change.sourceEntryId ?? "manual edit")").font(LBFont.meta)
                     Text(change.reason)
                     PreferencePatchView(title: "Before", patch: change.before)
                     PreferencePatchView(title: "After", patch: change.after)
@@ -121,7 +121,7 @@ public struct BotOverviewView: View {
                     }
                 }.padding(10).background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 10))
             }
-            Text("Undo rejects conflicting later edits; it never silently overwrites them.").font(.caption)
+            Text("Undo rejects conflicting later edits; it never silently overwrites them.").font(LBFont.meta)
         }
     }
     private func draftIdea(_ idea: BotIdea, bot: Bot) async {
@@ -175,8 +175,8 @@ struct BotGrantRow: View {
     var body: some View {
         VStack(alignment: .leading) {
             Text(current.capabilityId).font(.headline)
-            Text("Requested: \(current.requestedLevel) · effective: \(current.effectiveLevel)").font(.caption)
-            ForEach(current.reasons, id: \.self) { reason in Text(reason).font(.caption) }
+            Text("Requested: \(current.requestedLevel) · effective: \(current.effectiveLevel)").font(LBFont.meta)
+            ForEach(current.reasons, id: \.self) { reason in Text(reason).font(LBFont.meta) }
             if manages {
                 Menu("Request Bot access level") {
                     ForEach(["off", "read_only", "read_interact"], id: \.self) { level in Button(level.replacingOccurrences(of: "_", with: " ")) { Task { await action.perform { updated = try await store.mutate("PATCH", resourcePath("bots", current.botId, "/grants/" + current.id.addingPercentEncoding(withAllowedCharacters: .alphanumerics)!), body: ["revision": .number(Double(current.revision)), "requestedLevel": .string(level)]) } } } }
@@ -201,7 +201,7 @@ struct BotJobEditorView: View {
             TextField("Job", text: $job, axis: .vertical).lineLimit(3...12)
             TextField("Instructions / style / boundaries", text: $instructions, axis: .vertical).lineLimit(4...16)
             TextField("Reason for durable change", text: $reason)
-            Text("Durable instructions are distinct from one-time chat requests and Memory. Hard workspace policy remains a separate ceiling.").font(.caption)
+            Text("Durable instructions are distinct from one-time chat requests and Memory. Hard workspace policy remains a separate ceiling.").font(LBFont.meta)
             Button("Save inspectable preference change") { Task { await action.perform {
                 let _: PreferenceChange = try await store.mutate("POST", resourcePath("bots", bot.id, "/preference-changes"), body: ["revision": .number(Double(bot.revision)), "changes": .object(["job": .string(job), "instructions": .string(instructions)]), "reason": .string(reason)])
                 try await store.refresh()

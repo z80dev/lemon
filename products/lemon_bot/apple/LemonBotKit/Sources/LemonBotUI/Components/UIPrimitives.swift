@@ -67,11 +67,12 @@ private enum UIResourceError: LocalizedError {
     var busy: Bool { running || uncertain }
     var inFlight: Bool { running }
     var error: String?
+    var errorNonce: String?
     var receipt: String?
     func perform(_ action: () async throws -> Void) async {
         guard !running else { return }
         running = true
-        error = nil
+        error = nil; errorNonce = nil
         defer { running = false }
         do { try await action() } catch {
             // A view task cancelled by teardown or a reload is not a user-facing failure.
@@ -80,33 +81,49 @@ private enum UIResourceError: LocalizedError {
             if case ClientError.outcomeUnknown(let nonce) = error {
                 uncertain = true
                 uncertainNonce = nonce
+                errorNonce = nonce
             } else if case ClientError.unresolvedMutation(let intent) = error {
                 uncertain = true
                 uncertainNonce = intent.clientNonce
                 uncertainRunID = intent.runID
+                errorNonce = intent.clientNonce
             } else if let backend = error as? BackendError {
                 let runIDs = backend.failure.details?["runIds"]?.arrayValue?.compactMap(\.stringValue) ?? []
                 let entryIDs = backend.failure.details?["entryIds"]?.arrayValue?.compactMap(\.stringValue) ?? []
                 if backend.failure.code == "outcome_unknown" || (backend.failure.details?["clientNonce"]?.stringValue != nil && !runIDs.isEmpty && !entryIDs.isEmpty) {
                     uncertain = true
                     uncertainNonce = backend.failure.details?["clientNonce"]?.stringValue
+                    errorNonce = uncertainNonce
                     uncertainRunID = backend.failure.details?["runId"]?.stringValue ?? backend.failure.details?["runIds"]?.arrayValue?.first?.stringValue
                 }
             }
         }
     }
+    func resolveUncertainty(_ nonce: String) {
+        if uncertainNonce == nonce { uncertain = false; uncertainNonce = nil; uncertainRunID = nil }
+        if errorNonce == nonce { error = nil; errorNonce = nil }
+    }
 }
 
 struct ActionErrorView: View {
     let message: String?
+    private static let diagnosticMarkers = ["\nDetails: ", "\nRequest: ", "\nExact runs: ", "\nRecorded entries: "]
+    private func detailsStart(in text: String) -> String.Index? {
+        var first: String.Index?
+        for marker in Self.diagnosticMarkers {
+            if let index = text.range(of: marker)?.lowerBound, first == nil || index < first! { first = index }
+        }
+        return first
+    }
     var body: some View {
         if let message {
+            let diagnosticStart = detailsStart(in: message)
             VStack(alignment: .leading, spacing: 8) {
-                Label(message.components(separatedBy: "\nDetails: ").first ?? message, systemImage: "exclamationmark.circle.fill")
+                Label(diagnosticStart.map { String(message[..<$0]) } ?? message, systemImage: "exclamationmark.circle.fill")
                     .foregroundStyle(LB.danger).textSelection(.enabled)
-                if let range = message.range(of: "\nDetails: ") {
+                if let diagnosticStart {
                     DisclosureGroup("Details") {
-                        Text(String(message[range.upperBound...])).textSelection(.enabled)
+                        Text(String(message[diagnosticStart...]).trimmingCharacters(in: .whitespacesAndNewlines)).textSelection(.enabled)
                         Button("Copy") { copyText(message) }.buttonStyle(.pill(.quiet, compact: true))
                     }
                 } else {

@@ -167,7 +167,20 @@ public struct LemonBotSettingsView<Platform: View>: View {
             .background(LB.sidebar)
             .navigationSplitViewColumnWidth(min: 220, ideal: 236, max: 280)
         } detail: {
-            NavigationStack { macPane(router.pane) }.id(router.pane)
+            ZStack {
+                // Keep the editable Preferences navigation stack alive between pane switches.
+                NavigationStack { macPane(.preferences) }
+                    .opacity(router.pane == .preferences ? 1 : 0)
+                    .allowsHitTesting(router.pane == .preferences)
+                    .accessibilityHidden(router.pane != .preferences)
+                NavigationStack { macPane(.platform) }
+                    .opacity(router.pane == .platform ? 1 : 0)
+                    .allowsHitTesting(router.pane == .platform)
+                    .accessibilityHidden(router.pane != .platform)
+                if router.pane != .preferences && router.pane != .platform {
+                    NavigationStack { macPane(router.pane) }.id(router.pane)
+                }
+            }
         }
         .frame(minWidth: 780, minHeight: 540)
     }
@@ -251,7 +264,7 @@ private struct SettingsAccountHeader: View {
     var body: some View {
         HStack(spacing: 12) {
             Circle().fill(LB.lemon).frame(width: 40, height: 40)
-                .overlay(Text(initials).font(.system(size: 15, weight: .semibold)).foregroundStyle(LB.lemonInk))
+                .overlay(Text(initials).font(LBFont.bodyEmphasis).foregroundStyle(LB.lemonInk))
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 1) {
                 Text(name).font(LBFont.rowTitle).foregroundStyle(LB.ink).lineLimit(1)
@@ -270,7 +283,7 @@ struct SettingsPaneIcon: View {
     var size: CGFloat = 22
     var body: some View {
         Image(systemName: pane.symbol)
-            .font(.system(size: size * 0.55, weight: .semibold))
+            .font(LBFont.metaEmphasis)
             .foregroundStyle(.white)
             .frame(width: size, height: size)
             .background(RoundedRectangle(cornerRadius: size * 0.27, style: .continuous).fill(pane.tint.gradient))

@@ -6,6 +6,7 @@ import { cancelConversationGates } from './gates';
 
 export interface EntryAuthority { kind: 'human' | 'external' | 'bot'; userId: string; conversationId: string }
 interface StoredComposer extends P.ComposerDraft { id: string; userId: string; createdAtMs: number }
+interface StoredMessageReceipt { hash: string; receipt: P.MessageReceipt; targetBotIds?: P.ID[] }
 export interface AttachmentShare extends P.Resource { attachmentId: string; conversationId: string; userId: string }
 
 const kind = z.enum(['dm', 'task', 'group', 'channel']);
@@ -200,6 +201,34 @@ export function deleteConversationResources(services: BackendServices, actor: Pr
   });
 }
 
+function messageReceiptKey(actor: Principal, conversationId: string, clientNonce: string): string { return `messageReceipt:${actor.kind}:${actor.id}:${conversationId}:${clientNonce}`; }
+
+/** Observe the original reservation only. Partial group admission is never a complete receipt. */
+function readMessageReceipt(services: BackendServices, actor: Principal, conversationId: string, clientNonce: string): P.MessageReceipt {
+  if (!canUseConversation(services, actor, conversationId)) fail('not_found', 'This message submission is not recorded.');
+  const stored = services.store.metadata<StoredMessageReceipt>(messageReceiptKey(actor, conversationId, clientNonce));
+  if (!stored) fail('not_found', 'This message submission is not recorded.');
+  const entries = stored.receipt.entries.map(entry => authorizedEntry(services, actor, entry.id, conversationId));
+  const runs = stored.receipt.runs.map(value => {
+    const run = services.store.require<P.Run>('runs', value.id);
+    authorizedBot(services, actor, run.botId);
+    if (run.conversationId !== conversationId || run.clientNonce !== clientNonce || run.initiatorUserId !== actor.userId) fail('not_found', 'This message submission is not recorded.');
+    return run;
+  });
+  const delivery = runs.flatMap(run => {
+    const value = services.store.metadata<P.MessageReceipt['delivery'][number]>(`runDelivery:${run.id}`) ?? stored.receipt.delivery.find(value => value.runId === run.id);
+    return value && value.botId === run.botId && value.runId === run.id ? [value] : [];
+  });
+  // Older completed receipts already prove their full target set. An older partial reservation does not.
+  const targets = stored.targetBotIds ?? (stored.receipt.status !== 'outcome_unknown' ? stored.receipt.delivery.map(value => value.botId) : null);
+  const complete = targets !== null && runs.length === targets.length && delivery.length === targets.length
+    && targets.every(botId => delivery.filter(value => value.botId === botId).length === 1)
+    && runs.every(run => run.status !== 'reserved' && run.status !== 'outcome_unknown')
+    && delivery.every(value => value.effectiveMode !== 'outcome_unknown');
+  const admitted = delivery.filter(value => value.effectiveMode !== 'rejected');
+  return { entries, runs, delivery, clientNonce, status: !complete ? 'outcome_unknown' : admitted.length && admitted.every(value => value.effectiveMode === 'queued') ? 'queued' : 'accepted' };
+}
+
 /** The route and runtime.send share this function. It only calls runtime.submit, never runtime.send. */
 export async function sendMessage(services: BackendServices, actor: Principal, conversationId: string, message: P.MessageSend, context?: RequestContext, options?: { bot: P.Bot; run: P.Run; returnConversationId?: string; noHandoff?: boolean }, submission?: Partial<SubmissionContext> & { actor?: P.Actor; allowSourceAttachments?: boolean }): Promise<P.MessageReceipt> {
   const room = authorizedConversation(services, actor, conversationId);
@@ -210,9 +239,9 @@ export async function sendMessage(services: BackendServices, actor: Principal, c
     if (run.botId !== options.bot.id || run.initiatorUserId !== actor.userId || !retained || retained.userId !== actor.userId || retained.id !== actor.id || retained.kind !== actor.kind) fail('forbidden', 'Bot output must retain its actual owning initiator.');
     authorizedConversation(services, actor, run.conversationId);
   }
-  const receiptKey = `messageReceipt:${actor.kind}:${actor.id}:${room.id}:${message.clientNonce}`;
+  const receiptKey = messageReceiptKey(actor, room.id, message.clientNonce);
   const hash = services.mutations.digest({ message, sourceBotId: options?.bot.id ?? submission?.actor?.id ?? null });
-  const prior = services.store.metadata<{ hash: string; receipt: P.MessageReceipt }>(receiptKey);
+  const prior = services.store.metadata<StoredMessageReceipt>(receiptKey);
   if (prior) {
     if (prior.hash !== hash) fail('nonce_conflict', 'This nonce belongs to another message.');
     const failure = services.store.metadata<P.ErrorEnvelope['error']>(`messageFailure:${receiptKey}`);
@@ -242,7 +271,7 @@ export async function sendMessage(services: BackendServices, actor: Principal, c
   // Persist the authored batch and uncertain receipt before any runtime side effect.
   let created = false;
   const receipt = services.store.transaction(() => {
-    const again = services.store.metadata<{ hash: string; receipt: P.MessageReceipt }>(receiptKey);
+    const again = services.store.metadata<StoredMessageReceipt>(receiptKey);
     if (again) { if (again.hash !== hash) fail('nonce_conflict', 'This nonce belongs to another message.'); return again.receipt; }
     created = true;
     const batchId = services.id('batch');
@@ -267,7 +296,7 @@ export async function sendMessage(services: BackendServices, actor: Principal, c
       if (external) services.store.setMetadata(`externalEntry:${entry.id}`, true);
     }
     const reserved: P.MessageReceipt = { entries, runs: [], clientNonce: message.clientNonce, status: targets.length ? 'outcome_unknown' : 'accepted', delivery: [] };
-    services.store.setMetadata(receiptKey, { hash, receipt: reserved });
+    services.store.setMetadata(receiptKey, { hash, receipt: reserved, targetBotIds: targets } satisfies StoredMessageReceipt);
     const noHandoff = !!options?.noHandoff || !!submission?.noHandoff || /\b(?:no[ -]hand[ -]?offs?|do not (?:delegate|hand(?: this| it| that)? off|handoff|ask (?:any )?other bots)|don't (?:delegate|hand(?: this| it| that)? off|handoff|ask (?:any )?other bots))\b/i.test(primaryText);
     services.store.setMetadata(submissionKey(actor, room.id, message.clientNonce), { sourceEntryId: submission?.sourceEntryId ?? entries[0]!.id, noHandoff, returnConversationId: submission?.returnConversationId ?? options?.returnConversationId, parentRunId: submission?.parentRunId ?? options?.run.id, sourceBotId: submission?.sourceBotId ?? options?.bot.id } satisfies SubmissionContext);
     return reserved;
@@ -298,11 +327,11 @@ export async function sendMessage(services: BackendServices, actor: Principal, c
       if (refused && !firstRefusal) firstRefusal = failure;
       unknown ||= !refused && (!recorded || recorded.effectiveMode === 'outcome_unknown');
     }
-    services.store.setMetadata(receiptKey, { hash, receipt });
+    services.store.setMetadata(receiptKey, { hash, receipt, targetBotIds: targets } satisfies StoredMessageReceipt);
   }
   const admitted = receipt.delivery.filter(delivery => delivery.effectiveMode !== 'rejected');
   receipt.status = unknown ? 'outcome_unknown' : admitted.length && admitted.every(delivery => delivery.effectiveMode === 'queued') ? 'queued' : 'accepted';
-  services.store.setMetadata(receiptKey, { hash, receipt });
+  services.store.setMetadata(receiptKey, { hash, receipt, targetBotIds: targets } satisfies StoredMessageReceipt);
   if (firstRefusal && !admitted.length) {
     const details: P.JSONObject = { entryIds: receipt.entries.map(entry => entry.id), runIds: receipt.runs.map(run => run.id), clientNonce: message.clientNonce };
     const failure: P.ErrorEnvelope['error'] = { code: firstRefusal.code, message: firstRefusal.message.slice(0, 512), retrySafe: firstRefusal.retrySafe, requestId: context?.requestId ?? services.id('request'), details };
@@ -389,6 +418,7 @@ export function createConversationRoutes(services: BackendServices): Route[] {
       return services.page(context, visibleEntries(services, principal(context.user), room(context).id).filter(entry => (!input.beforeSeq || entry.seq < input.beforeSeq) && (input.afterSeq === undefined || entry.seq > input.afterSeq)), { ascending: true, key: entry => String(entry.seq).padStart(16, '0') });
     }),
     route('POST', '/conversations/:id/messages', context => sendMessage(services, principal(context.user), room(context).id, parse(messageSchema, context.body), context), 202),
+    route('GET', '/conversations/:id/messages/receipts/:nonce', context => readMessageReceipt(services, principal(context.user), context.params.id!, parse(mutation.shape.clientNonce, context.params.nonce))),
     route('GET', '/entries/:id', context => authorizedEntry(services, principal(context.user), context.params.id!)),
     route('POST', '/entries/:id/feedback', context => {
       const input = parse(mutation.extend({ sentiment: z.enum(['good', 'bad']), reasons: z.array(z.enum(['not_requested', 'inaccurate', 'low_quality', 'slow'])).max(4).optional(), comment: boundedText(4096).optional() }), context.body), actor = principal(context.user);
