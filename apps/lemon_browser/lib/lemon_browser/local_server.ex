@@ -94,7 +94,14 @@ defmodule LemonBrowser.LocalServer do
        last_error: nil,
        last_error_at: nil,
        driver_config: nil,
-       driver_opts: Keyword.take(opts, [:cdp_endpoint, :attach_only, :driver_path])
+       driver_opts:
+         Keyword.take(opts, [
+           :cdp_endpoint,
+           :attach_only,
+           :driver_path,
+           :user_data_dir,
+           :profile_directory
+         ])
      }}
   end
 
@@ -227,7 +234,14 @@ defmodule LemonBrowser.LocalServer do
 
   defp signal_os_process(_pid), do: :ok
 
-  defp ensure_port(%{port: port} = state) when is_port(port), do: {:ok, state}
+  defp ensure_port(%{port: port} = state) when is_port(port) do
+    if state.driver_config == driver_config_summary(state.driver_opts) do
+      {:ok, state}
+    else
+      {:error,
+       "Browser identity changed; stop the local browser before changing its profile or CDP configuration"}
+    end
+  end
 
   defp ensure_port(state) do
     with {:ok, node_path} <- find_node(),
@@ -407,6 +421,16 @@ defmodule LemonBrowser.LocalServer do
 
     []
     |> maybe_append_arg(endpoint != "", "--cdp-endpoint", endpoint)
+    |> maybe_append_arg(
+      configured_profile(opts, :user_data_dir) != "",
+      "--user-data-dir",
+      configured_profile(opts, :user_data_dir)
+    )
+    |> maybe_append_arg(
+      configured_profile(opts, :profile_directory) != "",
+      "--profile-directory",
+      configured_profile(opts, :profile_directory)
+    )
     |> maybe_append_flag(
       Keyword.get(opts, :attach_only, false) == true or endpoint != "",
       "--attach-only"
@@ -423,6 +447,18 @@ defmodule LemonBrowser.LocalServer do
       value when is_binary(value) and value != "" -> value
       _ -> Env.get(:lemon_browser_cdp_endpoint) |> to_string_safe()
     end
+  end
+
+  defp configured_profile(opts, key) do
+    env_key =
+      case key do
+        :user_data_dir -> :lemon_browser_user_data_dir
+        :profile_directory -> :lemon_browser_profile_directory
+      end
+
+    to_string_safe(
+      Keyword.get(opts, key) || Env.get(env_key) || Application.get_env(:lemon_browser, key)
+    )
   end
 
   defp driver_config_summary(opts) do
@@ -444,7 +480,14 @@ defmodule LemonBrowser.LocalServer do
       attach_only: attach_only?,
       cdp_port: if(endpoint == "", do: cdp_port, else: nil),
       cdp_endpoint_configured: endpoint != "",
-      cdp_endpoint_hash: if(endpoint == "", do: nil, else: hash_value(endpoint))
+      cdp_endpoint_hash: if(endpoint == "", do: nil, else: hash_value(endpoint)),
+      profile_identity_hash:
+        hash_value(
+          Jason.encode!([
+            configured_profile(opts, :user_data_dir),
+            configured_profile(opts, :profile_directory)
+          ])
+        )
     }
     |> Enum.reject(fn {_key, value} -> is_nil(value) end)
     |> Map.new()

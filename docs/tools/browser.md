@@ -33,6 +33,8 @@ Environment variables read by `lemon_browser` (from
 | `LEMON_BROWSER_CDP_ENDPOINT` | unset | CDP websocket endpoint to attach to instead of launching a browser. |
 | `LEMON_BROWSER_ATTACH_ONLY` | `false` | Attach only; never launch a browser. |
 | `LEMON_BROWSER_CDP_PORT` | `18800` | Local CDP port for a managed browser. Only positive integers are accepted. |
+| `LEMON_BROWSER_USER_DATA_DIR` | unset | Opt in to a dedicated managed Chrome user-data directory, using its cookies/logins. Default browser data directories are refused. |
+| `LEMON_BROWSER_PROFILE_DIRECTORY` | unset | Profile inside that data directory, e.g. `Default` or `Profile 1`. |
 | `LEMON_BROWSER_HYBRID_LOCAL_BACKEND` | `local` | Backend for local/private targets under `hybrid`. |
 | `LEMON_BROWSER_HYBRID_PUBLIC_BACKEND` | unset | Required under `hybrid`; backend for public targets. |
 | `LEMON_BROWSER_RELAY_TOKEN` | unset | Shared secret for the loopback MV3 relay. Secret. |
@@ -46,6 +48,12 @@ Environment variables read by `lemon_browser` (from
 The backend can also be selected with the application environment key
 `:lemon_browser, :backend`; an explicit `backend:` option on
 `LemonBrowser.request/4` overrides it.
+
+Managed profile settings also accept application config
+`config :lemon_browser, user_data_dir: "/dedicated/chrome-data", profile_directory: "Profile 1"`;
+the environment variables take precedence. Leave both unset to retain the
+Lemon-owned profile. Stop the local browser before changing either setting:
+an active driver refuses identity changes rather than reusing another profile.
 
 Driver resolution failures are reported as `Local browser driver not built`
 or `node executable not found on PATH` and remembered in driver status; the
@@ -144,6 +152,18 @@ Notes:
 - Unknown, unavailable, or mismatched backends fail closed; a backend failure
   never switches browser identity or profile.
 - Attached browsers are never closed by Lemon.
+- A selected managed profile runs actions **as the user**, with that profile's
+  cookies, logins, and permissions. Only opt in profiles whose identity you intend
+  to give the agent. Stopping Lemon closes only Chrome it launched; it never
+  deletes, cleans, or rewrites the selected profile directory as part of shutdown.
+  Chrome itself may persist normal browsing changes while running.
+- Chrome 136+ ignores remote debugging on its default user-data directory.
+  Lemon refuses platform-default Chrome/Chromium/Edge/Brave data directories
+  (including symlink aliases). For your real logged-in browser, use the MV3
+  relay below, or close Chrome and copy the desired profile to a dedicated
+  non-default user-data directory before setting `LEMON_BROWSER_USER_DATA_DIR`.
+- Profile locks fail closed: close Chrome using this profile, or attach via
+  `LEMON_BROWSER_CDP_ENDPOINT` / relay. Lemon never removes profile locks.
 - The MV3 relay (`LEMON_BROWSER_RELAY_TOKEN`) binds to loopback only, requires
   the token on every connection, hides restricted Chrome pages, and ignores
   `Browser.close`. See the
