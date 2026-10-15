@@ -41,7 +41,7 @@ private extension UIColor {
 #endif
 
 /// Semantic surface and text colors.
-enum LB {
+public enum LB {
     /// Conversation canvas.
     static let canvas = Color(light: 0xF8F8F4, dark: 0x121311)
     /// Sidebar / inspector column.
@@ -60,7 +60,7 @@ enum LB {
     static let separator = Color(light: 0x2B312A, dark: 0xFFFFFF, lightAlpha: 0.09, darkAlpha: 0.08)
 
     static let ink = Color(light: 0x2B312A, dark: 0xECEDE6)
-    static let muted = Color(light: 0x6E766B, dark: 0xA0A598)
+    public static let muted = Color(light: 0x6E766B, dark: 0xA0A598)
     static let faint = Color(light: 0x949B8F, dark: 0x70756B)
 
     /// Brand olive, used for focus rings, links and selection accents.
@@ -70,8 +70,8 @@ enum LB {
     static let lemonInk = Color(hex: 0x3F4A33)
     static let unread = Color(light: 0x3B82F0, dark: 0x5B9BFF)
     static let success = Color(light: 0x4C8A58, dark: 0x8CCB98)
-    static let warning = Color(light: 0x93691C, dark: 0xE6BA5E)
-    static let danger = Color(light: 0xA6423D, dark: 0xEC8478)
+    public static let warning = Color(light: 0x93691C, dark: 0xE6BA5E)
+    public static let danger = Color(light: 0xA6423D, dark: 0xEC8478)
 
     static let shadow = Color.black.opacity(0.10)
 }
@@ -90,13 +90,13 @@ enum LBMetric {
 }
 
 /// Typography: 15pt body on macOS; Dynamic-Type text styles on iOS.
-enum LBFont {
+public enum LBFont {
     #if os(macOS)
     static let body = Font.system(size: 15)
     static let bodyEmphasis = Font.system(size: 15, weight: .semibold)
     static let rowTitle = Font.system(size: 14, weight: .semibold)
-    static let rowSubtitle = Font.system(size: 13)
-    static let meta = Font.system(size: 12)
+    public static let rowSubtitle = Font.system(size: 13)
+    public static let meta = Font.system(size: 12)
     static let metaEmphasis = Font.system(size: 12, weight: .medium)
     static let chip = Font.system(size: 11, weight: .medium)
     static let title = Font.system(size: 20, weight: .semibold)
@@ -106,8 +106,8 @@ enum LBFont {
     static let body = Font.callout
     static let bodyEmphasis = Font.callout.weight(.semibold)
     static let rowTitle = Font.subheadline.weight(.semibold)
-    static let rowSubtitle = Font.subheadline
-    static let meta = Font.caption
+    public static let rowSubtitle = Font.subheadline
+    public static let meta = Font.caption
     static let metaEmphasis = Font.caption.weight(.medium)
     static let chip = Font.caption2.weight(.medium)
     static let title = Font.title3.weight(.semibold)

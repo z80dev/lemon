@@ -167,7 +167,20 @@ public struct LemonBotSettingsView<Platform: View>: View {
             .background(LB.sidebar)
             .navigationSplitViewColumnWidth(min: 220, ideal: 236, max: 280)
         } detail: {
-            NavigationStack { macPane(router.pane) }.id(router.pane)
+            ZStack {
+                // Keep the editable Preferences navigation stack alive between pane switches.
+                NavigationStack { macPane(.preferences) }
+                    .opacity(router.pane == .preferences ? 1 : 0)
+                    .allowsHitTesting(router.pane == .preferences)
+                    .accessibilityHidden(router.pane != .preferences)
+                NavigationStack { macPane(.platform) }
+                    .opacity(router.pane == .platform ? 1 : 0)
+                    .allowsHitTesting(router.pane == .platform)
+                    .accessibilityHidden(router.pane != .platform)
+                if router.pane != .preferences && router.pane != .platform {
+                    NavigationStack { macPane(router.pane) }.id(router.pane)
+                }
+            }
         }
         .frame(minWidth: 780, minHeight: 540)
     }

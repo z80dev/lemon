@@ -47,7 +47,7 @@ struct AccountSettingsView: View {
                         Task { await control.perform { try await store.restoreAccount(account) } }
                     }.disabled(control.busy)
                 }
-                AdminAction(title: "Sign out of current account", store: store, control: control) { try await store.signOut() }
+                AdminAction(title: "Sign out of current account", store: store, control: control, destructive: true) { try await store.signOut() }
             }
             Section("Product sessions") {
                 ForEach(sessions) { session in

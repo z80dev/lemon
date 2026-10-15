@@ -15,6 +15,12 @@ public struct MutationIntent: Codable, Hashable, Identifiable {
     public init(clientNonce: String, method: String, path: String, resourceIDs: [ID] = [], runID: ID? = nil, expectedRevision: Int? = nil, startedAtMs: TimestampMs = Date().timeIntervalSince1970 * 1000, state: String = "in_flight") {
         self.clientNonce = clientNonce; self.method = method; self.path = path; self.resourceIDs = resourceIDs; self.runID = runID; self.expectedRevision = expectedRevision; self.startedAtMs = startedAtMs; self.state = state
     }
+    var messageConversationID: ID? {
+        guard method == "POST", path.hasPrefix("/conversations/"), path.hasSuffix("/messages") else { return nil }
+        let encoded = path.dropFirst("/conversations/".count).dropLast("/messages".count)
+        guard !encoded.isEmpty, !encoded.contains("/") else { return nil }
+        return String(encoded).removingPercentEncoding
+    }
 }
 
 extension LemonBotStore {
@@ -66,6 +72,7 @@ extension LemonBotStore {
         let client = try activeTransport()
         var payload = body
         let handle = try beginIntent(method, path, payload: &payload)
+        defer { if method == "POST", path.hasSuffix("/messages") { scheduleMessageReconciliation() } }
         do {
             let value: T = try await client.mutate(method, path, body: payload, as: responseType)
             finishIntent(handle, unknown: unknownResources(value))
@@ -110,18 +117,20 @@ extension LemonBotStore {
         let current = generation
         let parts = intent.path.split(separator: "/").map(String.init)
         var resolved = false
-        if parts.first == "conversations", parts.last == "messages" {
-            let values: [Run] = try await allPages("/runs", query: ["clientNonce": clientNonce], as: Run.self)
-            for value in values { upsert(&runs, value, id: { $0.id }, revision: { $0.revision }) }
-            resolved = !values.isEmpty && values.allSatisfy { $0.status != "outcome_unknown" && $0.status != "reserved" }
-            if resolved {
-                let runIDs = Set(values.map(\.id))
-                for id in intent.resourceIDs where !runIDs.contains(id) {
-                    let entry: TranscriptEntry = try await read("/entries/\(HTTPTransport.pathID(id))")
-                    guard entry.clientNonce == clientNonce, entry.conversationId == (parts[1].removingPercentEncoding ?? parts[1]) else { throw ClientError.invalidFrame }
-                    upsertEntry(entry)
-                }
-            }
+        var messageReceipt: MessageReceipt?
+        if let conversationID = intent.messageConversationID {
+            let receipt = try await self.messageReceipt(conversationID: conversationID, clientNonce: clientNonce)
+            guard receipt.clientNonce == clientNonce,
+                  receipt.entries.allSatisfy({ $0.clientNonce == clientNonce && $0.conversationId == conversationID }),
+                  receipt.runs.allSatisfy({ $0.clientNonce == clientNonce && $0.conversationId == conversationID && $0.initiatorUserId == account.userID }) else { throw ClientError.invalidFrame }
+            for entry in receipt.entries { upsertEntry(entry) }
+            for run in receipt.runs { upsert(&runs, run, id: { $0.id }, revision: { $0.revision }) }
+            let runIDs = Set(receipt.runs.map(\.id))
+            resolved = receipt.status != "outcome_unknown" && !receipt.entries.isEmpty
+                && receipt.runs.allSatisfy { !["reserved", "outcome_unknown"].contains($0.status) }
+                && receipt.delivery.count == runIDs.count && Set(receipt.delivery.map(\.runId)) == runIDs
+                && receipt.delivery.allSatisfy { delivery in delivery.effectiveMode != "outcome_unknown" && receipt.runs.contains { $0.id == delivery.runId && $0.botId == delivery.botId } }
+            if resolved { messageReceipt = receipt }
         } else if parts.count >= 2 {
             let base = "/" + parts[0] + "/" + (try HTTPTransport.pathID(parts[1].removingPercentEncoding ?? parts[1]))
             switch parts[0] {
@@ -161,8 +170,40 @@ extension LemonBotStore {
             resolved = inspected
         }
         try assertGeneration(current)
-        if resolved { try persistCache(); finishIntent((account.id, clientNonce)) }
+        if resolved {
+            try persistCache(); finishIntent((account.id, clientNonce))
+            guard !pendingIntents.contains(where: { $0.clientNonce == clientNonce }) else { return false }
+            if let messageReceipt { reconciledMessageReceipts[clientNonce] = messageReceipt }
+        }
         return resolved
+    }
+    /// Only GETs the original message reservation. Neither reconnect nor foreground replays a send.
+    public func reconcilePendingMessages() async {
+        scheduleMessageReconciliation()
+        await messageReconciliationTask?.value
+    }
+    func scheduleMessageReconciliation(clientNonce: String? = nil) {
+        guard account != nil, connectionState != "reconnect_required",
+              pendingIntents.contains(where: { $0.messageConversationID != nil && (clientNonce == nil || $0.clientNonce == clientNonce) }) else { return }
+        messageReconciliationRequested = true
+        guard messageReconciliationTask == nil else { return }
+        let current = generation
+        messageReconciliationTask = Task { [weak self] in
+            guard let self else { return }
+            defer { if self.generation == current { self.messageReconciliationTask = nil } }
+            repeat {
+                self.messageReconciliationRequested = false
+                let nonces = self.pendingIntents.filter { $0.messageConversationID != nil }.map(\.clientNonce)
+                for nonce in nonces {
+                    guard !Task.isCancelled, self.generation == current else { return }
+                    do { _ = try await self.reconcileMutation(nonce) }
+                    catch {
+                        // A failed observation proves neither acceptance nor failure. Retain the original fence.
+                        guard !Task.isCancelled, self.generation == current, self.connectionState != "reconnect_required" else { return }
+                    }
+                }
+            } while self.messageReconciliationRequested
+        }
     }
     private func settledGate(_ gate: Gate) -> Bool { !["pending", "submitted", "outcome_unknown"].contains(gate.state) }
     @discardableResult public func setLocalComposerRouting(conversationID: ID, references: [Reference], mentions: [ID], everyone: Bool) -> Bool {

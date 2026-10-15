@@ -22,12 +22,15 @@ struct InboxView: View {
             SwiftUI.Section {
                 Toggle("Unread only", isOn: $unread)
                 Text("Reading or dismissing a notice never approves a request. Open the exact action to inspect current authorization and expiry.").font(.caption)
-                Button("Mark all displayed notices read") { Task { await action.perform {
+                Button("Mark all notices read") { Task { await action.perform {
                     let through = store.notifications.map(\.createdAtMs).max() ?? 0
                     let _: Empty = try await store.mutate("POST", "/notifications/read-all", body: ["throughAtMs": .number(Double(through))])
                     try await store.refresh()
                 } } }.disabled(action.busy || store.connectionState != "online")
                 ActionErrorView(message: action.error)
+            }
+            if store.notifications.filter({ $0.dismissedAtMs == nil && (!unread || $0.readAtMs == nil) }).isEmpty {
+                ContentUnavailableView(unread ? "No unread notices" : "No notices", systemImage: "bell", description: Text("Approvals and results from your Bots appear here."))
             }
             ForEach(store.notifications.filter { $0.dismissedAtMs == nil && (!unread || $0.readAtMs == nil) }.sorted { $0.createdAtMs > $1.createdAtMs }) { notice in
                 VStack(alignment: .leading, spacing: 8) {

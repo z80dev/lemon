@@ -262,6 +262,7 @@ private final class TestAccountCredentialStore: AccountCredentialStore {
             let _: MessageReceipt = try await first.mutate("POST", "/conversations/chat/messages", body: ["clientNonce": .string("fixed_intent_123456"), "text": .string("must_not_persist"), "password": .string("never_store_credentials")])
             XCTFail("Expected uncertain outcome")
         } catch ClientError.outcomeUnknown(let nonce) { XCTAssertEqual(nonce, "fixed_intent_123456") }
+        await first.reconcilePendingMessages()
         let intents = try persistence.loadMutationIntents(accountID: "account")
         XCTAssertEqual(intents.first?.clientNonce, "fixed_intent_123456")
         XCTAssertEqual(intents.first?.state, "outcome_unknown")
@@ -280,23 +281,29 @@ private final class TestAccountCredentialStore: AccountCredentialStore {
         let persistence = persistence(), store = try store(persistence)
         var resource = try JSONDecoder().decode([JSONObject].self, from: WireFixtures.events).first { $0["event"]?.stringValue == "run.upserted" }!["payload"]!.objectValue!
         resource["clientNonce"] = .string("fixed_message_123456"); resource["status"] = .string("outcome_unknown")
+        resource["conversationId"] = .string("chat")
         let run = try JSONDecoder().decode(Run.self, from: JSONEncoder().encode(resource))
-        let receipt = MessageReceipt(entries: [], runs: [run], clientNonce: "fixed_message_123456", status: "outcome_unknown", delivery: [])
+        var authored = try message("Hello")
+        if case .message(var value) = authored { value.clientNonce = "fixed_message_123456"; value.conversationId = "chat"; authored = .message(value) }
+        let receipt = MessageReceipt(entries: [authored], runs: [run], clientNonce: "fixed_message_123456", status: "outcome_unknown", delivery: [MessageReceiptDelivery(botId: run.botId, requestedMode: "followup", effectiveMode: "outcome_unknown", runId: run.id)])
+        var settled = false
         TestHTTPProtocol.handler = { request in
             if request.httpMethod == "POST" { return (202, [:], try JSONEncoder().encode(receipt)) }
-            XCTAssertEqual(request.url?.path, "/v1/runs")
-            XCTAssertEqual(URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems?.first(where: { $0.name == "clientNonce" })?.value, "fixed_message_123456")
-            var reconciled = run; reconciled.status = "queued"
-            return (200, [:], try JSONEncoder().encode(Page(items: [reconciled], nextCursor: nil)))
+            XCTAssertEqual(request.url?.path, "/v1/conversations/chat/messages/receipts/fixed_message_123456")
+            var reconciled = receipt
+            if settled { reconciled.status = "queued"; reconciled.runs[0].status = "queued"; reconciled.delivery[0].effectiveMode = "queued" }
+            return (200, [:], try JSONEncoder().encode(reconciled))
         }
         let accepted: MessageReceipt = try await store.mutate("POST", "/conversations/chat/messages", body: ["clientNonce": .string("fixed_message_123456"), "text": .string("Hello")])
         XCTAssertEqual(accepted.status, "outcome_unknown")
         XCTAssertEqual(store.pendingIntents.first?.runID, run.id)
-        let resolved = try await store.reconcileMutation("fixed_message_123456")
-        XCTAssertTrue(resolved)
+        settled = true
+        await store.reconcilePendingMessages()
+        XCTAssertEqual(store.reconciledMessageReceipts["fixed_message_123456"]?.status, "queued")
         XCTAssertTrue(store.pendingIntents.isEmpty)
         XCTAssertTrue(try persistence.loadMutationIntents(accountID: "account").isEmpty)
-        XCTAssertEqual(TestHTTPProtocol.requests.map(\.httpMethod), ["POST", "GET"])
+        XCTAssertEqual(TestHTTPProtocol.requests.filter { $0.httpMethod == "POST" }.count, 1)
+        XCTAssertTrue(TestHTTPProtocol.requests.dropFirst().allSatisfy { $0.httpMethod == "GET" })
     }
     func testComposerRoutingPersistsWithoutSending() throws {
         let persistence = persistence(), store = try store(persistence)
@@ -378,22 +385,25 @@ private final class TestAccountCredentialStore: AccountCredentialStore {
         let run = try JSONDecoder().decode(Run.self, from: JSONEncoder().encode(failureRun))
         var entry = try message("Authored text")
         if case .message(var value) = entry { value.id = "authored"; value.conversationId = "chat"; value.clientNonce = "refused_nonce_123456"; entry = .message(value) }
+        var settled = false
         TestHTTPProtocol.handler = { request in
             if request.httpMethod == "POST" {
                 return (503, [:], Data(#"{"error":{"code":"capability_unavailable","message":"Configure destination provider","requestId":"refusal","retrySafe":true,"details":{"clientNonce":"refused_nonce_123456","entryIds":["authored"],"runIds":["rejected_run"]}}}"#.utf8))
             }
-            if request.url?.path == "/v1/runs" { return (200, [:], try JSONEncoder().encode(Page(items: [run], nextCursor: nil))) }
-            XCTAssertEqual(request.url?.path, "/v1/entries/authored")
-            return (200, [:], try JSONEncoder().encode(entry))
+            XCTAssertEqual(request.url?.path, "/v1/conversations/chat/messages/receipts/refused_nonce_123456")
+            return (200, [:], try JSONEncoder().encode(MessageReceipt(entries: [entry], runs: [run], clientNonce: "refused_nonce_123456", status: settled ? "accepted" : "outcome_unknown", delivery: [MessageReceiptDelivery(botId: run.botId, requestedMode: "followup", effectiveMode: "rejected", runId: run.id)])))
         }
         do { let _: MessageReceipt = try await store.mutate("POST", "/conversations/chat/messages", body: ["clientNonce": .string("refused_nonce_123456"), "text": .string("Authored text")]); XCTFail("Expected actual refusal") }
         catch let error as BackendError { XCTAssertEqual(error.failure.code, "capability_unavailable") }
         XCTAssertEqual(store.pendingIntents.first?.state, "recorded_refusal")
-        let resolved = try await store.reconcileMutation("refused_nonce_123456")
-        XCTAssertTrue(resolved); XCTAssertTrue(store.pendingIntents.isEmpty)
+        settled = true
+        await store.reconcilePendingMessages()
+        XCTAssertTrue(store.pendingIntents.isEmpty)
+        XCTAssertEqual(store.reconciledMessageReceipts["refused_nonce_123456"]?.delivery.first?.effectiveMode, "rejected")
         XCTAssertEqual(store.entries["chat"]?.first?.id, "authored")
         XCTAssertEqual(store.runs.first?.status, "failed")
-        XCTAssertEqual(TestHTTPProtocol.requests.map(\.httpMethod), ["POST", "GET", "GET"])
+        XCTAssertEqual(TestHTTPProtocol.requests.filter { $0.httpMethod == "POST" }.count, 1)
+        XCTAssertTrue(TestHTTPProtocol.requests.dropFirst().allSatisfy { $0.httpMethod == "GET" })
     }
     func testTaskNotificationWithExactTaskConversationFetchesAndSelectsItsEntry() async throws {
         let store = try store()
