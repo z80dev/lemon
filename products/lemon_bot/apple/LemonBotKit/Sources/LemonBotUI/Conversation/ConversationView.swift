@@ -79,15 +79,6 @@ public struct ConversationView: View {
     public var body: some View {
         content
             .navigationTitle(title)
-            #if os(iOS)
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbarBackground(LB.canvas, for: .navigationBar)
-            .toolbarBackground(.visible, for: .navigationBar)
-            .toolbar {
-                ToolbarItem(placement: .principal) { headerPill(floating: false) }
-                ToolbarItem(placement: .topBarTrailing) { actionsMenu }
-            }
-            #endif
             .task(id: conversationID) { await open() }
             .onAppear { NotificationCenter.default.post(name: Notification.Name("LemonBot.visibleConversationChanged"), object: nil, userInfo: ["conversationID": conversationID]) }
             .onDisappear {
@@ -107,8 +98,21 @@ public struct ConversationView: View {
                 if let bot {
                     BotInspectorView(store: store, botID: bot.id, presentation: inspector)
                         .inspectorColumnWidth(min: 300, ideal: 340, max: 460)
+                        #if os(iOS)
+                        .presentationDetents([.medium, .large])
+                        .presentationDragIndicator(.visible)
+                        #endif
                 }
             }
+            #if os(iOS)
+            // Toolbar goes outside `.inspector` so its items land in the main navigation bar.
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbarBackground(LB.canvas, for: .navigationBar)
+            .toolbar {
+                ToolbarItem(placement: .principal) { headerPill(floating: false) }
+                ToolbarItem(placement: .topBarTrailing) { actionsMenu }
+            }
+            #endif
     }
 
     private var content: some View {

@@ -13,6 +13,7 @@ struct SidebarView: View {
     @Binding var destination: WorkspaceDestination
     let inspector: InspectorPresentation
     let openConversation: (ID) -> Void
+    let openDestination: (WorkspaceDestination) -> Void
     let openSettings: (SettingsPane) -> Void
     let newBot: () -> Void
     let newGroup: () -> Void
@@ -78,7 +79,13 @@ struct SidebarView: View {
             }
             footer
         }
+        #if os(macOS)
         .background(LB.sidebar)
+        #else
+        .background(LB.canvas)
+        .searchable(text: $query, isPresented: $searching, placement: .navigationBarDrawer(displayMode: .automatic), prompt: "Search Bots and groups")
+        .toolbar { phoneToolbar }
+        #endif
         .task(id: previewKey) { await loadPreviews() }
         .onChange(of: filterFocusRequest) { _, _ in
             lbWithAnimation(reduceMotion, LBMotion.snappy) { searching = true }
@@ -87,7 +94,9 @@ struct SidebarView: View {
     }
 
     @ViewBuilder private var rows: some View {
-        if searching { filterField.padding(.horizontal, 12).padding(.bottom, 8).sidebarRow() }
+        #if os(macOS)
+        if searching { filterField.padding(.horizontal, 12).padding(.bottom, 8) }
+        #endif
         if !pinned.isEmpty { pinnedRow.padding(.bottom, 10).sidebarRow() }
         utilityRows
         if store.bots.isEmpty { setupRow.sidebarRow() }
@@ -117,11 +126,9 @@ struct SidebarView: View {
 
     // MARK: Top bar
 
-    private var topBar: some View {
+    @ViewBuilder private var topBar: some View {
+        #if os(macOS)
         HStack(spacing: 8) {
-            #if os(iOS)
-            Text("Chats").font(.title2.weight(.bold)).foregroundStyle(LB.ink)
-            #endif
             Spacer()
             connectionPill
             Button {
@@ -137,12 +144,29 @@ struct SidebarView: View {
                 .contextMenu { Button("New group of Bots", systemImage: "person.2", action: newGroup) }
         }
         .padding(.horizontal, 14)
-        #if os(macOS)
         .frame(height: 52)
         #else
-        .padding(.vertical, 8)
+        // iPhone uses the navigation bar (large "Chats" title, + button) and pull-down search.
+        if !store.isOnline { HStack { Spacer(); connectionPill }.padding(.horizontal, 16).padding(.vertical, 4) }
         #endif
     }
+
+    #if os(iOS)
+    @ToolbarContentBuilder private var phoneToolbar: some ToolbarContent {
+        ToolbarItem(placement: .topBarLeading) {
+            Menu {
+                Toggle(isOn: $unreadOnly) { Label("Unread only", systemImage: "envelope.badge") }
+                Button(showHidden ? "Hide hidden Bots" : "Show hidden Bots", systemImage: showHidden ? "eye.slash" : "eye") { showHidden.toggle() }
+                Divider()
+                Button("Search everything", systemImage: "magnifyingglass", action: searchEverything)
+                Button("New group of Bots", systemImage: "person.2", action: newGroup).disabled(!store.isOnline)
+            } label: { Label("Filter", systemImage: unreadOnly ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle") }
+        }
+        ToolbarItem(placement: .topBarTrailing) {
+            Button(action: newBot) { Label("New Bot", systemImage: "square.and.pencil") }.disabled(!store.isOnline)
+        }
+    }
+    #endif
 
     @ViewBuilder private var connectionPill: some View {
         switch store.connectionState {
@@ -211,12 +235,12 @@ struct SidebarView: View {
 
     @ViewBuilder private var utilityRows: some View {
         if !filtering {
-            utilityRow("Inbox", symbol: "tray", count: unreadInbox, selected: destination == .inbox) { destination = .inbox }
-            utilityRow("Activity", symbol: "clock.arrow.circlepath", count: 0, selected: destination == .activity) { destination = .activity }
+            utilityRow("Inbox", symbol: "tray", count: unreadInbox, selected: destination == .inbox) { openDestination(.inbox) }
+            utilityRow("Activity", symbol: "clock.arrow.circlepath", count: 0, selected: destination == .activity) { openDestination(.activity) }
             if !store.pendingIntents.isEmpty {
-                utilityRow("Unconfirmed actions", symbol: "exclamationmark.arrow.triangle.2.circlepath", count: store.pendingIntents.count, selected: destination == .pending, tint: LB.warning) { destination = .pending }
+                utilityRow("Unconfirmed actions", symbol: "exclamationmark.arrow.triangle.2.circlepath", count: store.pendingIntents.count, selected: destination == .pending, tint: LB.warning) { openDestination(.pending) }
             }
-            Color.clear.frame(height: 6)
+            Color.clear.frame(height: 6).sidebarRow()
         }
     }
     private func utilityRow(_ title: String, symbol: String, count: Int, selected: Bool, tint: Color? = nil, action: @escaping () -> Void) -> some View {

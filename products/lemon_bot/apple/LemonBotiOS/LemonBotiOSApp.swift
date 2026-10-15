@@ -52,35 +52,52 @@ struct NativeLemonBotView: View {
     }
 
     var body: some View {
-        LemonBotRootView(store: store)
-            .safeAreaInset(edge: .bottom) {
-                VStack(spacing: 4) {
-                    if voice.active {
-                        HStack {
-                            Label(voice.capture.recording ? "Voice · Microphone on" : "Voice session active · microphone off", systemImage: voice.capture.recording ? "mic.fill" : "waveform")
-                                .font(.caption).foregroundStyle(voice.capture.recording ? Color.red : Color.primary)
-                            Spacer()
-                            Button("Return") { sheet = NativeSheet(action: "voice") }
-                            Button("Hang up") { Task { await voice.end() } }.disabled(voice.busy)
-                        }
+        LemonBotRootView(store: store) {
+            // Settings → This iPhone: OS permissions and items shared from other apps.
+            Form {
+                Section {
+                    Button { sheet = NativeSheet(action: "shares") } label: {
+                        Label(stagedCount > 0 ? "Shared items (\(stagedCount))" : "Shared items", systemImage: "square.and.arrow.down")
                     }
-                    HStack {
-                        Button { sheet = NativeSheet(action: "shares") } label: {
-                            Label(stagedCount > 0 ? "Selected shares (\(stagedCount))" : "Selected shares", systemImage: "square.and.arrow.down")
-                        }
-                        Spacer()
-                        Button { sheet = NativeSheet(action: "permissions") } label: { Label("iOS access", systemImage: "hand.raised") }
-                    }.font(.caption)
-                    if let error = localError ?? delegate.error ?? voice.error {
-                        HStack(alignment: .top) {
-                            Text(error).font(.caption).foregroundStyle(.red).textSelection(.enabled)
+                } footer: { Text("Files and text you share to Lemon Bot from other apps wait here until you choose a chat. Nothing is sent automatically.") }
+                permissionSections
+            }
+        }
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                // Only what needs attention: an active voice chat, staged shares, or a platform error.
+                VStack(spacing: 6) {
+                    if voice.active {
+                        HStack(spacing: 10) {
+                            Image(systemName: voice.capture.recording ? "mic.fill" : "waveform")
+                                .foregroundStyle(voice.capture.recording ? Color.red : Color.primary)
+                            Text(voice.capture.recording ? "Voice chat · mic on" : "Voice chat · mic off").font(.subheadline.weight(.medium))
                             Spacer()
-                            Button("Details") { sheet = NativeSheet(action: "permissions") }.font(.caption)
+                            Button("Return") { sheet = NativeSheet(action: "voice") }.buttonStyle(.bordered).buttonBorderShape(.capsule)
+                            Button("Hang up", role: .destructive) { Task { await voice.end() } }.buttonStyle(.borderedProminent).buttonBorderShape(.capsule).disabled(voice.busy)
                         }
+                        .padding(.horizontal, 14).padding(.vertical, 8)
+                        .background(.regularMaterial, in: Capsule())
+                        .accessibilityElement(children: .contain)
+                    }
+                    if stagedCount > 0 && store.selectedConversationID == nil {
+                        Button { sheet = NativeSheet(action: "shares") } label: {
+                            Label("\(stagedCount) shared \(stagedCount == 1 ? "item" : "items") waiting", systemImage: "square.and.arrow.down")
+                                .font(.subheadline.weight(.medium))
+                        }
+                        .buttonStyle(.bordered).buttonBorderShape(.capsule)
+                    }
+                    if let error = localError ?? delegate.error ?? voice.error {
+                        HStack(alignment: .firstTextBaseline, spacing: 8) {
+                            Image(systemName: "exclamationmark.circle.fill").foregroundStyle(.red)
+                            Text(error).font(.footnote).textSelection(.enabled).lineLimit(3)
+                            Spacer(minLength: 4)
+                            Button("Details") { sheet = NativeSheet(action: "permissions") }.font(.footnote.weight(.semibold))
+                        }
+                        .padding(.horizontal, 14).padding(.vertical, 10)
+                        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
                     }
                 }
-                .padding(8)
-                .background(.bar)
+                .padding(.horizontal, 12)
             }
             .sheet(item: $sheet, onDismiss: { reloadShares() }) { request in
                 switch request.action {
@@ -199,7 +216,13 @@ struct NativeLemonBotView: View {
 
     private var permissions: some View {
         NavigationStack {
-            Form {
+            Form { permissionSections }
+            .navigationTitle("iOS permissions")
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { sheet = nil } } }
+        }
+    }
+
+    @ViewBuilder private var permissionSections: some View {
                 Section("Notifications") {
                     Text("OS permission: \(delegate.permission)")
                     Text(delegate.registered ? "Actual APNs device token registered with this backend account." : "No confirmed APNs registration for this account.")
@@ -220,10 +243,6 @@ struct NativeLemonBotView: View {
                 if delegate.pendingNavigationURL != nil {
                     Button("Retry selected link with ACL fetch") { Task { if let url = delegate.pendingNavigationURL { await delegate.open(url) } } }
                 }
-            }
-            .navigationTitle("iOS permissions")
-            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { sheet = nil } } }
-        }
     }
 
     private var cameraPermission: String {

@@ -5,6 +5,8 @@ import LemonBotKit
 /// Admin surfaces live in Settings; Inbox and Activity are compact sidebar entries.
 public struct LemonBotRootView: View {
     private let store: LemonBotStore
+    /// Device-specific settings (iOS permissions, shared items) shown as Settings → This iPhone.
+    private let platformSettings: AnyView?
     @State private var destination: WorkspaceDestination = .conversation
     @State private var visibility: NavigationSplitViewVisibility = .all
     @State private var compactColumn: NavigationSplitViewColumn = .sidebar
@@ -20,8 +22,11 @@ public struct LemonBotRootView: View {
     @Environment(\.openSettings) private var openSettingsScene
     #endif
     @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
-    public init(store: LemonBotStore) { self.store = store; _inspector = State(initialValue: InspectorPresentation()) }
-    init(store: LemonBotStore, inspector: InspectorPresentation) { self.store = store; _inspector = State(initialValue: inspector) }
+    public init(store: LemonBotStore) { self.store = store; platformSettings = nil; _inspector = State(initialValue: InspectorPresentation()) }
+    public init<Platform: View>(store: LemonBotStore, @ViewBuilder platformSettings: () -> Platform) {
+        self.store = store; self.platformSettings = AnyView(platformSettings()); _inspector = State(initialValue: InspectorPresentation())
+    }
+    init(store: LemonBotStore, inspector: InspectorPresentation) { self.store = store; platformSettings = nil; _inspector = State(initialValue: inspector) }
     private var reduceMotion: Bool { systemReduceMotion || store.prefersReducedMotion }
     private var selectedBot: Bot? { store.bot(for: store.conversations.first { $0.id == store.selectedConversationID }) }
     private var orderedBots: [Bot] {
@@ -49,7 +54,9 @@ public struct LemonBotRootView: View {
             #endif
         }
         #if os(iOS)
-        .sheet(isPresented: $settings) { LemonBotSettingsView(store: store) }
+        .sheet(isPresented: $settings) {
+            if let platformSettings { LemonBotSettingsView(store: store) { platformSettings } } else { LemonBotSettingsView(store: store) }
+        }
         #endif
         .onChange(of: store.account?.id) { _, _ in newAccount = false; destination = .conversation; compactColumn = .sidebar }
         .preferredColorScheme(store.user?.preferences.appearance == "dark" ? .dark : store.user?.preferences.appearance == "light" ? .light : nil)
@@ -69,7 +76,7 @@ public struct LemonBotRootView: View {
         NavigationSplitView(columnVisibility: $visibility, preferredCompactColumn: $compactColumn) {
             SidebarView(
                 store: store, destination: $destination, inspector: inspector,
-                openConversation: openRoom, openSettings: openSettings,
+                openConversation: openRoom, openDestination: { destination = $0; compactColumn = .detail }, openSettings: openSettings,
                 newBot: { newBot = true }, newGroup: { newGroup = true },
                 searchEverything: { search = true }, reconnect: { pairing = true },
                 filterFocusRequest: $filterFocusRequest
@@ -78,7 +85,7 @@ public struct LemonBotRootView: View {
             .navigationSplitViewColumnWidth(min: 240, ideal: 290, max: 380)
             .ignoresSafeArea(edges: .top)
             #else
-            .toolbar(.hidden, for: .navigationBar)
+            .navigationTitle("Chats")
             #endif
         } detail: {
             NavigationStack { detail }
