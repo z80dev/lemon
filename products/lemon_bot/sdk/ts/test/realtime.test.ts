@@ -50,6 +50,31 @@ const ready: Extract<RealtimeServerFrame, { type: 'ready' }> = {
 const event: RealtimeEvent = { type: 'event', seq: '9007199254740994', event: 'user.updated', payload: { ...snapshot.user, revision: 2 }, timestampMs: 2 };
 
 describe('realtime consumer lifecycle', () => {
+  test('exposes the real backoff deadline and clears it on retry and close', async () => {
+    const sockets: TestSocket[] = [];
+    const deadlines: (number | null)[] = [];
+    const connection = new LemonBotClient({ baseUrl: 'https://bot.example', token: 'session' }).realtime({
+      cursor: snapshot.cursor, onReset: async () => snapshot, onEvent: () => {},
+      onState: state => { if (state === 'reconnecting') deadlines.push(connection.nextRetryAtMs); },
+      webSocket: url => { const socket = new TestSocket(url); sockets.push(socket); return socket as unknown as WebSocket; },
+    });
+    connections.push(connection);
+    connection.start();
+    expect(connection.nextRetryAtMs).toBeNull();
+    sockets[0]!.close(1006);
+    expect(connection.nextRetryAtMs).toBe(Date.now() + 500);
+    expect(deadlines).toEqual([Date.now() + 500]);
+    vi.advanceTimersByTime(500);
+    expect(sockets).toHaveLength(2);
+    expect(connection.nextRetryAtMs).toBeNull();
+    sockets[1]!.close(1006);
+    expect(connection.nextRetryAtMs).toBe(Date.now() + 1000);
+    connection.close();
+    expect(connection.nextRetryAtMs).toBeNull();
+    vi.advanceTimersByTime(30000);
+    expect(sockets).toHaveLength(2);
+  });
+
   test('auth precedes subscription, atomic reset cursor is used instead of ready watermark', async () => {
     const sockets: TestSocket[] = [];
     const reset = deferred();

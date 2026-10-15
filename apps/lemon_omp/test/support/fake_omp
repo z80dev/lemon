@@ -41,6 +41,14 @@
 #   WRITE_FILE  create worker.txt in cwd before completing the turn
 #   SUBAGENTS   realistic progress/lifecycle for a task child (HOLD keeps it running)
 #   anything else completes the turn at once.
+#
+# Redirect message keywords:
+#   REJECT          reject abort_and_prompt without aborting
+#   PROMPT_FAIL     acknowledge, then fail the asynchronous prompt with the same id
+#   LATE_REDIRECT   complete the new turn before acknowledging abort_and_prompt
+#   REDIRECT_GATE   after abort events, wait for .fake_omp_redirect_ack; acknowledge,
+#                   wait for .fake_omp_redirect_start; start the new turn,
+#                   wait for .fake_omp_redirect_finish; complete it
 
 if [ "$1" = models ]; then
   [ -z "$FAKE_OMP_MODELS_COUNT" ] || printf 'call\n' >>"$FAKE_OMP_MODELS_COUNT"
@@ -324,6 +332,48 @@ while IFS= read -r line; do
           ;;
         *APPROVAL_EXIT*) exit 3 ;;
       esac
+      ;;
+    abort_and_prompt)
+      msg=$(field message)
+      case "$msg" in
+        *REJECT*)
+          emit '{"type":"response","id":"'"$id"'","command":"abort_and_prompt","success":false,"error":"Redirect refused"}'
+          continue
+          ;;
+      esac
+      if [ -n "$held" ]; then
+        abort_turn "$held"
+        held=
+      fi
+      case "$msg" in
+        *REDIRECT_GATE*)
+          while [ ! -f "$cwd/.fake_omp_redirect_ack" ]; do sleep 0.02; done
+          ;;
+        *LATE_REDIRECT*)
+          start_turn
+          complete_turn "$id" "Redirected early"
+          respond "$id" abort_and_prompt
+          continue
+          ;;
+      esac
+      respond "$id" abort_and_prompt
+      case "$msg" in
+        *PROMPT_FAIL*)
+          case "$msg" in *PROMPT_FAIL_STARTED*) start_turn ;; esac
+          emit '{"type":"response","id":"'"$id"'","command":"abort_and_prompt","success":false,"error":"Redirect prompt failed\u001b[31m"}'
+          continue
+          ;;
+        *REDIRECT_GATE*)
+          while [ ! -f "$cwd/.fake_omp_redirect_start" ]; do sleep 0.02; done
+          ;;
+      esac
+      start_turn
+      case "$msg" in
+        *REDIRECT_GATE*)
+          while [ ! -f "$cwd/.fake_omp_redirect_finish" ]; do sleep 0.02; done
+          ;;
+      esac
+      complete_turn "$id" "Redirected: $msg"
       ;;
     abort)
       respond "$id" abort

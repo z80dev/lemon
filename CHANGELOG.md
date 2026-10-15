@@ -10,6 +10,8 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Lemon Bot
 
+- Web clients explain service, network, session and Lemon-link failures with live retry timing, real connection restart and owner recovery actions instead of silent sign-out or stuck disconnected screens.
+- Apple Settings adds a shared Lemon instance pane with live backend/controller/Lemon measurements, owner-confirmed start/stop/restart, operation polling and output details, plus direct recovery/About links.
 - Apple clients explain backend, network, sign-in and Lemon-link failures with live retry timing, service discovery and shared recovery controls; sandboxed Macs offer copyable local-start commands rather than launching a daemon.
 - Name missing required Lemon Bot startup settings without a stack dump, keep
   operator configuration details in server diagnostics rather than owner errors,
@@ -25,6 +27,12 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   duration, final output and retry errors in status and streamed progress.
   Owner-scoped `LemonOmp.subagent/3` and the `omp` tool's `subagent` action read
   sanitized transcript tails from live parent sessions.
+- omp's chat tool and Elixir API can redirect a running turn atomically with
+  `abort_and_prompt`. Existing waits follow the replacement turn; asynchronous
+  prompt failures are reported without acknowledging the same command twice.
+- Explicit omp crash continuation (`resume` with `continue: true`) through a
+  state-review prompt, plus a bounded read-only discovery `interrupted` hint.
+  This does not revive subagents; omp's native `--restore` is interactive-only.
 - omp workers support opt-in per-worker Git worktree isolation through `isolate`
   on starts and batch tasks, with managed branches, merge instructions, and
   bounded cleanup that preserves uncommitted or committed work.
@@ -60,6 +68,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Lemon Bot for iPhone keeps the composer and Send button above the keyboard,
+  follows the latest message as the viewport resizes, and uses Return for a newline
+  instead of submitting and dismissing the keyboard; transcript dragging dismisses it interactively.
 - Operator-owned omp approvals bind session-scoped grants to one omp invocation,
   preventing a grant from approving identical actions in another operator session.
 - New memory backdoor/exfiltration screening no longer invalidates retained facts

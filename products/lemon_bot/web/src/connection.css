@@ -1,0 +1,8 @@
+.connection-panel { margin: 16px; padding: 20px; border: 1px solid var(--warning, #b78937); border-radius: 14px; background: var(--surface, #fffdf5); color: var(--ink, #27301f); max-width: 900px; }
+.connection-panel h2 { margin: 0 0 8px; font-size: 18px; }
+.connection-panel p { margin: 6px 0; overflow-wrap: anywhere; }
+.connection-panel .row { flex-wrap: wrap; }
+.connection-panel pre, .runtime-operation pre, .instance-page pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 280px; overflow: auto; font-size: 12px; }
+.boot .connection-panel { margin: 0; width: 100%; }
+.auth-session-notice { padding: 14px; border-radius: 10px; background: #fff3d6; color: #624412; }
+@media (max-width: 760px) { .connection-panel { margin: 10px; padding: 14px; } .connection-panel .row > button { flex: 1 1 auto; } }

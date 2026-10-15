@@ -41,6 +41,9 @@ session id (for example `omp_3f9a1c2b7d4e`). Then:
 - “Tell omp to skip the docs” — steers the running turn; “after that, also
   run the linter” queues a follow-up. A message to an idle session starts a
   new turn.
+- “Stop that; instead, fix the parser” — redirects omp: aborts its current turn
+  and starts over with the new message in one omp command. A wait already in
+  progress follows the redirected turn, rather than ending at the aborted turn.
 - “Cancel the omp run” — aborts the current turn; the session stays open.
 - “Close it” — ends the omp process. Its history stays on disk.
 - “Which omp sessions exist here?” / “resume the last one” — lists omp's stored
@@ -55,6 +58,23 @@ For `start` or `resume`, the agent tool (and `LemonOmp.start/2`) accepts
 before execution, and `yolo` auto-approves ordinary tool calls. Omitting it
 leaves omp's own configured mode unchanged. Explicit omp tool policies still
 apply. Lemon passes an explicit mode as `--approval-mode <mode>`.
+
+### Continuing after a crash
+
+For an interrupted session, explicitly request
+`{"action":"resume","omp_session_id":"…","continue":true,"wait":true}`.
+Elixir callers use `LemonOmp.start(%{cwd: cwd, resume: omp_id, continue: true})`.
+`continue` is boolean, requires a resume id, and cannot accompany a prompt.
+It reopens history with `--resume` and sends a fixed instruction to review the
+conversation/workspace and finish unfinished work without redoing completed
+steps. This is a new model turn, not replay of the interrupted OS command.
+Nothing resumes automatically.
+
+omp 18.11's `--restore` is **interactive-only**, rejects RPC mode and prompts,
+and therefore cannot provide its interrupted-turn/subagent restoration here.
+Lemon's explicit continuation does not revive subagents. Discovery's
+`interrupted` hint identifies an unfinished last turn in the bounded file tail;
+it is not proof of a crash (a live session can also have an unfinished turn).
 
 ## Choosing a model
 
@@ -165,6 +185,10 @@ status-bar badge (`omp N▶` while sessions run) update live from the runtime's
 `omp.session` events. When Lemon's agent uses the `omp` tool, its card shows
 the session's status, activity, todo progress and usage as they change.
 
+The chat tool and Elixir API also support **redirect** (stop the current turn
+and start over with a new message). The panel does not yet have a redirect key;
+`s` steers and `c` only cancels.
+
 ## From the CLI
 
 ```bash
@@ -251,8 +275,8 @@ another omp).
   `LEMON_OMP_APPROVALS=decline` restores headless cancellation of tool approvals.
   Other blocking dialogs (confirm, input, editor, unrelated selects) are still
   declined and counted in `declinedPrompts`.
-- **Control fails closed.** Steering, follow-ups and cancellation go to one
-  process invocation and are acknowledged only after omp accepts them. A
+- **Control fails closed.** Steering, follow-ups, redirects and cancellation go
+  to one process invocation and are acknowledged only after omp accepts them. A
   closed or crashed session refuses them; resume it to continue (resuming is a
   new invocation with a new id). If omp does not answer in time the result is
   “outcome unknown” — check the status before retrying, because the request

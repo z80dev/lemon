@@ -26,6 +26,7 @@ defmodule LemonOmp do
   @resume_pattern ~r/\A[0-9A-Za-z][0-9A-Za-z-]{3,63}\z/
   @max_prompt_bytes 65_536
   @max_message_bytes 16_384
+  @continuation_prompt "Your previous omp process was interrupted mid-task. Review the conversation and the workspace state, then continue the unfinished work; do not redo completed steps."
   @default_list_limit 50
   @max_list_limit 100
 
@@ -128,10 +129,12 @@ defmodule LemonOmp do
 
   @doc """
   Start an omp process for `params` (`prompt`, `cwd`, optional `model`,
-  `thinking`, `resume`, `approval_mode`, `isolate`). Isolation creates a managed
-  git worktree from HEAD, leaving changed or committed work available on close.
-  Resume uses the supplied cwd; use a kept worktree's path to continue its work.
-  Approval mode is `always-ask`, `write`
+  `thinking`, `resume`, `continue`, `approval_mode`, `isolate`). `continue: true`
+  requires `resume` and no prompt; it sends a fixed request to review state and
+  finish unfinished work, not omp's interactive-only `--restore` or subagent
+  recovery. Isolation creates a managed git worktree from HEAD, leaving changed
+  or committed work available on close. Resume uses the supplied cwd; use a kept
+  worktree's path to continue its work. Approval mode is `always-ask`, `write`
   or `yolo`; omitting it keeps omp's configured mode. Returns once omp
   acknowledged the prompt, or once it is ready when resuming without one.
   """
@@ -192,7 +195,7 @@ defmodule LemonOmp do
 
     with {:ok, cwd} <- validate_cwd(params["cwd"]),
          {:ok, resume} <- validate_optional(params["resume"], @resume_pattern),
-         {:ok, prompt} <- validate_prompt(params["prompt"], resume),
+         {:ok, prompt} <- continuation_prompt(params, resume),
          {:ok, model} <- validate_optional(params["model"], @model_pattern),
          {:ok, thinking} <- validate_thinking(params["thinking"]),
          {:ok, approval_mode} <- validate_approval_mode(params["approval_mode"]),
@@ -259,12 +262,14 @@ defmodule LemonOmp do
   end
 
   @doc """
-  Steer the running turn (`:steer`), queue a follow-up (`:follow_up`), or —
-  when the session is idle — start a new turn with `message`.
+  Steer the running turn (`:steer`), queue a follow-up (`:follow_up`), or stop
+  it and start over atomically in omp (`:redirect`). When the session is idle,
+  every mode starts a new turn with `message`.
   """
-  @spec send_message(String.t(), String.t(), :steer | :follow_up, keyword()) ::
+  @spec send_message(String.t(), String.t(), :steer | :follow_up | :redirect, keyword()) ::
           {:ok, map()} | {:error, reason()}
-  def send_message(id, message, mode, opts \\ []) when mode in [:steer, :follow_up] do
+  def send_message(id, message, mode, opts \\ [])
+      when mode in [:steer, :follow_up, :redirect] do
     with {:ok, message} <- validate_message(message),
          {:ok, pid} <- fetch_live(id, opts) do
       Session.send_message(pid, message, mode)
@@ -560,6 +565,21 @@ defmodule LemonOmp do
   end
 
   defp validate_cwd(_cwd), do: {:error, :invalid_cwd}
+
+  defp continuation_prompt(params, resume) do
+    case params["continue"] do
+      true when is_binary(resume) ->
+        if is_nil(params["prompt"]),
+          do: {:ok, @continuation_prompt},
+          else: {:error, :invalid_params}
+
+      value when value in [nil, false] ->
+        validate_prompt(params["prompt"], resume)
+
+      _ ->
+        {:error, :invalid_params}
+    end
+  end
 
   defp validate_prompt(prompt, resume) when is_binary(prompt) do
     trimmed = String.trim(prompt)
