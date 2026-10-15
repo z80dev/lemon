@@ -8,6 +8,12 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
+No unreleased changes yet.
+
+---
+
+## [2026.10.10]
+
 ### Changed
 
 - Internal callers use canonical agent trust/abort helpers and `LemonCore.Id`;
