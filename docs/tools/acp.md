@@ -179,7 +179,9 @@ while their run's client bridge is connected. It issues the native
 `elicitation/create` form request with `requestedSchema`, choices and an optional
 custom answer. Accepted answers are the user's actual selections; decline,
 cancel, disconnection and timeout never select a recommendation automatically.
-Clients without form support do not advertise `ask`.
+ACP clients without form support do not advertise `ask` unless a separate
+session-level prompt surface is bound. The TUI uses that native prompt port;
+see [user questions](ask.md).
 
 Negotiated client filesystem support lets model-facing coding tools read and
 write editor-managed text buffers through the existing ACP client bridge. Raw

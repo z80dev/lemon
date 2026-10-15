@@ -102,6 +102,13 @@ a model when none is selected.
   directory and `/omp status` summarises them; the status line shows `omp N▶`
   while any run. Mutations are never queued offline and report refusals or
   unknown outcomes honestly; omp text is rendered as inert plain text.
+- Model `ask` questions appear in a session-scoped prompt panel. Use arrows and
+  Enter for a single choice, Space then Enter for multiple choices, or `o` for
+  a custom answer; free-text questions open an input directly. Escape declines
+  the entire form. Optional deadlines and disconnects never auto-select choices.
+  Answers are not execution approvals and grant no future tool permissions.
+  The TUI binds its live prompt surface before submitting a chat; see
+  [user questions](../../docs/tools/ask.md).
 - Exec approval panel (allow once / session / always / deny, number
   quick-pick, wrapped command preview, expiry countdown). Recovery preserves
   each pending request's server ID, so multiple approvals remain independently

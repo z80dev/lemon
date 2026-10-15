@@ -8,6 +8,11 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
+- Native TUI sessions can now use `ask` through a session-level user-prompt port,
+  with question/answer RPC events, multi-choice and free-text UI, and optional
+  fail-closed deadlines. ACP form elicitation remains supported. Decline,
+  cancellation and disconnect never choose a recommendation or grant approvals.
+
 - Bash supports session/project-scoped named services with log-regex or loopback
   TCP readiness checks, restart-by-name, and existing process inspection/stop tools.
 
