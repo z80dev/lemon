@@ -549,7 +549,9 @@ defmodule CodingAgent.Session.ProviderFallback do
         if(is_atom(provider), do: get_api_key.(Atom.to_string(provider))) ||
         original_api_key(original_options)
 
-    if is_binary(resolved) and resolved != "" do
+    # An empty key explicitly refuses authentication; nil would let providers
+    # fall back to ambient credentials (for example Codex's environment tokens).
+    if is_binary(resolved) do
       %{options | api_key: resolved}
     else
       options

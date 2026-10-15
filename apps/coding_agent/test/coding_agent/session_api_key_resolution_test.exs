@@ -195,6 +195,9 @@ defmodule CodingAgent.SessionApiKeyResolutionTest do
   end
 
   test "openai-codex requires auth_source" do
+    System.put_env("OPENAI_CODEX_API_KEY", "codex-from-env")
+    System.put_env("CHATGPT_TOKEN", "chatgpt-from-env")
+
     settings =
       settings(%{
         "openai-codex" => %{api_key: "codex-from-plain"}

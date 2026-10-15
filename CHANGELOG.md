@@ -22,6 +22,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 - Custom-provider discovery and cache-only model resolution use the selected
   healthy credential-pool principal, keeping picker and native request authority
   aligned without exposing another pool or ambient provider credentials.
+- Native provider routing preserves credential-rejection sentinels instead of
+  clearing them, so Codex cannot fall back to ambient tokens without a valid
+  `auth_source`.
 
 ---
 

@@ -1295,6 +1295,10 @@ are allowed. Existing `fallback_providers` routes remain useful when providers
 host the same model id. Each candidate resolves its own provider options and
 credentials; credentials from one provider are never reused for another.
 
+The wrapper preserves explicit authentication-refusal results instead of
+converting them into unset API keys. In particular, missing or invalid Codex
+`auth_source` cannot enable provider-level fallback to ambient tokens.
+
 Before output is committed, provider failures can move to the next model and
 rate/usage limits can rotate through configured credential-pool entries.
 Authentication failures refresh the same OAuth credential once on HTTP 401, then

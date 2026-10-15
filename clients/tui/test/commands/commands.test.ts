@@ -716,15 +716,13 @@ describe("sessions and history", () => {
 	});
 
 	test("/session delete previews and requires the exact key before it deletes", async () => {
-		harness.server.respondWith("sessions.list", {
-			sessions: [
-				{
-					sessionKey: "tui-session",
-					runCount: 1,
-					pinned: false,
-					archived: false,
-				},
-			],
+		harness.server.respondWith("sessions.get", {
+			session: {
+				sessionKey: "tui-session",
+				runCount: 1,
+				pinned: false,
+				archived: false,
+			},
 		});
 		harness.server.respondWith("sessions.delete", {
 			deleted: true,

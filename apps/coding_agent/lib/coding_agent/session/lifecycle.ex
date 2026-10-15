@@ -598,6 +598,7 @@ defmodule CodingAgent.Session.Lifecycle do
 
         state =
           State.reset_runtime(state, new_session_manager, System.system_time(:millisecond))
+          |> Map.put(:session_file, new_path)
           |> CodingAgent.Session.Planning.refresh()
 
         {:ok, state}

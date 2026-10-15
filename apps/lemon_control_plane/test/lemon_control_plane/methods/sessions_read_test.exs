@@ -26,9 +26,9 @@ defmodule LemonControlPlane.Methods.SessionsReadTest do
     assert {:ok, %{"session" => row}} =
              Registry.dispatch("sessions.get", %{"sessionKey" => key}, read_context())
 
-    assert row.session_key == key
-    assert row.title == "Native fork source"
-    assert row.pinned
+    assert row["sessionKey"] == key
+    assert row["title"] == "Native fork source"
+    assert row["pinned"]
     assert {:ok, detail} = SessionDetail.handle(%{"sessionKey" => key}, %{})
     assert detail["session"]["title"] == "Native fork source"
     assert detail["session"]["pinned"]

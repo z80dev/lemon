@@ -453,8 +453,10 @@ requests never include its token or secret reference.
 
 `sessions.get` (`operator.read`) accepts `{sessionKey}` and returns `{session}`
 from the daemon's canonical lifecycle index, including title, pin/archive state
-and run counts. `sessions.history` accepts `{sessionKey, limit}` (1–200, default
-50) and returns `{session, history}` with redacted structured **run history**.
+and run counts, using the same camelCase session projection as `sessions.list`
+(`sessionKey`, `runCount`, `updatedAtMs`, etc.). `sessions.history` accepts
+`{sessionKey, limit}` (1–200, default 50) and returns `{session, history}` with
+redacted structured **run history**.
 Unknown keys return `not_found`; these methods do not invent an empty session or
 read a separate client-local store. Keys are non-empty and bounded to 1,024 bytes.
 
