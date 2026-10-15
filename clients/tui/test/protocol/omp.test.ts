@@ -57,6 +57,11 @@ describe("omp wire parsing", () => {
 			owner: { kind: "operator" },
 			usage: { totalTokens: 41_226, cost: 0.0018 },
 		});
+		expect(session).toMatchObject({
+			approvalMode: "write",
+			approvals: { approved: 2, denied: 1, expired: 0 },
+			worktree: { branch: "omp/fix", kept: true },
+		});
 		expect(session?.activeTools).toEqual([
 			{
 				id: "call_9",
@@ -71,7 +76,7 @@ describe("omp wire parsing", () => {
 			"in_progress",
 			"pending",
 		]);
-		expect(session?.subagents[0]).toEqual({
+		expect(session?.subagents[0]).toMatchObject({
 			id: "Explore1",
 			agent: "explore",
 			status: "completed",
@@ -89,6 +94,10 @@ describe("omp wire parsing", () => {
 			usage: [],
 			owner: { kind: "agent", sessionKey: 5 },
 			exit: { code: "1" },
+			approvalMode: 4,
+			pendingApprovals: [{ id: 1 }],
+			approvals: { approved: "3" },
+			worktree: false,
 		});
 		expect(session).toMatchObject({
 			id: "omp_x",
@@ -99,6 +108,10 @@ describe("omp wire parsing", () => {
 			usage: null,
 			owner: { kind: "agent", sessionKey: null },
 			exit: { code: null, reason: null },
+			approvalMode: null,
+			pendingApprovals: [],
+			approvals: { approved: 0, denied: 0, expired: 0 },
+			worktree: null,
 		});
 		expect(session?.todos).toEqual([{ phase: null, content: "keep me", status: "pending" }]);
 		// Prototype keys are not statuses.

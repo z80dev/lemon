@@ -51,6 +51,16 @@ export interface OmpSubagent {
 	agent: string | null;
 	status: string | null;
 	description: string | null;
+	activity: string | null;
+	toolCalls: number;
+	recentTools: OmpRecentTool[];
+	usage: OmpUsage | null;
+	model: string | null;
+	startedAt: number | null;
+	endedAt: number | null;
+	durationMs: number | null;
+	output: string | null;
+	error: string | null;
 }
 
 export interface OmpUsage {
@@ -62,6 +72,22 @@ export interface OmpUsage {
 	cost: number | null;
 }
 
+export type OmpApprovalMode = "always-ask" | "write" | "yolo";
+export interface OmpPendingApproval {
+	id: string;
+	tool: string | null;
+	details: unknown;
+	requestedAt: number | null;
+}
+export interface OmpWorktree {
+	path: string | null;
+	branch: string | null;
+	base: string | null;
+	repo: string | null;
+	kept: boolean | null;
+	dirty: boolean | null;
+	commits: number | null;
+}
 /** One `session_wire`: a Lemon-side omp invocation and its projected state. */
 export interface OmpSession {
 	/** Lemon invocation id (`omp_…`); a new one per start/resume. */
@@ -71,6 +97,10 @@ export interface OmpSession {
 	cwd: string | null;
 	model: string | null;
 	thinking: string | null;
+	approvalMode: OmpApprovalMode | null;
+	pendingApprovals: OmpPendingApproval[];
+	approvals: { approved: number; denied: number; expired: number };
+	worktree: OmpWorktree | null;
 	owner: OmpOwner | null;
 	status: OmpSessionStatus;
 	lastTurn: string | null;
@@ -107,6 +137,9 @@ export interface OmpDiscoveredSession {
 	activeElsewhere: boolean;
 	/** The live Lemon invocation already driving it, when there is one. */
 	liveId: string | null;
+	source: "lemon" | "omp" | null;
+	interrupted: boolean;
+	worktree: OmpWorktree | null;
 }
 
 export type OmpSessionEventReason = "started" | "updated" | "settled" | "exited";
@@ -117,7 +150,7 @@ export interface OmpSessionEvent {
 	session: OmpSession;
 }
 
-export type OmpSendMode = "steer" | "followUp";
+export type OmpSendMode = "steer" | "followUp" | "redirect";
 
 export interface OmpSessionsListParams {
 	includeEnded?: boolean;
@@ -130,6 +163,8 @@ export interface OmpSessionsStartParams {
 	cwd: string;
 	model?: string;
 	thinking?: string;
+	approvalMode?: OmpApprovalMode;
+	isolate?: boolean;
 }
 
 export interface OmpSessionsResumeParams {
@@ -138,6 +173,8 @@ export interface OmpSessionsResumeParams {
 	prompt?: string;
 	model?: string;
 	thinking?: string;
+	approvalMode?: OmpApprovalMode;
+	continue?: boolean;
 }
 
 export interface OmpSessionsSendParams {
@@ -247,6 +284,21 @@ function parseUsage(value: unknown): OmpUsage | null {
 	};
 }
 
+function parseWorktree(value: unknown): OmpWorktree | null {
+	const tree = record(value);
+	return tree
+		? {
+				path: str(tree.path),
+				branch: str(tree.branch),
+				base: str(tree.base),
+				repo: str(tree.repo),
+				kept: typeof tree.kept === "boolean" ? tree.kept : null,
+				dirty: typeof tree.dirty === "boolean" ? tree.dirty : null,
+				commits: num(tree.commits),
+			}
+		: null;
+}
+
 /** One `session_wire`, or undefined when it carries no Lemon invocation id. */
 export function parseOmpSession(value: unknown): OmpSession | undefined {
 	const wire = record(value);
@@ -261,6 +313,29 @@ export function parseOmpSession(value: unknown): OmpSession | undefined {
 		cwd: str(wire.cwd),
 		model: str(wire.model),
 		thinking: str(wire.thinking),
+		approvalMode:
+			wire.approvalMode === "always-ask" ||
+			wire.approvalMode === "write" ||
+			wire.approvalMode === "yolo"
+				? wire.approvalMode
+				: null,
+		pendingApprovals: list(wire.pendingApprovals, (approval) => {
+			const id = str(approval.id);
+			return id
+				? {
+						id,
+						tool: str(approval.tool),
+						details: approval.details ?? null,
+						requestedAt: num(approval.requestedAt),
+					}
+				: undefined;
+		}),
+		approvals: {
+			approved: count(record(wire.approvals)?.approved),
+			denied: count(record(wire.approvals)?.denied),
+			expired: count(record(wire.approvals)?.expired),
+		},
+		worktree: parseWorktree(wire.worktree),
 		owner: parseOwner(wire.owner),
 		status: (status && Object.hasOwn(STATUSES, status) && STATUSES[status]) || "unknown",
 		lastTurn: str(wire.lastTurn),
@@ -298,6 +373,26 @@ export function parseOmpSession(value: unknown): OmpSession | undefined {
 			agent: str(agent.agent),
 			status: str(agent.status),
 			description: str(agent.description),
+			activity: str(agent.activity),
+			toolCalls: count(agent.toolCalls),
+			recentTools: list(agent.recentTools, (tool) => {
+				const name = str(tool.name);
+				return name
+					? {
+							name,
+							intent: str(tool.intent),
+							isError: tool.isError === true,
+							durationMs: num(tool.durationMs),
+						}
+					: undefined;
+			}),
+			usage: parseUsage(agent.usage),
+			model: str(agent.model),
+			startedAt: num(agent.startedAt),
+			endedAt: num(agent.endedAt),
+			durationMs: num(agent.durationMs),
+			output: str(agent.output),
+			error: str(agent.error),
 		})),
 		usage: parseUsage(wire.usage),
 		contextPercent: num(wire.contextPercent),
@@ -335,6 +430,9 @@ export function parseOmpDiscovered(value: unknown): OmpDiscoveredSession | undef
 		lastStatus: str(wire.lastStatus) ?? "unknown",
 		activeElsewhere: wire.activeElsewhere === true,
 		liveId: str(wire.liveId),
+		source: wire.source === "lemon" || wire.source === "omp" ? wire.source : null,
+		interrupted: wire.interrupted === true,
+		worktree: parseWorktree(wire.worktree),
 	};
 }
 
@@ -364,5 +462,88 @@ export function parseOmpStatus(value: unknown): OmpStatus {
 		reason: str(status.reason),
 		live: count(status.live),
 		maxSessions: num(status.maxSessions),
+	};
+}
+
+export interface OmpModel {
+	selector: string;
+	provider: string | null;
+	id: string | null;
+	name: string | null;
+	contextWindow: number | null;
+	reasoning: boolean;
+	costInput: number | null;
+	costOutput: number | null;
+	free: boolean;
+}
+export interface OmpModelsParams {
+	query?: string;
+	provider?: string;
+	freeOnly?: boolean;
+	limit?: number;
+}
+export interface OmpConfigureParams {
+	id: string;
+	model?: string;
+	thinking?: string;
+}
+export interface OmpStartManyParams {
+	tasks: OmpSessionsStartParams[];
+	isolate?: boolean;
+}
+export interface OmpStartManyResult {
+	results: Array<
+		| { index: number; session: OmpSession }
+		| { index: number; error: { code: string; message: string; id?: string } }
+	>;
+}
+export interface OmpSubagentResult {
+	id: string;
+	subagentId: string;
+	transcript: {
+		messages: Array<{ role: string; text: string; toolName?: string }>;
+		fromByte: number;
+		nextByte: number;
+		reset: boolean;
+	};
+}
+export function parseOmpModels(value: unknown): OmpModel[] {
+	return list(value, (model) => {
+		const selector = str(model.selector);
+		return selector
+			? {
+					selector,
+					provider: str(model.provider),
+					id: str(model.id),
+					name: str(model.name),
+					contextWindow: num(model.contextWindow),
+					reasoning: model.reasoning === true,
+					costInput: num(model.costInput),
+					costOutput: num(model.costOutput),
+					free: model.free === true,
+				}
+			: undefined;
+	});
+}
+export function parseOmpSubagent(value: unknown): OmpSubagentResult {
+	const wire = record(value) ?? {};
+	const transcript = record(wire.transcript) ?? {};
+	return {
+		id: str(wire.id) ?? "",
+		subagentId: str(wire.subagentId) ?? "",
+		transcript: {
+			messages: list(transcript.messages, (message) =>
+				typeof message.text === "string"
+					? {
+							role: str(message.role) ?? "unknown",
+							text: message.text,
+							...(str(message.toolName) ? { toolName: str(message.toolName)! } : {}),
+						}
+					: undefined,
+			),
+			fromByte: count(transcript.fromByte),
+			nextByte: count(transcript.nextByte),
+			reset: transcript.reset === true,
+		},
 	};
 }

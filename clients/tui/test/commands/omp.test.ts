@@ -44,10 +44,22 @@ describe("/omp", () => {
 		);
 	});
 
+	test("run passes approval and isolation flags without changing the prompt", async () => {
+		const h = await harness();
+		await h.run("/omp run --approval-mode write --isolate fix   this");
+		expect(h.server.requestsFor(METHOD.ompSessionsStart)[0]?.params).toEqual({
+			prompt: "fix   this",
+			cwd: "/work/lemon",
+			approvalMode: "write",
+			isolate: true,
+		});
+	});
+
 	test("run without a prompt prints usage and sends nothing", async () => {
 		const h = await harness();
 		await h.run("/omp run   ");
-		expect(h.host.last).toEqual({ text: "usage: /omp [run <prompt> | status]", level: "warning" });
+		expect(h.host.last?.text).toContain("usage: /omp [run [--approval-mode");
+		expect(h.host.last?.level).toBe("warning");
 		expect(h.server.requestsFor(METHOD.ompSessionsStart)).toHaveLength(0);
 	});
 
@@ -107,7 +119,7 @@ describe("/omp", () => {
 	test("unknown subcommands print usage", async () => {
 		const h = await harness();
 		await h.run("/omp launch now");
-		expect(h.host.last?.text).toBe("usage: /omp [run <prompt> | status]");
+		expect(h.host.last?.text).toContain("usage: /omp [run [--approval-mode");
 	});
 
 	test("is unavailable on a daemon without omp methods", async () => {
