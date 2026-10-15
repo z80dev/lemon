@@ -22,6 +22,7 @@ defmodule CodingAgent.Tools.Write do
   alias CodingAgent.MutationLock
   alias CodingAgent.Tools.ACPFileBridge
   alias CodingAgent.Tools.CheckpointGuard
+  alias CodingAgent.Tools.Conflicts
   alias CodingAgent.Tools.FileFormatHelpers
   alias CodingAgent.Tools.FileValidation
   alias CodingAgent.Tools.LspDiagnostics
@@ -147,6 +148,24 @@ defmodule CodingAgent.Tools.Write do
         {:ok, content} -> Messaging.send(path, content, opts)
         error -> error
       end
+    end
+  end
+
+  def execute(id, %{"path" => "conflict://" <> reference} = params, signal, update, cwd, opts) do
+    if AbortSignal.aborted?(signal) do
+      {:error, :aborted}
+    else
+      Conflicts.replace(reference, Map.get(params, "content"), cwd, opts, fn
+        path, content, cwd, opts ->
+          execute(
+            id,
+            Map.merge(params, %{"path" => path, "content" => content}),
+            signal,
+            update,
+            cwd,
+            opts
+          )
+      end)
     end
   end
 

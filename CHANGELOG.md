@@ -8,6 +8,16 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
+No unreleased changes yet.
+
+---
+
+## [2026.10.11]
+
+- Read `path:conflicts` to index Git conflict regions, then resolve a session-scoped
+  `conflict://N` with `write` and ours/theirs/base/both expansion tokens. Stale ids
+  are rejected after file changes.
+
 - Native TUI sessions can now use `ask` through a session-level user-prompt port,
   with question/answer RPC events, multi-choice and free-text UI, and optional
   fail-closed deadlines. ACP form elicitation remains supported. Decline,
