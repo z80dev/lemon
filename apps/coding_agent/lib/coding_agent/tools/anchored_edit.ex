@@ -40,10 +40,8 @@ defmodule CodingAgent.Tools.AnchoredEdit do
     end
   end
 
-  def apply(raw_content, normalized_content, snapshot, edits) do
-    expected = snapshot(raw_content)
-
-    if String.upcase(snapshot) == expected do
+  def apply(raw_content, normalized_content, snapshot, edits, previous_lines \\ nil) do
+    with {:ok, edits} <- resolve_edits(raw_content, snapshot, edits, previous_lines) do
       lines = lines(normalized_content)
 
       with {:ok, operations} <- operations(edits, length(lines)),
@@ -65,10 +63,63 @@ defmodule CodingAgent.Tools.AnchoredEdit do
 
         {:ok, result}
       end
-    else
-      {:error,
-       "Snapshot mismatch: the file changed since read. Re-read it and use fresh line numbers and snapshot; no edits were applied."}
     end
+  end
+
+  defp resolve_edits(raw, tag, edits, previous) do
+    cond do
+      String.upcase(tag) == snapshot(raw) ->
+        {:ok, edits}
+
+      is_list(previous) ->
+        current = lines(raw)
+
+        with {:ok, original_ops} <- operations(edits, length(previous)),
+             :ok <- validate_disjoint(original_ops),
+             {:ok, rebased} <- rebase_edits(edits, previous, current),
+             {:ok, rebased_ops} <- operations(rebased, length(current)),
+             :ok <- validate_disjoint(rebased_ops) do
+          {:ok, rebased}
+        else
+          _ -> snapshot_mismatch()
+        end
+
+      true ->
+        snapshot_mismatch()
+    end
+  end
+
+  defp rebase_edits(edits, previous, current) do
+    Enum.reduce_while(edits, {:ok, []}, fn edit, {:ok, rebased} ->
+      first = edit["start_line"]
+      last = Map.get(edit, "end_line", first)
+      anchor = Enum.slice(previous, first - 1, last - first + 1)
+      count = length(anchor)
+
+      matches =
+        current
+        |> Enum.chunk_every(count, 1, :discard)
+        |> Enum.with_index(1)
+        |> Enum.filter(fn {candidate, _index} -> candidate == anchor end)
+
+      case matches do
+        [{_anchor, start}] ->
+          edit = edit |> Map.put("start_line", start) |> Map.put("end_line", start + count - 1)
+          {:cont, {:ok, [edit | rebased]}}
+
+        _ ->
+          {:halt, snapshot_mismatch()}
+      end
+    end)
+    |> case do
+      {:ok, rebased} -> {:ok, Enum.reverse(rebased)}
+      error -> error
+    end
+  end
+
+  defp snapshot_mismatch do
+    {:error,
+     "Snapshot mismatch: the file changed since read. Re-read it and use fresh line numbers and snapshot; no edits were applied."}
   end
 
   # A terminal LF closes a line; it is not an extra editable empty line.

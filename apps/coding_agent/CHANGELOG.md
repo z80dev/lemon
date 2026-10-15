@@ -4,6 +4,11 @@
 
 ### Added
 
+- Local edit and patch support the same opt-in formatting as write and return
+  post-format snapshot tags. Anchored edits recover recent session/path tags
+  only when every referenced original range remains byte-identical and unique;
+  snapshot history is bounded, and text-edit staleness checks are unchanged.
+
 - Session-scoped `local://name` scratch files support read, write and bash URL
   expansion. `proc://` lists owned processes; process URLs peek output, write
   stdin or terminate through `/kill`.

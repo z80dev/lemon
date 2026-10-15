@@ -151,7 +151,7 @@ defmodule CodingAgent.Tools.Write do
     else
       with {:ok, path} <- get_path(params),
            {:ok, content} <- get_content(params),
-           {:ok, format?} <- get_format(params, opts),
+           {:ok, format?} <- LspFormatter.option(params, opts),
            {:ok, diagnostics?} <- LspDiagnostics.option(params, opts) do
         resolved_path = resolve_path(path, cwd, opts)
         write_file(resolved_path, content, signal, format?, diagnostics?, cwd, opts)
@@ -179,16 +179,6 @@ defmodule CodingAgent.Tools.Write do
 
   defp get_content(%{"content" => _}), do: {:error, "content must be a string"}
   defp get_content(_), do: {:error, "missing required parameter: content"}
-
-  defp get_format(params, opts) do
-    value = Map.get(params, "format", Keyword.get(opts, :format, false))
-
-    case value do
-      true -> {:ok, true}
-      false -> {:ok, false}
-      _ -> {:error, "format must be a boolean"}
-    end
-  end
 
   @doc false
   @spec resolve_path(path :: String.t(), cwd :: String.t(), opts :: keyword()) :: String.t()
@@ -316,7 +306,7 @@ defmodule CodingAgent.Tools.Write do
       File.write!(path, content)
 
       byte_count = byte_size(content)
-      {formatted, format_error} = maybe_format_file(path, format?, cwd, opts)
+      {formatted, format_error} = LspFormatter.after_write(path, format?, cwd, opts)
 
       if formatted,
         do: FileReadTracker.refresh(opts, [path]),
@@ -402,18 +392,6 @@ defmodule CodingAgent.Tools.Write do
 
       _ ->
         :unavailable
-    end
-  end
-
-  defp maybe_format_file(_path, false, _cwd, _opts), do: {false, nil}
-
-  defp maybe_format_file(path, true, cwd, opts) do
-    timeout_ms = Keyword.get(opts, :format_timeout_ms, 5_000)
-
-    case LspFormatter.format_file(path, cwd: cwd, timeout_ms: timeout_ms) do
-      {:ok, :formatted} -> {true, nil}
-      {:ok, :unchanged} -> {false, nil}
-      {:error, reason} -> {false, to_string(reason)}
     end
   end
 

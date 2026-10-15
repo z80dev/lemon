@@ -746,10 +746,13 @@ defmodule CodingAgent.Tools.Read do
            limit,
            max_lines,
            max_bytes,
-           signal
+           signal,
+           editable? and is_binary(opts[:session_id]) and opts[:session_id] != ""
          ) do
       {:ok, window} ->
-        FileReadTracker.record_digest(opts, path, window.digest)
+        if is_binary(window.snapshot_content),
+          do: FileReadTracker.record(opts, path, window.snapshot_content),
+          else: FileReadTracker.record_digest(opts, path, window.digest)
 
         render_window(path, window, normalize_offset(offset), max_bytes, %{
           immutable: not editable?,
