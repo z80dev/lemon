@@ -218,7 +218,10 @@ export function createHostServices(s: BackendServices, options: HostOptions = {}
   };
   const requiredCommand = (m: P.Machine, kind: 'networkApply' | 'egressApply' | 'setupRun'): P.HostDriverCommand => {
     const cmd = driver(m.id)?.[kind];
-    if (!cmd) fail('capability_unavailable', `Configure the destination ${kind} host driver.`);
+    if (!cmd) {
+      process.stderr.write(`Missing destination host driver: ${kind}.\n`);
+      fail('capability_unavailable', 'This machine is not configured for the requested action. Ask the operator to enable it.');
+    }
     return validCommand(cmd);
   };
   const runtimeRules = (m: P.Machine): P.NetworkRule[] => {
@@ -589,7 +592,10 @@ export function createHostServices(s: BackendServices, options: HostOptions = {}
       if (d?.actions[act]) validCommand(d.actions[act]!);
       if ((act === 'recreate_environment' || act === 'delete_environment') && d?.actions[act] && !isolatedRoot(d.environmentRoot)) fail('policy_denied', 'Environment actions require an isolated Lemon-owned root, never a user home or SSH root.');
       const verified = s.store.metadata<{ configDigest: string; environmentRoot: string | null; isolatedEnvironment: boolean }>(`hostVerified:${m.id}`);
-      if (d?.actions[act] && ['recreate_environment', 'delete_environment'].includes(act) && (!verified || !verified.isolatedEnvironment || verified.configDigest !== s.mutations.digest(d) || verified.environmentRoot !== d.environmentRoot)) fail('capability_unavailable', 'Probe and verify the exact isolated environment root before previewing deletion or recreation.');
+      if (d?.actions[act] && ['recreate_environment', 'delete_environment'].includes(act) && (!verified || !verified.isolatedEnvironment || verified.configDigest !== s.mutations.digest(d) || verified.environmentRoot !== d.environmentRoot)) {
+        process.stderr.write('Environment deletion/recreation requires a verified isolated environment root matching the current host driver configuration.\n');
+        fail('capability_unavailable', 'Inspect this machine and verify its isolated environment before previewing deletion or recreation. Ask the operator if inspection is unavailable.');
+      }
       return { id: m.id, revision: m.revision, nodeId: m.nodeId, name: m.name, configDigest: s.mutations.digest(d), environmentRoot: d?.environmentRoot ?? null, backup: s.store.metadata<{ lastBackupAtMs: number | null }>(`hostInspection:${m.id}`) };
     });
   };

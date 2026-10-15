@@ -212,6 +212,8 @@ Voice uses Apple Speech for dictation and an explicit visible active-call loop, 
 
 Notifications register the current installation to the current product account. iOS uses its actual APNs token; macOS uses local notifications. Same-device foreground viewed-conversation suppression does not clear inbox/unread or pending gates. Token-free `lemonbot://workspace/...` links fetch and authorize the exact task/entry/approval/machine/routine before navigation, never automatically approve.
 
+Foreground presence belongs to its realtime connection, independently of message delivery. A refresh or background reconnect can retire a presence write; that old socket's failure is not a delivery failure on the replacement connection. Current-connection failures remain visible, and a missing message HTTP acknowledgement still retains its original nonce for explicit reconciliation.
+
 ## Centralized checks
 
 Implementation agents intentionally do **not** run generation, builds, tests, formatters or live provider checks. The integration owner should run the commands above, then:

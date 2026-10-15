@@ -223,7 +223,10 @@ export function createAudioServices(services: BackendServices, overrides?: Audio
     const bytes = await services.attachments.bytes(attachment.id), info = inspectAudio(bytes);
     if (!(await services.integrations.effectivePolicy(principal)).productAccess) fail('policy_denied', 'Product access is disabled for this account.');
     services.auth.attachment(principal, attachment.id); scope(principal, attachment.conversationId ?? undefined, body.voiceSessionId);
-    if (!capabilities().stt) fail('capability_unavailable', stt === 'openai' ? 'OpenAI transcription requires LEMON_BOT_OPENAI_API_KEY.' : stt === 'deepgram' ? 'Deepgram transcription requires LEMON_BOT_DEEPGRAM_API_KEY.' : 'Configure LEMON_BOT_STT_PROVIDER as openai or deepgram.');
+    if (!capabilities().stt) {
+      process.stderr.write(`${stt === 'openai' ? 'OpenAI transcription requires LEMON_BOT_OPENAI_API_KEY.' : stt === 'deepgram' ? 'Deepgram transcription requires LEMON_BOT_DEEPGRAM_API_KEY.' : 'Configure LEMON_BOT_STT_PROVIDER as openai or deepgram.'}\n`);
+      fail('capability_unavailable', 'Transcription is not enabled on this Lemon Bot server. Ask the operator to configure a transcription provider.');
+    }
     let output: P.Transcription;
     if (stt === 'openai') {
       const form = new FormData(); form.set('file', new Blob([Buffer.from(bytes)], { type: info.mime }), `audio.${info.extension}`); form.set('model', 'whisper-1'); form.set('response_format', 'verbose_json'); form.append('timestamp_granularities[]', 'segment'); if (body.language) form.set('language', body.language.split('-')[0]!);
@@ -248,7 +251,10 @@ export function createAudioServices(services: BackendServices, overrides?: Audio
     if (provenance?.machineId && provenance.machineId !== bot?.machineId) fail('invalid_request', 'Speech provenance does not match the Bot machine.');
     if (!(await services.integrations.effectivePolicy(principal, botId)).productAccess) fail('policy_denied', 'Product access is disabled for this account.');
     scope(principal, conversationId, body.voiceSessionId);
-    if (!capabilities().tts) fail('capability_unavailable', tts === 'openai' ? 'OpenAI speech requires LEMON_BOT_OPENAI_API_KEY.' : tts === 'elevenlabs' ? 'ElevenLabs speech requires LEMON_BOT_ELEVENLABS_API_KEY.' : tts === 'google' ? 'Google speech requires LEMON_BOT_GOOGLE_SERVICE_ACCOUNT_PATH with a private valid service-account file.' : 'Configure LEMON_BOT_TTS_PROVIDER as openai, elevenlabs or google.');
+    if (!capabilities().tts) {
+      process.stderr.write(`${tts === 'openai' ? 'OpenAI speech requires LEMON_BOT_OPENAI_API_KEY.' : tts === 'elevenlabs' ? 'ElevenLabs speech requires LEMON_BOT_ELEVENLABS_API_KEY.' : tts === 'google' ? 'Google speech requires LEMON_BOT_GOOGLE_SERVICE_ACCOUNT_PATH with a private valid service-account file.' : 'Configure LEMON_BOT_TTS_PROVIDER as openai, elevenlabs or google.'}\n`);
+      fail('capability_unavailable', 'Speech playback is not enabled on this Lemon Bot server. Ask the operator to configure a speech provider.');
+    }
     const deadline = performance.now() + timeout;
     let bytes: Uint8Array;
     if (tts === 'openai') {

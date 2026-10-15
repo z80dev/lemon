@@ -13,11 +13,11 @@ export async function validateRuntimeLauncher(path: string | undefined): Promise
   catch { throw new Error('LEMON_BOT_RUNTIME_LAUNCHER must be an absolute path to an existing executable launcher.'); }
 }
 export async function loadConfiguration(environment:Record<string,string|undefined>=process.env):Promise<{config:BackendConfiguration;key:Uint8Array}> {
-  const required=z.string().min(1);
-  const dataDir=resolve(required.parse(environment.LEMON_BOT_DATA_DIR));
-  const operatorToken=required.parse(environment.LEMON_BOT_OPERATOR_TOKEN);
-  const controlUrl=new URL(required.parse(environment.LEMON_BOT_CONTROL_URL));
-  const publicUrl=new URL(required.parse(environment.LEMON_BOT_PUBLIC_URL));
+  const required=(name:string):string=>{const value=environment[name];if(!value)throw new Error(`${name} is required. See the env table in products/lemon_bot/backend/README.md.`);return value;};
+  const dataDir=resolve(required('LEMON_BOT_DATA_DIR'));
+  const operatorToken=required('LEMON_BOT_OPERATOR_TOKEN');
+  const controlUrl=new URL(required('LEMON_BOT_CONTROL_URL'));
+  const publicUrl=new URL(required('LEMON_BOT_PUBLIC_URL'));
   const trustedOverlay=environment.LEMON_BOT_TRUSTED_OVERLAY==='true';
   if(!['ws:','wss:'].includes(controlUrl.protocol)||controlUrl.pathname!=='/ws'||controlUrl.username||controlUrl.password||controlUrl.search||controlUrl.hash) throw new Error('LEMON_BOT_CONTROL_URL must be the credential-free exact /ws WebSocket endpoint.');
   if(!['http:','https:'].includes(publicUrl.protocol)||publicUrl.username||publicUrl.password||publicUrl.search||publicUrl.hash||publicUrl.pathname!=='/')throw new Error('LEMON_BOT_PUBLIC_URL must be a credential-free product origin.');

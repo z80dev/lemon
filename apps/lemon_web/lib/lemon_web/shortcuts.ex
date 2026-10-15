@@ -48,7 +48,8 @@ defmodule LemonWeb.Shortcuts do
     %{keys: "shift+tab", description: "Cycle thinking level (in composer)"},
     %{keys: "mod+shift+p", description: "Toggle plan mode"},
     %{keys: "mod+shift+m", description: "Open model picker"},
-    %{keys: "alt+o", description: "Expand or collapse all tool output"}
+    %{keys: "alt+o", description: "Expand or collapse all tool output"},
+    %{keys: "alt+r", description: "Expand the latest tool or thought"}
   ]
 
   @doc "Shortcut groups in display order: `[{group, [shortcut]}]`."

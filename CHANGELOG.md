@@ -11,6 +11,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 ### Lemon Bot
 
 - Apple clients explain backend, network, sign-in and Lemon-link failures with live retry timing, service discovery and shared recovery controls; sandboxed Macs offer copyable local-start commands rather than launching a daemon.
+- Name missing required Lemon Bot startup settings without a stack dump, keep
+  operator configuration details in server diagnostics rather than owner errors,
+  and clarify backend/SDK setup and contributor documentation.
 - Add truthful attached-instance status, controller reconnect (including rejected
   credentials), and opt-in owner-only local runtime start/stop/restart with
   bounded operation receipts. Publish TypeScript SDK helpers, Swift Codable
@@ -18,6 +21,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Added
 
+- omp sessions can select an approval mode and bridge tool approval prompts to
+  Lemon's conversation/channel approval UI or operator `exec.approval.resolve`.
+  Snapshots and wait progress expose pending approvals and decision counts;
+  cancelled dialogs and ended sessions clean up pending prompts.
 - MCP clients accept an optional asynchronous `notification_handler` callback for
   server notifications, including tool, resource and prompt list changes.
 - Expanded the LSP registry from six to 42 primary language servers, with
@@ -38,6 +45,8 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   instructions, provider-model examples, and documentation navigation.
 - Durable preference/project memory supports exact-first unique-substring
   patch/delete and rejects persistent backdoor/exfiltration instructions.
+- Web chat keeps run status visible on mobile, distinguishes unavailable checks,
+  improves recovery guidance, and makes login and navigation more accessible.
 - Honcho tool schemas now register only when the integration is configured and
   enabled, matching its memory provider and context contributor instead of adding
   five inactive tools to prompts on unconfigured hosts.
@@ -49,6 +58,11 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 - Custom-provider discovery and cache-only model resolution use the selected
   healthy credential-pool principal, keeping picker and native request authority
   aligned without exposing another pool or ambient provider credentials.
+
+### Removed
+
+- The broken `bin/lemon-dev` launcher, which passed flags the TUI no longer
+  accepts. Use `./bin/lemon` (source runtime plus TUI) or `./bin/lemon-tui`.
 
 ---
 

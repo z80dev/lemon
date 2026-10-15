@@ -95,8 +95,7 @@ extension LemonBotStore {
         switch frame {
         case .auth, .subscribe, .ack: throw ClientError.invalidFrame
         case .presence(let value):
-            foreground = value.foreground; visibleConversationID = value.conversationId
-            try await sendSocket(frame, on: socket)
+            try await setPresence(foreground: value.foreground, conversationID: value.conversationId)
         case .terminalSubscribe(let value):
             terminalSubscriptions.insert(value.terminalId)
             let last = terminalSequences[value.terminalId] ?? value.afterSeq ?? 0
@@ -112,7 +111,13 @@ extension LemonBotStore {
         self.foreground = foreground
         visibleConversationID = conversationID
         guard connectionState == "online", let socket else { return }
-        try await sendSocket(.presence(RealtimeClientFramePresence(foreground: foreground, conversationId: conversationID)), on: socket)
+        do { try await sendSocket(.presence(RealtimeClientFramePresence(foreground: foreground, conversationId: conversationID)), on: socket) }
+        catch {
+            // Refresh/background reconnect can replace the socket while its presence write awaits.
+            // That obsolete connection says nothing about a message POST or the current presence.
+            guard self.socket === socket else { return }
+            throw error
+        }
     }
     func process(_ frame: RealtimeServerFrame, on socket: URLSessionWebSocketTask) async throws {
         switch frame {
