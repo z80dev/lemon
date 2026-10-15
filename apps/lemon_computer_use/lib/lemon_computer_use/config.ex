@@ -3,8 +3,10 @@ defmodule LemonComputerUse.Config do
   Runtime settings for native computer use.
 
   Precedence for each value is the environment variable declared in
-  `LemonComputerUse.Env`, then `config :lemon_computer_use`, then the built-in
-  default. Nothing here raises: an unusable value falls back to the default.
+  `LemonComputerUse.Env`, then the `[runtime.tools.computer_use]` section of
+  Lemon's config (`enabled`, `chrome`, `lcu_root`, `node`, `declined_origins`),
+  then `config :lemon_computer_use`, then the built-in default. Nothing here
+  raises: an unusable value falls back to the next source.
 
     * `:enabled` / `LEMON_COMPUTER_USE_ENABLED` — the opt-in switch (default
       `false`). Disabled, the app registers no tools and no prompt section and
@@ -32,7 +34,7 @@ defmodule LemonComputerUse.Config do
   def enabled? do
     case parse_bool(env("LEMON_COMPUTER_USE_ENABLED")) do
       value when is_boolean(value) -> value
-      nil -> Application.get_env(@app, :enabled, false) == true
+      nil -> boolean(toml(:enabled), Application.get_env(@app, :enabled, false))
     end
   end
 
@@ -40,13 +42,14 @@ defmodule LemonComputerUse.Config do
   def chrome? do
     case parse_bool(env("LEMON_COMPUTER_USE_CHROME")) do
       value when is_boolean(value) -> value
-      nil -> Application.get_env(@app, :chrome, false) == true
+      nil -> boolean(toml(:chrome), Application.get_env(@app, :chrome, false))
     end
   end
 
   @spec lcu_root() :: String.t()
   def lcu_root do
-    case env("LEMON_COMPUTER_USE_LCU_ROOT") || Application.get_env(@app, :lcu_root) do
+    case env("LEMON_COMPUTER_USE_LCU_ROOT") || string(toml(:lcu_root)) ||
+           Application.get_env(@app, :lcu_root) do
       value when is_binary(value) and value != "" -> Path.expand(value)
       _ -> default_root()
     end
@@ -59,7 +62,8 @@ defmodule LemonComputerUse.Config do
 
   @spec node() :: String.t()
   def node do
-    case env("LEMON_COMPUTER_USE_NODE") || Application.get_env(@app, :node) do
+    case env("LEMON_COMPUTER_USE_NODE") || string(toml(:node)) ||
+           Application.get_env(@app, :node) do
       value when is_binary(value) and value != "" -> Path.expand(value)
       _ -> Path.join(lcu_root(), "agent-tools/node/bin/node")
     end
@@ -97,8 +101,8 @@ defmodule LemonComputerUse.Config do
   Website origins computer use always declines, besides Lemon's local ports:
   the Lemon Bot web client's origin (`LEMON_BOT_PUBLIC_URL`, which serves its
   approvals surface) and any origins listed in
-  `LEMON_COMPUTER_USE_DECLINED_ORIGINS` (comma-separated) or
-  `config :lemon_computer_use, declined_origins: [...]`. Each entry is reduced
+  `LEMON_COMPUTER_USE_DECLINED_ORIGINS` (comma-separated), the config file's
+  `declined_origins` list, or `config :lemon_computer_use, declined_origins: [...]`. Each entry is reduced
   to its `scheme://host[:port]` origin; unparseable entries are ignored.
   """
   @spec declined_origins() :: [String.t()]
@@ -115,7 +119,13 @@ defmodule LemonComputerUse.Config do
         _ -> []
       end
 
-    [env("LEMON_BOT_PUBLIC_URL") | listed ++ configured]
+    file =
+      case toml(:declined_origins) do
+        list when is_list(list) -> list
+        _ -> []
+      end
+
+    [env("LEMON_BOT_PUBLIC_URL") | listed ++ file ++ configured]
     |> Enum.flat_map(&origin_of/1)
     |> Enum.uniq()
   end
@@ -137,6 +147,25 @@ defmodule LemonComputerUse.Config do
   end
 
   def origin_of(_value), do: []
+
+  # The config file's `[runtime.tools.computer_use]`, through the platform's
+  # cached config. A missing or unreadable config is simply "not set".
+  defp toml(key) do
+    case LemonCore.Config.cached() do
+      %{agent: %{tools: %{computer_use: %{} = section}}} -> Map.get(section, key)
+      _ -> nil
+    end
+  rescue
+    _ -> nil
+  catch
+    :exit, _ -> nil
+  end
+
+  defp boolean(value, _fallback) when is_boolean(value), do: value
+  defp boolean(_value, fallback), do: fallback == true
+
+  defp string(value) when is_binary(value) and value != "", do: value
+  defp string(_value), do: nil
 
   defp env(name) do
     case System.get_env(name) do

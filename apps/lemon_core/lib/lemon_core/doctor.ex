@@ -52,7 +52,7 @@ defmodule LemonCore.Doctor do
   @spec checks(keyword()) :: [LemonCore.Doctor.Check.t()]
   def checks(opts \\ []) do
     (@builtin_checks ++ registered_checks())
-    |> Enum.reduce([], fn module, acc -> append_checks(acc, module.run(opts)) end)
+    |> Enum.reduce([], fn module, acc -> append_checks(acc, run_checks(module, opts)) end)
   end
 
   @spec report(keyword()) :: Report.t()
@@ -60,6 +60,28 @@ defmodule LemonCore.Doctor do
     opts
     |> checks()
     |> Report.from_checks()
+  end
+
+  defp run_checks(module, opts) do
+    module.run(opts)
+  rescue
+    _error ->
+      [
+        LemonCore.Doctor.Check.fail(
+          "doctor.check_failed",
+          "A diagnostic check could not complete.",
+          "Run `lemon config validate --verbose`; for removed settings run `lemon config migrate`."
+        )
+      ]
+  catch
+    _, _ ->
+      [
+        LemonCore.Doctor.Check.fail(
+          "doctor.check_failed",
+          "A diagnostic check stopped unexpectedly.",
+          "Run `lemon doctor --verbose` after checking the configuration."
+        )
+      ]
   end
 
   defp append_checks(acc, checks), do: acc ++ checks

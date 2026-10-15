@@ -201,6 +201,10 @@ defmodule LemonControlPlane.Methods.Registry do
     LemonControlPlane.Methods.OmpSessionsSend,
     LemonControlPlane.Methods.OmpSessionsCancel,
     LemonControlPlane.Methods.OmpSessionsClose,
+    LemonControlPlane.Methods.OmpSessionsStartMany,
+    LemonControlPlane.Methods.OmpModels,
+    LemonControlPlane.Methods.OmpSessionsSubagent,
+    LemonControlPlane.Methods.OmpSessionsConfigure,
     # Usage
     LemonControlPlane.Methods.UsageStatus,
     LemonControlPlane.Methods.UsageCost,

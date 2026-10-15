@@ -37,7 +37,7 @@ defmodule CodingAgent.SystemPrompt do
 
   # Tool guidance assumes this set when the caller does not say which tools the
   # session actually has (one-shot builds outside a session).
-  @default_tool_names ~w(read write edit patch bash bash_output kill_process grep find ls todo task read_skill skill_manage remember recall)
+  @default_tool_names ~w(read write edit patch bash bash_output kill_process process_input grep find ls todo task read_skill skill_manage remember recall)
 
   @doc """
   Build the system prompt for a Lemon coding agent session.
@@ -192,9 +192,9 @@ defmodule CodingAgent.SystemPrompt do
     {~w(bash),
      "Use `bash` for real commands: reproduce failures, run the project, execute checks, and inspect git state. " <>
        "Prefer dedicated file tools for reads, searches, and edits. Check exit codes and output; a command invocation is not proof of success."},
-    {~w(bash bash_output kill_process),
+    {~w(bash bash_output kill_process process_input),
      "For long-running commands, use an appropriate timeout or `run_in_background: true`; " <>
-       "retrieve output with `bash_output`, and stop processes you started with `kill_process` when finished."},
+       "retrieve output with `bash_output`, send exact stdin bytes with `process_input`, and stop processes you started with `kill_process` when finished."},
     {~w(eval),
      "Use `eval` for incremental computation or data inspection in a persistent Python/JS kernel; " <>
        "reuse earlier definitions instead of re-running setup. Use `bash` for project commands."},

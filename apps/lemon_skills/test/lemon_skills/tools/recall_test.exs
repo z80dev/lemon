@@ -51,6 +51,62 @@ defmodule LemonSkills.Tools.RecallTest do
     }
   end
 
+  test "browse and scroll expose only scoped session summaries", %{
+    tmp_dir: dir,
+    store: store,
+    context: context
+  } do
+    legacy_tool = recall_tool(dir, agent_id: "main", store: store)
+    assert {:error, _} = legacy_tool.execute.("browse", %{}, nil, nil)
+
+    assert {:error, _} =
+             legacy_tool.execute.("scroll", %{"session" => "agent:main:telegram:1"}, nil, nil)
+
+    {:ok, scope} = Project.scope(context)
+
+    for fact <- ["Priya's birthday is March 14th.", "Priya prefers wooden gifts."] do
+      assert :ok =
+               Store.put_sync(
+                 store,
+                 Document.new(
+                   session_key: "agent:main:telegram:1",
+                   agent_id: "main",
+                   workspace_key: dir,
+                   prompt_summary: "Priya birthday",
+                   answer_summary: fact,
+                   meta:
+                     Map.put(
+                       LemonMemory.ContextScope.metadata({:private, "owner-a"}),
+                       "home_digest",
+                       scope.home_digest
+                     )
+                 )
+               )
+    end
+
+    tool =
+      recall_tool(dir,
+        agent_id: "main",
+        store: store,
+        memory_context_key: "owner-a",
+        invocation_context_key: "epoch-a",
+        memory_context_verified: true
+      )
+
+    browse = tool.execute.("browse", %{}, nil, nil)
+    assert text(browse) =~ "agent:main:telegram:1"
+    assert text(browse) =~ "2 runs"
+    refute text(browse) =~ "agent:other"
+    scroll = tool.execute.("scroll", %{"session" => "agent:main:telegram:1"}, nil, nil)
+    assert text(scroll) =~ "March 14th"
+    assert text(scroll) =~ "wooden gifts"
+    assert text(scroll) =~ "Untrusted"
+    refute text(scroll) =~ "private unrelated"
+
+    assert text(tool.execute.("foreign", %{"session" => "agent:other:telegram:1"}, nil, nil)) =~
+             "No matching"
+  end
+
   test "agent scope recalls this agent across projects without another agent's facts", %{
     tmp_dir: tmp_dir,
     search_fn: search_fn

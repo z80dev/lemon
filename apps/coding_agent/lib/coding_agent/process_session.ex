@@ -111,15 +111,19 @@ defmodule CodingAgent.ProcessSession do
   `dropped_lines` counts lines that scrolled out of the bounded buffer before
   they could be read.
   """
-  def read_output(process_id) do
-    GenServer.call(via_tuple(process_id), :read_output, 5_000)
+  def read_output(process_id, opts \\ []) do
+    GenServer.call(via_tuple(process_id), {:read_output, Keyword.get(opts, :peek, false)}, 5_000)
   end
 
   @doc """
   Write to the process's stdin.
   """
-  def write_stdin(process_id, data) do
-    GenServer.call(via_tuple(process_id), {:write_stdin, data}, 5_000)
+  def write_stdin(process_id, data, opts \\ []) do
+    GenServer.call(
+      via_tuple(process_id),
+      {:write_stdin, data, Keyword.get(opts, :eof, false)},
+      5_000
+    )
   end
 
   @doc """
@@ -242,7 +246,7 @@ defmodule CodingAgent.ProcessSession do
       end
 
     # Start the OS process via Port
-    port =
+    {port, stdin_path} =
       try do
         if before_start = Keyword.get(opts, :before_start), do: before_start.()
         start_port(command, cwd, env, backend)
@@ -255,7 +259,16 @@ defmodule CodingAgent.ProcessSession do
     os_pid = get_os_pid(port)
 
     # Bind the owned group durably before the stdin gate allows user execution.
-    workload_identity = activate_workload(process_id, port, os_pid, output_file)
+    workload_identity =
+      try do
+        activate_workload(process_id, port, os_pid, output_file)
+      catch
+        kind, reason ->
+          File.rm(stdin_path)
+          :erlang.raise(kind, reason, __STACKTRACE__)
+      end
+
+    {:ok, stdin} = File.open(stdin_path, [:write, :binary, :raw])
     ProcessStore.classify_launch(process_id, :accepted)
 
     # Internal synchronization seam; never exposed in the agent's tool schema.
@@ -273,6 +286,9 @@ defmodule CodingAgent.ProcessSession do
     state = %{
       process_id: process_id,
       port: port,
+      stdin: stdin,
+      stdin_path: stdin_path,
+      stdin_closed: false,
       os_pid: os_pid,
       workload_identity: workload_identity,
       root_exited: false,
@@ -353,9 +369,10 @@ defmodule CodingAgent.ProcessSession do
     {:reply, {:ok, result}, state}
   end
 
-  def handle_call(:read_output, _from, state) do
+  def handle_call({:read_output, peek}, _from, state) do
     first_buffered = state.total_lines - state.log_count
-    start = max(state.read_cursor, first_buffered)
+    cursor = if peek, do: 0, else: state.read_cursor
+    start = max(cursor, first_buffered)
 
     lines =
       state.log_buffer
@@ -363,7 +380,7 @@ defmodule CodingAgent.ProcessSession do
       |> Enum.drop(start - first_buffered)
       |> Enum.map(&elem(&1, 0))
 
-    ProcessStore.put_read_cursor(state.process_id, state.total_lines)
+    unless peek, do: ProcessStore.put_read_cursor(state.process_id, state.total_lines)
 
     result = %{
       process_id: state.process_id,
@@ -373,23 +390,25 @@ defmodule CodingAgent.ProcessSession do
       owner: state.owner,
       lines: lines,
       full_output_path: state.full_output_path,
-      dropped_lines: start - state.read_cursor,
+      dropped_lines: start - cursor,
       output: output_stats(state)
     }
 
-    {:reply, {:ok, result}, %{state | read_cursor: state.total_lines}}
+    state = if peek, do: state, else: %{state | read_cursor: state.total_lines}
+    {:reply, {:ok, result}, state}
   end
 
-  def handle_call({:write_stdin, data}, _from, state) do
-    if state.status == :running do
+  def handle_call({:write_stdin, data, eof}, _from, state) do
+    if state.status == :running and not state.stdin_closed do
       # Stdin may make the root exit immediately. Retain any verified surviving
       # members before forwarding bytes, while root ownership still binds them.
       state = remember_workload_members(state)
 
       if state.status == :running do
         try do
-          Port.command(state.port, data)
-          {:reply, :ok, state}
+          :ok = :file.write(state.stdin, data)
+          if eof, do: File.close(state.stdin)
+          {:reply, :ok, %{state | stdin_closed: eof}}
         rescue
           e -> {:reply, {:error, e}, state}
         end
@@ -397,13 +416,18 @@ defmodule CodingAgent.ProcessSession do
         {:reply, {:error, {:outcome_unknown, state.process_id}}, state}
       end
     else
-      {:reply, {:error, :process_not_running}, state}
+      reason = if state.status == :running, do: :stdin_closed, else: :process_not_running
+      {:reply, {:error, reason}, state}
     end
   end
 
   def handle_call({:kill, signal}, _from, state) do
     if state.status in [:running, :killing, :lost] and state.os_pid do
       {reply, state} = request_workload_stop(state, signal, :canceled)
+
+      if reply == :ok and signal == :sigterm,
+        do: Process.send_after(self(), :kill_after_grace, 2_000)
+
       {:reply, reply, state}
     else
       {:reply, {:error, :process_not_running}, state}
@@ -456,6 +480,15 @@ defmodule CodingAgent.ProcessSession do
   def handle_info(:external_termination_confirmed, %{status: :lost} = state) do
     if state.workload_timer, do: Process.cancel_timer(state.workload_timer)
     {:stop, :normal, state}
+  end
+
+  def handle_info(:kill_after_grace, state) do
+    if state.status in [:running, :killing, :lost] do
+      {_reply, state} = request_workload_stop(state, :sigkill, :canceled)
+      {:noreply, state}
+    else
+      {:noreply, state}
+    end
   end
 
   def handle_info(:timeout, state) do
@@ -533,6 +566,9 @@ defmodule CodingAgent.ProcessSession do
         _, _ -> :ok
       end
     end
+
+    unless state.stdin_closed, do: File.close(state.stdin)
+    File.rm(state.stdin_path)
 
     :ok
   end
@@ -746,25 +782,39 @@ defmodule CodingAgent.ProcessSession do
         port_opts
       end
 
-    case :os.type() do
-      {:unix, _} ->
-        # Noninteractive POSIX sh does not source the command's BASH_ENV. The
-        # subshell consumes only our newline; exec preserves the target shell,
-        # env, cwd, argv and subsequent stdin without a new PATH lookup. POSIX
-        # `read` requires a variable name: dash (Linux /bin/sh) rejects a bare
-        # `read -r`, which would exit before exec and never run the command.
-        true = Path.type(executable) == :absolute
+    # A FIFO permits stdin EOF without closing stdout or losing exit status.
+    # Opening its writer after activation synchronizes with the shell's reader,
+    # so an immediate EOF cannot race the reader's open.
+    stdin_path =
+      Path.join(
+        System.tmp_dir!(),
+        "lemon-stdin-#{:crypto.strong_rand_bytes(16) |> Base.url_encode64(padding: false)}"
+      )
 
-        gated_args =
-          ["-c", "( IFS= read -r lemon_gate ) && exec \"$@\"", "lemon-process", executable | args]
+    {_, 0} = System.cmd("mkfifo", ["-m", "600", stdin_path])
 
+    try do
+      true = Path.type(executable) == :absolute
+
+      gated_args = [
+        "-c",
+        "( IFS= read -r lemon_gate ) && lemon_stdin=$1 && shift && exec \"$@\" < \"$lemon_stdin\"",
+        "lemon-process",
+        stdin_path,
+        executable | args
+      ]
+
+      port =
         Port.open(
           {:spawn_executable, "/bin/sh"},
           List.keyreplace(port_opts, :args, 0, {:args, gated_args})
         )
 
-      _ ->
-        Port.open({:spawn_executable, executable}, port_opts)
+      {port, stdin_path}
+    rescue
+      exception ->
+        File.rm(stdin_path)
+        reraise exception, __STACKTRACE__
     end
   end
 

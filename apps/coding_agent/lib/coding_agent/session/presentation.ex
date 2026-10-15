@@ -475,6 +475,7 @@ defmodule CodingAgent.Session.Presentation do
       "bash" -> :command
       "bash_output" -> :command
       "kill_process" -> :command
+      "process_input" -> :command
       "eval" -> :command
       "debug" -> :command
       "read" -> :tool
@@ -548,6 +549,23 @@ defmodule CodingAgent.Session.Presentation do
 
       "webfetch" ->
         "fetch: #{String.slice(a["url"] || "", 0, 50)}"
+
+      # Native app control (lemon_computer_use). `title` is the runtime's own
+      # short user-facing description of the call.
+      "cua_js" ->
+        label = a["title"] || (a["code"] || "") |> String.split("\n") |> hd()
+        "computer use: #{String.slice(label, 0, 60)}"
+
+      "cua_js_reset" ->
+        "computer use reset"
+
+      # Its per-app and per-site approval requests.
+      "computer_use" ->
+        cond do
+          is_binary(a["app"]) -> "computer use app: #{String.slice(a["app"], 0, 80)}"
+          is_binary(a["origin"]) -> "computer use site: #{String.slice(a["origin"], 0, 80)}"
+          true -> "computer use"
+        end
 
       "browser_navigate" ->
         "browser: #{String.slice(a["url"] || "", 0, 50)}"

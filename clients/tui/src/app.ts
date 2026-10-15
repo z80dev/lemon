@@ -328,6 +328,7 @@ export class AppShell {
 				this.#focusEditor();
 			},
 			notice: (text, level) => this.events.notice(text, level),
+			resolveApproval: (id, decision) => this.approvals.resolve(id, decision),
 		});
 		this.#modelPicker = new ModelPicker({
 			store: this.store,

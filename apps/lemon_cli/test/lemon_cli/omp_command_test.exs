@@ -179,7 +179,7 @@ defmodule LemonCli.OmpCommandTest do
 
   test "show prints the bounded summary with terminal escapes removed" do
     output = capture_io(fn -> assert CLI.run(["omp", "show", @id]) == 0 end)
-    assert output == "#{@id} running\nThinking\n"
+    assert output == "#{@id} running\nThinking\nApproval mode: omp default\n"
     assert_received {:omp_request, "omp.sessions.get", %{"id" => @id}, _}
 
     json = capture_io(fn -> assert CLI.run(["omp", "show", @id, "--json"]) == 0 end)
@@ -189,7 +189,7 @@ defmodule LemonCli.OmpCommandTest do
   test "discover defaults to the current directory and expands --cwd" do
     cwd = File.cwd!()
     output = capture_io(fn -> assert CLI.run(["omp", "discover"]) == 0 end)
-    assert output =~ ~r/01a1\s+completed\s+2026-\S+\s+-\s+Earlier work/
+    assert output =~ ~r/01a1\s+-\s+completed\s+2026-\S+\s+-\s+Earlier work/
     assert output =~ "lemon omp resume"
     assert_received {:omp_request, "omp.sessions.discover", %{"cwd" => ^cwd}, _}
 
@@ -430,6 +430,280 @@ defmodule LemonCli.OmpCommandTest do
 
     error = capture_io(:stderr, fn -> assert CLI.run(["omp", "watch", "omp_missing"]) == 1 end)
     assert error =~ "[NOT_FOUND]"
+  end
+
+  test "approval modes, isolation, continuation and redirect use the wire contract" do
+    for mode <- ~w(always-ask write yolo) do
+      capture_io(fn ->
+        assert CLI.run(["omp", "start", "--approval-mode", mode, "--isolate", "work"]) == 0
+      end)
+
+      assert_received {:omp_request, "omp.sessions.start",
+                       %{"approvalMode" => ^mode, "isolate" => true}, _}
+    end
+
+    capture_io(fn ->
+      assert CLI.run(["omp", "resume", "01a1", "--approval-mode", "write", "--continue"]) == 0
+    end)
+
+    assert_received {:omp_request, "omp.sessions.resume",
+                     %{"approvalMode" => "write", "continue" => true} = params, _}
+
+    refute Map.has_key?(params, "prompt")
+    Process.put({:omp_response, "omp.sessions.send"}, {:ok, %{"delivery" => "redirect"}})
+
+    output =
+      capture_io(fn -> assert CLI.run(["omp", "send", @id, "--redirect", "instead"]) == 0 end)
+
+    assert output =~ "as redirect"
+    assert_received {:omp_request, "omp.sessions.send", %{"mode" => "redirect"}, _}
+  end
+
+  test "start-many shares options and prints ordered successes and errors" do
+    Process.put(
+      {:omp_response, "omp.sessions.startMany"},
+      {:ok,
+       %{
+         "results" => [
+           %{"index" => 0, "session" => Client.session()},
+           %{
+             "index" => 1,
+             "error" => %{
+               "code" => "OMP_WORKTREE_FAILED",
+               "message" => "Could not create worktree."
+             }
+           }
+         ]
+       }}
+    )
+
+    output =
+      capture_io(fn ->
+        assert CLI.run([
+                 "omp",
+                 "start-many",
+                 "--task",
+                 "one",
+                 "--task",
+                 "two",
+                 "--cwd",
+                 "/work",
+                 "--model",
+                 "provider/model",
+                 "--thinking",
+                 "low",
+                 "--approval-mode",
+                 "yolo",
+                 "--isolate"
+               ]) == 0
+      end)
+
+    assert output =~ "0: #{@id} (running)"
+    assert output =~ "1: OMP_WORKTREE_FAILED: Could not create worktree."
+    assert_received {:omp_request, "omp.sessions.startMany", %{"tasks" => tasks}, _}
+    assert Enum.map(tasks, & &1["prompt"]) == ["one", "two"]
+
+    assert Enum.all?(
+             tasks,
+             &(Map.drop(&1, ["prompt"]) == %{
+                 "cwd" => "/work",
+                 "model" => "provider/model",
+                 "thinking" => "low",
+                 "approvalMode" => "yolo",
+                 "isolate" => true
+               })
+           )
+  end
+
+  test "models supports query and filters and prints free and paid prices" do
+    Process.put(
+      {:omp_response, "omp.models"},
+      {:ok,
+       %{
+         "models" => [
+           %{
+             "selector" => "p/free",
+             "name" => "Free model",
+             "contextWindow" => 128_000,
+             "free" => true
+           },
+           %{
+             "selector" => "p/paid",
+             "name" => "Paid model",
+             "contextWindow" => 64000,
+             "costInput" => 0.5,
+             "costOutput" => 2,
+             "free" => false
+           }
+         ]
+       }}
+    )
+
+    output =
+      capture_io(fn ->
+        assert CLI.run(["omp", "models", "model", "--free", "--provider", "p", "--limit", "200"]) ==
+                 0
+      end)
+
+    assert output =~ ~r/SELECTOR\s+NAME\s+CONTEXT\s+\$IN\/MTOK\s+\$OUT\/MTOK/
+    assert output =~ ~r/p\/free\s+Free model\s+128000\s+FREE\s+FREE/
+    assert output =~ ~r/p\/paid\s+Paid model\s+64000\s+0.5\s+2/
+
+    assert_received {:omp_request, "omp.models",
+                     %{"query" => "model", "freeOnly" => true, "provider" => "p", "limit" => 200},
+                     _}
+
+    capture_io(fn -> assert CLI.run(["omp", "models"]) == 0 end)
+    assert_received {:omp_request, "omp.models", %{}, _}
+  end
+
+  test "subagent prints a sanitized transcript tail" do
+    Process.put(
+      {:omp_response, "omp.sessions.subagent"},
+      {:ok,
+       %{
+         "transcript" => %{
+           "messages" => [
+             %{"role" => "assistant", "text" => "Working\e[2J\nnow"},
+             %{"role" => "tool", "toolName" => "bash", "text" => "ok"}
+           ]
+         }
+       }}
+    )
+
+    output =
+      capture_io(fn ->
+        assert CLI.run(["omp", "subagent", @id, "child", "--limit", "50"]) == 0
+      end)
+
+    assert output == "assistant: Working\nnow\ntool (bash): ok\n"
+
+    assert_received {:omp_request, "omp.sessions.subagent",
+                     %{"id" => @id, "subagentId" => "child", "limit" => 50}, _}
+  end
+
+  test "configure prints effective settings and preserves partial application details" do
+    Process.put(
+      {:omp_response, "omp.sessions.configure"},
+      {:ok, %{"session" => Client.session(%{"model" => "p/new", "thinking" => "minimal"})}}
+    )
+
+    for options <- [
+          ["--model", "p/new"],
+          ["--thinking", "low"],
+          ["--model", "p/new", "--thinking", "low"]
+        ] do
+      output = capture_io(fn -> assert CLI.run(["omp", "configure", @id] ++ options) == 0 end)
+      assert output =~ "model p/new; thinking minimal"
+      assert_received {:omp_request, "omp.sessions.configure", %{"id" => @id}, _}
+    end
+
+    details = %{
+      "code" => "OMP_PARTIALLY_APPLIED",
+      "applied" => ["model"],
+      "failedStep" => "thinking",
+      "retrySafe" => false
+    }
+
+    Process.put(
+      {:omp_response, "omp.sessions.configure"},
+      {:error,
+       {:control_plane,
+        %{"code" => "CONFLICT", "message" => "Thinking change failed.", "details" => details}}}
+    )
+
+    error =
+      capture_io(:stderr, fn ->
+        assert CLI.run(["omp", "configure", @id, "--thinking", "low"]) == 1
+      end)
+
+    assert error =~ "Applied: model. Failed step: thinking."
+    assert error =~ "not rolled back"
+    assert error =~ "Not retry-safe"
+
+    error =
+      capture_io(:stderr, fn ->
+        assert CLI.run(["omp", "configure", @id, "--model", "p/new", "--json"]) == 1
+      end)
+
+    assert Jason.decode!(error)["error"]["details"] == details
+  end
+
+  test "show displays approvals, worktree state and child activity; discover marks source and interruption" do
+    session =
+      Client.session(%{
+        "approvalMode" => "write",
+        "pendingApprovals" => [
+          %{"id" => "approval_1", "tool" => "bash", "details" => "run tests"}
+        ],
+        "worktree" => %{
+          "path" => "/work/tree",
+          "branch" => "lemon-omp/worker",
+          "kept" => true,
+          "dirty" => 2,
+          "commits" => nil
+        },
+        "subagents" => [%{"id" => "child", "status" => "running", "activity" => "Reading code"}]
+      })
+
+    Process.put(
+      {:omp_response, "omp.sessions.get"},
+      {:ok, %{"session" => session, "summary" => "Summary"}}
+    )
+
+    output = capture_io(fn -> assert CLI.run(["omp", "show", @id]) == 0 end)
+
+    for text <- [
+          "Approval mode: write",
+          "Pending approval approval_1: bash",
+          "exec.approval.resolve",
+          "/work/tree (lemon-omp/worker)",
+          "kept: true; dirty: 2; commits: unknown",
+          "Subagent child [running]: Reading code"
+        ] do
+      assert output =~ text
+    end
+
+    Process.put(
+      {:omp_response, "omp.sessions.discover"},
+      {:ok,
+       %{
+         "sessions" => [
+           %{
+             "ompSessionId" => "01a1",
+             "source" => "omp",
+             "interrupted" => true,
+             "lastStatus" => "running"
+           }
+         ]
+       }}
+    )
+
+    output = capture_io(fn -> assert CLI.run(["omp", "discover"]) == 0 end)
+    assert output =~ "SOURCE"
+    assert output =~ ~r/01a1\s+omp\s+running \(interrupted\)/
+  end
+
+  test "new invalid options fail before RPC" do
+    for args <- [
+          ["start", "--approval-mode", "bad", "work"],
+          ["resume", "01a1", "--continue", "prompt"],
+          ["resume", "01a1", "--approval-mode", "bad"],
+          ["send", @id, "--redirect", "--follow-up", "work"],
+          ["start-many"],
+          ["start-many", "--task", ""],
+          ["start-many", "--task", "one", "extra"],
+          ["models", "--limit", "201"],
+          ["models", "one", "two"],
+          ["subagent", @id],
+          ["subagent", @id, "child", "--limit", "51"],
+          ["configure", @id],
+          ["configure", @id, "--model", ""]
+        ] do
+      capture_io(:stderr, fn -> assert CLI.run(["omp" | args]) == 2 end)
+    end
+
+    refute_received {:omp_request, _, _, _}
   end
 
   defp with_stderr(fun) do

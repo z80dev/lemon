@@ -782,6 +782,13 @@ moved:
 | `theme` | `[tui]` `theme` |
 | anything else, including `[agent.<sub>]` tables | `[runtime]` / `[runtime.<sub>]` (an existing `[runtime]` key wins) |
 
+Malformed TOML is a load error, not an empty configuration; missing files still
+use defaults. `lemon config validate` lists both checked files on success and
+failure. Fix syntax errors in the named file, then run
+`lemon config validate --verbose`. For removed settings, run
+`lemon config migrate`. Doctor records invalid configuration as failing checks
+and continues with the remaining diagnostics.
+
 `lemon config migrate` rewrites the global config and the current project's
 config this way, and `lemon setup` does the same when it finds an existing
 file. Both keep comments and unrelated tables, write the original to
@@ -1596,6 +1603,21 @@ cache_dir = ""
 max_tool_invoke_depth = 4
 ```
 
+## Computer Use
+
+Native app control through LCU is off by default. See
+[`docs/tools/computer-use.md`](tools/computer-use.md) for requirements and
+approvals. `LEMON_COMPUTER_USE_*` environment variables override these keys.
+
+```toml
+[runtime.tools.computer_use]
+enabled = false
+chrome = false
+# lcu_root = "~/.local/share/lcu/current"
+# node = "<lcu_root>/agent-tools/node/bin/node"
+declined_origins = []
+```
+
 ## Tool Disclosure
 
 Every tool a session exposes sends its name, description and JSON schema with
@@ -1995,3 +2017,31 @@ slash command. Direct messages always run.
 
 Forum topic management:
 - `/topic <name>`: create a new topic in the current Telegram forum supergroup.
+
+## Learning Reminders (skills.json)
+
+Learning reminder settings use the existing skills configuration, **not**
+`config.toml`: global `~/.lemon/agent/skills.json` (or `LEMON_AGENT_DIR/skills.json`)
+and project `<cwd>/.lemon/skills.json`. Project keys override global keys.
+
+```json
+{
+  "learning_nudge": {
+    "enabled": true,
+    "memory_turn_interval": 10,
+    "skill_tool_threshold": 15
+  }
+}
+```
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `enabled` | `true` | Enable main-session in-band reminders; `false` skips reminders and forgets that session's counters on its next turn. |
+| `memory_turn_interval` | `10` | User turns without `remember` before suggesting a save; repeats at this interval if no save is made. |
+| `skill_tool_threshold` | `15` | Tool dispatches in the previous completed run, without `skill_manage`, before a one-turn skill creation/patch suggestion. |
+
+Thresholds must be positive integers; invalid values fall back to the defaults.
+Configuration is read at the next user turn. The fixed text is bounded volatile
+context: no extra model calls, memory reads, automatic saves or transcript scans.
+Subagents are excluded, and live-session counters disappear on session exit or
+runtime restart. See [learning reminders](user-guide/skills.md#learning-reminders).

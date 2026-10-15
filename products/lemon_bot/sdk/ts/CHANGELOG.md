@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Instance status now includes build, channel details, provider credential health and explicit runtime actions/via; the shared wire fixture covers controller lifecycle and all credential states.
 - Add `InstanceStatus`, controller-link and runtime lifecycle contracts with typed `instance()`, `reconnectController()` and `runtimeAction(action, confirm)` helpers. Actions retain nonce-based mutation handling; lifecycle completion is polled through instance status. Include a backend-produced instance JSON fixture and consumer tests.
 
 ## Owner assistant cutover

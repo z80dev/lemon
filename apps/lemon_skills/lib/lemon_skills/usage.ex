@@ -219,13 +219,17 @@ defmodule LemonSkills.Usage do
     agent_authored? = Map.get(record, "created_by") == "agent"
     protected? = lifecycle_state in ["pinned", "archived"]
 
+    archive_grace? =
+      integer_field(record, "load_count") > 0 or
+        (is_integer(idle_days) and idle_days >= stale_after_days)
+
     stale_candidate? =
       agent_authored? and not protected? and is_integer(idle_days) and
         idle_days >= stale_after_days
 
     archive_candidate? =
       agent_authored? and not protected? and is_integer(idle_days) and
-        idle_days >= archive_after_days
+        idle_days >= archive_after_days and archive_grace?
 
     %{
       name: key,

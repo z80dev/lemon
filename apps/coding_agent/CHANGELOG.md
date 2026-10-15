@@ -4,10 +4,19 @@
 
 ### Added
 
+- Background process controls now support exact stdin writes and EOF through
+  `process_input`, non-consuming `bash_output` peeks, and graceful `kill_process`
+  SIGTERM with a two-second SIGKILL fallback (or explicit immediate kill).
+
 - Web-search requests sent directly to `api.perplexity.ai` now include an
   `X-Pplx-Integration: lemon` header so Perplexity can attribute Lemon traffic.
   Requests routed through OpenRouter or custom compatible endpoints are
   unchanged.
+- Read accepts comma-separated line/range/count windows, sorts and merges them,
+  and preserves original line numbers with a single snapshot header. Single
+  non-raw bounded selectors include one preceding and three following context
+  lines; raw and comma-list windows remain exact. Overwrites reject selector
+  elision markers rather than copying omitted content into existing files.
 
 ### Changed
 
@@ -16,6 +25,20 @@
   search, topic, and session-browse tool surfaces.
 
 ### Fixed
+
+- Local overwrite format detection reads only a 64 KiB leading window rather
+  than loading the entire existing file.
+
+- Local patches refuse stale updates, deletes, and move sources before writing
+  any operation; filesystem errors now use actionable messages without raw terms.
+
+- Grep pages are sorted by path and line across both engines. Partial ripgrep
+  errors preserve matches with warnings, and lookaround/backreferences select
+  PCRE2 or explain the unsupported Rust-regex construct. The Elixir fallback
+  now has a 30-second deadline, a 4 MiB leading-file window with oversized-file
+  counts, and stops once the requested page is filled.
+- File overwrites reject truncated read output and preserve existing UTF-8 BOMs
+  and dominant CRLF endings, including ACP writes with available prior content.
 
 - Named-node file requests no longer return `filesystem_failed` when a parent
   symlink is swapped back to a directory while the path resolves. Each component

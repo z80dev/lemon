@@ -111,6 +111,7 @@ defmodule LemonChannels.Adapters.WhatsApp.Transport do
 
   @impl true
   def handle_info({:whatsapp_bridge_event, %{"type" => "connected"} = event}, state) do
+    LemonChannels.Registry.record_status("whatsapp", :connected)
     own_jid = event["jid"]
     phone = event["phone"] || phone_from_jid(own_jid)
 
@@ -140,11 +141,13 @@ defmodule LemonChannels.Adapters.WhatsApp.Transport do
   end
 
   def handle_info({:whatsapp_bridge_event, %{"type" => "connecting"}}, state) do
+    LemonChannels.Registry.record_status("whatsapp", :configured)
     Logger.info("whatsapp bridge connecting...")
     {:noreply, %{state | connected?: false}}
   end
 
   def handle_info({:whatsapp_bridge_event, %{"type" => "disconnected"} = event}, state) do
+    LemonChannels.Registry.record_status("whatsapp", {:error, :disconnected})
     status = event["status_code"]
     is_logged_out = event["is_logged_out"] || false
 

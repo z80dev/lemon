@@ -21,6 +21,19 @@ defmodule LemonCore.Doctor.RegistrationTest do
     def something_else, do: :ok
   end
 
+  defmodule RaisingCheck do
+    def run(_opts), do: raise("private diagnostic detail")
+  end
+
+  test "a raising check fails safely without preventing later checks" do
+    put_env(:doctor_checks, [RaisingCheck, ExtraCheck])
+    checks = Doctor.checks(project_dir: File.cwd!())
+    failure = Enum.find(checks, &(&1.name == "doctor.check_failed"))
+    assert failure.status == :fail
+    refute failure.message =~ "private diagnostic detail"
+    assert List.last(checks).name == "extra.registered"
+  end
+
   defp put_env(key, value) do
     original = Application.get_env(:lemon_core, key)
 
