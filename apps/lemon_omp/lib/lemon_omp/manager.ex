@@ -134,6 +134,7 @@ defmodule LemonOmp.Manager do
           "status" => "failed",
           "activity" => nil,
           "activeTools" => [],
+          "pendingApprovals" => [],
           "endedAt" => now,
           "updatedAt" => now,
           "error" => "the Lemon process supervising omp stopped unexpectedly",

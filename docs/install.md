@@ -44,8 +44,7 @@ The installer adds `~/.lemon/bin` to PATH in your shell rc file (zsh, bash or
 fish), so new terminals find `lemon`. In an interactive terminal,
 invoking `lemon` with no arguments opens the TUI; without a TTY it prints usage
 and exits. The TUI runs setup when required, starts a daemon if needed, and
-then attaches. Use `lemon start` (or `lemon run`) to run the runtime in the
-foreground.
+then attaches. Use `lemon start` to run the runtime in the foreground.
 
 ## Installer handoff and non-interactive installs
 
@@ -68,7 +67,7 @@ setup state, then supply the provider credential and default model explicitly:
 ```bash
 lemon setup --non-interactive
 lemon model --provider anthropic --token "$ANTHROPIC_API_KEY" \
-  --model anthropic:claude-sonnet-4-20250514 --set-default
+  --model claude-sonnet-4-20250514 --set-default
 lemon doctor
 ```
 
@@ -78,7 +77,7 @@ wanted, use the setup-provider flow instead:
 
 ```bash
 lemon setup provider --provider anthropic --token "$ANTHROPIC_API_KEY" \
-  --model anthropic:claude-sonnet-4-20250514 --set-default
+  --model claude-sonnet-4-20250514 --set-default
 ```
 
 That flow verifies the provider configuration and performs its live check when
@@ -211,7 +210,7 @@ For a source checkout, use the `./bin/lemon` wrapper for Lemon commands:
 
 ```bash
 ./bin/lemon model --provider anthropic --token "$ANTHROPIC_API_KEY" \
-  --model anthropic:claude-sonnet-4-20250514 --set-default
+  --model claude-sonnet-4-20250514 --set-default
 ./bin/lemon gateway setup telegram
 ./bin/lemon gateway setup discord
 ./bin/lemon config validate
@@ -222,8 +221,8 @@ For a source checkout, use the `./bin/lemon` wrapper for Lemon commands:
 
 The source wrapper follows the same setup and provider behavior described
 above. In an interactive terminal, bare `./bin/lemon` opens the TUI; without a
-TTY it prints usage. `./bin/lemon start` (or `./bin/lemon run`) runs the runtime
-in the foreground. `./bin/lemon-tui` remains the development TUI entry point.
+TTY it prints usage. `./bin/lemon start` runs the runtime in the foreground.
+`./bin/lemon-tui` remains the development TUI entry point.
 When it starts a fresh runtime, the launcher generates and shares an in-memory
 operator token with the TUI, then stops that owned runtime when the TUI exits.
 

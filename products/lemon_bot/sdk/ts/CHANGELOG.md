@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Add `InstanceStatus`, controller-link and runtime lifecycle contracts with typed `instance()`, `reconnectController()` and `runtimeAction(action, confirm)` helpers. Actions retain nonce-based mutation handling; lifecycle completion is polled through instance status. Include a backend-produced instance JSON fixture and consumer tests.
+
 ## Owner assistant cutover
 
 - Migrate to canonical named owner-only Bot/conversation/memory/skill/connector types. Remove obsolete cross-human group departure callers; retain own-Bot group admission and unknown-outcome reconciliation.

@@ -16,7 +16,7 @@ The initial stable 1.0 release artifact support target is:
 | Source install | Linux and macOS, best effort | Requires Elixir 1.19.5+ and Erlang/OTP 28.5+ |
 | Windows and macOS `x86_64` | Not supported for 1.0 | Use WSL, the container image, or source-level experimentation |
 | Install script | Supported with scope | `install.sh` on the `stable` channel for the three platform tags; `preview`/`nightly` require a pinned `LEMON_VERSION` |
-| Update | Supported with scope | `lemon update` stages runtime plus TUI artifacts atomically for full/min installs, then flips the symlink plus operator restart, with `--rollback`. No hot upgrades, no background auto-update |
+| Update | Supported with scope | `lemon update` stages runtime plus TUI artifacts atomically for full/min installs, then flips the symlink plus operator restart, with `lemon update rollback --receipt ID --confirm DIGEST`. No hot upgrades, no background auto-update |
 | Container image | `ghcr.io/z80dev/lemon` multi-arch | `amd64` and `arm64` under one tag |
 | Hosted Lemon service | Not supported for 1.0 | Lemon is local-first/self-hosted |
 | Stable remote channel | Telegram | Text-first support boundary; other channel adapters are preview unless promoted |

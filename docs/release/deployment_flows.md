@@ -367,15 +367,15 @@ For source development, the launcher runs `bun src/main.ts` from `clients/tui`:
 ./bin/lemon-tui
 ```
 
-The TUI connects to the control-plane at `http://localhost:4040` by default.
-Override with `LEMON_CONTROL_PLANE_URL`. Control-plane approval events surface
+The TUI connects to `ws://127.0.0.1:4040/ws` by default.
+Override with `LEMON_WS_URL` (a full WebSocket URL). Control-plane approval events surface
 as TUI notifications, including MCP OAuth `Open OAuth` links and resource,
 scope, and redirect context when a configured HTTP MCP source requests local
 PKCE authorization. Operators can resolve the same pending approvals from the
-terminal with `/approval approve|once|session|agent|global|deny <approval-id>`,
-which routes to the control-plane `exec.approval.resolve` method. Use
-`/approval` or `/approval list` to refresh the current pending approval
-snapshot from `exec.approvals.get`.
+terminal with `/approve [n] [once|session|agent|global]` or `/deny [n]`,
+which route to the control-plane `exec.approval.resolve` method. Use
+`/approvals` to refresh the current pending approval snapshot from
+`exec.approvals.get`; `n` is the 1-based index in that list.
 
 The source launcher creates a high-entropy process-scoped operator token when
 it boots a new local runtime, shares it only through the daemon and TUI process

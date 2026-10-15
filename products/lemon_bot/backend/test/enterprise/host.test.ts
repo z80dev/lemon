@@ -97,6 +97,8 @@ const nativeProcessReply = z.union([
 ]);
 class ActualProcess implements LemonService {
   connected = true;
+  controller: LemonService['controller'] = { url: 'ws://127.0.0.1:4040/ws', state: 'connected', connectedAtMs: 1, lastDisconnectedAtMs: null, lastError: null, nextRetryAtMs: null, methodCount: 0 };
+  reconnect() { this.start(); }
   methods = ['node.process.run', 'node.process.get', 'node.process.cancel'];
   private connections = new Set<() => void>();
   readonly processes = new Map<string, NativeProcessRecord>();
@@ -513,7 +515,7 @@ describe('trusted owned-host driver over actual noninteractive native processes'
   });
   test('isolated-root deletion requires measured root and retains home/SSH in preview', async () => {
     const h = await fixture();
-    expect(() => h.host.snapshot(h.owner, ['machine_a'], 'delete_environment')).toThrow('Probe and verify');
+    expect(() => h.host.snapshot(h.owner, ['machine_a'], 'delete_environment')).toThrow('Inspect this machine and verify its isolated environment');
     await h.host.management(h.owner, 'machine_a');
     const preview = await h.request<P.Confirmation>('POST', '/v1/host-operations/preview', { clientNonce: intent('delete_reviewed'), machineIds: ['machine_a'], action: 'delete_environment' });
     expect(preview.effects.join(' ')).toContain('SSH'); expect(preview.affected.some(a => a.operation === 'delete')).toBe(true); expect(preview.effects.join(' ')).toContain(h.directory);

@@ -35,6 +35,7 @@ describe('owner pairing boundary', () => {
     ]) {
       expect(() => parsePairUrl(value)).toThrow();
     }
+    expect(() => parsePairUrl('lemonbot://pair?secret=do-not-disclose')).toThrow();
     try { parsePairUrl('lemonbot://pair?secret=do-not-disclose'); }
     catch (failure) { expect(String(failure)).not.toContain('do-not-disclose'); }
   });

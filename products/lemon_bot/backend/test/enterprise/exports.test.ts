@@ -77,7 +77,7 @@ function fixture(path = ':memory:') {
     },
     page: unsupported,
     pageAfter: unsupported,
-    lemon: { connected: false, methods: [], call: unsupported, onEvent: unsupported, onConnected: unsupported, start: unsupported, close: unsupported },
+    lemon: { controller: { url: 'ws://127.0.0.1:4040/ws', state: 'stopped', connectedAtMs: null, lastDisconnectedAtMs: null, lastError: null, nextRetryAtMs: null, methodCount: 0 }, reconnect: unsupported, connected: false, methods: [], call: unsupported, onEvent: unsupported, onConnected: unsupported, start: unsupported, close: unsupported },
     runtime: { submit: unsupported, send: unsupported, cancel: unsupported, revokeConnectorInvocations: unsupported, reconcile: unsupported, sessionKey: unsupported },
     gates: { create: unsupported, resolve: unsupported, wait: unsupported, cancelUser: unsupported },
     integrations: { admission: unsupported, effectivePolicy: unsupported, connectorConfig: unsupported, sendApprovedDraft: unsupported, emitProviderNotifications: unsupported, channelIngress: unsupported, providerCapabilities: unsupported },

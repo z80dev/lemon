@@ -14,6 +14,10 @@ defmodule LemonOmp.Config do
     * `:idle_timeout_ms` / `LEMON_OMP_IDLE_TIMEOUT_MS` — an idle process (no turn
       in flight) is closed after this long; its session file stays resumable
       (default 30 minutes, `0` disables).
+    * `:approvals` / `LEMON_OMP_APPROVALS` — `bridge` (default) routes omp tool
+      approval selects to Lemon's shared approval prompts; `decline` cancels them.
+    * `:approval_timeout_ms` / `LEMON_OMP_APPROVAL_TIMEOUT_MS` — maximum time to
+      wait for approval (default 600000 ms), capped by omp's dialog timeout.
     * `:agent_dir` / `PI_CODING_AGENT_DIR` — omp's agent directory, used only for
       read-only session discovery (default `~/<PI_CONFIG_DIR or .omp>/agent`).
   """
@@ -22,6 +26,7 @@ defmodule LemonOmp.Config do
   @default_idle_timeout_ms 30 * 60 * 1000
   @default_ready_timeout_ms 30_000
   @default_command_timeout_ms 15_000
+  @default_approval_timeout_ms 600_000
 
   @spec executable() :: String.t() | nil
   def executable do
@@ -70,6 +75,31 @@ defmodule LemonOmp.Config do
   @spec command_timeout_ms() :: pos_integer()
   def command_timeout_ms,
     do: app_positive_int(:command_timeout_ms, @default_command_timeout_ms)
+
+  @spec approvals() :: :bridge | :decline
+  def approvals do
+    case env("LEMON_OMP_APPROVALS") do
+      "bridge" ->
+        :bridge
+
+      "decline" ->
+        :decline
+
+      _ ->
+        if Application.get_env(:lemon_omp, :approvals) in [:decline, "decline"],
+          do: :decline,
+          else: :bridge
+    end
+  end
+
+  @spec approval_timeout_ms() :: pos_integer()
+  def approval_timeout_ms,
+    do:
+      positive_int(
+        env("LEMON_OMP_APPROVAL_TIMEOUT_MS"),
+        :approval_timeout_ms,
+        @default_approval_timeout_ms
+      )
 
   @doc "omp's agent directory (session discovery root is `<agent_dir>/sessions`)."
   @spec agent_dir() :: String.t()

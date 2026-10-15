@@ -185,8 +185,14 @@ const publicMcpCeiling = z.object({
 export async function workspaceNativeToolRestrictions(s: BackendServices, bot: P.Bot, acknowledgedPolicy: P.JSONObject, measured?: P.MachineCapabilities): Promise<P.JSONObject> {
   const previous = acknowledgedNativePolicy.safeParse(acknowledgedPolicy);
   const cache = publicMcpCeiling.safeParse(s.store.metadata(`botPublicMcpCeiling:${bot.id}`));
-  if (!previous.success || !cache.success || new Set(cache.data.servers.map(server => server.name)).size !== cache.data.servers.length) fail('capability_unavailable', 'Workspace hardening requires an acknowledged closed native floor and credential-free public MCP ceiling.');
-  if (!cache.data.servers.some(server => server.name === 'lemon-bot')) fail('capability_unavailable', 'The acknowledged product MCP ceiling is missing.');
+  if (!previous.success || !cache.success || new Set(cache.data.servers.map(server => server.name)).size !== cache.data.servers.length) {
+    process.stderr.write('Workspace hardening requires an acknowledged closed native floor and credential-free public MCP ceiling.\n');
+    fail('capability_unavailable', 'This Bot’s existing tool permissions could not be verified. Ask the operator to check its setup before applying workspace restrictions.');
+  }
+  if (!cache.data.servers.some(server => server.name === 'lemon-bot')) {
+    process.stderr.write('Workspace hardening is missing the acknowledged product MCP ceiling.\n');
+    fail('capability_unavailable', 'This Bot’s connected-tool setup is incomplete. Ask the operator to check its setup before applying workspace restrictions.');
+  }
   if (measured && measured.machineId !== bot.machineId) fail('invalid_request', 'Capability evidence belongs to a different assigned machine.');
   if (!s.integrations.workspaceRestrictions) fail('capability_unavailable', 'The bounded workspace restriction projection is not configured.');
   const restrictions = s.integrations.workspaceRestrictions({ botId: bot.id, machineId: bot.machineId });

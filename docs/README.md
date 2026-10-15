@@ -34,7 +34,7 @@ with the workflow you need; source modules and tests define implementation APIs.
 ## Tools and skills
 
 - [Skill implementation/reference](skills.md) and [manifest schema](reference/skill-manifest-v2.md)
-- [Web/browser](tools/web.md), [Firecrawl](tools/firecrawl.md), [media](tools/media.md), [LSP](tools/lsp.md) and the [omp delegate](tools/omp.md)
+- [Web/browser](tools/web.md), [browser tool](tools/browser.md), [Firecrawl](tools/firecrawl.md), [media](tools/media.md), [LSP](tools/lsp.md) and the [omp delegate](tools/omp.md)
 - [ACP](tools/acp.md), [OpenAI-compatible API](tools/openai-compatible-api.md),
   [extensions/MCP clients](extensions.md) and [WASM](tools/wasm.md)
 

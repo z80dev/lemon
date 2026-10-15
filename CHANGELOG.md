@@ -8,6 +8,17 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
+### Lemon Bot
+
+- Name missing required Lemon Bot startup settings without a stack dump, keep
+  operator configuration details in server diagnostics rather than owner errors,
+  and clarify backend/SDK setup and contributor documentation.
+
+- Add truthful attached-instance status, controller reconnect (including rejected
+  credentials), and opt-in owner-only local runtime start/stop/restart with
+  bounded operation receipts. Publish TypeScript SDK helpers, Swift Codable
+  mirrors and a shared backend-produced fixture.
+
 ### Added
 
 - Computer use: with `LEMON_COMPUTER_USE_ENABLED=true`, Lemon agents get
@@ -15,9 +26,35 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   app's computer-use runtime via LCU. Per-app approval requests become Lemon
   approvals (once or for the session); Lemon's own apps are never approved.
   See [Computer use](docs/tools/computer-use.md).
+- omp sessions can select an approval mode and bridge tool approval prompts to
+  Lemon's conversation/channel approval UI or operator `exec.approval.resolve`.
+  Snapshots and wait progress expose pending approvals and decision counts;
+  cancelled dialogs and ended sessions clean up pending prompts.
+- MCP clients accept an optional asynchronous `notification_handler` callback for
+  server notifications, including tool, resource and prompt list changes.
+- Expanded the LSP registry from six to 42 primary language servers, with
+  installation hints, unique extension ownership, and case-insensitive
+  `LemonLsp.Servers.language_id/1` lookup.
+- Parallel omp workers: the `omp` tool can start a validated batch concurrently
+  with `start_many`, gather all or any worker with `wait` and `ids`, stream
+  throttled combined progress, and report per-task failures and total usage.
+  The Elixir facade exposes `start_many/2` and `wait_many/3` with owner scoping.
+- Opt-in real omp lifecycle smoke using a free model, covering tool writes,
+  follow-ups, cancellation, process cleanup, discovery and resume.
 
 ### Fixed
 
+- New memory backdoor/exfiltration screening no longer invalidates retained facts
+  or prevents editing/deleting them; new text and patched results remain screened.
+- Correct stale install, quickstart, browser authentication/routes, and TUI
+  instructions, provider-model examples, and documentation navigation.
+- Durable preference/project memory supports exact-first unique-substring
+  patch/delete and rejects persistent backdoor/exfiltration instructions.
+- Web chat keeps run status visible on mobile, distinguishes unavailable checks,
+  improves recovery guidance, and makes login and navigation more accessible.
+- Honcho tool schemas now register only when the integration is configured and
+  enabled, matching its memory provider and context contributor instead of adding
+  five inactive tools to prompts on unconfigured hosts.
 - Native dynamic-preset resolution binds discovered context, output limits,
   reasoning and input capabilities to the effective endpoint, headers and
   selected credential. Default/environment cached metadata no longer bleeds into
@@ -26,6 +63,11 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 - Custom-provider discovery and cache-only model resolution use the selected
   healthy credential-pool principal, keeping picker and native request authority
   aligned without exposing another pool or ambient provider credentials.
+
+### Removed
+
+- The broken `bin/lemon-dev` launcher, which passed flags the TUI no longer
+  accepts. Use `./bin/lemon` (source runtime plus TUI) or `./bin/lemon-tui`.
 
 ---
 

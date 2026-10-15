@@ -61,6 +61,47 @@ The supervised stdio manager registers these language servers:
 | `rust_analyzer` | Rust | `rust-analyzer` | `LEMON_LSP_RUST_ANALYZER_COMMAND` | Install rust-analyzer and put it on `PATH`. |
 | `gopls` | Go | `gopls` | `LEMON_LSP_GOPLS_COMMAND` | `go install golang.org/x/tools/gopls@latest`. |
 | `clangd` | C/C++ | `clangd` | `LEMON_LSP_CLANGD_COMMAND` | Install clangd and provide `compile_commands.json` or `compile_flags.txt` in the workspace for useful diagnostics. |
+| `tlaplus` | TLA+ | `tlapm_lsp --stdio` | `LEMON_LSP_TLAPLUS_COMMAND` | Install TLAPM and put tlapm_lsp on PATH. |
+| `zls` | ZLS | `zls` | `LEMON_LSP_ZLS_COMMAND` | Install ZLS and put zls on PATH. |
+| `vscode_html_language_server` | HTML | `vscode-html-language-server --stdio` | `LEMON_LSP_VSCODE_HTML_LANGUAGE_SERVER_COMMAND` | Install with npm install -g vscode-langservers-extracted. |
+| `vscode_css_language_server` | CSS | `vscode-css-language-server --stdio` | `LEMON_LSP_VSCODE_CSS_LANGUAGE_SERVER_COMMAND` | Install with npm install -g vscode-langservers-extracted. |
+| `vscode_json_language_server` | JSON | `vscode-json-language-server --stdio` | `LEMON_LSP_VSCODE_JSON_LANGUAGE_SERVER_COMMAND` | Install with npm install -g vscode-langservers-extracted. |
+| `svelte` | Svelte | `svelteserver --stdio` | `LEMON_LSP_SVELTE_COMMAND` | Install with npm install -g svelte-language-server. |
+| `vue_language_server` | Vue | `vue-language-server --stdio` | `LEMON_LSP_VUE_LANGUAGE_SERVER_COMMAND` | Install with npm install -g @vue/language-server. |
+| `astro` | Astro | `astro-ls --stdio` | `LEMON_LSP_ASTRO_COMMAND` | Install with npm install -g @astrojs/language-server. |
+| `jdtls` | Eclipse JDT LS | `jdtls` | `LEMON_LSP_JDTLS_COMMAND` | Install Eclipse JDT LS and put jdtls on PATH. |
+| `kotlin_lsp` | Kotlin LSP | `kotlin-lsp --stdio` | `LEMON_LSP_KOTLIN_LSP_COMMAND` | Install JetBrains kotlin-lsp and put kotlin-lsp on PATH. |
+| `metals` | Metals | `metals` | `LEMON_LSP_METALS_COMMAND` | Install Metals with Coursier: cs install metals. |
+| `hls` | Haskell Language Server | `haskell-language-server-wrapper --lsp` | `LEMON_LSP_HLS_COMMAND` | Install Haskell Language Server with ghcup install hls. |
+| `ocamllsp` | OCaml LSP | `ocamllsp` | `LEMON_LSP_OCAMLLSP_COMMAND` | Install with opam install ocaml-lsp-server. |
+| `erlangls` | Erlang LS | `erlang_ls` | `LEMON_LSP_ERLANGLS_COMMAND` | Install Erlang LS and put erlang_ls on PATH. |
+| `gleam` | Gleam | `gleam lsp` | `LEMON_LSP_GLEAM_COMMAND` | Install Gleam and put gleam on PATH. |
+| `ruby_lsp` | Ruby LSP | `ruby-lsp` | `LEMON_LSP_RUBY_LSP_COMMAND` | Install with gem install ruby-lsp. |
+| `bashls` | Bash Language Server | `bash-language-server start` | `LEMON_LSP_BASHLS_COMMAND` | Install with npm install -g bash-language-server. |
+| `lua_language_server` | Lua Language Server | `lua-language-server` | `LEMON_LSP_LUA_LANGUAGE_SERVER_COMMAND` | Install lua-language-server and put it on PATH. |
+| `intelephense` | Intelephense | `intelephense --stdio` | `LEMON_LSP_INTELEPHENSE_COMMAND` | Install with npm install -g intelephense. |
+| `yamlls` | YAML Language Server | `yaml-language-server --stdio` | `LEMON_LSP_YAMLLS_COMMAND` | Install with npm install -g yaml-language-server. |
+| `terraformls` | Terraform LS | `terraform-ls serve` | `LEMON_LSP_TERRAFORMLS_COMMAND` | Install HashiCorp terraform-ls and put it on PATH. |
+| `dockerls` | Dockerfile Language Server | `docker-langserver --stdio` | `LEMON_LSP_DOCKERLS_COMMAND` | Install with npm install -g dockerfile-language-server-nodejs. |
+| `nixd` | nixd | `nixd` | `LEMON_LSP_NIXD_COMMAND` | Install with nix profile install nixpkgs#nixd. |
+| `ols` | Odin Language Server | `ols` | `LEMON_LSP_OLS_COMMAND` | Install OLS and put ols on PATH. |
+| `dartls` | Dart Analysis Server | `dart language-server --protocol=lsp` | `LEMON_LSP_DARTLS_COMMAND` | Install the Dart SDK and put dart on PATH. |
+| `marksman` | Marksman | `marksman server` | `LEMON_LSP_MARKSMAN_COMMAND` | Install Marksman and put marksman on PATH. |
+| `texlab` | Texlab | `texlab` | `LEMON_LSP_TEXLAB_COMMAND` | Install Texlab and put texlab on PATH. |
+| `graphql` | GraphQL Language Server | `graphql-lsp server -m stream` | `LEMON_LSP_GRAPHQL_COMMAND` | Install with npm install -g graphql-language-service-cli. |
+| `prismals` | Prisma Language Server | `prisma-language-server --stdio` | `LEMON_LSP_PRISMALS_COMMAND` | Install with npm install -g @prisma/language-server. |
+| `vimls` | Vim Language Server | `vim-language-server --stdio` | `LEMON_LSP_VIMLS_COMMAND` | Install with npm install -g vim-language-server. |
+| `sourcekit_lsp` | SourceKit-LSP | `sourcekit-lsp` | `LEMON_LSP_SOURCEKIT_LSP_COMMAND` | Install the Swift toolchain and put sourcekit-lsp on PATH. |
+| `csharp_ls` | C# Language Server | `csharp-ls` | `LEMON_LSP_CSHARP_LS_COMMAND` | Install with dotnet tool install --global csharp-ls. |
+| `taplo` | Taplo | `taplo lsp stdio` | `LEMON_LSP_TAPLO_COMMAND` | Install with cargo install taplo-cli --locked --features lsp. |
+| `elm` | Elm Language Server | `elm-language-server --stdio` | `LEMON_LSP_ELM_COMMAND` | Install with npm install -g @elm-tooling/elm-language-server. |
+| `clojure_lsp` | Clojure LSP | `clojure-lsp` | `LEMON_LSP_CLOJURE_LSP_COMMAND` | Install clojure-lsp and put it on PATH. |
+| `solidity` | Solidity Language Server | `nomicfoundation-solidity-language-server --stdio` | `LEMON_LSP_SOLIDITY_COMMAND` | Install with npm install -g @nomicfoundation/solidity-language-server. |
+
+The registry assigns each extension to one primary server and omits supplemental
+linters. Language ids are available through `LemonLsp.Servers.language_id/1`;
+unknown extensions (including extensionless `Dockerfile`) return `"plaintext"`.
+Dockerfile LSP registration covers `.dockerfile` files.
 
 Override env vars can point at either a command on `PATH` or an absolute local
 executable path. Public status redacts absolute paths to command basenames.
