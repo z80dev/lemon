@@ -10,6 +10,7 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Lemon Bot
 
+- Web clients explain service, network, session and Lemon-link failures with live retry timing, real connection restart and owner recovery actions instead of silent sign-out or stuck disconnected screens.
 - Apple Settings adds a shared Lemon instance pane with live backend/controller/Lemon measurements, owner-confirmed start/stop/restart, operation polling and output details, plus direct recovery/About links.
 - Apple clients explain backend, network, sign-in and Lemon-link failures with live retry timing, service discovery and shared recovery controls; sandboxed Macs offer copyable local-start commands rather than launching a daemon.
 - Name missing required Lemon Bot startup settings without a stack dump, keep

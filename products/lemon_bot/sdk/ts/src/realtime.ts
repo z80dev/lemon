@@ -39,6 +39,7 @@ export class RealtimeConnection {
   private safeCursor?: Cursor;
   private currentState: RealtimeState = 'closed';
   private reconnectTimer?: number;
+  private retryAt: number | null = null;
   private deadline?: number;
   private heartbeat?: number;
   private liveness?: number;
@@ -53,6 +54,8 @@ export class RealtimeConnection {
 
   get state(): RealtimeState { return this.currentState; }
   get cursor(): Cursor | undefined { return this.safeCursor; }
+  /** Scheduled reconnect deadline, or null while connecting/live/closed. */
+  get nextRetryAtMs(): number | null { return this.retryAt; }
 
   start(): void {
     if (this.running) return;
@@ -70,6 +73,7 @@ export class RealtimeConnection {
     this.clearTimers();
     clearTimeout(this.reconnectTimer);
     this.reconnectTimer = undefined;
+    this.retryAt = null;
     this.socket?.close(1000, 'Client closed');
     this.socket = null;
     this.authenticated = false;
@@ -319,10 +323,12 @@ export class RealtimeConnection {
   private scheduleReconnect(error: unknown): void {
     if (!this.running || this.reconnectTimer) return;
     this.attempts++;
-    this.setState('reconnecting', error);
     const delay = this.options.reconnectDelayMs ?? Math.min(30000, 500 * 2 ** Math.min(this.attempts - 1, 6));
+    this.retryAt = Date.now() + delay;
+    this.setState('reconnecting', error);
     this.reconnectTimer = Number(setTimeout(() => {
       this.reconnectTimer = undefined;
+      this.retryAt = null;
       this.connect();
     }, delay));
   }
