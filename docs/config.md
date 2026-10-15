@@ -1579,6 +1579,29 @@ mode; `require_approval`, parent floors, and explicitly configured MCP approval
 requirements remain mandatory. An `on_tool_call` hook's revised arguments are
 used for approval resolution and the approval preview, not the original input.
 
+## Bash Dedicated-Tool Routing
+
+Opt in to shell interception in user or project `.lemon/config.toml`:
+
+```toml
+[runtime.tools.bash.interceptor]
+enabled = true # default false
+# Optional replacement for the complete default rule list:
+# rules = [{pattern = '^cat\s+', tool = 'read', message = 'Read files with read.'}]
+```
+
+Rules are `{pattern, tool, message}` tables with valid regular expressions and
+non-empty tool/message strings. Defaults route cat/head/tail/less/more to `read`,
+grep/rg (also ripgrep/ag/ack) to `grep`, find/fd/locate to `find`, ls to `ls`, and
+sed/perl in-place edits to `edit`. A rule only blocks when its target is in the
+session's filtered tool set. Pipeline consumers such as `git log | head` remain
+allowed. Checks scan simple commands, stripping assignments and common execution
+prefixes, including commands inside subshells and substitutions; quoted data does
+not become a command. They are advisory routing checks, not a shell sandbox.
+Checks run after internal URL expansion and before foreground, background or
+named-service launch. Refusals return an error tool result and configuration
+disable guidance. See [shell tools](tools/shell.md).
+
 ## Anchored Edit Visibility
 
 Enable seen-line enforcement in user or project `.lemon/config.toml`:

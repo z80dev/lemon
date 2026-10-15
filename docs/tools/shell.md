@@ -4,6 +4,23 @@ Start a background command with `bash` and `run_in_background: true`. Its return
 `process_id` identifies the job. Process tools are session-scoped: another session
 cannot read, write or stop your processes.
 
+## Dedicated-tool routing
+
+`[runtime.tools.bash.interceptor] enabled = true` opts in to pre-launch routing
+(default false). File reads (`cat`, `head`, `tail`, `less`, `more`) suggest `read`;
+content searches (`grep`, `rg`, `ripgrep`, `ag`, `ack`) suggest `grep`; discovery
+(`find`, `fd`, `locate`) suggests `find`; `ls` suggests `ls`; in-place `sed`/`perl`
+edits suggest `edit`. Only available session tools trigger routing.
+
+The scanner respects quotes/escapes and examines chained commands, subshells and
+command substitutions after internal URL expansion. Stages reading piped stdin
+(for example `git log | head`) are exempt; the first stage is still checked.
+Refusals are error tool results before any process starts, including background
+jobs and named services. Custom `rules` replace the defaults; set `enabled = false`
+to disable. See [configuration](../config.md#bash-dedicated-tool-routing).
+This is a convenience guard, not a shell sandbox: dynamic shell evaluation is
+not resolved.
+
 ## Named services
 
 Use `name` to start a long-lived service without a command deadline. Names are

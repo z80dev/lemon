@@ -10,6 +10,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Added
 
+- Add opt-in `[runtime.tools.bash.interceptor]` dedicated-tool routing with
+  configurable rules, session-tool availability checks and piped-stdin exemptions,
+  applied before foreground, background and named-service launches.
+
 - Ask `read` image questions with `?q=` (including SVG `:img?q=`), using a
   configured vision model role or the active image-capable model and returning
   bounded, untrusted answer text instead of pixels.
