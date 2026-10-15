@@ -7,12 +7,12 @@ defmodule CodingAgent.Tools.WebSearch do
   and configurable SearXNG.
   """
 
-  alias LemonAgent.Types.{AgentTool, AgentToolResult}
-  alias LemonAgent.Security.ExternalContent
+  alias CodingAgent.Search.{Operators, Provider}
   alias CodingAgent.Search.Registry, as: SearchRegistry
   alias CodingAgent.Search.SingleFlight
-  alias CodingAgent.Search.{Operators, Provider}
   alias CodingAgent.Tools.WebCache
+  alias LemonAgent.Security.ExternalContent
+  alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonCore.Secrets
 
   import LemonAgent.Tools.AbortHelpers, only: [check_abort: 1]

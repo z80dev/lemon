@@ -2,8 +2,8 @@ defmodule CodingAgent.InternalUrls.HistoryProtocol do
   @moduledoc "Concise, bounded visible transcripts of owned child tasks. Never includes hidden reasoning."
   alias CodingAgent.TaskStore
   alias CodingAgent.Tools.Task.{Control, Result}
-  alias LemonAgent.Types.AgentToolResult
   alias LemonAgent.Security.ToolResultTrust
+  alias LemonAgent.Types.AgentToolResult
   alias LemonAi.Types.TextContent
 
   def read("history://" <> task_id, opts) do
