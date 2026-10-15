@@ -4,6 +4,10 @@
 
 ### Added
 
+- Background process controls now support exact stdin writes and EOF through
+  `process_input`, non-consuming `bash_output` peeks, and graceful `kill_process`
+  SIGTERM with a two-second SIGKILL fallback (or explicit immediate kill).
+
 - Web-search requests sent directly to `api.perplexity.ai` now include an
   `X-Pplx-Integration: lemon` header so Perplexity can attribute Lemon traffic.
   Requests routed through OpenRouter or custom compatible endpoints are
@@ -16,6 +20,9 @@
   search, topic, and session-browse tool surfaces.
 
 ### Fixed
+
+- Local patches refuse stale updates, deletes, and move sources before writing
+  any operation; filesystem errors now use actionable messages without raw terms.
 
 - Grep pages are sorted by path and line across both engines. Partial ripgrep
   errors preserve matches with warnings, and lookaround/backreferences select

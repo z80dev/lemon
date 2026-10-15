@@ -8,6 +8,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
+### Lemon Bot
+
+- Instance status exposes release/build metadata, provider credential health and channel errors. Owner-confirmed restart/stop can use a remote controller, with lifecycle completion observed from link events; clients use explicit available action lists.
+
 ### Fixed
 
 - Skill usage recording no longer depends on the introspection handler. Pinned
@@ -29,9 +33,14 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   clarify that synthesized skills remain drafts until promotion.
 - Remember supports exact-entry or unique-substring edits consistently across scoped
   and legacy memory, with actionable ambiguity, safety, and capacity feedback.
+- Agent prompt memory blocks show deterministic character/fact/byte capacity
+  headers and recommend consolidation above 80%; subagents remain isolated.
 
 ### Added
 
+- Control-plane status reports the real Lemon release version, build identity,
+  offline provider credential presence, timestamped redacted channel health,
+  lifecycle availability and safe summary counts.
 - Computer use can be configured in `[runtime.tools.computer_use]` (`enabled`,
   `chrome`, `lcu_root`, `node`, `declined_origins`); environment variables still
   take precedence. Execution-node capability inspection reports a
@@ -42,8 +51,15 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 - TUI omp delegates support redirect, interrupted-session continuation, approval
   mode and isolated starts; the typed control-plane client exposes batch starts,
   model discovery, configuration and subagent transcripts.
+- `recall` can browse owned recent sessions and scroll chronological, bounded
+  run summaries around a document/run ID without crossing owner/profile boundaries.
 - The omp panel resolves pending approvals through the shared approval controller,
   selects free-marked omp models, and drills into subagent transcript tails.
+- Main-session learning reminders suggest saving durable facts/preferences with
+  `remember` every 10 user turns without a save, and creating/patching a skill
+  after a completed run uses at least 15 tools without `skill_manage`.
+  Configurable through global/project `skills.json`, these bounded volatile
+  reminders exclude subagents and make no extra model calls.
 
 ---
 
@@ -138,6 +154,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   follow-ups, cancellation, process cleanup, discovery and resume.
 
 ### Fixed
+
+- Configuration commands reject malformed TOML with file-specific guidance,
+  doctor continues after failed checks, and CLI validation and migration show
+  actionable recovery steps instead of internal error terms.
 
 - Provider-ownership probes inspect complete events and logs so large tool
   schemas cannot hide credential refusal or leaked values. Integration tests

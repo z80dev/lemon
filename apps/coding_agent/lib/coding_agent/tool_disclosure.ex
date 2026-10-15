@@ -105,7 +105,7 @@ defmodule CodingAgent.ToolDisclosure do
   # bridge for a read.
   @coding_core %{
     files: ~w(read write edit patch ls find grep ast_grep lsp_diagnostics checkpoint),
-    shell: ~w(bash bash_output kill_process),
+    shell: ~w(bash bash_output kill_process process_input),
     research: ~w(websearch webfetch read_skill recall),
     planning: ~w(todo ask),
     delegation: ~w(task wait agent_message parent_question)

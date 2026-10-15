@@ -144,7 +144,7 @@ defmodule CodingAgent.Tools.Patch do
 
   defp apply_local_patch(operations, paths, cwd, diagnostics?, signal, opts) do
     with :ok <- validate_operations(operations, cwd, opts),
-         {:ok, prepared_operations} <- prepare_operations(operations, cwd, signal),
+         {:ok, prepared_operations} <- prepare_operations(operations, cwd, signal, opts),
          baselines <- diagnostic_baselines(operations, cwd, diagnostics?, opts),
          {:ok, checkpoint} <-
            CheckpointGuard.before_mutation(paths, cwd, opts, %{
@@ -789,12 +789,12 @@ defmodule CodingAgent.Tools.Patch do
   # Patch Application
   # ============================================================================
 
-  defp prepare_operations(operations, cwd, signal) do
+  defp prepare_operations(operations, cwd, signal, opts) do
     Enum.reduce_while(operations, {:ok, []}, fn operation, {:ok, prepared} ->
       if aborted?(signal) do
         {:halt, {:error, "Operation aborted"}}
       else
-        case prepare_operation(operation, cwd, signal) do
+        case prepare_operation(operation, cwd, signal, opts) do
           {:ok, entry} -> {:cont, {:ok, [entry | prepared]}}
           {:error, reason} -> {:halt, {:error, reason}}
         end
@@ -806,7 +806,7 @@ defmodule CodingAgent.Tools.Patch do
     end
   end
 
-  defp prepare_operation(%{type: :add, path: path, content: content}, cwd, _signal) do
+  defp prepare_operation(%{type: :add, path: path, content: content}, cwd, _signal, _opts) do
     target = resolve_path(path, cwd)
 
     {:ok,
@@ -822,10 +822,11 @@ defmodule CodingAgent.Tools.Patch do
      }}
   end
 
-  defp prepare_operation(%{type: :delete, path: path}, cwd, _signal) do
+  defp prepare_operation(%{type: :delete, path: path}, cwd, _signal, opts) do
     source = resolve_path(path, cwd)
 
     with {:ok, content} <- safe_read_file(source),
+         :ok <- FileReadTracker.check(opts, source, content),
          {:ok, stat} <- File.stat(source) do
       {:ok,
        %{
@@ -846,12 +847,14 @@ defmodule CodingAgent.Tools.Patch do
   defp prepare_operation(
          %{type: :update, path: path, move_to: move_to, hunks: hunks},
          cwd,
-         signal
+         signal,
+         opts
        ) do
     source = resolve_path(path, cwd)
     target = if move_to, do: resolve_path(move_to, cwd), else: source
 
     with {:ok, content} <- safe_read_file(source),
+         :ok <- FileReadTracker.check(opts, source, content),
          {:ok, stat} <- File.stat(source),
          {:ok, new_content, additions, removals} <- apply_hunks(content, hunks, signal) do
       {:ok,
@@ -1241,7 +1244,7 @@ defmodule CodingAgent.Tools.Patch do
         {:error, "Cannot read directory as file: #{path}"}
 
       {:error, reason} ->
-        {:error, "Failed to read file #{path}: #{inspect(reason)}"}
+        {:error, format_error(reason, path)}
     end
   end
 
@@ -1267,7 +1270,7 @@ defmodule CodingAgent.Tools.Patch do
           {:error, "Disk quota exceeded when writing: #{path}"}
 
         {:error, reason} ->
-          {:error, "Failed to write file #{path}: #{inspect(reason)}"}
+          {:error, format_error(reason, path)}
       end
     end
   end
@@ -1296,7 +1299,7 @@ defmodule CodingAgent.Tools.Patch do
           {:error, "Disk quota exceeded when writing: #{path}"}
 
         {:error, reason} ->
-          {:error, "Failed to create file #{path}: #{inspect(reason)}"}
+          {:error, format_error(reason, path)}
       end
     end
   end
@@ -1431,7 +1434,7 @@ defmodule CodingAgent.Tools.Patch do
         {:error, "No space left on device when creating directory: #{dir}"}
 
       {:error, reason} ->
-        {:error, "Failed to create directory #{dir}: #{inspect(reason)}"}
+        {:error, format_error(reason, dir)}
     end
   end
 
@@ -1451,5 +1454,20 @@ defmodule CodingAgent.Tools.Patch do
   defp format_error(:edquot, path), do: "Disk quota exceeded: #{path}"
   defp format_error(:eisdir, path), do: "Is a directory: #{path}"
   defp format_error(:enotdir, path), do: "Not a directory in path: #{path}"
-  defp format_error(reason, path), do: "Failed to apply patch for #{path}: #{inspect(reason)}"
+
+  defp format_error(:stale, path),
+    do:
+      "#{path} has been modified on disk since you last read it. Re-read the file before applying the patch."
+
+  defp format_error(:eexist, path), do: "File already exists: #{path}"
+  defp format_error(:eperm, path), do: "Operation not permitted: #{path}"
+  defp format_error(:eloop, path), do: "Too many symbolic links: #{path}"
+  defp format_error(:enametoolong, _path), do: "File path is too long"
+  defp format_error(:emfile, _path), do: "Too many open files; close files and retry"
+  defp format_error(:enfile, _path), do: "System file table is full; retry after closing files"
+  defp format_error(:eio, _path), do: "File system input/output error while applying patch"
+  defp format_error(:einval, _path), do: "Invalid file system operation while applying patch"
+
+  defp format_error(_reason, _path),
+    do: "Failed to apply patch due to an unexpected file system error"
 end

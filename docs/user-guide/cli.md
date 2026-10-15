@@ -76,6 +76,15 @@ The `runtime.build` doctor check reports the same build identity. Source builds
 use the umbrella CalVer and current checkout commit. Packaged releases use
 metadata stamped at assembly; an older artifact without metadata reports
 `unknown` rather than guessing a commit or channel from the updater settings.
+
+`lemon config validate` always lists its global and project configuration files
+and finishes with a next step. Malformed TOML and removed settings fail with exit
+code 1; `lemon config show` also reports these errors without a stack trace.
+Use `lemon config migrate` for removed settings, or fix syntax and rerun
+`lemon config validate --verbose`. Unset summary values appear as `(not set)`;
+explicit `false` and zero values remain literal. A failing doctor check does not
+abort the report; use `lemon doctor --verbose` for details.
+
 Packaged version commands work before setup: they read build identity without
 running the runtime configuration providers or creating HOME state.
 

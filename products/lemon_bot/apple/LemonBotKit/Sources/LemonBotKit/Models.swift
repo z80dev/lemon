@@ -1636,59 +1636,132 @@ public struct InstanceController: Codable, Hashable {
 }
 public struct InstanceConnections: Codable, Hashable { public var active: Int; public var operators: Int; public var nodes: Int }
 public struct InstanceRuns: Codable, Hashable { public var active: Int; public var queued: Int; public var completedToday: Int }
-public struct InstanceChannels: Codable, Hashable { public var configured: [String]; public var connected: [String] }
+public struct InstanceChannels: Codable, Hashable { public var configured: [String]; public var connected: [String]; public var details: [InstanceChannel] }
+public struct InstanceHealthError: Codable, Hashable { public var message: String; public var atMs: TimestampMs }
+public struct InstanceBuild: Codable, Hashable {
+    public var runtimeMode: String
+    public var channel: String?
+    public var commit: String?
+    enum CodingKeys: String, CodingKey { case runtimeMode, channel, commit }
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        runtimeMode = try c.decode(String.self, forKey: .runtimeMode)
+        channel = try c.decode(String?.self, forKey: .channel)
+        commit = try c.decode(String?.self, forKey: .commit)
+    }
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(runtimeMode, forKey: .runtimeMode)
+        try c.encode(channel, forKey: .channel)
+        try c.encode(commit, forKey: .commit)
+    }
+}
+public struct InstanceChannel: Codable, Hashable {
+    public enum State: String, Codable, Hashable { case connected, configured, error }
+    public var id: String
+    public var state: State
+    public var lastError: InstanceHealthError?
+    enum CodingKeys: String, CodingKey { case id, state, lastError }
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        state = try c.decode(State.self, forKey: .state)
+        lastError = try c.decode(InstanceHealthError?.self, forKey: .lastError)
+    }
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(state, forKey: .state)
+        try c.encode(lastError, forKey: .lastError)
+    }
+}
+public struct InstanceProvider: Codable, Hashable {
+    public enum Credential: String, Codable, Hashable { case present, missing; case notRequired = "not_required" }
+    public var id: String
+    public var configured: Bool
+    public var credential: Credential
+    public var isDefault: Bool
+    public var lastError: InstanceHealthError?
+    enum CodingKeys: String, CodingKey { case id, configured, credential, isDefault, lastError }
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        configured = try c.decode(Bool.self, forKey: .configured)
+        credential = try c.decode(Credential.self, forKey: .credential)
+        isDefault = try c.decode(Bool.self, forKey: .isDefault)
+        lastError = try c.decode(InstanceHealthError?.self, forKey: .lastError)
+    }
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(configured, forKey: .configured)
+        try c.encode(credential, forKey: .credential)
+        try c.encode(isDefault, forKey: .isDefault)
+        try c.encode(lastError, forKey: .lastError)
+    }
+}
 public struct InstanceSkills: Codable, Hashable { public var installed: Int; public var enabled: Int }
 public struct InstanceNodes: Codable, Hashable { public var total: Int; public var online: Int }
 public struct InstanceLemonStatus: Codable, Hashable {
     public var version: String?
+    public var build: InstanceBuild?
     public var uptimeMs: Double?
     public var memoryMb: Double?
     public var connections: InstanceConnections?
     public var runs: InstanceRuns?
     public var activeSessions: Int?
     public var channels: InstanceChannels?
+    public var providers: [InstanceProvider]?
     public var skills: InstanceSkills?
     public var nodes: InstanceNodes?
-    enum CodingKeys: String, CodingKey { case version, uptimeMs, memoryMb, connections, runs, activeSessions, channels, skills, nodes }
+    enum CodingKeys: String, CodingKey { case version, build, uptimeMs, memoryMb, connections, runs, activeSessions, channels, providers, skills, nodes }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         version = try c.decode(String?.self, forKey: .version)
+        build = try c.decode(InstanceBuild?.self, forKey: .build)
         uptimeMs = try c.decode(Double?.self, forKey: .uptimeMs)
         memoryMb = try c.decode(Double?.self, forKey: .memoryMb)
         connections = try c.decode(InstanceConnections?.self, forKey: .connections)
         runs = try c.decode(InstanceRuns?.self, forKey: .runs)
         activeSessions = try c.decode(Int?.self, forKey: .activeSessions)
         channels = try c.decode(InstanceChannels?.self, forKey: .channels)
+        providers = try c.decode([InstanceProvider]?.self, forKey: .providers)
         skills = try c.decode(InstanceSkills?.self, forKey: .skills)
         nodes = try c.decode(InstanceNodes?.self, forKey: .nodes)
     }
     public func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
         try c.encode(version, forKey: .version)
+        try c.encode(build, forKey: .build)
         try c.encode(uptimeMs, forKey: .uptimeMs)
         try c.encode(memoryMb, forKey: .memoryMb)
         try c.encode(connections, forKey: .connections)
         try c.encode(runs, forKey: .runs)
         try c.encode(activeSessions, forKey: .activeSessions)
         try c.encode(channels, forKey: .channels)
+        try c.encode(providers, forKey: .providers)
         try c.encode(skills, forKey: .skills)
         try c.encode(nodes, forKey: .nodes)
     }
 }
 public struct InstanceRuntime: Codable, Hashable {
-    public var controllable: Bool
+    public enum Via: String, Codable, Hashable { case launcher, controller }
+    public var actions: [RuntimeAction]
+    public var via: Via?
     public var reason: String?
     public var operation: RuntimeOperation?
-    enum CodingKeys: String, CodingKey { case controllable, reason, operation }
+    enum CodingKeys: String, CodingKey { case actions, via, reason, operation }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        controllable = try c.decode(Bool.self, forKey: .controllable)
+        actions = try c.decode([RuntimeAction].self, forKey: .actions)
+        via = try c.decode(Via?.self, forKey: .via)
         reason = try c.decode(String?.self, forKey: .reason)
         operation = try c.decode(RuntimeOperation?.self, forKey: .operation)
     }
     public func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
-        try c.encode(controllable, forKey: .controllable)
+        try c.encode(actions, forKey: .actions)
+        try c.encode(via, forKey: .via)
         try c.encode(reason, forKey: .reason)
         try c.encode(operation, forKey: .operation)
     }

@@ -38,6 +38,8 @@ defmodule LemonChannels.Adapters.Telegram.Transport.Poller do
 
     case safe_get_updates(state) do
       {:ok, %{"ok" => true, "result" => updates}} ->
+        LemonChannels.Registry.record_status("telegram", :connected)
+
         if state.drop_pending_updates? and not state.drop_pending_done? do
           if updates == [] do
             %{state | drop_pending_done?: true}
@@ -119,6 +121,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport.Poller do
   defp maybe_transcribe_event(_state, normalized, _callbacks), do: {:ok, normalized}
 
   defp maybe_log_poll_error(state, reason) do
+    LemonChannels.Registry.record_status("telegram", {:error, reason})
     state = maybe_attempt_webhook_clear(state, reason)
 
     now = System.monotonic_time(:millisecond)

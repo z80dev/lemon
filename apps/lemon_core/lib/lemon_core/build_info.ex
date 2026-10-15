@@ -9,7 +9,7 @@ defmodule LemonCore.BuildInfo do
   @spec current(keyword()) :: map()
   def current(opts \\ []) do
     cwd = Keyword.get(opts, :cwd, File.cwd!())
-    git = git_info(cwd)
+    git = git_info(cwd, Keyword.get(opts, :include_git, true))
 
     %{
       lemon_version: app_version(:lemon_core),
@@ -57,8 +57,8 @@ defmodule LemonCore.BuildInfo do
     end
   end
 
-  defp git_info(cwd) do
-    if blank_to_nil(System.get_env("RELEASE_NAME")) do
+  defp git_info(cwd, include_git) do
+    if not include_git or blank_to_nil(System.get_env("RELEASE_NAME")) do
       %{
         commit:
           first_env(@env_commit_keys) ||
@@ -71,8 +71,10 @@ defmodule LemonCore.BuildInfo do
       }
     else
       %{
-        commit: first_env(@env_commit_keys) || git_value(cwd, ["rev-parse", "--short=12", "HEAD"]),
-        branch: first_env(@env_branch_keys) || git_value(cwd, ["rev-parse", "--abbrev-ref", "HEAD"]),
+        commit:
+          first_env(@env_commit_keys) || git_value(cwd, ["rev-parse", "--short=12", "HEAD"]),
+        branch:
+          first_env(@env_branch_keys) || git_value(cwd, ["rev-parse", "--abbrev-ref", "HEAD"]),
         dirty?: git_dirty?(cwd),
         describe: git_value(cwd, ["describe", "--tags", "--always", "--dirty"])
       }

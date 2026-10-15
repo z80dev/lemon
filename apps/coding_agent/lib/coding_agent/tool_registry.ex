@@ -49,6 +49,7 @@ defmodule CodingAgent.ToolRegistry do
     {:bash, Tools.Bash},
     {:bash_output, Tools.BashOutput},
     {:kill_process, Tools.KillProcess},
+    {:process_input, Tools.ProcessInput},
     {:eval, Tools.Eval},
     {:debug, Tools.Debug},
     {:grep, Tools.Grep},

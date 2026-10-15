@@ -501,13 +501,15 @@ defmodule CodingAgent.ProcessManager do
   @doc """
   Write data to a process's stdin.
   """
-  @spec write(String.t(), String.t()) :: :ok | {:error, term()}
-  def write(process_id, data) when is_binary(process_id) and is_binary(data) do
+  @spec write(String.t(), String.t(), keyword()) :: :ok | {:error, term()}
+  def write(process_id, data, opts \\ []) when is_binary(process_id) and is_binary(data) do
     if ProcessSession.alive?(process_id) do
-      ProcessSession.write_stdin(process_id, data)
+      ProcessSession.write_stdin(process_id, data, opts)
     else
       {:error, :process_not_running}
     end
+  catch
+    :exit, _ -> {:error, :process_not_running}
   end
 
   @doc """
@@ -521,28 +523,29 @@ defmodule CodingAgent.ProcessManager do
   existed). Works for running and finished processes (finished ones are read
   from `ProcessStore`).
   """
-  @spec read_output(String.t()) :: {:ok, map()} | {:error, term()}
-  def read_output(process_id) when is_binary(process_id) do
+  @spec read_output(String.t(), keyword()) :: {:ok, map()} | {:error, term()}
+  def read_output(process_id, opts \\ []) when is_binary(process_id) do
     if ProcessSession.alive?(process_id) do
       try do
-        ProcessSession.read_output(process_id)
+        ProcessSession.read_output(process_id, opts)
       catch
         # The session stopped between the liveness check and the call.
-        :exit, _reason -> read_output_from_store(process_id)
+        :exit, _reason -> read_output_from_store(process_id, opts)
       end
     else
-      read_output_from_store(process_id)
+      read_output_from_store(process_id, opts)
     end
   end
 
-  defp read_output_from_store(process_id) do
+  defp read_output_from_store(process_id, opts) do
     case ProcessStore.get(process_id) do
       {:ok, record, logs} ->
         total = Map.get(record, :total_lines, length(logs))
-        cursor = Map.get(record, :read_cursor, 0)
+        peek = Keyword.get(opts, :peek, false)
+        cursor = if peek, do: 0, else: Map.get(record, :read_cursor, 0)
         first_buffered = total - length(logs)
         start = max(cursor, first_buffered)
-        :ok = ProcessStore.put_read_cursor(process_id, total)
+        unless peek, do: ProcessStore.put_read_cursor(process_id, total)
 
         {:ok,
          %{
