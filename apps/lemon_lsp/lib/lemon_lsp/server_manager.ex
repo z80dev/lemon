@@ -161,17 +161,17 @@ defmodule LemonLsp.ServerManager do
     end
   end
 
-  defp await_edit_callback(task, request, deadline, owner_ref) do
+  defp await_edit_callback(%Task{ref: ref} = task, request, deadline, owner_ref) do
     receive do
-      {ref, result} when ref == task.ref ->
+      {^ref, result} ->
         Process.demonitor(ref, [:flush])
         {:applied, result}
 
-      {:DOWN, ref, :process, _pid, _reason} when ref == task.ref ->
+      {:DOWN, ^ref, :process, _pid, _reason} ->
         {:applied, {:error, "Workspace edit failed"}}
 
       {:DOWN, ^owner_ref, :process, _pid, _reason} ->
-        Task.shutdown(task, :brutal_kill)
+        _ = Task.shutdown(task, :brutal_kill)
         exit(:caller_exited)
 
       message
@@ -179,11 +179,11 @@ defmodule LemonLsp.ServerManager do
                   elem(message, 0) == __MODULE__ and elem(message, 1) == :apply_edit) ->
         case :gen_server.check_response(message, request) do
           {:reply, reply} ->
-            Task.shutdown(task, :brutal_kill)
+            _ = Task.shutdown(task, :brutal_kill)
             {:finished, reply}
 
           {:error, reason} ->
-            Task.shutdown(task, :brutal_kill)
+            _ = Task.shutdown(task, :brutal_kill)
             exit(reason)
 
           :no_reply ->
@@ -191,7 +191,7 @@ defmodule LemonLsp.ServerManager do
         end
     after
       max(deadline - System.monotonic_time(:millisecond), 0) ->
-        Task.shutdown(task, :brutal_kill)
+        _ = Task.shutdown(task, :brutal_kill)
         {:finished, {:error, :request_timeout}}
     end
   end
@@ -559,7 +559,7 @@ defmodule LemonLsp.ServerManager do
             session =
               Enum.reduce(pending_ids, session, fn id, session ->
                 {pending, remaining} = Map.pop(session.pending, id)
-                Process.cancel_timer(pending.timer)
+                _ = Process.cancel_timer(pending.timer)
 
                 session
                 |> Map.put(:pending, remaining)

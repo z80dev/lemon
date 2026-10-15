@@ -67,7 +67,7 @@ defmodule CodingAgent.Tools.DebugTest do
     for target <- [
           %{"adapter" => "fake"},
           %{"pid" => 0},
-          %{"port" => 65536},
+          %{"port" => 65_536},
           %{"pid" => 12, "port" => 5678}
         ] do
       assert {:error, _} = run(tool, Map.put(target, "action", "attach"))

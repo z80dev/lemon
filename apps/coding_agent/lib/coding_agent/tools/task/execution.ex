@@ -74,110 +74,110 @@ defmodule CodingAgent.Tools.Task.Execution do
 
     child_scope_id = run_id
 
-    with {:ok, context} <-
-           LemonCore.ExecutionContext.reidentify(validated.execution_context, run_id) do
-      validated = Map.put(validated, :execution_context, context)
+    case LemonCore.ExecutionContext.reidentify(validated.execution_context, run_id) do
+      {:ok, context} ->
+        validated = Map.put(validated, :execution_context, context)
 
-      task_id =
-        TaskStore.new_task(%{
-          description: description,
-          name: validated[:name],
-          prompt: prompt,
+        task_id =
+          TaskStore.new_task(%{
+            description: description,
+            name: validated[:name],
+            prompt: prompt,
+            run_id: run_id,
+            parent_run_id: parent_run_id,
+            parent_session_id: parent_session_id,
+            session_key: parent_session_key,
+            agent_id: parent_agent_id,
+            owner: Control.owner(opts),
+            orchestration_worker: Keyword.get(opts, :orchestration_worker, false),
+            role: role_id,
+            queue_mode: validated.queue_mode,
+            meta: validated.meta
+          })
+
+        lifecycle_context = %{
+          task_id: task_id,
           run_id: run_id,
           parent_run_id: parent_run_id,
           parent_session_id: parent_session_id,
           session_key: parent_session_key,
           agent_id: parent_agent_id,
-          owner: Control.owner(opts),
-          orchestration_worker: Keyword.get(opts, :orchestration_worker, false),
-          role: role_id,
-          queue_mode: validated.queue_mode,
-          meta: validated.meta
-        })
-
-      lifecycle_context = %{
-        task_id: task_id,
-        run_id: run_id,
-        parent_run_id: parent_run_id,
-        parent_session_id: parent_session_id,
-        session_key: parent_session_key,
-        agent_id: parent_agent_id,
-        root_action_id: root_action_id,
-        surface: surface,
-        description: description,
-        name: validated[:name],
-        role: role_id,
-        queue_mode: validated.resolved_queue_mode,
-        meta: validated.meta,
-        parent_session_pid: Keyword.get(opts, :session_pid),
-        task_owner_pid: Keyword.get(opts, :task_owner_pid),
-        orchestration_worker: Keyword.get(opts, :orchestration_worker, false),
-        direct_progress: Keyword.get(opts, :session_module, Session) == Session,
-        task_supervisor: Keyword.get(opts, :task_supervisor, CodingAgent.TaskSupervisor)
-      }
-
-      if run_id do
-        BudgetEnforcer.on_run_start(run_id, opts)
-      end
-
-      followup_context =
-        %{
-          auto_followup: validated.async and validated.auto_followup,
+          root_action_id: root_action_id,
+          surface: surface,
           description: description,
-          cwd: cwd,
-          parent_session_key: parent_session_key,
-          parent_agent_id: parent_agent_id,
+          name: validated[:name],
+          role: role_id,
           queue_mode: validated.resolved_queue_mode,
           meta: validated.meta,
-          invocation_context_key: Keyword.get(opts, :invocation_context_key),
-          memory_context_key: Keyword.get(opts, :memory_context_key),
-          memory_context_verified: Keyword.get(opts, :memory_context_verified) == true,
-          shared_memory_grant: Keyword.get(opts, :shared_memory_grant) == true,
-          tool_policy: Keyword.get(opts, :tool_policy),
-          invocation_mcp_servers: Keyword.get(opts, :invocation_mcp_servers),
-          role: role_id,
-          model: validated.model,
-          session_pid: Keyword.get(opts, :session_pid),
-          session_module: Keyword.get(opts, :session_module, Session),
-          run_orchestrator:
-            Keyword.get(opts, :run_orchestrator, Followup.default_run_orchestrator())
+          parent_session_pid: Keyword.get(opts, :session_pid),
+          task_owner_pid: Keyword.get(opts, :task_owner_pid),
+          orchestration_worker: Keyword.get(opts, :orchestration_worker, false),
+          direct_progress: Keyword.get(opts, :session_module, Session) == Session,
+          task_supervisor: Keyword.get(opts, :task_supervisor, CodingAgent.TaskSupervisor)
         }
-        |> Map.merge(Map.new(Keyword.take(opts, Params.private_native_fields())))
 
-      execution = %{
-        description: description,
-        prompt: prompt,
-        role_id: role_id,
-        async?: async?,
-        effective_cwd: effective_cwd,
-        run_id: run_id,
-        task_id: task_id,
-        child_scope_id: child_scope_id,
-        lifecycle_context: lifecycle_context,
-        followup_context: followup_context,
-        validated: validated
-      }
+        if run_id do
+          BudgetEnforcer.on_run_start(run_id, opts)
+        end
 
-      case reserve_parent_budget(run_id, parent_run_id, opts) do
-        :ok ->
-          if run_id && parent_run_id do
-            RunGraph.add_child(parent_run_id, run_id)
-          end
+        followup_context =
+          %{
+            auto_followup: validated.async and validated.auto_followup,
+            description: description,
+            cwd: cwd,
+            parent_session_key: parent_session_key,
+            parent_agent_id: parent_agent_id,
+            queue_mode: validated.resolved_queue_mode,
+            meta: validated.meta,
+            invocation_context_key: Keyword.get(opts, :invocation_context_key),
+            memory_context_key: Keyword.get(opts, :memory_context_key),
+            memory_context_verified: Keyword.get(opts, :memory_context_verified) == true,
+            shared_memory_grant: Keyword.get(opts, :shared_memory_grant) == true,
+            tool_policy: Keyword.get(opts, :tool_policy),
+            invocation_mcp_servers: Keyword.get(opts, :invocation_mcp_servers),
+            role: role_id,
+            model: validated.model,
+            session_pid: Keyword.get(opts, :session_pid),
+            session_module: Keyword.get(opts, :session_module, Session),
+            run_orchestrator:
+              Keyword.get(opts, :run_orchestrator, Followup.default_run_orchestrator())
+          }
+          |> Map.merge(Map.new(Keyword.take(opts, Params.private_native_fields())))
 
-          maybe_create_progress_binding(task_id, run_id, lifecycle_context)
-          {:ok, execution}
+        execution = %{
+          description: description,
+          prompt: prompt,
+          role_id: role_id,
+          async?: async?,
+          effective_cwd: effective_cwd,
+          run_id: run_id,
+          task_id: task_id,
+          child_scope_id: child_scope_id,
+          lifecycle_context: lifecycle_context,
+          followup_context: followup_context,
+          validated: validated
+        }
 
-        {:error, _kind, _details} = reason ->
-          if task_id, do: TaskStore.fail(task_id, reason)
-          RunGraph.fail(run_id, reason)
-          {:error, budget_reservation_error(reason)}
+        case reserve_parent_budget(run_id, parent_run_id, opts) do
+          :ok ->
+            if run_id && parent_run_id do
+              RunGraph.add_child(parent_run_id, run_id)
+            end
 
-        {:error, _kind} = reason ->
-          if task_id, do: TaskStore.fail(task_id, reason)
-          RunGraph.fail(run_id, reason)
-          {:error, budget_reservation_error(reason)}
-      end
-    else
+            maybe_create_progress_binding(task_id, run_id, lifecycle_context)
+            {:ok, execution}
+
+          {:error, _kind, _details} = reason ->
+            if task_id, do: TaskStore.fail(task_id, reason)
+            RunGraph.fail(run_id, reason)
+            {:error, budget_reservation_error(reason)}
+
+          {:error, _kind} = reason ->
+            if task_id, do: TaskStore.fail(task_id, reason)
+            RunGraph.fail(run_id, reason)
+            {:error, budget_reservation_error(reason)}
+        end
+
       {:error, reason} ->
         {:error, "Task execution identity is invalid: #{inspect(reason)}"}
     end

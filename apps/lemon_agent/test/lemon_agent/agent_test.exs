@@ -107,7 +107,7 @@ defmodule LemonAgent.AgentTest do
     end
 
     test "starts an agent with name" do
-      name = :"test_agent_#{:rand.uniform(10000)}"
+      name = :"test_agent_#{:rand.uniform(10_000)}"
       {:ok, _agent} = start_agent(name: name)
 
       # Should be able to reference by name

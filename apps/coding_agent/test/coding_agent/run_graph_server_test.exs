@@ -38,7 +38,7 @@ defmodule CodingAgent.RunGraphServerTest do
       # Start with custom name
       opts = [
         name: server_name,
-        dets_path: Path.join(System.tmp_dir!(), "test_run_graph_#{:rand.uniform(10000)}.dets")
+        dets_path: Path.join(System.tmp_dir!(), "test_run_graph_#{:rand.uniform(10_000)}.dets")
       ]
 
       assert {:ok, pid} = RunGraphServer.start_link(opts)

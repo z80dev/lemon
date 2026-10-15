@@ -10,6 +10,18 @@ exclude_tags =
     {:error, _} -> [:integration, :ast_grep]
   end
 
+exclude_tags =
+  if System.find_executable("python3"), do: exclude_tags, else: [:python3 | exclude_tags]
+
+exclude_tags =
+  case {
+    CodingAgent.Debug.Adapters.select_launch("/x/a.c", "/", "lldb-dap", :file),
+    System.find_executable("clang") || System.find_executable("cc")
+  } do
+    {{:ok, _}, compiler} when is_binary(compiler) -> exclude_tags
+    _ -> [:lldb_dap | exclude_tags]
+  end
+
 ExUnit.configure(exclude: exclude_tags)
 ExUnit.start(capture_log: true)
 

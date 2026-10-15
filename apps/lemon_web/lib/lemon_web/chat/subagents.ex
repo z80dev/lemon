@@ -48,7 +48,7 @@ defmodule LemonWeb.Chat.Subagents do
                   "subagent-" <> Base.url_encode64(:crypto.hash(:sha256, id), padding: false),
                 parent_id: identifier(row["parentRunId"]),
                 task_id: identifier(row["taskId"]),
-                depth: recovery_depth(id, parents, MapSet.new(), 0),
+                depth: recovery_depth(id, parents, %{}, 0),
                 label: "Child agent",
                 status: status(row["status"]),
                 event_count: 0,
@@ -73,8 +73,8 @@ defmodule LemonWeb.Chat.Subagents do
     parent = parents[id]
 
     if depth < @max_depth - 1 and is_binary(parent) and Map.has_key?(parents, parent) and
-         not MapSet.member?(seen, parent),
-       do: recovery_depth(parent, parents, MapSet.put(seen, id), depth + 1),
+         not Map.has_key?(seen, parent),
+       do: recovery_depth(parent, parents, Map.put(seen, id, true), depth + 1),
        else: depth
   end
 

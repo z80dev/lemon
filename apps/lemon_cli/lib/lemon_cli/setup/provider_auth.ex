@@ -37,28 +37,30 @@ defmodule LemonCli.Setup.ProviderAuth do
     auth_source = normalize(provider_cfg["auth_source"])
     secret_name = normalize(opts[:secret_name]) || oauth_secret_name(spec, provider_cfg)
 
-    with {:ok, login} <- stored_login(spec, secret_name) do
-      io.info.("#{spec.display_name} authentication")
-      io.info.("  Config: #{Path.expand(config_path)}")
-      io.info.("  Auth source: #{auth_source_label(auth_source)}")
+    case stored_login(spec, secret_name) do
+      {:ok, login} ->
+        io.info.("#{spec.display_name} authentication")
+        io.info.("  Config: #{Path.expand(config_path)}")
+        io.info.("  Auth source: #{auth_source_label(auth_source)}")
 
-      login_lines(spec, secret_name, login)
-      |> Enum.each(&io.info.("  " <> &1))
+        login_lines(spec, secret_name, login)
+        |> Enum.each(&io.info.("  " <> &1))
 
-      api_key_env_lines(spec, auth_source)
-      |> Enum.each(&io.info.("  " <> &1))
+        api_key_env_lines(spec, auth_source)
+        |> Enum.each(&io.info.("  " <> &1))
 
-      ready? =
-        if opts[:secret_name] do
-          present?(Credentials.resolve_secret_api_key(secret_name, env_fallback: false))
-        else
-          Credentials.provider_has_credentials?(spec.id, Map.get(config, "providers", %{}))
-        end
+        ready? =
+          if opts[:secret_name] do
+            present?(Credentials.resolve_secret_api_key(secret_name, env_fallback: false))
+          else
+            Credentials.provider_has_credentials?(spec.id, Map.get(config, "providers", %{}))
+          end
 
-      io.info.("  Credentials usable: #{if ready?, do: "yes", else: "no"}")
-      :ok
-    else
-      {:error, _} = error -> auth_failure(error, io)
+        io.info.("  Credentials usable: #{if ready?, do: "yes", else: "no"}")
+        :ok
+
+      {:error, _} = error ->
+        auth_failure(error, io)
     end
   end
 

@@ -10,7 +10,7 @@ defmodule LemonCore.Store.SqliteBackendTest do
   alias LemonCore.Store.SqliteBackend
 
   setup do
-    tmp_dir = System.tmp_dir!() |> Path.join("sqlite_test_#{:rand.uniform(10000)}")
+    tmp_dir = System.tmp_dir!() |> Path.join("sqlite_test_#{:rand.uniform(10_000)}")
     File.mkdir_p!(tmp_dir)
     on_exit(fn -> File.rm_rf!(tmp_dir) end)
     {:ok, tmp_dir: tmp_dir}

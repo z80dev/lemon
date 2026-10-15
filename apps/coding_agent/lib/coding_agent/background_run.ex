@@ -172,28 +172,29 @@ defmodule CodingAgent.BackgroundRun do
 
     id = TaskStore.new_task(attrs)
 
-    with {:ok, session_opts} <- build_session_opts(id, session_id, source, opts) do
-      worker_opts = [
-        id: id,
-        prompt: prompt,
-        session_id: session_id,
-        session_opts: session_opts,
-        timeout_ms: timeout_ms(opts),
-        runner: Keyword.get(opts, :runner),
-        task_supervisor: Keyword.get(opts, :task_supervisor, CodingAgent.TaskSupervisor)
-      ]
+    case build_session_opts(id, session_id, source, opts) do
+      {:ok, session_opts} ->
+        worker_opts = [
+          id: id,
+          prompt: prompt,
+          session_id: session_id,
+          session_opts: session_opts,
+          timeout_ms: timeout_ms(opts),
+          runner: Keyword.get(opts, :runner),
+          task_supervisor: Keyword.get(opts, :task_supervisor, CodingAgent.TaskSupervisor)
+        ]
 
-      worker_opts = Enum.reject(worker_opts, fn {_key, value} -> is_nil(value) end)
+        worker_opts = Enum.reject(worker_opts, fn {_key, value} -> is_nil(value) end)
 
-      case Supervisor.start_run(worker_opts) do
-        {:ok, _pid} ->
-          {:ok, %{id: id, status: :queued}}
+        case Supervisor.start_run(worker_opts) do
+          {:ok, _pid} ->
+            {:ok, %{id: id, status: :queued}}
 
-        {:error, reason} ->
-          TaskStore.fail(id, {:start_failed, reason})
-          {:error, :start_failed}
-      end
-    else
+          {:error, reason} ->
+            TaskStore.fail(id, {:start_failed, reason})
+            {:error, :start_failed}
+        end
+
       {:error, _reason} ->
         TaskStore.fail(id, :invalid_execution_context)
         {:error, :invalid_execution_context}

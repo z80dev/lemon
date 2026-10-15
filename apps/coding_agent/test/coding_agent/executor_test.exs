@@ -396,7 +396,7 @@ defmodule CodingAgent.ExecutorTest do
     end
 
     @tag :tmp_dir
-    @tag skip: if(System.find_executable("python3") == nil, do: "python3 required", else: false)
+    @tag :python3
     test "completed native turns hand off eval and debugger state; logical reset kills descendants",
          %{tmp_dir: tmp_dir} do
       parent = self()

@@ -674,12 +674,15 @@ defmodule LemonCore.ToolPolicy do
       :blocked_commands
     ]
 
-    if Enum.all?(list_keys, fn key ->
-         value = Map.fetch!(policy, key)
-         value == :all or length(value) <= @max_tool_entries
-       end) and map_size(policy.approvals) <= @max_tool_entries,
-       do: {:ok, policy},
-       else: {:error, :tool_policy_too_large}
+    within_entry_limit? =
+      Enum.all?(list_keys, fn key ->
+        value = Map.fetch!(policy, key)
+        value == :all or length(value) <= @max_tool_entries
+      end)
+
+    if within_entry_limit? and map_size(policy.approvals) <= @max_tool_entries,
+      do: {:ok, policy},
+      else: {:error, :tool_policy_too_large}
   end
 
   defp parse_base_profile(fields) do

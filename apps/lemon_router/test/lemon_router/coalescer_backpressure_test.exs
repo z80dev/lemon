@@ -68,10 +68,10 @@ defmodule LemonRouter.CoalescerBackpressureTest do
     # A message admitted by the old handle can race the resync marker. Its tag
     # must not mutate the recovered generation, even after another run starts.
     send(pid, {:lemon_bus_delivery, old.gate, {:delta, "run-1", 9999, "obsolete", %{}}})
-    StreamCoalescer.ingest_delta(session, "telegram", "run-1", 10000, "late API call")
+    StreamCoalescer.ingest_delta(session, "telegram", "run-1", 10_000, "late API call")
     assert %{finalized: true, last_sent_text: "complete canonical answer"} = :sys.get_state(pid)
     StreamCoalescer.ingest_delta(session, "telegram", "run-2", 1, "current")
-    send(pid, {:lemon_bus_delivery, old.gate, {:delta, "run-1", 10001, "obsolete", %{}}})
+    send(pid, {:lemon_bus_delivery, old.gate, {:delta, "run-1", 10_001, "obsolete", %{}}})
     assert %{run_id: "run-2", full_text: "current", finalized: false} = :sys.get_state(pid)
     current = :sys.get_state(pid)
 
@@ -133,7 +133,7 @@ defmodule LemonRouter.CoalescerBackpressureTest do
              "Progress updates were interrupted. Refresh session state for current tool results."
 
     send(pid, {:lemon_bus_delivery, old.gate, {:action, "run-1", action(9999), %{}}})
-    ToolStatusCoalescer.ingest_action(session, "telegram", "run-1", action(10000))
+    ToolStatusCoalescer.ingest_action(session, "telegram", "run-1", action(10_000))
 
     assert %{finalized: true, actions: %{"tool-1" => %{phase: :completed, ok: false}}} =
              :sys.get_state(pid)

@@ -1,20 +1,15 @@
 defmodule CodingAgent.Debug.LldbDapIntegrationTest do
   @moduledoc false
-  # Drives the real `lldb-dap` adapter against a tiny C program. Skipped when
-  # lldb-dap (or a C compiler) is not installed.
+  # Drives the real `lldb-dap` adapter against a tiny C program. The app helper
+  # excludes :lldb_dap only when the adapter or a C compiler is unavailable.
   use ExUnit.Case, async: false
 
-  alias CodingAgent.Debug.{Adapters, SessionServer}
+  alias CodingAgent.Debug.SessionServer
   alias CodingAgent.Tools.Debug
 
-  @lldb_available match?({:ok, _}, Adapters.select_launch("/x/a.c", "/", "lldb-dap", :file))
   @clang System.find_executable("clang") || System.find_executable("cc")
 
-  cond do
-    not @lldb_available -> @moduletag skip: "lldb-dap is not installed"
-    is_nil(@clang) -> @moduletag skip: "a C compiler is required"
-    true -> :ok
-  end
+  @moduletag :lldb_dap
 
   @moduletag :tmp_dir
   @moduletag timeout: 180_000

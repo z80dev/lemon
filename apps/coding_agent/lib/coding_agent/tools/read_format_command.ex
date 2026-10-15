@@ -6,42 +6,44 @@ defmodule CodingAgent.Tools.ReadFormatCommand do
   # PATH is operator configuration, but relative entries and workspace binaries
   # are not an implicit grant to execute project code for a fetch-only tool.
   def system_executable(name, cwd) do
-    with {:ok, real_cwd} <- canonical_path(Path.expand(cwd)) do
-      ancestors = Enum.uniq(ancestors(Path.expand(cwd)) ++ ancestors(real_cwd))
+    case canonical_path(Path.expand(cwd)) do
+      {:ok, real_cwd} ->
+        ancestors = Enum.uniq(ancestors(Path.expand(cwd)) ++ ancestors(real_cwd))
 
-      roots =
-        [Path.expand(cwd), real_cwd] ++
-          Enum.map(ancestors, &Path.join(&1, ".lemon")) ++
-          Enum.filter(ancestors, &File.exists?(Path.join(&1, ".git")))
+        roots =
+          [Path.expand(cwd), real_cwd] ++
+            Enum.map(ancestors, &Path.join(&1, ".lemon")) ++
+            Enum.filter(ancestors, &File.exists?(Path.join(&1, ".git")))
 
-      roots =
-        Enum.uniq(
-          roots ++
-            Enum.flat_map(roots, fn root ->
-              case canonical_path(root) do
-                {:ok, real} -> [real]
-                {:error, _} -> []
-              end
-            end)
-        )
+        roots =
+          Enum.uniq(
+            roots ++
+              Enum.flat_map(roots, fn root ->
+                case canonical_path(root) do
+                  {:ok, real} -> [real]
+                  {:error, _} -> []
+                end
+              end)
+          )
 
-      (System.get_env("PATH") || "")
-      |> String.split(if(match?({:win32, _}, :os.type()), do: ";", else: ":"))
-      |> Enum.filter(&(Path.type(&1) == :absolute))
-      |> Enum.find_value(fn directory ->
-        executable = Path.join(directory, name)
+        (System.get_env("PATH") || "")
+        |> String.split(if(match?({:win32, _}, :os.type()), do: ";", else: ":"))
+        |> Enum.filter(&(Path.type(&1) == :absolute))
+        |> Enum.find_value(fn directory ->
+          executable = Path.join(directory, name)
 
-        with {:ok, real} <- canonical_path(executable),
-             false <-
-               Enum.any?(roots, &(inside?(Path.expand(executable), &1) or inside?(real, &1))),
-             found when is_binary(found) <- System.find_executable(executable) do
-          found
-        else
-          _ -> nil
-        end
-      end)
-    else
-      _ -> nil
+          with {:ok, real} <- canonical_path(executable),
+               false <-
+                 Enum.any?(roots, &(inside?(Path.expand(executable), &1) or inside?(real, &1))),
+               found when is_binary(found) <- System.find_executable(executable) do
+            found
+          else
+            _ -> nil
+          end
+        end)
+
+      _ ->
+        nil
     end
   end
 
@@ -52,9 +54,8 @@ defmodule CodingAgent.Tools.ReadFormatCommand do
   def operator_executable(path, cwd) when is_binary(path) do
     executable = Path.expand(path, cwd)
 
-    with {:ok, _real} <- canonical_path(executable) do
-      System.find_executable(executable)
-    else
+    case canonical_path(executable) do
+      {:ok, _real} -> System.find_executable(executable)
       _ -> nil
     end
   end

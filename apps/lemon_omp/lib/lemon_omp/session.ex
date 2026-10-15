@@ -499,7 +499,10 @@ defmodule LemonOmp.Session do
     state = started(state, {:error, {:rejected, Projection.clean(message, 500)}})
 
     state
-    |> update_projection(&Projection.settle(%{&1 | error: Projection.clean(message, 1_000)}))
+    |> update_projection(fn projection ->
+      projection = put_in(projection.output.error, Projection.clean(message, 1_000))
+      Projection.settle(projection)
+    end)
     |> schedule_idle()
   end
 

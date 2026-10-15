@@ -83,7 +83,7 @@ defmodule LemonOmp.ProjectionTest do
       refute state.settling
       assert state.activity == nil
       assert state.last_turn == :completed
-      assert state.result == "All done"
+      assert state.output.result == "All done"
     end
 
     test "redirect holds the aborted verdict running until a fresh agent_start" do
@@ -114,7 +114,7 @@ defmodule LemonOmp.ProjectionTest do
 
       assert state.status == :idle
       assert state.last_turn == :completed
-      assert state.result == "New result"
+      assert state.output.result == "New result"
     end
 
     test "a non-terminal agent_end does not start settling" do
@@ -146,7 +146,7 @@ defmodule LemonOmp.ProjectionTest do
         ])
 
       assert errored.last_turn == :error
-      assert errored.error == "rate limited"
+      assert errored.output.error == "rate limited"
 
       # An unknown status keeps the previous verdict.
       odd = apply_all(errored, [{"agent_start", %{}}, {"prompt_result", %{"status" => "weird"}}])
@@ -159,8 +159,8 @@ defmodule LemonOmp.ProjectionTest do
           assistant_end("", nil, %{"stopReason" => "error", "errorMessage" => "boom"})
         ])
 
-      assert state.error == "boom"
-      assert apply_all(state, [{"agent_start", %{}}]).error == nil
+      assert state.output.error == "boom"
+      assert apply_all(state, [{"agent_start", %{}}]).output.error == nil
     end
 
     test "settle/1 and finish/3 never reopen ended sessions" do
@@ -178,7 +178,7 @@ defmodule LemonOmp.ProjectionTest do
         })
 
       assert failed.status == :failed
-      assert failed.error == "omp exited badly"
+      assert failed.output.error == "omp exited badly"
       assert failed.active_tools == []
       assert failed.activity == nil
     end
@@ -580,7 +580,7 @@ defmodule LemonOmp.ProjectionTest do
              }
 
       assert state.model == "anthropic/claude"
-      assert state.last_text == "bad"
+      assert state.output.last_text == "bad"
 
       state =
         Projection.apply_stats(state, %{
@@ -626,7 +626,7 @@ defmodule LemonOmp.ProjectionTest do
       assert Projection.to_wire(state)["lastText"] == "Hello"
 
       state = apply_all(state, [assistant_end("Hello world")])
-      assert state.stream_text == ""
+      assert state.output.stream_text == ""
       assert Projection.to_wire(state)["lastText"] == "Hello world"
     end
 
@@ -636,10 +636,10 @@ defmodule LemonOmp.ProjectionTest do
       state =
         apply_all(running(), [assistant_end(text), {"prompt_result", %{"status" => "completed"}}])
 
-      assert String.length(state.last_text) == 2_000
-      assert String.starts_with?(state.last_text, "…")
-      assert String.ends_with?(state.last_text, "END")
-      assert state.result == state.last_text
+      assert String.length(state.output.last_text) == 2_000
+      assert String.starts_with?(state.output.last_text, "…")
+      assert String.ends_with?(state.output.last_text, "END")
+      assert state.output.result == state.output.last_text
     end
 
     test "other message_update kinds update activity only" do
@@ -763,7 +763,7 @@ defmodule LemonOmp.ProjectionTest do
         ])
 
       assert [%{id: "c1", name: "bash", intent: "do things"}] = state.active_tools
-      assert state.last_text == "hi link"
+      assert state.output.last_text == "hi link"
       assert state.activity == "Running bash — do things"
     end
   end
@@ -837,6 +837,9 @@ defmodule LemonOmp.ProjectionTest do
 
       assert wire["owner"] == %{"kind" => "agent", "sessionKey" => "agent:main:x"}
       assert wire["status"] == "failed"
+      assert wire["lastText"] == "text"
+      assert wire["result"] == nil
+      assert wire["error"] == "boom"
       assert wire["exit"] == %{"code" => 1, "reason" => "crashed"}
       assert wire["usage"]["totalTokens"] == 3
       assert [%{"name" => "todo", "intent" => "Plan", "isError" => false}] = wire["recentTools"]

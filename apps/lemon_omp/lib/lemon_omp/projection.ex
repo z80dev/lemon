@@ -11,6 +11,9 @@ defmodule LemonOmp.Projection do
 
   Usage and cost accumulate from assistant `message_end` usage and are replaced
   by omp's own `get_session_stats` totals whenever the session refreshes them.
+
+  Streaming text, the last assistant message, the settled result and errors live
+  together in `output`; `to_wire/1` exposes their existing flat snapshot fields.
   """
 
   @max_title 120
@@ -62,10 +65,7 @@ defmodule LemonOmp.Projection do
               cost: 0.0
             },
             context_percent: nil,
-            stream_text: "",
-            last_text: nil,
-            result: nil,
-            error: nil,
+            output: %{stream_text: "", last_text: nil, result: nil, error: nil},
             declined_prompts: 0,
             pending_approvals: [],
             approvals: %{approved: 0, denied: 0, expired: 0},
@@ -133,8 +133,7 @@ defmodule LemonOmp.Projection do
       state
       | status: :running,
         activity: "Thinking",
-        error: nil,
-        stream_text: "",
+        output: %{state.output | error: nil, stream_text: ""},
         settling: false,
         redirecting: false
     }
@@ -144,8 +143,8 @@ defmodule LemonOmp.Projection do
   defp event(state, "message_update", %{"assistantMessageEvent" => %{"type" => kind} = ev}) do
     case kind do
       "text_delta" ->
-        text = clip_tail(state.stream_text <> string(ev["delta"]), @max_stream_buffer)
-        %{state | stream_text: text, activity: "Writing response"}
+        text = clip_tail(state.output.stream_text <> string(ev["delta"]), @max_stream_buffer)
+        %{state | output: %{state.output | stream_text: text}, activity: "Writing response"}
 
       kind when kind in ["thinking_start", "thinking_delta"] ->
         %{state | activity: "Thinking"}
@@ -172,13 +171,16 @@ defmodule LemonOmp.Projection do
 
     state =
       if text != "" do
-        %{state | last_text: clip_tail(text, @max_last_text), stream_text: ""}
+        %{
+          state
+          | output: %{state.output | last_text: clip_tail(text, @max_last_text), stream_text: ""}
+        }
       else
-        %{state | stream_text: ""}
+        put_in(state.output.stream_text, "")
       end
 
     case message["stopReason"] do
-      "error" -> %{state | error: clean(message["errorMessage"], @max_error)}
+      "error" -> put_in(state.output.error, clean(message["errorMessage"], @max_error))
       _ -> state
     end
   end
@@ -276,10 +278,10 @@ defmodule LemonOmp.Projection do
     error =
       case frame["error"] do
         %{"message" => message} -> clean(message, @max_error)
-        _ -> state.error
+        _ -> state.output.error
       end
 
-    settle(%{state | last_turn: turn, error: error})
+    settle(%{state | last_turn: turn, output: %{state.output | error: error}})
   end
 
   defp event(state, "session_settled", _frame), do: settle(state)
@@ -292,8 +294,8 @@ defmodule LemonOmp.Projection do
 
   def settle(state) do
     result =
-      case state.last_text do
-        nil -> state.result
+      case state.output.last_text do
+        nil -> state.output.result
         text -> clip_head(text, @max_result)
       end
 
@@ -302,9 +304,8 @@ defmodule LemonOmp.Projection do
       | status: if(state.redirecting, do: :running, else: :idle),
         activity: if(state.redirecting, do: "Redirecting turn"),
         active_tools: [],
-        stream_text: "",
         settling: state.redirecting,
-        result: result
+        output: %{state.output | stream_text: "", result: result}
     }
   end
 
@@ -357,7 +358,7 @@ defmodule LemonOmp.Projection do
     error =
       case {status, exit[:error]} do
         {:failed, message} when is_binary(message) -> clean(message, @max_error)
-        _ -> state.error
+        _ -> state.output.error
       end
 
     %{
@@ -365,12 +366,11 @@ defmodule LemonOmp.Projection do
       | status: status,
         activity: nil,
         active_tools: [],
-        stream_text: "",
         settling: false,
         redirecting: false,
         ended_at: now_ms(),
         updated_at: now_ms(),
-        error: error,
+        output: %{state.output | stream_text: "", error: error},
         exit: %{code: exit[:code], reason: exit[:reason]}
     }
   end
@@ -456,8 +456,8 @@ defmodule LemonOmp.Projection do
       },
       "contextPercent" => state.context_percent,
       "lastText" => current_text(state),
-      "result" => state.result,
-      "error" => state.error,
+      "result" => state.output.result,
+      "error" => state.output.error,
       "declinedPrompts" => state.declined_prompts,
       "pendingApprovals" => state.pending_approvals,
       "approvals" => %{
@@ -657,10 +657,10 @@ defmodule LemonOmp.Projection do
 
   def title_from_prompt(_prompt), do: nil
 
-  defp current_text(%{status: :running, stream_text: text}) when text != "",
+  defp current_text(%{status: :running, output: %{stream_text: text}}) when text != "",
     do: text |> clean(nil) |> clip_tail(@max_last_text)
 
-  defp current_text(state), do: state.last_text
+  defp current_text(state), do: state.output.last_text
 
   defp tool_activity(name, intent) when is_binary(intent) and intent != "",
     do: clip_head("Running #{name} — #{intent}", @max_activity)

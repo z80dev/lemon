@@ -2,7 +2,6 @@ defmodule CodingAgent.TaskStoreTest do
   use ExUnit.Case, async: false
 
   alias CodingAgent.TaskStore
-  alias CodingAgent.TaskStoreServer
 
   setup do
     # Clear all tasks before each test

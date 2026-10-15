@@ -375,7 +375,7 @@ defmodule CodingAgent.Tools.Debug do
 
   defp require_attach_target(pid, nil, _adapter) when is_integer(pid) and pid > 0, do: :ok
 
-  defp require_attach_target(nil, port, _adapter) when is_integer(port) and port in 1..65535,
+  defp require_attach_target(nil, port, _adapter) when is_integer(port) and port in 1..65_535,
     do: :ok
 
   defp require_attach_target(_, _, _),

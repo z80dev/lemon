@@ -342,17 +342,20 @@ defmodule CodingAgent.Debug.SessionServer do
   end
 
   defp run_live(%{action: "scopes"} = req, ctx, state) do
-    with {:ok, frame_id, state} <- resolve_frame(req[:frame_id], ctx, state) do
-      case dap_request(state, "scopes", %{"frameId" => frame_id}, ctx) do
-        {:ok, body, state} ->
-          {{:ok, %{snapshot: snapshot(state), scopes: list(body, "scopes"), frame_id: frame_id}},
-           state}
+    case resolve_frame(req[:frame_id], ctx, state) do
+      {:ok, frame_id, state} ->
+        case dap_request(state, "scopes", %{"frameId" => frame_id}, ctx) do
+          {:ok, body, state} ->
+            {{:ok,
+              %{snapshot: snapshot(state), scopes: list(body, "scopes"), frame_id: frame_id}},
+             state}
 
-        {status, message, state} ->
-          {{status, message}, state}
-      end
-    else
-      {status, message, state} -> {{status, message}, state}
+          {status, message, state} ->
+            {{status, message}, state}
+        end
+
+      {status, message, state} ->
+        {{status, message}, state}
     end
   end
 

@@ -36,7 +36,7 @@ defmodule LemonOmp.SubagentTest do
              "tokens" => 120,
              "cost" => 0.001,
              "contextTokens" => 200,
-             "contextWindow" => 10000
+             "contextWindow" => 10_000
            }
 
     assert {:ok, summary} = LemonOmp.summary(id, ctx.scope)
@@ -75,7 +75,7 @@ defmodule LemonOmp.SubagentTest do
     assert List.last(transcript["messages"])["text"] =~ "message 60 "
     assert Enum.all?(transcript["messages"], &(String.length(&1["text"]) == 2000))
     assert transcript["fromByte"] == 0
-    assert transcript["nextByte"] == 12345
+    assert transcript["nextByte"] == 12_345
     assert transcript["reset"] == false
     refute Jason.encode!(transcript) =~ "\u202e"
     refute Jason.encode!(transcript) =~ "\\u001b"
