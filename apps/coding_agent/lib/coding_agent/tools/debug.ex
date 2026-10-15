@@ -21,12 +21,13 @@ defmodule CodingAgent.Tools.Debug do
 
   @actions ~w(launch attach set_breakpoint remove_breakpoint set_function_breakpoint continue
               step_over step_in step_out pause stack_trace threads scopes variables evaluate
-              output status sessions terminate custom_request)
+              output status sessions terminate custom_request data_breakpoint_info
+              set_data_breakpoints set_instruction_breakpoints read_memory disassemble)
 
   @evaluate_contexts ~w(repl watch hover variables clipboard)
 
   @default_timeout_s 30
-  @max_timeout_s 600
+  @max_timeout_s 300
   @default_stack_levels 20
   @max_list_items 200
   @max_value_chars 500
@@ -49,7 +50,7 @@ defmodule CodingAgent.Tools.Debug do
 
   defp description do
     """
-    Debugger access through the Debug Adapter Protocol (lldb-dap, gdb, debugpy, dlv). \
+    Debugger access through the Debug Adapter Protocol (lldb-dap, gdb, debugpy, dlv, js-debug, codelldb, netcoredbg, rdbg). \
     Prefer this over bash for program state, breakpoints, stepping or thread inspection.
     Only one active debug session at a time; terminate it before launching another. \
     `program` is a target path (compiled binary, .py script, Go package dir), not a shell command.
@@ -57,6 +58,9 @@ defmodule CodingAgent.Tools.Debug do
     scopes → variables / evaluate → step_over / continue → terminate. Execution actions wait \
     for the next stop up to `timeout` seconds (default #{@default_timeout_s}); if the program is \
     still running, use pause. Without breakpoints, launch stops at program entry.
+    Source log points use `log_message`. Advanced actions accept DAP `arguments`: \
+    data_breakpoint_info, set_data_breakpoints, set_instruction_breakpoints, read_memory, disassemble. \
+    They require advertised adapter support and limit arguments/results to 128 KiB.
     """
   end
 
@@ -77,7 +81,7 @@ defmodule CodingAgent.Tools.Debug do
         "adapter" => %{
           "type" => "string",
           "description" =>
-            "Adapter id (lldb-dap, gdb, debugpy, dlv); default chosen from the program"
+            "Adapter id (lldb-dap, gdb, debugpy, dlv, js-debug, codelldb, netcoredbg, rdbg); default chosen from the program"
         },
         "cwd" => %{"type" => "string", "description" => "launch/attach: working directory"},
         "file" => %{"type" => "string", "description" => "Breakpoint source file"},
@@ -85,6 +89,10 @@ defmodule CodingAgent.Tools.Debug do
         "function" => %{"type" => "string", "description" => "Function breakpoint name"},
         "condition" => %{"type" => "string", "description" => "Breakpoint condition"},
         "hit_condition" => %{"type" => "string", "description" => "Breakpoint hit condition"},
+        "log_message" => %{
+          "type" => "string",
+          "description" => "Log point message (requires supportsLogPoints)"
+        },
         "expression" => %{"type" => "string", "description" => "evaluate: expression"},
         "context" => %{
           "type" => "string",
@@ -112,7 +120,8 @@ defmodule CodingAgent.Tools.Debug do
         "command" => %{"type" => "string", "description" => "custom_request: DAP command"},
         "arguments" => %{
           "type" => "object",
-          "description" => "custom_request: DAP request arguments"
+          "description" =>
+            "DAP arguments for custom_request, data_breakpoint_info, set_data_breakpoints, set_instruction_breakpoints, read_memory or disassemble"
         },
         "timeout" => %{
           "type" => "number",
@@ -170,8 +179,8 @@ defmodule CodingAgent.Tools.Debug do
   defp timeout_ms(params) do
     case Map.get(params, "timeout") do
       nil -> {:ok, @default_timeout_s * 1000}
-      s when is_number(s) and s > 0 -> {:ok, round(min(s, @max_timeout_s) * 1000)}
-      _ -> {:error, "timeout must be a positive number of seconds (max #{@max_timeout_s})"}
+      s when is_number(s) -> {:ok, round(s |> max(5) |> min(@max_timeout_s)) * 1000}
+      _ -> {:error, "timeout must be a number of seconds (clamped to 5..#{@max_timeout_s})"}
     end
   end
 
@@ -239,14 +248,16 @@ defmodule CodingAgent.Tools.Debug do
         with {:ok, file} <- required_string(params, "file", action),
              {:ok, line} <- required_line(params, action),
              {:ok, condition} <- optional_string(params, "condition"),
-             {:ok, hit_condition} <- optional_string(params, "hit_condition") do
+             {:ok, hit_condition} <- optional_string(params, "hit_condition"),
+             {:ok, log_message} <- optional_string(params, "log_message") do
           {:ok,
            %{
              action: action,
              file: PathHelpers.resolve_path(file, cwd),
              line: line,
              condition: condition,
-             hit_condition: hit_condition
+             hit_condition: hit_condition,
+             log_message: log_message
            }}
         end
 
@@ -303,6 +314,25 @@ defmodule CodingAgent.Tools.Debug do
     end
   end
 
+  defp build_request(action, params, _cwd, _opts)
+       when action in [
+              "data_breakpoint_info",
+              "set_data_breakpoints",
+              "set_instruction_breakpoints",
+              "read_memory",
+              "disassemble"
+            ] do
+    case params["arguments"] do
+      args when is_map(args) ->
+        if byte_size(Jason.encode!(args)) <= 128 * 1024,
+          do: {:ok, %{action: action, arguments: args}},
+          else: {:error, "DAP arguments exceed the 128 KB limit"}
+
+      _ ->
+        {:error, "#{action} requires an arguments object with DAP request fields"}
+    end
+  end
+
   defp build_request("custom_request", params, _cwd, _opts) do
     with {:ok, command} <- required_string(params, "command", "custom_request") do
       case Map.get(params, "arguments") do
@@ -330,7 +360,8 @@ defmodule CodingAgent.Tools.Debug do
          {:ok, line} <- optional_integer(params, "line"),
          {:ok, function} <- optional_string(params, "function"),
          {:ok, condition} <- optional_string(params, "condition"),
-         {:ok, hit_condition} <- optional_string(params, "hit_condition") do
+         {:ok, hit_condition} <- optional_string(params, "hit_condition"),
+         {:ok, log_message} <- optional_string(params, "log_message") do
       cond do
         is_binary(function) ->
           {:ok,
@@ -349,7 +380,8 @@ defmodule CodingAgent.Tools.Debug do
                file: PathHelpers.resolve_path(file, cwd),
                line: line,
                condition: condition,
-               hit_condition: hit_condition
+               hit_condition: hit_condition,
+               log_message: log_message
              }
            }}
 
@@ -657,6 +689,20 @@ defmodule CodingAgent.Tools.Debug do
       snapshot: data.snapshot,
       evaluation: evaluation
     })
+  end
+
+  defp format(action, data, _request, _timeout_ms, _cwd, _opts)
+       when action in [
+              "data_breakpoint_info",
+              "set_data_breakpoints",
+              "set_instruction_breakpoints",
+              "read_memory",
+              "disassemble"
+            ] do
+    text_result(
+      "#{action} response:\n" <> Jason.encode!(data.body, pretty: true),
+      %{action: action, success: true, snapshot: data.snapshot, body: data.body}
+    )
   end
 
   defp format("custom_request", data, request, _timeout_ms, _cwd, _opts) do
