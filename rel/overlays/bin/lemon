@@ -370,6 +370,13 @@ if [ -z "$COMMAND" ]; then
   COMMAND="tui"
   set -- tui
 fi
+# Session-resume flags open the TUI: `lemon -c`, `lemon --continue`, `lemon -r [key]`.
+case "$COMMAND" in
+  -c|--continue|-r|--resume)
+    COMMAND="tui"
+    set -- tui "$@"
+    ;;
+esac
 
 case "$COMMAND" in
   --version|version)

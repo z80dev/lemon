@@ -61,6 +61,8 @@ export interface RequestOptions {
 	queueIfOffline?: boolean;
 	/** Bypass the offline gate — used internally for `connect`. */
 	allowWhileConnecting?: boolean;
+	/** Fixed correlation identity retained by a submission awaiting reconciliation. */
+	requestId?: string;
 }
 
 export interface ControlPlaneClientOptions {
@@ -254,9 +256,9 @@ export class ControlPlaneClient {
 		if (this.#state !== "online" && !options.allowWhileConnecting) {
 			const queueable = options.queueIfOffline ?? this.#queueableMethods.has(method);
 			if (!queueable) return Promise.reject(new NotConnectedError(method));
-			return this.#enqueue(method, params, timeoutMs);
+			return this.#enqueue(method, params, timeoutMs, options.requestId);
 		}
-		return this.#dispatch(method, params, timeoutMs);
+		return this.#dispatch(method, params, timeoutMs, options.requestId);
 	}
 
 	// -- internals ----------------------------------------------------------
@@ -464,10 +466,10 @@ export class ControlPlaneClient {
 		});
 	}
 
-	#enqueue<T>(method: string, params: unknown, timeoutMs: number): Promise<T> {
+	#enqueue<T>(method: string, params: unknown, timeoutMs: number, id?: string): Promise<T> {
 		return new Promise<T>((resolve, reject) => {
 			const entry: QueuedRequest = {
-				id: crypto.randomUUID(),
+				id: id ?? crypto.randomUUID(),
 				method,
 				params,
 				timeoutMs,

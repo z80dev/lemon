@@ -23,6 +23,7 @@
  */
 
 import type { TUI } from "@oh-my-pi/pi-tui/tui";
+import type { SubmissionDisposition } from "../../composer/drafts.ts";
 import {
 	ControlPlaneError,
 	NotConnectedError,
@@ -35,7 +36,7 @@ import type {
 	ChatHistoryMessage,
 	SessionSummary,
 } from "../../protocol/types.ts";
-import { newSessionKey } from "../../session-key.ts";
+import { assertSessionDirectory, newSessionKey } from "../../session-key.ts";
 import type { AppStore } from "../../store/app-store.ts";
 import type { SessionStore } from "../../store/session-store.ts";
 import type { NoticeLevel } from "../../store/transcript-model.ts";
@@ -61,7 +62,7 @@ export interface SessionControllerOptions {
 	editor: DraftEditor;
 	cwd?: string;
 	/** Sends a prompt as the user (used by "new session with a first prompt"). */
-	sendPrompt?: (text: string) => void | Promise<void>;
+	sendPrompt?: (text: string) => Promise<SubmissionDisposition>;
 	refreshStatus?: () => void;
 	/** Presents a yes/no overlay. Without one, closing needs `confirmed: true`. */
 	confirm?: (spec: ConfirmSpec) => void;
@@ -82,7 +83,7 @@ export class SessionController {
 	readonly #tui: TUI;
 	readonly #editor: DraftEditor;
 	readonly #cwd: string | undefined;
-	readonly #sendPrompt: ((text: string) => void | Promise<void>) | undefined;
+	readonly #sendPrompt: ((text: string) => Promise<SubmissionDisposition>) | undefined;
 	readonly #refreshStatus: (() => void) | undefined;
 	readonly #confirm: ((spec: ConfirmSpec) => void) | undefined;
 
@@ -118,6 +119,7 @@ export class SessionController {
 	/** Hydrate an explicit launch key before the initial composer is ready. */
 	async initialize(): Promise<void> {
 		const session = this.#store.focused;
+		assertSessionDirectory(session.key, this.#cwd ?? process.cwd());
 		await Promise.all([
 			this.#hydrateIfCold(session),
 			this.hydrateRouting(session),
@@ -144,6 +146,7 @@ export class SessionController {
 	async switch(key: string): Promise<void> {
 		const target = key.trim();
 		if (target.length === 0) return;
+		assertSessionDirectory(target, this.#cwd ?? process.cwd());
 		const previousKey = this.#store.focusedKey;
 		if (target === previousKey) {
 			// Still worth the unread reset and a status repaint: the switcher can
@@ -478,7 +481,7 @@ export class SessionController {
 	}
 
 	#mintKey(): string {
-		return newSessionKey();
+		return newSessionKey(this.#cwd);
 	}
 
 	#notice(text: string, level: NoticeLevel = "info"): void {

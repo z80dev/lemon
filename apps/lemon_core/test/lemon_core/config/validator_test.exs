@@ -277,6 +277,26 @@ defmodule LemonCore.Config.ValidatorTest do
       refute Enum.any?(errors, &String.contains?(&1, "agent.default_thinking_level"))
     end
 
+    test "validates compaction thresholds" do
+      assert [] ==
+               Validator.validate_agent(
+                 %{compaction: %{threshold_percent: 80, threshold_tokens: 150_000}},
+                 []
+               )
+
+      assert [] == Validator.validate_agent(%{compaction: %{threshold_percent: nil}}, [])
+
+      for percent <- [0, 101, -5, 50.5, "80"] do
+        errors = Validator.validate_agent(%{compaction: %{threshold_percent: percent}}, [])
+        assert Enum.any?(errors, &String.contains?(&1, "agent.compaction.threshold_percent"))
+      end
+
+      for tokens <- [0, -1, 1.5, "9000"] do
+        errors = Validator.validate_agent(%{compaction: %{threshold_tokens: tokens}}, [])
+        assert Enum.any?(errors, &String.contains?(&1, "agent.compaction.threshold_tokens"))
+      end
+    end
+
     test "accepts nil values" do
       errors = Validator.validate_agent(%{}, [])
       assert errors == []

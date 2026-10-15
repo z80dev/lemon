@@ -51,6 +51,8 @@ defmodule CodingAgent.SettingsManager do
           compaction_enabled: boolean(),
           reserve_tokens: non_neg_integer(),
           keep_recent_tokens: non_neg_integer(),
+          compaction_threshold_percent: 1..100 | nil,
+          compaction_threshold_tokens: pos_integer() | nil,
 
           # Retry settings
           retry_enabled: boolean(),
@@ -97,6 +99,8 @@ defmodule CodingAgent.SettingsManager do
     compaction_enabled: true,
     reserve_tokens: 16_384,
     keep_recent_tokens: 20_000,
+    compaction_threshold_percent: nil,
+    compaction_threshold_tokens: nil,
 
     # Retry settings
     retry_enabled: true,
@@ -181,6 +185,8 @@ defmodule CodingAgent.SettingsManager do
       compaction_enabled: Map.get(compaction, :enabled, true),
       reserve_tokens: Map.get(compaction, :reserve_tokens, 16_384),
       keep_recent_tokens: Map.get(compaction, :keep_recent_tokens, 20_000),
+      compaction_threshold_percent: threshold_percent(Map.get(compaction, :threshold_percent)),
+      compaction_threshold_tokens: threshold_tokens(Map.get(compaction, :threshold_tokens)),
       retry_enabled: Map.get(retry, :enabled, true),
       max_retries: Map.get(retry, :max_retries, 3),
       base_delay_ms: Map.get(retry, :base_delay_ms, 1000),
@@ -245,17 +251,34 @@ defmodule CodingAgent.SettingsManager do
   Get compaction settings as a map.
   """
   @spec get_compaction_settings(t()) :: %{
+          optional(:threshold_percent) => 1..100,
+          optional(:threshold_tokens) => pos_integer(),
           enabled: boolean(),
           reserve_tokens: non_neg_integer(),
           keep_recent_tokens: non_neg_integer()
         }
   def get_compaction_settings(%__MODULE__{} = settings) do
-    %{
+    base = %{
       enabled: settings.compaction_enabled,
       reserve_tokens: settings.reserve_tokens,
       keep_recent_tokens: settings.keep_recent_tokens
     }
+
+    # Thresholds are optional; absent keys keep the reserve-based threshold.
+    base
+    |> put_unless_nil(:threshold_percent, settings.compaction_threshold_percent)
+    |> put_unless_nil(:threshold_tokens, settings.compaction_threshold_tokens)
   end
+
+  defp put_unless_nil(map, _key, nil), do: map
+  defp put_unless_nil(map, key, value), do: Map.put(map, key, value)
+
+  # Invalid thresholds are ignored here; `Config.Validator` reports them at load.
+  defp threshold_percent(value) when is_integer(value) and value in 1..100, do: value
+  defp threshold_percent(_value), do: nil
+
+  defp threshold_tokens(value) when is_integer(value) and value > 0, do: value
+  defp threshold_tokens(_value), do: nil
 
   @doc """
   Get retry settings as a map.

@@ -28,7 +28,7 @@ defmodule LemonControlPlane.Methods.SessionsExport do
             {:error, {:not_found, "Session not found", nil}}
 
           {:error, :unsupported_format} ->
-            {:error, {:invalid_params, "format must be json or markdown", nil}}
+            {:error, {:invalid_params, "format must be json, jsonl, markdown or html", nil}}
 
           {:error, _reason} ->
             {:error, {:internal_error, "Failed to export session", nil}}

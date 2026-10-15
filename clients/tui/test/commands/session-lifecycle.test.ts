@@ -83,15 +83,13 @@ describe("session discovery and inspection", () => {
 	});
 
 	test("show/current reports safe metadata without prompt, workspace, or response extras", async () => {
-		harness.server.respondWith("sessions.list", {
-			sessions: [
-				{
-					...session,
-					prompt: "private prompt",
-					answer: "private answer",
-					workspaceDir: "/private/project",
-				},
-			],
+		harness.server.respondWith("sessions.get", {
+			session: {
+				...session,
+				prompt: "private prompt",
+				answer: "private answer",
+				workspaceDir: "/private/project",
+			},
 		});
 
 		await harness.run(`/session show ${sessionKey}`);
@@ -112,14 +110,11 @@ describe("session discovery and inspection", () => {
 		).switchSession = (key: string) => {
 			switched.push(key);
 		};
-		harness.server.respondWith("sessions.list", { sessions: [session] });
+		harness.server.respondWith("sessions.get", { session });
 
 		await harness.run(`/session open ${sessionKey}`);
 
-		expect(harness.server.requestsFor("sessions.list")[0]?.params).toEqual({
-			query: sessionKey,
-			limit: 500,
-		});
+		expect(harness.server.requestsFor("sessions.get")[0]?.params).toEqual({ sessionKey });
 		expect(switched).toEqual([sessionKey]);
 	});
 });
@@ -159,7 +154,7 @@ describe("session metadata and resume", () => {
 
 	test("resume verifies the durable key and replays only after success", async () => {
 		harness.store.setFocused(sessionKey);
-		harness.server.respondWith("sessions.list", { sessions: [session] });
+		harness.server.respondWith("sessions.get", { session });
 		harness.server.respondWith("chat.history", {
 			sessionKey,
 			messages: [{ id: "m1", role: "user", content: "explicit resume content" }],
@@ -213,6 +208,26 @@ describe("redacted export and guarded deletion", () => {
 		expect(harness.host.text).not.toContain(workdir);
 	});
 
+	test("export sends html and jsonl formats and rejects an unknown --format before the wire", async () => {
+		for (const [format, content] of [
+			["html", "<!DOCTYPE html><html></html>\n"],
+			["jsonl", '{"type":"session"}\n{"type":"run"}\n'],
+		] as const) {
+			const out = join(workdir, `session.${format}`);
+			harness.server.respondWith("sessions.export", exportResult(content, format));
+			await harness.run(`/session export ${sessionKey} --format ${format} --output ${out}`);
+			expect(harness.server.requestsFor("sessions.export").at(-1)?.params).toEqual({
+				sessionKey,
+				format,
+			});
+			expect(readFileSync(out, "utf8")).toBe(content);
+		}
+
+		const before = harness.server.requestsFor("sessions.export").length;
+		await harness.run(`/session export ${sessionKey} --format pdf`);
+		expect(harness.server.requestsFor("sessions.export")).toHaveLength(before);
+	});
+
 	test("digest mismatch and unsafe destinations fail closed without leaking details", async () => {
 		const output = join(workdir, "secret-output.json");
 		const target = join(workdir, "target.json");
@@ -245,7 +260,7 @@ describe("redacted export and guarded deletion", () => {
 	test("delete previews first, requires the exact key, then exports before verified deletion", async () => {
 		const content = "# Redacted session\n\napi_key=[REDACTED]\n";
 		const output = join(workdir, "before-delete.md");
-		harness.server.respondWith("sessions.list", { sessions: [session] });
+		harness.server.respondWith("sessions.get", { session });
 		harness.server.respondWith("sessions.export", exportResult(content, "markdown"));
 		harness.server.respondWith("sessions.delete", {
 			deleted: true,
@@ -273,7 +288,7 @@ describe("redacted export and guarded deletion", () => {
 
 	test("refused deletion reports only the stable error code", async () => {
 		harness.host.draft = "draft survives refused mutation";
-		harness.server.respondWith("sessions.list", { sessions: [session] });
+		harness.server.respondWith("sessions.get", { session });
 		harness.server.failWith(
 			"sessions.delete",
 			"CONFLICT",
@@ -364,11 +379,11 @@ describe("exact preview-confirm pruning", () => {
 	});
 });
 
-function exportResult(content: string, format: "json" | "markdown") {
+function exportResult(content: string, format: "json" | "jsonl" | "markdown" | "html") {
 	return {
 		sessionKey,
 		format,
-		filename: format === "json" ? "session.json" : "session.md",
+		filename: `session.${{ json: "json", jsonl: "jsonl", markdown: "md", html: "html" }[format]}`,
 		content,
 		sha256: createHash("sha256").update(content).digest("hex"),
 		bytes: Buffer.byteLength(content),

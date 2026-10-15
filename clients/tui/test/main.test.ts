@@ -7,6 +7,7 @@ import {
 	parseArgs,
 	resolveVersion,
 	satisfiesVersion,
+	startupRequest,
 } from "../src/main.ts";
 
 describe("parseArgs", () => {
@@ -27,6 +28,39 @@ describe("parseArgs", () => {
 		expect(parseArgs(["--session", "s1"], env).sessionKey).toBe("s1");
 		expect(parseArgs(["-s", "s2"], env).sessionKey).toBe("s2");
 		expect(parseArgs(["--session=s3"], env).sessionKey).toBe("s3");
+	});
+
+	test("--continue and -c request the latest session", () => {
+		for (const flag of ["--continue", "-c"]) {
+			const options = parseArgs([flag], env);
+			expect(options.error).toBeUndefined();
+			expect(startupRequest(options)).toEqual({ mode: "continue" });
+		}
+		expect(startupRequest(parseArgs([], env))).toBeUndefined();
+	});
+
+	test("--resume takes an optional key and a bare one does not swallow a following flag", () => {
+		expect(startupRequest(parseArgs(["-r"], env))).toEqual({ mode: "resume", key: undefined });
+		expect(startupRequest(parseArgs(["--resume", "k1"], env))).toEqual({
+			mode: "resume",
+			key: "k1",
+		});
+		expect(startupRequest(parseArgs(["--resume=k3"], env))).toEqual({ mode: "resume", key: "k3" });
+
+		const options = parseArgs(["-r", "--ws-url", "ws://h:1/ws"], env);
+		expect(options.error).toBeUndefined();
+		expect(options.resumeKey).toBeUndefined();
+		expect(options.url).toBe("ws://h:1/ws");
+	});
+
+	test("--continue, --session and --resume are mutually exclusive", () => {
+		for (const argv of [
+			["--continue", "--session", "s"],
+			["--continue", "--resume"],
+			["--resume", "k", "--session", "s"],
+		]) {
+			expect(parseArgs(argv, env).error).toMatch(/mutually exclusive/);
+		}
 	});
 
 	test("flags help and version", () => {

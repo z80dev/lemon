@@ -686,6 +686,15 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 - Opt-in `thinking_level = "auto"` classifies each user prompt with an explicitly
   configured tiny/smol model and maps its effort to the active provider's
   supported levels. `@plan` and `@commit` join the built-in model role selectors.
+- **Session lifecycle parity.** `lemon sessions export` and `/session export`
+  gain `html` (self-contained, escaped, no scripts) and `jsonl` formats;
+  `sessions.context` returns session usage (tokens, estimated cost, input/output/
+  cache) shown by `/context` and `/session info`; `[runtime.compaction]` accepts
+  `threshold_percent` and `threshold_tokens`; context-overflow recovery now uses
+  the structured provider error classification before text matching.
+  Recovery retries only pre-output provider failures; an overflow after visible
+  output or tool commitment is not silently replayed.
+
 - **Lemon Web, rebuilt.** The browser UI is now a full workspace on the same
   control-plane methods and events as the TUI. Chat streams Markdown with
   highlighted code, thinking blocks and rich tool cards (shell output and exit
@@ -764,6 +773,48 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   meter also use the measurement for resumed sessions before their first run.
   All surfaces read the new read-scoped `sessions.context` control-plane method;
   category splits are estimates scaled to the provider-reported total.
+- **Continue and resume sessions from the command line.** `lemon -c` /
+  `--continue` reopens the most recently updated TUI session started from this
+  directory (a new session when there is none), and `lemon -r [key]` /
+  `--resume [key]` attaches to a known session or, without a key, opens the
+  session switcher; `lemon tui --continue` works too. New TUI sessions carry a
+  short directory tag in their key so `--continue` can find the current
+  project's sessions. `--continue`, `--session` and `--resume` are mutually
+  exclusive.
+  A bare `--resume` waits for the switcher's rows and mounted picker before
+  startup completes, rather than opening it in a detached background task.
+- **`/retry` in the TUI.** After a failed or aborted turn, `/retry` rewinds
+  history (never files) to the last prompt, keeps the discarded turn in `/tree`,
+  and resends the prompt; `/retry --force` also retries a completed turn.
+  Retry now checks authoritative original-message replay metadata and refuses
+  stored images or other non-text content before confirming any rewind; it
+  never silently resends just their text projection, including after resume or
+  with `--force`. Missing replay metadata also refuses without history mutation.
+  Recovery drafts now clear only after a concrete run acknowledgment. Rejected
+  sends retain the draft; uncertain sends keep their fixed request/run identity
+  for explicit queue review and never automatically replay. Exact resume uses
+  the durable lifecycle lookup, not a truncated history-search page, and local
+  TUI navigation refuses foreign-directory or untagged keys rather than replace
+  their native history.
+- **Switch branches, label entries and fork from any point in `/tree`.**
+  Selecting an entry in the TUI's `/tree` now opens its actions: inspect it,
+  switch the active branch to it (optionally summarizing the abandoned branch in
+  the background), bookmark it with a label (`/tree label <entryId> <text>`,
+  `/tree unlabel <entryId>`), or fork a new session whose history ends at it.
+  New write-scoped control-plane methods `sessions.navigate` and
+  `sessions.label`, an optional `entryId` on `sessions.fork`, and a `label` on
+  `sessions.tree` entries back it. Switching never deletes the old branch and is
+  refused while a run is active.
+  Background summaries apply only to their unchanged destination revision and
+  update live and resumed context together; stale results never move another
+  branch. Automatic resume also refuses an unavailable journal already mapped
+  to a logical session instead of silently replacing its history.
+  Native startup shares journal admission with stopped branch/label/rewind
+  mutations, and live navigation/label receipts capture their own mutation
+  atomically. Lost mutation receipts report an unknown outcome with automatic
+  retries disabled, rather than implying nothing changed.
+  Duplicate native startup returns an `already_started` error without sending an
+  abnormal linked exit to its caller or rewriting the live owner's journal.
 
 ### Changed
 

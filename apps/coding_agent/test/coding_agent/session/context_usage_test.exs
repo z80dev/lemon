@@ -325,4 +325,72 @@ defmodule CodingAgent.Session.ContextUsageTest do
     assert ContextUsage.stored_overhead(id) == nil
     assert ContextUsage.record_overhead(nil, profile) == nil
   end
+
+  describe "session usage" do
+    alias CodingAgent.Session.{BudgetLedger, MessageSerialization}
+
+    defp assistant(input, output, cache_read, cache_write, cost) do
+      %AssistantMessage{
+        role: :assistant,
+        content: [%TextContent{text: "done"}],
+        stop_reason: :stop,
+        timestamp: 1,
+        usage: %Usage{
+          input: input,
+          output: output,
+          cache_read: cache_read,
+          cache_write: cache_write,
+          total_tokens: input + output + cache_read + cache_write,
+          cost: %LemonAi.Types.Cost{total: cost}
+        }
+      }
+    end
+
+    test "sums active-branch assistant tokens and reports the cumulative ledger", %{
+      tmp_dir: tmp_dir
+    } do
+      manager = SessionManager.new(tmp_dir)
+      manager = SessionManager.append_message(manager, %{"role" => "user", "content" => "hi"})
+      root_id = manager.leaf_id
+
+      # An abandoned branch: counted by the ledger, not by the branch sums.
+      manager =
+        SessionManager.append_message(
+          manager,
+          MessageSerialization.serialize_message(assistant(1_000, 100, 0, 0, 0.5))
+        )
+
+      manager = SessionManager.set_leaf_id(manager, root_id)
+
+      manager =
+        SessionManager.append_message(
+          manager,
+          MessageSerialization.serialize_message(assistant(200, 30, 400, 50, 0.25))
+        )
+
+      manager =
+        SessionManager.append_message(
+          manager,
+          MessageSerialization.serialize_message(assistant(300, 20, 600, 0, 0.125))
+        )
+
+      assert ContextUsage.session_usage(manager) == %{
+               tokens: 1_100 + 680 + 920,
+               cost_usd: 0.875,
+               input: 500,
+               output: 50,
+               cache_read: 1_000,
+               cache_write: 50,
+               assistant_messages: 2
+             }
+
+      # An explicit ledger wins over derived values.
+      usage = ContextUsage.session_usage(manager, %{tokens: 9_999, cost_usd: 1.5})
+      assert usage.tokens == 9_999
+      assert usage.cost_usd == 1.5
+
+      {manager, _ledger} = BudgetLedger.initialize(manager)
+      assert ContextUsage.session_usage(manager).tokens == 2_700
+    end
+  end
 end

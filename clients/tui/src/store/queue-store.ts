@@ -29,6 +29,8 @@ export interface QueueItem {
 	id: string;
 	text: string;
 	attachments?: readonly PendingImage[];
+	/** A possibly committed send: inspect this identity, never auto-replay it. */
+	submission?: { requestId: string; runId?: string };
 	state: QueueItemState;
 	/** Wall-clock ms when the item was queued. */
 	at: number;

@@ -165,5 +165,40 @@ defmodule CodingAgent.ControlPlaneProviderTest do
       assert {:ok, session} = CodingAgent.SessionManager.load_from_file(context.path)
       assert Enum.any?(CodingAgent.SessionManager.get_branch(session), &(&1.type == :compaction))
     end
+
+    test "durable context usage carries the session usage ledger and branch token sums",
+         context do
+      assistant = %LemonAi.Types.AssistantMessage{
+        role: :assistant,
+        content: [%LemonAi.Types.TextContent{text: "Counted."}],
+        stop_reason: :stop,
+        timestamp: 1,
+        usage: %LemonAi.Types.Usage{
+          input: 700,
+          output: 80,
+          cache_read: 300,
+          cache_write: 20,
+          total_tokens: 1_100,
+          cost: %LemonAi.Types.Cost{total: 0.0375}
+        }
+      }
+
+      session =
+        context.session
+        |> CodingAgent.SessionManager.append_message(
+          CodingAgent.Session.MessageSerialization.serialize_message(assistant)
+        )
+
+      :ok = CodingAgent.SessionManager.save_to_file(context.path, session)
+
+      assert {:ok, report} =
+               ControlPlaneProvider.session_context_usage(context.source, context.cwd)
+
+      assert report.live == false
+      assert report.usage.input == 700
+      assert report.usage.assistant_messages == 2
+      assert report.usage.tokens == 1_100
+      assert report.usage.cost_usd == 0.0375
+    end
   end
 end

@@ -6,6 +6,7 @@ import type {
 	SessionRewindTarget,
 	SessionTreeEntry,
 } from "../protocol/session-tree.ts";
+import { forkSession } from "./fork.ts";
 import type { CommandContext, PickerChoice, SlashCommand } from "./registry.ts";
 
 const PAGE_SIZE = 100;
@@ -16,11 +17,20 @@ type TreeMode = "inspect" | "rewind";
 
 export const treeCommand: SlashCommand = {
 	name: "tree",
-	summary: "browse this session's message tree and preserved branches",
+	summary: "browse this session's message tree: switch branch, label entries, fork from one",
+	usage: "[label <entryId> <text> | unlabel <entryId>]",
 	group: "sessions",
 	methods: [METHOD.sessionsTree],
-	async run(ctx) {
-		await openTree(ctx, "inspect", false, 0);
+	async run(ctx, argv) {
+		if (argv.length === 0) {
+			await openTree(ctx, "inspect", false, 0);
+			return;
+		}
+		const label = /^label\s+(\S+)\s+(\S[\s\S]*)$/.exec(ctx.rest);
+		const unlabel = /^unlabel\s+(\S+)$/.exec(ctx.rest);
+		if (label) await setLabel(ctx, label[1]!, label[2]!.trim());
+		else if (unlabel) await setLabel(ctx, unlabel[1]!, null);
+		else ctx.ui.notice("usage: /tree [label <entryId> <text> | unlabel <entryId>]", "error");
 	},
 };
 
@@ -66,7 +76,7 @@ async function openTree(
 				? tree.entries.filter(
 						(entry) => entry.role === "user" && entry.rewindable && entry.isActive,
 					)
-				: tree.entries;
+				: tree.entries.filter((entry) => entry.type !== "label");
 		const byId = new Map(tree.entries.map((entry) => [entry.id, entry]));
 		const items: PickerChoice[] = entries.map((entry) => describeEntry(entry, byId));
 		if (offset > 0) items.push({ value: PREVIOUS_PAGE, label: "Previous page" });
@@ -85,7 +95,7 @@ async function openTree(
 			footer:
 				mode === "rewind"
 					? `enter previews ${restoreFiles ? "history + files" : "history only"} · esc cancels`
-					: "active = current branch · enter inspects · /rewind changes history",
+					: "active = current branch · enter opens entry actions · /rewind restores files",
 			onSelect: async (choice) => {
 				if (choice.value === NEXT_PAGE || choice.value === PREVIOUS_PAGE) {
 					const next =
@@ -98,11 +108,7 @@ async function openTree(
 				if (mode === "rewind") {
 					await previewRewind(ctx, entry, restoreFiles);
 				} else {
-					ctx.ui.noticeBlock([
-						`entry ${entry.id} · ${entry.role ?? entry.type} · ${entry.isActive ? "active" : "preserved branch"}`,
-						`parent: ${entry.parentId ?? "root"}${entry.isLeaf ? " · leaf" : ""}`,
-						entry.text ?? "(no text preview)",
-					]);
+					openEntryActions(ctx, entry, tree.leafId);
 				}
 			},
 		});
@@ -126,7 +132,7 @@ function describeEntry(
 	const preview = (entry.text ?? entry.type).replace(/\s+/g, " ").slice(0, 100);
 	return {
 		value: entry.id,
-		label: `${"  ".repeat(depth)}${depth > 0 ? "└─ " : ""}${entry.role ?? entry.type}: ${preview}`,
+		label: `${"  ".repeat(depth)}${depth > 0 ? "└─ " : ""}${entry.label ? `[${entry.label}] ` : ""}${entry.role ?? entry.type}: ${preview}`,
 		description: `${entry.isActive ? "active" : "branch"}${entry.isLeaf ? " · leaf" : ""} · ${entry.id}`,
 	};
 }
@@ -370,4 +376,169 @@ function failure(ctx: CommandContext, operation: string, error: unknown, mutatio
 		`session ${operation} did not complete (${errorCode(error)}); no local history or draft was discarded${unsafe ? ". The remote outcome is uncertain; inspect /tree and the affected files before retrying." : ""}`,
 		"error",
 	);
+}
+
+/** The per-entry action picker `/tree` opens; every mutation goes through a typed method. */
+function openEntryActions(
+	ctx: CommandContext,
+	entry: SessionTreeEntry,
+	leafId: string | null,
+): void {
+	const canNavigate = ctx.methods.supports(METHOD.sessionsNavigate) && entry.id !== leafId;
+	const items: PickerChoice[] = [{ value: "inspect", label: "Inspect" }];
+	if (canNavigate) {
+		items.push({
+			value: "switch",
+			label: "Switch active branch here",
+			description: "the abandoned branch stays in /tree",
+		});
+		if (!entry.isActive) {
+			items.push({
+				value: "switch-summarize",
+				label: "Switch here and summarize the abandoned branch",
+				description: "summary is generated in the background by a loaded session",
+			});
+		}
+	}
+	if (ctx.methods.supports(METHOD.sessionsLabel)) {
+		items.push({ value: "label", label: "Set label" });
+		if (entry.label)
+			items.push({ value: "unlabel", label: "Clear label", description: entry.label });
+	}
+	if (ctx.methods.supports(METHOD.sessionsFork) && ctx.ui.openFork) {
+		items.push({
+			value: "fork",
+			label: "Fork a new session from here",
+			description: "history up to and including this entry",
+		});
+	}
+	const sessionKey = ctx.session.key;
+	ctx.ui.openPicker({
+		title: `entry ${entry.id} · ${entry.role ?? entry.type}${entry.label ? ` · ${entry.label}` : ""}`,
+		detail: [(entry.text ?? "(no text preview)").replace(/\s+/g, " ").slice(0, 200)],
+		items,
+		footer: "enter selects · esc cancels",
+		onSelect: async (choice) => {
+			if (!items.some((item) => item.value === choice.value)) return;
+			if (choice.value !== "inspect" && ctx.store.focusedKey !== sessionKey) {
+				ctx.ui.notice("action canceled because the focused session changed", "warning");
+				return;
+			}
+			switch (choice.value) {
+				case "inspect":
+					ctx.ui.noticeBlock([
+						`entry ${entry.id} · ${entry.role ?? entry.type} · ${entry.isActive ? "active" : "preserved branch"}${entry.label ? ` · label: ${entry.label}` : ""}`,
+						`parent: ${entry.parentId ?? "root"}${entry.isLeaf ? " · leaf" : ""}`,
+						entry.text ?? "(no text preview)",
+					]);
+					return;
+				case "switch":
+				case "switch-summarize":
+					await switchBranch(ctx, entry, choice.value === "switch-summarize");
+					return;
+				case "label":
+					if (ctx.ui.getDraft().trim() === "") {
+						ctx.ui.setDraft(`/tree label ${entry.id} `);
+						ctx.ui.notice(
+							"type the label after the entry id and press enter (empty text is refused)",
+						);
+					} else {
+						ctx.ui.notice(`label this entry with: /tree label ${entry.id} <text>`);
+					}
+					return;
+				case "unlabel":
+					await setLabel(ctx, entry.id, null);
+					return;
+				case "fork":
+					await forkSession(ctx, entry.id);
+					return;
+			}
+		},
+	});
+}
+
+async function switchBranch(
+	ctx: CommandContext,
+	entry: SessionTreeEntry,
+	summarize: boolean,
+): Promise<void> {
+	if (ctx.session.busy) {
+		ctx.ui.notice("stop the current run before switching branches", "warning");
+		return;
+	}
+	if (!ctx.ui.reloadSession) {
+		ctx.ui.notice("this client cannot reload a switched session", "error");
+		return;
+	}
+	const sessionKey = ctx.session.key;
+	try {
+		const result = await ctx.methods.sessionsNavigate({
+			sessionKey,
+			cwd: ctx.cwd ?? process.cwd(),
+			entryId: entry.id,
+			summarize,
+		});
+		if (result.sessionKey !== sessionKey || result.entryId !== entry.id) {
+			ctx.ui.notice(
+				"branch switch outcome could not be verified; inspect /tree before doing anything else",
+				"error",
+			);
+			return;
+		}
+		ctx.ui.resetSession?.(sessionKey);
+		const recalled = typeof result.prompt === "string" && result.prompt.length > 0;
+		const draftFree = ctx.store.focusedKey !== sessionKey || ctx.ui.getDraft().trim() === "";
+		if (recalled && draftFree) {
+			ctx.store.setDraft(sessionKey, result.prompt!);
+			if (ctx.store.focusedKey === sessionKey) ctx.ui.setDraft(result.prompt!);
+		}
+		try {
+			await ctx.ui.reloadSession(sessionKey);
+			const lines = [
+				`switched active branch to ${entry.id}${recalled && draftFree ? " · edit the recalled prompt to continue" : ""}`,
+			];
+			if (summarize) {
+				lines.push(
+					result.summarizing
+						? "the abandoned branch is being summarized in the background"
+						: "abandoned-branch summary skipped: the session is not loaded",
+				);
+			}
+			if (recalled && !draftFree) {
+				lines.push("your draft was kept; the selected prompt was:", result.prompt!);
+			}
+			ctx.ui.noticeBlock(lines);
+		} catch (error) {
+			ctx.ui.notice(
+				`branch switched; history reload failed (${errorCode(error)}). Use /resume to reload.`,
+				"warning",
+			);
+		}
+	} catch (error) {
+		failure(ctx, "switch", error, true);
+	}
+}
+
+async function setLabel(ctx: CommandContext, entryId: string, label: string | null): Promise<void> {
+	if (!ctx.methods.supports(METHOD.sessionsLabel)) {
+		ctx.ui.notice("this daemon does not support entry labels", "warning");
+		return;
+	}
+	const sessionKey = ctx.session.key;
+	try {
+		const result = await ctx.methods.sessionsLabel({
+			sessionKey,
+			cwd: ctx.cwd ?? process.cwd(),
+			entryId,
+			label,
+		});
+		if (result.sessionKey !== sessionKey || result.entryId !== entryId) {
+			throw new Error("unexpected label receipt");
+		}
+		ctx.ui.notice(
+			result.label ? `labelled ${entryId}: ${result.label}` : `cleared the label of ${entryId}`,
+		);
+	} catch (error) {
+		failure(ctx, "label", error);
+	}
 }

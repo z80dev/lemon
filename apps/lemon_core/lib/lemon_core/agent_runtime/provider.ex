@@ -45,8 +45,27 @@ defmodule LemonCore.AgentRuntime.Provider do
   @doc "Forks native session state into an independent destination resume mapping."
   @callback session_fork(session_key(), Path.t(), session_key()) :: :ok | {:error, term()}
 
+  @doc """
+  Like `c:session_fork/3`, with options. `:entry_id` forks the history ending at
+  that entry instead of at the current leaf.
+  """
+  @callback session_fork(session_key(), Path.t(), session_key(), keyword()) ::
+              :ok | {:error, term()}
+
   @doc "Returns a bounded native tree page with string-keyed entries and branch summaries."
   @callback session_tree(session_key(), Path.t(), keyword()) :: {:ok, map()} | {:error, term()}
+
+  @doc """
+  Switches the active branch of a native session to an entry. Options:
+  `:summarize` (default false) asks a live session to summarize the abandoned
+  branch in the background. Refuses a streaming session with `{:error, :busy}`.
+  """
+  @callback session_navigate(session_key(), Path.t(), String.t(), keyword()) ::
+              {:ok, map()} | {:error, term()}
+
+  @doc "Sets (binary) or clears (nil) the bookmark label of a native session entry."
+  @callback session_label(session_key(), Path.t(), String.t(), String.t() | nil) ::
+              {:ok, map()} | {:error, term()}
 
   @doc """
   Previews or executes a confirmation-bound native session rewind.
@@ -158,7 +177,10 @@ defmodule LemonCore.AgentRuntime.Provider do
                       compact_session: 2,
                       session_history: 2,
                       session_fork: 3,
+                      session_fork: 4,
                       session_tree: 3,
+                      session_navigate: 4,
+                      session_label: 4,
                       session_rewind: 4,
                       session_create: 2,
                       session_plan: 4,

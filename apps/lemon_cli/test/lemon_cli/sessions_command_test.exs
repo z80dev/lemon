@@ -185,6 +185,23 @@ defmodule LemonCli.SessionsCommandTest do
     )
   end
 
+  test "html and jsonl exports reach the CLI intact and unknown formats fail",
+       %{session_key: session_key, run_id: run_id} do
+    seed_session(session_key, run_id, "<script>alert(1)</script>", "done")
+
+    html = run_json(["sessions", "export", session_key, "--format", "html", "--json"])
+    assert html["export"]["format"] == "html"
+    refute html["export"]["content"] =~ "<script"
+
+    jsonl = run_json(["sessions", "export", session_key, "--format", "jsonl", "--json"])
+    lines = String.split(jsonl["export"]["content"], "\n", trim: true)
+    assert Enum.map(lines, &Jason.decode!(&1)["type"]) == ["session", "run"]
+
+    capture_io(:stderr, fn ->
+      assert CLI.run(["sessions", "export", session_key, "--format", "pdf"]) != 0
+    end)
+  end
+
   test "prune requires exact preview parameters and verifies deletion",
        %{session_key: session_key, run_id: run_id} do
     now = System.system_time(:millisecond)

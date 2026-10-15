@@ -63,6 +63,23 @@ describe("parseSessionsContext", () => {
 		);
 	});
 
+	test("reads the optional session usage block and ignores malformed ones", () => {
+		const usage = parseSessionsContext(reportedContextFixture("s1"));
+		expect(usage.usage).toEqual({
+			tokens: 182_400,
+			costUsd: 0.4231,
+			input: 120_000,
+			output: 14_500,
+			cacheRead: 40_000,
+			cacheWrite: 7_900,
+			assistantMessages: 12,
+		});
+		expect(parseSessionsContext(estimatedContextFixture("s2")).usage).toBeUndefined();
+		const raw = reportedContextFixture("s1");
+		raw.usage = { tokens: "lots" };
+		expect(parseSessionsContext(raw).usage).toBeUndefined();
+	});
+
 	test("drops unknown category ids but keeps their tokens as an honest remainder", () => {
 		const raw = reportedContextFixture("s1");
 		const known = asArray(raw.categories).map((entry) => {

@@ -33,6 +33,8 @@ defmodule LemonCore.Config.Agent do
       enabled = true
       reserve_tokens = 16384
       keep_recent_tokens = 20000
+      # threshold_percent = 80     # optional: compact at this % of the context window
+      # threshold_tokens = 150000  # optional: fixed token threshold, overrides percent
 
       [runtime.retry]
       enabled = true
@@ -98,7 +100,9 @@ defmodule LemonCore.Config.Agent do
           compaction: %{
             enabled: boolean(),
             reserve_tokens: integer(),
-            keep_recent_tokens: integer()
+            keep_recent_tokens: integer(),
+            threshold_percent: 1..100 | nil,
+            threshold_tokens: pos_integer() | nil
           },
           retry: %{
             enabled: boolean(),
@@ -200,7 +204,11 @@ defmodule LemonCore.Config.Agent do
       keep_recent_tokens:
         Env.get(:lemon_compaction_keep_recent_tokens,
           default: compaction["keep_recent_tokens"] || 20_000
-        )
+        ),
+      # Optional; `nil` keeps the reserve-based threshold. Out-of-range values
+      # are reported by `Config.Validator.validate_agent/2`.
+      threshold_percent: compaction["threshold_percent"],
+      threshold_tokens: compaction["threshold_tokens"]
     }
   end
 
