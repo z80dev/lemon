@@ -139,9 +139,30 @@ defmodule CodingAgent.SessionAgentLoopTest do
 
   defp await_agent_end(session) do
     %{session_manager: %{header: %{id: session_id}}} = Session.get_state(session)
-    assert_receive {:session_event, ^session_id, {:agent_end, messages}}, 15_000
+    deadline = System.monotonic_time(:millisecond) + 15_000
+    messages = do_await_agent_end(session_id, deadline)
     wait_idle(session)
     messages
+  end
+
+  defp do_await_agent_end(session_id, deadline) do
+    remaining = deadline - System.monotonic_time(:millisecond)
+    assert remaining > 0, "Timed out waiting for session agent_end"
+
+    # Selective receive of only agent_end would retain progress events until the
+    # bounded subscription overflows and fences delivery of the terminal payload.
+    assert_receive {:session_event, ^session_id, event}, remaining
+
+    case event do
+      {:agent_end, messages} ->
+        messages
+
+      {:stream_resync, details} ->
+        flunk("Session subscription overflowed: #{inspect(details)}")
+
+      _ ->
+        do_await_agent_end(session_id, deadline)
+    end
   end
 
   defp wait_idle(session) do

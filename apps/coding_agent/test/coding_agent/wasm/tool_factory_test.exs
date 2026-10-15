@@ -15,8 +15,8 @@ defmodule CodingAgent.Wasm.ToolFactoryTest do
     def init(opts), do: {:ok, Map.new(opts)}
 
     @impl true
-    def handle_call({:invoke, tool, params_json, context_json}, _from, state) do
-      send(state.owner, {:fake_wasm_invoke, tool, params_json, context_json})
+    def handle_call({:invoke, tool, params_json, context_json, deadline, signal}, _from, state) do
+      send(state.owner, {:fake_wasm_invoke, tool, params_json, context_json, deadline, signal})
       {:reply, state.response, state}
     end
   end
@@ -229,7 +229,11 @@ defmodule CodingAgent.Wasm.ToolFactoryTest do
           nil
         )
 
-      assert_received {:fake_wasm_invoke, "telemetry_wasm", params_json, context_json}
+      assert_received {:fake_wasm_invoke, "telemetry_wasm", params_json, context_json, deadline,
+                       signal}
+
+      assert is_integer(deadline)
+      assert is_nil(signal)
       assert Jason.decode!(params_json) == %{"secret" => "do-not-leak"}
       assert is_binary(context_json)
 

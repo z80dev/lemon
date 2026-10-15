@@ -71,15 +71,22 @@ defmodule LemonScripts.LiveProviderOwnershipProbe do
       :logger.remove_handler(handler)
       records = drain(ref, [])
       wires = for {:wire, request} <- records, do: request
-      logs = for {:log, event} <- records, do: inspect(event)
+
+      logs =
+        for {:log, event} <- records,
+            do: inspect(event, limit: :infinity, printable_limit: :infinity)
+
+      # Tool-schema snapshots can exhaust Inspect's default limit before the
+      # terminal refusal or a private value. Probe predicates must scan it all.
+      event_text = inspect(events, limit: :infinity, printable_limit: :infinity)
       answered = answered?(events)
       refused = Enum.any?(events, &refusal?/1)
       completed = Enum.any?(events, &match?({:agent_end, _}, &1))
 
       credential_refusal =
-        String.contains?(inspect(events), "A resolved credential is required for provider")
+        String.contains?(event_text, "A resolved credential is required for provider")
 
-      leaked = Enum.any?(logs ++ [inspect(events)], &String.contains?(&1, @private))
+      leaked = Enum.any?(logs ++ [event_text], &String.contains?(&1, @private))
       a = Enum.filter(wires, &(&1.model == "gemma2-9b-it"))
       b = Enum.filter(wires, &(&1.model == "grok-3"))
       destination = Enum.filter(wires, &(&1.model == "fixture-keyless"))

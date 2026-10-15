@@ -1365,9 +1365,11 @@ the session is persisted. The smoke script is not part of the CI test lane.
 
 `MIX_ENV=test mix run --no-start scripts/live_provider_ownership_smoke.exs`
 exercises public native Session and Agent model switches, missing-selected-login
-refusal, successful keyless transitions, switch-then-fallback header isolation and
-same-provider rebinding with no caller headers and with genuine caller overrides,
-using fixture credentials and loopback HTTP only.
+refusal (including plan-role selection), successful keyless transitions,
+switch-then-fallback header isolation and same-provider rebinding with no caller
+headers and with genuine caller overrides, using fixture credentials and loopback
+HTTP only. Its refusal and credential-leak checks scan complete captured events
+and logs, including large tool-schema snapshots.
 
 Google Gemini CLI onboarding (`lemon model --provider gemini`, or
 `./bin/lemon model --provider gemini` from a checkout) resolves OAuth

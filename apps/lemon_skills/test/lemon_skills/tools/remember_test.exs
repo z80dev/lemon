@@ -129,7 +129,7 @@ defmodule LemonSkills.Tools.RememberTest do
              run(tool, %{"text" => "   "})
   end
 
-  test "project facts support exact add, duplicate, correction, and deletion", %{
+  test "project facts support exact and unique-substring correction, duplicates, and deletion", %{
     tool: tool,
     context: context,
     store: store,
@@ -144,8 +144,19 @@ defmodule LemonSkills.Tools.RememberTest do
     assert %{details: %{changed: false}} =
              run(tool, %{"target" => "project", "text" => fact})
 
-    assert {:error, _} =
-             run(tool, %{"target" => "project", "text" => corrected, "replaces" => "mix test"})
+    assert %{details: %{changed: true, action: "replace"}} =
+             run(tool, %{
+               "target" => "project",
+               "text" => "mix test apps/lemon_skills/test",
+               "replaces" => "mix test"
+             })
+
+    assert {:ok, [^corrected]} = Project.read(context, store: store)
+
+    assert %{details: %{changed: true, action: "replace"}} =
+             run(tool, %{"target" => "project", "text" => fact, "replaces" => corrected})
+
+    assert {:ok, [^fact]} = Project.read(context, store: store)
 
     assert %{details: %{changed: true, action: "replace"}} =
              run(tool, %{"target" => "project", "text" => corrected, "replaces" => fact})
@@ -158,6 +169,26 @@ defmodule LemonSkills.Tools.RememberTest do
              run(tool, %{"target" => "project", "replaces" => corrected})
 
     assert {:ok, []} = Project.read(context, store: store)
+  end
+
+  test "project replacements refuse missing or ambiguous substrings without mutating facts", %{
+    tool: tool,
+    context: context,
+    store: store
+  } do
+    facts = ["Run mix test from the umbrella root.", "Run mix test apps/lemon_memory/test."]
+
+    for fact <- facts do
+      assert %{details: %{changed: true, action: "add"}} =
+               run(tool, %{"target" => "project", "text" => fact})
+    end
+
+    for needle <- ["mix test", "mix format"] do
+      assert {:error, _} =
+               run(tool, %{"target" => "project", "text" => "New command.", "replaces" => needle})
+
+      assert {:ok, ^facts} = Project.read(context, store: store)
+    end
   end
 
   test "explicit null adds and deletes project facts without guessing replacement targets", %{

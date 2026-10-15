@@ -1025,6 +1025,8 @@ unsubscribe.()
 Both subscription modes bound delivery before the subscriber mailbox accepts an
 event. Overflow fences that subscription and explicitly requests recovery; it
 does not silently drop answer text and continue pretending the stream is whole.
+Consumers must continuously drain session events: selectively waiting only for
+`agent_end` leaves progress queued and can itself overflow the subscription.
 Session stream overflow always uses the resync strategy, not caller-selectable
 silent `drop_oldest`/`drop_newest` behavior. At most one compact
 `{:session_terminal, session_id, status}` notification is reserved after a direct

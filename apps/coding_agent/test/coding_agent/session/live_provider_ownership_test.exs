@@ -55,7 +55,10 @@ defmodule CodingAgent.Session.LiveProviderOwnershipTest do
     assert report.a_requests == 1
     assert report.selected_requests == 0
     assert report.refused
+    assert report.credential_refusal
+    refute report.answered
     assert report.journal_matches_selection
+    refute report.private_values_in_logs_or_events
     assert report.passed
   end
 

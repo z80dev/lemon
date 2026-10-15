@@ -76,7 +76,7 @@ defmodule CodingAgent.ExecutionNode.WorkerProcessTest do
     }
   end
 
-  test "advertises implemented v1 methods without changing runtime feature keys" do
+  test "advertises process v1 and native run v2 without changing runtime feature keys" do
     capabilities = Worker.capabilities()
 
     for method <- ~w(node.process.run node.process.get node.process.cancel) do
@@ -89,7 +89,9 @@ defmodule CodingAgent.ExecutionNode.WorkerProcessTest do
              }
     end
 
-    assert capabilities["coding_agent.run"]["version"] == 1
+    assert capabilities["coding_agent.run"]["version"] == 2
+    assert capabilities["coding_agent.run"]["executionContext"] == %{"version" => 1}
+    assert capabilities["coding_agent.run"]["nativePrivacyContext"] == %{"version" => 1}
     assert capabilities["node.shell.open"] == true
     assert capabilities["node.fs.read"] == true
 

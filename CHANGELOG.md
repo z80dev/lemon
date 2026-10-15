@@ -87,6 +87,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Provider-ownership probes inspect complete events and logs so large tool
+  schemas cannot hide credential refusal or leaked values. Integration tests
+  retain committed-output retry fences and drain bounded session subscriptions.
 - Native config-watcher crashes fall back to polling instead of shutting down
   the core application and its dependants.
 - Execution admission validates supplied tool policies and intersects inherited
