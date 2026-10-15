@@ -8,9 +8,7 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
-- Make coordinator active-session lifecycle tests deterministic with per-test
-  admission and explicit completion, timeout, cancellation and process-down fences
-  instead of racing short deadlines against shared session startup.
+### Added
 
 - Emit content-free tool-call start/stop/exception telemetry with native-unit
   duration, tool name, error outcome and timeout flag, including failed workers.
@@ -18,6 +16,12 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 - Add `report_issue` for short tool-misbehavior notes in a private, bounded
   session-local JSONL log, with timestamp and optional tool name. It requires
   no approval by default and makes no network requests.
+
+### Fixed
+
+- Make coordinator active-session lifecycle tests deterministic with per-test
+  admission and explicit completion, timeout, cancellation and process-down fences
+  instead of racing short deadlines against shared session startup.
 
 ---
 
