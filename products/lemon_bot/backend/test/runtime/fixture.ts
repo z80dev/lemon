@@ -123,6 +123,7 @@ export function fixture(): TestRuntimeFixture {
   };
   const lemon: ConnectedLemonService = {
     connected: true, methods: ['mcp.execution_names', 'chat.send', 'runs.receipt.get', 'agent.wait', 'chat.abort', 'node.secrets.set', 'node.shell.open', 'node.shell.input', 'node.shell.resize', 'node.shell.close', 'node.fs.write', 'node.fs.stat', 'nodes.list', 'node.capabilities.get', 'node.runtime.features'],
+    controller: { url: 'ws://127.0.0.1:4040/ws', state: 'connected', connectedAtMs: 1, lastDisconnectedAtMs: null, lastError: null, nextRetryAtMs: null, methodCount: 0 }, reconnect() {},
     async call<T>(method: string, params: Record<string, unknown> = {}, options = {}) { calls.push({ method, params, mutation: 'mutation' in options && options.mutation === true }); return await value.rpc(method, params) as T; },
     onEvent(listener) { eventListeners.add(listener); return () => { eventListeners.delete(listener); }; },
     onConnected(listener) { connectedListeners.add(listener); return () => { connectedListeners.delete(listener); }; },

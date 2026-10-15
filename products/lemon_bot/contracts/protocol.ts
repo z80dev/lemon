@@ -67,6 +67,28 @@ export interface PairingComplete extends Mutation { claimToken: string }
 /** Fixed nonce progresses/replays the same device/session until original pairing expiresAtMs; never mints a second credential. */
 export type PairingCompletion = { status: 'pending' | 'denied' | 'expired'; pairingId: ID; expiresAtMs: TimestampMs } | { status: 'connected'; auth: AuthResult; device: Device };
 export interface Capabilities { controlConnected: boolean; methods: string[]; stt: boolean; tts: boolean; imageGeneration: boolean; apns: boolean; webPush: boolean; vapidPublicKey: string | null; attachmentMaxBytes: number; videoMaxBytes: number; maxAttachments: number; minClientVersions: { web: string; macos: string; ios: string } }
+export type ControllerLinkState = 'connected' | 'connecting' | 'reconnecting' | 'rejected' | 'stopped';
+export type RuntimeAction = 'start' | 'stop' | 'restart';
+export interface InstanceStatus {
+  measuredAtMs: TimestampMs;
+  backend: { version: string; apiVersion: 1; startedAtMs: TimestampMs; publicUrl: string };
+  controller: { url: string; state: ControllerLinkState; connectedAtMs: TimestampMs | null; lastDisconnectedAtMs: TimestampMs | null; lastError: { code: string; message: string; atMs: TimestampMs } | null; nextRetryAtMs: TimestampMs | null; methodCount: number };
+  lemon: InstanceLemonStatus | null;
+  lemonUnavailableReason: string | null;
+  runtime: InstanceRuntime;
+}
+export interface InstanceLemonStatus {
+  version: string | null; uptimeMs: number | null; memoryMb: number | null;
+  connections: { active: number; operators: number; nodes: number } | null;
+  runs: { active: number; queued: number; completedToday: number } | null;
+  activeSessions: number | null;
+  channels: { configured: string[]; connected: string[] } | null;
+  skills: { installed: number; enabled: number } | null;
+  nodes: { total: number; online: number } | null;
+}
+export interface InstanceRuntime { controllable: boolean; reason: string | null; operation: RuntimeOperation | null }
+export interface RuntimeOperation { id: string; action: RuntimeAction; state: 'running' | 'succeeded' | 'failed'; startedAtMs: TimestampMs; completedAtMs: TimestampMs | null; exitCode: number | null; output: string }
+export interface RuntimeActionRequest extends Mutation { confirm?: boolean }
 export interface Machine extends Resource { nodeId: ID | null; nodeName: string; name: string; ownerUserId: ID; accessUserIds: ID[]; status: 'pending' | 'online' | 'offline' | 'revoked'; lastSeenAtMs: TimestampMs | null; labels: Record<string, string>; botIds: ID[] }
 export interface HostInfo { hostname: string; os: string; osVersion: string; arch: string; cpuCount: number; memTotalBytes: number; memFreeBytes: number; diskTotalBytes: number; diskFreeBytes: number; uptimeSec: number; lemonVersion: string; defaultCwd: string; user: string; measuredAtMs: TimestampMs }
 export interface MachineInvite extends Resource { machineId: ID; inviteCode: string; joinCommand: string; expiresAtMs: TimestampMs; status: 'pending' | 'joined' | 'expired' | 'revoked'; enrollment: 'invited' | 'waiting_for_join' | 'connecting' | 'verifying' | 'online' | 'expired' | 'failed' | 'revoked'; lastError: string | null }
@@ -618,6 +640,9 @@ export interface RestEndpoints {
   'POST /pairings/:id/deny': Endpoint<PairingDeny, Pairing>;
   'POST /pairings/:id/complete': Endpoint<PairingComplete, PairingCompletion>;
   'GET /capabilities': Endpoint<undefined, Capabilities>;
+  'GET /instance': Endpoint<undefined, InstanceStatus>;
+  'POST /instance/reconnect': Endpoint<Mutation, InstanceStatus>;
+  'POST /instance/runtime/:action': Endpoint<RuntimeActionRequest, RuntimeOperation>;
   'GET /sync': Endpoint<undefined, Snapshot>;
   'GET /machines': Endpoint<undefined, Page<Machine>, PageQuery>;
   'POST /machines': Endpoint<MachineAttach, MachineAttachResult>;
