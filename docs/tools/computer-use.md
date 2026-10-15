@@ -35,6 +35,7 @@ Optional settings:
 | `LEMON_COMPUTER_USE_LCU_ROOT` | `~/.local/share/lcu/current` (or `/opt/lcu/current`) | Installed LCU release. |
 | `LEMON_COMPUTER_USE_NODE` | `<root>/agent-tools/node/bin/node` | Node runtime for Lemon's bridge. |
 | `LEMON_COMPUTER_USE_CHROME` | `false` | Also control Chrome tabs (`lcu --chrome`); see [Chrome](#chrome). |
+| `LEMON_COMPUTER_USE_DECLINED_ORIGINS` | – | Extra website origins never approved, comma-separated. |
 
 When enabled, the runtime starts one bridge process at boot. Every session then
 gets the two tools below and a short **Computer use** system-prompt section
@@ -103,9 +104,13 @@ Lemon approval for tool `computer_use` with action `{"origin": "<origin>"}`.
 Any approval lets the agent use that site for the rest of the session, because
 the runtime remembers site decisions per session itself; a denial refuses it.
 Only exact `http(s)://host[:port]` origins are accepted; anything else is
-refused. Lemon's own local control-plane and web origins (`localhost`,
-`127.0.0.1` or `[::1]` on the configured control and web ports) are always
-declined. Page content is untrusted like every other result.
+refused. Lemon's own surfaces are always declined without asking, because
+they show Lemon approvals: the local control plane, Lemon Web and the Lemon Bot
+web development server (`localhost`, `127.0.0.1` or `[::1]` on the configured
+control and web ports and 4081), the Lemon Bot web client at
+`LEMON_BOT_PUBLIC_URL` when that is set in Lemon's environment, and any origins
+you list in `LEMON_COMPUTER_USE_DECLINED_ORIGINS` (comma-separated; use it for
+a Lemon Bot deployment whose backend runs elsewhere). Page content is untrusted like every other result.
 
 ## Turns and sessions
 

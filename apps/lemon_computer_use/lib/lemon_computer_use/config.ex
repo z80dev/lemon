@@ -93,6 +93,51 @@ defmodule LemonComputerUse.Config do
     end
   end
 
+  @doc """
+  Website origins computer use always declines, besides Lemon's local ports:
+  the Lemon Bot web client's origin (`LEMON_BOT_PUBLIC_URL`, which serves its
+  approvals surface) and any origins listed in
+  `LEMON_COMPUTER_USE_DECLINED_ORIGINS` (comma-separated) or
+  `config :lemon_computer_use, declined_origins: [...]`. Each entry is reduced
+  to its `scheme://host[:port]` origin; unparseable entries are ignored.
+  """
+  @spec declined_origins() :: [String.t()]
+  def declined_origins do
+    listed =
+      case env("LEMON_COMPUTER_USE_DECLINED_ORIGINS") do
+        nil -> []
+        value -> String.split(value, ",", trim: true)
+      end
+
+    configured =
+      case Application.get_env(@app, :declined_origins, []) do
+        list when is_list(list) -> list
+        _ -> []
+      end
+
+    [env("LEMON_BOT_PUBLIC_URL") | listed ++ configured]
+    |> Enum.flat_map(&origin_of/1)
+    |> Enum.uniq()
+  end
+
+  @doc false
+  @spec origin_of(term()) :: [String.t()]
+  def origin_of(value) when is_binary(value) do
+    case URI.parse(String.trim(value)) do
+      %URI{scheme: scheme, host: host, port: port}
+      when scheme in ["http", "https"] and is_binary(host) and host != "" ->
+        bracketed = if String.contains?(host, ":"), do: "[" <> host <> "]", else: host
+        default = if scheme == "https", do: 443, else: 80
+        suffix = if port in [nil, default], do: "", else: ":" <> Integer.to_string(port)
+        [scheme <> "://" <> String.downcase(bracketed) <> suffix]
+
+      _ ->
+        []
+    end
+  end
+
+  def origin_of(_value), do: []
+
   defp env(name) do
     case System.get_env(name) do
       value when is_binary(value) ->
