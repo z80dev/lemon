@@ -7,6 +7,8 @@ defmodule LemonControlPlane.Methods.CronUpdate do
 
   @behaviour LemonControlPlane.Method
 
+  require Logger
+
   @impl true
   def name, do: "cron.update"
 
@@ -43,7 +45,11 @@ defmodule LemonControlPlane.Methods.CronUpdate do
           {:error, {:invalid_request, reason, nil}}
 
         {:error, reason} ->
-          {:error, {:internal_error, inspect(reason), nil}}
+          Logger.warning("Could not update cron job: #{inspect(reason)}")
+
+          {:error,
+           {:internal_error, "Could not update cron job. Run `lemon doctor` before trying again.",
+            nil}}
       end
     end
   end

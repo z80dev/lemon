@@ -7,6 +7,8 @@ defmodule LemonControlPlane.Methods.CronAbort do
 
   @behaviour LemonControlPlane.Method
 
+  require Logger
+
   @impl true
   def name, do: "cron.abort"
 
@@ -35,7 +37,12 @@ defmodule LemonControlPlane.Methods.CronAbort do
           {:error, {:invalid_request, "Cron run is not active: #{run_id}", nil}}
 
         {:error, reason} ->
-          {:error, {:internal_error, inspect(reason), nil}}
+          Logger.warning("Could not abort cron run: #{inspect(reason)}")
+
+          {:error,
+           {:internal_error,
+            "Could not abort cron run. Run `lemon doctor` and check its status before trying again.",
+            nil}}
       end
     end
   end

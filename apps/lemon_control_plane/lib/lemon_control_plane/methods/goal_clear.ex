@@ -5,6 +5,8 @@ defmodule LemonControlPlane.Methods.GoalClear do
 
   @behaviour LemonControlPlane.Method
 
+  require Logger
+
   @impl true
   def name, do: "goal.clear"
 
@@ -24,7 +26,10 @@ defmodule LemonControlPlane.Methods.GoalClear do
            %{"sessionKey" => session_key, "cleared" => true, "summary" => summary(session_key)}}
 
         {:error, reason} ->
-          {:error, {:internal_error, inspect(reason), nil}}
+          Logger.warning("Could not clear goal: #{inspect(reason)}")
+
+          {:error,
+           {:internal_error, "Could not clear goal. Run `lemon doctor` before trying again.", nil}}
       end
     end
   end

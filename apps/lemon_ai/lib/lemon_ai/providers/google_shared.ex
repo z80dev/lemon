@@ -673,15 +673,23 @@ defmodule LemonAi.Providers.GoogleShared do
   contain only bounded actionable summaries, never response bodies, credentials
   or transport structs. Pass a normalized body from `normalize_http_error_body/1`.
   """
-  @spec safe_http_error(non_neg_integer(), String.t(), map() | [{term(), term()}]) ::
+  @spec safe_http_error(
+          non_neg_integer(),
+          String.t(),
+          map() | [{term(), term()}],
+          atom() | String.t() | nil
+        ) ::
           LemonAi.Error.parsed_error()
-  def safe_http_error(status, body, headers \\ %{}) do
-    details = LemonAi.Error.parse_http_error(status, body, headers)
+  def safe_http_error(status, body, headers \\ %{}, provider \\ nil) do
+    details = LemonAi.Error.parse_http_error(status, body, headers, provider)
 
     summary =
       case details.category do
         :auth ->
-          "Authentication failed; sign in again."
+          if is_nil(provider),
+            do: "Authentication failed; sign in again.",
+            else:
+              "Authentication failed for #{provider}; sign in again or run `lemon secrets set` to configure credentials."
 
         :context_length ->
           "Context length exceeded; compact or shorten the request."

@@ -164,6 +164,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Chat, task, provider and goal/cron failures use plain-language recovery steps
+  instead of raw Elixir terms; provider authentication names the credential to
+  check, and Discord approvals distinguish expired controls from unavailable service.
 - Configuration commands reject malformed TOML with file-specific guidance,
   doctor continues after failed checks, and CLI validation and migration show
   actionable recovery steps instead of internal error terms.

@@ -1,6 +1,8 @@
 defmodule CodingAgent.Tools.Task.Result do
   @moduledoc false
 
+  require Logger
+
   alias LemonAgent.Types.AgentToolResult
   alias LemonAi.Types.TextContent
   alias CodingAgent.RunGraph
@@ -704,5 +706,9 @@ defmodule CodingAgent.Tools.Task.Result do
   end
 
   defp format_error(reason) when is_binary(reason), do: reason
-  defp format_error(reason), do: inspect(reason)
+
+  defp format_error(reason) do
+    Logger.warning("Task failed: #{inspect(reason)}")
+    "The task failed unexpectedly. Run `lemon doctor` before trying again."
+  end
 end

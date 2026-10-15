@@ -799,8 +799,28 @@ defmodule LemonChannels.Adapters.Discord.Transport do
           :ok ->
             acknowledge_interaction(interaction)
 
-          _ ->
-            respond_ephemeral(interaction, "Approval rejected or unavailable; request unchanged")
+          {:error, reason} when reason in [:not_pending, :expired, :already_resolved] ->
+            respond_ephemeral(
+              interaction,
+              "This approval is no longer pending; nothing changed. Submit a new request if approval is still needed."
+            )
+
+          {:error, reason}
+          when reason in [
+                 :rejected,
+                 :invalid_callback,
+                 :wrong_target,
+                 :invalid_target,
+                 :invalid_pending
+               ] ->
+            respond_ephemeral(
+              interaction,
+              "This approval cannot be used here; nothing changed. Open the approval in its original conversation."
+            )
+
+          error ->
+            Logger.warning("Discord approval unavailable: #{inspect(error)}")
+            respond_ephemeral(interaction, "Approval is unavailable right now. Try again.")
         end
 
         state
@@ -1947,7 +1967,13 @@ defmodule LemonChannels.Adapters.Discord.Transport do
           state
 
         {:error, reason} ->
-          send_followup(interaction, "Failed to create thread: #{inspect(reason)}")
+          Logger.warning("Discord thread creation failed: #{inspect(reason)}")
+
+          send_followup(
+            interaction,
+            "Failed to create thread. Check that the bot can create threads in this channel, then try again."
+          )
+
           state
       end
     end

@@ -469,10 +469,12 @@ defmodule CodingAgent.Session.RunTranslator do
 
   def handle_session_down(%__MODULE__{} = t, reason) do
     if t.started_emitted and not t.completed_emitted do
+      Logger.warning("Session stopped: #{inspect(reason)}")
+
       error =
         if t.cancel_reason,
           do: Presentation.cancel_error_message(t.cancel_reason),
-          else: "Session terminated: #{inspect(reason)}"
+          else: "The session stopped unexpectedly. Send your message again to retry."
 
       emit_completed_error(t, error)
     else

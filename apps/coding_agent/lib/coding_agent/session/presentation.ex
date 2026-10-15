@@ -1249,7 +1249,7 @@ defmodule CodingAgent.Session.Presentation do
 
   def format_error(reason, _state) when is_binary(reason), do: reason
 
-  def format_error(reason, _state)
+  def format_error(reason, state)
       when reason in [
              :rate_limited,
              :max_concurrency,
@@ -1259,15 +1259,20 @@ defmodule CodingAgent.Session.Presentation do
              :econnreset,
              :nxdomain
            ] do
-    LemonAi.Error.format_error(reason)
+    LemonAi.Error.format_error(reason, current_provider(state))
   end
 
-  def format_error({:http_error, _status, _body} = reason, _state),
-    do: LemonAi.Error.format_error(reason)
+  def format_error({:http_error, _status, _body} = reason, state),
+    do: LemonAi.Error.format_error(reason, current_provider(state))
 
   def format_error({:error, reason}, state), do: format_error(reason, state)
   def format_error(reason, _state) when is_atom(reason), do: Atom.to_string(reason)
-  def format_error(reason, _state), do: inspect(reason)
+
+  def format_error(reason, _state) do
+    Logger.warning("Session request failed: #{inspect(reason)}")
+
+    "Something went wrong while running the request. Try again; if it keeps happening, run `lemon doctor`."
+  end
 
   def cancel_error_message(:user_requested), do: "Cancelled by user"
   def cancel_error_message(reason), do: "Cancelled: #{format_error(reason, %{})}"
@@ -1396,18 +1401,22 @@ defmodule CodingAgent.Session.Presentation do
   defp format_circuit_failure_reason(nil), do: nil
 
   defp format_circuit_failure_reason({:stream_tracking_start_failed, reason}) do
-    "stream tracking start failed: #{format_circuit_failure_reason(reason) || inspect(reason)}"
+    "Stream tracking could not start. #{format_circuit_failure_reason(reason) || "Run `lemon doctor`."}"
   end
 
   defp format_circuit_failure_reason({:stream_tracking_exception, message})
        when is_binary(message),
        do: message
 
-  defp format_circuit_failure_reason({:stream_tracking_exit, reason}),
-    do: "stream tracking exited: #{inspect(reason)}"
+  defp format_circuit_failure_reason({:stream_tracking_exit, reason}) do
+    Logger.warning("Stream tracking exited: #{inspect(reason)}")
+    "Stream tracking stopped unexpectedly. Run `lemon doctor`."
+  end
 
-  defp format_circuit_failure_reason({:unexpected_stream_result, result}),
-    do: "unexpected stream result: #{inspect(result)}"
+  defp format_circuit_failure_reason({:unexpected_stream_result, result}) do
+    Logger.warning("Unexpected stream result: #{inspect(result)}")
+    "The provider returned an unexpected response. Run `lemon doctor`."
+  end
 
   defp format_circuit_failure_reason({:exception, message}) when is_binary(message), do: message
 
@@ -1422,7 +1431,11 @@ defmodule CodingAgent.Session.Presentation do
     do: LemonAi.Error.format_error(reason)
 
   defp format_circuit_failure_reason(reason) when is_atom(reason), do: Atom.to_string(reason)
-  defp format_circuit_failure_reason(reason), do: inspect(reason)
+
+  defp format_circuit_failure_reason(reason) do
+    Logger.warning("Circuit failure: #{inspect(reason)}")
+    "The provider request failed. Run `lemon doctor`."
+  end
 
   defp current_provider(%{session: session}) when is_pid(session) do
     case Process.alive?(session) do
