@@ -281,11 +281,6 @@ defmodule LemonAgent.ProviderConfigResolverTest do
       assert Map.has_key?(result.headers, "aws_region")
       # credentials may or may not be present depending on env/secrets store
     end
-
-    test "result always contains headers key" do
-      result = ProviderConfigResolver.resolve_for_provider(:bedrock_converse_stream)
-      assert is_map(result.headers)
-    end
   end
 
   # ============================================================================

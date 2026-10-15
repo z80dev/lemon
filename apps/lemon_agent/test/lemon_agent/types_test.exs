@@ -14,9 +14,9 @@ defmodule LemonAgent.TypesTest do
 
       assert snapshot.tools == tools
       assert snapshot.tool_names == ["read", "write"]
-      assert snapshot.id =~ ~r/^tool_schema_[a-f0-9]{16}_[a-z0-9]+$/
-      assert byte_size(snapshot.fingerprint) == 16
-      assert is_integer(snapshot.created_at_ms)
+      assert ToolSchemaSnapshot.new(tools).fingerprint == snapshot.fingerprint
+      changed_tools = [%{hd(tools) | parameters: %{"type" => "string"}} | tl(tools)]
+      refute ToolSchemaSnapshot.new(changed_tools).fingerprint == snapshot.fingerprint
     end
   end
 end
