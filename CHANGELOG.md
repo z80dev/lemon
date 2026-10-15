@@ -15,6 +15,11 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Changed
 
+- Lemon Bot web explains channel and X setup, terminal access, file uploads and
+  machine-operation progress in plain language. Memory sources have descriptive
+  links, template identifiers stay under Details, and machine measurements
+  become visibly out of date while their page remains open.
+
 - Clarify Lemon Bot web notification setup and browser registration, distinguish
   server and browser voice samples, and use plain-language microphone guidance.
   Owner settings now name Network access, Startup scripts and Spend limits
