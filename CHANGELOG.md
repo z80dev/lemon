@@ -8,7 +8,13 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
-No unreleased changes yet.
+### Added
+
+- Computer use can be configured in `[runtime.tools.computer_use]` (`enabled`,
+  `chrome`, `lcu_root`, `node`, `declined_origins`); environment variables still
+  take precedence. Execution-node capability inspection reports a
+  `computer_use` item, and tool cards and approvals name the computer-use
+  action, app or site.
 
 ---
 

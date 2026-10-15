@@ -20,6 +20,41 @@ defmodule LemonComputerUse.ApplicationTest do
     assert List.last(LemonComputerUse.Config.command()) == "--chrome"
   end
 
+  test "the config file section is read below the environment" do
+    on_exit(fn ->
+      System.delete_env("LEMON_COMPUTER_USE_ENABLED")
+      LemonCore.Config.reload()
+    end)
+
+    dir = LemonCore.Paths.global_config() |> Path.dirname()
+    File.mkdir_p!(dir)
+    path = LemonCore.Paths.global_config()
+    original = File.read(path)
+
+    on_exit(fn ->
+      case original do
+        {:ok, body} -> File.write!(path, body)
+        _ -> File.rm(path)
+      end
+    end)
+
+    File.write!(path, """
+    [runtime.tools.computer_use]
+    enabled = true
+    chrome = true
+    declined_origins = ["https://bot.example.ts.net"]
+    """)
+
+    LemonCore.Config.reload()
+
+    assert LemonComputerUse.Config.enabled?()
+    assert LemonComputerUse.Config.chrome?()
+    assert "https://bot.example.ts.net" in LemonComputerUse.Config.declined_origins()
+
+    System.put_env("LEMON_COMPUTER_USE_ENABLED", "false")
+    refute LemonComputerUse.Config.enabled?()
+  end
+
   test "the environment switch overrides application config" do
     on_exit(fn -> System.delete_env("LEMON_COMPUTER_USE_ENABLED") end)
     System.put_env("LEMON_COMPUTER_USE_ENABLED", "true")
