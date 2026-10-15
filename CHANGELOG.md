@@ -8,7 +8,13 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
-No unreleased changes yet.
+### Fixed
+
+- Lemon Bot standalone backend/web release artifacts now build with the Bun
+  version their lockfiles require (`products/lemon_bot/.bun-version`). The
+  2026.10.7 tag was cut but never published because those artifacts failed to
+  build; this release publishes everything listed under 2026.10.7, including
+  the first owner-only Lemon Bot preview and the secure host join flow.
 
 ---
 
