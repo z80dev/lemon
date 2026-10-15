@@ -326,23 +326,6 @@ defmodule LemonCore.Config.Validator do
 
   defp validate_task_config(errors, _task), do: ["runtime.task: must be a table" | errors]
 
-  defp validate_compaction_thresholds(errors, %{} = compaction) do
-    percent = Map.get(compaction, :threshold_percent)
-
-    errors =
-      if is_nil(percent) or (is_integer(percent) and percent in 1..100),
-        do: errors,
-        else: ["agent.compaction.threshold_percent: must be an integer from 1 to 100" | errors]
-
-    validate_positive_integer(
-      errors,
-      Map.get(compaction, :threshold_tokens),
-      "agent.compaction.threshold_tokens"
-    )
-  end
-
-  defp validate_compaction_thresholds(errors, _compaction), do: errors
-
   @doc """
   Validates gateway configuration.
 
