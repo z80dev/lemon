@@ -93,7 +93,12 @@ tools/diagrams/output/
 
 # IDE/tool caches
 .expert/
-.factory/
+# Other tools keep caches in .factory/; only the Lemon factory's reviewed files are tracked.
+.factory/*
+!.factory/project.json
+!.factory/charter.md
+!.factory/policy.example.json
+!.factory/seed-work.json
 .agents/
 .pi/
 skills-lock.json

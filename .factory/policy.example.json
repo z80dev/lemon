@@ -1,0 +1,18 @@
+{
+  "allow_unreleased": false,
+  "fetch_base": true,
+  "implementation_slots": 1,
+  "review_slots": 1,
+  "reserved_repair_slots": 1,
+  "heavy_beam_slots": 1,
+  "max_ready_backlog": 3,
+  "max_repair_attempts": 2,
+  "automatic_ci_reruns": 0,
+  "merge_policy": "manual",
+  "release_policy": "manual",
+  "paid_benchmarks": "forbidden",
+  "omp": {
+    "extra_args": [],
+    "env": {}
+  }
+}

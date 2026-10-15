@@ -1,0 +1,72 @@
+{
+  "source": {
+    "kind": "plan_section",
+    "document": "lemon-factory-implementation-plan.md",
+    "design_date": "2026-10-15",
+    "approved_sections": ["15 P04", "15 P05", "15 P06", "15 P07", "15 P08"]
+  },
+  "packets": [
+    {
+      "key": "P04",
+      "title": "P04: one task through a genuine handoff",
+      "priority": "high",
+      "request": "Add atomic reservation, native-task adapter, source isolation, retained refs, evidence records, worker outcomes, and scoped review. Run one real low-risk Lemon task to an honest review/verification handoff. Do not introduce broad parallelism until this works.",
+      "acceptance": [
+        "Completed worker output is imported into a stable factory/<task>/<attempt> ref bound to the validated commit, tree and base, never a reported SHA.",
+        "A check runner records command, cwd, source identity, dirty status, toolchain, timestamps, exit status and retained redacted logs; results are reused only when inputs match.",
+        "Review findings are persisted with evidence and disposition; repairs supersede rather than overwrite receipts.",
+        "One real low-risk Lemon task reaches READY with honest review/verification evidence."
+      ]
+    },
+    {
+      "key": "P05",
+      "title": "P05: parallelism and predictable verification",
+      "priority": "normal",
+      "request": "Enable the small initial WIP limits, overlap checks, resource queue, build-process cleanup, request/runtime budgets, and changelog fragments. Prove three independent edits do not create shared-file churn or simultaneous shared-build writers. Failures must preserve work and get a named owner.",
+      "acceptance": [
+        "Three independent edits run concurrently without shared-file churn or simultaneous shared-build writers.",
+        "A killed runner's descendants are reconciled or terminated before build capacity is reused.",
+        "Request/runtime budgets are enforced locally and missing cost counters are reported as unknown, not zero.",
+        "Per-task changelog fragments are aggregated deterministically."
+      ],
+      "depends_on": ["P04"]
+    },
+    {
+      "key": "P06",
+      "title": "P06: CI observation and bounded repair",
+      "priority": "normal",
+      "request": "Extend the existing failure reporter, add exact-identity CI observation, classify waiting versus failure, deduplicate triage, and route repairs. Keep automatic reruns and merges off initially. Test stale runs, absent lanes, cancellation, rate limits, inherited-failure ambiguity, and one actual failure/repair cycle.",
+      "acceptance": [
+        "CI evidence binds repository, PR head, base, tested SHA, workflow identity, run ID, attempt, lanes and conclusion.",
+        "An old failure arriving after a new head cannot change the new head's status or cause duplicate repair.",
+        "Queued, cancelled, missing and timed-out results are never reported green.",
+        "One actual failure/repair cycle completes with automatic reruns and merges still off."
+      ],
+      "depends_on": ["P04"]
+    },
+    {
+      "key": "P07",
+      "title": "P07: source imports and selected integration policy",
+      "priority": "normal",
+      "request": "Add explicit issue/plan import, safe refresh/amendments, and the configured approval/integration path. Re-check live repository governance and the audit's CI gaps. Demonstrate a completed user outcome after merge verification, not just a stack of worker receipts.",
+      "acceptance": [
+        "Issue imports store repository/issue identity, fetched revision, content digest and source text; refreshes of in-progress work become amendments.",
+        "Untrusted issue or log text cannot grant new authority.",
+        "Integration rechecks current task/head, review dispositions, gates, main health and live protections; no admin fallback.",
+        "One completed user outcome is demonstrated after merge verification."
+      ],
+      "depends_on": ["P05", "P06"]
+    },
+    {
+      "key": "P08",
+      "title": "P08: operate, measure, then optimize",
+      "priority": "low",
+      "request": "Run five ordinary improvements through the system. Compare human interventions, end-to-end lead time, READY-to-land time, repairs, conflicts, and escapes. Only then add candidate batching, more slots, another host, stronger cache reuse, or another harness adapter when a measured bottleneck justifies it.",
+      "acceptance": [
+        "Five ordinary improvements have run through the factory with recorded interventions, lead time, READY-to-land time, repairs, conflicts and escapes.",
+        "Any optimization added is justified by a measured bottleneck."
+      ],
+      "depends_on": ["P07"]
+    }
+  ]
+}
