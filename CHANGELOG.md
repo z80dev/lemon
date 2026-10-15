@@ -11,6 +11,7 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 ### Lemon Bot
 
 - Apple clients recover from failed Bot loads and terminal closes, explain unavailable actions, preserve Preferences across pane switches, and confirm sign-out.
+- Web Settings adds Lemon instance details, live service/link/runtime measurements, owner-confirmed lifecycle controls and operation output, with direct recovery and About links.
 - Apple clients use plain-language errors with copyable details, clearer iPhone pairing labels, and status checks for unconfirmed actions without automatically resending them.
 - Web clients explain service, network, session and Lemon-link failures with live retry timing, real connection restart and owner recovery actions instead of silent sign-out or stuck disconnected screens.
 - Apple Settings adds a shared Lemon instance pane with live backend/controller/Lemon measurements, owner-confirmed start/stop/restart, operation polling and output details, plus direct recovery/About links.
@@ -25,6 +26,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Added
 
+- omp task subagents expose bounded activity, tool counts, tokens/cost, model,
+  duration, final output and retry errors in status and streamed progress.
+  Owner-scoped `LemonOmp.subagent/3` and the `omp` tool's `subagent` action read
+  sanitized transcript tails from live parent sessions.
 - omp's chat tool and Elixir API can redirect a running turn atomically with
   `abort_and_prompt`. Existing waits follow the replacement turn; asynchronous
   prompt failures are reported without acknowledging the same command twice.

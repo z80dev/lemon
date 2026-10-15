@@ -243,8 +243,9 @@ defmodule LemonOmp.Projection do
   defp event(state, "subagent_lifecycle", %{"payload" => payload}) when is_map(payload),
     do: upsert_subagent(state, payload, clean(payload["status"], 32))
 
-  defp event(state, "subagent_progress", %{"payload" => payload}) when is_map(payload),
-    do: upsert_subagent(state, payload, nil)
+  defp event(state, "subagent_progress", %{"payload" => %{"progress" => progress} = payload})
+       when is_map(progress),
+       do: upsert_subagent(state, payload, clean(progress["status"], 32))
 
   defp event(state, "agent_end", frame) do
     # The turn's verdict arrives next in `prompt_result` (or `session_settled`);
@@ -420,7 +421,19 @@ defmodule LemonOmp.Projection do
             "id" => sub.id,
             "agent" => sub.agent,
             "status" => sub.status,
-            "description" => sub.description
+            "description" => sub.description,
+            "index" => sub.index,
+            "parentToolCallId" => sub.parent_tool_call_id,
+            "activity" => sub.activity,
+            "toolCalls" => sub.tool_calls,
+            "recentTools" => sub.recent_tools,
+            "usage" => sub.usage,
+            "model" => sub.model,
+            "startedAt" => sub.started_at,
+            "endedAt" => sub.ended_at,
+            "durationMs" => sub.duration_ms,
+            "lastText" => sub.last_text,
+            "error" => sub.error
           }
         end),
       "usage" => %{
@@ -579,12 +592,22 @@ defmodule LemonOmp.Projection do
       Enum.map_join(todos, "\n", fn todo -> "  [#{todo["status"]}] #{todo["content"]}" end)
   end
 
-  defp subagents_line([]), do: nil
+  @doc "Compact per-subagent lines for status and streamed tool progress."
+  def subagents_summary([]), do: nil
 
-  defp subagents_line(subs) do
+  def subagents_summary(subs) do
     "Subagents: " <>
-      Enum.map_join(subs, ", ", fn sub -> "#{sub["agent"] || sub["id"]} (#{sub["status"]})" end)
+      Enum.map_join(subs, "\n  ", fn sub ->
+        detail = sub["activity"] || sub["error"] || sub["lastText"]
+        line = "#{sub["agent"] || sub["id"]} (#{sub["status"]})"
+        if detail, do: line <> " — " <> one_line(detail, 160), else: line
+      end)
   end
+
+  defp subagents_line(subs), do: subagents_summary(subs)
+
+  defp one_line(text, max),
+    do: text |> String.replace(~r/\s+/u, " ") |> clean(max)
 
   defp text_block(%{"status" => "running", "lastText" => text}) when is_binary(text),
     do: "Latest output:\n" <> text
@@ -697,11 +720,15 @@ defmodule LemonOmp.Projection do
   end
 
   defp upsert_subagent(state, payload, status) do
+    progress = if is_map(payload["progress"]), do: payload["progress"], else: %{}
+    id = blank_to_nil(clean(progress["id"] || payload["id"], 128))
+    index = payload["index"]
+
     key =
-      case {payload["index"], payload["id"]} do
-        {index, _} when is_integer(index) -> {:index, index}
-        {_, id} when is_binary(id) -> {:id, id}
-        _ -> nil
+      cond do
+        id -> {:id, id}
+        is_integer(index) and index >= 0 -> {:index, index}
+        true -> nil
       end
 
     cond do
@@ -718,22 +745,158 @@ defmodule LemonOmp.Projection do
             agent: nil,
             status: "running",
             description: nil,
+            index: nil,
+            parent_tool_call_id: nil,
+            activity: nil,
+            tool_calls: nil,
+            recent_tools: [],
+            usage: nil,
+            model: nil,
+            started_at: now_ms(),
+            ended_at: nil,
+            duration_ms: nil,
+            last_text: nil,
+            error: nil,
             order: map_size(state.subagents)
           })
 
+        status = normalize_subagent_status(status) || existing.status
+        terminal? = status in ["completed", "failed", "aborted"]
+        tool = clean(progress["currentTool"], 64)
+        intent = clean(progress["lastIntent"], @max_intent)
+
         updated = %{
           existing
-          | id: blank_to_nil(clean(payload["id"], 128)) || existing.id,
+          | id: id || existing.id,
+            index: if(is_integer(index) and index >= 0, do: index, else: existing.index),
+            parent_tool_call_id:
+              blank_to_nil(clean(payload["parentToolCallId"], 128)) ||
+                existing.parent_tool_call_id,
             agent: blank_to_nil(clean(payload["agent"], 64)) || existing.agent,
-            status: normalize_subagent_status(status) || existing.status,
+            status: status,
             description:
-              blank_to_nil(clean(payload["description"] || payload["task"], @max_intent)) ||
-                existing.description
+              blank_to_nil(
+                clean(
+                  progress["description"] || payload["description"] || payload["task"],
+                  @max_intent
+                )
+              ) || existing.description,
+            activity:
+              cond do
+                terminal? -> nil
+                tool != "" -> tool_activity(tool, intent)
+                intent != "" -> intent
+                progress != %{} -> nil
+                true -> existing.activity
+              end,
+            tool_calls: optional_int(progress["toolCount"]) || existing.tool_calls,
+            recent_tools: subagent_tools(progress["recentTools"], existing.recent_tools),
+            usage: subagent_usage(progress, existing.usage),
+            model:
+              model_label(
+                progress["resolvedModelIdentity"] || progress["resolvedModel"] ||
+                  progress["modelOverride"]
+              ) || existing.model,
+            ended_at: if(terminal?, do: existing.ended_at || now_ms(), else: nil),
+            duration_ms: optional_int(progress["durationMs"]) || existing.duration_ms,
+            last_text: subagent_output(progress["recentOutput"]) || existing.last_text,
+            error:
+              if progress == %{} do
+                existing.error
+              else
+                subagent_error(progress["retryFailure"]) || subagent_error(progress["retryState"])
+              end
         }
 
         %{state | subagents: Map.put(state.subagents, key, updated)}
     end
   end
+
+  defp subagent_error(%{"errorMessage" => message}),
+    do: blank_to_nil(clean(message, @max_error))
+
+  defp subagent_error(_failure), do: nil
+
+  defp subagent_tools(tools, _existing) when is_list(tools) do
+    tools
+    |> Enum.take(@max_recent_tools)
+    |> Enum.flat_map(fn
+      %{"tool" => tool} = entry ->
+        [%{"name" => clean(tool, 64), "endedAt" => optional_int(entry["endMs"])}]
+
+      _ ->
+        []
+    end)
+  end
+
+  defp subagent_tools(_tools, existing), do: existing
+
+  defp subagent_usage(progress, existing) do
+    # omp's tokens excludes cache reads; do not label this as totalTokens.
+    values =
+      %{
+        "tokens" => optional_int(progress["tokens"]),
+        "cost" => optional_number(progress["cost"]),
+        "contextTokens" => optional_int(progress["contextTokens"]),
+        "contextWindow" => optional_int(progress["contextWindow"])
+      }
+      |> Map.reject(fn {_key, value} -> is_nil(value) end)
+
+    if values == %{}, do: existing, else: Map.merge(existing || %{}, values)
+  end
+
+  defp subagent_output(lines) when is_list(lines) do
+    # omp sends up to eight recent lines, newest first.
+    lines
+    |> Enum.take(8)
+    |> Enum.reverse()
+    |> Enum.map(&clean(&1, 500))
+    |> Enum.join("\n")
+    |> clean(500)
+    |> blank_to_nil()
+  end
+
+  defp subagent_output(_lines), do: nil
+
+  @doc "Bound and sanitize a get_subagent_messages response, without exposing session paths."
+  @spec subagent_transcript(term(), pos_integer()) :: map()
+  def subagent_transcript(data, limit) do
+    data = if is_map(data), do: data, else: %{}
+    limit = min(max(limit, 1), 50)
+    messages = if is_list(data["messages"]), do: data["messages"], else: []
+
+    tail =
+      messages
+      |> Enum.take(-limit)
+      |> Enum.flat_map(fn
+        %{} = message ->
+          text =
+            case message["content"] do
+              text when is_binary(text) -> clean(text, 2_000)
+              _ -> message |> message_text() |> clean(2_000)
+            end
+
+          item = %{"role" => clean(message["role"], 32), "text" => text}
+          tool = blank_to_nil(clean(message["toolName"], 64))
+          [if(tool, do: Map.put(item, "toolName", tool), else: item)]
+
+        _ ->
+          []
+      end)
+
+    %{
+      "messages" => tail,
+      "fromByte" => optional_int(data["fromByte"]),
+      "nextByte" => optional_int(data["nextByte"]),
+      "reset" => data["reset"] == true
+    }
+  end
+
+  defp optional_int(value) when is_integer(value) and value >= 0, do: value
+  defp optional_int(_value), do: nil
+
+  defp optional_number(value) when is_number(value) and value >= 0, do: value
+  defp optional_number(_value), do: nil
 
   defp normalize_subagent_status("started"), do: "running"
   defp normalize_subagent_status(""), do: nil

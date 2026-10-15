@@ -23,7 +23,7 @@ defmodule LemonOmp.Tools.Omp do
   alias LemonAi.Types.TextContent
   alias LemonOmp.Projection
 
-  @actions ~w(models start start_many wait status list send cancel close resume discover)
+  @actions ~w(models start start_many wait status subagent list send cancel close resume discover)
   @default_wait_seconds 600
   @max_wait_seconds 3_600
 
@@ -37,7 +37,8 @@ defmodule LemonOmp.Tools.Omp do
   to block and stream progress until the turn ends), start_many (tasks: array of {prompt, optional \
   cwd/model/thinking/approval_mode/isolate}; starts parallel workers, wait=true gathers them all), wait (id, or ids with wait_for \
   "all" (default) or "any"; block until the turn(s) end), status (id; what the session is doing now: \
-  activity, tools, todos, usage/cost, latest output), list (sessions \
+  activity, tools, todos, subagents, usage/cost, latest output), subagent (id, subagent_id, optional limit \
+  default 20 max 50; read the subagent's transcript tail), list (sessions \
   this conversation started), send (id, message; mode "steer" interrupts the running turn, "follow_up" \
   queues after it, "redirect" stops the current turn and starts over with this message — use when omp is \
   going the wrong way; an idle session starts a new turn), cancel (id; abort the running turn, the session stays \
@@ -68,7 +69,8 @@ defmodule LemonOmp.Tools.Omp do
           "free_only" => %{"type" => "boolean", "description" => "models: only zero-cost models."},
           "limit" => %{
             "type" => "integer",
-            "description" => "models: result count (default 30, max 200)."
+            "description" =>
+              "models: result count (default 30, max 200). subagent: messages (default 20, max 50)."
           },
           "tasks" => %{
             "type" => "array",
@@ -133,6 +135,10 @@ defmodule LemonOmp.Tools.Omp do
               "start/start_many/resume: block until turns end, streaming progress (default false)."
           },
           "id" => %{"type" => "string", "description" => "Lemon omp session id (omp_…)."},
+          "subagent_id" => %{
+            "type" => "string",
+            "description" => "subagent: id from the session's subagents list."
+          },
           "ids" => %{
             "type" => "array",
             "minItems" => 1,
@@ -305,6 +311,40 @@ defmodule LemonOmp.Tools.Omp do
     case LemonOmp.get(id, scope) do
       {:ok, wire} -> session_result("status", wire, Projection.summary(wire))
       {:error, reason} -> error_result("status", reason)
+    end
+  end
+
+  defp run(
+         "subagent",
+         %{"id" => id, "subagent_id" => sub_id} = params,
+         scope,
+         _owner,
+         _signal,
+         _on_update,
+         _opts
+       )
+       when is_binary(id) and is_binary(sub_id) do
+    case LemonOmp.subagent(id, sub_id, Keyword.put(scope, :limit, params["limit"])) do
+      {:ok, transcript} ->
+        lines =
+          Enum.map(transcript["messages"], fn message ->
+            tool = if message["toolName"], do: " #{message["toolName"]}", else: ""
+            "[#{message["role"]}#{tool}]\n#{message["text"]}"
+          end)
+
+        text =
+          "omp subagent #{Projection.clean(sub_id, 128)} transcript tail:\n" <>
+            if(lines == [], do: "(no messages)", else: Enum.join(lines, "\n\n"))
+
+        result(text, %{
+          "action" => "subagent",
+          "id" => id,
+          "subagentId" => Projection.clean(sub_id, 128),
+          "transcript" => transcript
+        })
+
+      {:error, reason} ->
+        error_result("subagent", reason)
     end
   end
 
@@ -516,6 +556,7 @@ defmodule LemonOmp.Tools.Omp do
           Enum.filter(
             [
               "- #{wire["id"]} [#{wire["status"]}#{turn_suffix(wire)}] #{head}",
+              Projection.subagents_summary(wire["subagents"] || []),
               Projection.worktree_summary(wire["worktree"])
             ],
             &is_binary/1
@@ -577,7 +618,11 @@ defmodule LemonOmp.Tools.Omp do
       if((wire["pendingApprovals"] || []) != [],
         do: " (resolve via Lemon's approval prompts or exec.approval.resolve)",
         else: ""
-      )
+      ) <>
+      case Projection.subagents_summary(wire["subagents"] || []) do
+        nil -> ""
+        text -> "\n" <> text
+      end
   end
 
   defp activity_suffix(%{"activity" => activity}) when is_binary(activity), do: " — " <> activity
