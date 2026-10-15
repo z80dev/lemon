@@ -8,6 +8,12 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
+No unreleased changes yet.
+
+---
+
+## [2026.10.12]
+
 ### Added
 
 - Read `path:conflicts` to index Git conflict regions, then resolve a session-scoped
