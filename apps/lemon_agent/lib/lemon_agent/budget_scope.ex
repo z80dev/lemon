@@ -14,9 +14,10 @@ defmodule LemonAgent.BudgetScope do
   def start_link(opts), do: GenServer.start_link(__MODULE__, opts)
   def begin_run(pid), do: GenServer.call(pid, :begin_run)
   def attachment(pid), do: GenServer.call(pid, :attachment)
-  def check(nil), do: nil
-  def check({pid, _run}), do: check(pid)
-  def check(pid), do: GenServer.call(pid, :check)
+  def check(scope, projected \\ %{tokens: 0, cost_usd: 0.0})
+  def check(nil, _projected), do: nil
+  def check({pid, _run}, projected), do: check(pid, projected)
+  def check(pid, projected), do: GenServer.call(pid, {:check, projected})
   def cost_capped?(nil), do: false
   def cost_capped?({pid, _run}), do: cost_capped?(pid)
   def cost_capped?(pid), do: GenServer.call(pid, :cost_capped)
@@ -55,8 +56,8 @@ defmodule LemonAgent.BudgetScope do
 
   def handle_call(:attachment, _from, state), do: {:reply, {self(), state.run}, state}
 
-  def handle_call(:check, _from, state) do
-    {:reply, Budget.check(inclusive(state)) || check(state.parent), state}
+  def handle_call({:check, projected}, _from, state) do
+    {:reply, Budget.check(inclusive(state), projected) || check(state.parent, projected), state}
   end
 
   def handle_call(:cost_capped, _from, state) do

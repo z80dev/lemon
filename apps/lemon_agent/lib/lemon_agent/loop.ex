@@ -789,12 +789,14 @@ defmodule LemonAgent.Loop do
   end
 
   @doc false
-  def budget_check(%AgentLoopConfig{budget: nil}), do: nil
+  def budget_check(config, projected \\ %{tokens: 0, cost_usd: 0.0})
+  def budget_check(%AgentLoopConfig{budget: nil}, _projected), do: nil
 
-  def budget_check(config) do
+  def budget_check(config, projected) do
     budget = Process.get(@usage_budget_pd_key, config.budget)
 
-    case Budget.check(budget) || LemonAgent.BudgetScope.check(Map.get(budget.limits, :scope)) do
+    case Budget.check(budget, projected) ||
+           LemonAgent.BudgetScope.check(Map.get(budget.limits, :scope), projected) do
       nil -> nil
       details -> Map.put(details, :provider_usage, Map.take(budget, [:run_usage, :session_usage]))
     end

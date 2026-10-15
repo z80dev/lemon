@@ -96,6 +96,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Changed
 
+- Usage budgets now check projected input and maximum output cost/tokens before
+  sending model requests, stopping requests that would exceed run or session caps.
+
 - Ordinary bash commands now continue under the session-owned process manager
   when their foreground wait expires, returning a process ID without rerunning
   the command or interrupting output capture. PTY and ACP-client terminal

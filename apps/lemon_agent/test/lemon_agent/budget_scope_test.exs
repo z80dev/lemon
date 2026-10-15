@@ -68,6 +68,18 @@ defmodule LemonAgent.BudgetScopeTest do
     assert %{used: 1.0, run_usage: %{tokens: 15}} = BudgetScope.check(parent)
   end
 
+  test "projected descendant requests respect ancestor caps without recording estimates" do
+    parent = scope(%{max_session_cost_usd: 1.0}, child_usage: %{cost_usd: 0.75})
+    child = scope(%{}, parent: BudgetScope.attachment(parent))
+
+    assert %{scope: :session, used: 0.75, message: message} =
+             BudgetScope.check(child, %{tokens: 10, cost_usd: 0.5})
+
+    assert message =~ "next request is projected to exceed"
+    refute BudgetScope.check(child, %{tokens: 10, cost_usd: 0.25})
+    refute BudgetScope.check(parent)
+  end
+
   test "restored descendant totals enforce session caps without becoming own usage" do
     parent = scope(%{max_session_cost_usd: 1.0}, child_usage: %{cost_usd: 1.0})
 

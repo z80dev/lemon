@@ -249,6 +249,9 @@ defmodule LemonAgent.Loop.Streaming do
     end
   end
 
+  defp budget_retry_delay({:budget_exceeded, details}, _config, _retries_done),
+    do: {:budget_stop, details}
+
   defp budget_retry_delay(error, config, retries_done) do
     case Loop.budget_check(config) do
       nil -> retry_delay(error, config, retries_done)
@@ -398,7 +401,7 @@ defmodule LemonAgent.Loop.Streaming do
         options = %{config.stream_options | api_key: api_key}
 
         # Call the stream function (support {:ok, stream} or direct stream pid)
-        case stream_function.(config.model, llm_context, options) do
+        case request_with_budget(config, llm_context, options, stream_function) do
           {:ok, response_stream} ->
             process_stream_events(
               context,
@@ -440,6 +443,18 @@ defmodule LemonAgent.Loop.Streaming do
         {:error, reason} ->
           {:error, reason}
       end
+    end
+  end
+
+  defp request_with_budget(%AgentLoopConfig{budget: nil} = config, context, options, stream_fn),
+    do: stream_fn.(config.model, context, options)
+
+  defp request_with_budget(config, context, options, stream_fn) do
+    projected = LemonAgent.Budget.project(config.model, context, options)
+
+    case Loop.budget_check(config, projected) do
+      nil -> stream_fn.(config.model, context, options)
+      details -> {:error, {:budget_exceeded, details}}
     end
   end
 
