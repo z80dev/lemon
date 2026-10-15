@@ -256,7 +256,7 @@ defmodule LemonOmp.ProjectionTest do
   end
 
   describe "subagents" do
-    test "follow lifecycle and progress events by index or id" do
+    test "follow lifecycle and nested progress events by id" do
       state =
         apply_all(running(), [
           {"subagent_lifecycle",
@@ -269,17 +269,24 @@ defmodule LemonOmp.ProjectionTest do
                "task" => "Map the repo"
              }
            }},
-          {"subagent_progress", %{"payload" => %{"index" => 0, "description" => "Reading lib/"}}},
+          {"subagent_progress",
+           %{
+             "payload" => %{
+               "index" => 0,
+               "progress" => %{"id" => "sa-1", "description" => "Reading lib/"}
+             }
+           }},
           {"subagent_lifecycle",
            %{"payload" => %{"id" => "sa-2", "agent" => "task", "status" => "started"}}},
-          {"subagent_lifecycle", %{"payload" => %{"index" => 0, "status" => "completed"}}},
+          {"subagent_lifecycle",
+           %{"payload" => %{"id" => "sa-1", "index" => 0, "status" => "completed"}}},
           {"subagent_lifecycle", %{"payload" => %{"status" => "started"}}},
           {"subagent_progress", %{"payload" => "nope"}}
         ])
 
       wire = Projection.to_wire(state)
 
-      assert wire["subagents"] == [
+      assert [
                %{
                  "id" => "sa-1",
                  "agent" => "explore",
@@ -287,7 +294,7 @@ defmodule LemonOmp.ProjectionTest do
                  "description" => "Reading lib/"
                },
                %{"id" => "sa-2", "agent" => "task", "status" => "running", "description" => nil}
-             ]
+             ] = wire["subagents"]
     end
 
     test "are bounded" do
@@ -307,6 +314,209 @@ defmodule LemonOmp.ProjectionTest do
         ])
 
       assert hd(Projection.to_wire(state)["subagents"])["status"] == "failed"
+    end
+
+    test "retains distinct ids when separate task calls reuse an index" do
+      events =
+        for id <- ["first", "second"] do
+          {"subagent_lifecycle",
+           %{"payload" => %{"id" => id, "index" => 0, "agent" => "task", "status" => "started"}}}
+        end
+
+      assert apply_all(running(), events)
+             |> Projection.to_wire()
+             |> Map.fetch!("subagents")
+             |> Enum.map(& &1["id"]) == ["first", "second"]
+    end
+
+    test "bounds and sanitizes every progress field and ignores raw events" do
+      dirty = "\e[31m\u202e" <> String.duplicate("x", 3_000)
+
+      payload = %{
+        "index" => 0,
+        "agent" => dirty,
+        "parentToolCallId" => dirty,
+        "task" => dirty,
+        "sessionFile" => "/private/transcript",
+        "progress" => %{
+          "id" => "child",
+          "description" => dirty,
+          "status" => "running",
+          "currentTool" => dirty,
+          "lastIntent" => dirty,
+          "toolCount" => 12,
+          "recentTools" =>
+            List.duplicate(%{"tool" => dirty, "args" => dirty, "endMs" => 123}, 30),
+          "recentOutput" => List.duplicate(dirty, 30),
+          "tokens" => 234,
+          "cost" => 0.004,
+          "contextTokens" => 345,
+          "contextWindow" => 1000,
+          "durationMs" => 456,
+          "resolvedModelIdentity" => dirty,
+          "retryFailure" => %{"attempt" => 1, "errorMessage" => dirty}
+        }
+      }
+
+      state = apply_all(running(), [{"subagent_progress", %{"payload" => payload}}])
+      [sub] = Projection.to_wire(state)["subagents"]
+      assert sub["toolCalls"] == 12
+
+      assert sub["usage"] == %{
+               "tokens" => 234,
+               "cost" => 0.004,
+               "contextTokens" => 345,
+               "contextWindow" => 1000
+             }
+
+      assert sub["durationMs"] == 456
+      assert is_integer(sub["startedAt"])
+      assert sub["endedAt"] == nil
+      assert String.length(sub["agent"]) == 64
+      assert String.length(sub["parentToolCallId"]) == 128
+      assert String.length(sub["description"]) == 160
+      assert String.length(sub["activity"]) <= 200
+      assert String.length(sub["model"]) == 128
+      assert String.length(sub["lastText"]) == 500
+      assert String.length(sub["error"]) == 1000
+      assert length(sub["recentTools"]) == 8
+
+      assert Enum.all?(
+               sub["recentTools"],
+               &(String.length(&1["name"]) == 64 and &1["endedAt"] == 123)
+             )
+
+      refute Jason.encode!(sub) =~ "\e"
+      refute Jason.encode!(sub) =~ "\u202e"
+      refute Jason.encode!(sub) =~ "/private"
+      refute Jason.encode!(sub) =~ "\"args\""
+
+      assert apply_all(state, [
+               {"subagent_event", %{"payload" => %{"id" => "child", "event" => %{}}}}
+             ]).subagents == state.subagents
+
+      finished =
+        apply_all(state, [
+          {"subagent_lifecycle", %{"payload" => %{"id" => "child", "status" => "failed"}}}
+        ])
+
+      [ended] = Projection.to_wire(finished)["subagents"]
+      assert ended["status"] == "failed"
+      assert ended["activity"] == nil
+      assert ended["endedAt"] >= ended["startedAt"]
+      assert ended["toolCalls"] == 12
+      assert ended["lastText"] == sub["lastText"]
+    end
+
+    test "missing and malformed optional progress data stays bounded and nullable" do
+      state =
+        apply_all(running(), [
+          {"subagent_progress",
+           %{
+             "payload" => %{
+               "index" => 0,
+               "progress" => %{
+                 "id" => "child",
+                 "status" => "running",
+                 "toolCount" => -1,
+                 "tokens" => "many",
+                 "cost" => -4,
+                 "durationMs" => %{},
+                 "recentOutput" => [nil, %{}],
+                 "recentTools" => [nil],
+                 "retryFailure" => "not a map",
+                 "resolvedModel" => [],
+                 "lastIntent" => %{}
+               }
+             }
+           }}
+        ])
+
+      [sub] = Projection.to_wire(state)["subagents"]
+      assert sub["toolCalls"] == nil
+      assert sub["durationMs"] == nil
+      assert sub["usage"] == nil
+      assert sub["recentTools"] == []
+      assert sub["model"] == nil
+      assert sub["error"] == nil
+      assert sub["activity"] == nil
+    end
+
+    test "recent tools keep omp's newest-first ordering at the cap" do
+      tools = for i <- 20..1//-1, do: %{"tool" => "tool#{i}", "args" => "ignored", "endMs" => i}
+
+      state =
+        apply_all(running(), [
+          {"subagent_progress",
+           %{
+             "payload" => %{
+               "index" => 0,
+               "agent" => "task",
+               "progress" => %{"id" => "child", "status" => "running", "recentTools" => tools}
+             }
+           }}
+        ])
+
+      [sub] = Projection.to_wire(state)["subagents"]
+      assert Enum.map(sub["recentTools"], & &1["name"]) == Enum.map(20..13//-1, &"tool#{&1}")
+    end
+
+    test "retry-state errors are sanitized and clear after recovery" do
+      payload = %{
+        "index" => 0,
+        "agent" => "task",
+        "progress" => %{
+          "id" => "retry-child",
+          "status" => "running",
+          "retryState" => %{
+            "attempt" => 1,
+            "maxAttempts" => 3,
+            "delayMs" => 1000,
+            "startedAtMs" => 123,
+            "errorMessage" => "rate \u202elimited\e[31m"
+          }
+        }
+      }
+
+      state = apply_all(running(), [{"subagent_progress", %{"payload" => payload}}])
+      assert hd(Projection.to_wire(state)["subagents"])["error"] == "rate limited"
+      payload = update_in(payload["progress"], &Map.delete(&1, "retryState"))
+      state = apply_all(state, [{"subagent_progress", %{"payload" => payload}}])
+      assert hd(Projection.to_wire(state)["subagents"])["error"] == nil
+    end
+
+    test "transcript handles string content and bounds roles, tools and cursors" do
+      transcript =
+        Projection.subagent_transcript(
+          %{
+            "messages" => [
+              %{"role" => "\e[31muser\u202e", "content" => "Hello\u0000"},
+              %{
+                "role" => String.duplicate("r", 100),
+                "toolName" => String.duplicate("t", 100),
+                "content" => [
+                  %{"type" => "text", "text" => String.duplicate("z", 3000)},
+                  %{"type" => "thinking", "thinking" => "secret"}
+                ]
+              }
+            ],
+            "fromByte" => -1,
+            "nextByte" => "bad",
+            "reset" => true,
+            "sessionFile" => "/private/no"
+          },
+          50
+        )
+
+      assert [%{"role" => "user", "text" => "Hello"}, last] = transcript["messages"]
+      assert String.length(last["role"]) == 32
+      assert String.length(last["toolName"]) == 64
+      assert String.length(last["text"]) == 2000
+      assert transcript["fromByte"] == nil
+      assert transcript["nextByte"] == nil
+      assert transcript["reset"]
+      refute Map.has_key?(transcript, "sessionFile")
+      assert Projection.subagent_transcript(nil, 20)["messages"] == []
     end
   end
 

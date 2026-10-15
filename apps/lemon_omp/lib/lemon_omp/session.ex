@@ -74,6 +74,10 @@ defmodule LemonOmp.Session do
   @spec cancel(pid()) :: {:ok, map()} | {:error, term()}
   def cancel(pid), do: safe_call(pid, :cancel, Config.command_timeout_ms() + 2_000)
 
+  @spec subagent(pid(), String.t(), pos_integer()) :: {:ok, map()} | {:error, term()}
+  def subagent(pid, subagent_id, limit),
+    do: safe_call(pid, {:subagent, subagent_id, limit}, Config.command_timeout_ms() + 2_000)
+
   @spec close(pid()) :: :ok
   def close(pid) do
     ref = Process.monitor(pid)
@@ -181,6 +185,14 @@ defmodule LemonOmp.Session do
 
   def handle_call(:cancel, from, state),
     do: {:noreply, request(state, "abort", %{}, {:cancel, from})}
+
+  def handle_call({:subagent, _id, _limit}, _from, %{ready?: false} = state),
+    do: {:reply, {:error, :not_ready}, state}
+
+  def handle_call({:subagent, id, limit}, from, state) do
+    {:noreply,
+     request(state, "get_subagent_messages", %{"subagentId" => id}, {:subagent, from, limit})}
+  end
 
   @impl true
   def handle_cast(:close, state), do: {:stop, :normal, %{state | close_reason: :closed}}
@@ -482,6 +494,16 @@ defmodule LemonOmp.Session do
     state
   end
 
+  defp handle_response(state, %{kind: {:subagent, from, limit}}, {:ok, data}) do
+    GenServer.reply(from, {:ok, Projection.subagent_transcript(data, limit)})
+    state
+  end
+
+  defp handle_response(state, %{kind: {:subagent, from, _limit}}, {:error, message, _code}) do
+    GenServer.reply(from, {:error, {:rejected, Projection.clean(message, 500)}})
+    state
+  end
+
   defp handle_response(state, %{kind: :stats}, {:ok, data}) when is_map(data),
     do: state |> update_projection(&Projection.apply_stats(&1, data)) |> schedule_publish()
 
@@ -621,6 +643,9 @@ defmodule LemonOmp.Session do
     do: tap(state, fn _ -> GenServer.reply(from, reply) end)
 
   defp reply_pending(state, %{kind: {:cancel, from}}, reply),
+    do: tap(state, fn _ -> GenServer.reply(from, reply) end)
+
+  defp reply_pending(state, %{kind: {:subagent, from, _limit}}, reply),
     do: tap(state, fn _ -> GenServer.reply(from, reply) end)
 
   defp reply_pending(state, %{kind: :initial_prompt}, {:error, :outcome_unknown}) do

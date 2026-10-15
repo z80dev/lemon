@@ -33,6 +33,9 @@ session id (for example `omp_3f9a1c2b7d4e`). Then:
 
 - “What's omp doing?” — Lemon reports the current activity, running tools,
   todo progress, token usage and cost, and the latest output.
+- “What is its subagent doing?” — Lemon reports each task child's activity or
+  result. “Show that subagent's transcript” reads a bounded message tail while
+  the parent omp process is still open.
 - “Wait for omp to finish” — Lemon blocks until the turn ends; the tool card
   streams progress while it waits.
 - “Tell omp to skip the docs” — steers the running turn; “after that, also
@@ -190,7 +193,41 @@ turn's result. While approval is pending the activity says “Waiting for approv
 &lt;tool&gt;”. Text is clipped and stripped of control sequences. Ended sessions
 stay listed until the runtime restarts.
 
-**Discovery** reads omp's session files for a workspace
+### omp task subagents
+
+These are children spawned by omp's own `task` tool, not Lemon's parallel
+`start_many` workers. Lemon subscribes at omp's `progress` level: at most 20
+children appear, each with its id, agent, status, description, current tool and
+intent, tool-call count, available tokens/cost, model, elapsed duration, local
+start/end timestamps, latest output head (500 characters), and retry errors
+when supplied. Recent tool names are limited to eight. Children keep their final
+summary after completion; task calls that reuse an index remain distinct by id.
+Status reports and streamed tool progress text include a compact line per child.
+
+Ask Lemon to use `{"action":"subagent","id":"omp_…","subagent_id":"…"}` to
+read a child's transcript. Optional `limit` defaults to 20 messages and is capped
+at 50; each message exposes only role, text (at most 2000 characters), and an
+optional tool name. Thinking blocks, raw events, tool arguments, and session-file
+paths are not exposed. Like all omp output, transcripts are sanitized, bounded,
+and untrusted.
+
+Elixir callers use `LemonOmp.subagent(id, subagent_id, owner: scope, limit: 20)`.
+It returns `{:ok, %{"messages" => [...], "fromByte" => ..., "nextByte" => ...,
+"reset" => ...}}`, retaining omp's cursor metadata. Ownership is identical to
+`get/2`: foreign sessions read as not found; operator calls default to `:any`.
+Unknown/unavailable children are rejected by omp; a closed parent returns
+`:not_running` and a command timeout returns `:outcome_unknown` without retrying.
+
+Progress is aggregate data: omp's `tokens` counts lifetime input, output and cache
+writes, **excluding cache reads**, rather than parent-session `totalTokens`.
+Optional values remain absent/null when omp does not provide them. At this
+subscription level omp supplies retry state/failure errors, not every raw assistant or
+tool error; use the transcript for more context. Lemon does not subscribe to the
+higher-volume `events` level (raw per-child session events).
+
+### Discovery
+
+Discovery reads omp's session files for a workspace
 (`~/.omp/agent/sessions/…`, or `$PI_CODING_AGENT_DIR/sessions`) without
 writing, locking or migrating them. Each entry shows omp's session id, title,
 model, last outcome, whether Lemon currently runs it, and whether it was

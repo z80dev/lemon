@@ -21,6 +21,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Added
 
+- omp task subagents expose bounded activity, tool counts, tokens/cost, model,
+  duration, final output and retry errors in status and streamed progress.
+  Owner-scoped `LemonOmp.subagent/3` and the `omp` tool's `subagent` action read
+  sanitized transcript tails from live parent sessions.
 - omp workers support opt-in per-worker Git worktree isolation through `isolate`
   on starts and batch tasks, with managed branches, merge instructions, and
   bounded cleanup that preserves uncommitted or committed work.

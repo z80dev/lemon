@@ -108,6 +108,25 @@ defmodule LemonOmp do
   end
 
   @doc """
+  Read a live subagent's sanitized transcript tail (default 20, maximum 50
+  messages; each text is at most 2000 characters). Ownership matches `get/2`.
+  Returns omp's byte cursor metadata, but never its session-file path.
+  """
+  @spec subagent(String.t(), String.t(), keyword()) :: {:ok, map()} | {:error, reason()}
+  def subagent(id, subagent_id, opts \\ []) do
+    with true <-
+           is_binary(subagent_id) and byte_size(subagent_id) in 1..128 and
+             String.trim(subagent_id) != "",
+         {:ok, pid} <- fetch_live(id, opts) do
+      limit = clamp(Keyword.get(opts, :limit), 20, 50)
+      Session.subagent(pid, subagent_id, limit)
+    else
+      false -> {:error, :invalid_params}
+      {:error, _} = error -> error
+    end
+  end
+
+  @doc """
   Start an omp process for `params` (`prompt`, `cwd`, optional `model`,
   `thinking`, `resume`, `approval_mode`, `isolate`). Isolation creates a managed
   git worktree from HEAD, leaving changed or committed work available on close.

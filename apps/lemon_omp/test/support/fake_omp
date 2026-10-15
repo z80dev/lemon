@@ -39,6 +39,7 @@
 #   ACK_GATE    wait for DIR/.fake_omp_release before acknowledging the prompt
 #   REJECT      reject the prompt without starting a turn
 #   WRITE_FILE  create worker.txt in cwd before completing the turn
+#   SUBAGENTS   realistic progress/lifecycle for a task child (HOLD keeps it running)
 #   anything else completes the turn at once.
 
 if [ "$1" = models ]; then
@@ -124,6 +125,35 @@ complete_turn() {
   emit '{"type":"prompt_result","id":"'"$1"'","agentInvoked":true,"status":"completed","sessionSettled":false}'
   emit '{"type":"session_settled"}'
   turns_done=$((turns_done + 1))
+}
+
+subagent_started() {
+  emit '{"type":"subagent_lifecycle","payload":{"id":"child-1","index":0,"agent":"explore\u001b[31m","agentSource":"builtin","description":"Tiny child","status":"started","parentToolCallId":"task-1","sessionFile":"/private/child.jsonl"}}'
+  emit '{"type":"subagent_progress","payload":{"index":0,"agent":"explore\u001b[31m","agentSource":"builtin","task":"Create sub.txt","parentToolCallId":"task-1","sessionFile":"/private/child.jsonl","progress":{"index":0,"id":"child-1","agent":"explore","agentSource":"builtin","status":"running","task":"Create sub.txt","description":"Tiny child","lastIntent":"Create \u202esub.txt","currentTool":"write\u001b[0m","currentToolArgs":"sub.txt","currentToolStartMs":1000,"recentTools":[{"tool":"read\u0000","args":"README.md","endMs":999}],"recentOutput":["latest output\u202e","earlier output"],"toolCount":2,"requests":1,"tokens":120,"contextTokens":200,"contextWindow":10000,"cost":0.001,"durationMs":42,"resolvedModel":"fake/child:off","resolvedModelIdentity":"fake/child"}}}'
+}
+
+subagent_finished() {
+  emit '{"type":"subagent_progress","payload":{"index":0,"agent":"explore","agentSource":"builtin","task":"Create sub.txt","parentToolCallId":"task-1","progress":{"index":0,"id":"child-1","agent":"explore","agentSource":"builtin","status":"completed","task":"Create sub.txt","recentTools":[{"tool":"write","args":"sub.txt","endMs":1100}],"recentOutput":["Created sub.txt\u202e"],"toolCount":2,"requests":2,"tokens":150,"cost":0.002,"durationMs":100,"resolvedModelIdentity":"fake/child"}}}'
+  emit '{"type":"subagent_lifecycle","payload":{"id":"child-1","index":0,"agent":"explore","agentSource":"builtin","status":"completed","parentToolCallId":"task-1","sessionFile":"/private/child.jsonl"}}'
+}
+
+subagent_messages() {
+  # Shape matches RpcSubagentMessagesResult, including cursor and raw session path.
+  printf '{"type":"response","id":"%s","command":"get_subagent_messages","success":true,"data":{"sessionFile":"/private/child.jsonl","fromByte":0,"nextByte":12345,"reset":false,"entries":[],"messages":[' "$id"
+  padding=$(head -c 2500 /dev/zero | tr '\0' 'x')
+  n=1
+  while [ "$n" -le 60 ]; do
+    [ "$n" -eq 1 ] || printf ','
+    if [ "$n" -eq 1 ]; then
+      printf '{"role":"user","content":"Create sub.txt"}'
+    elif [ "$n" -eq 60 ]; then
+      printf '{"role":"toolResult","toolName":"write\\u001b[31m\\u202e","content":[{"type":"text","text":"message %s\\u001b[31m\\u202e %s"}]}' "$n" "$padding"
+    else
+      printf '{"role":"assistant","content":[{"type":"text","text":"message %s\\u001b[31m\\u202e %s"},{"type":"thinking","thinking":"not exposed"}]}' "$n" "$padding"
+    fi
+    n=$((n + 1))
+  done
+  printf ']}}\n'
 }
 
 abort_turn() {
@@ -219,6 +249,16 @@ while IFS= read -r line; do
       start_turn
 
       case "$msg" in
+        *SUBAGENTS*)
+          subagent_started
+          case "$msg" in
+            *HOLD*) held=$id ;;
+            *)
+              subagent_finished
+              complete_turn "$id" "Child finished"
+              ;;
+          esac
+          ;;
         *WRITE_FILE*)
           printf 'worker change\n' >"$cwd/worker.txt"
           complete_turn "$id" "Wrote worker.txt"
@@ -305,6 +345,16 @@ while IFS= read -r line; do
       ;;
     get_session_stats)
       respond "$id" get_session_stats "$(stats)"
+      ;;
+    get_subagent_messages)
+      case "$(field subagentId)" in
+        child-1) subagent_messages ;;
+        silent) ;;
+        exit) exit 3 ;;
+        *)
+          emit '{"type":"response","id":"'"$id"'","command":"get_subagent_messages","success":false,"error":"Unknown subagent\u001b[31m\u202e"}'
+          ;;
+      esac
       ;;
     get_state)
       respond "$id" get_state '{"sessionId":"'"$session_id"'","sessionName":"Resumed fake session","thinkingLevel":"low","model":{"provider":"fake","id":"fake-model"},"todoPhases":[{"name":"Earlier","tasks":[{"content":"Carry over","status":"pending"}]}]}'

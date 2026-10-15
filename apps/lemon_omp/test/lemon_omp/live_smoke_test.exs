@@ -261,6 +261,70 @@ defmodule LemonOmp.LiveSmokeTest do
     end
   end
 
+  test "real omp task subagents expose progress and transcript tails", ctx do
+    # The task model is not a task-call parameter. Pin its configured role and
+    # override (plus tiny labels/advisor roles), and disable paid retry fallback.
+    # Disable user-defined agents so their frontmatter cannot select a paid model.
+    disabled =
+      case File.ls(Path.join(ctx.agent_dir, "agents")) do
+        {:ok, names} -> for name <- names, String.ends_with?(name, ".md"), do: Path.rootname(name)
+        {:error, :enoent} -> []
+      end
+
+    config = %{
+      "modelRoles" => Map.new(~w(default task smol slow plan tiny advisor), &{&1, ctx.model}),
+      "retry" => %{"modelFallback" => false},
+      "advisor" => %{"enabled" => false},
+      "task" => %{
+        "agentModelOverrides" => %{"task" => ctx.model},
+        "agentAdvisor" => %{"task" => "off"},
+        "agentPrewalk" => %{"task" => "off"},
+        "prewalk" => false,
+        "disabledAgents" => disabled
+      }
+    }
+
+    File.mkdir_p!(Path.join(ctx.cwd, ".omp"))
+    # JSON is valid YAML; config.yml owns native per-project model-role overrides.
+    File.write!(Path.join(ctx.cwd, ".omp/config.yml"), Jason.encode!(config))
+
+    assert {:ok, started} =
+             LemonOmp.start(%{
+               cwd: ctx.cwd,
+               model: ctx.model,
+               thinking: "off",
+               approval_mode: "yolo",
+               prompt:
+                 "Use the task tool to spawn exactly one subagent for this trivial job: " <>
+                   "create sub.txt containing exactly sub. Use agent task, whose model is " <>
+                   "configured to the same free model as you. Wait for that subagent to finish, then stop."
+             })
+
+    id = started["id"]
+    kill_on_exit(:sys.get_state(session_pid(id)).os_pid)
+    assert {:ok, wire, :settled} = LemonOmp.wait(id, 240_000)
+
+    case wire["subagents"] do
+      [] ->
+        # Free models can decline/mis-call task or implement the job themselves.
+        # Keep provider compliance separate from deterministic protocol coverage.
+        IO.puts(
+          "omp subagent live assertion conditional: free model #{ctx.model} did not spawn " <>
+            "an observable task child (lastTurn=#{wire["lastTurn"]}); fake omp tests cover the protocol."
+        )
+
+      [sub | _] ->
+        assert is_binary(sub["id"]) and sub["id"] != ""
+        assert is_binary(sub["agent"]) and sub["agent"] != ""
+        assert sub["status"] in ["running", "completed", "failed", "aborted"]
+        assert {:ok, transcript} = LemonOmp.subagent(id, sub["id"])
+        assert transcript["messages"] != []
+        assert Enum.all?(transcript["messages"], &(String.length(&1["text"]) <= 2000))
+    end
+
+    assert {:ok, _} = LemonOmp.close(id)
+  end
+
   defp await_approval(id, timeout) do
     receive do
       %LemonCore.Event{

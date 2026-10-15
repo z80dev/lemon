@@ -15,6 +15,7 @@ installed”). For the workflow, see [Delegating to omp](../user-guide/omp.md).
 | `start_many` | `tasks` (array of start maps); optional `cwd`, `isolate` (batch defaults, each task can override), `wait`, `timeout_seconds` | Validates all tasks before creating any worktrees, then starts workers concurrently. Returns ordered sessions and per-task errors. With `wait: true`, gathers all successful workers and streams combined progress. |
 | `wait` | `id` or `ids` (array); optional `wait_for` (`all` default, `any`, for `ids`), `timeout_seconds` (default 600, max 3600) | Blocks until the current turn ends, or all/any selected workers settle, streaming progress. Timeout or a Lemon abort stops waiting only; omp keeps working. |
 | `status` | `id` | What the session is doing now: status, activity, running/recent tools, todos, subagents, usage and cost, latest output or last result. |
+| `subagent` | `id`, `subagent_id`; optional `limit` (default 20, max 50) | Sanitized transcript tail for an omp task child, while its parent process is open. Each message has role, text (max 2000 characters), and optional tool name; cursor metadata is retained. |
 | `list` | – | Sessions this conversation started (live and recently ended). |
 | `send` | `id`, `message`; optional `mode` (`steer` default, or `follow_up`) | Steers the running turn or queues a follow-up; an idle session starts a new turn with the message. |
 | `cancel` | `id` | Aborts the running turn; the process stays open. |
@@ -79,6 +80,28 @@ configured mode), `status`, `lastTurn`, `activity`, `activeTools`, `recentTools`
 `totalTokens`, `cost`), `contextPercent`, `lastText`, `result`, `error`,
 `declinedPrompts`, `pendingApprovals`, `approvals`, timestamps and `exit`.
 All strings are bounded.
+
+Each `subagents` entry retains the existing `id`, `agent`, `status`, `description`
+and adds `index`, `parentToolCallId`, `activity` (current tool and intent),
+`toolCalls`, `recentTools` (up to eight name/endedAt pairs), `usage`, `model`,
+`startedAt`, `endedAt` (local Unix milliseconds), `durationMs` (omp's elapsed time),
+`lastText` (latest output/result head, max 500 characters), and `error` (retry
+state/failure when provided). There are at most 20 entries, keyed by child id rather
+than task-local index. Status and wait progress include compact per-child lines.
+Child `usage` contains only supplied `tokens`, `cost`, `contextTokens`,
+`contextWindow`; `tokens` excludes cache reads and is not parent `totalTokens`.
+Lemon uses omp's aggregated `progress` subscription, not raw `subagent_event`
+streaming. General tool/assistant errors are not supplied at this level.
+
+`subagent` results carry `details` with `action`, `id`, `subagentId`, and
+`transcript` (`messages`, `fromByte`, `nextByte`, `reset`), not a session snapshot.
+Only role/text/toolName are retained from messages; thinking and non-text content,
+raw session entries and paths are omitted. Elixir callers can use
+`LemonOmp.subagent(id, subagent_id, owner: scope, limit: 20)` with the same
+ownership rules as `get/2`. omp errors become `{:rejected, message}`, closed
+sessions return `:not_running`, and silence returns `:outcome_unknown` without
+automatic retry. A completed child remains readable until its parent is closed,
+provided omp still retains its transcript reference.
 
 `pendingApprovals` lists `id` (Lemon's approval id), `tool`, sanitized `details`
 (at most 2000 characters) and `requestedAt` (Unix milliseconds). Activity reads
