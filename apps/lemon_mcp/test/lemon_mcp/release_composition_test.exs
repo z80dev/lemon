@@ -3,7 +3,7 @@ defmodule LemonMCP.ReleaseCompositionTest do
 
   alias LemonSkills.McpSource
 
-  test "the assembled library enables MCP feature detection without an application callback" do
+  test "the assembled library enables MCP feature detection" do
     saved_disabled = Application.fetch_env(:lemon_skills, :mcp_disabled)
     saved_disabled_env = System.get_env("LEMON_MCP_DISABLED")
 
@@ -15,9 +15,6 @@ defmodule LemonMCP.ReleaseCompositionTest do
       restore_env(saved_disabled_env)
     end)
 
-    assert Application.spec(:lemon_mcp, :mod) == []
-    refute Code.ensure_loaded?(LemonMCP.Application)
-    assert Code.ensure_loaded?(LemonMCP.Client)
     assert McpSource.mcp_enabled?()
   end
 

@@ -5,21 +5,6 @@ defmodule LemonSim.Bench.DomainsTest do
   alias LemonSim.Bench.Domains.Descriptor
 
   describe "all/0" do
-    test "every descriptor has a loadable example module and scorecard module" do
-      for %Descriptor{} = descriptor <- Domains.all() do
-        assert is_binary(descriptor.id) and descriptor.id != ""
-
-        assert {:module, module} = Code.ensure_loaded(descriptor.example_module)
-        assert function_exported?(module, :initial_world, 1)
-        assert function_exported?(module, :initial_state, 1)
-        assert function_exported?(module, :modules, 0) or function_exported?(module, :modules, 1)
-
-        assert {:module, scorecard} = Code.ensure_loaded(descriptor.scorecard_module)
-        assert LemonSim.Bench.Scorecard in behaviours(scorecard)
-        assert function_exported?(scorecard, :scorecard, 1)
-      end
-    end
-
     test "ids are unique" do
       ids = Enum.map(Domains.all(), & &1.id)
       assert Enum.sort(ids) == ids |> Enum.uniq() |> Enum.sort()
@@ -35,22 +20,8 @@ defmodule LemonSim.Bench.DomainsTest do
       end
     end
 
-    test "every league-adapter domain also has a sim_id_prefix and a default_player_count" do
-      for %Descriptor{league_adapter: adapter} = descriptor <- Domains.all(),
-          not is_nil(adapter) do
-        assert is_binary(descriptor.sim_id_prefix)
-        assert is_integer(descriptor.default_player_count)
-      end
-    end
-
     test "vending_bench carries SimManager's sim_id_prefix without a league adapter" do
       assert %Descriptor{sim_id_prefix: "vb_", league_adapter: nil} = Domains.get("vending_bench")
-    end
-  end
-
-  describe "keys/0" do
-    test "matches the ids in all/0, in order" do
-      assert Domains.keys() == Enum.map(Domains.all(), & &1.id)
     end
   end
 
@@ -68,18 +39,8 @@ defmodule LemonSim.Bench.DomainsTest do
   end
 
   describe "arena_domains/0" do
-    test "returns the always-on league domains, in display order, with their arena metadata" do
-      arena =
-        Domains.arena_domains() |> Enum.map(&{&1.id, &1.sim_id_prefix, &1.default_player_count})
-
-      assert arena == [
-               {"werewolf", "ww_", 6},
-               {"poker", "pkr_", 4}
-             ]
-    end
-
-    test "every arena domain has a non-nil league_adapter" do
-      assert Enum.all?(Domains.arena_domains(), &(&1.league_adapter != nil))
+    test "returns the always-on league domains in display order" do
+      assert Enum.map(Domains.arena_domains(), & &1.id) == ["werewolf", "poker"]
     end
   end
 

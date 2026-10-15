@@ -37,9 +37,6 @@ defmodule LemonGateway.EngineLockTest do
       {:ok, _release1} = GenServer.call(lock, {:acquire, :key1, 1000})
       {:ok, _release2} = GenServer.call(lock, {:acquire, :key2, 1000})
       {:ok, _release3} = GenServer.call(lock, {:acquire, :key3, 1000})
-
-      # All acquired, no blocking
-      assert true
     end
   end
 

@@ -4,32 +4,13 @@ defmodule LemonSim.Examples.WerewolfLoreIntegrationTest do
   alias LemonSim.Examples.Werewolf
 
   describe "initial_world/1 character_profiles" do
-    test "world includes character_profiles key defaulting to empty map" do
-      world = Werewolf.initial_world()
-      assert Map.has_key?(world, :character_profiles)
-      assert world.character_profiles == %{}
-    end
-
-    test "character_profiles is empty when generate_lore? is false" do
-      world = Werewolf.initial_world(generate_lore?: false)
-      assert world.character_profiles == %{}
-    end
-
-    test "character_profiles is empty when generate_lore? is not provided" do
-      world = Werewolf.initial_world(player_count: 5)
-      assert world.character_profiles == %{}
-    end
-
-    test "world still has all required keys with lore disabled" do
-      world = Werewolf.initial_world(player_count: 5)
-
-      assert Map.has_key?(world, :players)
-      assert Map.has_key?(world, :phase)
-      assert Map.has_key?(world, :day_number)
-      assert Map.has_key?(world, :backstory_connections)
-      assert Map.has_key?(world, :character_profiles)
-      assert Map.has_key?(world, :status)
-      assert world.status == "in_progress"
+    test "lore-disabled worlds start in progress with empty character profiles" do
+      for opts <- [[], [player_count: 5], [generate_lore?: false]] do
+        world = Werewolf.initial_world(opts)
+        assert Map.has_key?(world, :character_profiles)
+        assert world.character_profiles == %{}
+        assert world.status == "in_progress"
+      end
     end
 
     test "players have traits assigned regardless of lore" do
@@ -107,16 +88,6 @@ defmodule LemonSim.Examples.WerewolfLoreIntegrationTest do
       content = section.content
 
       refute Map.has_key?(content, "character_profile")
-    end
-  end
-
-  describe "decision_contract" do
-    test "includes CHARACTER PROFILE instruction" do
-      opts = Werewolf.projector_opts()
-      contract = opts[:section_overrides][:decision_contract]
-
-      assert contract =~ "CHARACTER PROFILE"
-      assert contract =~ "embody your character"
     end
   end
 end

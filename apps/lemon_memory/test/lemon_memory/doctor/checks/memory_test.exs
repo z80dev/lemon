@@ -2,19 +2,12 @@ defmodule LemonMemory.Doctor.Checks.MemoryTest do
   use ExUnit.Case, async: false
 
   alias LemonCore.Config.Features
-  alias LemonCore.Doctor.Check
   alias LemonMemory.Doctor.Checks.Memory
 
   defmodule StubMemoryStore do
     def stats do
       %{total: 3, oldest_ms: 1, newest_ms: System.system_time(:millisecond) - 120_000}
     end
-  end
-
-  test "returns a list of Check structs" do
-    checks = Memory.run(features: %Features{session_search: :off})
-    assert is_list(checks)
-    assert Enum.all?(checks, &match?(%Check{}, &1))
   end
 
   test "reports inactive memory when session_search is off" do

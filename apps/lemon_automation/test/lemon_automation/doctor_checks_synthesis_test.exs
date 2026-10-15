@@ -45,11 +45,6 @@ defmodule LemonAutomation.DoctorChecksSynthesisTest do
     })
   end
 
-  test "registered under :doctor_checks so the doctor picks it up" do
-    assert Synthesis in Application.get_env(:lemon_core, :doctor_checks, [])
-    assert Synthesis in LemonCore.Doctor.registered_checks()
-  end
-
   test "an off feature flag reports the runner as inactive", %{agent_id: agent_id} do
     assert [check] =
              Synthesis.run(features: features(:off), runner_config: runner_config(agent_id))

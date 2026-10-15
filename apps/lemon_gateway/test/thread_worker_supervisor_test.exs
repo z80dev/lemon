@@ -151,28 +151,13 @@ defmodule LemonGateway.ThreadWorkerSupervisorTest do
   # ============================================================================
 
   describe "supervisor startup and initialization" do
-    test "supervisor starts successfully" do
-      assert Process.whereis(ThreadWorkerSupervisor) != nil
-    end
-
-    test "supervisor uses DynamicSupervisor behavior" do
-      pid = Process.whereis(ThreadWorkerSupervisor)
-      assert Process.alive?(pid)
-
-      children = DynamicSupervisor.count_children(ThreadWorkerSupervisor)
-      assert is_map(children)
-      assert Map.has_key?(children, :active)
-      assert Map.has_key?(children, :specs)
-    end
-
     test "supervisor is registered with correct name" do
       pid = Process.whereis(ThreadWorkerSupervisor)
       assert is_pid(pid)
       assert Process.alive?(pid)
     end
 
-    test "supervisor uses :one_for_one strategy" do
-      # Verify by checking that independent workers don't affect each other
+    test "two workers complete requests independently" do
       scope1 = make_scope()
       scope2 = make_scope()
 
