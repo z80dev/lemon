@@ -18,7 +18,7 @@ defmodule CodingAgent.Tools.Find do
   alias CodingAgent.Tools.{FileValidation, IgnoreFilter}
   alias CodingAgent.Tools.PathHelpers
 
-  import CodingAgent.Tools.AbortHelpers, only: [aborted?: 1, check_abort: 1]
+  import LemonAgent.Tools.AbortHelpers, only: [aborted?: 1, check_abort: 1]
 
   @default_max_results 100
   @elixir_find_timeout_ms 30_000

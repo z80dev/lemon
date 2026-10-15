@@ -633,7 +633,7 @@ The eval harness is intentionally lightweight and deterministic. It should catch
 
 | Module | Description |
 |--------|-------------|
-| `LemonAgent.Security.ExternalContent` | External content sanitization; `CodingAgent.Security.ExternalContent` remains a compatibility wrapper |
+| `LemonAgent.Security.ExternalContent` | External content sanitization, imported directly by coding-agent tools |
 | `CodingAgent.Security.UntrustedToolBoundary` | Pre-LLM boundary for untrusted tool output; composed with `ContextGuardrails` |
 
 Named-node execution does not serialize source-side provider credentials,

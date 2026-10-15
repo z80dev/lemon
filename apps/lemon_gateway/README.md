@@ -232,7 +232,7 @@ in-process subagents.
 |--------|------|---------|
 | `LemonGateway.Binding` | `binding_resolver.ex` | Struct mapping transport/chat/topic to project, agent, and queue mode |
 | `LemonGateway.BindingResolver` | `binding_resolver.ex` | Resolves cwd, agent_id, and queue_mode from `ChatScope` |
-| `LemonGateway.Renderer` | `renderer.ex` | Behaviour for event-to-text rendering |
+
 | `LemonGateway.Renderers.Basic` | `renderers/basic.ex` | Plain-text renderer with action lists and resume info |
 
 ### Command System

@@ -48,7 +48,7 @@ defmodule CodingAgent.Tools.Patch do
   alias CodingAgent.Tools.LspDiagnostics
   alias CodingAgent.Tools.PathHelpers
 
-  import CodingAgent.Tools.AbortHelpers, only: [aborted?: 1, check_abort: 1]
+  import LemonAgent.Tools.AbortHelpers, only: [aborted?: 1, check_abort: 1]
 
   # Maximum file size to process (10 MB)
   @max_file_size 10 * 1024 * 1024

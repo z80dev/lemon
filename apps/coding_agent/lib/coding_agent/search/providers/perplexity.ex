@@ -4,7 +4,7 @@ defmodule CodingAgent.Search.Providers.Perplexity do
   @behaviour CodingAgent.Search.Provider
 
   alias CodingAgent.Search.Result
-  alias CodingAgent.Security.ExternalContent
+  alias LemonAgent.Security.ExternalContent
 
   @impl true
   def id, do: "perplexity"

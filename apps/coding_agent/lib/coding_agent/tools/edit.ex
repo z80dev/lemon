@@ -51,7 +51,7 @@ defmodule CodingAgent.Tools.Edit do
   alias CodingAgent.Tools.LspDiagnostics
   alias CodingAgent.Tools.PathHelpers
 
-  import CodingAgent.Tools.AbortHelpers, only: [aborted?: 1, check_aborted: 1]
+  import LemonAgent.Tools.AbortHelpers, only: [aborted?: 1, check_aborted: 1]
 
   @doc """
   Returns the tool definition for the edit tool.

@@ -23,7 +23,7 @@ defmodule CodingAgent.Tools.Read do
   alias CodingAgent.Tools.FileValidation
   alias CodingAgent.Tools.PathHelpers
 
-  import CodingAgent.Tools.AbortHelpers, only: [aborted?: 1, check_abort: 1]
+  import LemonAgent.Tools.AbortHelpers, only: [aborted?: 1, check_abort: 1]
 
   @default_max_lines 2000
   @default_max_bytes 50 * 1024

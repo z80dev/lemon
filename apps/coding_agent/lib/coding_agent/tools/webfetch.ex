@@ -13,7 +13,7 @@ defmodule CodingAgent.Tools.WebFetch do
   """
 
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
-  alias CodingAgent.Security.ExternalContent
+  alias LemonAgent.Security.ExternalContent
   alias CodingAgent.Search.Dispatcher, as: SearchDispatcher
   alias CodingAgent.Search.Registry, as: SearchRegistry
   alias CodingAgent.Search.SingleFlight
@@ -22,7 +22,7 @@ defmodule CodingAgent.Tools.WebFetch do
   alias CodingAgent.Utils.Http
   alias LemonCore.Secrets
 
-  import CodingAgent.Tools.AbortHelpers, only: [check_abort: 1]
+  import LemonAgent.Tools.AbortHelpers, only: [check_abort: 1]
 
   @default_fetch_max_chars 20_000
   @default_fetch_max_redirects 3

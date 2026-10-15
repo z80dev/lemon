@@ -77,7 +77,7 @@ Hosted rooms are single-node while persistence is local SQLite and PubSub is loc
 
 ### Multi-Model Assignment
 
-For Werewolf, each player seat can be assigned a distinct model from the launch form; Poker arena games use the same per-seat assignment path. `SimManager` builds a `model_assignments` map keyed by the domain's canonical actor ID and uses an `on_before_step` callback to switch the active model before each turn. For Werewolf, those IDs are villager names (`"Alice"`, `"Bram"`, etc.), not `player_n` seat labels. All provider credentials are resolved through `LemonSim.GameHelpers.Config`.
+For Werewolf, each player seat can be assigned a distinct model from the launch form; Poker arena games use the same per-seat assignment path. `SimManager` builds a `model_assignments` map keyed by the domain's canonical actor ID and uses an `on_before_step` callback to switch the active model before each turn. For Werewolf, those IDs are villager names (`"Alice"`, `"Bram"`, etc.), not `player_n` seat labels. All provider credentials are resolved through `LemonSim.LLM.GameHelpers.Config`.
 
 Werewolf renders any `character_profiles` supplied in the initial world. Live
 runs do not mutate persisted snapshots from a detached lore task; traits and
@@ -144,12 +144,11 @@ For Tic Tac Toe, the user can select a side at launch. On human turns:
 | Dependency | Source | Purpose |
 |---|---|---|
 | `lemon_core` | Umbrella | `LemonCore.Bus` for pubsub, `LemonCore.Store` via `LemonSim.Kernel.Store`, config helpers |
-| `lemon_sim` | Umbrella | `Runner`, `Store`, `Bus`, all domain examples and `GameHelpers` |
+| `lemon_sim` | Umbrella | `Runner`, `Store`, `Bus`, supported domain examples, `Examples.Helpers`, and `LLM.GameHelpers.Config` |
 | `phoenix` | Hex (~> 1.7) | HTTP and LiveView framework |
 | `phoenix_html` | Hex (~> 4.1) | HTML helpers |
 | `phoenix_live_view` | Hex (~> 1.0) | Server-rendered real-time UI |
 | `phoenix_live_reload` | Hex (~> 1.5, dev only) | Hot code reloading in development |
-| `gettext` | Hex (~> 0.26) | Internationalisation support |
 | `jason` | Hex (~> 1.4) | JSON encoding/decoding |
 | `bandit` | Hex (~> 1.5) | HTTP server (replaces Cowboy) |
 | `lazy_html` | Hex (~> 0.1, test only) | HTML parsing in LiveView tests |

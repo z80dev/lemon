@@ -8,13 +8,13 @@ defmodule CodingAgent.Tools.WebSearch do
   """
 
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
-  alias CodingAgent.Security.ExternalContent
+  alias LemonAgent.Security.ExternalContent
   alias CodingAgent.Search.Registry, as: SearchRegistry
   alias CodingAgent.Search.SingleFlight
   alias CodingAgent.Tools.WebCache
   alias LemonCore.Secrets
 
-  import CodingAgent.Tools.AbortHelpers, only: [check_abort: 1]
+  import LemonAgent.Tools.AbortHelpers, only: [check_abort: 1]
 
   @default_search_count 5
   @max_search_count 10

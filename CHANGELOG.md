@@ -8,6 +8,12 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
+### Changed
+
+- Internal callers use canonical agent trust/abort helpers and `LemonCore.Id`;
+  obsolete wrappers, unused renderer/coalescer behaviours and unused translation
+  backends are removed without changing active tool or simulation behavior.
+
 ### Fixed
 
 - Execution admission validates supplied tool policies and intersects inherited

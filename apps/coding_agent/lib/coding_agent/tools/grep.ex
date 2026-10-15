@@ -17,7 +17,7 @@ defmodule CodingAgent.Tools.Grep do
   alias CodingAgent.Tools.{FileValidation, IgnoreFilter}
   alias CodingAgent.Tools.PathHelpers
 
-  import CodingAgent.Tools.AbortHelpers, only: [aborted?: 1, check_abort: 1]
+  import LemonAgent.Tools.AbortHelpers, only: [aborted?: 1, check_abort: 1]
 
   @default_max_results 100
   @default_context_lines 0

@@ -5,12 +5,12 @@ defmodule CodingAgent.Tools.Browser do
 
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonAi.Types.{ImageContent, TextContent}
-  alias CodingAgent.Security.ExternalContent
+  alias LemonAgent.Security.ExternalContent
   alias CodingAgent.Tools.PathHelpers
   alias LemonBrowser.Artifacts
   alias LemonBrowser.RoutePolicy
 
-  import CodingAgent.Tools.AbortHelpers, only: [check_abort: 1]
+  import LemonAgent.Tools.AbortHelpers, only: [check_abort: 1]
 
   @default_timeout_ms 30_000
   @max_timeout_ms 120_000
