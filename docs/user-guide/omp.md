@@ -232,11 +232,20 @@ recent tools, todos, subagents, usage, latest output or result. Keys:
 | Enter | open the detail view / back |
 | `s` / `f` | steer the running turn / queue a follow-up |
 | `R` | redirect: stop the current turn and start with a new message |
+| `m` | choose an omp model (`[free]` marks free models) and configure the selected session |
+| `[` / `]`, `a` / `n` | select a pending approval, then approve once / deny by its server ID |
+| `{` / `}`, `v` | select a subagent, then inspect its bounded transcript tail |
 | `c` | cancel the running turn |
 | `x` | close the omp process |
 | `d` | discover stored sessions, showing source and interrupted state; Enter resumes, `C` resumes an interrupted session with continue |
 | `r` | refresh |
 | Esc | close the panel |
+
+Detail includes approval mode and counters, pending requests, and isolated
+worktree path/branch, retained/dirty state, commit count and a merge hint.
+Configuration failures report any partially applied settings explicitly; refresh
+before deciding whether to change them again. Model selection and child transcripts
+stay in the panel; Escape returns without changing the editor draft.
 
 `/omp run [--approval-mode always-ask|write|yolo] [--isolate] <prompt>` starts a session in the TUI's working directory, and
 `/omp status` prints a one-line summary of live sessions. The panel and the
