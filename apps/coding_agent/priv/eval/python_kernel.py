@@ -10,12 +10,14 @@ Protocol (owned by CodingAgent.Eval.Kernel):
   "\\x1eLEMONEVAL:<token>:", where the token comes from LEMON_EVAL_TOKEN and is
   removed from the environment before user code runs. Anything that is not a
   framed line is user output, so user code cannot corrupt the protocol.
+* Rich display records go to a bounded private JSONL side channel, never stdout.
 
 Stdin for user code is /dev/null. When the host closes the command pipe, the
 kernel kills its own process group (it is the group leader) and exits.
 """
 
 import ast
+import base64
 import asyncio
 import builtins
 import inspect
@@ -24,6 +26,7 @@ import linecache
 import os
 import platform
 import queue
+import shlex
 import signal
 import subprocess
 import sys
@@ -101,8 +104,74 @@ def main():
     sys.modules["__main__"] = module
     namespace = module.__dict__
 
+    display_path = os.environ.pop("LEMON_EVAL_DISPLAY_PATH")
+    pip_command = json.loads(os.environ.pop("LEMON_EVAL_PIP_COMMAND", "null"))
+    display_bytes = 0
+    display_count = 0
+
+    def display(value, mime=None):
+        nonlocal display_bytes, display_count
+        if mime is None and isinstance(value, dict) and len(value) == 1:
+            kind, content = next(iter(value.items()))
+            if kind in ("image/png", "image/jpeg", "text/markdown", "application/json"):
+                mime, value = kind, content
+        if mime is None:
+            for method, kind in (("_repr_png_", "image/png"), ("_repr_jpeg_", "image/jpeg"),
+                                 ("_repr_markdown_", "text/markdown"), ("_repr_json_", "application/json")):
+                formatter = getattr(value, method, None)
+                if callable(formatter):
+                    rendered = formatter()
+                    if rendered is not None:
+                        mime, value = kind, rendered
+                        break
+        if mime is None and isinstance(value, (bytes, bytearray, memoryview)):
+            value = bytes(value)
+            if value.startswith(b"\x89PNG\r\n\x1a\n"):
+                mime = "image/png"
+            elif value.startswith(b"\xff\xd8\xff"):
+                mime = "image/jpeg"
+            else:
+                raise ValueError("display bytes must be PNG or JPEG")
+        mime = mime or ("text/markdown" if isinstance(value, str) else "application/json")
+        if mime in ("image/png", "image/jpeg"):
+            if not isinstance(value, (bytes, bytearray, memoryview)):
+                raise TypeError("image display requires bytes")
+            payload = {"mime": mime, "data": base64.b64encode(value).decode("ascii")}
+        elif mime in ("text/markdown", "application/json"):
+            payload = {"mime": mime, "data": value}
+        else:
+            raise ValueError("unsupported display MIME type: " + mime)
+        encoded = (json.dumps(payload, ensure_ascii=True) + "\n").encode("ascii")
+        if len(encoded) > 1024 * 1024 or display_bytes + len(encoded) > 4 * 1024 * 1024 or display_count >= 32:
+            raise ValueError("display limit exceeded (1 MiB per output, 4 MiB / 32 outputs per cell)")
+        with open(display_path, "ab") as sink:
+            sink.write(encoded)
+        display_bytes += len(encoded)
+        display_count += 1
+
+    namespace["display"] = display
+
+    def run_magic(code):
+        words = shlex.split(code.strip())
+        if words[0] == "%pip":
+            if len(words) < 2 or words[1] != "install":
+                raise ValueError("supported pip magic: %pip install <arguments>")
+            subprocess.run((pip_command or [sys.executable, "-m", "pip"]) + words[1:], check=True)
+        elif words[0] == "%load" and len(words) == 2:
+            with open(words[1], encoding="utf-8") as source:
+                exec(compile(source.read(), words[1], "exec"), namespace)
+        else:
+            raise ValueError("supported magics: %pip install <arguments>, %load <path>")
+
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
+    executing = False
+
+    def interrupt_cell(_signal, _frame):
+        if executing:
+            raise KeyboardInterrupt
+
+    signal.signal(signal.SIGINT, interrupt_cell)
 
     send({"type": "ready", "runtime": "python", "version": platform.python_version()})
 
@@ -117,7 +186,20 @@ def main():
             continue
 
         cell += 1
-        result = run_cell(namespace, loop, str(message.get("code", "")), "<cell %d>" % cell)
+        display_bytes = 0
+        display_count = 0
+        code = str(message.get("code", ""))
+        try:
+            executing = True
+            if code.lstrip().startswith("%"):
+                run_magic(code)
+                result = {"status": "ok", "display": None}
+            else:
+                result = run_cell(namespace, loop, code, "<cell %d>" % cell)
+        except BaseException as exc:
+            result = {"status": "error", "error": format_user_exception(exc)}
+        finally:
+            executing = False
         result["type"] = "result"
         result["id"] = message.get("id")
         send(result)

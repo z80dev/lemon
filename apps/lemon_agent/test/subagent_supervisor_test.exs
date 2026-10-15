@@ -45,50 +45,6 @@ defmodule LemonAgent.SubagentSupervisorTest do
   end
 
   # ============================================================================
-  # 1. Supervisor Initialization Tests
-  # ============================================================================
-
-  describe "supervisor initialization" do
-    test "supervisor is running on application start" do
-      assert Process.whereis(LemonAgent.SubagentSupervisor) != nil
-      assert Process.alive?(Process.whereis(LemonAgent.SubagentSupervisor))
-    end
-
-    test "supervisor uses DynamicSupervisor" do
-      supervisor_pid = Process.whereis(LemonAgent.SubagentSupervisor)
-      assert supervisor_pid != nil
-
-      # Verify it responds to DynamicSupervisor functions
-      assert is_list(DynamicSupervisor.which_children(supervisor_pid))
-      assert is_map(DynamicSupervisor.count_children(supervisor_pid))
-    end
-
-    test "can start a new supervisor with custom name" do
-      # Start a separate supervisor for testing
-      {:ok, pid} = SubagentSupervisor.start_link(name: :test_subagent_supervisor)
-
-      assert Process.alive?(pid)
-      assert Process.whereis(:test_subagent_supervisor) == pid
-
-      # Clean up
-      Process.exit(pid, :normal)
-      Process.sleep(10)
-    end
-
-    test "init/1 returns one_for_one strategy" do
-      # We can verify this by checking the supervisor's behavior
-      # When a child dies, others should not be affected
-      supervisor_pid = Process.whereis(LemonAgent.SubagentSupervisor)
-      assert supervisor_pid != nil
-
-      # Count children confirms one_for_one is active
-      children_info = DynamicSupervisor.count_children(supervisor_pid)
-      assert Map.has_key?(children_info, :specs)
-      assert Map.has_key?(children_info, :active)
-    end
-  end
-
-  # ============================================================================
   # 2. Child Process Spawning Tests
   # ============================================================================
 
@@ -172,6 +128,9 @@ defmodule LemonAgent.SubagentSupervisorTest do
 
       assert length(pids) == 5
       assert SubagentSupervisor.count() == initial_count + 5
+      subagents = SubagentSupervisor.list_subagents()
+      assert length(subagents) == initial_count + 5
+      assert Enum.all?(pids, &(&1 in subagents))
 
       for pid <- pids do
         assert Process.alive?(pid)

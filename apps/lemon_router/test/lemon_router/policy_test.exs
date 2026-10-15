@@ -5,6 +5,19 @@ defmodule LemonRouter.PolicyTest do
   alias CodingAgent.ToolPolicy
   alias LemonCore.PolicyStore
 
+  test "session PolicyStore mode survives legacy and nested policy projections" do
+    key = "approval-mode-#{System.unique_integer([:positive])}"
+    on_exit(fn -> PolicyStore.delete_session(key) end)
+
+    for row <- [%{approval_mode: :write}, %{"tool_policy" => %{"approval_mode" => "write"}}] do
+      assert :ok = PolicyStore.put_session(key, row)
+      assert {:ok, policy} = Policy.resolve_validated_for_run(%{session_key: key})
+      assert policy.approval_mode == :write
+      refute ToolPolicy.requires_approval?(policy, "write")
+      assert ToolPolicy.requires_approval?(policy, "bash")
+    end
+  end
+
   describe "merge/2" do
     test "validates the other policy when one is absent" do
       policy = %{allow: ["read"], blocked_tools: ["bash"]}

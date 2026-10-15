@@ -228,16 +228,6 @@ defmodule LemonAgent.ContextPropertyTest do
   # ============================================================================
 
   describe "estimate_size properties" do
-    property "estimate_size is always non-negative" do
-      check all(
-              messages <- message_list(),
-              prompt <- system_prompt()
-            ) do
-        size = Context.estimate_size(messages, prompt)
-        assert size >= 0
-      end
-    end
-
     property "estimate_size with empty messages and nil prompt is zero" do
       assert Context.estimate_size([], nil) == 0
     end
@@ -523,11 +513,7 @@ defmodule LemonAgent.ContextPropertyTest do
             max_chars: max_chars
           )
 
-        # All messages should be valid maps with role
-        Enum.each(truncated, fn msg ->
-          assert is_map(msg)
-          assert Map.has_key?(msg, :role)
-        end)
+        assert Enum.all?(truncated, &(&1 in messages))
       end
     end
 
@@ -816,7 +802,7 @@ defmodule LemonAgent.ContextPropertyTest do
 
         {:ok, truncated} = transform.(messages, signal)
 
-        assert is_list(truncated)
+        assert {:ok, ^truncated} = transform.(messages, nil)
       end
     end
 

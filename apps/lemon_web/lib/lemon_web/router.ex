@@ -50,6 +50,7 @@ defmodule LemonWeb.Router do
       live("/blueprints", BlueprintManagementLive, :index)
       live("/skills", SkillsLive, :index)
       live("/memory", MemoryManagementLive, :index)
+      live("/learning", LearningLive, :index)
       live("/mcp", McpLive, :index)
       live("/profiles", ProfileManagementLive, :index)
       live("/models", ProviderManagementLive, :index)

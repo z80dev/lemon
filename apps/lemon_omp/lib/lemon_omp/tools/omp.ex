@@ -55,6 +55,7 @@ defmodule LemonOmp.Tools.Omp do
   def tool(opts \\ []) do
     %AgentTool{
       name: "omp",
+      timeout_ms: :infinity,
       label: "omp",
       description: @description,
       parameters: %{

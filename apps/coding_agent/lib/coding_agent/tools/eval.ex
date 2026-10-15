@@ -11,10 +11,10 @@ defmodule CodingAgent.Tools.Eval do
   stdout/stderr followed by the trailing expression's value or the error.
 
   The cell deadline is `timeout` seconds (default 30, max 600, `0` for no
-  deadline). A timeout or abort kills the kernel and its process tree, losing
-  its state; the next call starts a fresh kernel and says so. Output follows
-  the `bash` cap: the tail is kept and the full output is spilled to a file
-  with an `artifact://` handle.
+  deadline). Timeout first interrupts, retaining state when the cell unwinds
+  within two seconds; otherwise the process tree is killed. Abort kills directly.
+  `display` returns rich content over a bounded private side channel, separate
+  from stdout. Text output follows the `bash` cap and spills to an artifact.
 
   Options: `:session_id` is the durable kernel identity and `:session_pid`
   binds its current owner. Successful native turn handoff detaches that owner
@@ -47,9 +47,10 @@ defmodule CodingAgent.Tools.Eval do
           "incrementally (imports, then definitions, then use) and never re-import or re-declare " <>
           "without need. The last expression's value is displayed; print output is captured. " <>
           "Top-level `await` works in both languages. Code runs in the project root; JS has " <>
-          "`require` and `import` resolved from there. A timeout or abort kills the kernel and " <>
-          "loses its state; `reset: true` starts that language fresh. On error, fix and re-run " <>
-          "only the failing step.",
+          "`require` and `import` resolved from there. Use display(value) for PNG/JPEG bytes, " <>
+          "markdown or JSON. Python supports standalone %pip install and %load magics. " <>
+          "Timeout first interrupts with a two-second grace to preserve state; abort or an " <>
+          "unresponsive interrupt kills the kernel. `reset: true` starts that language fresh.",
       label: "Eval",
       parameters: %{
         "type" => "object",
@@ -155,6 +156,7 @@ defmodule CodingAgent.Tools.Eval do
              runtime: runtime,
              owner_pid: Keyword.get(opts, :session_pid),
              session_key: Keyword.get(opts, :session_key),
+             pip_command: Keyword.get(opts, :eval_pip_command),
              idle_timeout_ms: Keyword.get(opts, :eval_idle_timeout_ms)
            ),
          {:ok, %{ref: ref, restarted: restarted}} <-
@@ -257,10 +259,11 @@ defmodule CodingAgent.Tools.Eval do
     end
   end
 
-  # The slot relays output produced before the kill ahead of its reply.
+  # The slot relays output and the interrupted result ahead of its reply.
   defp interrupt(ctx, reason, acc) do
-    :ok = Kernel.interrupt(ctx.slot, ctx.ref, reason)
-    {reason, drain(ctx.ref, acc)}
+    outcome = Kernel.interrupt(ctx.slot, ctx.ref, reason)
+    status = if reason == :timeout, do: {:timeout, outcome}, else: reason
+    {status, drain(ctx.ref, acc)}
   end
 
   defp drain(ref, acc) do
@@ -268,6 +271,9 @@ defmodule CodingAgent.Tools.Eval do
       {:lemon_eval, ^ref, {:output, data}} ->
         {acc, _text} = Output.append(acc, data)
         drain(ref, acc)
+
+      {:lemon_eval, ^ref, {:result, frame}} ->
+        drain(ref, %{acc | rich: frame["outputs"] || []})
 
       {:lemon_eval, ^ref, _other} ->
         drain(ref, acc)
@@ -295,6 +301,12 @@ defmodule CodingAgent.Tools.Eval do
   # ── Result ───────────────────────────────────────────────────────────────
 
   defp finish(request, outcome, acc, restarted, started) do
+    acc =
+      case outcome do
+        {:result, frame} -> %{acc | rich: frame["outputs"] || []}
+        _ -> acc
+      end
+
     {status, acc, notice} = outcome_text(request, outcome, acc)
     final = Output.finalize(acc)
 
@@ -314,7 +326,7 @@ defmodule CodingAgent.Tools.Eval do
     text = if sections == [], do: "(no output)", else: Enum.join(sections, "\n\n")
 
     %AgentToolResult{
-      content: [%TextContent{text: text}],
+      content: [%TextContent{text: text} | acc.rich],
       details: %{
         language: request.language,
         title: request.title,
@@ -355,6 +367,15 @@ defmodule CodingAgent.Tools.Eval do
      "The #{language_name(request)} kernel stopped unexpectedly; its state was lost. " <>
        "The next call starts a fresh kernel."}
   end
+
+  defp outcome_text(request, {:timeout, :preserved}, acc) do
+    {:timeout, acc,
+     "Eval timed out after #{format_seconds(request.timeout_ms)}; the cell was interrupted. " <>
+       "The #{language_name(request)} kernel state was preserved."}
+  end
+
+  defp outcome_text(request, {:timeout, :killed}, acc),
+    do: outcome_text(request, :timeout, acc)
 
   defp outcome_text(request, :timeout, acc) do
     {:timeout, acc,

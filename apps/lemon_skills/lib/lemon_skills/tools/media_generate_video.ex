@@ -49,6 +49,7 @@ defmodule LemonSkills.Tools.MediaGenerateVideo do
   def tool(cwd, opts \\ []) do
     %AgentTool{
       name: "media_generate_video",
+      timeout_ms: :infinity,
       description:
         "Generate a supervised video through Lemon's BEAM media worker path. Supports deterministic local MP4 previews, OpenAI video job create/poll/download, and Vertex AI Veo long-running prediction, records redacted media-job metadata, and can opt into final Telegram/Discord attachment delivery.",
       label: "Media Generate Video",

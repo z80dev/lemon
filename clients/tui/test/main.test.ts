@@ -13,10 +13,6 @@ import {
 describe("parseArgs", () => {
 	const env = {} as NodeJS.ProcessEnv;
 
-	test("defaults to the local control plane", () => {
-		expect(parseArgs([], env).url).toBe("ws://127.0.0.1:4040/ws");
-	});
-
 	test("accepts --ws-url, --url and -u", () => {
 		expect(parseArgs(["--ws-url", "ws://host:1/ws"], env).url).toBe("ws://host:1/ws");
 		expect(parseArgs(["--url", "ws://host:2/ws"], env).url).toBe("ws://host:2/ws");

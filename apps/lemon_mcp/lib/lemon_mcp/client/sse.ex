@@ -257,13 +257,17 @@ defmodule LemonMCP.Client.SSE do
   @impl true
   def handle_info({:http, {request_id, :stream_end, _headers}}, state)
       when request_id == state.stream_request_id do
-    {:noreply, %{state | state: :disconnected, stream_request_id: nil}}
+    {:stop, :normal, %{state | state: :disconnected, stream_request_id: nil}}
   end
 
   @impl true
   def handle_info({:http, {request_id, {:error, _reason}}}, state)
       when request_id == state.stream_request_id do
-    {:noreply, %{state | state: :disconnected, stream_request_id: nil}}
+    {:stop, :normal, %{state | state: :disconnected, stream_request_id: nil}}
+  end
+
+  def handle_info({:mcp_stream_closed, request_id}, %{stream_request_id: request_id} = state) do
+    {:stop, :normal, %{state | state: :disconnected, stream_request_id: nil}}
   end
 
   defp open_stream(state) do
@@ -378,10 +382,12 @@ defmodule LemonMCP.Client.SSE do
         match_events(events, state, deadline, matcher)
 
       {:http, {request_id, :stream_end, _headers}} when request_id == state.stream_request_id ->
-        {:error, :sse_stream_closed, state}
+        send(self(), {:mcp_stream_closed, request_id})
+        {:error, :sse_stream_closed, %{state | state: :disconnected}}
 
       {:http, {request_id, {:error, reason}}} when request_id == state.stream_request_id ->
-        {:error, {:sse_stream_failed, reason}, state}
+        send(self(), {:mcp_stream_closed, request_id})
+        {:error, {:sse_stream_failed, reason}, %{state | state: :disconnected}}
 
       {:http, {request_id, result}} when request_id == state.stream_request_id ->
         {:error, {:unexpected_sse_message, result}, state}

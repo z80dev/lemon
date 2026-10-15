@@ -358,18 +358,13 @@ defmodule LemonAgent.AbortSignalTest do
         end
 
       # Wait for all to complete
-      for _ <- pids do
-        receive do
-          {:done, _pid, _op} -> :ok
-        after
-          1000 -> :timeout
-        end
+      for pid <- pids do
+        assert_receive {:done, ^pid, op}, 1_000
+        assert op in [:abort, :clear]
       end
 
-      # No crashes should occur, final state depends on operation order
-      # Just verify we can still use the signal
-      result = AbortSignal.aborted?(ref)
-      assert is_boolean(result)
+      AbortSignal.abort(ref)
+      assert AbortSignal.aborted?(ref)
     end
 
     test "different processes working with different signals do not interfere" do

@@ -12,8 +12,9 @@ defmodule CodingAgent.Eval.Kernel do
   JSON, partial lines or protocol-looking text therefore cannot desynchronise
   the protocol.
 
-  One cell runs at a time. Kernel state is lost (and the OS process tree is
-  killed) on timeout, abort, `reset`, kernel crash, idle timeout, owner exit and
+  One cell runs at a time. Timeout first sends SIGINT and waits two seconds for
+  the cell to unwind, preserving state when it does. Otherwise the process tree
+  is killed, as it is on abort, `reset`, kernel crash, idle timeout, owner exit and
   slot shutdown. The slot stays alive after a kill while its owner lives, so the
   next run reports that it started a fresh kernel and why the previous one
   ended. Without an owner pid the slot stops entirely after its idle timeout.
@@ -50,6 +51,9 @@ defmodule CodingAgent.Eval.Kernel do
     :marker,
     :busy,
     :lost_reason,
+    :display_path,
+    :pip_command,
+    :interruption,
     buffer: "",
     generation: 0,
     next_id: 1
@@ -93,14 +97,14 @@ defmodule CodingAgent.Eval.Kernel do
   end
 
   @doc """
-  Kills the kernel running `ref` (state is lost). Output already received from
-  the kernel is relayed to the caller before this returns.
+  Interrupts a timed-out cell, allowing two seconds to preserve the kernel.
+  Aborts kill immediately. Output is relayed before the reply.
   """
-  @spec interrupt(GenServer.server(), reference(), :timeout | :aborted) :: :ok
+  @spec interrupt(GenServer.server(), reference(), :timeout | :aborted) :: :preserved | :killed
   def interrupt(slot, ref, reason) do
     GenServer.call(slot, {:interrupt, ref, reason}, 15_000)
   catch
-    :exit, _ -> :ok
+    :exit, _ -> :killed
   end
 
   @doc "OS pid of the running kernel process, if any."
@@ -126,6 +130,7 @@ defmodule CodingAgent.Eval.Kernel do
       runtime: Keyword.fetch!(opts, :runtime),
       owner_ref: owner_ref,
       owner_pid: Keyword.get(opts, :owner_pid),
+      pip_command: Keyword.get(opts, :pip_command),
       idle_timeout_ms: Keyword.get(opts, :idle_timeout_ms) || @default_idle_timeout_ms
     }
 
@@ -149,6 +154,7 @@ defmodule CodingAgent.Eval.Kernel do
     case ensure_kernel(state) do
       {:ok, state} ->
         id = state.next_id
+        File.write!(state.display_path, "")
         Port.command(state.port, [Jason.encode!(%{op: "execute", id: id, code: code}), "\n"])
         ref = make_ref()
         busy = %{ref: ref, caller: caller, monitor: Process.monitor(caller), id: id}
@@ -160,11 +166,37 @@ defmodule CodingAgent.Eval.Kernel do
     end
   end
 
-  def handle_call({:interrupt, ref, reason}, _from, %{busy: %{ref: ref}} = state) do
-    {:reply, :ok, state |> kill_kernel(reason) |> arm_idle()}
+  def handle_call(
+        {:interrupt, ref, :timeout},
+        from,
+        %{busy: %{ref: ref}, interruption: nil} = state
+      ) do
+    state = drain_port(state)
+
+    if state.busy do
+      target =
+        if state.language == "py",
+          do: "-#{state.os_pid}",
+          else: Integer.to_string(state.os_pid)
+
+      case System.cmd("/bin/kill", ["-INT", "--", target], stderr_to_stdout: true) do
+        {_output, 0} ->
+          timer = Process.send_after(self(), {:interrupt_grace, ref}, 2_000)
+          {:noreply, %{state | interruption: %{from: from, timer: timer}}}
+
+        _ ->
+          {:reply, :killed, state |> kill_kernel(:timeout) |> arm_idle()}
+      end
+    else
+      {:reply, :preserved, state}
+    end
   end
 
-  def handle_call({:interrupt, _ref, _reason}, _from, state), do: {:reply, :ok, state}
+  def handle_call({:interrupt, ref, reason}, _from, %{busy: %{ref: ref}} = state) do
+    {:reply, :killed, state |> kill_kernel(reason) |> arm_idle()}
+  end
+
+  def handle_call({:interrupt, _ref, _reason}, _from, state), do: {:reply, :preserved, state}
 
   def handle_call(:os_pid, _from, state), do: {:reply, state.os_pid, state}
 
@@ -181,6 +213,9 @@ defmodule CodingAgent.Eval.Kernel do
       notify(state, {:exited, status})
       Process.demonitor(state.busy.monitor, [:flush])
     end
+
+    if state.display_path, do: File.rm(state.display_path)
+    state = complete_interrupt(state, :killed)
 
     {:noreply, arm_idle(%{state | port: nil, os_pid: nil, busy: nil, lost_reason: :crashed})}
   end
@@ -205,6 +240,10 @@ defmodule CodingAgent.Eval.Kernel do
       else: {:stop, :normal, state}
   end
 
+  def handle_info({:interrupt_grace, ref}, %{busy: %{ref: ref}} = state) do
+    {:noreply, state |> complete_interrupt(:killed) |> kill_kernel(:timeout) |> arm_idle()}
+  end
+
   def handle_info(_message, state), do: {:noreply, state}
 
   @impl true
@@ -220,9 +259,15 @@ defmodule CodingAgent.Eval.Kernel do
   defp ensure_kernel(state) do
     token = :crypto.strong_rand_bytes(12) |> Base.url_encode64(padding: false)
     marker = "\x1eLEMONEVAL:" <> token <> ":"
+    display_path = Path.join(System.tmp_dir!(), "lemon-eval-display-#{token}.jsonl")
+    File.write!(display_path, "", [:exclusive])
+    File.chmod!(display_path, 0o600)
+    state = %{state | display_path: display_path}
 
     env = [
       {~c"LEMON_EVAL_TOKEN", String.to_charlist(token)},
+      {~c"LEMON_EVAL_DISPLAY_PATH", String.to_charlist(display_path)},
+      {~c"LEMON_EVAL_PIP_COMMAND", String.to_charlist(Jason.encode!(state.pip_command))},
       {~c"PYTHONUNBUFFERED", ~c"1"},
       {~c"PYTHONDONTWRITEBYTECODE", ~c"1"},
       {~c"NO_COLOR", ~c"1"}
@@ -253,9 +298,17 @@ defmodule CodingAgent.Eval.Kernel do
           lost_reason: nil
       }
 
-      await_ready(state, System.monotonic_time(:millisecond) + @startup_timeout_ms, [])
+      case await_ready(state, System.monotonic_time(:millisecond) + @startup_timeout_ms, []) do
+        {:ok, _state} = ready ->
+          ready
+
+        {:error, reason, state} ->
+          File.rm(display_path)
+          {:error, reason, state}
+      end
     rescue
       error ->
+        File.rm(display_path)
         {:error, "could not start #{state.runtime}: #{Exception.message(error)}", state}
     end
   end
@@ -309,7 +362,25 @@ defmodule CodingAgent.Eval.Kernel do
     end
 
     if state.busy, do: Process.demonitor(state.busy.monitor, [:flush])
+
+    if state.busy do
+      case CodingAgent.Eval.Output.read_displays(state.display_path) do
+        {:ok, displays} -> notify(state, {:result, %{"status" => "error", "outputs" => displays}})
+        _ -> :ok
+      end
+    end
+
+    if state.display_path, do: File.rm(state.display_path)
+    state = complete_interrupt(state, :killed)
     %{state | port: nil, os_pid: nil, busy: nil, buffer: "", lost_reason: reason}
+  end
+
+  defp complete_interrupt(%{interruption: nil} = state, _outcome), do: state
+
+  defp complete_interrupt(state, outcome) do
+    Process.cancel_timer(state.interruption.timer)
+    GenServer.reply(state.interruption.from, outcome)
+    %{state | interruption: nil}
   end
 
   defp drain_port(%{port: port} = state) do
@@ -349,9 +420,15 @@ defmodule CodingAgent.Eval.Kernel do
   end
 
   defp handle_frame(%{"type" => "result", "id" => id} = frame, %{busy: %{id: id}} = state) do
+    frame =
+      case CodingAgent.Eval.Output.read_displays(state.display_path) do
+        {:ok, displays} -> Map.put(frame, "outputs", displays)
+        {:error, message} -> Map.merge(frame, %{"status" => "error", "error" => message})
+      end
+
     notify(state, {:result, frame})
     Process.demonitor(state.busy.monitor, [:flush])
-    arm_idle(%{state | busy: nil})
+    state |> complete_interrupt(:preserved) |> Map.put(:busy, nil) |> arm_idle()
   end
 
   defp handle_frame(_frame, state), do: state

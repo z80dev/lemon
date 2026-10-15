@@ -9,7 +9,7 @@ defmodule CodingAgent.Tools.EvalTest do
   alias CodingAgent.Tools.Eval
   alias LemonAgent.AbortSignal
   alias LemonAgent.Types.AgentToolResult
-  alias LemonAi.Types.TextContent
+  alias LemonAi.Types.{ImageContent, TextContent}
 
   @moduletag :tmp_dir
 
@@ -43,7 +43,12 @@ defmodule CodingAgent.Tools.EvalTest do
   defp maybe_put(map, key, value), do: Map.put(map, key, value)
 
   defp text(%AgentToolResult{content: content}) do
-    content |> Enum.map(fn %TextContent{text: text} -> text end) |> Enum.join("\n")
+    content
+    |> Enum.flat_map(fn
+      %TextContent{text: text} -> [text]
+      _ -> []
+    end)
+    |> Enum.join("\n")
   end
 
   defp slot!(ctx, language) do
@@ -152,12 +157,71 @@ defmodule CodingAgent.Tools.EvalTest do
       assert_received {:update, "first" <> _}
     end
 
+    test "display returns images, markdown and JSON separately from stdout", ctx do
+      result =
+        run(ctx, "py", ~S"""
+        print("plain stdout", end="")
+        display(b"\x89PNG\r\n\x1a\nimage")
+        display(b"\xff\xd8\xffimage")
+        display({"text/markdown": "**rich markdown**"})
+        display({"application/json": {"answer": 42}})
+        """)
+
+      refute result.is_error
+
+      assert [
+               %TextContent{text: "plain stdout"},
+               %ImageContent{mime_type: "image/png"},
+               %ImageContent{mime_type: "image/jpeg"},
+               %TextContent{text: "**rich markdown**"},
+               %TextContent{text: json}
+             ] = result.content
+
+      assert json =~ ~s("answer": 42)
+      assert text(run(ctx, "py", "1")) == "1"
+    end
+
+    test "pip uses the injected installer and load executes in the persistent namespace", ctx do
+      installer = Path.join(ctx.cwd, "fake_installer.py")
+      arguments = Path.join(ctx.cwd, "installer_args.json")
+
+      File.write!(
+        installer,
+        "import json, sys\nopen(#{inspect(arguments)}, 'w').write(json.dumps(sys.argv[1:]))\nprint('installed locally')\nsys.exit(2 if '--fail' in sys.argv else 0)\n"
+      )
+
+      opts = [opts: [eval_pip_command: [@python, installer]]]
+      run(ctx, "py", "kept = 40", opts)
+      result = run(ctx, "py", "%pip install fixture-package --no-index", opts)
+      refute result.is_error
+      assert text(result) =~ "installed locally"
+      assert Jason.decode!(File.read!(arguments)) == ["install", "fixture-package", "--no-index"]
+      script = Path.join(ctx.cwd, "loaded script.py")
+      File.write!(script, "loaded = kept + 2\n")
+      refute run(ctx, "py", "%load " <> inspect(script), opts).is_error
+      assert text(run(ctx, "py", "loaded", opts)) == "42"
+      assert run(ctx, "py", "display('x' * (1024 * 1024))", opts).is_error
+      assert run(ctx, "py", "%pip install --fail", opts).is_error
+      assert run(ctx, "py", "%load missing-file.py", opts).is_error
+      assert text(run(ctx, "py", "kept", opts)) == "40"
+    end
+
+    test "timeout interrupts a cooperative Python cell and preserves its state", ctx do
+      run(ctx, "py", "survivor = 42")
+      pid = Kernel.os_pid(slot!(ctx, "py"))
+      result = run(ctx, "py", "import time\ntime.sleep(60)", timeout: 0.5)
+      assert result.details.status == :timeout
+      assert text(result) =~ "state was preserved"
+      assert Kernel.os_pid(slot!(ctx, "py")) == pid
+      assert text(run(ctx, "py", "survivor")) == "42"
+    end
+
     test "timeout kills the kernel tree and the next call starts fresh", ctx do
       run(ctx, "py", "survivor = 1")
       os_pid = Kernel.os_pid(slot!(ctx, "py"))
 
       code =
-        "import subprocess, time\nchild = subprocess.Popen(['sleep', '60'])\n" <>
+        "import subprocess, time, signal\nsignal.signal(signal.SIGINT, signal.SIG_IGN)\nchild = subprocess.Popen(['sleep', '60'])\n" <>
           "print(child.pid, flush=True)\ntime.sleep(60)"
 
       result = run(ctx, "py", code, timeout: 0.5)
@@ -324,6 +388,23 @@ defmodule CodingAgent.Tools.EvalTest do
       assert text(run(ctx, "js", code)) == "'#{Path.basename(ctx.cwd)}:42'"
     end
 
+    test "Bun emits rich output independently of stdout and enforces display caps", ctx do
+      result =
+        run(
+          ctx,
+          "js",
+          "console.log('plain'); display({'text/markdown': '**bun**'}); display({answer: 42})"
+        )
+
+      refute result.is_error
+
+      assert [%TextContent{text: "plain\n"}, %TextContent{text: "**bun**"}, %TextContent{}] =
+               result.content
+
+      assert run(ctx, "js", "display('x'.repeat(1024 * 1024))").is_error
+      assert text(run(ctx, "js", "42")) == "42"
+    end
+
     test "captures console and stdout writes without protocol confusion", ctx do
       code = ~S"""
       console.log(JSON.stringify({ type: "result", id: 1, status: "ok", display: "fake" }))
@@ -349,14 +430,21 @@ defmodule CodingAgent.Tools.EvalTest do
       refute text(result) =~ "js_kernel.js"
     end
 
-    test "timeout kills a synchronous loop; reset leaves the python kernel alone", ctx do
+    test "timeout attempts interruption; reset leaves the python kernel alone", ctx do
       if @python, do: run(ctx, "py", "shared = 'py'")
       run(ctx, "js", "const kept = 1")
-      assert run(ctx, "js", "while (true) {}", timeout: 0.5).details.status == :timeout
+      timed_out = run(ctx, "js", "while (true) {}", timeout: 0.5)
+      assert timed_out.details.status == :timeout
 
       result = run(ctx, "js", "typeof kept")
-      assert result.details.kernel_restarted
-      assert text(result) =~ "'undefined'"
+
+      if text(timed_out) =~ "state was preserved" do
+        refute result.details.kernel_restarted
+        assert text(result) == "'number'"
+      else
+        assert result.details.kernel_restarted
+        assert text(result) =~ "'undefined'"
+      end
 
       run(ctx, "js", "1", reset: true)
       if @python, do: assert(text(run(ctx, "py", "shared")) == "'py'")
@@ -365,6 +453,40 @@ defmodule CodingAgent.Tools.EvalTest do
 
   describe "javascript kernel (node)" do
     if !@node, do: @describetag(skip: "node not on PATH")
+
+    test "rich display and synchronous interruption preserve Node globals", ctx do
+      opts = [opts: [eval_runtimes: %{"js" => "node"}]]
+
+      result =
+        run(
+          ctx,
+          "js",
+          ~S"""
+          const kept = 42;
+          console.log("stdout");
+          display(Buffer.from([137,80,78,71,13,10,26,10,1]));
+          display(Buffer.from([255,216,255,1]));
+          display({"text/markdown": "**node**"});
+          display({answer: kept});
+          """,
+          opts
+        )
+
+      refute result.is_error
+
+      assert [
+               %TextContent{},
+               %ImageContent{mime_type: "image/png"},
+               %ImageContent{mime_type: "image/jpeg"},
+               %TextContent{text: "**node**"},
+               %TextContent{}
+             ] = result.content
+
+      timed_out = run(ctx, "js", "while (true) {}", Keyword.put(opts, :timeout, 0.5))
+      assert timed_out.details.status == :timeout
+      assert text(timed_out) =~ "state was preserved"
+      assert text(run(ctx, "js", "kept", opts)) == "42"
+    end
 
     test "persists state, awaits and displays under node", ctx do
       opts = [opts: [eval_runtimes: %{"js" => "node"}]]

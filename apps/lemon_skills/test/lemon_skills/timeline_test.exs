@@ -221,6 +221,43 @@ defmodule LemonSkills.TimelineTest do
     assert {:error, :timeline_unavailable} = Timeline.list(ctx.context, ctx.opts)
   end
 
+  test "unattributed latest activity never inherits an earlier agent identity", ctx do
+    metadata = %{
+      key: "activity",
+      name: "activity",
+      action: "patch",
+      result: :ok,
+      scope: :project,
+      cwd: ctx.home,
+      agent_id: "alice"
+    }
+
+    assert :ok = Usage.record_load(metadata)
+    assert :ok = Usage.record_write(metadata)
+
+    assert :ok =
+             Usage.set_state("activity", :pinned,
+               scope: :project,
+               cwd: ctx.home,
+               agent_id: "alice"
+             )
+
+    assert :ok = Usage.record_load(Map.delete(metadata, :agent_id))
+    assert :ok = Usage.record_write(Map.delete(metadata, :agent_id))
+    assert :ok = Usage.set_state("activity", :active, scope: :project, cwd: ctx.home)
+    record = Usage.get("activity", scope: :project, cwd: ctx.home)
+    assert record["last_loaded_by_agent_id"] == nil
+    assert record["last_writer_agent_id"] == nil
+    assert record["state_updated_by_agent_id"] == nil
+  end
+
+  test "invalid retained timestamps cannot crash calendar consumers", ctx do
+    put(ctx, "invalid-date", "memory", 999_999_999_999_999, 999_999_999_999_999)
+    put(ctx, "valid-date", "memory", 1, 1)
+    assert {:ok, %{"items" => [item]}} = Timeline.list(ctx.context, ctx.opts)
+    assert item["at"] == 1
+  end
+
   test "enforces event, sidecar byte and record bounds and reports read failures", ctx do
     for n <- 1..120, do: put(ctx, "n#{n}", "memory", n, n)
     assert {:ok, %{"items" => events}} = Timeline.list(ctx.context, ctx.opts ++ [limit: 100])

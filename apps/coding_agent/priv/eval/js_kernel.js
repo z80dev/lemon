@@ -29,6 +29,46 @@ const { Writable } = require("node:stream");
 const { Worker } = require("node:worker_threads");
 const { createRequire } = require("node:module");
 const { pathToFileURL } = require("node:url");
+const vm = require("node:vm");
+const DISPLAY_PATH = process.env.LEMON_EVAL_DISPLAY_PATH;
+delete process.env.LEMON_EVAL_DISPLAY_PATH;
+delete process.env.LEMON_EVAL_PIP_COMMAND;
+let displayBytes = 0;
+let displayCount = 0;
+
+globalThis.display = function (value, mime) {
+  if (!mime && value && typeof value === "object" && !ArrayBuffer.isView(value)) {
+    const keys = Object.keys(value);
+    if (keys.length === 1 && ["image/png", "image/jpeg", "text/markdown", "application/json"].includes(keys[0])) {
+      mime = keys[0];
+      value = value[mime];
+    }
+  }
+  if (!mime && (Buffer.isBuffer(value) || value instanceof Uint8Array)) {
+    const bytes = Buffer.from(value);
+    if (bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))) mime = "image/png";
+    else if (bytes[0] === 255 && bytes[1] === 216 && bytes[2] === 255) mime = "image/jpeg";
+    else throw new Error("display bytes must be PNG or JPEG");
+  }
+  mime = mime || (typeof value === "string" ? "text/markdown" : "application/json");
+  if (mime === "image/png" || mime === "image/jpeg") {
+    if (!Buffer.isBuffer(value) && !(value instanceof Uint8Array)) throw new Error("image display requires bytes");
+    value = Buffer.from(value).toString("base64");
+  } else if (!["text/markdown", "application/json"].includes(mime)) {
+    throw new Error("unsupported display MIME type: " + mime);
+  }
+  const encoded = Buffer.from(JSON.stringify({ mime, data: value }) + "\n");
+  if (encoded.length > 1024 * 1024 || displayBytes + encoded.length > 4 * 1024 * 1024 || displayCount >= 32) {
+    throw new Error("display limit exceeded (1 MiB per output, 4 MiB / 32 outputs per cell)");
+  }
+  fs.appendFileSync(DISPLAY_PATH, encoded);
+  displayBytes += encoded.length;
+  displayCount++;
+};
+
+// V8's breakOnSigint interrupts synchronous cells without discarding globals.
+// If an asynchronous cell cannot unwind, the host enforces its grace deadline.
+process.on("SIGINT", () => {});
 
 const TOKEN = process.env.LEMON_EVAL_TOKEN || "";
 delete process.env.LEMON_EVAL_TOKEN;
@@ -603,7 +643,7 @@ function blankEdits(code, importEdits) {
 // Execution
 // ---------------------------------------------------------------------------
 
-const indirectEval = globalThis.eval;
+const executeCell = (source) => vm.runInThisContext(source, { breakOnSigint: true });
 
 // Frames of the kernel itself: indirect eval, worker message dispatch, runtime internals.
 const HOST_FRAME = /\(node:|\bat node:|eval \((<anonymous>|unknown)\)|<parse>/;
@@ -627,7 +667,7 @@ async function runCell(code, cell) {
   }
 
   try {
-    const value = await indirectEval(source);
+    const value = await executeCell(source);
     if (value === undefined) return { status: "ok", display: null };
     let display = util.inspect(value, { depth: 4, colors: false, maxArrayLength: 200, breakLength: 100 });
     if (display.length > MAX_DISPLAY_CHARS) {
@@ -696,6 +736,8 @@ async function drain() {
     }
     if (!message || message.op !== "execute") continue;
     cellCounter++;
+    displayBytes = 0;
+    displayCount = 0;
     const result = await runCell(String(message.code || ""), cellCounter);
     send(Object.assign({ type: "result", id: message.id }, result));
   }

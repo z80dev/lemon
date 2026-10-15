@@ -284,6 +284,11 @@ allow_tools = []
 # max_no_files = 5
 # compress_on_rotate = true
 
+# --- Tool Approval Defaults ---
+# Unset preserves existing per-tool/source approval behavior.
+# [runtime.tools]
+# approval_mode = "write" # ask: non-read; write: exec only; yolo: no tier gates
+
 # --- Web Tool Configuration ---
 
 # [runtime.tools.web.search]
@@ -367,6 +372,10 @@ name = "Default Agent"
 # allow = "all"
 # deny = []
 # require_approval = ["bash", "write", "edit"]
+# approval_mode = "ask" # Optional explicit policy mode; overrides config default.
+# [profiles.default.tool_policy.approvals]
+# read = "never"
+# bash = "always"
 
 # User-managed specialist profiles can be created with `lemon profile create`.
 # Their stable IDs derive ~/.lemon/profiles/<id>/ and agent:<id>:main; do not

@@ -25,6 +25,11 @@ defmodule CodingAgent.ToolPolicy do
   defdelegate deny_all(), to: LemonCore.ToolPolicy
   defdelegate allowed?(policy, tool_name), to: LemonCore.ToolPolicy
   defdelegate requires_approval?(policy, tool_name), to: LemonCore.ToolPolicy
+  defdelegate requires_approval?(policy, tool_name, args), to: LemonCore.ToolPolicy
+  defdelegate requires_approval?(policy, tool_name, args, tier), to: LemonCore.ToolPolicy
+  defdelegate tier(tool_name), to: LemonCore.ToolPolicy
+  defdelegate tier(tool_name, args), to: LemonCore.ToolPolicy
+  defdelegate with_default_approval_mode(policy, mode), to: LemonCore.ToolPolicy
   defdelegate approval_mode(policy, tool_name), to: LemonCore.ToolPolicy
   defdelegate no_reply?(policy), to: LemonCore.ToolPolicy
   defdelegate denial_reason(policy, tool_name), to: LemonCore.ToolPolicy

@@ -432,9 +432,8 @@ defmodule LemonAgent.AbortSignalConcurrencyTest do
           1000 -> flunk("Clear timed out")
         end
 
-        # Final state depends on order, but should be consistent
-        state = AbortSignal.aborted?(ref)
-        assert is_boolean(state)
+        AbortSignal.abort(ref)
+        assert AbortSignal.aborted?(ref)
       end
     end
 
@@ -493,9 +492,8 @@ defmodule LemonAgent.AbortSignalConcurrencyTest do
         end
       end
 
-      # System should be stable
-      final_state = AbortSignal.aborted?(ref)
-      assert is_boolean(final_state)
+      AbortSignal.abort(ref)
+      assert AbortSignal.aborted?(ref)
     end
 
     test "load test with mixed operations" do
@@ -643,22 +641,28 @@ defmodule LemonAgent.AbortSignalConcurrencyTest do
       signals = for _ <- 1..50, do: AbortSignal.new()
 
       # Perform interleaved operations
-      for _ <- 1..100 do
-        signal = Enum.random(signals)
-        op = Enum.random([:abort, :check, :clear])
+      expected =
+        Enum.reduce(1..100, Map.new(signals, &{&1, false}), fn _, expected ->
+          signal = Enum.random(signals)
+          op = Enum.random([:abort, :check, :clear])
 
-        case op do
-          :abort -> AbortSignal.abort(signal)
-          :check -> AbortSignal.aborted?(signal)
-          :clear -> AbortSignal.clear(signal)
-        end
-      end
+          case op do
+            :abort ->
+              AbortSignal.abort(signal)
+              Map.put(expected, signal, true)
 
-      # All operations should complete without error
-      # Verify each signal is in a valid state
-      Enum.each(signals, fn ref ->
-        state = AbortSignal.aborted?(ref)
-        assert is_boolean(state)
+            :check ->
+              assert AbortSignal.aborted?(signal) == expected[signal]
+              expected
+
+            :clear ->
+              AbortSignal.clear(signal)
+              Map.put(expected, signal, false)
+          end
+        end)
+
+      Enum.each(expected, fn {ref, aborted} ->
+        assert AbortSignal.aborted?(ref) == aborted
       end)
     end
   end
@@ -726,23 +730,29 @@ defmodule LemonAgent.AbortSignalConcurrencyTest do
       refs = for _ <- 1..100, do: AbortSignal.new()
 
       # Rapid process creation and termination interacting with signals
-      for _ <- 1..500 do
-        ref = Enum.random(refs)
+      expected =
+        Enum.reduce(1..500, Map.new(refs, &{&1, false}), fn _, expected ->
+          ref = Enum.random(refs)
+          op = :rand.uniform(3)
 
-        Task.async(fn ->
-          case :rand.uniform(3) do
-            1 -> AbortSignal.abort(ref)
-            2 -> AbortSignal.aborted?(ref)
-            3 -> AbortSignal.clear(ref)
+          Task.async(fn ->
+            case op do
+              1 -> AbortSignal.abort(ref)
+              2 -> AbortSignal.aborted?(ref)
+              3 -> AbortSignal.clear(ref)
+            end
+          end)
+          |> Task.await()
+
+          case op do
+            1 -> Map.put(expected, ref, true)
+            2 -> expected
+            3 -> Map.put(expected, ref, false)
           end
         end)
-        |> Task.await()
-      end
 
-      # All signals should still be accessible
-      Enum.each(refs, fn ref ->
-        state = AbortSignal.aborted?(ref)
-        assert is_boolean(state)
+      Enum.each(expected, fn {ref, aborted} ->
+        assert AbortSignal.aborted?(ref) == aborted
       end)
     end
 

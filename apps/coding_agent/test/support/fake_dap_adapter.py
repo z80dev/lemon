@@ -20,10 +20,19 @@ The launch spawns `sleep 300` as a stand-in debuggee and reports its pid in a
 import json
 import subprocess
 import sys
+import socket
 
 LOG_PATH = sys.argv[1]
 stdin = sys.stdin.buffer
 stdout = sys.stdout.buffer
+if "--listen" in sys.argv:
+    listener = socket.socket()
+    listener.bind(("127.0.0.1", int(sys.argv[sys.argv.index("--listen") + 1])))
+    listener.listen(1)
+    connection, _ = listener.accept()
+    listener.close()
+    stdin = connection.makefile("rb")
+    stdout = connection.makefile("wb")
 
 seq = 0
 state = {
@@ -142,6 +151,11 @@ def handle(request):
             "supportsFunctionBreakpoints": True,
             "supportsTerminateRequest": True,
             "supportsConditionalBreakpoints": True,
+            "supportsLogPoints": "--no-capabilities" not in sys.argv,
+            "supportsDataBreakpoints": "--no-capabilities" not in sys.argv,
+            "supportsInstructionBreakpoints": "--no-capabilities" not in sys.argv,
+            "supportsReadMemoryRequest": "--no-capabilities" not in sys.argv,
+            "supportsDisassembleRequest": "--no-capabilities" not in sys.argv,
         })
     elif command == "launch":
         state["mode"] = args.get("fakeMode", "normal")
@@ -236,6 +250,17 @@ def handle(request):
         respond(request, {})
         kill_debuggee()
         sys.exit(0)
+    elif command == "dataBreakpointInfo":
+        respond(request, {"dataId": "data-1", "description": args.get("name"), "accessTypes": ["read", "write"]})
+    elif command in ("setDataBreakpoints", "setInstructionBreakpoints"):
+        respond(request, {"breakpoints": [{"verified": True} for _ in args.get("breakpoints", [])]})
+    elif command == "readMemory":
+        respond(request, {"address": args.get("memoryReference"), "data": "AQID", "requestedCount": args.get("count")})
+    elif command == "disassemble":
+        if args.get("memoryReference") == "oversized":
+            respond(request, {"instructions": [{"instruction": "X" * (128 * 1024)}]})
+        else:
+            respond(request, {"instructions": [{"address": "0x10", "instruction": "nop"}], "requestedCount": args.get("instructionCount")})
     elif command == "crash":
         sys.exit(3)
     elif command == "echo":
