@@ -648,7 +648,7 @@ defmodule LemonCore.ToolPolicy do
         blocked_tools: union(base.blocked_tools, blocked_tools),
         require_approval: union(base.require_approval, require_approval),
         approvals: merge_approvals(base.approvals, approvals),
-        no_reply: base.no_reply or no_reply,
+        no_reply: no_reply,
         profile: base.profile,
         allowed_commands: intersect_allow(base.allowed_commands, allowed_commands),
         blocked_commands: union(base.blocked_commands, blocked_commands),
