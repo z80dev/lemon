@@ -52,6 +52,7 @@ defmodule CodingAgent.Tools.Edit do
   import CodingAgent.Tools.FileFormatHelpers, only: [normalize_line: 1, line_tokens: 1]
   alias CodingAgent.Tools.FileValidation
   alias CodingAgent.Tools.LspDiagnostics
+  alias CodingAgent.Tools.LspFormatter
   alias CodingAgent.Tools.PathHelpers
 
   import LemonAgent.Tools.AbortHelpers, only: [aborted?: 1, check_aborted: 1]
@@ -117,6 +118,11 @@ defmodule CodingAgent.Tools.Edit do
               "required" => ["start_line"]
             }
           },
+          "format" => %{
+            "type" => "boolean",
+            "default" => Keyword.get(opts, :format, false),
+            "description" => "Whether to auto-format the file after editing"
+          },
           "diagnostics" => %{
             "type" => "boolean",
             "default" => Keyword.get(opts, :diagnostics, false),
@@ -157,8 +163,16 @@ defmodule CodingAgent.Tools.Edit do
       result =
         with :ok <- validate_required_param(path, "path"),
              {:ok, edit_spec} <- build_edit_spec(params),
-             {:ok, diagnostics?} <- LspDiagnostics.option(params, opts) do
-          do_execute(path, edit_spec, diagnostics?, signal, cwd, opts)
+             {:ok, diagnostics?} <- LspDiagnostics.option(params, opts),
+             {:ok, format?} <- LspFormatter.option(params, opts) do
+          do_execute(
+            path,
+            edit_spec,
+            diagnostics?,
+            signal,
+            cwd,
+            Keyword.put(opts, :format, format?)
+          )
         end
 
       case result do
@@ -229,11 +243,12 @@ defmodule CodingAgent.Tools.Edit do
            ),
          {:ok, raw_content} <- File.read(resolved_path),
          :ok <- FileValidation.check_text_content(raw_content, path),
-         :ok <- FileReadTracker.check(opts, resolved_path, raw_content),
+         :ok <- check_read_tracker(opts, resolved_path, raw_content, edit_spec),
          {bom, content} <- FileFormatHelpers.strip_bom(raw_content),
          line_ending <- FileFormatHelpers.detect_line_ending(content),
          normalized_content <- FileFormatHelpers.normalize_to_lf(content),
-         {:ok, new_content} <- perform_edit(raw_content, normalized_content, edit_spec),
+         {:ok, new_content} <-
+           perform_local_edit(raw_content, normalized_content, edit_spec, opts, resolved_path),
          :ok <- check_content_changed(normalized_content, new_content),
          :ok <- check_aborted(signal),
          final_content <- FileFormatHelpers.finalize_content(new_content, line_ending, bom),
@@ -244,11 +259,19 @@ defmodule CodingAgent.Tools.Edit do
              path: resolved_path
            }),
          :ok <- File.write(resolved_path, final_content) do
-      digest = :erlang.md5(final_content)
-      FileReadTracker.record_digest(opts, resolved_path, digest)
-      snapshot = AnchoredEdit.snapshot_for_digest(digest)
-      diff = generate_diff(normalized_content, new_content)
-      first_changed_line = find_first_changed_line(normalized_content, new_content)
+      {formatted, format_error} =
+        LspFormatter.after_write(resolved_path, Keyword.get(opts, :format, false), cwd, opts)
+
+      final_content =
+        if Keyword.get(opts, :format, false), do: File.read!(resolved_path), else: final_content
+
+      FileReadTracker.record(opts, resolved_path, final_content)
+      snapshot = AnchoredEdit.snapshot(final_content)
+      {_bom, written_text} = FileFormatHelpers.strip_bom(final_content)
+      written_text = FileFormatHelpers.normalize_to_lf(written_text)
+      diff = generate_diff(normalized_content, written_text)
+      first_changed_line = find_first_changed_line(normalized_content, written_text)
+      format_text = if formatted, do: " Formatted the file.", else: ""
 
       {diagnostics, diagnostics_text} =
         LspDiagnostics.post_edit(resolved_path, cwd, baseline, diagnostics?, opts)
@@ -258,11 +281,14 @@ defmodule CodingAgent.Tools.Edit do
           %TextContent{
             type: :text,
             text:
-              "Successfully replaced text in #{path}.\n\n[#{resolved_path}##{snapshot}]\n#{diff}#{diagnostics_text}"
+              "Successfully replaced text in #{path}.#{format_text}\n\n[#{resolved_path}##{snapshot}]\n#{diff}#{diagnostics_text}"
           }
         ],
         details:
-          %{diff: diff, first_changed_line: first_changed_line}
+          %{diff: diff, first_changed_line: first_changed_line, formatted: formatted}
+          |> then(fn details ->
+            if format_error, do: Map.put(details, :format_error, format_error), else: details
+          end)
           |> CheckpointGuard.put_details(checkpoint)
           |> FileValidation.put_text_snapshots(resolved_path, raw_content, final_content)
           |> Map.put(:snapshot, snapshot)
@@ -291,6 +317,17 @@ defmodule CodingAgent.Tools.Edit do
       end
     end
   end
+
+  defp check_read_tracker(_opts, _path, _raw, {:anchored, _, _}), do: :ok
+
+  defp check_read_tracker(opts, path, raw, _spec), do: FileReadTracker.check(opts, path, raw)
+
+  defp perform_local_edit(raw, content, {:anchored, tag, edits}, opts, path) do
+    previous = FileReadTracker.snapshot_lines(opts, path, tag)
+    AnchoredEdit.apply(raw, content, tag, edits, previous)
+  end
+
+  defp perform_local_edit(raw, content, spec, _opts, _path), do: perform_edit(raw, content, spec)
 
   defp perform_edit(raw_content, content, {:anchored, snapshot, edits}) do
     AnchoredEdit.apply(raw_content, content, snapshot, edits)

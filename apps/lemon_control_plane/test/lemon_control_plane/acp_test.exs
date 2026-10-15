@@ -444,8 +444,9 @@ defmodule LemonControlPlane.ACPTest do
 
     assert missing.status == 401
 
-    assert Jason.decode!(missing.resp_body)["error"]["message"] ==
-             "authorization token is required"
+    assert Jason.decode!(missing.resp_body)["error"]["code"] == "UNAUTHORIZED"
+    assert Jason.decode!(missing.resp_body)["error"]["message"] =~ "Authorization: Bearer <token>"
+    assert Jason.decode!(missing.resp_body)["error"]["message"] =~ "LEMON_ACP_API_TOKEN"
 
     ok =
       :post

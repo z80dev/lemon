@@ -21,6 +21,42 @@ defmodule LemonHoncho.Env do
 
   @declarations [
     %{
+      name: :lemon_honcho_pin_user_peer,
+      env_var: "LEMON_HONCHO_PIN_USER_PEER",
+      aliases: [],
+      type: :boolean,
+      default: false,
+      doc: "Use the configured human peer for every channel sender.",
+      secret?: false,
+      required?: false,
+      area: :honcho,
+      apps: [:lemon_honcho]
+    },
+    %{
+      name: :lemon_honcho_user_peer_aliases,
+      env_var: "LEMON_HONCHO_USER_PEER_ALIASES",
+      aliases: [],
+      type: :string,
+      default: nil,
+      doc: "JSON map of channel-qualified runtime ids to Honcho peer ids.",
+      secret?: false,
+      required?: false,
+      area: :honcho,
+      apps: [:lemon_honcho]
+    },
+    %{
+      name: :lemon_honcho_runtime_peer_prefix,
+      env_var: "LEMON_HONCHO_RUNTIME_PEER_PREFIX",
+      aliases: [],
+      type: :string,
+      default: "",
+      doc: "Prefix for channel-qualified sender peer ids; empty keeps the configured peer.",
+      secret?: false,
+      required?: false,
+      area: :honcho,
+      apps: [:lemon_honcho]
+    },
+    %{
       name: :honcho_api_key,
       env_var: "HONCHO_API_KEY",
       aliases: [],

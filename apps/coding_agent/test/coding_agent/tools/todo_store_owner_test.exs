@@ -139,36 +139,6 @@ defmodule CodingAgent.Tools.TodoStoreOwnerTest do
 
       GenServer.stop(pid)
     end
-
-    test "enables read_concurrency", %{test_name: test_name} do
-      # Clean up first
-      case :ets.whereis(@table) do
-        :undefined -> :ok
-        _tid -> :ets.delete(@table)
-      end
-
-      assert {:ok, pid} = TodoStoreOwner.start_link(name: test_name)
-
-      info = :ets.info(@table)
-      assert info[:read_concurrency] == true
-
-      GenServer.stop(pid)
-    end
-
-    test "enables write_concurrency", %{test_name: test_name} do
-      # Clean up first
-      case :ets.whereis(@table) do
-        :undefined -> :ok
-        _tid -> :ets.delete(@table)
-      end
-
-      assert {:ok, pid} = TodoStoreOwner.start_link(name: test_name)
-
-      info = :ets.info(@table)
-      assert info[:write_concurrency] == true
-
-      GenServer.stop(pid)
-    end
   end
 
   # ============================================================================

@@ -13,33 +13,21 @@ defmodule LemonControlPlane.Methods.NodeMethodsTest do
         conn_pid: self()
       }
 
-      {:error, error} = NodeInvokeResult.handle(params, ctx)
-      error_str = inspect(error)
-
-      assert String.contains?(String.downcase(error_str), "forbidden") or
-               (is_map(error) and error[:code] == "FORBIDDEN")
+      assert {:error, {:forbidden, _message}} = NodeInvokeResult.handle(params, ctx)
     end
 
     test "returns error when invokeId is missing" do
       ctx = %{auth: %{role: :node, client_id: "node-1"}, conn_pid: self()}
       params = %{"result" => "success"}
 
-      {:error, error} = NodeInvokeResult.handle(params, ctx)
-      error_str = inspect(error)
-
-      assert String.contains?(error_str, "invokeId") or
-               (is_map(error) and error[:code] == "INVALID_REQUEST")
+      assert {:error, {:invalid_request, _message}} = NodeInvokeResult.handle(params, ctx)
     end
 
     test "returns not_found when invocation doesn't exist" do
       ctx = %{auth: %{role: :node, client_id: "node-1"}, conn_pid: self()}
       params = %{"invokeId" => "nonexistent-#{System.unique_integer()}", "result" => "success"}
 
-      {:error, error} = NodeInvokeResult.handle(params, ctx)
-      error_str = String.downcase(inspect(error))
-
-      assert String.contains?(error_str, "not found") or
-               (is_map(error) and error[:code] == "NOT_FOUND")
+      assert {:error, {:not_found, _message}} = NodeInvokeResult.handle(params, ctx)
     end
 
     test "processes result when invocation exists" do

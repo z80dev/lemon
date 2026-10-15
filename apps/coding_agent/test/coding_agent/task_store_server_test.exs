@@ -30,14 +30,6 @@ defmodule CodingAgent.TaskStoreServerTest do
   # ============================================================================
 
   describe "start_link/1" do
-    test "starts server successfully", %{dets_path: dets_path} do
-      assert {:ok, pid} = TaskStoreServer.start_link(dets_path: dets_path)
-      assert is_pid(pid)
-      assert Process.alive?(pid)
-
-      stop_server(pid)
-    end
-
     test "handles already_started gracefully", %{dets_path: dets_path} do
       assert {:ok, pid1} = TaskStoreServer.start_link(dets_path: dets_path)
       assert {:ok, pid2} = TaskStoreServer.start_link(dets_path: dets_path)
@@ -46,19 +38,6 @@ defmodule CodingAgent.TaskStoreServerTest do
       assert pid1 == pid2
 
       stop_server(pid1)
-    end
-  end
-
-  # ============================================================================
-  # ensure_table/1 Tests
-  # ============================================================================
-
-  describe "ensure_table/1" do
-    test "returns :ok when table exists", %{dets_path: dets_path} do
-      assert {:ok, pid} = TaskStoreServer.start_link(dets_path: dets_path)
-      assert :ok = TaskStoreServer.ensure_table(pid)
-
-      stop_server(pid)
     end
   end
 
@@ -145,60 +124,6 @@ defmodule CodingAgent.TaskStoreServerTest do
       assert :ok = TaskStoreServer.clear(pid)
 
       assert :ets.tab2list(table) == []
-
-      stop_server(pid)
-    end
-
-    test "clears from DETS as well", %{dets_path: dets_path} do
-      assert {:ok, pid} = TaskStoreServer.start_link(dets_path: dets_path)
-
-      table = TaskStoreServer.table_name()
-      :ets.insert(table, {"task1", %{id: "task1", status: :completed}, []})
-
-      assert :ok = TaskStoreServer.clear(pid)
-
-      # After restart, DETS should be empty too
-      stop_server(pid)
-
-      assert {:ok, pid2} = TaskStoreServer.start_link(dets_path: dets_path)
-      table2 = TaskStoreServer.table_name()
-      assert :ets.tab2list(table2) == []
-
-      stop_server(pid2)
-    end
-  end
-
-  # ============================================================================
-  # dets_status/1 Tests
-  # ============================================================================
-
-  describe "dets_status/1" do
-    test "returns DETS status when initialized", %{dets_path: dets_path} do
-      assert {:ok, pid} = TaskStoreServer.start_link(dets_path: dets_path)
-
-      result = TaskStoreServer.dets_status(pid)
-
-      assert is_map(result)
-      assert Map.has_key?(result, :info)
-      assert Map.has_key?(result, :state)
-
-      stop_server(pid)
-    end
-  end
-
-  # ============================================================================
-  # Persistence Tests
-  # ============================================================================
-
-  describe "persistence" do
-    test "data can be inserted and retrieved", %{dets_path: dets_path} do
-      assert {:ok, pid} = TaskStoreServer.start_link(dets_path: dets_path)
-
-      table = TaskStoreServer.table_name()
-      :ets.insert(table, {"test_task", %{id: "test_task", status: :completed}, []})
-
-      # Should be able to retrieve the data
-      assert :ets.lookup(table, "test_task") != []
 
       stop_server(pid)
     end

@@ -9,6 +9,8 @@ defmodule LemonControlPlane.HTTP.Router do
 
   use Plug.Router
 
+  alias LemonControlPlane.Protocol.Errors
+
   plug(Plug.Logger, log: :debug)
   plug(Plug.Parsers, parsers: [:json], pass: ["application/json"], json_decoder: Jason)
   plug(:match)
@@ -123,11 +125,21 @@ defmodule LemonControlPlane.HTTP.Router do
           |> WebSockAdapter.upgrade(LemonControlPlane.ACP.Connection, [], timeout: :infinity)
           |> halt()
         else
-          json(conn, 403, %{"error" => "ACP requires operator read, write and approval scopes"})
+          http_error(
+            conn,
+            403,
+            Errors.forbidden(
+              operator_auth_message("ACP requires operator read, write and approval scopes.")
+            )
+          )
         end
 
       _ ->
-        json(conn, 401, %{"error" => "Operator authentication is required"})
+        http_error(
+          conn,
+          401,
+          Errors.unauthorized(operator_auth_message("Operator authentication is required."))
+        )
     end
   end
 
@@ -142,7 +154,11 @@ defmodule LemonControlPlane.HTTP.Router do
   end
 
   match _ do
-    send_resp(conn, 404, Jason.encode!(%{error: "Not found"}))
+    if List.first(conn.path_info) == "v1" do
+      send_openai_result({:error, {404, "Not found"}}, conn)
+    else
+      http_error(conn, 404, Errors.not_found("Not found"))
+    end
   end
 
   defp send_openai_result({:ok, body}, conn), do: json(conn, 200, body)
@@ -383,11 +399,10 @@ defmodule LemonControlPlane.HTTP.Router do
         fun.(conn)
 
       {:error, status, message} ->
-        json(conn, status, %{
-          "jsonrpc" => "2.0",
-          "id" => nil,
-          "error" => %{"code" => -32_010, "message" => message}
-        })
+        error =
+          if status == 401, do: Errors.unauthorized(message), else: Errors.forbidden(message)
+
+        http_error(conn, status, error)
     end
   end
 
@@ -403,10 +418,7 @@ defmodule LemonControlPlane.HTTP.Router do
           missing? = is_nil(presented_openai_token(conn))
           status = if missing?, do: 401, else: 403
 
-          message =
-            if missing?,
-              do: "authorization token is required",
-              else: "authorization token is invalid"
+          message = token_auth_message(missing?, "LEMON_OPENAI_COMPAT_API_TOKEN")
 
           {:error, status, message}
         end
@@ -437,10 +449,7 @@ defmodule LemonControlPlane.HTTP.Router do
           missing? = is_nil(presented_openai_token(conn))
           status = if missing?, do: 401, else: 403
 
-          message =
-            if missing?,
-              do: "authorization token is required",
-              else: "authorization token is invalid"
+          message = token_auth_message(missing?, "LEMON_ACP_API_TOKEN")
 
           {:error, status, message}
         end
@@ -456,6 +465,21 @@ defmodule LemonControlPlane.HTTP.Router do
       value when is_binary(value) and value != "" -> value
       _ -> nil
     end
+  end
+
+  defp http_error(conn, status, error) do
+    json(conn, status, %{"error" => Errors.to_payload(error)})
+  end
+
+  defp token_auth_message(missing?, env) do
+    reason = if missing?, do: "required", else: "invalid"
+
+    "Authorization token is #{reason}. Send Authorization: Bearer <token> (or x-api-key) using the token configured by #{env}."
+  end
+
+  defp operator_auth_message(reason) do
+    reason <>
+      " Send Authorization: Bearer <token> using LEMON_CONTROL_PLANE_OPERATOR_TOKEN or the launcher's ~/.lemon/run/control-plane-<port>.token file."
   end
 
   defp presented_openai_token(conn) do

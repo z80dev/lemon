@@ -505,9 +505,8 @@ defmodule CodingAgent.CompactionTest do
     end
 
     test "uses default reserve_tokens when not specified" do
-      # Default is 16384
-      # 90000 > 100000 - 16384 = 83616
-      assert Compaction.should_compact?(90_000, 100_000, %{enabled: true})
+      refute Compaction.should_compact?(83_616, 100_000, %{enabled: true})
+      assert Compaction.should_compact?(83_617, 100_000, %{enabled: true})
     end
 
     test "returns false when exactly at threshold" do
@@ -516,10 +515,6 @@ defmodule CodingAgent.CompactionTest do
     end
 
     test "defaults to enabled when not specified" do
-      assert Compaction.should_compact?(90_000, 100_000, %{})
-    end
-
-    test "handles empty settings map" do
       assert Compaction.should_compact?(90_000, 100_000, %{})
     end
   end

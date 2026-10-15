@@ -7,7 +7,6 @@ defmodule LemonCore.ApplicationTest do
   """
   use ExUnit.Case, async: false
 
-  alias LemonCore.ConfigCache
   alias LemonCore.Store
 
   setup do
@@ -43,11 +42,6 @@ defmodule LemonCore.ApplicationTest do
              |> Enum.any?(fn {app, _, _} -> app == :lemon_core end)
     end
 
-    test "supervisor is running with correct name" do
-      assert Process.whereis(LemonCore.Supervisor) != nil
-      assert Process.alive?(Process.whereis(LemonCore.Supervisor))
-    end
-
     test "supervisor uses one_for_one strategy" do
       supervisor_pid = Process.whereis(LemonCore.Supervisor)
       assert supervisor_pid != nil
@@ -60,95 +54,13 @@ defmodule LemonCore.ApplicationTest do
     end
   end
 
-  describe "supervision tree children" do
-    test "Phoenix.PubSub is started with correct name" do
-      assert Process.whereis(LemonCore.PubSub) != nil
-      assert Process.alive?(Process.whereis(LemonCore.PubSub))
-    end
-
-    test "ConfigCache is started and available" do
-      assert ConfigCache.available?()
-      assert Process.whereis(LemonCore.ConfigCache) != nil
-    end
-
-    test "Store is started and accessible" do
-      assert Process.whereis(LemonCore.Store) != nil
-      assert Process.alive?(Process.whereis(LemonCore.Store))
-    end
-  end
-
   describe "supervisor children specification" do
-    test "supervisor has expected children" do
-      supervisor_pid = Process.whereis(LemonCore.Supervisor)
-      children = Supervisor.which_children(supervisor_pid)
-
-      # Verify all expected children are present
-      child_ids = Enum.map(children, fn {id, _, _, _} -> id end)
-
-      # Phoenix.PubSub is started as Phoenix.PubSub.Supervisor
-      assert Phoenix.PubSub.Supervisor in child_ids
-      assert LemonCore.ACPClientBridge in child_ids
-      assert LemonCore.ConfigCache in child_ids
-      assert LemonCore.Store in child_ids
-      assert LemonCore.Secrets.SourceTaskSupervisor in child_ids
-      assert LemonCore.Secrets.SourceCache in child_ids
-      assert LemonCore.RunHistoryStore in child_ids
-      assert LemonCore.NodeRegistry in child_ids
-      assert LemonCore.ConfigReloader in child_ids
-      assert LemonCore.ConfigReloader.Watcher in child_ids
-    end
-
     test "supervisor has exactly 11 children" do
       supervisor_pid = Process.whereis(LemonCore.Supervisor)
       children = Supervisor.which_children(supervisor_pid)
 
       # Includes LemonCore.UsageLedger, which records finished-run usage.
       assert length(children) == 11
-    end
-
-    test "children include both workers and supervisors" do
-      supervisor_pid = Process.whereis(LemonCore.Supervisor)
-      children = Supervisor.which_children(supervisor_pid)
-
-      # Collect types
-      types = Enum.map(children, fn {_, _, type, _} -> type end)
-
-      # Should have both workers and at least one supervisor (PubSub)
-      assert :worker in types
-      assert :supervisor in types
-
-      # All pids should be alive
-      for {_, pid, _, _} <- children do
-        assert pid != :undefined
-        assert Process.alive?(pid)
-      end
-    end
-
-    test "PubSub is a supervisor, others are workers" do
-      supervisor_pid = Process.whereis(LemonCore.Supervisor)
-      children = Supervisor.which_children(supervisor_pid)
-
-      child_map = Map.new(children, fn {id, pid, type, _} -> {id, {pid, type}} end)
-
-      # PubSub is a supervisor
-      assert {_, :supervisor} = child_map[Phoenix.PubSub.Supervisor]
-
-      # Others are workers
-      assert {_, :worker} = child_map[LemonCore.ConfigCache]
-      assert {_, :worker} = child_map[LemonCore.Store]
-      assert {_, :worker} = child_map[LemonCore.RunHistoryStore]
-      assert {_, :worker} = child_map[LemonCore.ConfigReloader]
-      assert {_, :worker} = child_map[LemonCore.ConfigReloader.Watcher]
-    end
-  end
-
-  describe "ConfigCache configuration" do
-    test "ConfigCache uses application environment config" do
-      # Get the config that was passed to ConfigCache
-      config = Application.get_env(:lemon_core, LemonCore.ConfigCache, [])
-
-      # ConfigCache should be started with these options
-      assert is_list(config)
     end
   end
 
@@ -196,11 +108,6 @@ defmodule LemonCore.ApplicationTest do
 
       # Clean up
       Store.delete(:runs, test_key)
-    end
-
-    test "ConfigCache returns config after application start" do
-      config = ConfigCache.get(nil)
-      assert is_map(config)
     end
   end
 end

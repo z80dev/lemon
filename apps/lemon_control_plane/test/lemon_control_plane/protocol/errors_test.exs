@@ -60,9 +60,28 @@ defmodule LemonControlPlane.Protocol.ErrorsTest do
     test "falls back for unexpected input" do
       assert Errors.to_payload(:boom) == %{
                "code" => "INTERNAL_ERROR",
-               "message" => "An unexpected error occurred",
-               "details" => ":boom"
+               "message" => "An unexpected error occurred"
              }
+    end
+
+    test "unsupported details cannot break response encoding or leak inspected runtime state" do
+      for details <- [
+            {:persist_failed, "private-token"},
+            %{nested: [self()]},
+            %{callback: fn -> :ok end},
+            <<255>>,
+            %{{:invalid, :key} => true}
+          ],
+          error <- [
+            {:internal_error, "Could not save node", details},
+            %{code: "INTERNAL_ERROR", message: "Could not save node", details: details}
+          ] do
+        payload = Errors.to_payload(error)
+        refute Map.has_key?(payload, "details")
+        encoded = LemonControlPlane.Protocol.Frames.encode_response("error-id", {:error, error})
+        assert Jason.decode!(encoded)["error"]["message"] == "Could not save node"
+        refute encoded =~ "private-token"
+      end
     end
   end
 

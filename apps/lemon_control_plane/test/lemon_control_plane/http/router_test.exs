@@ -74,6 +74,59 @@ defmodule LemonControlPlane.HTTP.RouterTest do
     :ok
   end
 
+  test "non-v1 HTTP errors share protocol codes and a JSON error envelope" do
+    missing = conn(:get, "/missing") |> Router.call([]) |> json_response()
+    assert missing.status == 404
+    assert missing.body == %{"error" => %{"code" => "NOT_FOUND", "message" => "Not found"}}
+
+    previous = Application.fetch_env(:lemon_control_plane, :acp_api_token)
+    Application.put_env(:lemon_control_plane, :acp_api_token, "private-acp-test-token")
+    on_exit(fn -> restore_env(:acp_api_token, previous) end)
+
+    for {headers, status, code} <- [
+          {[], 401, "UNAUTHORIZED"},
+          {[{"authorization", "Bearer wrong"}], 403, "FORBIDDEN"}
+        ] do
+      request = json_conn(:post, "/acp", %{"method" => "initialize"})
+
+      request =
+        Enum.reduce(headers, request, fn {key, value}, acc -> put_req_header(acc, key, value) end)
+
+      response = request |> Router.call([]) |> json_response()
+      assert response.status == status
+      assert response.body["error"]["code"] == code
+      assert response.body["error"]["message"] =~ "Authorization: Bearer <token>"
+      assert response.body["error"]["message"] =~ "LEMON_ACP_API_TOKEN"
+      refute Jason.encode!(response.body) =~ "private-acp-test-token"
+      refute Map.has_key?(response.body, "jsonrpc")
+    end
+  end
+
+  test "ACP WebSocket denial names the operator credential without exposing it" do
+    previous = Application.fetch_env(:lemon_control_plane, :operator_token)
+    Application.put_env(:lemon_control_plane, :operator_token, "private-operator-test-token")
+    on_exit(fn -> restore_env(:operator_token, previous) end)
+
+    response = conn(:get, "/acp/ws") |> Router.call([]) |> json_response()
+    assert response.status == 401
+    assert response.body["error"]["code"] == "UNAUTHORIZED"
+    assert response.body["error"]["message"] =~ "Authorization: Bearer <token>"
+    assert response.body["error"]["message"] =~ "LEMON_CONTROL_PLANE_OPERATOR_TOKEN"
+    assert response.body["error"]["message"] =~ "control-plane-<port>.token"
+    refute Jason.encode!(response.body) =~ "private-operator-test-token"
+  end
+
+  test "v1 unknown paths retain OpenAI error shape and healthz stays unchanged" do
+    response = conn(:get, "/v1/missing") |> Router.call([]) |> json_response()
+    assert response.status == 404
+
+    assert response.body == %{
+             "error" => %{"message" => "Not found", "type" => "invalid_request_error"}
+           }
+
+    assert conn(:get, "/healthz") |> Router.call([]) |> Map.fetch!(:resp_body) == ~s({"ok":true})
+  end
+
   test "serves OpenAI-compatible health and capability metadata" do
     health =
       :get
@@ -164,7 +217,9 @@ defmodule LemonControlPlane.HTTP.RouterTest do
       |> json_response()
 
     assert missing.status == 401
-    assert missing.body["error"]["message"] == "authorization token is required"
+    assert missing.body["error"]["type"] == "invalid_request_error"
+    assert missing.body["error"]["message"] =~ "Authorization: Bearer <token>"
+    assert missing.body["error"]["message"] =~ "LEMON_OPENAI_COMPAT_API_TOKEN"
 
     invalid =
       :get
@@ -174,7 +229,10 @@ defmodule LemonControlPlane.HTTP.RouterTest do
       |> json_response()
 
     assert invalid.status == 403
-    assert invalid.body["error"]["message"] == "authorization token is invalid"
+    assert invalid.body["error"]["message"] =~ "invalid"
+    assert invalid.body["error"]["message"] =~ "Authorization: Bearer <token>"
+    assert invalid.body["error"]["message"] =~ "LEMON_OPENAI_COMPAT_API_TOKEN"
+    refute invalid.body["error"]["message"] =~ "secret-token"
 
     ok =
       :get
