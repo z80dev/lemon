@@ -215,6 +215,11 @@ The app is messaging-first. The sidebar holds search and new-Bot buttons, pinned
 
 The primary navigation is your named Bot roster, with pinned Bots, synced sections, groups of your own Bots, hidden Bots and unread/activity indicators. macOS uses roster, conversation and inspector; iOS adapts split navigation to the available width. Bot identity, Job and assigned-profile Memory remain distinct. The selected Bot shows its actual owned desktop/swarm host, current work and reviewed artifacts, with Activity + Upcoming, Ideas that draft rather than execute, preference inspection/Undo, native capability review, templates and milestone evidence. Live Team Bots, managers, publishing, membership controls and enterprise-first navigation are absent; workspace/public templates remain reviewed declarative copies, not live access grants.
 
+On Mac, message actions appear when you hover over a message or move keyboard focus
+to its row or action buttons. Reply, Copy, reactions, feedback and Copy message ID
+are also available through VoiceOver actions and the message context menu.
+iPhone keeps its long-press context menu.
+
 On iPhone the composer stays in the bottom safe area above the software keyboard,
 including its Send button. Return (including Shift+Return on a hardware keyboard)
 inserts a newline; tap Send or use ⌘Return to send without dismissing the keyboard.
