@@ -8,10 +8,24 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
+### Changed
+
 - Preserve portable Agent Skills string-valued metadata (including `metadata.lemon`)
   and support 1024-character Unicode descriptions. Add conformance/discovery
   coverage for spec fields and bundled resources; document legacy leniency and
   clarify that synthesized skills remain drafts until promotion.
+- Remember supports exact-entry or unique-substring edits consistently across scoped
+  and legacy memory, with actionable ambiguity, safety, and capacity feedback.
+
+### Added
+
+- Computer use can be configured in `[runtime.tools.computer_use]` (`enabled`,
+  `chrome`, `lcu_root`, `node`, `declined_origins`); environment variables still
+  take precedence. Execution-node capability inspection reports a
+  `computer_use` item, and tool cards and approvals name the computer-use
+  action, app or site.
+- omp tool cards show parallel worker grids, combined usage and task errors,
+  approval waits, isolated worktrees, child activity, model prices and transcript tails.
 
 ---
 
