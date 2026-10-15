@@ -4,6 +4,7 @@
 //   "image"        -> a text block and a PNG image block
 //   "error"        -> isError: true
 //   "elicit:<app>" -> a native-app approval request for <app>; returns "approval:<action>"
+//   "origin:<url>" -> a website approval request for origin <url>; returns "approval:<action>"
 //   "hang"         -> waits for cancel, then fails with "aborted"
 //   "crash"        -> exits with status 3
 // LCU_FAKE_LOG names a file that receives every request as a JSON line.
@@ -38,6 +39,25 @@ function elicit(app, request) {
   });
 }
 
+function elicitOrigin(origin, request) {
+  return new Promise(resolve => {
+    const id = ++elicitations;
+    pending.set(id, resolve);
+    send({ type: 'elicitation', id, params: {
+      mode: 'form',
+      message: `Allow the browser to access ${origin}?`,
+      requestedSchema: { type: 'object', properties: {} },
+      _meta: {
+        codex_approval_kind: 'mcp_tool_call',
+        connector_id: 'browser-use',
+        tool_name: 'access_browser_origin',
+        origin,
+        'x-codex-turn-metadata': { session_id: request.sessionId, turn_id: request.turnId },
+      },
+    } });
+  });
+}
+
 async function call(request) {
   const code = String(request.arguments?.code ?? '');
   if (code.startsWith('text:')) return { content: [{ type: 'text', text: code.slice(5) }], isError: false };
@@ -47,6 +67,10 @@ async function call(request) {
   if (code === 'error') return { content: [{ type: 'text', text: 'boom' }], isError: true };
   if (code.startsWith('elicit:')) {
     const answer = await elicit(code.slice(7), request);
+    return { content: [{ type: 'text', text: `approval:${answer?.action}` }], isError: false };
+  }
+  if (code.startsWith('origin:')) {
+    const answer = await elicitOrigin(code.slice(7), request);
     return { content: [{ type: 'text', text: `approval:${answer?.action}` }], isError: false };
   }
   if (code === 'hang') {

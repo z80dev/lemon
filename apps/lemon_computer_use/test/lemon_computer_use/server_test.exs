@@ -133,6 +133,35 @@ defmodule LemonComputerUse.ServerTest do
                      }}
   end
 
+  test "routes website approval requests as origin approvals" do
+    parent = self()
+
+    approve = fn request ->
+      send(parent, {:approval, request})
+      {:ok, :approved, :approve_once}
+    end
+
+    js = Js.tool("/tmp", opts(approval_context: %{approval_request_fun: approve}))
+
+    assert %AgentToolResult{content: [%TextContent{text: "approval:accept"}]} =
+             run(js, %{"code" => "origin:http://127.0.0.1:8765"})
+
+    assert_received {:approval,
+                     %{tool: "computer_use", action: %{"origin" => "http://127.0.0.1:8765"}}}
+
+    never = fn _request ->
+      send(parent, :asked_for_lemon_web)
+      {:ok, :approved, :approve_once}
+    end
+
+    js = Js.tool("/tmp", opts(approval_context: %{approval_request_fun: never}))
+
+    assert %AgentToolResult{content: [%TextContent{text: "approval:decline"}]} =
+             run(js, %{"code" => "origin:http://localhost:4080"})
+
+    refute_received :asked_for_lemon_web
+  end
+
   test "a denied approval declines and Lemon's own apps are declined without asking" do
     deny = fn _request -> {:ok, :denied} end
 

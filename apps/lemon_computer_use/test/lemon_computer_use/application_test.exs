@@ -13,6 +13,13 @@ defmodule LemonComputerUse.ApplicationTest do
     assert LemonComputerUse.status() == %{enabled: false, running: false}
   end
 
+  test "the Chrome switch adds the browser surface to the LCU command" do
+    on_exit(fn -> System.delete_env("LEMON_COMPUTER_USE_CHROME") end)
+    refute "--chrome" in LemonComputerUse.Config.command()
+    System.put_env("LEMON_COMPUTER_USE_CHROME", "1")
+    assert List.last(LemonComputerUse.Config.command()) == "--chrome"
+  end
+
   test "the environment switch overrides application config" do
     on_exit(fn -> System.delete_env("LEMON_COMPUTER_USE_ENABLED") end)
     System.put_env("LEMON_COMPUTER_USE_ENABLED", "true")
