@@ -56,6 +56,12 @@ SVG tests use injected rasterizers by default. The real `rsvg-convert` case carr
 the `:rsvg_convert` tag, which the coding-agent helper explicitly excludes when
 librsvg is not installed. Install librsvg to include that host-backed coverage.
 
+The real LLDB/DAP integration carries `:lldb_dap`. The coding-agent helper
+compiles a trivial program and launches it with batch LLDB once per suite, with
+bounded subprocess probes. It excludes the tag if the adapter/compiler is
+missing or the host cannot launch the debuggee (including macOS debug permission
+denied in a non-interactive session); finding `lldb-dap` alone is not sufficient.
+
 Product and packaged-boot smokes isolate their home/store directories and use
 valid, test-only 32-byte secrets keys; no live provider credential is needed.
 For packaged CLI coverage, run `scripts/verify_release_runtime_boot` in
@@ -66,10 +72,19 @@ For packaged CLI coverage, run `scripts/verify_release_runtime_boot` in
 
 Run `scripts/test premerge` before merging a small change. It checks changed
 Elixir/HEEx formatting, changed Elixir files with the same Credo settings as
-`quality`, skip tags, changed changelogs, and the affected-app test run in that
-order. Each step reports elapsed time and stops on failure. Both `premerge` and
+`quality`, skip tags, changed changelogs, and then runs `changed --narrow`, in
+that order. Each step reports elapsed time and stops on failure. Both `premerge` and
 `changed` accept `--base REF` (default `origin/main`); selection compares the
 merge base with the working tree, including untracked non-ignored files.
+
+`--narrow` keeps the changed apps (and data readers) whole but limits every other
+affected downstream app to the test files that name a module defined in a
+changed lib file (its current or merge-base version). It falls back to whole
+apps when shared test support names such a module or a changed lib file defines
+no module. A behaviour change that reaches a downstream app only through an
+intermediate module is left to PR CI, which still runs affected apps whole.
+BEAM lanes install `clients/tui` (`bun install --frozen-lockfile`) when it has no
+`node_modules` and lemon_control_plane's TUI wire tests are selected.
 
 Use `scripts/test changed [--base REF] [mix test args...]` to repeat just the
 affected work. App changes include transitive reverse dependencies, including

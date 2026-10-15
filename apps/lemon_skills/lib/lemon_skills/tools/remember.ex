@@ -59,7 +59,7 @@ defmodule LemonSkills.Tools.Remember do
       description:
         "Save a durable fact or preference for future sessions in this memory context. " <>
           "The runtime fixes private/shared scope; tool input cannot change it. " <>
-          "Target \"user\" records human preferences, \"memory\" records other long-term facts, " <>
+          ~s(Target "user" records human preferences, "memory" records other long-term facts, ) <>
           "and \"project\" saves repository build commands, conventions, and decisions. " <>
           "To add a new fact, pass text and omit replaces (or set it to null, never an empty string). " <>
           "To correct or delete, use an exact saved entry or a unique substring in replaces. " <>

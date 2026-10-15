@@ -34,7 +34,7 @@ defmodule CodingAgent.Debug.ClientTest do
     log |> File.read!() |> String.split("\n", trim: true) |> Enum.map(&Jason.decode!/1)
   end
 
-  test "rejects runInTerminal and startDebugging reverse requests", %{
+  test "rejects runInTerminal and forwards startDebugging to its owner", %{
     adapter: adapter,
     cwd: cwd,
     log: log
@@ -43,7 +43,9 @@ defmodule CodingAgent.Debug.ClientTest do
     {:ok, _} = Client.request(client, "launch", %{"program" => "x", "fakeMode" => "reverse"})
 
     assert_receive {:dap, ^client, {:reverse_request, "runInTerminal"}}, 5_000
-    assert_receive {:dap, ^client, {:reverse_request, "startDebugging"}}, 5_000
+    assert_receive {:dap, ^client, {:start_debugging, request}}, 5_000
+    assert request["arguments"]["request"] == "launch"
+    assert :ok = Client.respond(client, request, :ok)
     assert_receive {:dap, ^client, {:event, "initialized", _}}, 5_000
 
     reverse_responses = fn ->
@@ -55,11 +57,10 @@ defmodule CodingAgent.Debug.ClientTest do
 
     assert [
              %{"reverse_response" => "runInTerminal", "success" => false, "message" => rit},
-             %{"reverse_response" => "startDebugging", "success" => false, "message" => sd}
+             %{"reverse_response" => "startDebugging", "success" => true, "message" => nil}
            ] = responses
 
     assert rit =~ "runInTerminal is not supported"
-    assert sd =~ "startDebugging"
   end
 
   test "reports adapter exit with captured stderr", %{adapter: adapter, cwd: cwd} do

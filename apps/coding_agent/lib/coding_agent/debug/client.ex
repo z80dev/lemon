@@ -9,12 +9,11 @@ defmodule CodingAgent.Debug.Client do
 
     * `{:dap, client, {:response, request_seq, response_map}}`
     * `{:dap, client, {:event, event_name, body}}`
-    * `{:dap, client, {:reverse_request, command}}` (already answered)
+    * `{:dap, client, {:start_debugging, request}}` (owner must answer)
+    * `{:dap, client, {:reverse_request, command}}` (unsupported, already answered)
     * `{:dap, client, {:exit, reason_text}}` (the adapter is gone)
 
-  Reverse requests (`runInTerminal`, `startDebugging`, anything else) are
-  answered with an error response: Lemon advertises neither capability and
-  never spawns terminals or child debug sessions on an adapter's behalf.
+  The session owner handles `startDebugging`; other reverse requests are rejected.
 
   The client links to its owner and traps exits, so the adapter's whole OS
   process tree (adapter, debug server, debuggee) is killed when the owner dies,
@@ -56,6 +55,16 @@ defmodule CodingAgent.Debug.Client do
   catch
     :exit, _ -> {:error, "debug adapter is not running"}
   end
+
+  @doc "Answer an adapter's startDebugging reverse request."
+  def respond(client, request, result) do
+    GenServer.call(client, {:respond, request, result})
+  catch
+    :exit, _ -> {:error, "debug adapter is not running"}
+  end
+
+  @doc "Adapter endpoint for a child session (server adapters share their listener)."
+  def child_adapter(client), do: GenServer.call(client, :child_adapter)
 
   @doc "OS pid of the adapter process, if it is still running."
   @spec os_pid(pid()) :: non_neg_integer() | nil
@@ -121,6 +130,41 @@ defmodule CodingAgent.Debug.Client do
       :ok -> {:reply, {:ok, seq}, %{state | seq: seq}}
       {:error, reason} -> {:reply, {:error, reason}, state}
     end
+  end
+
+  def handle_call({:respond, request, result}, _from, state) do
+    response = %{
+      "seq" => state.seq + 1,
+      "type" => "response",
+      "request_seq" => request["seq"],
+      "command" => request["command"],
+      "success" => result == :ok
+    }
+
+    response =
+      case result do
+        :ok -> response
+        {:error, message} -> Map.put(response, "message", message)
+      end
+
+    {:reply, write(state, Protocol.encode(response)), %{state | seq: state.seq + 1}}
+  end
+
+  def handle_call(:child_adapter, _from, state) do
+    adapter =
+      if state.adapter[:connect_mode] == :socket_server do
+        {:ok, {host, port}} = :inet.peername(state.socket)
+
+        Map.merge(state.adapter, %{
+          connect_mode: :remote,
+          host: List.to_string(:inet.ntoa(host)),
+          port: port
+        })
+      else
+        state.adapter
+      end
+
+    {:reply, adapter, state}
   end
 
   def handle_call(:os_pid, _from, state), do: {:reply, state.os_pid, state}
@@ -371,6 +415,11 @@ defmodule CodingAgent.Debug.Client do
     state
   end
 
+  defp dispatch(%{"type" => "request", "command" => "startDebugging"} = message, state) do
+    notify(state, {:start_debugging, message})
+    state
+  end
+
   defp dispatch(%{"type" => "request", "command" => command} = message, state) do
     text = reverse_request_error(command)
 
@@ -393,9 +442,6 @@ defmodule CodingAgent.Debug.Client do
 
   defp reverse_request_error("runInTerminal"),
     do: "runInTerminal is not supported by Lemon; the debuggee must use the adapter's console"
-
-  defp reverse_request_error("startDebugging"),
-    do: "startDebugging (child debug sessions) is not supported by Lemon"
 
   defp reverse_request_error(command), do: "Unsupported DAP reverse request: #{command}"
 

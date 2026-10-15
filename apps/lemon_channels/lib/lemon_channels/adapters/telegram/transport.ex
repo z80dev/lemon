@@ -119,8 +119,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
               voice_transcription_api_key:
                 normalize_blank(cfg_get(config, :voice_transcription_api_key)) || openai_api_key,
               voice_max_bytes: cfg_get(config, :voice_max_bytes, 10 * 1024 * 1024),
-              voice_transcriber:
-                config[:voice_transcriber] || LemonChannels.Adapters.Telegram.VoiceTranscriber,
+              voice_transcriber: config[:voice_transcriber] || LemonChannels.VoiceTranscriber,
               offset:
                 RuntimeState.initial_offset(
                   config_offset,

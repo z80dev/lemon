@@ -17,9 +17,9 @@ defmodule CodingAgent.ExecutionNode.PTYTest do
     assert :ok = PTY.command(pid, "resize", %{"cols" => 100, "rows" => 40})
     input = "test -t 0 && printf '\\n__LEMON_REAL_PTY__\\n'; exit 7\n"
     assert :ok = PTY.command(pid, "input", %{"dataBase64" => Base.encode64(input)})
-    output = receive_terminal(pid, "", 0)
-    assert output =~ "__LEMON_REAL_PTY__"
-    assert_receive {:node_pty, "pty-test", "exit", %{"code" => 7}}, 5_000
+    {code, output} = receive_terminal(pid, "", 0)
+    assert output =~ "\r\n__LEMON_REAL_PTY__\r\n"
+    assert code == 7
   end
 
   test "worker policy rejects a cwd outside allowed roots" do
@@ -171,16 +171,18 @@ defmodule CodingAgent.ExecutionNode.PTYTest do
     do: flunk("PTY protocol exceeded test bound")
 
   defp receive_terminal(pid, acc, count) when count < 100 do
+    # The helper reads only one unacknowledged chunk. Keep draining after the
+    # marker: interactive shells may emit a separate final `exit` chunk before
+    # EOF, and waiting only for exit here would deadlock its backpressure.
     receive do
       {:node_pty, "pty-test", "output", %{"dataBase64" => data}} ->
         PTY.ack(pid)
-        next = acc <> Base.decode64!(data)
+        receive_terminal(pid, acc <> Base.decode64!(data), count + 1)
 
-        if String.contains?(next, "\r\n__LEMON_REAL_PTY__\r\n"),
-          do: next,
-          else: receive_terminal(pid, next, count + 1)
+      {:node_pty, "pty-test", "exit", %{"code" => code}} ->
+        {code, acc}
     after
-      5_000 -> flunk("PTY did not produce the destination terminal marker")
+      5_000 -> flunk("PTY did not report terminal exit")
     end
   end
 
