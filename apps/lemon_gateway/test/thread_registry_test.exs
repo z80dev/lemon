@@ -112,28 +112,6 @@ defmodule LemonGateway.ThreadRegistryTest do
       send(pid, :stop)
     end
 
-    test "register/1 returns ok tuple with calling process pid" do
-      key = unique_key()
-      test_pid = self()
-
-      spawn(fn ->
-        {:ok, registered_pid} = ThreadRegistry.register(key)
-        send(test_pid, {:registered_pid, registered_pid, self()})
-
-        receive do
-          :stop -> :ok
-        end
-      end)
-
-      receive do
-        {:registered_pid, registered_pid, process_pid} ->
-          # The registered_pid should be the calling process
-          assert registered_pid == process_pid
-      after
-        1000 -> flunk("Timeout waiting for registration")
-      end
-    end
-
     test "register/1 can register different keys from same process" do
       key1 = unique_key()
       key2 = unique_key()
@@ -160,44 +138,18 @@ defmodule LemonGateway.ThreadRegistryTest do
       end
     end
 
-    test "register/1 can use various key types - tuple" do
-      key = {:scope, %{transport: :telegram, chat_id: 123}}
-      pid = spawn_registering_process(key)
-      result = wait_for_registration(pid)
-
-      assert {:ok, _} = result
-      assert ThreadRegistry.whereis(key) == pid
-      send(pid, :stop)
-    end
-
-    test "register/1 can use various key types - atom" do
-      key = :my_unique_thread
-      pid = spawn_registering_process(key)
-      result = wait_for_registration(pid)
-
-      assert {:ok, _} = result
-      assert ThreadRegistry.whereis(key) == pid
-      send(pid, :stop)
-    end
-
-    test "register/1 can use various key types - string" do
-      key = "thread:123:456"
-      pid = spawn_registering_process(key)
-      result = wait_for_registration(pid)
-
-      assert {:ok, _} = result
-      assert ThreadRegistry.whereis(key) == pid
-      send(pid, :stop)
-    end
-
-    test "register/1 can use various key types - integer" do
-      key = 12_345
-      pid = spawn_registering_process(key)
-      result = wait_for_registration(pid)
-
-      assert {:ok, _} = result
-      assert ThreadRegistry.whereis(key) == pid
-      send(pid, :stop)
+    test "register/1 accepts tuple, atom, string, and integer keys" do
+      for key <- [
+            {:scope, %{transport: :telegram, chat_id: 123}},
+            :my_unique_thread,
+            "thread:123:456",
+            12_345
+          ] do
+        pid = spawn_registering_process(key)
+        assert wait_for_registration(pid) == {:ok, pid}
+        assert ThreadRegistry.whereis(key) == pid
+        send(pid, :stop)
+      end
     end
   end
 

@@ -69,6 +69,7 @@ defmodule LemonMCP.Client.SSE do
       client_name: Keyword.get(opts, :client_name, "lemon-mcp"),
       client_version: Keyword.get(opts, :client_version, "0.1.0"),
       capabilities: Keyword.get(opts, :capabilities, %{}),
+      notification_handler: Protocol.notification_handler(opts),
       timeout_ms: Keyword.get(opts, :timeout_ms, 30_000)
     }
 
@@ -429,6 +430,20 @@ defmodule LemonMCP.Client.SSE do
       Enum.reduce(complete_lines, {[], state.sse_event}, fn line, {events, event} ->
         parse_sse_line(String.trim_trailing(line, "\r"), events, event)
       end)
+
+    Enum.each(events, fn
+      %{event: "message", data: data} ->
+        case Jason.decode(data) do
+          {:ok, message} ->
+            Protocol.dispatch_notification(message, state.config.notification_handler)
+
+          _ ->
+            :ok
+        end
+
+      _ ->
+        :ok
+    end)
 
     {Enum.reverse(events), %{state | sse_buffer: buffer, sse_event: event}}
   end

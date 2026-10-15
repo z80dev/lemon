@@ -10,6 +10,8 @@
     id="rail"
     data-open="false"
     aria-label="Primary"
+    phx-window-keydown={close_rail()}
+    phx-key="Escape"
     class="fixed inset-y-0 left-0 z-40 flex w-[232px] -translate-x-full flex-col border-r border-line bg-surface transition-transform duration-150 data-[open=true]:translate-x-0 data-[open=true]:shadow-overlay md:static md:z-auto md:w-[212px] md:translate-x-0 md:bg-surface/60"
   >
     <div class="flex h-12 items-center gap-2 px-3">

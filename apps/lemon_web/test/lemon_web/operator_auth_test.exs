@@ -174,6 +174,26 @@ defmodule LemonWeb.OperatorAuthTest do
       assert html_response(conn, 503) =~ "No operator token is configured"
     end
 
+    test "browser GET receives helpful HTML without opening access" do
+      conn =
+        build_conn()
+        |> Plug.Conn.put_req_header("accept", "text/html,application/xhtml+xml")
+        |> get("/sessions")
+
+      html = html_response(conn, 503)
+      assert html =~ "No operator token is configured"
+      assert html =~ "LEMON_CONTROL_PLANE_OPERATOR_TOKEN"
+      assert html =~ ~s(href="/login")
+    end
+
+    test "non-HTML GET keeps the plain-text 503" do
+      conn =
+        build_conn() |> Plug.Conn.put_req_header("accept", "application/json") |> get("/sessions")
+
+      assert response(conn, 503) =~ "operator token"
+      assert Plug.Conn.get_resp_header(conn, "content-type") == ["text/plain; charset=utf-8"]
+    end
+
     test "explicit tokenless compatibility admits only direct loopback peers" do
       Application.put_env(:lemon_control_plane, :allow_unauthenticated_loopback_operator, true)
 

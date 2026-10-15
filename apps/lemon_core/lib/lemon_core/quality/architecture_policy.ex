@@ -57,6 +57,10 @@ defmodule LemonCore.Quality.ArchitecturePolicy do
       :lemon_memory,
       :lemon_skills
     ],
+    # Native app control through LCU. A satellite: its `cua_js`/`cua_js_reset`
+    # tools and instructions section register through the platform registries
+    # at boot, and nothing in the platform names it.
+    lemon_computer_use: [:lemon_agent, :lemon_ai, :lemon_core],
     lemon_gateway: [:lemon_agent, :lemon_core],
     # A satellite: it implements platform contracts (a memory provider, a
     # context contributor, agent tools) and registers itself on the way up, so

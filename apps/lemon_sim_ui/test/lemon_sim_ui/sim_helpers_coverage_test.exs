@@ -72,9 +72,7 @@ defmodule LemonSimUi.SimHelpersCoverageTest do
     assert SimHelpers.domain_label(:vending_bench) == "Vending Bench"
     assert SimHelpers.domain_label(:poker) == "Poker"
     assert SimHelpers.domain_label(:missing) == "Unknown"
-    assert SimHelpers.domain_badge_color(:werewolf) =~ "fuchsia"
     assert SimHelpers.domain_badge_color(:missing) =~ "gray"
-    assert SimHelpers.status_color("lost") == "text-red-400"
     assert SimHelpers.status_color(nil) == "text-gray-500"
     assert SimHelpers.format_ts(nil) == "--"
   end

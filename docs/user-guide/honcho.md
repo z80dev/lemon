@@ -352,9 +352,11 @@ The presets are the whole of it in Lemon — the four flags cannot be set indivi
 
 ## Tools
 
-Five tools are registered whenever the app is installed. They report "Honcho is not
-configured" as an ordinary result rather than an error, so they are harmless on a host
-without a key.
+Five tools are registered at application boot only when Honcho is enabled and has an
+API key or base URL, under the same gate as its memory provider and context contributor.
+Unconfigured or disabled hosts do not include their schemas in agent prompts. If config
+becomes invalid after boot, calls still report "Honcho is not configured" as an ordinary
+result rather than an error.
 
 | Tool | What it asks Honcho for |
 |---|---|

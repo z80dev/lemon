@@ -64,6 +64,8 @@ Role labels in table:
 
 Device registration is authenticated POST /devices keyed by `(userId,installationId)`; repeated installs update the same device. deviceId is metadata, not authority. Push tokens belong to exact installation/user; logout/account removal disables delivery unless another valid session owns that same installation. Tokens are write-only; Device never returns push credentials. APNs topic/environment must match server allowlist. Web Push endpoint must be HTTPS on an allowed push-service origin, public resolved address, no redirects; reject arbitrary SSRF destinations. Optional VAPID public key appears in capabilities, private key never does.
 
+Instance status describes the backend's attached controller, not the client's host. It includes backend version/start time, sanitized controller link state/retry/error metadata, and nullable measured Lemon metrics. Advertised `status`, `health` fallback, `sessions.active.list`, and `nodes.list` reads run in parallel with five-second bounds; unavailable methods/read failures become null, never a status 5xx. Reconnect resets backoff, including a rejected operator credential. Runtime control requires an absolute executable `LEMON_BOT_RUNTIME_LAUNCHER` and loopback controller; otherwise capability false includes an actionable reason. Owner-only lifecycle actions `start`/`stop`/`restart` use fixed argv `[launcher, 'daemon'|'stop'|'restart']`, no shell, strip every `LEMON_BOT_*` variable, allow one operation at a time, and time out after 300 seconds. Stop/restart require `confirm:true`. Poll `runtime.operation` after 202; output is a bounded 4096-byte tail and operations are lost on backend restart. Successful start/restart reconnects the controller; successful launcher exit does not itself prove controller readiness.
+
 ## 3. REST endpoint catalog
 
 The catalogs in this section and §§10–11 together are exhaustive. Substitute opaque path IDs, percent-encode them and `:name`; no slash in an ID. Bodies/responses are exported wire types from protocol.ts; `undefined` means no body/query. `Page<T>`, intersections and `Omit` define JSON exactly. Multipart exceptions §4; standard SCIM/redirect exceptions §11. Roles include all ACL rules above. Unlisted methods return 404/405; clients never call control-plane RPC paths.
@@ -96,6 +98,9 @@ The catalogs in this section and §§10–11 together are exhaustive. Substitute
 | `PATCH /devices/:id` | `DeviceUpdate` | `Device` | `undefined` | Own | expired |
 | `DELETE /devices/:id` | `Mutation` | `Deleted` | `undefined` | Own | expired |
 | `GET /capabilities` | `undefined` | `Capabilities` | `undefined` | Member | — |
+| `GET /instance` | `undefined` | `InstanceStatus` | `undefined` | Owner/Admin | — |
+| `POST /instance/reconnect` | `Mutation` | `InstanceStatus` | `undefined` | Owner/Admin | — |
+| `POST /instance/runtime/:action` | `RuntimeActionRequest` | `RuntimeOperation` (202) | `undefined` | Owner | capability_unavailable, confirmation_required, conflict |
 | `GET /sync` | `undefined` | `Snapshot` | `undefined` | Member | — |
 | `GET /machines` | `undefined` | `Page<Machine>` | `PageQuery` | Machine | machine_offline, upstream_unavailable, capability_unavailable, policy_denied |
 | `POST /machines` | `MachineAttach` | `MachineAttachResult` | `undefined` | Admin | conflict, upstream_unavailable |

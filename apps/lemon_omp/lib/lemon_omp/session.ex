@@ -30,7 +30,7 @@ defmodule LemonOmp.Session do
 
   use GenServer, restart: :temporary, shutdown: 5_000
 
-  alias LemonOmp.{Config, Manager, Projection, Rpc}
+  alias LemonOmp.{Approval, Config, Manager, Projection, Rpc, Worktree}
 
   @line_bytes 65_536
   @max_frame_bytes 4 * 1_048_576
@@ -40,6 +40,7 @@ defmodule LemonOmp.Session do
   @stderr_tail_bytes 900
   @settle_fallback_ms 2_000
   @exit_grace_ms 1_500
+  @max_pending_approvals 32
 
   @type start_opts :: [
           id: String.t(),
@@ -48,6 +49,7 @@ defmodule LemonOmp.Session do
           prompt: String.t() | nil,
           model: String.t() | nil,
           thinking: String.t() | nil,
+          approval_mode: String.t() | nil,
           resume: String.t() | nil,
           owner: map()
         ]
@@ -105,8 +107,10 @@ defmodule LemonOmp.Session do
       Projection.new(
         id: id,
         cwd: Keyword.fetch!(opts, :cwd),
+        worktree: Worktree.wire(Keyword.get(opts, :worktree)),
         model: Keyword.get(opts, :model),
         thinking: Keyword.get(opts, :thinking),
+        approval_mode: Keyword.get(opts, :approval_mode),
         owner: Keyword.get(opts, :owner, %{kind: :operator}),
         prompt: Keyword.get(opts, :prompt)
       )
@@ -114,6 +118,7 @@ defmodule LemonOmp.Session do
     state = %{
       id: id,
       projection: projection,
+      worktree: Keyword.get(opts, :worktree),
       port: nil,
       os_pid: nil,
       stderr_path: stderr_path,
@@ -126,6 +131,7 @@ defmodule LemonOmp.Session do
       start_waiters: [],
       started: nil,
       pending: %{},
+      approvals: %{},
       seq: 0,
       ready_timer: nil,
       idle_timer: nil,
@@ -188,7 +194,7 @@ defmodule LemonOmp.Session do
     reason = state.close_reason || if(code == 0, do: :exited, else: :crashed)
     status = if reason in [:closed, :idle_timeout, :exited], do: :closed, else: :failed
     error = if status == :failed, do: exit_error(state, code)
-    state = %{state | port: nil, os_pid: nil}
+    state = cancel_approvals(%{state | port: nil, os_pid: nil}, "omp exited")
 
     # Publish the terminal snapshot before answering waiters, so a caller that
     # sees the error never reads a snapshot (or live count) still "starting".
@@ -246,19 +252,51 @@ defmodule LemonOmp.Session do
     {:noreply, %{state | last_publish: now_ms()}}
   end
 
+  def handle_info({:approval_result, dialog_id, approval_id, result}, state) do
+    case state.approvals[dialog_id] do
+      %{id: ^approval_id} ->
+        {outcome, fields} = approval_reply(result)
+        reply = Map.merge(%{"type" => "extension_ui_response", "id" => dialog_id}, fields)
+        if state.port, do: write(state, reply)
+        {:noreply, finish_approval(state, dialog_id, outcome)}
+
+      _ ->
+        # omp may have cancelled the dialog while the operator resolved it.
+        {:noreply, state}
+    end
+  end
+
+  def handle_info({:EXIT, pid, _reason}, state) when is_pid(pid) do
+    case Enum.find(state.approvals, fn {_dialog, entry} -> entry.pid == pid end) do
+      {dialog_id, entry} ->
+        handle_info({:approval_result, dialog_id, entry.id, {:error, :waiter_exited}}, state)
+
+      nil ->
+        {:noreply, state}
+    end
+  end
+
   def handle_info(_message, state), do: {:noreply, state}
 
   @impl true
   def terminate(_reason, state) do
+    state = cancel_approvals(state, "omp session closed")
     if state.port, do: stop_process(state)
 
-    if state.projection.status not in [:closed, :failed] do
-      state
-      |> update_projection(
-        &Projection.finish(&1, :closed, %{code: nil, reason: state.close_reason || :closed})
-      )
-      |> publish("exited")
-    end
+    worktree = Worktree.cleanup(state.worktree)
+    state = update_projection(state, &%{&1 | worktree: worktree})
+
+    state =
+      if state.projection.status not in [:closed, :failed] do
+        update_projection(
+          state,
+          &Projection.finish(&1, :closed, %{code: nil, reason: state.close_reason || :closed})
+        )
+      else
+        state
+      end
+
+    publish(state, "exited")
 
     _ = File.rm(state.stderr_path)
     :ok
@@ -327,20 +365,35 @@ defmodule LemonOmp.Session do
     end
   end
 
-  defp handle_frame(state, {:ui_request, id, method, _frame}) do
-    case Rpc.decline_ui_request(id, method) do
+  defp handle_frame(state, {:ui_request, _id, "cancel", %{"targetId" => target}}) do
+    case state.approvals[target] do
       nil ->
         state
 
-      reply ->
-        write(state, reply)
-
-        update_projection(state, fn projection ->
-          %{projection | declined_prompts: projection.declined_prompts + 1}
-        end)
-        |> schedule_publish()
+      entry ->
+        Approval.cancel(entry.pid, entry.id, "omp cancelled approval")
+        finish_approval(state, target, nil)
     end
   end
+
+  defp handle_frame(
+         state,
+         {:ui_request, id, "select", %{"options" => ["Approve", "Deny"]} = frame}
+       ) do
+    cond do
+      Map.has_key?(state.approvals, id) ->
+        state
+
+      Config.approvals() == :bridge and map_size(state.approvals) < @max_pending_approvals ->
+        request_approval(state, id, frame)
+
+      true ->
+        decline_ui_request(state, id, "select")
+    end
+  end
+
+  defp handle_frame(state, {:ui_request, id, method, _frame}),
+    do: decline_ui_request(state, id, method)
 
   defp handle_frame(state, {:host_request, id, frame}) do
     write(state, Rpc.reject_host_request(id, frame))
@@ -436,6 +489,90 @@ defmodule LemonOmp.Session do
     do: state |> update_projection(&Projection.apply_state(&1, data)) |> schedule_publish()
 
   defp handle_response(state, _entry, _result), do: state
+
+  defp decline_ui_request(state, id, method) do
+    case Rpc.decline_ui_request(id, method) do
+      nil ->
+        state
+
+      reply ->
+        write(state, reply)
+
+        update_projection(state, fn projection ->
+          %{projection | declined_prompts: projection.declined_prompts + 1}
+        end)
+        |> schedule_publish()
+    end
+  end
+
+  defp request_approval(state, dialog_id, frame) do
+    approval_id = LemonCore.Id.approval_id()
+    details = Projection.clean(frame["title"], 2_000)
+
+    tool =
+      case Regex.run(~r/^Allow tool:[ \t]*([^\n]+)/m, details, capture: :all_but_first) do
+        [name] -> name |> String.trim() |> Projection.clean(64)
+        _ -> ""
+      end
+
+    timeout =
+      case frame["timeout"] do
+        ms when is_integer(ms) and ms >= 0 -> min(ms, Config.approval_timeout_ms())
+        _ -> Config.approval_timeout_ms()
+      end
+
+    params =
+      state.projection.owner
+      |> Map.take([:session_key, :session_id, :run_id, :agent_id])
+      # Operators have no conversation key; bind their grants to this invocation.
+      |> Map.put_new(:session_key, "omp:operator:" <> state.id)
+      |> Map.merge(%{
+        approval_id: approval_id,
+        tool: if(tool == "", do: "omp", else: "omp:" <> tool),
+        action: %{
+          "type" => "omp_tool",
+          "ompSession" => state.id,
+          "tool" => if(tool == "", do: "omp", else: tool),
+          "details" => details
+        },
+        rationale: Projection.clean("omp session #{state.id} in #{state.projection.cwd}", 300),
+        expires_in_ms: timeout
+      })
+
+    waiter = Approval.start(self(), dialog_id, params)
+    entry = %{id: approval_id, pid: waiter}
+
+    %{state | approvals: Map.put(state.approvals, dialog_id, entry)}
+    |> update_projection(
+      &Projection.request_approval(&1, approval_id, params.action["tool"], details)
+    )
+    |> publish_now("approval_requested")
+  end
+
+  defp approval_reply({:ok, :approved, _scope}), do: {:approved, %{"value" => "Approve"}}
+  defp approval_reply({:ok, :denied}), do: {:denied, %{"value" => "Deny"}}
+
+  defp approval_reply({:error, :timeout}),
+    do: {:expired, %{"cancelled" => true, "timedOut" => true}}
+
+  defp approval_reply(_error), do: {:expired, %{"cancelled" => true}}
+
+  defp finish_approval(state, dialog_id, outcome) do
+    {entry, approvals} = Map.pop!(state.approvals, dialog_id)
+
+    %{state | approvals: approvals}
+    |> update_projection(&Projection.resolve_approval(&1, entry.id, outcome))
+    |> publish_now("approval_resolved")
+  end
+
+  defp cancel_approvals(state, reason) do
+    Enum.reduce(state.approvals, state, fn {dialog_id, entry}, acc ->
+      Approval.cancel(entry.pid, entry.id, reason)
+
+      %{acc | approvals: Map.delete(acc.approvals, dialog_id)}
+      |> update_projection(&Projection.resolve_approval(&1, entry.id, nil))
+    end)
+  end
 
   defp mark_running(%Projection{status: status} = projection) when status in [:starting, :idle],
     do: %{projection | status: :running, activity: projection.activity || "Starting turn"}
@@ -575,6 +712,7 @@ defmodule LemonOmp.Session do
       ["--mode", "rpc", "--cwd", cwd]
       |> add_flag("--model", Keyword.get(opts, :model))
       |> add_flag("--thinking", Keyword.get(opts, :thinking))
+      |> add_flag("--approval-mode", Keyword.get(opts, :approval_mode))
       |> add_flag("--resume", Keyword.get(opts, :resume))
 
     File.mkdir_p!(Path.dirname(stderr_path))

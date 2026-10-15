@@ -47,6 +47,98 @@ A conversation can only see and control the omp sessions it started. Sessions
 you start from the TUI or CLI are operator sessions; manage those from the TUI
 or CLI.
 
+For `start` or `resume`, the agent tool (and `LemonOmp.start/2`) accepts
+`approval_mode`: `always-ask` asks before writes and execution, `write` asks
+before execution, and `yolo` auto-approves ordinary tool calls. Omitting it
+leaves omp's own configured mode unchanged. Explicit omp tool policies still
+apply. Lemon passes an explicit mode as `--approval-mode <mode>`.
+
+## Choosing a model
+
+Ask Lemon to list omp models (`{"action":"models","free_only":true}`), then
+pass a returned `selector` as `model` on `start` or a `start_many` task.
+For simple mechanical work, prefer cheap/free models unless you specified one.
+Operators using Elixir can call `LemonOmp.models(free_only: true, limit: 30)`.
+The catalog supports case-insensitive `query` (selector/name), `provider`,
+`free_only`, and `limit` (default 30, maximum 200), sorted cheapest first.
+It runs `omp models --json` with a 20-second timeout and caches results for ten
+minutes per executable/mtime. Displayed costs are per million tokens.
+
+Prices are omp's catalog data, not a guarantee: OpenRouter `:free` routes can
+be withdrawn upstream; several have returned 404 “unavailable for free”.
+Be ready to select a fallback. Listing models does not make a model call.
+
+## Parallel workers
+
+Ask Lemon to split independent work across several omp workers. The `omp`
+tool's `start_many` action accepts a `tasks` array; each task has a `prompt`
+and optional `cwd`, `model`, `thinking`, `approval_mode`, and boolean `isolate`.
+Omitted directories default to the conversation's cwd. Set `isolate: true`
+to give each worker its own managed Git worktree instead of editing shared files.
+
+```json
+{
+  "action": "start_many",
+  "isolate": true,
+  "tasks": [
+    {"prompt": "Implement the parser", "cwd": "/src/app"},
+    {"prompt": "Document the API", "cwd": "/src/app"}
+  ],
+  "wait": true
+}
+```
+
+Starts run concurrently and return in task order. All task parameters are
+validated before any process starts, and batches larger than the remaining
+live-session capacity are rejected up front. Admission is still enforced for
+each start if another caller uses a slot concurrently. Individual startup
+failures are reported per task; successful workers keep running. An
+“outcome unknown” error includes the session id: check it before retrying.
+
+With `wait: true`, Lemon gathers all successful workers and streams combined
+progress, including token usage and cost. To gather workers later, use
+`{"action":"wait","ids":["omp_…","omp_…"],"wait_for":"all"}`.
+Set `wait_for` to `"any"` to return when the first worker settles. Timeout
+or abort stops only the wait, never the workers; cancel or close them
+explicitly when no longer needed.
+
+`isolate` is available on `start`, on each batch task (overriding the tool's
+batch default), and in the Elixir facade's start/task maps. `cwd` must be inside
+a Git work tree with a HEAD commit. Each isolated worker gets a fresh
+`lemon-omp/<invocation id>` branch from that checkout's current HEAD, and runs
+at the root of a worktree under
+`<git common dir>/lemon-omp-worktrees/<invocation id>`. Lemon derives this path;
+callers cannot supply it. Keeping it in Git's common directory avoids main
+checkout status noise and temporary-directory cleanup. Uncommitted changes in
+the original checkout are **not** copied to workers.
+
+Snapshots include `worktree` (`path`, `branch`, `base`, `repo`), and reports
+explain how to integrate the work. Inspect the worker directory first: omp may
+leave changes uncommitted. Commit those changes there, then run
+`git merge lemon-omp/<invocation id>` in the main checkout (or cherry-pick the
+desired commits). Resolve conflicts normally; isolation does not merge for you.
+
+On close, idle timeout, process exit or Session crash, Lemon removes a worktree
+and its branch only if there are no uncommitted changes and no commits beyond
+its base. Otherwise it keeps both and reports `kept: true`, `dirty`
+(changed/untracked paths) and `commits` (commits beyond base). Cleanup is bounded;
+if Git cannot establish safety, it keeps the work and unknown counts are `null`.
+It never force-removes dirty worktrees. Only Lemon-created worktrees are eligible
+for automatic cleanup. Remove kept work manually with `git worktree remove <path>`
+and `git branch -d <branch>` once integrated.
+
+Resume uses the **given cwd**, not automatic worktree lookup by omp session id.
+To continue kept isolated work, pass its `worktree.path` as `cwd` when resuming,
+without `isolate`; this reuses the directory without claiming ownership or
+automatically deleting it on close. `isolate: true` always creates a fresh worktree.
+
+
+Elixir callers can use `LemonOmp.start_many(tasks, owner: owner)` and
+`LemonOmp.wait_many(ids, timeout_ms, owner: scope, mode: :all)`. The latter
+uses one Bus subscription and reports the full ordered snapshot list through
+`on_update` at most about every 300 ms, plus an unconditional final update.
+Ownership restrictions are identical to single-session access.
+
 ## From the TUI
 
 `/omp` (Alt+M, also in the command palette) opens the omp panel: live and
@@ -92,9 +184,11 @@ These talk to the running Lemon runtime; see [CLI](cli.md) for every option.
 For each session Lemon keeps a bounded snapshot: status (`starting`,
 `running`, `idle`, `closed`, `failed`), the outcome of the last turn
 (`completed`, `error`, `aborted`), current activity, active and recent tools,
-todos, subagents, token usage and cost (omp's own totals), context use, the
-latest assistant text and the last turn's result. Text is clipped and stripped
-of control sequences. Ended sessions stay listed until the runtime restarts.
+todos, subagents, token usage and cost (omp's own totals), context use, pending
+approvals and approval outcome counters, the latest assistant text and the last
+turn's result. While approval is pending the activity says “Waiting for approval:
+&lt;tool&gt;”. Text is clipped and stripped of control sequences. Ended sessions
+stay listed until the runtime restarts.
 
 **Discovery** reads omp's session files for a workspace
 (`~/.omp/agent/sessions/…`, or `$PI_CODING_AGENT_DIR/sessions`) without
@@ -108,11 +202,18 @@ another omp).
 - **omp output is untrusted.** Everything quoted from omp — its replies,
   errors, todo text — reaches Lemon's model fenced as external data, never as
   instructions.
-- **Headless.** omp sometimes asks interactive questions (approvals, pickers).
-  Lemon has no surface to answer them, so it declines: confirms answer “no” and
-  other prompts are cancelled. The snapshot counts declined prompts. If your
-  omp is set to ask before writing, it will be unable to write; choose an omp
-  approval mode that suits unattended work.
+- **Approvals bridge.** omp's tool approval prompts appear in the owning
+  conversation's Lemon approval prompts and channel buttons (Telegram/Discord),
+  including native coding-session approval UI when the session identity is
+  available. Operators can resolve them with `exec.approval.resolve` using the
+  approval id in the snapshot's `pendingApprovals`. Session-scoped grants for
+  operator sessions apply only to that omp session, never another invocation.
+  The session stays responsive while it waits. Approve/deny decisions return to
+  omp; expiry cancels the prompt. Cancelling an omp dialog or closing/exiting its
+  session removes the corresponding Lemon approval too.
+  `LEMON_OMP_APPROVALS=decline` restores headless cancellation of tool approvals.
+  Other blocking dialogs (confirm, input, editor, unrelated selects) are still
+  declined and counted in `declinedPrompts`.
 - **Control fails closed.** Steering, follow-ups and cancellation go to one
   process invocation and are acknowledged only after omp accepts them. A
   closed or crashed session refuses them; resume it to continue (resuming is a
@@ -136,6 +237,8 @@ another omp).
 | `LEMON_OMP_BIN` | first `omp` on `PATH` | omp executable |
 | `LEMON_OMP_MAX_SESSIONS` | `4` | live omp processes |
 | `LEMON_OMP_IDLE_TIMEOUT_MS` | `1800000` | close idle processes (0 = never) |
+| `LEMON_OMP_APPROVALS` | `bridge` | route omp tool approvals to Lemon; `decline` cancels them |
+| `LEMON_OMP_APPROVAL_TIMEOUT_MS` | `600000` | maximum approval wait in ms, capped by omp's dialog timeout |
 | `PI_CODING_AGENT_DIR` / `PI_CONFIG_DIR` | omp's defaults | where discovery looks (omp's own variables) |
 
 See also the [`omp` tool reference](../tools/omp.md).

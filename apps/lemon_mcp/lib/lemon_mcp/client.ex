@@ -233,6 +233,7 @@ defmodule LemonMCP.Client do
       client_name: Keyword.get(opts, :client_name, "lemon-mcp"),
       client_version: Keyword.get(opts, :client_version, "0.1.0"),
       capabilities: Keyword.get(opts, :capabilities, %{}),
+      notification_handler: Protocol.notification_handler(opts),
       sampling_handler: sampling_handler(opts),
       timeout_ms: Keyword.get(opts, :timeout_ms, 30_000)
     }
@@ -626,6 +627,12 @@ defmodule LemonMCP.Client do
         GenServer.reply(pending.from, {:error, {:rpc_error, error}})
         {:noreply, new_state}
     end
+  end
+
+  defp process_message(%{"method" => _method} = message, state)
+       when not is_map_key(message, "id") do
+    Protocol.dispatch_notification(message, state.config.notification_handler)
+    {:noreply, state}
   end
 
   defp process_message(message, state) do

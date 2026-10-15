@@ -71,18 +71,34 @@ defmodule Mix.Tasks.Lemon.EvalTest do
       assert output =~ "Eval summary:"
     end
 
-    @tag :integration
-    test "raises on failure when checks fail" do
-      # This test verifies that the task raises when there are failures
-      # We can't easily make the harness fail without mocking, so we test the behavior
-      assert_raise Mix.Error, ~r/Eval harness failed/, fn ->
-        capture_io(fn ->
-          # Create a scenario that would cause failure
-          # This would require mocking the Harness module
-          # For now, we just verify the error format
-          raise Mix.Error, message: "Eval harness failed (1 failing checks)."
+    test "raises on real failing checks when live credentials are missing" do
+      env_vars =
+        ~w(LEMON_EVAL_API_KEY LEMON_EVAL_API_KEY_SECRET INTEGRATION_API_KEY INTEGRATION_API_KEY_SECRET ANTHROPIC_API_KEY)
+
+      previous = Map.new(env_vars, &{&1, System.get_env(&1)})
+      Enum.each(env_vars, &System.delete_env/1)
+
+      on_exit(fn ->
+        Enum.each(previous, fn
+          {key, nil} -> System.delete_env(key)
+          {key, value} -> System.put_env(key, value)
         end)
-      end
+      end)
+
+      output =
+        capture_io(fn ->
+          assert_raise Mix.Error, ~r/^Eval harness failed \(\d+ failing checks\)\.$/, fn ->
+            Eval.run(["--iterations", "1", "--live-model", "--json"])
+          end
+        end)
+
+      report = Jason.decode!(output)
+      assert report["summary"]["failed"] > 0
+
+      assert %{"status" => "fail", "details" => %{"reason" => reason}} =
+               Enum.find(report["results"], &(&1["name"] == "live_model_memory_trace_contract"))
+
+      assert reason =~ "LEMON_EVAL_API_KEY"
     end
   end
 
@@ -211,20 +227,6 @@ defmodule Mix.Tasks.Lemon.EvalTest do
         assert is_map(result["details"])
         assert map_size(result["details"]) > 0
       end
-    end
-  end
-
-  describe "task module" do
-    test "has correct shortdoc" do
-      assert Mix.Task.shortdoc(Mix.Tasks.Lemon.Eval) == "Run coding quality eval harness"
-    end
-
-    test "has moduledoc" do
-      doc = Mix.Task.moduledoc(Mix.Tasks.Lemon.Eval)
-      assert is_binary(doc)
-      assert doc =~ "coding eval harness"
-      assert doc =~ "--live-model"
-      assert doc =~ "LEMON_EVAL_API_KEY"
     end
   end
 

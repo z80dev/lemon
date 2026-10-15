@@ -1168,9 +1168,17 @@ defmodule LemonWeb.OmpLive do
 
   defp unavailable_text(socket) do
     case socket.assigns do
-      %{status_state: {:error, message}} -> "omp status is unavailable: #{message}"
-      %{status_state: :loading} -> "Still checking whether omp is installed."
-      _ -> "omp is not installed on the Lemon runtime."
+      %{status_state: {:error, message}} ->
+        "omp status is unavailable: #{message}"
+
+      %{status_state: :loading} ->
+        "Still checking whether omp is installed."
+
+      %{status_state: :ok, status: %{"available" => false}} ->
+        "omp is not installed on the Lemon runtime."
+
+      _ ->
+        "omp status has not been checked yet."
     end
   end
 

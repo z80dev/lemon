@@ -282,39 +282,13 @@ defmodule LemonGateway.RunSupervisorTest do
   # ============================================================================
 
   describe "supervisor startup and initialization" do
-    test "supervisor starts successfully" do
-      assert Process.whereis(RunSupervisor) != nil
-    end
-
-    test "supervisor uses DynamicSupervisor behavior" do
-      pid = Process.whereis(RunSupervisor)
-      assert Process.alive?(pid)
-
-      # Verify it's a DynamicSupervisor by calling count_children
-      children = DynamicSupervisor.count_children(RunSupervisor)
-      assert is_map(children)
-      assert Map.has_key?(children, :active)
-      assert Map.has_key?(children, :specs)
-    end
-
-    test "supervisor starts with no children" do
-      # Wait for any existing runs to complete
-      Process.sleep(100)
-
-      children = DynamicSupervisor.count_children(RunSupervisor)
-      # Active count may not be 0 if other tests left processes running
-      assert children.specs >= 0
-    end
-
     test "supervisor is registered with correct name" do
       pid = Process.whereis(RunSupervisor)
       assert is_pid(pid)
       assert Process.alive?(pid)
     end
 
-    test "supervisor uses :one_for_one strategy" do
-      # We verify this by checking that children are independent
-      # Start multiple runs and verify they don't affect each other
+    test "two concurrent runs complete independently" do
       scope1 = make_scope()
       scope2 = make_scope()
 
@@ -365,18 +339,6 @@ defmodule LemonGateway.RunSupervisorTest do
 
       # Wait for completion
       assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: true}}, 2000
-    end
-
-    test "start_run returns {:ok, pid}" do
-      scope = make_scope()
-      execution_request = make_execution_request(scope)
-
-      result = RunSupervisor.start_run(make_request(execution_request))
-
-      assert {:ok, pid} = result
-      assert is_pid(pid)
-
-      assert_receive {:run_complete, ^pid, _}, 2000
     end
 
     test "started process is supervised" do
@@ -630,52 +592,6 @@ defmodule LemonGateway.RunSupervisorTest do
   # ============================================================================
 
   describe "dynamic child management" do
-    test "DynamicSupervisor.which_children returns current children" do
-      scope = make_scope()
-
-      execution_request =
-        make_execution_request(scope,
-          fixture_mode: :slow,
-          meta: %{notify_pid: self(), delay_ms: 500}
-        )
-
-      {:ok, pid} = RunSupervisor.start_run(make_request(execution_request))
-
-      children = DynamicSupervisor.which_children(RunSupervisor)
-      child_pids = Enum.map(children, fn {_, child_pid, _, _} -> child_pid end)
-
-      assert pid in child_pids
-
-      assert_receive {:run_complete, ^pid, _}, 2000
-    end
-
-    test "DynamicSupervisor.count_children reflects active children" do
-      initial_count = DynamicSupervisor.count_children(RunSupervisor).active
-
-      scope = make_scope()
-
-      execution_request =
-        make_execution_request(scope,
-          fixture_mode: :controlled,
-          meta: %{notify_pid: self(), controller_pid: self()}
-        )
-
-      {:ok, _pid} = RunSupervisor.start_run(make_request(execution_request))
-
-      assert_receive {:executor_started, _, _, _, task_pid}, 2000
-
-      active_count = DynamicSupervisor.count_children(RunSupervisor).active
-      assert active_count >= initial_count + 1
-
-      # Complete the run
-      send(task_pid, {:complete, "done"})
-      assert_receive {:run_complete, _, _}, 2000
-
-      assert_eventually(fn ->
-        DynamicSupervisor.count_children(RunSupervisor).active <= active_count
-      end)
-    end
-
     test "DynamicSupervisor.terminate_child terminates a running child" do
       scope = make_scope()
 

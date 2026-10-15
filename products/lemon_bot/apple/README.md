@@ -145,6 +145,61 @@ An opaque creation timeout without returned IDs stays fenced when the server exp
 Every claim and completion retains its original nonce before networking. Pending checks and an explicitly reconciled lost response reuse the same completion nonce and return the **same** Device/AuthSession, never another credential. A lost desktop issuance response similarly uses **Reconcile original QR request** to recover the original one-use QR with its original nonce. Private receipt replay ends at the original five-minute pairing deadline; after explicit expired/denied state, discard the local request and create a fresh QR as a separate human action. The successfully installed session itself remains valid until revoked.
 
 Revoke the phone through **Settings → Account → Registered devices** or **Product sessions**. Device removal revokes its bound session; the phone shows explicit reconnect, not fake offline success. Camera, speech, share-sheet staging and selected files remain independent of pairing; no ambient capture or automatic send is introduced.
+## Connection recovery
+
+The sidebar connection pill opens the same recovery panel on Mac and iPhone.
+Mac also shows it above the conversation after a failed connection attempt;
+normal initial synchronization does not flash an error. The panel distinguishes
+an unreachable Lemon Bot service, device network/TLS/DNS problems, server/proxy
+errors, revoked sign-in and a reachable backend whose Lemon link is down. It
+shows the target account/address, last error details with Copy, and the live
+retry countdown. **Try again** bypasses the current backoff. Cached conversations
+and unsent drafts remain available.
+
+**Choose another Lemon Bot…** lists saved accounts and performs credential-free,
+two-second public setup probes at saved origins and the two local development
+addresses. Discovery is not a LAN scan or automatic sign-in. A discovered origin
+opens prefilled onboarding; **Enter address…** accepts another secure address.
+Physical iPhones start with an empty address and a tailnet HTTPS placeholder,
+not the phone's own loopback address. Simulator keeps the development default.
+
+When the backend is reachable, owners can start/restart Lemon through its
+configured runtime launcher; owners/admins can reconnect a rejected or stopped
+Lemon link. Restart requires confirmation. Running operations are observed by
+read-only polling and expose the backend's bounded command output, never an
+automatic mutation replay. An unconfigured launcher reports its actual reason.
+
+The Mac app remains sandboxed: when the backend itself is down at a loopback
+address, **Start it on this Mac** offers `lemon daemon`, the integrated-checkout
+backend command, setup documentation and **Open Terminal**. It never spawns
+Lemon or reads an operator token. Background reconnect detects the service when
+it returns; failed local onboarding also probes until it answers. These local
+commands and Terminal actions are not shown on iPhone.
+
+## Lemon instance
+
+**Settings → Lemon instance** shows the backend this account is attached to,
+its version/address/start time, the Lemon controller link and its last error,
+and the live Lemon version, uptime, memory, runs, sessions, nodes, channels and
+skills. Missing measurements stay unavailable instead of becoming zero. Owners
+and admins can view it and reconnect the link; other members see an explanation
+without fetching privileged instance data. About links here for service status
+and keeps client/worker compatibility and safe handoff diagnostics separate.
+
+Owners can **Start**, **Restart** or **Stop** only when the backend reports
+runtime control is configured. Stop and Restart explain the interruption and
+require explicit confirmation. Admins cannot issue owner-only lifecycle commands.
+When controls are unavailable, the backend's reason is shown. The shared pane
+is also available from **View instance details** in the connection panel.
+
+The pane refreshes every 10 seconds while visible, and every 2 seconds while a
+command is running, with Refresh and iOS pull-to-refresh for a manual read.
+Operation state and bounded output are the backend's actual receipt, with Copy
+inside Details. A lost command response stays fenced; refresh never replays it.
+The `instance-pane` and `instance-running` Mac snapshot scenes exercise the
+settings registration and active-operation display in light and dark.
+
+
 
 
 ## Native workspace
@@ -192,6 +247,8 @@ Voice uses Apple Speech for dictation and an explicit visible active-call loop, 
 
 Notifications register the current installation to the current product account. iOS uses its actual APNs token; macOS uses local notifications. Same-device foreground viewed-conversation suppression does not clear inbox/unread or pending gates. Token-free `lemonbot://workspace/...` links fetch and authorize the exact task/entry/approval/machine/routine before navigation, never automatically approve.
 
+Foreground presence belongs to its realtime connection, independently of message delivery. A refresh or background reconnect can retire a presence write; that old socket's failure is not a delivery failure on the replacement connection. Current-connection failures remain visible, and a missing message HTTP acknowledgement still retains its original nonce for explicit reconciliation.
+
 ## Centralized checks
 
 Implementation agents intentionally do **not** run generation, builds, tests, formatters or live provider checks. The integration owner should run the commands above, then:
@@ -205,6 +262,9 @@ xcodebuild -project LemonBot.xcodeproj -scheme LemonBotMac \
 ```
 
 DEBUG-only visual check. The `LemonBotSnapshots` scheme renders the real views with in-process fixture data, in light and dark, to `/tmp/lb-ux/after/apple-*.png`. Set `TEST_RUNNER_LB_SNAPSHOT_DIR` to write somewhere else. The iOS app launched with `-LBFixtures` in a Debug build opens the same fixture workspace. Fixture message sends record text in memory for that fixture session only; they never execute Bot work or contact a backend. Other non-bookkeeping mutations remain read-only.
+Use `-LBFixtures -LBFixtureScene backend-down` (or `controller-down` /
+`reconnect-required`) to inspect the shared connection sheet on an isolated iOS
+simulator. The Mac snapshot slugs match these names and include light/dark views.
 
 ```sh
 xcodebuild -project LemonBot.xcodeproj -scheme LemonBotSnapshots \

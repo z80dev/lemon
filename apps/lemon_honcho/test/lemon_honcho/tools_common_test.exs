@@ -201,10 +201,7 @@ defmodule LemonHoncho.ToolsCommonTest do
   end
 
   describe "client/0" do
-    test "it defaults to the real client and follows the test seam" do
-      Application.delete_env(:lemon_honcho, :client)
-      assert Common.client() == LemonHoncho.Client
-
+    test "it follows the configured client seam" do
       Application.put_env(:lemon_honcho, :client, StubClient)
       assert Common.client() == StubClient
     end

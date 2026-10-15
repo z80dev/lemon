@@ -15,12 +15,12 @@ final class FixtureURLProtocol: URLProtocol {
         var receipts: [String: FixtureJSON] = [:]
     }
     private static var messages: [String: Messages] = [:]
-    static func makeSession() -> URLSession {
+    static func makeSession(controllerDown: Bool = false, runtimeRunning: Bool = false) -> URLSession {
         let sessionID = UUID().uuidString
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [FixtureURLProtocol.self]
-        configuration.httpAdditionalHeaders = ["X-LB-Fixture-Session": sessionID]
         configuration.urlCache = nil
+        configuration.httpAdditionalHeaders = ["X-LB-Fixture-Session": sessionID, "X-LB-Fixture-Controller-Down": controllerDown ? "true" : "false", "X-LB-Fixture-Runtime-Running": runtimeRunning ? "true" : "false"]
         return URLSession(configuration: configuration)
     }
 
@@ -105,6 +105,7 @@ final class FixtureURLProtocol: URLProtocol {
 
         switch parts {
         case ["sync"]: return found(world.snapshot)
+        case ["instance"]: return found(world.instance(controllerDown: request.value(forHTTPHeaderField: "X-LB-Fixture-Controller-Down") == "true", runtimeRunning: request.value(forHTTPHeaderField: "X-LB-Fixture-Runtime-Running") == "true"))
         case ["me"]: return found(world.user)
         case ["workspace"]: return found(world.workspace)
         case ["bots"]: return found(world.page(world.bots))

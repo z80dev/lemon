@@ -3,7 +3,7 @@ import { chmod } from 'node:fs/promises';
 import type { Server } from 'bun';
 import type { BackendConfiguration, BackendServices } from './core/services';
 import type { Policies } from '../../contracts/protocol';
-import { loadConfiguration, createPrivateCodec } from './core/config';
+import { loadConfiguration, createPrivateCodec, validateRuntimeLauncher } from './core/config';
 import { Store } from './core/store';
 import { installHelpers } from './core/helpers';
 import { installSecretResolver } from './core/secrets';
@@ -14,6 +14,7 @@ import { createAccountRoutes, createAccountService } from './core/accounts';
 import { Router } from './core/router';
 import { createRealtime, type RealtimeData, type RealtimeService } from './core/realtime';
 import { createSyncRoutes } from './core/sync';
+import { createInstanceRoutes } from './core/instance';
 import { createLemonService } from './runtime/lemon';
 import { createRuntimeService } from './runtime/runs';
 import { createRuntimeAdmissionRoutes } from './runtime/admission';
@@ -39,6 +40,8 @@ export interface BackendInstance {
   stop(): Promise<void>;
 }
 export async function createBackend(config:BackendConfiguration,key:Uint8Array):Promise<BackendInstance> {
+  const startedAtMs=Date.now();
+  await validateRuntimeLauncher(config.runtimeLauncher);
   const store=new Store(join(config.dataDir,'product.sqlite'));
   await chmod(join(config.dataDir,'product.sqlite'),0o600);
   const codec=createPrivateCodec(key);
@@ -78,7 +81,7 @@ export async function createBackend(config:BackendConfiguration,key:Uint8Array):
   const accounts=createAccountService(services);
   const pairings=createPairingService(services);
   router.register([
-    ...createAccountRoutes(services,hooks),...createSyncRoutes(services),...createMachineRoutes(services),
+    ...createAccountRoutes(services,hooks),...createSyncRoutes(services),...createInstanceRoutes(services,startedAtMs),...createMachineRoutes(services),
     ...createBotRoutes(services),...createConversationRoutes(services),...createMcpRoutes(services),
     ...createGateRoutes(services),...createResourceRoutes(services),...createAttachmentRoutes(services),
     ...createVoiceRoutes(services),...createExperienceRoutes(services),...createIntegrationRoutes(services),
@@ -133,7 +136,10 @@ export async function createBackend(config:BackendConfiguration,key:Uint8Array):
 }
 
 export async function runBackend():Promise<void> {
-  const {config,key}=await loadConfiguration();const backend=await createBackend(config,key);const server=backend.start();
+  let configuration:{config:BackendConfiguration;key:Uint8Array};
+  try {configuration=await loadConfiguration();}
+  catch(error) {process.stderr.write(`${error instanceof Error?error.message:'Backend configuration could not be loaded.'}\n`);process.exit(1);}
+  const {config,key}=configuration;const backend=await createBackend(config,key);const server=backend.start();
   process.stdout.write(`Lemon Bot listening at ${config.publicUrl} (${server.hostname}:${server.port}).\n`);
   const shutdown=()=>{void backend.stop().then(()=>process.exit(0)).catch(()=>process.exit(1));};
   process.once('SIGINT',shutdown);process.once('SIGTERM',shutdown);

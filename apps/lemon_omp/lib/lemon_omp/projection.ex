@@ -35,8 +35,10 @@ defmodule LemonOmp.Projection do
             omp_session_id: nil,
             title: nil,
             cwd: nil,
+            worktree: nil,
             model: nil,
             thinking: nil,
+            approval_mode: nil,
             owner: %{kind: :operator},
             status: :starting,
             last_turn: nil,
@@ -64,6 +66,8 @@ defmodule LemonOmp.Projection do
             result: nil,
             error: nil,
             declined_prompts: 0,
+            pending_approvals: [],
+            approvals: %{approved: 0, denied: 0, expired: 0},
             settling: false,
             exit: nil
 
@@ -77,13 +81,41 @@ defmodule LemonOmp.Projection do
     %__MODULE__{
       id: Keyword.fetch!(attrs, :id),
       cwd: Keyword.fetch!(attrs, :cwd),
+      worktree: Keyword.get(attrs, :worktree),
       model: Keyword.get(attrs, :model),
       thinking: Keyword.get(attrs, :thinking),
+      approval_mode: Keyword.get(attrs, :approval_mode),
       owner: Keyword.get(attrs, :owner, %{kind: :operator}),
       title: title_from_prompt(Keyword.get(attrs, :prompt)),
       started_at: now,
       updated_at: now
     }
+  end
+
+  @doc "Record a shared Lemon approval awaiting a decision."
+  @spec request_approval(t(), String.t(), String.t(), String.t()) :: t()
+  def request_approval(state, id, tool, details) do
+    approval = %{
+      "id" => id,
+      "tool" => clean(tool, 64),
+      "details" => clean(details, 2_000),
+      "requestedAt" => now_ms()
+    }
+
+    %{state | pending_approvals: state.pending_approvals ++ [approval], updated_at: now_ms()}
+  end
+
+  @doc "Remove a pending approval; abandoned dialogs do not count as decisions."
+  @spec resolve_approval(t(), String.t(), :approved | :denied | :expired | nil) :: t()
+  def resolve_approval(state, id, outcome) do
+    {removed, pending} = Enum.split_with(state.pending_approvals, &(&1["id"] == id))
+
+    approvals =
+      if removed != [] and outcome in [:approved, :denied, :expired],
+        do: Map.update!(state.approvals, outcome, &(&1 + 1)),
+        else: state.approvals
+
+    %{state | pending_approvals: pending, approvals: approvals, updated_at: now_ms()}
   end
 
   @doc "Apply one decoded omp event. Unknown events only touch `updated_at`."
@@ -330,12 +362,18 @@ defmodule LemonOmp.Projection do
       "ompSessionId" => state.omp_session_id,
       "title" => state.title,
       "cwd" => state.cwd,
+      "worktree" => state.worktree,
       "model" => state.model,
       "thinking" => state.thinking,
+      "approvalMode" => state.approval_mode,
       "owner" => owner_wire(state.owner),
       "status" => Atom.to_string(state.status),
       "lastTurn" => state.last_turn && Atom.to_string(state.last_turn),
-      "activity" => state.activity,
+      "activity" =>
+        case state.pending_approvals do
+          [approval | _] -> "Waiting for approval: #{approval["tool"]}"
+          [] -> state.activity
+        end,
       "startedAt" => state.started_at,
       "updatedAt" => state.updated_at,
       "endedAt" => state.ended_at,
@@ -388,8 +426,33 @@ defmodule LemonOmp.Projection do
       "result" => state.result,
       "error" => state.error,
       "declinedPrompts" => state.declined_prompts,
+      "pendingApprovals" => state.pending_approvals,
+      "approvals" => %{
+        "approved" => state.approvals.approved,
+        "denied" => state.approvals.denied,
+        "expired" => state.approvals.expired
+      },
       "exit" => state.exit && %{"code" => state.exit.code, "reason" => to_s(state.exit.reason)}
     }
+  end
+
+  @doc "Sum usage across wire snapshots, without changing any session totals."
+  @spec combined_usage([map()]) :: map()
+  def combined_usage(wires) do
+    zero = %{
+      "input" => 0,
+      "output" => 0,
+      "cacheRead" => 0,
+      "cacheWrite" => 0,
+      "totalTokens" => 0,
+      "cost" => 0.0
+    }
+
+    Enum.reduce(wires, zero, fn wire, total ->
+      Map.new(total, fn {key, value} ->
+        {key, value + (get_in(wire, ["usage", key]) || 0)}
+      end)
+    end)
   end
 
   @doc """
@@ -408,6 +471,7 @@ defmodule LemonOmp.Projection do
           if(wire["ompSessionId"], do: " (omp #{wire["ompSessionId"]})", else: ""),
         "Title: #{wire["title"] || "untitled"}",
         "Workspace: #{wire["cwd"]}",
+        worktree_summary(wire["worktree"]),
         "Status: #{status_line(wire)}",
         wire["activity"] && "Current activity: #{wire["activity"]}",
         wire["model"] && "Model: #{wire["model"]}",
@@ -419,6 +483,7 @@ defmodule LemonOmp.Projection do
         recent_tools_line(wire["recentTools"] || []),
         todos_block(todos),
         subagents_line(wire["subagents"] || []),
+        pending_approvals_line(wire["pendingApprovals"] || []),
         wire["declinedPrompts"] > 0 &&
           "Declined #{wire["declinedPrompts"]} interactive omp prompt(s) (Lemon runs omp headless).",
         wire["error"] && "Error: #{wire["error"]}",
@@ -427,6 +492,30 @@ defmodule LemonOmp.Projection do
       |> Enum.filter(&is_binary/1)
 
     Enum.join(lines, "\n")
+  end
+
+  @doc "Explain where isolated work lives and how to integrate it."
+  def worktree_summary(nil), do: nil
+
+  def worktree_summary(%{"kept" => false} = worktree) do
+    "Isolated worktree: #{worktree["path"]} (base #{worktree["base"]})." <>
+      " Removed with branch #{worktree["branch"]} because it had no changes or new commits."
+  end
+
+  def worktree_summary(worktree) do
+    disposition =
+      case worktree["kept"] do
+        true ->
+          " Kept (#{worktree["dirty"] || "unknown"} dirty paths, #{worktree["commits"] || "unknown"} commits)."
+
+        nil ->
+          ""
+      end
+
+    "Isolated worktree: #{worktree["path"]} (base #{worktree["base"]})." <>
+      disposition <>
+      " In #{worktree["repo"]}, git merge #{worktree["branch"]} or cherry-pick its commits." <>
+      " omp may leave changes uncommitted; inspect and commit them in the worktree first."
   end
 
   defp status_line(%{"status" => "idle", "lastTurn" => turn}) when is_binary(turn),
@@ -448,6 +537,14 @@ defmodule LemonOmp.Projection do
     do: ", context #{:erlang.float_to_binary(percent / 1, decimals: 1)}%"
 
   defp context_suffix(_percent), do: ""
+
+  defp pending_approvals_line([]), do: nil
+
+  defp pending_approvals_line(approvals) do
+    "Pending approvals: " <>
+      Enum.map_join(approvals, ", ", &"#{&1["tool"]} (#{&1["id"]})") <>
+      ". Resolve through Lemon's approval prompts/channel buttons or operator exec.approval.resolve."
+  end
 
   defp active_tools_line([]), do: nil
 

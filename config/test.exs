@@ -146,6 +146,16 @@ Enum.each(
   &System.delete_env/1
 )
 
+# Computer use drives the real desktop. It stays off in tests regardless of a
+# developer's exported opt-in; suites start their own server against a fake
+# bridge.
+config :lemon_computer_use, enabled: false
+
+Enum.each(
+  ~w(LEMON_COMPUTER_USE_ENABLED LEMON_COMPUTER_USE_CHROME LEMON_COMPUTER_USE_DECLINED_ORIGINS),
+  &System.delete_env/1
+)
+
 # Prevent unit tests from starting real/interactive transports based on a developer's
 # local TOML config. Individual test suites can override these as needed and restart
 # the application under test.

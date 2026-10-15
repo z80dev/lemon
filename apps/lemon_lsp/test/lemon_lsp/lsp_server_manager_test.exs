@@ -23,8 +23,11 @@ defmodule LemonLsp.ServerManagerTest do
     assert status.mode == :registry_and_sessions
     assert status.active_count == 0
     assert status.active_servers == []
-    assert status.registry.count == 6
-    assert status.registry.available_count + status.registry.missing_count == 6
+    assert status.registry.count == length(LemonLsp.Servers.list())
+
+    assert status.registry.available_count + status.registry.missing_count ==
+             status.registry.count
+
     assert :server_registry in status.capabilities
     assert :json_rpc_diagnostics in status.planned_capabilities
     assert status.cleanup.includes_executable_paths == false
@@ -39,7 +42,7 @@ defmodule LemonLsp.ServerManagerTest do
     before = LspServerManager.status()
     after_refresh = LspServerManager.refresh()
 
-    assert after_refresh.registry.count == 6
+    assert after_refresh.registry.count == length(LemonLsp.Servers.list())
     assert after_refresh.refresh_count >= before.refresh_count
     assert is_binary(after_refresh.refreshed_at)
   end

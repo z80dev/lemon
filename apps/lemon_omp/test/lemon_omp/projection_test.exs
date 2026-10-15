@@ -496,6 +496,40 @@ defmodule LemonOmp.ProjectionTest do
     end
   end
 
+  describe "approvals" do
+    test "bounds untrusted details and preserves waiting activity across events" do
+      state =
+        new(approval_mode: "always-ask")
+        |> running()
+        |> Projection.request_approval(
+          "ap1",
+          "bash\e[31m",
+          String.duplicate("x", 3_000) <> "\u202e"
+        )
+        |> Projection.apply_event("message_update", %{
+          "assistantMessageEvent" => %{"type" => "text_delta", "delta" => "still working"}
+        })
+
+      wire = Projection.to_wire(state)
+      assert wire["approvalMode"] == "always-ask"
+      assert wire["activity"] == "Waiting for approval: bash"
+      assert [%{"id" => "ap1", "tool" => "bash", "details" => details}] = wire["pendingApprovals"]
+      assert String.length(details) == 2_000
+      refute details =~ "\u202e"
+      assert Projection.summary(wire) =~ "exec.approval.resolve"
+      assert Projection.summary(wire) =~ "Lemon's approval prompts"
+
+      state = Projection.resolve_approval(state, "ap1", :approved)
+      assert state.pending_approvals == []
+      assert state.approvals == %{approved: 1, denied: 0, expired: 0}
+      assert Projection.to_wire(state)["activity"] == "Writing response"
+      assert Projection.resolve_approval(state, "ap1", :approved).approvals.approved == 1
+
+      state = Projection.request_approval(state, "ap2", "write", "details")
+      assert Projection.resolve_approval(state, "ap2", nil).approvals == state.approvals
+    end
+  end
+
   describe "to_wire/1" do
     test "is JSON-encodable with camelCase keys" do
       state =
@@ -524,9 +558,9 @@ defmodule LemonOmp.ProjectionTest do
 
       assert Map.keys(wire) |> Enum.sort() ==
                Enum.sort(
-                 ~w(id ompSessionId title cwd model thinking owner status lastTurn activity
+                 ~w(id ompSessionId title cwd worktree model thinking approvalMode owner status lastTurn activity
                  startedAt updatedAt endedAt turns toolCalls activeTools recentTools todos subagents
-                 usage contextPercent lastText result error declinedPrompts exit)
+                 usage contextPercent lastText result error declinedPrompts pendingApprovals approvals exit)
                )
 
       assert wire["owner"] == %{"kind" => "agent", "sessionKey" => "agent:main:x"}

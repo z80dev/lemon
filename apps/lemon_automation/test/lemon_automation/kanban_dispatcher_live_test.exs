@@ -2,6 +2,7 @@ defmodule LemonAutomation.KanbanDispatcherLiveTest do
   use ExUnit.Case, async: false
 
   @moduletag :integration
+  @moduletag :automation_live
 
   alias LemonAutomation.KanbanDispatcher
   alias LemonAgent.Workspace.KanbanStore
@@ -9,8 +10,7 @@ defmodule LemonAutomation.KanbanDispatcherLiveTest do
   test "provider-backed dispatcher completes concurrent kanban work through real workers" do
     case live_config() do
       {:skip, reason} ->
-        IO.puts("[KanbanDispatcherLiveTest] Skipping: #{reason}")
-        assert true
+        flunk(reason)
 
       {:ok, model} ->
         workspace = Path.join(System.tmp_dir!(), "lemon-kanban-live-#{unique_id()}")
