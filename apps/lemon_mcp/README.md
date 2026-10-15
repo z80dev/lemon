@@ -289,6 +289,24 @@ When starting a client:
 - `:sampling_handler` - low-level raw callback for `sampling/createMessage`
 - `:timeout_ms` - Request timeout in milliseconds (default: 30000)
 
+## Server notifications
+
+All three clients accept `notification_handler: fn notification -> ... end`.
+The callback receives `%{method: method, params: params}` for server JSON-RPC
+notifications (a method with no request ID); omitted params become `%{}`.
+For example, a host can react to `notifications/tools/list_changed`,
+`notifications/resources/list_changed`, `notifications/prompts/list_changed` or
+`notifications/resources/updated` by refreshing its own cache.
+
+The option must be `nil` (the default, which ignores notifications) or an arity-one
+function. Each callback runs in an independent, unlinked task: exceptions and slow
+callbacks do not block or terminate the client. Delivery order and task completion
+are not guaranteed; hosts own callback work and cache lifecycle.
+
+Stdio and legacy SSE deliver notifications from their incoming streams. Streamable
+HTTP delivers notifications included in POST responses, including SSE-formatted
+responses; this client does not open a separate GET notification stream.
+
 ## License
 
 Part of the Lemon project.

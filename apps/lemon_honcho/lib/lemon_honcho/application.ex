@@ -49,13 +49,12 @@ defmodule LemonHoncho.Application do
     if Config.configured?(config) do
       register_memory_provider(config)
       register_context_contributor()
+      register_tools()
     else
       Logger.debug(
-        "honcho: not configured; memory provider and context contributor not registered"
+        "honcho: not configured; memory provider, context contributor and tools not registered"
       )
     end
-
-    register_tools()
   end
 
   # Registered only when configured, because an unregistered provider costs
@@ -118,9 +117,9 @@ defmodule LemonHoncho.Application do
       :ok
   end
 
-  # The tools register unconditionally. Each one reports "Honcho is not
-  # configured" as a normal tool result rather than raising: a model that asks
-  # for memory on an unconfigured host should be told so, not handed an error.
+  # Like the provider, tools register only when configured so inactive hosts
+  # spend no prompt tokens on their schemas. Per-call gates still report a normal
+  # "not configured" result if configuration becomes invalid after boot.
   defp register_tools do
     if Code.ensure_loaded?(LemonAgent.ToolRegistry) do
       Enum.each(@tools, fn {name, module} ->

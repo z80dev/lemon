@@ -41,7 +41,7 @@ use the operator token and the pages below.
 ## Layout, themes and keyboard
 
 The navigation rail groups **Workspace** (Chat, omp, Sessions), **Automate**,
-**Knowledge**, **Runtime** and **Settings**. On phones it becomes a drawer behind
+**Knowledge**, **Runtime** and **System**. On phones it becomes a drawer behind
 the menu button. Choose light, dark or system theme at the bottom of the rail or
 in **Settings** (⌘⇧L / Ctrl+Shift+L cycles it).
 
@@ -89,9 +89,10 @@ A session opens at `/chat/<session-key>`:
   match counts; todo checklists; subagents with status and links. Each run ends
   with model, duration, tokens and cost.
 - **Composer:** Enter sends, Shift+Enter adds a line, attachments (up to five
-  files of 20 MB; paste or drop images). While Lemon works, choose **Follow-up**
-  (queued for after the run), **Steer** (guidance for the current run; ⌘Enter)
-  or **Redirect** (new direction, finished tool work kept), or **Stop**.
+  files of 20 MB; paste or drop images). Images can total at most 10 MB per
+  message. While Lemon works, choose **Follow-up** (queued for after the run),
+  **Steer** (guidance for the current run; ⌘Enter) or **Redirect** (new direction,
+  finished tool work kept), or **Stop**.
 - **Approvals** appear in the conversation: Approve once, for the session,
   always, or Deny. Answers given in the TUI or another tab clear the card.
 - **Plan mode** (⌘⇧P) keeps the agent read-only. Its proposal appears as a plan
@@ -166,7 +167,7 @@ activation requires retyping the fresh digest.
 - **Usage** (`/usage`): spend and tokens for today, 7 and 30 days (UTC), by
   model, provider and top sessions. Usage is recorded when a run finishes.
 - **Diagnostics** (`/diagnostics`): health, versions, capacity, channels, setup
-  readiness, the same read-only checks as `lemon doctor`, and the last 1,000 log
+  readiness, the same read-only checks as `lemon doctor`, and the last 200 log
   lines with secrets and paths hidden. Use `lemon doctor --bundle` for a
   support bundle.
 - **Settings** (`/settings`): theme, notifications, default model and thinking
