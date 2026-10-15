@@ -25,6 +25,16 @@ exist, so a file really named `notes:12` is still read as-is. A selector cannot
 be combined with `offset`/`limit`. `:raw` output omits the snapshot tag, so use
 a numbered read before a snapshot-anchored `edit`.
 
+## Safe overwrites
+
+`write` refuses to overwrite an existing file with content containing a read
+continuation or long-line budget notice. Re-read the omitted range or use `edit`
+instead. New files are not subject to this check. Existing UTF-8 BOMs and dominant
+CRLF line endings are preserved when incoming text omits them; explicitly supplied
+CRLF text is left intact. The same safeguards apply to ACP writes when the prior
+contents are available.
+
+
 ## SQLite databases
 
 A `.db`, `.db3`, `.sqlite` or `.sqlite3` file with the SQLite header is opened
