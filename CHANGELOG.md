@@ -13,6 +13,12 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 - Opt in to a dedicated managed Chrome user-data directory and profile with
   `LEMON_BROWSER_USER_DATA_DIR` / `LEMON_BROWSER_PROFILE_DIRECTORY`, with
   default-directory and profile-lock safety checks and fail-closed identity binding.
+- Add opt-in `[runtime.tools.bash.interceptor]` dedicated-tool routing with
+  configurable rules, session-tool availability checks and piped-stdin exemptions,
+  applied before foreground, background and named-service launches.
+- Layer language-server defaults with global/project
+  `[runtime.tools.lsp.servers.<id>]` overrides, custom servers, disabling,
+  initialization options and environment settings across catalog consumers.
 
 - Native task subagents now have a configurable soft assistant-request budget
   (default 200, per-item override, `0` disables), one optional wrap-up steer, and

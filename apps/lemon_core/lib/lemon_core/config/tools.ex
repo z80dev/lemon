@@ -62,12 +62,15 @@ defmodule LemonCore.Config.Tools do
   top-level `tools` key, which is why `resolve/1` is called with `%{"tools" => ...}`.
   """
 
+  alias LemonCore.Config.Tools.Bash
   alias LemonCore.Env
 
   defstruct [
     :auto_resize_images,
     :approval_mode,
     :edit,
+    :bash,
+    :lsp,
     :intent_tracing,
     :web,
     :wasm,
@@ -147,6 +150,8 @@ defmodule LemonCore.Config.Tools do
           auto_resize_images: boolean(),
           approval_mode: String.t() | nil,
           edit: %{enforce_seen_lines: boolean()},
+          bash: %{interceptor: %{enabled: boolean(), rules: [map()]}},
+          lsp: map(),
           intent_tracing: boolean(),
           web: %{
             search: web_search_config(),
@@ -171,6 +176,8 @@ defmodule LemonCore.Config.Tools do
       auto_resize_images: resolve_auto_resize(tools_settings),
       approval_mode: Map.get(tools_settings, "approval_mode"),
       edit: resolve_edit(tools_settings),
+      bash: Bash.resolve(Map.get(tools_settings, "bash", %{})),
+      lsp: Map.get(tools_settings, "lsp", %{"servers" => %{}}),
       intent_tracing: Map.get(tools_settings, "intent_tracing", true),
       web: resolve_web(tools_settings),
       wasm: resolve_wasm(tools_settings),
@@ -485,6 +492,8 @@ defmodule LemonCore.Config.Tools do
       "auto_resize_images" => true,
       "checkpoint" => %{"enabled" => false},
       "edit" => %{"enforce_seen_lines" => false},
+      "bash" => Bash.defaults(),
+      "lsp" => %{"servers" => %{}},
       "web" => %{
         "search" => %{
           "enabled" => true,

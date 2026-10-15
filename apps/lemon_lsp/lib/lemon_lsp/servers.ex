@@ -633,32 +633,35 @@ defmodule LemonLsp.Servers do
     }
   ]
 
+  @doc false
+  def builtin_ids, do: Enum.map(@servers, &to_string(&1.id))
+
   @doc """
   List registered language-server metadata with redacted availability.
   """
-  @spec list() :: [map()]
-  def list do
-    Enum.map(@servers, &server_info/1)
+  @spec list(String.t() | nil) :: [map()]
+  def list(cwd \\ nil) do
+    Enum.map(merged(cwd), &server_info/1)
   end
 
   @doc """
   Return the owning server's LSP language id, or "plaintext" for unknown extensions.
   """
-  @spec language_id(String.t()) :: String.t()
-  def language_id(path) do
+  @spec language_id(String.t(), String.t() | nil) :: String.t()
+  def language_id(path, cwd \\ nil) do
     extension = path |> Path.extname() |> String.downcase()
 
-    Enum.find_value(@servers, "plaintext", &Map.get(&1.language_ids, extension))
+    Enum.find_value(merged(cwd), "plaintext", &Map.get(&1.language_ids, extension))
   end
 
   @doc """
   Resolve registered language-server metadata by id.
   """
-  @spec get(atom() | String.t()) :: {:ok, map()} | {:error, :unknown_lsp_server}
-  def get(id) do
+  @spec get(atom() | String.t(), String.t() | nil) :: {:ok, map()} | {:error, :unknown_lsp_server}
+  def get(id, cwd \\ nil) do
     normalized = normalize_id(id)
 
-    case get_raw(normalized) do
+    case get_raw(normalized, cwd) do
       nil -> {:error, :unknown_lsp_server}
       server -> {:ok, server_info(server)}
     end
@@ -667,11 +670,12 @@ defmodule LemonLsp.Servers do
   @doc """
   Validate and normalize a language-server id without creating atoms.
   """
-  @spec validate(atom() | String.t()) :: {:ok, atom()} | {:error, :unknown_lsp_server}
-  def validate(id) do
+  @spec validate(atom() | String.t(), String.t() | nil) ::
+          {:ok, atom() | String.t()} | {:error, :unknown_lsp_server}
+  def validate(id, cwd \\ nil) do
     normalized = normalize_id(id)
 
-    case get(normalized) do
+    case get(normalized, cwd) do
       {:ok, _server} -> {:ok, normalized}
       {:error, reason} -> {:error, reason}
     end
@@ -701,12 +705,12 @@ defmodule LemonLsp.Servers do
   end
 
   @doc false
-  @spec resolve_command(atom() | String.t()) ::
+  @spec resolve_command(atom() | String.t(), String.t() | nil) ::
           {:ok, map()} | {:error, :unknown_lsp_server | :command_unavailable}
-  def resolve_command(id) do
+  def resolve_command(id, cwd \\ nil) do
     normalized = normalize_id(id)
 
-    with server when is_map(server) <- get_raw(normalized),
+    with server when is_map(server) <- get_raw(normalized, cwd),
          {:ok, executable} <- resolve_executable(server) do
       {:ok,
        %{
@@ -714,6 +718,7 @@ defmodule LemonLsp.Servers do
          executable: executable,
          args: Map.get(server, :args, []),
          env: Map.get(server, :env, %{}),
+         initialization_options: Map.get(server, :initialization_options, %{}),
          command: command_label(executable)
        }}
     else
@@ -746,8 +751,80 @@ defmodule LemonLsp.Servers do
     }
   end
 
-  defp get_raw(id) do
-    Enum.find(@servers, &(&1.id == id))
+  defp get_raw(id, cwd) do
+    Enum.find(merged(cwd), &(&1.id == id))
+  end
+
+  defp merged(cwd) do
+    config = LemonCore.Config.load(cwd)
+    overrides = get_in(config.agent, [:tools, :lsp, "servers"]) || %{}
+    builtins = Map.new(@servers, &{to_string(&1.id), &1})
+
+    custom =
+      overrides
+      |> Enum.reject(fn {id, _} -> Map.has_key?(builtins, id) end)
+      |> Enum.sort_by(&elem(&1, 0))
+      |> Enum.map(fn {id, entry} -> custom_server(id, entry) end)
+
+    (@servers ++ custom)
+    |> Enum.map(fn server -> override(server, Map.get(overrides, to_string(server.id), %{})) end)
+    |> Enum.reject(&Map.get(&1, :disabled, false))
+  end
+
+  defp custom_server(id, entry) do
+    %{
+      id: id,
+      label: id,
+      language: id,
+      command: entry["command"],
+      args: [],
+      env: %{},
+      alternatives: [],
+      command_env: nil,
+      extensions: [],
+      language_ids: %{},
+      root_markers: [],
+      install_hint: "Configure runtime.tools.lsp.servers.#{id}.command.",
+      protocol: :lsp_stdio
+    }
+  end
+
+  defp override(server, entry) do
+    fields = ~w(command args root_markers initialization_options env disabled)a
+
+    server =
+      Enum.reduce(fields, server, fn field, acc ->
+        case Map.fetch(entry, to_string(field)) do
+          {:ok, value} when is_map(value) ->
+            Map.put(acc, field, LemonCore.MapHelpers.deep_merge(Map.get(acc, field, %{}), value))
+
+          {:ok, value} ->
+            Map.put(acc, field, value)
+
+          :error ->
+            acc
+        end
+      end)
+
+    extensions =
+      entry
+      |> Map.get("extensions", Map.get(entry, "file_types", server.extensions))
+      |> Enum.map(fn ext -> "." <> String.trim_leading(String.downcase(ext), ".") end)
+
+    language_ids =
+      Map.new(extensions, fn ext ->
+        {ext,
+         Map.get(
+           entry,
+           "language_id",
+           Map.get(server.language_ids, ext, to_string(server.language))
+         )}
+      end)
+
+    server
+    |> Map.put(:extensions, extensions)
+    |> Map.put(:language_ids, language_ids)
+    |> Map.put(:command_override, entry["command"])
   end
 
   defp resolve_executable(server) do
@@ -776,10 +853,12 @@ defmodule LemonLsp.Servers do
     end
   end
 
-  defp configured_command(%{command_env: env}) do
+  defp configured_command(%{command_env: nil} = server), do: Map.get(server, :command_override)
+
+  defp configured_command(%{command_env: env} = server) do
     case System.get_env(env) do
       value when is_binary(value) and value != "" -> value
-      _ -> nil
+      _ -> Map.get(server, :command_override)
     end
   end
 
@@ -812,7 +891,7 @@ defmodule LemonLsp.Servers do
 
     @servers
     |> Enum.map(& &1.id)
-    |> Enum.find(:unknown, &(Atom.to_string(&1) == normalized))
+    |> Enum.find(normalized, &(Atom.to_string(&1) == normalized))
   end
 
   defp normalize_id(_), do: :unknown

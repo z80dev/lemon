@@ -1591,6 +1591,29 @@ mode; `require_approval`, parent floors, and explicitly configured MCP approval
 requirements remain mandatory. An `on_tool_call` hook's revised arguments are
 used for approval resolution and the approval preview, not the original input.
 
+## Bash Dedicated-Tool Routing
+
+Opt in to shell interception in user or project `.lemon/config.toml`:
+
+```toml
+[runtime.tools.bash.interceptor]
+enabled = true # default false
+# Optional replacement for the complete default rule list:
+# rules = [{pattern = '^cat\s+', tool = 'read', message = 'Read files with read.'}]
+```
+
+Rules are `{pattern, tool, message}` tables with valid regular expressions and
+non-empty tool/message strings. Defaults route cat/head/tail/less/more to `read`,
+grep/rg (also ripgrep/ag/ack) to `grep`, find/fd/locate to `find`, ls to `ls`, and
+sed/perl in-place edits to `edit`. A rule only blocks when its target is in the
+session's filtered tool set. Pipeline consumers such as `git log | head` remain
+allowed. Checks scan simple commands, stripping assignments and common execution
+prefixes, including commands inside subshells and substitutions; quoted data does
+not become a command. They are advisory routing checks, not a shell sandbox.
+Checks run after internal URL expansion and before foreground, background or
+named-service launch. Refusals return an error tool result and configuration
+disable guidance. See [shell tools](tools/shell.md).
+
 ## Anchored Edit Visibility
 
 Enable seen-line enforcement in user or project `.lemon/config.toml`:
@@ -1609,6 +1632,32 @@ boolean; default false preserves clients that construct tags without tracked
 reads. Tool hosts can explicitly override it with the `:enforce_seen_lines` option.
 See [file tools](tools/files-and-search.md#anchored-edit-recovery-and-formatting)
 for visibility and snapshot-retention details.
+
+## Language Servers
+
+Configure `[runtime.tools.lsp.servers.<id>]` in user or project config. The
+effective catalog merges built-ins, user values, then project values. Known ids
+override fields; custom ids require `command` and a non-empty `extensions` list
+(`file_types` is an alias).
+
+```toml
+[runtime.tools.lsp.servers.clangd]
+command = "/opt/llvm/bin/clangd"
+args = ["--background-index"]
+root_markers = ["compile_commands.json", ".git"]
+extensions = [".c", ".h"]
+language_id = "c"
+initialization_options = { clangdFileStatus = true }
+env = { CLANGD_FLAGS = "" }
+disabled = false
+```
+
+`command` and `language_id` are non-empty strings; `args`, `root_markers`,
+`extensions`/`file_types` are string arrays; `env` is a string-to-string table;
+`initialization_options` is a table; `disabled` is boolean. Lists replace
+inherited values; nested tables merge. Command environment variables take
+priority over TOML. Disabled servers are excluded from all catalog lookups.
+See [LSP tools](tools/lsp.md#server-configuration) for custom servers and scope.
 
 ## Web Tools (`websearch` / `webfetch`)
 

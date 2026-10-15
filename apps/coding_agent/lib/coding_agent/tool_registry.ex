@@ -145,6 +145,8 @@ defmodule CodingAgent.ToolRegistry do
     settings = Keyword.get(opts, :settings_manager) || %{}
     tools_config = Map.get(settings, :tools, %{}) || %{}
     edit_config = Map.get(tools_config, :edit, Map.get(tools_config, "edit", %{}))
+    bash_config = Map.get(tools_config, :bash, Map.get(tools_config, "bash", %{}))
+    opts = Keyword.put_new(opts, :bash_config, bash_config)
 
     opts =
       Keyword.put_new(
@@ -196,6 +198,7 @@ defmodule CodingAgent.ToolRegistry do
     resolved_tools
     |> filter_tools(disabled, enabled_only)
     |> filter_policy_blocked(tool_policy)
+    |> configure_bash(cwd, opts)
     |> maybe_wrap_approval(
       tool_policy,
       Keyword.get(opts, :approval_context) ||
@@ -210,6 +213,15 @@ defmodule CodingAgent.ToolRegistry do
           ])
         )
     )
+  end
+
+  defp configure_bash(tools, cwd, opts) do
+    opts = Keyword.put(opts, :available_tools, Enum.map(tools, &elem(&1, 0)))
+
+    Enum.map(tools, fn
+      {"bash", _tool, :builtin} -> {"bash", Tools.Bash.tool(cwd, opts), :builtin}
+      other -> other
+    end)
   end
 
   @doc """
