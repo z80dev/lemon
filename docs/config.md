@@ -1133,6 +1133,22 @@ values are normalized to a `/v1` root (`OLLAMA_HOST=gpu-box` becomes
 `http://gpu-box:11434/v1`). A `base_url` written in config must include the
 OpenAI-compatible root (usually `/v1`).
 
+To configure these interactively, run `lemon setup provider --set-default` and
+choose a **local server**, or pass `--provider ollama` (aliases such as
+`--provider lm-studio` also work). Setup offers an optional API key, stores any
+key in encrypted secrets, and writes `auth = "none"` when it is left blank.
+Model discovery requests `GET {base_url}/models` only after explicit consent;
+declining, an empty list, or a connection failure allows manual model entry.
+`--model MODEL` and non-interactive local setup never discover models.
+Existing configured base URLs are retained; otherwise setup uses the preset's
+base-URL environment variables or default.
+
+The **Custom OpenAI-compatible endpoint** menu entry prompts for a new provider
+name, API base URL, and optional key. It writes `api = "openai_completions"` and
+either `auth = "none"` or an encrypted `api_key_secret` reference. No automatic
+runtime discovery setting is added. See the [setup guide](user-guide/setup.md#local-servers-and-custom-endpoints)
+for commands and the separate live-verification behavior.
+
 Readiness, `lemon doctor`, and offline setup verification accept these local
 presets without an API key. Custom keyless endpoints must explicitly set
 `auth = "none"`; a localhost URL alone does not waive a hosted provider's

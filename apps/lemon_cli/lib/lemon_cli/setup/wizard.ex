@@ -428,7 +428,7 @@ defmodule LemonCli.Setup.Wizard do
   # `lemon model` onboarding (LemonCli.CLI) stays offline-strong only.
   defp setup_verify_opts(opts) do
     opts
-    |> Keyword.take([:verifier, :skip_verify, :config, :verification_model, :cwd])
+    |> Keyword.take([:verifier, :skip_verify, :config, :verification_model, :cwd, :discovery])
     |> Keyword.put(:live_verify, true)
   end
 

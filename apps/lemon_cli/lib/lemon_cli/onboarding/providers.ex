@@ -306,20 +306,19 @@ defmodule LemonCli.Onboarding.Providers do
     }
   ]
 
-  # Hosted OpenAI-compatible presets sign in with an API key; local servers
-  # (Ollama, LM Studio, ...) need no sign-in.
   @providers @providers ++
-               for(
-                 preset <- LemonAi.Models.Presets.all(),
-                 not preset.local,
-                 do:
-                   Provider.api_key(
-                     Atom.to_string(preset.id),
-                     preset.name,
-                     "#{preset.name} API key",
+               Enum.map(LemonAi.Models.Presets.all(), fn preset ->
+                 id = Atom.to_string(preset.id)
+
+                 if preset.local do
+                   Provider.local(id, preset.name, aliases: preset.aliases)
+                 else
+                   Provider.api_key(id, preset.name, "#{preset.name} API key",
                      aliases: preset.aliases
                    )
-               )
+                 end
+               end) ++
+               [Provider.local("custom", "Custom OpenAI-compatible endpoint", custom: true)]
 
   @spec list() :: [Provider.t()]
   def list, do: @providers
@@ -354,6 +353,8 @@ defmodule LemonCli.Onboarding.Providers do
   end
 
   @spec auth_summary(Provider.t()) :: String.t()
+  def auth_summary(%Provider{local: true}), do: "local server (optional API key)"
+
   def auth_summary(%Provider{auth_modes: modes}) do
     modes
     |> Enum.map(&auth_mode_label/1)

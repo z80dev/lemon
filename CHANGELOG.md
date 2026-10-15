@@ -33,6 +33,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Added
 
+- Setup offers local inference servers and custom OpenAI-compatible endpoints,
+  optional encrypted keys, and consent-based model discovery with manual fallback.
+
 - Lemon Bot for Mac has an optional desktop pet: an original pixel lemon that
   floats above all windows and Spaces, reacts to thinking, tool work, approvals
   and questions, completions, failures and disconnects, and opens the relevant
