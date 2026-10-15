@@ -214,3 +214,22 @@ not `lib/deep/a.ex`); use `**` for recursive segments. The fd backend uses
 Both backends reject scopes exceeding 100,000 matching candidates with a narrowing
 hint instead of sorting a traversal-order subset. The fd safety ceiling is
 independent of `max_results`.
+
+## Structural search limits
+
+`ast_grep` refuses a scope with more than `max_files` files (default 1000) before
+starting the CLI or writing. Narrow `paths` or explicitly raise the cap. Directory
+enumeration skips hidden and ignored paths and does not follow directory
+symlinks; explicit files remain eligible. The cap counts candidate files, not
+just matching files, across the deduplicated scope.
+
+Each file is searched independently under the call's shared CLI timeout. A file's
+parse/CLI failure does not discard successful files: `details.parse_errors`
+contains the first 20 failures and `parse_errors_total` counts all failures.
+If every file fails, the tool still returns an error. Match counts and replacement
+previews exclude failed files, which are never rewritten.
+
+Large JSONL match results retain their complete spill file. When session artifact
+storage is available, the notice uses its `artifact://` handle and
+`details.artifact_uri` exposes it; `full_output_path` retains the backing path.
+
