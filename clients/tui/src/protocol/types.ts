@@ -11,6 +11,7 @@
  */
 
 import type { EventFrame, HelloOkFrame } from "./frames.ts";
+import type { UserPromptResolved } from "./user-prompt.ts";
 
 export type Nullable<T> = T | null | undefined;
 
@@ -344,6 +345,8 @@ export interface ProtocolEventMap {
 	"run.graph.changed": Record<string, unknown>;
 	"exec.approval.requested": ApprovalRequestedEvent;
 	"exec.approval.resolved": ApprovalResolvedEvent;
+	"session.prompt.requested": unknown;
+	"session.prompt.resolved": UserPromptResolved;
 	"channel.delivery": ChannelDeliveryEvent;
 	/**
 	 * `{reason, session: session_wire}` for an omp delegate. Untrusted and

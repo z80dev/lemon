@@ -417,10 +417,17 @@ defmodule CodingAgent.ToolRegistry do
   defp builtin_tool_tuples(cwd, opts) do
     builtin_tools()
     |> Enum.filter(fn
-      {:ask, _module} -> Tools.Ask.available?(opts)
-      {name, _module} when name in [:checkpoint, :rewind] -> Tools.Checkpoint.available?(opts)
-      {:ast_grep, _module} -> match?({:ok, _}, Tools.AstGrep.availability(opts))
-      _tool -> true
+      {:ask, _module} ->
+        Tools.Ask.available?(opts)
+
+      {name, _module} when name in [:checkpoint, :rewind] ->
+        Tools.Checkpoint.available?(Keyword.put(opts, :cwd, cwd))
+
+      {:ast_grep, _module} ->
+        match?({:ok, _}, Tools.AstGrep.availability(opts))
+
+      _tool ->
+        true
     end)
     |> Enum.map(fn {name, module} ->
       name = Atom.to_string(name)

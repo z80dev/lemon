@@ -239,7 +239,7 @@ defmodule LemonCore.ToolPolicy do
     "media_generate_video"
   ]
 
-  @write_tools ~w(write edit patch ast_grep fs_checkpoint checkpoint rewind skill_manage remember todo todowrite kanban goal cron)
+  @write_tools ~w(write edit patch ast_grep fs_checkpoint skill_manage remember todo todowrite kanban goal cron)
   @approval_read_tools @read_tools ++
                          ~w(ast_search bash_output webfetch websearch wait ask ask_parent extensions_status media_status tool_search)
   @browser_read_tools ~w(browser_tabs browser_snapshot browser_get_content browser_wait_for_selector browser_events browser_get_cookies)

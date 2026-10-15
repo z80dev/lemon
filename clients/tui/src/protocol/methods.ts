@@ -101,6 +101,7 @@ import type {
 	SessionsSnapshotResult,
 	UsageStatusResult,
 } from "./types.ts";
+import type { UserPromptResolveParams } from "./user-prompt.ts";
 
 export const METHOD = {
 	chatSend: "chat.send",
@@ -118,6 +119,8 @@ export const METHOD = {
 	sessionsList: "sessions.list",
 	sessionsGet: "sessions.get",
 	sessionsCreate: "sessions.create",
+	userPromptBind: "sessions.prompt.bind",
+	userPromptResolve: "sessions.prompt.resolve",
 	sessionsFork: "sessions.fork",
 	sessionsPreview: "sessions.preview",
 	sessionsActive: "sessions.active",
@@ -308,6 +311,33 @@ export class ControlPlaneMethods {
 	}
 
 	// -- sessions -----------------------------------------------------------
+
+	async userPromptBind(
+		sessionKey: string,
+		enabled = true,
+	): Promise<{ sessionKey: string; bound: boolean }> {
+		const result = await this.#call<{ sessionKey: string; bound: boolean }>(
+			METHOD.userPromptBind,
+			{ sessionKey, enabled },
+			{ queueIfOffline: false },
+		);
+		if (result?.sessionKey !== sessionKey || result.bound !== enabled)
+			throw new Error("The daemon did not confirm the session prompt surface.");
+		return result;
+	}
+
+	async userPromptResolve(
+		params: UserPromptResolveParams,
+	): Promise<{ resolved: boolean; promptId: string }> {
+		const result = await this.#call<{ resolved: boolean; promptId: string }>(
+			METHOD.userPromptResolve,
+			params,
+			{ queueIfOffline: false },
+		);
+		if (result?.resolved !== true || result.promptId !== params.promptId)
+			throw new Error("The daemon did not confirm the question answer.");
+		return result;
+	}
 
 	sessionsList(params?: SessionsListParams, options?: RequestOptions): Promise<SessionsListResult> {
 		return this.#call<SessionsListResult>(METHOD.sessionsList, params, options);

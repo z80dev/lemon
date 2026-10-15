@@ -83,6 +83,27 @@ selectors (`:raw:50-80` or `:50-80:raw`) remain exact, without context, line
 numbers, or a snapshot header. Raw comma lists also stay exact and retain the
 `…` separators. `offset`/`limit`, open-ended and tail selectors do not add context.
 
+## Merge conflicts
+
+`read path:conflicts` indexes local Git conflict regions as `#N Lx-Ly` with
+compact ours/theirs previews. Standard and diff3 (`|||||||` base) markers are
+supported. Existing literal filenames ending in `:conflicts` still take precedence.
+Conflict indexing requires a session id, UTF-8 local files up to 4 MiB, and cannot
+be combined with other selectors or ACP client buffers.
+
+Resolve one region with `write` using `path: "conflict://N"` and a replacement
+`content` body. Standalone body lines `@ours`, `@theirs`, `@base`, and `@both`
+expand to the original side text (`@both` concatenates ours then theirs;
+`@base` is empty for ordinary two-way conflicts). Other body text is literal.
+Only the marker region is replaced; surrounding bytes, BOM and line endings are
+preserved through the normal write pipeline, including mutation locks,
+checkpoints, formatting and diagnostics.
+
+Ids belong to the calling session. Any file-content change, including resolving
+one region, invalidates **all** ids for that file: re-read `path:conflicts`
+before resolving another region. Foreign, unknown, malformed and stale ids are
+rejected instead of falling back to ordinary filesystem writes.
+
 ## Structural code summaries
 
 A bare `read` of a recognized source-code file with at least 300 lines and at
@@ -145,6 +166,22 @@ against the current raw file bytes before any patch writes. If the file changed,
 re-read it before applying the patch. Files not previously read in the session
 can still be patched.
 
+## Archive member writes
+
+`write bundle.zip:inner/file.txt` replaces or adds one UTF-8 member. ZIP, TAR,
+`.tar.gz` and `.tgz` containers are supported, including new containers. Existing
+literal selector-shaped files take precedence. Members must be relative,
+slash-separated paths without empty, `.` or `..` segments; directories and links
+cannot be overwritten. Existing archives use the normal size, mutation lock,
+checkpoint, symlink and plan-mode guards. Replacing a member with truncated-read
+output is refused. A sibling temporary file is renamed over the archive only
+after the full replacement is ready.
+
+Unchanged ZIP members retain their uncompressed bytes and file metadata (ZIP
+compression/layout may change). Unrelated TAR headers, data, links and extension
+records remain byte-identical; gzip containers are recompressed. The replaced
+TAR member retains its mode, owner and timestamp.
+
 
 ## SQLite databases
 
@@ -163,7 +200,19 @@ app.db?q=SELECT name FROM users LIMIT 5  one read-only query (≤ 1000 rows)
 `where`, `order` and `q` reject comments, multiple statements and
 write/attach/pragma/transaction keywords; queries are interrupted after 10
 seconds. Database output is ordinary numbered text, so `offset`/`limit` page
-long results. Writing to databases is not supported.
+long results.
+
+`write app.db:users` inserts a row from a strict JSON object. Use
+`write app.db:users:42` to update fields by single-column primary key (including
+text keys), or rowid for tables without a primary key. Empty/whitespace content
+on a keyed selector deletes that row. `{}` inserts default values but is not a
+valid update. Composite primary keys and unavailable rowid fallbacks are refused.
+Values must be JSON scalars; column names are checked against `pragma_table_info`
+and SQL values are bound parameters. Database files must already exist; writes
+never create one. Query parameters are not accepted for writes. Connections use
+a 3-second busy timeout and physical database paths take the normal mutation lock,
+checkpoint, symlink and plan-mode guards. Existing literal selector-shaped files
+take precedence over SQLite interpretation.
 
 ## grep paging and ignore rules
 

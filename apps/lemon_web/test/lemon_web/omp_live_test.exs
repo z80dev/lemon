@@ -204,7 +204,7 @@ defmodule LemonWeb.OmpLiveTest do
     } do
       LemonCore.Bus.subscribe("omp")
       id = start_session!(workspace, "SUBAGENTS HOLD")
-      receive_snapshot(id, &(length(&1["subagents"]) > 0))
+      receive_snapshot(id, &match?([_ | _], &1["subagents"]))
       {:ok, view, _} = live(conn, "/omp/#{id}")
       render_async(view, @async_timeout)
       assert has_element?(view, "#omp-subagents", "tools")

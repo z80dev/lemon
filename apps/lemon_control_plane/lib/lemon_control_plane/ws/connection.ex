@@ -313,7 +313,7 @@ defmodule LemonControlPlane.WS.Connection do
 
       {:error, {:unauthorized, message}} ->
         message =
-          if (params || %{})["role"] in [nil, "operator"] do
+          if Map.get(params || %{}, "role") in [nil, "operator"] do
             message <>
               ". Set connect.auth.token from LEMON_CONTROL_PLANE_OPERATOR_TOKEN or the launcher's ~/.lemon/run/control-plane-<port>.token file."
           else
