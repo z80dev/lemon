@@ -22,8 +22,11 @@ defmodule CodingAgent.FileReadTracker do
 
   use GenServer
 
+  alias CodingAgent.Tools.AnchoredEdit
+
   @table :coding_agent_file_read_tracker
   @snapshots :coding_agent_file_snapshots
+  @seen :coding_agent_file_seen_lines
   @snapshot_limit 8
   @snapshot_bytes 256 * 1024
   @snapshot_lines 10_000
@@ -47,8 +50,8 @@ defmodule CodingAgent.FileReadTracker do
          true <- table_ready?(),
          true <- byte_size(content) <= @snapshot_bytes,
          true <- length(:binary.matches(content, "\n")) <= @snapshot_lines do
-      tag = CodingAgent.Tools.AnchoredEdit.snapshot_for_digest(content_digest)
-      lines = CodingAgent.Tools.AnchoredEdit.lines(content)
+      tag = AnchoredEdit.snapshot_for_digest(content_digest)
+      lines = AnchoredEdit.lines(content)
       GenServer.call(__MODULE__, {:snapshot, {scope, Path.expand(path)}, tag, lines})
     end
 
@@ -78,6 +81,33 @@ defmodule CodingAgent.FileReadTracker do
       end
     else
       _ -> nil
+    end
+  end
+
+  @doc "Merge the physical line numbers actually displayed for a snapshot."
+  def record_seen_lines(opts, path, tag, lines) do
+    with {:ok, scope} <- scope(opts),
+         true <- table_ready?() do
+      GenServer.call(
+        __MODULE__,
+        {:seen, {scope, Path.expand(path)}, String.upcase(tag), MapSet.new(lines)}
+      )
+
+      watch(scope, Keyword.get(opts, :session_pid))
+    end
+
+    :ok
+  end
+
+  @doc "Return displayed lines for this session/path/tag; unknown snapshots are unseen."
+  def seen_lines(opts, path, tag) do
+    with {:ok, scope} <- scope(opts),
+         true <- table_ready?(),
+         [{_key, versions}] <- :ets.lookup(@seen, {scope, Path.expand(path)}),
+         {_tag, seen} <- List.keyfind(versions, String.upcase(tag), 0) do
+      seen
+    else
+      _ -> MapSet.new()
     end
   end
 
@@ -125,6 +155,7 @@ defmodule CodingAgent.FileReadTracker do
     if table_ready?() do
       :ets.match_delete(@table, {{session_id, :_}, :_})
       :ets.match_delete(@snapshots, {{session_id, :_}, :_})
+      :ets.match_delete(@seen, {{session_id, :_}, :_})
     end
 
     :ok
@@ -157,6 +188,7 @@ defmodule CodingAgent.FileReadTracker do
     ])
 
     :ets.new(@snapshots, [:named_table, :public, :set, read_concurrency: true])
+    :ets.new(@seen, [:named_table, :public, :set, read_concurrency: true])
 
     {:ok, %{watched: %{}}}
   end
@@ -171,6 +203,27 @@ defmodule CodingAgent.FileReadTracker do
 
     snapshots = [{tag, lines} | List.keydelete(snapshots, tag, 0)] |> Enum.take(@snapshot_limit)
     :ets.insert(@snapshots, {key, snapshots})
+    {:reply, :ok, state}
+  end
+
+  def handle_call({:seen, key, tag, lines}, _from, state) do
+    versions =
+      case :ets.lookup(@seen, key) do
+        [{^key, versions}] -> versions
+        [] -> []
+      end
+
+    previous =
+      case List.keyfind(versions, tag, 0) do
+        {^tag, seen} -> seen
+        nil -> MapSet.new()
+      end
+
+    versions =
+      [{tag, MapSet.union(previous, lines)} | List.keydelete(versions, tag, 0)]
+      |> Enum.take(@snapshot_limit)
+
+    :ets.insert(@seen, {key, versions})
     {:reply, :ok, state}
   end
 
