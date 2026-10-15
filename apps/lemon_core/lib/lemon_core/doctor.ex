@@ -14,6 +14,10 @@ defmodule LemonCore.Doctor do
   A check module only has to export `run/1` returning a list of
   `LemonCore.Doctor.Check` structs. Modules that cannot be loaded are skipped,
   so a registration left behind by a removed dependency is not fatal.
+
+  Modules may also export `live_checks/1`, returning `{name, zero_arity_fun}`
+  jobs. These run only with `live: true`, concurrently under a shared deadline.
+  Jobs must return a Check and must never generate completions or send messages.
   """
   alias LemonCore.Doctor.Checks.{
     Config,
@@ -24,7 +28,7 @@ defmodule LemonCore.Doctor do
     Usage
   }
 
-  alias LemonCore.Doctor.Report
+  alias LemonCore.Doctor.{Check, LiveChecks, Report}
 
   @builtin_checks [
     Config,
@@ -49,10 +53,23 @@ defmodule LemonCore.Doctor do
     |> Enum.filter(&(Code.ensure_loaded?(&1) and function_exported?(&1, :run, 1)))
   end
 
-  @spec checks(keyword()) :: [LemonCore.Doctor.Check.t()]
+  @spec checks(keyword()) :: [Check.t()]
   def checks(opts \\ []) do
-    (@builtin_checks ++ registered_checks())
-    |> Enum.reduce([], fn module, acc -> append_checks(acc, run_checks(module, opts)) end)
+    modules = @builtin_checks ++ registered_checks()
+
+    offline =
+      Enum.reduce(modules, [], fn module, acc -> append_checks(acc, run_checks(module, opts)) end)
+
+    if Keyword.get(opts, :live, false) do
+      jobs =
+        Enum.flat_map(modules, fn module ->
+          if function_exported?(module, :live_checks, 1), do: module.live_checks(opts), else: []
+        end)
+
+      offline ++ LiveChecks.run(jobs, opts)
+    else
+      offline
+    end
   end
 
   @spec report(keyword()) :: Report.t()
@@ -67,7 +84,7 @@ defmodule LemonCore.Doctor do
   rescue
     _error ->
       [
-        LemonCore.Doctor.Check.fail(
+        Check.fail(
           "doctor.check_failed",
           "A diagnostic check could not complete.",
           "Run `lemon config validate --verbose`; for removed settings run `lemon config migrate`."
@@ -76,7 +93,7 @@ defmodule LemonCore.Doctor do
   catch
     _, _ ->
       [
-        LemonCore.Doctor.Check.fail(
+        Check.fail(
           "doctor.check_failed",
           "A diagnostic check stopped unexpectedly.",
           "Run `lemon doctor --verbose` after checking the configuration."
