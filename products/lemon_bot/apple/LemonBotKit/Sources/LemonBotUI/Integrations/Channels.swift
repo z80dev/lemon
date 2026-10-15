@@ -19,7 +19,7 @@ struct ChannelSettingsView: View {
     private var provider: ChannelProviderInfo? { providers.first { $0.id == providerID } }
     var body: some View {
         Form {
-            AdminStatus(control: control, store: store)
+            AdminStatus(control: control, store: store, refresh: { await control.perform { try await load() } })
             Section("Channel bindings — not MCP posting accounts") {
                 ForEach(channels) { channel in NavigationLink("\(channel.adapter) · \(channel.target) · \(channel.state) · \(channel.enabled ? "enabled" : "disabled")") { ChannelDetailSettingsView(store: store, binding: channel) } }
                 Text("Mapped external actors use their enabled product identity and budget. An unlinked person is refused, never silently charged to the Bot owner. Thread participation and listener triggers are separate from ordinary plugin posting consent.")

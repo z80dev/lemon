@@ -13,7 +13,7 @@ import LemonBotKit
         guard !busy else { return }
         busy = true; error = nil; notice = nil; attempts += 1; lastAttempt = Date()
         defer { busy = false }
-        do { try await operation() } catch { self.error = error.localizedDescription }
+        do { try await operation() } catch { self.error = humanErrorText(error) }
     }
 }
 
@@ -43,18 +43,26 @@ func adminDate(_ milliseconds: Double) -> String {
 struct AdminStatus: View {
     let control: AdminControl
     let store: LemonBotStore
+    var refresh: (() async -> Void)? = nil
     var body: some View {
         Section {
-            if control.busy { ProgressView("Contacting backend…") }
+            if control.busy { ProgressView("Connecting…") }
             if store.connectionState != "online" {
-                Label("\(store.connectionState). Changes require an online connection and are never queued.", systemImage: "wifi.exclamationmark")
+                Label("You're offline. Changes can't be saved until you reconnect.", systemImage: "wifi.exclamationmark")
+                Button("Try again") { Task { await reload() } }.disabled(control.busy)
             }
             if let error = control.error {
-                Text(error).foregroundStyle(.red).textSelection(.enabled)
-                Text("If the outcome is unknown, refresh the named resource before making another request. No request is automatically replayed.").font(.caption)
+                ActionErrorView(message: error)
+                Text("If this wasn't confirmed, refresh before trying again. Nothing was resent automatically.").font(LBFont.meta)
+                Button("Refresh") { Task { await reload() } }.disabled(control.busy)
             }
             if let notice = control.notice { Text(notice).textSelection(.enabled) }
         }
+    }
+    private func reload() async {
+        do { try await store.refresh() }
+        catch { control.error = humanErrorText(error); return }
+        if let refresh { await refresh() }
     }
 }
 

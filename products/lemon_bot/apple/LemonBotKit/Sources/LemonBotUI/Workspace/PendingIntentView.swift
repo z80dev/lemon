@@ -9,26 +9,29 @@ struct PendingIntentView: View {
     var body: some View {
         List {
             SwiftUI.Section {
-                Text("A timeout is not proof that an operation failed. These account-bound nonces survive restart, but contain no secret values, confirmation tokens or request bodies. A reconnect never resubmits them.")
+                Text("These actions may not have finished. Check their status before trying again. Reconnecting never sends them again.")
                 ActionErrorView(message: action.error)
             }
             ForEach(store.pendingIntents) { intent in
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("\(intent.method) \(intent.path)").font(.headline).textSelection(.enabled)
-                    StatusBadge(text: intent.state)
+                    Text("Action not confirmed").font(LBFont.rowTitle)
                     Text("Started \(timestamp(intent.startedAtMs).formatted())").font(.caption)
-                    Text("Nonce: \(intent.clientNonce)").font(.caption).textSelection(.enabled)
-                    if let run = intent.runID { Text("Run: \(run)").font(.caption).textSelection(.enabled) }
-                    ForEach(intent.resourceIDs, id: \.self) { id in Text("Exact resource: \(id)").font(.caption).textSelection(.enabled) }
-                    Button("Read exact outcome · never replay") { Task { await action.perform {
+                    DisclosureGroup("Details") {
+                        Text("\(intent.method) \(intent.path)").textSelection(.enabled)
+                        Text("Reference: \(intent.clientNonce)").textSelection(.enabled)
+                        if let run = intent.runID { Text("Run: \(run)").textSelection(.enabled) }
+                        ForEach(intent.resourceIDs, id: \.self) { id in Text("Resource: \(id)").textSelection(.enabled) }
+                        Button("Copy") { copyText("\(intent.method) \(intent.path)\n\(intent.clientNonce)\n\(intent.resourceIDs.joined(separator: ", "))") }
+                    }
+                    if store.connectionState != "online" { Text("Reconnect to check this action.").font(LBFont.meta).foregroundStyle(LB.muted) }
+                    Button("Check status") { Task { await action.perform {
                         let confirmed = try await store.reconcileMutation(intent.clientNonce)
-                        messages[intent.clientNonce] = confirmed ? "An authoritative read confirmed the original outcome; its fence was released. Nothing was replayed." : "No authoritative proof is available yet. The original intent remains fenced. Inspect the exact target or provider; an unknown create without a returned ID cannot safely be repeated."
+                        messages[intent.clientNonce] = confirmed ? "The result is confirmed. Nothing was sent again." : "The result still isn't confirmed. Check the item or service before trying again."
                     } } }.disabled(action.inFlight || store.connectionState != "online")
-                    if let message = messages[intent.clientNonce] { Text(message).font(.caption).foregroundStyle(.orange) }
-                    Button("Copy diagnostic IDs") { copyText("\(intent.method) \(intent.path)\nnonce \(intent.clientNonce)\nrun \(intent.runID ?? "not returned")\nresources \(intent.resourceIDs.joined(separator: ", "))") }.font(.caption)
+                    if let message = messages[intent.clientNonce] { Text(message).font(LBFont.meta).foregroundStyle(LB.warning) }
                 }.padding(.vertical, 6)
             }
-            if store.pendingIntents.isEmpty { Text("No unresolved account-bound mutations.") }
+            if store.pendingIntents.isEmpty { Text("No unconfirmed actions.") }
         }.navigationTitle("Unconfirmed actions")
     }
 }

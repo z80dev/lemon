@@ -9,7 +9,7 @@ struct InboxHubView: View {
     @State private var action = HubAction()
     var body: some View {
         List {
-            HubError(action: action)
+            HubError(action: action, store: store)
             Toggle("Unread only", isOn: $unreadOnly).onChange(of: unreadOnly) { Task { await load() } }
             Text("Opening a notification only navigates to its exact authorized task, entry, approval, machine or routine. It never approves a decision. Read state is independent of pending gates.")
             ForEach(notifications.filter { $0.dismissedAtMs == nil }) { notification in

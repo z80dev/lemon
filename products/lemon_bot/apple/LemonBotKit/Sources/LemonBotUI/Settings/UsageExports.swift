@@ -123,7 +123,7 @@ struct ExportSettingsView: View {
     @State private var consentConversation = ""
     var body: some View {
         Form {
-            AdminStatus(control: control, store: store)
+            AdminStatus(control: control, store: store, refresh: { await control.perform { try await load() } })
             Section("Your content export consent") {
                 Text("Content consent is off by default. Export requires your workspace content policy and explicit owner consent. Revoking stops new and undelivered queued content; already acknowledged collector copies and operator backups cannot be erased by this switch.")
                 Picker("Conversation", selection: $consentConversation) { Text("Choose authorized conversation").tag(""); ForEach(conversations) { Text($0.name.isEmpty ? $0.id : $0.name).tag($0.id) } }

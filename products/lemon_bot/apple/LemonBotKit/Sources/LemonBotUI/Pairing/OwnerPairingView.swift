@@ -18,14 +18,14 @@ public struct OwnerPairingView: View {
         NavigationStack {
             Form {
                 Section("Connect your iPhone") {
-                    Text("Use a reachable HTTPS desktop backend, such as Tailscale Serve. On iPhone choose Scan, check the exact origin, then request connection. Compare both verification codes before approving.")
-                    Button("Create one-use QR code") { perform { try await store.createPairing() } }
+                    Text("On your iPhone choose Scan QR code, check the server address, then request connection. Compare both verification codes before approving.")
+                    Button("Create QR code") { perform { try await store.createPairing() } }
                         .disabled(busy || store.pendingIntents.contains { $0.path == "/pairings" })
                     if store.pendingIntents.contains(where: { $0.path == "/pairings" }) {
-                        Button("Reconcile original QR request") {
+                        Button("Check previous QR code") {
                             perform { try await store.reconcilePairingIssuance() }
                         }.disabled(busy)
-                        Text("Recover the original one-use link with its fixed request nonce. This does not create another QR or extend its five-minute expiry. If expired, create a new QR explicitly.").font(.caption)
+                        Text("Check the QR you already created first. This doesn't make a new one or extend its five-minute expiry.").font(LBFont.meta)
                     }
                     if store.pairingURL != nil, let image = renderedQR {
                         Image(nsImage: image).interpolation(.none).resizable().scaledToFit().frame(width: 256, height: 256)
@@ -41,31 +41,31 @@ public struct OwnerPairingView: View {
                         Text("Copy only for your phone's secure paste field. The clipboard contains a temporary secret.").font(.caption)
                     }
                     Text("The QR is a temporary secret. Do not share screenshots. It is not your desktop session or password.").font(.caption)
-                    Button("Refresh requests · read only") { perform { try await store.refreshPairings() } }.disabled(busy)
+                    Button("Refresh requests") { perform { try await store.refreshPairings() } }.disabled(busy)
                 }
                 ForEach(store.pairings) { pairing in
                     Section(pairing.clusterName) {
                         Text(pairing.backendUrl).textSelection(.enabled)
                         Text("Expires \(Date(timeIntervalSince1970: pairing.expiresAtMs / 1000).formatted(date: .abbreviated, time: .standard))")
-                        Text("Status: \(pairing.status)")
+                        Text(pairingStatusLabel(pairing.status))
                         if let device = pairing.deviceName { Text("Device: \(device)").textSelection(.enabled) }
                         if let code = pairing.verificationCode {
                             Text(code).font(.title.monospaced()).textSelection(.enabled)
                             Text("Only approve if this exact code and device name match your phone.").font(.caption)
                         }
                         if pairing.status == "pending_approval" {
-                            Button("Approve this device once") { perform { try await store.approvePairing(pairing) } }
+                            Button("Approve this iPhone") { perform { try await store.approvePairing(pairing) } }
                                 .disabled(busy || fenced(pairing.id) || pairing.expiresAtMs <= Date().timeIntervalSince1970 * 1000)
                             Button("Deny", role: .destructive) { perform { try await store.denyPairing(pairing) } }
                                 .disabled(busy || fenced(pairing.id))
                         }
-                        if fenced(pairing.id) { Text("Outcome unconfirmed. Refresh reads the authoritative state; it never repeats approval or denial.").font(.caption) }
+                        if fenced(pairing.id) { Text("We couldn't confirm whether this went through. Refresh to see the current status. You don't need to approve again.").font(LBFont.meta) }
                     }
                 }
                 Section("Paired device access") {
                     Text("Manage or revoke this phone in Settings → Account → Devices / sessions. Revoking its device or session removes its access; pairing again requires explicit desktop approval.")
                 }
-                if let error { Text(error).foregroundStyle(.red) }
+                ActionErrorView(message: error)
                 if busy { ProgressView() }
             }.formStyle(.grouped).navigationTitle("Connect iPhone")
                 .toolbar { Button("Done") { dismiss() } }
@@ -79,7 +79,7 @@ public struct OwnerPairingView: View {
     private func perform(_ operation: @escaping @MainActor () async throws -> Void) {
         guard !busy else { return }
         busy = true; error = nil
-        Task { defer { busy = false }; do { try await operation() } catch { self.error = error.localizedDescription } }
+        Task { defer { busy = false }; do { try await operation() } catch { self.error = humanErrorText(error) } }
     }
     private func makeQRImage(_ link: String) -> NSImage? {
         let filter = CIFilter.qrCodeGenerator()
