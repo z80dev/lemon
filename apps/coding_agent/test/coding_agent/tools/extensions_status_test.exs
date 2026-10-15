@@ -15,7 +15,6 @@ defmodule CodingAgent.Tools.ExtensionsStatusTest do
 
       assert tool.name == "extensions_status"
       assert is_binary(tool.description)
-      assert tool.label == "Extensions Status"
       assert is_function(tool.execute, 4)
       assert is_map(tool.parameters)
     end

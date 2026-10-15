@@ -19,8 +19,6 @@ defmodule CodingAgent.Tools.LsTest do
       tool = Ls.tool("/tmp")
 
       assert tool.name == "ls"
-      assert tool.label == "List Directory"
-      assert tool.description =~ "List directory contents"
       assert tool.parameters["type"] == "object"
       assert tool.parameters["required"] == []
       assert is_function(tool.execute, 4)

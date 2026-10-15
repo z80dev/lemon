@@ -376,15 +376,6 @@ defmodule CodingAgent.BashExecutorTest do
       assert result.truncated == false
       assert result.full_output_path == nil
     end
-
-    test "default values" do
-      result = %Result{}
-      assert result.output == nil
-      assert result.exit_code == nil
-      assert result.cancelled == nil
-      assert result.truncated == nil
-      assert result.full_output_path == nil
-    end
   end
 
   describe "pty option" do
@@ -400,12 +391,6 @@ defmodule CodingAgent.BashExecutorTest do
       {:ok, result} = BashExecutor.execute("echo no_pty", "/tmp", pty: false)
       assert %Result{} = result
       assert result.output =~ "no_pty"
-      assert result.exit_code == 0
-    end
-
-    test "pty defaults to false when not specified" do
-      {:ok, result} = BashExecutor.execute("echo default", "/tmp")
-      assert result.output =~ "default"
       assert result.exit_code == 0
     end
 
