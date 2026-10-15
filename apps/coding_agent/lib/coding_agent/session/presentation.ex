@@ -475,6 +475,7 @@ defmodule CodingAgent.Session.Presentation do
       "bash" -> :command
       "bash_output" -> :command
       "kill_process" -> :command
+      "process_input" -> :command
       "eval" -> :command
       "debug" -> :command
       "read" -> :tool

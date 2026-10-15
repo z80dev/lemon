@@ -91,7 +91,7 @@ Required variables fail startup on omission/invalid configuration (no fake demo 
 | `LEMON_BOT_OPERATOR_TOKEN` | Required | Existing daemon operator token, server-only |
 | `LEMON_BOT_PUBLIC_URL` | Required | Reachable HTTPS product origin, HTTP loopback for development |
 | `LEMON_BOT_DATA_DIR` | Required | Private persistent SQLite/blobs/keys/config root |
-| `LEMON_BOT_RUNTIME_LAUNCHER` | Optional | Absolute existing executable Lemon launcher; enables owner-only start/stop/restart for a loopback controller. Invalid paths fail backend startup; remote controllers remain uncontrollable. |
+| `LEMON_BOT_RUNTIME_LAUNCHER` | Optional | Absolute existing executable Lemon launcher; enables owner-only start/stop/restart for a loopback controller and takes precedence over controller RPCs. Invalid paths fail backend startup. Remote restart/stop instead require the connected controller's advertised lifecycle methods and permissions. |
 | `LEMON_BOT_HOST` / `LEMON_BOT_PORT` | `127.0.0.1` / `4080` | Bun listener binding; expose only behind trusted TLS boundary |
 | `LEMON_BOT_ENCRYPTION_KEY` | Optional, otherwise private generated key | Stable 32-byte base64 master key for product session/integration credentials; never returned to client |
 | `LEMON_BOT_CONFIG_FILE` | Optional, otherwise DATA_DIR/config.json | Private operator provider, redirect, origin and host-management configuration |

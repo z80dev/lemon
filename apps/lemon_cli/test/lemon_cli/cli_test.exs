@@ -57,6 +57,74 @@ defmodule LemonCli.CLITest do
     {:ok, tmp_dir: tmp_dir}
   end
 
+  test "invalid TOML fails validation and names the file", %{tmp_dir: tmp_dir} do
+    path = LemonCore.Config.Modular.global_path()
+    File.mkdir_p!(Path.dirname(path))
+    File.write!(path, "api_key = \n")
+
+    output =
+      capture_io(:stderr, fn ->
+        capture_io(fn ->
+          assert CLI.run(["config", "validate", "--project-dir", tmp_dir]) == 1
+        end)
+      end)
+
+    assert output =~ path
+    assert output =~ "invalid TOML"
+    refute CLI.setup_required?()
+  end
+
+  test "removed settings produce doctor failures and actionable show errors", %{tmp_dir: tmp_dir} do
+    path = LemonCore.Config.Modular.global_path()
+    File.mkdir_p!(Path.dirname(path))
+    File.write!(path, "[runtime.cli]\nenabled = true\n")
+    checks = LemonCore.Doctor.checks(project_dir: tmp_dir)
+    assert Enum.any?(checks, &(&1.status == :fail))
+
+    output =
+      capture_io(:stderr, fn ->
+        assert CLI.run(["config", "show", "--project-dir", tmp_dir]) == 1
+      end)
+
+    assert output =~ "lemon config migrate"
+  end
+
+  test "migration explains invalid TOML without internal tuples", %{tmp_dir: tmp_dir} do
+    path = LemonCore.Config.Modular.global_path()
+    File.mkdir_p!(Path.dirname(path))
+    File.write!(path, "value = \n")
+
+    output =
+      capture_io(:stderr, fn ->
+        assert CLI.run(["config", "migrate", "--project-dir", tmp_dir]) == 1
+      end)
+
+    assert output =~ path
+    assert output =~ "invalid TOML"
+    assert output =~ "lemon config migrate"
+    refute output =~ "{:"
+  end
+
+  test "summary distinguishes unset values from false", %{tmp_dir: tmp_dir} do
+    output =
+      capture_io(fn ->
+        assert CLI.run(["config", "show", "--project-dir", tmp_dir]) == 0
+      end)
+
+    assert output =~ "Auto resume: false"
+    assert output =~ "File: (not set)"
+  end
+
+  test "unknown options point to command help" do
+    output =
+      capture_io(:stderr, fn ->
+        assert CLI.run(["config", "validate", "--foo"]) == 2
+      end)
+
+    assert output =~ "unknown option --foo (see lemon config --help)"
+    refute output =~ "{"
+  end
+
   test "dispatches setup without a Mix shell" do
     output =
       capture_io(fn ->
@@ -212,7 +280,7 @@ defmodule LemonCli.CLITest do
         assert CLI.run(["doctor", "--not-an-option"]) == 2
       end)
 
-    assert error =~ "Invalid options:"
+    assert error =~ "unknown option"
     assert error =~ "Usage: lemon doctor [options]"
     assert error =~ "--bundle [PATH]"
     refute error =~ "Diagnostics failed:"
@@ -263,7 +331,7 @@ defmodule LemonCli.CLITest do
         assert CLI.run(["config", "validate", "--not-an-option"]) == 2
       end)
 
-    assert error =~ "Invalid options:"
+    assert error =~ "unknown option"
     assert error =~ "Usage: lemon config [validate|show|migrate] [options]"
     assert error =~ "--project-dir, -p PATH"
   end
@@ -371,17 +439,17 @@ defmodule LemonCli.CLITest do
       assert CLI.setup_required?()
     end
 
-    test "fails closed when configuration is malformed" do
+    test "does not mistake malformed configuration for missing setup" do
       config_path = global_config_path()
       File.mkdir_p!(Path.dirname(config_path))
       File.write!(config_path, "[defaults\nprovider = \"openai\"\n")
-      assert CLI.setup_required?()
+      refute CLI.setup_required?()
     end
 
-    test "requires setup when the default provider credential is missing" do
+    test "does not mistake missing provider credentials for missing configuration" do
       write_openai_config("missing_setup_required_credential")
 
-      assert CLI.setup_required?()
+      refute CLI.setup_required?()
     end
 
     test "does not require setup with a resolved default provider credential" do

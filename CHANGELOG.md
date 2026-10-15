@@ -8,6 +8,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
+### Lemon Bot
+
+- Instance status exposes release/build metadata, provider credential health and channel errors. Owner-confirmed restart/stop can use a remote controller, with lifecycle completion observed from link events; clients use explicit available action lists.
+
 ### Fixed
 
 - Skill usage recording no longer depends on the introspection handler. Pinned
@@ -145,6 +149,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   follow-ups, cancellation, process cleanup, discovery and resume.
 
 ### Fixed
+
+- Configuration commands reject malformed TOML with file-specific guidance,
+  doctor continues after failed checks, and CLI validation and migration show
+  actionable recovery steps instead of internal error terms.
 
 - Provider-ownership probes inspect complete events and logs so large tool
   schemas cannot hide credential refusal or leaked values. Integration tests
