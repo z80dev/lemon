@@ -25,6 +25,41 @@ defmodule LemonSkills.CuratorTest do
     {:ok, tmp_dir: tmp_dir}
   end
 
+  test "cron exemptions prevent stale and archive transitions", %{tmp_dir: cwd} do
+    write_usage!(
+      cwd,
+      Map.new(["old", "stale"], fn name ->
+        {name, %{"created_by" => "agent", "created_at" => "2026-01-01T00:00:00Z"}}
+      end)
+    )
+
+    counts =
+      Curator.apply_automatic_transitions(
+        scope: :project,
+        cwd: cwd,
+        now: ~U[2026-05-06 00:00:00Z],
+        exempt_skills: ["old", "stale"]
+      )
+
+    assert counts.checked == 0
+    assert counts.archived == 0
+    assert counts.marked_stale == 0
+    refute Config.skill_disabled?("old", cwd)
+    assert Usage.get("stale", scope: :project, cwd: cwd)["lifecycle_state"] == "active"
+  end
+
+  test "never loaded skills receive the stale age floor before archive", %{tmp_dir: cwd} do
+    write_usage!(cwd, %{
+      "new" => %{"created_by" => "agent", "created_at" => "2026-05-01T00:00:00Z"}
+    })
+
+    opts = [scope: :project, cwd: cwd, stale_after_days: 30, archive_after_days: 1]
+    counts = Curator.apply_automatic_transitions(opts ++ [now: ~U[2026-05-06 00:00:00Z]])
+    assert counts.archived == 0
+    counts = Curator.apply_automatic_transitions(opts ++ [now: ~U[2026-05-31 00:00:00Z]])
+    assert counts.archived == 1
+  end
+
   test "automatic transitions archive stale agent-authored skills and disable them", %{
     tmp_dir: tmp_dir
   } do
@@ -110,7 +145,9 @@ defmodule LemonSkills.CuratorTest do
     assert result.review_prompt =~ "deploy-helper"
     assert result.auto_transitions.checked == 1
     assert result.auto_transitions.marked_stale == 1
-    assert result.report_path == Path.join([tmp_dir, ".lemon", "logs", "curator", "20260506T000000", "run.json"])
+
+    assert result.report_path ==
+             Path.join([tmp_dir, ".lemon", "logs", "curator", "20260506T000000", "run.json"])
 
     assert {:ok, report} = result.report_path |> File.read!() |> Jason.decode()
     assert report["started_at"] == "2026-05-06T00:00:00Z"
@@ -119,7 +156,9 @@ defmodule LemonSkills.CuratorTest do
     assert report["counts"]["marked_stale"] == 1
     assert report["candidate_count"] == 1
     assert [%{"name" => "deploy-helper"}] = report["candidates"]
-    assert [%{"name" => "deploy-helper", "from" => "active", "to" => "stale"}] = report["state_transitions"]
+
+    assert [%{"name" => "deploy-helper", "from" => "active", "to" => "stale"}] =
+             report["state_transitions"]
 
     human_report = result.report_path |> Path.dirname() |> Path.join("REPORT.md") |> File.read!()
     assert human_report =~ "# Curator run"

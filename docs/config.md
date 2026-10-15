@@ -1596,6 +1596,21 @@ cache_dir = ""
 max_tool_invoke_depth = 4
 ```
 
+## Computer Use
+
+Native app control through LCU is off by default. See
+[`docs/tools/computer-use.md`](tools/computer-use.md) for requirements and
+approvals. `LEMON_COMPUTER_USE_*` environment variables override these keys.
+
+```toml
+[runtime.tools.computer_use]
+enabled = false
+chrome = false
+# lcu_root = "~/.local/share/lcu/current"
+# node = "<lcu_root>/agent-tools/node/bin/node"
+declined_origins = []
+```
+
 ## Tool Disclosure
 
 Every tool a session exposes sends its name, description and JSON schema with

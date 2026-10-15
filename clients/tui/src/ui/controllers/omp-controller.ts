@@ -28,6 +28,7 @@ export interface OmpControllerOptions {
 	onBlur?: () => void;
 	/** Transcript notice for the record of what was asked and what happened. */
 	notice: (text: string, level?: NoticeLevel) => void;
+	resolveApproval?: (id: string, decision: string) => Promise<void>;
 	now?: () => number;
 	tickMs?: number;
 }
@@ -64,6 +65,10 @@ export class OmpController {
 			onRefresh: () => void this.refresh(true),
 			onDiscover: () => void this.discover(),
 			onResume: (row) => void this.resume(row),
+			onContinue: (row) => void this.resume(row, true),
+			onConfigure: (session) => void this.chooseModel(session),
+			onApproval: (session, id, decision) => void this.resolveApproval(session, id, decision),
+			onSubagent: (session, id) => void this.subagent(session, id),
 		});
 	}
 
@@ -130,7 +135,7 @@ export class OmpController {
 	}
 
 	async send(session: OmpSession, mode: OmpSendMode, message: string): Promise<boolean> {
-		const verb = mode === "steer" ? "steer" : "follow-up";
+		const verb = mode === "steer" ? "steer" : mode === "redirect" ? "redirect" : "follow-up";
 		if (Buffer.byteLength(message, "utf8") > OMP_MESSAGE_MAX_BYTES) {
 			this.#report(`${verb} not sent: message exceeds 16 KiB`, "warning");
 			return false;
@@ -203,7 +208,7 @@ export class OmpController {
 	}
 
 	/** Resume a discovered omp session in the TUI's working directory. */
-	async resume(row: OmpDiscoveredSession): Promise<void> {
+	async resume(row: OmpDiscoveredSession, continueInterrupted = false): Promise<void> {
 		if (row.liveId) {
 			this.panel.setFlash({
 				text: `already live as ${row.liveId} — select it in the list instead`,
@@ -217,12 +222,85 @@ export class OmpController {
 			const { session } = await this.#options.methods.ompSessionsResume({
 				ompSessionId: row.ompSessionId,
 				cwd: this.#options.cwd,
+				...(continueInterrupted ? { continue: true } : {}),
 			});
 			this.#options.store.upsert(session);
 			this.panel.setDiscover(undefined);
 			this.#report(`resumed ${ompSessionLabel(session)} as ${session.id}`, "info");
 		} catch (error) {
 			this.#report(`resume ${row.ompSessionId} failed: ${describeOmpError(error)}`, "error");
+		}
+	}
+
+	async chooseModel(session: OmpSession): Promise<void> {
+		if (!this.#ready(METHOD.ompModels, "list models")) return;
+		try {
+			const { models } = await this.#options.methods.ompModels({ limit: 200 });
+			if (!models.length) {
+				this.#report("no omp models available", "warning");
+				return;
+			}
+			this.panel.showViewer(
+				`configure ${session.id}: choose model`,
+				models.map((model) => `${model.selector}${model.free ? " [free]" : ""}`),
+				(index) => {
+					const model = models[index];
+					if (model) void this.configure(session, model.selector);
+				},
+			);
+		} catch (error) {
+			this.#report(`models failed: ${describeOmpError(error)}`, "error");
+		}
+	}
+
+	async configure(session: OmpSession, model: string): Promise<void> {
+		if (!this.#ready(METHOD.ompSessionsConfigure, "configure")) return;
+		try {
+			const result = await this.#options.methods.ompSessionsConfigure({ id: session.id, model });
+			this.#options.store.upsert(result.session);
+			this.#report(`configured ${session.id}: model ${result.session.model ?? model}`, "info");
+		} catch (error) {
+			this.#report(`configure ${session.id}: ${describeOmpError(error)}`, "error");
+			await this.refresh(false);
+		}
+	}
+
+	async resolveApproval(
+		session: OmpSession,
+		id: string,
+		decision: "approve_once" | "deny",
+	): Promise<void> {
+		if (!this.#ready(METHOD.approvalResolve, "resolve approval")) return;
+		if (!session.pendingApprovals.some((approval) => approval.id === id)) return;
+		try {
+			if (!this.#options.resolveApproval) {
+				this.#report("approval resolver unavailable", "warning");
+				return;
+			}
+			await this.#options.resolveApproval(id, decision);
+			await this.refresh(false);
+		} catch (error) {
+			this.#report(`approval ${id}: ${describeOmpError(error)}`, "error");
+		}
+	}
+
+	async subagent(session: OmpSession, subagentId: string): Promise<void> {
+		if (!this.#ready(METHOD.ompSessionsSubagent, "read subagent")) return;
+		try {
+			const { transcript } = await this.#options.methods.ompSessionsSubagent({
+				id: session.id,
+				subagentId,
+				limit: 50,
+			});
+			this.panel.showViewer(
+				`${session.id} / ${subagentId} · transcript tail`,
+				transcript.messages.flatMap((message) => [
+					`${message.role}${message.toolName ? ` · ${message.toolName}` : ""}`,
+					...message.text.split("\n"),
+				]),
+			);
+		} catch (error) {
+			this.#report(`subagent ${subagentId}: ${describeOmpError(error)}`, "error");
 		}
 	}
 

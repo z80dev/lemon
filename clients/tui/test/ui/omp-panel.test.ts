@@ -103,7 +103,7 @@ describe("omp panel", () => {
 			"▶ Fix the flaky reconnect test · running · lemon · deepseek/deepseek-v4-flash · Running bash — bun test test/protocol/ws.test.ts · 1m35s · 41k tok · $0.0018 · ctx 18%",
 		);
 		expect(text).toContain("○ Summarise the release notes · idle · completed");
-		expect(text).toContain("s steer · f follow-up · c cancel turn · x close");
+		expect(text).toContain("s steer · f follow-up · R redirect");
 	});
 
 	test("untrusted omp text never reaches the terminal as control sequences", async () => {
@@ -130,8 +130,11 @@ describe("omp panel", () => {
 		expect(detail).toContain("omp · Fix the flaky reconnect test (omp_3f9a1c2b7d4e)");
 		expect(detail).toContain("activity Running bash");
 		expect(detail).toContain("▶ bash — Re-running the reconnect suite");
-		expect(detail).toContain("todos 2/4");
-		expect(detail).toContain("[>] Fix: Make the watchdog deterministic");
+		expect(detail).toContain("approval mode write · approved 2 · denied 1 · expired 0");
+		expect(detail).toContain("approval_omp_1");
+		expect(detail).toContain("merge hint: review, then merge omp/fix into main");
+		panel.handleInput("\u001b[6~");
+		expect(rendered()).toContain("todos 2/4");
 		panel.handleInput(ENTER);
 		expect(panel.mode).toBe("list");
 	});
