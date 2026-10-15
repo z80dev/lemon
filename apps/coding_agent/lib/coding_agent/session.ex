@@ -1946,6 +1946,8 @@ defmodule CodingAgent.Session do
       session_id: state.session_manager && state.session_manager.header.id,
       agent_id: state.agent_id,
       run_id: state.run_id,
+      channel_identity:
+        if(state.session_scope == :main, do: (state.approval_context || %{})[:channel_identity]),
       query: if(is_binary(skill_context), do: skill_context, else: "")
     }
     |> Map.merge(trusted_memory_context(state))

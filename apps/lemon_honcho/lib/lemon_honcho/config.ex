@@ -12,10 +12,10 @@ defmodule LemonHoncho.Config do
   ## Resolution order
 
   For each field: the environment variable declared in `LemonHoncho.Env`, then
-  `Application.get_env(:lemon_honcho, key)`, then the built-in default. A value
-  that is present but unusable — a misspelled enum, a non-numeric integer, a
-  negative timeout — is treated as absent and resolution continues to the next
-  source. `load/0` therefore never raises and never returns a malformed struct.
+  `Application.get_env(:lemon_honcho, key)`, then `[honcho]` in the global Lemon
+  config, then the built-in default. `api_key_secret` references Lemon's encrypted
+  secret store, never a plaintext TOML key. A value that is present but unusable
+  is treated as absent and resolution continues to the next source.
   That rule matters more than it looks: this config is read on the way up in
   `LemonHoncho.Application`, so an operator typo that raised here would take
   the whole node down instead of quietly disabling one memory backend.
@@ -54,6 +54,9 @@ defmodule LemonHoncho.Config do
           environment: String.t(),
           workspace: String.t(),
           user_peer: String.t(),
+          pin_user_peer: boolean(),
+          user_peer_aliases: %{String.t() => String.t()},
+          runtime_peer_prefix: String.t(),
           ai_peer: String.t(),
           timeout_ms: pos_integer(),
           recall_mode: recall_mode(),
@@ -76,6 +79,9 @@ defmodule LemonHoncho.Config do
             environment: "production",
             workspace: "lemon",
             user_peer: "user",
+            pin_user_peer: false,
+            user_peer_aliases: %{},
+            runtime_peer_prefix: "",
             ai_peer: "lemon",
             timeout_ms: 30_000,
             recall_mode: :hybrid,
@@ -99,7 +105,7 @@ defmodule LemonHoncho.Config do
   @fallback_user_peer "user"
 
   @doc """
-  Builds the config from the environment, the application env, and the defaults.
+  Builds the config from the environment, application env, global TOML and defaults.
 
   Never raises: an unusable value falls through to the next source, so the
   worst an operator typo can do is leave a field at its default.
@@ -110,35 +116,45 @@ defmodule LemonHoncho.Config do
       iex> config.recall_mode in [:hybrid, :context, :tools]
       true
   """
-  @spec load() :: t()
-  def load do
+  @spec load(keyword()) :: t()
+  def load(opts \\ []) do
+    settings = settings(Keyword.get(opts, :config_path, LemonCore.Config.global_path()))
+    resolve = &resolve(&1, &2, &3, &4, settings)
+    enum = &enum(&1, &2, &3, &4, settings)
+
     %__MODULE__{
-      enabled?: resolve("LEMON_HONCHO_ENABLED", :enabled, &parse_bool/1, true),
-      api_key: resolve("HONCHO_API_KEY", :api_key, &parse_string/1, nil),
-      base_url: resolve("HONCHO_BASE_URL", :base_url, &parse_string/1, nil),
-      environment: resolve("HONCHO_ENVIRONMENT", :environment, &parse_string/1, "production"),
-      workspace: resolve("HONCHO_WORKSPACE", :workspace, &parse_string/1, "lemon"),
-      user_peer: user_peer(),
-      ai_peer: resolve("HONCHO_AI_PEER", :ai_peer, &parse_string/1, "lemon"),
-      timeout_ms: resolve("HONCHO_TIMEOUT_MS", :timeout_ms, &parse_pos_int/1, 30_000),
-      recall_mode: enum(env(:recall_mode), :recall_mode, @recall_modes, :hybrid),
-      session_strategy: session_strategy(),
-      context_cadence: resolve(env(:context_cadence), :context_cadence, &parse_pos_int/1, 1),
+      enabled?: resolve.("LEMON_HONCHO_ENABLED", :enabled, &parse_bool/1, true),
+      api_key: api_key(settings),
+      base_url: resolve.("HONCHO_BASE_URL", :base_url, &parse_string/1, nil),
+      environment: resolve.("HONCHO_ENVIRONMENT", :environment, &parse_string/1, "production"),
+      workspace: resolve.("HONCHO_WORKSPACE", :workspace, &parse_string/1, "lemon"),
+      user_peer: user_peer(settings),
+      pin_user_peer: resolve.("LEMON_HONCHO_PIN_USER_PEER", :pin_user_peer, &parse_bool/1, false),
+      user_peer_aliases:
+        resolve.("LEMON_HONCHO_USER_PEER_ALIASES", :user_peer_aliases, &parse_aliases/1, %{}),
+      runtime_peer_prefix:
+        resolve.("LEMON_HONCHO_RUNTIME_PEER_PREFIX", :runtime_peer_prefix, &parse_prefix/1, ""),
+      ai_peer: resolve.("HONCHO_AI_PEER", :ai_peer, &parse_string/1, "lemon"),
+      timeout_ms: resolve.("HONCHO_TIMEOUT_MS", :timeout_ms, &parse_pos_int/1, 30_000),
+      recall_mode: enum.(env(:recall_mode), :recall_mode, @recall_modes, :hybrid),
+      session_strategy:
+        enum.(env(:session_strategy), :session_strategy, @session_strategies, :per_directory),
+      context_cadence: resolve.(env(:context_cadence), :context_cadence, &parse_pos_int/1, 1),
       dialectic_cadence:
-        resolve(env(:dialectic_cadence), :dialectic_cadence, &parse_pos_int/1, 2),
-      context_tokens: resolve(env(:context_tokens), :context_tokens, &parse_pos_int/1, nil),
+        resolve.(env(:dialectic_cadence), :dialectic_cadence, &parse_pos_int/1, 2),
+      context_tokens: resolve.(env(:context_tokens), :context_tokens, &parse_pos_int/1, nil),
       dialectic_max_chars:
-        resolve(env(:dialectic_max_chars), :dialectic_max_chars, &parse_pos_int/1, 600),
-      reasoning_level: enum(env(:reasoning_level), :reasoning_level, @reasoning_levels, :low),
+        resolve.(env(:dialectic_max_chars), :dialectic_max_chars, &parse_pos_int/1, 600),
+      reasoning_level: enum.(env(:reasoning_level), :reasoning_level, @reasoning_levels, :low),
       observation_mode:
-        enum(env(:observation_mode), :observation_mode, @observation_modes, :directional),
-      save_messages?: resolve(env(:save_messages), :save_messages, &parse_bool/1, true),
+        enum.(env(:observation_mode), :observation_mode, @observation_modes, :directional),
+      save_messages?: resolve.(env(:save_messages), :save_messages, &parse_bool/1, true),
       inject_in_subagents?:
-        resolve(env(:inject_in_subagents), :inject_in_subagents, &parse_bool/1, false),
+        resolve.(env(:inject_in_subagents), :inject_in_subagents, &parse_bool/1, false),
       first_turn_wait_ms:
-        resolve(env(:first_turn_wait_ms), :first_turn_wait_ms, &parse_non_neg_int/1, 3_000),
+        resolve.(env(:first_turn_wait_ms), :first_turn_wait_ms, &parse_non_neg_int/1, 3_000),
       message_max_chars:
-        resolve(env(:message_max_chars), :message_max_chars, &parse_pos_int/1, 25_000)
+        resolve.(env(:message_max_chars), :message_max_chars, &parse_pos_int/1, 25_000)
     }
   end
 
@@ -200,17 +216,35 @@ defmodule LemonHoncho.Config do
   # here and LemonHoncho.Env.
   defp env(key), do: "LEMON_HONCHO_" <> String.upcase(Atom.to_string(key))
 
-  defp session_strategy do
-    enum(env(:session_strategy), :session_strategy, @session_strategies, :per_directory)
+  defp settings(path) do
+    case Toml.decode_file(path) do
+      {:ok, %{"honcho" => settings}} when is_map(settings) -> settings
+      _ -> %{}
+    end
+  end
+
+  defp api_key(settings) do
+    case resolve("HONCHO_API_KEY", :api_key, &parse_string/1, nil, %{}) do
+      nil ->
+        with {:ok, name} <- parse_string(settings["api_key_secret"]),
+             {:ok, value} <- LemonCore.Secrets.get(name) do
+          value
+        else
+          _ -> nil
+        end
+
+      value ->
+        value
+    end
   end
 
   # Peer ids address a durable record in someone's Honcho workspace, so they are
   # sanitized rather than passed through: a login containing "@" or "." would
   # otherwise create a peer that is awkward to address later. $USER is the
   # default because the person at the keyboard is who the memory is about.
-  defp user_peer do
+  defp user_peer(settings) do
     resolved =
-      resolve("HONCHO_PEER", :user_peer, &parse_string/1, nil) ||
+      resolve("HONCHO_PEER", :user_peer, &parse_string/1, nil, settings) ||
         System.get_env("USER") ||
         @fallback_user_peer
 
@@ -226,17 +260,15 @@ defmodule LemonHoncho.Config do
     |> String.trim("_")
   end
 
-  defp enum(env_var, app_key, allowed, default) do
-    resolve(env_var, app_key, &parse_enum(&1, allowed), default)
+  defp enum(env_var, app_key, allowed, default, settings) do
+    resolve(env_var, app_key, &parse_enum(&1, allowed), default, settings)
   end
 
-  # One resolution rule for every field: environment, then application env, then
-  # the default. `:error` from a parser means "present but unusable", which is
-  # deliberately indistinguishable from absent so a bad value degrades to the
-  # default instead of failing the boot.
-  defp resolve(env_var, app_key, parser, default) do
+  # Invalid values fall through rather than preventing the satellite from booting.
+  defp resolve(env_var, app_key, parser, default, settings) do
     with :error <- parse_source(Helpers.get_env(env_var), parser),
-         :error <- parse_source(Application.get_env(@app, app_key), parser) do
+         :error <- parse_source(Application.get_env(@app, app_key), parser),
+         :error <- parse_source(settings[Atom.to_string(app_key)], parser) do
       default
     else
       {:ok, value} -> value
@@ -255,6 +287,27 @@ defmodule LemonHoncho.Config do
 
   defp parse_string(value) when is_atom(value), do: parse_string(Atom.to_string(value))
   defp parse_string(_value), do: :error
+
+  defp parse_prefix(value) when is_binary(value), do: {:ok, String.trim(value)}
+  defp parse_prefix(_), do: :error
+
+  defp parse_aliases(value) when is_binary(value) do
+    case Jason.decode(value) do
+      {:ok, aliases} when is_map(aliases) -> parse_aliases(aliases)
+      _ -> :error
+    end
+  end
+
+  defp parse_aliases(value) when is_map(value) do
+    if Enum.all?(value, fn {key, peer} ->
+         is_binary(key) and key != "" and is_binary(peer) and
+           Regex.match?(~r/^[A-Za-z0-9_-]{1,512}$/, peer)
+       end),
+       do: {:ok, value},
+       else: :error
+  end
+
+  defp parse_aliases(_), do: :error
 
   defp parse_bool(value) when is_boolean(value), do: {:ok, value}
 

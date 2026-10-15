@@ -61,13 +61,12 @@ defmodule LemonControlPlane.Methods.MonitoringMethodsTest do
 
     test "handle/2 clamps limit to max 200" do
       {:ok, result} = RunsActiveList.handle(%{"limit" => 9999}, %{})
-      assert result["filters"]["limit"] <= 200
+      assert result["filters"]["limit"] == 200
     end
 
     test "handle/2 with negative limit uses default" do
       {:ok, result} = RunsActiveList.handle(%{"limit" => -5}, %{})
-      assert is_integer(result["filters"]["limit"])
-      assert result["filters"]["limit"] > 0
+      assert result["filters"]["limit"] == 100
     end
 
     test "handle/2 response always contains runs, total, and filters keys" do

@@ -39,6 +39,8 @@ defmodule CodingAgent.Tools.Edit do
   omitted; the existing diff and first changed line remain available.
   """
 
+  require Logger
+
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonAi.Types.TextContent
   alias CodingAgent.FileReadTracker
@@ -47,8 +49,10 @@ defmodule CodingAgent.Tools.Edit do
   alias CodingAgent.Tools.AnchoredEdit
   alias CodingAgent.Tools.CheckpointGuard
   alias CodingAgent.Tools.FileFormatHelpers
+  import CodingAgent.Tools.FileFormatHelpers, only: [normalize_line: 1, line_tokens: 1]
   alias CodingAgent.Tools.FileValidation
   alias CodingAgent.Tools.LspDiagnostics
+  alias CodingAgent.Tools.LspFormatter
   alias CodingAgent.Tools.PathHelpers
 
   import LemonAgent.Tools.AbortHelpers, only: [aborted?: 1, check_aborted: 1]
@@ -114,6 +118,11 @@ defmodule CodingAgent.Tools.Edit do
               "required" => ["start_line"]
             }
           },
+          "format" => %{
+            "type" => "boolean",
+            "default" => Keyword.get(opts, :format, false),
+            "description" => "Whether to auto-format the file after editing"
+          },
           "diagnostics" => %{
             "type" => "boolean",
             "default" => Keyword.get(opts, :diagnostics, false),
@@ -154,8 +163,16 @@ defmodule CodingAgent.Tools.Edit do
       result =
         with :ok <- validate_required_param(path, "path"),
              {:ok, edit_spec} <- build_edit_spec(params),
-             {:ok, diagnostics?} <- LspDiagnostics.option(params, opts) do
-          do_execute(path, edit_spec, diagnostics?, signal, cwd, opts)
+             {:ok, diagnostics?} <- LspDiagnostics.option(params, opts),
+             {:ok, format?} <- LspFormatter.option(params, opts) do
+          do_execute(
+            path,
+            edit_spec,
+            diagnostics?,
+            signal,
+            cwd,
+            Keyword.put(opts, :format, format?)
+          )
         end
 
       case result do
@@ -226,11 +243,12 @@ defmodule CodingAgent.Tools.Edit do
            ),
          {:ok, raw_content} <- File.read(resolved_path),
          :ok <- FileValidation.check_text_content(raw_content, path),
-         :ok <- FileReadTracker.check(opts, resolved_path, raw_content),
+         :ok <- check_read_tracker(opts, resolved_path, raw_content, edit_spec),
          {bom, content} <- FileFormatHelpers.strip_bom(raw_content),
          line_ending <- FileFormatHelpers.detect_line_ending(content),
          normalized_content <- FileFormatHelpers.normalize_to_lf(content),
-         {:ok, new_content} <- perform_edit(raw_content, normalized_content, edit_spec),
+         {:ok, new_content} <-
+           perform_local_edit(raw_content, normalized_content, edit_spec, opts, resolved_path),
          :ok <- check_content_changed(normalized_content, new_content),
          :ok <- check_aborted(signal),
          final_content <- FileFormatHelpers.finalize_content(new_content, line_ending, bom),
@@ -241,11 +259,19 @@ defmodule CodingAgent.Tools.Edit do
              path: resolved_path
            }),
          :ok <- File.write(resolved_path, final_content) do
-      digest = :erlang.md5(final_content)
-      FileReadTracker.record_digest(opts, resolved_path, digest)
-      snapshot = AnchoredEdit.snapshot_for_digest(digest)
-      diff = generate_diff(normalized_content, new_content)
-      first_changed_line = find_first_changed_line(normalized_content, new_content)
+      {formatted, format_error} =
+        LspFormatter.after_write(resolved_path, Keyword.get(opts, :format, false), cwd, opts)
+
+      final_content =
+        if Keyword.get(opts, :format, false), do: File.read!(resolved_path), else: final_content
+
+      FileReadTracker.record(opts, resolved_path, final_content)
+      snapshot = AnchoredEdit.snapshot(final_content)
+      {_bom, written_text} = FileFormatHelpers.strip_bom(final_content)
+      written_text = FileFormatHelpers.normalize_to_lf(written_text)
+      diff = generate_diff(normalized_content, written_text)
+      first_changed_line = find_first_changed_line(normalized_content, written_text)
+      format_text = if formatted, do: " Formatted the file.", else: ""
 
       {diagnostics, diagnostics_text} =
         LspDiagnostics.post_edit(resolved_path, cwd, baseline, diagnostics?, opts)
@@ -255,11 +281,14 @@ defmodule CodingAgent.Tools.Edit do
           %TextContent{
             type: :text,
             text:
-              "Successfully replaced text in #{path}.\n\n[#{resolved_path}##{snapshot}]\n#{diff}#{diagnostics_text}"
+              "Successfully replaced text in #{path}.#{format_text}\n\n[#{resolved_path}##{snapshot}]\n#{diff}#{diagnostics_text}"
           }
         ],
         details:
-          %{diff: diff, first_changed_line: first_changed_line}
+          %{diff: diff, first_changed_line: first_changed_line, formatted: formatted}
+          |> then(fn details ->
+            if format_error, do: Map.put(details, :format_error, format_error), else: details
+          end)
           |> CheckpointGuard.put_details(checkpoint)
           |> FileValidation.put_text_snapshots(resolved_path, raw_content, final_content)
           |> Map.put(:snapshot, snapshot)
@@ -288,6 +317,17 @@ defmodule CodingAgent.Tools.Edit do
       end
     end
   end
+
+  defp check_read_tracker(_opts, _path, _raw, {:anchored, _, _}), do: :ok
+
+  defp check_read_tracker(opts, path, raw, _spec), do: FileReadTracker.check(opts, path, raw)
+
+  defp perform_local_edit(raw, content, {:anchored, tag, edits}, opts, path) do
+    previous = FileReadTracker.snapshot_lines(opts, path, tag)
+    AnchoredEdit.apply(raw, content, tag, edits, previous)
+  end
+
+  defp perform_local_edit(raw, content, spec, _opts, _path), do: perform_edit(raw, content, spec)
 
   defp perform_edit(raw_content, content, {:anchored, snapshot, edits}) do
     AnchoredEdit.apply(raw_content, content, snapshot, edits)
@@ -332,8 +372,12 @@ defmodule CodingAgent.Tools.Edit do
   defp format_error({:error, :aborted}, _path), do: {:error, "Operation aborted"}
   defp format_error({:error, reason}, _path) when is_binary(reason), do: {:error, reason}
 
-  defp format_error({:error, reason}, _path),
-    do: {:error, "Failed to edit file: #{inspect(reason)}"}
+  defp format_error({:error, reason}, _path) do
+    Logger.warning("Failed to edit file: #{inspect(reason)}")
+
+    {:error,
+     "Failed to edit file. Re-read the file and check write permissions before trying again."}
+  end
 
   defp maybe_put_diagnostics(details, nil), do: details
 
@@ -376,13 +420,6 @@ defmodule CodingAgent.Tools.Edit do
 
   @max_reported_lines 10
 
-  # Smart quotes and unicode dashes fold to ASCII for line-based matching.
-  # Left/right single quote, single high-reversed-9 quote, prime, reversed prime
-  @single_quotes [0x2018, 0x2019, 0x201B, 0x2032, 0x2035]
-  # Left/right double quote, double low-9 / high-reversed-9 quote, (reversed) double prime
-  @double_quotes [0x201C, 0x201D, 0x201E, 0x201F, 0x2033, 0x2036]
-  # En dash, em dash, horizontal bar, minus sign
-  @dashes [0x2013, 0x2014, 0x2015, 0x2212]
   # Collapsed to a single space; trimmed at line edges
   @horizontal_space [?\s, ?\t, ?\r, ?\f, ?\v, 0x00A0]
 
@@ -609,52 +646,6 @@ defmodule CodingAgent.Tools.Edit do
 
     offset
   end
-
-  defp normalize_line(line) do
-    line
-    |> line_tokens()
-    |> Enum.map_join(fn {text, _orig_start, _orig_end} -> text end)
-  end
-
-  # Tokens are `{normalized_text, orig_start, orig_end}` byte ranges of the
-  # original line: one per codepoint (quotes/dashes folded to ASCII), with
-  # whitespace runs collapsed to one " " token and trimmed at both ends.
-  defp line_tokens(line) do
-    line
-    |> tokenize(0, [])
-    |> Enum.drop_while(&space_token?/1)
-    |> Enum.reverse()
-    |> Enum.drop_while(&space_token?/1)
-  end
-
-  defp space_token?({" ", _start, _end}), do: true
-  defp space_token?(_token), do: false
-
-  defp tokenize(<<>>, _pos, acc), do: acc
-
-  defp tokenize(<<cp::utf8, rest::binary>>, pos, acc) when cp in @horizontal_space do
-    next = pos + byte_size(<<cp::utf8>>)
-
-    case acc do
-      [{" ", start, _end} | tail] -> tokenize(rest, next, [{" ", start, next} | tail])
-      _ -> tokenize(rest, next, [{" ", pos, next} | acc])
-    end
-  end
-
-  defp tokenize(<<cp::utf8, rest::binary>>, pos, acc) do
-    next = pos + byte_size(<<cp::utf8>>)
-    tokenize(rest, next, [{fold_codepoint(cp), pos, next} | acc])
-  end
-
-  # Invalid UTF-8 byte: keep it as an opaque one-byte token.
-  defp tokenize(<<byte, rest::binary>>, pos, acc) do
-    tokenize(rest, pos + 1, [{<<byte>>, pos, pos + 1} | acc])
-  end
-
-  defp fold_codepoint(cp) when cp in @single_quotes, do: "'"
-  defp fold_codepoint(cp) when cp in @double_quotes, do: "\""
-  defp fold_codepoint(cp) when cp in @dashes, do: "-"
-  defp fold_codepoint(cp), do: <<cp::utf8>>
 
   # ============================================================================
   # Replacement

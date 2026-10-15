@@ -107,6 +107,25 @@ defmodule CodingAgent.Tools.Write do
           cwd :: String.t(),
           opts :: keyword()
         ) :: AgentToolResult.t() | {:error, term()}
+  def execute(_id, %{"path" => "proc://" <> _ = path} = params, signal, _update, cwd, opts) do
+    if AbortSignal.aborted?(signal),
+      do: {:error, :aborted},
+      else: CodingAgent.InternalUrls.ProcessProtocol.write(path, params, signal, cwd, opts)
+  end
+
+  def execute(id, %{"path" => "local://" <> _ = path} = params, signal, update, cwd, opts) do
+    with {:ok, resolved} <- CodingAgent.InternalUrls.resolve(path, Keyword.put(opts, :cwd, cwd)) do
+      execute(
+        id,
+        Map.put(params, "path", resolved),
+        signal,
+        update,
+        cwd,
+        Keyword.put(opts, :acp_client_fs_write_text_file, false)
+      )
+    end
+  end
+
   def execute(
         _tool_call_id,
         %{"path" => "agent://" <> _ = path} = params,
@@ -132,7 +151,7 @@ defmodule CodingAgent.Tools.Write do
     else
       with {:ok, path} <- get_path(params),
            {:ok, content} <- get_content(params),
-           {:ok, format?} <- get_format(params, opts),
+           {:ok, format?} <- LspFormatter.option(params, opts),
            {:ok, diagnostics?} <- LspDiagnostics.option(params, opts) do
         resolved_path = resolve_path(path, cwd, opts)
         write_file(resolved_path, content, signal, format?, diagnostics?, cwd, opts)
@@ -160,16 +179,6 @@ defmodule CodingAgent.Tools.Write do
 
   defp get_content(%{"content" => _}), do: {:error, "content must be a string"}
   defp get_content(_), do: {:error, "missing required parameter: content"}
-
-  defp get_format(params, opts) do
-    value = Map.get(params, "format", Keyword.get(opts, :format, false))
-
-    case value do
-      true -> {:ok, true}
-      false -> {:ok, false}
-      _ -> {:error, "format must be a boolean"}
-    end
-  end
 
   @doc false
   @spec resolve_path(path :: String.t(), cwd :: String.t(), opts :: keyword()) :: String.t()
@@ -297,7 +306,7 @@ defmodule CodingAgent.Tools.Write do
       File.write!(path, content)
 
       byte_count = byte_size(content)
-      {formatted, format_error} = maybe_format_file(path, format?, cwd, opts)
+      {formatted, format_error} = LspFormatter.after_write(path, format?, cwd, opts)
 
       if formatted,
         do: FileReadTracker.refresh(opts, [path]),
@@ -334,10 +343,23 @@ defmodule CodingAgent.Tools.Write do
   end
 
   defp existing_content(path) do
-    case File.read(path) do
-      {:ok, text} -> {:ok, text}
-      {:error, :enoent} -> {:ok, nil}
-      {:error, reason} -> {:error, "Failed to read existing file: #{:file.format_error(reason)}"}
+    result = File.open(path, [:read, :binary], &IO.binread(&1, 65_536))
+
+    case result do
+      {:ok, text} when is_binary(text) ->
+        {:ok, text}
+
+      {:ok, :eof} ->
+        {:ok, ""}
+
+      {:ok, {:error, reason}} ->
+        {:error, "Failed to read existing file: #{:file.format_error(reason)}"}
+
+      {:error, :enoent} ->
+        {:ok, nil}
+
+      {:error, reason} ->
+        {:error, "Failed to read existing file: #{:file.format_error(reason)}"}
     end
   end
 
@@ -370,18 +392,6 @@ defmodule CodingAgent.Tools.Write do
 
       _ ->
         :unavailable
-    end
-  end
-
-  defp maybe_format_file(_path, false, _cwd, _opts), do: {false, nil}
-
-  defp maybe_format_file(path, true, cwd, opts) do
-    timeout_ms = Keyword.get(opts, :format_timeout_ms, 5_000)
-
-    case LspFormatter.format_file(path, cwd: cwd, timeout_ms: timeout_ms) do
-      {:ok, :formatted} -> {true, nil}
-      {:ok, :unchanged} -> {false, nil}
-      {:error, reason} -> {false, to_string(reason)}
     end
   end
 

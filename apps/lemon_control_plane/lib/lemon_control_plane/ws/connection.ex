@@ -189,6 +189,11 @@ defmodule LemonControlPlane.WS.Connection do
     {:push, {:text, encode_response(id, result)}, state}
   end
 
+  def handle_info({:lifecycle_after_reply, ref}, state) do
+    LemonControlPlane.Lifecycle.after_reply(ref)
+    {:ok, state}
+  end
+
   def handle_info({:node_session_revoked, node_id, generation}, state) do
     Logger.info(
       "Closing superseded node session #{state.conn_id} for #{node_id} before generation #{generation}"
@@ -306,8 +311,16 @@ defmodule LemonControlPlane.WS.Connection do
             {:push, {:text, Frames.encode_response(id, {:error, error})}, state}
         end
 
-      {:error, {:unauthorized, _message} = error} ->
-        # For auth errors, we still send a res frame with the error
+      {:error, {:unauthorized, message}} ->
+        message =
+          if (params || %{})["role"] in [nil, "operator"] do
+            message <>
+              ". Set connect.auth.token from LEMON_CONTROL_PLANE_OPERATOR_TOKEN or the launcher's ~/.lemon/run/control-plane-<port>.token file."
+          else
+            message
+          end
+
+        error = Errors.unauthorized(message)
         {:push, {:text, Frames.encode_response(id, {:error, error})}, state}
     end
   end
@@ -440,7 +453,8 @@ defmodule LemonControlPlane.WS.Connection do
 
         {:error, reason} ->
           LemonCore.NodeRegistry.unregister(node_id, self())
-          {:error, Errors.internal_error("Failed to persist node connection", reason)}
+          Logger.error("Failed to persist node connection: #{inspect(reason)}")
+          {:error, Errors.internal_error("Failed to persist node connection")}
       end
     else
       false ->
@@ -453,7 +467,8 @@ defmodule LemonControlPlane.WS.Connection do
         {:error, Errors.unauthorized("Paired node has no durable name")}
 
       {:error, reason} ->
-        {:error, Errors.internal_error("Failed to register node connection", reason)}
+        Logger.error("Failed to register node connection: #{inspect(reason)}")
+        {:error, Errors.internal_error("Failed to register node connection")}
     end
   end
 

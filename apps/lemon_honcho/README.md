@@ -113,6 +113,9 @@ how much of a turn it may spend.
 | `HONCHO_WORKSPACE` | `lemon` | Workspace owning every peer, session, and conclusion Lemon writes |
 | `HONCHO_PEER` | `$USER`, then `user` | Peer id representing the human; sanitized to `[A-Za-z0-9_-]` |
 | `HONCHO_AI_PEER` | `lemon` | Peer id representing the assistant |
+| `LEMON_HONCHO_PIN_USER_PEER` | `false` | Pin channel turns to `user_peer`, ahead of aliases and generated peer names |
+| `LEMON_HONCHO_USER_PEER_ALIASES` | `{}` | JSON map of channel-qualified sender ids (`telegram_123`) to valid peer ids; many-to-one aliases are supported |
+| `LEMON_HONCHO_RUNTIME_PEER_PREFIX` | empty | Prefix for channel-qualified sender peers; local CLI/TUI/web turns keep `user_peer` |
 | `HONCHO_TIMEOUT_MS` | `30000` | Timeout for one attempt at an HTTP call. A turn-path call may retry twice; `mix lemon.honcho`'s probes do not |
 | `LEMON_HONCHO_ENABLED` | `true` | Master switch. Still inert without a key or base URL |
 | `LEMON_HONCHO_RECALL_MODE` | `hybrid` | How memory reaches the model: `hybrid` (both), `context` (injection only, tools inactive), `tools` (tools only, nothing injected) |
@@ -131,9 +134,16 @@ how much of a turn it may spend.
 Every variable is declared in `LemonHoncho.Env` and aggregated by `LemonCore.Env`
 through the `:env_registries` list, so `LemonCore.Env.by_area(:honcho)` documents them
 alongside the rest of the platform's configuration. Each also has an application-env twin — `config :lemon_honcho, recall_mode: :context`
-— which `LemonHoncho.Config` consults after the environment and before the default.
+— which `LemonHoncho.Config` consults after the environment. Global
+`config.toml` `[honcho]` settings come next, using the same snake-case names
+(`workspace`, `user_peer`, `recall_mode`, `timeout_ms`, etc.), then defaults.
+Project config is not used for personal-memory identity. `api_key_secret`
+references Lemon's encrypted store; plaintext `api_key` in TOML is ignored.
 A value that is present but unusable (a misspelled enum, a non-numeric integer) is
 treated as absent, because a config read on the way up must never take a node down.
+The [Hermes migration](../../docs/user-guide/migrate-from-hermes.md#honcho-configuration)
+imports supported Honcho settings and gated encrypted credentials without a
+platform-to-satellite dependency.
 
 ## How it plugs into the platform
 
@@ -209,6 +219,13 @@ hold for one to happen:
   `~/.lemon/config.toml`.
 * The document passes `LemonMemory.Safety.safe_document?/1`. A run whose summaries look
   like they carry a credential is never handed to any provider, Honcho included.
+
+Channel uploads use the turn's resolved human peer: pin, alias, prefixed
+platform/sender id, then configured peer. Transport-marked bot turns are skipped
+entirely. Context caches and peer reads are partitioned by resolved peer, so a
+group chat cannot reuse another sender's representation. See
+[gateway identity mapping](../../docs/user-guide/honcho.md#gateway-identity-mapping)
+for TOML and environment examples.
 
 ## Bounded session state
 

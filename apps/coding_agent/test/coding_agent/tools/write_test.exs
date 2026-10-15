@@ -133,6 +133,23 @@ defmodule CodingAgent.Tools.WriteTest do
       end
     end
 
+    test "preserves CRLF when overwriting a file larger than the format window", %{tmp_dir: cwd} do
+      path = Path.join(cwd, "large.txt")
+      File.write!(path, String.duplicate("existing line\r\n", 100_000))
+
+      assert %AgentToolResult{} =
+               Write.execute(
+                 "write",
+                 %{"path" => path, "content" => "new\ntext\n"},
+                 nil,
+                 nil,
+                 cwd,
+                 []
+               )
+
+      assert File.read!(path) == "new\r\ntext\r\n"
+    end
+
     test "rejects actual truncated read output only for existing targets", %{tmp_dir: cwd} do
       source = Path.join(cwd, "source.txt")
       target = Path.join(cwd, "target.txt")

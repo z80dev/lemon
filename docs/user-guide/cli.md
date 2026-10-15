@@ -51,6 +51,16 @@ Source runtime options go after `start`, `daemon`, or `restart`:
 `./bin/lemon start --no-distribution`. Runtime options are accepted after the
 relevant lifecycle command, not as bare launcher flags.
 
+Authenticated remote clients can call the admin-only `system.restart` and
+`system.stop` control-plane methods. They return acceptance before acting; restart
+uses the current `LEMON_LAUNCHER`, while stop gracefully shuts down the VM even
+without a launcher. These methods cannot start an offline controller. Source
+restarts preserve effective distribution name/cookie (or `--no-distribution`);
+both launchers inherit the control-plane/web/sim port environment. See the
+[system method reference](../reference/control-plane.md#systemrestart-and-systemstop)
+for availability, single-flight behavior, and release/custom-launcher limits.
+
+
 ### CLI commands
 
 These commands are dispatched by `LemonCli.CLI` in both source checkouts and
@@ -106,6 +116,31 @@ Commands that document `--json` emit JSON on success. Redacted operational
 error JSON is supported by the profile, session, blueprint, provider, learning,
 and secret-source command families; other commands report errors as text on
 stderr. Invalid arguments remain human-readable usage errors.
+
+## Setup
+
+`lemon setup` prepares configuration and encrypted secrets, onboards a default
+provider/model, and checks its credential. A rerun verifies the existing provider
+rather than silently trusting the saved key. **Setup complete** requires a passing
+live check; `--skip-verify` or an unsupported check is reported as not live-verified.
+Declining onboarding leaves pending steps without reporting a failed step.
+
+API-key prompts hide input and restore terminal echo afterwards. Without a TTY,
+use explicit non-interactive commands:
+
+```bash
+lemon setup --non-interactive --provider openai --token "$OPENAI_API_KEY" \
+  --model gpt-5 --set-default --daily-brief 07:30
+lemon setup provider --non-interactive --provider openai --token "$OPENAI_API_KEY" \
+  --model gpt-5 --set-default
+lemon doctor
+```
+
+Onboarding's `--model` takes a bare model id, not `provider:model`.
+`--daily-brief HH:MM` is opt-in and requires a Telegram chat paired with
+`lemon gateway setup telegram`. `lemon setup runtime` re-prompts for invalid
+interactive profiles or ports and rejects invalid flags; valid ports are 1–65535.
+See [setup and onboarding](setup.md) for the full workflow.
 
 ## ChatGPT authentication and Codex CLI login import
 

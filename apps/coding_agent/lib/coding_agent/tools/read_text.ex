@@ -5,8 +5,9 @@ defmodule CodingAgent.Tools.ReadText do
   # multi-megabyte line never needs to be materialized to display its preview.
   @chunk_bytes 64 * 1024
 
-  def read(path, offset, limit, max_lines, max_bytes, signal) do
+  def read(path, offset, limit, max_lines, max_bytes, signal, retain_snapshot? \\ false) do
     state = new_state(offset, limit, max_lines, max_bytes)
+    state = if retain_snapshot?, do: %{state | snapshot_chunks: []}, else: state
 
     case File.open(path, [:read, :binary], fn file -> scan(file, state, signal) end) do
       {:ok, result} -> result
@@ -48,6 +49,8 @@ defmodule CodingAgent.Tools.ReadText do
       current_saved: 0,
       truncated: nil,
       utf8_tail: "",
+      snapshot_chunks: nil,
+      snapshot_bytes: 0,
       digest: :crypto.hash_init(:md5)
     }
   end
@@ -64,7 +67,12 @@ defmodule CodingAgent.Tools.ReadText do
                lines: Enum.reverse(state.lines),
                total_lines: state.line,
                truncation: state.truncated,
-               digest: :crypto.hash_final(state.digest)
+               digest: :crypto.hash_final(state.digest),
+               snapshot_content:
+                 if(state.snapshot_chunks,
+                   do: state.snapshot_chunks |> Enum.reverse() |> IO.iodata_to_binary(),
+                   else: nil
+                 )
              }}
           else
             {:error, "File contains invalid UTF-8; use bash for binary inspection or conversion."}
@@ -76,10 +84,22 @@ defmodule CodingAgent.Tools.ReadText do
         chunk ->
           with {:ok, tail} <- validate_text(state.utf8_tail <> chunk) do
             state = %{state | utf8_tail: tail, digest: :crypto.hash_update(state.digest, chunk)}
+            state = retain_snapshot(state, chunk)
             scan(file, consume(chunk, state), signal)
           end
       end
     end
+  end
+
+  defp retain_snapshot(state, chunk) do
+    bytes = state.snapshot_bytes + byte_size(chunk)
+
+    chunks =
+      if state.snapshot_chunks && bytes <= CodingAgent.FileReadTracker.snapshot_byte_limit(),
+        do: [chunk | state.snapshot_chunks],
+        else: nil
+
+    %{state | snapshot_bytes: bytes, snapshot_chunks: chunks}
   end
 
   defp validate_text(bytes) do

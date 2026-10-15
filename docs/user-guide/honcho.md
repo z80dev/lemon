@@ -66,6 +66,76 @@ set `LEMON_HONCHO_ENABLED=false`, which wins over the key. Lemon's own test suit
 pinned off — and pinned off a second time at the transport, so that even a shell which
 forces the integration on cannot make `mix test` reach a real workspace.
 
+### Persistent configuration and Hermes imports
+
+Honcho also reads `[honcho]` in the global Lemon `config.toml` (normally
+`~/.lemon/config.toml`). The resolution order is environment, application env,
+global TOML, then defaults. Project TOML is deliberately not a source of Honcho
+credentials or personal-memory identity.
+
+```toml
+[honcho]
+api_key_secret = "HONCHO_API_KEY"
+workspace = "my-workspace"
+user_peer = "alice"
+ai_peer = "hermes"
+recall_mode = "tools"
+session_strategy = "per-session"
+save_messages = false
+timeout_ms = 30000
+```
+
+Store the referenced key with Lemon's `secrets` command; do not put an `api_key`
+value in TOML (the Honcho reader ignores it). Other `[honcho]` settings use their
+application-env names, such as `base_url`, `context_tokens`, `context_cadence`,
+`dialectic_cadence`, `reasoning_level` and `observation_mode`. Unusable values
+fall through to defaults. Restart Lemon after changing persistent configuration
+so its boot-time registrations reflect the new activation state.
+
+Coming from Hermes? `lemon migrate hermes --dry-run` previews the profile-local
+`honcho.json` or global `~/.honcho/config.json`, maps supported settings, and
+reports unsupported options. API-key import requires
+`--preset full --migrate-secrets` and uses Lemon's encrypted secret store, never
+plaintext config. Matching workspace and peer names keep access to your existing
+server-side memory; remote data and Hermes session IDs are not copied. See
+[the migration guide](migrate-from-hermes.md#honcho-configuration) for precedence,
+conflict handling and the full mapping.
+
+### Gateway identity mapping
+
+Channel turns (Telegram, Discord and other router channel ingress) can map each
+sender to a different Honcho human peer. CLI, TUI and web turns always use
+`user_peer`; channel chat/group ids are not treated as human identities.
+
+```toml
+[honcho]
+user_peer = "owner"
+pin_user_peer = false
+runtime_peer_prefix = "gateway_"
+user_peer_aliases = { telegram_123 = "alice", discord_456 = "alice" }
+```
+
+The first match wins: `pin_user_peer = true` uses `user_peer`; otherwise an
+alias for the channel-qualified runtime id wins; otherwise a nonempty
+`runtime_peer_prefix` is prepended to the runtime id; otherwise `user_peer`
+is used. For example, sender `123` on Telegram becomes `telegram_123`, and
+the prefix above produces `gateway_telegram_123`. Discord sender `123` has
+the distinct id `discord_123`. Aliases can intentionally map several ids to
+one person. Alias peer names must contain 1–512 ASCII letters, digits,
+underscores or hyphens. Generated names are sanitized and bounded, with a
+digest when normalization is needed to avoid collisions.
+
+Environment equivalents are `LEMON_HONCHO_PIN_USER_PEER`,
+`LEMON_HONCHO_RUNTIME_PEER_PREFIX` and `LEMON_HONCHO_USER_PEER_ALIASES`
+(a JSON object, e.g. `{"telegram_123":"alice"}`). Application env uses the
+same snake-case keys as TOML. Defaults are `false`, `""` and `{}`.
+Context, dialectic and tool peer selection follow the turn's resolved peer;
+volatile caches are partitioned by peer even in a shared group conversation.
+Transport-marked bot turns are **not uploaded at all**, including their
+assistant response, so a bot's words never train the human peer.
+
+### Upload controls
+
 Uploads travel over Lemon's built-in memory ingest, and that pipeline sits behind the
 `session_search` feature flag, which now defaults to **default-on** — so once the key
 is exported, per-run uploads happen without any further switch. If you want Honcho's

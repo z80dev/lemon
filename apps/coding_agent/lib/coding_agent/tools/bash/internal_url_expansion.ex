@@ -18,7 +18,7 @@ defmodule CodingAgent.Tools.Bash.InternalUrlExpansion do
 
   alias CodingAgent.InternalUrls
 
-  @pattern ~r{(?<![\w.+\-/:])(?:'(?:skill|artifact)://[^'\s")`\\]+'|"(?:skill|artifact)://[^"\s')`\\]+"|(?:skill|artifact)://[^\s'")`\\;&|<>($]+)}
+  @pattern ~r{(?<![\w.+\-/:])(?:'(?:skill|artifact|local)://[^'\s")`\\]+'|"(?:skill|artifact|local)://[^"\s')`\\]+"|(?:skill|artifact|local)://[^\s'")`\\;&|<>($]+)}
 
   @doc """
   Expands internal URL references in `command`.

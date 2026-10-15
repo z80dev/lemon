@@ -53,6 +53,28 @@ defmodule CodingAgent.Tools.LspFormatter do
 
   def formatable?(_), do: false
 
+  @doc false
+  def option(params, opts) do
+    case Map.get(params, "format", Keyword.get(opts, :format, false)) do
+      value when is_boolean(value) -> {:ok, value}
+      _ -> {:error, "format must be a boolean"}
+    end
+  end
+
+  @doc false
+  def after_write(_path, false, _cwd, _opts), do: {false, nil}
+
+  def after_write(path, true, cwd, opts) do
+    formatter = Keyword.get(opts, :format_file_fun, &format_file/2)
+    timeout_ms = Keyword.get(opts, :format_timeout_ms, 5_000)
+
+    case formatter.(path, cwd: cwd, timeout_ms: timeout_ms) do
+      {:ok, :formatted} -> {true, nil}
+      {:ok, :unchanged} -> {false, nil}
+      {:error, reason} -> {false, to_string(reason)}
+    end
+  end
+
   @doc """
   Format a file using the appropriate language formatter.
 
@@ -70,24 +92,24 @@ defmodule CodingAgent.Tools.LspFormatter do
       before = File.read(path)
       args = formatter.args ++ [path]
 
-      cmd_opts =
-        [stderr_to_stdout: true, timeout: timeout_ms]
-        |> maybe_put_cd(opts[:cwd])
+      command =
+        Enum.map_join([executable | args], " ", fn arg ->
+          "'" <> String.replace(arg, "'", "'\"'\"'") <> "'"
+        end)
 
-      case System.cmd(executable, args, cmd_opts) do
-        {_output, 0} ->
-          after_read = File.read(path)
+      result =
+        CodingAgent.BashExecutor.execute(command, opts[:cwd],
+          timeout: timeout_ms,
+          max_bytes: 8_192
+        )
 
-          case {before, after_read} do
-            {{:ok, before_content}, {:ok, after_content}} when before_content != after_content ->
-              {:ok, :formatted}
+      case result do
+        {:ok, result} ->
+          if result.full_output_path, do: File.rm(result.full_output_path)
+          formatter_result(result, before, path)
 
-            _ ->
-              {:ok, :unchanged}
-          end
-
-        {output, status} ->
-          {:error, "formatter exited with status #{status}: #{String.trim(output)}"}
+        {:error, reason} ->
+          {:error, inspect(reason)}
       end
     else
       {:skip, :not_formatable} -> {:ok, :unchanged}
@@ -99,6 +121,24 @@ defmodule CodingAgent.Tools.LspFormatter do
   end
 
   def format_file(_path, _opts), do: {:error, "path must be a string"}
+
+  defp formatter_result(%{timed_out: true}, _before, _path),
+    do: {:error, "formatter timed out"}
+
+  defp formatter_result(%{exit_code: 0}, before, path) do
+    after_read = File.read(path)
+
+    case {before, after_read} do
+      {{:ok, before_content}, {:ok, after_content}} when before_content != after_content ->
+        {:ok, :formatted}
+
+      _ ->
+        {:ok, :unchanged}
+    end
+  end
+
+  defp formatter_result(%{output: output, exit_code: status}, _before, _path),
+    do: {:error, "formatter exited with status #{status}: #{String.trim(output)}"}
 
   defp formatter_for_path(path) do
     ext = normalize_extension(path)
@@ -128,9 +168,6 @@ defmodule CodingAgent.Tools.LspFormatter do
       true -> {:error, "timeout must be a positive integer"}
     end
   end
-
-  defp maybe_put_cd(cmd_opts, cwd) when is_binary(cwd), do: Keyword.put(cmd_opts, :cd, cwd)
-  defp maybe_put_cd(cmd_opts, _cwd), do: cmd_opts
 
   defp normalize_extension(path) do
     path

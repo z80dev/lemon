@@ -8,21 +8,46 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
+- Lemon Web omp adds parallel worker starts and a live usage grid, searchable
+  free-marked model selection, live model/thinking configuration with explicit
+  partial-failure receipts, and bounded subagent transcript drill-down.
+
 ### Lemon Bot
 
 - Instance status exposes release/build metadata, provider credential health and channel errors. Owner-confirmed restart/stop can use a remote controller, with lifecycle completion observed from link events; clients use explicit available action lists.
+- Apple clients show Lemon build, provider credentials and channel errors, with action-aware local launcher and remote lifecycle controls.
+- Lemon Bot web shows build identity, provider credentials and timestamped channel health, with available-action lifecycle controls and clear local-launcher versus remote-controller guidance.
 
 ### Fixed
 
 - Release preflight fixtures retain built-in provider registrations, distinguish
   pending approvals from retained resolutions, and exercise typed provider errors
   and asynchronous subagent cleanup without cross-test state leaks.
+- Normalize non-OpenAI control-plane HTTP errors to code/message envelopes,
+  name authentication headers and credential sources, omit non-JSON error
+  details safely, and distinguish unavailable status subsystems from empty results.
+- Web chat model-list and compaction failures now show plain-language next steps
+  pointing to Diagnostics instead of exposing service error terms.
+
+- Channel status details no longer mistake a running adapter process for an
+  observed connection; Discord READY/resume and startup failures update the
+  redacted health projection.
+- All skill curator entry points now protect cron-referenced skills, including
+  disabled jobs, while preserving explicit exemptions. Automatic archival fails
+  closed with a reported reason when the automation provider is unavailable.
+- Recall browse/scroll now require the same verified private ownership as history
+  search; legacy or partially verified contexts fail closed.
 - Skill usage recording no longer depends on the introspection handler. Pinned
   skills reject content edits, never-used skills retain a stale-age grace floor,
   and background curation preserves skills referenced by disabled or active cron jobs.
 
 ### Changed
 
+- Honcho channel turns support pinned users, many-to-one sender aliases and
+  platform-qualified peer prefixes. Per-peer context follows each sender,
+  bot-authored turns are not uploaded, and Hermes migration imports these settings.
+- Bring Lemon Web's omp controls to parity with approval decisions and overrides,
+  isolated starts, interrupted continuation, redirect, and worktree/discovery details.
 - Expand `lemon omp` with approval modes, isolated and parallel starts, explicit
   interrupted-session continuation, redirect, model browsing/configuration,
   subagent transcripts, and richer approval/worktree/discovery output.
@@ -40,6 +65,15 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   headers and recommend consolidation above 80%; subagents remain isolated.
 
 ### Added
+
+- Admin-only control-plane `system.restart` and `system.stop` acknowledge before
+  acting, serialize runtime lifecycle requests, and preserve launcher ports and
+  source distribution identity across a detached restart.
+- Hermes migration previews and imports supported Honcho settings from global or
+  profile-local JSON, preserves active-host precedence, and reports unsupported
+  options. API keys use the gated encrypted-secret path, with conflict protection
+  and no plaintext fallback. Honcho reads persistent global `[honcho]` settings
+  and encrypted credential references without adding a platform dependency.
 
 - Control-plane status reports the real Lemon release version, build identity,
   offline provider credential presence, timestamped redacted channel health,
@@ -158,6 +192,13 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Chat, task, provider and goal/cron failures use plain-language recovery steps
+  instead of raw Elixir terms; provider authentication names the credential to
+  check, and Discord approvals distinguish expired controls from unavailable service.
+- Setup now hides pasted API keys, fails safely without a terminal, re-verifies
+  existing providers before claiming completion, distinguishes pending onboarding
+  from failure, and validates runtime input; packaged remediation, setup flags,
+  diagnostics hints, help errors, and duplicate completion entries are corrected.
 - Configuration commands reject malformed TOML with file-specific guidance,
   doctor continues after failed checks, and CLI validation and migration show
   actionable recovery steps instead of internal error terms.

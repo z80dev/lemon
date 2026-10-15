@@ -1694,7 +1694,11 @@ defmodule CodingAgent.Tools.Agent do
 
   defp format_error(nil), do: "unknown"
   defp format_error(error) when is_binary(error), do: error
-  defp format_error(error), do: inspect(error)
+
+  defp format_error(error) do
+    Logger.warning("Delegated agent failed: #{inspect(error)}")
+    "The delegated agent failed unexpectedly. Run `lemon doctor` before trying again."
+  end
 
   defp build_description do
     """

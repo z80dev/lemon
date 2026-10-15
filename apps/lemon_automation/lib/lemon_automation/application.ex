@@ -22,6 +22,7 @@ defmodule LemonAutomation.Application do
     opts = [strategy: :one_for_one, name: LemonAutomation.Supervisor]
 
     with {:ok, pid} <- Supervisor.start_link(children, opts) do
+      LemonSkills.CuratorReferences.register(LemonAutomation.CuratorReferences, pid)
       register_tools()
       {:ok, pid}
     end

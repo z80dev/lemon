@@ -17,6 +17,9 @@ defmodule LemonHoncho.ConfigTest do
     HONCHO_PEER
     HONCHO_AI_PEER
     HONCHO_TIMEOUT_MS
+    LEMON_HONCHO_PIN_USER_PEER
+    LEMON_HONCHO_USER_PEER_ALIASES
+    LEMON_HONCHO_RUNTIME_PEER_PREFIX
     LEMON_HONCHO_ENABLED
     LEMON_HONCHO_RECALL_MODE
     LEMON_HONCHO_SESSION_STRATEGY
@@ -30,6 +33,8 @@ defmodule LemonHoncho.ConfigTest do
     LEMON_HONCHO_INJECT_IN_SUBAGENTS
     LEMON_HONCHO_FIRST_TURN_WAIT_MS
     LEMON_HONCHO_MESSAGE_MAX_CHARS
+    HOME
+    LEMON_SECRETS_MASTER_KEY
   )
 
   @app_keys [
@@ -39,6 +44,9 @@ defmodule LemonHoncho.ConfigTest do
     :environment,
     :workspace,
     :user_peer,
+    :pin_user_peer,
+    :user_peer_aliases,
+    :runtime_peer_prefix,
     :ai_peer,
     :timeout_ms,
     :recall_mode,
@@ -56,18 +64,59 @@ defmodule LemonHoncho.ConfigTest do
   ]
 
   setup do
+    home = Path.join(System.tmp_dir!(), "honcho_config_#{System.unique_integer([:positive])}")
+    File.mkdir_p!(home)
     saved_env = Map.new(@env_vars, &{&1, System.get_env(&1)})
     saved_app = Map.new(@app_keys, &{&1, Application.fetch_env(:lemon_honcho, &1)})
+    saved_secrets = Application.fetch_env(:lemon_core, LemonCore.Secrets)
+    Application.put_env(:lemon_core, LemonCore.Secrets, key_providers: [:env])
 
     Enum.each(@env_vars, &System.delete_env/1)
     Enum.each(@app_keys, &Application.delete_env(:lemon_honcho, &1))
+    System.put_env("HOME", home)
 
     on_exit(fn ->
       Enum.each(saved_env, &restore_env/1)
       Enum.each(saved_app, &restore_app_env/1)
+
+      case saved_secrets do
+        {:ok, value} -> Application.put_env(:lemon_core, LemonCore.Secrets, value)
+        :error -> Application.delete_env(:lemon_core, LemonCore.Secrets)
+      end
+
+      File.rm_rf!(home)
     end)
 
-    :ok
+    %{home: home}
+  end
+
+  test "gateway identity settings resolve from TOML, app env and environment", %{home: home} do
+    path = Path.join(home, "gateway.toml")
+
+    File.write!(path, """
+    [honcho]
+    pin_user_peer = true
+    runtime_peer_prefix = "gateway_"
+    user_peer_aliases = { telegram_123 = "alice", discord_456 = "alice" }
+    """)
+
+    toml = Config.load(config_path: path)
+    assert toml.pin_user_peer
+    assert toml.runtime_peer_prefix == "gateway_"
+    assert toml.user_peer_aliases == %{"telegram_123" => "alice", "discord_456" => "alice"}
+
+    Application.put_env(:lemon_honcho, :pin_user_peer, false)
+    assert Config.load(config_path: path).pin_user_peer == false
+    System.put_env("LEMON_HONCHO_PIN_USER_PEER", "true")
+    System.put_env("LEMON_HONCHO_USER_PEER_ALIASES", ~s({"discord_789":"bob"}))
+    System.put_env("LEMON_HONCHO_RUNTIME_PEER_PREFIX", "remote_")
+    config = Config.load(config_path: path)
+    assert config.pin_user_peer
+    assert config.user_peer_aliases == %{"discord_789" => "bob"}
+    assert config.runtime_peer_prefix == "remote_"
+
+    System.put_env("LEMON_HONCHO_USER_PEER_ALIASES", ~s({"discord_789":"../bad"}))
+    assert Config.load(config_path: path).user_peer_aliases == toml.user_peer_aliases
   end
 
   describe "load/0 defaults" do
@@ -133,6 +182,96 @@ defmodule LemonHoncho.ConfigTest do
       System.put_env("HONCHO_API_KEY", "   ")
 
       assert Config.load().api_key == nil
+    end
+  end
+
+  describe "global [honcho] TOML" do
+    test "loads persisted settings without a plaintext API key", %{home: home} do
+      path = Path.join(home, "config.toml")
+
+      File.write!(path, """
+      [honcho]
+      workspace = "migrated-workspace"
+      user_peer = "alice"
+      ai_peer = "hermes"
+      base_url = "http://honcho.test:8000"
+      environment = "local"
+      timeout_ms = 1500
+      recall_mode = "tools"
+      session_strategy = "per-session"
+      context_cadence = 3
+      dialectic_cadence = 5
+      context_tokens = 1200
+      dialectic_max_chars = 900
+      message_max_chars = 16000
+      reasoning_level = "medium"
+      observation_mode = "unified"
+      save_messages = false
+      api_key = "plaintext-must-not-be-used"
+      """)
+
+      config = Config.load(config_path: path)
+      assert config.workspace == "migrated-workspace"
+      assert config.user_peer == "alice"
+      assert config.ai_peer == "hermes"
+      assert config.environment == "local"
+      assert config.timeout_ms == 1500
+      assert config.recall_mode == :tools
+      assert config.session_strategy == :per_session
+      assert config.context_cadence == 3
+      assert config.dialectic_cadence == 5
+      assert config.context_tokens == 1200
+      assert config.dialectic_max_chars == 900
+      assert config.message_max_chars == 16000
+      assert config.reasoning_level == :medium
+      assert config.observation_mode == :unified
+      refute config.save_messages?
+      assert config.api_key == nil
+      assert Config.configured?(config)
+    end
+
+    test "resolves an encrypted secret reference", %{home: home} do
+      key = Base.encode64(:binary.copy(<<10>>, 32))
+      System.put_env("LEMON_SECRETS_MASTER_KEY", key)
+      name = "honcho_config_test_#{System.unique_integer([:positive])}"
+      assert {:ok, _} = LemonCore.Secrets.set(name, "hk-config-test", key_providers: [:env])
+      on_exit(fn -> LemonCore.Secrets.delete(name) end)
+      path = Path.join(home, "config.toml")
+      File.write!(path, "[honcho]\napi_key_secret = \"#{name}\"\n")
+
+      assert Config.load(config_path: path).api_key == "hk-config-test"
+      System.put_env("HONCHO_API_KEY", "hk-env")
+      assert Config.load(config_path: path).api_key == "hk-env"
+    end
+
+    test "global config path and existing precedence are respected", %{home: home} do
+      path = LemonCore.Config.global_path()
+      assert String.starts_with?(path, home)
+      File.mkdir_p!(Path.dirname(path))
+      File.write!(path, "[honcho]\nworkspace = \"from-toml\"\nrecall_mode = \"tools\"\n")
+      assert Config.load().workspace == "from-toml"
+      Application.put_env(:lemon_honcho, :workspace, "from-app")
+      assert Config.load().workspace == "from-app"
+      System.put_env("HONCHO_WORKSPACE", "from-env")
+      assert Config.load().workspace == "from-env"
+    end
+
+    test "bad TOML, invalid fields and unavailable secret references degrade safely", %{
+      home: home
+    } do
+      path = Path.join(home, "config.toml")
+
+      File.write!(
+        path,
+        "[honcho]\ncontext_cadence = -1\nrecall_mode = \"invalid\"\napi_key_secret = \"missing-honcho-key\"\n"
+      )
+
+      config = Config.load(config_path: path)
+      assert config.context_cadence == 1
+      assert config.recall_mode == :hybrid
+      assert config.api_key == nil
+      File.write!(path, "broken = [")
+      assert Config.load(config_path: path).workspace == "lemon"
     end
   end
 

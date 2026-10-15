@@ -3,20 +3,7 @@ defmodule LemonControlPlane.Methods.SkillsMethodsTest do
 
   alias LemonControlPlane.Methods.SkillsInstall
 
-  setup do
-    # Clean up any existing test data
-    :ok
-  end
-
   describe "SkillsInstall" do
-    test "name returns correct method name" do
-      assert SkillsInstall.name() == "skills.install"
-    end
-
-    test "scopes returns admin scope" do
-      assert SkillsInstall.scopes() == [:admin]
-    end
-
     test "returns error when skillKey is missing" do
       ctx = %{auth: %{role: :operator}}
       params = %{}

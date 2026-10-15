@@ -26,13 +26,16 @@ not a Hex package; it ships as part of the reference runtime. It depends on
 `recall` also browses recent owned sessions when called without a query. Use a
 returned `session` with optional `around` document/run ID and `window` (5 by
 default, maximum 20) to read chronological run summaries. Content remains
-untrusted and scoped to the current main-session owner, agent, and profile.
+untrusted and scoped to the verified private main-session owner, agent, and
+profile. Legacy or incomplete ownership contexts cannot browse or scroll.
 
 Usage counters are recorded at the skill tool telemetry entry points, independently
 of introspection subscribers. Discovery-only prompt metadata is not a load.
-Pinned bundles reject content edits as well as archive/delete. The curator accepts
-`:exempt_skills` from its caller (automation owns cron lookups) and gives never-used
-skills at least `stale_after_days` before automatic archival.
+Pinned bundles reject content edits as well as archive/delete. Every curator entry
+point looks up cron references through `LemonSkills.CuratorReferences`, registered
+by automation at boot, and unions them with explicit `:exempt_skills`. If that
+provider is unavailable, automatic archival is skipped and the summary reports why.
+Never-used skills receive at least `stale_after_days` before automatic archival.
 
 ## In-band learning reminders
 

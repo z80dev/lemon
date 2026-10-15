@@ -22,7 +22,7 @@ Common options:
 
 | Option | Purpose |
 |---|---|
-| `--source PATH` | Hermes home. Defaults to `~/.hermes`. |
+| `--source PATH` | Hermes home. Defaults to `$HERMES_HOME`, then `~/.hermes`. |
 | `--target PATH` | Lemon home. Defaults to `~/.lemon`. |
 | `--workspace-dir PATH` | Lemon assistant workspace. Defaults to `<target>/agent/workspace`. |
 | `--preset user-data` | Import user data. This is the default. |
@@ -50,6 +50,7 @@ before writing. If conflicts are present, it refuses to apply unless
 | `memories/USER.md` | Compact `<target>/agent/workspace/USER.md`; overflow goes to `memory/topics/hermes-imported-user_profile.md` |
 | `skills/*/SKILL.md` | `<target>/agent/skill/<skill-name>/SKILL.md` |
 | `config.yaml` model/provider base URLs | Compatible `[defaults]` and `[providers.*]` entries in `<target>/config.toml` |
+| `$HERMES_HOME/honcho.json` or `~/.honcho/config.json` | Supported settings in `[honcho]`; API key in Lemon encrypted secrets with `--preset full --migrate-secrets` |
 | `.env` allowlisted secrets | Lemon encrypted secrets, only with `--migrate-secrets` |
 | `state.db` sessions/messages | Searchable Lemon memory documents in `<target>/store/memory.sqlite3` |
 | Known unmapped files | Archived under `<target>/migration/hermes/<timestamp>/archive/` for manual review |
@@ -57,6 +58,59 @@ before writing. If conflicts are present, it refuses to apply unless
 Imported Hermes sessions become durable recall records. They are searchable via
 Lemon memory tools, but they are not exact replay/resume records for the old
 Hermes runtime.
+
+## Honcho Configuration
+
+The importer selects `<source>/honcho.json` if present, otherwise
+`~/.honcho/config.json`. The profile-local file wins as a whole; it does not
+inherit missing fields or credentials from the global file. A malformed local
+file is an error, not permission to import a different profile's global settings.
+Honcho config is never copied into the plaintext migration archive.
+
+Within the selected file, the active `hosts.<host>` block overrides top-level
+values. The host comes from `HERMES_HONCHO_HOST` in the source `.env`, a named
+`profiles/<name>` source (`hermes_<name>`), or `defaultHost` / `hermes` for the
+default profile. Other host blocks are reported as `unsupported`, not imported.
+Missing workspace and AI peer settings retain Hermes's host-name defaults.
+
+| Hermes key | Lemon `[honcho]` key |
+|---|---|
+| `baseUrl` (`base_url`) | `base_url` |
+| `environment`, `workspace` | `environment`, `workspace` |
+| `peerName`, `aiPeer` | `user_peer`, `ai_peer` |
+| `pinUserPeer` (`pinPeerName`) | `pin_user_peer` |
+| `userPeerAliases`, `runtimePeerPrefix` | `user_peer_aliases`, `runtime_peer_prefix` |
+| `recallMode`, `sessionStrategy` | `recall_mode`, `session_strategy` |
+| `contextTokens`, `contextCadence`, `dialecticCadence` | `context_tokens`, `context_cadence`, `dialectic_cadence` |
+| `dialecticReasoningLevel`, `dialecticMaxChars` | `reasoning_level`, `dialectic_max_chars` |
+| `messageMaxChars`, `saveMessages`, `observationMode`, `enabled` | `message_max_chars`, `save_messages`, `observation_mode`, `enabled` |
+| `timeout` (`requestTimeout`), in seconds | `timeout_ms`, converted to milliseconds |
+| `apiKey` | Encrypted `HONCHO_API_KEY` secret; config stores only `api_key_secret = "HONCHO_API_KEY"` |
+
+The normal `user-data` preview includes supported non-secret settings. API keys
+are reported as `gated` until both `--preset full` and `--migrate-secrets` are
+supplied. Preview never writes config or secrets. Existing differing Honcho
+settings, credential references, and an existing `HONCHO_API_KEY` secret are
+conflicts unless `--overwrite` is set.
+
+Gateway identity settings are imported without collapsing their scope: the
+selected host's alias map replaces the root map, and canonical `pinUserPeer`
+wins over legacy `pinPeerName` within the same scope. Alias maps preserve
+runtime IDs as quoted TOML keys and require valid Honcho peer names. Empty maps
+and an empty prefix remain explicit empty values. These settings use the same
+preview and overwrite policy as other Honcho config.
+
+Unsupported keys (including `dialecticDepth`, `writeFrequency`, granular
+observation and session overrides) and invalid values
+appear as `unsupported` items in the preview; Lemon does not pretend to implement
+their semantics. Null settings are left at Lemon defaults. Review this report
+before enabling Honcho: retaining a workspace and peers preserves access to
+server-side memory, but does not copy remote data or reproduce Hermes's session
+IDs. The migration makes no Honcho network requests.
+
+Restart Lemon to load the imported settings; environment and application-env
+overrides still win. See [Honcho](honcho.md) for activation, remote costs and
+privacy controls.
 
 ## Safety Model
 
@@ -76,10 +130,11 @@ Before applying, the command also creates a zip backup at:
 <target>/backups/pre-hermes-migration-<timestamp>.zip
 ```
 
-Secret values are never written to reports. The secret importer only reads known
-Hermes environment variable names and writes them through `LemonCore.Secrets`.
-If the local Lemon secrets master key is not available, those items are reported
-as errors and the rest of the migration continues.
+Secret values are never written to reports. The secret importer reads known
+Hermes environment variable names and the selected Honcho `apiKey`, and writes
+them through `LemonCore.Secrets`. If the local Lemon secrets master key is not
+available, those items are reported as errors, no plaintext fallback or new
+credential reference is written, and the rest of the migration continues.
 
 ## Current Gaps
 

@@ -2,8 +2,8 @@ defmodule LemonCore.Runtime.ReleaseProfileTest do
   use ExUnit.Case, async: true
 
   @moduledoc """
-  Verifies that the runtime profiles declared in mix.exs and
-  LemonCore.Runtime.Profile are kept in sync.
+  Verifies runtime profile membership and the separation of minimal and
+  full-only applications.
   """
 
   alias LemonCore.Runtime.Profile

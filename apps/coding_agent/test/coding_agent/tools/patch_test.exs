@@ -1275,9 +1275,8 @@ defmodule CodingAgent.Tools.PatchTest do
 
       result = Patch.execute("call_1", %{"patch_text" => patch_text}, nil, nil, tmp_dir, [])
 
-      # Context doesn't match due to whitespace difference
-      assert {:error, msg} = result
-      assert msg =~ "Context not found"
+      assert %AgentToolResult{} = result
+      assert File.read!(file) == "line1\n  indented\ninserted\nline3"
     end
 
     test "context must match exactly", %{tmp_dir: tmp_dir} do

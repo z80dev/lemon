@@ -6,14 +6,29 @@ selectors, SQLite views and search paging; snapshot-anchored edits and rich
 reads (archives, PDFs, notebooks, images) are described in the
 [coding_agent README](../../apps/coding_agent/README.md#built-in-tools).
 
+## Session internal URLs
+
+`local://name` stores a scratch file beneath the session artifact directory.
+Use it with `read`, `write`, or as a whole shell word in `bash`. Names are single
+path segments; traversal and symlinks are rejected. Scratch files are per-session,
+not shared automatically with child sessions.
+
+`read proc://` lists up to 200 processes owned by the current session.
+`read proc://<id>` returns status and recent output without consuming the
+`bash_output` cursor. `write proc://<id>` sends `content` verbatim to stdin;
+`write proc://<id>/kill` sends SIGTERM with the normal kill-process fallback.
+Foreign process IDs are not accessible.
+
 ## Read line selectors
 
 `read` pages text with `offset`/`limit`, or with a selector appended to `path`:
 
 | Selector | Meaning |
 | --- | --- |
-| `file:50-80` | lines 50 through 80 |
-| `file:50+20` | 20 lines starting at line 50 |
+| `file:50-80` | lines 50 through 80, plus 1 preceding / 3 following context lines |
+| `file:50+20` | 20 lines starting at line 50, plus the same context |
+| `file:5-16,960-973` | exact disjoint line windows |
+| `file:5,19,59` or `file:5,19-25,59+2` | exact individual lines, ranges, or counts in one read |
 | `file:50` or `file:50-` | from line 50 to the end (still capped at 2000 lines / 50 KB) |
 | `file:-30` | the last 30 lines |
 | `file:raw`, `file:50-80:raw`, `file:raw:50-80` | unnumbered text without the snapshot header |
@@ -25,14 +40,53 @@ exist, so a file really named `notes:12` is still read as-is. A selector cannot
 be combined with `offset`/`limit`. `:raw` output omits the snapshot tag, so use
 a numbered read before a snapshot-anchored `edit`.
 
+A comma list is sorted and overlapping or adjacent windows are merged. Each
+window keeps its original line numbers, with a standalone `…` separator between
+windows and only one snapshot header for editable files. Comma-list numbers
+select individual lines (unlike the standalone open-ended `:50` selector).
+Comma windows must be bounded; tail and open-ended forms cannot be mixed into
+a list. All windows share the 2000-line / 50 KB output budget.
+
+Context for a single bounded range is clamped to the source boundaries. Raw
+selectors (`:raw:50-80` or `:50-80:raw`) remain exact, without context, line
+numbers, or a snapshot header. Raw comma lists also stay exact and retain the
+`…` separators. `offset`/`limit`, open-ended and tail selectors do not add context.
+
+## Anchored edit recovery and formatting
+
+Session-scoped anchored edits can recover an older snapshot tag after unrelated
+changes. Every referenced original line range must still occur byte-for-byte at
+exactly one position in the current file; changed, ambiguous, unknown, or evicted
+anchors retain the snapshot-mismatch error without writing. Text replacements
+still reject changes since the last read. The session retains up to eight
+snapshots per path, each at most 256 KiB and 10,000 lines; larger files still
+support fresh-tag edits, but not historical recovery. This does not restrict
+edits to previously displayed lines.
+
+Local `write`, `edit`, and `patch` accept `"format": true` (default false, unless
+enabled in tool options) to run an available formatter after writing. An explicit
+false overrides that default. Results report `formatted` and any `format_error`;
+formatter failure does not undo the write. Edit headers and patch per-file
+`snapshot` tags describe the post-format file, so they can be used directly for
+the next anchored edit. ACP writes retain client-managed formatting behavior.
+
+## Patch hunk matching
+
+Patch hunk context must identify a unique location. Exact matches take precedence;
+on an exact miss, `patch` tolerates indentation, horizontal whitespace, and smart
+quote/dash differences using the same normalization as text `edit`. Multiple
+normalized matches are rejected. Unchanged context keeps its original text.
+
 ## Safe overwrites
 
 `write` refuses to overwrite an existing file with content containing a read
-continuation or long-line budget notice. Re-read the omitted range or use `edit`
-instead. New files are not subject to this check. Existing UTF-8 BOMs and dominant
+continuation, long-line budget notice, or standalone `…` selector-elision marker.
+Re-read the omitted range or use `edit` instead. New files are not subject to this
+check. Existing UTF-8 BOMs and dominant
 CRLF line endings are preserved when incoming text omits them; explicitly supplied
 CRLF text is left intact. The same safeguards apply to ACP writes when the prior
-contents are available.
+contents are available. Local overwrite format detection samples only the first
+64 KiB, keeping memory bounded even when replacing very large files.
 
 Local `patch` updates, deletes, and move sources check the session's last read
 against the current raw file bytes before any patch writes. If the file changed,
@@ -72,6 +126,25 @@ that limit is reached. A final page may therefore be empty. The notice and
 {"pattern": "TODO", "max_results": 50, "skip": 50}
 ```
 
+`output_mode` defaults to `"content"`. `"files"` returns each matching path once;
+`"count"` returns per-file matching-line counts and the total across searched files
+(also in `details.counts` and `details.match_count`). In these modes `skip` and
+`max_results` page files, not individual matches. Count mode scans all files within
+the fallback's deadline and per-file byte bound, rather than stopping at a page.
+Patterns containing a literal newline or `\n` enable multiline search (`rg -U` or
+whole-file fallback matching); results identify the start line of each matching span.
+
+Both `grep` and `find` accept semicolon-separated `path` roots, such as
+`"src; test"` (whitespace/empty entries are ignored). Existing roots are searched
+and merged deterministically, with duplicate results removed before the result
+limit/page is applied. Missing roots appear in `details.missing_paths` and a
+notice; the call fails only when no root exists (other access/type errors still
+fail). Multi-root grep paths are relative to cwd, so same-name files stay distinct.
+
+Long grep lines show a roughly 500-character window centered on the first match,
+with `...` on each cut side and `[col N]` giving the original 1-based character
+column. Use `read` on the reported file/line for the complete text.
+
 Hidden files and files ignored by `.gitignore`/`.ignore` are skipped by default,
 with ripgrep or the Elixir fallback (which uses `git check-ignore` inside a work
 tree). Pass `"hidden": true` and/or `"no_ignore": true` to include them. `find`
@@ -89,3 +162,18 @@ matching. It searches only the leading 4 MiB of each file and reports the number
 of visited files with omitted tails in `details.skipped_oversized`. It skips
 binary and invalid UTF-8 files and stops scanning when the requested page is
 filled; use `next_skip` to continue.
+
+## Find ordering and path globs
+
+`find` collects and deduplicates the full candidate set across roots, sorts it,
+then applies `max_results`. `sort: "path"` remains the default, preserving the
+existing alphabetical/stable discovery contract. Use `sort: "mtime"` to surface
+recently modified entries first; equal timestamps are ordered by path.
+
+Patterns without `/` match basenames recursively. Patterns containing `/`, such
+as `lib/*.ex`, match path segments at any depth (including `nested/lib/a.ex`, but
+not `lib/deep/a.ex`); use `**` for recursive segments. The fd backend uses
+`--full-path` and a recursive prefix to match the same set as the Elixir fallback.
+Both backends reject scopes exceeding 100,000 matching candidates with a narrowing
+hint instead of sorting a traversal-order subset. The fd safety ceiling is
+independent of `max_results`.

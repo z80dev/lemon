@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
-import { LemonBotClient, LemonBotError, type InstanceStatus, type RuntimeAction, type RuntimeOperation } from '@lemon-bot/sdk';
+import { LemonBotClient, LemonBotError, type InstanceRuntime, type InstanceStatus, type RuntimeAction, type RuntimeOperation } from '@lemon-bot/sdk';
 import { Badge, formatTime, trapDialogFocus } from './ui';
 
 /** Shared by connection recovery and the instance settings pane. Polling never sends commands. */
@@ -65,12 +65,31 @@ export function InstanceError({ error, uncertain = false }: { error: unknown; un
   return <div className="stack small"><p role="alert">{uncertain ? 'The command may have started. Check the current instance details before doing anything else. It will not be sent again automatically.' : 'Instance details or the action couldn’t finish. Any details shown are from the last successful check.'}</p><details><summary>Details</summary><pre>{detail}</pre><button onClick={() => void navigator.clipboard.writeText(detail).catch(() => setCopyError(true))}>Copy details</button>{copyError && <p role="status">Couldn’t copy. Select the details and copy them manually.</p>}</details></div>;
 }
 
+export function RuntimeActions({ runtime, owner, available, busy, onAction, recovery = false }: { runtime: InstanceRuntime; owner: boolean; available: boolean; busy: boolean; onAction: (action: RuntimeAction) => void; recovery?: boolean }) {
+  const actions = (['start', 'restart', 'stop'] as const).filter(action => runtime.actions.includes(action) && (!recovery || action !== 'stop'));
+  const labels = { start: 'Start', restart: 'Restart', stop: 'Stop' };
+  return <>
+    {owner && actions.length > 0 && <div className="row">{actions.map(action => <button key={action} className={action === 'stop' ? 'danger' : undefined} disabled={!available || busy} onClick={() => onAction(action)}>{labels[action]}{recovery ? ' Lemon' : ''}</button>)}</div>}
+    {!owner && actions.length > 0 && <p className="small muted">Only workspace owners can {recovery ? 'start or restart' : 'start, stop or restart'} Lemon.</p>}
+    <RuntimeControlCopy runtime={runtime}/>
+  </>;
+}
+
+export function RuntimeControlCopy({ runtime }: { runtime: InstanceRuntime }) {
+  return <div className="small muted">
+    {runtime.via === 'launcher' && <p>Runs the Lemon launcher on the service host to start, stop or restart Lemon.</p>}
+    {runtime.via === 'controller' && <p>Restarts or stops Lemon remotely. Start isn’t available while Lemon is down.</p>}
+    {runtime.reason && <p>{runtime.reason}</p>}
+    {!runtime.via && !runtime.reason && <p>This service cannot control Lemon on this host.</p>}
+  </div>;
+}
+
 export function RuntimeOperationView({ operation }: { operation: RuntimeOperation }) {
   const labels = { start: 'Starting Lemon', restart: 'Restarting Lemon', stop: 'Stopping Lemon' };
   return <div className="stack runtime-operation"><div role="status" aria-live="polite"><strong>{labels[operation.action]}</strong> <Badge tone={operation.state === 'failed' ? 'danger' : operation.state === 'succeeded' ? 'good' : 'warning'}>{operation.state === 'running' ? 'In progress' : operation.state === 'succeeded' ? 'Completed' : 'Failed'}</Badge></div><details><summary>Details · command output</summary><p>Started {formatTime(operation.startedAtMs)}</p>{operation.completedAtMs !== null && <p>Finished {formatTime(operation.completedAtMs)}</p>}{operation.exitCode !== null && <p>Exit code: {operation.exitCode}</p>}<pre>{operation.output || 'No output yet.'}</pre><button onClick={() => void navigator.clipboard.writeText(operation.output).catch(() => undefined)}>Copy output</button></details></div>;
 }
 
-export function RuntimeConfirmation({ action, busy, available, error, uncertain, onConfirm, onCancel }: { action: 'stop' | 'restart'; busy: boolean; available: boolean; error: unknown; uncertain: boolean; onConfirm: () => Promise<void>; onCancel: () => void }) {
+export function RuntimeConfirmation({ action, via, busy, available, error, uncertain, onConfirm, onCancel }: { action: 'stop' | 'restart'; via: InstanceRuntime['via']; busy: boolean; available: boolean; error: unknown; uncertain: boolean; onConfirm: () => Promise<void>; onCancel: () => void }) {
   const titleId = useId(), descriptionId = useId();
   const cancel = useRef<HTMLButtonElement>(null);
   useEffect(() => {
@@ -81,7 +100,7 @@ export function RuntimeConfirmation({ action, busy, available, error, uncertain,
   const title = action === 'stop' ? 'Stop Lemon' : 'Restart Lemon';
   return <div className="modal-backdrop" onKeyDown={event => { trapDialogFocus(event); if (event.key === 'Escape' && (!busy || uncertain)) onCancel(); }}><section className="modal stack" role="dialog" aria-modal="true" aria-labelledby={titleId} aria-describedby={descriptionId}>
     <h2 id={titleId}>{title}?</h2>
-    <p id={descriptionId}>{action === 'stop' ? 'Bots stop working until Lemon is started again. Lemon Bot stays available so you can start it from here.' : 'Bots stop working until Lemon has restarted and reconnected. Lemon Bot stays available during the restart.'}</p>
+    <p id={descriptionId}>{action === 'stop' ? `Bots stop working until Lemon is started again. ${via === 'launcher' ? 'Lemon Bot stays available so you can start it from here.' : 'Lemon Bot stays available, but you’ll need to start Lemon on its host. It can’t be started remotely from here.'}` : 'Bots stop working until Lemon has restarted and reconnected. Lemon Bot stays available during the restart.'}</p>
     <InstanceError error={error} uncertain={uncertain}/>
     <div className="row"><button ref={cancel} disabled={busy && !uncertain} onClick={onCancel}>Cancel</button><button className="danger" disabled={busy || !available} onClick={() => void onConfirm()}>{busy ? 'Waiting for Lemon…' : title}</button></div>
   </section></div>;

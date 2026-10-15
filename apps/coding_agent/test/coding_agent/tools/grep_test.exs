@@ -7,6 +7,162 @@ defmodule CodingAgent.Tools.GrepTest do
 
   @moduletag :tmp_dir
 
+  test "both backends center long lines on the first match", %{tmp_dir: root} do
+    file = Path.join(root, "long.txt")
+    File.write!(file, String.duplicate("é", 1500) <> "needle" <> String.duplicate("x", 600))
+
+    output =
+      Jason.encode!(%{
+        "type" => "match",
+        "data" => %{
+          "path" => %{"text" => file},
+          "line_number" => 1,
+          "submatches" => [%{"start" => 3000, "end" => 3006}]
+        }
+      })
+
+    for rg? <- [true, false] do
+      result =
+        Grep.execute("window", %{"pattern" => "needle"}, nil, nil, root,
+          ripgrep_available?: rg?,
+          rg_cmd_fun: fn _, _, _ -> {output, 0} end
+        )
+
+      assert result.details.lines_truncated
+      assert result_text(result) =~ "long.txt:1: ..."
+      assert result_text(result) =~ "needle"
+      assert result_text(result) =~ "... [col 1501]"
+      assert String.valid?(result_text(result))
+    end
+  end
+
+  test "both backends merge roots before paging and report missing roots", %{tmp_dir: root} do
+    for dir <- ["a", "b"], do: File.mkdir_p!(Path.join(root, dir))
+    a = Path.join(root, "a/same.txt")
+    b = Path.join(root, "b/same.txt")
+    File.write!(a, "needle")
+    File.write!(b, "needle")
+
+    for rg? <- [true, false] do
+      opts = [
+        ripgrep_available?: rg?,
+        rg_cmd_fun: fn _, args, _ ->
+          assert Path.join(root, "a") in args
+          assert Path.join(root, "b") in args
+          {rg_output([{b, 1}, {a, 1}, {a, 1}]), 0}
+        end
+      ]
+
+      result =
+        Grep.execute(
+          "roots",
+          %{
+            "pattern" => "needle",
+            "path" => " b ; a ; missing ; ; a",
+            "skip" => 1,
+            "max_results" => 1
+          },
+          nil,
+          nil,
+          root,
+          opts
+        )
+
+      assert result_text(result) =~ "b/same.txt:1: needle"
+      refute result_text(result) =~ "a/same.txt:"
+      assert result.details.missing_paths == [Path.join(root, "missing")]
+      assert result_text(result) =~ "Missing search roots"
+
+      assert {:error, _} =
+               Grep.execute(
+                 "missing",
+                 %{"pattern" => "needle", "path" => "missing;also-missing"},
+                 nil,
+                 nil,
+                 root,
+                 opts
+               )
+    end
+  end
+
+  describe "output modes and multiline" do
+    test "both backends page matching paths and count all matching lines", %{tmp_dir: root} do
+      a = Path.join(root, "a.txt")
+      b = Path.join(root, "b.txt")
+      File.write!(a, "needle\nneedle\n")
+      File.write!(b, "needle\n")
+
+      for rg? <- [true, false] do
+        opts = [
+          ripgrep_available?: rg?,
+          rg_cmd_fun: fn _, _, _ -> {rg_output([{b, 1}, {a, 2}, {a, 1}]), 0} end
+        ]
+
+        files =
+          Grep.execute(
+            "files",
+            %{"pattern" => "needle", "output_mode" => "files", "skip" => 1, "max_results" => 1},
+            nil,
+            nil,
+            root,
+            opts
+          )
+
+        assert result_text(files) =~ "\nb.txt"
+        refute result_text(files) =~ "a.txt"
+
+        counts =
+          Grep.execute(
+            "count",
+            %{"pattern" => "needle", "output_mode" => "count", "max_results" => 1},
+            nil,
+            nil,
+            root,
+            opts
+          )
+
+        assert result_text(counts) =~ "a.txt: 2"
+        assert result_text(counts) =~ "Total: 3 matches."
+        assert counts.details.counts == %{a => 2, b => 1}
+        assert counts.details.next_skip == 1
+      end
+    end
+
+    test "literal and escaped newlines enable whole-file matching with start lines", %{
+      tmp_dir: root
+    } do
+      file = Path.join(root, "multi.txt")
+      File.write!(file, "before\na\nb\na\nb\n")
+
+      for pattern <- ["a\nb", "a\\nb"], rg? <- [false, true] do
+        result =
+          Grep.execute("multi", %{"pattern" => pattern}, nil, nil, root,
+            ripgrep_available?: rg?,
+            rg_cmd_fun: fn _, args, _ ->
+              assert "-U" in args
+              {rg_output([{file, 2}, {file, 4}]), 0}
+            end
+          )
+
+        assert result.details.match_count == 2
+        assert result_text(result) =~ "multi.txt:2: a"
+        assert result_text(result) =~ "multi.txt:4: a"
+      end
+    end
+
+    test "rejects unknown modes", %{tmp_dir: root} do
+      assert {:error, "output_mode must be content, files, or count"} =
+               Grep.execute(
+                 "bad",
+                 %{"pattern" => "x", "output_mode" => "bad"},
+                 nil,
+                 nil,
+                 root,
+                 []
+               )
+    end
+  end
+
   describe "deterministic engines and bounded fallback" do
     test "rg sorts before paging even when output order changes", %{tmp_dir: root} do
       a = Path.join(root, "a.txt")
@@ -611,7 +767,7 @@ defmodule CodingAgent.Tools.GrepTest do
 
       assert %AgentToolResult{content: [%TextContent{text: text}], details: details} = result
       assert details.lines_truncated == true
-      assert text =~ "[truncated]"
+      assert text =~ "... [col 1]"
     end
 
     test "truncates aggregate output to byte budget", %{tmp_dir: tmp_dir} do

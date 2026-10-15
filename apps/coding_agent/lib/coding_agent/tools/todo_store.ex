@@ -18,13 +18,13 @@ defmodule CodingAgent.Tools.TodoStore do
 
   `result_details/1` projects a complete list to string-keyed `todos` and an
   ordered `plan.entries` list of atom-keyed maps with string content/status/priority.
-  The plan supports pending, in_progress and completed; an internally blocked
-  todo remains blocked in `todos` but projects as pending in the plan.
+  Statuses, including blocked and abandoned, are preserved in both views.
+  Optional phase and blocker notes are retained in plan entries.
   """
 
   @table :coding_agent_todos
 
-  @type todo_status :: :pending | :in_progress | :completed | :blocked
+  @type todo_status :: :pending | :in_progress | :completed | :blocked | :abandoned
   @type todo_priority :: :high | :medium | :low
 
   @type todo_item :: %{
@@ -45,6 +45,7 @@ defmodule CodingAgent.Tools.TodoStore do
           completed: non_neg_integer(),
           in_progress: non_neg_integer(),
           blocked: non_neg_integer(),
+          abandoned: non_neg_integer(),
           pending: non_neg_integer(),
           percentage: non_neg_integer()
         }
@@ -91,8 +92,8 @@ defmodule CodingAgent.Tools.TodoStore do
   Returns complete normalized todo state and its ACP/TUI plan projection.
 
   Pass the entire stored list, not a filtered actionable subset. Extra todo
-  fields (including dependencies) are retained; plan entries contain only
-  content, status and priority and never omit completed tasks.
+  fields (including dependencies) are retained; plan entries contain content,
+  status, priority and any phase/blocker notes, and never omit terminal tasks.
   """
   @spec result_details(list(map())) :: %{todos: list(map()), plan: %{entries: list(map())}}
   def result_details(todos) do
@@ -110,12 +111,38 @@ defmodule CodingAgent.Tools.TodoStore do
       Enum.map(todos, fn todo ->
         %{
           content: Map.get(todo, "content", ""),
-          status: if(todo["status"] == "blocked", do: "pending", else: todo["status"]),
+          status: todo["status"],
           priority: todo["priority"]
         }
+        |> then(fn entry ->
+          Enum.reduce([{"phase", :phase}, {"blocker", :blocker}], entry, fn {key, atom}, acc ->
+            if Map.has_key?(todo, key), do: Map.put(acc, atom, todo[key]), else: acc
+          end)
+        end)
       end)
 
     %{todos: todos, plan: %{entries: entries}}
+  end
+
+  @doc "Keep the first in-progress item; demote later active items to pending."
+  @spec normalize(list(map())) :: list(map())
+  def normalize(todos) do
+    {todos, _active} =
+      Enum.map_reduce(todos, false, fn todo, active ->
+        if todo_status(todo) == :in_progress do
+          if active do
+            key = if Map.has_key?(todo, :status), do: :status, else: "status"
+            status = if is_atom(Map.get(todo, key)), do: :pending, else: "pending"
+            {Map.put(todo, key, status), true}
+          else
+            {todo, true}
+          end
+        else
+          {todo, active}
+        end
+      end)
+
+    todos
   end
 
   @doc """
@@ -201,7 +228,7 @@ defmodule CodingAgent.Tools.TodoStore do
   ## Examples
 
       iex> TodoStore.progress([%{"status" => "completed"}, %{"status" => "pending"}])
-      %{total: 2, completed: 1, in_progress: 0, blocked: 0, pending: 1, percentage: 50}
+      %{total: 2, completed: 1, in_progress: 0, blocked: 0, abandoned: 0, pending: 1, percentage: 50}
   """
   @spec progress(list(map())) :: progress_stats()
   def progress(todos) when is_list(todos) do
@@ -210,6 +237,7 @@ defmodule CodingAgent.Tools.TodoStore do
     completed = Enum.count(todos, &(todo_status(&1) == :completed))
     in_progress = Enum.count(todos, &(todo_status(&1) == :in_progress))
     blocked = Enum.count(todos, &(todo_status(&1) == :blocked))
+    abandoned = Enum.count(todos, &(todo_status(&1) == :abandoned))
     pending = Enum.count(todos, &(todo_status(&1) == :pending))
 
     percentage = if total > 0, do: div(completed * 100, total), else: 0
@@ -219,6 +247,7 @@ defmodule CodingAgent.Tools.TodoStore do
       completed: completed,
       in_progress: in_progress,
       blocked: blocked,
+      abandoned: abandoned,
       pending: pending,
       percentage: percentage
     }
@@ -297,10 +326,12 @@ defmodule CodingAgent.Tools.TodoStore do
       :in_progress -> :in_progress
       :completed -> :completed
       :blocked -> :blocked
+      :abandoned -> :abandoned
       "pending" -> :pending
       "in_progress" -> :in_progress
       "completed" -> :completed
       "blocked" -> :blocked
+      "abandoned" -> :abandoned
       _ -> :pending
     end
   end

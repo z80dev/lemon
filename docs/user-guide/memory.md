@@ -23,8 +23,10 @@ is capped at 20. Runs are returned chronologically; an unknown anchor returns
 no runs. These are finalized-run summaries, not full transcripts.
 
 Browse and scroll use the same owner, agent, and assistant-profile boundary as
-search, refuse subagents, and require `[features] session_search`. Session keys
-identify only visible sessions and do not grant access to another owner's data.
+search, require a verified private memory context, refuse subagents, and require
+`[features] session_search`. Legacy or unverified contexts cannot browse or scroll.
+Session keys identify only visible sessions and do not grant access to another
+owner's data.
 Each returned prompt/answer is byte-bounded; recalled content remains untrusted
 data, never instructions.
 ---
