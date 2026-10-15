@@ -10,6 +10,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Added
 
+- Add `ls tree: true`: depth-limited newest-first trees with file sizes,
+  12 children per directory and explicit omitted-sibling counts.
+
 - Emit content-free tool-call start/stop/exception telemetry with native-unit
   duration, tool name, error outcome and timeout flag, including failed workers.
 
