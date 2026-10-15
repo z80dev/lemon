@@ -71,6 +71,10 @@ defmodule LemonOmp.Session do
   def send_message(pid, message, mode),
     do: safe_call(pid, {:send_message, message, mode}, Config.command_timeout_ms() + 2_000)
 
+  @spec configure(pid(), [{String.t(), String.t(), map()}]) :: {:ok, map()} | {:error, term()}
+  def configure(pid, commands),
+    do: safe_call(pid, {:configure, commands}, 3 * Config.command_timeout_ms() + 2_000)
+
   @spec cancel(pid()) :: {:ok, map()} | {:error, term()}
   def cancel(pid), do: safe_call(pid, :cancel, Config.command_timeout_ms() + 2_000)
 
@@ -180,6 +184,12 @@ defmodule LemonOmp.Session do
 
     {:noreply, request(state, type, %{"message" => message}, {:send, from, delivery})}
   end
+
+  def handle_call({:configure, _commands}, _from, %{ready?: false} = state),
+    do: {:reply, {:error, :not_ready}, state}
+
+  def handle_call({:configure, commands}, from, state),
+    do: {:noreply, configure_next(state, from, [], commands)}
 
   def handle_call(:cancel, _from, %{projection: %{status: status}} = state)
       when status != :running,
@@ -544,6 +554,60 @@ defmodule LemonOmp.Session do
     state
   end
 
+  defp handle_response(
+         state,
+         %{kind: {:configure, from, applied, field, rest}},
+         {:ok, _data}
+       ),
+       do: configure_next(state, from, applied ++ [field], rest)
+
+  defp handle_response(
+         state,
+         %{kind: {:configure, from, applied, field, _rest}},
+         {:error, message, _code}
+       ),
+       do:
+         configure_failed(
+           state,
+           from,
+           applied,
+           field,
+           {:rejected, Projection.clean(message, 500)}
+         )
+
+  defp handle_response(
+         state,
+         %{kind: {:configure_snapshot, from, applied, failure}},
+         {:ok, data}
+       )
+       when is_map(data) do
+    state =
+      state |> update_projection(&Projection.apply_state(&1, data)) |> publish_now("configured")
+
+    reply =
+      if failure,
+        do: configure_error(applied, failure),
+        else: {:ok, Projection.to_wire(state.projection)}
+
+    GenServer.reply(from, reply)
+    state
+  end
+
+  defp handle_response(
+         state,
+         %{kind: {:configure_snapshot, from, applied, failure}},
+         result
+       ) do
+    reason =
+      case result do
+        {:error, message, _code} -> {:rejected, Projection.clean(message, 500)}
+        _ -> {:rejected, "omp returned an invalid session state"}
+      end
+
+    GenServer.reply(from, configure_error(applied, failure || {"snapshot", reason}))
+    state
+  end
+
   defp handle_response(state, %{kind: :stats}, {:ok, data}) when is_map(data),
     do: state |> update_projection(&Projection.apply_stats(&1, data)) |> schedule_publish()
 
@@ -677,6 +741,28 @@ defmodule LemonOmp.Session do
 
   defp maybe_request_state(state), do: state
 
+  defp configure_next(state, from, applied, [{field, type, fields} | rest]),
+    do: request(state, type, fields, {:configure, from, applied, field, rest})
+
+  defp configure_next(state, from, applied, []),
+    do: request(state, "get_state", %{}, {:configure_snapshot, from, applied, nil})
+
+  defp configure_failed(state, from, [], _field, reason) do
+    GenServer.reply(from, {:error, reason})
+    state
+  end
+
+  defp configure_failed(state, from, applied, field, :not_running) do
+    GenServer.reply(from, configure_error(applied, {field, :not_running}))
+    state
+  end
+
+  defp configure_failed(state, from, applied, field, reason),
+    do: request(state, "get_state", %{}, {:configure_snapshot, from, applied, {field, reason}})
+
+  defp configure_error(applied, {field, reason}),
+    do: {:error, {:partially_applied, applied, field, reason}}
+
   defp request(state, type, fields, kind) do
     seq = state.seq + 1
     id = "lemon-#{seq}"
@@ -716,6 +802,22 @@ defmodule LemonOmp.Session do
 
   defp reply_pending(state, %{kind: {:subagent, from, _limit}}, reply),
     do: tap(state, fn _ -> GenServer.reply(from, reply) end)
+
+  defp reply_pending(
+         state,
+         %{kind: {:configure, from, applied, field, _rest}},
+         {:error, reason}
+       ),
+       do: configure_failed(state, from, applied, field, reason)
+
+  defp reply_pending(
+         state,
+         %{kind: {:configure_snapshot, from, applied, failure}},
+         {:error, reason}
+       ) do
+    GenServer.reply(from, configure_error(applied, failure || {"snapshot", reason}))
+    state
+  end
 
   defp reply_pending(state, %{kind: :initial_prompt}, {:error, :outcome_unknown}) do
     # omp never acknowledged the prompt: report it as unknown, not as a failure.
