@@ -68,6 +68,8 @@ export interface OmpPanelHost {
 	onResume(row: OmpDiscoveredSession): void;
 	onContinue?(row: OmpDiscoveredSession): void;
 	onConfigure?(session: OmpSession): void;
+	onApproval?(session: OmpSession, id: string, decision: "approve_once" | "deny"): void;
+	onSubagent?(session: OmpSession, id: string): void;
 	now?: () => number;
 }
 
@@ -101,6 +103,11 @@ export class OmpPanelComponent implements Component {
 	#unavailable: string | undefined;
 	#revision = 0;
 	#native: { revision: number; node: NativeNode } | undefined;
+	#approvalSelected = 0;
+	#subagentSelected = 0;
+	#viewer:
+		| { title: string; rows: string[]; selected: number; choose?: (index: number) => void }
+		| undefined;
 
 	constructor(host: OmpPanelHost) {
 		this.#host = host;
@@ -134,6 +141,7 @@ export class OmpPanelComponent implements Component {
 	setVisible(visible: boolean): void {
 		if (this.#visible === visible) return;
 		this.#visible = visible;
+		if (!visible) this.#viewer = undefined;
 		if (!visible) {
 			this.#mode = "list";
 			this.#prompt = undefined;
@@ -179,7 +187,31 @@ export class OmpPanelComponent implements Component {
 		this.#host.requestRender();
 	}
 
+	showViewer(title: string, rows: string[], choose?: (index: number) => void): void {
+		this.#viewer = { title, rows, selected: 0, choose };
+		this.#changed();
+		this.#host.requestRender();
+	}
+
 	handleInput(data: string): void {
+		const viewer = this.#viewer;
+		if (viewer) {
+			if (matchesKey(data, "escape")) this.#viewer = undefined;
+			else if (matchesKey(data, "enter")) {
+				this.#viewer = undefined;
+				viewer.choose?.(viewer.selected);
+			} else
+				viewer.selected = Math.max(
+					0,
+					Math.min(
+						viewer.rows.length - 1,
+						viewer.selected + navigationDelta(data, OMP_DETAIL_WINDOW),
+					),
+				);
+			this.#changed();
+			this.#host.requestRender();
+			return;
+		}
 		if (this.#prompt) {
 			this.#promptKey(data);
 			return;
@@ -213,6 +245,44 @@ export class OmpPanelComponent implements Component {
 			return;
 		}
 		switch (data) {
+			case "a":
+			case "n": {
+				const session = this.selected;
+				const approval = session?.pendingApprovals[this.#approvalSelected];
+				if (session && approval)
+					this.#host.onApproval?.(session, approval.id, data === "a" ? "approve_once" : "deny");
+				return;
+			}
+			case "[":
+			case "]":
+				this.#approvalSelected = Math.max(
+					0,
+					Math.min(
+						(this.selected?.pendingApprovals.length ?? 1) - 1,
+						this.#approvalSelected + (data === "[" ? -1 : 1),
+					),
+				);
+				this.#changed();
+				this.#host.requestRender();
+				return;
+			case "{":
+			case "}":
+				this.#subagentSelected = Math.max(
+					0,
+					Math.min(
+						(this.selected?.subagents.length ?? 1) - 1,
+						this.#subagentSelected + (data === "{" ? -1 : 1),
+					),
+				);
+				this.#changed();
+				this.#host.requestRender();
+				return;
+			case "v": {
+				const session = this.selected;
+				const id = session?.subagents[this.#subagentSelected]?.id;
+				if (session && id) this.#host.onSubagent?.(session, id);
+				return;
+			}
 			case "m":
 				if (this.selected) this.#host.onConfigure?.(this.selected);
 				return;
@@ -240,6 +310,29 @@ export class OmpPanelComponent implements Component {
 
 	invalidate(): void {
 		// Nothing cached in row form: theme, focus and elapsed time are read at render time.
+	}
+
+	#operatorRows(session: OmpSession): string[] {
+		const rows = [
+			`approval mode ${session.approvalMode ?? "unknown"} · approved ${session.approvals.approved} · denied ${session.approvals.denied} · expired ${session.approvals.expired}`,
+		];
+		for (const [index, approval] of session.pendingApprovals.entries())
+			rows.push(
+				`${index === this.#approvalSelected ? "▸" : " "} approval ${approval.id} · ${approval.tool ?? "tool"} · ${typeof approval.details === "string" ? approval.details : JSON.stringify(approval.details)}`,
+			);
+		if (session.worktree) {
+			const tree = session.worktree;
+			rows.push(
+				`worktree ${tree.path ?? "unknown"} · ${tree.branch ?? "unknown"}`,
+				`kept ${tree.kept ?? "unknown"} · dirty ${tree.dirty ?? "unknown"} · commits ${tree.commits ?? "unknown"}`,
+				`merge hint: review, then merge ${tree.branch ?? "worktree branch"} into ${tree.base ?? "base branch"}`,
+			);
+		}
+		for (const [index, agent] of session.subagents.entries())
+			rows.push(
+				`${index === this.#subagentSelected ? "▸" : " "} subagent ${agent.id ?? "?"} · ${agent.status ?? "unknown"} · ${agent.activity ?? agent.description ?? ""}`,
+			);
+		return rows;
 	}
 
 	// -- input -----------------------------------------------------------------
@@ -361,11 +454,21 @@ export class OmpPanelComponent implements Component {
 		if (this.#unavailable) {
 			body.push(text([span(safeLine(this.#unavailable), "warning")], { key: "unavailable" }));
 		}
-		if (this.#mode === "discover") {
+		if (this.#viewer) {
+			body.push(text([span(safeLine(this.#viewer.title), "strong")], { key: "viewer-title" }));
+			for (const [index, line] of this.#viewer.rows.entries())
+				body.push(
+					text([span(`${index === this.#viewer.selected ? "▸ " : "  "}${safeLine(line)}`)], {
+						key: `viewer:${index}`,
+					}),
+				);
+		} else if (this.#mode === "discover") {
 			body.push(...this.#discoverNodes(now));
 		} else if (this.#mode === "detail" && this.selected) {
 			const session = this.selected;
 			body.push(ompAgentNode(session, { now, key: session.id, children: ompDetailNodes(session) }));
+			for (const [index, line] of this.#operatorRows(session).entries())
+				body.push(text([span(safeLine(line))], { key: `operator:${index}` }));
 		} else if (this.#sessions.length === 0) {
 			body.push(
 				text([span("No omp sessions yet — /omp run <prompt> starts one.", "dim")], {
@@ -434,6 +537,19 @@ export class OmpPanelComponent implements Component {
 		const lines = [theme.fg("accent", clamp(`omp · ${this.#headline()}`))];
 		if (this.#unavailable) lines.push(theme.fg("warning", clamp(safeLine(this.#unavailable))));
 		const now = this.#host.now?.() ?? Date.now();
+		if (this.#viewer) {
+			const start = Math.max(0, this.#viewer.selected - OMP_DETAIL_WINDOW + 1);
+			return [
+				...lines,
+				clamp(safeLine(this.#viewer.title)),
+				...this.#viewer.rows
+					.slice(start, start + OMP_DETAIL_WINDOW)
+					.map((line, index) =>
+						clamp(`${start + index === this.#viewer!.selected ? "▸ " : "  "}${safeLine(line)}`),
+					),
+				"↑↓ select/scroll · enter choose/back · esc back",
+			];
+		}
 		if (this.#mode === "discover") lines.push(...this.#discoverRows(now, clamp));
 		else if (this.#mode === "detail" && this.selected)
 			lines.push(...this.#detailRows(this.selected, now, clamp));
@@ -489,6 +605,7 @@ export class OmpPanelComponent implements Component {
 				`${OMP_STATUS_GLYPHS[session.status]} ${ompStatusText(session)}${elapsed !== undefined ? ` · ${formatElapsed(elapsed)}` : ""} · ${session.turns} turns · ${session.toolCalls} tools`,
 			],
 		];
+		for (const line of this.#operatorRows(session)) rows.push(["text", safeLine(line)]);
 		const facts = [
 			session.cwd ? `cwd ${safeLine(session.cwd, 120)}` : undefined,
 			session.model
@@ -626,7 +743,7 @@ export class OmpPanelComponent implements Component {
 		if (this.#mode === "discover")
 			return "SOURCE · ↑↓ select · enter resumes · C continue interrupted · r rescan · esc back";
 		const back = this.#mode === "detail" ? "enter list · ↑↓ scroll" : "↑↓ select · enter detail";
-		return `${back} · s steer · f follow-up · R redirect · m model · c cancel turn · x close · r refresh · d resume… · esc close`;
+		return `${back} · s steer · f follow-up · R redirect · m model · [/] approval · a approve · n deny · {/} child · v transcript · c cancel · x close · r refresh · d resume · esc close`;
 	}
 }
 
