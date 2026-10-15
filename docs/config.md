@@ -1946,11 +1946,13 @@ programmatically with `CodingAgent.Session.start_link(tool_disclosure: [profile:
 
 ## Automation
 
-`[automation]` holds opt-in proactive automation. It currently has one key:
+`[automation]` holds proactive automation settings:
 
 ```toml
 [automation]
 daily_brief = "08:00"   # HH:MM, 24-hour, server-local wall-clock time
+catch_up_missed = true
+run_retention_per_job = 100
 ```
 
 - `daily_brief` (default: unset) — when set, Lemon keeps one heartbeat cron job,
@@ -1964,6 +1966,13 @@ daily_brief = "08:00"   # HH:MM, 24-hour, server-local wall-clock time
   --daily-brief HH:MM` writes it non-interactively.
 - A value that is not a `HH:MM` 24-hour time fails config validation
   (`automation.daily_brief: must be a HH:MM 24-hour time`).
+- `catch_up_missed` (default: `true`) — restart runs one missed slot when it is
+  within half the schedule's next-occurrence gap, clamped to 2 minutes–2 hours.
+  Older slots are audited as skipped; expired one-shots are retired. Set `false`
+  to skip all missed slots. Paused jobs remain paused.
+- `run_retention_per_job` (default: `100`) — non-negative number of terminal
+  runs retained per job by hourly cleanup. Active attempts and undispatched
+  retries are exempt. This also applies to history of removed jobs.
 
 See [Reminders, heartbeats, and the daily brief](user-guide/reminders-and-heartbeats.md).
 

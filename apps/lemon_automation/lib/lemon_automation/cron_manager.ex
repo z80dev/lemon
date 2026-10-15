@@ -96,6 +96,7 @@ defmodule LemonAutomation.CronManager do
   }
 
   alias LemonCore.{Bus, Event, RunStore, SessionKey}
+  alias LemonCore.Config.Modular, as: Config
   alias LemonCore.Events, as: CoreEvents
 
   require Logger
@@ -276,13 +277,16 @@ defmodule LemonAutomation.CronManager do
     # Load existing jobs from storage
     jobs = CronStore.list_jobs()
 
-    # Compute next run times for all jobs
-    jobs =
-      Enum.map(jobs, fn job ->
-        next_run = CronSchedule.next_run_ms(job.schedule, job.timezone)
-        job = CronJob.set_next_run(job, next_run)
-        CronStore.put_job(job)
-        job
+    now = LemonCore.Clock.now_ms()
+    config = Config.load().automation
+
+    {jobs, catch_up_slots} =
+      Enum.reduce(jobs, {[], %{}}, fn job, {jobs, slots} ->
+        case restore_schedule(job, now, config.catch_up_missed) do
+          {:keep, job, true} -> {[job | jobs], Map.put(slots, job.id, job.next_run_at_ms)}
+          {:keep, job, false} -> {[job | jobs], slots}
+          :retired -> {jobs, slots}
+        end
       end)
 
     state = %{
@@ -290,6 +294,9 @@ defmodule LemonAutomation.CronManager do
       tasks: %{},
       task_refs: %{},
       retry_timer: nil,
+      catch_up_slots: catch_up_slots,
+      last_cleanup_at_ms: now,
+      run_retention_per_job: config.run_retention_per_job,
       task_supervisor:
         Keyword.get(
           opts,
@@ -788,6 +795,55 @@ defmodule LemonAutomation.CronManager do
 
   defp abort_router_run(_run), do: :ok
 
+  defp restore_schedule(%CronJob{enabled: false} = job, _now, _catch_up),
+    do: {:keep, job, false}
+
+  defp restore_schedule(%CronJob{next_run_at_ms: due} = job, now, catch_up)
+       when is_integer(due) and due < now do
+    following =
+      CronSchedule.next_run_ms(job.schedule, job.timezone,
+        from: DateTime.from_unix!(due, :millisecond)
+      )
+
+    period = if is_integer(following), do: following - due, else: 240_000
+    grace = period |> div(2) |> max(120_000) |> min(7_200_000)
+
+    if catch_up and now - due <= grace do
+      {:keep, job, true}
+    else
+      Logger.info("[CronManager] Skipping missed slot for #{job.id}")
+
+      CronStore.record_audit(:missed_slot_skipped, %{
+        job_id: job.id,
+        source: :cron_manager,
+        triggered_by: :schedule,
+        reason: if(catch_up, do: :outside_grace, else: :catch_up_disabled)
+      })
+
+      if job.once do
+        CronStore.delete_job(job.id)
+        CronStore.delete_monitor_state(job.id)
+        CronStore.delete_preflight_notice_state(job.id)
+        :retired
+      else
+        reanchor_schedule(job)
+      end
+    end
+  end
+
+  defp restore_schedule(%CronJob{next_run_at_ms: due} = job, _now, _catch_up)
+       when is_integer(due),
+       do: {:keep, job, false}
+
+  defp restore_schedule(job, _now, _catch_up), do: reanchor_schedule(job)
+
+  defp reanchor_schedule(job) do
+    next_run = CronSchedule.next_run_ms(job.schedule, job.timezone)
+    job = CronJob.set_next_run(job, next_run)
+    CronStore.put_job(job)
+    {:keep, job, false}
+  end
+
   defp do_tick(state) do
     now = LemonCore.Clock.now_ms()
     Events.emit_tick(now)
@@ -795,6 +851,14 @@ defmodule LemonAutomation.CronManager do
     all_jobs = Map.values(state.jobs)
     LemonCore.Telemetry.cron_tick(length(all_jobs))
     state = recover_stale_active_runs(state, now)
+
+    state =
+      if now - Map.get(state, :last_cleanup_at_ms, 0) >= 3_600_000 do
+        CronStore.cleanup_old_runs(Map.get(state, :run_retention_per_job, 100))
+        Map.put(state, :last_cleanup_at_ms, now)
+      else
+        state
+      end
 
     # Find due jobs
     due_jobs =
@@ -954,7 +1018,12 @@ defmodule LemonAutomation.CronManager do
       jitter_ms = if job.jitter_sec > 0, do: :rand.uniform(job.jitter_sec * 1000), else: 0
       scheduled_for_ms = job.next_run_at_ms || now || LemonCore.Clock.now_ms()
 
-      case execute_scheduled_job(job, scheduled_for_ms, submit_delay_ms: jitter_ms) do
+      catch_up = get_in(state, [:catch_up_slots, job.id]) == scheduled_for_ms
+
+      case execute_scheduled_job(job, scheduled_for_ms,
+             submit_delay_ms: jitter_ms,
+             catch_up: catch_up
+           ) do
         {:ok, _run} ->
           mark_claimed_scheduled_job(job, state, now || LemonCore.Clock.now_ms())
 
@@ -980,6 +1049,15 @@ defmodule LemonAutomation.CronManager do
 
     case CronStore.claim_scheduled_run(job, scheduled_for_ms, router_run_id) do
       {:ok, run} ->
+        run =
+          if Keyword.get(opts, :catch_up, false) do
+            run = %{run | meta: Map.put(run.meta || %{}, :catch_up, true)}
+            CronStore.put_run(run)
+            run
+          else
+            run
+          end
+
         CronStore.record_audit(:scheduled_run_claimed, %{
           job_id: job.id,
           run_id: run.id,

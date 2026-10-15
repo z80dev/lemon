@@ -8,7 +8,12 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
-No unreleased changes yet.
+### Fixed
+
+- Cron restarts catch up one missed slot within a bounded grace window and retire
+  expired one-shot reminders instead of moving them to next year.
+- Cron run history is pruned hourly to 100 terminal runs per job by default,
+  preserving active attempts and pending retries.
 
 ---
 
