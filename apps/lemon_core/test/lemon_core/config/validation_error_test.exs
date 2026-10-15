@@ -39,6 +39,7 @@ defmodule LemonCore.Config.ValidationErrorTest do
         "Invalid value for timeout: expected positive integer",
         "Unknown provider: invalid_provider"
       ]
+
       exception = ValidationError.exception(errors: errors)
 
       assert exception.errors == errors

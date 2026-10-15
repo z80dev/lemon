@@ -71,7 +71,6 @@ defmodule LemonCore.Config.ExpandedSchemaTest do
     end
   end
 
-
   describe "Providers - Google Vertex fields" do
     test "parses project_secret and location_secret" do
       settings = %{
