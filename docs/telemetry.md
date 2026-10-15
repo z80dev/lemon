@@ -141,6 +141,26 @@ router run ID in goal-loop status. Goal-loop hard stops additionally expose the
 router tombstone counters above, but operators should use persisted goal state
 for exact lifecycle counts; `[:lemon, :cron, :tick]` remains only a liveness signal.
 
+### Tool calls — `[:lemon_agent, :tool_call, ...]`
+
+The tool-loop collector emits one start and one terminal event per admitted call,
+including validation/start failures, cancellation and loop-enforced deadlines.
+Terminal events are emitted by the collector, so a killed tool worker still gets
+an outcome as long as its owning loop survives.
+
+| Event | Measurements | Metadata | Emitter |
+|---|---|---|---|
+| `[:lemon_agent, :tool_call, :start]` | `system_time` (native) | `tool_name`, `is_error: false`, `timeout: false` | `LemonAgent.Loop.ToolCalls` before preparation/start |
+| `[:lemon_agent, :tool_call, :stop]` | `duration` (native monotonic units) | `tool_name`, `is_error`, `timeout` | Tool return, validation error, cancellation or skipped call |
+| `[:lemon_agent, :tool_call, :exception]` | `duration` (native monotonic units) | `tool_name`, `is_error: true`, `timeout` | Caught exception/throw/exit, worker crash, task-start failure or loop timeout |
+
+`timeout` is true for a loop deadline or a tool result with `timed_out: true`
+or `timedOut: true`. Returned error results use `:stop` with `is_error: true`.
+Metadata contains **only** the tool name and those two booleans: no arguments,
+results, exception reasons, stacktraces, prompts or intent strings. Duration
+starts at admission (including argument preparation), not time spent queued
+behind earlier calls. Existing `tool_task` and `tool_result` events are unchanged.
+
 ### Heartbeats — `[:lemon, :heartbeat, ...]`
 
 | Event | Measurements | Metadata | Emitter |

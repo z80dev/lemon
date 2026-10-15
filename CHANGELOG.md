@@ -8,6 +8,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
+- Emit content-free tool-call start/stop/exception telemetry with native-unit
+  duration, tool name, error outcome and timeout flag, including failed workers.
+
 - Add `report_issue` for short tool-misbehavior notes in a private, bounded
   session-local JSONL log, with timestamp and optional tool name. It requires
   no approval by default and makes no network requests.
