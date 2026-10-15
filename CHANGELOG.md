@@ -10,6 +10,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Changed
 
+- Add short, availability-gated system prompt guidance for questions, conversation
+  and filesystem checkpoints, structural code rewrites, language servers, debugging
+  and external agent delegation, with stable ordering for prompt caching.
+
 - Rotate to healthy alternate credentials or fallback candidates immediately on
   rate limits; bench quota-exhausted credentials for 15 minutes to one hour.
 
