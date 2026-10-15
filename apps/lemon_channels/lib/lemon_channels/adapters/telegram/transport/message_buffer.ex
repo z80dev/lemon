@@ -12,6 +12,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport.MessageBuffer do
   """
 
   alias LemonChannels.Adapters.Telegram.Transport.Commands
+  alias LemonChannels.ImageDownload
 
   @type buffer :: %{
           inbound: map(),
@@ -55,6 +56,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport.MessageBuffer do
         timer_ref =
           Process.send_after(self(), {:debounce_flush, key, debounce_ref}, state.debounce_ms)
 
+        inbound = ImageDownload.merge(inbound, buffer.inbound)
         messages = [Commands.message_entry(inbound) | buffer.messages]
         inbound_last = merge_submission_dedupe_refs(inbound, buffer.inbound)
 

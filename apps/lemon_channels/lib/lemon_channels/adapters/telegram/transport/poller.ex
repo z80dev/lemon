@@ -5,6 +5,8 @@ defmodule LemonChannels.Adapters.Telegram.Transport.Poller do
 
   require Logger
 
+  alias LemonChannels.Adapters.Telegram.Inbound
+
   alias LemonChannels.Adapters.Telegram.Transport.{
     ActionRunner,
     Normalize,
@@ -105,6 +107,13 @@ defmodule LemonChannels.Adapters.Telegram.Transport.Poller do
     if UpdateProcessor.authorized_inbound?(state, inbound) do
       case callbacks.maybe_transcribe_voice.(state, inbound) do
         {:ok, inbound} ->
+          inbound =
+            Inbound.attach_images(
+              inbound,
+              state.api_mod,
+              state.token
+            )
+
           {:ok, %{normalized | inbound: inbound, text: inbound.message.text}}
 
         {:skip, new_state} ->

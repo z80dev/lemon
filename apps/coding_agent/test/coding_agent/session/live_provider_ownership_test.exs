@@ -4,6 +4,8 @@ Code.require_file(
 
 defmodule CodingAgent.Session.LiveProviderOwnershipTest do
   use ExUnit.Case, async: false
+
+  alias LemonAgent.ModelRuntime.{CredentialHealth, SessionPins}
   alias LemonScripts.LiveProviderOwnershipProbe
 
   setup do
@@ -15,8 +17,8 @@ defmodule CodingAgent.Session.LiveProviderOwnershipTest do
 
     File.mkdir!(root)
     owner = self()
-    LemonAgent.ModelRuntime.CredentialHealth.reset()
-    LemonAgent.ModelRuntime.SessionPins.reset()
+    CredentialHealth.reset()
+    SessionPins.reset()
 
     on_exit(fn ->
       case :logger.get_handler_config(:live_provider_ownership_probe) do
@@ -28,8 +30,8 @@ defmodule CodingAgent.Session.LiveProviderOwnershipTest do
       end
 
       File.rm_rf!(root)
-      LemonAgent.ModelRuntime.CredentialHealth.reset()
-      LemonAgent.ModelRuntime.SessionPins.reset()
+      CredentialHealth.reset()
+      SessionPins.reset()
     end)
 
     File.chmod!(root, 0o700)
@@ -42,6 +44,7 @@ defmodule CodingAgent.Session.LiveProviderOwnershipTest do
     assert report.a_requests == 1
     assert report.selected_requests == 0
     assert report.refused
+    assert report.credential_refusal
     refute report.answered
     assert report.journal_matches_selection
     refute report.private_values_in_logs_or_events
@@ -81,6 +84,23 @@ defmodule CodingAgent.Session.LiveProviderOwnershipTest do
       root: root
     } do
       report = run(root, unquote(scenario))
+
+      if unquote(scenario) == :agent_missing do
+        assert report.a_requests == 1
+        assert report.selected_requests == 0
+        assert report.refused
+        assert report.credential_refusal
+        refute report.answered
+      else
+        assert report.selected_requests == 1
+        assert report.keyless_requests == 1
+        assert report.completed
+        assert report.answered
+        refute report.refused
+        assert report.keyless_without_authorization
+      end
+
+      assert report.journal_matches_selection
       assert report.passed
       refute report.private_values_in_logs_or_events
     end
@@ -88,16 +108,32 @@ defmodule CodingAgent.Session.LiveProviderOwnershipTest do
 
   test "native live switch then fallback to startup provider strips foreign headers and selects pool key",
        %{root: root} do
-    report = run(root, :live_fallback)
-    assert report.a_requests == 2
-    assert report.b_requests == 1
-    assert report.answered
-    refute report.foreign_header_on_a
-    assert report.a_pool_selected
-    assert report.b_explicit_header_preserved
-    assert report.journal_matches_selection
-    refute report.private_values_in_logs_or_events
-    assert report.passed
+    # More runs than the default breaker threshold must each reach the real
+    # failing endpoint, rather than inheriting the previous run's 503 health.
+    for _ <- 1..8 do
+      report = run(root, :live_fallback)
+      assert report.a_requests == 2
+      assert report.b_requests == 1
+      assert report.answered
+      refute report.foreign_header_on_a
+      assert report.a_pool_selected
+      assert report.b_explicit_header_preserved
+      assert report.journal_matches_selection
+      refute report.private_values_in_logs_or_events
+      assert report.passed
+
+      for provider <- ["live-provider-ownership-startup", "live-provider-ownership-failure"] do
+        assert Registry.lookup(LemonAi.CircuitBreakerRegistry, provider) == []
+        assert Registry.lookup(LemonAi.RateLimiterRegistry, provider) == []
+        assert LemonAi.CallDispatcher.get_active_requests(provider) == 0
+        assert CredentialHealth.cooldown_until(provider, "default") == nil
+      end
+
+      assert CredentialHealth.cooldown_until(
+               "live-provider-ownership-startup",
+               "env:LIVE_OWNER_POOL"
+             ) == nil
+    end
   end
 
   test "same-provider idle rebinding and fallback wrapping preserve explicit caller headers", %{
