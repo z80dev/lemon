@@ -41,17 +41,19 @@ gh workflow run release.yml --ref main -f channel=stable -f draft=false
 
 The workflow serializes release cuts and performs the complete operation:
 
-1. `scripts/prepare_product_release --auto` validates the Unreleased notes,
-   chooses the version, updates all product version metadata, and moves the
-   notes into the new version section.
-2. GitHub Actions commits that cut to `main`, creates an annotated CalVer tag,
-   and checks out the exact tag for every build.
-3. The canonical fast, quality, deterministic eval, install and client lanes
-   are reused from `ci.yml` when it passed on the tagged commit or on the
-   ancestor the cut differs from only by version fields and changelogs
-   (`scripts/ci_verified_commit`); otherwise they run against the exact tag.
-   A dispatch with `skip_preflight=true` skips these lanes for an urgent cut;
+1. The canonical fast, quality, deterministic eval, install and client lanes
+   gate the dispatch's exact source commit **before** any version/changelog
+   mutation, release commit, tag or push. Existing successful `ci.yml` coverage
+   is reused through `scripts/ci_verified_commit`; otherwise the lanes run on
+   that source commit. `skip_preflight=true` explicitly bypasses these lanes;
    artifact, manifest and container verification still run.
+2. `scripts/prepare_product_release --auto` validates the Unreleased notes,
+   chooses the next unused version, updates product version metadata, and moves
+   the notes into the new version section. Automatic selection skips existing
+   Git tags, including tags left behind by failed/unpublished cuts; explicit
+   versions with existing tags are rejected without changing files.
+3. GitHub Actions commits that cut to `main`, creates an annotated CalVer tag,
+   and checks out the prepared tag (not the source commit) for every build.
 4. Native runners build and verify all 14 tarballs (the existing 11 runtime/TUI
    artifacts plus three standalone `lemon_bot` backends). Container builds are
    smoke-tested and merged under the version-specific tag.
@@ -64,9 +66,12 @@ version, a non-default-branch dispatch, or a concurrent release cut. A draft
 publishes the GitHub draft and version-specific container image, but
 deliberately does not move mutable container channel tags.
 
-If a later job fails, use **Re-run failed jobs** on that workflow run. A new
-workflow can also be dispatched with the existing tag as `--ref`; tag-ref
-dispatches skip preparation and rebuild the existing cut. Direct tag pushes
+If preflight fails, no release cut has been pushed: fix the source and dispatch
+again. If a later job fails, use **Re-run failed jobs** on that workflow run.
+A new workflow can also be dispatched with the existing tag as `--ref`; tag-ref
+dispatches skip preparation and gate/rebuild the existing cut. Existing orphan
+tags (including `v2026.10.10`, `v2026.10.11` and `v2026.10.13`) are left intact,
+not reused or deleted. Direct tag pushes
 remain supported for externally prepared releases. Ordinary releases should
 use the `main` dispatch so version metadata, changelog, commit, tag, artifacts,
 and container promotion stay one operation.
