@@ -2935,27 +2935,31 @@ defmodule CodingAgent.CompactionTest do
   end
 
   describe "extract_file_operations with various message types" do
-    test "handles LemonAi.Types messages" do
-      # The function should work with different message formats
+    test "extracts native read, write, edit, and patch file paths" do
       messages = [
-        %LemonAi.Types.AssistantMessage{
-          role: :assistant,
-          content: [
-            %LemonAi.Types.ToolCall{
-              type: :tool_call,
-              id: "tc1",
-              name: "read",
-              arguments: %{"path" => "/test/file.txt"}
-            }
-          ],
-          timestamp: 0
+        %LemonAi.Types.UserMessage{content: "Update the project"},
+        file_operation_message(),
+        %LemonAi.Types.ToolResultMessage{
+          tool_call_id: "patch",
+          tool_name: "patch",
+          content: [%LemonAi.Types.TextContent{text: "Applied patch"}]
         }
       ]
 
-      # LemonAi.Types.ToolCall has 'arguments' field like Messages.ToolCall
       result = Compaction.extract_file_operations(messages)
-      assert is_list(result.read_files)
-      assert is_list(result.modified_files)
+
+      assert result.read_files == ["lib/input.ex"]
+
+      assert MapSet.new(result.modified_files) ==
+               MapSet.new([
+                 "lib/written.ex",
+                 "lib/edited.ex",
+                 "lib/added.ex",
+                 "lib/deleted.ex",
+                 "lib/updated.ex",
+                 "lib/old_name.ex",
+                 "lib/new_name.ex"
+               ])
     end
 
     test "handles mixed CodingAgent.Messages and LemonAi.Types messages" do
@@ -2972,9 +2976,9 @@ defmodule CodingAgent.CompactionTest do
           timestamp: 0
         },
         %Messages.UserMessage{content: "Thanks", timestamp: 1},
-        %Messages.AssistantMessage{
+        %LemonAi.Types.AssistantMessage{
           content: [
-            %Messages.ToolCall{
+            %LemonAi.Types.ToolCall{
               type: :tool_call,
               id: "tc2",
               name: "write",
@@ -2989,5 +2993,116 @@ defmodule CodingAgent.CompactionTest do
       assert "/path/one.txt" in result.read_files
       assert "/path/two.txt" in result.modified_files
     end
+
+    for representation <- [:native, :serialized] do
+      test "compaction preserves file details for #{representation} tool messages" do
+        alias CodingAgent.Session.MessageSerialization
+        alias CodingAgent.SessionManager
+
+        message = file_operation_message()
+
+        message =
+          case unquote(representation) do
+            :native -> message
+            :serialized -> MessageSerialization.serialize_message(message)
+          end
+
+        session =
+          SessionManager.new("/tmp")
+          |> SessionManager.append_message(message)
+
+        session =
+          Enum.reduce(["read", "write", "edit", "patch"], session, fn id, session ->
+            SessionManager.append_message(session, %{
+              "role" => "tool_result",
+              "tool_call_id" => id,
+              "tool_name" => id,
+              "content" => [%{"type" => "text", "text" => "Completed"}]
+            })
+          end)
+          |> SessionManager.append_message(%{"role" => "user", "content" => "Continue"})
+
+        assert {:ok, result} =
+                 Compaction.compact(session, %LemonAi.Types.Model{},
+                   keep_recent_messages: 1,
+                   summary: "Recorded work"
+                 )
+
+        assert result.details.read_files == ["lib/input.ex"]
+
+        assert MapSet.new(result.details.modified_files) ==
+                 MapSet.new([
+                   "lib/written.ex",
+                   "lib/edited.ex",
+                   "lib/added.ex",
+                   "lib/deleted.ex",
+                   "lib/updated.ex",
+                   "lib/old_name.ex",
+                   "lib/new_name.ex"
+                 ])
+      end
+    end
+
+    test "ignores patch calls with missing or invalid patch text" do
+      for arguments <- [%{}, %{"patch_text" => nil}, %{"patch_text" => "not a patch"}] do
+        message = %LemonAi.Types.AssistantMessage{
+          content: [
+            %LemonAi.Types.ToolCall{id: "patch", name: "patch", arguments: arguments}
+          ]
+        }
+
+        assert Compaction.extract_file_operations([message]) == %{
+                 read_files: [],
+                 modified_files: []
+               }
+      end
+    end
+  end
+
+  defp file_operation_message do
+    %LemonAi.Types.AssistantMessage{
+      stop_reason: :tool_use,
+      content: [
+        %LemonAi.Types.TextContent{text: "Reading and updating files"},
+        %LemonAi.Types.ToolCall{
+          id: "read",
+          name: "read",
+          arguments: %{"path" => "lib/input.ex"}
+        },
+        %LemonAi.Types.ToolCall{
+          id: "write",
+          name: "write",
+          arguments: %{"path" => "lib/written.ex", "content" => "written\n"}
+        },
+        %LemonAi.Types.ToolCall{
+          id: "edit",
+          name: "edit",
+          arguments: %{"path" => "lib/edited.ex", "old_text" => "old", "new_text" => "new"}
+        },
+        %LemonAi.Types.ToolCall{
+          id: "patch",
+          name: "patch",
+          arguments: %{
+            "patch_text" => """
+            *** Begin Patch
+            *** Add File: lib/added.ex
+            +*** Add File: not-a-file.ex
+            *** Delete File: lib/deleted.ex
+            *** Update File: lib/updated.ex
+            @@
+            -old
+            +new
+            *** Update File: lib/old_name.ex
+            *** Move to: lib/new_name.ex
+            *** Update File: lib/edited.ex
+            @@
+            -old
+            +new
+            *** End Patch
+            """
+          }
+        }
+      ]
+    }
   end
 end
