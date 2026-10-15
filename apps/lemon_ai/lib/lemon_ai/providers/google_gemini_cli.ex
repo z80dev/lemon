@@ -25,6 +25,7 @@ defmodule LemonAi.Providers.GoogleGeminiCli do
 
   alias LemonAi.EventStream
   alias LemonAi.Providers.GoogleShared
+  alias LemonAi.Providers.RetryHelper
   import LemonAi.Providers.AssistantMessageHelper
 
   alias LemonAi.Types.{
@@ -418,7 +419,14 @@ defmodule LemonAi.Providers.GoogleGeminiCli do
       {:ok, %Req.Response{status: status, body: error_body, headers: response_headers}} ->
         error_text = GoogleShared.normalize_http_error_body(error_body)
 
-        if attempt < max_retries and GoogleShared.retryable_error?(status, error_text) do
+        rotate? =
+          RetryHelper.rotate_rate_limit?(
+            RetryHelper.policy(opts),
+            {:http_error, status, error_text}
+          )
+
+        if not rotate? and attempt < max_retries and
+             GoogleShared.retryable_error?(status, error_text) do
           delay =
             case GoogleShared.extract_retry_delay(error_text) do
               nil -> retry_delay_with_jitter(@base_delay_ms, attempt)

@@ -1415,6 +1415,13 @@ environment references cannot refresh. Provider retry hints are retained for
 credential cooldowns. The model/credential that commits is pinned for subsequent
 turns in that session, preserving provider caches.
 
+When an untried healthy credential or fallback candidate is available, a rate
+limit returns immediately to routing without sleeping or retrying the same
+credential. With no healthy alternate, the provider's bounded retry policy is
+unchanged. Credentials with exhausted account quota or credits retain the
+rate-limit failover category but cool down for 15 minutes, doubling on repeated
+failures up to one hour; longer provider retry-after hints are still honored.
+
 For generic OAuth providers, `auth_source = "oauth"` makes the selected stored
 login authoritative for both initial resolution and 401 refresh:
 `oauth_secret`, then `api_key_secret`, then the provider's default secret name.

@@ -8,7 +8,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
-No unreleased changes yet.
+### Changed
+
+- Rotate to healthy alternate credentials or fallback candidates immediately on
+  rate limits; bench quota-exhausted credentials for 15 minutes to one hour.
 
 ---
 
