@@ -17,6 +17,15 @@ struct MacShortcutRecorder: NSViewRepresentable {
     }
     static func dismantleNSView(_ button: RecorderButton, coordinator: ()) { button.finish() }
 
+    static func display(_ shortcut: String) -> String {
+        let parts = shortcut.lowercased().split(separator: "+").map { $0.trimmingCharacters(in: .whitespaces) }
+        guard let key = parts.last else { return "" }
+        let modifiers = [("control", "⌃"), ("option", "⌥"), ("shift", "⇧"), ("command", "⌘")]
+        let symbols = modifiers.filter { parts.dropLast().contains($0.0) }.map(\.1).joined()
+        let names = ["space": "Space", "return": "↩", "tab": "⇥", "escape": "⎋"]
+        return symbols + (names[key] ?? key.uppercased())
+    }
+
     final class RecorderButton: NSButton {
         var label = ""
         var value = ""
@@ -33,7 +42,7 @@ struct MacShortcutRecorder: NSViewRepresentable {
         }
         required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
         func refreshTitle() {
-            title = recording ? "Press shortcut…" : (value.isEmpty ? "Record shortcut" : value)
+            title = recording ? "Type shortcut…" : (value.isEmpty ? "Record Shortcut" : MacShortcutRecorder.display(value))
             setAccessibilityLabel(label)
             setAccessibilityValue(recording ? "Recording shortcut" : (value.isEmpty ? "Off" : value))
             setAccessibilityHelp("Press to record. Escape cancels; Delete clears.")

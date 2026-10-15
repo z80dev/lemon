@@ -29,7 +29,7 @@ defmodule LemonCli.Setup.Verification do
   alias LemonAi.Models
   alias LemonAi.Providers.RequestHeaders
   alias LemonCore.Config
-  alias LemonCore.Config.{Agent, LegacyAgentMigration, Providers}
+  alias LemonCore.Config.{Agent, LegacyAgentMigration, Modular, Providers}
   alias LemonCore.Httpc
   alias LemonCore.Setup.Readiness
 
@@ -368,7 +368,7 @@ defmodule LemonCli.Setup.Verification do
   # runtime can provide CA certificates.
   defp maybe_put_cacerts(ssl_opts) do
     if function_exported?(:public_key, :cacerts_get, 0) do
-      case apply(:public_key, :cacerts_get, []) do
+      case :public_key.cacerts_get() do
         cacerts when is_list(cacerts) and cacerts != [] ->
           Keyword.put(ssl_opts, :cacerts, cacerts)
 
@@ -417,7 +417,7 @@ defmodule LemonCli.Setup.Verification do
   # ──────────────────────────────────────────────────────────────────────────
 
   defp config_path(opts),
-    do: Keyword.get(opts, :config_path) || LemonCore.Config.Modular.global_path()
+    do: Keyword.get(opts, :config_path) || Modular.global_path()
 
   defp read_settings(path) do
     with {:ok, content} <- File.read(path),
@@ -432,7 +432,7 @@ defmodule LemonCli.Setup.Verification do
     path = config_path(opts)
     cwd = Keyword.get(opts, :cwd, File.cwd!())
 
-    if Path.expand(path) == Path.expand(LemonCore.Config.Modular.global_path()) do
+    if Path.expand(path) == Path.expand(Modular.global_path()) do
       Config.load(cwd, cache: false)
     else
       settings = path |> read_settings() |> LegacyAgentMigration.migrate_settings()

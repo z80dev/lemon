@@ -3,11 +3,15 @@ defmodule LemonCli.CLITest do
 
   import ExUnit.CaptureIO
 
+  alias LemonAi.Auth.OpenAICodexOAuth
   alias LemonAi.Models.Presets
   alias LemonCli.CLI
+  alias LemonCore.Config.Modular
   alias LemonCore.Secrets
   alias LemonCore.Secrets.EnvCatalog
+  alias LemonCore.Secrets.MasterKey
   alias LemonCore.Setup.Readiness
+  alias Mix.Tasks.Lemon.Config
 
   setup do
     tmp_dir =
@@ -60,7 +64,7 @@ defmodule LemonCli.CLITest do
   end
 
   test "cold setup readiness starts the secrets store without starting the runtime" do
-    path = LemonCore.Config.Modular.global_path()
+    path = Modular.global_path()
     File.mkdir_p!(Path.dirname(path))
     File.write!(path, "[defaults]\nprovider = \"ollama\"\nmodel = \"llama3\"\n")
     root = Path.expand("../../../..", __DIR__)
@@ -89,7 +93,7 @@ defmodule LemonCli.CLITest do
   end
 
   test "invalid TOML fails validation and names the file", %{tmp_dir: tmp_dir} do
-    path = LemonCore.Config.Modular.global_path()
+    path = Modular.global_path()
     File.mkdir_p!(Path.dirname(path))
     File.write!(path, "api_key = \n")
 
@@ -106,7 +110,7 @@ defmodule LemonCli.CLITest do
   end
 
   test "removed settings produce doctor failures and actionable show errors", %{tmp_dir: tmp_dir} do
-    path = LemonCore.Config.Modular.global_path()
+    path = Modular.global_path()
     File.mkdir_p!(Path.dirname(path))
     File.write!(path, "[runtime.cli]\nenabled = true\n")
     checks = LemonCore.Doctor.checks(project_dir: tmp_dir)
@@ -121,7 +125,7 @@ defmodule LemonCli.CLITest do
   end
 
   test "migration explains invalid TOML without internal tuples", %{tmp_dir: tmp_dir} do
-    path = LemonCore.Config.Modular.global_path()
+    path = Modular.global_path()
     File.mkdir_p!(Path.dirname(path))
     File.write!(path, "value = \n")
 
@@ -150,12 +154,12 @@ defmodule LemonCli.CLITest do
     tmp_dir: tmp_dir
   } do
     System.put_env("LEMON_DEFAULT_MODEL", "model-from-environment")
-    path = LemonCore.Config.Modular.global_path()
+    path = Modular.global_path()
     File.mkdir_p!(Path.dirname(path))
     File.write!(path, "[defaults]\nmodel = \"model-from-file\"\n")
 
     cli = capture_io(fn -> assert CLI.run(["config", "show", "--project-dir", tmp_dir]) == 0 end)
-    mix = capture_io(fn -> Mix.Tasks.Lemon.Config.run(["show", "--project-dir", tmp_dir]) end)
+    mix = capture_io(fn -> Config.run(["show", "--project-dir", tmp_dir]) end)
 
     assert cli == mix
     assert cli =~ "Default model: model-from-environment (from LEMON_DEFAULT_MODEL)"
@@ -166,7 +170,7 @@ defmodule LemonCli.CLITest do
   end
 
   test "show rejects unknown thinking choices rather than claiming a default", %{tmp_dir: tmp_dir} do
-    path = LemonCore.Config.Modular.global_path()
+    path = Modular.global_path()
     File.mkdir_p!(Path.dirname(path))
     File.write!(path, "[defaults]\nthinking_level = \"private-unknown-choice\"\n")
 
@@ -302,7 +306,7 @@ defmodule LemonCli.CLITest do
       assert {:ok, stored} =
                Secrets.get("llm_openai_codex_api_key", prefer_env: false, env_fallback: false)
 
-      assert {:ok, secret} = LemonAi.Auth.OpenAICodexOAuth.decode_secret(stored)
+      assert {:ok, secret} = OpenAICodexOAuth.decode_secret(stored)
       assert secret["refresh_token"] == "cli-import-refresh"
       assert secret["access_token"] == token
       records = LemonCore.Store.list(Secrets.table()) |> inspect()
@@ -458,7 +462,7 @@ defmodule LemonCli.CLITest do
     )
 
     key_file = Path.join([tmp_dir, "home", ".lemon", "secrets_master_key"])
-    assert {:ok, %{source: :file}} = LemonCore.Secrets.MasterKey.init(target: :file)
+    assert {:ok, %{source: :file}} = MasterKey.init(target: :file)
     original_key = File.read!(key_file)
     original_port = System.get_env("LEMON_CONTROL_PLANE_PORT")
     System.put_env("LEMON_CONTROL_PLANE_PORT", Integer.to_string(closed_port()))

@@ -12,11 +12,12 @@ defmodule CodingAgent.Tools.Agent do
 
   require Logger
 
+  alias CodingAgent.AsyncFollowups
+  alias CodingAgent.{JoinAwait, RunGraph, Subagents, TaskStore}
+  alias CodingAgent.Tools.Task.Params
   alias LemonAgent.AbortSignal
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonAi.Types.TextContent
-  alias CodingAgent.AsyncFollowups
-  alias CodingAgent.{JoinAwait, RunGraph, Subagents, TaskStore}
   alias LemonCore.{Bus, Events, RouterBridge, RunRequest, SessionKey, Store}
 
   @valid_actions ["run", "poll", "join"]
@@ -159,7 +160,7 @@ defmodule CodingAgent.Tools.Agent do
     opts =
       Keyword.merge(
         opts,
-        Map.to_list(CodingAgent.Tools.Task.Params.inherited_execution_context(opts))
+        Map.to_list(Params.inherited_execution_context(opts))
       )
 
     with {:ok, validated} <- validate_run_params(params, cwd),
@@ -709,12 +710,12 @@ defmodule CodingAgent.Tools.Agent do
 
     request = %{
       request
-      | meta: CodingAgent.Tools.Task.Params.continuation_metadata(request.meta, context)
+      | meta: Params.continuation_metadata(request.meta, context)
     }
 
     result =
-      if CodingAgent.Tools.Task.Params.managed_context?(context) do
-        CodingAgent.Tools.Task.Params.submit_native_followup(
+      if Params.managed_context?(context) do
+        Params.submit_native_followup(
           context,
           %{
             request
@@ -906,7 +907,7 @@ defmodule CodingAgent.Tools.Agent do
     session_pid = Keyword.get(opts, :session_pid)
 
     target =
-      if CodingAgent.Tools.Task.Params.managed_context?(Map.new(opts)),
+      if Params.managed_context?(Map.new(opts)),
         do: {:router, :collect},
         else: AsyncFollowups.dispatch_target(followup_queue_mode, session_module, session_pid)
 
@@ -1047,16 +1048,16 @@ defmodule CodingAgent.Tools.Agent do
           }
         })
 
-      managed? = CodingAgent.Tools.Task.Params.managed_context?(Map.new(opts))
+      managed? = Params.managed_context?(Map.new(opts))
 
       followup = %{
         followup
-        | meta: CodingAgent.Tools.Task.Params.continuation_metadata(followup.meta, Map.new(opts))
+        | meta: Params.continuation_metadata(followup.meta, Map.new(opts))
       }
 
       result =
         if managed? do
-          CodingAgent.Tools.Task.Params.submit_native_followup(
+          Params.submit_native_followup(
             Map.new(opts),
             %{
               followup

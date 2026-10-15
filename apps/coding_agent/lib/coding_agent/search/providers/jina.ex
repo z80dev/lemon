@@ -3,6 +3,7 @@ defmodule CodingAgent.Search.Providers.Jina do
 
   @behaviour CodingAgent.Search.Provider
 
+  alias CodingAgent.Search.Operators
   alias CodingAgent.Search.Providers.KeyedHttp
   alias CodingAgent.Search.Result
 
@@ -15,7 +16,7 @@ defmodule CodingAgent.Search.Providers.Jina do
   def capabilities, do: [:search]
 
   @impl true
-  def search_features, do: %{operators: CodingAgent.Search.Operators.syntax(), freshness: []}
+  def search_features, do: %{operators: Operators.syntax(), freshness: []}
 
   @impl true
   def available?(:search, context), do: KeyedHttp.available?(id(), "JINA_API_KEY", context)
