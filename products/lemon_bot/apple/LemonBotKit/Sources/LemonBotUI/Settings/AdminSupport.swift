@@ -170,30 +170,9 @@ struct AdminPreviewDelete: View {
     }
 }
 
+/// Kept for existing callers; forwards to the unified Settings view.
 public struct SettingsHubView: View {
     private let store: LemonBotStore
     public init(store: LemonBotStore) { self.store = store }
-    public var body: some View {
-        List {
-            Section("Personal") {
-                NavigationLink("Account, password and sessions") { AccountSettingsView(store: store) }
-                NavigationLink("Appearance, notifications and voice") { PreferencesSettingsView(store: store) }
-                NavigationLink("Local companion and accessibility") { LocalSettingsView(store: store) }
-            }
-            Section("Workspace and access") {
-                NavigationLink("Workspace name and timezone") { WorkspaceSettingsView(store: store) }
-                if store.member?.role == "owner" {
-                    NavigationLink("Read-only account cleanup observations") { AccountCleanupSettingsView(store: store) }
-                }
-                NavigationLink("Policies and action review") { PolicySettingsView(store: store) }
-            }
-            Section("Operations") {
-                NavigationLink("Network enforcement and egress") { NetworkSettingsView(store: store) }
-                NavigationLink("Usage and spend limits") { UsageSettingsView(store: store) }
-                NavigationLink("Exports and your content consent") { ExportSettingsView(store: store) }
-                NavigationLink("Provider catalog and exact setup prerequisites") { ProviderCatalogView(store: store) }
-                NavigationLink("About and diagnostics") { AboutSettingsView(store: store) }
-            }
-        }.navigationTitle("Settings")
-    }
+    public var body: some View { LemonBotSettingsView(store: store) }
 }

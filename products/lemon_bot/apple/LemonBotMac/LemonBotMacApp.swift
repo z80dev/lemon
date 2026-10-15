@@ -26,11 +26,14 @@ struct LemonBotMacApp: App {
     private var workspaceScene: some Scene {
         Window("Lemon Bot", id: "workspace") {
             workspaceContent
-        }.commands { workspaceCommands }
+        }
+        .windowStyle(.hiddenTitleBar)
+        .defaultSize(width: 1240, height: 820)
+        .commands { workspaceCommands }
     }
 
     private var settingsScene: some Scene {
-        Settings { MacSettingsView(controller: platform) }
+        Settings { LemonBotSettingsView(store: store) { MacSettingsView(controller: platform) } }
     }
 
     private var menuBarScene: some Scene {
@@ -42,6 +45,11 @@ struct LemonBotMacApp: App {
     private var workspaceCommands: some Commands {
         CommandGroup(after: .newItem) {
             Button("Summon mini composer") { platform.summon() }
+            Divider()
+            Button("Dictate into current chat") { if let id = store.selectedConversationID { platform.beginDictation(conversationID: id) } }
+                .disabled(store.selectedConversationID == nil)
+            Button("Start voice chat") { if let id = store.selectedConversationID { Task { await platform.startCall(conversationID: id) } } }
+                .disabled(store.selectedConversationID == nil || !platform.online)
             Button("Return to active voice chat") { platform.showVoicePanel() }
                 .disabled(store.voiceSession?.state != "active")
         }
@@ -82,31 +90,27 @@ struct LemonBotMacApp: App {
 
     private var workspaceLayout: some View {
         LemonBotRootView(store: store)
-            .frame(minWidth: 920, minHeight: 620)
+            .frame(minWidth: 880, minHeight: 600)
             .background(MacWindowIdentity())
             .background(MacAudioSettingsRequestHandler())
-            .toolbar { workspaceToolbar }
-            .safeAreaInset(edge: .bottom) { workspaceError }
+            .overlay(alignment: .top) { workspaceError }
     }
 
-    @ToolbarContentBuilder private var workspaceToolbar: some ToolbarContent {
-        ToolbarItemGroup {
-            if let conversationID = store.selectedConversationID {
-                Button { platform.beginDictation(conversationID: conversationID) } label: { Label("Dictate", systemImage: "mic") }
-                Button { Task { await platform.startCall(conversationID: conversationID) } } label: { Label("Voice chat", systemImage: "waveform") }
-                    .disabled(!platform.online)
-            }
-            Button { platform.summon() } label: { Label("Mini composer", systemImage: "square.and.pencil") }
-        }
-    }
-
+    /// Platform errors float as a compact dismissible pill instead of a window-wide bar.
     @ViewBuilder private var workspaceError: some View {
         if let error = platform.errorMessage {
-            HStack {
-                Text(error).font(.caption).foregroundStyle(.red).textSelection(.enabled)
-                Spacer()
-                Button("Dismiss") { platform.errorMessage = nil }
-            }.padding(8).background(.regularMaterial)
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Image(systemName: "exclamationmark.circle.fill").foregroundStyle(.red)
+                Text(error).font(.system(size: 13)).textSelection(.enabled).lineLimit(3)
+                Button { platform.errorMessage = nil } label: { Image(systemName: "xmark") }
+                    .buttonStyle(.plain).foregroundStyle(.secondary).accessibilityLabel("Dismiss error")
+            }
+            .padding(.horizontal, 14).padding(.vertical, 9)
+            .frame(maxWidth: 520)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .shadow(color: .black.opacity(0.12), radius: 12, y: 4)
+            .padding(.top, 60)
+            .transition(.move(edge: .top).combined(with: .opacity))
         }
     }
 
@@ -147,7 +151,7 @@ private struct MacMenuBarView: View {
         Button("Open Lemon Bot") { openWindow(id: "workspace"); NSApp.activate(ignoringOtherApps: true) }
         Button("Summon mini composer") { controller.summon() }.disabled(controller.selectedBot == nil)
         Button("Return to voice chat") { controller.showVoicePanel() }.disabled(controller.store.voiceSession?.state != "active")
-        SettingsLink { Text("macOS settings…") }
+        SettingsLink { Text("Settings…") }
         Divider()
         if controller.store.accounts.count > 1 {
             Menu("Switch account") {

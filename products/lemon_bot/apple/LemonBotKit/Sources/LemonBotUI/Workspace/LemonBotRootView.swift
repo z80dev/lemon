@@ -1,231 +1,167 @@
 import SwiftUI
 import LemonBotKit
 
+/// Messaging-first workspace: Bot list on the left, the conversation (with its inspector) on the right.
+/// Admin surfaces live in Settings; Inbox and Activity are compact sidebar entries.
 public struct LemonBotRootView: View {
     private let store: LemonBotStore
-    @State private var destination = "conversation"
+    /// Device-specific settings (iOS permissions, shared items) shown as Settings → This iPhone.
+    private let platformSettings: AnyView?
+    @State private var destination: WorkspaceDestination = .conversation
     @State private var visibility: NavigationSplitViewVisibility = .all
     @State private var compactColumn: NavigationSplitViewColumn = .sidebar
+    @State private var inspector: InspectorPresentation
     @State private var newBot = false
     @State private var newGroup = false
     @State private var newAccount = false
     @State private var search = false
     @State private var pairing = false
-    @State private var unreadOnly = false
-    @State private var hidden = false
-    @State private var rosterQuery = ""
-    @State private var sectionEditor = false
-    @State private var action = UIActionState()
-    @FocusState private var rosterFocused: Bool
-    public init(store: LemonBotStore) { self.store = store }
-    private var selectedBot: Bot? {
-        guard let room = store.conversations.first(where: { $0.id == store.selectedConversationID }) else { return nil }
-        return store.bots.first { $0.id == room.botIds.first }
+    @State private var settings = false
+    @State private var filterFocusRequest = 0
+    #if os(macOS)
+    @Environment(\.openSettings) private var openSettingsScene
+    #endif
+    @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
+    public init(store: LemonBotStore) { self.store = store; platformSettings = nil; _inspector = State(initialValue: InspectorPresentation()) }
+    public init<Platform: View>(store: LemonBotStore, @ViewBuilder platformSettings: () -> Platform) {
+        self.store = store; self.platformSettings = AnyView(platformSettings()); _inspector = State(initialValue: InspectorPresentation())
     }
+    init(store: LemonBotStore, inspector: InspectorPresentation) { self.store = store; platformSettings = nil; _inspector = State(initialValue: inspector) }
+    private var reduceMotion: Bool { systemReduceMotion || store.prefersReducedMotion }
+    private var selectedBot: Bot? { store.bot(for: store.conversations.first { $0.id == store.selectedConversationID }) }
+    private var orderedBots: [Bot] {
+        let visible = store.bots.filter { !$0.sidebar.hidden }
+        return visible.filter(\.sidebar.pinned).sorted { $0.sidebar.rank < $1.sidebar.rank } + visible.filter { !$0.sidebar.pinned }.sorted { $0.sidebar.rank < $1.sidebar.rank }
+    }
+
     public var body: some View {
         Group {
             if store.account == nil { OnboardingView(store: store) }
-            else {
-                #if os(macOS)
-                NavigationSplitView(columnVisibility: $visibility) {
-                    roster.navigationSplitViewColumnWidth(min: 220, ideal: 270, max: 380)
-                } content: {
-                    NavigationStack { selectedContent }
-                        .navigationSplitViewColumnWidth(min: 400, ideal: 660)
-                } detail: {
-                    NavigationStack {
-                        if let selectedBot, destination == "conversation" { BotOverviewView(store: store, botID: selectedBot.id) }
-                        else { Text("Select a Bot to inspect its identity, host, capabilities and work.").foregroundStyle(.secondary).padding() }
-                    }.navigationSplitViewColumnWidth(min: 270, ideal: 360, max: 520)
-                }
-                #else
-                NavigationSplitView(columnVisibility: $visibility, preferredCompactColumn: $compactColumn) { roster } detail: { NavigationStack { selectedContent } }
-                #endif
-            }
-        }.id(store.account?.id).sheet(isPresented: $newBot) { BotEditorView(store: store) }
-            .sheet(isPresented: $newGroup) { GroupEditorView(store: store) }
-            .sheet(isPresented: $search) { SearchPaletteView(store: store) }
-            .sheet(isPresented: $sectionEditor) { SectionEditorView(store: store) }
-            .sheet(isPresented: $newAccount) { OnboardingView(store: store) }
-            .sheet(isPresented: $pairing) {
-                #if os(macOS)
-                OwnerPairingView(store: store)
-                #else
-                PhonePairingView(store: store)
-                #endif
-            }
-            .onChange(of: store.account?.id) { _, _ in newAccount = false; destination = "conversation"; compactColumn = .sidebar }
-            .preferredColorScheme(store.user?.preferences.appearance == "dark" ? .dark : store.user?.preferences.appearance == "light" ? .light : nil)
-            .onChange(of: store.selectedConversationID) { _, id in if id != nil { destination = "conversation"; compactColumn = .detail } }
-            .onChange(of: store.navigationTarget) { _, target in
-                guard let target else { return }
-                if target.machineID != nil { destination = "linked-machine" }
-                else if target.routineRunID != nil && store.selectedConversationID != nil { destination = "conversation" }
-                else if target.routineID != nil { destination = "linked-routine" }
-                else if target.taskConversationID != nil || target.conversationID != nil { destination = "conversation" }
-                else if target.botID != nil { destination = "linked-bot" }
-                compactColumn = .detail
-            }
-    }
-    private var roster: some View {
-        List {
-            SwiftUI.Section {
-                Text(store.workspace?.name ?? "Lemon Bot").font(.headline)
-                StatusBadge(text: store.connectionState)
-                TextField("Search Bots / groups", text: $rosterQuery).autocorrectionDisabled().focused($rosterFocused)
-                Toggle("Unread only", isOn: $unreadOnly)
-                Toggle("Show hidden Bots", isOn: $hidden)
-                HStack {
-                    Button("New Bot", systemImage: "plus") { newBot = true }.keyboardShortcut("n", modifiers: .command)
-                    Button("Group", systemImage: "person.2.badge.plus") { newGroup = true }
-                }.disabled(store.connectionState != "online")
-            }
-            if store.bots.isEmpty {
-                SwiftUI.Section("Finish real setup") {
-                    Text("First attach an owned machine, wait for verified Online, then create a focused Bot. Setup is not complete without a real Bot on a real machine.").font(.caption)
-                    Button("Attach a machine") { choose("machines") }
-                }
-            }
-            botSection("Pinned", bots: visibleBots.filter(\.sidebar.pinned))
-            ForEach(store.sections.sorted { $0.rank < $1.rank }) { section in
-                SwiftUI.Section {
-                    if !section.collapsed { ForEach(visibleBots.filter { !$0.sidebar.pinned && $0.sidebar.sectionId == section.id }) { bot in botRow(bot) } }
-                } header: {
-                    HStack { Text(section.name); Spacer(); Button(section.collapsed ? "Expand" : "Collapse") { Task { await changeSection(section, collapsed: !section.collapsed) } }.font(.caption) }
-                }
-            }
-            botSection(hidden ? "Hidden / unassigned" : "Your Bots", bots: visibleBots.filter { !$0.sidebar.pinned && $0.sidebar.sectionId == nil })
-            SwiftUI.Section("Groups and tasks") {
-                ForEach(store.conversations.filter { ["group", "task"].contains($0.kind) && (!unreadOnly || $0.unreadCount > 0) && (rosterQuery.isEmpty || $0.name.localizedCaseInsensitiveContains(rosterQuery)) }) { room in
-                    Button { openRoom(room.id) } label: {
-                        HStack { Label(room.name, systemImage: room.kind == "group" ? "person.2" : "arrow.triangle.branch"); Spacer(); if room.unreadCount > 0 { Text("\(room.unreadCount)").font(.caption.bold()) } }
-                    }
-                }
-            }
-            SwiftUI.Section("Workspace") {
-                hubButton("Search / jump", "magnifyingglass", "search")
-                hubButton("Inbox", "tray", "inbox")
-                if !store.pendingIntents.isEmpty { hubButton("Unconfirmed actions · \(store.pendingIntents.count)", "exclamationmark.arrow.triangle.2.circlepath", "pending") }
-                hubButton("Activity + Upcoming", "clock", "activity")
-                hubButton("Machines", "desktopcomputer", "machines")
-                hubButton("Skills, routines and memory", "books.vertical", "library")
-                hubButton("Templates", "square.on.square", "templates")
-                hubButton("Connect apps and channels", "link", "integrations")
-                hubButton("Settings", "gearshape", "settings")
-                Button("Organize synced sections") { sectionEditor = true }
-            }
-            SwiftUI.Section("Account") {
-                Text(store.user?.displayName ?? store.account?.displayName ?? "")
-                #if os(macOS)
-                Button("Connect iPhone") { pairing = true }.disabled(store.connectionState != "online")
-                #else
-                if store.connectionState == "reconnect_required" {
-                    Button("Reconnect to your desktop") { pairing = true }
-                }
-                #endif
-                ForEach(store.accounts.filter { $0.id != store.account?.id }) { account in Button("Switch to \(account.displayName) · \(account.baseURL.host ?? "")") { Task { await action.perform { try await store.restoreAccount(account) } } } }
-                Button("Add another account or backend") { newAccount = true }
-                Button("Sign out") { Task { await action.perform { try await store.signOut() } } }
-                Button("Refresh authoritative state") { Task { await action.perform { try await store.refresh() } } }
-                ActionErrorView(message: action.error ?? store.errorMessage)
-            }
-        }.listStyle(.sidebar).navigationTitle("Lemon Bot")
-            .toolbar {
-                Button("Search", systemImage: "magnifyingglass") { search = true }.keyboardShortcut("k", modifiers: .command)
-                Button("Toggle roster", systemImage: "sidebar.left") {
-                    #if os(macOS)
-                    visibility = visibility == .all ? .doubleColumn : .all
-                    #else
-                    visibility = visibility == .all ? .detailOnly : .all
-                    #endif
-                }.keyboardShortcut("b", modifiers: .command)
-                Menu("Keyboard navigation") {
-                    Button("Find Bots") { rosterFocused = true }.keyboardShortcut("f", modifiers: [.command, .shift])
-                    Button("Settings") { choose("settings") }.keyboardShortcut(",", modifiers: .command)
-                    Button("Connect apps") { choose("integrations") }.keyboardShortcut("m", modifiers: [.command, .shift])
-                    Button("Skills and routines") { choose("library") }.keyboardShortcut("w", modifiers: [.command, .shift])
-                    Button("Bot overview / settings") { choose("overview") }.keyboardShortcut(",", modifiers: [.command, .shift])
-                    Button("Previous Bot") { Task { await adjacentBot(-1) } }.keyboardShortcut(.upArrow, modifiers: .option)
-                    Button("Next Bot") { Task { await adjacentBot(1) } }.keyboardShortcut(.downArrow, modifiers: .option)
-                    ForEach(Array(visibleBots.prefix(9).enumerated()), id: \.element.id) { index, bot in
-                        Button(bot.name) { Task { await openBot(bot) } }.keyboardShortcut(KeyEquivalent(Character(String(index + 1))), modifiers: .command)
-                    }
-                }
-                #if os(iOS)
-                EditButton()
-                #endif
-            }
-    }
-    private var visibleBots: [Bot] {
-        store.bots.filter { $0.sidebar.hidden == hidden && (!unreadOnly || $0.sidebar.unread) && (rosterQuery.isEmpty || $0.name.localizedCaseInsensitiveContains(rosterQuery) || $0.title.localizedCaseInsensitiveContains(rosterQuery)) }.sorted { $0.sidebar.rank < $1.sidebar.rank }
-    }
-    private func botSection(_ title: String, bots: [Bot]) -> some View { SwiftUI.Section(title) { ForEach(bots) { bot in botRow(bot) }.onMove { indices, target in Task { await reorder(bots, from: indices, to: target) } } } }
-    private func botRow(_ bot: Bot) -> some View {
-        Button { Task { await openBot(bot) } } label: {
-            VStack(alignment: .leading, spacing: 3) {
-                HStack { Text(bot.name).fontWeight(bot.sidebar.unread ? .bold : .regular); Spacer(); if bot.sidebar.unread { Image(systemName: "circle.fill").font(.system(size: 7)) }; StatusBadge(text: store.connectionState == "online" ? bot.activity : "last known: \(bot.activity)") }
-                Text("\(bot.title) · \(store.machines.first(where: { $0.id == bot.machineId })?.name ?? bot.machineId)").font(.caption).foregroundStyle(.secondary)
-            }
-        }.buttonStyle(.plain).contextMenu {
-            Button(bot.sidebar.pinned ? "Unpin" : "Pin") { Task { await sidebar(bot, ["pinned": .bool(!bot.sidebar.pinned)]) } }
-            Button(bot.sidebar.hidden ? "Unhide" : "Hide · work continues") { Task { await sidebar(bot, ["hidden": .bool(!bot.sidebar.hidden)]) } }
-            Button(bot.sidebar.unread ? "Mark read" : "Mark unread") { Task { await sidebar(bot, ["unread": .bool(!bot.sidebar.unread)]) } }
-            Menu("Move to section") {
-                Button("Unassigned") { Task { await sidebar(bot, ["sectionId": .null]) } }
-                ForEach(store.sections) { section in Button(section.name) { Task { await sidebar(bot, ["sectionId": .string(section.id)]) } } }
-            }
-            NavigationLink("Overview / identity / Job") { BotOverviewView(store: store, botID: bot.id) }
+            else { workspace }
+        }
+        .id(store.account?.id)
+        .environment(\.lbReduceMotion, store.prefersReducedMotion)
+        .tint(LB.accent)
+        .sheet(isPresented: $newBot) { BotEditorView(store: store) }
+        .sheet(isPresented: $newGroup) { GroupEditorView(store: store) }
+        .sheet(isPresented: $search) { SearchPaletteView(store: store) }
+        .sheet(isPresented: $newAccount) { OnboardingView(store: store) }
+        .sheet(isPresented: $pairing) {
+            #if os(macOS)
+            OwnerPairingView(store: store)
+            #else
+            PhonePairingView(store: store)
+            #endif
+        }
+        #if os(iOS)
+        .sheet(isPresented: $settings) {
+            if let platformSettings { LemonBotSettingsView(store: store) { platformSettings } } else { LemonBotSettingsView(store: store) }
+        }
+        #endif
+        .onChange(of: store.account?.id) { _, _ in newAccount = false; destination = .conversation; compactColumn = .sidebar }
+        .preferredColorScheme(store.user?.preferences.appearance == "dark" ? .dark : store.user?.preferences.appearance == "light" ? .light : nil)
+        .onChange(of: store.selectedConversationID) { _, id in if id != nil { destination = .conversation; compactColumn = .detail } }
+        .onChange(of: store.navigationTarget) { _, target in
+            guard let target else { return }
+            if target.machineID != nil { destination = .linkedMachine }
+            else if target.routineRunID != nil && store.selectedConversationID != nil { destination = .conversation }
+            else if target.routineID != nil { destination = .linkedRoutine }
+            else if target.taskConversationID != nil || target.conversationID != nil { destination = .conversation }
+            else if target.botID != nil { destination = .linkedBot }
+            compactColumn = .detail
         }
     }
-    private func hubButton(_ label: String, _ icon: String, _ target: String) -> some View { Button { if target == "search" { search = true } else { choose(target) } } label: { Label(label, systemImage: icon) } }
-    private func choose(_ target: String) { destination = target; compactColumn = .detail }
-    @ViewBuilder private var selectedContent: some View {
-        switch destination {
-        case "machines": MachineHubView(store: store)
-        case "library": LibraryHubView(store: store)
-        case "settings": SettingsHubView(store: store)
-        case "integrations": IntegrationsHubView(store: store)
-        case "activity": ActivityHubView(store: store)
-        case "templates": TemplateHubView(store: store)
-        case "inbox": InboxView(store: store)
-        case "pending": PendingIntentView(store: store)
-        case "overview": if let selectedBot { BotOverviewView(store: store, botID: selectedBot.id) } else { EmptySelectionView() }
-        case "linked-machine": if let id = store.navigationTarget?.machineID { MachineDetailView(store: store, machineID: id) } else { EmptySelectionView() }
-        case "linked-bot": if let id = store.navigationTarget?.botID { BotOverviewView(store: store, botID: id) } else { EmptySelectionView() }
-        case "linked-routine": if let id = store.navigationTarget?.routineID { RoutineDetailView(store: store, routineID: id) } else { EmptySelectionView() }
-        default:
-            if let id = store.selectedConversationID { ConversationView(store: store, conversationID: id).id(id) }
-            else { EmptySelectionView() }
+
+    private var workspace: some View {
+        NavigationSplitView(columnVisibility: $visibility, preferredCompactColumn: $compactColumn) {
+            SidebarView(
+                store: store, destination: $destination, inspector: inspector,
+                openConversation: openRoom, openDestination: { destination = $0; compactColumn = .detail }, openSettings: openSettings,
+                newBot: { newBot = true }, newGroup: { newGroup = true },
+                searchEverything: { search = true }, reconnect: { pairing = true },
+                filterFocusRequest: $filterFocusRequest
+            )
+            #if os(macOS)
+            .navigationSplitViewColumnWidth(min: 240, ideal: 290, max: 380)
+            .ignoresSafeArea(edges: .top)
+            #else
+            .navigationTitle("Chats")
+            #endif
+        } detail: {
+            NavigationStack { detail }
+                #if os(macOS)
+                .navigationSplitViewColumnWidth(min: 460, ideal: 760)
+                #endif
         }
+        .navigationSplitViewStyle(.balanced)
+        .background { shortcuts }
     }
-    private func openRoom(_ id: ID) { store.selectedConversationID = id; destination = "conversation"; compactColumn = .detail }
-    private func adjacentBot(_ offset: Int) async {
-        let bots = visibleBots
+
+    @ViewBuilder private var detail: some View {
+        Group {
+            switch destination {
+            case .activity: ActivityHubView(store: store).navigationTitle("Activity")
+            case .inbox: InboxView(store: store).navigationTitle("Inbox")
+            case .pending: PendingIntentView(store: store)
+            case .linkedMachine: if let id = store.navigationTarget?.machineID { MachineDetailView(store: store, machineID: id) } else { EmptySelectionView() }
+            case .linkedBot: if let id = store.navigationTarget?.botID { BotOverviewView(store: store, botID: id) } else { EmptySelectionView() }
+            case .linkedRoutine: if let id = store.navigationTarget?.routineID { RoutineDetailView(store: store, routineID: id) } else { EmptySelectionView() }
+            case .conversation:
+                if let id = store.selectedConversationID {
+                    ConversationView(store: store, conversationID: id, inspector: inspector).id(id)
+                        .transition(.opacity)
+                } else { EmptySelectionView() }
+            }
+        }
+        .animation(reduceMotion ? nil : LBMotion.fade, value: store.selectedConversationID)
+        .background(LB.canvas)
+    }
+
+    /// Keyboard shortcuts that act on the whole workspace (zero-size buttons keep them active without chrome).
+    private var shortcuts: some View {
+        ZStack {
+            Button("Search everything") { search = true }.keyboardShortcut("k", modifiers: .command)
+            Button("New Bot") { newBot = true }.keyboardShortcut("n", modifiers: .command).disabled(!store.isOnline)
+            Button("Find Bots") { filterFocusRequest += 1 }.keyboardShortcut("f", modifiers: [.command, .shift])
+            Button("Previous Bot") { adjacentBot(-1) }.keyboardShortcut("[", modifiers: .command)
+            Button("Next Bot") { adjacentBot(1) }.keyboardShortcut("]", modifiers: .command)
+            Button("Previous Bot") { adjacentBot(-1) }.keyboardShortcut(.upArrow, modifiers: .option)
+            Button("Next Bot") { adjacentBot(1) }.keyboardShortcut(.downArrow, modifiers: .option)
+            Button("Toggle Bot details") { lbWithAnimation(reduceMotion) { inspector.toggle() } }.keyboardShortcut("i", modifiers: [.command, .option])
+            Button("Bot details") { inspector.show(.details) }.keyboardShortcut(",", modifiers: [.command, .shift])
+            Button("Connect apps") { openSettings(.apps) }.keyboardShortcut("m", modifiers: [.command, .shift])
+            Button("Skills and routines") { openSettings(.library) }.keyboardShortcut("w", modifiers: [.command, .shift])
+            #if os(iOS)
+            Button("Settings") { openSettings(.account) }.keyboardShortcut(",", modifiers: .command)
+            #endif
+            ForEach(Array(orderedBots.prefix(9).enumerated()), id: \.element.id) { index, bot in
+                Button(bot.name) { openRoom(bot.mainConversationId) }.keyboardShortcut(KeyEquivalent(Character(String(index + 1))), modifiers: .command)
+            }
+        }
+        .buttonStyle(.plain)
+        .opacity(0)
+        .frame(width: 0, height: 0)
+        .accessibilityHidden(true)
+    }
+
+    private func openRoom(_ id: ID) {
+        destination = .conversation
+        store.selectedConversationID = id
+        compactColumn = .detail
+    }
+    private func openSettings(_ pane: SettingsPane) {
+        SettingsRouter.shared.pane = pane
+        #if os(macOS)
+        openSettingsScene()
+        #else
+        settings = true
+        #endif
+    }
+    private func adjacentBot(_ offset: Int) {
+        let bots = orderedBots
         guard !bots.isEmpty else { return }
-        let index = bots.firstIndex { $0.id == selectedBot?.id } ?? 0
-        let next = (index + offset + bots.count) % bots.count
-        await openBot(bots[next])
-    }
-    private func openBot(_ bot: Bot) async {
-        openRoom(bot.mainConversationId)
-    }
-    private func sidebar(_ bot: Bot, _ fields: JSONObject) async {
-        guard store.connectionState == "online" else { return }
-        await action.perform { var body = fields; body["revision"] = .number(Double(bot.revision)); let updated: Bot = try await store.mutate("PATCH", resourcePath("bots", bot.id, "/sidebar"), body: body); if let index = store.bots.firstIndex(where: { $0.id == updated.id }) { store.bots[index] = updated } }
-    }
-    private func reorder(_ bots: [Bot], from: IndexSet, to: Int) async {
-        guard store.connectionState == "online" else { return }
-        await action.perform {
-            var ordered = bots; ordered.move(fromOffsets: from, toOffset: to)
-            for (rank, bot) in ordered.enumerated() {
-                let latest: Bot = try await store.read(resourcePath("bots", bot.id))
-                let _: Bot = try await store.mutate("PATCH", resourcePath("bots", bot.id, "/sidebar"), body: ["revision": .number(Double(latest.revision)), "rank": .number(Double(rank))])
-            }
-            try await store.refresh()
-        }
-    }
-    private func changeSection(_ section: LemonBotKit.Section, collapsed: Bool) async {
-        await action.perform { let _: LemonBotKit.Section = try await store.mutate("PATCH", resourcePath("sections", section.id), body: ["revision": .number(Double(section.revision)), "collapsed": .bool(collapsed)]); try await store.refresh() }
+        let index = bots.firstIndex { $0.id == selectedBot?.id } ?? (offset > 0 ? -1 : 0)
+        openRoom(bots[(index + offset + bots.count) % bots.count].mainConversationId)
     }
 }
 

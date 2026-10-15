@@ -214,7 +214,7 @@ struct MacSettingsView: View {
                     .font(.caption)
             }
             if let error = controller.errorMessage { Text(error).foregroundStyle(.red).textSelection(.enabled) }
-        }.formStyle(.grouped).frame(width: 590, height: 680)
+        }.formStyle(.grouped)
             .onAppear { load(); controller.speech.refreshInputDevices() }
             .onChange(of: controller.settings) { _, _ in load() }
     }

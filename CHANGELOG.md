@@ -28,6 +28,22 @@ No unreleased changes yet.
 
 ### Added
 
+- Lemon Bot for Mac and iPhone is now a messaging-first app. The sidebar lists
+  your Bots with pinned avatars, label chips, last-message previews and unread
+  dots. Each conversation has a floating Bot pill, grouped bubbles in the Bot's
+  color, date separators, hover and long-press message actions, a typing
+  indicator, and a quiet "Couldn't finish this. Retry · Details" row in place of
+  empty failed-run bubbles. Retry only restores your message to the composer.
+  The composer is a floating pill, and a live "working…" row shows the current
+  step. A right-hand inspector, a sheet on iPhone, has Activity, Details and
+  Library tabs. Machines, connectors, channels, policies, usage, account,
+  devices, Connect iPhone and workspace admin now live in Settings. Bots use the
+  recolorable wonky-face lemon mascot. Dark and light modes, Reduce Motion and
+  keyboard shortcuts are supported: ⌘K search, ⌘N new Bot, ⌘F find, ⌘[ and ⌘]
+  or ⌥↑ and ⌥↓ to switch Bots, ⌘1–9 to jump to a Bot, and ⌥⌘I for the
+  inspector. A DEBUG-only `LemonBotSnapshots` scheme renders fixture screens
+  to PNG.
+
 - Keep native root target/policy/destination bindings through durable admission
   compaction, including proofless startup receipts and queued activation fences.
   Native agent/task follow-ups allocate their fixed ID before proof admission.

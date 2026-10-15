@@ -112,7 +112,29 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: org.lemonbot.native.tests
         GENERATE_INFOPLIST_FILE: YES
         ENABLE_HARDENED_RUNTIME: NO
+  LemonBotSnapshotTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: SnapshotTests
+    dependencies:
+      - package: LemonBotKit
+        product: LemonBotKit
+      - package: LemonBotKit
+        product: LemonBotUI
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: org.lemonbot.snapshot.tests
+        GENERATE_INFOPLIST_FILE: YES
+        ENABLE_HARDENED_RUNTIME: NO
 schemes:
+  LemonBotSnapshots:
+    build:
+      targets:
+        LemonBotSnapshotTests: [test]
+    test:
+      config: Debug
+      targets: [LemonBotSnapshotTests]
   LemonBotMac:
     build:
       targets:
