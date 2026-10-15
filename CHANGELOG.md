@@ -10,6 +10,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Probe real LLDB launch capability before enabling host-backed debugger tests,
+  and drain PTY output through exit so terminal backpressure cannot stall tests.
+
 - Keep bash streaming previews advancing after the first 50 KB, including delayed
   output, while preserving bounded replacement snapshots and managed capture.
 
