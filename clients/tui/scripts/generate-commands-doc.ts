@@ -1,5 +1,6 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
+import { TUI_KEYBINDINGS } from "@oh-my-pi/pi-tui/keybindings";
 import { createCommandRegistry, type SlashCommand } from "../src/commands/index.ts";
 
 import { LEMON_KEYBINDINGS } from "../src/ui/controllers/input-controller.ts";
@@ -74,16 +75,19 @@ export async function renderCommandsDoc(): Promise<string> {
 		lines.push("");
 	}
 	lines.push(
-		"## Global keybindings",
+		"## Configurable keybindings",
 		"",
-		"These defaults come from the TUI global binding registry. Overlays own their keys;",
-		"editor and picker-local shortcuts are outside this table.",
+		"Set quoted action IDs under `[tui.keys]` in `~/.lemon/config.toml` or the project",
+		"`.lemon/config.toml`. Values replace the defaults: a key string, an array of keys,",
+		'or `[]` / `"none"` to unbind. See [TUI configuration](../config.md#tui-keybindings).',
+		"Overlays own their keys; picker-local shortcuts are not configurable here.",
 		"",
-		"| Key | Action |",
-		"| --- | --- |",
+		"| Action ID | Default keys | Description |",
+		"| --- | --- | --- |",
 	);
-	for (const binding of Object.values(LEMON_KEYBINDINGS)) {
-		lines.push(`| ${cell(binding.defaultKeys)} | ${cell(binding.description)} |`);
+	for (const [id, binding] of Object.entries({ ...LEMON_KEYBINDINGS, ...TUI_KEYBINDINGS })) {
+		const keys = [binding.defaultKeys].flat().join(", ") || "unbound";
+		lines.push(`| ${cell(id)} | ${cell(keys)} | ${cell(binding.description)} |`);
 	}
 	lines.push("");
 	return lines.join("\n");

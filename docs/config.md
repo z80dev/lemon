@@ -659,9 +659,9 @@ contracts, not proof of remote workload termination.
 
 The Bun TUI uses the runtime's model and thinking defaults from `[defaults]`.
 The `[tui]` section controls terminal presentation settings loaded at startup.
-The Bun client's notification preference is read from **global**
-`~/.lemon/config.toml` at startup, with `LEMON_TUI_NOTIFICATIONS` taking
-precedence. `auto` (default) uses OSC 9/777 on recognized terminals and BEL
+The Bun client reads global `~/.lemon/config.toml` with project
+`.lemon/config.toml` overrides at startup. `LEMON_TUI_NOTIFICATIONS` takes
+precedence over `notifications`. `auto` (default) uses OSC 9/777 on recognized terminals and BEL
 (`\x07`) elsewhere. `osc` forces OSC without a bell fallback, `bell` uses BEL
 only, and `off` disables both. Pending `ask` questions, approvals, and run
 completion share this mode and use fixed notification text, never question or
@@ -669,6 +669,45 @@ conversation content. Tern's program-status inbox/banners remain controlled by
 Tern's settings; `bell` explicitly rings there too. Non-TTY, `TERM=dumb`, or
 `LEMON_TUI_TERMINAL_INTEGRATION=0` suppresses these side channels entirely.
 See `clients/tui/README.md` for copy commands and keyboard access.
+
+### TUI keybindings
+
+Use `[tui.keys]` to replace any action's default keys. Quote action IDs (otherwise
+TOML interprets dots as nested tables). Project bindings override global bindings
+per action, not the entire key table.
+
+```toml
+[tui.keys]
+"lemon.palette.open" = "alt+p"
+"lemon.plan.toggle" = ["alt+shift+p", "ctrl+shift+p"]
+"lemon.model.cycle" = "alt+v"
+"lemon.picker.thinking" = [] # unbind; "none" also works
+```
+
+Each value is one key string or an array. `[]` and `"none"` unbind the action.
+Chords use `ctrl`, `shift`, `alt`, or `super`, followed by `+` and a pi-tui key:
+a letter, digit, punctuation symbol, or named key such as `enter`, `escape`,
+`tab`, `space`, `backspace`, `delete`, `insert`, `home`, `end`, `pageUp`,
+`pageDown`, arrows, or `f1`–`f12`. Key names are case-insensitive. Modified keys
+depend on your terminal's keyboard protocol; some terminals cannot distinguish
+every chord.
+
+The [key reference](user-guide/tui-commands.md#configurable-keybindings) lists every
+bindable action ID and its defaults, including pi-tui editor and selector actions.
+Lemon's local composer policies (abort/quit, history recall, attachments and
+submission-mode cycling) and picker-local shortcuts remain separate.
+`lemon.plan.toggle` runs the same toggle as `/plan`; `lemon.model.cycle` uses the
+model picker's cached `models.list` order, wraps at the end, and changes only the
+current session (not the global default). Both start **unbound**.
+
+Unknown actions, invalid values, and conflicts are ignored and combined into one
+startup notice; rejected actions retain their defaults. Conflicts include a
+user binding that collides with another action's unchanged default, so unbind or
+remap the original owner in the same table before reusing its key. Existing
+context-specific default overlaps are retained. Without `[tui.keys]`, all
+existing defaults stay unchanged. These client-owned settings are accepted by
+`lemon config validate`; action/key validation happens in the TUI at startup.
+
 
 Async followup queue defaults for background `task` completions and delegated `agent`
 completions are currently umbrella app config, not TOML. The default lives in

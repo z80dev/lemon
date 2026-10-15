@@ -19,6 +19,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 - Lemon Bot exposes an authenticated, provider-specific voice catalog for native
   pickers without calling speech providers or generating billable audio.
 
+- Configure TUI shortcuts with `[tui.keys]`, including opt-in plan-mode toggle
+  and model cycling, with safe startup notices for invalid or conflicting bindings.
+
 ### Changed
 
 - Lemon Bot web explains channel and X setup, terminal access, file uploads and

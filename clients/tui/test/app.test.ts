@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { visibleWidth } from "@oh-my-pi/pi-tui/utils";
 import { AppShell } from "../src/app.ts";
 import { imageFromBytes } from "../src/composer/images.ts";
-import { FakeControlPlane } from "../src/dev/fake-server.ts";
+import { DEFAULT_METHODS, FakeControlPlane } from "../src/dev/fake-server.ts";
 import { ControlPlaneClient } from "../src/protocol/client.ts";
 import { newSessionKey } from "../src/session-key.ts";
 import { initTheme, resetTheme } from "../src/ui/theme/theme.ts";
@@ -22,8 +22,8 @@ afterEach(() => {
 	invalidateThemeAdapters();
 });
 
-async function bootApp(sessionKey = "tui-test") {
-	const server = await FakeControlPlane.start();
+async function bootApp(sessionKey = "tui-test", keybindings?: unknown, methods = DEFAULT_METHODS) {
+	const server = await FakeControlPlane.start({ methods });
 	teardown.push(() => server.stop());
 	server.onMethod("chat.send", (params: { sessionKey: string }) => ({
 		runId: "run-1",
@@ -43,6 +43,7 @@ async function bootApp(sessionKey = "tui-test") {
 		version: "test",
 		client,
 		terminal,
+		keybindings,
 		onExit: (code) => exits.push(code),
 	});
 	teardown.push(() => app.stop());
@@ -55,6 +56,46 @@ function chatText(app: AppShell): string {
 }
 
 describe("AppShell", () => {
+	test("bound plan and model actions reach the existing command and picker paths", async () => {
+		const { app, server, terminal } = await bootApp(
+			"tui-keys",
+			{
+				"lemon.plan.toggle": "alt+p",
+				"lemon.model.cycle": "alt+v",
+				"lemon.editor.external": "none",
+				"tui.editor.cursorLeft": "alt+h",
+			},
+			[...DEFAULT_METHODS, "sessions.plan"],
+		);
+		server.onMethod("sessions.plan", (params: { sessionKey: string; action: string }) => ({
+			sessionKey: params.sessionKey,
+			plan: { mode: params.action === "enter" ? "plan" : "code", path: null, content: null },
+		}));
+		server.respondWith("models.list", {
+			models: [
+				{ id: "first", provider: "test" },
+				{ id: "next", provider: "test" },
+			],
+		});
+		server.respondWith("sessions.patch", { success: true });
+		app.session.setModel({ model: "test:first", provider: "test" }, "local");
+		terminal.sendInput("\x1bp");
+		await waitForText(() => chatText(app), "plan mode on");
+		expect(app.session.planMode).toBe("plan");
+		terminal.sendInput("\x1bv");
+		await waitForText(() => chatText(app), "model: test:next");
+		expect(app.session.model).toBe("test:next");
+		expect(server.requestsFor("sessions.patch").at(-1)?.params).toEqual({
+			sessionKey: "tui-keys",
+			model: "test:next",
+		});
+		// pi-tui's editor consumes the same configured manager as the globals.
+		app.editor.setText("ab");
+		terminal.sendInput("\x1bh");
+		terminal.sendInput("x");
+		expect(app.editor.getText()).toBe("axb");
+	});
+
 	test("restores a cold launch session before accepting native delegation", async () => {
 		const server = await FakeControlPlane.start();
 		teardown.push(() => server.stop());
