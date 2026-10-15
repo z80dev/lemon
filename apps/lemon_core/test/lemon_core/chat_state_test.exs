@@ -1,8 +1,8 @@
 defmodule LemonCore.ChatStateTest do
   use ExUnit.Case, async: false
 
-  alias LemonCore.ChatState
   alias LemonCore.{ChatScope, ChatStateStore}
+  alias LemonCore.ChatState
 
   describe "new/0 default value verification" do
     test "creates new ChatState with all nil defaults" do

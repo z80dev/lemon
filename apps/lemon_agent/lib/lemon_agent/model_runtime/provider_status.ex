@@ -3,8 +3,11 @@ defmodule LemonAgent.ModelRuntime.ProviderStatus do
   Redacted provider credential readiness diagnostics.
   """
 
+  alias LemonAgent.ModelRuntime.Credentials
   alias LemonAgent.ModelRuntime.CustomProviders
+  alias LemonAgent.ModelRuntime.ProviderConfiguration
   alias LemonAgent.ModelRuntime.ProviderNames
+  alias LemonAgent.ModelRuntime.ProviderRouting
   alias LemonCore.Config
 
   @spec snapshot(map() | nil) :: map()
@@ -25,8 +28,8 @@ defmodule LemonAgent.ModelRuntime.ProviderStatus do
       "readyCount" => Enum.count(statuses, & &1["credentialReady"]),
       "defaultProvider" => default_agent_value(config, :default_provider),
       "defaultModel" => default_agent_value(config, :default_model),
-      "routingConfig" => LemonAgent.ModelRuntime.ProviderConfiguration.snapshot(config),
-      "routing" => LemonAgent.ModelRuntime.ProviderRouting.preview(params, config, statuses),
+      "routingConfig" => ProviderConfiguration.snapshot(config),
+      "routing" => ProviderRouting.preview(params, config, statuses),
       "cleanup" => %{
         "includesRawApiKeys" => false,
         "includesSecretNames" => false,
@@ -34,6 +37,21 @@ defmodule LemonAgent.ModelRuntime.ProviderStatus do
         "includesEnvVarNames" => false
       }
     }
+  end
+
+  @doc "Read-only circuit diagnostics shared by provider status projections."
+  def circuit(provider) do
+    case LemonAi.CircuitBreaker.peek(ProviderNames.canonical_name(provider) || provider) do
+      {:ok, info} ->
+        %{
+          "state" => to_string(info.state),
+          "failureCount" => info.failure_count,
+          "timeUntilRecoveryMs" => info.time_until_recovery_ms
+        }
+
+      state when state in [:not_started, :unknown] ->
+        %{"state" => to_string(state), "failureCount" => nil, "timeUntilRecoveryMs" => nil}
+    end
   end
 
   defp project_dir(params) do
@@ -53,7 +71,7 @@ defmodule LemonAgent.ModelRuntime.ProviderStatus do
     cond do
       requested != [] ->
         (requested ++
-           LemonAgent.ModelRuntime.ProviderRouting.candidate_provider_ids(params, config))
+           ProviderRouting.candidate_provider_ids(params, config))
         |> Enum.uniq_by(&normalize_provider/1)
 
       include_catalog?(params) ->
@@ -64,7 +82,7 @@ defmodule LemonAgent.ModelRuntime.ProviderStatus do
       true ->
         (config_provider_ids(config) ++
            default_provider_ids(config) ++
-           LemonAgent.ModelRuntime.ProviderRouting.candidate_provider_ids(params, config))
+           ProviderRouting.candidate_provider_ids(params, config))
         |> Enum.uniq_by(&normalize_provider/1)
     end
   end
@@ -125,6 +143,7 @@ defmodule LemonAgent.ModelRuntime.ProviderStatus do
       "known" => is_binary(canonical),
       "custom" => not is_nil(custom),
       "configured" => map_size(provider_cfg) > 0,
+      "circuit" => circuit(canonical || custom_id(custom) || normalize_provider(provider)),
       "credentialReady" =>
         cond do
           canonical ->
@@ -138,7 +157,7 @@ defmodule LemonAgent.ModelRuntime.ProviderStatus do
             )
 
           custom ->
-            LemonAgent.ModelRuntime.Credentials.provider_has_credentials?(
+            Credentials.provider_has_credentials?(
               custom_id(custom),
               config.providers,
               cwd: cwd,
@@ -189,12 +208,12 @@ defmodule LemonAgent.ModelRuntime.ProviderStatus do
   end
 
   defp credential_ready?("openai_codex", providers, provider_cfg, env_configured?, cwd, routing) do
-    LemonAgent.ModelRuntime.Credentials.provider_has_credentials?("openai_codex", providers,
+    Credentials.provider_has_credentials?("openai_codex", providers,
       cwd: cwd,
       provider_routing: routing
     ) or
       (not present?(provider_config_value(provider_cfg, :auth_source)) && not env_configured? &&
-         LemonAgent.ModelRuntime.Credentials.provider_has_credentials?(
+         Credentials.provider_has_credentials?(
            "openai_codex",
            %{"openai-codex" => %{"auth_source" => "oauth"}},
            cwd: cwd
@@ -202,14 +221,14 @@ defmodule LemonAgent.ModelRuntime.ProviderStatus do
   end
 
   defp credential_ready?("anthropic", providers, _provider_cfg, _env_configured?, cwd, routing) do
-    LemonAgent.ModelRuntime.Credentials.provider_has_credentials?("anthropic", providers,
+    Credentials.provider_has_credentials?("anthropic", providers,
       cwd: cwd,
       provider_routing: routing
     )
   end
 
   defp credential_ready?(canonical, providers, _provider_cfg, _env_configured?, cwd, routing) do
-    LemonAgent.ModelRuntime.Credentials.provider_has_credentials?(canonical, providers,
+    Credentials.provider_has_credentials?(canonical, providers,
       cwd: cwd,
       provider_routing: routing
     )

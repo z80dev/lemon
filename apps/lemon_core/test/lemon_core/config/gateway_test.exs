@@ -28,6 +28,7 @@ defmodule LemonCore.Config.GatewayTest do
   use LemonCore.Testing.Case, async: false
 
   alias LemonCore.Config.Gateway
+  alias LemonCore.Config.Validator
 
   setup do
     # Register a stub channel so the per-platform routing mechanism is
@@ -107,7 +108,7 @@ defmodule LemonCore.Config.GatewayTest do
       config = Gateway.resolve(%{"gateway" => %{"enable_stub" => "sometimes"}})
       assert config.enabled_channels.stub == "sometimes"
 
-      assert "gateway.enable_stub: must be a boolean" in LemonCore.Config.Validator.validate_gateway(
+      assert "gateway.enable_stub: must be a boolean" in Validator.validate_gateway(
                config,
                []
              )

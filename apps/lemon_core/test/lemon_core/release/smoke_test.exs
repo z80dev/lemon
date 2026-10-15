@@ -18,8 +18,8 @@ defmodule LemonCore.Release.SmokeTest do
 
   use ExUnit.Case, async: false
 
-  alias LemonCore.Doctor.Checks.{Config, Runtime}
   alias LemonCore.Doctor.Check
+  alias LemonCore.Doctor.Checks.{Config, Runtime}
   alias LemonCore.Runtime.{Env, Health, Profile}
 
   # ──────────────────────────────────────────────────────────────────────────

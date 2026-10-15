@@ -299,13 +299,11 @@ defmodule LemonCore.ConfigCache do
   end
 
   defp safe_load_base(cwd, paths) do
-    try do
-      {base, fp} = load_base(cwd, paths)
-      {:ok, base, fp}
-    rescue
-      exception ->
-        {:error, exception, __STACKTRACE__}
-    end
+    {base, fp} = load_base(cwd, paths)
+    {:ok, base, fp}
+  rescue
+    exception ->
+      {:error, exception, __STACKTRACE__}
   end
 
   defp reply_or_raise({:error, exception, stacktrace}), do: reraise(exception, stacktrace)

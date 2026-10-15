@@ -13,17 +13,19 @@ defmodule CodingAgent.SessionBranchTest do
   use ExUnit.Case, async: true
 
   alias CodingAgent.Session
+  alias CodingAgent.Session.MessageSerialization
+  alias CodingAgent.Session.Ownership
   alias CodingAgent.SessionManager
-  alias CodingAgent.SessionManager.{SessionEntry}
+  alias CodingAgent.SessionManager.SessionEntry
 
   alias LemonAi.Types.{
     AssistantMessage,
-    TextContent,
-    ToolCall,
-    Usage,
     Cost,
     Model,
-    ModelCost
+    ModelCost,
+    TextContent,
+    ToolCall,
+    Usage
   }
 
   # ============================================================================
@@ -152,7 +154,7 @@ defmodule CodingAgent.SessionBranchTest do
 
     expected =
       Enum.map(context.messages, fn message ->
-        restored = CodingAgent.Session.MessageSerialization.deserialize_message(message)
+        restored = MessageSerialization.deserialize_message(message)
         {restored.role, restored.content}
       end)
 
@@ -963,7 +965,7 @@ defmodule CodingAgent.SessionBranchTest do
         :ok = Session.reset(session)
         state = Session.get_state(session)
         assert File.regular?(state.session_file)
-        assert CodingAgent.Session.Ownership.owner(state.session_file) == session
+        assert Ownership.owner(state.session_file) == session
       end
 
       # Should end in clean state

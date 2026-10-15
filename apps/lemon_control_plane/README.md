@@ -1,5 +1,7 @@
 # LemonControlPlane
 
+<!-- Maintenance: strict Credo cleanup keeps runtime behavior unchanged. -->
+
 Authenticated HTTP/WebSocket access to Lemon's assistant runtime. The TUI and
 one-shot CLI use its frame-based protocol; handlers delegate to router, session,
 profile, cron, skill and blueprint services. The control plane also transports

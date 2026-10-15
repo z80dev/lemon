@@ -101,7 +101,17 @@
           {Credo.Check.Warning.UnusedRegexOperation, []},
           {Credo.Check.Warning.UnusedStringOperation, []},
           {Credo.Check.Warning.UnusedTupleOperation, []},
-          {Credo.Check.Warning.WrongTestFilename, []}
+          # The default file filter globs `apps/**/test/**/*_test.exs`, which
+          # walks every apps/*/tmp test artifact (git repos, symlink cycles)
+          # and never finishes once tests have run in the checkout. Scope it
+          # to the umbrella's test directories.
+          {Credo.Check.Warning.WrongTestFilename,
+           [
+             files: %{
+               included: ["apps/*/test/"],
+               excluded: ["apps/*/test/**/*_test.exs"]
+             }
+           ]}
         ],
         disabled: [
           # Deliberate style decisions — see header comment.

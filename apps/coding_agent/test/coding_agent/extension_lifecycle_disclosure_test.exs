@@ -6,6 +6,7 @@ defmodule CodingAgent.ExtensionLifecycleDisclosureTest do
   use ExUnit.Case, async: false
 
   alias CodingAgent.ExtensionLifecycle
+  alias CodingAgent.Security.SecretObfuscator
   alias CodingAgent.ToolDisclosure
   alias CodingAgent.ToolPolicy
   alias CodingAgent.ToolRegistry
@@ -135,13 +136,13 @@ defmodule CodingAgent.ExtensionLifecycleDisclosureTest do
       secret = "fixture-disclosure-secret"
 
       obfuscator =
-        CodingAgent.Security.SecretObfuscator.build(
+        SecretObfuscator.build(
           cwd: tmp_dir,
           agent_dir: tmp_dir,
           env: %{"API_KEY" => secret}
         )
 
-      placeholder = CodingAgent.Security.SecretObfuscator.obfuscate(obfuscator, secret)
+      placeholder = SecretObfuscator.obfuscate(obfuscator, secret)
       path = Path.join(tmp_dir, "restored.txt")
 
       inventory = [

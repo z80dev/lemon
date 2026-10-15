@@ -30,6 +30,8 @@ defmodule LemonCore.ConfigReloader do
   require Logger
 
   alias LemonCore.ConfigReloader.Digest
+  alias LemonCore.Events.ConfigReloaded
+  alias LemonCore.Events.ConfigReloadFailed
 
   @type source :: :files | :env | :secrets
   @type reload_result :: %{
@@ -251,7 +253,7 @@ defmodule LemonCore.ConfigReloader do
         event =
           LemonCore.Event.new(
             :config_reloaded,
-            LemonCore.Events.ConfigReloaded.new(%{
+            ConfigReloaded.new(%{
               reload_id: reload_id,
               reason: reason,
               changed_sources: changed_sources,
@@ -314,7 +316,7 @@ defmodule LemonCore.ConfigReloader do
         fail_event =
           LemonCore.Event.new(
             :config_reload_failed,
-            LemonCore.Events.ConfigReloadFailed.new(%{
+            ConfigReloadFailed.new(%{
               reload_id: reload_id,
               reason: reason,
               error: Exception.message(e)
@@ -397,14 +399,12 @@ defmodule LemonCore.ConfigReloader do
   # ---------------------------------------------------------------------------
 
   defp take_initial_snapshot(state) do
-    try do
-      state.initial_snapshot.(state)
-    rescue
-      error ->
-        message = Exception.message(error)
-        Logger.warning("[ConfigReloader] Initial snapshot failed: #{message}")
-        %{state | last_error: message}
-    end
+    state.initial_snapshot.(state)
+  rescue
+    error ->
+      message = Exception.message(error)
+      Logger.warning("[ConfigReloader] Initial snapshot failed: #{message}")
+      %{state | last_error: message}
   end
 
   defp default_initial_snapshot(state) do

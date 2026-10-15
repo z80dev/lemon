@@ -28,8 +28,10 @@ defmodule CodingAgent.ToolDisclosureAdversarialTest do
   alias CodingAgent.ToolPolicy
   alias CodingAgent.ToolRegistry
   alias LemonAgent.AbortSignal
+  alias LemonAgent.Loop.ToolCalls
   alias LemonAgent.Types.{AgentContext, AgentLoopConfig, AgentTool, AgentToolResult}
   alias LemonAi.Types.{AssistantMessage, Model, ModelCost, TextContent, ToolCall}
+  alias LemonCore.Config.Tools
 
   @moduletag :tmp_dir
 
@@ -209,7 +211,7 @@ defmodule CodingAgent.ToolDisclosureAdversarialTest do
       # or a key-type change on either side would silently make the whole
       # config surface inert again, which is exactly how this shipped once.
       resolved =
-        LemonCore.Config.Tools.resolve(%{
+        Tools.resolve(%{
           "tools" => %{
             "disclosure" => %{
               "budget_tokens" => 7,
@@ -243,7 +245,7 @@ defmodule CodingAgent.ToolDisclosureAdversarialTest do
 
     test "and it activates a real session", %{tmp_dir: tmp_dir} do
       resolved =
-        LemonCore.Config.Tools.resolve(%{
+        Tools.resolve(%{
           "tools" => %{"disclosure" => %{"budget_tokens" => 1}}
         }).disclosure
 
@@ -1235,7 +1237,7 @@ defmodule CodingAgent.ToolDisclosureAdversarialTest do
 
       runner =
         Task.async(fn ->
-          LemonAgent.Loop.ToolCalls.execute_and_collect_tools(
+          ToolCalls.execute_and_collect_tools(
             context,
             [],
             calls,

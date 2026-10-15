@@ -156,15 +156,13 @@ defmodule LemonLsp.ServerManager do
   end
 
   defp apply_edit_result(apply_edit, edit) do
-    try do
-      case apply_edit.(edit) do
-        {:ok, receipt} -> {:ok, receipt}
-        {:error, reason} when is_binary(reason) -> {:error, reason}
-        _ -> {:error, "Workspace edit failed"}
-      end
-    catch
-      _, _ -> {:error, "Workspace edit failed"}
+    case apply_edit.(edit) do
+      {:ok, receipt} -> {:ok, receipt}
+      {:error, reason} when is_binary(reason) -> {:error, reason}
+      _ -> {:error, "Workspace edit failed"}
     end
+  catch
+    _, _ -> {:error, "Workspace edit failed"}
   end
 
   defp await_edit_callback(%Task{ref: ref} = task, request, deadline, owner_ref) do

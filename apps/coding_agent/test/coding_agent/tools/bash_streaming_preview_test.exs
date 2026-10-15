@@ -72,7 +72,7 @@ defmodule CodingAgent.Tools.BashStreamingPreviewTest do
     result =
       Bash.execute(
         "bounded-preview",
-        %{"command" => "printf '%60000s' ''; printf 'END'"},
+        %{"command" => "printf '%60000s' ''; sleep 0.1; printf 'END'"},
         nil,
         fn update -> Agent.update(updates_pid, &[update | &1]) end,
         System.tmp_dir!(),

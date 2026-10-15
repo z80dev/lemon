@@ -20,6 +20,7 @@ defmodule LemonCore.ConfigTest do
   use ExUnit.Case, async: false
 
   alias LemonCore.Config
+  alias LemonCore.Setup.Readiness
 
   setup do
     original_home = System.get_env("HOME")
@@ -361,7 +362,7 @@ defmodule LemonCore.ConfigTest do
       assert config.agent.default_model == "openai:gpt-5.1"
     end)
 
-    state = LemonCore.Setup.Readiness.status()
+    state = Readiness.status()
     assert state.provider.provider == "openai"
     assert state.provider.model == "openai:gpt-5.1"
   end

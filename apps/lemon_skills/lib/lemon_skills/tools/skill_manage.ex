@@ -11,8 +11,8 @@ defmodule LemonSkills.Tools.SkillManage do
   alias LemonAgent.AbortSignal
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonAi.Types.TextContent
-  alias LemonSkills.{Config, Manifest, Registry}
   alias LemonSkills.Audit.BundleAudit
+  alias LemonSkills.{Config, Manifest, Registry}
 
   @max_name_length 64
   @max_skill_content_chars 100_000

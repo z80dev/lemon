@@ -10,6 +10,12 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Probe real LLDB launch capability before enabling host-backed debugger tests,
+  and drain PTY output through exit so terminal backpressure cannot stall tests.
+
+- Keep bash streaming previews advancing after the first 50 KB, including delayed
+  output, while preserving bounded replacement snapshots and managed capture.
+
 - Resolve qualified model selectors against their own provider when a preset or
   default provider was inherited, while preserving native colon IDs for explicit
   provider/model pairs.
@@ -28,6 +34,12 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   a folder, ZIP or HTTPS URL with size, dimension and path validation; pet
   packages are images only and never run code.
 
+- Add opt-in `lemon doctor --live` for bounded, redacted provider models-list and
+  Telegram/Discord bot identity checks without generating completions.
+
+- Provider status exposes circuit-breaker state, failure counts and recovery delay
+  without starting breakers; CLI and TUI status views surface open circuits.
+
 - Rate-limited cron failure and recovery alerts, persistent failure streaks,
   owner-chat fallback, and doctor warnings for failures without a delivery route.
 
@@ -39,6 +51,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 - Configure TUI shortcuts with `[tui.keys]`, including opt-in plan-mode toggle
   and model cycling, with safe startup notices for invalid or conflicting bindings.
+
+- The debug tool supports adapter-requested DAP child sessions, including js-debug
+  launch/attach configurations, child session targeting, and recursive teardown.
 
 ### Changed
 

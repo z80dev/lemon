@@ -305,6 +305,10 @@ describe("diagnostics", () => {
 			runs: { active: 1, queued: 0, completed_today: 7 },
 			channels: { configured: ["telegram"], connected: ["telegram"] },
 			skills: { installed: 10, enabled: 8 },
+			providers: [
+				{ id: "openai", circuit: { state: "open" } },
+				{ id: "anthropic", circuit: { state: "half_open" } },
+			],
 		});
 		harness.server.respondWith("health", { ok: true, checks: { router: { status: "ok" } } });
 
@@ -314,6 +318,8 @@ describe("diagnostics", () => {
 		expect(text).toContain("uptime: 1h 0m");
 		expect(text).toContain("telegram");
 		expect(text).toContain("router: ok");
+		expect(text).toContain("provider openai: circuit open");
+		expect(text).toContain("provider anthropic: circuit half_open");
 		expect(text).toContain("profile: none (ordinary chat)");
 		expect(text).toContain("model: not selected — /model to choose");
 		expect(text).toContain("tui-session");

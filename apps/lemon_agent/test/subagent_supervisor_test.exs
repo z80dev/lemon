@@ -14,8 +14,8 @@ defmodule LemonAgent.SubagentSupervisorTest do
 
   use ExUnit.Case, async: false
 
-  alias LemonAgent.SubagentSupervisor
   alias LemonAgent.AgentRegistry
+  alias LemonAgent.SubagentSupervisor
   alias LemonAgent.Test.Mocks
 
   import LemonCore.Testing.AsyncHelpers
