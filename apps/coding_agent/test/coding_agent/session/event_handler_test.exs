@@ -46,6 +46,47 @@ defmodule CodingAgent.Session.EventHandlerTest do
     %{callbacks: callbacks, state: state}
   end
 
+  test "emits ordered content-free session observations", %{state: state, callbacks: callbacks} do
+    handler = {__MODULE__, make_ref()}
+
+    events = [
+      [:coding_agent, :session, :tool_dispatched],
+      [:coding_agent, :session, :run_completed]
+    ]
+
+    :ok =
+      :telemetry.attach_many(
+        handler,
+        events,
+        fn event, measurements, metadata, target ->
+          send(target, {:observation, event, measurements, metadata})
+        end,
+        self()
+      )
+
+    on_exit(fn -> :telemetry.detach(handler) end)
+    state = Map.put(state, :session_scope, :main)
+    pid = self()
+
+    EventHandler.handle(
+      {:tool_execution_start, "call-1", "remember", %{"text" => "private"}},
+      state,
+      callbacks
+    )
+
+    EventHandler.handle({:agent_end, []}, state, callbacks)
+
+    assert_receive {:observation, [:coding_agent, :session, :tool_dispatched], %{},
+                    %{session_pid: ^pid, session_scope: :main, tool_name: "remember"} = metadata}
+
+    assert map_size(metadata) == 3
+
+    assert_receive {:observation, [:coding_agent, :session, :run_completed], %{},
+                    %{session_pid: ^pid, session_scope: :main} = metadata}
+
+    assert map_size(metadata) == 2
+  end
+
   describe "handle/3" do
     test "{:agent_start} returns state unchanged", %{state: state, callbacks: callbacks} do
       result = EventHandler.handle({:agent_start}, state, callbacks)

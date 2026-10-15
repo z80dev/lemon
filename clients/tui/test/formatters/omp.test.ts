@@ -43,7 +43,10 @@ describe("omp formatter", () => {
 			},
 			{ action: "wait", id: "omp_3f9a1c2b7d4e" },
 		);
-		expect(output.summary).toBe("wait · Fix the flaky reconnect test · running · todos 2/4");
+		// The default fixture is waiting on an approval, which the summary surfaces.
+		expect(output.summary).toBe(
+			"wait · Fix the flaky reconnect test · running · todos 2/4 · waiting for approval: bash",
+		);
 		const text = all(output);
 		expect(text).toContain("activity: Running bash — bun test test/protocol/ws.test.ts");
 		expect(text).toContain("▶ bash — Re-running the reconnect suite");

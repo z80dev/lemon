@@ -63,7 +63,9 @@ defmodule LemonMemory.Preferences do
           text =
             if notes == [],
               do: "",
-              else: heading <> "\n\n" <> Enum.map_join(notes, "\n", &("- " <> &1))
+              else:
+                LemonMemory.Usage.preferences(kind, Enum.sum(Enum.map(notes, &String.length/1))) <>
+                  "\n\n" <> heading <> "\n\n" <> Enum.map_join(notes, "\n", &("- " <> &1))
 
           {name, text}
         end

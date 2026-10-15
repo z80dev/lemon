@@ -23,12 +23,34 @@ defmodule LemonCli.HermesMigration do
     "DEEPGRAM_API_KEY" => {"gateway.voice", "deepgram_api_key_secret"}
   }
 
+  # Persist the satellite's public config schema without depending on its app.
+  @honcho_fields %{
+    "enabled" => {"enabled", :boolean},
+    "baseUrl" => {"base_url", :string},
+    "environment" => {"environment", :string},
+    "workspace" => {"workspace", :string},
+    "peerName" => {"user_peer", :string},
+    "aiPeer" => {"ai_peer", :string},
+    "recallMode" => {"recall_mode", ~w(hybrid context tools)},
+    "sessionStrategy" => {"session_strategy", ~w(per-session per-directory per-repo global)},
+    "contextTokens" => {"context_tokens", :positive_integer},
+    "contextCadence" => {"context_cadence", :positive_integer},
+    "dialecticCadence" => {"dialectic_cadence", :positive_integer},
+    "dialecticReasoningLevel" => {"reasoning_level", ~w(minimal low medium high max)},
+    "dialecticMaxChars" => {"dialectic_max_chars", :positive_integer},
+    "messageMaxChars" => {"message_max_chars", :positive_integer},
+    "saveMessages" => {"save_messages", :boolean},
+    "observationMode" => {"observation_mode", ~w(directional unified)},
+    "timeout" => {"timeout_ms", :seconds}
+  }
+
   @user_data_sections MapSet.new([
                         :soul,
                         :memory,
                         :user_profile,
                         :skills,
                         :config,
+                        :honcho,
                         :sessions,
                         :archive
                       ])
@@ -43,8 +65,14 @@ defmodule LemonCli.HermesMigration do
     run(Keyword.put(opts, :execute, true))
   end
 
+  defp source_root(opts) do
+    path(
+      opts[:source] || System.get_env("HERMES_HOME") || Path.join(System.user_home!(), ".hermes")
+    )
+  end
+
   def audit(opts \\ []) do
-    source_root = path(opts[:source] || Path.join(System.user_home!(), ".hermes"))
+    source_root = source_root(opts)
     target_root = path(opts[:target] || Path.join(System.user_home!(), ".lemon"))
     config_path = Path.join(source_root, "config.yaml")
     config = read_config(config_path)
@@ -68,6 +96,7 @@ defmodule LemonCli.HermesMigration do
       audit_skills(source_root),
       audit_config(config_path, config),
       audit_secrets(source_root),
+      audit_honcho(opts, source_root, target_root),
       audit_sessions(Path.join(source_root, "state.db")),
       audit_config_surface(
         "mcp",
@@ -116,6 +145,8 @@ defmodule LemonCli.HermesMigration do
       )
     ]
 
+    items = List.flatten(items)
+
     %{
       "source" => source_root,
       "target" => target_root,
@@ -127,7 +158,7 @@ defmodule LemonCli.HermesMigration do
   end
 
   def run(opts) do
-    source_root = path(opts[:source] || Path.join(System.user_home!(), ".hermes"))
+    source_root = source_root(opts)
     target_root = path(opts[:target] || Path.join(System.user_home!(), ".lemon"))
     execute? = Keyword.get(opts, :execute, false)
     overwrite? = Keyword.get(opts, :overwrite, false)
@@ -140,6 +171,8 @@ defmodule LemonCli.HermesMigration do
     ctx = %{
       source_root: source_root,
       target_root: target_root,
+      honcho_global_path:
+        opts[:honcho_global_path] || Path.join([System.user_home!(), ".honcho", "config.json"]),
       workspace_dir:
         Keyword.get(opts, :workspace_dir) || Path.join([target_root, "agent", "workspace"]),
       skill_dir: Path.join([target_root, "agent", "skill"]),
@@ -162,6 +195,7 @@ defmodule LemonCli.HermesMigration do
       |> maybe_add(ctx, :skills, &migrate_skills/1)
       |> maybe_add(ctx, :config, &migrate_config/1)
       |> maybe_add(ctx, :secrets, &migrate_secrets/1)
+      |> maybe_add(ctx, :honcho, &migrate_honcho/1)
       |> maybe_add(ctx, :sessions, &migrate_sessions/1)
       |> maybe_add(ctx, :archive, &archive_unmapped/1)
       |> List.flatten()
@@ -306,6 +340,263 @@ defmodule LemonCli.HermesMigration do
         items -> items
       end
     end
+  end
+
+  defp audit_honcho(opts, source, target) do
+    migrate_honcho(%{
+      source_root: source,
+      target_root: target,
+      honcho_global_path:
+        opts[:honcho_global_path] || Path.join([System.user_home!(), ".honcho", "config.json"]),
+      sections: @user_data_sections,
+      execute?: false,
+      overwrite?: true
+    })
+    |> Enum.map(fn entry ->
+      status =
+        case entry["status"] do
+          "planned" -> "compatible"
+          "skipped" -> "missing"
+          other -> other
+        end
+
+      Map.put(entry, "status", status)
+    end)
+  end
+
+  defp migrate_honcho(ctx) do
+    local = Path.join(ctx.source_root, "honcho.json")
+    source = if File.exists?(local), do: local, else: ctx.honcho_global_path
+    target = Path.join(ctx.target_root, "config.toml")
+
+    with {:ok, bytes} <- File.read(source),
+         {:ok, raw} when is_map(raw) <- Jason.decode(bytes),
+         {:ok, config, unsupported} <- honcho_host_config(raw, ctx.source_root),
+         {:ok, existing} <- read_target_config(target) do
+      content = if File.exists?(target), do: File.read!(target), else: ""
+
+      {patched, entries} =
+        config
+        |> Enum.sort()
+        |> Enum.reduce({content, []}, fn {key, value}, {content, entries} ->
+          case Map.fetch(@honcho_fields, key) do
+            {:ok, {dest_key, type}} ->
+              case honcho_value(value, type) do
+                {:ok, converted} ->
+                  {next, entry} =
+                    honcho_config_item(
+                      ctx,
+                      source,
+                      target,
+                      existing,
+                      content,
+                      dest_key,
+                      converted
+                    )
+
+                  {next, [entry | entries]}
+
+                :error ->
+                  {content,
+                   [honcho_unsupported(source, target, key, "Unsupported Honcho value") | entries]}
+
+                :unset ->
+                  {content, entries}
+              end
+
+            :error ->
+              {content, entries}
+          end
+        end)
+
+      {patched, secret_items} = honcho_secret(ctx, source, target, existing, patched, config)
+
+      if ctx.execute? and patched != content do
+        _ = backup_existing(ctx, target)
+        File.mkdir_p!(Path.dirname(target))
+        File.write!(target, patched)
+      end
+
+      unsupported_items =
+        Enum.map(unsupported, &honcho_unsupported(source, target, &1, "Unsupported Honcho key"))
+
+      Enum.reverse(entries) ++ secret_items ++ unsupported_items
+    else
+      {:error, :enoent} ->
+        [item("honcho", source, target, "skipped", "Hermes Honcho config not found")]
+
+      _ ->
+        [item("honcho", source, target, "error", "Could not read Hermes or Lemon Honcho config")]
+    end
+  end
+
+  defp honcho_host_config(raw, source_root) do
+    source_env = parse_env(Path.join(source_root, ".env"))
+
+    profile_host =
+      if Path.basename(Path.dirname(source_root)) == "profiles" do
+        "hermes_" <> String.replace(Path.basename(source_root), ~r/[^A-Za-z0-9_-]/, "_")
+      else
+        normalize_string(raw["defaultHost"]) || "hermes"
+      end
+
+    host = normalize_string(source_env["HERMES_HONCHO_HOST"]) || profile_host
+    hosts = Map.get(raw, "hosts", %{})
+
+    if is_map(hosts) and is_map(Map.get(hosts, host, %{})) do
+      host_config =
+        hosts
+        |> Map.get(host, %{})
+        |> honcho_alias("base_url", "baseUrl")
+        |> honcho_alias("requestTimeout", "timeout")
+
+      config =
+        raw
+        |> Map.drop(["hosts", "defaultHost"])
+        |> honcho_alias("base_url", "baseUrl")
+        |> honcho_alias("requestTimeout", "timeout")
+        |> Map.merge(host_config)
+        |> Map.put_new("workspace", host)
+        |> Map.put_new("aiPeer", host)
+
+      unsupported =
+        Enum.reject(Map.keys(config), &(&1 == "apiKey" or Map.has_key?(@honcho_fields, &1))) ++
+          Enum.map(Enum.reject(Map.keys(hosts), &(&1 == host)), &("hosts." <> &1))
+
+      {:ok, config, Enum.sort(unsupported)}
+    else
+      :error
+    end
+  end
+
+  defp honcho_alias(config, alias_key, key) do
+    case Map.pop(config, alias_key) do
+      {nil, config} -> config
+      {value, config} -> Map.put_new(config, key, value)
+    end
+  end
+
+  defp read_target_config(target) do
+    case File.read(target) do
+      {:ok, content} -> Toml.decode(content)
+      {:error, :enoent} -> {:ok, %{}}
+      error -> error
+    end
+  end
+
+  defp honcho_value(nil, _type), do: :unset
+
+  defp honcho_value(value, :string) do
+    case normalize_string(value) do
+      nil -> :error
+      value -> {:ok, value}
+    end
+  end
+
+  defp honcho_value(value, :boolean) when is_boolean(value), do: {:ok, value}
+
+  defp honcho_value(value, :positive_integer) when is_integer(value) and value > 0,
+    do: {:ok, value}
+
+  defp honcho_value(value, :seconds) when is_number(value) and value > 0,
+    do: {:ok, max(1, round(value * 1_000))}
+
+  defp honcho_value(value, allowed) when is_list(allowed) do
+    if value in allowed, do: {:ok, value}, else: :error
+  end
+
+  defp honcho_value(_value, _type), do: :error
+
+  defp honcho_config_item(ctx, source, target, existing, content, key, value) do
+    current = get_in(existing, ["honcho", key])
+    details = %{"key" => key}
+
+    cond do
+      current == value ->
+        {content, item("honcho", source, target, "skipped", "Target already matches", details)}
+
+      not is_nil(current) and not ctx.overwrite? ->
+        {content,
+         item("honcho", source, target, "conflict", "Target Honcho setting exists", details)}
+
+      true ->
+        patched =
+          if is_binary(value),
+            do: TomlPatch.upsert_string(content, "honcho", key, value),
+            else: TomlPatch.upsert_raw_line(content, "honcho", key, "#{key} = #{value}")
+
+        {patched,
+         item(
+           "honcho",
+           source,
+           target,
+           if(ctx.execute?, do: "migrated", else: "planned"),
+           "Mapped Honcho setting",
+           details
+         )}
+    end
+  end
+
+  defp honcho_secret(ctx, source, _target, existing, content, config) do
+    case normalize_string(config["apiKey"]) do
+      nil ->
+        {content, []}
+
+      value ->
+        name = "HONCHO_API_KEY"
+
+        entry = fn status, reason ->
+          item("honcho_secret", source, name, status, reason, %{"name" => name}, true)
+        end
+
+        cond do
+          not MapSet.member?(ctx.sections, :secrets) ->
+            {content,
+             [entry.("gated", "Honcho API key requires --preset full --migrate-secrets")]}
+
+          not ctx.overwrite? and
+              (not is_nil(get_in(existing, ["honcho", "api_key_secret"])) or
+                 not is_nil(get_in(existing, ["honcho", "api_key"]))) ->
+            {content, [entry.("conflict", "Target Honcho credential setting exists")]}
+
+          true ->
+            case Secrets.list() do
+              {:ok, secrets} ->
+                if not ctx.overwrite? and Enum.any?(secrets, &(&1.name == name)) do
+                  {content, [entry.("conflict", "Target Honcho secret exists")]}
+                else
+                  honcho_store_secret(ctx, content, value, entry)
+                end
+
+              {:error, _} ->
+                {content, [entry.("error", "Could not inspect Lemon secrets")]}
+            end
+        end
+    end
+  end
+
+  defp honcho_store_secret(ctx, content, value, entry) do
+    if ctx.execute? do
+      case Secrets.set("HONCHO_API_KEY", value, provider: "hermes_migration") do
+        {:ok, _} ->
+          patched =
+            content
+            |> TomlPatch.delete_key("honcho", "api_key")
+            |> TomlPatch.upsert_string("honcho", "api_key_secret", "HONCHO_API_KEY")
+
+          {patched, [entry.("migrated", "Imported Honcho API key into encrypted secrets")]}
+
+        {:error, _} ->
+          {content,
+           [entry.("error", "Honcho secret import failed; check Lemon secrets master key")]}
+      end
+    else
+      {content, [entry.("planned", "Honcho API key would be imported into encrypted secrets")]}
+    end
+  end
+
+  defp honcho_unsupported(source, target, key, reason) do
+    item("honcho", source, target, "unsupported", reason, %{"key" => key})
   end
 
   defp migrate_sessions(ctx) do
@@ -994,7 +1285,9 @@ defmodule LemonCli.HermesMigration do
       "archived" => Map.get(statuses, "archived", 0),
       "skipped" => Map.get(statuses, "skipped", 0),
       "conflict" => Map.get(statuses, "conflict", 0),
-      "error" => Map.get(statuses, "error", 0)
+      "error" => Map.get(statuses, "error", 0),
+      "unsupported" => Map.get(statuses, "unsupported", 0),
+      "gated" => Map.get(statuses, "gated", 0)
     }
   end
 
@@ -1035,6 +1328,8 @@ defmodule LemonCli.HermesMigration do
     - skipped: #{summary["skipped"]}
     - conflicts: #{summary["conflict"]}
     - errors: #{summary["error"]}
+    - unsupported: #{summary["unsupported"]}
+    - gated: #{summary["gated"]}
     """
   end
 

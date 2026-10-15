@@ -23,8 +23,10 @@ is capped at 20. Runs are returned chronologically; an unknown anchor returns
 no runs. These are finalized-run summaries, not full transcripts.
 
 Browse and scroll use the same owner, agent, and assistant-profile boundary as
-search, refuse subagents, and require `[features] session_search`. Session keys
-identify only visible sessions and do not grant access to another owner's data.
+search, require a verified private memory context, refuse subagents, and require
+`[features] session_search`. Legacy or unverified contexts cannot browse or scroll.
+Session keys identify only visible sessions and do not grant access to another
+owner's data.
 Each returned prompt/answer is byte-bounded; recalled content remains untrusted
 data, never instructions.
 ---
@@ -63,6 +65,15 @@ Raw legacy files stay unchanged and require explicit owner review/import to beco
 shared; appending one shared fact never promotes the rest of a file. Legacy
 unscoped sessions keep their previous file bootstrap behavior.
 Save reusable procedures as skills rather than memory facts.
+
+Prompt memory blocks report full store usage, for example
+`USER PROFILE [62% — 860/1,375 chars]`, `MEMORY [67% — 1,474/2,200 chars]`,
+and `PROJECT MEMORY [5/24 facts, 340/2,000 bytes]`. Above 80% of either
+applicable limit, a line reminds the agent to consolidate before adding.
+Scoped character counts exclude generated headings/bullets; legacy file counts
+include the saved file's formatting. Excerpts remain bounded even when the
+header reports the full store. Labels do not change stored notes or enter
+subagent prompts.
 
 ### Repository learnings
 

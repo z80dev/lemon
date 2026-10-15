@@ -66,6 +66,43 @@ set `LEMON_HONCHO_ENABLED=false`, which wins over the key. Lemon's own test suit
 pinned off — and pinned off a second time at the transport, so that even a shell which
 forces the integration on cannot make `mix test` reach a real workspace.
 
+### Persistent configuration and Hermes imports
+
+Honcho also reads `[honcho]` in the global Lemon `config.toml` (normally
+`~/.lemon/config.toml`). The resolution order is environment, application env,
+global TOML, then defaults. Project TOML is deliberately not a source of Honcho
+credentials or personal-memory identity.
+
+```toml
+[honcho]
+api_key_secret = "HONCHO_API_KEY"
+workspace = "my-workspace"
+user_peer = "alice"
+ai_peer = "hermes"
+recall_mode = "tools"
+session_strategy = "per-session"
+save_messages = false
+timeout_ms = 30000
+```
+
+Store the referenced key with Lemon's `secrets` command; do not put an `api_key`
+value in TOML (the Honcho reader ignores it). Other `[honcho]` settings use their
+application-env names, such as `base_url`, `context_tokens`, `context_cadence`,
+`dialectic_cadence`, `reasoning_level` and `observation_mode`. Unusable values
+fall through to defaults. Restart Lemon after changing persistent configuration
+so its boot-time registrations reflect the new activation state.
+
+Coming from Hermes? `lemon migrate hermes --dry-run` previews the profile-local
+`honcho.json` or global `~/.honcho/config.json`, maps supported settings, and
+reports unsupported options. API-key import requires
+`--preset full --migrate-secrets` and uses Lemon's encrypted secret store, never
+plaintext config. Matching workspace and peer names keep access to your existing
+server-side memory; remote data and Hermes session IDs are not copied. See
+[the migration guide](migrate-from-hermes.md#honcho-configuration) for precedence,
+conflict handling and the full mapping.
+
+### Upload controls
+
 Uploads travel over Lemon's built-in memory ingest, and that pipeline sits behind the
 `session_search` feature flag, which now defaults to **default-on** — so once the key
 is exported, per-run uploads happen without any further switch. If you want Honcho's

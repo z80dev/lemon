@@ -114,12 +114,26 @@ defmodule LemonChannels.Application do
   def start_adapter(adapter_module, opts \\ []) do
     child_spec = adapter_module.child_spec(opts)
 
+    if adapter_module.id() in ["telegram", "xmtp", "whatsapp"] do
+      LemonChannels.Registry.record_status(adapter_module.id(), :configured)
+    end
+
     case DynamicSupervisor.start_child(LemonChannels.AdapterSupervisor, child_spec) do
-      {:ok, _pid} -> :ok
-      {:ok, _pid, _info} -> :ok
-      :ignore -> :ok
-      {:error, {:already_started, _pid}} -> :ok
-      {:error, reason} -> {:error, reason}
+      {:ok, _pid} ->
+        :ok
+
+      {:ok, _pid, _info} ->
+        :ok
+
+      :ignore ->
+        :ok
+
+      {:error, {:already_started, _pid}} ->
+        :ok
+
+      {:error, reason} ->
+        LemonChannels.Registry.record_status(adapter_module.id(), {:error, reason})
+        {:error, reason}
     end
   end
 

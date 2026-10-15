@@ -175,6 +175,10 @@ are not automatically shared with context-owned runs.
 `Preferences.usage(context, kind, opts)` reports safe scoped entries, used characters
 and the per-kind cap. `Project.usage(context, opts)` reports fact count, byte usage,
 and both caps. These reads preserve the same ownership checks as ordinary reads.
+`Usage` formats deterministic capacity headers for shared bootstrap and bounded
+recall. Preference headers count saved characters; project headers include
+newline-separated UTF-8 bytes. Consolidation guidance appears strictly above
+80% of either applicable capacity, without timestamps or mutable session counters.
 
 `Project.read/2` combines only the exact private project and explicitly shared
 curated project namespace, within its existing fact/byte budget.
@@ -190,7 +194,9 @@ facts rather than unproven raw files. No provider/network/model fallback exists.
 run summaries around `:around` (document/run ID), or the latest `:window`
 (default 5, maximum 20). `recent_sessions(context, opts)` returns first-prompt
 representatives and run counts. Both apply indexed ownership/profile filters
-before window selection, refuse subagents, and respect the session-search flag.
+before window selection, require a proven private context just like history
+search, refuse subagents, and respect the session-search flag. Legacy or partial
+ownership contexts return `{:error, :unproven_context}` rather than browsing.
 Scroll prompt/answer summaries are capped at 1024/2048 bytes respectively.
 
 Authorized profile copies first inspect `Store.document_ownership/1` on the

@@ -16,6 +16,8 @@ history, compaction and supervised delegation. The loop/model runtime comes from
   `~/.lemon/agent/workspace/`; profile homes stay isolated.
 - Main bootstrap includes identity/user/memory files. Subagents receive only
   `AGENTS.md` and `TOOLS.md`; do not leak personal workspace memory to children.
+- Main personal-memory bootstrap projections carry deterministic capacity labels;
+  labels do not modify files or bypass the subagent bootstrap allowlist.
 - Compose static system prefix before volatile context. Capture environment once
   per session, not on every refresh. Stable skill metadata belongs in the prefix;
   turn-local relevance and recall do not. Preserve model replay bytes while

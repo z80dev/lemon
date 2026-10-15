@@ -250,10 +250,12 @@ defmodule LemonChannels.Adapters.Xmtp.Transport do
 
     case {mode, state.require_live} do
       {:live, _} ->
+        LemonChannels.Registry.record_status("xmtp", :connected)
         Logger.info("xmtp bridge connected (mode=live): #{inspect(event)}")
         maybe_schedule_poll(state)
 
       {:mock, false} ->
+        LemonChannels.Registry.record_status("xmtp", :connected)
         Logger.warning("xmtp bridge connected in mock mode: #{inspect(event)}")
         maybe_schedule_poll(state)
 
@@ -332,6 +334,7 @@ defmodule LemonChannels.Adapters.Xmtp.Transport do
   end
 
   defp handle_bridge_event(%{"type" => "error"} = event, state) do
+    LemonChannels.Registry.record_status("xmtp", {:error, :bridge_error})
     Logger.warning("xmtp bridge error: #{inspect(event)}")
 
     state =
@@ -1082,6 +1085,8 @@ defmodule LemonChannels.Adapters.Xmtp.Transport do
   end
 
   defp mark_unavailable(state, error_map) when is_map(error_map) do
+    LemonChannels.Registry.record_status("xmtp", {:error, :unavailable})
+
     state =
       state
       |> Map.put(:last_error, error_map)

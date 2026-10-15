@@ -92,7 +92,7 @@ defmodule LemonMemory.SessionSearch do
 
   defp history(context, opts) do
     with {:ok, identity} <- LemonMemory.Project.scope(context),
-         {:ok, owner} <- LemonMemory.ContextScope.scope(context) do
+         {:ok, {:private, _} = owner} <- LemonMemory.ContextScope.scope(context) do
       if enabled?() do
         window =
           case Keyword.get(opts, :window, 5) do
@@ -115,6 +115,9 @@ defmodule LemonMemory.SessionSearch do
       else
         {:ok, []}
       end
+    else
+      {:ok, :legacy} -> {:error, :unproven_context}
+      error -> error
     end
   end
 

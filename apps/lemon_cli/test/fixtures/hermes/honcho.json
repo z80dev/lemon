@@ -1,0 +1,23 @@
+{
+  "apiKey": "hk-fixture-not-a-real-key",
+  "baseUrl": "http://honcho.test:8000",
+  "environment": "local",
+  "workspace": "hermes-workspace",
+  "peerName": "alice",
+  "aiPeer": "hermes-assistant",
+  "recallMode": "tools",
+  "sessionStrategy": "per-session",
+  "contextTokens": 1200,
+  "contextCadence": 3,
+  "dialecticCadence": 5,
+  "dialecticDepth": 2,
+  "dialecticReasoningLevel": "medium",
+  "dialecticMaxChars": 900,
+  "messageMaxChars": 16000,
+  "writeFrequency": "session",
+  "saveMessages": false,
+  "observationMode": "unified",
+  "timeout": 1.5,
+  "pinUserPeer": true,
+  "userPeerAliases": {"123": "alice"}
+}

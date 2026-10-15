@@ -15,6 +15,8 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Recall browse/scroll now require the same verified private ownership as history
+  search; legacy or partially verified contexts fail closed.
 - Skill usage recording no longer depends on the introspection handler. Pinned
   skills reject content edits, never-used skills retain a stale-age grace floor,
   and background curation preserves skills referenced by disabled or active cron jobs.
@@ -34,9 +36,20 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   clarify that synthesized skills remain drafts until promotion.
 - Remember supports exact-entry or unique-substring edits consistently across scoped
   and legacy memory, with actionable ambiguity, safety, and capacity feedback.
+- Agent prompt memory blocks show deterministic character/fact/byte capacity
+  headers and recommend consolidation above 80%; subagents remain isolated.
 
 ### Added
 
+- Hermes migration previews and imports supported Honcho settings from global or
+  profile-local JSON, preserves active-host precedence, and reports unsupported
+  options. API keys use the gated encrypted-secret path, with conflict protection
+  and no plaintext fallback. Honcho reads persistent global `[honcho]` settings
+  and encrypted credential references without adding a platform dependency.
+
+- Control-plane status reports the real Lemon release version, build identity,
+  offline provider credential presence, timestamped redacted channel health,
+  lifecycle availability and safe summary counts.
 - Computer use can be configured in `[runtime.tools.computer_use]` (`enabled`,
   `chrome`, `lcu_root`, `node`, `declined_origins`); environment variables still
   take precedence. Execution-node capability inspection reports a
@@ -51,6 +64,11 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   run summaries around a document/run ID without crossing owner/profile boundaries.
 - The omp panel resolves pending approvals through the shared approval controller,
   selects free-marked omp models, and drills into subagent transcript tails.
+- Main-session learning reminders suggest saving durable facts/preferences with
+  `remember` every 10 user turns without a save, and creating/patching a skill
+  after a completed run uses at least 15 tools without `skill_manage`.
+  Configurable through global/project `skills.json`, these bounded volatile
+  reminders exclude subagents and make no extra model calls.
 
 ---
 
