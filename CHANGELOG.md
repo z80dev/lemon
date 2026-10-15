@@ -11,6 +11,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 - Emit content-free tool-call start/stop/exception telemetry with native-unit
   duration, tool name, error outcome and timeout flag, including failed workers.
 
+---
+
+## [2026.10.11]
+
 - Read `path:conflicts` to index Git conflict regions, then resolve a session-scoped
   `conflict://N` with `write` and ours/theirs/base/both expansion tokens. Stale ids
   are rejected after file changes.
