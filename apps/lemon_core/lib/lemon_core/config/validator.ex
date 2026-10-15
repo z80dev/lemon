@@ -34,6 +34,7 @@ defmodule LemonCore.Config.Validator do
 
   alias LemonCore.Config.{Automation, Features, LegacyAgentMigration, Memory, Modular, Providers}
   alias LemonCore.Config.Gateway.Channel
+  alias LemonCore.Config.Tools.Bash
 
   @valid_log_levels [:debug, :info, :notice, :warning, :error, :critical, :alert, :emergency]
   @valid_themes [:default, :dark, :light, :high_contrast, :lemon]
@@ -701,6 +702,7 @@ defmodule LemonCore.Config.Validator do
     |> validate_boolean(Map.get(tools, :intent_tracing), "tools.intent_tracing")
     |> validate_tool_approval_mode(Map.get(tools, :approval_mode))
     |> validate_edit(Map.get(tools, :edit))
+    |> Bash.validate(Map.get(tools, :bash))
     |> validate_lsp(Map.get(tools, :lsp))
     |> validate_positive_integer(
       get_in(tools, [Access.key(:web, %{}), :fetch, :max_body_bytes]),

@@ -1591,6 +1591,49 @@ mode; `require_approval`, parent floors, and explicitly configured MCP approval
 requirements remain mandatory. An `on_tool_call` hook's revised arguments are
 used for approval resolution and the approval preview, not the original input.
 
+## Bash Destructive Git Guard
+
+```toml
+[runtime.tools.bash]
+git_guard = true # default; false disables destructive Git checks
+```
+
+The boolean guard refuses Git commands that discard uncommitted work, delete
+stashes/unmerged branches, or force shared history without a lease. Checks run on
+expanded commands before every bash launch mode; refusals identify the operation,
+risk and disable setting. `reset --soft`/`--merge`/`--keep`, staged-only restore,
+`push --force-with-lease` and ordinary branch checkout remain allowed.
+See [shell tools](tools/shell.md#destructive-git-guard) for blocked forms.
+
+Effective cwd inside a `task` isolation worktree is exempt only with a matching
+task-store workspace record and Git worktree backlinks. Directory names alone do
+not qualify. Git `-C` and the bash `cwd` option are respected; uncertain cwd,
+repository/environment redirection or unavailable ownership records disable the
+exemption. This guard is not a security sandbox for dynamic shell evaluation.
+
+## Bash Dedicated-Tool Routing
+
+Opt in to shell interception in user or project `.lemon/config.toml`:
+
+```toml
+[runtime.tools.bash.interceptor]
+enabled = true # default false
+# Optional replacement for the complete default rule list:
+# rules = [{pattern = '^cat\s+', tool = 'read', message = 'Read files with read.'}]
+```
+
+Rules are `{pattern, tool, message}` tables with valid regular expressions and
+non-empty tool/message strings. Defaults route cat/head/tail/less/more to `read`,
+grep/rg (also ripgrep/ag/ack) to `grep`, find/fd/locate to `find`, ls to `ls`, and
+sed/perl in-place edits to `edit`. A rule only blocks when its target is in the
+session's filtered tool set. Pipeline consumers such as `git log | head` remain
+allowed. Checks scan simple commands, stripping assignments and common execution
+prefixes, including commands inside subshells and substitutions; quoted data does
+not become a command. They are advisory routing checks, not a shell sandbox.
+Checks run after internal URL expansion and before foreground, background or
+named-service launch. Refusals return an error tool result and configuration
+disable guidance. See [shell tools](tools/shell.md).
+
 ## Anchored Edit Visibility
 
 Enable seen-line enforcement in user or project `.lemon/config.toml`:

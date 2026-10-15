@@ -14,6 +14,16 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   across sessions, with reference-counted owners, configurable idle shutdown,
   central document versions, diagnostic fan-out and next-use crash recovery.
 
+- Add default-on `[runtime.tools.bash] git_guard` checks for destructive Git
+  commands before all shell launch modes, with a verified task-isolation worktree
+  exemption and actionable refusal messages.
+
+- Opt in to a dedicated managed Chrome user-data directory and profile with
+  `LEMON_BROWSER_USER_DATA_DIR` / `LEMON_BROWSER_PROFILE_DIRECTORY`, with
+  default-directory and profile-lock safety checks and fail-closed identity binding.
+- Add opt-in `[runtime.tools.bash.interceptor]` dedicated-tool routing with
+  configurable rules, session-tool availability checks and piped-stdin exemptions,
+  applied before foreground, background and named-service launches.
 - Layer language-server defaults with global/project
   `[runtime.tools.lsp.servers.<id>]` overrides, custom servers, disabling,
   initialization options and environment settings across catalog consumers.

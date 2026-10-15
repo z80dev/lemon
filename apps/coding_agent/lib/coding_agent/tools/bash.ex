@@ -26,7 +26,15 @@ defmodule CodingAgent.Tools.Bash do
 
   alias CodingAgent.BashExecutor
   alias CodingAgent.ProcessManager
-  alias CodingAgent.Tools.Bash.{InternalUrlExpansion, Service, StreamingPreview}
+
+  alias CodingAgent.Tools.Bash.{
+    GitGuard,
+    Interceptor,
+    InternalUrlExpansion,
+    Service,
+    StreamingPreview
+  }
+
   alias CodingAgent.Tools.PathHelpers
   alias LemonAgent.AbortSignal
   alias LemonAgent.Security.ToolResultTrust
@@ -184,7 +192,9 @@ defmodule CodingAgent.Tools.Bash do
       true ->
         with {:ok, run_cwd} <- resolve_cwd(Map.get(params, "cwd"), cwd),
              {:ok, env} <- validate_env(Map.get(params, "env")),
-             {:ok, command} <- InternalUrlExpansion.expand(command, Keyword.put(opts, :cwd, cwd)) do
+             {:ok, command} <- InternalUrlExpansion.expand(command, Keyword.put(opts, :cwd, cwd)),
+             :ok <- Interceptor.check(command, opts),
+             :ok <- GitGuard.check(command, run_cwd, Keyword.put(opts, :command_env, env)) do
           cond do
             Map.has_key?(params, "name") ->
               Service.execute(
@@ -213,6 +223,12 @@ defmodule CodingAgent.Tools.Bash do
                 )
               end
           end
+        else
+          {:blocked, message} ->
+            %AgentToolResult{content: [%TextContent{text: message}], is_error: true}
+
+          error ->
+            error
         end
     end
   end

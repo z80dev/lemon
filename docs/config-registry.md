@@ -113,8 +113,10 @@ Call-site migration to `LemonCore.Env.get/2` is out of scope for this pass and i
 | `LEMON_BROWSER_DRIVER_PATH` | string | _(none)_ |  | `lemon_browser` | Path to the browser automation driver binary. |
 | `LEMON_BROWSER_HYBRID_LOCAL_BACKEND` | string | `local` |  | `lemon_browser` | Local/private backend selected by the hybrid browser router. |
 | `LEMON_BROWSER_HYBRID_PUBLIC_BACKEND` | string | _(none)_ |  | `lemon_browser` | Explicit hosted backend selected by the hybrid router for public URLs. |
+| `LEMON_BROWSER_PROFILE_DIRECTORY` | string | _(none)_ |  | `lemon_browser` | Chrome profile directory within the managed user-data directory, such as Default or Profile 1. |
 | `LEMON_BROWSER_RELAY_PORT` | integer | `9224` |  | `lemon_browser` | Loopback port for the Manifest V3 existing-Chrome relay. |
 | `LEMON_BROWSER_RELAY_TOKEN` | string | _(none)_ | yes | `lemon_browser` | Required shared secret for the loopback extension and CDP relay. |
+| `LEMON_BROWSER_USER_DATA_DIR` | string | _(none)_ |  | `lemon_browser` | Dedicated Chrome user-data directory for managed launches; actions use its cookies and logins. |
 
 ### Computer use
 
@@ -261,7 +263,7 @@ Call-site migration to `LemonCore.Env.get/2` is out of scope for this pass and i
 | `LEMON_HONCHO_PIN_USER_PEER` | boolean | `false` |  | `lemon_honcho` | Use the configured human peer for every channel sender. |
 | `LEMON_HONCHO_REASONING_LEVEL` | string | `low` |  | `lemon_honcho` | Reasoning budget Honcho spends on dialectic queries: minimal, low, medium, high, max. |
 | `LEMON_HONCHO_RECALL_MODE` | string | `hybrid` |  | `lemon_honcho` | How memory reaches the model: hybrid (injection + tools), context (injection only; the honcho_* tools are inactive), or tools (tools only; nothing injected). |
-| `LEMON_HONCHO_RUNTIME_PEER_PREFIX` | string | `` |  | `lemon_honcho` | Prefix for channel-qualified sender peer ids; empty keeps the configured peer. |
+| `LEMON_HONCHO_RUNTIME_PEER_PREFIX` | string | `` |  | `lemon_honcho` | Prefix for channel-qualified non-owner sender peer ids; empty uses the runtime id. |
 | `LEMON_HONCHO_SAVE_MESSAGES` | boolean | `true` |  | `lemon_honcho` | Whether turns are written back to Honcho. False makes the integration read-only: no uploads, and the profile write and conclusion create/delete are refused. |
 | `LEMON_HONCHO_SESSION_STRATEGY` | string | `per-directory` |  | `lemon_honcho` | What a Honcho session maps to: per-session, per-directory, per-repo, or global. |
 | `LEMON_HONCHO_USER_PEER_ALIASES` | string | _(none)_ |  | `lemon_honcho` | JSON map of channel-qualified runtime ids to Honcho peer ids. |

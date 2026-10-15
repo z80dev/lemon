@@ -4,6 +4,45 @@ Start a background command with `bash` and `run_in_background: true`. Its return
 `process_id` identifies the job. Process tools are session-scoped: another session
 cannot read, write or stop your processes.
 
+## Dedicated-tool routing
+
+`[runtime.tools.bash.interceptor] enabled = true` opts in to pre-launch routing
+(default false). File reads (`cat`, `head`, `tail`, `less`, `more`) suggest `read`;
+content searches (`grep`, `rg`, `ripgrep`, `ag`, `ack`) suggest `grep`; discovery
+(`find`, `fd`, `locate`) suggests `find`; `ls` suggests `ls`; in-place `sed`/`perl`
+edits suggest `edit`. Only available session tools trigger routing.
+
+The scanner respects quotes/escapes and examines chained commands, subshells and
+command substitutions after internal URL expansion. Stages reading piped stdin
+(for example `git log | head`) are exempt; the first stage is still checked.
+Refusals are error tool results before any process starts, including background
+jobs and named services. Custom `rules` replace the defaults; set `enabled = false`
+to disable. See [configuration](../config.md#bash-dedicated-tool-routing).
+This is a convenience guard, not a shell sandbox: dynamic shell evaluation is
+not resolved.
+
+## Destructive Git guard
+
+`bash` blocks destructive Git commands by default, before launching foreground,
+background or named-service processes. The error explains the operation, risk and
+how to disable it with `[runtime.tools.bash] git_guard = false`.
+
+Blocked forms are `reset --hard`; `checkout -- <paths>`, `checkout .` and forced
+checkout; worktree `restore` (including `--staged --worktree`); forced `clean`;
+`stash drop`/`clear`; forced `push` (including `--force-if-includes`) without
+`--force-with-lease`; `branch -D`; forced `worktree remove`; and
+`switch --discard-changes`/`-f`. Soft/merge/keep reset, staged-only restore,
+lease-protected push and ordinary branch checkout/switch remain allowed.
+Global Git options such as `-C` and `-c` are recognized.
+
+Task-isolation worktrees are exempt only when the task store records the prepared
+workspace and Git's worktree links confirm it. Nested cwd and Git `-C` are checked
+against that workspace; changing to the parent checkout is not exempt. Missing
+records, symlink escapes, Git-directory overrides, environment overrides and
+ambiguous shell cwd changes (including env/sudo wrappers) fail closed (no exemption).
+No Git process is started to discover an exemption. These literal-command checks
+are not a shell sandbox.
+
 ## Named services
 
 Use `name` to start a long-lived service without a command deadline. Names are

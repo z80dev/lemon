@@ -22,6 +22,8 @@ export type LocalDriverConfig = {
   executablePath: string | null;
   openclawProfile: string;
   userDataDir: string;
+  profileDirectory?: string;
+  userProvidedProfile: boolean;
 };
 
 export type LocalDriverResponse = {
@@ -63,6 +65,8 @@ export function resolveLocalDriverConfig(params: {
     executablePath,
     openclawProfile,
     userDataDir,
+    profileDirectory: asString(params.args['profile-directory']) ?? asString(env.LEMON_BROWSER_PROFILE_DIRECTORY) ?? undefined,
+    userProvidedProfile: !!(asString(params.args['user-data-dir']) ?? asString(env.LEMON_BROWSER_USER_DATA_DIR)),
   };
 }
 
@@ -130,12 +134,14 @@ async function main() {
     cdpPort: config.cdpPort,
     cdpEndpoint: config.cdpEndpoint ?? undefined,
     userDataDir: config.userDataDir,
+    profileDirectory: config.profileDirectory,
+    userProvidedProfile: config.userProvidedProfile,
     executablePath: config.executablePath ?? undefined,
     headless: config.headless,
     noSandbox: config.noSandbox,
     attachOnly: config.attachOnly,
   });
-  await chrome.start();
+  let started: Promise<void> | undefined;
 
   process.stdin.setEncoding('utf8');
   let buf = '';
@@ -153,7 +159,11 @@ async function main() {
       const response = queue.then(() =>
         executeLocalDriverRequest({
           line,
-          invoke: (method, methodArgs) => dispatchBrowserRequest(chrome, method, methodArgs),
+          invoke: async (method, methodArgs) => {
+            started ??= chrome.start();
+            await started;
+            return dispatchBrowserRequest(chrome, method, methodArgs);
+          },
         }),
       );
 
