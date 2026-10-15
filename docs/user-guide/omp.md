@@ -53,6 +53,21 @@ before execution, and `yolo` auto-approves ordinary tool calls. Omitting it
 leaves omp's own configured mode unchanged. Explicit omp tool policies still
 apply. Lemon passes an explicit mode as `--approval-mode <mode>`.
 
+## Choosing a model
+
+Ask Lemon to list omp models (`{"action":"models","free_only":true}`), then
+pass a returned `selector` as `model` on `start` or a `start_many` task.
+For simple mechanical work, prefer cheap/free models unless you specified one.
+Operators using Elixir can call `LemonOmp.models(free_only: true, limit: 30)`.
+The catalog supports case-insensitive `query` (selector/name), `provider`,
+`free_only`, and `limit` (default 30, maximum 200), sorted cheapest first.
+It runs `omp models --json` with a 20-second timeout and caches results for ten
+minutes per executable/mtime. Displayed costs are per million tokens.
+
+Prices are omp's catalog data, not a guarantee: OpenRouter `:free` routes can
+be withdrawn upstream; several have returned 404 “unavailable for free”.
+Be ready to select a fallback. Listing models does not make a model call.
+
 ## Parallel workers
 
 Ask Lemon to split independent work across several omp workers. The `omp`
