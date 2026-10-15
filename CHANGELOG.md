@@ -11,6 +11,7 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 ### Lemon Bot
 
 - Instance status exposes release/build metadata, provider credential health and channel errors. Owner-confirmed restart/stop can use a remote controller, with lifecycle completion observed from link events; clients use explicit available action lists.
+- Apple clients show Lemon build, provider credentials and channel errors, with action-aware local launcher and remote lifecycle controls.
 - Lemon Bot web shows build identity, provider credentials and timestamped channel health, with available-action lifecycle controls and clear local-launcher versus remote-controller guidance.
 
 ### Fixed
@@ -18,6 +19,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 - Web chat model-list and compaction failures now show plain-language next steps
   pointing to Diagnostics instead of exposing service error terms.
 
+- Channel status details no longer mistake a running adapter process for an
+  observed connection; Discord READY/resume and startup failures update the
+  redacted health projection.
 - All skill curator entry points now protect cron-referenced skills, including
   disabled jobs, while preserving explicit exemptions. Automatic archival fails
   closed with a reported reason when the automation provider is unavailable.
