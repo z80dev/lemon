@@ -37,6 +37,7 @@ defmodule CodingAgent.Application do
       CodingAgent.Session.UserPrompt,
       CodingAgent.MutationLock,
       CodingAgent.FileReadTracker,
+      CodingAgent.ConflictStore,
       CodingAgent.ExecutionNode.FileService,
       CodingAgent.ExecutionNode.ProcessService,
       CodingAgent.SessionSupervisor,
