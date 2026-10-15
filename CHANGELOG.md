@@ -8,6 +8,12 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
+No unreleased changes yet.
+
+---
+
+## [2026.10.14]
+
 ### Security
 
 - Upgrade locked Mint from 1.10.1 to 1.10.2 to fix HTTP/1 response smuggling
