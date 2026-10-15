@@ -135,9 +135,11 @@ still reject changes since the last read. The session retains up to eight
 snapshots per path, each at most 256 KiB and 10,000 lines; larger files still
 support fresh-tag edits, but not historical recovery.
 
-Tool hosts can set `enforce_seen_lines: true` in the shared coding-tool options
-(alongside `session_id`) to require every replaced/deleted line and each insertion
-anchor to have appeared in a numbered read of that exact snapshot. The default is
+Set `[runtime.tools.edit] enforce_seen_lines = true` in user/project
+`.lemon/config.toml` to require every replaced/deleted line and each insertion
+anchor to have appeared in a numbered read of that exact snapshot. Tool hosts
+can explicitly override this with `:enforce_seen_lines` in shared tool options
+(alongside `session_id`). The default is
 false, matching omp and preserving existing clients that construct anchored edits
 without session-tracked reads. Plain `old_text`/`new_text` edits are unaffected.
 Unknown or evicted visibility records fail closed when enforcement is enabled.

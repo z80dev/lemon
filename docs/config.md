@@ -1566,6 +1566,25 @@ mode; `require_approval`, parent floors, and explicitly configured MCP approval
 requirements remain mandatory. An `on_tool_call` hook's revised arguments are
 used for approval resolution and the approval preview, not the original input.
 
+## Anchored Edit Visibility
+
+Enable seen-line enforcement in user or project `.lemon/config.toml`:
+
+```toml
+[runtime.tools.edit]
+enforce_seen_lines = true # default false
+```
+
+Every replaced/deleted line and insertion anchor must have been displayed by a
+numbered read of that snapshot in the current session. Omitted summary bodies and
+window gaps do not count; refusals provide a range-read hint without writing.
+Historical recovery checks visibility before translating unchanged anchors.
+Plain `old_text`/`new_text` replacements are unaffected. The setting must be a
+boolean; default false preserves clients that construct tags without tracked
+reads. Tool hosts can explicitly override it with the `:enforce_seen_lines` option.
+See [file tools](tools/files-and-search.md#anchored-edit-recovery-and-formatting)
+for visibility and snapshot-retention details.
+
 ## Web Tools (`websearch` / `webfetch`)
 
 Lemon includes web tools under `runtime.tools.web`. For full setup and troubleshooting, see:

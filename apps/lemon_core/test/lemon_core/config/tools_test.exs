@@ -4,7 +4,34 @@ defmodule LemonCore.Config.ToolsTest do
   """
   use LemonCore.Testing.Case, async: false
 
-  alias LemonCore.Config.Tools
+  alias LemonCore.Config.{Tools, Validator}
+
+  test "anchored edit visibility defaults off and validates configured booleans" do
+    assert Tools.defaults()["edit"] == %{"enforce_seen_lines" => false}
+    assert Tools.resolve(%{}).edit == %{enforce_seen_lines: false}
+
+    for enabled <- [true, false] do
+      config = Tools.resolve(%{"tools" => %{"edit" => %{"enforce_seen_lines" => enabled}}})
+      assert config.edit.enforce_seen_lines == enabled
+      assert Validator.validate_tools(config, []) == []
+    end
+
+    for invalid <- ["true", 1, []] do
+      config = Tools.resolve(%{"tools" => %{"edit" => %{"enforce_seen_lines" => invalid}}})
+
+      assert "runtime.tools.edit.enforce_seen_lines: must be a boolean" in Validator.validate_tools(
+               config,
+               []
+             )
+    end
+
+    config = Tools.resolve(%{"tools" => %{"edit" => true}})
+
+    assert "runtime.tools.edit: must be a table" in Validator.validate_tools(
+             config,
+             []
+           )
+  end
 
   test "approval modes resolve and validate without changing legacy defaults" do
     assert Tools.resolve(%{}).approval_mode == nil
@@ -12,13 +39,13 @@ defmodule LemonCore.Config.ToolsTest do
     for mode <- ["ask", "write", "yolo"] do
       config = Tools.resolve(%{"tools" => %{"approval_mode" => mode}})
       assert config.approval_mode == mode
-      assert LemonCore.Config.Validator.validate_tools(config, []) == []
+      assert Validator.validate_tools(config, []) == []
     end
 
     for invalid <- ["always", false, 3, %{}] do
       config = Tools.resolve(%{"tools" => %{"approval_mode" => invalid}})
 
-      assert "tools.approval_mode: must be ask, write, or yolo" in LemonCore.Config.Validator.validate_tools(
+      assert "tools.approval_mode: must be ask, write, or yolo" in Validator.validate_tools(
                config,
                []
              )
@@ -31,7 +58,7 @@ defmodule LemonCore.Config.ToolsTest do
     assert config.web.fetch.max_body_bytes == 123
     invalid = Tools.resolve(%{"tools" => %{"web" => %{"fetch" => %{"max_body_bytes" => 0}}}})
 
-    assert "tools.web.fetch.max_body_bytes: must be a positive integer" in LemonCore.Config.Validator.validate_tools(
+    assert "tools.web.fetch.max_body_bytes: must be a positive integer" in Validator.validate_tools(
              invalid,
              []
            )

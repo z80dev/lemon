@@ -67,6 +67,7 @@ defmodule LemonCore.Config.Tools do
   defstruct [
     :auto_resize_images,
     :approval_mode,
+    :edit,
     :web,
     :wasm,
     :disclosure,
@@ -144,6 +145,7 @@ defmodule LemonCore.Config.Tools do
   @type t :: %__MODULE__{
           auto_resize_images: boolean(),
           approval_mode: String.t() | nil,
+          edit: %{enforce_seen_lines: boolean()},
           web: %{
             search: web_search_config(),
             fetch: web_fetch_config(),
@@ -166,6 +168,7 @@ defmodule LemonCore.Config.Tools do
     %__MODULE__{
       auto_resize_images: resolve_auto_resize(tools_settings),
       approval_mode: Map.get(tools_settings, "approval_mode"),
+      edit: resolve_edit(tools_settings),
       web: resolve_web(tools_settings),
       wasm: resolve_wasm(tools_settings),
       disclosure: resolve_disclosure(tools_settings),
@@ -191,6 +194,16 @@ defmodule LemonCore.Config.Tools do
   end
 
   # Private functions for resolving each config section
+  defp resolve_edit(settings) do
+    case Map.get(settings, "edit", %{}) do
+      section when is_map(section) ->
+        %{enforce_seen_lines: Map.get(section, "enforce_seen_lines", false)}
+
+      invalid ->
+        invalid
+    end
+  end
+
   defp resolve_checkpoint(settings) do
     section = settings["checkpoint"]
 
@@ -468,6 +481,7 @@ defmodule LemonCore.Config.Tools do
     %{
       "auto_resize_images" => true,
       "checkpoint" => %{"enabled" => false},
+      "edit" => %{"enforce_seen_lines" => false},
       "web" => %{
         "search" => %{
           "enabled" => true,

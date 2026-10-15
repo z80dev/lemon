@@ -32,7 +32,7 @@ defmodule LemonCore.Config.Validator do
   implementations produce messages in the same shape.
   """
 
-  alias LemonCore.Config.{Features, LegacyAgentMigration, Memory, Modular, Providers}
+  alias LemonCore.Config.{Automation, Features, LegacyAgentMigration, Memory, Modular, Providers}
   alias LemonCore.Config.Gateway.Channel
 
   @valid_log_levels [:debug, :info, :notice, :warning, :error, :critical, :alert, :emergency]
@@ -690,6 +690,7 @@ defmodule LemonCore.Config.Validator do
     errors
     |> validate_boolean(Map.get(tools, :auto_resize_images), "tools.auto_resize_images")
     |> validate_tool_approval_mode(Map.get(tools, :approval_mode))
+    |> validate_edit(Map.get(tools, :edit))
     |> validate_positive_integer(
       get_in(tools, [Access.key(:web, %{}), :fetch, :max_body_bytes]),
       "tools.web.fetch.max_body_bytes"
@@ -700,6 +701,14 @@ defmodule LemonCore.Config.Validator do
     )
     |> validate_computer_use(Map.get(tools, :computer_use))
   end
+
+  defp validate_edit(errors, nil), do: errors
+
+  defp validate_edit(errors, %{} = edit) do
+    validate_boolean(errors, edit[:enforce_seen_lines], "runtime.tools.edit.enforce_seen_lines")
+  end
+
+  defp validate_edit(errors, _), do: ["runtime.tools.edit: must be a table" | errors]
 
   defp validate_tool_approval_mode(errors, mode) when mode in [nil, "ask", "write", "yolo"],
     do: errors
@@ -768,11 +777,11 @@ defmodule LemonCore.Config.Validator do
   @doc """
   Validates the `[automation]` section.
   """
-  @spec validate_automation(LemonCore.Config.Automation.t() | nil, [String.t()]) :: [String.t()]
+  @spec validate_automation(Automation.t() | nil, [String.t()]) :: [String.t()]
   def validate_automation(nil, errors), do: errors
 
-  def validate_automation(%LemonCore.Config.Automation{} = automation, errors),
-    do: LemonCore.Config.Automation.validate(automation, errors)
+  def validate_automation(%Automation{} = automation, errors),
+    do: Automation.validate(automation, errors)
 
   @doc """
   Validates TUI configuration.
@@ -1109,11 +1118,11 @@ defmodule LemonCore.Config.Validator do
   defp validate_model_input(errors, input, path) when is_list(input) do
     if input != [] and Enum.all?(input, &(&1 in ["text", "image"])),
       do: errors,
-      else: ["#{path}: must list \"text\" and/or \"image\"" | errors]
+      else: [~s(#{path}: must list "text" and/or "image") | errors]
   end
 
   defp validate_model_input(errors, _input, path),
-    do: ["#{path}: must list \"text\" and/or \"image\"" | errors]
+    do: [~s(#{path}: must list "text" and/or "image") | errors]
 
   defp validate_model_cost(errors, nil, _path), do: errors
 
@@ -1179,7 +1188,7 @@ defmodule LemonCore.Config.Validator do
       case Map.get(config, :auth_source, Map.get(config, "auth_source")) do
         nil ->
           [
-            "#{path_prefix}.openai-codex.auth_source: required; set auth_source = \"oauth\" or \"api_key\""
+            ~s(#{path_prefix}.openai-codex.auth_source: required; set auth_source = "oauth" or "api_key")
             | errors
           ]
 
