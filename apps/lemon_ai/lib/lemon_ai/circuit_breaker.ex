@@ -168,6 +168,34 @@ defmodule LemonAi.CircuitBreaker do
   end
 
   @doc """
+  Read an existing breaker without starting it or changing its state.
+
+  Returns `:not_started` when absent and `:unknown` when the process cannot
+  answer within 100 milliseconds. No failure reasons or credentials are exposed.
+  """
+  @spec peek(provider()) :: :not_started | :unknown | {:ok, map()}
+  def peek(provider) do
+    if Process.whereis(LemonAi.CircuitBreakerRegistry) do
+      case GenServer.whereis(via_tuple(provider)) || existing_provider_pid(provider) do
+        nil -> :not_started
+        pid -> GenServer.call(pid, :peek, 100)
+      end
+    else
+      :not_started
+    end
+  catch
+    :exit, _ -> :unknown
+  end
+
+  defp existing_provider_pid(provider) when is_binary(provider) do
+    GenServer.whereis(via_tuple(String.to_existing_atom(provider)))
+  rescue
+    ArgumentError -> nil
+  end
+
+  defp existing_provider_pid(provider), do: GenServer.whereis(via_tuple(to_string(provider)))
+
+  @doc """
   Reset the circuit breaker to closed state. Useful for testing or manual recovery.
   """
   @spec reset(provider()) :: :ok
@@ -240,6 +268,24 @@ defmodule LemonAi.CircuitBreaker do
       failure_threshold: state.failure_threshold,
       recovery_timeout: state.recovery_timeout,
       last_failure_reason: state.last_failure_reason
+    }
+
+    {:reply, {:ok, info}, state}
+  end
+
+  @impl true
+  def handle_call(:peek, _from, state) do
+    remaining =
+      if state.circuit_state == :open do
+        max(0, state.recovery_timeout - (monotonic_time(state) - state.last_failure_time))
+      else
+        0
+      end
+
+    info = %{
+      state: state.circuit_state,
+      failure_count: state.failure_count,
+      time_until_recovery_ms: remaining
     }
 
     {:reply, {:ok, info}, state}

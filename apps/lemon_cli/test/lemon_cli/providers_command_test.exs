@@ -61,6 +61,34 @@ defmodule LemonCli.ProvidersCommandTest do
     refute output =~ "OPENAI_API_KEY"
   end
 
+  test "status renders circuit recovery and failures", ctx do
+    provider = "cli_circuit_#{System.unique_integer([:positive])}"
+
+    start_supervised!(
+      {LemonAi.CircuitBreaker,
+       provider: provider,
+       failure_threshold: 1,
+       recovery_timeout: 23_000,
+       monotonic_time: fn -> 1000 end}
+    )
+
+    LemonAi.CircuitBreaker.record_failure(provider, :timeout)
+
+    output =
+      capture_io(fn ->
+        assert CLI.run([
+                 "providers",
+                 "status",
+                 "--provider",
+                 provider,
+                 "--project-dir",
+                 ctx.project
+               ]) == 0
+      end)
+
+    assert output =~ "circuit open (recovers in 23s, 1 failures)"
+  end
+
   test "fallback edits preserve config and require confirmation to remove", ctx do
     File.write!(ctx.global_config, "# operator comment\n")
 
