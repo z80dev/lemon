@@ -3,8 +3,8 @@ defmodule LemonAgent.AgentTest do
   import ExUnit.CaptureLog
 
   alias LemonAgent.Agent
-  alias LemonAgent.Types.AgentState
   alias LemonAgent.Test.Mocks
+  alias LemonAgent.Types.AgentState
   alias LemonAi.Types.StreamOptions
 
   # ============================================================================

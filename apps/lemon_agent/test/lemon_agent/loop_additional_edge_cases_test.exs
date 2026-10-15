@@ -14,19 +14,19 @@ defmodule LemonAgent.LoopAdditionalEdgeCasesTest do
   """
   use ExUnit.Case, async: true
 
-  alias LemonAgent.Loop
-  alias LemonAgent.EventStream
   alias LemonAgent.AbortSignal
-  alias LemonAgent.Types.{AgentContext, AgentLoopConfig, AgentTool, AgentToolResult}
+  alias LemonAgent.EventStream
+  alias LemonAgent.Loop
   alias LemonAgent.Test.Mocks
+  alias LemonAgent.Types.{AgentContext, AgentLoopConfig, AgentTool, AgentToolResult}
 
   alias LemonAi.Types.{
     AssistantMessage,
-    ThinkingContent,
+    StreamOptions,
     TextContent,
+    ThinkingContent,
     ToolResultMessage,
-    UserMessage,
-    StreamOptions
+    UserMessage
   }
 
   # ============================================================================

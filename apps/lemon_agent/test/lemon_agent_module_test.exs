@@ -11,7 +11,7 @@ defmodule LemonAgent.ModuleTest do
   use ExUnit.Case, async: true
 
   alias LemonAgent.Test.Mocks
-  alias LemonAgent.Types.{AgentContext, AgentTool, AgentToolResult, AgentLoopConfig}
+  alias LemonAgent.Types.{AgentContext, AgentLoopConfig, AgentTool, AgentToolResult}
   alias LemonAi.Types.{ImageContent, TextContent, ToolResultMessage}
 
   # ============================================================================
