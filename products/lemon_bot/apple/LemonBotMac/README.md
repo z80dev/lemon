@@ -22,6 +22,10 @@ Summon opens the selected Bot’s same shared mini-composer, labelled with accou
 
 Device/account settings persist through `LemonBotStore.saveLocalSettings(_:)` as the exact `ClientLocalSettings` fields; this is device-local, not an invented settings HTTP endpoint.
 
+## Desktop pet
+
+An optional original pixel lemon floats above your windows and reacts to live Bot activity, approvals and connection state. It is off by default, passes clicks through transparent pixels, and uses Mac-wide preferences independent of accounts. See the [desktop pet guide](DesktopPet.md) for controls, Codex package imports, privacy and DEBUG previews.
+
 ## Voice
 
 The macOS settings window lists actual Core Audio microphone inputs. Choose a device or **System default** and refresh after plugging in hardware; a disconnected selected device reports an error rather than silently selecting another microphone. This hardware choice is local to this Mac, changes only the explicit capture audio unit, and does not grant microphone access to a remote Bot.
@@ -41,6 +45,8 @@ Mac Debug selects `LemonBotMacDebug.entitlements`, preserving sandbox, outbound 
 Generate the XcodeGen project and build the LemonBotMac scheme with `CODE_SIGNING_ALLOWED=NO` for compilation-only CI. For actual login/Keychain checks, use the ad-hoc-signed Debug build and exact replacement/launch commands in the [Apple build guide](../README.md#generate-build-and-launch). Sign in, quit and relaunch that same app, and confirm the saved account restores; also save/resume/cancel a pending pairing across a restart. macOS uses encrypted, non-iCloud-sync local login-Keychain items, not iOS `ThisDeviceOnly` protection. Do not infer storage success from mocked lifecycle tests. On a signed Mac, also exercise shortcut conflicts/press-release during permission dialogs, denied/no-input Speech, draft preservation across conversations/accounts, actual backend voice preview/transcription/TTS and fallback, active-call mute/end, explicit Services/file import, foreground same-room suppression versus another room, and revoked/foreign-workspace deep links. Implementation workers do not run builds, tests, lint, formatting, XcodeGen, permission prompts or provider probes.
 
 ## Changelog
+
+- Added an opt-in, Codex-compatible desktop pet with live status, pixel-aware click-through, drag positioning, reduced-motion support, original lemon artwork and folder/ZIP/HTTPS pet imports. Pet packages contain images only; nothing in them runs.
 
 - Added native workspace entry, menu-bar integration, opt-in single companion, Carbon global summon/PTT, review-only Speech dictation, backend voice-session loop and voice preview, explicit Services/file sharing, device/account lifecycle and privacy-bounded notifications/deep links.
 - Added CoreImage one-use phone QR and exact-device approval/denial with read-only reconciliation; startup restores the last saved account and foreground reconnect retains offline credentials.
