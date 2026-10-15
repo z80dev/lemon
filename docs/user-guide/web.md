@@ -166,6 +166,10 @@ activation requires retyping the fresh digest.
   Hermes catalog with install.
 - **Memory** (`/memory`): search bounded, redacted summaries with provenance;
   delete requires the exact digest.
+- **Learning** (`/learning`): newest-first learning events grouped by UTC day,
+  filtered by local profile ID and kind. Uses the same bounded/redacted
+  [current-state timeline](skills.md#learning-timeline) as `lemon learning`.
+  Memory/Skills links lead to existing management; this page never mutates data.
 - **MCP** (`/mcp`): configured servers with connection status and tools.
 - **Nodes** (`/nodes`): paired execution nodes and pending pairing requests.
 

@@ -870,15 +870,8 @@ defmodule LemonAgent.ProxyErrorTest do
 
       result = EventStream.result(stream, @receive_timeout)
 
-      case result do
-        {:error, %AssistantMessage{} = message} ->
-          assert message.stop_reason == :error
-          assert message.error_message =~ "connection" or message.error_message =~ "error"
-
-        {:error, :timeout} ->
-          # This is also acceptable - the connection attempt timed out
-          assert true
-      end
+      assert {:error, %AssistantMessage{stop_reason: :error} = message} = result
+      assert message.error_message =~ "connection" or message.error_message =~ "error"
     end
   end
 

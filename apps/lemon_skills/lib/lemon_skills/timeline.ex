@@ -321,6 +321,7 @@ defmodule LemonSkills.Timeline do
 
   defp event(at, kind, action, id, text) do
     with at when is_integer(at) and at > 0 <- timestamp(at),
+         {:ok, _date} <- DateTime.from_unix(at, :millisecond),
          true <- is_binary(id) and byte_size(id) <= 256 and String.valid?(id),
          true <- String.valid?(text || "") do
       {preview, _} = Safety.redact_for_operator(text, max_bytes: 317)

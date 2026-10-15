@@ -76,13 +76,6 @@ defmodule LemonAgent.AgentTest do
   # ============================================================================
 
   describe "start_link/1" do
-    test "starts an agent with default options" do
-      {:ok, agent} = start_agent()
-
-      assert is_pid(agent)
-      assert Process.alive?(agent)
-    end
-
     test "starts an agent with custom system prompt" do
       {:ok, agent} = start_agent(system_prompt: "Custom prompt")
 
@@ -116,13 +109,20 @@ defmodule LemonAgent.AgentTest do
     end
 
     test "starts with custom convert_to_llm function" do
-      convert_fn = fn messages ->
-        Enum.filter(messages, fn m -> Map.get(m, :role) == :user end)
+      parent = self()
+      converted = [Mocks.user_message("Converted prompt")]
+      response = Mocks.assistant_message("Converted response")
+      mock_stream = Mocks.mock_stream_fn_single(response)
+
+      stream_fn = fn model, context, options ->
+        send(parent, {:converted_messages, context.messages})
+        mock_stream.(model, context, options)
       end
 
-      {:ok, agent} = start_agent(convert_to_llm: convert_fn)
-
-      assert is_pid(agent)
+      {:ok, agent} = start_agent(convert_to_llm: fn _ -> converted end, stream_fn: stream_fn)
+      :ok = Agent.prompt(agent, "Original prompt")
+      assert :ok = Agent.wait_for_idle(agent)
+      assert_receive {:converted_messages, ^converted}
     end
 
     test "starts with custom steering_mode" do
@@ -511,23 +511,6 @@ defmodule LemonAgent.AgentTest do
   # ============================================================================
 
   describe "subscribe/2" do
-    test "returns an unsubscribe function" do
-      {:ok, agent} = start_agent()
-
-      unsubscribe = Agent.subscribe(agent, self())
-
-      assert is_function(unsubscribe, 0)
-    end
-
-    test "unsubscribe can be called" do
-      {:ok, agent} = start_agent()
-
-      unsubscribe = Agent.subscribe(agent, self())
-
-      # Should not raise
-      assert :ok = unsubscribe.()
-    end
-
     test "unsubscribe stops event delivery" do
       {:ok, agent} = start_agent()
 
@@ -630,7 +613,7 @@ defmodule LemonAgent.AgentTest do
       Agent.follow_up(agent, Mocks.user_message("Will be cleared"))
       :ok = Agent.clear_follow_up_queue(agent)
 
-      # Queue should be empty
+      assert :sys.get_state(agent).follow_up_queue == []
     end
   end
 
@@ -683,16 +666,22 @@ defmodule LemonAgent.AgentTest do
     end
 
     test "sets is_streaming to true immediately" do
-      {:ok, agent} = start_agent()
+      parent = self()
 
+      stream_fn = fn _model, _context, _options ->
+        send(parent, {:stream_blocked, self()})
+
+        receive do
+          :release_stream -> {:error, :released}
+        end
+      end
+
+      {:ok, agent} = start_agent(stream_fn: stream_fn)
       :ok = Agent.prompt(agent, "Test")
-
-      # State should show streaming (may be brief)
-      state = Agent.get_state(agent)
-
-      # The agent should be streaming or have just finished
-      # This is a race condition test, so we accept either state
-      assert is_boolean(state.is_streaming)
+      assert_receive {:stream_blocked, loop_pid}, 5_000
+      assert Agent.get_state(agent).is_streaming
+      send(loop_pid, :release_stream)
+      assert :ok = Agent.wait_for_idle(agent)
     end
 
     test "string prompt creates a UserMessage struct" do
@@ -988,6 +977,7 @@ defmodule LemonAgent.AgentTest do
 
       # Should not raise
       :ok = Agent.abort(agent)
+      refute Agent.get_state(agent).is_streaming
     end
   end
 

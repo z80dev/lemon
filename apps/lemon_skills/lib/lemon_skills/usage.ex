@@ -76,7 +76,7 @@ defmodule LemonSkills.Usage do
         |> ensure_state()
         |> increment("load_count")
         |> Map.put("last_loaded_at", now)
-        |> maybe_put("last_loaded_by_agent_id", Map.get(metadata, :agent_id))
+        |> Map.put("last_loaded_by_agent_id", Map.get(metadata, :agent_id))
         |> maybe_put("last_view", Map.get(metadata, :view))
         |> maybe_put("last_tool_call_id", Map.get(metadata, :tool_call_id))
         |> maybe_put("last_session_key", Map.get(metadata, :session_key))
@@ -109,7 +109,7 @@ defmodule LemonSkills.Usage do
         |> maybe_put("last_write_result", to_string(Map.get(metadata, :result, :unknown)))
         |> maybe_put_created(action, metadata, now)
         |> maybe_put("last_action", action)
-        |> maybe_put("last_writer_agent_id", Map.get(metadata, :agent_id))
+        |> Map.put("last_writer_agent_id", Map.get(metadata, :agent_id))
         |> maybe_put("last_session_key", Map.get(metadata, :session_key))
         |> maybe_put("last_run_id", Map.get(metadata, :run_id))
         |> maybe_put("last_tool_call_id", Map.get(metadata, :tool_call_id))
@@ -136,7 +136,7 @@ defmodule LemonSkills.Usage do
         |> ensure_state()
         |> Map.put("lifecycle_state", state)
         |> Map.put("state_updated_at", now)
-        |> maybe_put("state_updated_by_agent_id", Keyword.get(opts, :agent_id))
+        |> Map.put("state_updated_by_agent_id", Keyword.get(opts, :agent_id))
       end)
     else
       {:error, "invalid lifecycle state: #{state}"}

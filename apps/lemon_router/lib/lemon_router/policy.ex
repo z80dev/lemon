@@ -185,7 +185,7 @@ defmodule LemonRouter.Policy do
 
   # Session rows contain routing settings beside the nested policy. Legacy
   # top-level policy fields remain an additional floor, never an override.
-  @policy_keys ~w(approvals blocked_tools allowed_commands blocked_commands max_file_size sandbox profile allow deny require_approval no_reply)a
+  @policy_keys ~w(approvals approval_mode blocked_tools allowed_commands blocked_commands max_file_size sandbox profile allow deny require_approval no_reply)a
 
   defp get_session_policy(nil), do: {:ok, nil}
 

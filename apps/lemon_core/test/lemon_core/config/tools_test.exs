@@ -6,6 +6,37 @@ defmodule LemonCore.Config.ToolsTest do
 
   alias LemonCore.Config.Tools
 
+  test "approval modes resolve and validate without changing legacy defaults" do
+    assert Tools.resolve(%{}).approval_mode == nil
+
+    for mode <- ["ask", "write", "yolo"] do
+      config = Tools.resolve(%{"tools" => %{"approval_mode" => mode}})
+      assert config.approval_mode == mode
+      assert LemonCore.Config.Validator.validate_tools(config, []) == []
+    end
+
+    for invalid <- ["always", false, 3, %{}] do
+      config = Tools.resolve(%{"tools" => %{"approval_mode" => invalid}})
+
+      assert "tools.approval_mode: must be ask, write, or yolo" in LemonCore.Config.Validator.validate_tools(
+               config,
+               []
+             )
+    end
+  end
+
+  test "web response cap survives canonical config resolution" do
+    assert Tools.resolve(%{}).web.fetch.max_body_bytes == 5_242_880
+    config = Tools.resolve(%{"tools" => %{"web" => %{"fetch" => %{"max_body_bytes" => 123}}}})
+    assert config.web.fetch.max_body_bytes == 123
+    invalid = Tools.resolve(%{"tools" => %{"web" => %{"fetch" => %{"max_body_bytes" => 0}}}})
+
+    assert "tools.web.fetch.max_body_bytes: must be a positive integer" in LemonCore.Config.Validator.validate_tools(
+             invalid,
+             []
+           )
+  end
+
   setup do
     # Store original env vars to restore later
     original_env = System.get_env()

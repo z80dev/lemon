@@ -8,6 +8,7 @@ defmodule CodingAgent.Eval.Output do
   """
 
   alias CodingAgent.BashExecutor
+  alias LemonAi.Types.{ImageContent, TextContent}
 
   @default_max_bytes 50_000
   @max_lines 2000
@@ -18,6 +19,7 @@ defmodule CodingAgent.Eval.Output do
             newline_terminated: true,
             file: nil,
             path: nil,
+            rich: [],
             max_bytes: @default_max_bytes
 
   @type t :: %__MODULE__{}
@@ -92,6 +94,66 @@ defmodule CodingAgent.Eval.Output do
 
     %{output: output, truncated: truncated, full_output_path: path}
   end
+
+  @doc "Read the bounded rich-display side channel, independently of stdout."
+  def read_displays(path) do
+    case File.open(path, [:read, :binary], &IO.binread(&1, 4 * 1024 * 1024 + 1)) do
+      {:ok, data} ->
+        cond do
+          data == :eof ->
+            {:ok, []}
+
+          is_binary(data) and byte_size(data) <= 4 * 1024 * 1024 ->
+            records = String.split(data, "\n", trim: true)
+
+            if length(records) <= 32 do
+              Enum.reduce_while(records, {:ok, []}, fn record, {:ok, blocks} ->
+                with true <- byte_size(record) <= 1024 * 1024,
+                     {:ok, decoded} <- Jason.decode(record),
+                     {:ok, block} <- display_block(decoded) do
+                  {:cont, {:ok, [block | blocks]}}
+                else
+                  _ -> {:halt, {:error, "Invalid or oversized rich display output"}}
+                end
+              end)
+              |> case do
+                {:ok, blocks} -> {:ok, Enum.reverse(blocks)}
+                error -> error
+              end
+            else
+              {:error, "Rich display exceeds 32 outputs per cell"}
+            end
+
+          true ->
+            {:error, "Rich display exceeds the 4 MiB cell limit"}
+        end
+
+      _ ->
+        {:error, "Could not read the rich display side channel"}
+    end
+  end
+
+  defp display_block(%{"mime" => mime, "data" => data})
+       when mime in ["image/png", "image/jpeg"] and is_binary(data) do
+    with {:ok, bytes} <- Base.decode64(data),
+         true <- image_signature?(mime, bytes) do
+      {:ok, %ImageContent{mime_type: mime, data: data}}
+    else
+      _ -> {:error, :invalid_image}
+    end
+  end
+
+  defp display_block(%{"mime" => "text/markdown", "data" => text}) when is_binary(text),
+    do: {:ok, %TextContent{text: BashExecutor.sanitize_output(text)}}
+
+  defp display_block(%{"mime" => "application/json", "data" => value}),
+    do: {:ok, %TextContent{text: "```json\n" <> Jason.encode!(value, pretty: true) <> "\n```"}}
+
+  defp display_block(_), do: {:error, :unsupported_display}
+
+  defp image_signature?("image/png", <<137, 80, 78, 71, 13, 10, 26, 10, _::binary>>), do: true
+  defp image_signature?("image/jpeg", <<255, 216, 255, _::binary>>), do: true
+  defp image_signature?(_, _), do: false
 
   defp flush_tail(%{utf8_tail: ""} = acc), do: acc
   defp flush_tail(acc), do: store(%{acc | utf8_tail: ""}, "�")

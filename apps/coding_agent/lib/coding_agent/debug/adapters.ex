@@ -57,6 +57,50 @@ defmodule CodingAgent.Debug.Adapters do
       accepts_directory: false,
       install_hint: "install Python 3 and debugpy (`pip install debugpy`)"
     },
+    "js-debug" => %{
+      commands: ["js-debug-adapter"],
+      args: ["{port}", "127.0.0.1"],
+      connect_mode: :socket_server,
+      file_types: ~w(.js .jsx .ts .tsx .mjs .cjs),
+      root_markers: ~w(package.json tsconfig.json jsconfig.json),
+      launch_defaults: %{"type" => "pwa-node", "stopOnEntry" => true},
+      attach_defaults: %{"type" => "pwa-node"},
+      accepts_directory: false,
+      install_hint: "install the vscode-js-debug standalone js-debug-adapter executable"
+    },
+    "codelldb" => %{
+      commands: ["codelldb"],
+      args: ["--port", "{port}"],
+      connect_mode: :socket_server,
+      file_types: ~w(.c .cc .cpp .cxx .rs .zig),
+      root_markers: ~w(Cargo.toml CMakeLists.txt Makefile compile_commands.json build.zig),
+      launch_defaults: %{"stopOnEntry" => true},
+      attach_defaults: %{},
+      accepts_directory: false,
+      install_hint: "install the CodeLLDB standalone adapter"
+    },
+    "netcoredbg" => %{
+      commands: ["netcoredbg"],
+      args: ["--interpreter=vscode"],
+      connect_mode: :stdio,
+      file_types: ~w(.cs .csx .fs .fsx),
+      root_markers: ~w(global.json *.sln *.csproj *.fsproj),
+      launch_defaults: %{"stopAtEntry" => true},
+      attach_defaults: %{},
+      accepts_directory: false,
+      install_hint: "install Samsung netcoredbg"
+    },
+    "rdbg" => %{
+      commands: ["rdbg"],
+      args: ["--open", "--host", "127.0.0.1", "--port", "{port}", "--command", "--"],
+      connect_mode: :socket_server,
+      file_types: ~w(.rb .rake .gemspec),
+      root_markers: ~w(Gemfile Rakefile .ruby-version),
+      launch_defaults: %{"type" => "rdbg"},
+      attach_defaults: %{"type" => "rdbg"},
+      accepts_directory: false,
+      install_hint: "install Ruby's debug gem (`gem install debug`)"
+    },
     "dlv" => %{
       commands: ["dlv"],
       args: ["dap"],
@@ -71,13 +115,13 @@ defmodule CodingAgent.Debug.Adapters do
   }
 
   # Launch-config keys that request an initial stop before user code runs.
-  @entry_stop_keys ["stopOnEntry", "stopAtBeginningOfMainSubprogram"]
+  @entry_stop_keys ["stopOnEntry", "stopAtBeginningOfMainSubprogram", "stopAtEntry"]
 
   @type resolved :: %{
           name: String.t(),
           command: String.t(),
           args: [String.t()],
-          connect_mode: :stdio | :socket,
+          connect_mode: :stdio | :socket | :socket_server | :remote,
           file_types: [String.t()],
           root_markers: [String.t()],
           launch_defaults: map(),
@@ -120,9 +164,9 @@ defmodule CodingAgent.Debug.Adapters do
   def select_attach(adapter_name, port, opts \\ []) do
     configs = configs(opts)
 
-    if is_integer(port) and adapter_name in [nil, "", "debugpy"] do
-      {:ok,
-       Map.merge(configs["debugpy"], %{name: "debugpy", command: nil, connect_mode: :remote})}
+    if is_integer(port) and (adapter_name in [nil, ""] or Map.has_key?(configs, adapter_name)) do
+      name = if adapter_name in [nil, ""], do: "debugpy", else: adapter_name
+      {:ok, Map.merge(configs[name], %{name: name, command: nil, connect_mode: :remote})}
     else
       if is_binary(adapter_name) and adapter_name != "" do
         resolve_named(adapter_name, configs)
@@ -268,9 +312,20 @@ defmodule CodingAgent.Debug.Adapters do
 
   defp find_root(dir, markers) do
     cond do
-      Enum.any?(markers, &File.exists?(Path.join(dir, &1))) -> dir
-      Path.dirname(dir) == dir -> nil
-      true -> find_root(Path.dirname(dir), markers)
+      Enum.any?(markers, fn marker ->
+        target = Path.join(dir, marker)
+
+        if String.contains?(marker, "*"),
+          do: Path.wildcard(target) != [],
+          else: File.exists?(target)
+      end) ->
+        dir
+
+      Path.dirname(dir) == dir ->
+        nil
+
+      true ->
+        find_root(Path.dirname(dir), markers)
     end
   end
 

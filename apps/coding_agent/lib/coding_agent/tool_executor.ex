@@ -59,13 +59,14 @@ defmodule CodingAgent.ToolExecutor do
   @doc """
   Wrap a single tool with approval checks.
 
-  If the tool doesn't require approval according to the policy, it is
-  returned unchanged.
+  Argument-sensitive tools resolve the gate at execution time, including after
+  an outer on_tool_call hook has rewritten arguments.
   """
   @spec wrap_with_approval(AgentTool.t(), ToolPolicy.policy(), map()) :: AgentTool.t()
   def wrap_with_approval(%AgentTool{} = tool, policy, context) do
-    if ToolPolicy.requires_approval?(policy, tool.name) do
-      wrap_tool(tool, context)
+    if tool.name == "lsp" or
+         ToolPolicy.requires_approval?(policy, tool.name, %{}, context[:approval_tier]) do
+      wrap_tool(tool, policy, context)
     else
       tool
     end
@@ -141,16 +142,20 @@ defmodule CodingAgent.ToolExecutor do
 
   # Private helpers
 
-  defp wrap_tool(%AgentTool{} = tool, context) do
+  defp wrap_tool(%AgentTool{} = tool, policy, context) do
     original_execute = tool.execute
 
     wrapped_execute = fn tool_call_id, params, signal, on_update ->
-      execute_with_approval(
-        tool.name,
-        params,
-        fn -> original_execute.(tool_call_id, params, signal, on_update) end,
-        Map.put(context, :tool_call_id, tool_call_id)
-      )
+      if ToolPolicy.requires_approval?(policy, tool.name, params, context[:approval_tier]) do
+        execute_with_approval(
+          tool.name,
+          params,
+          fn -> original_execute.(tool_call_id, params, signal, on_update) end,
+          Map.put(context, :tool_call_id, tool_call_id)
+        )
+      else
+        original_execute.(tool_call_id, params, signal, on_update)
+      end
     end
 
     %{tool | execute: wrapped_execute}

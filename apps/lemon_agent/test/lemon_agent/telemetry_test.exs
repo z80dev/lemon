@@ -105,67 +105,6 @@ defmodule LemonAgent.TelemetryTest do
         assert [:lemon_agent, :loop | _rest] = event_name
       end
     end
-
-    test "all tool_task telemetry events use [:lemon_agent, :tool_task, *] prefix", %{
-      handler_id: handler_id,
-      collector: collector
-    } do
-      tool_events = [
-        [:lemon_agent, :tool_task, :start],
-        [:lemon_agent, :tool_task, :end],
-        [:lemon_agent, :tool_task, :error]
-      ]
-
-      attach_telemetry(tool_events, handler_id, collector)
-
-      echo_tool = Mocks.echo_tool()
-      context = simple_context(tools: [echo_tool])
-
-      tool_call = Mocks.tool_call("echo", %{"text" => "hello"}, id: "call_prefix_test")
-      tool_response = Mocks.assistant_message_with_tool_calls([tool_call])
-      final_response = Mocks.assistant_message("Done")
-
-      config = simple_config(stream_fn: Mocks.mock_stream_fn([tool_response, final_response]))
-
-      _events = Loop.stream([user_message("Test")], context, config) |> Enum.to_list()
-
-      telemetry_events = get_events(collector)
-      detach_telemetry(handler_id)
-
-      # Verify all collected events have the correct prefix
-      for {event_name, _measurements, _metadata} <- telemetry_events do
-        assert [:lemon_agent, :tool_task | _rest] = event_name
-      end
-    end
-
-    test "all tool_result telemetry events use [:lemon_agent, :tool_result, *] prefix", %{
-      handler_id: handler_id,
-      collector: collector
-    } do
-      attach_telemetry([[:lemon_agent, :tool_result, :emit]], handler_id, collector)
-
-      echo_tool = Mocks.echo_tool()
-      context = simple_context(tools: [echo_tool])
-
-      tool_call =
-        Mocks.tool_call("echo", %{"text" => "hello"}, id: "call_tool_result_prefix_test")
-
-      tool_response = Mocks.assistant_message_with_tool_calls([tool_call])
-      final_response = Mocks.assistant_message("Done")
-
-      config = simple_config(stream_fn: Mocks.mock_stream_fn([tool_response, final_response]))
-
-      _events = Loop.stream([user_message("Test")], context, config) |> Enum.to_list()
-
-      telemetry_events = get_events(collector)
-      detach_telemetry(handler_id)
-
-      assert telemetry_events != []
-
-      for {event_name, _measurements, _metadata} <- telemetry_events do
-        assert [:lemon_agent, :tool_result | _rest] = event_name
-      end
-    end
   end
 
   # ============================================================================
@@ -173,6 +112,38 @@ defmodule LemonAgent.TelemetryTest do
   # ============================================================================
 
   describe "tool task telemetry" do
+    test "emits :error telemetry when tool task crashes", %{
+      handler_id: handler_id,
+      collector: collector
+    } do
+      attach_telemetry([[:lemon_agent, :tool_task, :error]], handler_id, collector)
+      on_exit(fn -> detach_telemetry(handler_id) end)
+
+      crash_tool = %AgentTool{
+        name: "crash_tool",
+        description: "Crashes",
+        parameters: %{},
+        label: "Crash",
+        execute: fn _id, _params, _abort, _on_update -> Process.exit(self(), :kill) end
+      }
+
+      context = simple_context(tools: [crash_tool])
+      tool_call = Mocks.tool_call("crash_tool", %{}, id: "call_telem_crash")
+      tool_response = Mocks.assistant_message_with_tool_calls([tool_call])
+      final_response = Mocks.assistant_message("Done")
+      config = simple_config(stream_fn: Mocks.mock_stream_fn([tool_response, final_response]))
+
+      _events = Loop.stream([user_message("Crash")], context, config) |> Enum.to_list()
+
+      assert [{[:lemon_agent, :tool_task, :error], _measurements, metadata}] =
+               Enum.filter(get_events(collector), fn {_, _, metadata} ->
+                 metadata.tool_call_id == "call_telem_crash"
+               end)
+
+      assert metadata.tool_name == "crash_tool"
+      assert metadata.reason != nil
+    end
+
     test "emits :start event when tool execution begins", %{
       handler_id: handler_id,
       collector: collector
@@ -203,7 +174,7 @@ defmodule LemonAgent.TelemetryTest do
 
       {event_name, measurements, metadata} = hd(matching_events)
       assert event_name == [:lemon_agent, :tool_task, :start]
-      assert Map.has_key?(measurements, :system_time)
+      assert is_integer(measurements.system_time)
       assert metadata.tool_name == "echo"
       assert metadata.tool_call_id == "call_start_test"
     end
@@ -238,7 +209,7 @@ defmodule LemonAgent.TelemetryTest do
 
       {event_name, measurements, metadata} = hd(matching_events)
       assert event_name == [:lemon_agent, :tool_task, :end]
-      assert Map.has_key?(measurements, :system_time)
+      assert is_integer(measurements.system_time)
       assert metadata.tool_name == "echo"
       assert metadata.tool_call_id == "call_end_test"
       assert metadata.is_error == false
