@@ -13,6 +13,8 @@ defmodule CodingAgent.Tools.Task.Wait do
   alias CodingAgent.Tools.Task.{Control, Result}
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
 
+  @safety_cap_ms 30 * 60 * 1000
+
   @spec tool(String.t(), keyword()) :: AgentTool.t()
   def tool(_cwd, opts \\ []) do
     %AgentTool{
@@ -44,7 +46,22 @@ defmodule CodingAgent.Tools.Task.Wait do
   def execute(params, signal, opts) do
     with {:ok, task_ids} <- select_task_ids(params, opts),
          :ok <- authorize_task_ids(task_ids, opts) do
-      case Result.do_join(%{"task_ids" => task_ids, "mode" => "wait_any"}, signal) do
+      timeout_ms = min(Keyword.get(opts, :wait_timeout_ms, @safety_cap_ms), @safety_cap_ms)
+
+      interrupted? = fn ->
+        case Keyword.get(opts, :session_pid) do
+          session when is_pid(session) ->
+            CodingAgent.Session.has_steering_messages?(session, signal)
+
+          _ ->
+            false
+        end
+      end
+
+      case Result.do_join(%{"task_ids" => task_ids, "mode" => "wait_any"}, signal,
+             timeout_ms: timeout_ms,
+             interrupted?: interrupted?
+           ) do
         %AgentToolResult{} = result ->
           observe_winner(result)
           result
@@ -101,7 +118,7 @@ defmodule CodingAgent.Tools.Task.Wait do
     Map.has_key?(record, :owner) and Map.get(record, :kind, :task) == :task
   end
 
-  defp observe_winner(%AgentToolResult{details: %{tasks: tasks}}) do
+  defp observe_winner(%AgentToolResult{details: %{status: "completed", tasks: tasks}}) do
     Enum.each(tasks, fn
       %{task_id: task_id, status: status}
       when is_binary(task_id) and status in ["completed", "error", "cancelled"] ->
