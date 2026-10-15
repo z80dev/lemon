@@ -19,8 +19,12 @@ defmodule CodingAgent.Tools.Browser do
 
   @spec tool(String.t(), keyword(), map()) :: AgentTool.t()
   def tool(cwd, opts, spec) do
-    resolution =
-      Keyword.get_lazy(opts, :browser_provider_resolution, &LemonCore.BrowserProvider.resolve/0)
+    {resolution, opts} =
+      Keyword.pop_lazy(opts, :browser_provider_resolution, &LemonCore.BrowserProvider.resolve/0)
+
+    # Each tool closure lands in the per-run tool schema snapshot event, so keep
+    # only what routing and the description read, not per-provider diagnostics.
+    resolution = Map.take(resolution, [:requested, :provider, :reason])
 
     runtime = %{
       browser_request:

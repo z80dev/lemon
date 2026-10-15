@@ -444,12 +444,12 @@ defmodule CodingAgent.ToolRegistry do
   end
 
   defp builtin_tool_tuples(cwd, opts) do
-    opts =
-      Keyword.put_new_lazy(
-        opts,
-        :browser_provider_resolution,
-        &LemonCore.BrowserProvider.resolve/0
-      )
+    # Only browser tools receive the resolution: every tool closure captures its
+    # opts, and the closures travel in each run's tool schema snapshot event.
+    {resolution, opts} =
+      Keyword.pop_lazy(opts, :browser_provider_resolution, &LemonCore.BrowserProvider.resolve/0)
+
+    browser_opts = Keyword.put(opts, :browser_provider_resolution, resolution)
 
     builtin_tools()
     |> Enum.filter(fn
@@ -463,14 +463,17 @@ defmodule CodingAgent.ToolRegistry do
         match?({:ok, _}, Tools.AstGrep.availability(opts))
 
       {name, _module} when name in @browser_tool_names ->
-        opts[:browser_provider_resolution].provider != "lcu"
+        resolution.provider != "lcu"
 
       _tool ->
         true
     end)
     |> Enum.map(fn {name, module} ->
+      tool_opts = if name in @browser_tool_names, do: browser_opts, else: opts
       name = Atom.to_string(name)
-      {name, module.tool(cwd, opts) |> maybe_serialize_mutation(name, cwd, opts), :builtin}
+
+      {name, module.tool(cwd, tool_opts) |> maybe_serialize_mutation(name, cwd, tool_opts),
+       :builtin}
     end)
   end
 

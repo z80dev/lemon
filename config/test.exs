@@ -149,10 +149,14 @@ Enum.each(
 # Computer use drives the real desktop. It stays off in tests regardless of a
 # developer's exported opt-in; suites start their own server against a fake
 # bridge.
-config :lemon_computer_use, enabled: false
+config :lemon_computer_use,
+  enabled: false,
+  # Browser auto-selection probes LCU on every tool registry build; never run a
+  # developer's installed LCU from unit tests.
+  lcu_root: Path.join(System.tmp_dir!(), "lemon_lcu_test_no_such_dir")
 
 Enum.each(
-  ~w(LEMON_COMPUTER_USE_ENABLED LEMON_COMPUTER_USE_DECLINED_ORIGINS
+  ~w(LEMON_COMPUTER_USE_ENABLED LEMON_COMPUTER_USE_LCU_ROOT LEMON_COMPUTER_USE_DECLINED_ORIGINS
      LEMON_BROWSER_PROVIDER LEMON_BROWSER_BACKEND LEMON_BROWSER_CDP_ENDPOINT
      LEMON_BROWSER_ATTACH_ONLY LEMON_BROWSER_RELAY_TOKEN LEMON_BROWSER_RELAY_PORT
      CODEX_CHROME_PREFERENCES_PATH CODEX_CHROMIUM_PREFERENCES_PATH
