@@ -80,8 +80,9 @@ defmodule CodingAgent.ProcessAdmissionTest do
       spawn(fn ->
         # A BEAM file-server FIFO open would block creation of the capture file,
         # which must precede the shell writer. Keep this observer outside it.
-        case System.cmd("cat", [fifo]) do
+        case System.cmd("head", ["-c", "8", fifo]) do
           {"started\n", 0} -> send(test, {:external_started, id})
+          {"canceled", 0} -> :ok
           {"", 0} -> :ok
         end
       end)
@@ -89,13 +90,20 @@ defmodule CodingAgent.ProcessAdmissionTest do
     on_exit(fn ->
       ref = Process.monitor(reader)
 
-      if Process.alive?(reader) do
-        # O_RDWR unblocks a never-started FIFO fixture without inventing a start.
-        {:ok, unblock} = File.open(fifo, [:read, :write])
-        File.close(unblock)
-      end
+      unblock =
+        if Process.alive?(reader) do
+          # Keep the receipt available even if the OS reader has not opened yet.
+          # A fixed-size read exits without requiring EOF from this descriptor.
+          {:ok, file} = File.open(fifo, [:read, :write])
+          :ok = IO.binwrite(file, "canceled")
+          file
+        end
 
-      assert_receive {:DOWN, ^ref, :process, ^reader, _}, 5_000
+      try do
+        assert_receive {:DOWN, ^ref, :process, ^reader, _}, 5_000
+      after
+        if unblock, do: File.close(unblock)
+      end
     end)
 
     opts = [

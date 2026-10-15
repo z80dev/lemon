@@ -4,6 +4,31 @@ Start a background command with `bash` and `run_in_background: true`. Its return
 `process_id` identifies the job. Process tools are session-scoped: another session
 cannot read, write or stop your processes.
 
+## Named services
+
+Use `name` to start a long-lived service without a command deadline. Names are
+scoped to the calling session and project directory; starting the same name stops
+the previous workload before launching its replacement. Services require a session
+id and use ProcessManager's existing ownership, output limits and cleanup.
+
+```json
+{"command":"python3 -m http.server 8765","name":"web","ready":{"port":8765}}
+```
+
+Optional `ready` accepts a `log` regular expression and/or a TCP `port` (1–65535).
+The call returns when **either** supplied condition passes. `host` defaults to
+`127.0.0.1`; `timeout_s` defaults to 30 seconds (positive, maximum 3600).
+An early exit or readiness timeout returns an error with recent output. A timed-out
+service stays managed so it can be inspected or stopped. Without `ready`, startup
+returns once the service is running. `name` cannot be combined with `timeout`,
+`pty: true`, or `run_in_background: true`.
+
+`read proc://` lists services with their names and process ids. Read
+`proc://web` to inspect output without consuming it, write `proc://web` to send
+stdin, and write `proc://web/kill` or call `kill_process` with `process_id: "web"`
+to stop it. Process ids remain valid for all existing process tools.
+
+
 ## Output
 
 Foreground `bash` keeps a leading window of about 20 KiB plus the output tail,

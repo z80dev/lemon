@@ -1050,7 +1050,11 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
       assert content.text =~ "description: check outbox"
       assert content.text =~ "status: error"
       assert content.text =~ "Task failed:"
-      assert content.text =~ "HTTP 400"
+
+      assert content.text =~
+               "The task failed unexpectedly. Run `lemon doctor` before trying again."
+
+      refute content.text =~ "HTTP 400"
       refute content.text =~ "TASK_RESULTS_JSON:"
     end
   end

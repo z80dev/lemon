@@ -99,6 +99,7 @@ defmodule CodingAgent.ProcessStore do
                 :termination_confirmed,
                 :admission_deadline_ms,
                 :inserted_at,
+                :service,
                 :status
               ])
             )
@@ -272,6 +273,11 @@ defmodule CodingAgent.ProcessStore do
   @spec put_output(process_id(), map()) :: :ok
   def put_output(process_id, output) when is_binary(process_id) and is_map(output) do
     update_record(process_id, &Map.put(&1, :output, output))
+  end
+
+  @doc false
+  def put_service(process_id, service) do
+    update_record(process_id, &Map.put(&1, :service, service))
   end
 
   @doc """
