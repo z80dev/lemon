@@ -15,6 +15,7 @@ defmodule LemonControlPlane.Application do
         LemonControlPlane.LogRing,
         # Method registry (ETS-backed for fast lookup)
         LemonControlPlane.Methods.Registry,
+        LemonControlPlane.Lifecycle,
         # Presence tracker for connected clients
         LemonControlPlane.Presence,
         # Connection-owned machine terminals (no global terminal event fanout)

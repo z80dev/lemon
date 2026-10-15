@@ -16,6 +16,8 @@ defmodule LemonAi.Error do
   Retry timing metadata is a hint, not permission to retry.
   """
 
+  require Logger
+
   @category_names %{
     "rate_limit" => :rate_limit,
     "auth" => :auth,
@@ -66,8 +68,13 @@ defmodule LemonAi.Error do
       iex> LemonAi.Error.parse_http_error(500, "Internal Server Error", [])
       %{category: :server, status: 500, message: "Internal server error", ...}
   """
-  @spec parse_http_error(non_neg_integer(), term(), map() | [{term(), term()}]) :: parsed_error()
-  def parse_http_error(status, body, headers \\ []) do
+  @spec parse_http_error(
+          non_neg_integer(),
+          term(),
+          map() | [{term(), term()}],
+          atom() | String.t() | nil
+        ) :: parsed_error()
+  def parse_http_error(status, body, headers \\ [], provider \\ nil) do
     body = normalize_error_body(body)
     provider_message = extract_provider_message(body) |> preserve_error_marker(body)
     category = classify_error(status, body, provider_message)
@@ -82,7 +89,7 @@ defmodule LemonAi.Error do
     %{
       category: category,
       status: status,
-      message: build_error_message(status, provider_message, category),
+      message: build_error_message(status, provider_message, category, provider),
       provider_message: provider_message,
       rate_limit_info: rate_limit_info,
       retryable: retryable_category?(category) and not quota_exhausted_message?(provider_message)
@@ -133,42 +140,62 @@ defmodule LemonAi.Error do
   @doc """
   Generate a user-friendly error message from an error term.
   """
-  @spec format_error(term()) :: String.t()
-  def format_error({:http_error, status, body}) do
-    parsed = parse_http_error(status, body, [])
-    parsed.message
+  @spec format_error(term(), atom() | String.t() | nil) :: String.t()
+  def format_error(error, provider \\ nil)
+
+  def format_error({:http_error, status, body}, provider) do
+    parse_http_error(status, body, [], provider).message
   end
 
-  def format_error(:rate_limited), do: "Request rate limited. Please wait before retrying."
+  def format_error(:rate_limited, _provider),
+    do: "Request rate limited. Please wait before retrying."
 
-  def format_error(:circuit_open),
+  def format_error(:circuit_open, _provider),
     do: "Service temporarily unavailable (circuit breaker open). Please try again later."
 
-  def format_error(:max_concurrency),
+  def format_error(:max_concurrency, _provider),
     do: "Too many concurrent requests. Please try again shortly."
 
-  def format_error(:timeout), do: "Request timed out. Please try again."
-  def format_error(:closed), do: "Connection closed unexpectedly. Please try again."
-  def format_error(:econnrefused), do: "Connection refused. The service may be unavailable."
-  def format_error(:econnreset), do: "Connection reset. Please try again."
-  def format_error(:nxdomain), do: "DNS lookup failed. Please check your network connection."
+  def format_error(reason, provider)
+      when reason in [:timeout, :closed, :econnrefused, :econnreset, :nxdomain] do
+    service =
+      if is_nil(provider), do: "the model provider", else: "provider #{provider_name(provider)}"
 
-  def format_error({:unknown_api, api}) do
-    "Unknown API type: #{inspect(api)}. Please check your model configuration."
+    case reason do
+      :timeout ->
+        "Request to #{service} timed out. Please try again."
+
+      :closed ->
+        "Connection to #{service} closed unexpectedly. Please try again."
+
+      :econnrefused ->
+        "Connection to #{service} was refused. Check base_url and that the server is running, then try again."
+
+      :econnreset ->
+        "Connection to #{service} was reset. Please try again."
+
+      :nxdomain ->
+        "DNS lookup for #{service} failed. Check base_url and your network connection, then try again."
+    end
   end
 
-  def format_error(%{__struct__: module, reason: reason})
+  def format_error({:unknown_api, api}, _provider) when is_atom(api) or is_binary(api) do
+    "Unknown API type \"#{api}\" for this model. Check the model's api setting and run `lemon doctor`."
+  end
+
+  def format_error(%{__struct__: module, reason: reason}, provider)
       when module in [Req.TransportError, Finch.TransportError, Mint.TransportError],
-      do: format_error(reason)
+      do: format_error(reason, provider)
 
-  def format_error(%{message: message}) when is_binary(message), do: message
-  def format_error(error) when is_exception(error), do: Exception.message(error)
-  def format_error(%{"message" => message}) when is_binary(message), do: message
+  def format_error(%{message: message}, _provider) when is_binary(message), do: message
+  def format_error(error, _provider) when is_exception(error), do: Exception.message(error)
+  def format_error(%{"message" => message}, _provider) when is_binary(message), do: message
+  def format_error(error, _provider) when is_binary(error), do: error
 
-  def format_error(error) when is_binary(error), do: error
+  def format_error(error, _provider) do
+    Logger.warning("Unexpected model provider error: #{inspect(error)}")
 
-  def format_error(error) do
-    "An unexpected error occurred: #{inspect(error)}"
+    "An unexpected error occurred with the model provider. Try again; if it keeps happening, run `lemon doctor`."
   end
 
   @doc """
@@ -1110,7 +1137,7 @@ defmodule LemonAi.Error do
 
   defp truncate_message(msg, _), do: msg
 
-  defp build_error_message(status, provider_message, category) do
+  defp build_error_message(status, provider_message, category, provider) do
     base_message =
       case category do
         :rate_limit -> "Rate limit exceeded"
@@ -1122,12 +1149,86 @@ defmodule LemonAi.Error do
         :unknown -> "Request failed"
       end
 
-    if provider_message do
-      "#{base_message} (HTTP #{status}): #{provider_message}"
+    message =
+      if provider_message do
+        "#{base_message} (HTTP #{status}): #{provider_message}"
+      else
+        "#{base_message} (HTTP #{status})"
+      end
+
+    if category == :auth do
+      message <> ". " <> auth_hint(provider)
     else
-      "#{base_message} (HTTP #{status})"
+      message
     end
   end
+
+  defp auth_hint(provider) do
+    name = provider_name(provider)
+
+    env_vars =
+      case name do
+        "anthropic" ->
+          ["ANTHROPIC_API_KEY"]
+
+        "openai" ->
+          ["OPENAI_API_KEY"]
+
+        "google" ->
+          ["GOOGLE_GENERATIVE_AI_API_KEY", "GOOGLE_API_KEY", "GEMINI_API_KEY"]
+
+        "azure_openai_responses" ->
+          ["AZURE_OPENAI_API_KEY"]
+
+        "openai_codex" ->
+          ["OPENAI_CODEX_API_KEY", "CHATGPT_TOKEN"]
+
+        "groq" ->
+          ["GROQ_API_KEY"]
+
+        "mistral" ->
+          ["MISTRAL_API_KEY"]
+
+        "xai" ->
+          ["XAI_API_KEY"]
+
+        "cerebras" ->
+          ["CEREBRAS_API_KEY"]
+
+        "deepseek" ->
+          ["DEEPSEEK_API_KEY"]
+
+        "openrouter" ->
+          ["OPENROUTER_API_KEY"]
+
+        "opencode" ->
+          ["OPENCODE_API_KEY"]
+
+        "zai" ->
+          ["ZAI_API_KEY"]
+
+        "minimax" ->
+          ["MINIMAX_API_KEY"]
+
+        "fireworks" ->
+          ["FIREWORKS_API_KEY"]
+
+        _ ->
+          Enum.find_value(LemonAi.Models.Presets.all(), [], fn preset ->
+            if Atom.to_string(preset.id) == name, do: preset.env_vars
+          end)
+      end
+
+    env_hint = if env_vars == [], do: "", else: "set #{Enum.join(env_vars, " or ")} or "
+    "Check the API key for #{name}; #{env_hint}run `lemon secrets set` to configure it."
+  end
+
+  defp provider_name(nil), do: "the model provider"
+
+  defp provider_name(provider) when is_atom(provider) or is_binary(provider),
+    do: to_string(provider)
+
+  defp provider_name(_provider), do: "the model provider"
 
   defp headers_to_map(headers) when is_map(headers) or is_list(headers) do
     Enum.reduce(headers, %{}, fn {key, value}, acc ->

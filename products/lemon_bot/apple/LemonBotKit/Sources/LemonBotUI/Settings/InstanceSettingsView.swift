@@ -18,6 +18,10 @@ struct InstanceSettingsView: View {
                     backend(status.backend)
                     controller(status.controller)
                     lemon(status)
+                    if let lemon = status.lemon {
+                        providers(lemon.providers, measuredAtMs: status.measuredAtMs)
+                        channels(lemon.channels, measuredAtMs: status.measuredAtMs)
+                    }
                     lifecycle(status.runtime)
                     Section {
                         Text("Measured \(timestamp(status.measuredAtMs).formatted())").font(LBFont.meta).foregroundStyle(LB.muted)
@@ -49,7 +53,7 @@ struct InstanceSettingsView: View {
                 Button(requested == .stop ? "Stop Lemon" : "Restart Lemon", role: .destructive) { confirmation = nil; run(requested, confirmed: true) }
             }
         } message: {
-            Text(confirmation == .stop ? "Bots stop working until Lemon is started again. Lemon Bot stays available so you can start it from here." : "Bots stop working until Lemon has restarted and reconnected. Lemon Bot stays available during the restart.")
+            Text(instanceConfirmation(confirmation, via: store.instanceStatus?.runtime.via))
         }
     }
     private func backend(_ backend: InstanceBackend) -> some View {
@@ -82,7 +86,7 @@ struct InstanceSettingsView: View {
     @ViewBuilder private func lemon(_ status: InstanceStatus) -> some View {
         Section("Lemon") {
             if let lemon = status.lemon {
-                LabeledContent("Version", value: lemon.version ?? "Unavailable")
+                LabeledContent("Build", value: instanceBuildLine(lemon))
                 LabeledContent("Uptime", value: lemon.uptimeMs.map(instanceUptime) ?? "Unavailable")
                 LabeledContent("Memory", value: lemon.memoryMb.map { $0.formatted(.number.precision(.fractionLength(0...1))) + " MB" } ?? "Unavailable")
                 if let runs = lemon.runs {
@@ -92,35 +96,75 @@ struct InstanceSettingsView: View {
                 if let sessions = lemon.activeSessions { LabeledContent("Active sessions", value: "\(sessions)") }
                 if let nodes = lemon.nodes { LabeledContent("Nodes online", value: "\(nodes.online) of \(nodes.total)") }
                 if let connections = lemon.connections { LabeledContent("Connections", value: "\(connections.active) active · \(connections.operators) operator · \(connections.nodes) node") }
-                if let channels = lemon.channels {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("Channels").font(LBFont.metaEmphasis)
-                        if channels.configured.isEmpty { Text("No channels configured").foregroundStyle(LB.muted) }
-                        ScrollView(.horizontal) {
-                            HStack {
-                                ForEach(channels.configured, id: \.self) { name in
-                                    LabelChip(text: "\(name) · \(channels.connected.contains(name) ? "connected" : "configured")", tint: channels.connected.contains(name) ? LB.success : LB.warning)
-                                }
-                                ForEach(channels.connected.filter { !channels.configured.contains($0) }, id: \.self) { name in LabelChip(text: "\(name) · connected", tint: LB.success) }
-                            }
-                        }.scrollIndicators(.never)
-                    }
-                }
                 if let skills = lemon.skills { LabeledContent("Skills", value: "\(skills.enabled) enabled / \(skills.installed) installed") }
             } else { Text(status.lemonUnavailableReason ?? "Lemon details are unavailable while the link is down.").foregroundStyle(LB.muted) }
         }
     }
+    private func providers(_ providers: [InstanceProvider]?, measuredAtMs: TimestampMs) -> some View {
+        Section("Providers") {
+            if let providers {
+                if providers.isEmpty { Text("No providers configured").foregroundStyle(LB.muted) }
+                ForEach(providers, id: \.id) { provider in
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack {
+                            Text(instanceServiceName(provider.id))
+                            if provider.isDefault { LabelChip(text: "Default", tint: LB.accent) }
+                            Spacer()
+                            switch provider.credential {
+                            case .present: LabelChip(text: "Key available", tint: LB.success)
+                            case .missing: LabelChip(text: "Key missing", tint: LB.warning)
+                            case .notRequired: LabelChip(text: "Key not required")
+                            }
+                        }
+                        if provider.credential == .missing {
+                            Text("Add a key with `lemon setup` on the Lemon host.").font(LBFont.meta).foregroundStyle(LB.warning)
+                        }
+                        if let error = provider.lastError { healthError(error, measuredAtMs: measuredAtMs) }
+                    }
+                }
+            } else { Text("Provider details are unavailable.").foregroundStyle(LB.muted) }
+        }
+    }
+    private func channels(_ channels: InstanceChannels?, measuredAtMs: TimestampMs) -> some View {
+        Section("Channels") {
+            if let channels {
+                if channels.details.isEmpty { Text("No channels configured").foregroundStyle(LB.muted) }
+                ForEach(channels.details, id: \.id) { channel in
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack {
+                            Text(instanceServiceName(channel.id))
+                            Spacer()
+                            switch channel.state {
+                            case .connected: LabelChip(text: "Connected", tint: LB.success)
+                            case .configured: LabelChip(text: "Configured")
+                            case .error: LabelChip(text: "Connection error", tint: LB.danger)
+                            }
+                        }
+                        if let error = channel.lastError { healthError(error, measuredAtMs: measuredAtMs) }
+                    }
+                }
+            } else { Text("Channel details are unavailable.").foregroundStyle(LB.muted) }
+        }
+    }
+    private func healthError(_ error: InstanceHealthError, measuredAtMs: TimestampMs) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(error.message).foregroundStyle(LB.warning).textSelection(.enabled)
+            Text(instanceErrorAge(error.atMs, measuredAtMs: measuredAtMs)).foregroundStyle(LB.muted)
+        }.font(LBFont.meta)
+    }
     private func lifecycle(_ runtime: InstanceRuntime) -> some View {
         Section("Lifecycle") {
+            if let copy = instanceLifecycleCopy(runtime.via) { Text(copy).font(LBFont.meta).foregroundStyle(LB.muted) }
+            if let reason = runtime.reason { Text(reason).font(LBFont.meta).foregroundStyle(LB.muted).textSelection(.enabled) }
             if !runtime.actions.isEmpty {
                 if store.canControlInstance {
                     HStack {
-                        if runtime.actions.contains(.start) { Button("Start") { run(.start) }.disabled(store.instanceStatus?.controller.state == .connected) }
+                        if runtime.actions.contains(.start) { Button("Start") { run(.start) } }
                         if runtime.actions.contains(.restart) { Button("Restart") { confirmation = .restart } }
                         if runtime.actions.contains(.stop) { Button("Stop", role: .destructive) { confirmation = .stop } }
                     }.buttonStyle(.pill(.secondary)).disabled(action.busy || operation?.state == .running || pendingRuntime)
                 } else { Text("Only workspace owners can start, stop or restart Lemon.").foregroundStyle(LB.muted) }
-            } else { Text(runtime.reason ?? "This backend cannot control Lemon on this host.").foregroundStyle(LB.muted).textSelection(.enabled) }
+            } else if runtime.reason == nil { Text("Runtime controls are unavailable.").foregroundStyle(LB.muted) }
             if let operation { RuntimeOperationView(operation: operation) }
             if pendingRuntime {
                 Text("A previous command has no confirmed result. Refresh to inspect the current state; the command will not be sent again automatically.").font(LBFont.meta).foregroundStyle(LB.warning)
@@ -158,4 +202,41 @@ func instanceUptime(_ milliseconds: Double) -> String {
     if seconds >= 3600 { return "\(seconds / 3600)h \(seconds % 3600 / 60)m" }
     if seconds >= 60 { return "\(seconds / 60)m \(seconds % 60)s" }
     return "\(seconds)s"
+}
+
+private let instanceRelativeFormatter = RelativeDateTimeFormatter()
+func instanceErrorAge(_ atMs: TimestampMs, measuredAtMs: TimestampMs) -> String {
+    instanceRelativeFormatter.localizedString(for: timestamp(atMs), relativeTo: timestamp(measuredAtMs))
+}
+
+func instanceBuildLine(_ lemon: InstanceLemonStatus) -> String {
+    let parts = [lemon.version, lemon.build?.channel, lemon.build?.commit.map { String($0.prefix(7)) }].compactMap { $0 }
+    return parts.isEmpty ? "Unavailable" : parts.joined(separator: " · ")
+}
+
+func instanceServiceName(_ id: String) -> String {
+    switch id {
+    case "openai": return "OpenAI"
+    case "anthropic": return "Anthropic"
+    case "ollama": return "Ollama"
+    case "xmtp": return "XMTP"
+    default: return id.replacingOccurrences(of: "_", with: " ").localizedCapitalized
+    }
+}
+
+func instanceLifecycleCopy(_ via: InstanceRuntime.Via?) -> String? {
+    switch via {
+    case .launcher: return "Runs the Lemon launcher on the Lemon Bot service host to start, stop or restart Lemon."
+    case .controller: return "Restarts or stops Lemon remotely. Start isn’t possible from here while Lemon is down."
+    case nil: return nil
+    }
+}
+
+func instanceConfirmation(_ action: RuntimeAction?, via: InstanceRuntime.Via?) -> String {
+    if action == .stop {
+        return via == .launcher
+            ? "Bots stop working until Lemon is started again. Lemon Bot stays available so you can start it from here."
+            : "Bots stop working until Lemon is started again on its host. Lemon Bot stays available, but cannot start Lemon remotely."
+    }
+    return "Bots stop working until Lemon has restarted and reconnected. Lemon Bot stays available during the restart."
 }

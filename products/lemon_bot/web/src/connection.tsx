@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { type InstanceStatus, type LemonBotClient, type RealtimeState } from '@lemon-bot/sdk';
 import { connectionIssue } from './connection-state';
-import { InstanceError, RuntimeConfirmation, RuntimeOperationView, useInstance } from './instance';
+import { InstanceError, RuntimeActions, RuntimeConfirmation, RuntimeOperationView, useInstance } from './instance';
 import { formatTime } from './ui';
 import './connection.css';
 
@@ -27,14 +27,12 @@ export function ConnectionPanel({ client, state, browserOnline, controlConnected
     <div aria-live="polite" role="status"><h2>{running && state === 'live' && controlConnected ? 'Lemon command in progress' : issue.title}</h2><p>Trying to reach <strong>{origin}</strong>{import.meta.env.DEV && origin === location.origin ? ' through the development proxy' : ''}</p><p>{running && state === 'live' && controlConnected ? 'The Lemon link is connected. Waiting for the command to finish.' : issue.reason}</p>{remaining > 0 ? <p className="small">Retrying in {remaining}s</p> : busy && <p className="small">Trying to connect…</p>}</div>
     <div className="row"><button className="primary" disabled={busy || !browserOnline} onClick={retry}>Try again</button>
       {controllerDown && canView && <button disabled={instance.busy || !browserOnline} onClick={() => void instance.mutate()}>Reconnect Lemon link</button>}
-      {controllerDown && role === 'owner' && <>{instance.status?.runtime.actions.includes('start') && <button disabled={instance.busy || !browserOnline} onClick={() => void instance.mutate('start')}>Start Lemon</button>}{instance.status?.runtime.actions.includes('restart') && <button disabled={instance.busy || !browserOnline} onClick={() => setRestart(true)}>Restart Lemon</button>}</>}
     </div>
-    {controllerDown && instance.status && !instance.status.runtime.actions.length && <p className="small muted">{instance.status.runtime.reason || 'This service cannot start or restart Lemon on this host.'}</p>}
-    {controllerDown && !!instance.status?.runtime.actions.length && role === 'admin' && <p className="small muted">Only workspace owners can start or restart Lemon.</p>}
+    {controllerDown && instance.status && <RuntimeActions runtime={instance.status.runtime} owner={role === 'owner'} available={browserOnline && state === 'live'} busy={instance.busy} recovery onAction={action => { if (action === 'start') void instance.mutate(action); else if (action === 'restart') setRestart(true); }}/>}
     {canView && <div className="row"><button onClick={viewInstance}>View instance details</button></div>}
     {instance.status?.runtime.operation && <RuntimeOperationView operation={instance.status.runtime.operation}/>}
     <InstanceError error={instance.error} uncertain={instance.uncertain}/>
-    {restart && <RuntimeConfirmation action="restart" busy={instance.busy} available={browserOnline} error={instance.error} uncertain={instance.uncertain} onCancel={() => setRestart(false)} onConfirm={async () => { if (await instance.mutate('restart')) setRestart(false); }}/>}
+    {restart && <RuntimeConfirmation action="restart" via={instance.status?.runtime.via ?? null} busy={instance.busy} available={browserOnline && state === 'live' && !!instance.status?.runtime.actions.includes('restart')} error={instance.error} uncertain={instance.uncertain} onCancel={() => setRestart(false)} onConfirm={async () => { if (await instance.mutate('restart')) setRestart(false); }}/>}
     <details><summary>Details</summary><pre>{detail}</pre><button onClick={() => void navigator.clipboard.writeText(detail).then(() => { setCopied(true); setCopyFailed(false); }).catch(() => setCopyFailed(true))}>Copy details</button>{copied && <p role="status">Details copied.</p>}{copyFailed && <p role="status">Couldn’t copy. Select the details and copy them manually.</p>}</details>
   </section>;
 }

@@ -28,7 +28,6 @@ defmodule Mix.Tasks.Lemon.OnboardTest do
         do: System.put_env("LEMON_SECRETS_MASTER_KEY", original_master_key),
         else: System.delete_env("LEMON_SECRETS_MASTER_KEY")
 
-
       clear_secrets_table()
       File.rm_rf!(tmp_dir)
     end)
@@ -71,7 +70,9 @@ defmodule Mix.Tasks.Lemon.OnboardTest do
 
     Req.Test.stub(__MODULE__, fn conn ->
       {:ok, body, conn} = Plug.Conn.read_body(conn)
-      assert %{"grant_type" => "authorization_code", "code" => "browser-code"} = Jason.decode!(body)
+
+      assert %{"grant_type" => "authorization_code", "code" => "browser-code"} =
+               Jason.decode!(body)
 
       Req.Test.json(conn, %{
         "access_token" => "sk-ant-oat01-browser",
@@ -82,7 +83,7 @@ defmodule Mix.Tasks.Lemon.OnboardTest do
     end)
 
     {:ok, auth_url} = start_supervised({Agent, fn -> nil end})
-    base_io = build_io(self(), [], [], [Providers.fetch!("anthropic"), :oauth, false])
+    base_io = build_io(self(), [], [], [Providers.fetch!("anthropic"), :oauth, false, false])
 
     io =
       base_io
@@ -166,6 +167,7 @@ defmodule Mix.Tasks.Lemon.OnboardTest do
     Onboard.run_with_io(
       [
         "gemini",
+        "--non-interactive",
         "--auth",
         "api_key",
         "--token",
@@ -193,6 +195,7 @@ defmodule Mix.Tasks.Lemon.OnboardTest do
     Onboard.run_with_io(
       [
         "z.ai",
+        "--non-interactive",
         "--token",
         "zai-token-123",
         "--config-path",
@@ -216,6 +219,7 @@ defmodule Mix.Tasks.Lemon.OnboardTest do
     Onboard.run_with_io(
       [
         "minimax",
+        "--non-interactive",
         "--token",
         "minimax-token-123",
         "--config-path",
@@ -241,6 +245,7 @@ defmodule Mix.Tasks.Lemon.OnboardTest do
     Onboard.run_with_io(
       [
         "kimi",
+        "--non-interactive",
         "--token",
         "kimi-token-123",
         "--config-path",

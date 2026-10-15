@@ -94,6 +94,7 @@ defmodule LemonChannels.Adapters.Discord.Transport do
 
   @impl true
   def init(opts) do
+    LemonChannels.Registry.record_status("discord", :configured)
     base = LemonChannels.GatewayConfig.get(:discord, %{}) || %{}
 
     config =
@@ -137,6 +138,7 @@ defmodule LemonChannels.Adapters.Discord.Transport do
            }}
 
         {:error, reason} ->
+          LemonChannels.Registry.record_status("discord", {:error, reason})
           Logger.warning("discord adapter disabled: #{inspect(reason)}")
           :ignore
       end
@@ -799,8 +801,28 @@ defmodule LemonChannels.Adapters.Discord.Transport do
           :ok ->
             acknowledge_interaction(interaction)
 
-          _ ->
-            respond_ephemeral(interaction, "Approval rejected or unavailable; request unchanged")
+          {:error, reason} when reason in [:not_pending, :expired, :already_resolved] ->
+            respond_ephemeral(
+              interaction,
+              "This approval is no longer pending; nothing changed. Submit a new request if approval is still needed."
+            )
+
+          {:error, reason}
+          when reason in [
+                 :rejected,
+                 :invalid_callback,
+                 :wrong_target,
+                 :invalid_target,
+                 :invalid_pending
+               ] ->
+            respond_ephemeral(
+              interaction,
+              "This approval cannot be used here; nothing changed. Open the approval in its original conversation."
+            )
+
+          error ->
+            Logger.warning("Discord approval unavailable: #{inspect(error)}")
+            respond_ephemeral(interaction, "Approval is unavailable right now. Try again.")
         end
 
         state
@@ -1947,7 +1969,13 @@ defmodule LemonChannels.Adapters.Discord.Transport do
           state
 
         {:error, reason} ->
-          send_followup(interaction, "Failed to create thread: #{inspect(reason)}")
+          Logger.warning("Discord thread creation failed: #{inspect(reason)}")
+
+          send_followup(
+            interaction,
+            "Failed to create thread. Check that the bot can create threads in this channel, then try again."
+          )
+
           state
       end
     end
@@ -2772,6 +2800,7 @@ defmodule LemonChannels.Adapters.Discord.Transport do
         nil
 
       {:error, reason} ->
+        LemonChannels.Registry.record_status("discord", {:error, reason})
         Logger.warning("discord consumer failed to start: #{inspect(reason)}")
         nil
     end
@@ -2922,7 +2951,11 @@ defmodule LemonChannels.Adapters.Discord.Transport do
 
     @transport LemonChannels.Adapters.Discord.Transport
 
-    def handle_event({_name, _payload, _ws_state} = event) do
+    def handle_event({name, _payload, _ws_state} = event) do
+      if name in [:READY, :RESUMED] do
+        LemonChannels.Registry.record_status("discord", :connected)
+      end
+
       if pid = Process.whereis(@transport) do
         send(pid, {:discord_event, event})
       end

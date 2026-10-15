@@ -93,7 +93,15 @@ defmodule LemonAi.Providers.OpenAIResponses do
       EventStream.push_async(stream, {:start, output})
 
       # Make streaming request (retries 429/5xx/transport failures in place)
-      case stream_request(url, headers, body, trace_id, RetryHelper.policy(opts), 0) do
+      case stream_request(
+             url,
+             headers,
+             body,
+             trace_id,
+             RetryHelper.policy(opts),
+             0,
+             model.provider
+           ) do
         {:ok, event_stream} ->
           # Process stream events
           case OpenAIResponsesShared.process_stream(
@@ -382,7 +390,7 @@ defmodule LemonAi.Providers.OpenAIResponses do
   # HTTP Streaming
   # ============================================================================
 
-  defp stream_request(url, headers, body, trace_id, policy, attempt) do
+  defp stream_request(url, headers, body, trace_id, policy, attempt, provider) do
     headers_list = Enum.map(headers, fn {k, v} -> {k, v} end)
     retry_allowed? = RetryHelper.retry_allowed?(attempt, policy)
 
@@ -424,12 +432,14 @@ defmodule LemonAi.Providers.OpenAIResponses do
 
         case retry_delay do
           :give_up ->
-            error = LemonAi.Error.parse_http_error(status, response_body, response_headers)
+            error =
+              LemonAi.Error.parse_http_error(status, response_body, response_headers, provider)
+
             {:error, error, RetryHelper.retry_after_ms(response_headers)}
 
           delay_ms ->
             RetryHelper.sleep(delay_ms)
-            stream_request(url, headers, body, trace_id, policy, attempt + 1)
+            stream_request(url, headers, body, trace_id, policy, attempt + 1, provider)
         end
 
       {:error, reason} ->
@@ -443,9 +453,10 @@ defmodule LemonAi.Providers.OpenAIResponses do
 
         if retry_allowed? and RetryHelper.retryable_transport_error?(reason) do
           RetryHelper.sleep(RetryHelper.backoff_delay_ms(attempt, policy))
-          stream_request(url, headers, body, trace_id, policy, attempt + 1)
+          stream_request(url, headers, body, trace_id, policy, attempt + 1, provider)
         else
-          {:error, reason, nil}
+          details = LemonAi.Error.to_error_details(reason)
+          {:error, %{details | message: LemonAi.Error.format_error(reason, provider)}, nil}
         end
     end
   end

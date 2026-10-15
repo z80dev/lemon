@@ -105,7 +105,10 @@ defmodule CodingAgent.Session.TodoJournalTest do
     navigate(session, a)
     TodoStore.clear()
     assert_host_views(session, original)
-    alternate = Enum.map(original, &Map.put(&1, "status", "in_progress"))
+
+    alternate =
+      original |> Enum.map(&Map.put(&1, "status", "in_progress")) |> TodoStore.normalize()
+
     assert host(session, %{"action" => "write", "todos" => alternate})["todos"] == alternate
     c = leaf(session)
     path = Session.get_state(session).session_file

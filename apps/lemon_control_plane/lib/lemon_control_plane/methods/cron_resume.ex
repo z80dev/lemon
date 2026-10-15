@@ -7,6 +7,8 @@ defmodule LemonControlPlane.Methods.CronResume do
 
   @behaviour LemonControlPlane.Method
 
+  require Logger
+
   @impl true
   def name, do: "cron.resume"
 
@@ -31,7 +33,11 @@ defmodule LemonControlPlane.Methods.CronResume do
           {:error, {:not_found, "Cron job not found: #{job_id}", nil}}
 
         {:error, reason} ->
-          {:error, {:internal_error, inspect(reason), nil}}
+          Logger.warning("Could not resume cron job: #{inspect(reason)}")
+
+          {:error,
+           {:internal_error, "Could not resume cron job. Run `lemon doctor` before trying again.",
+            nil}}
       end
     end
   end
