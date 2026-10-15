@@ -3,7 +3,7 @@ defmodule CodingAgent.Tools.ContextCheckpointTest do
 
   alias CodingAgent.Session.ContextCheckpoint
   alias CodingAgent.SessionManager
-  alias CodingAgent.Tools.{Checkpoint, Rewind}
+  alias CodingAgent.Tools.{Checkpoint, FsCheckpoint, Rewind}
   alias LemonAi.Types.{AssistantMessage, TextContent, ToolCall, ToolResultMessage, UserMessage}
 
   @moduletag :tmp_dir
@@ -29,7 +29,7 @@ defmodule CodingAgent.Tools.ContextCheckpointTest do
     assert Enum.sort(names) == ["checkpoint", "rewind"]
     assert Checkpoint.tool(cwd).parameters["required"] == ["goal"]
     assert Rewind.tool(cwd).parameters["required"] == ["report"]
-    assert CodingAgent.Tools.FsCheckpoint.tool(cwd).name == "fs_checkpoint"
+    assert FsCheckpoint.tool(cwd).name == "fs_checkpoint"
   end
 
   test "external and bridged external tool metadata cannot authorize a context rewrite", %{

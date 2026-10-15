@@ -8,10 +8,10 @@ defmodule CodingAgent.Tools.Ask do
   a recommendation for the user.
   """
 
+  alias CodingAgent.Session.UserPrompt
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonAi.Types.TextContent
   alias LemonCore.ACPClientBridge
-  alias CodingAgent.Session.UserPrompt
 
   @max_questions 8
   @max_options 20

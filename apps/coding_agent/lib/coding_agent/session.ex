@@ -56,6 +56,7 @@ defmodule CodingAgent.Session do
   alias CodingAgent.Session.BranchState
   alias CodingAgent.Session.CompactionLifecycle
   alias CodingAgent.Session.CompactionManager
+  alias CodingAgent.Session.ContextCheckpoint
   alias CodingAgent.Session.EventHandler
   alias CodingAgent.Session.Lifecycle
   alias CodingAgent.Session.ModelResolver
@@ -1127,7 +1128,7 @@ defmodule CodingAgent.Session do
   end
 
   def handle_call({:context_checkpoint, operation, id, value}, _from, state) do
-    case CodingAgent.Session.ContextCheckpoint.request(
+    case ContextCheckpoint.request(
            state.session_manager,
            operation,
            id,
@@ -1143,7 +1144,7 @@ defmodule CodingAgent.Session do
 
   def handle_call({:context_checkpoint_projection, rewind_id}, _from, state) do
     projection =
-      CodingAgent.Session.ContextCheckpoint.retained_context(state.session_manager, rewind_id)
+      ContextCheckpoint.retained_context(state.session_manager, rewind_id)
 
     {:reply, projection, state}
   end

@@ -7,9 +7,11 @@ defmodule CodingAgent.Session.ContextCheckpoint do
   timing between the loop and the session's event subscriber.
   """
 
+  alias CodingAgent.Messages.BranchSummaryMessage
+  alias CodingAgent.Session.{BranchState, Persistence, Rewind}
   alias CodingAgent.SessionManager
   alias CodingAgent.SessionManager.SessionEntry
-  alias CodingAgent.Messages.BranchSummaryMessage
+  alias LemonAgent.Agent
 
   @marker "context_checkpoint"
 
@@ -88,12 +90,12 @@ defmodule CodingAgent.Session.ContextCheckpoint do
 
     if rewound do
       :ok =
-        LemonAgent.Agent.replace_messages(
+        Agent.replace_messages(
           state.agent,
-          CodingAgent.Session.Persistence.restore_messages_from_session(manager)
+          Persistence.restore_messages_from_session(manager)
         )
 
-      CodingAgent.Session.BranchState.restore(state)
+      BranchState.restore(state)
     else
       state
     end
@@ -114,7 +116,7 @@ defmodule CodingAgent.Session.ContextCheckpoint do
             retained = siblings(assistant, results, rewind_id)
 
             {:ok, manager} =
-              CodingAgent.Session.Rewind.collapse_context(
+              Rewind.collapse_context(
                 session,
                 data.boundary,
                 data.report,
@@ -184,7 +186,7 @@ defmodule CodingAgent.Session.ContextCheckpoint do
 
     if data && SessionManager.get_entry(session, data.boundary) do
       prefix =
-        CodingAgent.Session.Persistence.restore_messages_from_session(%{
+        Persistence.restore_messages_from_session(%{
           session
           | leaf_id: data.boundary
         })

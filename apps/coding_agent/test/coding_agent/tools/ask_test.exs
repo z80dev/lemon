@@ -1,8 +1,8 @@
 defmodule CodingAgent.Tools.AskTest do
   use ExUnit.Case, async: true
+  alias CodingAgent.Session.UserPrompt
   alias CodingAgent.Tools.Ask
   alias LemonCore.ACPClientBridge
-  alias CodingAgent.Session.UserPrompt
 
   setup do
     run_id = "ask-test-#{System.unique_integer([:positive])}"
