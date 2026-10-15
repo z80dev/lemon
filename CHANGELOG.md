@@ -8,8 +8,18 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
+### Fixed
+
+- Skill usage recording no longer depends on the introspection handler. Pinned
+  skills reject content edits, never-used skills retain a stale-age grace floor,
+  and background curation preserves skills referenced by disabled or active cron jobs.
+
 ### Changed
 
+- Extend the omp operator API with bounded parallel starts, model discovery,
+  child transcripts, live configuration, approval overrides, isolated starts,
+  interrupted-session continuation and redirect delivery; preserve actionable
+  partial-application and outcome-unknown errors.
 - Preserve portable Agent Skills string-valued metadata (including `metadata.lemon`)
   and support 1024-character Unicode descriptions. Add conformance/discovery
   coverage for spec fields and bundled resources; document legacy leniency and
