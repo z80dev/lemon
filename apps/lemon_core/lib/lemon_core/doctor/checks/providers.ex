@@ -5,6 +5,7 @@ defmodule LemonCore.Doctor.Checks.Providers do
   alias LemonCore.Doctor.Check
   alias LemonCore.Doctor.ProviderDiagnostics
   alias LemonCore.Secrets
+  alias LemonCore.Setup.Readiness
 
   @doc """
   Returns a list of Check results covering provider configuration.
@@ -86,7 +87,8 @@ defmodule LemonCore.Doctor.Checks.Providers do
           entry.ambient.provider_env_configured
       end)
 
-    if provider_has_credential?(provider_config) or ambient? do
+    if Readiness.keyless_provider?(provider, provider_config) or
+         provider_has_credential?(provider_config) or ambient? do
       Check.pass(
         "providers.credentials",
         "Default provider credential is usable (offline check)."
@@ -116,8 +118,6 @@ defmodule LemonCore.Doctor.Checks.Providers do
         end
       end)
   end
-
-  defp provider_has_credential?(_provider), do: false
 
   defp check_provider_routing(status) do
     routing = Map.get(status, :routing, %{})

@@ -8,7 +8,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
-No unreleased changes yet.
+### Fixed
+
+- Re-enter setup for incomplete saved configurations on interactive launch, and
+  recognize keyless local providers in readiness, doctor, and setup verification.
 
 ---
 

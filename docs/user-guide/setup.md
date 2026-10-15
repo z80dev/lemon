@@ -60,6 +60,12 @@ ready, it opens this setup flow before starting the daemon. If no controlling
 terminal is available, it does not start an unconfigured daemon; run `lemon
 setup` later from an interactive terminal.
 
+An existing scaffold alone does not count as ready: an interrupted provider
+setup is offered again on the next interactive launch. This check is offline.
+Local presets such as Ollama and custom endpoints with `auth = "none"` do not
+need an API key to pass provider readiness; secure secrets setup remains a
+separate step.
+
 The browser is also fail-closed. `lemon web` may start before setup is complete
 so the page can explain what is missing, but the page disables prompts and
 uploads until config, secure secrets, and a usable provider/model are all

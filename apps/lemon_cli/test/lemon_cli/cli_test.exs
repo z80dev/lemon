@@ -3,9 +3,11 @@ defmodule LemonCli.CLITest do
 
   import ExUnit.CaptureIO
 
+  alias LemonAi.Models.Presets
   alias LemonCli.CLI
   alias LemonCore.Secrets
   alias LemonCore.Secrets.EnvCatalog
+  alias LemonCore.Setup.Readiness
 
   setup do
     tmp_dir =
@@ -71,7 +73,7 @@ defmodule LemonCli.CLITest do
 
     assert output =~ path
     assert output =~ "invalid TOML"
-    refute CLI.setup_required?()
+    assert CLI.setup_required?()
   end
 
   test "removed settings produce doctor failures and actionable show errors", %{tmp_dir: tmp_dir} do
@@ -474,17 +476,40 @@ defmodule LemonCli.CLITest do
       assert CLI.setup_required?()
     end
 
-    test "does not mistake malformed configuration for missing setup" do
+    test "requires setup for malformed configuration" do
       config_path = global_config_path()
       File.mkdir_p!(Path.dirname(config_path))
       File.write!(config_path, "[defaults\nprovider = \"openai\"\n")
+      assert CLI.setup_required?()
+    end
+
+    test "requires setup when provider credentials are missing" do
+      write_openai_config("missing_setup_required_credential")
+
+      assert CLI.setup_required?()
+    end
+
+    test "requires setup for a scaffold without a provider" do
+      config_path = global_config_path()
+      File.mkdir_p!(Path.dirname(config_path))
+      File.write!(config_path, "[defaults]\n")
+
+      assert CLI.setup_required?()
+    end
+
+    test "does not require setup for a keyless local provider" do
+      config_path = global_config_path()
+      File.mkdir_p!(Path.dirname(config_path))
+      File.write!(config_path, "[defaults]\nprovider = \"ollama\"\nmodel = \"qwen3\"\n")
+
       refute CLI.setup_required?()
     end
 
-    test "does not mistake missing provider credentials for missing configuration" do
-      write_openai_config("missing_setup_required_credential")
-
-      refute CLI.setup_required?()
+    test "core keyless presets agree with the model catalog" do
+      for preset <- Presets.all(),
+          name <- [Atom.to_string(preset.id) | preset.aliases] do
+        assert Readiness.keyless_provider?(name, %{}) == preset.keyless
+      end
     end
 
     test "does not require setup with a resolved default provider credential" do
