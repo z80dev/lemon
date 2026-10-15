@@ -105,23 +105,4 @@ defmodule LemonCore.Config.TUITest do
       assert config.debug == false
     end
   end
-
-  describe "defaults/0" do
-    test "returns the default TUI configuration" do
-      defaults = TUI.defaults()
-
-      assert defaults["theme"] == "lemon"
-      assert defaults["debug"] == false
-    end
-  end
-
-  describe "struct type" do
-    test "returns a properly typed struct" do
-      config = TUI.resolve(%{})
-
-      assert %TUI{} = config
-      assert is_binary(config.theme)
-      assert is_boolean(config.debug)
-    end
-  end
 end

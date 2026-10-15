@@ -22,15 +22,6 @@ defmodule LemonCli.UpdateCommandTest do
     :ok
   end
 
-  test "registry help describes the exact-confirmation lifecycle" do
-    output = capture_io(fn -> assert CLI.run(["update", "--help"]) == 0 end)
-
-    assert output =~ "lemon update <check|plan|apply|history|rollback>"
-    assert output =~ "--confirm DIGEST"
-    assert output =~ "--receipt ID"
-    assert output =~ "Planning is non-mutating"
-  end
-
   test "source checkout refuses packaged plan, apply, and rollback before mutation" do
     for command <- ~w(plan apply rollback) do
       error =

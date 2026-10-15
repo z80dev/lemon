@@ -49,13 +49,41 @@ LEMON_HOME_DIR="$HOME/.lemon"
 STATE_DIR="$LEMON_HOME_DIR/run"
 PORT="${LEMON_CONTROL_PLANE_PORT:-4040}"
 WEB_PORT="${LEMON_WEB_PORT:-4080}"
+SIM_PORT="${LEMON_SIM_UI_PORT:-4090}"
+LOG_PATH="${RELEASE_TMP:-$LEMON_ROOT/tmp}/log"
 PIDFILE="${LEMON_RUNTIME_PID_FILE:-$STATE_DIR/lemon-$PORT.pid}"
 ROOTFILE="$STATE_DIR/lemon-$PORT.root"
 export LEMON_CLI_LAUNCHER=release LEMON_LAUNCHER="$SCRIPT_DIR/lemon"
+export LEMON_RUNTIME_PROFILE="${PROFILE#lemon_}"
 
-for port in "$PORT" "$WEB_PORT"; do
-  [[ "$port" =~ ^[0-9]+$ ]] || { error "invalid port value: $port"; exit 1; }
+for port in "$PORT" "$WEB_PORT" "$SIM_PORT"; do
+  if [[ ! "$port" =~ ^[0-9]{1,5}$ ]] || ((10#$port < 1 || 10#$port > 65535)); then
+    error "invalid port value: $port (expected 1-65535)"
+    exit 2
+  fi
 done
+
+require_curl() {
+  command -v curl >/dev/null 2>&1 || {
+    error "curl is required for health checks; install it and retry"
+    exit 1
+  }
+}
+
+control_port_in_use() {
+  (exec 3<>"/dev/tcp/127.0.0.1/$PORT") 2>/dev/null
+}
+
+status_context() {
+  printf '  web: port %s\n  sim: port %s\n  log: %s (foreground output stays in its terminal)\n' "$WEB_PORT" "$SIM_PORT" "$LOG_PATH"
+}
+
+process_identity() {
+  local state
+  state="$(ps -p "$1" -o stat= 2>/dev/null)" || return 1
+  [[ "$state" != *Z* ]] || return 1
+  ps -p "$1" -o lstart= 2>/dev/null
+}
 
 # ── Managed operator credential: lets a later TUI or CLI process authenticate
 # to a daemon without putting the bearer in argv. Explicit tokens stay
@@ -204,10 +232,20 @@ run_cli() {
 # pid + release root (so stop/restart survive a version flip), and waits for
 # the control plane.
 start_daemon() {
-  local pid="" attempt
+  local pid="" born attempt snapshot reuse="${1:-1}"
   if [ "$PROFILE" != "sim_broadcast_platform" ] && control_plane_healthy; then
+    [ "$reuse" = 1 ] || { error "another runtime is serving port $PORT; restart did not replace it; stop it where it runs, then retry"; return 1; }
     info "a healthy Lemon runtime is already running on port $PORT; reusing it"
     return 0
+  fi
+  if [ "$PROFILE" != "sim_broadcast_platform" ] && control_port_in_use; then
+    error "port $PORT is occupied but does not answer Lemon health checks; free it or set LEMON_CONTROL_PLANE_PORT"
+    return 1
+  fi
+  if [ -e "$PIDFILE" ]; then
+    snapshot="$(update_daemon_snapshot)" || return 1
+    [ "$snapshot" = stopped ] || { error "managed runtime is alive but unhealthy; inspect $LOG_PATH, then run 'lemon stop' before retrying"; return 1; }
+    rm -f "$PIDFILE" "$ROOTFILE"
   fi
   ensure_managed_token || exit 1
   release_command "$LEMON_ROOT" daemon
@@ -220,11 +258,22 @@ start_daemon() {
     error "daemon started but its pid could not be determined"
     exit 1
   fi
+  born="$(process_identity "$pid" || true)"
   printf '%s\n' "$pid" > "$PIDFILE"
   printf '%s\n' "$LEMON_ROOT" > "$ROOTFILE"
   info "started (pid $pid)"
   if [ "$PROFILE" != "sim_broadcast_platform" ] && ! wait_until control_plane_healthy 60; then
-    error "runtime did not become healthy on port $PORT within 60s; check 'lemon status' and 'lemon doctor'"
+    error "runtime did not become healthy on port $PORT within 60s; see $LOG_PATH"
+    # This pid came from this launch; bind signals to its observed start time.
+    if [ -n "$born" ] && [ "$(process_identity "$pid" || true)" = "$born" ]; then
+      kill -TERM "$pid" 2>/dev/null || true
+      for ((attempt = 0; attempt < 100; attempt++)); do
+        [ "$(process_identity "$pid" || true)" = "$born" ] || break
+        sleep 0.1
+      done
+      [ "$(process_identity "$pid" || true)" != "$born" ] || kill -KILL "$pid"
+    fi
+    rm -f "$PIDFILE" "$ROOTFILE"
     exit 1
   fi
 }
@@ -257,7 +306,7 @@ update_daemon_snapshot() {
   local pid recorded born actual file
   if [ ! -e "$PIDFILE" ]; then
     if (exec 3<>"/dev/tcp/127.0.0.1/$PORT") 2>/dev/null; then
-      error "port $PORT is occupied without an owned daemon record; refusing to update its runtime"
+      error "port $PORT answers but is not managed by this HOME ($HOME); stop it where it runs"
       return 1
     fi
     printf 'stopped\n'
@@ -276,7 +325,7 @@ update_daemon_snapshot() {
     return 1
   fi
   recorded="$(cd "$recorded" && pwd -P)" || return
-  born="$(ps -p "$pid" -o lstart= 2>/dev/null || true)"
+  born="$(process_identity "$pid" || true)"
   if [ -z "$born" ]; then
     if (exec 3<>"/dev/tcp/127.0.0.1/$PORT") 2>/dev/null; then
       error "stale daemon record with occupied port $PORT; no process was signalled"
@@ -301,7 +350,7 @@ stop_recorded_runtime() {
   local root="$1" token="$2" pid born attempt
   root="$(cd "$root" && pwd -P)" || return
   IFS= read -r pid < "$PIDFILE"
-  born="$(ps -p "$pid" -o lstart= 2>/dev/null || true)"
+  born="$(process_identity "$pid" || true)"
   if [ "$(daemon_identity "$pid" "$born" "$root")" != "$token" ]; then
     error "daemon changed before stop; no process was signalled"
     return 1
@@ -309,10 +358,10 @@ stop_recorded_runtime() {
   release_command "$root" rpc \
     "if System.pid() == \"$pid\", do: System.stop(), else: raise(\"daemon changed before stop\")" || return
   for ((attempt = 0; attempt < 100; attempt++)); do
-    [ "$(ps -p "$pid" -o lstart= 2>/dev/null || true)" = "$born" ] || break
+    [ "$(process_identity "$pid" || true)" = "$born" ] || break
     sleep 0.1
   done
-  if [ "$(ps -p "$pid" -o lstart= 2>/dev/null || true)" = "$born" ]; then
+  if [ "$(process_identity "$pid" || true)" = "$born" ]; then
     error "daemon has not exited after stop; refusing to start another runtime"
     return 1
   fi
@@ -331,7 +380,7 @@ restart_updated_daemon() {
   fi
   stop_recorded_runtime "$previous" "$token" || return
   RELEASE_BIN="$LEMON_ROOT/bin/$PROFILE"
-  start_daemon || return
+  start_daemon 0 || return
   IFS= read -r recorded < "$ROOTFILE" || true
   if [ "$recorded" != "$LEMON_ROOT" ]; then
     error "another runtime won the restart; selected release was not started"
@@ -402,6 +451,9 @@ case "$COMMAND" in
     case "${2:-}" in -h|--help) run_cli help "$COMMAND" ;; esac
     ;;
 esac
+case "$COMMAND" in
+  tui|web|start|daemon|stop|restart|status|__update-daemon|acp|run|-p|--print) require_curl ;;
+esac
 
 setup_environment
 
@@ -470,7 +522,18 @@ case "$COMMAND" in
       info "a healthy Lemon runtime is already running on port $PORT; reusing it"
       exit 0
     fi
+    if [ "$PROFILE" != "sim_broadcast_platform" ] && control_port_in_use; then
+      error "port $PORT is occupied but does not answer Lemon health checks; free it or set LEMON_CONTROL_PLANE_PORT"
+      exit 1
+    fi
+    if [ -e "$PIDFILE" ] || [ -L "$PIDFILE" ]; then
+      snapshot="$(update_daemon_snapshot)" || exit 1
+      [ "$snapshot" = stopped ] || { error "managed runtime is alive but unhealthy; inspect $LOG_PATH, then run 'lemon stop' before retrying"; exit 1; }
+    fi
+    rm -f "$PIDFILE" "$ROOTFILE"
     ensure_managed_token || exit 1
+    printf '%s\n' "$$" > "$PIDFILE"
+    printf '%s\n' "$LEMON_ROOT" > "$ROOTFILE"
     exec "$RELEASE_BIN" start "$@"
     ;;
 
@@ -487,7 +550,7 @@ case "$COMMAND" in
   restart)
     snapshot="$(update_daemon_snapshot)" || exit 1
     if [ "$snapshot" = stopped ]; then
-      start_daemon
+      start_daemon 0
     else
       IFS= read -r recorded < "$ROOTFILE"
       restart_updated_daemon "$snapshot" "$recorded"
@@ -495,16 +558,25 @@ case "$COMMAND" in
     ;;
 
   status)
-    pid="$(cat "$PIDFILE" 2>/dev/null || true)"
-    [ -f "$PIDFILE" ] || { echo "lemon: not running (no pidfile)"; exit 1; }
-    if [ -z "$pid" ] || ! kill -0 "$pid" 2>/dev/null; then
-      echo "lemon: not running (stale pidfile: ${pid:-empty})"
-      exit 1
+    pid=""
+    if [ -f "$PIDFILE" ] && [ ! -L "$PIDFILE" ] && [ -O "$PIDFILE" ]; then
+      IFS= read -r pid < "$PIDFILE" || true
     fi
     if control_plane_healthy; then
-      echo "lemon: running (pid $pid), control-plane healthy on port $PORT"
+      if [[ "$pid" =~ ^[0-9]+$ ]] && process_identity "$pid" >/dev/null; then
+        echo "lemon: running (pid $pid), control-plane healthy on port $PORT; home: $LEMON_HOME_DIR"
+      else
+        echo "lemon: running, healthy on port $PORT (not managed by this HOME); home: $LEMON_HOME_DIR (launcher)"
+      fi
+      status_context
     else
-      echo "lemon: running (pid $pid), control-plane not reachable on port $PORT"
+      if [[ "$pid" =~ ^[0-9]+$ ]] && process_identity "$pid" >/dev/null; then
+        echo "lemon: running (pid $pid), control-plane not reachable on port $PORT; home: $LEMON_HOME_DIR"
+      else
+        echo "lemon: no Lemon runtime answers on port $PORT; home: $LEMON_HOME_DIR"
+      fi
+      status_context
+      exit 1
     fi
     ;;
 

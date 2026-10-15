@@ -122,7 +122,7 @@ defmodule LemonCore.Store.ReadCacheTest do
         end
 
       results = Enum.map(tasks, &Task.await/1)
-      assert Enum.all?(results, fn r -> is_map(r) end)
+      assert results == Enum.map(1..100, &%{value: &1})
     end
   end
 end

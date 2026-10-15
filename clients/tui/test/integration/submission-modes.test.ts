@@ -154,20 +154,19 @@ describe("queue mode", () => {
 		expect(app.focusQueue()).toBe(false);
 	});
 
-	test("prompts the protocol client parked while offline show up in the panel", async () => {
+	test("offline prompts remain drafts rather than entering either queue", async () => {
 		const { app, server } = await boot();
+		const disconnected = app.client.events.waitFor("state");
 		server.stop();
-		await waitFor(() => app.client.state !== "online", { what: "the connection to drop" });
+		expect((await disconnected).state).not.toBe("online");
 
-		// Not awaited on purpose: an offline `chat.send` is parked by the protocol
-		// client and only settles when the socket comes back.
-		void app.submit("typed before the daemon was ready");
-		await waitFor(() => app.client.queued.length === 1, { what: "the parked request" });
-
-		const panel = renderPlain(app.queueContainer.render(80));
-		expect(panel).toContain("(offline) typed before the daemon was ready");
-		// It is the client's to flush, not ours to send: our own queue stays empty.
+		app.editor.setText("typed before the daemon was ready");
+		expect(await app.submit("typed before the daemon was ready")).toBe("rejected");
+		expect(app.editor.getExpandedText()).toBe("typed before the daemon was ready");
+		expect(app.client.queued).toHaveLength(0);
 		expect(app.store.queue.length(SESSION)).toBe(0);
+		expect(renderPlain(app.queueContainer.render(80))).not.toContain("typed before");
+		expect(sends(server)).toHaveLength(0);
 	});
 });
 

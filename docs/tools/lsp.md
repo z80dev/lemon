@@ -24,14 +24,14 @@ one of the server's root markers (for clangd `compile_commands.json` or
 
 | Parameter | Meaning |
 | --- | --- |
-| `action` | Required. `diagnostics`, `definition`, `type_definition`, `implementation`, `references`, `hover`, `symbols`, `rename`, `code_actions`, `status` or `request`. |
+| `action` | Required. `diagnostics`, `definition`, `type_definition`, `implementation`, `references`, `hover`, `symbols`, `rename`, `rename_file`, `reload`, `capabilities`, `code_actions`, `status` or `request`. |
 | `file` | File path relative to the working directory, or absolute. |
 | `line` | 1-based line for position actions. |
 | `symbol` | Text on `line` to position at (first occurrence; `name#N` for the Nth). Bare identifiers match whole words; case-insensitive matching is the fallback. |
 | `column` | 1-based column (code points) when `symbol` is not given. Without either, the first non-blank character is used. |
 | `query` | Workspace symbol search text, the code action to apply (index or title substring), or the method for `request`. |
-| `new_name` | New name for `rename`. |
-| `apply` | `true` writes `rename`/`code_actions` edits. Default `false` (preview/list). |
+| `new_name` | New symbol name for `rename`, or destination path for `rename_file`. |
+| `apply` | `true` writes `rename`/`rename_file`/`code_actions` edits. Default `false` (preview/list). |
 | `timeout` | Seconds, default 20, clamped to 5..300. |
 | `payload` | JSON params for `request`; otherwise params are built from `file`/`line`/`symbol`. |
 
@@ -57,6 +57,17 @@ Behavior:
 - `diagnostics` uses pull diagnostics when the server advertises them, else
   waits (within `timeout`) for the server to publish diagnostics for the
   document version it was just sent.
+- `diagnostics` with `file: "*"` snapshots published diagnostics across running
+  clients in this session/workspace, without starting servers or waiting for fresh
+  analysis. It examines at most 32 clients and 200 files per client and returns
+  at most 100 diagnostics total.
+- `rename_file` takes `file` and `new_name` (a destination path). It previews by
+  default; `apply: true` applies `workspace/willRenameFiles` edits before moving
+  the file through the same locked/checkpointed WorkspaceEdit path, then sends
+  `workspace/didRenameFiles` when supported. Existing destinations are not overwritten.
+- `reload` restarts the server for `file`, or all running servers in this session
+  when `file` is omitted or `"*"`. `capabilities` with `file` reports the selected
+  server's advertised capabilities.
 - `symbols` with `file` lists document symbols; with only `query` it searches
   the workspace through the session's running servers (or servers whose root
   marker is in the working directory).

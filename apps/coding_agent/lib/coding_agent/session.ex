@@ -538,6 +538,12 @@ defmodule CodingAgent.Session do
     GenServer.call(session, :get_state)
   end
 
+  @doc "Return whether this invocation has pending steering, without consuming it."
+  @spec has_steering_messages?(GenServer.server(), reference() | nil) :: boolean()
+  def has_steering_messages?(session, signal) do
+    GenServer.call(session, {:has_steering_messages, signal}, 2_000)
+  end
+
   @doc """
   Get session statistics including message count, token usage, etc.
   """
@@ -976,6 +982,10 @@ defmodule CodingAgent.Session do
 
   def handle_call(:get_state, _from, state) do
     {:reply, state, state}
+  end
+
+  def handle_call({:has_steering_messages, signal}, _from, state) do
+    {:reply, LemonAgent.Agent.has_steering_messages?(state.agent, signal), state}
   end
 
   def handle_call(:get_stats, _from, state) do

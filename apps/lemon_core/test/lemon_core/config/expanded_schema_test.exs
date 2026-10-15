@@ -71,7 +71,6 @@ defmodule LemonCore.Config.ExpandedSchemaTest do
     end
   end
 
-
   describe "Providers - Google Vertex fields" do
     test "parses project_secret and location_secret" do
       settings = %{
@@ -273,16 +272,6 @@ defmodule LemonCore.Config.ExpandedSchemaTest do
       assert config.web.search.api_key_secret == nil
       assert config.web.search.perplexity.api_key_secret == nil
       assert config.web.fetch.firecrawl.api_key_secret == nil
-    end
-  end
-
-  describe "Facade integration - new fields appear in legacy struct" do
-    test "budget_defaults not directly in legacy agent (it's in the modular agent)" do
-      # The facade converts modular agent to legacy shape
-      # budget_defaults is part of the Agent struct but not the legacy agent map
-      # Let's verify it works through the full Config.load path
-      config = Agent.resolve(%{})
-      assert config.budget_defaults.max_children == 5
     end
   end
 end

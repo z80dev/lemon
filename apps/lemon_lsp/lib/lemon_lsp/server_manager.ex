@@ -209,6 +209,11 @@ defmodule LemonLsp.ServerManager do
     GenServer.call(@name, {:document_diagnostics, session_id, uri}, 5_000)
   end
 
+  @doc "Return a bounded snapshot of published diagnostics, including unopened files."
+  def workspace_diagnostics(session_id) when is_binary(session_id) do
+    GenServer.call(@name, {:workspace_diagnostics, session_id}, 5_000)
+  end
+
   @spec initialize_session(String.t(), map() | list() | nil, keyword()) :: request_result()
   def initialize_session(session_id, params \\ %{}, opts \\ []) when is_binary(session_id) do
     with {:ok, response} <- request_session(session_id, "initialize", params, opts),
@@ -500,6 +505,23 @@ defmodule LemonLsp.ServerManager do
       {:reply, {:ok, %{seq: Map.get(session, :diagnostic_seq, 0), entry: entry}}, state}
     else
       {:error, reason} -> {:reply, {:error, reason}, state}
+    end
+  end
+
+  def handle_call({:workspace_diagnostics, session_id}, _from, state) do
+    case fetch_session(state, session_id) do
+      {:ok, session} ->
+        entries =
+          session
+          |> Map.get(:diagnostics_by_uri, %{})
+          |> Enum.sort_by(&elem(&1, 0))
+          |> Enum.take(200)
+          |> Enum.map(fn {uri, entry} -> {uri, Enum.take(entry.diagnostics, 100)} end)
+
+        {:reply, {:ok, entries}, state}
+
+      {:error, reason} ->
+        {:reply, {:error, reason}, state}
     end
   end
 

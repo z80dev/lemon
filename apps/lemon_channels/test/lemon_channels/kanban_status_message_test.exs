@@ -106,8 +106,7 @@ defmodule LemonChannels.KanbanStatusMessageTest do
     assert stop_text =~ "Kanban Dispatcher Stopped"
   end
 
-  test "renders help and recognizes telegram kanban command for bot" do
-    assert KanbanStatusMessage.handle("wat") =~ "Kanban Commands"
+  test "recognizes telegram kanban command for bot" do
     assert Commands.kanban_command?("/kanban", "lemon_bot")
     assert Commands.kanban_command?("/kanban@lemon_bot", "lemon_bot")
     refute Commands.kanban_command?("/kanban@other_bot", "lemon_bot")

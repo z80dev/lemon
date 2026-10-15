@@ -4,11 +4,6 @@ defmodule LemonCli.Setup.ScaffoldTest do
   alias LemonCli.Setup.Scaffold
 
   describe "generate/1" do
-    test "returns a string" do
-      result = Scaffold.generate()
-      assert is_binary(result)
-    end
-
     test "names no provider, default or credential reference" do
       result = Scaffold.generate()
       {:ok, settings} = Toml.decode(result)
@@ -76,10 +71,6 @@ defmodule LemonCli.Setup.ScaffoldTest do
   end
 
   describe "global_config_exists?/0 and project_config_exists?/1" do
-    test "returns a boolean" do
-      assert is_boolean(Scaffold.global_config_exists?())
-    end
-
     test "project_config_exists? returns false for nonexistent dir" do
       dir = System.tmp_dir!() |> Path.join("no_such_project_#{:rand.uniform(999_999)}")
       refute Scaffold.project_config_exists?(dir)

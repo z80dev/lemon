@@ -49,7 +49,13 @@ import {
 import { editInExternalEditor } from "./external-editor.ts";
 import { getGitModeline } from "./git-utils.ts";
 import { ControlPlaneClient, type RequestOptions } from "./protocol/client.ts";
-import { ControlPlaneError, MethodUnavailableError } from "./protocol/errors.ts";
+import {
+	AuthenticationError,
+	ControlPlaneError,
+	describeError,
+	MethodUnavailableError,
+	offlineMessage,
+} from "./protocol/errors.ts";
 import { ControlPlaneMethods, METHOD } from "./protocol/methods.ts";
 import {
 	type AgentCompletedEvent,
@@ -229,7 +235,18 @@ export class AppShell {
 		this.#editor = new CustomEditor({
 			theme: getEditorTheme(),
 			onSubmit: async (text) => {
-				await this.submit(text);
+				const sessionKey = this.store.focusedKey;
+				const disposition = await this.submit(text);
+				// pi-tui clears plain text before calling us. Restore a refused
+				// prompt only if it cannot overwrite a newer draft or another chat.
+				if (
+					disposition === "rejected" &&
+					this.store.focusedKey === sessionKey &&
+					this.#editor.getExpandedText() === ""
+				) {
+					this.#editor.setText(text);
+					this.tui.requestRender();
+				}
 			},
 			canSubmit: () =>
 				this.#sessionReady &&
@@ -490,6 +507,9 @@ export class AppShell {
 		this.#disposers.push(
 			this.tui.addInputListener((data) => this.#terminalIntegration.handleInput(data)),
 			this.client.events.on("state", () => this.#renderConnection()),
+			this.client.events.on("client-error", ({ error, context }) => {
+				if (context === "handshake") this.events.notice(describeError(error), "error");
+			}),
 			this.client.events.on("hello-ok", () => {
 				// Every handshake, resumed or not: plan mode may have moved while away.
 				// A pending startup request refreshes after it has picked the session.
@@ -620,8 +640,9 @@ export class AppShell {
 			// advertising a sendable composer to terminal automation.
 			await this.#initialSessionLoad;
 		} catch (error) {
-			// The socket keeps retrying in the background; just say so.
-			this.events.notice(`connection failed: ${describeError(error)}`, "error");
+			// Authentication rejection is already surfaced by the client-error listener.
+			if (!(error instanceof AuthenticationError))
+				this.events.notice(describeError(error), "error");
 		}
 	}
 
@@ -694,11 +715,22 @@ export class AppShell {
 	#renderConnection(): void {
 		const theme = getTheme();
 		const state = this.client.state;
-		const slot = state === "online" ? "success" : state === "offline" ? "error" : "warning";
+		const slot =
+			state === "online"
+				? "success"
+				: state === "offline" || state === "auth-rejected"
+					? "error"
+					: "warning";
+		const label =
+			state === "auth-rejected"
+				? "auth rejected"
+				: state === "connecting" || state === "reconnecting"
+					? `${state}…`
+					: state;
 		const queued = this.client.queued.length;
 		const suffix = queued > 0 ? theme.fg("dim", `  (${queued} queued)`) : "";
 		this.#connectionLine.setText(
-			`${theme.fg("dim", this.client.url)}  ${theme.fg(slot, state)}${suffix}`,
+			`${theme.fg("dim", this.client.url)}  ${theme.fg(slot, label)}${suffix}`,
 		);
 		this.tui.requestRender();
 	}
@@ -1100,6 +1132,16 @@ export class AppShell {
 			);
 			return "rejected";
 		}
+		// Never transfer images to an unacknowledged offline RPC: the editable
+		// draft remains their owner until a concrete run or local queue accepts it.
+		if (!this.client.online) {
+			this.events.notice(
+				`${this.client.state === "auth-rejected" ? describeError(new AuthenticationError()) : offlineMessage(this.client.url)} Image draft kept; nothing sent.`,
+				"warning",
+				session,
+			);
+			return "rejected";
+		}
 		const mode = allowQueue ? this.#takeModeOverride() : "queue";
 		if (session.busy && mode === "queue") {
 			if (!allowQueue) return "rejected";
@@ -1110,16 +1152,6 @@ export class AppShell {
 				session,
 			);
 			return "queued";
-		}
-		// Never transfer images to an unacknowledged offline RPC: the editable
-		// draft remains their owner until a concrete run or local queue accepts it.
-		if (!this.client.online) {
-			this.events.notice(
-				"offline — image draft kept; reconnect before sending",
-				"warning",
-				session,
-			);
-			return "rejected";
 		}
 		const priorRun = session.activeRunId;
 		const queueMode = session.busy && mode !== "queue" ? mode : undefined;
@@ -1196,9 +1228,9 @@ export class AppShell {
 			this.events.notice(describeError(error), "error", session);
 			return "rejected";
 		}
-		if (!this.client.online && options.queueIfOffline === false) {
+		if (!this.client.online) {
 			this.events.notice(
-				"offline — prompt draft kept; reconnect before sending",
+				`${this.client.state === "auth-rejected" ? describeError(new AuthenticationError()) : offlineMessage(this.client.url)} Prompt draft kept; nothing queued or sent.`,
 				"warning",
 				session,
 			);
@@ -1705,11 +1737,6 @@ export function contextTokensFrom(usage: Record<string, unknown> | undefined): n
 /** The context window of the session's model, from the `models.list` cache. */
 export function contextWindowFor(store: AppStore, model: string | undefined): number | undefined {
 	return contextWindowFromCache(store.models, model);
-}
-
-function describeError(error: unknown): string {
-	if (error instanceof Error) return error.message;
-	return String(error);
 }
 
 /** Extract only the stable profile main-session shape; no arbitrary keys qualify. */
