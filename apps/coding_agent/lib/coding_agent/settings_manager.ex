@@ -79,10 +79,7 @@ defmodule CodingAgent.SettingsManager do
           extension_auto_load_default_paths: boolean(),
 
           # Secret obfuscation ([runtime.secret_obfuscation])
-          secret_obfuscation_enabled: boolean(),
-
-          # Display settings
-          theme: String.t()
+          secret_obfuscation_enabled: boolean()
         }
 
   defstruct [
@@ -125,9 +122,6 @@ defmodule CodingAgent.SettingsManager do
 
     # Secret obfuscation: opt-in
     secret_obfuscation_enabled: false,
-
-    # Display settings
-    theme: "default",
 
     # Native task subagent settings
     task: %{
@@ -200,7 +194,6 @@ defmodule CodingAgent.SettingsManager do
       extension_auto_load_default_paths: Map.get(extensions, :auto_load_default_paths, false),
       secret_obfuscation_enabled:
         Map.get(Map.get(agent, :secret_obfuscation) || %{}, :enabled, false) == true,
-      theme: Map.get(agent, :theme, "default"),
       task: task_settings(Map.get(agent, :task))
     }
   end
