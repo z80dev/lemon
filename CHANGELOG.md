@@ -19,6 +19,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Added
 
+- Show per-run tokens, recorded cost, model and provider in recent run history
+  and the TUI `/runs` output when usage records are available.
+
 - Dollar-capped sessions warn when the active model has no known catalog pricing.
 
 - Forward Telegram photos and image documents and Discord CDN image attachments
@@ -84,6 +87,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   no approval by default and makes no network requests.
 
 ### Fixed
+
+- Classify aborted and crashed run history truthfully, include bounded redacted
+  error labels, filter before limiting, and report unavailable history instead of
+  an empty list when storage fails.
 
 - Cron restarts catch up one missed slot within a bounded grace window and retire
   expired one-shot reminders instead of moving them to next year.

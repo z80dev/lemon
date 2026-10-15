@@ -168,6 +168,10 @@ a model when none is selected.
   inspect, resume, title, pin, archive, preview, privately export, prune, and
   delete through the authenticated server-owned lifecycle. Prune and delete
   are preview-confirm workflows, and offline mutations never claim success.
+- `/runs [count]` lists active and recent runs, preserving terminal states such as
+  `crashed` and showing reported errors, token counts, USD cost and model/provider
+  when available. Unknown pricing is not shown as free; absent history details
+  from older daemons are omitted.
 - `/tree` inspects active and preserved branches and is the entry point for
   branching: selecting an entry opens its actions — inspect it, switch the
   active branch to it (optionally summarizing the abandoned branch), set or clear
