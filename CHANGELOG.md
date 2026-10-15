@@ -31,6 +31,11 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   notifications, reconnect dropped clients with bounded backoff, and suspend
   crash storms with redacted unavailable status.
 
+- Native tool policies support read/write/exec approval tiers and configurable
+  ask/write/yolo defaults, preserving per-tool overrides and parent floors.
+  Approval is resolved against hook-rewritten arguments. Canonical web config
+  now retains the guarded-fetch response body cap.
+
 - Lemon Web omp adds parallel worker starts and a live usage grid, searchable
   free-marked model selection, live model/thinking configuration with explicit
   partial-failure receipts, and bounded subagent transcript drill-down.
