@@ -104,6 +104,15 @@ import type {
 } from "./types.ts";
 import type { UserPromptResolveParams } from "./user-prompt.ts";
 
+export interface SetupStatusResult {
+	ready: boolean;
+	pendingSteps: Array<{
+		id: "config" | "secrets" | "provider";
+		label: string;
+		command: string;
+	}>;
+}
+
 export const METHOD = {
 	chatSend: "chat.send",
 	chatAbort: "chat.abort",
@@ -154,6 +163,7 @@ export const METHOD = {
 	approvalsGet: "exec.approvals.get",
 	health: "health",
 	status: "status",
+	setupStatus: "setup.status",
 	usageStatus: "usage.status",
 	usageCost: "usage.cost",
 	runsActiveList: "runs.active.list",
@@ -627,6 +637,10 @@ export class ControlPlaneMethods {
 		options?: RequestOptions,
 	): Promise<Record<string, unknown>> {
 		return this.#call<Record<string, unknown>>(METHOD.status, params, options);
+	}
+
+	setupStatus(options?: RequestOptions): Promise<SetupStatusResult> {
+		return this.#call<SetupStatusResult>(METHOD.setupStatus, {}, options);
 	}
 
 	usageStatus(

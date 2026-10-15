@@ -160,7 +160,7 @@ defmodule LemonComputerUse.ServerTest do
     js = Js.tool("/tmp", opts(approval_context: %{approval_request_fun: never}))
 
     assert %AgentToolResult{content: [%TextContent{text: "approval:decline"}]} =
-             run(js, %{"code" => "origin:http://localhost:4080"})
+             run(js, %{"code" => "origin:http://localhost:#{LemonCore.Runtime.Env.web_port()}"})
 
     refute_received :asked_for_lemon_web
   end

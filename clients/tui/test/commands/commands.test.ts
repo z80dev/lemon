@@ -4,6 +4,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { modelCommand } from "../../src/commands/model.ts";
 import { reportedContextFixture } from "../../src/dev/fixtures/context-fixtures.ts";
 import type { RunsRecentListResult } from "../../src/protocol/types.ts";
 import { initTheme, resetTheme } from "../../src/ui/theme/theme.ts";
@@ -58,6 +59,16 @@ describe("routing commands", () => {
 	test("/model with no argument opens the picker", async () => {
 		await harness.run("/model");
 		expect(harness.host.modelPickerOpens).toBe(1);
+	});
+
+	test("/model without a picker points empty model lists to provider setup", async () => {
+		harness.server.respondWith("models.list", { models: [] });
+		const ui = Object.create(harness.host);
+		ui.openModelPicker = undefined;
+		await modelCommand.run(harness.context({ ui }), []);
+		expect(harness.host.text).toContain("no model list available");
+		expect(harness.host.text).toContain("run `lemon setup provider` to add a provider");
+		expect(harness.host.pickers).toHaveLength(0);
 	});
 
 	test("/think validates the level before sending", async () => {

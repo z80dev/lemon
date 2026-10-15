@@ -300,6 +300,16 @@ approval ID plus a fingerprint of the authoritative pending snapshot. Callback
 authorization preserves account/chat/topic, re-fetches the request, rejects
 expiry and atomically consumes that exact snapshot. A rejected, stale, replayed,
 foreign or unavailable decision never says “Recorded” or removes the controls.
+
+If buttons are unavailable, Telegram and Discord also accept `/approve [id]`
+and `/deny [id]` (including Discord slash commands). With no ID, a single pending
+request in the current chat/topic is selected. Multiple pending requests are
+listed with unique short IDs; supply an ID or unique prefix rather than guessing.
+`/approve` approves **once only**, never a standing policy. Text decisions reuse
+the button authorization, snapshot fingerprint and atomic consume; expired,
+resolved, foreign-chat/account/topic or unavailable requests cannot be consumed.
+The current button policy is chat-scoped, not restricted to the initiating user:
+other authorized members of that same chat can resolve either way.
 Telegram and Discord outbound adapters reject accounts other than the configured
 account instead of silently using the default bot/client.
 

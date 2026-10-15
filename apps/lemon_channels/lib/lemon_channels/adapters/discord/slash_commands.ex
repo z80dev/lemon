@@ -602,6 +602,22 @@ defmodule LemonChannels.Adapters.Discord.SlashCommands do
 
   def slash_commands do
     [
+      %{
+        name: "approve",
+        description: "Approve a pending tool request once",
+        type: 1,
+        options: [
+          %{type: 3, name: "id", description: "Approval ID or unique prefix", required: false}
+        ]
+      },
+      %{
+        name: "deny",
+        description: "Deny a pending tool request",
+        type: 1,
+        options: [
+          %{type: 3, name: "id", description: "Approval ID or unique prefix", required: false}
+        ]
+      },
       @lemon_command,
       @session_command,
       @model_command,

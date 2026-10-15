@@ -21,6 +21,30 @@ send that token in `connect.params.auth.token`, not an HTTP header.
 Error `details` are optional JSON context; unsupported runtime terms are omitted,
 never inspected into wire responses, so the original code and message survive.
 
+## `setup.status`
+
+Scope: `operator.read`. Parameters: `{}`. Wraps `LemonCore.Setup.Readiness`
+without network calls or configuration changes. No caller-supplied config path
+is accepted.
+
+```json
+{
+  "ready": false,
+  "pendingSteps": [
+    {"id": "provider", "label": "Choose a default provider and model with usable credentials", "command": "lemon setup provider"}
+  ]
+}
+```
+
+`pendingSteps` is ordered: `config`, `secrets`, `provider`, omitting complete
+steps. Configuration and secrets steps use `lemon setup`; the provider step uses
+`lemon setup provider`. Ready responses have `ready: true` and an empty list.
+Keyless local providers and environment-only credentials follow the shared
+readiness rules. This is local readiness, not proof of provider connectivity.
+The projection contains only the boolean and fixed step ids, labels and commands:
+no paths, provider/model names, secret references, credentials or diagnostic text.
+Clients should omit setup guidance silently when this optional method is absent.
+
 ## `runs.timeline.get`
 
 Scope: `operator.read` (like `runs.recent.list`). Parameters:
