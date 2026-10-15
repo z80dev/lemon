@@ -120,6 +120,86 @@ describe("omp formatter", () => {
 		expect(text).toContain("doneclick");
 	});
 
+	test("batch workers, combined usage, reasons and per-task errors", () => {
+		const details = {
+			action: "start_many",
+			sessions: [ompSessionWire()],
+			usage: { totalTokens: 1234, cost: 0.25 },
+			errors: [{ task: 1, error: "invalid_task", message: "bad\u001b[31m task" }],
+			reason: "timeout",
+		};
+		const output = ompFormatter.formatResult({ details });
+		expect(output.summary).toBe("start_many · 1 workers");
+		expect(all(output)).toContain("todos 2/4");
+		expect(all(output)).toContain("combined: 1.2k tok · $0.2500");
+		expect(all(output)).toContain("task 2: invalid_task · bad task");
+		expect(all(output)).toContain("wait: timeout");
+		expect(ompFormatter.formatPartial?.({ details })).toEqual(output);
+	});
+
+	test("approvals, worktrees, children and configuration are plain text", () => {
+		const output = ompFormatter.formatResult({
+			details: {
+				action: "configure",
+				session: {
+					...ompSessionWire(),
+					pendingApprovals: [{ tool: "bash\u001b[31m" }],
+					worktree: { branch: "worker", kept: true, dirty: true },
+					subagents: [{ id: "child", status: "running", activity: "Reading files" }],
+				},
+			},
+		});
+		expect(output.summary).toContain("waiting for approval: bash");
+		expect(all(output)).toContain("worktree: worker · kept · dirty");
+		expect(all(output)).toContain("↳ child · running · Reading files");
+		expect(all(output)).not.toMatch(TERMINAL_CONTROLS);
+	});
+
+	test("models, transcript tail, discovery metadata and continue arguments", () => {
+		const models = ompFormatter.formatResult({
+			details: {
+				action: "models",
+				models: [
+					{ selector: "p/free", contextWindow: 32000, free: true },
+					{ selector: "p/paid", costInput: 1, costOutput: 2 },
+				],
+			},
+		});
+		expect(all(models)).toContain("p/free · ctx 32k · FREE");
+		expect(all(models)).toContain("$1/$2 per Mtok");
+		const transcript = ompFormatter.formatResult({
+			details: {
+				action: "subagent",
+				subagentId: "child",
+				transcript: {
+					messages: Array.from({ length: 50 }, (_, i) => ({
+						role: "assistant",
+						text: `message ${i}\u001b[31m`,
+					})),
+				},
+			},
+		});
+		expect(all(transcript)).toContain("message 49");
+		expect(all(transcript)).not.toContain("message 0");
+		expect(all(transcript)).not.toMatch(TERMINAL_CONTROLS);
+		expect(transcript.details.length).toBeLessThanOrEqual(24);
+		const discover = ompFormatter.formatResult({
+			details: {
+				action: "discover",
+				sessions: OMP_DISCOVERED_FIXTURES.map((row) => ({
+					...row,
+					source: "omp",
+					interrupted: true,
+					worktree: { branch: "worker" },
+				})),
+			},
+		});
+		expect(all(discover)).toContain("omp · interrupted · worker");
+		expect(all(ompFormatter.formatArgs({ action: "resume", continue: true }))).toContain(
+			"continue: true",
+		);
+	});
+
 	test("shared helpers", () => {
 		const session = parseOmpSession(ompSessionWire());
 		if (!session) throw new Error("fixture");

@@ -16,6 +16,9 @@ import { parseSessionsContext } from "./context-usage.ts";
 import { MethodUnavailableError } from "./errors.ts";
 import {
 	type OmpCancelResult,
+	type OmpConfigureParams,
+	type OmpModel,
+	type OmpModelsParams,
 	type OmpSendResult,
 	type OmpSessionResult,
 	type OmpSessionsDiscoverResult,
@@ -25,11 +28,16 @@ import {
 	type OmpSessionsResumeParams,
 	type OmpSessionsSendParams,
 	type OmpSessionsStartParams,
+	type OmpStartManyParams,
+	type OmpStartManyResult,
 	type OmpStatus,
+	type OmpSubagentResult,
 	parseOmpDiscoveredList,
+	parseOmpModels,
 	parseOmpSession,
 	parseOmpSessions,
 	parseOmpStatus,
+	parseOmpSubagent,
 } from "./omp.ts";
 import type {
 	SessionLabelParams,
@@ -178,6 +186,10 @@ export const METHOD = {
 	ompSessionsSend: "omp.sessions.send",
 	ompSessionsCancel: "omp.sessions.cancel",
 	ompSessionsClose: "omp.sessions.close",
+	ompSessionsStartMany: "omp.sessions.startMany",
+	ompModels: "omp.models",
+	ompSessionsSubagent: "omp.sessions.subagent",
+	ompSessionsConfigure: "omp.sessions.configure",
 } as const;
 
 /** Every `omp.*` method; a daemon advertising none of them has no omp integration. */
@@ -191,6 +203,10 @@ export const OMP_METHODS: readonly string[] = [
 	METHOD.ompSessionsSend,
 	METHOD.ompSessionsCancel,
 	METHOD.ompSessionsClose,
+	METHOD.ompSessionsStartMany,
+	METHOD.ompModels,
+	METHOD.ompSessionsSubagent,
+	METHOD.ompSessionsConfigure,
 ];
 
 /** Spawning (or resuming) an omp process waits for its RPC handshake. */
@@ -865,6 +881,62 @@ export class ControlPlaneMethods {
 			queueIfOffline: false,
 		});
 		return { session: requireSession(result?.session, METHOD.ompSessionsClose) };
+	}
+
+	async ompModels(
+		params: OmpModelsParams = {},
+		options?: RequestOptions,
+	): Promise<{ models: OmpModel[] }> {
+		const result = await this.#call<{ models?: unknown }>(METHOD.ompModels, params, options);
+		return { models: parseOmpModels(result?.models) };
+	}
+
+	async ompSessionsSubagent(
+		params: { id: string; subagentId: string; limit?: number },
+		options?: RequestOptions,
+	): Promise<OmpSubagentResult> {
+		return parseOmpSubagent(await this.#call(METHOD.ompSessionsSubagent, params, options));
+	}
+
+	async ompSessionsConfigure(
+		params: OmpConfigureParams,
+		options?: RequestOptions,
+	): Promise<OmpSessionResult> {
+		const result = await this.#call<{ session?: unknown }>(METHOD.ompSessionsConfigure, params, {
+			timeoutMs: OMP_SEND_REQUEST_TIMEOUT_MS,
+			...options,
+			queueIfOffline: false,
+		});
+		return { session: requireSession(result?.session, METHOD.ompSessionsConfigure) };
+	}
+
+	async ompSessionsStartMany(
+		params: OmpStartManyParams,
+		options?: RequestOptions,
+	): Promise<OmpStartManyResult> {
+		const result = await this.#call<{
+			results?: Array<{
+				index: number;
+				session?: unknown;
+				error?: { code: string; message: string; id?: string };
+			}>;
+		}>(METHOD.ompSessionsStartMany, params, {
+			timeoutMs: OMP_START_REQUEST_TIMEOUT_MS,
+			...options,
+			queueIfOffline: false,
+		});
+		if (!Array.isArray(result?.results))
+			throw new Error("omp.sessions.startMany returned no results");
+		return {
+			results: result.results.map((entry) =>
+				entry.error
+					? { index: entry.index, error: entry.error }
+					: {
+							index: entry.index,
+							session: requireSession(entry.session, METHOD.ompSessionsStartMany),
+						},
+			),
+		};
 	}
 }
 

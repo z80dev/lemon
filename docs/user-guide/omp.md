@@ -212,6 +212,15 @@ Ownership restrictions are identical to single-session access.
 
 ## From the TUI
 
+Agent `omp` tool cards show parallel starts and multi-worker waits as compact
+worker rows with status, activity or result preview, todo progress, combined
+tokens/cost and individual task errors. Session cards highlight pending tool
+approvals and show isolated worktree branch/kept/dirty state and child activity.
+Model catalog cards show context size and prices (or FREE); subagent reads show a
+bounded transcript tail. Configuration and discovery receipts show the resulting
+session and the discovery source/interrupted state. All delegate text is inert,
+sanitized plain text; cards intentionally bound long output.
+
 `/omp` (Alt+M, also in the command palette) opens the omp panel: live and
 recent sessions with status, workspace, model, current activity, elapsed time
 and tokens/cost. Select a session for its detail view — activity, running and
@@ -221,21 +230,19 @@ recent tools, todos, subagents, usage, latest output or result. Keys:
 | --- | --- |
 | Enter | open the detail view / back |
 | `s` / `f` | steer the running turn / queue a follow-up |
+| `R` | redirect: stop the current turn and start with a new message |
 | `c` | cancel the running turn |
 | `x` | close the omp process |
-| `d` | discover stored omp sessions for this workspace; Enter resumes one |
+| `d` | discover stored sessions, showing source and interrupted state; Enter resumes, `C` resumes an interrupted session with continue |
 | `r` | refresh |
 | Esc | close the panel |
 
-`/omp run <prompt>` starts a session in the TUI's working directory, and
+`/omp run [--approval-mode always-ask|write|yolo] [--isolate] <prompt>` starts a session in the TUI's working directory, and
 `/omp status` prints a one-line summary of live sessions. The panel and the
 status-bar badge (`omp N▶` while sessions run) update live from the runtime's
 `omp.session` events. When Lemon's agent uses the `omp` tool, its card shows
 the session's status, activity, todo progress and usage as they change.
 
-The chat tool and Elixir API also support **redirect** (stop the current turn
-and start over with a new message). The panel does not yet have a redirect key;
-`s` steers and `c` only cancels.
 
 ## From the CLI
 

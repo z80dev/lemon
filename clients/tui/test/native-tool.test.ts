@@ -322,3 +322,38 @@ test("omp tool cards are agent nodes with sanitized omp text, live and settled",
 	expect(hostile).toContain("evil title");
 	expect(hostile).toContain("bad news");
 });
+
+test("native omp batch and catalog cards use bounded structured details", () => {
+	const batch = JSON.stringify(
+		new ToolCardComponent(
+			block(
+				"omp",
+				{ action: "start_many" },
+				{
+					action: "start_many",
+					sessions: [
+						{ id: "omp_worker", status: "idle", lastTurn: "completed", result: "Finished" },
+					],
+					usage: { totalTokens: 2000, cost: 0.1 },
+					errors: [{ task: 1, error: "invalid_task", message: "bad task" }],
+				},
+			),
+		).describe(),
+	);
+	expect(batch).toContain("omp_worker · idle · completed · Finished");
+	expect(batch).toContain("combined: 2.0k tok · $0.1000");
+	expect(batch).toContain("task 2: invalid_task");
+	const models = JSON.stringify(
+		new ToolCardComponent(
+			block(
+				"omp",
+				{ action: "models" },
+				{
+					action: "models",
+					models: [{ selector: "provider/free", free: true }],
+				},
+			),
+		).describe(),
+	);
+	expect(models).toContain("provider/free · ctx ? · FREE");
+});
