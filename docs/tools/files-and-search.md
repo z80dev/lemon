@@ -68,6 +68,27 @@ selectors (`:raw:50-80` or `:50-80:raw`) remain exact, without context, line
 numbers, or a snapshot header. Raw comma lists also stay exact and retain the
 `…` separators. `offset`/`limit`, open-ended and tail selectors do not add context.
 
+## Merge conflicts
+
+`read path:conflicts` indexes local Git conflict regions as `#N Lx-Ly` with
+compact ours/theirs previews. Standard and diff3 (`|||||||` base) markers are
+supported. Existing literal filenames ending in `:conflicts` still take precedence.
+Conflict indexing requires a session id, UTF-8 local files up to 4 MiB, and cannot
+be combined with other selectors or ACP client buffers.
+
+Resolve one region with `write` using `path: "conflict://N"` and a replacement
+`content` body. Standalone body lines `@ours`, `@theirs`, `@base`, and `@both`
+expand to the original side text (`@both` concatenates ours then theirs;
+`@base` is empty for ordinary two-way conflicts). Other body text is literal.
+Only the marker region is replaced; surrounding bytes, BOM and line endings are
+preserved through the normal write pipeline, including mutation locks,
+checkpoints, formatting and diagnostics.
+
+Ids belong to the calling session. Any file-content change, including resolving
+one region, invalidates **all** ids for that file: re-read `path:conflicts`
+before resolving another region. Foreign, unknown, malformed and stale ids are
+rejected instead of falling back to ordinary filesystem writes.
+
 ## Structural code summaries
 
 A bare `read` of a recognized source-code file with at least 300 lines and at

@@ -36,6 +36,7 @@ defmodule CodingAgent.Application do
       CodingAgent.Tools.TodoStoreOwner,
       CodingAgent.MutationLock,
       CodingAgent.FileReadTracker,
+      CodingAgent.ConflictStore,
       CodingAgent.ExecutionNode.FileService,
       CodingAgent.ExecutionNode.ProcessService,
       CodingAgent.SessionSupervisor,

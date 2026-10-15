@@ -202,6 +202,9 @@ defmodule CodingAgent.Tools.Read do
 
   defp do_execute(params, signal, cwd, opts) do
     case apply_path_selector(params, cwd, opts) do
+      {:ok, params, %{conflicts: true}} ->
+        CodingAgent.Tools.Conflicts.read(params["path"], cwd, opts)
+
       {:ok, params, %{tail: tail} = view} when is_integer(tail) ->
         read_tail(params, tail, view, signal, cwd, opts)
 
@@ -368,7 +371,7 @@ defmodule CodingAgent.Tools.Read do
   # Path Line Selectors
   # ============================================================================
 
-  @selector_token ~r/\A(?:raw|\d+(?:-\d*|\+\d+)?(?:,\d+(?:-\d*|\+\d+)?)*|-\d+)\z/
+  @selector_token ~r/\A(?:conflicts|raw|\d+(?:-\d*|\+\d+)?(?:,\d+(?:-\d*|\+\d+)?)*|-\d+)\z/
 
   # A trailing `:selector` (up to two, e.g. `:10-20:raw`) only applies when the
   # literal path is missing and the remaining base names a real source, so
@@ -420,10 +423,19 @@ defmodule CodingAgent.Tools.Read do
     end
   end
 
+  defp build_selector_view(params, base, ["conflicts"]) do
+    if Map.get(params, "offset") || Map.get(params, "limit"),
+      do: {:error, ":conflicts cannot be combined with offset/limit"},
+      else: {:ok, Map.put(params, "path", base), %{conflicts: true}}
+  end
+
   defp build_selector_view(params, base, tokens) do
     {raw_tokens, range_tokens} = Enum.split_with(tokens, &(&1 == "raw"))
 
     cond do
+      "conflicts" in tokens ->
+        {:error, ":conflicts cannot be combined with other selectors"}
+
       length(raw_tokens) > 1 or length(range_tokens) > 1 ->
         {:error, "A path selector takes at most one line range and one :raw"}
 

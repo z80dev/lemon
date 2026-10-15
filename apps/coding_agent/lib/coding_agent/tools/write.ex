@@ -144,6 +144,24 @@ defmodule CodingAgent.Tools.Write do
     end
   end
 
+  def execute(id, %{"path" => "conflict://" <> reference} = params, signal, update, cwd, opts) do
+    if AbortSignal.aborted?(signal) do
+      {:error, :aborted}
+    else
+      CodingAgent.Tools.Conflicts.replace(reference, Map.get(params, "content"), cwd, opts, fn
+        path, content, cwd, opts ->
+          execute(
+            id,
+            Map.merge(params, %{"path" => path, "content" => content}),
+            signal,
+            update,
+            cwd,
+            opts
+          )
+      end)
+    end
+  end
+
   def execute(_tool_call_id, params, signal, _on_update, cwd, opts) do
     # Check for abort at start
     if AbortSignal.aborted?(signal) do
