@@ -4,6 +4,10 @@
 
 ### Added
 
+- Foreground bash previews retain a 20 KiB head plus tail with an explicit middle
+  elision marker. Spill notices prefer session artifact handles over raw paths,
+  and unavailable PTYs report their fallback in both output and result details.
+
 - Local edit and patch support the same opt-in formatting as write and return
   post-format snapshot tags. Anchored edits recover recent session/path tags
   only when every referenced original range remains byte-identical and unique;
