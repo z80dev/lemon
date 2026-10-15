@@ -17,12 +17,10 @@ defmodule CodingAgent.BudgetEnforcer do
 
   ## Configuration
 
-  Configure default budgets in `config/config.exs`:
-
-      config :coding_agent, :budget_defaults,
-        max_tokens: 100_000,
-        max_cost: 10.0,
-        max_children: 3
+  Dollar and token caps are configured in `[budgets]`. Native sessions enforce
+  these inclusively through `LemonAgent.BudgetScope`. Explicit per-run tree
+  limits remain available to callers; there are no implicit dollar projections
+  or hidden per-parent concurrency limits (task scheduling owns concurrency).
   """
 
   require Logger
@@ -70,12 +68,12 @@ defmodule CodingAgent.BudgetEnforcer do
   ## Options
 
   - `:estimated_tokens` - Estimated tokens for this call (default: 4000)
-  - `:estimated_cost` - Estimated cost for this call (default: 0.1)
+  - `:estimated_cost` - Caller-supplied estimated cost (default: 0.0)
   """
   @spec check_api_call(String.t(), keyword()) :: enforcement_result()
   def check_api_call(run_id, opts \\ []) do
     estimated_tokens = Keyword.get(opts, :estimated_tokens, 4000)
-    estimated_cost = Keyword.get(opts, :estimated_cost, 0.1)
+    estimated_cost = Keyword.get(opts, :estimated_cost, 0.0)
 
     case BudgetTracker.get_budget(run_id) do
       nil ->
@@ -312,7 +310,7 @@ defmodule CodingAgent.BudgetEnforcer do
   # ============================================================================
 
   defp create_budget_for_run(run_id, opts) do
-    # app env (for test override) -> canonical config -> hardcoded default
+    # Application test overrides precede canonical configured tree defaults.
     defaults =
       case Application.get_env(:coding_agent, :budget_defaults) do
         nil -> resolve_config_budget_defaults()
@@ -323,7 +321,7 @@ defmodule CodingAgent.BudgetEnforcer do
       BudgetTracker.create_budget(
         max_tokens: Keyword.get(opts, :max_tokens, Map.get(defaults, :max_tokens)),
         max_cost: Keyword.get(opts, :max_cost, Map.get(defaults, :max_cost)),
-        max_children: Keyword.get(opts, :max_children, Map.get(defaults, :max_children, 3))
+        max_children: Keyword.get(opts, :max_children, Map.get(defaults, :max_children))
       )
 
     BudgetTracker.store_budget(run_id, budget)
@@ -351,19 +349,23 @@ defmodule CodingAgent.BudgetEnforcer do
   end
 
   defp format_budget_error(details) do
-    case Map.get(details, :type) do
-      :token_limit_exceeded ->
-        "Token budget exceeded: #{details.used}/#{details.limit} tokens used"
+    if Map.get(details, :reason) == :budget_exceeded and is_binary(Map.get(details, :message)) do
+      details.message
+    else
+      case Map.get(details, :type) do
+        :token_limit_exceeded ->
+          "Token budget exceeded: #{details.used}/#{details.limit} tokens used"
 
-      :cost_limit_exceeded ->
-        "Cost budget exceeded: $#{:erlang.float_to_binary(details.used, decimals: 2)}/" <>
-          "$#{:erlang.float_to_binary(details.limit, decimals: 2)} used"
+        :cost_limit_exceeded ->
+          "Cost budget exceeded: $#{:erlang.float_to_binary(details.used, decimals: 2)}/" <>
+            "$#{:erlang.float_to_binary(details.limit, decimals: 2)} used"
 
-      :max_children_exceeded ->
-        "Maximum concurrent subagents reached: #{details.active}/#{details.limit}"
+        :max_children_exceeded ->
+          "Maximum concurrent subagents reached: #{details.active}/#{details.limit}"
 
-      _ ->
-        "Budget limit exceeded"
+        _ ->
+          "Budget limit exceeded"
+      end
     end
   end
 end
