@@ -333,7 +333,7 @@ defmodule CodingAgent.Tools.LspDiagnostics do
   defp external_runner(:go, path, cwd) do
     case find_workspace_root(path, cwd, ["go.mod"]) do
       nil -> {:skip, "no go.mod found"}
-      root -> {:ok, %{command: "go", args: ["test", "./..."], root: root, source: "go test"}}
+      root -> {:ok, %{command: "go", args: ["vet", "./..."], root: root, source: "go vet"}}
     end
   end
 
@@ -390,18 +390,21 @@ defmodule CodingAgent.Tools.LspDiagnostics do
   defp run_command(command, args, cwd, opts) do
     timeout_ms = Keyword.get(opts, :diagnostics_timeout_ms, @default_timeout_ms)
 
-    task =
-      Task.async(fn ->
-        try do
-          System.cmd(command, args, cd: cwd, stderr_to_stdout: true)
-        catch
-          :exit, reason -> {"diagnostics command exited: #{inspect(reason)}", 1}
-        end
+    command =
+      Enum.map_join([command | args], " ", fn arg ->
+        "'" <> String.replace(arg, "'", "'\"'\"'") <> "'"
       end)
 
-    case Task.yield(task, timeout_ms) || Task.shutdown(task, :brutal_kill) do
-      {:ok, result} -> result
-      nil -> {"diagnostics timed out after #{timeout_ms}ms", 124}
+    case CodingAgent.BashExecutor.execute(command, cwd, timeout: timeout_ms, max_bytes: 64_000) do
+      {:ok, result} ->
+        if result.full_output_path, do: File.rm(result.full_output_path)
+
+        if result.timed_out,
+          do: {"diagnostics timed out after #{timeout_ms}ms", 124},
+          else: {result.output, result.exit_code}
+
+      {:error, _reason} ->
+        {"diagnostics command failed to start", 1}
     end
   end
 
