@@ -10,6 +10,7 @@ defmodule LemonRouter.SubmissionBuilder do
   alias LemonCore.{
     Cwd,
     ExecutionCommand,
+    ExecutionContext,
     MapHelpers,
     RunRequest,
     SessionKey
@@ -46,20 +47,33 @@ defmodule LemonRouter.SubmissionBuilder do
     tool_policy_override = params.tool_policy
     run_id = params.run_id
 
-    session_config = get_session_config(session_key)
-
-    with {:ok, agent_profile} <- get_execution_profile(agent_id, meta),
-         tool_policy <-
+    with {:ok, session_config} <- get_session_config(session_key),
+         {:ok, agent_profile} <- get_execution_profile(agent_id, meta),
+         {:ok, tool_policy} <-
            resolve_tool_policy(agent_profile, tool_policy_override, %{
              agent_id: agent_id,
              session_key: session_key,
              origin: origin,
-             channel_context: MapHelpers.get_key(meta, :channel_context),
-             native_factory_authority:
-               Map.get(meta, :invocation_proof_verified) == true or
-                 is_binary(MapHelpers.get_key(meta, :profile_id))
+             channel_context: MapHelpers.get_key(meta, :channel_context)
            }),
-         meta <- Map.put(meta, :resume_policy_override, is_map(tool_policy_override)),
+         cwd <- resolve_effective_cwd(cwd_override, meta, origin),
+         {:ok, execution_context} <-
+           resolve_execution_context(
+             params.execution_context,
+             run_id,
+             agent_id,
+             origin,
+             cwd,
+             tool_policy,
+             meta
+           ),
+         tool_policy <- execution_context.tool_policy,
+         meta <-
+           Map.put(
+             meta,
+             :resume_policy_override,
+             is_map(tool_policy_override) or not is_nil(params.execution_context)
+           ),
          {:ok, resolved_resume, resume_source} <-
            ResumeResolver.resolve(
              params.resume,
@@ -69,8 +83,6 @@ defmodule LemonRouter.SubmissionBuilder do
              LemonCore.Store,
              run_id
            ) do
-      cwd = resolve_effective_cwd(cwd_override, meta, origin)
-
       {prompt, pending_compaction_marker} =
         PendingCompaction.prepare(prompt, session_key, origin,
           meta: meta,
@@ -142,6 +154,7 @@ defmodule LemonRouter.SubmissionBuilder do
         resume: resolved_resume,
         lane: MapHelpers.get_key(meta, :lane) || :main,
         tool_policy: tool_policy,
+        execution_context: execution_context,
         meta: enriched_meta,
         conversation_key: conversation_key
       }
@@ -166,37 +179,33 @@ defmodule LemonRouter.SubmissionBuilder do
 
   @doc false
   def current_native_target_policy(profile_id, session_key, meta) do
-    with {:ok, profile} <- get_managed_profile(profile_id) do
-      profile
-      |> resolve_tool_policy(nil, %{
-        agent_id: profile_id,
-        session_key: session_key,
-        origin: :node,
-        channel_context: MapHelpers.get_key(meta || %{}, :channel_context),
-        native_factory_authority: true
-      })
-      |> LemonCore.ToolPolicy.normalize()
+    with {:ok, profile} <- get_managed_profile(profile_id),
+         {:ok, policy} <-
+           resolve_tool_policy(profile, nil, %{
+             agent_id: profile_id,
+             session_key: session_key,
+             origin: :node,
+             channel_context: MapHelpers.get_key(meta || %{}, :channel_context)
+           }) do
+      LemonCore.ToolPolicy.normalize(policy)
     end
   end
 
   defp resolve_tool_policy(agent_profile, override, context) do
-    base = Policy.resolve_for_run(context)
-    profile = normalize_profile_tool_policy(agent_profile)
-
-    if context.native_factory_authority do
-      base |> LemonCore.ToolPolicy.intersect(profile) |> LemonCore.ToolPolicy.intersect(override)
-    else
-      base = if map_size(profile) > 0, do: Policy.merge(base, profile), else: base
-      if is_map(override), do: Policy.merge(base, override), else: base
+    with {:ok, base} <- Policy.resolve_validated_for_run(context),
+         {:ok, profile} <-
+           Policy.merge_validated(base, normalize_profile_tool_policy(agent_profile)) do
+      Policy.merge_validated(profile, override)
     end
   end
 
-  defp get_session_config(nil), do: %{}
+  defp get_session_config(nil), do: {:ok, %{}}
 
   defp get_session_config(session_key) do
     case LemonCore.PolicyStore.get_session(session_key) do
-      nil -> %{}
-      config when is_map(config) -> config
+      nil -> {:ok, %{}}
+      config when is_map(config) -> {:ok, config}
+      _ -> {:error, :invalid_session_policy}
     end
   end
 
@@ -278,10 +287,12 @@ defmodule LemonRouter.SubmissionBuilder do
 
   defp normalize_profile_tool_policy(profile) when is_map(profile) do
     case MapHelpers.get_key(profile, :tool_policy) do
-      policy when is_map(policy) -> policy
-      _ -> %{}
+      nil -> nil
+      policy -> policy
     end
   end
+
+  defp normalize_profile_tool_policy(_), do: nil
 
   defp resolve_effective_cwd(cwd_override, meta, origin) do
     if MapHelpers.get_key(meta, :node) not in [nil, "", "local", :local] and
@@ -290,6 +301,67 @@ defmodule LemonRouter.SubmissionBuilder do
     else
       normalize_cwd(cwd_override) || normalize_cwd(MapHelpers.get_key(meta, :cwd)) ||
         default_cwd_for(origin)
+    end
+  end
+
+  defp resolve_execution_context(
+         nil,
+         run_id,
+         agent_id,
+         origin,
+         cwd,
+         tool_policy,
+         _meta
+       ) do
+    ExecutionContext.new(
+      run_id: run_id,
+      agent_id: agent_id,
+      origin: origin,
+      cwd: cwd,
+      tool_policy: tool_policy
+    )
+  end
+
+  defp resolve_execution_context(
+         %ExecutionContext{} = parent,
+         run_id,
+         agent_id,
+         origin,
+         cwd,
+         tool_policy,
+         meta
+       ) do
+    with {:ok, parent, child_cwd} <- context_parent_for_destination(parent, cwd, meta) do
+      ExecutionContext.child(parent,
+        run_id: run_id,
+        principal: %{type: "agent", id: agent_id},
+        provenance: %{origin: origin, delegated_by: ExecutionContext.identity(parent)},
+        cwd: child_cwd,
+        tool_policy: tool_policy
+      )
+    end
+  end
+
+  defp resolve_execution_context(
+         _context,
+         _run_id,
+         _agent_id,
+         _origin,
+         _cwd,
+         _tool_policy,
+         _meta
+       ),
+       do: {:error, :invalid_execution_context}
+
+  defp context_parent_for_destination(parent, cwd, meta) do
+    case MapHelpers.get_key(meta, :node) do
+      node when is_binary(node) and node not in ["", "local"] ->
+        with {:ok, remote_parent} <- ExecutionContext.for_remote(parent, nil) do
+          {:ok, remote_parent, nil}
+        end
+
+      _ ->
+        {:ok, parent, cwd}
     end
   end
 

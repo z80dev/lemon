@@ -581,90 +581,123 @@ defmodule CodingAgent.Tools.Agent do
           do: Subagents.tool_policy(persona, validated.tool_policy),
           else: validated.tool_policy
 
-      child_policy =
-        case {Keyword.get(opts, :tool_policy), child_policy} do
-          {nil, requested} -> requested
-          {parent, nil} -> parent
-          {parent, requested} -> LemonCore.ToolPolicy.intersect(parent, requested)
-        end
+      run_id = LemonCore.Id.run_id()
 
-      base_meta =
-        %{
-          parent_run_id: parent_run_id,
-          delegated_by: %{
-            run_id: parent_run_id,
-            session_key: parent_session_key,
-            session_id: parent_session_id,
-            agent_id: parent_agent_id
-          },
-          delegated: %{
-            target_agent_id: validated.agent_id,
-            auto_followup: validated.auto_followup,
-            role: validated.role_id
+      with {:ok, execution_context} <-
+             delegated_execution_context(validated, child_policy, run_id, cwd, opts) do
+        base_meta =
+          %{
+            parent_run_id: parent_run_id,
+            delegated_by: %{
+              run_id: parent_run_id,
+              session_key: parent_session_key,
+              session_id: parent_session_id,
+              agent_id: parent_agent_id
+            },
+            delegated: %{
+              target_agent_id: validated.agent_id,
+              auto_followup: validated.auto_followup,
+              role: validated.role_id
+            }
           }
-        }
-        |> compact_map()
+          |> compact_map()
 
-      meta =
-        validated.meta
-        |> Map.drop([
-          :delegated_by,
-          "delegated_by",
-          :delegated,
-          "delegated",
-          :parent_run_id,
-          :invocation_context_key,
-          "invocation_context_key",
-          :invocationContextKey,
-          "invocationContextKey",
-          :memory_context_key,
-          "memory_context_key",
-          :memoryContextKey,
-          "memoryContextKey",
-          :memory_context_verified,
-          "memory_context_verified",
-          :memoryContextVerified,
-          "memoryContextVerified",
-          :shared_memory_grant,
-          "shared_memory_grant",
-          :sharedMemoryGrant,
-          "sharedMemoryGrant",
-          :mcp_servers,
-          "mcp_servers",
-          "parent_run_id"
-        ])
-        |> Map.merge(base_meta)
-        |> Map.drop([
-          :node,
-          "node",
-          :remote_cwd,
-          "remote_cwd",
-          :remote_cwd_explicit,
-          "remote_cwd_explicit"
-        ])
-        |> put_execution_node(validated)
-        |> Map.put(:invocation_context_key, Keyword.get(opts, :invocation_context_key))
-        |> Map.put(:memory_context_key, Keyword.get(opts, :memory_context_key))
-        |> Map.put(:memory_context_verified, Keyword.get(opts, :memory_context_verified) == true)
-        |> Map.put(:shared_memory_grant, Keyword.get(opts, :shared_memory_grant) == true)
-        |> Map.put(:mcp_servers, Keyword.get(opts, :invocation_mcp_servers))
-        |> compact_map()
+        meta =
+          validated.meta
+          |> Map.drop([
+            :delegated_by,
+            "delegated_by",
+            :delegated,
+            "delegated",
+            :parent_run_id,
+            :invocation_context_key,
+            "invocation_context_key",
+            :invocationContextKey,
+            "invocationContextKey",
+            :memory_context_key,
+            "memory_context_key",
+            :memoryContextKey,
+            "memoryContextKey",
+            :memory_context_verified,
+            "memory_context_verified",
+            :memoryContextVerified,
+            "memoryContextVerified",
+            :shared_memory_grant,
+            "shared_memory_grant",
+            :sharedMemoryGrant,
+            "sharedMemoryGrant",
+            :mcp_servers,
+            "mcp_servers",
+            "parent_run_id"
+          ])
+          |> Map.merge(base_meta)
+          |> Map.drop([
+            :node,
+            "node",
+            :remote_cwd,
+            "remote_cwd",
+            :remote_cwd_explicit,
+            "remote_cwd_explicit"
+          ])
+          |> put_execution_node(validated)
+          |> Map.put(:invocation_context_key, Keyword.get(opts, :invocation_context_key))
+          |> Map.put(:memory_context_key, Keyword.get(opts, :memory_context_key))
+          |> Map.put(
+            :memory_context_verified,
+            Keyword.get(opts, :memory_context_verified) == true
+          )
+          |> Map.put(:shared_memory_grant, Keyword.get(opts, :shared_memory_grant) == true)
+          |> Map.put(:mcp_servers, Keyword.get(opts, :invocation_mcp_servers))
+          |> compact_map()
 
-      request =
-        RunRequest.new(%{
-          run_id: LemonCore.Id.run_id(),
-          origin: :node,
-          session_key: delegated_session_key,
-          agent_id: validated.agent_id,
-          prompt: prompt,
-          queue_mode: validated.queue_mode,
-          model: validated.model || persona_model(persona),
-          cwd: validated.cwd || cwd,
-          tool_policy: child_policy,
-          meta: meta
-        })
+        request =
+          RunRequest.new(%{
+            run_id: run_id,
+            origin: :node,
+            session_key: delegated_session_key,
+            agent_id: validated.agent_id,
+            prompt: prompt,
+            queue_mode: validated.queue_mode,
+            model: validated.model || persona_model(persona),
+            cwd: validated.cwd || cwd,
+            tool_policy: execution_context.tool_policy,
+            execution_context: execution_context,
+            meta: meta
+          })
 
-      {:ok, request}
+        {:ok, request}
+      end
+    end
+  end
+
+  defp delegated_execution_context(validated, policy, run_id, cwd, opts) do
+    alias LemonCore.ExecutionContext
+
+    parent =
+      case Keyword.get(opts, :execution_context) do
+        nil ->
+          ExecutionContext.new(
+            run_id: Keyword.get(opts, :parent_run_id) || Keyword.get(opts, :run_id),
+            cwd: cwd,
+            agent_id: Keyword.get(opts, :agent_id),
+            tool_policy: Keyword.get(opts, :tool_policy)
+          )
+
+        context ->
+          ExecutionContext.validate(context)
+      end
+
+    with {:ok, parent} <- parent,
+         {:ok, child} <-
+           ExecutionContext.child(parent,
+             run_id: run_id,
+             cwd: if(validated.node, do: cwd, else: validated.cwd || cwd),
+             tool_policy: policy,
+             provenance: %{origin: "agent", delegated_by: ExecutionContext.identity(parent)}
+           ) do
+      if validated.node,
+        do: ExecutionContext.for_remote(child, validated.cwd),
+        else: {:ok, child}
     end
   end
 
@@ -1409,6 +1442,10 @@ defmodule CodingAgent.Tools.Agent do
 
       not is_nil(tool_policy) and not is_map(tool_policy) ->
         {:error, "tool_policy must be an object"}
+
+      not is_nil(tool_policy) and
+          match?({:error, _}, LemonCore.ToolPolicy.parse(tool_policy)) ->
+        {:error, "Invalid tool_policy"}
 
       not is_nil(meta) and not is_map(meta) ->
         {:error, "meta must be an object"}

@@ -462,7 +462,8 @@ defmodule LemonRouter.NativeLineageTest do
              NodeRegistry.register_session(node, node, node_pid, 7, %{
                capabilities: %{
                  "coding_agent.run" => %{
-                   "version" => 1,
+                   "version" => 2,
+                   "executionContext" => %{"version" => 1},
                    "nativePrivacyContext" => %{"version" => 1}
                  }
                }
@@ -1058,7 +1059,8 @@ defmodule LemonRouter.NativeLineageTest do
              NodeRegistry.register_session(node, node, node_pid, 7, %{
                capabilities: %{
                  "coding_agent.run" => %{
-                   "version" => 1,
+                   "version" => 2,
+                   "executionContext" => %{"version" => 1},
                    "nativePrivacyContext" => %{"version" => 1}
                  }
                }
@@ -1309,7 +1311,8 @@ defmodule LemonRouter.NativeLineageTest do
              NodeRegistry.register_session(node, node, self(), 7, %{
                capabilities: %{
                  "coding_agent.run" => %{
-                   "version" => 1,
+                   "version" => 2,
+                   "executionContext" => %{"version" => 1},
                    "nativePrivacyContext" => %{"version" => 1}
                  }
                }
@@ -1341,7 +1344,8 @@ defmodule LemonRouter.NativeLineageTest do
              NodeRegistry.register_session(node, node, replacement, 8, %{
                capabilities: %{
                  "coding_agent.run" => %{
-                   "version" => 1,
+                   "version" => 2,
+                   "executionContext" => %{"version" => 1},
                    "nativePrivacyContext" => %{"version" => 1}
                  }
                }
@@ -1382,7 +1386,8 @@ defmodule LemonRouter.NativeLineageTest do
              NodeRegistry.register_session(node, ctx.prefix <> "-name", self(), 7, %{
                capabilities: %{
                  "coding_agent.run" => %{
-                   "version" => 1,
+                   "version" => 2,
+                   "executionContext" => %{"version" => 1},
                    "nativePrivacyContext" => %{"version" => 1}
                  }
                }
@@ -1648,7 +1653,11 @@ defmodule LemonRouter.NativeLineageTest do
   defp capable,
     do: %{
       capabilities: %{
-        "coding_agent.run" => %{"version" => 1, "nativePrivacyContext" => %{"version" => 1}}
+        "coding_agent.run" => %{
+          "version" => 2,
+          "executionContext" => %{"version" => 1},
+          "nativePrivacyContext" => %{"version" => 1}
+        }
       }
     }
 

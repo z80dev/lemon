@@ -14,7 +14,7 @@ defmodule CodingAgent.ExecutorTest do
 
   alias CodingAgent.Executor
   alias CodingAgent.Executor.SessionRunner, as: ExecutorSessionRunner
-  alias LemonCore.{NodeRegistry, ResumeToken}
+  alias LemonCore.{ExecutionContext, NodeRegistry, ResumeToken, ToolPolicy}
   alias LemonGateway.ExecutionRequest
 
   @tag :tmp_dir
@@ -178,6 +178,119 @@ defmodule CodingAgent.ExecutorTest do
 
   describe "start_run/3 direct session runner" do
     @tag :tmp_dir
+    test "validates supplied authority before starting a local session", %{tmp_dir: tmp_dir} do
+      req =
+        request(tmp_dir,
+          prompt: "must not start",
+          run_id: "authority-validation",
+          stream_fn: fn _, _, _ -> flunk("invalid authority must not invoke a provider") end
+        )
+
+      for invalid <- [false, %{"runId" => req.run_id}] do
+        assert {:error, :invalid_execution_context} =
+                 Executor.start_run(%{req | execution_context: invalid}, %{}, self())
+      end
+
+      assert {:ok, context} = ExecutionContext.new(run_id: "other-run", cwd: tmp_dir)
+
+      assert {:error, :execution_context_run_id_mismatch} =
+               Executor.start_run(%{req | execution_context: context}, %{}, self())
+
+      assert {:error, :invalid_execution_context} =
+               Executor.start_run(req, %{execution_context: false}, self())
+
+      refute_receive {:engine_event, _, _}, 50
+    end
+
+    @tag :tmp_dir
+    test "field and option authority preserve invocation ownership and destination policy floors",
+         %{
+           tmp_dir: tmp_dir
+         } do
+      parent = self()
+
+      for placement <- [:field, :option] do
+        run_id = "bounded-authority-#{placement}"
+        native = mock_stream_fn([assistant_message("bounded native run")])
+
+        stream = fn model, context, options ->
+          send(parent, {:authority_provider, self()})
+
+          receive do
+            :continue_authority -> native.(model, context, options)
+          after
+            5_000 -> raise "authority provider was not released"
+          end
+        end
+
+        assert {:ok, authority} =
+                 ExecutionContext.new(
+                   run_id: run_id,
+                   cwd: tmp_dir,
+                   principal: %{type: "actor", id: "authority-principal"},
+                   tool_policy: %{allow: ["read", "write"]},
+                   capabilities: ["read", "write"],
+                   limits: %{max_steps: 7}
+                 )
+
+        req =
+          request(tmp_dir,
+            run_id: run_id,
+            prompt: "inspect authority",
+            stream_fn: stream,
+            meta: %{agent_id: "invocation-owner", invocation_context_key: "invocation-binding"}
+          )
+
+        req = %{req | tool_policy: %{allow: :all}}
+        opts = %{stream_fn: stream, tool_policy: %{allow: ["read"]}}
+
+        {req, opts} =
+          if placement == :field,
+            do: {%{req | execution_context: authority}, opts},
+            else: {req, Map.put(opts, :execution_context, authority)}
+
+        assert {:ok, run_ref, %{runner_pid: runner}} = Executor.start_run(req, opts, self())
+        assert_receive {:authority_provider, provider}, 5_000
+        on_exit(fn -> send(provider, :continue_authority) end)
+        session = :sys.get_state(runner).session
+        state = CodingAgent.Session.get_state(session)
+
+        assert state.execution_context.run_id == run_id
+        assert state.execution_context.principal == authority.principal
+        assert state.execution_context.limits.max_steps == 7
+        assert ExecutionContext.subset?(state.execution_context, authority)
+        assert ToolPolicy.allowed?(state.execution_context.tool_policy, "read")
+        refute ToolPolicy.allowed?(state.execution_context.tool_policy, "write")
+        assert state.approval_context.invocation_context_key == "invocation-binding"
+        assert state.approval_context.agent_id == "invocation-owner"
+        assert state.approval_context.run_id == run_id
+        assert state.approval_context.session_key == req.session_key
+
+        send(provider, :continue_authority)
+
+        assert {:engine_event, ^run_ref, %{__event__: :completed, ok: true}} =
+                 List.last(collect_until_completed(run_ref))
+      end
+    end
+
+    @tag :tmp_dir
+    test "rejects malformed supplied policy before starting a session", %{tmp_dir: tmp_dir} do
+      request =
+        request(tmp_dir,
+          prompt: "must not start",
+          run_id: "run-invalid-policy",
+          stream_fn: mock_stream_fn([assistant_message("unexpected")])
+        )
+
+      request = %{request | tool_policy: %{"allow" => 123}}
+
+      assert {:error, {:invalid_policy_field, :allow}} =
+               Executor.start_run(request, %{stream_fn: request.meta[:stream_fn]}, self())
+
+      refute_receive {:engine_event, _, _}, 50
+    end
+
+    @tag :tmp_dir
     test "emits started, delta, tool action, and completed events", %{tmp_dir: tmp_dir} do
       tool_response =
         assistant_message_with_tool_calls([
@@ -186,7 +299,9 @@ defmodule CodingAgent.ExecutorTest do
             %{
               "command" => "printf executor-tool",
               "env" => %{"FOO" => "opaque-env-value-never-log"}
-            }, id: "call_executor")
+            },
+            id: "call_executor"
+          )
         ])
 
       final_response = assistant_message("executor done")

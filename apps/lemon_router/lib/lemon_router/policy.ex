@@ -32,66 +32,33 @@ defmodule LemonRouter.Policy do
       }
   """
 
+  alias LemonCore.ToolPolicy
+
   @doc """
-  Merge two tool policies.
+  Intersect two tool policies.
 
-  Native policies compose restrictively: allow-list intersection, denial and
-  approval-gate unions, and `always` approvals cannot be weakened. Other router
-  fields retain their existing merge behavior (maps deep-merge; sandbox tightens).
+  The result cannot authorize more than either input. Invalid input returns a
+  deny-all policy; execution admission uses `merge_validated/2` to retain the
+  explicit validation error.
   """
-  @spec merge(tool_policy_a :: map(), tool_policy_b :: map()) :: map()
-  def merge(nil, policy_b), do: LemonCore.ToolPolicy.expand(policy_b)
-  def merge(policy_a, nil), do: LemonCore.ToolPolicy.expand(policy_a)
-
-  def merge(policy_a, policy_b) when is_map(policy_a) and is_map(policy_b) do
-    policy_a = LemonCore.ToolPolicy.expand(policy_a)
-    policy_b = LemonCore.ToolPolicy.expand(policy_b)
-
-    merged =
-      Map.merge(policy_a, policy_b, fn key, v1, v2 ->
-        merge_value(key, v1, v2)
-      end)
-
-    native = LemonCore.ToolPolicy.intersect(policy_a, policy_b)
-
-    Map.merge(
-      merged,
-      Map.take(native, [
-        :profile,
-        :allow,
-        :deny,
-        :blocked_tools,
-        :require_approval,
-        :approvals,
-        :no_reply
-      ])
-    )
-  end
-
-  defp merge_value(_key, v1, v2) when is_map(v1) and is_map(v2) do
-    merge(v1, v2)
-  end
-
-  defp merge_value(key, v1, v2) when is_list(v1) and is_list(v2) do
-    # For blocked lists, combine both. For allowed lists, use the more restrictive (v2).
-    if String.contains?(to_string(key), "blocked") do
-      Enum.uniq(v1 ++ v2)
-    else
-      # For allowed lists, take the intersection if v2 is non-empty
-      if Enum.empty?(v2), do: v1, else: v2
+  @spec merge(term(), term()) :: ToolPolicy.t()
+  def merge(policy_a, policy_b) do
+    case merge_validated(policy_a, policy_b) do
+      {:ok, policy} -> policy
+      {:error, _reason} -> ToolPolicy.deny_all()
     end
   end
 
-  # For boolean deny semantics (sandbox, etc.), stricter wins
-  defp merge_value(key, v1, v2) when is_boolean(v1) and is_boolean(v2) do
-    if String.contains?(to_string(key), "sandbox") or String.contains?(to_string(key), "block") do
-      v1 or v2
-    else
-      v2
+  @doc "Strict policy intersection used by execution admission."
+  @spec merge_validated(term(), term()) :: {:ok, ToolPolicy.t()} | {:error, term()}
+  def merge_validated(policy_a, policy_b) do
+    with {:ok, policy_a} <-
+           ToolPolicy.resolve(policy_a, ToolPolicy.from_profile(:full_access)),
+         {:ok, policy_b} <-
+           ToolPolicy.resolve(policy_b, ToolPolicy.from_profile(:full_access)) do
+      ToolPolicy.restrict(policy_a, policy_b)
     end
   end
-
-  defp merge_value(_key, _v1, v2), do: v2
 
   @doc """
   Resolve the effective tool policy for a run.
@@ -103,35 +70,30 @@ defmodule LemonRouter.Policy do
   - `:origin` - Request origin (:channel, :control_plane, :cron, :node)
   - `:channel_context` - Optional channel-specific context
   """
-  @spec resolve_for_run(map()) :: map()
+  @spec resolve_for_run(map()) :: ToolPolicy.t()
   def resolve_for_run(params) do
+    case resolve_validated_for_run(params) do
+      {:ok, policy} -> policy
+      {:error, _reason} -> ToolPolicy.deny_all()
+    end
+  end
+
+  @doc "Resolves all configured policy layers without permissive fallback."
+  @spec resolve_validated_for_run(map()) :: {:ok, ToolPolicy.t()} | {:error, term()}
+  def resolve_validated_for_run(params) do
     agent_id = params[:agent_id]
     session_key = params[:session_key]
     origin = params[:origin]
     channel_context = params[:channel_context]
 
-    # Get agent default policy
-    agent_policy = get_agent_policy(agent_id)
-
-    # Get channel policy if applicable
-    channel_policy =
-      if origin == :channel and channel_context do
-        get_channel_policy(channel_context)
-      else
-        %{}
-      end
-
-    # Get session overrides
-    session_policy = get_session_policy(session_key)
-
-    # Get runtime overrides
-    runtime_policy = get_runtime_policy()
-
-    # Merge in order: agent -> channel -> session -> runtime
-    agent_policy
-    |> merge(channel_policy)
-    |> merge(session_policy)
-    |> merge(runtime_policy)
+    with {:ok, channel_policy} <- get_channel_policy_for_run(origin, channel_context),
+         {:ok, session_policy} <- get_session_policy(session_key),
+         {:ok, policy} <- merge_validated(nil, get_agent_policy(agent_id)),
+         {:ok, policy} <- merge_validated(policy, channel_policy),
+         {:ok, policy} <- merge_validated(policy, session_policy),
+         {:ok, policy} <- merge_validated(policy, get_runtime_policy()) do
+      {:ok, policy}
+    end
   end
 
   @doc """
@@ -145,13 +107,10 @@ defmodule LemonRouter.Policy do
   """
   @spec approval_required?(map(), binary()) :: :always | :dangerous | :never | :default
   def approval_required?(policy, tool) do
-    case get_in(policy, [:approvals, tool]) do
+    case ToolPolicy.approval_mode(policy, tool) do
       :always -> :always
       :dangerous -> :dangerous
       :never -> :never
-      "always" -> :always
-      "dangerous" -> :dangerous
-      "never" -> :never
       _ -> :default
     end
   end
@@ -160,10 +119,7 @@ defmodule LemonRouter.Policy do
   Check if a tool is blocked by the policy.
   """
   @spec tool_blocked?(map(), binary()) :: boolean()
-  def tool_blocked?(policy, tool) do
-    blocked = policy[:blocked_tools] || []
-    tool in blocked
-  end
+  def tool_blocked?(policy, tool), do: not ToolPolicy.allowed?(policy, tool)
 
   @doc """
   Check if a command is allowed by the policy.
@@ -173,11 +129,15 @@ defmodule LemonRouter.Policy do
   """
   @spec command_allowed?(map(), binary()) :: boolean()
   def command_allowed?(policy, command) do
-    blocked = policy[:blocked_commands] || []
-    allowed = policy[:allowed_commands]
+    case ToolPolicy.parse(policy) do
+      {:ok, policy} ->
+        not command_matches_any?(command, policy.blocked_commands) and
+          (policy.allowed_commands == :all or
+             command_matches_any?(command, policy.allowed_commands))
 
-    not command_matches_any?(command, blocked) and
-      (allowed in [nil, []] or command_matches_any?(command, allowed))
+      {:error, _reason} ->
+        false
+    end
   end
 
   defp command_matches_any?(command, patterns) do
@@ -188,18 +148,18 @@ defmodule LemonRouter.Policy do
   end
 
   # Load agent policy from store
-  defp get_agent_policy(nil), do: %{}
+  defp get_agent_policy(nil), do: nil
 
-  defp get_agent_policy(agent_id) do
-    case LemonCore.PolicyStore.get_agent(agent_id) do
-      nil -> %{}
-      policy when is_map(policy) -> policy
-    end
-  end
+  defp get_agent_policy(agent_id), do: LemonCore.PolicyStore.get_agent(agent_id)
 
   # Tools that mutate files or execute code on the host. Group chats require
   # an approval for each call because any member can prompt the agent.
   @group_approval_tools ~w(bash write edit patch hashline_edit)
+
+  defp get_channel_policy_for_run(:channel, context) when is_map(context),
+    do: get_channel_policy(context)
+
+  defp get_channel_policy_for_run(_origin, _context), do: {:ok, nil}
 
   # Load channel-specific restrictions
   defp get_channel_policy(channel_context) do
@@ -220,55 +180,66 @@ defmodule LemonRouter.Policy do
         %{}
       end
 
-    merge(channel_policy, group_policy)
+    merge_validated(channel_policy, group_policy)
   end
 
-  # Load session overrides from store. A session row (written by
-  # `sessions.patch`) holds routing settings beside the tool policy:
-  # `%{tool_policy: map, model: id, thinking_level: level}`. Only its
-  # `tool_policy` map is a tool policy; legacy rows that stored policy keys
-  # (approvals, blocked_tools, ...) at the top level keep working.
-  @session_routing_keys [
-    :tool_policy,
-    :model,
-    :thinking_level,
-    "tool_policy",
-    "model",
-    "thinking_level"
-  ]
+  # Session rows contain routing settings beside the nested policy. Legacy
+  # top-level policy fields remain an additional floor, never an override.
   @policy_keys ~w(approvals blocked_tools allowed_commands blocked_commands max_file_size sandbox profile allow deny require_approval no_reply)a
 
-  defp get_session_policy(nil), do: %{}
+  defp get_session_policy(nil), do: {:ok, nil}
 
   defp get_session_policy(session_key) do
     case LemonCore.PolicyStore.get_session(session_key) do
-      policy when is_map(policy) ->
-        legacy = Map.drop(policy, @session_routing_keys)
-
-        case Map.get(policy, :tool_policy) || Map.get(policy, "tool_policy") do
-          tool_policy when is_map(tool_policy) -> merge(legacy, atomize_policy_keys(tool_policy))
-          _ -> legacy
-        end
-
-      _ ->
-        %{}
+      nil -> {:ok, nil}
+      policy when is_map(policy) -> session_tool_policy(policy)
+      _ -> {:error, :invalid_session_policy}
     end
   end
 
-  # `sessions.patch` stores the wire map (string keys); policy readers expect
-  # the atom keys the agent/runtime policies use, so known keys are atomized.
-  defp atomize_policy_keys(policy) do
-    Map.new(policy, fn {key, value} ->
-      atom = Enum.find(@policy_keys, &(Atom.to_string(&1) == key))
-      {atom || key, value}
-    end)
+  # Load operator runtime overrides from store
+  defp get_runtime_policy, do: LemonCore.PolicyStore.get_runtime()
+
+  defp session_tool_policy(policy) do
+    legacy =
+      Enum.reduce(@policy_keys, %{}, fn key, acc ->
+        acc
+        |> copy_present_policy_key(policy, key)
+        |> copy_present_policy_key(policy, Atom.to_string(key))
+      end)
+
+    with {:ok, nested_policy} <- nested_session_tool_policy(policy) do
+      merge_validated(legacy, nested_policy)
+    end
   end
 
-  # Load operator runtime overrides from store
-  defp get_runtime_policy do
-    case LemonCore.PolicyStore.get_runtime() do
-      nil -> %{}
-      policy when is_map(policy) -> policy
+  defp nested_session_tool_policy(policy) do
+    atom_value = Map.fetch(policy, :tool_policy)
+    string_value = Map.fetch(policy, "tool_policy")
+
+    case {atom_value, string_value} do
+      {:error, :error} ->
+        {:ok, nil}
+
+      {{:ok, value}, :error} ->
+        {:ok, value}
+
+      {:error, {:ok, value}} ->
+        {:ok, value}
+
+      {{:ok, value}, {:ok, value}} ->
+        {:ok, value}
+
+      {{:ok, _atom_value}, {:ok, _string_value}} ->
+        {:error, {:conflicting_session_policy_key, :tool_policy}}
+    end
+  end
+
+  defp copy_present_policy_key(acc, source, key) do
+    if is_map(source) and Map.has_key?(source, key) do
+      Map.put(acc, key, Map.get(source, key))
+    else
+      acc
     end
   end
 end

@@ -1005,11 +1005,11 @@ Internal callers inspecting a node before dispatch can pin that live connection
 with `NodeRegistry.invoke_node(..., expected_pid: inspected.pid,
 expected_generation: inspected.generation)`. PID replacement or credential
 generation change returns the definite pre-dispatch error `{:node_connection_changed,nodeId}`.
-Private native requests also require `required_native_privacy_context: 1`, which
-checks the actual resolved connection's nested
-`capabilities["coding_agent.run"]["nativePrivacyContext"] == {"version":1}`
-inside the registry owner before invocation allocation or delivery. An absent/
-unsupported marker returns `{:native_privacy_context_unsupported,nodeId}`.
+Native requests also require `required_native_privacy_context: 1`, which checks
+the actual resolved connection's complete native descriptor inside the registry
+owner before invocation allocation or delivery: `coding_agent.run` version 2,
+`executionContext` version 1, and `nativePrivacyContext` version 1. An absent or
+unsupported descriptor returns `{:native_privacy_context_unsupported,nodeId}`.
 These are internal admission options, not remotely supplied PID values or a
 post-response privacy check.
 

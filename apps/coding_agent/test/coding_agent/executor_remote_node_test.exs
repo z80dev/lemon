@@ -21,7 +21,7 @@ defmodule CodingAgent.ExecutorRemoteNodeTest do
   end
 
   test "targets a named node with a JSON-safe request and destination-local defaults" do
-    assert :ok = NodeRegistry.register("node-1", "newphy", self())
+    assert :ok = NodeRegistry.register("node-1", "newphy", self(), privacy_capabilities())
 
     request =
       request(%{
@@ -44,6 +44,14 @@ defmodule CodingAgent.ExecutorRemoteNodeTest do
 
     payload = invocation["args"]
     assert payload["runId"] == request.run_id
+    assert payload["version"] == 2
+
+    assert {:ok, execution_context} =
+             LemonCore.ExecutionContext.decode(payload["executionContext"])
+
+    assert execution_context.run_id == request.run_id
+    assert execution_context.workspace_scope.root == nil
+    refute LemonCore.ToolPolicy.allowed?(execution_context.tool_policy, "agent")
     assert payload["sessionKey"] == request.session_key
     assert payload["prompt"] == request.prompt
     assert payload["cwd"] == nil
@@ -118,7 +126,7 @@ defmodule CodingAgent.ExecutorRemoteNodeTest do
   end
 
   test "preserves an explicitly supplied remote cwd verbatim" do
-    assert :ok = NodeRegistry.register("node-1", "newphy", self())
+    assert :ok = NodeRegistry.register("node-1", "newphy", self(), privacy_capabilities())
 
     request =
       request(%{
@@ -139,7 +147,7 @@ defmodule CodingAgent.ExecutorRemoteNodeTest do
   end
 
   test "maps a remote error to a failed gateway completion" do
-    assert :ok = NodeRegistry.register("node-1", "newphy", self())
+    assert :ok = NodeRegistry.register("node-1", "newphy", self(), privacy_capabilities())
     assert {:ok, run_ref, _ctx} = Executor.start_run(request(%{node: "newphy"}), %{}, self())
     assert_receive {:node_event, "node.invoke.request", invocation}
     assert_receive {:engine_event, ^run_ref, %{__event__: :started}}
@@ -170,7 +178,7 @@ defmodule CodingAgent.ExecutorRemoteNodeTest do
   end
 
   test "forwards cancellation to the selected node invocation" do
-    assert :ok = NodeRegistry.register("node-1", "newphy", self())
+    assert :ok = NodeRegistry.register("node-1", "newphy", self(), privacy_capabilities())
     assert {:ok, _run_ref, ctx} = Executor.start_run(request(%{node: "newphy"}), %{}, self())
     assert_receive {:node_event, "node.invoke.request", invocation}
 
@@ -183,7 +191,7 @@ defmodule CodingAgent.ExecutorRemoteNodeTest do
   end
 
   test "waits for destination acceptance before reporting remote steer and redirect" do
-    assert :ok = NodeRegistry.register("node-1", "newphy", self())
+    assert :ok = NodeRegistry.register("node-1", "newphy", self(), privacy_capabilities())
     assert {:ok, _run_ref, ctx} = Executor.start_run(request(%{node: "newphy"}), %{}, self())
     assert_receive {:node_event, "node.invoke.request", invocation}
     invoke_id = invocation["invokeId"]
@@ -321,7 +329,14 @@ defmodule CodingAgent.ExecutorRemoteNodeTest do
 
   test "disconnect cancels pending controller approvals and cannot grant a late decision" do
     :ok = LemonCore.Bus.subscribe("exec_approvals")
-    assert :ok = NodeRegistry.register("node-disconnect", "disconnect-worker", self())
+
+    assert :ok =
+             NodeRegistry.register(
+               "node-disconnect",
+               "disconnect-worker",
+               self(),
+               privacy_capabilities()
+             )
 
     assert {:ok, run_ref, _ctx} =
              Executor.start_run(request(%{node: "disconnect-worker"}), %{}, self())
@@ -356,7 +371,13 @@ defmodule CodingAgent.ExecutorRemoteNodeTest do
   end
 
   test "an expired remote approval returns denial without granting execution" do
-    assert :ok = NodeRegistry.register("node-expired", "expired-worker", self())
+    assert :ok =
+             NodeRegistry.register(
+               "node-expired",
+               "expired-worker",
+               self(),
+               privacy_capabilities()
+             )
 
     assert {:ok, _run_ref, ctx} =
              Executor.start_run(request(%{node: "expired-worker"}), %{}, self())
@@ -381,6 +402,41 @@ defmodule CodingAgent.ExecutorRemoteNodeTest do
                     }}
 
     :ok = Executor.cancel(ctx)
+  end
+
+  test "unscoped native execution refuses missing or stale execution-context protocol descriptors" do
+    for {capabilities, index} <-
+          Enum.with_index([
+            %{},
+            %{"coding_agent.run" => %{"version" => 1}},
+            %{"coding_agent.run" => %{"version" => 2}},
+            %{
+              "coding_agent.run" => %{
+                "version" => 2,
+                "executionContext" => %{"version" => 1}
+              }
+            },
+            %{
+              "coding_agent.run" => %{
+                "version" => 2,
+                "executionContext" => %{"version" => 2},
+                "nativePrivacyContext" => %{"version" => 1}
+              }
+            }
+          ]) do
+      id = "unsupported-#{index}"
+      assert :ok = NodeRegistry.register(id, id, self(), %{capabilities: capabilities})
+      assert {:ok, ref, _ctx} = Executor.start_run(request(%{node: id}), %{}, self())
+
+      assert_receive {:engine_event, ^ref,
+                      %{
+                        __event__: :completed,
+                        ok: false,
+                        error: {:execution_context_unsupported, ^id}
+                      }}
+
+      refute_receive {:node_event, "node.invoke.request", _}
+    end
   end
 
   test "scoped payload never reaches an old live worker, including negative private claims" do
@@ -454,7 +510,11 @@ defmodule CodingAgent.ExecutorRemoteNodeTest do
   defp privacy_capabilities,
     do: %{
       capabilities: %{
-        "coding_agent.run" => %{"version" => 1, "nativePrivacyContext" => %{"version" => 1}}
+        "coding_agent.run" => %{
+          "version" => 2,
+          "executionContext" => %{"version" => 1},
+          "nativePrivacyContext" => %{"version" => 1}
+        }
       }
     }
 

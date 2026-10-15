@@ -141,6 +141,10 @@ defmodule CodingAgent.Tools.Task.Params do
       not is_nil(tool_policy) and not is_map(tool_policy) ->
         {:error, "tool_policy must be an object"}
 
+      not is_nil(tool_policy) and
+          match?({:error, _}, LemonCore.ToolPolicy.parse(tool_policy)) ->
+        {:error, "Invalid tool_policy"}
+
       not is_nil(meta) and not is_map(meta) ->
         {:error, "meta must be an object"}
 
@@ -198,27 +202,62 @@ defmodule CodingAgent.Tools.Task.Params do
           followup_queue_mode =
             if is_nil(queue_mode), do: nil, else: normalize_queue_mode(queue_mode)
 
-          {:ok,
-           Map.merge(launch, %{
-             description: description,
-             name: name,
-             prompt: wrap_context(guarded_prompt, context),
-             role_id: role_id,
-             persona: persona,
-             schema_mode: schema_mode || "strict",
-             async: async?,
-             auto_followup: auto_followup,
-             worktree: worktree,
-             merge: merge,
-             cwd: delegated_cwd,
-             meta: sanitize_child_metadata(meta || %{}),
-             session_key: session_key,
-             agent_id: agent_id,
-             queue_mode: followup_queue_mode,
-             resolved_queue_mode:
-               AsyncFollowups.resolve_async_followup_queue_mode(followup_queue_mode, :followup)
-           })}
+          Map.merge(launch, %{
+            description: description,
+            name: name,
+            prompt: wrap_context(guarded_prompt, context),
+            role_id: role_id,
+            persona: persona,
+            schema_mode: schema_mode || "strict",
+            async: async?,
+            auto_followup: auto_followup,
+            worktree: worktree,
+            merge: merge,
+            cwd: delegated_cwd,
+            meta: sanitize_child_metadata(meta || %{}),
+            session_key: session_key,
+            agent_id: agent_id,
+            queue_mode: followup_queue_mode,
+            resolved_queue_mode:
+              AsyncFollowups.resolve_async_followup_queue_mode(followup_queue_mode, :followup)
+          })
+          |> then(&{:ok, &1})
         end
+    end
+  end
+
+  @doc false
+  def restrict_to_parent(validated, cwd, opts) do
+    inherited = inherited_execution_context(opts)
+
+    parent =
+      case inherited.execution_context do
+        nil ->
+          LemonCore.ExecutionContext.new(
+            run_id: Keyword.get(opts, :parent_run_id) || Keyword.get(opts, :run_id),
+            agent_id: Keyword.get(opts, :agent_id),
+            cwd: cwd,
+            tool_policy: inherited.tool_policy
+          )
+
+        context ->
+          LemonCore.ExecutionContext.validate(context)
+      end
+
+    with {:ok, parent} <- parent,
+         {:ok, child} <-
+           LemonCore.ExecutionContext.child(parent,
+             cwd: validated[:cwd] || cwd,
+             tool_policy: validated[:tool_policy],
+             provenance: %{
+               origin: "task",
+               delegated_by: LemonCore.ExecutionContext.identity(parent)
+             }
+           ) do
+      {:ok,
+       validated |> Map.put(:tool_policy, child.tool_policy) |> Map.put(:execution_context, child)}
+    else
+      {:error, reason} -> {:error, "Task execution authority is invalid: #{inspect(reason)}"}
     end
   end
 
@@ -613,6 +652,7 @@ defmodule CodingAgent.Tools.Task.Params do
       |> Keyword.put(:task_child, true)
       |> maybe_put_kw(:task_allowed_agents, validated[:task_allowed_agents])
       |> maybe_put_kw(:tool_policy, child_policy)
+      |> maybe_put_kw(:execution_context, child_execution_context(cwd, validated, opts))
       |> maybe_put_kw(:session_key, validated[:session_key])
       |> maybe_put_kw(:agent_id, validated[:agent_id])
       |> maybe_put_kw(:extra_tools, child_extra_tools_if_present(child_extra_tools))
@@ -625,6 +665,28 @@ defmodule CodingAgent.Tools.Task.Params do
     ]
   end
 
+  defp child_execution_context(cwd, validated, opts) do
+    case {validated[:execution_context], Keyword.get(opts, :child_run_id)} do
+      {nil, _} ->
+        case restrict_to_parent(validated, cwd, opts) do
+          {:ok, child} -> child_execution_context(cwd, child, opts)
+          {:error, reason} -> raise ArgumentError, reason
+        end
+
+      {context, nil} ->
+        context
+
+      {context, run_id} ->
+        case LemonCore.ExecutionContext.reidentify(context, run_id) do
+          {:ok, context} ->
+            context
+
+          {:error, reason} ->
+            raise ArgumentError, "Invalid child execution identity: #{inspect(reason)}"
+        end
+    end
+  end
+
   @doc false
   def inherited_execution_context(opts), do: inherited_execution_context(opts, nil)
 
@@ -632,7 +694,8 @@ defmodule CodingAgent.Tools.Task.Params do
     approval_context = Keyword.get(opts, :approval_context) || %{}
 
     complete? =
-      Keyword.has_key?(opts, :tool_policy) &&
+      not is_nil(Keyword.get(opts, :execution_context)) &&
+        Keyword.has_key?(opts, :tool_policy) &&
         Keyword.has_key?(opts, :invocation_mcp_servers) &&
         (Keyword.has_key?(opts, :invocation_context_key) ||
            Map.has_key?(approval_context, :invocation_context_key)) &&
@@ -649,6 +712,8 @@ defmodule CodingAgent.Tools.Task.Params do
     parent_approval_context = Map.get(parent_state, :approval_context) || %{}
 
     %{
+      execution_context:
+        Keyword.get(opts, :execution_context) || Map.get(parent_state, :execution_context),
       invocation_context_key:
         LemonCore.MapHelpers.get_key(approval_context, :invocation_context_key) ||
           Keyword.get(

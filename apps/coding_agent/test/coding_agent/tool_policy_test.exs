@@ -143,10 +143,11 @@ defmodule CodingAgent.ToolPolicyTest do
       refute ToolPolicy.allowed?(policy, "media_generate_video")
     end
 
-    test "unknown profile defaults to full_access" do
+    test "unknown profile fails closed" do
       policy = ToolPolicy.from_profile(:unknown_profile)
 
-      assert policy.allow == :all
+      assert policy.allow == []
+      refute ToolPolicy.allowed?(policy, "read")
     end
   end
 

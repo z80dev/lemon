@@ -72,6 +72,7 @@ defmodule CodingAgent.Session.Presentation do
     |> maybe_add_opt(:profile_instructions, Keyword.get(opts, :profile_instructions))
     |> maybe_add_opt(:stream_fn, Keyword.get(opts, :stream_fn))
     |> maybe_add_opt(:tool_policy, tool_policy)
+    |> maybe_add_opt(:execution_context, Keyword.get(opts, :execution_context))
     |> maybe_add_opt(:approval_context, approval_context)
     |> maybe_add_opt(:invocation_context_key, Keyword.get(opts, :invocation_context_key))
     |> maybe_add_opt(:memory_context_key, Keyword.get(opts, :memory_context_key))

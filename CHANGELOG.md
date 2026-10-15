@@ -10,6 +10,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Execution admission validates supplied tool policies and intersects inherited
+  restrictions instead of accepting malformed or authority-widening overrides.
+  Root and delegated execution contexts bind identity, workspace, capabilities
+  and limits; named nodes apply their destination-local capability ceiling.
 - Failed selected OAuth logins cannot borrow static or environment credentials
   or transmit encoded OAuth records. Public selected-credential callbacks preserve
   `nil` refusal rather than reviving a cached token; successful access-token

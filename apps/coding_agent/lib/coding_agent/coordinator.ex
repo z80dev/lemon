@@ -491,12 +491,20 @@ defmodule CodingAgent.Coordinator do
         params = %{
           "prompt" => spec.prompt,
           "agent" => spec[:subagent],
-          "description" => spec[:description] || "Subagent #{id}"
+          "description" => spec[:description] || "Subagent #{id}",
+          "tool_policy" => spec[:tool_policy]
         }
 
         with {:ok, validated} <-
                Params.validate_run_params(params, state.cwd,
-                 settings_manager: state.settings_manager
+                 settings_manager: state.settings_manager,
+                 parent_session: state.parent_session,
+                 execution_context: spec[:execution_context]
+               ),
+             {:ok, validated} <-
+               Params.restrict_to_parent(validated, state.cwd,
+                 parent_session: state.parent_session,
+                 execution_context: spec[:execution_context]
                ),
              :ok <- check_cancelled(owner_ref),
              {:ok, pid} <- admit_session(guardian, build_session_opts(state, validated)) do

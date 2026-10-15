@@ -7,10 +7,17 @@ defmodule CodingAgent.Executor.RemotePolicyPayloadTest do
   test "full native policy arrays cross JSON without truncation" do
     names = Enum.map(1..16_384, &"mcp_tool_#{&1}")
 
+    assert {:ok, context} =
+             LemonCore.ExecutionContext.new(
+               run_id: "dense-policy",
+               tool_policy: %{"require_approval" => names}
+             )
+
     request = %ExecutionRequest{
       run_id: "dense-policy",
       session_key: "agent:dense:main",
       prompt: "Use only admitted tools",
+      execution_context: context,
       tool_policy: %{"require_approval" => names}
     }
 

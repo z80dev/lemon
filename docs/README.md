@@ -48,6 +48,7 @@ overview and the app guides below, rather than keeping a second runtime catalog.
   [add a channel](getting-started/add-a-channel.md) and [persist memory](getting-started/persist-memory.md)
 - [App boundaries](architecture_boundaries.md), [BEAM lifecycle invariants](beam_agents.md),
   [bus events](platform/bus-events.md) and [model selection](model-selection-decoupling.md)
+- [Execution policy and inherited authority](execution-policy.md)
 - [Context](context.md), [bootstrap](assistant_bootstrap_contract.md),
   [long-running harnesses](long-running-agent-harnesses.md) and [parent questions](subagent-parent-questions.md)
 - [Hot reload](runtime-hot-reload.md), [telemetry](telemetry.md) and [error reporting](error-reporting.md)

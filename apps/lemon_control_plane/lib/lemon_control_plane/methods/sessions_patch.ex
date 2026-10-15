@@ -5,6 +5,7 @@ defmodule LemonControlPlane.Methods.SessionsPatch do
   Updates session properties (like tool policy overrides).
   """
 
+  alias LemonCore.ToolPolicy
   alias LemonRouter.ThinkingLevel
 
   @legacy_selector_fields ~w(
@@ -36,35 +37,37 @@ defmodule LemonControlPlane.Methods.SessionsPatch do
       if is_nil(session_key) do
         {:error, {:invalid_request, "sessionKey is required", nil}}
       else
-        patch =
-          %{
-            tool_policy: params["toolPolicy"],
-            model: params["model"],
-            thinking_level: params["thinkingLevel"]
-          }
-          |> Enum.reject(fn {_k, v} -> is_nil(v) end)
-          |> Map.new()
+        with {:ok, tool_policy} <- parse_optional_tool_policy(params["toolPolicy"]) do
+          patch =
+            %{
+              tool_policy: tool_policy,
+              model: params["model"],
+              thinking_level: params["thinkingLevel"]
+            }
+            |> Enum.reject(fn {_k, v} -> is_nil(v) end)
+            |> Map.new()
 
-        case apply_session_patch(session_key, patch) do
-          :ok ->
-            {:ok,
-             %{
-               "success" => true,
-               "sessionKey" => session_key,
-               "summary" => %{
+          case apply_session_patch(session_key, patch) do
+            :ok ->
+              {:ok,
+               %{
+                 "success" => true,
                  "sessionKey" => session_key,
-                 "patchedKeys" => patch_keys(patch),
-                 "patchedCount" => map_size(patch),
-                 "cleanup" => %{
-                   "includesToolPolicy" => false,
-                   "includesModel" => false,
-                   "includesSecretValues" => false
+                 "summary" => %{
+                   "sessionKey" => session_key,
+                   "patchedKeys" => patch_keys(patch),
+                   "patchedCount" => map_size(patch),
+                   "cleanup" => %{
+                     "includesToolPolicy" => false,
+                     "includesModel" => false,
+                     "includesSecretValues" => false
+                   }
                  }
-               }
-             }}
+               }}
 
-          {:error, reason} ->
-            {:error, {:internal_error, "Failed to patch session", reason}}
+            {:error, reason} ->
+              {:error, {:internal_error, "Failed to patch session", reason}}
+          end
         end
       end
     end
@@ -114,4 +117,18 @@ defmodule LemonControlPlane.Methods.SessionsPatch do
   end
 
   defp validate_thinking_level(_), do: :ok
+
+  defp parse_optional_tool_policy(nil), do: {:ok, nil}
+
+  defp parse_optional_tool_policy(policy) do
+    case ToolPolicy.parse(policy) do
+      {:ok, policy} ->
+        {:ok, ToolPolicy.to_map(policy)}
+
+      {:error, reason} ->
+        {:error,
+         {:invalid_params, "toolPolicy is invalid",
+          %{field: "toolPolicy", reason: inspect(reason)}}}
+    end
+  end
 end

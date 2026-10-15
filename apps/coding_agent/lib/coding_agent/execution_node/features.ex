@@ -45,7 +45,7 @@ defmodule CodingAgent.ExecutionNode.Features do
       "profileSync" =>
         all?(capabilities, ~w(node.profile.sync node.profile.sync.status node.profile.paths)),
       "liveStreaming" =>
-        version(capabilities["coding_agent.run"]) == 1 and
+        version(capabilities["coding_agent.run"]) == 2 and
           version(capabilities["node.invoke.event"]) == 1 and
           valid_stream_bound?(capabilities["node.invoke.event"]),
       "repairInvites" =>
@@ -53,10 +53,7 @@ defmodule CodingAgent.ExecutionNode.Features do
           capabilities["node.enrollment"]["repairInvites"] == true,
       "nativeExecutionPolicy" =>
         native_policy and
-          match?(
-            %{"version" => 1, "nativePrivacyContext" => %{"version" => 1}},
-            capabilities["coding_agent.run"]
-          )
+          LemonCore.NodeRegistry.native_privacy_context_supported?(%{capabilities: capabilities})
     }
 
     missing =

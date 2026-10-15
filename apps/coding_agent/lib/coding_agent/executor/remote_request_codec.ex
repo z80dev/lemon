@@ -9,10 +9,10 @@ defmodule CodingAgent.Executor.RemoteRequestCodec do
   cwd; omitted remote cwd is encoded as `nil` for destination-local resolution.
   """
 
-  alias LemonCore.ResumeToken
+  alias LemonCore.{ExecutionContext, ResumeToken, ToolPolicy}
   alias LemonGateway.ExecutionRequest
 
-  @version 1
+  @version 2
 
   @execution_meta_keys ~w(model thinking_level system_prompt profile_id profile_instructions
                           mcp_servers invocation_mcp_servers invocation_context_key
@@ -68,20 +68,30 @@ defmodule CodingAgent.Executor.RemoteRequestCodec do
   def encode(request, opts \\ [])
 
   def encode(%ExecutionRequest{} = request, opts) do
+    cwd = remote_cwd(request)
     native_images = if is_nil(request.images), do: [], else: request.images
 
     with {:ok, source_meta} <- normalize_source_meta(request.meta),
-         {:ok, images} <- LemonAi.ImageInputs.encode(native_images) do
+         {:ok, images} <- LemonAi.ImageInputs.encode(native_images),
+         {:ok, remote_context} <- ExecutionContext.for_remote(request.execution_context, cwd),
+         :ok <- validate_context_run_id(remote_context, request.run_id),
+         {:ok, requested_policy} <-
+           ToolPolicy.resolve(request.tool_policy, remote_context.tool_policy),
+         {:ok, policy} <- ToolPolicy.restrict(remote_context.tool_policy, requested_policy),
+         {:ok, remote_context} <-
+           ExecutionContext.validate(%{remote_context | tool_policy: policy}),
+         {:ok, encoded_context} <- ExecutionContext.encode(remote_context) do
       payload = %{
         "version" => @version,
         "runId" => request.run_id,
         "sessionKey" => request.session_key,
         "prompt" => request.prompt,
         "images" => images,
-        "cwd" => remote_cwd(request),
+        "cwd" => cwd,
         "resume" => encode_resume(request.resume),
         "lane" => encode_atom(request.lane),
-        "toolPolicy" => request.tool_policy,
+        "toolPolicy" => ToolPolicy.to_map(policy),
+        "executionContext" => encoded_context,
         # Cwd routing hints are consumed above, not execution metadata. In particular
         # an unused controller path must not survive through a false explicit flag.
         "meta" =>
@@ -128,6 +138,11 @@ defmodule CodingAgent.Executor.RemoteRequestCodec do
   end
 
   def encode(_, _opts), do: {:error, :invalid_execution_request}
+
+  defp validate_context_run_id(%ExecutionContext{run_id: run_id}, run_id), do: :ok
+
+  defp validate_context_run_id(_context, _run_id),
+    do: {:error, :execution_context_run_id_mismatch}
 
   defp normalize_source_meta(nil), do: {:ok, %{}}
 

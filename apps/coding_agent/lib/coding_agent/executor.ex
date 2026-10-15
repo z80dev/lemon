@@ -12,7 +12,7 @@ defmodule CodingAgent.Executor do
 
   alias CodingAgent.Executor.{RemoteSessionRunner, SessionRunner}
   alias CodingAgent.Session.Presentation
-  alias LemonCore.ResumeToken
+  alias LemonCore.{ExecutionContext, ResumeToken, ToolPolicy}
   alias LemonGateway.Event
   alias LemonGateway.ExecutionRequest
 
@@ -41,7 +41,8 @@ defmodule CodingAgent.Executor do
     # running before starting a session.
     case Application.ensure_all_started(:coding_agent) do
       {:ok, _started} ->
-        with :ok <- ensure_session_available() do
+        with :ok <- ensure_session_available(),
+             {:ok, request} <- validate_execution_request(request, opts) do
           start_session_runner(request, opts, sink_pid)
         end
 
@@ -188,6 +189,70 @@ defmodule CodingAgent.Executor do
         if is_map(opts),
           do: Map.put(opts, :stream_options, stream_options),
           else: Keyword.put(opts || [], :stream_options, stream_options)
+    end
+  end
+
+  defp validate_execution_request(%ExecutionRequest{} = request, opts) do
+    cwd = request.cwd || get_opt(opts, :cwd) || File.cwd!()
+
+    request = %{
+      request
+      | run_id: request.run_id || get_opt(opts, :run_id),
+        execution_context:
+          case request.execution_context do
+            nil -> get_opt(opts, :execution_context)
+            context -> context
+          end
+    }
+
+    with {:ok, context} <- resolve_execution_context(request, cwd),
+         :ok <- validate_context_identity(context, request),
+         {:ok, context} <- ExecutionContext.bind_workspace(context, cwd),
+         {:ok, policy} <- resolve_request_policy(request.tool_policy, context.tool_policy),
+         {:ok, context} <- ExecutionContext.validate(%{context | tool_policy: policy}) do
+      {:ok,
+       %{
+         request
+         | run_id: context.run_id,
+           execution_context: context,
+           tool_policy: ToolPolicy.to_map(policy)
+       }}
+    end
+  end
+
+  defp resolve_execution_context(%ExecutionRequest{execution_context: nil} = request, cwd) do
+    meta = request.meta || %{}
+
+    ExecutionContext.new(
+      run_id: request.run_id,
+      agent_id: meta[:agent_id] || meta["agent_id"],
+      origin: meta[:origin] || meta["origin"] || :direct,
+      cwd: cwd,
+      tool_policy: request.tool_policy
+    )
+  end
+
+  defp resolve_execution_context(
+         %ExecutionRequest{execution_context: %ExecutionContext{} = context},
+         _cwd
+       ),
+       do: ExecutionContext.validate(context)
+
+  defp resolve_execution_context(_request, _cwd), do: {:error, :invalid_execution_context}
+
+  defp validate_context_identity(context, %{run_id: run_id})
+       when is_binary(run_id) and run_id != "" do
+    if context.run_id == run_id, do: :ok, else: {:error, :execution_context_run_id_mismatch}
+  end
+
+  defp validate_context_identity(_context, _request), do: :ok
+
+  defp resolve_request_policy(nil, context_policy), do: {:ok, context_policy}
+
+  defp resolve_request_policy(request_policy, context_policy) do
+    with {:ok, request_policy} <- ToolPolicy.parse(request_policy),
+         {:ok, effective} <- ToolPolicy.restrict(context_policy, request_policy) do
+      {:ok, effective}
     end
   end
 

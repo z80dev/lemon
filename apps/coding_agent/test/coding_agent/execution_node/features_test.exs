@@ -13,7 +13,11 @@ defmodule CodingAgent.ExecutionNode.FeaturesTest do
 
   defp capabilities do
     Map.new(@methods, &{&1, %{"version" => 1}})
-    |> Map.put("coding_agent.run", %{"version" => 1, "nativePrivacyContext" => %{"version" => 1}})
+    |> Map.put("coding_agent.run", %{
+      "version" => 2,
+      "executionContext" => %{"version" => 1},
+      "nativePrivacyContext" => %{"version" => 1}
+    })
     |> Map.put("node.invoke.event", %{"version" => 1, "maxBytes" => 65_536})
     |> Map.put("node.enrollment", %{"version" => 1, "repairInvites" => true})
   end

@@ -47,6 +47,13 @@ defmodule CodingAgent.Session.Lifecycle do
 
     session_manager = load_or_create_session(cwd, session_file, session_id, parent_session)
     cwd = session_manager.header.cwd
+
+    {:ok, session_manager} =
+      SessionManager.append_execution_context(
+        session_manager,
+        Keyword.fetch!(opts, :execution_context)
+      )
+
     restored_context = SessionManager.build_session_context(session_manager)
 
     session_scope =
@@ -103,6 +110,7 @@ defmodule CodingAgent.Session.Lifecycle do
       |> SessionManager.persist(session_file)
 
     tool_policy = Keyword.get(opts, :tool_policy)
+    execution_context = Keyword.fetch!(opts, :execution_context)
 
     approval_context =
       resolve_approval_context(opts, session_manager.header.id, tool_policy)
@@ -134,6 +142,7 @@ defmodule CodingAgent.Session.Lifecycle do
       |> Keyword.put(:session_scope, session_scope)
       |> Keyword.put(:task_child, task_child)
       |> Keyword.put(:tool_policy, tool_policy)
+      |> Keyword.put(:execution_context, execution_context)
       |> Keyword.put(:approval_context, approval_context)
       |> Keyword.put(:invocation_context_key, (approval_context || %{})[:invocation_context_key])
       |> Keyword.put(:invocation_mcp_servers, (approval_context || %{})[:invocation_mcp_servers])
@@ -425,6 +434,7 @@ defmodule CodingAgent.Session.Lifecycle do
       convert_to_llm: convert_to_llm,
       transform_context: transform_context,
       tool_policy: tool_policy,
+      execution_context: execution_context,
       approval_context: approval_context,
       secret_obfuscator: secret_obfuscator,
       extensions: lifecycle.extensions,
@@ -475,6 +485,7 @@ defmodule CodingAgent.Session.Lifecycle do
         task_depth: state.task_depth,
         task_allowed_agents: state.task_allowed_agents,
         tool_policy: state.tool_policy,
+        execution_context: state.execution_context,
         approval_context: state.approval_context,
         invocation_context_key: (state.approval_context || %{})[:invocation_context_key],
         invocation_mcp_servers: (state.approval_context || %{})[:invocation_mcp_servers],

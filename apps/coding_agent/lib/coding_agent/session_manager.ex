@@ -395,6 +395,23 @@ defmodule CodingAgent.SessionManager do
     end
   end
 
+  @doc "Restores durable execution authority independently of the selected history branch."
+  def execution_context(session) do
+    case Enum.find(Enum.reverse(entries(session)), fn entry ->
+           entry.type == :custom and entry.custom_type == "lemon.execution_context"
+         end) do
+      nil -> {:ok, nil}
+      entry -> LemonCore.ExecutionContext.decode(entry.data)
+    end
+  end
+
+  @doc "Journals validated execution authority without adding model-visible content."
+  def append_execution_context(session, context) do
+    with {:ok, encoded} <- LemonCore.ExecutionContext.encode(context) do
+      {:ok, append_entry(session, SessionEntry.custom("lemon.execution_context", encoded))}
+    end
+  end
+
   @doc """
   Fork the selected branch into an independent session file, preserving model,
   thinking level and compaction history. A separate cumulative-spend snapshot
@@ -430,9 +447,10 @@ defmodule CodingAgent.SessionManager do
             CodingAgent.Session.BudgetLedger.restore(source)
           )
 
-        case save_to_file(destination_path, child) do
-          :ok -> {:ok, child}
-          {:error, _} = error -> error
+        with {:ok, context} <- execution_context(source),
+             {:ok, child} <- inherit_fork_execution_context(child, context),
+             :ok <- save_to_file(destination_path, child) do
+          {:ok, child}
         end
       else
         {:error, :entry_not_found}
@@ -440,6 +458,22 @@ defmodule CodingAgent.SessionManager do
     else
       true -> {:error, :eexist}
       {:error, _} = error -> error
+    end
+  end
+
+  defp inherit_fork_execution_context(child, nil), do: {:ok, child}
+
+  defp inherit_fork_execution_context(child, parent) do
+    with {:ok, context} <-
+           LemonCore.ExecutionContext.child(parent,
+             run_id: child.header.id,
+             cwd: child.header.cwd,
+             provenance: %{
+               origin: "fork",
+               delegated_by: LemonCore.ExecutionContext.identity(parent)
+             }
+           ) do
+      append_execution_context(child, context)
     end
   end
 

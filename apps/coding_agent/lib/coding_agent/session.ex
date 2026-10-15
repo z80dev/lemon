@@ -126,6 +126,7 @@ defmodule CodingAgent.Session do
     :convert_to_llm,
     :transform_context,
     :tool_policy,
+    :execution_context,
     :approval_context,
     :secret_obfuscator,
     :extensions,
@@ -195,7 +196,8 @@ defmodule CodingAgent.Session do
           convert_to_llm: (list() -> list()),
           transform_context: (list(), reference() | nil ->
                                 list() | {:ok, list()} | {:error, term()}),
-          tool_policy: map() | nil,
+          tool_policy: LemonCore.ToolPolicy.t(),
+          execution_context: LemonCore.ExecutionContext.t(),
           approval_context: map() | nil,
           secret_obfuscator: CodingAgent.Security.SecretObfuscator.t() | nil,
           extensions: [module()],
@@ -225,11 +227,14 @@ defmodule CodingAgent.Session do
   @doc """
   Starts a new Session GenServer.
 
-  ## Options (required)
+  ## Options
 
-    * `:cwd` - Working directory for the session
-
-  ## Options (optional)
+    * `:cwd` - Working directory, defaulting to the execution-context workspace
+      root and then the process working directory.
+    * `:execution_context` - Validated `LemonCore.ExecutionContext` authority.
+      Direct starts create a root context. Supplied policy and durable session
+      authority can narrow it, never widen it; existing privacy, admission and
+      resource-ownership bindings remain independently enforced.
 
     * `:budget_limits` - Cumulative run/session caps, overriding SettingsManager.budgets.
     * `:model` - The AI model to use (`LemonAi.Types.Model.t()`). If not provided,
@@ -316,12 +321,75 @@ defmodule CodingAgent.Session do
   """
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts) do
-    {name, opts} = Keyword.pop(opts, :name)
+    with {:ok, opts} <- validate_execution_options(opts) do
+      {name, opts} = Keyword.pop(opts, :name)
 
-    if name do
-      GenServer.start_link(__MODULE__, opts, name: name)
-    else
-      GenServer.start_link(__MODULE__, opts)
+      if name do
+        GenServer.start_link(__MODULE__, opts, name: name)
+      else
+        GenServer.start_link(__MODULE__, opts)
+      end
+    end
+  end
+
+  defp validate_execution_options(opts) when is_list(opts) do
+    alias LemonCore.{ExecutionContext, ToolPolicy}
+
+    with {:ok, context} <- resolve_session_execution_context(opts),
+         {:ok, context} <- restrict_durable_execution_context(context, opts),
+         cwd <- Keyword.get(opts, :cwd) || context.workspace_scope.root || File.cwd!(),
+         {:ok, context} <- ExecutionContext.bind_workspace(context, cwd),
+         {:ok, policy} <-
+           ToolPolicy.resolve(Keyword.get(opts, :tool_policy), context.tool_policy),
+         {:ok, policy} <- ToolPolicy.restrict(context.tool_policy, policy) do
+      {:ok,
+       opts
+       |> Keyword.put(:cwd, cwd)
+       |> Keyword.put(:execution_context, %{context | tool_policy: policy})
+       |> Keyword.put(:tool_policy, policy)}
+    end
+  end
+
+  defp validate_execution_options(_opts), do: {:error, :invalid_session_options}
+
+  defp resolve_session_execution_context(opts) do
+    case Keyword.get(opts, :execution_context) do
+      nil ->
+        LemonCore.ExecutionContext.new(
+          run_id: Keyword.get(opts, :run_id),
+          agent_id: Keyword.get(opts, :agent_id),
+          origin: Keyword.get(opts, :execution_origin, :direct),
+          cwd: Keyword.get(opts, :cwd),
+          tool_policy: Keyword.get(opts, :tool_policy)
+        )
+
+      context ->
+        LemonCore.ExecutionContext.validate(context)
+    end
+  end
+
+  defp restrict_durable_execution_context(context, opts) do
+    case Keyword.get(opts, :session_file) do
+      nil ->
+        {:ok, context}
+
+      path ->
+        with {:ok, session} <- CodingAgent.SessionManager.load_from_file(path),
+             {:ok, stored} <- CodingAgent.SessionManager.execution_context(session) do
+          if is_nil(stored) do
+            {:ok, context}
+          else
+            LemonCore.ExecutionContext.child(stored,
+              run_id: context.run_id,
+              attempt_id: context.attempt_id,
+              tool_policy: context.tool_policy,
+              capabilities: context.capabilities,
+              limits: context.limits,
+              cwd: Keyword.get(opts, :cwd) || session.header.cwd,
+              provenance: context.provenance
+            )
+          end
+        end
     end
   end
 

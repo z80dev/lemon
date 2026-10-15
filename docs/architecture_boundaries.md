@@ -69,6 +69,12 @@ the dependency policy above, not these source-level rules:
 - Gateway-owned transports submit through `LemonCore.RouterBridge` when they need router normalization. They must not take a compile-time dependency on `LemonRouter.RunOrchestrator`.
 - Router-owned active session state is only exposed through `LemonRouter.Router` and `LemonCore.RouterBridge`. External apps must not reference `LemonRouter.SessionRegistry` directly.
 - Top-level requests and execution commands never validate or carry a runner identity. `engine: "lemon"` remains fixed run provenance in events and stores. `ResumeToken.engine` and historical `ChatState.last_engine` remain persisted discriminators; only native tokens may resume a top-level run, while non-native historical values are retained and quarantined from resume. Subagents execute natively in-process (`CodingAgent.Session` via `CodingAgent.Coordinator`); there is no external CLI runner registry. Router should use `LemonCore.Cwd` for default cwd resolution instead of `LemonGateway.Cwd`.
+- Execution authorization is shared core language:
+  `LemonCore.ToolPolicy` strictly validates supplied policy and
+  `LemonCore.ExecutionContext` binds run lineage, principal/provenance,
+  workspace, effective capabilities, and limits. Router layers and child
+  execution use authority intersection; named nodes transport and revalidate
+  only the versioned context rather than independently normalizing policy.
 - Shared domains in `lemon_core` / `lemon_control_plane` must use typed wrappers such as `RunStore`, `ChatStateStore`, `PolicyStore`, and `ProjectBindingStore` instead of bypassing them with raw store helpers.
 - Agent runtime registration and optional callback contracts live in `LemonCore.AgentRuntime`. Coding products register their provider at boot; control-plane methods, automation reviewers, channel commands and Web projections call the same core seam. Registry configuration belongs to `:lemon_core`; no consumer depends on the control plane to discover the running agent.
 - The shared CLI registry dispatches Mix-free command modules in their owning apps. Its `lemon_channels` and `lemon_media` references are runtime-only so setup and other one-shot commands do not start channel services through an application dependency. Source Mix tasks are thin adapters; packaged runtime profiles include the same handlers.
@@ -116,6 +122,7 @@ These rules complement the dependency policy table above. They must be respected
 | omp delegate driver (RPC protocol, session processes, discovery, `omp` tool) | `lemon_omp` | `lemon_core`, `coding_agent`, `lemon_gateway`, `lemon_control_plane` |
 | Skill platform logic (manifest, registry, installer, lockfile, source router, audit) | `lemon_skills` | `coding_agent`, `lemon_core`, `lemon_router` |
 | Prompt assembly and tool registration | `coding_agent` | `lemon_skills`, `lemon_core` |
+| Execution policy and authority context contracts | `lemon_core` | Any product-specific app |
 | Model/session routing | `lemon_router` | `coding_agent`, `lemon_skills` |
 | Runtime boot, profile, health, env detection | `lemon_core/runtime` | Shell scripts (only thin wrappers allowed there) |
 

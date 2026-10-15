@@ -83,6 +83,7 @@ export default {
           { text: "Overview", link: "/architecture/overview" },
           { text: "BEAM Agents", link: "/beam_agents" },
           { text: "App Boundaries", link: "/architecture_boundaries" },
+          { text: "Execution Policy", link: "/execution-policy" },
           { text: "Model Selection", link: "/model-selection-decoupling" },
           { text: "Context Management", link: "/context" },
           { text: "Bootstrap Contract", link: "/assistant_bootstrap_contract" },

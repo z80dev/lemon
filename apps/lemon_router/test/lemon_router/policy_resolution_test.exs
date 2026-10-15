@@ -107,10 +107,10 @@ defmodule LemonRouter.PolicyResolutionTest do
       assert Policy.command_allowed?(policy, "any command") == true
     end
 
-    test "returns true when allowed_commands is empty" do
+    test "returns false when allowed_commands is explicitly empty" do
       policy = %{allowed_commands: []}
 
-      assert Policy.command_allowed?(policy, "any command") == true
+      assert Policy.command_allowed?(policy, "any command") == false
     end
 
     test "blocked_commands takes precedence over allowed_commands" do
@@ -135,13 +135,14 @@ defmodule LemonRouter.PolicyResolutionTest do
       assert result.approvals["write"] == :dangerous
     end
 
-    test "second policy overrides same key in approvals" do
+    test "approval requirements cannot be weakened in either order" do
       a = %{approvals: %{"bash" => :never}}
       b = %{approvals: %{"bash" => :always}}
 
       result = Policy.merge(a, b)
 
       assert result.approvals["bash"] == :always
+      assert Policy.merge(b, a).approvals["bash"] == :always
     end
 
     test "combines blocked_tools lists" do
@@ -164,14 +165,15 @@ defmodule LemonRouter.PolicyResolutionTest do
       assert "sudo" in result.blocked_commands
     end
 
-    test "allowed_commands uses second policy when non-empty" do
+    test "allowed_commands intersect rather than taking the second policy" do
       a = %{allowed_commands: ["git", "npm", "curl"]}
-      b = %{allowed_commands: ["git", "npm"]}
+      b = %{allowed_commands: ["git", "npm", "cargo"]}
 
       result = Policy.merge(a, b)
 
-      # Second policy is more restrictive
       assert result.allowed_commands == ["git", "npm"]
+      assert Policy.merge(b, a).allowed_commands == ["git", "npm"]
+      assert Policy.merge(a, %{allowed_commands: []}).allowed_commands == []
     end
 
     test "sandbox boolean uses stricter (true) value" do

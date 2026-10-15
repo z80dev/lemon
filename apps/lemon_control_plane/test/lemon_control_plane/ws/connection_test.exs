@@ -45,7 +45,11 @@ defmodule LemonControlPlane.WS.ConnectionTest do
     token = "privacy-node-token-" <> suffix
 
     stored = %{
-      "coding_agent.run" => %{"version" => 1, "nativePrivacyContext" => %{"version" => 1}},
+      "coding_agent.run" => %{
+        "version" => 2,
+        "executionContext" => %{"version" => 1},
+        "nativePrivacyContext" => %{"version" => 1}
+      },
       "memory.search" => %{"version" => 1, "contextVersion" => 1},
       "memory.transfer.import" => %{"version" => 1, "contextVersion" => 1},
       "ordinary.legacy" => true

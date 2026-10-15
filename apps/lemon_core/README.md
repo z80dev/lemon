@@ -165,7 +165,9 @@ truncating so partial credentials cannot escape.
 | `LemonCore.Store.SqliteBackend` | SQLite backend with WAL mode and optional ephemeral tables |
 | `LemonCore.Store.JsonlBackend` | Append-only JSONL backend (human-readable, portable) |
 | `LemonCore.Store.ReadCache` | Public ETS read-through cache for hot domains |
-| `LemonCore.PolicyStore` | Agent, channel, session, and runtime policies over their four tables |
+| `LemonCore.PolicyStore` | Typed policy API and metadata owner for the existing agent, channel, session, and runtime policy tables |
+| `LemonCore.ToolPolicy` | Strict validated tool authorization shared by every execution boundary |
+| `LemonCore.ExecutionContext` | Versioned identity, provenance, policy, workspace, capability, and limit authority for root and child runs |
 
 ### Memory
 

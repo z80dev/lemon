@@ -142,6 +142,35 @@ defmodule CodingAgent.Executor.SessionRunner do
     request = Keyword.fetch!(opts, :request)
     request = %{request | meta: RemoteRequestCodec.normalize_meta(request.meta)}
     run_opts = Keyword.get(opts, :opts, %{})
+
+    request =
+      case request.execution_context do
+        nil -> %{request | execution_context: get_opt(run_opts, :execution_context)}
+        _context -> request
+      end
+
+    case request.execution_context do
+      nil ->
+        init_native_session(opts, request, run_opts)
+
+      supplied ->
+        run_id = request.run_id || get_opt(run_opts, :run_id)
+
+        with {:ok, context} <- LemonCore.ExecutionContext.validate(supplied),
+             true <- is_nil(run_id) or context.run_id == run_id do
+          init_native_session(
+            opts,
+            %{request | run_id: context.run_id, execution_context: context},
+            run_opts
+          )
+        else
+          false -> {:stop, :execution_context_run_id_mismatch}
+          {:error, reason} -> {:stop, reason}
+        end
+    end
+  end
+
+  defp init_native_session(opts, request, run_opts) do
     sink_pid = Keyword.fetch!(opts, :sink_pid)
     run_ref = Keyword.fetch!(opts, :run_ref)
 
@@ -215,6 +244,7 @@ defmodule CodingAgent.Executor.SessionRunner do
         native_source_floor_fun: get_opt(run_opts, :native_source_floor_fun),
         invocation_proof: Map.get(meta, :invocation_proof),
         invocation_proof_verified: Map.get(meta, :invocation_proof_verified) == true,
+        execution_context: request.execution_context,
         approval_timeout_ms: get_opt(run_opts, :approval_timeout_ms),
         acp_session_id: get_in(meta, [:acp_session_id]),
         acp_client_terminal: get_in(meta, [:acp_client_terminal]),
@@ -553,6 +583,9 @@ defmodule CodingAgent.Executor.SessionRunner do
       end)
 
     floor
+    |> LemonCore.ToolPolicy.intersect(
+      if request.execution_context, do: request.execution_context.tool_policy
+    )
     |> LemonCore.ToolPolicy.intersect(request.tool_policy)
     |> LemonCore.ToolPolicy.intersect(
       meta[:tool_policy] || meta["tool_policy"] || meta["toolPolicy"]
