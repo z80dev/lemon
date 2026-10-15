@@ -198,6 +198,21 @@ defmodule LemonCli.CommandRegistry do
       ]
     },
     %{
+      name: "pairing",
+      summary: "Review and approve channel pairing requests",
+      usage:
+        "lemon pairing list | approve <telegram|discord> <CODE> | deny <telegram|discord> <CODE>",
+      subcommands: [
+        %{name: "list", summary: "List pending requests without codes"},
+        %{name: "approve", summary: "Consume a code and allow its chat"},
+        %{name: "deny", summary: "Consume a code without allowing its chat"}
+      ],
+      options: [],
+      details: [
+        "Local operator only. Approval updates the user gateway config; restart the runtime to apply the allowlist."
+      ]
+    },
+    %{
       name: "doctor",
       summary: "Run diagnostics or write a support bundle",
       usage: "lemon doctor [options]",

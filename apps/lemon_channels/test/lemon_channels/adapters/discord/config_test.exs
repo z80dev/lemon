@@ -28,6 +28,25 @@ defmodule LemonChannels.Adapters.Discord.ConfigTest do
     :ok
   end
 
+  test "pairing behavior is opt-in and validates both channel policies" do
+    for config <- [Config, LemonChannels.Adapters.Telegram.Config] do
+      for behavior <- ["pair", "ignore"] do
+        resolved = config.resolve(%{"unauthorized_dm_behavior" => behavior})
+        assert resolved.unauthorized_dm_behavior == behavior
+        assert config.validate(resolved, []) == []
+      end
+
+      for behavior <- ["approve", true, false, 123] do
+        resolved = config.resolve(%{"unauthorized_dm_behavior" => behavior})
+
+        assert Enum.any?(
+                 config.validate(resolved, []),
+                 &String.contains?(&1, "unauthorized_dm_behavior")
+               )
+      end
+    end
+  end
+
   describe "resolve/1" do
     test "resolves the discord section" do
       resolved =

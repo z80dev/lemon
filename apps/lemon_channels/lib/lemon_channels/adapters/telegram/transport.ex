@@ -106,6 +106,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
               allowed_chat_ids:
                 RuntimeState.parse_allowed_chat_ids(cfg_get(config, :allowed_chat_ids)),
               allow_all_chats: cfg_get(config, :allow_all_chats, false) == true,
+              unauthorized_dm_behavior: cfg_get(config, :unauthorized_dm_behavior, "ignore"),
               deny_unbound_chats: cfg_get(config, :deny_unbound_chats, false),
               account_id: account_id,
               voice_transcription: cfg_get(config, :voice_transcription, false),
@@ -379,6 +380,15 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
         |> Enum.reject(&is_nil/1)
         |> Enum.join("\n")
 
+      send_critical_feedback(state, chat_id, thread_id, user_msg_id, text)
+    end
+
+    :ok
+  end
+
+  defp send_unpaired_notice(%{unauthorized_dm_behavior: "pair"} = state, inbound) do
+    with {:ok, text} <- LemonChannels.Pairing.reply("telegram", inbound) do
+      {chat_id, thread_id, user_msg_id} = extract_message_ids(inbound)
       send_critical_feedback(state, chat_id, thread_id, user_msg_id, text)
     end
 

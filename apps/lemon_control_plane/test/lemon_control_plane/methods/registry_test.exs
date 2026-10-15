@@ -75,6 +75,29 @@ defmodule LemonControlPlane.Methods.RegistryTest do
     assert LemonControlPlane.Methods.UsageRecords.scopes() == [:read]
   end
 
+  test "channel pairing requires pairing scope and a trusted local operator context" do
+    assert {:ok, LemonControlPlane.Methods.ChannelPairing} = Registry.lookup("channels.pairing")
+
+    assert {:error, {:forbidden, _}} =
+             Registry.dispatch(
+               "channels.pairing",
+               %{"action" => "list"},
+               ctx_with_scopes([:read])
+             )
+
+    ctx = ctx_with_scopes([:pairing]) |> Map.put(:local?, false)
+
+    assert {:error, :forbidden, "Local operator access required", nil} =
+             Registry.dispatch("channels.pairing", %{"action" => "list"}, ctx)
+
+    assert {:error, :forbidden, _, nil} =
+             Registry.dispatch(
+               "channels.pairing",
+               %{"action" => "list", "local?" => true},
+               ctx
+             )
+  end
+
   test "register/1, lookup/1, unregister/1, and list_methods/0 for dynamic method names" do
     method = LifecycleHandler.name()
     refute method in Registry.list_methods()

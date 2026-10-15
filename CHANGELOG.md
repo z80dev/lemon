@@ -24,6 +24,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Added
 
+- Opt-in, expiring Telegram/Discord DM pairing codes with local-owner approval
+  through `lemon pairing`, replacing manual allowlist edits.
+
 - Add opt-in `lemon doctor --live` for bounded, redacted provider models-list and
   Telegram/Discord bot identity checks without generating completions.
 

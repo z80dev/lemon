@@ -38,6 +38,7 @@ defmodule LemonChannels.Adapters.Discord.Config do
       default_thread_id: blank_to_nil_or_integer(section["default_thread_id"]),
       allowed_guild_ids: section["allowed_guild_ids"],
       allowed_channel_ids: section["allowed_channel_ids"],
+      unauthorized_dm_behavior: section["unauthorized_dm_behavior"],
       deny_unbound_channels: boolean(section["deny_unbound_channels"], false),
       message_content_intent_enabled: boolean(section["message_content_intent_enabled"], false),
       files: section["files"]
@@ -50,6 +51,7 @@ defmodule LemonChannels.Adapters.Discord.Config do
   def validate(section, errors) when is_map(section) do
     errors
     |> validate_bot_token(Map.get(section, :bot_token))
+    |> validate_unauthorized_dm_behavior(Map.get(section, :unauthorized_dm_behavior), "discord")
     |> validate_id_list(
       Map.get(section, :allowed_guild_ids),
       "gateway.discord.allowed_guild_ids"

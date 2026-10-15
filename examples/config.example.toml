@@ -205,6 +205,7 @@ drop = "oldest"
 # [gateway.telegram]
 # bot_token_secret = "TELEGRAM_BOT_TOKEN"
 # allowed_chat_ids = [12345678]
+# unauthorized_dm_behavior = "ignore" # opt-in "pair": unknown human DMs receive owner-approved codes
 # default_account_id = "default"
 # default_chat_id = 12345678
 # default_thread_id = 35
@@ -355,6 +356,7 @@ allow_tools = []
 # bot_token = ""
 # allowed_guild_ids = []
 # allowed_channel_ids = []
+# unauthorized_dm_behavior = "ignore" # opt-in "pair": DMs require explicit channel allowlisting
 # default_account_id = "default"
 # default_channel_id = ""
 # default_thread_id = ""

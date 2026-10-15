@@ -117,6 +117,34 @@ defmodule LemonChannels.Adapters.Telegram.TransportAuthorizationTest do
     :ok
   end
 
+  test "opt-in pairing replies once to an unknown DM even with an existing allowlist" do
+    chat_id = 100_020
+    AuthMockAPI.set_updates([message_update(chat_id, "hello"), message_update(chat_id, "again")])
+
+    assert {:ok, _pid} =
+             start_transport(%{allowed_chat_ids: [chat_id + 1], unauthorized_dm_behavior: "pair"})
+
+    assert_receive {:send_message, ^chat_id, reply}
+    assert [_, code] = Regex.run(~r/Pairing code: ([A-HJ-NP-Z2-9]{8})/, reply)
+    assert reply =~ "lemon pairing approve telegram #{code}"
+    refute_receive {:send_message, ^chat_id, _}, 100
+    refute_receive {:inbound, _}, 100
+
+    assert {:ok, %{chat_id: "100020", user_id: "99"}} =
+             LemonChannels.Pairing.consume("telegram", code)
+  end
+
+  test "opt-in pairing does not offer codes to unknown groups" do
+    update = put_in(message_update(100_021, "hello"), ["message", "chat", "type"], "supergroup")
+    AuthMockAPI.set_updates([update])
+
+    assert {:ok, _pid} =
+             start_transport(%{allowed_chat_ids: [], unauthorized_dm_behavior: "pair"})
+
+    refute_receive {:send_message, _, _}, 150
+    refute_receive {:inbound, _}, 100
+  end
+
   test "unpaired bot drops DMs from any chat and tells the chat once how to pair" do
     chat_id = 100_010
 

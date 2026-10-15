@@ -127,6 +127,56 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
 
   @gateway_config_key :"Elixir.LemonGateway.Config"
 
+  test "default ignore preserves guild restrictions on non-allowlisted DMs" do
+    with_discord_api(fn ->
+      state =
+        discord_message_state()
+        |> Map.put(:allowed_guild_ids, MapSet.new([1]))
+        |> Map.put(:allowed_channel_ids, MapSet.new([1_475_727_417_372_049_419]))
+
+      message = discord_message("1503803470493257895", "hello") |> Map.delete("guild_id")
+
+      assert {:noreply, ^state} =
+               Transport.handle_info({:discord_event, {:MESSAGE_CREATE, message, nil}}, state)
+
+      refute_receive {:discord_create, _, _}, 50
+    end)
+  end
+
+  test "opt-in pairing replies once to an unknown human DM without routing it" do
+    with_discord_api(fn ->
+      with_router_bridge(fn ->
+        state = Map.put(discord_message_state(), :unauthorized_dm_behavior, "pair")
+        message = discord_message("1503803470493257893", "hello") |> Map.delete("guild_id")
+        event = {:discord_event, {:MESSAGE_CREATE, message, nil}}
+        assert {:noreply, ^state} = Transport.handle_info(event, state)
+        assert_receive {:discord_create, _, %{content: reply}}
+        assert [_, code] = Regex.run(~r/Pairing code: ([A-HJ-NP-Z2-9]{8})/, reply)
+        assert reply =~ "lemon pairing approve discord #{code}"
+        assert {:noreply, ^state} = Transport.handle_info(event, state)
+        refute_receive {:discord_create, _, _}, 50
+        refute_receive {:submit_run, _}, 50
+        assert {:ok, %{platform: "discord"}} = LemonChannels.Pairing.consume("discord", code)
+      end)
+    end)
+  end
+
+  test "opt-in pairing never replies to unknown guild messages" do
+    with_discord_api(fn ->
+      state =
+        discord_message_state()
+        |> Map.put(:unauthorized_dm_behavior, "pair")
+        |> Map.put(:allowed_channel_ids, MapSet.new())
+
+      message = discord_message("1503803470493257894", "hello")
+
+      assert {:noreply, ^state} =
+               Transport.handle_info({:discord_event, {:MESSAGE_CREATE, message, nil}}, state)
+
+      refute_receive {:discord_create, _, _}, 50
+    end)
+  end
+
   test "ignores messages authored by the bot" do
     state = %{bot_user_id: @bot_user_id}
 
