@@ -187,6 +187,11 @@ export class LemonBotClient {
     return this.call('GET /runs', { query: { ...query, clientNonce } });
   }
 
+  /** Observe the complete original target reservation; an empty/partial run list is not enough. */
+  messageReceipt(conversationId: string, clientNonce: string) {
+    return this.call('GET /conversations/:id/messages/receipts/:nonce', { params: { id: conversationId, nonce: clientNonce } });
+  }
+
   /** Upload audio first, then request real backend STT; never sends a chat message. */
   async transcribe(file: Blob, metadata: AttachmentUpload, options: TranscribeOptions, filename?: string): Promise<Transcription> {
     const attachment = await this.call('POST /attachments', {

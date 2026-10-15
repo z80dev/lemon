@@ -102,6 +102,7 @@ struct LemonBotMacApp: App {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Image(systemName: "exclamationmark.circle.fill").foregroundStyle(.red)
                 Text(error).font(.system(size: 13)).textSelection(.enabled).lineLimit(3)
+                if platform.selectedBot == nil && store.account != nil { SettingsLink { Text("Open Settings") } }
                 Button { platform.errorMessage = nil } label: { Image(systemName: "xmark") }
                     .buttonStyle(.plain).foregroundStyle(.secondary).accessibilityLabel("Dismiss error")
             }
@@ -142,6 +143,7 @@ struct LemonBotMacApp: App {
 private struct MacMenuBarView: View {
     @Bindable var controller: MacPlatformController
     @Environment(\.openWindow) private var openWindow
+    @State private var confirmingSignOut = false
     var body: some View {
         Text(controller.store.account?.displayName ?? "Not signed in")
         if let bot = controller.selectedBot {
@@ -162,13 +164,18 @@ private struct MacMenuBarView: View {
                 }
             }
         }
-        Button("Sign out") {
-            Task {
-                controller.cancelCapture()
-                controller.stopPlayback()
-                do { try await controller.store.signOut() } catch { controller.errorMessage = error.localizedDescription }
+        Button("Sign out") { confirmingSignOut = true }
+            .disabled(controller.store.account == nil)
+            .confirmationDialog("Sign out of Lemon Bot on this Mac?", isPresented: $confirmingSignOut, titleVisibility: .visible) {
+                Button("Sign out", role: .destructive) {
+                    Task {
+                        controller.cancelCapture()
+                        controller.stopPlayback()
+                        do { try await controller.store.signOut() } catch { controller.errorMessage = error.localizedDescription }
+                    }
+                }
+                Button("Cancel", role: .cancel) {}
             }
-        }.disabled(controller.store.account == nil)
         Button("Quit Lemon Bot") { NSApp.terminate(nil) }.keyboardShortcut("q")
     }
 }
