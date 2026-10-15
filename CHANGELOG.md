@@ -10,6 +10,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Added
 
+- Layer language-server defaults with global/project
+  `[runtime.tools.lsp.servers.<id>]` overrides, custom servers, disabling,
+  initialization options and environment settings across catalog consumers.
+
 - Native task subagents now have a configurable soft assistant-request budget
   (default 200, per-item override, `0` disables), one optional wrap-up steer, and
   a graceful hard stop at 1.5x that auto-delivers partial findings. Revived runs

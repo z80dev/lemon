@@ -1610,6 +1610,32 @@ reads. Tool hosts can explicitly override it with the `:enforce_seen_lines` opti
 See [file tools](tools/files-and-search.md#anchored-edit-recovery-and-formatting)
 for visibility and snapshot-retention details.
 
+## Language Servers
+
+Configure `[runtime.tools.lsp.servers.<id>]` in user or project config. The
+effective catalog merges built-ins, user values, then project values. Known ids
+override fields; custom ids require `command` and a non-empty `extensions` list
+(`file_types` is an alias).
+
+```toml
+[runtime.tools.lsp.servers.clangd]
+command = "/opt/llvm/bin/clangd"
+args = ["--background-index"]
+root_markers = ["compile_commands.json", ".git"]
+extensions = [".c", ".h"]
+language_id = "c"
+initialization_options = { clangdFileStatus = true }
+env = { CLANGD_FLAGS = "" }
+disabled = false
+```
+
+`command` and `language_id` are non-empty strings; `args`, `root_markers`,
+`extensions`/`file_types` are string arrays; `env` is a string-to-string table;
+`initialization_options` is a table; `disabled` is boolean. Lists replace
+inherited values; nested tables merge. Command environment variables take
+priority over TOML. Disabled servers are excluded from all catalog lookups.
+See [LSP tools](tools/lsp.md#server-configuration) for custom servers and scope.
+
 ## Web Tools (`websearch` / `webfetch`)
 
 Lemon includes web tools under `runtime.tools.web`. For full setup and troubleshooting, see:

@@ -100,6 +100,46 @@ identity. Explicit abort/stop, logical reset/delete, unexpected owner death and
 install hint. `lsp` is in the dangerous-tool set because some servers build or
 run project code.
 
+## Server Configuration
+
+The catalog is layered as built-in defaults → `~/.lemon/config.toml` →
+project `.lemon/config.toml`, using the normal Lemon config loader. Configure
+servers under `[runtime.tools.lsp.servers.<id>]`; known ids override individual
+fields and unknown ids add servers (requiring `command` and non-empty
+`extensions`, or its alias `file_types`). Server ids should use lowercase
+letters and underscores.
+
+```toml
+[runtime.tools.lsp.servers.clangd]
+command = "/opt/llvm/bin/clangd"
+args = ["--background-index"]
+root_markers = ["compile_commands.json", ".git"]
+initialization_options = { clangdFileStatus = true }
+env = { CLANGD_FLAGS = "" }
+
+[runtime.tools.lsp.servers.pyright]
+disabled = true
+
+[runtime.tools.lsp.servers.my_language]
+command = "my-language-server"
+args = ["--stdio"]
+extensions = [".mylang"]
+language_id = "my-language"
+```
+
+Lists replace inherited lists; nested tables merge with project values winning.
+`language_id` sets the LSP language id for all configured extensions; without it,
+built-in per-extension ids remain intact. Extensions are case-insensitive and
+may omit the leading dot. Disabled servers are absent from selection and lookup.
+The documented `LEMON_LSP_*_COMMAND` variables still take priority over TOML
+commands. Use `reload` after changing a running server's configuration.
+
+`CodingAgent.Tools.Lsp.Client` coordinates synchronization and initialization;
+only `LemonLsp.ServerManager` opens LSP processes. The separately named
+`lsp_diagnostics` and `LspFormatter` helpers execute local checker/formatter
+commands, not LSP servers, and do not use this catalog.
+
+
 ## `lsp_diagnostics` Tool
 
 `lsp_diagnostics` accepts a file path relative to the active working directory:
