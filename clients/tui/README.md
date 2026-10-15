@@ -254,8 +254,8 @@ a model when none is selected.
   kept, and the edit is refused if the result would not parse.
 - Native terminal integration: Tern pane detection, prompt/reply navigation
   marks (OSC 133), clickable URL and file references (OSC 8, including `#L42`
-  line anchors), a session/status title, turn-completion and approval desktop
-  notifications, and an indeterminate progress indicator while working.
+  line anchors), a session/status title, turn-completion, approval and pending
+  question notifications, and an indeterminate progress indicator while working.
 
 ### Tern and modern terminals
 
@@ -303,7 +303,7 @@ Compaction results render as a compaction divider. While a run works, the dock
 shows a working row whose **Stop** takes Esc's abort path. Queued prompts are
 pills with an **Edit** control, and approvals offer clickable decision buttons
 with the full action and a countdown. The Alt+A task tree is a card of subagent
-nodes. Copy writes the clipboard over OSC 52.
+nodes. Copy uses the same clipboard path as `/copy` below.
 
 Tool calls are omp's semantic tool cards rather than painted text: shell calls
 are run boxes (command, tail-following output, `Done`/`exit N` foot), edits and
@@ -335,11 +335,12 @@ The title shows the focused session name (or key) and current status. `lemon_ses
 and `lemon_status` are exported as base64 OSC 1337 SetUserVar markers; this
 terminal client intentionally does **not** claim `tern_acp_session`, which is
 reserved for native ACP chats. Tern receives OSC 7501 program status:
-working, blocked for approval, done, or error. Cancelled turns return to neutral
+working, blocked for approval or a question, done, or error. Cancelled turns return to neutral
 idle instead of reporting success or failure. Its pane glow, inbox, completion
 banners and Carly waiting state follow those transitions. Other terminals
-receive generic OSC 9 or OSC 777 notifications (including “Turn interrupted”
-for cancellation), never prompts, answers, commands, or tool arguments.
+receive generic OSC 9 or OSC 777 notifications where supported, otherwise a
+terminal bell (including for interrupted turns), never prompts, answers,
+questions, commands, or tool arguments.
 
 pi-tui negotiates kitty keyboard support with a capability query rather than
 assuming it from environment variables, preserving the parent keyboard flags.
@@ -347,8 +348,23 @@ Exit and external-editor handoff restore the keyboard, cursor and raw mode,
 clear the progress indicator and remove the session markers. The title is
 restored where the terminal supports the xterm title stack, otherwise cleared
 so an exited client never leaves a stale working/approval status.
-`LEMON_TUI_NOTIFICATIONS=0` disables OSC 9/777 notifications; Tern's program
-status inbox and banners follow Tern's own notification settings.
+Configure attention signals in `~/.lemon/config.toml` (global TUI settings,
+loaded at startup):
+
+```toml
+[tui]
+notifications = "auto" # auto | osc | bell | off
+```
+
+`auto` (default) uses OSC notifications on recognized terminals and BEL (`\x07`)
+otherwise; Terminal.app therefore gets a bell. `osc` forces OSC 9/777 without
+a bell fallback; `bell` always rings BEL; `off` emits neither OSC notifications
+nor BEL. The same mode applies to pending questions, approvals, and completed,
+failed, or interrupted turns. Bell visibility/sound depends on terminal settings.
+`LEMON_TUI_NOTIFICATIONS=auto|osc|bell|off` overrides the file; legacy `0` means
+`off` and `1` means `auto`. Tern uses its native program-status inbox/banners
+instead of duplicate OSC notifications; those follow Tern's own settings even
+in `off` mode. Explicit `bell` also rings in Tern.
 `LEMON_TUI_TERMINAL_INTEGRATION=0` disables Lemon's terminal side channels and
 row transcript marks. `PI_TUI_NATIVE=0` disables native surfaces, and
 `PI_NO_HYPERLINKS=1` disables row-renderer links. pi-tui's multiplexer
@@ -362,6 +378,9 @@ and control plane authoritative:
 
 | Command | Lemon behavior |
 | --- | --- |
+| `/copy` | Copy the focused session's latest assistant reply (all text segments, including a partial reply). Alt+Shift+C does the same without changing the draft. |
+| `/copy code [n]` | Copy the nth fenced code block of that reply, numbered from 1; omitted `n` means **first**. Backtick and tilde fences, including nested ones, use the renderer's Markdown parsing. |
+| `/copy prompt` | Copy the latest submitted user prompt, not the current draft. |
 | `/queue [prompt]`, `/q [prompt]` | With a prompt, use queue mode for that submission; without one, inspect and edit the pending queue. `/q` is intentionally queue, not quit. |
 | `/steer <prompt>` | Send one steering submission without changing the default submission mode. |
 | `/redirect <prompt>` | Replace the active run's pending model direction without changing the default submission mode. |
@@ -396,6 +415,13 @@ and control plane authoritative:
 | `/name <title…>\|--clear` | Set or clear the current session's durable title through `sessions.metadata.patch`. |
 | `/blueprints [bundle-id filter]` | Browse bounded catalog IDs/counts, then inspect the selected entry through the shared authenticated service. |
 | `/blueprint [help\|list\|inspect\|validate\|preview\|activate] …` | Inspect and validate content-free metadata, preview one profile without mutation, or activate only after a fresh exact digest match. Refused/stale plans preserve the profile draft and never queue offline. |
+
+All copy controls send OSC 52 and, when local, also try a native clipboard:
+`pbcopy` on macOS; `wl-copy`, then `xclip -selection clipboard`, then
+`xsel --clipboard --input` on Linux. This also covers tmux or terminals that
+drop OSC 52. `SSH_TTY` or `SSH_CONNECTION` disables native clipboard access so
+a remote host's clipboard is never changed. Notices identify the paths used
+(OSC 52 is unacknowledged, not proof of a clipboard update), never copied text.
 
 Use `/quit` (or the existing keyboard exit binding) to leave the TUI. `/clear`
 remains visual-only: it clears terminal scrollback and the rendered transcript

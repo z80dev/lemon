@@ -8,7 +8,13 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
-No unreleased changes yet.
+### Added
+
+- Notify when a TUI `ask` question is waiting, with shared `[tui] notifications`
+  modes and a terminal-bell fallback for questions, approvals, and turn completion.
+- Add `/copy`, `/copy code [n]` (first block by default), `/copy prompt`, and
+  Alt+Shift+C, sharing OSC 52 plus local native clipboard fallbacks with message
+  Copy buttons; SSH never invokes host clipboard tools.
 
 ---
 

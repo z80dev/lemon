@@ -9,6 +9,7 @@
 import { approvalsCommand, approveCommand, denyCommand } from "./approvals.ts";
 import { blueprintCommand, blueprintsCommand } from "./blueprints.ts";
 import { contextCommand } from "./context.ts";
+import { copyCommand } from "./copy.ts";
 import {
 	clearCommand,
 	debugCommand,
@@ -72,6 +73,7 @@ export function createCommandRegistry(options: RegistryOptions = {}): CommandReg
 		taskTreeCommand,
 		outputCommand,
 		diffCommand,
+		copyCommand,
 		quitCommand,
 		clearCommand,
 		modeCommand,
