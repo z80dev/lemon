@@ -49,6 +49,12 @@ defmodule LemonCore.AgentRuntime.Provider do
   """
   @callback session_todos(session_key(), Path.t()) ::
               {:ok, [map()], {non_neg_integer(), String.t() | nil}} | {:error, term()}
+  @doc "Read selected-branch recovery input; cwd may be nil when the session is live."
+  @callback session_recovery_snapshot(session_key(), Path.t() | nil) ::
+              {:ok, map()} | {:error, term()}
+
+  @doc "Read redacted process receipts for an exact native session owner."
+  @callback session_process_receipts(String.t()) :: {:ok, [map()]} | {:error, term()}
 
   @doc "Forks native session state into an independent destination resume mapping."
   @callback session_fork(session_key(), Path.t(), session_key()) :: :ok | {:error, term()}
@@ -185,6 +191,8 @@ defmodule LemonCore.AgentRuntime.Provider do
                       compact_session: 2,
                       session_history: 2,
                       session_todos: 2,
+                      session_recovery_snapshot: 2,
+                      session_process_receipts: 1,
                       session_fork: 3,
                       session_fork: 4,
                       session_tree: 3,

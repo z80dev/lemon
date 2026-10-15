@@ -969,16 +969,34 @@ see [`docs/user-guide/reminders-and-heartbeats.md`](../../docs/user-guide/remind
 ### Subscribing to Events
 
 ```elixir
-# Direct mode (default)
-unsubscribe = CodingAgent.Session.subscribe(session)
+# Bounded direct mode (default)
+unsubscribe = CodingAgent.Session.subscribe(session, max_queue: 1000)
 receive do
+  {:session_event, session_id, {:stream_resync, %{reason: :overflow}}} ->
+    IO.puts("recover from the session owner")
   {:session_event, session_id, event} -> IO.inspect(event)
+  {:session_terminal, session_id, status} -> IO.inspect({:owner_terminal, status})
 end
 unsubscribe.()
 
-# Stream mode (backpressure-aware)
-{:ok, stream_pid} = CodingAgent.Session.subscribe(session, mode: :stream)
+# Existing EventStream, with bounded mailbox ingress and explicit resync
+{:ok, stream_pid} = CodingAgent.Session.subscribe(session, mode: :stream, max_queue: 1000)
 ```
+
+Both subscription modes bound delivery before the subscriber mailbox accepts an
+event. Overflow fences that subscription and explicitly requests recovery; it
+does not silently drop answer text and continue pretending the stream is whole.
+Session stream overflow always uses the resync strategy, not caller-selectable
+silent `drop_oldest`/`drop_newest` behavior. At most one compact
+`{:session_terminal, session_id, status}` notification is reserved after a direct
+subscription overflows. A runtime consumer must reread the owner's canonical
+messages/terminal state and finish exactly once; it must not infer success from
+that compact notification alone. Public clients reconcile through
+[`sessions.snapshot`](../lemon_control_plane/README.md#session-snapshot-and-reconciliation).
+See the [delivery inventory](../../docs/platform/bus-events.md#current-delivery-and-recovery-boundary)
+for exact defaults and the preceding owner/adapter paths that remain best effort.
+An unread resync-fenced Session stream expires after 30 seconds, including when
+a late terminal arrives; the terminal does not reopen or extend that buffer.
 
 ### Using Tool Policies
 

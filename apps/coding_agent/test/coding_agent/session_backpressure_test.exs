@@ -198,28 +198,33 @@ defmodule CodingAgent.SessionBackpressureTest do
       session = start_session(cwd: tmp_dir)
 
       {:ok, stream} =
-        Session.subscribe(session, mode: :stream, max_queue: 50, drop_strategy: :drop_oldest)
+        Session.subscribe(session, mode: :stream, max_queue: 50)
 
       stats = EventStream.stats(stream)
       assert stats.max_queue == 50
     end
 
     @tag :tmp_dir
-    test "respects drop_strategy option", %{tmp_dir: tmp_dir} do
+    test "overflow signals resynchronization instead of silently dropping events", %{
+      tmp_dir: tmp_dir
+    } do
       session = start_session(cwd: tmp_dir)
 
       {:ok, stream} =
-        Session.subscribe(session, mode: :stream, max_queue: 5, drop_strategy: :drop_newest)
+        Session.subscribe(session, mode: :stream, max_queue: 5)
 
-      # The drop strategy is internal but we can verify the stream was created
-      # by checking stats
-      stats = EventStream.stats(stream)
-      assert stats.max_queue == 5
+      for n <- 1..5, do: assert(:ok == EventStream.push(stream, {:progress, n}))
+      assert {:error, :overflow} = EventStream.push(stream, {:progress, 6})
+      assert %{queue_size: 6, max_queue: 5, dropped: 1} = EventStream.stats(stream)
+
+      assert List.last(Enum.to_list(EventStream.events(stream))) ==
+               {:session_event, Session.get_stats(session).session_id,
+                {:stream_resync, %{reason: :overflow}}}
     end
   end
 
   # ============================================================================
-  # Direct Mode Subscribe Tests (Legacy Behavior)
+  # Direct Mode Subscribe Tests (Bounded Mailbox Admission)
   # ============================================================================
 
   describe "subscribe with mode: :direct" do
@@ -244,7 +249,7 @@ defmodule CodingAgent.SessionBackpressureTest do
     end
 
     @tag :tmp_dir
-    test "default mode is :direct for backwards compatibility", %{tmp_dir: tmp_dir} do
+    test "default mode is bounded direct delivery", %{tmp_dir: tmp_dir} do
       session = start_session(cwd: tmp_dir)
 
       # Call subscribe without options
@@ -274,33 +279,42 @@ defmodule CodingAgent.SessionBackpressureTest do
       session = start_session(cwd: tmp_dir, stream_fn: slow_stream_fn)
 
       {:ok, stream} =
-        Session.subscribe(session, mode: :stream, max_queue: 10, drop_strategy: :drop_oldest)
+        Session.subscribe(session, mode: :stream, max_queue: 10)
+
+      _unsubscribe = Session.subscribe(session)
 
       # Start prompt but don't consume events immediately
       :ok = Session.prompt(session, "Hello")
 
-      # Give it time to potentially overflow
-      Process.sleep(100)
+      # The direct terminal is the barrier for owner completion, not a sleep.
+      assert_receive {:session_event, _session_id, {:agent_end, _}}, 5_000
 
       stats = EventStream.stats(stream)
       # Queue should be bounded
-      assert stats.queue_size <= 10
+      assert stats.queue_size <= 11
     end
 
     @tag :tmp_dir
-    test "drop_oldest drops old events when queue is full", %{tmp_dir: tmp_dir} do
+    test "full queue retains one explicit resync indication", %{tmp_dir: tmp_dir} do
       session = start_session(cwd: tmp_dir)
 
       {:ok, stream} =
-        Session.subscribe(session, mode: :stream, max_queue: 3, drop_strategy: :drop_oldest)
+        Session.subscribe(session, mode: :stream, max_queue: 3)
+
+      _unsubscribe = Session.subscribe(session)
 
       :ok = Session.prompt(session, "Hello")
-      wait_for_streaming_complete(session)
+      assert_receive {:session_event, _session_id, {:agent_end, _}}, 5_000
 
       stats = EventStream.stats(stream)
-      # If more than 3 events were generated, some should have been dropped
-      # We can verify dropped count if events exceeded max_queue
-      assert stats.queue_size <= 3 or stats.dropped > 0
+      assert stats.queue_size <= 4
+      assert stats.dropped > 0
+      assert {:error, :overflow} = EventStream.result(stream)
+
+      assert Enum.any?(EventStream.events(stream), fn
+               {:session_event, _, {:stream_resync, %{reason: :overflow}}} -> true
+               _ -> false
+             end)
     end
   end
 

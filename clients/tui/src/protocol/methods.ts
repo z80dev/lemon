@@ -89,6 +89,8 @@ import type {
 	SessionsPreviewResult,
 	SessionsPruneParams,
 	SessionsPruneResult,
+	SessionsSnapshotParams,
+	SessionsSnapshotResult,
 	UsageStatusResult,
 } from "./types.ts";
 
@@ -112,6 +114,7 @@ export const METHOD = {
 	sessionsPreview: "sessions.preview",
 	sessionsActive: "sessions.active",
 	sessionsActiveList: "sessions.active.list",
+	sessionsSnapshot: "sessions.snapshot",
 	sessionsPatch: "sessions.patch",
 	sessionsMetadataPatch: "sessions.metadata.patch",
 	sessionsExport: "sessions.export",
@@ -328,6 +331,16 @@ export class ControlPlaneMethods {
 		options?: RequestOptions,
 	): Promise<SessionsListResult> {
 		return this.#call<SessionsListResult>(METHOD.sessionsActiveList, params, options);
+	}
+
+	sessionsSnapshot(
+		params: SessionsSnapshotParams,
+		options?: RequestOptions,
+	): Promise<SessionsSnapshotResult> {
+		return this.#call<SessionsSnapshotResult>(METHOD.sessionsSnapshot, params, {
+			...options,
+			queueIfOffline: false,
+		});
 	}
 
 	sessionsPatch(params: SessionsPatchParams, options?: RequestOptions): Promise<unknown> {

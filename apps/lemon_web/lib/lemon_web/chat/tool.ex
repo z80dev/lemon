@@ -15,7 +15,7 @@ defmodule LemonWeb.Chat.Tool do
   @text_limit 64_000
   @list_limit 400
 
-  @type status :: :running | :done | :failed | :cancelled | :completed
+  @type status :: :running | :done | :failed | :cancelled | :completed | :unknown
 
   @doc "DOM id for a tool-call identity."
   @spec dom_id(String.t()) :: String.t()
@@ -104,6 +104,10 @@ defmodule LemonWeb.Chat.Tool do
 
   def merge(%{phase: "completed"} = old, %{phase: phase}) when phase != "completed", do: old
 
+  def merge(%{phase: "unknown"} = old, %{phase: phase})
+      when phase not in ["completed", "unknown"],
+      do: old
+
   def merge(old, new) do
     started = old.started_ms || new.started_ms
 
@@ -151,6 +155,7 @@ defmodule LemonWeb.Chat.Tool do
     end
   end
 
+  defp status("unknown", _ok, _details), do: :unknown
   defp status(_phase, _ok, _details), do: :running
 
   defp notice(details, :cancelled) do
@@ -166,6 +171,7 @@ defmodule LemonWeb.Chat.Tool do
     end
   end
 
+  defp notice(_details, :unknown), do: "The tool's final outcome is unknown."
   defp notice(_details, _status), do: nil
 
   @doc "The text a card shows as the tool's output for its status."
@@ -490,6 +496,7 @@ defmodule LemonWeb.Chat.Tool do
 
   defp phase(value) when value in [:completed, "completed"], do: "completed"
   defp phase(value) when value in [:updated, "updated"], do: "updated"
+  defp phase(value) when value in [:unknown, "unknown"], do: "unknown"
   defp phase(_), do: "started"
 
   defp first_line(nil), do: nil

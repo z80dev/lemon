@@ -180,8 +180,10 @@ defmodule CodingAgent.Session do
           context_frozen: boolean(),
           is_streaming: boolean(),
           pending_prompt_timer_ref: reference() | nil,
-          event_listeners: [{pid(), reference()}],
-          event_streams: %{reference() => %{pid: pid(), stream: pid()}},
+          event_listeners: [{pid(), reference(), LemonCore.Bus.Delivery.t()}],
+          event_streams: %{
+            reference() => %{pid: pid(), stream: pid(), delivery: LemonCore.Bus.Delivery.t()}
+          },
           abort_signal: reference() | nil,
           steering_queue: :queue.queue(),
           follow_up_queue: :queue.queue(),
@@ -414,9 +416,13 @@ defmodule CodingAgent.Session do
 
   ## Options
 
-    * `:mode` - `:direct` (default, uses send/2) or `:stream` (uses EventStream with backpressure)
-    * `:max_queue` - Max queue size for stream mode (default 1000)
-    * `:drop_strategy` - How to handle overflow: `:drop_oldest`, `:drop_newest`, or `:error` (default :drop_oldest)
+    * `:mode` - `:direct` (default) or `:stream` (bounded EventStream)
+    * `:max_queue` - Mailbox admission bound (direct default 256, stream default 1000)
+    * `:max_bytes` - Per-event admission limit (default 1 MiB)
+    * On overflow, delivery is fenced with `{:stream_resync, %{reason: :overflow}}`.
+      Read authoritative state and explicitly re-subscribe. A fenced direct
+      subscription reserves one compact `{:session_terminal, session_id, status}`
+      notification; terminal answer text remains available from the session owner.
 
   ## Returns
 
@@ -425,7 +431,7 @@ defmodule CodingAgent.Session do
 
   ## Examples
 
-      # Direct mode (legacy behavior)
+      # Bounded direct mailbox delivery (default)
       unsub = Session.subscribe(session)
       receive do
         {:session_event, _id, event} -> IO.inspect(event)
@@ -658,6 +664,9 @@ defmodule CodingAgent.Session do
     GenServer.call(session, :context_snapshot, 5_000)
   end
 
+  @doc "Read selected-branch recovery state without exposing model context or mutating the session."
+  def recovery_snapshot(session), do: GenServer.call(session, :recovery_snapshot, 5_000)
+
   @doc """
   Save the session to disk.
   """
@@ -874,8 +883,8 @@ defmodule CodingAgent.Session do
     {:reply, {:ok, stream}, new_state}
   end
 
-  def handle_call({:subscribe, pid, :direct, _opts}, _from, state) do
-    {unsubscribe, new_state} = Notifier.subscribe_direct(state, pid, self())
+  def handle_call({:subscribe, pid, :direct, opts}, _from, state) do
+    {unsubscribe, new_state} = Notifier.subscribe_direct(state, pid, self(), opts)
     {:reply, unsubscribe, new_state}
   end
 
@@ -1121,6 +1130,23 @@ defmodule CodingAgent.Session do
   def handle_call(:get_messages, _from, state) do
     agent_state = LemonAgent.Agent.get_state(state.agent)
     {:reply, Enum.map(agent_state.messages, &strip_recalled_context/1), state}
+  end
+
+  def handle_call(:recovery_snapshot, _from, state) do
+    agent_state = LemonAgent.Agent.get_state(state.agent)
+
+    snapshot =
+      CodingAgent.Session.Recovery.snapshot(state.session_manager,
+        run_id: state.run_id,
+        streaming: state.is_streaming or agent_state.is_streaming,
+        messages: Enum.map(agent_state.messages, &strip_recalled_context/1),
+        partial: agent_state.stream_message,
+        pending: MapSet.to_list(agent_state.pending_tool_calls),
+        failed: not is_nil(agent_state.error),
+        turn: state.turn_index
+      )
+
+    {:reply, {:ok, snapshot}, state}
   end
 
   def handle_call(:context_snapshot, _from, state) do

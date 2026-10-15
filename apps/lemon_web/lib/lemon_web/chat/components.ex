@@ -257,6 +257,7 @@ defmodule LemonWeb.Chat.Components do
   defp status_label(:failed), do: "failed"
   defp status_label(:cancelled), do: "cancelled"
   defp status_label(:completed), do: "completed"
+  defp status_label(:unknown), do: "outcome unknown"
 
   attr(:tool, :map, required: true)
   attr(:diff, :any, default: nil)

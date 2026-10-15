@@ -120,4 +120,11 @@ defmodule LemonCore.ExecApprovalStore do
     |> Store.list()
     |> Enum.reject(fn {_id, record} -> match?(%{resolution: _}, record) end)
   end
+
+  @doc "Read pending requests without interpreting store failure as no approvals."
+  def fetch_pending_list do
+    with {:ok, pending} <- Store.fetch_all(@pending_table) do
+      {:ok, Enum.reject(pending, fn {_id, record} -> match?(%{resolution: _}, record) end)}
+    end
+  end
 end

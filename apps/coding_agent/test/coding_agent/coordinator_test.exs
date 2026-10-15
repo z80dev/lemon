@@ -24,6 +24,7 @@ defmodule CodingAgent.CoordinatorTest do
         test_ref: test_ref,
         session_id: session_id,
         subscriber: nil,
+        messages: [],
         prompt_error: Keyword.get(opts, :prompt_error),
         gate_prompt: Keyword.get(opts, :gate_prompt, false),
         gate_cleanup: Keyword.get(opts, :gate_cleanup, false)
@@ -42,6 +43,10 @@ defmodule CodingAgent.CoordinatorTest do
     @impl true
     def handle_call(:get_stats, _from, state) do
       {:reply, %{session_id: state.session_id}, state}
+    end
+
+    def handle_call(:get_messages, _from, state) do
+      {:reply, state.messages, state}
     end
 
     def handle_call({:subscribe, subscriber, :direct, _opts}, _from, state) do
@@ -94,6 +99,23 @@ defmodule CodingAgent.CoordinatorTest do
     def handle_info({:fail, reason}, state) do
       send(state.subscriber, {:session_event, state.session_id, {:error, reason, []}})
       {:noreply, state}
+    end
+
+    def handle_info({:terminal, status, text}, state) do
+      messages =
+        if is_binary(text) do
+          [%LemonAi.Types.AssistantMessage{content: [%LemonAi.Types.TextContent{text: text}]}]
+        else
+          []
+        end
+
+      send(
+        state.subscriber,
+        {:session_event, state.session_id, {:stream_resync, %{reason: :overflow}}}
+      )
+
+      send(state.subscriber, {:session_terminal, state.session_id, status})
+      {:noreply, %{state | messages: messages}}
     end
 
     def handle_info({:DOWN, ref, :process, _pid, _reason}, %{test_ref: ref} = state) do
@@ -547,9 +569,21 @@ defmodule CodingAgent.CoordinatorTest do
     end
   end
 
-  for event <- [{:complete, "completed answer"}, {:fail, :provider_failed}],
+  for event <- [
+        {:complete, "completed answer"},
+        {:fail, :provider_failed},
+        {:terminal, :completed, "recovered canonical answer"},
+        {:terminal, :canceled, nil},
+        {:terminal, :error, nil}
+      ],
       cancellation <- [:abort, :timeout] do
-    test "#{elem(event, 0)} remains terminal when #{cancellation} arrives during cleanup", %{
+    event_name =
+      case event do
+        {:terminal, status, _} -> "compact #{status}"
+        _ -> elem(event, 0)
+      end
+
+    test "#{event_name} remains terminal when #{cancellation} arrives during cleanup", %{
       tmp_dir: tmp_dir
     } do
       coordinator = start_controlled_coordinator(tmp_dir, gate_cleanup: true)
@@ -579,6 +613,9 @@ defmodule CodingAgent.CoordinatorTest do
         case event do
           {:complete, answer} -> %{status: :completed, result: answer, error: nil}
           {:fail, reason} -> %{status: :error, result: nil, error: reason}
+          {:terminal, :completed, answer} -> %{status: :completed, result: answer, error: nil}
+          {:terminal, :canceled, _} -> %{status: :error, result: nil, error: :aborted}
+          {:terminal, :error, _} -> %{status: :error, result: nil, error: :session_failed}
         end
 
       assert Map.take(result, [:status, :result, :error, :session_id]) ==
@@ -586,6 +623,34 @@ defmodule CodingAgent.CoordinatorTest do
 
       assert Coordinator.list_active(coordinator) == []
     end
+  end
+
+  test "compact terminal wakeups from another session do not complete a worker", %{
+    tmp_dir: tmp_dir
+  } do
+    coordinator = start_controlled_coordinator(tmp_dir)
+    call = run_async(coordinator, [%{prompt: "Scoped terminal"}])
+    {pid, ref, session_id, worker} = started_session("Scoped terminal")
+
+    for status <- [:error, :canceled, :completed] do
+      send(worker, {:session_terminal, "foreign-session", status})
+    end
+
+    send(pid, {:terminal, :completed, "own canonical answer"})
+    assert_receive {:DOWN, ^ref, :process, ^pid, :shutdown}, 1_000
+
+    assert_receive {:results, ^call,
+                    [
+                      %{
+                        status: :completed,
+                        result: "own canonical answer",
+                        error: nil,
+                        session_id: ^session_id
+                      }
+                    ]},
+                   1_000
+
+    assert Coordinator.list_active(coordinator) == []
   end
 
   describe "crash handling" do

@@ -19,6 +19,8 @@ defmodule LemonWeb.Chat.PaneLive do
     * deltas are coalesced (~40 ms) and only the streaming message is
       re-inserted; a run's final answer is appended only when nothing was
       streamed for it, so completion never duplicates the reply;
+    * owner recovery replaces the entire projection, including buffered deltas;
+      pending coalescer text must never be flushed into the replacement stream;
     * setup readiness is checked before uploads are consumed or any call is made.
   """
 
@@ -74,6 +76,8 @@ defmodule LemonWeb.Chat.PaneLive do
 
   @flush_ms 40
   @subagent_refresh_ms 2_000
+  @terminal_run_limit 128
+  @live_answer_bytes 65_536
   @control_modes [:followup, :steer, :redirect]
   @thinking_levels ~w(off minimal low medium high xhigh auto)
   @tool_profiles [
@@ -102,11 +106,7 @@ defmodule LemonWeb.Chat.PaneLive do
   defp init(socket, key, session) do
     connected? = connected?(socket)
 
-    if connected? do
-      Bus.subscribe(Bus.session_topic(key))
-      Bus.subscribe("exec_approvals")
-      Bus.subscribe("system")
-    end
+    delivery = if connected?, do: subscribe_delivery(key), else: nil
 
     setup = Setup.status()
     {cwd, cwd_recorded?} = resolve_cwd(key)
@@ -151,6 +151,19 @@ defmodule LemonWeb.Chat.PaneLive do
       dirty: MapSet.new(),
       flush_timer: nil,
       streamed_runs: MapSet.new(),
+      terminal_runs: [],
+      bus_delivery: delivery,
+      recovery: %{
+        identity: nil,
+        generation: 0,
+        event_revision: 0,
+        inflight: false,
+        retries: 0,
+        needed: true,
+        recovered_run: nil
+      },
+      processes: %{"status" => "unavailable", "items" => []},
+      todos: %{"status" => "unavailable", "items" => []},
       last_seq: %{},
       tools: Map.new(for(%{kind: :tool} = tool <- items, do: {tool.id, tool})),
       history_error: history_error,
@@ -185,6 +198,7 @@ defmodule LemonWeb.Chat.PaneLive do
         |> load_context()
         |> refresh_subagents()
         |> schedule_subagent_refresh()
+        |> start_recovery()
       else
         socket
       end
@@ -630,16 +644,27 @@ defmodule LemonWeb.Chat.PaneLive do
       {:noreply,
        assign(socket, :context, %{socket.assigns.context | status: :unavailable, error: nil})}
 
-  def handle_async(:plan, {:ok, {:ok, plan}}, socket),
-    do: {:noreply, assign(socket, :plan, Map.put(plan, :error, nil))}
+  def handle_async(:plan, {:ok, {identity, result}}, socket) do
+    if identity == socket.assigns.recovery.identity do
+      case result do
+        {:ok, plan} ->
+          {:noreply, assign(socket, :plan, Map.put(plan, :error, nil))}
 
-  def handle_async(:plan, {:ok, {:error, error}}, socket),
-    do: {:noreply, assign(socket, :plan, %{socket.assigns.plan | error: Rpc.message(error)})}
+        {:error, error} ->
+          {:noreply, assign(socket, :plan, %{socket.assigns.plan | error: Rpc.message(error)})}
+      end
+    else
+      {:noreply, socket}
+    end
+  end
 
-  def handle_async(:plan, {:exit, _}, socket),
-    do:
-      {:noreply,
-       assign(socket, :plan, %{socket.assigns.plan | error: "Plan status is unavailable."})}
+  def handle_async(:plan, {:exit, _}, socket) do
+    if socket.assigns.recovery.identity,
+      do: {:noreply, socket},
+      else:
+        {:noreply,
+         assign(socket, :plan, %{socket.assigns.plan | error: "Plan status is unavailable."})}
+  end
 
   def handle_async(:compact, {:ok, :ok}, socket) do
     {:noreply,
@@ -657,20 +682,81 @@ defmodule LemonWeb.Chat.PaneLive do
       {:noreply,
        socket |> assign(:compacting, false) |> toast(:danger, "Compaction did not complete.")}
 
+  def handle_async(:recovery, {:ok, {key, generation, revision, result}}, socket) do
+    recovery = socket.assigns.recovery
+
+    cond do
+      key != socket.assigns.session_key or generation != recovery.generation ->
+        {:noreply, socket}
+
+      revision != recovery.event_revision ->
+        {:noreply, retry_recovery(socket)}
+
+      true ->
+        socket = assign(socket, :recovery, %{recovery | inflight: false})
+
+        case result do
+          {:ok, snapshot} -> {:noreply, apply_recovery(socket, snapshot)}
+          :retry -> {:noreply, retry_recovery(socket)}
+          {:error, _} -> {:noreply, recovery_unavailable(socket)}
+        end
+    end
+  end
+
+  def handle_async(:recovery, {:exit, _}, socket),
+    do: {:noreply, recovery_unavailable(socket)}
+
   # ── Bus events ──────────────────────────────────────────────────────────
 
   @impl true
+  def handle_info({:lemon_bus_delivery, gate, message}, socket) do
+    if LemonCore.Bus.Delivery.matches?(socket.assigns.bus_delivery, gate),
+      do: handle_info(message, socket),
+      else: {:noreply, socket}
+  end
+
   def handle_info(:flush, socket), do: {:noreply, socket |> assign(:flush_timer, nil) |> flush()}
 
-  def handle_info(:refresh_subagents, socket),
-    do: {:noreply, socket |> maybe_refresh_subagents() |> schedule_subagent_refresh()}
+  def handle_info(:refresh_subagents, socket) do
+    socket = socket |> maybe_refresh_subagents() |> schedule_subagent_refresh()
+    recovery = socket.assigns.recovery
+
+    socket =
+      if recovery.needed or recovery.recovered_run,
+        do: start_recovery(socket),
+        else: socket
+
+    {:noreply, socket}
+  end
+
+  def handle_info({:stream_resync, :overflow}, socket) do
+    {:noreply,
+     socket
+     |> assign(:recovery, %{
+       socket.assigns.recovery
+       | needed: true,
+         event_revision: socket.assigns.recovery.event_revision + 1
+     })
+     |> start_recovery()}
+  end
 
   def handle_info(%LemonCore.Event{type: type}, socket)
       when type in [:config_reloaded, :secret_changed],
       do: {:noreply, refresh_setup(socket)}
 
   def handle_info(%LemonCore.Event{} = event, socket) do
+    socket =
+      assign(socket, :recovery, %{
+        socket.assigns.recovery
+        | event_revision: socket.assigns.recovery.event_revision + 1
+      })
+
     case safe_project(event) do
+      {"stream.resync", payload} ->
+        if mine?(socket, payload),
+          do: handle_info({:stream_resync, :overflow}, socket),
+          else: {:noreply, socket}
+
       {"chat", %{"type" => "delta"} = payload} ->
         {:noreply, on_delta(socket, payload)}
 
@@ -696,6 +782,258 @@ defmodule LemonWeb.Chat.PaneLive do
 
   def handle_info(_message, socket), do: {:noreply, socket}
 
+  # Recovery reads the same authority as remote/TUI clients. There is no
+  # durable delta cursor: events observed during a read invalidate it, and a
+  # recovered active answer stays replacement-only until terminal truth.
+  defp start_recovery(socket, retries \\ 0) do
+    recovery = socket.assigns.recovery
+
+    if recovery.inflight do
+      socket
+    else
+      key = socket.assigns.session_key
+      cwd = socket.assigns.cwd
+      generation = recovery.generation + 1
+      revision = recovery.event_revision
+
+      socket
+      |> assign(:recovery, %{
+        recovery
+        | generation: generation,
+          inflight: true,
+          retries: retries,
+          needed: true
+      })
+      |> start_async(:recovery, fn ->
+        {key, generation, revision, Backend.snapshot(key, cwd)}
+      end)
+    end
+  end
+
+  defp retry_recovery(socket) do
+    recovery = socket.assigns.recovery
+    socket = assign(socket, :recovery, %{recovery | inflight: false})
+
+    if recovery.retries < 2,
+      do: start_recovery(socket, recovery.retries + 1),
+      else: recovery_unavailable(socket)
+  end
+
+  defp recovery_unavailable(socket) do
+    socket
+    |> assign(:recovery, %{socket.assigns.recovery | inflight: false, needed: true})
+    |> assign(:history_error, "Current session recovery is unavailable. Lemon will retry.")
+  end
+
+  defp apply_recovery(socket, %{"identity" => identity, "snapshot" => snapshot} = result) do
+    previous = socket.assigns.recovery.identity
+    attempt_fields = ["sessionId", "branchId", "runId", "attempt"]
+
+    regressed? =
+      is_map(previous) and
+        Map.take(previous, attempt_fields) == Map.take(identity, attempt_fields) and
+        identity["runId"] in socket.assigns.terminal_runs and snapshot["phase"] == "running"
+
+    if regressed?, do: recovery_unavailable(socket), else: install_recovery(socket, result)
+  end
+
+  defp install_recovery(socket, %{"identity" => identity, "snapshot" => snapshot}) do
+    run_id = identity["runId"]
+
+    items =
+      snapshot
+      |> recovery_rows(run_id)
+      |> Transcript.from_history()
+      |> recovery_terminal_notice(snapshot["phase"])
+
+    active? = snapshot["phase"] == "running"
+    previous = socket.assigns.recovery.identity
+    previous_run = previous && previous["runId"]
+
+    terminal_runs =
+      [
+        if(snapshot["terminal"], do: run_id),
+        if(previous_run != run_id and snapshot["phase"] != "unknown", do: previous_run)
+      ]
+      |> Enum.filter(&is_binary/1)
+      |> Kernel.++(socket.assigns.terminal_runs)
+      |> Enum.uniq()
+      |> Enum.take(@terminal_run_limit)
+
+    run =
+      cond do
+        active? and is_binary(run_id) ->
+          %{socket.assigns.run | status: :running, run_id: run_id}
+
+        snapshot["phase"] == "unknown" ->
+          if socket.assigns.run.status in [:running, :stopping],
+            do: socket.assigns.run,
+            else: %{idle_run() | status: :unavailable}
+
+        true ->
+          idle_run()
+      end
+
+    approvals =
+      case snapshot["approvals"] do
+        %{"status" => "ok", "items" => pending} when is_list(pending) ->
+          pending |> Enum.map(&Components.approval_view/1) |> Enum.filter(&is_binary(&1.id))
+
+        _ ->
+          # An unavailable approval owner must never preserve actionable cards.
+          []
+      end
+
+    # A stream reset retains inserts already queued in this render. Publishing
+    # the dirty tail here would therefore reinsert abandoned text alongside the
+    # recovered rows, even though the segment indexes below are cleared.
+    _ = if socket.assigns.flush_timer, do: Process.cancel_timer(socket.assigns.flush_timer)
+
+    socket =
+      socket
+      |> assign(:flush_timer, nil)
+      |> assign(
+        run: run,
+        last_run_id: run_id,
+        terminal_runs: terminal_runs,
+        segments: %{},
+        dirty: MapSet.new(),
+        streamed_runs: MapSet.new(),
+        resumed_runs: MapSet.new(),
+        last_seq: %{},
+        tools: Map.new(for(%{kind: :tool} = tool <- items, do: {tool.id, tool})),
+        transcript_empty?: items == [],
+        approvals: approvals,
+        approval_notice:
+          if(snapshot["approvals"]["status"] != "ok",
+            do: "Approval status is unavailable.",
+            else: nil
+          ),
+        todos: snapshot["todos"],
+        processes: snapshot["processes"],
+        subagents: Subagents.from_recovery(snapshot["children"]),
+        history_error: recovery_preview_notice(snapshot),
+        recovery: %{
+          socket.assigns.recovery
+          | identity: identity,
+            inflight: false,
+            retries: 0,
+            needed: snapshot["phase"] == "unknown",
+            recovered_run: if(active?, do: run_id)
+        }
+      )
+      |> stream(:items, items, reset: true, limit: -Transcript.max_items())
+      |> apply_recovery_plan(snapshot["plan"])
+      |> replace_delivery()
+
+    notify_parent(socket, :sessions_changed)
+    socket
+  end
+
+  defp recovery_rows(snapshot, run_id) do
+    rows = (snapshot["messages"] || []) ++ (snapshot["actions"] || [])
+
+    case snapshot["answer"] do
+      %{"canonical" => true, "text" => answer}
+      when is_binary(run_id) and is_binary(answer) and answer != "" ->
+        # Canonical completion replaces all current-turn text segments. It is
+        # not another message appended beside a partial or mismatching answer.
+        rows =
+          Enum.reject(rows, &(&1["role"] == "assistant" and &1["runId"] == run_id))
+
+        timestamp = Enum.reduce(rows, 0, &max(&1["timestampMs"] || 0, &2))
+
+        rows ++
+          [
+            %{
+              "id" => "recovery:#{run_id}:answer",
+              "role" => "assistant",
+              "runId" => run_id,
+              "content" => answer,
+              "timestampMs" => timestamp + 1
+            }
+          ]
+
+      _ ->
+        rows
+    end
+  end
+
+  defp recovery_preview_notice(snapshot) do
+    cond do
+      snapshot["phase"] == "unknown" ->
+        "Current run state is unavailable."
+
+      snapshot["messagesTruncated"] == true or snapshot["actionsTruncated"] == true or
+          snapshot["answer"]["truncated"] == true ->
+        "Recovery preview is bounded; some transcript or answer text is omitted."
+
+      true ->
+        nil
+    end
+  end
+
+  defp recovery_terminal_notice(items, "cancelled"),
+    do: items ++ [Transcript.notice_item("info", "Run stopped.")]
+
+  defp recovery_terminal_notice(items, "failed"),
+    do: items ++ [Transcript.notice_item("danger", "The run did not finish successfully.")]
+
+  defp recovery_terminal_notice(items, _), do: items
+
+  defp apply_recovery_plan(socket, %{"status" => "ok", "value" => value})
+       when is_map(value) do
+    assign(socket, :plan, %{
+      mode: value["mode"],
+      content: value["content"],
+      path: nil,
+      error: if(value["truncated"] == true, do: "Plan preview is truncated.")
+    })
+  end
+
+  defp apply_recovery_plan(socket, _),
+    do:
+      assign(socket, :plan, %{
+        mode: nil,
+        content: nil,
+        path: nil,
+        error: "Plan status is unavailable."
+      })
+
+  defp current_recovery_run?(socket, run_id) do
+    case socket.assigns.recovery.identity do
+      nil ->
+        true
+
+      identity ->
+        identity["runId"] == run_id and socket.assigns.run.status in [:running, :stopping]
+    end
+  end
+
+  defp delivery_topics(key), do: [Bus.session_topic(key), "exec_approvals", "system"]
+
+  defp subscribe_delivery(key) do
+    delivery =
+      LemonCore.Bus.Delivery.new(self(),
+        tagged: true,
+        max_queue: 256,
+        max_bytes: 65_536,
+        overflow_message: {:stream_resync, :overflow}
+      )
+
+    Enum.each(delivery_topics(key), &Bus.subscribe(&1, delivery: delivery))
+    delivery
+  end
+
+  defp replace_delivery(socket) do
+    if socket.assigns.bus_delivery do
+      LemonCore.Bus.Delivery.close(socket.assigns.bus_delivery)
+      Enum.each(delivery_topics(socket.assigns.session_key), &Bus.unsubscribe/1)
+    end
+
+    assign(socket, :bus_delivery, subscribe_delivery(socket.assigns.session_key))
+  end
+
   defp safe_project(event) do
     EventBridge.project(event)
   rescue
@@ -716,29 +1054,54 @@ defmodule LemonWeb.Chat.PaneLive do
     last = Map.get(socket.assigns.last_seq, run_id)
 
     cond do
+      run_id in socket.assigns.terminal_runs ->
+        socket
+
       not mine?(socket, payload) or not is_binary(text) or text == "" ->
         socket
+
+      socket.assigns.recovery.recovered_run == run_id ->
+        # There is no durable token cursor. A recovered partial answer is a
+        # replacement snapshot, never a prefix to append uncertain deltas to.
+        socket
+
+      not current_recovery_run?(socket, run_id) ->
+        start_recovery(socket)
+
+      is_integer(seq) and is_integer(last) and seq > last + 1 ->
+        start_recovery(socket)
 
       is_integer(seq) and is_integer(last) and seq <= last ->
         socket
 
       true ->
-        segment = socket.assigns.segments[run_id] || Transcript.assistant_item(run_id, "", true)
-        segment = %{segment | text: segment.text <> text}
+        append_live_delta(socket, run_id, seq, text)
+    end
+  end
 
-        socket
-        |> assign(
-          segments: Map.put(socket.assigns.segments, run_id, segment),
-          dirty: MapSet.put(socket.assigns.dirty, run_id),
-          streamed_runs: MapSet.put(socket.assigns.streamed_runs, run_id),
-          last_seq:
-            if(is_integer(seq),
-              do: Map.put(socket.assigns.last_seq, run_id, seq),
-              else: socket.assigns.last_seq
-            )
-        )
-        |> mark_running(run_id)
-        |> schedule_flush()
+  defp append_live_delta(socket, run_id, seq, text) do
+    segment = socket.assigns.segments[run_id] || Transcript.assistant_item(run_id, "", true)
+
+    if byte_size(segment.text) + byte_size(text) > @live_answer_bytes do
+      socket
+      |> assign(:recovery, %{socket.assigns.recovery | recovered_run: run_id})
+      |> start_recovery()
+    else
+      segment = %{segment | text: segment.text <> text}
+
+      socket
+      |> assign(
+        segments: Map.put(socket.assigns.segments, run_id, segment),
+        dirty: MapSet.put(socket.assigns.dirty, run_id),
+        streamed_runs: MapSet.put(socket.assigns.streamed_runs, run_id),
+        last_seq:
+          if(is_integer(seq),
+            do: Map.put(socket.assigns.last_seq, run_id, seq),
+            else: socket.assigns.last_seq
+          )
+      )
+      |> mark_running(run_id)
+      |> schedule_flush()
     end
   end
 
@@ -746,11 +1109,17 @@ defmodule LemonWeb.Chat.PaneLive do
     run_id = payload["runId"]
 
     cond do
+      run_id in socket.assigns.terminal_runs ->
+        socket
+
       not mine?(socket, payload) or not is_binary(run_id) ->
         socket
 
       payload["parentRunId"] not in [nil, ""] ->
         refresh_subagents(socket)
+
+      socket.assigns.recovery.identity != nil ->
+        start_recovery(socket)
 
       true ->
         queued =
@@ -791,8 +1160,14 @@ defmodule LemonWeb.Chat.PaneLive do
     run_id = payload["runId"] || socket.assigns.run.run_id || "run"
 
     cond do
+      run_id in socket.assigns.terminal_runs ->
+        socket
+
       not mine?(socket, payload) ->
         socket
+
+      socket.assigns.recovery.identity != nil ->
+        start_recovery(socket)
 
       kind == "approval" ->
         socket
@@ -812,10 +1187,23 @@ defmodule LemonWeb.Chat.PaneLive do
             merged = Tool.merge(socket.assigns.tools[tool.id], tool)
 
             socket
-            |> assign(:tools, Map.put(socket.assigns.tools, tool.id, merged))
+            |> assign(:tools, bounded_tools(socket.assigns.tools, merged))
             |> mark_running(payload["runId"])
             |> insert(merged)
         end
+    end
+  end
+
+  defp bounded_tools(tools, tool) do
+    tools = Map.put(tools, tool.id, tool)
+
+    if map_size(tools) > Transcript.max_items() do
+      {oldest, _} =
+        Enum.min_by(tools, fn {id, entry} -> {entry.started_ms || 0, id} end)
+
+      Map.delete(tools, oldest)
+    else
+      tools
     end
   end
 
@@ -833,9 +1221,18 @@ defmodule LemonWeb.Chat.PaneLive do
   end
 
   defp on_completed(socket, payload, event) do
+    if socket.assigns.recovery.identity do
+      # Untagged events cannot prove membership in a selected branch/attempt.
+      if mine?(socket, payload), do: start_recovery(socket), else: socket
+    else
+      apply_completed(socket, payload, event)
+    end
+  end
+
+  defp apply_completed(socket, payload, event) do
     run_id = payload["runId"] || socket.assigns.run.run_id || "run"
 
-    if mine?(socket, payload) do
+    if mine?(socket, payload) and run_id not in socket.assigns.terminal_runs do
       answer = full_answer(event) || payload["answer"]
       streamed? = MapSet.member?(socket.assigns.streamed_runs, run_id)
       segment = socket.assigns.segments[run_id]
@@ -881,6 +1278,7 @@ defmodule LemonWeb.Chat.PaneLive do
         )
         |> assign(
           streamed_runs: MapSet.delete(socket.assigns.streamed_runs, run_id),
+          terminal_runs: Enum.take([run_id | socket.assigns.terminal_runs], @terminal_run_limit),
           resumed_runs: MapSet.delete(socket.assigns.resumed_runs, run_id),
           last_seq: Map.delete(socket.assigns.last_seq, run_id)
         )
@@ -989,6 +1387,10 @@ defmodule LemonWeb.Chat.PaneLive do
       payload["sessionKey"] != socket.assigns.session_key ->
         socket
 
+      socket.assigns.recovery.identity != nil ->
+        # Pending owner state wins over a delayed request/resolution event.
+        start_recovery(socket)
+
       not is_binary(approval.id) ->
         socket
 
@@ -1001,6 +1403,12 @@ defmodule LemonWeb.Chat.PaneLive do
   end
 
   defp on_approval_resolved(socket, payload) do
+    if socket.assigns.recovery.identity,
+      do: start_recovery(socket),
+      else: apply_approval_resolved(socket, payload)
+  end
+
+  defp apply_approval_resolved(socket, payload) do
     id = payload["approvalId"]
 
     if Enum.any?(socket.assigns.approvals, &(&1.id == id)) do
@@ -1318,7 +1726,11 @@ defmodule LemonWeb.Chat.PaneLive do
     socket = ensure_cwd(socket)
     key = socket.assigns.session_key
     cwd = socket.assigns.cwd
-    start_async(socket, :plan, fn -> Backend.plan(key, cwd, "status") end)
+    identity = socket.assigns.recovery.identity
+
+    if identity,
+      do: start_recovery(socket),
+      else: start_async(socket, :plan, fn -> {identity, Backend.plan(key, cwd, "status")} end)
   end
 
   defp change_plan(socket, action) do
@@ -1361,8 +1773,12 @@ defmodule LemonWeb.Chat.PaneLive do
   defp on_tab_open(socket, _tab), do: socket
 
   defp refresh_subagents(socket) do
-    run_id = socket.assigns.run.run_id || socket.assigns.last_run_id
-    assign(socket, :subagents, Subagents.snapshot(socket.assigns.session_key, run_id))
+    if socket.assigns.recovery.identity do
+      start_recovery(socket)
+    else
+      run_id = socket.assigns.run.run_id || socket.assigns.last_run_id
+      assign(socket, :subagents, Subagents.snapshot(socket.assigns.session_key, run_id))
+    end
   end
 
   defp maybe_refresh_subagents(socket) do
@@ -1992,6 +2408,8 @@ defmodule LemonWeb.Chat.PaneLive do
             context={@context}
             compacting={@compacting}
             plan={@plan}
+            todos={@todos}
+            processes={@processes}
             subagents={@subagents}
           />
         </div>

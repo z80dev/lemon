@@ -19,8 +19,6 @@ defmodule LemonControlPlane.Application do
         LemonControlPlane.Presence,
         # Connection-owned machine terminals (no global terminal event fanout)
         LemonControlPlane.NodeShells,
-        # Fanout task supervisor for EventBridge broadcast dispatch (supervised)
-        {Task.Supervisor, name: LemonControlPlane.EventBridge.FanoutSupervisor},
         # Event bridge for bus -> WebSocket fanout
         LemonControlPlane.EventBridge,
         # Connection supervisor for WebSocket connections

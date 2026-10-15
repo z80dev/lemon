@@ -163,6 +163,15 @@ defmodule LemonCore.SessionLifecycle do
     end)
   end
 
+  @doc "Fetch one lifecycle row with an explicit owner-unavailable receipt."
+  def fetch(session_key) when is_binary(session_key) do
+    case RunStore.fetch_session_index(session_key) do
+      {:ok, nil} -> {:ok, nil}
+      {:ok, session} when is_map(session) -> {:ok, merge_metadata(session)}
+      _ -> {:error, :session_store_unavailable}
+    end
+  end
+
   @doc "Resolve a fork source's agent from its canonical key or durable session index."
   @spec fork_agent_id(String.t()) :: {:ok, String.t()} | {:error, atom()}
   def fork_agent_id(session_key) when is_binary(session_key) do

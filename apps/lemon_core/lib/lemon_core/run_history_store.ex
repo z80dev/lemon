@@ -180,6 +180,16 @@ defmodule LemonCore.RunHistoryStore do
     :exit, _ -> []
   end
 
+  @doc "Read retained history without confusing an unavailable owner with an empty session."
+  def fetch(session_key, opts \\ []) do
+    case GenServer.call(__MODULE__, {:get, session_key, Keyword.get(opts, :limit, 50)}, 5_000) do
+      rows when is_list(rows) -> {:ok, rows}
+      _ -> {:error, :unavailable}
+    end
+  catch
+    :exit, _ -> {:error, :unavailable}
+  end
+
   @doc """
   Delete all history for a session.
   """

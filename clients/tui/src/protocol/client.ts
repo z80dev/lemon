@@ -437,6 +437,15 @@ export class ControlPlaneClient {
 
 	#onEvent(frame: EventFrame): void {
 		this.events.emit("frame", frame);
+		if (frame.event === "stream.resync" && this.#helloOk) {
+			const payload = frame.payload as ProtocolEventMap["stream.resync"] | undefined;
+			this.events.emit("resync-needed", {
+				hello: this.#helloOk,
+				reason: "overflow",
+				...(typeof payload?.sessionKey === "string" ? { sessionKey: payload.sessionKey } : {}),
+				...(typeof payload?.runId === "string" ? { runId: payload.runId } : {}),
+			});
+		}
 		const name = frame.event as ProtocolEventName;
 		if (this.events.listenerCount(name) > 0 || isKnownEvent(name)) {
 			this.events.emit(name, frame.payload as ProtocolEventMap[ProtocolEventName]);
@@ -552,6 +561,7 @@ const KNOWN_EVENTS = new Set<string>([
 	"exec.approval.resolved",
 	"channel.delivery",
 	"omp.session",
+	"stream.resync",
 ]);
 
 function isKnownEvent(name: string): boolean {

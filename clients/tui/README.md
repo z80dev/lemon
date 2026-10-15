@@ -89,7 +89,23 @@ remains a legacy client-side alias; it does not configure the daemon.
   while any run. Mutations are never queued offline and report refusals or
   unknown outcomes honestly; omp text is rendered as inert plain text.
 - Exec approval panel (allow once / session / always / deny, number
-  quick-pick, wrapped command preview, expiry countdown).
+  quick-pick, wrapped command preview, expiry countdown). Recovery preserves
+  each pending request's server ID, so multiple approvals remain independently
+  actionable. Malformed or unavailable approval snapshots never confirm an empty
+  pending set; bounded partial reads retain omitted requests, while authorization
+  revocation removes only the selected session's cached requests. Recovery never
+  approves a tool automatically.
+  The offline owner/AppShell regression smoke is
+  `sh scripts/smoke_recovery_approvals.sh` from the umbrella root after dependencies
+  and central test artifacts are installed/compiled. It runs no ExUnit, compilation,
+  provider network calls or browser; it starts isolated native/approval owners and
+  authenticated loopback control-plane handlers, then exercises the real AppShell
+  through two recovered IDs, one explicit `approve_once` and one explicit denial.
+  A local scripted inference callback supplies the native tool call, not a remote
+  model. The fixture supplies initial RunStore metadata rather than router admission.
+  Its HOME, state and mode-0600 operator credential stay under a printed private
+  temporary root; the process exits after the consumer assertions. The scripts are
+  prepared regression coverage, not evidence of an executed successful smoke.
 - Four submission modes while the agent is busy: `queue` (client-side,
   editable), `steer`, `redirect`, `interrupt` — with graceful fallbacks. Redirect
   replaces pending model direction while preserving completed tool work. Interrupted
@@ -107,10 +123,23 @@ remains a legacy client-side alias; it does not configure the daemon.
   Queued images remain editable; an uncertain failed send requires explicit review
   rather than automatic replay. Non-image dropped files become quoted `@` references,
   and `@` completion navigates files without reading their contents into the prompt.
+  After recovery, a verified canonical terminal snapshot advances one known-unsent
+  local followup on the same run and native branch, even while another session is
+  focused. Completion and loss/reconnect recovery target the owning session;
+  background replacement never rebuilds the focused transcript or changes its draft.
+  Repeated terminal snapshots never advance the next prompt; unknown owners, stale
+  selections, unproven branch/attempt continuity and uncertain send receipts do not
+  authorize replay.
 - Multi-session: Ctrl+X switcher (live + recent, debounced server-side search
   across stored sessions, new-with-prompt, close), per-session drafts, unread
   badges, history hydration. Search results are not restricted to the initially
   loaded recent sessions; failed searches never leave stale rows selectable.
+  Reconnect, overflow, selection and rewind use the shared bounded
+  [`sessions.snapshot`](../../apps/lemon_control_plane/README.md#session-snapshot-and-reconciliation)
+  authority to replace branch history, current approvals, child/process state
+  and todo/plan projection. Recovery rejects stale/raced reads and never
+  appends uncertain deltas to a recovered answer or replays an offline mutation.
+  Unknown owner state and omitted preview text are shown explicitly.
   Picker filters accept bracketed paste as text, including copied model names
   and session searches.
 - Durable session lifecycle: `/sessions` adds server-backed text, agent,
@@ -466,6 +495,22 @@ bun run check             # tsc --noEmit
 bun run lint              # biome
 bun run gallery           # headless render of every component/state
 ```
+
+The opt-in `bun run scripts/recovery-queue-smoke.ts` uses the public AppShell
+in a real terminal and an isolated production router/gateway/native runtime.
+It requires already-prepared dev BEAM artifacts and installed TUI dependencies;
+it runs no build or ExUnit. A loopback-only scripted SSE endpoint gates two real
+router-admitted runs, checking reconnect recovery, one queue-head submission,
+real run receipts, repeated snapshots, the remaining queue and visible answer.
+Pass `--background` to complete the recovered run while another draft session is
+focused; the same real queue admission must preserve that session's selection
+and draft. Existing project-fact capture also uses the loopback fixture and is
+counted separately from the two native execution requests.
+Its private temporary root retains `runtime.json` (mode 0400), the separate
+operator credential file (0400), request-count/state evidence and terminal
+capture; the script stops only its own runtime. No external provider executes.
+This is a prepared smoke entrypoint, not a claim that it has been executed.
+
 
 The fake control plane (`src/dev/fake-server.ts`) powers the tests and the
 gallery; no daemon or credentials are needed for either. Profile and session

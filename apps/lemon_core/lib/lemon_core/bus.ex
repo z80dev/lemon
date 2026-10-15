@@ -75,14 +75,19 @@ defmodule LemonCore.Bus do
   @doc """
   Subscribe the calling process to a topic.
 
+  Pass `delivery: LemonCore.Bus.Delivery.new(self(), opts)` to bound admission
+  before messages enter the mailbox. Reuse one handle across a consumer's topics.
+  The ordinary one-argument subscription remains best-effort and unbounded.
   Returns `:ok` on success.
   """
-  @spec subscribe(topic :: binary()) :: :ok
-  def subscribe(topic) when is_binary(topic) do
+  @spec subscribe(topic :: binary(), keyword()) :: :ok
+  def subscribe(topic, opts \\ []) when is_binary(topic) do
+    delivery = Keyword.get(opts, :delivery)
+
     if pubsub?() do
-      Phoenix.PubSub.subscribe(@pubsub, topic)
+      Phoenix.PubSub.subscribe(@pubsub, topic, metadata: delivery)
     else
-      case Registry.register(@registry, topic, nil) do
+      case Registry.register(@registry, topic, delivery) do
         {:ok, _owner} -> :ok
         {:error, {:already_registered, _pid}} -> :ok
       end
@@ -112,9 +117,9 @@ defmodule LemonCore.Bus do
   @spec broadcast(topic :: binary(), event :: LemonCore.Event.t() | term()) :: :ok
   def broadcast(topic, event) when is_binary(topic) do
     if pubsub?() do
-      Phoenix.PubSub.broadcast(@pubsub, topic, event)
+      Phoenix.PubSub.broadcast(@pubsub, topic, event, __MODULE__)
     else
-      dispatch(topic, event, nil)
+      dispatch_registry(topic, event, nil)
     end
   end
 
@@ -169,9 +174,9 @@ defmodule LemonCore.Bus do
   @spec broadcast_from(topic :: binary(), event :: LemonCore.Event.t() | term()) :: :ok
   def broadcast_from(topic, event) when is_binary(topic) do
     if pubsub?() do
-      Phoenix.PubSub.broadcast_from(@pubsub, self(), topic, event)
+      Phoenix.PubSub.broadcast_from(@pubsub, self(), topic, event, __MODULE__)
     else
-      dispatch(topic, event, self())
+      dispatch_registry(topic, event, self())
     end
   end
 
@@ -227,10 +232,22 @@ defmodule LemonCore.Bus do
     backend
   end
 
-  defp dispatch(topic, event, except) do
-    Registry.dispatch(@registry, topic, fn subscribers ->
-      for {pid, _value} <- subscribers, pid != except, do: send(pid, event)
-    end)
+  # Phoenix dispatch runs on the subscriber's node, where the metadata/atomics
+  # handle was created. Legacy subscriptions retain their ordinary raw delivery.
+  @doc false
+  def dispatch(subscribers, except, event) do
+    for {pid, delivery} <- subscribers, pid != except do
+      case delivery do
+        %LemonCore.Bus.Delivery{} -> LemonCore.Bus.Delivery.send(delivery, event)
+        _ -> send(pid, event)
+      end
+    end
+
+    :ok
+  end
+
+  defp dispatch_registry(topic, event, except) when is_binary(topic) do
+    Registry.dispatch(@registry, topic, &dispatch(&1, except, event))
   end
 
   @doc """

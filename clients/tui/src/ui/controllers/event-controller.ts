@@ -81,6 +81,7 @@ export class EventController {
 
 	#renderScheduled = false;
 	#attached = false;
+	#recoveryScheduled = false;
 
 	constructor(options: EventControllerOptions) {
 		this.#client = options.client;
@@ -126,6 +127,9 @@ export class EventController {
 		);
 		on("exec.approval.resolved", (event: ApprovalResolvedEvent) => {
 			// Someone else answered: another client, or the daemon's own timeout.
+			const pending = this.#store.approvals.get(event.approvalId);
+			if (pending?.event.sessionKey && event.sessionKey !== pending.event.sessionKey) return;
+			this.#sessionFor(event.sessionKey).recoveryEventVersion += 1;
 			this.resolveApproval(event.approvalId, event.decision);
 		});
 		on("shutdown", () => this.notice("daemon is shutting down", "warning"));
@@ -243,8 +247,8 @@ export class EventController {
 	}
 
 	/**
-	 * Rebuild the transcript tree from the focused session's blocks. The only
-	 * sanctioned scrollback-clearing path (P6 session switching) funnels here.
+	 * Rebuild from the focused session's blocks after selection, reset, or
+	 * authoritative snapshot replacement; discarded rows cannot remain native history.
 	 */
 	rebuildFocused(): void {
 		this.#reveal.stop();
@@ -262,11 +266,29 @@ export class EventController {
 	}
 
 	// -- protocol handlers ---------------------------------------------------
+	#requestRecovery(session: SessionStore): void {
+		if (session !== this.#store.focused || this.#recoveryScheduled) return;
+		this.#recoveryScheduled = true;
+		queueMicrotask(() => {
+			this.#recoveryScheduled = false;
+			const hello = this.#client.helloOk;
+			if (hello && session === this.#store.focused)
+				this.#client.events.emit("resync-needed", { hello, sessionKey: session.key });
+		});
+	}
 
 	#onChat(event: ChatEvent): void {
 		if (event?.type !== "delta") return;
 		const delta = event as ChatDeltaEvent;
 		const session = this.#sessionFor(delta.sessionKey);
+		session.recoveryEventVersion += 1;
+		if (
+			!session.acceptsEvent(delta.runId, delta.identity) ||
+			session.snapshotRunId === delta.runId
+		) {
+			this.#requestRecovery(session);
+			return;
+		}
 		const result = session.appendDelta(delta.runId, delta.seq, delta.text ?? "");
 		if (!result.accepted) return;
 		if (session !== this.#store.focused) return;
@@ -287,10 +309,22 @@ export class EventController {
 	}
 
 	#onAgent(event: AgentEvent): void {
+		const owner = this.#sessionFor(event.sessionKey);
+		owner.recoveryEventVersion += 1;
+		if (!owner.acceptsEvent(event.runId, event.identity)) {
+			this.#requestRecovery(owner);
+			return;
+		}
+		if (owner.snapshotIdentity) {
+			// With no event cursor, actions and terminal previews refresh owner truth.
+			this.#requestRecovery(owner);
+			return;
+		}
 		switch (event.type) {
 			case "started": {
 				const started = event as AgentStartedEvent;
 				const session = this.#sessionFor(started.sessionKey);
+				if (session.isRunTerminal(started.runId)) return;
 				session.activeRunId = started.runId;
 				session.busy = true;
 				session.engine = started.engine ?? undefined;
@@ -396,6 +430,12 @@ export class EventController {
 
 	#onApprovalRequested(event: ApprovalRequestedEvent): void {
 		const session = this.#sessionFor(event.sessionKey);
+		session.recoveryEventVersion += 1;
+		if (session.snapshotIdentity || !session.acceptsEvent(event.runId, event.identity)) {
+			this.#requestRecovery(session);
+			return;
+		}
+		if (this.#store.approvals.has(event.approvalId)) return;
 		const block = session.addApprovalBlock(event.approvalId, event.tool ?? undefined);
 		// The block is the transcript's record; the panel (mounted by the approval
 		// controller, which watches the store) is where the decision is made.

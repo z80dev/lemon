@@ -4,7 +4,7 @@ import type { NativeNode } from "@oh-my-pi/pi-tui/native/node";
 import type { Component } from "@oh-my-pi/pi-tui/tui";
 import { truncateToWidth } from "@oh-my-pi/pi-tui/utils";
 import {
-	isTaskTerminal,
+	isTaskActive,
 	type TaskStatus,
 	type TaskTreeRow,
 	taskElapsedMs,
@@ -97,7 +97,7 @@ export class TaskTreeComponent implements Component {
 		if (!this.#visible) return EMPTY_NODE;
 		if (this.#native?.rows === this.#rows) return this.#native.node;
 		const rows = this.#rows;
-		const active = rows.filter((row) => !isTaskTerminal(row.task.status)).length;
+		const active = rows.filter((row) => isTaskActive(row.task.status)).length;
 		const now = this.#options.now?.() ?? Date.now();
 		const agents: NativeNode[] = rows.map(({ task, depth }) => {
 			const id = taskDisplayText(task.taskId);
@@ -108,10 +108,12 @@ export class TaskTreeComponent implements Component {
 				role: "omp.task.agent",
 				...(task.agent ? { agent: task.agent } : {}),
 				...(task.description && task.description !== id ? { task: task.description } : {}),
-				stats: task.finishedAt !== undefined ? { took: ms } : { age: ms },
-				...(task.status === "cancelling"
-					? { badges: [{ text: "cancelling", tone: "warning" as const }] }
-					: {}),
+				...(task.status !== "unknown" ? { stats: task.finishedAt !== undefined ? { took: ms } : { age: ms } } : {}),
+				...(task.status === "unknown"
+					? { badges: [{ text: "outcome unknown", tone: "warning" as const }] }
+					: task.status === "cancelling"
+						? { badges: [{ text: "cancelling", tone: "warning" as const }] }
+						: {}),
 				...(depth > 0 ? { depth } : {}),
 				...(task.progress ? { collapsible: true, collapsed: false } : {}),
 			};
@@ -143,7 +145,7 @@ export class TaskTreeComponent implements Component {
 		if (!this.#visible || width <= 0) return EMPTY;
 		const theme = getTheme();
 		const clamp = (text: string) => truncateToWidth(text, width);
-		const active = this.#rows.filter((row) => !isTaskTerminal(row.task.status)).length;
+		const active = this.#rows.filter((row) => isTaskActive(row.task.status)).length;
 		const hint = this.focused ? " · ↑↓ browse · esc done" : "";
 		const lines = [
 			theme.fg("accent", clamp(`tasks · ${this.#rows.length} children · ${active} active${hint}`)),
@@ -166,7 +168,7 @@ export class TaskTreeComponent implements Component {
 			const branch = depth > 0 ? "└─ " : "";
 			const marker = selected ? theme.cursor : " ";
 			const seconds = Math.floor(taskElapsedMs(task, now) / 1000);
-			const elapsed = seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m${seconds % 60}s`;
+			const elapsed = task.status === "unknown" ? "" : seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m${seconds % 60}s`;
 			const agent = task.agent ? ` @${task.agent}` : "";
 			const id = taskDisplayText(task.taskId);
 			const label = task.description || id;
