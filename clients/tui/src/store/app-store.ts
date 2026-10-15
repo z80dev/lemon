@@ -9,6 +9,7 @@
  * updates are the controllers' business, not the store's.
  */
 
+import type { SetupStatusResult } from "../protocol/methods.ts";
 import type {
 	ApprovalRequestedEvent,
 	ConnectionState,
@@ -26,6 +27,7 @@ export interface AppStoreEventMap {
 	"session-changed": { key: string };
 	"approvals-changed": { pending: number };
 	"prompts-changed": { pending: number };
+	"setup-changed": undefined;
 	/** A session's block list grew or mutated; the UI may need a full render. */
 	"blocks-changed": { key: string };
 	/** The default submission mode changed (`/mode`). */
@@ -77,6 +79,8 @@ export class AppStore {
 	models: ModelsListResult["models"] = [];
 	/** When {@link models} was last fetched; 0 means never. */
 	modelsFetchedAtMs = 0;
+	/** Undefined when readiness is unavailable (including older daemons). */
+	setupStatus: SetupStatusResult | undefined;
 	/** What a submission does while a run is in flight. Owned by `/mode`. */
 	submissionMode: SubmissionMode = "queue";
 	/** Latest `usage.status` payload, for the status bar's context gauge. */
