@@ -56,6 +56,12 @@ SVG tests use injected rasterizers by default. The real `rsvg-convert` case carr
 the `:rsvg_convert` tag, which the coding-agent helper explicitly excludes when
 librsvg is not installed. Install librsvg to include that host-backed coverage.
 
+The real LLDB/DAP integration carries `:lldb_dap`. The coding-agent helper
+compiles a trivial program and launches it with batch LLDB once per suite, with
+bounded subprocess probes. It excludes the tag if the adapter/compiler is
+missing or the host cannot launch the debuggee (including macOS debug permission
+denied in a non-interactive session); finding `lldb-dap` alone is not sufficient.
+
 Product and packaged-boot smokes isolate their home/store directories and use
 valid, test-only 32-byte secrets keys; no live provider credential is needed.
 For packaged CLI coverage, run `scripts/verify_release_runtime_boot` in
