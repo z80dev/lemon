@@ -14,6 +14,99 @@ defmodule CodingAgent.Tools.LsTest do
              Ls.execute("cycle", %{"recursive" => true}, nil, nil, tmp_dir, [])
   end
 
+  describe "tree mode" do
+    test "defaults to depth two, renders file sizes and never follows symlinks", %{tmp_dir: dir} do
+      File.mkdir_p!(Path.join(dir, "one/two"))
+      File.write!(Path.join(dir, "one/child.txt"), "hello")
+      File.write!(Path.join(dir, "one/two/unseen.txt"), "deep")
+      File.ln_s!(dir, Path.join(dir, "loop"))
+
+      result = Ls.execute("tree", %{"tree" => true}, nil, nil, dir, [])
+      assert %AgentToolResult{trust: :untrusted, details: %{tree: true, max_depth: 2}} = result
+      [%TextContent{text: text}] = result.content
+      assert text =~ "one/"
+      assert text =~ "two/"
+      assert text =~ "child.txt (5B)"
+      assert text =~ "loop@"
+      refute text =~ "unseen.txt"
+
+      shallow = Ls.execute("shallow", %{"tree" => true, "max_depth" => 1}, nil, nil, dir, [])
+      refute hd(shallow.content).text =~ "child.txt"
+      deep = Ls.execute("deep", %{"tree" => true, "max_depth" => 3}, nil, nil, dir, [])
+      assert hd(deep.content).text =~ "unseen.txt (4B)"
+    end
+
+    test "caps each directory at twelve newest children with omitted counts", %{tmp_dir: dir} do
+      File.mkdir_p!(Path.join(dir, "nested"))
+
+      for index <- 1..14 do
+        name = "file-#{String.pad_leading(to_string(index), 2, "0")}"
+
+        for parent <- [dir, Path.join(dir, "nested")] do
+          path = Path.join(parent, name)
+          File.write!(path, "x")
+          File.touch!(path, 1_700_000_000 + index)
+        end
+      end
+
+      File.touch!(Path.join(dir, "nested"), 1_700_000_100)
+      result = Ls.execute("cap", %{"tree" => true}, nil, nil, dir, [])
+      [%TextContent{text: text}] = result.content
+      assert result.details.truncated
+      assert result.details.shown_entries == 24
+      assert text =~ "… 3 more"
+      assert text =~ "… 2 more"
+      refute text =~ "file-01"
+      refute text =~ "file-02"
+      assert :binary.match(text, "file-14") < :binary.match(text, "file-13")
+    end
+
+    test "sorts files and directories together by recency and alphabetically on ties", %{
+      tmp_dir: dir
+    } do
+      File.mkdir!(Path.join(dir, "old-dir"))
+
+      for name <- ["b.txt", "a.txt", ".hidden"] do
+        File.write!(Path.join(dir, name), "")
+        File.touch!(Path.join(dir, name), 1_700_000_100)
+      end
+
+      File.touch!(Path.join(dir, "old-dir"), 1_700_000_000)
+
+      result = Ls.execute("order", %{"tree" => true}, nil, nil, dir, [])
+      [%TextContent{text: text}] = result.content
+      assert :binary.match(text, "a.txt") < :binary.match(text, "b.txt")
+      assert :binary.match(text, "b.txt") < :binary.match(text, "old-dir/")
+      refute text =~ ".hidden"
+      visible = Ls.execute("all", %{"tree" => true, "all" => true}, nil, nil, dir, [])
+      assert hd(visible.content).text =~ ".hidden"
+    end
+
+    test "honors the global entry budget and handles empty and depth-zero views", %{tmp_dir: dir} do
+      assert hd(Ls.execute("empty", %{"tree" => true}, nil, nil, dir, []).content).text =~
+               "(empty directory)"
+
+      for name <- ["a", "b", "c", "d"], do: File.write!(Path.join(dir, name), "")
+      result = Ls.execute("budget", %{"tree" => true, "max_entries" => 2}, nil, nil, dir, [])
+      assert result.details.shown_entries == 2
+      assert result.details.truncated
+      assert hd(result.content).text =~ "… 2 more"
+      root = Ls.execute("root", %{"tree" => true, "max_depth" => 0}, nil, nil, dir, [])
+      assert root.details.shown_entries == 0
+      assert hd(root.content).text =~ "(depth limit)"
+    end
+
+    test "rejects invalid tree controls", %{tmp_dir: dir} do
+      for params <- [
+            %{"tree" => "yes"},
+            %{"tree" => true, "max_depth" => -1},
+            %{"tree" => true, "max_entries" => 0}
+          ] do
+        assert {:error, _} = Ls.execute("invalid", params, nil, nil, dir, [])
+      end
+    end
+  end
+
   describe "tool/2" do
     test "returns an AgentTool struct with correct properties" do
       tool = Ls.tool("/tmp")

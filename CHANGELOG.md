@@ -8,6 +8,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
+- Add `ls tree: true`: depth-limited newest-first trees with file sizes,
+  12 children per directory and explicit omitted-sibling counts.
+
 - Opt-in model `checkpoint(goal)` / `rewind(report)` retain exploration findings
   as branch context without restoring files or prompting for confirmation.
   Enable `[runtime.tools.checkpoint] enabled = true` (default off). The former

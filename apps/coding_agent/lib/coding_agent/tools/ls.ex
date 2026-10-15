@@ -58,10 +58,14 @@ defmodule CodingAgent.Tools.Ls do
             "type" => "boolean",
             "description" => "List subdirectories recursively. Defaults to false."
           },
+          "tree" => %{
+            "type" => "boolean",
+            "description" =>
+              "Show a newest-first tree with file sizes, at most 12 children per directory; default depth 2"
+          },
           "max_depth" => %{
             "type" => "integer",
-            "description" =>
-              "Maximum depth for recursive listing. Only used when recursive is true."
+            "description" => "Maximum depth for recursive listing or tree mode (tree default: 2)."
           },
           "max_entries" => %{
             "type" => "integer",
@@ -124,7 +128,16 @@ defmodule CodingAgent.Tools.Ls do
     with {:ok, resolved_path} <- resolve_path(path, cwd),
          {:ok, _stat} <- check_directory_access(resolved_path),
          :ok <- check_abort(signal) do
-      list_directory(resolved_path, show_all, long_format, recursive, max_depth, max_entries)
+      case Map.get(params, "tree", false) do
+        false ->
+          list_directory(resolved_path, show_all, long_format, recursive, max_depth, max_entries)
+
+        true ->
+          list_tree(resolved_path, show_all, max_depth || 2, max_entries, signal)
+
+        _ ->
+          {:error, "tree must be a boolean"}
+      end
     end
   end
 
@@ -147,6 +160,113 @@ defmodule CodingAgent.Tools.Ls do
   # ============================================================================
   # Directory Listing
   # ============================================================================
+
+  defp list_tree(path, show_all, depth, limit, signal)
+       when is_integer(depth) and depth >= 0 and is_integer(limit) and limit > 0 do
+    config = %{all: show_all, depth: depth, limit: limit, signal: signal}
+    state = %{lines: [], count: 0, truncated: false}
+
+    with {:ok, state} <- tree_directory(path, "", 0, config, state) do
+      lines =
+        case {state.lines, depth} do
+          {[], 0} -> ["(depth limit)"]
+          {[], _} -> ["(empty directory)"]
+          {lines, _} -> Enum.reverse(lines)
+        end
+
+      %AgentToolResult{
+        content: [
+          %TextContent{text: Enum.join([String.trim_trailing(path, "/") <> "/" | lines], "\n")}
+        ],
+        details: %{
+          path: path,
+          tree: true,
+          max_depth: depth,
+          per_directory_limit: 12,
+          shown_entries: state.count,
+          truncated: state.truncated
+        }
+      }
+    end
+  end
+
+  defp list_tree(_path, _all, _depth, _limit, _signal),
+    do: {:error, "tree requires a non-negative max_depth and a positive max_entries"}
+
+  defp tree_directory(_path, _prefix, depth, %{depth: max_depth}, state)
+       when depth >= max_depth, do: {:ok, state}
+
+  defp tree_directory(path, prefix, depth, config, state) do
+    with :ok <- check_abort(config.signal),
+         {:ok, names} <- File.ls(path) do
+      entries =
+        names
+        |> Enum.reject(&(not config.all and String.starts_with?(&1, ".")))
+        |> Enum.map(fn name ->
+          stat =
+            case File.lstat(Path.join(path, name), time: :posix) do
+              {:ok, stat} -> stat
+              {:error, _} -> nil
+            end
+
+          {name, stat}
+        end)
+        |> Enum.sort_by(fn {name, stat} -> {-if(stat, do: stat.mtime, else: 0), name} end)
+
+      total = length(entries)
+
+      entries
+      |> Enum.take(12)
+      |> Enum.with_index()
+      |> Enum.reduce_while({:ok, state, 0}, fn {{name, stat}, index}, {:ok, state, shown} ->
+        if state.count >= config.limit do
+          {:halt, {:ok, state, shown}}
+        else
+          last? = index == total - 1
+          connector = if last?, do: "└── ", else: "├── "
+          line = prefix <> connector <> tree_label(name, stat)
+          state = %{state | lines: [line | state.lines], count: state.count + 1}
+          child_prefix = prefix <> if(last?, do: "    ", else: "│   ")
+
+          case tree_child(Path.join(path, name), child_prefix, depth, stat, config, state) do
+            {:ok, state} -> {:cont, {:ok, state, shown + 1}}
+            error -> {:halt, error}
+          end
+        end
+      end)
+      |> case do
+        {:ok, state, shown} ->
+          more = total - shown
+
+          state =
+            if more > 0,
+              do: %{
+                state
+                | lines: [prefix <> "└── … #{more} more" | state.lines],
+                  truncated: true
+              },
+              else: state
+
+          {:ok, state}
+
+        error ->
+          error
+      end
+    end
+  end
+
+  defp tree_child(path, prefix, depth, %File.Stat{type: :directory}, config, state),
+    do: tree_directory(path, prefix, depth + 1, config, state)
+
+  defp tree_child(_path, _prefix, _depth, _stat, _config, state), do: {:ok, state}
+
+  defp tree_label(name, %File.Stat{type: :directory}), do: name <> "/"
+  defp tree_label(name, %File.Stat{type: :symlink}), do: name <> "@"
+
+  defp tree_label(name, %File.Stat{type: :regular, size: size}),
+    do: name <> " (" <> String.trim(format_size(size)) <> ")"
+
+  defp tree_label(name, _stat), do: name <> " (?)"
 
   defp list_directory(path, show_all, long_format, recursive, max_depth, max_entries) do
     case collect_entries(path, show_all, recursive, max_depth, max_entries, 0, path) do

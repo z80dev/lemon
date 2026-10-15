@@ -35,6 +35,21 @@ It is a concise transcript, not raw session events: hidden reasoning, tool-call
 internals and foreign tasks are excluded. History is capped at 12,000 Unicode
 characters and tagged untrusted. Expired TaskStore entries are unavailable.
 
+## Directory trees
+
+`ls` with `tree: true` shows a depth-limited directory tree (default
+`max_depth: 2`, counting children of the requested root as depth 1). Each
+directory displays at most 12 children, sorted newest-first by modification
+time with alphabetical tie-breaking, plus `… N more` for omitted siblings.
+Files include human-readable sizes; directories end in `/` and symlinks in `@`.
+Directory symlinks are not followed.
+
+`all: true` includes dotfiles. The existing `max_entries` budget (default 500)
+also bounds the total tree entries, and `details.truncated` reports child/global
+entry limits. `max_depth: 0` displays only the requested root. Tree mode implies
+recursive traversal; `recursive` and `long` are unnecessary. Without `tree`,
+the existing flat/recursive listing behavior and ordering are unchanged.
+
 ## Read line selectors
 
 `read` pages text with `offset`/`limit`, or with a selector appended to `path`:
