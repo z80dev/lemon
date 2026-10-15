@@ -150,7 +150,7 @@ Enum.each(
 # developer's exported opt-in; suites start their own server against a fake
 # bridge.
 config :lemon_computer_use, enabled: false
-System.delete_env("LEMON_COMPUTER_USE_ENABLED")
+Enum.each(~w(LEMON_COMPUTER_USE_ENABLED LEMON_COMPUTER_USE_CHROME), &System.delete_env/1)
 
 # Prevent unit tests from starting real/interactive transports based on a developer's
 # local TOML config. Individual test suites can override these as needed and restart

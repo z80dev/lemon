@@ -15,6 +15,9 @@ defmodule LemonComputerUse.Config do
       imports LCU's shared harness client from `<root>/adapters/client.mjs`.
     * `:node` / `LEMON_COMPUTER_USE_NODE` — Node runtime for the bridge (default
       `<root>/agent-tools/node/bin/node`, the runtime LCU selected at setup).
+    * `:chrome` / `LEMON_COMPUTER_USE_CHROME` — also enable the runtime's
+      browser surface (`lcu --chrome`): Chrome tabs through the official
+      ChatGPT extension (default `false`). Requires `lcu browser install`.
     * `:connect_timeout_ms` — how long tool construction waits for the first
       connection (default 30 seconds).
 
@@ -30,6 +33,14 @@ defmodule LemonComputerUse.Config do
     case parse_bool(env("LEMON_COMPUTER_USE_ENABLED")) do
       value when is_boolean(value) -> value
       nil -> Application.get_env(@app, :enabled, false) == true
+    end
+  end
+
+  @spec chrome?() :: boolean()
+  def chrome? do
+    case parse_bool(env("LEMON_COMPUTER_USE_CHROME")) do
+      value when is_boolean(value) -> value
+      nil -> Application.get_env(@app, :chrome, false) == true
     end
   end
 
@@ -59,7 +70,7 @@ defmodule LemonComputerUse.Config do
   def command do
     case Application.get_env(@app, :command) do
       [_ | _] = argv -> argv
-      _ -> [Path.join(lcu_root(), "bin/lcu")]
+      _ -> [Path.join(lcu_root(), "bin/lcu") | if(chrome?(), do: ["--chrome"], else: [])]
     end
   end
 

@@ -106,4 +106,69 @@ defmodule LemonComputerUse.ApprovalTest do
     assert_received {:rationale, rationale}
     assert byte_size(rationale) < 600
   end
+
+  defp origin_request(origin, overrides \\ %{}) do
+    Map.merge(
+      %{
+        "mode" => "form",
+        "message" => "Allow access to #{origin}?",
+        "requestedSchema" => %{"type" => "object", "properties" => %{}},
+        "_meta" => %{
+          "codex_approval_kind" => "mcp_tool_call",
+          "connector_id" => "browser-use",
+          "tool_name" => "access_browser_origin",
+          "origin" => origin
+        }
+      },
+      overrides
+    )
+  end
+
+  test "recognizes only exact http(s) website origins" do
+    assert {:ok, "https://example.com", _} =
+             Approval.browser_origin_request(origin_request("https://example.com"))
+
+    assert {:ok, "http://[::1]:8080", _} =
+             Approval.browser_origin_request(origin_request("http://[::1]:8080"))
+
+    for bad <- [
+          "https://example.com/",
+          "https://example.com:443",
+          "https://user@example.com",
+          "https://example.com/path",
+          "file:///etc/passwd",
+          "chrome://settings"
+        ] do
+      assert :error = Approval.browser_origin_request(origin_request(bad)), bad
+    end
+
+    assert :error =
+             Approval.browser_origin_request(
+               origin_request("https://example.com", %{"mode" => "url"})
+             )
+  end
+
+  test "any approval scope accepts a website; denial declines; Lemon's own origins are declined" do
+    answer = fn origin, reply ->
+      Approval.answer(origin_request(origin), %{approval_request_fun: fn _ -> reply end}, "id")
+    end
+
+    assert answer.("https://example.com", {:ok, :approved, :approve_once}) ==
+             %{action: "accept", content: %{}}
+
+    assert answer.("https://example.com", {:ok, :approved, :approve_global}) ==
+             %{action: "accept", content: %{}}
+
+    assert answer.("https://example.com", {:ok, :approved, :forever}) == %{action: "cancel"}
+    assert answer.("https://example.com", {:ok, :denied}) == %{action: "decline"}
+
+    ask = fn _ -> flunk("must not ask for Lemon's own surfaces") end
+
+    assert %{action: "decline"} =
+             Approval.answer(
+               origin_request("http://127.0.0.1:4040"),
+               %{approval_request_fun: ask},
+               "id"
+             )
+  end
 end

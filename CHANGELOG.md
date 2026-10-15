@@ -28,6 +28,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   app's computer-use runtime via LCU. Per-app approval requests become Lemon
   approvals (once or for the session); Lemon's own apps are never approved.
   See [Computer use](docs/tools/computer-use.md).
+- Computer use can drive Chrome tabs (`LEMON_COMPUTER_USE_CHROME=true`, LCU's
+  `--chrome` surface through the official ChatGPT extension). Website access
+  requests become Lemon approvals for the origin; Lemon's own local web and
+  control-plane origins are never approved.
 - omp sessions can select an approval mode and bridge tool approval prompts to
   Lemon's conversation/channel approval UI or operator `exec.approval.resolve`.
   Snapshots and wait progress expose pending approvals and decision counts;
