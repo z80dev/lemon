@@ -64,7 +64,7 @@ mix do --app lemon_web assets.setup
 mix do --app lemon_web assets.build
 
 # Run the app's tests
-mix test apps/lemon_web/test
+scripts/test path apps/lemon_web/test
 ```
 
 The Tailwind build writes `priv/static/assets/app.css`. Commit regenerated CSS
