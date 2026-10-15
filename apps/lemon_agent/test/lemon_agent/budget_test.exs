@@ -7,6 +7,23 @@ defmodule LemonAgent.BudgetTest do
   alias LemonAgent.Types.{AgentContext, AgentLoopConfig}
   alias LemonAi.Types.{Cost, Usage}
 
+  test "unknown pricing warns only for dollar caps, without refusing free models" do
+    model = Mocks.mock_model()
+
+    assert Budget.unpriced_warning(%{max_run_cost_usd: 1}, %{
+             model
+             | cost: %LemonAi.Types.ModelCost{}
+           }) =~
+             "Dollar caps cannot bound unpriced usage"
+
+    refute Budget.unpriced_warning(%{max_run_tokens: 10}, model)
+
+    refute Budget.unpriced_warning(%{max_session_cost_usd: 1}, %{
+             model
+             | cost: %LemonAi.Types.ModelCost{input: 1.0}
+           })
+  end
+
   test "cache-write-long is a subset, and a populated provider total takes precedence" do
     usage = %Usage{
       input: 11,

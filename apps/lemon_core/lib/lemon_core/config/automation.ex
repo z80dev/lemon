@@ -11,9 +11,13 @@ defmodule LemonCore.Config.Automation do
   offers to write it. Absent (the default) means no daily brief.
   """
 
-  defstruct daily_brief: nil
+  defstruct daily_brief: nil, catch_up_missed: true, run_retention_per_job: 100
 
-  @type t :: %__MODULE__{daily_brief: String.t() | nil}
+  @type t :: %__MODULE__{
+          daily_brief: String.t() | nil,
+          catch_up_missed: boolean(),
+          run_retention_per_job: non_neg_integer()
+        }
 
   @time_pattern ~r/^([01]?\d|2[0-3]):([0-5]\d)$/
 
@@ -26,7 +30,11 @@ defmodule LemonCore.Config.Automation do
         _ -> %{}
       end
 
-    %__MODULE__{daily_brief: normalize_time(section["daily_brief"])}
+    %__MODULE__{
+      daily_brief: normalize_time(section["daily_brief"]),
+      catch_up_missed: Map.get(section, "catch_up_missed", true),
+      run_retention_per_job: Map.get(section, "run_retention_per_job", 100)
+    }
   end
 
   @doc """
@@ -44,13 +52,20 @@ defmodule LemonCore.Config.Automation do
 
   @doc "Validates the resolved section, prepending `automation.*` errors."
   @spec validate(t(), [String.t()]) :: [String.t()]
-  def validate(%__MODULE__{daily_brief: nil}, errors), do: errors
+  def validate(%__MODULE__{} = config, errors) do
+    errors =
+      if is_nil(config.daily_brief) or match?({:ok, _}, parse_time(config.daily_brief)),
+        do: errors,
+        else: ["automation.daily_brief: must be a HH:MM 24-hour time" | errors]
 
-  def validate(%__MODULE__{daily_brief: value}, errors) do
-    case parse_time(value) do
-      {:ok, _} -> errors
-      :error -> ["automation.daily_brief: must be a HH:MM 24-hour time" | errors]
-    end
+    errors =
+      if is_boolean(config.catch_up_missed),
+        do: errors,
+        else: ["automation.catch_up_missed: must be a boolean" | errors]
+
+    if is_integer(config.run_retention_per_job) and config.run_retention_per_job >= 0,
+      do: errors,
+      else: ["automation.run_retention_per_job: must be a non-negative integer" | errors]
   end
 
   defp normalize_time(value) when is_binary(value) do

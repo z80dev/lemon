@@ -8,6 +8,31 @@ defmodule CodingAgent.ControlPlaneProviderTest do
 
   alias CodingAgent.ControlPlaneProvider
 
+  defmodule BusyBackend do
+    @behaviour LemonCore.Store.Backend
+    def init(_), do: {:ok, %{}}
+    def put(_, _, _, _), do: {:error, :sqlite_busy}
+    def put_new(_, _, _, _), do: {:error, :sqlite_busy}
+    def get(_, _, _), do: {:error, :sqlite_busy}
+    def delete(_, _, _), do: {:error, :sqlite_busy}
+    def list(_, _), do: {:error, :sqlite_busy}
+  end
+
+  test "offline todos distinguish unavailable workspace history from a missing session" do
+    key = "agent:introspection-failure-#{System.unique_integer([:positive])}:main"
+    original = :sys.get_state(LemonCore.Store)
+    :sys.replace_state(LemonCore.Store, &%{&1 | backend: BusyBackend, backend_state: %{}})
+
+    try do
+      assert ControlPlaneProvider.session_todos(key, nil) ==
+               {:error, :introspection_unavailable}
+    after
+      :sys.replace_state(LemonCore.Store, fn _ -> original end)
+    end
+
+    assert ControlPlaneProvider.session_todos(key, nil) == {:error, :session_not_found}
+  end
+
   test "the running application has registered this provider" do
     assert LemonCore.AgentRuntime.provider() == ControlPlaneProvider
     assert LemonCore.AgentRuntime.available?()

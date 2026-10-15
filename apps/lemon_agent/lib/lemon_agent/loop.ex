@@ -768,6 +768,16 @@ defmodule LemonAgent.Loop do
           nil
       end
 
+    scope = Map.get(config.budget_limits || %{}, :scope)
+    if scope && reset_run?, do: LemonAgent.BudgetScope.begin_run(scope)
+
+    warning = Budget.unpriced_warning(config.budget_limits || %{}, config.model)
+
+    if warning do
+      Logger.warning(warning)
+      EventStream.push(stream, {:budget_warning, %{message: warning}})
+    end
+
     if budget do
       Process.put(@usage_budget_pd_key, budget)
       emit_budget_usage(stream, budget)
@@ -779,7 +789,15 @@ defmodule LemonAgent.Loop do
 
   @doc false
   def budget_check(%AgentLoopConfig{budget: nil}), do: nil
-  def budget_check(config), do: Budget.check(Process.get(@usage_budget_pd_key, config.budget))
+
+  def budget_check(config) do
+    budget = Process.get(@usage_budget_pd_key, config.budget)
+
+    case Budget.check(budget) || LemonAgent.BudgetScope.check(Map.get(budget.limits, :scope)) do
+      nil -> nil
+      details -> Map.put(details, :provider_usage, Map.take(budget, [:run_usage, :session_usage]))
+    end
+  end
 
   @doc false
   def record_budget_usage(%AgentLoopConfig{budget: nil}, _message, _stream), do: :ok
@@ -787,6 +805,8 @@ defmodule LemonAgent.Loop do
   def record_budget_usage(config, message, stream) do
     budget = Budget.record_message(Process.get(@usage_budget_pd_key, config.budget), message)
     Process.put(@usage_budget_pd_key, budget)
+    scope = Map.get(budget.limits, :scope)
+    if scope, do: LemonAgent.BudgetScope.update(scope, budget)
     emit_budget_usage(stream, budget)
   end
 

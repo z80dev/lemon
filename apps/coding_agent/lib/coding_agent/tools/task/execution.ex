@@ -30,6 +30,13 @@ defmodule CodingAgent.Tools.Task.Execution do
   def run(tool_call_id, validated, signal, on_update, cwd, opts) do
     opts = Keyword.merge(opts, Map.to_list(Params.inherited_execution_context(opts)))
 
+    opts =
+      if scope = Keyword.get(opts, :budget_scope) do
+        Keyword.put(opts, :parent_budget_scope, LemonAgent.BudgetScope.attachment(scope))
+      else
+        opts
+      end
+
     case build_execution_context(tool_call_id, validated, cwd, opts) do
       {:error, message} ->
         {:error, message}
@@ -109,6 +116,7 @@ defmodule CodingAgent.Tools.Task.Execution do
           task_id: task_id,
           run_id: run_id,
           parent_run_id: parent_run_id,
+          parent_budget_scope: Keyword.get(opts, :parent_budget_scope),
           parent_session_id: parent_session_id,
           session_key: parent_session_key,
           agent_id: parent_agent_id,

@@ -160,37 +160,71 @@ function costRangeParams(range: string): { startDate: string; endDate: string } 
 export const costCommand: SlashCommand = {
 	name: "cost",
 	summary: "spend breakdown",
-	usage: "[range]",
+	usage: "[range] [--by day|provider|model|session]",
 	group: "diagnostics",
 	methods: [METHOD.usageCost],
 	async run(ctx, argv) {
-		const range = argv[0];
-		// The server only understands startDate/endDate (ISO dates); range
-		// words are a client-side convenience translated here.
+		let range: string | undefined;
+		let by = "provider";
+		for (let i = 0; i < argv.length; i++) {
+			if (argv[i] === "--by") {
+				by = argv[++i] ?? "";
+			} else if (!range && !argv[i]?.startsWith("--")) {
+				range = argv[i];
+			} else {
+				ctx.ui.noticeBlock(["cost: usage /cost [range] [--by day|provider|model|session]"]);
+				return;
+			}
+		}
+		if (!["day", "provider", "model", "session"].includes(by)) {
+			ctx.ui.noticeBlock(["cost: --by must be day, provider, model, or session"]);
+			return;
+		}
 		const params = range ? costRangeParams(range) : undefined;
 		if (range && !params) {
 			ctx.ui.noticeBlock([`cost: unrecognized range "${range}" (try 7d, 30d, today, week, month)`]);
 			return;
 		}
-		const result = await ctx.methods.usageCost(params);
+		const result = await ctx.methods.usageCost({ ...params, groupBy: by });
 		const lines = [`cost${range ? ` — ${range}` : ""}`];
 		const span = `${pickString(result, "startDate") ?? "?"} → ${pickString(result, "endDate") ?? "?"}`;
 		lines.push(`period: ${span}`);
+		const incomplete = result.incomplete !== false;
+		lines.push(`incomplete: ${result.incomplete ?? "unknown"}`);
+		lines.push(`sessions omitted: ${pickNumber(result, "sessionsOmitted") ?? "unknown"}`);
+		const money = (value: number | undefined) =>
+			value === undefined
+				? "unknown"
+				: `${humanCost(value)}${incomplete ? " known subtotal (unknown pricing may be present)" : ""}`;
 		const total = pickNumber(result, "totalCost", "total", "cost", "summary.total");
-		if (total !== undefined) lines.push(`total: ${humanCost(total)}`);
-		const breakdown = result.breakdown;
-		if (breakdown && typeof breakdown === "object" && !Array.isArray(breakdown)) {
-			for (const [provider, cost] of Object.entries(breakdown as Record<string, unknown>)) {
-				if (typeof cost === "number") lines.push(`  ${provider}: ${humanCost(cost)}`);
-			}
-		} else {
-			const providers = asArray(result.providers ?? breakdown);
-			for (const provider of providers) {
-				lines.push(
-					`  ${pickString(provider, "provider", "name") ?? "?"}: ${humanCost(pickNumber(provider, "cost", "total")) ?? "$0"}`,
-				);
-			}
+		lines.push(`total: ${money(total)}`);
+		const section = {
+			day: "dailyUsage",
+			provider: "providers",
+			model: "models",
+			session: "sessions",
+		}[by]!;
+		lines.push(`${by}:`);
+		const rows =
+			by === "provider" &&
+			!Array.isArray(result.providers) &&
+			result.breakdown &&
+			typeof result.breakdown === "object"
+				? Object.entries(result.breakdown).map(([provider, cost]) => ({ provider, cost }))
+				: asArray(result[section]);
+		for (const row of rows) {
+			const label =
+				by === "model"
+					? `${pickString(row, "provider") ?? "?"}:${pickString(row, "model") ?? "?"}`
+					: (pickString(
+							row,
+							by === "day" ? "date" : by === "session" ? "sessionKey" : "provider",
+						) ?? "?");
+			lines.push(
+				`  ${label}: ${money(pickNumber(row, "cost"))} · ${humanNumber(pickNumber(row, "requests") ?? 0)} req · ${humanNumber(pickNumber(row, "inputTokens") ?? 0)} in · ${humanNumber(pickNumber(row, "outputTokens") ?? 0)} out`,
+			);
 		}
+		if (rows.length === 0) lines.push("  none");
 		ctx.ui.noticeBlock(lines);
 	},
 };

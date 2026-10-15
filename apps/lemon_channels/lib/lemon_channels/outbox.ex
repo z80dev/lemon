@@ -37,6 +37,9 @@ defmodule LemonChannels.Outbox do
   split into multiple messages.
 
   Returns `{:ok, ref}` or `{:error, reason}`.
+
+  A call timeout returns `{:error, {:outcome_unknown, :enqueue_timeout}}`:
+  admission may still complete. Callers must not resend automatically.
   """
   @spec enqueue(OutboundPayload.t()) :: {:ok, reference()} | {:error, term()}
   def enqueue(%OutboundPayload{} = payload) do
@@ -49,15 +52,14 @@ defmodule LemonChannels.Outbox do
       # IMPORTANT: The GenServer may still process this enqueue even though the
       # call timed out on our side. The message sits in the GenServer mailbox and
       # will be delivered eventually, but we have no way to get the ref back.
-      # Return {:error, :enqueue_timeout} so callers know the delivery status is
-      # ambiguous — the message is likely in-flight, not lost.
+      # Admission is ambiguous, not rejected. Callers must not resend.
       Logger.warning(
         "Outbox.enqueue timed out (message may still be delivered) " <>
           "channel=#{payload.channel_id} account=#{payload.account_id} " <>
           "idempotency_key=#{inspect(payload.idempotency_key)}"
       )
 
-      {:error, :enqueue_timeout}
+      {:error, {:outcome_unknown, :enqueue_timeout}}
 
     :exit, reason ->
       {:error, {:outbox_exit, reason}}
@@ -194,6 +196,8 @@ defmodule LemonChannels.Outbox do
             {:noreply, state}
 
           {:error, reason} ->
+            reason = LemonChannels.DeliveryError.classify(reason)
+
             # Retry only for retryable failures.
             #
             # `:unknown_channel` is a configuration/programming error and will never succeed by retrying.
@@ -345,6 +349,13 @@ defmodule LemonChannels.Outbox do
   defp enqueue_payloads(state, ref, payloads) do
     state =
       Enum.reduce(payloads, state, fn payload, acc ->
+        payload =
+          if payload.channel_id == "discord" do
+            %{payload | meta: Map.put(payload.meta || %{}, :delivery_id, make_ref())}
+          else
+            payload
+          end
+
         entry = %{
           ref: ref,
           payload: payload,
@@ -702,19 +713,11 @@ defmodule LemonChannels.Outbox do
   defp min_wait(wait_ms, nil), do: wait_ms
   defp min_wait(wait_a, wait_b), do: min(wait_a, wait_b)
 
-  defp retryable_reason?(:unknown_channel), do: false
-
-  defp retryable_reason?({:http_error, status, _reason})
-       when status >= 400 and status < 500 and status != 429, do: false
-
-  defp retryable_reason?({:worker_exit, _reason}), do: false
-  defp retryable_reason?(:outcome_unknown), do: false
-  defp retryable_reason?({:outcome_unknown, _reason}), do: false
-  defp retryable_reason?({:exception, _reason}), do: false
-  defp retryable_reason?({_kind, %{__exception__: true}}), do: false
-  defp retryable_reason?(:normal), do: true
-  defp retryable_reason?(:shutdown), do: true
-  defp retryable_reason?(_reason), do: true
+  defp retryable_reason?({:http_error, 429, _body}), do: true
+  defp retryable_reason?({:failed_connect, _reason}), do: true
+  defp retryable_reason?(:econnrefused), do: true
+  defp retryable_reason?(:nxdomain), do: true
+  defp retryable_reason?(_reason), do: false
 
   defp queue_full?(state, incoming_count)
        when is_integer(incoming_count) and incoming_count > 0 do

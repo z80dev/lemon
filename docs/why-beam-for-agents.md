@@ -97,7 +97,7 @@ rather than a second message to the user.
 The comment at [`outbox.ex:42-53`](../apps/lemon_channels/lib/lemon_channels/outbox.ex) is
 the part I would point at in an interview. When `enqueue` times out, the message may still
 be in the GenServer's mailbox and may still be delivered — so the caller gets
-`:enqueue_timeout`, named to mean *ambiguous*, not *failed*. You can only write that
+`{:outcome_unknown, :enqueue_timeout}`, explicitly *ambiguous*, not *failed*. You can only write that
 comment in a runtime where you know exactly where the message is.
 
 Single-flight per session is a unique-key Registry

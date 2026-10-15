@@ -112,4 +112,108 @@ defmodule LemonControlPlane.Methods.UsageCostDetailsTest do
     assert result["providers"] == []
     assert result["dailyUsage"] == []
   end
+
+  test "usage.cost pins the complete seeded wire shape", ctx do
+    usage = %{cost: 0.5, requests: 2, input: 30, output: 4}
+
+    UsageStore.put_record(ctx.today, %{
+      date: ctx.today,
+      total_cost: 0.5,
+      breakdown: %{"test" => 0.5},
+      requests: %{"test" => 2},
+      tokens: %{"test" => %{input: 30, output: 4}},
+      models: %{"test:model" => Map.merge(usage, %{provider: "test", model: "model"})},
+      sessions: %{"session" => Map.put(usage, :last_at_ms, 123)},
+      sessions_omitted: 3,
+      unknown_cost_records: 1
+    })
+
+    params = %{"startDate" => ctx.today, "endDate" => ctx.today}
+    assert {:ok, result} = UsageCost.handle(params, %{})
+
+    expected = %{
+      "startDate" => ctx.today,
+      "endDate" => ctx.today,
+      "totalCost" => 0.5,
+      "knownCostSubtotal" => 0.5,
+      "incomplete" => true,
+      "breakdown" => %{"test" => 0.5},
+      "totalRequests" => 2,
+      "totalTokens" => %{"input" => 30, "output" => 4},
+      "providers" => [
+        %{
+          "provider" => "test",
+          "cost" => 0.5,
+          "requests" => 2,
+          "inputTokens" => 30,
+          "outputTokens" => 4
+        }
+      ],
+      "models" => [
+        %{
+          "provider" => "test",
+          "model" => "model",
+          "cost" => 0.5,
+          "requests" => 2,
+          "inputTokens" => 30,
+          "outputTokens" => 4
+        }
+      ],
+      "sessions" => [
+        %{
+          "sessionKey" => "session",
+          "lastAtMs" => 123,
+          "cost" => 0.5,
+          "requests" => 2,
+          "inputTokens" => 30,
+          "outputTokens" => 4
+        }
+      ],
+      "sessionsOmitted" => 3,
+      "dailyUsage" => [
+        %{
+          "date" => ctx.today,
+          "cost" => 0.5,
+          "requests" => 2,
+          "inputTokens" => 30,
+          "outputTokens" => 4
+        }
+      ],
+      "daily" => %{
+        ctx.today => %{"cost" => 0.5, "requests" => 2, "breakdown" => %{"test" => 0.5}}
+      },
+      "summary" => %{
+        "groupBy" => "day",
+        "providerCount" => 1,
+        "dailyReturned" => true,
+        "dailyCount" => 1,
+        "totalRequests" => 2,
+        "totalTokenCount" => 34,
+        "cleanup" => %{
+          "includesPrompts" => false,
+          "includesResponses" => false,
+          "includesMessageBodies" => false,
+          "includesCredentials" => false,
+          "includesSecretValues" => false
+        }
+      }
+    }
+
+    # Round-trip pins JSON keys, numeric values, nesting, and absence of extra fields.
+    assert Jason.decode!(Jason.encode!(result)) == expected
+    assert Jason.encode!(result) == Jason.encode!(expected)
+
+    assert {:ok, provider_result} = UsageCost.handle(Map.put(params, "groupBy", "provider"), %{})
+    refute Map.has_key?(provider_result, "daily")
+
+    assert provider_result["summary"] ==
+             Map.merge(expected["summary"], %{
+               "groupBy" => "provider",
+               "dailyReturned" => false,
+               "dailyCount" => 0
+             })
+
+    assert Map.drop(provider_result, ["daily", "summary"]) ==
+             Map.drop(result, ["daily", "summary"])
+  end
 end

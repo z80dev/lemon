@@ -5,7 +5,61 @@ defmodule LemonChannels.Adapters.Telegram.Inbound do
 
   require Logger
 
+  alias LemonChannels.Adapters.Telegram.Transport.Commands
+  alias LemonChannels.ImageDownload
   alias LemonCore.InboundMessage
+
+  @doc "Fetch image content after transport authorization, preserving file-transfer metadata."
+  def attach_images(inbound, api, token) do
+    if Commands.file_command?(inbound.message.text, nil) do
+      inbound
+    else
+      do_attach_images(inbound, api, token)
+    end
+  end
+
+  defp do_attach_images(inbound, api, token) do
+    message =
+      inbound.raw["message"] || inbound.raw["edited_message"] || inbound.raw["channel_post"] ||
+        %{}
+
+    photos = Enum.filter(List.wrap(message["photo"]), &is_map/1)
+
+    eligible =
+      Enum.reject(
+        photos,
+        &(is_integer(&1["file_size"]) and &1["file_size"] > ImageDownload.max_bytes())
+      )
+
+    photo = Enum.max_by(eligible, &((&1["width"] || 0) * (&1["height"] || 0)), fn -> nil end)
+    document = message["document"]
+
+    candidates =
+      cond do
+        photos != [] ->
+          [{photo || List.first(photos), "image/jpeg"}]
+
+        is_map(document) and ImageDownload.image_mime?(document["mime_type"]) ->
+          [{document, document["mime_type"]}]
+
+        true ->
+          []
+      end
+
+    ImageDownload.attach(inbound, candidates, fn {file, mime} ->
+      with false <-
+             is_integer(file["file_size"]) and file["file_size"] > ImageDownload.max_bytes(),
+           {:ok, %{"ok" => true, "result" => info}} <- api.get_file(token, file["file_id"]),
+           false <-
+             is_integer(info["file_size"]) and info["file_size"] > ImageDownload.max_bytes(),
+           path when is_binary(path) <- info["file_path"],
+           {:ok, bytes} <- api.download_file(token, path, ImageDownload.max_bytes()) do
+        {:ok, bytes, mime}
+      else
+        _ -> {:error, :image_unavailable}
+      end
+    end)
+  end
 
   @doc """
   Normalize a raw Telegram update to an InboundMessage.
