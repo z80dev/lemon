@@ -205,6 +205,7 @@ defmodule LemonCli.CommandRegistry do
       options: [
         option("--verbose, -v", ["--verbose", "-v"], "Show passing and skipped checks"),
         option("--json", ["--json"], "Output one JSON document"),
+        option("--live", ["--live"], "Opt in to bounded, non-generating connectivity checks"),
         option("--project-dir PATH", ["--project-dir"], "Use a specific project directory"),
         option("--bundle [PATH]", ["--bundle"], "Write a redacted support bundle"),
         option("--bundle-path PATH", ["--bundle-path"], "Set the support bundle path")
@@ -451,9 +452,9 @@ defmodule LemonCli.CommandRegistry do
     },
     %{
       name: "cron",
-      summary: "Inspect cron run history",
-      usage: "lemon cron runs [options]",
-      subcommands: subcommands(~w(runs)),
+      summary: "Inspect cron status and run history",
+      usage: "lemon cron status [--json] | lemon cron runs [options]",
+      subcommands: subcommands(~w(status runs)),
       options: [
         option("--job ID", ["--job"], "Select one job; default all current jobs"),
         option(

@@ -226,7 +226,6 @@ struct MessageBubble: View {
     var streaming = false
     var mine = false
     var palette: BotPalette
-    @Environment(\.colorScheme) private var scheme
     var body: some View {
         let ink = mine ? palette.onTint : LB.ink
         let segments = messageSegments(text)
@@ -239,7 +238,7 @@ struct MessageBubble: View {
                         .foregroundStyle(ink).tint(mine ? palette.onTint : LB.accent)
                         .textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
                 case .code(let value, let language):
-                    CodeBlock(code: value, language: language, inset: Color.black.opacity(mine ? 0.18 : scheme == .dark ? 0.30 : 0.07), ink: ink)
+                    CodeBlock(code: value, language: language, inset: mine ? LB.tintedCodeInset : LB.codeInset, ink: ink)
                 }
             }
         }
@@ -466,7 +465,7 @@ struct LiveWorkingRow: View {
             }
             if canStop {
                 Button(action: onStop) { Label("Stop", systemImage: "stop.fill").labelStyle(.titleAndIcon) }
-                    .buttonStyle(.pill(.quiet, compact: true)).disabled(stopping).accessibilityLabel("Stop")
+                    .buttonStyle(PillButtonStyle(kind: .quiet, compact: true, minimumTouchSize: LBMetric.composerHitSize)).disabled(stopping).accessibilityLabel("Stop")
             }
         }
         .padding(.leading, 14).padding(.trailing, canStop ? 5 : 14).padding(.vertical, 5)

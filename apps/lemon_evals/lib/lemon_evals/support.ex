@@ -10,9 +10,9 @@ defmodule LemonEvals.Support do
   they all lived in a single `LemonEvals.Harness` module.
   """
 
-  alias LemonAgent.Types.AgentToolResult
-  alias CodingAgent.ToolRegistry
   alias CodingAgent.Session.EventHandler
+  alias CodingAgent.ToolRegistry
+  alias LemonAgent.Types.AgentToolResult
   alias LemonCore.Introspection
 
   alias LemonAi.Types.{

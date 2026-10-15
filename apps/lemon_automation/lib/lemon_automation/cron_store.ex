@@ -37,6 +37,8 @@ defmodule LemonAutomation.CronStore do
   @audit_table :cron_audit_events
   @monitor_table :cron_monitor_state
   @preflight_notice_table :cron_preflight_notice_state
+  @failure_alert_table :cron_failure_alert_state
+  @notices_table :cron_failure_notices
 
   # ============================================================================
   # Job Operations
@@ -79,8 +81,45 @@ defmodule LemonAutomation.CronStore do
   """
   @spec delete_job(binary()) :: :ok
   def delete_job(job_id) do
+    delete_failure_alert_state(job_id)
     LemonCore.Store.delete(@jobs_table, job_id)
   end
+
+  @doc "Read the durable failure incident state for a job."
+  def get_failure_alert_state(job_id),
+    do: LemonCore.Store.get(@failure_alert_table, job_id) || %{}
+
+  @doc "Persist bounded incident state (owned by RunNotifications)."
+  def put_failure_alert_state(job_id, state),
+    do: LemonCore.Store.put(@failure_alert_table, job_id, state)
+
+  @doc "Clear incidents after recovery or job removal."
+  def delete_failure_alert_state(job_id),
+    do: LemonCore.Store.delete(@failure_alert_table, job_id)
+
+  @doc "Record the latest unread undelivered failure per job, keeping at most 200 jobs."
+  def record_failure_notice(job_id, notice) do
+    :ok = LemonCore.Store.put(@notices_table, job_id, notice)
+
+    @notices_table
+    |> LemonCore.Store.list()
+    |> Enum.sort_by(fn {_id, notice} -> notice.ts_ms end, :desc)
+    |> Enum.drop(200)
+    |> Enum.each(fn {id, _notice} -> clear_failure_notice(id) end)
+
+    :ok
+  end
+
+  @doc "Read outstanding local failure notices."
+  def list_failure_notices do
+    @notices_table
+    |> LemonCore.Store.list()
+    |> Enum.map(fn {_id, notice} -> notice end)
+    |> Enum.sort_by(& &1.ts_ms, :desc)
+  end
+
+  @doc "Resolve the local notice after recovery or successful alert admission."
+  def clear_failure_notice(job_id), do: LemonCore.Store.delete(@notices_table, job_id)
 
   @doc """
   List all cron jobs.

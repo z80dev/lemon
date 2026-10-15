@@ -43,6 +43,17 @@ defmodule LemonCli.OperatorCommandsTest do
     {:ok, directory: directory}
   end
 
+  test "cron status prints failing jobs and preserves the JSON status projection" do
+    status = %{"jobCount" => 4, "activeJobs" => 3, "failingJobs" => 2}
+    Process.put(:operator_response, fn "cron.status", %{} -> {:ok, status} end)
+    output = capture_io(fn -> assert CLI.run(~w(cron status)) == 0 end)
+    assert output =~ "Cron jobs: 4, enabled: 3, failing: 2"
+    assert_received {:operator_request, "cron.status", %{}}
+
+    assert capture_io(fn -> assert CLI.run(~w(cron status --json)) == 0 end) |> Jason.decode!() ==
+             status
+  end
+
   test "since parses exact relative minutes, hours and days" do
     now = 1_000_000_000
     assert RunsCommand.since_ms("30m", now) == {:ok, now - 1_800_000}
@@ -70,6 +81,8 @@ defmodule LemonCli.OperatorCommandsTest do
           ~w(cron list),
           ~w(cron runs --status error),
           ~w(cron runs --since 1s),
+          ~w(cron status --job id),
+          ~w(cron status extra),
           ~w(logs -n 0),
           ~w(logs -n 1001),
           ~w(logs --level debug),

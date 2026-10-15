@@ -8,6 +8,8 @@ defmodule LemonAgent.Loop.Streaming do
   alias LemonAgent.Loop.TranscriptValidator
   alias LemonAgent.Types.{AgentLoopConfig, AgentTool}
 
+  alias LemonAi.Providers.RetryHelper
+
   alias LemonAi.Types.{
     AssistantMessage,
     Context,
@@ -311,7 +313,7 @@ defmodule LemonAgent.Loop.Streaming do
   defp error_text(error), do: error
 
   defp retry_after_ms(error),
-    do: LemonAi.Providers.RetryHelper.error_retry_after_ms(error)
+    do: RetryHelper.error_retry_after_ms(error)
 
   defp wait_for_retry(signal, deadline) do
     cond do
@@ -743,18 +745,16 @@ defmodule LemonAgent.Loop.Streaming do
   end
 
   defp safe_ai_take(stream, nil) do
-    try do
-      GenServer.call(stream, :take, :infinity)
-    catch
-      :exit, {:noproc, _} ->
-        {:event, {:canceled, :canceled}}
+    GenServer.call(stream, :take, :infinity)
+  catch
+    :exit, {:noproc, _} ->
+      {:event, {:canceled, :canceled}}
 
-      :exit, {:normal, _} ->
-        {:event, {:canceled, :canceled}}
+    :exit, {:normal, _} ->
+      {:event, {:canceled, :canceled}}
 
-      :exit, {:shutdown, _} ->
-        {:event, {:canceled, :canceled}}
-    end
+    :exit, {:shutdown, _} ->
+      {:event, {:canceled, :canceled}}
   end
 
   defp safe_ai_take(stream, signal) do

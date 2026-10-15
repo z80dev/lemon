@@ -251,6 +251,11 @@ After a lost/late HTTP acknowledgement or an envelope-less relay 502/504, native
 
 Selected local files show **Not sent** until you choose **Upload**; the composer explains that they must be uploaded or removed before sending. An unconfirmed message shows **Check status** and **Reload conversation**, keeps the draft, and never treats a reload as permission to resend. Offline drafts stay local until you reconnect and choose Send. Delivery choices are **Send as follow-up**, **Update running task**, and **Stop and send now**, with an explanation beside the composer.
 
+Composer icon controls reserve at least 44 × 44 points on iPhone without enlarging
+their artwork. The composer keeps a fixed corner radius while typing. Pasted-file
+confirmation shows at most three names plus the remaining count, with long names
+shortened in the middle; all selected files still attach after confirmation.
+
 Mac Bot management and group editors use grouped sections with bounded content width. Cancel stays in the cancellation toolbar position, and the main action is in the confirmation position. Standalone reminder, skill, memory-import, routine, machine-enrollment, template-publication, organization and destructive-review forms also use grouped layouts rather than macOS's default column form.
 
 Gate and destructive controls require an online authenticated connection; they are never queued for offline replay. Native OIDC uses `ASWebAuthenticationSession` with the exact one-time `flowId`/`completionCode` callback and the original PKCE verifier. File previews authorize first; HTML is shown inert rather than executing embedded scripts in a privileged client, and voice memos use authorized persisted audio with native playback controls.
@@ -273,6 +278,13 @@ After account deletion revokes its sessions, an enabled workspace Owner can read
 
 Voice uses Apple Speech for dictation and an explicit visible active-call loop, ordinary conversation messages and actual reply audio. Review applies before ordinary dictation Send. AVSpeechSynthesizer is an explicitly labeled local TTS fallback, not a persisted voice memo; persisted memo/sample downloads require actual server audio. iOS follows audio-session interruption policies and makes no background continuous-listening promise. Quick Look previews authorized downloaded files where the platform supports them; unsupported formats remain downloadable.
 
+Voice settings in Preferences, Bot editing and active calls use the server's
+provider-specific built-in voice picker. Loading the catalog and selecting a
+voice never synthesize audio or save changes; **Save**/**Apply** and voice preview
+remain separate explicit actions. Google choices set their matching language.
+Saved custom voice IDs stay selected even when absent from the curated catalog.
+Offline and load failures retain the saved selection and offer read-only recovery.
+
 Notifications register the current installation to the current product account. iOS uses its actual APNs token; macOS uses local notifications. Same-device foreground viewed-conversation suppression does not clear inbox/unread or pending gates. Token-free `lemonbot://workspace/...` links fetch and authorize the exact task/entry/approval/machine/routine before navigation, never automatically approve.
 
 Foreground presence belongs to its realtime connection, independently of message delivery. A refresh or background reconnect can retire a presence write; that old socket's failure is not a delivery failure on the replacement connection. Current-connection failures remain visible, and a missing message HTTP acknowledgement retains its original nonce until authoritative read-only reconciliation settles it. Realtime ACKs use the delivered frame's cursor, not a newer global HTTP snapshot watermark.
@@ -293,6 +305,8 @@ DEBUG-only visual check. The `LemonBotSnapshots` scheme renders the real views w
 Use `-LBFixtures -LBFixtureScene backend-down` (or `controller-down` /
 `reconnect-required`) to inspect the shared connection sheet on an isolated iOS
 simulator. The Mac snapshot slugs match these names and include light/dark views.
+`-LBFixtures -LBRenderScene composer-polish` renders the focused voice/code/composer
+review scene on iOS as well; it uses only in-memory fixture responses.
 
 ```sh
 xcodebuild -project LemonBot.xcodeproj -scheme LemonBotSnapshots \
@@ -308,6 +322,13 @@ xcodebuild -project LemonBot.xcodeproj -scheme LemonBotKeyboard \
   -destination 'platform=iOS Simulator,id=<your-simulator-UDID>' \
   -derivedDataPath /tmp/lemonbot-keyboard-build CODE_SIGNING_ALLOWED=NO test
 ```
+
+`LemonBotShareReview` hosts the actual extension review view in the fixture app
+for missing-App-Group copy checks and light/dark screenshots. Run just
+`-only-testing:LemonBotShareTests/ShareReviewTests` on a dedicated simulator;
+`TEST_RUNNER_LB_SHARE_SNAPSHOT_DIR` selects the screenshot output directory.
+`ProviderVoicePickerTests` in `LemonBotKeyboardTests` checks named voice selection,
+and the composer keyboard tests assert 44-point Send/Dictate/Add hit geometry.
 
 Exercise a real backend and attached host: setup/login/OIDC and account switch; desktop HTTPS-publicUrl QR issuance; phone scan/paste exact preview, matching-code approve/deny, pending reopen, lost issuance/claim/completion receipt recovery, expired re-pair, Keychain restart, offline return, same Bot/conversation restore and device/session revocation. Also exercise draft retention; streaming reconnect and cursor expiry; stale/expired gates; uncertain send reconciliation; owner groups and profile memory; files and interactive PTY; voice permissions/review/mute/end; interrupted share import; notifications/task links; provider prerequisites and applied host policy. Build/test success does not substitute for real camera permission, physical-device TLS/Tailscale reachability, signing/APNs or configured host/provider probes.
 

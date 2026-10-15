@@ -8,10 +8,11 @@ defmodule LemonChannels.Adapters.Telegram.TransportFakeApiTest do
 
   use ExUnit.Case, async: false
 
-  alias LemonChannels.Telegram.FakeAPI
   alias LemonChannels.Adapters.Telegram
+  alias LemonChannels.Telegram.FakeAPI
   alias LemonChannels.Telegram.TriggerMode
   alias LemonCore.ChatScope
+  alias LemonCore.Events.ApprovalPending
 
   defmodule FakeApiTestRouter do
     use LemonCore.RouterBridge.Router
@@ -413,7 +414,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportFakeApiTest do
       id = LemonCore.Id.approval_id()
 
       preview =
-        LemonCore.Events.ApprovalPending.new(%{
+        ApprovalPending.new(%{
           id: id,
           run_id: LemonCore.Id.run_id(),
           session_key: "agent:default:telegram:default:dm:#{chat_id}",

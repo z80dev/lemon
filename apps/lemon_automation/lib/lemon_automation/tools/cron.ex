@@ -8,7 +8,8 @@ defmodule LemonAutomation.Tools.Cron do
 
   Results are delivered to the originating Telegram/Discord chat or, for jobs
   created from any other session (TUI, web, CLI), to the paired owner chat.
-  `deliverTo` overrides the target; `deliverTo: "none"` opts out.
+  `deliverTo` overrides the target; `"none"` opts out of ordinary result delivery.
+  Failure/recovery alerts still fall back to the owner chat.
 
   ## Registration
 
@@ -38,7 +39,7 @@ defmodule LemonAutomation.Tools.Cron do
       name: "cron",
       label: "Cron",
       description:
-        "Manage Lemon internal cron jobs: status, list, add, update, pause, resume, abort, remove, run, and runs. Prompt jobs run native coding sessions in cwd (defaults to the current repository). Pause disables future runs; abort stops a specific active cron run. Add/update accepts 5-field cron, recurring shorthands like 'every 30m', and one-shots like 'in 30m' or '2027-01-15T09:00' in the job timezone. Lifecycle actions accept an id or an unambiguous case-insensitive exact name. Results reach the user's paired chat automatically; use deliverTo='none' to opt out.",
+        "Manage Lemon internal cron jobs: status, list, add, update, pause, resume, abort, remove, run, and runs. Prompt jobs run native coding sessions in cwd (defaults to the current repository). Pause disables future runs; abort stops a specific active cron run. Add/update accepts 5-field cron, recurring shorthands like 'every 30m', and one-shots like 'in 30m' or '2027-01-15T09:00' in the job timezone. Lifecycle actions accept an id or an unambiguous case-insensitive exact name. Results reach the user's paired chat automatically; deliverTo='none' opts out of ordinary results, not rate-limited failure/recovery alerts.",
       parameters: tool_schema(),
       execute: &execute(&1, inherit_cwd(&2, cwd), &3, &4, session_key, agent_id)
     }
@@ -78,6 +79,10 @@ defmodule LemonAutomation.Tools.Cron do
     %{
       "type" => "object",
       "properties" => %{
+        "failing" => %{
+          "type" => "boolean",
+          "description" => "Only jobs with a nonzero failure streak (list)."
+        },
         "action" => %{
           "type" => "string",
           "enum" => @actions,
@@ -146,7 +151,7 @@ defmodule LemonAutomation.Tools.Cron do
         "deliverTo" => %{
           "type" => "string",
           "description" =>
-            "Where results are sent (add/update). Omit for the default: the originating chat, else the user's paired chat. 'none' disables delivery; 'telegram:<chat_id>[:<topic_id>]' or 'discord:<channel_id>[:<thread_id>]' picks a chat; 'auto' restores the default."
+            "Where ordinary results are sent (add/update). Omit for the default: the originating chat, else the user's paired chat. 'none' disables ordinary results; failure/recovery alerts still fall back to the owner. 'telegram:<chat_id>[:<topic_id>]' or 'discord:<channel_id>[:<thread_id>]' picks a chat; 'auto' restores the default."
         },
         "once" => %{
           "type" => "boolean",
@@ -210,6 +215,7 @@ defmodule LemonAutomation.Tools.Cron do
         "enabled" => true,
         "jobCount" => length(jobs),
         "activeJobs" => Enum.count(jobs, &truthy?(Map.get(&1, :enabled))),
+        "failingJobs" => Enum.count(jobs, &(CronJob.failure_streak(&1) > 0)),
         "nextRunAtMs" => next_run_ms(jobs)
       }
 
@@ -226,6 +232,7 @@ defmodule LemonAutomation.Tools.Cron do
         jobs
         |> maybe_filter_enabled(include_disabled)
         |> maybe_filter_agent(agent_id)
+        |> maybe_filter_failing(parse_bool(fetch_param(params, "failing"), false))
         |> Enum.map(&format_job/1)
         |> then(&%{"jobs" => &1})
 
@@ -653,6 +660,11 @@ defmodule LemonAutomation.Tools.Cron do
     "Cron #{base}"
   end
 
+  defp maybe_filter_failing(jobs, false), do: jobs
+
+  defp maybe_filter_failing(jobs, true),
+    do: Enum.filter(jobs, &(CronJob.failure_streak(&1) > 0))
+
   defp maybe_filter_enabled(jobs, true), do: jobs
   defp maybe_filter_enabled(jobs, false), do: Enum.filter(jobs, &truthy?(Map.get(&1, :enabled)))
 
@@ -691,9 +703,14 @@ defmodule LemonAutomation.Tools.Cron do
       "createdAtMs" => Map.get(job, :created_at_ms),
       "updatedAtMs" => Map.get(job, :updated_at_ms),
       "lastRunAtMs" => Map.get(job, :last_run_at_ms),
+      "failureStreak" => CronJob.failure_streak(job),
+      "lastStatus" => job |> CronJob.last_status() |> status_string(),
       "nextRunAtMs" => Map.get(job, :next_run_at_ms)
     }
   end
+
+  defp status_string(nil), do: nil
+  defp status_string(status), do: to_string(status)
 
   defp format_run(run) do
     %{

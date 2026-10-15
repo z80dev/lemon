@@ -3,15 +3,16 @@ defmodule CodingAgent.Tools.Task.Params do
 
   require Logger
 
-  alias LemonAgent.Types.AgentTool
   alias CodingAgent.AsyncFollowups
   alias CodingAgent.BudgetEnforcer
   alias CodingAgent.Session
+  alias CodingAgent.Session.ModelResolver
   alias CodingAgent.SettingsManager
   alias CodingAgent.Subagents
   alias CodingAgent.ToolPolicy
   alias CodingAgent.Tools.AskParent
   alias CodingAgent.Tools.Task.StructuredOutput
+  alias LemonAgent.Types.AgentTool
   alias LemonCore.SessionKey
 
   @valid_queue_modes ["collect", "followup", "steer", "steer_backlog", "interrupt"]
@@ -587,7 +588,7 @@ defmodule CodingAgent.Tools.Task.Params do
     inherited_model = resolve_inherited_model(opts)
 
     model =
-      CodingAgent.Session.ModelResolver.resolve_task_model(
+      ModelResolver.resolve_task_model(
         validated[:model],
         settings,
         inherited_model

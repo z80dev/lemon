@@ -98,10 +98,10 @@ struct BotEditorView: View {
                     }
                 }
                 SwiftUI.Section("Voice and language") {
-                    TextField("Voice ID (provider-supported or default)", text: $voiceID)
+                    ProviderVoicePicker(store: store, voiceID: $voiceID, language: $voiceLanguage)
                     Slider(value: $speed, in: 0.5...2, step: 0.1) { Text("Speed") }
                     Text("Speed: \(speed, specifier: "%.1f")×")
-                    TextField("Voice language (BCP-47 or blank for auto)", text: $voiceLanguage)
+                    TextField("Voice language (optional, e.g. en-US)", text: $voiceLanguage)
                     TextField("Reply language (blank for automatic)", text: $language)
                     Text("Voice and language changes are saved to this Bot's history. You can undo them under Preferences history.").font(LBFont.meta)
                 }

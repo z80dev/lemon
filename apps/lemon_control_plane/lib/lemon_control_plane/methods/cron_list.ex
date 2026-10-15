@@ -7,6 +7,8 @@ defmodule LemonControlPlane.Methods.CronList do
 
   @behaviour LemonControlPlane.Method
 
+  alias LemonAutomation.CronJob
+
   @impl true
   def name, do: "cron.list"
 
@@ -22,6 +24,7 @@ defmodule LemonControlPlane.Methods.CronList do
     jobs =
       LemonAutomation.CronManager.list()
       |> maybe_filter_agent(agent_id)
+      |> maybe_filter_failing(truthy?(params["failing"]))
 
     formatted_jobs = Enum.map(jobs, &format_job(&1, include_target_text?))
 
@@ -38,11 +41,12 @@ defmodule LemonControlPlane.Methods.CronList do
     active_runs = LemonAutomation.CronStore.active_runs(job.id)
     prompt = job.prompt || ""
     command = job.command || ""
+    last_status = CronJob.last_status(job)
 
     %{
       "id" => job.id,
       "name" => job.name,
-      "mode" => job |> LemonAutomation.CronJob.execution_mode() |> Atom.to_string(),
+      "mode" => job |> CronJob.execution_mode() |> Atom.to_string(),
       "schedule" => job.schedule,
       "enabled" => job.enabled,
       "agentId" => job.agent_id,
@@ -63,6 +67,8 @@ defmodule LemonControlPlane.Methods.CronList do
       "createdAtMs" => job.created_at_ms,
       "updatedAtMs" => job.updated_at_ms,
       "lastRunAtMs" => job.last_run_at_ms,
+      "failureStreak" => CronJob.failure_streak(job),
+      "lastStatus" => if(last_status, do: to_string(last_status)),
       "nextRunAtMs" => job.next_run_at_ms,
       "lastRunStatus" => latest_run && to_string(latest_run.status),
       "activeRunCount" => length(active_runs),
@@ -74,7 +80,7 @@ defmodule LemonControlPlane.Methods.CronList do
   defp job_summary(job, prompt, command, include_target_text?) do
     %{
       "jobId" => job.id,
-      "mode" => job |> LemonAutomation.CronJob.execution_mode() |> Atom.to_string(),
+      "mode" => job |> CronJob.execution_mode() |> Atom.to_string(),
       "enabled" => job.enabled,
       "promptBytes" => byte_size(prompt),
       "commandBytes" => byte_size(command),
@@ -103,6 +109,11 @@ defmodule LemonControlPlane.Methods.CronList do
       "includesSecretValues" => false
     }
   end
+
+  defp maybe_filter_failing(jobs, false), do: jobs
+
+  defp maybe_filter_failing(jobs, true),
+    do: Enum.filter(jobs, &(CronJob.failure_streak(&1) > 0))
 
   defp maybe_filter_agent(jobs, nil), do: jobs
   defp maybe_filter_agent(jobs, ""), do: jobs

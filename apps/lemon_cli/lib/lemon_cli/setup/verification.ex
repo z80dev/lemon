@@ -30,14 +30,7 @@ defmodule LemonCli.Setup.Verification do
   alias LemonAi.Providers.RequestHeaders
   alias LemonCore.Config
   alias LemonCore.Config.{Agent, LegacyAgentMigration, Modular, Providers}
-  alias LemonCore.Httpc
   alias LemonCore.Setup.Readiness
-
-  @live_timeout_ms 5_000
-
-  # Registry APIs that expose a lightweight, unauthenticated-cheap
-  # `GET {base_url}/models` endpoint suitable for a setup smoke test.
-  @live_check_apis [:openai_completions, :openai_responses]
 
   @type step :: Readiness.step()
   @type provider_state :: Readiness.provider_state()
@@ -192,7 +185,7 @@ defmodule LemonCli.Setup.Verification do
     if skip_verify? do
       {:ok, %{provider: provider, model: model, live: :disabled}}
     else
-      verifier = Keyword.get(opts, :verifier) || (&default_live_check/1)
+      verifier = Keyword.get(opts, :verifier) || (&LemonCli.ProviderLiveCheck.check/1)
 
       case build_live_input(opts, provider, model) do
         {:ok, live_input} ->
@@ -214,7 +207,7 @@ defmodule LemonCli.Setup.Verification do
                %{
                  step: :live,
                  reason: reason,
-                 message: live_failure_message(live_input, reason)
+                 message: LemonCli.ProviderLiveCheck.failure_message(reason)
                }}
           end
 
@@ -241,6 +234,36 @@ defmodule LemonCli.Setup.Verification do
   end
 
   defp live_note(_), do: "live check passed"
+
+  @doc "Builds the default provider probe using setup's canonical credential and model resolution."
+  @spec live_input(keyword()) :: {:ok, map()} | {:skip, term()} | {:error, term()}
+  def live_input(opts \\ []) do
+    config = Keyword.get(opts, :config) || effective_config(opts)
+    provider = config.agent[:default_provider]
+    model = config.agent[:default_model]
+
+    resolved = Keyword.get(opts, :verification_model) || effective_model(config, provider, model)
+    provider_cfg = provider_config(config, provider)
+
+    cond do
+      is_nil(provider) or is_nil(model) or is_nil(resolved) ->
+        {:skip, :unknown_model}
+
+      Keyword.get(opts, :non_generating, false) and
+          (Credentials.oauth_selected?(provider_cfg) or
+             resolved.api not in [
+               :openai_completions,
+               :openai_responses,
+               :anthropic_messages,
+               :google_generative_ai
+             ]) ->
+        {:skip, {:unsupported_api, resolved.api}}
+
+      true ->
+        opts = opts |> Keyword.put(:config, config) |> Keyword.put(:verification_model, resolved)
+        build_live_input(opts, provider, model)
+    end
+  end
 
   defp build_live_input(opts, provider, model) do
     config = Keyword.fetch!(opts, :config)
@@ -327,90 +350,7 @@ defmodule LemonCli.Setup.Verification do
       end)
   end
 
-  # Default live verifier: one lightweight GET against the provider's
-  # OpenAI-compatible models endpoint. 2xx proves the credential is accepted;
-  # 401/403 proves it is not; anything else is reported, never guessed.
-  defp default_live_check(%{api: api, base_url: base_url, api_key: api_key, headers: headers}) do
-    if api in @live_check_apis do
-      url = String.trim_trailing(base_url, "/") <> "/models"
-
-      auth_headers = if api_key, do: %{"authorization" => "Bearer " <> api_key}, else: %{}
-
-      request_headers =
-        auth_headers
-        |> RequestHeaders.merge(headers)
-        |> Enum.map(fn {name, value} ->
-          {String.to_charlist(name), String.to_charlist(value)}
-        end)
-
-      request = {String.to_charlist(url), request_headers}
-      ssl_opts = [verify: :verify_peer] |> maybe_put_cacerts()
-
-      case Httpc.request(:get, request, [{:ssl, ssl_opts}, {:timeout, @live_timeout_ms}], []) do
-        {:ok, {{_vsn, status, _phrase}, _headers, _body}} when status in 200..299 ->
-          {:ok, %{http_status: status}}
-
-        {:ok, {{_vsn, status, _phrase}, _headers, _body}} when status in [401, 403] ->
-          {:error, :unauthorized}
-
-        {:ok, {{_vsn, status, _phrase}, _headers, _body}} ->
-          {:error, {:http_status, status}}
-
-        {:error, _reason} ->
-          {:error, :unreachable}
-      end
-    else
-      {:skip, {:unsupported_api, api}}
-    end
-  end
-
-  # Same TLS posture as the gateway smoke tests: verify peers whenever the
-  # runtime can provide CA certificates.
-  defp maybe_put_cacerts(ssl_opts) do
-    if function_exported?(:public_key, :cacerts_get, 0) do
-      case :public_key.cacerts_get() do
-        cacerts when is_list(cacerts) and cacerts != [] ->
-          Keyword.put(ssl_opts, :cacerts, cacerts)
-
-        _ ->
-          ssl_opts
-      end
-    else
-      ssl_opts
-    end
-  end
-
-  defp live_failure_message(_live_input, :unauthorized) do
-    "The provider rejected the credential (HTTP 401/403). Re-run `lemon setup provider` " <>
-      "to store a valid credential, or use --skip-verify to defer this check."
-  end
-
-  defp live_failure_message(_live_input, :unreachable) do
-    "Could not reach the provider's models endpoint. Check your network and retry, " <>
-      "or re-run with --skip-verify when offline."
-  end
-
-  defp live_failure_message(_live_input, {:http_status, status}) do
-    "The provider's models endpoint returned HTTP #{status}. Check the provider status " <>
-      "and your credential, or re-run with --skip-verify to defer this check."
-  end
-
-  defp live_failure_message(_live_input, reason) do
-    "Provider verification failed: #{format_live_reason(reason)}. " <>
-      "Re-run `lemon setup provider` to fix the configuration, or use --skip-verify to defer."
-  end
-
-  defp format_live_reason(:unknown_model), do: "the configured model could not be resolved"
-  defp format_live_reason(:offline), do: "the provider is offline"
-  defp format_live_reason(:no_reference), do: "no saved key is configured for this provider"
-
-  defp format_live_reason({:credential_unavailable, _}),
-    do: "the provider credential is unavailable"
-
-  defp format_live_reason({:unsupported_api, _}),
-    do: "this provider does not support a lightweight live check"
-
-  defp format_live_reason(_), do: "the live check is unavailable"
+  defp format_live_reason(reason), do: LemonCli.ProviderLiveCheck.format_reason(reason)
 
   # ──────────────────────────────────────────────────────────────────────────
   # Shared helpers

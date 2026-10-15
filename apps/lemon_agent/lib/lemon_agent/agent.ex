@@ -1121,39 +1121,37 @@ defmodule LemonAgent.Agent do
           stream_fn() | nil
         ) :: :ok | {:error, term()}
   defp run_agent_loop(messages, context, config, abort_ref, agent_pid, stream_fn) do
-    try do
-      # Get the event stream from LemonAgent.Loop with abort signal
-      event_stream =
-        if messages do
-          LemonAgent.Loop.agent_loop(messages, context, config, abort_ref, stream_fn, agent_pid)
-        else
-          LemonAgent.Loop.agent_loop_continue(context, config, abort_ref, stream_fn, agent_pid)
-        end
+    # Get the event stream from LemonAgent.Loop with abort signal
+    event_stream =
+      if messages do
+        LemonAgent.Loop.agent_loop(messages, context, config, abort_ref, stream_fn, agent_pid)
+      else
+        LemonAgent.Loop.agent_loop_continue(context, config, abort_ref, stream_fn, agent_pid)
+      end
 
-      # Consume the stream and forward events
-      partial_message =
-        event_stream
-        |> LemonAgent.EventStream.events()
-        |> Enum.reduce_while(nil, fn event, partial ->
-          # Send event to GenServer
-          send(agent_pid, {:agent_event, event})
+    # Consume the stream and forward events
+    partial_message =
+      event_stream
+      |> LemonAgent.EventStream.events()
+      |> Enum.reduce_while(nil, fn event, partial ->
+        # Send event to GenServer
+        send(agent_pid, {:agent_event, event})
 
-          # Track partial message state
-          new_partial = track_partial_message(event, partial)
-          {:cont, new_partial}
-        end)
+        # Track partial message state
+        new_partial = track_partial_message(event, partial)
+        {:cont, new_partial}
+      end)
 
-      # Handle any remaining partial message
-      handle_remaining_partial(partial_message, agent_pid, abort_ref, config)
+    # Handle any remaining partial message
+    handle_remaining_partial(partial_message, agent_pid, abort_ref, config)
 
-      :ok
-    rescue
-      error ->
-        # Send error event
-        error_event = build_error_event(error, config)
-        send(agent_pid, {:agent_event, error_event})
-        {:error, error}
-    end
+    :ok
+  rescue
+    error ->
+      # Send error event
+      error_event = build_error_event(error, config)
+      send(agent_pid, {:agent_event, error_event})
+      {:error, error}
   end
 
   defp aborted?(abort_ref), do: AbortSignal.aborted?(abort_ref)

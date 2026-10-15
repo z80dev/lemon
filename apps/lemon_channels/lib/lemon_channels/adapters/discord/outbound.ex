@@ -467,11 +467,9 @@ defmodule LemonChannels.Adapters.Discord.Outbound do
   defp normalize_api_mod(mod) when is_atom(mod), do: mod
 
   defp normalize_api_mod(mod) when is_binary(mod) do
-    try do
-      String.to_existing_atom(mod)
-    rescue
-      ArgumentError -> NostrumMessage
-    end
+    String.to_existing_atom(mod)
+  rescue
+    ArgumentError -> NostrumMessage
   end
 
   defp normalize_api_mod(_), do: NostrumMessage

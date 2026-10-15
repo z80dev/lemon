@@ -30,11 +30,13 @@ final class ShareReviewModel: ObservableObject {
     @Published var text = ""
     @Published var loading = false
     @Published var error: String?
+    @Published var sharingUnavailable = false
     var context: NSExtensionContext?
 
     func load() async {
         loading = true
         error = nil
+        sharingUnavailable = false
         if let old = capture { try? ShareInbox.discard(old) }
         capture = nil
         var draft: SharedCapture?
@@ -82,6 +84,7 @@ final class ShareReviewModel: ObservableObject {
             text = result.text
         } catch {
             self.error = error.localizedDescription
+            if case .sharingUnavailable? = error as? CaptureError { sharingUnavailable = true }
             if let draft { try? ShareInbox.discard(draft) }
         }
         loading = false
@@ -140,17 +143,21 @@ final class ShareReviewModel: ObservableObject {
     }
 }
 
-private struct ShareReviewView: View {
+struct ShareReviewView: View {
     @ObservedObject var model: ShareReviewModel
     var body: some View {
         NavigationStack {
             Form {
                 Section {
-                    Text("Save only these selected items. Open Lemon Bot, choose an account and conversation, then attach them to its unsent composer. Nothing is uploaded or sent from this extension.")
+                    if !model.sharingUnavailable {
+                        Text("Save only these selected items. Open Lemon Bot, choose an account and conversation, then attach them to its unsent composer. Nothing is uploaded or sent from this extension.")
+                    }
                     if model.loading { ProgressView("Copying selected content…") }
                     if let error = model.error {
                         Text(error).foregroundStyle(.red).textSelection(.enabled)
-                        Button("Read selected items again") { Task { await model.load() } }
+                        if !model.sharingUnavailable {
+                            Button("Read selected items again") { Task { await model.load() } }
+                        }
                     }
                 }
                 if let capture = model.capture {
@@ -169,7 +176,9 @@ private struct ShareReviewView: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel", action: model.cancel) }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Save for review", action: model.save).disabled(model.capture == nil || model.loading)
+                    if !model.sharingUnavailable {
+                        Button("Save for review", action: model.save).disabled(model.capture == nil || model.loading)
+                    }
                 }
             }
         }

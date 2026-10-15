@@ -19,8 +19,8 @@ defmodule CodingAgent.Tools.Lsp do
   alias CodingAgent.Artifacts
   alias CodingAgent.Tools.{CheckpointGuard, PathHelpers}
   alias CodingAgent.Tools.Lsp.{Client, Text, WorkspaceEdit}
-  alias LemonAgent.Tools.AbortHelpers
   alias LemonAgent.Security.ToolResultTrust
+  alias LemonAgent.Tools.AbortHelpers
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonAi.Types.TextContent
   alias LemonLsp.ServerManager
