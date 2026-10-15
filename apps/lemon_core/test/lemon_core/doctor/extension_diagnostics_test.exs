@@ -1,11 +1,18 @@
 defmodule LemonCore.Doctor.ExtensionDiagnosticsTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
   alias LemonCore.Doctor.ExtensionDiagnostics
 
   test "reports disabled extension execution policy without loading code" do
+    previous = System.get_env("LEMON_EXTENSIONS_ENABLED")
     System.put_env("LEMON_EXTENSIONS_ENABLED", "false")
-    on_exit(fn -> System.delete_env("LEMON_EXTENSIONS_ENABLED") end)
+
+    on_exit(fn ->
+      case previous do
+        nil -> System.delete_env("LEMON_EXTENSIONS_ENABLED")
+        value -> System.put_env("LEMON_EXTENSIONS_ENABLED", value)
+      end
+    end)
 
     tmp_dir =
       Path.join(
