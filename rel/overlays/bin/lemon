@@ -51,6 +51,7 @@ PORT="${LEMON_CONTROL_PLANE_PORT:-4040}"
 WEB_PORT="${LEMON_WEB_PORT:-4080}"
 SIM_PORT="${LEMON_SIM_UI_PORT:-4090}"
 LOG_PATH="${RELEASE_TMP:-$LEMON_ROOT/tmp}/log"
+export LEMON_RUNTIME_LOG_DIR="$LOG_PATH"
 PIDFILE="${LEMON_RUNTIME_PID_FILE:-$STATE_DIR/lemon-$PORT.pid}"
 ROOTFILE="$STATE_DIR/lemon-$PORT.root"
 export LEMON_CLI_LAUNCHER=release LEMON_LAUNCHER="$SCRIPT_DIR/lemon"
@@ -225,6 +226,8 @@ The sim_broadcast_platform release has no runtime CLI; use lemon_runtime_min or 
 
 run_cli() {
   [ "$PROFILE" != "sim_broadcast_platform" ] || sim_command "$@"
+  # Operator follow must exit on Ctrl-C instead of opening the BEAM break menu.
+  if [ "${1:-}" = logs ]; then export ELIXIR_ERL_OPTIONS="${ELIXIR_ERL_OPTIONS:-} +Bd"; fi
   exec "$RELEASE_BIN" eval "$CLI_EXPR" "$@"
 }
 

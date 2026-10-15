@@ -8,7 +8,11 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
-No unreleased changes yet.
+### Added
+
+- Add read-only `lemon runs`, `lemon runs active`, `lemon cron runs`, and
+  `lemon logs` for headless operators, with bounded redacted offline launcher
+  logs and interruptible two-second follow polling.
 
 ---
 
