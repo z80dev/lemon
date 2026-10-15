@@ -142,7 +142,7 @@ Agent behavior configuration:
 
 Source sections:
 - `[defaults]` for model/provider/thinking defaults
-- `[runtime]` for compaction/retry/shell/tools/extensions/theme
+- `[runtime]` for compaction/retry/shell/tools/extensions
 - A deprecated `[agent]` table still loads, with a warning: `LegacyAgentMigration`
   maps it onto `[defaults]`, `[runtime]` and `[tui]` (theme) before resolution,
   and `lemon config migrate` (or `lemon setup`) rewrites the file
@@ -158,7 +158,6 @@ Source sections:
 - `extensions.enabled` - Global switch for extension code execution
 - `extensions.auto_load_default_paths` - Trust default global/project extension directories
 - `secret_obfuscation.enabled` - Opt-in placeholder obfuscation of secrets in provider-visible text
-- `theme` - Agent theme
 
 Environment variables:
 - `LEMON_DEFAULT_PROVIDER`, `LEMON_DEFAULT_MODEL`
@@ -167,7 +166,7 @@ Environment variables:
 - `LEMON_COMPACTION_ENABLED`, `LEMON_COMPACTION_RESERVE_TOKENS`
 - `LEMON_RETRY_ENABLED`, `LEMON_MAX_RETRIES`
 - `LEMON_SECRET_OBFUSCATION_ENABLED`
-- `LEMON_EXTENSION_PATHS`, `LEMON_THEME`
+- `LEMON_EXTENSION_PATHS`
 
 ### Config.Tools
 

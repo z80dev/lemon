@@ -50,7 +50,7 @@ defmodule LemonHoncho.Env do
       aliases: [],
       type: :string,
       default: "",
-      doc: "Prefix for channel-qualified sender peer ids; empty keeps the configured peer.",
+      doc: "Prefix for channel-qualified non-owner sender peer ids; empty uses the runtime id.",
       secret?: false,
       required?: false,
       area: :honcho,

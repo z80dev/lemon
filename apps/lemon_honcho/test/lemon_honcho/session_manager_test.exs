@@ -917,6 +917,26 @@ defmodule LemonHoncho.SessionManagerTest do
   end
 
   describe "gateway identities" do
+    test "default uploads and context preserve owner history while isolating other senders" do
+      start_manager()
+      key = "agent:demo:telegram:default:group:42"
+      owner = %{channel_id: "telegram", sender_id: "123", owner?: true}
+      visitor = %{channel_id: "telegram", sender_id: "456", owner?: false}
+
+      for {identity, peer} <- [{owner, "user"}, {visitor, "telegram_456"}] do
+        request = @request |> Map.put(:session_key, key) |> Map.put(:channel_identity, identity)
+        assert SessionManager.context_for(request) =~ "Knows #{peer}."
+
+        SessionManager.sync_document(
+          document(session_key: key, meta: %{channel_identity: identity})
+        )
+
+        assert_receive {:honcho_call, :add_messages,
+                        {_, [%{peer_id: ^peer}, %{peer_id: "lemon"}]}},
+                       1_000
+      end
+    end
+
     test "local sessions ignore channel-shaped metadata" do
       start_manager(runtime_peer_prefix: "gateway_")
       request = Map.put(@request, :channel_identity, %{channel_id: "telegram", sender_id: "123"})

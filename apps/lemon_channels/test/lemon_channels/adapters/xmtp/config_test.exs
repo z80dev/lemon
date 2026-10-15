@@ -12,7 +12,7 @@ defmodule LemonChannels.Adapters.Xmtp.ConfigTest do
 
   alias LemonChannels.Adapters.Xmtp.Config
 
-  @env_vars ~w(XMTP_WALLET_KEY LEMON_GATEWAY_ENABLE_XMTP)
+  @env_vars ~w(XMTP_WALLET_ADDRESS XMTP_WALLET_KEY LEMON_GATEWAY_ENABLE_XMTP)
 
   setup do
     original = Map.new(@env_vars, fn key -> {key, System.get_env(key)} end)
@@ -53,6 +53,34 @@ defmodule LemonChannels.Adapters.Xmtp.ConfigTest do
     test "uses the default section when absent" do
       assert Config.resolve(%{}) == %{}
       assert Config.resolve(nil) == %{}
+    end
+
+    test "resolves wallet environment references before bridge use" do
+      address = "0xabcdefabcdefabcdefabcdefabcdefabcdefabcd"
+      key = String.duplicate("a", 64)
+      System.put_env("XMTP_WALLET_ADDRESS", address)
+      System.put_env("XMTP_WALLET_KEY", key)
+
+      config =
+        Config.resolve(%{
+          "wallet_address" => "${XMTP_WALLET_ADDRESS}",
+          "wallet_key" => "${XMTP_WALLET_KEY}",
+          "private_key" => "${XMTP_WALLET_KEY}",
+          "wallet_key_secret" => "xmtp/key"
+        })
+
+      assert config.wallet_address == address
+      assert config.wallet_key == key
+      assert config.private_key == key
+      assert config.wallet_key_secret == "xmtp/key"
+      assert Config.validate(config, []) == []
+
+      System.delete_env("XMTP_WALLET_ADDRESS")
+
+      refute Map.has_key?(
+               Config.resolve(%{"wallet_address" => "${XMTP_WALLET_ADDRESS}"}),
+               :wallet_address
+             )
     end
   end
 

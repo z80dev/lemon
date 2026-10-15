@@ -103,6 +103,16 @@ defmodule LemonCore.Config.GatewayTest do
       assert config.enabled_channels[:stub] == true
     end
 
+    test "keeps unknown enable flag values for validation" do
+      config = Gateway.resolve(%{"gateway" => %{"enable_stub" => "sometimes"}})
+      assert config.enabled_channels.stub == "sometimes"
+
+      assert "gateway.enable_stub: must be a boolean" in LemonCore.Config.Validator.validate_gateway(
+               config,
+               []
+             )
+    end
+
     test "environment variables override settings" do
       System.put_env("LEMON_GATEWAY_MAX_CONCURRENT_RUNS", "10")
       System.put_env("LEMON_GATEWAY_DEFAULT_CWD", "/workspace")

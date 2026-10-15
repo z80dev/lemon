@@ -8,8 +8,8 @@ defmodule LemonChannels.Adapters.Xmtp.Config do
   `LemonChannels.Env`, and the section's validation rules. See
   `LemonCore.Config.Gateway.Channel`.
 
-  Only `wallet_key_secret` is normalized; everything else passes through
-  atomized so the bridge keeps seeing the keys it reads.
+  Wallet environment references (`${NAME}`) are resolved before reaching the
+  bridge. Secret names remain references to the encrypted secret store.
   """
 
   @behaviour LemonCore.Config.Gateway.Channel
@@ -31,7 +31,12 @@ defmodule LemonChannels.Adapters.Xmtp.Config do
 
   @impl LemonCore.Config.Gateway.Channel
   def resolve(section) when is_map(section) do
-    base = %{wallet_key_secret: blank_to_nil(section["wallet_key_secret"])}
+    base = %{
+      wallet_key_secret: blank_to_nil(section["wallet_key_secret"]),
+      wallet_address: resolve_env_ref(section["wallet_address"]),
+      wallet_key: resolve_env_ref(section["wallet_key"]),
+      private_key: resolve_env_ref(section["private_key"])
+    }
 
     section
     |> Enum.reduce(base, fn {key, value}, acc ->
@@ -43,6 +48,14 @@ defmodule LemonChannels.Adapters.Xmtp.Config do
   end
 
   def resolve(_section), do: resolve(%{})
+
+  defp resolve_env_ref(value) do
+    if Validator.env_var_reference?(value) do
+      value |> String.slice(2..-2//1) |> Env.string()
+    else
+      value
+    end
+  end
 
   @impl LemonCore.Config.Gateway.Channel
   def validate(section, errors) when is_map(section) do

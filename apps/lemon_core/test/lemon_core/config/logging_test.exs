@@ -127,9 +127,10 @@ defmodule LemonCore.Config.LoggingTest do
       assert config.level == :debug
     end
 
-    test "returns nil for unknown level" do
+    test "preserves unknown levels for validation" do
       config = Logging.resolve(%{"logging" => %{"level" => "unknown"}})
-      assert config.level == nil
+      assert config.level == "unknown"
+      assert [_error] = LemonCore.Config.Validator.validate_logging(config, [])
     end
 
     test "returns nil when level not set" do
