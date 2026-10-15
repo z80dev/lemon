@@ -98,8 +98,9 @@ partial output instead surfaces that output and the original error.
 `test/compliance/` runs the kit against the platform's own implementations — three
 store backends, two channel adapters, and the local memory provider. Additional
 compliance suites should live with their implementations where dependency direction
-requires it.
+requires it. Helper self-tests also cover missing optional-dependency diagnostics
+and typed nested fixture overrides.
 
 ```bash
-mix test apps/lemon_platform_test
+scripts/test path apps/lemon_platform_test/test --cover
 ```
