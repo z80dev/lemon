@@ -147,6 +147,12 @@ defmodule CodingAgent.Tools.Read do
           cwd :: String.t(),
           opts :: keyword()
         ) :: AgentToolResult.t() | {:error, term()}
+  def execute(_id, %{"path" => "proc://" <> _ = path}, signal, _update, cwd, opts) do
+    if aborted?(signal),
+      do: {:error, "Operation aborted"},
+      else: CodingAgent.InternalUrls.ProcessProtocol.read(path, signal, cwd, opts)
+  end
+
   def execute(_tool_call_id, %{"path" => "agent://" <> _ = path}, signal, _on_update, _cwd, opts) do
     if aborted?(signal),
       do: {:error, "Operation aborted"},

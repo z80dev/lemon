@@ -916,6 +916,53 @@ defmodule LemonHoncho.SessionManagerTest do
     end
   end
 
+  describe "gateway identities" do
+    test "local sessions ignore channel-shaped metadata" do
+      start_manager(runtime_peer_prefix: "gateway_")
+      request = Map.put(@request, :channel_identity, %{channel_id: "telegram", sender_id: "123"})
+      assert SessionManager.context_for(request) =~ "Knows user."
+      refute_receive {:honcho_call, :ensure_peer, "gateway_telegram_123"}, 50
+    end
+
+    test "uploads summaries under the sender peer and skips bot-authored turns" do
+      start_manager(runtime_peer_prefix: "gateway_")
+      identity = %{channel_id: "telegram", sender_id: "123", is_bot: false}
+
+      SessionManager.sync_document(
+        document(
+          session_key: "agent:demo:telegram:default:dm:42",
+          meta: %{channel_identity: identity}
+        )
+      )
+
+      assert_receive {:honcho_call, :add_messages, {_session, messages}}, 1_000
+      assert [%{peer_id: "gateway_telegram_123"}, %{peer_id: "lemon"}] = messages
+
+      bot = %{identity | is_bot: true}
+
+      SessionManager.sync_document(
+        document(session_key: "agent:demo:telegram:default:dm:42", meta: %{channel_identity: bot})
+      )
+
+      refute_receive {:honcho_call, :add_messages, _}, 150
+    end
+
+    test "group senders get separate cached context and dialectic reads" do
+      start_manager(runtime_peer_prefix: "gateway_")
+      request = %{@request | session_key: "agent:demo:telegram:default:group:42"}
+      first = Map.put(request, :channel_identity, %{channel_id: "telegram", sender_id: "1"})
+      second = Map.put(request, :channel_identity, %{channel_id: "telegram", sender_id: "2"})
+
+      assert SessionManager.context_for(first) =~ "gateway_telegram_1"
+      assert_receive {:honcho_call, :chat, {"lemon", _, first_opts}}, 1_000
+      assert first_opts[:target] == "gateway_telegram_1"
+      assert SessionManager.context_for(second) =~ "gateway_telegram_2"
+      assert_receive {:honcho_call, :chat, {"lemon", _, second_opts}}, 1_000
+      assert second_opts[:target] == "gateway_telegram_2"
+      assert length(SessionManager.sessions()) == 2
+    end
+  end
+
   describe "sync_document/1" do
     test "makes no calls when message saving is switched off" do
       start_manager(save_messages?: false)

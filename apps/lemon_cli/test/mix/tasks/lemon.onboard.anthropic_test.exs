@@ -29,7 +29,6 @@ defmodule Mix.Tasks.Lemon.Onboard.AnthropicTest do
         do: System.put_env("LEMON_SECRETS_MASTER_KEY", original_master_key),
         else: System.delete_env("LEMON_SECRETS_MASTER_KEY")
 
-
       clear_secrets_table()
       File.rm_rf!(tmp_dir)
     end)
@@ -45,6 +44,7 @@ defmodule Mix.Tasks.Lemon.Onboard.AnthropicTest do
     output =
       capture_io(fn ->
         Anthropic.run([
+          "--non-interactive",
           "--token",
           "anthropic-token-123",
           "--config-path",
@@ -72,6 +72,7 @@ defmodule Mix.Tasks.Lemon.Onboard.AnthropicTest do
 
     capture_io(fn ->
       Anthropic.run([
+        "--non-interactive",
         "--token",
         "anthropic-token-123",
         "--config-path",
@@ -100,7 +101,12 @@ defmodule Mix.Tasks.Lemon.Onboard.AnthropicTest do
 
     output =
       capture_io("n\nsk-ant-oat01-setup-token\n", fn ->
-        Anthropic.run(["--auth", "oauth", "--config-path", config_path])
+        io = Map.put(LemonCli.Onboarding.Runner.default_io(), :interactive?, fn -> true end)
+
+        Mix.Tasks.Lemon.Onboard.run_with_io(
+          ["anthropic", "--auth", "oauth", "--no-set-default", "--config-path", config_path],
+          io
+        )
       end)
 
     with {:ok, socket} <- port_holder, do: :gen_tcp.close(socket)
@@ -131,6 +137,7 @@ defmodule Mix.Tasks.Lemon.Onboard.AnthropicTest do
     assert_raise Mix.Error, ~r/Unknown model/, fn ->
       capture_io(fn ->
         Anthropic.run([
+          "--non-interactive",
           "--token",
           "anthropic-token-123",
           "--config-path",

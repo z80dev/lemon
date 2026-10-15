@@ -107,6 +107,25 @@ defmodule CodingAgent.Tools.Write do
           cwd :: String.t(),
           opts :: keyword()
         ) :: AgentToolResult.t() | {:error, term()}
+  def execute(_id, %{"path" => "proc://" <> _ = path} = params, signal, _update, cwd, opts) do
+    if AbortSignal.aborted?(signal),
+      do: {:error, :aborted},
+      else: CodingAgent.InternalUrls.ProcessProtocol.write(path, params, signal, cwd, opts)
+  end
+
+  def execute(id, %{"path" => "local://" <> _ = path} = params, signal, update, cwd, opts) do
+    with {:ok, resolved} <- CodingAgent.InternalUrls.resolve(path, Keyword.put(opts, :cwd, cwd)) do
+      execute(
+        id,
+        Map.put(params, "path", resolved),
+        signal,
+        update,
+        cwd,
+        Keyword.put(opts, :acp_client_fs_write_text_file, false)
+      )
+    end
+  end
+
   def execute(
         _tool_call_id,
         %{"path" => "agent://" <> _ = path} = params,

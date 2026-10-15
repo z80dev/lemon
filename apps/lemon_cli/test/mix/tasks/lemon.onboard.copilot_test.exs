@@ -41,6 +41,7 @@ defmodule Mix.Tasks.Lemon.Onboard.CopilotTest do
     output =
       capture_io(fn ->
         Copilot.run([
+          "--non-interactive",
           "--token",
           "copilot-token-123",
           "--config-path",
@@ -66,6 +67,7 @@ defmodule Mix.Tasks.Lemon.Onboard.CopilotTest do
 
     capture_io(fn ->
       Copilot.run([
+        "--non-interactive",
         "--token",
         "copilot-token-123",
         "--config-path",
@@ -91,6 +93,7 @@ defmodule Mix.Tasks.Lemon.Onboard.CopilotTest do
     assert_raise Mix.Error, ~r/Unknown model/, fn ->
       capture_io(fn ->
         Copilot.run([
+          "--non-interactive",
           "--token",
           "copilot-token-123",
           "--config-path",

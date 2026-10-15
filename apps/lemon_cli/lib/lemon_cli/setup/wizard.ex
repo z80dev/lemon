@@ -26,7 +26,8 @@ defmodule LemonCli.Setup.Wizard do
           required(:error) => (String.t() -> any()),
           required(:prompt) => (String.t() -> String.t() | charlist() | nil),
           required(:secret) => (String.t() -> String.t() | charlist() | nil),
-          optional(:select) => (map() -> any())
+          optional(:select) => (map() -> any()),
+          optional(:interactive?) => (-> boolean())
         }
 
   @doc """
@@ -52,6 +53,7 @@ defmodule LemonCli.Setup.Wizard do
           provider: :string,
           skip_verify: :boolean,
           daily_brief: :string,
+          set_default: :boolean,
           token: :string,
           auth: :string,
           codex_auth_path: :string,
@@ -81,11 +83,10 @@ defmodule LemonCli.Setup.Wizard do
         end
 
       {[], []} ->
-        Runner.ensure_required_apps!()
         run_full([], io, Keyword.merge(opts, parsed))
 
-      {[], [subcommand | _]} ->
-        io.error.("Unknown subcommand: #{inspect(subcommand)}")
+      {[], [_subcommand | _]} ->
+        io.error.("Unknown setup subcommand. Run `#{usage_command} --help` to list subcommands.")
         io.info.("")
         io.info.("Usage: #{usage_command} [provider|runtime|gateway|doctor] [options]")
         print_help_hint(io, usage_command)
@@ -118,7 +119,7 @@ defmodule LemonCli.Setup.Wizard do
   6. Offer an opt-in daily brief (default off; `--daily-brief HH:MM` in
      non-interactive mode).
   7. Offer to configure the runtime profile (optional).
-  8. Print a summary that only claims completion when nothing is pending.
+  8. Print a summary that only claims completion after a passing live check.
 
   ## Options
 
@@ -133,6 +134,8 @@ defmodule LemonCli.Setup.Wizard do
   def run_full(_args, io, opts \\ []) do
     non_interactive? = Keyword.get(opts, :non_interactive, false)
     config_path = Keyword.get(opts, :config_path) || Modular.global_path()
+    unless non_interactive?, do: Runner.ensure_interactive!(io)
+    Runner.ensure_required_apps!()
 
     print_banner(io)
     print_status(io, Verification.setup_state(config_path: config_path))
@@ -143,7 +146,7 @@ defmodule LemonCli.Setup.Wizard do
         ensure_provider(config_path, io, non_interactive?, opts)
       end
 
-    if result == :ok do
+    if result == :ok or match?({:ok, _}, result) do
       step_offer_daily_brief(config_path, io, non_interactive?, opts)
       step_offer_runtime(io, non_interactive?)
     end
@@ -151,12 +154,17 @@ defmodule LemonCli.Setup.Wizard do
     state = Verification.setup_state(config_path: config_path)
 
     result =
-      if result == :ok and not LemonCore.Setup.Readiness.ready?(state),
-        do: {:error, :setup_incomplete},
-        else: result
+      if (result == :ok or match?({:ok, _}, result)) and
+           not LemonCore.Setup.Readiness.ready?(state),
+         do: {:error, :setup_incomplete},
+         else: result
 
     print_summary(io, state, result)
-    result
+
+    case result do
+      {:ok, _verification} -> :ok
+      other -> other
+    end
   end
 
   @doc """
@@ -171,11 +179,11 @@ defmodule LemonCli.Setup.Wizard do
 
     * `:non_interactive` - skip interactive prompts, print defaults (default: false)
   """
-  @spec run_runtime([String.t()], io_callbacks(), keyword()) :: :ok
+  @spec run_runtime([String.t()], io_callbacks(), keyword()) :: :ok | {:error, term()}
   def run_runtime(args, io, opts \\ []) do
-    {cli_opts, _rest, _invalid} =
+    {cli_opts, rest, invalid} =
       OptionParser.parse(args,
-        switches: [
+        strict: [
           profile: :string,
           control_port: :integer,
           web_port: :integer,
@@ -187,17 +195,24 @@ defmodule LemonCli.Setup.Wizard do
 
     non_interactive? = cli_opts[:non_interactive] || Keyword.get(opts, :non_interactive, false)
 
-    io.info.("")
-    io.info.("Runtime Configuration")
-    io.info.("─────────────────────")
+    if rest != [] or invalid != [] do
+      io.error.(
+        "Invalid runtime options. Use ports from 1 to 65535; run `lemon setup --help` for options."
+      )
 
-    profile_name = resolve_profile(cli_opts, io, non_interactive?)
-    env = Env.resolve()
-    ports = resolve_ports(cli_opts, env, io, non_interactive?)
+      {:error, :invalid_arguments}
+    else
+      unless non_interactive?, do: Runner.ensure_interactive!(io)
+      io.info.("")
+      io.info.("Runtime Configuration")
+      io.info.("─────────────────────")
 
-    print_runtime_summary(profile_name, ports, io)
-
-    :ok
+      with {:ok, profile_name} <- resolve_profile(cli_opts, io, non_interactive?),
+           {:ok, ports} <- resolve_ports(cli_opts, Env.resolve(), io, non_interactive?) do
+        print_runtime_summary(profile_name, ports, io)
+        :ok
+      end
+    end
   end
 
   # ──────────────────────────────────────────────────────────────────────────
@@ -276,7 +291,10 @@ defmodule LemonCli.Setup.Wizard do
           :ok
 
         {:error, reason} ->
-          io.error.("Could not create config scaffold: #{inspect(reason)}")
+          io.error.(
+            "Could not create the config scaffold. Check permissions, then run `lemon setup`."
+          )
+
           {:error, {:scaffold_failed, reason}}
       end
     end
@@ -299,14 +317,15 @@ defmodule LemonCli.Setup.Wizard do
         io.error.("Config uses settings that need a manual edit:")
         Enum.each(errors, &io.error.("  • #{&1}"))
 
-      {:error, reason} ->
-        io.error.("Could not migrate deprecated config settings: #{inspect(reason)}")
+      {:error, _reason} ->
+        io.error.(
+          "Could not migrate deprecated config settings. Run `lemon config migrate` for guidance."
+        )
     end
   end
 
-  # The Mix task for `lemon secrets init` is not available from packaged
-  # releases, so drive the master-key API directly. Initialization is
-  # automatic on every path — interactive and non-interactive alike — because
+  # Drive the master-key API directly in both source and packaged setup.
+  # Initialization is automatic on every path because
   # stopping to ask the user to run a second command before setup can proceed
   # is exactly the dead end first-run onboarding must avoid.
   defp ensure_secrets(io) do
@@ -326,21 +345,24 @@ defmodule LemonCli.Setup.Wizard do
           :ok
 
         {:error, :keychain_unavailable} ->
-          io.error.("Could not initialize a secrets master key: the system keychain is")
-          io.error.("unavailable and no key file location could be determined.")
-          io.error.("Set #{MasterKey.env_var()} or configure")
-          io.error.("`config :lemon_core, LemonCore.Secrets, key_file: ...`, then re-run setup.")
+          io.error.(
+            "The system keychain and key file are unavailable. Run `lemon secrets init --target file`, then run `lemon setup`."
+          )
+
           {:error, :secrets_init_failed}
 
-        {:error, {:key_file_exists, path}} ->
-          io.error.("A secrets master key already exists at #{path}; it will not be replaced —")
-          io.error.("every secret encrypted under the old key becomes unreadable when a key is")
-          io.error.("replaced. Make the existing key resolvable (set #{MasterKey.env_var()} or")
-          io.error.("restore #{path}), then re-run setup.")
+        {:error, {:key_file_exists, _path}} ->
+          io.error.(
+            "An existing secrets master key could not be loaded and will not be replaced. Restore access to the original key, then run `lemon secrets status`."
+          )
+
           {:error, :secrets_init_failed}
 
         {:error, reason} ->
-          io.error.("Failed to initialize secrets master key: #{inspect(reason)}")
+          io.error.(
+            "Could not initialize the secrets master key. Run `lemon secrets init` for guidance."
+          )
+
           {:error, {:secrets_init_failed, reason}}
       end
     end
@@ -357,7 +379,7 @@ defmodule LemonCli.Setup.Wizard do
         )
 
         io.info.("Skipping onboarding. Run `lemon setup provider` to change it.")
-        :ok
+        Provider.verify_config(config_path, io, setup_verify_opts(opts))
 
       non_interactive? and is_nil(forced) ->
         io.info.(
@@ -385,7 +407,7 @@ defmodule LemonCli.Setup.Wizard do
               end) ++
               if(Keyword.get(opts, :skip_verify, false), do: ["--skip-verify"], else: [])
 
-          Provider.run(provider_args, io, setup_verify_opts(opts))
+          Provider.configure(provider_args, io, setup_verify_opts(opts))
         else
           io.info.("Skipped. Run `lemon setup provider` when ready.")
           :ok
@@ -427,7 +449,10 @@ defmodule LemonCli.Setup.Wizard do
         {:ok, time}
 
       :error ->
-        io.error.("Ignoring --daily-brief #{inspect(flag)}: expected HH:MM (24-hour).")
+        io.error.(
+          "Ignoring the invalid daily brief time. Run `lemon setup --daily-brief HH:MM` with a 24-hour time."
+        )
+
         :skip
     end
   end
@@ -437,7 +462,12 @@ defmodule LemonCli.Setup.Wizard do
   defp requested_daily_brief(io, false, nil) do
     io.info.("")
 
-    if prompt_yes_no?("Get a short daily brief on your phone each morning?", false, io) do
+    if prompt_yes_no?(
+         "Get a short daily brief on your phone each morning? " <>
+           "(Needs a paired Telegram chat: `lemon gateway setup telegram`.)",
+         false,
+         io
+       ) do
       prompt_brief_time(io)
     else
       io.info.("Skipped. Add `daily_brief = \"08:00\"` under [automation] to enable it later.")
@@ -484,8 +514,11 @@ defmodule LemonCli.Setup.Wizard do
       io.info.("run `lemon gateway setup telegram` if you have not paired one yet.")
       :ok
     else
-      {:error, reason} ->
-        io.error.("Could not write the daily brief to #{path}: #{inspect(reason)}")
+      {:error, _reason} ->
+        io.error.(
+          "Could not save the daily brief. Check config permissions, then run `lemon setup`."
+        )
+
         :ok
     end
   end
@@ -528,29 +561,38 @@ defmodule LemonCli.Setup.Wizard do
   defp print_summary(io, state, result) do
     io.info.("")
 
-    case Verification.pending_steps(state) do
-      [] when result == :ok ->
+    case {Verification.pending_steps(state), result} do
+      {[], {:ok, %{live: :ok}}} ->
         io.info.("Setup complete. Next steps:")
         io.info.("  lemon                        — start coding in this directory")
         io.info.("  lemon config validate        — verify configuration")
         io.info.("  lemon setup provider         — onboard another AI provider")
         io.info.("  lemon setup runtime          — change runtime profile / ports")
-        io.info.("  lemon setup doctor           — run diagnostics")
+        io.info.("  lemon doctor                 — run diagnostics")
         io.info.("")
 
-      [] ->
+      {[], result} when result == :ok or elem(result, 0) == :ok ->
+        io.info.("Configuration saved, but the provider was not live-verified.")
+
+        io.info.(
+          "Run `lemon setup` without --skip-verify to check it, or `lemon doctor` for diagnostics."
+        )
+
+        io.info.("")
+
+      {[], _result} ->
         # Verification (or another step) failed even though every step is
         # configured; never claim completion after a failure.
-        io.info.("Setup did not complete — resolve the errors above, then re-run.")
+        io.info.("Setup did not complete. Resolve the errors above, then run `lemon setup`.")
         io.info.("")
 
-      pending ->
+      {pending, _result} ->
         io.info.("Setup unfinished — pending steps:")
         print_pending(pending, state, io)
 
-        if result != :ok do
+        if result not in [:ok, {:error, :setup_incomplete}] and not match?({:ok, _}, result) do
           io.info.("")
-          io.info.("Setup did not complete — resolve the errors above, then re-run.")
+          io.info.("Setup did not complete. Resolve the errors above, then run `lemon setup`.")
         end
 
         io.info.("")
@@ -570,101 +612,117 @@ defmodule LemonCli.Setup.Wizard do
   # ──────────────────────────────────────────────────────────────────────────
 
   defp resolve_profile(cli_opts, io, non_interactive?) do
-    profile_names = Profile.names()
+    names = Profile.names()
     default = :runtime_full
 
     case cli_opts[:profile] do
       nil when non_interactive? ->
-        default
+        {:ok, default}
 
       nil ->
         io.info.("")
         io.info.("Available runtime profiles:")
 
-        profile_names
+        names
         |> Enum.with_index(1)
-        |> Enum.each(fn {name, idx} ->
-          profile = Profile.get(name)
-          marker = if name == default, do: " (default)", else: ""
-          io.info.("  #{idx}. #{name}#{marker} — #{profile.description}")
+        |> Enum.each(fn {name, index} ->
+          io.info.("  #{index}. #{name} — #{Profile.get(name).description}")
         end)
 
-        choice = normalize_input(io.prompt.("Choose profile [default: #{default}]: "))
+        prompt_profile(names, default, io)
 
-        cond do
-          choice == "" ->
-            default
+      value ->
+        case Enum.find(names, &(Atom.to_string(&1) == value)) do
+          nil ->
+            io.error.(
+              "Invalid runtime profile. Use --profile #{Enum.join(names, " or ")} with `lemon setup runtime`."
+            )
 
-          String.match?(choice, ~r/^\d+$/) ->
-            idx = String.to_integer(choice)
-            Enum.at(profile_names, idx - 1) || default
+            {:error, :invalid_arguments}
 
-          choice in Enum.map(profile_names, &Atom.to_string/1) ->
-            String.to_atom(choice)
-
-          true ->
-            io.error.("Unknown profile #{inspect(choice)}, using #{default}.")
-            default
+          profile ->
+            {:ok, profile}
         end
+    end
+  end
 
-      profile_str ->
-        # Validate as string first to avoid creating atoms for arbitrary user input.
-        # Only convert to atom after confirming the name is a known profile.
-        valid_strings = Enum.map(profile_names, &Atom.to_string/1)
+  defp prompt_profile(names, default, io) do
+    choice = normalize_input(io.prompt.("Choose profile [default: #{default}]: "))
 
-        if profile_str in valid_strings do
-          String.to_existing_atom(profile_str)
-        else
-          io.error.("Unknown profile #{inspect(profile_str)}, using #{default}.")
-          default
-        end
+    profile =
+      case Integer.parse(choice) do
+        {index, ""} when index > 0 -> Enum.at(names, index - 1)
+        _ -> Enum.find(names, &(Atom.to_string(&1) == choice))
+      end
+
+    cond do
+      choice == "" ->
+        {:ok, default}
+
+      profile ->
+        {:ok, profile}
+
+      true ->
+        io.error.("Invalid profile. Enter 1–#{length(names)} or #{Enum.join(names, ", ")}.")
+        prompt_profile(names, default, io)
     end
   end
 
   defp resolve_ports(cli_opts, env, io, non_interactive?) do
-    current = %{
-      control: env.control_port,
-      web: env.web_port,
-      sim: env.sim_port
-    }
+    current = %{control: env.control_port, web: env.web_port, sim: env.sim_port}
+    flags = [control_port: :control, web_port: :web, sim_port: :sim]
 
-    if non_interactive? or (cli_opts[:control_port] || cli_opts[:web_port] || cli_opts[:sim_port]) do
-      %{
-        control: cli_opts[:control_port] || current.control,
-        web: cli_opts[:web_port] || current.web,
-        sim: cli_opts[:sim_port] || current.sim
-      }
-    else
-      io.info.("")
-      io.info.("Current ports:")
-      io.info.("  control-plane : #{current.control}  (LEMON_CONTROL_PLANE_PORT)")
-      io.info.("  web           : #{current.web}  (LEMON_WEB_PORT)")
-      io.info.("  sim-ui        : #{current.sim}  (LEMON_SIM_UI_PORT)")
-      io.info.("")
-      io.info.("Press Enter to keep each value, or type a new port number.")
+    invalid =
+      Enum.find(flags, fn {flag, _key} ->
+        Keyword.has_key?(cli_opts, flag) and not valid_port?(cli_opts[flag])
+      end)
 
-      control =
-        parse_port(io.prompt.("control-plane port [#{current.control}]: "), current.control)
+    cond do
+      invalid ->
+        {flag, _key} = invalid
+        flag = flag |> Atom.to_string() |> String.replace("_", "-")
+        io.error.("Invalid --#{flag}. Use a port from 1 to 65535 with `lemon setup runtime`.")
+        {:error, :invalid_arguments}
 
-      web = parse_port(io.prompt.("web port [#{current.web}]: "), current.web)
-      sim = parse_port(io.prompt.("sim-ui port [#{current.sim}]: "), current.sim)
+      non_interactive? or Enum.any?(flags, fn {flag, _} -> Keyword.has_key?(cli_opts, flag) end) ->
+        ports =
+          Enum.reduce(flags, current, fn {flag, key}, ports ->
+            Map.put(ports, key, Keyword.get(cli_opts, flag, ports[key]))
+          end)
 
-      %{control: control, web: web, sim: sim}
+        {:ok, ports}
+
+      true ->
+        io.info.("")
+        io.info.("Press Enter to keep each port, or enter a port from 1 to 65535.")
+
+        {:ok,
+         %{
+           control: prompt_port("control-plane", current.control, io),
+           web: prompt_port("web", current.web, io),
+           sim: prompt_port("sim-ui", current.sim, io)
+         }}
     end
   end
 
-  defp parse_port(raw, default) do
-    case normalize_input(raw) do
+  defp prompt_port(label, default, io) do
+    case normalize_input(io.prompt.("#{label} port [#{default}]: ")) do
       "" ->
         default
 
-      str ->
-        case Integer.parse(str) do
-          {port, ""} when port > 0 and port <= 65_535 -> port
-          _ -> default
+      value ->
+        case Integer.parse(value) do
+          {port, ""} when port > 0 and port <= 65_535 ->
+            port
+
+          _ ->
+            io.error.("Invalid port. Enter a number from 1 to 65535.")
+            prompt_port(label, default, io)
         end
     end
   end
+
+  defp valid_port?(port), do: is_integer(port) and port > 0 and port <= 65_535
 
   defp print_runtime_summary(profile_name, ports, io) do
     profile = Profile.get(profile_name)
@@ -714,8 +772,8 @@ defmodule LemonCli.Setup.Wizard do
     end
   end
 
-  defp normalize_input(nil), do: ""
-  defp normalize_input(:eof), do: ""
+  defp normalize_input(nil), do: Runner.no_terminal!()
+  defp normalize_input(:eof), do: Runner.no_terminal!()
   defp normalize_input(value) when is_binary(value), do: String.trim(value)
   defp normalize_input(value) when is_list(value), do: value |> List.to_string() |> String.trim()
   defp normalize_input(value), do: value |> to_string() |> String.trim()
