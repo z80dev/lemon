@@ -10,6 +10,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Added
 
+- Ask `read` image questions with `?q=` (including SVG `:img?q=`), using a
+  configured vision model role or the active image-capable model and returning
+  bounded, untrusted answer text instead of pixels.
+
 - Read SVG/SVGZ markup as text and render explicit `:img` views as bounded PNG
   previews with librsvg; decoded SVGZ sources enforce the rich-read size limit.
 
