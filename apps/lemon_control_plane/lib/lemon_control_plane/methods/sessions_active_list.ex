@@ -30,21 +30,34 @@ defmodule LemonControlPlane.Methods.SessionsActiveList do
         sessions =
           sessions
           |> Enum.filter(&(&1[:active?] == true))
-          |> Enum.map(&format_session/1)
+          |> Enum.reduce_while([], fn session, acc ->
+            case format_session(session) do
+              {:ok, formatted} -> {:cont, [formatted | acc]}
+              {:error, _} = error -> {:halt, error}
+            end
+          end)
 
-        filters = %{
-          "agentId" => agent_id,
-          "limit" => limit,
-          "route" => format_route_filter(route)
-        }
+        case sessions do
+          {:error, _} ->
+            {:error, {:unavailable, "Active session details are unavailable", nil}}
 
-        {:ok,
-         %{
-           "sessions" => sessions,
-           "total" => length(sessions),
-           "filters" => filters,
-           "summary" => summary(sessions, filters)
-         }}
+          sessions when is_list(sessions) ->
+            sessions = Enum.reverse(sessions)
+
+            filters = %{
+              "agentId" => agent_id,
+              "limit" => limit,
+              "route" => format_route_filter(route)
+            }
+
+            {:ok,
+             %{
+               "sessions" => sessions,
+               "total" => length(sessions),
+               "filters" => filters,
+               "summary" => summary(sessions, filters)
+             }}
+        end
 
       {:error, _reason} ->
         {:error, {:unavailable, "Active sessions are unavailable", nil}}
@@ -114,23 +127,29 @@ defmodule LemonControlPlane.Methods.SessionsActiveList do
       }
 
     case harness_snapshot(session[:session_key]) do
-      nil -> base
-      harness -> Map.put(base, "harness", harness)
+      {:error, _} = error -> error
+      nil -> {:ok, base}
+      harness -> {:ok, Map.put(base, "harness", harness)}
     end
   end
 
   defp harness_snapshot(session_key) when is_binary(session_key) do
     todos = todo_progress(session_key)
     checkpoints = checkpoint_progress(session_key)
-    requirements = requirements_progress(session_key)
 
-    %{}
-    |> maybe_put("todos", todos)
-    |> maybe_put("checkpoints", checkpoints)
-    |> maybe_put("requirements", requirements)
-    |> case do
-      harness when map_size(harness) == 0 -> nil
-      harness -> harness
+    case requirements_progress(session_key) do
+      {:error, _} = error ->
+        error
+
+      requirements ->
+        %{}
+        |> maybe_put("todos", todos)
+        |> maybe_put("checkpoints", checkpoints)
+        |> maybe_put("requirements", requirements)
+        |> case do
+          harness when map_size(harness) == 0 -> nil
+          harness -> harness
+        end
     end
   end
 
@@ -168,7 +187,11 @@ defmodule LemonControlPlane.Methods.SessionsActiveList do
       |> stringify_map_keys()
       |> Map.put("cwd", cwd)
     else
-      _ -> nil
+      {:error, :introspection_unavailable} = error ->
+        error
+
+      _ ->
+        nil
     end
   rescue
     _ -> nil
@@ -187,13 +210,16 @@ defmodule LemonControlPlane.Methods.SessionsActiveList do
           {:error, :not_found}
         end
 
-      _ ->
+      {:error, _} ->
+        {:error, :introspection_unavailable}
+
+      [] ->
         {:error, :not_found}
     end
   rescue
-    _ -> {:error, :not_found}
+    _ -> {:error, :introspection_unavailable}
   catch
-    :exit, _ -> {:error, :not_found}
+    :exit, _ -> {:error, :introspection_unavailable}
   end
 
   defp latest_session_cwd(_), do: {:error, :invalid_session_key}

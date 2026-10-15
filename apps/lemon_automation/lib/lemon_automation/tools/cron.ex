@@ -38,7 +38,7 @@ defmodule LemonAutomation.Tools.Cron do
       name: "cron",
       label: "Cron",
       description:
-        "Manage Lemon internal cron jobs: status, list, add, update, pause, resume, abort, remove, run, and runs. Prompt jobs run native coding sessions in cwd (defaults to the current repository). Pause disables future runs; abort stops a specific active cron run. Add/update accepts 5-field cron and shorthands like 'every 30m'. Results reach the user's paired chat automatically; use deliverTo='none' to opt out.",
+        "Manage Lemon internal cron jobs: status, list, add, update, pause, resume, abort, remove, run, and runs. Prompt jobs run native coding sessions in cwd (defaults to the current repository). Pause disables future runs; abort stops a specific active cron run. Add/update accepts 5-field cron, recurring shorthands like 'every 30m', and one-shots like 'in 30m' or '2027-01-15T09:00' in the job timezone. Lifecycle actions accept an id or an unambiguous case-insensitive exact name. Results reach the user's paired chat automatically; use deliverTo='none' to opt out.",
       parameters: tool_schema(),
       execute: &execute(&1, inherit_cwd(&2, cwd), &3, &4, session_key, agent_id)
     }
@@ -106,16 +106,18 @@ defmodule LemonAutomation.Tools.Cron do
         },
         "name" => %{
           "type" => "string",
-          "description" => "Job name (add/update)."
+          "description" =>
+            "Job name on add; case-insensitive exact selector when id/jobId is absent. For update by name, put changes (including a new name) in patch."
         },
         "schedule" => %{
           "type" => "string",
           "description" =>
-            "Schedule as a 5-field cron expression or supported shorthand, for example: '0 9 * * *', 'every 30m', 'daily at 9am', or 'weekdays at 09:30'."
+            "5-field cron or recurring shorthand ('every 30m', 'daily at 9am'); or a one-shot delay 'in 30m', 'in 2h', 'in 1d', or local ISO timestamp 'YYYY-MM-DDTHH:MM[:SS]' in the job timezone. One-shots must be in the future and retire after running."
         },
         "prompt" => %{
           "type" => "string",
-          "description" => "Prompt text to run when the job fires."
+          "description" =>
+            "Prompt text to run when the job fires. A successful final reply that trims to exactly [SILENT] is recorded but not delivered; merely containing the marker does not suppress output, and failures are never suppressed."
         },
         "cwd" => %{
           "type" => "string",
@@ -139,7 +141,7 @@ defmodule LemonAutomation.Tools.Cron do
         "timezone" => %{
           "type" => "string",
           "description" =>
-            "'UTC' (default) or 'local' (the server's wall-clock time; use it for times the user states)."
+            "'UTC' (default), 'local' (the server's wall-clock time), or an IANA zone such as 'America/New_York'. Local ISO timestamps are interpreted in this zone and pinned to an absolute instant."
         },
         "deliverTo" => %{
           "type" => "string",
@@ -149,7 +151,7 @@ defmodule LemonAutomation.Tools.Cron do
         "once" => %{
           "type" => "boolean",
           "description" =>
-            "One-shot job (add/update): runs at the next scheduled time, then is removed. Pin the date in the schedule, e.g. '30 14 28 9 *'."
+            "One-shot job (add/update): runs at the next scheduled time, then is removed. Automatically true for relative delays and ISO timestamps; optional for date-pinned cron expressions."
         },
         "jitterSec" => %{
           "type" => "integer",
@@ -317,8 +319,12 @@ defmodule LemonAutomation.Tools.Cron do
   end
 
   defp dispatch("update", params, _session_key, _default_agent_id) do
-    job_id = resolve_job_id(params)
-    patch_source = nested_map(params, "patch") || params
+    patch_source =
+      nested_map(params, "patch") ||
+        if(resolve_job_id(params),
+          do: params,
+          else: params |> Map.delete("name") |> Map.delete(:name)
+        )
 
     patch =
       %{}
@@ -380,36 +386,33 @@ defmodule LemonAutomation.Tools.Cron do
         )
       )
 
-    cond do
-      is_nil(job_id) ->
-        {:error, "id (or jobId) is required for action=update"}
+    with {:ok, job_id} <- require_job_id(params),
+         true <- map_size(patch) > 0 do
+      case cron_call(:update, [job_id, patch]) do
+        {:ok, {:ok, job}} ->
+          payload = %{
+            "id" => Map.get(job, :id),
+            "updated" => true,
+            "nextRunAtMs" => Map.get(job, :next_run_at_ms)
+          }
 
-      map_size(patch) == 0 ->
-        {:error, "No update fields were provided"}
+          {:ok, {"Cron job updated", payload}}
 
-      true ->
-        case cron_call(:update, [job_id, patch]) do
-          {:ok, {:ok, job}} ->
-            payload = %{
-              "id" => Map.get(job, :id),
-              "updated" => true,
-              "nextRunAtMs" => Map.get(job, :next_run_at_ms)
-            }
+        {:ok, {:error, :not_found}} ->
+          {:error, "Cron job not found: #{job_id}"}
 
-            {:ok, {"Cron job updated", payload}}
+        {:ok, {:error, {:invalid_target, reason}}} ->
+          {:error, "Invalid job: #{reason}"}
 
-          {:ok, {:error, :not_found}} ->
-            {:error, "Cron job not found: #{job_id}"}
+        {:ok, {:error, reason}} ->
+          {:error, "Failed to update cron job: #{inspect(reason)}"}
 
-          {:ok, {:error, {:invalid_target, reason}}} ->
-            {:error, "Invalid job: #{reason}"}
-
-          {:ok, {:error, reason}} ->
-            {:error, "Failed to update cron job: #{inspect(reason)}"}
-
-          {:error, _} = error ->
-            error
-        end
+        {:error, _} = error ->
+          error
+      end
+    else
+      false -> {:error, "No update fields were provided"}
+      error -> error
     end
   end
 
@@ -566,7 +569,7 @@ defmodule LemonAutomation.Tools.Cron do
 
   defp require_job_id(params) do
     case resolve_job_id(params) do
-      nil -> {:error, "id (or jobId) is required"}
+      nil -> resolve_job_name(normalize_string(fetch_param(params, "name")))
       job_id -> {:ok, job_id}
     end
   end
@@ -580,6 +583,34 @@ defmodule LemonAutomation.Tools.Cron do
 
   defp resolve_job_id(params) do
     normalize_string(fetch_param(params, "id")) || normalize_string(fetch_param(params, "jobId"))
+  end
+
+  defp resolve_job_name(nil), do: {:error, "id (or jobId) is required"}
+
+  defp resolve_job_name(name) do
+    with {:ok, jobs} when is_list(jobs) <- cron_call(:list, []) do
+      normalized_name = String.downcase(name)
+      matches = Enum.filter(jobs, &(String.downcase(&1.name) == normalized_name))
+
+      case matches do
+        [job] ->
+          {:ok, job.id}
+
+        [] ->
+          {:error, "Cron job not found: #{name}. Candidates: #{job_candidates(jobs)}"}
+
+        matches ->
+          {:error,
+           "Ambiguous cron job name #{inspect(name)}. Candidates: #{job_candidates(matches)}"}
+      end
+    end
+  end
+
+  defp job_candidates(jobs) do
+    case Enum.sort_by(jobs, &{String.downcase(&1.name), &1.id}) do
+      [] -> "(none)"
+      jobs -> Enum.map_join(jobs, ", ", &"#{inspect(&1.name)} (#{&1.id})")
+    end
   end
 
   defp resolve_run_id(params) do

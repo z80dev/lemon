@@ -213,6 +213,22 @@ defmodule CodingAgent.Tools.Task.Async do
     emit_terminal_update(task_id, run_id, result, lifecycle_context)
 
     case result do
+      {:ok, result} when is_map(result) ->
+        usage = Map.get(result, :usage) || get_in(Map.get(result, :details) || %{}, [:usage])
+
+        if is_map(usage) do
+          LemonAgent.BudgetScope.report(
+            lifecycle_context[:parent_budget_scope],
+            run_id,
+            LemonAgent.Budget.usage_from_message(%{usage: usage})
+          )
+        end
+
+      _ ->
+        :ok
+    end
+
+    case result do
       {:ok, %AgentToolResult{} = tool_result} ->
         TaskStore.finish(task_id, tool_result)
         maybe_finish_run(run_id, tool_result)

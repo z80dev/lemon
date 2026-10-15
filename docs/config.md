@@ -234,10 +234,21 @@ including spend outside the selected branch; subsequent spend is independent.
 A genuinely new, unrelated session starts a new session budget.
 
 These caps apply to the **prompt agent loop**, including its reported retry
-attempts and the decision to execute tools or request another turn. Compaction
-and project-memory maintenance model calls are **not counted** in these counters.
-Subagent sessions have their own run/session counters; this is not an aggregate
-account-wide billing limit.
+attempts and native `task`/swarm descendants. Child usage updates and completion
+reports count toward the parent's run and session limits exactly once; an
+exhausted parent cannot launch further children. Running children check ancestor
+limits before further requests/tools. An already in-flight request can overshoot
+a cap, including requests from concurrently running children.
+
+Descendant spend is stored separately for budget enforcement: each session's usage
+reports and billing records still contain only its own provider usage. Late async
+child usage charges the originating parent session, not a later prompt's run cap.
+Compaction and project-memory maintenance model calls are **not counted**.
+This is not an account-wide billing limit and does not cover router-delegated
+`agent` runs. Models with all-zero or missing catalog pricing emit a budget warning
+when a dollar cap is configured; requests remain allowed, so configure model
+pricing or token caps to bound unpriced usage. Task scheduler concurrency settings
+still apply; there is no hidden three-child or projected $0.10 budget gate.
 
 Tokens use the provider's reported total, or input + output + cache-read +
 cache-write when a total is unavailable. Long-lived cache writes are a subset of
@@ -1081,6 +1092,11 @@ values are normalized to a `/v1` root (`OLLAMA_HOST=gpu-box` becomes
 `http://gpu-box:11434/v1`). A `base_url` written in config must include the
 OpenAI-compatible root (usually `/v1`).
 
+Readiness, `lemon doctor`, and offline setup verification accept these local
+presets without an API key. Custom keyless endpoints must explicitly set
+`auth = "none"`; a localhost URL alone does not waive a hosted provider's
+credential requirement.
+
 ```toml
 [providers.ollama]
 base_url = "http://gpu-box:11434/v1"
@@ -1427,6 +1443,17 @@ environment references cannot refresh. Provider retry hints are retained for
 credential cooldowns. The model/credential that commits is pinned for subsequent
 turns in that session, preserving provider caches.
 
+When an untried healthy credential or fallback candidate is available, a rate
+limit returns immediately to routing without sleeping or retrying the same
+credential. With no healthy alternate, the provider's bounded retry policy is
+unchanged. Credentials with exhausted account quota or credits retain the
+rate-limit failover category but cool down for 15 minutes, doubling on repeated
+failures up to one hour; longer provider retry-after hints are still honored.
+
+Missing local API keys are credential failures, not provider outages. They remain
+non-retryable against the same credential and do not open the provider-wide
+circuit breaker or block another session with valid credentials.
+
 For generic OAuth providers, `auth_source = "oauth"` makes the selected stored
 login authoritative for both initial resolution and 401 refresh:
 `oauth_secret`, then `api_key_secret`, then the provider's default secret name.
@@ -1456,7 +1483,9 @@ refusal (including plan-role selection), successful keyless transitions,
 switch-then-fallback header isolation and same-provider rebinding with no caller
 headers and with genuine caller overrides, using fixture credentials and loopback
 HTTP only. Its refusal and credential-leak checks scan complete captured events
-and logs, including large tool-schema snapshots.
+and logs, including large tool-schema snapshots. The intentional fallback failure
+uses fixture-owned provider health processes, so repeated runs neither inherit
+nor contaminate the real provider's circuit breaker or request-rate bucket.
 
 Google Gemini CLI onboarding (`lemon model --provider gemini`, or
 `./bin/lemon model --provider gemini` from a checkout) resolves OAuth
@@ -1958,11 +1987,13 @@ programmatically with `CodingAgent.Session.start_link(tool_disclosure: [profile:
 
 ## Automation
 
-`[automation]` holds opt-in proactive automation. It currently has one key:
+`[automation]` holds proactive automation settings:
 
 ```toml
 [automation]
 daily_brief = "08:00"   # HH:MM, 24-hour, server-local wall-clock time
+catch_up_missed = true
+run_retention_per_job = 100
 ```
 
 - `daily_brief` (default: unset) — when set, Lemon keeps one heartbeat cron job,
@@ -1976,6 +2007,13 @@ daily_brief = "08:00"   # HH:MM, 24-hour, server-local wall-clock time
   --daily-brief HH:MM` writes it non-interactively.
 - A value that is not a `HH:MM` 24-hour time fails config validation
   (`automation.daily_brief: must be a HH:MM 24-hour time`).
+- `catch_up_missed` (default: `true`) — restart runs one missed slot when it is
+  within half the schedule's next-occurrence gap, clamped to 2 minutes–2 hours.
+  Older slots are audited as skipped; expired one-shots are retired. Set `false`
+  to skip all missed slots. Paused jobs remain paused.
+- `run_retention_per_job` (default: `100`) — non-negative number of terminal
+  runs retained per job by hourly cleanup. Active attempts and undispatched
+  retries are exempt. This also applies to history of removed jobs.
 
 See [Reminders, heartbeats, and the daily brief](user-guide/reminders-and-heartbeats.md).
 

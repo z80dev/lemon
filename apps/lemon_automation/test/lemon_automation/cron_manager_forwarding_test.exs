@@ -119,6 +119,53 @@ defmodule LemonAutomation.CronManagerForwardingTest do
     assert content =~ task.run_id
   end
 
+  test "exact SILENT output is recorded but never forwarded or delivered", %{token: token} do
+    register_forwarding_telegram_plugin()
+    session = "agent:cron_silent_#{token}:main"
+    job = add_job!(token, "silent", session, deliver_to: "telegram:424242")
+    topic = Bus.session_topic(session)
+    Bus.subscribe(topic)
+    on_exit(fn -> Bus.unsubscribe(topic) end)
+    run = complete_run!(job, "  [SILENT]\n")
+
+    assert await(fn ->
+             match?(%CronRun{status: :completed, suppressed: true}, CronStore.get_run(run.id))
+           end)
+
+    refute_receive %Event{type: :run_completed}, 100
+    refute_receive {:cron_forwarded_channel_payload, _}, 100
+  end
+
+  test "output containing SILENT is still delivered", %{token: token} do
+    register_forwarding_telegram_plugin()
+
+    job =
+      add_job!(token, "silent-containing", "agent:cron_silent_#{token}:main",
+        deliver_to: "telegram:424242"
+      )
+
+    run = complete_run!(job, "The marker [SILENT] is not a whole reply")
+    assert_receive {:cron_forwarded_channel_payload, _}, 2_000
+    assert %CronRun{status: :completed, suppressed: false} = CronStore.get_run(run.id)
+  end
+
+  test "failed SILENT output is never suppressed", %{token: token} do
+    register_forwarding_telegram_plugin()
+    session = "agent:cron_silent_failure_#{token}:main"
+    job = add_job!(token, "silent-failure", session, deliver_to: "telegram:424242")
+
+    run = %{
+      build_running_run(token, "silent-failure", session)
+      | job_id: job.id,
+        output: "[SILENT]"
+    }
+
+    CronStore.put_run(run)
+    send(CronManager, {:run_complete, run.id, {:error, "[SILENT]"}})
+    assert_receive {:cron_forwarded_channel_payload, _}, 2_000
+    assert %CronRun{status: :failed, suppressed: false} = CronStore.get_run(run.id)
+  end
+
   test "forwards completed cron summary into originating main session", %{token: token} do
     base_session_key = "agent:cron_forward_#{token}:main"
     run = build_running_run(token, "main", base_session_key)

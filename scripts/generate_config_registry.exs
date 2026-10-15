@@ -54,7 +54,7 @@ defmodule ConfigRegistryGenerator do
       default,
       if(declaration.secret?, do: "yes", else: ""),
       Enum.map_join(declaration.apps, ", ", &code(Atom.to_string(&1))),
-      escape(declaration.doc)
+      escape_description(declaration.doc)
     ]
 
     "| " <> Enum.join(cells, " | ") <> " |"
@@ -62,6 +62,16 @@ defmodule ConfigRegistryGenerator do
 
   defp code(value), do: "`" <> escape(value) <> "`"
   defp escape(value), do: value |> String.replace("|", "&#124;") |> String.replace("\n", "<br>")
+
+  defp escape_description(value) do
+    # Keep existing Markdown code spans literal; only prose can become HTML/Vue tags.
+    value
+    |> String.split(~r/(`+)[^`]*\1/, include_captures: true)
+    |> Enum.map_join(fn
+      "`" <> _ = code_span -> escape(code_span)
+      prose -> prose |> String.replace("<", "&lt;") |> String.replace(">", "&gt;") |> escape()
+    end)
+  end
 end
 
 path = Path.expand("../docs/config-registry.md", __DIR__)

@@ -52,7 +52,7 @@ defmodule CodingAgent.Tools.ReadSvgTest do
   test "img returns PNG bytes using an injected rasterizer executable for SVG and SVGZ", %{
     tmp_dir: dir
   } do
-    executable = stub(dir, "printf '%s' '#{Base.encode64(@png)}' | /usr/bin/base64 -D")
+    executable = stub(dir, "printf '%s' '#{Base.encode64(@png)}' | /usr/bin/base64 -d")
 
     for extension <- ["svg", "svgz"] do
       path = Path.join(dir, "drawing." <> extension)
@@ -109,7 +109,7 @@ defmodule CodingAgent.Tools.ReadSvgTest do
     assert error =~ "timed out"
   end
 
-  @tag skip: is_nil(System.find_executable("rsvg-convert")) && "rsvg-convert is not installed"
+  @tag :rsvg_convert
   test "real rsvg-convert produces a PNG", %{tmp_dir: dir} do
     path = Path.join(dir, "drawing.svg")
     File.write!(path, @svg)
