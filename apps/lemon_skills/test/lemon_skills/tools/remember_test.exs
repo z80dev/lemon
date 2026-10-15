@@ -155,9 +155,11 @@ defmodule LemonSkills.Tools.RememberTest do
              run(tool, %{"target" => "user", "text" => String.duplicate("x", 1_400)})
 
     assert message =~ "/1375 chars"
+    assert message =~ "attempted entry 1400 chars"
 
     assert {:error, message} = run(tool, %{"text" => String.duplicate("x", 2_300)})
     assert message =~ "/2200 chars"
+    assert message =~ "attempted entry 2300 chars"
   end
 
   test "refuses secrets, prompt injection, and invisible controls", %{tool: tool} do

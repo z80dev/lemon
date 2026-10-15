@@ -65,11 +65,20 @@ defmodule LemonChannels.Registry do
   end
 
   @doc """
-  Summarize configured/connected channel adapters.
+  Summarize configured/connected channel adapters and redacted live health.
   """
-  @spec status() :: %{configured: [binary()], connected: [binary()]}
+  @spec status() :: %{configured: [binary()], connected: [binary()], details: [map()]}
   def status do
     GenServer.call(__MODULE__, :status, @call_timeout_ms)
+  end
+
+  @doc """
+  Record an adapter health transition. Error terms are reduced to fixed messages;
+  raw platform responses, credentials and paths are never retained here.
+  """
+  @spec record_status(binary(), :connected | :configured | {:error, term()}) :: :ok
+  def record_status(channel_id, status) do
+    GenServer.cast(__MODULE__, {:adapter_status, channel_id, status})
   end
 
   @doc """
@@ -177,7 +186,7 @@ defmodule LemonChannels.Registry do
 
   @impl true
   def init(_opts) do
-    {:ok, %{plugins: %{}}}
+    {:ok, %{plugins: %{}, health: %{}}}
   end
 
   @impl true
@@ -194,7 +203,7 @@ defmodule LemonChannels.Registry do
 
   def handle_call({:unregister, plugin_id}, _from, state) do
     plugins = Map.delete(state.plugins, plugin_id)
-    {:reply, :ok, %{state | plugins: plugins}}
+    {:reply, :ok, %{state | plugins: plugins, health: Map.delete(state.health, plugin_id)}}
   end
 
   def handle_call({:get, plugin_id}, _from, state) do
@@ -229,10 +238,27 @@ defmodule LemonChannels.Registry do
   end
 
   def handle_call(:status, _from, state) do
-    plugins = Map.values(state.plugins)
-    configured = Enum.map(plugins, & &1.id())
+    configured = state.plugins |> Map.keys() |> Enum.sort()
     connected = Enum.filter(configured, &adapter_running_by_id?(state, &1))
-    {:reply, %{configured: configured, connected: connected}, state}
+
+    details =
+      Enum.map(configured, fn id ->
+        running? = id in connected
+        health = Map.get(state.health, id)
+        error = if health, do: health["lastError"]
+
+        status =
+          cond do
+            error -> "error"
+            not running? -> "configured"
+            health -> health["state"]
+            true -> "connected"
+          end
+
+        %{"id" => id, "state" => status, "lastError" => error}
+      end)
+
+    {:reply, %{configured: configured, connected: connected, details: details}, state}
   end
 
   def handle_call({:logout, channel_id}, _from, state) do
@@ -243,9 +269,39 @@ defmodule LemonChannels.Registry do
       plugin ->
         _ = LemonChannels.Application.stop_adapter(plugin)
         plugins = Map.delete(state.plugins, channel_id)
-        {:reply, :ok, %{state | plugins: plugins}}
+        {:reply, :ok, %{state | plugins: plugins, health: Map.delete(state.health, channel_id)}}
     end
   end
+
+  @impl true
+  def handle_cast({:adapter_status, id, status}, state) do
+    health =
+      case status do
+        {:error, reason} ->
+          %{
+            "state" => "error",
+            "lastError" => %{
+              "message" => error_message(reason),
+              "atMs" => System.system_time(:millisecond)
+            }
+          }
+
+        status when status in [:connected, :configured] ->
+          %{"state" => Atom.to_string(status), "lastError" => nil}
+      end
+
+    {:noreply, %{state | health: Map.put(state.health, id, health)}}
+  end
+
+  defp error_message({:http_error, code, _}) when code in [401, 403],
+    do: "Channel authentication was rejected. Check credentials on the Lemon host."
+
+  defp error_message({:http_error, 409, _}),
+    do: "Channel connection conflicts with another poller or webhook."
+
+  defp error_message(:timeout), do: "Channel connection timed out."
+  defp error_message(:disconnected), do: "Channel disconnected. Check the Lemon host."
+  defp error_message(_), do: "Channel connection failed. Check the Lemon host logs."
 
   defp adapter_running_by_id?(state, channel_id) do
     case Map.get(state.plugins, channel_id) do
