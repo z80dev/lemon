@@ -227,7 +227,7 @@ defmodule LemonAgent.Loop.StreamingTest do
 
         LemonAi.EventStream.push(
           ai_stream,
-          {:tool_call_delta, 0, ~s({"path":"mix"), delta_partial}
+          {:tool_call_delta, 0, ~s({"path":"mix), delta_partial}
         )
 
         LemonAi.EventStream.push(ai_stream, {:tool_call_delta, 0, ~s(.exs"}), completed_partial})
@@ -261,7 +261,7 @@ defmodule LemonAgent.Loop.StreamingTest do
 
     assert Enum.any?(events, fn
              {:message_update, %{content: [%ToolCall{arguments: %{"path" => "mix"}}]},
-              {:tool_call_delta, 0, ~s({"path":"mix"), _}} ->
+              {:tool_call_delta, 0, ~s({"path":"mix), _}} ->
                true
 
              _ ->

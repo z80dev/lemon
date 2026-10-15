@@ -809,6 +809,21 @@ defmodule LemonAgent.Loop.ToolCalls do
   defp error_text(reason) when is_binary(reason), do: reason
   defp error_text(reason), do: inspect(reason)
 
+  @doc false
+  def argument_errors(tool_calls, tools) do
+    Enum.flat_map(tool_calls, fn call ->
+      tool = Enum.find(tools, &(normalize_tool_name(&1.name) == normalize_tool_name(call.name)))
+
+      case tool && prepare_tool_call(tool, call) do
+        {:error, %{details: %{error_type: :invalid_tool_arguments, errors: errors}}} ->
+          errors
+
+        _ ->
+          []
+      end
+    end)
+  end
+
   defp prepare_tool_call(nil, tool_call), do: {:error, unknown_tool_result(tool_call)}
 
   defp prepare_tool_call(tool, tool_call) do

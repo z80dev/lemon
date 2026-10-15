@@ -279,6 +279,9 @@ defmodule CodingAgent.Session do
     * `:complete_fn` - Optional completion injection `(model, context, options)` for auto classification
     * `:register` - When true, register the session under its ID in `CodingAgent.SessionRegistry`
     * `:registry` - Registry module to use when registering (default: `CodingAgent.SessionRegistry`)
+    * `:extension_inventory` - Optional preloaded `{extension_modules, load_errors}` for startup;
+      bypasses shared extension discovery and its caches
+    * `:mcp_tools` - Optional explicit MCP tool inventory (an empty list disables MCP discovery)
     * `:transform_context` - Optional custom context transform `(messages, signal) -> messages`
       composed after built-in guardrails and untrusted-output wrapping
     * `:context_guardrails` - Optional map/list overrides for built-in context guardrails
