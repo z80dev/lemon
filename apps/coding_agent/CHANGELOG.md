@@ -4,6 +4,10 @@
 
 ### Added
 
+- Session-scoped `local://name` scratch files support read, write and bash URL
+  expansion. `proc://` lists owned processes; process URLs peek output, write
+  stdin or terminate through `/kill`.
+
 - Grep supports `output_mode: content|files|count`, with paged paths or per-file
   matching-line counts and a total. Newline patterns search across lines in both backends.
 

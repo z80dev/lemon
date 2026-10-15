@@ -23,7 +23,7 @@ defmodule CodingAgent.InternalUrls do
   def internal_url?("notes://" <> _), do: true
 
   def internal_url?(path) when is_binary(path) do
-    String.valid?(path) and Regex.match?(~r/\A(?:skill|artifact):/i, path)
+    String.valid?(path) and Regex.match?(~r/\A(?:skill|artifact|local|proc):/i, path)
   end
 
   def internal_url?(_path), do: false
@@ -37,6 +37,21 @@ defmodule CodingAgent.InternalUrls do
   @spec resolve(String.t(), keyword()) :: result()
   def resolve("notes://" <> _ = uri, opts) do
     NotesProtocol.resolve(uri, opts)
+  end
+
+  def resolve("local://" <> name, opts) do
+    with true <- valid_segment?(name),
+         {:ok, directory} <- CodingAgent.Artifacts.spill_dir(Keyword.fetch!(opts, :cwd), opts),
+         {:ok, directory} <- physical_directory(directory, 40),
+         root = Path.join(directory, "local"),
+         :ok <- File.mkdir_p(root),
+         {:ok, %File.Stat{type: :directory}} <- File.lstat(root),
+         path = Path.join(root, name),
+         :ok <- local_file_type(path) do
+      {:ok, path}
+    else
+      _ -> {:error, "Invalid or unavailable local URL"}
+    end
   end
 
   def resolve("skill://" <> reference, opts) do
@@ -131,6 +146,40 @@ defmodule CodingAgent.InternalUrls do
 
       {:error, _} ->
         {:error, "Skill file unavailable"}
+    end
+  end
+
+  # Resolve only the trusted artifact base, not the caller-selected local file.
+  # In particular macOS's temporary directory commonly starts with /var -> /private/var.
+  defp physical_directory(_path, 0), do: {:error, :symlink_loop}
+
+  defp physical_directory(path, remaining) do
+    [root | segments] = Path.split(path)
+
+    Enum.reduce_while(segments, {:ok, root}, fn segment, {:ok, parent} ->
+      candidate = Path.join(parent, segment)
+
+      case File.read_link(candidate) do
+        {:ok, target} ->
+          case physical_directory(Path.expand(target, Path.dirname(candidate)), remaining - 1) do
+            {:ok, resolved} -> {:cont, {:ok, resolved}}
+            error -> {:halt, error}
+          end
+
+        {:error, reason} when reason in [:einval, :enoent] ->
+          {:cont, {:ok, candidate}}
+
+        error ->
+          {:halt, error}
+      end
+    end)
+  end
+
+  defp local_file_type(path) do
+    case File.lstat(path) do
+      {:ok, %File.Stat{type: :regular}} -> :ok
+      {:error, :enoent} -> :ok
+      _ -> {:error, :unsafe_path}
     end
   end
 end
