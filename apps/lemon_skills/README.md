@@ -275,6 +275,13 @@ Instructions here.
 
 YAML frontmatter is parsed with `YamlElixir`; TOML frontmatter supports Lemon's flat scalar/list subset. Hermes platform aliases (`macos`, `windows`) and `prerequisites.commands` / `prerequisites.env_vars` are normalized to Lemon's platform and requirement fields.
 
+Agent Skills YAML fields `license`, `compatibility`, `metadata`, and experimental
+`allowed-tools` are preserved, including string-valued `metadata.lemon`.
+Descriptions accept up to 1024 Unicode characters within the 4096-byte safety
+bound. `allowed-tools` never grants tool permissions. See
+[interoperability and deliberate validation differences](../../docs/user-guide/skills.md#agent-skills-interoperability)
+for portable naming rules, resource directories, and legacy leniency.
+
 ## Importing official Hermes skills
 
 The official Nous Research catalog is looked up dynamically from the current
