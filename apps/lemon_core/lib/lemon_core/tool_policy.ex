@@ -653,7 +653,7 @@ defmodule LemonCore.ToolPolicy do
         allowed_commands: intersect_allow(base.allowed_commands, allowed_commands),
         blocked_commands: union(base.blocked_commands, blocked_commands),
         max_file_size: minimum_limit(base.max_file_size, max_file_size),
-        sandbox: base.sandbox or sandbox
+        sandbox: sandbox
       })
     end
   end
