@@ -153,6 +153,17 @@ The app is messaging-first. The sidebar holds search and new-Bot buttons, pinned
 
 The primary navigation is your named Bot roster, with pinned Bots, synced sections, groups of your own Bots, hidden Bots and unread/activity indicators. macOS uses roster, conversation and inspector; iOS adapts split navigation to the available width. Bot identity, Job and assigned-profile Memory remain distinct. The selected Bot shows its actual owned desktop/swarm host, current work and reviewed artifacts, with Activity + Upcoming, Ideas that draft rather than execute, preference inspection/Undo, native capability review, templates and milestone evidence. Live Team Bots, managers, publishing, membership controls and enterprise-first navigation are absent; workspace/public templates remain reviewed declarative copies, not live access grants.
 
+On iPhone the composer stays in the bottom safe area above the software keyboard,
+including its Send button. Return (including Shift+Return on a hardware keyboard)
+inserts a newline; tap Send or use ⌘Return to send without dismissing the keyboard.
+Long drafts scroll inside the multiline editor; landscape limits its visible
+height so the transcript and Send button still have room above the keyboard.
+In landscape, **+ → Last send details** retains receipt details without taking
+space from the transcript; errors and unconfirmed outcomes remain visible inline.
+Drag the transcript downward to dismiss the keyboard interactively. A transcript
+already at the latest message stays there when the keyboard or composer resizes;
+reading older messages does not force a jump to the bottom.
+
 Groups have one human owner and two to six Bots owned by that person. There are no human invitations, successor transfer or Group Leave. Deletion uses the existing exact preview/confirmation and verified active/unknown-work lifecycle. Authoritative conversation deletion removes only this account's room draft and copied staging files, not selected originals or another account's cache. Legacy cached foreign live Bots/rooms do not regain visibility during offline restoration.
 
 The transcript renders the declared entry/card families with attributable actors and durable states. Questions are ordinary non-secret fields; secrets use a masked write-only destination flow. Approvals show the exact target, Bot, host, review scope and consequences. Only the targeted user can explicitly act before expiry; approval is not proof an external action completed. Email/Slack/channel drafts expose edited recipients, target/thread, body and files before Send. Unknown delivery is not Sent. Replies, reactions and feedback never resolve gates. Stop reports the server's actual run state; queued, steering and interrupting labels come from the receipt.
@@ -193,11 +204,21 @@ xcodebuild -project LemonBot.xcodeproj -scheme LemonBotMac \
   -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO test
 ```
 
-DEBUG-only visual check. The `LemonBotSnapshots` scheme renders the real views with in-process fixture data, in light and dark, to `/tmp/lb-ux/after/apple-*.png`. Set `TEST_RUNNER_LB_SNAPSHOT_DIR` to write somewhere else. The iOS app launched with `-LBFixtures` in a Debug build opens the same fixture workspace.
+DEBUG-only visual check. The `LemonBotSnapshots` scheme renders the real views with in-process fixture data, in light and dark, to `/tmp/lb-ux/after/apple-*.png`. Set `TEST_RUNNER_LB_SNAPSHOT_DIR` to write somewhere else. The iOS app launched with `-LBFixtures` in a Debug build opens the same fixture workspace. Fixture message sends record text in memory for that fixture session only; they never execute Bot work or contact a backend. Other non-bookkeeping mutations remain read-only.
 
 ```sh
 xcodebuild -project LemonBot.xcodeproj -scheme LemonBotSnapshots \
   -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO test -only-testing:LemonBotSnapshotTests
+```
+
+The `LemonBotKeyboard` UI-test scheme exercises short and multiline drafts, soft
+Return, visible Send with the keyboard up, and transcript following in portrait
+and landscape on a dedicated iPhone simulator:
+
+```sh
+xcodebuild -project LemonBot.xcodeproj -scheme LemonBotKeyboard \
+  -destination 'platform=iOS Simulator,id=<your-simulator-UDID>' \
+  -derivedDataPath /tmp/lemonbot-keyboard-build CODE_SIGNING_ALLOWED=NO test
 ```
 
 Exercise a real backend and attached host: setup/login/OIDC and account switch; desktop HTTPS-publicUrl QR issuance; phone scan/paste exact preview, matching-code approve/deny, pending reopen, lost issuance/claim/completion receipt recovery, expired re-pair, Keychain restart, offline return, same Bot/conversation restore and device/session revocation. Also exercise draft retention; streaming reconnect and cursor expiry; stale/expired gates; uncertain send reconciliation; owner groups and profile memory; files and interactive PTY; voice permissions/review/mute/end; interrupted share import; notifications/task links; provider prerequisites and applied host policy. Build/test success does not substitute for real camera permission, physical-device TLS/Tailscale reachability, signing/APNs or configured host/provider probes.
@@ -211,7 +232,7 @@ The owner-assistant cutover adds strict named pairing Codable DTOs and nullable 
 
 Wire-array decoding and encoding preserve the exact feedback-reason, export-stream and X-media literal sets, rejecting unsupported elements without dropping fields or substituting opaque JSON. Optional array omission remains distinct from invalid null. Nullable actor IDs and public `protocol:`/`as:` argument labels use unambiguous Swift types and identifiers.
 
-Native conversation input handles Return key events with their modifiers, retaining Shift+Return for a newline. Decision eligibility reads stay on the main actor, and replaying a finished voice memo awaits the native seek before playback. Composer and routine-editor composition is split into typed view sections and explicit action handlers while retaining draft/file/routing controls, delivery reconciliation, trigger consent, run history and one-time webhook-key review. The native VT delegate conformance is main-actor isolated to match its UI-thread callback invariant, and destructive-preview completion callbacks are explicitly labeled.
+On macOS, native conversation input handles Return key events with their modifiers, retaining Shift+Return for a newline; iOS uses multiline Return and the visible Send button. Decision eligibility reads stay on the main actor, and replaying a finished voice memo awaits the native seek before playback. Composer and routine-editor composition is split into typed view sections and explicit action handlers while retaining draft/file/routing controls, delivery reconciliation, trigger consent, run history and one-time webhook-key review. The native VT delegate conformance is main-actor isolated to match its UI-thread callback invariant, and destructive-preview completion callbacks are explicitly labeled.
 
 Store lifecycle tests inject an isolated credential store within the test target; production still defaults to Keychain and reports credential-access/deletion failures without an insecure fallback. Cursor-expiry fixtures serve complete authorized resource pagination and opened transcripts, checking read-only recovery, access eviction and local-draft retention without requiring a private request order.
 

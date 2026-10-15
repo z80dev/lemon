@@ -10,6 +10,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Lemon Bot for iPhone keeps the composer and Send button above the keyboard,
+  follows the latest message as the viewport resizes, and uses Return for a newline
+  instead of submitting and dismissing the keyboard; transcript dragging dismisses it interactively.
 - Native dynamic-preset resolution binds discovered context, output limits,
   reasoning and input capabilities to the effective endpoint, headers and
   selected credential. Default/environment cached metadata no longer bleeds into
