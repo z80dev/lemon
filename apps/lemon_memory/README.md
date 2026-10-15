@@ -138,9 +138,15 @@ row cannot attest private/shared ownership merely by containing future-looking
 raw flags; scoped exact-ID reads use `Store.get_owned_document/5` as well.
 
 `Preferences.remember(context, kind, text, replaces \\ nil, opts \\ [])` saves
-`user`/`memory` notes in Store, not `USER.md` or `MEMORY.md`. Exact replacement
-or removal affects only the selected write owner. Accepted text bytes are
-preserved in bounded `preference_facts` metadata, independently of Document's
+`user`/`memory` notes in Store, not `USER.md` or `MEMORY.md`. Replacement
+or removal affects only the selected write owner. Exact entries take priority;
+otherwise a unique substring selects an entry. Deletion removes that entry,
+while patching replaces only the unique span; ambiguous entries or repeated
+spans return `:ambiguous_match` without writing. Project selectors normalize
+whitespace like project facts. Patched results pass normal safety and capacity
+checks. Backdoor and credential-exfiltration instructions are screened as prompt
+injection. Accepted text bytes are preserved in bounded `preference_facts`
+metadata, independently of Document's
 2000-byte index summary. Secret, invisible-control, and injection screening is
 shared through `Safety.validate_note/2`; input is capped at 4096 bytes, total
 notes at 200 per owner, and per-kind text at 1375/2200 characters. Mutations

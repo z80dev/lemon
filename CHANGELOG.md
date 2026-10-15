@@ -14,9 +14,16 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   with `start_many`, gather all or any worker with `wait` and `ids`, stream
   throttled combined progress, and report per-task failures and total usage.
   The Elixir facade exposes `start_many/2` and `wait_many/3` with owner scoping.
+- Opt-in real omp lifecycle smoke using a free model, covering tool writes,
+  follow-ups, cancellation, process cleanup, discovery and resume.
 
 ### Fixed
 
+- Durable preference/project memory supports exact-first unique-substring
+  patch/delete and rejects persistent backdoor/exfiltration instructions.
+- Honcho tool schemas now register only when the integration is configured and
+  enabled, matching its memory provider and context contributor instead of adding
+  five inactive tools to prompts on unconfigured hosts.
 - Native dynamic-preset resolution binds discovered context, output limits,
   reasoning and input capabilities to the effective endpoint, headers and
   selected credential. Default/environment cached metadata no longer bleeds into
