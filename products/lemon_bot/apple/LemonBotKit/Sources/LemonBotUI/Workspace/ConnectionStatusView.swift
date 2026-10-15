@@ -78,7 +78,7 @@ public struct ConnectionStatusView: View {
         }
         .confirmationDialog("Restart Lemon?", isPresented: $restart, titleVisibility: .visible) {
             Button("Restart Lemon", role: .destructive) { run(.restart) }
-        } message: { Text("Bots stop working while Lemon restarts. They can work again once it reconnects.") }
+        } message: { Text(instanceConfirmation(.restart, via: store.instanceStatus?.runtime.via)) }
         .task(id: store.connectionIssue?.layer == .controllerDown) {
             guard store.connectionIssue?.layer == .controllerDown else { return }
             while !Task.isCancelled {
@@ -110,12 +110,16 @@ public struct ConnectionStatusView: View {
     }
     @ViewBuilder private var controllerActions: some View {
         VStack(alignment: .leading, spacing: 8) {
+            if let runtime = store.instanceStatus?.runtime {
+                if let copy = instanceLifecycleCopy(runtime.via) { Text(copy).font(LBFont.meta).foregroundStyle(LB.muted) }
+                if let reason = runtime.reason { Text(reason).font(LBFont.meta).foregroundStyle(LB.muted) }
+            }
             if store.canControlInstance {
                 HStack {
                     if store.instanceStatus?.runtime.actions.contains(.start) == true { Button("Start Lemon") { run(.start) } }
                     if store.instanceStatus?.runtime.actions.contains(.restart) == true { Button("Restart Lemon") { restart = true } }
-                }.buttonStyle(.pill(.secondary)).disabled(action.busy || store.instanceStatus?.runtime.operation?.state == .running)
-            } else if let reason = store.instanceStatus?.runtime.reason { Text(reason).font(LBFont.meta).foregroundStyle(LB.muted) }
+                }.buttonStyle(.pill(.secondary)).disabled(action.busy || store.instanceStatus?.runtime.operation?.state == .running || store.pendingIntents.contains { $0.path.hasPrefix("/instance/runtime/") })
+            }
             if let state = store.instanceStatus?.controller.state, [.rejected, .stopped, .reconnecting].contains(state) {
                 Button("Reconnect Lemon link") { Task { await action.perform { try await store.reconnectLemonLink() } } }.buttonStyle(.pill(.secondary)).disabled(action.busy)
             }
@@ -132,7 +136,7 @@ struct RuntimeOperationView: View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
                 if operation.state == .running { ProgressView().controlSize(.small) }
-                Text("Lemon \(operation.action.rawValue) · \(operation.state.rawValue)").font(LBFont.metaEmphasis)
+                Text(runtimeOperationLabel(operation.action, state: operation.state)).font(LBFont.metaEmphasis)
             }
             DisclosureGroup("Details · command output") {
                 VStack(alignment: .leading, spacing: 6) {
@@ -146,6 +150,20 @@ struct RuntimeOperationView: View {
                 }.padding(.top, 4)
             }.font(LBFont.meta)
         }
+    }
+}
+
+func runtimeOperationLabel(_ action: RuntimeAction, state: RuntimeOperation.State) -> String {
+    switch (action, state) {
+    case (.start, .running): return "Starting Lemon…"
+    case (.stop, .running): return "Stopping Lemon…"
+    case (.restart, .running): return "Restarting Lemon…"
+    case (.start, .succeeded): return "Lemon started"
+    case (.stop, .succeeded): return "Lemon stopped"
+    case (.restart, .succeeded): return "Lemon restarted"
+    case (.start, .failed): return "Lemon couldn’t start"
+    case (.stop, .failed): return "Lemon couldn’t stop"
+    case (.restart, .failed): return "Lemon couldn’t restart"
     }
 }
 
