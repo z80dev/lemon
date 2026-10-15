@@ -10,6 +10,8 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Recall browse/scroll now require the same verified private ownership as history
+  search; legacy or partially verified contexts fail closed.
 - Skill usage recording no longer depends on the introspection handler. Pinned
   skills reject content edits, never-used skills retain a stale-age grace floor,
   and background curation preserves skills referenced by disabled or active cron jobs.

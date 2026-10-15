@@ -100,6 +100,25 @@ defmodule LemonMemory.SessionScrollTest do
     assert {:ok, []} = SessionSearch.recent_sessions(context, store: store)
   end
 
+  test "browse and scroll require the same proven private owner as history search", %{
+    context: context,
+    store: store
+  } do
+    legacy =
+      Map.drop(context, [:memory_context_key, :invocation_context_key, :memory_context_verified])
+
+    unproven = %{context | memory_context_verified: false}
+    partial = Map.delete(context, :invocation_context_key)
+
+    for rejected <- [legacy, unproven, partial] do
+      assert {:error, :unproven_context} =
+               Project.search_history(rejected, "prompt", :agent, store: store)
+
+      assert {:error, :unproven_context} = SessionSearch.session(rejected, "mine", store: store)
+      assert {:error, :unproven_context} = SessionSearch.recent_sessions(rejected, store: store)
+    end
+  end
+
   test "public scroll refuses subagents", %{context: context} do
     assert {:error, _} = SessionSearch.session(%{context | session_scope: :subagent}, "mine")
     assert {:error, _} = SessionSearch.recent_sessions(%{context | session_scope: :subagent})

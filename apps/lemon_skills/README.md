@@ -26,7 +26,8 @@ not a Hex package; it ships as part of the reference runtime. It depends on
 `recall` also browses recent owned sessions when called without a query. Use a
 returned `session` with optional `around` document/run ID and `window` (5 by
 default, maximum 20) to read chronological run summaries. Content remains
-untrusted and scoped to the current main-session owner, agent, and profile.
+untrusted and scoped to the verified private main-session owner, agent, and
+profile. Legacy or incomplete ownership contexts cannot browse or scroll.
 
 Usage counters are recorded at the skill tool telemetry entry points, independently
 of introspection subscribers. Discovery-only prompt metadata is not a load.
