@@ -21,6 +21,13 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Added
 
+- Lemon Bot for Mac has an optional desktop pet: an original pixel lemon that
+  floats above all windows and Spaces, reacts to thinking, tool work, approvals
+  and questions, completions, failures and disconnects, and opens the relevant
+  conversation when clicked. It loads Codex-format pets (V1 and V2), imported from
+  a folder, ZIP or HTTPS URL with size, dimension and path validation; pet
+  packages are images only and never run code.
+
 - Rate-limited cron failure and recovery alerts, persistent failure streaks,
   owner-chat fallback, and doctor warnings for failures without a delivery route.
 

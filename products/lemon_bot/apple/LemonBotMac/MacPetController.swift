@@ -90,6 +90,9 @@ final class MacPetController: NSObject {
     @ObservationIgnored private var workspaceObserver: NSObjectProtocol?
     @ObservationIgnored private var started = false
     @ObservationIgnored private var hovered = false
+    @ObservationIgnored private var observationGeneration = 0
+    /// Per animation, the fraction of the cell above its tallest frame's artwork; the balloon sits just above it.
+    @ObservationIgnored private var artTops: [PetAnimation: CGFloat] = [:]
     @ObservationIgnored private var dragging = false
     @ObservationIgnored private var pointerDown: NSPoint?
     @ObservationIgnored private var dragOrigin = NSPoint.zero
@@ -128,8 +131,7 @@ final class MacPetController: NSObject {
     func start() {
         guard !started else { return }
         started = true
-        refreshLibrary()
-        observeStatus()
+        // Nothing is decoded or observed until the pet is shown; a hidden pet costs nothing.
         observers.append(NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.screenParametersChanged() }
         })
@@ -169,12 +171,18 @@ final class MacPetController: NSObject {
         else { defaults.set(data, forKey: Self.preferencesKey) }
     }
 
+    /// Re-derives on store changes while the pet is shown. Bumping the generation ends a tracking chain.
     private func observeStatus() {
-        guard started else { return }
+        guard started, preferences.enabled else { return }
+        observationGeneration += 1
+        let generation = observationGeneration
         let result = withObservationTracking {
             (platform.store.petStatus(now: Date()), platform.store.localSettings?.reducedMotion == "on")
         } onChange: { [weak self] in
-            Task { @MainActor in self?.observeStatus() }
+            Task { @MainActor in
+                guard let self, generation == self.observationGeneration else { return }
+                self.observeStatus()
+            }
         }
         let motion = result.1 || NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
         let motionChanged = reducedMotion != motion
@@ -216,6 +224,12 @@ final class MacPetController: NSObject {
 
     private func refreshLibrary() {
         pets = library?.installedPets() ?? []
+        loadSelectedPet()
+    }
+
+    /// Settings-only: decoding every installed atlas for thumbnails is deferred until the picker is shown.
+    func settingsAppeared() {
+        pets = library?.installedPets() ?? []
         thumbnails = [:]
         for pet in pets {
             if let image = try? library?.loadSprite(pet).frames(for: .idle).first {
@@ -223,7 +237,6 @@ final class MacPetController: NSObject {
                 thumbnails[pet.id] = NSImage(cgImage: image, size: NSSize(width: 24, height: 26))
             }
         }
-        loadSelectedPet()
     }
 
     private func loadSelectedPet() {
@@ -239,11 +252,18 @@ final class MacPetController: NSObject {
             if sprite != nil { preferences.petID = PetLibrary.defaultPetID; persist() }
         }
         masks.removeAll()
+        artTops.removeAll()
         if let sprite {
-            for image in sprite.frames.values.flatMap({ $0 }) + sprite.lookFrames.compactMap({ $0 }) {
-                masks[ObjectIdentifier(image)] = MacPetAlphaMask(image)
+            for animation in PetAnimation.allCases {
+                for image in sprite.frames(for: animation) {
+                    let mask = MacPetAlphaMask(image)
+                    masks[ObjectIdentifier(image)] = mask
+                    artTops[animation] = min(artTops[animation] ?? 1, mask.topFraction)
+                }
             }
+            for image in sprite.lookFrames.compactMap({ $0 }) { masks[ObjectIdentifier(image)] = MacPetAlphaMask(image) }
         }
+        updateBubble()
         restartAnimation()
     }
 
@@ -289,7 +309,9 @@ final class MacPetController: NSObject {
         guard started else { return }
         if preferences.enabled {
             let appearing = panel?.isVisible != true
+            if sprite == nil { refreshLibrary() }
             if panel == nil { makePanel() }
+            if appearing { observeStatus() }
             panel?.orderFrontRegardless()
             if let position = MacPetLaunch.position { panel?.setFrameOrigin(position) }
             installMonitors()
@@ -308,6 +330,7 @@ final class MacPetController: NSObject {
             #endif
             removeMonitors()
             hovered = false
+            observationGeneration += 1
         }
     }
 
@@ -332,7 +355,8 @@ final class MacPetController: NSObject {
     private func schedulePreviewCapture() {
         guard ProcessInfo.processInfo.arguments.contains("-LBFixtures"), MacPetLaunch.value("-LBPetCapture") != nil,
               !capturedPreview, captureTimer == nil else { return }
-        captureTimer = timer(after: 1.5) { controller in
+        // Launch-to-visible takes about a second; wait for the greeting wave to finish so the mood row is captured.
+        captureTimer = timer(after: 3) { controller in
             controller.captureTimer = nil
             if ProcessInfo.processInfo.arguments.contains("-LBPetHover") {
                 controller.hovered = true
@@ -367,7 +391,9 @@ final class MacPetController: NSObject {
 
     private func play(_ animation: PetAnimation, once: Bool = false) {
         animationTimer?.invalidate(); animationTimer = nil
+        let previous = self.animation
         self.animation = reducedMotion ? status.mood.animation : animation
+        if artTops[previous] != artTops[self.animation] { updateBubble() }
         oneShot = !reducedMotion && once
         frameIndex = 0
         frameDurations = self.animation.durations(frameCount: sprite?.frames(for: self.animation).count ?? 0)
@@ -424,7 +450,9 @@ final class MacPetController: NSObject {
         content.bubble.rootView = MacPetBubble(text: text)
         content.bubble.isHidden = text == nil
         let height = min(66, content.bubble.fittingSize.height)
-        content.bubble.frame = NSRect(x: 12, y: content.spriteView.frame.maxY + 4, width: 180, height: height)
+        // Anchor the balloon just above the current animation's artwork, not the empty top of the atlas cell.
+        let artTop = content.spriteView.frame.minY + content.spriteView.frame.height * (1 - (artTops[animation] ?? 1))
+        content.bubble.frame = NSRect(x: 12, y: artTop + 2, width: 180, height: height)
         content.setAccessibilityLabel("Lemon Bot pet. \(status.detail ?? status.bubble ?? status.mood.rawValue)")
         updateHitTesting()
     }
@@ -623,8 +651,8 @@ final class MacPetController: NSObject {
         do {
             let imported = try library?.importPackage(at: url) ?? []
             errorMessage = nil
-            refreshLibrary()
-            if let first = imported.first { updatePreferences { $0.petID = first.id } }
+            settingsAppeared()
+            if let first = imported.first { select(first.id) }
         } catch { errorMessage = error.localizedDescription }
     }
 
@@ -638,8 +666,8 @@ final class MacPetController: NSObject {
             guard let library else { return }
             let pet = try await library.importPackage(from: url)
             errorMessage = nil
-            refreshLibrary()
-            updatePreferences { $0.petID = pet.id }
+            settingsAppeared()
+            select(pet.id)
         } catch { errorMessage = error.localizedDescription }
     }
 
@@ -650,8 +678,14 @@ final class MacPetController: NSObject {
             preferences.petID = PetLibrary.defaultPetID
             persist()
             errorMessage = nil
-            refreshLibrary()
+            settingsAppeared()
+            loadSelectedPet()
         } catch { errorMessage = error.localizedDescription }
+    }
+
+    /// Selects an imported pet; re-importing the current pet reloads its replaced atlas.
+    private func select(_ id: String) {
+        if id == preferences.petID { loadSelectedPet() } else { updatePreferences { $0.petID = id } }
     }
 }
 
@@ -673,6 +707,11 @@ private struct MacPetAlphaMask {
             context.interpolationQuality = .none
             context.draw(image, in: CGRect(x: 0, y: 0, width: 96, height: 104))
         }
+    }
+    /// Fraction of the cell height above the topmost opaque row (1 when empty).
+    var topFraction: CGFloat {
+        guard let index = pixels.firstIndex(where: { $0 > 25 }) else { return 1 }
+        return CGFloat(index / width) / CGFloat(height)
     }
     func opaque(x: CGFloat, y: CGFloat) -> Bool {
         let column = min(width - 1, max(0, Int(x * CGFloat(width))))

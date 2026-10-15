@@ -89,6 +89,7 @@ struct MacPetSettingsSection: View {
                 .font(LBFont.meta).foregroundStyle(LB.muted)
             if let error = controller.errorMessage { Text(error).font(LBFont.meta).foregroundStyle(LB.danger).textSelection(.enabled) }
         }
+        .onAppear { controller.settingsAppeared() }
         .confirmationDialog("Remove this imported pet?", isPresented: $confirmingRemoval, titleVisibility: .visible) {
             Button("Remove pet", role: .destructive) { controller.removeSelectedPet() }
             Button("Cancel", role: .cancel) {}

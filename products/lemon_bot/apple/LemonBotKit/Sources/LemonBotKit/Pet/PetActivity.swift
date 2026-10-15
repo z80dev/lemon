@@ -41,7 +41,8 @@ public enum PetActivity {
         }
         for run in live {
             let recentEntries = (entries[run.conversationId] ?? []).reversed()
-            let tool = recentEntries.compactMap { entry -> ToolCallEntry? in
+            // Re-derived on every streamed delta: stop at the newest started tool instead of scanning the transcript.
+            let tool = recentEntries.lazy.compactMap { entry -> ToolCallEntry? in
                 if case .toolCall(let value) = entry, value.status == "started", value.runId == run.id { return value }
                 return nil
             }.first
