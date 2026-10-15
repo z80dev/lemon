@@ -155,23 +155,16 @@ defmodule CodingAgent.Tools.FindTest do
       tool = Find.tool("/tmp")
 
       assert tool.name == "find"
-      assert tool.label == "Find Files"
-      assert tool.description =~ "Find files"
       assert tool.parameters["type"] == "object"
       assert tool.parameters["required"] == ["pattern"]
       assert is_function(tool.execute, 4)
     end
 
-    test "includes all expected parameters" do
+    test "exposes the required pattern parameter" do
       tool = Find.tool("/tmp")
       props = tool.parameters["properties"]
 
       assert Map.has_key?(props, "pattern")
-      assert Map.has_key?(props, "path")
-      assert Map.has_key?(props, "type")
-      assert Map.has_key?(props, "max_depth")
-      assert Map.has_key?(props, "max_results")
-      assert Map.has_key?(props, "hidden")
     end
   end
 

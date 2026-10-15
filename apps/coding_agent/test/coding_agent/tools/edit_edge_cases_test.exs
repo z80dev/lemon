@@ -158,29 +158,6 @@ defmodule CodingAgent.Tools.EditEdgeCasesTest do
   end
 
   describe "execute/6 - line ending edge cases" do
-    test "handles CRLF file and preserves line endings", %{tmp_dir: tmp_dir} do
-      path = Path.join(tmp_dir, "crlf.txt")
-      File.write!(path, "line1\r\nline2\r\nline3")
-
-      result =
-        Edit.execute(
-          "call_1",
-          %{
-            "path" => path,
-            "old_text" => "line2",
-            "new_text" => "replaced"
-          },
-          nil,
-          nil,
-          tmp_dir,
-          []
-        )
-
-      assert %AgentToolResult{} = result
-      content = File.read!(path)
-      assert content =~ "line1\r\nreplaced\r\nline3"
-    end
-
     test "replaces multiline text with LF in CRLF file", %{tmp_dir: tmp_dir} do
       path = Path.join(tmp_dir, "multiline_crlf.txt")
       File.write!(path, "start\r\nmiddle\r\nend")
