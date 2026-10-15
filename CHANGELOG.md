@@ -32,6 +32,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   `--chrome` surface through the official ChatGPT extension). Website access
   requests become Lemon approvals for the origin; Lemon's own local web and
   control-plane origins are never approved.
+- Computer use also never approves the Lemon Bot web client (its
+  `LEMON_BOT_PUBLIC_URL` origin and development port) or origins listed in
+  `LEMON_COMPUTER_USE_DECLINED_ORIGINS`.
 - omp sessions can select an approval mode and bridge tool approval prompts to
   Lemon's conversation/channel approval UI or operator `exec.approval.resolve`.
   Snapshots and wait progress expose pending approvals and decision counts;

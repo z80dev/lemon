@@ -1,5 +1,5 @@
 defmodule LemonComputerUse.ApprovalTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
   alias LemonComputerUse.Approval
 
@@ -168,6 +168,56 @@ defmodule LemonComputerUse.ApprovalTest do
              Approval.answer(
                origin_request("http://127.0.0.1:4040"),
                %{approval_request_fun: ask},
+               "id"
+             )
+  end
+
+  test "the Lemon Bot web origin and configured origins are declined without asking" do
+    saved = System.get_env("LEMON_BOT_PUBLIC_URL")
+
+    on_exit(fn ->
+      if saved,
+        do: System.put_env("LEMON_BOT_PUBLIC_URL", saved),
+        else: System.delete_env("LEMON_BOT_PUBLIC_URL")
+
+      System.delete_env("LEMON_COMPUTER_USE_DECLINED_ORIGINS")
+      Application.delete_env(:lemon_computer_use, :declined_origins)
+    end)
+
+    System.put_env("LEMON_BOT_PUBLIC_URL", "https://bot.tailnet-example.ts.net/")
+
+    System.put_env(
+      "LEMON_COMPUTER_USE_DECLINED_ORIGINS",
+      "https://lemon.example:8443/app, not a url"
+    )
+
+    Application.put_env(:lemon_computer_use, :declined_origins, ["http://[::1]:9000"])
+
+    assert LemonComputerUse.Config.declined_origins() == [
+             "https://bot.tailnet-example.ts.net",
+             "https://lemon.example:8443",
+             "http://[::1]:9000"
+           ]
+
+    ask = fn _ -> flunk("must not ask for Lemon's own surfaces") end
+
+    for origin <- [
+          "https://bot.tailnet-example.ts.net",
+          "https://lemon.example:8443",
+          "http://[::1]:9000",
+          "http://127.0.0.1:4081"
+        ] do
+      assert %{action: "decline"} =
+               Approval.answer(origin_request(origin), %{approval_request_fun: ask}, "id"),
+             origin
+    end
+
+    approve = fn _ -> {:ok, :approved, :approve_once} end
+
+    assert %{action: "accept"} =
+             Approval.answer(
+               origin_request("https://lemon.example"),
+               %{approval_request_fun: approve},
                "id"
              )
   end
