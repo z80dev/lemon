@@ -12,13 +12,13 @@ defmodule CodingAgent.ToolRegistry do
 
   require Logger
 
-  alias LemonAgent.Types.AgentTool
   alias CodingAgent.Extensions
   alias CodingAgent.MutationLock
   alias CodingAgent.ToolExecutor
   alias CodingAgent.ToolPolicy
   alias CodingAgent.Tools
   alias CodingAgent.Wasm.Policy, as: WasmPolicy
+  alias LemonAgent.Types.AgentTool
 
   @type tool_name :: String.t()
   @type tool_opts :: keyword()
@@ -505,14 +505,12 @@ defmodule CodingAgent.ToolRegistry do
   end
 
   defp discover_configured_mcp_tools(cwd) do
-    try do
-      tools = LemonSkills.McpSource.discover_tools(cwd: cwd)
-      mcp_tuples_with_approval(tools, LemonSkills.McpSource.approval_policy())
-    rescue
-      _ -> []
-    catch
-      :exit, _ -> []
-    end
+    tools = LemonSkills.McpSource.discover_tools(cwd: cwd)
+    mcp_tuples_with_approval(tools, LemonSkills.McpSource.approval_policy())
+  rescue
+    _ -> []
+  catch
+    :exit, _ -> []
   end
 
   defp discover_session_mcp_tools(opts) do
