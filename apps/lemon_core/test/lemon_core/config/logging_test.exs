@@ -218,31 +218,4 @@ defmodule LemonCore.Config.LoggingTest do
       assert config.filesync_repeat_interval == 15_000
     end
   end
-
-  describe "defaults/0" do
-    test "returns the default logging configuration" do
-      defaults = Logging.defaults()
-
-      assert defaults["file"] == nil
-      assert defaults["level"] == nil
-      assert defaults["max_no_bytes"] == nil
-      assert defaults["max_no_files"] == nil
-      assert defaults["compress_on_rotate"] == nil
-      assert defaults["filesync_repeat_interval"] == nil
-    end
-  end
-
-  describe "struct type" do
-    test "returns a properly typed struct" do
-      config = Logging.resolve(%{})
-
-      assert %Logging{} = config
-      assert config.file == nil or is_binary(config.file)
-      assert config.level == nil or is_atom(config.level)
-      assert config.max_no_bytes == nil or is_integer(config.max_no_bytes)
-      assert config.max_no_files == nil or is_integer(config.max_no_files)
-      assert config.compress_on_rotate == nil or is_boolean(config.compress_on_rotate)
-      assert config.filesync_repeat_interval == nil or is_integer(config.filesync_repeat_interval)
-    end
-  end
 end

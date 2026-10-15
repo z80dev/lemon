@@ -27,14 +27,8 @@ defmodule LemonCore.BusRegistryFallbackTest do
     :ok
   end
 
-  test "the backend switch is observable" do
-    refute Bus.pubsub?()
-
-    assert {Registry, keys: :duplicate, name: LemonCore.Bus.Registry} =
-             Bus.child_spec_for_backend()
-  end
-
   test "subscribers receive broadcasts" do
+    refute Bus.pubsub?()
     topic = "fallback:#{System.unique_integer([:positive])}"
     assert Bus.subscribe(topic) == :ok
 

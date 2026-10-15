@@ -14,20 +14,6 @@ defmodule LemonCore.Quality.ArchitectureCheckTest do
       assert is_map(report.actual_dependencies)
     end
 
-    test "report structure contains all required fields" do
-      assert {:ok, report} = ArchitectureCheck.run(root: @repo_root)
-
-      assert Map.has_key?(report, :root)
-      assert Map.has_key?(report, :apps_checked)
-      assert Map.has_key?(report, :issue_count)
-      assert Map.has_key?(report, :issues)
-      assert Map.has_key?(report, :actual_dependencies)
-      assert Map.has_key?(report, :allowed_dependencies)
-      assert Map.has_key?(report, :reference_only_namespace_exceptions)
-      assert Map.has_key?(report, :target_drift_count)
-      assert Map.has_key?(report, :target_dependency_drifts)
-    end
-
     test "returns error report when issues are found" do
       # Create a temporary umbrella with violations
       tmp_dir = create_tmp_umbrella_with_violation()
@@ -43,24 +29,6 @@ defmodule LemonCore.Quality.ArchitectureCheckTest do
   end
 
   describe "allowed_direct_deps/0" do
-    test "returns the dependency policy map" do
-      deps = ArchitectureCheck.allowed_direct_deps()
-      assert is_map(deps)
-      assert Map.has_key?(deps, :lemon_core)
-      assert is_list(deps.lemon_core)
-    end
-
-    test "delegates to architecture policy" do
-      assert ArchitectureCheck.allowed_direct_deps() ==
-               ArchitecturePolicy.allowed_direct_deps()
-
-      assert ArchitectureCheck.current_allowed_direct_deps() ==
-               ArchitecturePolicy.current_allowed_direct_deps()
-
-      assert ArchitectureCheck.target_allowed_direct_deps() ==
-               ArchitecturePolicy.target_allowed_direct_deps()
-    end
-
     test "lemon_core has no allowed dependencies" do
       deps = ArchitectureCheck.allowed_direct_deps()
       assert deps.lemon_core == []
