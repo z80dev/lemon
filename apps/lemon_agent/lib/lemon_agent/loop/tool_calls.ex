@@ -544,18 +544,16 @@ defmodule LemonAgent.Loop.ToolCalls do
   end
 
   defp start_tool_task(tool_task_supervisor, parent, ref, tool, tool_call, signal, stream) do
-    try do
-      Task.Supervisor.start_child(tool_task_supervisor, fn ->
-        {result, is_error} = execute_tool_call(tool, tool_call, signal, stream, parent, ref)
-        send(parent, {:tool_task_result, ref, tool_call, result, is_error})
-      end)
-    catch
-      :exit, reason -> {:error, reason}
-    else
-      {:ok, pid} -> {:ok, pid}
-      {:error, reason} -> {:error, reason}
-      other -> {:error, {:unexpected_start_result, other}}
-    end
+    Task.Supervisor.start_child(tool_task_supervisor, fn ->
+      {result, is_error} = execute_tool_call(tool, tool_call, signal, stream, parent, ref)
+      send(parent, {:tool_task_result, ref, tool_call, result, is_error})
+    end)
+  catch
+    :exit, reason -> {:error, reason}
+  else
+    {:ok, pid} -> {:ok, pid}
+    {:error, reason} -> {:error, reason}
+    other -> {:error, {:unexpected_start_result, other}}
   end
 
   defp emit_start_failures(start_failures, context, new_messages, results, stream) do
