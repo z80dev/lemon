@@ -110,6 +110,7 @@ max_tool_invoke_depth = 4
 [tui]
 theme = "lemon"
 debug = false
+notifications = "auto" # auto | osc | bell | off (Bun terminal client)
 
 [logging]
 # Optional: write logs to a file for later analysis.
@@ -536,6 +537,7 @@ browser-session exchange needed to authenticate that client safely. Never
 place the shared server token in `VITE_*` configuration.
 - `LEMON_PROVIDER_ROUTING_ENABLED`, `LEMON_PROVIDER_FALLBACK_PROVIDERS`, `LEMON_PROVIDER_ROUTING_REQUIRE_CREDENTIALS`
 - `LEMON_TUI_THEME`, `LEMON_TUI_DEBUG` — TUI appearance and debug mode
+- `LEMON_TUI_NOTIFICATIONS=auto|osc|bell|off` — overrides the Bun TUI's global `[tui] notifications`; legacy `0` means `off`, `1` means `auto`
 - `LEMON_SECRET_OBFUSCATION_ENABLED` — overrides `[runtime.secret_obfuscation] enabled`
 - `<PROVIDER>_API_KEY`, `<PROVIDER>_BASE_URL` (e.g., `ANTHROPIC_API_KEY`, `OPENAI_BASE_URL`, `OPENCODE_API_KEY`, `ZAI_API_KEY`, `MINIMAX_API_KEY`); local servers use `OLLAMA_BASE_URL`/`OLLAMA_HOST`, `LM_STUDIO_BASE_URL`, `LLAMA_CPP_BASE_URL` and `LITELLM_BASE_URL` only when config sets no `base_url` (see [OpenAI-Compatible Endpoints](#openai-compatible-endpoints))
 - `LEMON_WASM_ENABLED`, `LEMON_WASM_RUNTIME_PATH`, `LEMON_WASM_TOOL_PATHS`, `LEMON_WASM_AUTO_BUILD`
@@ -657,6 +659,16 @@ contracts, not proof of remote workload termination.
 
 The Bun TUI uses the runtime's model and thinking defaults from `[defaults]`.
 The `[tui]` section controls terminal presentation settings loaded at startup.
+The Bun client's notification preference is read from **global**
+`~/.lemon/config.toml` at startup, with `LEMON_TUI_NOTIFICATIONS` taking
+precedence. `auto` (default) uses OSC 9/777 on recognized terminals and BEL
+(`\x07`) elsewhere. `osc` forces OSC without a bell fallback, `bell` uses BEL
+only, and `off` disables both. Pending `ask` questions, approvals, and run
+completion share this mode and use fixed notification text, never question or
+conversation content. Tern's program-status inbox/banners remain controlled by
+Tern's settings; `bell` explicitly rings there too. Non-TTY, `TERM=dumb`, or
+`LEMON_TUI_TERMINAL_INTEGRATION=0` suppresses these side channels entirely.
+See `clients/tui/README.md` for copy commands and keyboard access.
 
 Async followup queue defaults for background `task` completions and delegated `agent`
 completions are currently umbrella app config, not TOML. The default lives in

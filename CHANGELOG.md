@@ -19,6 +19,12 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Added
 
+- Notify when a TUI `ask` question is waiting, with shared `[tui] notifications`
+  modes and a terminal-bell fallback for questions, approvals, and turn completion.
+- Add `/copy`, `/copy code [n]` (first block by default), `/copy prompt`, and
+  Alt+Shift+C, sharing OSC 52 plus local native clipboard fallbacks with message
+  Copy buttons; SSH never invokes host clipboard tools.
+
 - Cron schedules accept relative one-shots such as `in 30m` and timezone-aware
   local ISO timestamps, rejecting past times and retiring after execution.
 - Successful prompt jobs can reply with exactly `[SILENT]` to retain history

@@ -39,6 +39,10 @@ export const LEMON_KEYBINDINGS = {
 	"lemon.omp.toggle": { defaultKeys: "alt+m", description: "Show/hide omp delegate sessions" },
 	"lemon.tools.toggle": { defaultKeys: "alt+o", description: "Collapse/expand all tool output" },
 	"lemon.tools.diff": { defaultKeys: "alt+d", description: "Inspect the latest edit diff" },
+	"lemon.clipboard.copyLast": {
+		defaultKeys: "alt+shift+c",
+		description: "Copy the last assistant reply",
+	},
 } as const;
 
 export type LemonKeybinding = keyof typeof LEMON_KEYBINDINGS;
@@ -64,6 +68,7 @@ export interface InputControllerOptions {
 	toggleOmpPanel?: () => void;
 	toggleToolOutputs?: () => void;
 	openDiff?: () => void;
+	copyLastReply?: () => void | Promise<void>;
 	notice?: (text: string) => void;
 }
 
@@ -113,6 +118,10 @@ export class InputController {
 			}
 			if (this.#matches(data, "lemon.tools.diff")) {
 				this.#options.openDiff?.();
+				return { consume: true };
+			}
+			if (this.#matches(data, "lemon.clipboard.copyLast")) {
+				void this.#options.copyLastReply?.();
 				return { consume: true };
 			}
 			if (this.#matches(data, "lemon.picker.model")) {
