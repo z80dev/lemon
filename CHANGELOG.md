@@ -71,6 +71,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Restore the LSP Dialyzer gate by explicitly discarding idle timer cancellation
+  results and removing an unreachable nil working-directory branch.
+
 - Re-enter setup for incomplete saved configurations on interactive launch, and
   recognize keyless local providers and environment-only credentials in readiness,
   doctor, and setup verification.
