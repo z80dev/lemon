@@ -2,7 +2,9 @@ defmodule LemonControlPlane.Methods.StatusTest do
   # Stops lemon_channels in one test, so it cannot share the VM with async tests.
   use ExUnit.Case, async: false
 
+  alias LemonChannels.Adapters.Discord.Transport.Consumer
   alias LemonControlPlane.Methods.{Health, Status}
+  alias LemonControlPlane.Protocol.Frames
 
   defmodule Channel do
     use Agent
@@ -101,7 +103,7 @@ defmodule LemonControlPlane.Methods.StatusTest do
              "commit" => "sample-build-commit"
            }
 
-    hello = LemonControlPlane.Protocol.Frames.encode_hello_ok(%{}) |> Jason.decode!()
+    hello = Frames.encode_hello_ok(%{}) |> Jason.decode!()
     assert hello["server"]["version"] == version
   end
 
@@ -225,7 +227,7 @@ defmodule LemonControlPlane.Methods.StatusTest do
     assert {:ok, failed} = Status.handle(%{}, %{})
     assert Enum.find(failed["channels"]["details"], &(&1["id"] == "discord"))["state"] == "error"
 
-    LemonChannels.Adapters.Discord.Transport.Consumer.handle_event({:READY, %{}, nil})
+    Consumer.handle_event({:READY, %{}, nil})
     assert {:ok, connected} = Status.handle(%{}, %{})
 
     assert %{"state" => "connected", "lastError" => nil} =

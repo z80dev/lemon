@@ -421,42 +421,40 @@ defmodule LemonAi.CallDispatcher do
   end
 
   defp track_stream_result(provider, slot_ref, stream_pid) do
-    try do
-      terminal_result = await_stream_terminal_result(stream_pid)
-      record_stream_terminal_result(provider, terminal_result)
-    rescue
-      error ->
-        Logger.warning(
-          "CallDispatcher stream tracking crashed for #{inspect(provider)}: #{Exception.message(error)}"
-        )
+    terminal_result = await_stream_terminal_result(stream_pid)
+    record_stream_terminal_result(provider, terminal_result)
+  rescue
+    error ->
+      Logger.warning(
+        "CallDispatcher stream tracking crashed for #{inspect(provider)}: #{Exception.message(error)}"
+      )
 
-        LemonAi.CircuitBreaker.record_failure(
-          provider,
-          {:stream_tracking_exception, Exception.message(error)}
-        )
-    catch
-      # A :shutdown exit of the tracked stream is a deliberate teardown — a
-      # consumer cancel propagated through a link cascade (e.g. the fallback
-      # wrapper's relay task being shut down), not a provider failure. Record
-      # neither success nor failure.
-      :exit, :shutdown ->
-        :ok
+      LemonAi.CircuitBreaker.record_failure(
+        provider,
+        {:stream_tracking_exception, Exception.message(error)}
+      )
+  catch
+    # A :shutdown exit of the tracked stream is a deliberate teardown — a
+    # consumer cancel propagated through a link cascade (e.g. the fallback
+    # wrapper's relay task being shut down), not a provider failure. Record
+    # neither success nor failure.
+    :exit, :shutdown ->
+      :ok
 
-      :exit, {:shutdown, _} ->
-        :ok
+    :exit, {:shutdown, _} ->
+      :ok
 
-      :exit, {{:shutdown, _}, _} ->
-        :ok
+    :exit, {{:shutdown, _}, _} ->
+      :ok
 
-      :exit, reason ->
-        Logger.warning(
-          "CallDispatcher stream tracking exited for #{inspect(provider)}: #{inspect(reason)}"
-        )
+    :exit, reason ->
+      Logger.warning(
+        "CallDispatcher stream tracking exited for #{inspect(provider)}: #{inspect(reason)}"
+      )
 
-        LemonAi.CircuitBreaker.record_failure(provider, {:stream_tracking_exit, reason})
-    after
-      release_slot(slot_ref)
-    end
+      LemonAi.CircuitBreaker.record_failure(provider, {:stream_tracking_exit, reason})
+  after
+    release_slot(slot_ref)
   end
 
   defp await_stream_terminal_result(stream_pid) do
