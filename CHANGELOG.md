@@ -8,9 +8,14 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
+- Lemon Web omp adds parallel worker starts and a live usage grid, searchable
+  free-marked model selection, live model/thinking configuration with explicit
+  partial-failure receipts, and bounded subagent transcript drill-down.
+
 ### Lemon Bot
 
 - Instance status exposes release/build metadata, provider credential health and channel errors. Owner-confirmed restart/stop can use a remote controller, with lifecycle completion observed from link events; clients use explicit available action lists.
+- Apple clients show Lemon build, provider credentials and channel errors, with action-aware local launcher and remote lifecycle controls.
 - Lemon Bot web shows build identity, provider credentials and timestamped channel health, with available-action lifecycle controls and clear local-launcher versus remote-controller guidance.
 
 ### Fixed
@@ -20,6 +25,15 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   Connection failures and `/reconnect` report actionable outcomes; `/status`
   includes profile/model, theme changes say whether they were saved, and
   command suggestions no longer mistake `/faq` for the `/q` queue alias.
+- Normalize non-OpenAI control-plane HTTP errors to code/message envelopes,
+  name authentication headers and credential sources, omit non-JSON error
+  details safely, and distinguish unavailable status subsystems from empty results.
+- Web chat model-list and compaction failures now show plain-language next steps
+  pointing to Diagnostics instead of exposing service error terms.
+
+- Channel status details no longer mistake a running adapter process for an
+  observed connection; Discord READY/resume and startup failures update the
+  redacted health projection.
 - All skill curator entry points now protect cron-referenced skills, including
   disabled jobs, while preserving explicit exemptions. Automatic archival fails
   closed with a reported reason when the automation provider is unavailable.
@@ -31,6 +45,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Changed
 
+- Honcho channel turns support pinned users, many-to-one sender aliases and
+  platform-qualified peer prefixes. Per-peer context follows each sender,
+  bot-authored turns are not uploaded, and Hermes migration imports these settings.
 - Bring Lemon Web's omp controls to parity with approval decisions and overrides,
   isolated starts, interrupted continuation, redirect, and worktree/discovery details.
 - Expand `lemon omp` with approval modes, isolated and parallel starts, explicit

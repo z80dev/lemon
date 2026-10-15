@@ -14,7 +14,7 @@ defmodule CodingAgent.Tools.Grep do
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonAgent.Security.ToolResultTrust
   alias LemonAi.Types.TextContent
-  alias CodingAgent.Tools.{FileValidation, IgnoreFilter}
+  alias CodingAgent.Tools.IgnoreFilter
   alias CodingAgent.Tools.PathHelpers
 
   import LemonAgent.Tools.AbortHelpers, only: [aborted?: 1, check_abort: 1]
@@ -47,7 +47,7 @@ defmodule CodingAgent.Tools.Grep do
           "path" => %{
             "type" => "string",
             "description" =>
-              "File or directory to search in (relative to cwd or absolute). Defaults to cwd."
+              "File/directory roots separated by semicolons (relative to cwd or absolute). Defaults to cwd."
           },
           "glob" => %{
             "type" => "string",
@@ -136,12 +136,18 @@ defmodule CodingAgent.Tools.Grep do
          :ok <- validate_max_results(max_results),
          :ok <- validate_skip(skip),
          :ok <- validate_output_mode(output_mode),
-         {:ok, resolved_path} <- resolve_path(path, cwd, opts),
-         :ok <- check_path_access(resolved_path),
+         {:ok, paths, missing} <-
+           PathHelpers.resolve_search_paths(
+             path,
+             cwd,
+             [:regular, :directory],
+             Keyword.put(opts, :include_bare_memory, true)
+           ),
          :ok <- check_abort(signal) do
       search_opts = %{
         pattern: pattern,
-        path: resolved_path,
+        path: if(length(paths) == 1, do: hd(paths), else: cwd),
+        paths: paths,
         glob: glob,
         case_sensitive: case_sensitive,
         literal: literal,
@@ -163,11 +169,14 @@ defmodule CodingAgent.Tools.Grep do
         fallback_match_fun: Keyword.get(opts, :fallback_match_fun, &line_matches?/2)
       }
 
-      if Keyword.get(opts, :ripgrep_available?, ripgrep_available?()) do
-        search_with_ripgrep(search_opts)
-      else
-        search_with_elixir(search_opts)
-      end
+      result =
+        if Keyword.get(opts, :ripgrep_available?, ripgrep_available?()) do
+          search_with_ripgrep(search_opts)
+        else
+          search_with_elixir(search_opts)
+        end
+
+      PathHelpers.with_missing_paths(result, missing)
     end
   end
 
@@ -243,20 +252,6 @@ defmodule CodingAgent.Tools.Grep do
 
       true ->
         ""
-    end
-  end
-
-  defp resolve_path(nil, cwd, _opts), do: {:ok, cwd}
-  defp resolve_path("", cwd, _opts), do: {:ok, cwd}
-
-  defp resolve_path(path, cwd, opts) do
-    {:ok, PathHelpers.resolve_path(path, cwd, Keyword.put(opts, :include_bare_memory, true))}
-  end
-
-  defp check_path_access(path) do
-    case FileValidation.check_path_access(path, [:regular, :directory]) do
-      {:ok, _stat} -> :ok
-      {:error, _} = error -> error
     end
   end
 
@@ -430,7 +425,7 @@ defmodule CodingAgent.Tools.Grep do
     # `--regexp=` keeps a pattern that starts with `-` (e.g. `->`) from being
     # parsed as a flag (`-e -foo` is rejected by ripgrep's argument parser);
     # `--` does the same for the path.
-    args ++ ["--regexp=" <> opts.pattern, "--", opts.path]
+    args ++ ["--regexp=" <> opts.pattern, "--"] ++ opts.paths
   end
 
   defp parse_ripgrep_output(output, opts) do
@@ -442,18 +437,21 @@ defmodule CodingAgent.Tools.Grep do
           {:ok,
            %{
              "type" => "match",
-             "data" => %{
-               "path" => %{"text" => file_path},
-               "line_number" => line_number
-             }
+             "data" =>
+               %{
+                 "path" => %{"text" => file_path},
+                 "line_number" => line_number
+               } = data
            }}
           when is_binary(file_path) and is_integer(line_number) ->
-            [%{file_path: file_path, line_number: line_number} | acc]
+            column = get_in(data, ["submatches", Access.at(0), "start"]) || 0
+            [%{file_path: file_path, line_number: line_number, column: column} | acc]
 
           _ ->
             acc
         end
       end)
+      |> Enum.uniq_by(&{&1.file_path, &1.line_number})
       |> Enum.sort_by(&{&1.file_path, &1.line_number})
 
     build_result_from_match_refs(matches, opts)
@@ -494,7 +492,9 @@ defmodule CodingAgent.Tools.Grep do
       limit = if opts.output_mode == "count", do: :infinity, else: opts.skip + opts.max_results
 
       {refs, count, oversized, incomplete?} =
-        opts.fallback_files_fun.(opts.path, opts)
+        opts.paths
+        |> Enum.flat_map(&opts.fallback_files_fun.(&1, opts))
+        |> Enum.uniq()
         |> Enum.sort()
         |> Enum.reduce_while({[], 0, 0, false}, fn file, {refs, count, oversized, _} ->
           if aborted?(opts.signal) do
@@ -623,7 +623,9 @@ defmodule CodingAgent.Tools.Grep do
               |> String.split(~r/\r?\n/)
               |> Stream.with_index(1)
               |> Stream.filter(fn {line, _} -> opts.fallback_match_fun.(line, matcher) end)
-              |> Stream.map(fn {_, idx} -> %{file_path: file_path, line_number: idx} end)
+              |> Stream.map(fn {line, idx} ->
+                %{file_path: file_path, line_number: idx, column: match_column(line, matcher)}
+              end)
               |> take_refs(limit)
             end
           else
@@ -655,10 +657,35 @@ defmodule CodingAgent.Tools.Grep do
     offsets
     |> Stream.map(fn offset ->
       line = 1 + length(:binary.matches(binary_part(content, 0, offset), "\n"))
-      %{file_path: file_path, line_number: line}
+
+      line_start =
+        case :binary.matches(binary_part(content, 0, offset), "\n") |> List.last() do
+          nil -> 0
+          {last, _} -> last + 1
+        end
+
+      %{file_path: file_path, line_number: line, column: offset - line_start}
     end)
     |> Stream.uniq_by(& &1.line_number)
     |> take_refs(limit)
+  end
+
+  defp match_column(line, {:regex, regex}) do
+    case Regex.run(regex, line, return: :index, capture: :first) do
+      [{offset, _}] -> offset
+      _ -> 0
+    end
+  end
+
+  defp match_column(line, {:literal, pattern, true}) do
+    case :binary.match(line, pattern) do
+      {offset, _} -> offset
+      :nomatch -> 0
+    end
+  end
+
+  defp match_column(line, {:literal, pattern, false}) do
+    match_column(line, {:regex, Regex.compile!(Regex.escape(pattern), [:caseless])})
   end
 
   defp line_matches?(line, {:regex, regex}), do: Regex.match?(regex, line)
@@ -865,7 +892,7 @@ defmodule CodingAgent.Tools.Grep do
   end
 
   defp format_match_ref(
-         %{file_path: file_path, line_number: line_number},
+         %{file_path: file_path, line_number: line_number} = match_ref,
          opts,
          cache,
          directory_search?
@@ -891,7 +918,8 @@ defmodule CodingAgent.Tools.Grep do
         {block_lines, block_truncated?} =
           Enum.reduce(start_line..end_line, {[], false}, fn current_line, {acc, any_truncated?} ->
             raw_line = Enum.at(lines, current_line - 1, "")
-            {line_text, line_truncated?} = truncate_match_line(raw_line)
+            column = if current_line == line_number, do: Map.get(match_ref, :column, 0), else: 0
+            {line_text, line_truncated?} = truncate_match_line(raw_line, column)
 
             formatted_line =
               if current_line == line_number do
@@ -942,20 +970,28 @@ defmodule CodingAgent.Tools.Grep do
   defp display_path(file_path, search_path, true) do
     relative_path = Path.relative_to(file_path, search_path)
 
-    if relative_path == file_path or String.starts_with?(relative_path, "../") do
-      Path.basename(file_path)
-    else
-      relative_path
-    end
+    relative_path
   end
 
   defp display_path(file_path, _search_path, false), do: Path.basename(file_path)
 
-  defp truncate_match_line(line) do
+  defp truncate_match_line(line, byte_offset) do
     if String.length(line) <= @grep_max_line_length do
       {line, false}
     else
-      {String.slice(line, 0, @grep_max_line_length) <> "... [truncated]", true}
+      prefix = binary_part(line, 0, min(byte_offset, byte_size(line)))
+      column = String.length(prefix)
+
+      start =
+        max(
+          0,
+          min(column - div(@grep_max_line_length, 2), String.length(line) - @grep_max_line_length)
+        )
+
+      window = String.slice(line, start, @grep_max_line_length)
+      left = if start > 0, do: "...", else: ""
+      right = if start + @grep_max_line_length < String.length(line), do: "...", else: ""
+      {left <> window <> right <> " [col #{column + 1}]", true}
     end
   end
 

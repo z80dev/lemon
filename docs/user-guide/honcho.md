@@ -101,6 +101,39 @@ server-side memory; remote data and Hermes session IDs are not copied. See
 [the migration guide](migrate-from-hermes.md#honcho-configuration) for precedence,
 conflict handling and the full mapping.
 
+### Gateway identity mapping
+
+Channel turns (Telegram, Discord and other router channel ingress) can map each
+sender to a different Honcho human peer. CLI, TUI and web turns always use
+`user_peer`; channel chat/group ids are not treated as human identities.
+
+```toml
+[honcho]
+user_peer = "owner"
+pin_user_peer = false
+runtime_peer_prefix = "gateway_"
+user_peer_aliases = { telegram_123 = "alice", discord_456 = "alice" }
+```
+
+The first match wins: `pin_user_peer = true` uses `user_peer`; otherwise an
+alias for the channel-qualified runtime id wins; otherwise a nonempty
+`runtime_peer_prefix` is prepended to the runtime id; otherwise `user_peer`
+is used. For example, sender `123` on Telegram becomes `telegram_123`, and
+the prefix above produces `gateway_telegram_123`. Discord sender `123` has
+the distinct id `discord_123`. Aliases can intentionally map several ids to
+one person. Alias peer names must contain 1–512 ASCII letters, digits,
+underscores or hyphens. Generated names are sanitized and bounded, with a
+digest when normalization is needed to avoid collisions.
+
+Environment equivalents are `LEMON_HONCHO_PIN_USER_PEER`,
+`LEMON_HONCHO_RUNTIME_PEER_PREFIX` and `LEMON_HONCHO_USER_PEER_ALIASES`
+(a JSON object, e.g. `{"telegram_123":"alice"}`). Application env uses the
+same snake-case keys as TOML. Defaults are `false`, `""` and `{}`.
+Context, dialectic and tool peer selection follow the turn's resolved peer;
+volatile caches are partitioned by peer even in a shared group conversation.
+Transport-marked bot turns are **not uploaded at all**, including their
+assistant response, so a bot's words never train the human peer.
+
 ### Upload controls
 
 Uploads travel over Lemon's built-in memory ingest, and that pipeline sits behind the

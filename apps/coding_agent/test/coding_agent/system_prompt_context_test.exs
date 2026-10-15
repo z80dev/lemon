@@ -138,6 +138,7 @@ defmodule CodingAgent.SystemPromptContextTest do
         session_id: "session-id-1",
         agent_id: "agent-id-1",
         run_id: "run-id-1",
+        channel_identity: %{channel_id: "telegram", sender_id: "42", is_bot: false},
         skill_context: "what did we decide about billing"
       })
 
@@ -155,7 +156,26 @@ defmodule CodingAgent.SystemPromptContextTest do
     assert request.session_id == "session-id-1"
     assert request.agent_id == "agent-id-1"
     assert request.run_id == "run-id-1"
+    assert request.channel_identity == %{channel_id: "telegram", sender_id: "42", is_bot: false}
     assert request.query == "what did we decide about billing"
+  end
+
+  @tag :tmp_dir
+  test "subagent contributors never receive inherited channel identity", %{tmp_dir: tmp_dir} do
+    :ok = ContextRegistry.register(:test_alpha, Alpha)
+
+    opts =
+      tmp_dir
+      |> build_opts()
+      |> Map.merge(%{
+        session_scope: :subagent,
+        run_id: "subagent-channel-identity",
+        channel_identity: %{channel_id: "telegram", sender_id: "42", is_bot: false}
+      })
+
+    SystemPrompt.build(tmp_dir, opts)
+    assert_receive {:contributed, Alpha, %{run_id: "subagent-channel-identity"} = request}, 2_000
+    assert request.channel_identity == nil
   end
 
   @tag :tmp_dir

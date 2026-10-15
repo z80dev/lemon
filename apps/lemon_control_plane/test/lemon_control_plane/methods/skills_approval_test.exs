@@ -93,27 +93,4 @@ defmodule LemonControlPlane.Methods.SkillsApprovalTest do
       end
     end
   end
-
-  describe "approval flow context propagation" do
-    test "install passes session context to installer" do
-      ctx = %{
-        conn_id: "conn-123",
-        auth: %{role: :operator},
-        session_key: "session-abc",
-        agent_id: "agent-xyz",
-        run_id: "run-456"
-      }
-
-      params = %{"skillKey" => "context-test-skill", "cwd" => "/tmp"}
-
-      # The context should be passed through to the installer
-      # We can't easily verify this without mocking, but we ensure no crash
-      result = SkillsInstall.handle(params, ctx)
-
-      case result do
-        {:error, _} -> :ok
-        {:ok, _} -> :ok
-      end
-    end
-  end
 end

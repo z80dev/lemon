@@ -252,7 +252,7 @@ defmodule LemonChannels.Registry do
             error -> "error"
             not running? -> "configured"
             health -> health["state"]
-            true -> "connected"
+            true -> "configured"
           end
 
         %{"id" => id, "state" => status, "lastError" => error}
