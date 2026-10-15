@@ -47,6 +47,10 @@ control plane. Install its locked dependencies in a fresh worktree first:
 `(cd clients/tui && bun install --frozen-lockfile)`. Release BEAM setup performs
 the same install before its deterministic gates.
 
+SVG tests use injected rasterizers by default. The real `rsvg-convert` case carries
+the `:rsvg_convert` tag, which the coding-agent helper explicitly excludes when
+librsvg is not installed. Install librsvg to include that host-backed coverage.
+
 Product and packaged-boot smokes isolate their home/store directories and use
 valid, test-only 32-byte secrets keys; no live provider credential is needed.
 For packaged CLI coverage, run `scripts/verify_release_runtime_boot` in

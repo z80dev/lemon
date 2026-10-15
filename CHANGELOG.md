@@ -8,7 +8,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
-No unreleased changes yet.
+### Fixed
+
+- Make injected SVG rasterizer fixtures portable across BSD and GNU base64, and
+  explicitly exclude only the named real-rasterizer test when librsvg is absent.
 
 ---
 
