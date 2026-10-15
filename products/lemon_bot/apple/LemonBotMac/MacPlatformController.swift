@@ -67,7 +67,7 @@ final class MacPlatformController: NSObject {
     }
 
     func start() {
-        guard lifecycleTask == nil else { return }
+        guard !MacPetLaunch.fixtures, lifecycleTask == nil else { return }
         NSApp.servicesProvider = self
         lifecycleTask = Task { [weak self] in
             guard let self else { return }
@@ -86,6 +86,7 @@ final class MacPlatformController: NSObject {
     }
 
     func accountChanged() async {
+        if MacPetLaunch.fixtures { settings = store.localSettings ?? settings; return }
         guard activeAccountID != store.account?.id else { return }
         activeAccountID = store.account?.id
         let generation = UUID()
@@ -470,7 +471,7 @@ final class MacPlatformController: NSObject {
     }
 
     func publishPresence() async {
-        guard online else { return }
+        guard !MacPetLaunch.fixtures, online else { return }
         do { try await store.sendFrame(["type": .string("presence"), "foreground": .bool(NSApp.isActive), "conversationId": viewedConversationID.map(JSONValue.string) ?? .null]) }
         catch { errorMessage = error.localizedDescription }
     }
@@ -501,7 +502,7 @@ final class MacPlatformController: NSObject {
     }
 
     func notificationsChanged() {
-        guard store.account != nil else { return }
+        guard !MacPetLaunch.fixtures, store.account != nil else { return }
         if !notificationBaseline {
             seenNotifications = Set(store.notifications.map(\.id))
             notificationBaseline = true
