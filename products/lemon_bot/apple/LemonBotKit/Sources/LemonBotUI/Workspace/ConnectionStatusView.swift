@@ -112,8 +112,8 @@ public struct ConnectionStatusView: View {
         VStack(alignment: .leading, spacing: 8) {
             if store.canControlInstance {
                 HStack {
-                    Button("Start Lemon") { run(.start) }
-                    Button("Restart Lemon") { restart = true }
+                    if store.instanceStatus?.runtime.actions.contains(.start) == true { Button("Start Lemon") { run(.start) } }
+                    if store.instanceStatus?.runtime.actions.contains(.restart) == true { Button("Restart Lemon") { restart = true } }
                 }.buttonStyle(.pill(.secondary)).disabled(action.busy || store.instanceStatus?.runtime.operation?.state == .running)
             } else if let reason = store.instanceStatus?.runtime.reason { Text(reason).font(LBFont.meta).foregroundStyle(LB.muted) }
             if let state = store.instanceStatus?.controller.state, [.rejected, .stopped, .reconnecting].contains(state) {

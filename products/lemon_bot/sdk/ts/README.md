@@ -24,6 +24,19 @@ Origin and `/v1` base URLs, with or without trailing slashes, normalize to a sin
 
 Every explicit mutation carries the request type's nonce and, for updates, the current resource revision. The SDK does not silently invent these for the caller. Password/secret/auth requests are never replayed. Hooks use the sole `/hooks/:routineId` prefix exception outside `/v1`; use a separate client whose token is the current routine key, never the user or operator credential. SCIM uses a separate scoped integration token, `application/scim+json`, and required `ifMatch` options on existing Users/Groups PUT/PATCH/DELETE. Obtain its strong version from the fetched resource's `meta.version`. OIDC callback redirects return `{status:302,location}` without following the redirect or sending credentials to its target.
 
+### Attached Lemon instance
+
+Owners/admins can call `client.instance()` and `client.reconnectController()`.
+The instance includes nullable build metadata, provider credential presence and
+channel details/errors. It describes the controller host, not the client device.
+Render only `status.runtime.actions`; `via` distinguishes a local launcher from
+controller RPCs. A remote controller can expose restart/stop, never start.
+Owners explicitly call `client.runtimeAction('restart', true)` or
+`client.runtimeAction('stop', true)` after confirmation; start needs no destructive
+confirmation. Poll `client.instance()` for the returned operation's completion,
+never repeat the mutation automatically. Missing provider credentials require
+`lemon setup` on that host; the API never returns keys.
+
 ### Errors, unknown outcomes and revisions
 
 ```ts
