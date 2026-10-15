@@ -263,6 +263,8 @@ run_cli() {
   cd "$LEMON_ROOT"
   # Dependencies are installed explicitly; launching must never mutate them.
   MIX_QUIET=1 compile_source >&2
+  # Operator follow must exit on Ctrl-C instead of opening the BEAM break menu.
+  if [ "${1:-}" = logs ]; then export ELIXIR_ERL_OPTIONS="${ELIXIR_ERL_OPTIONS:-} +Bd"; fi
   exec env MIX_QUIET=1 elixir "$LEMON_ROOT/scripts/lemon_cli.exs" "$@"
 }
 

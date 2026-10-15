@@ -53,6 +53,29 @@ defmodule LemonCli.LauncherLifecycleTest do
     {:ok, source: source, release: release, tools: tools, home: home, env: env}
   end
 
+  test "both launchers disable the BEAM break menu for logs without starting a daemon", ctx do
+    executable(Path.join(ctx.tools, "mix"), "exit 0")
+    executable(Path.join(ctx.tools, "elixir"), ~s(printf '%s\\n' "$ELIXIR_ERL_OPTIONS"))
+
+    executable(Path.join(ctx.release, "bin/lemon_runtime_min"), """
+    case "$1" in
+      eval) printf '%s\\n' "$ELIXIR_ERL_OPTIONS"; printf '%s\\n' "$LEMON_RUNTIME_LOG_DIR" ;;
+      *) echo 'unexpected runtime start' >&2; exit 99 ;;
+    esac
+    """)
+
+    env = put(ctx.env, "ELIXIR_ERL_OPTIONS", "-elixir ansi_enabled false")
+
+    for root <- [ctx.source, ctx.release] do
+      assert {output, 0} = launch(root, ["logs", "--follow"], env)
+      assert output =~ "-elixir ansi_enabled false +Bd"
+      refute output =~ "unexpected runtime start"
+    end
+
+    assert {output, 0} = launch(ctx.release, ["logs"], env)
+    assert output =~ Path.join(ctx.release, "tmp/log")
+  end
+
   test "source help reads the registry without Mix or HOME mutation", ctx do
     for args <- [
           ["--help"],

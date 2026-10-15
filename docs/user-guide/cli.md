@@ -111,6 +111,59 @@ both launchers inherit the control-plane/web/sim port environment. See the
 for availability, single-flight behavior, and release/custom-launcher limits.
 
 
+### Headless run and log inspection
+
+```bash
+lemon runs --status error --since 1h --limit 20
+lemon runs list --session agent:operator:main --agent operator --json
+lemon runs active
+lemon cron runs --job JOB_ID --status failed --since 2d
+lemon logs -n 50 --level warning
+lemon logs --follow --json
+```
+
+These commands do not start a runtime or submit work. Select its control port
+with `LEMON_CONTROL_PLANE_PORT` and authenticate using the same operator-token
+environment as other control-plane CLI clients. An unavailable runtime makes
+run queries fail with exit 1 and a `lemon daemon` instruction, not an empty list.
+Invalid arguments exit 2.
+
+`runs` defaults to recent history; `active` lists in-flight sessions. Human
+tables show UTC time, status, duration, model, cost, session/agent and a short
+run ID, plus tokens and error labels when the runtime supplies them. Older
+runtimes without usage/error fields display `-`. Recent statuses are
+`completed`, `aborted`, `crashed`, and `error`; older runtimes may not report
+crashes or correctly classify aborts. Recent client-side time filtering examines
+at most the newest 200 history rows returned by the runtime, not an unbounded
+archive. `--since` accepts positive integer minutes (`30m`), hours (`1h`), or
+days (`2d`), relative to invocation time; list limits are 1–200 (default 50).
+
+`cron runs` uses the cron status vocabulary: `pending`, `running`, `completed`,
+`failed`, `timeout`, and `aborted`. Without `--job`, it queries each currently
+configured job and returns the newest matching rows across those jobs. Deleted
+jobs can still be queried by their exact ID. JSON excludes job prompts, command
+text, run output, and arbitrary metadata.
+
+`logs` reads the runtime's bounded 1,000-entry ring. If the connection cannot
+be established, it reads the launcher log instead: source uses
+`~/.lemon/run/lemon-PORT.log`; packaged releases use the newest `erlang.log.N`
+under `$RELEASE_TMP/log` (default: the release's `tmp/log`).
+`LEMON_RUNTIME_LOG_FILE` selects an explicit file. File reads seek from the end,
+read at most 1 MiB, discard a cut first line, include a partial last line, and
+credential-redact every returned line. The header names the source without
+exposing its raw filesystem path. This is credential filtering, not removal of
+all potentially private log text.
+
+`--level` is a minimum severity. Offline, it recognizes bracketed log levels
+and excludes lines without a recognizable level. `--follow` polls every two
+seconds, uses a timestamp cursor with boundary deduplication online and
+overlapping bounded file tails offline; Ctrl-C exits without stopping the
+runtime (standard interrupt status 130). More than 1,000 new ring entries or 1 MiB of file data
+between polls can be lost. Identical entries at the same millisecond are
+deduplicated. JSON follow is a stream of one document per poll, each with
+`source` and `logs`; one-shot mode emits one document. A connected runtime's
+authentication/query failure remains an error, never an empty/offline success.
+
 ### CLI commands
 
 These commands are dispatched by `LemonCli.CLI` in both source checkouts and
@@ -124,6 +177,7 @@ packaged releases:
 | `blueprints` | Source and release | Starts the local runtime through the launcher if it is not healthy. |
 | `profile` | Source and release | `profile chat` starts the local runtime through the launcher if it is not healthy. |
 | `backup`, `context`, `sessions`, `learn` | Source and release | Manage backups, bounded context, durable sessions, and learning. |
+| `runs`, `cron runs`, `logs` | Source and release | Read-only operator inspection; requires a running runtime except for the redacted launcher-log fallback. |
 | `omp` | Source and release | Start, watch, steer, and resume omp coding-agent sessions owned by the runtime; starts the local runtime through the launcher if it is not healthy. |
 | `update` | Source and release | Release: full managed-update commands; source: `check` and `history` only, while plan/apply/rollback fail closed. Bare or unknown source update forms do not forward to Mix. Use `mix lemon.update` directly for source configuration migration and bundled-skill sync. |
 | `completion` | Source and release | Generate completion for the current launcher's available commands. |
