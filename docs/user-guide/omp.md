@@ -200,7 +200,7 @@ If the worktree was deleted or cannot be validated, resume uses the supplied
 `cwd` instead; the agent tool reports this fallback. `isolate: true` still
 explicitly creates a fresh worktree rather than reusing one. Discovery checks
 at most 32 managed worktrees and 2,000 filenames per candidate session directory,
-reading bounded headers/tails from at most twice the requested limit per workspace.
+reading bounded headers/tails until the requested number of matching sessions is found.
 If the original branch creation reflog is unavailable, the resumed snapshot's
 base is `null` and cleanup keeps the worktree rather than guessing its base.
 
@@ -300,12 +300,40 @@ higher-volume `events` level (raw per-child session events).
 
 ### Discovery
 
-Discovery reads omp's session files for a workspace
-(`~/.omp/agent/sessions/…`, or `$PI_CODING_AGENT_DIR/sessions`) without
-writing, locking or migrating them. Each entry shows omp's session id, title,
-model, last outcome, whether Lemon currently runs it, and whether it was
-written to in the last two minutes without a clean exit (probably open in
-another omp).
+Discovery reads both Lemon's history and omp's own session files for a workspace
+without writing, locking or migrating them. Each entry includes `source`
+(`"lemon"` or `"omp"`), omp's session id, title, model, last outcome, whether
+Lemon currently runs it, and whether it was written to in the last two minutes
+without a clean exit (probably open in another omp). The agent tool text and
+structured discovery results include source; the CLI/TUI discovery tables do
+not yet display that field.
+
+### Where omp history lives
+
+New Lemon-run sessions live in `~/.lemon/omp/sessions` by default (more precisely,
+`omp/sessions` under `LemonCore.Paths.home_state_dir()`). Lemon passes this
+directory as `--session-dir`, creates it with private `0700` permissions before
+starting omp, and leaves interactive omp history alone. omp 18.11 uses an
+explicit session directory **flat**, without encoded per-cwd subdirectories;
+Lemon filters each file's header cwd when discovering a workspace.
+
+Set `LEMON_OMP_SESSION_DIR` (or `config :lemon_omp, :session_dir`) to a custom
+path; `~` and relative paths are expanded to an absolute path. The environment
+overrides app config. Set it to **`omp`** to opt out: new sessions omit the
+`--session-dir` flag and use omp's own default layout under
+`~/.omp/agent/sessions`, or `$PI_CODING_AGENT_DIR/sessions`
+(`PI_CONFIG_DIR` changes `.omp`). Empty or invalid values fall back to valid
+app config, then Lemon's private default; an empty value is not the opt-out.
+
+Older Lemon sessions and interactive omp sessions stay discoverable from omp's
+default directory alongside Lemon's history. Resume resolves an id or unique
+case-insensitive prefix across both sources, then passes the actual containing
+directory to omp; it continues the original file **in place**, never moves,
+copies or migrates history. Exact ids take precedence over longer prefix matches;
+ambiguous matches are rejected before spawning. Lookup is bounded like discovery,
+but filters by id before applying the result limit. If no match is found,
+omp searches the configured new-session directory (or its own default on opt-out).
+Changing the custom directory does not search previous custom directories.
 
 ## Safety and lifecycle
 
@@ -345,10 +373,11 @@ another omp).
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `LEMON_OMP_BIN` | first `omp` on `PATH` | omp executable |
+| `LEMON_OMP_SESSION_DIR` | `<Lemon state dir>/omp/sessions` (normally `~/.lemon/omp/sessions`) | private flat history directory; `omp` uses omp's own default for new sessions |
 | `LEMON_OMP_MAX_SESSIONS` | `4` | live omp processes |
 | `LEMON_OMP_IDLE_TIMEOUT_MS` | `1800000` | close idle processes (0 = never) |
 | `LEMON_OMP_APPROVALS` | `bridge` | route omp tool approvals to Lemon; `decline` cancels them |
 | `LEMON_OMP_APPROVAL_TIMEOUT_MS` | `600000` | maximum approval wait in ms, capped by omp's dialog timeout |
-| `PI_CODING_AGENT_DIR` / `PI_CONFIG_DIR` | omp's defaults | where discovery looks (omp's own variables) |
+| `PI_CODING_AGENT_DIR` / `PI_CONFIG_DIR` | omp's defaults | omp's credentials/settings and original history source; also the new-session history on opt-out |
 
 See also the [`omp` tool reference](../tools/omp.md).

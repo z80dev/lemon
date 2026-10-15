@@ -177,7 +177,7 @@ defmodule LemonOmp.SessionLifecycleTest do
       assert summary =~ "todos 1/2 done"
 
       assert File.read!(Path.join(ws, ".fake_omp.args")) ==
-               "--mode rpc --cwd #{ws} --model fake/fake-model --thinking low\n"
+               "--mode rpc --cwd #{ws} --session-dir #{LemonOmp.Config.session_dir()} --model fake/fake-model --thinking low\n"
 
       assert "set_subagent_subscription" in received_types(ws)
 
@@ -722,10 +722,12 @@ defmodule LemonOmp.SessionLifecycleTest do
              ]
 
       assert File.read!(Path.join(ws, ".fake_omp.args")) =~ "--resume 01resume-0001"
+      assert File.read!(Path.join(ws, ".fake_omp.args")) =~ "--session-dir #{store}"
       refute "prompt" in received_types(ws)
 
       assert {:ok, [found]} = LemonOmp.discover(ws)
       assert found["ompSessionId"] == "01resume-0001"
+      assert found["source"] == "omp"
       assert found["liveId"] == id
       assert found["activeElsewhere"] == false
 

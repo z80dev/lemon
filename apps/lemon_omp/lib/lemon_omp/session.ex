@@ -51,6 +51,8 @@ defmodule LemonOmp.Session do
           thinking: String.t() | nil,
           approval_mode: String.t() | nil,
           resume: String.t() | nil,
+          session_dir: String.t() | nil,
+          session_source: String.t() | nil,
           owner: map()
         ]
 
@@ -903,9 +905,12 @@ defmodule LemonOmp.Session do
     executable = Keyword.fetch!(opts, :executable)
     cwd = Keyword.fetch!(opts, :cwd)
     sh = System.find_executable("sh") || "/bin/sh"
+    session_dir = Keyword.get_lazy(opts, :session_dir, &Config.session_dir/0)
+    prepare_session_dir(session_dir, Keyword.get(opts, :session_source))
 
     args =
       ["--mode", "rpc", "--cwd", cwd]
+      |> add_flag("--session-dir", session_dir)
       |> add_flag("--model", Keyword.get(opts, :model))
       |> add_flag("--thinking", Keyword.get(opts, :thinking))
       |> add_flag("--approval-mode", Keyword.get(opts, :approval_mode))
@@ -932,6 +937,15 @@ defmodule LemonOmp.Session do
     end
   rescue
     error -> {:error, Exception.message(error)}
+  end
+
+  # Discovery and legacy resume never create/chmod omp's own history buckets.
+  defp prepare_session_dir(nil, _source), do: :ok
+  defp prepare_session_dir(_dir, "omp"), do: :ok
+
+  defp prepare_session_dir(dir, _source) do
+    File.mkdir_p!(dir)
+    File.chmod!(dir, 0o700)
   end
 
   defp add_flag(args, _flag, nil), do: args

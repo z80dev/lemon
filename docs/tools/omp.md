@@ -21,7 +21,7 @@ installed”). For the workflow, see [Delegating to omp](../user-guide/omp.md).
 | `configure` | `id`; `model` (full `provider/id` selector) and/or `thinking` | Changes a live worker without restarting or aborting it, including during a running turn. Applies from the next model call. Sets model first, then thinking, and returns a refreshed snapshot plus text with the effective model/thinking. |
 | `cancel` | `id` | Aborts the running turn; the process stays open. |
 | `close` | `id` | Ends the omp process; its session can be resumed. |
-| `discover` | optional `cwd` | omp's stored sessions for the workspace (read-only). |
+| `discover` | optional `cwd` | Stored sessions from Lemon's history and omp's default history for the workspace (read-only), tagged `source: "lemon"` or `"omp"`. |
 | `resume` | `omp_session_id` (id or unique prefix from `discover`); optional `prompt`, `continue` (boolean), `cwd`, `model`, `thinking`, `approval_mode`, `wait` | Reopens a stored omp session as a new invocation. After a crash/kill, `continue: true` sends a fixed request to review state and finish unfinished work; requires an id and no prompt. It does not restore subagents: omp 18.11's `--restore` rejects RPC mode. |
 
 `id` is Lemon's invocation id (`omp_…`); `omp_session_id` is omp's own
@@ -30,6 +30,15 @@ session id.
 `discover` includes an `interrupted` boolean and marks unfinished last turns in
 its text. This bounded-tail hint can also describe a still-running session;
 check `liveId` and `activeElsewhere` before explicitly continuing it.
+
+New sessions use Lemon's private `~/.lemon/omp/sessions` (or its configured
+per-user state directory), not interactive omp history. `LEMON_OMP_SESSION_DIR`
+/ `config :lemon_omp, :session_dir` selects another expanded path; `omp` opts
+out and omits `--session-dir` for new sessions. An explicit directory is flat,
+so discovery filters session headers by cwd. Resume resolves ids/prefixes across
+both sources and passes the original containing directory to omp, keeping the
+existing file in place. No history is moved, copied or migrated. See
+[Where omp history lives](../user-guide/omp.md#where-omp-history-lives).
 
 `approval_mode` is `always-ask` (ask before writes and execution), `write`
 (ask before execution), or `yolo` (auto-approve ordinary tool calls). It overrides

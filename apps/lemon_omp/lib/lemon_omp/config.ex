@@ -18,6 +18,9 @@ defmodule LemonOmp.Config do
       approval selects to Lemon's shared approval prompts; `decline` cancels them.
     * `:approval_timeout_ms` / `LEMON_OMP_APPROVAL_TIMEOUT_MS` — maximum time to
       wait for approval (default 600000 ms), capped by omp's dialog timeout.
+    * `:session_dir` / `LEMON_OMP_SESSION_DIR` — Lemon's flat omp history
+      directory (default `<LemonCore.Paths.home_state_dir()>/omp/sessions`).
+      `"omp"` opts out and uses omp's own per-workspace default.
     * `:agent_dir` / `PI_CODING_AGENT_DIR` — omp's agent directory, used only for
       read-only session discovery (default `~/<PI_CONFIG_DIR or .omp>/agent`).
   """
@@ -119,8 +122,49 @@ defmodule LemonOmp.Config do
     end
   end
 
+  @doc "Lemon's flat session directory, or nil to use omp's own default."
+  @spec session_dir() :: String.t() | nil
+  def session_dir do
+    case parse_session_dir(env("LEMON_OMP_SESSION_DIR")) do
+      {:ok, path} ->
+        path
+
+      :error ->
+        case parse_session_dir(Application.get_env(:lemon_omp, :session_dir)) do
+          {:ok, path} -> path
+          :error -> Path.expand(Path.join(LemonCore.Paths.home_state_dir(), "omp/sessions"))
+        end
+    end
+  end
+
+  @doc "Effective history directory (flat for Lemon, per-workspace buckets for omp)."
   @spec sessions_dir() :: String.t()
-  def sessions_dir, do: Path.join(agent_dir(), "sessions")
+  def sessions_dir, do: session_dir() || omp_sessions_dir()
+
+  @doc "omp's own history root, read alongside Lemon's history without migration."
+  @spec omp_sessions_dir() :: String.t()
+  def omp_sessions_dir, do: Path.join(agent_dir(), "sessions")
+
+  defp parse_session_dir(value) when is_binary(value) do
+    if String.valid?(value) do
+      case String.trim(value) do
+        "omp" ->
+          {:ok, nil}
+
+        "" ->
+          :error
+
+        path ->
+          if String.match?(path, ~r/[\x00-\x1f\x7f]/),
+            do: :error,
+            else: {:ok, Path.expand(path)}
+      end
+    else
+      :error
+    end
+  end
+
+  defp parse_session_dir(_value), do: :error
 
   defp env(name) do
     case System.get_env(name) do

@@ -73,6 +73,19 @@ defmodule LemonOmp.Env do
       apps: [:lemon_omp]
     },
     %{
+      name: :omp_session_dir,
+      env_var: "LEMON_OMP_SESSION_DIR",
+      aliases: [],
+      type: :string,
+      default: nil,
+      doc:
+        "Lemon's omp history directory (default: Lemon state dir/omp/sessions). Set to omp to use omp's own default.",
+      secret?: false,
+      required?: false,
+      area: :omp,
+      apps: [:lemon_omp]
+    },
+    %{
       name: :omp_agent_dir,
       env_var: "PI_CODING_AGENT_DIR",
       aliases: [],

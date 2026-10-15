@@ -15,6 +15,10 @@ defmodule LemonOmp.LiveSmokeTest do
     agent_dir = System.get_env("LEMON_OMP_LIVE_AGENT_DIR") || real_agent_dir!()
     previous = System.get_env("PI_CODING_AGENT_DIR")
     System.put_env("PI_CODING_AGENT_DIR", agent_dir)
+    previous_session_dir = System.get_env("LEMON_OMP_SESSION_DIR")
+    System.delete_env("LEMON_OMP_SESSION_DIR")
+    session_dir = Path.join(tmp_dir!("lemon_omp_live_history"), "sessions")
+    put_app_env(:session_dir, session_dir)
 
     on_exit(fn ->
       close_all_sessions()
@@ -22,6 +26,10 @@ defmodule LemonOmp.LiveSmokeTest do
       if previous,
         do: System.put_env("PI_CODING_AGENT_DIR", previous),
         else: System.delete_env("PI_CODING_AGENT_DIR")
+
+      if previous_session_dir,
+        do: System.put_env("LEMON_OMP_SESSION_DIR", previous_session_dir),
+        else: System.delete_env("LEMON_OMP_SESSION_DIR")
     end)
 
     model = System.get_env("LEMON_OMP_LIVE_MODEL") || @free_model
@@ -30,7 +38,7 @@ defmodule LemonOmp.LiveSmokeTest do
     assert {_, 0} = System.cmd("git", ["init", "--quiet", cwd])
     File.write!(Path.join(cwd, "README.md"), "Tiny omp smoke workspace.\n")
     pin_free_models!(%{cwd: cwd, model: model, agent_dir: agent_dir})
-    {:ok, cwd: cwd, model: model, agent_dir: agent_dir}
+    {:ok, cwd: cwd, model: model, agent_dir: agent_dir, session_dir: session_dir}
   end
 
   test "real omp catalog includes the free smoke model" do
@@ -93,17 +101,17 @@ defmodule LemonOmp.LiveSmokeTest do
     wait_until(fn -> not os_alive?(os_pid) end, 20_000)
     omp_id = first["ompSessionId"]
 
-    assert {:ok, sessions} =
-             LemonOmp.discover(ctx.cwd, sessions_dir: Path.join(ctx.agent_dir, "sessions"))
-
-    assert Enum.any?(sessions, &(&1["ompSessionId"] == omp_id))
+    assert {:ok, sessions} = LemonOmp.discover(ctx.cwd)
+    assert Enum.any?(sessions, &(&1["ompSessionId"] == omp_id and &1["source"] == "lemon"))
+    assert Enum.any?(File.ls!(ctx.session_dir), &String.ends_with?(&1, "_#{omp_id}.jsonl"))
+    assert Bitwise.band(File.stat!(ctx.session_dir).mode, 0o777) == 0o700
 
     assert {:ok, resumed} =
              LemonOmp.start(%{
                cwd: ctx.cwd,
                model: ctx.model,
                thinking: "off",
-               resume: omp_id,
+               resume: String.slice(omp_id, 0, 12),
                prompt: "Use write to create resumed.txt containing exactly back. Then stop."
              })
 
@@ -340,6 +348,12 @@ defmodule LemonOmp.LiveSmokeTest do
       assert ended["worktree"]["dirty"] > 0
       assert File.dir?(ended["worktree"]["path"])
       wait_until(fn -> not os_alive?(os_pid) end, 20_000)
+      assert {:ok, sessions} = LemonOmp.discover(ctx.cwd)
+
+      assert Enum.any?(sessions, fn session ->
+               session["ompSessionId"] == wire["ompSessionId"] and
+                 session["source"] == "lemon" and session["worktree"]["path"] == wire["cwd"]
+             end)
     end
   end
 
@@ -494,31 +508,15 @@ defmodule LemonOmp.LiveSmokeTest do
   end
 
   defp transcript_tail(wire, ctx) do
-    sessions_dir = Path.join(ctx.agent_dir, "sessions")
-
-    with {:ok, sessions} <- LemonOmp.discover(wire["cwd"], sessions_dir: sessions_dir),
-         %{"cwd" => cwd} <-
-           Enum.find(sessions, &(&1["ompSessionId"] == wire["ompSessionId"])),
-         {canonical, 0} <- System.cmd("realpath", [cwd], stderr_to_stdout: true) do
-      canonical
-      |> String.trim()
-      |> LemonOmp.SessionFiles.candidate_dir_names(wire["cwd"])
-      |> Enum.find_value(fn name ->
-        dir = Path.join(sessions_dir, name)
-
-        with {:ok, names} <- File.ls(dir),
-             name when is_binary(name) <-
-               Enum.find(names, &String.ends_with?(&1, "_#{wire["ompSessionId"]}.jsonl")),
-             path = Path.join(dir, name),
-             {:ok, %{size: size}} <- File.stat(path),
-             {:ok, io} <- File.open(path, [:read, :binary]) do
-          tail = :file.pread(io, max(size - 8_192, 0), 8_192)
-          File.close(io)
-          tail
-        else
-          _ -> nil
-        end
-      end)
+    with {:ok, names} <- File.ls(ctx.session_dir),
+         name when is_binary(name) <-
+           Enum.find(names, &String.ends_with?(&1, "_#{wire["ompSessionId"]}.jsonl")),
+         path = Path.join(ctx.session_dir, name),
+         {:ok, %{size: size}} <- File.stat(path),
+         {:ok, io} <- File.open(path, [:read, :binary]) do
+      tail = :file.pread(io, max(size - 8_192, 0), 8_192)
+      File.close(io)
+      tail
     else
       other -> {:not_discovered, other}
     end
