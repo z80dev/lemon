@@ -12,6 +12,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   session-local JSONL log, with timestamp and optional tool name. It requires
   no approval by default and makes no network requests.
 
+---
+
+## [2026.10.11]
+
 - Read `path:conflicts` to index Git conflict regions, then resolve a session-scoped
   `conflict://N` with `write` and ours/theirs/base/both expansion tokens. Stale ids
   are rejected after file changes.
