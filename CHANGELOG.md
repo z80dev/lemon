@@ -10,6 +10,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Added
 
+- Add opt-in `[runtime.tools.bash.interceptor]` dedicated-tool routing with
+  configurable rules, session-tool availability checks and piped-stdin exemptions,
+  applied before foreground, background and named-service launches.
 - Layer language-server defaults with global/project
   `[runtime.tools.lsp.servers.<id>]` overrides, custom servers, disabling,
   initialization options and environment settings across catalog consumers.
