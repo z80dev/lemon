@@ -88,6 +88,68 @@ defmodule CodingAgent.Session.EventHandlerTest do
     assert map_size(metadata) == 2
   end
 
+  test "persists tool completion with timing and classification, never arguments or results", %{
+    state: state,
+    callbacks: callbacks
+  } do
+    id = "run-#{LemonCore.Id.uuid()}"
+    state = Map.put(state, :run_id, id)
+
+    state =
+      EventHandler.handle(
+        {:tool_execution_start, "call", "bash", %{command: "private-argument"}},
+        state,
+        callbacks
+      )
+
+    state =
+      Map.put(state, :tool_started_at, %{"call" => System.monotonic_time(:millisecond) - 25})
+
+    result = %{
+      content: [%{text: "private-result api_key=private-secret"}],
+      details: %{error_type: :tool_task_timeout}
+    }
+
+    state =
+      EventHandler.handle({:tool_execution_end, "call", "bash", result, true}, state, callbacks)
+
+    assert state.tool_started_at == %{}
+    assert [event] = Introspection.list(run_id: id, event_type: :tool_call_completed)
+    assert event.payload.tool_call_id == "call"
+    assert event.payload.tool_name == "bash"
+    assert event.payload.ok == false
+    assert event.payload.duration_ms >= 25
+    assert event.payload.error == "tool_task_timeout"
+    refute inspect(event) =~ "private"
+
+    assert Map.keys(event.payload) |> Enum.sort() == [
+             :duration_ms,
+             :error,
+             :ok,
+             :tool_call_id,
+             :tool_name
+           ]
+  end
+
+  test "successful tools have no error and missing dispatch timing stays unknown", %{
+    state: state,
+    callbacks: callbacks
+  } do
+    id = "run-#{LemonCore.Id.uuid()}"
+    state = Map.put(state, :run_id, id)
+
+    EventHandler.handle(
+      {:tool_execution_end, "call", "read", %{content: "private"}, false},
+      state,
+      callbacks
+    )
+
+    assert [event] = Introspection.list(run_id: id, event_type: :tool_call_completed)
+    assert event.payload.ok == true
+    assert event.payload.duration_ms == nil
+    assert event.payload.error == nil
+  end
+
   describe "handle/3" do
     test "{:agent_start} returns state unchanged", %{state: state, callbacks: callbacks} do
       result = EventHandler.handle({:agent_start}, state, callbacks)

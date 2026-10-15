@@ -138,6 +138,7 @@ bot_token_secret = "telegram_bot_token"
 # and ignores every chat (it only answers /whoami and a pairing hint).
 allowed_chat_ids = [12345678]
 # allow_all_chats = true         # explicit opt-out: accept every chat when allowed_chat_ids is empty
+# unauthorized_dm_behavior = "pair" # opt-in owner-approved codes for unknown human DMs
 default_account_id = "default"   # optional account for ./bin/lemon send account-scoped lookups
 default_chat_id = 12345678       # optional default for ./bin/lemon send --to telegram
 default_thread_id = 35           # optional forum topic/thread
@@ -150,6 +151,7 @@ default_channel_id = 123456789012345678
 allowed_channel_ids = [123456789012345678]
 deny_unbound_channels = true
 # allowed_guild_ids = [123456789012345678] # optional additional restriction
+# unauthorized_dm_behavior = "pair" # opt-in; DMs require an explicit allowed_channel_ids entry
 
 [gateway.xmtp]
 env = "production"                  # production | dev | local
@@ -2356,6 +2358,46 @@ an enabled, unpaired Telegram adapter as a failure (`channels.telegram.allowlist
 In group chats (`group`, `supergroup`, `channel` peers) the router requires an approval
 for every `bash`, `write`, `edit`, `patch`, and `hashline_edit` call,
 because any member can prompt the agent.
+
+## Telegram and Discord DM pairing codes
+
+Set `unauthorized_dm_behavior = "pair"` in `[gateway.telegram]` or
+`[gateway.discord]`, then restart Lemon. An unknown human DM receives an
+eight-character code and asks the owner to run:
+
+```bash
+lemon pairing list
+lemon pairing approve telegram <CODE>
+# Or: lemon pairing approve discord <CODE>
+lemon pairing deny telegram <CODE>
+```
+
+The default, `"ignore"`, preserves existing behavior: Telegram's empty-allowlist
+setup hint remains rate-limited, non-allowlisted chats are dropped, and Discord
+retains its configured guild/channel restrictions. In `"pair"` mode, Discord DMs
+require an explicit channel allowlist entry even if the allowlist was absent.
+Groups, guild channels, bots, callbacks and slash-command interactions do not mint
+codes. Telegram `/whoami` continues to answer without authorization.
+
+Codes expire in one hour, are single-use and platform-bound, and only their
+SHA-256 digests are stored. Each platform admits at most three pending requests.
+Repeated DMs reuse the pending request and receive at most one code reply every
+ten minutes. After a runtime restart a pending code is still approvable, but cannot
+be displayed again because plaintext is never persisted; wait for expiry if lost.
+`list` shows platform, masked chat ID, display name and age, never codes. Names are
+untrusted: confirm the sender out of band before approving.
+
+Only the local operator CLI approves; the runtime list/consume method requires
+operator pairing scope and a direct loopback connection. Chats cannot approve
+themselves. Approval consumes the code and appends the chat ID to the user config's
+Telegram `allowed_chat_ids` or Discord `allowed_channel_ids` through the same
+TOML patcher as gateway setup. It does not loosen guild restrictions for guild
+traffic; an explicitly allowed DM can operate independently of guild membership.
+Project config overrides still take precedence. **Restart Lemon after approval**:
+the config watcher reloads canonical config but existing adapters retain their
+startup authorization state. No automatic confirmation is sent. If config writing
+fails after consumption, fix the config and ask for a fresh request.
+
 
 ## Trigger Mode (Mentions-Only)
 

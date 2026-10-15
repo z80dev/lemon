@@ -10,6 +10,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Assert LSP owner cleanup by the exact managed server ID rather than a global
+  active-count delta that races unrelated idle-server cleanup.
+
 - Keep Telegram `/model` reply-keyboard choices stable for the picker conversation
   without repeating model/credential discovery on every navigation step.
 
@@ -39,6 +42,12 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   conversation when clicked. It loads Codex-format pets (V1 and V2), imported from
   a folder, ZIP or HTTPS URL with size, dimension and path validation; pet
   packages are images only and never run code.
+
+- Inspect per-run lifecycle, tool outcomes, child tasks and usage with
+  `lemon runs show <runId>` and TUI `/runs <runId>`, backed by redacted completion events.
+
+- Opt-in, expiring Telegram/Discord DM pairing codes with local-owner approval
+  through `lemon pairing`, replacing manual allowlist edits.
 
 - Discord voice notes and audio attachments can use the shared voice transcription
   settings, with bounded CDN downloads and URL fallback on failure.

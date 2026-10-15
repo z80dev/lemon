@@ -198,6 +198,21 @@ defmodule LemonCli.CommandRegistry do
       ]
     },
     %{
+      name: "pairing",
+      summary: "Review and approve channel pairing requests",
+      usage:
+        "lemon pairing list | approve <telegram|discord> <CODE> | deny <telegram|discord> <CODE>",
+      subcommands: [
+        %{name: "list", summary: "List pending requests without codes"},
+        %{name: "approve", summary: "Consume a code and allow its chat"},
+        %{name: "deny", summary: "Consume a code without allowing its chat"}
+      ],
+      options: [],
+      details: [
+        "Local operator only. Approval updates the user gateway config; restart the runtime to apply the allowlist."
+      ]
+    },
+    %{
       name: "doctor",
       summary: "Run diagnostics or write a support bundle",
       usage: "lemon doctor [options]",
@@ -435,9 +450,9 @@ defmodule LemonCli.CommandRegistry do
     },
     %{
       name: "runs",
-      summary: "Inspect recent or active runtime runs",
-      usage: "lemon runs [list|active] [options]",
-      subcommands: subcommands(~w(list active)),
+      summary: "Inspect runtime runs and per-run timelines",
+      usage: "lemon runs [list|active] [options] | lemon runs show <runId> [--json]",
+      subcommands: subcommands(~w(list active show)),
       options: [
         option("--status S", ["--status"], "completed, aborted, crashed, or error (recent only)"),
         option("--session KEY", ["--session"], "Filter session key"),
@@ -447,7 +462,7 @@ defmodule LemonCli.CommandRegistry do
         option("--json", ["--json"], "Emit JSON")
       ],
       details: [
-        "Requires a running runtime; never starts one. Recent filters inspect at most 200 returned history rows. Active lists in-flight sessions."
+        "Requires a running runtime; never starts one. Recent filters inspect at most 200 returned history rows. Active lists in-flight sessions. Show renders a redacted per-run timeline with relative times, tool outcomes, subagents and usage (latest 500 entries)."
       ]
     },
     %{
