@@ -11,8 +11,28 @@ struct LemonBotiOSApp: App {
     @UIApplicationDelegateAdaptor(LemonBotAppDelegate.self) private var delegate
     @State private var store = LemonBotiOSApp.makeStore()
     var body: some Scene {
-        WindowGroup { NativeLemonBotView(store: store, delegate: delegate) }
+        WindowGroup {
+            #if DEBUG
+            if let scene = renderScene {
+                if store.account != nil { LemonBotSnapshotScene.view(for: scene, store: store) }
+                else { ProgressView("Loading fixture…") }
+            } else {
+                NativeLemonBotView(store: store, delegate: delegate)
+            }
+            #else
+            NativeLemonBotView(store: store, delegate: delegate)
+            #endif
+        }
     }
+
+    #if DEBUG
+    private var renderScene: LemonBotSnapshotScene? {
+        let arguments = ProcessInfo.processInfo.arguments
+        guard arguments.contains("-LBFixtures"), let index = arguments.firstIndex(of: "-LBRenderScene"),
+              arguments.indices.contains(index + 1) else { return nil }
+        return LemonBotSnapshotScene.allCases.first { $0.slug == arguments[index + 1] }
+    }
+    #endif
 
     private static func makeStore() -> LemonBotStore {
         #if DEBUG

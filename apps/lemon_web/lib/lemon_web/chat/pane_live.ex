@@ -28,8 +28,9 @@ defmodule LemonWeb.Chat.PaneLive do
 
   require Logger
 
-  alias LemonCore.{Bus, NodeRegistry, SessionKey}
   alias LemonControlPlane.EventBridge
+  alias LemonCore.{Bus, NodeRegistry, SessionKey}
+  alias LemonCore.Bus.Delivery
 
   alias LemonWeb.Chat.{
     Backend,
@@ -758,7 +759,7 @@ defmodule LemonWeb.Chat.PaneLive do
 
   @impl true
   def handle_info({:lemon_bus_delivery, gate, message}, socket) do
-    if LemonCore.Bus.Delivery.matches?(socket.assigns.bus_delivery, gate),
+    if Delivery.matches?(socket.assigns.bus_delivery, gate),
       do: handle_info(message, socket),
       else: {:noreply, socket}
   end
@@ -1069,7 +1070,7 @@ defmodule LemonWeb.Chat.PaneLive do
 
   defp subscribe_delivery(key) do
     delivery =
-      LemonCore.Bus.Delivery.new(self(),
+      Delivery.new(self(),
         tagged: true,
         max_queue: 256,
         max_bytes: 65_536,
@@ -1082,7 +1083,7 @@ defmodule LemonWeb.Chat.PaneLive do
 
   defp replace_delivery(socket) do
     if socket.assigns.bus_delivery do
-      LemonCore.Bus.Delivery.close(socket.assigns.bus_delivery)
+      Delivery.close(socket.assigns.bus_delivery)
       Enum.each(delivery_topics(socket.assigns.session_key), &Bus.unsubscribe/1)
     end
 

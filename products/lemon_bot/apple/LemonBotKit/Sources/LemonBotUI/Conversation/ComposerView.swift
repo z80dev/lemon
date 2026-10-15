@@ -82,7 +82,7 @@ public struct ComposerView: View {
             .confirmationDialog("Attach pasted files to this conversation?", isPresented: Binding(get: { !pastedFiles.isEmpty }, set: { if !$0 { pastedFiles = [] } })) {
                 Button("Attach \(pastedFiles.count) \(pastedFiles.count == 1 ? "file" : "files")") { let urls = pastedFiles; pastedFiles = []; Task { await attach(urls) } }
                 Button("Cancel", role: .cancel) { pastedFiles = [] }
-            } message: { Text(pastedFiles.map(\.lastPathComponent).joined(separator: "\n")) }
+            } message: { Text(pastedFileSummary(pastedFiles)) }
             .task(id: conversationID) { await loadReferences() }
             .onAppear { platform("stagedFiles") }
             .onReceive(NotificationCenter.default.publisher(for: Notification.Name("LemonBot.platformStagedFilesChanged"))) { notice in
@@ -111,7 +111,6 @@ public struct ComposerView: View {
     private var sendDisabled: Bool {
         !online || action.inFlight || unresolvedAction || pendingMessageNonce != nil || (draft.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && draft.attachmentIDs.isEmpty && draft.fileURLs.isEmpty)
     }
-    private var multiline: Bool { draft.text.contains("\n") || draft.text.count > 70 }
     private var compactKeyboardLayout: Bool {
         #if os(iOS)
         verticalSizeClass == .compact
@@ -147,12 +146,12 @@ public struct ComposerView: View {
     }
 
     private var pill: some View {
-        let shape = RoundedRectangle(cornerRadius: multiline ? 22 : 24, style: .continuous)
+        let shape = RoundedRectangle(cornerRadius: 22, style: .continuous)
         return HStack(alignment: .bottom, spacing: 6) {
             plusMenu
             messageInput.padding(.vertical, 7)
             Button { platform("dictation") } label: { Image(systemName: "mic").font(.system(size: 14, weight: .medium)) }
-                .buttonStyle(GhostCircleButtonStyle(size: 32, filled: false))
+                .buttonStyle(GhostCircleButtonStyle(size: 32, filled: false, minimumTouchSize: LBMetric.composerHitSize))
                 .keyboardShortcut("d", modifiers: .command).disabled(action.inFlight)
                 .accessibilityLabel("Dictate").help("Dictate (⌘D)")
             primaryButton
@@ -169,12 +168,14 @@ public struct ComposerView: View {
         if draftIsEmpty && voiceAllowed {
             Button { platform("voice") } label: {
                 Image(systemName: "waveform").font(.system(size: 14, weight: .bold)).foregroundStyle(onTint).frame(width: 32, height: 32).background(tint, in: Circle())
+                    .composerTouchTarget()
             }
             .buttonStyle(.plain).disabled(!online).opacity(online ? 1 : 0.5)
             .accessibilityLabel("Voice chat").help("Start a live voice chat")
         } else {
             Button { Task { await send() } } label: {
                 Image(systemName: "arrow.up").font(.system(size: 14, weight: .bold)).foregroundStyle(onTint).frame(width: 32, height: 32).background(tint, in: Circle())
+                    .composerTouchTarget()
             }
             .buttonStyle(.plain).keyboardShortcut(.return, modifiers: .command)
             .disabled(sendDisabled).opacity(sendDisabled ? 0.5 : 1)
@@ -206,6 +207,7 @@ public struct ComposerView: View {
         } label: {
             Image(systemName: "plus").font(.system(size: 14, weight: .semibold)).foregroundStyle(LB.ink)
                 .frame(width: 32, height: 32).background(LB.fill, in: Circle()).contentShape(Circle())
+                .composerTouchTarget()
         }
         .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
         .accessibilityLabel("Add attachment, reference or delivery option")
@@ -544,6 +546,17 @@ public struct ComposerView: View {
         receipt = recorded; unconfirmedDraft = nil
         action.receipt = nil
     }
+}
+
+/// Keep confirmation dialogs bounded even when the clipboard contains many files.
+func pastedFileSummary(_ urls: [URL]) -> String {
+    let names = urls.prefix(3).map { url in
+        let name = url.lastPathComponent
+        guard name.count > 80 else { return name }
+        return String(name.prefix(56)) + "…" + String(name.suffix(23))
+    }
+    let remaining = urls.count - names.count
+    return (names + (remaining > 0 ? ["and \(remaining) more"] : [])).joined(separator: "\n")
 }
 private enum ComposerError: LocalizedError { case message(String); var errorDescription: String? { if case .message(let value) = self { return value }; return nil } }
 
