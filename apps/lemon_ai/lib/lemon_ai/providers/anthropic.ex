@@ -255,21 +255,29 @@ defmodule LemonAi.Providers.Anthropic do
     |> Enum.find_value(&env_value/1)
   end
 
-  defp provider_env_vars(:kimi), do: ["KIMI_API_KEY", "MOONSHOT_API_KEY", "ANTHROPIC_API_KEY"]
-  defp provider_env_vars("kimi"), do: ["KIMI_API_KEY", "MOONSHOT_API_KEY", "ANTHROPIC_API_KEY"]
-  defp provider_env_vars(:opencode), do: ["OPENCODE_API_KEY", "ANTHROPIC_API_KEY"]
-  defp provider_env_vars("opencode"), do: ["OPENCODE_API_KEY", "ANTHROPIC_API_KEY"]
-  defp provider_env_vars(:minimax), do: ["MINIMAX_API_KEY", "ANTHROPIC_API_KEY"]
-  defp provider_env_vars("minimax"), do: ["MINIMAX_API_KEY", "ANTHROPIC_API_KEY"]
+  defp provider_env_vars(provider)
+       when provider in [:kimi, :kimi_coding, "kimi", "kimi_coding"],
+       do: ["KIMI_API_KEY", "MOONSHOT_API_KEY"]
 
-  defp provider_env_vars(:minimax_cn),
-    do: ["MINIMAX_CN_API_KEY", "MINIMAX_API_KEY", "ANTHROPIC_API_KEY"]
+  defp provider_env_vars(provider)
+       when provider in [:opencode, :opencode_go, "opencode", "opencode_go"],
+       do: ["OPENCODE_API_KEY"]
 
-  defp provider_env_vars("minimax_cn"),
-    do: ["MINIMAX_CN_API_KEY", "MINIMAX_API_KEY", "ANTHROPIC_API_KEY"]
+  defp provider_env_vars(provider) when provider in [:minimax, "minimax"],
+    do: ["MINIMAX_API_KEY"]
 
-  defp provider_env_vars("anthropic"), do: ["ANTHROPIC_API_KEY"]
-  defp provider_env_vars(provider) when is_atom(provider), do: ["ANTHROPIC_API_KEY"]
+  defp provider_env_vars(provider) when provider in [:minimax_cn, "minimax_cn"],
+    do: ["MINIMAX_CN_API_KEY", "MINIMAX_API_KEY"]
+
+  defp provider_env_vars(provider) when provider in [:github_copilot, "github_copilot"],
+    do: ["GITHUB_COPILOT_API_KEY"]
+
+  defp provider_env_vars(provider) when provider in [:anthropic, "anthropic"],
+    do: ["ANTHROPIC_API_KEY"]
+
+  defp provider_env_vars(provider) when is_atom(provider),
+    do: LemonAi.Models.Presets.env_vars(provider)
+
   # Other binary providers are user-configured custom endpoints: they only get
   # their own credential, never the ambient Anthropic key.
   defp provider_env_vars(_provider), do: []

@@ -80,11 +80,14 @@ Behavior:
 - `status` lists every registered server as installed, missing (with its
   install hint) or running for this session.
 
-One initialized server is kept per (session, server, workspace root). Opened
-documents are re-synced (`didChange` with a new version) whenever their bytes
-on disk change. Servers stop when the owning session ends or after 10 idle
-minutes. A missing server binary is reported with its install hint. `lsp` is
-in the dangerous-tool set because some servers build or run project code.
+One initialized server is kept per (durable session, server, workspace root).
+Opened documents are re-synced (`didChange` with a new version) whenever their
+bytes on disk change. Successful native turns hand off the server before the
+transient session process stops, and the resumed turn binds the same durable
+identity. Explicit abort/stop, logical reset/delete, unexpected owner death and
+10 idle minutes dispose of it. A missing server binary is reported with its
+install hint. `lsp` is in the dangerous-tool set because some servers build or
+run project code.
 
 ## `lsp_diagnostics` Tool
 

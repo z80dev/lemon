@@ -16,10 +16,12 @@ defmodule CodingAgent.Tools.Eval do
   the `bash` cap: the tail is kept and the full output is spilled to a file
   with an `artifact://` handle.
 
-  Options: `:session_id` / `:session_pid` own the kernels (they die with the
-  session pid), `:eval_idle_timeout_ms` (default 30 minutes) kills idle
-  kernels, and `:eval_runtimes` (`%{"py" => exe, "js" => exe}`) overrides the
-  runtime executables.
+  Options: `:session_id` is the durable kernel identity and `:session_pid`
+  binds its current owner. Successful native turn handoff detaches that owner
+  before stop; unexpected owner death still disposes of the kernel.
+  `:eval_idle_timeout_ms` (default 30 minutes) kills idle kernels, and
+  `:eval_runtimes` (`%{"py" => exe, "js" => exe}`) overrides the runtime
+  executables.
   """
 
   alias CodingAgent.Eval.{Kernel, KernelSupervisor, Output}

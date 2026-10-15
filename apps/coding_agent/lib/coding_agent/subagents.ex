@@ -369,25 +369,25 @@ defmodule CodingAgent.Subagents do
 
   defp parse_yaml(yaml) do
     # Preserve pairs so duplicate fields cannot silently change security settings,
-    # then read values as plain maps so nested output schemas keep their shape.
-    case read_yaml(yaml, maps_as_keywords: true) do
-      {:ok, pairs} when is_list(pairs) ->
-        cond do
-          not Enum.all?(pairs, &match?({key, _} when is_binary(key), &1)) ->
-            {:error, "frontmatter must be a mapping"}
+    # then map the same parsed document so nested output schemas keep their shape.
+    with {:ok, document} <- read_yaml(yaml),
+         pairs when is_list(pairs) <-
+           YamlElixir.Mapper.process(document, maps_as_keywords: true) do
+      cond do
+        not Enum.all?(pairs, &match?({key, _} when is_binary(key), &1)) ->
+          {:error, "frontmatter must be a mapping"}
 
-          length(Enum.uniq_by(pairs, &elem(&1, 0))) != length(pairs) ->
-            {:error, "duplicate frontmatter fields"}
+        length(Enum.uniq_by(pairs, &elem(&1, 0))) != length(pairs) ->
+          {:error, "duplicate frontmatter fields"}
 
-          true ->
-            case read_yaml(yaml) do
-              {:ok, fields} when is_map(fields) -> {:ok, fields}
-              _ -> {:error, "frontmatter must be a mapping"}
-            end
-        end
-
-      _ ->
-        {:error, "malformed YAML frontmatter"}
+        true ->
+          case YamlElixir.Mapper.process(document, []) do
+            fields when is_map(fields) -> {:ok, fields}
+            _ -> {:error, "frontmatter must be a mapping"}
+          end
+      end
+    else
+      _ -> {:error, "malformed YAML frontmatter"}
     end
   rescue
     _ -> {:error, "malformed YAML frontmatter"}
@@ -405,10 +405,8 @@ defmodule CodingAgent.Subagents do
   # deadlocked: the controller waited on the session supervisor, which waited
   # on this init. yamerl is already running as a yaml_elixir dependency, so
   # parse with yamerl directly.
-  defp read_yaml(yaml, options \\ []) do
-    options = Keyword.merge(options, @yaml_options)
-    document = yaml |> :yamerl_constr.string(options) |> List.last()
-    {:ok, YamlElixir.Mapper.process(document, options)}
+  defp read_yaml(yaml) do
+    {:ok, yaml |> :yamerl_constr.string(@yaml_options) |> List.last()}
   catch
     _, _ -> {:error, :malformed}
   end

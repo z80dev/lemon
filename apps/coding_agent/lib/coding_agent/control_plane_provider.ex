@@ -479,8 +479,8 @@ defmodule CodingAgent.ControlPlaneProvider do
               {:ok, CodingAgent.Session.Planning.status(nil)}
 
             {:error, :session_not_found} when action == :enter ->
-              with {:ok, session} <- create_native_session(session_key, cwd),
-                   {:ok, plan, _} <- CodingAgent.Session.Planning.transition(session, :enter, []) do
+              with {:ok, session} <- create_native_session(session_key, cwd, :enter) do
+                plan = CodingAgent.Session.Planning.status(session)
                 {:ok, plan}
               end
 
@@ -494,19 +494,24 @@ defmodule CodingAgent.ControlPlaneProvider do
     end
   end
 
-  defp create_native_session(session_key, cwd) do
+  defp create_native_session(session_key, cwd, action \\ :status) do
     session = CodingAgent.SessionManager.new(cwd)
-    path = CodingAgent.SessionManager.session_file_path(cwd, session.header.id)
-    session = CodingAgent.SessionManager.persist(session, path)
 
-    with :ok <-
-           LemonCore.ChatStateStore.put(session_key, %LemonCore.ChatState{
-             last_engine: "lemon",
-             last_resume_token: session.header.id,
-             updated_at: System.system_time(:millisecond)
-           }),
-         :ok <- register_native_index(session_key) do
-      {:ok, session}
+    # Resolve the initial planning role before publishing a resume token or
+    # creating a journal. Invalid configuration leaves creation untouched.
+    with {:ok, _plan, session} <- CodingAgent.Session.Planning.transition(session, action, []) do
+      path = CodingAgent.SessionManager.session_file_path(cwd, session.header.id)
+      session = CodingAgent.SessionManager.persist(session, path)
+
+      with :ok <-
+             LemonCore.ChatStateStore.put(session_key, %LemonCore.ChatState{
+               last_engine: "lemon",
+               last_resume_token: session.header.id,
+               updated_at: System.system_time(:millisecond)
+             }),
+           :ok <- register_native_index(session_key) do
+        {:ok, session}
+      end
     end
   end
 

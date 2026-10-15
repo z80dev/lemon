@@ -10,6 +10,15 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Failed selected OAuth logins cannot borrow static or environment credentials
+  or transmit encoded OAuth records. Public selected-credential callbacks preserve
+  `nil` refusal rather than reviving a cached token; successful access-token
+  authority and explicit credential-pool/default fallback remain supported.
+- Anthropic-compatible providers no longer implicitly send another provider's
+  `ANTHROPIC_API_KEY`; exact-target API-key and keyless behavior remain supported.
+- Stopped native plan transitions journal the configured `@plan` model and
+  preserve the prior execution model. Restart uses that journal, and exit or
+  approval restores the prior model without rewriting invalid transitions.
 - Provider sign-in status and logout distinguish missing credentials from
   encrypted-store, journal and master-key failures. Failed reads refuse the
   command without deleting logins or clearing the selected OAuth authority;
@@ -645,7 +654,6 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 ## [2026.10.4]
 
 ### Added
-
 - Opt-in `runtime.tools.disclosure.profile = "coding"` keeps a coding core
   directly exposed and defers optional registry-resolved built-ins behind
   `tool_search` / `tool_invoke`. Explicit pins and per-session overrides support

@@ -278,6 +278,23 @@ defmodule LemonCore.Config.Validator do
     |> validate_compaction_thresholds(Map.get(agent, :compaction))
   end
 
+  defp validate_compaction_thresholds(errors, %{} = compaction) do
+    percent = Map.get(compaction, :threshold_percent)
+
+    errors =
+      if is_nil(percent) or (is_integer(percent) and percent in 1..100),
+        do: errors,
+        else: ["agent.compaction.threshold_percent: must be an integer from 1 to 100" | errors]
+
+    validate_positive_integer(
+      errors,
+      Map.get(compaction, :threshold_tokens),
+      "agent.compaction.threshold_tokens"
+    )
+  end
+
+  defp validate_compaction_thresholds(errors, _compaction), do: errors
+
   defp validate_task_config(errors, nil), do: errors
 
   defp validate_task_config(errors, task) when is_map(task) do

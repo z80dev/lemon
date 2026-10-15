@@ -253,9 +253,13 @@ defmodule LemonAgent.Loop.Streaming do
             get_key_fn ->
               provider = config.model.provider
 
-              get_key_fn.(provider) ||
-                if(is_atom(provider), do: get_key_fn.(Atom.to_string(provider))) ||
-                config.stream_options.api_key
+              resolved_key =
+                get_key_fn.(provider) ||
+                  if(is_atom(provider), do: get_key_fn.(Atom.to_string(provider)))
+
+              if config.stream_options.api_key_authoritative,
+                do: resolved_key,
+                else: resolved_key || config.stream_options.api_key
           end
 
         options = %{config.stream_options | api_key: api_key}

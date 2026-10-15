@@ -67,6 +67,7 @@ defmodule LemonAgent.ModelRuntime.StreamOptionsTest do
       stream_timeout: 123,
       tool_choice: :auto,
       api_key: "fake-key",
+      api_key_authoritative: true,
       access_token: "fake-token",
       service_account_json: "fake-service",
       project: "old-project",
@@ -89,6 +90,7 @@ defmodule LemonAgent.ModelRuntime.StreamOptionsTest do
 
     clean = LemonAgent.ModelRuntime.StreamOptions.sanitize_for_provider_switch(options)
     assert clean.api_key == nil
+    refute clean.api_key_authoritative
     assert clean.access_token == nil
     assert clean.service_account_json == nil
     assert clean.project == nil
@@ -104,6 +106,7 @@ defmodule LemonAgent.ModelRuntime.StreamOptionsTest do
     clean =
       LemonAgent.ModelRuntime.StreamOptions.sanitize_for_provider_switch(%{
         "api_key" => "fake-key",
+        "api_key_authoritative" => true,
         "access_token" => "fake-token",
         "headers" => %{"authorization" => "fake-token"},
         "provider_options" => %{openai: %{api_key: "fake-key"}},
@@ -112,6 +115,7 @@ defmodule LemonAgent.ModelRuntime.StreamOptionsTest do
       })
 
     assert clean.api_key == nil
+    refute clean.api_key_authoritative
     assert clean.access_token == nil
     assert clean.headers == %{}
     assert clean.provider_options == %{}

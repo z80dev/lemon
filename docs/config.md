@@ -294,10 +294,17 @@ that ultimately reaches a concrete model; it cannot fall back to itself.
 Omitting `task.model` preserves parent inheritance unless `model_roles.task` is
 configured; an explicit task model takes precedence.
 
-Entering plan mode automatically selects `model_roles.plan` only when configured.
+Entering plan mode automatically selects `model_roles.plan` only when configured,
+whether the native session is live, stopped, or being created before its first run.
+The stopped path uses the saved session's project configuration and journals the
+planning model without starting an agent or requesting a model response. Project
+overrides still take precedence over user-global roles; a profile's bootstrap
+workspace does not replace the session's project configuration.
 Exiting or approving a plan restores the execution model recorded on entry,
-including after durable session resume. `@commit` is available to explicit model
-selectors and delegated tasks; it does not automatically invoke a commit tool.
+including after durable session resume. Invalid planning models fail before the
+mode, selected model, branch, or new-session resume binding changes. `@commit` is
+available to explicit model selectors and delegated tasks; it does not
+automatically invoke a commit tool.
 
 Compaction and abandoned-branch summaries choose `model_roles.compaction` first,
 then `model_roles.smol` **only if configured**, otherwise the active session model.
@@ -1057,6 +1064,11 @@ selected as `<id>:<model>` or `<id>/<model>` in `default_model`, `/model`,
 `model_roles`, task/compaction selectors and `provider_routing.fallback_providers`,
 and they appear in the TUI `/model` picker once the provider has a credential.
 
+Qualified `[defaults] model` selectors resolve their provider before default
+provider routing, including when no `[defaults] provider` is set. Provider-native
+IDs such as `qwen3:32b`, and models explicitly listed under the selected provider,
+remain that provider's model IDs rather than being split as new selectors.
+
 ```toml
 [providers.my-gateway]
 api = "openai_completions"        # openai_completions | openai_responses |
@@ -1600,6 +1612,12 @@ profile. Host calls retain the catalog's wrapped implementation and the current
 plan-mode gate; reload replaces that inventory so removed authority is not kept
 alive by an old host lookup. Neither WASM tools nor the disclosure bridge tools
 can be host targets, preventing recursive calls through the deferred catalog.
+
+Target closures are wrapped before disclosure partitions the catalog. Direct,
+bridged and host execution restore secret arguments before target hooks and
+approval checks. Plan-mode bridge and host writes reuse the session's restricted
+write/edit wrappers, including the final directory check after hook replacement;
+schema deferral does not create another execution authority.
 
 The tool list is computed at session start and on extension reload, never per
 turn. `extensions_status` reports the active profile, the exposed and deferred
