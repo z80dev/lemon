@@ -13,11 +13,16 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 - Rotate to healthy alternate credentials or fallback candidates immediately on
   rate limits; bench quota-exhausted credentials for 15 minutes to one hour.
 
----
-
-## [2026.10.13]
+- Native task and swarm subagent spend now counts toward parent run/session token
+  and dollar caps without duplicating per-session usage reports; exhausted parents
+  cannot spawn further children.
 
 ### Added
+
+- Dollar-capped sessions warn when the active model has no known catalog pricing.
+
+- Forward Telegram photos and image documents and Discord CDN image attachments
+  to vision-capable models, with bounded downloads and text fallback on failure.
 
 - Share one initialized language-server process per server/workspace/config
   across sessions, with reference-counted owners, configurable idle shutdown,
@@ -79,6 +84,34 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   no approval by default and makes no network requests.
 
 ### Fixed
+
+- Escape angle-bracket placeholders in generated configuration registry prose so
+  VitePress treats paths such as `<root>/agent-tools/node/bin/node` as text, not
+  unclosed HTML tags, while preserving existing inline code and alias line breaks.
+
+- Restore the LSP Dialyzer gate by explicitly discarding idle timer cancellation
+  results and removing an unreachable nil working-directory branch.
+
+- Re-enter setup for incomplete saved configurations on interactive launch, and
+  recognize keyless local providers and environment-only credentials in readiness,
+  doctor, and setup verification.
+
+- Make injected SVG rasterizer fixtures portable across BSD and GNU base64, and
+  explicitly exclude only the named real-rasterizer test when librsvg is absent.
+
+- Synchronize task-surface regression fixtures with the owning run's delta
+  admission before flushing a reused conversation coalescer.
+
+- Keep missing local provider API keys out of shared circuit-breaker health, so
+  they cannot block other sessions that have valid credentials.
+
+- Isolate intentional provider outages in ownership probes so their circuit and
+  rate-limit state cannot contaminate later cases or repeated runs.
+
+- Gate manual product releases on the source commit before bumping versions or
+  pushing tags, build artifacts from the prepared cut, and skip existing CalVer
+  tags without deleting unpublished orphan tags.
+
 
 - Bind TUI fake control-plane listeners to their advertised IPv4 loopback address,
   preventing random test ports from reaching unrelated IPv4 services and timing

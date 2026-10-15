@@ -96,6 +96,60 @@ defmodule CodingAgent.Session.BudgetLedgerTest do
     end)
   end
 
+  test "descendant ledger persists separately without changing provider usage", %{tmp_dir: dir} do
+    session = SessionManager.new(dir)
+    session = BudgetLedger.append(session, %{tokens: 10, cost_usd: 0.25})
+    session = BudgetLedger.append_children(session, %{tokens: 20, cost_usd: 0.5})
+    assert BudgetLedger.restore(session) == %{tokens: 10, cost_usd: 0.25}
+    assert BudgetLedger.restore_children(session) == %{tokens: 20, cost_usd: 0.5}
+    path = Path.join(dir, "inclusive-budget.jsonl")
+    :ok = SessionManager.save_to_file(path, session)
+    assert {:ok, restored} = SessionManager.load_from_file(path)
+    assert BudgetLedger.restore(restored) == %{tokens: 10, cost_usd: 0.25}
+    assert BudgetLedger.restore_children(restored) == %{tokens: 20, cost_usd: 0.5}
+  end
+
+  test "native child usage enforces ancestor caps while both usage ledgers stay local", %{
+    tmp_dir: dir
+  } do
+    parent = start_session(dir, %{max_session_cost_usd: 0.25})
+    parent_scope = Session.get_state(parent).budget_limits.scope
+
+    child =
+      start_session(dir, %{},
+        parent_budget_scope: LemonAgent.BudgetScope.attachment(parent_scope),
+        run_id: "live-child"
+      )
+
+    prompt(child)
+    assert_receive :provider_called
+    assert %{scope: :session, used: 0.25} = LemonAgent.BudgetScope.check(parent_scope)
+    assert Session.get_state(child).budget_usage == %{tokens: 10, cost_usd: 0.25}
+    state = Session.get_state(parent)
+    assert state.budget_usage == %{tokens: 0, cost_usd: 0.0}
+    assert BudgetLedger.restore_children(state.session_manager) == %{tokens: 10, cost_usd: 0.25}
+    path = state.session_file
+    GenServer.stop(parent)
+    resumed = start_session(dir, %{max_session_cost_usd: 0.25}, session_file: path)
+    assert budget_stop?(prompt(resumed), :session, 0.25)
+    refute_receive :provider_called
+  end
+
+  test "unpriced dollar-capped model warns visibly but still runs", %{tmp_dir: dir} do
+    session = start_session(dir, %{max_run_cost_usd: 1.0})
+    events = prompt(session)
+
+    assert Enum.any?(events, fn
+             {:session_event, _, {:budget_warning, %{message: message}}} ->
+               message =~ "no known catalog price"
+
+             _ ->
+               false
+           end)
+
+    assert_receive :provider_called
+  end
+
   test "zero configured cap blocks requests and explicit session limits override settings", %{
     tmp_dir: dir
   } do

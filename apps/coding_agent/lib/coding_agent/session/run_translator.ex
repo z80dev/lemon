@@ -381,7 +381,8 @@ defmodule CodingAgent.Session.RunTranslator do
   end
 
   def handle_event(%__MODULE__{} = t, {:error, {:budget_exceeded, details}, partial_state}) do
-    t = %{t | budget_stop: details, budget_usage: Map.take(details, [:run_usage, :session_usage])}
+    usage = Map.get(details, :provider_usage, Map.take(details, [:run_usage, :session_usage]))
+    t = %{t | budget_stop: details, budget_usage: usage}
     emit_completed_error(t, details.message, partial_state)
   end
 

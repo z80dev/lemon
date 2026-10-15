@@ -2,11 +2,11 @@ name: Release
 
 # Builds, verifies, and publishes a versioned Lemon product release.
 #
-# A manual dispatch from main is the one-click path: it validates and consumes
-# CHANGELOG.md's Unreleased notes, derives the next CalVer (or uses an explicit
-# version), bumps first-party version metadata, commits and tags that cut, then
-# builds and publishes it. A directly pushed `v*.*.*` tag remains supported for
-# recovery and externally prepared releases.
+# A manual dispatch from main first gates the source commit, then consumes
+# CHANGELOG.md's Unreleased notes, derives the next unused CalVer (or uses an
+# explicit version), commits and tags that cut, and builds the prepared ref.
+# A directly pushed `v*.*.*` tag remains supported for recovery and externally
+# prepared releases.
 #
 # The GITHUB_TOKEN push from the preparation job does not recursively start a
 # second tag-push workflow. Release runs are serialized so two automatic cuts
@@ -60,7 +60,8 @@ jobs:
   # ── Prepare a manual release commit and tag ──────────────────────────────────
   prepare:
     name: Prepare release
-    if: github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/')
+    needs: [preflight-beam, preflight-clients]
+    if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/') && (inputs.skip_preflight || (needs.preflight-beam.result == 'success' && needs.preflight-clients.result == 'success')) }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -79,6 +80,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          ref: ${{ github.sha }}
 
       - name: Prepare version and changelog
         id: release
@@ -167,17 +169,12 @@ jobs:
           fi
           echo "mix.exs version matches tag: $MIX_VERSION"
 
-  # ── Deterministic release gates for the exact release commit ─────────────────
-  # Pushes to main run every CI job, so when CI already passed on the release
-  # commit, or on the ancestor it differs from only by release metadata
-  # (version fields and changelogs), these lanes would re-prove the same code.
-  # scripts/ci_verified_commit decides; anything else runs the full gates.
+  # ── Gate the source commit before any release metadata or tag is pushed ──────
+  # Reuse existing CI coverage where possible; otherwise run the full gates.
+  # Tag pushes and tag-ref dispatches gate their existing source commit too.
   preflight-beam:
     name: Preflight BEAM
-    needs: validate
-    # Tag-ref dispatches and tag pushes skip `prepare`; the implicit success()
-    # check covers skipped ancestors, so every downstream job gates explicitly.
-    if: ${{ !cancelled() && needs.validate.result == 'success' && !inputs.skip_preflight }}
+    if: ${{ !cancelled() && !inputs.skip_preflight }}
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     permissions:
@@ -185,13 +182,13 @@ jobs:
       actions: read
 
     steps:
-      - name: Checkout release tag
+      - name: Checkout source commit
         uses: actions/checkout@v4
         with:
-          ref: ${{ needs.validate.outputs.tag }}
+          ref: ${{ github.sha }}
           fetch-depth: 50
 
-      - name: Find CI coverage for the release commit
+      - name: Find CI coverage for the source commit
         id: ci
         env:
           GH_TOKEN: ${{ github.token }}
@@ -226,8 +223,7 @@ jobs:
 
   preflight-clients:
     name: Preflight clients
-    needs: validate
-    if: ${{ !cancelled() && needs.validate.result == 'success' && !inputs.skip_preflight }}
+    if: ${{ !cancelled() && !inputs.skip_preflight }}
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     permissions:
@@ -235,13 +231,13 @@ jobs:
       actions: read
 
     steps:
-      - name: Checkout release tag
+      - name: Checkout source commit
         uses: actions/checkout@v4
         with:
-          ref: ${{ needs.validate.outputs.tag }}
+          ref: ${{ github.sha }}
           fetch-depth: 50
 
-      - name: Find CI coverage for the release commit
+      - name: Find CI coverage for the source commit
         id: ci
         env:
           GH_TOKEN: ${{ github.token }}
