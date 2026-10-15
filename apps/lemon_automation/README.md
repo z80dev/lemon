@@ -1,5 +1,7 @@
 # LemonAutomation
 
+<!-- Maintenance: strict Credo cleanup keeps runtime behavior unchanged. -->
+
 Cron scheduling, heartbeats, scheduled-result delivery, and automation orchestration for agents in the Lemon umbrella project. This OTP application manages the full lifecycle of scheduled and manually triggered prompt or operator-command runs, from cron expression parsing through job execution, completion tracking, chat delivery, and event broadcasting.
 
 ## Architecture Overview
