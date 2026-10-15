@@ -31,7 +31,7 @@ import { CLOSE_ACTION, pickerAction } from "@oh-my-pi/pi-tui/native/picker";
 import { ProcessTerminal, type Terminal } from "@oh-my-pi/pi-tui/terminal";
 import { Container, TUI } from "@oh-my-pi/pi-tui/tui";
 import * as postmortem from "@oh-my-pi/pi-utils/postmortem";
-import { indentBlock, pick, pickNumber, pickString } from "./commands/format.ts";
+import { indentBlock, pickNumber, pickString } from "./commands/format.ts";
 import { type CommandHost, type CommandRegistry, createCommandRegistry } from "./commands/index.ts";
 import { contextWindowFromCache } from "./commands/model.ts";
 import {

@@ -178,11 +178,18 @@ export class QueuePanelComponent implements Component {
 			}
 			if (item.submission) {
 				const identity = item.submission.runId ?? item.submission.requestId;
-				children.push(node("badge", {
-					text: identity.replace(/\p{Cc}/gu, ""),
-					tone: "warning",
-					title: `Request ${item.submission.requestId}`,
-				}, undefined, "submission"));
+				children.push(
+					node(
+						"badge",
+						{
+							text: identity.replace(/\p{Cc}/gu, ""),
+							tone: "warning",
+							title: `Request ${item.submission.requestId}`,
+						},
+						undefined,
+						"submission",
+					),
+				);
 			}
 			if (index === 0 && items.length > 1) {
 				children.push(
@@ -284,7 +291,9 @@ export class QueuePanelComponent implements Component {
 			);
 			if (item.submission) {
 				const identity = item.submission.runId ?? item.submission.requestId;
-				rows.push(theme.fg("dim", clamp(`    outcome unknown · ${identity.replace(/\p{Cc}/gu, "")}`)));
+				rows.push(
+					theme.fg("dim", clamp(`    outcome unknown · ${identity.replace(/\p{Cc}/gu, "")}`)),
+				);
 			}
 		}
 		const hidden = this.#items.length - (end - start);

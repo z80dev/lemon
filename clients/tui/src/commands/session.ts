@@ -53,7 +53,6 @@ const MAX_EXPORT_BYTES = 750_000;
 /** How many stored sessions the merged list asks for. */
 export const SESSION_LIST_LIMIT = 100;
 
-
 export interface SessionRow {
 	key: string;
 	agentId?: string;

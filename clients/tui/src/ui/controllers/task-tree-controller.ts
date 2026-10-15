@@ -67,10 +67,16 @@ export class TaskTreeController {
 				sessionId: typeof item.sessionId === "string" ? item.sessionId : undefined,
 				parentRunId: typeof item.parentRunId === "string" ? item.parentRunId : undefined,
 				status:
-					status === "completed" || status === "error" || status === "aborted" ||
-					status === "queued" || status === "running" || status === "cancelling"
+					status === "completed" ||
+					status === "error" ||
+					status === "aborted" ||
+					status === "queued" ||
+					status === "running" ||
+					status === "cancelling"
 						? status
-						: status === "cancelled" ? "aborted" : "unknown",
+						: status === "cancelled"
+							? "aborted"
+							: "unknown",
 				progress: typeof item.answer === "string" ? taskDisplayText(item.answer, true) : undefined,
 			});
 		}

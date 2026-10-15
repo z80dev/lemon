@@ -108,7 +108,9 @@ export class TaskTreeComponent implements Component {
 				role: "omp.task.agent",
 				...(task.agent ? { agent: task.agent } : {}),
 				...(task.description && task.description !== id ? { task: task.description } : {}),
-				...(task.status !== "unknown" ? { stats: task.finishedAt !== undefined ? { took: ms } : { age: ms } } : {}),
+				...(task.status !== "unknown"
+					? { stats: task.finishedAt !== undefined ? { took: ms } : { age: ms } }
+					: {}),
 				...(task.status === "unknown"
 					? { badges: [{ text: "outcome unknown", tone: "warning" as const }] }
 					: task.status === "cancelling"
@@ -168,7 +170,12 @@ export class TaskTreeComponent implements Component {
 			const branch = depth > 0 ? "└─ " : "";
 			const marker = selected ? theme.cursor : " ";
 			const seconds = Math.floor(taskElapsedMs(task, now) / 1000);
-			const elapsed = task.status === "unknown" ? "" : seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m${seconds % 60}s`;
+			const elapsed =
+				task.status === "unknown"
+					? ""
+					: seconds < 60
+						? `${seconds}s`
+						: `${Math.floor(seconds / 60)}m${seconds % 60}s`;
 			const agent = task.agent ? ` @${task.agent}` : "";
 			const id = taskDisplayText(task.taskId);
 			const label = task.description || id;

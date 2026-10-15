@@ -320,12 +320,26 @@ test("snapshot replacement converges child terminal and unknown identities witho
 	tree.reconcile("chat", {
 		status: "ok",
 		items: [
-			{ taskId: "fixed", runId: "child-run", parentRunId: "parent-run", status: "completed", terminal: true },
-			{ taskId: "lost", runId: null, sessionId: "child-session", status: "unknown", terminal: false, answer: `\u001b[31m${"x".repeat(1024)}\u001b[0m` },
+			{
+				taskId: "fixed",
+				runId: "child-run",
+				parentRunId: "parent-run",
+				status: "completed",
+				terminal: true,
+			},
+			{
+				taskId: "lost",
+				runId: null,
+				sessionId: "child-session",
+				status: "unknown",
+				terminal: false,
+				answer: `\u001b[31m${"x".repeat(1024)}\u001b[0m`,
+			},
 		],
 	});
 	expect(tree.store.items("chat").map((task) => [task.taskId, task.status])).toEqual([
-		["fixed", "completed"], ["lost", "unknown"],
+		["fixed", "completed"],
+		["lost", "unknown"],
 	]);
 	expect(tree.ticking).toBe(false);
 	expect(tree.panel.render(120).join("\n")).toContain("0 active");

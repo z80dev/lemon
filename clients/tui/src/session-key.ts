@@ -27,5 +27,7 @@ export function newSessionKey(cwd?: string): string {
 export function assertSessionDirectory(key: string, cwd: string): void {
 	const peer = /^agent:[^:]+:tui:local:dm:(.+)$/.exec(key)?.[1];
 	if (peer === undefined || peer.startsWith(`${cwdSessionTag(cwd)}-`)) return;
-	throw new Error("this TUI session belongs to another or unknown directory; reopen it from its original directory");
+	throw new Error(
+		"this TUI session belongs to another or unknown directory; reopen it from its original directory",
+	);
 }

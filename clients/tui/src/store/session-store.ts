@@ -146,7 +146,8 @@ export class SessionStore {
 				identity.branchId !== current.branchId ||
 				identity.revision !== current.revision ||
 				identity.attempt !== current.attempt)
-		) return false;
+		)
+			return false;
 		return Boolean(runId && runId === current.runId && !this.isRunTerminal(runId));
 	}
 
