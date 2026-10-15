@@ -130,6 +130,23 @@ against the current raw file bytes before any patch writes. If the file changed,
 re-read it before applying the patch. Files not previously read in the session
 can still be patched.
 
+## JSON queries
+
+`read data.json?q=.users[]%20%7C%20select(.age%20>%2018)%20%7C%20.name`
+evaluates a native Elixir jq subset. Filters may also be supplied directly
+when they contain no query-escaped characters; percent-encode literal `+` and
+other URL-sensitive characters. No shell or optional `jq` installation is used.
+Existing literal filenames containing `?` always take precedence.
+
+Supported filters: `.`, `.a.b`, `.[0]` (negative indexes count from the end),
+`.[]`, `.a[]`, pipes (`|`), `keys`, `length`, and
+`select(.field == value)` with `==`, `!=`, `<` or `>` and a JSON scalar literal.
+Missing fields/indexes yield JSON null; iteration produces a stream of JSON
+values. Scalar ordering is null, false, true, numbers, strings. Unsupported
+syntax and type-incompatible operations return an explicit error, not a fallback.
+Results are immutable, numbered JSON text using the ordinary read line/byte
+budget and `offset`/`limit` continuation. An empty stream displays `(no results)`.
+
 
 ## SQLite databases
 
