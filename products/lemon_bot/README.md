@@ -8,8 +8,8 @@ Bots remain active when clients close. They stop being able to execute when thei
 
 - [API and screens](contracts/api.md): HTTP/auth/ACL/nonce/replay, MCP tools, voice, integrations, deployment/provider prerequisites and all client destinations.
 - [Wire types](contracts/protocol.ts): dependency-free request/response/resources/events, imported by backend and SDK; Swift mirrors these discriminated unions and nullability.
-- [Transcript/cards](contracts/cards.md): all entry kinds, adaptation of 27 Grok typed messages and resolving state machines.
-- [Behavioral coverage](contracts/coverage.md): every one of 101 Grok use cases, plus the 16 adopted Muse features and explicit provider/host prerequisites. This is design coverage, not a claim of exercised tests.
+- [Transcript/cards](contracts/cards.md): transcript entry kinds and interactive card behavior.
+- [Behavioral coverage](contracts/coverage.md): supported use cases and provider/host prerequisites.
 
 ## Architecture
 
@@ -22,7 +22,7 @@ Bots remain active when clients close. They stop being able to execute when thei
                                   └─ webhooks /hooks/:routineId             └─ bots execute here
 ```
 
-The backend holds owner-bound accounts/sessions/devices/pairing, Bot-group UI metadata, transcript/cards, immutable attachments, idempotency receipts, durable event cursor, notifications and explicit integrations. Every live Bot is accessible only to its actual human owner; workspace/admin metadata never grants live Bot work or private content. Lemon owns profiles, router/session/run execution, cron, host I/O/PTY/secrets and profile memory. No second runtime/router/cron/auth service. One operator connection reconnects/reconciles without replaying uncertain mutations; live deltas map only to authorized owner runs/conversations. Product event seq is independent of Lemon's connection seq.
+The backend stores accounts, sessions, device pairing, Bot groups, transcripts, attachments, notifications and integrations. Each Bot’s private content and live work belong to its human owner. Lemon provides execution, scheduling and machine access. Clients receive product sessions; the backend keeps the operator credential private.
 
 | Component | Location | Role |
 |---|---|---|
@@ -34,9 +34,9 @@ The backend holds owner-bound accounts/sessions/devices/pairing, Bot-group UI me
 | macOS | `apple/LemonBotMac/` | SwiftUI workspace, optional selected-bot compact companion and configurable global summon/PTT mini-composer |
 | iOS | `apple/LemonBotiOS/` | SwiftUI own-Bot workspace, QR scanner/paste-link pairing, Keychain connection restore, camera/files, explicit voice and share extension |
 
-Every Bot maps to a placed `lb-<stable-slug>` profile and canonical owner main chat; tasks use independent sessions, and groups contain 2–6 Bots all owned by the same human with a Bot-scoped session per participant. No live Team Bots, managers/publishing/required flags, other-human group membership, Team DM or private fallback. Every chat/cron/channel/handoff/helper retains actual actor.userId === Bot.ownerUserId on assigned owned machine; no borrowed owner/admin authority. Machine row is durable nodeId, not transient socket. Memory is owned profile memory.* only; no Team/private-note store or scope. Identity/Job/Memory remain distinct with preference-change inspection/undo. Declarative workspace/public templates create separate reviewed owned copies, never live access.
+Every Bot has an assigned machine, a Lemon profile and an owner conversation. Tasks use independent sessions; groups coordinate 2–6 Bots owned by the same person. Identity, Job and Memory can be reviewed separately, including preference changes and undo. Workspace/Public templates create reviewed copies owned by the recipient.
 
-Owner-first setup is a focused named assistant, actual machine and optional phone connection, not enterprise-first onboarding or extra consent layers. Existing optional configured operator identity/policy/export/provider/host controls never grant another live Bot; missing prerequisites are honestly unavailable. No Lemon subscription/paywall/entitlement selling; usage shows actual provider spend/limits. Screen streaming/demo recording, proprietary hardware, ambient mic, automatic social linking, payment wallet and vendor cloud-agent/1Password are excluded. Actual written skills, host terminal/files/human steps and owned integrations preserve work outcomes.
+Setup starts with a named assistant and a machine, with optional phone pairing. Usage shows provider spend and limits. Integrations and host controls depend on configured providers and permissions.
 
 ## Running an integrated checkout
 
@@ -67,7 +67,7 @@ bun run --cwd products/lemon_bot/web dev
 bun run --cwd products/lemon_bot/web build
 ```
 
-Web dev `/v1`, `/hooks` and `/mcp` proxy to backend origin; Vite dev socket is not product realtime. Web never connects directly to Lemon `/ws`.
+The web dev server runs at `http://127.0.0.1:4081`. Its `/v1` (including realtime WebSocket), `/hooks` and `/mcp` requests proxy to `http://127.0.0.1:4080`; set `LEMON_BOT_DEV_BACKEND` in the web development environment to use another backend origin. The Vite dev socket is separate from product realtime. Web never connects directly to Lemon `/ws`.
 
 4. Native apps: generate `apple/project.yml` with XcodeGen, open `apple/LemonBot.xcodeproj`, choose LemonBotMac or LemonBotiOS, and configure signing/App Group/APNs for installed devices. macOS uses the product backend URL; iPhone uses the QR/paste-link flow below to persistently attach to that desktop cluster. `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer` is the reference toolchain. Share extension exchanges only explicit user-selected content through App Group, never operator authority. Credentials use Keychain. Task `lemonbot://` links contain resource IDs only; short-lived pairing QR is a separate secret-bearing account-security flow.
 
@@ -91,25 +91,34 @@ Required variables fail startup on omission/invalid configuration (no fake demo 
 | `LEMON_BOT_OPERATOR_TOKEN` | Required | Existing daemon operator token, server-only |
 | `LEMON_BOT_PUBLIC_URL` | Required | Reachable HTTPS product origin, HTTP loopback for development |
 | `LEMON_BOT_DATA_DIR` | Required | Private persistent SQLite/blobs/keys/config root |
+| `LEMON_BOT_RUNTIME_LAUNCHER` | Optional | Absolute existing executable Lemon launcher; enables owner-only start/stop/restart for a loopback controller. Invalid paths fail backend startup; remote controllers remain uncontrollable. |
 | `LEMON_BOT_HOST` / `LEMON_BOT_PORT` | `127.0.0.1` / `4080` | Bun listener binding; expose only behind trusted TLS boundary |
 | `LEMON_BOT_ENCRYPTION_KEY` | Optional, otherwise private generated key | Stable 32-byte base64 master key for product session/integration credentials; never returned to client |
-| `LEMON_BOT_CONFIG_FILE` | Optional, otherwise DATA_DIR/config.json | Operator provider/redirect/origin/host-management configuration (§11 API), secret references not model prompts |
+| `LEMON_BOT_CONFIG_FILE` | Optional, otherwise DATA_DIR/config.json | Private operator provider, redirect, origin and host-management configuration |
+| `LEMON_BOT_TRUSTED_OVERLAY` | `false` | Set exactly `true` only for off-loopback HTTP/WS protected by an operator-trusted encrypted overlay |
+| `LEMON_BOT_WEB_ROOT` | Optional | Override source `web/dist` or packaged `bot/web` assets directory |
 | `LEMON_BOT_APNS_KEY_ID` | Optional set, all APNs fields together | APNs token-auth key identifier |
 | `LEMON_BOT_APNS_TEAM_ID` | APNs set | Apple developer team identifier |
 | `LEMON_BOT_APNS_PRIVATE_KEY_PATH` | APNs set | Owner-readable `.p8` key, never committed |
 | `LEMON_BOT_APNS_TOPICS` | APNs set | Comma-separated allowlisted native bundle topics |
+| `LEMON_BOT_APNS_ENVIRONMENTS` | `sandbox,production` | Comma-separated allowed Apple push environments |
+| `LEMON_BOT_WEB_PUSH_ORIGINS` | Built-in push-service origins | Comma-separated exact HTTPS push-service origins; see [providers](providers.md) |
 | `LEMON_BOT_VAPID_PUBLIC_KEY` | Optional pair | Base64url Web Push public key published via capabilities |
 | `LEMON_BOT_VAPID_PRIVATE_KEY` | VAPID pair | Server-only Web Push private key |
 | `LEMON_BOT_VAPID_SUBJECT` | VAPID pair | `mailto:` or HTTPS contact URI |
 | `LEMON_BOT_STT_PROVIDER` | Optional `openai` / `deepgram` | Real backend transcription provider; absent means capability false, on-device dictation still usable |
-| `LEMON_BOT_TTS_PROVIDER` | Optional `openai` / `elevenlabs` / `google` | Real backend speech provider; no silent-wav fake fallback |
+| `LEMON_BOT_TTS_PROVIDER` | Optional `openai` / `elevenlabs` / `google` | Backend speech provider |
 | `LEMON_BOT_OPENAI_API_KEY` | When OpenAI voice/image selected | Server provider credential, separate from swarm/local destination provider auth |
 | `LEMON_BOT_DEEPGRAM_API_KEY` | Deepgram STT | Server transcription credential |
 | `LEMON_BOT_ELEVENLABS_API_KEY` | ElevenLabs TTS | Server synthesis credential |
 | `LEMON_BOT_GOOGLE_SERVICE_ACCOUNT_PATH` | Google TTS | Private service-account credential file |
 | `LEMON_BOT_IMAGE_PROVIDER` | Optional `openai` | Real avatar generation provider; absent keeps character/upload but generate unavailable |
 
-Optional push/voice/image config publishes accurate capabilities; foreground/inbox notifications still work without push. Runtime-owned model/provider auth must be set **on each destination machine**, not sent as product client metadata. OIDC discovery/client credential refs, SCIM integration tokens, SMTP/IMAP/provisioning provider, Slack OAuth/signing/app installation, X OAuth/mention webhook/signature/public handle, GitHub/Linear/Sentry/PagerDuty verification keys/event allowlists, audit destinations, network/egress/host driver manifests and required runtime destination allowlists are configured in the private config file according to api.md. Providers need real credentials/permissions; unavailable cases return capability_unavailable, never imitation accounts/sends.
+### Optional providers and integrations
+
+Push, voice and image providers publish their configured capabilities. Foreground/inbox notifications work without push. See the [provider reference](providers.md) for push origins, voice credentials and provider prerequisites.
+
+Model/provider authentication for Bot execution belongs on each destination machine. Configure identity, email, channels, external event sources, audit destinations and host-management providers in the private operator configuration described in the [API reference](contracts/api.md). Each integration requires actual provider credentials and permissions.
 
 Clients discover actual provider IDs and secret-free prerequisites through `GET /v1/integration-providers`; configured is distinct from a connected account. Optional private configuration includes `connectorProviders` (exact MCP origins/OAuth/shared-service-account permission), `approvedPrivateMcpOrigins` and `reviewedSetupManifests` (exact approved scripts/groups/machines/secret-name references). Omitted lists are empty; dependent operations fail explicitly until operator-reviewed configuration exists. Discovery never exposes secrets, private scripts or raw host command manifests.
 Channel/email/X setup screens also consume typed `/v1/channels/providers`, `/v1/email/providers` and `/v1/x/provider` projections. Own channel-account linking starts through `/v1/channels/principal-links/start`, proves actual external sender then confirms the reviewed identity; `/v1/event-sources/:source` defines exact supported trigger/filter schemas.
@@ -131,6 +140,8 @@ Automated host management, setup, network/egress application and read-only drive
 
 Never approve an action just because a card says "working". Read Bot/machine/scope/consequences and exact target; Send on outward drafts is always explicit. Delete conversation, forget selected memory, disconnect connector, reset selected Bot scopes and detach machine are distinct previewed actions. Product deletion does not automatically revoke external provider sessions or erase operator backups.
 
-## Integration verification
+## Contributor checks
 
-Release verification covers protocol/SDK/backend/native response conformance; owner-only refusal across CRUD/chat/cron/channel/handoff/helpers; nonce/revision/cursor and unknown-effect fencing; real node placement, streaming, files, terminal and profile memory; QR preview, claim, approval, lost-response same-session replay, original-deadline expiry, Keychain reopen and device revocation; null paired expiry versus bounded normal sessions; APNs/Web Push/voice/task deep links and owner client screens. Exercise a real Bot response with a supported model and a provider account with available quota: an accepted run, online host or provider quota refusal is not proof of a successful answer. Optional provider/host/admin adapters require their actual external prerequisites. The coverage matrix describes design scope, not exercised verification.
+From `products/lemon_bot/backend`, run `bun install`, `bun test` and `bun run typecheck`. From `products/lemon_bot/sdk/ts`, run `bun install`, `bun test` and `bun run check`.
+
+Live integration checks require an enrolled machine and configured providers. Exercise a completed Bot response, phone pairing and revocation, and the provider-specific operations you deploy.

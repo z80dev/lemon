@@ -105,6 +105,7 @@ config :lemon_core, :env_registries, [
   LemonAutomation.Env,
   LemonBrowser.Env,
   LemonChannels.Env,
+  LemonComputerUse.Env,
   LemonControlPlane.Env,
   LemonEvals.Env,
   LemonGateway.Env,

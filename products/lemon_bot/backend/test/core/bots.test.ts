@@ -44,6 +44,7 @@ function fixture() {
   const methods = ['profiles.create', 'profiles.update', 'profiles.get', 'profiles.sync', 'profiles.sync.status', 'profiles.delete', 'mcp.execution_names', 'profile.followup.admission.set', 'runs.followup.lineage.get', 'runs.active.list', 'memory.transfer', 'memory.transfer.status', 'memory.list', 'memory.delete', 'memory.add', 'nodes.list', 'node.capabilities.get', 'node.secrets.set', 'node.secrets.receipt', 'node.secrets.delete', 'node.host.info', 'node.profile.paths', 'node.fs.stat', 'node.fs.write', 'node.fs.delete', 'cron.pause', 'cron.resume', 'cron.add', 'cron.remove', 'sessions.delete'];
   f.services.lemon = {
     connected: true, methods,
+    controller: { url: 'ws://127.0.0.1:4040/ws', state: 'connected', connectedAtMs: 1, lastDisconnectedAtMs: null, lastError: null, nextRetryAtMs: null, methodCount: 0 }, reconnect() {},
     async call<T>(method: string, params: Record<string, unknown> = {}, options?: { mutation?: boolean }): Promise<T> {
       calls.push({ method, params, mutation: options?.mutation === true }); reject?.(method, params);
       let value: unknown;
@@ -324,11 +325,11 @@ describe('section rank and provider prerequisites', () => {
     expect(f.store.metadata<P.SidebarState>(`botSidebar:alice:${bot.id}`)?.sectionId).toBeNull();
     expect(f.store.metadata<P.SidebarState>(`botSidebar:admin:${bot.id}`)?.sectionId).toBe('another-section');
   });
-  test('missing avatar provider reports the exact prerequisite and creates no artifact', async () => {
+  test('missing avatar provider gives owner guidance and creates no artifact', async () => {
     const f = fixture(), bot = f.bot(), previous = process.env.LEMON_BOT_IMAGE_PROVIDER;
     delete process.env.LEMON_BOT_IMAGE_PROVIDER;
     try {
-      await expect(f.request('POST', `/v1/bots/${bot.id}/avatar/generate`, { clientNonce: nonce('avatar_prerequisite'), prompt: 'A friendly character' })).rejects.toMatchObject({ code: 'capability_unavailable', retrySafe: true });
+      await expect(f.request('POST', `/v1/bots/${bot.id}/avatar/generate`, { clientNonce: nonce('avatar_prerequisite'), prompt: 'A friendly character' })).rejects.toMatchObject({ code: 'capability_unavailable', retrySafe: true, message: 'Image generation is not enabled on this Lemon Bot server. Ask the operator to configure an image provider.' });
       expect(f.store.list<P.Attachment>('attachments')).toEqual([]);
     } finally { if (previous === undefined) delete process.env.LEMON_BOT_IMAGE_PROVIDER; else process.env.LEMON_BOT_IMAGE_PROVIDER = previous; }
   });

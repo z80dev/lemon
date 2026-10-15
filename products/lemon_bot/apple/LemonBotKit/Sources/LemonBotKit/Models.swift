@@ -1564,6 +1564,172 @@ public struct Capabilities: Codable, Hashable {
     }
 }
 
+public enum ControllerLinkState: String, Codable, Hashable { case connected, connecting, reconnecting, rejected, stopped }
+public enum RuntimeAction: String, Codable, Hashable { case start, stop, restart }
+public struct InstanceStatus: Codable, Hashable {
+    public var measuredAtMs: TimestampMs
+    public var backend: InstanceBackend
+    public var controller: InstanceController
+    public var lemon: InstanceLemonStatus?
+    public var lemonUnavailableReason: String?
+    public var runtime: InstanceRuntime
+    enum CodingKeys: String, CodingKey { case measuredAtMs, backend, controller, lemon, lemonUnavailableReason, runtime }
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        measuredAtMs = try c.decode(TimestampMs.self, forKey: .measuredAtMs)
+        backend = try c.decode(InstanceBackend.self, forKey: .backend)
+        controller = try c.decode(InstanceController.self, forKey: .controller)
+        lemon = try c.decode(InstanceLemonStatus?.self, forKey: .lemon)
+        lemonUnavailableReason = try c.decode(String?.self, forKey: .lemonUnavailableReason)
+        runtime = try c.decode(InstanceRuntime.self, forKey: .runtime)
+    }
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(measuredAtMs, forKey: .measuredAtMs)
+        try c.encode(backend, forKey: .backend)
+        try c.encode(controller, forKey: .controller)
+        try c.encode(lemon, forKey: .lemon)
+        try c.encode(lemonUnavailableReason, forKey: .lemonUnavailableReason)
+        try c.encode(runtime, forKey: .runtime)
+    }
+}
+public struct InstanceBackend: Codable, Hashable {
+    public var version: String
+    public var apiVersion: Int
+    public var startedAtMs: TimestampMs
+    public var publicUrl: String
+}
+public struct InstanceControllerError: Codable, Hashable {
+    public var code: String
+    public var message: String
+    public var atMs: TimestampMs
+}
+public struct InstanceController: Codable, Hashable {
+    public var url: String
+    public var state: ControllerLinkState
+    public var connectedAtMs: TimestampMs?
+    public var lastDisconnectedAtMs: TimestampMs?
+    public var lastError: InstanceControllerError?
+    public var nextRetryAtMs: TimestampMs?
+    public var methodCount: Int
+    enum CodingKeys: String, CodingKey { case url, state, connectedAtMs, lastDisconnectedAtMs, lastError, nextRetryAtMs, methodCount }
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        url = try c.decode(String.self, forKey: .url)
+        state = try c.decode(ControllerLinkState.self, forKey: .state)
+        connectedAtMs = try c.decode(TimestampMs?.self, forKey: .connectedAtMs)
+        lastDisconnectedAtMs = try c.decode(TimestampMs?.self, forKey: .lastDisconnectedAtMs)
+        lastError = try c.decode(InstanceControllerError?.self, forKey: .lastError)
+        nextRetryAtMs = try c.decode(TimestampMs?.self, forKey: .nextRetryAtMs)
+        methodCount = try c.decode(Int.self, forKey: .methodCount)
+    }
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(url, forKey: .url)
+        try c.encode(state, forKey: .state)
+        try c.encode(connectedAtMs, forKey: .connectedAtMs)
+        try c.encode(lastDisconnectedAtMs, forKey: .lastDisconnectedAtMs)
+        try c.encode(lastError, forKey: .lastError)
+        try c.encode(nextRetryAtMs, forKey: .nextRetryAtMs)
+        try c.encode(methodCount, forKey: .methodCount)
+    }
+}
+public struct InstanceConnections: Codable, Hashable { public var active: Int; public var operators: Int; public var nodes: Int }
+public struct InstanceRuns: Codable, Hashable { public var active: Int; public var queued: Int; public var completedToday: Int }
+public struct InstanceChannels: Codable, Hashable { public var configured: [String]; public var connected: [String] }
+public struct InstanceSkills: Codable, Hashable { public var installed: Int; public var enabled: Int }
+public struct InstanceNodes: Codable, Hashable { public var total: Int; public var online: Int }
+public struct InstanceLemonStatus: Codable, Hashable {
+    public var version: String?
+    public var uptimeMs: Double?
+    public var memoryMb: Double?
+    public var connections: InstanceConnections?
+    public var runs: InstanceRuns?
+    public var activeSessions: Int?
+    public var channels: InstanceChannels?
+    public var skills: InstanceSkills?
+    public var nodes: InstanceNodes?
+    enum CodingKeys: String, CodingKey { case version, uptimeMs, memoryMb, connections, runs, activeSessions, channels, skills, nodes }
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        version = try c.decode(String?.self, forKey: .version)
+        uptimeMs = try c.decode(Double?.self, forKey: .uptimeMs)
+        memoryMb = try c.decode(Double?.self, forKey: .memoryMb)
+        connections = try c.decode(InstanceConnections?.self, forKey: .connections)
+        runs = try c.decode(InstanceRuns?.self, forKey: .runs)
+        activeSessions = try c.decode(Int?.self, forKey: .activeSessions)
+        channels = try c.decode(InstanceChannels?.self, forKey: .channels)
+        skills = try c.decode(InstanceSkills?.self, forKey: .skills)
+        nodes = try c.decode(InstanceNodes?.self, forKey: .nodes)
+    }
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(version, forKey: .version)
+        try c.encode(uptimeMs, forKey: .uptimeMs)
+        try c.encode(memoryMb, forKey: .memoryMb)
+        try c.encode(connections, forKey: .connections)
+        try c.encode(runs, forKey: .runs)
+        try c.encode(activeSessions, forKey: .activeSessions)
+        try c.encode(channels, forKey: .channels)
+        try c.encode(skills, forKey: .skills)
+        try c.encode(nodes, forKey: .nodes)
+    }
+}
+public struct InstanceRuntime: Codable, Hashable {
+    public var controllable: Bool
+    public var reason: String?
+    public var operation: RuntimeOperation?
+    enum CodingKeys: String, CodingKey { case controllable, reason, operation }
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        controllable = try c.decode(Bool.self, forKey: .controllable)
+        reason = try c.decode(String?.self, forKey: .reason)
+        operation = try c.decode(RuntimeOperation?.self, forKey: .operation)
+    }
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(controllable, forKey: .controllable)
+        try c.encode(reason, forKey: .reason)
+        try c.encode(operation, forKey: .operation)
+    }
+}
+public struct RuntimeOperation: Codable, Hashable {
+    public enum State: String, Codable, Hashable { case running, succeeded, failed }
+    public var id: String
+    public var action: RuntimeAction
+    public var state: State
+    public var startedAtMs: TimestampMs
+    public var completedAtMs: TimestampMs?
+    public var exitCode: Int?
+    public var output: String
+    enum CodingKeys: String, CodingKey { case id, action, state, startedAtMs, completedAtMs, exitCode, output }
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        action = try c.decode(RuntimeAction.self, forKey: .action)
+        state = try c.decode(State.self, forKey: .state)
+        startedAtMs = try c.decode(TimestampMs.self, forKey: .startedAtMs)
+        completedAtMs = try c.decode(TimestampMs?.self, forKey: .completedAtMs)
+        exitCode = try c.decode(Int?.self, forKey: .exitCode)
+        output = try c.decode(String.self, forKey: .output)
+    }
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(action, forKey: .action)
+        try c.encode(state, forKey: .state)
+        try c.encode(startedAtMs, forKey: .startedAtMs)
+        try c.encode(completedAtMs, forKey: .completedAtMs)
+        try c.encode(exitCode, forKey: .exitCode)
+        try c.encode(output, forKey: .output)
+    }
+}
+public struct RuntimeActionRequest: Codable, Hashable {
+    public var clientNonce: String
+    public var confirm: Bool?
+    public init(clientNonce: String, confirm: Bool? = nil) { self.clientNonce = clientNonce; self.confirm = confirm }
+}
+
 public struct Machine: Codable, Hashable, Identifiable {
     public var `id`: ID
     public var `revision`: Int

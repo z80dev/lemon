@@ -50,6 +50,7 @@ defmodule LemonCore.Quality.ArchitectureCheck do
     lemon_control_plane: ["LemonControlPlane"],
     lemon_cli: ["LemonCli"],
     lemon_core: ["LemonCore"],
+    lemon_computer_use: ["LemonComputerUse"],
     lemon_evals: ["LemonEvals"],
     lemon_gateway: ["LemonGateway"],
     lemon_honcho: ["LemonHoncho"],

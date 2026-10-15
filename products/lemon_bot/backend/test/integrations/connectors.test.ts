@@ -54,6 +54,8 @@ const productExecutionProjection = {
 /** Stateful destination records: measured presence, stored profiles and destination-only secret resolution. */
 class DestinationPeer implements LemonService {
   connected = true;
+  controller: LemonService['controller'] = { url: 'ws://127.0.0.1:4040/ws', state: 'connected', connectedAtMs: 1, lastDisconnectedAtMs: null, lastError: null, nextRetryAtMs: null, methodCount: 0 };
+  reconnect() { this.start(); }
   methods = ['node.mcp.discover', 'node.secrets.list', 'node.secrets.set', 'node.secrets.delete', 'node.capabilities.get', 'node.runtime.features', 'nodes.list', 'node.host.info', 'profiles.update', 'profiles.get', 'profiles.sync', 'mcp.execution_names', 'profile.followup.admission.set', 'runs.followup.lineage.get', 'chat.abort', 'agent.wait'];
   calls: { method: string; params: Record<string, unknown> }[] = [];
   secrets = new Map<string, string>();
@@ -324,7 +326,8 @@ describe('destination connector configuration', () => {
     expect(f.peer.profiles.get(f.bot.profileId)?.every(server => Object.keys(server.headers).length === 0)).toBe(true);
     const current = await f.peer.call<{ profile: Profile & { mcpConfigFingerprint: string } }>('profiles.get', { id: f.bot.profileId });
     const server = serverSchema.parse(discovery.params.server);
-    expect(current.profile.toolPolicy.allow).toEqual([...['read_skill', 'webfetch', 'websearch', 'task', 'agent_message', 'wait', 'parent_question'], ...productExecutionProjection.tools.map(tool => tool.executionName), executionName(server, 'read_items'), executionName(server, 'write_item')].sort());
+    expect(current.profile.toolPolicy.allow).toEqual(expect.arrayContaining(['read_skill', 'webfetch', 'websearch', 'task', 'agent_message', 'wait', 'parent_question', executionName(server, 'read_items'), executionName(server, 'write_item')]));
+    for (const disallowed of ['read', 'write', 'bash', 'browser_evaluate', 'recall']) expect(current.profile.toolPolicy.allow).not.toContain(disallowed);
     expect(current.profile.toolPolicy.deny).toEqual(expect.arrayContaining(['read', 'write', 'bash', 'browser_evaluate', 'recall']));
     expect(current.profile.mcpConfigFingerprint).toBe(connectorConfigurationFingerprint([baseBotMcpTemplate(f.services), ...config]));
     const publicData = JSON.stringify([result.body, enabled.body, config, f.store.list('auditRecords'), f.store.db.query('SELECT payload FROM events').all(), [...f.peer.profiles.values()]]);

@@ -369,7 +369,7 @@ defmodule LemonWeb.UsageLive do
   defp quota_panel(assigns) do
     ~H"""
     <div id="usage-quota">
-      <p :if={@quota in [nil, :unavailable]} class="text-[13px] text-muted">Quota status is unavailable.</p>
+      <p :if={@quota in [nil, :unavailable]} class="text-[13px] text-muted">Quota status is unavailable right now. Try again, or check /diagnostics.</p>
       <div :if={is_map(@quota)} class="space-y-4">
         <div class="flex items-center gap-2">
           <.badge tone={quota_tone(@quota.status)} icon={if @quota.status == "over_limit", do: "alert-triangle", else: "shield-check"}>
