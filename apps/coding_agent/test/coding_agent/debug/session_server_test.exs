@@ -3,6 +3,7 @@ defmodule CodingAgent.Debug.SessionServerTest do
 
   import CodingAgent.AsyncHelpers
 
+  alias CodingAgent.Debug.Client
   alias CodingAgent.Debug.SessionServer
   alias LemonAgent.AbortSignal
 
@@ -82,6 +83,147 @@ defmodule CodingAgent.Debug.SessionServerTest do
       {stat, 0} -> not String.starts_with?(String.trim(stat), "Z")
       _ -> false
     end
+  end
+
+  for kind <- ["launch", "attach"] do
+    @child_kind kind
+    test "startDebugging creates and routes to a #{@child_kind} child, cleaned up with parent",
+         ctx do
+      kind = @child_kind
+      assert {:ok, _} = launch(ctx, %{"fakeMode" => "reverse", "childRequest" => kind})
+
+      assert_eventually(fn ->
+        {:ok, %{snapshot: snapshot}} = call(ctx.key, %{action: "sessions"})
+        match?([%{status: :stopped}], snapshot.children)
+      end)
+
+      {:ok, %{snapshot: %{id: parent_id, children: [child]}}} =
+        call(ctx.key, %{action: "sessions"})
+
+      assert child.parent_id == parent_id
+      assert child.kind == String.to_existing_atom(kind)
+      assert child.program == "child"
+      child_server = SessionServer.whereis({ctx.key, String.replace_suffix(child.id, "-1", "")})
+      assert is_pid(child_server)
+      monitor = Process.monitor(child_server)
+
+      assert {:ok, %{snapshot: %{id: child_id}}} =
+               call(ctx.key, %{action: "status", debug_session_id: child.id})
+
+      assert child_id == child.id
+
+      assert {:ok, _} =
+               call(ctx.key, %{action: "step_over", debug_session_id: child.id})
+
+      assert {:ok, %{snapshot: %{stop_reason: "step"}}} =
+               call(ctx.key, %{action: "status", debug_session_id: child.id})
+
+      assert {:ok, %{snapshot: %{stop_reason: "entry"}}} =
+               call(ctx.key, %{action: "status"})
+
+      entries =
+        ctx.log |> File.read!() |> String.split("\n", trim: true) |> Enum.map(&Jason.decode!/1)
+
+      assert Enum.any?(
+               entries,
+               &match?(%{"reverse_response" => "startDebugging", "success" => true}, &1)
+             )
+
+      assert {^kind, %{"__pendingTargetId" => "target-42", "program" => "child"}} =
+               Enum.find(commands(ctx.log), fn {command, args} ->
+                 command == kind and args["program"] == "child"
+               end)
+
+      assert {:error, "Unknown debug session: missing"} =
+               call(ctx.key, %{action: "status", debug_session_id: "missing"})
+
+      assert {:ok, _} = call(ctx.key, %{action: "terminate"})
+      assert_receive {:DOWN, ^monitor, :process, ^child_server, _}, 5_000
+      assert {:ok, %{snapshot: %{children: []}}} = call(ctx.key, %{action: "sessions"})
+    end
+  end
+
+  test "server adapters connect children to the existing listener", ctx do
+    adapter =
+      adapter(ctx.log, %{"fakeMode" => "reverse"})
+      |> Map.merge(%{
+        connect_mode: :socket_server,
+        args: [@fake_adapter, ctx.log, "--listen", "{port}"]
+      })
+
+    assert {:ok, _} =
+             call(ctx.key, %{
+               action: "launch",
+               adapter: adapter,
+               program: "parent",
+               cwd: ctx.cwd,
+               args: [],
+               launch_overrides: %{}
+             })
+
+    assert_eventually(fn ->
+      {:ok, %{snapshot: snapshot}} = call(ctx.key, %{action: "sessions"})
+      match?([%{status: :stopped}], snapshot.children)
+    end)
+
+    [child] = Map.values(:sys.get_state(SessionServer.whereis(ctx.key)).children)
+    child_adapter = :sys.get_state(child).session.adapter
+    assert child_adapter.connect_mode == :remote
+    assert child_adapter.host == "127.0.0.1"
+    assert is_integer(child_adapter.port)
+    assert {:ok, _} = call(ctx.key, %{action: "terminate"})
+  end
+
+  test "invalid startDebugging requests are rejected without creating children", ctx do
+    assert {:ok, _} = launch(ctx, %{"fakeMode" => "reverse", "childRequest" => "invalid"})
+
+    assert_eventually(fn ->
+      ctx.log
+      |> File.read!()
+      |> String.split("\n", trim: true)
+      |> Enum.map(&Jason.decode!/1)
+      |> Enum.any?(&match?(%{"reverse_response" => "startDebugging", "success" => false}, &1))
+    end)
+
+    assert {:ok, %{snapshot: %{children: []}}} = call(ctx.key, %{action: "sessions"})
+  end
+
+  test "parent adapter exit tears down children", ctx do
+    assert {:ok, _} = launch(ctx, %{"fakeMode" => "reverse"})
+    parent = SessionServer.whereis(ctx.key)
+    assert_eventually(fn -> map_size(:sys.get_state(parent).children) == 1 end)
+    [child] = Map.values(:sys.get_state(parent).children)
+    ref = Process.monitor(child)
+    Client.stop(:sys.get_state(parent).session.client)
+    assert_receive {:DOWN, ^ref, :process, ^child, _}, 15_000
+    assert {:ok, %{snapshot: %{children: []}}} = call(ctx.key, %{action: "sessions"})
+  end
+
+  test "child handshake errors remain visible in sessions", ctx do
+    assert {:ok, _} =
+             launch(ctx, %{
+               "fakeMode" => "reverse",
+               "childConfiguration" => %{"fakeMode" => "fail_launch", "program" => "child"}
+             })
+
+    assert_eventually(fn ->
+      {:ok, %{snapshot: snapshot}} = call(ctx.key, %{action: "sessions"})
+      match?([%{status: :terminated, error: "cannot launch: boom"}], snapshot.children)
+    end)
+  end
+
+  test "parent termination also stops a child stuck in its initialize handshake", ctx do
+    assert {:ok, _} =
+             launch(ctx, %{
+               "fakeMode" => "reverse",
+               "childConfiguration" => %{"fakeMode" => "no_initialized", "program" => "child"}
+             })
+
+    parent = SessionServer.whereis(ctx.key)
+    [child] = Map.values(:sys.get_state(parent).children)
+    ref = Process.monitor(child)
+    assert {:ok, _} = call(ctx.key, %{action: "terminate"})
+    assert_receive {:DOWN, ^ref, :process, ^child, _}, 5_000
   end
 
   test "handshake sends pending breakpoints between initialized and configurationDone", ctx do

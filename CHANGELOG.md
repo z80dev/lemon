@@ -8,7 +8,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
-No unreleased changes yet.
+### Added
+
+- The debug tool supports adapter-requested DAP child sessions, including js-debug
+  launch/attach configurations, child session targeting, and recursive teardown.
 
 ---
 
