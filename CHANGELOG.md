@@ -21,6 +21,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Added
 
+- Provider status exposes circuit-breaker state, failure counts and recovery delay
+  without starting breakers; CLI and TUI status views surface open circuits.
+
 - Rate-limited cron failure and recovery alerts, persistent failure streaks,
   owner-chat fallback, and doctor warnings for failures without a delivery route.
 

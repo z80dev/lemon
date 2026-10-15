@@ -150,6 +150,78 @@ defmodule LemonControlPlane.Methods.StatusTest do
     refute Jason.encode!(row) =~ "/private"
   end
 
+  test "provider circuit status never starts breakers and bounds unresponsive reads" do
+    provider = "status-circuit-#{System.unique_integer([:positive])}"
+
+    config = %{
+      agent: %{default_provider: provider, default_model: "example"},
+      providers: %{provider => %{auth: "none"}}
+    }
+
+    row = fn ->
+      Enum.find(LemonControlPlane.ProviderStatus.snapshot(config), &(&1["id"] == provider))
+    end
+
+    assert row.()["circuit"]["state"] == "not_started"
+    assert LemonAi.CircuitBreaker.peek(provider) == :not_started
+
+    pid =
+      start_supervised!(
+        {LemonAi.CircuitBreaker,
+         provider: provider,
+         failure_threshold: 1,
+         recovery_timeout: 23_000,
+         monotonic_time: fn -> 1000 end}
+      )
+
+    LemonAi.CircuitBreaker.record_failure(provider, "private failure")
+
+    assert row.()["circuit"] == %{
+             "state" => "open",
+             "failureCount" => 1,
+             "timeUntilRecoveryMs" => 23_000
+           }
+
+    :sys.suspend(pid)
+
+    try do
+      assert row.()["circuit"] == %{
+               "state" => "unknown",
+               "failureCount" => nil,
+               "timeUntilRecoveryMs" => nil
+             }
+    after
+      :sys.resume(pid)
+    end
+  end
+
+  test "provider circuit status reports unknown when an existing process exits during the read" do
+    provider = "status-exiting-circuit-#{System.unique_integer([:positive])}"
+    parent = self()
+
+    start_supervised!(
+      {Task,
+       fn ->
+         {:ok, _} = Registry.register(LemonAi.CircuitBreakerRegistry, provider, nil)
+         send(parent, :registered)
+
+         receive do
+           {:"$gen_call", _from, :peek} -> :ok
+         end
+       end}
+    )
+
+    assert_receive :registered
+
+    config = %{
+      agent: %{default_provider: provider, default_model: "example"},
+      providers: %{provider => %{auth: "none"}}
+    }
+
+    row = Enum.find(LemonControlPlane.ProviderStatus.snapshot(config), &(&1["id"] == provider))
+    assert row["circuit"]["state"] == "unknown"
+  end
+
   test "projects configured providers, missing credentials, keyless endpoints and defaults offline" do
     config = %{
       agent: %{default_provider: "status-missing", default_model: "example-model"},
@@ -168,6 +240,11 @@ defmodule LemonControlPlane.Methods.StatusTest do
              "configured" => true,
              "credential" => "missing",
              "default" => true,
+             "circuit" => %{
+               "state" => "not_started",
+               "failureCount" => nil,
+               "timeUntilRecoveryMs" => nil
+             },
              "lastError" => nil
            }
 
