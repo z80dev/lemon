@@ -85,6 +85,11 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Cron restarts catch up one missed slot within a bounded grace window and retire
+  expired one-shot reminders instead of moving them to next year.
+- Cron run history is pruned hourly to 100 terminal runs per job by default,
+  preserving active attempts and pending retries.
+
 - Escape angle-bracket placeholders in generated configuration registry prose so
   VitePress treats paths such as `<root>/agent-tools/node/bin/node` as text, not
   unclosed HTML tags, while preserving existing inline code and alias line breaks.
