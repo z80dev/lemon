@@ -74,9 +74,11 @@ Usage: scripts/test <lane> [args]
 
 Canonical test lanes:
   fast       CI test lane: compile with warnings as errors, then ExUnit excluding integration (no coverage)
-  changed    Affected apps + data readers: [--base REF] [--focused] [mix test args...]
-             --focused is a quick pre-check only, not a substitute for the app run
-  premerge   Stop-on-failure diff checks: [--base REF] (default: origin/main)
+  changed    Affected apps + data readers: [--base REF] [--focused] [--narrow] [mix test args...]
+             --focused is a quick pre-check only, not a substitute for the app run; --narrow limits
+             downstream apps to test files naming a module defined in a changed file
+  premerge   Stop-on-failure diff checks: [--base REF] (default: origin/main); runs `changed --narrow`:
+             changed apps whole, downstream apps only tests naming a changed module
   quality    CI check lane: compile -Werror, format check, credo, skip-tag guard, shellcheck, launcher
              script tests, changelog guard, selector self-test, skill lint, mix lemon.quality, focused quality tests;
              [--base REF] (PR CI) limits format/credo to files changed since REF unless the diff is full scope
@@ -176,9 +178,18 @@ scrub_live_credentials() {
   done
 }
 
+# lemon_control_plane's TUI wire tests run clients/tui scripts with
+# `bun --no-install`, so a fresh worktree needs the lockfile-pinned install.
+ensure_tui_deps() {
+  if [ ! -d clients/tui/node_modules ] && command -v bun >/dev/null 2>&1; then
+    (cd clients/tui && bun install --frozen-lockfile)
+  fi
+}
+
 run_fast() {
   ensure_repo_root
   setup_test_env
+  ensure_tui_deps
   mix compile --warnings-as-errors
   mix test --exclude integration "$@"
 }
@@ -357,7 +368,7 @@ for path in json.load(open(sys.argv[1]))[sys.argv[2]]:
 run_changed() {
   ensure_repo_root
   setup_test_env
-  local base="origin/main" focused=0 arg scope clients docs selection
+  local base="origin/main" focused=0 narrow=() arg scope clients docs selection
   local mix_args=() paths=()
   while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -368,16 +379,21 @@ run_changed() {
         fi
         base="$2"; shift 2 ;;
       --focused) focused=1; shift ;;
+      --narrow) narrow=(--narrow); shift ;;
       --) shift; mix_args+=("$@"); break ;;
       *) mix_args+=("$1"); shift ;;
     esac
   done
   selection="$(mktemp "$LEMON_TEST_TMPDIR/changed.XXXXXX")"
-  scripts/changed_tests --base "$base" --focused --format json >"$selection"
+  scripts/changed_tests --base "$base" --focused ${narrow[@]+"${narrow[@]}"} --format json >"$selection"
   read -r scope clients docs < <(python3 -c 'import json, sys
 s = json.load(open(sys.argv[1]))
 print(s["scope"], str(s["lanes"]["clients"]).lower(), str(s["lanes"]["docs"]).lower())
 ' "$selection")
+  if [ "$scope" = "full" ] || python3 -c 'import json, sys
+sys.exit(0 if "lemon_control_plane" in json.load(open(sys.argv[1]))["apps"] else 1)' "$selection"; then
+    ensure_tui_deps
+  fi
   python3 -c 'import json, sys
 s = json.load(open(sys.argv[1]))
 print("Test scope: " + s["scope"])
@@ -474,8 +490,9 @@ run_premerge() {
   else
     echo "premerge: changelog skipped (no changed CHANGELOG.md; 0s)"
   fi
-  premerge_step changed run_changed --base "$base"
-  echo "Not covered: full suite runs on main after merge; dialyzer/install/sim-bench run in CI."
+  premerge_step changed run_changed --base "$base" --narrow
+  echo "Not covered: downstream tests that don't name a changed module (PR CI runs those apps whole),"
+  echo "the full suite (main after merge), dialyzer/install/sim-bench (CI)."
 }
 
 case "$LANE" in

@@ -3,7 +3,7 @@ defmodule LemonChannels.Adapters.Telegram.VoiceTranscriptionTest do
   use ExUnit.Case, async: false
 
   alias Elixir.LemonChannels.Adapters.Telegram.Transport
-  alias LemonChannels.Adapters.Telegram.VoiceTranscriber
+  alias LemonChannels.VoiceTranscriber
 
   defmodule VoiceTestRouter do
     use LemonCore.RouterBridge.Router

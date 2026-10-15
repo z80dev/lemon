@@ -34,6 +34,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   a folder, ZIP or HTTPS URL with size, dimension and path validation; pet
   packages are images only and never run code.
 
+- Discord voice notes and audio attachments can use the shared voice transcription
+  settings, with bounded CDN downloads and URL fallback on failure.
+
 - Add opt-in `lemon doctor --live` for bounded, redacted provider models-list and
   Telegram/Discord bot identity checks without generating completions.
 
