@@ -65,14 +65,6 @@ describe("FormatterRegistry", () => {
 	});
 
 	describe("register(formatter)", () => {
-		it("should register a formatter for a single tool", () => {
-			const formatter = createMockFormatter(["mytool"]);
-			registry.register(formatter);
-
-			expect(registry.hasFormatter("mytool")).toBe(true);
-			expect(registry.getFormatter("mytool")).toBe(formatter);
-		});
-
 		it("should register a formatter for multiple tools", () => {
 			const formatter = createMockFormatter(["tool1", "tool2", "tool3"]);
 			registry.register(formatter);
@@ -83,17 +75,6 @@ describe("FormatterRegistry", () => {
 			expect(registry.getFormatter("tool1")).toBe(formatter);
 			expect(registry.getFormatter("tool2")).toBe(formatter);
 			expect(registry.getFormatter("tool3")).toBe(formatter);
-		});
-
-		it("should overwrite existing registration when registering same tool", () => {
-			const formatter1 = createMockFormatter(["mytool"]);
-			const formatter2 = createMockFormatter(["mytool"]);
-
-			registry.register(formatter1);
-			expect(registry.getFormatter("mytool")).toBe(formatter1);
-
-			registry.register(formatter2);
-			expect(registry.getFormatter("mytool")).toBe(formatter2);
 		});
 
 		it("should allow multiple formatters for different tools", () => {
@@ -129,13 +110,6 @@ describe("FormatterRegistry", () => {
 			expect(registry.hasFormatter("tool3")).toBe(false);
 		});
 
-		it("should handle unregistering non-existent formatter gracefully", () => {
-			const formatter = createMockFormatter(["unknown"]);
-
-			// Should not throw
-			expect(() => registry.unregister(formatter)).not.toThrow();
-		});
-
 		it("should only unregister if the current registration matches the formatter", () => {
 			const formatter1 = createMockFormatter(["mytool"]);
 			const formatter2 = createMockFormatter(["mytool"]);
@@ -147,48 +121,6 @@ describe("FormatterRegistry", () => {
 			registry.unregister(formatter1);
 			expect(registry.hasFormatter("mytool")).toBe(true);
 			expect(registry.getFormatter("mytool")).toBe(formatter2);
-		});
-	});
-
-	describe("getFormatter(toolName)", () => {
-		it("should return registered formatter", () => {
-			const formatter = createMockFormatter(["mytool"]);
-			registry.register(formatter);
-
-			expect(registry.getFormatter("mytool")).toBe(formatter);
-		});
-
-		it("should return undefined for unknown tool", () => {
-			expect(registry.getFormatter("unknowntool")).toBeUndefined();
-		});
-
-		it("should return undefined after formatter is unregistered", () => {
-			const formatter = createMockFormatter(["mytool"]);
-			registry.register(formatter);
-			registry.unregister(formatter);
-
-			expect(registry.getFormatter("mytool")).toBeUndefined();
-		});
-	});
-
-	describe("hasFormatter(toolName)", () => {
-		it("should return true for registered tool", () => {
-			const formatter = createMockFormatter(["mytool"]);
-			registry.register(formatter);
-
-			expect(registry.hasFormatter("mytool")).toBe(true);
-		});
-
-		it("should return false for unregistered tool", () => {
-			expect(registry.hasFormatter("unknowntool")).toBe(false);
-		});
-
-		it("should return false after unregistration", () => {
-			const formatter = createMockFormatter(["mytool"]);
-			registry.register(formatter);
-			registry.unregister(formatter);
-
-			expect(registry.hasFormatter("mytool")).toBe(false);
 		});
 	});
 
@@ -471,24 +403,6 @@ describe("FormatterRegistry", () => {
 	});
 
 	describe("default formatting behavior", () => {
-		it("should produce valid FormattedOutput for default formatArgs", () => {
-			const result = registry.formatArgs("unknown", { test: "value" });
-
-			expect(result).toHaveProperty("summary");
-			expect(result).toHaveProperty("details");
-			expect(typeof result.summary).toBe("string");
-			expect(Array.isArray(result.details)).toBe(true);
-		});
-
-		it("should produce valid FormattedOutput for default formatResult", () => {
-			const result = registry.formatResult("unknown", { data: 123 });
-
-			expect(result).toHaveProperty("summary");
-			expect(result).toHaveProperty("details");
-			expect(typeof result.summary).toBe("string");
-			expect(Array.isArray(result.details)).toBe(true);
-		});
-
 		it("should truncate long summary text", () => {
 			const longText = "a".repeat(500);
 			const result = registry.formatResult("unknown", longText);

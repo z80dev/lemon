@@ -263,6 +263,18 @@ defmodule CodingAgent.CoordinatorTest do
     end
   end
 
+  test "stale and unknown mailbox messages leave the coordinator available", %{tmp_dir: tmp_dir} do
+    coordinator = start_coordinator(tmp_dir)
+    send(coordinator, {:DOWN, make_ref(), :process, self(), :normal})
+    send(coordinator, {:session_event, "unknown-session-id", {:agent_end, []}})
+    send(coordinator, :unknown_atom)
+    send(coordinator, {:unknown, :tuple, 123})
+    send(coordinator, %{unknown: "map"})
+
+    assert Coordinator.list_active(coordinator) == []
+    assert Process.alive?(coordinator)
+  end
+
   describe "run_subagent/2" do
     test "returns the visible assistant answer", %{tmp_dir: tmp_dir} do
       coordinator = start_controlled_coordinator(tmp_dir)

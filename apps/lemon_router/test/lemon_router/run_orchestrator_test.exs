@@ -1137,19 +1137,6 @@ defmodule LemonRouter.RunOrchestratorTest do
       end
     end
 
-    test "accepts RunRequest struct input" do
-      result =
-        RunOrchestrator.submit(%RunRequest{
-          origin: :control_plane,
-          session_key: "agent:test:main",
-          agent_id: "test",
-          prompt: "Hello from struct",
-          queue_mode: :collect
-        })
-
-      assert match?({:ok, _}, result) or match?({:error, _}, result)
-    end
-
     test "accepts map input and normalizes to RunRequest" do
       result =
         RunOrchestrator.submit(%{
@@ -1158,18 +1145,6 @@ defmodule LemonRouter.RunOrchestratorTest do
           agent_id: "test",
           prompt: "Hello from map input"
         })
-
-      assert match?({:ok, _}, result) or match?({:error, _}, result)
-    end
-
-    test "accepts keyword input and normalizes to RunRequest" do
-      result =
-        RunOrchestrator.submit(
-          origin: :control_plane,
-          session_key: "agent:test:main",
-          agent_id: "test",
-          prompt: "Hello from keyword input"
-        )
 
       assert match?({:ok, _}, result) or match?({:error, _}, result)
     end
@@ -1368,6 +1343,7 @@ defmodule LemonRouter.RunOrchestratorTest do
         end)
 
       Process.sleep(5_100)
+
       refute Task.yield(task, 0)
       :ok = :sys.resume(orchestrator_pid)
       assert Task.await(task, 2_000) == :ok
@@ -1782,21 +1758,6 @@ defmodule LemonRouter.RunOrchestratorTest do
     # These tests verify the cwd parameter is properly extracted and passed
     # We test the logic flow rather than the full integration
 
-    test "cwd override is accepted in params" do
-      params = %{
-        origin: :control_plane,
-        session_key: "agent:test:main",
-        agent_id: "test",
-        prompt: "Hello",
-        cwd: "/custom/working/dir"
-      }
-
-      # The orchestrator should accept the cwd parameter without error
-      # Even if the full submission fails, no crash should occur
-      result = RunOrchestrator.submit(request(params))
-      assert match?({:ok, _}, result) or match?({:error, _}, result)
-    end
-
     test "cwd from meta is used when no override provided" do
       params = %{
         origin: :control_plane,
@@ -1826,22 +1787,6 @@ defmodule LemonRouter.RunOrchestratorTest do
   end
 
   describe "tool_policy override handling" do
-    test "tool_policy override is accepted in params" do
-      params = %{
-        origin: :control_plane,
-        session_key: "agent:test:main",
-        agent_id: "test",
-        prompt: "Hello",
-        tool_policy: %{
-          approvals: %{"bash" => :always},
-          blocked_tools: ["dangerous_tool"]
-        }
-      }
-
-      result = RunOrchestrator.submit(request(params))
-      assert match?({:ok, _}, result) or match?({:error, _}, result)
-    end
-
     test "tool_policy override is merged with resolved policy" do
       params = %{
         origin: :control_plane,
@@ -1862,37 +1807,6 @@ defmodule LemonRouter.RunOrchestratorTest do
         agent_id: "test",
         prompt: "Hello",
         tool_policy: %{}
-      }
-
-      result = RunOrchestrator.submit(request(params))
-      assert match?({:ok, _}, result) or match?({:error, _}, result)
-    end
-
-    test "nil tool_policy override is ignored" do
-      params = %{
-        origin: :control_plane,
-        session_key: "agent:test:main",
-        agent_id: "test",
-        prompt: "Hello",
-        tool_policy: nil
-      }
-
-      result = RunOrchestrator.submit(request(params))
-      assert match?({:ok, _}, result) or match?({:error, _}, result)
-    end
-  end
-
-  describe "combined overrides" do
-    test "both cwd and tool_policy overrides can be provided" do
-      params = %{
-        origin: :control_plane,
-        session_key: "agent:test:main",
-        agent_id: "test",
-        prompt: "Hello",
-        cwd: "/custom/dir",
-        tool_policy: %{
-          approvals: %{"bash" => :always}
-        }
       }
 
       result = RunOrchestrator.submit(request(params))

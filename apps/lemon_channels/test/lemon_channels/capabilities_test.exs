@@ -4,155 +4,52 @@ defmodule LemonChannels.CapabilitiesTest do
   alias LemonChannels.Capabilities
   alias LemonChannels.Capabilities.Capability
 
-  describe "new/1" do
-    test "creates capabilities from simple atom list" do
-      caps = Capabilities.new([:threads, :reactions, :streaming])
+  test "supports?/2 honours presence and the enabled flag" do
+    caps = Capabilities.new([:threads, {:attachments, enabled: false}])
 
-      assert Capabilities.supports?(caps, :threads)
-      assert Capabilities.supports?(caps, :reactions)
-      assert Capabilities.supports?(caps, :streaming)
-      refute Capabilities.supports?(caps, :attachments)
-    end
-
-    test "creates capabilities with configuration" do
-      caps =
-        Capabilities.new([
-          {:attachments, max_size: 10_000_000},
-          {:rich_blocks, [:markdown, :buttons]}
-        ])
-
-      assert Capabilities.supports?(caps, :attachments)
-      assert Capabilities.supports?(caps, :rich_blocks)
-
-      attachment_cap = Capabilities.get(caps, :attachments)
-      assert attachment_cap.config.max_size == 10_000_000
-    end
-
-    test "includes default capabilities" do
-      caps = Capabilities.new([])
-
-      # Default edit/delete are false
-      refute Capabilities.supports?(caps, :edit)
-      refute Capabilities.supports?(caps, :delete)
-
-      # But chunk_limit is always present
-      assert Capabilities.get(caps, :chunk_limit) != nil
-    end
+    assert Capabilities.supports?(caps, :threads)
+    refute Capabilities.supports?(caps, :streaming)
+    refute Capabilities.supports?(caps, :attachments)
   end
 
-  describe "supports?/2" do
-    test "returns true for supported capabilities" do
-      caps = Capabilities.new([:threads, :reactions])
+  test "supports_feature?/3 requires both the capability and the feature" do
+    caps = Capabilities.new([{:rich_blocks, [:markdown, :buttons]}])
 
-      assert Capabilities.supports?(caps, :threads)
-      assert Capabilities.supports?(caps, :reactions)
-    end
-
-    test "returns false for unsupported capabilities" do
-      caps = Capabilities.new([:threads])
-
-      refute Capabilities.supports?(caps, :streaming)
-      refute Capabilities.supports?(caps, :unknown_capability)
-    end
-
-    test "returns false for disabled capabilities" do
-      caps = Capabilities.new([{:attachments, enabled: false}])
-
-      refute Capabilities.supports?(caps, :attachments)
-    end
-  end
-
-  describe "supports_feature?/3" do
-    test "returns true for supported features" do
-      caps = Capabilities.new([{:rich_blocks, [:markdown, :buttons]}])
-
-      assert Capabilities.supports_feature?(caps, :rich_blocks, :markdown)
-      assert Capabilities.supports_feature?(caps, :rich_blocks, :buttons)
-    end
-
-    test "returns false for unsupported features" do
-      caps = Capabilities.new([{:rich_blocks, [:markdown]}])
-
-      refute Capabilities.supports_feature?(caps, :rich_blocks, :tables)
-    end
-
-    test "returns false for unsupported capability" do
-      caps = Capabilities.new([:threads])
-
-      refute Capabilities.supports_feature?(caps, :rich_blocks, :markdown)
-    end
-  end
-
-  describe "get/2" do
-    test "returns capability struct when present" do
-      caps = Capabilities.new([{:attachments, max_size: 5_000_000}])
-
-      cap = Capabilities.get(caps, :attachments)
-      assert %Capability{} = cap
-      assert cap.type == :attachments
-      assert cap.config.max_size == 5_000_000
-    end
-
-    test "returns nil for missing capability" do
-      caps = Capabilities.new([:threads])
-
-      assert Capabilities.get(caps, :attachments) == nil
-    end
+    assert Capabilities.supports_feature?(caps, :rich_blocks, :buttons)
+    refute Capabilities.supports_feature?(caps, :rich_blocks, :tables)
+    refute Capabilities.supports_feature?(Capabilities.new([:threads]), :rich_blocks, :markdown)
   end
 
   describe "validate/3" do
-    test "returns ok for valid attachment" do
-      caps = Capabilities.new([{:attachments, max_size: 10_000_000}])
+    test "enforces attachment size and wildcard mime allowlists" do
+      caps = Capabilities.new([{:attachments, max_size: 10_000_000, allowed_mimes: ["image/*"]}])
 
       assert :ok =
-               Capabilities.validate(caps, :attachments, %{
-                 size: 5_000_000,
-                 mime_type: "image/png"
-               })
-    end
-
-    test "returns error for oversized attachment" do
-      caps = Capabilities.new([{:attachments, max_size: 10_000_000}])
+               Capabilities.validate(caps, :attachments, %{size: 1000, mime_type: "image/jpeg"})
 
       assert {:error, :file_too_large} =
                Capabilities.validate(caps, :attachments, %{
                  size: 15_000_000,
                  mime_type: "image/png"
                })
-    end
-
-    test "returns error for unsupported mime type" do
-      caps = Capabilities.new([{:attachments, max_size: 10_000_000, allowed_mimes: ["image/*"]}])
 
       assert {:error, :mime_type_not_allowed} =
                Capabilities.validate(caps, :attachments, %{
-                 size: 5_000_000,
+                 size: 1000,
                  mime_type: "application/exe"
                })
     end
 
-    test "allows wildcard mime patterns" do
-      caps = Capabilities.new([{:attachments, allowed_mimes: ["image/*"]}])
-
-      assert :ok =
-               Capabilities.validate(caps, :attachments, %{size: 1000, mime_type: "image/png"})
-
-      assert :ok =
-               Capabilities.validate(caps, :attachments, %{size: 1000, mime_type: "image/jpeg"})
-    end
-
-    test "returns error for unsupported capability" do
-      caps = Capabilities.new([:threads])
-
+    test "rejects missing and disabled capabilities" do
       assert {:error, :capability_not_supported} =
-               Capabilities.validate(caps, :attachments, %{size: 1000})
-    end
-
-    test "returns error for disabled capability" do
-      caps = Capabilities.new([{:attachments, enabled: false}])
+               Capabilities.validate(Capabilities.new([:threads]), :attachments, %{size: 1000})
 
       assert {:error, :capability_disabled} =
-               Capabilities.validate(caps, :attachments, %{size: 1000})
+               Capabilities.validate(
+                 Capabilities.new([{:attachments, enabled: false}]),
+                 :attachments,
+                 %{size: 1000}
+               )
     end
 
     test "validates rich block types" do
@@ -166,14 +63,6 @@ defmodule LemonChannels.CapabilitiesTest do
   end
 
   describe "list/1" do
-    test "returns list of supported capability types" do
-      caps = Capabilities.new([:threads, :reactions])
-
-      types = Capabilities.list(caps)
-      assert :threads in types
-      assert :reactions in types
-    end
-
     test "does not include disabled capabilities" do
       caps = Capabilities.new([:threads, {:attachments, enabled: false}])
 
@@ -231,62 +120,29 @@ defmodule LemonChannels.CapabilitiesTest do
     end
   end
 
-  describe "set/1" do
-    test "returns messaging set" do
-      caps = Capabilities.set(:messaging)
+  test "to_legacy/1 converts new format to legacy" do
+    caps =
+      Capabilities.new([
+        :threads,
+        :reactions,
+        :edit,
+        :delete,
+        {:attachments, features: [:images]}
+      ])
 
-      assert caps != []
-      assert Enum.any?(caps, &(&1.type == :threads))
-      assert Enum.any?(caps, &(&1.type == :reactions))
-    end
+    legacy = Capabilities.to_legacy(caps)
 
-    test "returns rich_content set" do
-      caps = Capabilities.set(:rich_content)
-
-      assert Enum.any?(caps, &(&1.type == :attachments))
-      assert Enum.any?(caps, &(&1.type == :rich_blocks))
-    end
-
-    test "returns realtime set" do
-      caps = Capabilities.set(:realtime)
-
-      assert Enum.any?(caps, &(&1.type == :streaming))
-    end
-
-    test "returns full set" do
-      caps = Capabilities.set(:full)
-
-      assert length(caps) >= 6
-    end
-
-    test "returns empty list for unknown set" do
-      assert Capabilities.set(:unknown) == []
-    end
+    assert legacy.thread_support == true
+    assert legacy.reaction_support == true
+    assert legacy.edit_support == true
+    assert legacy.delete_support == true
+    assert legacy.image_support == true
+    assert legacy.file_support == true
   end
 
-  describe "legacy compatibility" do
-    test "to_legacy/1 converts new format to legacy" do
-      caps =
-        Capabilities.new([
-          :threads,
-          :reactions,
-          :edit,
-          :delete,
-          {:attachments, features: [:images]}
-        ])
-
-      legacy = Capabilities.to_legacy(caps)
-
-      assert legacy.thread_support == true
-      assert legacy.reaction_support == true
-      assert legacy.edit_support == true
-      assert legacy.delete_support == true
-      assert legacy.image_support == true
-      assert legacy.file_support == true
-    end
-
-    test "from_legacy/1 converts legacy format to new" do
-      legacy = %{
+  test "from_legacy/1 maps plugin metadata flags onto capabilities" do
+    caps =
+      Capabilities.from_legacy(%{
         edit_support: true,
         delete_support: true,
         thread_support: true,
@@ -296,59 +152,18 @@ defmodule LemonChannels.CapabilitiesTest do
         file_support: true,
         chunk_limit: 2000,
         rate_limit: 30
-      }
+      })
 
-      caps = Capabilities.from_legacy(legacy)
-
-      assert Capabilities.supports?(caps, :edit)
-      assert Capabilities.supports?(caps, :delete)
-      assert Capabilities.supports?(caps, :threads)
-      assert Capabilities.supports?(caps, :reactions)
-      assert Capabilities.supports?(caps, :attachments)
-
-      chunk_cap = Capabilities.get(caps, :chunk_limit)
-      assert chunk_cap.config.value == 2000
+    for capability <- [:edit, :delete, :threads, :reactions, :attachments] do
+      assert Capabilities.supports?(caps, capability)
     end
+
+    assert Capabilities.get(caps, :chunk_limit).config.value == 2000
   end
 
   describe "Capability module" do
-    test "new/2 creates capability" do
-      cap = Capability.new(:threads, enabled: true)
-
-      assert cap.type == :threads
-      assert cap.enabled == true
-    end
-
-    test "from_spec/1 handles simple atoms" do
-      cap = Capability.from_spec(:threads)
-
-      assert cap.type == :threads
-      assert cap.enabled == true
-    end
-
-    test "from_spec/1 handles tuples with options" do
-      cap = Capability.from_spec({:attachments, max_size: 5_000_000})
-
-      assert cap.type == :attachments
-      assert cap.config.max_size == 5_000_000
-    end
-
-    test "from_spec/1 handles tuples with feature lists" do
-      cap = Capability.from_spec({:rich_blocks, [:markdown, :buttons]})
-
-      assert cap.type == :rich_blocks
-      assert :markdown in cap.config.features
-    end
-
     test "from_spec/1 returns nil for invalid input" do
       assert Capability.from_spec("invalid") == nil
-    end
-
-    test "validate/2 validates attachments" do
-      cap = Capability.new(:attachments, max_size: 1000)
-
-      assert :ok = Capability.validate(cap, %{size: 500})
-      assert {:error, :file_too_large} = Capability.validate(cap, %{size: 2000})
     end
 
     test "merge/2 combines capabilities" do
@@ -370,12 +185,6 @@ defmodule LemonChannels.CapabilitiesTest do
       :ok = Registry.register_set(:custom, custom_caps)
 
       assert Capabilities.set(:custom) == custom_caps
-    end
-  end
-
-  describe "empty/0" do
-    test "returns empty capabilities map" do
-      assert Capabilities.empty() == %{}
     end
   end
 end

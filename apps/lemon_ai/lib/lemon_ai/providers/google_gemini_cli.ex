@@ -415,8 +415,8 @@ defmodule LemonAi.Providers.GoogleGeminiCli do
       {:ok, %Req.Response{status: status} = resp} when status in 200..299 ->
         {:ok, {url, resp}}
 
-      {:ok, %Req.Response{status: status, body: error_body}} ->
-        error_text = if is_binary(error_body), do: error_body, else: inspect(error_body)
+      {:ok, %Req.Response{status: status, body: error_body, headers: response_headers}} ->
+        error_text = GoogleShared.normalize_http_error_body(error_body)
 
         if attempt < max_retries and GoogleShared.retryable_error?(status, error_text) do
           delay =
@@ -428,8 +428,7 @@ defmodule LemonAi.Providers.GoogleGeminiCli do
           Process.sleep(delay)
           make_request_with_retry(endpoints, headers, body, opts, attempt + 1)
         else
-          {:error,
-           "Cloud Code Assist API error (#{status}): #{GoogleShared.extract_error_message(error_text)}"}
+          {:error, GoogleShared.safe_http_error(status, error_text, response_headers)}
         end
 
       {:error, %Req.TransportError{reason: reason}} ->
@@ -534,11 +533,13 @@ defmodule LemonAi.Providers.GoogleGeminiCli do
             empty_attempt + 1
           )
 
-        {:ok, %Req.Response{status: status, body: error_body}} ->
+        {:ok, %Req.Response{status: status, body: error_body, headers: response_headers}} ->
+          error_text = GoogleShared.normalize_http_error_body(error_body)
+
           handle_error(
             stream,
             output,
-            "Cloud Code Assist API error (#{status}): #{inspect(error_body)}"
+            GoogleShared.safe_http_error(status, error_text, response_headers)
           )
 
         {:error, reason} ->
@@ -848,11 +849,7 @@ defmodule LemonAi.Providers.GoogleGeminiCli do
   end
 
   defp handle_error(stream, output, reason) do
-    error_output = %{
-      output
-      | stop_reason: :error,
-        error_message: reason
-    }
+    error_output = error_assistant_message(output, reason)
 
     EventStream.error(stream, error_output)
   end

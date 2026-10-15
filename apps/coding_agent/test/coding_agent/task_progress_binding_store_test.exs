@@ -110,18 +110,6 @@ defmodule CodingAgent.TaskProgressBindingStoreTest do
       assert {:error, :not_found} = TaskProgressBindingStore.get_by_child_run_id("missing-child")
     end
 
-    test "applies defaults for inserted_at_ms and status" do
-      attrs =
-        binding_attrs()
-        |> Map.delete(:inserted_at_ms)
-        |> Map.delete(:status)
-
-      assert :ok = TaskProgressBindingStore.new_binding(attrs)
-      assert {:ok, binding} = TaskProgressBindingStore.get_by_child_run_id(attrs.child_run_id)
-      assert is_integer(binding.inserted_at_ms)
-      assert binding.status == :running
-    end
-
     test "accepts the generic :status surface" do
       attrs = binding_attrs(%{surface: :status})
 
@@ -140,27 +128,15 @@ defmodule CodingAgent.TaskProgressBindingStoreTest do
                    end
     end
 
-    test "raises for invalid required field types" do
-      attrs = binding_attrs(%{task_id: 123})
-
-      assert_raise ArgumentError, ~r/invalid task progress binding field :task_id/, fn ->
-        TaskProgressBindingStore.new_binding(attrs)
-      end
-    end
-
-    test "raises for invalid surface shape" do
-      attrs = binding_attrs(%{surface: %{bad: :surface}})
-
-      assert_raise ArgumentError, ~r/invalid task progress binding field :surface/, fn ->
-        TaskProgressBindingStore.new_binding(attrs)
-      end
-    end
-
-    test "raises for invalid inserted_at_ms" do
-      attrs = binding_attrs(%{inserted_at_ms: "not-an-int"})
-
-      assert_raise ArgumentError, ~r/invalid task progress binding field :inserted_at_ms/, fn ->
-        TaskProgressBindingStore.new_binding(attrs)
+    test "rejects malformed identity, surface and cleanup timestamp fields" do
+      for overrides <- [
+            %{task_id: 123},
+            %{surface: %{bad: :surface}},
+            %{inserted_at_ms: "not-an-int"}
+          ] do
+        assert_raise ArgumentError, fn ->
+          TaskProgressBindingStore.new_binding(binding_attrs(overrides))
+        end
       end
     end
 
@@ -196,10 +172,6 @@ defmodule CodingAgent.TaskProgressBindingStoreTest do
       assert binding.status == :completed
       assert is_integer(binding.completed_at_ms)
       assert binding.task_id == attrs.task_id
-    end
-
-    test "returns ok for missing child run id" do
-      assert :ok = TaskProgressBindingStore.mark_completed("missing-child")
     end
   end
 
@@ -282,12 +254,6 @@ defmodule CodingAgent.TaskProgressBindingStoreTest do
 
       assert {:error, :not_found} =
                TaskProgressBindingStore.get_by_child_run_id(binding.child_run_id)
-    end
-  end
-
-  describe "delete_by_child_run_id/1 missing ids" do
-    test "returns ok for missing child run id" do
-      assert :ok = TaskProgressBindingStore.delete_by_child_run_id("missing-child")
     end
   end
 

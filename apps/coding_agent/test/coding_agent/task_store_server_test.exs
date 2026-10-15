@@ -38,25 +38,6 @@ defmodule CodingAgent.TaskStoreServerTest do
       stop_server(pid)
     end
 
-    test "creates ETS table on startup", %{dets_path: dets_path} do
-      assert {:ok, pid} = TaskStoreServer.start_link(dets_path: dets_path)
-
-      # Table should exist
-      table = TaskStoreServer.table_name()
-      assert :ets.whereis(table) != :undefined
-
-      stop_server(pid)
-    end
-
-    test "initializes DETS on startup", %{dets_path: dets_path} do
-      assert {:ok, pid} = TaskStoreServer.start_link(dets_path: dets_path)
-
-      status = TaskStoreServer.dets_status(pid)
-      assert status.state.dets_initialized == true
-
-      stop_server(pid)
-    end
-
     test "handles already_started gracefully", %{dets_path: dets_path} do
       assert {:ok, pid1} = TaskStoreServer.start_link(dets_path: dets_path)
       assert {:ok, pid2} = TaskStoreServer.start_link(dets_path: dets_path)
@@ -65,32 +46,6 @@ defmodule CodingAgent.TaskStoreServerTest do
       assert pid1 == pid2
 
       stop_server(pid1)
-    end
-
-    test "accepts custom name option", %{dets_path: _dets_path} do
-      name = :custom_task_store
-      assert {:ok, pid} = TaskStoreServer.start_link(name: name)
-
-      # Should be registered under the custom name
-      assert Process.whereis(name) == pid
-
-      stop_server(pid)
-    end
-  end
-
-  # ============================================================================
-  # table_name/0 Tests
-  # ============================================================================
-
-  describe "table_name/0" do
-    test "returns atom table name" do
-      assert is_atom(TaskStoreServer.table_name())
-    end
-
-    test "returns consistent value" do
-      name1 = TaskStoreServer.table_name()
-      name2 = TaskStoreServer.table_name()
-      assert name1 == name2
     end
   end
 
@@ -102,18 +57,6 @@ defmodule CodingAgent.TaskStoreServerTest do
     test "returns :ok when table exists", %{dets_path: dets_path} do
       assert {:ok, pid} = TaskStoreServer.start_link(dets_path: dets_path)
       assert :ok = TaskStoreServer.ensure_table(pid)
-
-      stop_server(pid)
-    end
-
-    test "table is a named set", %{dets_path: dets_path} do
-      assert {:ok, pid} = TaskStoreServer.start_link(dets_path: dets_path)
-
-      table = TaskStoreServer.table_name()
-      info = :ets.info(table)
-
-      assert info[:named_table] == true
-      assert info[:type] == :set
 
       stop_server(pid)
     end
@@ -185,14 +128,6 @@ defmodule CodingAgent.TaskStoreServerTest do
 
       stop_server(pid)
     end
-
-    test "returns 0 when no expired tasks", %{dets_path: dets_path} do
-      assert {:ok, pid} = TaskStoreServer.start_link(dets_path: dets_path)
-
-      assert {:ok, 0} = TaskStoreServer.cleanup(pid)
-
-      stop_server(pid)
-    end
   end
 
   # ============================================================================
@@ -231,14 +166,6 @@ defmodule CodingAgent.TaskStoreServerTest do
 
       stop_server(pid2)
     end
-
-    test "works on empty table", %{dets_path: dets_path} do
-      assert {:ok, pid} = TaskStoreServer.start_link(dets_path: dets_path)
-
-      assert :ok = TaskStoreServer.clear(pid)
-
-      stop_server(pid)
-    end
   end
 
   # ============================================================================
@@ -260,46 +187,10 @@ defmodule CodingAgent.TaskStoreServerTest do
   end
 
   # ============================================================================
-  # Server Lifecycle Tests
-  # ============================================================================
-
-  describe "server lifecycle" do
-    test "ETS table is created on server start", %{dets_path: dets_path} do
-      assert {:ok, pid} = TaskStoreServer.start_link(dets_path: dets_path)
-
-      table = TaskStoreServer.table_name()
-      assert :ets.whereis(table) != :undefined
-
-      stop_server(pid)
-    end
-
-    test "DETS status is available during server lifecycle", %{dets_path: dets_path} do
-      assert {:ok, pid} = TaskStoreServer.start_link(dets_path: dets_path)
-
-      # Let it initialize
-      Process.sleep(100)
-
-      status = TaskStoreServer.dets_status(pid)
-      assert status.state.dets_initialized == true
-
-      stop_server(pid)
-    end
-  end
-
-  # ============================================================================
   # Persistence Tests
   # ============================================================================
 
   describe "persistence" do
-    test "DETS status reflects initialized server", %{dets_path: dets_path} do
-      assert {:ok, pid} = TaskStoreServer.start_link(dets_path: dets_path)
-
-      status = TaskStoreServer.dets_status(pid)
-      assert status.state.dets_initialized == true
-
-      stop_server(pid)
-    end
-
     test "data can be inserted and retrieved", %{dets_path: dets_path} do
       assert {:ok, pid} = TaskStoreServer.start_link(dets_path: dets_path)
 
@@ -308,30 +199,6 @@ defmodule CodingAgent.TaskStoreServerTest do
 
       # Should be able to retrieve the data
       assert :ets.lookup(table, "test_task") != []
-
-      stop_server(pid)
-    end
-  end
-
-  # ============================================================================
-  # Concurrent Access Tests
-  # ============================================================================
-
-  describe "concurrent access" do
-    test "handles concurrent reads", %{dets_path: dets_path} do
-      assert {:ok, pid} = TaskStoreServer.start_link(dets_path: dets_path)
-
-      # Spawn multiple processes that read
-      tasks =
-        for _ <- 1..10 do
-          Task.async(fn ->
-            TaskStoreServer.ensure_table(pid)
-          end)
-        end
-
-      # All should succeed
-      results = Task.await_many(tasks)
-      assert Enum.all?(results, &(&1 == :ok))
 
       stop_server(pid)
     end

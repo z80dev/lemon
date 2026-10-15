@@ -568,47 +568,148 @@ defmodule LemonAi.Providers.GoogleShared do
     end
   end
 
-  @doc """
-  Normalize error response bodies from Req into a plain string.
+  @max_http_error_body_bytes 16_384
 
-  Handles plain binaries, maps, and `Req.Response.Async` bodies produced by
-  streaming requests (`into: :self`) so provider logs include the real upstream
-  error JSON instead of an async struct dump.
+  @doc """
+  Collect a bounded HTTP error body for classification, not public display.
+
+  Async bodies are limited to 16 KiB and a total elapsed deadline (one second by
+  default). The transport is canceled and its queued messages cleaned up before
+  returning, including on completion, timeout or transport failure. Unknown body
+  terms are never inspected.
   """
   @spec normalize_http_error_body(term()) :: String.t()
   def normalize_http_error_body(body), do: normalize_http_error_body(body, 1_000)
 
   @spec normalize_http_error_body(term(), non_neg_integer()) :: String.t()
-  def normalize_http_error_body(body, _timeout_ms) when is_binary(body), do: body
+  def normalize_http_error_body(body, _timeout_ms) when is_binary(body) do
+    body
+    |> binary_part(0, min(byte_size(body), @max_http_error_body_bytes))
+    |> :binary.copy()
+    |> error_body_utf8()
+  end
 
   def normalize_http_error_body(%Req.Response.Async{} = async, timeout_ms)
       when is_integer(timeout_ms) and timeout_ms >= 0 do
-    case collect_async_error_body(async, "", timeout_ms) do
-      "" -> inspect(async)
-      text -> text
+    response = %Req.Response{body: async}
+    deadline = System.monotonic_time(:millisecond) + timeout_ms
+
+    try do
+      collect_async_error_body(response, [], 0, deadline)
+      |> Enum.reverse()
+      |> IO.iodata_to_binary()
+      |> error_body_utf8()
+    after
+      Req.cancel_async_response(response)
     end
   end
 
-  def normalize_http_error_body(body, _timeout_ms) when is_map(body), do: Jason.encode!(body)
-  def normalize_http_error_body(body, _timeout_ms), do: inspect(body)
+  def normalize_http_error_body(%_{} = _body, _timeout_ms), do: ""
 
-  defp collect_async_error_body(%Req.Response.Async{ref: ref, pid: pid} = async, acc, timeout_ms) do
-    receive do
-      {^ref, {:data, chunk}} when is_binary(chunk) ->
-        collect_async_error_body(async, acc <> chunk, timeout_ms)
-
-      {^ref, :done} ->
-        acc
-
-      {^ref, {:done, _}} ->
-        acc
-
-      {:DOWN, ^ref, :process, ^pid, _reason} ->
-        acc
-    after
-      timeout_ms ->
-        acc
+  def normalize_http_error_body(body, timeout_ms) when is_map(body) do
+    case Jason.encode(body) do
+      {:ok, text} -> normalize_http_error_body(text, timeout_ms)
+      {:error, _} -> ""
     end
+  end
+
+  def normalize_http_error_body(_body, _timeout_ms), do: ""
+
+  # Discard incomplete/invalid suffixes rather than growing the byte-limited
+  # body with replacement characters, or passing invalid UTF-8 to classifiers.
+  defp error_body_utf8(text) do
+    case :unicode.characters_to_binary(text, :utf8, :utf8) do
+      {:error, valid, _} -> valid
+      {:incomplete, valid, _} -> valid
+      valid when is_binary(valid) -> valid
+    end
+  end
+
+  defp collect_async_error_body(_response, chunks, size, _deadline)
+       when size >= @max_http_error_body_bytes,
+       do: chunks
+
+  defp collect_async_error_body(
+         %Req.Response{body: %Req.Response.Async{ref: ref, pid: pid}} = response,
+         chunks,
+         size,
+         deadline
+       ) do
+    remaining = deadline - System.monotonic_time(:millisecond)
+
+    if remaining <= 0 do
+      chunks
+    else
+      receive do
+        {^ref, _} = message ->
+          case Req.parse_message(response, message) do
+            {:ok, [data: chunk]} when is_binary(chunk) ->
+              length = min(byte_size(chunk), @max_http_error_body_bytes - size)
+              chunk = binary_part(chunk, 0, length)
+              collect_async_error_body(response, [chunk | chunks], size + length, deadline)
+
+            {:ok, [:done]} ->
+              chunks
+
+            {:error, _} ->
+              chunks
+
+            _ ->
+              collect_async_error_body(response, chunks, size, deadline)
+          end
+
+        {:DOWN, ^ref, :process, ^pid, _reason} ->
+          chunks
+      after
+        remaining -> chunks
+      end
+    end
+  end
+
+  @doc """
+  Classify a collected HTTP error without exposing untrusted upstream text.
+
+  Keeps typed status, category, retryability and retry metadata. Public errors
+  contain only bounded actionable summaries, never response bodies, credentials
+  or transport structs. Pass a normalized body from `normalize_http_error_body/1`.
+  """
+  @spec safe_http_error(non_neg_integer(), String.t(), map() | [{term(), term()}]) ::
+          LemonAi.Error.parsed_error()
+  def safe_http_error(status, body, headers \\ %{}) do
+    details = LemonAi.Error.parse_http_error(status, body, headers)
+
+    summary =
+      case details.category do
+        :auth ->
+          "Authentication failed; sign in again."
+
+        :context_length ->
+          "Context length exceeded; compact or shorten the request."
+
+        :client ->
+          "Invalid request; check the model and request parameters."
+
+        :rate_limit when not details.retryable ->
+          "Account quota exhausted; check billing or credentials."
+
+        :rate_limit ->
+          "Rate limit exceeded; wait before retrying."
+
+        :server ->
+          "Upstream server error; retry later."
+
+        :transient ->
+          "Service temporarily unavailable; retry later."
+
+        :unknown ->
+          "Request failed; check provider configuration."
+      end
+
+    %{
+      details
+      | message: "Cloud Code Assist API error (HTTP #{status}): #{summary}",
+        provider_message: nil
+    }
   end
 
   # ============================================================================

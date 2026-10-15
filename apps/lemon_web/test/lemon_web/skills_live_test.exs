@@ -1,6 +1,13 @@
 defmodule LemonWeb.SkillsLiveTest do
   use ExUnit.Case, async: false
 
+  @moduledoc """
+  Exercises the real skills RPC/registry against temporary user roots and config.
+  Global directory overrides and application settings are restored on exit.
+  Refresh at both lifecycle boundaries so the registry's identity-check interval
+  cannot expose the previous fixture (or the operator's installed skills).
+  """
+
   import Phoenix.ConnTest
   import Phoenix.LiveViewTest
   import LemonWeb.Test.OperatorAuth
@@ -13,16 +20,21 @@ defmodule LemonWeb.SkillsLiveTest do
 
   setup do
     root = Path.join(System.tmp_dir!(), "web-skills-#{System.unique_integer([:positive])}")
+    home = Path.join(root, "home")
     agent_dir = Path.join(root, "agent")
-    harness = Path.join(root, "harness")
     hermes = Path.join(root, "hermes")
-    File.mkdir_p!(harness)
+    File.mkdir_p!(home)
 
-    env = Map.new(~w(LEMON_AGENT_DIR LEMON_HARNESS_SKILLS_DIR), &{&1, System.get_env(&1)})
-    hermes_repo = Application.get_env(:lemon_skills, :hermes_repo)
-    System.put_env("LEMON_AGENT_DIR", agent_dir)
-    System.put_env("LEMON_HARNESS_SKILLS_DIR", harness)
-    Application.put_env(:lemon_skills, :hermes_repo, hermes)
+    overrides = %{
+      "HOME" => home,
+      "LEMON_AGENT_DIR" => agent_dir,
+      "LEMON_HARNESS_SKILLS_DIR" => Path.join(root, "harness"),
+      "LEMON_OMP_SKILLS_DIR" => Path.join(root, "omp"),
+      "LEMON_CLAUDE_SKILLS_DIR" => Path.join(root, "claude")
+    }
+
+    env = Map.new(overrides, fn {key, _value} -> {key, System.get_env(key)} end)
+    hermes_repo = Application.fetch_env(:lemon_skills, :hermes_repo)
 
     on_exit(fn ->
       Enum.each(env, fn
@@ -30,13 +42,18 @@ defmodule LemonWeb.SkillsLiveTest do
         {key, value} -> System.put_env(key, value)
       end)
 
-      if hermes_repo,
-        do: Application.put_env(:lemon_skills, :hermes_repo, hermes_repo),
-        else: Application.delete_env(:lemon_skills, :hermes_repo)
+      case hermes_repo do
+        {:ok, value} -> Application.put_env(:lemon_skills, :hermes_repo, value)
+        :error -> Application.delete_env(:lemon_skills, :hermes_repo)
+      end
 
       LemonSkills.Registry.refresh()
       File.rm_rf!(root)
     end)
+
+    System.put_env(overrides)
+    Application.put_env(:lemon_skills, :hermes_repo, hermes)
+    :ok = LemonSkills.Registry.refresh()
 
     %{root: root, agent_dir: agent_dir, hermes: hermes}
   end
@@ -83,6 +100,9 @@ defmodule LemonWeb.SkillsLiveTest do
       assert html =~ "Notes"
       refute html =~ root
       assert has_element?(view, "#skills-search[phx-hook=SearchShortcut]")
+      assert has_element?(view, "#skills-list > li#skill-deploy-helper")
+      assert has_element?(view, "#skills-list > li#skill-notes")
+      assert length(LemonSkills.Registry.list()) == 2
     end
 
     test "search and state filters narrow the list", %{conn: conn} do
@@ -123,14 +143,26 @@ defmodule LemonWeb.SkillsLiveTest do
     end
   end
 
+  test "empty registry renders the empty state", %{conn: conn} do
+    assert LemonSkills.Registry.list() == []
+    {:ok, view, _html} = live(conn, "/skills")
+
+    assert has_element?(view, "#skills-installed #skills-search")
+    assert has_element?(view, ~s(#skills-installed a[href="/skills?tab=catalog"]))
+    refute has_element?(view, "#skills-list")
+  end
+
   test "a failed query is an unavailable state, not an empty list", %{conn: conn} do
     {:ok, module} = Registry.lookup("skills.list")
     :ok = Registry.unregister("skills.list")
     on_exit(fn -> Registry.register(module) end)
 
-    {:ok, _view, html} = live(conn, "/skills")
-    assert html =~ "Skills are unavailable"
-    refute html =~ "No skills installed"
+    {:ok, view, _html} = live(conn, "/skills")
+
+    assert has_element?(view, "#skills-installed button[phx-click=refresh]")
+    refute has_element?(view, "#skills-installed #skills-search")
+    refute has_element?(view, ~s(#skills-installed a[href="/skills?tab=catalog"]))
+    refute has_element?(view, "#skills-list")
   end
 
   describe "Hermes catalog" do
@@ -143,13 +175,14 @@ defmodule LemonWeb.SkillsLiveTest do
         "---\nname: arxiv\ndescription: Search papers.\n---\nbody\n"
       )
 
-      approvals = Application.get_env(:lemon_skills, :require_approval)
+      approvals = Application.fetch_env(:lemon_skills, :require_approval)
       Application.put_env(:lemon_skills, :require_approval, true)
 
       on_exit(fn ->
-        if is_nil(approvals),
-          do: Application.delete_env(:lemon_skills, :require_approval),
-          else: Application.put_env(:lemon_skills, :require_approval, approvals)
+        case approvals do
+          {:ok, value} -> Application.put_env(:lemon_skills, :require_approval, value)
+          :error -> Application.delete_env(:lemon_skills, :require_approval)
+        end
       end)
 
       :ok
