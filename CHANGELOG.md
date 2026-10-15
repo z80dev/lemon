@@ -8,6 +8,13 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
+### Added
+
+- omp sessions can select an approval mode and bridge tool approval prompts to
+  Lemon's conversation/channel approval UI or operator `exec.approval.resolve`.
+  Snapshots and wait progress expose pending approvals and decision counts;
+  cancelled dialogs and ended sessions clean up pending prompts.
+
 ### Fixed
 
 - Native dynamic-preset resolution binds discovered context, output limits,

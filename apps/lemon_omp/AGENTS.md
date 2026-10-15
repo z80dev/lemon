@@ -33,8 +33,10 @@ the [operator guide](../../docs/user-guide/omp.md).
 - Agent callers are scoped to their own session key; a foreign id reads as not
   found. Operator surfaces use `owner: :any`.
 - Everything from omp is untrusted. Bound and sanitize it in `Projection`, mark
-  tool results untrusted, and decline omp's blocking UI requests (Lemon is
-  headless). Reject host-tool/host-URI requests; Lemon registers none.
+  tool results untrusted, and bridge tool approval selects through
+  `LemonCore.ExecApprovals` without blocking the Session. Cancel pending approvals
+  when omp abandons a dialog or the session ends; decline all other blocking UI
+  requests. Reject host-tool/host-URI requests; Lemon registers none.
 
 ## Verification
 

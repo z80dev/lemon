@@ -33,6 +33,57 @@ defmodule LemonOmp.Tools.OmpTest do
 
     assert tool.parameters["properties"]["action"]["enum"] ==
              ~w(start wait status list send cancel close resume discover)
+
+    assert tool.parameters["properties"]["approval_mode"]["enum"] == ~w(always-ask write yolo)
+    assert tool.parameters["properties"]["approval_mode"]["description"] =~ "start, resume"
+  end
+
+  test "start and resume forward approval mode and native approval routing context", ctx do
+    tool = Omp.tool(ctx.ws, session_key: ctx.key, session_id: "native-id", run_id: "run-id")
+    LemonCore.Bus.subscribe("exec_approvals")
+
+    for params <- [
+          %{"action" => "start", "prompt" => "APPROVAL", "approval_mode" => "always-ask"},
+          %{
+            "action" => "resume",
+            "omp_session_id" => "fake-session-0001",
+            "prompt" => "APPROVAL",
+            "approval_mode" => "write"
+          }
+        ] do
+      result = run(tool, params) |> assert_untrusted()
+      refute result.is_error
+      wire = result.details["session"]
+      assert wire["approvalMode"] == params["approval_mode"]
+
+      assert File.read!(Path.join(ctx.ws, ".fake_omp.args")) =~
+               "--approval-mode #{params["approval_mode"]}"
+
+      assert_receive %LemonCore.Event{type: :approval_requested, payload: %{pending: pending}},
+                     5_000
+
+      assert pending.session_id == "native-id"
+      assert pending.run_id == "run-id"
+      assert pending.session_key == ctx.key
+      assert {:ok, _} = LemonCore.ExecApprovals.resolve(pending.id, :deny)
+      await_wire(wire["id"], &(&1["pendingApprovals"] == []))
+      assert {:ok, _} = LemonOmp.close(wire["id"])
+    end
+  end
+
+  test "wait reports pending approval and where to resolve it", ctx do
+    parent = self()
+    on_update = fn update -> send(parent, {:approval_update, update}) end
+    result = run(ctx.tool, %{"action" => "start", "prompt" => "APPROVAL"})
+    id = result.details["session"]["id"]
+    await_wire(id, &(&1["pendingApprovals"] != []))
+    signal = LemonAgent.AbortSignal.new()
+    :ok = LemonAgent.AbortSignal.abort(signal)
+    wait = run(ctx.tool, %{"action" => "wait", "id" => id}, on_update, signal)
+    assert text(wait) =~ "Pending approvals:"
+    assert_receive {:approval_update, update}
+    assert text(update) =~ "Waiting for approval: bash"
+    assert text(update) =~ "exec.approval.resolve"
   end
 
   test "start, status, list, send, cancel and close a session it owns", ctx do

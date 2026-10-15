@@ -2,7 +2,7 @@
 # Test double for `omp --mode rpc` (newline-delimited JSON over stdio).
 #
 # LemonOmp spawns it as `fake_omp --mode rpc --cwd DIR [--model M]
-# [--thinking L] [--resume ID]`. Lemon strips LEMON_* variables from the
+# [--thinking L] [--approval-mode A] [--resume ID]`. Lemon strips LEMON_* variables from the
 # child, so behaviour is selected per workspace instead:
 #
 #   DIR/.fake_omp_mode   startup mode (default: $FAKE_OMP_MODE, else normal)
@@ -30,6 +30,12 @@
 #               the turn completes once the confirm reply arrives
 #   BIGTEXT     complete the turn with a ~100 KB assistant text
 #   LATE_ACK    finish the whole turn before acknowledging the prompt
+#   APPROVAL    wait for an Approve/Deny tool approval
+#   APPROVAL_TIMEOUT  approval with a short omp dialog timeout
+#   APPROVAL_CANCEL   cancel approval when a follow_up arrives
+#   APPROVAL_CANCEL_NOW  cancel immediately (registration race)
+#   APPROVAL_EXIT  exit when a follow_up arrives, leaving the approval pending
+#   OTHER_UI    emit input/editor/non-approval selects, all declined
 #   anything else completes the turn at once.
 
 all_args="$*"
@@ -63,6 +69,8 @@ session_id=${resume:-fake-session-0001}
 turns_done=0
 held=
 muted=0
+approval=
+approval_action=
 
 emit() {
   printf '%s\n' "$1"
@@ -182,6 +190,26 @@ while IFS= read -r line; do
       start_turn
 
       case "$msg" in
+        *APPROVAL*)
+          held=$id
+          approval=ui-approval-1
+          approval_action=$msg
+          timeout=
+          case "$msg" in *APPROVAL_TIMEOUT*) timeout=',"timeout":100' ;; esac
+          emit '{"type":"extension_ui_request","id":"ui-approval-1","method":"select","title":"Allow tool: bash\nCommand: printf safe\u001b[31m\u202e","options":["Approve","Deny"]'"$timeout"'}'
+          case "$msg" in
+            *APPROVAL_CANCEL_NOW*)
+              emit '{"type":"extension_ui_request","id":"ui-cancel-1","method":"cancel","targetId":"ui-approval-1"}'
+              approval=
+              ;;
+          esac
+          ;;
+        *OTHER_UI*)
+          held=$id
+          emit '{"type":"extension_ui_request","id":"ui-input","method":"input","title":"Input?"}'
+          emit '{"type":"extension_ui_request","id":"ui-editor","method":"editor","title":"Edit?"}'
+          emit '{"type":"extension_ui_request","id":"ui-select","method":"select","title":"Choose","options":["Deny","Approve"]}'
+          ;;
         *HOLD*)
           held=$id
           ;;
@@ -216,16 +244,28 @@ while IFS= read -r line; do
       ;;
     follow_up)
       respond "$id" follow_up
+      case "$approval_action" in
+        *APPROVAL_CANCEL*)
+          emit '{"type":"extension_ui_request","id":"ui-cancel-1","method":"cancel","targetId":"ui-approval-1"}'
+          approval=
+          ;;
+        *APPROVAL_EXIT*) exit 3 ;;
+      esac
       ;;
     abort)
       respond "$id" abort
       if [ -n "$held" ]; then
+        if [ -n "$approval" ]; then
+          emit '{"type":"extension_ui_request","id":"ui-cancel-abort","method":"cancel","targetId":"'"$approval"'"}'
+          approval=
+        fi
         abort_turn "$held"
         held=
       fi
       ;;
     extension_ui_response)
       if [ -n "$held" ]; then
+        approval=
         complete_turn "$held" "UI answered"
         held=
       fi

@@ -21,6 +21,7 @@ defmodule LemonOmp do
   alias LemonOmp.{Config, Manager, Projection, Session, SessionFiles}
 
   @thinking_levels ~w(off minimal low medium high xhigh max auto)
+  @approval_modes ~w(always-ask write yolo)
   @model_pattern ~r/\A[A-Za-z0-9][A-Za-z0-9._:\/@+-]{0,127}\z/
   @resume_pattern ~r/\A[0-9A-Za-z][0-9A-Za-z-]{3,63}\z/
   @max_prompt_bytes 65_536
@@ -103,8 +104,9 @@ defmodule LemonOmp do
 
   @doc """
   Start an omp process for `params` (`prompt`, `cwd`, optional `model`,
-  `thinking`, `resume`). Returns once omp acknowledged the prompt, or once it is
-  ready when resuming without one.
+  `thinking`, `resume`, `approval_mode`). Approval mode is `always-ask`, `write`
+  or `yolo`; omitting it keeps omp's configured mode. Returns once omp
+  acknowledged the prompt, or once it is ready when resuming without one.
   """
   @spec start(map(), keyword()) :: {:ok, map()} | {:error, reason()}
   def start(params, opts \\ []) when is_map(params) do
@@ -115,7 +117,8 @@ defmodule LemonOmp do
          {:ok, resume} <- validate_optional(params["resume"], @resume_pattern),
          {:ok, prompt} <- validate_prompt(params["prompt"], resume),
          {:ok, model} <- validate_optional(params["model"], @model_pattern),
-         {:ok, thinking} <- validate_thinking(params["thinking"]) do
+         {:ok, thinking} <- validate_thinking(params["thinking"]),
+         {:ok, approval_mode} <- validate_approval_mode(params["approval_mode"]) do
       id = "omp_" <> Base.encode16(:crypto.strong_rand_bytes(6), case: :lower)
 
       session_opts = [
@@ -125,6 +128,7 @@ defmodule LemonOmp do
         prompt: prompt,
         model: model,
         thinking: thinking,
+        approval_mode: approval_mode,
         resume: resume,
         owner: normalize_owner(Keyword.get(opts, :owner, %{kind: :operator}))
       ]
@@ -191,6 +195,8 @@ defmodule LemonOmp do
 
     try do
       with {:ok, wire} <- get(id, opts) do
+        notify(opts[:on_update], wire)
+
         if wire["status"] in ["running", "starting"] do
           deadline = System.monotonic_time(:millisecond) + timeout_ms
           wait_loop(id, wire, deadline, opts)
@@ -339,8 +345,12 @@ defmodule LemonOmp do
 
   defp owns?(_owner, _wire), do: false
 
-  defp normalize_owner(%{kind: :agent, session_key: key}) when is_binary(key) and key != "",
-    do: %{kind: :agent, session_key: key}
+  defp normalize_owner(%{kind: :agent, session_key: key} = owner)
+       when is_binary(key) and key != "",
+       do: Map.take(owner, [:kind, :session_key, :session_id, :run_id, :agent_id])
+
+  defp normalize_owner(owner) when is_map(owner),
+    do: owner |> Map.take([:session_id, :run_id, :agent_id]) |> Map.put(:kind, :operator)
 
   defp normalize_owner(_owner), do: %{kind: :operator}
 
@@ -401,6 +411,10 @@ defmodule LemonOmp do
   defp validate_thinking(""), do: {:ok, nil}
   defp validate_thinking(level) when level in @thinking_levels, do: {:ok, level}
   defp validate_thinking(_level), do: {:error, :invalid_params}
+
+  defp validate_approval_mode(nil), do: {:ok, nil}
+  defp validate_approval_mode(mode) when mode in @approval_modes, do: {:ok, mode}
+  defp validate_approval_mode(_mode), do: {:error, :invalid_params}
 
   defp normalize_keys(params), do: Map.new(params, fn {key, value} -> {to_string(key), value} end)
 
