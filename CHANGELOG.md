@@ -21,6 +21,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Added
 
+- omp workers support opt-in per-worker Git worktree isolation through `isolate`
+  on starts and batch tasks, with managed branches, merge instructions, and
+  bounded cleanup that preserves uncommitted or committed work.
 - Cached omp model catalog through `LemonOmp.models/1` and the `omp` tool's
   `models` action, with cheap/free filtering, pricing and upstream availability warnings.
 - Computer use: with `LEMON_COMPUTER_USE_ENABLED=true`, Lemon agents get
