@@ -329,6 +329,8 @@ global → project; every key is optional:
 max_depth = 2              # -1 unlimited; 0 = the main session cannot delegate
 max_runtime_ms = 0         # per-child wall-clock limit; 0 disables it
 idle_ttl_ms = 300000       # park a completed live child after 5 min; 0 keeps it idle
+request_budget = 200       # soft assistant-request budget per run; 0 disables it
+request_budget_notice = true # send one wrap-up steer at the soft budget
 worktree_merge = "none"    # default merge for worktree: true tasks: none | patch | branch
 disabled_agents = ["sonic"]
 
@@ -341,6 +343,16 @@ reviewer = "@slow"         # model or @role per persona ID
   children created at the cap never receive the `task` tool.
 - `max_runtime_ms`: wall-clock limit for each child session; the child fails
   with a timeout error when it is exceeded.
+- `request_budget`: completed assistant requests per child run, including schema
+  correction requests. At the soft limit, the child receives one concise wrap-up
+  steering message (unless `request_budget_notice = false`). At `ceil(1.5 × budget)`
+  it is gracefully stopped and returns its latest visible output as partial,
+  with `details.budget_exhausted = true`, `request_count`, and a stop annotation.
+  `0` disables both thresholds. The task's optional `request_budget` parameter
+  overrides this default per item, including batch/swarm children. Woken and
+  revived children start a fresh count. Invalid structured output at exhaustion
+  returns an explicit error result with the partial text, without correction
+  retries; valid JSON is still decoded into `structured_output`.
 - `idle_ttl_ms`: how long a successfully completed child stays live and idle.
   After the TTL, Lemon releases its session but retains its transcript and
   address. `0` keeps it idle until the parent session ends. A direct

@@ -101,6 +101,7 @@ defmodule CodingAgent.Tools.Task.Params do
     queue_mode = Map.get(params, "queue_mode")
     context = Map.get(params, "context")
     schema_mode = Map.get(params, "schema_mode")
+    request_budget = Map.get(params, "request_budget")
     role_cwd = delegated_cwd || cwd
 
     cond do
@@ -181,6 +182,10 @@ defmodule CodingAgent.Tools.Task.Params do
       not is_nil(schema_mode) and schema_mode not in @schema_modes ->
         {:error, "schema_mode must be one of: #{Enum.join(@schema_modes, ", ")}"}
 
+      Map.has_key?(params, "request_budget") and
+          not (is_integer(request_budget) and request_budget >= 0) ->
+        {:error, "request_budget must be a nonnegative integer"}
+
       true ->
         task_settings = task_settings(cwd, opts)
 
@@ -209,6 +214,8 @@ defmodule CodingAgent.Tools.Task.Params do
             role_id: role_id,
             persona: persona,
             schema_mode: schema_mode || "strict",
+            request_budget: request_budget || task_settings.request_budget,
+            request_budget_notice: task_settings.request_budget_notice,
             async: async?,
             auto_followup: auto_followup,
             worktree: worktree,

@@ -752,6 +752,10 @@ defmodule CodingAgent.Session do
     GenServer.call(session, :context_snapshot, 5_000)
   end
 
+  @doc "Current model and settings for auxiliary tool completions, without conversation data."
+  @spec model_context(GenServer.server()) :: map()
+  def model_context(session), do: GenServer.call(session, :model_context)
+
   @doc "Read selected-branch recovery state without exposing model context or mutating the session."
   def recovery_snapshot(session), do: GenServer.call(session, :recovery_snapshot, 5_000)
 
@@ -1299,6 +1303,10 @@ defmodule CodingAgent.Session do
     }
 
     {:reply, snapshot, state}
+  end
+
+  def handle_call(:model_context, _from, state) do
+    {:reply, %{model: state.model, settings_manager: state.settings_manager}, state}
   end
 
   def handle_call(:save, _from, state) do

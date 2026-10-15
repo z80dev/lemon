@@ -261,7 +261,11 @@ defmodule CodingAgent.Tools.Task.Execution do
                   signal,
                   on_update_safe,
                   execution.role_id,
-                  [task_id: execution.task_id] ++
+                  [
+                    task_id: execution.task_id,
+                    request_budget: validated.request_budget,
+                    request_budget_notice: validated.request_budget_notice
+                  ] ++
                     output_validator_opts(execution.validated) ++
                     runner_timeout_opts(execution.effective_cwd, opts)
                 )
@@ -346,17 +350,32 @@ defmodule CodingAgent.Tools.Task.Execution do
         result
 
       schema ->
-        text = Result.visible_output_text(result)
+        text = result.details[:partial_output] || Result.visible_output_text(result)
         decoded = StructuredOutput.decode(text, schema)
+        budget_exhausted = result.details[:budget_exhausted] == true
 
-        case {decoded, validated[:schema_mode]} do
-          {{:ok, output}, _mode} ->
+        case {decoded, validated[:schema_mode], budget_exhausted} do
+          {{:ok, output}, _mode, _budget_exhausted} ->
             %{result | details: Map.put(result.details || %{}, :structured_output, output)}
 
-          {{:error, reason}, "permissive"} ->
+          {{:error, reason}, _mode, true} ->
+            %{
+              result
+              | is_error: true,
+                content:
+                  result.content ++
+                    [
+                      %LemonAi.Types.TextContent{
+                        text: "Structured output missing at request budget: #{reason}"
+                      }
+                    ],
+                details: Map.put(result.details, :structured_output_error, reason)
+            }
+
+          {{:error, reason}, "permissive", false} ->
             %{result | details: Map.put(result.details || %{}, :structured_output_error, reason)}
 
-          {{:error, _reason} = error, _mode} ->
+          {{:error, _reason} = error, _mode, false} ->
             error
         end
     end
