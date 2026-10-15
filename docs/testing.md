@@ -47,6 +47,10 @@ control plane. Install its locked dependencies in a fresh worktree first:
 `(cd clients/tui && bun install --frozen-lockfile)`. Release BEAM setup performs
 the same install before its deterministic gates.
 
+SVG tests use injected rasterizers by default. The real `rsvg-convert` case carries
+the `:rsvg_convert` tag, which the coding-agent helper explicitly excludes when
+librsvg is not installed. Install librsvg to include that host-backed coverage.
+
 Product and packaged-boot smokes isolate their home/store directories and use
 valid, test-only 32-byte secrets keys; no live provider credential is needed.
 For packaged CLI coverage, run `scripts/verify_release_runtime_boot` in
@@ -120,6 +124,11 @@ Provider-registry fixtures must restore the exact API-to-module mappings they
 found, rather than leave the registry empty after extension tests. Provider
 stream fixtures use `LemonAi.Types.AssistantMessage` terminal payloads and call
 `EventStream.error/2` for errors, not a raw error followed by successful completion.
+
+Controlled provider-outage fixtures own their circuit-breaker and rate-limiter
+processes and await terminal health accounting before teardown; injected failures
+must not poison another case or a repeated run.
+
 Approval fixtures read pending requests through `LemonCore.ExecApprovalStore`;
 the underlying table also retains terminal resolution receipts.
 
