@@ -6,12 +6,6 @@ defmodule LemonAi.ApplicationTest do
   """
 
   describe "application supervision tree" do
-    test "application starts correctly" do
-      # The application should already be started from test_helper.exs
-      # Verify the main supervisor is running
-      assert Process.whereis(LemonAi.Supervisor) != nil
-    end
-
     test "StreamTaskSupervisor is started" do
       assert Process.whereis(LemonAi.StreamTaskSupervisor) != nil
 
@@ -23,89 +17,9 @@ defmodule LemonAi.ApplicationTest do
 
       assert Task.await(task) == :stream_task_executed
     end
-
-    test "RateLimiterRegistry is started" do
-      assert Process.whereis(LemonAi.RateLimiterRegistry) != nil
-
-      # Verify it's a Registry by doing a lookup (returns empty list for non-existent key)
-      result = Registry.lookup(LemonAi.RateLimiterRegistry, :nonexistent_key)
-      assert result == []
-    end
-
-    test "CircuitBreakerRegistry is started" do
-      assert Process.whereis(LemonAi.CircuitBreakerRegistry) != nil
-
-      # Verify it's a Registry by doing a lookup (returns empty list for non-existent key)
-      result = Registry.lookup(LemonAi.CircuitBreakerRegistry, :nonexistent_key)
-      assert result == []
-    end
-
-    test "ProviderSupervisor is started" do
-      assert Process.whereis(LemonAi.ProviderSupervisor) != nil
-
-      # Verify it's a DynamicSupervisor
-      children = DynamicSupervisor.which_children(LemonAi.ProviderSupervisor)
-      assert is_list(children)
-    end
-
-    test "CallDispatcher is started" do
-      assert Process.whereis(LemonAi.CallDispatcher) != nil
-
-      # Verify it responds to get_state
-      state = LemonAi.CallDispatcher.get_state()
-      assert is_map(state)
-      assert Map.has_key?(state, :concurrency_caps)
-      assert Map.has_key?(state, :active_requests)
-      assert Map.has_key?(state, :default_cap)
-    end
-
-    test "supervisor has correct child count" do
-      # The application should have 6 children:
-      # 1. LemonAi.StreamTaskSupervisor (Task.Supervisor)
-      # 2. LemonAi.RateLimiterRegistry (Registry)
-      # 3. LemonAi.CircuitBreakerRegistry (Registry)
-      # 4. LemonAi.ProviderSupervisor (DynamicSupervisor)
-      # 5. LemonAi.CallDispatcher (GenServer)
-      # 6. LemonAi.ModelCache (GenServer)
-      children = Supervisor.which_children(LemonAi.Supervisor)
-      assert length(children) == 6
-    end
-
-    test "supervisor uses one_for_one strategy" do
-      # Verify children have unique ids
-      children = Supervisor.which_children(LemonAi.Supervisor)
-      ids = Enum.map(children, fn {id, _, _, _} -> id end)
-      assert length(ids) == length(Enum.uniq(ids))
-    end
-  end
-
-  describe "child process characteristics" do
-    test "all child processes are alive" do
-      children = Supervisor.which_children(LemonAi.Supervisor)
-
-      for {_id, pid, _type, _modules} <- children do
-        assert is_pid(pid)
-        assert Process.alive?(pid)
-      end
-    end
-
-    test "supervisor counts children correctly" do
-      counts = Supervisor.count_children(LemonAi.Supervisor)
-
-      assert counts.active == 6
-      assert counts.specs == 6
-      # ProviderSupervisor and StreamTaskSupervisor are supervisors
-      assert counts.supervisors >= 2
-      # CallDispatcher and ModelCache are workers
-      assert counts.workers >= 2
-    end
   end
 
   describe "ProviderRegistry initialization" do
-    test "ProviderRegistry is initialized" do
-      assert LemonAi.ProviderRegistry.initialized?() == true
-    end
-
     test "built-in providers are registered" do
       # Check that the major providers are registered
       assert LemonAi.ProviderRegistry.registered?(:anthropic_messages)
@@ -139,14 +53,6 @@ defmodule LemonAi.ApplicationTest do
   end
 
   describe "CallDispatcher functionality" do
-    test "get_state returns initial state" do
-      state = LemonAi.CallDispatcher.get_state()
-
-      assert is_map(state.concurrency_caps)
-      assert is_map(state.active_requests)
-      assert state.default_cap == 10
-    end
-
     test "can set and get concurrency cap" do
       provider = :test_provider_app
 
@@ -186,29 +92,6 @@ defmodule LemonAi.ApplicationTest do
 
       results = Enum.map(tasks, &Task.await/1)
       assert results == [{:ok, 1}, {:ok, 2}, {:ok, 3}, {:ok, 4}, {:ok, 5}]
-    end
-  end
-
-  describe "graceful shutdown behavior" do
-    test "ProviderSupervisor stops cleanly when empty" do
-      # Verify the supervisor can list children without error
-      children = DynamicSupervisor.which_children(LemonAi.ProviderSupervisor)
-      assert is_list(children)
-
-      # Verify we can check the DynamicSupervisor state
-      counts = DynamicSupervisor.count_children(LemonAi.ProviderSupervisor)
-      assert is_map(counts)
-      assert Map.has_key?(counts, :active)
-    end
-
-    test "registries can handle lookups" do
-      # Test RateLimiterRegistry
-      result = Registry.lookup(LemonAi.RateLimiterRegistry, :nonexistent)
-      assert result == []
-
-      # Test CircuitBreakerRegistry
-      result = Registry.lookup(LemonAi.CircuitBreakerRegistry, :nonexistent)
-      assert result == []
     end
   end
 

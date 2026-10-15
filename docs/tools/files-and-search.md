@@ -19,6 +19,22 @@ not shared automatically with child sessions.
 `write proc://<id>/kill` sends SIGTERM with the normal kill-process fallback.
 Foreign process IDs are not accessible.
 
+`read issue://42` and `read pr://42` resolve the GitHub repository from the cwd's
+git `origin` remote (HTTPS or SSH). Explicit forms such as
+`issue://owner/repo/42` and `pr://owner/repo/42` work outside a checkout.
+Lemon prefers an installed, authenticated `gh` CLI; if unavailable or unsuccessful,
+it uses public GitHub REST without handling tokens itself. Issue/PR descriptions
+include the first 100 comments. `pr://42/diff` lists files with zero-based indexes,
+`pr://42/diff/0` shows one patch, and `pr://42/diff/all` shows all returned patches.
+Diff enumeration is capped at 1000 files; GitHub may omit large or binary patches.
+Views are capped at 50 KB and marked untrusted.
+
+`read history://<task_id>` shows the owned child's assignment, status, up to ten
+recent visible progress updates, and final visible answer retained by TaskStore.
+It is a concise transcript, not raw session events: hidden reasoning, tool-call
+internals and foreign tasks are excluded. History is capped at 12,000 Unicode
+characters and tagged untrusted. Expired TaskStore entries are unavailable.
+
 ## Read line selectors
 
 `read` pages text with `offset`/`limit`, or with a selector appended to `path`:

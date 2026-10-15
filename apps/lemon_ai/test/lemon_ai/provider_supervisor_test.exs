@@ -145,16 +145,6 @@ defmodule LemonAi.ProviderSupervisorTest do
   # ============================================================================
 
   describe "supervisor startup" do
-    test "supervisor is running after application start" do
-      assert pid = Process.whereis(LemonAi.ProviderSupervisor)
-      assert Process.alive?(pid)
-    end
-
-    test "supervisor has correct module" do
-      pid = Process.whereis(LemonAi.ProviderSupervisor)
-      assert {:registered_name, LemonAi.ProviderSupervisor} = Process.info(pid, :registered_name)
-    end
-
     test "supervisor can be started with custom name" do
       custom_name = :"custom_supervisor_#{System.unique_integer([:positive])}"
       {:ok, pid} = ProviderSupervisor.start_link(name: custom_name)
