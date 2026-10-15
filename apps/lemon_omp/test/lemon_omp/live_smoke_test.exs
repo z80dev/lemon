@@ -118,6 +118,100 @@ defmodule LemonOmp.LiveSmokeTest do
     assert {:ok, %{"status" => "closed"}} = LemonOmp.close(resumed["id"])
   end
 
+  test "real omp redirects an active bash tool into a completed write turn", ctx do
+    assert {:ok, started} =
+             LemonOmp.start(%{
+               cwd: ctx.cwd,
+               model: ctx.model,
+               thinking: "off",
+               approval_mode: "yolo",
+               prompt:
+                 "Call bash with command `sleep 60`, timeout 90 and async false. " <>
+                   "This is a finite foreground command, not a service: omit the name and ready fields entirely. " <>
+                   "Do not do anything else."
+             })
+
+    id = started["id"]
+    os_pid = :sys.get_state(session_pid(id)).os_pid
+    kill_on_exit(os_pid)
+
+    await_wire(id, &(&1["activeTools"] != []), 180_000)
+
+    parent = self()
+
+    waiter =
+      Task.async(fn ->
+        LemonOmp.wait(id, 180_000,
+          on_update: fn wire -> send(parent, {:redirect_progress, wire}) end
+        )
+      end)
+
+    assert_receive {:redirect_progress, %{"status" => "running"}}
+
+    assert {:ok, %{"delivery" => "redirect"}} =
+             LemonOmp.send_message(
+               id,
+               "Stop that. Instead create redirected.txt containing exactly ok using the write tool, then stop.",
+               :redirect
+             )
+
+    assert {:ok, final, :settled} = Task.await(waiter, 190_000)
+    assert final["status"] == "idle"
+    assert final["lastTurn"] == "completed"
+    assert File.read!(Path.join(ctx.cwd, "redirected.txt")) == "ok"
+    assert Enum.any?(final["recentTools"], &String.contains?(&1["name"], "write"))
+    assert {:ok, %{"status" => "closed"}} = LemonOmp.close(id)
+    wait_until(fn -> not os_alive?(os_pid) end, 20_000)
+  end
+
+  test "explicit continuation starts a new turn on the same history after SIGKILL", ctx do
+    assert {:ok, started} =
+             LemonOmp.start(%{
+               cwd: ctx.cwd,
+               model: ctx.model,
+               thinking: "off",
+               approval_mode: "yolo",
+               prompt:
+                 "First run sleep 30 using bash. After it finishes, use write to create restored.txt containing exactly ok. Then stop."
+             })
+
+    id = started["id"]
+    os_pid = :sys.get_state(session_pid(id)).os_pid
+    kill_on_exit(os_pid)
+
+    await_wire(
+      id,
+      fn wire ->
+        Enum.any?(wire["activeTools"], &String.contains?(&1["name"], "bash"))
+      end,
+      180_000
+    )
+
+    assert {_, 0} = System.cmd("kill", ["-KILL", Integer.to_string(os_pid)])
+    crashed = await_wire(id, &(&1["status"] == "failed"), 20_000)
+    assert is_binary(crashed["ompSessionId"])
+
+    assert {:ok, resumed} =
+             LemonOmp.start(%{
+               cwd: ctx.cwd,
+               resume: crashed["ompSessionId"],
+               continue: true,
+               model: ctx.model,
+               thinking: "off",
+               approval_mode: "yolo"
+             })
+
+    # The free model can loop on an interrupted bash transcript. Assert the
+    # headless contract we actually provide, not native --restore recovery:
+    # an acknowledged new turn on the crashed session's persisted history.
+    assert resumed["status"] == "running"
+    assert resumed["ompSessionId"] == crashed["ompSessionId"]
+    assert resumed["id"] != crashed["id"]
+    assert {:ok, _} = LemonOmp.cancel(resumed["id"])
+    assert {:ok, stopped, :settled} = LemonOmp.wait(resumed["id"], 20_000)
+    assert stopped["status"] == "idle"
+  end
+
   test "real omp tool approvals round-trip through Lemon's shared approvals", ctx do
     put_app_env(:approvals, :bridge)
     LemonCore.Bus.subscribe("exec_approvals")

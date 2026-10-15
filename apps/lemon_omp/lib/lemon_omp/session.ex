@@ -66,7 +66,7 @@ defmodule LemonOmp.Session do
   @spec await_started(pid(), timeout()) :: {:ok, map()} | {:error, term()}
   def await_started(pid, timeout), do: safe_call(pid, :await_started, timeout)
 
-  @spec send_message(pid(), String.t(), :steer | :follow_up) ::
+  @spec send_message(pid(), String.t(), :steer | :follow_up | :redirect) ::
           {:ok, map()} | {:error, term()}
   def send_message(pid, message, mode),
     do: safe_call(pid, {:send_message, message, mode}, Config.command_timeout_ms() + 2_000)
@@ -131,6 +131,7 @@ defmodule LemonOmp.Session do
       start_waiters: [],
       started: nil,
       pending: %{},
+      redirects: %{},
       approvals: %{},
       seq: 0,
       ready_timer: nil,
@@ -168,6 +169,7 @@ defmodule LemonOmp.Session do
     {type, delivery} =
       case {state.projection.status, mode} do
         {:running, :follow_up} -> {"follow_up", "followUp"}
+        {:running, :redirect} -> {"abort_and_prompt", "redirect"}
         {:running, _steer} -> {"steer", "steer"}
         {_idle, _mode} -> {"prompt", "prompt"}
       end
@@ -227,7 +229,22 @@ defmodule LemonOmp.Session do
         {:noreply, state}
 
       {entry, pending} ->
-        {:noreply, reply_pending(%{state | pending: pending}, entry, {:error, :outcome_unknown})}
+        state = reply_pending(%{state | pending: pending}, entry, {:error, :outcome_unknown})
+
+        # An unacknowledged redirect must not hold the session "running"
+        # forever: release its guard so omp's own events decide the status.
+        state =
+          if is_map_key(state.redirects, id) do
+            state = clear_redirect(state, id)
+
+            if state.projection.settling and not state.projection.redirecting,
+              do: handle_frame(state, {:event, "session_settled", %{}}),
+              else: state
+          else
+            state
+          end
+
+        {:noreply, state}
     end
   end
 
@@ -354,10 +371,10 @@ defmodule LemonOmp.Session do
     end
   end
 
-  defp handle_frame(state, {:response, id, _command, result}) do
+  defp handle_frame(state, {:response, id, command, result}) do
     case Map.pop(state.pending, id) do
       {nil, _pending} ->
-        state
+        handle_late_response(state, id, command, result)
 
       {entry, pending} ->
         if entry.timer, do: Process.cancel_timer(entry.timer)
@@ -404,7 +421,14 @@ defmodule LemonOmp.Session do
     before = state.projection
 
     state =
-      if type == "agent_start", do: %{state | agent_starts: state.agent_starts + 1}, else: state
+      if type == "agent_start" do
+        # Keep the current redirect's id for omp's asynchronous prompt failure,
+        # but discard ids from earlier turns. A new start releases the idle guard.
+        redirects = Map.reject(state.redirects, fn {_id, seen} -> seen < state.agent_starts end)
+        %{state | agent_starts: state.agent_starts + 1, redirects: redirects}
+      else
+        state
+      end
 
     state = update_projection(state, &Projection.apply_event(&1, type, frame))
     after_status = state.projection.status
@@ -460,16 +484,32 @@ defmodule LemonOmp.Session do
   defp handle_response(state, %{kind: {:send, from, delivery}} = entry, {:ok, _data}) do
     GenServer.reply(from, {:ok, %{"delivery" => delivery}})
 
-    if delivery == "prompt" do
-      state |> cancel_idle() |> mark_running_after_ack(entry) |> publish_now("updated")
-    else
-      state
+    case delivery do
+      "prompt" ->
+        state |> cancel_idle() |> mark_running_after_ack(entry) |> publish_now("updated")
+
+      "redirect" ->
+        state |> cancel_idle() |> mark_running_after_ack(entry) |> publish_now("redirected")
+
+      _ ->
+        state
     end
   end
 
-  defp handle_response(state, %{kind: {:send, from, _delivery}}, {:error, message, _code}) do
+  defp handle_response(state, %{kind: {:send, from, delivery}} = entry, {:error, message, _code}) do
     GenServer.reply(from, {:error, {:rejected, Projection.clean(message, 500)}})
-    state
+
+    if delivery == "redirect" do
+      state = clear_redirect(state, entry.id)
+
+      if state.projection.settling and not state.projection.redirecting do
+        handle_frame(state, {:event, "session_settled", %{}})
+      else
+        schedule_publish(state)
+      end
+    else
+      state
+    end
   end
 
   defp handle_response(state, %{kind: {:cancel, from}}, {:ok, _data}) do
@@ -489,6 +529,28 @@ defmodule LemonOmp.Session do
     do: state |> update_projection(&Projection.apply_state(&1, data)) |> schedule_publish()
 
   defp handle_response(state, _entry, _result), do: state
+
+  # abort_and_prompt acknowledges before its new prompt finishes. omp can then
+  # send a second, failing response with the same id: it is a turn error, not a
+  # second command reply. Keep the caller's accepted result and settle the turn.
+  defp handle_late_response(state, id, "abort_and_prompt", {:error, message, _code})
+       when is_map_key(state.redirects, id) do
+    state
+    |> clear_redirect(id)
+    |> handle_frame(
+      {:event, "prompt_result", %{"status" => "error", "error" => %{"message" => message}}}
+    )
+  end
+
+  defp handle_late_response(state, _id, _command, _result), do: state
+
+  defp clear_redirect(state, id) do
+    redirects = Map.delete(state.redirects, id)
+    redirecting = Enum.any?(redirects, fn {_id, seen} -> seen == state.agent_starts end)
+
+    %{state | redirects: redirects}
+    |> update_projection(&%{&1 | redirecting: redirecting})
+  end
 
   defp decline_ui_request(state, id, method) do
     case Rpc.decline_ui_request(id, method) do
@@ -604,8 +666,15 @@ defmodule LemonOmp.Session do
         _ -> Process.send_after(self(), {:command_timeout, id}, Config.command_timeout_ms())
       end
 
-    entry = %{kind: kind, timer: timer, agent_starts: state.agent_starts}
-    %{state | seq: seq, pending: Map.put(state.pending, id, entry)}
+    entry = %{id: id, kind: kind, timer: timer, agent_starts: state.agent_starts}
+    state = %{state | seq: seq, pending: Map.put(state.pending, id, entry)}
+
+    if type == "abort_and_prompt" do
+      %{state | redirects: Map.put(state.redirects, id, state.agent_starts)}
+      |> update_projection(&%{&1 | redirecting: true})
+    else
+      state
+    end
   end
 
   defp write(%{port: nil}, _frame), do: :ok

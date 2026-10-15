@@ -16,14 +16,18 @@ installed”). For the workflow, see [Delegating to omp](../user-guide/omp.md).
 | `wait` | `id` or `ids` (array); optional `wait_for` (`all` default, `any`, for `ids`), `timeout_seconds` (default 600, max 3600) | Blocks until the current turn ends, or all/any selected workers settle, streaming progress. Timeout or a Lemon abort stops waiting only; omp keeps working. |
 | `status` | `id` | What the session is doing now: status, activity, running/recent tools, todos, subagents, usage and cost, latest output or last result. |
 | `list` | – | Sessions this conversation started (live and recently ended). |
-| `send` | `id`, `message`; optional `mode` (`steer` default, or `follow_up`) | Steers the running turn or queues a follow-up; an idle session starts a new turn with the message. |
+| `send` | `id`, `message`; optional `mode` (`steer` default, `follow_up`, or `redirect`) | Steers the running turn, queues a follow-up, or redirects: stops the current turn and starts over with this message atomically in omp. Use redirect when omp is going the wrong way. An idle session starts a new turn with the message in every mode. |
 | `cancel` | `id` | Aborts the running turn; the process stays open. |
 | `close` | `id` | Ends the omp process; its session can be resumed. |
 | `discover` | optional `cwd` | omp's stored sessions for the workspace (read-only). |
-| `resume` | `omp_session_id` (id or unique prefix from `discover`); optional `prompt`, `cwd`, `model`, `thinking`, `approval_mode`, `wait` | Reopens a stored omp session as a new invocation. |
+| `resume` | `omp_session_id` (id or unique prefix from `discover`); optional `prompt`, `continue` (boolean), `cwd`, `model`, `thinking`, `approval_mode`, `wait` | Reopens a stored omp session as a new invocation. After a crash/kill, `continue: true` sends a fixed request to review state and finish unfinished work; requires an id and no prompt. It does not restore subagents: omp 18.11's `--restore` rejects RPC mode. |
 
 `id` is Lemon's invocation id (`omp_…`); `omp_session_id` is omp's own
 session id.
+
+`discover` includes an `interrupted` boolean and marks unfinished last turns in
+its text. This bounded-tail hint can also describe a still-running session;
+check `liveId` and `activeElsewhere` before explicitly continuing it.
 
 `approval_mode` is `always-ask` (ask before writes and execution), `write`
 (ask before execution), or `yolo` (auto-approve ordinary tool calls). It overrides
@@ -41,6 +45,12 @@ reported per task. Partial startup failure is not a tool error unless every
 task fails. “Outcome unknown” retains the invocation id for reconciliation.
 Multi-worker reports include a line per worker and combined tokens/cost.
 `wait_for` applies only to multi-worker waits; `mode` remains the send mode.
+
+`send` with `mode: "redirect"` is acknowledged when omp accepts its atomic
+abort-and-prompt command, not when the replacement turn finishes. Existing
+`wait` calls keep waiting for that replacement turn. If the new prompt fails
+after acceptance, the session reports `lastTurn: "error"` and its bounded
+`error`; the accepted command is not replied to again or retried.
 
 Isolated workers run in `<git common dir>/lemon-omp-worktrees/<id>` on branch
 `lemon-omp/<id>`. Reports include the path and merge/cherry-pick instructions.

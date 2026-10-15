@@ -23,6 +23,12 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Added
 
+- omp's chat tool and Elixir API can redirect a running turn atomically with
+  `abort_and_prompt`. Existing waits follow the replacement turn; asynchronous
+  prompt failures are reported without acknowledging the same command twice.
+- Explicit omp crash continuation (`resume` with `continue: true`) through a
+  state-review prompt, plus a bounded read-only discovery `interrupted` hint.
+  This does not revive subagents; omp's native `--restore` is interactive-only.
 - omp workers support opt-in per-worker Git worktree isolation through `isolate`
   on starts and batch tasks, with managed branches, merge instructions, and
   bounded cleanup that preserves uncommitted or committed work.
@@ -58,6 +64,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Lemon Bot for iPhone keeps the composer and Send button above the keyboard,
+  follows the latest message as the viewport resizes, and uses Return for a newline
+  instead of submitting and dismissing the keyboard; transcript dragging dismisses it interactively.
 - Operator-owned omp approvals bind session-scoped grants to one omp invocation,
   preventing a grant from approving identical actions in another operator session.
 - New memory backdoor/exfiltration screening no longer invalidates retained facts
