@@ -16,19 +16,23 @@ defmodule CodingAgent.Tools.Write do
   file). Larger or unavailable snapshots are omitted, never truncated.
   """
 
-  alias LemonAgent.AbortSignal
-  alias LemonAgent.Types.{AgentTool, AgentToolResult}
-  alias LemonAi.Types.TextContent
   alias CodingAgent.FileReadTracker
+  alias CodingAgent.InternalUrls
+  alias CodingAgent.InternalUrls.ProcessProtocol
   alias CodingAgent.MutationLock
   alias CodingAgent.Tools.ACPFileBridge
   alias CodingAgent.Tools.CheckpointGuard
-  alias CodingAgent.Tools.FileValidation
   alias CodingAgent.Tools.FileFormatHelpers
-  alias CodingAgent.Tools.Read
+  alias CodingAgent.Tools.FileValidation
   alias CodingAgent.Tools.LspDiagnostics
   alias CodingAgent.Tools.LspFormatter
   alias CodingAgent.Tools.PathHelpers
+  alias CodingAgent.Tools.Read
+  alias CodingAgent.Tools.Task.Messaging
+  alias CodingAgent.Tools.WriteSqlite
+  alias LemonAgent.AbortSignal
+  alias LemonAgent.Types.{AgentTool, AgentToolResult}
+  alias LemonAi.Types.TextContent
 
   @doc """
   Returns the write file tool definition.
@@ -56,7 +60,8 @@ defmodule CodingAgent.Tools.Write do
         "properties" => %{
           "path" => %{
             "type" => "string",
-            "description" => "The path to the file to write (relative to cwd or absolute)"
+            "description" =>
+              "File path, db.sqlite:table to insert JSON, or db.sqlite:table:key to update (empty content deletes)"
           },
           "content" => %{
             "type" => "string",
@@ -110,11 +115,11 @@ defmodule CodingAgent.Tools.Write do
   def execute(_id, %{"path" => "proc://" <> _ = path} = params, signal, _update, cwd, opts) do
     if AbortSignal.aborted?(signal),
       do: {:error, :aborted},
-      else: CodingAgent.InternalUrls.ProcessProtocol.write(path, params, signal, cwd, opts)
+      else: ProcessProtocol.write(path, params, signal, cwd, opts)
   end
 
   def execute(id, %{"path" => "local://" <> _ = path} = params, signal, update, cwd, opts) do
-    with {:ok, resolved} <- CodingAgent.InternalUrls.resolve(path, Keyword.put(opts, :cwd, cwd)) do
+    with {:ok, resolved} <- InternalUrls.resolve(path, Keyword.put(opts, :cwd, cwd)) do
       execute(
         id,
         Map.put(params, "path", resolved),
@@ -138,7 +143,7 @@ defmodule CodingAgent.Tools.Write do
       {:error, :aborted}
     else
       case get_content(params) do
-        {:ok, content} -> CodingAgent.Tools.Task.Messaging.send(path, content, opts)
+        {:ok, content} -> Messaging.send(path, content, opts)
         error -> error
       end
     end
@@ -154,7 +159,11 @@ defmodule CodingAgent.Tools.Write do
            {:ok, format?} <- LspFormatter.option(params, opts),
            {:ok, diagnostics?} <- LspDiagnostics.option(params, opts) do
         resolved_path = resolve_path(path, cwd, opts)
-        write_file(resolved_path, content, signal, format?, diagnostics?, cwd, opts)
+
+        case WriteSqlite.target(resolved_path) do
+          nil -> write_file(resolved_path, content, signal, format?, diagnostics?, cwd, opts)
+          target -> WriteSqlite.write(target, content, signal, cwd, opts)
+        end
       end
     end
   end
@@ -247,40 +256,38 @@ defmodule CodingAgent.Tools.Write do
   end
 
   defp write_file_local_locked(path, content, signal, format?, diagnostics?, cwd, opts) do
-    try do
-      with :ok <-
-             FileValidation.check_mutation_target(path, Keyword.put(opts, :mutation_root, cwd)),
-           {:ok, existing} <- existing_content(path),
-           {:ok, content} <- prepare_content(content, existing),
-           {:ok, checkpoint} <-
-             CheckpointGuard.before_mutation([path], cwd, opts, %{
-               tool: "write",
-               action: "overwrite",
-               path: path
-             }) do
-        baseline = LspDiagnostics.baseline(path, cwd, diagnostics?, opts)
-        old_text = read_bounded_snapshot(path)
+    with :ok <-
+           FileValidation.check_mutation_target(path, Keyword.put(opts, :mutation_root, cwd)),
+         {:ok, existing} <- existing_content(path),
+         {:ok, content} <- prepare_content(content, existing),
+         {:ok, checkpoint} <-
+           CheckpointGuard.before_mutation([path], cwd, opts, %{
+             tool: "write",
+             action: "overwrite",
+             path: path
+           }) do
+      baseline = LspDiagnostics.baseline(path, cwd, diagnostics?, opts)
+      old_text = read_bounded_snapshot(path)
 
-        do_write_file(
-          path,
-          content,
-          signal,
-          format?,
-          diagnostics?,
-          baseline,
-          cwd,
-          opts,
-          checkpoint,
-          old_text
-        )
-      end
-    rescue
-      e in File.Error ->
-        {:error, "Failed to write file: #{Exception.message(e)}"}
-
-      e ->
-        {:error, "Unexpected error: #{Exception.message(e)}"}
+      do_write_file(
+        path,
+        content,
+        signal,
+        format?,
+        diagnostics?,
+        baseline,
+        cwd,
+        opts,
+        checkpoint,
+        old_text
+      )
     end
+  rescue
+    e in File.Error ->
+      {:error, "Failed to write file: #{Exception.message(e)}"}
+
+    e ->
+      {:error, "Unexpected error: #{Exception.message(e)}"}
   end
 
   defp do_write_file(
