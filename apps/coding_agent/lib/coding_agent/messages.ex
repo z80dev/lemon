@@ -334,12 +334,18 @@ defmodule CodingAgent.Messages do
   @doc """
   Extract tool calls from an assistant message.
 
-  Returns a list of ToolCall structs from the message content.
+  Supports both CodingAgent and LemonAi assistant messages, returning their
+  original tool-call structs in content order.
   Returns an empty list for non-assistant messages.
   """
-  @spec get_tool_calls(message()) :: [ToolCall.t()]
+  @spec get_tool_calls(message() | LemonAi.Types.message()) ::
+          [ToolCall.t() | LemonAi.Types.ToolCall.t()]
   def get_tool_calls(%AssistantMessage{content: content}) do
     Enum.filter(content, &match?(%ToolCall{}, &1))
+  end
+
+  def get_tool_calls(%LemonAi.Types.AssistantMessage{} = message) do
+    LemonAi.get_tool_calls(message)
   end
 
   def get_tool_calls(_message), do: []

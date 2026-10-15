@@ -33,10 +33,10 @@ defmodule CodingAgent.Compaction do
   """
 
   alias CodingAgent.Messages
-  alias CodingAgent.Messages.ToolCall
   alias CodingAgent.Security.SecretObfuscator
   alias CodingAgent.SessionManager
   alias CodingAgent.SessionManager.SessionEntry
+  alias CodingAgent.Tools.Patch
 
   # ============================================================================
   # Constants
@@ -868,8 +868,11 @@ defmodule CodingAgent.Compaction do
   @doc """
   Extract read/modified files from messages for compaction details.
 
-  Scans tool calls for read, write, and edit operations and extracts
-  the file paths.
+  Accepts both CodingAgent and LemonAi message structs. Scans read, write, edit,
+  and patch tool calls, including patch additions, deletions, and both rename paths.
+  Paths are recorded as supplied and deduplicated within each list. This tracks
+  requested operations, not proof of successful execution; summaries must still
+  consult tool results.
 
   ## Parameters
 
@@ -878,10 +881,10 @@ defmodule CodingAgent.Compaction do
   ## Returns
 
   Map with:
-  - `:read_files` - List of file paths that were read
-  - `:modified_files` - List of file paths that were written or edited
+  - `:read_files` - List of file paths targeted by read calls
+  - `:modified_files` - List of file paths targeted by write, edit, or patch calls
   """
-  @spec extract_file_operations([Messages.message()]) :: %{
+  @spec extract_file_operations([Messages.message() | LemonAi.Types.message()]) :: %{
           read_files: [String.t()],
           modified_files: [String.t()]
         }
@@ -903,24 +906,24 @@ defmodule CodingAgent.Compaction do
     end)
   end
 
-  defp extract_op_from_tool_call(%ToolCall{name: "read", arguments: args}, acc) do
+  defp extract_op_from_tool_call(%{name: name, arguments: args}, acc)
+       when name in ["read", "write", "edit"] do
+    key = if name == "read", do: :read_files, else: :modified_files
+
     case Map.get(args, "path") do
       nil -> acc
-      path -> Map.update!(acc, :read_files, fn files -> [path | files] end)
+      path -> Map.update!(acc, key, fn files -> [path | files] end)
     end
   end
 
-  defp extract_op_from_tool_call(%ToolCall{name: "write", arguments: args}, acc) do
-    case Map.get(args, "path") do
-      nil -> acc
-      path -> Map.update!(acc, :modified_files, fn files -> [path | files] end)
-    end
-  end
-
-  defp extract_op_from_tool_call(%ToolCall{name: "edit", arguments: args}, acc) do
-    case Map.get(args, "path") do
-      nil -> acc
-      path -> Map.update!(acc, :modified_files, fn files -> [path | files] end)
+  defp extract_op_from_tool_call(
+         %{name: "patch", arguments: %{"patch_text" => patch_text}},
+         acc
+       )
+       when is_binary(patch_text) do
+    case Patch.affected_paths(patch_text) do
+      {:ok, paths} -> Map.update!(acc, :modified_files, fn files -> paths ++ files end)
+      {:error, _reason} -> acc
     end
   end
 

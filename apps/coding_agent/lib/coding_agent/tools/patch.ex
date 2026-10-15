@@ -94,6 +94,25 @@ defmodule CodingAgent.Tools.Patch do
   end
 
   @doc """
+  Extract paths targeted by a patch without reading or changing the filesystem.
+
+  Uses the execution parser and returns paths as supplied, including both source
+  and destination for moves. A valid patch describes intent, not execution success.
+  """
+  @spec affected_paths(String.t()) :: {:ok, [String.t()]} | {:error, String.t()}
+  def affected_paths(patch_text) when is_binary(patch_text) do
+    with {:ok, operations} <- parse_patch(patch_text) do
+      paths =
+        for operation <- operations,
+            path <- [operation.path, Map.get(operation, :move_to)],
+            is_binary(path),
+            do: path
+
+      {:ok, Enum.uniq(paths)}
+    end
+  end
+
+  @doc """
   Execute the patch tool.
 
   Parses and applies a patch in a unified-diff-like format. Supports three

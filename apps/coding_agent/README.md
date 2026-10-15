@@ -893,6 +893,14 @@ signature/state checks. Repeated compaction summarizes the previous summary
 plus newly retired messages, preserving decisions, outstanding work and file
 operations without repeatedly replaying the entire original transcript.
 
+Compaction entry `details` retain deduplicated `read_files` and `modified_files`
+from both native `LemonAi.Types` messages and serialized session history.
+Reads record their target paths; writes, edits, and patches record mutation
+targets, including added/deleted files and both sides of patch renames. These
+paths carry forward into later compaction requests even after the original
+messages leave the active context. They describe requested tool operations,
+not verified success; tool results remain the evidence for completed changes.
+
 `Session.compact/2` forces manual compaction by default and waits for the summary
 instead of timing out after five seconds. It accepts `:custom_instructions` or
 an explicit `:summary`; compacting or switching branches while a turn is

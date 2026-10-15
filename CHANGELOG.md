@@ -8,7 +8,11 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
-No unreleased changes yet.
+### Fixed
+
+- Preserve file-operation details from native assistant tool calls during
+  compaction, including patch additions, updates, deletions, and rename paths,
+  so subsequent summaries retain the affected files.
 
 ---
 
