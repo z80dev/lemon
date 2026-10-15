@@ -34,6 +34,21 @@ Pinned bundles reject content edits as well as archive/delete. The curator accep
 `:exempt_skills` from its caller (automation owns cron lookups) and gives never-used
 skills at least `stale_after_days` before automatic archival.
 
+## In-band learning reminders
+
+`LemonSkills.LearningNudge` is a supervised `ContextRegistry` contributor for main
+sessions only. It contributes fixed, bounded volatile text after 10 user turns
+without `remember`, or after a completed run dispatches at least 15 tools without
+`skill_manage`. It uses content-free session telemetry, keeps only counters and
+booleans, and drops them when the owning session process exits. It never scans
+transcripts, reads personal memory, writes notes/skills, or calls a model.
+
+The existing global/project `skills.json` configuration accepts
+`learning_nudge.enabled` (default `true`), `memory_turn_interval` (10), and
+`skill_tool_threshold` (15). See the
+[user guide](../../docs/user-guide/skills.md#learning-reminders) for cadence and
+configuration examples.
+
 ## Profile memory transfer
 
 `LemonSkills.ProfileMemoryTransfer` owns private memory copying, not placement.

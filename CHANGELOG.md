@@ -55,6 +55,11 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   run summaries around a document/run ID without crossing owner/profile boundaries.
 - The omp panel resolves pending approvals through the shared approval controller,
   selects free-marked omp models, and drills into subagent transcript tails.
+- Main-session learning reminders suggest saving durable facts/preferences with
+  `remember` every 10 user turns without a save, and creating/patching a skill
+  after a completed run uses at least 15 tools without `skill_manage`.
+  Configurable through global/project `skills.json`, these bounded volatile
+  reminders exclude subagents and make no extra model calls.
 
 ---
 
