@@ -40,6 +40,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   a folder, ZIP or HTTPS URL with size, dimension and path validation; pet
   packages are images only and never run code.
 
+- Inspect per-run lifecycle, tool outcomes, child tasks and usage with
+  `lemon runs show <runId>` and TUI `/runs <runId>`, backed by redacted completion events.
+
 - Discord voice notes and audio attachments can use the shared voice transcription
   settings, with bounded CDN downloads and URL fallback on failure.
 

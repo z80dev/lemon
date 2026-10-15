@@ -55,6 +55,10 @@ records or an unknown start time also produce null fields; mixed models/provider
 have a null model/provider, and any unpriced occurrence makes the run's cost null
 and `priceKnown` false.
 
+Use `/runs <runId>` for the same per-run timeline as `lemon runs show <runId>`;
+`/runs` and `/runs <count>` retain the active/recent list. Run IDs are nonnumeric;
+a numeric argument continues to select a list count.
+
 ## Commands and availability
 
 ### Launcher lifecycle commands
@@ -117,6 +121,8 @@ for availability, single-flight behavior, and release/custom-launcher limits.
 lemon runs --status error --since 1h --limit 20
 lemon runs list --session agent:operator:main --agent operator --json
 lemon runs active
+lemon runs show RUN_ID
+lemon runs show RUN_ID --json
 lemon cron status --json
 lemon cron runs --job JOB_ID --status failed --since 2d
 lemon logs -n 50 --level warning
@@ -138,6 +144,16 @@ crashes or correctly classify aborts. Recent client-side time filtering examines
 at most the newest 200 history rows returned by the runtime, not an unbounded
 archive. `--since` accepts positive integer minutes (`30m`), hours (`1h`), or
 days (`2d`), relative to invocation time; list limits are 1–200 (default 50).
+
+`runs show <runId> [--json]` shows what one run did: loop/turn and answer-finalize
+events, tool calls paired with their completion, and child subagents. Human output
+uses times relative to the first displayed entry, recorded durations and
+`[ok]`/`[fail]` markers; an unmatched tool dispatch stays `[pending]`, not successful.
+Available run usage is included. The latest 500 entries are shown chronologically
+from a bounded 1,000-event history window, with an explicit truncation notice.
+Labels exclude tool arguments/results and private conversation content.
+Unknown/expired runs and failed storage queries are errors, not empty timelines.
+See the [timeline method reference](../reference/control-plane.md#runstimelineget).
 
 `cron status` reports job totals, enabled jobs, and `failingJobs` (jobs with a
 nonzero persisted failure streak). Use `--json` for the complete cron status

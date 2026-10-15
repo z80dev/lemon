@@ -111,13 +111,36 @@ defmodule CodingAgent.Session.EventHandler do
       provenance: :direct
     )
 
-    state
+    Map.put(
+      state,
+      :tool_started_at,
+      Map.put(Map.get(state, :tool_started_at, %{}), id, System.monotonic_time(:millisecond))
+    )
   end
 
   def handle({:tool_execution_end, id, name, result, is_error}, state, _callbacks) do
     # Execute on_tool_execution_end hooks
     Extensions.execute_hooks(state.hooks, :on_tool_execution_end, [id, name, result, is_error])
-    state
+    {started_at, pending} = Map.pop(Map.get(state, :tool_started_at, %{}), id)
+    duration_ms = if started_at, do: max(System.monotonic_time(:millisecond) - started_at, 0)
+
+    Introspection.record(
+      :tool_call_completed,
+      %{
+        tool_call_id: id,
+        tool_name: name,
+        ok: not is_error,
+        duration_ms: duration_ms,
+        error: if(is_error, do: tool_error_label(result), else: nil)
+      },
+      run_id: run_id(state),
+      session_key: session_key(state),
+      agent_id: agent_id(state),
+      engine: "lemon",
+      provenance: :direct
+    )
+
+    Map.put(state, :tool_started_at, pending)
   end
 
   def handle({:agent_end, messages}, state, callbacks) do
@@ -167,6 +190,15 @@ defmodule CodingAgent.Session.EventHandler do
     state
   end
 
+  # Classifications only: tool content and exception messages can contain arbitrary
+  # private arguments/results even after credential redaction.
+  defp tool_error_label(%{details: %{error_type: type}})
+       when is_atom(type) and not is_nil(type) do
+    type |> Atom.to_string() |> LemonCore.Redact.text() |> String.slice(0, 64)
+  end
+
+  defp tool_error_label(_result), do: "tool_error"
+
   # Content-free lifecycle seam for optional context contributors. Dispatch is
   # observed before completion so subscribers can maintain cheap per-run counts
   # without copying messages, tool arguments or results.
@@ -185,6 +217,7 @@ defmodule CodingAgent.Session.EventHandler do
     state
     |> Map.put(:steering_queue, :queue.new())
     |> Map.put(:follow_up_queue, :queue.new())
+    |> Map.put(:tool_started_at, %{})
   end
 
   defp maybe_record_missed_skills(state, messages) do

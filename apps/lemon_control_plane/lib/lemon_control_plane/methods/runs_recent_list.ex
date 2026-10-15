@@ -13,6 +13,7 @@ defmodule LemonControlPlane.Methods.RunsRecentList do
   @behaviour LemonControlPlane.Method
 
   alias LemonControlPlane.Methods.RunOutcome
+  alias LemonControlPlane.Methods.RunUsage
 
   @default_limit 50
   @max_limit 200
@@ -33,7 +34,7 @@ defmodule LemonControlPlane.Methods.RunsRecentList do
     status_filter = get_param(params, "status")
 
     with {:ok, runs} <- fetch_recent_runs(agent_id, session_key, limit, status_filter),
-         {:ok, runs} <- attach_usage(runs) do
+         {:ok, runs} <- RunUsage.attach(runs) do
       filters = %{
         "agentId" => agent_id,
         "sessionKey" => session_key,
@@ -173,73 +174,6 @@ defmodule LemonControlPlane.Methods.RunsRecentList do
     if String.valid?(label),
       do: label,
       else: label |> binary_part(0, byte_size(label) - 1) |> valid_label_prefix()
-  end
-
-  defp attach_usage(runs) do
-    known = Enum.filter(runs, &is_integer(&1["startedAtMs"]))
-
-    with {:ok, grouped} <- fetch_usage(known) do
-      {:ok,
-       Enum.map(runs, fn run ->
-         records =
-           if is_integer(run["startedAtMs"]),
-             do: Map.get(grouped, run["runId"], []),
-             else: []
-
-         Map.merge(run, usage_fields(records))
-       end)}
-    end
-  end
-
-  defp fetch_usage([]), do: {:ok, %{}}
-
-  defp fetch_usage(runs) do
-    timestamps =
-      Enum.flat_map(runs, &[&1["startedAtMs"], &1["completedAtMs"]])
-      |> Enum.filter(&is_integer/1)
-
-    from_ms = Enum.min(timestamps)
-    to_ms = Enum.max(timestamps) + 1
-
-    with {:ok, page} <-
-           LemonCore.UsageRecords.query(%{
-             "fromMs" => max(from_ms, 0),
-             "toMs" => to_ms,
-             "limit" => 500
-           }) do
-      {:ok,
-       if(is_nil(page.next_cursor),
-         do: Enum.group_by(page.records, & &1.run_id),
-         else: %{}
-       )}
-    end
-  end
-
-  defp usage_fields([]) do
-    Map.new(["tokens", "costUsd", "priceKnown", "model", "provider"], &{&1, nil})
-  end
-
-  defp usage_fields(records) do
-    priced? = Enum.all?(records, &(&1.price_known and is_number(&1.cost_usd)))
-
-    %{
-      "tokens" => %{
-        "input" => Enum.sum(Enum.map(records, & &1.input_tokens)),
-        "output" => Enum.sum(Enum.map(records, & &1.output_tokens)),
-        "total" => Enum.sum(Enum.map(records, & &1.total_tokens))
-      },
-      "costUsd" => if(priced?, do: Enum.sum(Enum.map(records, & &1.cost_usd)), else: nil),
-      "priceKnown" => priced?,
-      "model" => single_value(records, :model),
-      "provider" => single_value(records, :provider)
-    }
-  end
-
-  defp single_value(records, key) do
-    case records |> Enum.map(&Map.get(&1, key)) |> Enum.uniq() do
-      [value] -> value
-      _ -> nil
-    end
   end
 
   defp started_at_ms(event, duration_ms) do
