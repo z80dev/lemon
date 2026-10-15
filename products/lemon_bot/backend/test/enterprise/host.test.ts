@@ -515,7 +515,7 @@ describe('trusted owned-host driver over actual noninteractive native processes'
   });
   test('isolated-root deletion requires measured root and retains home/SSH in preview', async () => {
     const h = await fixture();
-    expect(() => h.host.snapshot(h.owner, ['machine_a'], 'delete_environment')).toThrow('Probe and verify');
+    expect(() => h.host.snapshot(h.owner, ['machine_a'], 'delete_environment')).toThrow('Inspect this machine and verify its isolated environment');
     await h.host.management(h.owner, 'machine_a');
     const preview = await h.request<P.Confirmation>('POST', '/v1/host-operations/preview', { clientNonce: intent('delete_reviewed'), machineIds: ['machine_a'], action: 'delete_environment' });
     expect(preview.effects.join(' ')).toContain('SSH'); expect(preview.affected.some(a => a.operation === 'delete')).toBe(true); expect(preview.effects.join(' ')).toContain(h.directory);

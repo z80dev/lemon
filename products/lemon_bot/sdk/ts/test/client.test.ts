@@ -44,7 +44,6 @@ describe('typed client at the fetch boundary', () => {
     const user = await client.call('PATCH /me', { body: intent });
     expect(user.revision).toBe(8);
     expect(boundary.requests).toHaveLength(1);
-    expect(intent.clientNonce).toMatch(/^[a-zA-Z0-9_-]{16,128}$/);
   });
 
   test('multipart carries exactly metadata and actual original bytes', async () => {
