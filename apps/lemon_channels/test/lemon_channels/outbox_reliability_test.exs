@@ -1,7 +1,7 @@
 defmodule LemonChannels.OutboxReliabilityTest do
   use ExUnit.Case, async: false
 
-  alias LemonChannels.{Outbox, OutboundPayload, Registry}
+  alias LemonChannels.{OutboundPayload, Outbox, Registry}
   alias LemonChannels.Outbox.{Dedupe, RateLimiter}
 
   defmodule ControlledPlugin do

@@ -12,8 +12,8 @@ defmodule LemonCli.Setup.VerificationWireTest do
   alias LemonAi.Models.Presets
   alias LemonCli.Setup.Verification
   alias LemonCore.Secrets
-  alias LemonScripts.SetupVerificationProbe
   alias LemonScripts.SetupOnboardingProbe
+  alias LemonScripts.SetupVerificationProbe
 
   setup do
     root =

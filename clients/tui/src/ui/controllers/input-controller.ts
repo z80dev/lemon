@@ -1,16 +1,16 @@
 /**
  * Global keys — the ones that work regardless of what has focus.
  *
- * They are declared as keybindings rather than matched inline so `/help` (and,
- * later, a user config) has one place to read them from, and so a conflict with
- * pi-tui's own bindings is visible instead of mysterious.
+ * They are declared as keybindings rather than matched inline so config and
+ * help share the same action registry.
  *
  * The listener defers to overlays: while one is up it owns the keyboard, or Esc
  * inside a picker would also fire whatever global binding Esc has.
  */
 
-import { KeybindingsManager, TUI_KEYBINDINGS } from "@oh-my-pi/pi-tui/keybindings";
+import { type KeybindingsManager, TUI_KEYBINDINGS } from "@oh-my-pi/pi-tui/keybindings";
 import type { TUI } from "@oh-my-pi/pi-tui/tui";
+import { resolveKeybindings } from "../../config.ts";
 import type { CommandPaletteMode } from "./command-palette.ts";
 
 export const LEMON_KEYBINDINGS = {
@@ -43,12 +43,15 @@ export const LEMON_KEYBINDINGS = {
 		defaultKeys: "alt+shift+c",
 		description: "Copy the last assistant reply",
 	},
+	"lemon.plan.toggle": { defaultKeys: [] as [], description: "Toggle plan mode" },
+	"lemon.model.cycle": { defaultKeys: [] as [], description: "Cycle to the next model" },
 } as const;
 
 export type LemonKeybinding = keyof typeof LEMON_KEYBINDINGS;
 
 export interface InputControllerOptions {
 	tui: TUI;
+	userBindings?: unknown;
 	/** True while a picker/switcher owns the keyboard. */
 	hasOverlay: () => boolean;
 	openModelPicker: () => void | Promise<void>;
@@ -69,6 +72,8 @@ export interface InputControllerOptions {
 	toggleToolOutputs?: () => void;
 	openDiff?: () => void;
 	copyLastReply?: () => void | Promise<void>;
+	togglePlan?: () => void | Promise<void>;
+	cycleModel?: () => void | Promise<void>;
 	notice?: (text: string) => void;
 }
 
@@ -79,7 +84,12 @@ export class InputController {
 
 	constructor(options: InputControllerOptions) {
 		this.#options = options;
-		this.#keys = new KeybindingsManager({ ...TUI_KEYBINDINGS, ...LEMON_KEYBINDINGS });
+		const { manager, issues } = resolveKeybindings(options.userBindings, {
+			...TUI_KEYBINDINGS,
+			...LEMON_KEYBINDINGS,
+		});
+		this.#keys = manager;
+		if (issues.length > 0) options.notice?.(`Keybindings: ${issues.join("; ")}`);
 	}
 
 	get keybindings(): KeybindingsManager {
@@ -89,7 +99,8 @@ export class InputController {
 	/** One line per global binding, for `/help` and the banner. */
 	describe(): string[] {
 		return Object.entries(LEMON_KEYBINDINGS).map(
-			([name, definition]) => `${definition.defaultKeys} — ${definition.description ?? name}`,
+			([name, definition]) =>
+				`${this.#keys.getKeys(name as never).join(", ") || "unbound"} — ${definition.description}`,
 		);
 	}
 
@@ -124,6 +135,14 @@ export class InputController {
 				void this.#options.copyLastReply?.();
 				return { consume: true };
 			}
+			if (this.#matches(data, "lemon.plan.toggle")) {
+				void this.#options.togglePlan?.();
+				return { consume: true };
+			}
+			if (this.#matches(data, "lemon.model.cycle")) {
+				void this.#options.cycleModel?.();
+				return { consume: true };
+			}
 			if (this.#matches(data, "lemon.picker.model")) {
 				void this.#options.openModelPicker();
 				return { consume: true };
@@ -155,9 +174,7 @@ export class InputController {
 				this.#options.cycleDetail?.();
 				return { consume: true };
 			}
-			// Ctrl+G, Ctrl+C and Ctrl+D belong to the editor, which has focus in
-			// every normal case; they are only handled here when it does not.
-			if (this.#matches(data, "lemon.editor.external") && !this.#editorFocused()) {
+			if (this.#matches(data, "lemon.editor.external")) {
 				if (this.#options.openExternalEditor) void this.#options.openExternalEditor();
 				return { consume: true };
 			}

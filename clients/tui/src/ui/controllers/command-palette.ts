@@ -1,5 +1,5 @@
 import { formatKeyHint } from "@oh-my-pi/pi-tui/key-hint-format";
-import { matchesKey } from "@oh-my-pi/pi-tui/keys";
+import { type KeyId, matchesKey } from "@oh-my-pi/pi-tui/keys";
 import { CLOSE_ACTION } from "@oh-my-pi/pi-tui/native/picker";
 import {
 	commandPaletteEntries,
@@ -24,6 +24,7 @@ export interface CommandPaletteHost {
 	present(overlay: PickerOverlay): () => void;
 	repaint(): void;
 	notice(text: string, level?: NoticeLevel): void;
+	bindingKeys?: (action: LemonKeybinding) => KeyId[];
 	/** Local filesystem configuration, not the daemon's remote/profile workspace. */
 	resources?: Omit<PaletteSourceOptions, "cwd">;
 }
@@ -55,6 +56,7 @@ const COMMAND_KEYS: Record<string, LemonKeybinding> = {
 	diff: "lemon.tools.diff",
 	copy: "lemon.clipboard.copyLast",
 	editor: "lemon.editor.external",
+	plan: "lemon.plan.toggle",
 };
 
 const KIND_GROUPS: Record<PaletteEntry["kind"], { id: string; label: string; icon: string }> = {
@@ -66,17 +68,23 @@ const KIND_GROUPS: Record<PaletteEntry["kind"], { id: string; label: string; ico
 const PALETTE_COLUMNS: PickerSheet["columns"] = [{ id: "keys", format: "dim", priority: 1 }];
 
 /** Native sheet extras: a kind icon and group, the bound key, unavailability. */
-function withNative(entries: readonly PaletteEntry[]): PaletteEntry[] {
+function withNative(
+	entries: readonly PaletteEntry[],
+	bindingKeys?: CommandPaletteHost["bindingKeys"],
+): PaletteEntry[] {
 	return entries.map((entry) => {
 		const binding = entry.kind === "command" ? COMMAND_KEYS[entry.name] : undefined;
+		const keys = binding
+			? (bindingKeys?.(binding) ?? [LEMON_KEYBINDINGS[binding].defaultKeys].flat())
+			: [];
 		const { id, label, icon } = KIND_GROUPS[entry.kind];
 		return {
 			...entry,
 			group: { id, label },
 			native: {
 				icon,
-				...(binding
-					? { facts: { keys: formatKeyHint(LEMON_KEYBINDINGS[binding].defaultKeys) } }
+				...(keys.length > 0
+					? { facts: { keys: keys.map((key) => formatKeyHint(key)).join(", ") } }
 					: {}),
 				...(entry.available ? {} : { disabled: entry.reason ?? true }),
 			},
@@ -124,7 +132,7 @@ export class CommandPalette {
 		this.#sessionKey = ctx.session.key;
 		this.#resources = { entries: [], issues: [] };
 		this.#mode = mode;
-		this.#entries = withNative(commandPaletteEntries(ctx));
+		this.#entries = withNative(commandPaletteEntries(ctx), this.#host.bindingKeys);
 		this.#loading = true;
 		const query = filter ?? this.#draft.match(/^\s*\/([^\s/]*)/)?.[1] ?? "";
 		this.#overlay = new PickerOverlay({
@@ -196,10 +204,10 @@ export class CommandPalette {
 			};
 		}
 		this.#loading = false;
-		this.#entries = withNative([
-			...commandPaletteEntries(this.#host.context()),
-			...this.#resources.entries,
-		]);
+		this.#entries = withNative(
+			[...commandPaletteEntries(this.#host.context()), ...this.#resources.entries],
+			this.#host.bindingKeys,
+		);
 		const currentFilter = this.#overlay?.filter ?? query;
 		this.#overlay?.setItems(rankPaletteEntries(this.#entries, currentFilter), currentFilter);
 		this.#host.repaint();

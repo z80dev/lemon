@@ -9,6 +9,7 @@ defmodule LemonChannels.Adapters.Discord.Transport do
   require Logger
 
   alias LemonChannels.Adapters.Discord.{
+    Approval,
     FileOperations,
     Inbound,
     ModelCatalog,
@@ -29,6 +30,7 @@ defmodule LemonChannels.Adapters.Discord.Transport do
   alias LemonChannels.SubmissionOutcome
   alias LemonChannels.Telegram.TransportShared
   alias LemonCore.ChatScope
+  alias LemonCore.Dedupe.Ets
 
   alias LemonCore.{
     ChatStateStore,
@@ -42,7 +44,7 @@ defmodule LemonChannels.Adapters.Discord.Transport do
     Store
   }
 
-  alias Nostrum.Api.{ApplicationCommand, Interaction}
+  alias Nostrum.Api.{ApplicationCommand, Interaction, Message, Thread, Webhook}
 
   @cancel_callback_prefix "lemon:cancel"
   @model_callback_prefix "lemon:model"
@@ -114,7 +116,7 @@ defmodule LemonChannels.Adapters.Discord.Transport do
           maybe_subscribe_exec_approvals()
 
           # Initialize dedup table (same pattern as Telegram transport)
-          :ok = LemonCore.Dedupe.Ets.init(@dedupe_table)
+          :ok = Ets.init(@dedupe_table)
           _ = :ets.delete_all_objects(@dedupe_table)
 
           {:ok,
@@ -274,7 +276,7 @@ defmodule LemonChannels.Adapters.Discord.Transport do
 
   # Approval requests
   def handle_info(%LemonCore.Event{type: :approval_requested, payload: payload}, state) do
-    _ = LemonChannels.Adapters.Discord.Approval.send(state, payload)
+    _ = Approval.send(state, payload)
     {:noreply, state}
   end
 
@@ -321,7 +323,7 @@ defmodule LemonChannels.Adapters.Discord.Transport do
   defp check_dedupe(inbound, state) do
     key = TransportShared.inbound_message_dedupe_key(inbound)
 
-    case LemonCore.Dedupe.Ets.check_and_mark(@dedupe_table, key, state.dedupe_ttl_ms) do
+    case Ets.check_and_mark(@dedupe_table, key, state.dedupe_ttl_ms) do
       :seen -> :seen
       :new -> check_and_mark_persistent_dedupe(inbound, key, state)
     end
@@ -822,7 +824,7 @@ defmodule LemonChannels.Adapters.Discord.Transport do
         handle_model_component(interaction, state, custom_id, values)
 
       true ->
-        case LemonChannels.Adapters.Discord.Approval.handle(state, interaction) do
+        case Approval.handle(state, interaction) do
           :ok ->
             acknowledge_interaction(interaction)
 
@@ -2010,7 +2012,7 @@ defmodule LemonChannels.Adapters.Discord.Transport do
   defp create_thread_or_forum_post(channel_id, name, initial_message)
        when is_integer(channel_id) do
     # First try as a forum channel (create_in_forum)
-    case Nostrum.Api.Thread.create_in_forum(channel_id, %{
+    case Thread.create_in_forum(channel_id, %{
            name: name,
            message: %{content: initial_message},
            auto_archive_duration: 10_080
@@ -2020,7 +2022,7 @@ defmodule LemonChannels.Adapters.Discord.Transport do
 
       {:error, _} ->
         # Fall back to regular thread creation
-        Nostrum.Api.Thread.create(channel_id, %{
+        Thread.create(channel_id, %{
           name: name,
           type: 11,
           auto_archive_duration: 10_080
@@ -2049,7 +2051,7 @@ defmodule LemonChannels.Adapters.Discord.Transport do
     if guild_allowed? and is_integer(thread_id) do
       # Auto-join the thread so we receive MESSAGE_CREATE events in it
       spawn(fn ->
-        _ = Nostrum.Api.Thread.join(thread_id)
+        _ = Thread.join(thread_id)
       end)
     end
 
@@ -2434,7 +2436,7 @@ defmodule LemonChannels.Adapters.Discord.Transport do
     app_id = map_get(interaction, :application_id)
 
     if is_binary(token) and app_id do
-      Nostrum.Api.Webhook.execute(app_id, token, %{
+      Webhook.execute(app_id, token, %{
         content: content,
         flags: 64,
         allowed_mentions: safe_allowed_mentions()
@@ -2445,7 +2447,7 @@ defmodule LemonChannels.Adapters.Discord.Transport do
   end
 
   defp send_channel_message(channel_id, text) when is_integer(channel_id) and is_binary(text) do
-    Nostrum.Api.Message.create(channel_id, %{
+    Message.create(channel_id, %{
       content: text,
       allowed_mentions: safe_allowed_mentions()
     })

@@ -1,12 +1,13 @@
 defmodule CodingAgent.Session.ProviderFallback do
   @moduledoc false
 
-  alias LemonAi.Types.StreamOptions
+  alias CodingAgent.Session.ModelResolver
+  alias CodingAgent.SettingsManager
   alias LemonAgent.ModelRuntime.CredentialHealth
   alias LemonAgent.ModelRuntime.Credentials
   alias LemonAgent.ModelRuntime.SessionPins
-  alias CodingAgent.Session.ModelResolver
-  alias CodingAgent.SettingsManager
+  alias LemonAi.Providers.RetryHelper
+  alias LemonAi.Types.StreamOptions
 
   @max_precommit_events 256
 
@@ -255,7 +256,7 @@ defmodule CodingAgent.Session.ProviderFallback do
   defp error_details(reason), do: LemonAi.Error.to_error_details(reason)
 
   defp retry_after_hint({:error, _reason, message}), do: retry_after_hint(message)
-  defp retry_after_hint(error), do: LemonAi.Providers.RetryHelper.error_retry_after_ms(error)
+  defp retry_after_hint(error), do: RetryHelper.error_retry_after_ms(error)
 
   defp with_alternate_signal(options, model, entries, candidates, ctx) do
     healthy? = fn provider, entry ->

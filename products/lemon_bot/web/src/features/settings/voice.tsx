@@ -24,17 +24,17 @@ function VoiceEditor({ user, backendTts, backendStt, onReload, onSaved }: { user
   return <section className="panel stack">
     <h2>Voice & language</h2><IntentNotice intent={intent} />
     <dl className="settings-facts">
-      <dt>Backend speech</dt><dd>{backendTts === undefined ? 'Unknown / loading' : backendTts ? 'Configured real provider' : 'Unavailable — operator must configure a TTS provider'}</dd>
-      <dt>Backend transcription</dt><dd>{backendStt === undefined ? 'Unknown / loading' : backendStt ? 'Configured real provider' : 'Unavailable — on-device dictation may still work'}</dd>
-      <dt>Browser speech synthesis</dt><dd>{'speechSynthesis' in window ? 'Available locally; separate from backend voice' : 'Unavailable'}</dd>
-      <dt>Browser dictation API</dt><dd>{'SpeechRecognition' in window || 'webkitSpeechRecognition' in window ? 'Browser API available; browser/provider determines on-device processing' : 'Not supported in this browser'}</dd>
+      <dt>Server voice</dt><dd>{backendTts === undefined ? 'Checking availability…' : backendTts ? 'On' : 'Off — ask your administrator to turn on server voice.'}</dd>
+      <dt>Server transcription</dt><dd>{backendStt === undefined ? 'Checking availability…' : backendStt ? 'On' : 'Off — browser dictation may still work.'}</dd>
+      <dt>Browser voice</dt><dd>{'speechSynthesis' in window ? 'Available on this device; it doesn’t use server voice.' : 'Not available in this browser.'}</dd>
+      <dt>Dictation</dt><dd>{'SpeechRecognition' in window || 'webkitSpeechRecognition' in window ? 'Uses your browser; some browsers send audio to their company.' : 'Not supported in this browser.'}</dd>
     </dl>
     <form className="stack" onSubmit={e => { e.preventDefault(); void (async () => {
       const saved = await intent.run(() => client.call('PATCH /me', { body: { preferences: { ...user.preferences, voice }, revision: user.revision, clientNonce: nonce() } }));
       if (saved) { onSaved(saved); await refresh().catch(reportError); }
     })(); }}>
       <fieldset className="grid" disabled={intent.disabled}>
-        <Field label="Backend voice ID" hint="Use default or an ID supported by your configured provider."><input required value={voice.voiceId} onChange={e => setVoice({ ...voice, voiceId: e.target.value })} /></Field>
+        <Field label="Server voice ID" hint="Use default or an ID supported by your server’s voice provider."><input required value={voice.voiceId} onChange={e => setVoice({ ...voice, voiceId: e.target.value })} /></Field>
         <Field label={`Speed · ${voice.speed.toFixed(2)}×`}><input type="range" min={0.5} max={2} step={0.05} value={voice.speed} onChange={e => setVoice({ ...voice, speed: Number(e.target.value) })} /></Field>
         <Field label="Speech language (BCP-47)" hint="Blank means automatic selection."><input value={voice.language ?? ''} onChange={e => setVoice({ ...voice, language: e.target.value || null })} /></Field>
       </fieldset>
@@ -45,15 +45,15 @@ function VoiceEditor({ user, backendTts, backendStt, onReload, onSaved }: { user
     const result = await client.call('POST /audio/speech', { body: { text: sample, voice, clientNonce: nonce() } });
     const bytes = await client.downloadBytes(result.download);
     setAudioUrl(URL.createObjectURL(new Blob([new Uint8Array(bytes)], { type: result.download.mime })));
-  })}>Generate real backend sample</button>
+  })}>Play server voice sample</button>
     <button disabled={!audioUrl && !('speechSynthesis' in window)} onClick={() => { audio.current?.pause(); if ('speechSynthesis' in window) speechSynthesis.cancel(); }}>Stop playback</button>
-    </div>{audioUrl && <audio ref={audio} controls src={audioUrl} aria-label="Backend voice sample" />}
+    </div>{audioUrl && <audio ref={audio} controls autoPlay src={audioUrl} aria-label="Server voice sample" />}
     {'speechSynthesis' in window && <div className="card stack">
-      <h3>Local browser sample</h3>
-      <Field label="Local voice (not a backend voice ID)"><select value={localVoice} onChange={e => setLocalVoice(e.target.value)}><option value="">Browser default</option>{localVoices.map(item => <option key={item.voiceURI} value={item.voiceURI}>{item.name} · {item.lang} · {item.localService ? 'local' : 'browser network service'}</option>)}</select></Field>
-      <button disabled={!sample.trim()} onClick={() => { speechSynthesis.cancel(); const utterance = new SpeechSynthesisUtterance(sample); utterance.rate = voice.speed; if (voice.language) utterance.lang = voice.language; utterance.voice = localVoices.find(item => item.voiceURI === localVoice) ?? null; speechSynthesis.speak(utterance); }}>Play local sample</button>
+      <h3>Browser voice sample</h3>
+      <Field label="Browser voice" hint="This sample uses your browser’s voices, not the server voice ID."><select value={localVoice} onChange={e => setLocalVoice(e.target.value)}><option value="">Browser default</option>{localVoices.map(item => <option key={item.voiceURI} value={item.voiceURI}>{item.name} · {item.lang} · {item.localService ? 'local' : 'browser network service'}</option>)}</select></Field>
+      <button disabled={!sample.trim()} onClick={() => { speechSynthesis.cancel(); const utterance = new SpeechSynthesisUtterance(sample); utterance.rate = voice.speed; if (voice.language) utterance.lang = voice.language; utterance.voice = localVoices.find(item => item.voiceURI === localVoice) ?? null; speechSynthesis.speak(utterance); }}>Play browser voice sample</button>
     </div>}
-    <p className="muted small">Preview never starts a call or sends a chat message. Backend samples are real generated attachments. Microphone capture is explicit; there is no ambient listening.</p>
+    <p className="muted small">Samples never start a call or send a chat message. Server samples use your server’s voice provider; browser samples use your browser’s voices. Your microphone only turns on when you ask.</p>
   </section>;
 }
 function MicrophoneSettings() {
@@ -67,7 +67,7 @@ function MicrophoneSettings() {
       const capture = await navigator.mediaDevices.getUserMedia({ audio: selected ? { deviceId: { exact: selected } } : true });
       stream.current?.getTracks().forEach(track => track.stop()); stream.current = capture; setActive(true); setPermission('Granted — microphone test active');
       setDevices((await navigator.mediaDevices.enumerateDevices()).filter(device => device.kind === 'audioinput'));
-    } catch (failure) { setError(failure); setPermission(failure instanceof DOMException && failure.name === 'NotAllowedError' ? 'Denied — allow microphone in site permissions beside the address bar' : failure instanceof DOMException && failure.name === 'NotFoundError' ? 'No microphone input found' : 'Could not access selected microphone'); }
+    } catch (failure) { setError(failure); setPermission(failure instanceof DOMException && failure.name === 'NotAllowedError' ? 'Microphone blocked. Allow it in your browser’s site settings, then try again.' : failure instanceof DOMException && failure.name === 'NotFoundError' ? 'No microphone input found' : 'Could not access selected microphone'); }
   }
-  return <section className="panel stack"><h2>Microphone — this browser only</h2><p role="status">{permission}</p><ErrorNotice error={error} /><Field label="Input device" hint="This device-local choice is used by voice capture, not sent as a backend preference. Explicit test requests browser permission."><select value={selected} disabled={active} onChange={e => { setSelected(e.target.value); localStorage.setItem('lemonbot.microphoneDeviceId', e.target.value); }}><option value="">System default</option>{selected && !devices.some(device => device.deviceId === selected) && <option value={selected}>Previously selected input — not yet inspected</option>}{devices.map(device => <option key={device.deviceId} value={device.deviceId}>{device.label || 'Microphone input'}</option>)}</select></Field><div className="row"><button disabled={active} onClick={() => void inspect()}>Request permission & test input</button><button disabled={!active} onClick={() => { stream.current?.getTracks().forEach(track => track.stop()); stream.current = null; setActive(false); setPermission('Permission granted — microphone stopped'); }}>Stop microphone test</button></div><p className="muted small">The test opens the selected input so the browser shows its microphone indicator. It does not record, upload or transcribe. Stop explicitly or leave this screen to release it.</p></section>;
+  return <section className="panel stack"><h2>Microphone — this browser only</h2><p role="status">{permission}</p><ErrorNotice error={error} /><Field label="Input device" hint="This device-local choice is used by voice capture, not sent as a backend preference. Explicit test requests browser permission."><select value={selected} disabled={active} onChange={e => { setSelected(e.target.value); localStorage.setItem('lemonbot.microphoneDeviceId', e.target.value); }}><option value="">System default</option>{selected && !devices.some(device => device.deviceId === selected) && <option value={selected}>Previously selected microphone (not connected yet)</option>}{devices.map(device => <option key={device.deviceId} value={device.deviceId}>{device.label || 'Microphone input'}</option>)}</select></Field><div className="row"><button disabled={active} onClick={() => void inspect()}>Request permission & test input</button><button disabled={!active} onClick={() => { stream.current?.getTracks().forEach(track => track.stop()); stream.current = null; setActive(false); setPermission('Permission granted — microphone stopped'); }}>Stop microphone test</button></div><p className="muted small">The test opens the selected input so the browser shows its microphone indicator. It does not record, upload or transcribe. Stop explicitly or leave this screen to release it.</p></section>;
 }

@@ -28,6 +28,40 @@ defmodule LemonAutomation.Tools.CronTest do
     :ok
   end
 
+  test "list exposes persisted outcomes and failing filter; status counts failing jobs" do
+    alias LemonAutomation.{CronJob, CronManager, CronRun, CronStore}
+    tool = Cron.tool(".", session_key: LemonCore.SessionKey.main("default"))
+
+    result =
+      call_tool(tool, %{
+        "action" => "add",
+        "name" => "fail-filter",
+        "schedule" => "0 0 1 1 *",
+        "prompt" => "hello",
+        "enabled" => false,
+        "deliverTo" => "none"
+      })
+
+    id = result.details["id"]
+    run = id |> CronRun.new(:manual) |> CronRun.start(nil)
+    CronStore.put_run(run)
+    send(CronManager, {:run_complete, run.id, {:error, "run_failed"}})
+    [job] = CronManager.list()
+    assert CronJob.failure_streak(job) == 1
+    failing = call_tool(tool, %{"action" => "list", "failing" => true})
+
+    assert [%{"id" => ^id, "failureStreak" => 1, "lastStatus" => "failed"}] =
+             failing.details["jobs"]
+
+    status = call_tool(tool, %{"action" => "status"})
+    assert status.details["failingJobs"] == 1
+
+    run = id |> CronRun.new(:manual) |> CronRun.start(nil)
+    CronStore.put_run(run)
+    send(CronManager, {:run_complete, run.id, {:ok, "[SILENT]"}})
+    assert call_tool(tool, %{"action" => "list", "failing" => true}).details["jobs"] == []
+  end
+
   test "add, list, update, pause, resume, abort, and remove actions operate on Lemon internal cron" do
     session_key = LemonCore.SessionKey.main("default")
     tool = Cron.tool(".", session_key: session_key, agent_id: "default")

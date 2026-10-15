@@ -382,7 +382,19 @@ defmodule LemonCore.Config.Modular do
 
     settings =
       Enum.reduce(sources, %{}, fn {_path, settings}, merged ->
-        LemonCore.MapHelpers.deep_merge(merged, settings)
+        merged = LemonCore.MapHelpers.deep_merge(merged, settings)
+        defaults = LegacyAgentMigration.migrate_settings(settings)["defaults"] || %{}
+
+        cond do
+          defaults["provider"] not in [nil, ""] ->
+            Map.put(merged, :default_provider_source, :explicit)
+
+          defaults["model"] not in [nil, ""] ->
+            Map.put(merged, :default_provider_source, :inherited)
+
+          true ->
+            merged
+        end
       end)
 
     {settings, sources}

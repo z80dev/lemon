@@ -3,11 +3,11 @@ defmodule CodingAgent.Tools.Task.Result do
 
   require Logger
 
-  alias LemonAgent.Types.AgentToolResult
-  alias LemonAi.Types.TextContent
+  alias CodingAgent.JoinAwait
   alias CodingAgent.RunGraph
   alias CodingAgent.TaskStore
-  alias CodingAgent.JoinAwait
+  alias LemonAgent.Types.AgentToolResult
+  alias LemonAi.Types.TextContent
 
   @max_poll_preview_chars 500
 

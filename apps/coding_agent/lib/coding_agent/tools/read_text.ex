@@ -1,6 +1,8 @@
 defmodule CodingAgent.Tools.ReadText do
   @moduledoc false
 
+  alias LemonAgent.Tools.AbortHelpers
+
   # Scan fixed-size chunks, retaining only the requested window. Even a single
   # multi-megabyte line never needs to be materialized to display its preview.
   @chunk_bytes 64 * 1024
@@ -56,7 +58,7 @@ defmodule CodingAgent.Tools.ReadText do
   end
 
   defp scan(file, state, signal) do
-    with :ok <- LemonAgent.Tools.AbortHelpers.check_abort(signal) do
+    with :ok <- AbortHelpers.check_abort(signal) do
       case IO.binread(file, @chunk_bytes) do
         :eof ->
           if state.utf8_tail == "" do

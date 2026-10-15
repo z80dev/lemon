@@ -54,6 +54,38 @@ function fixture() {
 }
 const fakeFetch = (fn: (url: string, init: RequestInit) => Response | Promise<Response>): HttpClient => async (input, init) => fn(input instanceof Request ? input.url : String(input), init ?? {});
 
+describe('curated voice catalog', () => {
+  test('returns provider choices and default without any network or synthesis', async () => {
+    const f = fixture();
+    const request: HttpClient = async () => { throw new Error('Catalog must not call a provider'); };
+    for (const provider of ['openai', 'elevenlabs', 'google'] as const) {
+      const audio = createAudioServices(f.services, { env: { LEMON_BOT_TTS_PROVIDER: provider, LEMON_BOT_OPENAI_API_KEY: 'private', LEMON_BOT_ELEVENLABS_API_KEY: 'private' }, fetch: request });
+      const catalog = await audio.voiceCatalog(principal);
+      expect(catalog.provider).toBe(provider);
+      expect(catalog.configured).toBe(provider !== 'google');
+      expect(catalog.voices[0]).toEqual({ id: 'default', name: 'Provider default', languages: [] });
+      expect(catalog.voices.length).toBeGreaterThan(1);
+      expect(new Set(catalog.voices.map(voice => voice.id)).size).toBe(catalog.voices.length);
+      if (provider === 'google') expect(catalog.voices[1]?.languages).toEqual(['en-US']);
+    }
+    expect(f.captured()).toBeNull(); expect(f.events).toEqual([]);
+  });
+  test('unconfigured/unknown providers are honest and product access is enforced', async () => {
+    const f = fixture();
+    for (const provider of [undefined, 'unknown', 'openai']) {
+      const catalog = await createAudioServices(f.services, { env: { LEMON_BOT_TTS_PROVIDER: provider } }).voiceCatalog(principal);
+      expect(catalog.configured).toBe(false);
+      expect(catalog.provider).toBe(provider === 'openai' ? 'openai' : null);
+      if (provider !== 'openai') expect(catalog.voices).toHaveLength(1);
+    }
+    f.setProductAccess(false);
+    await expect(createAudioServices(f.services, { env: {} }).voiceCatalog(principal)).rejects.toMatchObject({ code: 'policy_denied' });
+    const route = createAudioRoutes(f.services, { env: {} }).find(route => route.path === '/v1/audio/voices')!;
+    expect(route.method).toBe('GET'); expect(route.auth).toBe('member');
+    expect(() => route.handler({ user: null } as RequestContext)).toThrow('Authentication required');
+  });
+});
+
 describe('bounded genuine audio containers', () => {
   test('sniffs bytes and measures PCM WAV, MP3, MP4, live WebM and Opus', () => {
     const f = fixture(); expect(inspectAudio(f.wave)).toEqual({ mime: 'audio/wav', extension: 'wav', durationMs: 1000 });

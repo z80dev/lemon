@@ -1,9 +1,9 @@
 defmodule LemonRouter.PolicyTest do
   use ExUnit.Case, async: true
 
-  alias LemonRouter.Policy
   alias CodingAgent.ToolPolicy
   alias LemonCore.PolicyStore
+  alias LemonRouter.Policy
 
   test "session PolicyStore mode survives legacy and nested policy projections" do
     key = "approval-mode-#{System.unique_integer([:positive])}"

@@ -9,7 +9,8 @@ public enum LemonBotSnapshotScene: String, CaseIterable {
     case instancePane, instanceRunning
     case actionRecovery, newBotNoMachine, inboxEmpty
     case appsAndChannels, groupEditor, botLifecycle
-    case composerFiles
+    case composerFiles, composerPolish
+    case sidebarOffline
 
     /// `sidebar-conversation`, used for output file names.
     public var slug: String {
@@ -18,9 +19,10 @@ public enum LemonBotSnapshotScene: String, CaseIterable {
     public var scenario: LemonBotFixtureScenario {
         switch self {
         case .sidebarConversation: return .chiefOfStaff
+        case .sidebarOffline: return .backendDown
         case .inspectorActivity, .composerActiveRun: return .activeRun
         case .failedRun: return .failedRun
-        case .settings, .actionRecovery, .newBotNoMachine, .inboxEmpty, .appsAndChannels, .groupEditor, .botLifecycle, .composerFiles: return .chiefOfStaff
+        case .settings, .actionRecovery, .newBotNoMachine, .inboxEmpty, .appsAndChannels, .groupEditor, .botLifecycle, .composerFiles, .composerPolish: return .chiefOfStaff
         case .emptyState: return .noSelection
         case .backendDown: return .backendDown
         case .controllerDown: return .controllerDown
@@ -32,13 +34,18 @@ public enum LemonBotSnapshotScene: String, CaseIterable {
     /// Point size of the offscreen window the scene is rendered into.
     public var windowSize: CGSize {
         if self == .instancePane || self == .instanceRunning { return CGSize(width: 1100, height: 1700) }
+        if self == .composerPolish { return CGSize(width: 760, height: 840) }
         return self == .settings ? CGSize(width: 900, height: 620) : CGSize(width: 1320, height: 840)
     }
 
     @MainActor public static func view(for scene: LemonBotSnapshotScene, store: LemonBotStore) -> AnyView {
-        store.selectedConversationID = scene.scenario.conversationID
+        if store.selectedConversationID != scene.scenario.conversationID { store.selectedConversationID = scene.scenario.conversationID }
         switch scene {
+        case .sidebarOffline:
+            store.entries = [:]
+            return AnyView(LemonBotRootView(store: store))
         case .inspectorActivity: return AnyView(LemonBotRootView(store: store, inspector: InspectorPresentation(isPresented: true, tab: .activity)))
+        case .composerPolish: return AnyView(ComposerPolishScene(store: store))
         case .composerFiles:
             if let id = scene.scenario.conversationID {
                 var draft = store.draft(for: id)
@@ -75,6 +82,27 @@ public enum LemonBotSnapshotScene: String, CaseIterable {
             return AnyView(LemonBotSettingsView(store: store))
         default: return AnyView(LemonBotRootView(store: store))
         }
+    }
+}
+
+private struct ComposerPolishScene: View {
+    let store: LemonBotStore
+    @State private var voiceID = "alloy"
+    @State private var language = ""
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    Text("Voice and composer").font(LBFont.title)
+                    ProviderVoicePicker(store: store, voiceID: $voiceID, language: $language)
+                    MessageBubble(text: "```swift\nlet answer = 42\n```", palette: .named("green"))
+                    MessageBubble(text: "```swift\nprint(answer)\n```", mine: true, palette: .named("green"))
+                    Text("Pasted files").font(LBFont.sectionTitle)
+                    Text(pastedFileSummary((1...6).map { URL(fileURLWithPath: "/fixture/Report \($0).pdf") })).font(LBFont.meta)
+                }.padding(16)
+            }
+            if let id = store.selectedConversationID { ComposerView(store: store, conversationID: id) }
+        }.background(LB.canvas)
     }
 }
 #endif

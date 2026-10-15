@@ -130,6 +130,26 @@ defmodule LemonControlPlane.Methods.StatusTest do
     assert result["server"]["build"]["commit"] == "github-build-commit"
   end
 
+  test "provider status exposes the actual redacted timestamped last failure" do
+    provider = "status-error-#{System.unique_integer([:positive])}"
+    reason = {:http_error, 401, "token=secret /private/key"}
+
+    assert {:error, ^reason} =
+             LemonAi.CallDispatcher.dispatch(provider, fn -> {:error, reason} end)
+
+    config = %{
+      agent: %{default_provider: provider, default_model: "example"},
+      providers: %{provider => %{auth: "none"}}
+    }
+
+    row = Enum.find(LemonControlPlane.ProviderStatus.snapshot(config), &(&1["id"] == provider))
+    assert %{"message" => message, "atMs" => at_ms} = row["lastError"]
+    assert is_integer(at_ms)
+    assert String.length(message) <= 256
+    refute Jason.encode!(row) =~ "secret"
+    refute Jason.encode!(row) =~ "/private"
+  end
+
   test "projects configured providers, missing credentials, keyless endpoints and defaults offline" do
     config = %{
       agent: %{default_provider: "status-missing", default_model: "example-model"},
