@@ -5,6 +5,7 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
 
   alias LemonChannels.Adapters.Discord.Transport
   alias LemonChannels.Discord.KnownTargetStore
+  alias LemonCore.Dedupe.Ets
   alias LemonCore.Store
 
   @bot_user_id 1_476_753_643_834_183_690
@@ -51,6 +52,14 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
     end
 
     def unreact(_channel_id, _message_id, _emoji), do: {:ok}
+
+    def start_typing(channel_id) do
+      if pid = :persistent_term.get({FakeRouter, :test_pid}, nil) do
+        send(pid, {:discord_typing, channel_id})
+      end
+
+      {:ok}
+    end
   end
 
   defmodule ApprovalOutboxAPI do
@@ -1025,6 +1034,53 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
 
         assert failure_text =~ "couldn't queue"
         refute failure_text =~ "Queued"
+      end)
+    end)
+  end
+
+  test "accepted thread runs trigger typing and cancellation stops the refresher" do
+    :ok = Ets.init(:lemon_channels_discord_dedupe)
+    _ = :ets.delete_all_objects(:lemon_channels_discord_dedupe)
+
+    with_discord_api(fn ->
+      with_router_bridge(fn ->
+        run_id = "discord_typing_#{System.unique_integer([:positive])}"
+        :persistent_term.put({FakeRouter, :submit_result}, {:ok, run_id})
+        channel_id = 1_475_727_417_372_049_419
+        thread_id = channel_id + System.unique_integer([:positive])
+        message_id = 1_503_803_470_493_259_000 + System.unique_integer([:positive])
+
+        message =
+          discord_message(Integer.to_string(message_id), "<@#{@bot_user_id}> typing", thread_id)
+          |> Map.put("thread", %{
+            "id" => to_string(thread_id),
+            "parent_id" => to_string(channel_id)
+          })
+
+        assert {:noreply, state} =
+                 Transport.handle_info(
+                   {:discord_event, {:MESSAGE_CREATE, message, nil}},
+                   discord_message_state()
+                 )
+
+        assert [{scope_key, buffer}] = Map.to_list(state.buffers)
+
+        assert {:noreply, _state} =
+                 Transport.handle_info(
+                   {:debounce_flush, scope_key, buffer.debounce_ref},
+                   state
+                 )
+
+        assert_receive {:submit_run, request}
+        assert_receive {:discord_typing, ^thread_id}
+        target = {:discord, "default", request.meta.thread_id || request.meta.channel_id}
+        entry = :sys.get_state(LemonChannels.TypingIndicator).targets[target]
+        assert entry.interval_ms == 8_000
+
+        assert :ok = LemonChannels.Runtime.cancel_by_run_id(run_id)
+        refute Map.has_key?(:sys.get_state(LemonChannels.TypingIndicator).targets, target)
+        send(LemonChannels.TypingIndicator, {:refresh, target, entry.token})
+        refute_receive {:discord_typing, _}, 100
       end)
     end)
   end

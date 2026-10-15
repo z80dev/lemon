@@ -30,7 +30,13 @@ defmodule LemonChannels.Adapters.Telegram.TransportFakeApiTest do
         send(pid, {:inbound, inbound_from_request(request)})
       end
 
-      {:ok, "run_#{System.unique_integer([:positive])}"}
+      run_id = "run_#{System.unique_integer([:positive])}"
+
+      if pid = :persistent_term.get({__MODULE__, :pid}, nil) do
+        send(pid, {:accepted_run, run_id})
+      end
+
+      {:ok, run_id}
     end
 
     defp inbound_from_request(%LemonCore.RunRequest{} = request) do
@@ -379,6 +385,25 @@ defmodule LemonChannels.Adapters.Telegram.TransportFakeApiTest do
       assert msg.meta[:chat_id] == chat_id
       assert msg.meta[:topic_id] == thread_id
       assert msg.message.text == "topic message"
+
+      assert_receive {:accepted_run, run_id}
+
+      assert {:ok, %{args: [^chat_id, ^thread_id, "typing"]}} =
+               FakeAPI.await_send(:send_chat_action, 2_000)
+
+      target = {:telegram, "default", chat_id, thread_id}
+      entry = :sys.get_state(LemonChannels.TypingIndicator).targets[target]
+
+      LemonCore.Bus.broadcast(
+        LemonCore.Bus.run_topic(run_id),
+        LemonCore.Event.new(:run_completed, %{completed: %{ok: true}}, %{run_id: run_id})
+      )
+
+      await_typing_stopped(target)
+      count = length(FakeAPI.sent(:send_chat_action))
+      send(LemonChannels.TypingIndicator, {:refresh, target, entry.token})
+      Process.sleep(50)
+      assert length(FakeAPI.sent(:send_chat_action)) == count
     end
 
     test "stale approval callback is answered without consuming the changed request" do
@@ -435,6 +460,16 @@ defmodule LemonChannels.Adapters.Telegram.TransportFakeApiTest do
                FakeAPI.get_file("t", "photo-1")
 
       assert {:ok, <<1, 2, 3, 4>>} = FakeAPI.download_file("t", path)
+    end
+  end
+
+  defp await_typing_stopped(target, attempts \\ 100)
+  defp await_typing_stopped(_target, 0), do: flunk("typing did not stop after completion")
+
+  defp await_typing_stopped(target, attempts) do
+    if Map.has_key?(:sys.get_state(LemonChannels.TypingIndicator).targets, target) do
+      Process.sleep(10)
+      await_typing_stopped(target, attempts - 1)
     end
   end
 

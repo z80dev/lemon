@@ -26,6 +26,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Added
 
+- Show Telegram and Discord typing indicators for chat-originated runs, with
+  topic/thread-scoped refreshes and bounded cleanup on completion or cancellation.
+
 - Interactive setup audits an existing Hermes home and offers a confirmed,
   backed-up import without secrets or overwriting conflicts.
 

@@ -17,6 +17,10 @@ defmodule LemonChannels.RuntimeTest do
     def abort_run(run_id, reason), do: record({:abort_run, run_id, reason})
     def keep_run_alive(run_id, decision), do: record({:keep_run_alive, run_id, decision})
 
+    def submit(_request) do
+      :persistent_term.get({__MODULE__, :submit_result}, {:ok, "run_typing_runtime"})
+    end
+
     def session_busy?(session_key) do
       case :persistent_term.get({__MODULE__, :busy_query_mode}, :normal) do
         :raise -> raise "sensitive-router-query"
@@ -45,6 +49,7 @@ defmodule LemonChannels.RuntimeTest do
 
     on_exit(fn ->
       :persistent_term.erase({RecordingRouter, :busy_query_mode})
+      :persistent_term.erase({RecordingRouter, :submit_result})
     end)
 
     :ok
@@ -83,6 +88,48 @@ defmodule LemonChannels.RuntimeTest do
 
       assert Runtime.keep_run_alive("run_1", :cancel) == :ok
       assert_receive {:keep_run_alive, "run_1", :cancel}
+    end
+
+    test "typing starts only for confirmed acceptance and is opt-in at the chat boundary" do
+      parent = self()
+      target = {:telegram, "typing-test", 123, nil}
+      session_key = "agent:typing:main"
+      run_id = "typing_runtime_#{System.unique_integer([:positive])}"
+      :persistent_term.put({RecordingRouter, :submit_result}, {:ok, run_id})
+
+      inbound = %LemonCore.InboundMessage{
+        channel_id: "telegram",
+        account_id: "typing-test",
+        peer: %{kind: :dm, id: "123", thread_id: nil},
+        message: %{text: "hello"},
+        meta: %{session_key: session_key}
+      }
+
+      typing = [
+        target: target,
+        session_key: session_key,
+        interval_ms: 20,
+        send: fn ->
+          send(parent, :runtime_typing)
+          :ok
+        end
+      ]
+
+      # Non-chat callers, including scheduled deliveries, never request typing.
+      assert :ok = Runtime.submit_inbound(inbound)
+      refute_receive :runtime_typing, 50
+
+      for error <- [{:error, :unavailable}, {:error, :outcome_unknown}] do
+        :persistent_term.put({RecordingRouter, :submit_result}, error)
+        assert ^error = Runtime.submit_inbound(inbound, typing: typing)
+        refute_receive :runtime_typing, 50
+      end
+
+      :persistent_term.put({RecordingRouter, :submit_result}, {:ok, run_id})
+      assert :ok = Runtime.submit_inbound(inbound, typing: typing)
+      assert_receive :runtime_typing
+      assert :ok = Runtime.cancel_session(session_key)
+      refute Map.has_key?(:sys.get_state(LemonChannels.TypingIndicator).targets, target)
     end
 
     test "session_busy? answers the router's boolean" do

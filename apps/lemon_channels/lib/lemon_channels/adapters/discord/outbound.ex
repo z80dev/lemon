@@ -12,6 +12,18 @@ defmodule LemonChannels.Adapters.Discord.Outbound do
   @max_content_chars 1_900
   @max_file_count 10
 
+  @doc "Trigger typing in a channel or thread using Discord's channel endpoint."
+  def start_typing(channel_id) do
+    api =
+      case GatewayConfig.get(:discord, %{}) do
+        %{api_mod: mod} -> normalize_api_mod(mod)
+        %{"api_mod" => mod} -> normalize_api_mod(mod)
+        _ -> Nostrum.Api.Channel
+      end
+
+    api.start_typing(channel_id)
+  end
+
   @spec deliver(OutboundPayload.t()) :: {:ok, term()} | {:error, term()}
   def deliver(%OutboundPayload{kind: :text} = payload) do
     channel_id = peer_channel_id(payload)
