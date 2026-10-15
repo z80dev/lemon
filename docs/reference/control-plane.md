@@ -85,14 +85,29 @@ with “Run timeline is unavailable”, never an empty result. No provider is ca
 
 ## `status`
 
-Scope: `operator.read`. Parameters: `{}`. Existing runtime, connection, run and
-skill counters remain unchanged. Optional subsystem lookup failures do not fail
-the request. `subsystems` maps `presence`, `router`, `channels`, `skills`, and
+Scope: `operator.read`. Parameters: `{}`. Optional subsystem lookup failures do
+not fail the request. `subsystems` maps `presence`, `router`, `channels`, `skills`, and
 `providers` to `{"status":"available"}` or `{"status":"unavailable"}` for the
 corresponding lookup. Stopped channels still return empty
 configured/connected/details arrays and stopped skills retain zero counts for
 existing clients; consult `subsystems` before interpreting these as real empty
 results. Availability describes a local query, not adapter/provider connectivity.
+
+`runs` contains `active`, `queued`, `completed_today`, and `failed_today`.
+Each field is a nonnegative integer or JSON `null` when its source is unavailable;
+clients display null as **unknown**, never zero. `subsystems.router.fields` maps
+each run-count field to `"available"` or `"unavailable"`; the router section's
+`status` is unavailable if any field is unknown. Coordinator reads time out after
+100 ms rather than waiting for the default GenServer timeout.
+
+Daily counts use **midnight UTC**, not the operator's local timezone.
+`completed_today` counts distinct terminal run IDs (including failures), while
+`failed_today` counts `run_failed` and `run_completed` with `ok: false`.
+The tracker rebuilds from durable introspection events on restart and deduplicates
+live telemetry/events by run ID. Provider UsageStore requests are not run completions.
+When introspection persistence is disabled or unreadable during initialization,
+daily totals are unknown because complete history cannot be established.
+`lemon status` reports launcher health/context, not these run counters.
 
 - `server.version` is the Lemon release CalVer, shared with `hello-ok`: packaged
   runtimes use `RELEASE_VSN`, source checkouts use the umbrella `mix.exs` version.

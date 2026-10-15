@@ -23,4 +23,26 @@ defmodule LemonCore.IntrospectionStoreTest do
 
     assert IntrospectionStore.count(run_id: run_id) >= 1
   end
+
+  test "terminal seed includes all events beyond the listing cap and respects its boundary" do
+    ts = System.system_time(:millisecond)
+    prefix = "daily-seed-#{System.unique_integer([:positive])}"
+
+    for i <- 1..1001 do
+      assert :ok =
+               IntrospectionStore.append(%{
+                 event_id: "#{prefix}-#{i}",
+                 ts_ms: ts,
+                 event_type: if(rem(i, 2) == 0, do: :run_failed, else: :run_completed),
+                 provenance: :direct,
+                 run_id: "#{prefix}-#{i}",
+                 payload: %{ok: rem(i, 2) != 0}
+               })
+    end
+
+    assert {:ok, events} = IntrospectionStore.terminal_events_since(ts)
+    assert Enum.count(events, &String.starts_with?(&1.run_id || "", prefix)) == 1001
+    assert {:ok, later} = IntrospectionStore.terminal_events_since(ts + 1)
+    refute Enum.any?(later, &String.starts_with?(&1.run_id || "", prefix))
+  end
 end
