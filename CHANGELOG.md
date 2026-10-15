@@ -8,6 +8,13 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
+### Lemon Bot
+
+- Add truthful attached-instance status, controller reconnect (including rejected
+  credentials), and opt-in owner-only local runtime start/stop/restart with
+  bounded operation receipts. Publish TypeScript SDK helpers, Swift Codable
+  mirrors and a shared backend-produced fixture.
+
 ### Added
 
 - MCP clients accept an optional asynchronous `notification_handler` callback for

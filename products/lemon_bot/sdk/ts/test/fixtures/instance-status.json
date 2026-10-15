@@ -1,0 +1,56 @@
+{
+  "measuredAtMs": 1791940000000,
+  "backend": {
+    "version": "0.1.0",
+    "apiVersion": 1,
+    "startedAtMs": 1791939999000,
+    "publicUrl": "https://lemon.example"
+  },
+  "controller": {
+    "url": "ws://127.0.0.1:4040/ws",
+    "state": "connected",
+    "connectedAtMs": 1791940000000,
+    "lastDisconnectedAtMs": null,
+    "lastError": null,
+    "nextRetryAtMs": null,
+    "methodCount": 4
+  },
+  "lemon": {
+    "version": "0.1.0",
+    "uptimeMs": 12000,
+    "memoryMb": 256.5,
+    "connections": {
+      "active": 3,
+      "operators": 1,
+      "nodes": 2
+    },
+    "runs": {
+      "active": 1,
+      "queued": 2,
+      "completedToday": 4
+    },
+    "activeSessions": 7,
+    "channels": {
+      "configured": [
+        "telegram"
+      ],
+      "connected": [
+        "telegram"
+      ]
+    },
+    "skills": {
+      "installed": 10,
+      "enabled": 8
+    },
+    "nodes": {
+      "total": 3,
+      "online": 2
+    }
+  },
+  "lemonUnavailableReason": null,
+  "runtime": {
+    "controllable": false,
+    "reason": "Set LEMON_BOT_RUNTIME_LAUNCHER to the absolute path of the lemon launcher on this host to enable start/stop/restart.",
+    "operation": null
+  }
+}

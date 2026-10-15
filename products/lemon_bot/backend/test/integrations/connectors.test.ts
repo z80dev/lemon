@@ -54,6 +54,8 @@ const productExecutionProjection = {
 /** Stateful destination records: measured presence, stored profiles and destination-only secret resolution. */
 class DestinationPeer implements LemonService {
   connected = true;
+  controller: LemonService['controller'] = { url: 'ws://127.0.0.1:4040/ws', state: 'connected', connectedAtMs: 1, lastDisconnectedAtMs: null, lastError: null, nextRetryAtMs: null, methodCount: 0 };
+  reconnect() { this.start(); }
   methods = ['node.mcp.discover', 'node.secrets.list', 'node.secrets.set', 'node.secrets.delete', 'node.capabilities.get', 'node.runtime.features', 'nodes.list', 'node.host.info', 'profiles.update', 'profiles.get', 'profiles.sync', 'mcp.execution_names', 'profile.followup.admission.set', 'runs.followup.lineage.get', 'chat.abort', 'agent.wait'];
   calls: { method: string; params: Record<string, unknown> }[] = [];
   secrets = new Map<string, string>();

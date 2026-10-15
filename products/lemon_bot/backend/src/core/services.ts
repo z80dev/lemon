@@ -56,6 +56,8 @@ export interface MutationService {
 export interface LemonService {
   connected: boolean;
   methods: string[];
+  controller: P.InstanceStatus['controller'];
+  reconnect(): void;
   call<T = unknown>(method: string, params?: Record<string, unknown>, options?: { mutation?: boolean; timeoutMs?: number; resourceIds?: string[] }): Promise<T>;
   onEvent(listener: (event: string, payload: unknown) => void): () => void;
   onConnected(listener: () => void): () => void;
@@ -117,6 +119,7 @@ export interface BackendConfiguration {
   publicUrl: string; controlUrl: string; operatorToken: string; dataDir: string; host: string; port: number;
   /** Absolute external web assets directory; omitted callers use the runtime layout. */
   webRoot?: string;
+  runtimeLauncher?: string;
   trustedOverlay: boolean; operator: P.OperatorConfiguration;
 }
 export interface BackendServices {
