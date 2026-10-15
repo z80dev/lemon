@@ -8,7 +8,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
-No unreleased changes yet.
+- Extend the omp operator API with bounded parallel starts, model discovery,
+  child transcripts, live configuration, approval overrides, isolated starts,
+  interrupted-session continuation and redirect delivery; preserve actionable
+  partial-application and outcome-unknown errors.
 
 ---
 

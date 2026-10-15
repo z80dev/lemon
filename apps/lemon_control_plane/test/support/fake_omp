@@ -13,6 +13,11 @@ if [ "$1" = "--version" ]; then
   exit 0
 fi
 
+if [ "$1" = "models" ]; then
+  echo '[{"selector":"fake/free","provider":"fake","id":"free","name":"Free","contextWindow":8192,"reasoning":true,"cost":{"input":0,"output":0}}]'
+  exit 0
+fi
+
 emit() { printf '%s\n' "$1"; }
 
 respond() {
@@ -54,6 +59,12 @@ while IFS= read -r line; do
     abort)
       respond "$id" "$type"
       finish_turn aborted
+      ;;
+    get_state)
+      emit "{\"id\":\"$id\",\"type\":\"response\",\"command\":\"$type\",\"success\":true,\"data\":{\"model\":{\"provider\":\"fake\",\"id\":\"free\"},\"thinkingLevel\":\"low\"}}"
+      ;;
+    get_subagent_messages)
+      emit "{\"id\":\"$id\",\"type\":\"response\",\"command\":\"$type\",\"success\":true,\"data\":{\"messages\":[{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"child done\"}]}],\"fromByte\":0,\"nextByte\":42,\"reset\":false}}"
       ;;
     *)
       respond "$id" "$type"

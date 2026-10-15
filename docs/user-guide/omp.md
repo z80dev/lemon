@@ -125,9 +125,7 @@ or `"snapshot"` (refresh). Earlier changes are not rolled back. Neither
 mutations nor unknown outcomes are retried automatically.
 
 Only live sessions can be configured, with the same ownership rules as sending
-a message. This is available through the chat tool and Elixir API; control-plane
-`omp.sessions.configure`, CLI `lemon omp configure`, and a TUI model switch are
-not yet exposed.
+a message. The control plane exposes this as `omp.sessions.configure`.
 
 ## Parallel workers
 
@@ -210,6 +208,37 @@ Elixir callers can use `LemonOmp.start_many(tasks, owner: owner)` and
 uses one Bus subscription and reports the full ordered snapshot list through
 `on_update` at most about every 300 ms, plus an unconditional final update.
 Ownership restrictions are identical to single-session access.
+
+## Control-plane API
+
+Authenticated operators can use these methods (parameters use camelCase):
+
+| Method | Scope | Parameters / result |
+| --- | --- | --- |
+| `omp.sessions.start` | write | `cwd`, `prompt`; optional `model`, `thinking`, `approvalMode`, `isolate`. Returns `{session}`. |
+| `omp.sessions.resume` | write | `cwd`, `ompSessionId`; optional `prompt`, `model`, `thinking`, `approvalMode`, `continue`. `continue: true` cannot accompany a prompt. Returns `{session}`. |
+| `omp.sessions.startMany` | write | `tasks` (1–8 start maps), optional batch-default `isolate`. Returns ordered `{results: [{index, session} \| {index, error}]}`. Each task requires its own `cwd` and `prompt`; task isolation overrides the batch default. |
+| `omp.models` | read | Optional `query`, `provider`, `freeOnly`, `limit` (1–200). Returns `{models}` cheapest first. |
+| `omp.sessions.subagent` | read | `id`, `subagentId`, optional `limit` (1–50). Returns `{id, subagentId, transcript}` with sanitized messages and byte cursors. |
+| `omp.sessions.configure` | write | `id`, at least one of `model`, `thinking`. Returns `{session}`. |
+| `omp.sessions.send` | write | `id`, `message`, optional `mode`: `steer` (default), `followUp`, or `redirect`. Returns `{accepted: true, delivery}`; idle delivery is `prompt`. |
+
+These methods dispatch asynchronously so approvals and `omp.session` events keep
+flowing. Existing list/get/discover methods remain read-only. Discovery includes
+`source`, `interrupted`, and worktree path/branch when present; snapshots and event
+payloads retain the driver's approval, worktree and subagent details unchanged.
+Prompts and messages are limited to 16 KiB, paths to 4096 bytes, and model selectors
+to 128 bytes. Approval modes are `always-ask`, `write`, and `yolo`; thinking levels
+are `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, and `auto`.
+
+Errors carry a public `details.code`: `OMP_NOT_A_GIT_REPO` identifies `cwd`,
+`OMP_WORKTREE_FAILED` and `OMP_CATALOG_FAILED` report unavailable operations,
+and `OMP_INVALID_TASK` includes the zero-based failing task `index`. Whole-batch
+validation finishes before workers start. Per-task errors retain their public
+code and any uncertain invocation `id`. `OMP_PARTIALLY_APPLIED` includes `applied`,
+`failedStep`, and `retrySafe: false`; earlier configuration changes are not rolled
+back. Outcome-unknown errors also carry `retrySafe: false`: reconcile rather than
+automatically retrying.
 
 ## From the TUI
 
