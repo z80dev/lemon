@@ -4,6 +4,7 @@ defmodule CodingAgent.Tools.Task.WaitTest do
   alias CodingAgent.{ParentQuestions, RunGraph, TaskStore}
   alias CodingAgent.Tools.Task.{Control, Wait}
   alias LemonAgent.AbortSignal
+  alias LemonAgent.Test.Mocks
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
 
   @opts [session_id: "wait-parent", agent_id: "parent-agent"]
@@ -202,7 +203,7 @@ defmodule CodingAgent.Tools.Task.WaitTest do
          [
            cwd: cwd,
            workspace_dir: Path.join(cwd, "workspace"),
-           model: LemonAgent.Test.Mocks.mock_model(),
+           model: Mocks.mock_model(),
            stream_fn: fn _, _, _ -> flunk("no provider calls expected") end
          ]}
       )

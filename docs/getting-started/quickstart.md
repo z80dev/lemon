@@ -150,8 +150,20 @@ Keep the token private.
 lemon doctor
 ```
 
-Follow the failing check's concrete fix. Doctor checks config, resolvable
-credentials, model selection, dependencies and runtime health; it does not claim
-to have made a model request. For credential changes, use the
-[setup guide](../user-guide/setup.md); for logs and redacted support bundles, use
-[Support](../support.md). Never post tokens, raw secrets or an unreviewed bundle.
+Follow the failing check's concrete fix. By default doctor stays offline: it
+checks config, resolvable credentials, model selection, dependencies and runtime
+health without contacting providers or channels. To investigate a revoked key
+or connectivity problem, opt in:
+
+```bash
+lemon doctor --live --verbose
+```
+
+This makes a non-generating models-list request to the default provider and
+identity requests to configured Telegram/Discord bots. Requests have a five-second
+timeout and share a six-second overall live-check deadline. Unsupported/OAuth-only
+endpoints are skipped; no completion is generated. Failures count as `FAIL` and
+exit `1`; `--json` includes live results. Output omits raw responses, keys and URLs.
+For credential changes, use the [setup guide](../user-guide/setup.md); for logs
+and redacted support bundles, use [Support](../support.md). Never post tokens,
+raw secrets or an unreviewed bundle.

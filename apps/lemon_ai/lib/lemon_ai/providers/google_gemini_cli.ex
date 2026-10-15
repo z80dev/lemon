@@ -26,6 +26,7 @@ defmodule LemonAi.Providers.GoogleGeminiCli do
   alias LemonAi.EventStream
   alias LemonAi.Providers.GoogleShared
   alias LemonAi.Providers.RetryHelper
+  alias LemonAi.Providers.StreamingHelper
   import LemonAi.Providers.AssistantMessageHelper
 
   alias LemonAi.Types.{
@@ -88,7 +89,7 @@ defmodule LemonAi.Providers.GoogleGeminiCli do
 
   @impl true
   def stream(%Model{} = model, %Context{} = context, %StreamOptions{} = opts) do
-    LemonAi.Providers.StreamingHelper.start_streaming(model, context, opts, &do_stream/4)
+    StreamingHelper.start_streaming(model, context, opts, &do_stream/4)
   end
 
   # ============================================================================
@@ -877,7 +878,7 @@ defmodule LemonAi.Providers.GoogleGeminiCli do
   end
 
   defp retry_delay_with_jitter(base_ms, attempt) do
-    LemonAi.Providers.RetryHelper.exponential_backoff_with_jitter(base_ms, attempt)
+    RetryHelper.exponential_backoff_with_jitter(base_ms, attempt)
   end
 
   @doc "Register this provider with the registry"

@@ -9,6 +9,7 @@ defmodule LemonWeb.ChatLiveTest do
 
   alias LemonCore.{Event, ExecApprovals, ExecApprovalStore}
   alias LemonCore.Events.{ApprovalPending, ApprovalRequested}
+  alias LemonWeb.Chat.PaneLive
 
   defmodule BusyBackend do
     @behaviour LemonCore.Store.Backend
@@ -82,13 +83,13 @@ defmodule LemonWeb.ChatLiveTest do
         ] do
       log =
         ExUnit.CaptureLog.capture_log(fn ->
-          assert {:noreply, models} = LemonWeb.Chat.PaneLive.handle_async(:models, result, socket)
+          assert {:noreply, models} = PaneLive.handle_async(:models, result, socket)
 
           assert models.assigns.models ==
                    {:error, "Models are unavailable. Try again, or check /diagnostics."}
 
           assert {:noreply, compact} =
-                   LemonWeb.Chat.PaneLive.handle_async(:compact, result, socket)
+                   PaneLive.handle_async(:compact, result, socket)
 
           refute compact.assigns.compacting
 
@@ -887,7 +888,7 @@ defmodule LemonWeb.ChatLiveTest do
     # whether the stale text is already committed or still buffered.
     :sys.replace_state(pane.pid, fn state ->
       {:noreply, socket} =
-        LemonWeb.Chat.PaneLive.handle_info(
+        PaneLive.handle_info(
           delta("abandoned-run", 2, "obsolete live text"),
           state.socket
         )

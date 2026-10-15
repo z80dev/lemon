@@ -2027,6 +2027,7 @@ programmatically with `CodingAgent.Session.start_link(tool_disclosure: [profile:
 - `gateway`: Lemon gateway settings, including `queue`, `telegram`, `discord`, `sms`, `voice`, `xmtp`, `projects`, and `bindings`.
 - `logging`: optional file logging configuration.
 - `automation`: opt-in proactive automation (`daily_brief`).
+- `cron`: cron failure-alert cooldown settings.
 
 ## Automation
 
@@ -2059,6 +2060,21 @@ run_retention_per_job = 100
   retries are exempt. This also applies to history of removed jobs.
 
 See [Reminders, heartbeats, and the daily brief](user-guide/reminders-and-heartbeats.md).
+
+### Cron failure alerts
+
+```toml
+[cron]
+failure_alert_cooldown_ms = 21600000 # 6 hours
+```
+
+`failure_alert_cooldown_ms` is a non-negative integer, resolved and validated by
+the core automation configuration. It limits repeated failure alerts per job
+and normalized error class; the first failure and a changed error class alert
+immediately. `0` disables the cooldown. Incident state survives restarts.
+Recovery notices are separate from cooldown reminders. See the
+[failure-alert workflow](user-guide/reminders-and-heartbeats.md#failure-alerts-and-recovery)
+for routing, silent successes, and local doctor warnings.
 
 ## Gateway Projects and Bindings
 

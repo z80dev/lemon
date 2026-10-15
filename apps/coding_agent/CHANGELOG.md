@@ -94,7 +94,7 @@
 ### Changed
 
 - Normalize module aliases, implicit exception handling and direct function calls
-  in recently changed coding-agent modules without changing runtime behavior.
+  in recently changed coding-agent modules and tests without changing runtime behavior.
 
 - Deadline-owning task/wait, agent delegation, bash, eval, debug, question and
   browser tools explicitly retain their own limits under the agent runtime's

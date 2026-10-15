@@ -51,6 +51,7 @@ defmodule LemonAi.Providers.OpenAICodexResponses do
   alias LemonAi.Providers.OpenAIResponsesShared
   alias LemonAi.Providers.RetryHelper
   alias LemonAi.Providers.SSEParser
+  alias LemonAi.Providers.StreamingHelper
   import LemonAi.Providers.AssistantMessageHelper
 
   # ============================================================================
@@ -93,7 +94,7 @@ defmodule LemonAi.Providers.OpenAICodexResponses do
 
   @impl true
   def stream(%Model{} = model, %Context{} = context, %StreamOptions{} = opts) do
-    LemonAi.Providers.StreamingHelper.start_streaming(model, context, opts, &do_stream/4)
+    StreamingHelper.start_streaming(model, context, opts, &do_stream/4)
   end
 
   defp do_stream(stream, model, context, opts) do

@@ -29,6 +29,10 @@ defmodule LemonChannels.Doctor.Checks.Channels do
       ]
   end
 
+  @doc "Returns opt-in bot identity jobs; offline checks never resolve live credentials."
+  @spec live_checks(keyword()) :: [LemonCore.Doctor.LiveChecks.job()]
+  def live_checks(opts), do: LemonChannels.Doctor.LiveChecks.jobs(opts)
+
   defp check_telegram(%{enabled: true} = telegram) do
     if token_ready?(telegram) do
       Check.pass("channels.telegram.config", "Telegram is enabled with credential shape present.")

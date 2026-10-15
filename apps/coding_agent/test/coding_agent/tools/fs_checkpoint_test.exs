@@ -1,11 +1,11 @@
 defmodule CodingAgent.Tools.FsCheckpointTest do
   use ExUnit.Case, async: false
 
-  alias LemonAgent.Types.AgentToolResult
   alias CodingAgent.Checkpoint
-  alias CodingAgent.Tools.FsCheckpoint, as: CheckpointTool
   alias CodingAgent.Tools.Edit
+  alias CodingAgent.Tools.FsCheckpoint, as: CheckpointTool
   alias CodingAgent.Tools.Patch
+  alias LemonAgent.Types.AgentToolResult
 
   @moduletag :tmp_dir
 

@@ -57,7 +57,8 @@ defmodule LemonAi.Providers.OpenAICompletions do
   }
 
   alias LemonAi.EventStream
-  alias LemonAi.Providers.{OpenCodeGoSession, RetryHelper}
+  alias LemonAi.Models.Presets
+  alias LemonAi.Providers.{OpenCodeGoSession, RequestHeaders, RetryHelper, StreamingHelper}
 
   require Logger
 
@@ -80,7 +81,7 @@ defmodule LemonAi.Providers.OpenAICompletions do
 
   @impl LemonAi.Provider
   def stream(%Model{} = model, %Context{} = context, %StreamOptions{} = opts) do
-    LemonAi.Providers.StreamingHelper.start_streaming(model, context, opts, &do_stream/4)
+    StreamingHelper.start_streaming(model, context, opts, &do_stream/4)
   end
 
   # ============================================================================
@@ -208,7 +209,7 @@ defmodule LemonAi.Providers.OpenAICompletions do
   }
 
   defp provider_env_vars(provider) when is_atom(provider) do
-    Map.get(@provider_env_vars, provider) || LemonAi.Models.Presets.env_vars(provider)
+    Map.get(@provider_env_vars, provider) || Presets.env_vars(provider)
   end
 
   defp provider_env_vars(provider) when is_binary(provider) do
@@ -284,10 +285,10 @@ defmodule LemonAi.Providers.OpenAICompletions do
 
     # Merge headers - later entries override earlier ones
     base_headers
-    |> LemonAi.Providers.RequestHeaders.merge(session_headers)
-    |> LemonAi.Providers.RequestHeaders.merge(model.headers)
-    |> LemonAi.Providers.RequestHeaders.merge(copilot_headers)
-    |> LemonAi.Providers.RequestHeaders.merge(opts.headers)
+    |> RequestHeaders.merge(session_headers)
+    |> RequestHeaders.merge(model.headers)
+    |> RequestHeaders.merge(copilot_headers)
+    |> RequestHeaders.merge(opts.headers)
     |> Map.to_list()
   end
 

@@ -1,9 +1,10 @@
 defmodule LemonAgent.LoopTest do
   use ExUnit.Case, async: true
 
-  alias LemonAgent.Loop
-  alias LemonAgent.EventStream
   alias LemonAgent.AbortSignal
+  alias LemonAgent.EventStream
+  alias LemonAgent.Loop
+  alias LemonAgent.Test.Mocks
 
   alias LemonAgent.Types.{
     AgentContext,
@@ -13,15 +14,13 @@ defmodule LemonAgent.LoopTest do
     ToolSchemaSnapshot
   }
 
-  alias LemonAgent.Test.Mocks
-
   alias LemonAi.Types.{
     AssistantMessage,
+    StreamOptions,
     TextContent,
     ToolCall,
     ToolResultMessage,
-    UserMessage,
-    StreamOptions
+    UserMessage
   }
 
   # ============================================================================
