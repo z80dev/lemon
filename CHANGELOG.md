@@ -13,6 +13,12 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 - Lemon Bot exposes an authenticated, provider-specific voice catalog for native
   pickers without calling speech providers or generating billable audio.
 
+### Changed
+
+- Lemon Bot Apple clients explain uncached offline previews and expose sidebar
+  section/selection accessibility state. Mac global shortcuts use an explicit
+  native recorder, and Previous/Next Bot have one discoverable menu binding.
+
 ---
 
 ## [2026.10.14]
