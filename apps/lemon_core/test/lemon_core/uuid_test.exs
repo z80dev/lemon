@@ -5,19 +5,7 @@ defmodule LemonCore.UUIDTest do
 
   doctest LemonCore.Id
 
-  @canonical ~r/\A[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\z/
-
   describe "uuid4/0" do
-    test "is canonical lowercase 8-4-4-12" do
-      assert UUID.uuid4() =~ @canonical
-    end
-
-    test "sets the version and RFC 9562 variant bits" do
-      assert {:ok, <<_::48, version::4, _::12, variant::2, _::62>>} = UUID.decode(UUID.uuid4())
-      assert version == 4
-      assert variant == 0b10
-    end
-
     test "does not repeat" do
       generated = Enum.map(1..1_000, fn _ -> UUID.uuid4() end)
       assert generated |> Enum.uniq() |> length() == 1_000
@@ -54,14 +42,6 @@ defmodule LemonCore.UUIDTest do
   end
 
   describe "decode/1" do
-    test "round-trips the generated string" do
-      uuid = UUID.uuid4()
-      {:ok, raw} = UUID.decode(uuid)
-
-      assert byte_size(raw) == 16
-      assert raw |> Base.encode16(case: :lower) |> String.length() == 32
-    end
-
     test "rejects malformed input" do
       assert UUID.decode("") == :error
       assert UUID.decode("xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx") == :error

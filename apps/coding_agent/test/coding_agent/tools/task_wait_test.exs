@@ -173,6 +173,56 @@ defmodule CodingAgent.Tools.Task.WaitTest do
     refute TaskStore.auto_followup_suppressed?(foreign)
   end
 
+  test "safety cap yields a snapshot without cancelling, observing or suppressing children" do
+    {id, run} = running_task("slow")
+    result = Wait.execute(%{}, nil, Keyword.put(@opts, :wait_timeout_ms, 1))
+
+    assert %AgentToolResult{
+             details: %{
+               timed_out: true,
+               interrupted: false,
+               tasks: [%{task_id: ^id, status: "running"}]
+             }
+           } = result
+
+    refute observed?(id)
+    refute TaskStore.auto_followup_suppressed?(id)
+    assert {:ok, %{status: :running}} = RunGraph.get(run)
+    finish_task(id, run, "after cap")
+
+    assert %AgentToolResult{details: %{tasks: [%{task_id: ^id, output: "after cap"}]}} =
+             Wait.execute(%{}, nil, @opts)
+  end
+
+  @tag :tmp_dir
+  test "steering interrupts wait without consuming the peer message", %{tmp_dir: cwd} do
+    session =
+      start_supervised!(
+        {CodingAgent.Session,
+         [
+           cwd: cwd,
+           workspace_dir: Path.join(cwd, "workspace"),
+           model: LemonAgent.Test.Mocks.mock_model(),
+           stream_fn: fn _, _, _ -> flunk("no provider calls expected") end
+         ]}
+      )
+
+    {id, run} = running_task("waiting")
+    opts = Keyword.put(@opts, :session_pid, session)
+    waiter = Task.async(fn -> Wait.execute(%{}, nil, opts) end)
+    wait_until(fn -> TaskStore.auto_followup_suppressed?(id) end)
+    CodingAgent.Session.steer(session, "A peer asks you to stop waiting")
+
+    assert %AgentToolResult{details: %{interrupted: true, timed_out: false}} =
+             Task.await(waiter, 2_000)
+
+    assert CodingAgent.Session.has_steering_messages?(session, nil)
+    refute CodingAgent.Session.has_steering_messages?(session, make_ref())
+    refute observed?(id)
+    refute TaskStore.auto_followup_suppressed?(id)
+    assert {:ok, %{status: :running}} = RunGraph.get(run)
+  end
+
   test "aborting the wait releases reservations without cancelling or observing children" do
     tasks = Enum.map(1..3, &running_task("running #{&1}"))
     signal = AbortSignal.new()

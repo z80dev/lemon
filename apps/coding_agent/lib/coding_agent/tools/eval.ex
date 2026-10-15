@@ -40,6 +40,7 @@ defmodule CodingAgent.Tools.Eval do
   def tool(cwd, opts \\ []) do
     %AgentTool{
       name: "eval",
+      timeout_ms: :infinity,
       description:
         "Run one step of code in a persistent kernel: `py` (Python 3) or `js` (Bun, or Node). " <>
           "Variables, imports and functions persist across calls in this session, so work " <>

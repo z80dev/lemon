@@ -4,6 +4,38 @@ Skills are reusable knowledge modules that Lemon loads into context when relevan
 They capture task patterns, approaches, and domain knowledge so you don't have to
 repeat yourself across sessions.
 
+## Learning timeline
+
+```bash
+lemon learning                         # default assistant, newest first
+lemon learning --profile research --kind skill --limit 20
+lemon learning --kind project --json
+```
+
+The timeline combines saved user/memory notes, repository learnings, reviewed
+source memories, skill drafts, installs, audits, and available usage/lifecycle
+timestamps. Select a local profile explicitly with `--profile`; no other profile's
+home is scanned. Skill sidecars are read only below that assistant home; the
+canonical default assistant also includes agent-attributed global skill events
+and global drafts whose source memory belongs to it. Unattributed global records
+and repository skills outside the home cannot be attributed safely and are omitted.
+
+This is a **current-state timeline**, not an append-only history: only existing
+creation and latest-change timestamps are available. Deleted records and earlier
+edits are absent, workspace-note timestamps describe the file, and an older
+event's preview shows the current text. Loads without recorded agent attribution
+and legacy write attempts without a success marker are omitted. Previews are
+redacted and truncated; treat them as untrusted data.
+The default is 50 events, with a maximum of 100, from bounded source windows.
+Oversized or unreadable skill sidecars report unavailable rather than pretending
+to be empty.
+
+IDs are existing management references, not a new mutation API. Use the Memory
+page's revision-confirmed delete for a memory ID; use `remember(text, replaces)`
+in the owning conversation for note edits, and `lemon skill` / `lemon skill draft`
+for existing skill management. Check `lemon skill --help` before destructive
+actions. Listing never modifies memory or skills or makes a provider call.
+
 ## Learning reminders
 
 Lemon occasionally prompts the main assistant to preserve useful knowledge:
@@ -284,6 +316,29 @@ mix lemon.skill remove <skill-key>
 ```
 
 ---
+
+## Review agent skill writes
+
+Enable human review of agent-authored procedural memory in `config.toml`:
+
+```toml
+[skills]
+write_approval = true
+```
+
+Off by default, this gates every mutating `skill_manage` action: create, edit,
+patch, delete, supporting-file writes/removals, pin/unpin, and archive/restore.
+`report` remains available without write approval. The existing execution
+approval UI shows the target/action and bounded, escaped, redacted content or
+patch summary; a digest binds the full mutation to its workspace. Approval is
+not an audit override: unsafe or pinned writes can still be refused.
+
+Declined, unavailable or expired approval means nothing is written. Unattended
+background review cannot create drafts or patch skills behind this gate; cron
+and channels without approval controls also fail closed. Interactive native
+sessions and Telegram/Discord use their existing approval flow. Explicit
+operator skill-management services retain their existing review rules.
+See [configuration](../config.md#memory) for timeout and memory-write settings.
 
 ## Quality Checks
 

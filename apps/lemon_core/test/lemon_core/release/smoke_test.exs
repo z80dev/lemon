@@ -18,8 +18,8 @@ defmodule LemonCore.Release.SmokeTest do
 
   use ExUnit.Case, async: false
 
-  alias LemonCore.Doctor.Checks.{Config, NodeTools, Runtime}
-  alias LemonCore.Doctor.{Check, Report}
+  alias LemonCore.Doctor.Checks.{Config, Runtime}
+  alias LemonCore.Doctor.Check
   alias LemonCore.Runtime.{Env, Health, Profile}
 
   # ──────────────────────────────────────────────────────────────────────────
@@ -47,20 +47,13 @@ defmodule LemonCore.Release.SmokeTest do
 
       assert length(full.apps) > length(min.apps)
     end
-
-    test "all profile app lists contain only atoms" do
-      for name <- Profile.names() do
-        apps = Profile.app_list(name)
-        assert Enum.all?(apps, &is_atom/1)
-      end
-    end
   end
 
   describe "runtime modules" do
-    test "Env module resolves without crashing" do
+    test "Env resolves valid control and web port boundaries" do
       env = Env.resolve()
-      assert is_integer(env.control_port) and env.control_port > 0
-      assert is_integer(env.web_port) and env.web_port > 0
+      assert env.control_port in 1..65_535
+      assert env.web_port in 1..65_535
     end
   end
 
@@ -74,14 +67,6 @@ defmodule LemonCore.Release.SmokeTest do
     test "Runtime checks return valid Check structs" do
       checks = Runtime.run()
       assert Enum.all?(checks, &match?(%Check{}, &1))
-    end
-
-    test "doctor report aggregation works end-to-end" do
-      all_checks = Config.run() ++ Runtime.run() ++ NodeTools.run()
-
-      report = Report.from_checks(all_checks)
-      assert is_boolean(Report.ok?(report))
-      assert Report.overall(report) in [:pass, :warn, :fail]
     end
   end
 

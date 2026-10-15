@@ -217,7 +217,12 @@ defmodule LemonRouter.Router do
 
   defp inbound_channel_identity(%{channel_id: channel, sender: %{id: sender} = identity})
        when is_binary(channel) and is_binary(sender) and sender != "" do
-    %{channel_id: channel, sender_id: sender, is_bot: Map.get(identity, :bot, false) == true}
+    %{
+      channel_id: channel,
+      sender_id: sender,
+      is_bot: Map.get(identity, :bot, false) == true,
+      owner?: Map.get(identity, :owner?, false) == true
+    }
   end
 
   defp inbound_channel_identity(_), do: nil

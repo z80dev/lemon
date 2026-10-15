@@ -436,12 +436,12 @@ defmodule CodingAgent.Tools.WebSearchTest do
     assert payload["error"] == "missing_brave_api_key"
     assert payload["provider_requested"] == "brave"
     assert payload["provider_used"] == "brave"
-    assert payload["failover"]["attempted"] == false
+    assert payload["failover"]["attempted"] == true
     assert payload["failover"]["used"] == false
-    assert payload["failover"]["reason"] =~ "freshness is only supported by Brave"
+    assert payload["failover"]["reason"] =~ "perplexity does not support"
   end
 
-  test "rejects freshness for non-brave providers" do
+  test "rejects freshness when no provider in the chain supports it" do
     tool =
       WebSearch.tool("/tmp",
         settings_manager: %{
@@ -456,8 +456,13 @@ defmodule CodingAgent.Tools.WebSearchTest do
         }
       )
 
-    assert {:error, "freshness is only supported by the Brave websearch provider"} =
-             tool.execute.("id", %{"query" => "lemon", "freshness" => "pw"}, nil, nil)
+    assert {:error, "No provider in the search chain supports the requested freshness filter"} =
+             tool.execute.(
+               "id",
+               %{"query" => "lemon", "freshness" => "pw", "fallbackProviders" => []},
+               nil,
+               nil
+             )
   end
 
   test "runs perplexity search with citations" do

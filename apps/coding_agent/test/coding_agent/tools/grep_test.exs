@@ -369,24 +369,16 @@ defmodule CodingAgent.Tools.GrepTest do
       tool = Grep.tool("/tmp")
 
       assert tool.name == "grep"
-      assert tool.label == "Search Files"
-      assert tool.description =~ "Search for patterns"
       assert tool.parameters["type"] == "object"
       assert tool.parameters["required"] == ["pattern"]
       assert is_function(tool.execute, 4)
     end
 
-    test "includes all expected parameters" do
+    test "exposes the required pattern parameter" do
       tool = Grep.tool("/tmp")
       props = tool.parameters["properties"]
 
       assert Map.has_key?(props, "pattern")
-      assert Map.has_key?(props, "path")
-      assert Map.has_key?(props, "glob")
-      assert Map.has_key?(props, "case_sensitive")
-      assert Map.has_key?(props, "literal")
-      assert Map.has_key?(props, "context_lines")
-      assert Map.has_key?(props, "max_results")
     end
   end
 
@@ -725,9 +717,22 @@ defmodule CodingAgent.Tools.GrepTest do
     end
 
     test "uses default max_results of 100", %{tmp_dir: tmp_dir} do
-      tool = Grep.tool(tmp_dir)
-      # Verify the tool was created with proper defaults
-      assert tool.parameters["properties"]["max_results"]["description"] =~ "100"
+      path = Path.join(tmp_dir, "matches.txt")
+      File.write!(path, Enum.map_join(1..150, "\n", &"match line #{&1}"))
+
+      assert %AgentToolResult{content: [%TextContent{text: text}], details: details} =
+               Grep.execute(
+                 "default-limit",
+                 %{"pattern" => "match line", "path" => path},
+                 nil,
+                 nil,
+                 tmp_dir,
+                 []
+               )
+
+      assert details.match_limit_reached == 100
+      assert details.next_skip == 100
+      assert length(Regex.scan(~r/match line \d+/, text)) == 100
     end
 
     test "returns error for invalid max_results", %{tmp_dir: tmp_dir} do

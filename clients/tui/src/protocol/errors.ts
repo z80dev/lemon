@@ -100,3 +100,42 @@ export class HandshakeError extends Error {
 		this.cause = cause;
 	}
 }
+
+/** Authentication failed; retrying the same credential cannot recover it. */
+export class AuthenticationError extends HandshakeError {
+	constructor(cause?: unknown) {
+		super(
+			"auth rejected — set LEMON_CONTROL_PLANE_OPERATOR_TOKEN to the runtime's token and restart the TUI, or use the lemon launcher to load ~/.lemon/run/control-plane-<port>.token",
+			cause,
+		);
+		this.name = "AuthenticationError";
+	}
+}
+
+export function offlineMessage(url: string): string {
+	return `Lemon isn't running at ${url}. Start it with \`lemon start\`, then /reconnect (or check --url / LEMON_WS_URL).`;
+}
+
+/** User-facing failures; method names, close codes and wire details stay in /debug. */
+export function describeError(error: unknown): string {
+	if (error instanceof AuthenticationError) return error.message;
+	if (error instanceof NotConnectedError) return "not connected — run /reconnect, then try again";
+	if (error instanceof RequestTimeoutError)
+		return `Lemon did not answer within ${error.timeoutMs / 1000}s — run /reconnect before trying again`;
+	if (error instanceof MethodUnavailableError)
+		return "this action needs a newer Lemon runtime — update Lemon, then /reconnect";
+	if (error instanceof HandshakeError) return error.message;
+	if (error instanceof ControlPlaneError) {
+		switch (error.code) {
+			case "HANDSHAKE_REQUIRED":
+			case "ALREADY_CONNECTED":
+				return "the connection is not ready — run /reconnect, then try again";
+			case "METHOD_NOT_FOUND":
+			case "NOT_IMPLEMENTED":
+				return "this action is unavailable — update Lemon, then /reconnect";
+			case "INTERNAL_ERROR":
+				return "Lemon could not complete this action — check the runtime logs";
+		}
+	}
+	return error instanceof Error ? error.message : String(error);
+}

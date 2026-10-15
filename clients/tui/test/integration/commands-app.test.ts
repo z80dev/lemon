@@ -102,6 +102,65 @@ function chatText(app: AppShell): string {
 	return renderPlain(app.chatContainer.render(80));
 }
 
+async function bootDisconnectedApp(url: string) {
+	const home = mkdtempSync(join(tmpdir(), "lemon-tui-disconnected-"));
+	teardown.push(() => rmSync(home, { recursive: true, force: true }));
+	const terminal = new MemoryTerminal();
+	const client = new ControlPlaneClient({ url, requestTimeoutMs: 25 });
+	const app = new AppShell({
+		url,
+		client,
+		terminal,
+		resources: { home, env: {} },
+		readBranch: async () => null,
+	});
+	teardown.push(() => app.stop());
+	await app.start();
+	return { app, terminal };
+}
+
+describe("connection failure recovery", () => {
+	test("a rejected token leaves connecting, keeps the draft, and sends nothing", async () => {
+		const server = await FakeControlPlane.start({
+			rejectHandshake: { code: "UNAUTHORIZED", message: "Operator token is invalid" },
+		});
+		teardown.push(() => server.stop());
+		const { app, terminal } = await bootDisconnectedApp(server.url);
+		expect(app.client.state).toBe("auth-rejected");
+		expect(stripAnsi(app.statusBar.render(160)[0])).toContain("auth rejected");
+		terminal.sendInput("keep this prompt");
+		terminal.sendInput("\r");
+		await waitFor(() => app.editor.getExpandedText() === "keep this prompt", {
+			what: "the refused editor draft",
+		});
+		expect(app.editor.getExpandedText()).toBe("keep this prompt");
+		expect(app.client.queued).toHaveLength(0);
+		expect(server.requestsFor("chat.send")).toHaveLength(0);
+		expect(chatText(app)).toContain("LEMON_CONTROL_PLANE_OPERATOR_TOKEN");
+		expect(chatText(app).replace(/\s+/g, " ")).toContain("nothing queued or sent");
+		await app.submit("/reconnect");
+		expect(chatText(app)).toContain("reconnect failed: auth rejected");
+	});
+
+	test("an unreachable runtime explains startup and retains text without queueing", async () => {
+		const server = await FakeControlPlane.start();
+		const url = server.url;
+		server.stop();
+		// Exercise the real socket/deadline boundary; no arbitrary wait is needed.
+		const { app } = await bootDisconnectedApp(url);
+		expect(chatText(app)).toContain(`Lemon isn't running at ${url}`);
+		expect(chatText(app)).toContain("lemon start");
+		expect(chatText(app)).toContain("/reconnect");
+		expect(chatText(app)).not.toContain("handshake");
+		app.editor.setText("do not send this later");
+		expect(await app.submit("do not send this later")).toBe("rejected");
+		expect(app.editor.getExpandedText()).toBe("do not send this later");
+		expect(app.client.queued).toHaveLength(0);
+		await app.submit("/reconnect");
+		expect(chatText(app)).toContain("reconnect failed:");
+	});
+});
+
 describe("slash commands in the app", () => {
 	test("/help renders the registry into the transcript", async () => {
 		const { app } = await bootApp();

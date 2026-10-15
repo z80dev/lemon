@@ -60,7 +60,7 @@ export class RecordingHost implements CommandHost {
 		this.exits.push(code);
 	}
 
-	reconnect(): void {
+	async reconnect(): Promise<void> {
 		this.reconnects += 1;
 	}
 

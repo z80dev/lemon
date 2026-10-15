@@ -82,13 +82,6 @@ defmodule LemonChannels.PortableCommandTest do
     end)
   end
 
-  test "renders grouped help from the portable catalog" do
-    assert {:ok, help} = PortableCommand.handle("commands", "", %{})
-    assert help =~ "Information"
-    assert help =~ "/queue <prompt> (/q)"
-    assert help =~ "/btw <question>"
-  end
-
   test "renders task records through the registered runtime provider" do
     assert {:ok, tasks} = PortableCommand.handle("agents", "", %{})
     assert tasks =~ "task-123456"

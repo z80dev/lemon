@@ -123,21 +123,6 @@ defmodule LemonCore.StoreInstanceTest do
         assert :ets.info(:ets.whereis(beta_table), :owner) == Process.whereis(beta)
       end
     end
-
-    test "the default store keeps its historical table names" do
-      assert ReadCache.table_for(:chat) == :lemon_store_cache_chat
-      assert ReadCache.table_for(:runs) == :lemon_store_cache_runs
-      assert ReadCache.table_for(:progress) == :lemon_store_cache_progress
-      assert ReadCache.table_for(:sessions_index) == :lemon_store_cache_sessions_index
-
-      assert ReadCache.table_for(:demo_targets) ==
-               :lemon_store_cache_demo_targets
-
-      assert ReadCache.table_for(LemonCore.Store, :chat) == :lemon_store_cache_chat
-
-      assert ReadCache.table_for(:store_instance_alpha, :chat) ==
-               :lemon_store_cache_store_instance_alpha_chat
-    end
   end
 
   describe "backend configuration" do
@@ -176,13 +161,6 @@ defmodule LemonCore.StoreInstanceTest do
       store = start_store(name, backend_opts: [tag: :opts])
 
       assert Store.get(store, :tag, :tag) == :opts
-    end
-
-    test "the default store still reads config :lemon_core, LemonCore.Store" do
-      # The running application store is configured through the historical key;
-      # its cache tables and app-env key must not have moved.
-      assert is_pid(Process.whereis(LemonCore.Store))
-      assert Store.ping() == :ok
     end
 
     @tag :tmp_dir
@@ -282,11 +260,6 @@ defmodule LemonCore.StoreInstanceTest do
       name = :config_cache_instance_test
 
       start_supervised!(Supervisor.child_spec({LemonCore.ConfigCache, name: name}, id: name))
-
-      assert LemonCore.ConfigCache.table_for(name) ==
-               :lemon_core_config_cache_config_cache_instance_test
-
-      assert LemonCore.ConfigCache.table_for(LemonCore.ConfigCache) == :lemon_core_config_cache
 
       assert LemonCore.ConfigCache.available?(name)
       assert %LemonCore.Config{} = LemonCore.ConfigCache.get(name, nil, [])

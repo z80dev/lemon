@@ -248,7 +248,9 @@ export async function main(argv: string[] = Bun.argv.slice(2)): Promise<number> 
 	// Without a TTY the editor would wait forever on input that can never arrive;
 	// exit 2 instead of hanging, matching the `lemon` shim's no-TTY contract.
 	if (!hasInteractiveTerminal()) {
-		process.stderr.write("lemon-tui: requires an interactive terminal (no TTY detected)\n");
+		process.stderr.write(
+			'lemon-tui: requires an interactive terminal — use lemon -p "…" for non-interactive runs, or lemon start to run the runtime\n',
+		);
 		return 2;
 	}
 
@@ -284,7 +286,7 @@ export async function main(argv: string[] = Bun.argv.slice(2)): Promise<number> 
 		void app.start().catch((error) => {
 			app.stop();
 			process.stderr.write(
-				`lemon-tui: ${error instanceof Error ? error.message : String(error)}\n`,
+				`lemon-tui: could not start the TUI: ${error instanceof Error ? error.message : String(error)}\n`,
 			);
 			resolve(1);
 		});

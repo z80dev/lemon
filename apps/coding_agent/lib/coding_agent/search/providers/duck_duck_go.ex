@@ -14,12 +14,24 @@ defmodule CodingAgent.Search.Providers.DuckDuckGo do
   def capabilities, do: [:search]
 
   @impl true
+  def search_features,
+    do: %{operators: CodingAgent.Search.Operators.syntax(), freshness: [:relative]}
+
+  @impl true
   def available?(:search, _context), do: :ok
 
   @impl true
   def search(request, context) do
     started_ms = System.monotonic_time(:millisecond)
-    url = @endpoint <> "?" <> URI.encode_query(%{"q" => request.query})
+
+    params =
+      %{"q" => request.query}
+      |> CodingAgent.Search.Operators.put_if(
+        "df",
+        CodingAgent.Search.Operators.relative(request, day: "d", week: "w", month: "m", year: "y")
+      )
+
+    url = @endpoint <> "?" <> URI.encode_query(params)
 
     opts = [
       headers: [

@@ -93,6 +93,82 @@ defmodule CodingAgent.Tools.TaskRuntimeParityTest do
     end
   end
 
+  describe "per-item batch execution" do
+    test "mixes sync and async children without joining background siblings" do
+      owner = self()
+
+      opts =
+        base_opts(
+          run_override: fn _, _, context ->
+            send(owner, {:started, context.description, self()})
+
+            if context.description == "background" do
+              receive do
+                :finish -> result("background answer")
+              after
+                5_000 -> {:error, "test worker not released"}
+              end
+            else
+              result("sync answer")
+            end
+          end
+        )
+
+      joined =
+        execute("/tmp", opts, %{
+          "async" => false,
+          "thinking_level" => "medium",
+          "tasks" => [
+            %{
+              "description" => "background",
+              "prompt" => "wait",
+              "async" => true,
+              "thinking_level" => "low"
+            },
+            %{
+              "description" => "foreground",
+              "prompt" => "answer",
+              "async" => false,
+              "thinking_level" => "high"
+            }
+          ]
+        })
+
+      assert_receive {:started, "background", worker}
+      assert_receive {:started, "foreground", _}
+
+      try do
+        assert [%{output: "sync answer"}] = joined.details.tasks
+        assert [%{async: true, task_id: async_id}, %{async: false}] = joined.details.launches
+        assert Enum.any?(joined.content, &(&1.text =~ async_id))
+        assert {:ok, %{status: :running}, _} = CodingAgent.TaskStore.get(async_id)
+      after
+        send(worker, :finish)
+      end
+
+      execute("/tmp", opts, %{"action" => "join", "task_ids" => joined.details.task_ids})
+    end
+
+    test "item async is present in schema and validated rather than overwritten" do
+      tool = TaskTool.tool("/tmp", base_opts([]))
+      item = tool.parameters["properties"]["tasks"]["items"]["properties"]
+      assert item["async"]["type"] == "boolean"
+      assert item["thinking_level"]["type"] == "string"
+
+      for thinking <- ["low", "high"] do
+        assert {:ok, %{thinking_level: ^thinking}} =
+                 Params.validate_run_params(
+                   %{"prompt" => "x", "thinking_level" => thinking},
+                   "/tmp", settings_manager: settings())
+      end
+
+      assert {:error, "Async must be a boolean"} =
+               execute("/tmp", base_opts([]), %{
+                 "tasks" => [%{"prompt" => "x", "async" => "invalid"}]
+               })
+    end
+  end
+
   describe "persona and config defaults" do
     @tag :tmp_dir
     test "persona thinking level and output schema apply unless explicitly overridden", %{

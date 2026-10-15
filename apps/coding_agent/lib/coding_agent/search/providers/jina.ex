@@ -15,6 +15,9 @@ defmodule CodingAgent.Search.Providers.Jina do
   def capabilities, do: [:search]
 
   @impl true
+  def search_features, do: %{operators: CodingAgent.Search.Operators.syntax(), freshness: []}
+
+  @impl true
   def available?(:search, context), do: KeyedHttp.available?(id(), "JINA_API_KEY", context)
 
   @impl true

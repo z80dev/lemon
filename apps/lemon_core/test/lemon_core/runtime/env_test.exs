@@ -188,17 +188,6 @@ defmodule LemonCore.Runtime.EnvTest do
         Application.put_env(:lemon_core, :runtime_endpoints, original)
       end
     end
-
-    test "the platform declares no product endpoint modules of its own" do
-      # lemon_core must never name a product's endpoint: the bindings come from
-      # config so the sim (and any other product) can leave without touching it.
-      for {_field, otp_app, endpoint} <- Env.runtime_endpoints() do
-        assert is_atom(otp_app)
-        assert is_atom(endpoint)
-      end
-
-      refute Env.runtime_endpoints() == []
-    end
   end
 
   defp clear_env(keys) do

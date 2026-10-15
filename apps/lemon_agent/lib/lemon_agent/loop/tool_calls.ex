@@ -286,7 +286,7 @@ defmodule LemonAgent.Loop.ToolCalls do
                   nil ->
                     {context, new_messages, pending_by_ref, pending_by_mon, results}
 
-                  %{tool_call: tool_call, pid: pid} ->
+                  %{tool_call: tool_call, pid: pid, timeout_ms: timeout_ms} ->
                     {pending_by_ref, pending_by_mon} =
                       drop_pending_task(pending_by_ref, pending_by_mon, ref)
 
@@ -301,7 +301,7 @@ defmodule LemonAgent.Loop.ToolCalls do
                     {context, new_messages, results} =
                       emit_tool_result(
                         tool_call,
-                        tool_timeout_result(tool_timeout_ms),
+                        tool_timeout_result(timeout_ms),
                         true,
                         context,
                         new_messages,
@@ -471,7 +471,8 @@ defmodule LemonAgent.Loop.ToolCalls do
                          ) do
                       {:ok, pid} ->
                         mon_ref = Process.monitor(pid)
-                        timeout_ref = schedule_tool_timeout(ref, tool_timeout_ms)
+                        timeout_ms = tool_timeout(tool, tool_timeout_ms)
+                        timeout_ref = schedule_tool_timeout(ref, timeout_ms)
 
                         state = {
                           Map.put(by_ref, ref, %{
@@ -479,6 +480,7 @@ defmodule LemonAgent.Loop.ToolCalls do
                             mon_ref: mon_ref,
                             pid: pid,
                             timeout_ref: timeout_ref,
+                            timeout_ms: timeout_ms,
                             parallel_safe: parallel_safe?,
                             partial: nil,
                             result: nil
@@ -1050,7 +1052,8 @@ defmodule LemonAgent.Loop.ToolCalls do
     |> min(total_tool_calls)
   end
 
-  defp resolve_max_tool_concurrency(%AgentLoopConfig{}, total_tool_calls), do: total_tool_calls
+  defp resolve_max_tool_concurrency(%AgentLoopConfig{}, total_tool_calls),
+    do: min(8, total_tool_calls)
 
   defp resolve_tool_timeout_ms(%AgentLoopConfig{tool_timeout_ms: :infinity}), do: nil
 
@@ -1059,7 +1062,14 @@ defmodule LemonAgent.Loop.ToolCalls do
     timeout_ms
   end
 
-  defp resolve_tool_timeout_ms(%AgentLoopConfig{}), do: nil
+  defp resolve_tool_timeout_ms(%AgentLoopConfig{}), do: 300_000
+
+  defp tool_timeout(%{timeout_ms: :infinity}, _default), do: nil
+
+  defp tool_timeout(%{timeout_ms: milliseconds}, _default)
+       when is_integer(milliseconds) and milliseconds > 0, do: milliseconds
+
+  defp tool_timeout(_tool, default), do: default
 
   defp schedule_tool_timeout(_ref, nil), do: nil
 

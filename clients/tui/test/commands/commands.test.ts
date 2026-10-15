@@ -313,9 +313,19 @@ describe("diagnostics", () => {
 		expect(text).toContain("uptime: 1h 0m");
 		expect(text).toContain("telegram");
 		expect(text).toContain("router: ok");
+		expect(text).toContain("profile: none (ordinary chat)");
+		expect(text).toContain("model: not selected — /model to choose");
 		expect(text).toContain("tui-session");
 	});
 
+	test("/status includes the focused profile and model", async () => {
+		harness.store.setFocused("agent:research:main");
+		harness.store.focused.setModel({ model: "openai:gpt-5" }, "local");
+		harness.server.respondWith("status", { server: { version: "test" } });
+		await harness.run("/status");
+		expect(harness.host.text).toContain("profile: research");
+		expect(harness.host.text).toContain("model: openai:gpt-5");
+	});
 	test("/usage renders totals and caches them for the gauge", async () => {
 		harness.server.respondWith("usage.status", {
 			period: "today",
@@ -815,6 +825,23 @@ describe("client-local commands", () => {
 	test("/reconnect asks the client to redial", async () => {
 		await harness.run("/reconnect");
 		expect(harness.host.reconnects).toBe(1);
+		expect(harness.host.text).toContain(`connected to ${harness.client.url}`);
+	});
+
+	test("/reconnect reports a failed attempt", async () => {
+		harness.host.reconnect = async () => {
+			throw new Error("not reachable — start Lemon");
+		};
+		await harness.run("/reconnect");
+		expect(harness.host.last).toEqual({
+			text: "reconnect failed: not reachable — start Lemon",
+			level: "error",
+		});
+	});
+
+	test("/faq does not suggest the unrelated /q alias", async () => {
+		await harness.run("/faq");
+		expect(harness.host.last?.text).toBe("unknown command /faq");
 	});
 
 	test("/debug shows the frame log", async () => {
