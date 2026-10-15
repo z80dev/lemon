@@ -84,7 +84,7 @@ defmodule LemonChannels.Doctor.Checks.ChannelsTest do
       assert check.remediation =~ "gateway.discord.bot_token_secret"
     end
 
-    test "Telegram local voice transcription passes without provider credentials" do
+    test "Telegram local voice transcription warns that no STT backend exists" do
       tmp_dir =
         project_with_config("channels_telegram_voice_local", """
         [gateway]
@@ -99,7 +99,7 @@ defmodule LemonChannels.Doctor.Checks.ChannelsTest do
       checks = Channels.run(project_dir: tmp_dir)
 
       assert check_status(checks, "channels.telegram.config") == :pass
-      assert check_status(checks, "channels.telegram.voice_transcription") == :pass
+      assert check_status(checks, "channels.telegram.voice_transcription") == :warn
       refute inspect(checks) =~ "telegram_bot_token_secret_name"
     end
 

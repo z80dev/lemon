@@ -413,13 +413,20 @@ defmodule LemonChannels.Adapters.Telegram.Outbound do
         {:ok, result} ->
           {:cont, {:ok, [result | acc]}}
 
-        {:error, _reason} ->
+        {:error, {:outcome_unknown, _} = reason} ->
+          {:halt, {:error, reason}}
+
+        {:error, {:http_error, status, _body}}
+        when status >= 400 and status < 500 and status != 429 ->
           # If media-group delivery is rejected by Telegram, retry this batch as
           # individual sends to preserve image delivery.
           case send_files_sequentially(api_mod, token, chat_id, batch, batch_opts) do
             {:ok, result} -> {:cont, {:ok, [result | acc]}}
-            {:error, reason} -> {:halt, {:error, reason}}
+            {:error, reason} -> {:halt, {:error, batch_failure(reason, acc)}}
           end
+
+        {:error, reason} ->
+          {:halt, {:error, batch_failure(reason, acc)}}
       end
     end)
     |> case do
@@ -442,7 +449,7 @@ defmodule LemonChannels.Adapters.Telegram.Outbound do
 
       case send_file_with_retry(api_mod, token, chat_id, file.path, file_opts) do
         {:ok, result} -> {:cont, {:ok, [result | acc]}}
-        {:error, reason} -> {:halt, {:error, reason}}
+        {:error, reason} -> {:halt, {:error, batch_failure(reason, acc)}}
       end
     end)
     |> case do
@@ -450,6 +457,10 @@ defmodule LemonChannels.Adapters.Telegram.Outbound do
       {:error, reason} -> {:error, reason}
     end
   end
+
+  defp batch_failure(reason, []), do: reason
+  defp batch_failure({:outcome_unknown, _} = reason, _acc), do: reason
+  defp batch_failure(reason, _acc), do: {:outcome_unknown, reason}
 
   defp send_media_group_with_retry(api_mod, token, chat_id, batch, opts) do
     with_retry(fn -> api_mod.send_media_group(token, chat_id, batch, opts) end)
@@ -467,6 +478,8 @@ defmodule LemonChannels.Adapters.Telegram.Outbound do
         ok
 
       {:error, reason} ->
+        reason = LemonChannels.DeliveryError.classify(reason)
+
         case retry_decision(reason, rate_limit_attempts, transient_attempts) do
           {:rate_limit, wait_ms} ->
             Logger.debug(
@@ -527,12 +540,9 @@ defmodule LemonChannels.Adapters.Telegram.Outbound do
 
   defp retry_after_ms(_reason), do: @default_retry_after_ms
 
-  defp transient_reason?({:http_error, status, _body}) when status >= 500 and status < 600,
-    do: true
-
-  defp transient_reason?(:timeout), do: true
+  defp transient_reason?(:econnrefused), do: true
+  defp transient_reason?(:nxdomain), do: true
   defp transient_reason?({:failed_connect, _reason}), do: true
-  defp transient_reason?({:closed, _reason}), do: true
   defp transient_reason?(_), do: false
 
   defp transient_backoff_ms(attempt) when is_integer(attempt) and attempt >= 0 do
