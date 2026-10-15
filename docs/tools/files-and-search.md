@@ -39,6 +39,24 @@ selectors (`:raw:50-80` or `:50-80:raw`) remain exact, without context, line
 numbers, or a snapshot header. Raw comma lists also stay exact and retain the
 `…` separators. `offset`/`limit`, open-ended and tail selectors do not add context.
 
+## Anchored edit recovery and formatting
+
+Session-scoped anchored edits can recover an older snapshot tag after unrelated
+changes. Every referenced original line range must still occur byte-for-byte at
+exactly one position in the current file; changed, ambiguous, unknown, or evicted
+anchors retain the snapshot-mismatch error without writing. Text replacements
+still reject changes since the last read. The session retains up to eight
+snapshots per path, each at most 256 KiB and 10,000 lines; larger files still
+support fresh-tag edits, but not historical recovery. This does not restrict
+edits to previously displayed lines.
+
+Local `write`, `edit`, and `patch` accept `"format": true` (default false, unless
+enabled in tool options) to run an available formatter after writing. An explicit
+false overrides that default. Results report `formatted` and any `format_error`;
+formatter failure does not undo the write. Edit headers and patch per-file
+`snapshot` tags describe the post-format file, so they can be used directly for
+the next anchored edit. ACP writes retain client-managed formatting behavior.
+
 ## Patch hunk matching
 
 Patch hunk context must identify a unique location. Exact matches take precedence;

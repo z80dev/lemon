@@ -4,6 +4,11 @@
 
 ### Added
 
+- Local edit and patch support the same opt-in formatting as write and return
+  post-format snapshot tags. Anchored edits recover recent session/path tags
+  only when every referenced original range remains byte-identical and unique;
+  snapshot history is bounded, and text-edit staleness checks are unchanged.
+
 - Background process controls now support exact stdin writes and EOF through
   `process_input`, non-consuming `bash_output` peeks, and graceful `kill_process`
   SIGTERM with a two-second SIGKILL fallback (or explicit immediate kill).

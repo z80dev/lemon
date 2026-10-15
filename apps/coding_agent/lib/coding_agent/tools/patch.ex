@@ -43,10 +43,12 @@ defmodule CodingAgent.Tools.Patch do
   alias CodingAgent.FileReadTracker
   alias CodingAgent.MutationLock
   alias CodingAgent.Tools.ACPFileBridge
+  alias CodingAgent.Tools.AnchoredEdit
   alias CodingAgent.Tools.CheckpointGuard
   alias CodingAgent.Tools.FileFormatHelpers
   alias CodingAgent.Tools.FileValidation
   alias CodingAgent.Tools.LspDiagnostics
+  alias CodingAgent.Tools.LspFormatter
   alias CodingAgent.Tools.PathHelpers
 
   import LemonAgent.Tools.AbortHelpers, only: [aborted?: 1, check_abort: 1]
@@ -72,6 +74,11 @@ defmodule CodingAgent.Tools.Patch do
           "patch_text" => %{
             "type" => "string",
             "description" => "Full patch text to apply"
+          },
+          "format" => %{
+            "type" => "boolean",
+            "default" => Keyword.get(opts, :format, false),
+            "description" => "Whether to auto-format added, updated, and moved files"
           },
           "diagnostics" => %{
             "type" => "boolean",
@@ -125,7 +132,10 @@ defmodule CodingAgent.Tools.Patch do
     else
       with {:ok, patch_text} <- get_patch_text(params),
            {:ok, operations} <- parse_patch(patch_text),
-           {:ok, diagnostics?} <- LspDiagnostics.option(params, opts) do
+           {:ok, diagnostics?} <- LspDiagnostics.option(params, opts),
+           {:ok, format?} <- LspFormatter.option(params, opts) do
+        opts = Keyword.put(opts, :format, format?)
+
         if ACPFileBridge.read_enabled?(opts) and ACPFileBridge.write_enabled?(opts) do
           execute_acp_patch(operations, cwd, signal, opts)
         else
@@ -154,16 +164,29 @@ defmodule CodingAgent.Tools.Patch do
              operation_count: length(operations)
            }),
          {:ok, summary} <- commit_prepared_operations(prepared_operations, signal) do
+      prepared_operations = format_prepared_files(prepared_operations, cwd, opts)
+      file_results = prepared_file_results(prepared_operations)
+      formatted = Enum.any?(prepared_operations, &Map.get(&1, :formatted, false))
+
+      snapshot_text =
+        file_results
+        |> Enum.filter(&Map.has_key?(&1, :snapshot))
+        |> Enum.map_join("", &"\n[#{&1.path}##{&1.snapshot}]")
+
+      format_text = if formatted, do: "\nFormatted changed files.", else: ""
       FileReadTracker.refresh(opts, paths)
 
       {diagnostics, diagnostics_text} =
         patch_diagnostics(summary.details.changed, cwd, baselines, diagnostics?, opts)
 
       %AgentToolResult{
-        content: [%TextContent{text: summary.output <> diagnostics_text}],
+        content: [
+          %TextContent{text: summary.output <> format_text <> snapshot_text <> diagnostics_text}
+        ],
         details:
           summary.details
-          |> Map.put(:perFileResults, prepared_file_results(prepared_operations))
+          |> Map.put(:perFileResults, file_results)
+          |> Map.put(:formatted, formatted)
           |> CheckpointGuard.put_details(checkpoint)
           |> maybe_put_diagnostics(diagnostics)
       }
@@ -1049,23 +1072,48 @@ defmodule CodingAgent.Tools.Patch do
     end
   end
 
+  defp format_prepared_files(prepared, cwd, opts) do
+    Enum.map(prepared, fn
+      %{type: :delete} = entry ->
+        entry
+
+      entry ->
+        enabled = Keyword.get(opts, :format, false)
+        {formatted, error} = LspFormatter.after_write(entry.target, enabled, cwd, opts)
+        content = if enabled, do: File.read!(entry.target), else: entry.new_content
+
+        entry
+        |> Map.put(:new_content, content)
+        |> Map.put(:formatted, formatted)
+        |> Map.put(:format_error, error)
+    end)
+  end
+
+  defp written_file_result(entry, old_text) do
+    %{formatted: entry.formatted, snapshot: AnchoredEdit.snapshot(entry.new_content)}
+    |> then(fn details ->
+      if entry.format_error,
+        do: Map.put(details, :format_error, entry.format_error),
+        else: details
+    end)
+    |> FileValidation.put_text_snapshots(entry.target, old_text, entry.new_content)
+  end
+
   defp prepared_file_results(prepared) do
     prepared
     |> Enum.flat_map(fn
       %{type: :move} = entry ->
         [
           FileValidation.put_text_snapshots(%{}, entry.source, entry.original_content, nil),
-          FileValidation.put_text_snapshots(%{}, entry.target, nil, entry.new_content)
+          written_file_result(entry, nil)
         ]
+
+      %{type: :delete} = entry ->
+        [FileValidation.put_text_snapshots(%{}, entry.target, entry.original_content, nil)]
 
       entry ->
         [
-          FileValidation.put_text_snapshots(
-            %{},
-            entry.target,
-            entry.original_content,
-            entry.new_content
-          )
+          written_file_result(entry, entry.original_content)
         ]
     end)
     |> bound_file_results()
