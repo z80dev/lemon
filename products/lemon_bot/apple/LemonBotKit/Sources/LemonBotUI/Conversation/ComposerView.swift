@@ -21,6 +21,7 @@ public struct ComposerView: View {
     @State private var pastedFiles: [URL] = []
     @State private var receipt: MessageReceipt?
     @State private var unconfirmedDraft: LocalComposerDraft?
+    @State private var messageNonce: String?
     @State private var reconciledRuns: [Run] = []
     @State private var stagedFilenames: [String] = []
     @FocusState private var focused: Bool
@@ -54,7 +55,10 @@ public struct ComposerView: View {
     private var pendingMessageNonce: String? {
         store.pendingIntents.first { $0.method == "POST" && $0.path == resourcePath("conversations", conversationID, "/messages") }?.clientNonce
     }
-    private var messageUncertain: Bool { pendingMessageNonce != nil || (action.uncertain && unconfirmedDraft != nil) }
+    private var resolvedMessage: MessageReceipt? { messageNonce.flatMap { store.reconciledMessageReceipts[$0] } }
+    private var unresolvedAction: Bool { action.uncertain && (action.uncertainNonce != messageNonce || resolvedMessage == nil) }
+    private var messageUncertain: Bool { pendingMessageNonce != nil || (unresolvedAction && unconfirmedDraft != nil) }
+    private var actionError: String? { action.errorNonce == messageNonce && resolvedMessage != nil ? nil : action.error }
     public var body: some View {
         composerContent
             .fileImporter(isPresented: $files, allowedContentTypes: [.item], allowsMultipleSelection: true, onCompletion: handleSelectedFiles)
@@ -72,6 +76,8 @@ public struct ComposerView: View {
                 if notice.userInfo?["conversationID"] as? String == conversationID { focused = true }
             }
             .onDisappear(perform: retainDepartingDraft)
+            .onChange(of: resolvedMessage) { _, _ in applyMessageReconciliation() }
+            .onChange(of: action.uncertainNonce) { _, _ in applyMessageReconciliation() }
     }
 
     @Environment(\.colorScheme) private var scheme
@@ -86,7 +92,7 @@ public struct ComposerView: View {
     }
     private var draftIsEmpty: Bool { draft.text.isEmpty && draft.attachmentIDs.isEmpty && draft.fileURLs.isEmpty && stagedFilenames.isEmpty }
     private var sendDisabled: Bool {
-        !online || action.busy || pendingMessageNonce != nil || !draft.fileURLs.isEmpty || (draft.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && draft.attachmentIDs.isEmpty)
+        !online || action.inFlight || unresolvedAction || pendingMessageNonce != nil || !draft.fileURLs.isEmpty || (draft.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && draft.attachmentIDs.isEmpty)
     }
     private var multiline: Bool { draft.text.contains("\n") || draft.text.count > 70 }
 
@@ -313,8 +319,8 @@ public struct ComposerView: View {
                     }.frame(maxWidth: .infinity, alignment: .leading)
                 }.font(LBFont.meta).foregroundStyle(LB.muted)
             }
-            ActionErrorView(message: action.error)
-            if action.uncertain && !messageUncertain { Text("An upload isn't confirmed. Nothing is retried automatically — check your files before trying again.").font(LBFont.meta).foregroundStyle(LB.warning) }
+            ActionErrorView(message: actionError)
+            if unresolvedAction && !messageUncertain { Text("An upload isn't confirmed. Nothing is retried automatically — check your files before trying again.").font(LBFont.meta).foregroundStyle(LB.warning) }
             if let receipt = action.receipt { Text(receipt).font(LBFont.meta).foregroundStyle(LB.muted) }
         }.padding(.horizontal, 8)
     }
@@ -399,12 +405,14 @@ public struct ComposerView: View {
     private func send() async {
         await action.perform {
             guard online else { throw ClientError.offline }
-            guard pendingMessageNonce == nil && !action.uncertain else { throw ComposerError.message("This submission is fenced. Read the exact outcome before any new Send.") }
+            guard pendingMessageNonce == nil && !unresolvedAction else { throw ComposerError.message("This submission is fenced. Read the exact outcome before any new Send.") }
             let captured = draft
             guard !captured.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !captured.attachmentIDs.isEmpty else { throw ComposerError.message("Write a message or attach a ready file before Send.") }
             guard captured.fileURLs.isEmpty else { throw ComposerError.message("Explicitly upload or remove selected local files before Send.") }
             unconfirmedDraft = captured
-            let result = try await store.send(conversationID: conversationID, text: captured.text, attachmentIDs: captured.attachmentIDs, replyTo: captured.replyToEntryID, mode: mode, mentions: captured.mentions, everyone: captured.everyone, references: captured.references)
+            let nonce = UUID().uuidString
+            messageNonce = nonce
+            let result = try await store.send(conversationID: conversationID, text: captured.text, attachmentIDs: captured.attachmentIDs, replyTo: captured.replyToEntryID, mode: mode, mentions: captured.mentions, everyone: captured.everyone, references: captured.references, clientNonce: nonce)
             guard store.account?.id == owningAccountID else { return }
             receipt = result
             if result.status == "outcome_unknown" { action.uncertain = true; action.uncertainNonce = result.clientNonce }
@@ -416,6 +424,12 @@ public struct ComposerView: View {
                 unconfirmedDraft = nil
             }
         }
+        if action.uncertain {
+            if let original = action.uncertainNonce, original != messageNonce { unconfirmedDraft = nil; messageNonce = original }
+            if action.uncertainNonce == nil { action.uncertainNonce = messageNonce }
+            if action.error != nil { action.errorNonce = messageNonce }
+        }
+        applyMessageReconciliation()
     }
     private func reconcile() async {
         await action.perform {
@@ -434,14 +448,20 @@ public struct ComposerView: View {
             guard store.account?.id == owningAccountID else { return }
             reconciledRuns = store.runs.filter { $0.conversationId == conversationID && $0.clientNonce == nonce }
             guard settled else { return }
-            if let captured = unconfirmedDraft, matchesDraft(captured) {
-                store.setLocalDraft(conversationID: conversationID, text: "", attachmentIDs: [], replyTo: nil)
-                store.setLocalComposerRouting(conversationID: conversationID, references: [], mentions: [], everyone: false)
-            }
-            action.uncertain = false; action.uncertainNonce = nil; action.uncertainRunID = nil
-            receipt = nil; unconfirmedDraft = nil
-            action.receipt = "The original submission is recorded. No content was resubmitted. Review any retained draft before deliberately sending a new intent."
+            applyMessageReconciliation(nonce)
         }
+    }
+    private func applyMessageReconciliation(_ nonce: String? = nil) {
+        guard store.account?.id == owningAccountID, let nonce = nonce ?? messageNonce,
+              let recorded = store.reconciledMessageReceipts[nonce] else { return }
+        if let captured = unconfirmedDraft, matchesDraft(captured) {
+            store.setLocalDraft(conversationID: conversationID, text: "", attachmentIDs: [], replyTo: nil)
+            store.setLocalComposerRouting(conversationID: conversationID, references: [], mentions: [], everyone: false)
+        }
+        reconciledRuns = recorded.runs
+        action.resolveUncertainty(nonce)
+        receipt = nil; unconfirmedDraft = nil
+        action.receipt = "The original message is recorded. No content was resubmitted; target errors remain shown."
     }
 }
 private enum ComposerError: LocalizedError { case message(String); var errorDescription: String? { if case .message(let value) = self { return value }; return nil } }

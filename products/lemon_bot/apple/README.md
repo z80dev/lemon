@@ -188,7 +188,9 @@ Groups have one human owner and two to six Bots owned by that person. There are 
 
 The transcript renders the declared entry/card families with attributable actors and durable states. Questions are ordinary non-secret fields; secrets use a masked write-only destination flow. Approvals show the exact target, Bot, host, review scope and consequences. Only the targeted user can explicitly act before expiry; approval is not proof an external action completed. Email/Slack/channel drafts expose edited recipients, target/thread, body and files before Send. Unknown delivery is not Sent. Replies, reactions and feedback never resolve gates. Stop reports the server's actual run state; queued, steering and interrupting labels come from the receipt.
 
-A saved authored message does not mean every target admitted work. Per-target **Rejected** delivery retains the matching failed run's actual refusal reason, with no fabricated start or blanket unknown result; mixed group receipts keep admitted work independent. Explicit reconciliation uses the reserved IDs/nonce rather than dispatching another message.
+A saved authored message does not mean every target admitted work. Per-target **Rejected** delivery retains the matching failed run's actual refusal reason, with no fabricated start or blanket unknown result; mixed group receipts keep admitted work independent. Message reconciliation reads the original actor/conversation/nonce receipt rather than dispatching another message.
+
+After a lost/late HTTP acknowledgement or an envelope-less relay 502/504, native clients automatically read that receipt. Matching realtime entry/run observations, a caught-up reconnect and app foreground also recheck pending messages. A complete receipt clears the composer fence/error and only the unchanged captured draft; a partial group, missing reservation or unavailable read stays uncertain. Rejected/failed targets retain their actual errors. No message POST is automatically replayed.
 
 Gate and destructive controls require an online authenticated connection; they are never queued for offline replay. Native OIDC uses `ASWebAuthenticationSession` with the exact one-time `flowId`/`completionCode` callback and the original PKCE verifier. File previews authorize first; HTML is shown inert rather than executing embedded scripts in a privileged client, and voice memos use authorized persisted audio with native playback controls.
 
@@ -212,7 +214,7 @@ Voice uses Apple Speech for dictation and an explicit visible active-call loop, 
 
 Notifications register the current installation to the current product account. iOS uses its actual APNs token; macOS uses local notifications. Same-device foreground viewed-conversation suppression does not clear inbox/unread or pending gates. Token-free `lemonbot://workspace/...` links fetch and authorize the exact task/entry/approval/machine/routine before navigation, never automatically approve.
 
-Foreground presence belongs to its realtime connection, independently of message delivery. A refresh or background reconnect can retire a presence write; that old socket's failure is not a delivery failure on the replacement connection. Current-connection failures remain visible, and a missing message HTTP acknowledgement still retains its original nonce for explicit reconciliation.
+Foreground presence belongs to its realtime connection, independently of message delivery. A refresh or background reconnect can retire a presence write; that old socket's failure is not a delivery failure on the replacement connection. Current-connection failures remain visible, and a missing message HTTP acknowledgement retains its original nonce until authoritative read-only reconciliation settles it. Realtime ACKs use the delivered frame's cursor, not a newer global HTTP snapshot watermark.
 
 ## Centralized checks
 

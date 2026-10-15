@@ -36,9 +36,9 @@ try {
   if (!(error instanceof LemonBotError)) throw error;
   if (error.outcomeUnknown) {
     // Retain unsent UI input and the original intent/nonce. No resend here.
-    const runs = await client.reconcileRuns(clientNonce, { conversationId });
-    // Inspect run statuses; an empty result is not proof nothing happened.
-    // GET error.resourceIds through the corresponding authorized resource routes.
+    const receipt = await client.messageReceipt(conversationId, clientNonce);
+    // Only a complete receipt accounts for every original group target.
+    // Unknown/missing receipts retain the nonce fence; rejected targets retain their run errors.
   } else if (error.code === 'revision_conflict') {
     // Inspect error.currentRevision/currentResource, GET the resource, review changes.
     // Do not overwrite another device's update or blindly replay the old request.
