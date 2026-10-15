@@ -1087,8 +1087,8 @@ defmodule LemonCore.Env.Declarations do
       default: nil,
       doc:
         "Whether Firecrawl is used as the webfetch backend. Tri-state (nil = undecided, " <>
-          "falls through to TOML/default); recognizes \"true\"/\"1\"/\"yes\" and " <>
-          "\"false\"/\"0\"/\"no\" only -- not the \"on\"/\"off\" spellings most other " <>
+          ~s|falls through to TOML/default); recognizes "true"/"1"/"yes" and | <>
+          ~s|"false"/"0"/"no" only -- not the "on"/"off" spellings most other | <>
           "booleans in this registry accept. Resolved with bespoke logic in " <>
           "LemonCore.Config.Tools.resolve_firecrawl/1, not the standard :boolean cast.",
       secret?: false,

@@ -50,15 +50,19 @@ results. Availability describes a local query, not adapter/provider connectivity
   and the observed wall-clock `atMs`. A successful connection/poll clears the
   error. Unobserved adapters remain `configured` in details even when a process
   is running; the legacy `connected` array keeps its process-running meaning.
-- `providers` contains `{id,configured,credential,default,lastError}` for providers
+- `providers` contains `{id,configured,credential,default,lastError,circuit}` for providers
   selected by the configured default provider/model, configured in Lemon, or
   known to the model registry with local credentials present. `credential` is
   `present`, `missing`, or `not_required` (keyless local/custom endpoints).
   Presence is configuration/environment/encrypted-store metadata only: it is not
   proof of a valid key or a successful model request. No secret values, OAuth
   refresh, external secret-source commands, network discovery, or provider calls
-  occur. `lastError` is null because this projection has no retained provider
-  error with a wall-clock observation time.
+  occur. `lastError` retains the dispatcher's timestamped credential-free failure
+  summary, or null if none has been observed. `circuit` contains `state`
+  (`closed`, `open`, `half_open`, `not_started`, or `unknown`), `failureCount`
+  and `timeUntilRecoveryMs`. Polling never starts a breaker; unavailable counters
+  are null. Existing breakers have a bounded 100 ms read timeout and process
+  exits report `unknown`. TUI `/status` includes each provider's circuit state.
 - `lifecycle` contains `{restart,stop,reason}`. Restart requires a nonempty
   `LEMON_LAUNCHER`; graceful stop is always available. `reason` explains why
   restart is absent and is null for launcher-managed runtimes.

@@ -23,6 +23,10 @@ LemonSkills provides a centralized system for extending agent capabilities throu
 not a Hex package; it ships as part of the reference runtime. It depends on
 `lemon_core`, `lemon_agent`, `lemon_ai`, `lemon_memory` and `lemon_media`.
 
+Contributor maintenance: keep changed Elixir files formatted and clean under
+strict Credo, including alphabetically ordered dependency aliases. Run targeted
+tests from the umbrella root; alias and invocation cleanups preserve behavior.
+
 `LemonSkills.Timeline` composes bounded operator memory projections and existing
 home-local skill sidecars for `lemon learning`. It never creates an event log,
 reads another profile's home, or exposes raw source/audit metadata. Global skill

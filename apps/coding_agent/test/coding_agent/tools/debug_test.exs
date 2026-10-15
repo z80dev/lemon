@@ -1,6 +1,8 @@
 defmodule CodingAgent.Tools.DebugTest do
   use ExUnit.Case, async: true
 
+  import CodingAgent.AsyncHelpers
+
   alias CodingAgent.Debug.SessionServer
   alias CodingAgent.ToolRegistry
   alias LemonAgent.Types.AgentToolResult
@@ -17,6 +19,11 @@ defmodule CodingAgent.Tools.DebugTest do
     File.write!(Path.join(tmp_dir, "prog.fake"), "")
 
     adapters = %{
+      "child-fake" => %{
+        command: @python || "python3",
+        args: [@fake_adapter, log],
+        launch_defaults: %{"stopOnEntry" => true, "fakeMode" => "reverse"}
+      },
       "fake" => %{
         command: @python || "python3",
         args: [@fake_adapter, log],
@@ -64,6 +71,27 @@ defmodule CodingAgent.Tools.DebugTest do
   defp run(tool, params), do: tool.execute.("call", params, nil, nil)
 
   defp text(%AgentToolResult{content: content}), do: Enum.map_join(content, "\n", & &1.text)
+
+  test "lists child session ids and routes tool actions to the selected child", %{tool: tool} do
+    assert %AgentToolResult{is_error: false} =
+             run(tool, %{
+               "action" => "launch",
+               "program" => "prog.fake",
+               "adapter" => "child-fake"
+             })
+
+    assert_eventually(fn ->
+      result = run(tool, %{"action" => "sessions"})
+      text(result) =~ "Child session debug-1-1-1"
+    end)
+
+    result = run(tool, %{"action" => "step_over", "debug_session_id" => "debug-1-1-1"})
+    assert %AgentToolResult{is_error: false} = result
+    assert text(result) =~ "step"
+    result = run(tool, %{"action" => "status", "debug_session_id" => "debug-1-1-1"})
+    assert text(result) =~ "Session debug-1-1-1"
+    assert %AgentToolResult{is_error: false} = run(tool, %{"action" => "terminate"})
+  end
 
   test "validates parameters before touching an adapter", %{tool: tool} do
     assert {:error, "action is required"} = run(tool, %{})

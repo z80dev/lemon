@@ -2,6 +2,8 @@ defmodule LemonCore.EventTest do
   use ExUnit.Case, async: true
 
   alias LemonCore.Event
+  alias LemonCore.Events.Action
+  alias LemonCore.Events.EngineAction
 
   describe "now_ms/0" do
     test "returns current time in milliseconds" do
@@ -79,7 +81,7 @@ defmodule LemonCore.EventTest do
         ],
         wire_kind <- [kind, Atom.to_string(kind)] do
       payload =
-        LemonCore.Events.EngineAction.from_map(%{
+        EngineAction.from_map(%{
           "engine" => "lemon",
           "phase" => "updated",
           "action" => %{
@@ -92,7 +94,7 @@ defmodule LemonCore.EventTest do
 
       assert payload.action.kind == kind
       assert payload.action.detail == detail
-      assert LemonCore.Events.Action.valid_kind?(wire_kind)
+      assert Action.valid_kind?(wire_kind)
 
       projected = payload |> Jason.encode!() |> Jason.decode!()
       assert projected["action"]["kind"] == Atom.to_string(kind)

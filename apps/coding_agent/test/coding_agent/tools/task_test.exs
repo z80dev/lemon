@@ -5,6 +5,7 @@ defmodule CodingAgent.Tools.TaskTest do
   alias CodingAgent.Tools.Task
   alias CodingAgent.Tools.Task.Params
   alias LemonAgent.AbortSignal
+  alias LemonAgent.Test.Mocks
   alias LemonCore.ExecutionContext
 
   defmodule EmptyRunGraph do
@@ -29,7 +30,7 @@ defmodule CodingAgent.Tools.TaskTest do
         {CodingAgent.Session,
          [
            cwd: tmp_dir,
-           model: LemonAgent.Test.Mocks.mock_model(),
+           model: Mocks.mock_model(),
            tools: [],
            invocation_context_key: "parent-client",
            invocation_mcp_servers: [],
@@ -61,7 +62,7 @@ defmodule CodingAgent.Tools.TaskTest do
         Params.build_session_opts(
           tmp_dir,
           Keyword.merge(
-            [model: LemonAgent.Test.Mocks.mock_model(), child_run_id: "child-run"],
+            [model: Mocks.mock_model(), child_run_id: "child-run"],
             trusted_opts
           ),
           validated
@@ -110,7 +111,7 @@ defmodule CodingAgent.Tools.TaskTest do
       Params.build_session_opts(
         tmp_dir,
         [
-          model: LemonAgent.Test.Mocks.mock_model(),
+          model: Mocks.mock_model(),
           tool_policy: ToolPolicy.custom(allow: [])
         ],
         %{tool_policy: ToolPolicy.from_profile(:full_access)}

@@ -76,6 +76,13 @@ export const statusCommand: SlashCommand = {
 			]),
 		);
 
+		for (const provider of asArray(status.providers)) {
+			const circuit = asRecord(asRecord(provider)?.circuit);
+			lines.push(
+				`provider ${pickString(provider, "id") ?? "?"}: circuit ${pickString(circuit, "state") ?? "unknown"}`,
+			);
+		}
+
 		if (ctx.methods.supports(METHOD.health)) {
 			const health = await ctx.methods.health().catch(() => undefined);
 			if (health) {

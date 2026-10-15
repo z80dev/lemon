@@ -1,8 +1,10 @@
 defmodule LemonSkills.BackgroundReviewTest do
   use ExUnit.Case, async: false
 
-  alias LemonSkills.{BackgroundReview, Config, LearningNudge}
   alias LemonAi.Types.{AssistantMessage, Model, TextContent}
+  alias LemonSkills.{BackgroundReview, Config, LearningNudge}
+  alias LemonSkills.Synthesis.DraftStore
+  alias LemonSkills.Tools.SkillManage
 
   @moduletag :tmp_dir
 
@@ -160,7 +162,7 @@ defmodule LemonSkills.BackgroundReviewTest do
              )
 
     assert {:ok, _} =
-             LemonSkills.Synthesis.DraftStore.get("review-draft",
+             DraftStore.get("review-draft",
                global: false,
                cwd: ctx.request.cwd
              )
@@ -310,7 +312,7 @@ defmodule LemonSkills.BackgroundReviewTest do
   end
 
   test "review patches use the existing audit and cannot modify pinned skills", ctx do
-    normal = LemonSkills.Tools.SkillManage.tool(cwd: ctx.request.cwd)
+    normal = SkillManage.tool(cwd: ctx.request.cwd)
     content = "---\nname: protected\ndescription: Captures a workflow\n---\nProven procedure.\n"
 
     assert %LemonAgent.Types.AgentToolResult{} =

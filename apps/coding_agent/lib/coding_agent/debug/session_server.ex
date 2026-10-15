@@ -4,8 +4,8 @@ defmodule CodingAgent.Debug.SessionServer do
 
   One server runs per coding session (registered in `CodingAgent.Debug.Registry`
   under the session id and started under `CodingAgent.Debug.Supervisor`). It
-  holds at most one active debug session (launch/attach) plus the breakpoint
-  lists, which persist across relaunches and may be set before `launch`.
+  holds one root debug session and adapter-requested child sessions. Breakpoint
+  lists persist across root relaunches and may be set before `launch`.
 
   The server owns a linked `CodingAgent.Debug.Client` for the adapter and
   processes every operation synchronously: DAP responses and events arrive as
@@ -144,9 +144,11 @@ defmodule CodingAgent.Debug.SessionServer do
         owner_pid: Keyword.get(opts, :owner),
         idle_timeout_ms: Keyword.get(opts, :idle_timeout_ms, @idle_timeout_ms),
         idle_token: nil,
-        breakpoints: %{},
-        function_breakpoints: [],
+        breakpoints: Keyword.get(opts, :breakpoints, %{}),
+        function_breakpoints: Keyword.get(opts, :function_breakpoints, []),
         session: nil,
+        children: %{},
+        id_prefix: Keyword.get(opts, :id_prefix, "debug"),
         next_id: 1
       }
       |> schedule_idle()
@@ -158,6 +160,35 @@ defmodule CodingAgent.Debug.SessionServer do
   def handle_call({operation, owner}, _from, state)
       when operation in [:bind_owner, :detach_owner],
       do: CodingAgent.ToolResources.owner_reply(operation, owner, state)
+
+  def handle_call({:op, %{debug_session_id: id} = request, ctx}, _from, state)
+      when is_binary(id) do
+    cond do
+      state.session && state.session.id == id ->
+        handle_call({:op, Map.delete(request, :debug_session_id), ctx}, nil, state)
+
+      true ->
+        child =
+          Enum.find(state.children, fn {child_id, _} ->
+            id == child_id or String.starts_with?(id, child_id <> "-")
+          end)
+
+        reply =
+          case child do
+            {_, pid} ->
+              try do
+                GenServer.call(pid, {:op, request, ctx}, ctx.timeout_ms + @call_slack_ms)
+              catch
+                :exit, _ -> {:error, "Child debug session is no longer running"}
+              end
+
+            nil ->
+              {:error, "Unknown debug session: #{id}"}
+          end
+
+        {:reply, reply, schedule_idle(state)}
+    end
+  end
 
   def handle_call({:op, request, ctx}, _from, state) do
     {reply, state} =
@@ -178,6 +209,36 @@ defmodule CodingAgent.Debug.SessionServer do
   end
 
   @impl true
+  def handle_info({:start_child, request}, state) do
+    ctx = %{
+      timeout_ms: 30_000,
+      deadline: System.monotonic_time(:millisecond) + 30_000,
+      signal: nil
+    }
+
+    {reply, state} = run(request, ctx, state)
+
+    state =
+      case reply do
+        {:error, message} ->
+          session =
+            new_session(
+              %{state | next_id: 1},
+              String.to_existing_atom(request.action),
+              request.adapter,
+              nil,
+              request
+            )
+
+          %{state | session: %{session | status: :terminated, error: message}}
+
+        _ ->
+          state
+      end
+
+    {:noreply, dispose_if_terminated(state)}
+  end
+
   def handle_info({:dap, client, payload}, %{session: %{client: client}} = state)
       when is_pid(client) do
     state = state |> apply_payload(payload) |> dispose_if_terminated()
@@ -206,6 +267,8 @@ defmodule CodingAgent.Debug.SessionServer do
 
   @impl true
   def terminate(_reason, state) do
+    stop_children(state)
+
     case state.session do
       %{client: client} when is_pid(client) -> Client.stop(client)
       _ -> :ok
@@ -575,7 +638,7 @@ defmodule CodingAgent.Debug.SessionServer do
       "columnsStartAt1" => true,
       "pathFormat" => "path",
       "supportsRunInTerminalRequest" => false,
-      "supportsStartDebuggingRequest" => false,
+      "supportsStartDebuggingRequest" => true,
       "supportsVariableType" => true,
       "supportsVariablePaging" => false,
       "supportsMemoryReferences" => false,
@@ -583,6 +646,8 @@ defmodule CodingAgent.Debug.SessionServer do
       "supportsInvalidatedEvent" => false
     }
   end
+
+  defp start_args(_kind, %{reverse_configuration: configuration}, _state), do: configuration
 
   defp start_args(:launch, request, state) do
     entry_overrides =
@@ -1000,6 +1065,8 @@ defmodule CodingAgent.Debug.SessionServer do
 
   defp dispose_if_terminated(%{session: %{status: :terminated, client: client}} = state)
        when is_pid(client) do
+    state = stop_children(state)
+
     ctx = %{
       timeout_ms: @dispose_timeout_ms,
       deadline: System.monotonic_time(:millisecond) + @dispose_timeout_ms,
@@ -1023,6 +1090,9 @@ defmodule CodingAgent.Debug.SessionServer do
     stop_client(state)
   end
 
+  defp dispose_if_terminated(%{session: %{status: :terminated}} = state),
+    do: stop_children(state)
+
   defp dispose_if_terminated(state), do: state
 
   defp stop_client(state) do
@@ -1038,6 +1108,7 @@ defmodule CodingAgent.Debug.SessionServer do
   end
 
   defp discard_session(state) do
+    state = stop_children(state)
     state = stop_client(state)
     %{state | session: nil}
   end
@@ -1193,6 +1264,78 @@ defmodule CodingAgent.Debug.SessionServer do
     end
   end
 
+  defp stop_children(state) do
+    Enum.each(state.children, fn {_id, pid} ->
+      ref = Process.monitor(pid)
+
+      try do
+        GenServer.stop(pid, :normal, @dispose_timeout_ms)
+      catch
+        :exit, _ -> Process.exit(pid, :kill)
+      end
+
+      receive do
+        {:DOWN, ^ref, :process, ^pid, _reason} -> :ok
+      end
+    end)
+
+    %{state | children: %{}}
+  end
+
+  defp apply_payload(state, {:start_debugging, message}) do
+    arguments = message["arguments"] || %{}
+    configuration = arguments["configuration"]
+    kind = arguments["request"]
+
+    if kind in ["launch", "attach"] and is_map(configuration) do
+      id = "#{state.session.id}-#{map_size(state.children) + 1}"
+      key = {state.key, id}
+
+      case DynamicSupervisor.start_child(
+             @supervisor,
+             {__MODULE__,
+              key: key,
+              owner: self(),
+              id_prefix: id,
+              breakpoints: state.breakpoints,
+              function_breakpoints: state.function_breakpoints}
+           ) do
+        {:ok, pid} ->
+          request = %{
+            action: kind,
+            adapter: Client.child_adapter(state.session.client),
+            cwd: configuration["cwd"] || state.session.cwd,
+            program: configuration["program"],
+            args: configuration["args"] || [],
+            reverse_configuration: configuration
+          }
+
+          # Acknowledge session creation before handshaking: adapters may wait
+          # for this response before allowing the child's initialize/attach.
+          Client.respond(state.session.client, message, :ok)
+          send(pid, {:start_child, request})
+          %{state | children: Map.put(state.children, id <> "-1", pid)}
+
+        {:error, _reason} ->
+          Client.respond(
+            state.session.client,
+            message,
+            {:error, "Cannot create child debug session"}
+          )
+
+          state
+      end
+    else
+      Client.respond(
+        state.session.client,
+        message,
+        {:error, "startDebugging requires request launch/attach and a configuration object"}
+      )
+
+      state
+    end
+  end
+
   defp apply_payload(%{session: nil} = state, _payload), do: state
 
   defp apply_payload(state, {:response, seq, response}) do
@@ -1217,6 +1360,8 @@ defmodule CodingAgent.Debug.SessionServer do
   end
 
   defp apply_payload(state, {:exit, reason}) do
+    state = stop_children(state)
+
     update_session(state, fn session ->
       # The adapter may have died before disconnecting its launched program.
       # Its children can already be reparented, so the adapter pid alone no
@@ -1337,7 +1482,7 @@ defmodule CodingAgent.Debug.SessionServer do
 
   defp new_session(state, kind, adapter, client, request) do
     %{
-      id: "debug-#{state.next_id}",
+      id: "#{state.id_prefix}-#{state.next_id}",
       kind: kind,
       adapter: adapter,
       client: client,
@@ -1381,7 +1526,28 @@ defmodule CodingAgent.Debug.SessionServer do
         Map.put(entry, :file, file)
       end
 
-    base = %{breakpoints: breakpoints, function_breakpoints: state.function_breakpoints}
+    children =
+      Enum.map(state.children, fn {id, pid} ->
+        try do
+          ctx = %{
+            timeout_ms: 100,
+            deadline: System.monotonic_time(:millisecond) + 100,
+            signal: nil
+          }
+
+          {:ok, %{snapshot: child}} = GenServer.call(pid, {:op, %{action: "status"}, ctx}, 100)
+          Map.put(child, :parent_id, state.session && state.session.id)
+        catch
+          :exit, _ ->
+            %{id: id, status: :initializing, parent_id: state.session && state.session.id}
+        end
+      end)
+
+    base = %{
+      breakpoints: breakpoints,
+      function_breakpoints: state.function_breakpoints,
+      children: children
+    }
 
     case state.session do
       nil ->

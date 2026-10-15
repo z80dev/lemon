@@ -5,8 +5,8 @@ defmodule LemonAi.Providers.AnthropicTest do
   """
   use ExUnit.Case, async: false
 
-  alias LemonAi.Providers.Anthropic
   alias LemonAi.EventStream
+  alias LemonAi.Providers.Anthropic
   alias LemonAi.Types.{Context, Model, ModelCost, StreamOptions, Tool, ToolCall, UserMessage}
 
   setup do

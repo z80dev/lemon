@@ -3,9 +3,9 @@ defmodule CodingAgent.Tools.Debug do
   `debug` tool: drive a Debug Adapter Protocol debugger (lldb-dap, gdb,
   debugpy, dlv) for the current coding session.
 
-  Each coding session has at most one active debug session, owned by a
-  `CodingAgent.Debug.SessionServer` that is killed with the coding session.
-  Breakpoints may be set before `launch` and persist across relaunches.
+  Each coding session has one root debug session, owned by a
+  `CodingAgent.Debug.SessionServer`, plus adapter-requested child sessions.
+  Children are terminated with their parent. Breakpoints persist across relaunches.
   Execution actions (`launch`, `continue`, `step_*`, `pause`) wait for the
   next stop or termination (bounded by `timeout` seconds) and report the stop
   location with a source excerpt.
@@ -52,7 +52,8 @@ defmodule CodingAgent.Tools.Debug do
     """
     Debugger access through the Debug Adapter Protocol (lldb-dap, gdb, debugpy, dlv, js-debug, codelldb, netcoredbg, rdbg). \
     Prefer this over bash for program state, breakpoints, stepping or thread inspection.
-    Only one active debug session at a time; terminate it before launching another. \
+    One root session at a time; adapter-requested children appear in status/sessions. \
+    Set `debug_session_id` to a child's id to inspect or control it. Terminating a parent terminates its children. \
     `program` is a target path (compiled binary, .py script, Go package dir), not a shell command.
     Typical flow: set_breakpoint (file+line, allowed before launch) → launch → stack_trace → \
     scopes → variables / evaluate → step_over / continue → terminate. Execution actions wait \
@@ -69,6 +70,10 @@ defmodule CodingAgent.Tools.Debug do
       "type" => "object",
       "properties" => %{
         "action" => %{"type" => "string", "enum" => @actions, "description" => "Debug action"},
+        "debug_session_id" => %{
+          "type" => "string",
+          "description" => "Target debug session id from status/sessions (default: root)"
+        },
         "program" => %{
           "type" => "string",
           "description" => "launch: debug target path (Delve also accepts Go package directories)"
@@ -152,7 +157,13 @@ defmodule CodingAgent.Tools.Debug do
   defp do_execute(params, signal, cwd, opts) do
     with {:ok, action} <- fetch_action(params),
          {:ok, timeout_ms} <- timeout_ms(params),
+         {:ok, debug_session_id} <- optional_string(params, "debug_session_id"),
          {:ok, request} <- build_request(action, params, cwd, opts) do
+      request =
+        if debug_session_id,
+          do: Map.put(request, :debug_session_id, debug_session_id),
+          else: request
+
       key = Keyword.get(opts, :session_id) || {:cwd, Path.expand(cwd)}
 
       call_opts =
@@ -757,6 +768,8 @@ defmodule CodingAgent.Tools.Debug do
         _ -> join_sections([snapshot_text(snapshot, cwd), breakpoint_summary(snapshot, cwd)])
       end
 
+    text = join_sections([text, child_sessions_text(snapshot)])
+
     sessions = if snapshot.status == :none, do: [], else: [snapshot]
     text_result(text, %{action: action, success: true, snapshot: snapshot, sessions: sessions})
   end
@@ -826,6 +839,19 @@ defmodule CodingAgent.Tools.Debug do
     frame = if present?(snapshot.frame_name), do: " in #{snapshot.frame_name}", else: ""
     thread = if snapshot.thread_id, do: " (thread #{snapshot.thread_id})", else: ""
     "Stopped: #{reason}#{description}#{location}#{frame}#{thread}"
+  end
+
+  defp child_sessions_text(snapshot) do
+    snapshot
+    |> Map.get(:children, [])
+    |> Enum.map_join("\n", fn child ->
+      error = if child[:error], do: " — #{child.error}", else: ""
+
+      join_sections([
+        "Child session #{child.id} (parent #{child.parent_id}): #{child.status}#{error}",
+        child_sessions_text(child)
+      ])
+    end)
   end
 
   defp snapshot_text(snapshot, cwd) do

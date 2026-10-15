@@ -195,6 +195,12 @@ Status includes credential readiness, the effective fallback route, and
 credential-pool counts, but never raw keys, secret names, credential references,
 base URLs, or environment-variable names.
 
+Provider rows also include `circuit` (`state`, `failureCount`,
+`timeUntilRecoveryMs`). Text output shows, for example,
+`circuit open (recovers in 23s, 5 failures)`. These are read-only observations:
+status never starts a breaker. An unused provider reports `not_started`; an
+unresponsive or exiting breaker reports `unknown`, with null counters.
+
 ```bash
 lemon providers status --json
 lemon providers fallback add zai

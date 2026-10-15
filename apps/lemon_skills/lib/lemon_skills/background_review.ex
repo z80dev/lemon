@@ -7,9 +7,11 @@ defmodule LemonSkills.BackgroundReview do
   carried into the two tool closures; shared grants are never inherited.
   """
 
+  alias LemonAgent.Security.ExternalContent
   alias LemonAgent.Types.AgentToolResult
   alias LemonAi.Types.TextContent
   alias LemonMemory.ContextScope
+  alias LemonSkills.Synthesis.DraftStore
   alias LemonSkills.Tools.{Remember, SkillManage}
 
   @system """
@@ -54,7 +56,7 @@ defmodule LemonSkills.BackgroundReview do
        "\nAnswer summary:\n" <> LemonMemory.Document.summary_text(answer))
     |> LemonMemory.Safety.redact()
     |> elem(0)
-    |> LemonAgent.Security.ExternalContent.wrap_external_content(
+    |> ExternalContent.wrap_external_content(
       source: :unknown,
       include_warning: false,
       max_bytes: cap
@@ -185,7 +187,7 @@ defmodule LemonSkills.BackgroundReview do
         {:error, "Invalid skill content"}
 
       true ->
-        case LemonSkills.Synthesis.DraftStore.put_new(
+        case DraftStore.put_new(
                %{key: name, content: content, source: "learning_background_review"},
                global: false,
                cwd: cwd
@@ -220,7 +222,7 @@ defmodule LemonSkills.BackgroundReview do
                 end)
 
               text =
-                LemonAgent.Security.ExternalContent.wrap_external_content(text,
+                ExternalContent.wrap_external_content(text,
                   source: :unknown,
                   max_bytes: 4_096
                 )

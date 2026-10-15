@@ -11,7 +11,7 @@ defmodule LemonAi.EventStreamBeamTest do
   use ExUnit.Case
 
   alias LemonAi.EventStream
-  alias LemonAi.Types.{AssistantMessage, TextContent, Usage, Cost}
+  alias LemonAi.Types.{AssistantMessage, Cost, TextContent, Usage}
 
   defp make_message(opts \\ []) do
     %AssistantMessage{

@@ -4,6 +4,7 @@ defmodule LemonCore.StoreTest do
   import ExUnit.CaptureLog
 
   alias LemonCore.Store
+  alias LemonCore.Testing.AsyncHelpers
 
   setup do
     assert {:ok, _} = Application.ensure_all_started(:lemon_core)
@@ -791,7 +792,7 @@ defmodule LemonCore.StoreTest do
                })
 
       # The history write to RunHistoryStore is asynchronous
-      LemonCore.Testing.AsyncHelpers.assert_eventually(
+      AsyncHelpers.assert_eventually(
         fn ->
           key
           |> Store.get_run_history(limit: 50)
