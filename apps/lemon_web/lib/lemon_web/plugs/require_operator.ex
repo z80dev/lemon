@@ -49,7 +49,27 @@ defmodule LemonWeb.Plugs.RequireOperator do
     |> halt()
   end
 
-  defp not_configured(conn) do
+  defp not_configured(%Plug.Conn{method: "GET"} = conn) do
+    if Enum.any?(get_req_header(conn, "accept"), &String.contains?(&1, "text/html")) do
+      conn
+      |> put_resp_content_type("text/html")
+      |> send_resp(503, """
+      <!doctype html>
+      <html lang="en"><head><meta charset="utf-8"><title>Operator token required · Lemon</title></head>
+      <body><main><h1>No operator token is configured</h1>
+      <p>Lemon Web needs an operator token. Start Lemon with
+      <code>LEMON_CONTROL_PLANE_OPERATOR_TOKEN</code> set (the launcher manages one automatically).</p>
+      <a href="/login">Go to login</a></main></body></html>
+      """)
+      |> halt()
+    else
+      not_configured_plain(conn)
+    end
+  end
+
+  defp not_configured(conn), do: not_configured_plain(conn)
+
+  defp not_configured_plain(conn) do
     conn
     |> put_resp_content_type("text/plain")
     |> send_resp(

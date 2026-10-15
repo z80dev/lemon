@@ -33,28 +33,29 @@ defmodule LemonWeb.Chat.Setup do
   def message,
     do: "Finish setup before chatting: run `lemon setup` in a terminal, then check again."
 
-  defp unavailable do
-    %{
-      config: %{complete: false},
-      secrets: %{complete: false},
-      provider: %{complete: false, reason: nil}
-    }
-  end
+  defp unavailable, do: %{unavailable: true}
 
   attr(:state, :map, required: true)
   attr(:target, :any, default: nil)
 
   @doc "Setup checklist callout with a re-check button (`refresh-setup`)."
   def gate(assigns) do
-    assigns = assign(assigns, :steps, steps(assigns.state))
+    assigns =
+      assigns
+      |> assign(:unavailable, Map.get(assigns.state, :unavailable, false))
+      |> assign(:steps, steps(assigns.state))
 
     ~H"""
-    <.callout id="setup-readiness" tone="warning" title="Finish setup before chatting">
-      <p>
+    <.callout id="setup-readiness" tone="warning" title={if @unavailable, do: "Setup status could not be checked", else: "Finish setup before chatting"}>
+      <p :if={@unavailable}>
+        Check <.link navigate="/diagnostics" class="underline">diagnostics</.link>, then try again.
+        Nothing is sent until setup status is known.
+      </p>
+      <p :if={!@unavailable}>
         Run <code class="rounded bg-surface-2 px-1 font-mono text-xs">lemon setup</code>
         in a terminal, then check again. Nothing is sent until setup is complete.
       </p>
-      <ul class="mt-2 space-y-1">
+      <ul :if={!@unavailable} class="mt-2 space-y-1">
         <li :for={{step, complete, help} <- @steps} class="flex items-center gap-2 text-[13px]">
           <.icon
             name={if complete, do: "check-circle", else: "circle"}

@@ -37,6 +37,8 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   instructions, provider-model examples, and documentation navigation.
 - Durable preference/project memory supports exact-first unique-substring
   patch/delete and rejects persistent backdoor/exfiltration instructions.
+- Web chat keeps run status visible on mobile, distinguishes unavailable checks,
+  improves recovery guidance, and makes login and navigation more accessible.
 - Honcho tool schemas now register only when the integration is configured and
   enabled, matching its memory provider and context contributor instead of adding
   five inactive tools to prompts on unconfigured hosts.

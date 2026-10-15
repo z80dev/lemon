@@ -321,10 +321,10 @@ defmodule LemonWeb.DiagnosticsLive do
               {if @readiness.ready, do: "Ready", else: "Action needed"}
             </.badge>
           </:actions>
-          <p :if={@readiness == :unavailable} class="text-[13px] text-muted">Readiness could not be determined.</p>
+          <p :if={@readiness == :unavailable} class="text-[13px] text-muted">Readiness could not be determined. Run <code class="font-mono">lemon doctor</code> in a terminal for details.</p>
           <ul :if={is_map(@readiness)} class="space-y-2.5 text-[13px]">
-            <.readiness_step ok={@readiness.config} label="Config file" hint="Global config.toml exists" fix="lemon setup" />
-            <.readiness_step ok={@readiness.secrets} label="Secrets" hint="Encrypted secret store master key" fix="lemon setup" />
+            <.readiness_step ok={@readiness.config} label="Config file" hint="Global config file (config.toml) is present" fix="lemon setup" />
+            <.readiness_step ok={@readiness.secrets} label="Secrets" hint="Secret store key is set up" fix="lemon setup" />
             <.readiness_step
               ok={@readiness.provider}
               label="Default provider"
@@ -443,7 +443,7 @@ defmodule LemonWeb.DiagnosticsLive do
             </.button>
           </:actions>
           <.callout :if={@logs_state == :unavailable} tone="warning" class="m-3" id="logs-unavailable">
-            Logs are unavailable right now.
+            Logs are unavailable right now. Run <code class="font-mono">lemon doctor</code> in a terminal for details.
           </.callout>
           <div :if={@logs_state == :ok and @logs == []} class="px-4 py-8 text-center text-[13px] text-muted">
             No log entries at this level yet.
