@@ -123,18 +123,21 @@ defmodule CodingAgent.InternalUrls.GitHubProtocol do
         (file["patch"] || "[No patch supplied by GitHub: binary, large, or unchanged file.]")
 
   defp files(endpoint, page, acc, cwd, opts) do
-    with {:ok, batch} when is_list(batch) <-
-           api("#{endpoint}?per_page=100&page=#{page}", cwd, opts) do
-      acc = acc ++ Enum.take(batch, 100)
+    case api("#{endpoint}?per_page=100&page=#{page}", cwd, opts) do
+      {:ok, batch} when is_list(batch) ->
+        acc = acc ++ Enum.take(batch, 100)
 
-      cond do
-        length(batch) < 100 -> {:ok, acc, false}
-        page == @max_pages -> {:ok, acc, true}
-        true -> files(endpoint, page + 1, acc, cwd, opts)
-      end
-    else
-      {:error, _} = error -> error
-      _ -> {:error, "Unexpected GitHub file response"}
+        cond do
+          length(batch) < 100 -> {:ok, acc, false}
+          page == @max_pages -> {:ok, acc, true}
+          true -> files(endpoint, page + 1, acc, cwd, opts)
+        end
+
+      {:error, _} = error ->
+        error
+
+      _ ->
+        {:error, "Unexpected GitHub file response"}
     end
   end
 
