@@ -107,14 +107,23 @@ private enum UIResourceError: LocalizedError {
 
 struct ActionErrorView: View {
     let message: String?
+    private static let diagnosticMarkers = ["\nDetails: ", "\nRequest: ", "\nExact runs: ", "\nRecorded entries: "]
+    private func detailsStart(in text: String) -> String.Index? {
+        var first: String.Index?
+        for marker in Self.diagnosticMarkers {
+            if let index = text.range(of: marker)?.lowerBound, first == nil || index < first! { first = index }
+        }
+        return first
+    }
     var body: some View {
         if let message {
+            let diagnosticStart = detailsStart(in: message)
             VStack(alignment: .leading, spacing: 8) {
-                Label(message.components(separatedBy: "\nDetails: ").first ?? message, systemImage: "exclamationmark.circle.fill")
+                Label(diagnosticStart.map { String(message[..<$0]) } ?? message, systemImage: "exclamationmark.circle.fill")
                     .foregroundStyle(LB.danger).textSelection(.enabled)
-                if let range = message.range(of: "\nDetails: ") {
+                if let diagnosticStart {
                     DisclosureGroup("Details") {
-                        Text(String(message[range.upperBound...])).textSelection(.enabled)
+                        Text(String(message[diagnosticStart...]).trimmingCharacters(in: .whitespacesAndNewlines)).textSelection(.enabled)
                         Button("Copy") { copyText(message) }.buttonStyle(.pill(.quiet, compact: true))
                     }
                 } else {

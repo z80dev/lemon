@@ -264,7 +264,7 @@ private struct SettingsAccountHeader: View {
     var body: some View {
         HStack(spacing: 12) {
             Circle().fill(LB.lemon).frame(width: 40, height: 40)
-                .overlay(Text(initials).font(.system(size: 15, weight: .semibold)).foregroundStyle(LB.lemonInk))
+                .overlay(Text(initials).font(LBFont.bodyEmphasis).foregroundStyle(LB.lemonInk))
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 1) {
                 Text(name).font(LBFont.rowTitle).foregroundStyle(LB.ink).lineLimit(1)
@@ -283,7 +283,7 @@ struct SettingsPaneIcon: View {
     var size: CGFloat = 22
     var body: some View {
         Image(systemName: pane.symbol)
-            .font(.system(size: size * 0.55, weight: .semibold))
+            .font(LBFont.metaEmphasis)
             .foregroundStyle(.white)
             .frame(width: size, height: size)
             .background(RoundedRectangle(cornerRadius: size * 0.27, style: .continuous).fill(pane.tint.gradient))

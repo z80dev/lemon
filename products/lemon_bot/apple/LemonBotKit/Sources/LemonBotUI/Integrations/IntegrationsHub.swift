@@ -6,17 +6,17 @@ public struct IntegrationsHubView: View {
     public init(store: LemonBotStore) { self.store = store }
     public var body: some View {
         List {
-            Section("Explicit account authority") {
-                NavigationLink("Connect apps — per-Bot MCP accounts and tools") { ConnectorSettingsView(store: store) }
-                NavigationLink("Channels — install, verified principals and event capabilities") { ChannelSettingsView(store: store) }
-                NavigationLink("Email — approved address and actual mailbox search") { EmailSettingsView(store: store) }
-                NavigationLink("X — connect, public mentions and main Bot") { XSettingsView(store: store) }
+            Section("Apps & channels") {
+                NavigationLink("Connected apps") { ConnectorSettingsView(store: store) }
+                NavigationLink("Chat channels") { ChannelSettingsView(store: store) }
+                NavigationLink("Email") { EmailSettingsView(store: store) }
+                NavigationLink("X") { XSettingsView(store: store) }
             }
             Section("Operator configuration") {
-                NavigationLink("Provider catalog and exact prerequisites") { ProviderCatalogView(store: store) }
+                NavigationLink("Available providers and setup help") { ProviderCatalogView(store: store) }
             }
-            Text("Connecting your account is not a tool approval or permission to send. Channels are separate from MCP posting tools; provider installation and external administrator approval are independent states.")
-        }.navigationTitle("Integrations")
+            Text("Connecting an account doesn't approve tools or send anything. Some apps need their administrator's approval before they're ready.")
+        }.navigationTitle("Apps & channels")
     }
 }
 

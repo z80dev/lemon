@@ -23,14 +23,15 @@ defmodule LemonOmp.Tools.Omp do
   alias LemonAi.Types.TextContent
   alias LemonOmp.Projection
 
-  @actions ~w(models start start_many wait status subagent list send cancel close resume discover)
+  @actions ~w(models start start_many wait status subagent list send configure cancel close resume discover)
   @default_wait_seconds 600
   @max_wait_seconds 3_600
 
   @description """
   Delegate a coding task to omp (oh-my-pi), an external coding agent that runs as a separate process in a \
   workspace, and observe or control it. Use it when the user asks to run something "in omp". \
-  Use models to find a selector, then pass it as model on start/start_many. Prefer cheap/free models for \
+  Use models to find a selector, then pass it as model on start/start_many. Use models + configure to \
+  move an existing worker to a cheaper model without restarting it. Prefer cheap/free models for \
   simple mechanical tasks when the user has not specified a model. models accepts query, free_only, \
   provider, limit (default 30, max 200). \
   Actions: start (prompt, optional cwd/model/thinking/approval_mode/isolate; returns the session id at once — set wait=true \
@@ -41,7 +42,8 @@ defmodule LemonOmp.Tools.Omp do
   default 20 max 50; read the subagent's transcript tail), list (sessions \
   this conversation started), send (id, message; mode "steer" interrupts the running turn, "follow_up" \
   queues after it, "redirect" stops the current turn and starts over with this message — use when omp is \
-  going the wrong way; an idle session starts a new turn), cancel (id; abort the running turn, the session stays \
+  going the wrong way; an idle session starts a new turn), configure (id, model and/or thinking; change a \
+  live worker's settings for its next model call, including while running), cancel (id; abort the running turn, the session stays \
   open), close (id; end the omp process), resume (omp_session_id from discover, optional prompt; \
   continue=true instead asks to finish interrupted work after a crash/kill, without reviving subagents), discover \
   (omp sessions stored for a workspace, read-only, marks interrupted turns). Set isolate=true to give parallel \
@@ -111,12 +113,13 @@ defmodule LemonOmp.Tools.Omp do
           "model" => %{
             "type" => "string",
             "description" =>
-              "omp model, e.g. \"anthropic/claude-sonnet-4-5\". Defaults to omp's configured model."
+              "omp model, e.g. \"anthropic/claude-sonnet-4-5\". configure requires provider/id; omission keeps the current model."
           },
           "thinking" => %{
             "type" => "string",
             "enum" => ~w(off minimal low medium high xhigh max auto),
-            "description" => "omp thinking level (start, resume). Defaults to omp's setting."
+            "description" =>
+              "omp thinking level (start, resume, configure). Omission keeps omp's setting."
           },
           "approval_mode" => %{
             "type" => "string",
@@ -366,6 +369,34 @@ defmodule LemonOmp.Tools.Omp do
     result(text, %{"action" => "list", "sessions" => sessions})
   end
 
+  defp run("configure", %{"id" => id} = params, scope, _o, _s, _u, _opts)
+       when is_binary(id) do
+    case LemonOmp.configure(id, Map.take(params, ["model", "thinking"]), scope) do
+      {:ok, wire} ->
+        session_result(
+          "configure",
+          wire,
+          "Configured omp #{id}: model #{wire["model"] || "(none)"}, thinking #{wire["thinking"] || "(none)"}. Applies from the next model call."
+        )
+
+      {:error, {:partially_applied, applied, step, reason} = partial} ->
+        result = error_result("configure", partial)
+
+        %{
+          result
+          | details:
+              Map.merge(result.details, %{
+                "applied" => applied,
+                "failedStep" => step,
+                "cause" => error_code(reason)
+              })
+        }
+
+      {:error, reason} ->
+        error_result("configure", reason)
+    end
+  end
+
   defp run("send", %{"id" => id, "message" => message} = params, scope, _o, _s, _u, _opts)
        when is_binary(id) do
     mode =
@@ -438,6 +469,11 @@ defmodule LemonOmp.Tools.Omp do
         text =
           Enum.map_join(sessions, "\n", fn s ->
             "- #{s["ompSessionId"]} [#{s["lastStatus"]}#{if s["interrupted"], do: ", interrupted turn"}#{if s["liveId"], do: ", live as #{s["liveId"]}"}#{if s["activeElsewhere"], do: ", possibly open elsewhere"}] #{s["title"] || "untitled"}"
+            |> then(fn line ->
+              if s["worktree"],
+                do: line <> " (kept worktree #{s["worktree"]["branch"]})",
+                else: line
+            end)
           end)
 
         result("omp sessions for #{cwd}:\n" <> text, %{
@@ -581,6 +617,18 @@ defmodule LemonOmp.Tools.Omp do
     isolation = Projection.worktree_summary(wire["worktree"])
 
     text =
+      if action == "resume" do
+        note =
+          if wire["worktree"],
+            do: "Reused kept worktree #{wire["worktree"]["branch"]}.",
+            else: "No matching existing kept Lemon worktree found; using the supplied cwd."
+
+        text <> "\n" <> note
+      else
+        text
+      end
+
+    text =
       if isolation && not String.contains?(text, isolation),
         do: text <> "\n" <> isolation,
         else: text
@@ -604,6 +652,7 @@ defmodule LemonOmp.Tools.Omp do
   end
 
   defp error_code({kind, _message}) when is_atom(kind), do: Atom.to_string(kind)
+  defp error_code({:partially_applied, _applied, _step, _reason}), do: "partially_applied"
   defp error_code({:invalid_task, _index, _reason}), do: "invalid_task"
   defp error_code(reason) when is_atom(reason), do: Atom.to_string(reason)
   defp error_code(_reason), do: "error"

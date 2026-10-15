@@ -37,6 +37,7 @@ defmodule LemonOmp.Projection do
             cwd: nil,
             worktree: nil,
             model: nil,
+            model_confirmed: false,
             thinking: nil,
             approval_mode: nil,
             owner: %{kind: :operator},
@@ -158,7 +159,15 @@ defmodule LemonOmp.Projection do
   end
 
   defp event(state, "message_end", %{"message" => %{"role" => "assistant"} = message}) do
-    state = state |> add_usage(message["usage"]) |> put_if(:model, message_model(message))
+    state = add_usage(state, message["usage"])
+
+    # An in-flight call can finish with the old model after configure's state
+    # refresh. Its receipt is not the selected model for the next call.
+    state =
+      if state.model_confirmed,
+        do: state,
+        else: put_if(state, :model, message_model(message))
+
     text = message |> message_text() |> clean(nil)
 
     state =
@@ -235,8 +244,8 @@ defmodule LemonOmp.Projection do
 
   defp event(state, "model_changed", frame) do
     case model_label(frame["model"]) do
-      nil -> state
-      model -> %{state | model: model}
+      nil -> %{state | model_confirmed: false}
+      model -> %{state | model: model, model_confirmed: true}
     end
   end
 
@@ -304,8 +313,9 @@ defmodule LemonOmp.Projection do
   def apply_state(state, data) when is_map(data) do
     state
     |> put_if(:omp_session_id, clean(data["sessionId"], 128))
-    |> put_if(:model, model_label(data["model"]))
-    |> put_if(:thinking, clean(data["thinkingLevel"], 16))
+    |> Map.put(:model, model_label(data["model"]))
+    |> Map.put(:model_confirmed, true)
+    |> Map.put(:thinking, blank_to_nil(clean(data["thinkingLevel"], 16)))
     |> put_if(:title, clean(data["sessionName"], @max_title))
     |> put_if(:context_percent, percent(get_in(data, ["contextUsage", "percent"])))
     |> then(fn state ->

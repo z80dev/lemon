@@ -11,13 +11,13 @@ public struct MachineHubView: View {
     public var body: some View {
         List {
             HubError(action: action, store: store)
-            Section { Text("You retain SSH and full host access. Bots sharing a host share its OS user's files, browser sessions and CLI credentials. A persona is not an OS sandbox.") }
+            Section { Text("Bots using the same computer user share its files and logins. Use a separate computer user or machine to keep them apart. You keep full access to your machine.") }
             ForEach(machines) { machine in
                 NavigationLink { MachineDetailView(store: store, machineID: machine.id) } label: {
                     VStack(alignment: .leading) {
                         Text(machine.name).font(.headline)
-                        Text("\(machine.status) · \(machine.botIds.count) Bots · \(machine.nodeName)")
-                        Text("Owner: \(machine.ownerUserId) · Last seen: \(hubDate(machine.lastSeenAtMs))").font(.caption)
+                        Text("\(humanizedStatus(machine.status)) · \(machine.botIds.count) Bots")
+                        Text("Last seen: \(hubDate(machine.lastSeenAtMs))").font(LBFont.meta)
                     }
                 }
             }
@@ -52,11 +52,10 @@ struct MachineAttachView: View {
             if let result { MachineEnrollmentView(store: store, machineID: result.machine.id, initialInvite: result.invite) }
             else {
                 TextField("Friendly name", text: $name)
-                TextField("Durable node name", text: $nodeName)
-                Text("Purpose: lemon_bot")
+                TextField("Machine connection name", text: $nodeName)
                 TextField("Optional label key", text: $labelKey)
                 TextField("Label value", text: $labelValue)
-                Toggle("I trust this privileged host. Co-resident Bots share files and logins.", isOn: $accepted)
+                Toggle("I trust this machine and understand its Bots share files and logins", isOn: $accepted)
                 Button("Create one-use invitation") { Task { await action.perform {
                     var body: JSONObject = ["name": .string(name), "nodeName": .string(nodeName)]
                     if !labelKey.isEmpty { body["labels"] = .object([labelKey: .string(labelValue)]) }
@@ -83,7 +82,7 @@ struct MachineEnrollmentView: View {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("\(invite.enrollment) · \(invite.status)").font(.headline)
                     Text("Expires: \(hubDate(invite.expiresAtMs))")
-                    if let error = invite.lastError { Text(error).foregroundStyle(.red) }
+                    if let error = invite.lastError { Text(error).foregroundStyle(LB.danger) }
                     if invite.status == "pending" {
                         Text(invite.joinCommand).font(.system(.caption, design: .monospaced)).textSelection(.enabled)
                         Button("Copy exact join command") { hubCopy(invite.joinCommand) }
@@ -131,16 +130,21 @@ public struct MachineDetailView: View {
         Form {
             HubError(action: action, store: store)
             if let machine {
-                Section("Owned host") {
-                    Text("\(machine.nodeName) · \(machine.status)")
-                    Text("Owner: \(machine.ownerUserId) · Last seen \(hubDate(machine.lastSeenAtMs))")
-                    Text("Full host access is privileged. Every Bot on this machine shares files, browser logins and CLI credentials; use separate OS users/machines for isolation.").foregroundStyle(.orange)
+                Section("Your machine") {
+                    Text(humanizedStatus(machine.status))
+                    Text("Last seen \(hubDate(machine.lastSeenAtMs))")
+                    DisclosureGroup("Details") {
+                        let details = "Connection name: \(machine.nodeName)\nOwner ID: \(machine.ownerUserId)"
+                        Text(details).textSelection(.enabled)
+                        Button("Copy") { copyText(details) }
+                    }
+                    Text("Bots using the same computer user share its files and logins. Use a separate computer user or machine to keep them apart.").foregroundStyle(LB.warning)
                     TextField("Name", text: $name)
-                    Button("Save host name") { Task { await action.perform {
+                    Button("Save machine name") { Task { await action.perform {
                         let updated: Machine = try await store.mutate("PATCH", "/machines/\(hubID(machineID))", body: ["revision": .number(Double(machine.revision)), "name": .string(name)]); self.machine = updated
                     } } }.disabled(action.busy || action.uncertain || store.connectionState != "online")
                 }
-                Section("Measured host information") {
+                Section("Machine information") {
                     if let host {
                         LabeledContent("Hostname / OS", value: "\(host.hostname) · \(host.os) \(host.osVersion) · \(host.arch)")
                         LabeledContent("CPU", value: "\(host.cpuCount) cores")
@@ -159,29 +163,29 @@ public struct MachineDetailView: View {
                                 Text(capability.name).font(.headline)
                                 Text("\(capability.supported ? "Supported" : "Unsupported") · \(capability.configuredLevel) · OS grant \(capability.osGrant)")
                                 Text(capability.reason)
-                                Text(capability.tools.joined(separator: ", ")).font(.caption)
+                                Text(capability.tools.joined(separator: ", ")).font(LBFont.meta)
                             }
                         }
                     }
                 }
                 if let capabilityError { Section("Capability measurement unavailable") { ActionErrorView(message: capabilityError) } }
-                Section("Bots on this host") {
+                Section("Bots on this machine") {
                     ForEach(store.bots.filter { $0.machineId == machineID }) { bot in
                         NavigationLink(bot.name) { BotOverviewView(store: store, botID: bot.id) }
                         MachineBotGrantsView(store: store, bot: bot)
                     }
                 }
-                Section("Full host tools") {
+                Section("Machine tools") {
                     NavigationLink("Files") { MachineFilesView(store: store, machineID: machineID) }
                     NavigationLink("Interactive terminal") { MachineTerminalView(store: store, machineID: machineID) }
                     NavigationLink("Write-only secrets") { MachineSecretsView(store: store, machineID: machineID) }
                 }
-                Section("Host-management driver") {
+                Section("Machine management") {
                     if let management {
                         Text("\(management.provider) · isolated root: \(management.environmentRoot ?? "None")")
                         Text("Backup: \(hubDate(management.lastBackupAtMs))")
                         Text("Network: \(management.supportsNetworkPolicy ? "Supported" : "Unsupported") · Egress: \(management.supportsEgress ? "Supported" : "Unsupported") · Setup: \(management.supportsSetup ? "Supported" : "Unsupported")")
-                        NavigationLink("Review supported host operations") { HostOperationsView(store: store, machineID: machineID, supported: management.supportedActions) }
+                        NavigationLink("Review machine actions") { HostOperationsView(store: store, machineID: machineID, supported: management.supportedActions) }
                     } else { ActionErrorView(message: managementError); if managementError == nil { Text("Loading configured driver") } }
                 }
                 MachineEnrollmentView(store: store, machineID: machineID, initialInvite: nil)

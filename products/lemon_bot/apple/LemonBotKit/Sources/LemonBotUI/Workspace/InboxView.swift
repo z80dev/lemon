@@ -21,7 +21,7 @@ struct InboxView: View {
         List {
             SwiftUI.Section {
                 Toggle("Unread only", isOn: $unread)
-                Text("Reading or dismissing a notice never approves a request. Open the exact action to inspect current authorization and expiry.").font(.caption)
+                Text("Notices don't approve anything. Open the item to see what's needed.").font(LBFont.meta)
                 Button("Mark all notices read") { Task { await action.perform {
                     let through = store.notifications.map(\.createdAtMs).max() ?? 0
                     let _: Empty = try await store.mutate("POST", "/notifications/read-all", body: ["throughAtMs": .number(Double(through))])
@@ -38,7 +38,7 @@ struct InboxView: View {
                     Text(notice.body)
                     Text(timestamp(Double(notice.createdAtMs)), style: .date).font(.caption)
                     HStack {
-                        Button("Open exact target") { Task { await action.perform {
+                        Button("Open item") { Task { await action.perform {
                             guard let url = URL(string: notice.deepLink) else { return }
                             try await store.navigate(url)
                             try await store.acknowledgeNotification(notice.id)
@@ -49,11 +49,11 @@ struct InboxView: View {
                     if let id = notice.requestId { Button("Copy request ID") { copyText(id) }.font(.caption) }
                 }.padding(.vertical, 4)
             }
-            SwiftUI.Section("Delivery diagnostics") {
-                Text("Realtime: \(store.connectionState)")
-                Text("Backend APNs configured: \(store.capabilities?.apns == true ? "yes" : "no")")
-                Text("OS permission and per-device settings are independent of backend push configuration. Pending requests remain visible even without push.").font(.caption)
-                NavigationLink("Notification settings / permission recovery") { SettingsHubView(store: store) }
+            SwiftUI.Section("Notifications") {
+                Text("Connection: \(store.isOnline ? "Online" : "Offline")")
+                Text("Push notifications: \(store.capabilities?.apns == true ? "Set up on this server" : "Not set up on this server")")
+                Text("Notices stay in the inbox even when push alerts are off.").font(LBFont.meta)
+                NavigationLink("Notification settings") { SettingsHubView(store: store) }
             }
         }.navigationTitle("Inbox")
     }

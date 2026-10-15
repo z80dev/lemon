@@ -26,7 +26,31 @@ defmodule LemonOmp.SessionFiles do
   @active_window_ms 120_000
 
   @spec discover(String.t(), keyword()) :: {:ok, [map()]} | {:error, :invalid_cwd}
-  def discover(cwd, opts \\ []) when is_binary(cwd) do
+  def discover(cwd, opts \\ []) do
+    with {:ok, sessions} <- discover_workspace(cwd, opts) do
+      workers =
+        LemonOmp.Worktree.kept(cwd)
+        |> Enum.flat_map(fn worktree ->
+          case discover_workspace(worktree.path, opts) do
+            {:ok, entries} ->
+              Enum.map(entries, &Map.put(&1, "worktree", LemonOmp.Worktree.wire(worktree)))
+
+            _ ->
+              []
+          end
+        end)
+
+      limit = opts |> Keyword.get(:limit, @default_limit) |> clamp_limit()
+
+      {:ok,
+       (workers ++ sessions)
+       |> Enum.uniq_by(& &1["ompSessionId"])
+       |> Enum.sort_by(&(-&1["updatedAt"]))
+       |> Enum.take(limit)}
+    end
+  end
+
+  defp discover_workspace(cwd, opts) when is_binary(cwd) do
     limit = opts |> Keyword.get(:limit, @default_limit) |> clamp_limit()
     sessions_dir = Keyword.get_lazy(opts, :sessions_dir, &LemonOmp.Config.sessions_dir/0)
     expanded = Path.expand(cwd)
@@ -102,6 +126,7 @@ defmodule LemonOmp.SessionFiles do
       {:ok, names} ->
         names
         |> Enum.filter(&String.ends_with?(&1, ".jsonl"))
+        |> Enum.take(2_000)
         |> Enum.flat_map(fn name ->
           path = Path.join(dir, name)
 

@@ -110,8 +110,8 @@ struct NetworkPolicySettingsView: View {
                 }.disabled(machines.isEmpty)
                 ForEach(Array(applications.enumerated()), id: \.offset) { _, value in
                     Text("\(value.machineId) · desired \(value.desiredRevision) · applied \(value.appliedRevision.map(String.init) ?? "unknown") · \(value.state)")
-                    if let error = value.error { Text(error).foregroundStyle(.red).textSelection(.enabled) }
-                    Text("Measured \(adminDate(Double(value.measuredAtMs)))").font(.caption)
+                    if let error = value.error { Text(error).foregroundStyle(LB.danger).textSelection(.enabled) }
+                    Text("Measured \(adminDate(Double(value.measuredAtMs)))").font(LBFont.meta)
                 }
                 Button("Refresh observed applications (does not reapply)") { Task { await control.perform { try await loadApplications() } } }
             }
@@ -132,14 +132,14 @@ struct EgressRouteSettingsRow: View {
         VStack(alignment: .leading) {
             Text("\(route.machineId) → \(route.throughMachineId) · \(route.state)")
             Text("Remembered explicit preference: \(route.rememberedPreference ? "yes" : "no")")
-            if let error = route.error { Text(error).foregroundStyle(.red) }
+            if let error = route.error { Text(error).foregroundStyle(LB.danger) }
             AdminAction(title: route.enabled ? "Disable route" : "Enable route if authorized", store: store, control: control) {
                 _ = try await store.mutate("PATCH", "/egress-routes/\(adminPath(route.id))", body: ["revision": .number(Double(route.revision)), "enabled": .bool(!route.enabled)], as: EgressRoute.self); try await refresh()
             }
             AdminAction(title: "Remove route", store: store, control: control, destructive: true) {
                 _ = try await store.mutate("DELETE", "/egress-routes/\(adminPath(route.id))", body: adminRevision(route.revision), as: Deleted.self); try await refresh()
             }
-            if let error = control.error { Text(error).foregroundStyle(.red).textSelection(.enabled) }
+            if let error = control.error { Text(error).foregroundStyle(LB.danger).textSelection(.enabled) }
         }
     }
 }

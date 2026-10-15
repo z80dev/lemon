@@ -49,6 +49,13 @@
 #   REDIRECT_GATE   after abort events, wait for .fake_omp_redirect_ack; acknowledge,
 #                   wait for .fake_omp_redirect_start; start the new turn,
 #                   wait for .fake_omp_redirect_finish; complete it
+#
+# Configure controls:
+#   DIR/.fake_omp_configure_gate  wait for .fake_omp_configure_release before model ack
+#   DIR/.fake_omp_thinking_mode   reject, mute or exit when setting thinking
+#   DIR/.fake_omp_state_mode      reject, mute or gate (.fake_omp_state_release)
+#   fake/no-thinking              model with no thinking level; fake/clamped clamps high to low
+#   fake/REJECT                   reject set_model
 
 if [ "$1" = models ]; then
   [ -z "$FAKE_OMP_MODELS_COUNT" ] || printf 'call\n' >>"$FAKE_OMP_MODELS_COUNT"
@@ -72,6 +79,9 @@ fi
 all_args="$*"
 cwd=
 resume=
+provider=fake
+model_id=fake-model
+thinking=low
 while [ $# -gt 0 ]; do
   case "$1" in
     --version)
@@ -80,6 +90,15 @@ while [ $# -gt 0 ]; do
       ;;
     --cwd)
       cwd=$2
+      shift
+      ;;
+    --model)
+      provider=${2%%/*}
+      model_id=${2#*/}
+      shift
+      ;;
+    --thinking)
+      thinking=$2
       shift
       ;;
     --resume)
@@ -406,8 +425,61 @@ while IFS= read -r line; do
           ;;
       esac
       ;;
+    set_model)
+      next_model=$(field modelId)
+      case "$next_model" in
+        REJECT)
+          emit '{"type":"response","id":"'"$id"'","command":"set_model","success":false,"error":"Model refused\u001b[31m\u202e"}'
+          continue
+          ;;
+      esac
+      provider=$(field provider)
+      model_id=$next_model
+      case "$model_id" in
+        no-thinking) thinking= ;;
+        clamped) thinking=low ;;
+      esac
+      emit '{"type":"model_changed"}'
+      if [ -f "$cwd/.fake_omp_configure_gate" ]; then
+        while [ ! -f "$cwd/.fake_omp_configure_release" ]; do sleep 0.02; done
+      fi
+      respond "$id" set_model '{"provider":"'"$provider"'","id":"'"$model_id"'"}'
+      ;;
+    set_thinking_level)
+      thinking_mode=
+      [ ! -f "$cwd/.fake_omp_thinking_mode" ] || thinking_mode=$(cat "$cwd/.fake_omp_thinking_mode")
+      case "$thinking_mode" in
+        reject)
+          emit '{"type":"response","id":"'"$id"'","command":"set_thinking_level","success":false,"error":"Thinking refused"}'
+          continue
+          ;;
+        mute) continue ;;
+        exit) exit 3 ;;
+      esac
+      thinking=$(field level)
+      case "$model_id" in
+        no-thinking) thinking= ;;
+        clamped) thinking=low ;;
+      esac
+      emit '{"type":"thinking_level_changed","thinkingLevel":"'"$thinking"'"}'
+      respond "$id" set_thinking_level
+      ;;
     get_state)
-      respond "$id" get_state '{"sessionId":"'"$session_id"'","sessionName":"Resumed fake session","thinkingLevel":"low","model":{"provider":"fake","id":"fake-model"},"todoPhases":[{"name":"Earlier","tasks":[{"content":"Carry over","status":"pending"}]}]}'
+      state_mode=
+      [ ! -f "$cwd/.fake_omp_state_mode" ] || state_mode=$(cat "$cwd/.fake_omp_state_mode")
+      case "$state_mode" in
+        reject)
+          emit '{"type":"response","id":"'"$id"'","command":"get_state","success":false,"error":"State refused"}'
+          continue
+          ;;
+        mute) continue ;;
+        gate)
+          while [ ! -f "$cwd/.fake_omp_state_release" ]; do sleep 0.02; done
+          ;;
+      esac
+      thinking_json=
+      [ -z "$thinking" ] || thinking_json='"thinkingLevel":"'"$thinking"'",'
+      respond "$id" get_state '{"sessionId":"'"$session_id"'","sessionName":"Resumed fake session",'"$thinking_json"'"model":{"provider":"'"$provider"'","id":"'"$model_id"'"},"todoPhases":[{"name":"Earlier","tasks":[{"content":"Carry over","status":"pending"}]}]}'
       ;;
     host_tool_result | host_uri_result) ;;
     *)
