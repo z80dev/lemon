@@ -47,7 +47,8 @@ Re-read the omitted range or use `edit` instead. New files are not subject to th
 check. Existing UTF-8 BOMs and dominant
 CRLF line endings are preserved when incoming text omits them; explicitly supplied
 CRLF text is left intact. The same safeguards apply to ACP writes when the prior
-contents are available.
+contents are available. Local overwrite format detection samples only the first
+64 KiB, keeping memory bounded even when replacing very large files.
 
 Local `patch` updates, deletes, and move sources check the session's last read
 against the current raw file bytes before any patch writes. If the file changed,
