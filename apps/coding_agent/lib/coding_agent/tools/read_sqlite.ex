@@ -20,6 +20,9 @@ defmodule CodingAgent.Tools.ReadSqlite do
   alias CodingAgent.Tools.ReadFormatText
   alias Exqlite.Sqlite3
 
+  import CodingAgent.Tools.Sqlite,
+    only: [ident: 1, query: 2, query: 3, query: 4, table_sql: 2, row_lookup: 2]
+
   @magic "SQLite format 3" <> <<0>>
   @path_regex ~r/\A(?<db>.+?\.(?:sqlite3?|db3?))(?<rest>(?::[^?]*)?(?:\?.*)?)\z/i
   @default_limit 20
@@ -31,13 +34,14 @@ defmodule CodingAgent.Tools.ReadSqlite do
   @forbidden ~w(attach detach pragma vacuum insert update delete replace create drop alter reindex analyze begin commit rollback savepoint release load_extension)
 
   @doc """
-  Splits a resolved path into `{database_path, sub_path, query}` when it names
-  an existing SQLite file, else `nil`.
+  Splits a resolved path into `{database_path, sub_path, query}`.
+  By default the database must exist; writers can parse first, then validate
+  the physical mutation target before opening it.
   """
-  @spec split_path(String.t()) :: {String.t(), String.t(), String.t()} | nil
-  def split_path(path) when is_binary(path) do
+  @spec split_path(String.t(), boolean()) :: {String.t(), String.t(), String.t()} | nil
+  def split_path(path, existing_only \\ true) when is_binary(path) do
     with %{"db" => db, "rest" => rest} <- Regex.named_captures(@path_regex, path),
-         true <- sqlite_file?(db) do
+         true <- not existing_only or sqlite_file?(db) do
       {sub_path, query} =
         case String.split(rest, "?", parts: 2) do
           [sub_path, query] -> {sub_path, query}
@@ -59,10 +63,8 @@ defmodule CodingAgent.Tools.ReadSqlite do
   @doc "Whether `path` is a regular file starting with the SQLite header."
   @spec sqlite_file?(String.t()) :: boolean()
   def sqlite_file?(path) do
-    case File.open(path, [:read, :binary], &IO.binread(&1, byte_size(@magic))) do
-      {:ok, @magic} -> File.regular?(path)
-      _ -> false
-    end
+    File.regular?(path) and
+      match?({:ok, @magic}, File.open(path, [:read, :binary], &IO.binread(&1, byte_size(@magic))))
   end
 
   @spec read(String.t(), String.t(), String.t(), map(), reference() | nil, keyword()) ::
@@ -157,18 +159,9 @@ defmodule CodingAgent.Tools.ReadSqlite do
   # ── connection ─────────────────────────────────────────────────────────────
 
   defp with_connection(db_path, fun) do
-    case Sqlite3.open(db_path, mode: :readonly) do
-      {:ok, conn} ->
-        try do
-          :ok = Sqlite3.execute(conn, "PRAGMA query_only = 1")
-          run_with_deadline(conn, fn -> fun.(conn) end)
-        after
-          Sqlite3.close(conn)
-        end
-
-      {:error, reason} ->
-        {:error, "Cannot open SQLite database #{db_path}: #{inspect(reason)}"}
-    end
+    CodingAgent.Tools.Sqlite.with_connection(db_path, :readonly, fn conn ->
+      run_with_deadline(conn, fn -> fun.(conn) end)
+    end)
   end
 
   defp run_with_deadline(conn, fun) do
@@ -184,39 +177,6 @@ defmodule CodingAgent.Tools.ReadSqlite do
         {:error, "SQLite query exceeded #{div(@query_timeout_ms, 1000)}s and was interrupted"}
     end
   end
-
-  defp query(conn, sql, args \\ [], max_rows \\ :infinity) do
-    with {:ok, stmt} <- Sqlite3.prepare(conn, sql) do
-      try do
-        with :ok <- Sqlite3.bind(stmt, args),
-             {:ok, columns} <- Sqlite3.columns(conn, stmt),
-             {:ok, rows, truncated?} <- collect(conn, stmt, max_rows, []) do
-          {:ok, columns, rows, truncated?}
-        end
-      after
-        Sqlite3.release(conn, stmt)
-      end
-    end
-    |> case do
-      {:error, reason} -> {:error, "SQLite error: #{format_error(reason)}"}
-      ok -> ok
-    end
-  end
-
-  defp collect(_conn, _stmt, max, acc) when is_integer(max) and length(acc) >= max,
-    do: {:ok, Enum.reverse(acc), true}
-
-  defp collect(conn, stmt, max, acc) do
-    case Sqlite3.step(conn, stmt) do
-      {:row, row} -> collect(conn, stmt, max, [row | acc])
-      :done -> {:ok, Enum.reverse(acc), false}
-      :busy -> {:error, "database is busy"}
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
-  defp format_error(reason) when is_binary(reason), do: reason
-  defp format_error(reason), do: inspect(reason)
 
   # ── rendering ──────────────────────────────────────────────────────────────
 
@@ -310,28 +270,6 @@ defmodule CodingAgent.Tools.ReadSqlite do
       {:ok, "#{length(rows)} row(s)\n" <> render_table(columns, rows) <> cap}
     end
   end
-
-  defp table_sql(conn, table) do
-    case query(
-           conn,
-           "SELECT sql FROM sqlite_schema WHERE name = ? AND type IN ('table','view')",
-           [table]
-         ) do
-      {:ok, _, [[sql]], _} -> {:ok, sql || "(no schema SQL)"}
-      {:ok, _, [], _} -> {:error, "No table or view named '#{table}'"}
-      {:error, _} = error -> error
-    end
-  end
-
-  defp row_lookup(conn, table) do
-    case query(conn, "SELECT name FROM pragma_table_info(?) WHERE pk > 0 ORDER BY pk", [table]) do
-      {:ok, _, [[column]], _} -> {:ok, ident(column)}
-      {:ok, _, _, _} -> {:ok, "rowid"}
-      {:error, _} = error -> error
-    end
-  end
-
-  defp ident(name), do: ~s(") <> String.replace(name, ~s("), ~s("")) <> ~s(")
 
   defp render_table(columns, []), do: Enum.join(columns, " | ") <> "\n(no rows)"
 

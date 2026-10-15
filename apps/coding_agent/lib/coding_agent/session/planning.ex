@@ -519,8 +519,9 @@ defmodule CodingAgent.Session.Planning do
   defp plan_write?(_name, _params, _context), do: false
 
   defp plan_file?(path, context) do
-    path == context.plan_path or
-      (Path.dirname(path) == context.plan_dir and Path.extname(path) == ".md")
+    is_nil(CodingAgent.Tools.WriteSqlite.target(path)) and
+      (path == context.plan_path or
+         (Path.dirname(path) == context.plan_dir and Path.extname(path) == ".md"))
   end
 
   # Plan files are session-private server storage: write them locally even when

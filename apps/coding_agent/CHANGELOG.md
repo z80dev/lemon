@@ -4,6 +4,10 @@
 
 ### Added
 
+- `write` supports parameterized SQLite row inserts, primary-key/rowid updates
+  and keyed deletes in existing databases, with JSON scalar/column validation
+  and the normal mutation guards.
+
 - LSP supports preview/apply file renames, server reload, advertised capabilities,
   and bounded workspace diagnostics from running clients. Document language IDs
   now come from the shared LemonLsp server catalog.
