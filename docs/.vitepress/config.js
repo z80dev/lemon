@@ -117,6 +117,7 @@ export default {
           { text: "Web", link: "/tools/web" },
           { text: "Firecrawl", link: "/tools/firecrawl" },
           { text: "Media", link: "/tools/media" },
+          { text: "Browser", link: "/tools/browser" },
           { text: "LSP", link: "/tools/lsp" },
           { text: "omp delegate", link: "/tools/omp" },
           { text: "OpenAI-Compatible API", link: "/tools/openai-compatible-api" },
