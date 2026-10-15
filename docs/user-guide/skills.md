@@ -12,6 +12,11 @@ lemon learning --profile research --kind skill --limit 20
 lemon learning --kind project --json
 ```
 
+In Lemon Web, open **Learning** (`/learning`) for the same timeline grouped by UTC
+day. Choose a local profile ID and kind; filters stay in the URL. Previews are
+escaped plain text, never rendered as skill instructions or HTML. Refresh reloads
+current saved state. Memory/Skills links open existing management workflows.
+
 The timeline combines saved user/memory notes, repository learnings, reviewed
 source memories, skill drafts, installs, audits, and available usage/lifecycle
 timestamps. Select a local profile explicitly with `--profile`; no other profile's
