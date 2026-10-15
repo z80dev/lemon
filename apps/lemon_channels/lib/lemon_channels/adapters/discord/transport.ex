@@ -126,6 +126,7 @@ defmodule LemonChannels.Adapters.Discord.Transport do
              account_id: cfg_get(config, :account_id, "default"),
              allowed_guild_ids: parse_allowed_ids(cfg_get(config, :allowed_guild_ids)),
              allowed_channel_ids: parse_allowed_ids(cfg_get(config, :allowed_channel_ids)),
+             unauthorized_dm_behavior: cfg_get(config, :unauthorized_dm_behavior, "ignore"),
              deny_unbound_channels: cfg_get(config, :deny_unbound_channels, false),
              bot_user_id: nil,
              # Model picker state: {channel_id, thread_id, user_id} => picker
@@ -297,7 +298,7 @@ defmodule LemonChannels.Adapters.Discord.Transport do
   defp maybe_handle_message(message, state) do
     with true <- not_self_message?(message, state),
          {:ok, inbound} <- normalize_message_inbound(message, state),
-         true <- allowed_inbound?(inbound, state),
+         :ok <- authorize_message(inbound, state),
          true <- binding_allowed?(inbound, state),
          {:new, dedupe_ref} <- check_dedupe(inbound, state) do
       inbound = put_submission_dedupe_ref(inbound, dedupe_ref)
@@ -321,6 +322,10 @@ defmodule LemonChannels.Adapters.Discord.Transport do
         do: state,
         else: handle_inbound_message(state, inbound)
     else
+      {:unauthorized, inbound} ->
+        maybe_reply_pairing(inbound, state)
+        state
+
       :seen ->
         Logger.debug("discord: dropping duplicate message")
         state
@@ -333,6 +338,27 @@ defmodule LemonChannels.Adapters.Discord.Transport do
       Logger.warning("discord inbound message handling failed: #{inspect(error)}")
       state
   end
+
+  defp authorize_message(inbound, state) do
+    if allowed_inbound?(inbound, state), do: :ok, else: {:unauthorized, inbound}
+  end
+
+  defp maybe_reply_pairing(inbound, %{unauthorized_dm_behavior: "pair"}) do
+    with {:ok, text} <- LemonChannels.Pairing.reply("discord", inbound) do
+      api = cfg_get(LemonChannels.GatewayConfig.get(:discord, %{}), :api_mod, Message)
+
+      api.create(
+        inbound.meta[:channel_id],
+        %{content: text, allowed_mentions: safe_allowed_mentions()}
+      )
+    end
+  rescue
+    _ -> Logger.warning("discord pairing reply failed")
+  catch
+    _kind, _reason -> Logger.warning("discord pairing reply failed")
+  end
+
+  defp maybe_reply_pairing(_inbound, _state), do: :ok
 
   defp check_dedupe(inbound, state) do
     key = TransportShared.inbound_message_dedupe_key(inbound)
@@ -411,11 +437,37 @@ defmodule LemonChannels.Adapters.Discord.Transport do
         spawn(fn -> FileOperations.handle_attachment_auto_put(state, inbound) end)
       end
 
-    if should_ignore_for_trigger?(state, inbound, text) do
-      state
-    else
-      enqueue_buffer(state, inbound)
+    case Regex.run(~r/^\/(approve|deny)(?:\s+(.*))?$/s, String.trim(text)) do
+      [_, command | rest] ->
+        handle_approval_message(state, inbound, command, List.first(rest) || "")
+
+      _ ->
+        if should_ignore_for_trigger?(state, inbound, text) do
+          state
+        else
+          enqueue_buffer(state, inbound)
+        end
     end
+  end
+
+  defp handle_approval_message(state, inbound, command, args) do
+    meta = inbound.meta
+
+    interaction = %{
+      channel_id: meta[:thread_id] || meta[:channel_id],
+      guild_id: meta[:guild_id],
+      channel: if(meta[:thread_id], do: %{parent_id: meta[:channel_id]}, else: %{})
+    }
+
+    context = %{
+      surface: "discord",
+      account_id: state.account_id,
+      approval_authorize: Approval.text_authorizer(state, interaction)
+    }
+
+    {_, text} = LemonChannels.PortableCommand.handle(command, args, context)
+    _ = Outbound.send_with_components(meta[:thread_id] || meta[:channel_id], text, [], [])
+    state
   end
 
   defp submit_buffer(buffer, state) do
@@ -758,7 +810,8 @@ defmodule LemonChannels.Adapters.Discord.Transport do
       "reset" ->
         handle_new_session(interaction, state, option_value(interaction, "project"))
 
-      command when command in ~w(status usage agents tasks compress commands help bg btw) ->
+      command
+      when command in ~w(status usage agents tasks compress commands help bg btw approve deny) ->
         handle_portable_interaction(interaction, state, command)
 
       "checkpoint" ->
@@ -958,6 +1011,7 @@ defmodule LemonChannels.Adapters.Discord.Transport do
         "help" -> option_value(interaction, "filter")
         "bg" -> option_value(interaction, "prompt")
         "btw" -> option_value(interaction, "question")
+        name when name in ["approve", "deny"] -> option_value(interaction, "id")
         _ -> ""
       end
 
@@ -971,6 +1025,8 @@ defmodule LemonChannels.Adapters.Discord.Transport do
 
       context = %{
         surface: "discord",
+        account_id: state.account_id,
+        approval_authorize: Approval.text_authorizer(state, interaction),
         session_key: session_key,
         cwd: BindingResolver.resolve_cwd(scope)
       }
@@ -2804,7 +2860,12 @@ defmodule LemonChannels.Adapters.Discord.Transport do
         set -> is_integer(channel_id) and MapSet.member?(set, channel_id)
       end
 
-    guild_allowed? and channel_allowed?
+    if inbound.peer.kind == :dm and Map.get(state, :unauthorized_dm_behavior, "ignore") == "pair" do
+      is_struct(Map.get(state, :allowed_channel_ids), MapSet) and
+        MapSet.member?(state.allowed_channel_ids, channel_id)
+    else
+      guild_allowed? and channel_allowed?
+    end
   end
 
   defp binding_allowed?(%InboundMessage{} = inbound, state) do

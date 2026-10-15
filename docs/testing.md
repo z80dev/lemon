@@ -121,7 +121,7 @@ responsibilities. No live provider calls are needed for `premerge` or `changed`.
 
 | Workflow | Trigger | What it runs |
 | --- | --- | --- |
-| `ci.yml` | every PR and push to `main`; called by `release.yml` and `nightly.yml`; dispatch | `changes` → `scripts/changed_tests` (PRs only); `check` → `scripts/test quality` + `eval-fast`; `test (n/N)` → `scripts/test fast --partitions N [selected app test dirs]`; `dialyzer` (advisory full run plus the `scripts/dialyzer_gate.sh` allowlist gate); `sim-bench` (`scripts/ci_sim_bench.sh`); `install` → `scripts/verify_source_install` + `scripts/verify_install_script`; `clients` → `scripts/test clients`; `wasm-runtime`; `history` (PRs only); `CI result` (the one status to require; summarizes failures) |
+| `ci.yml` | every PR and push to `main`; called by `release.yml` and `nightly.yml`; dispatch | `changes` → `scripts/changed_tests` (PRs only); `check` → `scripts/test quality` + `eval-fast` (PRs: `quality --base origin/<base>`, which formats and credo-checks only changed files unless the diff is full scope; Credo's cross-file checks are authoritative on `main`'s full run); `test (n/N)` → `scripts/test fast --partitions N [selected app test dirs]`; `dialyzer` (advisory full run plus the `scripts/dialyzer_gate.sh` allowlist gate); `sim-bench` (`scripts/ci_sim_bench.sh`); `install` → `scripts/verify_source_install` + `scripts/verify_install_script`; `clients` → `scripts/test clients`; `wasm-runtime`; `history` (PRs only); `CI result` (the one status to require; summarizes failures) |
 | `nightly.yml` | daily + dispatch | the full `ci.yml`; `scripts/test coverage`; the prompt/skill/overflow regression files with `--repeat-until-failure 5`; `scripts/test eval-fast` with 20 iterations; the `nightly-red` issue |
 | `product-smoke.yml` | PRs touching `apps/**`, weekly, dispatch | Boots a `lemon_runtime_full` release against a local deterministic provider |
 | `release-smoke.yml` | release paths, weekly, dispatch | Release assembly and boot matrix |
@@ -227,10 +227,25 @@ Coordinator cancellation fixtures wait for tracked admission guardians and sessi
 to exit before asserting an empty active set: a bounded batch result is not a
 synchronous shutdown receipt.
 
+Coordinator timeout/abort protocol fixtures use controlled sessions, wait for
+prompt acknowledgements, deliver timeout messages explicitly and monitor cleanup.
+Terminal-event fixtures supply empty tools, extension inventory and MCP tools;
+they exercise event handling rather than unrelated resource discovery.
+Delegated completion fixtures finalize the durable run summary before publishing
+the Bus event, including late reconciliation and store-only poll recovery.
+Environment cap/ordering fixtures keep the full filesystem traversal but inject
+its probe execution; they must not mistake the valid production deadline result
+for deterministic rendering. Large file fixtures run synchronously and use raw
+writes to avoid contending with async tests through the shared file server.
+
 LSP owner-lifecycle fixtures monitor the scoped client through exit, then assert
 that its exact managed server ID is gone. Unrelated idle-server cleanup can change
 the shared manager's active count concurrently; global count deltas are not an
 ownership assertion.
+
+Recency/deduplication fixtures use explicit ingestion timestamps, not consecutive
+wall-clock reads. Exercise reversed input and equal-timestamp ID tie-breaking
+separately so crossing a millisecond cannot change the expected winner.
 
 Submission-shape fixtures use per-test run supervisors and capturing run processes,
 not real gateway work that can finish during another test's global count assertions.

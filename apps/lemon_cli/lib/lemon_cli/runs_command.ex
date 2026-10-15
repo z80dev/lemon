@@ -4,13 +4,76 @@ defmodule LemonCli.RunsCommand do
   @run_statuses ~w(completed aborted crashed error)
   @cron_statuses ~w(pending running completed failed timeout aborted)
 
+  def run(["show" | args]), do: show(args)
   def run(["active" | args]), do: execute(:active, args)
   def run(["list" | args]), do: execute(:recent, args)
   def run(args), do: execute(:recent, args)
 
   def run_cron(["runs" | args]), do: execute(:cron, args)
   def run_cron(["status" | args]), do: cron_status(args)
-  def run_cron(_args), do: usage("Use lemon cron runs [options] or lemon cron status [--json].")
+  def run_cron(args), do: LemonCli.CronCommand.run(args)
+
+  defp show(args) do
+    case OptionParser.parse(args, strict: [json: :boolean]) do
+      {opts, [run_id], []} when byte_size(run_id) in 1..256 ->
+        show_run(run_id, opts[:json] == true)
+
+      _ ->
+        usage("Use lemon runs show <runId> [--json].")
+    end
+  end
+
+  defp show_run(run_id, json?) do
+    case request("runs.timeline.get", %{"runId" => run_id}) do
+      {:ok, %{"entries" => entries} = timeline} when is_list(entries) ->
+        if json?, do: IO.puts(Jason.encode!(timeline)), else: print_timeline(timeline)
+        0
+
+      {:ok, _} ->
+        failure(:invalid_response, json?)
+
+      {:error, reason} ->
+        failure(reason, json?)
+    end
+  end
+
+  defp print_timeline(timeline) do
+    entries = timeline["entries"]
+
+    origin =
+      case entries do
+        [first | _] -> first["atMs"]
+        [] -> 0
+      end
+
+    IO.puts("Run #{clean(timeline["runId"])}")
+
+    Enum.each(entries, fn entry ->
+      marker =
+        case entry["ok"] do
+          true -> "[ok]"
+          false -> "[fail]"
+          _ -> "[#{clean(entry["status"])}]"
+        end
+
+      IO.puts(
+        "+#{duration(entry["atMs"] - origin)} #{marker} #{clean(entry["label"])}" <>
+          " · #{clean(entry["status"])} · #{duration(entry["durationMs"])}"
+      )
+    end)
+
+    usage = timeline["usage"] || %{}
+    tokens = get_in(usage, ["tokens", "total"])
+
+    if tokens,
+      do:
+        IO.puts(
+          "Usage: #{tokens} tokens · cost USD #{cost(usage["costUsd"])} · #{clean(usage["model"])}"
+        )
+
+    if timeline["truncated"],
+      do: IO.puts("Timeline truncated: showing the latest 500 entries from bounded history.")
+  end
 
   defp cron_status(args) do
     case OptionParser.parse(args, strict: [json: :boolean]) do

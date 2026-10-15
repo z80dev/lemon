@@ -26,6 +26,7 @@ import { saveDefaultModel } from "../../config.ts";
 import type { ControlPlaneMethods } from "../../protocol/methods.ts";
 import type { AppStore } from "../../store/app-store.ts";
 import type { SessionStore } from "../../store/session-store.ts";
+import { refreshSetupStatus } from "../../store/setup.ts";
 import type { NoticeLevel } from "../../store/transcript-model.ts";
 import {
 	confirmAction,
@@ -101,7 +102,10 @@ export class ModelPicker {
 		try {
 			const entries = await ensureModels({ store: this.#host.store, methods: this.#host.methods });
 			if (entries.length === 0) {
-				this.#host.notice("no models to choose from (models.list returned nothing)", "warning");
+				this.#host.notice(
+					"no models to choose from (models.list returned nothing) — run `lemon setup provider` to add a provider",
+					"warning",
+				);
 				return;
 			}
 			const index = entries.findIndex((entry) => isCurrent(entry, session.model));
@@ -119,7 +123,10 @@ export class ModelPicker {
 	async open(): Promise<void> {
 		this.#entries = await ensureModels({ store: this.#host.store, methods: this.#host.methods });
 		if (this.#entries.length === 0) {
-			this.#host.notice("no models to choose from (models.list returned nothing)", "warning");
+			this.#host.notice(
+				"no models to choose from (models.list returned nothing) — run `lemon setup provider` to add a provider",
+				"warning",
+			);
 			return;
 		}
 		this.#persistGlobally = false;
@@ -320,6 +327,7 @@ export class ModelPicker {
 				"local",
 			);
 			this.#host.refreshStatus();
+			await refreshSetupStatus(this.#host.store, this.#host.methods);
 			this.#host.notice(`model: ${modelId} (session ${session.key})`);
 		} catch (error) {
 			this.#host.notice(
@@ -334,6 +342,7 @@ export class ModelPicker {
 		try {
 			await saveDefaultModel(provider, modelId);
 			this.#host.notice(`default model: ${modelId}`);
+			await refreshSetupStatus(this.#host.store, this.#host.methods);
 		} catch (error) {
 			this.#host.notice(
 				`default not persisted: ${error instanceof Error ? error.message : String(error)}`,

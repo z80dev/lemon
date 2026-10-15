@@ -300,6 +300,16 @@ approval ID plus a fingerprint of the authoritative pending snapshot. Callback
 authorization preserves account/chat/topic, re-fetches the request, rejects
 expiry and atomically consumes that exact snapshot. A rejected, stale, replayed,
 foreign or unavailable decision never says “Recorded” or removes the controls.
+
+If buttons are unavailable, Telegram and Discord also accept `/approve [id]`
+and `/deny [id]` (including Discord slash commands). With no ID, a single pending
+request in the current chat/topic is selected. Multiple pending requests are
+listed with unique short IDs; supply an ID or unique prefix rather than guessing.
+`/approve` approves **once only**, never a standing policy. Text decisions reuse
+the button authorization, snapshot fingerprint and atomic consume; expired,
+resolved, foreign-chat/account/topic or unavailable requests cannot be consumed.
+The current button policy is chat-scoped, not restricted to the initiating user:
+other authorized members of that same chat can resolve either way.
 Telegram and Discord outbound adapters reject accounts other than the configured
 account instead of silently using the default bot/client.
 
@@ -615,11 +625,31 @@ LemonChannels.VoiceTranscriber.transcribe(%{
 
 Add `LemonChannels.Adapters.Telegram` to `config :lemon_channels, :adapters`. Required: Telegram bot token (via `LemonCore.Secrets` or env vars).
 
+#### Owner-approved DM pairing
+
+Set `unauthorized_dm_behavior = "pair"` in `[gateway.telegram]` and restart to
+offer unknown human DMs an expiring code. The owner runs
+`lemon pairing approve telegram <CODE>` locally, then restarts to apply the
+allowlist. The default `"ignore"` preserves today's setup hint/drop behavior;
+groups and callbacks never mint codes. See [pairing security and limits](../../docs/config.md#telegram-and-discord-dm-pairing-codes).
+
+
 ### Discord
 
 **Plugin ID**: `"discord"` | **Chunk limit**: 2000
 
 Supports edit, delete, images, files, and threads.
+
+#### Owner-approved DM pairing
+
+Set `unauthorized_dm_behavior = "pair"` in `[gateway.discord]` and restart.
+Unknown human DMs receive a code; the local owner uses
+`lemon pairing approve discord <CODE>` to append its DM channel ID to
+`allowed_channel_ids`, then restarts. Pair mode requires explicit DM allowlisting;
+guild channels retain their existing restrictions and cannot request codes.
+The default `"ignore"` preserves existing authorization.
+See [pairing security and limits](../../docs/config.md#telegram-and-discord-dm-pairing-codes).
+
 
 #### Module Layout
 

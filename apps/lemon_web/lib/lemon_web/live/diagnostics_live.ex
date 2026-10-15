@@ -134,9 +134,10 @@ defmodule LemonWeb.DiagnosticsLive do
       clients: integer(connections["active"]),
       operators: integer(connections["operators"]),
       nodes: integer(connections["nodes"]),
-      active_runs: integer(runs["active"]),
-      queued_runs: integer(runs["queued"]),
-      completed_today: integer(runs["completed_today"]),
+      active_runs: run_count(runs["active"]),
+      queued_runs: run_count(runs["queued"]),
+      completed_today: run_count(runs["completed_today"]),
+      failed_today: run_count(runs["failed_today"]),
       channels_configured: identifiers(channels["configured"]),
       channels_connected: identifiers(channels["connected"]),
       skills_installed: integer(skills["installed"]),
@@ -263,6 +264,9 @@ defmodule LemonWeb.DiagnosticsLive do
   defp integer(value) when is_integer(value) and value >= 0, do: value
   defp integer(_value), do: 0
 
+  defp run_count(value) when is_integer(value) and value >= 0, do: value
+  defp run_count(_value), do: "unknown"
+
   defp number(value) when is_number(value) and value >= 0, do: value * 1.0
   defp number(_value), do: 0.0
 
@@ -303,7 +307,7 @@ defmodule LemonWeb.DiagnosticsLive do
       <section aria-label="Runtime" class="mb-5 grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
         <.stat label="Uptime" icon="clock" value={health_value(@health, &duration(&1.uptime_ms))} />
         <.stat label="Memory" icon="gauge" value={health_value(@health, &"#{round(&1.memory_mb)} MB")} />
-        <.stat label="Active runs" icon="activity" value={status_value(@status, & &1.active_runs)} hint={status_hint(@status, &"#{&1.queued_runs} queued · #{&1.completed_today} today")} />
+        <.stat label="Active runs" icon="activity" value={status_value(@status, & &1.active_runs)} hint={status_hint(@status, &"#{&1.queued_runs} queued · #{&1.completed_today} today · #{&1.failed_today} failed today")} />
         <.stat label="Clients" icon="users" value={status_value(@status, & &1.clients)} hint={status_hint(@status, &"#{&1.operators} operators")} />
         <.stat label="Nodes" icon="server" value={status_value(@status, & &1.nodes)} hint="Paired execution nodes" />
         <.stat label="Skills" icon="sparkles" value={status_value(@status, & &1.skills_enabled)} hint={status_hint(@status, &"#{&1.skills_installed} installed")} />
@@ -594,7 +598,7 @@ defmodule LemonWeb.DiagnosticsLive do
         ),
         if(is_map(status),
           do:
-            "runs: #{status.active_runs} active, #{status.queued_runs} queued, #{status.completed_today} today · clients #{status.clients} · nodes #{status.nodes} · channels #{length(status.channels_connected)}/#{length(status.channels_configured)} connected · skills #{status.skills_enabled}/#{status.skills_installed} enabled",
+            "runs: #{status.active_runs} active, #{status.queued_runs} queued, #{status.completed_today} today, #{status.failed_today} failed today · clients #{status.clients} · nodes #{status.nodes} · channels #{length(status.channels_connected)}/#{length(status.channels_configured)} connected · skills #{status.skills_enabled}/#{status.skills_installed} enabled",
           else: nil
         ),
         if(is_map(status),

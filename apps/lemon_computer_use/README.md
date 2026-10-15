@@ -11,8 +11,10 @@ stdio MCP server. Opt-in (`LEMON_COMPUTER_USE_ENABLED=true`).
   `cua_js_reset` agent tools, registered through `LemonAgent.ToolRegistry`.
 - `LemonComputerUse.ContextContributor` — the runtime's instructions as a
   system-prompt section, registered through `LemonAgent.ContextRegistry`.
-- `LemonComputerUse.Approval` — native-app approval requests as
-  `LemonCore.ExecApprovals` requests.
+- `LemonComputerUse.Approval` — native-app and website-origin approval requests as
+  `LemonCore.ExecApprovals` requests. Lemon's own native apps and loopback origins
+  on the configured control-plane/web ports are declined without asking; tests
+  derive these origins from runtime configuration rather than assuming defaults.
 - `LemonComputerUse.Config` / `Env` — settings.
 
 See the [tool reference](../../docs/tools/computer-use.md).

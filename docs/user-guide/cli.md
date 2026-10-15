@@ -55,6 +55,33 @@ records or an unknown start time also produce null fields; mixed models/provider
 have a null model/provider, and any unpriced occurrence makes the run's cost null
 and `priceKnown` false.
 
+Use `/runs <runId>` for the same per-run timeline as `lemon runs show <runId>`;
+`/runs` and `/runs <count>` retain the active/recent list. Run IDs are nonnumeric;
+a numeric argument continues to select a list count.
+
+## Channel pairing
+
+```bash
+lemon pairing list
+lemon pairing approve telegram <CODE>
+lemon pairing approve discord <CODE>
+lemon pairing deny telegram <CODE>
+```
+
+For channels configured with `unauthorized_dm_behavior = "pair"`, unknown human
+DMs receive a single-use code valid for one hour. Confirm the sender's identity
+out of band, then approve from the local operator CLI. `list` displays platform,
+masked chat ID, name and age, never codes. `deny` consumes without adding access.
+Wrong-platform, expired and already-used codes fail without changing config.
+
+These commands reuse/start the local runtime and require operator pairing access
+over direct loopback. Approval appends to the user gateway allowlist using the
+same patcher as `gateway setup`; project overrides still win. **Restart Lemon
+after approval** to refresh adapters' authorization state. Success exits 0,
+operation failures exit 1, and usage errors exit 2. No code is echoed in output.
+See [channel configuration](../config.md#telegram-and-discord-dm-pairing-codes)
+for default behavior, rate limits and lost-code handling.
+
 ## Commands and availability
 
 ### Launcher lifecycle commands
@@ -117,6 +144,8 @@ for availability, single-flight behavior, and release/custom-launcher limits.
 lemon runs --status error --since 1h --limit 20
 lemon runs list --session agent:operator:main --agent operator --json
 lemon runs active
+lemon runs show RUN_ID
+lemon runs show RUN_ID --json
 lemon cron status --json
 lemon cron runs --job JOB_ID --status failed --since 2d
 lemon logs -n 50 --level warning
@@ -139,9 +168,33 @@ at most the newest 200 history rows returned by the runtime, not an unbounded
 archive. `--since` accepts positive integer minutes (`30m`), hours (`1h`), or
 days (`2d`), relative to invocation time; list limits are 1–200 (default 50).
 
+`runs show <runId> [--json]` shows what one run did: loop/turn and answer-finalize
+events, tool calls paired with their completion, and child subagents. Human output
+uses times relative to the first displayed entry, recorded durations and
+`[ok]`/`[fail]` markers; an unmatched tool dispatch stays `[pending]`, not successful.
+Available run usage is included. The latest 500 entries are shown chronologically
+from a bounded 1,000-event history window, with an explicit truncation notice.
+Labels exclude tool arguments/results and private conversation content.
+Unknown/expired runs and failed storage queries are errors, not empty timelines.
+See the [timeline method reference](../reference/control-plane.md#runstimelineget).
+
 `cron status` reports job totals, enabled jobs, and `failingJobs` (jobs with a
 nonzero persisted failure streak). Use `--json` for the complete cron status
 projection. See [cron failure alerts](reminders-and-heartbeats.md#failure-alerts-and-recovery).
+
+`lemon cron list [--failing] [--json]` lists job IDs, names, schedules, enabled
+state, next-run timestamps, failure streaks, and last statuses. `--failing` keeps
+jobs with a nonzero failure streak. No cron command starts a runtime.
+
+Use `lemon cron pause <id|name>`, `resume <id|name>`, or `run <id|name>` to
+disable scheduled launches, re-enable them, or trigger a manual run through the
+runtime's normal validation. Names match exactly, case-insensitively; duplicate
+names are refused with candidate IDs. Exact IDs take precedence.
+
+`lemon cron remove <id|name>` asks for confirmation. Non-interactive callers
+must explicitly pass `--yes`; cancellation never removes the job. The TUI offers
+the same management actions with `/cron` (list by default); `/cron remove`
+opens a confirmation picker with Cancel selected first.
 
 `cron runs` uses the cron status vocabulary: `pending`, `running`, `completed`,
 `failed`, `timeout`, and `aborted`. Without `--job`, it queries each currently
@@ -182,7 +235,7 @@ packaged releases:
 | `blueprints` | Source and release | Starts the local runtime through the launcher if it is not healthy. |
 | `profile` | Source and release | `profile chat` starts the local runtime through the launcher if it is not healthy. |
 | `backup`, `context`, `sessions`, `learn` | Source and release | Manage backups, bounded context, durable sessions, and learning. |
-| `runs`, `cron runs`, `logs` | Source and release | Read-only operator inspection; requires a running runtime except for the redacted launcher-log fallback. |
+| `runs`, `cron`, `logs` | Source and release | Inspect runs/logs and manage scheduled jobs; requires a running runtime except for the redacted launcher-log fallback. |
 | `omp` | Source and release | Start, watch, steer, and resume omp coding-agent sessions owned by the runtime; starts the local runtime through the launcher if it is not healthy. |
 | `update` | Source and release | Release: full managed-update commands; source: `check` and `history` only, while plan/apply/rollback fail closed. Bare or unknown source update forms do not forward to Mix. Use `mix lemon.update` directly for source configuration migration and bundled-skill sync. |
 | `completion` | Source and release | Generate completion for the current launcher's available commands. |

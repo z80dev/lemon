@@ -8,6 +8,7 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
   alias LemonChannels.Adapters.Discord.TriggerMode
   alias LemonChannels.Discord.KnownTargetStore
   alias LemonCore.Dedupe.Ets
+  alias LemonCore.Events.ApprovalPending
   alias LemonCore.Store
 
   @bot_user_id 1_476_753_643_834_183_690
@@ -61,6 +62,13 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
       end
 
       {:ok}
+    end
+  end
+
+  defmodule FailingPairingAPI do
+    def create(_channel_id, params) do
+      send(self(), {:failed_pairing_reply, params.content})
+      exit({:delivery_failed, params.content})
     end
   end
 
@@ -126,6 +134,79 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
   end
 
   @gateway_config_key :"Elixir.LemonGateway.Config"
+
+  test "pairing API exits cannot put plaintext codes into crash logs" do
+    with_discord_api(fn ->
+      Application.put_env(:lemon_gateway, @gateway_config_key, %{
+        discord: %{api_mod: FailingPairingAPI}
+      })
+
+      state = Map.put(discord_message_state(), :unauthorized_dm_behavior, "pair")
+      message = discord_message("1503803470493257896", "hello") |> Map.delete("guild_id")
+
+      log =
+        capture_log(fn ->
+          assert {:noreply, ^state} =
+                   Transport.handle_info({:discord_event, {:MESSAGE_CREATE, message, nil}}, state)
+        end)
+
+      assert_receive {:failed_pairing_reply, reply}
+      assert [_, code] = Regex.run(~r/Pairing code: ([A-HJ-NP-Z2-9]{8})/, reply)
+      assert log =~ "pairing reply failed"
+      refute log =~ code
+      assert {:ok, _} = LemonChannels.Pairing.consume("discord", code)
+    end)
+  end
+
+  test "default ignore preserves guild restrictions on non-allowlisted DMs" do
+    with_discord_api(fn ->
+      state =
+        discord_message_state()
+        |> Map.put(:allowed_guild_ids, MapSet.new([1]))
+        |> Map.put(:allowed_channel_ids, MapSet.new([1_475_727_417_372_049_419]))
+
+      message = discord_message("1503803470493257895", "hello") |> Map.delete("guild_id")
+
+      assert {:noreply, ^state} =
+               Transport.handle_info({:discord_event, {:MESSAGE_CREATE, message, nil}}, state)
+
+      refute_receive {:discord_create, _, _}, 50
+    end)
+  end
+
+  test "opt-in pairing replies once to an unknown human DM without routing it" do
+    with_discord_api(fn ->
+      with_router_bridge(fn ->
+        state = Map.put(discord_message_state(), :unauthorized_dm_behavior, "pair")
+        message = discord_message("1503803470493257893", "hello") |> Map.delete("guild_id")
+        event = {:discord_event, {:MESSAGE_CREATE, message, nil}}
+        assert {:noreply, ^state} = Transport.handle_info(event, state)
+        assert_receive {:discord_create, _, %{content: reply}}
+        assert [_, code] = Regex.run(~r/Pairing code: ([A-HJ-NP-Z2-9]{8})/, reply)
+        assert reply =~ "lemon pairing approve discord #{code}"
+        assert {:noreply, ^state} = Transport.handle_info(event, state)
+        refute_receive {:discord_create, _, _}, 50
+        refute_receive {:submit_run, _}, 50
+        assert {:ok, %{platform: "discord"}} = LemonChannels.Pairing.consume("discord", code)
+      end)
+    end)
+  end
+
+  test "opt-in pairing never replies to unknown guild messages" do
+    with_discord_api(fn ->
+      state =
+        discord_message_state()
+        |> Map.put(:unauthorized_dm_behavior, "pair")
+        |> Map.put(:allowed_channel_ids, MapSet.new())
+
+      message = discord_message("1503803470493257894", "hello")
+
+      assert {:noreply, ^state} =
+               Transport.handle_info({:discord_event, {:MESSAGE_CREATE, message, nil}}, state)
+
+      refute_receive {:discord_create, _, _}, 50
+    end)
+  end
 
   test "ignores messages authored by the bot" do
     state = %{bot_user_id: @bot_user_id}
@@ -383,10 +464,65 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
     assert commands["stop"].description == "Alias for /cancel"
   end
 
+  test "text deny bypasses mention triggers and never becomes a prompt" do
+    with_discord_api(fn ->
+      state = discord_message_state()
+      channel_id = 1_475_727_417_372_049_419
+      pending = text_approval(channel_id)
+      message = discord_message("1503803470493299991", "/deny #{pending.id}", channel_id)
+
+      assert {:noreply, ^state} =
+               Transport.handle_info({:discord_event, {:MESSAGE_CREATE, message, nil}}, state)
+
+      assert_receive {:discord_create, ^channel_id, %{content: "Approval: Denied"}}
+      assert {:ok, nil} = LemonCore.ExecApprovalStore.fetch_pending(pending.id)
+    end)
+  end
+
+  test "slash approve selects the only pending approval once" do
+    with_interaction_responder(fn ->
+      state = discord_message_state()
+      slash = interaction("approve", [])
+      pending = text_approval(String.to_integer(slash.channel_id))
+
+      assert {:noreply, ^state} =
+               Transport.handle_info({:discord_event, {:INTERACTION_CREATE, slash, nil}}, state)
+
+      assert_receive {:interaction_response, ^slash,
+                      %{type: 4, data: %{content: "Approval: Approved (once)", flags: 64}}}
+
+      assert {:ok, nil} = LemonCore.ExecApprovalStore.fetch_pending(pending.id)
+    end)
+  end
+
+  defp text_approval(channel_id) do
+    id = LemonCore.Id.approval_id()
+
+    pending =
+      ApprovalPending.new(%{
+        id: id,
+        run_id: "run_#{id}",
+        session_key: "agent:test:child:#{id}",
+        tool: "bash",
+        action: %{command: "pwd"}
+      })
+
+    target = %{
+      channel_id: "discord",
+      account_id: "default",
+      peer: %{kind: :group, id: to_string(channel_id), thread_id: nil}
+    }
+
+    :ok = LemonChannels.Supervision.bind_run(pending.run_id, pending.session_key, target)
+    :ok = LemonCore.ExecApprovalStore.put_pending(id, pending)
+    on_exit(fn -> LemonCore.ExecApprovalStore.delete_pending(id) end)
+    pending
+  end
+
   test "exports portable status, task, compaction, help, and side-run commands" do
     commands = Map.new(Transport.slash_commands(), &{&1.name, &1})
 
-    for name <- ~w(status usage agents tasks compress commands help bg btw) do
+    for name <- ~w(status usage agents tasks compress commands help bg btw approve deny) do
       assert Map.has_key?(commands, name)
     end
 

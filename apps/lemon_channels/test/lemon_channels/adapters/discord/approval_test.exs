@@ -65,6 +65,47 @@ defmodule LemonChannels.Adapters.Discord.ApprovalTest do
     %{pending: pending, target: target, state: state, interaction: interaction, opts: opts}
   end
 
+  test "text commands use the button location authorization without a component message", c do
+    interaction = Map.delete(c.interaction, :message)
+
+    context = %{
+      surface: "discord",
+      account_id: "default",
+      approval_authorize: Approval.text_authorizer(c.state, interaction)
+    }
+
+    wrong = %{
+      context
+      | approval_authorize: Approval.text_authorizer(c.state, %{interaction | channel_id: "999"})
+    }
+
+    assert {:error, message} =
+             LemonChannels.PortableCommand.handle("approve", c.pending.id, wrong)
+
+    assert message =~ "No matching pending"
+
+    assert {:ok, "Approval: Approved (once)"} =
+             LemonChannels.PortableCommand.handle("approve", c.pending.id, context)
+
+    assert {:error, message} = LemonChannels.PortableCommand.handle("deny", c.pending.id, context)
+    assert message =~ "already been resolved"
+  end
+
+  test "text deny accepts a unique prefix", c do
+    context = %{
+      surface: "discord",
+      account_id: "default",
+      approval_authorize: Approval.text_authorizer(c.state, Map.delete(c.interaction, :message))
+    }
+
+    assert {:ok, "Approval: Denied"} =
+             LemonChannels.PortableCommand.handle(
+               "deny",
+               String.slice(c.pending.id, 0..-2//1),
+               context
+             )
+  end
+
   test "request uses matching account, exact target and once/deny Outbox components", c do
     assert :ok = Approval.send(c.state, %{approval_id: c.pending.id, pending: c.pending}, c.opts)
 

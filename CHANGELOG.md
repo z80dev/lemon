@@ -10,6 +10,19 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Pin skill-synthesis candidate timestamps in ordering fixtures and cover
+  recency/ID tie-breaking independently of wall-clock scheduling.
+
+- Derive computer-use approval test origins from configured control-plane/web
+  ports so non-default test listeners retain Lemon self-surface protection.
+
+- Run status preserves unavailable counts as unknown instead of zero and restores
+  UTC daily terminal totals after tracker restarts, including crashed runs.
+- Preserve delegated run identity when polling recovers a durable completion, so
+  the task and RunGraph both become terminal even without a live watcher.
+- Make coordinator/session/watcher/environment regressions synchronize with their
+  actual lifecycle and isolate resource discovery from protocol fixtures.
+
 - Assert LSP owner cleanup by the exact managed server ID rather than a global
   active-count delta that races unrelated idle-server cleanup.
 
@@ -33,6 +46,21 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Added
 
+- Status exposes `failed_today` and per-field run-count availability, with
+  null-safe TUI and web diagnostics.
+
+- Manage scheduled jobs with `lemon cron` and TUI `/cron`: inspect failures,
+  pause/resume, trigger manually, and remove with confirmation by ID or exact name.
+- Setup offers local inference servers and custom OpenAI-compatible endpoints,
+  optional encrypted keys, and consent-based model discovery with manual fallback.
+
+- TUI startup shows pending setup steps above the prompt, hides them once ready,
+  and points empty model lists to `lemon setup provider`; `setup.status` exposes
+  read-only, content-free readiness for clients.
+
+- Telegram and Discord support chat-scoped `/approve [id]` and `/deny [id]`
+  fallbacks for approval buttons, with unique prefixes and safe disambiguation.
+
 - Lemon Bot for Mac has an optional desktop pet: an original pixel lemon that
   floats above all windows and Spaces, reacts to thinking, tool work, approvals
   and questions, completions, failures and disconnects, and opens the relevant
@@ -43,6 +71,12 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 - The lemon desktop pet artwork and its generator are dedicated to the public
   domain under CC0 1.0 (the rest of Lemon stays MIT). The generator can export a
   reproducible Codex pet ZIP with the license included, ready for pet galleries.
+
+- Inspect per-run lifecycle, tool outcomes, child tasks and usage with
+  `lemon runs show <runId>` and TUI `/runs <runId>`, backed by redacted completion events.
+
+- Opt-in, expiring Telegram/Discord DM pairing codes with local-owner approval
+  through `lemon pairing`, replacing manual allowlist edits.
 
 - Discord voice notes and audio attachments can use the shared voice transcription
   settings, with bounded CDN downloads and URL fallback on failure.

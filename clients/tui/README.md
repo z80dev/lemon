@@ -49,6 +49,15 @@ the TUI, or use the `lemon` launcher to load its port-scoped token file.
 Use `/status` for the focused chat's profile and model, and `/model` to choose
 a model when none is selected.
 
+After connecting, a readiness card above the prompt lists unfinished setup steps
+and their exact recovery commands: `lemon setup` for configuration or secrets,
+`lemon setup provider` for a usable default provider/model. This is an offline,
+read-only check on the daemon; keyless local providers and environment credentials
+use the same readiness rules as setup. The card disappears once ready, rechecking
+on reconnect and when opening or changing models. Older daemons without
+`setup.status` show no card or error. Empty model lists also point to
+`lemon setup provider`.
+
 ## Features
 
 - Streaming markdown using pi-tui's native Tern surface or bounded terminal

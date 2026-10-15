@@ -166,7 +166,7 @@ defmodule LemonComputerUse.ApprovalTest do
 
     assert %{action: "decline"} =
              Approval.answer(
-               origin_request("http://127.0.0.1:4040"),
+               origin_request("http://127.0.0.1:#{LemonCore.Runtime.Env.control_port()}"),
                %{approval_request_fun: ask},
                "id"
              )

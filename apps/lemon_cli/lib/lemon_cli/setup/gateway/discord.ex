@@ -9,6 +9,7 @@ defmodule LemonCli.Setup.Gateway.Discord do
 
   @behaviour LemonCli.Setup.Gateway.Adapter
 
+  alias LemonCli.Setup.Gateway.AllowlistConfig
   alias LemonCore.Config.{Modular, TomlPatch}
   alias LemonCore.Httpc
   alias LemonCore.Secrets
@@ -261,8 +262,6 @@ defmodule LemonCli.Setup.Gateway.Discord do
   end
 
   defp patch_gateway_config(content, secret_key, scope) do
-    allowed_channel_ids = Enum.join(scope.allowed_channel_ids, ", ")
-
     content
     |> TomlPatch.upsert_raw_line("gateway", "enable_discord", "enable_discord = true")
     |> TomlPatch.upsert_string("gateway.discord", "bot_token_secret", secret_key)
@@ -271,11 +270,7 @@ defmodule LemonCli.Setup.Gateway.Discord do
       "default_channel_id",
       "default_channel_id = #{scope.default_channel_id}"
     )
-    |> TomlPatch.upsert_raw_line(
-      "gateway.discord",
-      "allowed_channel_ids",
-      "allowed_channel_ids = [#{allowed_channel_ids}]"
-    )
+    |> AllowlistConfig.patch("discord", scope.allowed_channel_ids)
     |> TomlPatch.upsert_raw_line(
       "gateway.discord",
       "deny_unbound_channels",
