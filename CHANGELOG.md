@@ -8,7 +8,20 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
-No unreleased changes yet.
+### Added
+
+- Interactive setup audits an existing Hermes home and offers a confirmed,
+  backed-up import without secrets or overwriting conflicts.
+
+### Changed
+
+- Setup finishes with a first coding prompt, a success check, optional Telegram
+  and Web UI commands, and an offer to open Lemon immediately after verification.
+
+### Fixed
+
+- Hermes provider-config import now reports conflicts instead of replacing
+  existing values unless `--overwrite` is explicitly requested.
 
 ---
 

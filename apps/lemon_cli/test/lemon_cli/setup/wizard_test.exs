@@ -125,6 +125,8 @@ defmodule LemonCli.Setup.WizardTest do
       assert info_event?(events, &String.contains?(&1, "Setup unfinished — pending steps"))
       refute info_event?(events, &String.contains?(&1, "Setup did not complete"))
       refute info_event?(events, &String.contains?(&1, "Setup complete"))
+      refute Enum.any?(prompt_events(events), &String.contains?(&1, "Open Lemon"))
+      refute info_event?(events, &String.contains?(&1, "first prompt"))
       refute error_event?(events, fn _ -> true end)
     end
 
@@ -301,6 +303,104 @@ defmodule LemonCli.Setup.WizardTest do
       refute info_event?(events, &String.contains?(&1, "lemon setup doctor"))
     end
 
+    test "finish screen shows the first prompt and success check", %{config_path: path} do
+      configure_ready_provider(path)
+
+      assert :ok =
+               Wizard.run_full([], recording_io(),
+                 config_path: path,
+                 non_interactive: true,
+                 verifier: fn _ -> {:ok, %{}} end
+               )
+
+      summary =
+        drain_events([])
+        |> Enum.flat_map(fn
+          {:info, message} -> [message]
+          _ -> []
+        end)
+        |> Enum.drop_while(&(&1 != "Setup complete."))
+
+      assert summary == [
+               "Setup complete.",
+               "Success check: a reply arrives and `lemon doctor` shows no FAIL.",
+               "Run `lemon` in your repository and try this first prompt:",
+               "  Read the repository instructions. Find how to run the tests. Add the test command to README if missing, run the focused tests, and show the diff.",
+               "Optional next steps: `lemon gateway setup telegram` for Telegram; `lemon web` for the Web UI.",
+               ""
+             ]
+    end
+
+    test "TTY finish offers an injected launcher, defaulting to yes", %{config_path: path} do
+      configure_ready_provider(path)
+
+      for answer <- ["", "yes", "n"] do
+        io = Map.put(recording_io(["n", "n", answer]), :interactive?, fn -> true end)
+
+        assert :ok =
+                 Wizard.run_full([], io,
+                   config_path: path,
+                   hermes_home: path <> ".absent",
+                   verifier: fn _ -> {:ok, %{}} end,
+                   launcher: fn ->
+                     send(self(), :launched)
+                     :ok
+                   end
+                 )
+
+        if answer == "n", do: refute_received(:launched), else: assert_received(:launched)
+        assert "Open Lemon now? [Y/n]: " in prompt_events(drain_events([]))
+      end
+    end
+
+    test "launch is not offered without a TTY, in the launcher gate, or without verification", %{
+      config_path: path
+    } do
+      configure_ready_provider(path)
+
+      for opts <- [
+            [],
+            [launch: false, tty: true],
+            [skip_verify: true, tty: true],
+            [non_interactive: true, tty: true],
+            [verifier: fn _ -> {:error, :unauthorized} end, tty: true]
+          ] do
+        io = recording_io(["n", "n"])
+        io = if opts[:tty], do: Map.put(io, :interactive?, fn -> true end), else: io
+
+        Wizard.run_full(
+          [],
+          io,
+          Keyword.merge(
+            [
+              config_path: path,
+              hermes_home: path <> ".absent",
+              verifier: fn _ -> {:ok, %{}} end,
+              launcher: fn -> flunk("launcher must not run") end
+            ],
+            Keyword.delete(opts, :tty)
+          )
+        )
+
+        refute Enum.any?(prompt_events(drain_events([])), &String.contains?(&1, "Open Lemon"))
+      end
+    end
+
+    test "launcher failure keeps a manual try-it-now path", %{config_path: path} do
+      configure_ready_provider(path)
+      io = Map.put(recording_io(["n", "n", "y"]), :interactive?, fn -> true end)
+
+      assert :ok =
+               Wizard.run_full([], io,
+                 config_path: path,
+                 hermes_home: path <> ".absent",
+                 verifier: fn _ -> {:ok, %{}} end,
+                 launcher: fn -> {:error, :unavailable} end
+               )
+
+      assert error_event?(drain_events([]), &String.contains?(&1, "Run `lemon` to try again"))
+    end
+
     test "rerunning a configured provider performs the live check and reports rejection", %{
       config_path: path
     } do
@@ -338,6 +438,146 @@ defmodule LemonCli.Setup.WizardTest do
         assert info_event?(events, &String.contains?(&1, "not live-verified"))
         refute info_event?(events, &String.contains?(&1, "Setup complete"))
       end
+    end
+  end
+
+  describe "run_full/3 — Hermes detection" do
+    test "discovers HERMES_HOME or the default home directory", ctx do
+      original = System.get_env("HERMES_HOME")
+
+      on_exit(fn ->
+        if original,
+          do: System.put_env("HERMES_HOME", original),
+          else: System.delete_env("HERMES_HOME")
+      end)
+
+      source = hermes_fixture(ctx.tmp_dir)
+      System.put_env("HERMES_HOME", source)
+
+      for mode <- [:environment, :default] do
+        if mode == :default do
+          System.delete_env("HERMES_HOME")
+          File.rename!(source, Path.join(ctx.home, ".hermes"))
+        end
+
+        io = Map.put(recording_io(["n", "n", "n", "n"]), :interactive?, fn -> true end)
+
+        assert {:error, :setup_incomplete} =
+                 Wizard.run_full([], io, config_path: ctx.config_path, home: ctx.home)
+
+        assert info_event?(drain_events([]), &String.contains?(&1, "Found Hermes home: 1 skills"))
+      end
+    end
+
+    test "audit summary and declining import leave Hermes data unimported", ctx do
+      source = hermes_fixture(ctx.tmp_dir)
+      io = Map.put(recording_io(["", "n", "n", "n"]), :interactive?, fn -> true end)
+
+      assert {:error, :setup_incomplete} =
+               Wizard.run_full([], io, config_path: ctx.config_path, hermes_home: source)
+
+      events = drain_events([])
+
+      assert info_event?(
+               events,
+               &(&1 == "Found Hermes home: 1 skills, 2 memory files, 1 provider config.")
+             )
+
+      assert "Import Hermes data now? [y/N]: " in prompt_events(events)
+      refute File.exists?(Path.join(ctx.tmp_dir, "agent"))
+      refute File.exists?(Path.join(ctx.tmp_dir, "migration"))
+      assert File.read!(Path.join(source, "memories/MEMORY.md")) == "Use focused tests.\n"
+    end
+
+    test "confirmed import reuses the importer without secrets and before config scaffolding",
+         ctx do
+      source = hermes_fixture(ctx.tmp_dir)
+      io = Map.put(recording_io(["yes", "n", "n", "n"]), :interactive?, fn -> true end)
+      path = Path.join(ctx.tmp_dir, "custom.toml")
+
+      assert {:error, :setup_incomplete} =
+               Wizard.run_full([], io, config_path: path, hermes_home: source)
+
+      assert File.read!(Path.join(ctx.tmp_dir, "agent/workspace/MEMORY.md")) =~
+               "Use focused tests."
+
+      assert File.exists?(Path.join(ctx.tmp_dir, "agent/skill/demo/SKILL.md"))
+      assert Toml.decode_file!(path)["defaults"]["model"] == "openai:gpt-5"
+      refute File.exists?(ctx.config_path)
+      refute File.read!(path) =~ "hermes-secret"
+      assert {:error, :not_found} = Secrets.get("OPENAI_API_KEY")
+      reports = Path.wildcard(Path.join(ctx.tmp_dir, "migration/hermes/*/report.json"))
+      assert [report] = reports
+      assert Jason.decode!(File.read!(report))["migrate_secrets"] == false
+      assert info_event?(drain_events([]), &String.contains?(&1, "Hermes import:"))
+    end
+
+    test "conflicts refuse the entire import without overwriting", ctx do
+      source = hermes_fixture(ctx.tmp_dir)
+      destination = Path.join(ctx.tmp_dir, "agent/skill/demo")
+      File.mkdir_p!(destination)
+      File.write!(Path.join(destination, "SKILL.md"), "Keep existing skill.\n")
+      io = Map.put(recording_io(["y", "n", "n", "n"]), :interactive?, fn -> true end)
+
+      assert {:error, :setup_incomplete} =
+               Wizard.run_full([], io, config_path: ctx.config_path, hermes_home: source)
+
+      assert File.read!(Path.join(destination, "SKILL.md")) == "Keep existing skill.\n"
+      refute File.exists?(Path.join(ctx.tmp_dir, "agent/workspace/MEMORY.md"))
+      refute File.exists?(Path.join(ctx.tmp_dir, "migration"))
+      assert error_event?(drain_events([]), &String.contains?(&1, "nothing was imported"))
+    end
+
+    test "non-interactive skips detection and launch even with Hermes present", ctx do
+      source = hermes_fixture(ctx.tmp_dir)
+      configure_ready_provider(ctx.config_path)
+      io = Map.put(recording_io(), :interactive?, fn -> flunk("TTY checked in headless mode") end)
+
+      assert :ok =
+               Wizard.run_full([], io,
+                 non_interactive: true,
+                 config_path: ctx.config_path,
+                 hermes_home: source,
+                 verifier: fn _ -> {:ok, %{}} end,
+                 launcher: fn -> flunk("headless launch") end
+               )
+
+      events = drain_events([])
+      assert prompt_events(events) == []
+      refute info_event?(events, &String.contains?(&1, "Hermes"))
+      refute File.exists?(Path.join(ctx.tmp_dir, "migration"))
+    end
+
+    test "absent Hermes home is silent", ctx do
+      io = Map.put(recording_io(["n", "n", "n"]), :interactive?, fn -> true end)
+
+      assert {:error, :setup_incomplete} =
+               Wizard.run_full([], io,
+                 config_path: ctx.config_path,
+                 hermes_home: Path.join(ctx.tmp_dir, "absent")
+               )
+
+      events = drain_events([])
+      refute info_event?(events, &String.contains?(&1, "Hermes"))
+      refute Enum.any?(prompt_events(events), &String.contains?(&1, "Hermes"))
+    end
+
+    test "existing provider values are not silently replaced by Hermes", ctx do
+      source = hermes_fixture(ctx.tmp_dir)
+      configure_ready_provider(ctx.config_path)
+      before = File.read!(ctx.config_path)
+      io = Map.put(recording_io(["y", "n", "n", "n"]), :interactive?, fn -> true end)
+
+      assert :ok =
+               Wizard.run_full([], io,
+                 config_path: ctx.config_path,
+                 hermes_home: source,
+                 verifier: fn _ -> {:ok, %{}} end
+               )
+
+      assert File.read!(ctx.config_path) == before
+      refute File.exists?(Path.join(ctx.tmp_dir, "agent"))
+      assert error_event?(drain_events([]), &String.contains?(&1, "nothing was imported"))
     end
   end
 
@@ -535,6 +775,25 @@ defmodule LemonCli.Setup.WizardTest do
   # ──────────────────────────────────────────────────────────────────────────
   # Helpers
   # ──────────────────────────────────────────────────────────────────────────
+
+  defp hermes_fixture(root) do
+    source = Path.join(root, "hermes")
+    File.mkdir_p!(Path.join(source, "skills/demo"))
+    File.mkdir_p!(Path.join(source, "memories"))
+    File.write!(Path.join(source, "skills/demo/SKILL.md"), "# Demo\n\nA local skill.\n")
+    File.write!(Path.join(source, "memories/MEMORY.md"), "Use focused tests.\n")
+    File.write!(Path.join(source, "memories/USER.md"), "Prefers concise replies.\n")
+    File.write!(Path.join(source, ".env"), "OPENAI_API_KEY=hermes-secret\n")
+
+    File.write!(Path.join(source, "config.yaml"), """
+    model: openai:gpt-5
+    providers:
+      openai:
+        base_url: https://api.openai.test/v1
+    """)
+
+    source
+  end
 
   defp configure_ready_provider(path) do
     set_master_key_env()

@@ -289,7 +289,7 @@ defmodule LemonCli.CLI do
   defp run_setup_if_required(args) do
     if setup_required?() do
       IO.puts("Setup is required before Lemon can start; launching `lemon setup`.")
-      wizard_status = run_wizard(args)
+      wizard_status = run_wizard(args, launch: false)
 
       if setup_required?() do
         IO.puts(:stderr, "Setup is incomplete. Run `lemon setup` to finish configuration.")
@@ -302,8 +302,8 @@ defmodule LemonCli.CLI do
     end
   end
 
-  defp run_wizard(args) do
-    case Wizard.run(args, Runner.default_io(), usage_command: "lemon setup") do
+  defp run_wizard(args, opts \\ []) do
+    case Wizard.run(args, Runner.default_io(), Keyword.put(opts, :usage_command, "lemon setup")) do
       :ok -> @exit_ok
       {:error, reason} -> exit_code_for(reason)
     end

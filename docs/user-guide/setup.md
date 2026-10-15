@@ -9,7 +9,8 @@ curl -fsSL https://raw.githubusercontent.com/z80dev/lemon/main/install.sh | sh
 
 The installer verifies and installs the release, then starts `lemon setup` for
 `full` and `min` profiles when it can read `/dev/tty`. Complete the provider,
-authentication, and default-model prompts, then start the TUI:
+authentication, and default-model prompts, then accept **Open Lemon now? [Y/n]**
+to start the TUI immediately. To open it later:
 
 ```bash
 $HOME/.lemon/bin/lemon
@@ -34,8 +35,10 @@ re-checks the saved state, performs pending work, and re-verifies an existing pr
 3. onboards a provider, auth credential, and default provider/model;
 4. checks the resulting configuration and credential, including a live provider
    check when supported;
-5. offers an opt-in daily brief (default: off); and
-6. offers optional runtime-profile configuration.
+5. offers an opt-in daily brief (default: off);
+6. offers optional runtime-profile configuration; and
+7. shows a first prompt and success check, then offers to open Lemon in an
+   interactive terminal after a passing live check.
 
 Pasted API keys are read with terminal echo disabled; echo is restored after the
 read, including on errors or closed input. Without an interactive terminal, setup
@@ -46,6 +49,14 @@ Declining provider onboarding leaves **pending steps**, not a failed step. The
 wizard only prints **Setup complete** after a passing live credential check.
 When the check is skipped or unsupported, it explicitly says the provider was
 not live-verified; local configuration can still be saved successfully.
+
+The finish screen reuses the README's first coding task. Success means a reply
+arrives and `lemon doctor` shows no **FAIL**. Get one conversation working before
+adding optional Telegram (`lemon gateway setup telegram`) or the browser UI
+(`lemon web`). Declining the launch keeps the manual `lemon` command available.
+Headless setup never offers or starts the TUI. During bare `lemon`'s first-run
+setup, the original launcher opens the TUI afterwards instead of offering a
+second launch.
 
 It does not install source dependencies, configure Telegram or Discord, start
 a gateway, or run `lemon doctor` automatically. Rerun it whenever setup is
@@ -65,6 +76,21 @@ so the page can explain what is missing, but the page disables prompts and
 uploads until config, secure secrets, and a usable provider/model are all
 ready. After setup changes, choose **Check again**; a running Web client also
 refreshes on config and secret change events. See the [browser guide](web.md).
+
+### Coming from Hermes
+
+At the start of interactive setup, an existing `$HERMES_HOME` (or `~/.hermes`
+when unset) triggers a read-only compatibility audit. Setup shows counts of
+skills, memory files, and compatible provider configuration files, then asks
+whether to import. **No is the default**; declining does not import anything.
+Accepting uses the existing `user-data` importer and backs up the Lemon home
+first. Conflicts refuse the import without overwriting; review and resolve
+them with `lemon migrate hermes` if needed.
+
+Setup does not import credentials. Secret migration requires the importer's
+explicit `--migrate-secrets` flag. Non-interactive setup silently skips Hermes
+detection and import. See [Migrate from Hermes](migrate-from-hermes.md) for the
+read-only preview, overwrite policy, and secret-import options.
 
 ### Provider, auth, and model
 
