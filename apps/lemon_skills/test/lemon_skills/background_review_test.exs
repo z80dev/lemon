@@ -246,11 +246,17 @@ defmodule LemonSkills.BackgroundReviewTest do
       receive do: (:release -> {:error, :released})
     end
 
-    assert {:error, :timeout} =
-             BackgroundReview.run(request, %{"timeout_ms" => 20}, "digest", stream_fn: stream)
+    review =
+      Task.async(fn ->
+        BackgroundReview.run(request, %{"timeout_ms" => 1_000}, "digest", stream_fn: stream)
+      end)
 
-    assert_receive {:stalled_provider, provider}
+    # Observe the stalled provider before awaiting the timeout. A 20ms total
+    # deadline could expire during agent startup under concurrent umbrella work,
+    # never exercising cancellation of an attached provider at all.
+    assert_receive {:stalled_provider, provider}, 2_000
     ref = Process.monitor(provider)
+    assert {:error, :timeout} = Task.await(review, 3_000)
     assert_receive {:DOWN, ^ref, :process, ^provider, _}, 1_000
   end
 

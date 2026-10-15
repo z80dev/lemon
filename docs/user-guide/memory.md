@@ -58,6 +58,25 @@ Before correcting or deleting a project fact, use `recall` with `scope: "project
 and relevant query keywords, then copy the exact saved fact into `replaces`.
 A missing replacement target leaves memory unchanged; it never falls back to adding.
 
+To review agent memory changes before they land, set this in your global or
+project `config.toml`:
+
+```toml
+[memory]
+write_approval = true
+```
+
+The default is `false`. Every `remember` add, correction or deletion then waits
+for the existing human execution-approval flow. Its target/action and new text
+or replacement selector are shown as bounded, escaped, redacted untrusted data.
+The full mutation is digest-bound even when the preview is truncated/redacted.
+Approve to continue normal screening and writing; decline to leave memory alone.
+Unavailable/expired approvals also leave it unchanged. Unattended background
+review and cron runs, or channels without approval controls, refuse these writes.
+This does not grant subagents write access or change private/profile boundaries.
+See [configuration](../config.md#memory) for skill-write approval and timeout details.
+
+
 Only provenance-proven canonical **shared** preferences enter context-owned static
 bootstrap as virtual `USER.md`/`MEMORY.md`. Private preferences and authorized
 conversation/project facts are selected for bounded volatile recall instead.

@@ -110,6 +110,7 @@ defmodule LemonSkills.BackgroundReview do
       ])
       |> Map.merge(%{
         session_scope: :main,
+        unattended: true,
         session_key: "learning-review:" <> LemonCore.Id.uuid(),
         shared_memory_grant: false
       })
@@ -138,9 +139,22 @@ defmodule LemonSkills.BackgroundReview do
       | description: "Create a skill draft or patch a non-pinned existing skill.",
         execute: fn id, params, signal, update ->
           case Map.get(params, "action") do
-            "patch" -> execute.(id, params, signal, update)
-            "create" -> create_draft(params, skill_cwd, signal)
-            _ -> {:error, "Background review permits only create (draft) and patch"}
+            action when action in ["create", "patch"] ->
+              with :ok <-
+                     LemonSkills.WriteApproval.check(
+                       :skills,
+                       "skill_manage",
+                       params,
+                       %{cwd: skill_cwd, unattended: true},
+                       id
+                     ) do
+                if action == "create",
+                  do: create_draft(params, skill_cwd, signal),
+                  else: execute.(id, params, signal, update)
+              end
+
+            _ ->
+              {:error, "Background review permits only create (draft) and patch"}
           end
         end
     }

@@ -50,6 +50,7 @@ defmodule LemonSkills.Tools.Remember do
       memory_context_key: Keyword.get(opts, :memory_context_key),
       memory_context_verified: Keyword.get(opts, :memory_context_verified),
       shared_memory_grant: Keyword.get(opts, :shared_memory_grant, false),
+      approval_context: LemonSkills.WriteApproval.context(opts),
       store_opts: Keyword.take(opts, [:store])
     }
 
@@ -126,7 +127,7 @@ defmodule LemonSkills.Tools.Remember do
           (AgentToolResult.t() -> :ok) | nil,
           map()
         ) :: AgentToolResult.t() | {:error, term()}
-  def execute(_tool_call_id, params, signal, _on_update, context) do
+  def execute(tool_call_id, params, signal, _on_update, context) do
     if AbortSignal.aborted?(signal) do
       {:error, "Operation aborted"}
     else
@@ -134,7 +135,15 @@ defmodule LemonSkills.Tools.Remember do
            :ok <- validate_session_scope(context),
            {:ok, memory_scope} <- ContextScope.scope(context),
            {:ok, target} <- get_target(params),
-           {:ok, action} <- get_action(params) do
+           {:ok, action} <- get_action(params),
+           :ok <-
+             LemonSkills.WriteApproval.check(
+               :memory,
+               "remember",
+               params |> Map.put("target", target) |> Map.put("action", action),
+               Map.merge(context, Map.get(context, :approval_context, %{})),
+               tool_call_id
+             ) do
         cond do
           target == "project" ->
             remember_project(context, action, params)

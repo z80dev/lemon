@@ -8,6 +8,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
+- Add opt-in `memory.write_approval` and `skills.write_approval` for human review
+  of agent-authored durable facts and skills through existing execution approvals.
+  Previews are bounded, escaped and redacted; denied/unavailable approval writes
+  nothing, and unattended background review, cron and unsupported channels fail closed.
 - Add `lemon learning`: a bounded, redacted, profile-isolated timeline over
   existing memory and skill timestamps, with kind filters and JSON output.
 
