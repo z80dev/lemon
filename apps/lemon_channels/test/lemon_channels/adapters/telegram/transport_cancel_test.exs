@@ -98,7 +98,22 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
     @updates_key {__MODULE__, :updates}
     @pid_key {__MODULE__, :pid}
 
-    def set_updates(updates), do: :persistent_term.put(@updates_key, updates)
+    def set_updates(updates) do
+      :persistent_term.put(@updates_key, updates)
+
+      if pid = Process.whereis(Elixir.LemonChannels.Adapters.Telegram.Transport) do
+        flush_updates(pid)
+      end
+    end
+
+    def flush_updates(pid) do
+      # Polling is synchronous in the transport. Queue enough polls to consume
+      # the fixture and use a state barrier instead of racing its next timer.
+      for _ <- :persistent_term.get(@updates_key, []), do: send(pid, :poll)
+      :sys.get_state(pid)
+      :ok
+    end
+
     def register_test(pid), do: :persistent_term.put(@pid_key, pid)
 
     def get_updates(_token, _offset, _timeout_ms) do
@@ -772,7 +787,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
     refute_receive {:inbound, _msg}, 200
   end
 
-  test "/model minimax picker omits the broken highspeed variant" do
+  test "/model minimax picker retains its opening catalog and omits the broken highspeed variant" do
     chat_id = 33_300_531
     user_msg_id = 13_331
 
@@ -802,11 +817,16 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
       end)
       |> Map.fetch!("text")
 
+    # Credential changes affect the next /model conversation, not the indices
+    # and provider choices already presented by this one.
+    System.delete_env("MINIMAX_API_KEY")
+
     CancelMockAPI.set_updates([
       message_update(chat_id, user_msg_id + 1, minimax_choice)
     ])
 
-    assert_receive {:send_message, ^chat_id, _provider_text, model_opts, _parse_mode}
+    assert_receive {:send_message, ^chat_id, provider_text, model_opts, _parse_mode}
+    assert provider_text =~ "Choose a model:"
 
     model_texts =
       model_opts
@@ -1096,7 +1116,14 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
       }
       |> Map.merge(overrides)
 
-    Elixir.LemonChannels.Adapters.Telegram.Transport.start_link(config: config)
+    case Elixir.LemonChannels.Adapters.Telegram.Transport.start_link(config: config) do
+      {:ok, pid} = result ->
+        CancelMockAPI.flush_updates(pid)
+        result
+
+      other ->
+        other
+    end
   end
 
   defp provider_choice(opts) do

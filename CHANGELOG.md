@@ -10,6 +10,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Keep Telegram `/model` reply-keyboard choices stable for the picker conversation
+  without repeating model/credential discovery on every navigation step.
+
 - Probe real LLDB launch capability before enabling host-backed debugger tests,
   and drain PTY output through exit so terminal backpressure cannot stall tests.
 
