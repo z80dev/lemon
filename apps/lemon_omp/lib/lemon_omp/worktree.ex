@@ -28,6 +28,73 @@ defmodule LemonOmp.Worktree do
 
   def validate(_cwd, _isolate), do: {:error, :invalid_params}
 
+  @doc "Read-only inventory of existing, registered Lemon worktrees (at most 32)."
+  def kept(cwd) do
+    deadline = deadline(@command_timeout)
+
+    with {:ok, repo} <- validate(cwd, true),
+         {:ok, listing} <-
+           git(cwd, ["worktree", "list", "--porcelain", "-z"], deadline) do
+      listing
+      |> String.split(<<0, 0>>, trim: true)
+      |> Enum.take(256)
+      |> Enum.flat_map(fn record ->
+        fields = String.split(record, <<0>>, trim: true)
+
+        path =
+          Enum.find_value(
+            fields,
+            &(String.starts_with?(&1, "worktree ") && String.replace_prefix(&1, "worktree ", ""))
+          )
+
+        branch =
+          Enum.find_value(
+            fields,
+            &(String.starts_with?(&1, "branch refs/heads/") &&
+                String.replace_prefix(&1, "branch refs/heads/", ""))
+          )
+
+        root = Path.join(repo.common, "lemon-omp-worktrees")
+
+        if is_binary(path) and is_binary(branch) and
+             Path.dirname(path) == root and
+             branch == "lemon-omp/" <> Path.basename(path) and
+             File.dir?(path) and not match?({:ok, %{type: :symlink}}, File.lstat(path)) and
+             not match?({:ok, %{type: :symlink}}, File.lstat(root)) do
+          [Map.merge(repo, %{path: path, branch: branch})]
+        else
+          []
+        end
+      end)
+      |> Enum.take(32)
+      |> Enum.flat_map(fn worktree ->
+        case git(
+               cwd,
+               ["reflog", "show", "--format=%H%x00%gs", "--max-count=1000", worktree.branch],
+               deadline
+             ) do
+          {:ok, output} ->
+            base =
+              output
+              |> String.split("\n", trim: true)
+              |> Enum.find_value(fn entry ->
+                case String.split(entry, <<0>>, parts: 2) do
+                  [hash, "branch: Created from " <> _] -> hash
+                  _ -> nil
+                end
+              end)
+
+            [%{worktree | base: base}]
+
+          _ ->
+            [%{worktree | base: nil}]
+        end
+      end)
+    else
+      _ -> []
+    end
+  end
+
   def create(nil, _id), do: {:ok, nil}
 
   def create(repo, id) do
@@ -63,7 +130,7 @@ defmodule LemonOmp.Worktree do
     %{
       "path" => worktree.path,
       "branch" => worktree.branch,
-      "base" => String.slice(worktree.base, 0, 12),
+      "base" => if(worktree.base, do: String.slice(worktree.base, 0, 12)),
       "repo" => worktree.repo
     }
   end
@@ -108,6 +175,8 @@ defmodule LemonOmp.Worktree do
        when x in [?R, ?C] or y in [?R, ?C], do: count_status(rest, count + 1)
 
   defp count_status([_ | rest], count), do: count_status(rest, count + 1)
+
+  defp commit_count(%{base: nil}, _deadline), do: nil
 
   defp commit_count(worktree, deadline) do
     case git(

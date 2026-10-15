@@ -207,15 +207,134 @@ defmodule LemonOmp.WorktreeTest do
     assert {:ok, _} = LemonOmp.close(b["id"])
   end
 
-  test "resuming without isolation uses the given kept cwd", ctx do
+  test "resume discovers a kept worktree from the main checkout and owns cleanup again", ctx do
     assert {:ok, wire} = LemonOmp.start(%{cwd: ctx.cwd, prompt: "WRITE_FILE", isolate: true})
     assert {:ok, _, :settled} = LemonOmp.wait(wire["id"], 5_000)
     assert {:ok, _} = LemonOmp.close(wire["id"])
-    assert {:ok, resumed} = LemonOmp.start(%{cwd: wire["cwd"], resume: "fake-session-0001"})
+    session_fixture(wire["cwd"], "fake-session-0001")
+
+    assert {:ok, [found]} = LemonOmp.discover(ctx.cwd)
+    assert found["worktree"]["branch"] == wire["worktree"]["branch"]
+    assert {:ok, [direct]} = LemonOmp.discover(wire["cwd"])
+    assert direct["worktree"]["path"] == wire["cwd"]
+    result = Omp.execute("discover", %{"action" => "discover"}, nil, nil, cwd: ctx.cwd)
+    assert hd(result.content).text =~ "kept worktree #{wire["worktree"]["branch"]}"
+
+    assert {:ok, resumed} = LemonOmp.start(%{cwd: ctx.cwd, resume: "fake-session"})
     assert resumed["cwd"] == wire["cwd"]
+    assert resumed["worktree"] == wire["worktree"]
+    assert {:ok, ended} = LemonOmp.close(resumed["id"])
+    assert ended["worktree"]["kept"]
+    assert ended["worktree"]["dirty"] == 1
+  end
+
+  test "resume from another worktree preserves committed work and reports reuse", ctx do
+    assert {:ok, repo} = LemonOmp.Worktree.validate(ctx.cwd, true)
+    assert {:ok, wt} = LemonOmp.Worktree.create(repo, "omp_committed")
+    File.write!(Path.join(wt.path, "committed.txt"), "worker\n")
+    git!(wt.path, ["add", "."])
+
+    git!(wt.path, [
+      "-c",
+      "user.name=Test",
+      "-c",
+      "user.email=test@example.invalid",
+      "commit",
+      "--quiet",
+      "-m",
+      "worker"
+    ])
+
+    other = Path.join(ctx.cwd, ".git/other")
+    git!(ctx.cwd, ["worktree", "add", "--detach", other, "HEAD"])
+    session_fixture(wt.path, "fake-session-0001")
+
+    result =
+      Omp.execute("resume", %{"action" => "resume", "omp_session_id" => "fake-session"}, nil, nil,
+        cwd: other,
+        session_key: "agent:resume-committed"
+      )
+
+    refute result.is_error
+    assert hd(result.content).text =~ "Reused kept worktree #{wt.branch}"
+    resumed = result.details["session"]
+    assert resumed["cwd"] == wt.path
+    assert resumed["worktree"]["base"] == String.slice(repo.base, 0, 12)
+    assert {:ok, ended} = LemonOmp.close(resumed["id"])
+    assert ended["worktree"]["kept"]
+    assert ended["worktree"]["commits"] == 1
+  end
+
+  test "missing creation reflog keeps resumed work rather than guessing its base", ctx do
+    assert {:ok, repo} = LemonOmp.Worktree.validate(ctx.cwd, true)
+    assert {:ok, wt} = LemonOmp.Worktree.create(repo, "omp_noreflog")
+    git!(ctx.cwd, ["reflog", "expire", "--expire=all", "refs/heads/" <> wt.branch])
+    session_fixture(wt.path, "fake-session-0001")
+    assert {:ok, resumed} = LemonOmp.start(%{cwd: ctx.cwd, resume: "fake-session"})
+    assert resumed["cwd"] == wt.path
+    assert resumed["worktree"]["base"] == nil
+    assert {:ok, ended} = LemonOmp.close(resumed["id"])
+    assert ended["worktree"]["kept"]
+    assert ended["worktree"]["commits"] == nil
+  end
+
+  test "deleted kept worktrees fall back to cwd with a tool note", ctx do
+    assert {:ok, repo} = LemonOmp.Worktree.validate(ctx.cwd, true)
+    assert {:ok, wt} = LemonOmp.Worktree.create(repo, "omp_deleted")
+    session_fixture(wt.path, "fake-session-0001")
+    git!(ctx.cwd, ["worktree", "remove", wt.path])
+
+    result =
+      Omp.execute(
+        "resume",
+        %{"action" => "resume", "omp_session_id" => "fake-session-0001"},
+        nil,
+        nil,
+        cwd: ctx.cwd,
+        session_key: "agent:resume-deleted"
+      )
+
+    refute result.is_error
+    assert result.details["session"]["cwd"] == ctx.cwd
+    assert hd(result.content).text =~ "using the supplied cwd"
+    assert {:ok, _} = LemonOmp.close(result.details["session"]["id"])
+  end
+
+  test "foreign and unregistered worktree paths are not discovered or resumed", ctx do
+    foreign = workspace!()
+    session_fixture(foreign, "fake-session-foreign")
+    assert {:ok, []} = LemonOmp.discover(ctx.cwd)
+    assert {:ok, resumed} = LemonOmp.start(%{cwd: ctx.cwd, resume: "fake-session-foreign"})
+    assert resumed["cwd"] == ctx.cwd
     assert resumed["worktree"] == nil
     assert {:ok, _} = LemonOmp.close(resumed["id"])
-    assert File.dir?(wire["cwd"])
+
+    path = Path.join(ctx.cwd, ".git/lemon-omp-worktrees/omp_unregistered")
+    File.mkdir_p!(path)
+    session_fixture(path, "fake-session-unregistered")
+    assert {:ok, []} = LemonOmp.discover(ctx.cwd)
+
+    assert {:ok, repo} = LemonOmp.Worktree.validate(ctx.cwd, true)
+    assert {:ok, wt} = LemonOmp.Worktree.create(repo, "omp_forged")
+    session_fixture(wt.path, "fake-session-forged", foreign)
+    assert {:ok, []} = LemonOmp.discover(ctx.cwd)
+    assert {:ok, resumed} = LemonOmp.start(%{cwd: ctx.cwd, resume: "fake-session-forged"})
+    assert resumed["cwd"] == ctx.cwd
+    assert resumed["worktree"] == nil
+    assert {:ok, _} = LemonOmp.close(resumed["id"])
+  end
+
+  defp session_fixture(cwd, id, recorded_cwd \\ nil) do
+    agent = workspace!()
+    put_app_env(:agent_dir, agent)
+    [name | _] = LemonOmp.SessionFiles.candidate_dir_names(cwd, cwd)
+    dir = Path.join([agent, "sessions", name])
+    File.mkdir_p!(dir)
+
+    File.write!(
+      Path.join(dir, "fixture.jsonl"),
+      Jason.encode!(%{type: "session", id: id, cwd: recorded_cwd || cwd}) <> "\n"
+    )
   end
 
   defp git!(cwd, args) do

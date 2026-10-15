@@ -25,6 +25,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Added
 
+- omp discovery includes sessions in kept managed Git worktrees, and resume
+  automatically reuses a validated worktree in the caller's repository with
+  conservative cleanup ownership restored.
+
 - omp task subagents expose bounded activity, tool counts, tokens/cost, model,
   duration, final output and retry errors in status and streamed progress.
   Owner-scoped `LemonOmp.subagent/3` and the `omp` tool's `subagent` action read
@@ -69,6 +73,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   follow-ups, cancellation, process cleanup, discovery and resume.
 
 ### Fixed
+
+- Keep omp worktree cleanup ownership until the Session monitor and pending
+  cleanup finish, even when ended-session cache eviction runs after an early
+  terminal snapshot.
 
 - Lemon Bot for iPhone keeps the composer and Send button above the keyboard,
   follows the latest message as the viewport resizes, and uses Return for a newline

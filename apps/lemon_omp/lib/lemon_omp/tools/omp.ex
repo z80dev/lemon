@@ -438,6 +438,11 @@ defmodule LemonOmp.Tools.Omp do
         text =
           Enum.map_join(sessions, "\n", fn s ->
             "- #{s["ompSessionId"]} [#{s["lastStatus"]}#{if s["interrupted"], do: ", interrupted turn"}#{if s["liveId"], do: ", live as #{s["liveId"]}"}#{if s["activeElsewhere"], do: ", possibly open elsewhere"}] #{s["title"] || "untitled"}"
+            |> then(fn line ->
+              if s["worktree"],
+                do: line <> " (kept worktree #{s["worktree"]["branch"]})",
+                else: line
+            end)
           end)
 
         result("omp sessions for #{cwd}:\n" <> text, %{
@@ -579,6 +584,18 @@ defmodule LemonOmp.Tools.Omp do
 
   defp session_result(action, wire, text) do
     isolation = Projection.worktree_summary(wire["worktree"])
+
+    text =
+      if action == "resume" do
+        note =
+          if wire["worktree"],
+            do: "Reused kept worktree #{wire["worktree"]["branch"]}.",
+            else: "No matching existing kept Lemon worktree found; using the supplied cwd."
+
+        text <> "\n" <> note
+      else
+        text
+      end
 
     text =
       if isolation && not String.contains?(text, isolation),
