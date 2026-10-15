@@ -27,7 +27,7 @@ defmodule LemonCore.Config.ExpandedSchemaTest do
   """
   use ExUnit.Case, async: false
 
-  alias LemonCore.Config.{Agent, Providers, Gateway, Tools}
+  alias LemonCore.Config.{Agent, Gateway, Providers, Tools}
 
   setup do
     previous = Application.get_env(:lemon_core, :gateway_channels)

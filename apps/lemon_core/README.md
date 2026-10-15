@@ -1,5 +1,7 @@
 # LemonCore
 
+<!-- Maintenance: strict Credo cleanup keeps runtime behavior unchanged. -->
+
 Foundational shared library for the Lemon umbrella project. All other apps depend on `lemon_core` -- it provides configuration management, configured-implementation contract validation, encrypted secrets, pluggable storage, an event bus, live named-node invocation routing, session routing primitives, idempotency, execution approvals, telemetry, and quality tooling.
 
 `LemonCore.Context` is the shared versioned preview/resolve boundary for

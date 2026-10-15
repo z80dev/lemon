@@ -304,11 +304,9 @@ defmodule LemonCore.Config.Gateway do
   defp safe_to_atom(key) when is_atom(key), do: key
 
   defp safe_to_atom(key) when is_binary(key) do
-    try do
-      String.to_existing_atom(key)
-    rescue
-      ArgumentError -> String.to_atom(key)
-    end
+    String.to_existing_atom(key)
+  rescue
+    ArgumentError -> String.to_atom(key)
   end
 
   @doc """
