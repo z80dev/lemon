@@ -27,7 +27,7 @@ defmodule CodingAgent.Session.Planning do
   alias CodingAgent.Session.ModelResolver
   alias CodingAgent.SessionManager
   alias CodingAgent.SessionManager.SessionEntry
-  alias CodingAgent.Tools.{Edit, Write, WriteSqlite}
+  alias CodingAgent.Tools.{Edit, Write, WriteArchive, WriteSqlite}
   alias LemonAgent.ModelRuntime.SessionPins
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonAi.Types.TextContent
@@ -520,7 +520,7 @@ defmodule CodingAgent.Session.Planning do
   defp plan_write?(_name, _params, _context), do: false
 
   defp plan_file?(path, context) do
-    is_nil(WriteSqlite.target(path)) and
+    is_nil(WriteArchive.target(path)) and is_nil(WriteSqlite.target(path)) and
       (path == context.plan_path or
          (Path.dirname(path) == context.plan_dir and Path.extname(path) == ".md"))
   end

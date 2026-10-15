@@ -592,6 +592,9 @@ defmodule CodingAgent.Session.PlanningTest do
     assert %AgentToolResult{is_error: true} =
              run(tools["write"], Path.join(plan_dir, "x.txt"), "x")
 
+    assert %AgentToolResult{is_error: true} =
+             run(tools["write"], Path.join(plan_dir, "bundle.zip:plan.md"), "blocked")
+
     database = Path.join(plan_dir, "app.db")
     {:ok, conn} = Exqlite.Sqlite3.open(database)
     :ok = Exqlite.Sqlite3.execute(conn, "CREATE TABLE \"plan.md\" (name TEXT)")

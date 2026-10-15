@@ -130,6 +130,22 @@ against the current raw file bytes before any patch writes. If the file changed,
 re-read it before applying the patch. Files not previously read in the session
 can still be patched.
 
+## Archive member writes
+
+`write bundle.zip:inner/file.txt` replaces or adds one UTF-8 member. ZIP, TAR,
+`.tar.gz` and `.tgz` containers are supported, including new containers. Existing
+literal selector-shaped files take precedence. Members must be relative,
+slash-separated paths without empty, `.` or `..` segments; directories and links
+cannot be overwritten. Existing archives use the normal size, mutation lock,
+checkpoint, symlink and plan-mode guards. Replacing a member with truncated-read
+output is refused. A sibling temporary file is renamed over the archive only
+after the full replacement is ready.
+
+Unchanged ZIP members retain their uncompressed bytes and file metadata (ZIP
+compression/layout may change). Unrelated TAR headers, data, links and extension
+records remain byte-identical; gzip containers are recompressed. The replaced
+TAR member retains its mode, owner and timestamp.
+
 
 ## SQLite databases
 
