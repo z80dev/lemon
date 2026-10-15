@@ -40,6 +40,12 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Added
 
+- Hermes migration previews and imports supported Honcho settings from global or
+  profile-local JSON, preserves active-host precedence, and reports unsupported
+  options. API keys use the gated encrypted-secret path, with conflict protection
+  and no plaintext fallback. Honcho reads persistent global `[honcho]` settings
+  and encrypted credential references without adding a platform dependency.
+
 - Control-plane status reports the real Lemon release version, build identity,
   offline provider credential presence, timestamped redacted channel health,
   lifecycle availability and safe summary counts.
