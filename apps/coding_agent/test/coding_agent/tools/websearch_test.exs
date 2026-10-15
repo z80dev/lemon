@@ -3,8 +3,8 @@ defmodule CodingAgent.Tools.WebSearchTest do
 
   import CodingAgent.AsyncHelpers
 
-  alias LemonAgent.AbortSignal
   alias CodingAgent.Tools.WebSearch
+  alias LemonAgent.AbortSignal
 
   setup do
     original_cache_path = System.get_env("LEMON_WEB_CACHE_PATH")

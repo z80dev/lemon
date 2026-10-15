@@ -1,8 +1,8 @@
 defmodule CodingAgent.Session.EventHandlerTest do
   use ExUnit.Case, async: false
 
-  alias LemonCore.{Introspection, Store}
   alias CodingAgent.Session.EventHandler
+  alias LemonCore.{Introspection, Store}
 
   setup do
     case Store.start_link([]) do
