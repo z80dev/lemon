@@ -30,6 +30,9 @@ defmodule LemonChannels.PortableCommand do
     args = String.trim(args || "")
 
     case CommandCatalog.find(command) do
+      {:ok, %{"name" => name}} when name in ["approve", "deny"] ->
+        approval(name, args, context)
+
       {:ok, %{"name" => "status"}} ->
         {:ok, render_status(context)}
 
@@ -61,6 +64,32 @@ defmodule LemonChannels.PortableCommand do
     _ -> {:error, "Command failed safely. Check the Lemon runtime logs for details."}
   catch
     :exit, _ -> {:error, "Command runtime is unavailable."}
+  end
+
+  defp approval(name, args, context) do
+    with authorize when is_function(authorize, 1) <- context[:approval_authorize],
+         {:ok, _, decision} <-
+           LemonChannels.RemoteApproval.resolve_text(
+             args,
+             if(name == "approve", do: :approve_once, else: :deny),
+             context[:surface],
+             context[:account_id],
+             authorize,
+             context[:approval_opts] || []
+           ) do
+      {:ok,
+       if(decision == :approve_once, do: "Approval: Approved (once)", else: "Approval: Denied")}
+    else
+      {:error, {:ambiguous, ids}} ->
+        {:error, "Multiple pending approvals; use /#{name} <id>:\n" <> Enum.join(ids, "\n")}
+
+      {:error, reason} when reason in [:not_pending, :expired] ->
+        {:error,
+         "No matching pending approval in this chat. It may have expired or already been resolved."}
+
+      _ ->
+        {:error, "Approval rejected or unavailable; request unchanged."}
+    end
   end
 
   defp render_status(context) do

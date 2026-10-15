@@ -1466,6 +1466,16 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
 
       context = %{
         surface: "telegram",
+        account_id: state.account_id,
+        approval_authorize:
+          ApprovalRequest.text_authorizer(state, %{
+            "message_id" => user_msg_id,
+            "message_thread_id" => thread_id,
+            "chat" => %{
+              "id" => chat_id,
+              "type" => to_string(inbound.meta[:chat_type])
+            }
+          }),
         session_key: session_key,
         cwd: BindingResolver.resolve_cwd(scope),
         model: inbound.meta[:model],

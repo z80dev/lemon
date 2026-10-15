@@ -51,6 +51,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   and points empty model lists to `lemon setup provider`; `setup.status` exposes
   read-only, content-free readiness for clients.
 
+- Telegram and Discord support chat-scoped `/approve [id]` and `/deny [id]`
+  fallbacks for approval buttons, with unique prefixes and safe disambiguation.
+
 - Lemon Bot for Mac has an optional desktop pet: an original pixel lemon that
   floats above all windows and Spaces, reacts to thinking, tool work, approvals
   and questions, completions, failures and disconnects, and opens the relevant
