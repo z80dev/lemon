@@ -10,6 +10,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Restore the LSP Dialyzer gate by explicitly discarding idle timer cancellation
+  results and removing an unreachable nil working-directory branch.
+
 - Make injected SVG rasterizer fixtures portable across BSD and GNU base64, and
   explicitly exclude only the named real-rasterizer test when librsvg is absent.
 
