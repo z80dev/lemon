@@ -60,7 +60,7 @@ defmodule LemonMemory.Preferences do
          {:ok, owner} <- native_owner(context),
          {:ok, kind} <- normalize_kind(kind),
          :ok <- optional_text(text),
-         :ok <- optional_text(replaces),
+         :ok <- optional_stored_text(replaces),
          true <- text != nil or replaces != nil do
       owner = if ContextScope.shared_grant?(context), do: :shared, else: owner
 
@@ -91,7 +91,8 @@ defmodule LemonMemory.Preferences do
 
     case meta["preference_facts"] || meta[:preference_facts] do
       [text] when kind in ["user", "memory"] and is_binary(text) ->
-        if validate_text(text) == :ok and String.length(text) <= @caps[kind], do: [text], else: []
+        if Safety.validate_note(text, screen_exfiltration: false) == :ok and
+             String.length(text) <= @caps[kind], do: [text], else: []
 
       _ ->
         []
@@ -139,6 +140,9 @@ defmodule LemonMemory.Preferences do
   defp optional_text(nil), do: :ok
   defp optional_text(text), do: validate_text(text)
 
+  defp optional_stored_text(nil), do: :ok
+  defp optional_stored_text(text), do: Safety.validate_note(text, screen_exfiltration: false)
+
   defp load(context, identity, owner, opts) do
     case Store.list_owned_recent(server(opts), identity.agent_id, identity.home_digest, owner,
            preferences_only: true,
@@ -164,6 +168,14 @@ defmodule LemonMemory.Preferences do
     end
   end
 
+  defp validate_patch(nil, _kind), do: :ok
+
+  defp validate_patch(text, kind) do
+    if String.length(text) > @caps[kind],
+      do: {:error, :capacity_exceeded},
+      else: validate_text(text)
+  end
+
   defp mutate(context, identity, owner, kind, text, replaces, opts) do
     server = server(opts)
 
@@ -172,8 +184,11 @@ defmodule LemonMemory.Preferences do
        owner}
 
     :global.trans({lock, self()}, fn ->
-      with {:ok, all} <- load(context, identity, owner, opts) do
-        docs = Enum.filter(all, &(document_kind(&1) == kind))
+      with {:ok, all} <- load(context, identity, owner, opts),
+           docs = Enum.filter(all, &(document_kind(&1) == kind)),
+           {:ok, _matched, replaces, text} <-
+             LemonMemory.NoteMatch.resolve(Enum.flat_map(docs, &facts/1), replaces, text),
+           :ok <- validate_patch(text, kind) do
         matches = Enum.filter(docs, &(facts(&1) == [replaces]))
         duplicate = Enum.find(docs, &(facts(&1) == [text]))
 
