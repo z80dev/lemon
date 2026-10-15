@@ -636,6 +636,16 @@ defmodule CodingAgent.ToolRegistry do
 
   @spec extension_inventory(String.t(), tool_opts()) :: {[module()], [Extensions.load_error()]}
   defp extension_inventory(cwd, opts) do
+    case Keyword.fetch(opts, :extension_inventory) do
+      {:ok, {extensions, load_errors}} ->
+        {sort_extensions(extensions), load_errors}
+
+      :error ->
+        cached_extension_inventory(cwd, opts)
+    end
+  end
+
+  defp cached_extension_inventory(cwd, opts) do
     extension_paths = resolve_extension_paths(cwd, opts)
     key = cache_key(cwd, extension_paths)
 

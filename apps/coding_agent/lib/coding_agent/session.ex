@@ -150,6 +150,7 @@ defmodule CodingAgent.Session do
     :wasm_status,
     :plan_gate,
     branch_generation: 0,
+    tool_started_at: %{},
     wasm_host_calls: %{},
     auto_compaction: %CompactionLifecycle.State{},
     overflow_recovery: %OverflowRecovery.State{},
@@ -221,6 +222,7 @@ defmodule CodingAgent.Session do
           wasm_status: map() | nil,
           plan_gate: :atomics.atomics_ref() | nil,
           branch_generation: non_neg_integer(),
+          tool_started_at: %{String.t() => integer()},
           wasm_host_calls: %{reference() => map()},
           auto_compaction: CompactionLifecycle.State.t(),
           overflow_recovery: OverflowRecovery.State.t()
@@ -277,6 +279,9 @@ defmodule CodingAgent.Session do
     * `:complete_fn` - Optional completion injection `(model, context, options)` for auto classification
     * `:register` - When true, register the session under its ID in `CodingAgent.SessionRegistry`
     * `:registry` - Registry module to use when registering (default: `CodingAgent.SessionRegistry`)
+    * `:extension_inventory` - Optional preloaded `{extension_modules, load_errors}` for startup;
+      bypasses shared extension discovery and its caches
+    * `:mcp_tools` - Optional explicit MCP tool inventory (an empty list disables MCP discovery)
     * `:transform_context` - Optional custom context transform `(messages, signal) -> messages`
       composed after built-in guardrails and untrusted-output wrapping
     * `:context_guardrails` - Optional map/list overrides for built-in context guardrails

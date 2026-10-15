@@ -23,9 +23,8 @@ defmodule LemonCli.Setup.Provider do
 
   alias LemonCli.Onboarding.{LogSilencer, PromptUI, Providers, Runner}
   alias LemonCli.Onboarding.Provider, as: ProviderSpec
-  alias LemonCli.Setup.Verification
+  alias LemonCli.Setup.{ProviderAuth, Scaffold, Verification}
   alias LemonCore.Secrets
-  alias LemonCli.Setup.{ProviderAuth, Scaffold}
 
   @doc """
   Runs provider onboarding within the setup context.
@@ -87,7 +86,7 @@ defmodule LemonCli.Setup.Provider do
 
     with :ok <- ensure_secrets_ready(io),
          :ok <- maybe_bootstrap_config(io),
-         :ok <- onboard(rest, io) do
+         :ok <- onboard(rest, io, opts) do
       verify_config(
         extract_config_path(rest),
         io,
@@ -126,7 +125,7 @@ defmodule LemonCli.Setup.Provider do
     end
   end
 
-  defp onboard(args, io) do
+  defp onboard(args, io, opts) do
     LogSilencer.with_quiet_logs(interactive_prompt_session?(io), fn ->
       {provider_name, remaining_args} = extract_provider_arg(args)
 
@@ -136,7 +135,7 @@ defmodule LemonCli.Setup.Provider do
           value -> fetch_provider!(value)
         end
 
-      Runner.run(remaining_args, provider, io: io)
+      Runner.run(remaining_args, provider, Keyword.put(Keyword.take(opts, [:discovery]), :io, io))
       :ok
     end)
   end

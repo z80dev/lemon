@@ -4,6 +4,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { modelCommand } from "../../src/commands/model.ts";
 import { reportedContextFixture } from "../../src/dev/fixtures/context-fixtures.ts";
 import type { RunsRecentListResult } from "../../src/protocol/types.ts";
 import { initTheme, resetTheme } from "../../src/ui/theme/theme.ts";
@@ -58,6 +59,16 @@ describe("routing commands", () => {
 	test("/model with no argument opens the picker", async () => {
 		await harness.run("/model");
 		expect(harness.host.modelPickerOpens).toBe(1);
+	});
+
+	test("/model without a picker points empty model lists to provider setup", async () => {
+		harness.server.respondWith("models.list", { models: [] });
+		const ui = Object.create(harness.host);
+		ui.openModelPicker = undefined;
+		await modelCommand.run(harness.context({ ui }), []);
+		expect(harness.host.text).toContain("no model list available");
+		expect(harness.host.text).toContain("run `lemon setup provider` to add a provider");
+		expect(harness.host.pickers).toHaveLength(0);
 	});
 
 	test("/think validates the level before sending", async () => {
@@ -466,6 +477,39 @@ describe("runs and goals", () => {
 		await harness.run("/runs");
 		expect(harness.host.text).toContain("run-1");
 		expect(harness.host.text).toContain("2.5s");
+	});
+
+	test("/runs <id> renders the timeline instead of listing runs", async () => {
+		harness.server.respondWith("runs.timeline.get", {
+			runId: "run-detail",
+			entries: [
+				{ atMs: 1000, label: "run started", status: "active", ok: null },
+				{ atMs: 2500, label: "read", status: "completed", durationMs: 250, ok: true },
+				{ atMs: 3000, label: "bash", status: "error", durationMs: 500, ok: false },
+				{ atMs: 4000, label: "task", status: "pending", ok: null },
+			],
+			truncated: true,
+			usage: { tokens: { total: 5 }, costUsd: 0, model: "fixture" },
+		});
+		await harness.run("/runs run-detail");
+		expect(harness.server.requestsFor("runs.timeline.get")[0].params).toEqual({
+			runId: "run-detail",
+		});
+		expect(harness.server.requestsFor("runs.active.list")).toHaveLength(0);
+		expect(harness.server.requestsFor("runs.recent.list")).toHaveLength(0);
+		expect(harness.host.text).toContain("+1.5s [ok] read");
+		expect(harness.host.text).toContain("[fail] bash");
+		expect(harness.host.text).toContain("[pending] task");
+		expect(harness.host.text).toContain("5 tokens");
+		expect(harness.host.text).toContain("timeline truncated");
+	});
+
+	test("/runs count retains listing behavior", async () => {
+		harness.server.respondWith("runs.active.list", { runs: [] });
+		harness.server.respondWith("runs.recent.list", { runs: [] });
+		await harness.run("/runs 3");
+		expect(harness.server.requestsFor("runs.active.list")[0].params).toEqual({ limit: 3 });
+		expect(harness.server.requestsFor("runs.timeline.get")).toHaveLength(0);
 	});
 
 	test("/runs shows crashed history with reported error, usage, cost and model", async () => {

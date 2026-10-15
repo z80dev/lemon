@@ -19,6 +19,23 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Pin skill-synthesis candidate timestamps in ordering fixtures and cover
+  recency/ID tie-breaking independently of wall-clock scheduling.
+
+- Derive computer-use approval test origins from configured control-plane/web
+  ports so non-default test listeners retain Lemon self-surface protection.
+
+- Preserve delegated run identity when polling recovers a durable completion, so
+  the task and RunGraph both become terminal even without a live watcher.
+- Make coordinator/session/watcher/environment regressions synchronize with their
+  actual lifecycle and isolate resource discovery from protocol fixtures.
+
+- Assert LSP owner cleanup by the exact managed server ID rather than a global
+  active-count delta that races unrelated idle-server cleanup.
+
+- Keep Telegram `/model` reply-keyboard choices stable for the picker conversation
+  without repeating model/credential discovery on every navigation step.
+
 - Probe real LLDB launch capability before enabling host-backed debugger tests,
   and drain PTY output through exit so terminal backpressure cannot stall tests.
 
@@ -35,6 +52,26 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   bounded pasted-filename previews and appearance-aware code inset colors.
 
 ### Added
+
+- Setup offers local inference servers and custom OpenAI-compatible endpoints,
+  optional encrypted keys, and consent-based model discovery with manual fallback.
+
+- TUI startup shows pending setup steps above the prompt, hides them once ready,
+  and points empty model lists to `lemon setup provider`; `setup.status` exposes
+  read-only, content-free readiness for clients.
+
+- Lemon Bot for Mac has an optional desktop pet: an original pixel lemon that
+  floats above all windows and Spaces, reacts to thinking, tool work, approvals
+  and questions, completions, failures and disconnects, and opens the relevant
+  conversation when clicked. It loads Codex-format pets (V1 and V2), imported from
+  a folder, ZIP or HTTPS URL with size, dimension and path validation; pet
+  packages are images only and never run code.
+
+- Inspect per-run lifecycle, tool outcomes, child tasks and usage with
+  `lemon runs show <runId>` and TUI `/runs <runId>`, backed by redacted completion events.
+
+- Opt-in, expiring Telegram/Discord DM pairing codes with local-owner approval
+  through `lemon pairing`, replacing manual allowlist edits.
 
 - Discord voice notes and audio attachments can use the shared voice transcription
   settings, with bounded CDN downloads and URL fallback on failure.
@@ -59,6 +96,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 - The debug tool supports adapter-requested DAP child sessions, including js-debug
   launch/attach configurations, child session targeting, and recursive teardown.
+
+- Agent runs continue up to three times after empty replies or malformed tool
+  arguments, preserving streamed output and tool results without replaying tools.
 
 ### Changed
 

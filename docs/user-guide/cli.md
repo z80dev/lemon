@@ -55,6 +55,33 @@ records or an unknown start time also produce null fields; mixed models/provider
 have a null model/provider, and any unpriced occurrence makes the run's cost null
 and `priceKnown` false.
 
+Use `/runs <runId>` for the same per-run timeline as `lemon runs show <runId>`;
+`/runs` and `/runs <count>` retain the active/recent list. Run IDs are nonnumeric;
+a numeric argument continues to select a list count.
+
+## Channel pairing
+
+```bash
+lemon pairing list
+lemon pairing approve telegram <CODE>
+lemon pairing approve discord <CODE>
+lemon pairing deny telegram <CODE>
+```
+
+For channels configured with `unauthorized_dm_behavior = "pair"`, unknown human
+DMs receive a single-use code valid for one hour. Confirm the sender's identity
+out of band, then approve from the local operator CLI. `list` displays platform,
+masked chat ID, name and age, never codes. `deny` consumes without adding access.
+Wrong-platform, expired and already-used codes fail without changing config.
+
+These commands reuse/start the local runtime and require operator pairing access
+over direct loopback. Approval appends to the user gateway allowlist using the
+same patcher as `gateway setup`; project overrides still win. **Restart Lemon
+after approval** to refresh adapters' authorization state. Success exits 0,
+operation failures exit 1, and usage errors exit 2. No code is echoed in output.
+See [channel configuration](../config.md#telegram-and-discord-dm-pairing-codes)
+for default behavior, rate limits and lost-code handling.
+
 ## Commands and availability
 
 ### Launcher lifecycle commands
@@ -117,6 +144,8 @@ for availability, single-flight behavior, and release/custom-launcher limits.
 lemon runs --status error --since 1h --limit 20
 lemon runs list --session agent:operator:main --agent operator --json
 lemon runs active
+lemon runs show RUN_ID
+lemon runs show RUN_ID --json
 lemon cron status --json
 lemon cron runs --job JOB_ID --status failed --since 2d
 lemon logs -n 50 --level warning
@@ -138,6 +167,16 @@ crashes or correctly classify aborts. Recent client-side time filtering examines
 at most the newest 200 history rows returned by the runtime, not an unbounded
 archive. `--since` accepts positive integer minutes (`30m`), hours (`1h`), or
 days (`2d`), relative to invocation time; list limits are 1–200 (default 50).
+
+`runs show <runId> [--json]` shows what one run did: loop/turn and answer-finalize
+events, tool calls paired with their completion, and child subagents. Human output
+uses times relative to the first displayed entry, recorded durations and
+`[ok]`/`[fail]` markers; an unmatched tool dispatch stays `[pending]`, not successful.
+Available run usage is included. The latest 500 entries are shown chronologically
+from a bounded 1,000-event history window, with an explicit truncation notice.
+Labels exclude tool arguments/results and private conversation content.
+Unknown/expired runs and failed storage queries are errors, not empty timelines.
+See the [timeline method reference](../reference/control-plane.md#runstimelineget).
 
 `cron status` reports job totals, enabled jobs, and `failingJobs` (jobs with a
 nonzero persisted failure streak). Use `--json` for the complete cron status

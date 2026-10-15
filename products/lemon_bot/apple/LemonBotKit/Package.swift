@@ -10,7 +10,7 @@ let package = Package(
     ],
     dependencies: [.package(url: "https://github.com/migueldeicaza/SwiftTerm.git", exact: "1.13.0")],
     targets: [
-        .target(name: "LemonBotKit", path: "Sources/LemonBotKit"),
+        .target(name: "LemonBotKit", path: "Sources/LemonBotKit", resources: [.copy("Resources/Pets")]),
         .target(name: "LemonBotUI", dependencies: ["LemonBotKit", .product(name: "SwiftTerm", package: "SwiftTerm")], path: "Sources/LemonBotUI"),
         .testTarget(name: "LemonBotKitTests", dependencies: ["LemonBotKit", "LemonBotUI"], path: "Tests/LemonBotKitTests")
     ],

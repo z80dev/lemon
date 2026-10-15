@@ -92,16 +92,8 @@ defmodule LemonChannels.Adapters.Telegram.Transport.Pipeline do
 
         {state, actions}
 
-      {:drop, :unpaired, inbound} ->
-        {state, notify?} =
-          RuntimeState.claim_unpaired_notice(
-            state,
-            chat_id,
-            System.monotonic_time(:millisecond)
-          )
-
-        notice = if notify?, do: [{:send_unpaired_notice, inbound}], else: []
-        {state, [{:log_drop, inbound, :unpaired} | notice]}
+      {:drop, reason, inbound} when reason in [:unpaired, :chat_not_allowed] ->
+        unauthorized_message(state, inbound, chat_id, reason)
 
       {:drop, reason, inbound} ->
         {state, [{:index_known_target, update}, {:log_drop, inbound, reason}]}
@@ -110,6 +102,27 @@ defmodule LemonChannels.Adapters.Telegram.Transport.Pipeline do
         {state, [{:index_known_target, update}, {:log_drop, inbound, :dedupe}]}
     end
   end
+
+  defp unauthorized_message(
+         %{unauthorized_dm_behavior: "pair"} = state,
+         inbound,
+         _chat_id,
+         reason
+       ) do
+    notice = if inbound.peer.kind == :dm, do: [{:send_unpaired_notice, inbound}], else: []
+    {state, [{:log_drop, inbound, reason} | notice]}
+  end
+
+  defp unauthorized_message(state, inbound, chat_id, :unpaired) do
+    {state, notify?} =
+      RuntimeState.claim_unpaired_notice(state, chat_id, System.monotonic_time(:millisecond))
+
+    notice = if notify?, do: [{:send_unpaired_notice, inbound}], else: []
+    {state, [{:log_drop, inbound, :unpaired} | notice]}
+  end
+
+  defp unauthorized_message(state, inbound, _chat_id, reason),
+    do: {state, [{:log_drop, inbound, reason}]}
 
   defp inbound_chat_id(inbound) do
     case (inbound.meta || %{})[:chat_id] || inbound.peer.id do

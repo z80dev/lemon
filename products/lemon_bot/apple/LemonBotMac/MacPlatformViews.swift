@@ -178,11 +178,13 @@ struct MacVoiceView: View {
 
 struct MacSettingsView: View {
     @Bindable var controller: MacPlatformController
+    @Bindable var pet: MacPetController
     @State private var value = ClientLocalSettings(micCuesEnabled: true, compactCompanionEnabled: false, reducedMotion: "system")
     @State private var summon = ""
     @State private var ptt = ""
     var body: some View {
         Form {
+            MacPetSettingsSection(controller: pet)
             Section("Selected Bot and companion") {
                 Picker("Bot", selection: $value.selectedBotId) {
                     Text("None").tag(String?.none)
@@ -224,7 +226,7 @@ struct MacSettingsView: View {
                 if let status = controller.speechStatus { Text(status).font(LBFont.meta) }
             }
             Section("Privacy") {
-                Text("No listening, clipboard history or screen capture happens in the background. To share text, right-click selected text → Services → Send to Lemon Bot, then review it in the quick composer. Choose files with the file picker. Shortcuts and the companion are off by default and saved for this device and account.").font(LBFont.meta)
+                Text("No listening, clipboard history or screen capture happens in the background. The desktop pet only shows status already in the app; it never reads other windows. To share text, right-click selected text → Services → Send to Lemon Bot, then review it in the quick composer. Choose files with the file picker. Shortcuts and the companion are off by default and saved for this device and account. Pet settings are saved for this Mac, independently of accounts.").font(LBFont.meta)
             }
             if let error = controller.errorMessage { Text(error).foregroundStyle(LB.danger).textSelection(.enabled) }
         }.formStyle(.grouped)

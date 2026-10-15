@@ -111,6 +111,7 @@ export const DEFAULT_METHODS = [
 	"usage.cost",
 	"runs.active.list",
 	"runs.recent.list",
+	"runs.timeline.get",
 	"tasks.active.list",
 	"tasks.recent.list",
 	"goal.set",

@@ -104,6 +104,15 @@ import type {
 } from "./types.ts";
 import type { UserPromptResolveParams } from "./user-prompt.ts";
 
+export interface SetupStatusResult {
+	ready: boolean;
+	pendingSteps: Array<{
+		id: "config" | "secrets" | "provider";
+		label: string;
+		command: string;
+	}>;
+}
+
 export const METHOD = {
 	chatSend: "chat.send",
 	chatAbort: "chat.abort",
@@ -154,10 +163,12 @@ export const METHOD = {
 	approvalsGet: "exec.approvals.get",
 	health: "health",
 	status: "status",
+	setupStatus: "setup.status",
 	usageStatus: "usage.status",
 	usageCost: "usage.cost",
 	runsActiveList: "runs.active.list",
 	runsRecentList: "runs.recent.list",
+	runsTimelineGet: "runs.timeline.get",
 	tasksActiveList: "tasks.active.list",
 	tasksRecentList: "tasks.recent.list",
 	goalSet: "goal.set",
@@ -628,6 +639,10 @@ export class ControlPlaneMethods {
 		return this.#call<Record<string, unknown>>(METHOD.status, params, options);
 	}
 
+	setupStatus(options?: RequestOptions): Promise<SetupStatusResult> {
+		return this.#call<SetupStatusResult>(METHOD.setupStatus, {}, options);
+	}
+
 	usageStatus(
 		params?: Record<string, unknown>,
 		options?: RequestOptions,
@@ -653,6 +668,13 @@ export class ControlPlaneMethods {
 		options?: RequestOptions,
 	): Promise<RunsRecentListResult> {
 		return this.#call<RunsRecentListResult>(METHOD.runsRecentList, params, options);
+	}
+
+	runsTimelineGet(
+		params: { runId: string },
+		options?: RequestOptions,
+	): Promise<Record<string, unknown>> {
+		return this.#call<Record<string, unknown>>(METHOD.runsTimelineGet, params, options);
 	}
 
 	tasksActiveList(params?: Record<string, unknown>, options?: RequestOptions): Promise<unknown> {

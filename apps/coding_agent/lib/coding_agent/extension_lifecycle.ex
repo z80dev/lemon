@@ -53,10 +53,18 @@ defmodule CodingAgent.ExtensionLifecycle do
       Keyword.get(opts, :approval_context, Keyword.get(tool_opts, :approval_context))
 
     extension_paths = extension_paths(cwd, settings_manager)
-    {extensions, load_errors} = load_extensions(extension_paths)
 
-    # Prime registry cache so lookups in this lifecycle run do not reload extensions.
-    ToolRegistry.prime_extension_cache(cwd, extension_paths, extensions, load_errors)
+    {extensions, load_errors} =
+      case Keyword.fetch(tool_opts, :extension_inventory) do
+        {:ok, {extensions, load_errors}} ->
+          {extensions, load_errors}
+
+        :error ->
+          inventory = load_extensions(extension_paths)
+          {extensions, load_errors} = inventory
+          ToolRegistry.prime_extension_cache(cwd, extension_paths, extensions, load_errors)
+          inventory
+      end
 
     hooks = Extensions.get_hooks(extensions)
     provider_registration = Extensions.register_extension_providers(extensions)

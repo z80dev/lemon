@@ -2,6 +2,8 @@ defmodule LemonCli.Setup.ProviderTest do
   # async: false because we manipulate Application env and HOME
   use ExUnit.Case, async: false
 
+  alias LemonAi.Models.Presets
+  alias LemonCli.Onboarding.Providers
   alias LemonCli.Onboarding.Runner
   alias LemonCli.Setup.{Provider, Verification}
   alias LemonCore.Secrets
@@ -93,7 +95,7 @@ defmodule LemonCli.Setup.ProviderTest do
 
     assert :ok = Provider.run([], io)
     events = drain_events([])
-    range = "1–#{length(LemonCli.Onboarding.Providers.list())}"
+    range = "1–#{length(Providers.list())}"
     assert error_event?(events, &String.contains?(&1, range))
     assert error_event?(events, &String.contains?(&1, "openai"))
     assert info_event?(events, &String.contains?(&1, "onboarding will continue now"))
@@ -101,6 +103,99 @@ defmodule LemonCli.Setup.ProviderTest do
 
     assert {:ok, "synthetic-provider-key"} =
              Secrets.get("llm_openai_api_key", prefer_env: false, env_fallback: false)
+  end
+
+  test "provider menu includes local presets and a custom endpoint" do
+    set_master_key_env()
+
+    io =
+      Map.put(capturing_io(), :select, fn params ->
+        for preset <- Presets.all(), preset.local do
+          assert Enum.any?(params.options, fn option ->
+                   option.value.id == to_string(preset.id) and option.label =~ "local server"
+                 end)
+
+          assert Providers.find(preset.id).local
+        end
+
+        assert Enum.any?(params.options, &(&1.label =~ "Custom OpenAI-compatible endpoint"))
+        :cancel
+      end)
+
+    assert_raise Mix.Error, "Onboarding cancelled.", fn -> Provider.run([], io) end
+  end
+
+  test "--provider ollama accepts keyless headless setup and uses live verification", %{
+    config_path: path
+  } do
+    set_master_key_env()
+    io = Map.put(capturing_io(), :prompt, fn _ -> flunk("headless setup prompted") end)
+
+    assert :ok =
+             Provider.run(
+               [
+                 "--provider",
+                 "ollama",
+                 "--non-interactive",
+                 "--set-default",
+                 "--model",
+                 "qwen3:8b",
+                 "--config-path",
+                 path
+               ],
+               io,
+               live_verify: true,
+               discovery: fn _, _, _ -> flunk("headless setup discovered") end,
+               verifier: fn input ->
+                 assert input.provider == "ollama"
+                 assert input.api_key == nil
+                 assert input.base_url == Presets.base_url(:ollama)
+                 send(self(), :keyless_live_verified)
+                 {:ok, %{http_status: 200}}
+               end
+             )
+
+    assert_received :keyless_live_verified
+    assert {:ok, config} = Toml.decode_file(path)
+    assert config["providers"]["ollama"]["auth"] == "none"
+    assert config["defaults"]["model"] == "ollama:qwen3:8b"
+  end
+
+  test "custom setup forwards discovery and verifies the saved keyless provider", %{
+    config_path: path
+  } do
+    set_master_key_env()
+
+    responses =
+      start_supervised!(
+        {Agent,
+         fn ->
+           ["custom", "my-local", "http://localhost:4567/v1", "y", "1"]
+         end}
+      )
+
+    io =
+      Map.put(capturing_io(), :prompt, fn _ ->
+        Agent.get_and_update(responses, fn [value | rest] -> {value, rest} end)
+      end)
+
+    assert :ok =
+             Provider.run(["--config-path", path, "--set-default"], io,
+               live_verify: true,
+               discovery: fn :openai_models, "http://localhost:4567/v1", opts ->
+                 assert opts[:provider] == "my-local"
+                 {:ok, [%{id: "my-model"}]}
+               end,
+               verifier: fn input ->
+                 assert input.provider == "my-local"
+                 assert input.api_key == nil
+                 assert input.base_url == "http://localhost:4567/v1"
+                 send(self(), :custom_live_verified)
+                 {:ok, %{http_status: 200}}
+               end
+             )
+
+    assert_received :custom_live_verified
   end
 
   describe "run/2 — scaffold error propagation" do

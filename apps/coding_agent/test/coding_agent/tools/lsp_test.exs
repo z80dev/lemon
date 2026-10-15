@@ -346,11 +346,14 @@ defmodule CodingAgent.Tools.LspTest do
     assert [%{pid: pid, server_id: :clangd, root: root}] = Client.list(ctx.session_id)
     assert root == ctx.tmp
     ref = Process.monitor(pid)
-    before = LemonLsp.ServerManager.status().active_count
+    assert {:ok, %{session_id: managed_session_id}} = Client.sync(pid, nil, 5_000)
 
     send(ctx.owner, :stop)
     assert_receive {:DOWN, ^ref, :process, ^pid, _}, 5_000
-    assert LemonLsp.ServerManager.status().active_count == before - 1
+    # Other idle servers may disappear at the same time. Check this lease's
+    # managed server, not a delta in the process-global active count.
+    assert {:error, :unknown_lsp_session} =
+             LemonLsp.ServerManager.stop_session(managed_session_id)
   end
 
   test "two coding sessions share a process and authoritative document versions", ctx do

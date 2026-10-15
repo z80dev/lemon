@@ -29,6 +29,9 @@ defmodule LemonCli.Onboarding.Provider do
     :api_key_prompt,
     :api_key_choice_label,
     :oauth_choice_label,
+    :base_url,
+    local: false,
+    custom: false,
     aliases: [],
     auth_modes: [:api_key],
     preferred_models: [],
@@ -57,6 +60,9 @@ defmodule LemonCli.Onboarding.Provider do
           api_key_prompt: String.t() | nil,
           api_key_choice_label: String.t() | nil,
           oauth_choice_label: String.t() | nil,
+          base_url: String.t() | nil,
+          local: boolean(),
+          custom: boolean(),
           aliases: [String.t()],
           auth_modes: [auth_mode()],
           preferred_models: [String.t()],
@@ -86,6 +92,18 @@ defmodule LemonCli.Onboarding.Provider do
       api_key_prompt: "Enter your #{display_name} API key: ",
       api_key_choice_label: "Paste API key",
       auth_source_by_mode: %{api_key: "api_key"}
+    }
+  end
+
+  @doc false
+  def local(id, display_name, opts \\ []) do
+    spec = api_key(id, display_name, "Local OpenAI-compatible server", opts)
+
+    %{
+      spec
+      | local: true,
+        custom: Keyword.get(opts, :custom, false),
+        base_url: Keyword.get(opts, :base_url)
     }
   end
 end

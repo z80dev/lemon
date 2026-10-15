@@ -10,11 +10,27 @@ struct LemonBotMacApp: App {
     @NSApplicationDelegateAdaptor(MacAppDelegate.self) private var delegate
     @State private var store: LemonBotStore
     @State private var platform: MacPlatformController
+    @State private var pet: MacPetController
+    @Environment(\.openWindow) private var openWindow
+    @Environment(\.openSettings) private var openSettings
 
     init() {
-        let store = LemonBotStore()
+        let store = Self.makeStore()
+        let platform = MacPlatformController(store: store)
         _store = State(initialValue: store)
-        _platform = State(initialValue: MacPlatformController(store: store))
+        _platform = State(initialValue: platform)
+        _pet = State(initialValue: MacPetController(platform: platform))
+    }
+
+    private static func makeStore() -> LemonBotStore {
+        #if DEBUG
+        if MacPetLaunch.fixtures {
+            let scene = MacPetLaunch.value("-LBFixtureScene")
+            let scenario = LemonBotSnapshotScene.allCases.first { $0.slug == scene }?.scenario ?? .chiefOfStaff
+            return LemonBotFixtures.makeStore(scenario: scenario)
+        }
+        #endif
+        return LemonBotStore()
     }
 
     var body: some Scene {
@@ -33,12 +49,12 @@ struct LemonBotMacApp: App {
     }
 
     private var settingsScene: some Scene {
-        Settings { LemonBotSettingsView(store: store) { MacSettingsView(controller: platform) } }
+        Settings { LemonBotSettingsView(store: store) { MacSettingsView(controller: platform, pet: pet) } }
     }
 
     private var menuBarScene: some Scene {
         MenuBarExtra("Lemon Bot", systemImage: "leaf") {
-            MacMenuBarView(controller: platform)
+            MacMenuBarView(controller: platform, pet: pet)
         }
     }
 
@@ -62,7 +78,7 @@ struct LemonBotMacApp: App {
             .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in Task { await platform.publishPresence() } }
             .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
                 Task {
-                    if store.account != nil, store.connectionState != "online", store.connectionState != "reconnect_required" {
+                    if !MacPetLaunch.fixtures, store.account != nil, store.connectionState != "online", store.connectionState != "reconnect_required" {
                         do { try await store.refresh() } catch { if store.connectionIssue == nil { platform.errorMessage = error.localizedDescription } }
                     }
                     await platform.publishPresence()
@@ -81,7 +97,14 @@ struct LemonBotMacApp: App {
 
     private var workspaceAccountEvents: some View {
         workspaceLayout
-            .task { delegate.platform = platform; platform.start() }
+            .task {
+                delegate.platform = platform
+                delegate.pet = pet
+                pet.openWorkspace = { openWindow(id: "workspace") }
+                pet.openSettings = { SettingsRouter.shared.pane = .platform; openSettings() }
+                pet.start()
+                platform.start()
+            }
             .onChange(of: store.account?.id) { _, _ in Task { await platform.accountChanged() } }
             .onChange(of: store.selectedConversationID) { _, _ in Task { await platform.publishPresence() } }
             .onChange(of: store.notifications) { _, _ in platform.notificationsChanged() }
@@ -144,6 +167,7 @@ struct LemonBotMacApp: App {
 
 private struct MacMenuBarView: View {
     @Bindable var controller: MacPlatformController
+    @Bindable var pet: MacPetController
     @Environment(\.openWindow) private var openWindow
     @State private var confirmingSignOut = false
     var body: some View {
@@ -156,6 +180,9 @@ private struct MacMenuBarView: View {
         Button("Open quick composer") { controller.summon() }.disabled(controller.selectedBot == nil).help("Choose a Bot in Settings first")
         Button("Return to voice chat") { controller.showVoicePanel() }.disabled(controller.store.voiceSession?.state != "active")
         SettingsLink { Text("Settings…") }
+        Button(pet.preferences.enabled ? "Hide Desktop Pet" : "Show Desktop Pet") {
+            pet.updatePreferences { $0.enabled.toggle() }
+        }
         Divider()
         if controller.store.accounts.count > 1 {
             Menu("Switch account") {
@@ -185,6 +212,7 @@ private struct MacMenuBarView: View {
 @MainActor
 final class MacAppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate {
     private var pendingURLs: [URL] = []
+    weak var pet: MacPetController?
     weak var platform: MacPlatformController? {
         didSet {
             guard let platform else { return }
@@ -199,7 +227,7 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationC
         NSApp.setActivationPolicy(.regular)
         NSUpdateDynamicServices()
     }
-    func applicationWillTerminate(_ notification: Foundation.Notification) { platform?.cancelCapture(); platform?.stopPlayback() }
+    func applicationWillTerminate(_ notification: Foundation.Notification) { pet?.stop(); platform?.cancelCapture(); platform?.stopPlayback() }
     func application(_ application: NSApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
         Task { await platform?.registerPush(deviceToken) }
     }

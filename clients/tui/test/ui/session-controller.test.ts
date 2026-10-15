@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { AppShell } from "../../src/app.ts";
 import { DEFAULT_METHODS, FakeControlPlane } from "../../src/dev/fake-server.ts";
 import { ControlPlaneClient } from "../../src/protocol/client.ts";
+import type { SetupStatusResult } from "../../src/protocol/methods.ts";
 import type {
 	ApprovalRequestedEvent,
 	ChatHistoryMessage,
@@ -33,11 +34,21 @@ interface RenderCall {
 	clearScrollback: boolean;
 }
 
-async function bootApp(sessionKey = "tui-a", snapshot = false) {
+async function bootApp(
+	sessionKey = "tui-a",
+	snapshot = false,
+	setup?: SetupStatusResult | "missing",
+) {
 	const server = await FakeControlPlane.start({
-		methods: snapshot ? [...DEFAULT_METHODS, "sessions.snapshot"] : DEFAULT_METHODS,
+		methods: [
+			...DEFAULT_METHODS,
+			...(snapshot ? ["sessions.snapshot"] : []),
+			...(setup ? ["setup.status"] : []),
+		],
 	});
 	teardown.push(() => server.stop());
+	if (setup === "missing") server.failWith("setup.status", "METHOD_NOT_FOUND", "not supported");
+	else if (setup) server.respondWith("setup.status", setup);
 	server.onMethod("chat.send", (params: { sessionKey: string }) => ({
 		runId: `run-${params.sessionKey}`,
 		sessionKey: params.sessionKey,
@@ -83,6 +94,71 @@ async function bootApp(sessionKey = "tui-a", snapshot = false) {
 function chatText(app: AppShell): string {
 	return renderPlain(app.chatContainer.render(80));
 }
+
+const PENDING_SETUP: SetupStatusResult = {
+	ready: false,
+	pendingSteps: [
+		{ id: "config", label: "Create configuration", command: "lemon setup" },
+		{
+			id: "provider",
+			label: "Choose a default provider and model with usable credentials",
+			command: "lemon setup provider",
+		},
+	],
+};
+
+describe("setup readiness", () => {
+	test("startup shows one pending card in the dock, not the transcript", async () => {
+		const { app, server } = await bootApp("tui-a", false, PENDING_SETUP);
+		const dock = renderPlain(app.statusContainer.render(120));
+		expect(dock.match(/Finish setup before chatting/g)).toHaveLength(1);
+		expect(dock).toContain("Create configuration — run `lemon setup`");
+		expect(dock).toContain("run `lemon setup provider`");
+		expect(chatText(app)).not.toContain("Finish setup");
+		expect(server.requestsFor("setup.status")).toHaveLength(1);
+	});
+
+	test("startup ready state shows no card", async () => {
+		const { app } = await bootApp("tui-a", false, { ready: true, pendingSteps: [] });
+		expect(renderPlain(app.statusContainer.render(120))).not.toContain("Finish setup");
+	});
+
+	test("model changes recheck readiness and remove the existing card", async () => {
+		const { app, server } = await bootApp("tui-a", false, PENDING_SETUP);
+		server.respondWith("setup.status", { ready: true, pendingSteps: [] });
+		server.respondWith("models.list", { models: [{ id: "local", provider: "ollama" }] });
+		server.respondWith("sessions.patch", { success: true });
+		app.editor.setText("keep my draft");
+		await app.submit("/model ollama:local");
+		expect(app.store.setupStatus?.ready).toBe(true);
+		expect(renderPlain(app.statusContainer.render(120))).not.toContain("Finish setup");
+		expect(app.editor.getExpandedText()).toBe("keep my draft");
+		expect(server.requestsFor("setup.status").length).toBeGreaterThan(1);
+	});
+
+	test("reconnect refreshes readiness after external setup", async () => {
+		const { app, server } = await bootApp("tui-a", false, PENDING_SETUP);
+		server.respondWith("setup.status", { ready: true, pendingSteps: [] });
+		await app.client.reconnect();
+		await waitFor(() => app.store.setupStatus?.ready === true);
+		expect(renderPlain(app.statusContainer.render(120))).not.toContain("Finish setup");
+	});
+
+	test("an older daemon without the method is silent and receives no request", async () => {
+		const { app, server } = await bootApp();
+		expect(server.requestsFor("setup.status")).toHaveLength(0);
+		expect(renderPlain(app.statusContainer.render(120))).not.toContain("Finish setup");
+		expect(chatText(app)).not.toContain("setup.status");
+	});
+
+	test("a missing-method response is also silent", async () => {
+		const { app, server } = await bootApp("tui-a", false, "missing");
+		expect(server.requestsFor("setup.status")).toHaveLength(1);
+		expect(app.store.setupStatus).toBeUndefined();
+		expect(chatText(app)).not.toContain("setup.status");
+		expect(chatText(app)).not.toContain("not supported");
+	});
+});
 
 describe("SessionController.switch", () => {
 	test("parks the outgoing draft and restores the incoming one", async () => {

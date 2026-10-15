@@ -26,6 +26,7 @@ defmodule LemonCli.Setup.Gateway.Telegram do
 
   @behaviour LemonCli.Setup.Gateway.Adapter
 
+  alias LemonCli.Setup.Gateway.AllowlistConfig
   alias LemonCore.Config.{Modular, TomlPatch}
   alias LemonCore.Httpc
   alias LemonCore.Secrets
@@ -360,11 +361,7 @@ defmodule LemonCli.Setup.Gateway.Telegram do
     content
     |> TomlPatch.upsert_raw_line("gateway", "enable_telegram", "enable_telegram = true")
     |> TomlPatch.upsert_string("gateway.telegram", "bot_token_secret", secret_key)
-    |> TomlPatch.upsert_raw_line(
-      "gateway.telegram",
-      "allowed_chat_ids",
-      "allowed_chat_ids = [#{Enum.join(chat_ids, ", ")}]"
-    )
+    |> AllowlistConfig.patch("telegram", chat_ids)
   end
 
   defp write_config(path, content, io) do

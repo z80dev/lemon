@@ -25,6 +25,7 @@ defmodule LemonControlPlane.Protocol.Schemas do
     "system.restart" => %{optional: %{}},
     "system.stop" => %{optional: %{}},
     "doctor.run" => %{optional: %{}},
+    "setup.status" => %{optional: %{}},
     "logs.tail" => %{
       optional: %{
         "limit" => :integer,
@@ -36,6 +37,10 @@ defmodule LemonControlPlane.Protocol.Schemas do
 
     # Channel methods
     "commands.catalog" => %{optional: %{}},
+    "channels.pairing" => %{
+      required: %{"action" => :string},
+      optional: %{"platform" => :string, "pairing_code" => :string}
+    },
     "background.start" => %{
       required: %{"prompt" => :string},
       optional: %{
