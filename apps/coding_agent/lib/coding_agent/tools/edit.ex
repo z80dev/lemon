@@ -41,8 +41,6 @@ defmodule CodingAgent.Tools.Edit do
 
   require Logger
 
-  alias LemonAgent.Types.{AgentTool, AgentToolResult}
-  alias LemonAi.Types.TextContent
   alias CodingAgent.FileReadTracker
   alias CodingAgent.MutationLock
   alias CodingAgent.Tools.ACPFileBridge
@@ -54,6 +52,9 @@ defmodule CodingAgent.Tools.Edit do
   alias CodingAgent.Tools.LspDiagnostics
   alias CodingAgent.Tools.LspFormatter
   alias CodingAgent.Tools.PathHelpers
+  alias LemonAgent.Security.ToolResultTrust
+  alias LemonAgent.Types.{AgentTool, AgentToolResult}
+  alias LemonAi.Types.TextContent
 
   import LemonAgent.Tools.AbortHelpers, only: [aborted?: 1, check_aborted: 1]
 
@@ -63,7 +64,9 @@ defmodule CodingAgent.Tools.Edit do
   ## Parameters
 
     - `cwd` - Current working directory for resolving relative paths
-    - `opts` - Optional configuration (reserved for future use)
+    - `opts` - Tool configuration, including `:enforce_seen_lines` (default false).
+      When enabled, anchored edits require a session id and a numbered read of
+      every targeted line; plain text replacements are unaffected.
   """
   @spec tool(String.t(), keyword()) :: AgentTool.t()
   def tool(cwd, opts \\ []) do
@@ -177,7 +180,7 @@ defmodule CodingAgent.Tools.Edit do
 
       case result do
         {:error, :aborted} -> {:error, "Operation aborted"}
-        other -> LemonAgent.Security.ToolResultTrust.untrusted(other, :local_file)
+        other -> ToolResultTrust.untrusted(other, :local_file)
       end
     end
   end
@@ -199,7 +202,8 @@ defmodule CodingAgent.Tools.Edit do
          {bom, content} <- FileFormatHelpers.strip_bom(raw_content),
          line_ending <- FileFormatHelpers.detect_line_ending(content),
          normalized_content <- FileFormatHelpers.normalize_to_lf(content),
-         {:ok, new_content} <- perform_edit(raw_content, normalized_content, edit_spec),
+         {:ok, new_content} <-
+           perform_local_edit(raw_content, normalized_content, edit_spec, opts, resolved_path),
          :ok <- check_content_changed(normalized_content, new_content),
          :ok <- check_aborted(signal),
          final_content <- FileFormatHelpers.finalize_content(new_content, line_ending, bom),
@@ -324,13 +328,59 @@ defmodule CodingAgent.Tools.Edit do
 
   defp perform_local_edit(raw, content, {:anchored, tag, edits}, opts, path) do
     previous = FileReadTracker.snapshot_lines(opts, path, tag)
-    AnchoredEdit.apply(raw, content, tag, edits, previous)
+
+    with :ok <- check_seen_lines(opts, path, tag, edits) do
+      # Validate original coordinates before recovery: rebase_edits only translates
+      # byte-identical, unique ranges, so permission follows those exact seen lines,
+      # never unrelated lines occupying their old positions in the new snapshot.
+      AnchoredEdit.apply(raw, content, tag, edits, previous)
+    end
   end
 
   defp perform_local_edit(raw, content, spec, _opts, _path), do: perform_edit(raw, content, spec)
 
-  defp perform_edit(raw_content, content, {:anchored, snapshot, edits}) do
-    AnchoredEdit.apply(raw_content, content, snapshot, edits)
+  defp check_seen_lines(opts, path, tag, edits) do
+    if Keyword.get(opts, :enforce_seen_lines, false) do
+      seen = FileReadTracker.seen_lines(opts, path, tag)
+
+      unseen =
+        edits
+        |> Enum.flat_map(fn edit ->
+          Enum.to_list(edit["start_line"]..Map.get(edit, "end_line", edit["start_line"]))
+        end)
+        |> Enum.uniq()
+        |> Enum.reject(&MapSet.member?(seen, &1))
+        |> Enum.sort()
+
+      case unseen do
+        [] ->
+          :ok
+
+        lines ->
+          ranges =
+            lines
+            |> Enum.chunk_while(
+              [],
+              fn
+                line, [] -> {:cont, [line]}
+                line, [last | _] = acc when line == last + 1 -> {:cont, [line | acc]}
+                line, acc -> {:cont, Enum.reverse(acc), [line]}
+              end,
+              fn acc -> {:cont, Enum.reverse(acc), []} end
+            )
+            |> Enum.map_join(",", fn chunk ->
+              first = hd(chunk)
+              last = List.last(chunk)
+              if first == last, do: "#{first}", else: "#{first}-#{last}"
+            end)
+
+          {:error,
+           "Unseen lines #{ranges} in [#{path}##{tag}]. Read them with read #{path}:#{ranges} " <>
+             "in this session, then retry with the returned snapshot and line numbers; no edits were applied."}
+      end
+    else
+      :ok
+    end
   end
 
   defp perform_edit(_raw_content, content, {:text, old_text, new_text}) do

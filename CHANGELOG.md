@@ -10,6 +10,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Added
 
+- Add opt-in `enforce_seen_lines` coding-tool options for snapshot-anchored edits:
+  remember displayed lines across read windows and refuse unseen targets or
+  insertion anchors with actionable range-read hints, including during recovery.
+
 - Add `ls tree: true`: depth-limited newest-first trees with file sizes,
   12 children per directory and explicit omitted-sibling counts.
 
