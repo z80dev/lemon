@@ -24,6 +24,7 @@ defmodule CodingAgent.Tools.Grep do
   @default_max_bytes 50 * 1024
   @grep_max_line_length 500
   @ripgrep_timeout_ms 30_000
+  @max_file_bytes 4 * 1024 * 1024
 
   @doc """
   Returns the Grep tool definition.
@@ -144,7 +145,12 @@ defmodule CodingAgent.Tools.Grep do
         max_bytes: Keyword.get(opts, :max_bytes, @default_max_bytes),
         signal: signal,
         timeout_ms: Keyword.get(opts, :ripgrep_timeout_ms, @ripgrep_timeout_ms),
-        rg_cmd_fun: Keyword.get(opts, :rg_cmd_fun, &System.cmd/3)
+        rg_cmd_fun: Keyword.get(opts, :rg_cmd_fun, &System.cmd/3),
+        pcre2_available?:
+          Keyword.get_lazy(opts, :pcre2_available?, fn -> &pcre2_available?/0 end),
+        fallback_timeout_ms: Keyword.get(opts, :fallback_timeout_ms, @ripgrep_timeout_ms),
+        fallback_files_fun: Keyword.get(opts, :fallback_files_fun, &find_files/2),
+        fallback_match_fun: Keyword.get(opts, :fallback_match_fun, &line_matches?/2)
       }
 
       if Keyword.get(opts, :ripgrep_available?, ripgrep_available?()) do
@@ -249,25 +255,106 @@ defmodule CodingAgent.Tools.Grep do
     end
   end
 
-  defp search_with_ripgrep(opts) do
-    args = build_ripgrep_args(opts)
+  defp pcre2_available? do
+    key = {__MODULE__, :pcre2, System.find_executable("rg")}
 
-    case run_ripgrep_command(args, opts) do
-      {:ok, {output, 0}} ->
-        parse_ripgrep_output(output, opts)
+    case :persistent_term.get(key, :unknown) do
+      :unknown ->
+        supported? =
+          case System.cmd("rg", ["--pcre2-version"], stderr_to_stdout: true) do
+            {_, 0} -> true
+            _ -> false
+          end
 
-      {:ok, {_output, 1}} ->
-        no_matches_result()
+        :persistent_term.put(key, supported?)
+        supported?
 
-      {:ok, {output, 2}} ->
-        {:error, "Search error: #{String.trim(output)}"}
-
-      {:ok, {output, code}} ->
-        {:error, "ripgrep exited with code #{code}: #{String.trim(output)}"}
-
-      {:error, reason} ->
-        {:error, reason}
+      supported? ->
+        supported?
     end
+  end
+
+  defp regex_engine(%{literal: true}), do: {:ok, false}
+
+  defp regex_engine(opts) do
+    case pcre_construct(opts.pattern) do
+      nil ->
+        {:ok, false}
+
+      construct ->
+        supported? = opts.pcre2_available?
+        supported? = if is_function(supported?, 0), do: supported?.(), else: supported?
+
+        if supported? do
+          {:ok, true}
+        else
+          {:error,
+           "Pattern uses #{construct}, but rg uses Rust regex without PCRE2 support. " <>
+             "Use a Rust-regex-compatible pattern or install ripgrep with PCRE2."}
+        end
+    end
+  end
+
+  defp pcre_construct(""), do: nil
+
+  defp pcre_construct(<<"\\", next, _::binary>>) when next in ?1..?9 or next in [?g, ?k],
+    do: "backreferences"
+
+  defp pcre_construct(<<"\\", _, rest::binary>>), do: pcre_construct(rest)
+  defp pcre_construct(<<"[", rest::binary>>), do: skip_character_class(rest)
+  defp pcre_construct(<<"(?=", _::binary>>), do: "lookaround"
+  defp pcre_construct(<<"(?!", _::binary>>), do: "lookaround"
+  defp pcre_construct(<<"(?<=", _::binary>>), do: "lookaround"
+  defp pcre_construct(<<"(?<!", _::binary>>), do: "lookaround"
+  defp pcre_construct(<<"(?P=", _::binary>>), do: "backreferences"
+  defp pcre_construct(<<_, rest::binary>>), do: pcre_construct(rest)
+
+  defp skip_character_class(""), do: nil
+  defp skip_character_class(<<"\\", _, rest::binary>>), do: skip_character_class(rest)
+  defp skip_character_class(<<"]", rest::binary>>), do: pcre_construct(rest)
+  defp skip_character_class(<<_, rest::binary>>), do: skip_character_class(rest)
+
+  defp search_with_ripgrep(opts) do
+    with {:ok, pcre2?} <- regex_engine(opts) do
+      args = build_ripgrep_args(opts)
+      args = if pcre2?, do: ["--pcre2" | args], else: args
+
+      case run_ripgrep_command(args, opts) do
+        {:ok, {output, 0}} ->
+          parse_ripgrep_output(output, opts)
+
+        {:ok, {_output, 1}} ->
+          no_matches_result()
+
+        {:ok, {output, 2}} ->
+          result = parse_ripgrep_output(output, opts)
+          warning = first_ripgrep_warning(output)
+
+          if result.details.match_count > 0 do
+            %{
+              result
+              | content: result.content ++ [%TextContent{text: "warnings: #{warning}"}],
+                details: Map.put(result.details, :warnings, [warning])
+            }
+          else
+            {:error, "Search error: #{warning}"}
+          end
+
+        {:ok, {output, code}} ->
+          {:error, "ripgrep exited with code #{code}: #{String.trim(output)}"}
+
+        {:error, reason} ->
+          {:error, reason}
+      end
+    end
+  end
+
+  defp first_ripgrep_warning(output) do
+    output
+    |> String.split("\n", trim: true)
+    |> Enum.find("ripgrep exited with code 2", fn line ->
+      not match?({:ok, %{"type" => _}}, Jason.decode(line))
+    end)
   end
 
   defp run_ripgrep_command(args, opts) do
@@ -353,29 +440,84 @@ defmodule CodingAgent.Tools.Grep do
             acc
         end
       end)
-      |> Enum.reverse()
+      |> Enum.sort_by(&{&1.file_path, &1.line_number})
 
     build_result_from_match_refs(matches, opts)
   end
 
   defp search_with_elixir(opts) do
+    task =
+      Task.Supervisor.async_nolink(CodingAgent.TaskSupervisor, fn ->
+        run_elixir_search(opts)
+      end)
+
+    await_elixir_result(task, opts, System.monotonic_time(:millisecond))
+  end
+
+  defp await_elixir_result(task, opts, started_at_ms) do
+    remaining = opts.fallback_timeout_ms - (System.monotonic_time(:millisecond) - started_at_ms)
+
+    cond do
+      aborted?(opts.signal) ->
+        Task.shutdown(task, :brutal_kill)
+        {:error, "Operation aborted"}
+
+      remaining <= 0 ->
+        Task.shutdown(task, :brutal_kill)
+        {:error, "Search timed out after #{opts.fallback_timeout_ms}ms"}
+
+      true ->
+        case Task.yield(task, min(100, remaining)) do
+          {:ok, result} -> result
+          {:exit, reason} -> {:error, "Search error: #{Exception.format_exit(reason)}"}
+          nil -> await_elixir_result(task, opts, started_at_ms)
+        end
+    end
+  end
+
+  defp run_elixir_search(opts) do
     with {:ok, matcher} <- compile_matcher(opts.pattern, opts.case_sensitive, opts.literal) do
-      match_refs =
-        opts.path
-        |> find_files(opts)
-        |> Stream.flat_map(fn file ->
+      limit = opts.skip + opts.max_results
+
+      {refs, count, oversized, incomplete?} =
+        opts.fallback_files_fun.(opts.path, opts)
+        |> Enum.sort()
+        |> Enum.reduce_while({[], 0, 0, false}, fn file, {refs, count, oversized, _} ->
           if aborted?(opts.signal) do
-            []
+            {:halt, {refs, count, oversized, true}}
           else
-            search_file_refs(file, matcher)
+            {matches, oversized?, more?} = search_file_refs(file, matcher, limit - count, opts)
+            count = count + length(matches)
+
+            acc =
+              {Enum.reverse(matches, refs), count, oversized + if(oversized?, do: 1, else: 0),
+               more? or count == limit}
+
+            if count == limit, do: {:halt, acc}, else: {:cont, acc}
           end
         end)
-        |> Enum.to_list()
 
       if aborted?(opts.signal) do
         {:error, "Operation aborted"}
       else
-        build_result_from_match_refs(match_refs, opts)
+        refs = Enum.sort_by(refs, &{&1.file_path, &1.line_number})
+        opts = Map.merge(opts, %{incomplete: incomplete?, bounded: true})
+        result = build_result_from_match_refs(refs, opts)
+
+        details =
+          Map.merge(result.details, %{skipped_oversized: oversized, incomplete: incomplete?})
+
+        details =
+          if incomplete? and count > 0,
+            do:
+              Map.put_new(
+                details,
+                :next_skip,
+                opts.skip + min(opts.max_results, count - opts.skip)
+              ),
+            else: details
+
+        %{result | details: details}
       end
     end
   end
@@ -411,7 +553,7 @@ defmodule CodingAgent.Tools.Grep do
           pattern
           |> Path.wildcard(match_dot: opts.hidden)
           |> Enum.filter(&regular_file?/1)
-          |> Enum.filter(&text_file?/1)
+          |> Enum.sort()
 
         if opts.no_ignore, do: files, else: IgnoreFilter.reject_ignored(files, path)
 
@@ -427,45 +569,46 @@ defmodule CodingAgent.Tools.Grep do
     end
   end
 
-  defp text_file?(path) do
-    case File.open(path, [:read, :binary]) do
-      {:ok, file} ->
-        result =
-          case IO.binread(file, 512) do
-            {:error, _} -> false
-            :eof -> true
-            data -> not String.contains?(data, <<0>>)
+  defp read_leading_window(file_path) do
+    with {:ok, stat} <- File.stat(file_path),
+         {:ok, content} <-
+           File.open(file_path, [:read, :binary], &IO.binread(&1, @max_file_bytes)) do
+      content = if content == :eof, do: "", else: content
+      oversized? = stat.size > @max_file_bytes
+
+      content =
+        if oversized? and is_binary(content) do
+          case :unicode.characters_to_binary(content) do
+            {:incomplete, prefix, _} -> prefix
+            _ -> content
           end
+        else
+          content
+        end
 
-        File.close(file)
-        result
-
-      _ ->
-        false
+      if is_binary(content), do: {:ok, content, oversized?}, else: {:error, :read}
     end
   end
 
-  defp search_file_refs(file_path, matcher) do
-    case File.read(file_path) do
-      {:ok, content} when is_binary(content) ->
-        if String.valid?(content) and not String.contains?(content, <<0>>) do
-          content
-          |> String.split(~r/\r?\n/)
-          |> Enum.with_index(1)
-          |> Enum.reduce([], fn {line, idx}, acc ->
-            if line_matches?(line, matcher) do
-              [%{file_path: file_path, line_number: idx} | acc]
-            else
-              acc
-            end
-          end)
-          |> Enum.reverse()
-        else
-          []
-        end
+  defp search_file_refs(file_path, matcher, limit, opts) do
+    case read_leading_window(file_path) do
+      {:ok, content, oversized?} ->
+        refs =
+          if String.valid?(content) and not String.contains?(content, <<0>>) do
+            content
+            |> String.split(~r/\r?\n/)
+            |> Stream.with_index(1)
+            |> Stream.filter(fn {line, _} -> opts.fallback_match_fun.(line, matcher) end)
+            |> Stream.map(fn {_, idx} -> %{file_path: file_path, line_number: idx} end)
+            |> Enum.take(limit)
+          else
+            []
+          end
+
+        {refs, oversized?, length(refs) == limit}
 
       {:error, _} ->
-        []
+        {[], false, false}
     end
   end
 
@@ -484,7 +627,8 @@ defmodule CodingAgent.Tools.Grep do
   defp build_result_from_match_refs(match_refs, opts) do
     total_match_count = length(match_refs)
     shown_refs = match_refs |> Enum.drop(opts.skip) |> Enum.take(opts.max_results)
-    match_limit_reached? = total_match_count > opts.skip + opts.max_results
+    incomplete? = Map.get(opts, :incomplete, false)
+    match_limit_reached? = incomplete? or total_match_count > opts.skip + opts.max_results
 
     {formatted_lines, lines_truncated?, shown_count, byte_limit_reached?} =
       format_match_refs(shown_refs, opts)
@@ -497,7 +641,7 @@ defmodule CodingAgent.Tools.Grep do
         do: %{truncation | truncated: true, truncated_by: :bytes},
         else: truncation
 
-    more? = total_match_count > opts.skip + shown_count
+    more? = incomplete? or total_match_count > opts.skip + shown_count
 
     notices =
       []
@@ -507,7 +651,7 @@ defmodule CodingAgent.Tools.Grep do
       )
       |> maybe_add_notice(
         match_limit_reached?,
-        "#{opts.max_results} matches limit reached: showing matches #{opts.skip + 1}-#{opts.skip + shown_count} of #{total_match_count}. Use skip=#{opts.skip + shown_count} for the next page, or refine pattern"
+        "#{opts.max_results} matches limit reached: showing matches #{opts.skip + 1}-#{opts.skip + shown_count} of #{if incomplete?, do: "at least ", else: ""}#{total_match_count}. Use skip=#{opts.skip + shown_count} for the next page, or refine pattern"
       )
       |> maybe_add_notice(
         truncation.truncated,
@@ -535,7 +679,8 @@ defmodule CodingAgent.Tools.Grep do
           content <> "\n\n[" <> Enum.join(notices, ". ") <> "]"
       end
 
-    summary = "Found #{total_match_count} match#{if total_match_count == 1, do: "", else: "es"}."
+    summary =
+      "Found #{if incomplete?, do: "at least ", else: ""}#{total_match_count} match#{if total_match_count == 1, do: "", else: "es"}."
 
     text =
       if body do
@@ -627,7 +772,7 @@ defmodule CodingAgent.Tools.Grep do
        ) do
     display_path = display_path(file_path, opts.path, directory_search?)
 
-    case load_file_lines(file_path, cache) do
+    case load_file_lines(file_path, cache, opts) do
       {{:ok, lines}, next_cache} ->
         start_line =
           if opts.context_lines > 0 do
@@ -665,14 +810,14 @@ defmodule CodingAgent.Tools.Grep do
     end
   end
 
-  defp load_file_lines(file_path, cache) do
+  defp load_file_lines(file_path, cache, opts) do
     case Map.fetch(cache, file_path) do
       {:ok, value} ->
         {value, cache}
 
       :error ->
         value =
-          case File.read(file_path) do
+          case read_display_file(file_path, opts) do
             {:ok, content} ->
               normalized = content |> String.replace("\r\n", "\n") |> String.replace("\r", "\n")
               {:ok, String.split(normalized, "\n", trim: false)}
@@ -684,6 +829,15 @@ defmodule CodingAgent.Tools.Grep do
         {value, Map.put(cache, file_path, value)}
     end
   end
+
+  defp read_display_file(file_path, %{bounded: true}) do
+    case read_leading_window(file_path) do
+      {:ok, content, _} -> {:ok, content}
+      error -> error
+    end
+  end
+
+  defp read_display_file(file_path, _opts), do: File.read(file_path)
 
   defp display_path(file_path, search_path, true) do
     relative_path = Path.relative_to(file_path, search_path)

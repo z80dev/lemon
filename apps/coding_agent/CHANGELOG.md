@@ -17,6 +17,11 @@
 
 ### Fixed
 
+- Grep pages are sorted by path and line across both engines. Partial ripgrep
+  errors preserve matches with warnings, and lookaround/backreferences select
+  PCRE2 or explain the unsupported Rust-regex construct. The Elixir fallback
+  now has a 30-second deadline, a 4 MiB leading-file window with oversized-file
+  counts, and stops once the requested page is filled.
 - File overwrites reject truncated read output and preserve existing UTF-8 BOMs
   and dominant CRLF endings, including ACP writes with available prior content.
 
