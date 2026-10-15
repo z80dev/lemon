@@ -2,6 +2,10 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+
+node "$ROOT/scripts/check_docs_navigation.mjs"
+node --test "$ROOT/scripts/check_docs_navigation.test.mjs"
+bun "$ROOT/clients/tui/scripts/generate-commands-doc.ts" --check
 WORK_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/lemon-docs-site.XXXXXX")"
 DOCS_COPY="$WORK_ROOT/docs"
 

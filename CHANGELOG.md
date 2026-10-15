@@ -8,7 +8,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
-No unreleased changes yet.
+### Added
+
+- Publish a generated TUI command and global-key reference, expose overlooked tool guides in site navigation, and guard against orphaned pages and command-reference drift.
 
 ---
 
