@@ -66,6 +66,7 @@ defmodule LemonCore.Config.Tools do
 
   defstruct [
     :auto_resize_images,
+    :approval_mode,
     :web,
     :wasm,
     :disclosure,
@@ -97,6 +98,7 @@ defmodule LemonCore.Config.Tools do
           timeout_seconds: integer(),
           cache_ttl_minutes: integer(),
           max_redirects: integer(),
+          max_body_bytes: pos_integer(),
           user_agent: String.t(),
           readability: boolean(),
           allow_private_network: boolean(),
@@ -141,6 +143,7 @@ defmodule LemonCore.Config.Tools do
 
   @type t :: %__MODULE__{
           auto_resize_images: boolean(),
+          approval_mode: String.t() | nil,
           web: %{
             search: web_search_config(),
             fetch: web_fetch_config(),
@@ -162,6 +165,7 @@ defmodule LemonCore.Config.Tools do
 
     %__MODULE__{
       auto_resize_images: resolve_auto_resize(tools_settings),
+      approval_mode: Map.get(tools_settings, "approval_mode"),
       web: resolve_web(tools_settings),
       wasm: resolve_wasm(tools_settings),
       disclosure: resolve_disclosure(tools_settings),
@@ -275,6 +279,7 @@ defmodule LemonCore.Config.Tools do
           default: if(is_nil(fetch["enabled"]), do: true, else: fetch["enabled"])
         ),
       max_chars: Env.get(:lemon_web_fetch_max_chars, default: fetch["max_chars"] || 50_000),
+      max_body_bytes: Map.get(fetch, "max_body_bytes", 5 * 1024 * 1024),
       timeout_seconds: Env.get(:lemon_web_fetch_timeout, default: fetch["timeout_seconds"] || 30),
       cache_ttl_minutes:
         Env.get(:lemon_web_fetch_cache_ttl, default: fetch["cache_ttl_minutes"] || 15),

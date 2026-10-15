@@ -4,6 +4,76 @@ defmodule LemonCore.ToolPolicyTest do
 
   alias LemonCore.ToolPolicy
 
+  test "global modes gate write and exec tiers while preserving explicit overrides" do
+    for {mode, expected} <- [ask: {true, true}, write: {false, true}, yolo: {false, false}] do
+      policy = ToolPolicy.parse!(%{approval_mode: mode})
+      {write?, exec?} = expected
+      refute ToolPolicy.requires_approval?(policy, "read")
+      refute ToolPolicy.requires_approval?(policy, "websearch")
+      assert ToolPolicy.requires_approval?(policy, "write") == write?
+      assert ToolPolicy.requires_approval?(policy, "bash") == exec?
+      assert ToolPolicy.requires_approval?(policy, "unknown_extension") == exec?
+
+      override =
+        ToolPolicy.parse!(%{
+          approval_mode: mode,
+          approvals: %{"bash" => :never, "read" => :always}
+        })
+
+      refute ToolPolicy.requires_approval?(override, "bash")
+      assert ToolPolicy.requires_approval?(override, "read")
+    end
+
+    legacy = ToolPolicy.from_profile(:full_access)
+    refute ToolPolicy.requires_approval?(legacy, "write")
+    refute ToolPolicy.requires_approval?(legacy, "bash")
+
+    assert ToolPolicy.requires_approval?(
+             %{approval_mode: :yolo, require_approval: ["bash"], approvals: %{"bash" => :never}},
+             "bash"
+           )
+  end
+
+  test "tiers classify mutation, executable and argument-sensitive LSP surfaces" do
+    for tool <- ~w(write edit patch ast_grep fs_checkpoint remember skill_manage) do
+      assert ToolPolicy.tier(tool) == :write
+    end
+
+    for tool <-
+          ~w(bash process_input kill_process eval debug lsp_diagnostics browser_evaluate mcp_server_tool wasm_echo unknown) do
+      assert ToolPolicy.tier(tool) == :exec
+    end
+
+    for action <-
+          ~w(definition type_definition implementation references rename rename_file code_actions diagnostics) do
+      assert ToolPolicy.tier("lsp", %{"action" => action, "apply" => false}) == :read
+      assert ToolPolicy.tier("lsp", %{"action" => action, "apply" => true}) == :exec
+    end
+
+    assert ToolPolicy.tier("lsp", %{"action" => "request"}) == :exec
+    assert ToolPolicy.tier("lsp", %{"action" => "rename", "apply" => "true"}) == :exec
+  end
+
+  test "mode survives JSON transport, sparse persistence and restrictive delegation" do
+    parent = ToolPolicy.parse!(%{"approval_mode" => "ask"})
+    assert ToolPolicy.to_map(parent)["approval_mode"] == "ask"
+
+    assert {:ok, %{"approval_mode" => "write"}} =
+             ToolPolicy.normalize(%{"approval_mode" => "write"})
+
+    assert {:error, _} = ToolPolicy.parse(%{approval_mode: "invalid"})
+
+    assert {:ok, restricted} =
+             ToolPolicy.restrict(parent, %{approval_mode: :yolo, approvals: %{"bash" => :never}})
+
+    assert restricted.approval_mode == :ask
+    assert ToolPolicy.requires_approval?(restricted, "bash")
+    refute ToolPolicy.subset?(%{approval_mode: :yolo}, parent)
+    assert ToolPolicy.subset?(restricted, parent)
+    assert ToolPolicy.with_default_approval_mode(parent, "yolo") == parent
+    assert ToolPolicy.with_default_approval_mode(%{}, "write").approval_mode == :write
+  end
+
   test "native presets remain ceilings even when explicit grants claim full access" do
     policy =
       ToolPolicy.intersect(
