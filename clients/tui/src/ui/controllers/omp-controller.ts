@@ -64,6 +64,7 @@ export class OmpController {
 			onRefresh: () => void this.refresh(true),
 			onDiscover: () => void this.discover(),
 			onResume: (row) => void this.resume(row),
+			onContinue: (row) => void this.resume(row, true),
 		});
 	}
 
@@ -130,7 +131,7 @@ export class OmpController {
 	}
 
 	async send(session: OmpSession, mode: OmpSendMode, message: string): Promise<boolean> {
-		const verb = mode === "steer" ? "steer" : "follow-up";
+		const verb = mode === "steer" ? "steer" : mode === "redirect" ? "redirect" : "follow-up";
 		if (Buffer.byteLength(message, "utf8") > OMP_MESSAGE_MAX_BYTES) {
 			this.#report(`${verb} not sent: message exceeds 16 KiB`, "warning");
 			return false;
@@ -203,7 +204,7 @@ export class OmpController {
 	}
 
 	/** Resume a discovered omp session in the TUI's working directory. */
-	async resume(row: OmpDiscoveredSession): Promise<void> {
+	async resume(row: OmpDiscoveredSession, continueInterrupted = false): Promise<void> {
 		if (row.liveId) {
 			this.panel.setFlash({
 				text: `already live as ${row.liveId} — select it in the list instead`,
@@ -217,6 +218,7 @@ export class OmpController {
 			const { session } = await this.#options.methods.ompSessionsResume({
 				ompSessionId: row.ompSessionId,
 				cwd: this.#options.cwd,
+				...(continueInterrupted ? { continue: true } : {}),
 			});
 			this.#options.store.upsert(session);
 			this.panel.setDiscover(undefined);

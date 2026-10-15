@@ -26,6 +26,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   action, app or site.
 - omp tool cards show parallel worker grids, combined usage and task errors,
   approval waits, isolated worktrees, child activity, model prices and transcript tails.
+- TUI omp delegates support redirect, interrupted-session continuation, approval
+  mode and isolated starts; the typed control-plane client exposes batch starts,
+  model discovery, configuration and subagent transcripts.
 
 ---
 

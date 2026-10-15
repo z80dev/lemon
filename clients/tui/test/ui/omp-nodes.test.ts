@@ -9,10 +9,19 @@ test("semantic nodes prominently show approvals, worktree and child activity", (
 	if (!parsed) throw new Error("fixture");
 	const session = {
 		...parsed,
-		pendingApprovals: [{ tool: "bash\u001b[31m" }],
-		worktree: { branch: "worker", kept: true, dirty: true },
+		pendingApprovals: [
+			{ id: "approval_child", tool: "bash\u001b[31m", details: null, requestedAt: null },
+		],
+		worktree: { ...parsed.worktree!, branch: "worker", kept: true, dirty: true },
 		subagents: [
-			{ id: "child", agent: null, description: null, status: "running", activity: "Reading files" },
+			{
+				...parsed.subagents[0]!,
+				id: "child",
+				agent: null,
+				description: null,
+				status: "running",
+				activity: "Reading files",
+			},
 		],
 	};
 	const header = JSON.stringify(ompAgentNode(session, { now: 0, key: "session" }));
