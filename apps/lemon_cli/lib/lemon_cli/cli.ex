@@ -17,8 +17,6 @@ defmodule LemonCli.CLI do
   source and packaged installs.
   """
 
-  require Logger
-
   alias LemonCore.Backup
   alias LemonCore.Config.Modular
   alias LemonCli.Onboarding.Runner
@@ -50,17 +48,16 @@ defmodule LemonCli.CLI do
   @exit_error 1
   @exit_usage 2
 
-  @doc "Returns whether the global configuration still needs offline setup."
+  @doc """
+  Returns whether the global configuration still needs offline setup.
+
+  Starts only the core services needed to read encrypted credentials; a cold
+  source-wrapper invocation has not started the secrets store yet.
+  """
   @spec setup_required?() :: boolean()
   def setup_required? do
+    ensure_apps_started!([:lemon_core])
     not Readiness.ready?(Readiness.status())
-  rescue
-    error ->
-      Logger.warning(
-        "Setup readiness check failed (#{inspect(error.__struct__)}); setup is required"
-      )
-
-      true
   end
 
   @doc """

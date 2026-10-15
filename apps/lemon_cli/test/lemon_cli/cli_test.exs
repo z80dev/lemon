@@ -59,6 +59,35 @@ defmodule LemonCli.CLITest do
     {:ok, tmp_dir: tmp_dir}
   end
 
+  test "cold setup readiness starts the secrets store without starting the runtime" do
+    path = LemonCore.Config.Modular.global_path()
+    File.mkdir_p!(Path.dirname(path))
+    File.write!(path, "[defaults]\nprovider = \"ollama\"\nmodel = \"llama3\"\n")
+    root = Path.expand("../../../..", __DIR__)
+
+    source = """
+    # Match mix run --no-start without trying to acquire the parent test's Mix lock.
+    Mix.start()
+    Mix.env(:test)
+    nil = Process.whereis(LemonCore.Store)
+    {:error, :store_unavailable} = LemonCore.Secrets.status()
+    false = LemonCli.CLI.setup_required?()
+    true = is_pid(Process.whereis(LemonCore.Store))
+    nil = Process.whereis(LemonGateway.Supervisor)
+    IO.puts("cold readiness complete")
+    """
+
+    {output, status} =
+      System.cmd(
+        System.find_executable("elixir"),
+        ["--erl", "+S 2:2", "-pa", Path.join(root, "_build/test/lib/*/ebin"), "-e", source],
+        stderr_to_stdout: true
+      )
+
+    assert status == 0, output
+    assert output =~ "cold readiness complete"
+  end
+
   test "invalid TOML fails validation and names the file", %{tmp_dir: tmp_dir} do
     path = LemonCore.Config.Modular.global_path()
     File.mkdir_p!(Path.dirname(path))
