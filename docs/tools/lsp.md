@@ -61,7 +61,6 @@ The supervised stdio manager registers these language servers:
 | `rust_analyzer` | Rust | `rust-analyzer` | `LEMON_LSP_RUST_ANALYZER_COMMAND` | Install rust-analyzer and put it on `PATH`. |
 | `gopls` | Go | `gopls` | `LEMON_LSP_GOPLS_COMMAND` | `go install golang.org/x/tools/gopls@latest`. |
 | `clangd` | C/C++ | `clangd` | `LEMON_LSP_CLANGD_COMMAND` | Install clangd and provide `compile_commands.json` or `compile_flags.txt` in the workspace for useful diagnostics. |
-
 | `tlaplus` | TLA+ | `tlapm_lsp --stdio` | `LEMON_LSP_TLAPLUS_COMMAND` | Install TLAPM and put tlapm_lsp on PATH. |
 | `zls` | ZLS | `zls` | `LEMON_LSP_ZLS_COMMAND` | Install ZLS and put zls on PATH. |
 | `vscode_html_language_server` | HTML | `vscode-html-language-server --stdio` | `LEMON_LSP_VSCODE_HTML_LANGUAGE_SERVER_COMMAND` | Install with npm install -g vscode-langservers-extracted. |
