@@ -18,7 +18,8 @@ defmodule LemonCore.Setup.Readiness do
   `lemon doctor`; readiness never sends credentials over the network.
   """
 
-  alias LemonCore.Config.{LegacyAgentMigration, Modular}
+  alias LemonCore.Config.{LegacyAgentMigration, Modular, Providers}
+  alias LemonCore.Doctor.ProviderDiagnostics
   alias LemonCore.Secrets
 
   @type step :: :config | :secrets | :provider
@@ -79,6 +80,21 @@ defmodule LemonCore.Setup.Readiness do
   @spec ready?(setup_state()) :: boolean()
   def ready?(state), do: pending_steps(state) == []
 
+  @doc """
+  Whether a provider may run without credentials.
+
+  Explicit `auth = "none"` endpoints and the keyless local presets qualify.
+  The preset ids are kept here so core remains usable without lemon_ai.
+  """
+  @spec keyless_provider?(term(), map()) :: boolean()
+  def keyless_provider?(provider, config) do
+    auth = Map.get(config, :auth) || Map.get(config, "auth")
+
+    Providers.canonical_auth(auth) == "none" or
+      (is_binary(provider) and
+         normalize_provider_name(provider) in ~w(ollama lm-studio lmstudio llama-cpp llama.cpp llamacpp vllm litellm lite-llm))
+  end
+
   defp derive_provider(settings) do
     defaults = settings["defaults"] || %{}
 
@@ -113,7 +129,7 @@ defmodule LemonCore.Setup.Readiness do
 
   defp credential_state(nil, _provider_cfg), do: {false, :missing_default_provider}
 
-  defp credential_state(_provider, provider_cfg) do
+  defp credential_state(provider, provider_cfg) do
     refs =
       provider_cfg
       |> Map.take(["oauth_secret", "api_key_secret"])
@@ -122,7 +138,9 @@ defmodule LemonCore.Setup.Readiness do
     inline_key = normalize_optional_string(provider_cfg["api_key"])
 
     cond do
+      keyless_provider?(provider, provider_cfg) -> {true, nil}
       inline_key != nil -> {true, nil}
+      ProviderDiagnostics.ambient_configured?(provider) -> {true, nil}
       Enum.any?(refs, &secret_usable?/1) -> {true, nil}
       true -> {false, :credential_not_usable}
     end

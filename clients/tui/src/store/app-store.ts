@@ -14,6 +14,7 @@ import type {
 	ConnectionState,
 	ModelsListResult,
 } from "../protocol/types.ts";
+import type { UserPromptRequested } from "../protocol/user-prompt.ts";
 import { Emitter } from "./events.ts";
 import { OmpStore } from "./omp-store.ts";
 import { QueueStore } from "./queue-store.ts";
@@ -24,6 +25,7 @@ export interface AppStoreEventMap {
 	"conn-changed": { state: ConnectionState };
 	"session-changed": { key: string };
 	"approvals-changed": { pending: number };
+	"prompts-changed": { pending: number };
 	/** A session's block list grew or mutated; the UI may need a full render. */
 	"blocks-changed": { key: string };
 	/** The default submission mode changed (`/mode`). */
@@ -56,6 +58,7 @@ export class AppStore {
 	readonly events = new Emitter<AppStoreEventMap>();
 	readonly sessions = new Map<string, SessionStore>();
 	readonly approvals = new Map<string, PendingApproval>();
+	readonly userPrompts = new Map<string, UserPromptRequested>();
 	/**
 	 * Unsent editor text, per session. A switch parks the outgoing session's
 	 * draft here and takes the incoming one back out, so a half-typed prompt
@@ -130,6 +133,22 @@ export class AppStore {
 		if (this.connection === state) return;
 		this.connection = state;
 		this.events.emit("conn-changed", { state });
+	}
+
+	addUserPrompt(event: UserPromptRequested): void {
+		this.userPrompts.set(event.promptId, event);
+		this.events.emit("prompts-changed", { pending: this.userPrompts.size });
+	}
+
+	removeUserPrompt(promptId: string): void {
+		if (!this.userPrompts.delete(promptId)) return;
+		this.events.emit("prompts-changed", { pending: this.userPrompts.size });
+	}
+
+	clearUserPrompts(): void {
+		if (this.userPrompts.size === 0) return;
+		this.userPrompts.clear();
+		this.events.emit("prompts-changed", { pending: 0 });
 	}
 
 	addApproval(event: ApprovalRequestedEvent, block?: ApprovalBlock): void {

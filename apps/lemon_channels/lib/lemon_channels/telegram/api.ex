@@ -196,6 +196,13 @@ defmodule LemonChannels.Telegram.API do
     request(token, "getFile", params, @default_timeout)
   end
 
+  def download_file(token, file_path, max_bytes) when is_binary(file_path) do
+    LemonChannels.ImageDownload.download(
+      "https://api.telegram.org/file/bot#{token}/#{file_path}",
+      max_bytes
+    )
+  end
+
   def download_file(token, file_path) when is_binary(file_path) do
     url = "https://api.telegram.org/file/bot#{token}/#{file_path}"
     headers = []

@@ -113,6 +113,32 @@ defmodule CodingAgent.Session.RunTranslatorTest do
     assert json["meta"]["budget"]["used"] == 120
   end
 
+  test "inclusive budget stops never duplicate child spend in usage records" do
+    details = %{
+      reason: :budget_exceeded,
+      scope: :run,
+      metric: :cost_usd,
+      limit: 1.0,
+      used: 1.25,
+      run_usage: %{tokens: 100, cost_usd: 1.25},
+      session_usage: %{tokens: 100, cost_usd: 1.25},
+      provider_usage: %{
+        run_usage: %{tokens: 10, cost_usd: 0.25},
+        session_usage: %{tokens: 10, cost_usd: 0.25}
+      },
+      message: "Parent budget exhausted"
+    }
+
+    RunTranslator.handle_event(
+      translator(),
+      {:error, {:budget_exceeded, details}, %{new_messages: []}}
+    )
+
+    assert_receive {:completed, %{usage: usage, meta: %{budget: ^details}}}
+    assert usage.total_tokens == 10
+    assert usage.cost.total == 0.25
+  end
+
   test "cancel intent drains terminal tool actions before one failed completion" do
     result = %AgentToolResult{
       content: [%TextContent{text: "observed partial output"}],
