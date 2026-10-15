@@ -68,6 +68,7 @@ defmodule LemonOmp.Projection do
             pending_approvals: [],
             approvals: %{approved: 0, denied: 0, expired: 0},
             settling: false,
+            redirecting: false,
             exit: nil
 
   @type t :: %__MODULE__{}
@@ -125,7 +126,15 @@ defmodule LemonOmp.Projection do
   end
 
   defp event(state, "agent_start", _frame),
-    do: %{state | status: :running, activity: "Thinking", error: nil, stream_text: ""}
+    do: %{
+      state
+      | status: :running,
+        activity: "Thinking",
+        error: nil,
+        stream_text: "",
+        settling: false,
+        redirecting: false
+    }
 
   defp event(state, "turn_start", _frame), do: %{state | turns: state.turns + 1}
 
@@ -278,11 +287,11 @@ defmodule LemonOmp.Projection do
 
     %{
       state
-      | status: :idle,
-        activity: nil,
+      | status: if(state.redirecting, do: :running, else: :idle),
+        activity: if(state.redirecting, do: "Redirecting turn"),
         active_tools: [],
         stream_text: "",
-        settling: false,
+        settling: state.redirecting,
         result: result
     }
   end
@@ -345,6 +354,7 @@ defmodule LemonOmp.Projection do
         active_tools: [],
         stream_text: "",
         settling: false,
+        redirecting: false,
         ended_at: now_ms(),
         updated_at: now_ms(),
         error: error,

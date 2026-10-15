@@ -38,6 +38,9 @@ session id (for example `omp_3f9a1c2b7d4e`). Then:
 - “Tell omp to skip the docs” — steers the running turn; “after that, also
   run the linter” queues a follow-up. A message to an idle session starts a
   new turn.
+- “Stop that; instead, fix the parser” — redirects omp: aborts its current turn
+  and starts over with the new message in one omp command. A wait already in
+  progress follows the redirected turn, rather than ending at the aborted turn.
 - “Cancel the omp run” — aborts the current turn; the session stays open.
 - “Close it” — ends the omp process. Its history stays on disk.
 - “Which omp sessions exist here?” / “resume the last one” — lists omp's stored
@@ -115,6 +118,10 @@ status-bar badge (`omp N▶` while sessions run) update live from the runtime's
 `omp.session` events. When Lemon's agent uses the `omp` tool, its card shows
 the session's status, activity, todo progress and usage as they change.
 
+The chat tool and Elixir API also support **redirect** (stop the current turn
+and start over with a new message). The panel does not yet have a redirect key;
+`s` steers and `c` only cancels.
+
 ## From the CLI
 
 ```bash
@@ -167,8 +174,8 @@ another omp).
   `LEMON_OMP_APPROVALS=decline` restores headless cancellation of tool approvals.
   Other blocking dialogs (confirm, input, editor, unrelated selects) are still
   declined and counted in `declinedPrompts`.
-- **Control fails closed.** Steering, follow-ups and cancellation go to one
-  process invocation and are acknowledged only after omp accepts them. A
+- **Control fails closed.** Steering, follow-ups, redirects and cancellation go
+  to one process invocation and are acknowledged only after omp accepts them. A
   closed or crashed session refuses them; resume it to continue (resuming is a
   new invocation with a new id). If omp does not answer in time the result is
   “outcome unknown” — check the status before retrying, because the request

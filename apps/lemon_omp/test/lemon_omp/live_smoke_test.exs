@@ -111,6 +111,53 @@ defmodule LemonOmp.LiveSmokeTest do
     assert {:ok, %{"status" => "closed"}} = LemonOmp.close(resumed["id"])
   end
 
+  test "real omp redirects an active bash tool into a completed write turn", ctx do
+    assert {:ok, started} =
+             LemonOmp.start(%{
+               cwd: ctx.cwd,
+               model: ctx.model,
+               thinking: "off",
+               approval_mode: "yolo",
+               prompt: "Run sleep 60 using bash now. Do not do anything else."
+             })
+
+    id = started["id"]
+    os_pid = :sys.get_state(session_pid(id)).os_pid
+    kill_on_exit(os_pid)
+
+    await_wire(
+      id,
+      &Enum.any?(&1["activeTools"], fn tool -> String.contains?(tool["name"], "bash") end),
+      180_000
+    )
+
+    parent = self()
+
+    waiter =
+      Task.async(fn ->
+        LemonOmp.wait(id, 180_000,
+          on_update: fn wire -> send(parent, {:redirect_progress, wire}) end
+        )
+      end)
+
+    assert_receive {:redirect_progress, %{"status" => "running"}}
+
+    assert {:ok, %{"delivery" => "redirect"}} =
+             LemonOmp.send_message(
+               id,
+               "Stop that. Instead create redirected.txt containing exactly ok using the write tool, then stop.",
+               :redirect
+             )
+
+    assert {:ok, final, :settled} = Task.await(waiter, 190_000)
+    assert final["status"] == "idle"
+    assert final["lastTurn"] == "completed"
+    assert File.read!(Path.join(ctx.cwd, "redirected.txt")) == "ok"
+    assert Enum.any?(final["recentTools"], &String.contains?(&1["name"], "write"))
+    assert {:ok, %{"status" => "closed"}} = LemonOmp.close(id)
+    wait_until(fn -> not os_alive?(os_pid) end, 20_000)
+  end
+
   test "real omp tool approvals round-trip through Lemon's shared approvals", ctx do
     put_app_env(:approvals, :bridge)
     LemonCore.Bus.subscribe("exec_approvals")

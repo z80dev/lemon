@@ -193,6 +193,135 @@ defmodule LemonOmp.SessionLifecycleTest do
       assert Enum.any?(sent, &match?(%{"type" => "prompt", "message" => "next task"}, &1))
     end
 
+    test "redirect keeps existing waits running across abort, acknowledgement and the new turn",
+         ctx do
+      ws = workspace!()
+      id = start!(ws, "HOLD the wrong turn", ctx)["id"]
+      await_wire(id, &(&1["activeTools"] != []))
+      parent = self()
+
+      waiter =
+        Task.async(fn ->
+          LemonOmp.wait(id, 10_000,
+            on_update: fn wire -> send(parent, {:redirect_update, wire}) end
+          )
+        end)
+
+      assert_receive {:redirect_update, %{"status" => "running"}}
+      many = Task.async(fn -> LemonOmp.wait_many([id], 10_000) end)
+
+      wait_until(fn ->
+        match?(
+          {:current_function, {LemonOmp, :wait_many_loop, 2}},
+          Process.info(many.pid, :current_function)
+        )
+      end)
+
+      sender =
+        Task.async(fn ->
+          LemonOmp.send_message(id, "REDIRECT_GATE new task", :redirect, ctx.scope)
+        end)
+
+      aborted = await_wire(id, &(&1["lastTurn"] == "aborted"))
+      assert aborted["status"] == "running"
+      assert aborted["activeTools"] == []
+      assert Task.yield(sender, 100) == nil
+      assert Task.yield(waiter, 0) == nil
+      assert Task.yield(many, 0) == nil
+
+      File.write!(Path.join(ws, ".fake_omp_redirect_ack"), "")
+      assert {:ok, %{"delivery" => "redirect"}} = Task.await(sender)
+
+      # Even the old turn's fallback timer cannot settle a redirect awaiting start.
+      assert Task.yield(waiter, 2_100) == nil
+      assert {:ok, %{"status" => "running"}} = LemonOmp.get(id)
+      File.write!(Path.join(ws, ".fake_omp_redirect_start"), "")
+      await_wire(id, &(&1["turns"] == 2 and &1["activeTools"] != []))
+      refute :sys.get_state(session_pid(id)).projection.settling
+      assert Task.yield(waiter, 0) == nil
+
+      File.write!(Path.join(ws, ".fake_omp_redirect_finish"), "")
+
+      assert {:ok, final, :settled} = Task.await(waiter)
+      assert final["status"] == "idle"
+      assert final["lastTurn"] == "completed"
+      assert final["result"] == "Redirected: REDIRECT_GATE new task"
+      assert {:ok, [^final], :settled} = Task.await(many)
+
+      assert [%{"type" => "abort_and_prompt", "message" => "REDIRECT_GATE new task"}] =
+               Enum.filter(received(ws), &(&1["type"] == "abort_and_prompt"))
+
+      refute "abort" in received_types(ws)
+    end
+
+    test "a redirect acknowledged after the new turn finishes does not reopen it", ctx do
+      ws = workspace!()
+      id = start!(ws, "HOLD the old turn", ctx)["id"]
+      await_wire(id, &(&1["activeTools"] != []))
+
+      assert {:ok, %{"delivery" => "redirect"}} =
+               LemonOmp.send_message(id, "LATE_REDIRECT new task", :redirect, ctx.scope)
+
+      assert {:ok,
+              %{"status" => "idle", "lastTurn" => "completed", "result" => "Redirected early"},
+              :settled} = LemonOmp.wait(id, 3_000, ctx.scope)
+    end
+
+    test "redirect on an idle session delivers a plain prompt", ctx do
+      ws = workspace!()
+      id = start!(ws, "first task", ctx)["id"]
+      await_wire(id, &(&1["status"] == "idle"))
+
+      assert {:ok, %{"delivery" => "prompt"}} =
+               LemonOmp.send_message(id, "replacement task", :redirect, ctx.scope)
+
+      final = await_wire(id, &(&1["result"] == "Done: replacement task"))
+      assert final["lastTurn"] == "completed"
+
+      assert Enum.any?(
+               received(ws),
+               &match?(%{"type" => "prompt", "message" => "replacement task"}, &1)
+             )
+
+      refute "abort_and_prompt" in received_types(ws)
+    end
+
+    test "a rejected redirect leaves the original turn running", ctx do
+      ws = workspace!()
+      id = start!(ws, "HOLD the original", ctx)["id"]
+      await_wire(id, &(&1["activeTools"] != []))
+
+      assert {:error, {:rejected, "Redirect refused"}} =
+               LemonOmp.send_message(id, "REJECT this", :redirect, ctx.scope)
+
+      assert {:ok, %{"status" => "running", "lastTurn" => nil}} = LemonOmp.get(id)
+      assert {:ok, _} = LemonOmp.send_message(id, "finish original", :steer, ctx.scope)
+      assert {:ok, %{"lastTurn" => "completed"}, :settled} = LemonOmp.wait(id, 3_000)
+    end
+
+    test "a redirect prompt failure after success records a turn error without another reply",
+         ctx do
+      for message <- ["PROMPT_FAIL", "PROMPT_FAIL_STARTED"] do
+        ws = workspace!()
+        id = start!(ws, "HOLD the original", ctx)["id"]
+        await_wire(id, &(&1["activeTools"] != []))
+        pid = session_pid(id)
+
+        assert {:ok, %{"delivery" => "redirect"}} =
+                 LemonOmp.send_message(id, message, :redirect, ctx.scope)
+
+        final = await_wire(id, &(&1["lastTurn"] == "error"))
+        assert final["status"] == "idle"
+        assert final["error"] == "Redirect prompt failed"
+        assert final["activeTools"] == []
+        assert Process.alive?(pid)
+        assert {:ok, _} = LemonOmp.send_message(id, "recover", :redirect, ctx.scope)
+
+        assert %{"lastTurn" => "completed", "error" => nil} =
+                 await_wire(id, &(&1["result"] == "Done: recover"))
+      end
+    end
+
     test "a prompt acknowledged after its turn finished leaves the session idle", ctx do
       ws = workspace!()
       id = start!(ws, "first", ctx)["id"]
@@ -447,6 +576,11 @@ defmodule LemonOmp.SessionLifecycleTest do
 
       assert {:error, :outcome_unknown} = LemonOmp.cancel(id, ctx.scope)
       assert {:error, :outcome_unknown} = LemonOmp.send_message(id, "hello?", :steer, ctx.scope)
+
+      assert {:error, :outcome_unknown} =
+               LemonOmp.send_message(id, "start over?", :redirect, ctx.scope)
+
+      assert 1 == Enum.count(received(ws), &(&1["type"] == "abort_and_prompt"))
       assert {:ok, %{"status" => "running"}} = LemonOmp.get(id)
     end
 

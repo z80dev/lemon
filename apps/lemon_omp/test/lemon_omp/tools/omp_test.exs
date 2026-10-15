@@ -35,6 +35,8 @@ defmodule LemonOmp.Tools.OmpTest do
              ~w(start start_many wait status list send cancel close resume discover)
 
     assert tool.parameters["properties"]["approval_mode"]["enum"] == ~w(always-ask write yolo)
+    assert tool.parameters["properties"]["mode"]["enum"] == ~w(steer follow_up redirect)
+    assert tool.parameters["properties"]["mode"]["description"] =~ "going the wrong way"
     assert tool.parameters["properties"]["approval_mode"]["description"] =~ "start, resume"
 
     assert tool.parameters["properties"]["tasks"]["items"]["properties"]["approval_mode"]["enum"] ==
@@ -171,6 +173,29 @@ defmodule LemonOmp.Tools.OmpTest do
     assert again.is_error
     assert %{"action" => "send", "error" => "not_running"} = again.details
     assert text(again) == "omp send failed: " <> LemonOmp.error_message(:not_running)
+  end
+
+  test "send redirect aborts the running turn and describes the accepted redirect", ctx do
+    started = run(ctx.tool, %{"action" => "start", "prompt" => "HOLD the wrong task"})
+    id = started.details["session"]["id"]
+    await_wire(id, &(&1["activeTools"] != []))
+
+    redirected =
+      run(ctx.tool, %{
+        "action" => "send",
+        "id" => id,
+        "message" => "the right task",
+        "mode" => "redirect"
+      })
+      |> assert_untrusted()
+
+    refute redirected.is_error
+    assert redirected.details["delivery"] == "redirect"
+    assert text(redirected) =~ "redirected the turn"
+    assert Enum.any?(received(ctx.ws), &(&1["type"] == "abort_and_prompt"))
+
+    assert %{"lastTurn" => "completed"} =
+             await_wire(id, &(&1["result"] == "Redirected: the right task"))
   end
 
   test "start with wait streams progress until the turn settles", ctx do
