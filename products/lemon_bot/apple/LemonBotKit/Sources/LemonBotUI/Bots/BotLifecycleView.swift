@@ -22,14 +22,16 @@ struct BotLifecycleView: View {
     var body: some View {
         NavigationStack {
             Form {
-                SwiftUI.Section("Distinct operations") {
+                SwiftUI.Section("What would you like to do?") {
                     Picker("Operation", selection: $operation) {
                         if owner { Text("Duplicate").tag("duplicate"); Text("Move machine").tag("move") }
                         if owner { Text("Reset selected scopes").tag("reset") }
                         if owner { Text("Delete Bot").tag("delete") }
                     }
-                    Text("Hide is reversible and only suppresses your own sidebar and notifications. It never stops work.")
-                    Button("Hide instead") { Task { await action.perform { let _: Bot = try await store.mutate("PATCH", resourcePath("bots", bot.id, "/sidebar"), body: ["revision": .number(Double(bot.revision)), "hidden": .bool(true)]); try await store.refresh(); dismiss() } } }
+                }
+                SwiftUI.Section("Hide from my sidebar") {
+                    Text("Hiding only affects your sidebar and notifications. Work keeps running.")
+                    Button("Hide Bot") { Task { await action.perform { let _: Bot = try await store.mutate("PATCH", resourcePath("bots", bot.id, "/sidebar"), body: ["revision": .number(Double(bot.revision)), "hidden": .bool(true)]); try await store.refresh(); dismiss() } } }
                 }
                 if ["duplicate", "move"].contains(operation) {
                     SwiftUI.Section("Destination") {
@@ -38,37 +40,37 @@ struct BotLifecycleView: View {
                         if !store.machines.contains(where: { $0.status == "online" && (operation != "move" || $0.id != bot.machineId) }) {
                             Text(operation == "move" ? "No other machine is online to move to." : "No machine is online. Start one of your machines, then come back.").font(LBFont.meta).foregroundStyle(LB.warning)
                         }
-                        Toggle("I accept shared host files, browser sessions and CLI credentials", isOn: $sharedHostConsent)
+                        Toggle("I understand Bots on this computer user share files and logins", isOn: $sharedHostConsent)
                     }
                 }
                 switch operation {
                 case "duplicate":
-                    SwiftUI.Section("Explicit duplicate scope") {
+                    SwiftUI.Section("What to copy") {
                         Toggle("Include installed skills", isOn: $includeSkills)
                         Toggle("Copy routines as paused", isOn: $includeRoutines)
                         Text("Settings are copied. No memory, chat, attachments, secrets, browser logins or connector tokens are copied.")
                         Button("Create separate duplicate") { Task { await copyBot() } }.disabled(name.isEmpty || machineID.isEmpty || !sharedHostConsent)
                     }
                 case "move":
-                    SwiftUI.Section("Placement cutover") {
-                        Text("Move requires idle work and an online destination. Persona, enabled skills and profile memory are acknowledged before cutover. Product transcript stays; files, browser logins, credentials and terminals do not move automatically.")
-                        if !bot.activeRunIds.isEmpty { Text("Active or unconfirmed runs block moving this Bot.").foregroundStyle(.orange) }
-                        Button("Preview exact move") { Task { await preview() } }.disabled(machineID.isEmpty || !sharedHostConsent || !bot.activeRunIds.isEmpty)
+                    SwiftUI.Section("Move to another machine") {
+                        Text("The Bot must be idle and its new machine online. Review what the preview will carry over before confirming. Chat history stays. Files, browser logins, credentials and terminals don't move automatically.")
+                        if !bot.activeRunIds.isEmpty { Text("Active or unconfirmed runs block moving this Bot.").foregroundStyle(LB.warning) }
+                        Button("Preview move") { Task { await preview() } }.disabled(machineID.isEmpty || !sharedHostConsent || !bot.activeRunIds.isEmpty)
                     }
                 case "reset":
-                    SwiftUI.Section("Select scopes to reset") {
-                        ForEach(["conversations", "memory", "job", "routines", "connectors", "attachments"], id: \.self) { scope in Toggle(scope.capitalized, isOn: selection(scope, set: $resetScopes)) }
-                        Text("Identity, owner, machine and unselected scopes stay. Host files, browser/CLI logins and external provider sessions are not implicitly erased. Preview lists exact deleted and retained IDs.")
+                    SwiftUI.Section("Choose what to reset") {
+                        ForEach(["conversations", "memory", "job", "routines", "connectors", "attachments"], id: \.self) { scope in Toggle(scope == "connectors" ? "Connected apps" : scope.capitalized, isOn: selection(scope, set: $resetScopes)) }
+                        Text("The Bot's identity, owner and machine stay, along with anything you don't select. Machine files and outside logins aren't deleted unless the preview says so.")
                         Button("Preview selected reset") { Task { await preview() } }.disabled(resetScopes.isEmpty)
                     }
                 default:
                     SwiftUI.Section("Permanent deletion") {
-                        Text("Delete the product Bot and previewed related data. Files, machine OS accounts, browser sessions, backups and independently retained provider authorization remain unless the preview explicitly reports verified removal.")
+                        Text("Deleting removes this Bot and the data listed in the preview. Files on the machine, OS accounts, browser logins, backups and provider logins aren't deleted unless the preview says they are.")
                         Button("Preview permanent deletion", role: .destructive) { Task { await preview() } }
                     }
                 }
                 ActionErrorView(message: action.error)
-                if let receipt = action.receipt { Text(receipt).font(.caption) }
+                if let receipt = action.receipt { Text(receipt).font(LBFont.meta) }
             }.disabled(action.busy || store.connectionState != "online")
                 .navigationTitle("\(bot.name) · lifecycle")
                 .toolbar {

@@ -18,7 +18,7 @@ struct RoutineLibraryView: View {
                 VStack(alignment: .leading) {
                     Text(routine.name).font(.headline)
                     Text("\(routine.enabled ? "Active" : "Paused") · \(routine.scheduleDescription)")
-                    Text("Next: \(hubDate(routine.nextRunAtMs)) · Bot \(routine.botId)").font(.caption)
+                    Text("Next: \(hubDate(routine.nextRunAtMs)) · Bot \(routine.botId)").font(LBFont.meta)
                 }
             } }
             if cursor != nil { Button("More routines") { Task { await load(more: true) } } }
@@ -215,9 +215,9 @@ struct RoutineEditorView: View {
             if saved.webhookUrl != nil {
                 Section("Authenticated webhook") {
                     Text(saved.webhookUrl ?? "").textSelection(.enabled)
-                    Text("POST JSON with clientNonce and optional payload. Bearer current one-time-issued key. Accepted means started, not completed. Rotation immediately revokes the old key; a paused routine cannot receive work.")
-                    Button("Issue / rotate one-time key") { rotatePresented = true }
-                    Button("Revoke webhook ingress", role: .destructive) { revokePresented = true }
+                    Text("Send a POST with a JSON body containing a unique clientNonce (a new value for every request) and an optional payload. Send your key as Authorization: Bearer <key>. A started response means the routine began, not that it finished. Creating a new key disables the old one. Paused routines don't accept requests.")
+                    Button("Create a new webhook key") { rotatePresented = true }
+                    Button("Turn off webhook", role: .destructive) { revokePresented = true }
                 }
             }
             runHistoryFields
@@ -235,7 +235,7 @@ struct RoutineEditorView: View {
         VStack(alignment: .leading) {
             Text("\(humanizedStatus(run.trigger)) · \(hubStatusLabel(run.status))").font(LBFont.rowTitle)
             Text("\(hubDate(run.startedAtMs)) · cost \(run.costUsd.map { String(format: "$%.4f", $0) } ?? "unknown")")
-            if let error = run.error { Text(error).foregroundStyle(.red) }
+            if let error = run.error { Text(error).foregroundStyle(LB.danger) }
             Button("Open result") { Task { await action.perform(readOnly: true) { try await store.openConversation(run.conversationId) } } }
             Button("Check status") { Task { await action.perform(readOnly: true) { let current: RoutineRun = try await store.read("/routine-runs/\(hubID(run.id))"); if let index = runs.firstIndex(where: { $0.id == current.id }) { runs[index] = current }; if action.uncertainResourceID == current.id, ["completed", "succeeded", "failed", "cancelled"].contains(current.status) { action.uncertain = false; action.uncertainResourceID = nil; action.error = nil } } } }
             if ["reserved", "queued", "running", "awaiting_input"].contains(run.status) {
@@ -258,9 +258,9 @@ struct RoutineEditorView: View {
             }
             if channelEvent == "email_received" { TextField("Allowed sender emails / domains (comma separated)", text: $senders); Text("Mail alone never wakes the Bot. No subject filter is claimed.") }
             else { TextField("Channel filter (optional)", text: $channel); TextField("Phrase filter (optional)", text: $phrase); if channelEvent == "reaction" { TextField("Exact reaction", text: $reaction) } }
-            if let error = channels.first(where: { $0.id == channelID })?.lastError { Text(error).foregroundStyle(.red).textSelection(.enabled) }
+            if let error = channels.first(where: { $0.id == channelID })?.lastError { Text(error).foregroundStyle(LB.danger).textSelection(.enabled) }
             if channelEvent == "message", phrase.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                Text("Every new message in this exact scope may start work and consume usage. A channel-only limit remains broad. This opt-in is not action approval and never carries over from a template or copy.").foregroundStyle(.orange)
+                Text("Every new message in this exact scope may start work and consume usage. A channel-only limit remains broad. This opt-in is not action approval and never carries over from a template or copy.").foregroundStyle(LB.warning)
                 Text("Bot \(botID) · binding \(channelID) · channel \(channel.isEmpty ? "all authorized binding channels" : channel)")
                 Toggle("I explicitly authorize this broad listener for the scope shown", isOn: $noisyConsent)
             }
@@ -276,7 +276,7 @@ struct RoutineEditorView: View {
                 }
                 Text("Filters must satisfy every selected event's registered schema. If schemas differ, explicitly select a compatible subset; existing events are never silently removed.")
                 let unavailable = selectedEventNames.subtracting(Set(definition.events.map(\.name)))
-                if !unavailable.isEmpty { Text("Previously selected events no longer advertised: \(unavailable.sorted().joined(separator: ", ")). Remove them explicitly before changing this trigger.").foregroundStyle(.orange) }
+                if !unavailable.isEmpty { Text("Previously selected events no longer advertised: \(unavailable.sorted().joined(separator: ", ")). Remove them explicitly before changing this trigger.").foregroundStyle(LB.warning) }
                 ForEach(unavailable.sorted(), id: \.self) { name in Button("Explicitly remove unavailable event \(name)", role: .destructive) { selectedEventNames.remove(name) } }
             }
         default: Text("Webhook receives authenticated bounded JSON, with one-time key issuance after save. No event backfill or implicit authorization.")

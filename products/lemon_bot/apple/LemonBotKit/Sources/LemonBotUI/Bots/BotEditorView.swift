@@ -71,7 +71,7 @@ struct BotEditorView: View {
                             Text("No machine is online. Start one of your machines, then come back.").font(LBFont.meta).foregroundStyle(LB.warning)
                         }
                         Toggle("I trust this host and accept shared files, browser logins and CLI credentials", isOn: $consent)
-                        Text("Bots on one OS user are not isolated. Use separate hosts/users for hard isolation.").font(.caption)
+                        Text("Bots on one OS user are not isolated. Use separate hosts/users for hard isolation.").font(LBFont.meta)
                     }
                 }
                 SwiftUI.Section("Avatar") {
@@ -89,7 +89,7 @@ struct BotEditorView: View {
                     if let avatarID { AttachmentView(store: store, attachmentID: avatarID) }
                     TextField("Image generation prompt", text: $generatedPrompt)
                     Button("Generate with configured image provider") { Task { await generate() } }.disabled(action.busy || bot == nil || generatedPrompt.isEmpty || store.connectionState != "online")
-                    Text("Generation returns an unattached real image. Crop or explicitly save it as the Bot avatar; missing provider prerequisite is shown exactly.").font(.caption)
+                    Text("Generation returns an unattached real image. Crop or explicitly save it as the Bot avatar; missing provider prerequisite is shown exactly.").font(LBFont.meta)
                 }
                 if bot == nil {
                     SwiftUI.Section("Focused Job") {
@@ -113,7 +113,7 @@ struct BotEditorView: View {
                     SwiftUI.Section("Your notification preference") { Toggle("Notifications for this Bot", isOn: $notify) }
                 }
                 ActionErrorView(message: action.error)
-                if let receipt = action.receipt { Text(receipt).font(.caption) }
+                if let receipt = action.receipt { Text(receipt).font(LBFont.meta) }
                 Button(bot == nil ? "Create Bot" : "Save changes") { Task { await save() } }.disabled(action.busy || name.isEmpty || store.connectionState != "online" || (bot == nil && (machineID.isEmpty || !consent)))
                 if store.connectionState != "online" { Text("Reconnect to save changes.").font(LBFont.meta).foregroundStyle(LB.muted) }
                 else if name.isEmpty { Text("Add a name to save.").font(LBFont.meta).foregroundStyle(LB.muted) }

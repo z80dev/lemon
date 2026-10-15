@@ -195,6 +195,10 @@ Status sections appear before Lifecycle. **Start** is unavailable while the Lemo
 
 On Mac, switching Settings panes keeps unfinished Preferences and local-platform edits in place. Sign-out asks for confirmation. When a voice message isn't confirmed, check its conversation before choosing **Start new voice message**; this discards the reviewed recording, never resends it, and does not bypass any pending-message check.
 
+The clients call the shared account space a **workspace** and a computer running Bots a **machine**. **Apps & channels** contains Connected apps, Chat channels, Email and X. Connecting an account does not approve tools or send messages. Email addresses are checked, requested, approved and then claimed as separate steps.
+
+**Open quick composer** opens the Mac's compact draft window. In voice chat, choose **Record**, **Stop**, review the text, then **Send** or **Save as draft**. **Turn speech into text** uploads only the selected recording to the server's configured speech-to-text provider.
+
 The pane refreshes every 10 seconds while visible, and every 2 seconds while a
 command is running, with Refresh and iOS pull-to-refresh for a manual read.
 Operation state and bounded output are the backend's actual receipt, with Copy

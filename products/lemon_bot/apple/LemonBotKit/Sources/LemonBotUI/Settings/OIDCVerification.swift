@@ -67,7 +67,7 @@ struct OIDCVerificationView: View {
                     reauthToken = result.reauthToken; control.notice = "Reauthenticated; token is single-use and expires in five minutes."
                 }
             }.disabled(provider.isEmpty || (purpose == "link" && reauthToken.isEmpty))
-            if let error = control.error { Text(error).foregroundStyle(.red).textSelection(.enabled) }
+            if let error = control.error { Text(error).foregroundStyle(LB.danger).textSelection(.enabled) }
             if let notice = control.notice { Text(notice) }
         }.task { await control.perform { providers = try await store.read("/auth/oidc/providers", as: [AdminOIDCSummary].self) } }
     }

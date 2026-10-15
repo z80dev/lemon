@@ -20,7 +20,7 @@ struct GroupEditorView: View {
             Form {
                 SwiftUI.Section("Group") {
                     TextField("Group name", text: $name)
-                    Text("Choose 2–6 of your own Bots. Each works on its assigned machine; @everyone may start several billed provider runs. Inputs and files are visible to the selected Bots.")
+                    Text("Choose 2–6 of your Bots. Each works on its machine. Anyone in the group can start Bots, which may use paid providers. Selected Bots can see the group's messages and files.")
                 }
                 SwiftUI.Section("Bots · \(botIDs.count)/6") {
                     ForEach(store.bots.filter { $0.ownerUserId == store.user?.id }) { bot in Toggle(isOn: selected(bot.id)) { BotIdentityAnchor(store: store, bot: bot) }.disabled(!botIDs.contains(bot.id) && botIDs.count >= 6) }
@@ -32,6 +32,7 @@ struct GroupEditorView: View {
                 ActionErrorView(message: action.error)
                 Button(conversation == nil ? "Create group" : "Update group") { Task { await save() } }
                     .disabled(action.busy || store.connectionState != "online" || !(2...6).contains(botIDs.count) || !botIDs.contains(lead) || name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                Text(store.isOnline ? "Add a name, 2–6 Bots and a lead Bot to save." : "Reconnect to save this group.").font(LBFont.meta).foregroundStyle(LB.muted)
             }.navigationTitle(conversation == nil ? "New group" : "Group members")
                 .toolbar { Button("Cancel") { dismiss() } }
         }.frame(minWidth: 320, minHeight: 520)
