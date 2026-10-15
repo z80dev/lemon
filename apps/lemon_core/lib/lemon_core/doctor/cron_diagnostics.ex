@@ -11,11 +11,30 @@ defmodule LemonCore.Doctor.CronDiagnostics do
     jobs = store_entries(:cron_jobs)
     runs = store_entries(:cron_runs)
     audit_events = store_entries(:cron_audit_events)
+    notices = store_entries(:cron_failure_notices)
+    notice_job_ids = MapSet.new(notices, & &1.id)
+    job_ids = MapSet.new(jobs, & &1.id)
+    failing_jobs = Enum.filter(jobs, &(failure_streak(&1.data) > 0))
+
+    unread_jobs =
+      failing_jobs
+      |> Enum.filter(&MapSet.member?(notice_job_ids, &1.id))
+      |> Enum.map(&format_job/1)
+
+    # One-shot jobs retire after terminalization; their undelivered alert must
+    # remain visible even though their job definition is no longer present.
+    retired_notices =
+      notices
+      |> Enum.reject(&MapSet.member?(job_ids, &1.id))
+      |> Enum.map(&format_failure_notice/1)
 
     %{
       job_count: length(jobs),
       enabled_count: Enum.count(jobs, &truthy?(get_value(&1.data, :enabled))),
       disabled_count: Enum.count(jobs, &(not truthy?(get_value(&1.data, :enabled)))),
+      failing_job_count: length(failing_jobs),
+      unread_failing_job_count: length(unread_jobs) + length(retired_notices),
+      unread_failing_jobs: Enum.take(unread_jobs ++ retired_notices, limit),
       run_count: length(runs),
       active_run_count: Enum.count(runs, &(run_status(&1.data) in ["pending", "running"])),
       failed_run_count: Enum.count(runs, &(run_status(&1.data) in ["failed", "timeout"])),
@@ -64,6 +83,15 @@ defmodule LemonCore.Doctor.CronDiagnostics do
     _, _ -> empty_status()
   end
 
+  defp format_failure_notice(%{id: id, data: notice}) do
+    %{
+      id_hash: hash(id),
+      failure_streak: integer_value(notice, :failure_streak) || 1,
+      last_status: safe_terminal_status(notice),
+      retired: true
+    }
+  end
+
   defp store_entries(table) do
     table
     |> LemonCore.Store.list()
@@ -84,6 +112,8 @@ defmodule LemonCore.Doctor.CronDiagnostics do
       schedule_present: present?(string_value(job, :schedule)),
       mode: job_mode(job),
       enabled: truthy?(get_value(job, :enabled)),
+      failure_streak: failure_streak(job),
+      last_status: safe_terminal_status(normalize_map(get_value(job, :failure_state))),
       timezone: safe_timezone(string_value(job, :timezone)),
       jitter_sec: integer_value(job, :jitter_sec) || 0,
       timeout_ms: integer_value(job, :timeout_ms),
@@ -159,6 +189,9 @@ defmodule LemonCore.Doctor.CronDiagnostics do
       job_count: 0,
       enabled_count: 0,
       disabled_count: 0,
+      failing_job_count: 0,
+      unread_failing_job_count: 0,
+      unread_failing_jobs: [],
       run_count: 0,
       active_run_count: 0,
       failed_run_count: 0,
@@ -221,6 +254,18 @@ defmodule LemonCore.Doctor.CronDiagnostics do
 
       _ ->
         nil
+    end
+  end
+
+  defp failure_streak(job) do
+    state = normalize_map(get_value(job, :failure_state))
+    integer_value(state, :consecutive_failures) || 0
+  end
+
+  defp safe_terminal_status(job) do
+    case string_value(job, :last_status) do
+      status when status in ["completed", "failed", "timeout", "aborted"] -> status
+      _ -> nil
     end
   end
 

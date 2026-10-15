@@ -1344,6 +1344,7 @@ defmodule LemonAutomation.CronManager do
         }
 
       CronStore.put_run(updated_run)
+      {job, state} = update_job_outcome(job, updated_run, state)
 
       if job && CronJob.execution_mode(job) == :agent do
         memory_result =
@@ -1362,7 +1363,10 @@ defmodule LemonAutomation.CronManager do
       maybe_record_terminal_audit(Keyword.get(opts, :audit_action), updated_run)
       maybe_record_retry_audit(job, updated_run, retry_intent)
       Events.emit_run_completed(updated_run)
-      if deliver?, do: forward_result(updated_run, job)
+      notification_result = deliver_to_channel(updated_run, job)
+
+      if deliver? and notification_result != :suppressed,
+        do: forward_summary_to_base_session(updated_run)
 
       state =
         state
@@ -1372,6 +1376,14 @@ defmodule LemonAutomation.CronManager do
 
       {updated_run, state}
     end
+  end
+
+  defp update_job_outcome(nil, _run, state), do: {nil, state}
+
+  defp update_job_outcome(job, run, state) do
+    job = CronJob.terminalize(job, run.status)
+    :ok = CronStore.put_job(job)
+    {job, %{state | jobs: Map.put(state.jobs, job.id, job)}}
   end
 
   defp retain_unknown_run(state, run, reason, opts \\ []) do
@@ -2142,16 +2154,6 @@ defmodule LemonAutomation.CronManager do
       standalone_mode: false,
       state_vsn: @vsn
     }
-  end
-
-  # Cron runs execute in isolated sub-sessions. A delivered result becomes
-  # visible in two places: the originating main/channel-peer session (a
-  # synthetic run completion on its bus topic plus run history) and a chat
-  # chosen by `LemonAutomation.CronDelivery` (explicit `deliver_to`, the
-  # originating chat, or the paired owner chat).
-  defp forward_result(%CronRun{} = run, job) do
-    forward_summary_to_base_session(run)
-    deliver_to_channel(run, job)
   end
 
   defp forward_summary_to_base_session(%CronRun{} = run) do

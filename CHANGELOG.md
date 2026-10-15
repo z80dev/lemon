@@ -16,6 +16,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Added
 
+- Rate-limited cron failure and recovery alerts, persistent failure streaks,
+  owner-chat fallback, and doctor warnings for failures without a delivery route.
+
 - Provider status and Lemon Bot instance panes now expose the last observed
   provider failure with a timestamp and bounded, credential-free category summary.
 

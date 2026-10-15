@@ -9,7 +9,33 @@ defmodule LemonCli.RunsCommand do
   def run(args), do: execute(:recent, args)
 
   def run_cron(["runs" | args]), do: execute(:cron, args)
-  def run_cron(_args), do: usage("Use lemon cron runs [options].")
+  def run_cron(["status" | args]), do: cron_status(args)
+  def run_cron(_args), do: usage("Use lemon cron runs [options] or lemon cron status [--json].")
+
+  defp cron_status(args) do
+    case OptionParser.parse(args, strict: [json: :boolean]) do
+      {opts, [], []} ->
+        case request("cron.status", %{}) do
+          {:ok, status} ->
+            if opts[:json] do
+              IO.puts(Jason.encode!(status))
+            else
+              IO.puts(
+                "Cron jobs: #{status["jobCount"] || 0}, enabled: #{status["activeJobs"] || 0}, " <>
+                  "failing: #{status["failingJobs"] || 0}"
+              )
+            end
+
+            0
+
+          {:error, reason} ->
+            failure(reason, opts[:json] == true)
+        end
+
+      _ ->
+        usage("Use lemon cron status [--json].")
+    end
+  end
 
   defp execute(kind, args) do
     with {:ok, opts} <- parse(kind, args),
