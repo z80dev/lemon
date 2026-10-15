@@ -8,6 +8,12 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
+### Fixed
+
+- Skill usage recording no longer depends on the introspection handler. Pinned
+  skills reject content edits, never-used skills retain a stale-age grace floor,
+  and background curation preserves skills referenced by disabled or active cron jobs.
+
 ### Changed
 
 - Preserve portable Agent Skills string-valued metadata (including `metadata.lemon`)

@@ -446,6 +446,15 @@ Lemon tracks load/write counts and lifecycle state outside `SKILL.md` in
 `skills.usage.json`. Agent-authored skills can be reported, pinned, archived,
 or restored with `skill_manage`.
 
+Successful `read_skill` views (including status/file views) increment the load
+counter; successful `skill_manage` writes and patches increment the write counter.
+Discovery/relevance auto-injection contains metadata, not skill instructions, so
+it does not count as a load. Counters are independent of introspection telemetry.
+Pinned skills cannot be edited, patched, have supporting files written/removed,
+deleted, or archived through `skill_manage`: unpin first.
+Never-loaded skills cannot be automatically archived before `stale_after_days`,
+even when `archive_after_days` is configured shorter.
+
 For a maintenance pass:
 
 ```bash
@@ -473,6 +482,14 @@ for active router sessions to drain, applies the same interval/pause gates, and
 submits the curator prompt to the configured agent only when review is required.
 Those background reviews default to the learning tools only: `read_skill`,
 `skill_manage`, `remember`, and `recall`.
+
+Background automatic stale/archive transitions also exempt skills referenced by
+any persisted cron job, including disabled/paused jobs. Cron jobs have no dedicated
+skill field: the automation layer checks `meta.skill` / `meta.skills` and complete
+skill names in prompt text (not substrings of longer skill names). This conservative
+name matching may preserve a skill mentioned only as background context. The
+lower-level curator accepts `exempt_skills`; direct API/CLI maintenance callers
+must supply exemptions when they want the same cron protection.
 
 ---
 
