@@ -8,6 +8,11 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
+- Opt-in model `checkpoint(goal)` / `rewind(report)` retain exploration findings
+  as branch context without restoring files or prompting for confirmation.
+  Enable `[runtime.tools.checkpoint] enabled = true` (default off). The former
+  filesystem `checkpoint` tool is now `fs_checkpoint`, with no alias.
+
 - Lemon Web omp adds parallel worker starts and a live usage grid, searchable
   free-marked model selection, live model/thinking configuration with explicit
   partial-failure receipts, and bounded subagent transcript drill-down.

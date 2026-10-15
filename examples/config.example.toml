@@ -322,6 +322,11 @@ allow_tools = []
 # BROWSERBASE_API_KEY / BROWSERBASE_PROJECT_ID, BROWSER_USE_API_KEY,
 # FIRECRAWL_API_KEY, or CAMOFOX_URL / CAMOFOX_API_KEY configure hosted backends.
 
+# Conversation-only model exploration checkpoints (not filesystem rollback).
+#
+# [runtime.tools.checkpoint]
+# enabled = false
+
 # --- Computer Use (native apps through LCU; docs/tools/computer-use.md) ---
 
 # [runtime.tools.computer_use]
