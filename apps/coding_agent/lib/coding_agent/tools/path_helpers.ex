@@ -97,4 +97,61 @@ defmodule CodingAgent.Tools.PathHelpers do
       end
     end
   end
+
+  @doc """
+  Resolves semicolon-separated search roots, ignoring blank entries and retaining
+  missing paths for a result notice. Non-missing access/type errors still fail.
+  """
+  def resolve_search_paths(path, cwd, allowed_types, opts \\ []) do
+    path = if path in [nil, ""], do: ".", else: path
+
+    roots =
+      path
+      |> String.split(";")
+      |> Enum.map(&String.trim/1)
+      |> Enum.reject(&(&1 == ""))
+      |> Enum.map(&resolve_path(&1, cwd, opts))
+      |> Enum.uniq()
+
+    roots
+    |> Enum.reduce_while({:ok, [], []}, fn root, {:ok, found, missing} ->
+      case File.stat(root) do
+        {:error, :enoent} ->
+          {:cont, {:ok, found, [root | missing]}}
+
+        _ ->
+          case CodingAgent.Tools.FileValidation.check_path_access(root, allowed_types) do
+            {:ok, _} -> {:cont, {:ok, [root | found], missing}}
+            {:error, _} = error -> {:halt, error}
+          end
+      end
+    end)
+    |> case do
+      {:ok, [], [missing | _]} ->
+        CodingAgent.Tools.FileValidation.check_path_access(missing, allowed_types)
+
+      {:ok, [], []} ->
+        {:error, "Search scope must contain at least one non-empty path"}
+
+      {:ok, found, missing} ->
+        {:ok, Enum.sort(found), Enum.reverse(missing)}
+
+      error ->
+        error
+    end
+  end
+
+  @doc "Adds a missing-root notice to a successful search result."
+  def with_missing_paths(result, []), do: result
+  def with_missing_paths({:error, _} = error, _missing), do: error
+
+  def with_missing_paths(%LemonAgent.Types.AgentToolResult{} = result, missing) do
+    notice = "Missing search roots (skipped): " <> Enum.join(missing, "; ")
+
+    %{
+      result
+      | content: result.content ++ [%LemonAi.Types.TextContent{text: notice}],
+        details: Map.put(result.details, :missing_paths, missing)
+    }
+  end
 end

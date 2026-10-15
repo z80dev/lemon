@@ -241,6 +241,43 @@ code and any uncertain invocation `id`. `OMP_PARTIALLY_APPLIED` includes `applie
 back. Outcome-unknown errors also carry `retrySafe: false`: reconcile rather than
 automatically retrying.
 
+## From Lemon Web
+
+Open `/omp` to start, inspect, resume and control delegate sessions. New sessions
+offer an approval-mode override and **Isolate** (a managed Git worktree).
+Leave approval mode at **omp default** to preserve omp's configured policy.
+Session details show the mode, approval counters and pending tool approvals:
+**Approve** approves that request once; **Deny** refuses it.
+
+Use **Steer** for guidance, **Follow-up** to queue work, or **Redirect** to abort
+the current turn and start the replacement message. Receipts report the actual
+delivery returned by omp; an idle session can receive the message as a prompt.
+An unconfirmed mutation is never retried automatically.
+
+Resume discovery marks Lemon/omp sources, interrupted sessions and isolated
+branches. For interrupted sessions, leave the message empty to offer **Continue
+interrupted work**; this starts a new continuation turn, not an OS-command replay.
+Resume can also override approval mode. Isolated-session details show the path,
+branch, base and cleanup state, with a `git merge <branch>` hint. Inspect and
+commit any worker changes before merging; Web does not merge automatically.
+Delegate output is escaped plain text, never executable HTML.
+
+For parallel work, enable **Start parallel workers** in New session and separate
+one to eight prompts with blank lines. Workspace, model, thinking, approval mode
+and isolation apply to every task. Ordered task receipts retain individual errors;
+the worker grid follows live session events and combines token usage and cost.
+An invalid-batch error identifies the zero-based task index; uncertain starts are
+never replayed automatically.
+
+**Browse omp models** searches the daemon's omp catalog, with a free-only filter,
+FREE badges and input/output prices per million tokens. Choose a model for a new
+session or open **Configure model / thinking** on a live session. Either setting
+may be changed independently. Partial configuration explicitly lists applied
+steps and the failed step: applied changes are not rolled back or retried.
+
+Subagent rows include activity, tool calls and usage. **Transcript tail** loads
+up to 50 messages as bounded escaped plain text, without exposing transcript paths.
+
 ## From the TUI
 
 Agent `omp` tool cards show parallel starts and multi-worker waits as compact

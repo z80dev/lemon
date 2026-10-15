@@ -163,11 +163,13 @@ opens prefilled onboarding; **Enter address…** accepts another secure address.
 Physical iPhones start with an empty address and a tailnet HTTPS placeholder,
 not the phone's own loopback address. Simulator keeps the development default.
 
-When the backend is reachable, owners can start/restart Lemon through its
-configured runtime launcher; owners/admins can reconnect a rejected or stopped
-Lemon link. Restart requires confirmation. Running operations are observed by
-read-only polling and expose the backend's bounded command output, never an
-automatic mutation replay. An unconfigured launcher reports its actual reason.
+When the backend is reachable, owners can use only the Start/Restart actions it
+advertises. Launcher controls run on the Lemon Bot service host; remote controller
+controls restart or stop Lemon but cannot start it while it is down. The panel
+shows the backend's explanation when an action is unavailable. Owners/admins can
+reconnect a rejected or stopped Lemon link. Restart requires confirmation.
+Running operations are observed by read-only polling and expose the backend's
+bounded output, never an automatic mutation replay.
 
 The Mac app remains sandboxed: when the backend itself is down at a loopback
 address, **Start it on this Mac** offers `lemon daemon`, the integrated-checkout
@@ -180,18 +182,23 @@ commands and Terminal actions are not shown on iPhone.
 
 **Settings → Lemon instance** shows the backend this account is attached to,
 its version/address/start time, the Lemon controller link and its last error,
-and the live Lemon version, uptime, memory, runs, sessions, nodes, channels and
-skills. Missing measurements stay unavailable instead of becoming zero. Owners
+and the live Lemon build (version, release channel and short commit), uptime,
+memory, runs, sessions, nodes and skills. Providers show the default model provider,
+credential health and last error; a missing key points to `lemon setup` on the
+Lemon host. Channels show individual connection states and last errors with
+relative times. Missing measurements stay unavailable instead of becoming zero. Owners
 and admins can view it and reconnect the link; other members see an explanation
 without fetching privileged instance data. About links here for service status
 and keeps client/worker compatibility and safe handoff diagnostics separate.
 
-Owners can **Start**, **Restart** or **Stop** only when the backend reports
-runtime control is configured. Stop and Restart explain the interruption and
-require explicit confirmation. Admins cannot issue owner-only lifecycle commands.
-When controls are unavailable, the backend's reason is shown. The shared pane
-is also available from **View instance details** in the connection panel.
-Status sections appear before Lifecycle. **Start** is unavailable while the Lemon link is connected.
+Owners see **Start**, **Restart** and **Stop** only when each action is advertised
+by the backend. Launcher controls run on the service host. Controller controls
+restart or stop Lemon remotely, but cannot start it when down; start it on its
+host instead. Stop and Restart explain the interruption and require explicit
+confirmation. Admins cannot issue owner-only lifecycle commands. The backend's
+reason stays visible even when some controls are available. The shared pane is
+also available from **View instance details** in the connection panel. Status
+sections appear before Lifecycle.
 
 On Mac, switching Settings panes keeps unfinished Preferences and local-platform edits in place. Sign-out asks for confirmation. When a voice message isn't confirmed, check its conversation before choosing **Start new voice message**; this discards the reviewed recording, never resends it, and does not bypass any pending-message check.
 
@@ -203,8 +210,9 @@ The pane refreshes every 10 seconds while visible, and every 2 seconds while a
 command is running, with Refresh and iOS pull-to-refresh for a manual read.
 Operation state and bounded output are the backend's actual receipt, with Copy
 inside Details. A lost command response stays fenced; refresh never replays it.
-The `instance-pane` and `instance-running` Mac snapshot scenes exercise the
-settings registration and active-operation display in light and dark.
+The `instance-pane`, `instance-running` and `controller-down` Mac snapshot scenes
+exercise provider/channel health, launcher controls, remote restart progress and
+unavailable remote Start in light and dark.
 
 
 

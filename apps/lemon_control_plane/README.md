@@ -84,6 +84,10 @@ build metadata, offline provider credential presence, per-channel redacted healt
 and runtime lifecycle availability alongside the existing counters. See the
 [system method reference](../../docs/reference/control-plane.md#status) for exact
 fields and their limits; credential presence is not a provider network probe.
+Admin-only `system.restart` and `system.stop` return acceptance before the
+connection schedules their side effects. Restart requires `LEMON_LAUNCHER`;
+stop is graceful and does not require a launcher. See the
+[lifecycle contract](../../docs/reference/control-plane.md#systemrestart-and-systemstop).
 
 
 ### Verified approval resolution

@@ -8,6 +8,15 @@
   expansion. `proc://` lists owned processes; process URLs peek output, write
   stdin or terminate through `/kill`.
 
+- Find sorts the complete candidate set before applying `max_results`, with
+  `sort: "mtime"` for newest-first (path tie-breaks) or the existing default
+  `"path"`. Slash globs use full-path matching in fd as in the fallback;
+  scopes exceeding 100,000 candidates fail with a narrowing hint.
+
+- Grep and find accept semicolon-separated roots, merge/deduplicate results before
+  paging, and report missing roots without discarding existing ones. Grep long
+  lines now show a match-centered 500-character window and the original column.
+
 - Grep supports `output_mode: content|files|count`, with paged paths or per-file
   matching-line counts and a total. Newline patterns search across lines in both backends.
 

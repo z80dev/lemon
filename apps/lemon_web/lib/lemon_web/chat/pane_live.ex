@@ -621,11 +621,27 @@ defmodule LemonWeb.Chat.PaneLive do
   def handle_async(:models, {:ok, {:ok, models}}, socket),
     do: {:noreply, assign(socket, :models, models)}
 
-  def handle_async(:models, {:ok, {:error, error}}, socket),
-    do: {:noreply, assign(socket, :models, {:error, Rpc.message(error)})}
+  def handle_async(:models, {:ok, {:error, error}}, socket) do
+    Logger.info("chat models unavailable: #{inspect(error)}")
 
-  def handle_async(:models, {:exit, _}, socket),
-    do: {:noreply, assign(socket, :models, {:error, "Models are unavailable."})}
+    {:noreply,
+     assign(
+       socket,
+       :models,
+       {:error, "Models are unavailable. Try again, or check /diagnostics."}
+     )}
+  end
+
+  def handle_async(:models, {:exit, reason}, socket) do
+    Logger.info("chat models task failed: #{inspect(reason)}")
+
+    {:noreply,
+     assign(
+       socket,
+       :models,
+       {:error, "Models are unavailable. Try again, or check /diagnostics."}
+     )}
+  end
 
   def handle_async(:context, {:ok, {:ok, data}}, socket),
     do: {:noreply, assign(socket, :context, %{status: :ok, data: data, error: nil})}
@@ -674,13 +690,23 @@ defmodule LemonWeb.Chat.PaneLive do
      |> load_context()}
   end
 
-  def handle_async(:compact, {:ok, {:error, error}}, socket),
-    do: {:noreply, socket |> assign(:compacting, false) |> toast(:danger, Rpc.message(error))}
+  def handle_async(:compact, {:ok, {:error, error}}, socket) do
+    Logger.info("chat compaction refused: #{inspect(error)}")
 
-  def handle_async(:compact, {:exit, _}, socket),
-    do:
-      {:noreply,
-       socket |> assign(:compacting, false) |> toast(:danger, "Compaction did not complete.")}
+    {:noreply,
+     socket
+     |> assign(:compacting, false)
+     |> toast(:danger, "Compaction did not complete. Try again, or check /diagnostics.")}
+  end
+
+  def handle_async(:compact, {:exit, reason}, socket) do
+    Logger.info("chat compaction task failed: #{inspect(reason)}")
+
+    {:noreply,
+     socket
+     |> assign(:compacting, false)
+     |> toast(:danger, "Compaction did not complete. Try again, or check /diagnostics.")}
+  end
 
   def handle_async(:recovery, {:ok, {key, generation, revision, result}}, socket) do
     recovery = socket.assigns.recovery
@@ -1603,7 +1629,7 @@ defmodule LemonWeb.Chat.PaneLive do
          )}
 
       {:error, error} ->
-        Logger.info("chat.send refused code=#{inspect(error.code)}")
+        Logger.info("chat.send refused: #{inspect(error)}")
 
         {:noreply,
          socket

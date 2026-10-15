@@ -51,6 +51,16 @@ Source runtime options go after `start`, `daemon`, or `restart`:
 `./bin/lemon start --no-distribution`. Runtime options are accepted after the
 relevant lifecycle command, not as bare launcher flags.
 
+Authenticated remote clients can call the admin-only `system.restart` and
+`system.stop` control-plane methods. They return acceptance before acting; restart
+uses the current `LEMON_LAUNCHER`, while stop gracefully shuts down the VM even
+without a launcher. These methods cannot start an offline controller. Source
+restarts preserve effective distribution name/cookie (or `--no-distribution`);
+both launchers inherit the control-plane/web/sim port environment. See the
+[system method reference](../reference/control-plane.md#systemrestart-and-systemstop)
+for availability, single-flight behavior, and release/custom-launcher limits.
+
+
 ### CLI commands
 
 These commands are dispatched by `LemonCli.CLI` in both source checkouts and

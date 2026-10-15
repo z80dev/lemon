@@ -11,6 +11,13 @@ defmodule LemonControlPlane.Methods.StatusTest do
     def start_link(_), do: Agent.start_link(fn -> nil end, name: __MODULE__)
   end
 
+  defmodule DiscordChannel do
+    use Agent
+    def id, do: "discord"
+    def meta, do: %{}
+    def start_link(_), do: Agent.start_link(fn -> nil end, name: __MODULE__)
+  end
+
   setup do
     keys = ~w(RELEASE_NAME RELEASE_VSN LEMON_GIT_SHA LEMON_RELEASE_CHANNEL LEMON_LAUNCHER)
     previous = Map.new(keys, &{&1, System.get_env(&1)})
@@ -147,11 +154,14 @@ defmodule LemonControlPlane.Methods.StatusTest do
 
   test "channel health retains a timestamped sanitized error and clears it on recovery" do
     :ok = LemonChannels.Registry.register(Channel)
+    start_supervised!(Channel)
     on_exit(fn -> LemonChannels.Registry.unregister(Channel.id()) end)
     assert {:ok, configured} = Status.handle(%{}, %{})
 
     assert %{"state" => "configured", "lastError" => nil} =
              Enum.find(configured["channels"]["details"], &(&1["id"] == Channel.id()))
+
+    assert Channel.id() in configured["channels"]["connected"]
 
     before = System.system_time(:millisecond)
 
@@ -169,12 +179,27 @@ defmodule LemonControlPlane.Methods.StatusTest do
     refute Jason.encode!(detail) =~ "token="
     assert failed["summary"]["channelErrorCount"] >= 1
 
-    start_supervised!(Channel)
     LemonChannels.Registry.record_status(Channel.id(), :connected)
     assert {:ok, recovered} = Status.handle(%{}, %{})
 
     assert %{"state" => "connected", "lastError" => nil} =
              Enum.find(recovered["channels"]["details"], &(&1["id"] == Channel.id()))
+  end
+
+  test "Discord READY observation clears a retained connection error without a network probe" do
+    :ok = LemonChannels.Registry.register(DiscordChannel)
+    start_supervised!(DiscordChannel)
+    on_exit(fn -> LemonChannels.Registry.unregister(DiscordChannel.id()) end)
+
+    LemonChannels.Registry.record_status("discord", {:error, :startup_failed})
+    assert {:ok, failed} = Status.handle(%{}, %{})
+    assert Enum.find(failed["channels"]["details"], &(&1["id"] == "discord"))["state"] == "error"
+
+    LemonChannels.Adapters.Discord.Transport.Consumer.handle_event({:READY, %{}, nil})
+    assert {:ok, connected} = Status.handle(%{}, %{})
+
+    assert %{"state" => "connected", "lastError" => nil} =
+             Enum.find(connected["channels"]["details"], &(&1["id"] == "discord"))
   end
 
   test "lifecycle availability distinguishes managed and unmanaged runtimes" do
@@ -186,13 +211,32 @@ defmodule LemonControlPlane.Methods.StatusTest do
     assert managed["lifecycle"] == %{"restart" => true, "stop" => true, "reason" => nil}
   end
 
-  test "a stopped channels app reports no channels instead of failing the request" do
+  test "a stopped channels app is explicitly unavailable without changing legacy fields" do
     :ok = Application.stop(:lemon_channels)
     on_exit(fn -> {:ok, _} = Application.ensure_all_started(:lemon_channels) end)
 
     assert {:ok, result} = Status.handle(%{}, %{})
     assert result["channels"] == %{"configured" => [], "connected" => [], "details" => []}
     assert result["summary"]["configuredChannelCount"] == 0
+    assert result["subsystems"]["channels"] == %{"status" => "unavailable"}
+    assert result["subsystems"]["presence"] == %{"status" => "available"}
+  end
+
+  test "successful empty subsystem lookups are available" do
+    assert {:ok, result} = Status.handle(%{}, %{})
+    assert result["subsystems"]["channels"] == %{"status" => "available"}
+    assert result["subsystems"]["skills"] == %{"status" => "available"}
+    assert result["subsystems"]["presence"] == %{"status" => "available"}
+  end
+
+  test "stopped skills is unavailable instead of a successful zero count" do
+    :ok = Application.stop(:lemon_skills)
+    on_exit(fn -> {:ok, _} = Application.ensure_all_started(:lemon_skills) end)
+
+    assert {:ok, result} = Status.handle(%{}, %{})
+    assert result["skills"] == %{"installed" => 0, "enabled" => 0}
+    assert result["subsystems"]["skills"] == %{"status" => "unavailable"}
+    refute Jason.encode!(result["subsystems"]) =~ "noproc"
   end
 
   test "has correct method name and scopes" do

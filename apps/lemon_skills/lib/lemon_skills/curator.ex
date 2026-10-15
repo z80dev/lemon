@@ -45,6 +45,7 @@ defmodule LemonSkills.Curator do
 
   @type scope :: :global | :project
   @type counts :: %{
+          optional(:archive_skip_reason) => :cron_references_unavailable,
           checked: non_neg_integer(),
           marked_stale: non_neg_integer(),
           archived: non_neg_integer(),
@@ -109,6 +110,9 @@ defmodule LemonSkills.Curator do
   used by `skill_manage action=archive`; stale candidates are marked stale.
   Pinned and already archived skills are skipped by `Usage.report/1` candidate
   flags and are never auto-deleted.
+  Cron references are resolved for every pass and unioned with `:exempt_skills`.
+  If the runtime provider is unavailable, archival is skipped and counts include
+  `:archive_skip_reason`; stale/reactivation transitions can still proceed.
   """
   @spec apply_automatic_transitions(keyword()) :: counts()
   def apply_automatic_transitions(opts \\ []) do
@@ -116,9 +120,16 @@ defmodule LemonSkills.Curator do
     usage_opts = usage_opts(opts)
 
     rows = Usage.report(report_opts(opts))
-    exempt = MapSet.new(Keyword.get(opts, :exempt_skills, []))
+    references = LemonSkills.CuratorReferences.lookup(Enum.map(rows, & &1.name))
+    exempt = MapSet.new(Keyword.get(opts, :exempt_skills, []) ++ reference_names(references))
 
-    Enum.reduce(rows, empty_counts(), fn row, counts ->
+    counts =
+      case references do
+        {:ok, _} -> empty_counts()
+        {:error, reason} -> Map.put(empty_counts(), :archive_skip_reason, reason)
+      end
+
+    Enum.reduce(rows, counts, fn row, counts ->
       if row.agent_authored and not MapSet.member?(exempt, row.name) do
         counts
         |> increment(:checked)
@@ -230,6 +241,17 @@ defmodule LemonSkills.Curator do
     |> Enum.filter(& &1.agent_authored)
   end
 
+  defp reference_names({:ok, names}), do: names
+  defp reference_names({:error, _}), do: []
+
+  defp maybe_transition(
+         %{archive_skip_reason: _} = counts,
+         %{archive_candidate: true},
+         _opts,
+         _days
+       ),
+       do: counts
+
   defp maybe_transition(counts, %{archive_candidate: true} = row, usage_opts, _stale_after_days) do
     case archive_skill(row.name, usage_opts) do
       :ok -> increment(counts, :archived)
@@ -282,7 +304,13 @@ defmodule LemonSkills.Curator do
   end
 
   defp summarize_counts(counts) do
-    "checked=#{counts.checked} stale=#{counts.marked_stale} archived=#{counts.archived} reactivated=#{counts.reactivated}"
+    summary =
+      "checked=#{counts.checked} stale=#{counts.marked_stale} archived=#{counts.archived} reactivated=#{counts.reactivated}"
+
+    case Map.get(counts, :archive_skip_reason) do
+      nil -> summary
+      reason -> summary <> " archive_skipped=#{reason}"
+    end
   end
 
   defp usage_opts(opts), do: [scope: scope(opts)] ++ cwd_opt(opts)

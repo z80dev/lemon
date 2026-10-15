@@ -116,6 +116,17 @@ the fallback's deadline and per-file byte bound, rather than stopping at a page.
 Patterns containing a literal newline or `\n` enable multiline search (`rg -U` or
 whole-file fallback matching); results identify the start line of each matching span.
 
+Both `grep` and `find` accept semicolon-separated `path` roots, such as
+`"src; test"` (whitespace/empty entries are ignored). Existing roots are searched
+and merged deterministically, with duplicate results removed before the result
+limit/page is applied. Missing roots appear in `details.missing_paths` and a
+notice; the call fails only when no root exists (other access/type errors still
+fail). Multi-root grep paths are relative to cwd, so same-name files stay distinct.
+
+Long grep lines show a roughly 500-character window centered on the first match,
+with `...` on each cut side and `[col N]` giving the original 1-based character
+column. Use `read` on the reported file/line for the complete text.
+
 Hidden files and files ignored by `.gitignore`/`.ignore` are skipped by default,
 with ripgrep or the Elixir fallback (which uses `git check-ignore` inside a work
 tree). Pass `"hidden": true` and/or `"no_ignore": true` to include them. `find`
@@ -133,3 +144,18 @@ matching. It searches only the leading 4 MiB of each file and reports the number
 of visited files with omitted tails in `details.skipped_oversized`. It skips
 binary and invalid UTF-8 files and stops scanning when the requested page is
 filled; use `next_skip` to continue.
+
+## Find ordering and path globs
+
+`find` collects and deduplicates the full candidate set across roots, sorts it,
+then applies `max_results`. `sort: "path"` remains the default, preserving the
+existing alphabetical/stable discovery contract. Use `sort: "mtime"` to surface
+recently modified entries first; equal timestamps are ordered by path.
+
+Patterns without `/` match basenames recursively. Patterns containing `/`, such
+as `lib/*.ex`, match path segments at any depth (including `nested/lib/a.ex`, but
+not `lib/deep/a.ex`); use `**` for recursive segments. The fd backend uses
+`--full-path` and a recursive prefix to match the same set as the Elixir fallback.
+Both backends reject scopes exceeding 100,000 matching candidates with a narrowing
+hint instead of sorting a traversal-order subset. The fd safety ceiling is
+independent of `max_results`.
