@@ -118,7 +118,8 @@ defmodule LemonCli.Onboarding.Runner do
         "Invalid secret name."
       )
 
-    if token, do: store_secret!(secret_name, token, spec.api_key_secret_provider, spec)
+    _secret_metadata =
+      if token, do: store_secret!(secret_name, token, spec.api_key_secret_provider, spec)
 
     model =
       if resolve_set_default?(cli_opts[:set_default], spec, io),
