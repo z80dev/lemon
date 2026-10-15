@@ -176,6 +176,8 @@ loader/cache state and configured MCP services. Their ordinary sessions use
 explicit tools; the default-tool assertions still request the real built-in
 toolset. Temporary working roots live outside the checkout so session discovery
 does not inherit repository-local resources.
+The two approval-event broadcast cases remain in the small synchronous
+`SessionApprovalEventsTest` module because they publish to a shared Bus topic.
 
 Shared Elixir helpers live in `LemonCore.Testing.HermeticEnv`:
 
