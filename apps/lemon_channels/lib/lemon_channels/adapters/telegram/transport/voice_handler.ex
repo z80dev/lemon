@@ -9,6 +9,8 @@ defmodule LemonChannels.Adapters.Telegram.Transport.VoiceHandler do
 
   require Logger
 
+  import LemonChannels.VoiceTranscriber, only: [format_voice_error: 1]
+
   @doc """
   Attempt to transcribe an inbound voice message and return a normalized inbound
   payload, or signal that the message should be skipped.
@@ -181,34 +183,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport.VoiceHandler do
   rescue
     _ -> :ok
   end
-
-  defp format_voice_error(:voice_too_large),
-    do:
-      "Voice message is too large to transcribe. Send a shorter recording or send the message as text."
-
-  defp format_voice_error(:missing_api_key),
-    do:
-      "Voice transcription requires an OpenAI API key. Set OPENAI_API_KEY or run `lemon secrets set` to configure it."
-
-  defp format_voice_error({:http_error, status, msg}) do
-    msg =
-      if is_binary(msg) and msg != "" do
-        String.slice(msg, 0, 200)
-      else
-        "request failed"
-      end
-
-    "Voice transcription failed (#{status}): #{msg}. Try again, or send the message as text."
-  end
-
-  defp format_voice_error({:telegram_file_lookup_failed, _}),
-    do: "Failed to fetch voice file. Try again, or send the message as text."
-
-  defp format_voice_error({:telegram_download_failed, _}),
-    do: "Failed to download voice file. Try again, or send the message as text."
-
-  defp format_voice_error(_other),
-    do: "Voice transcription failed. Try again, or send the message as text."
 
   defp ensure_httpc do
     _ = Application.ensure_all_started(:inets)

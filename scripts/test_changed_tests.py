@@ -246,7 +246,46 @@ class SelectorTest(unittest.TestCase):
         result, calls = self.run_lane("premerge")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual([call[0] for call in calls], ["format", "credo", "compile", "test"])
-        self.assertIn("Not covered: full suite", result.stdout)
+        self.assertIn("Not covered: downstream tests that don't name a changed module", result.stdout)
+
+    def narrow_fixture(self):
+        self.put("apps/lemon_core/lib/widget.ex", "defmodule LemonCore.Widget do\nend\n")
+        self.put("apps/lemon_router/test/widget_user_test.exs", "LemonCore.Widget.run()\n")
+        self.put("apps/lemon_router/test/other_test.exs", "# unrelated\n")
+        self.put("apps/lemon_channels/test/support/widget_case.ex", "alias LemonCore.Widget\n")
+        self.commit()
+        self.git("update-ref", "refs/remotes/origin/main", "HEAD")
+
+    def test_narrow_limits_downstream_apps_to_tests_naming_changed_modules(self):
+        self.narrow_fixture()
+        self.put("apps/lemon_core/lib/widget.ex", "defmodule LemonCore.Widget do\n  def run, do: :ok\nend\n")
+        result = self.selection(narrow=True)
+        self.assertEqual(result["scope"], "apps")
+        self.assertEqual(len(result["apps"]), 9)
+        self.assertIn("apps/lemon_core/test", result["test_paths"])
+        self.assertIn("apps/lemon_router/test/widget_user_test.exs", result["test_paths"])
+        self.assertNotIn("apps/lemon_router/test/other_test.exs", result["test_paths"])
+        self.assertNotIn("apps/lemon_router/test", result["test_paths"])
+        # Shared test support naming the module runs the whole app.
+        self.assertIn("apps/lemon_channels/test", result["test_paths"])
+        self.assertNotIn("apps/lemon_sim/test", result["test_paths"])
+        # Without --narrow (PR CI) every affected app still runs whole.
+        self.assertIn("apps/lemon_router/test", self.selection()["test_paths"])
+
+    def test_narrow_uses_base_modules_for_deleted_files(self):
+        self.narrow_fixture()
+        (self.root / "apps/lemon_core/lib/widget.ex").unlink()
+        paths = self.selection(narrow=True)["test_paths"]
+        self.assertIn("apps/lemon_router/test/widget_user_test.exs", paths)
+
+    def test_narrow_falls_back_to_whole_apps_when_modules_are_unknown(self):
+        self.put("apps/lemon_core/lib/sample.ex")
+        paths = self.selection(narrow=True)["test_paths"]
+        self.assertIn("apps/lemon_router/test", paths)
+
+    def test_narrow_test_only_change_runs_only_the_touched_app(self):
+        self.put("apps/lemon_core/test/env_test.exs", "# changed test\n")
+        self.assertEqual(self.selection(narrow=True)["test_paths"], ["apps/lemon_core/test"])
 
 
 class ChangelogTest(unittest.TestCase):
