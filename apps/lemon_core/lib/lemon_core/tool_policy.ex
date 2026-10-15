@@ -121,6 +121,7 @@ defmodule LemonCore.ToolPolicy do
     "grep",
     "find",
     "ls",
+    "report_issue",
     "webfetch",
     "websearch",
     "browser_tabs",
@@ -241,7 +242,7 @@ defmodule LemonCore.ToolPolicy do
 
   @write_tools ~w(write edit patch ast_grep fs_checkpoint skill_manage remember todo todowrite kanban goal cron)
   @approval_read_tools @read_tools ++
-                         ~w(ast_search bash_output webfetch websearch wait ask ask_parent extensions_status media_status tool_search)
+                         ~w(ast_search bash_output webfetch websearch wait ask ask_parent extensions_status media_status tool_search report_issue)
   @browser_read_tools ~w(browser_tabs browser_snapshot browser_get_content browser_wait_for_selector browser_events browser_get_cookies)
   @browser_write_tools ~w(browser_tab_open browser_tab_activate browser_tab_close browser_navigate browser_click browser_type browser_hover browser_select_option browser_upload_file browser_download browser_press browser_scroll browser_back browser_set_cookies browser_clear_state browser_screenshot)
   @lsp_read_actions ~w(diagnostics definition type_definition implementation references hover symbols rename rename_file code_actions capabilities status)
