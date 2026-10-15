@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { chromium, type Browser, type BrowserContext, type Page } from 'playwright-core';
+import { validateManagedProfile } from './profile-safety.js';
 
 export type BrowserTab = {
   targetId: string;
@@ -22,6 +23,8 @@ export type ChromeConfig = {
   cdpPort: number;
   cdpEndpoint?: string;
   userDataDir: string;
+  profileDirectory?: string;
+  userProvidedProfile?: boolean;
   executablePath?: string;
   headless: boolean;
   noSandbox: boolean;
@@ -36,13 +39,20 @@ export class ChromeSession {
   private ownedBrowser = false;
 
   constructor(cfg: ChromeConfig) {
-    this.cfg = cfg;
+    this.cfg = {
+      ...cfg,
+      userDataDir: path.resolve(cfg.userDataDir.startsWith('~/')
+        ? path.join(os.homedir(), cfg.userDataDir.slice(2)) : cfg.userDataDir),
+    };
   }
 
   async start(): Promise<void> {
     const endpoint = this.cfg.cdpEndpoint || `http://127.0.0.1:${this.cfg.cdpPort}`;
 
     const reachable = await isCdpReachable(endpoint, 600);
+    if (reachable && (this.cfg.userProvidedProfile || this.cfg.profileDirectory !== undefined) && !this.cfg.attachOnly && !this.cfg.cdpEndpoint && !this.ownedBrowser) {
+      throw new Error('CDP port already in use; cannot verify the requested browser profile. Close that browser or attach explicitly via LEMON_BROWSER_CDP_ENDPOINT / relay.');
+    }
     if (!reachable) {
       if (this.cfg.attachOnly || this.cfg.cdpEndpoint) {
         throw new Error(`CDP not reachable at ${redactEndpoint(endpoint)} (attachOnly=true)`);
@@ -246,6 +256,7 @@ export class ChromeSession {
   }
 
   private async launchChrome(): Promise<void> {
+    validateManagedProfile(this.cfg.userDataDir);
     const exe = this.cfg.executablePath || defaultChromeExecutable();
     if (!exe) {
       throw new Error(
@@ -270,6 +281,9 @@ export class ChromeSession {
       '--password-store=basic',
     ];
 
+    if (this.cfg.profileDirectory) {
+      args.push(`--profile-directory=${this.cfg.profileDirectory}`);
+    }
     if (this.cfg.headless) {
       args.push('--headless=new', '--disable-gpu');
     }

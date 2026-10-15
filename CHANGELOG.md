@@ -10,6 +10,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Added
 
+- Opt in to a dedicated managed Chrome user-data directory and profile with
+  `LEMON_BROWSER_USER_DATA_DIR` / `LEMON_BROWSER_PROFILE_DIRECTORY`, with
+  default-directory and profile-lock safety checks and fail-closed identity binding.
+
 - Native task subagents now have a configurable soft assistant-request budget
   (default 200, per-item override, `0` disables), one optional wrap-up steer, and
   a graceful hard stop at 1.5x that auto-delivers partial findings. Revived runs
