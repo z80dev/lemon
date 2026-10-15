@@ -20,6 +20,7 @@ import {
 	reconnectCommand,
 	themeCommand,
 } from "./core.ts";
+import { cronCommand } from "./cron.ts";
 import { costCommand, logsCommand, statusCommand, usageCommand } from "./diagnostics.ts";
 import { forkCommand } from "./fork.ts";
 import {
@@ -93,6 +94,7 @@ export function createCommandRegistry(options: RegistryOptions = {}): CommandReg
 		contextCommand,
 		planCommand,
 		heartbeatCommand,
+		cronCommand,
 		profilesCommand,
 		profileCommand,
 		blueprintsCommand,

@@ -11,7 +11,7 @@ defmodule LemonCli.RunsCommand do
 
   def run_cron(["runs" | args]), do: execute(:cron, args)
   def run_cron(["status" | args]), do: cron_status(args)
-  def run_cron(_args), do: usage("Use lemon cron runs [options] or lemon cron status [--json].")
+  def run_cron(args), do: LemonCli.CronCommand.run(args)
 
   defp show(args) do
     case OptionParser.parse(args, strict: [json: :boolean]) do
