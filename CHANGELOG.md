@@ -10,6 +10,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Added
 
+- Read SVG/SVGZ markup as text and render explicit `:img` views as bounded PNG
+  previews with librsvg; decoded SVGZ sources enforce the rich-read size limit.
+
 - Expose anchored-edit seen-line enforcement through the validated
   `[runtime.tools.edit] enforce_seen_lines` config key (default false), carried
   through session settings into registered edit tools.

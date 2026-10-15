@@ -83,6 +83,20 @@ selectors (`:raw:50-80` or `:50-80:raw`) remain exact, without context, line
 numbers, or a snapshot header. Raw comma lists also stay exact and retain the
 `…` separators. `offset`/`limit`, open-ended and tail selectors do not add context.
 
+## SVG previews
+
+`read drawing.svg` reads SVG markup as ordinary editable text. `.svgz` files
+are gunzipped into bounded, immutable text views; line selectors work on the
+decoded markup. Use `read drawing.svg:img` (also `.svgz:img`) when visual layout
+matters: it returns a PNG image block instead of XML.
+
+PNG rendering requires `rsvg-convert` from librsvg (`brew install librsvg` or
+`apt install librsvg2-bin`). Rendering has a 30-second timeout, a 1568-pixel
+bounding box and a 4 MiB output cap; the source is never overwritten. Tool
+constructors can set `:svg_rasterizer`, `:svg_timeout_ms`, `:image_max_dimension`
+and `:image_max_bytes`. `:img` is SVG-only and cannot be combined with text
+selectors or offset/limit. Existing literal filenames still take precedence.
+
 ## Merge conflicts
 
 `read path:conflicts` indexes local Git conflict regions as `#N Lx-Ly` with
