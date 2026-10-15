@@ -1,5 +1,9 @@
 # Backend changelog
 
+## Unreleased
+
+- Fixed Apple clients reporting a retired foreground-presence socket's error after a reconnect during an acknowledged message send. Current socket failures and uncertain message nonce fencing remain intact.
+
 ## 0.1.0
 
 - Added the separate Bun/SQLite product API and static web serving, durable local account/member/device authorization, encrypted private credentials and exact nonce receipts.
