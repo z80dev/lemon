@@ -26,6 +26,29 @@ defmodule CodingAgent.Tools.BashServiceTest do
     {:ok, cwd: cwd, opts: opts}
   end
 
+  test "service identity is registered before external launch", %{cwd: cwd, opts: opts} do
+    owner = self()
+    service = %{name: "atomic", project: cwd, generation: 1}
+
+    assert {:ok, id} =
+             ProcessManager.exec(
+               command: "read value",
+               cwd: cwd,
+               owner: opts[:session_id],
+               owner_pid: self(),
+               service: service,
+               before_start: fn ->
+                 send(
+                   owner,
+                   {:registered_before_start,
+                    CodingAgent.Tools.Bash.Service.resolve("atomic", cwd, opts)}
+                 )
+               end
+             )
+
+    assert_receive {:registered_before_start, ^id}
+  end
+
   test "log readiness sees a partial line without waiting for a newline", %{cwd: cwd, opts: opts} do
     result =
       Bash.execute(

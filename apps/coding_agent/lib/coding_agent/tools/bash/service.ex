@@ -126,21 +126,18 @@ defmodule CodingAgent.Tools.Bash.Service do
         cwd: cwd,
         env: env,
         owner: owner,
-        owner_pid: Keyword.get(opts, :session_pid)
+        owner_pid: Keyword.get(opts, :session_pid),
+        service: %{name: name, project: project, generation: System.system_time(:microsecond)}
       )
 
     case result do
       {classification, id} when classification in [:ok, :queued] ->
-        register(id, name, project)
-
         deadline =
           System.monotonic_time(:millisecond) + if(ready, do: ready.timeout_ms, else: 30_000)
 
         await_ready(id, name, ready, signal, deadline)
 
       {:error, {:outcome_unknown, id}} ->
-        register(id, name, project)
-
         result(
           id,
           name,
@@ -153,14 +150,6 @@ defmodule CodingAgent.Tools.Bash.Service do
       {:error, reason} ->
         {:error, "Service launch failed: #{inspect(reason)}"}
     end
-  end
-
-  defp register(id, name, project) do
-    ProcessStore.put_service(id, %{
-      name: name,
-      project: project,
-      generation: System.system_time(:microsecond)
-    })
   end
 
   defp await_ready(id, name, ready, signal, deadline) do
