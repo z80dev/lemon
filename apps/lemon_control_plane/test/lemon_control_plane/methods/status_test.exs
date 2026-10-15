@@ -211,13 +211,32 @@ defmodule LemonControlPlane.Methods.StatusTest do
     assert managed["lifecycle"] == %{"restart" => true, "stop" => true, "reason" => nil}
   end
 
-  test "a stopped channels app reports no channels instead of failing the request" do
+  test "a stopped channels app is explicitly unavailable without changing legacy fields" do
     :ok = Application.stop(:lemon_channels)
     on_exit(fn -> {:ok, _} = Application.ensure_all_started(:lemon_channels) end)
 
     assert {:ok, result} = Status.handle(%{}, %{})
     assert result["channels"] == %{"configured" => [], "connected" => [], "details" => []}
     assert result["summary"]["configuredChannelCount"] == 0
+    assert result["subsystems"]["channels"] == %{"status" => "unavailable"}
+    assert result["subsystems"]["presence"] == %{"status" => "available"}
+  end
+
+  test "successful empty subsystem lookups are available" do
+    assert {:ok, result} = Status.handle(%{}, %{})
+    assert result["subsystems"]["channels"] == %{"status" => "available"}
+    assert result["subsystems"]["skills"] == %{"status" => "available"}
+    assert result["subsystems"]["presence"] == %{"status" => "available"}
+  end
+
+  test "stopped skills is unavailable instead of a successful zero count" do
+    :ok = Application.stop(:lemon_skills)
+    on_exit(fn -> {:ok, _} = Application.ensure_all_started(:lemon_skills) end)
+
+    assert {:ok, result} = Status.handle(%{}, %{})
+    assert result["skills"] == %{"installed" => 0, "enabled" => 0}
+    assert result["subsystems"]["skills"] == %{"status" => "unavailable"}
+    refute Jason.encode!(result["subsystems"]) =~ "noproc"
   end
 
   test "has correct method name and scopes" do

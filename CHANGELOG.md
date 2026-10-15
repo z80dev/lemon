@@ -16,6 +16,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Normalize non-OpenAI control-plane HTTP errors to code/message envelopes,
+  name authentication headers and credential sources, omit non-JSON error
+  details safely, and distinguish unavailable status subsystems from empty results.
 - Web chat model-list and compaction failures now show plain-language next steps
   pointing to Diagnostics instead of exposing service error terms.
 

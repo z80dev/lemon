@@ -94,11 +94,9 @@ defmodule LemonControlPlane.Protocol.Errors do
   """
   @spec to_payload(error() | term()) :: error_payload()
   def to_payload({code, message, details}) when is_atom(code) do
-    %{
-      "code" => Map.get(@error_codes, code, "INTERNAL_ERROR"),
-      "message" => message,
-      "details" => details
-    }
+    {code, message}
+    |> to_payload()
+    |> with_details(details)
   end
 
   def to_payload({code, message}) when is_atom(code) do
@@ -114,19 +112,29 @@ defmodule LemonControlPlane.Protocol.Errors do
       "message" => message
     }
 
-    if Map.has_key?(error, :details) and error.details != nil do
-      Map.put(payload, "details", error.details)
-    else
-      payload
-    end
+    with_details(payload, Map.get(error, :details))
   end
 
-  def to_payload(other) do
+  def to_payload(_other) do
     %{
       "code" => "INTERNAL_ERROR",
-      "message" => "An unexpected error occurred",
-      "details" => inspect(other)
+      "message" => "An unexpected error occurred"
     }
+  end
+
+  # Keep useful JSON context, but never replace unsupported terms with inspect:
+  # arbitrary runtime state can contain credentials as well as break encoding.
+  defp with_details(payload, nil), do: payload
+
+  defp with_details(payload, details) do
+    case Jason.encode(details) do
+      {:ok, _} -> Map.put(payload, "details", details)
+      {:error, _} -> payload
+    end
+  rescue
+    _ -> payload
+  catch
+    _, _ -> payload
   end
 
   @doc """
