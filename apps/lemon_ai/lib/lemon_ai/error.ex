@@ -773,6 +773,15 @@ defmodule LemonAi.Error do
 
   defp retryable_category?(category), do: category in [:rate_limit, :transient, :server]
 
+  @doc "Whether an error reports exhausted account quota or credits rather than throttling."
+  @spec quota_exhausted?(term()) :: boolean()
+  def quota_exhausted?(error) do
+    details = to_error_details(error)
+
+    quota_exhausted_message?(details.provider_message) or
+      quota_exhausted_message?(details.message)
+  end
+
   defp quota_exhausted_error?(%Req.TransportError{}), do: false
 
   defp quota_exhausted_error?(exception) when is_exception(exception),

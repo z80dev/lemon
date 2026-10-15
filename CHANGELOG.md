@@ -10,6 +10,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Changed
 
+- Rotate to healthy alternate credentials or fallback candidates immediately on
+  rate limits; bench quota-exhausted credentials for 15 minutes to one hour.
+
 - Native task and swarm subagent spend now counts toward parent run/session token
   and dollar caps without duplicating per-session usage reports; exhausted parents
   cannot spawn further children.

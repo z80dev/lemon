@@ -18,6 +18,10 @@ defmodule LemonAi.Providers.RetryHelper do
   When the server asks for a longer wait than `max_retry_after_ms`, the
   provider stops retrying and surfaces the delay as
   `LemonAi.Types.AssistantMessage.retry_after_ms` so the caller can decide.
+
+  Per-request `provider_retry: %{alternate_available: true}` surfaces rate limits
+  immediately for caller-owned rotation. It does not change transport or server
+  retries. Without that signal, the configured retry policy is unchanged.
   """
 
   @default_max_attempts 4
@@ -59,6 +63,7 @@ defmodule LemonAi.Providers.RetryHelper do
       value = Map.get(overrides, key, default)
       Map.put(acc, key, if(is_integer(value) and value > 0, do: value, else: default))
     end)
+    |> Map.put(:alternate_available, Map.get(overrides, :alternate_available) == true)
   end
 
   def policy(_options), do: policy()
@@ -91,11 +96,29 @@ defmodule LemonAi.Providers.RetryHelper do
   @doc """
   Delay to wait before retrying an HTTP failure: the server's retry-after
   hint when present, otherwise `backoff_delay_ms/2`. Returns `:give_up` when
-  the server asks for more than the policy's `max_retry_after_ms`.
+  the server asks for more than the policy's `max_retry_after_ms`, or the supplied
+  error is a rate limit and the caller has a healthy alternate.
   """
   @spec http_retry_delay_ms(non_neg_integer(), map() | list(), policy()) ::
           pos_integer() | :give_up
-  def http_retry_delay_ms(attempt, headers, policy) do
+  @spec http_retry_delay_ms(non_neg_integer(), map() | list(), policy(), term()) ::
+          pos_integer() | :give_up
+  def http_retry_delay_ms(attempt, headers, policy, error \\ nil) do
+    if rotate_rate_limit?(policy, error) do
+      :give_up
+    else
+      http_backoff_delay_ms(attempt, headers, policy)
+    end
+  end
+
+  @doc "Whether a rate limit should surface immediately to an alternate candidate."
+  @spec rotate_rate_limit?(policy(), term()) :: boolean()
+  def rotate_rate_limit?(policy, error) do
+    Map.get(policy, :alternate_available, false) and
+      LemonAi.Error.classify(error) == :rate_limit
+  end
+
+  defp http_backoff_delay_ms(attempt, headers, policy) do
     case retry_after_ms(headers) do
       nil -> backoff_delay_ms(attempt, policy)
       ms when ms > policy.max_retry_after_ms -> :give_up
