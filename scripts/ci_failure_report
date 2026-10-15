@@ -176,10 +176,11 @@ def summary(run_id):
     return "\n".join(out)
 
 
-def open_issue(label):
-    issues = request("GET", f"/repos/{repo()}/issues?state=open&labels={label}&per_page=10")
-    issues = [issue for issue in issues if "pull_request" not in issue]
-    return issues[0] if issues else None
+def open_issues(label):
+    """Open issues with LABEL, oldest first. The label index can lag issue
+    creation by a few seconds, so callers must tolerate duplicates."""
+    issues = request("GET", f"/repos/{repo()}/issues?state=open&labels={label}&sort=created&direction=asc&per_page=20")
+    return [issue for issue in issues if "pull_request" not in issue]
 
 
 def ensure_label(label):
@@ -194,19 +195,19 @@ def track(run_id, label, title, status):
     run = request("GET", f"/repos/{repo()}/actions/runs/{run_id}")
     sha = os.environ.get("GITHUB_SHA") or run["head_sha"]
     run_link = f"[{run['name']} run {run_id}]({run['html_url']}) on `{sha[:10]}`"
-    issue = open_issue(label)
+    issues = open_issues(label)
 
     if status == "success":
-        if issue:
+        for issue in issues:
             request("POST", f"/repos/{repo()}/issues/{issue['number']}/comments", {"body": f"Green again: {run_link}."})
             request("PATCH", f"/repos/{repo()}/issues/{issue['number']}", {"state": "closed", "state_reason": "completed"})
             print(f"closed #{issue['number']}")
         return
 
     body = f"Failing: {run_link}.\n\n{summary(run_id)}"
-    if issue:
-        request("POST", f"/repos/{repo()}/issues/{issue['number']}/comments", {"body": body})
-        print(f"commented on #{issue['number']}")
+    if issues:
+        request("POST", f"/repos/{repo()}/issues/{issues[0]['number']}/comments", {"body": body})
+        print(f"commented on #{issues[0]['number']}")
     else:
         ensure_label(label)
         intro = (
