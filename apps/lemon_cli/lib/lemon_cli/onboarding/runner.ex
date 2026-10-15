@@ -2,13 +2,14 @@ defmodule LemonCli.Onboarding.Runner do
   @moduledoc false
 
   alias LemonAgent.ModelRuntime.ModelCatalog
+  alias LemonAi.Models.Presets
   alias LemonCli.CLI
   alias LemonCli.Onboarding.LogSilencer
-  alias LemonCore.OAuth.LocalCallbackListener
-  alias LemonCli.Onboarding.Provider
   alias LemonCli.Onboarding.PromptUI
+  alias LemonCli.Onboarding.Provider
   alias LemonCore.Config
   alias LemonCore.Config.TomlPatch
+  alias LemonCore.OAuth.LocalCallbackListener
   alias LemonCore.Secrets
 
   @common_switches [
@@ -423,7 +424,7 @@ defmodule LemonCli.Onboarding.Runner do
     result =
       cond do
         auth_mode == :device and function_exported?(oauth_module, :login_device_code, 1) ->
-          apply(oauth_module, :login_device_code, [oauth_opts])
+          oauth_module.login_device_code(oauth_opts)
 
         auth_mode == :device ->
           fail!(
@@ -431,13 +432,13 @@ defmodule LemonCli.Onboarding.Runner do
           )
 
         function_exported?(oauth_module, :login_device_flow, 1) ->
-          apply(oauth_module, :login_device_flow, [oauth_opts])
+          oauth_module.login_device_flow(oauth_opts)
 
         function_exported?(oauth_module, :login_device_flow, 0) ->
-          apply(oauth_module, :login_device_flow, [])
+          oauth_module.login_device_flow()
 
         function_exported?(oauth_module, :resolve_access_token, 0) ->
-          apply(oauth_module, :resolve_access_token, [])
+          oauth_module.resolve_access_token()
 
         true ->
           fail!(
@@ -472,7 +473,7 @@ defmodule LemonCli.Onboarding.Runner do
 
   defp encode_oauth_payload!(payload, oauth_module) when is_map(payload) do
     if function_exported?(oauth_module, :encode_secret, 1) do
-      apply(oauth_module, :encode_secret, [payload])
+      oauth_module.encode_secret(payload)
     else
       Jason.encode!(payload)
     end
@@ -630,8 +631,7 @@ defmodule LemonCli.Onboarding.Runner do
          true <- function_exported?(models_module, :get_providers, 0),
          provider when not is_nil(provider) <-
            provider_atom_for_models(models_module, spec.id) do
-      models_module
-      |> apply(:get_models, [provider])
+      models_module.get_models(provider)
       |> case do
         [] -> discovered_models(spec, api_key)
         models -> models
@@ -661,7 +661,7 @@ defmodule LemonCli.Onboarding.Runner do
   defp preset_provider(%Provider{id: id}) do
     normalized = normalize_provider_name(id)
 
-    Enum.find_value(LemonAi.Models.Presets.all(), fn preset ->
+    Enum.find_value(Presets.all(), fn preset ->
       if preset.id |> Atom.to_string() |> normalize_provider_name() == normalized,
         do: preset.id
     end)
@@ -670,8 +670,7 @@ defmodule LemonCli.Onboarding.Runner do
   defp provider_atom_for_models(models_module, provider_id) do
     normalized = normalize_provider_name(provider_id)
 
-    models_module
-    |> apply(:get_providers, [])
+    models_module.get_providers()
     |> Enum.find(fn provider ->
       provider_str = provider |> Atom.to_string() |> normalize_provider_name()
       provider_str == normalized

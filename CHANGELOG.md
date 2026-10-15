@@ -16,6 +16,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Added
 
+- Provider status and Lemon Bot instance panes now expose the last observed
+  provider failure with a timestamp and bounded, credential-free category summary.
+
 - Lemon Bot exposes an authenticated, provider-specific voice catalog for native
   pickers without calling speech providers or generating billable audio.
 
