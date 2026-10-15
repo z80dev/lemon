@@ -718,8 +718,14 @@ defmodule LemonCli.CommandRegistry do
       "usage",
       LemonCore.Usage.CLI,
       "Inspect usage diagnostics",
-      "lemon usage [--json]",
-      [option("--json", ["--json"], "Emit redacted usage JSON")]
+      "lemon usage [--days N | --since YYYY-MM-DD --until YYYY-MM-DD] [--by day|provider|model|session] [--json]",
+      [
+        option("--days N", ["--days"], "Last N UTC dates including today (1–366)"),
+        option("--since YYYY-MM-DD", ["--since"], "Inclusive first UTC date"),
+        option("--until YYYY-MM-DD", ["--until"], "Inclusive last UTC date"),
+        option("--by GROUP", ["--by"], "day, provider (default), model, or session"),
+        option("--json", ["--json"], "Emit redacted usage JSON")
+      ]
     )
   ]
 

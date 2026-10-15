@@ -8,7 +8,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
-No unreleased changes yet.
+### Added
+
+- Add offline `lemon usage` date ranges and day/provider/model/session reports,
+  plus TUI `/cost --by` breakdowns with explicit completeness and session omissions.
 
 ---
 
