@@ -204,7 +204,10 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     import supervisor
 
     if cmd == "start":
-        return supervisor.start(project, actor=actor, wait=args.wait)
+        started = supervisor.start(project, actor=actor, wait=args.wait)
+        status = status_payload(project)
+        # Report the queue the console must describe, not a remembered one.
+        return {**started, "work": status["work"], "next": status["next"]}
     if cmd in ("pause", "resume", "drain"):
         return supervisor.request_mode(project, {"pause": "paused", "resume": "running", "drain": "draining"}[cmd],
                                        actor=actor)

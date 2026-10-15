@@ -211,6 +211,28 @@ class SupervisorTest(unittest.TestCase):
         self.assertEqual(stray.read_text(), "do not lose me\n")
         del code
 
+    def set_policy(self, **changes: object) -> None:
+        path = self.home.state_dir / "policy.json"
+        path.write_text(json.dumps({**json.loads(path.read_text()), **changes}))
+
+    def test_checkout_setup_seeds_ignored_build_inputs_and_rejects_dirtying_steps(self) -> None:
+        (self.home.repo / ".gitignore").write_text("_build/\n")
+        git(self.home.repo, "add", ".gitignore")
+        git(self.home.repo, "commit", "-q", "-m", "ignore build")
+        git(self.home.repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+        (self.home.repo / "_build").mkdir()
+        (self.home.repo / "_build" / "cached.beam").write_text("beam")
+        self.set_policy(checkout_seed_from_primary=["_build"], checkout_setup=[["sh", "-c", "echo ok > _build/setup"]])
+        self.start()
+        checkout = self.home.state_dir / "checkout"
+        self.assertEqual((checkout / "_build" / "cached.beam").read_text(), "beam")
+        self.assertEqual((checkout / "_build" / "setup").read_text(), "ok\n")
+        self.home.cli("stop")
+        self.set_policy(checkout_setup=[["sh", "-c", "echo x > stray.txt"]])
+        _, payload = self.home.cli("start", check=False)
+        self.assertFalse(payload["ok"])
+        self.assertIn("modified tracked or unignored files", payload["runtime"]["detail"]["message"])
+
     def test_user_checkout_edits_are_never_touched(self) -> None:
         edit = self.home.repo / "README.md"
         edit.write_text("user's uncommitted edit\n")

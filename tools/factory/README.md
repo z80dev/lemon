@@ -77,8 +77,16 @@ from another machine, run that over SSH. Never share the SQLite file across host
   same-user files are not a sandbox; do not run untrusted forks through it.
 - Workers run isolated with `task.isolation.apply=false`: results stay on
   `omp/task/<attempt>` and never touch the coordinator checkout or `main`.
-  Isolated workers inherit uncommitted state from the coordinator checkout, so
-  `reserve` refuses dispatch unless that checkout is clean at the recorded base.
+  Isolated workers clone the coordinator checkout, ignored files and uncommitted
+  state included, so `reserve` refuses dispatch unless that checkout is clean at
+  the recorded base. Before launching the coordinator, the supervisor seeds
+  ignored build inputs (`checkout_seed_from_primary`, copy-on-write clones of the
+  primary checkout's `deps`/`_build`) and runs `checkout_setup` (`mix deps.get`,
+  test compile), so workers can run real focused checks. Setup that dirties the
+  checkout blocks startup.
+- OMP keeps finished workers' isolation workspaces until the owning OMP process
+  exits; the supervisor then removes the ones that process owned (results stay on
+  their branches) and never touches other sessions' workspaces.
 - OMP's strict output schema coerces scalars; handoffs are validated against the
   actual branch diff, not trusted as evidence.
 - Integration, releases, CI policy, GitHub settings, and paid benchmarks stay

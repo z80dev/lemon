@@ -15,6 +15,9 @@ import time
 import unittest
 from pathlib import Path
 
+import omp_adapter
+import supervisor
+
 from .omp_fixture import FixtureEnv, git, omp_available, pids_matching, raw_state, script, wait_for, wait_settled
 
 STRICT_SCHEMA = {
@@ -43,6 +46,16 @@ def spawn_step(name: str, child_steps: list[dict], *, isolated: bool = True) -> 
     }
 
 
+def isolation_workspaces() -> list[tuple[str, int | None]]:
+    listing = subprocess.run([omp_adapter.omp_executable(), "worktree", "list", "--json"], capture_output=True,
+                             text=True, check=True)
+    found = []
+    for entry in json.loads(listing.stdout or "[]"):
+        owner = Path(entry["path"]) / ".omp-isolation-owner.json"
+        found.append((entry["path"], json.loads(owner.read_text()).get("pid") if owner.exists() else None))
+    return found
+
+
 def async_results(client) -> list[dict]:
     return [m for m in client.get_messages() if m.get("customType") == "async-result"]
 
@@ -51,10 +64,18 @@ def async_results(client) -> list[dict]:
 class OmpSeamTest(unittest.TestCase):
     def setUp(self) -> None:
         self.fx = FixtureEnv()
-        self.client = self.fx.client()
+        self.owner_pids: list[int] = []
+        self.client = self.open_client()
+
+    def open_client(self, extra: list[str] | None = None):
+        client = self.fx.client(extra)
+        self.owner_pids.append(client._process.pid)
+        return client
 
     def tearDown(self) -> None:
         self.client.stop()
+        for pid in self.owner_pids:
+            supervisor.reap_isolation_workspaces(pid)
         self.fx.cleanup()
 
     def test_ready_handshake_negotiates_protocol_v2(self) -> None:
@@ -104,6 +125,17 @@ class OmpSeamTest(unittest.TestCase):
         self.assertFalse((self.fx.repo / "worker-output.txt").exists())
         changed = git(self.fx.repo, "diff", "--name-only", "main", "omp/task/SeamWorker").split()
         self.assertEqual(changed, ["worker-output.txt"])
+
+    def test_finished_isolation_workspace_is_kept_until_owner_exits_then_reaped(self) -> None:
+        child = [{"tool": "yield", "args": {"data": {"result": "ok"}}}]
+        self.client.prompt(script(spawn_step("KeptSpace", child), {"text": "spawned"}))
+        wait_settled(self.client)
+        owner_pid = self.client._process.pid
+        owned = [p for p in isolation_workspaces() if p[1] == owner_pid]
+        self.assertEqual(len(owned), 1, "OMP keeps a finished worker's workspace while its owner lives")
+        self.client.stop()
+        self.assertEqual(supervisor.reap_isolation_workspaces(owner_pid), [owned[0][0]])
+        self.assertFalse(Path(owned[0][0]).exists())
 
     def test_strict_schema_violation_fails_the_worker(self) -> None:
         child = [{"tool": "yield", "args": {"data": {"other": 1}}}] * 6
@@ -183,7 +215,7 @@ class OmpSeamTest(unittest.TestCase):
         self.assertTrue((artifacts / "Retained.jsonl").exists())
         self.assertIn("kept.txt", git(self.fx.repo, "show", "--name-only", "--format=", "omp/task/Retained"))
         # `--continue` with the same session dir resumes the coordinator's session.
-        self.client = self.fx.client(["--continue"])
+        self.client = self.open_client(["--continue"])
         after = raw_state(self.client)
         self.assertEqual(after["sessionId"], before["sessionId"])
         self.assertIn("Retained", json.dumps(self.client.get_messages()))

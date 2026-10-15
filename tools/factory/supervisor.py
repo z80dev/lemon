@@ -16,6 +16,7 @@ import hashlib
 import json
 import os
 import signal
+import shutil
 import subprocess
 import sys
 import threading
@@ -196,8 +197,9 @@ def stop(project: projects.Project, *, actor: str, abort: bool, wait: float) -> 
             if pid:
                 killed.extend(kill_tree(pid))
         uncertain = _orphan_live_attempts(ledger, reason="emergency abort: worker cleanup not confirmed")
+        reaped = reap_isolation_workspaces(state["coordinator_pid"]) if state["coordinator_pid"] else []
         ledger.update_runtime(mode="stopped", event="runtime.emergency_abort", actor=actor,
-                              detail={"killed": killed, "uncertain_attempts": uncertain})
+                              detail={"killed": killed, "uncertain_attempts": uncertain, "reaped": reaped})
         deadline = time.monotonic() + 10
         while _lock_held(project) and time.monotonic() < deadline:
             time.sleep(0.1)
@@ -225,6 +227,29 @@ def verified_base(project: projects.Project, ledger: Ledger) -> str | None:
     if head.stdout.strip() != base:
         raise AdmissionRefused(f"coordinator checkout moved from recorded base {base[:12]} to {head.stdout.strip()[:12]}")
     return base
+
+
+def reap_isolation_workspaces(owner_pid: int) -> list[str]:
+    """Remove isolated-worker workspaces created by one (exited) OMP process.
+
+    OMP keeps finished workers' workspaces until their owner exits; their results
+    already live on retained branches. Only workspaces whose owner record names
+    this pid are touched, never other sessions' entries.
+    """
+    listing = subprocess.run([omp_adapter.omp_executable(), "worktree", "list", "--json"], capture_output=True,
+                             text=True, timeout=60)
+    removed = []
+    for entry in json.loads(listing.stdout or "[]") if listing.returncode == 0 else []:
+        if entry.get("kind") != "task-isolation":
+            continue
+        try:
+            owner = json.loads((Path(entry["path"]) / ".omp-isolation-owner.json").read_text())
+        except (OSError, ValueError):
+            continue
+        if owner.get("pid") == owner_pid:
+            shutil.rmtree(entry["path"], ignore_errors=True)
+            removed.append(entry["path"])
+    return removed
 
 
 def _orphan_live_attempts(ledger: Ledger, *, reason: str) -> list[str]:
@@ -366,7 +391,32 @@ class Supervisor:
         if not self._git("config", "user.email"):
             raise Blocked("git user.email is not configured for the coordinator checkout")
         self._git("checkout", "--quiet", "--detach", base_ref)
+        self._setup_checkout(checkout, source)
         return self._git("rev-parse", "HEAD")
+
+    def _setup_checkout(self, checkout: Path, source: Path) -> None:
+        """Give isolated workers usable build inputs: workers clone this checkout, ignored files included.
+
+        Runs before the coordinator exists, so no dispatch can observe a half-prepared tree.
+        """
+        for name in self.policy.get("checkout_seed_from_primary", []):
+            target, origin = checkout / name, source / name
+            if not target.exists() and origin.exists():
+                # APFS clonefile copy-on-write: the coordinator never shares a mutable tree with the user.
+                subprocess.run(["cp", "-c", "-R", str(origin), str(target)], check=True, timeout=600)
+        log = self.project.logs_dir / "checkout-setup.log"
+        for command in self.policy.get("checkout_setup", []):
+            self._set("recovering", phase="checkout-setup", step=" ".join(command))
+            with open(log, "a") as out:
+                out.write(f"\n$ {' '.join(command)}  # {time.ctime()}\n")
+                out.flush()
+                result = subprocess.run(command, cwd=checkout, stdout=out, stderr=subprocess.STDOUT,
+                                        timeout=self.policy.get("checkout_setup_timeout_s", 1800))
+            if result.returncode != 0:
+                raise Blocked(f"checkout setup {' '.join(command)} exited {result.returncode}; see {log}")
+        dirty = self._git("status", "--porcelain", "--untracked-files=all")
+        if dirty:
+            raise Blocked("checkout setup modified tracked or unignored files", dirty=dirty.splitlines()[:20])
 
     def _reconcile(self) -> dict[str, Any]:
         """Attempts from earlier epochs: import finished work, block unknowns, never relaunch blindly."""
@@ -574,6 +624,9 @@ class Supervisor:
                 if _alive(pid):
                     os.kill(pid, signal.SIGKILL)
         client.stop()
+        reaped = reap_isolation_workspaces(process.pid)
+        if reaped:
+            print(f"{time.ctime()} removed {len(reaped)} finished worker workspaces", flush=True)
         return confirmed
 
 

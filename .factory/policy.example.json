@@ -1,6 +1,9 @@
 {
   "allow_unreleased": false,
   "fetch_base": true,
+  "checkout_seed_from_primary": ["deps", "_build"],
+  "checkout_setup": [["mix", "deps.get"], ["env", "MIX_ENV=test", "mix", "compile"]],
+  "checkout_setup_timeout_s": 1800,
   "implementation_slots": 1,
   "review_slots": 1,
   "reserved_repair_slots": 1,

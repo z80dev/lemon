@@ -66,8 +66,9 @@ Supervisor messages are automated notices, not user instructions.
   your result on a branch. Do not push, merge, or open PRs.
 - Follow the repository's AGENTS.md and the relevant app guide.
 - Run focused checks for the change (for Elixir: `mix format` on changed files
-  and the narrowest relevant `scripts/test path …`). Do not run full umbrella
-  lanes; report what you did not run under `not_covered`.
+  and the narrowest relevant `scripts/test path …`; dependencies are already
+  fetched and compiled in your workspace). Do not run full umbrella lanes;
+  report what you did not run under `not_covered`.
 - Report checks honestly with their real exit codes. A skipped or unavailable
   check is not a pass.
 
