@@ -8,15 +8,15 @@ import './enterprise.css';
 
 const destinations = [
   { screen: 'settings.identity', title: 'Sign-in providers', description: 'Your verified identities and configured provider prerequisites' },
-  { screen: 'settings.network', title: 'Network & egress', description: 'Owner policy and measured enforcement on your machines' },
-  { screen: 'settings.setup', title: 'Reviewed host setup', description: 'Optional configured host scripts, named secrets and real run records' },
-  { screen: 'settings.usage.limit', title: 'Spend limits', description: 'Actual provider usage and explicit new-work ceilings' },
+  { screen: 'settings.network', title: 'Network access', description: 'Choose which network connections your Bots can use' },
+  { screen: 'settings.setup', title: 'Startup scripts', description: 'Configure optional scripts and secrets for your machines, and review past runs' },
+  { screen: 'settings.usage.limit', title: 'Spend limits', description: 'Review provider spending and set limits for new work' },
 ];
 
 export function OwnerControlsScreen({ route }: { route: Route }) {
   const { navigate, online } = useApp();
   const destination = destinations.find(item => item.screen === route.screen);
-  return <main className="page enterprise-page"><PageHeader title={destination?.title ?? 'Owner settings'} eyebrow="Your workspace"><p className="muted">{destination?.description ?? 'Choose an owner control. No enterprise setup is required.'}</p></PageHeader><nav className="tabs enterprise-tabs" aria-label="Advanced owner settings">{destinations.map(item => <button type="button" className={route.screen === item.screen ? 'selected' : ''} aria-current={route.screen === item.screen ? 'page' : undefined} key={item.screen} onClick={() => navigate({ screen: item.screen })}>{item.title}</button>)}</nav>{!online && <aside className="error-notice" role="status">Offline. Displayed records may be stale. Reads report errors rather than empty state; mutations are never queued.</aside>}
+  return <main className="page enterprise-page"><PageHeader title={destination?.title ?? 'Owner settings'} eyebrow="Your workspace"><p className="muted">{destination?.description ?? 'Choose an owner control. No enterprise setup is required.'}</p></PageHeader><nav className="tabs enterprise-tabs" aria-label="Owner settings">{destinations.map(item => <button type="button" className={route.screen === item.screen ? 'selected' : ''} aria-current={route.screen === item.screen ? 'page' : undefined} key={item.screen} onClick={() => navigate({ screen: item.screen })}>{item.title}</button>)}</nav>{!online && <aside className="error-notice" role="status">Offline. Displayed records may be stale. Reads report errors rather than empty state; mutations are never queued.</aside>}
     {route.screen === 'settings.identity' && <IdentityScreen />}
     {route.screen === 'settings.network' && <NetworkScreen />}
     {route.screen === 'settings.setup' && <SetupScreen />}

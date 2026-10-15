@@ -8,12 +8,26 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
+### Added
+
+- Lemon Bot exposes an authenticated, provider-specific voice catalog for native
+  pickers without calling speech providers or generating billable audio.
+
 ### Changed
 
 - Lemon Bot web explains channel and X setup, terminal access, file uploads and
   machine-operation progress in plain language. Memory sources have descriptive
   links, template identifiers stay under Details, and machine measurements
   become visibly out of date while their page remains open.
+
+- Clarify Lemon Bot web notification setup and browser registration, distinguish
+  server and browser voice samples, and use plain-language microphone guidance.
+  Owner settings now name Network access, Startup scripts and Spend limits
+  consistently.
+
+- Lemon Bot Apple clients explain uncached offline previews and expose sidebar
+  section/selection accessibility state. Mac global shortcuts use an explicit
+  native recorder, and Previous/Next Bot have one discoverable menu binding.
 
 ---
 

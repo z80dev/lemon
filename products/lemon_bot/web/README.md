@@ -77,6 +77,18 @@ Text/document previews are bounded to 8 MiB; table views bound rows/columns and 
 
 Microphone capture begins only after explicit action, has stop/cancel controls and releases tracks. Dictation is reviewable **unsent** text. Active voice chat uses STT → ordinary message/run stream → TTS. Local browser speech fallbacks are labelled; backend audio providers are separately advertised capabilities. Background or lock-screen microphone continuity is not promised.
 
+Notification settings distinguish browser registration and subscription from
+server delivery for browsers and iPhones. If server delivery is not set up, ask
+your administrator to enable it; browser permission alone does not enable delivery.
+**Check browser status** reads the browser subscription without changing it.
+The in-app inbox keeps alerts even when browser notifications are off.
+
+Voice settings separately label **Server voice** and **Browser voice** samples.
+Server samples use the configured server provider; browser samples use the
+browser's voices. Browser dictation may send audio to the browser vendor.
+Saved microphone inputs that have not been connected in this visit are labelled
+**not connected yet** rather than presented as confirmed available devices.
+
 No mutation is automatically replayed after a lost response. Unknown outcomes retain draft input and fixed nonce/resource IDs, fence consequential intents and offer read-only reconciliation. Revisions bind edits. Destructive dialogs disclose exact affected/retained scope, expire, require typed confirmation and remain mounted until acknowledgment. Offline destructive actions and approvals are never queued. Read failures are errors, not synthetic empty lists or success. Realtime cursors are acknowledged only after authoritative event application; refresh never treats a watermark as a replacement snapshot.
 
 ## Connection recovery
