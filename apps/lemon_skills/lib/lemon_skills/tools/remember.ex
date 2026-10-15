@@ -15,8 +15,8 @@ defmodule LemonSkills.Tools.Remember do
 
     * `text` alone appends `- text` under the file's heading (a no-op when the
       file already contains it);
-    * `text` with `replaces` swaps one exact existing passage for `text`;
-    * `replaces` alone deletes one exact existing passage.
+    * `text` with `replaces` patches an exact entry or unique substring;
+    * `replaces` alone deletes the entire matched entry. Exact entries win.
 
   Its read-side counterpart is `LemonSkills.Tools.Recall`. Registered as a
   builtin tool in `CodingAgent.ToolRegistry`.
@@ -61,8 +61,9 @@ defmodule LemonSkills.Tools.Remember do
           "Target \"user\" records human preferences, \"memory\" records other long-term facts, " <>
           "and \"project\" saves repository build commands, conventions, and decisions. " <>
           "To add a new fact, pass text and omit replaces (or set it to null, never an empty string). " <>
-          "To correct or delete a project fact, first recall it with scope \"project\", then copy " <>
-          "its exact saved text into replaces. Pass text as well to correct it; omit or null text to delete.",
+          "To correct or delete, use an exact saved entry or a unique substring in replaces. " <>
+          "An exact whole entry wins. With text, only the matched span is replaced; " <>
+          "without text, the whole matched entry is deleted.",
       label: "Remember",
       parameters: %{
         "type" => "object",
@@ -84,8 +85,9 @@ defmodule LemonSkills.Tools.Remember do
             "type" => ["string", "null"],
             "minLength" => 1,
             "description" =>
-              "Omit or null when adding. For correction/deletion, copy the exact existing saved " <>
-                "note or project fact, not a guessed summary. An empty string is invalid."
+              "Omit or null when adding. Otherwise use an exact entry or unique substring. " <>
+                "Exact whole entries win; text patches only the matched span, while omitted text " <>
+                "deletes the whole entry. Use longer unique text if ambiguous."
           }
         },
         "required" => []
@@ -102,7 +104,7 @@ defmodule LemonSkills.Tools.Remember do
 
   - `"text"` - the note to save (add) or the replacement (with `"replaces"`)
   - `"target"` (default `"memory"`) - `"user"`, `"memory"`, or `"project"`
-  - `"replaces"` - exact existing text, matched exactly once, to replace or delete
+  - `"replaces"` - exact entry (preferred) or unique substring to patch or delete
 
   Text values must be non-empty strings of at most 4096 bytes without NUL bytes;
   saved text is additionally screened against secrets, invisible or
@@ -184,6 +186,9 @@ defmodule LemonSkills.Tools.Remember do
           }
         }
 
+      {:error, reason} when reason in [:ambiguous_match, :capacity_exceeded, :unsafe_text] ->
+        mutation_error(reason, context, target, params)
+
       {:error, reason} when is_atom(reason) ->
         {:error, "Scoped preferences refused: #{reason}"}
 
@@ -218,11 +223,73 @@ defmodule LemonSkills.Tools.Remember do
            "Use recall with scope \"project\" and relevant query keywords, then copy the exact " <>
            "saved fact into replaces. To add a genuinely new fact instead, omit replaces or set it to null."}
 
+      {:error, reason} when reason in [:ambiguous_match, :capacity_exceeded, :unsafe_fact] ->
+        mutation_error(reason, context, "project", params)
+
       {:error, reason} when is_atom(reason) ->
         {:error, "Project memory refused: #{reason}"}
 
       error ->
         error
+    end
+  end
+
+  defp mutation_error(:ambiguous_match, _context, _target, _params) do
+    {:error,
+     "replaces is ambiguous; use longer unique text or the exact whole entry, then retry."}
+  end
+
+  defp mutation_error(reason, _context, _target, params)
+       when reason in [:unsafe_text, :unsafe_fact] do
+    reason =
+      LemonMemory.Safety.note_refusal_reason(Map.get(params, "text") || "") ||
+        LemonMemory.Safety.note_refusal_reason(Map.get(params, "replaces") || "")
+
+    {:error,
+     "Refusing to store unsafe memory content (#{reason || :unsafe_text}); remove it and retry."}
+  end
+
+  defp mutation_error(:capacity_exceeded, context, target, params) do
+    usage =
+      if target == "project",
+        do: Project.usage(context, context.store_opts),
+        else: Preferences.usage(context, target, context.store_opts)
+
+    case usage do
+      {:ok, usage} ->
+        text = Map.get(params, "text") || ""
+
+        {old, patched} =
+          case LemonMemory.NoteMatch.resolve(usage.facts, Map.get(params, "replaces"), text) do
+            {:ok, _, old, patched} -> {old, patched}
+            {:error, _} -> {nil, text}
+          end
+
+        facts = if old, do: List.delete(usage.facts, old), else: usage.facts
+        facts = if patched, do: facts ++ [patched], else: facts
+
+        message =
+          if target == "project" do
+            bytes = byte_size(Enum.join(facts, "\n"))
+
+            "Project memory at #{usage.used}/#{usage.cap} facts, #{usage.bytes}/#{usage.byte_cap} bytes; " <>
+              "attempted entry #{byte_size(text)} bytes. Free at least " <>
+              "#{max(length(facts) - usage.cap, 0)} facts and #{max(bytes - usage.byte_cap, 0)} bytes."
+          else
+            size = Enum.sum(Enum.map(facts, &String.length/1))
+
+            "Memory at #{usage.used}/#{usage.cap} chars; attempted entry #{String.length(text)} chars " <>
+              "would exceed the limit by #{max(size - usage.cap, 0)} chars."
+          end
+
+        {:error,
+         message <>
+           " Remove or shorten entries, then retry.\nCurrent entries:\n" <>
+           Enum.map_join(usage.facts, "\n", &("- " <> &1))}
+
+      _ ->
+        {:error,
+         "Memory capacity exceeded; current usage unavailable. Remove or shorten entries, then retry."}
     end
   end
 
