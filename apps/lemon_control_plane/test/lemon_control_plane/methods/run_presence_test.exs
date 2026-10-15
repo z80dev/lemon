@@ -29,6 +29,8 @@ defmodule LemonControlPlane.Methods.RunPresenceTest do
 
   setup do
     {:ok, _} = Application.ensure_all_started(:lemon_router)
+    # Earlier teardown may have stopped runs the registry has not yet dropped.
+    await_exited_runs_unregistered()
     original = :sys.get_state(Store)
 
     :sys.replace_state(Store, fn state ->
@@ -128,7 +130,7 @@ defmodule LemonControlPlane.Methods.RunPresenceTest do
     assert {:ok, %{"runs" => [_], "presence" => %{"active" => 2, "queued" => 2}}} =
              RunsActiveList.handle(%{"profileId" => profile, "limit" => 1}, %{})
 
-    stop_supervised!({RunProcess, extra_id})
+    stop_run!(extra_id)
 
     assert {:ok, %{"presence" => %{"idle" => true}}} =
              RunsActiveList.handle(%{"profileId" => "misleading"}, %{})
@@ -186,7 +188,7 @@ defmodule LemonControlPlane.Methods.RunPresenceTest do
       :sys.resume(run)
     end
 
-    stop_supervised!({RunProcess, id})
+    stop_run!(id)
 
     :ok =
       Store.put(RunOrchestrator.admission_table(), id, %{state: "submitting", identity: "legacy"})
@@ -308,6 +310,34 @@ defmodule LemonControlPlane.Methods.RunPresenceTest do
 
     assert {:ok, %{"presence" => %{"unknown" => 0, "idle" => true}}} =
              RunsActiveList.handle(%{"profileId" => profile}, %{})
+  end
+
+  defp stop_run!(run_id) do
+    :ok = stop_supervised!({RunProcess, run_id})
+    await_exited_runs_unregistered()
+  end
+
+  # Registry drops an exited process's entry only after its partition handles
+  # the exit signal. Until then `LemonRouter.active_runs/0`, which reads with
+  # `Registry.select/2`, still reports the run as a disappearing, unattributed
+  # active run. Presence assertions must not race that cleanup.
+  defp await_exited_runs_unregistered(attempts \\ 100) do
+    exited =
+      LemonRouter.RunRegistry
+      |> Registry.select([{{:"$1", :"$2", :_}, [], [{{:"$1", :"$2"}}]}])
+      |> Enum.reject(fn {_run_id, pid} -> Process.alive?(pid) end)
+
+    cond do
+      exited == [] ->
+        :ok
+
+      attempts > 0 ->
+        Process.sleep(10)
+        await_exited_runs_unregistered(attempts - 1)
+
+      true ->
+        flunk("exited runs remain registered: #{inspect(Enum.map(exited, &elem(&1, 0)))}")
+    end
   end
 
   defp submission(id, key, conversation, profile, agent) do
