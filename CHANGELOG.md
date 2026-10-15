@@ -15,6 +15,11 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Changed
 
+- Clarify Lemon Bot web notification setup and browser registration, distinguish
+  server and browser voice samples, and use plain-language microphone guidance.
+  Owner settings now name Network access, Startup scripts and Spend limits
+  consistently.
+
 - Lemon Bot Apple clients explain uncached offline previews and expose sidebar
   section/selection accessibility state. Mac global shortcuts use an explicit
   native recorder, and Previous/Next Bot have one discoverable menu binding.
