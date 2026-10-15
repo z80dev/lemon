@@ -20,6 +20,13 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Configuration loads now reject invalid resolved values, report expected types
+  without echoing supplied values, and name input files. CLI and Mix summaries
+  agree on unset/false values and identify environment overrides.
+- Remove obsolete runtime-theme and vendor-CLI environment documentation, refresh
+  the generated environment registry, make example credentials/bindings opt-in,
+  and resolve XMTP wallet environment references before connecting.
+
 - Normalize non-OpenAI control-plane HTTP errors to code/message envelopes,
   name authentication headers and credential sources, omit non-JSON error
   details safely, and distinguish unavailable status subsystems from empty results.

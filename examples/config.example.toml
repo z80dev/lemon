@@ -110,7 +110,7 @@ api_key_secret = "google_api_key"
 
 [defaults]
 provider = "anthropic"
-model = "claude-sonnet-5"
+model = "claude-sonnet-4-20250514"
 thinking_level = "medium"
 # Use "auto" for per-prompt effort selection; configure a classifier role below.
 #
@@ -120,7 +120,6 @@ thinking_level = "medium"
 # commit = "@smol"
 
 [runtime]
-theme = "default"
 extension_paths = []
 
 # Provider routing can be managed without exposing credentials:
@@ -203,19 +202,19 @@ mode = "collect"
 cap = 50
 drop = "oldest"
 
-[gateway.telegram]
-bot_token = "123456:token"
-allowed_chat_ids = [12345678]
+# [gateway.telegram]
+# bot_token_secret = "TELEGRAM_BOT_TOKEN"
+# allowed_chat_ids = [12345678]
 # default_account_id = "default"
 # default_chat_id = 12345678
 # default_thread_id = 35
-poll_interval_ms = 1000
-edit_throttle_ms = 1000
-debounce_ms = 1000
-allow_queue_override = false
-account_id = "default"
-offset = 0
-drop_pending_updates = false
+# poll_interval_ms = 1000
+# edit_throttle_ms = 1000
+# debounce_ms = 1000
+# allow_queue_override = false
+# account_id = "default"
+# offset = 0
+# drop_pending_updates = false
 
 [gateway.xmtp]
 # XMTP network: production | dev | local
@@ -266,15 +265,15 @@ timeout_ms = 300000
 # Empty means the conservative gateway.a2a.default_allow_tools list.
 allow_tools = []
 
-[gateway.projects.example]
-root = "/path/to/project"
-
-[[gateway.bindings]]
-transport = "telegram"
-chat_id = 12345678
-topic_id = 0
-project = "example"
-queue_mode = "collect"
+# [gateway.projects.example]
+# root = "/path/to/project"
+#
+# [[gateway.bindings]]
+# transport = "telegram"
+# chat_id = 12345678
+# topic_id = 0
+# project = "example"
+# queue_mode = "collect"
 
 # --- Logging ---
 

@@ -236,7 +236,8 @@ defmodule LemonCore.Config.Providers do
   defp normalize_enum(value, canonical) do
     case normalize_optional_string(value) do
       nil -> nil
-      string -> canonical.(string) || String.trim(string)
+      string when is_binary(string) -> canonical.(string) || String.trim(string)
+      other -> other
     end
   end
 
@@ -296,7 +297,7 @@ defmodule LemonCore.Config.Providers do
   defp normalize_optional_string(nil), do: nil
   defp normalize_optional_string(""), do: nil
   defp normalize_optional_string(str) when is_binary(str), do: str
-  defp normalize_optional_string(_), do: nil
+  defp normalize_optional_string(value), do: value
 
   defp reject_nil_values(map) do
     map

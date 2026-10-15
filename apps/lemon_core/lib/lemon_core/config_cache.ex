@@ -130,18 +130,12 @@ defmodule LemonCore.ConfigCache do
   @doc """
   Force reload the cached *base* config for `cwd` from disk.
 
-  ## Options
-
-    * `:validate` - Whether to validate the config and log warnings on validation errors
-      (default: false to maintain backward compatibility)
+  Configuration is validated before replacing the cache entry. Invalid settings
+  raise `LemonCore.Config.ValidationError` and leave the previous entry intact.
 
   ## Examples
 
-      # Reload without validation
       LemonCore.ConfigCache.reload()
-
-      # Reload with validation warnings
-      LemonCore.ConfigCache.reload(validate: true)
   """
   @spec reload(String.t() | nil, keyword()) :: LemonCore.Config.t()
   def reload(cwd \\ nil, opts \\ []), do: reload(__MODULE__, cwd, opts)
@@ -154,7 +148,7 @@ defmodule LemonCore.ConfigCache do
     ensure_available!(server)
 
     server
-    |> GenServer.call({:reload, cwd, opts}, call_timeout(server, opts))
+    |> GenServer.call({:reload, cwd}, call_timeout(server, opts))
     |> reply_or_raise()
   end
 
@@ -282,12 +276,7 @@ defmodule LemonCore.ConfigCache do
     {:reply, :ok, state}
   end
 
-  def handle_call({:reload, cwd}, from, state) do
-    # Backward compatibility: call without opts
-    handle_call({:reload, cwd, []}, from, state)
-  end
-
-  def handle_call({:reload, cwd, opts}, _from, state) do
+  def handle_call({:reload, cwd}, _from, state) do
     paths = config_paths(cwd)
     key = cache_key(paths)
     now = now_ms()
@@ -295,11 +284,6 @@ defmodule LemonCore.ConfigCache do
     case safe_load_base(cwd, paths) do
       {:ok, base, fp} ->
         _ = :ets.insert(state.table, {key, base, fp, now, now})
-
-        # Optionally validate and log warnings
-        if Keyword.get(opts, :validate, false) do
-          validate_config(base)
-        end
 
         {:reply, base, state}
 
@@ -326,23 +310,6 @@ defmodule LemonCore.ConfigCache do
 
   defp reply_or_raise({:error, exception, stacktrace}), do: reraise(exception, stacktrace)
   defp reply_or_raise(reply), do: reply
-
-  defp validate_config(base_config) do
-    # Validate the legacy config struct directly
-    # The Validator module can handle both modular and legacy configs
-    case LemonCore.Config.Validator.validate(base_config) do
-      :ok ->
-        :ok
-
-      {:error, errors} ->
-        require Logger
-
-        Logger.warning("""
-        Configuration validation warnings after reload:
-        #{Enum.map_join(errors, "\n", &"  - #{&1}")}
-        """)
-    end
-  end
 
   defp config_paths(cwd) do
     global = LemonCore.Config.global_path() |> Path.expand()

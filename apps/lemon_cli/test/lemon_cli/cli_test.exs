@@ -115,6 +115,40 @@ defmodule LemonCli.CLITest do
     assert output =~ "File: (not set)"
   end
 
+  test "CLI and Mix summaries agree and identify active environment overrides", %{
+    tmp_dir: tmp_dir
+  } do
+    System.put_env("LEMON_DEFAULT_MODEL", "model-from-environment")
+    path = LemonCore.Config.Modular.global_path()
+    File.mkdir_p!(Path.dirname(path))
+    File.write!(path, "[defaults]\nmodel = \"model-from-file\"\n")
+
+    cli = capture_io(fn -> assert CLI.run(["config", "show", "--project-dir", tmp_dir]) == 0 end)
+    mix = capture_io(fn -> Mix.Tasks.Lemon.Config.run(["show", "--project-dir", tmp_dir]) end)
+
+    assert cli == mix
+    assert cli =~ "Default model: model-from-environment (from LEMON_DEFAULT_MODEL)"
+    assert cli =~ "Auto resume: false"
+    assert cli =~ "Debug: false"
+    assert cli =~ "File: (not set)"
+    refute cli =~ "model-from-file"
+  end
+
+  test "show rejects unknown thinking choices rather than claiming a default", %{tmp_dir: tmp_dir} do
+    path = LemonCore.Config.Modular.global_path()
+    File.mkdir_p!(Path.dirname(path))
+    File.write!(path, "[defaults]\nthinking_level = \"private-unknown-choice\"\n")
+
+    output =
+      capture_io(:stderr, fn ->
+        assert CLI.run(["config", "show", "--project-dir", tmp_dir]) == 1
+      end)
+
+    assert output =~ path
+    assert output =~ "defaults.thinking_level"
+    refute output =~ "private-unknown-choice"
+  end
+
   test "unknown options point to command help" do
     output =
       capture_io(:stderr, fn ->
