@@ -54,6 +54,7 @@ defmodule LemonSkills.Tools.MediaAnalyzeImage do
   def tool(cwd, opts \\ []) do
     %AgentTool{
       name: "media_analyze_image",
+      timeout_ms: :infinity,
       description:
         "Analyze a local image artifact through Lemon's BEAM media worker path. Supports deterministic local vision previews and OpenAI vision analysis, records redacted media-job metadata, and can opt into final Telegram/Discord analysis delivery.",
       label: "Media Analyze Image",

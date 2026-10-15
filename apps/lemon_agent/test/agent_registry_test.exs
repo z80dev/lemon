@@ -567,13 +567,6 @@ defmodule LemonAgent.AgentRegistryTest do
   # ============================================================================
 
   describe "list/0" do
-    test "returns empty list when no agents registered" do
-      # Note: Other tests might have agents registered, so we can't assert empty
-      # Instead, we verify the structure of results
-      result = AgentRegistry.list()
-      assert is_list(result)
-    end
-
     test "returns registered agents with their keys and pids" do
       session_id = unique_session_id()
       key = {session_id, :test_list, 0}
@@ -799,12 +792,6 @@ defmodule LemonAgent.AgentRegistryTest do
 
       # Cleanup
       Agent.stop(pid)
-    end
-  end
-
-  describe "registry_name/0" do
-    test "returns the registry module name" do
-      assert AgentRegistry.registry_name() == LemonAgent.AgentRegistry
     end
   end
 

@@ -60,6 +60,7 @@ defmodule LemonSkills.Tools.MediaGenerateSpeech do
   def tool(cwd, opts \\ []) do
     %AgentTool{
       name: "media_generate_speech",
+      timeout_ms: :infinity,
       description:
         "Generate supervised speech audio through Lemon's BEAM media worker path. Supports deterministic local WAV previews, OpenAI TTS, ElevenLabs TTS, and Google Cloud Text-to-Speech, records redacted media-job metadata, and can opt into final Telegram/Discord attachment delivery.",
       label: "Media Generate Speech",

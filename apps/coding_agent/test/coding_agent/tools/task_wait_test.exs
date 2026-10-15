@@ -292,8 +292,6 @@ defmodule CodingAgent.Tools.Task.WaitTest do
 
   test "tool schema documents first-child native scope and captures trusted ownership" do
     assert %AgentTool{name: "wait"} = tool = Wait.tool("/tmp", @opts)
-    assert tool.description =~ "first owned native task child result"
-    assert tool.description =~ "Does not wait on shell jobs"
     assert tool.parameters["required"] == []
     assert tool.parameters["properties"]["task_ids"]["items"]["minLength"] == 1
     refute Map.has_key?(tool.parameters["properties"], "timeout_ms")

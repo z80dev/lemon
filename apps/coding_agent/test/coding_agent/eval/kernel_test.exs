@@ -37,4 +37,21 @@ defmodule CodingAgent.Eval.KernelTest do
     acc = Output.append_block(Output.new(), "\e[31mframed error\e[0m")
     assert Output.finalize(acc).output == "framed error"
   end
+
+  @tag :tmp_dir
+  test "rich output side channel rejects oversized, invalid and excessive records", %{
+    tmp_dir: tmp
+  } do
+    path = Path.join(tmp, "display.jsonl")
+    File.write!(path, Jason.encode!(%{mime: "text/markdown", data: "**ok**"}) <> "\n")
+    assert {:ok, [%LemonAi.Types.TextContent{text: "**ok**"}]} = Output.read_displays(path)
+    File.write!(path, String.duplicate("x", 4 * 1024 * 1024 + 1))
+    assert {:error, _} = Output.read_displays(path)
+    File.write!(path, String.duplicate(~s({"mime":"text/markdown","data":"x"}\n), 33))
+    assert {:error, _} = Output.read_displays(path)
+    File.write!(path, ~s({"mime":"image/png","data":"invalid base64"}\n))
+    assert {:error, _} = Output.read_displays(path)
+    File.write!(path, ~s({"mime":"image/png","data":"eA=="}\n))
+    assert {:error, _} = Output.read_displays(path)
+  end
 end
