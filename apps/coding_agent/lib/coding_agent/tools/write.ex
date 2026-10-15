@@ -24,6 +24,8 @@ defmodule CodingAgent.Tools.Write do
   alias CodingAgent.Tools.ACPFileBridge
   alias CodingAgent.Tools.CheckpointGuard
   alias CodingAgent.Tools.FileValidation
+  alias CodingAgent.Tools.FileFormatHelpers
+  alias CodingAgent.Tools.Read
   alias CodingAgent.Tools.LspDiagnostics
   alias CodingAgent.Tools.LspFormatter
   alias CodingAgent.Tools.PathHelpers
@@ -196,27 +198,34 @@ defmodule CodingAgent.Tools.Write do
           _ -> :unavailable
         end
       else
-        :unavailable
+        case File.read(path) do
+          {:ok, text} -> text
+          {:error, :enoent} -> nil
+          _ -> :unavailable
+        end
       end
 
-    case ACPFileBridge.write_text_file(path, content, opts) do
-      :ok ->
-        byte_count = byte_size(content)
+    with {:ok, content} <- prepare_content(content, old_text),
+         result <- ACPFileBridge.write_text_file(path, content, opts) do
+      case result do
+        :ok ->
+          byte_count = byte_size(content)
 
-        %AgentToolResult{
-          content: [
-            %TextContent{
-              type: :text,
-              text: success_message(path, byte_count, false)
-            }
-          ],
-          details:
-            %{path: path, bytes_written: byte_count, formatted: false, acp_client: true}
-            |> FileValidation.put_text_snapshots(path, old_text, content)
-        }
+          %AgentToolResult{
+            content: [
+              %TextContent{
+                type: :text,
+                text: success_message(path, byte_count, false)
+              }
+            ],
+            details:
+              %{path: path, bytes_written: byte_count, formatted: false, acp_client: true}
+              |> FileValidation.put_text_snapshots(path, old_text, content)
+          }
 
-      {:error, reason} ->
-        {:error, reason}
+        {:error, reason} ->
+          {:error, reason}
+      end
     end
   end
 
@@ -232,6 +241,8 @@ defmodule CodingAgent.Tools.Write do
     try do
       with :ok <-
              FileValidation.check_mutation_target(path, Keyword.put(opts, :mutation_root, cwd)),
+           {:ok, existing} <- existing_content(path),
+           {:ok, content} <- prepare_content(content, existing),
            {:ok, checkpoint} <-
              CheckpointGuard.before_mutation([path], cwd, opts, %{
                tool: "write",
@@ -321,6 +332,30 @@ defmodule CodingAgent.Tools.Write do
       }
     end
   end
+
+  defp existing_content(path) do
+    case File.read(path) do
+      {:ok, text} -> {:ok, text}
+      {:error, :enoent} -> {:ok, nil}
+      {:error, reason} -> {:error, "Failed to read existing file: #{:file.format_error(reason)}"}
+    end
+  end
+
+  defp prepare_content(content, old) when is_binary(old) do
+    if Read.truncated_output?(content) do
+      {:error,
+       "content looks like a truncated read output; re-read the omitted range or use edit"}
+    else
+      {old_bom, old_text} = FileFormatHelpers.strip_bom(old)
+      {new_bom, new_text} = FileFormatHelpers.strip_bom(content)
+      crlf = length(:binary.matches(old_text, "\r\n"))
+      lf = length(:binary.matches(old_text, "\n"))
+      ending = if crlf * 2 > lf and not String.contains?(content, "\r\n"), do: "\r\n", else: "\n"
+      {:ok, FileFormatHelpers.finalize_content(new_text, ending, new_bom || old_bom)}
+    end
+  end
+
+  defp prepare_content(content, _old), do: {:ok, content}
 
   defp read_bounded_snapshot(path) do
     case File.stat(path) do
