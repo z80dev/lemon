@@ -26,6 +26,7 @@ import {
 	setTranscriptActionHandler,
 	type TranscriptAction,
 } from "@oh-my-pi/pi-tui/chat/transcript-actions";
+import { setKeybindings } from "@oh-my-pi/pi-tui/keybindings";
 import { matchesKey } from "@oh-my-pi/pi-tui/keys";
 import { CLOSE_ACTION, pickerAction } from "@oh-my-pi/pi-tui/native/picker";
 import { ProcessTerminal, type Terminal } from "@oh-my-pi/pi-tui/terminal";
@@ -97,7 +98,7 @@ import { ApprovalController } from "./ui/controllers/approval-controller.ts";
 import { CommandController, type DeliverOptions } from "./ui/controllers/command-controller.ts";
 import { CommandPalette } from "./ui/controllers/command-palette.ts";
 import { EventController } from "./ui/controllers/event-controller.ts";
-import { InputController, LEMON_KEYBINDINGS } from "./ui/controllers/input-controller.ts";
+import { InputController } from "./ui/controllers/input-controller.ts";
 import { OmpController } from "./ui/controllers/omp-controller.ts";
 import { SelectorController } from "./ui/controllers/selector-controller.ts";
 import {
@@ -140,6 +141,7 @@ export interface AppShellOptions {
 	 */
 	themePreference?: ThemePreference;
 	notifications?: NotificationMode;
+	keybindings?: unknown;
 	/** Local roots for skills, prompts and file commands; tests inject a fixture home. */
 	resources?: Omit<PaletteSourceOptions, "cwd">;
 }
@@ -243,6 +245,7 @@ export class AppShell {
 			},
 		);
 		// Editor construction needs a theme: pi-tui ships no defaults.
+		const controlKeys: { model?: string; thinking?: string } = {};
 		this.#editor = new CustomEditor({
 			theme: getEditorTheme(),
 			onSubmit: async (text) => {
@@ -273,7 +276,6 @@ export class AppShell {
 			},
 			onAbort: () => this.#abortActiveRun(),
 			onQuit: (code) => this.requestExit(code),
-			onExternalEdit: () => this.openExternalEditor(),
 			onCycleMode: () => this.cycleSubmissionMode(),
 			notice: (text, level) => this.events.notice(text, level),
 			requestRender: () => this.tui.requestRender(),
@@ -289,10 +291,7 @@ export class AppShell {
 			onSelectThinking: () => {
 				if (!this.#hasOverlay()) void this.submit("/think");
 			},
-			controlKeys: {
-				model: LEMON_KEYBINDINGS["lemon.picker.model"].defaultKeys,
-				thinking: LEMON_KEYBINDINGS["lemon.picker.thinking"].defaultKeys,
-			},
+			controlKeys,
 		});
 		const smooth = options.smoothStreaming !== false;
 		this.events = new EventController({
@@ -437,6 +436,7 @@ export class AppShell {
 			repaint: () => this.selectors.repaint(),
 			notice: (text, level) => this.events.notice(text, level),
 			resources: options.resources,
+			bindingKeys: (action) => this.input.keybindings.getKeys(action as never),
 		});
 		this.commandController = new CommandController({
 			registry: this.commands,
@@ -450,6 +450,7 @@ export class AppShell {
 		});
 		this.input = new InputController({
 			tui: this.tui,
+			userBindings: options.keybindings,
 			// A pending approval is modal: Ctrl+L must not clear the transcript out
 			// from under a question the daemon is blocked on.
 			hasOverlay: () => this.#hasOverlay(),
@@ -474,8 +475,17 @@ export class AppShell {
 			copyLastReply: async () => {
 				await this.submit("/copy");
 			},
+			togglePlan: async () => {
+				await this.submit("/plan");
+			},
+			cycleModel: () => this.#modelPicker.cycle(),
 			notice: (text) => this.events.notice(text),
 		});
+		setKeybindings(this.input.keybindings);
+		controlKeys.model = this.input.keybindings.getKeys("lemon.picker.model" as never).join(", ");
+		controlKeys.thinking = this.input.keybindings
+			.getKeys("lemon.picker.thinking" as never)
+			.join(", ");
 	}
 
 	get sessionKey(): string {

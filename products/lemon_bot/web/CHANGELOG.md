@@ -1,6 +1,18 @@
 # Web client changelog
 
-## Unreleased
+## [Unreleased]
+
+### Changed
+
+- Reply chips show the original author and a short message preview; Send has a keyboard-focus tooltip.
+- Standardized computer connection setup as “Connect a computer” and raised status badges to 12px. Narrow sidebar headers keep their New Bot button on the logo row, truncating long connection labels instead.
+- Load feature screens on demand instead of bundling all routes into the initial client chunk.
+
+### Fixed
+
+- Device registration, About and update requirements use the build's package version and complete semantic-version precedence instead of hardcoded version checks.
+
+### Added
 
 - Messaging-first polish. Conversations drop the page heading for a floating Bot pill that toggles a right-hand panel (Activity: live run, steps and recent outcomes with Stop; Details: Bot facts, settings links and the existing conversation details; Library: files, memory, routines, skills, connected apps). On phones the panel opens as a full-screen sheet.
 - Transcript: grouped, borderless bubbles with date separators; user bubbles use the Bot's color. Reactions, reply, copy and feedback appear on hover, or on long-press/context menu on touch. Existing reactions show as small chips.
@@ -15,7 +27,7 @@
 - The lemon mascot (soft blob, wonky face) is now a crisp SVG for the brand mark, the default Bot avatars (recolored per Bot), the empty states and the sign-in illustration. Added a favicon, an Apple touch icon and a web app manifest.
 - iPhone Safari: `viewport-fit=cover` with safe-area insets, 16px inputs (no zoom on focus), Add to Home Screen metadata, and light/dark theme colors. Refreshed warm olive/cream light and dark palettes, 15px body text, pill buttons.
 
-## 1.0.0
+## [1.0.0]
 
 - Introduce the separate Lemon Bot React/Vite product client with a Bot-centric roster, calm status anchor, responsive workspace, command/search navigation, task-aware links and light/dark/reduced-motion presentation.
 - Add real typed transcript/card, file and explicit voice workflows, durable drafts, unknown-outcome reconciliation, exact revision/confirmation-bound actions, and authenticated realtime resume through the TypeScript SDK.

@@ -12,7 +12,8 @@ defmodule CodingAgent.SettingsManager do
   @type thinking_level :: :off | :auto | :minimal | :low | :medium | :high | :xhigh
 
   @type model_config :: %{
-          provider: String.t() | nil,
+          optional(:provider_source) => :explicit | :inherited,
+          provider: atom() | String.t() | nil,
           model_id: String.t(),
           base_url: String.t() | nil
         }
@@ -158,7 +159,14 @@ defmodule CodingAgent.SettingsManager do
     provider = Map.get(agent, :default_provider)
     model = Map.get(agent, :default_model)
 
-    default_model = parse_model_spec(provider, model)
+    provider_source =
+      Map.get(
+        agent,
+        :default_provider_source,
+        if(provider in [nil, ""], do: :inherited, else: :explicit)
+      )
+
+    default_model = parse_model_spec(provider, model, provider_source)
 
     case ModelRoles.validate(config.model_roles) do
       :ok -> :ok
@@ -344,25 +352,40 @@ defmodule CodingAgent.SettingsManager do
   # Helpers
   # ============================================================================
 
-  defp parse_model_spec(nil, nil), do: nil
-  defp parse_model_spec(_provider, "@" <> _role = selector), do: selector
+  defp parse_model_spec(nil, nil, _provider_source), do: nil
+  defp parse_model_spec(_provider, "@" <> _role = selector, _provider_source), do: selector
 
-  defp parse_model_spec(provider, model) when is_binary(model) do
+  defp parse_model_spec(provider, model, provider_source) when is_binary(model) do
     # Try colon separator first (Lemon's current format)
     case String.split(model, ":", parts: 2) do
       [p, model_id] when provider in [nil, ""] and p != "" and model_id != "" ->
-        %{provider: normalize_provider(p), model_id: model_id, base_url: nil}
+        %{
+          provider: normalize_provider(p),
+          provider_source: :explicit,
+          model_id: model_id,
+          base_url: nil
+        }
 
       _ ->
         # Try slash separator (OpenRouter/Pi format)
         case String.split(model, "/", parts: 2) do
           [p, model_id] when provider in [nil, ""] and p != "" and model_id != "" ->
-            %{provider: normalize_provider(p), model_id: model_id, base_url: nil}
+            %{
+              provider: normalize_provider(p),
+              provider_source: :explicit,
+              model_id: model_id,
+              base_url: nil
+            }
 
           _ ->
             # Fall back to treating entire string as model_id
             if model != "" do
-              %{provider: normalize_provider(provider), model_id: model, base_url: nil}
+              %{
+                provider: normalize_provider(provider),
+                provider_source: provider_source,
+                model_id: model,
+                base_url: nil
+              }
             else
               nil
             end
@@ -370,11 +393,17 @@ defmodule CodingAgent.SettingsManager do
     end
   end
 
-  defp parse_model_spec(provider, model) when is_binary(provider) and provider != "" do
-    %{provider: normalize_provider(provider), model_id: to_string(model), base_url: nil}
+  defp parse_model_spec(provider, model, provider_source)
+       when is_binary(provider) and provider != "" do
+    %{
+      provider: normalize_provider(provider),
+      provider_source: provider_source,
+      model_id: to_string(model),
+      base_url: nil
+    }
   end
 
-  defp parse_model_spec(_provider, _model), do: nil
+  defp parse_model_spec(_provider, _model, _provider_source), do: nil
 
   # Built-in provider names normalize to atoms (lowercase, dashes to
   # underscores). Custom `[providers.<id>]` ids stay binaries so config input

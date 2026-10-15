@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import { readFile } from "node:fs/promises";
+import { TUI_KEYBINDINGS } from "@oh-my-pi/pi-tui/keybindings";
 import { cell, renderCommandsDoc } from "../scripts/generate-commands-doc.ts";
 import { createCommandRegistry } from "../src/commands/index.ts";
 import { LEMON_KEYBINDINGS } from "../src/ui/controllers/input-controller.ts";
@@ -14,8 +15,9 @@ test("reference contains every registered command, aliases, args and summary", a
 	}
 	expect(doc).toContain("## core");
 	expect(doc).toContain("## session-tree");
-	for (const binding of Object.values(LEMON_KEYBINDINGS)) {
-		expect(doc).toContain(`| ${cell(binding.defaultKeys)} | ${cell(binding.description)} |`);
+	for (const [id, binding] of Object.entries({ ...LEMON_KEYBINDINGS, ...TUI_KEYBINDINGS })) {
+		const keys = [binding.defaultKeys].flat().join(", ") || "unbound";
+		expect(doc).toContain(`| ${cell(id)} | ${cell(keys)} | ${cell(binding.description)} |`);
 	}
 	expect(doc).toBe(
 		await readFile(new URL("../../../docs/user-guide/tui-commands.md", import.meta.url), "utf8"),
