@@ -541,6 +541,10 @@ boot_one_profile() {
     "LEMON_CONTROL_PLANE_PORT=$control_port"
     "LEMON_WEB_PORT=$web_port"
     "LEMON_SIM_UI_PORT=$sim_port"
+    "LEMON_ROUTER_HEALTH_PORT=0"
+    "LEMON_GATEWAY_HEALTH_PORT=0"
+    "RELEASE_NODE=lemon_release_boot_$control_port"
+    "RELEASE_DISTRIBUTION=sname"
     "LEMON_WEB_SECRET_KEY_BASE=runtime_boot_secret_key_base_runtime_boot_secret_key_base_runtime_boot"
     "LEMON_GATEWAY_NODE_COOKIE=runtime-boot-cookie-$profile"
     "PHX_SERVER=true"
@@ -749,6 +753,22 @@ PY
     fi
 
     run_launcher stop
+    if run_launcher status; then
+      echo "$profile: status succeeded after stop" >&2
+      exit 1
+    fi
+
+    # Foreground start must be observable and stoppable from another launcher.
+    run_launcher start > "$profile_dir/foreground.log" 2>&1 &
+    local foreground_pid=$!
+    wait_for_health "http://127.0.0.1:$control_port/healthz" "$profile foreground control-plane"
+    run_launcher status
+    run_launcher stop
+    wait "$foreground_pid" || true
+    if run_launcher status; then
+      echo "$profile: status succeeded after foreground stop" >&2
+      exit 1
+    fi
     run_release eval "LemonCore.Doctor.CLI.bundle!(bundle_path: \"$bundle_path\")"
 
     if [ ! -f "$bundle_path" ]; then

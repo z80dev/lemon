@@ -15,6 +15,12 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Make source and packaged launcher lifecycle results truthful: foreground health
+  is visible to status, unreachable runtimes fail status, foreign listeners fail
+  stop/restart, and failed daemon health waits clean up their processes. Validate
+  lifecycle ports, explain missing Mix/curl, show selected home/ports/logs, and
+  render source help without compiling or creating credentials. Status RPC adds
+  the runtime profile and configured default model ID without exposing home paths.
 - All skill curator entry points now protect cron-referenced skills, including
   disabled jobs, while preserving explicit exemptions. Automatic archival fails
   closed with a reported reason when the automation provider is unavailable.
