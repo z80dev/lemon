@@ -191,11 +191,19 @@ defmodule LemonMemory.Project do
       owner = if ContextScope.shared_grant?(context), do: :shared, else: owner
 
       mutate(context, owned(identity, owner), opts, fn facts ->
-        cond do
-          replaces == nil -> {:ok, Enum.uniq(facts ++ [text])}
-          replaces not in facts -> {:error, :not_found}
-          text == nil -> {:ok, List.delete(facts, replaces)}
-          true -> {:ok, facts |> Enum.map(&if(&1 == replaces, do: text, else: &1)) |> Enum.uniq()}
+        with {:ok, _matched, previous, patched} <-
+               LemonMemory.NoteMatch.resolve(facts, replaces, text),
+             {:ok, patched} <- optional_patched_fact(patched) do
+          cond do
+            previous == nil ->
+              {:ok, Enum.uniq(facts ++ [patched])}
+
+            patched == nil ->
+              {:ok, List.delete(facts, previous)}
+
+            true ->
+              {:ok, facts |> Enum.map(&if(&1 == previous, do: patched, else: &1)) |> Enum.uniq()}
+          end
         end
       end)
     else
@@ -366,6 +374,15 @@ defmodule LemonMemory.Project do
     case Store.put_sync(server, doc) do
       :ok -> :ok
       {:error, _} -> {:error, :store_unavailable}
+    end
+  end
+
+  defp optional_patched_fact(nil), do: {:ok, nil}
+
+  defp optional_patched_fact(fact) do
+    case normalize_fact(fact) do
+      {:error, :fact_too_long} -> {:error, :capacity_exceeded}
+      result -> result
     end
   end
 

@@ -4,12 +4,16 @@ defmodule LemonMemory.Safety do
 
   Credential matching is shared with `LemonCore.Redact`. Operator previews add
   URL/path, standalone Basic authorization, and secret-name omission on top.
+  Persistent backdoor and credential-exfiltration instructions use the existing
+  `:prompt_injection` refusal reason, preserving caller screening contracts.
   """
 
   alias LemonMemory.Document
 
   @unsafe_controls ~r/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F\x{200B}-\x{200F}\x{202A}-\x{202E}\x{2066}-\x{2069}\x{FEFF}]/u
   @injection ~r/ignore (all )?(previous|prior|above) instructions|disregard (all )?(previous|prior|above) instructions|reveal (the )?(system|developer) prompt|system prompt|developer message|<\|\/?(?:system|developer|assistant|user)\|>/iu
+  # Backdoor/exfiltration instructions share the existing injection refusal contract.
+  @exfiltration ~r/(?:\b(?:write|append|add|install|copy|echo|tee)\b[^\n]{0,120}\bauthorized_keys\b|>>?\s*[^\s;|]*authorized_keys\b|\b(?:curl|wget)\b[^\n|]{0,300}\|\s*(?:sudo\s+)?(?:ba|z)?sh\b|\bbase64\s+(?:-d|--decode)\b[^\n|]{0,200}\|\s*(?:sudo\s+)?(?:ba|z)?sh\b|\b(?:send|post|upload|exfiltrate)\b[^\n]{0,100}\b(?:credentials?|secrets?|tokens?|api[ _-]?keys?|env|ssh[ _-]?keys?)\b[^\n]{0,100}\bto\s+(?:https?:\/\/[^\s]+|[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}|(?:[a-z0-9-]+\.)+[a-z]{2,}(?::\d+)?))/iu
 
   @doc "Screen prompt-injected notes without changing their accepted bytes."
   def validate_note(text, opts \\ []) do
@@ -30,6 +34,7 @@ defmodule LemonMemory.Safety do
       contains_secret?(text) -> :secret
       Regex.match?(@unsafe_controls, text) -> :invisible
       Regex.match?(@injection, text) -> :prompt_injection
+      Regex.match?(@exfiltration, text) -> :prompt_injection
       true -> nil
     end
   end
