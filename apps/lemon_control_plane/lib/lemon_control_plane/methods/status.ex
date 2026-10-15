@@ -59,8 +59,7 @@ defmodule LemonControlPlane.Methods.Status do
     {connections, presence_state} =
       snapshot(%{"active" => 0, "operators" => 0, "nodes" => 0}, &connection_status/0)
 
-    {runs, router_state} =
-      snapshot(%{"active" => 0, "queued" => 0, "completed_today" => 0}, &run_status/0)
+    {runs, router_state} = run_status()
 
     {channels, channels_state} =
       snapshot(%{"configured" => [], "connected" => [], "details" => []}, &channel_status/0)
@@ -198,8 +197,22 @@ defmodule LemonControlPlane.Methods.Status do
     %{
       "active" => run_counts.active,
       "queued" => run_counts.queued,
-      "completed_today" => run_counts.completed_today
+      "completed_today" => run_counts.completed_today,
+      "failed_today" => run_counts.failed_today
     }
+    |> then(fn runs ->
+      fields =
+        Map.new(runs, fn {key, value} ->
+          {key, if(is_nil(value), do: "unavailable", else: "available")}
+        end)
+
+      state =
+        if Enum.any?(runs, fn {_key, value} -> is_nil(value) end),
+          do: "unavailable",
+          else: "available"
+
+      {runs, %{"status" => state, "fields" => fields}}
+    end)
   end
 
   defp channel_status do
@@ -228,7 +241,11 @@ defmodule LemonControlPlane.Methods.Status do
   end
 
   defp get_run_counts do
-    if LemonRouter.available?(), do: LemonRouter.counts(), else: exit(:unavailable)
+    default = %{active: nil, queued: nil, completed_today: nil, failed_today: nil}
+
+    optional(default, fn ->
+      if LemonRouter.available?(), do: LemonRouter.counts(), else: default
+    end)
   end
 
   defp get_channel_status do

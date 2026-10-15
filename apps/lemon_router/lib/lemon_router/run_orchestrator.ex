@@ -229,33 +229,32 @@ defmodule LemonRouter.RunOrchestrator do
   Lightweight run counts for status UIs.
 
   `active` reflects current supervised run processes.
-  `queued` is read from authoritative coordinator backlogs; `completed_today`
-  is maintained by `LemonRouter.RunCountTracker` from terminal-run telemetry.
+  `queued` is read from authoritative coordinator backlogs. Daily terminal counts
+  are maintained by `LemonRouter.RunCountTracker`. Unavailable fields are nil.
   """
   @spec counts() :: %{
-          active: non_neg_integer(),
-          queued: non_neg_integer(),
-          completed_today: non_neg_integer()
+          active: non_neg_integer() | nil,
+          queued: non_neg_integer() | nil,
+          completed_today: non_neg_integer() | nil,
+          failed_today: non_neg_integer() | nil
         }
   def counts do
-    # Counts remain available during supervisor startup/shutdown; callback bugs
-    # are not equivalent to an unavailable process.
-    active =
-      try do
-        %{active: n} = DynamicSupervisor.count_children(LemonRouter.RunSupervisor)
-        n
-      catch
-        :exit, _reason -> 0
-      end
+    %{
+      active:
+        count_or_unavailable(fn ->
+          %{active: n} = DynamicSupervisor.count_children(LemonRouter.RunSupervisor)
+          n
+        end),
+      queued: count_or_unavailable(&LemonRouter.RunCountTracker.queued/0),
+      completed_today: count_or_unavailable(&LemonRouter.RunCountTracker.completed_today/0),
+      failed_today: count_or_unavailable(&LemonRouter.RunCountTracker.failed_today/0)
+    }
+  end
 
-    {queued, completed_today} =
-      try do
-        {LemonRouter.RunCountTracker.queued(), LemonRouter.RunCountTracker.completed_today()}
-      catch
-        :exit, _reason -> {0, 0}
-      end
-
-    %{active: active, queued: queued, completed_today: completed_today}
+  defp count_or_unavailable(fun) do
+    fun.()
+  catch
+    :exit, _reason -> nil
   end
 
   @impl true

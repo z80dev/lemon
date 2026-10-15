@@ -81,7 +81,7 @@ defmodule LemonCli.OperatorCommandsTest do
           ~w(runs show one two),
           ~w(runs show one --limit 5),
           ~w(runs active --since 1h),
-          ~w(cron list),
+          ~w(cron list --unknown),
           ~w(cron runs --status error),
           ~w(cron runs --since 1s),
           ~w(cron status --job id),
