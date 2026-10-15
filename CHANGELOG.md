@@ -58,6 +58,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 - The debug tool supports adapter-requested DAP child sessions, including js-debug
   launch/attach configurations, child session targeting, and recursive teardown.
 
+- Agent runs continue up to three times after empty replies or malformed tool
+  arguments, preserving streamed output and tool results without replaying tools.
+
 ### Changed
 
 - Ordinary bash commands now continue under the session-owned process manager

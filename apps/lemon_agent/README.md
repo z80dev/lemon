@@ -71,6 +71,26 @@ The supervisor uses a `:one_for_one` strategy. Each child is independent:
 | LemonAgent.Loop.Streaming (internal) | `lib/agent_core/loop/streaming.ex` | LLM response streaming. Calls `LemonAi.stream/3` (or a custom `stream_fn`), processes SSE events, builds partial `AssistantMessage`, emits `message_start`/`message_update`/`message_end` events. |
 | LemonAgent.Loop.ToolCalls (internal) | `lib/agent_core/loop/tool_calls.ex` | Supervised tool execution. Only tools opting into `parallel_safe: true` overlap; sequential tools are ordering barriers. Supports `max_tool_concurrency`, steering, abort, crash and timeout recovery. |
 
+### Empty and malformed reply recovery
+
+Across a run, the loop can make up to three additional provider calls to
+recover an empty non-tool reply (including reasoning-only
+stops) or malformed tool arguments. Argument checks reuse the execution path's
+schema/coercion rules and inspect streamed JSON before attempting recovery.
+This is separate from transient transport retries and shares the run's usage
+budget and cancellation signal.
+
+Each continuation emits a `provider_retry` notice such as
+`empty reply, continuing (1/3)`. The short correction is request-local system
+guidance, not a synthetic human message in the transcript. Already committed
+assistant content remains in history, and the next reply appends rather than
+replaying it. Continuations retain existing tool results and only re-call the
+provider; they never re-execute earlier tools. When no continuation is taken,
+malformed calls follow the ordinary tool argument-error result path so the
+model can self-correct. Empty-reply exhaustion keeps the existing terminal
+assistant error path (and the router's existing whole-run retry).
+Ordinary text-only final answers are not classified as unexpected stops.
+
 ### Events and Context
 
 | Module | File | Purpose |
