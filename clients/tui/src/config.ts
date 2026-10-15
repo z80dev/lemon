@@ -1,6 +1,14 @@
 import { promises as fsPromises } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import {
+	addKeyAliases,
+	canonicalKeyId,
+	type KeybindingDefinitions,
+	type KeybindingsConfig,
+	KeybindingsManager,
+} from "@oh-my-pi/pi-tui/keybindings";
+import { Key, type KeyId, parseKey } from "@oh-my-pi/pi-tui/keys";
 
 export type NotificationMode = "auto" | "osc" | "bell" | "off";
 
@@ -31,6 +39,7 @@ export interface LemonConfig {
 	tui?: {
 		theme?: string;
 		notifications?: NotificationMode;
+		keys?: unknown;
 	};
 }
 
@@ -71,7 +80,11 @@ export async function loadConfig(cwd?: string): Promise<LemonConfig> {
 	const project = await readConfigFile(getProjectConfigPath(cwd));
 	return {
 		defaults: { ...global.defaults, ...project.defaults },
-		tui: { ...global.tui, ...project.tui },
+		tui: {
+			...global.tui,
+			...project.tui,
+			keys: mergeKeyTables(global.tui?.keys, project.tui?.keys),
+		},
 	};
 }
 
@@ -97,6 +110,99 @@ async function readOptional(configPath: string): Promise<string | undefined> {
 function configLoadError(configPath: string, err: unknown): Error {
 	const message = err instanceof Error ? err.message : String(err);
 	return new Error(`Failed to load config ${configPath}: ${message}`);
+}
+
+function isTable(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function mergeKeyTables(global: unknown, project: unknown): unknown {
+	if (project === undefined) return global;
+	return isTable(global) && isTable(project) ? { ...global, ...project } : project;
+}
+
+/** pi-tui exposes a raw-input parser, not a chord-string validator. Check its
+ * exported named keys and parse printable bases; reject malformed modifiers. */
+function parseBinding(value: string): KeyId | undefined {
+	let rest = value.toLowerCase();
+	const modifiers = new Set<string>();
+	for (;;) {
+		const match = /^(ctrl|shift|alt|super)\+/.exec(rest);
+		if (!match) break;
+		if (modifiers.has(match[1]!)) return undefined;
+		modifiers.add(match[1]!);
+		rest = rest.slice(match[0].length);
+	}
+	const named = Object.values(Key).some(
+		(key) => typeof key === "string" && key.toLowerCase() === rest,
+	);
+	if (!named && !(rest.length === 1 && /^[a-z0-9]$/.test(rest) && parseKey(rest))) {
+		return undefined;
+	}
+	return canonicalKeyId(value.toLowerCase()) as KeyId;
+}
+
+/** Ignore invalid overrides as a unit. Conflicting overrides fall back to their
+ * defaults, iterating because that fallback can expose another conflict. */
+export function resolveKeybindings(
+	configured: unknown,
+	definitions: KeybindingDefinitions,
+): { manager: KeybindingsManager; issues: string[] } {
+	const issues: string[] = [];
+	const bindings: KeybindingsConfig = {};
+	if (configured !== undefined && !isTable(configured)) {
+		issues.push("[tui.keys] must be a table");
+	}
+	for (const [action, value] of Object.entries(isTable(configured) ? configured : {})) {
+		if (!Object.hasOwn(definitions, action)) {
+			issues.push(`unknown action ${action}`);
+			continue;
+		}
+		if (value === "none") {
+			bindings[action] = [];
+			continue;
+		}
+		const values = Array.isArray(value) ? value : [value];
+		const keys = values.map((key) => (typeof key === "string" ? parseBinding(key) : undefined));
+		if (keys.some((key) => key === undefined)) {
+			issues.push(`invalid key for ${action}`);
+			continue;
+		}
+		bindings[action] = keys as KeyId[];
+	}
+	let manager = new KeybindingsManager(definitions, bindings);
+	for (;;) {
+		const conflicts = manager.getConflicts();
+		// The manager reports user/user conflicts only. Include defaults, using
+		// its canonical IDs so aliases and reordered modifiers also collide.
+		const claims = new Map<string, string[]>();
+		for (const [action, keys] of Object.entries(manager.getResolvedBindings())) {
+			const aliases = new Set<string>();
+			for (const key of [keys ?? []].flat()) addKeyAliases(aliases, key);
+			for (const key of aliases) {
+				const actions = claims.get(key) ?? [];
+				actions.push(action);
+				claims.set(key, actions);
+			}
+		}
+		for (const [key, actions] of claims) {
+			if (actions.length > 1 && actions.some((action) => bindings[action] !== undefined)) {
+				conflicts.push({ key: key as KeyId, keybindings: actions });
+			}
+		}
+		const rejected = new Set<string>();
+		for (const conflict of conflicts) {
+			for (const action of conflict.keybindings) {
+				if (bindings[action] !== undefined) rejected.add(action);
+			}
+			const issue = `key ${conflict.key} conflicts: ${conflict.keybindings.join(", ")}`;
+			if (!issues.includes(issue)) issues.push(issue);
+		}
+		if (rejected.size === 0) break;
+		for (const action of rejected) delete bindings[action];
+		manager = new KeybindingsManager(definitions, bindings);
+	}
+	return { manager, issues };
 }
 
 /**

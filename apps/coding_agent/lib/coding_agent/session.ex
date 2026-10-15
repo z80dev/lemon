@@ -47,32 +47,42 @@ defmodule CodingAgent.Session do
   @reset_abort_wait_ms 5_000
   @todo_call_timeout_ms 30_000
 
-  alias LemonAgent.ContextRegistry
-  alias LemonAgent.Types.AgentTool
-  alias LemonCore.Introspection
   alias CodingAgent.AsyncFollowups
   alias CodingAgent.Extensions
   alias CodingAgent.Extensions.AdditionalContext
+  alias CodingAgent.Extensions.SessionHooks
+  alias CodingAgent.Messages.CustomMessage
   alias CodingAgent.Session.BackgroundTasks
   alias CodingAgent.Session.BranchState
   alias CodingAgent.Session.BudgetLedger
   alias CodingAgent.Session.CompactionLifecycle
   alias CodingAgent.Session.CompactionManager
+  alias CodingAgent.Session.ContextBudget
   alias CodingAgent.Session.ContextCheckpoint
+  alias CodingAgent.Session.ContextUsage
   alias CodingAgent.Session.EventHandler
+  alias CodingAgent.Session.LearningReview
   alias CodingAgent.Session.Lifecycle
   alias CodingAgent.Session.ModelResolver
   alias CodingAgent.Session.Notifier
   alias CodingAgent.Session.OverflowRecovery
+  alias CodingAgent.Session.Ownership
   alias CodingAgent.Session.Persistence
+  alias CodingAgent.Session.Planning
   alias CodingAgent.Session.PromptComposer
+  alias CodingAgent.Session.Recovery
+  alias CodingAgent.Session.Rewind
   alias CodingAgent.Session.State
   alias CodingAgent.Session.Todos
   alias CodingAgent.Session.WasmBridge
-  alias CodingAgent.Wasm.SidecarSupervisor
   alias CodingAgent.SessionManager
   alias CodingAgent.SessionManager.{Session, SessionEntry}
-  alias CodingAgent.Messages.CustomMessage
+  alias CodingAgent.Tools.Task.Control
+  alias CodingAgent.Wasm.SidecarSupervisor
+  alias LemonAgent.ContextRegistry
+  alias LemonAgent.ModelRuntime.SessionPins
+  alias LemonAgent.Types.AgentTool
+  alias LemonCore.Introspection
 
   # ============================================================================
   # State
@@ -464,11 +474,9 @@ defmodule CodingAgent.Session do
   @spec deliver_parent_question(GenServer.server(), String.t()) ::
           :ok | {:error, :session_unavailable}
   def deliver_parent_question(session, text) do
-    try do
-      GenServer.call(session, {:deliver_parent_question, text}, 5_000)
-    catch
-      :exit, _reason -> {:error, :session_unavailable}
-    end
+    GenServer.call(session, {:deliver_parent_question, text}, 5_000)
+  catch
+    :exit, _reason -> {:error, :session_unavailable}
   end
 
   @doc """
@@ -797,7 +805,7 @@ defmodule CodingAgent.Session do
   @impl true
   def init(opts) do
     Process.flag(:trap_exit, true)
-    CodingAgent.Session.Ownership.initialize(opts, &initialize_owned_session/1)
+    Ownership.initialize(opts, &initialize_owned_session/1)
   end
 
   defp initialize_owned_session(opts) do
@@ -843,7 +851,7 @@ defmodule CodingAgent.Session do
   @impl true
   def handle_call(:context_budget, _from, state) do
     budget =
-      CodingAgent.Session.ContextBudget.measure(state, LemonAgent.Agent.get_state(state.agent))
+      ContextBudget.measure(state, LemonAgent.Agent.get_state(state.agent))
 
     {:reply, {:ok, budget}, state}
   end
@@ -852,7 +860,7 @@ defmodule CodingAgent.Session do
     if action != :status and (state.is_streaming or state.auto_compaction.in_progress) do
       {:reply, {:error, :busy}, state}
     else
-      case CodingAgent.Session.Planning.transition_session(state, action, opts) do
+      case Planning.transition_session(state, action, opts) do
         {:ok, plan, state} ->
           {:reply, {:ok, plan}, state}
 
@@ -865,7 +873,7 @@ defmodule CodingAgent.Session do
   # Called from the running `propose_plan` tool once the user decided.
   def handle_call({:resolve_plan_proposal, decision, proposal}, _from, state)
       when decision in [:approve, :refine] do
-    case CodingAgent.Session.Planning.resolve_proposal(state, decision, proposal) do
+    case Planning.resolve_proposal(state, decision, proposal) do
       {:ok, state} -> {:reply, :ok, state}
       {:error, _} = error -> {:reply, error, state}
     end
@@ -1080,7 +1088,7 @@ defmodule CodingAgent.Session do
     # An explicit model choice outranks stickiness from a previous fallback
     # commit: clear the session's provider pin so the fallback wrapper cannot
     # lead the next turn with a provider pinned for the old model.
-    LemonAgent.ModelRuntime.SessionPins.clear(state.session_manager.header.id)
+    SessionPins.clear(state.session_manager.header.id)
 
     # Record model change in session
     entry =
@@ -1130,7 +1138,7 @@ defmodule CodingAgent.Session do
   end
 
   def handle_call({:tree, opts}, _from, state) do
-    {:reply, {:ok, CodingAgent.Session.Rewind.tree(state.session_manager, opts)}, state}
+    {:reply, {:ok, Rewind.tree(state.session_manager, opts)}, state}
   end
 
   def handle_call({:context_checkpoint, operation, id, value}, _from, state) do
@@ -1161,7 +1169,7 @@ defmodule CodingAgent.Session do
   def handle_call({:rewind, entry_id, opts}, _from, state) do
     state = CompactionManager.cancel_compaction_tasks(state, :rewind)
 
-    case CodingAgent.Session.Rewind.run(state.session_manager, entry_id, opts) do
+    case Rewind.run(state.session_manager, entry_id, opts) do
       {:ok, result, session_manager} ->
         if Keyword.get(opts, :dry_run, true) do
           {:reply, {:ok, result}, state}
@@ -1201,13 +1209,13 @@ defmodule CodingAgent.Session do
     do: {:reply, {:error, :busy}, state}
 
   def handle_call({:navigate_entry, entry_id, opts}, _from, state) do
-    case CodingAgent.Session.Rewind.navigation_target(state.session_manager, entry_id) do
+    case Rewind.navigation_target(state.session_manager, entry_id) do
       {:ok, target} ->
         {state, summarizing} =
           navigate_branch(state, target.leaf, Keyword.get(opts, :summarize, false))
 
         receipt =
-          CodingAgent.Session.Rewind.navigation_receipt(
+          Rewind.navigation_receipt(
             state.session_manager,
             entry_id,
             target,
@@ -1241,7 +1249,7 @@ defmodule CodingAgent.Session do
 
       _entry ->
         manager = SessionManager.append_label(state.session_manager, entry_id, label)
-        receipt = CodingAgent.Session.Rewind.label_receipt(manager, entry_id)
+        receipt = Rewind.label_receipt(manager, entry_id)
         {:reply, {:ok, receipt}, %{state | session_manager: manager}}
     end
   end
@@ -1269,7 +1277,7 @@ defmodule CodingAgent.Session do
     agent_state = LemonAgent.Agent.get_state(state.agent)
 
     snapshot =
-      CodingAgent.Session.Recovery.snapshot(state.session_manager,
+      Recovery.snapshot(state.session_manager,
         run_id: state.run_id,
         streaming: state.is_streaming or agent_state.is_streaming,
         messages: Enum.map(agent_state.messages, &strip_recalled_context/1),
@@ -1319,7 +1327,7 @@ defmodule CodingAgent.Session do
 
   def handle_call(:context_usage, _from, state) do
     usage =
-      CodingAgent.Session.ContextUsage.measure(
+      ContextUsage.measure(
         state,
         LemonAgent.Agent.get_state(state.agent),
         strip_recall: &strip_recalled_context/1
@@ -1401,7 +1409,7 @@ defmodule CodingAgent.Session do
       |> CompactionManager.clear_overflow_recovery_state()
       |> Map.put(:follow_up_queue, :queue.new())
 
-    CodingAgent.Tools.Task.Control.cancel_parent(self())
+    Control.cancel_parent(self())
 
     LemonAgent.Agent.abort(state.agent)
 
@@ -1543,7 +1551,7 @@ defmodule CodingAgent.Session do
 
   def handle_info(:run_session_start_hooks, state) do
     context =
-      CodingAgent.Extensions.SessionHooks.session_start(state.hooks, %{
+      SessionHooks.session_start(state.hooks, %{
         session_id: state.session_manager.header.id,
         cwd: state.cwd,
         session_scope: state.session_scope
@@ -1670,7 +1678,7 @@ defmodule CodingAgent.Session do
     _ = WasmBridge.cancel_host_calls(state, :session_unavailable)
     _ = CompactionManager.cancel_compaction_tasks(state, :session_terminated)
 
-    CodingAgent.Extensions.SessionHooks.session_shutdown(state.hooks, %{
+    SessionHooks.session_shutdown(state.hooks, %{
       session_id: state.session_manager && state.session_manager.header.id,
       cwd: state.cwd,
       reason: reason
@@ -2010,7 +2018,7 @@ defmodule CodingAgent.Session do
       session_id: state.session_manager && state.session_manager.header.id,
       agent_id: state.agent_id,
       run_id: state.run_id,
-      learning_review_options: CodingAgent.Session.LearningReview.options(state),
+      learning_review_options: LearningReview.options(state),
       tool_policy: state.tool_policy,
       channel_identity:
         if(state.session_scope == :main, do: (state.approval_context || %{})[:channel_identity]),
@@ -2063,11 +2071,11 @@ defmodule CodingAgent.Session do
            |> Map.merge(trusted_memory_context(state))
          ) do
       :unchanged ->
-        CodingAgent.Session.Planning.refresh(state)
+        Planning.refresh(state)
 
       {:changed, next_prompt, sections} ->
         %{state | base_system_prompt: next_prompt, prompt_sections: sections}
-        |> CodingAgent.Session.Planning.refresh()
+        |> Planning.refresh()
     end
   end
 
@@ -2078,10 +2086,10 @@ defmodule CodingAgent.Session do
 
   defp record_context_overhead(state) do
     profile =
-      CodingAgent.Session.ContextUsage.overhead(state, LemonAgent.Agent.get_state(state.agent))
+      ContextUsage.overhead(state, LemonAgent.Agent.get_state(state.agent))
 
     recorded =
-      CodingAgent.Session.ContextUsage.record_overhead(
+      ContextUsage.record_overhead(
         state.session_manager && state.session_manager.header.id,
         profile,
         state.context_overhead

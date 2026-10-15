@@ -7,9 +7,10 @@ defmodule CodingAgent.Tools.LspDiagnostics do
   deltas without failing the edit when a checker is missing.
   """
 
+  alias CodingAgent.Tools.PathHelpers
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonAi.Types.TextContent
-  alias CodingAgent.Tools.PathHelpers
+  alias LemonCore.Doctor.LspDiagnostics, as: DoctorLspDiagnostics
 
   @default_timeout_ms 20_000
 
@@ -129,7 +130,7 @@ defmodule CodingAgent.Tools.LspDiagnostics do
   """
   @spec status(keyword()) :: map()
   def status(opts \\ []) do
-    LemonCore.Doctor.LspDiagnostics.status(opts)
+    DoctorLspDiagnostics.status(opts)
   end
 
   @doc """

@@ -1,17 +1,13 @@
-import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { createContext, Suspense, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { LemonBotClient, nonce, type Bot, type Conversation, type Device, type InstanceStatus, type RealtimeConnection, type RealtimeEvent, type RealtimeState, type Resource, type Snapshot } from '@lemon-bot/sdk';
 import { AuthScreen, savedAccounts, type WebSession } from './auth';
 import { ArrowDown, ChevronRight, GitBranch, History, Inbox, LayoutGrid, ListFilter, Menu, MoreHorizontal, Plus, Search, SquarePen } from 'lucide-react';
 import { AccountAvatar, BotAvatar, ConfirmDialog, EmptyState, ErrorNotice, LemonFace, LemonMark, Loading, useAction } from './ui';
 import { currentStep, previewText } from './live';
 import { SettingsRoute, isSettingsScreen } from './settings-shell';
-import { BotsScreen } from './features/bots';
-import { ConversationScreen, FileViewer, VoiceOverlay } from './features/chat';
-import { MachinesScreen } from './features/machines';
-import { WorkScreen } from './features/work';
-import { SettingsScreen } from './features/settings';
-import { OwnerControlsScreen } from './features/enterprise';
-import { PairingScreen } from './features/pairing';
+import { BotsScreen, ConversationScreen, FileViewer, SettingsScreen } from './route-components';
+import { VoiceOverlay } from './features/chat/voice-loader';
+import { appVersion, requiresClientUpdate } from './version';
 import { ActivityScreen, Palette, SearchScreen } from './navigation';
 import { ConnectionPanel } from './connection';
 import { connectionLabel, sessionEnded } from './connection-state';
@@ -147,7 +143,7 @@ function Workspace({ session, onLogout }: { session: WebSession; onLogout: (reas
         bootFailures.current = 0;
         let registration: Device | undefined;
         try { let installationId = localStorage.getItem('lemonbot.installation'); if (!installationId) { installationId = nonce(); localStorage.setItem('lemonbot.installation', installationId); }
-          registration = await client.call('POST /devices', { body: { clientNonce: nonce(), installationId, platform: 'web', name: 'Web browser', appVersion: '1.0.0' } }); if (disposed) return; setDevice(registration);
+          registration = await client.call('POST /devices', { body: { clientNonce: nonce(), installationId, platform: 'web', name: 'Web browser', appVersion } }); if (disposed) return; setDevice(registration);
         } catch (failure) { if (!disposed) reportError(failure); }
         socket = client.realtime({ deviceId: registration?.id, cursor: value.cursor, onEvent: async event => {
           if (disposed) return; if (snapshotRef.current) update(applySnapshotEvent(snapshotRef.current, event));
@@ -213,9 +209,8 @@ function Workspace({ session, onLogout }: { session: WebSession; onLogout: (reas
   const recoveryPanel = <ConnectionPanel client={client} state={connection} browserOnline={browserOnline} controlConnected={snapshot?.capabilities.controlConnected} error={connectionError} nextRetryAtMs={bootRetryAt ?? realtime?.nextRetryAtMs ?? null} lastAttemptAtMs={lastAttemptAt} retry={retry} busy={connecting} role={snapshot?.member.role} onInstance={applyInstance} onRunning={setRuntimeRunning} viewInstance={() => navigate({ screen: 'settings.instance' })}/>;
   if (!snapshot) return <main className="boot stack"><div className="brand"><LemonMark/>Lemon Bot</div>{recoveryPanel}<button onClick={() => onLogout()}>Choose another account</button></main>;
   const requiredVersion = snapshot.capabilities.minClientVersions.web;
-  const requiredParts = requiredVersion.split('.').map(Number);
-  const updateRequired = requiredParts[0] > 1 || requiredParts[0] === 1 && (requiredParts[1] > 0 || requiredParts[2] > 0);
-  if (updateRequired) return <main className="boot stack"><div className="brand"><LemonMark/>Lemon Bot</div><h1>This app needs an update</h1><p>Reload to get the latest available version. Your Bots and work are unaffected.</p><button className="primary" onClick={() => location.reload()}>Reload</button><details><summary>Details for your administrator</summary><p>This web client is 1.0.0; the service requires {requiredVersion}. Build and deploy matching web assets if reloading doesn’t update the app.</p></details><button onClick={() => void logout()}>Sign out</button></main>;
+  const updateRequired = requiresClientUpdate(appVersion, requiredVersion);
+  if (updateRequired) return <main className="boot stack"><div className="brand"><LemonMark/>Lemon Bot</div><h1>This app needs an update</h1><p>Reload to get the latest available version. Your Bots and work are unaffected.</p><button className="primary" onClick={() => location.reload()}>Reload</button><details><summary>Details for your administrator</summary><p>This web client is {appVersion}; the service requires {requiredVersion}. Build and deploy matching web assets if reloading doesn’t update the app.</p></details><button onClick={() => void logout()}>Sign out</button></main>;
   const activeBot = snapshot.bots.find(bot => bot.id === (route.botId || (route.screen.startsWith('bot.') || route.screen === 'memory' ? route.id : undefined))) || (route.screen === 'conversation' ? snapshot.bots.find(bot => bot.mainConversationId === route.id || snapshot.conversations.find(room => room.id === route.id)?.botIds.includes(bot.id)) : undefined);
   const appearance = snapshot.user.preferences.appearance;
   const context: AppContextValue = { client, realtime, snapshot, device, online: browserOnline && connection === 'live' && snapshot.capabilities.controlConnected !== false, navigate, refresh, updateInstance: applyInstance, reportError, logout, forgetConversation, draftPrompt: (conversationId, text) => {
@@ -230,6 +225,9 @@ function Workspace({ session, onLogout }: { session: WebSession; onLogout: (reas
   return <AppContext.Provider value={context}><div className={`workspace ${sidebar ? 'sidebar-open' : ''} ${conversationScreen ? 'in-conversation' : ''} ${settingsScreen ? 'in-settings' : ''} ${atHome ? 'at-home' : ''} ${connected ? '' : 'disconnected'}`} data-theme={appearance}><a className="skip-link" href="#main-content">Skip to workspace content</a><Roster route={route} close={() => setSidebar(false)} openPalette={() => setPalette(true)} unreadInbox={unreadInbox} connection={connected ? null : connectionLabel(connection, browserOnline, snapshot.capabilities.controlConnected)} reconnect={retry} recovery={(!connected || runtimeRunning) && phone && atHome ? recoveryPanel : undefined}/><div className="workspace-main">{!conversationScreen && !atHome && !settingsScreen && <header className="workspace-bar"><button className="icon-button mobile-menu" aria-label="Open Bot list" onClick={() => setSidebar(value => !value)}><Menu size={20}/></button>{activeBot ? <button className="companion-anchor" onClick={() => navigate({ screen: 'conversation', id: activeBot.mainConversationId, botId: activeBot.id })}><BotAvatar bot={activeBot} size={22}/><strong>{activeBot.name}</strong></button> : <span/>}<div className="row workspace-tools"><button className="ghost-circle" aria-label="Search everything" title={`Search (${navigator.platform.includes('Mac') ? '⌘' : 'Ctrl+'}K)`} onClick={() => setPalette(true)}><Search size={15}/></button></div></header>}<main id="main-content" className="main-content" tabIndex={-1}>{!!error && <div className="global-error"><ErrorNotice error={error}/><button onClick={() => setError(undefined)}>Dismiss</button></div>}{(!connected || runtimeRunning) && !(phone && atHome) && route.screen !== 'settings.instance' && recoveryPanel}<Destination route={route} activeBot={activeBot}/></main></div>{palette && <Palette close={() => setPalette(false)}/>}<VoiceOverlay/></div></AppContext.Provider>;
 }
 function Destination({ route, activeBot }: { route: Route; activeBot?: Bot }) {
+  return <Suspense fallback={<Loading label="Loading screen…"/>}><DestinationContent route={route} activeBot={activeBot}/></Suspense>;
+}
+function DestinationContent({ route, activeBot }: { route: Route; activeBot?: Bot }) {
   const { snapshot, navigate } = useApp();
   if (route.screen === 'home') return <Home/>;
   if (route.screen === 'conversation') return <ConversationScreen route={route}/>;
@@ -323,7 +321,7 @@ function Roster({ route, close, openPalette, unreadInbox, connection, reconnect,
     <div className="roster-top">
       <button className="roster-brand" aria-label="Lemon Bot home" onClick={() => navigate({ screen: 'home' })}><LemonMark size={26}/></button>
       <h1 className="roster-title">Chats</h1>
-      {connection && <span className="connection-pill" role="status" aria-live="polite"><span className={`status-dot ${connection === 'Offline' || connection === 'Connection failed' || connection === 'Disconnected' ? 'offline' : 'needs_input'}`}/>{connection}</span>}
+      {connection && <span className="connection-pill" role="status" aria-live="polite" title={connection}><span className={`status-dot ${connection === 'Offline' || connection === 'Connection failed' || connection === 'Disconnected' ? 'offline' : 'needs_input'}`}/><span className="connection-pill-label">{connection}</span></span>}
       {connection && phone && !recovery && <button className="pill-button warning compact" onClick={reconnect}>Try again</button>}
       {phoneHome ? <details className="roster-filter"><summary className="ghost-circle" aria-label="Filter chats"><ListFilter size={18}/></summary><div className="menu" role="menu">
         <button role="menuitemcheckbox" aria-checked={unreadOnly} onClick={() => setUnreadOnly(value => !value)}>{unreadOnly ? '✓ ' : ''}Unread only</button>

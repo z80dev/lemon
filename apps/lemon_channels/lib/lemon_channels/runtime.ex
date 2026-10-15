@@ -12,6 +12,8 @@ defmodule LemonChannels.Runtime do
   it already distinguishes those cases.
   """
 
+  alias LemonChannels.Telegram.ResumeIndexStore
+  alias LemonChannels.Telegram.StateStore
   alias LemonCore.InboundMessage
   alias LemonCore.RouterBridge
 
@@ -128,8 +130,8 @@ defmodule LemonChannels.Runtime do
   @spec clear_telegram_thread_state(binary(), integer(), integer() | nil) :: :ok
   def clear_telegram_thread_state(account_id, chat_id, thread_id)
       when is_binary(account_id) and is_integer(chat_id) do
-    LemonChannels.Telegram.StateStore.delete_selected_resume({account_id, chat_id, thread_id})
-    LemonChannels.Telegram.ResumeIndexStore.delete_thread(account_id, chat_id, thread_id)
+    StateStore.delete_selected_resume({account_id, chat_id, thread_id})
+    ResumeIndexStore.delete_thread(account_id, chat_id, thread_id)
     :ok
   end
 

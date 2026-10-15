@@ -58,14 +58,12 @@ defmodule CodingAgent.Tools.OutputRecoveryTest do
         []
       )
 
-    assert %AgentToolResult{is_error: true, content: [%TextContent{text: text}], details: details} =
-             result
-
+    assert %AgentToolResult{is_error: false, details: details} = result
     assert details.timed_out
-    assert details.truncated
-    assert text =~ details.full_output_path
-    assert File.read!(details.full_output_path) |> String.starts_with?("payload\n")
-    File.rm!(details.full_output_path)
+    assert details.background
+    {:ok, output} = ProcessManager.read_output(details.process_id)
+    assert File.read!(output.full_output_path) |> String.starts_with?("payload\n")
+    ProcessManager.kill(details.process_id)
   end
 
   test "background output remains recoverable after scrolling out of its buffer", %{tmp_dir: cwd} do

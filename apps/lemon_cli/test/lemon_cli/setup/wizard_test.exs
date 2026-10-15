@@ -2,8 +2,9 @@ defmodule LemonCli.Setup.WizardTest do
   # async: false because we manipulate Application env, HOME, and the secrets store
   use ExUnit.Case, async: false
 
-  alias LemonCli.Setup.Wizard
   alias LemonCli.Onboarding.Runner
+  alias LemonCli.Setup.Wizard
+  alias LemonCore.Config.Modular
   alias LemonCore.Secrets
   alias LemonCore.Setup.Readiness
 
@@ -753,7 +754,7 @@ defmodule LemonCli.Setup.WizardTest do
       assert "openai:" <> model = settings["defaults"]["model"]
       refute model == "fallback"
       assert Map.keys(settings["providers"]) == ["openai"]
-      assert {:ok, _config} = LemonCore.Config.Modular.validate_settings(settings)
+      assert {:ok, _config} = Modular.validate_settings(settings)
       assert Readiness.ready?(Readiness.status(config_path: path))
     end
   end

@@ -3,6 +3,7 @@ defmodule CodingAgent.Search.Providers.Brave do
 
   @behaviour CodingAgent.Search.Provider
 
+  alias CodingAgent.Search.Operators
   alias CodingAgent.Search.Result
 
   @endpoint "https://api.search.brave.com/res/v1/web/search"
@@ -16,7 +17,7 @@ defmodule CodingAgent.Search.Providers.Brave do
   @impl true
   def search_features,
     do: %{
-      operators: CodingAgent.Search.Operators.syntax(),
+      operators: Operators.syntax(),
       mapped_operators: [:after, :before],
       freshness: [:relative, :range]
     }
@@ -96,7 +97,7 @@ defmodule CodingAgent.Search.Providers.Brave do
     tokens = Map.get(request, :operator_tokens, [])
 
     if Enum.any?(tokens, &(&1.kind in [:after, :before])) do
-      {first, last} = CodingAgent.Search.Operators.dates(request)
+      {first, last} = Operators.dates(request)
       "#{first || "1970-01-01"}to#{last || Date.to_iso8601(Date.utc_today())}"
     else
       Map.get(request, :freshness)

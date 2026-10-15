@@ -10,6 +10,7 @@ public enum LemonBotSnapshotScene: String, CaseIterable {
     case actionRecovery, newBotNoMachine, inboxEmpty
     case appsAndChannels, groupEditor, botLifecycle
     case composerFiles
+    case sidebarOffline
 
     /// `sidebar-conversation`, used for output file names.
     public var slug: String {
@@ -18,6 +19,7 @@ public enum LemonBotSnapshotScene: String, CaseIterable {
     public var scenario: LemonBotFixtureScenario {
         switch self {
         case .sidebarConversation: return .chiefOfStaff
+        case .sidebarOffline: return .backendDown
         case .inspectorActivity, .composerActiveRun: return .activeRun
         case .failedRun: return .failedRun
         case .settings, .actionRecovery, .newBotNoMachine, .inboxEmpty, .appsAndChannels, .groupEditor, .botLifecycle, .composerFiles: return .chiefOfStaff
@@ -38,6 +40,9 @@ public enum LemonBotSnapshotScene: String, CaseIterable {
     @MainActor public static func view(for scene: LemonBotSnapshotScene, store: LemonBotStore) -> AnyView {
         store.selectedConversationID = scene.scenario.conversationID
         switch scene {
+        case .sidebarOffline:
+            store.entries = [:]
+            return AnyView(LemonBotRootView(store: store))
         case .inspectorActivity: return AnyView(LemonBotRootView(store: store, inspector: InspectorPresentation(isPresented: true, tab: .activity)))
         case .composerFiles:
             if let id = scene.scenario.conversationID {

@@ -80,6 +80,7 @@ defmodule LemonCore.Config.Agent do
   defstruct [
     :default_provider,
     :default_model,
+    :default_provider_source,
     :default_thinking_level,
     :compaction,
     :retry,
@@ -96,6 +97,7 @@ defmodule LemonCore.Config.Agent do
   @type t :: %__MODULE__{
           default_provider: String.t(),
           default_model: String.t(),
+          default_provider_source: :explicit | :inherited,
           default_thinking_level: String.t(),
           compaction: %{
             enabled: boolean(),
@@ -146,6 +148,7 @@ defmodule LemonCore.Config.Agent do
     %__MODULE__{
       default_provider: resolve_provider(agent_settings),
       default_model: resolve_model(agent_settings),
+      default_provider_source: resolve_provider_source(settings, agent_settings),
       default_thinking_level: resolve_thinking_level(agent_settings),
       compaction: resolve_compaction(agent_settings),
       retry: resolve_retry(agent_settings),
@@ -176,6 +179,25 @@ defmodule LemonCore.Config.Agent do
 
   defp resolve_provider(settings) do
     Env.get(:lemon_default_provider, default: settings["default_provider"] || "anthropic")
+  end
+
+  # A model-only override inherits its provider; a provider supplied at the
+  # same or a higher priority is an explicit part of the model identity.
+  defp resolve_provider_source(settings, agent_settings) do
+    cond do
+      Env.get(:lemon_default_provider, default: nil) not in [nil, ""] ->
+        :explicit
+
+      Env.get(:lemon_default_model, default: nil) not in [nil, ""] ->
+        :inherited
+
+      true ->
+        Map.get(
+          settings,
+          :default_provider_source,
+          if(agent_settings["default_provider"] in [nil, ""], do: :inherited, else: :explicit)
+        )
+    end
   end
 
   defp resolve_model(settings) do
