@@ -4,6 +4,9 @@
 
 ### Added
 
+- `write archive:member` adds or replaces ZIP/TAR/tar.gz/tgz members atomically,
+  preserving unrelated member data and enforcing physical archive mutation guards.
+
 - LSP supports preview/apply file renames, server reload, advertised capabilities,
   and bounded workspace diagnostics from running clients. Document language IDs
   now come from the shared LemonLsp server catalog.

@@ -56,7 +56,7 @@ defmodule CodingAgent.Tools.Write do
         "properties" => %{
           "path" => %{
             "type" => "string",
-            "description" => "The path to the file to write (relative to cwd or absolute)"
+            "description" => "File path or archive.zip:inner/path (also .tar, .tar.gz, .tgz)"
           },
           "content" => %{
             "type" => "string",
@@ -154,7 +154,11 @@ defmodule CodingAgent.Tools.Write do
            {:ok, format?} <- LspFormatter.option(params, opts),
            {:ok, diagnostics?} <- LspDiagnostics.option(params, opts) do
         resolved_path = resolve_path(path, cwd, opts)
-        write_file(resolved_path, content, signal, format?, diagnostics?, cwd, opts)
+
+        case CodingAgent.Tools.WriteArchive.target(resolved_path) do
+          nil -> write_file(resolved_path, content, signal, format?, diagnostics?, cwd, opts)
+          target -> CodingAgent.Tools.WriteArchive.write(target, content, signal, cwd, opts)
+        end
       end
     end
   end
