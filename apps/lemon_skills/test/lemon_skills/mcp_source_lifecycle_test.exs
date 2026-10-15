@@ -26,9 +26,10 @@ defmodule LemonSkills.McpSourceLifecycleTest do
     script = Path.join(root, "server.exs")
     File.write!(script, fixture())
 
+    # The fixture server is a fresh Erlang VM; its boot is not under test, so
+    # keep the product's ready deadline instead of racing boot under load.
     config =
-      {:stdio, System.find_executable("elixir"), ["--erl", "+S 1:1", script],
-       name: "lifecycle", ready_timeout_ms: 500}
+      {:stdio, System.find_executable("elixir"), ["--erl", "+S 1:1", script], name: "lifecycle"}
 
     source =
       start_supervised!({McpSource, name: nil, configs: [config], refresh_interval_ms: 60_000})
