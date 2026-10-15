@@ -110,7 +110,8 @@ def measure(body, previous):
     output = {'tokenizer': 'o200k_base', 'estimates': estimates,
               'repeated_estimates': {'instructions': count(common), 'tool_schemas': count(tools_text) if previous.get('tools_hash') == digest(tools_text) else 0, 'input': repeated},
               'instructions_bytes': len(instructions.encode('utf-8')), 'instruction_sections': instructions_sections(instructions),
-              'tool_schemas': tool_rows, 'input_items': items, 'opaque_replay_bytes': opaque_bytes,
+              'tool_schemas': tool_rows, 'tools_catalog_digest': digest(tools_text),
+              'input_items': items, 'opaque_replay_bytes': opaque_bytes,
               'reasoning': (body.get('reasoning') or {}).get('effort', 'provider_default')}
     previous['instructions'] = instructions
     previous['tools_hash'] = digest(tools_text)
@@ -122,9 +123,9 @@ def sanitize_usage(usage):
     fields = attribution.get('request_fields') or {}
     items = attribution.get('items') or {}
     return {'input_tokens': number(usage.get('input_tokens')), 'output_tokens': number(usage.get('output_tokens')), 'total_tokens': number(usage.get('total_tokens')),
-            'cache_read_tokens': number((usage.get('input_tokens_details') or {}).get('cached_tokens', 0)),
-            'cache_write_tokens': number((usage.get('input_tokens_details') or {}).get('cache_write_tokens', 0)),
-            'reasoning_output_tokens': number((usage.get('output_tokens_details') or {}).get('reasoning_tokens', 0)),
+            'cache_read_tokens': number((usage.get('input_tokens_details') or {}).get('cached_tokens')),
+            'cache_write_tokens': number((usage.get('input_tokens_details') or {}).get('cache_write_tokens')),
+            'reasoning_output_tokens': number((usage.get('output_tokens_details') or {}).get('reasoning_tokens')),
             'request_fields': {key: numeric(value) for key, value in fields.items() if key in ('instructions', 'tools', 'input') and isinstance(value, dict)},
             'item_usage': [{'id_hash': digest(key), **numeric(value)} for key, value in items.items() if isinstance(value, dict)]}
 
@@ -139,7 +140,7 @@ def main():
         for line in sys.stdin:
             packet = json.loads(line)
             metadata = packet['metadata']
-            key = (metadata['run_id'], metadata['session_id'])
+            key = (metadata.get('run_id'), metadata.get('session_id'))
             previous = state.setdefault(key, {'request_index': 0})
             event = packet['event']
             if event == 'payload':
@@ -147,6 +148,28 @@ def main():
                 details = measure(packet['data'], previous)
             elif event == 'usage':
                 details = {'provider_usage': sanitize_usage(packet['data'])}
+            elif event == 'disclosure_applied':
+                data = packet['data']
+                details = {'profile': data['profile'] if data.get('profile') in ('coding', 'legacy') else None,
+                           'active': data.get('active') if type(data.get('active')) is bool else None}
+                details['diagnostic_events_version'] = 1 if data.get('diagnostic_events_version') == 1 else None
+                catalog = data.get('catalog_digest')
+                details['catalog_digest'] = catalog if isinstance(catalog, str) and len(catalog) == 64 and all(character in '0123456789abcdef' for character in catalog) else None
+                for key in ('estimated_tokens', 'disclosed_tokens', 'hidden_count', 'disclosed_count'):
+                    details[key] = number(data.get(key))
+            elif event == 'disclosure_search':
+                data = packet['data']
+                details = {'status': data.get('status') if data.get('status') in ('ok', 'error') else None,
+                           'matched_count': number(data.get('matched_count'))}
+            elif event == 'disclosure_rejected':
+                data = packet['data']
+                details = {'reason': data.get('reason') if data.get('reason') in ('unknown_tool', 'invalid_arguments', 'invalid_request') else None}
+            elif event == 'disclosure_invoke':
+                data = packet['data']
+                target = data.get('resolved_tool_digest', '')
+                details = {'resolved_tool_digest': target if len(target) == 64 and all(character in '0123456789abcdef' for character in target) else None,
+                           'status': data.get('status') if data.get('status') in ('ok', 'error') else None,
+                           'duration_us': number(data.get('duration_us'))}
             else:
                 raise ValueError('unsupported profiler event')
             record = {'event': event, **metadata, 'request_index': previous['request_index'], **details}
