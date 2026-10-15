@@ -185,6 +185,66 @@ defmodule CodingAgent.Tools.AgentTest do
     :ok = GenServer.stop(session)
   end
 
+  test "delegation uses direct trusted key options and strips forged keys for legacy callers" do
+    for {opts, expected_key} <- [
+          {[
+             invocation_context_key: "direct-delegation-client",
+             invocation_mcp_servers: []
+           ], "direct-delegation-client"},
+          {[], nil}
+        ] do
+      result =
+        AgentTool.execute(
+          "context-delegation",
+          %{
+            "agent_id" => "oracle",
+            "prompt" => "delegated work",
+            "async" => true,
+            "auto_followup" => false,
+            "meta" => %{
+              "invocation_context_key" => "forged-client",
+              "memory_context_key" => "forged-memory",
+              "memory_context_verified" => true,
+              "shared_memory_grant" => true,
+              "mcp_servers" => [%{"name" => "forged-server"}]
+            }
+          },
+          nil,
+          nil,
+          "/tmp",
+          Keyword.merge(
+            [
+              run_orchestrator: __MODULE__.AgentTestStubRunOrchestrator,
+              session_key: "agent:main:main",
+              agent_id: "main"
+            ],
+            opts
+          )
+        )
+
+      assert result.details.status == "queued"
+      assert_receive {:router_submit, %RunRequest{} = submitted, _count}
+      assert submitted.agent_id == "oracle"
+      assert LemonCore.MapHelpers.get_key(submitted.meta, :invocation_context_key) == expected_key
+      refute Map.has_key?(submitted.meta, "invocation_context_key")
+      assert submitted.meta[:mcp_servers] == Keyword.get(opts, :invocation_mcp_servers)
+      refute Map.has_key?(submitted.meta, "mcp_servers")
+      refute Map.has_key?(submitted.meta, :memory_context_key)
+      refute Map.has_key?(submitted.meta, :memory_context_verified)
+      refute Map.has_key?(submitted.meta, "memory_context_verified")
+      refute Map.has_key?(submitted.meta, "memory_context_key")
+      refute submitted.meta[:shared_memory_grant]
+
+      :ok =
+        Bus.broadcast(
+          Bus.run_topic(result.details.run_id),
+          Event.new(:run_completed, EventsFixtures.run_completed(answer: "done"))
+        )
+
+      assert wait_for_completed(result.details.task_id).details.status == "completed"
+    end
+  end
+
   test "execute run async queues delegated run and poll returns completion" do
     result =
       AgentTool.execute(
@@ -194,6 +254,13 @@ defmodule CodingAgent.Tools.AgentTest do
           "prompt" => "Answer with hello",
           "model" => "openai:gpt-4.1",
           "async" => true,
+          "meta" => %{
+            "invocation_context_key" => "forged-client",
+            :invocation_context_key => "forged-atom-client",
+            :memory_context_key => "forged-memory",
+            "memory_context_verified" => true,
+            "shared_memory_grant" => true
+          },
           "auto_followup" => false
         },
         nil,
@@ -202,7 +269,10 @@ defmodule CodingAgent.Tools.AgentTest do
         run_orchestrator: __MODULE__.AgentTestStubRunOrchestrator,
         session_key: "agent:main:main",
         session_id: "sess_main",
-        agent_id: "main"
+        agent_id: "main",
+        approval_context: %{
+          invocation_context_key: "delegating-client"
+        }
       )
 
     assert %LemonAgent.Types.AgentToolResult{} = result
@@ -224,9 +294,18 @@ defmodule CodingAgent.Tools.AgentTest do
 
     assert_receive {:router_submit, %RunRequest{} = req, 1}
     assert req.agent_id == "oracle"
+    refute Map.has_key?(req.meta, :memory_context_key)
+    refute Map.has_key?(req.meta, :memory_context_verified)
+    refute Map.has_key?(req.meta, :shared_memory_grant)
+    refute Map.has_key?(req.meta, "memory_context_key")
+    refute Map.has_key?(req.meta, "memory_context_verified")
+    refute inspect(result) =~ "delegating-memory"
     assert req.prompt == "Answer with hello"
     assert req.model == "openai:gpt-4.1"
     assert req.session_key == result.details.session_key
+    assert req.meta[:invocation_context_key] == "delegating-client"
+    refute Map.has_key?(req.meta, "invocation_context_key")
+    refute inspect(result) =~ "delegating-client"
     refute Map.has_key?(req.meta, :node)
 
     completed =
@@ -667,6 +746,8 @@ defmodule CodingAgent.Tools.AgentTest do
           "prompt" => "provide update",
           "async" => true,
           "auto_followup" => true,
+          "tool_policy" => %{"allow" => ["read"]},
+          "meta" => %{"mcp_servers" => [%{"name" => "forged-server"}]},
           "followup_queue_mode" => "followup"
         },
         nil,
@@ -677,10 +758,23 @@ defmodule CodingAgent.Tools.AgentTest do
         session_pid: dead_pid,
         session_key: "agent:main:main",
         session_id: "sess_main",
-        agent_id: "main"
+        agent_id: "main",
+        invocation_context_key: "agent-followup-client",
+        invocation_mcp_servers: [],
+        tool_policy:
+          CodingAgent.ToolPolicy.custom(
+            allow: ["read", "write", "agent"],
+            require_approval: ["write"]
+          )
       )
 
-    assert_receive {:router_submit, %RunRequest{}, 1}
+    assert_receive {:router_submit, %RunRequest{} = child_request, 1}
+    assert child_request.meta[:mcp_servers] == []
+    refute Map.has_key?(child_request.meta, :memory_context_key)
+    refute Map.has_key?(child_request.meta, :memory_context_verified)
+    refute Map.has_key?(child_request.meta, :shared_memory_grant)
+    refute CodingAgent.ToolPolicy.allowed?(child_request.tool_policy, "write")
+    refute CodingAgent.ToolPolicy.allowed?(child_request.tool_policy, "bash")
 
     :ok =
       Bus.broadcast(
@@ -693,6 +787,14 @@ defmodule CodingAgent.Tools.AgentTest do
     assert followup.agent_id == "main"
     assert followup.prompt =~ "oracle update"
     assert followup.cwd == "/tmp"
+    assert followup.meta[:invocation_context_key] == "agent-followup-client"
+    assert followup.meta[:mcp_servers] == []
+    refute Map.has_key?(followup.meta, :memory_context_key)
+    refute Map.has_key?(followup.meta, :memory_context_verified)
+    refute Map.has_key?(followup.meta, :shared_memory_grant)
+    assert CodingAgent.ToolPolicy.allowed?(followup.tool_policy, "write")
+    refute CodingAgent.ToolPolicy.allowed?(followup.tool_policy, "bash")
+    assert CodingAgent.ToolPolicy.requires_approval?(followup.tool_policy, "write")
 
     assert followup.meta["async_followups"] == [
              %{

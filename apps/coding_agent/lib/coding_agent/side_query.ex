@@ -11,7 +11,7 @@ defmodule CodingAgent.SideQuery do
   """
 
   alias CodingAgent.{Session, SessionRegistry}
-  alias CodingAgent.Tools.Task.{Result, Runner}
+  alias CodingAgent.Tools.Task.{Params, Result, Runner}
   alias LemonAgent.AbortSignal
   alias LemonAgent.Types.AgentToolResult
   alias LemonAi.Types.{AssistantMessage, TextContent, UserMessage}
@@ -75,7 +75,8 @@ defmodule CodingAgent.SideQuery do
        settings_manager: Map.get(snapshot, :settings_manager),
        workspace_dir: Map.get(snapshot, :workspace_dir),
        source_session_key: Map.get(snapshot, :source_session_key),
-       source_agent_id: Map.get(snapshot, :source_agent_id)
+       source_agent_id: Map.get(snapshot, :source_agent_id),
+       approval_context: Map.get(snapshot, :approval_context, %{})
      }}
   end
 
@@ -101,7 +102,8 @@ defmodule CodingAgent.SideQuery do
        settings_manager: snapshot.settings_manager,
        workspace_dir: snapshot.workspace_dir,
        source_session_key: snapshot.source_session_key,
-       source_agent_id: snapshot.source_agent_id
+       source_agent_id: snapshot.source_agent_id,
+       approval_context: Map.get(snapshot, :approval_context, %{})
      }}
   rescue
     _ -> {:error, :session_unavailable}
@@ -143,6 +145,52 @@ defmodule CodingAgent.SideQuery do
   end
 
   defp run(context, question, opts) do
+    source_context = context[:approval_context] || %{}
+    requested_context = Params.inherited_execution_context(opts)
+    context_fields = [:invocation_context_key, :memory_context_key, :memory_context_verified]
+    requested_approval_context = Keyword.get(opts, :approval_context) || %{}
+
+    supplied_context? =
+      Enum.any?(context_fields, fn key ->
+        Keyword.has_key?(opts, key) || Map.has_key?(requested_approval_context, key) ||
+          Map.has_key?(requested_approval_context, Atom.to_string(key))
+      end)
+
+    source_identity = {
+      MapHelpers.get_key(source_context, :invocation_context_key),
+      MapHelpers.get_key(source_context, :memory_context_key),
+      Map.get(
+        source_context,
+        :memory_context_verified,
+        Map.get(source_context, "memory_context_verified")
+      ) == true
+    }
+
+    requested_identity = {
+      requested_context.invocation_context_key,
+      requested_context.memory_context_key,
+      requested_context.memory_context_verified
+    }
+
+    if context.mode == :snapshot && supplied_context? && source_identity != requested_identity do
+      {:error, :session_unavailable}
+    else
+      actor_context =
+        if context.mode == :snapshot do
+          %{
+            invocation_context_key: elem(source_identity, 0),
+            memory_context_key: elem(source_identity, 1),
+            memory_context_verified: elem(source_identity, 2)
+          }
+        else
+          Map.take(requested_context, context_fields)
+        end
+
+      run_with_context(context, question, opts, actor_context)
+    end
+  end
+
+  defp run_with_context(context, question, opts, actor_context) do
     signal = AbortSignal.new()
     timeout_ms = timeout_ms(opts)
     session_id = generate_session_id()
@@ -158,6 +206,10 @@ defmodule CodingAgent.SideQuery do
         workspace_dir: context[:workspace_dir],
         context_snapshot: context[:snapshot],
         initial_messages: context[:initial_messages],
+        invocation_context_key: actor_context[:invocation_context_key],
+        memory_context_key: actor_context[:memory_context_key],
+        memory_context_verified: actor_context[:memory_context_verified] == true,
+        shared_memory_grant: false,
         tools: [],
         stream_fn: Keyword.get(opts, :stream_fn),
         get_api_key: Keyword.get(opts, :get_api_key),

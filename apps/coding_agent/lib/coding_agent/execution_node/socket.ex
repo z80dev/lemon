@@ -81,7 +81,7 @@ defmodule CodingAgent.ExecutionNode.Socket do
 
   @impl WebSockex
   def handle_frame({:text, data}, state) do
-    if byte_size(data) > payload_limit(state) do
+    if byte_size(data) > max(payload_limit(state), LemonCore.ToolPolicy.execution_max_bytes()) do
       Logger.warning("Execution node closed an oversized control-plane frame")
       {:close, {1009, "payload too large"}, state}
     else
@@ -92,7 +92,7 @@ defmodule CodingAgent.ExecutionNode.Socket do
   def handle_frame({_kind, _data}, state), do: {:ok, state}
 
   defp decode_frame(data, state) do
-    case Codec.decode(data) do
+    case bounded_decode(data, state) do
       {:ok, {:hello, hello}} ->
         notify(state, {:connected, hello})
 
@@ -116,14 +116,41 @@ defmodule CodingAgent.ExecutionNode.Socket do
 
         if pending do
           Process.cancel_timer(pending.timer)
-          notify(state, {:response, pending.tag, result})
+          deliver_response(state, pending.tag, result)
         end
 
         {:ok, %{state | pending: rest}}
 
+      {:error, :payload_too_large} ->
+        {:close, {1009, "payload too large"}, state}
+
       {:error, reason} ->
         Logger.warning("Execution node ignored invalid control-plane frame: #{inspect(reason)}")
         {:ok, state}
+    end
+  end
+
+  defp bounded_decode(data, state) do
+    with {:ok, decoded} <- Codec.decode(data) do
+      native? =
+        case decoded do
+          {:event, "node.invoke.request", %{"method" => "coding_agent.run"}} ->
+            true
+
+          {:response, id, _} ->
+            case state.pending[id] do
+              %{tag: {:native_reply, _, _}} -> true
+              _ -> false
+            end
+
+          _ ->
+            false
+        end
+
+      limit =
+        if native?, do: LemonCore.ToolPolicy.execution_max_bytes(), else: payload_limit(state)
+
+      if byte_size(data) <= limit, do: {:ok, decoded}, else: {:error, :payload_too_large}
     end
   end
 
@@ -150,7 +177,7 @@ defmodule CodingAgent.ExecutionNode.Socket do
 
   def handle_info({:request_timeout, id}, state) do
     {pending, rest} = Map.pop(state.pending, id)
-    if pending, do: notify(state, {:response, pending.tag, {:error, :timeout}})
+    if pending, do: deliver_response(state, pending.tag, {:error, :timeout})
     {:ok, %{state | pending: rest}}
   end
 
@@ -203,9 +230,16 @@ defmodule CodingAgent.ExecutionNode.Socket do
   defp fail_pending(state, reason) do
     Enum.each(state.pending, fn {_id, pending} ->
       Process.cancel_timer(pending.timer)
-      notify(state, {:response, pending.tag, {:error, reason}})
+      deliver_response(state, pending.tag, {:error, reason})
     end)
   end
+
+  defp deliver_response(_state, {:native_reply, recipient, ref}, result)
+       when is_pid(recipient) and is_reference(ref) do
+    send(recipient, {:native_controller_reply, ref, result})
+  end
+
+  defp deliver_response(state, tag, result), do: notify(state, {:response, tag, result})
 
   defp notify(state, message) do
     send(state.owner, {:execution_node_socket, self(), message})

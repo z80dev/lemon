@@ -110,6 +110,29 @@ Initial stable 1.0 support targets:
   counts, per-provider request/token/cost rows, quota status, remaining quota
   estimates, and cleanup flags without returning prompts, responses, or secret
   values.
+- canonical spend accounting through read-only `usage.records`. Request
+  `{fromMs, toMs, runId?, sessionKey?, cursor?, limit?}` with a half-open
+  millisecond range `[fromMs, toMs)`; `limit` defaults to 100 and is bounded
+  to 1–500. The response is `{records, nextCursor, incomplete}`. Each record
+  contains `id`, `runId`, `sessionKey`, `agentId`, `atMs`, `model`, `provider`,
+  `inputTokens`, `outputTokens`, `totalTokens`, `costUsd` and `priceKnown`.
+  Exhaust every cursor page; ordering is stable by occurrence time and ID,
+  and a cursor cannot be reused with different range/run/session filters.
+  Native completed assistant calls retain their actual response price, including
+  tier pricing, and native run identity across local and named-node execution.
+  Durable run/occurrence IDs prevent replayed completions from double billing,
+  including after ledger restart. `costUsd: null, priceKnown: false` means
+  unknown, not free; a known zero price is `0` with `priceKnown: true`.
+  Historical missing occurrence attribution/time remains incomplete (`agentId`
+  or `atMs` can be null); aggregate-only history is not assigned to invented
+  runs or sessions. Native default zero prices on uncatalogued models remain
+  unknown unless their actual usage explicitly attests a known price.
+  Store/query failures return errors, never an empty successful page. Spend
+  enforcement must fail closed on unavailable or incomplete accounting and
+  cannot derive provider-account or product-user authority from provider/model
+  labels. `usage.cost` remains a bounded display of known-cost subtotals,
+  exposes `knownCostSubtotal`/`incomplete`, and is not an enforcement ledger.
+  No prompts, response bodies, filesystem paths or credentials appear in records.
 - config diagnostics through `config.get` and `config.set`. Stored config keys
   that look like API keys, tokens, passwords, secrets, credentials, or private
   keys are returned as bounded redaction objects in single-key and full-config

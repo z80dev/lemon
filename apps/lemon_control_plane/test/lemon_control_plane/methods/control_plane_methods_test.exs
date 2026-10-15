@@ -112,6 +112,73 @@ defmodule LemonControlPlane.Methods.ControlPlaneMethodsTest do
       refute inspect(result["summary"]) =~ "private prompt body"
     end
 
+    test "completed cancellation proof is projected independently of error text" do
+      for {proof, expected} <- [{true, true}, {false, false}, {nil, false}] do
+        run_id = "run_wait_cancelled_#{System.unique_integer([:positive, :monotonic])}"
+
+        LemonCore.RunStore.finalize(run_id, %{
+          completed: %{run_id: run_id, ok: false, error: :interrupted, meta: %{cancelled: proof}},
+          session_key: "agent:wait:cancelled"
+        })
+
+        assert {:ok, result} =
+                 AgentWait.handle(%{"runId" => run_id, "timeoutMs" => 1}, %{})
+
+        assert result["cancelled"] == expected
+      end
+    end
+
+    test "status-only completion query does not transfer private answer or usage" do
+      run_id = "run_wait_status_#{System.unique_integer([:positive, :monotonic])}"
+      private_answer = "private cancellation-owner answer"
+
+      LemonCore.RunStore.finalize(run_id, %{
+        completed: %{
+          run_id: run_id,
+          ok: false,
+          answer: private_answer,
+          error: :interrupted,
+          usage: %{total_tokens: 731},
+          meta: %{cancelled: true, budget: %{max_total_tokens: 900}}
+        },
+        session_key: "agent:wait:status"
+      })
+
+      assert {:ok, result} =
+               AgentWait.handle(
+                 %{"runId" => run_id, "timeoutMs" => 1, "includeAnswer" => false},
+                 %{}
+               )
+
+      assert result["runId"] == run_id
+      assert result["ok"] == false
+      assert result["cancelled"] == true
+      assert result["error"] == ":interrupted"
+      assert result["answer"] == nil
+      assert result["summary"]["answerReturned"] == false
+      assert result["summary"]["answerBytes"] == 0
+      refute Map.has_key?(result, "usage")
+      refute Map.has_key?(result, "budget")
+      refute inspect(result) =~ private_answer
+
+      assert {:ok, original_result} =
+               AgentWait.handle(%{"runId" => run_id, "timeoutMs" => 1}, %{})
+
+      json = original_result |> Jason.encode!() |> Jason.decode!()
+      assert json["answer"] == private_answer
+      assert json["usage"]["total_tokens"] == 731
+    end
+
+    test "status projection rejects nonboolean includeAnswer rather than returning answer" do
+      for value <- [nil, "false", 0, [], %{}] do
+        assert {:error, {:invalid_request, "includeAnswer must be a boolean", nil}} =
+                 AgentWait.handle(
+                   %{"runId" => "foreign-private-run", "includeAnswer" => value},
+                   %{}
+                 )
+      end
+    end
+
     test "budget failure results retain machine-readable caps and actual usage for print JSON" do
       run_id = "run_wait_budget_#{System.unique_integer([:positive, :monotonic])}"
       session_key = "agent:wait:budget:#{System.unique_integer([:positive])}"

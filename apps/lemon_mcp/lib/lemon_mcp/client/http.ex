@@ -8,11 +8,18 @@ defmodule LemonMCP.Client.HTTP do
   Streamable HTTP servers, and returns OAuth protected-resource and
   authorization-server metadata when a server requires authentication during
   startup.
+
+  `:origin_policy` restricts every HTTP destination, including OAuth discovery
+  and token exchanges. `:destination_pin` is a trusted, process-local option
+  computed by the host before resolving credentials, never a server config field.
+  Policy clients connect directly to the pinned address while retaining the
+  original Host and TLS identity. All requests reject redirects.
   """
 
   use GenServer
 
   alias LemonMCP.Protocol
+  alias LemonMCP.HTTP.OriginPolicy
 
   require Logger
 
@@ -69,6 +76,9 @@ defmodule LemonMCP.Client.HTTP do
   def init(opts) do
     config = %{
       url: Keyword.fetch!(opts, :url),
+      origin_policy: Keyword.get(opts, :origin_policy),
+      destination_pin: nil,
+      http_profile: :default,
       headers: Keyword.get(opts, :headers, []),
       oauth: Keyword.get(opts, :oauth, []),
       oauth_token_cache:
@@ -79,27 +89,33 @@ defmodule LemonMCP.Client.HTTP do
       timeout_ms: Keyword.get(opts, :timeout_ms, 30_000)
     }
 
-    state =
-      %{
-        state: :initializing,
-        config: config,
-        server_info: nil,
-        server_capabilities: nil,
-        protocol_version: nil,
-        session_id: nil,
-        oauth_access_token: nil,
-        oauth_refresh_token: nil,
-        oauth_metadata: nil
-      }
-      |> load_oauth_token_cache()
+    with {:ok, pin} <-
+           destination_pin(config.url, config.origin_policy, Keyword.get(opts, :destination_pin)),
+         :ok <- ensure_http_apps(),
+         {:ok, profile} <- start_http_profile(config.origin_policy) do
+      state =
+        %{
+          state: :initializing,
+          config: %{config | destination_pin: pin, http_profile: profile},
+          server_info: nil,
+          server_capabilities: nil,
+          protocol_version: nil,
+          session_id: nil,
+          oauth_access_token: nil,
+          oauth_refresh_token: nil,
+          oauth_metadata: nil
+        }
+        |> load_oauth_token_cache()
 
-    with :ok <- ensure_http_apps(),
-         {:ok, state} <- initialize(state),
-         {:ok, state} <- send_initialized_notification(state) do
-      {:ok, %{state | state: :ready}}
+      with {:ok, state} <- initialize(state),
+           {:ok, state} <- send_initialized_notification(state) do
+        {:ok, %{state | state: :ready}}
+      else
+        {:error, reason} ->
+          {:stop, reason}
+      end
     else
-      {:error, reason} ->
-        {:stop, reason}
+      {:error, reason} -> {:stop, reason}
     end
   end
 
@@ -297,12 +313,15 @@ defmodule LemonMCP.Client.HTTP do
   defp post_raw(message, state, allow_oauth_retry?) do
     with {:ok, body} <- Protocol.encode(message) do
       headers = request_headers(state)
-      timeout = state.config.timeout_ms
 
-      request = {to_charlist(state.config.url), headers, ~c"application/json", to_charlist(body)}
-      http_opts = [timeout: timeout, connect_timeout: timeout]
-
-      case :httpc.request(:post, request, http_opts, body_format: :binary) do
+      case http_request(
+             :post,
+             state.config.url,
+             headers,
+             {~c"application/json", to_charlist(body)},
+             state,
+             state.config.destination_pin
+           ) do
         {:ok, {{_version, status, _reason}, headers, response_body}} when status in 200..299 ->
           state = capture_session_id(state, headers)
           normalized_body = String.trim(to_string(response_body))
@@ -320,29 +339,46 @@ defmodule LemonMCP.Client.HTTP do
           end
 
         {:ok, {{_version, 401, reason}, headers, response_body}} ->
-          metadata =
-            auth_metadata(headers, state) ||
-              state.oauth_metadata ||
-              %{
-                "status" => 401,
-                "reason" => to_string(reason),
-                "body" => to_string(response_body)
-              }
+          case auth_metadata(headers, state) do
+            {:ok, discovered_metadata} ->
+              metadata =
+                discovered_metadata ||
+                  state.oauth_metadata ||
+                  %{
+                    "status" => 401,
+                    "reason" => to_string(reason),
+                    "body" => to_string(response_body)
+                  }
 
-          case allow_oauth_retry? and maybe_authorize(metadata, state) do
-            {:ok, state} -> post_raw(message, state, false)
-            :error -> {:error, {:auth_required, metadata}, state}
-            false -> {:error, {:auth_required, metadata}, state}
+              case allow_oauth_retry? and maybe_authorize(metadata, state) do
+                {:ok, state} -> post_raw(message, state, false)
+                {:error, reason} -> {:error, reason, state}
+                :error -> {:error, auth_required_reason(state, metadata), state}
+                false -> {:error, auth_required_reason(state, metadata), state}
+              end
+
+            {:error, reason} ->
+              {:error, reason, state}
           end
 
         {:ok, {{_version, status, reason}, _headers, response_body}} ->
-          {:error, {:http_error, status, to_string(reason), to_string(response_body)}, state}
+          error =
+            if is_nil(state.config.origin_policy),
+              do: {:http_error, status, to_string(reason), to_string(response_body)},
+              else: :http_error
+
+          {:error, error, state}
 
         {:error, reason} ->
-          {:error, {:http_request_failed, reason}, state}
+          {:error, reason, state}
       end
     end
   end
+
+  defp auth_required_reason(%{config: %{origin_policy: nil}}, metadata),
+    do: {:auth_required, metadata}
+
+  defp auth_required_reason(_state, _metadata), do: :auth_required
 
   defp decode_response_body(nil, _id), do: {:error, :missing_response_body}
 
@@ -438,45 +474,212 @@ defmodule LemonMCP.Client.HTTP do
     end
   end
 
+  defp destination_pin(_url, nil, _pin), do: {:ok, nil}
+  defp destination_pin(url, policy, nil), do: OriginPolicy.pin(url, policy)
+
+  defp destination_pin(
+         url,
+         _policy,
+         %{
+           url: url,
+           origin: origin,
+           scheme: scheme,
+           host: host,
+           port: port,
+           address: address
+         } = pin
+       )
+       when scheme in ["http", "https"] do
+    with {:ok, ^origin} <- OriginPolicy.canonical_origin(url),
+         %URI{scheme: ^scheme, host: ^host, port: ^port} <- URI.parse(origin),
+         rendered when is_list(rendered) <- :inet.ntoa(address) do
+      {:ok, pin}
+    else
+      _ -> {:error, :invalid_destination_pin}
+    end
+  rescue
+    _ -> {:error, :invalid_destination_pin}
+  end
+
+  defp destination_pin(_url, _policy, _pin), do: {:error, :invalid_destination_pin}
+
+  defp start_http_profile(nil), do: {:ok, :default}
+
+  defp start_http_profile(_policy) do
+    # This profile never inherits operator proxies/cookies. It uses no pooled
+    # connections: IP-keyed reuse could cross original TLS/Host identities.
+    case :inets.start(:httpc, profile: :lemon_mcp_pinned) do
+      {:ok, _pid} -> configure_pinned_profile()
+      {:error, {:already_started, _pid}} -> configure_pinned_profile()
+      {:error, _reason} -> {:error, :http_transport_unavailable}
+    end
+  end
+
+  defp configure_pinned_profile do
+    :ok =
+      :httpc.set_options(
+        [
+          cookies: :disabled,
+          max_keep_alive_length: 0,
+          keep_alive_timeout: 0,
+          ipfamily: :inet6fb4
+        ],
+        :lemon_mcp_pinned
+      )
+
+    {:ok, :lemon_mcp_pinned}
+  end
+
+  defp http_request(method, url, headers, body, state, pin \\ :resolve) do
+    policy = state.config.origin_policy
+
+    with {:ok, pin} <-
+           if(pin == :resolve, do: OriginPolicy.pin(url, policy), else: {:ok, pin}) do
+      {url, headers, tls_opts} = pinned_request(url, headers, pin)
+      timeout = state.config.timeout_ms
+      http_opts = [timeout: timeout, connect_timeout: timeout, autoredirect: false] ++ tls_opts
+
+      request =
+        case body do
+          nil -> {to_charlist(url), headers}
+          {content_type, data} -> {to_charlist(url), headers, content_type, data}
+        end
+
+      case :httpc.request(
+             method,
+             request,
+             http_opts,
+             [body_format: :binary],
+             state.config.http_profile
+           ) do
+        {:ok, {{_version, status, _reason}, _headers, _body}} when status in 300..399 ->
+          {:error, :redirect_forbidden}
+
+        {:error, reason} ->
+          if is_nil(policy),
+            do: {:error, {:http_request_failed, reason}},
+            else: {:error, :http_request_failed}
+
+        response ->
+          response
+      end
+    end
+  end
+
+  defp pinned_request(url, headers, nil), do: {url, headers, []}
+
+  defp pinned_request(url, headers, pin) do
+    original = URI.parse(pin.origin)
+    address = pin.address |> :inet.ntoa() |> to_string()
+    uri = URI.parse(url)
+    url = URI.to_string(%{uri | scheme: pin.scheme, host: address, port: pin.port})
+    host = if String.contains?(original.host, ":"), do: "[#{original.host}]", else: original.host
+    default_port = if pin.scheme == "https", do: 443, else: 80
+    host = if pin.port == default_port, do: host, else: "#{host}:#{pin.port}"
+
+    headers =
+      [
+        {~c"host", to_charlist(host)},
+        {~c"connection", ~c"close"}
+        | Enum.reject(headers, fn {key, _value} ->
+            String.downcase(to_string(key)) in ["host", "connection"]
+          end)
+      ]
+
+    tls_opts =
+      if pin.scheme == "https" do
+        reference =
+          case :inet.parse_address(to_charlist(original.host)) do
+            {:ok, ip} -> {:ip, ip}
+            {:error, _} -> {:dns_id, to_charlist(original.host)}
+          end
+
+        sni = if elem(reference, 0) == :dns_id, do: elem(reference, 1), else: :disable
+
+        [
+          ssl: [
+            verify: :verify_peer,
+            cacerts: :public_key.cacerts_get(),
+            server_name_indication: sni,
+            customize_hostname_check: [
+              match_fun: :public_key.pkix_verify_hostname_match_fun(:https)
+            ],
+            verify_fun: {&verify_original_peer/3, reference}
+          ]
+        ]
+      else
+        []
+      end
+
+    {url, headers, tls_opts}
+  end
+
+  defp verify_original_peer(_cert, {:bad_cert, reason}, _reference), do: {:fail, reason}
+  defp verify_original_peer(_cert, {:extension, _extension}, reference), do: {:unknown, reference}
+  defp verify_original_peer(_cert, :valid, reference), do: {:valid, reference}
+
+  defp verify_original_peer(cert, :valid_peer, reference) do
+    if :public_key.pkix_verify_hostname(cert, [reference],
+         match_fun: :public_key.pkix_verify_hostname_match_fun(:https)
+       ),
+       do: {:valid, reference},
+       else: {:fail, :hostname_check_failed}
+  end
+
   defp auth_metadata(headers, state) do
     with header when is_binary(header) <- response_header(headers, "www-authenticate"),
-         metadata_url when is_binary(metadata_url) <- challenge_param(header, "resource_metadata") do
-      fetch_resource_metadata(metadata_url, state)
-      |> Map.put("www_authenticate", header)
-      |> Map.put("resource_metadata_url", metadata_url)
+         metadata_url when is_binary(metadata_url) <- challenge_param(header, "resource_metadata"),
+         {:ok, metadata} <- fetch_resource_metadata(metadata_url, state) do
+      {:ok,
+       metadata
+       |> Map.put("www_authenticate", header)
+       |> Map.put("resource_metadata_url", metadata_url)}
     else
-      _ -> nil
+      {:error, reason} -> {:error, reason}
+      _ -> {:ok, nil}
     end
   end
 
   defp fetch_resource_metadata(url, state) do
-    case fetch_metadata_json(url, state.config.timeout_ms) do
+    case fetch_metadata_json(url, state) do
       {:ok, metadata} -> put_authorization_server_metadata(metadata, state)
-      {:error, metadata} -> metadata
+      {:error, metadata} when is_map(metadata) -> {:ok, metadata}
+      {:error, reason} -> {:error, reason}
     end
   end
 
   defp put_authorization_server_metadata(%{"authorization_servers" => servers} = metadata, state)
        when is_list(servers) do
-    authorization_metadata =
-      servers
-      |> Enum.filter(&is_binary/1)
-      |> Enum.map(&fetch_authorization_server_metadata(&1, state))
+    servers
+    |> Enum.filter(&is_binary/1)
+    |> Enum.reduce_while({:ok, []}, fn issuer, {:ok, acc} ->
+      case fetch_authorization_server_metadata(issuer, state) do
+        {:ok, result} -> {:cont, {:ok, [result | acc]}}
+        {:error, reason} -> {:halt, {:error, reason}}
+      end
+    end)
+    |> case do
+      {:ok, results} ->
+        {:ok, Map.put(metadata, "authorization_server_metadata", Enum.reverse(results))}
 
-    Map.put(metadata, "authorization_server_metadata", authorization_metadata)
+      {:error, reason} ->
+        {:error, reason}
+    end
   end
 
-  defp put_authorization_server_metadata(metadata, _state), do: metadata
+  defp put_authorization_server_metadata(metadata, _state), do: {:ok, metadata}
 
   defp fetch_authorization_server_metadata(issuer, state) do
     with metadata_url when is_binary(metadata_url) <- authorization_server_metadata_url(issuer),
-         {:ok, metadata} <- fetch_metadata_json(metadata_url, state.config.timeout_ms) do
-      metadata
-      |> Map.put_new("issuer", issuer)
-      |> Map.put("metadata_url", metadata_url)
+         {:ok, metadata} <- fetch_metadata_json(metadata_url, state) do
+      {:ok,
+       metadata
+       |> Map.put_new("issuer", issuer)
+       |> Map.put("metadata_url", metadata_url)}
     else
-      {:error, metadata} -> Map.put(metadata, "issuer", issuer)
-      _ -> %{"issuer" => issuer, "metadata_error" => "invalid_issuer"}
+      {:error, metadata} when is_map(metadata) -> {:ok, Map.put(metadata, "issuer", issuer)}
+      {:error, reason} -> {:error, reason}
+      _ -> {:ok, %{"issuer" => issuer, "metadata_error" => "invalid_issuer"}}
     end
   end
 
@@ -500,27 +703,32 @@ defmodule LemonMCP.Client.HTTP do
     end
   end
 
-  defp fetch_metadata_json(url, timeout) do
+  defp fetch_metadata_json(url, state) do
     headers = http_headers([{"accept", "application/json"}])
 
-    case :httpc.request(
-           :get,
-           {to_charlist(url), headers},
-           [timeout: timeout, connect_timeout: timeout],
-           body_format: :binary
-         ) do
+    case http_request(:get, url, headers, nil, state) do
       {:ok, {{_version, status, _reason}, _headers, body}} when status in 200..299 ->
         case Jason.decode(to_string(body)) do
-          {:ok, metadata} when is_map(metadata) -> {:ok, metadata}
-          _ -> {:error, %{"metadata_error" => "invalid_json"}}
+          {:ok, metadata} when is_map(metadata) ->
+            {:ok, metadata}
+
+          _ ->
+            if is_nil(state.config.origin_policy),
+              do: {:error, %{"metadata_error" => "invalid_json"}},
+              else: {:error, :invalid_metadata}
         end
 
       {:ok, {{_version, status, reason}, _headers, _body}} ->
-        {:error,
-         %{"metadata_error" => "http_#{status}", "metadata_error_reason" => to_string(reason)}}
+        if is_nil(state.config.origin_policy),
+          do:
+            {:error,
+             %{"metadata_error" => "http_#{status}", "metadata_error_reason" => to_string(reason)}},
+          else: {:error, :metadata_http_error}
 
       {:error, reason} ->
-        {:error, %{"metadata_error" => inspect(reason)}}
+        if is_nil(state.config.origin_policy) and reason != :redirect_forbidden,
+          do: {:error, %{"metadata_error" => inspect(reason)}},
+          else: {:error, reason}
     end
   end
 
@@ -539,6 +747,9 @@ defmodule LemonMCP.Client.HTTP do
         {:ok, token} ->
           {:ok, put_oauth_token(state, metadata, token)}
 
+        {:error, reason} ->
+          {:error, reason}
+
         :error ->
           fetch_new_token(token_endpoint, metadata, oauth, state)
       end
@@ -552,12 +763,14 @@ defmodule LemonMCP.Client.HTTP do
       authorization_code_provider?(oauth) ->
         case fetch_authorization_code_token(token_endpoint, metadata, oauth, state) do
           {:ok, token} -> {:ok, put_oauth_token(state, metadata, token)}
+          {:error, reason} -> {:error, reason}
           :error -> :error
         end
 
       client_credentials_oauth?(oauth) ->
         case fetch_client_credentials_token(token_endpoint, metadata, oauth, state) do
           {:ok, token} -> {:ok, put_oauth_token(state, metadata, token)}
+          {:error, reason} -> {:error, reason}
           :error -> :error
         end
 
@@ -660,8 +873,6 @@ defmodule LemonMCP.Client.HTTP do
   defp authorization_endpoint(_metadata), do: nil
 
   defp fetch_client_credentials_token(token_endpoint, metadata, oauth, state) do
-    timeout = state.config.timeout_ms
-
     params = %{
       "grant_type" => "client_credentials",
       "client_id" => Keyword.fetch!(oauth, :client_id)
@@ -683,26 +894,23 @@ defmodule LemonMCP.Client.HTTP do
             ] ++ auth_headers
           )
 
-        case :httpc.request(
-               :post,
-               {to_charlist(token_endpoint), headers, ~c"application/x-www-form-urlencoded",
-                to_charlist(body)},
-               [timeout: timeout, connect_timeout: timeout],
-               body_format: :binary
-             ) do
+        case oauth_token_request(token_endpoint, headers, body, state) do
           {:ok, {{_version, status, _reason}, _headers, response_body}} when status in 200..299 ->
             decode_oauth_token(response_body)
+
+          {:error, reason} ->
+            {:error, reason}
 
           _ ->
             :error
         end
-      :error -> :error
+
+      :error ->
+        :error
     end
   end
 
   defp fetch_authorization_code_token(token_endpoint, metadata, oauth, state) do
-    timeout = state.config.timeout_ms
-
     with {:ok, authorization_request} <- build_authorization_request(metadata, oauth),
          {:ok, code} <- request_authorization_code(oauth, authorization_request) do
       params = %{
@@ -734,20 +942,20 @@ defmodule LemonMCP.Client.HTTP do
               ] ++ auth_headers
             )
 
-          case :httpc.request(
-                 :post,
-                 {to_charlist(token_endpoint), headers, ~c"application/x-www-form-urlencoded",
-                  to_charlist(body)},
-                 [timeout: timeout, connect_timeout: timeout],
-                 body_format: :binary
-               ) do
-            {:ok, {{_version, status, _reason}, _headers, response_body}} when status in 200..299 ->
+          case oauth_token_request(token_endpoint, headers, body, state) do
+            {:ok, {{_version, status, _reason}, _headers, response_body}}
+            when status in 200..299 ->
               decode_oauth_token(response_body)
+
+            {:error, reason} ->
+              {:error, reason}
 
             _ ->
               :error
           end
-        :error -> :error
+
+        :error ->
+          :error
       end
     else
       :error -> :error
@@ -860,8 +1068,6 @@ defmodule LemonMCP.Client.HTTP do
   end
 
   defp fetch_refresh_token(token_endpoint, metadata, oauth, refresh_token, state) do
-    timeout = state.config.timeout_ms
-
     params = %{
       "grant_type" => "refresh_token",
       "refresh_token" => refresh_token,
@@ -884,20 +1090,41 @@ defmodule LemonMCP.Client.HTTP do
             ] ++ auth_headers
           )
 
-        case :httpc.request(
-               :post,
-               {to_charlist(token_endpoint), headers, ~c"application/x-www-form-urlencoded",
-                to_charlist(body)},
-               [timeout: timeout, connect_timeout: timeout],
-               body_format: :binary
-             ) do
+        case oauth_token_request(token_endpoint, headers, body, state) do
           {:ok, {{_version, status, _reason}, _headers, response_body}} when status in 200..299 ->
             decode_oauth_token(response_body)
+
+          {:error, reason} ->
+            {:error, reason}
 
           _ ->
             :error
         end
-      :error -> :error
+
+      :error ->
+        :error
+    end
+  end
+
+  defp oauth_token_request(url, headers, body, state) do
+    case http_request(
+           :post,
+           url,
+           headers,
+           {~c"application/x-www-form-urlencoded", to_charlist(body)},
+           state
+         ) do
+      {:error, reason} when not is_nil(state.config.origin_policy) ->
+        {:error, reason}
+
+      {:error, :redirect_forbidden} ->
+        {:error, :redirect_forbidden}
+
+      {:error, _reason} ->
+        :error
+
+      response ->
+        response
     end
   end
 

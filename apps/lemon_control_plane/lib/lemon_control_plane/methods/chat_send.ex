@@ -2,13 +2,17 @@ defmodule LemonControlPlane.Methods.ChatSend do
   @moduledoc """
   Handler for the chat.send method.
 
-  Sends a message to a session. An optional `cwd` must be an absolute existing
-  directory. Canonical profile sessions do not accept caller workspace overrides.
+  Sends a message to a session. An optional `profileId` inherits the profile's
+  persona, model, node and workspace while retaining the caller's session key.
+  An optional `cwd` must be an absolute existing directory; profile-bound and
+  canonical profile sessions do not accept caller workspace overrides.
+  Profile chat may replace MCP attachments with `invocationMcpServers`; omission
+  inherits the profile defaults, while an explicit empty list attaches none.
   """
 
   @behaviour LemonControlPlane.Method
 
-  alias LemonControlPlane.{ImageInputs, Protocol.Errors}
+  alias LemonControlPlane.{ChatSubmission, ImageInputs}
 
   @impl true
   def name, do: "chat.send"
@@ -18,15 +22,17 @@ defmodule LemonControlPlane.Methods.ChatSend do
 
   @impl true
   def handle(params, ctx) do
-    with {:ok, images} <- ImageInputs.validate(Map.get(params, "images", [])) do
-      submit(params, ctx, images)
+    with {:ok, run_id} <- ChatSubmission.run_id(params),
+         {:ok, context_key} <- ChatSubmission.invocation_context_key(params),
+         {:ok, images} <- ImageInputs.validate(Map.get(params, "images", [])) do
+      submit(params, ctx, images, run_id, context_key)
     end
   end
 
-  defp submit(params, ctx, images) do
+  defp submit(params, ctx, images, run_id, context_key) do
     session_key = params["sessionKey"]
     prompt = params["prompt"] || params["message"]
-    agent_id = params["agentId"]
+    profile_id = params["profileId"]
     queue_mode = parse_queue_mode(params["queueMode"])
     router_mod = Map.get(ctx, :router_mod, LemonRouter)
 
@@ -37,6 +43,24 @@ defmodule LemonControlPlane.Methods.ChatSend do
       is_nil(prompt) ->
         {:error, {:invalid_request, "prompt is required", nil}}
 
+      Map.has_key?(params, "profileId") and
+          (not is_binary(profile_id) or profile_id == "") ->
+        {:error, {:invalid_request, "profileId must be a nonempty string", nil}}
+
+      Map.has_key?(params, "invocationMcpServers") and is_nil(profile_id) ->
+        {:error, {:invalid_request, "invocationMcpServers requires profileId", nil}}
+
+      Map.has_key?(params, "invocationToolPolicy") and is_nil(profile_id) ->
+        {:error, {:invalid_request, "invocationToolPolicy requires profileId", nil}}
+
+      not is_nil(context_key) and not is_nil(profile_id) and
+          not Map.has_key?(params, "invocationMcpServers") ->
+        {:error,
+         {:invalid_request, "Managed invocation requires explicit invocationMcpServers", nil}}
+
+      Map.has_key?(params, "cwd") and not is_nil(profile_id) ->
+        {:error, {:invalid_request, "cwd cannot override a profile workspace", nil}}
+
       Map.has_key?(params, "cwd") and not valid_cwd?(params["cwd"]) ->
         {:error, {:invalid_request, "cwd must be a nonempty absolute existing directory", nil}}
 
@@ -44,49 +68,85 @@ defmodule LemonControlPlane.Methods.ChatSend do
         {:error, {:invalid_request, "cwd cannot override a canonical profile session", nil}}
 
       true ->
-        run_id = LemonCore.Id.run_id()
-
-        submit_params = %{
-          run_id: run_id,
-          origin: :control_plane,
-          session_key: session_key,
-          agent_id: agent_id,
-          prompt: prompt,
-          images: images,
-          queue_mode: queue_mode,
-          meta: %{
-            control_plane: true
-          }
-        }
-
-        submit_params =
-          if Map.has_key?(params, "cwd") do
-            Map.put(submit_params, :cwd, params["cwd"])
-          else
+        with {:ok, submit_params} <-
+               build_request(params, profile_id, session_key, prompt, run_id, images, queue_mode) do
+          submit_params =
             submit_params
+            |> Map.merge(%{origin: :control_plane, images: images, queue_mode: queue_mode})
+            |> Map.update(:meta, %{control_plane: true}, &Map.put(&1, :control_plane, true))
+
+          with {:ok, submit_params} <-
+                 ChatSubmission.attach_execution_context(submit_params, params, ctx) do
+            dispatch(router_mod, submit_params, prompt, queue_mode)
           end
-
-        case router_mod.submit(submit_params) do
-          {:ok, run_id} ->
-            {:ok,
-             %{
-               "runId" => run_id,
-               "sessionKey" => session_key,
-               "summary" => summary(run_id, session_key, agent_id, prompt, queue_mode)
-             }}
-
-          {:error, :outcome_unknown} ->
-            {:error,
-             Errors.error(:unavailable, "Chat submission outcome is unknown", %{
-               "code" => "SUBMISSION_OUTCOME_UNKNOWN",
-               "runId" => run_id,
-               "sessionKey" => session_key,
-               "retrySafe" => false
-             })}
-
-          {:error, _reason} ->
-            {:error, {:internal_error, "Chat submission failed", nil}}
         end
+    end
+  end
+
+  defp build_request(params, nil, session_key, prompt, run_id, _images, _queue_mode) do
+    request = %{
+      run_id: run_id,
+      session_key: session_key,
+      agent_id: params["agentId"],
+      prompt: prompt
+    }
+
+    {:ok,
+     if(Map.has_key?(params, "cwd"), do: Map.put(request, :cwd, params["cwd"]), else: request)}
+  end
+
+  defp build_request(params, profile_id, session_key, prompt, run_id, images, queue_mode) do
+    case LemonCore.ProfileStore.get_for_execution(profile_id) do
+      {:ok, profile} ->
+        opts = [
+          session_key: session_key,
+          run_id: run_id,
+          images: images,
+          queue_mode: queue_mode
+        ]
+
+        opts =
+          if Map.has_key?(params, "invocationMcpServers"),
+            do: Keyword.put(opts, :invocation_mcp_servers, params["invocationMcpServers"]),
+            else: opts
+
+        with {:ok, policy} <- invocation_tool_policy(params),
+             {:ok, request} <-
+               LemonCore.ProfileStore.chat_request(
+                 profile,
+                 prompt,
+                 Keyword.put(opts, :tool_policy, policy)
+               ) do
+          {:ok, request}
+        else
+          {:error, _} -> {:error, {:invalid_request, "Profile chat request is invalid", nil}}
+        end
+
+      {:error, :not_found} ->
+        {:error, {:not_found, "Unknown profile", %{"profileId" => profile_id}}}
+
+      {:error, :invalid_id} ->
+        {:error, {:invalid_request, "Invalid profileId", nil}}
+
+      {:error, _} ->
+        {:error, {:unavailable, "Profile is unavailable", nil}}
+    end
+  end
+
+  defp invocation_tool_policy(params) do
+    case Map.fetch(params, "invocationToolPolicy") do
+      :error -> {:ok, %{}}
+      {:ok, policy} -> LemonCore.ToolPolicy.normalize(policy)
+    end
+  end
+
+  defp dispatch(router_mod, submit_params, prompt, queue_mode) do
+    %{run_id: run_id, session_key: session_key, agent_id: agent_id} = submit_params
+
+    with {:ok, receipt} <-
+           ChatSubmission.submit(submit_params, &router_mod.submit_with_receipt/1) do
+      {:ok,
+       Map.put(receipt, "summary", summary(run_id, session_key, agent_id, prompt, queue_mode))}
     end
   end
 

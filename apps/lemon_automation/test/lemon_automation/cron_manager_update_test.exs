@@ -80,6 +80,48 @@ defmodule LemonAutomation.CronManagerUpdateTest do
            end)
   end
 
+  test "rejects unknown timezone on creation without persisting a job", %{job: job} do
+    id = "invalid_timezone_#{System.unique_integer([:positive, :monotonic])}"
+
+    on_exit(fn -> CronManager.remove(id) end)
+
+    assert {:error, {:invalid_target, "Invalid timezone"}} =
+             CronManager.add(%{
+               id: id,
+               name: "invalid timezone",
+               schedule: job.schedule,
+               enabled: false,
+               agent_id: job.agent_id,
+               session_key: job.session_key,
+               prompt: "ping",
+               timezone: "Not/A_Zone"
+             })
+
+    assert CronStore.get_job(id) == nil
+  end
+
+  test "rejects invalid timezone patches without changing the existing job", %{job: job} do
+    for params <- [%{timezone: "Not/A_Zone"}, %{"timezone" => nil}] do
+      assert {:error, {:invalid_target, "Invalid timezone"}} =
+               CronManager.update(job.id, params)
+
+      assert CronStore.get_job(job.id) == job
+    end
+  end
+
+  test "a timezone-only patch changes the next scheduled instant", %{job: job} do
+    assert {:ok, updated} =
+             CronManager.update(job.id, %{"timezone" => "America/New_York"})
+
+    assert updated.next_run_at_ms != job.next_run_at_ms
+    assert updated.schedule == job.schedule
+
+    next = DateTime.from_unix!(updated.next_run_at_ms, :millisecond)
+    wall = DateTime.shift_zone!(next, "America/New_York")
+    assert {wall.month, wall.day, wall.hour, wall.minute} == {1, 1, 0, 0}
+    assert CronStore.get_job(job.id).next_run_at_ms == updated.next_run_at_ms
+  end
+
   test "normalizes schedule shorthands on add" do
     token = System.unique_integer([:positive, :monotonic])
 

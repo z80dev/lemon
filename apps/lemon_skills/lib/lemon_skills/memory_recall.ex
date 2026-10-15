@@ -5,10 +5,11 @@ defmodule LemonSkills.MemoryRecall do
 
   Registered by `LemonSkills.Application` under `:memory_recall`, through the
   same seam `LemonHoncho.ContextContributor` uses. For each turn it asks
-  `LemonMemory.Recall.block/2` for profile-scoped earlier conversations that share
-  keywords with the new message, USER.md facts from the session workspace, and
-  bounded project learnings from `LemonMemory.Project.read/2`. Project defaults
-  need not match the opening query. They contribute as one `:user_message` section.
+  `LemonMemory.Recall.block/2` for authorized earlier conversations and canonical
+  preferences, plus bounded project learnings from `LemonMemory.Project.read/2`.
+  Context-owned runs require verified native ownership and never read raw legacy
+  preference files; legacy unscoped CLI behavior remains unchanged. Project defaults
+  need not match the opening query; the result is one `:user_message` section.
   The block changes every
   turn, so it rides after the last prompt-cache breakpoint (attached to the
   outgoing message by `CodingAgent.Session.attach_recalled_context/2`) instead
@@ -31,7 +32,7 @@ defmodule LemonSkills.MemoryRecall do
 
   @behaviour LemonAgent.ContextRegistry
 
-  alias LemonMemory.{Project, Query, Recall}
+  alias LemonMemory.{ContextScope, Project, Query, Recall}
 
   @impl true
   def contribute(request), do: contribute(request, [])
@@ -49,6 +50,7 @@ defmodule LemonSkills.MemoryRecall do
   def contribute(%{} = request, opts) when is_list(opts) do
     with :main <- Map.get(request, :session_scope),
          true <- auto_recall?(request, opts),
+         {:ok, _memory_scope} <- ContextScope.scope(request),
          agent_id when is_binary(agent_id) <- agent_id(request),
          true <- length(Query.terms(Map.get(request, :query))) >= 2 do
       context = Map.put(request, :agent_id, agent_id)

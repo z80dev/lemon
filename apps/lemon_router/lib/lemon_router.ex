@@ -45,6 +45,12 @@ defmodule LemonRouter do
     |> LemonRouter.RunOrchestrator.submit()
   end
 
+  @doc "Submit a fixed intent and return its durable queue/runtime disposition."
+  defdelegate submit_with_receipt(request), to: LemonRouter.RunOrchestrator
+
+  @doc "Reconcile a fixed admission ID without replaying dispatch."
+  defdelegate run_receipt(run_id), to: LemonRouter.RunOrchestrator
+
   @doc """
   Abort a session's active run.
   """
@@ -62,17 +68,16 @@ defmodule LemonRouter do
 
   # -- Run introspection ------------------------------------------------------
   #
-  # Callers outside this app used to reach into `RunRegistry`, `RunSupervisor`
-  # and `RunOrchestrator` directly (Registry selects, DynamicSupervisor counts,
-  # `Process.whereis` liveness probes). These functions are that surface, and
-  # they own the defensiveness those call sites each reimplemented: a router
-  # that is not running reports "nothing active" rather than raising.
+  # Callers outside this app use this surface rather than private runtime
+  # registries. Authoritative reads preserve unavailable state; informational
+  # startup counters below remain best-effort.
 
   @typedoc "A run currently being orchestrated."
   @type active_run :: %{
           run_id: binary(),
           session_key: binary() | nil,
           agent_id: binary() | nil,
+          profile_id: binary() | nil,
           engine: binary() | nil,
           started_at_ms: integer() | nil
         }
@@ -95,26 +100,45 @@ defmodule LemonRouter do
   Every run currently active, newest first is not guaranteed — callers that
   care about ordering should sort on `:started_at_ms`.
 
-  Returns `[]` when the router is not running.
+  Returns `{:error, :unavailable}` when either runtime owner is absent and
+  `{:error, :query_failed}` when the registry cannot be read.
 
   Metadata reads have a 100 ms bound and never terminate the run. A busy or
   disappearing run keeps its fixed ID in the snapshot with unavailable fields
   set to `nil`; prompts, private metadata and process identifiers are excluded.
   """
-  @spec active_runs() :: [active_run()]
+  @spec active_runs() :: {:ok, [active_run()]} | {:error, :unavailable | :query_failed}
   def active_runs do
-    if is_pid(Process.whereis(LemonRouter.RunRegistry)) do
-      LemonRouter.RunRegistry
-      |> Registry.select([{{:"$1", :"$2", :"$3"}, [], [{{:"$1", :"$2"}}]}])
-      |> Enum.map(&describe_active_run/1)
+    orchestrator = Process.whereis(LemonRouter.RunOrchestrator)
+    registry = Process.whereis(LemonRouter.RunRegistry)
+
+    if is_pid(orchestrator) and is_pid(registry) do
+      case GenServer.call(orchestrator, :presence_barrier, @metadata_timeout_ms) do
+        :ok ->
+          runs =
+            LemonRouter.RunRegistry
+            |> Registry.select([{{:"$1", :"$2", :"$3"}, [], [{{:"$1", :"$2"}}]}])
+            |> Enum.map(&describe_active_run/1)
+
+          if Process.whereis(LemonRouter.RunOrchestrator) == orchestrator and
+               Process.whereis(LemonRouter.RunRegistry) == registry,
+             do: {:ok, runs},
+             else: {:error, :unavailable}
+
+        _ ->
+          {:error, :query_failed}
+      end
     else
-      []
+      {:error, :unavailable}
     end
   rescue
-    ArgumentError -> []
+    ArgumentError -> {:error, :query_failed}
   catch
-    :exit, _ -> []
+    :exit, _ -> {:error, :query_failed}
   end
+
+  @doc "Authoritative scoped active, queued and unresolved work; read failures never prove idle."
+  defdelegate run_presence(filters \\ %{}), to: LemonRouter.RunPresence, as: :query
 
   @doc """
   Whether `run_id` is currently active.
@@ -187,13 +211,21 @@ defmodule LemonRouter do
       run_id: run_id,
       session_key: Map.get(metadata, :session_key),
       agent_id: Map.get(metadata, :agent_id),
+      profile_id: Map.get(metadata, :profile_id),
       engine: Map.get(metadata, :engine),
       started_at_ms: Map.get(metadata, :started_at_ms)
     }
   end
 
   defp describe_active_run({run_id, _pid}) do
-    %{run_id: run_id, session_key: nil, agent_id: nil, engine: nil, started_at_ms: nil}
+    %{
+      run_id: run_id,
+      session_key: nil,
+      agent_id: nil,
+      profile_id: nil,
+      engine: nil,
+      started_at_ms: nil
+    }
   end
 
   @doc """

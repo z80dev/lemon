@@ -35,7 +35,7 @@ defmodule LemonCore.Secrets do
 
   alias LemonCore.Clock
   alias LemonCore.MapHelpers
-  alias LemonCore.Secrets.{Crypto, External, KeyRotation, Lock, MasterKey}
+  alias LemonCore.Secrets.{Crypto, External, KeyRotation, Lock, MasterKey, Receipts}
   alias LemonCore.Store
 
   @table :secrets_v1
@@ -56,7 +56,10 @@ defmodule LemonCore.Secrets do
           required(:last_used_at) => integer() | nil,
           required(:created_at) => integer(),
           required(:updated_at) => integer(),
-          required(:version) => String.t()
+          required(:version) => String.t(),
+          optional(:operation_id) => String.t(),
+          optional(:status) => String.t(),
+          optional(:current_binding_matches) => boolean()
         }
 
   @spec table() :: atom()
@@ -73,6 +76,10 @@ defmodule LemonCore.Secrets do
   retiring. Returns `{:error, :secrets_locked}` if a live holder keeps the
   lock for longer than the wait, or `{:error, {:secrets_lock_held, host}}`
   for a lease from another host; callers must report either, not succeed.
+  With `:operation_id` and authenticated `:node_id`, the same row also stores a
+  private durable receipt. An identical operation returns without writing;
+  changed intent or a superseded binding returns `:secret_operation_conflict`.
+  Receipt capacity is bounded and never evicts historical proof.
   """
   @spec set(name(), String.t(), keyword()) ::
           {:ok, secret_metadata()} | {:error, error_reason()}
@@ -81,6 +88,7 @@ defmodule LemonCore.Secrets do
   def set(name, value, opts) when is_binary(value) do
     with {:ok, name} <- normalize_name(name),
          {:ok, owner} <- normalize_owner(opts),
+         :ok <- validate_operation(opts),
          {:ok, server} <- storage_owner(opts) do
       Lock.with_write_lock(fn -> store_secret(server, owner, name, value, opts) end, server)
     end
@@ -88,18 +96,139 @@ defmodule LemonCore.Secrets do
 
   def set(_, _, _), do: {:error, :invalid_secret_value}
 
-  defp store_secret(server, owner, name, value, opts) do
-    with {:ok, existing} <- Store.fetch(server, @table, {owner, name}),
-         {:ok, record} <- encrypt_record(existing, value, opts),
-         :ok <- Store.put(server, @table, {owner, name}, record) do
-      emit_secret_event(owner, name, :set)
-      {:ok, metadata(owner, name, record)}
+  defp validate_operation(opts) do
+    if Keyword.has_key?(opts, :operation_id) do
+      with :ok <- Receipts.operation_id(opts[:operation_id]),
+           do: Receipts.node_id(opts[:node_id])
+    else
+      :ok
     end
   end
 
-  defp encrypt_record(existing, value, opts) do
-    with {:ok, master_key, _source} <- MasterKey.resolve(opts),
-         {:ok, encrypted} <- Crypto.encrypt(value, master_key) do
+  defp store_secret(server, owner, name, value, opts) do
+    with {:ok, existing} <- Store.fetch(server, @table, {owner, name}),
+         {:ok, rows} <- fetch_receipt_rows(server),
+         {:ok, found} <- operation_receipt(rows, owner, opts),
+         {:ok, master_key, _source} <- MasterKey.resolve(opts) do
+      provider = normalize_optional_string(opts[:provider]) || @default_provider
+      expires_at = normalize_optional_integer(opts[:expires_at])
+
+      case found do
+        nil ->
+          write_secret(server, owner, name, value, existing, master_key, opts)
+
+        {^name, entry, receipt} ->
+          intent =
+            Receipts.intent(master_key, owner, opts[:node_id], name, value, provider, expires_at)
+
+          if Receipts.current?(entry, receipt) and Receipts.same_intent?(receipt, intent),
+            do: {:ok, operation_metadata(owner, name, entry, opts)},
+            else: {:error, :secret_operation_conflict}
+
+        _ ->
+          {:error, :secret_operation_conflict}
+      end
+    end
+  end
+
+  defp write_secret(server, owner, name, value, existing, master_key, opts) do
+    with {:ok, record} <- encrypt_record(existing, value, master_key, opts),
+         {:ok, record} <- append_receipt(record, owner, name, value, master_key, opts),
+         :ok <- persist_record(server, owner, name, record, opts) do
+      emit_secret_event(owner, name, :set)
+      {:ok, operation_metadata(owner, name, record, opts)}
+    end
+  end
+
+  defp append_receipt(record, owner, name, value, key, opts) do
+    if Keyword.has_key?(opts, :operation_id) do
+      receipt = %{
+        node_id: opts[:node_id],
+        operation_id: opts[:operation_id],
+        intent:
+          Receipts.intent(
+            key,
+            owner,
+            opts[:node_id],
+            name,
+            value,
+            record.provider,
+            record.expires_at
+          ),
+        binding: Receipts.binding(record)
+      }
+
+      Receipts.append(record, receipt)
+    else
+      {:ok, record}
+    end
+  end
+
+  defp operation_metadata(owner, name, record, opts) do
+    result = metadata(owner, name, record)
+
+    if Keyword.has_key?(opts, :operation_id) do
+      Map.merge(result, %{
+        operation_id: opts[:operation_id],
+        status: "applied",
+        current_binding_matches: not expired_entry?(record)
+      })
+    else
+      result
+    end
+  end
+
+  defp operation_receipt(rows, owner, opts) do
+    # Validate all receipts for this owner even for ordinary writes, so
+    # malformed persisted proof cannot be discarded by overwriting its row.
+    Receipts.find(rows, owner, opts[:node_id], opts[:operation_id])
+  end
+
+  defp fetch_receipt_rows(server) do
+    case Store.fetch_all(server, @table) do
+      {:ok, rows} -> {:ok, rows}
+      {:error, _} -> {:error, :secret_store_failed}
+    end
+  end
+
+  defp persist_record(server, owner, name, record, opts) do
+    case Store.put(server, @table, {owner, name}, record) do
+      :ok ->
+        :ok
+
+      {:error, _} = error ->
+        if Keyword.has_key?(opts, :operation_id),
+          do: {:error, :secret_store_failed},
+          else: error
+    end
+  end
+
+  @doc """
+  Read-only durable proof for an operation on the authenticated `:node_id`.
+  Does not resolve a master key, decrypt a value, replay a set, or touch usage.
+  `applied` is historical proof; `current_binding_matches` also requires the
+  original encrypted revision to remain active and unexpired.
+  """
+  @spec receipt(String.t(), keyword()) :: {:ok, map()} | {:error, error_reason()}
+  def receipt(operation_id, opts \\ []) do
+    with :ok <- Receipts.operation_id(operation_id),
+         :ok <- Receipts.node_id(opts[:node_id]),
+         {:ok, owner} <- normalize_owner(opts),
+         {:ok, server} <- storage_owner(opts) do
+      Lock.with_write_lock(
+        fn ->
+          with {:ok, rows} <- fetch_receipt_rows(server),
+               {:ok, found} <- Receipts.find(rows, owner, opts[:node_id], operation_id) do
+            {:ok, Receipts.proof(opts[:node_id], operation_id, found)}
+          end
+        end,
+        server
+      )
+    end
+  end
+
+  defp encrypt_record(existing, value, master_key, opts) do
+    with {:ok, encrypted} <- Crypto.encrypt(value, master_key) do
       now = Clock.now_ms()
 
       {:ok,
@@ -114,7 +243,8 @@ defmodule LemonCore.Secrets do
          last_used_at: nil,
          created_at: get_field(existing || %{}, :created_at) || now,
          updated_at: now,
-         version: encrypted.version
+         version: encrypted.version,
+         receipts: Receipts.entries(existing || %{})
        }}
     end
   end
@@ -173,7 +303,10 @@ defmodule LemonCore.Secrets do
       Lock.with_write_lock(
         fn ->
           with {:ok, entry} <- fetch_revision_entry(server, owner, name, revision),
-               {:ok, record} <- encrypt_record(entry, value, opts) do
+               {:ok, rows} <- fetch_receipt_rows(server),
+               {:ok, _} <- Receipts.find(rows, owner, nil, nil),
+               {:ok, master_key, _source} <- MasterKey.resolve(opts),
+               {:ok, record} <- encrypt_record(entry, value, master_key, opts) do
             swap_revision(server, owner, name, revision, entry, record)
           end
         end,
@@ -384,16 +517,19 @@ defmodule LemonCore.Secrets do
       else
         Lock.with_write_lock(
           fn ->
-            case Store.compare_and_delete_many(server, [{@table, {owner, name}, entry}]) do
-              :ok ->
-                emit_secret_event(owner, name, :delete)
-                :ok
+            with {:ok, rows} <- fetch_receipt_rows(server),
+                 {:ok, _} <- Receipts.find(rows, owner, nil, nil) do
+              case remove_value(server, owner, name, entry) do
+                :ok ->
+                  emit_secret_event(owner, name, :delete)
+                  :ok
 
-              {:error, :mismatch} ->
-                {:error, :stale_revision}
+                {:error, :mismatch} ->
+                  {:error, :stale_revision}
 
-              {:error, _reason} = error ->
-                error
+                {:error, _reason} = error ->
+                  error
+              end
             end
           end,
           server
@@ -406,17 +542,26 @@ defmodule LemonCore.Secrets do
   def list(opts \\ []) do
     with {:ok, owner} <- normalize_owner(opts),
          {:ok, server} <- storage_owner(opts),
-         {:ok, rows} <- Store.fetch_all(server, @table) do
+         {:ok, rows} <- Store.fetch_all(server, @table),
+         {:ok, _} <- Receipts.find(rows, owner, nil, nil) do
       rows
       |> Enum.reduce_while({:ok, []}, fn
         {{record_owner, name}, entry}, {:ok, acc} when record_owner == owner ->
-          if expired_entry?(entry) do
-            case remove_expired(server, record_owner, name, entry) do
-              :ok -> {:cont, {:ok, acc}}
-              {:error, _reason} = error -> {:halt, error}
-            end
-          else
-            {:cont, {:ok, [metadata(record_owner, name, entry) | acc]}}
+          cond do
+            Receipts.receipt_only?(entry) ->
+              {:cont, {:ok, acc}}
+
+            not value_entry?(entry) ->
+              {:halt, {:error, :invalid_secret_record}}
+
+            expired_entry?(entry) ->
+              case remove_expired(server, record_owner, name, entry) do
+                :ok -> {:cont, {:ok, acc}}
+                {:error, _reason} = error -> {:halt, error}
+              end
+
+            true ->
+              {:cont, {:ok, [metadata(record_owner, name, entry) | acc]}}
           end
 
         _, acc ->
@@ -430,16 +575,22 @@ defmodule LemonCore.Secrets do
   end
 
   defp remove_expired(server, owner, name, entry) do
-    Lock.with_write_lock(
-      fn ->
-        case Store.compare_and_delete_many(server, [{@table, {owner, name}, entry}]) do
-          :ok -> :ok
-          {:error, :mismatch} -> :ok
-          {:error, _reason} = error -> error
-        end
-      end,
-      server
-    )
+    # Receipt-bearing rows retain their historical proof unchanged; expiry
+    # already invalidates the current binding and hides the value from reads.
+    if Receipts.entries(entry) != [] do
+      :ok
+    else
+      Lock.with_write_lock(
+        fn ->
+          case Store.compare_and_delete_many(server, [{@table, {owner, name}, entry}]) do
+            :ok -> :ok
+            {:error, :mismatch} -> :ok
+            {:error, _reason} = error -> error
+          end
+        end,
+        server
+      )
+    end
   end
 
   @spec status(keyword()) :: map() | {:error, error_reason()}
@@ -517,7 +668,12 @@ defmodule LemonCore.Secrets do
         {:error, :not_found}
 
       {:ok, entry} when is_map(entry) ->
-        if expired_entry?(entry), do: {:error, :expired}, else: {:ok, entry}
+        cond do
+          Receipts.receipt_only?(entry) -> {:error, :not_found}
+          not value_entry?(entry) -> {:error, :invalid_secret_record}
+          expired_entry?(entry) -> {:error, :expired}
+          true -> {:ok, entry}
+        end
 
       {:ok, _invalid} ->
         {:error, :invalid_secret_record}
@@ -525,6 +681,23 @@ defmodule LemonCore.Secrets do
       {:error, _reason} = error ->
         error
     end
+  end
+
+  defp remove_value(server, owner, name, entry) do
+    if Receipts.entries(entry) != [] do
+      Store.compare_and_swap(server, @table, {owner, name}, entry, receipt_only_entry(entry))
+    else
+      Store.compare_and_delete_many(server, [{@table, {owner, name}, entry}])
+    end
+  end
+
+  @doc false
+  def value_entry?(entry) when is_map(entry), do: is_binary(get_field(entry, :ciphertext))
+  def value_entry?(_), do: false
+
+  @doc false
+  def receipt_only_entry(entry) do
+    %{receipts: Receipts.entries(entry)}
   end
 
   # Compare-and-swap so a read never writes back a record that changed after it

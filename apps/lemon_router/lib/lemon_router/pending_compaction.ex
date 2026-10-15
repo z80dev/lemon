@@ -3,8 +3,9 @@ defmodule LemonRouter.PendingCompaction do
   Prepares and transactionally consumes router pending-compaction markers.
 
   Fresh markers are only deleted after the corresponding run submission is
-  accepted. Stale markers and fresh markers with no usable history are cleared
-  immediately because retrying them cannot produce a different prompt.
+  accepted. Stale markers and markers without any history are cleared.
+  History is filtered to the owning execution context; markers with only
+  inaccessible history remain available to their original owners.
 
   Historical run summaries are rendered as one JSON object per completed run.
   Embedded newlines are JSON-escaped and angle brackets are unicode-escaped,
@@ -15,37 +16,26 @@ defmodule LemonRouter.PendingCompaction do
 
   require Logger
 
-  alias LemonRouter.PendingCompactionStore
+  alias LemonRouter.{PendingCompactionStore, ResumeResolver}
 
   @pending_compaction_ttl_ms 12 * 60 * 60 * 1000
   @history_limit 8
   @transcript_max_chars 8_000
-  @prepared_meta_key :lemon_router_pending_compaction_marker
 
   @type marker :: map()
 
-  @spec prepare(String.t() | nil, binary(), atom()) :: {String.t() | nil, marker() | nil}
-  def prepare(prompt, session_key, :channel) when is_binary(session_key) do
+  @spec prepare(String.t() | nil, binary(), atom(), keyword()) ::
+          {String.t() | nil, marker() | nil}
+  def prepare(prompt, session_key, origin, opts \\ [])
+
+  def prepare(prompt, session_key, :channel, opts) when is_binary(session_key) do
     case PendingCompactionStore.get(session_key) do
-      marker when is_map(marker) -> prepare_marker(prompt, session_key, marker)
+      marker when is_map(marker) -> prepare_marker(prompt, session_key, marker, opts)
       _ -> {prompt, nil}
     end
   end
 
-  def prepare(prompt, _session_key, _origin), do: {prompt, nil}
-
-  @spec put_prepared_marker(map(), marker() | nil) :: map()
-  def put_prepared_marker(meta, nil) when is_map(meta), do: meta
-
-  def put_prepared_marker(meta, marker) when is_map(meta) and is_map(marker),
-    do: Map.put(meta, @prepared_meta_key, marker)
-
-  @spec pop_prepared_marker(map()) :: {marker() | nil, map()}
-  def pop_prepared_marker(meta) when is_map(meta), do: Map.pop(meta, @prepared_meta_key)
-
-  @spec prepared_marker(map()) :: marker() | nil
-  def prepared_marker(meta) when is_map(meta), do: Map.get(meta, @prepared_meta_key)
-  def prepared_marker(_meta), do: nil
+  def prepare(prompt, _session_key, _origin, _opts), do: {prompt, nil}
 
   @doc """
   Deletes `marker` only when it is still the marker stored for `session_key`.
@@ -109,15 +99,23 @@ defmodule LemonRouter.PendingCompaction do
 
   def format_history(_history, _opts), do: ""
 
-  defp prepare_marker(prompt, session_key, marker) do
+  defp prepare_marker(prompt, session_key, marker, opts) do
     if fresh?(marker) do
+      history = LemonCore.RunStore.history(session_key, limit: @history_limit)
+
       transcript =
-        session_key
-        |> LemonCore.RunStore.history(limit: @history_limit)
+        history
+        |> ResumeResolver.filter_history(
+          Keyword.get(opts, :meta, %{}),
+          Keyword.get(opts, :tool_policy),
+          LemonCore.Store,
+          Keyword.get(opts, :run_id)
+        )
         |> format_history(max_chars: @transcript_max_chars)
 
       if transcript == "" do
-        _ = PendingCompactionStore.delete(session_key)
+        # Other contexts can still use this marker; do not consume their history.
+        if history == [], do: PendingCompactionStore.delete(session_key)
         {prompt, nil}
       else
         Logger.warning(

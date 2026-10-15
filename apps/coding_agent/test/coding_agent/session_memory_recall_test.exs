@@ -51,7 +51,7 @@ defmodule CodingAgent.SessionMemoryRecallTest do
     %{agent_id: agent_id}
   end
 
-  defp start_session(agent_id, cwd) do
+  defp start_session(agent_id, cwd, extra_opts \\ []) do
     owner = self()
     inner = Mocks.mock_stream_fn_single(Mocks.assistant_message("ok"))
 
@@ -60,15 +60,24 @@ defmodule CodingAgent.SessionMemoryRecallTest do
       inner.(model, context, options)
     end
 
+    opts =
+      Keyword.merge(
+        [
+          cwd: cwd,
+          workspace_dir: Process.get(:recall_workspace),
+          agent_id: agent_id,
+          session_key: "agent:#{agent_id}:tui:2",
+          model: Mocks.mock_model(),
+          stream_fn: stream_fn
+        ],
+        extra_opts
+      )
+
     session =
       start_supervised!(
-        {Session,
-         cwd: cwd,
-         workspace_dir: Process.get(:recall_workspace),
-         agent_id: agent_id,
-         session_key: "agent:#{agent_id}:tui:2",
-         model: Mocks.mock_model(),
-         stream_fn: stream_fn}
+        Supervisor.child_spec({Session, opts},
+          id: {Session, Keyword.get(extra_opts, :memory_context_key, :legacy)}
+        )
       )
 
     session
@@ -142,6 +151,100 @@ defmodule CodingAgent.SessionMemoryRecallTest do
 
     assert text =~ fact
     assert text =~ "March 14th"
+  end
+
+  test "actual session recall carries admitted private ownership through volatile and static prompt paths",
+       %{agent_id: agent_id} do
+    cwd = Process.get(:recall_cwd)
+    workspace = Process.get(:recall_workspace)
+    File.mkdir_p!(workspace)
+    File.write!(Path.join(workspace, "USER.md"), "Unproven birthday gift obsidian preference.")
+
+    a = %{
+      agent_id: agent_id,
+      cwd: cwd,
+      workspace_dir: workspace,
+      session_scope: :main,
+      session_key: "agent:#{agent_id}:main",
+      invocation_context_key: "invocation-epoch-1",
+      memory_context_key: "private-actor-a",
+      memory_context_verified: true
+    }
+
+    b = %{a | memory_context_key: "private-actor-b"}
+
+    for {context, preference, answer, run} <- [
+          {a, "Priya birthday gift preference is cedar.",
+           "Priya birthday gift order uses saffron.", "actor-a"},
+          {b, "Priya birthday gift preference is copper.",
+           "Priya birthday gift order uses graphite.", "actor-b"}
+        ] do
+      assert {:ok, _} = LemonMemory.Preferences.remember(context, "user", preference)
+      {:ok, identity} = LemonMemory.Project.scope(context)
+
+      meta =
+        context
+        |> Map.take([:invocation_context_key, :memory_context_key, :memory_context_verified])
+        |> Map.put("home_digest", identity.home_digest)
+
+      :ok =
+        LemonMemory.Ingest.handle_finalize_run(%{
+          run_id: "#{agent_id}-#{run}",
+          record: %{events: [], started_at: System.system_time(:millisecond)},
+          summary: %{
+            session_key: "agent:#{agent_id}:prior:#{run}",
+            agent_id: agent_id,
+            workspace_key: cwd,
+            meta: meta,
+            prompt: "Priya birthday gift planning",
+            completed: %{ok: true, answer: answer}
+          }
+        })
+    end
+
+    :sys.get_state(LemonMemory.Ingest)
+
+    assert {:ok, _} =
+             LemonMemory.Preferences.remember(
+               Map.put(a, :shared_memory_grant, true),
+               "user",
+               "Priya birthday gift shared budget is forty."
+             )
+
+    for {key, owned, foreign, history, foreign_history} <- [
+          {"private-actor-a", "cedar", "copper", "saffron", "graphite"},
+          {"private-actor-b", "copper", "cedar", "graphite", "saffron"}
+        ] do
+      session =
+        start_session(agent_id, cwd,
+          invocation_context_key: "invocation-epoch-2",
+          memory_context_key: key,
+          memory_context_verified: true,
+          shared_memory_grant: false
+        )
+
+      assert %{approval_context: %{memory_context_key: ^key, memory_context_verified: true}} =
+               Session.context_snapshot(session)
+
+      :ok = Session.prompt(session, "What birthday gift should I get Priya?")
+      {text, system_prompt} = sent_user_text()
+      assert text =~ owned
+      assert text =~ history
+      assert text =~ "forty"
+
+      for excluded <- [foreign, foreign_history, "March 14th", "obsidian"],
+          do: refute(text =~ excluded)
+
+      assert system_prompt =~ "forty"
+
+      for excluded <- ["cedar", "copper", "saffron", "graphite", "obsidian"],
+          do: refute(system_prompt =~ excluded)
+
+      :ok = stop_supervised({Session, key})
+    end
+
+    assert File.read!(Path.join(workspace, "USER.md")) ==
+             "Unproven birthday gift obsidian preference."
   end
 
   defp eventually(fun, attempts \\ 500)

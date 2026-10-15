@@ -39,6 +39,9 @@ defmodule CodingAgent.CoordinatorEdgeCasesTest do
     }
   end
 
+  # Persona validation is startup work inside the batch deadline. Tests asserting an
+  # invalid persona's :error use this configured deadline so validation, not the
+  # timer, classifies it.
   defp default_coordinator_opts(overrides) do
     Keyword.merge(
       [
@@ -402,7 +405,7 @@ defmodule CodingAgent.CoordinatorEdgeCasesTest do
 
       # First call with invalid subagent
       specs1 = [%{prompt: "Task", subagent: "invalid_type_123"}]
-      results1 = Coordinator.run_subagents(coordinator, specs1, timeout: 100)
+      results1 = Coordinator.run_subagents(coordinator, specs1)
       assert [%{status: :error}] = results1
 
       # Second call should still work
@@ -421,7 +424,7 @@ defmodule CodingAgent.CoordinatorEdgeCasesTest do
       # Multiple errors in a row
       for i <- 1..5 do
         specs = [%{prompt: "Task", subagent: "invalid_#{i}"}]
-        results = Coordinator.run_subagents(coordinator, specs, timeout: 50)
+        results = Coordinator.run_subagents(coordinator, specs)
         assert [%{status: :error}] = results
       end
 
@@ -442,7 +445,7 @@ defmodule CodingAgent.CoordinatorEdgeCasesTest do
         %{prompt: "Valid task 3"}
       ]
 
-      results = Coordinator.run_subagents(coordinator, specs, timeout: 150)
+      results = Coordinator.run_subagents(coordinator, specs)
 
       assert length(results) == 5
 
@@ -656,7 +659,7 @@ defmodule CodingAgent.CoordinatorEdgeCasesTest do
         %{prompt: "Valid task 2"}
       ]
 
-      results = Coordinator.run_subagents(coordinator, specs, timeout: 200)
+      results = Coordinator.run_subagents(coordinator, specs)
 
       assert length(results) == 3
 
@@ -734,7 +737,7 @@ defmodule CodingAgent.CoordinatorEdgeCasesTest do
       coordinator = start_coordinator(cwd: tmp_dir)
 
       specs = [%{prompt: "Task", subagent: "invalid_xyz"}]
-      [result] = Coordinator.run_subagents(coordinator, specs, timeout: 100)
+      [result] = Coordinator.run_subagents(coordinator, specs)
 
       assert result.status == :error
       assert result.error == "Unknown subagent: invalid_xyz"
@@ -766,7 +769,7 @@ defmodule CodingAgent.CoordinatorEdgeCasesTest do
         %{prompt: "Task 5", subagent: "invalid_5"}
       ]
 
-      results = Coordinator.run_subagents(coordinator, specs, timeout: 100)
+      results = Coordinator.run_subagents(coordinator, specs)
 
       # Errors should be at positions 0, 2, 4
       assert Enum.at(results, 0).status == :error
@@ -810,7 +813,7 @@ defmodule CodingAgent.CoordinatorEdgeCasesTest do
 
       # Cause error
       specs1 = [%{prompt: "Task", subagent: "bad_type"}]
-      [result1] = Coordinator.run_subagents(coordinator, specs1, timeout: 100)
+      [result1] = Coordinator.run_subagents(coordinator, specs1)
       assert result1.status == :error
 
       # Coordinator should still function normally
@@ -859,7 +862,7 @@ defmodule CodingAgent.CoordinatorEdgeCasesTest do
           prompt: "Task",
           subagent: "invalid_type",
           description: "Full spec",
-          timeout: 100
+          timeout: 5_000
         )
 
       assert {:error, {:error, "Unknown subagent: invalid_type"}} = result

@@ -47,6 +47,29 @@ defmodule LemonRouter.PolicyTest do
       result = Policy.merge(a, b)
       assert Enum.sort(result[:blocked_tools]) == ["exec", "read", "write"]
     end
+
+    test "native allow and approval floors intersect string and atom keyed overrides" do
+      floor = %{
+        "allow" => ["read", "write"],
+        "deny" => ["bash"],
+        "require_approval" => ["write"],
+        "approvals" => %{"write" => "always"}
+      }
+
+      result =
+        Policy.merge(floor, %{
+          allow: :all,
+          deny: [],
+          require_approval: [],
+          approvals: %{"write" => :never}
+        })
+
+      assert result.allow == ["read", "write"]
+      assert result.deny == ["bash"]
+      assert result.require_approval == ["write"]
+      assert result.approvals["write"] == :always
+      assert Policy.merge(result, %{allow: []}).allow == []
+    end
   end
 
   describe "resolve_for_run/1" do

@@ -52,7 +52,7 @@ defmodule LemonCore.MixProject do
   defp package do
     [
       licenses: ["MIT"],
-      files: ~w(lib mix.exs README.md CHANGELOG.md LICENSE),
+      files: ~w(lib priv mix.exs README.md CHANGELOG.md LICENSE),
       # Tooling for the lemon repository itself stays out of the tarball: the
       # architecture/docs lint (`mix lemon.quality`), the managed-install
       # self-updater (`mix lemon.update`), the repo's benchmark runner and task

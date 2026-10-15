@@ -4,6 +4,7 @@ defmodule CodingAgent.Executor.SessionRunner do
   use GenServer
 
   alias CodingAgent.Session.Presentation
+  alias CodingAgent.Executor.RemoteRequestCodec
   alias CodingAgent.Session.RunTranslator
   alias LemonCore.ResumeToken
   alias LemonGateway.ExecutionRequest
@@ -25,6 +26,7 @@ defmodule CodingAgent.Executor.SessionRunner do
     :run_id,
     :session_key,
     :agent_id,
+    :mcp_session_id,
     :translator
   ]
 
@@ -138,6 +140,7 @@ defmodule CodingAgent.Executor.SessionRunner do
 
   defp init_session(opts) do
     request = Keyword.fetch!(opts, :request)
+    request = %{request | meta: RemoteRequestCodec.normalize_meta(request.meta)}
     run_opts = Keyword.get(opts, :opts, %{})
     sink_pid = Keyword.fetch!(opts, :sink_pid)
     run_ref = Keyword.fetch!(opts, :run_ref)
@@ -185,14 +188,33 @@ defmodule CodingAgent.Executor.SessionRunner do
 
     meta = request.meta || %{}
     workspace_dir = profile_workspace(meta)
+    tool_policy = execution_tool_policy(request, cwd, run_opts)
 
     session_opts =
       [
         model: get_in(meta, [:model]),
         thinking_level: get_in(meta, [:thinking_level]),
         system_prompt: get_in(meta, [:system_prompt]),
+        profile_instructions: get_in(meta, [:profile_instructions]),
         stream_fn: stream_fn,
-        tool_policy: request.tool_policy,
+        tool_policy: tool_policy,
+        invocation_context_key: LemonCore.MapHelpers.get_key(meta, :invocation_context_key),
+        memory_context_key: LemonCore.MapHelpers.get_key(meta, :memory_context_key),
+        memory_context_verified:
+          Map.get(meta, :memory_context_verified, Map.get(meta, "memory_context_verified")) ==
+            true,
+        shared_memory_grant:
+          Map.get(meta, :shared_memory_grant, Map.get(meta, "shared_memory_grant")) == true,
+        invocation_mcp_servers: Map.get(meta, :mcp_servers),
+        native_managed_context: CodingAgent.Tools.Task.Params.managed_metadata?(meta),
+        native_lineage_handle: Map.get(meta, :native_lineage_handle),
+        native_lineage_run_id: Map.get(meta, :native_lineage_run_id),
+        native_source_profile_id: Map.get(meta, :profile_id),
+        native_source_session_key: request.session_key,
+        native_followup_submit: get_opt(run_opts, :native_followup_submit),
+        native_source_floor_fun: get_opt(run_opts, :native_source_floor_fun),
+        invocation_proof: Map.get(meta, :invocation_proof),
+        invocation_proof_verified: Map.get(meta, :invocation_proof_verified) == true,
         approval_timeout_ms: get_opt(run_opts, :approval_timeout_ms),
         acp_session_id: get_in(meta, [:acp_session_id]),
         acp_client_terminal: get_in(meta, [:acp_client_terminal]),
@@ -213,7 +235,7 @@ defmodule CodingAgent.Executor.SessionRunner do
       ]
       |> Presentation.build_session_opts(cwd, run_id, session_key, agent_id)
 
-    case Presentation.start_or_resume_session(resume, session_opts, state) do
+    case start_session(resume, session_opts, state, meta) do
       {:ok, session, session_id, state} ->
         {:ok, _stream} = CodingAgent.Session.subscribe(session, mode: :stream, max_queue: 10_000)
         _unsub = CodingAgent.Session.subscribe(session)
@@ -325,12 +347,72 @@ defmodule CodingAgent.Executor.SessionRunner do
 
   @impl true
   def terminate(_reason, state) do
+    if state.mcp_session_id, do: LemonSkills.McpSession.close(state.mcp_session_id)
+
     if is_pid(state.session) and Process.alive?(state.session) do
       CodingAgent.Session.abort(state.session)
       Presentation.finalize_session(state)
     end
 
     :ok
+  end
+
+  defp start_session(resume, session_opts, state, meta) do
+    with :ok <- register_native_source_floor(session_opts, state.run_id),
+         :ok <- CodingAgent.Workspace.validate_profile_instructions(meta[:profile_instructions]),
+         {:ok, mcp_session_id} <- open_profile_mcp(meta, state.cwd) do
+      state = %{state | mcp_session_id: mcp_session_id}
+      session_opts = Keyword.put(session_opts, :mcp_session_id, mcp_session_id)
+
+      case Presentation.start_or_resume_session(resume, session_opts, state) do
+        {:ok, _session, _session_id, _state} = result ->
+          result
+
+        {:error, _reason} = error ->
+          if mcp_session_id, do: LemonSkills.McpSession.close(mcp_session_id)
+          error
+      end
+    end
+  end
+
+  defp register_native_source_floor(opts, actual_run_id) do
+    source = %{
+      run_id: Keyword.get(opts, :native_lineage_run_id),
+      lineage_handle: Keyword.get(opts, :native_lineage_handle)
+    }
+
+    receipt =
+      Keyword.get(opts, :native_source_floor_fun) ||
+        (&LemonCore.RouterBridge.register_native_source_floor/2)
+
+    if is_nil(source.run_id) and is_nil(source.lineage_handle) do
+      if Keyword.get(opts, :native_managed_context) == true,
+        do: receipt.(%{run_id: actual_run_id}, Keyword.get(opts, :tool_policy)),
+        else: :ok
+    else
+      if source.run_id == actual_run_id and is_binary(source.lineage_handle) do
+        receipt.(source, Keyword.get(opts, :tool_policy))
+      else
+        {:error, :invalid_native_source}
+      end
+    end
+  catch
+    _, _ -> {:error, :native_source_floor_unavailable}
+  end
+
+  defp open_profile_mcp(meta, cwd) do
+    case Map.get(meta, :mcp_servers) do
+      servers when servers in [nil, []] ->
+        {:ok, nil}
+
+      servers ->
+        id = "profile-mcp-#{System.unique_integer([:positive, :monotonic])}"
+
+        case LemonSkills.McpSession.open_http(id, cwd, servers, self()) do
+          :ok -> {:ok, id}
+          {:error, reason} -> {:error, {:profile_mcp, reason}}
+        end
+    end
   end
 
   defp normalize_resume(%ResumeToken{engine: @engine} = token), do: token
@@ -417,6 +499,39 @@ defmodule CodingAgent.Executor.SessionRunner do
   defp async_followups(request) do
     meta = request.meta || %{}
     meta[:async_followups] || meta["async_followups"]
+  end
+
+  @doc false
+  def execution_tool_policy(request, cwd, run_opts \\ %{}) do
+    meta = request.meta || %{}
+    id = request_agent_id(request)
+    profile_id = meta[:profile_id] || meta["profile_id"]
+    config = LemonCore.Config.load_base_from_disk(cwd)
+
+    ids =
+      Enum.uniq([id, profile_id, LemonCore.SessionKey.agent_id(request.session_key || "")]) --
+        [nil]
+
+    destination_policy =
+      Enum.reduce(ids, %{}, fn profile, policy ->
+        LemonCore.ToolPolicy.intersect(policy, get_in(config.agents, [profile, :tool_policy]))
+      end)
+
+    floor =
+      Enum.reduce(ids, destination_policy, fn profile, policy ->
+        case LemonCore.ProfileStore.get(profile) do
+          {:ok, stored} -> LemonCore.ToolPolicy.intersect(policy, stored["toolPolicy"])
+          {:error, :not_found} -> policy
+          {:error, _} -> LemonCore.ToolPolicy.intersect(policy, %{allow: []})
+        end
+      end)
+
+    floor
+    |> LemonCore.ToolPolicy.intersect(request.tool_policy)
+    |> LemonCore.ToolPolicy.intersect(
+      meta[:tool_policy] || meta["tool_policy"] || meta["toolPolicy"]
+    )
+    |> LemonCore.ToolPolicy.intersect(get_opt(run_opts, :tool_policy))
   end
 
   @doc false

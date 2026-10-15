@@ -218,7 +218,9 @@ defmodule LemonControlPlane.EventBridge do
     end
   end
 
-  defp general_event_client?(%{role: role}) when role in [:node, "node"], do: false
+  defp general_event_client?(%{role: role})
+       when role in [:node, "node", :enrollment, "enrollment"], do: false
+
   defp general_event_client?(_info), do: true
 
   defp dispatch_event(clients, event_name, payload, state_version) do
@@ -492,8 +494,8 @@ defmodule LemonControlPlane.EventBridge do
        "sessionKey" => get_field(pending, :session_key),
        "agentId" => get_field(pending, :agent_id),
        "tool" => get_field(pending, :tool),
-       "action" => stringify_keys(get_field(pending, :action) || %{}),
-       "rationale" => get_field(pending, :rationale),
+       "action" => stringify_keys(LemonCore.Redact.map(get_field(pending, :action) || %{})),
+       "rationale" => LemonCore.Redact.text(get_field(pending, :rationale)),
        "requestedAtMs" => get_field(pending, :requested_at_ms),
        "expiresAtMs" => get_field(pending, :expires_at_ms)
      }}
@@ -706,8 +708,8 @@ defmodule LemonControlPlane.EventBridge do
        "invokeId" => payload[:invoke_id],
        "nodeId" => payload[:node_id],
        "method" => payload[:method],
-       "args" => payload[:args],
-       "timeoutMs" => payload[:timeout_ms]
+       "timeoutMs" => payload[:timeout_ms],
+       "cleanup" => %{"includesArgs" => false}
      }}
   end
 

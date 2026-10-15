@@ -38,6 +38,147 @@ defmodule LemonControlPlane.WS.ConnectionTest do
     def handle(_params, _ctx), do: {:ok, %{"usage" => %LemonAi.Types.Usage{input: 1}}}
   end
 
+  test "a fresh old worker cannot inherit durable native or memory privacy capabilities" do
+    suffix = Integer.to_string(System.unique_integer([:positive]))
+    node_id = "privacy-handshake-" <> suffix
+    name = "Privacy Handshake " <> suffix
+    token = "privacy-node-token-" <> suffix
+
+    stored = %{
+      "coding_agent.run" => %{"version" => 1, "nativePrivacyContext" => %{"version" => 1}},
+      "memory.search" => %{"version" => 1, "contextVersion" => 1},
+      "memory.transfer.import" => %{"version" => 1, "contextVersion" => 1},
+      "ordinary.legacy" => true
+    }
+
+    assert :ok =
+             LemonControlPlane.NodeStore.put_node(
+               node_id,
+               %{
+                 id: node_id,
+                 name: name,
+                 type: "coding_agent",
+                 capabilities: stored,
+                 status: :offline
+               }
+             )
+
+    assert {:ok, _} =
+             LemonControlPlane.Auth.TokenStore.store(token, %{
+               "type" => "node",
+               "nodeId" => node_id
+             })
+
+    node_pid = self()
+
+    on_exit(fn ->
+      LemonCore.NodeRegistry.unregister(node_id, node_pid)
+      LemonCore.Store.delete(:session_tokens, token)
+      LemonCore.Store.delete(:session_token_heads, {"node", node_id})
+      LemonControlPlane.NodeStore.release_node_name(name, node_id)
+      LemonCore.Store.delete(:nodes_registry, node_id)
+    end)
+
+    assert {:ok, state} = Connection.init([])
+
+    frame =
+      Jason.encode!(%{
+        "type" => "req",
+        "id" => "old-connect",
+        "method" => "connect",
+        "params" => %{"auth" => %{"token" => token}}
+      })
+
+    assert {:push, {:text, hello}, connected} =
+             Connection.handle_in({frame, [opcode: :text]}, state)
+
+    assert Jason.decode!(hello)["type"] == "hello-ok"
+    assert {:ok, live} = LemonCore.NodeRegistry.resolve_id(node_id)
+    refute get_in(live.metadata, [:capabilities, "coding_agent.run", "nativePrivacyContext"])
+    refute get_in(live.metadata, [:capabilities, "memory.search", "contextVersion"])
+    refute get_in(live.metadata, [:capabilities, "memory.transfer.import", "contextVersion"])
+    assert live.metadata.capabilities["ordinary.legacy"] == true
+
+    assert get_in(LemonControlPlane.NodeStore.get_node(node_id), [
+             :capabilities,
+             "coding_agent.run",
+             "nativePrivacyContext",
+             "version"
+           ]) == 1
+
+    assert {:error, {:native_privacy_context_unsupported, ^node_id}} =
+             LemonCore.NodeRegistry.invoke_node(
+               node_id,
+               "coding_agent.run",
+               %{
+                 "version" => 1,
+                 "prompt" => "private payload",
+                 "meta" => %{"invocation_context_key" => "private-actor"}
+               },
+               expected_pid: self(),
+               expected_generation: live.generation,
+               required_native_privacy_context: 1
+             )
+
+    refute_receive {:node_event, "node.invoke.request", _}
+
+    frame =
+      Jason.encode!(%{
+        "type" => "req",
+        "id" => "fresh-connect",
+        "method" => "connect",
+        "params" => %{"auth" => %{"token" => token}, "capabilities" => stored}
+      })
+
+    assert {:ok, reconnect_state} = Connection.init([])
+
+    assert {:push, {:text, fresh_hello}, _} =
+             Connection.handle_in({frame, [opcode: :text]}, reconnect_state)
+
+    assert Jason.decode!(fresh_hello)["type"] == "hello-ok"
+    assert {:ok, fresh} = LemonCore.NodeRegistry.resolve_id(node_id)
+
+    assert get_in(fresh.metadata, [
+             :capabilities,
+             "coding_agent.run",
+             "nativePrivacyContext",
+             "version"
+           ]) == 1
+
+    assert connected.auth.role == :node
+  end
+
+  test "native conduit budget is larger only for authenticated node methods" do
+    large_policy = %{"allow" => Enum.map(1..12_000, &"tool-#{&1}")}
+
+    body =
+      Jason.encode!(%{
+        "type" => "req",
+        "id" => "large-floor",
+        "method" => "node.native.lineage.floor",
+        "params" => %{
+          "sourceRunId" => "unknown-root",
+          "lineageHandle" => String.duplicate("x", 43),
+          "toolPolicy" => large_policy
+        }
+      })
+
+    node = %Connection{
+      conn_id: "native-budget",
+      connected: true,
+      auth: %{role: :node, client_id: "unknown", scopes: [:invoke]}
+    }
+
+    assert {:ok, _} = Connection.handle_in({body, [opcode: :text]}, node)
+    assert_receive {:method_result, "large-floor", {:error, _}}, 1000
+    operator = %{node | auth: %{role: :operator, scopes: [:admin]}}
+    assert {:push, {:text, rejected}, _} = Connection.handle_in({body, [opcode: :text]}, operator)
+    assert Jason.decode!(rejected)["ok"] == false
+    ordinary = String.replace(body, "node.native.lineage.floor", "node.invoke.event")
+    assert {:push, {:text, rejected}, _} = Connection.handle_in({ordinary, [opcode: :text]}, node)
+    assert Jason.decode!(rejected)["ok"] == false
+  end
+
   test "unsupported inline and async responses preserve the socket with reconciliation errors" do
     :ok = Registry.register(InvalidResultHandler)
     on_exit(fn -> Registry.unregister(InvalidResultHandler.name()) end)

@@ -1,6 +1,11 @@
 defmodule LemonRouter.SessionTransitions do
   @moduledoc """
   Pure queue/state transitions for `LemonRouter.SessionCoordinator`.
+
+  Active controls and follow-up merges require the same private invocation and
+  memory scope, verified memory grants, effective tool policy and exact MCP
+  configuration. A different execution context retains its own collected run;
+  it cannot mutate the active executor.
   """
 
   alias LemonCore.MapHelpers
@@ -24,6 +29,7 @@ defmodule LemonRouter.SessionTransitions do
       requested_mode = submission.queue_mode
       submission = maybe_queue_image_submission(submission)
       submission = maybe_promote_auto_followup(submission, state)
+      submission = isolate_active_context(submission, state)
 
       {next_state, effects} = enqueue_by_mode(state, submission, now_ms, requested_mode)
 
@@ -259,7 +265,8 @@ defmodule LemonRouter.SessionTransitions do
 
     case maybe_merge_followup(state.queue, submission, state.last_followup_at_ms, now_ms) do
       {:merged, queue} ->
-        {%SessionState{state | queue: queue, last_followup_at_ms: now_ms}, []}
+        %SessionState{} = merged_state = record_merge(state, queue)
+        {%SessionState{merged_state | last_followup_at_ms: now_ms}, []}
 
       :no_merge ->
         {%SessionState{state | queue: state.queue ++ [submission], last_followup_at_ms: now_ms},
@@ -372,6 +379,29 @@ defmodule LemonRouter.SessionTransitions do
 
   defp goal_continuation_submission?(_submission), do: false
 
+  defp isolate_active_context(submission, %SessionState{active: active})
+       when is_map(active) do
+    if submission.queue_mode in [:followup, :steer, :steer_backlog, :redirect, :interrupt] and
+         not same_execution_context?(Map.get(active, :submission), submission) do
+      %{submission | queue_mode: :collect}
+    else
+      submission
+    end
+  end
+
+  defp isolate_active_context(submission, _state), do: submission
+
+  defp same_execution_context?(left, right) do
+    execution_context(left) === execution_context(right)
+  end
+
+  defp execution_context(%Submission{execution_request: request}) do
+    LemonRouter.ResumeResolver.execution_context(request)
+  end
+
+  # A recovered pointer without its Submission has no attested capabilities.
+  defp execution_context(_submission), do: {nil, nil, nil, nil, false, false}
+
   defp maybe_promote_auto_followup(%{queue_mode: :followup, meta: meta} = submission, state)
        when not is_nil(state.active) do
     if not image_submission?(submission) and
@@ -433,7 +463,8 @@ defmodule LemonRouter.SessionTransitions do
             :no_merge
 
           {%{queue_mode: :followup} = previous, rest} ->
-            if image_submission?(previous) or async_followup_submission?(previous) do
+            if not same_execution_context?(previous, submission) or image_submission?(previous) or
+                 async_followup_submission?(previous) do
               :no_merge
             else
               {:merged, rest ++ [merge_followup_submission(previous, submission)]}
@@ -452,6 +483,21 @@ defmodule LemonRouter.SessionTransitions do
   end
 
   defp async_followup_submission?(_submission), do: false
+
+  # The newest follow-up remains the execution owner. Keep follower identities
+  # separate from prompt metadata so all durable receipts can follow that owner.
+  defp record_merge(%SessionState{} = state, queue) do
+    previous = List.last(state.queue)
+    survivor = List.last(queue)
+    followers = [previous.run_id | Map.get(state.merged_run_ids, previous.run_id, [])]
+
+    merged_run_ids =
+      state.merged_run_ids
+      |> Map.delete(previous.run_id)
+      |> Map.put(survivor.run_id, followers)
+
+    %SessionState{state | queue: queue, merged_run_ids: merged_run_ids}
+  end
 
   defp merge_followup_submission(previous, current) do
     merged_prompt =
@@ -554,7 +600,8 @@ defmodule LemonRouter.SessionTransitions do
            now_ms
          ) do
       {:merged, queue} ->
-        %SessionState{state | queue: queue, last_followup_at_ms: now_ms}
+        %SessionState{} = merged_state = record_merge(state, queue)
+        %SessionState{merged_state | last_followup_at_ms: now_ms}
 
       :no_merge ->
         %SessionState{

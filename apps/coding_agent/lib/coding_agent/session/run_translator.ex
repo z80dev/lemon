@@ -30,6 +30,7 @@ defmodule CodingAgent.Session.RunTranslator do
     :budget_usage,
     :budget_stop,
     :cancel_reason,
+    usage_occurrences: [],
     accumulated_text: "",
     pending_actions: %{},
     task_actions: %{},
@@ -369,6 +370,21 @@ defmodule CodingAgent.Session.RunTranslator do
   end
 
   def handle_event(%__MODULE__{} = t, {:agent_end, messages}) do
+    t =
+      if t.usage_occurrences == [] do
+        occurrences =
+          Enum.flat_map(messages, fn message ->
+            case CodingAgent.Executor.Usage.occurrence(message) do
+              nil -> []
+              occurrence -> [occurrence]
+            end
+          end)
+
+        %{t | usage_occurrences: Enum.reverse(occurrences)}
+      else
+        t
+      end
+
     if t.cancel_reason do
       emit_completed_error(t, Presentation.cancel_error_message(t.cancel_reason), %{
         messages: messages
@@ -416,7 +432,14 @@ defmodule CodingAgent.Session.RunTranslator do
 
   def handle_event(%__MODULE__{} = t, {:turn_end, _msg, _results}), do: %{t | turns: t.turns + 1}
   def handle_event(%__MODULE__{} = t, {:message_start, _msg}), do: t
-  def handle_event(%__MODULE__{} = t, {:message_end, _msg}), do: t
+
+  def handle_event(%__MODULE__{} = t, {:message_end, message}) do
+    case CodingAgent.Executor.Usage.occurrence(message) do
+      nil -> t
+      occurrence -> %{t | usage_occurrences: [occurrence | t.usage_occurrences]}
+    end
+  end
+
   def handle_event(%__MODULE__{} = t, {:extension_status_report, _report}), do: t
   def handle_event(%__MODULE__{} = t, {:branch_summarized, _info}), do: t
   def handle_event(%__MODULE__{} = t, _event), do: t
@@ -577,8 +600,13 @@ defmodule CodingAgent.Session.RunTranslator do
 
   defp with_budget_usage(usage, _translator), do: usage
 
-  defp with_metrics(usage, t),
-    do: Map.merge(usage || %{}, %{turns: t.turns, tool_errors: t.tool_errors})
+  defp with_metrics(usage, t) do
+    Map.merge(usage || %{}, %{
+      turns: t.turns,
+      tool_errors: t.tool_errors,
+      occurrences: Enum.reverse(t.usage_occurrences)
+    })
+  end
 
   defp emit_action_event(%__MODULE__{} = t, fields) do
     fields =

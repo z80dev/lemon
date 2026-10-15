@@ -29,6 +29,12 @@ Checks:
   - an update round-trip flips versions/current and retains the old version
   - a profile with no published artifact, a non-stable channel without a pin,
     and an unsupported platform are all refused
+  - an exact pin accepts the channel its manifest publishes unless LEMON_CHANNEL
+    is set explicitly, in which case a contradiction is refused
+  - --require-bot installs only the full or min runtime (never backend, sim, or
+    TUI), refuses other profiles before any download, and refuses a staged or
+    already-installed runtime whose capability gate or exact version fails,
+    leaving the live install and no residue
   - bin/lemon doctor forwards the complete argv to the runtime CLI entrypoint
     as arguments: the eval expression stays a fixed constant, option order is
     preserved, and a --bundle path containing literal Elixir interpolation
@@ -38,6 +44,9 @@ Checks:
     invoke it; unavailable terminals print the exact absolute setup command
   - the fixture TUI gates an incomplete installation through setup once, then
     does not repeat setup once its config and credential source are ready
+  - lemon_bot installs independently of the native runtime, validates archive
+    layout and manifest identity/size/digest, and rejects failed or incorrect
+    binary version probes before changing the live backend pointer
 EOF
   exit 2
 }
@@ -135,6 +144,7 @@ TUI_PROFILE="lemon_tui"
 build_fixture_tarball() {
   local version="$1"
   local profile="${2:-$PROFILE}"
+  local bot_ready="${3:-1}"
   local build_dir="$work_dir/build/$version-$profile"
 
   mkdir -p "$build_dir/bin"
@@ -145,6 +155,7 @@ set -eu
 
 VERSION="$version"
 PROFILE="$profile"
+BOT_READY="$bot_ready"
 EOF
 
   cat >> "$build_dir/bin/lemon" <<'EOF'
@@ -194,6 +205,23 @@ fixture_credential="$home_dir/fixture-provider-token"
 case "${1:-}" in
   version)
     echo "lemon $VERSION"
+    ;;
+  node)
+    # The shipped `lemon node capabilities` contract: an exact version pin,
+    # then bot-worker readiness. Anything else is not a supported fixture call.
+    [ "${2:-}" = capabilities ] || exit 2
+    expected="$VERSION"
+    shift 2
+    while [ "$#" -gt 0 ]; do
+      if [ "$1" = --expected-version ]; then
+        expected="${2:-}"
+        shift
+      fi
+      shift
+    done
+    [ "$expected" = "$VERSION" ] || exit 2
+    [ "$BOT_READY" = 1 ] || exit 2
+    printf '{"lemonVersion":"%s","botReady":true}\n' "$VERSION"
     ;;
   daemon|start)
     health_dir="$run_dir/health"
@@ -317,6 +345,7 @@ publish() {
   local tui_tarball="${5:-}"
   local tui_sha_override="${6:-}"
   local profile="${7:-$PROFILE}"
+  local channel="${8:-stable}"
 
   mkdir -p "$dest_dir"
   cp "$tarball" "$dest_dir/"
@@ -354,6 +383,7 @@ publish() {
   MANIFEST_TUI_FILE="$tui_file" \
   MANIFEST_TUI_SHA="$tui_sha" \
   MANIFEST_TUI_SIZE="$tui_size" \
+  MANIFEST_CHANNEL="$channel" \
     python3 - <<'PY'
 import json
 import os
@@ -398,7 +428,7 @@ if os.environ["MANIFEST_TUI_FILE"]:
 manifest = {
     "schema": 2,
     "version": os.environ["MANIFEST_VERSION"],
-    "channel": "stable",
+    "channel": os.environ["MANIFEST_CHANNEL"],
     "commit": "0123456789abcdef0123456789abcdef01234567",
     "built_at": "2026-08-16T00:00:00Z",
     "otp": "28.5",
@@ -887,6 +917,141 @@ else
   fi
 fi
 
+# 8a. A pinned release is identified by its exact version and its manifest's
+#     channel; --require-bot installs only a bot-capable native runtime and
+#     proves its worker APIs before anything is promoted.
+tarball_v6="$(build_fixture_tarball 9999.6.0)"
+tui_v6="$(build_fixture_tui_tarball 9999.6.0)"
+tarball_v7="$(build_fixture_tarball 9999.7.0 "$PROFILE" 0)"
+tarball_v75="$(build_fixture_tarball 9999.7.5)"
+publish "$serve_root/releases/download/v9999.6.0" 9999.6.0 "$tarball_v6" "" "$tui_v6" "" "$PROFILE" preview
+publish "$serve_root/releases/download/v9999.7.0" 9999.7.0 "$tarball_v7" "" "" "" "$PROFILE" preview
+# A manifest whose version differs from what the published runtime reports.
+publish "$serve_root/releases/download/v9999.8.0" 9999.8.0 "$tarball_v75" "" "" "" "$PROFILE" preview
+
+join_flags=(--profile full --require-bot --force --skip-setup --no-modify-path)
+http_requests() { wc -l < "$work_dir/http.log" | tr -d ' '; }
+
+channel_home="$work_dir/home-channel"
+mkdir -p "$channel_home"
+tui_requests_before="$(grep -c lemon_tui "$work_dir/http.log" || true)"
+if run_install "$work_dir/install-bot-1.log" "$channel_home" "$base_url" \
+  LEMON_VERSION=9999.6.0 LEMON_PROFILE=lemon_bot -- "${join_flags[@]}"; then
+  if [ -x "$channel_home/.lemon/versions/9999.6.0/bin/lemon" ] &&
+    [ "$(readlink "$channel_home/.lemon/versions/current")" = "9999.6.0" ] &&
+    [ ! -e "$channel_home/.lemon/versions/9999.6.0/tui" ] &&
+    [ ! -e "$channel_home/.local/bin/lemon-bot" ] &&
+    [ "$(grep -c lemon_tui "$work_dir/http.log" || true)" = "$tui_requests_before" ] &&
+    grep -q "Installed Lemon 9999.6.0 (preview, lemon_runtime_full)" "$work_dir/install-bot-1.log"; then
+    ok "pinned preview release installs the bot-capable runtime without TUI or backend, ignoring ambient lemon_bot"
+  else
+    fail "pinned --require-bot install selected the wrong artifacts"
+    cat "$work_dir/install-bot-1.log" >&2
+  fi
+else
+  fail "pinned preview --require-bot install failed without an explicit channel"
+  cat "$work_dir/install-bot-1.log" >&2
+fi
+
+mismatch_home="$work_dir/home-channel-mismatch"
+mkdir -p "$mismatch_home"
+if run_install "$work_dir/install-bot-2.log" "$mismatch_home" "$base_url" \
+  LEMON_VERSION=9999.6.0 LEMON_CHANNEL=stable -- --require-bot; then
+  fail "an explicit stable channel installed a preview release"
+else
+  if [ ! -d "$mismatch_home/.lemon/versions/9999.6.0" ] &&
+    [ ! -e "$mismatch_home/.lemon/versions/current" ]; then
+    ok "an explicit channel that contradicts the pinned manifest is refused"
+  else
+    fail "explicit channel mismatch was not refused cleanly"
+    cat "$work_dir/install-bot-2.log" >&2
+  fi
+fi
+
+explicit_home="$work_dir/home-channel-explicit"
+mkdir -p "$explicit_home"
+if run_install "$work_dir/install-bot-3.log" "$explicit_home" "$base_url" \
+  LEMON_VERSION=9999.6.0 LEMON_CHANNEL=preview -- --require-bot &&
+  [ -x "$explicit_home/.lemon/versions/9999.6.0/bin/lemon" ]; then
+  ok "an explicit channel matching the pinned manifest installs"
+else
+  fail "explicit matching preview channel did not install"
+  cat "$work_dir/install-bot-3.log" >&2
+fi
+
+profile_home="$work_dir/home-require-profile"
+mkdir -p "$profile_home"
+requests_before="$(http_requests)"
+profile_ok=1
+for profile_case in env-bot flag-bot flag-sim; do
+  case "$profile_case" in
+    env-bot) profile_envs=(LEMON_PROFILE=lemon_bot); profile_args=(--require-bot) ;;
+    flag-bot) profile_envs=(LEMON_PROFILE=full); profile_args=(--profile lemon_bot --require-bot) ;;
+    flag-sim) profile_envs=(LEMON_PROFILE=full); profile_args=(--profile sim --require-bot) ;;
+  esac
+  # Consumer-visible contract: rejected, with no request or state change. The
+  # refusal wording and which guard fires first are not part of it.
+  if run_install "$work_dir/install-bot-profile-$profile_case.log" "$profile_home" "$base_url" \
+    LEMON_VERSION=9999.6.0 "${profile_envs[@]}" -- "${profile_args[@]}"; then
+    profile_ok=0
+    cat "$work_dir/install-bot-profile-$profile_case.log" >&2
+  fi
+done
+if [ "$profile_ok" = 1 ] && [ ! -e "$profile_home/.lemon" ] && [ "$(http_requests)" = "$requests_before" ]; then
+  ok "--require-bot refuses backend and sim profiles before any download or state change"
+else
+  fail "--require-bot accepted or partially acted on a non-worker profile"
+fi
+
+gate_home="$work_dir/home-require-gate"
+mkdir -p "$gate_home"
+if run_install "$work_dir/install-bot-4.log" "$gate_home" "$base_url" LEMON_VERSION=9999.6.0 -- --require-bot; then
+  touch "$gate_home/.lemon/versions/9999.6.0/SENTINEL"
+else
+  fail "baseline --require-bot install failed"
+  cat "$work_dir/install-bot-4.log" >&2
+fi
+if run_install "$work_dir/install-bot-5.log" "$gate_home" "$base_url" LEMON_VERSION=9999.7.0 -- --require-bot; then
+  fail "--require-bot promoted a runtime that lacks the bot worker APIs"
+else
+  if [ "$(readlink "$gate_home/.lemon/versions/current")" = "9999.6.0" ] &&
+    [ -f "$gate_home/.lemon/versions/9999.6.0/SENTINEL" ] &&
+    [ ! -e "$gate_home/.lemon/versions/9999.7.0" ] &&
+    [ -z "$(find "$gate_home/.lemon/versions" -maxdepth 1 -name '*.partial' 2>/dev/null)" ] &&
+    [ -z "$(find "$gate_home/.lemon/tmp" -mindepth 1 2>/dev/null)" ]; then
+    ok "a runtime failing the capability gate is refused before promotion, leaving the live install and no residue"
+  else
+    fail "capability gate refusal left the install inconsistent"
+    cat "$work_dir/install-bot-5.log" >&2
+  fi
+fi
+
+if run_install "$work_dir/install-bot-6.log" "$gate_home" "$base_url" LEMON_VERSION=9999.7.0; then
+  touch "$gate_home/.lemon/versions/9999.7.0/SENTINEL"
+  if run_install "$work_dir/install-bot-7.log" "$gate_home" "$base_url" LEMON_VERSION=9999.7.0 -- --require-bot; then
+    fail "--require-bot reused an already-installed runtime without the worker APIs"
+  elif [ -f "$gate_home/.lemon/versions/9999.7.0/SENTINEL" ] &&
+    [ "$(readlink "$gate_home/.lemon/versions/current")" = "9999.7.0" ]; then
+    ok "--require-bot gates the already-installed fast path instead of trusting the version"
+  else
+    fail "already-installed capability refusal was not explicit"
+    cat "$work_dir/install-bot-7.log" >&2
+  fi
+else
+  fail "ordinary install of the fixture non-bot runtime failed"
+  cat "$work_dir/install-bot-6.log" >&2
+fi
+
+version_home="$work_dir/home-require-version"
+mkdir -p "$version_home"
+if run_install "$work_dir/install-bot-8.log" "$version_home" "$base_url" LEMON_VERSION=9999.8.0 -- --require-bot; then
+  fail "--require-bot installed a runtime that reports a different version than its manifest"
+elif [ ! -e "$version_home/.lemon/versions/9999.8.0" ] && [ ! -e "$version_home/.lemon/versions/current" ]; then
+  ok "--require-bot refuses a runtime whose reported version differs from the manifest"
+else
+  fail "version mismatch refusal left an install behind"
+fi
+
 # 8b. --resolve-version prints only the version an install would pick, unpinned
 #     or pinned, and installs nothing. stderr (curl progress) is kept apart.
 resolve_home="$work_dir/home-resolve"
@@ -1237,6 +1402,216 @@ arg:--verbose"
     fail "doctor argv did not cross the exec boundary verbatim"
     printf 'expected:\n%s\n\ngot:\n%s\n' "$expected_doctor_out" "$doctor_out" >&2
   fi
+fi
+
+# Backend cases exercise the installer as a subprocess against real tar files.
+# Fixture binaries model the version command; compiled runtime behavior is
+# covered by the backend artifact verifier, not by these installer fixtures.
+if python3 - "$INSTALL_SH" "$work_dir" "$base_url" "$PLATFORM" "$home_dir" <<'PY'
+import hashlib
+import io
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+import tarfile
+
+installer, work, base, platform, home = sys.argv[1:]
+work = Path(work)
+home = Path(home)
+serve = work / "serve"
+root = home / ".lemon/lemon_bot"
+native_current = os.readlink(home / ".lemon/versions/current")
+version = "9999.8.0"
+filename = f"lemon-{version}-stable-{platform}-lemon_bot.tar.gz"
+os_name, arch = platform.split("-", 1)
+native_platform = {"linux-x86_64": "linux-x64", "linux-arm64": "linux-arm64", "darwin-arm64": "darwin-arm64"}[platform]
+checks = 0
+
+def publish_case(case, mutation=None, extra=None, binary=None):
+    dest = serve / case / "releases/latest/download"
+    dest.mkdir(parents=True)
+    archive_path = dest / filename
+    payloads = {
+        "bot/bin/lemon-bot": binary or (
+            f'#!/bin/sh\n[ "$#" = 1 ] && [ "$1" = --version ] || exit 2\n'
+            f'[ -z "${{LEMON_BOT_OPERATOR_TOKEN:-}}" ] || exit 3\n'
+            f'printf "lemon-bot {version}\\n"\n'
+        ).encode(),
+        "bot/web/index.html": b"<html>backend fixture</html>",
+        f"bot/node_modules/@img/sharp-{native_platform}/package.json": json.dumps({"name": f"@img/sharp-{native_platform}"}).encode(),
+        f"bot/node_modules/@img/sharp-libvips-{native_platform}/package.json": json.dumps({"name": f"@img/sharp-libvips-{native_platform}"}).encode(),
+        f"bot/node_modules/@img/sharp-{native_platform}/lib/sharp-{native_platform}.node": b"native fixture",
+    }
+    with tarfile.open(archive_path, "w:gz") as archive:
+        for name, data in payloads.items():
+            entry = tarfile.TarInfo(name)
+            entry.size = len(data)
+            entry.mode = 0o755 if name.endswith("lemon-bot") else 0o644
+            archive.addfile(entry, io.BytesIO(data))
+        if extra:
+            entry, data = extra
+            archive.addfile(entry, io.BytesIO(data) if data else None)
+    data = archive_path.read_bytes()
+    manifest = {
+        "schema": 2, "version": version, "channel": "stable",
+        "artifacts": [{
+            "file": filename, "profile": "lemon_bot", "platform": platform,
+            "os": os_name, "arch": arch, "size": len(data),
+            "sha256": hashlib.sha256(data).hexdigest(),
+        }],
+    }
+    if mutation:
+        mutation(manifest)
+    (dest / "manifest.json").write_text(json.dumps(manifest))
+    return f"{base}/{case}"
+
+def install(url, *args, profile_env=False):
+    env = {
+        "HOME": str(home), "PATH": os.environ["PATH"], "SHELL": "/bin/sh",
+        "LEMON_INSTALL_BASE_URL": url, "LEMON_INSTALL_IGNORE_GLIBC": "1",
+    }
+    command = ["sh", installer, "--no-modify-path", "--skip-setup"]
+    if profile_env:
+        env["LEMON_PROFILE"] = "lemon_bot"
+    else:
+        command += ["--profile", "lemon_bot"]
+    result = subprocess.run(
+        command + list(args), env=env, stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT, timeout=45,
+    )
+    return result
+
+def require(condition, message):
+    global checks
+    if not condition:
+        raise AssertionError(message)
+    checks += 1
+    print(f"ok {message}")
+
+try:
+    valid = publish_case("bot-valid")
+    result = install(valid)
+    require(result.returncode == 0, f"backend-only install succeeds: {result.stdout.decode()}")
+    key = f"{version}-stable-{platform}"
+    live = f"versions/{key}"
+    require(os.readlink(root / "current") == live, "backend current pointer uses isolated versions")
+    launcher = home / ".local/bin/lemon-bot"
+    require(os.readlink(launcher) == str(root / "current/bot/bin/lemon-bot"),
+            "backend launcher resolves through isolated current")
+    require(os.readlink(home / ".lemon/versions/current") == native_current,
+            "backend install leaves native current unchanged")
+    require(not (root / live / "bin/lemon").exists() and
+            not (root / live / "tui").exists(), "backend install needs neither BEAM nor TUI")
+    state = root / "operator-state"
+    state.write_text("retain me")
+    sentinel = root / live / "sentinel"
+    sentinel.write_text("no re-extraction")
+    require(install(valid, profile_env=True).returncode == 0 and sentinel.exists(),
+            "backend environment profile is idempotent")
+    require(install(valid, "--force").returncode == 0 and not sentinel.exists()
+            and state.read_text() == "retain me", "forced backend reinstall preserves external state")
+
+    mutations = {
+        "schema": lambda m: m.update(schema=1),
+        "platform": lambda m: m["artifacts"][0].update(platform="unknown"),
+        "profile": lambda m: m["artifacts"][0].update(profile="lemon_runtime_full"),
+        "channel": lambda m: m.update(channel="preview"),
+        "version-path": lambda m: m.update(version="../escape"),
+        "arch": lambda m: m["artifacts"][0].update(arch="unknown"),
+        "size": lambda m: m["artifacts"][0].update(size=m["artifacts"][0]["size"] + 1),
+        "digest": lambda m: m["artifacts"][0].update(sha256="0" * 64),
+        "duplicate": lambda m: m["artifacts"].append(dict(m["artifacts"][0])),
+    }
+    for case, mutation in mutations.items():
+        result = install(publish_case(f"bot-{case}", mutation), "--force")
+        require(result.returncode != 0 and os.readlink(root / "current") == live
+                and state.read_text() == "retain me", f"backend rejects {case} without promotion")
+
+    traversal = tarfile.TarInfo("../escaped")
+    traversal.size = 6
+    absolute = tarfile.TarInfo(str(work / "escaped-absolute"))
+    absolute.size = 6
+    symlink = tarfile.TarInfo("bot/web/escape")
+    symlink.type = tarfile.SYMTYPE
+    symlink.linkname = "../../../escaped-link"
+    hardlink = tarfile.TarInfo("bot/web/hardlink")
+    hardlink.type = tarfile.LNKTYPE
+    hardlink.linkname = "bot/bin/lemon-bot"
+    fifo = tarfile.TarInfo("bot/web/fifo")
+    fifo.type = tarfile.FIFOTYPE
+    for case, entry, data in [
+        ("traversal", traversal, b"escape"),
+        ("absolute", absolute, b"escape"),
+        ("symlink", symlink, b""),
+        ("hardlink", hardlink, b""),
+        ("fifo", fifo, b""),
+    ]:
+        result = install(publish_case(f"bot-{case}", extra=(entry, data)), "--force")
+        require(result.returncode != 0 and os.readlink(root / "current") == live,
+                f"backend rejects unsafe {case} archive without promotion")
+    require(not (root / "versions/escaped").exists() and not (work / "escaped-absolute").exists(),
+            "unsafe backend archives write no escaped files")
+    for case, binary in [
+        ("wrong-version", b'#!/bin/sh\nprintf "lemon-bot wrong\\n"\n'),
+        ("failed-version", b'#!/bin/sh\nexit 1\n'),
+        ("noisy-version", f'#!/bin/sh\nprintf "banner\\nlemon-bot {version}\\n"\n'.encode()),
+    ]:
+        result = install(publish_case(f"bot-{case}", binary=binary), "--force")
+        require(result.returncode != 0 and os.readlink(root / "current") == live,
+                f"backend rejects {case} before promotion")
+    smoke_binary = f"""#!/bin/sh
+if [ "${{1:-}}" = --version ]; then
+  printf 'lemon-bot {version}\\n'
+  exit 0
+fi
+exec python3 - <<'SERVER'
+import http.server
+import os
+from pathlib import Path
+state = Path(os.environ["LEMON_BOT_DATA_DIR"])
+state.mkdir(parents=True)
+(state / "smoke").write_text("isolated")
+class Handler(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        if self.path not in ("/", "/v1/setup"):
+            self.send_error(404)
+            return
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"fixture ready")
+http.server.HTTPServer((os.environ["LEMON_BOT_HOST"], int(os.environ["LEMON_BOT_PORT"])), Handler).serve_forever()
+SERVER
+""".encode()
+    require(install(publish_case("bot-smoke", binary=smoke_binary), "--force", "--verify").returncode == 0
+            and not (root / "smoke").exists(),
+            "backend --verify boots HTTP in isolated external state before promotion")
+    require(install(publish_case("bot-slow", binary=b"#!/bin/sh\nsleep 20\n"), "--force").returncode != 0
+            and os.readlink(root / "current") == live,
+            "backend version probe has a bounded deadline without promotion")
+    require(not list((root / "tmp").iterdir()) and
+            not list((root / "versions").glob("*.partial")) and
+            not list((root / "versions").glob("*.previous.*")),
+            "backend failures leave no download or staging residue")
+    require(os.readlink(home / ".lemon/versions/current") == native_current,
+            "backend security refusals preserve native runtime")
+    version = "9999.9.0"
+    filename = f"lemon-{version}-stable-{platform}-lemon_bot.tar.gz"
+    require(install(publish_case("bot-update")).returncode == 0 and
+            os.readlink(root / "current") == f"versions/{version}-stable-{platform}" and
+            (root / live).is_dir() and state.read_text() == "retain me" and
+            os.readlink(home / ".lemon/versions/current") == native_current,
+            "backend update retains previous version, state, and independent native current")
+except (AssertionError, OSError, subprocess.TimeoutExpired) as error:
+    print(f"error backend installer: {error}", file=sys.stderr)
+    raise SystemExit(1)
+print(f"verified backend installer across {checks} behavioral checks")
+PY
+then
+  ok "backend installer behavioral and security cases"
+else
+  fail "backend installer behavioral or security cases"
 fi
 
 echo

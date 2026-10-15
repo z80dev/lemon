@@ -81,7 +81,12 @@ defmodule LemonControlPlane.WS.Connection do
   def handle_in({text, [opcode: :text]}, state) do
     max_payload = LemonControlPlane.max_payload()
 
-    if byte_size(text) > max_payload do
+    receive_limit =
+      if native_node_connection?(state),
+        do: max(max_payload, LemonCore.ToolPolicy.execution_max_bytes()),
+        else: max_payload
+
+    if byte_size(text) > receive_limit do
       error = Errors.invalid_request("Payload exceeds maxPayload policy")
       {:push, {:text, Frames.encode_response("unknown", {:error, error})}, state}
     else
@@ -95,7 +100,7 @@ defmodule LemonControlPlane.WS.Connection do
   end
 
   defp parse_text_frame(text, state, max_payload) do
-    case Frames.parse(text, max_payload: max_payload) do
+    case parse_authenticated_frame(text, state, max_payload) do
       {:ok, frame} ->
         handle_frame(frame, state)
 
@@ -111,6 +116,31 @@ defmodule LemonControlPlane.WS.Connection do
       when limit in [:max_bytes, :max_depth, :max_items, :not_json_safe] ->
         error = Errors.invalid_request("Payload violates JSON boundary policy")
         {:push, {:text, Frames.encode_response("unknown", {:error, error})}, state}
+    end
+  end
+
+  defp native_node_connection?(state),
+    do: state.connected && is_map(state.auth) && state.auth[:role] == :node
+
+  defp parse_authenticated_frame(text, state, max_payload) do
+    if native_node_connection?(state) do
+      case Jason.decode(text) do
+        {:ok, %{"type" => "req", "id" => id, "method" => method} = decoded}
+        when is_binary(id) and
+               method in ["node.native.followup", "node.native.lineage.floor"] ->
+          with {:ok, _} <-
+                 LemonCore.JSONPayload.validate(
+                   decoded,
+                   LemonCore.ToolPolicy.execution_json_opts()
+                 ) do
+            {:ok, %{type: :req, id: id, method: method, params: Map.get(decoded, "params")}}
+          end
+
+        _ ->
+          Frames.parse(text, max_payload: max_payload)
+      end
+    else
+      Frames.parse(text, max_payload: max_payload)
     end
   end
 
@@ -250,7 +280,7 @@ defmodule LemonControlPlane.WS.Connection do
   defp handle_connect(id, params, state) do
     case Authorize.from_params(params || %{}, local?: state.local?) do
       {:ok, auth} ->
-        case register_node_connection(auth) do
+        case register_node_connection(auth, params || %{}) do
           :ok ->
             finish_connect(auth, state)
 
@@ -356,7 +386,7 @@ defmodule LemonControlPlane.WS.Connection do
     end
   end
 
-  defp register_node_connection(%{role: :node} = auth) do
+  defp register_node_connection(%{role: :node} = auth, params) do
     node_id = auth.client_id
     identity = Map.get(auth, :identity)
 
@@ -373,19 +403,19 @@ defmodule LemonControlPlane.WS.Connection do
             {:error, Errors.unauthorized("Paired node was not found")}
 
           node ->
-            register_durable_node(node_id, node, auth)
+            register_durable_node(node_id, node, auth, params)
         end
     end
   end
 
-  defp register_node_connection(_auth), do: :ok
+  defp register_node_connection(_auth, _params), do: :ok
 
-  defp register_durable_node(node_id, node, auth) do
+  defp register_durable_node(node_id, node, auth, params) do
     name = get_field(node, :name)
 
     with true <- is_binary(name) and String.trim(name) != "",
          :ok <- NodeStore.reserve_node_name(name, node_id),
-         :ok <- register_live_node(node_id, name, node, auth) do
+         :ok <- register_live_node(node_id, name, node, auth, params) do
       case mark_node_status(node_id, node, :online) do
         :ok ->
           :ok
@@ -409,13 +439,44 @@ defmodule LemonControlPlane.WS.Connection do
     end
   end
 
-  defp register_live_node(node_id, name, node, auth) do
+  defp register_live_node(node_id, name, node, auth, params) do
     generation = get_field(auth.identity || %{}, :sessionGeneration) || 0
 
     LemonCore.NodeRegistry.register_session(node_id, name, self(), generation, %{
       type: get_field(node, :type),
-      capabilities: get_field(node, :capabilities) || %{}
+      capabilities: live_capabilities(node, params)
     })
+  end
+
+  defp live_capabilities(node, params) do
+    stored = get_field(node, :capabilities)
+    stored = if is_map(stored), do: stored, else: %{}
+
+    legacy =
+      Map.new(stored, fn {method, descriptor} ->
+        descriptor =
+          cond do
+            is_map(descriptor) && method in ["coding_agent.run", :"coding_agent.run"] ->
+              Map.drop(descriptor, ["nativePrivacyContext", :nativePrivacyContext])
+
+            is_map(descriptor) && is_binary(method) && String.starts_with?(method, "memory.") ->
+              Map.drop(descriptor, ["contextVersion", :contextVersion])
+
+            is_map(descriptor) && is_atom(method) &&
+                String.starts_with?(Atom.to_string(method), "memory.") ->
+              Map.drop(descriptor, ["contextVersion", :contextVersion])
+
+            true ->
+              descriptor
+          end
+
+        {method, descriptor}
+      end)
+
+    case Map.get(params, :capabilities, Map.get(params, "capabilities")) do
+      current when is_map(current) -> Map.merge(legacy, current)
+      _ -> legacy
+    end
   end
 
   defp unregister_node_connection(%{auth: %{role: :node, client_id: node_id}})

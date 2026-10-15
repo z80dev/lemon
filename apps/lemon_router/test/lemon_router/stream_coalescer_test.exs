@@ -174,9 +174,41 @@ defmodule LemonRouter.StreamCoalescerTest do
 
   @answer_cap 100_000
 
+  defp isolate_answer_dispatcher do
+    previous_dispatcher = Application.fetch_env(:lemon_router, :dispatcher)
+    Application.put_env(:lemon_router, :dispatcher, IntentDispatcherStub)
+    :persistent_term.put({IntentDispatcherStub, :test_pid}, self())
+
+    on_exit(fn ->
+      :persistent_term.erase({IntentDispatcherStub, :test_pid})
+
+      case previous_dispatcher do
+        {:ok, dispatcher} -> Application.put_env(:lemon_router, :dispatcher, dispatcher)
+        :error -> Application.delete_env(:lemon_router, :dispatcher)
+      end
+    end)
+
+    :ok
+  end
+
   # `ingest_delta` casts; `current_text` is a call on the same mailbox, so it
   # lands behind every queued delta. No sleeping needed to synchronise.
   defp stream_answer(session_key, run_id, chunk, count, seq_offset \\ 0) do
+    # Own these aggregation-only streams so no idle flush survives the test or
+    # runs through a different dispatcher after its application env is restored.
+    case Registry.lookup(LemonRouter.CoalescerRegistry, {session_key, "telegram"}) do
+      [] ->
+        start_supervised!(
+          Supervisor.child_spec(
+            {StreamCoalescer, session_key: session_key, channel_id: "telegram"},
+            id: {:answer_cap, session_key}
+          )
+        )
+
+      [_] ->
+        :ok
+    end
+
     for seq <- 1..count do
       assert :ok =
                StreamCoalescer.ingest_delta(
@@ -188,7 +220,9 @@ defmodule LemonRouter.StreamCoalescerTest do
                )
     end
 
-    StreamCoalescer.current_text(session_key, "telegram", run_id)
+    text = StreamCoalescer.current_text(session_key, "telegram", run_id)
+    assert is_binary(text)
+    text
   end
 
   defp microseconds_per_delta(session_key, run_id, chunk, count, seq_offset) do
@@ -199,6 +233,10 @@ defmodule LemonRouter.StreamCoalescerTest do
   end
 
   describe "byte-cap invariant (property)" do
+    setup do
+      isolate_answer_dispatcher()
+    end
+
     # A multibyte "unit" whose byte width varies, so the retained tail's leading
     # boundary lands inside a codepoint for some (pad, width) combinations —
     # exactly the case drop_partial_codepoint/1 exists to handle.
@@ -226,10 +264,7 @@ defmodule LemonRouter.StreamCoalescerTest do
         session_key = "agent:prop-#{suffix}:telegram:bot#{suffix}:dm:user#{suffix}"
         run_id = "run_prop_#{suffix}"
 
-        assert :ok =
-                 StreamCoalescer.ingest_delta(session_key, "telegram", run_id, 1, text)
-
-        capped = StreamCoalescer.current_text(session_key, "telegram", run_id)
+        capped = stream_answer(session_key, run_id, text, 1)
 
         assert is_binary(capped)
         assert String.valid?(capped), "capped text must be valid UTF-8"
@@ -1386,6 +1421,13 @@ defmodule LemonRouter.StreamCoalescerTest do
   end
 
   describe "accumulated answer cap" do
+    # Channel rendering/outbox work is covered separately. Queuing 150 full
+    # snapshots through it makes current_text wait on unrelated synchronous work
+    # and measures renderer/backlog cost instead of the coalescer's byte trim.
+    setup do
+      isolate_answer_dispatcher()
+    end
+
     # Regression guards for the trim cliff. `cap_full_text/1` used to trim with
     # `String.length/1` + `String.slice/3`, which walk the binary grapheme by
     # grapheme: past the cap that cost milliseconds per delta, and for
@@ -1414,17 +1456,26 @@ defmodule LemonRouter.StreamCoalescerTest do
       # 150 x 1,000 three-byte characters = 450 KB. The grapheme-based trim
       # returned this untouched, so this assertion is the regression guard.
       chunk = String.duplicate("€", 1_000)
+      run_id = "run_#{System.unique_integer([:positive])}"
 
       text =
         stream_answer(
           "agent:test:telegram:bot:dm:cap_multibyte",
-          "run_#{System.unique_integer([:positive])}",
+          run_id,
           chunk,
           150
         )
 
       assert byte_size(text) <= @answer_cap
       assert String.valid?(text)
+      assert String.ends_with?(text, chunk)
+
+      assert_receive {:dispatched_intent,
+                      %DeliveryIntent{
+                        run_id: ^run_id,
+                        kind: :stream_snapshot,
+                        body: %{seq: 150, text: ^text}
+                      }}
     end
 
     test "never leaves a partial codepoint at the head of the kept tail" do
@@ -1445,6 +1496,7 @@ defmodule LemonRouter.StreamCoalescerTest do
 
         assert String.valid?(text), "invalid UTF-8 at pad offset #{pad}"
         assert byte_size(text) <= @answer_cap
+        assert String.ends_with?(text, chunk)
       end
     end
 

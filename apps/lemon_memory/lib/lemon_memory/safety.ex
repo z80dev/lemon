@@ -8,6 +8,34 @@ defmodule LemonMemory.Safety do
 
   alias LemonMemory.Document
 
+  @unsafe_controls ~r/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F\x{200B}-\x{200F}\x{202A}-\x{202E}\x{2066}-\x{2069}\x{FEFF}]/u
+  @injection ~r/ignore (all )?(previous|prior|above) instructions|disregard (all )?(previous|prior|above) instructions|reveal (the )?(system|developer) prompt|system prompt|developer message|<\|\/?(?:system|developer|assistant|user)\|>/iu
+
+  @doc "Screen prompt-injected notes without changing their accepted bytes."
+  def validate_note(text, opts \\ []) do
+    max_bytes = Keyword.get(opts, :max_bytes, 4_096)
+
+    cond do
+      not is_binary(text) -> {:error, :invalid_text}
+      not String.valid?(text) or byte_size(text) > max_bytes -> {:error, :invalid_text}
+      String.trim(text) == "" -> {:error, :empty_text}
+      note_refusal_reason(text) != nil -> {:error, :unsafe_text}
+      true -> :ok
+    end
+  end
+
+  @doc "Detailed screening reason, shared by private and legacy preference owners."
+  def note_refusal_reason(text) when is_binary(text) do
+    cond do
+      contains_secret?(text) -> :secret
+      Regex.match?(@unsafe_controls, text) -> :invisible
+      Regex.match?(@injection, text) -> :prompt_injection
+      true -> nil
+    end
+  end
+
+  def note_refusal_reason(_), do: nil
+
   @doc """
   Returns true when text contains common secret-looking material.
   """

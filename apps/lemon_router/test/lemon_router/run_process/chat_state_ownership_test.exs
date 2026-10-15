@@ -10,13 +10,19 @@ defmodule LemonRouter.RunProcess.ChatStateOwnershipTest do
 
   use ExUnit.Case, async: false
 
-  alias LemonCore.{ChatState, ChatStateStore, Event, ResumeToken}
+  alias LemonCore.{ChatState, ChatStateStore, Event, ExecutionCommand, ResumeToken}
   alias LemonRouter.RunProcess.CompactionTrigger
+  alias LemonRouter.ResumeResolver
 
   setup do
     session_key = "agent:chat_state_owner_#{System.unique_integer([:positive])}:main"
     on_exit(fn -> ChatStateStore.delete(session_key) end)
-    %{session_key: session_key, state: %{session_key: session_key, run_id: "run_1"}}
+    request = %ExecutionCommand{run_id: session_key, session_key: session_key, prompt: "turn"}
+
+    %{
+      session_key: session_key,
+      state: %{session_key: session_key, run_id: request.run_id, execution_request: request}
+    }
   end
 
   defp completed_event(fields) do
@@ -81,6 +87,57 @@ defmodule LemonRouter.RunProcess.ChatStateOwnershipTest do
 
       assert :ok = CompactionTrigger.maybe_store_chat_state(state, event)
       assert ChatStateStore.get(key) == nil
+    end
+
+    test "publishes native resume only after binding the owning request, not completion metadata",
+         %{
+           session_key: key,
+           state: state
+         } do
+      token = %ResumeToken{engine: "lemon", value: key}
+
+      meta = %{
+        invocation_context_key: "owner",
+        memory_context_key: "private-room",
+        mcp_servers: []
+      }
+
+      policy = %{blocked_tools: ["bash"]}
+      request = %{state.execution_request | meta: meta, tool_policy: policy}
+      state = %{state | execution_request: request}
+
+      event =
+        completed_event(%{
+          resume: token,
+          meta: %{
+            invocation_context_key: "forged",
+            memory_context_key: "shared-room",
+            mcp_servers: nil
+          }
+        })
+
+      assert :ok = CompactionTrigger.maybe_store_chat_state(state, event)
+      assert ChatStateStore.get(key).last_resume_token == token.value
+      assert {:ok, ^token, :auto} = ResumeResolver.resolve(nil, key, meta, policy)
+
+      assert {:ok, nil, nil} =
+               ResumeResolver.resolve(
+                 nil,
+                 key,
+                 %{meta | invocation_context_key: "forged"},
+                 policy
+               )
+
+      other = %{request | meta: %{meta | invocation_context_key: "other"}}
+
+      assert :ok =
+               CompactionTrigger.maybe_store_chat_state(
+                 %{state | execution_request: other},
+                 event
+               )
+
+      assert {:ok, ^token, :auto} = ResumeResolver.resolve(nil, key, meta, policy)
+      assert {:ok, nil, nil} = ResumeResolver.resolve(nil, key, other.meta, policy)
     end
   end
 

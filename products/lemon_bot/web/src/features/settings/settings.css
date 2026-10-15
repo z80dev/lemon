@@ -1,0 +1,42 @@
+.settings-page { max-width: 1180px; margin-inline: auto; }
+.settings-page fieldset { min-width: 0; border: 0; margin: 0; padding: 0; }
+.settings-page .grid { grid-template-columns: repeat(auto-fit, minmax(min(100%, 230px), 1fr)); }
+.settings-page .row { flex-wrap: wrap; }
+.settings-page .panel { overflow-wrap: anywhere; }
+.settings-page .list { margin: 0; padding: 0; list-style: none; }
+.settings-page .list-row { gap: 1rem; flex-wrap: wrap; }
+.settings-page .field, .settings-page label { min-width: 0; }
+.settings-page input:not([type=checkbox]):not([type=range]), .settings-page select, .settings-page textarea { max-width: 100%; }
+.settings-page textarea { min-height: 6rem; resize: vertical; }
+.settings-tabs { flex-wrap: wrap; margin-block-end: 1.25rem; }
+.settings-toggle { display: flex; align-items: center; justify-content: space-between; gap: 1.25rem; padding-block: .7rem; }
+.settings-toggle > span { display: grid; gap: .25rem; }
+.settings-toggle input { flex-shrink: 0; width: 1.15rem; height: 1.15rem; accent-color: currentColor; }
+.settings-facts { display: grid; grid-template-columns: minmax(9rem, .7fr) minmax(0, 1.3fr); gap: .6rem 1.2rem; margin-block: .5rem; }
+.settings-facts dt { font-weight: 600; }
+.settings-facts dd { margin: 0; overflow-wrap: anywhere; }
+.settings-metrics .card { display: grid; gap: .6rem; }
+.settings-metrics strong { font-size: clamp(1.1rem, 2.8vw, 1.8rem); font-variant-numeric: tabular-nums; }
+.settings-bars { display: grid; gap: .75rem; margin: 0; }
+.settings-bar-row { display: grid; grid-template-columns: minmax(7rem, 1fr) minmax(5rem, 3fr) minmax(4rem, auto); align-items: center; gap: 1rem; font-variant-numeric: tabular-nums; }
+.settings-bar-row meter { width: 100%; height: 1.1rem; }
+.settings-page table { width: 100%; border-collapse: collapse; text-align: start; font-variant-numeric: tabular-nums; }
+.settings-page th, .settings-page td { padding: .8rem; border-bottom: 1px solid color-mix(in srgb, currentColor 15%, transparent); text-align: start; }
+.settings-page caption { text-align: start; padding-block: .5rem 1rem; }
+.settings-account-avatar { width: 5rem; height: 5rem; border-radius: 50%; object-fit: cover; display: grid; place-items: center; font-size: 2rem; }
+.settings-confirm { border: 2px solid color-mix(in srgb, currentColor 40%, transparent); }
+.settings-unread { border-inline-start: 3px solid currentColor; }
+.settings-inbox { display: grid; gap: 1rem; }
+.settings-notice-body { white-space: pre-wrap; }
+.settings-page audio { width: min(100%, 32rem); }
+.settings-page :focus-visible { outline: 3px solid currentColor; outline-offset: 3px; }
+@media (max-width: 600px) {
+  .settings-facts { grid-template-columns: 1fr; gap: .25rem; }
+  .settings-facts dd { margin-block-end: .65rem; }
+  .settings-bar-row { grid-template-columns: 1fr minmax(3rem, auto); }
+  .settings-bar-row > span:first-child { grid-column: 1 / -1; }
+  .settings-tabs { gap: .35rem; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .settings-page *, .settings-page *::before, .settings-page *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
+}

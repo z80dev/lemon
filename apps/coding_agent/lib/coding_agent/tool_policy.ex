@@ -36,137 +36,6 @@ defmodule CodingAgent.ToolPolicy do
           | :no_external
           | :custom
 
-  @read_tools ["read", "read_skill", "recall", "grep", "find", "ls"]
-
-  @minimal_core_tools [
-    "read",
-    "read_skill",
-    "skill_manage",
-    "remember",
-    "recall",
-    "checkpoint",
-    "write",
-    "edit",
-    "patch",
-    "ast_grep",
-    "bash",
-    "bash_output",
-    "kill_process",
-    "grep",
-    "find",
-    "ls",
-    "webfetch",
-    "websearch",
-    "browser_tabs",
-    "browser_tab_open",
-    "browser_tab_activate",
-    "browser_tab_close",
-    "browser_navigate",
-    "browser_snapshot",
-    "browser_get_content",
-    "browser_click",
-    "browser_type",
-    "browser_hover",
-    "browser_select_option",
-    "browser_upload_file",
-    "browser_download",
-    "browser_press",
-    "browser_scroll",
-    "browser_back",
-    "browser_wait_for_selector",
-    "browser_evaluate",
-    "browser_events",
-    "browser_get_cookies",
-    "browser_set_cookies",
-    "browser_clear_state",
-    "browser_screenshot",
-    "browser_analyze",
-    "media_status",
-    "media_generate_image",
-    "media_generate_speech",
-    "media_transcribe_audio",
-    "media_analyze_image",
-    "media_generate_video",
-    "todo",
-    "kanban",
-    "goal",
-    "cron",
-    "task",
-    "agent",
-    "extensions_status"
-  ]
-
-  @external_tools [
-    "webfetch",
-    "websearch",
-    "browser_tabs",
-    "browser_tab_open",
-    "browser_tab_activate",
-    "browser_tab_close",
-    "browser_navigate",
-    "browser_snapshot",
-    "browser_get_content",
-    "browser_click",
-    "browser_type",
-    "browser_hover",
-    "browser_select_option",
-    "browser_upload_file",
-    "browser_download",
-    "browser_press",
-    "browser_scroll",
-    "browser_back",
-    "browser_wait_for_selector",
-    "browser_evaluate",
-    "browser_events",
-    "browser_get_cookies",
-    "browser_set_cookies",
-    "browser_clear_state",
-    "browser_screenshot",
-    "browser_analyze",
-    "media_status",
-    "media_generate_image",
-    "media_generate_speech",
-    "media_transcribe_audio",
-    "media_analyze_image",
-    "media_generate_video"
-  ]
-
-  @dangerous_tools [
-    "write",
-    "edit",
-    "patch",
-    "ast_grep",
-    "checkpoint",
-    "skill_manage",
-    "remember",
-    "bash",
-    # Runs project compilers/checkers (`mix compile`, `cargo check`, `go test`),
-    # which execute project code.
-    "lsp_diagnostics",
-    "kill_process",
-    "agent",
-    "task",
-    "goal",
-    "kanban",
-    "cron",
-    "browser_click",
-    "browser_type",
-    "browser_select_option",
-    "browser_upload_file",
-    "browser_download",
-    "browser_press",
-    "browser_set_cookies",
-    "browser_clear_state",
-    "browser_evaluate",
-    "browser_screenshot",
-    "browser_analyze",
-    "media_generate_image",
-    "media_generate_speech",
-    "media_transcribe_audio",
-    "media_analyze_image",
-    "media_generate_video"
-  ]
-
   # ============================================================================
   # Profile Creation
   # ============================================================================
@@ -175,115 +44,7 @@ defmodule CodingAgent.ToolPolicy do
   Create a policy from a predefined profile.
   """
   @spec from_profile(profile()) :: policy()
-  def from_profile(:full_access) do
-    %{
-      allow: :all,
-      deny: [],
-      blocked_tools: [],
-      require_approval: [],
-      approvals: %{},
-      no_reply: false,
-      profile: :full_access
-    }
-  end
-
-  def from_profile(:orchestrator) do
-    %{
-      allow: :all,
-      deny: [],
-      blocked_tools: [],
-      require_approval: [],
-      approvals: %{},
-      no_reply: false,
-      profile: :orchestrator
-    }
-  end
-
-  def from_profile(:leaf_worker) do
-    %{
-      allow: :all,
-      deny: ["task", "agent", "goal", "kanban", "cron"],
-      blocked_tools: [],
-      require_approval: [],
-      approvals: %{},
-      no_reply: false,
-      profile: :leaf_worker
-    }
-  end
-
-  def from_profile(:minimal_core) do
-    %{
-      allow: @minimal_core_tools,
-      deny: [],
-      blocked_tools: [],
-      require_approval: [],
-      approvals: %{},
-      no_reply: false,
-      profile: :minimal_core
-    }
-  end
-
-  def from_profile(:read_only) do
-    %{
-      allow: @read_tools,
-      deny: [],
-      blocked_tools: [],
-      require_approval: [],
-      approvals: %{},
-      no_reply: false,
-      profile: :read_only
-    }
-  end
-
-  def from_profile(:safe_mode) do
-    %{
-      allow: :all,
-      deny: @dangerous_tools,
-      blocked_tools: [],
-      require_approval: [],
-      approvals: %{},
-      no_reply: false,
-      profile: :safe_mode
-    }
-  end
-
-  def from_profile(:subagent_restricted) do
-    %{
-      allow: :all,
-      deny: @dangerous_tools,
-      blocked_tools: [],
-      require_approval: ["write", "edit"],
-      approvals: %{},
-      no_reply: false,
-      profile: :subagent_restricted
-    }
-  end
-
-  def from_profile(:no_external) do
-    %{
-      allow: :all,
-      deny: @external_tools,
-      blocked_tools: [],
-      require_approval: [],
-      approvals: %{},
-      no_reply: false,
-      profile: :no_external
-    }
-  end
-
-  def from_profile(:custom) do
-    %{
-      allow: :all,
-      deny: [],
-      blocked_tools: [],
-      require_approval: [],
-      approvals: %{},
-      no_reply: false,
-      profile: :custom
-    }
-  end
-
-  def from_profile(_), do: from_profile(:full_access)
+  def from_profile(profile), do: LemonCore.ToolPolicy.from_profile(profile)
 
   @doc """
   Create a custom policy.
@@ -319,6 +80,7 @@ defmodule CodingAgent.ToolPolicy do
   """
   @spec allowed?(policy() | map(), String.t()) :: boolean()
   def allowed?(policy, tool_name) when is_map(policy) and is_binary(tool_name) do
+    policy = LemonCore.ToolPolicy.expand(policy)
     allow = normalize_allow(Map.get(policy, :allow) || Map.get(policy, "allow"))
     deny = normalize_string_list(Map.get(policy, :deny) || Map.get(policy, "deny"))
 
@@ -349,6 +111,8 @@ defmodule CodingAgent.ToolPolicy do
   """
   @spec requires_approval?(policy() | map(), String.t()) :: boolean()
   def requires_approval?(policy, tool_name) when is_map(policy) and is_binary(tool_name) do
+    policy = LemonCore.ToolPolicy.expand(policy)
+
     require_approval =
       normalize_string_list(
         Map.get(policy, :require_approval) || Map.get(policy, "require_approval")
@@ -373,6 +137,7 @@ defmodule CodingAgent.ToolPolicy do
   """
   @spec approval_mode(policy() | map(), String.t()) :: :always | :never | :inherit
   def approval_mode(policy, tool_name) when is_map(policy) and is_binary(tool_name) do
+    policy = LemonCore.ToolPolicy.expand(policy)
     approvals = normalize_approvals(Map.get(policy, :approvals) || Map.get(policy, "approvals"))
 
     case Map.get(approvals, tool_name) do
@@ -514,6 +279,8 @@ defmodule CodingAgent.ToolPolicy do
   """
   @spec from_map(map()) :: policy()
   def from_map(map) do
+    map = LemonCore.ToolPolicy.expand(map)
+
     %{
       allow: normalize_allow(Map.get(map, "allow") || Map.get(map, :allow)),
       deny: normalize_string_list(Map.get(map, "deny") || Map.get(map, :deny)),
@@ -527,6 +294,8 @@ defmodule CodingAgent.ToolPolicy do
         case Map.get(map, "profile") || Map.get(map, :profile) do
           nil -> nil
           atom when is_atom(atom) -> atom
+          "orchestrator" -> :orchestrator
+          "leaf_worker" -> :leaf_worker
           "full_access" -> :full_access
           "minimal_core" -> :minimal_core
           "read_only" -> :read_only

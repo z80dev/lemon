@@ -77,6 +77,68 @@ legitimately arrive first. Failure and budget-stop completions remain
 Slow/approval-gated handlers run asynchronously so events and approval resolution
 can continue while their correlated request remains pending.
 
+### Verified approval resolution
+
+`exec.approval.resolve` requires the approvals scope and accepts:
+
+```json
+{"approvalId":"approval-id","decision":"approve_once","expectedSessionKey":"agent:bot:main","expectedRunId":"run-id"}
+```
+
+`approvalId` and `decision` are required. `expectedSessionKey` and `expectedRunId`
+are optional nonempty strings (at most 1024 bytes); clients approving an exact
+run should provide both. Decisions are `approve_once`, `approve_session`,
+`approve_agent`, `approve_global` or `deny`; existing camelCase decision inputs
+remain accepted, but responses always use canonical snake_case.
+
+Success is a verified owner receipt, not merely removal from the pending list:
+
+```json
+{
+  "resolved":true,"approvalId":"approval-id","sessionKey":"agent:bot:main","runId":"run-id",
+  "decision":"approve_once","outcome":"approved","approved":true,"replayed":false,
+  "resolvedAtMs":1791936000000,
+  "summary":{
+    "approvalId":"approval-id","resolved":true,"decision":"approve_once","outcome":"approved",
+    "cleanup":{"includesAction":false,"includesRationale":false,"includesSecretValues":false}
+  }
+}
+```
+
+`deny` succeeds with `decision:"deny"`, `outcome:"denied"` and `approved:false`.
+`sessionKey`/`runId` can be null for an unbound native request. Expected identities
+are checked by the owning service and the exact snapshot is replaced atomically:
+a stale preview cannot approve another invocation. A completed same-decision
+request is idempotent only with both exact expected identities and retained owner
+state; it returns `replayed:true`, the original timestamp, and no repeated grants
+or events. Without both identities, an already-completed request is rejected.
+
+Pending-approval snapshots and `exec.approval.requested` events redact nested
+credentials and credential-bearing rationale text before delivery. Review targets
+remain visible; authorization still binds to the owning service's original action
+and exact run/session, not the redacted wire copy.
+
+Failures use normal error frames with `details:{approvalId,reason}`:
+
+| Code | `reason` |
+| --- | --- |
+| `NOT_FOUND` | `not_found` (including missing retained state) |
+| `CONFLICT` | `mismatch`, `expired`, `cancelled`, `conflict` (another decision won), `already_resolved`, `resolution_in_progress` |
+| `UNAVAILABLE` | `store_unavailable` |
+| `INVALID_REQUEST` | malformed IDs, bindings or decisions |
+
+No failure returns `resolved:true`. Terminal state retains only IDs, decision,
+outcome, timestamp and a snapshot digest; action, rationale and secrets are omitted.
+Named-node approvals use the controller ID and its controller pending identity;
+the destination still resolves only its own invocation/run/session-bound worker ID.
+
+Context-owned runs also isolate standing session/agent grants by their private
+trusted invocation context, without changing any public session/profile identity.
+Another principal or changed policy must obtain its own approval even for the
+same public bot session. This private field is not an RPC parameter and is absent
+from pending lists, approval events and resolution receipts. Explicit operator
+global/node grants remain independent.
+
 Authenticated sockets receive an RFC WebSocket ping every 25 seconds. Browser,
 Bun and other conforming clients automatically pong, keeping long-running
 outbound streams alive without application-level requests. The listener retains
@@ -95,9 +157,9 @@ classification; clients must reconcile any potentially completed mutation.
 
 Ordinary `chat.send` requests may supply `cwd`: a nonempty absolute existing
 directory forwarded to the native coding session and its tools. Relative,
-missing and non-directory paths are rejected before submission. Canonical
-profile sessions reject caller workspace overrides; use `profile.chat`, whose
-workspace remains server-owned.
+missing and non-directory paths are rejected before submission. Profile-bound
+(`profileId`) and canonical profile sessions reject caller workspace overrides;
+their workspace remains server-owned.
 
 `chat.send` and `profile.chat` accept optional `images` arrays containing
 `{"type":"image","mime_type":"image/png","data":"<standard Base64>"}`.
@@ -119,6 +181,273 @@ A lost mutation acknowledgement does not prove failure. In particular,
 prune, provider edits and blueprint activation retain their owning service's
 preview/revision/exact-confirmation requirements. Public management history and
 errors are bounded and redacted, not raw run/store dumps.
+
+## Profiles, placement-aware chat, and routines
+
+Profile methods use the canonical `LemonCore.ProfileStore` lifecycle and reload
+the router profile registry after mutations:
+
+| Method | Scope | Request | Successful payload |
+| --- | --- | --- | --- |
+| `profiles.list` | read | `{}` | `{profiles,count}` |
+| `profiles.get` | read | `{id}` | `{profile,summary}` |
+| `profiles.create` | admin | `{id,[name,description,avatar,model,systemPrompt,node,mcpServers,toolPolicy]}` | `{profile,summary}` |
+| `profiles.update` | admin | `{id,[name,description,avatar,model,systemPrompt,node,mcpServers,toolPolicy]}` | `{profile,summary}` |
+| `profiles.clone` | admin | `{sourceId,id,[name,description,avatar,model,systemPrompt,node,mcpServers,toolPolicy]}` | `{profile,summary}` |
+| `profile.chat` | write | `{id,prompt,[model,queueMode,images]}` | `{runId,profileId,sessionKey,node,summary}` |
+| `profiles.sync` | admin | `{id,[nodeId,mutationId]}` | `{profileId,nodeId,mutationId,acknowledged,revisionDigest}` |
+| `profiles.sync.status` | read | `{id,nodeId,mutationId}` | `{profileId,nodeId,mutationId,status,acknowledged,revisionDigest}` |
+| `node.mcp.discover` | admin | `{nodeId,server}` | `{connected,server:{name,status},tools:[{name,executionName,description,inputSchema,readOnly}],count,truncated}` |
+| `node.profile.paths` | read | `{nodeId,profileId}` | `{profileId,nodeId,workspacePath,skillsPath}` |
+| `mcp.execution_names` | read | `{server:{name,url},toolNames:[name]}` | `{server:{name},tools:[{name,executionName}],count}` |
+
+`profiles.update` preserves omitted fields, clears optional text with `""`, and
+uses `"local"` to clear node placement. `mcpServers` is a list of
+`{name,url,headers,[enabledTools,allowedOrigins,approvedPrivateOrigins]}` Streamable
+HTTP server definitions, with string-to-string header objects. Names must be
+unique; limits are 32 servers and 64 KiB total. `enabledTools` is an exact
+raw-tool-name allowlist (no glob expansion): omitted permits all, `[]` none,
+and a provided list exposes only those executable tools. Resource/prompt utility
+tools are not implicitly granted by an explicit native-tool allowlist.
+Create/update/clone/get/list profile projections omit MCP `headers` completely.
+Headers are execution-only secrets: not logged, emitted in management events,
+or stored in run history. A full replacement list replaces previous headers;
+omit `mcpServers` to preserve existing connections, or send `[]` to remove them.
+Header values support `${LEMON_SECRET:NAME}` references, including literal
+prefix/suffix text. References are resolved through the executing host's
+encrypted secret store immediately before MCP attachment—not by the controller.
+No environment or external-source fallback/expansion occurs. Missing, malformed
+or failing references fail closed with `secret_resolution_failed`; resolved
+values never replace the stored/reference-bearing execution definition.
+General `node.invoke.request` events contain only
+`{invokeId,nodeId,method,timeoutMs,cleanup:{includesArgs:false}}`. Invocation
+arguments are sent only on the targeted destination node connection.
+
+Names accept at most 120 Unicode scalar values (defensive 512-byte UTF-8 cap).
+`systemPrompt` preserves exact UTF-8, including whitespace, through 131,072
+bytes; chat prompts and each persona file remain separately bounded to 65,536
+bytes. Invalid UTF-8/NUL or oversized values are rejected, never truncated.
+Profile projections include credential-free `mcpConfigFingerprint`: lowercase
+SHA-256 of compact JSON server arrays
+`[name,url,sortedHeaderPairs,enabledTools|null,allowedOrigins|null,approvedPrivateOrigins|null]`,
+in server order. It binds private configuration for lost-response reconciliation
+without exposing headers; omission of optional fields differs from an empty list.
+
+`toolPolicy` is the existing native policy object, not a second permission
+store: optional `profile`, `allow` (`"all"` or exact registry-name array), `deny`,
+`blocked_tools`, `require_approval`, `approvals` (name to `"always"`/`"never"`),
+and boolean `no_reply`. Lists/maps accept at most 16,384 entries, names at most
+256 UTF-8 bytes. `allow: []` denies all; `{}` clears the stored profile floor,
+while omission preserves it. Every canonical/arbitrary profile chat and cron
+run inherits the current durable floor. Allow sets intersect, deny/blocked and
+required-approval sets union, `"always"` dominates `"never"`, and `no_reply` ORs
+with session, invocation and destination ceilings. Corrupt/unreadable profile
+storage fails closed. Active sessions retain startup policy; callers must fence
+new admission and cancel/settle active runs before acknowledging a restrictive
+grant change. Rich execution frames allow 131,072 JSON items within the
+configured byte limit (default 16 MiB); unrelated traversal stays at 10,000,
+and explicit smaller transport limits remain authoritative.
+
+`chat.send {sessionKey,prompt,[profileId,agentId,cwd,images,queueMode,invocationMcpServers,invocationToolPolicy]}` can use a
+profile's persona, model and node on arbitrary task/DM/group session keys.
+Named profile requests carry JSON-safe system prompt/bootstrap instructions
+and MCP servers to the worker and omit controller-default cwd. Provider
+credentials and assistant workspace paths are resolved destination-locally.
+MCP tools attach through the existing owner-bound session client lifecycle.
+With `profileId`, `invocationMcpServers` uses the same server shape and replaces
+the complete default connector list for this run. Omission inherits the profile;
+`[]` attaches none. Supplied definitions never merge owner headers or connectors.
+Only operator-authorized requests reach this seam.
+`invocationToolPolicy` also requires `profileId` and uses the same validated
+native shape. Omission or `{}` adds no restriction; `allow: []` denies all.
+It intersects rather than replaces persistent/session/node floors, so caller
+grants cannot widen denied or required-approval tools. Profile executions never
+inherit ambient machine-global MCP connections, including explicit `[]`.
+Profile-owned skills load metadata from the destination profile's
+`workspace/.lemon/skill/<key>/SKILL.md`, independently of execution cwd;
+`read_skill` lazily loads the full body through the owning skill registry.
+Image-only remote runs retain the shared five-image/10 MiB decoded admission
+limit and native model-vision checks. Only known native image blocks encode to
+wire JSON; empty text without valid images and arbitrary structs are rejected.
+
+Product connector definitions must include `allowedOrigins` containing the
+exact canonical HTTP(S) endpoint origin. `approvedPrivateOrigins` is a subset
+explicitly permitting private destinations. The executing host validates
+all DNS answers and pins the real transport to an approved address before
+decrypting headers. Host/TLS certificate identity remains the original origin;
+redirects are rejected. No-policy operator configurations retain intentional
+legacy behavior; product clients must not omit policy.
+
+`mcp.execution_names` is a synchronous operator-read projection for building
+closed native allowlists before a profile or HTTP session exists. It accepts
+only public server `name`/`url` and at most 256 raw selectable tool names, then
+uses the owning native alias function. No profile/node identity, headers,
+credentials, DNS lookup or HTTP initialization is required or performed.
+The result returns only server name and `{name,executionName}` mappings.
+It does not assert that a tool exists, is connected, is read-only or permitted;
+live destination discovery and native policy remain separate authorities.
+
+`node.mcp.discover` is an asynchronous operator-admin method targeting an
+execution node, never a controller-local or unauthenticated URL fetch.
+Discovery uses a temporary owner-bound MCP session with no executable tools,
+then closes it. It returns raw tool names and complete input schemas, bounded
+to 256 tools, 128-byte names, 4 KiB descriptions, 32 KiB per schema and 1 MiB
+total. Oversized/credential-bearing schemas are omitted, not rewritten;
+`truncated` marks omitted metadata. `readOnly` defaults false unless the server
+advertises boolean `readOnlyHint: true`; it is advisory, not authorization.
+`executionName` is the actual native registry alias used in `toolPolicy`. For
+profile HTTP clients it hashes public server name, canonical URL and validated
+raw tool name, and stays stable across secret rotation and DNS pinning. Never
+guess aliases from display names. These clients defer to native deny/approval
+policy rather than adding an unconditional MCP approval gate. Server hints
+cannot bypass native restrictions; legacy global/ACP aliases and approval rules
+remain unchanged.
+
+`profiles.sync` provisions the four controller-owned persona instruction files
+and a credential-free revision record on the target, verifying persisted files
+before acknowledging. Explicit `nodeId` supports provisioning before a move;
+otherwise current placement selects an exact stored durable ID first, even if
+offline, and resolves a unique configured name only when no ID record exists. Local profiles
+require an explicit target. Sync never switches controller placement and never
+copies MCP headers, provider credentials, USER.md, skills or memory. Mutation
+correlation is optional (`null` when absent); a non-null mutation/digest binding
+is durably reserved before persona writes. The worker retains one latest
+binding, rejecting reuse with different content, not an unbounded ledger.
+`profiles.sync.status` sends only the requested identity and current source
+digest, never persona content. It returns `status: "acknowledged"` only when
+the exact binding and stored files verify, `"pending"` for a matching reserved
+but unfinished write, or `"unknown"` (null digest) for absent/superseded/mismatched
+bindings. Transport, corrupt storage and bad acknowledgements are RPC errors,
+not unknown. Status never writes, repairs or resends. Explicit `nodeId` targets
+use durable ID-only dispatch, never name fallback even offline. Implicit sync
+also preserves stored ID ownership against same-named nodes; legacy actual
+names remain supported when there is no exact ID record. Placement changes only in a separate
+`profiles.update` after acknowledgment.
+
+`node.profile.paths` is a trusted operator read on an explicit durable node ID.
+The worker derives its actual `ProfileStore` workspace/skill paths, including
+custom state roots, without creating files or changing placement. Selected
+skill provisioning must use the returned `skillsPath`, then the owning node
+filesystem stat/CAS APIs, not infer a path from controller state or host cwd.
+Lookup grants no filesystem authority: native OS-home/explicit `--allowed-root`
+ceilings still apply. Custom state outside admitted roots requires the machine
+operator to admit its existing parent root.
+
+`cron.add {name,schedule,[profileId,agentId,sessionKey,prompt,...]}` persists
+`profileId` for agent jobs; `cron.list` job rows expose `profileId` (null when
+unset). Each agent run resolves current profile placement/persona rather than
+snapshotting the node at job creation. Shell jobs remain scheduler-local.
+Profile placement is rejected for shell jobs. Explicit routine `cwd` and model
+pins remain supported; an explicit remote cwd is interpreted on the worker.
+See [profiles](../../docs/user-guide/profiles.md) for configuration and boundaries.
+
+### Private cron admission
+
+Only trusted operators (`admin` scope) configure external admission:
+
+- `cron.admission.set {routineId, token}` stores/rotates a dedicated token in the
+  controller's encrypted secret store and returns `{secretName, set: true}`.
+  The token is never returned. IDs are nonempty and at most 256 bytes; tokens
+  are nonempty, at most 4096 bytes, and cannot contain CR/LF.
+- `cron.add` and `cron.update` accept an optional `admission` map with exactly
+  `{url, token_secret, routine_id, creator_id, workspace_id}` (snake-case keys).
+  `token_secret` is the returned secret name, not the token. This is supported
+  only for agent jobs with a `profileId`. Updating with `admission: null`
+  removes the hook; omitting the field preserves it. Public add/update/list
+  responses expose only `admissionConfigured`.
+
+Operators allow exact callback origins using
+`LEMON_CRON_ADMISSION_ALLOWED_ORIGINS` (comma-separated), or
+`:lemon_automation, :cron_admission_allowed_origins` in deployment config.
+The environment override takes precedence. An empty allowlist admits no
+callback. HTTPS is required except explicitly allowlisted HTTP origins at
+literal `127.0.0.1` or `[::1]`; `localhost` and all other HTTP hosts are denied.
+Callback URLs forbid userinfo, query and fragment. Redirects and HTTP retries
+are disabled; the encrypted token is never sent to an untrusted origin.
+
+Before any dispatch the controller POSTs JSON with Bearer authentication:
+
+```text
+{jobId, profileId, routineId, creatorId, workspaceId,
+ cronRunId, routerRunId, triggeredBy, scheduledForMs}
+```
+
+`cronRunId` and `routerRunId` are the scheduler's fixed receipt IDs.
+`triggeredBy` is `"schedule"`, `"manual"`, `"wake"`, or `"retry"`;
+`scheduledForMs` is the claimed scheduled slot or null for nonscheduled work.
+The endpoint returns HTTP 200 JSON
+`{allow: true | false, context: <exact echoed request object>}`. Only an exact
+context match and `allow: true` admits execution. A matching `allow: false`
+records `denied`; any other reply, unavailable credential, timeout/disconnect,
+or removed origin trust records `admission_unavailable`. Both are failed cron
+run outcomes (also `meta.admission_outcome`), with no router submission and no
+automatic retry. The next ordinary occurrence rechecks admission. The callback
+must only read policy and project already-authorized invocation configuration;
+it must not provision credentials or launch work itself.
+
+For shared/Team profiles, an approved response can additionally contain exactly
+one `invocation` object:
+
+```text
+{allow: true, context: <exact echoed request object>,
+ invocation: {invocationContextKey, memoryContextKey, invocationMcpServers,
+              invocationToolPolicy, invocationProof, sharedMemoryGrant: false}}
+```
+
+All six invocation fields are required. Unknown top-level, invocation, server,
+or policy fields fail closed. Both context keys are 1–128 ASCII characters
+matching `[A-Za-z0-9][A-Za-z0-9_.:-]*`; they bind the creator's current execution
+and private memory scope. Scheduled callbacks cannot grant shared memory.
+The server list uses canonical `chat.send` MCP definitions (`name`, `url`,
+`headers`, optional `enabledTools`, `allowedOrigins`, `approvedPrivateOrigins`).
+It replaces the whole profile connector list, never merging the profile owner's
+default credentials. An empty replacement never falls back to that list, but
+a projected invocation must include its required core proof server or admission
+fails closed. Header values must be exact `${LEMON_SECRET:NAME}` references, or
+`Bearer ${LEMON_SECRET:NAME}` for Authorization. No literal tokens or
+controller-side secret resolution occur.
+URLs forbid userinfo, queries, fragments, and interpolation; HTTPS is required
+except literal-loopback HTTP with the exact origin present in both
+`allowedOrigins` and `approvedPrivateOrigins`.
+
+`invocationToolPolicy` is the canonical native policy map (`profile`, `allow`,
+`deny`, `blocked_tools`, `require_approval`, `approvals`, `no_reply`). It is
+restrictively intersected with the cron tool block and the current profile
+floor: allowlists intersect, denials/approval gates union, and an `always`
+approval cannot be replaced with `never`. Unsupported policy shapes do not
+become permissive defaults.
+
+`invocationProof` uses the shared native factory's exact descriptor:
+
+```text
+{runId: <routerRunId>, serverName, serverUrl,
+ headerName: "X-Lemon-Bot-Invocation",
+ secretName: "lemon_bot/invocations/<routerRunId>"}
+```
+
+Exactly one replacement server must match the descriptor's name/URL and carry
+that exact header with value
+`${LEMON_SECRET:lemon_bot/invocations/<routerRunId>}`. The callback must use the
+actual creator's current native invocation builder for this fixed run, not copy
+a previous descriptor or proof secret. Before launch, the shared Core factory
+validates the proof again against the actual profile-built request, then stamps
+canonical private memory/proof attestations. Authentication remains at the
+owning boundary: the configured authenticated cron allow receipt, or actual
+operator authorization for direct chat. No synthetic operator context is used.
+
+The projection is consumed only after an authenticated allow receipt with an
+exact context echo. It remains a private worker argument, not job metadata,
+cron run history, an audit field, or a grant from prompt/client text. The
+destination request receives the context key and secret-reference-bearing
+connector definitions through the normal owning profile/node path.
+The two-field response remains valid for existing single-principal jobs.
+
+
+Admission configuration is durable only in the private owning job record.
+Job events, management projections, audit records, run history, and router
+requests never include its token or secret reference.
+
+
 
 ## Durable session inspection
 
@@ -229,6 +558,196 @@ process so heartbeats and other control frames continue while it is working.
 A disconnected client must inspect session status before retrying: the durable
 summary may have committed even when its acknowledgement was lost.
 
+## Profile memory
+
+The `memory.*` methods address a managed profile by `profileId`; they never accept
+a workspace path or arbitrary installation-wide scope. Reads require `operator.read`;
+add and delete require `operator.admin`. All run asynchronously so a named-node
+request does not block the connection's events or heartbeat.
+
+| Method | Parameters | Successful payload |
+|---|---|---|
+| `memory.list` | `{profileId, query?, limit?, cursor?}` | `{items, nextCursor}` |
+| `memory.search` | `{profileId, query, limit?}` | `{items, nextCursor}` |
+| `memory.get` | `{profileId, id}` | `{item}` |
+| `memory.add` | `{profileId, text, kind?}` | `{item}` |
+| `memory.delete` | `{profileId, id, confirm}` | `{deleted: true, id}` |
+
+All five methods also accept private operator selectors:
+
+* `{memoryScope: "private", memoryContextKey: "<verified stable actor key>"}` selects
+  **only** that actor's documents in this profile/home. A valid item ID is not proof
+  of ownership: list/search/get/delete enforce the same selector in the owning store.
+* `{memoryScope: "shared"}` selects only provenance-proven canonical shared documents.
+  `memoryContextKey` may be omitted or null here, never a non-null private key.
+* Omitting **both** fields retains the legacy unrestricted trusted-operator view,
+  including retained workspace files. Product Team UI/backend requests must never
+  omit selectors. Malformed/partial selectors fail rather than falling back.
+
+Every explicitly scoped success appends `memoryScope` and `memoryContextKey`
+(null for shared) to the table's payload. The backend validates the exact echo
+before using results and must strip internal context keys from model/client-facing
+responses. Keys are 1–128 ASCII characters matching
+`[A-Za-z0-9][A-Za-z0-9_.:-]*`; authenticated services derive them from verified Bot,
+actor and audience ownership, not client/model/tool metadata or grant epochs.
+
+For example, a private empty list is:
+
+```json
+{"items":[],"nextCursor":null,"memoryScope":"private","memoryContextKey":"private_bot_v1.actor"}
+```
+
+`limit` is 1–50 (default 25). Managed `query` accepts at most 512 Unicode codepoints
+and 2,048 UTF-8 bytes, without truncation; malformed UTF-8/NUL is rejected.
+Unfiltered list browses a recent window. Explicitly scoped queries use the owning
+index before its candidate limit, plus full accepted canonical preference text.
+A match need not appear in the redacted/2 KiB preview; callers must not re-filter
+native matches against that preview. `nextCursor` is null at the candidate set's end.
+Pass a returned cursor to `memory.list` with the same profile/query/selector;
+stale or mismatched cursors fail. This is not an unbounded archive export.
+
+Each item is exactly `{id, kind, text, source, createdAtMs, updatedAtMs}`.
+`text` is an operator-redacted preview of at most 2 KiB, not a full raw memory
+record. `source` is `workspace` or `durable`; raw paths, credentials, provenance
+contents and arbitrary provider errors are excluded. Workspace preferences use
+`kind: "user"` or `"memory"`; durable records retain their supported memory kind.
+
+Adding defaults to `kind: "memory"`; `"user"` selects human preferences. Explicit
+private/shared selections write canonical facts through `LemonMemory.Preferences`
+in the existing `LemonMemory.Store`, never raw `USER.md`/`MEMORY.md` files.
+Only the omitted legacy operator mode writes those files. All paths reuse owning
+`remember` secret/prompt-injection screening and compact preference limits;
+`text` is bounded to 4,096 bytes. This is not a second store.
+Read/list the item before deletion and set `confirm` to its **exact item id**;
+booleans or another id are rejected. Opaque item ids bind profile and revision:
+workspace preferences bind exact text plus the whole file revision, while durable
+ids bind the document revision. Refresh the item after any concurrent change.
+Durable deletion uses the lifecycle service's revision-bound preview/confirmation
+and atomic compare-and-delete.
+
+For a named-node profile the controller sends only JSON-safe method parameters
+over the existing node invocation channel. The destination derives the profile
+workspace locally; neither the controller's workspace nor credentials cross the
+boundary. Durable records must match both the profile agent id and the assistant
+home identity. Explicit selections additionally require persisted actor/shared proof.
+No unavailable destination falls back to controller memory. A lost mutation receipt
+is `UNAVAILABLE` with
+`{code: "MEMORY_OUTCOME_UNKNOWN", profileId, invokeId, retrySafe: false}`; re-read
+memory before deciding whether to repeat the mutation.
+
+Explicitly scoped remote requests require the live authenticated connection to
+advertise that exact `memory.*` method with `{version: 1, contextVersion: 1}`.
+Persisted capabilities do not prove a current worker supports private memory.
+Dispatch is pinned to the checked durable ID and connection PID. Old, unqueryable
+or reconnected workers fail before enqueue, without private-to-legacy mutation.
+A missing/mismatched response selector echo also fails closed.
+
+No memory-content event is broadcast. Remote terminal replies use
+`node.invoke.result` with `result: {ok: true, payload: <payload above>}` or
+`result: {ok: false, error: "<bounded service classification>"}`; the existing
+authenticated node/session/invocation ownership checks still apply.
+
+### Copying scoped memory before moving a profile
+
+`memory.transfer` requires `operator.admin` and runs asynchronously. It does
+**not** change profile placement. Supply `{profileId, nodeId, mutationId}` where
+`nodeId` is the explicit durable destination node ID (not its display name).
+The source is the profile's current placement, pinned to its durable node ID or
+`"local"` for controller-local memory.
+
+Use a fresh `mutationId` for each independent move attempt, retaining that same
+ID through preview, confirmation, and reconciliation. It is at most 128 bytes,
+using letters, digits, `_`, `.`, `:`, or `-`. Reusing an ID for another profile or
+destination is a conflict. Source and destination must differ.
+
+Preview before an overwrite:
+
+```json
+{"type":"req","id":"move-preview","method":"memory.transfer","params":{"profileId":"researcher","nodeId":"destination-node-id","mutationId":"move-unique-id","action":"preview"}}
+```
+
+The payload is:
+
+```json
+{"profileId":"researcher","mutationId":"move-unique-id","sourceNodeId":"source-node-id","nodeId":"destination-node-id","snapshotDigest":"<sha256>","destinationDigest":"<sha256>","confirmationToken":"<opaque-token>","sourceCounts":{"documents":12,"preferences":2},"destinationCounts":{"documents":2,"preferences":1},"overwrite":true}
+```
+
+Only counts and digests are exposed. `documents` counts selected durable records;
+`preferences` counts complete preference files present (USER.md/MEMORY.md, 0–2),
+not individual notes. Explain that the destination's selected profile memory and
+both preference-file slots will be replaced by the incoming scope; unrelated
+profiles, persona files, and other files are retained. After explicit approval,
+send the same IDs with `action: "apply"`, `snapshotDigest`, `destinationDigest`,
+and `confirmationToken` from the preview. The token binds the exact incoming
+snapshot, current destination snapshot, profile, both nodes, and mutation.
+A changed source or destination invalidates the plan; create a new move preview
+with a fresh mutation ID instead of automatically overwriting or merging.
+
+Without a confirmation token, `action: "apply"` (the default) permits only a
+create-only copy to an empty selected destination scope. Divergent existing
+memory requires an exact confirmed preview. Success returns:
+
+```json
+{"profileId":"researcher","mutationId":"move-unique-id","sourceNodeId":"source-node-id","nodeId":"destination-node-id","snapshotDigest":"<sha256>","copied":true}
+```
+
+The destination persists a receipt bound to those identities and digest before
+acknowledging success. Same-operation replay returns that exact receipt.
+Once apply may have been dispatched, repeating the operation queries only its
+destination receipt and never replays the copy. An uncertain outcome returns
+`UNAVAILABLE` with `{code: "MEMORY_TRANSFER_OUTCOME_UNKNOWN", profileId, nodeId,
+mutationId, retrySafe: false}`. Retain the mutation ID and reconcile before
+changing placement or starting a different move attempt.
+
+For a strictly read-only receipt query, call `memory.transfer.status`
+(`operator.read`) with `{profileId, nodeId, mutationId}`. It inspects the
+destination's durable journal only—even if no controller intent exists—and
+never freezes a snapshot, starts an apply, or replays a mutation. Its payload is:
+
+```json
+{"profileId":"researcher","nodeId":"destination-node-id","mutationId":"move-unique-id","sourceNodeId":"source-node-id","snapshotDigest":"<sha256>","status":"completed","receipt":{"profileId":"researcher","mutationId":"move-unique-id","sourceNodeId":"source-node-id","nodeId":"destination-node-id","snapshotDigest":"<sha256>","copied":true}}
+```
+
+`status` is `completed`, `pending`, or `unknown`. Pending operations have a null
+receipt; an absent journal entry is `unknown` with null actual source, digest,
+and receipt, **not** proof that a mutation was never applied. Offline/query
+failures return `UNAVAILABLE`, not an empty successful result. The response and
+receipt must match the exact profile, destination, mutation and expected source
+digest before the caller switches placement. This method does not change the
+controller journal or profile placement.
+
+Transfer uses a private, frozen owning-service snapshot, not redacted list/get
+previews. Scoped run/project documents, canonical private/shared preference facts,
+and complete retained assistant `USER.md`/`MEMORY.md` bytes are selected. Both agent
+and assistant home identity are checked, destination identities rebound locally,
+and private actor keys preserved. Unknown legacy files/rows remain unproven;
+copying bytes never creates sharing authority. Retained metadata cannot attest its
+own authority: export uses persisted owning-store ownership, and import cannot
+promote pre-index private/shared claims. Source memory is retained.
+Source snapshots are bounded to 500 documents,
+64 KiB per preference file, and 2 MiB encoded total. The node JSON item/depth
+policy also applies, with headroom reserved for invocation wrappers; complex
+records can reach that bound before 500 documents. Excess or unsafe source data
+fails closed rather than being silently truncated or redacted.
+
+No session journals/chat transcripts, credentials, cookies, daily-note files,
+or general host files are copied. Home-scoped repository learnings rebind to the
+destination profile workspace; other repository groups retain opaque identities
+without transporting source repository paths. Their exact facts remain visible
+as profile memory, but destination repository-specific recall cannot infer a
+new repository mapping.
+
+Private worker methods are `memory.transfer.prepare`, `.snapshot`, `.validate`,
+`.preview`, `.apply`, `.status`, and `.inspect` over the authenticated invocation
+channel. Each method requires this connection's fresh
+`{version: 1, contextVersion: 1}` advertisement and exact ID/PID dispatch binding,
+before a source snapshot read or destination apply. Old provenance-unaware
+workers cannot strip actor ownership into a legacy copy or attest such a receipt.
+Full snapshot content is never included in management responses,
+broadcast events, controller operation journals, or logs. Only after `copied`
+is durably acknowledged should the caller perform persona sync and explicitly
+change profile placement.
+
 ## Named execution nodes
 
 On the destination host, supply the controller's operator credential for pairing:
@@ -249,6 +768,325 @@ crosses the wire, not callbacks or source BEAM state. Cancellation and bounded
 steer/redirect are invocation-bound and require destination acknowledgement.
 Plaintext off loopback requires explicit `--allow-insecure-controller` and a
 verified encrypted overlay; otherwise use TLS.
+
+Durable node names are unique and never equal another durable node ID.
+Name-or-ID selectors (profile `node`, `agent` node targets) resolve an exact
+live durable ID first, and an authorized durable ID never falls back to another
+node's name while offline; private execution then pins that ID, connection and
+generation.
+
+### Live named-node runs
+
+`coding_agent.run` workers stream live deltas, tool actions and checkpoints through
+the authenticated node socket. The controller's normal executor/gateway/router
+path publishes them on `run:<runId>` and `session:<sessionKey>`; existing `chat`
+and `agent` WebSocket projections are unchanged. A gateway started event is emitted
+once on dispatch, and `node.invoke.result` remains the sole terminal outcome.
+
+**Node-only RPC: `node.invoke.event`** (scope `invoke` or `event`):
+
+```json
+{"invokeId":"invoke-id","seq":1,"event":{"type":"delta","text":"Hello"}}
+```
+
+Success payload:
+
+```json
+{"invokeId":"invoke-id","seq":1,"received":true,"duplicate":false}
+```
+
+Sequence starts at 1 and covers every event in the invocation, not just text.
+Only the node ID, live connection and credential generation owning the invocation
+may submit frames. Already-accepted sequence numbers return `duplicate:true`
+without republishing; a gap is rejected. Supported envelopes:
+
+| `event.type` | Other fields |
+| --- | --- |
+| `delta` | `text` |
+| `started` | `title` (optional; the controller does not emit a second start) |
+| `action` | `action:{id,kind,title,detail}`, `phase:"started"|"updated"|"completed"`, optional `ok,message,level` |
+| `checkpoint_created`, `checkpoint_restored`, `checkpoint_deleted` | `checkpointId,checkpointKind,tool,action,pathCount,paths,restoredCount` |
+| `approval_requested` | `approvalId,tool,action,rationale,expiresAtMs` |
+
+Events are limited to 64 KiB JSON with the normal depth/item limits. Workers send
+one frame awaiting acknowledgement and retain at most 64 queued frames. An
+oversized event, exhausted queue, rejected frame or acknowledgement timeout cancels
+destination execution and returns a failed terminal result rather than dropping
+events. The terminal result waits for all live-frame acknowledgements. Disconnect,
+node replacement, invocation timeout or cancellation ends the invocation; reconnect
+does not resume/replay cancelled work, and old-session frames cannot revive it.
+Completed native runners may already have stopped while their final events await
+acknowledgement. Cancelling this transport-only state releases its invocation and
+pending approvals without calling the stopped runner or disrupting other runs.
+Cancellation also tolerates a live runner exiting concurrently.
+
+Remote tool approvals enter the controller's existing approval store and emit
+`exec.approval.requested/resolved`; resolve the **controller** approval ID with
+`exec.approval.resolve` as usual. Worker approval IDs are separate and never used
+as controller store keys. The broker sends only the owning worker a targeted event:
+
+```json
+{"event":"node.invoke.approval","payload":{"nodeId":"node-id","invokeId":"invoke-id","runId":"run-id","approvalId":"worker-approval-id","decision":"approve_once"}}
+```
+
+The other decisions are `approve_session`, `approve_agent`, `approve_global` and
+`deny`. Delivery is invocation-bound and callable only by the invocation recipient,
+not by operator or node RPC callers. The worker resolves only an approval it observed
+for that live invocation and run. Approval waits are capped at ten minutes;
+disconnect/timeout/caller death cancels pending requests and never authorizes tools.
+Cancellation and steer/redirect keep their existing terminal and acknowledgement
+semantics.
+
+### Attached-machine methods
+
+Machine operations target the **durable `nodeId`**, not a node name or connection
+ID. They execute through the authenticated invocation channel on the destination.
+Slow calls dispatch asynchronously, preserving event traffic. Raw file content,
+terminal input/output and secret values are never written to invocation records
+or general events; audit lines contain only operation and outcome classifications.
+`node.invoke` cannot bypass the admin-scoped file, secret or terminal methods.
+
+Internal callers inspecting a node before dispatch can pin that live connection
+with `NodeRegistry.invoke_node(..., expected_pid: inspected.pid,
+expected_generation: inspected.generation)`. PID replacement or credential
+generation change returns the definite pre-dispatch error `{:node_connection_changed,nodeId}`.
+Private native requests also require `required_native_privacy_context: 1`, which
+checks the actual resolved connection's nested
+`capabilities["coding_agent.run"]["nativePrivacyContext"] == {"version":1}`
+inside the registry owner before invocation allocation or delivery. An absent/
+unsupported marker returns `{:native_privacy_context_unsupported,nodeId}`.
+These are internal admission options, not remotely supplied PID values or a
+post-response privacy check.
+
+| Method | Scope | Request | Success payload |
+| --- | --- | --- | --- |
+| `node.pair.invite` | pairing | `{nodeName,nodeId?,purpose?,labels?,expiresInMs?}` | `{inviteId,inviteCode,joinCommand,expiresAtMs,summary}` |
+| `node.pair.invite.revoke` | pairing | `{inviteId}` | `{inviteId,revoked:true}` |
+| `node.capabilities.get` | read | `{nodeId}` | `{nodeId,os,measuredAtMs,stale,items}` |
+| `node.runtime.features` | read | `{nodeId}` | `{nodeId,protocol,lemonVersion,methods,features,botReady,missingFeatures}` |
+| `node.host.info` | read | `{nodeId}` | `{hostname,os,osVersion,arch,cpuCount,memTotalBytes,memFreeBytes,diskTotalBytes,diskFreeBytes,uptimeSec,lemonVersion,defaultCwd,user}` |
+| `node.fs.list` | admin | `{nodeId,path,showHidden?}` | `{path,entries,limit,truncated}` |
+| `node.fs.stat` | admin | `{nodeId,path}` | `{path,type,size,mtimeMs,mode,mime,readable,writable}` |
+| `node.fs.read` | admin | `{nodeId,path,offset?,length?}` | `{path,dataBase64,offset,length,size,mime,eof}` |
+| `node.fs.write` | admin | `{nodeId,path,dataBase64,expectedModifiedAtMs?,offset?,truncate?,mkdirs?}` | `{path,offset,bytesWritten,size,mtimeMs}` |
+| `node.fs.mkdir` | admin | `{nodeId,path}` | `{path,created:true}` |
+| `node.fs.move` | admin | `{nodeId,path,destination,expectedModifiedAtMs,overwrite?}` | `{path,destination,moved:true}` |
+| `node.fs.delete.preview` | admin | `{nodeId,path,recursive?}` | `{path,stat,childCount,childrenDigest,candidateCount,confirmationToken,expiresAtMs}` |
+| `node.fs.delete` | admin | `{nodeId,path,confirm,confirmationToken}` | `{path,deleted:true}` |
+| `node.secrets.set` | admin | `{nodeId,name,value,operationId?}` | `{name,set:true}`; with an operation ID also `{operationId,status:"applied",currentBindingMatches}` |
+| `node.secrets.list` | admin | `{nodeId}` | `{names,limit,truncated}` |
+| `node.secrets.delete` | admin | `{nodeId,name}` | `{name,deleted:true}` |
+| `node.secrets.receipt` | admin | `{nodeId,operationId}` | `{nodeId,operationId,status,name,currentBindingMatches}` |
+| `node.process.run` | admin | `{nodeId,processId,cwd,argv,stdinBase64,timeoutMs,maxOutputBytes}` (all required) | `{processId,nodeId,state,exitCode,stdoutBase64,stderrBase64,outputTruncated}` |
+| `node.process.get` | admin (read-only) | `{nodeId,processId}` | Same receipt; additionally permits `state:"not_found"` |
+| `node.process.cancel` | admin | `{nodeId,processId}` | Same receipt; absent ID becomes a durable cancelled tombstone |
+| `node.shell.open` | admin | `{nodeId,cwd?,cols?,rows?}` | `{shellId}` |
+| `node.shell.input` | admin | `{shellId,dataBase64}` | `{shellId,accepted:true}` |
+| `node.shell.resize` | admin | `{shellId,cols,rows}` | `{shellId,accepted:true}` |
+| `node.shell.close` | admin | `{shellId}` | `{shellId,accepted:true}` |
+
+Invites default to purpose `lemon_bot`, labels `{}`, expiry 15 minutes (bounded
+to 1 ms–24 hours). Labels are a record with at most 32 nonempty keys (64 UTF-8
+bytes) and string values (256 UTF-8 bytes). The command uses a provisioned
+destination source checkout or installs an explicitly pinned operator-supported
+build through the existing installer, then verifies actual worker compatibility
+before enrollment. It never defaults to the currently published release or PATH.
+The exact-name-bound credential embeds no operator token. Optional `nodeId`
+creates a repair invitation bound to that durable
+identity, recovery hash and current generation; it never creates a replacement
+identity. Revocation invalidates only a pending unused invite.
+Set `LEMON_CONTROL_PLANE_PUBLIC_WS_URL` to the reachable `wss://.../ws` endpoint.
+`nodes.list {name?,nodeId?}` filters exact matches before caps; rows include
+`purpose`, label records and `enrollmentInviteId` (null for legacy nodes), and
+`summary.truncated` distinguishes capped inventory. Invite connections have
+enrollment-only authority and receive no general events.
+
+Runtime selection uses `LEMON_NODE_SOURCE_CHECKOUT` (absolute destination path),
+or **both** `LEMON_NODE_INSTALL_VERSION` and `LEMON_NODE_INSTALL_BASE_URL`
+(HTTPS operator-supported artifacts). Equivalent Elixir settings are
+`:node_source_checkout`, `:node_install_version`, and `:node_install_base_url`.
+Loopback development can use the controller's actual compiled source checkout.
+Configured version pins must match `lemon version` exactly. Generated commands
+run `lemon node capabilities --json --require-bot` before consuming any invite;
+direct invite joins perform the same fail-closed check.
+
+`node.runtime.features` reports protocol 1, declared methods and ten boolean
+feature flags: `hostIO`, `filesystemCAS`, `deletePreviews`, `encryptedSecrets`,
+`ptyShell`, `mcpDiscovery`, `profileSync`, `liveStreaming`, `repairInvites`,
+`nativeExecutionPolicy`. `missingFeatures` is sorted; `botReady` is true only when
+all are present, including required Python/assets, the large native tool-policy
+JSON envelope and native privacy-context protocol version 1. Native policy readiness
+requires the actual worker's nested `coding_agent.run.nativePrivacyContext` descriptor,
+not just a shared JSON helper. This is installed software compatibility, **not** provider login,
+per-bot policy or an OS permission grant. Reconcile the live enrolled exact node
+and require its `botReady:true` before declaring a machine ready; an online socket
+or a matching version string alone is insufficient.
+
+Paths resolve on the worker, under the node user's home by default. Repeat
+destination CLI `--allowed-root PATH` to allow additional existing directories.
+Descriptor-relative file operations pin worker policy roots and use `O_NOFOLLOW`;
+caller path traversal and symlink escapes are rejected. All worker file calls
+serialize through one supervised owner. Existing-file writes require matching
+`expectedModifiedAtMs`; zero means require missing. Moves require the source
+revision and default to native atomic no-overwrite (`overwrite:true` is explicit).
+Delete previews bind revisions and exact candidate sets to a one-use, five-minute
+worker token. Execution requires that token and `confirm` equal to the exact
+caller path. Nonrecursive deletion is the default; recursion requires an explicit
+recursive preview. Stale proofs fail closed; local external writers are not
+sandboxed, and raced recursive deletion can leave a partial outcome.
+Read/write/input chunks decode to at most 1 MiB. Writes default to offset zero
+and truncation at the end of the chunk; use `truncate:false` for intermediate
+chunks and carry the returned `mtimeMs` into the next CAS. Directory and secret
+listings cap at 500. See [files and secrets](../../docs/user-guide/node-files-and-secrets.md).
+
+Supported macOS/Linux host snapshots contain real measured memory, disk, CPU,
+uptime and version data. Failed or unsupported measurement returns `UNAVAILABLE`,
+not nulls or invented zeroes. Secret values enter only the destination encrypted
+store; missing master keys fail closed.
+
+For durable install reconciliation, fix a unique `operationId` (1–128 ASCII
+letters/digits/`_:-`) before `node.secrets.set`. The destination atomically stores
+encrypted value and a private intent/current-revision receipt in one vault row.
+An identical still-current operation returns its original proof without another
+set; conflicting or superseded intent fails with `CONFLICT`. Query
+`node.secrets.receipt` after a lost response rather than replaying the mutation.
+Status is `"applied"` or `"not_found"`; `name` is null for not found, and
+`currentBindingMatches` is false when not found or when replacement, deletion,
+expiry or key rotation invalidated the original encrypted binding. The query
+does not decrypt, change secret usage, set a value or replay an operation.
+Historical proof survives ordinary mutations and never exposes values, private
+fingerprints or digests. History is bounded to 128 operations per owner/name;
+capacity fails closed without evicting proof. `secret_store_failed`, timeouts and
+transport loss can be ambiguous and must be reconciled. Vault/lease diagnostics
+are content-free, including failure logs.
+
+Reserved private invocation proof names `lemon_bot/invocations/<runId>` require
+`operationId` exactly equal to that run ID. The controller queries the owning
+`NativeLineage.pending_destination(runId,nodeId)` before provisioning: a pending
+follow-up must retain its sealed exact node/PID/generation; only strict owning
+Store absence permits a new pre-admission root and fresh live-ID inspection.
+Existing nonpending/terminal/malformed rows, target/profile/session mismatch and
+query failure never fall back to root provisioning. Both paths require privacy
+protocol v1 and pin PID/generation atomically in dispatch before sending the proof
+value. Names are inspected after the same trim normalization used by the vault,
+so decorated names cannot bypass this guard. No caller-supplied flag grants this
+authority; raw `node.invoke` remains forbidden for secret methods. Ordinary
+secret operations and read-only reconciliation retain their original behavior.
+
+After a successful awaited vault reply, the wrapper rechecks the owning lineage
+and the **same pre-provision PID/generation** plus current privacy capability
+before acknowledging success. Current pending target configuration/policy changes
+or ownership loss cannot become a positive proof acknowledgement. Pending lookup
+disappearance never becomes a fresh-root fallback; an initial root must remain
+strictly absent from admission. Failure returns `UNAVAILABLE` with
+`reason:private_proof_acknowledgement_changed`, `preDispatch:false`,
+`retrySafe:false`, and `mutationMayHaveApplied:true`: the value may already be
+durable, so do not replay. This acknowledgement is not model authority; actual
+root admission still validates placement, configuration and policy.
+
+Capability items contain `{id,name,category,supported,configuredLevel,osGrant,
+tools,reason,measuredAtMs,stale}`. Categories are `files|shell|browser|connector|os_app`,
+levels `off|read_only|read_interact`, and OS grant states
+`granted|denied|not_required|unknown`. Probes read the destination's actual tool
+catalog/root permissions, executable availability and browser backend status.
+macOS Peekaboo grants and Linux X11 connection status are passive, bounded
+checks; unavailable inspection stays unknown, never fabricated denial or grant.
+Full Disk Access has no supported nonprompting macOS query and remains unknown.
+Connector authorization is session-scoped, not invented from method names.
+These measurements are not per-bot grants or an OS sandbox.
+The shell tool inventory includes `lsp_diagnostics` only when that exact native
+tool is in the actual registry and destination shell machinery is supported.
+It resolves destination workspace files and can execute local language checkers;
+it is not baseline/read-only access. Product diagnostics require effective files
+**and** shell `read_interact` ceilings and normal tool approvals. Installed language
+checker availability remains the diagnostic tool's actual result, not an OS grant.
+
+### Native automated processes
+
+`node.process.*` is the non-PTY destination-native execution path for automated
+HostDriver actions and probes. All three methods require operator `admin` and
+dispatch asynchronously; `run` awaits the bounded final receipt, while `get`
+only reads a fixed-ID receipt and never starts or replays work. Interactive
+`node.shell.*` terminals remain unchanged. There is no shell-string, PTY, SSH,
+or named-node fallback for native process requests.
+
+Every run field is required; no environment, shell, TTY, or client admission
+options are accepted. `processId` is 1–128 ASCII letters/digits/`_`/`:`/`-`.
+`argv` is 1–128 literal UTF-8 strings without NUL; each and their total are at
+most 131,072 bytes, with a nonempty executable in `argv[0]`. Later empty
+arguments are valid. `cwd` is a nonempty UTF-8 path of at most 4096 bytes without
+NUL or traversal, admitted and descriptor-pinned under the destination's home
+and explicit `--allowed-root` roots. `stdinBase64` is standard base64 decoding
+to at most 1 MiB (empty is allowed); stdin closes at EOF. `maxOutputBytes` is
+1–1,048,576 **combined** stdout/stderr bytes. `timeoutMs` is 1000–1,800,000
+(30 minutes). Run's broker deadline is `timeoutMs + 5000`; the local await
+allows another 1000 ms. Get/cancel use the normal 30-second broker budget.
+
+The method resolves the actual durable `nodeId` and internally pins its PID
+and generation. Registry admission requires `required_process_execution: 1`
+and actual version-1 descriptors for all three process methods before delivery;
+caller-supplied options and generic `node.invoke` cannot bypass this boundary.
+The broker supplies authenticated `nodeGeneration`, never a caller generation.
+
+The frozen seven-field receipt has state `running|completed|cancelled|outcome_unknown`
+(get additionally `not_found`). `exitCode` is an integer only for an observed
+OS exit, otherwise null. A `completed` receipt requires that observed integer
+exit, even when captured output is unavailable; null exit is not completion
+evidence. Output strings represent captured bytes; `""` means actually measured
+zero bytes, not absent output. Unavailable outputs are
+null/null with `outputTruncated:true`; running, unknown and not-found receipts
+also have null exit. Restarted receipts retain known state/exit but do not
+persist raw output. Missing receipt fields fail closed rather than being filled
+with fabricated empty output. A transport failure stays an error, not an
+execution receipt or proof of absence.
+
+Choose the fixed ID before first intent and retain it across controller timeouts.
+Never redispatch uncertain execution: reconcile with `get` on the original
+node/ID. Only a successful strict destination Store absence read can return
+`not_found`; offline/error is not absence. Cancel of an absent ID durably writes
+a tombstone before acknowledgment so a racing later run cannot start. Active
+cancellation is bound to the original authenticated owning node/generation;
+a replacement worker cannot cancel its predecessor's job, although get can
+read its receipt. Timeout/overflow/cancellation clean up the process group and
+descendants where supported, without inventing an exit code.
+
+The narrow worker owner admits at most 16 active processes and retains at most
+1,000 durable fixed-ID fences across its destination service. Spent IDs and cancel
+tombstones do **not** expire: exhaustion returns `process_receipt_limit` before
+new execution, never deletes a fence to make an old ID runnable. Automated
+inspection/probe intents consume this capacity too; operators must provision a
+destination with available admission capacity rather than clear/reuse spent IDs.
+Captured output is volatile, limited to 16 completed receipts and a 24-hour cache
+lifetime; cache loss never erases original status/exit or allows redispatch.
+
+Argv, stdin and captured output are private to the authenticated request/response
+transport and never enter general events, model context, logs, or durable process
+receipt content. Keep credential-bearing inputs and outputs in a trusted backend
+over `wss://` or a trusted encrypted overlay. See the exact request examples and
+reconciliation workflow in [node files, secrets and native processes](../../docs/user-guide/node-files-and-secrets.md#native-processes).
+
+### Interactive terminals
+
+Terminals use a real worker PTY (`python3` required), with the destination login
+shell and worker default cwd unless specified. Cwd is opened through the same
+descriptor-root resolver and applied with `fchdir`, not a raced path-based chdir.
+The helper reads exactly one length-prefixed worker policy packet before forking;
+later input packets remain in the terminal protocol. Its shared filesystem
+resolver is import-safe: the filesystem packet server runs only when that helper
+is executed directly, never while the PTY imports its descriptor policy.
+Dimensions are 1–500 columns/rows.
+`node.shell.output {shellId,dataBase64,seq}` (one-based per-shell sequence) and
+`node.shell.exit {shellId,code}` are delivered **only to the opening connection**;
+foreign connections cannot operate a shell. The node-only `node.shell.event
+{invokeId,payload}` transport validates the receiving connection, credential
+generation and active opening invocation. No terminal data reaches the Bus.
+PTY output has 16 KiB chunks, acknowledgement backpressure, a 32 MiB total cap
+and one-hour lifetime. Disconnect, close, timeout, node replacement and slow
+consumers terminate the terminal and clean up its process group. Limits are
+64 terminals globally and eight per opening connection.
+
+See [attaching a bot machine](../../docs/user-guide/attaching-a-bot-machine.md).
+
 
 ## Other HTTP surfaces
 

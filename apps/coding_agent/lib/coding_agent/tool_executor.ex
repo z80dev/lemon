@@ -29,6 +29,8 @@ defmodule CodingAgent.ToolExecutor do
   - `:run_id` - The current run ID
   - `:session_id` - The native CodingAgent session ID
   - `:session_key` - The session key for routing
+  - `:agent_id` - The executing agent identity
+  - `:invocation_context_key` - Trusted private grant namespace (optional)
   - `:timeout_ms` - Approval timeout in milliseconds (optional; default: no timeout)
   """
 
@@ -106,6 +108,8 @@ defmodule CodingAgent.ToolExecutor do
            run_id,
            session_id,
            session_key,
+           context[:agent_id],
+           context[:invocation_context_key],
            tool_name,
            args,
            timeout_ms,
@@ -156,6 +160,8 @@ defmodule CodingAgent.ToolExecutor do
          run_id,
          session_id,
          session_key,
+         agent_id,
+         invocation_context_key,
          tool_name,
          args,
          timeout_ms,
@@ -166,6 +172,8 @@ defmodule CodingAgent.ToolExecutor do
       run_id: run_id,
       session_id: session_id,
       session_key: session_key,
+      agent_id: agent_id,
+      invocation_context_key: invocation_context_key,
       tool_call_id: tool_call_id,
       tool: tool_name,
       action: args,

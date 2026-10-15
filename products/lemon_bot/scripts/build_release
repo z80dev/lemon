@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ $# != 4 ]]; then
+  echo 'Usage: build_release VERSION CHANNEL PLATFORM OUTPUT_DIR' >&2
+  exit 2
+fi
+VERSION=$1 CHANNEL=$2 PLATFORM=$3 OUTPUT_DIR=$4
+[[ "$VERSION" =~ ^[0-9]{4}\.[0-9]{1,2}\.[0-9]+$ ]] || { echo 'Expected CalVer version.' >&2; exit 2; }
+case "$CHANNEL" in stable|preview|nightly) ;; *) echo 'Unsupported release channel.' >&2; exit 2 ;; esac
+case "$(uname -s)/$(uname -m)" in
+  Linux/x86_64) HOST_PLATFORM=linux-x86_64 ;;
+  Linux/aarch64|Linux/arm64) HOST_PLATFORM=linux-arm64 ;;
+  Darwin/arm64) HOST_PLATFORM=darwin-arm64 ;;
+  *) echo 'Unsupported native build host.' >&2; exit 2 ;;
+esac
+[[ "$PLATFORM" == "$HOST_PLATFORM" ]] || { echo 'Backend bundles require native builds for the sharp addon.' >&2; exit 2; }
+ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)
+BACKEND="$ROOT/products/lemon_bot/backend"
+WEB="$ROOT/products/lemon_bot/web"
+mkdir -p "$OUTPUT_DIR"
+OUTPUT_DIR=$(cd "$OUTPUT_DIR" && pwd)
+STAGE=$(mktemp -d)
+trap 'rm -rf "$STAGE"' EXIT
+mkdir -p "$STAGE/bot/bin"
+(cd "$BACKEND" && bun install --frozen-lockfile)
+(cd "$WEB" && bun install --frozen-lockfile && bun run build)
+[[ -s "$WEB/dist/index.html" ]] || { echo 'Built web entrypoint missing.' >&2; exit 1; }
+cp -R "$WEB/dist" "$STAGE/bot/web"
+bun "$ROOT/products/lemon_bot/scripts/compile_backend.ts" "$BACKEND" "$VERSION" "$PLATFORM" "$STAGE/bot/bin/lemon-bot"
+bun "$ROOT/products/lemon_bot/scripts/package_image_runtime.ts" "$BACKEND" "$STAGE/bot" "$PLATFORM"
+chmod 755 "$STAGE/bot/bin/lemon-bot"
+# Only explicit executable, built web, and public dependency packages enter the archive.
+# Private operator configuration, keys, databases and checkout source are never copied.
+printf '{"product":"lemon_bot","version":"%s","channel":"%s","platform":"%s"}\n' \
+  "$VERSION" "$CHANNEL" "$PLATFORM" > "$STAGE/bot/release.json"
+# macOS tar otherwise adds AppleDouble ._bot outside the allowed archive root.
+COPYFILE_DISABLE=1 tar -czf "$OUTPUT_DIR/lemon-$VERSION-$CHANNEL-$PLATFORM-lemon_bot.tar.gz" -C "$STAGE" bot

@@ -315,4 +315,111 @@ defmodule LemonMemory.DocumentTest do
       end
     end
   end
+
+  test "summary_text retains the ingest cap and UTF-8 truncation marker" do
+    text = String.duplicate("café ", 600)
+    summary = Document.summary_text(text)
+    assert String.valid?(summary)
+    assert String.ends_with?(summary, "...[truncated]")
+    doc = Document.new(session_key: "session", agent_id: "agent", prompt_summary: text)
+    assert doc.prompt_summary == summary
+    assert Document.summary_text(nil) == ""
+    assert Document.summary_text("accepted bytes") == "accepted bytes"
+  end
+
+  test "owning constructors recompute index instead of trusting caller index fields" do
+    meta = %{
+      "memory_scope" => "private",
+      "memory_context_key" => "actor-a",
+      "memory_context_verified" => true,
+      "home_digest" => "home"
+    }
+
+    doc =
+      Document.new(
+        session_key: "session",
+        agent_id: "agent",
+        meta: meta,
+        index: {"shared", nil, "foreign", nil, nil}
+      )
+
+    assert doc.index == {"private", "actor-a", "home", nil, nil}
+    changed = %{doc | meta: %{"memory_scope" => "unproven", "home_digest" => "home"}}
+    assert Document.with_index(changed).index == {"unproven", nil, "home", "run", nil}
+  end
+
+  test "new run indexes omit runtime MCP credentials and ignore provider authority claims" do
+    servers = %{
+      "private" => %{
+        "headers" => %{"Authorization" => "Bearer must-not-index"},
+        "env" => %{"API_KEY" => "must-not-index"}
+      }
+    }
+
+    meta = %{
+      memory_context_key: "actor-a",
+      invocation_context_key: "epoch-1",
+      memory_context_verified: true,
+      home_digest: "actual-home",
+      profile_id: "actual-profile",
+      source: "native-request",
+      mcp_servers: servers,
+      headers: %{"X-Token" => "must-not-index"},
+      access_token: "must-not-index",
+      kind: :memory
+    }
+
+    meta = Map.put(meta, "mcpServers", servers)
+
+    meta =
+      Map.merge(meta, %{
+        invocation_proof_verified: true,
+        invocationProof: %{capsule: "ephemeral-proof"}
+      })
+
+    meta =
+      meta
+      |> Map.put("invocationProofVerified", true)
+      |> Map.put("invocation_proof", %{"capsule" => "ephemeral-proof"})
+
+    doc =
+      Document.from_run("run", %{}, %{
+        session_key: "agent:demo:main",
+        agent_id: "demo",
+        meta: meta,
+        completed: %{
+          answer: "Safe outcome",
+          meta: %{
+            memory_context_key: "actor-b",
+            invocation_context_key: "epoch-2",
+            memory_context_verified: true,
+            mcp_servers: servers
+          }
+        }
+      })
+
+    assert doc.meta["memory_scope"] == "private"
+    assert doc.meta["memory_context_key"] == "actor-a"
+    assert doc.meta["kind"] == "run"
+    assert elem(doc.index, 3) == "run"
+    assert doc.meta["home_digest"] == "actual-home"
+    assert doc.meta[:profile_id] == "actual-profile"
+    assert doc.meta[:source] == "native-request"
+
+    for key <- [
+          :mcp_servers,
+          "mcpServers",
+          :headers,
+          :access_token,
+          :invocation_proof_verified,
+          :invocationProof,
+          "invocationProofVerified",
+          "invocation_proof"
+        ] do
+      refute Map.has_key?(doc.meta, key)
+    end
+
+    refute inspect(doc.meta) =~ "must-not-index"
+    refute inspect(doc.meta) =~ "ephemeral-proof"
+  end
 end

@@ -521,6 +521,17 @@ SQLite serializes keys and values with `:erlang.term_to_binary/1`. The JSONL
 backend uses a JSON codec that preserves atoms, tuples, structs, and nested map
 keys for portable append-only files.
 
+`LemonCore.Durable` owns stable-storage barriers. JSONL `sync/1` flushes every
+table file and then its directory; acknowledgement requires every actual
+barrier to succeed. On macOS, Python 3 is required for the packaged
+`priv/durable_sync.py` helper, which opens a no-follow descriptor, performs
+`fsync` and Darwin `F_FULLFSYNC` for both files and directories. Paths are
+literal argv, never shell commands; raw helper errors/paths are not returned.
+Missing prerequisites, wrong descriptor kinds or refused/unsupported filesystem
+barriers fail closed. There is no ordinary macOS `sync(8)` or weaker fallback.
+GNU coreutils synchronous per-directory syncing remains the supported
+non-Darwin Unix path.
+
 ## Event Bus
 
 ### Standard Topics
@@ -590,9 +601,19 @@ Tool execution gating with scope-based persistence. Placed in `lemon_core` so an
 | Scope | Persistence |
 |-------|-------------|
 | `:approve_once` | Not persisted (single request) |
-| `:approve_session` | Persisted per session_key |
-| `:approve_agent` | Persisted per agent_id |
+| `:approve_session` | Persisted per session_key and optional private invocation context |
+| `:approve_agent` | Persisted per agent_id and optional private invocation context |
 | `:approve_global` | Persisted globally |
+
+Context-owned team runs carry the trusted private `invocation_context_key`
+through their native approval request. Session/agent grants are bound to both
+the public identity and this exact principal/policy context: one teammate user's
+grant cannot authorize another user or a changed policy on the same shared bot
+session. Context-owned requests never fall back to legacy unscoped session/agent
+grants. Nil-context native requests keep their original scope behavior; explicit
+operator global/node grants remain independent. The typed pending record retains
+the private key for owner policy writes, but direct JSON, wire approval events,
+pending lists, resolution receipts and introspection never expose it.
 
 ```elixir
 # Request (blocks until resolved)
@@ -606,10 +627,23 @@ case LemonCore.ExecApprovals.request(%{
   {:error, :timeout} -> handle_timeout()
 end
 
-# Resolve (called by UI/admin). Atomic: a racing cancel/resolve on the same
-# id has exactly one winner; the loser gets {:error, :not_pending}.
-:ok = LemonCore.ExecApprovals.resolve(approval_id, :approve_session)
+# Resolve (called by UI/admin). Compare and consume the exact owner identity.
+{:ok, %{decision: :approve_session, outcome: :approved, replayed: false}} =
+  LemonCore.ExecApprovals.resolve(approval_id, :approve_session,
+    expected_session_key: session_key, expected_run_id: run_id)
 ```
+
+Resolve, cancellation and timeout atomically replace the exact pending snapshot;
+only the winner installs grants or emits resolution events. The resolution receipt
+returns the actual decision/outcome and approval/run/session identity. Wrong
+identity or changed previews (`expected_pending`) leave the live approval untouched.
+Expired, cancelled, unknown and conflicting decisions return distinct errors.
+Pending accessors exclude redacted terminal records. Retained completed state
+allows the same decision to replay only when **both** expected identities match,
+without new grants/events. An unbound repeated call is `:already_resolved`, not
+an acknowledgement. Missing retained state is `:not_found`; IDs with retained
+state cannot be reused for another invocation. A crash during policy installation
+leaves an in-progress record that fails closed, never a fabricated completion.
 
 Approval requests, resolutions, and timeouts also write redacted
 `approval_*` introspection events with approval id, tool, action type/hash, and

@@ -18,6 +18,24 @@ defmodule LemonAutomation.CronJobTest do
     CronJob.new(Map.merge(required_attrs(), attrs))
   end
 
+  test "profile placement survives job persistence and updates" do
+    job = new_job(%{"profile_id" => "teammate"})
+    assert job.profile_id == "teammate"
+    assert CronJob.to_map(job).profile_id == "teammate"
+    assert CronJob.from_map(CronJob.to_map(job)).profile_id == "teammate"
+
+    assert CronJob.from_map(%{
+             "id" => job.id,
+             "name" => job.name,
+             "schedule" => job.schedule,
+             "profile_id" => "teammate"
+           }).profile_id == "teammate"
+
+    assert CronJob.update(job, %{prompt: "next"}).profile_id == "teammate"
+    assert CronJob.update(job, %{profile_id: "moved"}).profile_id == "moved"
+    assert CronJob.from_map(Map.delete(CronJob.to_map(job), :profile_id)).profile_id == nil
+  end
+
   describe "new/1" do
     test "creates a job from mixed atom/string keys with defaults and timestamps" do
       before = LemonCore.Clock.now_ms()

@@ -5,6 +5,8 @@ defmodule LemonSkills.Synthesis.CandidateSelector do
   #
   # A document qualifies when it meets all of the following:
   #
+  # - Existing owner provenance permits shared/legacy synthesis. Private or
+  #   unproven data cannot automatically become globally readable draft files.
   # - `outcome` is `:success` (`:partial` is deliberately excluded — see anti-capture below)
   # - `prompt_summary` is at least `#{__MODULE__}.min_prompt_length/0` characters (non-trivial)
   # - `answer_summary` is at least `#{__MODULE__}.min_answer_length/0` characters (substantive)
@@ -33,6 +35,7 @@ defmodule LemonSkills.Synthesis.CandidateSelector do
 
   alias LemonMemory.Document
   alias LemonMemory.Safety
+  alias LemonMemory.Store
   alias LemonMemory.TaskFingerprint
 
   @min_prompt_length 50
@@ -84,7 +87,8 @@ defmodule LemonSkills.Synthesis.CandidateSelector do
   # ── Private helpers ─────────────────────────────────────────────────────────
 
   defp qualified?(%Document{} = doc) do
-    good_outcome?(doc.outcome) and
+    Store.document_ownership(doc) in [:legacy, :shared] and
+      good_outcome?(doc.outcome) and
       long_enough?(doc.prompt_summary, @min_prompt_length) and
       long_enough?(doc.answer_summary, @min_answer_length) and
       Safety.safe_document?(doc) and

@@ -227,6 +227,15 @@ defmodule LemonGateway.RunTest do
   # ============================================================================
 
   setup do
+    previous_executor = Application.fetch_env(:lemon_gateway, :executor)
+
+    on_exit(fn ->
+      case previous_executor do
+        {:ok, executor} -> Application.put_env(:lemon_gateway, :executor, executor)
+        :error -> Application.delete_env(:lemon_gateway, :executor)
+      end
+    end)
+
     # Stop and restart the application with the configured executor fixture.
     _ = Application.stop(:lemon_gateway)
 

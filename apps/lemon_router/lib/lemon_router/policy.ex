@@ -35,19 +35,37 @@ defmodule LemonRouter.Policy do
   @doc """
   Merge two tool policies.
 
-  The second policy takes precedence, with some special handling:
-  - Lists are concatenated (e.g., allowed_commands)
-  - Maps are deep merged
-  - Booleans use the stricter value for "deny" semantics
+  Native policies compose restrictively: allow-list intersection, denial and
+  approval-gate unions, and `always` approvals cannot be weakened. Other router
+  fields retain their existing merge behavior (maps deep-merge; sandbox tightens).
   """
   @spec merge(tool_policy_a :: map(), tool_policy_b :: map()) :: map()
-  def merge(nil, policy_b), do: policy_b || %{}
-  def merge(policy_a, nil), do: policy_a || %{}
+  def merge(nil, policy_b), do: LemonCore.ToolPolicy.expand(policy_b)
+  def merge(policy_a, nil), do: LemonCore.ToolPolicy.expand(policy_a)
 
   def merge(policy_a, policy_b) when is_map(policy_a) and is_map(policy_b) do
-    Map.merge(policy_a, policy_b, fn key, v1, v2 ->
-      merge_value(key, v1, v2)
-    end)
+    policy_a = LemonCore.ToolPolicy.expand(policy_a)
+    policy_b = LemonCore.ToolPolicy.expand(policy_b)
+
+    merged =
+      Map.merge(policy_a, policy_b, fn key, v1, v2 ->
+        merge_value(key, v1, v2)
+      end)
+
+    native = LemonCore.ToolPolicy.intersect(policy_a, policy_b)
+
+    Map.merge(
+      merged,
+      Map.take(native, [
+        :profile,
+        :allow,
+        :deny,
+        :blocked_tools,
+        :require_approval,
+        :approvals,
+        :no_reply
+      ])
+    )
   end
 
   defp merge_value(_key, v1, v2) when is_map(v1) and is_map(v2) do

@@ -23,6 +23,7 @@ defmodule LemonCore.Quality.ArchitecturePolicy do
       :lemon_browser,
       :lemon_core,
       :lemon_gateway,
+      :lemon_mcp,
       :lemon_memory,
       # test-only: shared platform compliance cases
       :lemon_platform_test,
@@ -85,6 +86,7 @@ defmodule LemonCore.Quality.ArchitecturePolicy do
       :lemon_ai,
       :lemon_channels,
       :lemon_core,
+      :lemon_mcp,
       :lemon_media,
       :lemon_memory
     ],

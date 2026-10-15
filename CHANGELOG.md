@@ -8,7 +8,332 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
-No unreleased changes yet.
+### Added
+
+- Keep native root target/policy/destination bindings through durable admission
+  compaction, including proofless startup receipts and queued activation fences.
+  Native agent/task follow-ups allocate their fixed ID before proof admission.
+  Synchronous start failures retain their known error and terminal replay fence
+  when terminal persistence races admission acknowledgement.
+
+- Machine invitations now return a short, credential-free repository join-script
+  command and a separate one-use code. The script reads hidden terminal input,
+  sends enrollment only through `--invite-code-stdin`, restores echo on exit,
+  and reuses compatible pinned Lemon installs before invoking the existing
+  installer. Source selection, exact version and capability gates remain
+  fail-closed; the argv enrollment-code flag is removed. Unknown enrollment
+  exchanges stop instead of replaying the invite. Packaged commands fetch
+  `join-node.sh` and canonical `install.sh` from the same exact release tag,
+  never mutable `main`; installation requires a bot-capable full/min runtime
+  via `--require-bot`, not the standalone backend artifact. `--require-bot`
+  installs no TUI and promotes a runtime only after its own exact-version
+  `node capabilities` gate passes; an exact pin accepts its manifest's channel
+  (preview/nightly) unless `LEMON_CHANNEL` is explicit. Invitations issued by a
+  packaged release always pin that release instead of its build machine's
+  checkout. Source commands invoke the provisioned checkout's join script directly.
+
+- Standalone Lemon Bot release bundles contain the native backend and complete
+  external web assets for Linux x86_64/arm64 and macOS arm64. Schema-2 release
+  metadata records their checksums and sizes; the canonical installer verifies
+  the selected bundle and keeps backend installation isolated from Lemon runtimes.
+- Correct destination-local MCP URL parsing so normal HTTPS authorities and
+  Unicode hostnames reach the existing exact-origin and DNS-pinning checks;
+  credentials, malformed ports and unsafe authorities remain rejected.
+- Host join reuses a compatible existing PATH installation and starts its
+  worker without binding the desktop runtime's health-server ports. Enrollment
+  stdin also supports standard in-memory IO devices without accepting argv secrets.
+
+- Operator `chat.send` and `profile.chat` accept fixed upstream run IDs with
+  durable same-intent replay protection and conflict rejection. Queue-owned
+  receipts report actual new/queued/merged/steering/interrupt targets rather
+  than echoing requested modes; `runs.receipt.get` reconciles lost responses
+  without dispatch. Unknown outcomes retain the original nonretryable ID.
+  Stable-storage barriers precede dispatch and merge effects and protect receipt
+  acknowledgements/readback; failed barriers never authorize another send.
+  Private invocation-context keys isolate shared-session queue controls, merging
+  and native standing approvals across principals, policy and connector epochs;
+  changed execution capabilities queue their own run instead of steering an
+  older runtime with broader credentials.
+  Verified memory identities keep private native recall/capture separate from
+  shared rooms; standing session/agent grants and native resume/compaction history
+  cannot cross execution contexts. Explicit admin shared-memory intent remains
+  separate from private automatic capture. Bound per-run MCP proofs mask only
+  their exact attested header value during context comparison, never transport.
+  Fresh native task/background/delegated follow-ups reserve their own ID, verify
+  sealed lineage through a private backend issuer and provision new proofs before
+  independent execution; unknown outcomes never replay a completed root proof.
+  Remote private execution requires fresh advertised privacy-context support and
+  atomic exact-node/connection/session-generation fences. Public raw native node
+  calls reject private attestation and lineage aliases rather than minting trust.
+  `agent.wait` supports answer-free terminal status queries. `runs.active.list`
+  reports complete pre-limit active/queued/unknown presence, actual profile/source
+  dependencies and explicit unavailable failures instead of unsafe empty results.
+- Lemon Bot product architecture and dependency-free client/backend contracts:
+  authenticated local/OIDC accounts and SCIM directory provisioning, durable
+  named teammates on user-owned swarm machines, typed REST/realtime/MCP,
+  scoped cards/approvals/drafts, attachments/voice/push, skills/routines/memory,
+  provider integrations, applied host policies and self-hosted usage controls.
+  Includes web/macOS/iOS screen contracts, all 101 Grok behavioral mappings
+  and all 16 adopted Muse companion/control features, with explicit provider
+  prerequisites and no virtual-desktop or demonstration-recording claims.
+- Lemon Bot owner-only live-resource cutover: removed Team publishing,
+  managers/default Bots, other-human groups and cross-human connector lending.
+  Chat, cron, channel, handoff and helper work retain the actual Bot owner.
+  Added named desktop-to-iPhone QR preview/claim/approval/completion contracts,
+  private fixed-nonce same-device/session receipt recovery and explicit null
+  paired-session expiry until revocation; ordinary sessions stay bounded.
+  Updated owner-first screens, card taxonomy and all 101+16 design mappings.
+- Lemon Bot secret-free integration/channel/email/X provider discovery,
+  verified own-account channel linking initiation and exact event-filter
+  schemas, with operator-reviewed connector/private-origin/setup inputs.
+- Lemon Bot broad channel-message routine opt-in and a strictly read-only,
+  metadata-only audit collector scope for workspace integration tokens.
+- Clarified Lemon Bot file chunks retain the owning node's total source-file
+  size, with actual chunk length measured from decoded bytes for progress.
+- Lemon Bot mailbox accounts expose optional measured provider indexing
+  status/time instead of fabricated eventual-indexing warning labels.
+- Lemon Bot group receipts distinguish proven per-target rejection from
+  admitted work and genuinely uncertain dispatch without automatic replay.
+- Lemon Bot groups have explicit own-member leave and successor selection,
+  preserving other members' history and truthful membership-loss events,
+  with owned active room work terminalized before membership revocation.
+- Lemon Bot Owners can observe bounded account-teardown receipts after
+  session revocation, with explicit OAuth revocation/introspection settings
+  and no deleted-account restoration or mutation replay.
+- Pending Lemon Bot X OAuth connections keep unverified identities null
+  rather than exposing fabricated or empty account IDs/usernames.
+- Lemon Bot OIDC uses explicit operator-approved HTTPS origins, private-IdP
+  DNS exceptions and exact client/secret-reference destination bindings.
+- Canonical Lemon Bot private configuration now types delivered host/export
+  grants, OIDC mappings, separate public X credentials, actual provider spend
+  sources and fixed channel app principals without an untyped extras bag.
+- Named execution-node runs now stream live chat deltas, tool activity and
+  checkpoints through the controller's normal run/session events. Invocation-bound,
+  sequenced `node.invoke.event` frames reject foreign/stale node sessions, ignore
+  duplicates and enforce bounded payload/backpressure limits. Remote tool approvals
+  use the controller approval store and return decisions to the owning worker;
+  disconnects and timeouts fail closed. Terminal results, cancellation and
+  steer/redirect retain their existing semantics.
+- Profile placement for arbitrary `chat.send` sessions and cron agent jobs via
+  `profileId`, resolved at execution time for routines. `profiles.update` edits
+  persona, model, node and per-profile Streamable HTTP MCP servers. MCP headers
+  are write-only in management responses and excluded from run persistence.
+- Profile-scoped `memory.list`, `memory.search`, `memory.get`, `memory.add` and
+  exact-confirmation `memory.delete` control-plane methods. They reuse durable
+  memory lifecycle and assistant workspace preference services, enforce separate
+  read/admin scopes, and return bounded redacted previews. Named-node profiles
+  execute memory operations on their destination through authenticated node
+  invocations, without controller paths or credentials crossing the boundary.
+- Private, admin-only `memory.transfer` for machine moves: full scoped memory
+  and assistant preferences copy through authenticated node invocations with
+  durable mutation-bound receipts, create-only defaults, exact source/target
+  digest-bound overwrite previews, and explicit read-only `memory.transfer.status`
+  reconciliation after uncertain outcomes. Placement stays unchanged until the
+  caller explicitly switches it.
+- Explicit private/shared memory management selections, exact worker scope echoes,
+  full-fact preference search and owned indexed search with bounded 512-codepoint
+  queries. Private preferences remain in the existing memory owner rather than
+  shared workspace files; intentional shared facts have canonical provenance.
+- Attached-machine control-plane APIs: destination-local host information,
+  policy-rooted chunked file transfer, connection-owned real PTY terminals and
+  write-only encrypted node secrets. Single-use, expiring, name-bound node
+  invitations install and enroll a bot machine without sharing the operator
+  credential; node listings include purpose and labels. See
+  [attaching a bot machine](docs/user-guide/attaching-a-bot-machine.md).
+- Attached-machine safety: exact durable-ID routing cannot be hijacked by a node
+  named after another node's ID. Worker-owned file CAS, atomic no-overwrite moves
+  and revision/candidate-bound deletion previews use descriptor-relative root
+  admission. Revocable repair invites retain durable identity and generation
+  fences; label records and enrollment proofs support reliable reconciliation.
+  Machine inspection reports measured host resources and explicit capability/
+  OS-grant states without fabricated metrics or permissions.
+  Supported shell inventory includes the actual registered `lsp_diagnostics`
+  builtin for destination-local checks; diagnostics remain file-and-shell
+  read-interact operations with tool approval, never baseline permission.
+- Worker compatibility is measured by `lemon node capabilities --json --require-bot`
+  and authenticated `node.runtime.features`, not inferred from a release number.
+  Invite commands select the actual integrated source checkout or an explicitly
+  pinned operator-supported artifact, verify the installed version/features, and
+  fail before enrollment when required APIs are absent. No published build is
+  silently treated as supporting new bot APIs.
+- Fixed secret operation IDs persist an atomic private receipt with the encrypted
+  destination vault row. Admin-only `node.secrets.receipt` reconciles lost replies
+  without replay, plaintext or digest exposure; replacement, deletion, expiry
+  and rotation safely invalidate current binding while retaining historical proof.
+  Vault/lease error diagnostics are redacted. PTY opening cwd uses the filesystem
+  descriptor resolver, and browser availability inspection never launches a browser.
+- Registry dispatch can atomically pin a preceding inspection to an exact live
+  node PID and require the native privacy-context protocol before sending private
+  arguments. Reconnect or missing protocol support is a definite admission failure,
+  never a request sent to an old worker and rejected only after its response.
+  Bot readiness requires the actual native privacy descriptor as well as the
+  large-policy JSON helper, preventing a nominally compatible old protocol from
+  being reported ready for private bot execution.
+- Profile MCP headers support explicit `${LEMON_SECRET:NAME}` references resolved
+  exclusively from the encrypted secret store on the execution host. Missing or
+  failing secret reads fail closed before MCP clients start; controller requests
+  keep references unchanged and never substitute environment values.
+- Canonical read-only `usage.records` with millisecond range/run/session filters,
+  filter-bound pagination and native local/named-node run attribution. Actual
+  response prices preserve known zero versus unknown cost; missing historical
+  attribution and aggregate-only history are explicitly incomplete. Durable
+  run/usage-occurrence dedupe survives ledger restart. `usage.cost` now identifies
+  its known-cost subtotal and completeness, delegates recording to the core owner,
+  and propagates unavailable storage as an error.
+- Profile-backed cron jobs can require private, authenticated product admission
+  before every dispatch. Decisions bind the actual owner/workspace/profile and
+  fixed run receipts; denial or unavailable admission never launches or retries
+  work. Trusted operators provision encrypted per-routine tokens through
+  `cron.admission.set`; callback credentials remain absent from public cron
+  projections. Origins are explicitly allowlisted, with HTTPS except literal
+  loopback HTTP for local development.
+- Destination-local `node.mcp.discover`, exact executable `enabledTools`
+  allowlists, and principal-specific `chat.send.invocationMcpServers` replacement
+  without inheriting owner credentials. Product MCP origins are checked and DNS
+  pinned on the worker before secret resolution; transports retain Host/TLS
+  identity, reject redirects, and separately authorize OAuth metadata origins.
+- Acknowledged `profiles.sync` persona provisioning on a selected destination
+  before placement changes, preserving destination credentials and mutable
+  memory with verified revision/mutation bindings.
+- Read-only `profiles.sync.status` reconciles lost provisioning responses with
+  durable destination mutation/digest receipts, distinguishing acknowledged,
+  pending, unknown and unavailable without replaying private persona content.
+- Persistent native profile `toolPolicy` and restrictive
+  `chat.send.invocationToolPolicy` floors apply to canonical, task, DM, group
+  and cron execution; caller overrides cannot widen native hard ceilings.
+  Profile HTTP discovery exposes stable `executionName` aliases whose actual
+  calls obey native denial and required approvals, not advisory server hints.
+- Profile names support 120 Unicode scalar values and exact 128 KiB system
+  prompts. Rich execution JSON budgets support complete 16,384-entry native
+  grants without changing unrelated JSON traversal limits.
+- Read-only `node.profile.paths` exposes authoritative destination workspace/
+  skill paths for selected profile provisioning without guessing controller
+  state or granting new filesystem roots.
+- Pure operator-read `mcp.execution_names` projects exact native profile HTTP
+  tool aliases before profile creation, without HTTP/DNS initialization, secret
+  configuration or JavaScript guesses at the native identity encoding.
+- Authenticated cron admission receipts can project a Team routine creator's
+  current execution/private-memory scopes, destination-only connector references,
+  restrictive native policy, and fresh fixed-run core proof. The shared native
+  factory checks the actual profile-built request before launch; stale proofs
+  and shared-memory grants fail closed, without storing the private projection
+  in cron job metadata, runs, events, or audits.
+
+### Fixed
+
+- Node-only control-plane methods (invocation results/events/control results,
+  native follow-up and lineage floor) now require the authenticated node role
+  before any scope check, so operator credentials carrying node scopes are
+  refused.
+
+- Lemon Bot clients normalize trailing-slash backend origins without duplicate
+  API path separators. Web form labels and body text remain legible in dark
+  appearance, including onboarding before sign-in.
+- Lemon Bot native startup defers macOS Services registration until AppKit is
+  initialized. UIKit terminal colors, Carbon sizes and nested voice bindings use
+  their actual platform APIs without replacing capture owners or masking errors.
+- Pending execution-approval events redact nested credentials and rationale
+  secrets before reaching clients, while preserving visible review targets.
+- Private cron admission accepts valid allowlisted callback URLs without
+  depending on URI's deprecated authority field; malformed empty ports remain
+  rejected without weakening callback origin or receipt checks.
+- Cron jobs now evaluate IANA timezone names with real UTC offsets and
+  daylight-saving rules. Missing spring-forward slots are skipped; repeated
+  fall-back slots use only their first occurrence. Invalid/unavailable zones
+  are rejected on creation/update instead of silently scheduling in UTC, and
+  timezone-only updates recompute the next run.
+
+- Execution approval resolution now returns an owner-verified outcome and actual
+  decision instead of acknowledging stale or unknown prompts. Optional exact
+  session/run bindings are atomically checked with the pending snapshot; expired,
+  cancelled and conflicting decisions fail closed. Redacted retained receipts
+  allow only exact-bound same-decision replays, without reinstalling grants.
+  Named-node workers retain failed approval resolutions for teardown and bind
+  successful decisions to their invocation's run and session.
+- Standing session/agent tool approvals for context-owned team runs are now
+  isolated by their trusted private principal/policy context. Another user or
+  changed policy cannot inherit a grant through a shared bot session, nor fall
+  back to a legacy unscoped grant. Public identities are unchanged; private
+  context remains in typed owner storage and is excluded from wire projections.
+  Explicit operator global/node grants and nil-context native scopes are retained.
+- Named-node profile chat no longer inherits the controller's default working
+  directory. Profile persona instructions and MCP connections accompany the
+  execution request, while provider credentials remain destination-local.
+- Subagent coordinators remain responsive to active-session queries and cancellation
+  while child sessions are starting, rather than blocking those requests behind
+  synchronous session initialization. Terminal answers and provider errors survive
+  cancellation during cleanup, and late admissions retain a cleanup owner even if
+  their execution worker dies during startup.
+
+- Execution-node workers no longer crash when cancellation, disconnect or event
+  delivery failure occurs after a native runner has finished but its live events
+  are still draining. Finished runners are not cancelled again, concurrent runner
+  exits are tolerated, and invocation/approval cleanup still completes.
+- Mutable `USER.md` preference memory is destination-owned, never replaced by
+  controller persona snapshots. Subsequent session bootstrap reflects real
+  user-memory additions and deletions.
+- Profile sessions no longer inherit ambient machine-global MCP credentials;
+  selected destination-owned skills remain available with an independent
+  execution cwd and load their full bodies lazily through `read_skill`.
+- Remote image-only requests encode validated native image blocks as the
+  established wire format, preserving five-image/10 MiB aggregate admission,
+  strict MIME/Base64 validation, configured transport bounds and vision checks.
+- Implicit profile synchronization now prefers an exact stored durable node ID
+  even while offline, preventing a node with that ID as its name from receiving
+  another machine's private persona. Legacy names resolve only without an ID
+  record; explicit target IDs remain ID-only.
+- PTY descriptor-policy startup no longer imports a running filesystem packet
+  server that consumes the terminal's policy frame. The filesystem helper has an
+  import-safe direct-execution entrypoint; real binary terminal startup and queued
+  input retain their own framing and descriptor-rooted cwd admission.
+- Context-owned native recall/bootstrap and remember/capture now use admitted
+  stable actor partitions across local and destination-worker completed runs.
+  Other actors, unproven summaries and raw legacy USER/MEMORY bytes cannot enter
+  owned recall; retained data is not rewritten or silently promoted to shared.
+  Transfers preserve persisted ownership rather than trusting retained raw claims.
+  Scoped worker calls require fresh capabilities and exact checked connection
+  binding before enqueue, with no private-to-legacy fallback.
+- Automatic native skill synthesis excludes indexed private/unproven documents
+  instead of publishing their summaries into global/profile draft files. New
+  memory indexes omit runtime credential configuration and ephemeral admission
+  proof artifacts; canonical preferences/project facts survive ordinary history
+  pruning, without promoting or rewriting legacy rows.
+- Remote execution metadata now canonicalizes atom-key proof/grant/context
+  presence before JSON encoding, so forged string/camel aliases cannot replace
+  explicit false/null values. Untrusted meaningful scope/proof claims fail
+  closed instead of downgrading to legacy context; unresolved references remain
+  execution-host owned.
+- Factory-only native source profile/session identifiers, managed-context
+  sentinels, connection generations and follow-up/floor callbacks no longer
+  survive remote execution metadata encoding under atom or string/camel aliases.
+- Lemon Bot host management and probes require direct noninteractive native
+  destination process execution; PTY is reserved for user-facing terminals.
+- Private invocation proof secrets use the owning pending lineage destination
+  and atomically pin both live PID and credential generation before provisioning.
+  Only strict absence permits a fresh root; stale/mismatched/finished lineage
+  never falls back. Trim-normalized reserved names require their exact fixed
+  operation ID, and missing privacy support rejects before any proof value is sent.
+  Successful vault replies are revalidated against the same pre-provision session
+  and current owning pending target before acknowledgement; lost ownership or
+  configuration/policy changes report a non-retry-safe potentially applied mutation,
+  never a positive private proof authority acknowledgement.
+- Automated host-driver actions and read-only probes can use admin-only
+  `node.process.run|get|cancel`: literal executable argv, descriptor-admitted
+  destination cwd, bounded raw stdin with EOF, independent non-TTY stdout/stderr,
+  and observed exit receipts. Fixed IDs persist immutable private admission and
+  spent/cancel fences; uncertain work is queried, never redispatched. Cancellation
+  before admission durably prevents a later run, and active cancellation/timeout/
+  overflow cleans the real process group. Outputs stay private to the RPC caller,
+  missing output is null rather than invented empty data, and interactive PTYs
+  remain exclusively explicit user terminals—no automated PTY/shell/SSH fallback.
+- Native process overflow, drain and final cleanup share one successful
+  process-group stop request instead of repeatedly signalling an already-stopped
+  group. First-stop permission failures remain errors and owned descriptors
+  still close; no fabricated cancellation receipt is returned.
+- JSONL-backed native process receipts can pass real macOS durability admission:
+  the owning Core barrier uses a packaged Python 3 descriptor helper for file
+  and directory fsync plus F_FULLFSYNC. Missing/refused barriers remain errors,
+  not a weaker global-sync success or a switch to another persistence backend.
 
 ---
 

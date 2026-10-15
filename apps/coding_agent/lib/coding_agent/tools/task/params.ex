@@ -211,7 +211,7 @@ defmodule CodingAgent.Tools.Task.Params do
              worktree: worktree,
              merge: merge,
              cwd: delegated_cwd,
-             meta: meta || %{},
+             meta: sanitize_child_metadata(meta || %{}),
              session_key: session_key,
              agent_id: agent_id,
              queue_mode: followup_queue_mode,
@@ -551,6 +551,22 @@ defmodule CodingAgent.Tools.Task.Params do
     inherited_extra_tools = normalize_extra_tools(Keyword.get(opts, :extra_tools, []))
     child_extra_tools = inherited_extra_tools ++ maybe_build_ask_parent_tools(cwd, opts)
     {task_model, settings} = resolve_task_model(cwd, opts, validated)
+    parent_session = Keyword.get(opts, :parent_session)
+    parent_state = if is_pid(parent_session), do: inherited_session_state(opts)
+    inherited_context = inherited_execution_context(opts, parent_state)
+
+    child_policy =
+      case {inherited_context.tool_policy, validated[:tool_policy]} do
+        {nil, requested} -> requested
+        {parent, nil} -> parent
+        {parent, requested} -> LemonCore.ToolPolicy.intersect(parent, requested)
+      end
+
+    opts =
+      case parent_state do
+        %{session_manager: %{header: %{id: id}}} -> Keyword.put(opts, :parent_session, id)
+        _ -> opts
+      end
 
     base_opts =
       opts
@@ -570,6 +586,23 @@ defmodule CodingAgent.Tools.Task.Params do
       ])
       |> Enum.reject(fn {_key, value} -> is_nil(value) end)
       |> Keyword.put(:settings_manager, settings)
+      |> Keyword.put(:invocation_mcp_servers, inherited_context.invocation_mcp_servers)
+      |> maybe_put_kw(:memory_context_key, inherited_context.memory_context_key)
+      |> Keyword.put(:memory_context_verified, inherited_context.memory_context_verified)
+      |> Keyword.put(:shared_memory_grant, inherited_context.shared_memory_grant)
+      |> Keyword.merge(Map.to_list(Map.take(inherited_context, private_native_fields())))
+      |> maybe_put_kw(
+        :mcp_session_id,
+        Keyword.get(opts, :mcp_session_id, Map.get(parent_state || %{}, :mcp_session_id))
+      )
+      |> maybe_put_kw(
+        :acp_mcp_session_id,
+        Keyword.get(opts, :acp_mcp_session_id, Map.get(parent_state || %{}, :acp_mcp_session_id))
+      )
+      |> maybe_put_kw(
+        :invocation_context_key,
+        inherited_context.invocation_context_key
+      )
 
     override_opts =
       []
@@ -579,7 +612,7 @@ defmodule CodingAgent.Tools.Task.Params do
       |> Keyword.put(:task_depth, current_task_depth(opts) + 1)
       |> Keyword.put(:task_child, true)
       |> maybe_put_kw(:task_allowed_agents, validated[:task_allowed_agents])
-      |> maybe_put_kw(:tool_policy, validated[:tool_policy])
+      |> maybe_put_kw(:tool_policy, child_policy)
       |> maybe_put_kw(:session_key, validated[:session_key])
       |> maybe_put_kw(:agent_id, validated[:agent_id])
       |> maybe_put_kw(:extra_tools, child_extra_tools_if_present(child_extra_tools))
@@ -590,6 +623,286 @@ defmodule CodingAgent.Tools.Task.Params do
       {:run_id, Keyword.get(opts, :child_run_id)},
       {:session_scope, :subagent} | Keyword.merge(base_opts, override_opts)
     ]
+  end
+
+  @doc false
+  def inherited_execution_context(opts), do: inherited_execution_context(opts, nil)
+
+  defp inherited_execution_context(opts, parent_state) do
+    approval_context = Keyword.get(opts, :approval_context) || %{}
+
+    complete? =
+      Keyword.has_key?(opts, :tool_policy) &&
+        Keyword.has_key?(opts, :invocation_mcp_servers) &&
+        (Keyword.has_key?(opts, :invocation_context_key) ||
+           Map.has_key?(approval_context, :invocation_context_key)) &&
+        (Keyword.has_key?(opts, :memory_context_key) ||
+           Map.has_key?(approval_context, :memory_context_key)) &&
+        (Keyword.has_key?(opts, :memory_context_verified) ||
+           Map.has_key?(approval_context, :memory_context_verified)) &&
+        (Keyword.has_key?(opts, :shared_memory_grant) ||
+           Map.has_key?(approval_context, :shared_memory_grant))
+
+    parent_state =
+      parent_state || if(complete?, do: %{}, else: inherited_session_state(opts)) || %{}
+
+    parent_approval_context = Map.get(parent_state, :approval_context) || %{}
+
+    %{
+      invocation_context_key:
+        LemonCore.MapHelpers.get_key(approval_context, :invocation_context_key) ||
+          Keyword.get(
+            opts,
+            :invocation_context_key,
+            LemonCore.MapHelpers.get_key(parent_approval_context, :invocation_context_key)
+          ),
+      memory_context_key:
+        LemonCore.MapHelpers.get_key(approval_context, :memory_context_key) ||
+          Keyword.get(
+            opts,
+            :memory_context_key,
+            LemonCore.MapHelpers.get_key(parent_approval_context, :memory_context_key)
+          ),
+      memory_context_verified:
+        Keyword.get(
+          opts,
+          :memory_context_verified,
+          Map.get(
+            approval_context,
+            :memory_context_verified,
+            Map.get(
+              approval_context,
+              "memory_context_verified",
+              Map.get(
+                parent_approval_context,
+                :memory_context_verified,
+                Map.get(parent_approval_context, "memory_context_verified", false)
+              )
+            )
+          )
+        ) == true,
+      shared_memory_grant:
+        Keyword.get(
+          opts,
+          :shared_memory_grant,
+          Map.get(
+            approval_context,
+            :shared_memory_grant,
+            Map.get(
+              approval_context,
+              "shared_memory_grant",
+              Map.get(
+                parent_approval_context,
+                :shared_memory_grant,
+                Map.get(parent_approval_context, "shared_memory_grant", false)
+              )
+            )
+          )
+        ) == true,
+      tool_policy: Keyword.get(opts, :tool_policy, Map.get(parent_state, :tool_policy)),
+      invocation_mcp_servers:
+        Keyword.get(
+          opts,
+          :invocation_mcp_servers,
+          Map.get(
+            approval_context,
+            :invocation_mcp_servers,
+            Map.get(parent_approval_context, :invocation_mcp_servers)
+          )
+        )
+    }
+    |> Map.merge(
+      Map.new(private_native_fields(), fn key ->
+        {key,
+         Map.get(
+           approval_context,
+           key,
+           Keyword.get(opts, key, Map.get(parent_approval_context, key))
+         )}
+      end)
+    )
+    |> Map.put(
+      :native_managed_context,
+      inherited_managed_context(opts, approval_context, parent_approval_context)
+    )
+  end
+
+  @doc false
+  def private_native_fields do
+    [
+      :native_lineage_handle,
+      :native_lineage_run_id,
+      :native_source_profile_id,
+      :native_source_session_key,
+      :native_followup_submit,
+      :native_source_floor_fun,
+      :invocation_proof,
+      :invocation_proof_verified,
+      :native_managed_context
+    ]
+  end
+
+  @doc false
+  def submit_native_followup(context, request) do
+    source = %{
+      run_id: context[:native_lineage_run_id],
+      lineage_handle: context[:native_lineage_handle]
+    }
+
+    if is_binary(source.run_id) and is_binary(source.lineage_handle) do
+      submit =
+        context[:native_followup_submit] || (&LemonCore.RouterBridge.submit_native_followup/2)
+
+      submit.(source, request)
+    else
+      {:error, :native_followup_lineage_unavailable}
+    end
+  end
+
+  @doc false
+  def managed_context?(context) do
+    case Map.fetch(context, :native_managed_context) do
+      {:ok, flag} when is_boolean(flag) -> flag
+      _ -> managed_metadata?(context)
+    end
+  end
+
+  @doc false
+  def continuation_metadata(meta, context) do
+    meta = sanitize_child_metadata(meta || %{})
+
+    if managed_context?(context) do
+      meta
+    else
+      case context[:invocation_context_key] do
+        key when is_binary(key) and key != "" ->
+          meta
+          |> Map.put(:invocation_context_key, key)
+          |> Map.put(:mcp_servers, context[:invocation_mcp_servers] || [])
+
+        _ ->
+          meta
+      end
+    end
+  end
+
+  @doc false
+  def sanitize_child_metadata(meta) when is_map(meta) do
+    names = [
+      "invocation_context_key",
+      "invocationContextKey",
+      "memory_context_key",
+      "memoryContextKey",
+      "memory_context_verified",
+      "memoryContextVerified",
+      "shared_memory_grant",
+      "sharedMemoryGrant",
+      "invocation_proof",
+      "invocationProof",
+      "invocation_proof_verified",
+      "invocationProofVerified",
+      "native_lineage_handle",
+      "nativeLineageHandle",
+      "native_lineage_run_id",
+      "nativeLineageRunId",
+      "native_destination_pid",
+      "nativeDestinationPid",
+      "native_destination_generation",
+      "nativeDestinationGeneration",
+      "native_source_profile_id",
+      "nativeSourceProfileId",
+      "native_source_session_key",
+      "nativeSourceSessionKey",
+      "native_managed_context",
+      "nativeManagedContext",
+      "native_followup_submit",
+      "nativeFollowupSubmit",
+      "native_source_floor_fun",
+      "nativeSourceFloorFun",
+      "mcp_servers",
+      "mcpServers",
+      "invocation_mcp_servers",
+      "invocationMcpServers",
+      "sourceRunId",
+      "source_run_id",
+      "sourceProfileId",
+      "source_profile_id",
+      "sourceSessionKey",
+      "source_session_key",
+      "rootRunId",
+      "root_run_id"
+    ]
+
+    Enum.reduce(meta, %{}, fn {key, value}, acc ->
+      name = if is_atom(key), do: Atom.to_string(key), else: key
+
+      if name in names or name in ["mcp_servers_json", "mcpServersJson"],
+        do: acc,
+        else: Map.put(acc, key, sanitize_nested_metadata(value))
+    end)
+  end
+
+  defp sanitize_nested_metadata(value) when is_map(value), do: sanitize_child_metadata(value)
+
+  defp sanitize_nested_metadata(value) when is_list(value),
+    do: Enum.map(value, &sanitize_nested_metadata/1)
+
+  defp sanitize_nested_metadata(value), do: value
+
+  defp inherited_managed_context(opts, context, parent_context) do
+    sources = [context, Map.new(opts), parent_context]
+
+    case Enum.find(sources, &is_boolean(&1[:native_managed_context])) do
+      nil -> Enum.any?(sources, &managed_metadata?/1)
+      source -> source.native_managed_context
+    end
+  end
+
+  @doc false
+  def managed_metadata?(meta) when is_map(meta) do
+    fields = [
+      {:memory_context_key, :memoryContextKey, "memoryContextKey"},
+      {:memory_context_verified, :memoryContextVerified, "memoryContextVerified"},
+      {:shared_memory_grant, :sharedMemoryGrant, "sharedMemoryGrant"},
+      {:invocation_proof, :invocationProof, "invocationProof"},
+      {:invocation_proof_verified, :invocationProofVerified, "invocationProofVerified"},
+      {:native_lineage_handle, :nativeLineageHandle, "nativeLineageHandle"},
+      {:native_lineage_run_id, :nativeLineageRunId, "nativeLineageRunId"}
+    ]
+
+    Enum.any?(fields, fn {key, camel_atom, camel} ->
+      Enum.any?(
+        [key, Atom.to_string(key), camel, camel_atom],
+        &Map.has_key?(meta, &1)
+      )
+    end) or
+      reserved_invocation_reference?(
+        meta[:invocation_mcp_servers] || meta[:mcp_servers] || meta["mcp_servers"]
+      )
+  end
+
+  defp reserved_invocation_reference?(value) when is_binary(value),
+    do: String.contains?(value, "lemon_bot/invocations/")
+
+  defp reserved_invocation_reference?(value) when is_list(value),
+    do: Enum.any?(value, &reserved_invocation_reference?/1)
+
+  defp reserved_invocation_reference?(value) when is_map(value),
+    do: Enum.any?(value, fn {_key, item} -> reserved_invocation_reference?(item) end)
+
+  defp reserved_invocation_reference?(_), do: false
+
+  defp inherited_session_state(opts) do
+    session_pid = Keyword.get(opts, :session_pid) || Keyword.get(opts, :parent_session)
+    session_module = Keyword.get(opts, :session_module, Session)
+
+    with true <- is_pid(session_pid) && Process.alive?(session_pid),
+         true <- function_exported?(session_module, :get_state, 1),
+         state when is_map(state) <- safe_get_session_state(session_module, session_pid) do
+      state
+    else
+      _ -> nil
+    end
   end
 
   defp resolve_inherited_model(opts) do
@@ -647,9 +960,10 @@ defmodule CodingAgent.Tools.Task.Params do
   defp default_task_tool_policy(nil), do: ToolPolicy.from_profile(:leaf_worker)
 
   # Persona `spawns` lifts only the leaf worker's task denial; other delegation stays denied.
+  # A custom profile keeps the leaf preset floor from re-adding the lifted denial.
   defp default_task_tool_policy(_spawns) do
     policy = ToolPolicy.from_profile(:leaf_worker)
-    %{policy | deny: List.delete(policy.deny, "task")}
+    %{policy | deny: List.delete(policy.deny, "task"), profile: :custom}
   end
 
   defp infer_tool_only_policy(prompt) when is_binary(prompt) do

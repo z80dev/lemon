@@ -201,6 +201,104 @@ defmodule LemonAutomation.CronScheduleTest do
     end
   end
 
+  describe "IANA timezone schedules" do
+    test "09:00 New York uses summer and winter UTC offsets" do
+      assert CronSchedule.next_run_datetime("0 9 * * *", "America/New_York",
+               from: ~U[2026-07-15 00:00:00Z]
+             ) == ~U[2026-07-15 13:00:00Z]
+
+      assert CronSchedule.next_run_ms("0 9 * * *", "America/New_York",
+               from: ~U[2026-01-15 00:00:00Z]
+             ) == DateTime.to_unix(~U[2026-01-15 14:00:00Z], :millisecond)
+    end
+
+    test "skips the missing spring-forward slot without moving it to 03:30" do
+      assert CronSchedule.next_runs("30 2 * * *", "America/New_York",
+               from: ~U[2026-03-07 07:30:00Z],
+               count: 2
+             ) == [~U[2026-03-09 06:30:00Z], ~U[2026-03-10 06:30:00Z]]
+    end
+
+    test "uses the first fall-back slot only" do
+      assert CronSchedule.next_runs("30 1 * * *", "America/New_York",
+               from: ~U[2026-11-01 04:00:00Z],
+               count: 3
+             ) == [
+               ~U[2026-11-01 05:30:00Z],
+               ~U[2026-11-02 06:30:00Z],
+               ~U[2026-11-03 06:30:00Z]
+             ]
+    end
+
+    test "does not replay the folded slot after its first occurrence has passed" do
+      for from <- [~U[2026-11-01 05:45:00Z], ~U[2026-11-01 06:10:00Z]] do
+        assert CronSchedule.next_run_datetime("30 1 * * *", "America/New_York", from: from) ==
+                 ~U[2026-11-02 06:30:00Z]
+      end
+    end
+
+    test "returns chronological instants across the folded hour" do
+      assert CronSchedule.next_runs("*/15 * * * *", "America/New_York",
+               from: ~U[2026-11-01 05:14:30Z],
+               count: 5
+             ) == [
+               ~U[2026-11-01 05:15:00Z],
+               ~U[2026-11-01 05:30:00Z],
+               ~U[2026-11-01 05:45:00Z],
+               ~U[2026-11-01 07:00:00Z],
+               ~U[2026-11-01 07:15:00Z]
+             ]
+    end
+
+    test "matches calendar fields in the source zone, not the UTC date" do
+      assert CronSchedule.next_run_datetime("0 22 31 12 *", "America/New_York",
+               from: ~U[2026-01-01 02:00:00Z]
+             ) == ~U[2026-01-01 03:00:00Z]
+    end
+
+    test "supports non-hour offsets" do
+      assert CronSchedule.next_run_datetime("0 9 * * *", "Asia/Kathmandu",
+               from: ~U[2026-07-15 00:00:00Z]
+             ) == ~U[2026-07-15 03:15:00Z]
+    end
+
+    test "rejects invalid zones instead of scheduling in UTC" do
+      assert CronSchedule.validate_timezone("Not/A_Zone") == {:error, :invalid_timezone}
+      assert CronSchedule.validate_timezone(nil) == {:error, :invalid_timezone}
+      assert CronSchedule.next_run_ms("0 9 * * *", "Not/A_Zone") == nil
+      assert CronSchedule.next_run_datetime("0 9 * * *", "Not/A_Zone") == nil
+      assert CronSchedule.next_runs("0 9 * * *", "Not/A_Zone", count: 2) == []
+    end
+
+    test "fails closed when a timezone database cannot support the zone" do
+      database = Calendar.UTCOnlyTimeZoneDatabase
+
+      assert CronSchedule.validate_timezone("America/New_York", database) ==
+               {:error, :timezone_unavailable}
+
+      assert CronSchedule.next_runs("0 9 * * *", "America/New_York",
+               from: ~U[2026-07-15 00:00:00Z],
+               time_zone_database: database
+             ) == []
+    end
+
+    test "honors exclusive starting instants for UTC and zero requested runs" do
+      from = ~U[2026-07-15 09:00:00Z]
+
+      assert CronSchedule.next_runs("0 9 * * *", "UTC", from: from, count: 2) ==
+               [~U[2026-07-16 09:00:00Z], ~U[2026-07-17 09:00:00Z]]
+
+      assert CronSchedule.next_runs("* * * * *", "UTC", from: from, count: 0) == []
+    end
+
+    test "starting datetime represents an instant regardless of its own zone" do
+      from = DateTime.shift_zone!(~U[2026-07-15 12:30:00Z], "Asia/Tokyo")
+
+      assert CronSchedule.next_run_datetime("0 9 * * *", "America/New_York", from: from) ==
+               ~U[2026-07-15 13:00:00Z]
+    end
+  end
+
   describe "matches?/2" do
     test "returns true when datetime matches expression" do
       # Create a datetime at exactly 9:00

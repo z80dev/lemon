@@ -58,12 +58,24 @@ defmodule LemonControlPlane.Methods.Registry do
     LemonControlPlane.Methods.ProfilesList,
     LemonControlPlane.Methods.ProfilesGet,
     LemonControlPlane.Methods.ProfilesCreate,
+    LemonControlPlane.Methods.ProfilesUpdate,
     LemonControlPlane.Methods.ProfilesClone,
     LemonControlPlane.Methods.ProfilesRename,
     LemonControlPlane.Methods.ProfilesExport,
     LemonControlPlane.Methods.ProfilesDelete,
     LemonControlPlane.Methods.ProfilesRoster,
     LemonControlPlane.Methods.ProfileChat,
+    LemonControlPlane.Methods.ProfileFollowupAdmissionSet,
+    # Profile-scoped memory
+    LemonControlPlane.Methods.MemoryList,
+    LemonControlPlane.Methods.MemorySearch,
+    LemonControlPlane.Methods.MemoryGet,
+    LemonControlPlane.Methods.MemoryAdd,
+    LemonControlPlane.Methods.MemoryDelete,
+    LemonControlPlane.Methods.ProfilesSync,
+    LemonControlPlane.Methods.ProfilesSyncStatus,
+    LemonControlPlane.Methods.MemoryTransfer,
+    LemonControlPlane.Methods.MemoryTransferStatus,
     # Agents
     LemonControlPlane.Methods.AgentsList,
     # Skills
@@ -75,6 +87,7 @@ defmodule LemonControlPlane.Methods.Registry do
     # MCP server connections
     LemonControlPlane.Methods.McpServersList,
     LemonControlPlane.Methods.McpServersRefresh,
+    LemonControlPlane.Methods.McpExecutionNames,
     # Portable skill bundles and automation blueprints
     LemonControlPlane.Methods.BlueprintsList,
     LemonControlPlane.Methods.BlueprintsInspect,
@@ -107,6 +120,7 @@ defmodule LemonControlPlane.Methods.Registry do
     # Runs
     LemonControlPlane.Methods.RunsActiveList,
     LemonControlPlane.Methods.RunsRecentList,
+    LemonControlPlane.Methods.RunsFollowupLineageGet,
     # Tasks
     LemonControlPlane.Methods.TasksActiveList,
     LemonControlPlane.Methods.TasksRecentList,
@@ -114,6 +128,7 @@ defmodule LemonControlPlane.Methods.Registry do
     LemonControlPlane.Methods.CronList,
     LemonControlPlane.Methods.CronAdd,
     LemonControlPlane.Methods.CronUpdate,
+    LemonControlPlane.Methods.CronAdmissionSet,
     LemonControlPlane.Methods.CronPause,
     LemonControlPlane.Methods.CronResume,
     LemonControlPlane.Methods.CronAbort,
@@ -127,14 +142,45 @@ defmodule LemonControlPlane.Methods.Registry do
     LemonControlPlane.Methods.ExecApprovalResolve,
     # Chat
     LemonControlPlane.Methods.ChatSend,
+    LemonControlPlane.Methods.RunsReceiptGet,
     LemonControlPlane.Methods.ChatAbort,
     LemonControlPlane.Methods.ChatHistory,
     # Execution node pairing and invocation
     LemonControlPlane.Methods.NodePairRequest,
     LemonControlPlane.Methods.NodePairApprove,
+    LemonControlPlane.Methods.NodePairInvite,
+    LemonControlPlane.Methods.NodePairInviteRevoke,
+    LemonControlPlane.Methods.NodeCapabilitiesGet,
+    LemonControlPlane.Methods.NodeRuntimeFeatures,
+    LemonControlPlane.Methods.NodeHostInfo,
+    LemonControlPlane.Methods.NodeFsList,
+    LemonControlPlane.Methods.NodeFsStat,
+    LemonControlPlane.Methods.NodeFsRead,
+    LemonControlPlane.Methods.NodeFsWrite,
+    LemonControlPlane.Methods.NodeFsMkdir,
+    LemonControlPlane.Methods.NodeFsMove,
+    LemonControlPlane.Methods.NodeFsDeletePreview,
+    LemonControlPlane.Methods.NodeFsDelete,
+    LemonControlPlane.Methods.NodeSecretsSet,
+    LemonControlPlane.Methods.NodeSecretsList,
+    LemonControlPlane.Methods.NodeSecretsDelete,
+    LemonControlPlane.Methods.NodeSecretsReceipt,
+    LemonControlPlane.Methods.NodeProcessRun,
+    LemonControlPlane.Methods.NodeProcessGet,
+    LemonControlPlane.Methods.NodeProcessCancel,
+    LemonControlPlane.Methods.NodeShellOpen,
+    LemonControlPlane.Methods.NodeShellInput,
+    LemonControlPlane.Methods.NodeShellResize,
+    LemonControlPlane.Methods.NodeShellClose,
+    LemonControlPlane.Methods.NodeShellEvent,
     LemonControlPlane.Methods.NodeInvoke,
+    LemonControlPlane.Methods.NodeMcpDiscover,
+    LemonControlPlane.Methods.NodeProfilePaths,
     LemonControlPlane.Methods.NodeInvokeResult,
+    LemonControlPlane.Methods.NodeInvokeEvent,
     LemonControlPlane.Methods.NodeInvokeControlResult,
+    LemonControlPlane.Methods.NodeNativeFollowup,
+    LemonControlPlane.Methods.NodeNativeLineageFloor,
     LemonControlPlane.Methods.NodesList,
     LemonControlPlane.Methods.NodesRevoke,
     # Config
@@ -154,7 +200,8 @@ defmodule LemonControlPlane.Methods.Registry do
     LemonControlPlane.Methods.OmpSessionsClose,
     # Usage
     LemonControlPlane.Methods.UsageStatus,
-    LemonControlPlane.Methods.UsageCost
+    LemonControlPlane.Methods.UsageCost,
+    LemonControlPlane.Methods.UsageRecords
   ]
 
   ## Client API

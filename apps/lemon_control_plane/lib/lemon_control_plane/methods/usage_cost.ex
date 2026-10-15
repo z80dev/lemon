@@ -37,23 +37,17 @@ defmodule LemonControlPlane.Methods.UsageCost do
   }
   ```
 
-  ## Recording Usage
+  ## Enforcement
 
-  Use `LemonControlPlane.Methods.UsageCost.record_usage/1` to record usage:
-
-  ```elixir
-  UsageCost.record_usage(%{
-    provider: "claude",
-    cost: 0.05,
-    input_tokens: 500,
-    output_tokens: 200
-  })
-  ```
+  This is a bounded presentation of known-cost subtotals. Use `usage.records`
+  and exhaust every page for spend accounting; unknown prices and unattributed
+  historical totals are incomplete, never evidence of free execution.
+  Recording belongs to `LemonCore.UsageLedger` and the native run owner.
   """
 
   @behaviour LemonControlPlane.Method
 
-  alias LemonControlPlane.UsageStore
+  alias LemonCore.UsageStore
 
   @impl true
   def name, do: "usage.cost"
@@ -70,33 +64,45 @@ defmodule LemonControlPlane.Methods.UsageCost do
     # Parse dates or use defaults
     {start_ms, end_ms} = parse_date_range(start_date, end_date)
 
-    records = fetch_records(start_ms, end_ms)
-    costs = calculate_costs(records, group_by)
-    details = details(records)
+    case fetch_records(start_ms, end_ms) do
+      {:ok, records} ->
+        costs = calculate_costs(records, group_by)
+        details = details(records)
 
-    result = %{
-      "startDate" => format_date(start_ms),
-      "endDate" => format_date(end_ms),
-      "totalCost" => costs.total,
-      "breakdown" => costs.breakdown,
-      "totalRequests" => costs.total_requests,
-      "totalTokens" => costs.total_tokens,
-      "providers" => details.providers,
-      "models" => details.models,
-      "sessions" => details.sessions,
-      "sessionsOmitted" => details.sessions_omitted,
-      "dailyUsage" => details.daily
-    }
+        result = %{
+          "startDate" => format_date(start_ms),
+          "endDate" => format_date(end_ms),
+          "totalCost" => costs.total,
+          "knownCostSubtotal" => costs.total,
+          "incomplete" =>
+            Enum.any?(records, fn record ->
+              not Map.has_key?(record, :unknown_cost_records) or
+                Map.get(record, :unknown_cost_records, 0) > 0
+            end),
+          "breakdown" => costs.breakdown,
+          "totalRequests" => costs.total_requests,
+          "totalTokens" => costs.total_tokens,
+          "providers" => details.providers,
+          "models" => details.models,
+          "sessions" => details.sessions,
+          "sessionsOmitted" => details.sessions_omitted,
+          "dailyUsage" => details.daily
+        }
 
-    # Add daily breakdown if grouped by day
-    result =
-      if group_by == "day" and map_size(costs.daily) > 0 do
-        Map.put(result, "daily", costs.daily)
-      else
-        result
-      end
+        # Add daily breakdown if grouped by day
+        result =
+          if group_by == "day" and map_size(costs.daily) > 0 do
+            Map.put(result, "daily", costs.daily)
+          else
+            result
+          end
 
-    {:ok, Map.put(result, "summary", summary(result, group_by))}
+        {:ok, Map.put(result, "summary", summary(result, group_by))}
+
+      {:error, _} ->
+        {:error,
+         LemonControlPlane.Protocol.Errors.error(:unavailable, "Usage ledger unavailable")}
+    end
   end
 
   defp summary(result, group_by) do
@@ -122,102 +128,6 @@ defmodule LemonControlPlane.Methods.UsageCost do
   end
 
   defp total_token_count(_), do: 0
-
-  @doc """
-  Record a usage event for cost tracking.
-
-  ## Options
-
-  - `:provider` - Provider name (e.g., "claude", "openai")
-  - `:cost` - Cost in USD
-  - `:input_tokens` - Number of input tokens
-  - `:output_tokens` - Number of output tokens
-  - `:model` - Optional model name
-  """
-  @spec record_usage(map()) :: :ok
-  def record_usage(usage) do
-    provider = usage[:provider] || usage["provider"] || "other"
-    cost = usage[:cost] || usage["cost"] || 0.0
-    input_tokens = usage[:input_tokens] || usage["input_tokens"] || 0
-    output_tokens = usage[:output_tokens] || usage["output_tokens"] || 0
-
-    # Get today's date key
-    date_key = Date.utc_today() |> Date.to_iso8601()
-
-    # Get or create today's record
-    record =
-      UsageStore.get_record(date_key) ||
-        %{
-          date: date_key,
-          total_cost: 0.0,
-          breakdown: %{},
-          requests: %{},
-          tokens: %{}
-        }
-
-    # Update totals
-    record = %{
-      record
-      | total_cost: (get_field(record, :total_cost) || 0.0) + cost,
-        breakdown: update_breakdown(get_field(record, :breakdown) || %{}, provider, cost),
-        requests: update_count(get_field(record, :requests) || %{}, provider, 1),
-        tokens:
-          update_tokens(get_field(record, :tokens) || %{}, provider, input_tokens, output_tokens)
-    }
-
-    # Store updated record
-    UsageStore.put_record(date_key, record)
-
-    # Also update the current summary for quick access
-    update_current_summary(provider, cost, input_tokens, output_tokens)
-
-    :ok
-  end
-
-  defp update_breakdown(breakdown, provider, cost) do
-    current = get_field(breakdown, provider) || 0.0
-    Map.put(breakdown, provider, current + cost)
-  end
-
-  defp update_count(counts, provider, delta) do
-    current = get_field(counts, provider) || 0
-    Map.put(counts, provider, current + delta)
-  end
-
-  defp update_tokens(tokens, provider, input, output) do
-    current = get_field(tokens, provider) || %{input: 0, output: 0}
-    current_input = get_field(current, :input) || 0
-    current_output = get_field(current, :output) || 0
-    Map.put(tokens, provider, %{input: current_input + input, output: current_output + output})
-  end
-
-  defp update_current_summary(provider, cost, input_tokens, output_tokens) do
-    summary =
-      UsageStore.get_summary(:current) ||
-        %{
-          total_cost: 0.0,
-          breakdown: %{},
-          requests: %{},
-          total_requests: 0,
-          total_tokens: %{input: 0, output: 0}
-        }
-
-    updated =
-      Map.merge(summary, %{
-        total_cost: (get_field(summary, :total_cost) || 0.0) + cost,
-        breakdown: update_breakdown(get_field(summary, :breakdown) || %{}, provider, cost),
-        requests: update_count(get_field(summary, :requests) || %{}, provider, 1),
-        tokens:
-          update_tokens(get_field(summary, :tokens) || %{}, provider, input_tokens, output_tokens),
-        total_requests: (get_field(summary, :total_requests) || 0) + 1,
-        total_tokens: %{
-          input: (get_in_field(summary, [:total_tokens, :input]) || 0) + input_tokens,
-          output: (get_in_field(summary, [:total_tokens, :output]) || 0) + output_tokens
-        }
-      })
-
-    UsageStore.put_summary(:current, updated)
-  end
 
   defp parse_date_range(nil, nil) do
     # Default to last 30 days
@@ -258,14 +168,14 @@ defmodule LemonControlPlane.Methods.UsageCost do
     end_date = DateTime.from_unix!(end_ms, :millisecond) |> DateTime.to_date()
     start_date = Enum.max([start_date, Date.add(end_date, 1 - @max_range_days)], Date)
 
-    start_date
-    |> generate_date_range(end_date)
-    |> Enum.flat_map(fn date_key ->
-      case UsageStore.get_record(date_key) do
-        nil -> []
-        record -> [record]
-      end
-    end)
+    with {:ok, records} <- UsageStore.fetch_daily_records() do
+      dates = MapSet.new(generate_date_range(start_date, end_date))
+
+      {:ok,
+       Enum.flat_map(records, fn {date, record} ->
+         if MapSet.member?(dates, date), do: [record], else: []
+       end)}
+    end
   end
 
   defp calculate_costs(records, group_by) do
@@ -520,22 +430,6 @@ defmodule LemonControlPlane.Methods.UsageCost do
   # Safe map access supporting both atom and string keys
   defp get_field(map, key) when is_atom(key) do
     Map.get(map, key) || Map.get(map, Atom.to_string(key))
-  end
-
-  defp get_field(map, key) when is_binary(key) do
-    Map.get(map, key) || Map.get(map, String.to_existing_atom(key))
-  rescue
-    ArgumentError -> Map.get(map, key)
-  end
-
-  defp get_in_field(map, [key | rest]) do
-    value = get_field(map, key)
-
-    if rest == [] do
-      value
-    else
-      if is_map(value), do: get_in_field(value, rest), else: nil
-    end
   end
 
   defp format_date(ms) when is_integer(ms) do

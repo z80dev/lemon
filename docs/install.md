@@ -132,12 +132,13 @@ warning.
 | `--verify` | Boot the installed runtime on ephemeral ports and poll `/healthz` before finishing. |
 | `--no-modify-path` | Do not add `~/.lemon/bin` to PATH in your shell rc file; only print the line. |
 | `--skip-setup` | Do not start the post-install setup wizard. |
+| `--require-bot` | Worker hosts: install only the full or min runtime (never `lemon_bot`, `sim`, or the TUI), and refuse to promote it unless `node capabilities --json --require-bot --expected-version <manifest version>` passes on the staged tree. |
 | `--resolve-version` | Print the version this run would install and exit without installing. |
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `LEMON_VERSION` | *(latest stable)* | Pin an exact release version. Required for non-stable channels. |
-| `LEMON_CHANNEL` | `stable` | Release channel. `preview` and `nightly` also require `LEMON_VERSION`. |
+| `LEMON_VERSION` | *(latest stable)* | Pin an exact release version. Required for non-stable channels. A pin alone accepts the channel its manifest publishes. |
+| `LEMON_CHANNEL` | `stable` | Release channel. `preview` and `nightly` also require `LEMON_VERSION`. When set explicitly it must match the manifest, even with a pin. |
 | `LEMON_PROFILE` | `lemon_runtime_full` | `full`, `min`, or `sim`, or the full profile name. |
 | `LEMON_NO_TUI` | *(unset)* | Set to `1` to omit the TUI artifact. `sim` is runtime-only. |
 | `LEMON_INSTALL_IGNORE_GLIBC` | *(unset)* | Silence the Linux glibc baseline warning. |

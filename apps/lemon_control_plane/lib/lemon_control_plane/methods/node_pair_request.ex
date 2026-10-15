@@ -2,23 +2,94 @@ defmodule LemonControlPlane.Methods.NodePairRequest do
   @moduledoc """
   Handler for the node.pair.request control plane method.
 
-  Initiates a pairing request for a new node or rotates credentials for an
-  existing durable node identity.
+  Initiates an operator-authorized pairing request for a new node or rotates
+  credentials for an existing durable identity. A valid enrollment invitation
+  atomically consumes its bound name and auto-approves either a new node or its
+  generation-bound durable repair, returning the ordinary challenge and recovery credentials.
   """
 
   @behaviour LemonControlPlane.Method
 
   alias LemonControlPlane.NodeStore
   alias LemonControlPlane.Protocol.Errors
+  alias LemonControlPlane.Auth.Authorize
+  alias LemonControlPlane.Methods.NodePairApprove
+  require Logger
 
   @impl true
   def name, do: "node.pair.request"
 
   @impl true
-  def scopes, do: [:pairing]
+  def scopes, do: [:pairing, :enroll]
 
   @impl true
-  def handle(params, _ctx) do
+  def handle(params, ctx) do
+    with :ok <- Authorize.authorize(ctx[:auth] || %{}, name(), scopes()) do
+      cond do
+        is_binary(params["inviteCode"]) ->
+          enroll(params, ctx)
+
+        get_in(ctx, [:auth, :role]) == :enrollment ->
+          {:error, Errors.unauthorized("Enrollment invite is required")}
+
+        true ->
+          request_pairing(params)
+      end
+    end
+  end
+
+  defp enroll(params, ctx) do
+    Logger.info("node_io operation=node.pair.request enrollment=true redacted=true")
+    code = params["inviteCode"]
+    node_name = normalize_name(params["nodeName"])
+
+    with false <-
+           Enum.any?(
+             ["nodeId", "node_id", "recoveryToken", "recovery_token", "repair"],
+             &Map.has_key?(params, &1)
+           ),
+         {:ok, invite} <- NodeStore.fetch_invite(code),
+         invite_id = NodeStore.invite_field(invite, :id),
+         true <-
+           get_in(ctx, [:auth, :role]) != :enrollment or
+             get_in(ctx, [:auth, :identity, "inviteId"]) == invite_id,
+         {:ok, invite} <- NodeStore.consume_invite(code, node_name, invite_id) do
+      pairing_id = LemonCore.Id.uuid()
+
+      request = %{
+        id: pairing_id,
+        node_type: params["nodeType"] || "coding_agent",
+        node_name: node_name,
+        capabilities: params["capabilities"] || %{},
+        purpose: NodeStore.invite_field(invite, :purpose),
+        labels: NodeStore.invite_field(invite, :labels),
+        invite_id: invite_id,
+        node_id: NodeStore.invite_field(invite, :node_id),
+        recovery_mode: if(NodeStore.invite_field(invite, :node_id), do: :invite_repair),
+        recovery_token_hash: NodeStore.invite_field(invite, :recovery_token_hash),
+        session_generation: NodeStore.invite_field(invite, :session_generation),
+        status: :pending,
+        expires_at_ms: NodeStore.invite_field(invite, :expires_at_ms),
+        created_at_ms: System.system_time(:millisecond)
+      }
+
+      with :ok <- NodeStore.put_pairing(pairing_id, request),
+           {:ok, response} <- NodePairApprove.handle(%{"pairingId" => pairing_id}, ctx) do
+        {:ok, Map.put(response, "pairingId", pairing_id)}
+      else
+        {:error, reason} when is_tuple(reason) -> {:error, reason}
+        {:error, _} -> {:error, Errors.unavailable("Enrollment could not be completed")}
+      end
+    else
+      _ ->
+        {:error,
+         Errors.unauthorized(
+           "Enrollment invite is invalid, expired, revoked, stale or does not match"
+         )}
+    end
+  end
+
+  defp request_pairing(params) do
     node_type = params["nodeType"] || params["node_type"] || "generic"
     node_name = params["nodeName"] || params["node_name"]
     capabilities = params["capabilities"] || %{}

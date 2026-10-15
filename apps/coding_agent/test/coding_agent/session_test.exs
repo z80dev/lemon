@@ -473,6 +473,40 @@ defmodule CodingAgent.SessionTest do
       assert String.contains?(state_after.system_prompt, "updated-memory-fact")
       refute String.contains?(state_after.system_prompt, "initial-memory-fact")
     end
+
+    @tag :tmp_dir
+    test "profile instruction snapshots survive prompt refresh and leave local files unchanged",
+         %{tmp_dir: root} do
+      workspace = Path.join(root, "workspace")
+      File.mkdir_p!(workspace)
+      File.write!(Path.join(workspace, "SOUL.md"), "stale-local-persona")
+      File.write!(Path.join(workspace, "MEMORY.md"), "initial-local-memory")
+
+      session =
+        start_session(
+          cwd: root,
+          workspace_dir: workspace,
+          system_prompt: "profile-system",
+          profile_instructions: %{"SOUL.md" => "profile-persona", "README.md" => "profile-job"},
+          stream_fn: mock_stream_fn_single(assistant_message("ack"))
+        )
+
+      before = Session.get_state(session)
+      assert before.system_prompt =~ "profile-system"
+      assert before.system_prompt =~ "profile-persona"
+      assert before.system_prompt =~ "profile-job"
+      refute before.system_prompt =~ "stale-local-persona"
+      File.write!(Path.join(workspace, "MEMORY.md"), "updated-local-memory")
+      :ok = Session.prompt(session, "Refresh the profile context.")
+      wait_for_streaming_complete(session)
+      after_refresh = Session.get_state(session)
+      assert after_refresh.system_prompt =~ "profile-persona"
+      assert after_refresh.system_prompt =~ "profile-job"
+      assert after_refresh.system_prompt =~ "updated-local-memory"
+      refute after_refresh.system_prompt =~ "stale-local-persona"
+      assert File.read!(Path.join(workspace, "SOUL.md")) == "stale-local-persona"
+      refute File.exists?(Path.join(workspace, "README.md"))
+    end
   end
 
   describe "start_link/1 with optional opts" do

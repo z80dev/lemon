@@ -52,7 +52,8 @@ The workflow serializes release cuts and performs the complete operation:
    (`scripts/ci_verified_commit`); otherwise they run against the exact tag.
    A dispatch with `skip_preflight=true` skips these lanes for an urgent cut;
    artifact, manifest and container verification still run.
-4. Native runners build and verify all 11 artifacts. The container builds are
+4. Native runners build and verify all 14 tarballs (the existing 11 runtime/TUI
+   artifacts plus three standalone `lemon_bot` backends). Container builds are
    smoke-tested and merged under the version-specific tag.
 5. The workflow verifies the assembled manifest and artifacts, publishes the
    GitHub Release, then promotes the selected mutable container channel tag.
@@ -105,21 +106,74 @@ Current release automation produces:
   `mix release`, one per profile and platform.
 - A `manifest.json` describing every artifact in the release.
 
-The published matrix is `lemon_runtime_min` and `lemon_runtime_full` on all
+The original matrix remains `lemon_runtime_min` and `lemon_runtime_full` on all
 three platform tags, `sim_broadcast_platform` on the two Linux tags, and
-`lemon_tui` on all three tags: 11 artifacts total. `lemon_tui` is a
-pseudo-profile for a Bun-compiled client tarball containing
-`tui/bin/lemon-tui`, not a BEAM release. The container image on
-`ghcr.io/z80dev/lemon` is published as a multi-arch (`amd64`/`arm64`) manifest
-and remains the portable Linux deployment contract.
+`lemon_tui` on all three tags: 11 artifacts. `lemon_tui` contains
+`tui/bin/lemon-tui`, not a BEAM release. The standalone `lemon_bot` profile adds
+one tarball on each platform, for **14 tarballs total**. It contains
+`bot/bin/lemon-bot`, the complete built browser client in `bot/web`, and the
+host-native Sharp addon and libvips dependencies under `bot/node_modules`.
+It requires neither BEAM, the TUI, nor an installed Bun/Node runtime.
+
+The release workflow calls the single canonical builder on each native host:
+
+```sh
+products/lemon_bot/scripts/build_release VERSION CHANNEL PLATFORM OUTPUT_DIR
+```
+
+The builder installs real dependencies, builds the web client, and compiles the
+backend with Bun. `lemon-bot --version` prints `lemon-bot VERSION`. Native smoke
+verification uses a clean HOME, a private temporary operator token and data
+directory, checks `/v1/setup` and `/setup`, and fetches every packaged web asset.
+No setup secret or first-run log is published.
+
+Install only the standalone backend with:
+
+```sh
+LEMON_PROFILE=lemon_bot sh install.sh --skip-setup
+```
+
+This selects only `lemon_bot`, never a runtime or TUI artifact. Versions live in
+`~/.lemon/lemon_bot/versions/<version>-<channel>-<platform>`, with the atomic
+`~/.lemon/lemon_bot/current` pointer and `~/.local/bin/lemon-bot` executable.
+Mutable product data stays outside version directories. Default full/min
+runtime installation and its `~/.lemon/versions/current` pointer are unchanged.
+Configure the backend's control URL, operator token, public URL and private data
+directory before starting it; see the product's deployment instructions.
+
+Each release also publishes version-scoped `join-node.sh` and `install.sh`
+assets. The join command downloads from `releases/download/v<VERSION>/`, not a
+mutable source branch. The manifest's top-level `scripts` array records each
+asset's `kind` (`node_join` or `installer`), `filename`, `sha256` and `size_bytes`.
+Verifiers download and validate both scripts alongside the tarballs.
+
+The container image on `ghcr.io/z80dev/lemon` remains a multi-arch
+(`amd64`/`arm64`) BEAM runtime deployment contract.
+
+### Apple application prerequisites
+
+The standalone macOS backend tarball is not a signed desktop application.
+Apple application packaging uses `products/lemon_bot/apple/release.py`, whose
+schema-version-1 receipt identifies product/version/channel, Apple marketing
+and build numbers, distribution, and artifact filename/format/platform/checksum/
+size. A receipt's `uploadAccepted` means transport acceptance only, not App
+Store review or public availability.
+
+Normal desktop application assets must be Developer ID signed and notarized
+(`developer-id-notarized`); App Store delivery requires the actual signing and
+App Store Connect credentials (`app-store`). `local-preview` artifacts must
+never enter normal publication. The tarball workflow does not fabricate or
+publish signed `.dmg`, application `.zip`, or `.ipa` assets. Wiring those assets
+into normal publication requires the real signing credentials and an
+authenticated receipt/artifact handoff from the Apple builder first.
 
 macOS source installs are best effort. macOS `x86_64` and Windows have no
 release artifacts; use a source install, WSL, or the container image.
 
 ## Release manifest (schema 2)
 
-Consumers — `install.sh`, the self-updater, and the verifier scripts — match on
-the structured fields, never on a filename regex:
+Consumers select artifacts by structured profile/platform fields; verification
+also checks that the filename agrees with those fields:
 
 ```json
 {
@@ -151,12 +205,13 @@ the structured fields, never on a filename regex:
 | `version` / `channel` | CalVer version and release channel for the whole release. |
 | `commit` | Source commit the artifacts were built from. |
 | `built_at` | UTC build timestamp, RFC 3339. |
-| `otp` / `elixir` | Toolchain versions baked into the release. |
+| `otp` / `elixir` | Toolchain versions for the BEAM artifacts, not a standalone backend requirement. |
 | `artifacts[].file` | Bare filename of the asset, no path component. |
 | `artifacts[].profile` | Release profile name. |
 | `artifacts[].platform` | Platform tag; `os` and `arch` repeat its parts for convenience. |
 | `artifacts[].sha256` / `size` | Mandatory integrity fields; every consumer verifies both. |
 | `artifacts[].glibc_min` | Optional; present on Linux artifacts only. |
+| `scripts` | Version-scoped join/installer assets with `kind`, `filename`, `sha256`, and `size_bytes`. |
 
 The manifest is published as a release asset, so it is reachable at
 `releases/latest/download/manifest.json` for the latest stable release and at

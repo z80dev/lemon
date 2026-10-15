@@ -17,11 +17,24 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ### Fixed
 
+- `LemonCore.NodeRegistry` name-or-ID selectors resolve an exact live durable
+  ID before a unique live name; an authorized durable ID never falls back to
+  another node's name while offline. `native_privacy_context_supported?/1` is
+  the single native privacy-descriptor predicate shared by admission and
+  pinned dispatch.
+- `LemonCore.Durable` performs real descriptor `fsync` plus Darwin `F_FULLFSYNC`
+  through its packaged Python 3 helper for files and directories. JSONL sync
+  and atomic file-key durability can therefore complete on supported macOS
+  filesystems instead of unconditionally refusing Darwin. Unsupported/refused
+  barriers remain errors; no plain/global-sync fallback or private-path output.
 - Secret reads distinguish backend failure from missing credentials, and set,
   conditional save, deletion and expiry cleanup return persistence failures
   instead of acknowledging an unsuccessful mutation. Reads never remove
   expired records; list cleanup and deletion conditionally remove their exact
   snapshot under the shared mutation lease so a newer replacement survives.
+  Conditional saves retain durable operation receipts, deletion preserves them
+  in value-free tombstones, and list cleanup leaves receipt-bearing expired
+  records unchanged and hidden so historical proof remains available.
 - Conditional credential saves recheck the original record's expiry immediately
   before each compare-and-swap, including after blocked key resolution, so a
   refresh cannot revive a credential that expired while encryption was pending.

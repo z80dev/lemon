@@ -10,6 +10,57 @@ defmodule LemonControlPlane.Env do
 
   @declarations [
     %{
+      name: :lemon_control_plane_public_ws_url,
+      env_var: "LEMON_CONTROL_PLANE_PUBLIC_WS_URL",
+      aliases: [],
+      type: :string,
+      default: nil,
+      doc:
+        "Reachable secure control-plane WebSocket URL embedded in node invitations; ws is allowed only for loopback.",
+      secret?: false,
+      required?: false,
+      area: :execution_nodes,
+      apps: [:lemon_control_plane]
+    },
+    %{
+      name: :lemon_node_source_checkout,
+      env_var: "LEMON_NODE_SOURCE_CHECKOUT",
+      aliases: [],
+      type: :string,
+      default: nil,
+      doc: "Absolute destination-local integrated source checkout used by node invite commands.",
+      secret?: false,
+      required?: false,
+      area: :execution_nodes,
+      apps: [:lemon_control_plane]
+    },
+    %{
+      name: :lemon_node_install_version,
+      env_var: "LEMON_NODE_INSTALL_VERSION",
+      aliases: [],
+      type: :string,
+      default: nil,
+      doc:
+        "Exact operator-supported node artifact CalVer; requires an HTTPS node install base URL and actual feature checks.",
+      secret?: false,
+      required?: false,
+      area: :execution_nodes,
+      apps: [:lemon_control_plane]
+    },
+    %{
+      name: :lemon_node_install_base_url,
+      env_var: "LEMON_NODE_INSTALL_BASE_URL",
+      aliases: [],
+      type: :string,
+      default: nil,
+      doc:
+        "HTTPS operator-supported pinned node artifact base URL passed to the existing installer; never defaults to published artifacts.",
+      secret?: false,
+      required?: false,
+      area: :execution_nodes,
+      apps: [:lemon_control_plane]
+    },
+    %{
       name: :lemon_gateway_enable_a2a,
       env_var: "LEMON_GATEWAY_ENABLE_A2A",
       aliases: [],

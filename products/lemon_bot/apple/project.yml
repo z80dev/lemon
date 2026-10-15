@@ -1,0 +1,132 @@
+name: LemonBot
+options:
+  minimumXcodeGenVersion: 2.46.0
+  xcodeVersion: "26.3"
+  createIntermediateGroups: true
+  deploymentTarget:
+    macOS: "14.0"
+    iOS: "17.0"
+packages:
+  LemonBotKit:
+    path: LemonBotKit
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    MARKETING_VERSION: "1.0.0"
+    CURRENT_PROJECT_VERSION: "1"
+    CODE_SIGN_STYLE: Automatic
+    ENABLE_USER_SCRIPT_SANDBOXING: YES
+    CLANG_ENABLE_MODULES: YES
+    SWIFT_EMIT_LOC_STRINGS: YES
+    GENERATE_INFOPLIST_FILE: NO
+    ENABLE_HARDENED_RUNTIME: YES
+    APP_GROUP_IDENTIFIER: group.org.lemonbot.shared
+  configs:
+    Debug:
+      APS_ENVIRONMENT: development
+    Release:
+      APS_ENVIRONMENT: production
+targets:
+  LemonBotMac:
+    type: application
+    platform: macOS
+    sources:
+      - path: LemonBotMac
+        excludes:
+          - "*.plist"
+          - "*.entitlements"
+      - path: Assets.xcassets
+    dependencies:
+      - package: LemonBotKit
+        product: LemonBotKit
+      - package: LemonBotKit
+        product: LemonBotUI
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: org.lemonbot.mac
+        INFOPLIST_FILE: LemonBotMac/Info.plist
+        CODE_SIGN_ENTITLEMENTS: LemonBotMac/LemonBotMac.entitlements
+        PRODUCT_NAME: Lemon Bot
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        COMBINE_HIDPI_IMAGES: YES
+      configs:
+        Debug:
+          CODE_SIGN_STYLE: Manual
+          CODE_SIGN_IDENTITY: "-"
+          CODE_SIGN_ENTITLEMENTS: LemonBotMac/LemonBotMacDebug.entitlements
+          APS_ENVIRONMENT: ""
+  LemonBotiOS:
+    type: application
+    platform: iOS
+    sources:
+      - path: LemonBotiOS
+        excludes:
+          - ShareExtension
+          - "*.plist"
+          - "*.entitlements"
+      - path: Assets.xcassets
+    dependencies:
+      - package: LemonBotKit
+        product: LemonBotKit
+      - package: LemonBotKit
+        product: LemonBotUI
+      - target: LemonBotShare
+        embed: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: org.lemonbot.ios
+        INFOPLIST_FILE: LemonBotiOS/Info.plist
+        CODE_SIGN_ENTITLEMENTS: LemonBotiOS/LemonBotiOS.entitlements
+        PRODUCT_NAME: Lemon Bot
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        TARGETED_DEVICE_FAMILY: "1,2"
+        SUPPORTS_MACCATALYST: NO
+  LemonBotShare:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: LemonBotiOS/ShareExtension
+        excludes:
+          - "*.plist"
+          - "*.entitlements"
+      - path: LemonBotiOS/Shared
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: org.lemonbot.ios.share
+        INFOPLIST_FILE: LemonBotiOS/ShareExtension/Info.plist
+        CODE_SIGN_ENTITLEMENTS: LemonBotiOS/ShareExtension/ShareExtension.entitlements
+        PRODUCT_NAME: LemonBotShare
+        TARGETED_DEVICE_FAMILY: "1,2"
+        APPLICATION_EXTENSION_API_ONLY: YES
+        SKIP_INSTALL: YES
+  LemonBotNativeTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: Tests
+    dependencies:
+      - package: LemonBotKit
+        product: LemonBotKit
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: org.lemonbot.native.tests
+        GENERATE_INFOPLIST_FILE: YES
+        ENABLE_HARDENED_RUNTIME: NO
+schemes:
+  LemonBotMac:
+    build:
+      targets:
+        LemonBotMac: all
+        LemonBotNativeTests: [test]
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets: [LemonBotNativeTests]
+  LemonBotiOS:
+    build:
+      targets:
+        LemonBotiOS: all
+        LemonBotShare: all
+    run:
+      config: Debug

@@ -1,6 +1,6 @@
 defmodule LemonRouter.RouterPendingCompactionTest do
   @moduledoc """
-  Tests for the generic pending-compaction consumer in Router.
+  Tests for router-owned context-scoped pending compaction.
 
   Covers:
   - Transactional marker preparation and post-submit deletion
@@ -9,8 +9,8 @@ defmodule LemonRouter.RouterPendingCompactionTest do
   """
   use ExUnit.Case, async: false
 
-  alias LemonRouter.{PendingCompaction, Router}
-  alias LemonCore.InboundMessage
+  alias LemonRouter.{PendingCompaction, ResumeResolver, Router}
+  alias LemonCore.{ExecutionCommand, InboundMessage}
   alias LemonRouter.PendingCompactionStore
 
   defmodule RunOrchestratorStubPendingCompaction do
@@ -69,118 +69,135 @@ defmodule LemonRouter.RouterPendingCompactionTest do
     }
   end
 
-  describe "maybe_apply_pending_compaction/3" do
-    test "prepares a fresh pending_compaction marker without consuming it" do
-      session_key = "agent:test-agent:api:default:dm:pc_#{System.unique_integer([:positive])}"
-      msg = make_inbound("api", "pc_test", "hello")
-      meta = msg.meta || %{}
+  describe "PendingCompaction.prepare/4" do
+    test "prepares fresh legacy history without consuming its marker" do
+      session_key = "legacy-compaction-#{System.unique_integer([:positive])}"
+      run_id = "legacy-run-#{System.unique_integer([:positive])}"
+      marker = %{reason: "near_limit", set_at_ms: System.system_time(:millisecond)}
 
-      LemonCore.RunHistoryStore.put(
-        session_key,
-        System.system_time(:millisecond),
-        "run1",
-        %{summary: %{prompt: "What is 2+2?", answer: "4"}}
-      )
+      assert :ok =
+               LemonCore.RunHistoryStore.put(
+                 session_key,
+                 System.system_time(:millisecond),
+                 run_id,
+                 %{summary: %{prompt: "What is 2+2?", answer: "4"}}
+               )
 
-      _ = LemonCore.RunHistoryStore.get(session_key, limit: 1)
+      assert :ok = PendingCompactionStore.put(session_key, marker)
 
-      # Set a fresh pending compaction marker
-      marker = %{
-        reason: "near_limit",
-        session_key: session_key,
-        set_at_ms: System.system_time(:millisecond),
-        input_tokens: 100_000,
-        threshold_tokens: 90_000,
-        context_window_tokens: 128_000
-      }
+      on_exit(fn ->
+        LemonCore.RunHistoryStore.delete_session(session_key)
+        PendingCompactionStore.delete(session_key)
+      end)
 
-      PendingCompactionStore.put(session_key, marker)
-
-      {new_msg, new_meta} = Router.maybe_apply_pending_compaction(msg, meta, session_key)
-
-      # Preparation is not consumption; a submit error must be retryable.
+      assert {prompt, ^marker} = PendingCompaction.prepare("hello", session_key, :channel)
+      assert prompt =~ "previous conversation"
+      assert prompt =~ "What is 2+2?"
+      assert prompt =~ "hello"
       assert PendingCompactionStore.get(session_key) == marker
-      assert PendingCompaction.prepared_marker(new_meta) == marker
-      refute Map.has_key?(new_meta, :auto_compacted)
-      refute Map.has_key?(new_meta, "auto_compacted")
-
-      # Prompt should contain the compaction context
-      assert new_msg.message.text =~ "previous conversation"
-      assert new_msg.message.text =~ "What is 2+2?"
-      assert new_msg.message.text =~ "hello"
-
-      LemonCore.RunHistoryStore.delete_session(session_key)
-      PendingCompactionStore.delete(session_key)
+      assert :ok = PendingCompaction.consume(session_key, marker)
+      assert PendingCompactionStore.get(session_key) == nil
     end
 
-    test "deletes stale marker and does not modify the prompt" do
-      session_key = "agent:test-agent:api:default:dm:stale_#{System.unique_integer([:positive])}"
-      msg = make_inbound("api", "stale_test", "hi")
-      meta = msg.meta || %{}
-
-      # Set a stale marker (13 hours ago)
-      stale_ms = System.system_time(:millisecond) - 13 * 60 * 60 * 1000
-
-      PendingCompactionStore.put(session_key, %{
-        reason: "near_limit",
-        session_key: session_key,
-        set_at_ms: stale_ms,
-        input_tokens: 100_000,
-        threshold_tokens: 90_000,
-        context_window_tokens: 128_000
-      })
-
-      {new_msg, new_meta} = Router.maybe_apply_pending_compaction(msg, meta, session_key)
-
-      # Stale marker should be deleted
+    test "stale and empty markers do not modify the caller prompt" do
+      session_key = "empty-compaction-#{System.unique_integer([:positive])}"
+      assert {"hello", nil} = PendingCompaction.prepare("hello", session_key, :channel)
+      stale = %{set_at_ms: System.system_time(:millisecond) - 13 * 60 * 60 * 1000}
+      assert :ok = PendingCompactionStore.put(session_key, stale)
+      assert {"hello", nil} = PendingCompaction.prepare("hello", session_key, :channel)
       assert PendingCompactionStore.get(session_key) == nil
 
-      # Prompt should NOT be modified
-      assert new_msg.message.text == "hi"
-      refute Map.has_key?(new_meta, :auto_compacted)
-      refute Map.has_key?(new_meta, "auto_compacted")
+      assert :ok =
+               PendingCompactionStore.put(session_key, %{
+                 set_at_ms: System.system_time(:millisecond)
+               })
+
+      assert {"hello", nil} = PendingCompaction.prepare("hello", session_key, :channel)
+      assert PendingCompactionStore.get(session_key) == nil
     end
 
-    test "passes through cleanly when no marker exists" do
-      session_key = "agent:test-agent:api:default:dm:none_#{System.unique_integer([:positive])}"
-      msg = make_inbound("api", "none_test", "hello")
-      meta = msg.meta || %{}
+    test "only exact execution context history enters compaction and other journals remain intact" do
+      session_key = "scoped-compaction-#{System.unique_integer([:positive])}"
 
-      {new_msg, new_meta} = Router.maybe_apply_pending_compaction(msg, meta, session_key)
+      private = %{
+        invocation_context_key: "owner",
+        memory_context_key: "private-room",
+        mcp_servers: []
+      }
 
-      assert new_msg.message.text == "hello"
-      refute Map.has_key?(new_meta, :auto_compacted)
-      refute Map.has_key?(new_meta, "auto_compacted")
-    end
+      shared = %{private | memory_context_key: "shared-room"}
+      policy = %{blocked_tools: ["bash"]}
+      marker = %{set_at_ms: System.system_time(:millisecond)}
 
-    test "handles empty run history gracefully (no compaction applied)" do
-      session_key = "agent:test-agent:api:default:dm:empty_#{System.unique_integer([:positive])}"
-      msg = make_inbound("api", "empty_test", "hello")
-      meta = msg.meta || %{}
-
-      PendingCompactionStore.put(session_key, %{
-        reason: "near_limit",
+      first = %ExecutionCommand{
+        run_id: "#{session_key}-private",
         session_key: session_key,
-        set_at_ms: System.system_time(:millisecond),
-        input_tokens: 100_000,
-        threshold_tokens: 90_000,
-        context_window_tokens: 128_000
-      })
+        prompt: "private bootstrap",
+        meta: private,
+        tool_policy: policy
+      }
 
-      {new_msg, new_meta} = Router.maybe_apply_pending_compaction(msg, meta, session_key)
+      second = %{
+        first
+        | run_id: "#{session_key}-shared",
+          prompt: "public room work",
+          meta: shared
+      }
 
-      # With empty history, no compaction should be applied
-      assert new_msg.message.text == "hello"
-      refute Map.has_key?(new_meta, :auto_compacted)
-      refute Map.has_key?(new_meta, "auto_compacted")
+      assert :ok = ResumeResolver.bind_run(first)
+      assert :ok = ResumeResolver.bind_run(second)
 
-      # Clean up
-      _ = PendingCompactionStore.delete(session_key)
+      for request <- [first, second] do
+        assert :ok =
+                 LemonCore.RunHistoryStore.put(
+                   session_key,
+                   System.system_time(:millisecond),
+                   request.run_id,
+                   %{summary: %{prompt: request.prompt, answer: "answer", meta: request.meta}}
+                 )
+      end
+
+      assert :ok = PendingCompactionStore.put(session_key, marker)
+
+      on_exit(fn ->
+        LemonCore.RunHistoryStore.delete_session(session_key)
+        PendingCompactionStore.delete(session_key)
+      end)
+
+      assert {prompt, ^marker} =
+               PendingCompaction.prepare("continue", session_key, :channel,
+                 meta: shared,
+                 tool_policy: policy
+               )
+
+      assert prompt =~ "public room work"
+      refute prompt =~ "private bootstrap"
+      assert PendingCompactionStore.get(session_key) == marker
+
+      unknown = %{shared | invocation_context_key: "unproven"}
+
+      assert {"own prompt", nil} =
+               PendingCompaction.prepare("own prompt", session_key, :channel,
+                 meta: unknown,
+                 tool_policy: policy
+               )
+
+      assert PendingCompactionStore.get(session_key) == marker
+      assert length(LemonCore.RunHistoryStore.get(session_key)) == 2
+
+      assert {private_prompt, ^marker} =
+               PendingCompaction.prepare("continue", session_key, :channel,
+                 meta: private,
+                 tool_policy: policy
+               )
+
+      assert private_prompt =~ "private bootstrap"
+      refute private_prompt =~ "public room work"
     end
   end
 
   describe "handle_inbound/1 with pending compaction" do
-    test "applies pending compaction before submitting to orchestrator for non-Telegram channel" do
+    test "defers compaction until the orchestrator resolves channel capabilities" do
       peer_id = "api_#{System.unique_integer([:positive])}"
       session_key = "agent:test-agent:api:default:dm:#{peer_id}"
       msg = make_inbound("api", peer_id, "continue please")
@@ -207,20 +224,19 @@ defmodule LemonRouter.RouterPendingCompactionTest do
 
       assert_receive {:orchestrator_submit, request}
 
-      # The prompt should have been modified with compaction context
-      assert request.prompt =~ "previous conversation"
-      assert request.prompt =~ "previous task"
-      assert request.prompt =~ "continue please"
+      # The builder, not ingress, authorizes history using the resolved policy.
+      assert request.prompt == "continue please"
       refute Map.has_key?(request.meta, :auto_compacted)
       refute Map.has_key?(request.meta, "auto_compacted")
 
-      # Marker should be consumed
-      assert PendingCompactionStore.get(session_key) == nil
+      # The stub has not built or admitted a run, so the marker remains usable.
+      assert PendingCompactionStore.get(session_key) != nil
 
       LemonCore.RunHistoryStore.delete_session(session_key)
+      PendingCompactionStore.delete(session_key)
     end
 
-    test "preserves a prepared marker when orchestrator submission fails" do
+    test "preserves the marker when orchestrator submission fails" do
       peer_id = "failed_#{System.unique_integer([:positive])}"
       session_key = "agent:test-agent:api:default:dm:#{peer_id}"
       msg = make_inbound("api", peer_id, "retry me")
@@ -243,7 +259,7 @@ defmodule LemonRouter.RouterPendingCompactionTest do
 
       assert {:error, :submit_failed} = Router.handle_inbound(msg)
       assert_receive {:orchestrator_submit, request}
-      assert request.prompt =~ "previous conversation"
+      assert request.prompt == "retry me"
       assert PendingCompactionStore.get(session_key) == marker
 
       LemonCore.RunHistoryStore.delete_session(session_key)
@@ -251,16 +267,16 @@ defmodule LemonRouter.RouterPendingCompactionTest do
     end
   end
 
-  describe "build_pending_compaction_prompt/2" do
+  describe "PendingCompaction.build_prompt/2" do
     test "includes transcript and user text" do
-      result = Router.build_pending_compaction_prompt("transcript here", "user question")
+      result = PendingCompaction.build_prompt("transcript here", "user question")
       assert result =~ "previous_conversation"
       assert result =~ "transcript here"
       assert result =~ "user question"
     end
 
     test "uses Continue. when user text is empty" do
-      result = Router.build_pending_compaction_prompt("transcript here", "")
+      result = PendingCompaction.build_prompt("transcript here", "")
       assert result =~ "Continue."
       refute result =~ "User:"
     end
@@ -277,7 +293,7 @@ defmodule LemonRouter.RouterPendingCompactionTest do
       ]
 
       transcript = PendingCompaction.format_history(history, max_chars: 8_000)
-      prompt = Router.build_pending_compaction_prompt(transcript, "continue")
+      prompt = PendingCompaction.build_prompt(transcript, "continue")
 
       refute transcript =~ "</previous_conversation>"
       refute transcript =~ "\nAssistant:"

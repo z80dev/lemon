@@ -35,7 +35,9 @@ defmodule LemonSkills.MixProject do
       {:toml, "~> 0.7"},
       {:yaml_elixir, "~> 2.9"},
       {:phoenix_pubsub, "~> 2.1"},
-      {:req, "~> 0.5"}
+      {:req, "~> 0.5"},
+      {:bandit, "~> 1.0", only: :test},
+      {:plug, "~> 1.14", only: :test}
     ]
   end
 end

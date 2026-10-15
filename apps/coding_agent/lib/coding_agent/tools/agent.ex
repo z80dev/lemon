@@ -155,6 +155,12 @@ defmodule CodingAgent.Tools.Agent do
   end
 
   defp do_run(params, cwd, opts) do
+    opts =
+      Keyword.merge(
+        opts,
+        Map.to_list(CodingAgent.Tools.Task.Params.inherited_execution_context(opts))
+      )
+
     with {:ok, validated} <- validate_run_params(params, cwd),
          {:ok, delegated_session_key} <- resolve_delegated_session_key(validated, opts),
          {:ok, request} <- build_run_request(validated, delegated_session_key, cwd, opts),
@@ -570,6 +576,18 @@ defmodule CodingAgent.Tools.Agent do
 
     with {:ok, prompt, persona} <-
            maybe_apply_role_prompt(validated.prompt, validated.role_id, role_cwd) do
+      child_policy =
+        if persona,
+          do: Subagents.tool_policy(persona, validated.tool_policy),
+          else: validated.tool_policy
+
+      child_policy =
+        case {Keyword.get(opts, :tool_policy), child_policy} do
+          {nil, requested} -> requested
+          {parent, nil} -> parent
+          {parent, requested} -> LemonCore.ToolPolicy.intersect(parent, requested)
+        end
+
       base_meta =
         %{
           parent_run_id: parent_run_id,
@@ -595,6 +613,24 @@ defmodule CodingAgent.Tools.Agent do
           :delegated,
           "delegated",
           :parent_run_id,
+          :invocation_context_key,
+          "invocation_context_key",
+          :invocationContextKey,
+          "invocationContextKey",
+          :memory_context_key,
+          "memory_context_key",
+          :memoryContextKey,
+          "memoryContextKey",
+          :memory_context_verified,
+          "memory_context_verified",
+          :memoryContextVerified,
+          "memoryContextVerified",
+          :shared_memory_grant,
+          "shared_memory_grant",
+          :sharedMemoryGrant,
+          "sharedMemoryGrant",
+          :mcp_servers,
+          "mcp_servers",
           "parent_run_id"
         ])
         |> Map.merge(base_meta)
@@ -607,10 +643,16 @@ defmodule CodingAgent.Tools.Agent do
           "remote_cwd_explicit"
         ])
         |> put_execution_node(validated)
+        |> Map.put(:invocation_context_key, Keyword.get(opts, :invocation_context_key))
+        |> Map.put(:memory_context_key, Keyword.get(opts, :memory_context_key))
+        |> Map.put(:memory_context_verified, Keyword.get(opts, :memory_context_verified) == true)
+        |> Map.put(:shared_memory_grant, Keyword.get(opts, :shared_memory_grant) == true)
+        |> Map.put(:mcp_servers, Keyword.get(opts, :invocation_mcp_servers))
         |> compact_map()
 
       request =
         RunRequest.new(%{
+          run_id: LemonCore.Id.run_id(),
           origin: :node,
           session_key: delegated_session_key,
           agent_id: validated.agent_id,
@@ -618,11 +660,7 @@ defmodule CodingAgent.Tools.Agent do
           queue_mode: validated.queue_mode,
           model: validated.model || persona_model(persona),
           cwd: validated.cwd || cwd,
-          tool_policy:
-            if(persona,
-              do: Subagents.tool_policy(persona, validated.tool_policy),
-              else: validated.tool_policy
-            ),
+          tool_policy: child_policy,
           meta: meta
         })
 
@@ -633,7 +671,28 @@ defmodule CodingAgent.Tools.Agent do
   defp submit_run(request, opts) do
     router = run_orchestrator(opts)
 
-    case submit_with_orchestrator(router, request) do
+    context = Map.new(opts)
+
+    request = %{
+      request
+      | meta: CodingAgent.Tools.Task.Params.continuation_metadata(request.meta, context)
+    }
+
+    result =
+      if CodingAgent.Tools.Task.Params.managed_context?(context) do
+        CodingAgent.Tools.Task.Params.submit_native_followup(
+          context,
+          %{
+            request
+            | queue_mode: :collect,
+              meta: LemonCore.RunStore.execution_projection(request.meta || %{})
+          }
+        )
+      else
+        submit_with_orchestrator(router, request)
+      end
+
+    case result do
       {:ok, run_id} when is_binary(run_id) -> {:ok, run_id}
       {:ok, other} -> {:error, "Unexpected run id: #{inspect(other)}"}
       {:error, {:unknown_agent_id, agent_id}} -> {:error, "Unknown agent_id: #{agent_id}"}
@@ -812,7 +871,12 @@ defmodule CodingAgent.Tools.Agent do
     session_module = Keyword.get(opts, :session_module, CodingAgent.Session)
     session_pid = Keyword.get(opts, :session_pid)
 
-    case AsyncFollowups.dispatch_target(followup_queue_mode, session_module, session_pid) do
+    target =
+      if CodingAgent.Tools.Task.Params.managed_context?(Map.new(opts)),
+        do: {:router, :collect},
+        else: AsyncFollowups.dispatch_target(followup_queue_mode, session_module, session_pid)
+
+    case target do
       {:live, delivery_mode} ->
         if send_followup_via_live_session(
              text,
@@ -917,18 +981,26 @@ defmodule CodingAgent.Tools.Agent do
 
       followup =
         RunRequest.new(%{
+          run_id: LemonCore.Id.run_id(),
           origin: :node,
           session_key: parent_session_key,
           agent_id: parent_agent_id,
           prompt: text,
           queue_mode: queue_mode,
           cwd: Keyword.get(opts, :cwd),
+          tool_policy: Keyword.get(opts, :tool_policy),
           meta: %{
             :delegated_auto_followup => true,
             :delegated_run_id => run_id,
             :delegated_task_id => task_id,
             :delegated_agent_id => target_agent_id,
             :delegated_session_key => delegated_session_key,
+            :invocation_context_key =>
+              LemonCore.MapHelpers.get_key(request.meta, :invocation_context_key),
+            :memory_context_key => Keyword.get(opts, :memory_context_key),
+            :memory_context_verified => Keyword.get(opts, :memory_context_verified) == true,
+            :shared_memory_grant => Keyword.get(opts, :shared_memory_grant) == true,
+            :mcp_servers => Keyword.get(opts, :invocation_mcp_servers),
             "async_followups" => [
               async_followup_entry(
                 run_id,
@@ -941,14 +1013,35 @@ defmodule CodingAgent.Tools.Agent do
           }
         })
 
-      case submit_with_orchestrator(router, followup) do
+      managed? = CodingAgent.Tools.Task.Params.managed_context?(Map.new(opts))
+
+      followup = %{
+        followup
+        | meta: CodingAgent.Tools.Task.Params.continuation_metadata(followup.meta, Map.new(opts))
+      }
+
+      result =
+        if managed? do
+          CodingAgent.Tools.Task.Params.submit_native_followup(
+            Map.new(opts),
+            %{
+              followup
+              | queue_mode: :collect,
+                meta: LemonCore.RunStore.execution_projection(followup.meta || %{})
+            }
+          )
+        else
+          submit_with_orchestrator(router, followup)
+        end
+
+      case result do
         {:ok, _} ->
           Logger.info(
             "Agent tool followup submitted for task_id=#{task_id} " <>
               "session_key=#{inspect(parent_session_key)} agent_id=#{inspect(parent_agent_id)}"
           )
 
-        {:error, {:unknown_agent_id, _}} when parent_agent_id != "default" ->
+        {:error, {:unknown_agent_id, _}} when parent_agent_id != "default" and not managed? ->
           fallback = %{followup | agent_id: "default"}
 
           case submit_with_orchestrator(router, fallback) do

@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+    <key>CFBundleDevelopmentRegion</key><string>en</string>
+    <key>CFBundleDisplayName</key><string>Lemon Bot</string>
+    <key>CFBundleExecutable</key><string>$(EXECUTABLE_NAME)</string>
+    <key>CFBundleIdentifier</key><string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+    <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
+    <key>CFBundleName</key><string>$(PRODUCT_NAME)</string>
+    <key>CFBundlePackageType</key><string>APPL</string>
+    <key>CFBundleShortVersionString</key><string>$(MARKETING_VERSION)</string>
+    <key>CFBundleVersion</key><string>$(CURRENT_PROJECT_VERSION)</string>
+    <key>LSMinimumSystemVersion</key><string>$(MACOSX_DEPLOYMENT_TARGET)</string>
+    <key>LSApplicationCategoryType</key><string>public.app-category.productivity</string>
+    <key>NSMicrophoneUsageDescription</key><string>Capture only voice you explicitly record or hold push-to-talk for, then let you review it before sending.</string>
+    <key>NSSpeechRecognitionUsageDescription</key><string>Transcribe explicitly recorded voice on this Mac into editable, unsent text.</string>
+    <key>NSAppTransportSecurity</key><dict><key>NSAllowsLocalNetworking</key><true/></dict>
+    <key>LemonBotAPNSEnvironment</key><string>$(APS_ENVIRONMENT)</string>
+    <key>CFBundleURLTypes</key><array><dict>
+        <key>CFBundleURLName</key><string>org.lemonbot.resource</string>
+        <key>CFBundleURLSchemes</key><array><string>lemonbot</string></array>
+        <key>CFBundleTypeRole</key><string>Viewer</string>
+    </dict></array>
+    <key>NSServices</key><array><dict>
+        <key>NSMenuItem</key><dict><key>default</key><string>Send selection to Lemon Bot</string></dict>
+        <key>NSMessage</key><string>receiveSelection</string>
+        <key>NSPortName</key><string>Lemon Bot</string>
+        <key>NSSendTypes</key><array><string>public.utf8-plain-text</string><string>public.file-url</string></array>
+        <key>NSRequiredContext</key><dict/>
+    </dict></array>
+</dict></plist>

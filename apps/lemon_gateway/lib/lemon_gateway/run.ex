@@ -440,6 +440,15 @@ defmodule LemonGateway.Run do
     end
   end
 
+  # Remote checkpoint frames share the executor sink so they cannot overtake
+  # deltas/actions already received for this run.
+  def handle_info({:engine_checkpoint, run_ref, type, payload}, %{run_ref: run_ref} = state)
+      when type in [:checkpoint_created, :checkpoint_restored, :checkpoint_deleted] and
+             is_map(payload) do
+    emit_to_bus(state.run_id, type, payload, Map.put(build_event_meta(state), :remote_node, true))
+    {:noreply, state}
+  end
+
   # Handle delta events from engine (for streaming)
   def handle_info({:engine_delta, run_ref, text}, %{run_ref: run_ref} = state)
       when is_binary(text) do
@@ -739,6 +748,7 @@ defmodule LemonGateway.Run do
              completed: completed,
              session_key: state.session_key,
              run_id: state.run_id,
+             completed_at_ms: System.system_time(:millisecond),
              run_ref: state.run_ref,
              prompt: state.execution_request.prompt,
              duration_ms: duration_ms,

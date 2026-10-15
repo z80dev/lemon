@@ -547,13 +547,36 @@ defmodule LemonCli.CommandRegistry do
     },
     %{
       name: "node",
-      summary: "Join a controller as a named execution node",
-      usage: "lemon node join --name NAME --controller wss://HOST/ws [options]",
-      subcommands: [%{name: "join", summary: "Pair with or reconnect to a controller"}],
+      summary: "Inspect worker compatibility or join a named execution node",
+      usage:
+        "lemon node join --name NAME --controller wss://HOST/ws [options]\nlemon node capabilities [--json] [--require-bot] [--expected-version VERSION]",
+      subcommands: [
+        %{name: "join", summary: "Pair with or reconnect to a controller"},
+        %{
+          name: "capabilities",
+          summary: "Inspect installed worker API compatibility without starting a runtime"
+        }
+      ],
       options: [
+        option("--json", ["--json"], "Print worker compatibility JSON (capabilities)"),
+        option(
+          "--require-bot",
+          ["--require-bot"],
+          "Fail if required bot worker APIs are absent (capabilities)"
+        ),
+        option(
+          "--expected-version VERSION",
+          ["--expected-version"],
+          "Require the exact installed worker CalVer (capabilities)"
+        ),
         option("--name NAME", ["--name"], "Unique execution node name"),
         option("--controller URL", ["--controller"], "Controller control-plane WebSocket"),
         option("--pair", ["--pair"], "Pair and store a controller-issued node token"),
+        option(
+          "--invite-code-stdin",
+          ["--invite-code-stdin"],
+          "Read one bounded enrollment or repair code from stdin (implies --pair)"
+        ),
         option("--node-id ID", ["--node-id"], "Durable controller node ID"),
         option("--repair", ["--repair"], "Operator-authorized legacy credential repair"),
         option(
@@ -561,7 +584,12 @@ defmodule LemonCli.CommandRegistry do
           ["--allow-insecure-controller"],
           "Allow non-loopback ws://"
         ),
-        option("--cwd PATH", ["--cwd"], "Default local working directory")
+        option("--cwd PATH", ["--cwd"], "Default local working directory"),
+        option(
+          "--allowed-root PATH",
+          ["--allowed-root"],
+          "Allowed host file/shell root (repeatable)"
+        )
       ]
     },
     %{

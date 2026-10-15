@@ -48,6 +48,81 @@ Canonical files:
 
 Daily memory files are expected under `memory/YYYY-MM-DD.md` and are read/written via tools.
 
+### Placed profile sessions
+
+Profile execution supplies a JSON-safe `profile_instructions` snapshot mapping
+`AGENTS.md`, `IDENTITY.md`, `README.md` and `SOUL.md` to text, alongside
+the profile's explicit `system_prompt`. Native sessions overlay this snapshot
+in the existing bootstrap composition; they do not need controller-local profile
+files and do not write the snapshot into destination files. Omitted snapshot
+files do not inherit a stale destination persona. The overlay remains stable
+through prompt refresh and follows the same truncation and subagent filtering
+as disk bootstrap files.
+
+The profile ID derives the assistant workspace on the execution host. Project
+cwd, session journal paths, provider credentials, `TOOLS.md`, `USER.md`, `MEMORY.md`
+and daily memory remain destination-local. `USER.md` is mutable preference
+memory; controller snapshots cannot override it. An omitted remote cwd selects the worker's
+default, never the controller's router cwd.
+Explicit `profiles.sync` persists only the four controller-owned persona files
+and a credential-free revision record; it acknowledges verified storage without
+changing controller placement or transferring mutable memory.
+
+Profile `mcp_servers` execution definitions contain streamable-HTTP `name`, `url`
+and `headers`, plus optional exact `enabledTools` and origin consent policies.
+The native run owner opens them through `LemonSkills.McpSession`. Profile
+executions expose only their owner-bound connections (plus explicitly attached
+ACP clients), never ambient machine-global MCP credentials, even when their
+connector list is empty. Generic non-profile sessions retain configured clients.
+Connections close when execution ends, initialization fails or the owner dies.
+Headers are volatile execution credentials, not session management metadata.
+`${LEMON_SECRET:NAME}` references in profile HTTP headers resolve through
+`LemonCore.Secrets.get/1` on the executing host before any client starts.
+Reference-bearing request metadata stays unchanged; resolved values are used
+only in volatile connection configuration. No environment expansion or external
+source fallback is performed. Missing/failing reads and malformed references
+fail attachment with a credential-free `secret_resolution_failed` classification.
+Origin-policy clients validate destination DNS and pin their real transport
+before decrypting headers, preserve Host/TLS identity and reject redirects.
+Per-invocation connector replacements never merge another principal's headers.
+
+Before remote JSON encoding, private invocation/memory proof metadata keeps
+canonical atom-key presence authoritative, including explicit `false` and
+`nil`; snake/camel aliases cannot override it through duplicate JSON keys.
+String-only meaningful proof, grant, context or proof-descriptor claims are
+rejected rather than removed into legacy defaults. Existing negative presence
+remains negative, and trusted positive canonical fields travel only as data
+for the authenticated execution boundary's owning validation. This is not
+generic model-map authority promotion. MCP/secret references remain unresolved.
+Factory-only source profile/session identities, managed-context sentinels,
+controller connection PID and generation, and native follow-up/floor callbacks
+are excluded from execution JSON in all atom/snake/camel forms. The destination derives actual source
+identities from its immutable native session options; body metadata cannot
+select or attest a source profile/session.
+
+Profile MCP aliases are stable public-identity hashes, exposed by discovery as
+`executionName`. Credential rotation and DNS pinning do not change policy names.
+Profile clients use native `ToolPolicy` as the execution/approval authority:
+deny/blocked sets and required approvals cannot be bypassed by server hints or
+invocation configuration. Persistent profile, invocation, session and
+destination floors intersect on fresh admission. Active restriction changes
+require the owning application's admission fence and settled cancellation.
+
+Selected skills use the same destination-owned profile workspace as the skill
+registry root, not a different project cwd. Metadata appears in the normal
+available-skills section; `read_skill` loads bodies lazily from
+`workspace/.lemon/skill/<key>/SKILL.md`. Bodies are not concatenated into the
+profile system prompt or silently truncated to fit its 128 KiB limit.
+
+For context-owned Bot sessions, `USER.md` and `MEMORY.md` are virtual projections
+of provenance-proven canonical **shared** preference facts from the existing
+`LemonMemory.Preferences`/`LemonMemory.Store` owner. Unknown raw files and daily
+notes remain retained but are not injected or searched by context-owned recall.
+Private preferences enter bounded volatile recall instead of the static prefix.
+Owner review/import must explicitly authorize exact facts before sharing; one
+shared append never promotes unrelated legacy bytes. An unavailable shared store
+or missing native proof never permits raw-file fallback.
+
 ## Memory Scopes
 
 Lemon uses four frozen memory scopes. New stores must be placed in one of these scopes; no additional scopes may be introduced without updating this document.
@@ -59,13 +134,29 @@ Lemon uses four frozen memory scopes. New stores must be placed in one of these 
 | `agent` | `lemon_core` (agent memory store) | Agent lifetime | Cross-run memory for a specific agent identity. Shared across workspaces for the same agent. |
 | `global` | `lemon_core` (global store) | Installation lifetime | Installation-wide configuration and state. Shared across all agents and workspaces. |
 
-Architecture placement rule: all scope-owning stores live in `lemon_core`. No other app may own a scope-level store. `coding_agent` and `lemon_router` may read from stores but must not define new scope boundaries.
+Scope identities and run/session stores remain owned by `lemon_core`; existing
+durable document indexing, project facts and canonical preferences are owned by
+`lemon_memory`. Consumers in `coding_agent`/`lemon_router` reuse those services
+rather than creating parallel stores. Privacy is an ownership partition inside
+the existing scope/store, not a fifth scope or a second product memory store.
+
+Context-owned runs require a paired admitted `invocationContextKey` and stable
+`memoryContextKey` with private native proof. Both keys are 1–128 ASCII characters
+matching `[A-Za-z0-9][A-Za-z0-9_.:-]*`; only trusted runtime atom fields attest
+admission, never model/tool/provider metadata. Stable Bot+user preference keys do
+not include grant epochs; shared-room keys additionally bind actor, conversation
+and authorized audience, never reuse a private DM key. Owning SQL filters this
+partition before candidate limits and rechecks it on get/delete. Historical rows
+without persisted proof are not backfilled or rewritten into private/shared
+authority; retained claims alone cannot create proof, including through transfer.
 
 ## Session Scoping
 
 Bootstrap injection is session-scoped:
 
-- Main sessions: full bootstrap context, including `MEMORY.md`.
+- Legacy unscoped main sessions: existing full file bootstrap.
+- Context-owned main sessions: allowed identity files plus canonical shared
+  preference projections, never raw legacy/personal files.
 - Subagent sessions: restricted bootstrap context (`AGENTS.md`, `TOOLS.md` only).
 
 Subagent scope is inferred from `:parent_session` when present, or can be set explicitly via `:session_scope`.
@@ -74,9 +165,23 @@ Subagent scope is inferred from `:parent_session` when present, or can be set ex
 
 Main-session prompt policy requires the assistant to:
 
-- Use `remember` to add, replace, or remove compact facts in `USER.md` and `MEMORY.md`.
-- Use `recall` to search past conversations and longer notes under `memory/`.
-- Automatic recall may attach a bounded **Relevant memory** block to the user message.
-- Persist user-requested memories to durable files, not ephemeral reasoning.
+- Use `remember` for compact user/memory/project facts. Context-owned saves stay
+  private in the existing owner unless an authenticated trusted maintainer grant
+  explicitly authorizes the exact new shared fact; tool booleans cannot authorize it.
+- Use `recall` for exact owned summaries, canonical preferences and project facts.
+  Context-owned reads exclude legacy/unproven rows and raw file bytes.
+- Automatic recall attaches bounded **Relevant memory** after the cache breakpoint.
+  Both contributor collection and initial/refreshed bootstrap receive the admitted
+  ownership fields; proof failure skips rather than broadening the search.
+- Automatic project capture always stays private, even with a shared-write grant.
+- Automatic native skill synthesis excludes private/unproven indexed sources from
+  profile/global draft files. Proven shared and legitimate legacy non-product
+  sources retain eligibility; private Experiences use their existing owning flow.
+- Local finalized-run ingest stamps original admitted root metadata; the destination
+  execution worker also indexes its completed runs locally from a bounded original
+  request snapshot, never provider/completion metadata or MCP credentials.
+- Legacy unscoped CLI/operator file behavior is retained; product backends must
+  always send explicit private/shared memory management selectors.
 
-Subagent prompt policy forbids reading/updating `MEMORY.md` unless explicitly requested by the parent task.
+Subagents receive no personal bootstrap or memory tool authority. Inherited
+context cannot broaden the parent scope, and a shared-write grant is not inherited.

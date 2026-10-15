@@ -97,6 +97,9 @@ defmodule CodingAgent.Session do
     :explicit_system_prompt,
     :prompt_template,
     :workspace_dir,
+    :profile_instructions,
+    :mcp_session_id,
+    :acp_mcp_session_id,
     :extra_tools,
     :tool_disclosure,
     :tool_catalog,
@@ -159,6 +162,9 @@ defmodule CodingAgent.Session do
           explicit_system_prompt: String.t() | nil,
           prompt_template: String.t() | nil,
           workspace_dir: String.t(),
+          profile_instructions: %{String.t() => String.t()} | nil,
+          mcp_session_id: String.t() | nil,
+          acp_mcp_session_id: String.t() | nil,
           extra_tools: [AgentTool.t()],
           tool_disclosure: keyword() | map() | nil,
           tool_catalog: CodingAgent.ToolDisclosure.catalog(),
@@ -220,6 +226,9 @@ defmodule CodingAgent.Session do
       uses `default_model` from SettingsManager.
     * `:system_prompt` - Explicit system prompt text. Takes highest precedence
       in the composed prompt.
+    * `:profile_instructions` - JSON-safe bootstrap filename/text snapshot. Overrides
+      matching assistant-home instruction files for this session without writing
+      destination files; local memory and credentials are not transferred.
     * `:prompt_template` - Name of a prompt template to load via ResourceLoader.
       Templates are searched in `.lemon/prompts/`, `.claude/prompts/`, and
       `~/.lemon/agent/prompts/`.
@@ -1041,7 +1050,12 @@ defmodule CodingAgent.Session do
       workspace_dir: state.workspace_dir,
       source_session_id: state.session_manager.header.id,
       source_session_key: state.session_key,
-      source_agent_id: state.agent_id
+      source_agent_id: state.agent_id,
+      approval_context:
+        Map.take(
+          state.approval_context || %{},
+          [:invocation_context_key, :memory_context_key, :memory_context_verified]
+        )
     }
 
     {:reply, snapshot, state}
@@ -1641,15 +1655,17 @@ defmodule CodingAgent.Session do
   defp relevant_skill_keys(_state, context) when context in [nil, ""], do: []
 
   defp relevant_skill_keys(state, context) when is_binary(context) do
+    skill_cwd = CodingAgent.Workspace.skill_cwd(state.cwd, state)
+
     views =
       context
-      |> LemonSkills.find_relevant(cwd: state.cwd, max_results: 3, refresh: false)
-      |> Enum.map(&LemonSkills.SkillView.from_entry(&1, cwd: state.cwd))
+      |> LemonSkills.find_relevant(cwd: skill_cwd, max_results: 3, refresh: false)
+      |> Enum.map(&LemonSkills.SkillView.from_entry(&1, cwd: skill_cwd))
       |> Enum.filter(&LemonSkills.SkillView.prompt_visible?/1)
 
     _rendered_for_telemetry =
       LemonSkills.PromptView.render_relevant_skills(views,
-        cwd: state.cwd,
+        cwd: skill_cwd,
         run_id: state.run_id,
         session_key: state.session_key,
         session_id: state.session_manager && state.session_manager.header.id,
@@ -1669,7 +1685,7 @@ defmodule CodingAgent.Session do
   # failure here may become a turn that does not start.
   @spec collect_contributed_sections(t(), String.t()) :: [ContextRegistry.section()]
   defp collect_contributed_sections(state, skill_context) do
-    ContextRegistry.collect(%{
+    %{
       cwd: state.cwd,
       workspace_dir: state.workspace_dir,
       session_scope: state.session_scope,
@@ -1678,15 +1694,29 @@ defmodule CodingAgent.Session do
       agent_id: state.agent_id,
       run_id: state.run_id,
       query: if(is_binary(skill_context), do: skill_context, else: "")
-    })
+    }
+    |> Map.merge(trusted_memory_context(state))
+    |> ContextRegistry.collect()
   rescue
-    error ->
-      Logger.debug("Contributed context unavailable: #{Exception.message(error)}")
+    _error ->
+      Logger.debug("Contributed context unavailable")
       []
   catch
-    kind, reason ->
-      Logger.debug("Contributed context unavailable: #{inspect({kind, reason})}")
+    kind, _reason ->
+      Logger.debug("Contributed context unavailable kind=#{kind}")
       []
+  end
+
+  defp trusted_memory_context(state) do
+    Map.take(
+      state.approval_context || %{},
+      [
+        :invocation_context_key,
+        :memory_context_key,
+        :memory_context_verified,
+        :shared_memory_grant
+      ]
+    )
   end
 
   @spec refresh_system_prompt(t(), String.t(), [ContextRegistry.section()]) :: t()
@@ -1706,8 +1736,10 @@ defmodule CodingAgent.Session do
              agent_id: state.agent_id,
              contributed_sections: system_sections,
              tool_names: Enum.map(state.tools || [], & &1.name),
+             profile_instructions: state.profile_instructions,
              environment: state.prompt_environment
            }
+           |> Map.merge(trusted_memory_context(state))
          ) do
       :unchanged ->
         CodingAgent.Session.Planning.refresh(state)

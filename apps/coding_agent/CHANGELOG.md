@@ -10,6 +10,16 @@
 
 ### Fixed
 
+- Named-node file requests no longer return `filesystem_failed` when a parent
+  symlink is swapped back to a directory while the path resolves. Each component
+  is classified with one descriptor-relative `readlinkat`, so concurrent
+  replacement yields `not_found`, `path_not_allowed` or `not_directory`, or acts
+  on the directory actually present inside the root; nothing is written outside
+  it.
+- Swarm nodes inherit the execution context captured when the swarm launched
+  instead of re-reading parent session state per node, and persona `spawns`
+  keeps its `task` grant under preset tool-policy floors while other
+  leaf-worker denials remain.
 - `BashExecutor` keeps output that races an abort or timeout: a chunk that
   arrives after the abort flag is set, or is already in the mailbox when the
   process tree is killed, is now part of the partial result instead of being

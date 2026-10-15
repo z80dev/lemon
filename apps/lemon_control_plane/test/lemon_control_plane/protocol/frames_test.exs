@@ -3,6 +3,10 @@ defmodule LemonControlPlane.Protocol.FramesTest do
 
   alias LemonControlPlane.Protocol.Frames
 
+  test "advertises invocation-bound approval decisions to execution nodes" do
+    assert "node.invoke.approval" in Frames.supported_events()
+  end
+
   describe "parse/1" do
     test "parses valid request with params" do
       json = ~s({"type":"req","id":"req-1","method":"chat.send","params":{"prompt":"hello"}})

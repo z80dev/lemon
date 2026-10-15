@@ -194,11 +194,16 @@ defmodule LemonCore.Config.TomlPatch do
   defp upsert_line_in_section(section, key, line) do
     key_regex = ~r/^\s*#{Regex.escape(key)}\s*=.*$/m
 
-    if Regex.match?(key_regex, section) do
-      String.replace(section, key_regex, line)
-    else
-      section = ensure_trailing_newline(section)
-      section <> line <> "\n"
+    case Regex.run(key_regex, section, return: :index) do
+      [{offset, length}] ->
+        tail_offset = offset + length
+
+        binary_part(section, 0, offset) <>
+          line <> binary_part(section, tail_offset, byte_size(section) - tail_offset)
+
+      nil ->
+        section = ensure_trailing_newline(section)
+        section <> line <> "\n"
     end
   end
 

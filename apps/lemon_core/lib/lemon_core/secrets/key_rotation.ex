@@ -341,8 +341,15 @@ defmodule LemonCore.Secrets.KeyRotation do
 
   defp fetch_rows do
     case Store.fetch_all(Secrets.table()) do
-      {:ok, rows} -> {:ok, Enum.sort_by(rows, &elem(&1, 0))}
-      {:error, reason} -> {:error, {:store_failed, safe_reason(reason)}}
+      {:ok, rows} ->
+        # Receipt-only tombstones carry historical proof, not encrypted values.
+        {:ok,
+         rows
+         |> Enum.reject(fn {_ref, entry} -> LemonCore.Secrets.Receipts.receipt_only?(entry) end)
+         |> Enum.sort_by(&elem(&1, 0))}
+
+      {:error, reason} ->
+        {:error, {:store_failed, safe_reason(reason)}}
     end
   end
 
@@ -407,12 +414,18 @@ defmodule LemonCore.Secrets.KeyRotation do
 
   defp prune_expired(expired) do
     Enum.reduce_while(expired, :ok, fn {ref, entry}, :ok ->
-      case Store.compare_and_delete(Secrets.table(), ref, entry) do
+      case prune_record(ref, entry) do
         :ok -> {:cont, :ok}
         {:error, :mismatch} -> {:halt, {:error, :target_changed}}
         {:error, reason} -> {:halt, {:error, {:store_failed, safe_reason(reason)}}}
       end
     end)
+  end
+
+  defp prune_record(ref, entry) do
+    if LemonCore.Secrets.Receipts.entries(entry) == [],
+      do: Store.compare_and_delete(Secrets.table(), ref, entry),
+      else: Store.compare_and_swap(Secrets.table(), ref, entry, Secrets.receipt_only_entry(entry))
   end
 
   defp stage(plan, new_key) do
@@ -531,7 +544,9 @@ defmodule LemonCore.Secrets.KeyRotation do
   # every live record done.
   defp converge(old_key, new_key, passes) do
     with {:ok, rows} <- fetch_rows() do
-      outcomes = Enum.map(rows, fn {ref, entry} -> converge_record(ref, entry, old_key, new_key) end)
+      outcomes =
+        Enum.map(rows, fn {ref, entry} -> converge_record(ref, entry, old_key, new_key) end)
+
       pending = Enum.count(outcomes, &(&1 in [:staged, :failed]))
 
       with :ok <- sync_if(Enum.any?(outcomes, &(&1 in [:changed, :staged]))) do
@@ -546,7 +561,7 @@ defmodule LemonCore.Secrets.KeyRotation do
 
   defp converge_record(ref, entry, old_key, new_key) do
     if expired?(entry) do
-      case Store.compare_and_delete(Secrets.table(), ref, entry) do
+      case prune_record(ref, entry) do
         :ok -> :changed
         {:error, _reason} -> :failed
       end

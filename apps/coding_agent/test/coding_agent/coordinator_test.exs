@@ -2,666 +2,718 @@ defmodule CodingAgent.CoordinatorTest do
   use ExUnit.Case, async: true
 
   alias CodingAgent.Coordinator
+  alias LemonAi.Types.{AssistantMessage, Model, ModelCost, TextContent}
 
-  alias LemonAi.Types.{
-    Model,
-    ModelCost
-  }
+  @moduletag :tmp_dir
 
-  # ============================================================================
-  # Test Mocks and Helpers
-  # ============================================================================
-
-  defp mock_model(opts \\ []) do
-    %Model{
-      id: Keyword.get(opts, :id, "mock-model-1"),
-      name: Keyword.get(opts, :name, "Mock Model"),
-      api: Keyword.get(opts, :api, :mock),
-      provider: Keyword.get(opts, :provider, :mock_provider),
-      base_url: Keyword.get(opts, :base_url, "https://api.mock.test"),
-      reasoning: Keyword.get(opts, :reasoning, false),
-      input: Keyword.get(opts, :input, [:text]),
-      cost: Keyword.get(opts, :cost, %ModelCost{input: 0.01, output: 0.03}),
-      context_window: Keyword.get(opts, :context_window, 128_000),
-      max_tokens: Keyword.get(opts, :max_tokens, 4096),
-      headers: Keyword.get(opts, :headers, %{}),
-      compat: Keyword.get(opts, :compat, nil)
-    }
-  end
-
-  defp default_coordinator_opts(overrides) do
-    Keyword.merge(
-      [
-        cwd: System.tmp_dir!(),
-        model: mock_model(),
-        default_timeout: 5_000
-      ],
-      overrides
-    )
-  end
-
-  defp start_coordinator(opts \\ []) do
-    opts = default_coordinator_opts(opts)
-    {:ok, coordinator} = Coordinator.start_link(opts)
-    coordinator
-  end
-
-  defp assert_eventually(fun, timeout_ms \\ 1_000) when is_function(fun, 0) do
-    deadline = System.monotonic_time(:millisecond) + timeout_ms
-    do_assert_eventually(fun, deadline)
-  end
-
-  defp do_assert_eventually(fun, deadline) do
-    if fun.() do
-      :ok
-    else
-      if System.monotonic_time(:millisecond) >= deadline do
-        flunk("condition was not met within timeout")
-      else
-        Process.sleep(10)
-        do_assert_eventually(fun, deadline)
-      end
-    end
-  end
-
-  defmodule SlowSession do
+  defmodule ControlledSession do
     use GenServer
 
-    def start_link(opts) do
-      GenServer.start_link(__MODULE__, opts)
-    end
+    def start_link(opts), do: GenServer.start_link(__MODULE__, opts)
 
     @impl true
     def init(opts) do
       Process.flag(:trap_exit, true)
+      test_pid = Keyword.fetch!(opts, :test_pid)
+      test_ref = Process.monitor(test_pid)
+      session_id = "controlled-session-#{System.unique_integer([:positive])}"
+      send(test_pid, {:session_starting, self(), session_id})
 
-      {:ok,
-       %{
-         delay_ms: Keyword.get(opts, :delay_ms, 300),
-         test_pid: Keyword.fetch!(opts, :test_pid)
-       }}
+      state = %{
+        test_pid: test_pid,
+        test_ref: test_ref,
+        session_id: session_id,
+        subscriber: nil,
+        prompt_error: Keyword.get(opts, :prompt_error),
+        gate_prompt: Keyword.get(opts, :gate_prompt, false),
+        gate_cleanup: Keyword.get(opts, :gate_cleanup, false)
+      }
+
+      if Keyword.get(opts, :gate_start, false) do
+        receive do
+          :release_start -> {:ok, state}
+          {:DOWN, ^test_ref, :process, ^test_pid, _reason} -> {:stop, :normal}
+        end
+      else
+        {:ok, state}
+      end
     end
 
     @impl true
-    def handle_cast(:abort, state), do: {:noreply, state}
+    def handle_call(:get_stats, _from, state) do
+      {:reply, %{session_id: state.session_id}, state}
+    end
+
+    def handle_call({:subscribe, subscriber, :direct, _opts}, _from, state) do
+      session = self()
+      unsubscribe = fn -> GenServer.cast(session, {:unsubscribe, subscriber}) end
+      send(state.test_pid, {:session_subscribed, self(), subscriber})
+      {:reply, unsubscribe, %{state | subscriber: subscriber}}
+    end
+
+    def handle_call({:prompt, text, _opts}, _from, state) do
+      send(state.test_pid, {:session_prompted, self(), text})
+
+      cond do
+        state.gate_prompt ->
+          receive do
+            :release_prompt ->
+              reply = if state.prompt_error, do: {:error, state.prompt_error}, else: :ok
+              {:reply, reply, state}
+
+            {:DOWN, ref, :process, _pid, _reason} when ref == state.test_ref ->
+              {:stop, :normal, state}
+          end
+
+        state.prompt_error ->
+          {:reply, {:error, state.prompt_error}, state}
+
+        true ->
+          {:reply, :ok, state}
+      end
+    end
+
+    @impl true
+    def handle_cast(:abort, state) do
+      send(state.test_pid, {:session_aborted, self()})
+      {:noreply, state}
+    end
+
+    def handle_cast({:unsubscribe, _subscriber}, state), do: {:noreply, state}
+
+    @impl true
+    def handle_info({:complete, text}, state) do
+      message = %LemonAi.Types.AssistantMessage{
+        content: [%LemonAi.Types.TextContent{text: text}]
+      }
+
+      send(state.subscriber, {:session_event, state.session_id, {:agent_end, [message]}})
+      {:noreply, state}
+    end
+
+    def handle_info({:fail, reason}, state) do
+      send(state.subscriber, {:session_event, state.session_id, {:error, reason, []}})
+      {:noreply, state}
+    end
+
+    def handle_info({:DOWN, ref, :process, _pid, _reason}, %{test_ref: ref} = state) do
+      {:stop, :normal, state}
+    end
 
     @impl true
     def terminate(_reason, state) do
-      send(state.test_pid, {:slow_session_terminate_started, self()})
-      Process.sleep(state.delay_ms)
-      send(state.test_pid, {:slow_session_terminate_finished, self()})
+      send(state.test_pid, {:session_cleanup_started, self()})
+
+      if state.gate_cleanup && Process.alive?(state.test_pid) do
+        receive do
+          :release_cleanup -> :ok
+          {:DOWN, ref, :process, _pid, _reason} when ref == state.test_ref -> :ok
+        end
+      end
+
       :ok
     end
   end
 
-  # ============================================================================
-  # Initialization Tests
-  # ============================================================================
-
-  describe "start_link/1" do
-    test "starts with cwd and model" do
-      coordinator = start_coordinator()
-      assert is_pid(coordinator)
-      assert Process.alive?(coordinator)
-    end
-
-    test "starts with custom name" do
-      name = :"coordinator_test_#{:erlang.unique_integer()}"
-      {:ok, _pid} = Coordinator.start_link(default_coordinator_opts(name: name))
-
-      # Can call by name
-      assert Coordinator.list_active(name) == []
-    end
-
-    test "fails without cwd" do
-      Process.flag(:trap_exit, true)
-      result = Coordinator.start_link(model: mock_model())
-
-      case result do
-        {:error, _reason} ->
-          # Any error is acceptable (KeyError, key_not_found, etc.)
-          :ok
-
-        {:ok, pid} ->
-          assert_receive {:EXIT, ^pid, _reason}, 2_000
-      end
-
-      Process.flag(:trap_exit, false)
-    end
-
-    test "fails without model" do
-      Process.flag(:trap_exit, true)
-      result = Coordinator.start_link(cwd: System.tmp_dir!())
-
-      case result do
-        {:error, _reason} ->
-          :ok
-
-        {:ok, pid} ->
-          assert_receive {:EXIT, ^pid, _reason}, 2_000
-      end
-
-      Process.flag(:trap_exit, false)
-    end
-
-    test "accepts custom default_timeout" do
-      coordinator = start_coordinator(default_timeout: 60_000)
-      assert is_pid(coordinator)
-    end
-
-    test "accepts thinking_level option" do
-      coordinator = start_coordinator(thinking_level: :high)
-      assert is_pid(coordinator)
-    end
+  defp mock_model do
+    %Model{
+      id: "coordinator-controlled-model",
+      name: "Coordinator Controlled Model",
+      api: :mock,
+      provider: :mock_provider,
+      base_url: "https://api.mock.test",
+      reasoning: false,
+      input: [:text],
+      cost: %ModelCost{input: 0.01, output: 0.03},
+      context_window: 128_000,
+      max_tokens: 4096
+    }
   end
 
-  # ============================================================================
-  # Basic Subagent Spawning Tests
-  # ============================================================================
-
-  describe "run_subagent/2" do
-    @tag :tmp_dir
-    test "spawns a single subagent and returns result", %{tmp_dir: tmp_dir} do
-      # Start coordinator with mock session options that will be merged
-      coordinator =
-        start_coordinator(
-          cwd: tmp_dir,
-          # We need to pass these to sessions started by the coordinator
-          # The coordinator uses CodingAgent.start_session which may use supervisor
-          default_timeout: 10_000
-        )
-
-      # For this test to work without real API calls, we need to mock at a higher level
-      # Since Coordinator calls CodingAgent.start_session, we'll test the basic API
-      # and verify errors are handled properly
-
-      # Test with an unknown subagent type to verify error handling
-      result =
-        Coordinator.run_subagent(coordinator, prompt: "Hello", subagent: "nonexistent_agent")
-
-      # Should get an error for unknown subagent
-      assert {:error, {:error, "Unknown subagent: nonexistent_agent"}} = result
-    end
-
-    @tag :tmp_dir
-    test "returns error tuple on failure", %{tmp_dir: tmp_dir} do
-      coordinator = start_coordinator(cwd: tmp_dir, default_timeout: 1_000)
-
-      # Invalid subagent type should return error
-      result = Coordinator.run_subagent(coordinator, prompt: "Test", subagent: "invalid_type_xyz")
-
-      assert {:error, _reason} = result
-    end
-
-    @tag :tmp_dir
-    test "works without subagent type", %{tmp_dir: tmp_dir} do
-      coordinator = start_coordinator(cwd: tmp_dir, default_timeout: 500)
-
-      # Without a subagent type, the prompt is used directly
-      # This will timeout without a real API but tests the code path
-      result = Coordinator.run_subagent(coordinator, prompt: "Hello", timeout: 100)
-
-      # Will likely timeout or error without real API
-      assert {:error, _reason} = result
-    end
-
-    @tag :tmp_dir
-    test "respects timeout option", %{tmp_dir: tmp_dir} do
-      coordinator = start_coordinator(cwd: tmp_dir, default_timeout: 30_000)
-
-      # Very short timeout should cause timeout or error (API not available)
-      start_time = System.monotonic_time(:millisecond)
-      result = Coordinator.run_subagent(coordinator, prompt: "Hello", timeout: 50)
-      elapsed = System.monotonic_time(:millisecond) - start_time
-
-      # Should stay bounded under full-suite scheduler load.
-      assert elapsed < 15_000
-      # Can be timeout or other error depending on environment
-      assert {:error, _reason} = result
-    end
+  defp coordinator_opts(tmp_dir, overrides \\ []) do
+    Keyword.merge([cwd: tmp_dir, model: mock_model(), default_timeout: 5_000], overrides)
   end
 
-  # ============================================================================
-  # Multiple Subagent Execution Tests
-  # ============================================================================
-
-  describe "run_subagents/3" do
-    @tag :tmp_dir
-    test "spawns multiple subagents concurrently", %{tmp_dir: tmp_dir} do
-      coordinator = start_coordinator(cwd: tmp_dir, default_timeout: 1_000)
-
-      specs = [
-        %{prompt: "Task 1"},
-        %{prompt: "Task 2"},
-        %{prompt: "Task 3"}
-      ]
-
-      # Will timeout but should return results for all specs
-      results = Coordinator.run_subagents(coordinator, specs, timeout: 100)
-
-      assert length(results) == 3
-
-      Enum.each(results, fn result ->
-        assert Map.has_key?(result, :id)
-        assert Map.has_key?(result, :status)
-        assert result.status in [:completed, :error, :timeout, :aborted]
-      end)
-    end
-
-    @tag :tmp_dir
-    test "returns results in same order as specs", %{tmp_dir: tmp_dir} do
-      coordinator = start_coordinator(cwd: tmp_dir, default_timeout: 1_000)
-
-      specs = [
-        %{prompt: "First task", description: "first"},
-        %{prompt: "Second task", description: "second"},
-        %{prompt: "Third task", description: "third"}
-      ]
-
-      results = Coordinator.run_subagents(coordinator, specs, timeout: 100)
-
-      assert length(results) == 3
-
-      # Results should have unique IDs
-      ids = Enum.map(results, & &1.id)
-      assert length(Enum.uniq(ids)) == 3
-    end
-
-    @tag :tmp_dir
-    test "handles mix of valid and invalid subagent types", %{tmp_dir: tmp_dir} do
-      coordinator = start_coordinator(cwd: tmp_dir, default_timeout: 1_000)
-
-      specs = [
-        %{prompt: "Research task", subagent: "scout"},
-        %{prompt: "Invalid task", subagent: "nonexistent_subagent"},
-        %{prompt: "Review task", subagent: "reviewer"}
-      ]
-
-      results = Coordinator.run_subagents(coordinator, specs, timeout: 200)
-
-      assert length(results) == 3
-
-      # The invalid subagent should have error status
-      [_first, second, _third] = results
-      assert second.status == :error
-      assert second.error == "Unknown subagent: nonexistent_subagent"
-    end
-
-    @tag :tmp_dir
-    test "empty specs list returns empty results", %{tmp_dir: tmp_dir} do
-      coordinator = start_coordinator(cwd: tmp_dir)
-
-      results = Coordinator.run_subagents(coordinator, [])
-
-      assert results == []
-    end
+  defp start_coordinator(tmp_dir, opts \\ []) do
+    start_supervised!({Coordinator, coordinator_opts(tmp_dir, opts)})
   end
 
-  # ============================================================================
-  # Timeout Handling Tests
-  # ============================================================================
+  defp start_controlled_coordinator(tmp_dir, session_opts \\ [], coordinator_opts \\ []) do
+    coordinator = start_coordinator(tmp_dir, coordinator_opts)
+    supervisor = start_supervised!({DynamicSupervisor, strategy: :one_for_one})
+    test_pid = self()
 
-  describe "timeout handling" do
-    @tag :tmp_dir
-    test "times out after specified duration", %{tmp_dir: tmp_dir} do
-      coordinator = start_coordinator(cwd: tmp_dir, default_timeout: 30_000)
-
-      specs = [%{prompt: "Long running task"}]
-
-      start_time = System.monotonic_time(:millisecond)
-      results = Coordinator.run_subagents(coordinator, specs, timeout: 100)
-      elapsed = System.monotonic_time(:millisecond) - start_time
-
-      # Keep this bounded but allow scheduler noise in CI.
-      assert elapsed < 15_000
-
-      assert [result] = results
-      # Can be timeout or error depending on whether session started
-      assert result.status in [:timeout, :error]
-    end
-
-    @tag :tmp_dir
-    test "uses default_timeout when not specified", %{tmp_dir: tmp_dir} do
-      # Short default timeout
-      coordinator = start_coordinator(cwd: tmp_dir, default_timeout: 100)
-
-      specs = [%{prompt: "Task"}]
-
-      start_time = System.monotonic_time(:millisecond)
-      results = Coordinator.run_subagents(coordinator, specs)
-      elapsed = System.monotonic_time(:millisecond) - start_time
-
-      # Should use default timeout while allowing cleanup under scheduler load.
-      assert elapsed < 15_000
-      assert [result] = results
-      # Can be timeout or error depending on whether session started
-      assert result.status in [:timeout, :error]
-    end
-
-    @tag :tmp_dir
-    test "cleans up subagents after timeout", %{tmp_dir: tmp_dir} do
-      coordinator = start_coordinator(cwd: tmp_dir, default_timeout: 100)
-
-      specs = [%{prompt: "Task 1"}, %{prompt: "Task 2"}]
-
-      _results = Coordinator.run_subagents(coordinator, specs, timeout: 50)
-
-      # Should have no active subagents once cleanup completes
-      assert_eventually(fn -> Coordinator.list_active(coordinator) == [] end, 5_000)
-    end
-  end
-
-  # ============================================================================
-  # Abort All Functionality Tests
-  # ============================================================================
-
-  describe "abort_all/1" do
-    @tag :tmp_dir
-    test "aborts all active subagents", %{tmp_dir: tmp_dir} do
-      coordinator = start_coordinator(cwd: tmp_dir, default_timeout: 30_000)
-
-      # Start subagents in a separate process so we can abort them
-      parent = self()
-
-      spawn(fn ->
-        results =
-          Coordinator.run_subagents(coordinator, [%{prompt: "Task 1"}, %{prompt: "Task 2"}],
-            timeout: 10_000
-          )
-
-        send(parent, {:results, results})
-      end)
-
-      # Wait for subagents to start
-      assert_eventually(fn -> Coordinator.list_active(coordinator) != [] end, 5_000)
-
-      # Abort all
-      :ok = Coordinator.abort_all(coordinator)
-
-      # Wait for results
-      receive do
-        {:results, results} ->
-          # Results may be timeout or aborted
-          assert length(results) == 2
-      after
-        2_000 ->
-          # If we don't get results, check that active is empty
-          assert Coordinator.list_active(coordinator) == []
-      end
-    end
-
-    @tag :tmp_dir
-    test "returns ok when no active subagents", %{tmp_dir: tmp_dir} do
-      coordinator = start_coordinator(cwd: tmp_dir)
-
-      # Should not error when nothing to abort
-      assert :ok = Coordinator.abort_all(coordinator)
-    end
-
-    @tag :tmp_dir
-    test "cleans up after abort", %{tmp_dir: tmp_dir} do
-      coordinator = start_coordinator(cwd: tmp_dir, default_timeout: 30_000)
-
-      # Start subagents asynchronously
-      spawn(fn ->
-        Coordinator.run_subagents(coordinator, [%{prompt: "Task"}], timeout: 10_000)
-      end)
-
-      assert_eventually(
-        fn ->
-          Coordinator.list_active(coordinator) != []
-        end,
-        2_000
-      )
-
-      :ok = Coordinator.abort_all(coordinator)
-
-      assert_eventually(
-        fn ->
-          Coordinator.list_active(coordinator) == []
-        end,
-        5_000
-      )
-    end
-
-    @tag :tmp_dir
-    test "keeps bookkeeping until session cleanup completes", %{tmp_dir: tmp_dir} do
-      coordinator = start_coordinator(cwd: tmp_dir, default_timeout: 30_000)
-      assert Process.whereis(CodingAgent.SessionSupervisor)
-
+    starter = fn _opts ->
       child_spec = %{
-        id: {:slow_session, make_ref()},
-        start: {SlowSession, :start_link, [[delay_ms: 300, test_pid: self()]]},
+        id: make_ref(),
+        start: {ControlledSession, :start_link, [Keyword.put(session_opts, :test_pid, test_pid)]},
         restart: :temporary,
         shutdown: 5_000,
         type: :worker
       }
 
-      {:ok, slow_pid} = DynamicSupervisor.start_child(CodingAgent.SessionSupervisor, child_spec)
+      DynamicSupervisor.start_child(supervisor, child_spec)
+    end
 
-      on_exit(fn ->
-        if Process.alive?(slow_pid) do
-          _ = DynamicSupervisor.terminate_child(CodingAgent.SessionSupervisor, slow_pid)
+    :sys.replace_state(coordinator, &%{&1 | session_starter: starter})
+    coordinator
+  end
+
+  defp run_async(coordinator, specs, opts \\ []) do
+    test_pid = self()
+    ref = make_ref()
+
+    pid =
+      spawn(fn ->
+        try do
+          results = Coordinator.run_subagents(coordinator, specs, opts)
+          send(test_pid, {:results, ref, results})
+        catch
+          :exit, reason -> send(test_pid, {:caller_exit, ref, reason})
         end
       end)
 
-      subagent_id = "slow-subagent-#{System.unique_integer([:positive])}"
-      monitor_ref = make_ref()
-
-      :sys.replace_state(coordinator, fn state ->
-        subagent_state = %{
-          pid: slow_pid,
-          session_id: "slow-session-#{System.unique_integer([:positive])}",
-          monitor_ref: monitor_ref,
-          caller: nil,
-          status: :running
-        }
-
-        %{state | active_subagents: Map.put(state.active_subagents, subagent_id, subagent_state)}
-      end)
-
-      assert subagent_id in Coordinator.list_active(coordinator)
-
-      :ok = Coordinator.abort_all(coordinator)
-
-      assert_receive {:slow_session_terminate_started, ^slow_pid}, 5_000
-      assert subagent_id in Coordinator.list_active(coordinator)
-      assert_receive {:slow_session_terminate_finished, ^slow_pid}, 5_000
-      send(coordinator, {:DOWN, monitor_ref, :process, slow_pid, :normal})
-
-      assert_eventually(fn ->
-        subagent_id not in Coordinator.list_active(coordinator)
-      end)
-    end
+    on_exit(fn -> if Process.alive?(pid), do: Process.exit(pid, :kill) end)
+    ref
   end
 
-  # ============================================================================
-  # Error Handling Tests
-  # ============================================================================
+  defp track_session(pid) do
+    ref = Process.monitor(pid)
 
-  describe "error handling" do
-    @tag :tmp_dir
-    test "handles unknown subagent type gracefully", %{tmp_dir: tmp_dir} do
-      coordinator = start_coordinator(cwd: tmp_dir)
+    on_exit(fn ->
+      cleanup_ref = Process.monitor(pid)
+      send(pid, :release_start)
+      send(pid, :release_prompt)
+      send(pid, :release_cleanup)
 
-      specs = [%{prompt: "Task", subagent: "definitely_not_a_real_subagent"}]
-
-      results = Coordinator.run_subagents(coordinator, specs, timeout: 100)
-
-      assert [result] = results
-      assert result.status == :error
-      assert result.error == "Unknown subagent: definitely_not_a_real_subagent"
-    end
-
-    @tag :tmp_dir
-    test "handles empty prompt in spec", %{tmp_dir: tmp_dir} do
-      coordinator = start_coordinator(cwd: tmp_dir)
-
-      specs = [%{prompt: ""}]
-
-      # Should handle empty prompt
-      results = Coordinator.run_subagents(coordinator, specs, timeout: 100)
-
-      assert length(results) == 1
-    end
-
-    @tag :tmp_dir
-    test "includes session_id in results when available", %{tmp_dir: tmp_dir} do
-      coordinator = start_coordinator(cwd: tmp_dir, default_timeout: 200)
-
-      specs = [%{prompt: "Task"}]
-
-      results = Coordinator.run_subagents(coordinator, specs, timeout: 150)
-
-      assert [result] = results
-      # session_id may be nil if session failed to start, or set if it did
-      assert Map.has_key?(result, :session_id)
-    end
-
-    @tag :tmp_dir
-    test "coordinator remains functional after subagent errors", %{tmp_dir: tmp_dir} do
-      coordinator = start_coordinator(cwd: tmp_dir)
-
-      # First run with error
-      specs1 = [%{prompt: "Task", subagent: "invalid"}]
-      results1 = Coordinator.run_subagents(coordinator, specs1, timeout: 100)
-      assert [%{status: :error}] = results1
-
-      # Second run should still work
-      specs2 = [%{prompt: "Another task"}]
-      results2 = Coordinator.run_subagents(coordinator, specs2, timeout: 100)
-      assert length(results2) == 1
-    end
-  end
-
-  # ============================================================================
-  # Process Crash Tests
-  # ============================================================================
-
-  describe "subagent crash handling" do
-    @tag :tmp_dir
-    test "handles crashed subagent gracefully", %{tmp_dir: tmp_dir} do
-      coordinator = start_coordinator(cwd: tmp_dir, default_timeout: 5_000)
-
-      # Without being able to inject a crashing session, we verify the coordinator
-      # handles the DOWN message properly by testing the error path
-      specs = [%{prompt: "Task"}]
-
-      # This will timeout, which exercises similar cleanup code
-      results = Coordinator.run_subagents(coordinator, specs, timeout: 50)
-
-      assert length(results) == 1
-      # Coordinator should still be alive
-      assert Process.alive?(coordinator)
-    end
-
-    @tag :tmp_dir
-    test "coordinator survives subagent failures", %{tmp_dir: tmp_dir} do
-      coordinator = start_coordinator(cwd: tmp_dir)
-
-      # Run multiple times with potential failures
-      for _ <- 1..3 do
-        specs = [
-          %{prompt: "Task", subagent: "invalid_" <> Integer.to_string(:rand.uniform(1000))}
-        ]
-
-        results = Coordinator.run_subagents(coordinator, specs, timeout: 50)
-        assert length(results) == 1
+      if Process.alive?(pid) do
+        try do
+          GenServer.stop(pid, :shutdown, 5_000)
+        catch
+          :exit, _ -> Process.exit(pid, :kill)
+        end
       end
 
-      # Coordinator should still be alive
+      receive do
+        {:DOWN, ^cleanup_ref, :process, ^pid, _reason} -> :ok
+      after
+        5_000 -> flunk("controlled session did not exit during teardown")
+      end
+    end)
+
+    ref
+  end
+
+  defp started_session(prompt) do
+    assert_receive {:session_prompted, pid, ^prompt}, 1_000
+    ref = track_session(pid)
+    assert_receive {:session_starting, ^pid, session_id}, 1_000
+    assert_receive {:session_subscribed, ^pid, subscriber}, 1_000
+    assert is_pid(subscriber)
+    assert subscriber != self()
+    {pid, ref, session_id, subscriber}
+  end
+
+  describe "start_link/1" do
+    test "starts with cwd and model", %{tmp_dir: tmp_dir} do
+      coordinator = start_coordinator(tmp_dir)
       assert Process.alive?(coordinator)
       assert Coordinator.list_active(coordinator) == []
     end
 
-    @tag :tmp_dir
-    test "crashed subagent returns error result with reason", %{tmp_dir: tmp_dir} do
-      coordinator = start_coordinator(cwd: tmp_dir)
+    test "starts with custom name", %{tmp_dir: tmp_dir} do
+      name = :"coordinator_test_#{System.unique_integer([:positive])}"
+      start_coordinator(tmp_dir, name: name)
+      assert Coordinator.list_active(name) == []
+    end
 
-      specs = [%{prompt: "Task", subagent: "bad_subagent_type"}]
+    test "fails without required options" do
+      Process.flag(:trap_exit, true)
+      assert {:error, _} = Coordinator.start_link(model: mock_model())
+      assert {:error, _} = Coordinator.start_link(cwd: System.tmp_dir!())
+    end
 
-      results = Coordinator.run_subagents(coordinator, specs, timeout: 100)
-
-      assert [result] = results
-      assert result.status == :error
-      assert result.error != nil
+    test "accepts thinking level and default timeout", %{tmp_dir: tmp_dir} do
+      coordinator = start_coordinator(tmp_dir, thinking_level: :high, default_timeout: 60_000)
+      state = :sys.get_state(coordinator)
+      assert state.thinking_level == :high
+      assert state.default_timeout == 60_000
     end
   end
 
-  # ============================================================================
-  # List Active Tests
-  # ============================================================================
+  describe "run_subagent/2" do
+    test "returns the visible assistant answer", %{tmp_dir: tmp_dir} do
+      coordinator = start_controlled_coordinator(tmp_dir)
+      parent = self()
 
-  describe "list_active/1" do
-    @tag :tmp_dir
-    test "returns empty list when no subagents", %{tmp_dir: tmp_dir} do
-      coordinator = start_coordinator(cwd: tmp_dir)
+      spawn(fn ->
+        send(parent, {:single_result, Coordinator.run_subagent(coordinator, prompt: "Hello")})
+      end)
+
+      {pid, ref, _session_id, _worker} = started_session("Hello")
+      send(pid, {:complete, "Visible answer"})
+      assert_receive {:DOWN, ^ref, :process, ^pid, :shutdown}, 1_000
+      assert_receive {:single_result, {:ok, "Visible answer"}}, 1_000
+      assert Coordinator.list_active(coordinator) == []
+    end
+
+    test "returns the provider failure to the caller", %{tmp_dir: tmp_dir} do
+      coordinator = start_controlled_coordinator(tmp_dir)
+      parent = self()
+
+      spawn(fn ->
+        send(parent, {:single_result, Coordinator.run_subagent(coordinator, prompt: "Fail")})
+      end)
+
+      {pid, ref, _session_id, _worker} = started_session("Fail")
+      send(pid, {:fail, :provider_unavailable})
+      assert_receive {:DOWN, ^ref, :process, ^pid, :shutdown}, 1_000
+      assert_receive {:single_result, {:error, {:error, :provider_unavailable}}}, 1_000
+    end
+
+    test "returns an error for an unknown subagent", %{tmp_dir: tmp_dir} do
+      coordinator = start_controlled_coordinator(tmp_dir)
+
+      assert {:error, {:error, "Unknown subagent: nonexistent_agent"}} =
+               Coordinator.run_subagent(coordinator,
+                 prompt: "Hello",
+                 subagent: "nonexistent_agent"
+               )
+
+      refute_receive {:session_starting, _, _}
+      assert Coordinator.list_active(coordinator) == []
+    end
+
+    test "rejects an empty prompt without admitting a session", %{tmp_dir: tmp_dir} do
+      coordinator = start_controlled_coordinator(tmp_dir)
+
+      assert {:error, {:error, "Prompt must be a non-empty string"}} =
+               Coordinator.run_subagent(coordinator, prompt: "")
+
+      refute_receive {:session_starting, _, _}
+      assert Coordinator.list_active(coordinator) == []
+    end
+
+    test "a rejected prompt cleans up its admitted session", %{tmp_dir: tmp_dir} do
+      coordinator =
+        start_controlled_coordinator(tmp_dir, prompt_error: :already_streaming, gate_prompt: true)
+
+      call = run_async(coordinator, [%{prompt: "Rejected prompt"}])
+      {pid, ref, session_id, _worker} = started_session("Rejected prompt")
+      send(pid, :release_prompt)
+      assert_receive {:DOWN, ^ref, :process, ^pid, :shutdown}, 1_000
+
+      assert_receive {:results, ^call,
+                      [%{status: :error, error: :already_streaming, session_id: ^session_id}]},
+                     1_000
 
       assert Coordinator.list_active(coordinator) == []
     end
 
-    @tag :tmp_dir
-    test "returns empty list after subagents complete", %{tmp_dir: tmp_dir} do
-      coordinator = start_coordinator(cwd: tmp_dir)
+    test "an admission failure returns its error and leaves no active ID", %{tmp_dir: tmp_dir} do
+      coordinator = start_coordinator(tmp_dir)
 
-      specs = [%{prompt: "Task"}]
-      _results = Coordinator.run_subagents(coordinator, specs, timeout: 50)
+      :sys.replace_state(
+        coordinator,
+        &%{&1 | session_starter: fn _opts -> {:error, :admission_failed} end}
+      )
 
-      # After completion, should be empty
+      assert [%{status: :error, result: nil, error: :admission_failed, session_id: nil}] =
+               Coordinator.run_subagents(coordinator, [%{prompt: "Admission failure"}])
+
+      assert Coordinator.list_active(coordinator) == []
+    end
+
+    test "standalone linked admission still returns its completed result", %{tmp_dir: tmp_dir} do
+      coordinator = start_coordinator(tmp_dir)
+      test_pid = self()
+      starter = fn _opts -> ControlledSession.start_link(test_pid: test_pid) end
+      :sys.replace_state(coordinator, &%{&1 | session_starter: starter})
+
+      call = run_async(coordinator, [%{prompt: "Linked admission"}])
+      {pid, ref, session_id, _worker} = started_session("Linked admission")
+      send(pid, {:complete, "linked answer"})
+      assert_receive {:DOWN, ^ref, :process, ^pid, :shutdown}, 1_000
+
+      assert_receive {:results, ^call,
+                      [%{status: :completed, result: "linked answer", session_id: ^session_id}]},
+                     1_000
+
       assert Coordinator.list_active(coordinator) == []
     end
   end
 
-  # ============================================================================
-  # Result Structure Tests
-  # ============================================================================
+  describe "run_subagents/3" do
+    test "runs concurrently and retains spec order across out-of-order completion and failures",
+         %{
+           tmp_dir: tmp_dir
+         } do
+      coordinator = start_controlled_coordinator(tmp_dir)
 
-  describe "result structure" do
-    @tag :tmp_dir
-    test "results have required fields", %{tmp_dir: tmp_dir} do
-      coordinator = start_coordinator(cwd: tmp_dir)
+      call =
+        run_async(coordinator, [
+          %{prompt: "First"},
+          %{prompt: "Invalid", subagent: "nonexistent_subagent"},
+          %{prompt: "Third"}
+        ])
 
-      specs = [%{prompt: "Task"}]
-      results = Coordinator.run_subagents(coordinator, specs, timeout: 50)
+      {first, first_ref, first_id, first_worker} = started_session("First")
+      {third, third_ref, third_id, third_worker} = started_session("Third")
+      assert first_worker != third_worker
+      %{active_subagents: active} = :sys.get_state(coordinator)
+      assert Enum.any?(active, fn {_id, subagent} -> subagent.pid == first end)
+      assert Enum.any?(active, fn {_id, subagent} -> subagent.pid == third end)
+      send(third, {:complete, "third answer"})
+      assert_receive {:DOWN, ^third_ref, :process, ^third, :shutdown}, 1_000
+      refute_receive {:results, ^call, _}
+      send(first, {:complete, "first answer"})
+      assert_receive {:DOWN, ^first_ref, :process, ^first, :shutdown}, 1_000
 
-      assert [result] = results
+      assert_receive {:results, ^call, [first_result, invalid_result, third_result]}, 1_000
 
-      # All required fields should be present
-      assert Map.has_key?(result, :id)
-      assert Map.has_key?(result, :status)
-      assert Map.has_key?(result, :result)
-      assert Map.has_key?(result, :error)
-      assert Map.has_key?(result, :session_id)
+      assert %{status: :completed, result: "first answer", error: nil, session_id: ^first_id} =
+               first_result
 
-      assert is_binary(result.id)
-      assert result.status in [:completed, :error, :timeout, :aborted]
+      assert %{status: :error, error: "Unknown subagent: nonexistent_subagent", session_id: nil} =
+               invalid_result
+
+      assert %{status: :completed, result: "third answer", error: nil, session_id: ^third_id} =
+               third_result
+
+      assert length(Enum.uniq(Enum.map([first_result, invalid_result, third_result], & &1.id))) ==
+               3
+
+      assert Coordinator.list_active(coordinator) == []
     end
 
-    @tag :tmp_dir
-    test "timeout result has correct fields", %{tmp_dir: tmp_dir} do
-      coordinator = start_coordinator(cwd: tmp_dir)
-
-      specs = [%{prompt: "Task"}]
-      results = Coordinator.run_subagents(coordinator, specs, timeout: 10)
-
-      assert [result] = results
-      # Can be timeout or error depending on whether session started
-      assert result.status in [:timeout, :error]
-      assert result.error != nil
-      assert result.result == nil
+    test "empty specs return empty results", %{tmp_dir: tmp_dir} do
+      coordinator = start_controlled_coordinator(tmp_dir)
+      assert Coordinator.run_subagents(coordinator, []) == []
+      refute_receive {:session_starting, _, _}
     end
 
-    @tag :tmp_dir
-    test "error result has correct fields", %{tmp_dir: tmp_dir} do
-      coordinator = start_coordinator(cwd: tmp_dir)
-
-      specs = [%{prompt: "Task", subagent: "invalid_subagent"}]
-      results = Coordinator.run_subagents(coordinator, specs, timeout: 100)
-
-      assert [result] = results
-      assert result.status == :error
-      assert result.error != nil
-      assert result.result == nil
+    test "a second caller can run while another batch is active", %{tmp_dir: tmp_dir} do
+      coordinator = start_controlled_coordinator(tmp_dir)
+      first_call = run_async(coordinator, [%{prompt: "First caller"}])
+      {first, first_ref, _, _} = started_session("First caller")
+      second_call = run_async(coordinator, [%{prompt: "Second caller"}])
+      {second, second_ref, _, _} = started_session("Second caller")
+      send(second, {:complete, "second"})
+      assert_receive {:DOWN, ^second_ref, :process, ^second, :shutdown}, 1_000
+      assert_receive {:results, ^second_call, [%{status: :completed, result: "second"}]}, 1_000
+      refute_receive {:results, ^first_call, _}
+      send(first, {:complete, "first"})
+      assert_receive {:DOWN, ^first_ref, :process, ^first, :shutdown}, 1_000
+      assert_receive {:results, ^first_call, [%{status: :completed, result: "first"}]}, 1_000
     end
+  end
+
+  describe "timeout handling" do
+    test "zero timeout does not admit a session", %{tmp_dir: tmp_dir} do
+      coordinator = start_controlled_coordinator(tmp_dir)
+
+      assert [%{status: :timeout, result: nil, error: :timeout, session_id: nil}] =
+               Coordinator.run_subagents(coordinator, [%{prompt: "Never start"}], timeout: 0)
+
+      refute_receive {:session_starting, _, _}
+      assert Coordinator.list_active(coordinator) == []
+    end
+
+    test "execution timeout cleans up a running session", %{tmp_dir: tmp_dir} do
+      coordinator = start_controlled_coordinator(tmp_dir)
+      call = run_async(coordinator, [%{prompt: "Timeout"}])
+      {pid, ref, session_id, _worker} = started_session("Timeout")
+      %{batches: batches} = :sys.get_state(coordinator)
+      [batch_ref] = Map.keys(batches)
+      send(coordinator, {:batch_timeout, batch_ref})
+      assert_receive {:DOWN, ^ref, :process, ^pid, :shutdown}, 1_000
+
+      assert_receive {:results, ^call,
+                      [%{status: :timeout, result: nil, error: :timeout, session_id: ^session_id}]},
+                     1_000
+
+      assert Coordinator.list_active(coordinator) == []
+    end
+
+    test "the default deadline includes session admission", %{tmp_dir: tmp_dir} do
+      coordinator = start_controlled_coordinator(tmp_dir, gate_start: true)
+      call = run_async(coordinator, [%{prompt: "Admission timeout"}])
+      assert_receive {:session_starting, pid, _session_id}, 1_000
+      ref = track_session(pid)
+      [id] = Coordinator.list_active(coordinator)
+      %{batches: batches} = :sys.get_state(coordinator)
+      [batch_ref] = Map.keys(batches)
+      assert %{timer: timer} = Map.fetch!(batches, batch_ref)
+      assert Process.read_timer(timer) > 0
+      # Deliver the real deadline message at the controlled admission boundary.
+      send(coordinator, {:batch_timeout, batch_ref})
+      assert [^id] = Coordinator.list_active(coordinator)
+      send(pid, :release_start)
+      assert_receive {:DOWN, ^ref, :process, ^pid, :shutdown}, 1_000
+
+      assert_receive {:results, ^call,
+                      [%{id: ^id, status: :timeout, error: :timeout, session_id: nil}]},
+                     1_000
+
+      refute_receive {:session_prompted, ^pid, _}
+      assert Coordinator.list_active(coordinator) == []
+    end
+  end
+
+  describe "abort_all/1" do
+    test "aborts every running subagent and returns cancellation results", %{tmp_dir: tmp_dir} do
+      coordinator = start_controlled_coordinator(tmp_dir)
+      call = run_async(coordinator, [%{prompt: "Task 1"}, %{prompt: "Task 2"}], timeout: 10_000)
+      {first, first_ref, first_id, _} = started_session("Task 1")
+      {second, second_ref, second_id, _} = started_session("Task 2")
+      assert length(Coordinator.list_active(coordinator)) == 2
+      assert :ok = Coordinator.abort_all(coordinator)
+      assert_receive {:session_aborted, ^first}, 1_000
+      assert_receive {:session_aborted, ^second}, 1_000
+      assert_receive {:DOWN, ^first_ref, :process, ^first, :shutdown}, 1_000
+      assert_receive {:DOWN, ^second_ref, :process, ^second, :shutdown}, 1_000
+      assert_receive {:results, ^call, [first_result, second_result]}, 2_000
+
+      assert %{status: :aborted, result: nil, error: :aborted, session_id: ^first_id} =
+               first_result
+
+      assert %{status: :aborted, result: nil, error: :aborted, session_id: ^second_id} =
+               second_result
+
+      assert Coordinator.list_active(coordinator) == []
+    end
+
+    test "cancels blocked admission without losing its late session", %{tmp_dir: tmp_dir} do
+      coordinator = start_controlled_coordinator(tmp_dir, gate_start: true, gate_cleanup: true)
+      call = run_async(coordinator, [%{prompt: "Blocked startup"}])
+      assert_receive {:session_starting, pid, _session_id}, 1_000
+      ref = track_session(pid)
+      [id] = Coordinator.list_active(coordinator)
+      assert :ok = Coordinator.abort_all(coordinator)
+      assert [^id] = Coordinator.list_active(coordinator)
+      send(pid, :release_start)
+      assert_receive {:session_cleanup_started, ^pid}, 1_000
+      assert_receive {:session_aborted, ^pid}, 1_000
+      assert [^id] = Coordinator.list_active(coordinator)
+      refute_receive {:session_subscribed, ^pid, _}
+      refute_receive {:session_prompted, ^pid, _}
+      send(pid, :release_cleanup)
+      assert_receive {:DOWN, ^ref, :process, ^pid, :shutdown}, 1_000
+
+      assert_receive {:results, ^call,
+                      [%{id: ^id, status: :aborted, error: :aborted, result: nil}]},
+                     2_000
+
+      assert Coordinator.list_active(coordinator) == []
+    end
+
+    test "remains responsive while the synchronous prompt handshake is blocked", %{
+      tmp_dir: tmp_dir
+    } do
+      coordinator = start_controlled_coordinator(tmp_dir, gate_prompt: true, gate_cleanup: true)
+      call = run_async(coordinator, [%{prompt: "Blocked prompt"}])
+      {pid, ref, session_id, _worker} = started_session("Blocked prompt")
+      [id] = Coordinator.list_active(coordinator)
+      assert :ok = Coordinator.abort_all(coordinator)
+      assert [^id] = Coordinator.list_active(coordinator)
+      send(pid, :release_prompt)
+      assert_receive {:session_cleanup_started, ^pid}, 1_000
+      assert_receive {:session_aborted, ^pid}, 1_000
+      assert [^id] = Coordinator.list_active(coordinator)
+      send(pid, :release_cleanup)
+      assert_receive {:DOWN, ^ref, :process, ^pid, :shutdown}, 1_000
+
+      assert_receive {:results, ^call,
+                      [%{id: ^id, status: :aborted, error: :aborted, session_id: ^session_id}]},
+                     2_000
+
+      assert Coordinator.list_active(coordinator) == []
+    end
+
+    test "handles the asynchronous cancellation message", %{tmp_dir: tmp_dir} do
+      coordinator = start_controlled_coordinator(tmp_dir)
+      call = run_async(coordinator, [%{prompt: "Async abort"}])
+      {pid, ref, _, _} = started_session("Async abort")
+      send(coordinator, :abort_all)
+      assert_receive {:session_aborted, ^pid}, 1_000
+      assert_receive {:DOWN, ^ref, :process, ^pid, :shutdown}, 1_000
+      assert_receive {:results, ^call, [%{status: :aborted, error: :aborted}]}, 1_000
+      assert Coordinator.list_active(coordinator) == []
+    end
+
+    test "returns ok when nothing is active", %{tmp_dir: tmp_dir} do
+      coordinator = start_coordinator(tmp_dir)
+      assert :ok = Coordinator.abort_all(coordinator)
+    end
+  end
+
+  for event <- [{:complete, "completed answer"}, {:fail, :provider_failed}],
+      cancellation <- [:abort, :timeout] do
+    test "#{elem(event, 0)} remains terminal when #{cancellation} arrives during cleanup", %{
+      tmp_dir: tmp_dir
+    } do
+      coordinator = start_controlled_coordinator(tmp_dir, gate_cleanup: true)
+      call = run_async(coordinator, [%{prompt: "Terminal before cleanup"}])
+      {pid, ref, session_id, _worker} = started_session("Terminal before cleanup")
+      event = unquote(Macro.escape(event))
+      send(pid, event)
+      assert_receive {:session_cleanup_started, ^pid}, 1_000
+
+      case unquote(cancellation) do
+        :abort ->
+          assert :ok = Coordinator.abort_all(coordinator)
+
+        :timeout ->
+          %{batches: batches} = :sys.get_state(coordinator)
+          [batch_ref] = Map.keys(batches)
+          send(coordinator, {:batch_timeout, batch_ref})
+      end
+
+      assert [_active_id] = Coordinator.list_active(coordinator)
+      refute_receive {:results, ^call, _}
+      send(pid, :release_cleanup)
+      assert_receive {:DOWN, ^ref, :process, ^pid, :shutdown}, 1_000
+      assert_receive {:results, ^call, [result]}, 2_000
+
+      expected =
+        case event do
+          {:complete, answer} -> %{status: :completed, result: answer, error: nil}
+          {:fail, reason} -> %{status: :error, result: nil, error: reason}
+        end
+
+      assert Map.take(result, [:status, :result, :error, :session_id]) ==
+               Map.put(expected, :session_id, session_id)
+
+      assert Coordinator.list_active(coordinator) == []
+    end
+  end
+
+  describe "crash handling" do
+    test "reports an actual session crash and remains usable", %{tmp_dir: tmp_dir} do
+      coordinator = start_controlled_coordinator(tmp_dir)
+      call = run_async(coordinator, [%{prompt: "Crash"}])
+      {pid, ref, session_id, _worker} = started_session("Crash")
+      Process.exit(pid, :kill)
+      assert_receive {:DOWN, ^ref, :process, ^pid, :killed}, 1_000
+
+      assert_receive {:results, ^call,
+                      [
+                        %{
+                          status: :error,
+                          result: nil,
+                          error: {:crashed, :killed},
+                          session_id: ^session_id
+                        }
+                      ]},
+                     1_000
+
+      assert Process.alive?(coordinator)
+      assert Coordinator.list_active(coordinator) == []
+
+      assert [%{status: :error, error: "Unknown subagent: invalid"}] =
+               Coordinator.run_subagents(coordinator, [%{prompt: "Retry", subagent: "invalid"}])
+    end
+
+    test "a worker crash cleans up the session it owns", %{tmp_dir: tmp_dir} do
+      coordinator = start_controlled_coordinator(tmp_dir)
+      call = run_async(coordinator, [%{prompt: "Worker crash"}])
+      {pid, ref, session_id, worker} = started_session("Worker crash")
+      # Ensure the coordinator has observed admission before crashing its owner.
+      %{active_subagents: active} = :sys.get_state(coordinator)
+      assert Enum.any?(active, fn {_id, subagent} -> subagent.pid == pid end)
+      Process.exit(worker, :kill)
+      assert_receive {:DOWN, ^ref, :process, ^pid, :shutdown}, 1_000
+
+      assert_receive {:results, ^call,
+                      [%{status: :error, error: {:crashed, :killed}, session_id: ^session_id}]},
+                     1_000
+
+      assert Coordinator.list_active(coordinator) == []
+    end
+
+    test "worker death during supervised admission retains ownership of the late child", %{
+      tmp_dir: tmp_dir
+    } do
+      coordinator = start_coordinator(tmp_dir)
+      supervisor = start_supervised!({DynamicSupervisor, strategy: :one_for_one})
+      test_pid = self()
+
+      starter = fn _opts ->
+        DynamicSupervisor.start_child(supervisor, %{
+          id: make_ref(),
+          start: {ControlledSession, :start_link, [[test_pid: test_pid, gate_start: true]]},
+          restart: :temporary
+        })
+      end
+
+      :sys.replace_state(coordinator, &%{&1 | session_starter: starter})
+      call = run_async(coordinator, [%{prompt: "Worker dies in admission"}])
+      assert_receive {:session_starting, pid, _session_id}, 1_000
+      ref = track_session(pid)
+      %{active_subagents: active} = :sys.get_state(coordinator)
+      [{id, %{worker_pid: worker}}] = Map.to_list(active)
+      worker_ref = Process.monitor(worker)
+      Process.exit(worker, :kill)
+      assert_receive {:DOWN, ^worker_ref, :process, ^worker, :killed}, 1_000
+      assert [^id] = Coordinator.list_active(coordinator)
+      refute_receive {:results, ^call, _}
+
+      send(pid, :release_start)
+      assert_receive {:session_aborted, ^pid}, 1_000
+      assert_receive {:DOWN, ^ref, :process, ^pid, :shutdown}, 1_000
+      assert_receive {:results, ^call, [%{status: :error, error: {:crashed, :killed}}]}, 2_000
+      refute_receive {:session_prompted, ^pid, _}
+      assert Coordinator.list_active(coordinator) == []
+      assert DynamicSupervisor.which_children(supervisor) == []
+    end
+
+    test "coordinator death cancels a still-starting session", %{tmp_dir: tmp_dir} do
+      coordinator = start_controlled_coordinator(tmp_dir, gate_start: true)
+      call = run_async(coordinator, [%{prompt: "Owner dies"}])
+      assert_receive {:session_starting, pid, _session_id}, 1_000
+      ref = track_session(pid)
+      %{active_subagents: active} = :sys.get_state(coordinator)
+      [{_id, %{worker_pid: worker}}] = Map.to_list(active)
+      worker_ref = Process.monitor(worker)
+      GenServer.stop(coordinator)
+      send(pid, :release_start)
+      assert_receive {:DOWN, ^ref, :process, ^pid, :shutdown}, 1_000
+      assert_receive {:DOWN, ^worker_ref, :process, ^worker, :normal}, 1_000
+      assert_receive {:caller_exit, ^call, _reason}, 1_000
+      refute_receive {:session_prompted, ^pid, _}
+    end
+  end
+
+  test "result extraction ignores thinking and uses the last assistant text", %{tmp_dir: tmp_dir} do
+    coordinator = start_controlled_coordinator(tmp_dir)
+    call = run_async(coordinator, [%{prompt: "Visible output"}])
+    {pid, ref, session_id, worker} = started_session("Visible output")
+
+    messages = [
+      %AssistantMessage{content: [%TextContent{text: "earlier"}]},
+      %AssistantMessage{
+        content: [
+          %LemonAi.Types.ThinkingContent{thinking: "private"},
+          %TextContent{text: "visible"}
+        ]
+      }
+    ]
+
+    send(worker, {:session_event, session_id, {:agent_end, messages}})
+    assert_receive {:DOWN, ^ref, :process, ^pid, :shutdown}, 1_000
+
+    assert_receive {:results, ^call,
+                    [
+                      %{
+                        status: :completed,
+                        result: "visible",
+                        error: nil,
+                        session_id: ^session_id
+                      } = result
+                    ]},
+                   1_000
+
+    assert Map.keys(result) |> Enum.sort() == [:error, :id, :result, :session_id, :status]
+    assert is_binary(result.id)
   end
 end

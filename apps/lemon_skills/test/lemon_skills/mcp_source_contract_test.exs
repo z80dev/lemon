@@ -32,6 +32,8 @@ defmodule LemonSkills.McpSourceContractTest do
          approval_timeout_ms: 500
        ]},
       {:http, "http://localhost:3000/mcp"},
+      {:http, "http://localhost:3000/mcp", enabled_tools: []},
+      {:http, "http://localhost:3000/mcp", enabled_tools: ["literal*", "echo"]},
       {:sse, "https://example.test/events"},
       {:http, "https://example.test/mcp",
        headers: [{"X-Test", "value"}],
@@ -76,6 +78,8 @@ defmodule LemonSkills.McpSourceContractTest do
   test "rejects malformed filters, timeouts, and sampling policies" do
     invalid_cases = [
       {[allow_tools: [:echo]], "allow_tools must be a list of strings"},
+      {[enabled_tools: nil], "enabled_tools must be a list of strings"},
+      {[enabled_tools: [:echo]], "enabled_tools must be a list of strings"},
       {[ready_timeout_ms: 0], "ready_timeout_ms must be a positive integer"},
       {[timeout_ms: "slow"], "timeout_ms must be a positive integer"},
       {[sampling_policy: :deny], "sampling_policy must be a keyword list"},
@@ -143,6 +147,40 @@ defmodule LemonSkills.McpSourceContractTest do
         {:error, "tool_approvals must map tool names to always or never"}
       )
     end
+  end
+
+  test "shared parser preserves optional exact allowlists and destination policy" do
+    origin = "https://example.test"
+
+    raw = %{
+      "type" => "http",
+      "name" => "fixture",
+      "url" => origin <> "/mcp",
+      "headers" => %{},
+      "enabledTools" => [],
+      "allowedOrigins" => [origin],
+      "approvedPrivateOrigins" => []
+    }
+
+    assert [{:http, _, opts}] = Config.parse_mcp_server_config(raw)
+    assert Keyword.fetch!(opts, :enabled_tools) == []
+    assert opts[:origin_policy] == %{allowed_origins: [origin], approved_private_origins: []}
+
+    assert [{:http, _, omitted}] =
+             Config.parse_mcp_server_config(
+               Map.drop(
+                 raw,
+                 ["enabledTools", "allowedOrigins", "approvedPrivateOrigins"]
+               )
+             )
+
+    refute Keyword.has_key?(omitted, :enabled_tools)
+    refute Keyword.has_key?(omitted, :origin_policy)
+
+    assert [invalid] = Config.parse_mcp_server_config(Map.put(raw, "enabledTools", nil))
+
+    assert {:error, "enabled_tools must be a list of strings"} =
+             McpSource.validate_config(invalid)
   end
 
   test "utility selectors are distinct from similarly named remote tools" do

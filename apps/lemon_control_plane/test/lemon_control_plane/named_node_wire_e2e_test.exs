@@ -199,6 +199,19 @@ defmodule LemonControlPlane.NamedNodeWireE2ETest do
   end
 
   setup do
+    # Gateway unit suites can leave a local fixture executor in application env.
+    # The controller side must use the real executor that routes :node metadata;
+    # only the destination worker is replaced with the probe executor.
+    previous_executor = Application.fetch_env(:lemon_gateway, :executor)
+    Application.put_env(:lemon_gateway, :executor, CodingAgent.Executor)
+
+    on_exit(fn ->
+      case previous_executor do
+        {:ok, executor} -> Application.put_env(:lemon_gateway, :executor, executor)
+        :error -> Application.delete_env(:lemon_gateway, :executor)
+      end
+    end)
+
     true = Process.register(self(), NamedNodeWireExecutor)
     :ok
   end
@@ -285,7 +298,12 @@ defmodule LemonControlPlane.NamedNodeWireE2ETest do
     assert_receive {:fake_executor_started, request, run_opts, ^worker, run_ref, context}, 3_000
     assert request.prompt == "cross the wire"
     assert request.cwd == tmp_dir
-    assert run_opts == %{cwd: tmp_dir, run_id: "wire-run-#{suffix}"}
+
+    assert Map.drop(run_opts, [:native_followup_submit, :native_source_floor_fun]) == %{
+             cwd: tmp_dir,
+             run_id: "wire-run-#{suffix}",
+             approval_timeout_ms: 600_000
+           }
 
     assert {:ok, control_id} =
              LemonCore.NodeRegistry.control(invoke_id, :steer, "stay on the wire",
@@ -310,6 +328,12 @@ defmodule LemonControlPlane.NamedNodeWireE2ETest do
     send(worker, {:engine_delta, run_ref, "wire "})
     send(worker, {:engine_delta, run_ref, "complete"})
 
+    assert_receive {:lemon_node_event, ^invoke_id, 1, %{"type" => "delta", "text" => "wire "}},
+                   3_000
+
+    assert_receive {:lemon_node_event, ^invoke_id, 2, %{"type" => "delta", "text" => "complete"}},
+                   3_000
+
     send(worker, {
       :engine_event,
       run_ref,
@@ -333,6 +357,154 @@ defmodule LemonControlPlane.NamedNodeWireE2ETest do
              LemonCore.NodeRegistry.control(invoke_id, :steer, "too late")
 
     send(context.runner_pid, :stop)
+
+    # Run the controller's real executor/gateway/router forwarding path, not
+    # merely the broker recipient. Session observers see live work before final.
+    stream_run_id = "wire-stream-#{suffix}"
+    session_key = "agent:default:wire-stream-#{suffix}"
+    :ok = LemonCore.Bus.subscribe(LemonCore.Bus.session_topic(session_key))
+    :ok = LemonCore.Bus.subscribe("exec_approvals")
+
+    route_request = %LemonCore.ExecutionCommand{
+      run_id: stream_run_id,
+      session_key: session_key,
+      prompt: "live remote work",
+      conversation_key: {:session, session_key},
+      meta: %{node: node_name}
+    }
+
+    {:ok, route_pid} =
+      LemonRouter.RunProcess.start_link(%{
+        run_id: stream_run_id,
+        session_key: session_key,
+        execution_request: route_request,
+        submit_to_gateway?: false
+      })
+
+    {:ok, gateway_pid} =
+      LemonGateway.Run.start_link(%{
+        execution_request: %ExecutionRequest{
+          run_id: stream_run_id,
+          session_key: session_key,
+          prompt: "live remote work",
+          cwd: tmp_dir,
+          meta: %{node: node_name, agent_id: "default"}
+        },
+        slot_ref: make_ref(),
+        worker_pid: self()
+      })
+
+    gateway_ref = Process.monitor(gateway_pid)
+    route_ref = Process.monitor(route_pid)
+
+    assert_receive {:fake_executor_started, _request, _opts, ^worker, live_ref, live_context},
+                   3_000
+
+    send(worker, {:engine_delta, live_ref, "first "})
+    send(worker, {:engine_delta, live_ref, "second"})
+
+    assert_receive %LemonCore.Event{
+                     type: :delta,
+                     payload: %{seq: 1, text: "first "},
+                     meta: %{session_key: ^session_key}
+                   },
+                   3_000
+
+    assert_receive %LemonCore.Event{
+                     type: :delta,
+                     payload: %{seq: 2, text: "second"},
+                     meta: %{session_key: ^session_key}
+                   },
+                   3_000
+
+    assert Process.alive?(gateway_pid)
+
+    send(
+      worker,
+      {:engine_event, live_ref,
+       LemonGateway.Event.action_event(%{
+         engine: "lemon",
+         phase: :started,
+         action: LemonGateway.Event.action(%{id: "tool-1", kind: "bash", title: "Run command"})
+       })}
+    )
+
+    assert_receive %LemonCore.Event{
+                     type: :engine_action,
+                     payload: %{phase: :started},
+                     meta: %{session_key: ^session_key}
+                   },
+                   3_000
+
+    LemonCore.Bus.broadcast(
+      LemonCore.Bus.run_topic(stream_run_id),
+      LemonCore.Event.new(:checkpoint_created, %{checkpoint_id: "wire-cp", paths: []}, %{
+        run_id: stream_run_id,
+        session_key: session_key
+      })
+    )
+
+    assert_receive %LemonCore.Event{
+                     type: :checkpoint_created,
+                     meta: %{remote_node: true, session_key: ^session_key}
+                   },
+                   3_000
+
+    local_approval_id = LemonCore.Id.approval_id()
+
+    approval_task =
+      Task.async(fn ->
+        LemonCore.ExecApprovals.request(%{
+          approval_id: local_approval_id,
+          run_id: stream_run_id,
+          session_key: session_key,
+          session_id: "worker-native-session",
+          tool: "bash",
+          action: %{command_hash: "wire-hash"},
+          expires_in_ms: 10_000
+        })
+      end)
+
+    assert_receive %LemonCore.Event{
+                     type: :approval_requested,
+                     payload: %{
+                       pending: %{
+                         id: controller_approval_id,
+                         session_id: nil,
+                         run_id: ^stream_run_id
+                       }
+                     }
+                   },
+                   3_000
+
+    refute controller_approval_id == local_approval_id
+    assert LemonCore.ExecApprovalStore.get_pending(controller_approval_id).tool == "bash"
+
+    assert {:ok, %{decision: :approve_once, outcome: :approved}} =
+             LemonCore.ExecApprovals.resolve(controller_approval_id, :approve_once)
+
+    assert {:ok, :approved, :approve_once} = Task.await(approval_task, 3_000)
+
+    send(
+      worker,
+      {:engine_event, live_ref,
+       LemonGateway.Event.completed(%{
+         engine: "lemon",
+         ok: true,
+         answer: "first second"
+       })}
+    )
+
+    assert_receive %LemonCore.Event{
+                     type: :run_completed,
+                     payload: %{completed: %{ok: true, answer: "first second"}},
+                     meta: %{session_key: ^session_key}
+                   },
+                   3_000
+
+    assert_receive {:DOWN, ^gateway_ref, :process, ^gateway_pid, :normal}, 3_000
+    assert_receive {:DOWN, ^route_ref, :process, ^route_pid, :normal}, 3_000
+    send(live_context.runner_pid, :stop)
 
     assert {:ok, cancel_id} =
              LemonCore.NodeRegistry.invoke(

@@ -10,6 +10,22 @@ defmodule LemonControlPlane.Methods.UsageCostTrackingTest do
     :ok
   end
 
+  defp record_usage(usage) do
+    run_id = "usage-test-#{LemonCore.Id.uuid()}"
+    provider = usage[:provider] || usage["provider"]
+
+    entry =
+      LemonCore.UsageLedger.entry(run_id, "agent:test:usage", %{
+        completed: %{usage: usage},
+        completed_at_ms: System.system_time(:millisecond),
+        meta: %{provider: provider, model: "test"}
+      })
+
+    record = LemonCore.UsageLedger.occurrence_record(entry)
+    on_exit(fn -> LemonCore.Store.delete(:usage_occurrences, record.id) end)
+    LemonCore.UsageLedger.record(entry)
+  end
+
   describe "UsageCost" do
     test "returns cost breakdown with default date range" do
       {:ok, result} = UsageCost.handle(%{}, @ctx)
@@ -64,11 +80,11 @@ defmodule LemonControlPlane.Methods.UsageCostTrackingTest do
     end
   end
 
-  describe "UsageCost.record_usage/1" do
+  describe "canonical UsageLedger recording" do
     test "records usage and updates totals" do
       # Record some usage
       :ok =
-        UsageCost.record_usage(%{
+        record_usage(%{
           provider: "claude",
           cost: 0.05,
           input_tokens: 500,
@@ -76,7 +92,7 @@ defmodule LemonControlPlane.Methods.UsageCostTrackingTest do
         })
 
       :ok =
-        UsageCost.record_usage(%{
+        record_usage(%{
           provider: "openai",
           cost: 0.03,
           input_tokens: 300,
@@ -94,7 +110,7 @@ defmodule LemonControlPlane.Methods.UsageCostTrackingTest do
 
     test "records usage with string keys" do
       :ok =
-        UsageCost.record_usage(%{
+        record_usage(%{
           "provider" => "claude",
           "cost" => 0.10,
           "input_tokens" => 1000,
@@ -107,17 +123,17 @@ defmodule LemonControlPlane.Methods.UsageCostTrackingTest do
       assert summary.total_cost >= 0.10
     end
 
-    test "defaults to 'other' provider when not specified" do
-      :ok = UsageCost.record_usage(%{cost: 0.01})
+    test "keeps unavailable provider attribution unknown" do
+      :ok = record_usage(%{cost: 0.01})
 
       summary = LemonCore.Store.get(:usage_data, :current)
-      assert Map.get(summary.breakdown, "other", 0) >= 0.01
+      assert Map.get(summary.breakdown, "unknown", 0) >= 0.01
     end
 
     test "accumulates usage across multiple calls" do
       for _ <- 1..5 do
         :ok =
-          UsageCost.record_usage(%{
+          record_usage(%{
             provider: "claude",
             cost: 0.01,
             input_tokens: 100,
@@ -134,7 +150,7 @@ defmodule LemonControlPlane.Methods.UsageCostTrackingTest do
 
     test "stores daily records" do
       :ok =
-        UsageCost.record_usage(%{
+        record_usage(%{
           provider: "claude",
           cost: 0.05,
           input_tokens: 500,

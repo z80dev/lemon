@@ -135,6 +135,25 @@ defmodule LemonCore.RunRequest do
   def normalize_run_id(run_id) when is_binary(run_id) and run_id != "", do: run_id
   def normalize_run_id(_), do: nil
 
+  @doc """
+  Validate an opaque invocation-context digest supplied by a trusted producer.
+
+  Producers derive it from the authenticated principal, effective policy and
+  connector/grant epochs. The digest is private execution metadata, not an
+  authorization grant. Missing metadata retains legacy routing; an explicitly
+  supplied key must be a bounded nonempty ASCII identifier.
+  """
+  @spec validate_invocation_context_key(term()) ::
+          :ok | {:error, :invalid_invocation_context_key}
+  def validate_invocation_context_key(key)
+      when is_binary(key) and byte_size(key) > 0 and byte_size(key) <= 128 do
+    if Regex.match?(~r/\A[A-Za-z0-9][A-Za-z0-9_.:-]*\z/, key),
+      do: :ok,
+      else: {:error, :invalid_invocation_context_key}
+  end
+
+  def validate_invocation_context_key(_key), do: {:error, :invalid_invocation_context_key}
+
   defp field(params, key) when is_map(params) and is_atom(key) do
     MapHelpers.get_key(params, key)
   end

@@ -26,6 +26,7 @@ defmodule LemonControlPlane.Methods.CronUpdate do
              "id" => job.id,
              "updated" => true,
              "nextRunAtMs" => job.next_run_at_ms,
+             "admissionConfigured" => not is_nil(job.admission),
              "summary" => summary(job, patch)
            }}
 
@@ -61,10 +62,18 @@ defmodule LemonControlPlane.Methods.CronUpdate do
     |> maybe_put(:timeout_ms, params["timeoutMs"])
     |> maybe_put(:max_retries, params["maxRetries"])
     |> maybe_put(:retry_backoff_ms, params["retryBackoffMs"])
+    |> maybe_put_admission(params)
   end
 
   defp maybe_put(map, _key, nil), do: map
   defp maybe_put(map, key, value), do: Map.put(map, key, value)
+
+  defp maybe_put_admission(patch, params) do
+    case Map.fetch(params, "admission") do
+      {:ok, admission} -> Map.put(patch, :admission, admission)
+      :error -> patch
+    end
+  end
 
   defp validate_immutable_patch(params) when is_map(params) do
     fields =

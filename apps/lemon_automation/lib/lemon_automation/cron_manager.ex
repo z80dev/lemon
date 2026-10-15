@@ -139,7 +139,7 @@ defmodule LemonAutomation.CronManager do
   ## Optional Parameters
 
   - `:enabled` - Whether job is active (default: true)
-  - `:timezone` - `"UTC"` (default) or `"local"` (server wall-clock time)
+  - `:timezone` - `"UTC"` (default), `"local"` (server clock), or an available IANA name
   - `:jitter_sec` - Random delay spread (default: 0)
   - `:timeout_ms` - Execution timeout (default: 300000)
   - `:deliver_to` - `nil` (default target), `"none"`, or `"telegram:<id>[:<thread>]"`
@@ -426,9 +426,9 @@ defmodule LemonAutomation.CronManager do
               {:ok, params} ->
                 updated = job |> CronJob.update(params) |> recapture_on_unpin(job)
 
-                # Recompute next run if schedule changed
+                # Both schedule and timezone determine the next wall-clock slot.
                 updated =
-                  if params[:schedule] || params["schedule"] do
+                  if has_any_key?(params, [:schedule, "schedule", :timezone, "timezone"]) do
                     next_run = CronSchedule.next_run_ms(updated.schedule, updated.timezone)
                     CronJob.set_next_run(updated, next_run)
                   else
@@ -1020,37 +1020,24 @@ defmodule LemonAutomation.CronManager do
     manager = self()
 
     fun = fn ->
-      case preflight_mod().check(job) do
+      case check_admission(job, run) do
         :ok ->
-          case CronJob.execution_mode(job) do
-            :command ->
-              command_runner().submit(job, run, run_id: run.run_id)
+          submit_preflighted_run(job, run, manager)
 
-            :agent ->
-              run_submitter().submit(job, run,
-                run_id: run.run_id,
-                append_memory: false,
-                on_submitting: fn router_id, session_key ->
-                  GenServer.call(
-                    manager,
-                    {:claim_submission, run.id, router_id, session_key},
-                    @call_timeout_ms
-                  )
-                end
-              )
-          end
+        {:ok, invocation} ->
+          submit_preflighted_run(job, run, manager, admission_invocation: invocation)
 
-        {:skip, failure} ->
-          CronStore.record_audit(:preflight_failed, %{
+        {:error, outcome} ->
+          CronStore.record_audit(:admission_failed, %{
             job_id: job.id,
             run_id: run.id,
             router_run_id: run.run_id,
             source: :cron_manager,
             triggered_by: run.triggered_by,
-            reason: CronPreflight.format_failure(failure)
+            reason: outcome
           })
 
-          {:preflight_skip, failure}
+          {:admission_failed, outcome}
       end
     end
 
@@ -1070,6 +1057,62 @@ defmodule LemonAutomation.CronManager do
           )
 
         state
+    end
+  end
+
+  defp check_admission(%CronJob{admission: nil}, _run), do: :ok
+
+  defp check_admission(job, run) do
+    admission =
+      Application.get_env(:lemon_automation, :cron_admission_mod, LemonAutomation.CronAdmission)
+
+    case admission.check(job, run) do
+      :ok -> :ok
+      {:ok, invocation} when is_map(invocation) -> {:ok, invocation}
+      {:error, :denied} -> {:error, :denied}
+      _ -> {:error, :admission_unavailable}
+    end
+  rescue
+    _ -> {:error, :admission_unavailable}
+  catch
+    _, _ -> {:error, :admission_unavailable}
+  end
+
+  defp submit_preflighted_run(job, run, manager, invocation_opts \\ []) do
+    case preflight_mod().check(job) do
+      :ok ->
+        case CronJob.execution_mode(job) do
+          :command ->
+            command_runner().submit(job, run, run_id: run.run_id)
+
+          :agent ->
+            opts =
+              Keyword.merge(invocation_opts,
+                run_id: run.run_id,
+                append_memory: false,
+                on_submitting: fn router_id, session_key ->
+                  GenServer.call(
+                    manager,
+                    {:claim_submission, run.id, router_id, session_key},
+                    @call_timeout_ms
+                  )
+                end
+              )
+
+            run_submitter().submit(job, run, opts)
+        end
+
+      {:skip, failure} ->
+        CronStore.record_audit(:preflight_failed, %{
+          job_id: job.id,
+          run_id: run.id,
+          router_run_id: run.run_id,
+          source: :cron_manager,
+          triggered_by: run.triggered_by,
+          reason: CronPreflight.format_failure(failure)
+        })
+
+        {:preflight_skip, failure}
     end
   end
 
@@ -1275,6 +1318,16 @@ defmodule LemonAutomation.CronManager do
     |> then(&%{&1 | meta: Map.put(&1.meta || %{}, :preflight_failure, failure)})
   end
 
+  defp terminal_result(run, {:admission_failed, outcome})
+       when outcome in [:denied, :admission_unavailable] do
+    run
+    |> CronRun.fail(Atom.to_string(outcome))
+    |> then(&%{&1 | meta: Map.put(&1.meta || %{}, :admission_outcome, outcome)})
+  end
+
+  defp terminal_result(run, {:error, :admission_unavailable}),
+    do: terminal_result(run, {:admission_failed, :admission_unavailable})
+
   defp terminal_result(run, {:error, error}), do: CronRun.fail(run, to_error(error))
 
   defp terminal_result(run, other),
@@ -1469,6 +1522,7 @@ defmodule LemonAutomation.CronManager do
   # re-checks.
   defp retryable_run?(%CronRun{status: status, triggered_by: triggered_by} = run) do
     is_nil(meta_value(run.meta, :preflight_failure)) and
+      is_nil(meta_value(run.meta, :admission_outcome)) and
       meta_value(run.meta, :abort_requested) != true and
       status in [:failed, :timeout] and triggered_by in [:schedule, :retry]
   end
@@ -1614,7 +1668,15 @@ defmodule LemonAutomation.CronManager do
 
   defp prepare_update_patch(%CronJob{} = job, params) do
     with {:ok, params} <- validate_patch_target(job, params),
-         {:ok, params} <- validate_feature_fields(params, CronJob.execution_mode(job), job.id),
+         {:ok, params} <-
+           validate_feature_fields(params, CronJob.execution_mode(job), job.id, job.timezone),
+         {:ok, params} <-
+           validate_admission_field(
+             params,
+             CronJob.execution_mode(job),
+             job.profile_id,
+             job.admission
+           ),
          {:ok, params} <- normalize_schedule_patch(params) do
       {:ok, params}
     end
@@ -1624,8 +1686,10 @@ defmodule LemonAutomation.CronManager do
     mode = if present?(params[:command] || params["command"]), do: :command, else: :agent
     job_id = params[:id] || params["id"]
 
-    case validate_feature_fields(params, mode, job_id) do
-      {:ok, params} -> {:ok, params}
+    with {:ok, params} <- validate_feature_fields(params, mode, job_id),
+         {:ok, params} <- validate_admission_field(params, mode, nil, nil) do
+      {:ok, params}
+    else
       {:invalid_target, reason} -> {:error, {:invalid_target, reason}}
     end
   end
@@ -1633,13 +1697,82 @@ defmodule LemonAutomation.CronManager do
   # Shared validation for the job-quality and delivery fields. Returns the
   # normalized params (atom keys, trimmed values) or an `{:invalid_target,
   # reason}` tuple that each caller maps onto its own error shape.
-  defp validate_feature_fields(params, mode, job_id) do
-    with {:ok, params} <- validate_cwd(params),
+  defp validate_feature_fields(params, mode, job_id, default_timezone \\ "UTC") do
+    with {:ok, params} <- validate_timezone_field(params, default_timezone),
+         {:ok, params} <- validate_cwd(params),
          {:ok, params} <- validate_monitor_flags(params),
+         {:ok, params} <- validate_profile_field(params, mode),
          {:ok, params} <- validate_model_field(params, mode),
          {:ok, params} <- validate_context_from(params, mode, job_id),
          {:ok, params} <- validate_deliver_to(params) do
       validate_once(params)
+    end
+  end
+
+  defp validate_timezone_field(params, default_timezone) do
+    timezone =
+      case fetch_param(params, :timezone) do
+        :error -> default_timezone
+        {:ok, value} -> value
+      end
+
+    case CronSchedule.validate_timezone(timezone) do
+      :ok ->
+        {:ok, params}
+
+      {:error, :invalid_timezone} ->
+        {:invalid_target, "Invalid timezone"}
+
+      {:error, :timezone_unavailable} ->
+        {:invalid_target, "Timezone database is unavailable"}
+    end
+  end
+
+  defp validate_admission_field(params, mode, default_profile, default_admission) do
+    profile =
+      case fetch_param(params, :profile_id) do
+        :error -> default_profile
+        {:ok, value} -> value
+      end
+
+    admission =
+      case fetch_param(params, :admission) do
+        :error -> default_admission
+        {:ok, value} -> value
+      end
+
+    if not is_nil(admission) and mode != :agent do
+      {:invalid_target, "Admission callbacks require a profile agent job"}
+    else
+      case LemonAutomation.CronAdmission.validate(admission, profile) do
+        {:ok, canonical} ->
+          if fetch_param(params, :admission) == :error,
+            do: {:ok, params},
+            else: {:ok, params |> Map.delete("admission") |> Map.put(:admission, canonical)}
+
+        {:error, reason} ->
+          {:invalid_target, reason}
+      end
+    end
+  end
+
+  defp validate_profile_field(params, mode) do
+    case fetch_param(params, :profile_id) do
+      :error ->
+        {:ok, params}
+
+      {:ok, nil} ->
+        {:ok, params}
+
+      {:ok, id} when is_binary(id) and id != "" and mode == :agent ->
+        case LemonCore.ProfileStore.get(id) do
+          {:ok, _profile} -> {:ok, params}
+          {:error, :not_found} -> {:invalid_target, "Unknown profile"}
+          {:error, _} -> {:invalid_target, "Profile is unavailable"}
+        end
+
+      _ ->
+        {:invalid_target, "profile_id must name a profile for an agent job"}
     end
   end
 

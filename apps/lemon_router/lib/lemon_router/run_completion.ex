@@ -25,6 +25,8 @@ defmodule LemonRouter.RunCompletion do
 
     case RunStore.finalize(command.run_id, summary) do
       :ok ->
+        :ok = LemonRouter.RunReceiptStore.retain_terminal_evidence(command.run_id)
+
         LemonCore.Telemetry.emit(
           [:lemon, :run, :stop],
           %{duration_ms: event.payload.duration_ms || 0, ok: completed.ok},
@@ -38,6 +40,7 @@ defmodule LemonRouter.RunCompletion do
         # Reconcile this owner from the durable result without broadcasting a
         # contradictory second terminal event to clients.
         {:ok, %{summary: existing}} = RunStore.fetch(run_id)
+        :ok = LemonRouter.RunReceiptStore.retain_terminal_evidence(run_id)
         send(self(), %{event | payload: %{event.payload | completed: existing.completed}})
         :ok
 

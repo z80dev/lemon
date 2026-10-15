@@ -1078,7 +1078,23 @@ defmodule LemonSkills.Config do
       end
 
     header_opts ++
-      oauth_config_opts(config) ++ mcp_timeout_opts(config) ++ mcp_filter_opts(config)
+      oauth_config_opts(config) ++
+      mcp_timeout_opts(config) ++
+      mcp_filter_opts(config) ++
+      http_origin_policy_opts(config)
+  end
+
+  defp http_origin_policy_opts(config) do
+    if Map.has_key?(config, "allowedOrigins") or Map.has_key?(config, "approvedPrivateOrigins") do
+      [
+        origin_policy: %{
+          allowed_origins: Map.get(config, "allowedOrigins", []),
+          approved_private_origins: Map.get(config, "approvedPrivateOrigins", [])
+        }
+      ]
+    else
+      []
+    end
   end
 
   defp sse_config_opts(config) do
@@ -1155,15 +1171,20 @@ defmodule LemonSkills.Config do
   defp sampling_reviewer(_sampling), do: nil
 
   defp mcp_filter_opts(config) do
-    [
-      allow_tools: string_list(config, "allow_tools"),
-      block_tools: string_list(config, "block_tools"),
-      allow_resources: string_list(config, "allow_resources"),
-      block_resources: string_list(config, "block_resources"),
-      allow_prompts: string_list(config, "allow_prompts"),
-      block_prompts: string_list(config, "block_prompts")
-    ]
-    |> Enum.reject(fn {_key, value} -> value == [] end)
+    filters =
+      [
+        allow_tools: string_list(config, "allow_tools"),
+        block_tools: string_list(config, "block_tools"),
+        allow_resources: string_list(config, "allow_resources"),
+        block_resources: string_list(config, "block_resources"),
+        allow_prompts: string_list(config, "allow_prompts"),
+        block_prompts: string_list(config, "block_prompts")
+      ]
+      |> Enum.reject(fn {_key, value} -> value == [] end)
+
+    if Map.has_key?(config, "enabledTools"),
+      do: [{:enabled_tools, config["enabledTools"]} | filters],
+      else: filters
   end
 
   defp mcp_timeout_opts(config) do
@@ -1227,6 +1248,7 @@ defmodule LemonSkills.Config do
 
   defp validate_mcp_filter_opts(opts) do
     allowed_keys = [
+      :enabled_tools,
       :allow_tools,
       :block_tools,
       :allow_resources,

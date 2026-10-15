@@ -21,7 +21,7 @@ defmodule LemonCore.RunStore do
   def fetch(run_id), do: Store.fetch_run(run_id)
 
   @spec append_event(term(), term()) :: :ok | {:error, term()}
-  def append_event(run_id, event), do: Store.append_run_event(run_id, event)
+  def append_event(run_id, event), do: Store.append_run_event(run_id, execution_projection(event))
 
   @doc """
   Finalize a run synchronously.
@@ -34,7 +34,8 @@ defmodule LemonCore.RunStore do
   at-least-once delivery, so hook implementations must be idempotent by run id.
   """
   @spec finalize(Store.server(), term(), map()) :: :ok | {:error, term()}
-  def finalize(server \\ Store, run_id, summary), do: Store.finalize_run(server, run_id, summary)
+  def finalize(server \\ Store, run_id, summary),
+    do: Store.finalize_run(server, run_id, execution_projection(summary))
 
   @spec history(term(), keyword()) :: list()
   def history(session_key, opts \\ []), do: RunHistoryStore.get(session_key, opts)
@@ -75,6 +76,45 @@ defmodule LemonCore.RunStore do
     delete_session_index(session_key)
     delete_history(session_key)
   end
+
+  @doc "Remove execution-only MCP configuration before persistence or management projection."
+  @spec execution_projection(term()) :: term()
+  def execution_projection(%_{} = value) do
+    Map.merge(value, execution_projection(Map.from_struct(value)))
+  end
+
+  def execution_projection(value) when is_map(value) do
+    value
+    |> Map.drop([
+      :mcp_servers,
+      "mcp_servers",
+      :mcpServers,
+      "mcpServers",
+      :mcp_servers_json,
+      "mcp_servers_json",
+      :native_lineage_handle,
+      "native_lineage_handle",
+      :nativeLineageHandle,
+      "nativeLineageHandle",
+      :native_destination_pid,
+      "native_destination_pid",
+      :nativeDestinationPid,
+      "nativeDestinationPid",
+      :native_destination_generation,
+      "native_destination_generation",
+      :nativeDestinationGeneration,
+      "nativeDestinationGeneration"
+    ])
+    |> Map.new(fn {key, entry} -> {key, execution_projection(entry)} end)
+  end
+
+  def execution_projection(value) when is_list(value),
+    do: Enum.map(value, &execution_projection/1)
+
+  def execution_projection(value) when is_tuple(value),
+    do: value |> Tuple.to_list() |> Enum.map(&execution_projection/1) |> List.to_tuple()
+
+  def execution_projection(value), do: value
 
   # `:__recent_run_ids__` is the store's bounded finalization-idempotency
   # marker; the other two are the unbounded marker it replaced, still present on

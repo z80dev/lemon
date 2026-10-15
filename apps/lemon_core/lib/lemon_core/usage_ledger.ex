@@ -6,10 +6,11 @@ defmodule LemonCore.UsageLedger do
 
       finalize_run_hooks: [{LemonCore.UsageLedger, :handle_finalize_run}]
 
-  The hook runs inside the store process, so it only casts to this server, which
-  serializes the read-modify-write of the daily record and the `:current`
-  summary. Delivery is at least once; a bounded set of recently recorded run IDs
-  keeps a retried finalization from counting twice.
+  The hook casts to this server to avoid calling Store from inside Store.
+  Native run/usage occurrence IDs are inserted durably before updating bounded
+  daily projections. Replayed completion survives ledger restart without billing
+  twice. `UsageStore.records/1` is the canonical, unbounded-by-session ledger;
+  daily projections are known-cost subtotals, not spend enforcement authority.
 
   Each UTC day's record (key `"YYYY-MM-DD"`) keeps the historical shape read by
   `usage.cost` and `LemonCore.UsageDiagnostics` (`total_cost`, provider-keyed
@@ -30,7 +31,6 @@ defmodule LemonCore.UsageLedger do
   alias LemonCore.UsageStore
 
   @max_sessions_per_day 100
-  @recent_run_ids 1_000
   @max_label_bytes 128
 
   @input_keys [:input_tokens, :input, :prompt_tokens]
@@ -52,10 +52,9 @@ defmodule LemonCore.UsageLedger do
   @spec handle_finalize_run(GenServer.server(), map()) :: :ok
   def handle_finalize_run(server, %{run_id: run_id, summary: summary} = event)
       when is_map(summary) do
-    case entry(run_id, Map.get(event, :session_key), summary) do
-      nil -> :ok
-      entry -> GenServer.cast(server, {:record, entry})
-    end
+    entries = entries(run_id, Map.get(event, :session_key), summary)
+    store = Map.get(event, :store, LemonCore.Store)
+    Enum.each(entries, &GenServer.cast(server, {:record, &1, store}))
 
     :ok
   catch
@@ -65,13 +64,48 @@ defmodule LemonCore.UsageLedger do
   def handle_finalize_run(_server, _event), do: :ok
 
   @doc """
-  Records one run synchronously (tests and callers outside the store hook).
-  `entry` is the map produced from a finalized run summary: `:run_id`,
-  `:session_key`, `:provider`, `:model`, `:input`, `:output`, `:cost`.
+  Records one usage occurrence synchronously (callers outside the Store hook).
+  `entry` carries native `:run_id`, `:occurrence`, `:session_key`, `:agent_id`,
+  `:at_ms`, provider/model, token counts and nullable `:cost`/`:price_known`.
   """
-  @spec record(GenServer.server(), map()) :: :ok
+  @spec record(GenServer.server(), map()) :: :ok | {:error, term()}
   def record(server \\ __MODULE__, entry) when is_map(entry),
     do: GenServer.call(server, {:record, entry})
+
+  @doc "Extracts actual per-call usage, falling back to explicitly incomplete historical totals."
+  def entries(run_id, session_key, summary) do
+    completed = field(summary, :completed) || %{}
+    usage = field(completed, :usage) || %{}
+
+    case field(usage, :occurrences) do
+      occurrences when is_list(occurrences) ->
+        occurrences
+        |> Enum.with_index()
+        |> Enum.flat_map(fn {occurrence, index} ->
+          occurrence_summary = %{
+            completed: %{usage: field(occurrence, :usage)},
+            meta: %{
+              model: field(occurrence, :model),
+              provider: field(occurrence, :provider),
+              agent_id: field(field(summary, :meta), :agent_id)
+            },
+            completed_at_ms: field(occurrence, :at_ms),
+            occurrence: index
+          }
+
+          case entry(run_id, session_key, occurrence_summary) do
+            nil -> []
+            entry -> [entry]
+          end
+        end)
+
+      _ ->
+        case entry(run_id, session_key, summary) do
+          nil -> []
+          entry -> [entry]
+        end
+    end
+  end
 
   @doc """
   Builds a usage entry from a finalized run summary, or `nil` when the run
@@ -99,12 +133,23 @@ defmodule LemonCore.UsageLedger do
 
       %{
         run_id: run_id,
-        session_key: label(session_key || field(summary, :session_key)),
+        session_key: identity(session_key || field(summary, :session_key)),
         provider: provider,
         model: model,
         input: (input || 0) + if(cache_inclusive?(usage), do: 0, else: cache),
         output: output || 0,
-        cost: cost || 0.0
+        cost: cost,
+        price_known: not is_nil(cost),
+        total_tokens:
+          first_integer(usage, [:total_tokens]) ||
+            (input || 0) + (output || 0) + if(cache_inclusive?(usage), do: 0, else: cache),
+        agent_id:
+          identity(
+            field(meta, :agent_id) ||
+              LemonCore.SessionKey.agent_id(session_key || field(summary, :session_key) || "")
+          ),
+        at_ms: timestamp(field(summary, :completed_at_ms)),
+        occurrence: field(summary, :occurrence) || 0
       }
     end
   rescue
@@ -116,58 +161,80 @@ defmodule LemonCore.UsageLedger do
   # -- GenServer ---------------------------------------------------------------
 
   @impl true
-  def init(_opts), do: {:ok, %{recent: MapSet.new(), order: :queue.new()}}
+  def init(opts), do: {:ok, %{store: Keyword.get(opts, :store, LemonCore.Store)}}
 
   @impl true
-  def handle_cast({:record, entry}, state), do: {:noreply, do_record(entry, state)}
+  def handle_cast({:record, entry, store}, state) do
+    do_record(entry, store)
+    {:noreply, state}
+  end
 
   @impl true
-  def handle_call({:record, entry}, _from, state), do: {:reply, :ok, do_record(entry, state)}
+  def handle_call({:record, entry}, _from, state),
+    do: {:reply, do_record(entry, state.store), state}
 
-  defp do_record(%{run_id: run_id} = entry, state) when not is_nil(run_id) do
-    if MapSet.member?(state.recent, run_id) do
-      state
-    else
-      safe_write(entry)
-      remember(state, run_id)
+  defp do_record(%{run_id: run_id} = entry, store) when is_binary(run_id) and run_id != "" do
+    record = occurrence_record(entry)
+
+    case UsageStore.put_occurrence(store, record) do
+      :ok ->
+        # Aggregates remain known-cost subtotals; canonical records retain nil.
+        projection = %{entry | cost: entry.cost || 0.0}
+        now_ms = System.system_time(:millisecond)
+        at_ms = Map.get(entry, :at_ms) || now_ms
+
+        today =
+          DateTime.from_unix!(at_ms, :millisecond) |> DateTime.to_date() |> Date.to_iso8601()
+
+        daily = UsageStore.get_record(store, today) || %{date: today}
+
+        with :ok <-
+               UsageStore.put_record(store, today, add_to_record(daily, projection, today, at_ms)) do
+          if today == Date.to_iso8601(Date.utc_today()) do
+            summary =
+              case UsageStore.get_summary(store, :current) do
+                %{date: ^today} = summary -> summary
+                _ -> %{date: today}
+              end
+
+            UsageStore.put_summary(store, :current, add_to_summary(summary, projection))
+          else
+            :ok
+          end
+        end
+
+      {:error, :exists} ->
+        :ok
+
+      {:error, _} = error ->
+        error
     end
   end
 
-  defp do_record(entry, state) do
-    safe_write(entry)
-    state
-  end
+  defp do_record(_, _store), do: {:error, :invalid_usage_identity}
 
-  defp remember(state, run_id) do
-    recent = MapSet.put(state.recent, run_id)
-    order = :queue.in(run_id, state.order)
+  @doc false
+  def occurrence_record(entry) do
+    occurrence = Map.get(entry, :occurrence, 0)
 
-    if MapSet.size(recent) > @recent_run_ids do
-      {{:value, oldest}, order} = :queue.out(order)
-      %{state | recent: MapSet.delete(recent, oldest), order: order}
-    else
-      %{state | recent: recent, order: order}
-    end
-  end
+    id =
+      :crypto.hash(:sha256, :erlang.term_to_binary({entry.run_id, occurrence}))
+      |> Base.url_encode64(padding: false)
 
-  defp safe_write(entry) do
-    today = Date.utc_today() |> Date.to_iso8601()
-    now_ms = System.system_time(:millisecond)
-
-    record = UsageStore.get_record(today) || %{date: today}
-    UsageStore.put_record(today, add_to_record(record, entry, today, now_ms))
-
-    summary =
-      case UsageStore.get_summary(:current) do
-        %{date: ^today} = summary -> summary
-        _ -> %{date: today}
-      end
-
-    UsageStore.put_summary(:current, add_to_summary(summary, entry))
-  rescue
-    _ -> :ok
-  catch
-    :exit, _ -> :ok
+    %{
+      id: id,
+      run_id: entry.run_id,
+      session_key: entry.session_key,
+      agent_id: Map.get(entry, :agent_id),
+      at_ms: Map.get(entry, :at_ms),
+      provider: entry.provider,
+      model: entry.model,
+      input_tokens: entry.input,
+      output_tokens: entry.output,
+      total_tokens: Map.get(entry, :total_tokens, entry.input + entry.output),
+      cost_usd: entry.cost,
+      price_known: Map.get(entry, :price_known, not is_nil(entry.cost))
+    }
   end
 
   @doc false
@@ -176,6 +243,11 @@ defmodule LemonCore.UsageLedger do
     record = Map.put(record, :date, date)
 
     record
+    |> Map.put(
+      :unknown_cost_records,
+      integer(record[:unknown_cost_records]) +
+        if(is_nil(Map.get(entry, :price_known)) or entry.price_known, do: 0, else: 1)
+    )
     |> Map.put(:total_cost, number(record[:total_cost]) + entry.cost)
     |> Map.put(:breakdown, bump(record[:breakdown], provider, entry.cost))
     |> Map.put(:requests, bump(record[:requests], provider, 1))
@@ -284,11 +356,27 @@ defmodule LemonCore.UsageLedger do
   defp label(_), do: nil
 
   defp cost(usage) do
-    case field(usage, :cost) do
-      %{} = cost -> to_float(field(plain_map(cost), :total))
-      cost -> to_float(cost)
+    value =
+      case field(usage, :cost) do
+        %{} = cost -> to_float(field(plain_map(cost), :total))
+        cost -> to_float(cost)
+      end
+
+    case field(usage, :price_known) do
+      false -> nil
+      true -> value
+      _ -> if(is_number(value) and value > 0, do: value, else: nil)
     end
   end
+
+  defp timestamp(value) when is_integer(value) and value > 0, do: value
+  defp timestamp(_), do: nil
+
+  defp identity(value) when is_binary(value) and byte_size(value) in 1..1024 do
+    if String.valid?(value), do: value, else: nil
+  end
+
+  defp identity(_), do: nil
 
   # `:prompt_tokens` already includes cached input in the APIs that report it.
   defp cache_inclusive?(usage) do

@@ -17,7 +17,7 @@ defmodule LemonControlPlane.Methods.NodePairApprove do
   def scopes, do: [:pairing]
 
   @impl true
-  def handle(params, _ctx) do
+  def handle(params, ctx) do
     pairing_id = params["pairingId"] || params["pairing_id"]
     code = params["code"]
 
@@ -49,13 +49,19 @@ defmodule LemonControlPlane.Methods.NodePairApprove do
             capabilities = get_field(request, :capabilities)
 
             cond do
+              not may_approve?(ctx, request) ->
+                {:error, Errors.unauthorized("Pairing authorization is required")}
+
+              status in [:approved, "approved"] and invite_repair?(request) ->
+                {:error, Errors.unauthorized("Repair invitation has already been used")}
+
               status in [:approved, "approved"] ->
                 recover_approved_pairing(pairing_id, request, node_name, node_type, now)
 
               status not in [:pending, "pending"] ->
                 {:error, Errors.invalid_request("Pairing request is not pending")}
 
-              expires_at_ms && expires_at_ms < now ->
+              not is_integer(expires_at_ms) or expires_at_ms <= now ->
                 {:error, Errors.invalid_request("Pairing request has expired")}
 
               recovery_request?(request) ->
@@ -76,6 +82,12 @@ defmodule LemonControlPlane.Methods.NodePairApprove do
   end
 
   defp approve_recovery_pairing(pairing_id, request, now) do
+    if invite_repair?(request),
+      do: approve_invite_repair(pairing_id, request, now),
+      else: approve_legacy_recovery(pairing_id, request, now)
+  end
+
+  defp approve_legacy_recovery(pairing_id, request, now) do
     node_id = get_field(request, :node_id)
 
     case NodeStore.get_node(node_id) do
@@ -111,6 +123,49 @@ defmodule LemonControlPlane.Methods.NodePairApprove do
     end
   end
 
+  defp approve_invite_repair(pairing_id, request, now) do
+    with {:ok, node} when is_map(node) <- NodeStore.validate_repair_binding(request),
+         node_id = get_field(request, :node_id),
+         node_name = get_field(node, :name),
+         :ok <- NodeStore.reserve_node_name(node_name, node_id) do
+      {token, updated} = recovery_credential(request, node)
+
+      updated =
+        put_fields(updated, %{
+          purpose: get_field(request, :purpose),
+          labels: get_field(request, :labels) || %{},
+          enrollment_invite_id: get_field(request, :invite_id)
+        })
+
+      case LemonCore.Store.compare_and_swap(:nodes_registry, node_id, node, updated) do
+        :ok ->
+          issue_challenge(
+            pairing_id,
+            request,
+            node_id,
+            node_name,
+            get_field(node, :type),
+            get_field(node, :capabilities) || %{},
+            token,
+            now,
+            true
+          )
+
+        {:error, :mismatch} ->
+          {:error, Errors.unauthorized("Repair invitation generation is stale")}
+
+        {:error, _} ->
+          {:error, Errors.unavailable("Node repair store is unavailable")}
+      end
+    else
+      {:error, :store_unavailable} ->
+        {:error, Errors.unavailable("Node repair store is unavailable")}
+
+      _ ->
+        {:error, Errors.unauthorized("Repair invitation generation is stale")}
+    end
+  end
+
   defp approve_pairing(pairing_id, request, node_name, node_type, capabilities, now) do
     node_id = LemonCore.Id.uuid()
 
@@ -125,6 +180,9 @@ defmodule LemonControlPlane.Methods.NodePairApprove do
           id: node_id,
           name: node_name,
           type: node_type,
+          purpose: get_field(request, :purpose),
+          labels: get_field(request, :labels) || %{},
+          enrollment_invite_id: get_field(request, :invite_id),
           capabilities: capabilities,
           token_hash: hash_token(node_token),
           paired_at_ms: now,
@@ -132,29 +190,32 @@ defmodule LemonControlPlane.Methods.NodePairApprove do
           status: :offline
         }
 
-        NodeStore.put_node(node_id, node)
+        case NodeStore.put_node(node_id, node) do
+          :ok ->
+            event =
+              LemonCore.Event.new(:node_pair_resolved, %{
+                pairing_id: pairing_id,
+                node_id: node_id,
+                approved: true
+              })
 
-        # Broadcast event
-        event =
-          LemonCore.Event.new(:node_pair_resolved, %{
-            pairing_id: pairing_id,
-            node_id: node_id,
-            approved: true
-          })
+            LemonCore.Bus.broadcast("nodes", event)
 
-        LemonCore.Bus.broadcast("nodes", event)
+            issue_challenge(
+              pairing_id,
+              request,
+              node_id,
+              node_name,
+              node_type,
+              capabilities,
+              node_token,
+              now,
+              false
+            )
 
-        issue_challenge(
-          pairing_id,
-          request,
-          node_id,
-          node_name,
-          node_type,
-          capabilities,
-          node_token,
-          now,
-          false
-        )
+          {:error, _} ->
+            {:error, Errors.unavailable("Node pairing store is unavailable")}
+        end
 
       {:error, :invalid_name} ->
         {:error, Errors.invalid_request("Node name is required")}
@@ -225,21 +286,24 @@ defmodule LemonControlPlane.Methods.NodePairApprove do
     challenge_expires_at = now + 60_000
 
     updated_request =
-      Map.merge(request, %{
+      put_fields(request, %{
         status: :approved,
         node_id: node_id,
         challenge_token: challenge_token,
         challenge_expires_at_ms: challenge_expires_at
       })
 
-    with :ok <- NodeStore.put_pairing(pairing_id, updated_request),
+    with {:ok, binding} <- challenge_binding(request, node_id, node_name),
+         :ok <- NodeStore.put_pairing(pairing_id, updated_request),
          :ok <-
            NodeStore.put_challenge(challenge_token, %{
              node_id: node_id,
              node_name: node_name,
              node_type: node_type,
              pairing_id: pairing_id,
-             expires_at_ms: challenge_expires_at
+             expires_at_ms: challenge_expires_at,
+             invite_id: get_field(request, :invite_id),
+             generation_binding: binding
            }) do
       {:ok,
        %{
@@ -267,10 +331,23 @@ defmodule LemonControlPlane.Methods.NodePairApprove do
        }
        |> maybe_put_node_token(node_token)}
     else
+      {:error, :stale_session_generation} ->
+        {:error, Errors.unauthorized("Node pairing generation is stale")}
+
       {:error, reason} ->
         {:error, Errors.internal_error("Failed to issue node pairing challenge", reason)}
     end
   end
+
+  defp may_approve?(%{auth: %{role: :enrollment, identity: identity}}, request) do
+    get_field(request, :status) in [:pending, "pending"] and
+      is_binary(identity["inviteId"]) and identity["inviteId"] == get_field(request, :invite_id)
+  end
+
+  defp may_approve?(%{auth: %{role: :operator, scopes: scopes}}, _request),
+    do: :pairing in scopes
+
+  defp may_approve?(_ctx, _request), do: false
 
   defp capability_count(capabilities) when is_map(capabilities), do: map_size(capabilities)
   defp capability_count(_), do: 0
@@ -290,13 +367,31 @@ defmodule LemonControlPlane.Methods.NodePairApprove do
     :crypto.hash(:sha256, token) |> Base.encode16(case: :lower)
   end
 
+  defp invite_repair?(request),
+    do: get_field(request, :recovery_mode) in [:invite_repair, "invite_repair"]
+
+  defp challenge_binding(request, node_id, node_name) do
+    case NodeStore.repair_binding(node_id, node_name) do
+      {:ok, binding, _node} ->
+        if invite_repair?(request) and
+             binding.session_generation != get_field(request, :session_generation),
+           do: {:error, :stale_session_generation},
+           else: {:ok, Map.put(binding, :node_name, node_name)}
+
+      {:error, _} = error ->
+        error
+    end
+  end
+
   defp recovery_request?(request) do
     is_binary(get_field(request, :node_id)) and
       get_field(request, :recovery_mode) in [
         :recovery_token,
         "recovery_token",
         :operator_repair,
-        "operator_repair"
+        "operator_repair",
+        :invite_repair,
+        "invite_repair"
       ]
   end
 
@@ -305,8 +400,14 @@ defmodule LemonControlPlane.Methods.NodePairApprove do
       {nil, node}
     else
       token = generate_node_token()
-      {token, Map.put(node, :token_hash, hash_token(token))}
+      {token, put_fields(node, %{token_hash: hash_token(token)})}
     end
+  end
+
+  defp put_fields(record, fields) do
+    record
+    |> Map.drop(Enum.map(Map.keys(fields), &Atom.to_string/1))
+    |> Map.merge(fields)
   end
 
   defp maybe_put_node_token(response, token) when is_binary(token),

@@ -302,7 +302,23 @@ defmodule LemonCore.Config do
 
     base = default_agent_profile(id, cfg, defaults)
 
-    tool_policy = parse_tool_policy(cfg["tool_policy"])
+    tool_policy =
+      case cfg["tool_policy_json"] do
+        json when is_binary(json) ->
+          case Jason.decode(json) do
+            {:ok, policy} ->
+              case LemonCore.ToolPolicy.normalize(policy) do
+                {:ok, normalized} -> LemonCore.ToolPolicy.expand(normalized)
+                _ -> %{allow: []}
+              end
+
+            _ ->
+              %{allow: []}
+          end
+
+        _ ->
+          parse_tool_policy(cfg["tool_policy"])
+      end
 
     base
     |> Map.put(:name, cfg["name"] || base.name || id)
@@ -312,6 +328,7 @@ defmodule LemonCore.Config do
     |> Map.put(:system_prompt, cfg["system_prompt"])
     |> Map.put(:tool_policy, tool_policy)
     |> Map.put(:rate_limit, cfg["rate_limit"])
+    |> Map.put(:node, cfg["node"])
     |> Map.put(:status, cfg["status"] || base.status)
   end
 
@@ -338,9 +355,10 @@ defmodule LemonCore.Config do
     }
   end
 
-  defp parse_tool_policy(nil), do: nil
+  @doc false
+  def parse_tool_policy(nil), do: nil
 
-  defp parse_tool_policy(map) when is_map(map) do
+  def parse_tool_policy(map) when is_map(map) do
     map = stringify_keys(map)
 
     allow =
@@ -396,6 +414,8 @@ defmodule LemonCore.Config do
 
     profile =
       case map["profile"] do
+        "orchestrator" -> :orchestrator
+        "leaf_worker" -> :leaf_worker
         "full_access" -> :full_access
         "minimal_core" -> :minimal_core
         "read_only" -> :read_only
@@ -406,17 +426,18 @@ defmodule LemonCore.Config do
         _ -> nil
       end
 
-    %{
+    LemonCore.ToolPolicy.expand(%{
       allow: allow,
       deny: deny,
+      blocked_tools: List.wrap(map["blocked_tools"] || []),
       require_approval: require_approval,
       approvals: approvals,
       no_reply: parse_boolean(map["no_reply"], false),
       profile: profile
-    }
+    })
   end
 
-  defp parse_tool_policy(_), do: nil
+  def parse_tool_policy(_), do: nil
 
   # ============================================================================
   # Raw settings loader (for profiles that Modular doesn't expose)

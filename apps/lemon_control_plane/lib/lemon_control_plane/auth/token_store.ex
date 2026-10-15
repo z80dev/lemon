@@ -239,6 +239,21 @@ defmodule LemonControlPlane.Auth.TokenStore do
   end
 
   def current_node_generation(_node_id), do: nil
+  @doc "Reads the durable session generation, including zero for a never-issued session."
+  def fetch_node_generation(node_id) when is_binary(node_id) and node_id != "" do
+    with {:ok, head} <- Store.fetch(@head_namespace, head_key("node", node_id)) do
+      case head do
+        nil ->
+          {:ok, 0}
+
+        _ ->
+          case head_generation(head) do
+            generation when is_integer(generation) and generation >= 0 -> {:ok, generation}
+            _ -> {:error, :invalid_session_generation}
+          end
+      end
+    end
+  end
 
   @doc """
   Reports a durable node's current session credential state without exposing
@@ -274,7 +289,14 @@ defmodule LemonControlPlane.Auth.TokenStore do
 
   defp do_replace_node_session(token, identity, node_id, opts, attempts_left) do
     key = head_key("node", node_id)
-    current = Store.get(@head_namespace, key)
+
+    with {:ok, current} <- Store.fetch(@head_namespace, key),
+         :ok <- expected_generation(current, opts) do
+      replace_node_head(token, identity, node_id, opts, attempts_left, key, current)
+    end
+  end
+
+  defp replace_node_head(token, identity, node_id, opts, attempts_left, key, current) do
     generation = next_generation(current)
     identity = Map.put(identity, "sessionGeneration", generation)
     token_info = token_info(token, identity, opts)
@@ -289,12 +311,29 @@ defmodule LemonControlPlane.Auth.TokenStore do
 
         {:error, :mismatch} ->
           Store.delete(@store_namespace, token)
-          do_replace_node_session(token, identity, node_id, opts, attempts_left - 1)
+
+          if Keyword.has_key?(opts, :expected_generation),
+            do: {:error, :stale_session_generation},
+            else: do_replace_node_session(token, identity, node_id, opts, attempts_left - 1)
 
         {:error, reason} ->
           Store.delete(@store_namespace, token)
           {:error, reason}
       end
+    end
+  end
+
+  defp expected_generation(current, opts) do
+    case Keyword.fetch(opts, :expected_generation) do
+      :error ->
+        :ok
+
+      {:ok, expected} ->
+        generation = if is_nil(current), do: 0, else: head_generation(current)
+
+        if is_integer(expected) and generation == expected,
+          do: :ok,
+          else: {:error, :stale_session_generation}
     end
   end
 

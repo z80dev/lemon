@@ -1042,6 +1042,154 @@ defmodule LemonRouter.SessionTransitionsTest do
     assert queued.execution_request.meta["async_followups"] == queued.meta["async_followups"]
   end
 
+  test "different active contexts collect every control without steering or cancellation" do
+    contexts = [
+      {%{invocation_context_key: "a"}, %{invocation_context_key: "b"}, nil, nil},
+      {%{}, %{invocation_context_key: "b"}, nil, nil},
+      {%{invocation_context_key: "a"}, %{}, nil, nil},
+      {%{invocation_context_key: "same", memory_context_key: "private"},
+       %{invocation_context_key: "same", memory_context_key: "shared"}, nil, nil},
+      {%{memory_context_key: "private"}, %{}, nil, nil},
+      {%{
+         invocation_context_key: "same",
+         memory_context_key: "room",
+         memory_context_verified: true
+       }, %{invocation_context_key: "same", memory_context_key: "room"}, nil, nil},
+      {%{invocation_context_key: "same", memory_context_key: "room", shared_memory_grant: true},
+       %{invocation_context_key: "same", memory_context_key: "room", shared_memory_grant: false},
+       nil, nil},
+      {%{}, %{}, %{deny: ["bash"]}, %{deny: ["read"]}},
+      {%{invocation_context_key: "a"}, %{invocation_context_key: "a"}, %{}, %{deny: ["bash"]}},
+      {%{mcp_servers: [%{url: "https://mcp.invalid", secret_ref: "a"}]}, %{mcp_servers: []}, nil,
+       nil},
+      {%{}, %{mcp_servers: []}, nil, nil}
+    ]
+
+    for {active_meta, incoming_meta, active_policy, incoming_policy} <- contexts,
+        mode <- [:followup, :steer, :steer_backlog, :redirect, :interrupt] do
+      active = context_submission("active", :collect, active_meta, active_policy)
+      queued = context_submission("queued", :collect, active_meta, active_policy)
+      incoming = context_submission("own", mode, incoming_meta, incoming_policy)
+      state = %SessionState{active: %{run_id: "active", submission: active}, queue: [queued]}
+
+      assert {:ok, next, []} = SessionTransitions.submit(state, incoming, 100)
+      assert next.active == state.active
+      assert next.pending_steers == %{}
+      assert next.merged_run_ids == %{}
+      assert [^queued, own] = next.queue
+      assert own.queue_mode == :collect
+      assert own.execution_request == incoming.execution_request
+    end
+  end
+
+  test "same keyed and legacy contexts preserve active control and followup semantics" do
+    for meta <- [%{}, %{invocation_context_key: "same", mcp_servers: []}] do
+      active = context_submission("active", :collect, meta, %{deny: ["bash"]})
+      state = %SessionState{active: %{run_id: "active", submission: active}}
+
+      for {mode, fallback} <- [steer: :followup, steer_backlog: :collect, redirect: :followup] do
+        input = context_submission("control", mode, meta, %{deny: ["bash"]})
+
+        assert {:ok, next, [{:dispatch_steer, "active", ^mode, _, ^fallback}]} =
+                 SessionTransitions.submit(state, input, 100)
+
+        assert next.queue == []
+      end
+
+      input = context_submission("interrupt", :interrupt, meta, %{deny: ["bash"]})
+
+      assert {:ok, next, [{:cancel_active, :interrupted}]} =
+               SessionTransitions.submit(state, input, 100)
+
+      assert [^input] = next.queue
+
+      first = context_submission("first", :followup, meta, %{deny: ["bash"]})
+      second = context_submission("second", :followup, meta, %{deny: ["bash"]})
+      assert {:ok, next, []} = SessionTransitions.submit(state, first, 100)
+      assert {:ok, merged, []} = SessionTransitions.submit(next, second, 200)
+      assert [owner] = merged.queue
+      assert owner.run_id == "second"
+      assert owner.execution_request.prompt == "first\nsecond"
+    end
+  end
+
+  test "debounce and rejected-steer fallback never merge different execution contexts" do
+    for {left, right, left_policy, right_policy} <- [
+          {%{invocation_context_key: "a"}, %{invocation_context_key: "b"}, nil, nil},
+          {%{}, %{invocation_context_key: "b"}, nil, nil},
+          {%{invocation_context_key: "a"}, %{}, nil, nil},
+          {%{invocation_context_key: "same", memory_context_key: "private"},
+           %{invocation_context_key: "same", memory_context_key: "shared"}, nil, nil},
+          {%{memory_context_key: "private"}, %{}, nil, nil},
+          {%{
+             invocation_context_key: "same",
+             memory_context_key: "room",
+             memory_context_verified: true
+           }, %{invocation_context_key: "same", memory_context_key: "room"}, nil, nil},
+          {%{
+             invocation_context_key: "same",
+             memory_context_key: "room",
+             shared_memory_grant: true
+           },
+           %{
+             invocation_context_key: "same",
+             memory_context_key: "room",
+             shared_memory_grant: false
+           }, nil, nil},
+          {%{}, %{}, %{deny: ["bash"]}, %{}},
+          {%{mcp_servers: [%{secret_ref: "a"}]}, %{mcp_servers: [%{secret_ref: "b"}]}, nil, nil},
+          {%{}, %{mcp_servers: []}, nil, nil}
+        ] do
+      previous = context_submission("first", :followup, left, left_policy)
+      current = context_submission("second", :followup, right, right_policy)
+      state = %SessionState{queue: [previous], last_followup_at_ms: 100}
+
+      assert {:ok, next, [:maybe_start_next]} = SessionTransitions.submit(state, current, 200)
+      assert Enum.map(next.queue, & &1.run_id) == ["first", "second"]
+      assert Enum.map(next.queue, & &1.execution_request.prompt) == ["first", "second"]
+      assert next.merged_run_ids == %{}
+
+      pending = %SessionState{
+        state
+        | active: %{run_id: "active"},
+          pending_steers: %{"active" => [{%{current | queue_mode: :steer}, :followup}]}
+      }
+
+      assert {:ok, fallback, []} = SessionTransitions.steer_rejected(pending, "second", 200)
+      assert Enum.map(fallback.queue, & &1.run_id) == ["first", "second"]
+      assert Enum.map(fallback.queue, & &1.execution_request.prompt) == ["first", "second"]
+      assert fallback.merged_run_ids == %{}
+    end
+  end
+
+  test "automatic followups and recovered unknown active pointers cannot bypass context isolation" do
+    for active <- [
+          %{run_id: "active"},
+          %{run_id: "active", submission: context_submission("active", :collect, %{}, nil)}
+        ],
+        flag <- [:task_auto_followup, :delegated_auto_followup] do
+      input =
+        context_submission(
+          "own",
+          :followup,
+          %{flag => true, :invocation_context_key => "new"},
+          nil
+        )
+
+      state = %SessionState{active: active}
+      assert {:ok, next, []} = SessionTransitions.submit(state, input, 100)
+      assert next.pending_steers == %{}
+      assert [own] = next.queue
+      assert own.run_id == "own"
+      assert own.queue_mode == :collect
+    end
+  end
+
+  defp context_submission(id, mode, meta, policy) do
+    input = submission(id, "s1", mode, id, meta: meta, request_meta: meta)
+    %{input | execution_request: %{input.execution_request | tool_policy: policy}}
+  end
+
   defp merge_followups(previous, current) do
     next_state = submit_followups(previous, current)
     assert [merged] = next_state.queue
