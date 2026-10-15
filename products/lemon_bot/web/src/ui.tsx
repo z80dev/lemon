@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode, type KeyboardEvent } from 'react';
+import { useCallback, useEffect, useId, useRef, useState, type ReactNode, type KeyboardEvent } from 'react';
 import { LemonBotError, type Bot, type Confirmation, type Confirm } from '@lemon-bot/sdk';
 import { useApp } from './app';
+import { errorSummary } from './error-copy';
 
 export function useQuery<T>(key: string, load: () => Promise<T>) {
   const loader = useRef(load); loader.current = load;
@@ -36,7 +37,7 @@ export function useAction({ reconcileOnRefresh = false, available = true }: { re
   }, [reconcileOnRefresh]);
   const run = async <T,>(fn: () => Promise<T>): Promise<T | undefined> => {
     if (lock.current || unresolved.current) return undefined;
-    if (!available) { setError(new Error('Offline: this action was not queued. Reconnect first.')); return undefined; }
+    if (!available) { setError(new Error('You’re offline, so this didn’t send. Reconnect and try again.')); return undefined; }
     lock.current = true; setBusy(true); setError(undefined);
     try { return await fn(); } catch (failure) { if (reconcileOnRefresh && (!(failure instanceof LemonBotError) || failure.outcomeUnknown || !failure.retrySafe)) unresolved.current = true; setError(failure); return undefined; }
     finally { lock.current = false; setBusy(false); }
@@ -44,11 +45,17 @@ export function useAction({ reconcileOnRefresh = false, available = true }: { re
   return { run, busy, error };
 }
 export function ErrorNotice({ error }: { error: unknown }) {
+  const [copied, setCopied] = useState(false);
   if (!error) return null;
   const known = error instanceof LemonBotError;
-  return <div className="error-notice" role="alert"><strong>{known && error.outcomeUnknown ? 'Outcome not confirmed' : 'Could not complete this request'}</strong><p>{error instanceof Error ? error.message : 'The service did not return a usable result.'}</p>{known && <><p className="small">{error.code.replaceAll('_', ' ')} · {error.requestId || 'No server request ID'}</p>{error.requestId && <button onClick={() => void navigator.clipboard.writeText(error.requestId)}>Copy request ID</button>}{error.outcomeUnknown && <><p>Work may already have started. Keep this intent and check its resource or run before sending again. Nothing is automatically replayed.</p>{error.clientNonce && <p className="small">Intent nonce: <code>{error.clientNonce}</code></p>}{error.resourceIds.length > 0 && <p className="small">Reserved resources: {error.resourceIds.join(', ')}</p>}</>}{error.code === 'revision_conflict' && <p>The resource changed on another device. Reload before editing.{error.currentRevision && ` Current server revision: ${error.currentRevision}.`}</p>}</>}</div>;
+  const detail = [error instanceof Error ? error.message : 'No usable response was received.', ...(known ? [`Code: ${error.code}`, `Request ID: ${error.requestId || 'Not provided'}`, error.clientNonce ? `Reference: ${error.clientNonce}` : '', error.resourceIds.length ? `Resources: ${error.resourceIds.join(', ')}` : '', error.currentRevision ? `Revision: ${error.currentRevision}` : ''] : [])].filter(Boolean).join('\n');
+  return <div className="error-notice" role="alert"><strong>{known && error.outcomeUnknown ? 'Couldn’t confirm' : 'Couldn’t finish this'}</strong><p>{errorSummary(error)}</p><details><summary>Details</summary><pre>{detail}</pre><button onClick={() => void navigator.clipboard.writeText(detail).then(() => setCopied(true)).catch(() => setCopied(false))}>Copy details</button>{copied && <span role="status">Details copied.</span>}</details></div>;
 }
-export function Loading() { return <div className="loading" role="status"><span className="loading-dot"/> Connecting to your workspace…</div>; }
+/** Consistent read-only recovery copy; callers retain their own mutation fences. */
+export function RecoveryNotice({ error, uncertain, busy, onCheck, available = true, reviewed = false, onResume }: { error: unknown; uncertain: boolean; busy: boolean; onCheck?: () => Promise<unknown>; available?: boolean; reviewed?: boolean; onResume?: () => void }) {
+  return <><ErrorNotice error={error}/>{uncertain && <p role="status">We couldn’t confirm this went through. Your input is kept. Check the current status before trying again so you don’t duplicate it.</p>}{(!!error || uncertain) && onCheck && <button disabled={busy || !available} onClick={() => void onCheck()}>{uncertain ? 'Check status' : 'Refresh and check again'}</button>}{uncertain && reviewed && onResume && <><p>Status refreshed. If your change is shown, you’re done. Otherwise, check the affected service or computer before starting a new change.</p><button disabled={busy || !available} onClick={onResume}>I’ve checked — start a new change</button></>}</>;
+}
+export function Loading({ label = 'Loading…' }: { label?: string }) { return <div className="loading" role="status"><span className="loading-dot"/> {label}</div>; }
 export function EmptyState({ title, children, action }: { title: string; children?: ReactNode; action?: ReactNode }) { return <div className="empty-state"><LemonMark size={76}/><h2>{title}</h2>{children && <div className="muted">{children}</div>}{action}</div>; }
 export function PageHeader({ title, eyebrow, children }: { title: string; eyebrow?: string; children?: ReactNode }) { return <header className="page-header"><div>{eyebrow && <div className="eyebrow">{eyebrow}</div>}<h1>{title}</h1></div><div className="row">{children}</div></header>; }
 export function Badge({ children, tone = 'muted' }: { children: ReactNode; tone?: 'good' | 'warning' | 'danger' | 'muted' }) { return <span className={`badge ${tone}`}>{children}</span>; }
@@ -61,12 +68,22 @@ export function trapDialogFocus(event: KeyboardEvent<HTMLElement>) {
   if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
   else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
 }
-export function ConfirmDialog({ confirmation, title, onConfirm, onCancel, disabled = false }: { confirmation: Confirmation; title: string; onConfirm: (confirm: Omit<Confirm, 'clientNonce'>) => Promise<void>; onCancel: () => void; disabled?: boolean }) {
+type ConfirmDialogProps = { title: string; onCancel: () => void; disabled?: boolean } & (
+  { confirmation: Confirmation; children?: never; onConfirm: (confirm: Omit<Confirm, 'clientNonce'>) => Promise<void> } |
+  { confirmation?: never; children: ReactNode; onConfirm: () => Promise<void> }
+);
+export function ConfirmDialog(props: ConfirmDialogProps) {
+  const { confirmation, title, onCancel, disabled = false } = props;
   const [name, setName] = useState(''); const action = useAction(); const [now, setNow] = useState(Date.now());
-  useEffect(() => { const timer = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(timer); }, []);
-  const expired = now >= confirmation.expiresAtMs;
-  const focus = useRef<HTMLInputElement>(null); useEffect(() => { const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null; focus.current?.focus(); return () => { if (previous?.isConnected) previous.focus(); }; }, []);
-  return <div className="modal-backdrop" onKeyDown={event => { trapDialogFocus(event); if (event.key === 'Escape' && !action.busy) onCancel(); }}><section className="modal stack" role="dialog" aria-modal="true" aria-labelledby="confirm-title"><h2 id="confirm-title">{title}</h2><p>This preview is bound to the exact resources and revision below. Host files, independent memory, provider sessions and backups are retained only as disclosed here.</p><ul>{confirmation.effects.map((effect, i) => <li key={i}>{effect}</li>)}</ul><div className="scope-effects">{confirmation.affected.map((effect, i) => <div key={i}><Badge>{effect.operation}</Badge> <strong>{effect.resourceType} · {effect.id}</strong><p>{effect.explanation}{effect.machineId && ` · Machine ${effect.machineId}`}</p></div>)}</div><Field label={`Type “${confirmation.confirmName}” to confirm`}><input ref={focus} value={name} autoComplete="off" onChange={event => setName(event.target.value)} /></Field><p className="small muted">{expired ? 'Preview expired. Cancel and request a new preview.' : `Expires ${formatTime(confirmation.expiresAtMs)} · revision ${confirmation.revision}`}</p><ErrorNotice error={action.error}/><div className="row"><button onClick={onCancel} disabled={action.busy}>Cancel</button><button className="danger" disabled={disabled || action.busy || expired || name !== confirmation.confirmName || !navigator.onLine} onClick={() => void action.run(() => onConfirm({ revision: confirmation.revision, confirmationToken: confirmation.confirmationToken, confirmName: name }))}>{action.busy ? 'Confirming…' : 'Confirm exact scope'}</button></div></section></div>;
+  const titleId = useId();
+  useEffect(() => { if (!confirmation) return; const timer = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(timer); }, [confirmation]);
+  const expired = !!confirmation && now >= confirmation.expiresAtMs;
+  const focus = useRef<HTMLInputElement>(null), cancel = useRef<HTMLButtonElement>(null);
+  useEffect(() => { const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null; (focus.current || cancel.current)?.focus(); return () => { if (previous?.isConnected) previous.focus(); }; }, []);
+  return <div className="modal-backdrop" onKeyDown={event => { trapDialogFocus(event); if (event.key === 'Escape' && !action.busy) onCancel(); }}><section className="modal stack" role="dialog" aria-modal="true" aria-labelledby={titleId}><h2 id={titleId}>{title}</h2>
+    {confirmation ? <><p>Review what will change before confirming. Anything not listed here is kept.</p><ul>{confirmation.effects.map((effect, i) => <li key={i}>{effect}</li>)}</ul><details><summary>Details · affected items</summary><div className="scope-effects">{confirmation.affected.map((effect, i) => <div key={i}><Badge>{effect.operation.replaceAll('_', ' ')}</Badge> <strong>{effect.resourceType} · {effect.id}</strong><p>{effect.explanation}{effect.machineId && ` · Computer ${effect.machineId}`}</p></div>)}</div><p>Revision {confirmation.revision}</p></details><Field label={`Type “${confirmation.confirmName}” to confirm`}><input ref={focus} value={name} autoComplete="off" onChange={event => setName(event.target.value)}/></Field><p className="small muted">{expired ? 'This preview expired. Cancel and review the action again.' : `Expires ${formatTime(confirmation.expiresAtMs)}`}</p></> : props.children}
+    <ErrorNotice error={action.error}/><div className="row"><button ref={cancel} onClick={onCancel} disabled={action.busy}>Cancel</button><button className="danger" disabled={disabled || action.busy || expired || (!!confirmation && name !== confirmation.confirmName) || !navigator.onLine} onClick={() => void action.run(async () => { if (props.confirmation) await props.onConfirm({ revision: props.confirmation.revision, confirmationToken: props.confirmation.confirmationToken, confirmName: name }); else await props.onConfirm(); })}>{action.busy ? 'Confirming…' : 'Confirm'}</button></div>
+  </section></div>;
 }
 /** Per-Bot palette shared by every client (design system §1). `avatar` fills the mascot; `tint` is the user bubble, send button and header dot; `onTint` is text on `tint`. */
 export interface BotPalette { avatar: string; tint: string; onTint: string }
