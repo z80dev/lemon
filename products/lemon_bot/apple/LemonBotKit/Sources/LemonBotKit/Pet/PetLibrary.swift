@@ -35,11 +35,11 @@ public final class PetLibrary {
         func pets(_ directory: URL?, builtIn: Bool) -> [InstalledPet] {
             guard let directory, let children = try? fm.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey], options: [.skipsHiddenFiles]) else { return [] }
             return children.compactMap { child in
+                // Imports were fully decoded before installation; listing only checks the manifest and sheet file.
                 guard let values = try? child.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey]), values.isDirectory == true, values.isSymbolicLink != true,
-                      let manifest = try? folderManifest(child) else { return nil }
-                let pet = InstalledPet(manifest: manifest, directory: child, isBuiltIn: builtIn)
-                guard (try? loadSprite(pet)) != nil else { return nil }
-                return pet
+                      let manifest = try? folderManifest(child), let sheet = try? sheetURL(manifest.spritesheetPath, in: child),
+                      (try? sheet.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true else { return nil }
+                return InstalledPet(manifest: manifest, directory: child, isBuiltIn: builtIn)
             }.sorted { $0.manifest.displayName.localizedStandardCompare($1.manifest.displayName) == .orderedAscending }
         }
         return pets(builtInDirectory, builtIn: true) + pets(root, builtIn: false)
@@ -91,10 +91,12 @@ public final class PetLibrary {
         guard remote.scheme?.lowercased() == "https", remote.host != nil, remote.user == nil, remote.password == nil else {
             throw PetPackageError.invalid("Use an HTTPS URL to a pet ZIP or pet.json. HTTP, file URLs and other schemes aren't accepted for remote pets.")
         }
-        if remote.pathExtension.lowercased() == "zip" {
-            return try importPackage(zipData: await download(remote, limit: PetPackage.downloadLimit, session: session))
+        if remote.lastPathComponent != "pet.json" {
+            // Galleries serve ZIPs from extensionless download endpoints; the content must be a ZIP.
+            let data = try await download(remote, limit: PetPackage.downloadLimit, session: session)
+            guard data.starts(with: [0x50, 0x4b, 0x03, 0x04]) else { throw PetPackageError.invalid("That HTTPS URL didn't return a pet ZIP. Use a direct .zip download link or a pet.json URL, not a gallery page or installer.") }
+            return try importPackage(zipData: data)
         }
-        guard remote.lastPathComponent == "pet.json" else { throw PetPackageError.invalid("The HTTPS URL must point to a .zip or pet.json file, not a gallery page or installer.") }
         let data = try await download(remote, limit: PetPackage.manifestLimit, session: session)
         let manifest = try PetPackage.manifest(data, fallbackName: remote.deletingLastPathComponent().lastPathComponent)
         // Append components as literal filenames, not a URL reference (which could contain a query or fragment).

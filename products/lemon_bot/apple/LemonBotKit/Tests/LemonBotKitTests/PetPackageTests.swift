@@ -161,7 +161,7 @@ final class PetPackageTests: XCTestCase {
     }
 
     func testRemoteRejectsNonHTTPSAndNonPackageURLs() async throws {
-        for string in ["http://example.com/pet.zip", "file:///tmp/pet.zip", "ftp://example.com/pet.zip", "https://example.com/gallery"] {
+        for string in ["http://example.com/pet.zip", "file:///tmp/pet.zip", "ftp://example.com/pet.zip", "https://user:pw@example.com/pet.zip"] {
             do { _ = try await library.importPackage(from: URL(string: string)!); XCTFail("Accepted \(string)") }
             catch { XCTAssertTrue(error is PetPackageError) }
         }
@@ -175,12 +175,18 @@ final class PetPackageTests: XCTestCase {
         PetPackageURLProtocol.responses = [
             "/buddy/pet.json": (try manifest(), nil, nil),
             "/buddy/sheet.png": (Self.v1, nil, nil),
-            "/buddy.zip": (try zip([("pet.json", manifest()), ("sheet.png", Self.v1)], deflated: true), nil, nil)
+            "/buddy.zip": (try zip([("pet.json", manifest()), ("sheet.png", Self.v1)], deflated: true), nil, nil),
+            "/api/download/buddy": (try zip([("pet.json", manifest()), ("sheet.png", Self.v1)]), nil, nil),
+            "/gallery": (Data("<!doctype html><title>Pets</title>".utf8), nil, nil)
         ]
         let manifestPet = try await library.importPackage(from: URL(string: "https://pets.example/buddy/pet.json")!, session: session)
         XCTAssertEqual(manifestPet.id, "test")
         let zipPet = try await library.importPackage(from: URL(string: "https://pets.example/buddy.zip")!, session: session)
         XCTAssertEqual(try library.loadSprite(zipPet).version, .v1)
+        let endpointPet = try await library.importPackage(from: URL(string: "https://pets.example/api/download/buddy")!, session: session)
+        XCTAssertEqual(endpointPet.id, "test")
+        do { _ = try await library.importPackage(from: URL(string: "https://pets.example/gallery")!, session: session); XCTFail("Accepted a gallery page") }
+        catch { XCTAssertTrue(error is PetPackageError) }
         let responses: [(Data, Int?, URL?)] = [
             (Data(), PetPackage.manifestLimit + 1, nil),
             (Data(repeating: 32, count: PetPackage.manifestLimit + 1), nil, nil),

@@ -18,8 +18,8 @@ final class PetActivityTests: XCTestCase {
     }
 
     func testPriorityTableAndConnectionStartupStates() {
-        let live = run("running"), failed = run("failed"), waiting = run("awaiting_input"), done = run("succeeded")
-        let entries: [ID: [TranscriptEntry]] = ["conversation": [tool()]]
+        let live = run("running", id: "live", age: 5), failed = run("failed"), waiting = run("awaiting_input"), done = run("succeeded")
+        let entries: [ID: [TranscriptEntry]] = ["conversation": [tool(runID: "live")]]
         XCTAssertEqual(status(signedIn: false, runs: [waiting, failed, live]).mood, .signedOut)
         XCTAssertEqual(status(signedIn: false).bubble, "Sign in to Lemon Bot")
         XCTAssertEqual(status(connection: "disconnected", runs: [waiting]).mood, .offline)
@@ -67,7 +67,10 @@ final class PetActivityTests: XCTestCase {
         let failed = status(runs: [run("failed", age: 59)])
         XCTAssertEqual(failed.mood, .failed); XCTAssertEqual(failed.validUntil, now.addingTimeInterval(1))
         XCTAssertEqual(status(runs: [run("failed", age: 60)]).mood, .idle)
-        XCTAssertEqual(status(runs: [run("failed", age: -1)]).mood, .idle)
+        XCTAssertEqual(status(runs: [run("failed", age: -1)]).mood, .failed, "a client clock slightly behind the server still shows the failure")
+        XCTAssertEqual(status(runs: [run("failed", age: -31)]).mood, .idle)
+        XCTAssertEqual(status(runs: [run("failed", age: 10), run("running", id: "retry", age: 3)]).mood, .thinking, "newer work supersedes a failure")
+        XCTAssertEqual(status(runs: [run("running", id: "retry", age: 3)], notifications: [notification("error", age: 10)]).mood, .thinking)
         let error = status(notifications: [notification("error", age: 5)])
         XCTAssertEqual(error.bubble, "Run failed"); XCTAssertEqual(error.validUntil, now.addingTimeInterval(55))
         XCTAssertEqual(status(notifications: [notification("error", age: 60)]).mood, .idle)

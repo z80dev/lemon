@@ -27,8 +27,11 @@ public enum PetActivity {
             let link = notification.flatMap { validLink($0.deepLink) } ?? run.flatMap { runLink($0, workspaceID: workspaceID) }
             return PetStatus(mood: .needsInput, bubble: bubble, deepLink: link)
         }
-        let failedRun = runs.filter { $0.status == "failed" && recent($0.completedAtMs, seconds: 60, now: now) }.max { ($0.completedAtMs ?? 0) < ($1.completedAtMs ?? 0) }
-        let error = unread.filter { $0.kind == "error" && recent($0.createdAtMs, seconds: 60, now: now) }.max { $0.createdAtMs < $1.createdAtMs }
+        let live = runs.filter { ["reserved", "queued", "running"].contains($0.status) }.sorted(by: newest)
+        // Work started after a failure means the user has moved on; the newer run wins.
+        let latestStart = live.map { $0.startedAtMs ?? $0.createdAtMs }.max() ?? -Double.infinity
+        let failedRun = runs.filter { $0.status == "failed" && recent($0.completedAtMs, seconds: 60, now: now) && ($0.completedAtMs ?? 0) > latestStart }.max { ($0.completedAtMs ?? 0) < ($1.completedAtMs ?? 0) }
+        let error = unread.filter { $0.kind == "error" && recent($0.createdAtMs, seconds: 60, now: now) && $0.createdAtMs > latestStart }.max { $0.createdAtMs < $1.createdAtMs }
         if let error, error.createdAtMs > (failedRun?.completedAtMs ?? -Double.infinity) {
             let run = runs.filter { $0.conversationId == error.conversationId }.sorted(by: newest).first
             return PetStatus(mood: .failed, bubble: "Run failed", deepLink: validLink(error.deepLink) ?? run.flatMap { runLink($0, workspaceID: workspaceID) }, validUntil: date(error.createdAtMs).addingTimeInterval(60))
@@ -36,7 +39,6 @@ public enum PetActivity {
         if let run = failedRun, let completed = run.completedAtMs {
             return PetStatus(mood: .failed, bubble: "Run failed", deepLink: runLink(run, workspaceID: workspaceID), validUntil: date(completed).addingTimeInterval(60))
         }
-        let live = runs.filter { ["reserved", "queued", "running"].contains($0.status) }.sorted(by: newest)
         for run in live {
             let recentEntries = (entries[run.conversationId] ?? []).reversed()
             let tool = recentEntries.compactMap { entry -> ToolCallEntry? in
@@ -64,10 +66,11 @@ public enum PetActivity {
         return a == b ? lhs.id < rhs.id : a > b
     }
     private static func date(_ ms: TimestampMs) -> Date { Date(timeIntervalSince1970: Double(ms) / 1000) }
+    /// Server timestamps vs the local clock: tolerate a client running up to 30 s behind.
     private static func recent(_ ms: TimestampMs?, seconds: Double, now: Date) -> Bool {
         guard let ms else { return false }
         let age = now.timeIntervalSince(date(ms))
-        return age >= 0 && age < seconds
+        return age > -30 && age < seconds
     }
     private static func botName(_ run: Run, bots: [Bot]) -> String { bots.first { $0.id == run.botId }?.name ?? "Bot" }
     private static func humanized(_ raw: String) -> String {
