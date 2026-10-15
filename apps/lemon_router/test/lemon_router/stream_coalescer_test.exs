@@ -438,6 +438,9 @@ defmodule LemonRouter.StreamCoalescerTest do
                  1,
                  "Unknown format test"
                )
+
+      assert [{_pid, _}] =
+               Registry.lookup(Elixir.LemonRouter.CoalescerRegistry, {session_key, channel_id})
     end
 
     test "handles unknown peer_kind gracefully with :unknown fallback" do
@@ -455,6 +458,9 @@ defmodule LemonRouter.StreamCoalescerTest do
                  1,
                  "Invalid kind test"
                )
+
+      assert [{_pid, _}] =
+               Registry.lookup(Elixir.LemonRouter.CoalescerRegistry, {session_key, channel_id})
     end
   end
 
@@ -675,10 +681,10 @@ defmodule LemonRouter.StreamCoalescerTest do
                    1,
                    "Test #{invalid_kind}"
                  )
-      end
 
-      # All invalid kinds should result in :unknown, not new atoms
-      Process.sleep(50)
+        assert [{_pid, _}] =
+                 Registry.lookup(Elixir.LemonRouter.CoalescerRegistry, {session_key, "telegram"})
+      end
     end
   end
 
