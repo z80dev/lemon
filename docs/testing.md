@@ -136,6 +136,13 @@ Coordinator cancellation fixtures wait for tracked admission guardians and sessi
 to exit before asserting an empty active set: a bounded batch result is not a
 synchronous shutdown receipt.
 
+Submission-shape fixtures use per-test run supervisors and capturing run processes,
+not real gateway work that can finish during another test's global count assertions.
+Own database fixtures with `start_supervised!` so shutdown finishes before directory
+cleanup; checking `Process.alive?` before stopping a test-linked process is a race.
+Atom-safety tests check that each generated untrusted token still fails
+`String.to_existing_atom/1`, rather than attributing VM-wide atom growth to one call.
+
 Aggregation/property and per-delta cost tests should use the semantic dispatcher
 seam rather than synchronously rendering every accumulated snapshot through an
 adapter/outbox. Own their coalescers with the test supervisor so pending idle
