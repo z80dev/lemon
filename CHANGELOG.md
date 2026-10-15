@@ -15,6 +15,8 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   take precedence. Execution-node capability inspection reports a
   `computer_use` item, and tool cards and approvals name the computer-use
   action, app or site.
+- omp tool cards show parallel worker grids, combined usage and task errors,
+  approval waits, isolated worktrees, child activity, model prices and transcript tails.
 
 ---
 

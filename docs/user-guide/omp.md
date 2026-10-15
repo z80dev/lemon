@@ -213,6 +213,15 @@ Ownership restrictions are identical to single-session access.
 
 ## From the TUI
 
+Agent `omp` tool cards show parallel starts and multi-worker waits as compact
+worker rows with status, activity or result preview, todo progress, combined
+tokens/cost and individual task errors. Session cards highlight pending tool
+approvals and show isolated worktree branch/kept/dirty state and child activity.
+Model catalog cards show context size and prices (or FREE); subagent reads show a
+bounded transcript tail. Configuration and discovery receipts show the resulting
+session and the discovery source/interrupted state. All delegate text is inert,
+sanitized plain text; cards intentionally bound long output.
+
 `/omp` (Alt+M, also in the command palette) opens the omp panel: live and
 recent sessions with status, workspace, model, current activity, elapsed time
 and tokens/cost. Select a session for its detail view — activity, running and
