@@ -176,6 +176,30 @@ Lemon or reads an operator token. Background reconnect detects the service when
 it returns; failed local onboarding also probes until it answers. These local
 commands and Terminal actions are not shown on iPhone.
 
+## Lemon instance
+
+**Settings → Lemon instance** shows the backend this account is attached to,
+its version/address/start time, the Lemon controller link and its last error,
+and the live Lemon version, uptime, memory, runs, sessions, nodes, channels and
+skills. Missing measurements stay unavailable instead of becoming zero. Owners
+and admins can view it and reconnect the link; other members see an explanation
+without fetching privileged instance data. About links here for service status
+and keeps client/worker compatibility and safe handoff diagnostics separate.
+
+Owners can **Start**, **Restart** or **Stop** only when the backend reports
+runtime control is configured. Stop and Restart explain the interruption and
+require explicit confirmation. Admins cannot issue owner-only lifecycle commands.
+When controls are unavailable, the backend's reason is shown. The shared pane
+is also available from **View instance details** in the connection panel.
+
+The pane refreshes every 10 seconds while visible, and every 2 seconds while a
+command is running, with Refresh and iOS pull-to-refresh for a manual read.
+Operation state and bounded output are the backend's actual receipt, with Copy
+inside Details. A lost command response stays fenced; refresh never replays it.
+The `instance-pane` and `instance-running` Mac snapshot scenes exercise the
+settings registration and active-operation display in light and dark.
+
+
 
 
 ## Native workspace

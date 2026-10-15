@@ -17,6 +17,13 @@ final class SnapshotRenderTests: XCTestCase {
         if case .bad = StatusTone("Last known: disconnected") {} else { XCTFail("Prefixed disconnected must render as a failure") }
         if case .good = StatusTone("connected") {} else { XCTFail("Connected must keep its successful tone") }
     }
+    func testInstanceUptimeUsesHumanUnits() {
+        XCTAssertEqual(instanceUptime(12_000), "12s")
+        XCTAssertEqual(instanceUptime(65_000), "1m 5s")
+        XCTAssertEqual(instanceUptime(3_660_000), "1h 1m")
+        XCTAssertEqual(instanceUptime(90_000_000), "1d 1h")
+    }
+
 
     func testRenderAllScenesInLightAndDark() async throws {
         _ = NSApplication.shared
