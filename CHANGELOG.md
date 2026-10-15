@@ -8,7 +8,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
-No unreleased changes yet.
+### Added
+
+- Configure TUI shortcuts with `[tui.keys]`, including opt-in plan-mode toggle
+  and model cycling, with safe startup notices for invalid or conflicting bindings.
 
 ---
 

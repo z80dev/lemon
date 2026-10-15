@@ -150,24 +150,60 @@ Regenerate from the repository root with `bun clients/tui/scripts/generate-comma
 | /output | — | — | browse complete tool output receipts |
 | /diff | — | — | inspect the latest edit diff without card truncation |
 
-## Global keybindings
+## Configurable keybindings
 
-These defaults come from the TUI global binding registry. Overlays own their keys;
-editor and picker-local shortcuts are outside this table.
+Set quoted action IDs under `[tui.keys]` in `~/.lemon/config.toml` or the project
+`.lemon/config.toml`. Values replace the defaults: a key string, an array of keys,
+or `[]` / `"none"` to unbind. See [TUI configuration](../config.md#tui-keybindings).
+Overlays own their keys; picker-local shortcuts are not configurable here.
 
-| Key | Action |
-| --- | --- |
-| ctrl+o | Pick a model |
-| shift+tab | Pick the session thinking level |
-| ctrl+x | Switch session |
-| ctrl+g | Edit the draft in $EDITOR |
-| ctrl+l | Clear the transcript |
-| ctrl+q | Edit the queued prompts |
-| ctrl+r | Expand/collapse the latest tool card or thinking block |
-| ctrl+t | Cycle detail for every card: collapsed → expanded → default |
-| ctrl+p | Search commands, skills and prompts |
-| alt+a | Show/hide live subagent tree |
-| alt+m | Show/hide omp delegate sessions |
-| alt+o | Collapse/expand all tool output |
-| alt+d | Inspect the latest edit diff |
-| alt+shift+c | Copy the last assistant reply |
+| Action ID | Default keys | Description |
+| --- | --- | --- |
+| lemon.picker.model | ctrl+o | Pick a model |
+| lemon.picker.thinking | shift+tab | Pick the session thinking level |
+| lemon.sessions.switch | ctrl+x | Switch session |
+| lemon.editor.external | ctrl+g | Edit the draft in $EDITOR |
+| lemon.transcript.clear | ctrl+l | Clear the transcript |
+| lemon.queue.focus | ctrl+q | Edit the queued prompts |
+| lemon.transcript.toggleLatest | ctrl+r | Expand/collapse the latest tool card or thinking block |
+| lemon.transcript.cycleDetail | ctrl+t | Cycle detail for every card: collapsed → expanded → default |
+| lemon.palette.open | ctrl+p | Search commands, skills and prompts |
+| lemon.tasks.toggle | alt+a | Show/hide live subagent tree |
+| lemon.omp.toggle | alt+m | Show/hide omp delegate sessions |
+| lemon.tools.toggle | alt+o | Collapse/expand all tool output |
+| lemon.tools.diff | alt+d | Inspect the latest edit diff |
+| lemon.clipboard.copyLast | alt+shift+c | Copy the last assistant reply |
+| lemon.plan.toggle | unbound | Toggle plan mode |
+| lemon.model.cycle | unbound | Cycle to the next model |
+| tui.editor.cursorUp | up | Move cursor up |
+| tui.editor.cursorDown | down | Move cursor down |
+| tui.editor.cursorLeft | left, ctrl+b | Move cursor left |
+| tui.editor.cursorRight | right, ctrl+f | Move cursor right |
+| tui.editor.cursorWordLeft | alt+left, ctrl+left, alt+b | Move cursor word left |
+| tui.editor.cursorWordRight | alt+right, ctrl+right, alt+f | Move cursor word right |
+| tui.editor.cursorLineStart | home, ctrl+a | Move to line start |
+| tui.editor.cursorLineEnd | end, ctrl+e | Move to line end |
+| tui.editor.jumpForward | ctrl+] | Jump forward to character |
+| tui.editor.jumpBackward | ctrl+alt+] | Jump backward to character |
+| tui.editor.pageUp | pageUp | Page up |
+| tui.editor.pageDown | pageDown | Page down |
+| tui.editor.deleteCharBackward | backspace | Delete character backward |
+| tui.editor.deleteCharForward | delete, ctrl+d | Delete character forward |
+| tui.editor.deleteWordBackward | ctrl+w, alt+backspace, ctrl+backspace, super+alt+backspace | Delete word backward |
+| tui.editor.deleteWordForward | alt+delete, alt+d, ctrl+delete, super+alt+delete, super+alt+d | Delete word forward |
+| tui.editor.deleteToLineStart | ctrl+u | Delete to line start |
+| tui.editor.deleteToLineEnd | ctrl+k | Delete to line end |
+| tui.editor.yank | ctrl+y | Yank |
+| tui.editor.yankPop | alt+y | Yank pop |
+| tui.editor.undo | ctrl+-, ctrl+_ | Undo |
+| tui.editor.spellingSuggestions | ctrl+. | Show spelling replacements |
+| tui.input.newLine | shift+enter, ctrl+j | Insert newline |
+| tui.input.submit | enter | Submit input |
+| tui.input.tab | tab | Tab / autocomplete |
+| tui.input.copy | ctrl+c | Copy selection |
+| tui.select.up | up | Move selection up |
+| tui.select.down | down | Move selection down |
+| tui.select.pageUp | pageUp | Selection page up |
+| tui.select.pageDown | pageDown | Selection page down |
+| tui.select.confirm | enter | Confirm selection |
+| tui.select.cancel | escape, ctrl+c | Cancel selection |
