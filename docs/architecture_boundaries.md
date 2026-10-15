@@ -11,7 +11,7 @@ silent permissions.
 <!-- architecture_policy:start -->
 | App | Actual direct deps from `mix.exs` | Allowed direct deps | Reference-only exceptions |
 | --- | --- | --- | --- |
-| `coding_agent` | `lemon_agent`, `lemon_ai`, `lemon_browser`, `lemon_core`, `lemon_gateway`, `lemon_mcp`, `lemon_memory`, `lemon_platform_test`, `lemon_skills` | `lemon_agent`, `lemon_ai`, `lemon_browser`, `lemon_core`, `lemon_gateway`, `lemon_mcp`, `lemon_memory`, `lemon_platform_test`, `lemon_skills` | *(none)* |
+| `coding_agent` | `lemon_agent`, `lemon_ai`, `lemon_browser`, `lemon_core`, `lemon_gateway`, `lemon_lsp`, `lemon_mcp`, `lemon_memory`, `lemon_platform_test`, `lemon_skills` | `lemon_agent`, `lemon_ai`, `lemon_browser`, `lemon_core`, `lemon_gateway`, `lemon_lsp`, `lemon_mcp`, `lemon_memory`, `lemon_platform_test`, `lemon_skills` | *(none)* |
 | `lemon_agent` | `lemon_ai`, `lemon_core` | `lemon_ai`, `lemon_core` | *(none)* |
 | `lemon_ai` | *(none)* | *(none)* | *(none)* |
 | `lemon_automation` | `lemon_agent`, `lemon_ai`, `lemon_core`, `lemon_router`, `lemon_skills` | `lemon_agent`, `lemon_ai`, `lemon_core`, `lemon_router`, `lemon_skills` | *(none)* |
@@ -112,6 +112,7 @@ These rules complement the dependency policy table above. They must be respected
 | Agent runtime and channel supervision capability contracts/registries | `lemon_core` | Consumer apps (provider implementations remain in their owning products) |
 | Media job driver | `lemon_media` | `lemon_core`, `lemon_skills`, `lemon_router`, `lemon_control_plane` |
 | LSP server driver | `lemon_lsp` | `lemon_core`, `coding_agent`, `lemon_control_plane` |
+| Debug adapter (DAP) client | `coding_agent` | `lemon_core`, `lemon_control_plane` |
 | omp delegate driver (RPC protocol, session processes, discovery, `omp` tool) | `lemon_omp` | `lemon_core`, `coding_agent`, `lemon_gateway`, `lemon_control_plane` |
 | Skill platform logic (manifest, registry, installer, lockfile, source router, audit) | `lemon_skills` | `coding_agent`, `lemon_core`, `lemon_router` |
 | Prompt assembly and tool registration | `coding_agent` | `lemon_skills`, `lemon_core` |

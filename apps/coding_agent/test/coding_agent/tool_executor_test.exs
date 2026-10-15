@@ -184,6 +184,52 @@ defmodule CodingAgent.ToolExecutorTest do
       assert String.contains?(text, "approval failed")
       refute_received :executed
     end
+
+    test "bash approval requests expose env names but never env values" do
+      parent = self()
+      secret = "s3cret-value-#{System.unique_integer([:positive])}"
+
+      context = %{
+        approval_request_fun: fn request ->
+          send(parent, {:approval_request, request})
+          {:ok, :approved, :once}
+        end
+      }
+
+      args = %{"command" => "deploy", "cwd" => "app", "env" => %{"TOKEN" => secret, "A" => "1"}}
+
+      assert :ran =
+               ToolExecutor.execute_with_approval("bash", args, fn -> :ran end, context)
+
+      assert_received {:approval_request, request}
+      assert request.action["env_keys"] == ["A", "TOKEN"]
+      assert request.action["command"] == "deploy"
+      assert request.action["cwd"] == "app"
+      refute inspect(request) =~ secret
+
+      changed =
+        ToolExecutor.project_action("bash", put_in(args, ["env", "TOKEN"], "different-value"))
+
+      refute changed["env_digest"] == request.action["env_digest"]
+
+      malformed = Map.put(args, "env", [secret])
+
+      assert :ran =
+               ToolExecutor.execute_with_approval("bash", malformed, fn -> :ran end, context)
+
+      assert_received {:approval_request, request}
+      refute Map.has_key?(request.action, "env")
+      refute inspect(request) =~ secret
+
+      bridge = %{"name" => "bash", "args" => args}
+
+      assert :ran =
+               ToolExecutor.execute_with_approval("tool_invoke", bridge, fn -> :ran end, context)
+
+      assert_received {:approval_request, request}
+      assert request.action["args"]["env_keys"] == ["A", "TOKEN"]
+      refute inspect(request) =~ secret
+    end
   end
 
   describe "policy integration" do

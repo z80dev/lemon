@@ -4,9 +4,29 @@
 external-content tools:
 
 - `websearch`: query registered providers. Bundled providers are Brave
-  (default), Exa, Perplexity Sonar, keyless DuckDuckGo, and user-hosted SearXNG.
+  (default), Exa, Perplexity Sonar, Tavily, Kagi, Jina, keyless DuckDuckGo,
+  and user-hosted SearXNG.
 - `webfetch`: extract readable content through registered providers. Guarded
   direct extraction is the default and optionally falls back to Firecrawl.
+  Direct extraction converts PDF responses to `=== Page N ===` text with the
+  same system backends as `read` (pdftotext, mutool, or Python pypdf/PyMuPDF
+  on the operator's PATH). Only absolute PATH entries are used; workspace
+  binaries and ancestor `.lemon` trees are excluded, including canonical
+  symlink targets. Normal absolute user-installed toolchain paths outside
+  those project trees remain available. Unlike local `read`, fetching never discovers or
+  probes project/ancestor `.lemon/read-formats-venv` interpreters. An operator
+  may explicitly trust one with `WebFetch.tool(cwd, pdf_python: "/trusted/venv/bin/python3")`;
+  this constructor option is not exposed to model-supplied fetch arguments.
+  Python runs with `-I` for both probing and extraction, excluding cwd,
+  `PYTHONPATH`, and user-site imports. A project backend must be trusted before
+  even a capability probe can execute; permitting `webfetch` does not grant
+  project code execution. Without a backend the error names the install/trust
+  options. Extracted PDF text remains fenced, untrusted web data.
+  GitHub `blob/<ref>/<path>` URLs fetch the raw file
+  from `raw.githubusercontent.com`, and `issues/<n>` / `pull/<n>` URLs render
+  title, state, labels, body and the first 100 comments from the public REST
+  API (unauthenticated, subject to GitHub's anonymous rate limit). All of these
+  stay on the guarded, SSRF-checked path.
 - `browser_navigate`: navigate the supervised local browser session.
 - `browser_tabs`, `browser_tab_open`, `browser_tab_activate`,
   `browser_tab_close`: enumerate and manage tabs through stable Chrome target
@@ -50,6 +70,9 @@ direct extraction are terminal and never fall back through a remote extractor.
 | `brave` | search | `BRAVE_API_KEY` or `runtime.tools.web.search.api_key` |
 | `exa` | search/highlights and batch extract | `EXA_API_KEY` or configured key |
 | `perplexity` | search/answer | `PERPLEXITY_API_KEY`, `OPENROUTER_API_KEY`, or configured key |
+| `tavily` | search | `TAVILY_API_KEY` or `runtime.tools.web.search.providers.tavily.api_key` |
+| `kagi` | search (V1 API: web, then video/news/infobox buckets) | `KAGI_API_KEY` or `runtime.tools.web.search.providers.kagi.api_key` |
+| `jina` | search (`s.jina.ai`) | `JINA_API_KEY` or `runtime.tools.web.search.providers.jina.api_key` |
 | `duckduckgo` | keyless search | none |
 | `searxng` | search | `runtime.tools.web.search.providers.searxng.base_url` |
 | `direct` | extract | built in; guarded HTTP plus readability |

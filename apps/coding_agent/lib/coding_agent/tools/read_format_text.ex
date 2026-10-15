@@ -11,6 +11,7 @@ defmodule CodingAgent.Tools.ReadFormatText do
     limit = Map.get(params, "limit")
     max_lines = Keyword.get(opts, :max_lines, 2000)
     max_bytes = Keyword.get(opts, :max_bytes, 50 * 1024)
+    raw? = Keyword.get(opts, :raw, false)
 
     with :ok <- check_abort(signal),
          :ok <- validate_text(content) do
@@ -27,7 +28,11 @@ defmodule CodingAgent.Tools.ReadFormatText do
         selected = Enum.drop(all_lines, offset - 1)
         selected = if limit, do: Enum.take(selected, limit), else: selected
         # Reserve original-number width and a source-bearing continuation footer.
-        number_margin = byte_size(Integer.to_string(total)) * min(length(selected), max_lines)
+        number_margin =
+          if raw?,
+            do: 0,
+            else: byte_size(Integer.to_string(total)) * min(length(selected), max_lines)
+
         footer_margin = min(320 + byte_size(source), div(max_bytes, 2))
         budget = max(max_bytes - number_margin - footer_margin, 1)
 
@@ -52,11 +57,14 @@ defmodule CodingAgent.Tools.ReadFormatText do
             end
 
           text =
-            window.lines
-            |> Enum.with_index(offset)
-            |> Enum.map_join("\n", fn {line, index} -> "#{index}: #{line}" end)
-
-          text = append_footer(text, truncation, max_bytes)
+            if raw? do
+              Enum.join(window.lines, "\n")
+            else
+              window.lines
+              |> Enum.with_index(offset)
+              |> Enum.map_join("\n", fn {line, index} -> "#{index}: #{line}" end)
+              |> append_footer(truncation, max_bytes)
+            end
 
           if byte_size(text) > max_bytes do
             {:error,
@@ -73,6 +81,7 @@ defmodule CodingAgent.Tools.ReadFormatText do
                    total_lines: total,
                    start_line: offset,
                    lines_shown: shown,
+                   raw: raw?,
                    truncation: truncation,
                    next_offset: if(remaining, do: next)
                  })

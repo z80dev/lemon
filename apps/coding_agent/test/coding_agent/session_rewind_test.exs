@@ -3,11 +3,13 @@ defmodule CodingAgent.SessionRewindTest do
 
   alias CodingAgent.Session.Rewind
   alias CodingAgent.SessionManager
+  alias CodingAgent.Tools.Lsp.Text
   alias LemonCore.Checkpoint
 
   setup do
     dir = Path.join(System.tmp_dir!(), "session-rewind-#{System.unique_integer([:positive])}")
     File.mkdir_p!(dir)
+    dir = Text.realpath(dir)
     paths = Application.get_env(:lemon_core, :paths, [])
 
     Application.put_env(
@@ -137,6 +139,41 @@ defmodule CodingAgent.SessionRewindTest do
     assert SessionManager.build_session_context(rewound).messages == []
     assert {:ok, reloaded} = SessionManager.load_from_file(full.file_path)
     assert reloaded.leaf_id == nil
+  end
+
+  test "one LSP result restores every checkpoint in order", %{dir: dir, session: session} do
+    existing = Path.join(dir, "existing.c")
+    created = Path.join(dir, "created.c")
+    File.write!(existing, "original")
+    target = user(session, "apply refactor")
+    {:ok, first} = Checkpoint.create_filesystem(session.header.id, [existing], cwd: dir)
+    File.write!(existing, "first edit")
+    {:ok, second} = Checkpoint.create_filesystem(session.header.id, [existing, created], cwd: dir)
+    File.write!(existing, "second edit")
+    File.write!(created, "new file")
+
+    full =
+      SessionManager.append_message(target, %{
+        "role" => "tool_result",
+        "tool_name" => "lsp",
+        "tool_call_id" => "refactor",
+        "content" => [%{"type" => "text", "text" => "applied"}],
+        "details" => %{"checkpoint_id" => second.id, "checkpoint_ids" => [first.id, second.id]}
+      })
+
+    {:ok, preview, _} = Rewind.run(full, target.leaf_id, restore_files: true)
+    assert Enum.sort(preview["restorePaths"]) == Enum.sort([existing, created])
+    assert preview["unrestorableTools"] == []
+
+    assert {:ok, _, _} =
+             Rewind.run(full, target.leaf_id,
+               restore_files: true,
+               dry_run: false,
+               confirmation_token: preview["confirmationToken"]
+             )
+
+    assert File.read!(existing) == "original"
+    refute File.exists?(created)
   end
 
   test "confirmation refuses changed files and changed branches", %{dir: dir, session: session} do
@@ -350,6 +387,467 @@ defmodule CodingAgent.SessionRewindTest do
         assert preview["unrestorableTools"] == []
       end
     end
+  end
+
+  test "arbitrary code effects fail closed after success, failure or interruption", %{
+    session: session,
+    dir: dir
+  } do
+    path = Path.join(dir, "tracked.txt")
+    File.write!(path, "original")
+    target = user(session, "edit and execute")
+    {:ok, checkpoint} = Checkpoint.create_filesystem(session.header.id, [path], cwd: dir)
+    File.write!(path, "edited")
+    edited = tool_result(target, "write", checkpoint.id)
+
+    for {name, arguments} <- [
+          {"eval", %{"code" => "write_file()"}},
+          {"debug", %{"action" => "evaluate", "expression" => "write_file()"}},
+          {"debug", %{"action" => "launch"}},
+          {"debug", %{"action" => "continue"}},
+          {"debug", %{"action" => "custom_request"}},
+          {"debug", %{"action" => "variables"}},
+          {"debug", %{"action" => "unknown"}},
+          {"debug", %{}}
+        ],
+        outcome <- [:success, :failed, :interrupted] do
+      called = code_call(edited, name, arguments)
+
+      full =
+        if outcome == :interrupted do
+          called
+        else
+          SessionManager.append_message(called, %{
+            "role" => "tool_result",
+            "tool_name" => name,
+            "tool_call_id" => "code",
+            "is_error" => outcome == :failed,
+            "details" => Map.put(arguments, "checkpoint_id", checkpoint.id),
+            "content" => []
+          })
+        end
+
+      {:ok, preview, _} =
+        Rewind.run(full, target.leaf_id, restore_files: true, allow_partial_restore: true)
+
+      assert name in preview["unrestorableTools"]
+      refute preview["canAllowPartialRestore"]
+
+      assert {:error, :unrestorable_effects} =
+               Rewind.run(full, target.leaf_id,
+                 restore_files: true,
+                 allow_partial_restore: true,
+                 dry_run: false,
+                 confirmation_token: preview["confirmationToken"]
+               )
+
+      assert File.read!(path) == "edited"
+    end
+  end
+
+  test "precise debug inspection is not mistaken for execution", %{session: session} do
+    target = user(session, "inspect")
+
+    for action <- ~w(status sessions output threads stack_trace scopes) do
+      called = code_call(target, "debug", %{"action" => action})
+      {:ok, preview, _} = Rewind.run(called, target.leaf_id, restore_files: true)
+      assert preview["unrestorableTools"] == []
+
+      inspected =
+        SessionManager.append_message(called, %{
+          "role" => "tool_result",
+          "tool_name" => "debug",
+          "tool_call_id" => "code",
+          "is_error" => true,
+          "content" => []
+        })
+
+      {:ok, preview, _} = Rewind.run(inspected, target.leaf_id, restore_files: true)
+      assert preview["unrestorableTools"] == []
+    end
+
+    # A result without persisted arguments must not infer inspection or purity.
+    unknown = tool_result(target, "debug", nil)
+    {:ok, preview, _} = Rewind.run(unknown, target.leaf_id, restore_files: true)
+    assert preview["unrestorableTools"] == ["debug"]
+
+    unidentified =
+      SessionManager.append_message(target, %{
+        "role" => "assistant",
+        "content" => [%{"type" => "tool_call", "name" => "eval", "arguments" => %{}}]
+      })
+
+    {:ok, preview, _} = Rewind.run(unidentified, target.leaf_id, restore_files: true)
+    assert preview["unrestorableTools"] == ["eval"]
+  end
+
+  test "error receipts reverse overlapping directory and file batches without losing resources",
+       %{
+         session: session,
+         dir: dir
+       } do
+    root = Path.join(dir, "source")
+    destination = Path.join(dir, "renamed")
+    empty = Path.join(root, "empty")
+    file = Path.join(root, "file")
+    outside = Path.join(dir, "outside")
+    File.mkdir_p!(empty)
+    File.chmod!(empty, 0o750)
+    File.chmod!(root, 0o751)
+    File.write!(file, "original")
+    File.chmod!(file, 0o640)
+    File.write!(outside, "untouched")
+    File.ln_s!(outside, Path.join(root, "link"))
+    target = user(session, "edit then rename")
+    {:ok, first} = Checkpoint.create_filesystem(session.header.id, [file], cwd: dir)
+    File.write!(file, "intermediate")
+    {:ok, second} = Checkpoint.create_filesystem(session.header.id, [root, destination], cwd: dir)
+    File.rename!(root, destination)
+    File.write!(Path.join(destination, "extra"), "created")
+    File.chmod!(destination, 0o550)
+
+    full =
+      SessionManager.append_message(target, %{
+        "role" => "tool_result",
+        "tool_name" => "lsp",
+        "tool_call_id" => "resource",
+        "is_error" => true,
+        "details" => %{"checkpoint_ids" => [first.id, second.id], "success" => false},
+        "content" => []
+      })
+
+    {:ok, preview, _} = Rewind.run(full, target.leaf_id, restore_files: true)
+    assert preview["unrestorableTools"] == []
+
+    assert {:ok, _, _} =
+             Rewind.run(full, target.leaf_id,
+               restore_files: true,
+               dry_run: false,
+               confirmation_token: preview["confirmationToken"]
+             )
+
+    assert File.read!(file) == "original"
+    assert File.dir?(empty)
+    assert Bitwise.band(File.stat!(root).mode, 0o777) == 0o751
+    assert Bitwise.band(File.stat!(empty).mode, 0o777) == 0o750
+    assert Bitwise.band(File.stat!(file).mode, 0o777) == 0o640
+    assert File.read_link!(Path.join(root, "link")) == outside
+    assert File.read!(outside) == "untouched"
+    refute File.exists?(destination)
+  end
+
+  test "directory deletion restores the full tree and nested changes invalidate consent", %{
+    session: session,
+    dir: dir
+  } do
+    root = Path.join(dir, "tree")
+    File.mkdir_p!(Path.join(root, "empty"))
+    path = Path.join(root, "file")
+    File.write!(path, "original")
+    target = user(session, "delete tree")
+    {:ok, checkpoint} = Checkpoint.create_filesystem(session.header.id, [root], cwd: dir)
+    File.rm_rf!(root)
+    full = tool_result(target, "lsp", checkpoint.id)
+    {:ok, preview, _} = Rewind.run(full, target.leaf_id, restore_files: true)
+    File.mkdir_p!(root)
+    File.write!(path, "new user content")
+
+    assert {:error, :stale_confirmation} =
+             Rewind.run(full, target.leaf_id,
+               restore_files: true,
+               dry_run: false,
+               confirmation_token: preview["confirmationToken"]
+             )
+
+    {:ok, fresh, _} = Rewind.run(full, target.leaf_id, restore_files: true)
+    File.write!(path, "changed nested content")
+
+    assert {:error, :stale_confirmation} =
+             Rewind.run(full, target.leaf_id,
+               restore_files: true,
+               dry_run: false,
+               confirmation_token: fresh["confirmationToken"]
+             )
+
+    {:ok, final, _} = Rewind.run(full, target.leaf_id, restore_files: true)
+
+    assert {:ok, _, _} =
+             Rewind.run(full, target.leaf_id,
+               restore_files: true,
+               dry_run: false,
+               confirmation_token: final["confirmationToken"]
+             )
+
+    assert File.read!(path) == "original"
+    assert File.dir?(Path.join(root, "empty"))
+  end
+
+  test "tree capture bounds refuse before recording and symlinks never capture their targets", %{
+    session: session,
+    dir: dir
+  } do
+    root = Path.join(dir, "bounded")
+    File.mkdir_p!(Path.join(root, "empty"))
+    File.write!(Path.join(root, "file"), "12345")
+
+    for limits <- [
+          [max_bytes: 4],
+          [max_total_bytes: 4],
+          [max_entries: 2],
+          [max_depth: 0]
+        ] do
+      assert {:error, _} =
+               Checkpoint.create_filesystem(session.header.id, [root], [cwd: dir] ++ limits)
+    end
+
+    fifo = Path.join(root, "pipe")
+    assert {"", 0} = System.cmd("mkfifo", [fifo], stderr_to_stdout: true)
+
+    assert {:error, {:unsupported_file_type, ^fifo, _}} =
+             Checkpoint.create_filesystem(session.header.id, [root], cwd: dir)
+
+    File.rm!(fifo)
+    assert Checkpoint.list(session.header.id) == []
+    outside = Path.join(dir, "outside")
+    File.write!(outside, String.duplicate("x", 100))
+    link = Path.join(dir, "link")
+    File.ln_s!(outside, link)
+
+    assert {:ok, checkpoint} =
+             Checkpoint.create_filesystem(session.header.id, [link], cwd: dir, max_bytes: 0)
+
+    File.rm!(link)
+    File.write!(link, "replacement")
+    assert {:ok, _} = Checkpoint.restore_filesystem(checkpoint.id)
+    assert File.read_link!(link) == outside
+    assert File.read!(outside) == String.duplicate("x", 100)
+  end
+
+  test "restore validates all selected trees and refuses symlink parents before deletion", %{
+    session: session,
+    dir: dir
+  } do
+    path = Path.join(dir, "kept")
+    root = Path.join(dir, "tree")
+    File.write!(path, "keep current")
+    File.mkdir_p!(root)
+    {:ok, captured} = Checkpoint.create_filesystem(session.header.id, [path, root], cwd: dir)
+    [file_snapshot, tree_snapshot] = captured.state.filesystem.files
+    corrupt = %{tree_snapshot | entries: [%{name: "../escape", snapshot: file_snapshot}]}
+
+    {:ok, invalid} =
+      Checkpoint.create(session.header.id,
+        metadata: %{kind: "filesystem"},
+        state: %{filesystem: %{cwd: dir, files: [file_snapshot, corrupt]}}
+      )
+
+    File.write!(path, "new content")
+    assert {:error, _} = Checkpoint.restore_filesystem(invalid.id)
+    assert File.read!(path) == "new content"
+    assert File.dir?(root)
+    nested = Path.join(root, "file")
+    File.write!(nested, "original")
+    {:ok, checkpoint} = Checkpoint.create_filesystem(session.header.id, [nested], cwd: dir)
+    other = Path.join(dir, "other")
+    File.mkdir_p!(other)
+    File.write!(Path.join(other, "file"), "external content")
+    File.rm_rf!(root)
+    File.ln_s!(other, root)
+    assert {:error, _} = Checkpoint.restore_filesystem(checkpoint.id)
+    assert File.read!(Path.join(other, "file")) == "external content"
+    assert {:error, _} = Checkpoint.create_filesystem(session.header.id, [nested], cwd: dir)
+  end
+
+  test "persisted bridge and direct effects have identical refusal and redacted shell review", %{
+    session: session,
+    dir: dir
+  } do
+    tracked = Path.join(dir, "tracked")
+    File.write!(tracked, "original")
+    target = user(session, "write and execute")
+    {:ok, checkpoint} = Checkpoint.create_filesystem(session.header.id, [tracked], cwd: dir)
+    File.write!(tracked, "edited")
+    base = tool_result(target, "write", checkpoint.id)
+    secret = "sk-" <> String.duplicate("x", 40)
+
+    for {name, arguments, refusal} <- [
+          {"bash", %{"command" => "API_KEY=#{secret} printf ok"}, :unrestorable_effects},
+          {"eval", %{"code" => "write_file()"}, :unrestorable_effects},
+          {"debug", %{"action" => "evaluate"}, :unrestorable_effects},
+          {"debug", %{"action" => "unknown"}, :unrestorable_effects},
+          {"write", %{"path" => "untracked", "content" => "new"}, :checkpoint_missing}
+        ],
+        outcome <- [:success, :failed, :interrupted] do
+      reviews =
+        for bridged <- [false, true] do
+          full = persisted_invocation(base, name, arguments, bridged, outcome)
+          {:ok, preview, _} = Rewind.run(full, target.leaf_id, restore_files: true)
+          assert preview["unrestorableTools"] == [name]
+          assert preview["restorePaths"] == [tracked]
+          refute Enum.join(preview["unrestorableCommands"]) =~ secret
+
+          assert {:error, ^refusal} =
+                   Rewind.run(full, target.leaf_id,
+                     restore_files: true,
+                     dry_run: false,
+                     confirmation_token: preview["confirmationToken"]
+                   )
+
+          assert File.read!(tracked) == "edited"
+
+          Map.take(preview, [
+            "unrestorableTools",
+            "restorePaths",
+            "unrestorableCommands",
+            "unrestorableCommandCount",
+            "canAllowPartialRestore"
+          ])
+        end
+
+      assert Enum.at(reviews, 0) == Enum.at(reviews, 1)
+    end
+  end
+
+  test "persisted bridge write errors keep recoverable receipts and inspection matches its outer ID",
+       %{
+         session: session,
+         dir: dir
+       } do
+    path = Path.join(dir, "file")
+
+    for bridged <- [false, true], outcome <- [:success, :failed] do
+      File.write!(path, "original")
+      target = user(session, "write")
+      {:ok, checkpoint} = Checkpoint.create_filesystem(session.header.id, [path], cwd: dir)
+      File.write!(path, "edited before result")
+
+      full =
+        persisted_invocation(
+          target,
+          "write",
+          %{"path" => path, "content" => "edit"},
+          bridged,
+          outcome,
+          %{"checkpoint_ids" => [checkpoint.id]}
+        )
+
+      {:ok, preview, _} = Rewind.run(full, target.leaf_id, restore_files: true)
+      assert preview["unrestorableTools"] == []
+
+      assert {:ok, _, _} =
+               Rewind.run(full, target.leaf_id,
+                 restore_files: true,
+                 dry_run: false,
+                 confirmation_token: preview["confirmationToken"]
+               )
+
+      assert File.read!(path) == "original"
+    end
+
+    target = user(session, "inspect")
+
+    for bridged <- [false, true], outcome <- [:success, :failed, :interrupted] do
+      full = persisted_invocation(target, "debug", %{"action" => "status"}, bridged, outcome)
+      {:ok, preview, _} = Rewind.run(full, target.leaf_id, restore_files: true)
+      assert preview["unrestorableTools"] == []
+    end
+  end
+
+  test "unidentified persisted bridges fail closed and missing shell arguments cannot get partial consent",
+       %{
+         session: session
+       } do
+    target = user(session, "unknown invocation")
+
+    orphan =
+      SessionManager.append_message(target, %{
+        "role" => "tool_result",
+        "tool_name" => "tool_invoke",
+        "tool_call_id" => "missing",
+        "is_error" => true,
+        "content" => [],
+        "details" => %{"name" => "debug", "action" => "status"}
+      })
+
+    {:ok, reloaded} = SessionManager.load_from_file(orphan.file_path)
+    {:ok, preview, _} = Rewind.run(reloaded, target.leaf_id, restore_files: true)
+    assert preview["unrestorableTools"] == ["tool_invoke"]
+
+    assert {:error, :checkpoint_missing} =
+             Rewind.run(reloaded, target.leaf_id,
+               restore_files: true,
+               dry_run: false,
+               confirmation_token: preview["confirmationToken"]
+             )
+
+    for outcome <- [:success, :failed, :interrupted] do
+      full = persisted_invocation(target, "bash", %{}, true, outcome)
+
+      {:ok, preview, _} =
+        Rewind.run(full, target.leaf_id, restore_files: true, allow_partial_restore: true)
+
+      assert preview["unrestorableTools"] == ["bash"]
+      assert preview["unrestorableCommandCount"] == 1
+      refute preview["canAllowPartialRestore"]
+
+      assert {:error, :partial_restore_unreviewable} =
+               Rewind.run(full, target.leaf_id,
+                 restore_files: true,
+                 allow_partial_restore: true,
+                 dry_run: false,
+                 confirmation_token: preview["confirmationToken"]
+               )
+    end
+  end
+
+  defp persisted_invocation(session, name, arguments, bridged, outcome, details \\ %{}) do
+    outer_name = if bridged, do: "tool_invoke", else: name
+    params = if bridged, do: %{"name" => name, "args" => arguments}, else: arguments
+    id = "invocation-#{System.unique_integer([:positive])}"
+
+    called =
+      SessionManager.append_message(session, %{
+        "role" => "assistant",
+        "content" => [
+          %{
+            "type" => "tool_call",
+            "id" => id,
+            "name" => outer_name,
+            "arguments" => params
+          }
+        ]
+      })
+
+    full =
+      if outcome == :interrupted do
+        called
+      else
+        SessionManager.append_message(called, %{
+          "role" => "tool_result",
+          "tool_name" => outer_name,
+          "tool_call_id" => id,
+          "is_error" => outcome == :failed,
+          "content" => [],
+          "details" => details
+        })
+      end
+
+    {:ok, reloaded} = SessionManager.load_from_file(full.file_path)
+    reloaded
+  end
+
+  defp code_call(session, name, arguments) do
+    SessionManager.append_message(session, %{
+      "role" => "assistant",
+      "content" => [
+        %{
+          "type" => "tool_call",
+          "id" => "code",
+          "name" => name,
+          "arguments" => arguments
+        }
+      ]
+    })
   end
 
   defp shell_call(session, command) do

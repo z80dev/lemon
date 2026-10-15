@@ -46,12 +46,17 @@ defmodule CodingAgent.ACPTerminalExecutor do
     signal = Keyword.get(opts, :signal)
 
     create =
-      async_request(run_id, "terminal/create", %{
-        "command" => shell,
-        "args" => shell_args ++ [command],
-        "cwd" => cwd,
-        "outputByteLimit" => @snapshot_bytes
-      })
+      async_request(
+        run_id,
+        "terminal/create",
+        %{
+          "command" => shell,
+          "args" => shell_args ++ [command],
+          "cwd" => cwd,
+          "outputByteLimit" => @snapshot_bytes
+        }
+        |> put_env(Keyword.get(opts, :env, %{}))
+      )
 
     case await_create(create, owner, signal, deadline) do
       {:ok, %{"terminalId" => terminal_id}} when is_binary(terminal_id) and terminal_id != "" ->
@@ -65,6 +70,18 @@ defmodule CodingAgent.ACPTerminalExecutor do
       _ ->
         {:error, :acp_terminal_create_failed}
     end
+  end
+
+  # ACP `terminal/create` takes extra variables as `[%{name, value}]`.
+  defp put_env(params, env) when map_size(env) == 0, do: params
+
+  defp put_env(params, env) do
+    entries =
+      env
+      |> Enum.sort()
+      |> Enum.map(fn {name, value} -> %{"name" => name, "value" => value} end)
+
+    Map.put(params, "env", entries)
   end
 
   defp await_create({pid, ref}, owner, signal, deadline) do

@@ -452,6 +452,20 @@ defmodule CodingAgent.Tools.GrepTest do
       assert %AgentToolResult{content: [%TextContent{text: text}], details: details} = result
       assert details.truncation.truncated == true
       assert text =~ "300B limit reached"
+      assert details.next_skip > 0 and details.next_skip < 20
+
+      next =
+        Grep.execute(
+          "call_2",
+          %{"pattern" => "match", "path" => path, "skip" => details.next_skip},
+          nil,
+          nil,
+          tmp_dir,
+          max_bytes: 300
+        )
+
+      assert Enum.map_join(next.content, "", & &1.text) =~
+               ":#{details.next_skip + 1}: match#{details.next_skip + 1} "
     end
   end
 
@@ -721,6 +735,129 @@ defmodule CodingAgent.Tools.GrepTest do
       params = %{"pattern" => "->", "literal" => true}
       arrow = Grep.execute("call_2", params, nil, nil, tmp_dir, [])
       assert %AgentToolResult{details: %{match_count: 1}} = arrow
+    end
+  end
+
+  describe "paging, hidden and ignored files" do
+    setup %{tmp_dir: tmp_dir} do
+      {_, 0} = System.cmd("git", ["init", "-q", tmp_dir])
+      File.write!(Path.join(tmp_dir, ".gitignore"), "ignored/\n")
+      File.mkdir_p!(Path.join(tmp_dir, "ignored"))
+      File.write!(Path.join(tmp_dir, "ignored/skip.txt"), "needle ignored\n")
+      File.write!(Path.join(tmp_dir, ".hidden.txt"), "needle hidden\n")
+      File.write!(Path.join(tmp_dir, "visible.txt"), Enum.map_join(1..5, "\n", &"needle #{&1}"))
+      File.write!(Path.join(tmp_dir, ".ignore"), "private/\n")
+      File.mkdir_p!(Path.join(tmp_dir, "private"))
+      File.write!(Path.join(tmp_dir, "private/secret.txt"), "needle private\n")
+      :ok
+    end
+
+    for rg? <- [true, false], rg? == false or System.find_executable("rg") != nil do
+      @rg rg?
+      test "skips ignored and hidden files by default (ripgrep: #{rg?})", %{tmp_dir: tmp_dir} do
+        result = grep(tmp_dir, %{"pattern" => "needle"}, @rg)
+        assert %AgentToolResult{content: [%TextContent{text: text}], details: details} = result
+        assert details.match_count == 5
+        refute text =~ "ignored"
+        refute text =~ "hidden"
+        refute text =~ "needle private"
+      end
+
+      test "hidden and no_ignore include those files (ripgrep: #{rg?})", %{tmp_dir: tmp_dir} do
+        params = %{"pattern" => "needle", "hidden" => true, "no_ignore" => true}
+        assert %AgentToolResult{content: [%TextContent{text: text}]} = grep(tmp_dir, params, @rg)
+        assert text =~ "needle ignored"
+        assert text =~ "needle hidden"
+        assert text =~ "needle private"
+      end
+
+      test "skip pages past max_results (ripgrep: #{rg?})", %{tmp_dir: tmp_dir} do
+        first = grep(tmp_dir, %{"pattern" => "needle", "max_results" => 2}, @rg)
+        assert %AgentToolResult{content: [%TextContent{text: text}], details: details} = first
+        assert details.next_skip == 2
+        assert text =~ "visible.txt:1: needle 1"
+        refute text =~ "needle 3"
+
+        params = %{"pattern" => "needle", "max_results" => 2, "skip" => 4}
+        last = grep(tmp_dir, params, @rg)
+        assert %AgentToolResult{content: [%TextContent{text: text}], details: details} = last
+        assert text =~ "visible.txt:5: needle 5"
+        refute text =~ "needle 4"
+        refute Map.has_key?(details, :next_skip)
+        assert details.skip == 4
+      end
+    end
+
+    test "fallback honors nested ignore globs and negation outside a repository", %{
+      tmp_dir: tmp_dir
+    } do
+      File.rm_rf!(Path.join(tmp_dir, ".git"))
+      root = Path.join(tmp_dir, "nonrepo")
+      File.mkdir_p!(Path.join(root, "nested"))
+      File.write!(Path.join(root, ".ignore"), "**/*.cache\n!keep.cache\n")
+      File.write!(Path.join(root, "skip.cache"), "needle skip")
+      File.write!(Path.join(root, "keep.cache"), "needle keep")
+      File.write!(Path.join(root, "nested/.ignore"), "ignored[12].txt\n")
+      File.write!(Path.join(root, "nested/ignored1.txt"), "needle nested")
+      File.write!(Path.join(root, "nested/visible.txt"), "needle visible")
+      result = grep(root, %{"pattern" => "needle"}, false)
+
+      assert %AgentToolResult{content: [%TextContent{text: text}], details: %{match_count: 2}} =
+               result
+
+      assert text =~ "needle keep"
+      assert text =~ "needle visible"
+      refute text =~ "needle skip"
+      refute text =~ "needle nested"
+    end
+
+    for root_kind <- [:non_repository, :gitignored_root] do
+      test "fallback filters local gitignore before paging a #{root_kind}", %{tmp_dir: tmp_dir} do
+        if unquote(root_kind) == :non_repository do
+          File.rm_rf!(Path.join(tmp_dir, ".git"))
+        else
+          File.write!(Path.join(tmp_dir, ".gitignore"), "fixture/\n")
+        end
+
+        root = Path.join(tmp_dir, "fixture")
+        File.mkdir_p!(Path.join(root, "ignored"))
+        File.mkdir_p!(Path.join(root, "private"))
+        File.write!(Path.join(root, ".gitignore"), "ignored/\n")
+        File.write!(Path.join(root, ".ignore"), "private/\n")
+        File.write!(Path.join(root, "ignored/skip.txt"), "needle ignored\n")
+        File.write!(Path.join(root, "private/secret.txt"), "needle private\n")
+        File.write!(Path.join(root, ".hidden.txt"), "needle hidden\n")
+        File.write!(Path.join(root, "visible.txt"), Enum.map_join(1..5, "\n", &"needle #{&1}"))
+
+        assert %AgentToolResult{content: [%TextContent{text: text}], details: details} =
+                 grep(root, %{"pattern" => "needle"}, false)
+
+        assert details.match_count == 5
+        refute text =~ "needle ignored"
+        refute text =~ "needle private"
+        refute text =~ "needle hidden"
+
+        assert %AgentToolResult{content: [%TextContent{text: first}], details: first_details} =
+                 grep(root, %{"pattern" => "needle", "max_results" => 2}, false)
+
+        assert first_details.next_skip == 2
+        assert first =~ "visible.txt:1: needle 1"
+        assert first =~ "visible.txt:2: needle 2"
+        refute first =~ "needle 3"
+
+        assert %AgentToolResult{content: [%TextContent{text: last}], details: last_details} =
+                 grep(root, %{"pattern" => "needle", "max_results" => 2, "skip" => 4}, false)
+
+        assert last =~ "visible.txt:5: needle 5"
+        refute last =~ "needle 4"
+        assert last_details.match_count == 5
+        assert last_details.skip == 4
+        refute Map.has_key?(last_details, :next_skip)
+      end
+    end
+
+    defp grep(tmp_dir, params, rg?) do
+      Grep.execute("call", params, nil, nil, tmp_dir, ripgrep_available?: rg?)
     end
   end
 end

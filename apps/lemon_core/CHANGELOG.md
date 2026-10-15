@@ -39,6 +39,12 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
   before each compare-and-swap, including after blocked key resolution, so a
   refresh cannot revive a credential that expired while encryption was pending.
 
+- Filesystem checkpoints capture bounded recursive directory trees, preserving
+  empty directories, modes and symlink identity without following targets.
+  Restore validates selected snapshots and parent paths before mutation and
+  removes newly created trees when the recorded root was absent. Defaults:
+  10 MiB/file, 50 MiB aggregate, 10,000 entries, depth 128 per capture.
+
 ## [0.2.0] - 2026-10-13
 
 First release as a standalone package. `lemon_core` used to be the umbrella's

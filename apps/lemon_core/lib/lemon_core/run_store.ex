@@ -71,7 +71,17 @@ defmodule LemonCore.RunStore do
 
   @spec delete_history(term()) :: :ok
   def delete_history(session_key) do
-    RunHistoryStore.delete_session(session_key)
+    cutoff = System.monotonic_time()
+    result = RunHistoryStore.delete_session(session_key)
+
+    if result == :ok,
+      do:
+        LemonCore.Bus.broadcast(
+          "sessions:lifecycle",
+          {:session_history_deleted, session_key, cutoff}
+        )
+
+    result
   end
 
   @spec delete_session(term()) :: :ok

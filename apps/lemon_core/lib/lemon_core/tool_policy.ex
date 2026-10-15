@@ -27,6 +27,7 @@ defmodule LemonCore.ToolPolicy do
     "bash",
     "bash_output",
     "kill_process",
+    "eval",
     "grep",
     "find",
     "ls",
@@ -115,6 +116,11 @@ defmodule LemonCore.ToolPolicy do
     "skill_manage",
     "remember",
     "bash",
+    # Persistent kernels and debuggers execute arbitrary project code.
+    "eval",
+    "debug",
+    # Language servers can execute project code and apply file edits.
+    "lsp",
     # Runs project compilers/checkers (`mix compile`, `cargo check`, `go test`),
     # which execute project code.
     "lsp_diagnostics",

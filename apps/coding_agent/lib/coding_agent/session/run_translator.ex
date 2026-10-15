@@ -80,7 +80,12 @@ defmodule CodingAgent.Session.RunTranslator do
     action_id = "tool_#{id}"
     kind = Presentation.tool_kind(name)
     title = Presentation.tool_title(name, args)
-    detail = %{name: name, args: args, tool_call_id: id}
+
+    detail = %{
+      name: name,
+      args: CodingAgent.ToolExecutor.project_action(name, args),
+      tool_call_id: id
+    }
 
     action = %{id: action_id, kind: kind, title: title, detail: detail}
 
