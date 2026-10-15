@@ -15,6 +15,11 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- The TUI stops retrying rejected operator credentials, shows token recovery
+  steps, and keeps offline prompts in the editor instead of silently queueing.
+  Connection failures and `/reconnect` report actionable outcomes; `/status`
+  includes profile/model, theme changes say whether they were saved, and
+  command suggestions no longer mistake `/faq` for the `/q` queue alias.
 - All skill curator entry points now protect cron-referenced skills, including
   disabled jobs, while preserving explicit exemptions. Automatic archival fails
   closed with a reported reason when the automation provider is unavailable.

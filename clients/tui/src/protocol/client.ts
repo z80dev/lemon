@@ -3,27 +3,28 @@
  *
  * Connection lifecycle
  * --------------------
- *   socket open -> send `connect` (role: operator, no token for a local
- *   operator, which grants all scopes) -> server replies with a `hello-ok`
- *   frame *instead of* a `res` -> state becomes "online" and every other method
+ *   socket open -> send `connect` with operator credentials -> server replies
+ *   with a `hello-ok` frame *instead of* a `res` -> state becomes "online" and every other method
  *   is allowed. Anything sent before that is rejected server-side with
  *   HANDSHAKE_REQUIRED, so the client enforces the same rule locally.
  *
  * Offline behaviour
  * -----------------
- *   `chat.send` or `profile.chat` issued while not online is parked (the UI is told via the
- *   `queued` event) and flushed FIFO once the handshake completes — typing
- *   before the daemon is ready is a normal thing to do. Every other method
- *   rejects with NotConnectedError rather than silently buffering state-changing
- *   calls across a reconnect.
+ *   Protocol callers may park `chat.send` or `profile.chat` while offline and
+ *   flush FIFO once connected; the interactive UI instead retains the draft.
+ *   Authentication rejection closes the socket, rejects queued calls and blocks
+ *   new ones until an explicit reconnect. Other offline methods reject rather
+ *   than buffering state-changing calls across a reconnect.
  */
 
 import { Emitter } from "../store/events.ts";
 import {
+	AuthenticationError,
 	ControlPlaneError,
 	HandshakeError,
 	NotConnectedError,
 	RequestTimeoutError,
+	offlineMessage,
 } from "./errors.ts";
 import {
 	type EventFrame,
@@ -132,6 +133,7 @@ export class ControlPlaneClient {
 		reject: (error: unknown) => void;
 	}> = [];
 	#closed = false;
+	#connectionError: HandshakeError | undefined;
 	#probeInFlight = false;
 	/** One-line summaries of recent traffic, oldest first (see `/debug`). */
 	readonly #frameLog: string[] = [];
@@ -207,6 +209,7 @@ export class ControlPlaneClient {
 	connect(timeoutMs = this.#requestTimeoutMs): Promise<HelloOkFrame> {
 		if (this.#closed) return Promise.reject(new NotConnectedError(undefined, "client is closed"));
 		if (this.#helloOk && this.#state === "online") return Promise.resolve(this.#helloOk);
+		if (this.#connectionError) return Promise.reject(this.#connectionError);
 		const waiter = new Promise<HelloOkFrame>((resolve, reject) => {
 			const entry = { resolve, reject };
 			this.#handshakeWaiters.push(entry);
@@ -215,7 +218,7 @@ export class ControlPlaneClient {
 					const index = this.#handshakeWaiters.indexOf(entry);
 					if (index >= 0) {
 						this.#handshakeWaiters.splice(index, 1);
-						reject(new HandshakeError(`handshake did not complete within ${timeoutMs}ms`));
+						reject(new HandshakeError(offlineMessage(this.url)));
 					}
 				}, timeoutMs);
 				timer.unref?.();
@@ -230,10 +233,19 @@ export class ControlPlaneClient {
 	 * Drop the socket and dial again immediately (`/reconnect`). In-flight
 	 * requests fail with NotConnectedError as they would on any disconnect.
 	 */
-	reconnect(reason = "user requested"): void {
-		if (this.#closed) return;
+	async reconnect(reason = "user requested"): Promise<void> {
+		if (this.#closed) throw new NotConnectedError(undefined, "client is closed");
 		this.#log(`-- reconnect (${reason})`);
-		this.#socket.forceReconnect(reason);
+		this.#socket.close();
+		this.#helloOk = undefined;
+		this.#handshakeId = undefined;
+		this.#connectionError = undefined;
+		const error = new NotConnectedError();
+		this.#failPending(error);
+		const waiters = this.#handshakeWaiters.splice(0);
+		for (const waiter of waiters) waiter.reject(error);
+		this.#setState("reconnecting");
+		await this.connect();
 	}
 
 	/** Close permanently. Pending and queued requests reject. */
@@ -251,6 +263,8 @@ export class ControlPlaneClient {
 	 */
 	request<T = unknown>(method: string, params?: unknown, options: RequestOptions = {}): Promise<T> {
 		if (this.#closed) return Promise.reject(new NotConnectedError(method, "client is closed"));
+		if (this.#connectionError && !options.allowWhileConnecting)
+			return Promise.reject(this.#connectionError);
 		const timeoutMs = options.timeoutMs ?? this.#requestTimeoutMs;
 
 		if (this.#state !== "online" && !options.allowWhileConnecting) {
@@ -279,6 +293,7 @@ export class ControlPlaneClient {
 		});
 
 		this.#socket.events.on("close", (info) => {
+			this.#log(`-- close ${info.code}${info.reason ? `: ${info.reason}` : ""}`);
 			const wasOnline = this.#state === "online";
 			this.#helloOk = undefined;
 			this.#handshakeId = undefined;
@@ -346,7 +361,7 @@ export class ControlPlaneClient {
 		this.#handshakeId = frame.id;
 		if (!this.#socket.send(encodeFrame(frame))) {
 			this.events.emit("client-error", {
-				error: new HandshakeError("failed to send connect frame"),
+				error: new HandshakeError(offlineMessage(this.url)),
 				context: "handshake",
 			});
 		}
@@ -407,13 +422,16 @@ export class ControlPlaneClient {
 		if (this.#handshakeId && frame.id === this.#handshakeId) {
 			this.#handshakeId = undefined;
 			if (!frame.ok) {
-				const error = new HandshakeError(
-					frame.error?.message ?? "handshake rejected",
-					frame.error ? new ControlPlaneError(frame.error, "connect") : undefined,
-				);
-				const waiters = this.#handshakeWaiters;
-				this.#handshakeWaiters = [];
-				for (const waiter of waiters) waiter.reject(error);
+				const cause = frame.error ? new ControlPlaneError(frame.error, "connect") : undefined;
+				const error =
+					cause && ["UNAUTHORIZED", "FORBIDDEN", "PERMISSION_DENIED"].includes(cause.code)
+						? new AuthenticationError(cause)
+						: new HandshakeError("Lemon refused the connection — check the runtime logs", cause);
+				this.#connectionError = error;
+				this.#helloOk = undefined;
+				this.#socket.close();
+				this.#setState(error instanceof AuthenticationError ? "auth-rejected" : "offline");
+				this.#failAll(error);
 				this.events.emit("client-error", { error, context: "handshake" });
 				return;
 			}
