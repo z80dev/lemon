@@ -10,6 +10,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Lemon Bot
 
+- Name missing required Lemon Bot startup settings without a stack dump, keep
+  operator configuration details in server diagnostics rather than owner errors,
+  and clarify backend/SDK setup and contributor documentation.
+
 - Add truthful attached-instance status, controller reconnect (including rejected
   credentials), and opt-in owner-only local runtime start/stop/restart with
   bounded operation receipts. Publish TypeScript SDK helpers, Swift Codable
@@ -54,6 +58,11 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 - Custom-provider discovery and cache-only model resolution use the selected
   healthy credential-pool principal, keeping picker and native request authority
   aligned without exposing another pool or ambient provider credentials.
+
+### Removed
+
+- The broken `bin/lemon-dev` launcher, which passed flags the TUI no longer
+  accepts. Use `./bin/lemon` (source runtime plus TUI) or `./bin/lemon-tui`.
 
 ---
 
