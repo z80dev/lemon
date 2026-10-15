@@ -175,6 +175,8 @@ export class FakeControlPlane {
 		if (this.#server) return this;
 		const self = this;
 		this.#server = Bun.serve<SocketData>({
+			// Match url's IPv4 host instead of Bun's potentially IPv6-only localhost.
+			hostname: "127.0.0.1",
 			port: this.#options.port,
 			fetch(request, server) {
 				if (server.upgrade(request, { data: { connected: false, id: 0 } })) return undefined;

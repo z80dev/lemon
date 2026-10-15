@@ -26,6 +26,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Bind TUI fake control-plane listeners to their advertised IPv4 loopback address,
+  preventing random test ports from reaching unrelated IPv4 services and timing
+  out during command-harness setup.
+
 - Make coordinator active-session lifecycle tests deterministic with per-test
   admission and explicit completion, timeout, cancellation and process-down fences
   instead of racing short deadlines against shared session startup.

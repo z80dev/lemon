@@ -41,6 +41,21 @@ function makeClient(url: string, overrides: Record<string, unknown> = {}) {
 }
 
 describe("handshake", () => {
+	test("fake control plane refuses an occupied advertised IPv4 endpoint", async () => {
+		const occupied = Bun.serve({
+			hostname: "127.0.0.1",
+			port: 0,
+			fetch: () => new Response("another listener", { status: 418 }),
+		});
+		try {
+			await expect(withServer({ port: occupied.port })).rejects.toMatchObject({
+				code: "EADDRINUSE",
+			});
+		} finally {
+			await occupied.stop(true);
+		}
+	});
+
 	test("sends connect with operator role and no token, then goes online", async () => {
 		const server = await withServer();
 		const client = makeClient(server.url, { clientId: "lemon-tui@test-1" });
