@@ -258,10 +258,13 @@ Call-site migration to `LemonCore.Env.get/2` is out of scope for this pass and i
 | `LEMON_HONCHO_INJECT_IN_SUBAGENTS` | boolean | `false` |  | `lemon_honcho` | Whether subagent runs also get memory injected. Off by default; subagents are cheap. |
 | `LEMON_HONCHO_MESSAGE_MAX_CHARS` | integer | `25000` |  | `lemon_honcho` | Per-message truncation applied before a turn is uploaded to Honcho. |
 | `LEMON_HONCHO_OBSERVATION_MODE` | string | `directional` |  | `lemon_honcho` | Peer observation preset: directional (both peers observe) or unified (one model). |
+| `LEMON_HONCHO_PIN_USER_PEER` | boolean | `false` |  | `lemon_honcho` | Use the configured human peer for every channel sender. |
 | `LEMON_HONCHO_REASONING_LEVEL` | string | `low` |  | `lemon_honcho` | Reasoning budget Honcho spends on dialectic queries: minimal, low, medium, high, max. |
 | `LEMON_HONCHO_RECALL_MODE` | string | `hybrid` |  | `lemon_honcho` | How memory reaches the model: hybrid (injection + tools), context (injection only; the honcho_* tools are inactive), or tools (tools only; nothing injected). |
+| `LEMON_HONCHO_RUNTIME_PEER_PREFIX` | string | `` |  | `lemon_honcho` | Prefix for channel-qualified sender peer ids; empty keeps the configured peer. |
 | `LEMON_HONCHO_SAVE_MESSAGES` | boolean | `true` |  | `lemon_honcho` | Whether turns are written back to Honcho. False makes the integration read-only: no uploads, and the profile write and conclusion create/delete are refused. |
 | `LEMON_HONCHO_SESSION_STRATEGY` | string | `per-directory` |  | `lemon_honcho` | What a Honcho session maps to: per-session, per-directory, per-repo, or global. |
+| `LEMON_HONCHO_USER_PEER_ALIASES` | string | _(none)_ |  | `lemon_honcho` | JSON map of channel-qualified runtime ids to Honcho peer ids. |
 
 ### Logging
 
