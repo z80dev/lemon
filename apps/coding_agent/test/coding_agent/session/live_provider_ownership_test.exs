@@ -42,6 +42,7 @@ defmodule CodingAgent.Session.LiveProviderOwnershipTest do
     assert report.a_requests == 1
     assert report.selected_requests == 0
     assert report.refused
+    assert report.credential_refusal
     refute report.answered
     assert report.journal_matches_selection
     refute report.private_values_in_logs_or_events
@@ -81,6 +82,23 @@ defmodule CodingAgent.Session.LiveProviderOwnershipTest do
       root: root
     } do
       report = run(root, unquote(scenario))
+
+      if unquote(scenario) == :agent_missing do
+        assert report.a_requests == 1
+        assert report.selected_requests == 0
+        assert report.refused
+        assert report.credential_refusal
+        refute report.answered
+      else
+        assert report.selected_requests == 1
+        assert report.keyless_requests == 1
+        assert report.completed
+        assert report.answered
+        refute report.refused
+        assert report.keyless_without_authorization
+      end
+
+      assert report.journal_matches_selection
       assert report.passed
       refute report.private_values_in_logs_or_events
     end

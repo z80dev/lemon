@@ -11,6 +11,8 @@ defmodule LemonAi.Error do
   `classify/1` is shared by HTTP, transport and stream-terminal errors.
   `retryable?/1` retries rate limits, transient/network failures and server
   errors, but never authentication, client or context-overflow failures.
+  Missing local API keys are authentication failures, not provider outages, and
+  must not contribute to the provider-wide circuit breaker.
   Account quota/credit/spend exhaustion is classified as `:rate_limit` for
   credential failover, but is not retryable against the same credential.
   Retry timing metadata is a hint, not permission to retry.
@@ -702,6 +704,8 @@ defmodule LemonAi.Error do
       String.contains?(downcased, "authentication") or
       String.contains?(downcased, "invalid api key") or
       String.contains?(downcased, "invalid_api_key") or
+      String.contains?(downcased, "no api key provided") or
+      String.contains?(downcased, "api key is required") or
       String.contains?(downcased, "invalid x-api-key") or
       String.contains?(downcased, "api key not valid") or
       String.contains?(downcased, "permission denied") or

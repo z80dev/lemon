@@ -208,6 +208,36 @@ defmodule LemonAi.CallDispatcherTest do
       assert cb_after.failure_count == 0
     end
 
+    for api <- [:anthropic_messages, :openai_completions, :openai_responses] do
+      @api api
+      test "#{api} missing local keys do not open the provider circuit", %{provider: provider} do
+        start_supervised!(
+          {RateLimiter, provider: provider, tokens_per_second: 100, max_tokens: 100}
+        )
+
+        start_supervised!({CircuitBreaker, provider: provider, failure_threshold: 3})
+
+        model = %LemonAi.Types.Model{id: "missing-key", provider: provider, api: @api}
+        context = LemonAi.Types.Context.new(messages: [%LemonAi.Types.UserMessage{content: "hello"}])
+
+        # Exercise the real provider's local credential refusal and asynchronous
+        # dispatcher accounting beyond the breaker threshold, without resets.
+        for _ <- 1..5 do
+          assert {:ok, stream} = LemonAi.stream(model, context, %{})
+          assert {:error, message} = EventStream.result(stream)
+          assert message.error_message =~ "No API key provided"
+          wait_until(fn -> CallDispatcher.get_active_requests(provider) == 0 end)
+          EventStream.cancel(stream, :test_cleanup)
+        end
+
+        assert {:ok, %{failure_count: 0, circuit_state: :closed}} =
+                 CircuitBreaker.get_state(provider)
+
+        assert {:ok, :still_available} =
+                 CallDispatcher.dispatch(provider, fn -> {:ok, :still_available} end)
+      end
+    end
+
     test "rate-limit-shaped stream terminal error is not recorded as circuit breaker failure",
          %{provider: provider} do
       start_supervised!(

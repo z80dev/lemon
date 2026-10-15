@@ -1415,6 +1415,10 @@ environment references cannot refresh. Provider retry hints are retained for
 credential cooldowns. The model/credential that commits is pinned for subsequent
 turns in that session, preserving provider caches.
 
+Missing local API keys are credential failures, not provider outages. They remain
+non-retryable against the same credential and do not open the provider-wide
+circuit breaker or block another session with valid credentials.
+
 For generic OAuth providers, `auth_source = "oauth"` makes the selected stored
 login authoritative for both initial resolution and 401 refresh:
 `oauth_secret`, then `api_key_secret`, then the provider's default secret name.

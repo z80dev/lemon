@@ -127,6 +127,26 @@ defmodule LemonAi.ErrorFailoverTest do
       assert Error.classify("HTTP 400: no thanks") == :client
     end
 
+    test "missing local API keys remain credential failures through stream terminals" do
+      for text <- [
+            "No API key provided for Anthropic. Set ANTHROPIC_API_KEY or pass api_key in options.",
+            "No API key provided for Kimi. Set KIMI_API_KEY (or MOONSHOT_API_KEY) or pass api_key in options.",
+            "No API key provided for provider together. Configure an API key for it.",
+            "OpenAI API key is required. Set OPENAI_API_KEY environment variable or pass it as an argument.",
+            "OpenCode API key is required. Set OPENCODE_API_KEY environment variable or pass it as an argument."
+          ] do
+        event = stream_error_event(text)
+        {:error, :error, message} = event
+
+        for error <- [text, message, event, %RuntimeError{message: text}] do
+          assert Error.classify(error) == :auth
+          assert Error.failover_action(error) == :next_credential
+          refute Error.retryable?(error)
+          refute Error.stream_terminal_breaker_failure?(error)
+        end
+      end
+    end
+
     test "unknown for unclassifiable terms" do
       assert Error.classify({:weird, :tuple}) == :unknown
       assert Error.classify("provider_unavailable") == :unknown
