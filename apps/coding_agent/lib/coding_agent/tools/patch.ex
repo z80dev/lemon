@@ -38,8 +38,6 @@ defmodule CodingAgent.Tools.Patch do
   ```
   """
 
-  alias LemonAgent.Types.{AgentTool, AgentToolResult}
-  alias LemonAi.Types.TextContent
   alias CodingAgent.FileReadTracker
   alias CodingAgent.MutationLock
   alias CodingAgent.Tools.ACPFileBridge
@@ -50,6 +48,8 @@ defmodule CodingAgent.Tools.Patch do
   alias CodingAgent.Tools.LspDiagnostics
   alias CodingAgent.Tools.LspFormatter
   alias CodingAgent.Tools.PathHelpers
+  alias LemonAgent.Types.{AgentTool, AgentToolResult}
+  alias LemonAi.Types.TextContent
 
   import LemonAgent.Tools.AbortHelpers, only: [aborted?: 1, check_abort: 1]
 

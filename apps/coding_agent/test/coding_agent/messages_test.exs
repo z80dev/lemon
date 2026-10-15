@@ -4,18 +4,18 @@ defmodule CodingAgent.MessagesTest do
   alias CodingAgent.Messages
 
   alias CodingAgent.Messages.{
-    UserMessage,
     AssistantMessage,
-    ToolResultMessage,
     BashExecutionMessage,
-    CustomMessage,
     BranchSummaryMessage,
     CompactionSummaryMessage,
-    TextContent,
+    CustomMessage,
     ImageContent,
+    TextContent,
     ThinkingContent,
     ToolCall,
-    Usage
+    ToolResultMessage,
+    Usage,
+    UserMessage
   }
 
   describe "to_llm/1" do

@@ -37,6 +37,8 @@ defmodule CodingAgent.Compaction do
   alias CodingAgent.SessionManager
   alias CodingAgent.SessionManager.SessionEntry
   alias CodingAgent.Tools.Patch
+  alias LemonAi.Providers.Anthropic
+  alias LemonAi.Types.Context
 
   # ============================================================================
   # Constants
@@ -716,8 +718,8 @@ defmodule CodingAgent.Compaction do
 
     # Create context for summarization
     context =
-      LemonAi.Types.Context.new(system_prompt: system_prompt)
-      |> LemonAi.Types.Context.add_user_message(user_prompt)
+      Context.new(system_prompt: system_prompt)
+      |> Context.add_user_message(user_prompt)
 
     # Check abort again before API call
     if aborted?(signal) do
@@ -997,8 +999,8 @@ defmodule CodingAgent.Compaction do
     user_prompt = SecretObfuscator.obfuscate(Keyword.get(opts, :secret_obfuscator), user_prompt)
 
     context =
-      LemonAi.Types.Context.new(system_prompt: system_prompt)
-      |> LemonAi.Types.Context.add_user_message(user_prompt)
+      Context.new(system_prompt: system_prompt)
+      |> Context.add_user_message(user_prompt)
 
     if aborted?(signal) do
       {:error, :aborted}
@@ -1344,8 +1346,8 @@ defmodule CodingAgent.Compaction do
   def estimate_tool_definition_tokens(_tool), do: 0
 
   defp provider_request_message_limit(model) do
-    if function_exported?(LemonAi.Providers.Anthropic, :request_history_limit, 1) do
-      LemonAi.Providers.Anthropic.request_history_limit(model)
+    if function_exported?(Anthropic, :request_history_limit, 1) do
+      Anthropic.request_history_limit(model)
     else
       nil
     end

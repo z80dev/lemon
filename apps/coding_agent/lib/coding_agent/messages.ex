@@ -90,7 +90,7 @@ defmodule CodingAgent.Messages do
 
   defmodule UserMessage do
     @moduledoc "A message from the user"
-    alias CodingAgent.Messages.{TextContent, ImageContent}
+    alias CodingAgent.Messages.{ImageContent, TextContent}
 
     @type content :: String.t() | [TextContent.t() | ImageContent.t()]
     @type t :: %__MODULE__{
@@ -173,7 +173,7 @@ defmodule CodingAgent.Messages do
 
   defmodule CustomMessage do
     @moduledoc "Extension-defined custom message"
-    alias CodingAgent.Messages.{TextContent, ImageContent}
+    alias CodingAgent.Messages.{ImageContent, TextContent}
 
     @type content :: String.t() | [TextContent.t() | ImageContent.t()]
     @type t :: %__MODULE__{
