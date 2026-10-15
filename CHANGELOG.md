@@ -10,6 +10,7 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Lemon Bot
 
+- Apple clients recover from failed Bot loads and terminal closes, explain unavailable actions, preserve Preferences across pane switches, and confirm sign-out.
 - Web Settings adds Lemon instance details, live service/link/runtime measurements, owner-confirmed lifecycle controls and operation output, with direct recovery and About links.
 - Apple clients use plain-language errors with copyable details, clearer iPhone pairing labels, and status checks for unconfirmed actions without automatically resending them.
 - Web clients explain service, network, session and Lemon-link failures with live retry timing, real connection restart and owner recovery actions instead of silent sign-out or stuck disconnected screens.
@@ -30,6 +31,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   Changes apply from the next model call, including during running turns;
   correlated acknowledgements, refreshed snapshots and partial-application
   errors preserve truthful outcomes without rollback or automatic retries.
+- omp discovery includes sessions in kept managed Git worktrees, and resume
+  automatically reuses a validated worktree in the caller's repository with
+  conservative cleanup ownership restored.
+
 - omp task subagents expose bounded activity, tool counts, tokens/cost, model,
   duration, final output and retry errors in status and streamed progress.
   Owner-scoped `LemonOmp.subagent/3` and the `omp` tool's `subagent` action read
@@ -74,6 +79,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   follow-ups, cancellation, process cleanup, discovery and resume.
 
 ### Fixed
+
+- Keep omp worktree cleanup ownership until the Session monitor and pending
+  cleanup finish, even when ended-session cache eviction runs after an early
+  terminal snapshot.
 
 - Lemon Bot for iPhone keeps the composer and Send button above the keyboard,
   follows the latest message as the viewport resizes, and uses Return for a newline

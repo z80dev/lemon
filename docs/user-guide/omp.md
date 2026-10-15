@@ -188,10 +188,21 @@ It never force-removes dirty worktrees. Only Lemon-created worktrees are eligibl
 for automatic cleanup. Remove kept work manually with `git worktree remove <path>`
 and `git branch -d <branch>` once integrated.
 
-Resume uses the **given cwd**, not automatic worktree lookup by omp session id.
-To continue kept isolated work, pass its `worktree.path` as `cwd` when resuming,
-without `isolate`; this reuses the directory without claiming ownership or
-automatically deleting it on close. `isolate: true` always creates a fresh worktree.
+Resume from the main checkout or any worktree in the same repository: Lemon
+finds the stored session's recorded cwd and automatically reuses an existing,
+registered Lemon worktree. Its snapshot carries `worktree` metadata again, so
+the same conservative cleanup applies on close. Discovery includes these kept
+workers and their branch names. No arbitrary session-header path is trusted:
+the directory must be directly under this repository's managed worktree root
+and registered with Git on its matching `lemon-omp/…` branch.
+
+If the worktree was deleted or cannot be validated, resume uses the supplied
+`cwd` instead; the agent tool reports this fallback. `isolate: true` still
+explicitly creates a fresh worktree rather than reusing one. Discovery checks
+at most 32 managed worktrees and 2,000 filenames per candidate session directory,
+reading bounded headers/tails from at most twice the requested limit per workspace.
+If the original branch creation reflog is unavailable, the resumed snapshot's
+base is `null` and cleanup keeps the worktree rather than guessing its base.
 
 
 Elixir callers can use `LemonOmp.start_many(tasks, owner: owner)` and

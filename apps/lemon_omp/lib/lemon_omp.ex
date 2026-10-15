@@ -134,8 +134,8 @@ defmodule LemonOmp do
   requires `resume` and no prompt; it sends a fixed request to review state and
   finish unfinished work, not omp's interactive-only `--restore` or subagent
   recovery. Isolation creates a managed git worktree from HEAD, leaving changed
-  or committed work available on close. Resume uses the supplied cwd; use a kept
-  worktree's path to continue its work. Approval mode is `always-ask`, `write`
+  or committed work available on close. Resume finds registered kept Lemon
+  worktrees belonging to the cwd's repository. Approval mode is `always-ask`, `write`
   or `yolo`; omitting it keeps omp's configured mode. Returns once omp
   acknowledged the prompt, or once it is ready when resuming without one.
   """
@@ -219,7 +219,9 @@ defmodule LemonOmp do
   defp start_validated(params, executable, opts) do
     id = "omp_" <> Base.encode16(:crypto.strong_rand_bytes(6), case: :lower)
 
-    with {:ok, worktree} <- Worktree.create(params[:isolation], id) do
+    params = resolve_resume_worktree(params)
+
+    with {:ok, worktree} <- resume_or_create_worktree(params, id) do
       case start_in_worktree(params, executable, opts, id, worktree) do
         {:error, reason} = error when reason not in [:outcome_unknown] ->
           # Admission/spawn can fail before a Session owns cleanup.
@@ -229,6 +231,39 @@ defmodule LemonOmp do
         result ->
           result
       end
+    end
+  end
+
+  defp resolve_resume_worktree(params) do
+    if params[:resume] && is_nil(params[:isolation]) do
+      matches =
+        case SessionFiles.discover(params[:cwd], limit: 100) do
+          {:ok, sessions} ->
+            Enum.filter(sessions, &String.starts_with?(&1["ompSessionId"], params[:resume]))
+
+          _ ->
+            []
+        end
+
+      case matches do
+        [%{"worktree" => %{"path" => path}}] ->
+          case Enum.find(Worktree.kept(params[:cwd]), &(&1.path == path)) do
+            nil -> params
+            worktree -> Keyword.put(params, :resumed_worktree, worktree)
+          end
+
+        _ ->
+          params
+      end
+    else
+      params
+    end
+  end
+
+  defp resume_or_create_worktree(params, id) do
+    case params[:resumed_worktree] do
+      nil -> Worktree.create(params[:isolation], id)
+      worktree -> {:ok, worktree}
     end
   end
 

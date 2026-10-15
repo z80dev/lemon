@@ -35,6 +35,9 @@ struct BotLifecycleView: View {
                     SwiftUI.Section("Destination") {
                         if operation != "move" { TextField("New Bot name", text: $name) }
                         Picker("Online machine", selection: $machineID) { Text("Choose machine").tag(""); ForEach(store.machines.filter { $0.status == "online" && (operation != "move" || $0.id != bot.machineId) }) { machine in Text(machine.name).tag(machine.id) } }
+                        if !store.machines.contains(where: { $0.status == "online" && (operation != "move" || $0.id != bot.machineId) }) {
+                            Text(operation == "move" ? "No other machine is online to move to." : "No machine is online. Start one of your machines, then come back.").font(LBFont.meta).foregroundStyle(LB.warning)
+                        }
                         Toggle("I accept shared host files, browser sessions and CLI credentials", isOn: $sharedHostConsent)
                     }
                 }

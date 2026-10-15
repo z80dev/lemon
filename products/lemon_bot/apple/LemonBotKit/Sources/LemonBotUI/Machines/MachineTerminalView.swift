@@ -78,10 +78,21 @@ public struct MachineTerminalView: View {
                 NativeTerminalSurface(session: session, frames: store.terminalFrames[terminal.id] ?? [], gap: store.terminalGaps[terminal.id])
                     .id(terminal.id).frame(minHeight: 300).disabled(terminal.state != "open" || session.inputFenced || store.connectionState != "online" || store.terminalExitFrames[terminal.id] != nil)
                 HStack {
-                    Button("Reattach / reconcile") { Task { await action.perform(readOnly: true) { try await session.subscribe() } } }
+                    Button("Check shell status") { Task {
+                        await action.checkStatus(store) { try await session.subscribe() }
+                        if !action.uncertain { session.inputFenced = session.terminal?.state != "open" }
+                    } }
                     Button("Close shell", role: .destructive) { Task { await action.perform {
+                        let wasFenced = session.inputFenced
                         session.inputFenced = true
-                        session.terminal = try await store.mutate("DELETE", "/terminals/\(hubID(terminal.id))", body: [:])
+                        do { session.terminal = try await store.mutate("DELETE", "/terminals/\(hubID(terminal.id))", body: [:]) }
+                        catch {
+                            var unconfirmed = (error as? BackendError)?.failure.code == "outcome_unknown"
+                            if case ClientError.outcomeUnknown = error { unconfirmed = true }
+                            if case ClientError.unresolvedMutation = error { unconfirmed = true }
+                            session.inputFenced = wasFenced || unconfirmed
+                            throw error
+                        }
                     } } }.disabled(terminal.state != "open" || action.busy || action.uncertain || store.connectionState != "online")
                 }
                 if terminal.state == "closed" || store.terminalExitFrames[terminal.id] != nil {

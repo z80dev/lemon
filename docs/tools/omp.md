@@ -77,9 +77,11 @@ Isolated workers run in `<git common dir>/lemon-omp-worktrees/<id>` on branch
 Closing removes only worktrees with no uncommitted changes and no new commits;
 others remain available with `worktree.kept`, `dirty` and `commits` counts
 (`null` if Git could not determine a count within the cleanup budget). Inspect
-and commit uncommitted work before merging. Resume uses the supplied `cwd`;
-to reuse kept work, pass its path without `isolate`. See
-[Parallel workers](../user-guide/omp.md#parallel-workers).
+and commit uncommitted work before merging. Resume automatically reuses an
+existing registered kept Lemon worktree belonging to the supplied cwd's repo;
+otherwise it uses cwd and reports the fallback. Discovery includes kept worker
+sessions and their branch names. Resumed worktrees receive the same conservative
+cleanup as isolated starts. See [Parallel workers](../user-guide/omp.md#parallel-workers).
 
 ## Scope and trust
 
@@ -101,7 +103,8 @@ Multi-worker results include combined `usage`; `start_many` also includes
 `errors` with a zero-based task index and safe error message. The session
 object is the same snapshot the control plane returns
 from `omp.sessions.get`: `id`, `ompSessionId`, `title`, `cwd`, `model`,
-`worktree` (null or `path`, `branch`, `base` short SHA, `repo` main checkout root;
+`worktree` (null or `path`, `branch`, `base` short SHA or null when the original
+creation reflog is unavailable, `repo` main checkout root;
 after cleanup also `kept`, `dirty`, `commits`),
 `thinking`, `approvalMode` (the requested override, or `null` for omp's own
 configured mode), `status`, `lastTurn`, `activity`, `activeTools`, `recentTools`,

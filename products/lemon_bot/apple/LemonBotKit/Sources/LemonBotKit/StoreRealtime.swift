@@ -133,6 +133,7 @@ extension LemonBotStore {
             for id in terminalSubscriptions {
                 try await sendSocket(.terminalSubscribe(RealtimeClientFrameTerminalSubscribe(terminalId: id, afterSeq: terminalSequences[id] ?? 0)), on: socket)
             }
+            scheduleMessageReconciliation()
         case .watermark(let value): try await advanceCursor(value.cursor, on: socket)
         case .error(let value):
             if value.error.code == "cursor_expired" {
@@ -189,7 +190,8 @@ extension LemonBotStore {
     }
     func advanceCursor(_ value: Cursor, on socket: URLSessionWebSocketTask) async throws {
         try commitCursor(value)
-        try await sendSocket(.ack(RealtimeClientFrameAck(cursor: cursor)), on: socket)
+        // HTTP sync may have a newer global watermark; ACK only what this socket delivered.
+        try await sendSocket(.ack(RealtimeClientFrameAck(cursor: value)), on: socket)
     }
     func commitCursor(_ value: Cursor) throws {
         let normalized = try WorkspaceCursor.normalized(value)
@@ -234,7 +236,9 @@ extension LemonBotStore {
             // Retain current local edits; cross-device server changes only replace an untouched local draft.
             if drafts[value.conversationId] == nil { drafts[value.conversationId] = LocalComposerDraft(text: value.text, attachmentIDs: value.attachmentIds, replyToEntryID: value.replyToEntryId, revision: value.revision) }
             if let account, let draft = drafts[value.conversationId] { try persistence.saveDraft(draft, conversationID: value.conversationId, accountID: account.id) }
-        case .entryUpserted(let value): upsertEntry(value)
+        case .entryUpserted(let value):
+            upsertEntry(value)
+            if let nonce = value.clientNonce { scheduleMessageReconciliation(clientNonce: nonce) }
         case .entryDeleted(let value): entries[value.conversationId]?.removeAll { $0.id == value.id }
         case .entryDelta(let delta):
             if let index = entries[delta.conversationId]?.firstIndex(where: { $0.id == delta.entryId }),
@@ -246,7 +250,9 @@ extension LemonBotStore {
                 guard authoritative.conversationId == delta.conversationId, authoritative.runId == delta.runId else { throw ClientError.invalidFrame }
                 upsertEntry(authoritative)
             }
-        case .runUpserted(let value): upsert(&runs, value, id: { $0.id }, revision: { $0.revision })
+        case .runUpserted(let value):
+            upsert(&runs, value, id: { $0.id }, revision: { $0.revision })
+            scheduleMessageReconciliation(clientNonce: value.clientNonce)
         case .notificationUpserted(let value): upsert(&notifications, value, id: { $0.id }, revision: { $0.revision })
         case .notificationDeleted(let value): notifications.removeAll { $0.id == value.id }
         case .voiceUpserted(let value): if value.userId == user?.id { voiceSession = value }
