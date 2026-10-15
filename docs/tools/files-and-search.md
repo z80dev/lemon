@@ -6,6 +6,19 @@ selectors, SQLite views and search paging; snapshot-anchored edits and rich
 reads (archives, PDFs, notebooks, images) are described in the
 [coding_agent README](../../apps/coding_agent/README.md#built-in-tools).
 
+## Session internal URLs
+
+`local://name` stores a scratch file beneath the session artifact directory.
+Use it with `read`, `write`, or as a whole shell word in `bash`. Names are single
+path segments; traversal and symlinks are rejected. Scratch files are per-session,
+not shared automatically with child sessions.
+
+`read proc://` lists up to 200 processes owned by the current session.
+`read proc://<id>` returns status and recent output without consuming the
+`bash_output` cursor. `write proc://<id>` sends `content` verbatim to stdin;
+`write proc://<id>/kill` sends SIGTERM with the normal kill-process fallback.
+Foreign process IDs are not accessible.
+
 ## Read line selectors
 
 `read` pages text with `offset`/`limit`, or with a selector appended to `path`:
