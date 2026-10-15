@@ -8,7 +8,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
-No unreleased changes yet.
+- TUI omp delegates support redirect, interrupted-session continuation, approval
+  mode and isolated starts; the typed control-plane client exposes batch starts,
+  model discovery, configuration and subagent transcripts.
 
 ---
 

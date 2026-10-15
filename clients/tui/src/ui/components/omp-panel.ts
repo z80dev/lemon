@@ -66,6 +66,8 @@ export interface OmpPanelHost {
 	onRefresh(): void;
 	onDiscover(): void;
 	onResume(row: OmpDiscoveredSession): void;
+	onContinue?(row: OmpDiscoveredSession): void;
+	onConfigure?(session: OmpSession): void;
 	now?: () => number;
 }
 
@@ -211,6 +213,9 @@ export class OmpPanelComponent implements Component {
 			return;
 		}
 		switch (data) {
+			case "m":
+				if (this.selected) this.#host.onConfigure?.(this.selected);
+				return;
 			case "r":
 				this.#host.onRefresh();
 				return;
@@ -219,7 +224,8 @@ export class OmpPanelComponent implements Component {
 				return;
 			case "s":
 			case "f":
-				this.#openPrompt(data === "s" ? "steer" : "followUp");
+			case "R":
+				this.#openPrompt(data === "s" ? "steer" : data === "R" ? "redirect" : "followUp");
 				return;
 			case "c":
 			case "x": {
@@ -322,6 +328,10 @@ export class OmpPanelComponent implements Component {
 		} else if (matchesKey(data, "enter")) {
 			const row = this.selectedDiscovered;
 			if (row) this.#host.onResume(row);
+			return;
+		} else if (data === "C") {
+			const row = this.selectedDiscovered;
+			if (row?.interrupted) this.#host.onContinue?.(row);
 			return;
 		} else if (data === "r") {
 			this.#host.onDiscover();
@@ -602,7 +612,8 @@ export class OmpPanelComponent implements Component {
 	#promptLine(): { label: string; text: string; sending: boolean } | undefined {
 		const prompt = this.#prompt;
 		if (!prompt) return undefined;
-		const verb = prompt.mode === "steer" ? "steer" : "follow-up";
+		const verb =
+			prompt.mode === "steer" ? "steer" : prompt.mode === "redirect" ? "redirect" : "follow-up";
 		return {
 			label: `${verb} ${prompt.sessionId}${prompt.sending ? " (sending…)" : ""} › `,
 			text: prompt.text,
@@ -612,9 +623,10 @@ export class OmpPanelComponent implements Component {
 
 	#hint(): string {
 		if (this.#prompt) return "enter sends · esc cancels · ctrl+u clears";
-		if (this.#mode === "discover") return "↑↓ select · enter resumes here · r rescan · esc back";
+		if (this.#mode === "discover")
+			return "SOURCE · ↑↓ select · enter resumes · C continue interrupted · r rescan · esc back";
 		const back = this.#mode === "detail" ? "enter list · ↑↓ scroll" : "↑↓ select · enter detail";
-		return `${back} · s steer · f follow-up · c cancel turn · x close · r refresh · d resume… · esc close`;
+		return `${back} · s steer · f follow-up · R redirect · m model · c cancel turn · x close · r refresh · d resume… · esc close`;
 	}
 }
 
@@ -648,6 +660,9 @@ export function formatElapsed(ms: number): string {
 function discoveredFacts(row: OmpDiscoveredSession, now: number): string {
 	const updated = row.updatedAt ?? row.createdAt;
 	return [
+		`SOURCE ${row.source ?? "unknown"}`,
+		row.interrupted ? "⚠ interrupted" : undefined,
+		row.worktree?.branch ? `worktree ${safeLine(row.worktree.branch)}` : undefined,
 		safeLine(row.lastStatus, 20),
 		updated != null ? `${formatElapsed(Math.max(0, now - updated))} ago` : undefined,
 		row.model ? safeLine(row.model, 40) : undefined,
