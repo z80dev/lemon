@@ -5,6 +5,7 @@
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { reportedContextFixture } from "../../src/dev/fixtures/context-fixtures.ts";
+import type { RunsRecentListResult } from "../../src/protocol/types.ts";
 import { initTheme, resetTheme } from "../../src/ui/theme/theme.ts";
 import { invalidateThemeAdapters } from "../../src/ui/theme/tui-adapters.ts";
 import { createHarness, type Harness } from "../helpers/command-harness.ts";
@@ -417,6 +418,83 @@ describe("runs and goals", () => {
 		expect(harness.host.text).toContain("2.5s");
 	});
 
+	test("/runs shows crashed history with reported error, usage, cost and model", async () => {
+		const recent: RunsRecentListResult = {
+			runs: [
+				{
+					runId: "run-crashed",
+					status: "crashed",
+					error: "execution process exited",
+					tokens: { input: 120, output: 30, total: 150 },
+					costUsd: 0.0045,
+					priceKnown: true,
+					model: "test-model",
+					provider: "test-provider",
+				},
+			],
+		};
+		harness.server.respondWith("runs.active.list", { runs: [] });
+		harness.server.respondWith("runs.recent.list", recent);
+
+		await harness.run("/runs");
+
+		expect(harness.host.text).toContain("run-crashed · crashed");
+		expect(harness.host.text).toContain("error: execution process exited");
+		expect(harness.host.text).toContain("tokens 120 in / 30 out / 150 total");
+		expect(harness.host.text).toContain("cost $0.0045");
+		expect(harness.host.text).toContain("model test-provider:test-model");
+	});
+
+	test.each([
+		{},
+		{ error: null, tokens: null, costUsd: null, priceKnown: null, model: null, provider: null },
+	])("/runs omits unavailable history details (%j)", async (details) => {
+		harness.server.respondWith("runs.active.list", { runs: [] });
+		harness.server.respondWith("runs.recent.list", {
+			runs: [{ runId: "run-legacy", status: "ok", ...details }],
+		});
+
+		await harness.run("/runs");
+
+		expect(harness.host.text).toContain("run-legacy · ok");
+		for (const label of [
+			"error:",
+			"tokens ",
+			"cost ",
+			"model ",
+			"provider ",
+			"null",
+			"undefined",
+		]) {
+			expect(harness.host.text).not.toContain(label);
+		}
+	});
+
+	test("/runs preserves zero usage and distinguishes unknown pricing from free", async () => {
+		harness.server.respondWith("runs.active.list", { runs: [] });
+		harness.server.respondWith("runs.recent.list", {
+			runs: [
+				{
+					runId: "run-free",
+					status: "ok",
+					tokens: { input: 0, output: 0, total: 0 },
+					costUsd: 0,
+					priceKnown: true,
+					model: "local-model",
+				},
+				{ runId: "run-unpriced", status: "error", costUsd: 0, priceKnown: false },
+			],
+		});
+
+		await harness.run("/runs");
+
+		expect(harness.host.text).toContain(
+			"run-free · ok · model local-model · tokens 0 in / 0 out / 0 total · cost $0",
+		);
+		expect(harness.host.text).toContain("run-unpriced · error · cost unknown");
+		expect(harness.host.text).not.toContain("run-unpriced · error · cost $0");
+	});
+
 	test("/goal set sends the whole objective", async () => {
 		harness.server.respondWith("goal.set", { id: "goal-1", status: "active" });
 		await harness.run("/goal set ship the release today");
@@ -813,12 +891,18 @@ describe("client-local commands", () => {
 					description: "queue work",
 					aliases: ["/q"],
 				},
+				{
+					name: "file",
+					description: "channel-only file operations",
+					surfaces: ["telegram", "discord"],
+				},
 			],
 		});
 		await harness.run("/commands");
 		expect(harness.host.text).toContain("daemon catalog");
 		expect(harness.host.text).toContain("/queue <prompt>");
 		expect(harness.host.text).toContain("aliases: /q");
+		expect(harness.host.text).not.toContain("channel-only file operations");
 	});
 
 	test("/reconnect asks the client to redial", async () => {

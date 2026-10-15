@@ -60,6 +60,15 @@ ready, it opens this setup flow before starting the daemon. If no controlling
 terminal is available, it does not start an unconfigured daemon; run `lemon
 setup` later from an interactive terminal.
 
+An existing scaffold alone does not count as ready: an interrupted provider
+setup is offered again on the next interactive launch. This check is offline.
+Local presets such as Ollama and custom endpoints with `auth = "none"` do not
+need an API key to pass provider readiness; secure secrets setup remains a
+separate step.
+Provider credentials exported through recognized environment variables (for
+example `ANTHROPIC_API_KEY` or `OPENAI_API_KEY`) also satisfy offline readiness,
+even without a secret reference in the config.
+
 The browser is also fail-closed. `lemon web` may start before setup is complete
 so the page can explain what is missing, but the page disables prompts and
 uploads until config, secure secrets, and a usable provider/model are all
@@ -229,12 +238,53 @@ the daily brief, and other scheduled results created outside a chat are sent
 there. In a paired chat, `/remind <when> <what>` sets a reminder. See
 [Reminders, heartbeats, and the daily brief](reminders-and-heartbeats.md).
 
+### Images in Telegram and Discord
+
+Send a Telegram photo or a document with an `image/*` MIME type to give a
+vision-capable model the image itself, not just an attachment link. Captions
+remain the prompt; a photo without a caption uses `[image]`. For Telegram
+photos, Lemon selects the largest available dimensions whose declared size
+fits the limit.
+
+Discord image attachments are fetched only over HTTPS from
+`cdn.discordapp.com` or `media.discordapp.net`; redirects are not followed.
+Attachment URLs remain in the prompt, including non-image files and images
+that could not be fetched.
+
+Image input uses fixed safety limits: **5 MiB per image** and **four images per
+message/submission**. Downloads stop at the byte limit. Failed or oversized
+images leave the text intact and add a short image-unavailable note; they do
+not stop the message from being submitted. Telegram messages combined by the
+debounce buffer share the four-image limit. Group mention/reply rules still
+apply. Existing Telegram `/file put` and configured file auto-put workflows
+keep their file-transfer behavior (upload-only mode does not start a model
+run). The selected model must support image input.
+
 Inspect redacted channel configuration (enabled state, credentials, binding and
 allowlist counts, registered transports) with:
 
 ```bash
 lemon channels
 ```
+
+### Channel commands
+
+Send `/help` or `/commands` in the bot conversation to see commands accepted by
+that platform, including aliases. Telegram also populates the bot's `/` menu at
+startup from the same catalog. Admin-only controls are excluded from the public
+menu; a menu entry does not bypass chat authorization or command permissions.
+If Telegram rejects menu registration, the transport still starts and typed
+commands remain available.
+
+Both Telegram and Discord support `/model`, `/resume`, `/file`, `/checkpoint`,
+`/rollback`, `/goal`, `/kanban`, and `/media`, alongside `/queue`, `/steer`,
+`/status`, `/usage`, `/agents`, `/compress`, `/bg`, and `/btw`.
+Use `/new` on Telegram or `/session new` on Discord to start fresh; `/reset`
+works on both. `/cancel` and `/stop` cancel the active run.
+Telegram additionally offers `/whoami`, `/remind`, `/reminders`, and `/unremind`.
+Discord offers `/lemon <prompt>`, `/session info`, and `/redirect <correction>`.
+These lists describe discovery only: existing authorization and command behavior
+are unchanged.
 
 ## Source development
 

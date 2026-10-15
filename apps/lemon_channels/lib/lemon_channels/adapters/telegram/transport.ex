@@ -134,6 +134,21 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
 
           log_authorization_mode(state)
           maybe_subscribe_exec_approvals()
+
+          _ =
+            start_async_task(state, fn ->
+              try do
+                case api_mod.set_my_commands(token, LemonChannels.CommandCatalog.telegram_menu()) do
+                  {:ok, _} -> :ok
+                  _ -> Logger.warning("Telegram command menu registration failed")
+                end
+              rescue
+                _ -> Logger.warning("Telegram command menu registration failed")
+              catch
+                _, _ -> Logger.warning("Telegram command menu registration failed")
+              end
+            end)
+
           send(self(), :poll)
           {:ok, state}
 
@@ -1436,6 +1451,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
       {command, args} = Commands.portable_command_parts(inbound.message.text || "")
 
       context = %{
+        surface: "telegram",
         session_key: session_key,
         cwd: BindingResolver.resolve_cwd(scope),
         model: inbound.meta[:model],

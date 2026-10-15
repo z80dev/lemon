@@ -25,6 +25,15 @@ defmodule LemonChannels.Telegram.API do
     request(token, "getMe", %{}, @default_timeout)
   end
 
+  def set_my_commands(token, commands) when is_list(commands) do
+    request(
+      token,
+      "setMyCommands",
+      %{"commands" => commands, "scope" => %{"type" => "default"}},
+      @default_timeout
+    )
+  end
+
   def delete_webhook(token, opts \\ %{}) do
     opts = if is_map(opts), do: opts, else: Enum.into(opts, %{})
 
@@ -185,6 +194,13 @@ defmodule LemonChannels.Telegram.API do
   def get_file(token, file_id) when is_binary(file_id) do
     params = %{"file_id" => file_id}
     request(token, "getFile", params, @default_timeout)
+  end
+
+  def download_file(token, file_path, max_bytes) when is_binary(file_path) do
+    LemonChannels.ImageDownload.download(
+      "https://api.telegram.org/file/bot#{token}/#{file_path}",
+      max_bytes
+    )
   end
 
   def download_file(token, file_path) when is_binary(file_path) do

@@ -413,7 +413,12 @@ defmodule LemonAi.Providers.Anthropic do
         retry_delay =
           if RetryHelper.retry_allowed?(attempt, policy) and
                retryable_http_response?(response, initial_state.model) do
-            RetryHelper.http_retry_delay_ms(attempt, response.headers, policy)
+            RetryHelper.http_retry_delay_ms(
+              attempt,
+              response.headers,
+              policy,
+              {:http_error, status, response.body}
+            )
           else
             :give_up
           end

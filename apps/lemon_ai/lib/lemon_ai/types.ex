@@ -332,6 +332,9 @@ defmodule LemonAi.Types do
     `provider_retry` overrides the local HTTP retry policy for this request.
     `LemonAi.complete/3` sets one HTTP attempt because its oneshot policy owns
     the total attempt budget; ordinary streams retain the provider defaults.
+    Provider fallback sets `provider_retry.alternate_available` when an untried
+    healthy candidate exists. Rate limits then surface without in-provider sleeps;
+    other failures and single-candidate retry behavior are unchanged.
 
     `api_key_authoritative` marks caller-resolved credential authority. A missing
     or empty key then fails before provider fallback or HTTP, even on a keyless

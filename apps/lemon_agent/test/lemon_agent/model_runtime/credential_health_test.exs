@@ -81,6 +81,30 @@ defmodule LemonAgent.ModelRuntime.CredentialHealthTest do
     assert until_ms - System.monotonic_time(:millisecond) > 5_000
   end
 
+  test "quota exhaustion has a long capped cooldown and honors longer hints" do
+    for {attempt, expected} <- [{1, 900_000}, {2, 1_800_000}, {3, 3_600_000}, {4, 3_600_000}] do
+      before = System.monotonic_time(:millisecond)
+
+      CredentialHealth.record_failure(:openai, "quota", :rate_limit,
+        quota_exhausted: true,
+        retry_after_ms: 10
+      )
+
+      deadline = CredentialHealth.cooldown_until(:openai, "quota")
+      assert deadline >= before + expected, "attempt #{attempt}"
+      assert deadline <= System.monotonic_time(:millisecond) + expected
+    end
+
+    before = System.monotonic_time(:millisecond)
+
+    CredentialHealth.record_failure(:openai, "long", :rate_limit,
+      quota_exhausted: true,
+      retry_after_ms: 7_200_000
+    )
+
+    assert CredentialHealth.cooldown_until(:openai, "long") >= before + 7_200_000
+  end
+
   test "success resets the backoff progression" do
     CredentialHealth.record_failure(:openai, "default", :transient)
     CredentialHealth.record_failure(:openai, "default", :transient)

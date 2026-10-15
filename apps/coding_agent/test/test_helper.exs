@@ -14,6 +14,11 @@ exclude_tags =
   if System.find_executable("python3"), do: exclude_tags, else: [:python3 | exclude_tags]
 
 exclude_tags =
+  if System.find_executable("rsvg-convert"),
+    do: exclude_tags,
+    else: [:rsvg_convert | exclude_tags]
+
+exclude_tags =
   case {
     CodingAgent.Debug.Adapters.select_launch("/x/a.c", "/", "lldb-dap", :file),
     System.find_executable("clang") || System.find_executable("cc")

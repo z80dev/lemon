@@ -105,6 +105,14 @@ the existing router, session, task, and control-plane owners. In particular,
 Lemon `/stop` means cancelling the active conversation run, not killing every
 runtime process.
 
+Catalog entries include `surfaces`; `CommandCatalog.catalog("telegram")` and
+`catalog("discord")` return only that platform's accepted commands and aliases.
+Channel `/help` and `/commands` use this scoped view, including native model,
+resume, file, checkpoint, and goal commands. Telegram startup asynchronously
+registers `CommandCatalog.telegram_menu()` with Bot API `setMyCommands` in the
+default scope, excluding admin-only controls. Registration failures are logged
+without preventing polling or typed commands.
+
 Telegram and Discord execute the portable information/session commands through
 `LemonChannels.PortableCommand`. Queue and steer remain router-owned submission
 modes; reset/reasoning/stop reuse the native new/thinking/cancel handlers;

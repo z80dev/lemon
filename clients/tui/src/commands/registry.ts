@@ -62,6 +62,8 @@ export interface CommandHost {
 	notice(text: string, level?: NoticeLevel, compaction?: CompactionDetails): void;
 	/** Append a multi-line notice; continuation lines are indented for reading. */
 	noticeBlock(lines: string[], level?: NoticeLevel): void;
+	/** Copy without exposing the text in notices or diagnostics. */
+	copyText?(text: string): Promise<void>;
 	/** Drop every transcript block and clear native scrollback. */
 	clearTranscript(): void;
 	requestExit(code: number): void;

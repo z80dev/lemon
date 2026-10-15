@@ -2,6 +2,7 @@ defmodule LemonAi.ErrorFailoverTest do
   use ExUnit.Case, async: true
 
   alias LemonAi.Error
+  alias LemonAi.Providers.RetryHelper
   alias LemonAi.Types.{AssistantMessage, Usage}
 
   defp stream_error_event(error_message) do
@@ -125,6 +126,26 @@ defmodule LemonAi.ErrorFailoverTest do
       assert Error.classify("Authentication failed (HTTP 401): bad key") == :auth
       assert Error.classify("Server error (HTTP 500)") == :server
       assert Error.classify("HTTP 400: no thanks") == :client
+    end
+
+    test "missing local API keys remain credential failures through stream terminals" do
+      for text <- [
+            "No API key provided for Anthropic. Set ANTHROPIC_API_KEY or pass api_key in options.",
+            "No API key provided for Kimi. Set KIMI_API_KEY (or MOONSHOT_API_KEY) or pass api_key in options.",
+            "No API key provided for provider together. Configure an API key for it.",
+            "OpenAI API key is required. Set OPENAI_API_KEY environment variable or pass it as an argument.",
+            "OpenCode API key is required. Set OPENCODE_API_KEY environment variable or pass it as an argument."
+          ] do
+        event = stream_error_event(text)
+        {:error, :error, message} = event
+
+        for error <- [text, message, event, %RuntimeError{message: text}] do
+          assert Error.classify(error) == :auth
+          assert Error.failover_action(error) == :next_credential
+          refute Error.retryable?(error)
+          refute Error.stream_terminal_breaker_failure?(error)
+        end
+      end
     end
 
     test "unknown for unclassifiable terms" do
@@ -316,7 +337,7 @@ defmodule LemonAi.ErrorFailoverTest do
           error <- [reason, {:error, reason}, %Req.TransportError{reason: reason}] do
         assert Error.classify(error) == :transient
         assert Error.retryable?(error)
-        assert LemonAi.Providers.RetryHelper.retryable_transport_error?(error)
+        assert RetryHelper.retryable_transport_error?(error)
       end
 
       for error <- [
@@ -327,7 +348,7 @@ defmodule LemonAi.ErrorFailoverTest do
           ] do
         assert Error.classify(error) == :unknown
         refute Error.retryable?(error)
-        refute LemonAi.Providers.RetryHelper.retryable_transport_error?(error)
+        refute RetryHelper.retryable_transport_error?(error)
       end
     end
   end
@@ -419,16 +440,16 @@ defmodule LemonAi.ErrorFailoverTest do
   describe "transport_retry_statuses/0" do
     test "RetryHelper sources its default set from Error" do
       for status <- Error.transport_retry_statuses() do
-        assert LemonAi.Providers.RetryHelper.retryable_http_status?(status)
+        assert RetryHelper.retryable_http_status?(status)
       end
 
-      refute LemonAi.Providers.RetryHelper.retryable_http_status?(400)
-      refute LemonAi.Providers.RetryHelper.retryable_http_status?(401)
+      refute RetryHelper.retryable_http_status?(400)
+      refute RetryHelper.retryable_http_status?(401)
     end
 
     test "Anthropic overloaded (529) and rate limits (429) retry in place" do
-      assert LemonAi.Providers.RetryHelper.retryable_http_status?(529)
-      assert LemonAi.Providers.RetryHelper.retryable_http_status?(429)
+      assert RetryHelper.retryable_http_status?(529)
+      assert RetryHelper.retryable_http_status?(429)
     end
   end
 end

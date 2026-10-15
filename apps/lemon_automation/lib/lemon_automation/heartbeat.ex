@@ -55,13 +55,18 @@ defmodule LemonAutomation.Heartbeat do
   def healthy_response?(_response), do: false
 
   @doc """
-  Heartbeat delivery policy for a terminal run. Returns the (possibly
-  suppressed) run and whether it should be delivered. Non-heartbeat jobs pass
-  through unchanged.
+  Delivery policy for a terminal run. Completed prompt jobs may reply with
+  exactly `[SILENT]` (trimmed) to suppress delivery. Heartbeats additionally
+  recognize `HEARTBEAT_OK`. Failures are never suppressed here.
   """
   @spec apply_policy(CronJob.t() | nil, CronRun.t()) :: {CronRun.t(), boolean()}
   def apply_policy(%CronJob{} = job, %CronRun{} = run) do
     cond do
+      silent_prompt?(job, run) ->
+        run = CronRun.suppress(run)
+        if heartbeat?(job), do: Events.emit_heartbeat_suppressed(run, job)
+        {run, false}
+
       not heartbeat?(job) ->
         {run, true}
 
@@ -77,6 +82,12 @@ defmodule LemonAutomation.Heartbeat do
   end
 
   def apply_policy(_job, %CronRun{} = run), do: {run, true}
+
+  defp silent_prompt?(job, %CronRun{status: :completed, output: output})
+       when is_binary(output),
+       do: CronJob.execution_mode(job) == :agent and String.trim(output) == "[SILENT]"
+
+  defp silent_prompt?(_job, _run), do: false
 
   @doc "Stable id of the daily brief job."
   @spec daily_brief_id() :: String.t()

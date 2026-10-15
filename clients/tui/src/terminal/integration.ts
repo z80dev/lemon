@@ -15,6 +15,7 @@ export class TerminalIntegration {
 	readonly #disposers: Array<() => void> = [];
 	readonly #runs = new Set<string>();
 	readonly #approvals = new Set<string>();
+	readonly #questions = new Set<string>();
 	readonly #outcomes = new Map<string, "done" | "error" | "idle">();
 	readonly #cwd: string;
 	readonly #beforeStatusChange: (() => void) | undefined;
@@ -61,6 +62,17 @@ export class TerminalIntegration {
 					if (this.#approvals.has(id)) continue;
 					this.#approvals.add(id);
 					this.#notify("Approval needed", "A tool is waiting for your decision");
+				}
+				this.update();
+			}),
+			this.#store.events.on("prompts-changed", () => {
+				for (const id of this.#questions) {
+					if (!this.#store.userPrompts.has(id)) this.#questions.delete(id);
+				}
+				for (const id of this.#store.userPrompts.keys()) {
+					if (this.#questions.has(id)) continue;
+					this.#questions.add(id);
+					this.#notify("Question waiting", "Return to Lemon to answer");
 				}
 				this.update();
 			}),
@@ -148,11 +160,13 @@ export class TerminalIntegration {
 		const status =
 			store.pendingApprovals > 0
 				? "approval needed"
-				: store.connection !== "online"
-					? store.connection
-					: store.busySessions() > 0
-						? "working"
-						: "ready";
+				: store.userPrompts.size > 0
+					? "question waiting"
+					: store.connection !== "online"
+						? store.connection
+						: store.busySessions() > 0
+							? "working"
+							: "ready";
 		if (status !== this.#status) this.#beforeStatusChange?.();
 		const session = oscText(store.focusedKey);
 		const name = oscText(store.focused.title ?? store.focusedKey);
@@ -173,11 +187,13 @@ export class TerminalIntegration {
 			const state =
 				status === "approval needed"
 					? "blocked:kind=permission"
-					: status === "working"
-						? "working"
-						: status === "ready"
-							? (this.#outcomes.get(store.focusedKey) ?? "idle")
-							: "idle";
+					: status === "question waiting"
+						? "blocked:kind=question"
+						: status === "working"
+							? "working"
+							: status === "ready"
+								? (this.#outcomes.get(store.focusedKey) ?? "idle")
+								: "idle";
 			const programStatus = `state=${state}:app=lemon`;
 			if (programStatus !== this.#programStatus) {
 				this.#terminal.write(`\x1b]7501;${programStatus}\x1b\\`);
@@ -197,6 +213,7 @@ export class TerminalIntegration {
 		for (const dispose of this.#disposers.splice(0)) dispose();
 		this.#runs.clear();
 		this.#approvals.clear();
+		this.#questions.clear();
 		this.#outcomes.clear();
 		TERMINAL.hyperlinks = this.#previousHyperlinks;
 	}
@@ -208,6 +225,10 @@ export class TerminalIntegration {
 
 	#notify(title: string, body: string): void {
 		if (!this.#active) return;
+		if (this.capabilities.notifications === "bell") {
+			this.#terminal.write("\x07");
+			return;
+		}
 		// Tern's program-status protocol already owns the inbox and banners.
 		if (this.capabilities.tern) return;
 		if (this.capabilities.notifications === "osc9") {
