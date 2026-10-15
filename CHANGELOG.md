@@ -8,6 +8,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
+- Emit content-free tool-call start/stop/exception telemetry with native-unit
+  duration, tool name, error outcome and timeout flag, including failed workers.
+
 - Opt-in model `checkpoint(goal)` / `rewind(report)` retain exploration findings
   as branch context without restoring files or prompting for confirmation.
   Enable `[runtime.tools.checkpoint] enabled = true` (default off). The former

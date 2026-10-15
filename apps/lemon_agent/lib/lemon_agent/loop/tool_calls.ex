@@ -127,6 +127,7 @@ defmodule LemonAgent.Loop.ToolCalls do
                                                                           {ctx, messages,
                                                                            collected} ->
             {result, is_error} = aborted_task_result(pending)
+            tool_call_finish(pending.tool_call.name, pending.started_at, result, is_error)
 
             LemonCore.Telemetry.emit(
               [:lemon_agent, :tool_task, :end],
@@ -225,6 +226,9 @@ defmodule LemonAgent.Loop.ToolCalls do
 
               {:tool_task_result, ref, tool_call, result, is_error} ->
                 if Map.has_key?(pending_by_ref, ref) do
+                  pending = Map.fetch!(pending_by_ref, ref)
+                  tool_call_finish(tool_call.name, pending.started_at, result, is_error)
+
                   {pending_by_ref, pending_by_mon} =
                     drop_pending_task(pending_by_ref, pending_by_mon, ref)
 
@@ -256,7 +260,9 @@ defmodule LemonAgent.Loop.ToolCalls do
                     {context, new_messages, pending_by_ref, pending_by_mon, results}
 
                   ref ->
-                    %{tool_call: tool_call} = Map.fetch!(pending_by_ref, ref)
+                    %{tool_call: tool_call} = pending = Map.fetch!(pending_by_ref, ref)
+                    result = tool_crash_result(reason)
+                    tool_call_finish(tool_call.name, pending.started_at, result, true)
 
                     {pending_by_ref, pending_by_mon} =
                       drop_pending_task(pending_by_ref, pending_by_mon, ref)
@@ -270,7 +276,7 @@ defmodule LemonAgent.Loop.ToolCalls do
                     {context, new_messages, results} =
                       emit_tool_result(
                         tool_call,
-                        tool_crash_result(reason),
+                        result,
                         true,
                         context,
                         new_messages,
@@ -286,7 +292,10 @@ defmodule LemonAgent.Loop.ToolCalls do
                   nil ->
                     {context, new_messages, pending_by_ref, pending_by_mon, results}
 
-                  %{tool_call: tool_call, pid: pid, timeout_ms: timeout_ms} ->
+                  %{tool_call: tool_call, pid: pid, timeout_ms: timeout_ms} = pending ->
+                    result = tool_timeout_result(timeout_ms)
+                    tool_call_finish(tool_call.name, pending.started_at, result, true)
+
                     {pending_by_ref, pending_by_mon} =
                       drop_pending_task(pending_by_ref, pending_by_mon, ref)
 
@@ -301,7 +310,7 @@ defmodule LemonAgent.Loop.ToolCalls do
                     {context, new_messages, results} =
                       emit_tool_result(
                         tool_call,
-                        tool_timeout_result(timeout_ms),
+                        result,
                         true,
                         context,
                         new_messages,
@@ -444,6 +453,7 @@ defmodule LemonAgent.Loop.ToolCalls do
 
               true ->
                 [_tool_call | rest] = remaining
+                started_at = tool_call_start(tool_call.name)
 
                 EventStream.push(
                   stream,
@@ -477,6 +487,7 @@ defmodule LemonAgent.Loop.ToolCalls do
                         state = {
                           Map.put(by_ref, ref, %{
                             tool_call: prepared_tool_call,
+                            started_at: started_at,
                             mon_ref: mon_ref,
                             pid: pid,
                             timeout_ref: timeout_ref,
@@ -503,11 +514,15 @@ defmodule LemonAgent.Loop.ToolCalls do
                           }
                         )
 
-                        failure = {tool_call, tool_start_failure_result(reason)}
+                        result = tool_start_failure_result(reason)
+                        tool_call_finish(tool_call.name, started_at, result, true)
+                        failure = {tool_call, result}
                         {:cont, {by_ref, by_mon, rest, [failure | start_failures]}}
                     end
 
                   {:error, result} ->
+                    tool_call_finish(tool_call.name, started_at, result, true)
+
                     LemonCore.Telemetry.emit(
                       [:lemon_agent, :tool_task, :error],
                       %{system_time: System.system_time()},
@@ -563,6 +578,9 @@ defmodule LemonAgent.Loop.ToolCalls do
   defp emit_tool_errors(tool_calls, result, context, new_messages, results, stream) do
     Enum.reduce(tool_calls, {context, new_messages, results}, fn tool_call,
                                                                  {context, new_messages, results} ->
+      started_at = tool_call_start(tool_call.name)
+      tool_call_finish(tool_call.name, started_at, result, true)
+
       LemonCore.Telemetry.emit(
         [:lemon_agent, :tool_task, :error],
         %{system_time: System.system_time()},
@@ -575,6 +593,42 @@ defmodule LemonAgent.Loop.ToolCalls do
 
       emit_tool_result(tool_call, result, true, context, new_messages, results, stream)
     end)
+  end
+
+  defp tool_call_start(name) do
+    started_at = System.monotonic_time()
+
+    LemonCore.Telemetry.emit(
+      [:lemon_agent, :tool_call, :start],
+      %{system_time: System.system_time()},
+      %{tool_name: name, is_error: false, timeout: false}
+    )
+
+    started_at
+  end
+
+  defp tool_call_finish(name, started_at, result, is_error) do
+    details = if is_map(result.details), do: result.details, else: %{}
+    error_type = Map.get(details, :error_type)
+
+    timeout =
+      error_type == :tool_task_timeout or
+        Map.get(details, :timed_out) == true or Map.get(details, :timedOut) == true
+
+    event =
+      if error_type in [
+           :tool_exception,
+           :tool_caught,
+           :tool_task_start_failed,
+           :tool_task_crashed,
+           :tool_task_timeout
+         ], do: :exception, else: :stop
+
+    LemonCore.Telemetry.emit(
+      [:lemon_agent, :tool_call, event],
+      %{duration: System.monotonic_time() - started_at},
+      %{tool_name: name, is_error: is_error, timeout: timeout}
+    )
   end
 
   defp drop_pending_task(pending_by_ref, pending_by_mon, ref) do
