@@ -93,6 +93,21 @@ defmodule CodingAgent.Tools.Bash do
               "Start the command in the background and return a process_id immediately " <>
                 "(default: false). Read output with bash_output; stop it with kill_process."
           },
+          "name" => %{
+            "type" => "string",
+            "description" =>
+              "Session/project-scoped service name; starting the same name restarts it"
+          },
+          "ready" => %{
+            "type" => "object",
+            "properties" => %{
+              "log" => %{"type" => "string", "description" => "Readiness log regex"},
+              "port" => %{"type" => "integer", "minimum" => 1, "maximum" => 65_535},
+              "host" => %{"type" => "string", "default" => "127.0.0.1"},
+              "timeout_s" => %{"type" => "number", "default" => 30}
+            },
+            "description" => "Return when the log regex matches OR the TCP port accepts"
+          },
           "pty" => %{
             "type" => "boolean",
             "description" =>
@@ -156,6 +171,13 @@ defmodule CodingAgent.Tools.Bash do
       not is_boolean(background) ->
         {:error, "run_in_background must be a boolean"}
 
+      Map.has_key?(params, "ready") and not Map.has_key?(params, "name") ->
+        {:error, "ready requires a service name"}
+
+      Map.has_key?(params, "name") and
+          (background or use_pty or Map.has_key?(params, "timeout")) ->
+        {:error, "name is incompatible with run_in_background, pty and timeout"}
+
       background and use_pty ->
         {:error, "pty is not supported with run_in_background"}
 
@@ -163,12 +185,33 @@ defmodule CodingAgent.Tools.Bash do
         with {:ok, run_cwd} <- resolve_cwd(Map.get(params, "cwd"), cwd),
              {:ok, env} <- validate_env(Map.get(params, "env")),
              {:ok, command} <- InternalUrlExpansion.expand(command, Keyword.put(opts, :cwd, cwd)) do
-          if background do
-            run_in_background(command, run_cwd, env, opts)
-          else
-            with {:ok, timeout_ms} <- resolve_timeout(params, opts) do
-              run_foreground(command, use_pty, timeout_ms, signal, on_update, run_cwd, env, opts)
-            end
+          cond do
+            Map.has_key?(params, "name") ->
+              CodingAgent.Tools.Bash.Service.execute(
+                params,
+                command,
+                run_cwd,
+                env,
+                signal,
+                Keyword.put(opts, :project_cwd, cwd)
+              )
+
+            background ->
+              run_in_background(command, run_cwd, env, opts)
+
+            true ->
+              with {:ok, timeout_ms} <- resolve_timeout(params, opts) do
+                run_foreground(
+                  command,
+                  use_pty,
+                  timeout_ms,
+                  signal,
+                  on_update,
+                  run_cwd,
+                  env,
+                  opts
+                )
+              end
           end
         end
     end

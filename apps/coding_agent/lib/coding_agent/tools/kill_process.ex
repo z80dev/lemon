@@ -39,8 +39,9 @@ defmodule CodingAgent.Tools.KillProcess do
 
   @spec execute(String.t(), map(), reference() | nil, function() | nil, String.t(), keyword()) ::
           AgentToolResult.t() | {:error, String.t()}
-  def execute(_tool_call_id, params, _signal, _on_update, _cwd, opts) do
-    with {:ok, process_id} <- BashOutput.fetch_process_id(params),
+  def execute(_tool_call_id, params, _signal, _on_update, cwd, opts) do
+    with {:ok, reference} <- BashOutput.fetch_process_id(params),
+         process_id = CodingAgent.Tools.Bash.Service.resolve(reference, cwd, opts),
          :ok <- BashOutput.authorize(process_id, opts),
          {:ok, signal} <- fetch_signal(params) do
       kill(process_id, signal)

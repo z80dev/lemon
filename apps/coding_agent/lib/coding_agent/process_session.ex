@@ -353,6 +353,7 @@ defmodule CodingAgent.ProcessSession do
       exit_code: state.exit_code,
       os_pid: state.os_pid,
       logs: logs,
+      partial_line: state.partial_line,
       command: state.command,
       cwd: state.cwd,
       backend: state.backend,
