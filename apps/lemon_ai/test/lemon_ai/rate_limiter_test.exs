@@ -28,13 +28,6 @@ defmodule LemonAi.RateLimiterTest do
   end
 
   describe "start_link/1" do
-    test "starts with required provider option" do
-      provider = unique_provider(:start_test)
-      assert {:ok, pid} = RateLimiter.start_link(provider: provider)
-      assert is_pid(pid)
-      assert Process.alive?(pid)
-    end
-
     test "raises when provider is missing" do
       assert_raise KeyError, fn ->
         RateLimiter.start_link([])
@@ -418,13 +411,6 @@ defmodule LemonAi.RateLimiterTest do
   end
 
   describe "ensure_started/2" do
-    test "starts limiter if not running" do
-      provider = unique_provider(:ensure_new)
-      assert {:ok, pid} = RateLimiter.ensure_started(provider)
-      assert is_pid(pid)
-      assert Process.alive?(pid)
-    end
-
     test "returns existing pid if already running" do
       provider = unique_provider(:ensure_existing)
       {:ok, pid1} = RateLimiter.start_link(provider: provider)

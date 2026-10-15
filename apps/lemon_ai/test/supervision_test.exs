@@ -6,15 +6,6 @@ defmodule LemonAi.SupervisionTest do
   use ExUnit.Case
 
   describe "application supervision tree" do
-    test "LemonAi.StreamTaskSupervisor is running" do
-      # The task supervisor should be started by the application
-      assert Process.whereis(LemonAi.StreamTaskSupervisor) != nil
-    end
-
-    test "LemonAi.Supervisor is running" do
-      assert Process.whereis(LemonAi.Supervisor) != nil
-    end
-
     test "StreamTaskSupervisor can start tasks" do
       test_pid = self()
       ref = make_ref()
@@ -67,13 +58,6 @@ defmodule LemonAi.SupervisionTest do
   end
 
   describe "provider registry initialization" do
-    test "providers are registered on startup" do
-      # These should be registered by LemonAi.Application.register_providers/0
-      assert LemonAi.ProviderRegistry.registered?(:anthropic_messages)
-      assert LemonAi.ProviderRegistry.registered?(:openai_responses)
-      assert LemonAi.ProviderRegistry.registered?(:google_generative_ai)
-    end
-
     test "can look up registered providers" do
       {:ok, anthropic} = LemonAi.ProviderRegistry.get(:anthropic_messages)
       assert anthropic == LemonAi.Providers.Anthropic

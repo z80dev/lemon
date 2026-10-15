@@ -35,18 +35,28 @@ defmodule LemonAi.CircuitBreakerTest do
       assert state.last_failure_reason == nil
     end
 
-    test "uses default failure threshold of 5", %{provider: provider} do
+    test "opens on the fifth failure with the default threshold", %{provider: provider} do
       start_supervised!({CircuitBreaker, provider: provider})
 
-      {:ok, state} = CircuitBreaker.get_state(provider)
-      assert state.failure_threshold == 5
+      for _ <- 1..4 do
+        CircuitBreaker.record_failure(provider)
+        refute CircuitBreaker.open?(provider)
+      end
+
+      CircuitBreaker.record_failure(provider)
+      assert CircuitBreaker.open?(provider)
     end
 
-    test "uses default recovery timeout of 30000ms", %{provider: provider} do
-      start_supervised!({CircuitBreaker, provider: provider})
+    test "recovers at the default 30000ms timeout", %{provider: provider} do
+      advance = start_with_clock(provider, failure_threshold: 1)
+      CircuitBreaker.record_failure(provider)
+      assert CircuitBreaker.open?(provider)
 
-      {:ok, state} = CircuitBreaker.get_state(provider)
-      assert state.recovery_timeout == 30_000
+      advance.(29_999)
+      assert CircuitBreaker.open?(provider)
+      advance.(1)
+      refute CircuitBreaker.open?(provider)
+      assert_state(provider, :half_open)
     end
 
     test "accepts custom failure threshold", %{provider: provider} do
