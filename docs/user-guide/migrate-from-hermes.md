@@ -78,6 +78,8 @@ Missing workspace and AI peer settings retain Hermes's host-name defaults.
 | `baseUrl` (`base_url`) | `base_url` |
 | `environment`, `workspace` | `environment`, `workspace` |
 | `peerName`, `aiPeer` | `user_peer`, `ai_peer` |
+| `pinUserPeer` (`pinPeerName`) | `pin_user_peer` |
+| `userPeerAliases`, `runtimePeerPrefix` | `user_peer_aliases`, `runtime_peer_prefix` |
 | `recallMode`, `sessionStrategy` | `recall_mode`, `session_strategy` |
 | `contextTokens`, `contextCadence`, `dialecticCadence` | `context_tokens`, `context_cadence`, `dialectic_cadence` |
 | `dialecticReasoningLevel`, `dialecticMaxChars` | `reasoning_level`, `dialectic_max_chars` |
@@ -91,8 +93,15 @@ supplied. Preview never writes config or secrets. Existing differing Honcho
 settings, credential references, and an existing `HONCHO_API_KEY` secret are
 conflicts unless `--overwrite` is set.
 
-Unsupported keys (including `dialecticDepth`, `writeFrequency`, `pinUserPeer`,
-`userPeerAliases`, granular observation and session overrides) and invalid values
+Gateway identity settings are imported without collapsing their scope: the
+selected host's alias map replaces the root map, and canonical `pinUserPeer`
+wins over legacy `pinPeerName` within the same scope. Alias maps preserve
+runtime IDs as quoted TOML keys and require valid Honcho peer names. Empty maps
+and an empty prefix remain explicit empty values. These settings use the same
+preview and overwrite policy as other Honcho config.
+
+Unsupported keys (including `dialecticDepth`, `writeFrequency`, granular
+observation and session overrides) and invalid values
 appear as `unsupported` items in the preview; Lemon does not pretend to implement
 their semantics. Null settings are left at Lemon defaults. Review this report
 before enabling Honcho: retaining a workspace and peers preserves access to

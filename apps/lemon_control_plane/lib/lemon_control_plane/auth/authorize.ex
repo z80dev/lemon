@@ -354,6 +354,8 @@ defmodule LemonControlPlane.Auth.Authorize do
   defp admin_method?(method) do
     String.starts_with?(method, "config.") or
       method in [
+        "system.restart",
+        "system.stop",
         "skills.install",
         "node.mcp.discover",
         "profiles.sync",

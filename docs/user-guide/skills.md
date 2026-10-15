@@ -545,13 +545,14 @@ submits the curator prompt to the configured agent only when review is required.
 Those background reviews default to the learning tools only: `read_skill`,
 `skill_manage`, `remember`, and `recall`.
 
-Background automatic stale/archive transitions also exempt skills referenced by
-any persisted cron job, including disabled/paused jobs. Cron jobs have no dedicated
-skill field: the automation layer checks `meta.skill` / `meta.skills` and complete
-skill names in prompt text (not substrings of longer skill names). This conservative
-name matching may preserve a skill mentioned only as background context. The
-lower-level curator accepts `exempt_skills`; direct API/CLI maintenance callers
-must supply exemptions when they want the same cron protection.
+All curator entry points (background, API, CLI and Mix tasks) exempt skills
+referenced by any persisted cron job, including disabled/paused jobs. Cron jobs
+have no dedicated skill field: automation contributes `meta.skill` / `meta.skills`
+and complete skill names in prompt text (not substrings of longer skill names)
+through a runtime provider. This conservative matching may preserve a skill
+mentioned only as background context. Explicit `exempt_skills` are additive.
+If automation or its provider is unavailable, automatic archival is skipped;
+the curator summary and persisted report explain why.
 
 ---
 

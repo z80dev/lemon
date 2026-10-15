@@ -18,10 +18,17 @@ defmodule CodingAgent.SessionRecalledContextTest.Contributor do
   end
 
   @impl true
-  def contribute(_request) do
+  def contribute(request) do
     case :persistent_term.get(@key, :skip) do
-      :skip -> :skip
-      specs -> {:ok, specs}
+      :skip ->
+        :skip
+
+      {:capture, owner} ->
+        send(owner, {:channel_identity_request, request})
+        :skip
+
+      specs ->
+        {:ok, specs}
     end
   end
 end
@@ -143,6 +150,30 @@ defmodule CodingAgent.SessionRecalledContextTest do
     ]
 
     start_supervised!({Session, Keyword.merge(defaults, opts)})
+  end
+
+  test "native main sessions preserve channel identity across contributor turns" do
+    identity = %{channel_id: "telegram", sender_id: "42", is_bot: false}
+    Contributor.answer({:capture, self()})
+    session = start_session(channel_identity: identity)
+    assert Session.get_state(session).approval_context.channel_identity == identity
+    assert_receive {:channel_identity_request, %{channel_identity: ^identity}}, 2_000
+    :ok = Session.prompt(session, "hello")
+    await_sent()
+
+    assert_receive {:channel_identity_request, %{channel_identity: ^identity, query: "hello"}},
+                   2_000
+  end
+
+  test "native subagents discard inherited channel identity before tools and context" do
+    identity = %{channel_id: "telegram", sender_id: "42", is_bot: false}
+    Contributor.answer({:capture, self()})
+    session = start_session(channel_identity: identity, session_scope: :subagent)
+    refute Map.has_key?(Session.get_state(session).approval_context, :channel_identity)
+    assert_receive {:channel_identity_request, %{channel_identity: nil}}, 2_000
+    :ok = Session.prompt(session, "hello")
+    await_sent()
+    assert_receive {:channel_identity_request, %{channel_identity: nil, query: "hello"}}, 2_000
   end
 
   defp await_sent do

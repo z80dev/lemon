@@ -7,6 +7,8 @@ defmodule LemonChannels.Adapters.Discord.FileOperations do
   module where possible, adapting the download/upload paths for Discord's API.
   """
 
+  require Logger
+
   alias LemonChannels.Adapters.Telegram.Transport.FileOperations, as: TelegramFileOps
   alias LemonChannels.BindingResolver
   alias LemonCore.ChatScope
@@ -179,11 +181,21 @@ defmodule LemonChannels.Adapters.Discord.FileOperations do
   """
   def download_attachment_bytes(url) when is_binary(url) and url != "" do
     case Req.get(url) do
-      {:ok, %{status: 200, body: body}} when is_binary(body) -> {:ok, body}
-      _ -> {:error, "Failed to download attachment."}
+      {:ok, %{status: 200, body: body}} when is_binary(body) ->
+        {:ok, body}
+
+      result ->
+        Logger.warning("Discord attachment download failed: #{inspect(result)}")
+
+        {:error,
+         "Failed to download attachment. Check that the attachment is still available, then try again."}
     end
   rescue
-    ArgumentError -> {:error, "Failed to download attachment."}
+    error in ArgumentError ->
+      Logger.warning("Discord attachment download failed: #{inspect(error)}")
+
+      {:error,
+       "Failed to download attachment. Check that the attachment is still available, then try again."}
   end
 
   def download_attachment_bytes(_), do: {:error, "No attachment URL provided."}
@@ -195,11 +207,21 @@ defmodule LemonChannels.Adapters.Discord.FileOperations do
   @doc false
   def send_file_to_channel(channel_id, path, filename) when is_integer(channel_id) do
     case Nostrum.Api.Message.create(channel_id, %{content: filename, files: [path]}) do
-      {:ok, _} -> :ok
-      {:error, reason} -> {:error, "Failed to send file: #{inspect(reason)}"}
+      {:ok, _} ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning("Discord file send failed: #{inspect(reason)}")
+
+        {:error,
+         "Failed to send file. Check the file size and that the bot can post in this channel, then try again."}
     end
   rescue
-    _ -> {:error, "Failed to send file."}
+    error ->
+      Logger.warning("Discord file send failed: #{inspect(error)}")
+
+      {:error,
+       "Failed to send file. Check that the file exists, its size, and that the bot can post in this channel, then try again."}
   end
 
   def send_file_to_channel(_, _, _), do: {:error, "Invalid channel ID."}

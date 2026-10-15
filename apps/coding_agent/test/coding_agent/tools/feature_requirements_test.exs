@@ -189,44 +189,18 @@ defmodule CodingAgent.Tools.FeatureRequirementsTest do
 
   describe "generate_requirements/2" do
     @tag :integration
-    test "generates requirements from prompt", %{test_dir: test_dir} do
-      # This test requires a real LLM, skip in CI
-      if System.get_env("CI") do
-        {:ok, requirements} = FeatureRequirements.generate_requirements("Build a simple todo app")
+    test "generates requirements from prompt" do
+      # Requires a real LLM; run only when explicitly including integration tests.
+      {:ok, requirements} = FeatureRequirements.generate_requirements("Build a simple todo app")
 
-        assert is_map(requirements)
-        assert is_binary(requirements.project_name)
-        assert requirements.features != []
+      assert is_map(requirements)
+      assert is_binary(requirements.project_name)
+      assert requirements.features != []
 
-        first_feature = hd(requirements.features)
-        assert is_binary(first_feature.id)
-        assert is_binary(first_feature.description)
-        assert first_feature.status == :pending
-      else
-        # Mock test for non-CI environments
-        requirements = %{
-          project_name: "Todo App",
-          original_prompt: "Build a simple todo app",
-          features: [
-            %{
-              id: "f-1",
-              description: "Setup project",
-              status: :pending,
-              dependencies: [],
-              priority: :high,
-              acceptance_criteria: [],
-              notes: "",
-              created_at: now(),
-              updated_at: nil
-            }
-          ],
-          created_at: now(),
-          version: "1.0"
-        }
-
-        :ok = FeatureRequirements.save_requirements(requirements, test_dir)
-        assert FeatureRequirements.requirements_exist?(test_dir)
-      end
+      first_feature = hd(requirements.features)
+      assert is_binary(first_feature.id)
+      assert is_binary(first_feature.description)
+      assert first_feature.status == :pending
     end
   end
 

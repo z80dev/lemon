@@ -194,11 +194,12 @@ defmodule LemonRouter.Router do
       queue_mode: meta[:queue_mode] || meta["queue_mode"],
       resume: normalize_resume_token(meta[:resume] || meta["resume"]),
       meta:
-        Map.merge(meta, %{
+        Map.merge(Map.delete(meta, "channel_identity"), %{
           channel_id: msg.channel_id,
           account_id: msg.account_id,
           peer: msg.peer,
           sender: msg.sender,
+          channel_identity: inbound_channel_identity(msg),
           raw: msg.raw,
           # Read by LemonRouter.Policy so per-channel and group-chat tool
           # restrictions apply to real channel ingress. Always derived from
@@ -213,6 +214,13 @@ defmodule LemonRouter.Router do
         })
     })
   end
+
+  defp inbound_channel_identity(%{channel_id: channel, sender: %{id: sender} = identity})
+       when is_binary(channel) and is_binary(sender) and sender != "" do
+    %{channel_id: channel, sender_id: sender, is_bot: Map.get(identity, :bot, false) == true}
+  end
+
+  defp inbound_channel_identity(_), do: nil
 
   defp control_param(params, key) when is_map(params) and is_atom(key) do
     Map.get(params, key) || Map.get(params, Atom.to_string(key))

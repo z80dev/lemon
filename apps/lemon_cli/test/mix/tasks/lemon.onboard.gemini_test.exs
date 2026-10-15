@@ -44,6 +44,7 @@ defmodule Mix.Tasks.Lemon.Onboard.GeminiTest do
     output =
       capture_io(fn ->
         Gemini.run([
+          "--non-interactive",
           "--token",
           ~s({"token":"gemini-token-123","projectId":"proj-123"}),
           "--config-path",
@@ -74,6 +75,7 @@ defmodule Mix.Tasks.Lemon.Onboard.GeminiTest do
 
     capture_io(fn ->
       Gemini.run([
+        "--non-interactive",
         "--token",
         ~s({"token":"gemini-token-123","projectId":"proj-123"}),
         "--config-path",
@@ -99,6 +101,7 @@ defmodule Mix.Tasks.Lemon.Onboard.GeminiTest do
     assert_raise Mix.Error, ~r/Unknown model/, fn ->
       capture_io(fn ->
         Gemini.run([
+          "--non-interactive",
           "--token",
           ~s({"token":"gemini-token-123","projectId":"proj-123"}),
           "--config-path",

@@ -17,6 +17,9 @@ defmodule LemonHoncho.ConfigTest do
     HONCHO_PEER
     HONCHO_AI_PEER
     HONCHO_TIMEOUT_MS
+    LEMON_HONCHO_PIN_USER_PEER
+    LEMON_HONCHO_USER_PEER_ALIASES
+    LEMON_HONCHO_RUNTIME_PEER_PREFIX
     LEMON_HONCHO_ENABLED
     LEMON_HONCHO_RECALL_MODE
     LEMON_HONCHO_SESSION_STRATEGY
@@ -41,6 +44,9 @@ defmodule LemonHoncho.ConfigTest do
     :environment,
     :workspace,
     :user_peer,
+    :pin_user_peer,
+    :user_peer_aliases,
+    :runtime_peer_prefix,
     :ai_peer,
     :timeout_ms,
     :recall_mode,
@@ -82,6 +88,35 @@ defmodule LemonHoncho.ConfigTest do
     end)
 
     %{home: home}
+  end
+
+  test "gateway identity settings resolve from TOML, app env and environment", %{home: home} do
+    path = Path.join(home, "gateway.toml")
+
+    File.write!(path, """
+    [honcho]
+    pin_user_peer = true
+    runtime_peer_prefix = "gateway_"
+    user_peer_aliases = { telegram_123 = "alice", discord_456 = "alice" }
+    """)
+
+    toml = Config.load(config_path: path)
+    assert toml.pin_user_peer
+    assert toml.runtime_peer_prefix == "gateway_"
+    assert toml.user_peer_aliases == %{"telegram_123" => "alice", "discord_456" => "alice"}
+
+    Application.put_env(:lemon_honcho, :pin_user_peer, false)
+    assert Config.load(config_path: path).pin_user_peer == false
+    System.put_env("LEMON_HONCHO_PIN_USER_PEER", "true")
+    System.put_env("LEMON_HONCHO_USER_PEER_ALIASES", ~s({"discord_789":"bob"}))
+    System.put_env("LEMON_HONCHO_RUNTIME_PEER_PREFIX", "remote_")
+    config = Config.load(config_path: path)
+    assert config.pin_user_peer
+    assert config.user_peer_aliases == %{"discord_789" => "bob"}
+    assert config.runtime_peer_prefix == "remote_"
+
+    System.put_env("LEMON_HONCHO_USER_PEER_ALIASES", ~s({"discord_789":"../bad"}))
+    assert Config.load(config_path: path).user_peer_aliases == toml.user_peer_aliases
   end
 
   describe "load/0 defaults" do

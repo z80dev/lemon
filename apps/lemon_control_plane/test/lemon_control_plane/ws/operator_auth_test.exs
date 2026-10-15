@@ -49,8 +49,13 @@ defmodule LemonControlPlane.WS.OperatorAuthTest do
 
     assert %{
              "ok" => false,
-             "error" => %{"code" => "UNAUTHORIZED", "message" => "Operator token is required"}
+             "error" => %{"code" => "UNAUTHORIZED", "message" => missing_message}
            } = Jason.decode!(missing_frame)
+
+    assert missing_message =~ "Operator token is required"
+    assert missing_message =~ "connect.auth.token"
+    assert missing_message =~ "LEMON_CONTROL_PLANE_OPERATOR_TOKEN"
+    assert missing_message =~ "control-plane-<port>.token"
 
     wrong_token = "do-not-reflect-this-token"
 
@@ -63,8 +68,11 @@ defmodule LemonControlPlane.WS.OperatorAuthTest do
 
     assert %{
              "ok" => false,
-             "error" => %{"code" => "UNAUTHORIZED", "message" => "Operator token is invalid"}
+             "error" => %{"code" => "UNAUTHORIZED", "message" => wrong_message}
            } = Jason.decode!(wrong_frame)
+
+    assert wrong_message =~ "Operator token is invalid"
+    assert wrong_message =~ "connect.auth.token"
 
     refute missing_frame =~ @operator_token
     refute wrong_frame =~ @operator_token

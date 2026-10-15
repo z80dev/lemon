@@ -7,6 +7,8 @@ defmodule LemonChannels.Adapters.Telegram.Transport.VoiceHandler do
   sending user-visible system message errors when needed.
   """
 
+  require Logger
+
   @doc """
   Attempt to transcribe an inbound voice message and return a normalized inbound
   payload, or signal that the message should be skipped.
@@ -42,7 +44,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport.VoiceHandler do
           maybe_send_voice_error(
             state,
             inbound,
-            "Voice transcription requires an API key.",
+            format_voice_error(:missing_api_key),
             send_system_message_fn,
             extract_message_ids_fn
           )
@@ -57,6 +59,8 @@ defmodule LemonChannels.Adapters.Telegram.Transport.VoiceHandler do
             {:ok, %{inbound | message: message, meta: meta}}
 
           {:error, reason} ->
+            Logger.warning("Telegram voice transcription failed: #{inspect(reason)}")
+
             _ =
               maybe_send_voice_error(
                 state,
@@ -178,8 +182,13 @@ defmodule LemonChannels.Adapters.Telegram.Transport.VoiceHandler do
     _ -> :ok
   end
 
-  defp format_voice_error(:voice_too_large), do: "Voice message is too large to transcribe."
-  defp format_voice_error(:missing_api_key), do: "Voice transcription requires an API key."
+  defp format_voice_error(:voice_too_large),
+    do:
+      "Voice message is too large to transcribe. Send a shorter recording or send the message as text."
+
+  defp format_voice_error(:missing_api_key),
+    do:
+      "Voice transcription requires an OpenAI API key. Set OPENAI_API_KEY or run `lemon secrets set` to configure it."
 
   defp format_voice_error({:http_error, status, msg}) do
     msg =
@@ -189,12 +198,17 @@ defmodule LemonChannels.Adapters.Telegram.Transport.VoiceHandler do
         "request failed"
       end
 
-    "Voice transcription failed (#{status}): #{msg}"
+    "Voice transcription failed (#{status}): #{msg}. Try again, or send the message as text."
   end
 
-  defp format_voice_error({:telegram_file_lookup_failed, _}), do: "Failed to fetch voice file."
-  defp format_voice_error({:telegram_download_failed, _}), do: "Failed to download voice file."
-  defp format_voice_error(other), do: "Voice transcription failed: #{inspect(other)}"
+  defp format_voice_error({:telegram_file_lookup_failed, _}),
+    do: "Failed to fetch voice file. Try again, or send the message as text."
+
+  defp format_voice_error({:telegram_download_failed, _}),
+    do: "Failed to download voice file. Try again, or send the message as text."
+
+  defp format_voice_error(_other),
+    do: "Voice transcription failed. Try again, or send the message as text."
 
   defp ensure_httpc do
     _ = Application.ensure_all_started(:inets)

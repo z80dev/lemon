@@ -34,11 +34,8 @@ defmodule LemonAutomation.SkillCurator do
 
       true ->
         run_opts = curator_opts(cfg, opts)
-        jobs = Keyword.get(opts, :cron_jobs_fun, &LemonAutomation.CronStore.list_jobs/0).()
-        names = LemonSkills.Usage.report(run_opts) |> Enum.map(& &1.name)
-        exempt = referenced_skills(jobs, names)
 
-        case curator_mod.run(Keyword.put(run_opts, :exempt_skills, exempt)) do
+        case curator_mod.run(run_opts) do
           {:ok, %{review_required: true, review_prompt: prompt} = result} ->
             submit_review(prompt, result, cfg, opts)
 
@@ -177,32 +174,6 @@ defmodule LemonAutomation.SkillCurator do
     end
   end
 
-  @doc """
-  Find skill references in all persisted cron jobs, including disabled jobs.
-
-  Cron has no dedicated skill field. Match complete skill names in prompt text
-  and explicit `skill` / `skills` metadata fields conservatively.
-  """
-  def referenced_skills(jobs, names) do
-    Enum.filter(names, fn name ->
-      pattern =
-        Regex.compile!(
-          "(?<![\\p{L}\\p{N}_-])" <> Regex.escape(name) <> "(?![\\p{L}\\p{N}_-])",
-          "u"
-        )
-
-      Enum.any?(jobs, fn job ->
-        meta = Map.get(job, :meta) || Map.get(job, "meta") || %{}
-
-        explicit =
-          Enum.flat_map([:skill, "skill", :skills, "skills"], &List.wrap(Map.get(meta, &1)))
-
-        prompt = Map.get(job, :prompt) || Map.get(job, "prompt")
-        name in explicit or (is_binary(prompt) and Regex.match?(pattern, prompt))
-      end)
-    end)
-  end
-
   defp curator_opts(cfg, opts) do
     [
       enabled: enabled?(cfg),
@@ -211,7 +182,8 @@ defmodule LemonAutomation.SkillCurator do
       interval_hours: positive_integer(cfg, :interval_hours, @default_interval_hours),
       stale_after_days: positive_integer(cfg, :stale_after_days, @default_stale_after_days),
       archive_after_days: positive_integer(cfg, :archive_after_days, @default_archive_after_days),
-      now: Keyword.get(opts, :now, DateTime.utc_now())
+      now: Keyword.get(opts, :now, DateTime.utc_now()),
+      exempt_skills: Keyword.get(opts, :exempt_skills, [])
     ]
   end
 

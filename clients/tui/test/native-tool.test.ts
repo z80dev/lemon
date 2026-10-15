@@ -101,6 +101,26 @@ test("an empty todo receipt does not revive the proposed checklist", () => {
 	expect(card.render(120).join("\n")).not.toContain("Abandoned");
 });
 
+test("native todo checklist preserves phase groups and blocked reasons", () => {
+	const card = new ToolCardComponent(
+		block(
+			"todo",
+			{ action: "read" },
+			{
+				todos: [
+					{ content: "Deploy", status: "blocked", phase: "Release", blocker: "Need access" },
+					{ content: "Old approach", status: "abandoned", phase: "Archive" },
+				],
+			},
+		),
+	);
+	const description = JSON.stringify(card.describe());
+	expect(description).toContain("Release");
+	expect(description).toContain("Archive");
+	expect(description).toContain("Need access");
+	expect(description).toContain("1/2");
+});
+
 test("structured paths with fragment-like names stay literal, with controls rejected", () => {
 	expectTarget(
 		block("edit", { path: "src/name#L42" }, { first_changed_line: 7 }),

@@ -26,7 +26,7 @@ behavior, including platform support and updates, is in the
 ## What setup does—and does not do
 
 `lemon setup` is an idempotent first-time configuration wizard. On each run it
-re-checks the state and performs only pending work:
+re-checks the saved state, performs pending work, and re-verifies an existing provider:
 
 1. creates a minimal config scaffold if no config exists;
 2. initializes encrypted secrets if they are not configured, without replacing
@@ -36,6 +36,16 @@ re-checks the state and performs only pending work:
    check when supported;
 5. offers an opt-in daily brief (default: off); and
 6. offers optional runtime-profile configuration.
+
+Pasted API keys are read with terminal echo disabled; echo is restored after the
+read, including on errors or closed input. Without an interactive terminal, setup
+fails before prompting. Use `lemon setup --non-interactive` to prepare config and
+secrets, then a flag-driven provider command as shown below.
+
+Declining provider onboarding leaves **pending steps**, not a failed step. The
+wizard only prints **Setup complete** after a passing live credential check.
+When the check is skipped or unsupported, it explicitly says the provider was
+not live-verified; local configuration can still be saved successfully.
 
 It does not install source dependencies, configure Telegram or Discord, start
 a gateway, or run `lemon doctor` automatically. Rerun it whenever setup is
@@ -83,6 +93,10 @@ stored credential still run:
 lemon setup provider --skip-verify
 ```
 
+The full wizard always selects a default provider/model; `setup provider`
+accepts `--set-default` to request this explicitly. Both `--set-default` and
+`--daily-brief HH:MM` appear in `lemon setup --help`.
+
 If a provider verification fails, setup remains incomplete. Correct the
 credential or model and rerun `lemon setup provider`; do not expect a failed
 verification to be treated as a working setup.
@@ -102,7 +116,7 @@ provider setup, use explicit values:
 
 ```bash
 lemon setup --non-interactive
-lemon model --provider anthropic --token "$ANTHROPIC_API_KEY" \
+lemon model --non-interactive --provider anthropic --token "$ANTHROPIC_API_KEY" \
   --model claude-sonnet-4-20250514 --set-default
 lemon doctor
 ```
@@ -112,16 +126,21 @@ network request. When network access is available and you need the live check,
 use the corresponding provider setup command instead:
 
 ```bash
-lemon setup provider --provider anthropic --token "$ANTHROPIC_API_KEY" \
+lemon setup provider --non-interactive --provider anthropic --token "$ANTHROPIC_API_KEY" \
   --model claude-sonnet-4-20250514 --set-default
 ```
 
 Append `--skip-verify` to that command to defer only the live check.
 
+Pass a bare model id such as `claude-sonnet-4-20250514`, not
+`anthropic:claude-sonnet-4-20250514`, to onboarding's `--model`. Runtime model
+overrides elsewhere use the `provider:model` form.
+
 ### Daily brief
 
 After the provider step, setup asks whether you want a short daily brief on
-your phone each morning (default: no) and, if so, at what time (`HH:MM`,
+your phone each morning (default: no), explains that this needs a paired
+Telegram chat (`lemon gateway setup telegram`), and asks for a time (`HH:MM`,
 24-hour, this machine's local time; default `08:00`). The answer is written as
 `daily_brief` under `[automation]` in your config and takes effect the next time
 Lemon starts. If a brief is already configured, setup only reports its time.
@@ -135,6 +154,18 @@ lemon setup --non-interactive --daily-brief 07:30
 The brief is delivered to your paired chat, so pair Telegram (see below). To
 change or remove it, edit `[automation] daily_brief` and restart Lemon. See
 [Reminders, heartbeats, and the daily brief](reminders-and-heartbeats.md).
+
+### Runtime profile and ports
+
+`lemon setup runtime` offers `runtime_min` and `runtime_full` and prints the
+environment settings to apply. Invalid interactive profile or port input is
+explained and asked again; an invalid flag is an error, not a fallback.
+Ports must be integers from 1 to 65535.
+
+```bash
+lemon setup runtime --non-interactive --profile runtime_min \
+  --control-port 5050 --web-port 5080 --sim-port 5090
+```
 
 ## Verify and recover
 

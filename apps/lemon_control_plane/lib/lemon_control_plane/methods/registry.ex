@@ -32,6 +32,8 @@ defmodule LemonControlPlane.Methods.Registry do
   @builtin_methods [
     LemonControlPlane.Methods.Health,
     LemonControlPlane.Methods.Status,
+    LemonControlPlane.Methods.SystemRestart,
+    LemonControlPlane.Methods.SystemStop,
     LemonControlPlane.Methods.DoctorRun,
     LemonControlPlane.Methods.Agent,
     LemonControlPlane.Methods.AgentWait,

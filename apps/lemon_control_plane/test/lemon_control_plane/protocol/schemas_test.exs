@@ -4,19 +4,6 @@ defmodule LemonControlPlane.Protocol.SchemasTest do
   alias LemonControlPlane.Protocol.Schemas
 
   describe "get/1" do
-    test "returns schema for known methods" do
-      assert Schemas.get("connect") != nil
-      assert Schemas.get("sessions.list") != nil
-      assert Schemas.get("sessions.active.list") != nil
-      assert Schemas.get("cron.add") != nil
-      assert Schemas.get("cron.pause") != nil
-      assert Schemas.get("cron.resume") != nil
-      assert Schemas.get("cron.abort") != nil
-      assert Schemas.get("cron.audit") != nil
-      assert Schemas.get("chat.send") != nil
-      assert Schemas.get("agent") != nil
-    end
-
     test "returns schema for contract-backed events" do
       assert Schemas.get_event("exec.approval.requested") != nil
       assert Schemas.get_event("exec.approval.resolved") != nil

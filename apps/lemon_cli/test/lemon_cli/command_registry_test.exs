@@ -21,6 +21,56 @@ defmodule LemonCli.CommandRegistryTest do
     end
   end
 
+  test "unknown help names report the error before displaying the command list" do
+    error =
+      capture_io(:stderr, fn ->
+        output = capture_io(fn -> IO.write(CommandRegistry.help("nosuchcommand")) end)
+        assert output =~ "Usage: lemon <command>"
+      end)
+
+    assert error =~ "Unknown command: nosuchcommand"
+    assert error =~ "lemon --help"
+  end
+
+  test "unknown help dispatch exits with a usage error" do
+    capture_io(:stderr, fn ->
+      capture_io(fn -> assert CLI.run(["help", "nosuchcommand"]) == 2 end)
+    end)
+  end
+
+  test "help and completion contain each command exactly once" do
+    for launcher <- [:source, :release] do
+      names = Enum.map(CommandRegistry.completion_commands(launcher), & &1.name)
+      assert length(names) == length(Enum.uniq(names))
+
+      for name <- ["acp", "tern"] do
+        assert length(Regex.scan(~r/^  #{name} /m, CommandRegistry.overview(launcher))) == 1
+        assert Enum.count(names, &(&1 == name)) == 1
+      end
+    end
+  end
+
+  test "setup help includes accepted flags and the diagnostics alias" do
+    help = CommandRegistry.help("setup")
+    assert help =~ "--daily-brief HH:MM"
+    assert help =~ "--set-default"
+    assert help =~ "alias for doctor"
+  end
+
+  test "version and path placeholders describe supported syntax" do
+    assert CommandRegistry.overview(:source) =~ "use alone"
+    assert CommandRegistry.overview(:source) =~ "lemon version --verbose"
+    assert CommandRegistry.help("gateway") =~ "[--transport NAME]"
+    assert CommandRegistry.help("tern") =~ "--config-dir PATH"
+    refute CommandRegistry.help("tern") =~ "--config-path"
+
+    for command <- CommandRegistry.commands(),
+        option <- command.options,
+        "--cwd" in option.flags do
+      assert option.syntax == "--cwd PATH"
+    end
+  end
+
   test "source and release completion share families but not release VM tools" do
     source = Enum.map(CommandRegistry.completion_commands(:source), & &1.name)
     release = Enum.map(CommandRegistry.completion_commands(:release), & &1.name)

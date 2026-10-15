@@ -14,7 +14,7 @@ defmodule CodingAgent.Tools.Grep do
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonAgent.Security.ToolResultTrust
   alias LemonAi.Types.TextContent
-  alias CodingAgent.Tools.{FileValidation, IgnoreFilter}
+  alias CodingAgent.Tools.IgnoreFilter
   alias CodingAgent.Tools.PathHelpers
 
   import LemonAgent.Tools.AbortHelpers, only: [aborted?: 1, check_abort: 1]
@@ -47,7 +47,7 @@ defmodule CodingAgent.Tools.Grep do
           "path" => %{
             "type" => "string",
             "description" =>
-              "File or directory to search in (relative to cwd or absolute). Defaults to cwd."
+              "File/directory roots separated by semicolons (relative to cwd or absolute). Defaults to cwd."
           },
           "glob" => %{
             "type" => "string",
@@ -60,6 +60,12 @@ defmodule CodingAgent.Tools.Grep do
           "literal" => %{
             "type" => "boolean",
             "description" => "Treat the pattern as a literal string instead of a regex"
+          },
+          "output_mode" => %{
+            "type" => "string",
+            "enum" => ["content", "files", "count"],
+            "description" =>
+              "Return matching content (default), paths, or per-file counts and total"
           },
           "context_lines" => %{
             "type" => "integer",
@@ -120,6 +126,7 @@ defmodule CodingAgent.Tools.Grep do
     literal = Map.get(params, "literal", false)
     context_lines = Map.get(params, "context_lines", @default_context_lines)
     skip = Map.get(params, "skip", 0)
+    output_mode = Map.get(params, "output_mode", "content")
 
     max_results =
       Map.get(params, "max_results", Keyword.get(opts, :max_results, @default_max_results))
@@ -128,15 +135,24 @@ defmodule CodingAgent.Tools.Grep do
          :ok <- validate_context_lines(context_lines),
          :ok <- validate_max_results(max_results),
          :ok <- validate_skip(skip),
-         {:ok, resolved_path} <- resolve_path(path, cwd, opts),
-         :ok <- check_path_access(resolved_path),
+         :ok <- validate_output_mode(output_mode),
+         {:ok, paths, missing} <-
+           PathHelpers.resolve_search_paths(
+             path,
+             cwd,
+             [:regular, :directory],
+             Keyword.put(opts, :include_bare_memory, true)
+           ),
          :ok <- check_abort(signal) do
       search_opts = %{
         pattern: pattern,
-        path: resolved_path,
+        path: if(length(paths) == 1, do: hd(paths), else: cwd),
+        paths: paths,
         glob: glob,
         case_sensitive: case_sensitive,
         literal: literal,
+        output_mode: output_mode,
+        multiline: String.contains?(pattern, ["\n", "\\n"]),
         context_lines: context_lines,
         max_results: max_results,
         skip: skip,
@@ -153,11 +169,14 @@ defmodule CodingAgent.Tools.Grep do
         fallback_match_fun: Keyword.get(opts, :fallback_match_fun, &line_matches?/2)
       }
 
-      if Keyword.get(opts, :ripgrep_available?, ripgrep_available?()) do
-        search_with_ripgrep(search_opts)
-      else
-        search_with_elixir(search_opts)
-      end
+      result =
+        if Keyword.get(opts, :ripgrep_available?, ripgrep_available?()) do
+          search_with_ripgrep(search_opts)
+        else
+          search_with_elixir(search_opts)
+        end
+
+      PathHelpers.with_missing_paths(result, missing)
     end
   end
 
@@ -214,6 +233,9 @@ defmodule CodingAgent.Tools.Grep do
     {:error, "skip must be a non-negative integer, got: #{inspect(skip)}"}
   end
 
+  defp validate_output_mode(mode) when mode in ["content", "files", "count"], do: :ok
+  defp validate_output_mode(_), do: {:error, "output_mode must be content, files, or count"}
+
   defp suggest_regex_fix(pattern) do
     cond do
       String.contains?(pattern, "[") and not String.contains?(pattern, "]") ->
@@ -230,20 +252,6 @@ defmodule CodingAgent.Tools.Grep do
 
       true ->
         ""
-    end
-  end
-
-  defp resolve_path(nil, cwd, _opts), do: {:ok, cwd}
-  defp resolve_path("", cwd, _opts), do: {:ok, cwd}
-
-  defp resolve_path(path, cwd, opts) do
-    {:ok, PathHelpers.resolve_path(path, cwd, Keyword.put(opts, :include_bare_memory, true))}
-  end
-
-  defp check_path_access(path) do
-    case FileValidation.check_path_access(path, [:regular, :directory]) do
-      {:ok, _stat} -> :ok
-      {:error, _} = error -> error
     end
   end
 
@@ -403,6 +411,7 @@ defmodule CodingAgent.Tools.Grep do
     args = ["--json", "--line-number", "--color", "never"]
     args = if opts.case_sensitive, do: args, else: args ++ ["--ignore-case"]
     args = if opts.literal, do: args ++ ["--fixed-strings"], else: args
+    args = if opts.multiline, do: args ++ ["-U"], else: args
     args = if opts.hidden, do: args ++ ["--hidden"], else: args
     args = if opts.no_ignore, do: args ++ ["--no-ignore"], else: args
 
@@ -416,7 +425,7 @@ defmodule CodingAgent.Tools.Grep do
     # `--regexp=` keeps a pattern that starts with `-` (e.g. `->`) from being
     # parsed as a flag (`-e -foo` is rejected by ripgrep's argument parser);
     # `--` does the same for the path.
-    args ++ ["--regexp=" <> opts.pattern, "--", opts.path]
+    args ++ ["--regexp=" <> opts.pattern, "--"] ++ opts.paths
   end
 
   defp parse_ripgrep_output(output, opts) do
@@ -428,18 +437,21 @@ defmodule CodingAgent.Tools.Grep do
           {:ok,
            %{
              "type" => "match",
-             "data" => %{
-               "path" => %{"text" => file_path},
-               "line_number" => line_number
-             }
+             "data" =>
+               %{
+                 "path" => %{"text" => file_path},
+                 "line_number" => line_number
+               } = data
            }}
           when is_binary(file_path) and is_integer(line_number) ->
-            [%{file_path: file_path, line_number: line_number} | acc]
+            column = get_in(data, ["submatches", Access.at(0), "start"]) || 0
+            [%{file_path: file_path, line_number: line_number, column: column} | acc]
 
           _ ->
             acc
         end
       end)
+      |> Enum.uniq_by(&{&1.file_path, &1.line_number})
       |> Enum.sort_by(&{&1.file_path, &1.line_number})
 
     build_result_from_match_refs(matches, opts)
@@ -477,21 +489,30 @@ defmodule CodingAgent.Tools.Grep do
 
   defp run_elixir_search(opts) do
     with {:ok, matcher} <- compile_matcher(opts.pattern, opts.case_sensitive, opts.literal) do
-      limit = opts.skip + opts.max_results
+      limit = if opts.output_mode == "count", do: :infinity, else: opts.skip + opts.max_results
 
       {refs, count, oversized, incomplete?} =
-        opts.fallback_files_fun.(opts.path, opts)
+        opts.paths
+        |> Enum.flat_map(&opts.fallback_files_fun.(&1, opts))
+        |> Enum.uniq()
         |> Enum.sort()
         |> Enum.reduce_while({[], 0, 0, false}, fn file, {refs, count, oversized, _} ->
           if aborted?(opts.signal) do
             {:halt, {refs, count, oversized, true}}
           else
-            {matches, oversized?, more?} = search_file_refs(file, matcher, limit - count, opts)
+            remaining =
+              cond do
+                opts.output_mode == "files" -> 1
+                limit == :infinity -> :infinity
+                true -> limit - count
+              end
+
+            {matches, oversized?, more?} = search_file_refs(file, matcher, remaining, opts)
             count = count + length(matches)
 
             acc =
               {Enum.reverse(matches, refs), count, oversized + if(oversized?, do: 1, else: 0),
-               more? or count == limit}
+               (opts.output_mode == "content" and more?) or count == limit}
 
             if count == limit, do: {:halt, acc}, else: {:cont, acc}
           end
@@ -528,7 +549,7 @@ defmodule CodingAgent.Tools.Grep do
   end
 
   defp compile_matcher(pattern, case_sensitive, false) do
-    options = if case_sensitive, do: [], else: [:caseless]
+    options = if case_sensitive, do: [:multiline], else: [:multiline, :caseless]
 
     case Regex.compile(pattern, options) do
       {:ok, regex} -> {:ok, {:regex, regex}}
@@ -595,12 +616,18 @@ defmodule CodingAgent.Tools.Grep do
       {:ok, content, oversized?} ->
         refs =
           if String.valid?(content) and not String.contains?(content, <<0>>) do
-            content
-            |> String.split(~r/\r?\n/)
-            |> Stream.with_index(1)
-            |> Stream.filter(fn {line, _} -> opts.fallback_match_fun.(line, matcher) end)
-            |> Stream.map(fn {_, idx} -> %{file_path: file_path, line_number: idx} end)
-            |> Enum.take(limit)
+            if opts.multiline do
+              multiline_refs(content, matcher, file_path, limit)
+            else
+              content
+              |> String.split(~r/\r?\n/)
+              |> Stream.with_index(1)
+              |> Stream.filter(fn {line, _} -> opts.fallback_match_fun.(line, matcher) end)
+              |> Stream.map(fn {line, idx} ->
+                %{file_path: file_path, line_number: idx, column: match_column(line, matcher)}
+              end)
+              |> take_refs(limit)
+            end
           else
             []
           end
@@ -610,6 +637,55 @@ defmodule CodingAgent.Tools.Grep do
       {:error, _} ->
         {[], false, false}
     end
+  end
+
+  defp take_refs(refs, :infinity), do: Enum.to_list(refs)
+  defp take_refs(refs, limit), do: Enum.take(refs, limit)
+
+  defp multiline_refs(content, matcher, file_path, limit) do
+    offsets =
+      case matcher do
+        {:regex, regex} ->
+          Regex.scan(regex, content, return: :index, capture: :first)
+          |> Enum.map(fn [{offset, _}] -> offset end)
+
+        {:literal, pattern, case_sensitive} ->
+          source = if case_sensitive, do: content, else: String.downcase(content)
+          :binary.matches(source, pattern) |> Enum.map(&elem(&1, 0))
+      end
+
+    offsets
+    |> Stream.map(fn offset ->
+      line = 1 + length(:binary.matches(binary_part(content, 0, offset), "\n"))
+
+      line_start =
+        case :binary.matches(binary_part(content, 0, offset), "\n") |> List.last() do
+          nil -> 0
+          {last, _} -> last + 1
+        end
+
+      %{file_path: file_path, line_number: line, column: offset - line_start}
+    end)
+    |> Stream.uniq_by(& &1.line_number)
+    |> take_refs(limit)
+  end
+
+  defp match_column(line, {:regex, regex}) do
+    case Regex.run(regex, line, return: :index, capture: :first) do
+      [{offset, _}] -> offset
+      _ -> 0
+    end
+  end
+
+  defp match_column(line, {:literal, pattern, true}) do
+    case :binary.match(line, pattern) do
+      {offset, _} -> offset
+      :nomatch -> 0
+    end
+  end
+
+  defp match_column(line, {:literal, pattern, false}) do
+    match_column(line, {:regex, Regex.compile!(Regex.escape(pattern), [:caseless])})
   end
 
   defp line_matches?(line, {:regex, regex}), do: Regex.match?(regex, line)
@@ -623,6 +699,57 @@ defmodule CodingAgent.Tools.Grep do
   end
 
   defp build_result_from_match_refs([], _opts), do: no_matches_result()
+
+  defp build_result_from_match_refs(refs, %{output_mode: mode} = opts)
+       when mode in ["files", "count"] do
+    counts = Enum.frequencies_by(refs, & &1.file_path)
+    entries = Enum.sort(counts)
+    page = entries |> Enum.drop(opts.skip) |> Enum.take(opts.max_results)
+    incomplete? = Map.get(opts, :incomplete, false)
+
+    {lines, shown, _, byte_limited?} =
+      Enum.reduce_while(page, {[], 0, 0, false}, fn {path, count}, {lines, shown, bytes, _} ->
+        line =
+          display_path(path, opts.path, directory_search?(opts.path)) <>
+            if(mode == "count", do: ": #{count}", else: "")
+
+        size = byte_size(line) + 1
+
+        if bytes + size > opts.max_bytes do
+          {:halt, {lines, shown, bytes, true}}
+        else
+          {:cont, {[line | lines], shown + 1, bytes + size, false}}
+        end
+      end)
+
+    more? = incomplete? or length(entries) > opts.skip + shown
+    total = length(refs)
+    qualifier = if incomplete?, do: "at least ", else: ""
+
+    summary =
+      if mode == "count",
+        do: "Total: #{qualifier}#{total} matches.",
+        else: "Found #{qualifier}#{length(entries)} matching files."
+
+    notice = if more?, do: "\n\n[Use skip=#{opts.skip + shown} for the next page.]", else: ""
+
+    details = %{
+      output_mode: mode,
+      match_count: total,
+      file_count: length(entries),
+      truncated: more? or byte_limited?
+    }
+
+    details = if more?, do: Map.put(details, :next_skip, opts.skip + shown), else: details
+    details = if mode == "count", do: Map.put(details, :counts, Map.new(counts)), else: details
+
+    %AgentToolResult{
+      content: [
+        %TextContent{text: summary <> "\n\n" <> Enum.join(Enum.reverse(lines), "\n") <> notice}
+      ],
+      details: details
+    }
+  end
 
   defp build_result_from_match_refs(match_refs, opts) do
     total_match_count = length(match_refs)
@@ -765,7 +892,7 @@ defmodule CodingAgent.Tools.Grep do
   end
 
   defp format_match_ref(
-         %{file_path: file_path, line_number: line_number},
+         %{file_path: file_path, line_number: line_number} = match_ref,
          opts,
          cache,
          directory_search?
@@ -791,7 +918,8 @@ defmodule CodingAgent.Tools.Grep do
         {block_lines, block_truncated?} =
           Enum.reduce(start_line..end_line, {[], false}, fn current_line, {acc, any_truncated?} ->
             raw_line = Enum.at(lines, current_line - 1, "")
-            {line_text, line_truncated?} = truncate_match_line(raw_line)
+            column = if current_line == line_number, do: Map.get(match_ref, :column, 0), else: 0
+            {line_text, line_truncated?} = truncate_match_line(raw_line, column)
 
             formatted_line =
               if current_line == line_number do
@@ -842,20 +970,28 @@ defmodule CodingAgent.Tools.Grep do
   defp display_path(file_path, search_path, true) do
     relative_path = Path.relative_to(file_path, search_path)
 
-    if relative_path == file_path or String.starts_with?(relative_path, "../") do
-      Path.basename(file_path)
-    else
-      relative_path
-    end
+    relative_path
   end
 
   defp display_path(file_path, _search_path, false), do: Path.basename(file_path)
 
-  defp truncate_match_line(line) do
+  defp truncate_match_line(line, byte_offset) do
     if String.length(line) <= @grep_max_line_length do
       {line, false}
     else
-      {String.slice(line, 0, @grep_max_line_length) <> "... [truncated]", true}
+      prefix = binary_part(line, 0, min(byte_offset, byte_size(line)))
+      column = String.length(prefix)
+
+      start =
+        max(
+          0,
+          min(column - div(@grep_max_line_length, 2), String.length(line) - @grep_max_line_length)
+        )
+
+      window = String.slice(line, start, @grep_max_line_length)
+      left = if start > 0, do: "...", else: ""
+      right = if start + @grep_max_line_length < String.length(line), do: "...", else: ""
+      {left <> window <> right <> " [col #{column + 1}]", true}
     end
   end
 

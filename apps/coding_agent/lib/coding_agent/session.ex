@@ -1949,6 +1949,8 @@ defmodule CodingAgent.Session do
       run_id: state.run_id,
       learning_review_options: CodingAgent.Session.LearningReview.options(state),
       tool_policy: state.tool_policy,
+      channel_identity:
+        if(state.session_scope == :main, do: (state.approval_context || %{})[:channel_identity]),
       query: if(is_binary(skill_context), do: skill_context, else: "")
     }
     |> Map.merge(trusted_memory_context(state))

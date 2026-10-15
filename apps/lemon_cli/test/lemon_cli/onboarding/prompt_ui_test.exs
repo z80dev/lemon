@@ -38,10 +38,17 @@ defmodule LemonCli.Onboarding.PromptUITest do
              PromptUI.select(%{title: "Choose", options: @options}, io: io, force: true)
   end
 
-  test "closed input cancels instead of silently accepting the default" do
+  test "closed input is distinct from an explicit cancellation" do
     {io, _messages} = io_for([])
 
-    assert :cancel =
+    assert {:error, :end_of_input} =
+             PromptUI.select(%{title: "Choose", options: @options}, io: io, force: true)
+  end
+
+  test "EOF is distinct from an explicit cancellation" do
+    {io, _messages} = io_for([:eof])
+
+    assert {:error, :end_of_input} =
              PromptUI.select(%{title: "Choose", options: @options}, io: io, force: true)
   end
 

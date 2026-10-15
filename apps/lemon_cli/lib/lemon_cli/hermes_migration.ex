@@ -30,6 +30,9 @@ defmodule LemonCli.HermesMigration do
     "environment" => {"environment", :string},
     "workspace" => {"workspace", :string},
     "peerName" => {"user_peer", :string},
+    "pinUserPeer" => {"pin_user_peer", :boolean},
+    "userPeerAliases" => {"user_peer_aliases", :peer_aliases},
+    "runtimePeerPrefix" => {"runtime_peer_prefix", :optional_string},
     "aiPeer" => {"ai_peer", :string},
     "recallMode" => {"recall_mode", ~w(hybrid context tools)},
     "sessionStrategy" => {"session_strategy", ~w(per-session per-directory per-repo global)},
@@ -449,12 +452,14 @@ defmodule LemonCli.HermesMigration do
         |> Map.get(host, %{})
         |> honcho_alias("base_url", "baseUrl")
         |> honcho_alias("requestTimeout", "timeout")
+        |> honcho_alias("pinPeerName", "pinUserPeer")
 
       config =
         raw
         |> Map.drop(["hosts", "defaultHost"])
         |> honcho_alias("base_url", "baseUrl")
         |> honcho_alias("requestTimeout", "timeout")
+        |> honcho_alias("pinPeerName", "pinUserPeer")
         |> Map.merge(host_config)
         |> Map.put_new("workspace", host)
         |> Map.put_new("aiPeer", host)
@@ -493,6 +498,18 @@ defmodule LemonCli.HermesMigration do
     end
   end
 
+  defp honcho_value(value, :optional_string) when is_binary(value),
+    do: {:ok, String.trim(value)}
+
+  defp honcho_value(value, :peer_aliases) when is_map(value) do
+    if Enum.all?(value, fn {id, peer} ->
+         is_binary(id) and id != "" and is_binary(peer) and
+           Regex.match?(~r/^[A-Za-z0-9_-]{1,512}$/, peer)
+       end),
+       do: {:ok, value},
+       else: :error
+  end
+
   defp honcho_value(value, :boolean) when is_boolean(value), do: {:ok, value}
 
   defp honcho_value(value, :positive_integer) when is_integer(value) and value > 0,
@@ -521,9 +538,33 @@ defmodule LemonCli.HermesMigration do
 
       true ->
         patched =
-          if is_binary(value),
-            do: TomlPatch.upsert_string(content, "honcho", key, value),
-            else: TomlPatch.upsert_raw_line(content, "honcho", key, "#{key} = #{value}")
+          cond do
+            is_binary(value) ->
+              TomlPatch.upsert_raw_line(
+                content,
+                "honcho",
+                key,
+                "#{key} = #{Jason.encode!(value)}"
+              )
+
+            is_map(value) ->
+              aliases =
+                value
+                |> Enum.sort()
+                |> Enum.map_join("\n", fn {id, peer} ->
+                  "#{Jason.encode!(id)} = #{Jason.encode!(peer)}"
+                end)
+
+              # Explicit tables also preserve an empty alias map with the TOML
+              # decoder, whose empty inline-table path loses the parent scope.
+              content
+              |> TomlPatch.delete_key("honcho", key)
+              |> TomlPatch.delete_table_tree("honcho.#{key}")
+              |> then(&(&1 <> "\n[honcho.#{key}]\n" <> aliases <> "\n"))
+
+            true ->
+              TomlPatch.upsert_raw_line(content, "honcho", key, "#{key} = #{value}")
+          end
 
         {patched,
          item(

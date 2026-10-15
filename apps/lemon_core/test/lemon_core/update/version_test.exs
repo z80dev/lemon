@@ -54,7 +54,7 @@ defmodule LemonCore.Update.VersionTest do
     end
 
     test "falls back to string comparison for non-CalVer" do
-      assert is_atom(Version.compare("0.1.0", "0.2.0"))
+      assert Version.compare("0.1.0", "0.2.0") == :lt
     end
   end
 

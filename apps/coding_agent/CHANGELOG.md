@@ -4,6 +4,27 @@
 
 ### Added
 
+- Local edit and patch support the same opt-in formatting as write and return
+  post-format snapshot tags. Anchored edits recover recent session/path tags
+  only when every referenced original range remains byte-identical and unique;
+  snapshot history is bounded, and text-edit staleness checks are unchanged.
+
+- Session-scoped `local://name` scratch files support read, write and bash URL
+  expansion. `proc://` lists owned processes; process URLs peek output, write
+  stdin or terminate through `/kill`.
+
+- Find sorts the complete candidate set before applying `max_results`, with
+  `sort: "mtime"` for newest-first (path tie-breaks) or the existing default
+  `"path"`. Slash globs use full-path matching in fd as in the fallback;
+  scopes exceeding 100,000 candidates fail with a narrowing hint.
+
+- Grep and find accept semicolon-separated roots, merge/deduplicate results before
+  paging, and report missing roots without discarding existing ones. Grep long
+  lines now show a match-centered 500-character window and the original column.
+
+- Grep supports `output_mode: content|files|count`, with paged paths or per-file
+  matching-line counts and a total. Newline patterns search across lines in both backends.
+
 - Background process controls now support exact stdin writes and EOF through
   `process_input`, non-consuming `bash_output` peeks, and graceful `kill_process`
   SIGTERM with a two-second SIGKILL fallback (or explicit immediate kill).
@@ -20,11 +41,19 @@
 
 ### Changed
 
+- Todo plans preserve `blocked` and `abandoned` statuses, optional phase/blocker
+  notes and stable IDs in the journal and client projections. Writes keep only
+  the first in-progress task active; progress reports all statuses, and actionable
+  tasks exclude blocked/abandoned work. Terminal checklists show phases and notes.
+
 - Consolidate memory tools as `remember` (compact USER.md/MEMORY.md facts) and
   `recall` (past conversations and longer workspace notes); remove the former
   search, topic, and session-browse tool surfaces.
 
 ### Fixed
+
+- Patch hunks retry whitespace and typographic-punctuation normalization only
+  after an exact miss, reject ambiguous matches, and preserve original context.
 
 - Local overwrite format detection reads only a 64 KiB leading window rather
   than loading the entire existing file.

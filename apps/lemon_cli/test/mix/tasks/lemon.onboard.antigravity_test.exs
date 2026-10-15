@@ -44,6 +44,7 @@ defmodule Mix.Tasks.Lemon.Onboard.AntigravityTest do
     output =
       capture_io(fn ->
         Antigravity.run([
+          "--non-interactive",
           "--token",
           "antigravity-token-123",
           "--config-path",
@@ -69,6 +70,7 @@ defmodule Mix.Tasks.Lemon.Onboard.AntigravityTest do
 
     capture_io(fn ->
       Antigravity.run([
+        "--non-interactive",
         "--token",
         "antigravity-token-123",
         "--config-path",
@@ -96,6 +98,7 @@ defmodule Mix.Tasks.Lemon.Onboard.AntigravityTest do
     assert_raise Mix.Error, ~r/Unknown model/, fn ->
       capture_io(fn ->
         Antigravity.run([
+          "--non-interactive",
           "--token",
           "antigravity-token-123",
           "--config-path",
