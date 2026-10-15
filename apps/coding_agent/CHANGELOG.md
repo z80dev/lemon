@@ -17,6 +17,9 @@
 
 ### Fixed
 
+- Local patches refuse stale updates, deletes, and move sources before writing
+  any operation; filesystem errors now use actionable messages without raw terms.
+
 - Grep pages are sorted by path and line across both engines. Partial ripgrep
   errors preserve matches with warnings, and lookaround/backreferences select
   PCRE2 or explain the unsupported Rust-regex construct. The Elixir fallback
