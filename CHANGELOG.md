@@ -8,7 +8,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
-No unreleased changes yet.
+- Add `report_issue` for short tool-misbehavior notes in a private, bounded
+  session-local JSONL log, with timestamp and optional tool name. It requires
+  no approval by default and makes no network requests.
 
 ---
 
