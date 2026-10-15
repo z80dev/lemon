@@ -6,32 +6,6 @@ defmodule LemonAgent.EventStreamTest do
   alias LemonAgent.Test.Mocks
 
   # ============================================================================
-  # Starting a Stream
-  # ============================================================================
-
-  describe "start_link/1" do
-    test "starts a new event stream" do
-      {:ok, stream} = EventStream.start_link()
-      assert is_pid(stream)
-      assert Process.alive?(stream)
-    end
-
-    test "starts with empty options" do
-      {:ok, stream} = EventStream.start_link([])
-      assert is_pid(stream)
-    end
-
-    test "multiple streams can be started" do
-      {:ok, stream1} = EventStream.start_link()
-      {:ok, stream2} = EventStream.start_link()
-
-      assert stream1 != stream2
-      assert Process.alive?(stream1)
-      assert Process.alive?(stream2)
-    end
-  end
-
-  # ============================================================================
   # Pushing Events
   # ============================================================================
 

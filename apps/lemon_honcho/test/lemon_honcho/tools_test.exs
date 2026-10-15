@@ -197,6 +197,7 @@ defmodule LemonHoncho.ToolsTest do
     test "every tool exposes a well-formed schema from tool/1 and tool/2" do
       Enum.each(@modules, fn module ->
         assert_valid_tool(module.tool([]), @names[module])
+        assert module.tool([]).timeout_ms == :infinity
         assert_valid_tool(module.tool("/tmp/lemon-honcho-tools-test", []), @names[module])
       end)
     end

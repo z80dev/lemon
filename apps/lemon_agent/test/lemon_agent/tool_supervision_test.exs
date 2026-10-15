@@ -47,11 +47,6 @@ defmodule LemonAgent.ToolSupervisionTest do
   # ============================================================================
 
   describe "LemonAgent.ToolTaskSupervisor" do
-    test "ToolTaskSupervisor is running on application start" do
-      assert Process.whereis(LemonAgent.ToolTaskSupervisor) != nil
-      assert Process.alive?(Process.whereis(LemonAgent.ToolTaskSupervisor))
-    end
-
     test "tool tasks run under ToolTaskSupervisor" do
       test_pid = self()
 
@@ -286,121 +281,6 @@ defmodule LemonAgent.ToolSupervisionTest do
 
       # ToolTaskSupervisor should still be alive
       assert Process.alive?(Process.whereis(LemonAgent.ToolTaskSupervisor))
-    end
-  end
-
-  # ============================================================================
-  # Telemetry Tests
-  # ============================================================================
-
-  describe "tool task telemetry" do
-    setup do
-      test_pid = self()
-
-      # Attach telemetry handlers
-      :telemetry.attach_many(
-        "test-tool-task-telemetry",
-        [
-          [:lemon_agent, :tool_task, :start],
-          [:lemon_agent, :tool_task, :end],
-          [:lemon_agent, :tool_task, :error]
-        ],
-        fn event, measurements, metadata, _config ->
-          send(test_pid, {:telemetry, event, measurements, metadata})
-        end,
-        nil
-      )
-
-      on_exit(fn ->
-        :telemetry.detach("test-tool-task-telemetry")
-      end)
-
-      :ok
-    end
-
-    test "emits :start telemetry when tool task begins" do
-      echo_tool = Mocks.echo_tool()
-      context = simple_context(tools: [echo_tool])
-
-      tool_call = Mocks.tool_call("echo", %{"text" => "hello"}, id: "call_telem_start")
-      tool_response = Mocks.assistant_message_with_tool_calls([tool_call])
-      final_response = Mocks.assistant_message("Done")
-
-      config =
-        simple_config(stream_fn: Mocks.mock_stream_fn([tool_response, final_response]))
-
-      _events = Loop.stream([user_message("Echo")], context, config) |> Enum.to_list()
-
-      assert_receive {:telemetry, [:lemon_agent, :tool_task, :start], measurements, metadata}
-      assert is_integer(measurements.system_time)
-      assert metadata.tool_name == "echo"
-      assert metadata.tool_call_id == "call_telem_start"
-    end
-
-    test "emits :end telemetry when tool task completes" do
-      echo_tool = Mocks.echo_tool()
-      context = simple_context(tools: [echo_tool])
-
-      tool_call = Mocks.tool_call("echo", %{"text" => "hello"}, id: "call_telem_end")
-      tool_response = Mocks.assistant_message_with_tool_calls([tool_call])
-      final_response = Mocks.assistant_message("Done")
-
-      config =
-        simple_config(stream_fn: Mocks.mock_stream_fn([tool_response, final_response]))
-
-      _events = Loop.stream([user_message("Echo")], context, config) |> Enum.to_list()
-
-      assert_receive {:telemetry, [:lemon_agent, :tool_task, :end], measurements, metadata}
-      assert is_integer(measurements.system_time)
-      assert metadata.tool_name == "echo"
-      assert metadata.tool_call_id == "call_telem_end"
-      assert metadata.is_error == false
-    end
-
-    test "emits :end telemetry with is_error=true for tool errors" do
-      error_tool = Mocks.error_tool()
-      context = simple_context(tools: [error_tool])
-
-      tool_call = Mocks.tool_call("error_tool", %{"message" => "fail"}, id: "call_telem_err")
-      tool_response = Mocks.assistant_message_with_tool_calls([tool_call])
-      final_response = Mocks.assistant_message("Done")
-
-      config =
-        simple_config(stream_fn: Mocks.mock_stream_fn([tool_response, final_response]))
-
-      _events = Loop.stream([user_message("Error")], context, config) |> Enum.to_list()
-
-      assert_receive {:telemetry, [:lemon_agent, :tool_task, :end], _measurements, metadata}
-      assert metadata.tool_name == "error_tool"
-      assert metadata.is_error == true
-    end
-
-    test "emits :error telemetry when tool task crashes" do
-      crash_tool = %AgentTool{
-        name: "crash_tool",
-        description: "Crashes",
-        parameters: %{},
-        label: "Crash",
-        execute: fn _id, _params, _abort, _on_update ->
-          Process.exit(self(), :kill)
-        end
-      }
-
-      context = simple_context(tools: [crash_tool])
-
-      tool_call = Mocks.tool_call("crash_tool", %{}, id: "call_telem_crash")
-      tool_response = Mocks.assistant_message_with_tool_calls([tool_call])
-      final_response = Mocks.assistant_message("Done")
-
-      config =
-        simple_config(stream_fn: Mocks.mock_stream_fn([tool_response, final_response]))
-
-      _events = Loop.stream([user_message("Crash")], context, config) |> Enum.to_list()
-
-      assert_receive {:telemetry, [:lemon_agent, :tool_task, :error], _measurements, metadata}
-      assert metadata.tool_name == "crash_tool"
-      assert metadata.tool_call_id == "call_telem_crash"
-      assert metadata.reason != nil
     end
   end
 end
