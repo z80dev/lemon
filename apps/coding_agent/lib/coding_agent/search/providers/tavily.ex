@@ -3,6 +3,7 @@ defmodule CodingAgent.Search.Providers.Tavily do
 
   @behaviour CodingAgent.Search.Provider
 
+  alias CodingAgent.Search.Operators
   alias CodingAgent.Search.Providers.KeyedHttp
   alias CodingAgent.Search.Result
 
@@ -36,12 +37,12 @@ defmodule CodingAgent.Search.Providers.Tavily do
       "include_raw_content" => false
     }
 
-    {first, last} = CodingAgent.Search.Operators.dates(request)
+    {first, last} = Operators.dates(request)
 
     body =
       body
-      |> CodingAgent.Search.Operators.put_if("start_date", first)
-      |> CodingAgent.Search.Operators.put_if("end_date", last)
+      |> Operators.put_if("start_date", first)
+      |> Operators.put_if("end_date", last)
 
     tokens = Map.get(request, :operator_tokens, [])
 

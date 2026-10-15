@@ -209,11 +209,9 @@ defmodule CodingAgent.BashExecutor do
   end
 
   defp safe_close_port(port) do
-    try do
-      Port.close(port)
-    catch
-      :error, _ -> :ok
-    end
+    Port.close(port)
+  catch
+    :error, _ -> :ok
   end
 
   defp collect_output(state) do

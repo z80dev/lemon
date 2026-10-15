@@ -18,7 +18,7 @@ defmodule CodingAgent.SessionManager do
   """
 
   alias CodingAgent.Session.BudgetLedger
-  alias CodingAgent.SessionManager.{Session, SessionHeader, SessionEntry}
+  alias CodingAgent.SessionManager.{Session, SessionEntry, SessionHeader}
 
   @current_version 3
   @id_length 8

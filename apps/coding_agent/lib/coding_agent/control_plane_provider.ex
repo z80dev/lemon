@@ -15,7 +15,18 @@ defmodule CodingAgent.ControlPlaneProvider do
 
   @behaviour LemonCore.AgentRuntime.Provider
 
+  alias CodingAgent.Session.ContextUsage
+  alias CodingAgent.Session.ModelResolver
+  alias CodingAgent.Session.Ownership
+  alias CodingAgent.Session.Persistence
+  alias CodingAgent.Session.Planning
+  alias CodingAgent.Session.Presentation
+  alias CodingAgent.Session.Recovery
+  alias CodingAgent.Session.Rewind
+  alias CodingAgent.Session.Todos
   alias CodingAgent.Session.UserPrompt
+  alias CodingAgent.Tools.FeatureRequirements
+  alias CodingAgent.Tools.TodoStore
 
   def user_prompt_bind(session_key, connection, enabled, opts \\ []) do
     if enabled,
@@ -34,8 +45,8 @@ defmodule CodingAgent.ControlPlaneProvider do
     case session_todos(session_key, nil) do
       {:ok, todos, _revision} ->
         todos
-        |> CodingAgent.Tools.TodoStore.progress()
-        |> Map.put(:actionable_count, length(CodingAgent.Tools.TodoStore.actionable(todos)))
+        |> TodoStore.progress()
+        |> Map.put(:actionable_count, length(TodoStore.actionable(todos)))
 
       {:error, _} ->
         nil
@@ -93,7 +104,7 @@ defmodule CodingAgent.ControlPlaneProvider do
   end
 
   defp materialized_todos(session) do
-    {result, head} = CodingAgent.Session.Todos.materialize(session)
+    {result, head} = Todos.materialize(session)
 
     case result do
       {:ok, todos} -> {:ok, todos, {0, head}}
@@ -122,7 +133,7 @@ defmodule CodingAgent.ControlPlaneProvider do
     end
   end
 
-  def feature_progress(cwd), do: CodingAgent.Tools.FeatureRequirements.get_progress(cwd)
+  def feature_progress(cwd), do: FeatureRequirements.get_progress(cwd)
 
   def compact_session(session_key, opts) do
     case live_session(session_key) do
@@ -162,7 +173,7 @@ defmodule CodingAgent.ControlPlaneProvider do
              {:ok, path} <- native_session_path(session_key, cwd),
              {:ok, session} <- CodingAgent.SessionManager.load_from_file(path),
              :ok <- recovery_owner(session_key, session.header.id) do
-          {:ok, CodingAgent.Session.Recovery.snapshot(session)}
+          {:ok, Recovery.snapshot(session)}
         else
           nil -> {:error, :unavailable}
           {:error, _} = error -> error
@@ -218,7 +229,7 @@ defmodule CodingAgent.ControlPlaneProvider do
       |> Enum.filter(fn {_id, record} -> record.owner == owner end)
       |> Enum.sort_by(&elem(&1, 0))
       |> Enum.reduce_while({:ok, []}, fn {id, record}, {:ok, receipts} ->
-        case apply(manager, :receipt, [id, owner]) do
+        case manager.receipt(id, owner) do
           {:ok, receipt} ->
             {:cont, {:ok, [receipt | receipts]}}
 
@@ -245,7 +256,7 @@ defmodule CodingAgent.ControlPlaneProvider do
       nil ->
         with {:ok, path} <- native_session_path(session_key, cwd),
              {:ok, session} <- CodingAgent.SessionManager.load_from_file(path) do
-          {:ok, CodingAgent.Session.Rewind.tree(session, opts)}
+          {:ok, Rewind.tree(session, opts)}
         end
 
       pid ->
@@ -261,7 +272,7 @@ defmodule CodingAgent.ControlPlaneProvider do
       fn path ->
         with {:ok, session} <- load_native_session(path),
              {:ok, result, _session} <-
-               CodingAgent.Session.Rewind.run(%{session | file_path: path}, entry_id, opts) do
+               Rewind.run(%{session | file_path: path}, entry_id, opts) do
           {:ok, result}
         end
       end
@@ -285,11 +296,11 @@ defmodule CodingAgent.ControlPlaneProvider do
       &CodingAgent.Session.navigate_entry(&1, entry_id, opts),
       fn path ->
         with {:ok, session} <- load_native_session(path),
-             {:ok, target} <- CodingAgent.Session.Rewind.navigation_target(session, entry_id) do
+             {:ok, target} <- Rewind.navigation_target(session, entry_id) do
           session =
             CodingAgent.SessionManager.set_leaf_id(%{session | file_path: path}, target.leaf)
 
-          {:ok, CodingAgent.Session.Rewind.navigation_receipt(session, entry_id, target, false)}
+          {:ok, Rewind.navigation_receipt(session, entry_id, target, false)}
         end
       end
     )
@@ -307,7 +318,7 @@ defmodule CodingAgent.ControlPlaneProvider do
           session =
             CodingAgent.SessionManager.append_label(%{session | file_path: path}, entry_id, label)
 
-          {:ok, CodingAgent.Session.Rewind.label_receipt(session, entry_id)}
+          {:ok, Rewind.label_receipt(session, entry_id)}
         else
           :missing -> {:error, :entry_not_found}
           {:error, _} = error -> error
@@ -324,8 +335,8 @@ defmodule CodingAgent.ControlPlaneProvider do
       nil ->
         with {:ok, path} <- native_session_path(session_key, cwd) do
           decision =
-            CodingAgent.Session.Ownership.with_file(path, fn ->
-              case CodingAgent.Session.Ownership.owner(path) || live_session(session_key) do
+            Ownership.with_file(path, fn ->
+              case Ownership.owner(path) || live_session(session_key) do
                 nil -> {:stopped, stopped_mutation.(path)}
                 pid -> {:live, pid}
               end
@@ -355,7 +366,7 @@ defmodule CodingAgent.ControlPlaneProvider do
          nil <- LemonCore.ChatStateStore.get(destination_key),
          {:ok, source_path} <- native_session_path(source_key, cwd) do
       id = LemonCore.Id.uuid()
-      destination_path = CodingAgent.Session.Presentation.session_file_path(id, cwd)
+      destination_path = Presentation.session_file_path(id, cwd)
 
       fork_opts =
         case Keyword.get(opts, :entry_id) do
@@ -405,12 +416,12 @@ defmodule CodingAgent.ControlPlaneProvider do
       settings = CodingAgent.SettingsManager.load(session.header.cwd)
       context = CodingAgent.SessionManager.build_session_context(session)
       model = durable_model(context.model, settings)
-      messages = CodingAgent.Session.Persistence.restore_messages_from_session(session)
+      messages = Persistence.restore_messages_from_session(session)
 
-      CodingAgent.Session.ContextUsage.measure_durable(
+      ContextUsage.measure_durable(
         %{session_manager: session, model: model, settings_manager: settings},
         messages,
-        CodingAgent.Session.ContextUsage.stored_overhead(session.header.id)
+        ContextUsage.stored_overhead(session.header.id)
       )
     end
   end
@@ -425,7 +436,7 @@ defmodule CodingAgent.ControlPlaneProvider do
   # A model that is no longer registered still has history worth measuring;
   # its window is then reported as unknown.
   defp durable_model(model, settings) do
-    CodingAgent.Session.ModelResolver.resolve_session_model(model, settings)
+    ModelResolver.resolve_session_model(model, settings)
   rescue
     ArgumentError -> nil
   end
@@ -479,7 +490,7 @@ defmodule CodingAgent.ControlPlaneProvider do
                 fn path ->
                   with {:ok, session} <- load_native_session(path),
                        {:ok, plan, _} <-
-                         CodingAgent.Session.Planning.transition(
+                         Planning.transition(
                            %{session | file_path: path},
                            action,
                            opts
@@ -490,11 +501,11 @@ defmodule CodingAgent.ControlPlaneProvider do
               )
 
             {:error, :session_not_found} when action in [:status, :exit] ->
-              {:ok, CodingAgent.Session.Planning.status(nil)}
+              {:ok, Planning.status(nil)}
 
             {:error, :session_not_found} when action == :enter ->
               with {:ok, session} <- create_native_session(session_key, cwd, :enter) do
-                plan = CodingAgent.Session.Planning.status(session)
+                plan = Planning.status(session)
                 {:ok, plan}
               end
 
@@ -513,7 +524,7 @@ defmodule CodingAgent.ControlPlaneProvider do
 
     # Resolve the initial planning role before publishing a resume token or
     # creating a journal. Invalid configuration leaves creation untouched.
-    with {:ok, _plan, session} <- CodingAgent.Session.Planning.transition(session, action, []) do
+    with {:ok, _plan, session} <- Planning.transition(session, action, []) do
       path = CodingAgent.SessionManager.session_file_path(cwd, session.header.id)
       session = CodingAgent.SessionManager.persist(session, path)
 
@@ -595,7 +606,7 @@ defmodule CodingAgent.ControlPlaneProvider do
 
         if engine == "lemon" and is_binary(token) and token != "" and
              Path.basename(token) == token do
-          {:ok, CodingAgent.Session.Presentation.session_file_path(token, cwd)}
+          {:ok, Presentation.session_file_path(token, cwd)}
         else
           {:error, :unsupported_session}
         end

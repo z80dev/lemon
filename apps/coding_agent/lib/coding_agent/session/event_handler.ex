@@ -9,6 +9,10 @@ defmodule CodingAgent.Session.EventHandler do
   """
 
   alias CodingAgent.Extensions
+  alias CodingAgent.Session.BudgetLedger
+  alias CodingAgent.Session.ContextCheckpoint
+  alias CodingAgent.Session.LearningReview
+  alias CodingAgent.Session.ProjectMemory
   alias LemonCore.Introspection
 
   @type callbacks(state) :: %{
@@ -26,7 +30,7 @@ defmodule CodingAgent.Session.EventHandler do
   end
 
   def handle({:usage_budget_updated, usage}, state, _callbacks) do
-    CodingAgent.Session.BudgetLedger.update(state, usage)
+    BudgetLedger.update(state, usage)
   end
 
   def handle({:turn_start}, state, _callbacks) do
@@ -38,7 +42,7 @@ defmodule CodingAgent.Session.EventHandler do
   def handle({:turn_end, message, tool_results}, state, callbacks) do
     # Execute on_turn_end hooks
     Extensions.execute_hooks(state.hooks, :on_turn_end, [message, tool_results])
-    state = CodingAgent.Session.ContextCheckpoint.finish_turn(state, message, tool_results)
+    state = ContextCheckpoint.finish_turn(state, message, tool_results)
 
     # Abort can terminate the underlying stream before {:canceled, reason} is observed.
     # Treat an aborted assistant turn as terminal to keep Session lifecycle consistent.
@@ -121,9 +125,9 @@ defmodule CodingAgent.Session.EventHandler do
     Extensions.execute_hooks(state.hooks, :on_agent_end, [messages])
     maybe_record_missed_skills(state, messages)
     maybe_record_missed_learning(state, messages)
-    _ = CodingAgent.Session.ProjectMemory.after_turn(state, messages)
+    _ = ProjectMemory.after_turn(state, messages)
     observe_session(state, :run_completed, %{})
-    CodingAgent.Session.LearningReview.completed(messages)
+    LearningReview.completed(messages)
 
     # Complete all event streams with the final event
     callbacks.complete_event_streams.(state, {:agent_end, messages})
