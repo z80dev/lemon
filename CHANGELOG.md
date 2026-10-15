@@ -13,6 +13,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 - Expand `lemon omp` with approval modes, isolated and parallel starts, explicit
   interrupted-session continuation, redirect, model browsing/configuration,
   subagent transcripts, and richer approval/worktree/discovery output.
+- Preserve portable Agent Skills string-valued metadata (including `metadata.lemon`)
+  and support 1024-character Unicode descriptions. Add conformance/discovery
+  coverage for spec fields and bundled resources; document legacy leniency and
+  clarify that synthesized skills remain drafts until promotion.
 - Remember supports exact-entry or unique-substring edits consistently across scoped
   and legacy memory, with actionable ambiguity, safety, and capacity feedback.
 
