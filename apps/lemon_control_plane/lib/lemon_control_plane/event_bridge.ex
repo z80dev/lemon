@@ -73,9 +73,10 @@ defmodule LemonControlPlane.EventBridge do
 
   require Logger
 
-  alias LemonCore.Bus
-  alias LemonCore.Events
   alias LemonControlPlane.Presence
+  alias LemonCore.Bus
+  alias LemonCore.Bus.Delivery
+  alias LemonCore.Events
 
   @bus_topics [
     "exec_approvals",
@@ -125,7 +126,7 @@ defmodule LemonControlPlane.EventBridge do
 
   @impl true
   def init(_opts) do
-    delivery = LemonCore.Bus.Delivery.new(self(), tagged: true)
+    delivery = Delivery.new(self(), tagged: true)
     Enum.each([LemonOmp.bus_topic() | @bus_topics], &Bus.subscribe(&1, delivery: delivery))
 
     # Initialize state version counters
@@ -161,7 +162,7 @@ defmodule LemonControlPlane.EventBridge do
 
   @impl true
   def handle_info({:lemon_bus_delivery, gate, message}, state) do
-    if LemonCore.Bus.Delivery.matches?(state.delivery, gate),
+    if Delivery.matches?(state.delivery, gate),
       do: handle_info(message, state),
       else: {:noreply, state}
   end
@@ -170,12 +171,12 @@ defmodule LemonControlPlane.EventBridge do
     # Lost bus deltas cannot be replayed. Fence every affected client and require
     # authenticated reconnect + owner snapshot recovery, including approvals.
     for {_id, info} <- get_connected_clients(), general_event_client?(info) do
-      LemonCore.Bus.Delivery.resync(info.delivery)
+      Delivery.resync(info.delivery)
     end
 
     topics = [LemonOmp.bus_topic() | @bus_topics] ++ Map.keys(state.topic_ref_counts)
     Enum.each(topics, &Bus.unsubscribe/1)
-    delivery = LemonCore.Bus.Delivery.new(self(), tagged: true)
+    delivery = Delivery.new(self(), tagged: true)
     Enum.each(topics, &Bus.subscribe(&1, delivery: delivery))
     {:noreply, %{state | delivery: delivery}}
   end
@@ -252,7 +253,7 @@ defmodule LemonControlPlane.EventBridge do
     # Inline admission is nonblocking and preserves event order. A task per event
     # simply moved an unbounded queue into the task supervisor.
     Enum.each(clients, fn {_conn_id, info} ->
-      LemonCore.Bus.Delivery.send(info.delivery, {:event, event_name, payload, state_version})
+      Delivery.send(info.delivery, {:event, event_name, payload, state_version})
     end)
   end
 

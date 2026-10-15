@@ -4,6 +4,7 @@ defmodule LemonControlPlane.EventBridgeTest do
   alias LemonControlPlane.EventBridge
   alias LemonControlPlane.Presence
   alias LemonControlPlane.Protocol.Schemas
+  alias LemonCore.Events.ChannelDelivery
 
   setup do
     bridge =
@@ -338,7 +339,7 @@ defmodule LemonControlPlane.EventBridgeTest do
       intent_id = "intent_#{System.unique_integer()}"
 
       payload =
-        LemonCore.Events.ChannelDelivery.new(%{
+        ChannelDelivery.new(%{
           intent_id: intent_id,
           run_id: "run-bridge-1",
           session_key: "agent:default:main",
