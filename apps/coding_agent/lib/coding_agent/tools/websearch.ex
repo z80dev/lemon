@@ -722,11 +722,16 @@ defmodule CodingAgent.Tools.WebSearch do
   end
 
   defp supports_freshness?(provider, freshness) do
-    with {:ok, spec} <- SearchRegistry.fetch(provider) do
-      support = Map.get(Provider.search_features(spec.module), :freshness, [])
-      if freshness in ["pd", "pw", "pm", "py"], do: :relative in support, else: :range in support
-    else
-      _ -> false
+    case SearchRegistry.fetch(provider) do
+      {:ok, spec} ->
+        support = Map.get(Provider.search_features(spec.module), :freshness, [])
+
+        if freshness in ["pd", "pw", "pm", "py"],
+          do: :relative in support,
+          else: :range in support
+
+      _ ->
+        false
     end
   end
 

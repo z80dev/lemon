@@ -49,6 +49,7 @@ defmodule CodingAgent.Tools.ReadFormats do
     ReadArchive,
     ReadFormatText,
     ReadImage,
+    ReadJson,
     ReadNotebook,
     ReadPdf,
     ReadSqlite
@@ -72,9 +73,9 @@ defmodule CodingAgent.Tools.ReadFormats do
         File.regular?(resolved) ->
           dispatch_file(resolved, params, signal, cwd, opts)
 
-        json = CodingAgent.Tools.ReadJson.split_path(resolved) ->
+        json = ReadJson.split_path(resolved) ->
           {file, query} = json
-          CodingAgent.Tools.ReadJson.read(file, query, resolved, params, signal, opts)
+          ReadJson.read(file, query, resolved, params, signal, opts)
 
         sqlite = ReadSqlite.split_path(resolved) ->
           {db, sub_path, query} = sqlite

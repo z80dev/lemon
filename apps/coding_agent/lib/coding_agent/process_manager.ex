@@ -89,9 +89,19 @@ defmodule CodingAgent.ProcessManager do
              deadline,
              Keyword.get(opts, :owner_pid)
            ) do
-        :new -> admit_new_launch(backend, opts)
-        {:existing, receipt} -> receipt_result(receipt)
-        {:error, :identity_conflict} -> {:error, {:rejected, identity, :identity_conflict}}
+        :new ->
+          # Record a service's identity before admission can start external work.
+          # A caller dying before exec/1 returns must not hide its live service.
+          if service = Keyword.get(opts, :service),
+            do: ProcessStore.put_service(identity, service)
+
+          admit_new_launch(backend, opts)
+
+        {:existing, receipt} ->
+          receipt_result(receipt)
+
+        {:error, :identity_conflict} ->
+          {:error, {:rejected, identity, :identity_conflict}}
       end
     else
       {:error, :unknown_backend} ->

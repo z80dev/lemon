@@ -23,8 +23,8 @@ import {
 	ControlPlaneError,
 	HandshakeError,
 	NotConnectedError,
-	RequestTimeoutError,
 	offlineMessage,
+	RequestTimeoutError,
 } from "./errors.ts";
 import {
 	type EventFrame,
@@ -577,6 +577,8 @@ const KNOWN_EVENTS = new Set<string>([
 	"run.graph.changed",
 	"exec.approval.requested",
 	"exec.approval.resolved",
+	"session.prompt.requested",
+	"session.prompt.resolved",
 	"channel.delivery",
 	"omp.session",
 	"stream.resync",

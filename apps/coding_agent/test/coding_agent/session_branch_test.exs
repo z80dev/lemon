@@ -882,12 +882,14 @@ defmodule CodingAgent.SessionBranchTest do
         count = :counters.get(error_after_count, 1)
         :counters.add(error_after_count, 1, 1)
 
-        if count < 2 do
+        if count == 0 do
           {:ok, stream} = LemonAi.EventStream.start_link()
 
           Task.start(fn ->
-            LemonAi.EventStream.push(stream, {:error, "Simulated error", %{}})
-            LemonAi.EventStream.complete(stream, %{})
+            LemonAi.EventStream.error(
+              stream,
+              assistant_message("", stop_reason: :error, error_message: "Simulated error")
+            )
           end)
 
           {:ok, stream}
@@ -903,6 +905,11 @@ defmodule CodingAgent.SessionBranchTest do
       :ok = Session.prompt(session, "Will error")
       assert_receive {:session_event, _id, {:error, _reason, _partial}}, 5000
 
+      assert_receive {:session_event, _id,
+                      {:message_end,
+                       %AssistantMessage{stop_reason: :error, error_message: "Simulated error"}}},
+                     5000
+
       wait_for_streaming_complete(session)
       state = Session.get_state(session)
       assert state.is_streaming == false
@@ -912,8 +919,14 @@ defmodule CodingAgent.SessionBranchTest do
       wait_for_streaming_complete(session)
 
       messages = Session.get_messages(session)
-      # Should have messages from successful prompt
-      assert messages != []
+
+      assert Enum.any?(messages, fn
+               %AssistantMessage{content: [%TextContent{text: "Recovery!"}], stop_reason: :stop} ->
+                 true
+
+               _ ->
+                 false
+             end)
     end
 
     @tag :tmp_dir

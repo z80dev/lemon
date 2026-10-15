@@ -499,7 +499,7 @@ defmodule CodingAgent.BashEdgeCasesTest do
   # ============================================================================
 
   describe "output truncation behavior" do
-    test "truncation keeps tail (most recent output)", %{tmp_dir: tmp_dir} do
+    test "truncation preserves head and tail and archives the omitted middle", %{tmp_dir: tmp_dir} do
       {:ok, result} =
         BashExecutor.execute(
           "for i in $(seq 1 3000); do echo line$i; done",
@@ -509,11 +509,16 @@ defmodule CodingAgent.BashEdgeCasesTest do
         )
 
       assert result.truncated == true
-      # Should have the last lines
+      assert result.output =~ "line1\n"
       assert result.output =~ "line3000"
       assert result.output =~ "line2999"
-      # Should not have early lines
-      refute result.output =~ "line1\n"
+      assert result.output =~ "showing head and tail"
+      refute result.output =~ "line1500\n"
+
+      assert File.read!(result.full_output_path) ==
+               Enum.map_join(1..3000, "", &"line#{&1}\n")
+
+      File.rm!(result.full_output_path)
     end
 
     test "temp file created for very large output", %{tmp_dir: tmp_dir} do
