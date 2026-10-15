@@ -589,23 +589,6 @@ defmodule CodingAgent.ExtensionLifecycleDisclosureTest do
 
       assert summary =~ "**Active:** false (custom_tools)"
     end
-
-    test "a report without the key renders unchanged", %{tmp_dir: tmp_dir} do
-      # A pre-disclosure report shape: the tool must not crash on it.
-      report = %{
-        total_loaded: 0,
-        total_errors: 0,
-        loaded_at: System.system_time(:millisecond),
-        extensions: [],
-        load_errors: [],
-        tool_conflicts: nil
-      }
-
-      tool = ExtensionsStatus.tool(tmp_dir, session_id: "")
-      assert is_function(tool.execute, 4)
-
-      refute Map.has_key?(report, :tool_disclosure)
-    end
   end
 
   defp extension_tools_code(tool_name) do

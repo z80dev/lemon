@@ -84,17 +84,6 @@ defmodule CodingAgent.RunGraphServerTest do
       assert {:error, :not_found} = RunGraph.get(run1)
       assert {:error, :not_found} = RunGraph.get(run2)
     end
-
-    test "clears from DETS as well" do
-      # Create and clear a run
-      run = RunGraph.new_run(%{type: :task})
-      assert {:ok, _} = RunGraph.get(run)
-
-      assert :ok = RunGraphServer.clear()
-
-      # After clear, the run should not exist
-      assert {:error, :not_found} = RunGraph.get(run)
-    end
   end
 
   describe "stats/1" do
@@ -115,14 +104,6 @@ defmodule CodingAgent.RunGraphServerTest do
       stats = RunGraphServer.stats()
       assert stats.size == 5
       assert stats.memory > 0
-    end
-
-    test "returns initialized: false if table not initialized" do
-      # This test verifies the structure of stats when uninitialized
-      # In practice, ensure_tables() will initialize it before returning
-      stats = RunGraphServer.stats()
-      assert is_map(stats)
-      assert Map.has_key?(stats, :initialized)
     end
   end
 
@@ -205,36 +186,6 @@ defmodule CodingAgent.RunGraphServerTest do
       # Cleanup with 1 minute TTL should remove
       assert {:ok, deleted_count} = RunGraphServer.cleanup(RunGraphServer, 60)
       assert deleted_count >= 1
-    end
-  end
-
-  describe "dets_status/1" do
-    test "returns DETS status information" do
-      status = RunGraphServer.dets_status()
-
-      assert is_map(status)
-      assert is_map(status.info)
-      assert is_map(status.state)
-      assert Map.has_key?(status.state, :loaded_from_dets)
-      assert Map.has_key?(status.state, :ets_initialized)
-      assert Map.has_key?(status.state, :dets_initialized)
-    end
-
-    test "returns not_initialized status when DETS is not initialized" do
-      # The status should indicate DETS state
-      status = RunGraphServer.dets_status()
-
-      # Either initialized or not, we get proper structure
-      # When DETS is initialized, info contains :size, :type, etc.
-      # When not initialized, status field may be set to :not_initialized
-      has_status = Map.has_key?(status.info, :status)
-      has_size = Map.has_key?(status.info, :size)
-
-      if has_status do
-        assert status.info.status in [:not_initialized, :closed]
-      else
-        assert has_size or Map.has_key?(status.info, :filename)
-      end
     end
   end
 

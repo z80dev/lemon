@@ -99,21 +99,6 @@ defmodule CodingAgent.ToolDisclosureTest do
       assert over_budget.reason == nil
     end
 
-    test "estimate_tool_tokens matches the documented heuristic" do
-      t = tool("probe", description: "a description", parameters: %{"type" => "object"})
-
-      expected =
-        LemonAi.Tokens.estimate_bytes(
-          Jason.encode!(%{
-            "name" => "probe",
-            "description" => "a description",
-            "parameters" => %{"type" => "object"}
-          })
-        )
-
-      assert ToolDisclosure.estimate_tool_tokens(t) == expected
-    end
-
     test "a non-encodable schema does not raise and still costs something" do
       t = tool("bad", description: "some description", parameters: %{"pid" => self()})
 

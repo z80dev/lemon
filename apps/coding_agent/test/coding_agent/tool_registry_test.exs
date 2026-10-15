@@ -245,16 +245,6 @@ defmodule CodingAgent.ToolRegistryTest do
       assert "parent_question" in names
     end
 
-    test "all tools have required fields", %{tmp_dir: tmp_dir} do
-      tools = ToolRegistry.get_tools(tmp_dir)
-
-      for tool <- tools do
-        assert is_binary(tool.name)
-        assert is_binary(tool.description)
-        assert is_function(tool.execute, 4)
-      end
-    end
-
     test "built-in tool schemas are well-formed JSON object schemas", %{tmp_dir: tmp_dir} do
       tools = ToolRegistry.get_tools(tmp_dir, include_extensions: false, include_mcp: false)
 

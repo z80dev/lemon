@@ -34,13 +34,6 @@ defmodule CodingAgent.ResourceLoaderTest do
   end
 
   describe "load_instructions/1" do
-    test "loads from tmp_dir even when no local files exist", %{tmp_dir: tmp_dir} do
-      # Note: This may still find global files in ~/.claude/ etc.
-      # We just verify it doesn't crash and returns a string
-      result = ResourceLoader.load_instructions(tmp_dir)
-      assert is_binary(result)
-    end
-
     test "loads CLAUDE.md from cwd", %{tmp_dir: tmp_dir} do
       claude_path = Path.join(tmp_dir, "CLAUDE.md")
       File.write!(claude_path, "# Project Instructions\nDo good things.")
@@ -374,13 +367,6 @@ defmodule CodingAgent.ResourceLoaderTest do
   end
 
   describe "load_skills/1" do
-    test "returns empty map when no skills exist", %{tmp_dir: tmp_dir} do
-      result = ResourceLoader.load_skills(tmp_dir)
-      # Note: This may still find global skills under ~/.lemon/agent/skill.
-      # We mainly verify it doesn't crash and returns a map.
-      assert is_map(result)
-    end
-
     test "loads skills from .lemon/skill/*/SKILL.md", %{tmp_dir: tmp_dir} do
       skill_dir = Path.join([tmp_dir, ".lemon", "skill", "commit"])
       File.mkdir_p!(skill_dir)

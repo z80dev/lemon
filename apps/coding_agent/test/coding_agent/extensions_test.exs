@@ -765,19 +765,11 @@ defmodule CodingAgent.ExtensionsTest do
       :ok = Extensions.clear_extension_cache()
       :ok = Extensions.clear_extension_cache()
       :ok = Extensions.clear_extension_cache()
+      assert Extensions.last_load_errors() == {[], nil}
     end
   end
 
   describe "last_load_errors/0" do
-    test "returns empty list and nil timestamp when no errors have been stored" do
-      # Note: This test assumes the ETS table may or may not exist from other tests
-      # We test the behavior when called - it should return {[], nil} or cached errors
-      {errors, loaded_at} = Extensions.last_load_errors()
-      assert is_list(errors)
-      # loaded_at is either nil or an integer timestamp
-      assert is_nil(loaded_at) or is_integer(loaded_at)
-    end
-
     test "returns cached errors after load_extensions_with_errors", %{tmp_dir: tmp_dir} do
       # Create an invalid extension file to generate an error
       invalid_code = """
