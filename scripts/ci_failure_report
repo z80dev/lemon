@@ -1,0 +1,240 @@
+#!/usr/bin/env python3
+"""Summarize a GitHub Actions run's failures and track a red-branch issue.
+
+Usage:
+  scripts/ci_failure_report summary --run-id ID
+  scripts/ci_failure_report track --run-id ID --label LABEL --title TITLE
+                                  --status success|failure
+
+`summary` prints Markdown naming every failed job of the run (it may still be
+in progress; jobs that have not finished are ignored) with the ExUnit failures
+or `##[error]` lines from its log. Pipe it into $GITHUB_STEP_SUMMARY.
+
+`track` keeps one open issue per LABEL: a failing run opens it (or comments
+on the open one) with the summary; a passing run comments and closes it. Use
+it only for runs of the default branch, so the issue means "main is red".
+
+Needs GITHUB_REPOSITORY, GITHUB_SERVER_URL (optional) and a token in
+GH_TOKEN or GITHUB_TOKEN with actions:read, plus issues:write for `track`.
+"""
+
+import argparse
+import json
+import os
+import re
+import sys
+import urllib.error
+import urllib.request
+
+API = os.environ.get("GITHUB_API_URL", "https://api.github.com")
+SERVER = os.environ.get("GITHUB_SERVER_URL", "https://github.com")
+MAX_TESTS_PER_JOB = 25
+MAX_ERRORS_PER_JOB = 8
+MAX_TAIL_LINES = 8
+
+TIMESTAMP = re.compile(r"^\ufeff?\d{4}-\d\d-\d\dT[\d:.]+Z ")
+ANSI = re.compile(r"\x1b\[[0-9;]*m")
+EXUNIT_FAILURE = re.compile(r"^\s+\d+\) ((?:test|doctest) .*) \(([\w.]+)\)\s*$")
+TEST_LOCATION = re.compile(r"^(?:##\[error\])?\s+((?:apps|test)/[\w/.\-]+\.exs:\d+)")
+ERROR_LINE = re.compile(r"^##\[error\](.*)$")
+NOISE = re.compile(r"Process completed with exit code|^\s*$")
+
+
+def token():
+    value = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
+    if not value:
+        sys.exit("ci_failure_report: set GH_TOKEN or GITHUB_TOKEN")
+    return value
+
+
+def request(method, path, body=None, raw=False):
+    data = json.dumps(body).encode() if body is not None else None
+    req = urllib.request.Request(
+        path if path.startswith("http") else f"{API}{path}",
+        data=data,
+        method=method,
+        headers={
+            "Authorization": f"Bearer {token()}",
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+        },
+    )
+    with urllib.request.urlopen(req, timeout=60) as resp:
+        payload = resp.read()
+    if raw:
+        return payload.decode("utf-8", errors="replace")
+    return json.loads(payload) if payload else None
+
+
+def repo():
+    value = os.environ.get("GITHUB_REPOSITORY")
+    if not value:
+        sys.exit("ci_failure_report: set GITHUB_REPOSITORY")
+    return value
+
+
+def failed_jobs(run_id):
+    jobs, page = [], 1
+    while True:
+        batch = request("GET", f"/repos/{repo()}/actions/runs/{run_id}/jobs?per_page=100&page={page}")
+        jobs.extend(batch["jobs"])
+        if len(batch["jobs"]) < 100:
+            break
+        page += 1
+    return [
+        job
+        for job in jobs
+        if job["status"] == "completed" and job["conclusion"] in ("failure", "timed_out", "cancelled")
+    ]
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *args, **kwargs):
+        return None
+
+
+def log_lines(job_id):
+    # The logs endpoint redirects to signed blob storage, which rejects the
+    # API Authorization header, so follow the redirect without it.
+    req = urllib.request.Request(
+        f"{API}/repos/{repo()}/actions/jobs/{job_id}/logs",
+        headers={"Authorization": f"Bearer {token()}", "Accept": "application/vnd.github+json"},
+    )
+    try:
+        try:
+            with urllib.request.build_opener(_NoRedirect).open(req, timeout=60) as resp:
+                text = resp.read()
+        except urllib.error.HTTPError as error:
+            if error.code not in (301, 302, 303, 307, 308):
+                raise
+            with urllib.request.urlopen(error.headers["Location"], timeout=120) as resp:
+                text = resp.read()
+    except urllib.error.HTTPError as error:
+        return None, f"log unavailable (HTTP {error.code})"
+    text = text.decode("utf-8", errors="replace")
+    return [ANSI.sub("", TIMESTAMP.sub("", line)) for line in text.splitlines()], None
+
+
+def job_findings(lines):
+    """ExUnit failures, `##[error]` messages, and the output preceding the
+    first failed step's exit (for scripts that print their own diagnostics)."""
+    tests, errors, tail = [], [], []
+    for index, line in enumerate(lines):
+        failure = EXUNIT_FAILURE.match(line)
+        if failure:
+            location = next(
+                (m.group(1) for m in map(TEST_LOCATION.match, lines[index + 1 : index + 4]) if m),
+                None,
+            )
+            entry = f"{failure.group(2)}: {failure.group(1)}"
+            entry = f"`{location}` {entry}" if location else entry
+            if entry not in tests:
+                tests.append(entry)
+            continue
+        error = ERROR_LINE.match(line)
+        if error and "Process completed with exit code" in error.group(1) and not tail:
+            tail = [l.strip() for l in lines[max(0, index - 40) : index] if l.strip()][-MAX_TAIL_LINES:]
+        elif error and not NOISE.search(error.group(1)):
+            message = error.group(1).strip()
+            if message not in errors:
+                errors.append(message)
+    return tests, errors, tail
+
+
+def summary(run_id):
+    jobs = failed_jobs(run_id)
+    run_url = f"{SERVER}/{repo()}/actions/runs/{run_id}"
+    if not jobs:
+        return f"No failed jobs in [run {run_id}]({run_url}).\n"
+
+    out = [f"### Failed jobs in [run {run_id}]({run_url})", ""]
+    for job in jobs:
+        out.append(f"- **[{job['name']}]({job['html_url']})**: {job['conclusion']}")
+        lines, problem = log_lines(job["id"])
+        if lines is None:
+            out.append(f"  - {problem}")
+            continue
+        tests, errors, tail = job_findings(lines)
+        for test in tests[:MAX_TESTS_PER_JOB]:
+            out.append(f"  - {test}")
+        if len(tests) > MAX_TESTS_PER_JOB:
+            out.append(f"  - … {len(tests) - MAX_TESTS_PER_JOB} more failing tests")
+        if tests:
+            continue
+        for error in errors[:MAX_ERRORS_PER_JOB]:
+            out.append(f"  - `{error[:300]}`")
+        if not errors:
+            failed_steps = [s["name"] for s in job.get("steps", []) if s["conclusion"] == "failure"]
+            if failed_steps:
+                out.append(f"  - failed step: {', '.join(failed_steps)}")
+            if tail:
+                out.append("")
+                out.append("    ```")
+                out.extend(f"    {line[:300]}" for line in tail)
+                out.append("    ```")
+    out.append("")
+    return "\n".join(out)
+
+
+def open_issue(label):
+    issues = request("GET", f"/repos/{repo()}/issues?state=open&labels={label}&per_page=10")
+    issues = [issue for issue in issues if "pull_request" not in issue]
+    return issues[0] if issues else None
+
+
+def ensure_label(label):
+    try:
+        request("POST", f"/repos/{repo()}/labels", {"name": label, "color": "d73a4a"})
+    except urllib.error.HTTPError as error:
+        if error.code != 422:  # already exists
+            raise
+
+
+def track(run_id, label, title, status):
+    run = request("GET", f"/repos/{repo()}/actions/runs/{run_id}")
+    sha = os.environ.get("GITHUB_SHA") or run["head_sha"]
+    run_link = f"[{run['name']} run {run_id}]({run['html_url']}) on `{sha[:10]}`"
+    issue = open_issue(label)
+
+    if status == "success":
+        if issue:
+            request("POST", f"/repos/{repo()}/issues/{issue['number']}/comments", {"body": f"Green again: {run_link}."})
+            request("PATCH", f"/repos/{repo()}/issues/{issue['number']}", {"state": "closed", "state_reason": "completed"})
+            print(f"closed #{issue['number']}")
+        return
+
+    body = f"Failing: {run_link}.\n\n{summary(run_id)}"
+    if issue:
+        request("POST", f"/repos/{repo()}/issues/{issue['number']}/comments", {"body": body})
+        print(f"commented on #{issue['number']}")
+    else:
+        ensure_label(label)
+        intro = (
+            "Opened automatically by `scripts/ci_failure_report`. A later green run of the "
+            "same workflow on the default branch closes it. Fix forward before merging more "
+            "changes on top.\n\n"
+        )
+        created = request("POST", f"/repos/{repo()}/issues", {"title": title, "body": intro + body, "labels": [label]})
+        print(f"opened #{created['number']}")
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    sub = parser.add_subparsers(dest="command", required=True)
+    summary_cmd = sub.add_parser("summary")
+    summary_cmd.add_argument("--run-id", required=True)
+    track_cmd = sub.add_parser("track")
+    track_cmd.add_argument("--run-id", required=True)
+    track_cmd.add_argument("--label", required=True)
+    track_cmd.add_argument("--title", required=True)
+    track_cmd.add_argument("--status", required=True, choices=["success", "failure"])
+    args = parser.parse_args()
+
+    if args.command == "summary":
+        sys.stdout.write(summary(args.run_id))
+    else:
+        track(args.run_id, args.label, args.title, args.status)
+
+
+if __name__ == "__main__":
+    main()

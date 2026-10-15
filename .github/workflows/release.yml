@@ -43,7 +43,7 @@ on:
         required: true
         default: false
       skip_preflight:
-        description: "Skip the test-lane preflight (fast/quality/eval/clients); artifacts are still verified"
+        description: "Skip the CI gate preflight (reused or rerun ci.yml); artifacts are still verified"
         type: boolean
         required: true
         default: false
@@ -60,8 +60,8 @@ jobs:
   # ── Prepare a manual release commit and tag ──────────────────────────────────
   prepare:
     name: Prepare release
-    needs: [preflight-beam, preflight-clients]
-    if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/') && (inputs.skip_preflight || (needs.preflight-beam.result == 'success' && needs.preflight-clients.result == 'success')) }}
+    needs: preflight
+    if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/') && needs.preflight.result == 'success' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -170,65 +170,22 @@ jobs:
           echo "mix.exs version matches tag: $MIX_VERSION"
 
   # ── Gate the source commit before any release metadata or tag is pushed ──────
-  # Reuse existing CI coverage where possible; otherwise run the full gates.
-  # Tag pushes and tag-ref dispatches gate their existing source commit too.
-  preflight-beam:
-    name: Preflight BEAM
+  # Reuse a green CI push run of the source commit (or of its last code commit,
+  # past release-metadata-only cuts), waiting for one still in progress. Only
+  # when none exists run ci.yml itself: the same sharded, parallel jobs a push
+  # to main runs (fast x4, quality/eval, install, clients, dialyzer, sim-bench,
+  # wasm), so release gates and main's gates cannot drift apart. Tag pushes and
+  # tag-ref dispatches gate their existing source commit too.
+  preflight-coverage:
+    name: Find CI coverage
     if: ${{ !cancelled() && !inputs.skip_preflight }}
-    runs-on: ubuntu-24.04
-    timeout-minutes: 60
-    permissions:
-      contents: read
-      actions: read
-
-    steps:
-      - name: Checkout source commit
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.sha }}
-          fetch-depth: 50
-
-      - name: Find CI coverage for the source commit
-        id: ci
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          if result="$(scripts/ci_verified_commit HEAD)"; then
-            echo "::notice::Release gates already passed in CI: $result"
-            echo "verified=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "::notice::Running full release gates ($result)"
-            echo "verified=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: BEAM setup
-        if: steps.ci.outputs.verified != 'true'
-        uses: ./.github/actions/beam-setup
-        with:
-          family: install
-          bun: "true"
-
-      - name: Run deterministic BEAM release gates
-        if: steps.ci.outputs.verified != 'true'
-        run: |
-          scripts/test fast
-          scripts/test quality
-          scripts/test eval-fast
-
-      - name: Verify supported source and installer flows
-        if: steps.ci.outputs.verified != 'true'
-        run: |
-          scripts/verify_source_install
-          scripts/verify_install_script
-
-  preflight-clients:
-    name: Preflight clients
-    if: ${{ !cancelled() && !inputs.skip_preflight }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:
       contents: read
       actions: read
+    outputs:
+      verified: ${{ steps.ci.outputs.verified }}
 
     steps:
       - name: Checkout source commit
@@ -242,47 +199,58 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if result="$(scripts/ci_verified_commit HEAD)"; then
-            echo "::notice::Client gates already passed in CI: $result"
+          if result="$(scripts/ci_verified_commit HEAD --wait-minutes 30)"; then
+            echo "::notice::Release gates already passed in CI: $result"
             echo "verified=true" >> "$GITHUB_OUTPUT"
           else
-            echo "::notice::Running full client gates ($result)"
+            echo "::notice::Running the CI gates for this release ($result)"
             echo "verified=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Setup Node
-        if: steps.ci.outputs.verified != 'true'
-        uses: actions/setup-node@v4
-        with:
-          node-version: "24"
-          cache: npm
-          cache-dependency-path: clients/lemon-browser-node/package-lock.json
+  preflight-ci:
+    name: Preflight
+    needs: preflight-coverage
+    if: ${{ !cancelled() && needs.preflight-coverage.outputs.verified == 'false' }}
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+      actions: read
+      issues: write
 
-      - name: Setup Bun
-        if: steps.ci.outputs.verified != 'true'
-        uses: oven-sh/setup-bun@v2
-        with:
-          bun-version-file: clients/tui/.bun-version
-
-      - name: Cache Bun install cache
-        if: steps.ci.outputs.verified != 'true'
-        uses: actions/cache@v4
-        with:
-          path: ~/.bun/install/cache
-          key: ${{ runner.os }}-bun-${{ hashFiles('clients/tui/bun.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-bun-
-
-      - name: Run client release gates
-        if: steps.ci.outputs.verified != 'true'
-        run: scripts/test clients
+  # One status for prepare/build to depend on: skipped preflight (explicit
+  # skip_preflight), reused CI coverage, or a passing preflight CI run.
+  preflight:
+    name: Preflight gate
+    needs: [preflight-coverage, preflight-ci]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require release gates
+        env:
+          SKIP: ${{ inputs.skip_preflight == true }}
+          COVERAGE: ${{ needs.preflight-coverage.result }}
+          VERIFIED: ${{ needs.preflight-coverage.outputs.verified }}
+          CI: ${{ needs.preflight-ci.result }}
+        run: |
+          echo "skip_preflight=$SKIP coverage=$COVERAGE verified=$VERIFIED ci=$CI"
+          if [ "$SKIP" = "true" ]; then
+            echo "::warning::Release preflight skipped by request"
+          elif [ "$COVERAGE" = "success" ] && [ "$VERIFIED" = "true" ]; then
+            echo "Reusing CI coverage of the source commit"
+          elif [ "$COVERAGE" = "success" ] && [ "$CI" = "success" ]; then
+            echo "Preflight CI passed"
+          else
+            echo "::error::Release gates did not pass"
+            exit 1
+          fi
 
   # ── Build release artifacts ──────────────────────────────────────────────────
   build:
     name: Build ${{ matrix.profile }} (${{ matrix.platform }})
     runs-on: ${{ matrix.os }}
-    needs: [validate, preflight-beam, preflight-clients]
-    if: ${{ !cancelled() && needs.validate.result == 'success' && (inputs.skip_preflight || (needs.preflight-beam.result == 'success' && needs.preflight-clients.result == 'success')) }}
+    needs: [validate, preflight]
+    if: ${{ !cancelled() && needs.validate.result == 'success' && needs.preflight.result == 'success' }}
 
     strategy:
       fail-fast: false
@@ -434,8 +402,8 @@ jobs:
   build-bot:
     name: Build lemon_bot (${{ matrix.platform }})
     runs-on: ${{ matrix.os }}
-    needs: [validate, preflight-beam, preflight-clients]
-    if: ${{ !cancelled() && needs.validate.result == 'success' && (inputs.skip_preflight || (needs.preflight-beam.result == 'success' && needs.preflight-clients.result == 'success')) }}
+    needs: [validate, preflight]
+    if: ${{ !cancelled() && needs.validate.result == 'success' && needs.preflight.result == 'success' }}
     strategy:
       fail-fast: false
       matrix:
@@ -489,8 +457,8 @@ jobs:
   build-tui:
     name: Build lemon_tui
     runs-on: ubuntu-24.04
-    needs: [validate, preflight-beam, preflight-clients]
-    if: ${{ !cancelled() && needs.validate.result == 'success' && (inputs.skip_preflight || (needs.preflight-beam.result == 'success' && needs.preflight-clients.result == 'success')) }}
+    needs: [validate, preflight]
+    if: ${{ !cancelled() && needs.validate.result == 'success' && needs.preflight.result == 'success' }}
 
     env:
       LEMON_VERSION: ${{ needs.validate.outputs.version }}
@@ -638,8 +606,8 @@ jobs:
   docker-build:
     name: Docker ${{ matrix.platform }}
     runs-on: ${{ matrix.runner }}
-    needs: [validate, preflight-beam, preflight-clients]
-    if: ${{ !cancelled() && needs.validate.result == 'success' && (inputs.skip_preflight || (needs.preflight-beam.result == 'success' && needs.preflight-clients.result == 'success')) }}
+    needs: [validate, preflight]
+    if: ${{ !cancelled() && needs.validate.result == 'success' && needs.preflight.result == 'success' }}
 
     permissions:
       contents: read
