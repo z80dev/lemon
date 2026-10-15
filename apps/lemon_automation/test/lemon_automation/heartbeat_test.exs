@@ -46,12 +46,33 @@ defmodule LemonAutomation.HeartbeatTest do
                Heartbeat.apply_policy(heartbeat, run(:failed, "HEARTBEAT_OK"))
     end
 
-    test "ordinary jobs are never suppressed" do
+    test "ordinary jobs do not recognize HEARTBEAT_OK" do
       assert {%CronRun{suppressed: false}, true} =
                Heartbeat.apply_policy(job(meta: %{}), run(:completed, "HEARTBEAT_OK"))
 
       assert {%CronRun{suppressed: false}, true} =
                Heartbeat.apply_policy(nil, run(:completed, "HEARTBEAT_OK"))
+    end
+
+    test "only successful prompt jobs recognize an exact SILENT marker" do
+      prompt_job = job(meta: %{})
+
+      assert {%CronRun{suppressed: true}, false} =
+               Heartbeat.apply_policy(prompt_job, run(:completed, " \n[SILENT]\t"))
+
+      for status <- [:failed, :timeout, :aborted] do
+        assert {%CronRun{suppressed: false}, true} =
+                 Heartbeat.apply_policy(prompt_job, run(status, "[SILENT]"))
+      end
+
+      assert {%CronRun{suppressed: false}, true} =
+               Heartbeat.apply_policy(prompt_job, run(:completed, "[SILENT] but important"))
+
+      assert {%CronRun{suppressed: false}, true} =
+               Heartbeat.apply_policy(
+                 job(command: "echo", prompt: nil),
+                 run(:completed, "[SILENT]")
+               )
     end
   end
 

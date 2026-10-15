@@ -22,9 +22,10 @@ A call accepts 1–8 questions with unique IDs. Each question has `id`, `questio
 and `options`. An empty options list requests free text. Optional `header` and
 option `description` supply explanatory text. `multi: true` allows multiple
 choices. `recommended` is a zero-based hint, never permission to auto-select.
-`timeout_ms` is an optional positive deadline; native prompts otherwise wait
-until answered, cancelled or disconnected. ACP retains its existing default
-five-minute client-request deadline when no override is supplied.
+`timeout_ms` is an optional positive deadline; TUI prompts otherwise wait
+until answered, cancelled or disconnected. ACP defaults to five minutes.
+Telegram and Discord prompts have a five-minute maximum; a smaller explicit
+deadline is honored, and omitting it never creates an infinite channel wait.
 
 The tool returns actual selected labels and/or custom text in `details.results`,
 with `status: "answered"`. Decline, cancellation, deadline, unavailable surface
@@ -68,7 +69,29 @@ form; resolution events include identities/status only, not answer text.
 This does not install once/session/global tool approval grants.
 
 ACP continues to use negotiated `elicitation/create` without depending on the
-native prompt port. Telegram and Discord were intentionally not changed:
-their execution-approval replies carry approval decisions, not generic bounded
-question answers, so neither adapter binds a question surface. Channel and
-unattended sessions remain unavailable unless a real surface is explicitly bound.
+native prompt port. Unattended sessions remain unavailable unless a real
+surface is explicitly bound.
+
+## Telegram and Discord
+
+Native runs started by a user's message bind a channel prompt surface before
+submission. Questions appear one at a time with inline option buttons,
+**Decline** and **Cancel**. For multiple choices, toggle buttons and then
+**Done selecting**; nothing is selected automatically, including recommendations.
+Question/option display text is bounded and cannot grant tool approvals.
+
+To supply free text (including a custom answer instead of the options), send
+your next plain message in the same chat and topic/thread while the question
+is pending. It is consumed as the answer, **not submitted as a new run**, and
+does not need a group mention. Commands and attachments are not answers.
+Outside a pending question, normal group mention rules are unchanged.
+Only the user whose message started the run can answer; other users, accounts,
+chats and threads cannot consume it. If multiple forked sessions have questions
+for the same user in the same conversation, a plain reply is consumed without
+starting a run; a notice asks you to use buttons to identify the question.
+
+Each session has at most one pending question. Buttons from prior questions,
+completed runs or expired prompts report `expired`. A timeout returns a clear
+no-answer tool result and unbinds the surface; run completion/cancellation also
+cleans it up. These volatile bindings are not restored after a runtime restart.
+Execution-approval controls and decisions are separate and unchanged.

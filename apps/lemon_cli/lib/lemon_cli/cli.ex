@@ -17,6 +17,8 @@ defmodule LemonCli.CLI do
   source and packaged installs.
   """
 
+  require Logger
+
   alias LemonCore.Backup
   alias LemonCore.Config.Modular
   alias LemonCli.Onboarding.Runner
@@ -27,6 +29,7 @@ defmodule LemonCli.CLI do
   alias LemonCore.Secrets.EnvCatalog
   alias LemonCore.Secrets.KeyRotation
   alias LemonCore.Secrets.MasterKey
+  alias LemonCore.Setup.Readiness
   alias LemonCore.Update.ConfigMigrator
   alias LemonCli.LocalRuntime
   alias LemonCli.CommandRegistry
@@ -47,16 +50,17 @@ defmodule LemonCli.CLI do
   @exit_error 1
   @exit_usage 2
 
-  @doc """
-  Returns whether the global configuration is missing.
-
-  Existing but invalid configuration and unavailable credentials need repair,
-  not a new-install wizard. Commands that load configuration surface those
-  failures with validation and migration guidance.
-  """
+  @doc "Returns whether the global configuration still needs offline setup."
   @spec setup_required?() :: boolean()
   def setup_required? do
-    not File.exists?(Path.expand(Modular.global_path()))
+    not Readiness.ready?(Readiness.status())
+  rescue
+    error ->
+      Logger.warning(
+        "Setup readiness check failed (#{inspect(error.__struct__)}); setup is required"
+      )
+
+      true
   end
 
   @doc """

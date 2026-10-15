@@ -7,7 +7,7 @@ defmodule LemonChannels.Adapters.Discord.OutboundTest do
   defmodule MockMessageApi do
     def create(channel_id, params) do
       send(self(), {:create, channel_id, params})
-      {:ok, %{id: 4444}}
+      Process.get(:create_result, {:ok, %{id: 4444}})
     end
 
     def edit(channel_id, message_id, params) do
@@ -58,6 +58,43 @@ defmodule LemonChannels.Adapters.Discord.OutboundTest do
 
   defp restore_env(app, key, nil), do: Application.delete_env(app, key)
   defp restore_env(app, key, value), do: Application.put_env(app, key, value)
+
+  test "accepted Discord creates with lost replies are terminal unknown" do
+    payload =
+      OutboundPayload.text(
+        "discord",
+        "acct",
+        %{kind: :channel, id: "123", thread_id: nil},
+        "hello"
+      )
+
+    for reason <- [:timeout, {:closed, :socket}, {:http_error, 503, ""}] do
+      Process.put(:create_result, {:error, reason})
+      assert {:error, {:outcome_unknown, ^reason}} = Outbound.deliver(payload)
+      assert_receive {:create, 123, %{enforce_nonce: true, nonce: nonce}}
+      assert byte_size(nonce) <= 25
+      refute_receive {:create, _, _}, 0
+    end
+  end
+
+  test "Discord nonce is stable per delivery and distinct for chunks" do
+    payload =
+      OutboundPayload.text(
+        "discord",
+        "acct",
+        %{kind: :channel, id: "123", thread_id: nil},
+        String.duplicate("a", 2000),
+        meta: %{delivery_id: make_ref()}
+      )
+
+    assert {:ok, _} = Outbound.deliver(payload)
+    assert_receive {:create, 123, %{nonce: first, enforce_nonce: true}}
+    assert_receive {:create, 123, %{nonce: second, enforce_nonce: true}}
+    refute first == second
+    assert {:ok, _} = Outbound.deliver(payload)
+    assert_receive {:create, 123, %{nonce: ^first}}
+    assert_receive {:create, 123, %{nonce: ^second}}
+  end
 
   test "foreign accounts never use the configured Discord client" do
     payload =

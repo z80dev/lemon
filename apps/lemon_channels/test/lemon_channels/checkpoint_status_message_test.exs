@@ -5,6 +5,34 @@ defmodule LemonChannels.CheckpointStatusMessageTest do
   alias LemonChannels.CheckpointStatusMessage
   alias LemonCore.Checkpoint
 
+  defmodule BusyBackend do
+    @behaviour LemonCore.Store.Backend
+    def init(_), do: {:ok, %{}}
+    def put(_, _, _, _), do: {:error, :sqlite_busy}
+    def put_new(_, _, _, _), do: {:error, :sqlite_busy}
+    def get(_, _, _), do: {:error, :sqlite_busy}
+    def delete(_, _, _), do: {:error, :sqlite_busy}
+    def list(_, _), do: {:error, {:sqlite_busy, "private-backend-detail"}}
+  end
+
+  test "checkpoint history reports unavailable without inventing zero events" do
+    original = :sys.get_state(LemonCore.Store)
+    :sys.replace_state(LemonCore.Store, &%{&1 | backend: BusyBackend, backend_state: %{}})
+
+    try do
+      status = CheckpointStatusMessage.text()
+      assert status =~ "Events: unavailable"
+      assert status =~ "Recent events: unavailable"
+      refute status =~ "created 0"
+      refute status =~ "private-backend-detail"
+
+      assert CheckpointStatusMessage.handle("events") == "Checkpoint Events\nunavailable"
+      assert CheckpointStatusMessage.handle_rollback("events") == "Checkpoint Events\nunavailable"
+    after
+      :sys.replace_state(LemonCore.Store, fn _ -> original end)
+    end
+  end
+
   setup do
     original = Application.get_env(:lemon_core, :introspection, [])
     Application.put_env(:lemon_core, :introspection, Keyword.put(original, :enabled, true))

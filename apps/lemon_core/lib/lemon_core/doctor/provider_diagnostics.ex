@@ -230,7 +230,9 @@ defmodule LemonCore.Doctor.ProviderDiagnostics do
 
   defp secret_present?(_), do: false
 
-  defp ambient_configured?(provider) do
+  @doc "Whether a known provider has a nonblank ambient environment credential (offline)."
+  @spec ambient_configured?(term()) :: boolean()
+  def ambient_configured?(provider) do
     provider
     |> normalize_provider()
     |> then(&Map.get(@ambient_provider_env, &1, []))

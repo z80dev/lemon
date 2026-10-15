@@ -14,7 +14,16 @@ import type {
 	SessionTreeEntry,
 } from "../protocol/session-tree.ts";
 import type { Block } from "../store/transcript-model.ts";
-import { asArray, humanDuration, humanTime, pickNumber, pickString } from "./format.ts";
+import {
+	asArray,
+	humanCost,
+	humanDuration,
+	humanNumber,
+	humanTime,
+	pickBoolean,
+	pickNumber,
+	pickString,
+} from "./format.ts";
 import type { CommandContext, SlashCommand } from "./registry.ts";
 
 export const abortCommand: SlashCommand = {
@@ -383,6 +392,20 @@ function retryFailure(ctx: CommandContext, stage: string, error: unknown, mutati
 }
 
 function describeRun(run: unknown): string {
+	const model = pickString(run, "model");
+	const provider = pickString(run, "provider");
+	const tokens = [
+		["input", "in"],
+		["output", "out"],
+		["total", "total"],
+	]
+		.map(([key, label]) => {
+			const count = pickNumber(run, `tokens.${key}`);
+			return count === undefined ? undefined : `${humanNumber(count)} ${label}`;
+		})
+		.filter(Boolean);
+	const cost = humanCost(pickNumber(run, "costUsd"));
+	const error = pickString(run, "error");
 	const parts = [
 		pickString(run, "runId") ?? "?",
 		pickString(run, "status"),
@@ -390,6 +413,10 @@ function describeRun(run: unknown): string {
 		pickString(run, "sessionKey"),
 		humanDuration(pickNumber(run, "durationMs")),
 		humanTime(pickNumber(run, "startedAtMs")),
+		model ? `model ${provider ? `${provider}:` : ""}${model}` : provider && `provider ${provider}`,
+		tokens.length > 0 ? `tokens ${tokens.join(" / ")}` : undefined,
+		pickBoolean(run, "priceKnown") === false ? "cost unknown" : cost && `cost ${cost}`,
+		error ? `error: ${error}` : undefined,
 	].filter(Boolean);
 	return parts.join(" · ");
 }

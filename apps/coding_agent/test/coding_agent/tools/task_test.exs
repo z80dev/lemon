@@ -208,6 +208,45 @@ defmodule CodingAgent.Tools.TaskTest do
     end
   end
 
+  @tag :tmp_dir
+  test "child completion exhausts the parent dollar cap and refuses further tasks", %{
+    tmp_dir: dir
+  } do
+    {:ok, scope} =
+      LemonAgent.BudgetScope.start_link(
+        limits: %{max_run_cost_usd: 0.5},
+        id: :parent,
+        owner: self()
+      )
+
+    parent_run = RunGraph.new_run(%{description: "budgeted parent"})
+    owner = self()
+
+    opts = [
+      budget_scope: scope,
+      parent_run_id: parent_run,
+      run_override: fn _, _ ->
+        send(owner, :child_ran)
+
+        %LemonAgent.Types.AgentToolResult{
+          content: [%LemonAi.Types.TextContent{text: "done"}],
+          details: %{status: "completed", usage: %{total_tokens: 10, cost: %{total: 0.5}}}
+        }
+      end
+    ]
+
+    params = %{"description" => "spend", "prompt" => "stubbed task", "async" => false}
+
+    assert %LemonAgent.Types.AgentToolResult{} =
+             Task.execute("first", params, nil, nil, dir, opts)
+
+    assert_receive :child_ran
+    assert %{used: 0.5, run_usage: %{tokens: 10}} = LemonAgent.BudgetScope.check(scope)
+    assert {:error, message} = Task.execute("second", params, nil, nil, dir, opts)
+    assert message =~ "The run usage budget is exhausted"
+    refute_receive :child_ran
+  end
+
   describe "execute/6 identity validation" do
     test "returns a fail-closed error when the run graph produces an empty run id" do
       assert {:error, message} =

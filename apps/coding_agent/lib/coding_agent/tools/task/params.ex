@@ -498,10 +498,14 @@ defmodule CodingAgent.Tools.Task.Params do
     effective_opts = maybe_put_kw(opts, :tool_policy, validated.tool_policy)
 
     budget_check =
-      if parent_run_id do
-        BudgetEnforcer.check_subagent_spawn(parent_run_id, effective_opts)
-      else
-        :ok
+      case LemonAgent.BudgetScope.check(Keyword.get(opts, :budget_scope)) do
+        nil ->
+          if parent_run_id,
+            do: BudgetEnforcer.check_subagent_spawn(parent_run_id, effective_opts),
+            else: :ok
+
+        details ->
+          {:error, :budget_exceeded, details}
       end
 
     case budget_check do
@@ -617,6 +621,7 @@ defmodule CodingAgent.Tools.Task.Params do
     base_opts =
       opts
       |> Keyword.take([
+        :parent_budget_scope,
         :thinking_level,
         :system_prompt,
         :prompt_template,

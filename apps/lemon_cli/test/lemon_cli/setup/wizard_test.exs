@@ -5,6 +5,7 @@ defmodule LemonCli.Setup.WizardTest do
   alias LemonCli.Setup.Wizard
   alias LemonCli.Onboarding.Runner
   alias LemonCore.Secrets
+  alias LemonCore.Setup.Readiness
 
   # Minimal IO callbacks stub for testing non-interactive paths
   defp silent_io do
@@ -259,6 +260,33 @@ defmodule LemonCli.Setup.WizardTest do
   end
 
   describe "run_full/3 — complete state" do
+    for {provider, model} <- [{"openai", "gpt-5"}, {"ollama", "qwen3"}] do
+      test "#{provider} without secret refs stays ready after successful wizard completion", %{
+        config_path: path
+      } do
+        previous = System.get_env("OPENAI_API_KEY")
+
+        on_exit(fn ->
+          if previous,
+            do: System.put_env("OPENAI_API_KEY", previous),
+            else: System.delete_env("OPENAI_API_KEY")
+        end)
+
+        System.put_env("OPENAI_API_KEY", "test-env-key")
+        set_master_key_env()
+
+        File.write!(path, """
+        [defaults]
+        provider = "#{unquote(provider)}"
+        model = "#{unquote(model)}"
+        """)
+
+        opts = [config_path: path, non_interactive: true, verifier: fn _ -> {:ok, %{}} end]
+        assert :ok = Wizard.run_full([], recording_io(), opts)
+        assert Readiness.ready?(Readiness.status(config_path: path))
+      end
+    end
+
     test "configured users are not reprompted and the wizard stays concise", %{
       config_path: config_path
     } do
@@ -279,6 +307,8 @@ defmodule LemonCli.Setup.WizardTest do
 
       assert Wizard.run_full([], io, config_path: config_path, verifier: fn _ -> {:ok, %{}} end) ==
                :ok
+
+      assert Readiness.ready?(Readiness.status(config_path: config_path))
 
       events = drain_events([])
 
@@ -450,6 +480,8 @@ defmodule LemonCli.Setup.WizardTest do
                  env_fallback: false
                )
 
+      assert Readiness.ready?(Readiness.status(config_path: path))
+
       events = drain_events([])
       assert info_event?(events, &String.contains?(&1, "not live-verified"))
       refute info_event?(events, &String.contains?(&1, "Setup complete"))
@@ -482,6 +514,7 @@ defmodule LemonCli.Setup.WizardTest do
       refute model == "fallback"
       assert Map.keys(settings["providers"]) == ["openai"]
       assert {:ok, _config} = LemonCore.Config.Modular.validate_settings(settings)
+      assert Readiness.ready?(Readiness.status(config_path: path))
     end
   end
 
