@@ -392,6 +392,25 @@ defmodule LemonOmp.Projection do
     }
   end
 
+  @doc "Sum usage across wire snapshots, without changing any session totals."
+  @spec combined_usage([map()]) :: map()
+  def combined_usage(wires) do
+    zero = %{
+      "input" => 0,
+      "output" => 0,
+      "cacheRead" => 0,
+      "cacheWrite" => 0,
+      "totalTokens" => 0,
+      "cost" => 0.0
+    }
+
+    Enum.reduce(wires, zero, fn wire, total ->
+      Map.new(total, fn {key, value} ->
+        {key, value + (get_in(wire, ["usage", key]) || 0)}
+      end)
+    end)
+  end
+
   @doc """
   A bounded plain-text report of what the session is doing, for chat and the
   CLI. It quotes omp output, which callers must treat as untrusted.

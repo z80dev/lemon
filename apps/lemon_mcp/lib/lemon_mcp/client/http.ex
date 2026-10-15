@@ -86,6 +86,7 @@ defmodule LemonMCP.Client.HTTP do
       client_name: Keyword.get(opts, :client_name, "lemon-mcp"),
       client_version: Keyword.get(opts, :client_version, "0.1.0"),
       capabilities: Keyword.get(opts, :capabilities, %{}),
+      notification_handler: Protocol.notification_handler(opts),
       timeout_ms: Keyword.get(opts, :timeout_ms, 30_000)
     }
 
@@ -327,6 +328,14 @@ defmodule LemonMCP.Client.HTTP do
           normalized_body = String.trim(to_string(response_body))
           content_type = response_header(headers, "content-type") || "application/json"
 
+          case Jason.decode(normalized_body) do
+            {:ok, message} ->
+              Protocol.dispatch_notification(message, state.config.notification_handler)
+
+            _ ->
+              :ok
+          end
+
           cond do
             normalized_body in ["", "null"] ->
               {:ok, nil, state}
@@ -401,7 +410,19 @@ defmodule LemonMCP.Client.HTTP do
       |> parse_sse_events()
       |> Enum.filter(&(&1.event == "message"))
 
-    case List.last(events) do
+    responses =
+      Enum.reject(events, fn %{data: data} ->
+        case Jason.decode(data) do
+          {:ok, %{"method" => _} = message} when not is_map_key(message, "id") ->
+            Protocol.dispatch_notification(message, state.config.notification_handler)
+            true
+
+          _ ->
+            false
+        end
+      end)
+
+    case List.last(responses) do
       %{data: data} -> {:ok, data, state}
       nil -> {:error, :missing_sse_response, state}
     end
