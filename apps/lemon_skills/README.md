@@ -23,6 +23,12 @@ LemonSkills provides a centralized system for extending agent capabilities throu
 not a Hex package; it ships as part of the reference runtime. It depends on
 `lemon_core`, `lemon_agent`, `lemon_ai`, `lemon_memory` and `lemon_media`.
 
+`LemonSkills.Timeline` composes bounded operator memory projections and existing
+home-local skill sidecars for `lemon learning`. It never creates an event log,
+reads another profile's home, or exposes raw source/audit metadata. Global skill
+state is included only for the canonical default assistant; explicit private/shared
+memory selectors omit unproven workspace/skill sidecars.
+
 `recall` also browses recent owned sessions when called without a query. Use a
 returned `session` with optional `around` document/run ID and `window` (5 by
 default, maximum 20) to read chronological run summaries. Content remains
