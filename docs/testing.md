@@ -198,6 +198,16 @@ provider keys into their env var before running live integration tests.
 The omp real-binary smoke (lifecycle, approvals bridge, parallel workers) is opt-in:
 `LEMON_OMP_LIVE=1 scripts/test path apps/lemon_omp/test/lemon_omp/live_smoke_test.exs`.
 It uses omp's own credentials and a zero-cost model, not Lemon provider keys.
+Every throwaway workspace pins auxiliary model roles to that same `:free` model
+and disables model fallback. Required-tool steps allow at most two attempts,
+re-prompting only after a completed text-only/nonmatching-tool response, never
+after a tool error or an uncertain command acknowledgement. Cancellation,
+redirect and SIGKILL wait for a bash-created marker **and** an active bash call;
+approval denial must observe a real shared approval request. Required-action
+failures include attempt snapshots and an 8 KiB read-only tail of that smoke
+session's transcript. Treat these diagnostics as local test output, not an
+artifact to commit. Run the complete live file twice consecutively when changing
+this smoke, followed by `scripts/test path apps/lemon_omp/test`.
 See [omp verification](../apps/lemon_omp/AGENTS.md#verification) for overrides.
 
 The remaining manual smoke scripts are not run by CI:
