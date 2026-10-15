@@ -702,8 +702,8 @@ defmodule CodingAgent.CoordinatorEdgeCasesTest do
       specs = [%{prompt: "Task"}]
       _results = Coordinator.run_subagents(coordinator, specs, timeout: 50)
 
-      # After run_subagents returns, active should be empty
-      assert Coordinator.list_active(coordinator) == []
+      # The batch can reply on its deadline before session cleanup removes the subagent.
+      assert_eventually(fn -> Coordinator.list_active(coordinator) == [] end, 5_000)
     end
 
     @tag :tmp_dir
