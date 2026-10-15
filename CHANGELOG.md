@@ -25,6 +25,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Added
 
+- omp task subagents expose bounded activity, tool counts, tokens/cost, model,
+  duration, final output and retry errors in status and streamed progress.
+  Owner-scoped `LemonOmp.subagent/3` and the `omp` tool's `subagent` action read
+  sanitized transcript tails from live parent sessions.
 - omp's chat tool and Elixir API can redirect a running turn atomically with
   `abort_and_prompt`. Existing waits follow the replacement turn; asynchronous
   prompt failures are reported without acknowledging the same command twice.

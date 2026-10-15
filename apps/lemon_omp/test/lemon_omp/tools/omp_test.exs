@@ -32,7 +32,7 @@ defmodule LemonOmp.Tools.OmpTest do
     assert "action" in tool.parameters["required"]
 
     assert tool.parameters["properties"]["action"]["enum"] ==
-             ~w(models start start_many wait status list send cancel close resume discover)
+             ~w(models start start_many wait status subagent list send cancel close resume discover)
 
     assert tool.parameters["properties"]["approval_mode"]["enum"] == ~w(always-ask write yolo)
     assert tool.parameters["properties"]["mode"]["enum"] == ~w(steer follow_up redirect)
@@ -41,6 +41,59 @@ defmodule LemonOmp.Tools.OmpTest do
 
     assert tool.parameters["properties"]["tasks"]["items"]["properties"]["approval_mode"]["enum"] ==
              ~w(always-ask write yolo)
+  end
+
+  test "subagent status, streamed progress and drill-down text are untrusted", ctx do
+    started = run(ctx.tool, %{"action" => "start", "prompt" => "SUBAGENTS HOLD"})
+    id = started.details["session"]["id"]
+    await_wire(id, &(get_in(&1, ["subagents", Access.at(0), "toolCalls"]) == 2))
+
+    status = run(ctx.tool, %{"action" => "status", "id" => id}) |> assert_untrusted()
+    assert text(status) =~ "Subagents: explore (running) — Running write — Create sub.txt"
+    parent = self()
+    signal = LemonAgent.AbortSignal.new()
+    :ok = LemonAgent.AbortSignal.abort(signal)
+    run(ctx.tool, %{"action" => "wait", "id" => id}, &send(parent, {:child_update, &1}), signal)
+    assert_receive {:child_update, update}
+    assert text(update) =~ "Subagents: explore (running) — Running write — Create sub.txt"
+    assert update.trust == :untrusted
+
+    run(
+      ctx.tool,
+      %{"action" => "wait", "ids" => [id]},
+      &send(parent, {:child_batch_update, &1}),
+      signal
+    )
+
+    assert_receive {:child_batch_update, batch_update}
+    assert batch_update.trust == :untrusted
+    assert text(batch_update) =~ "Subagents: explore (running) — Running write — Create sub.txt"
+
+    transcript =
+      run(ctx.tool, %{
+        "action" => "subagent",
+        "id" => id,
+        "subagent_id" => "child-1",
+        "limit" => 1
+      })
+      |> assert_untrusted()
+
+    refute transcript.is_error
+    assert transcript.details["action"] == "subagent"
+    assert transcript.details["subagentId"] == "child-1"
+    assert length(transcript.details["transcript"]["messages"]) == 1
+    assert text(transcript) =~ "omp subagent child-1 transcript tail:"
+    assert text(transcript) =~ "[toolResult write]\nmessage 60 "
+    refute text(transcript) =~ "\u202e"
+
+    foreign = Omp.tool(ctx.ws, session_key: "another-conversation")
+    denied = run(foreign, %{"action" => "subagent", "id" => id, "subagent_id" => "child-1"})
+    assert denied.is_error
+    assert denied.details["error"] == "not_found"
+    missing = run(ctx.tool, %{"action" => "subagent", "id" => id, "subagent_id" => "missing"})
+    assert missing.is_error
+    assert missing.details["error"] == "rejected"
+    assert text(missing) =~ "Unknown subagent"
   end
 
   test "resume explicitly continues interrupted work without accepting an extra prompt", ctx do
