@@ -218,7 +218,9 @@ defmodule LemonAi.CallDispatcherTest do
         start_supervised!({CircuitBreaker, provider: provider, failure_threshold: 3})
 
         model = %LemonAi.Types.Model{id: "missing-key", provider: provider, api: @api}
-        context = LemonAi.Types.Context.new(messages: [%LemonAi.Types.UserMessage{content: "hello"}])
+
+        context =
+          LemonAi.Types.Context.new(messages: [%LemonAi.Types.UserMessage{content: "hello"}])
 
         # Exercise the real provider's local credential refusal and asynchronous
         # dispatcher accounting beyond the breaker threshold, without resets.

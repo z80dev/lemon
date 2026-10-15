@@ -13,6 +13,12 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 - Make injected SVG rasterizer fixtures portable across BSD and GNU base64, and
   explicitly exclude only the named real-rasterizer test when librsvg is absent.
 
+- Synchronize task-surface regression fixtures with the owning run's delta
+  admission before flushing a reused conversation coalescer.
+
+- Keep missing local provider API keys out of shared circuit-breaker health, so
+  they cannot block other sessions that have valid credentials.
+
 ---
 
 ## [2026.10.13]

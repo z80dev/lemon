@@ -14,7 +14,9 @@ exclude_tags =
   if System.find_executable("python3"), do: exclude_tags, else: [:python3 | exclude_tags]
 
 exclude_tags =
-  if System.find_executable("rsvg-convert"), do: exclude_tags, else: [:rsvg_convert | exclude_tags]
+  if System.find_executable("rsvg-convert"),
+    do: exclude_tags,
+    else: [:rsvg_convert | exclude_tags]
 
 exclude_tags =
   case {
