@@ -2,6 +2,7 @@ defmodule LemonChannels.Adapters.Telegram.VoiceTranscriptionTest do
   alias Elixir.LemonChannels, as: LemonChannels
   use ExUnit.Case, async: false
 
+  alias Elixir.LemonChannels.Adapters.Telegram.Transport
   alias LemonChannels.Adapters.Telegram.VoiceTranscriber
 
   defmodule VoiceTestRouter do
@@ -179,7 +180,7 @@ defmodule LemonChannels.Adapters.Telegram.VoiceTranscriptionTest do
 
   test "transcribes voice and routes transcript" do
     {:ok, _pid} =
-      Elixir.LemonChannels.Adapters.Telegram.Transport.start_link(
+      Transport.start_link(
         config: %{
           bot_token: "token",
           api_mod: VoiceMockAPI,
@@ -213,7 +214,7 @@ defmodule LemonChannels.Adapters.Telegram.VoiceTranscriptionTest do
 
   test "local voice transcription fails closed without submitting a run" do
     {:ok, _pid} =
-      Elixir.LemonChannels.Adapters.Telegram.Transport.start_link(
+      Transport.start_link(
         config: %{
           bot_token: "token",
           api_mod: VoiceMockAPI,
@@ -235,7 +236,7 @@ defmodule LemonChannels.Adapters.Telegram.VoiceTranscriptionTest do
 
   test "voice disabled replies and skips routing" do
     {:ok, _pid} =
-      Elixir.LemonChannels.Adapters.Telegram.Transport.start_link(
+      Transport.start_link(
         config: %{
           bot_token: "token",
           api_mod: VoiceMockAPI,

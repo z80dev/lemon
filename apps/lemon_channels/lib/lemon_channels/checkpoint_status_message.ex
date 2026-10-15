@@ -2,6 +2,7 @@ defmodule LemonChannels.CheckpointStatusMessage do
   @moduledoc false
 
   alias LemonCore.Checkpoint
+  alias LemonCore.Doctor.CheckpointDiagnostics
   alias LemonCore.Introspection
 
   @checkpoint_events [:checkpoint_created, :checkpoint_restored, :checkpoint_deleted]
@@ -87,7 +88,7 @@ defmodule LemonChannels.CheckpointStatusMessage do
 
   @spec text(keyword()) :: String.t()
   def text(opts \\ []) do
-    summary = LemonCore.Doctor.CheckpointDiagnostics.summary(opts)
+    summary = CheckpointDiagnostics.summary(opts)
 
     lines = [
       "Checkpoint Status",
