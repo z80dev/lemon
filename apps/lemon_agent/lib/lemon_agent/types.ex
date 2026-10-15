@@ -120,6 +120,9 @@ defmodule LemonAgent.Types do
         Defaults to `false`; mutations and tools with ordering dependencies
         must remain sequential. Sequential calls are barriers between parallel
         groups, even when `max_tool_concurrency` is unbounded.
+      * `:timeout_ms` — execution deadline override in milliseconds. `nil` inherits
+        the loop default (300,000 ms); `:infinity` exempts tools that own their
+        deadline or legitimately wait indefinitely.
 
     ## The execute function
 
@@ -202,6 +205,7 @@ defmodule LemonAgent.Types do
             parameters: map(),
             label: String.t(),
             parallel_safe: boolean(),
+            timeout_ms: pos_integer() | :infinity | nil,
             execute: execute_fn()
           }
     defstruct name: "",
@@ -209,6 +213,7 @@ defmodule LemonAgent.Types do
               parameters: %{},
               label: "",
               parallel_safe: false,
+              timeout_ms: nil,
               execute: nil
   end
 
@@ -374,12 +379,12 @@ defmodule LemonAgent.Types do
     - `get_steering_messages` - Returns messages to inject mid-run for steering
     - `has_steering_messages` - Non-consuming queue peek used between tool calls
     - `get_follow_up_messages` - Returns follow-up messages after agent would stop
-    - `max_tool_concurrency` - Max number of concurrent tool calls (`nil`/`:infinity` = unbounded)
+    - `max_tool_concurrency` - Max concurrent tool calls (default 8; `nil` uses the default, `:infinity` opts out)
     - `max_tool_turns` - Max assistant turns that may execute tools before terminal fallback
     - `max_retries` - Maximum transient provider retries per response (default: 3; 0 disables)
     - `retry_base_delay_ms` - Initial exponential retry delay (default: 2,000ms)
     - `retry_max_delay_ms` - Maximum retry delay (default: 30,000ms)
-    - `tool_timeout_ms` - Optional per-tool task timeout in milliseconds
+    - `tool_timeout_ms` - Per-tool task deadline (default 300,000 ms; `nil` uses the default, `:infinity` opts out); tools may declare their own `timeout_ms`
     - `tool_task_supervisor` - Task supervisor used to run tools (defaults to `LemonAgent.ToolTaskSupervisor`)
     - `tool_schema_snapshot` - Per-run snapshot used for provider schemas and tool execution
     - `budget_limits` - Canonical cumulative caps; all nil/omitted disables accounting
@@ -457,12 +462,12 @@ defmodule LemonAgent.Types do
               get_steering_messages: nil,
               has_steering_messages: nil,
               get_follow_up_messages: nil,
-              max_tool_concurrency: nil,
+              max_tool_concurrency: 8,
               max_tool_turns: 25,
               max_retries: 3,
               retry_base_delay_ms: 2_000,
               retry_max_delay_ms: 30_000,
-              tool_timeout_ms: nil,
+              tool_timeout_ms: 300_000,
               tool_task_supervisor: nil,
               tool_schema_snapshot: nil,
               budget_limits: nil,

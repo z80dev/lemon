@@ -28,6 +28,7 @@ defmodule CodingAgent.Tools.Ask do
   def tool(_cwd, opts \\ []) do
     %AgentTool{
       name: "ask",
+      timeout_ms: :infinity,
       label: "Ask User",
       description:
         "Ask the user for clarification or a decision. Supply questions with choices, or an empty options list for free text. The user can provide a custom answer, decline, or cancel. Do not ask for credentials or secrets.",

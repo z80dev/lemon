@@ -63,6 +63,10 @@
 
 ### Changed
 
+- Deadline-owning task/wait, agent delegation, bash, eval, debug, question and
+  browser tools explicitly retain their own limits under the agent runtime's
+  new five-minute default tool deadline and eight-call concurrency cap.
+
 - Todo plans preserve `blocked` and `abandoned` statuses, optional phase/blocker
   notes and stable IDs in the journal and client projections. Writes keep only
   the first in-progress task active; progress reports all statuses, and actionable

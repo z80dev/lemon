@@ -52,6 +52,7 @@ defmodule CodingAgent.Tools.Browser do
 
     %AgentTool{
       name: spec.name,
+      timeout_ms: :infinity,
       description: spec.description,
       label: spec.label,
       parameters: maybe_add_target_parameter(spec.parameters, spec),
