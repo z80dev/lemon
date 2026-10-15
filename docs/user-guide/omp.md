@@ -56,6 +56,23 @@ before execution, and `yolo` auto-approves ordinary tool calls. Omitting it
 leaves omp's own configured mode unchanged. Explicit omp tool policies still
 apply. Lemon passes an explicit mode as `--approval-mode <mode>`.
 
+### Continuing after a crash
+
+For an interrupted session, explicitly request
+`{"action":"resume","omp_session_id":"…","continue":true,"wait":true}`.
+Elixir callers use `LemonOmp.start(%{cwd: cwd, resume: omp_id, continue: true})`.
+`continue` is boolean, requires a resume id, and cannot accompany a prompt.
+It reopens history with `--resume` and sends a fixed instruction to review the
+conversation/workspace and finish unfinished work without redoing completed
+steps. This is a new model turn, not replay of the interrupted OS command.
+Nothing resumes automatically.
+
+omp 18.11's `--restore` is **interactive-only**, rejects RPC mode and prompts,
+and therefore cannot provide its interrupted-turn/subagent restoration here.
+Lemon's explicit continuation does not revive subagents. Discovery's
+`interrupted` hint identifies an unfinished last turn in the bounded file tail;
+it is not proof of a crash (a live session can also have an unfinished turn).
+
 ## Choosing a model
 
 Ask Lemon to list omp models (`{"action":"models","free_only":true}`), then

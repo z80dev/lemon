@@ -111,6 +111,7 @@ defmodule LemonOmp.SessionFilesTest do
              "updatedAt" => session["updatedAt"],
              "model" => "anthropic/claude-x",
              "lastStatus" => "completed",
+             "interrupted" => false,
              "activeElsewhere" => false,
              "liveId" => nil
            }
@@ -192,6 +193,7 @@ defmodule LemonOmp.SessionFilesTest do
 
     for {id, {_entries, status}} <- cases do
       assert found[id]["lastStatus"] == status, "#{id}: #{inspect(found[id])}"
+      assert found[id]["interrupted"] == (status == "interrupted")
     end
   end
 

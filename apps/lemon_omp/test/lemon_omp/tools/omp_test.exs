@@ -43,6 +43,30 @@ defmodule LemonOmp.Tools.OmpTest do
              ~w(always-ask write yolo)
   end
 
+  test "resume explicitly continues interrupted work without accepting an extra prompt", ctx do
+    invalid =
+      run(ctx.tool, %{
+        "action" => "resume",
+        "omp_session_id" => "01abcd",
+        "continue" => true,
+        "prompt" => "extra"
+      })
+
+    assert invalid.is_error
+
+    result =
+      run(ctx.tool, %{
+        "action" => "resume",
+        "omp_session_id" => "01abcd",
+        "continue" => true,
+        "wait" => true
+      })
+
+    refute result.is_error
+    assert result.details["session"]["lastTurn"] == "completed"
+    assert File.read!(Path.join(ctx.ws, ".fake_omp.args")) =~ "--resume 01abcd"
+  end
+
   test "parallel workers forward approval modes and native routing context", ctx do
     tool = Omp.tool(ctx.ws, session_key: ctx.key, session_id: "batch-native", run_id: "batch-run")
     LemonCore.Bus.subscribe("exec_approvals")
