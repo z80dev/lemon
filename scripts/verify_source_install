@@ -307,6 +307,7 @@ assert_setup_required() {
 assert_setup_required true
 
 run_onboarding_durable "$onboarding_output" model \
+  --non-interactive \
   --provider openai \
   --token source-install-fixture-token \
   --secret-name source_install_fixture_openai \
