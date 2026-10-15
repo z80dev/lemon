@@ -81,6 +81,35 @@ defmodule LemonPlatformTest.HelpersTest do
     end
   end
 
+  describe "require_dep!/3" do
+    test "accepts an available optional dependency" do
+      assert :ok =
+               LemonPlatformTest.require_dep!("BackendCase", LemonCore.Store.Backend, :lemon_core)
+    end
+
+    test "names the missing Hex dependency and how to install it" do
+      error =
+        assert_raise RuntimeError, fn ->
+          LemonPlatformTest.require_dep!("ProviderCase", No.Such.Provider, :lemon_memory)
+        end
+
+      assert error.message =~ "LemonPlatformTest.ProviderCase needs No.Such.Provider"
+      assert error.message =~ ~s({:lemon_memory, "~> 0.2", only: :test})
+      assert error.message =~ "mix deps.get"
+    end
+
+    test "directs unpublished channel consumers to a checkout instead of Hex" do
+      error =
+        assert_raise RuntimeError, fn ->
+          LemonPlatformTest.require_dep!("PluginCase", No.Such.Plugin, :lemon_channels)
+        end
+
+      assert error.message =~ "LemonPlatformTest.PluginCase needs No.Such.Plugin"
+      assert error.message =~ ~s(path: "/path/to/lemon/apps/lemon_channels")
+      assert error.message =~ "lemon_channels is not on Hex"
+    end
+  end
+
   describe "resolve/2" do
     test "calls a {module, function} supplier with the context" do
       assert LemonPlatformTest.resolve({__MODULE__, :supplier}, %{tmp_dir: "/somewhere"}) ==

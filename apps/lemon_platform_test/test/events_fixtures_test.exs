@@ -15,7 +15,8 @@ defmodule LemonPlatformTest.EventsFixturesTest do
     {:cron_tick, &EventsFixtures.cron_tick/0},
     {:cron_run_started, &EventsFixtures.cron_run_started/0},
     {:cron_run_completed, &EventsFixtures.cron_run_completed/0},
-    {:cron_job_created, &EventsFixtures.cron_job_changed/0}
+    {:cron_job_created, &EventsFixtures.cron_job_changed/0},
+    {:channel_delivery, &EventsFixtures.channel_delivery/0}
   ]
 
   describe "defaults" do
@@ -84,6 +85,26 @@ defmodule LemonPlatformTest.EventsFixturesTest do
 
       assert %Events.RunCompleted{completed: ^completion} =
                EventsFixtures.run_completed(completed: completion, answer: "ignored")
+    end
+
+    test "an explicit completion map is coerced and wins over shorthand" do
+      assert %Events.RunCompleted{
+               completed: %Events.Completion{ok: false, answer: "explicit", error: :timeout}
+             } =
+               EventsFixtures.run_completed(
+                 completed: %{ok: false, answer: "explicit", error: :timeout},
+                 answer: "ignored"
+               )
+    end
+
+    test "an explicit pending struct is preserved in both approval events" do
+      pending = EventsFixtures.approval_pending(id: "approval-custom", tool: "read_file")
+
+      assert %Events.ApprovalRequested{pending: ^pending} =
+               EventsFixtures.approval_requested(pending: pending)
+
+      assert %Events.ApprovalResolved{pending: ^pending} =
+               EventsFixtures.approval_resolved(pending: pending)
     end
 
     test "approval events coerce a :pending map into the nested struct" do
