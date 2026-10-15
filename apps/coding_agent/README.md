@@ -156,6 +156,11 @@ CodingAgent.Supervisor (one_for_one)
 | Task / Agent | `task`, `agent`, `parent_question`, [`todo`](../../docs/tools/todo.md), `kanban` |
 | System | `tool_auth`, `extensions_status` |
 
+[`ask`](../../docs/tools/ask.md) is available while a session has a bound user
+prompt surface (the TUI), or an ACP client has negotiated form elicitation.
+Questions can offer single/multiple choices or free text. Decline, cancellation,
+timeout and disconnect fail closed; they never select a recommended answer.
+
 Opt-in conversation-only `checkpoint(goal)` / `rewind(report)` collapse model
 exploration into retained findings without restoring files. Enable
 `[runtime.tools.checkpoint] enabled = true`; see [checkpoints](../../docs/tools/checkpoint.md).

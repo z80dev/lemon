@@ -286,11 +286,22 @@ defmodule LemonAgent.LoopRedirectTest do
       context = simple_context()
       parent = self()
 
-      stream_fn =
+      provider_stream_fn =
         scripted_stream_fn(parent, %{
           1 => {:slow, :streaming_chunk},
           2 => {:respond, Mocks.assistant_message("Should not happen")}
         })
+
+      stream_fn = fn model, llm_context, options ->
+        response = provider_stream_fn.(model, llm_context, options)
+        send(parent, {:stream_ready, self()})
+
+        receive do
+          :release_stream_fn -> response
+        after
+          5_000 -> flunk("provider stream was not released")
+        end
+      end
 
       config = simple_config(stream_fn: stream_fn)
       signal = AbortSignal.new()
@@ -298,8 +309,12 @@ defmodule LemonAgent.LoopRedirectTest do
       stream = Loop.agent_loop([user_message("Start")], context, config, signal, nil)
 
       assert_receive {:streaming_chunk, 2}, 2000
+      assert_receive {:stream_ready, loop_pid}, 2000
       AbortSignal.request_redirect(signal)
       AbortSignal.abort(signal)
+      assert AbortSignal.redirect_requested?(signal)
+      assert AbortSignal.aborted?(signal)
+      send(loop_pid, :release_stream_fn)
 
       {events, result} = collect_events_and_result(stream)
 

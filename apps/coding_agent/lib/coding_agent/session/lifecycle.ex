@@ -277,7 +277,10 @@ defmodule CodingAgent.Session.Lifecycle do
       State.build_transform_context(
         Keyword.get(opts, :transform_context),
         context_guardrail_opts,
-        secret_obfuscator
+        secret_obfuscator,
+        fn rewind_id ->
+          GenServer.call(session_pid, {:context_checkpoint_projection, rewind_id}, :infinity)
+        end
       )
 
     get_api_key =

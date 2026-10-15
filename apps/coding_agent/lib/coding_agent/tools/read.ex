@@ -14,15 +14,22 @@ defmodule CodingAgent.Tools.Read do
   - `agent://` live family rosters and `agent://<task-id-or-name>` identities
   """
 
-  alias LemonAgent.Types.{AgentTool, AgentToolResult}
-  alias LemonAgent.Security.ToolResultTrust
-  alias LemonAi.Types.{TextContent, ImageContent}
   alias CodingAgent.FileReadTracker
   alias CodingAgent.InternalUrls
+  alias CodingAgent.InternalUrls.{GitHubProtocol, HistoryProtocol, ProcessProtocol}
   alias CodingAgent.Tools.ACPFileBridge
+  alias CodingAgent.Tools.AnchoredEdit
+  alias CodingAgent.Tools.Conflicts
   alias CodingAgent.Tools.FileValidation
   alias CodingAgent.Tools.PathHelpers
+  alias CodingAgent.Tools.ReadArchive
+  alias CodingAgent.Tools.ReadFormats
   alias CodingAgent.Tools.ReadSummary
+  alias CodingAgent.Tools.ReadText
+  alias CodingAgent.Tools.Task.Messaging
+  alias LemonAgent.Security.ToolResultTrust
+  alias LemonAgent.Types.{AgentTool, AgentToolResult}
+  alias LemonAi.Types.{ImageContent, TextContent}
 
   import LemonAgent.Tools.AbortHelpers, only: [aborted?: 1, check_abort: 1]
 
@@ -160,31 +167,31 @@ defmodule CodingAgent.Tools.Read do
   def execute(_id, %{"path" => "issue://" <> _ = path}, signal, _update, cwd, opts) do
     if aborted?(signal),
       do: {:error, "Operation aborted"},
-      else: CodingAgent.InternalUrls.GitHubProtocol.read(path, cwd, opts)
+      else: GitHubProtocol.read(path, cwd, opts)
   end
 
   def execute(_id, %{"path" => "pr://" <> _ = path}, signal, _update, cwd, opts) do
     if aborted?(signal),
       do: {:error, "Operation aborted"},
-      else: CodingAgent.InternalUrls.GitHubProtocol.read(path, cwd, opts)
+      else: GitHubProtocol.read(path, cwd, opts)
   end
 
   def execute(_id, %{"path" => "history://" <> _ = path}, signal, _update, _cwd, opts) do
     if aborted?(signal),
       do: {:error, "Operation aborted"},
-      else: CodingAgent.InternalUrls.HistoryProtocol.read(path, opts)
+      else: HistoryProtocol.read(path, opts)
   end
 
   def execute(_id, %{"path" => "proc://" <> _ = path}, signal, _update, cwd, opts) do
     if aborted?(signal),
       do: {:error, "Operation aborted"},
-      else: CodingAgent.InternalUrls.ProcessProtocol.read(path, signal, cwd, opts)
+      else: ProcessProtocol.read(path, signal, cwd, opts)
   end
 
   def execute(_tool_call_id, %{"path" => "agent://" <> _ = path}, signal, _on_update, _cwd, opts) do
     if aborted?(signal),
       do: {:error, "Operation aborted"},
-      else: CodingAgent.Tools.Task.Messaging.read(path, opts)
+      else: Messaging.read(path, opts)
   end
 
   def execute(tool_call_id, params, signal, _on_update, cwd, opts) do
@@ -202,6 +209,9 @@ defmodule CodingAgent.Tools.Read do
 
   defp do_execute(params, signal, cwd, opts) do
     case apply_path_selector(params, cwd, opts) do
+      {:ok, params, %{conflicts: true}} ->
+        Conflicts.read(params["path"], cwd, opts)
+
       {:ok, params, %{tail: tail} = view} when is_integer(tail) ->
         read_tail(params, tail, view, signal, cwd, opts)
 
@@ -237,7 +247,7 @@ defmodule CodingAgent.Tools.Read do
       # Internal references deliberately stay local, as do native rich reads.
       rich_result =
         if not ACPFileBridge.read_enabled?(opts) or InternalUrls.internal_url?(path),
-          do: CodingAgent.Tools.ReadFormats.read(resolved_path, params, signal, cwd, opts),
+          do: ReadFormats.read(resolved_path, params, signal, cwd, opts),
           else: :not_supported
 
       case rich_result do
@@ -368,7 +378,7 @@ defmodule CodingAgent.Tools.Read do
   # Path Line Selectors
   # ============================================================================
 
-  @selector_token ~r/\A(?:raw|\d+(?:-\d*|\+\d+)?(?:,\d+(?:-\d*|\+\d+)?)*|-\d+)\z/
+  @selector_token ~r/\A(?:conflicts|raw|\d+(?:-\d*|\+\d+)?(?:,\d+(?:-\d*|\+\d+)?)*|-\d+)\z/
 
   # A trailing `:selector` (up to two, e.g. `:10-20:raw`) only applies when the
   # literal path is missing and the remaining base names a real source, so
@@ -416,14 +426,23 @@ defmodule CodingAgent.Tools.Read do
         resolved_base = PathHelpers.resolve_path(base, cwd, opts)
 
         File.exists?(resolved_base) or
-          CodingAgent.Tools.ReadArchive.split_path(resolved_base) != nil
+          ReadArchive.split_path(resolved_base) != nil
     end
+  end
+
+  defp build_selector_view(params, base, ["conflicts"]) do
+    if Map.get(params, "offset") || Map.get(params, "limit"),
+      do: {:error, ":conflicts cannot be combined with offset/limit"},
+      else: {:ok, Map.put(params, "path", base), %{conflicts: true}}
   end
 
   defp build_selector_view(params, base, tokens) do
     {raw_tokens, range_tokens} = Enum.split_with(tokens, &(&1 == "raw"))
 
     cond do
+      "conflicts" in tokens ->
+        {:error, ":conflicts cannot be combined with other selectors"}
+
       length(raw_tokens) > 1 or length(range_tokens) > 1 ->
         {:error, "A path selector takes at most one line range and one :raw"}
 
@@ -817,7 +836,7 @@ defmodule CodingAgent.Tools.Read do
     max_lines = Keyword.get(opts, :max_lines, @default_max_lines)
     max_bytes = Keyword.get(opts, :max_bytes, @default_max_bytes)
 
-    case CodingAgent.Tools.ReadText.read(
+    case ReadText.read(
            path,
            normalize_offset(offset),
            limit,
@@ -863,7 +882,7 @@ defmodule CodingAgent.Tools.Read do
     max_lines = Keyword.get(opts, :max_lines, @default_max_lines)
     max_bytes = Keyword.get(opts, :max_bytes, @default_max_bytes)
 
-    with {:ok, window} <- CodingAgent.Tools.ReadText.from_content(content, max_lines, max_bytes) do
+    with {:ok, window} <- ReadText.from_content(content, max_lines, max_bytes) do
       window =
         if normalize_offset(offset) == 0 and is_nil(limit),
           do: Map.put(window, :digest, :erlang.md5(content)),
@@ -931,7 +950,7 @@ defmodule CodingAgent.Tools.Read do
       snapshot =
         case {raw? or Map.get(extra_details, :immutable, false), Map.get(window, :digest)} do
           {false, digest} when is_binary(digest) ->
-            CodingAgent.Tools.AnchoredEdit.snapshot_for_digest(digest)
+            AnchoredEdit.snapshot_for_digest(digest)
 
           _ ->
             nil

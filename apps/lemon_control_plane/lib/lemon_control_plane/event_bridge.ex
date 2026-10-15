@@ -79,6 +79,7 @@ defmodule LemonControlPlane.EventBridge do
 
   @bus_topics [
     "exec_approvals",
+    "user_prompts",
     "channels",
     "cron",
     "goals",
@@ -505,6 +506,23 @@ defmodule LemonControlPlane.EventBridge do
        "tool" => get_field(pending, :tool)
      }}
   end
+
+  defp map_event_type(:user_prompt_requested, payload, _meta) when is_map(payload),
+    do:
+      {"session.prompt.requested",
+       Map.take(payload, [
+         "promptId",
+         "sessionKey",
+         "runId",
+         "questions",
+         "requestedAtMs",
+         "expiresAtMs"
+       ])}
+
+  defp map_event_type(:user_prompt_resolved, payload, _meta) when is_map(payload),
+    do:
+      {"session.prompt.resolved",
+       Map.take(payload, ["promptId", "sessionKey", "runId", "status"])}
 
   # Channel delivery events — outbound dispatch observations from LemonChannels.Dispatcher.
   defp map_event_type(:channel_delivery, %Events.ChannelDelivery{} = payload, meta) do

@@ -667,6 +667,16 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
 
     on_exit(fn -> Application.delete_env(:lemon_channels, :discord_interaction_responder) end)
 
+    # Terminal receipts share the backing table with pending requests.
+    :ok =
+      LemonCore.ExecApprovalStore.put_pending("discord_retained_resolution", %{
+        resolution: %{outcome: :cancelled}
+      })
+
+    on_exit(fn ->
+      LemonCore.ExecApprovalStore.delete_pending("discord_retained_resolution")
+    end)
+
     task =
       Task.async(fn ->
         LemonCore.ExecApprovals.request(%{
@@ -680,7 +690,7 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
 
     pending =
       eventually(fn ->
-        LemonCore.Store.list(:exec_approvals_pending)
+        LemonCore.ExecApprovalStore.list_pending()
         |> Enum.find_value(fn {_key, pending} ->
           if pending.run_id == "run_discord_approval", do: pending, else: nil
         end)
