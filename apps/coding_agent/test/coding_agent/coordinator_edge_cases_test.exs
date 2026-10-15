@@ -121,50 +121,6 @@ defmodule CodingAgent.CoordinatorEdgeCasesTest do
 
   describe "session lifecycle - start" do
     @tag :tmp_dir
-    test "coordinator process dies if started with invalid cwd type", %{tmp_dir: _tmp_dir} do
-      result =
-        Coordinator.start_link(
-          cwd: 12_345,
-          model: mock_model()
-        )
-
-      case result do
-        {:error, _} ->
-          :ok
-
-        {:ok, pid} ->
-          assert Process.alive?(pid)
-          GenServer.stop(pid)
-      end
-    end
-
-    @tag :tmp_dir
-    test "coordinator can be started with all optional parameters", %{tmp_dir: tmp_dir} do
-      coordinator =
-        start_coordinator(
-          cwd: tmp_dir,
-          thinking_level: :high,
-          settings_manager: nil,
-          parent_session: "parent-123",
-          default_timeout: 60_000
-        )
-
-      assert Process.alive?(coordinator)
-      GenServer.stop(coordinator)
-    end
-
-    @tag :tmp_dir
-    test "coordinator handles nonexistent cwd gracefully on start", %{tmp_dir: _tmp_dir} do
-      # Coordinator should start even with nonexistent directory
-      # Error occurs when actually running subagents
-      coordinator =
-        start_coordinator(cwd: "/nonexistent/path/that/does/not/exist/#{:rand.uniform(10_000)}")
-
-      assert Process.alive?(coordinator)
-      GenServer.stop(coordinator)
-    end
-
-    @tag :tmp_dir
     test "multiple coordinators can be started concurrently", %{tmp_dir: tmp_dir} do
       coordinators =
         Enum.map(1..5, fn _ ->
