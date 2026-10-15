@@ -16,6 +16,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Channel status details no longer mistake a running adapter process for an
+  observed connection; Discord READY/resume and startup failures update the
+  redacted health projection.
 - All skill curator entry points now protect cron-referenced skills, including
   disabled jobs, while preserving explicit exemptions. Automatic archival fails
   closed with a reported reason when the automation provider is unavailable.
