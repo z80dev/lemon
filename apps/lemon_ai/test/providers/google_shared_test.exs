@@ -706,7 +706,7 @@ defmodule LemonAi.Providers.GoogleSharedComprehensiveTest do
       send(self(), {ref, {:data, "\"message\":\"Prompt is too long\"}}"}})
       send(self(), {ref, :done})
 
-      text = GoogleShared.normalize_http_error_body(async, 50)
+      text = GoogleShared.normalize_http_error_body(async)
 
       assert %{status: 400, category: :context_length, retryable: false} =
                GoogleShared.safe_http_error(400, text)
@@ -738,7 +738,7 @@ defmodule LemonAi.Providers.GoogleSharedComprehensiveTest do
       send(self(), {ref, {:data, "credential-that-must-not-be-collected"}})
       send(self(), {ref, :done})
 
-      text = GoogleShared.normalize_http_error_body(async, 50)
+      text = GoogleShared.normalize_http_error_body(async)
       assert byte_size(text) <= 16_384
       refute text =~ "credential-that-must-not-be-collected"
       assert %{status: 400, category: :context_length} = GoogleShared.safe_http_error(400, text)
@@ -753,7 +753,7 @@ defmodule LemonAi.Providers.GoogleSharedComprehensiveTest do
       send(self(), {ref, {:error, %{credentials: "private-upstream-token"}}})
       send(self(), {ref, {:data, "private-upstream-token"}})
 
-      text = GoogleShared.normalize_http_error_body(async, 50)
+      text = GoogleShared.normalize_http_error_body(async)
       details = GoogleShared.safe_http_error(400, text)
       assert %{status: 400, category: :client, retryable: false} = details
       refute Jason.encode!(details) =~ "private-upstream-token"

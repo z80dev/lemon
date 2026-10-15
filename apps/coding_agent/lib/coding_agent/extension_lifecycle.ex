@@ -172,6 +172,10 @@ defmodule CodingAgent.ExtensionLifecycle do
         |> ToolHooks.wrap_tuples(hooks, hook_context)
         |> SecretObfuscator.wrap_tuples(obfuscator),
         extra_tools
+        |> ToolExecutor.wrap_all_with_approval(
+          tool_policy,
+          Map.put(approval_context || %{}, :approval_tier, :exec)
+        )
         |> ToolHooks.wrap_tools(hooks, hook_context)
         |> SecretObfuscator.wrap_tools(obfuscator),
         disclosure_cfg,
@@ -274,6 +278,10 @@ defmodule CodingAgent.ExtensionLifecycle do
             |> ToolHooks.wrap_tuples(hooks, hook_context)
             |> SecretObfuscator.wrap_tuples(obfuscator),
             extra_tools
+            |> ToolExecutor.wrap_all_with_approval(
+              tool_policy,
+              Map.put(approval_context || %{}, :approval_tier, :exec)
+            )
             |> ToolHooks.wrap_tools(hooks, hook_context)
             |> SecretObfuscator.wrap_tools(obfuscator),
             disclosure_cfg,
@@ -291,7 +299,7 @@ defmodule CodingAgent.ExtensionLifecycle do
             ToolExecutor.wrap_all_with_approval(
               all_tools,
               tool_policy,
-              approval_context
+              Map.put(approval_context, :approval_tier, :exec)
             )
           else
             all_tools

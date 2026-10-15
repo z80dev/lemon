@@ -13,6 +13,8 @@ defmodule LemonCore.ToolPolicy do
   """
 
   @type approval_mode :: :always | :dangerous | :never
+  @type tier :: :read | :write | :exec
+  @type global_approval_mode :: :ask | :write | :yolo | nil
   @type profile ::
           :full_access
           | :orchestrator
@@ -30,6 +32,7 @@ defmodule LemonCore.ToolPolicy do
           blocked_tools: [String.t()],
           require_approval: [String.t()],
           approvals: %{optional(String.t()) => approval_mode()},
+          approval_mode: global_approval_mode(),
           no_reply: boolean(),
           profile: profile() | nil,
           allowed_commands: :all | [String.t()],
@@ -44,6 +47,7 @@ defmodule LemonCore.ToolPolicy do
     :blocked_tools,
     :require_approval,
     :approvals,
+    :approval_mode,
     :no_reply,
     :profile,
     :allowed_commands,
@@ -71,6 +75,7 @@ defmodule LemonCore.ToolPolicy do
     :blocked_tools,
     :require_approval,
     :approvals,
+    :approval_mode,
     :no_reply,
     :profile,
     :allowed_commands,
@@ -79,7 +84,16 @@ defmodule LemonCore.ToolPolicy do
     :sandbox
   ]
 
-  @native_keys [:allow, :deny, :blocked_tools, :require_approval, :approvals, :no_reply, :profile]
+  @native_keys [
+    :allow,
+    :deny,
+    :blocked_tools,
+    :require_approval,
+    :approvals,
+    :approval_mode,
+    :no_reply,
+    :profile
+  ]
   @max_tool_entries 16_384
   @execution_json_items 131_072
   @execution_json_bytes 16_777_216
@@ -224,6 +238,39 @@ defmodule LemonCore.ToolPolicy do
     "media_analyze_image",
     "media_generate_video"
   ]
+
+  @write_tools ~w(write edit patch ast_grep fs_checkpoint checkpoint rewind skill_manage remember todo todowrite kanban goal cron)
+  @approval_read_tools @read_tools ++
+                         ~w(ast_search bash_output webfetch websearch wait ask ask_parent extensions_status media_status tool_search)
+  @browser_read_tools ~w(browser_tabs browser_snapshot browser_get_content browser_wait_for_selector browser_events browser_get_cookies)
+  @browser_write_tools ~w(browser_tab_open browser_tab_activate browser_tab_close browser_navigate browser_click browser_type browser_hover browser_select_option browser_upload_file browser_download browser_press browser_scroll browser_back browser_set_cookies browser_clear_state browser_screenshot)
+  @lsp_read_actions ~w(diagnostics definition type_definition implementation references hover symbols rename rename_file code_actions capabilities status)
+
+  @doc "Classifies built-ins; unclassified, external and executable surfaces fail closed to exec."
+  @spec tier(String.t(), map()) :: tier()
+  def tier(tool, args \\ %{})
+
+  def tier("lsp", args) when is_map(args) do
+    action = Map.get(args, "action", Map.get(args, :action))
+    apply? = Map.get(args, "apply", Map.get(args, :apply, false))
+    if action in @lsp_read_actions and apply? in [false, nil], do: :read, else: :exec
+  end
+
+  def tier(tool, _args) when tool in @write_tools or tool in @browser_write_tools, do: :write
+
+  def tier(tool, _args) when tool in @approval_read_tools or tool in @browser_read_tools,
+    do: :read
+
+  def tier(_tool, _args), do: :exec
+
+  @doc "Seeds only an unset mode from config. Explicit PolicyStore/session policy wins."
+  def with_default_approval_mode(policy, mode) do
+    policy = parse!(policy)
+
+    if is_nil(policy.approval_mode),
+      do: parse!(%{policy | approval_mode: mode}),
+      else: policy
+  end
 
   @doc """
   JSON boundary defaults for rich native execution policy/connector payloads.
@@ -417,7 +464,8 @@ defmodule LemonCore.ToolPolicy do
         deny: union(parent.deny, requested.deny),
         blocked_tools: union(parent.blocked_tools, requested.blocked_tools),
         require_approval: union(parent.require_approval, requested.require_approval),
-        approvals: merge_approvals(parent.approvals, requested.approvals),
+        approvals: intersect_approvals(parent, requested),
+        approval_mode: stricter_mode(parent.approval_mode, requested.approval_mode),
         no_reply: parent.no_reply or requested.no_reply,
         profile: :custom,
         allowed_commands: intersect_allow(parent.allowed_commands, requested.allowed_commands),
@@ -445,10 +493,14 @@ defmodule LemonCore.ToolPolicy do
           parent.allowed_commands,
           parent.blocked_commands
         ) and
-        Enum.all?(union(parent.require_approval, Map.keys(parent.approvals)), fn tool ->
-          not authorized?(child, tool) or
-            approval_strength(child, tool) >= approval_strength(parent, tool)
-        end) and
+        global_mode_rank(child.approval_mode) >= global_mode_rank(parent.approval_mode) and
+        Enum.all?(
+          union(parent.require_approval, Map.keys(parent.approvals) ++ Map.keys(child.approvals)),
+          fn tool ->
+            not authorized?(child, tool) or
+              approval_strength(child, tool) >= approval_strength(parent, tool)
+          end
+        ) and
         (not parent.no_reply or child.no_reply) and
         (not parent.sandbox or child.sandbox) and
         (is_nil(parent.max_file_size) or
@@ -477,20 +529,36 @@ defmodule LemonCore.ToolPolicy do
       (policy.allow == :all or tool_name in policy.allow)
   end
 
-  @doc "Checks whether a tool requires approval. Invalid input requires approval."
-  @spec requires_approval?(t() | map(), String.t()) :: boolean()
-  def requires_approval?(policy, tool_name) when is_binary(tool_name) do
+  @doc "Checks approval against the actual arguments and optional source-resolved tier."
+  def requires_approval?(policy, tool_name, args \\ %{}, resolved_tier \\ nil)
+
+  def requires_approval?(policy, tool_name, args, resolved_tier) when is_binary(tool_name) do
     case parse(policy) do
       {:ok, policy} ->
         tool_name in policy.require_approval or
-          Map.get(policy.approvals, tool_name) in [:always, :dangerous]
+          case Map.get(policy.approvals, tool_name, :inherit) do
+            mode when mode in [:always, :dangerous] ->
+              true
+
+            :never ->
+              false
+
+            :inherit ->
+              tier = resolved_tier || tier(tool_name, args)
+
+              case policy.approval_mode do
+                :ask -> tier != :read
+                :write -> tier == :exec
+                _ -> false
+              end
+          end
 
       {:error, _reason} ->
         true
     end
   end
 
-  def requires_approval?(_policy, _tool_name), do: true
+  def requires_approval?(_policy, _tool_name, _args, _tier), do: true
 
   @doc "Returns the explicit approval mode for a tool."
   @spec approval_mode(t() | map(), String.t()) :: approval_mode() | :inherit
@@ -574,6 +642,7 @@ defmodule LemonCore.ToolPolicy do
       "require_approval" => policy.require_approval,
       "approvals" =>
         Map.new(policy.approvals, fn {tool, mode} -> {tool, Atom.to_string(mode)} end),
+      "approval_mode" => if(policy.approval_mode, do: Atom.to_string(policy.approval_mode)),
       "no_reply" => policy.no_reply,
       "profile" => if(policy.profile, do: Atom.to_string(policy.profile)),
       "allowed_commands" => encode_allow(policy.allowed_commands),
@@ -596,6 +665,7 @@ defmodule LemonCore.ToolPolicy do
       blocked_tools: [],
       require_approval: [],
       approvals: %{},
+      approval_mode: :ask,
       no_reply: false,
       profile: nil,
       allowed_commands: [],
@@ -635,6 +705,7 @@ defmodule LemonCore.ToolPolicy do
            ),
          {:ok, approvals} <-
            parse_approvals(Map.get(fields, :approvals, base.approvals)),
+         {:ok, mode} <- parse_global_mode(Map.get(fields, :approval_mode, base.approval_mode)),
          {:ok, no_reply} <- parse_boolean(Map.get(fields, :no_reply, base.no_reply), :no_reply),
          {:ok, allowed_commands} <-
            parse_allow(
@@ -658,6 +729,7 @@ defmodule LemonCore.ToolPolicy do
         blocked_tools: union(base.blocked_tools, blocked_tools),
         require_approval: union(base.require_approval, require_approval),
         approvals: merge_approvals(base.approvals, approvals),
+        approval_mode: mode,
         no_reply: no_reply,
         profile: base.profile,
         allowed_commands: intersect_allow(base.allowed_commands, allowed_commands),
@@ -806,6 +878,28 @@ defmodule LemonCore.ToolPolicy do
 
   defp parse_approval_mode(_mode), do: :error
 
+  defp parse_global_mode(mode) when mode in [nil, :ask, :write, :yolo], do: {:ok, mode}
+  defp parse_global_mode("ask"), do: {:ok, :ask}
+  defp parse_global_mode("write"), do: {:ok, :write}
+  defp parse_global_mode("yolo"), do: {:ok, :yolo}
+  defp parse_global_mode(_), do: {:error, {:invalid_policy_field, :approval_mode}}
+
+  defp global_mode_rank(:ask), do: 2
+  defp global_mode_rank(:write), do: 1
+  defp global_mode_rank(_), do: 0
+
+  defp stricter_mode(left, right) do
+    if global_mode_rank(left) > global_mode_rank(right), do: left, else: right || left
+  end
+
+  defp intersect_approvals(parent, requested) do
+    merge_approvals(parent.approvals, requested.approvals)
+    |> Map.new(fn {tool, mode} ->
+      required = requires_approval?(parent, tool) or requires_approval?(requested, tool)
+      {tool, if(mode == :never and required, do: :always, else: mode)}
+    end)
+  end
+
   defp parse_boolean(value, _field) when is_boolean(value), do: {:ok, value}
   defp parse_boolean(_value, field), do: {:error, {:invalid_policy_field, field}}
 
@@ -849,6 +943,7 @@ defmodule LemonCore.ToolPolicy do
       blocked_tools: [],
       require_approval: [],
       approvals: %{},
+      approval_mode: nil,
       no_reply: false,
       profile: profile,
       allowed_commands: :all,
@@ -880,9 +975,11 @@ defmodule LemonCore.ToolPolicy do
   defp approval_rank(:never), do: 1
 
   defp approval_strength(policy, tool) do
-    if tool in policy.require_approval,
-      do: approval_rank(:always),
-      else: policy.approvals |> Map.get(tool, :never) |> approval_rank()
+    cond do
+      tool in policy.require_approval -> approval_rank(:always)
+      requires_approval?(policy, tool) -> approval_rank(Map.get(policy.approvals, tool, :always))
+      true -> approval_rank(:never)
+    end
   end
 
   defp grants_subset?(:all, child_denied, :all, parent_denied) do

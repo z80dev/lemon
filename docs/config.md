@@ -1536,6 +1536,36 @@ from `~/.claude/.credentials.json` or `CLAUDE_CODE_OAUTH_TOKEN` /
 env token. See [Claude subscription sign-in](user-guide/cli.md#claude-subscription-sign-in-anthropic-oauth)
 for `--status`, `--logout`, and refresh behavior.
 
+## Tool Approval Modes
+
+```toml
+[runtime.tools]
+approval_mode = "write" # ask | write | yolo
+```
+
+| Mode | Approvals required |
+| --- | --- |
+| `ask` | All non-read tools (`write` and `exec`) |
+| `write` | Executable tools (`exec`) only |
+| `yolo` | No tier-based approvals |
+
+Leaving the setting unset preserves existing behavior, including configured
+per-tool and source-specific approval requirements. Reads/search/web fetches
+are `read`; built-in file/state mutations are `write`; shell/process control,
+eval/debug, browser evaluation, MCP/WASM/extension and unknown tools are `exec`.
+LSP navigation and edit previews are `read`; applying edits, raw requests and
+server reloads are `exec`.
+
+Config supplies only the default. A canonical tool policy can set
+`approval_mode = "ask"`, `"write"` or `"yolo"` in
+`[profiles.<id>.tool_policy]` or through the existing PolicyStore session/runtime
+policy. Explicit policy modes win over the config default. Policy intersections
+retain the stricter mode, so delegated work cannot weaken parent approval gates.
+The existing `approvals` map (`always`/`never`) overrides tier defaults in every
+mode; `require_approval`, parent floors, and explicitly configured MCP approval
+requirements remain mandatory. An `on_tool_call` hook's revised arguments are
+used for approval resolution and the approval preview, not the original input.
+
 ## Web Tools (`websearch` / `webfetch`)
 
 Lemon includes web tools under `runtime.tools.web`. For full setup and troubleshooting, see:

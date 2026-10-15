@@ -141,6 +141,21 @@ defmodule CodingAgent.ToolRegistry do
         policy -> policy
       end
 
+    settings = Keyword.get(opts, :settings_manager) || %{}
+    tools_config = Map.get(settings, :tools, %{}) || %{}
+
+    tool_policy =
+      case ToolPolicy.parse(tool_policy) do
+        {:ok, policy} ->
+          ToolPolicy.with_default_approval_mode(
+            policy,
+            Map.get(tools_config, :approval_mode, Map.get(tools_config, "approval_mode"))
+          )
+
+        {:error, _} ->
+          tool_policy
+      end
+
     builtin = builtin_tool_tuples(cwd, opts)
     wasm_tools = normalize_wasm_tools(Keyword.get(opts, :wasm_tools, []))
     mcp_tools = mcp_tool_tuples(cwd, opts, include_mcp)
@@ -899,17 +914,30 @@ defmodule CodingAgent.ToolRegistry do
   end
 
   defp maybe_wrap_approval(tools, tool_policy, approval_context) do
-    Enum.map(tools, fn {name, tool, source} = tuple ->
-      requires_approval =
-        ToolPolicy.requires_approval?(tool_policy, name) or
-          wasm_default_requires_approval?(tool_policy, name, source) or
-          mcp_requires_approval?(source)
+    Enum.map(tools, fn {name, tool, source} ->
+      original_execute = tool.execute
 
-      if requires_approval do
-        {name, force_wrap_approval(tool, name, approval_context), elem(tuple, 2)}
-      else
-        tuple
+      execute = fn tool_call_id, params, signal, on_update ->
+        tier = if source == :builtin, do: ToolPolicy.tier(name, params), else: :exec
+
+        required =
+          ToolPolicy.requires_approval?(tool_policy, name, params, tier) or
+            wasm_default_requires_approval?(tool_policy, name, source) or
+            mcp_requires_approval?(source)
+
+        if required do
+          ToolExecutor.execute_with_approval(
+            name,
+            params,
+            fn -> original_execute.(tool_call_id, params, signal, on_update) end,
+            Map.put(approval_context, :tool_call_id, tool_call_id)
+          )
+        else
+          original_execute.(tool_call_id, params, signal, on_update)
+        end
       end
+
+      {name, %{tool | execute: execute}, source}
     end)
   end
 
@@ -917,25 +945,12 @@ defmodule CodingAgent.ToolRegistry do
   defp mcp_requires_approval?(_source), do: false
 
   defp wasm_default_requires_approval?(tool_policy, tool_name, {:wasm, meta}) do
-    WasmPolicy.requires_approval?(tool_policy, tool_name, meta)
+    if is_nil(Map.get(tool_policy, :approval_mode, Map.get(tool_policy, "approval_mode"))),
+      do: WasmPolicy.requires_approval?(tool_policy, tool_name, meta),
+      else: false
   end
 
   defp wasm_default_requires_approval?(_tool_policy, _tool_name, _source), do: false
-
-  defp force_wrap_approval(%AgentTool{} = tool, tool_name, approval_context) do
-    original_execute = tool.execute
-
-    wrapped_execute = fn tool_call_id, params, signal, on_update ->
-      ToolExecutor.execute_with_approval(
-        tool_name,
-        params,
-        fn -> original_execute.(tool_call_id, params, signal, on_update) end,
-        Map.put(approval_context, :tool_call_id, tool_call_id)
-      )
-    end
-
-    %{tool | execute: wrapped_execute}
-  end
 
   defp normalize_wasm_tools(nil), do: []
 

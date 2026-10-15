@@ -222,7 +222,7 @@ defmodule LemonHoncho.ConfigTest do
       assert config.dialectic_cadence == 5
       assert config.context_tokens == 1200
       assert config.dialectic_max_chars == 900
-      assert config.message_max_chars == 16000
+      assert config.message_max_chars == 16_000
       assert config.reasoning_level == :medium
       assert config.observation_mode == :unified
       refute config.save_messages?

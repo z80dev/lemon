@@ -301,7 +301,7 @@ defmodule LemonCli.HermesMigrationTest do
                "dialectic_cadence" => 5,
                "reasoning_level" => "medium",
                "dialectic_max_chars" => 900,
-               "message_max_chars" => 16000,
+               "message_max_chars" => 16_000,
                "save_messages" => false,
                "observation_mode" => "unified",
                "timeout_ms" => 1500

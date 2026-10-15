@@ -22,6 +22,7 @@ defmodule CodingAgent.Session.Lifecycle do
 
   alias CodingAgent.SessionManager
   alias CodingAgent.SettingsManager
+  alias CodingAgent.ToolPolicy
   alias CodingAgent.SystemPrompt.Environment, as: SystemPromptEnvironment
   alias CodingAgent.Workspace
 
@@ -118,8 +119,12 @@ defmodule CodingAgent.Session.Lifecycle do
       )
       |> SessionManager.persist(session_file)
 
-    tool_policy = Keyword.get(opts, :tool_policy)
-    execution_context = Keyword.fetch!(opts, :execution_context)
+    tool_policy =
+      opts
+      |> Keyword.fetch!(:tool_policy)
+      |> ToolPolicy.with_default_approval_mode(Map.get(settings_manager.tools, :approval_mode))
+
+    execution_context = %{Keyword.fetch!(opts, :execution_context) | tool_policy: tool_policy}
 
     approval_context =
       resolve_approval_context(opts, session_manager.header.id, tool_policy)

@@ -31,6 +31,11 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   notifications, reconnect dropped clients with bounded backoff, and suspend
   crash storms with redacted unavailable status.
 
+- Native tool policies support read/write/exec approval tiers and configurable
+  ask/write/yolo defaults, preserving per-tool overrides and parent floors.
+  Approval is resolved against hook-rewritten arguments. Canonical web config
+  now retains the guarded-fetch response body cap.
+
 - Lemon Web omp adds parallel worker starts and a live usage grid, searchable
   free-marked model selection, live model/thinking configuration with explicit
   partial-failure receipts, and bounded subagent transcript drill-down.
@@ -47,6 +52,11 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Release preflight fixtures retain built-in provider registrations, distinguish
+  pending approvals from retained resolutions, and exercise typed provider errors
+  and asynchronous subagent cleanup without cross-test state leaks.
+- The Learning page reads its bounded, profile-scoped timeline through the
+  authenticated control plane instead of adding a forbidden Web-to-Skills dependency.
 - The TUI stops retrying rejected operator credentials, shows token recovery
   steps, and keeps offline prompts in the editor instead of silently queueing.
   Connection failures and `/reconnect` report actionable outcomes; `/status`

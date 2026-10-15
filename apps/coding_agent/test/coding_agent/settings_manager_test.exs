@@ -80,7 +80,7 @@ defmodule CodingAgent.SettingsManagerTest do
       assert settings.tools == %{}
       assert settings.extension_paths == []
       assert settings.extension_auto_load_default_paths == false
-      assert settings.theme == "default"
+      refute Map.has_key?(settings, :theme)
     end
 
     test "converts config with default provider and model" do
@@ -550,13 +550,11 @@ defmodule CodingAgent.SettingsManagerTest do
       assert settings.extension_auto_load_default_paths == true
     end
 
-    test "extracts theme from agent config" do
+    test "keeps TUI-owned theme out of runtime settings" do
       config = %LemonConfig{
         providers: %{},
-        agent: %{
-          theme: "dark"
-        },
-        tui: %{},
+        agent: %{},
+        tui: %{theme: "dark"},
         logging: %{},
         gateway: %{},
         agents: %{}
@@ -564,7 +562,7 @@ defmodule CodingAgent.SettingsManagerTest do
 
       settings = SettingsManager.from_config(config)
 
-      assert settings.theme == "dark"
+      refute Map.has_key?(settings, :theme)
     end
   end
 
@@ -584,8 +582,10 @@ defmodule CodingAgent.SettingsManagerTest do
       model = "gpt-4"
       thinking_level = "low"
 
-      [runtime]
+      [tui]
       theme = "light"
+
+      [runtime]
       extension_paths = ["/custom/extensions"]
 
       [runtime.compaction]
@@ -614,7 +614,8 @@ defmodule CodingAgent.SettingsManagerTest do
       assert settings.default_model.provider == :openai
       assert settings.default_model.model_id == "gpt-4"
       assert settings.default_thinking_level == :low
-      assert settings.theme == "light"
+      refute Map.has_key?(settings, :theme)
+      assert LemonConfig.load(test_dir).tui.theme == "light"
       assert settings.compaction_enabled == false
       assert settings.reserve_tokens == 4096
       assert settings.keep_recent_tokens == 5000

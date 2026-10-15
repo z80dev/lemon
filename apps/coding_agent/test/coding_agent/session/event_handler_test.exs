@@ -37,6 +37,7 @@ defmodule CodingAgent.Session.EventHandlerTest do
 
     state = %{
       hooks: [],
+      session_manager: CodingAgent.SessionManager.new(System.tmp_dir!()),
       is_streaming: true,
       steering_queue: :queue.new(),
       follow_up_queue: :queue.from_list([:pending_follow_up]),
