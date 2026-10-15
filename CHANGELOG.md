@@ -13,6 +13,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 - Expanded the LSP registry from six to 42 primary language servers, with
   installation hints, unique extension ownership, and case-insensitive
   `LemonLsp.Servers.language_id/1` lookup.
+- Parallel omp workers: the `omp` tool can start a validated batch concurrently
+  with `start_many`, gather all or any worker with `wait` and `ids`, stream
+  throttled combined progress, and report per-task failures and total usage.
+  The Elixir facade exposes `start_many/2` and `wait_many/3` with owner scoping.
 - Opt-in real omp lifecycle smoke using a free model, covering tool writes,
   follow-ups, cancellation, process cleanup, discovery and resume.
 
