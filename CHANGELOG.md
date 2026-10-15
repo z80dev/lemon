@@ -8,7 +8,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
-No unreleased changes yet.
+### Added
+
+- Forward Telegram photos and image documents and Discord CDN image attachments
+  to vision-capable models, with bounded downloads and text fallback on failure.
 
 ---
 

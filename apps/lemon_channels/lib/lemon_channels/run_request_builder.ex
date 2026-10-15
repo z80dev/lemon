@@ -14,6 +14,7 @@ defmodule LemonChannels.RunRequestBuilder do
       session_key: session_key,
       agent_id: agent_id,
       prompt: message_text(msg),
+      images: Map.get(msg.message, :images, []),
       queue_mode: meta_value(meta, :queue_mode),
       model: meta_value(meta, :model),
       resume: normalize_resume_token(meta_value(meta, :resume)),
