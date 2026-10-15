@@ -92,6 +92,10 @@ struct NativeLemonBotView: View {
                             Text(error).font(.footnote).textSelection(.enabled).lineLimit(3)
                             Spacer(minLength: 4)
                             Button("Details") { sheet = NativeSheet(action: "permissions") }.font(.footnote.weight(.semibold))
+                            Button {
+                                localError = nil; delegate.error = nil; voice.error = nil
+                            } label: { Image(systemName: "xmark").font(.footnote.weight(.semibold)) }
+                            .accessibilityLabel("Dismiss error")
                         }
                         .padding(.horizontal, 14).padding(.vertical, 10)
                         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
@@ -264,8 +268,12 @@ struct NativeLemonBotView: View {
     }
 
     @MainActor private func handle(action: String, conversationID: ID) async {
+        // Composer appearance asks for staged files passively; that is not user input and must not raise an error.
+        if action == "stagedFiles" {
+            if scenePhase == .active, store.account != nil { publishStagedFiles(conversationID: conversationID) }
+            return
+        }
         guard scenePhase == .active, store.account != nil else { localError = "Sign in and keep Lemon Bot in the foreground before selecting native input."; return }
-        if action == "stagedFiles" { publishStagedFiles(conversationID: conversationID); return }
         guard sheet == nil, !filePicker, !handlingNativeRequest else { return }
         handlingNativeRequest = true
         defer { handlingNativeRequest = false }
