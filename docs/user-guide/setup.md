@@ -72,7 +72,10 @@ terminal is available, it does not start an unconfigured daemon; run `lemon
 setup` later from an interactive terminal.
 
 An existing scaffold alone does not count as ready: an interrupted provider
-setup is offered again on the next interactive launch. This check is offline.
+setup is offered again on the next interactive launch. This check is offline:
+it starts only the core services needed to read encrypted credentials, not the
+agent runtime. A startup/read error is reported rather than mistaken for
+incomplete setup.
 Local presets such as Ollama and custom endpoints with `auth = "none"` do not
 need an API key to pass provider readiness; secure secrets setup remains a
 separate step.

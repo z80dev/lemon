@@ -137,6 +137,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Start core credential storage before cold CLI setup-readiness checks, so
+  configured source installs are recognized without starting the agent runtime;
+  surface readiness failures instead of silently rerunning setup.
+
 - Preserve observed input, output and cache-token breakdowns in cancelled and
   failed native runs when budget accounting arrives before terminal completion.
 
