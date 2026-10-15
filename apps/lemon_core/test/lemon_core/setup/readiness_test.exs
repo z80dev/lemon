@@ -1,7 +1,32 @@
 defmodule LemonCore.Setup.ReadinessTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
+  alias LemonCore.Doctor.ProviderDiagnostics
   alias LemonCore.Setup.Readiness
+
+  test "environment-only credentials agree with doctor and reject blank values" do
+    path =
+      Path.join(System.tmp_dir!(), "readiness_env_#{System.unique_integer([:positive])}.toml")
+
+    previous = System.get_env("OPENAI_API_KEY")
+    File.write!(path, "[defaults]\nprovider = \"openai\"\nmodel = \"gpt-5\"\n")
+
+    on_exit(fn ->
+      if previous,
+        do: System.put_env("OPENAI_API_KEY", previous),
+        else: System.delete_env("OPENAI_API_KEY")
+
+      File.rm!(path)
+    end)
+
+    System.put_env("OPENAI_API_KEY", "test-env-key")
+    assert Readiness.status(config_path: path).provider.complete
+    assert ProviderDiagnostics.ambient_configured?("openai")
+
+    System.put_env("OPENAI_API_KEY", " \n")
+    refute Readiness.status(config_path: path).provider.complete
+    refute ProviderDiagnostics.ambient_configured?("openai")
+  end
 
   for {provider, auth, ready?} <- [
         {"ollama", "", true},

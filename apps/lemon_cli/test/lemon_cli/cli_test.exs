@@ -505,6 +505,48 @@ defmodule LemonCli.CLITest do
       refute CLI.setup_required?()
     end
 
+    test "an environment-only credential does not re-enter setup" do
+      config_path = global_config_path()
+      File.mkdir_p!(Path.dirname(config_path))
+
+      File.write!(
+        config_path,
+        "[defaults]\nprovider = \"anthropic\"\nmodel = \"claude-sonnet-4-5\"\n"
+      )
+
+      System.put_env("ANTHROPIC_API_KEY", "test-env-credential")
+
+      assert Readiness.ready?(Readiness.status())
+      refute CLI.setup_required?()
+      output = capture_io(fn -> assert CLI.run(["setup", "--if-required"]) == 0 end)
+      refute output =~ "Setup is required"
+
+      System.put_env("ANTHROPIC_API_KEY", " \n")
+      assert CLI.setup_required?()
+    end
+
+    test "a saved ChatGPT OAuth credential does not re-enter setup" do
+      config_path = global_config_path()
+      File.mkdir_p!(Path.dirname(config_path))
+
+      File.write!(config_path, """
+      [defaults]
+      provider = "openai-codex"
+      model = "openai-codex:gpt-5.3-codex"
+      [providers.openai-codex]
+      auth_source = "oauth"
+      oauth_secret = "ready_codex_oauth"
+      """)
+
+      assert {:ok, _} =
+               Secrets.set("ready_codex_oauth", Jason.encode!(%{"access_token" => "test-oauth"}))
+
+      assert Readiness.ready?(Readiness.status())
+      refute CLI.setup_required?()
+      output = capture_io(fn -> assert CLI.run(["setup", "--if-required"]) == 0 end)
+      refute output =~ "Setup is required"
+    end
+
     test "core keyless presets agree with the model catalog" do
       for preset <- Presets.all(),
           name <- [Atom.to_string(preset.id) | preset.aliases] do

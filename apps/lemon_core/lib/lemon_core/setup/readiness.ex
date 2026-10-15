@@ -19,6 +19,7 @@ defmodule LemonCore.Setup.Readiness do
   """
 
   alias LemonCore.Config.{LegacyAgentMigration, Modular, Providers}
+  alias LemonCore.Doctor.ProviderDiagnostics
   alias LemonCore.Secrets
 
   @type step :: :config | :secrets | :provider
@@ -139,6 +140,7 @@ defmodule LemonCore.Setup.Readiness do
     cond do
       keyless_provider?(provider, provider_cfg) -> {true, nil}
       inline_key != nil -> {true, nil}
+      ProviderDiagnostics.ambient_configured?(provider) -> {true, nil}
       Enum.any?(refs, &secret_usable?/1) -> {true, nil}
       true -> {false, :credential_not_usable}
     end

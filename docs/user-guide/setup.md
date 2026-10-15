@@ -65,6 +65,9 @@ setup is offered again on the next interactive launch. This check is offline.
 Local presets such as Ollama and custom endpoints with `auth = "none"` do not
 need an API key to pass provider readiness; secure secrets setup remains a
 separate step.
+Provider credentials exported through recognized environment variables (for
+example `ANTHROPIC_API_KEY` or `OPENAI_API_KEY`) also satisfy offline readiness,
+even without a secret reference in the config.
 
 The browser is also fail-closed. `lemon web` may start before setup is complete
 so the page can explain what is missing, but the page disables prompts and
