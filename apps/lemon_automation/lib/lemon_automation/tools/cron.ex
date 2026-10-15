@@ -773,11 +773,9 @@ defmodule LemonAutomation.Tools.Cron do
   end
 
   defp to_existing_atom(key) when is_binary(key) do
-    try do
-      String.to_existing_atom(key)
-    rescue
-      ArgumentError -> nil
-    end
+    String.to_existing_atom(key)
+  rescue
+    ArgumentError -> nil
   end
 
   defp normalize_string(value) when is_binary(value) do

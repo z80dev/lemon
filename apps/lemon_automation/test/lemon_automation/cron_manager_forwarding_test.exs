@@ -1,6 +1,8 @@
 defmodule LemonAutomation.CronManagerForwardingTest do
   use ExUnit.Case, async: false
 
+  alias LemonAgent.Workspace.GoalStore
+  alias LemonAgent.Workspace.KanbanStore
   alias LemonAutomation.{CronManager, CronRun, CronStore}
   alias LemonCore.{Bus, Event, Store}
 
@@ -57,20 +59,18 @@ defmodule LemonAutomation.CronManagerForwardingTest do
     params = %{run_id: "run_goal_remote_#{token}", session_key: session <> ":goal_judge"}
 
     {:ok, goal} =
-      LemonAgent.Workspace.GoalStore.set(session, "Check result",
-        meta: %{"deliverTo" => "telegram:-100777:12"}
-      )
+      GoalStore.set(session, "Check result", meta: %{"deliverTo" => "telegram:-100777:12"})
 
-    on_exit(fn -> LemonAgent.Workspace.GoalStore.clear(session) end)
+    on_exit(fn -> GoalStore.clear(session) end)
     assert :ok = LemonAutomation.RunNotifications.bind_goal(goal, params)
 
     {:ok, _} =
-      LemonAgent.Workspace.GoalStore.record_loop_status(session, :running,
+      GoalStore.record_loop_status(session, :running,
         run_id: params.run_id,
         run_kind: :judge
       )
 
-    {:ok, _} = LemonAgent.Workspace.GoalStore.complete(session)
+    {:ok, _} = GoalStore.complete(session)
     assert :ok = LemonAutomation.RunNotifications.goal_finished(session, :finished)
 
     assert_receive {:cron_forwarded_channel_payload,
@@ -83,16 +83,16 @@ defmodule LemonAutomation.CronManagerForwardingTest do
     refute_receive {:cron_forwarded_channel_payload, _}, 100
 
     {:ok, board} =
-      LemonAgent.Workspace.KanbanStore.create_board("Remote",
+      KanbanStore.create_board("Remote",
         meta: %{
           "notificationSessionKey" => "agent:operator:telegram:default:group:-100777:thread:12"
         }
       )
 
-    on_exit(fn -> LemonAgent.Workspace.KanbanStore.clear_board(board.id) end)
+    on_exit(fn -> KanbanStore.clear_board(board.id) end)
 
     {:ok, task} =
-      LemonAgent.Workspace.KanbanStore.create_task(board.id, "Remote card",
+      KanbanStore.create_task(board.id, "Remote card",
         session_key: session,
         run_id: "run_card_remote_#{token}"
       )
@@ -103,11 +103,11 @@ defmodule LemonAutomation.CronManagerForwardingTest do
                session_key: session
              })
 
-    {:ok, leased} = LemonAgent.Workspace.KanbanStore.lease_task(board.id, "worker")
+    {:ok, leased} = KanbanStore.lease_task(board.id, "worker")
     lease = leased.meta["kanbanLease"]["id"]
 
     {:ok, failed} =
-      LemonAgent.Workspace.KanbanStore.fail_leased_task(task.id, lease, "run_failed")
+      KanbanStore.fail_leased_task(task.id, lease, "run_failed")
 
     assert :ok = LemonAutomation.RunNotifications.kanban_finished(failed, lease)
 
