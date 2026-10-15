@@ -385,6 +385,12 @@ defmodule CodingAgent.Session.Lifecycle do
         # (or the user interrupts); `[runtime] max_tool_turns` or an explicit
         # `:max_tool_turns` option installs a cap.
         max_tool_turns: Keyword.get(opts, :max_tool_turns, settings_manager.max_tool_turns),
+        intent_tracing:
+          Keyword.get(
+            opts,
+            :intent_tracing,
+            Map.get(settings_manager.tools, :intent_tracing, true)
+          ),
         max_retries: if(retry_settings.enabled, do: retry_settings.max_retries, else: 0),
         retry_base_delay_ms: retry_settings.base_delay_ms,
         name: LemonAgent.AgentRegistry.via(agent_registry_key)

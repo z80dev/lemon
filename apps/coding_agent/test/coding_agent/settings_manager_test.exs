@@ -10,6 +10,7 @@ defmodule CodingAgent.SettingsManagerTest do
 
   alias CodingAgent.SettingsManager
   alias LemonCore.Config, as: LemonConfig
+  alias LemonCore.Config.{Tools, Validator}
 
   # ============================================================================
   # Test Setup
@@ -80,6 +81,32 @@ defmodule CodingAgent.SettingsManagerTest do
       assert settings.tools.checkpoint.enabled
       assert SettingsManager.load(root).tools == settings.tools
     end
+  end
+
+  test "tool intent defaults on and respects project config", %{test_dir: project} do
+    assert Tools.resolve(%{}).intent_tracing
+
+    assert SettingsManager.from_config(%LemonConfig{agent: %{tools: %{intent_tracing: false}}}).tools.intent_tracing ==
+             false
+
+    for enabled <- [true, false] do
+      root = Path.join(project, to_string(enabled))
+      File.mkdir_p!(Path.join(root, ".lemon"))
+
+      File.write!(Path.join(root, ".lemon/config.toml"), """
+      [runtime.tools]
+      intent_tracing = #{enabled}
+      """)
+
+      assert SettingsManager.load(root).tools.intent_tracing == enabled
+    end
+
+    invalid = Tools.resolve(%{"tools" => %{"intent_tracing" => "yes"}})
+
+    assert "tools.intent_tracing: must be a boolean" in Validator.validate_tools(
+             invalid,
+             []
+           )
   end
 
   # ============================================================================

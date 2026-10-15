@@ -68,6 +68,7 @@ defmodule LemonCore.Config.Tools do
     :auto_resize_images,
     :approval_mode,
     :edit,
+    :intent_tracing,
     :web,
     :wasm,
     :disclosure,
@@ -146,6 +147,7 @@ defmodule LemonCore.Config.Tools do
           auto_resize_images: boolean(),
           approval_mode: String.t() | nil,
           edit: %{enforce_seen_lines: boolean()},
+          intent_tracing: boolean(),
           web: %{
             search: web_search_config(),
             fetch: web_fetch_config(),
@@ -169,6 +171,7 @@ defmodule LemonCore.Config.Tools do
       auto_resize_images: resolve_auto_resize(tools_settings),
       approval_mode: Map.get(tools_settings, "approval_mode"),
       edit: resolve_edit(tools_settings),
+      intent_tracing: Map.get(tools_settings, "intent_tracing", true),
       web: resolve_web(tools_settings),
       wasm: resolve_wasm(tools_settings),
       disclosure: resolve_disclosure(tools_settings),

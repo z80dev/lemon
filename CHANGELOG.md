@@ -14,6 +14,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   `[runtime.tools.edit] enforce_seen_lines` config key (default false), carried
   through session settings into registered edit tools.
 
+- Add default-on optional `i` tool intent in provider schemas, preserving original
+  transcripts while keeping intent out of execution arguments and telemetry;
+  show it in approval rationales and existing ACP tool-call titles.
+
 - Add opt-in `enforce_seen_lines` coding-tool options for snapshot-anchored edits:
   remember displayed lines across read windows and refuse unseen targets or
   insertion anchors with actionable range-read hints, including during recovery.
