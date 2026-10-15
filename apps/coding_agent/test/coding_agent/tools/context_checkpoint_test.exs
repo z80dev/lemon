@@ -32,6 +32,28 @@ defmodule CodingAgent.Tools.ContextCheckpointTest do
     assert CodingAgent.Tools.FsCheckpoint.tool(cwd).name == "fs_checkpoint"
   end
 
+  test "registry resolves the checkpoint flag for its requested project directory", %{
+    tmp_dir: cwd
+  } do
+    File.mkdir_p!(Path.join(cwd, ".lemon"))
+
+    File.write!(
+      Path.join(cwd, ".lemon/config.toml"),
+      "[runtime.tools.checkpoint]\nenabled = true\n"
+    )
+
+    names =
+      CodingAgent.ToolRegistry.get_tools(cwd,
+        session_pid: self(),
+        enabled_only: ["checkpoint"],
+        include_extensions: false,
+        include_mcp: false
+      )
+      |> Enum.map(& &1.name)
+
+    assert Enum.sort(names) == ["checkpoint", "rewind"]
+  end
+
   test "native session's next provider call and durable branch both drop exploration", %{
     tmp_dir: cwd
   } do
