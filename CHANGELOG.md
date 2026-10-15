@@ -74,6 +74,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Escape angle-bracket placeholders in generated configuration registry prose so
+  VitePress treats paths such as `<root>/agent-tools/node/bin/node` as text, not
+  unclosed HTML tags, while preserving existing inline code and alias line breaks.
+
 - Restore the LSP Dialyzer gate by explicitly discarding idle timer cancellation
   results and removing an unreachable nil working-directory branch.
 
