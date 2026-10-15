@@ -23,6 +23,9 @@ defmodule CodingAgent.SessionAgentEventTerminalTest do
     defaults = [
       cwd: cwd,
       workspace_dir: Path.join(cwd, "workspace"),
+      tools: [],
+      extension_inventory: {[], []},
+      mcp_tools: [],
       session_file: session_file,
       model: Mocks.mock_model(),
       stream_fn: Mocks.mock_stream_fn_single(Mocks.assistant_message("ok"))
