@@ -10,6 +10,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Added
 
+- Share one initialized language-server process per server/workspace/config
+  across sessions, with reference-counted owners, configurable idle shutdown,
+  central document versions, diagnostic fan-out and next-use crash recovery.
+
 - Add default-on `[runtime.tools.bash] git_guard` checks for destructive Git
   commands before all shell launch modes, with a verified task-isolation worktree
   exemption and actionable refusal messages.

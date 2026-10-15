@@ -1661,6 +1661,9 @@ override fields; custom ids require `command` and a non-empty `extensions` list
 (`file_types` is an alias).
 
 ```toml
+[runtime.tools.lsp]
+idle_timeout_ms = 30000 # grace after the last owner releases; 0 stops immediately
+
 [runtime.tools.lsp.servers.clangd]
 command = "/opt/llvm/bin/clangd"
 args = ["--background-index"]

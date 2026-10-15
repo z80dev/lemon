@@ -10,6 +10,13 @@ defmodule LemonLsp.ServerManagerProtocolTest do
       Path.join(System.tmp_dir!(), "lsp_protocol_test_#{System.unique_integer([:positive])}")
 
     File.mkdir_p!(tmp_dir)
+    File.mkdir_p!(Path.join(tmp_dir, ".lemon"))
+
+    File.write!(
+      Path.join(tmp_dir, ".lemon/config.toml"),
+      "[runtime.tools.lsp]\nidle_timeout_ms = 0\n"
+    )
+
     server_path = Path.join(tmp_dir, "fake_protocol_server.exs")
     File.write!(server_path, fake_server_script())
     File.chmod!(server_path, 0o755)
@@ -254,11 +261,219 @@ defmodule LemonLsp.ServerManagerProtocolTest do
 
              Enum.find(
                status.recent_sessions,
-               &(&1.session_hash == session.session_hash and &1.status == :owner_exited)
+               &(&1.session_hash == session.session_hash and &1.status == :idle)
              )
            end)
 
     assert {:error, :unknown_lsp_session} = ServerManager.stop_session(session_id)
+  end
+
+  test "shares one process, initializes once and reference-counts owners", ctx do
+    owner = start_owner()
+    before_count = ServerManager.status().active_count
+
+    assert {:ok, first} =
+             ServerManager.start_session(:elixir_ls, cwd: ctx.tmp_dir, session_id: ctx.session_id)
+
+    assert {:ok, second} = ServerManager.start_session(:elixir_ls, cwd: ctx.tmp_dir, owner: owner)
+    assert first.session_id == second.session_id
+    assert {:ok, _} = ServerManager.start_session(:elixir_ls, cwd: ctx.tmp_dir)
+    assert ServerManager.status().active_count == before_count + 1
+
+    initializers =
+      for _ <- 1..2,
+          do:
+            Task.async(fn ->
+              ServerManager.initialize_session(first.session_id, %{}, timeout_ms: 5_000)
+            end)
+
+    Enum.each(initializers, fn task -> assert {:ok, _} = Task.await(task, 6_000) end)
+    assert {:ok, response} = ServerManager.request_session(first.session_id, "fake/pid")
+    assert response["result"]["initializations"] == 1
+    assert is_binary(response["result"]["pid"])
+
+    active =
+      Enum.find(ServerManager.status().active_servers, &(&1.session_hash == first.session_hash))
+
+    assert active.owner_count == 3
+    assert :ok = ServerManager.release_session(first.session_id)
+    assert :ok = ServerManager.release_session(first.session_id)
+    assert {:ok, same} = ServerManager.request_session(second.session_id, "fake/pid")
+    assert same["result"]["pid"] == response["result"]["pid"]
+    assert :ok = ServerManager.release_session(second.session_id, owner)
+
+    assert wait_until(fn ->
+             match?(
+               {:error, :unknown_lsp_session},
+               ServerManager.document_diagnostics(first.session_id, "file:///gone")
+             )
+           end)
+  end
+
+  test "idle shutdown starts only after the last release and reacquisition cancels it", ctx do
+    config = Path.join(ctx.tmp_dir, ".lemon/config.toml")
+    File.write!(config, "[runtime.tools.lsp]\nidle_timeout_ms = 300\n")
+    LemonCore.Config.reload(ctx.tmp_dir)
+    owner = start_owner()
+
+    assert {:ok, first} =
+             ServerManager.start_session(:elixir_ls, cwd: ctx.tmp_dir, session_id: ctx.session_id)
+
+    assert {:ok, _} = ServerManager.start_session(:elixir_ls, cwd: ctx.tmp_dir, owner: owner)
+    assert :ok = ServerManager.release_session(first.session_id)
+    Process.sleep(350)
+    assert {:ok, _} = ServerManager.document_diagnostics(first.session_id, "file:///alive")
+    assert :ok = ServerManager.release_session(first.session_id, owner)
+    assert {:ok, _} = ServerManager.document_diagnostics(first.session_id, "file:///idle")
+    Process.sleep(100)
+    assert {:ok, reused} = ServerManager.start_session(:elixir_ls, cwd: ctx.tmp_dir)
+    assert reused.session_id == first.session_id
+    Process.sleep(250)
+    assert {:ok, _} = ServerManager.document_diagnostics(first.session_id, "file:///reacquired")
+    assert :ok = ServerManager.release_session(first.session_id)
+
+    assert wait_until(fn ->
+             match?(
+               {:error, :unknown_lsp_session},
+               ServerManager.document_diagnostics(first.session_id, "file:///gone")
+             )
+           end)
+  end
+
+  test "document versions and diagnostic delivery are shared across owners", ctx do
+    first_owner = start_owner()
+    second_owner = start_owner()
+    path = Path.join(ctx.tmp_dir, "shared.ex")
+    uri = "file://" <> URI.encode(path)
+    File.write!(path, "first")
+
+    assert {:ok, session} =
+             ServerManager.start_session(:elixir_ls,
+               cwd: ctx.tmp_dir,
+               owner: first_owner,
+               session_id: ctx.session_id
+             )
+
+    assert {:ok, _} =
+             ServerManager.start_session(:elixir_ls, cwd: ctx.tmp_dir, owner: second_owner)
+
+    assert {:ok, _} = ServerManager.initialize_session(session.session_id, %{}, timeout_ms: 5_000)
+    sid = session.session_id
+
+    assert {:ok, %{version: 1, synced: :opened}} =
+             owner_call(first_owner, fn -> ServerManager.sync_file(sid, path, "elixir") end)
+
+    assert_receive {:owner_message, ^first_owner,
+                    {ServerManager, :diagnostics, ^sid, ^uri, %{version: 1}}},
+                   2_000
+
+    assert_receive {:owner_message, ^second_owner,
+                    {ServerManager, :diagnostics, ^sid, ^uri, %{version: 1}}},
+                   2_000
+
+    assert {:ok, %{version: 1, synced: :unchanged}} =
+             owner_call(second_owner, fn -> ServerManager.sync_file(sid, path, "elixir") end)
+
+    File.write!(path, "second")
+
+    assert {:ok, %{version: 2, synced: :changed}} =
+             owner_call(second_owner, fn -> ServerManager.sync_file(sid, path, "elixir") end)
+
+    assert {:ok, %{version: 2, synced: :unchanged}} =
+             owner_call(first_owner, fn -> ServerManager.sync_file(sid, path, "elixir") end)
+
+    File.write!(path, "third")
+
+    assert {:ok, %{version: 3, synced: :changed}} =
+             owner_call(first_owner, fn -> ServerManager.sync_file(sid, path, "elixir") end)
+
+    assert {:ok, _} = owner_call(first_owner, fn -> ServerManager.close_document(sid, uri) end)
+    assert {:ok, events} = ServerManager.request_session(sid, "fake/events")
+    methods = Enum.map(events["result"], & &1["method"])
+    assert methods == ["textDocument/didOpen", "textDocument/didChange", "textDocument/didChange"]
+    assert {:ok, _} = owner_call(second_owner, fn -> ServerManager.close_document(sid, uri) end)
+    assert {:ok, events} = ServerManager.request_session(sid, "fake/events")
+    assert List.last(events["result"])["method"] == "textDocument/didClose"
+    Process.exit(first_owner, :kill)
+
+    assert wait_until(fn ->
+             active =
+               Enum.find(
+                 ServerManager.status().active_servers,
+                 &(&1.session_hash == session.session_hash)
+               )
+
+             active && active.owner_count == 1
+           end)
+
+    assert {:ok, _} = ServerManager.request_session(sid, "fake/pid")
+    Process.exit(second_owner, :kill)
+
+    assert wait_until(fn ->
+             match?({:error, :unknown_lsp_session}, ServerManager.document_diagnostics(sid, uri))
+           end)
+  end
+
+  test "crash fails every in-flight request and the next acquire starts a new process", ctx do
+    owner = start_owner()
+
+    assert {:ok, session} =
+             ServerManager.start_session(:elixir_ls, cwd: ctx.tmp_dir, session_id: ctx.session_id)
+
+    assert {:ok, _} = ServerManager.start_session(:elixir_ls, cwd: ctx.tmp_dir, owner: owner)
+    assert {:ok, _} = ServerManager.initialize_session(session.session_id, %{}, timeout_ms: 5_000)
+    assert {:ok, before} = ServerManager.request_session(session.session_id, "fake/pid")
+
+    requests =
+      for _ <- 1..2,
+          do:
+            Task.async(fn ->
+              ServerManager.request_session(session.session_id, "fake/slow", %{},
+                timeout_ms: 5_000
+              )
+            end)
+
+    assert wait_until(fn -> ServerManager.status().pending_request_count == 2 end)
+
+    assert {:error, :session_exited} =
+             ServerManager.request_session(session.session_id, "fake/crash")
+
+    Enum.each(requests, fn task -> assert {:error, :session_exited} = Task.await(task, 2_000) end)
+    sid = session.session_id
+    assert_receive {ServerManager, :server_stopped, ^sid}, 2_000
+    assert_receive {:owner_message, ^owner, {ServerManager, :server_stopped, ^sid}}, 2_000
+
+    assert {:ok, restarted} =
+             ServerManager.start_session(:elixir_ls, cwd: ctx.tmp_dir, session_id: ctx.session_id)
+
+    assert {:ok, _} =
+             ServerManager.initialize_session(restarted.session_id, %{}, timeout_ms: 5_000)
+
+    assert {:ok, after_restart} = ServerManager.request_session(restarted.session_id, "fake/pid")
+    refute before["result"]["pid"] == after_restart["result"]["pid"]
+  end
+
+  defp start_owner do
+    parent = self()
+    pid = spawn(fn -> owner_loop(parent) end)
+    on_exit(fn -> Process.exit(pid, :kill) end)
+    pid
+  end
+
+  defp owner_loop(parent) do
+    receive do
+      {:call, from, ref, fun} -> send(from, {ref, fun.()})
+      message -> send(parent, {:owner_message, self(), message})
+    end
+
+    owner_loop(parent)
+  end
+
+  defp owner_call(owner, fun) do
+    ref = make_ref()
+    send(owner, {:call, self(), ref, fun})
+    assert_receive {^ref, result}, 5_000
+    result
   end
 
   defp wait_until(fun, attempts \\ 400)
@@ -349,8 +564,21 @@ defmodule LemonLsp.ServerManagerProtocolTest do
             :ok
 
           %{"method" => "initialize", "id" => id} ->
+            Process.sleep(50)
+            Process.put(:initializations, Process.get(:initializations, 0) + 1)
             send(%{"id" => id, "result" => %{"capabilities" => %{}}})
             loop(cancelled, last_command)
+
+          %{"method" => "fake/pid", "id" => id} ->
+            send(%{"id" => id, "result" => %{"pid" => System.pid(), "initializations" => Process.get(:initializations, 0)}})
+            loop(cancelled, last_command)
+
+          %{"method" => "fake/events", "id" => id} ->
+            send(%{"id" => id, "result" => Enum.reverse(Process.get(:events, []))})
+            loop(cancelled, last_command)
+
+          %{"method" => "fake/crash"} ->
+            System.halt(7)
 
           %{"method" => "workspace/executeCommand", "id" => id, "params" => params} ->
             send(%{
@@ -406,7 +634,10 @@ defmodule LemonLsp.ServerManagerProtocolTest do
             send(%{"id" => id, "result" => Map.put(last_command, "cancelled", cancelled)})
             loop(cancelled, last_command)
 
-          %{"method" => "textDocument/didOpen", "params" => params} ->
+          %{"method" => method, "params" => params}
+              when method in ["textDocument/didOpen", "textDocument/didChange", "textDocument/didClose"] ->
+            Process.put(:events, [%{"method" => method, "params" => params} | Process.get(:events, [])])
+            if method != "textDocument/didClose" do
             send(%{
               "method" => "textDocument/publishDiagnostics",
               "params" => %{
@@ -415,6 +646,7 @@ defmodule LemonLsp.ServerManagerProtocolTest do
                 "diagnostics" => [%{"severity" => 1, "message" => "private diagnostic text"}]
               }
             })
+            end
 
             loop(cancelled, last_command)
 

@@ -91,14 +91,28 @@ Behavior:
 - `status` lists every registered server as installed, missing (with its
   install hint) or running for this session.
 
-One initialized server is kept per (durable session, server, workspace root).
-Opened documents are re-synced (`didChange` with a new version) whenever their
-bytes on disk change. Successful native turns hand off the server before the
-transient session process stops, and the resumed turn binds the same durable
-identity. Explicit abort/stop, logical reset/delete, unexpected owner death and
-10 idle minutes dispose of it. A missing server binary is reported with its
-install hint. `lsp` is in the dangerous-tool set because some servers build or
-run project code.
+One initialized OS process is shared per (server id, workspace root, effective
+server configuration), across durable coding sessions and direct manager users.
+Session-scoped clients hold reference-counted leases. Successful native turns
+hand off their client before the transient session process stops; resumed turns
+bind the same durable identity. Explicit abort/stop, logical reset/delete,
+unexpected owner death and 10 idle minutes release that client's lease, without
+stopping a server another session still owns.
+
+The last release starts an idle grace period: configure
+`[runtime.tools.lsp] idle_timeout_ms = 30000` (the default); `0` stops immediately.
+Reacquisition cancels the timer. `ServerManager.release_session/2` releases one
+lease, whereas `stop_session/1` and the tool's `reload` force a shared restart.
+
+The manager reads the latest on-disk text during synchronization, owns each URI's
+monotonically increasing version, opens it once and closes it only after its last
+document owner releases it. Published diagnostics are available to every owner
+and delivered as `{LemonLsp.ServerManager, :diagnostics, session_id, uri, entry}`
+messages. A crash fails every in-flight request with a clear error, not an
+automatic request replay; the next use starts and initializes a fresh process.
+Configuration changes use a different pool key on the next catalog refresh/tool
+call. A missing server binary is reported with its install hint. `lsp` remains
+dangerous because some servers build or run project code.
 
 ## Server Configuration
 
@@ -132,7 +146,7 @@ Lists replace inherited lists; nested tables merge with project values winning.
 built-in per-extension ids remain intact. Extensions are case-insensitive and
 may omit the leading dot. Disabled servers are absent from selection and lookup.
 The documented `LEMON_LSP_*_COMMAND` variables still take priority over TOML
-commands. Use `reload` after changing a running server's configuration.
+commands. Explicit `reload` also restarts an already-running shared server.
 
 `CodingAgent.Tools.Lsp.Client` coordinates synchronization and initialization;
 only `LemonLsp.ServerManager` opens LSP processes. The separately named

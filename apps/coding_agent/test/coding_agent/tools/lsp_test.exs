@@ -16,6 +16,13 @@ defmodule CodingAgent.Tools.LspTest do
       tmp = Path.join(System.tmp_dir!(), "lsp_tool_#{System.unique_integer([:positive])}")
       File.mkdir_p!(Path.join(tmp, "src"))
       tmp = Text.realpath(tmp)
+      File.mkdir_p!(Path.join(tmp, ".lemon"))
+
+      File.write!(
+        Path.join(tmp, ".lemon/config.toml"),
+        "[runtime.tools.lsp]\nidle_timeout_ms = 0\n"
+      )
+
       server = Path.join(tmp, "fake_lsp_server.exs")
       File.write!(server, fake_server_script())
       File.chmod!(server, 0o755)
@@ -346,10 +353,134 @@ defmodule CodingAgent.Tools.LspTest do
     assert LemonLsp.ServerManager.status().active_count == before - 1
   end
 
+  test "two coding sessions share a process and authoritative document versions", ctx do
+    other = second_session(ctx)
+    first_pid = raw_result(ctx, "fake/pid")
+    assert raw_result(other, "fake/pid") == first_pid
+    [first] = Client.list(ctx.session_id)
+    [second] = Client.list(other.session_id)
+    refute first.pid == second.pid
+    path = Path.join(ctx.tmp, "src/main.c")
+    assert {:ok, a} = Client.sync(first.pid, path, 5_000)
+    assert {:ok, b} = Client.sync(second.pid, path, 5_000)
+    assert a.session_id == b.session_id
+    assert a.version == 1
+    assert b.version == 1
+    File.write!(path, "int latest = 2;\n")
+    assert {:ok, %{version: 2}} = Client.sync(second.pid, path, 5_000)
+    assert {:ok, %{version: 2, synced: :unchanged}} = Client.sync(first.pid, path, 5_000)
+
+    assert text!(run(ctx, %{"action" => "diagnostics", "file" => "src/main.c"})) =~
+             "fake problem v2"
+
+    assert text!(run(other, %{"action" => "diagnostics", "file" => "src/main.c"})) =~
+             "fake problem v2"
+
+    Client.stop(first.pid)
+    assert raw_result(other, "fake/pid") == first_pid
+  end
+
+  test "configuration changes select a new shared process without reusing stale clients", ctx do
+    before = raw_result(ctx, "fake/pid")
+
+    File.write!(Path.join(ctx.tmp, ".lemon/config.toml"), """
+    [runtime.tools.lsp]
+    idle_timeout_ms = 0
+    [runtime.tools.lsp.servers.clangd]
+    args = ["changed-config"]
+    """)
+
+    LemonCore.Config.reload(ctx.tmp)
+    refute raw_result(ctx, "fake/pid") == before
+    assert raw_result(ctx, "fake/config")["args"] == ["changed-config"]
+
+    File.write!(Path.join(ctx.tmp, ".lemon/config.toml"), """
+    [runtime.tools.lsp]
+    idle_timeout_ms = 0
+    [runtime.tools.lsp.servers.clangd]
+    disabled = true
+    """)
+
+    LemonCore.Config.reload(ctx.tmp)
+    assert run(ctx, %{"action" => "reload", "file" => "*"}).details.count == 0
+    assert Client.list(ctx.session_id) == []
+  end
+
+  test "a crash reports all in-flight calls and restarts on the next use", ctx do
+    other = second_session(ctx)
+    before = raw_result(ctx, "fake/pid")
+    assert raw_result(other, "fake/pid") == before
+
+    requests =
+      for context <- [ctx, other],
+          do:
+            Task.async(fn ->
+              run(context, %{
+                "action" => "request",
+                "file" => "src/main.c",
+                "query" => "fake/hold"
+              })
+            end)
+
+    assert wait_pending(2)
+
+    assert {:error, crash} =
+             run(ctx, %{"action" => "request", "file" => "src/main.c", "query" => "fake/crash"})
+
+    assert crash =~ "exited while this request was in flight"
+
+    Enum.each(requests, fn request ->
+      assert {:error, message} = Task.await(request, 2_000)
+      assert message =~ "exited while this request was in flight"
+    end)
+
+    after_restart = raw_result(other, "fake/pid")
+    refute after_restart == before
+    assert raw_result(ctx, "fake/pid") == after_restart
+  end
+
+  defp second_session(ctx) do
+    owner = spawn(fn -> receive do: (:stop -> :ok) end)
+    id = ctx.session_id <> "-other"
+
+    on_exit(fn ->
+      Enum.each(Client.list(id), &Client.stop(&1.pid))
+      send(owner, :stop)
+    end)
+
+    %{
+      ctx
+      | session_id: id,
+        owner: owner,
+        opts: Keyword.merge(ctx.opts, session_id: id, session_pid: owner)
+    }
+  end
+
+  defp raw_result(ctx, method) do
+    result = run(ctx, %{"action" => "request", "file" => "src/main.c", "query" => method})
+    [_header, json] = String.split(text!(result), "\n", parts: 2)
+    Jason.decode!(json)
+  end
+
+  defp wait_pending(count, attempts \\ 200)
+  defp wait_pending(_count, 0), do: false
+
+  defp wait_pending(count, attempts) do
+    if LemonLsp.ServerManager.status().pending_request_count == count do
+      true
+    else
+      Process.sleep(10)
+      wait_pending(count, attempts - 1)
+    end
+  end
+
   test "custom project catalog reaches the spawned process and initialization", ctx do
     File.mkdir_p!(Path.join(ctx.tmp, ".lemon"))
 
     File.write!(Path.join(ctx.tmp, ".lemon/config.toml"), """
+    [runtime.tools.lsp]
+    idle_timeout_ms = 0
+
     [runtime.tools.lsp.servers.custom_test]
     command = #{Jason.encode!(Path.join(ctx.tmp, "fake_lsp_server.exs"))}
     args = ["custom-argument"]
@@ -436,6 +567,14 @@ defmodule CodingAgent.Tools.LspTest do
           message -> message |> handle(state) |> loop()
         end
       end
+
+      def handle(%{"method" => "fake/pid", "id" => id}, state) do
+        reply(id, System.pid())
+        state
+      end
+
+      def handle(%{"method" => "fake/hold"}, state), do: state
+      def handle(%{"method" => "fake/crash"}, _state), do: System.halt(7)
 
       def handle(%{"method" => "fake/config", "id" => id}, state) do
         reply(id, %{"args" => System.argv(), "env" => System.get_env("LSP_CUSTOM_TEST"), "options" => state[:options]})

@@ -1,15 +1,13 @@
 defmodule CodingAgent.Tools.Lsp.Client do
   @moduledoc """
-  One initialized language-server session per (scope, server, workspace root).
+  Session-scoped ownership of a shared language-server process.
 
-  The scope is the owning coding session id (or the cwd for calls made outside
-  a session). The client owns a `LemonLsp.ServerManager` session: it starts and
-  initializes the server on first use, keeps opened documents in sync with the
-  disk (`didOpen`, then `didChange` with an incremented version whenever the
-  file's bytes change) and stops the server when the owning session process
-  exits, after an idle timeout, or when it is stopped explicitly. The manager
-  session is also bound to this process as its owner, so even a brutal kill of
-  the client cannot leak a server.
+  The scope is the durable coding session id (or cwd outside a session). Each
+  client acquires a lease from `LemonLsp.ServerManager`, which pools processes by
+  server, root and configuration, assigns document versions centrally and fans
+  diagnostics out to all owners. Clients keep only their open-file views.
+  Owner death, explicit stop and idle expiry release the lease; the manager
+  shuts down the process after the last lease's configured idle grace period.
 
   Requests themselves go straight to the manager from the calling tool process;
   the client only serializes lifecycle and document synchronization.
@@ -109,7 +107,16 @@ defmodule CodingAgent.Tools.Lsp.Client do
   def ensure({_scope, _server_id, _root} = key, server, owner, session_key, config_root) do
     case Registry.lookup(@registry, key) do
       [{pid, _value}] ->
-        with :ok <- CodingAgent.ToolResources.bind(pid, owner), do: {:ok, pid}
+        case current_config(pid, server.config_hash) do
+          :ok ->
+            with :ok <- CodingAgent.ToolResources.bind(pid, owner), do: {:ok, pid}
+
+          :changed ->
+            ensure(key, server, owner, session_key, config_root)
+
+          {:error, reason} ->
+            {:error, reason}
+        end
 
       [] ->
         case DynamicSupervisor.start_child(
@@ -126,13 +133,21 @@ defmodule CodingAgent.Tools.Lsp.Client do
           {:ok, pid} ->
             {:ok, pid}
 
-          {:error, {:already_started, pid}} ->
-            with :ok <- CodingAgent.ToolResources.bind(pid, owner), do: {:ok, pid}
+          {:error, {:already_started, _pid}} ->
+            ensure(key, server, owner, session_key, config_root)
 
           {:error, reason} ->
             {:error, reason}
         end
     end
+  end
+
+  defp current_config(pid, hash) do
+    GenServer.call(pid, {:ensure_config, hash})
+  catch
+    :exit, {:noproc, _call} -> :changed
+    :exit, {:normal, _call} -> :changed
+    :exit, _reason -> {:error, :session_lost}
   end
 
   @doc """
@@ -158,10 +173,10 @@ defmodule CodingAgent.Tools.Lsp.Client do
     :exit, _reason -> :ok
   end
 
-  @doc "Stop a client and its language server."
-  @spec stop(pid()) :: :ok
-  def stop(pid) do
-    GenServer.stop(pid, :normal, 10_000)
+  @doc "Release this client's lease; `restart: true` also stops the shared process."
+  @spec stop(pid(), keyword()) :: :ok
+  def stop(pid, opts \\ []) do
+    GenServer.call(pid, {:stop, Keyword.get(opts, :restart, false)}, 10_000)
   catch
     :exit, _reason -> :ok
   end
@@ -223,6 +238,20 @@ defmodule CodingAgent.Tools.Lsp.Client do
       when operation in [:bind_owner, :detach_owner],
       do: CodingAgent.ToolResources.owner_reply(operation, owner, state)
 
+  def handle_call({:ensure_config, hash}, _from, state) do
+    if state.server.config_hash == hash do
+      {:reply, :ok, state}
+    else
+      Registry.unregister(@registry, state.key)
+      {:stop, :normal, :changed, state}
+    end
+  end
+
+  def handle_call({:stop, restart?}, _from, state) do
+    if restart? and state.session_id, do: ServerManager.stop_session(state.session_id)
+    {:stop, :normal, :ok, state}
+  end
+
   def handle_call({:sync, path, timeout_ms}, _from, state) do
     state = touch(state)
 
@@ -267,6 +296,7 @@ defmodule CodingAgent.Tools.Lsp.Client do
         initialized: state.session_id != nil,
         open_documents: map_size(state.documents),
         root: state.root,
+        config_hash: state.server.config_hash,
         server_id: state.server.id
       }}, state}
   end
@@ -279,11 +309,17 @@ defmodule CodingAgent.Tools.Lsp.Client do
   def handle_info({:DOWN, ref, :process, _pid, _reason}, %{owner_ref: ref} = state),
     do: {:stop, :normal, state}
 
+  def handle_info(
+        {ServerManager, :server_stopped, session_id},
+        %{session_id: session_id} = state
+      ),
+      do: {:noreply, %{state | session_id: nil, capabilities: nil, documents: %{}}}
+
   def handle_info(_message, state), do: {:noreply, state}
 
   @impl true
   def terminate(_reason, %{session_id: session_id}) when is_binary(session_id) do
-    _ = ServerManager.stop_session(session_id)
+    _ = ServerManager.release_session(session_id)
     :ok
   catch
     :exit, _reason -> :ok
@@ -365,61 +401,40 @@ defmodule CodingAgent.Tools.Lsp.Client do
   defp sync_documents(state, path) do
     path = Path.expand(path)
 
-    with {:ok, text} <- File.read(path),
-         {:ok, %{seq: seq}} <-
-           ServerManager.document_diagnostics(state.session_id, Text.path_to_uri(path)) do
-      {synced, state} = sync_text(state, path, text)
-      state = state |> resync_open(path) |> evict()
-      doc = state.documents[path]
+    case sync_text(state, path) do
+      {:ok, info, state} ->
+        state = state |> resync_open(path) |> evict()
+        doc = state.documents[path]
 
-      {:ok,
-       %{
-         uri: doc.uri,
-         version: doc.version,
-         synced: synced,
-         diagnostics_seq: seq,
-         documents: state.documents
-       }, state}
-    else
-      {:error, :unknown_lsp_session} -> {:error, :session_lost, state}
-      {:error, reason} when is_atom(reason) -> {:error, {:file, reason, path}, state}
+        {:ok,
+         %{
+           uri: doc.uri,
+           version: doc.version,
+           synced: info.synced,
+           diagnostics_seq: info.diagnostics_seq,
+           documents: state.documents
+         }, state}
+
+      {:error, :unknown_lsp_session} ->
+        {:error, :session_lost, state}
+
+      {:error, reason} when is_atom(reason) ->
+        {:error, {:file, reason, path}, state}
     end
   end
 
-  defp sync_text(state, path, text) do
-    digest = :erlang.md5(text)
-    now = System.monotonic_time()
+  defp sync_text(state, path) do
+    language_id =
+      Map.get(state.server.language_ids, Path.extname(path) |> String.downcase(), "plaintext")
 
-    case Map.get(state.documents, path) do
-      nil ->
-        uri = Text.path_to_uri(path)
+    with {:ok, info} <- ServerManager.sync_file(state.session_id, path, language_id) do
+      doc = %{
+        uri: Text.path_to_uri(path),
+        version: info.version,
+        used_at: System.monotonic_time()
+      }
 
-        notify!(
-          ServerManager.open_document(
-            state.session_id,
-            uri,
-            Map.get(
-              state.server.language_ids,
-              Path.extname(path) |> String.downcase(),
-              "plaintext"
-            ),
-            text,
-            version: 1
-          )
-        )
-
-        doc = %{uri: uri, version: 1, digest: digest, used_at: now}
-        {:opened, put_in(state.documents[path], doc)}
-
-      %{digest: ^digest} = doc ->
-        {:unchanged, put_in(state.documents[path], %{doc | used_at: now})}
-
-      doc ->
-        version = doc.version + 1
-        notify!(ServerManager.change_document(state.session_id, doc.uri, text, version: version))
-
-        {:changed,
-         put_in(state.documents[path], %{doc | version: version, digest: digest, used_at: now})}
+      {:ok, info, put_in(state.documents[path], doc)}
     end
   end
 
@@ -435,19 +450,12 @@ defmodule CodingAgent.Tools.Lsp.Client do
   defp resync(state, path) do
     doc = state.documents[path]
 
-    case File.read(path) do
-      {:ok, text} ->
-        if :erlang.md5(text) == doc.digest do
-          state
-        else
-          version = doc.version + 1
+    case sync_text(state, path) do
+      {:ok, _info, state} ->
+        state
 
-          notify!(
-            ServerManager.change_document(state.session_id, doc.uri, text, version: version)
-          )
-
-          put_in(state.documents[path], %{doc | version: version, digest: :erlang.md5(text)})
-        end
+      {:error, :unknown_lsp_session} ->
+        throw(:session_lost)
 
       {:error, _reason} ->
         notify!(ServerManager.close_document(state.session_id, doc.uri))

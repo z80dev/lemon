@@ -726,6 +726,13 @@ defmodule LemonCore.Config.Validator do
   defp validate_lsp(errors, nil), do: errors
 
   defp validate_lsp(errors, %{} = lsp) do
+    ttl = Map.get(lsp, "idle_timeout_ms", 30_000)
+
+    errors =
+      if is_integer(ttl) and ttl >= 0,
+        do: errors,
+        else: ["runtime.tools.lsp.idle_timeout_ms: must be a non-negative integer" | errors]
+
     case Map.get(lsp, "servers", %{}) do
       servers when is_map(servers) ->
         Enum.reduce(servers, errors, fn {id, entry}, errors ->
