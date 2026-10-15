@@ -22,6 +22,8 @@ defmodule LemonControlPlane.Protocol.Schemas do
     # System/health methods
     "health" => %{optional: %{}},
     "status" => %{optional: %{}},
+    "system.restart" => %{optional: %{}},
+    "system.stop" => %{optional: %{}},
     "doctor.run" => %{optional: %{}},
     "logs.tail" => %{
       optional: %{

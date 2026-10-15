@@ -46,6 +46,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Added
 
+- Admin-only control-plane `system.restart` and `system.stop` acknowledge before
+  acting, serialize runtime lifecycle requests, and preserve launcher ports and
+  source distribution identity across a detached restart.
 - Hermes migration previews and imports supported Honcho settings from global or
   profile-local JSON, preserves active-host precedence, and reports unsupported
   options. API keys use the gated encrypted-secret path, with conflict protection
