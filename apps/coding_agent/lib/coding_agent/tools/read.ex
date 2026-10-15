@@ -7,7 +7,7 @@ defmodule CodingAgent.Tools.Read do
   - Directories, in-memory archive members, PDF pages and notebook cells/outputs
   - Native image content with bounded proportional previews when a backend exists
   - Offset and limit parameters for partial reads, with format-specific continuation
-  - Path line selectors (`file:50-80`, `file:50+20`, `file:50`, `file:-30`, `file:raw`)
+  - Path line selectors (`file:50-80`, `file:5,19-25`, `file:50+20`, `file:50`, `file:-30`, `file:raw`)
     applied only when the literal path does not exist
   - Bounded chunked text scanning, including oversized single-line files
   - Binary/invalid UTF-8 refusal with actionable inspection guidance
@@ -37,7 +37,10 @@ defmodule CodingAgent.Tools.Read do
                        end)
 
   @doc false
-  def truncated_output?(content), do: Enum.any?(@truncation_patterns, &Regex.match?(&1, content))
+  def truncated_output?(content) do
+    Enum.any?(@truncation_patterns, &Regex.match?(&1, content)) or
+      Regex.match?(~r/(?:\A|\n)…(?:\n|\z)/, content)
+  end
 
   defp notice(template, values) do
     Enum.reduce(values, template, fn {key, value}, text ->
@@ -68,7 +71,8 @@ defmodule CodingAgent.Tools.Read do
           "Text files include a snapshot tag and 1-based lines; prefer edit with snapshot + edits " <>
           "to change line ranges without copying old text. Use offset/limit or a path selector " <>
           "(file:50-80, file:50+20, file:50 from line 50, file:-30 last 30 lines, file:raw or " <>
-          "file:50-80:raw for unnumbered text) to page. " <>
+          "file:50-80:raw for exact unnumbered text, file:5,19-25 for disjoint windows) to page. " <>
+          "A single non-raw bounded range includes 1 line before and 3 after; comma lists stay exact. " <>
           "Text output is capped at 2000 lines / 50KB. PDF page/page_limit and notebook cell/cell_limit select source units. " <>
           "Returned skill:// and artifact:// references are readable paths.",
       label: "Read File",
@@ -79,7 +83,7 @@ defmodule CodingAgent.Tools.Read do
           "path" => %{
             "type" => "string",
             "description" =>
-              "A local path, skill://<key>[/relative-path], returned artifact://<id> handle, agent:// live roster, or agent://<task-id-or-name>[/json/path] owned task status/output. May end with a line selector such as :50-80, :50+20, :50, :-30 or :raw"
+              "A local path, skill://<key>[/relative-path], returned artifact://<id> handle, agent:// live roster, or agent://<task-id-or-name>[/json/path] owned task status/output. May end with a line selector such as :50-80, :5,19-25, :50+20, :50, :-30 or :raw"
           },
           "offset" => %{
             "type" => "integer",
@@ -167,6 +171,9 @@ defmodule CodingAgent.Tools.Read do
       {:ok, params, %{tail: tail} = view} when is_integer(tail) ->
         read_tail(params, tail, view, signal, cwd, opts)
 
+      {:ok, params, %{windows: windows} = view} ->
+        read_windows(windows, params, view, signal, cwd, opts, nil)
+
       {:ok, params, view} ->
         do_read(params, view, signal, cwd, opts)
 
@@ -179,7 +186,11 @@ defmodule CodingAgent.Tools.Read do
     path = Map.get(params, "path", "")
     offset = Map.get(params, "offset")
     limit = Map.get(params, "limit")
-    opts = Keyword.put(opts, :raw, Map.get(view, :raw, false))
+
+    opts =
+      opts
+      |> Keyword.put(:raw, Map.get(view, :raw, false))
+      |> Keyword.put(:selector_window, Map.has_key?(view, :windows))
 
     with :ok <- validate_params(path, offset, limit),
          {:ok, resolved_path} <- resolve_path(path, cwd, opts),
@@ -222,11 +233,104 @@ defmodule CodingAgent.Tools.Read do
     end
   end
 
+  # Reuse the same plain/rich/ACP read pipeline for each disjoint window, sharing
+  # its output budget and retaining a single full-source snapshot header.
+  defp read_windows([], _params, _view, _signal, _cwd, _opts, result), do: result
+
+  defp read_windows([window | rest], params, view, signal, cwd, opts, previous) do
+    max_lines = Keyword.get(opts, :max_lines, @default_max_lines)
+    max_bytes = Keyword.get(opts, :max_bytes, @default_max_bytes)
+
+    case do_read(Map.merge(params, window), view, signal, cwd, opts) do
+      %AgentToolResult{content: [%TextContent{text: text}], details: details} = current ->
+        with {:ok, result} <- append_window(previous, current) do
+          remaining_lines = max_lines - details.lines_shown
+          remaining_bytes = max_bytes - byte_size(text) - byte_size("\n…\n")
+
+          cond do
+            rest == [] or not is_nil(details.truncation) ->
+              result
+
+            remaining_lines <= 0 or remaining_bytes <= 0 ->
+              next = hd(rest)["offset"]
+
+              message =
+                notice(@continuation_notice,
+                  first: result.details.start_line,
+                  last: details.start_line + details.lines_shown - 1,
+                  total: details.total_lines,
+                  next: next
+                )
+
+              reason = if remaining_lines <= 0, do: "max_lines", else: "max_bytes"
+              truncation = %{truncated: true, reason: reason, next_offset: next, message: message}
+              [%TextContent{text: body}] = result.content
+
+              %{
+                result
+                | content: [%TextContent{text: body <> "\n" <> message}],
+                  details: Map.put(result.details, :truncation, truncation)
+              }
+
+            true ->
+              opts =
+                opts
+                |> Keyword.put(:max_lines, remaining_lines)
+                |> Keyword.put(:max_bytes, remaining_bytes)
+
+              read_windows(rest, params, view, signal, cwd, opts, result)
+          end
+        end
+
+      %AgentToolResult{} ->
+        {:error, "Line selectors require text content"}
+
+      {:error, _} = error ->
+        error
+    end
+  end
+
+  defp append_window(nil, result) do
+    range = Map.take(result.details, [:start_line, :lines_shown])
+    {:ok, %{result | details: Map.put(result.details, :ranges, [range])}}
+  end
+
+  defp append_window(previous, current) do
+    if Map.get(previous.details, :snapshot) != Map.get(current.details, :snapshot) do
+      {:error, "File changed while reading selected ranges; read again"}
+    else
+      [%TextContent{text: before}] = previous.content
+      [%TextContent{text: after_text}] = current.content
+      snapshot = Map.get(current.details, :snapshot)
+
+      after_text =
+        if snapshot,
+          do: String.replace_prefix(after_text, "[#{current.details.path}##{snapshot}]\n", ""),
+          else: after_text
+
+      range = Map.take(current.details, [:start_line, :lines_shown])
+
+      details = %{
+        previous.details
+        | lines_shown: previous.details.lines_shown + current.details.lines_shown,
+          truncation: current.details.truncation,
+          ranges: previous.details.ranges ++ [range]
+      }
+
+      {:ok,
+       %{
+         previous
+         | content: [%TextContent{text: before <> "\n…\n" <> after_text}],
+           details: details
+       }}
+    end
+  end
+
   # ============================================================================
   # Path Line Selectors
   # ============================================================================
 
-  @selector_token ~r/\A(?:raw|\d+(?:-\d*|\+\d+)?|-\d+)\z/
+  @selector_token ~r/\A(?:raw|\d+(?:-\d*|\+\d+)?(?:,\d+(?:-\d*|\+\d+)?)*|-\d+)\z/
 
   # A trailing `:selector` (up to two, e.g. `:10-20:raw`) only applies when the
   # literal path is missing and the remaining base names a real source, so
@@ -308,12 +412,69 @@ defmodule CodingAgent.Tools.Read do
   end
 
   defp apply_selector_range(params, view, range) do
+    if String.contains?(range, ",") do
+      with {:ok, windows} <- selector_windows(String.split(range, ",")) do
+        {:ok, params, Map.put(view, :windows, merge_windows(windows))}
+      end
+    else
+      apply_single_selector_range(params, view, range)
+    end
+  end
+
+  defp apply_single_selector_range(params, view, range) do
     [start | rest] = Regex.run(~r/\A(\d+)(?:(-|\+)(\d*))?\z/, range, capture: :all_but_first)
 
     case selector_window(String.to_integer(start), rest) do
-      {:ok, window} -> {:ok, Map.merge(params, window), view}
-      {:error, _} = error -> error
+      {:ok, window} ->
+        window =
+          if not view.raw and Map.has_key?(window, "limit") do
+            start = max(1, window["offset"] - 1)
+            stop = window["offset"] + window["limit"] - 1 + 3
+            %{"offset" => start, "limit" => stop - start + 1}
+          else
+            window
+          end
+
+        {:ok, Map.merge(params, window), view}
+
+      {:error, _} = error ->
+        error
     end
+  end
+
+  defp selector_windows(ranges) do
+    Enum.reduce_while(ranges, {:ok, []}, fn range, {:ok, windows} ->
+      [start | rest] = Regex.run(~r/\A(\d+)(?:(-|\+)(\d*))?\z/, range, capture: :all_but_first)
+      rest = if rest == [], do: ["+", "1"], else: rest
+
+      case selector_window(String.to_integer(start), rest) do
+        {:ok, %{"limit" => _} = window} -> {:cont, {:ok, [window | windows]}}
+        {:ok, _} -> {:halt, {:error, "Comma-list selectors require bounded line windows"}}
+        {:error, _} = error -> {:halt, error}
+      end
+    end)
+  end
+
+  defp merge_windows(windows) do
+    windows
+    |> Enum.sort_by(& &1["offset"])
+    |> Enum.reduce([], fn window, acc ->
+      case acc do
+        [previous | rest] ->
+          previous_stop = previous["offset"] + previous["limit"] - 1
+
+          if window["offset"] <= previous_stop + 1 do
+            stop = max(previous_stop, window["offset"] + window["limit"] - 1)
+            [%{"offset" => previous["offset"], "limit" => stop - previous["offset"] + 1} | rest]
+          else
+            [window | acc]
+          end
+
+        [] ->
+          [window]
+      end
+    end)
+    |> Enum.reverse()
   end
 
   defp selector_window(start, _rest) when start < 1,
