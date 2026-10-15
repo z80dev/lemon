@@ -1,8 +1,8 @@
 defmodule LemonAgent.Loop.ToolDefaultsTest do
   use ExUnit.Case, async: true
   alias LemonAgent.{EventStream, Loop.ToolCalls}
-  alias LemonAgent.Types.{AgentContext, AgentLoopConfig, AgentTool, AgentToolResult}
   alias LemonAgent.Test.Mocks
+  alias LemonAgent.Types.{AgentContext, AgentLoopConfig, AgentTool, AgentToolResult}
   alias LemonAi.Types.TextContent
 
   test "loop and agent defaults are bounded and infinity remains explicit" do

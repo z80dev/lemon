@@ -13,13 +13,13 @@ defmodule LemonAgent.ProxyErrorTest do
   """
   use ExUnit.Case, async: true
 
+  alias LemonAgent.AbortSignal
   alias LemonAgent.Proxy
   alias LemonAgent.Proxy.ProxyStreamOptions
-  alias LemonAgent.AbortSignal
   alias LemonAgent.Test.Mocks
 
   alias LemonAi.EventStream
-  alias LemonAi.Types.{AssistantMessage, TextContent, ToolCall}
+  alias LemonAi.Types.{AssistantMessage, Context, TextContent, ToolCall}
 
   @receive_timeout 5_000
 
@@ -167,7 +167,7 @@ defmodule LemonAgent.ProxyErrorTest do
       stream =
         Proxy.stream_proxy(
           Mocks.mock_model(),
-          LemonAi.Types.Context.new(),
+          Context.new(),
           %ProxyStreamOptions{
             auth_token: "token",
             proxy_url: "http://localhost:#{port}"
@@ -197,7 +197,7 @@ defmodule LemonAgent.ProxyErrorTest do
       stream =
         Proxy.stream_proxy(
           Mocks.mock_model(),
-          LemonAi.Types.Context.new(),
+          Context.new(),
           %ProxyStreamOptions{
             auth_token: "token",
             proxy_url: "http://localhost:#{port}"
@@ -228,7 +228,7 @@ defmodule LemonAgent.ProxyErrorTest do
       stream =
         Proxy.stream_proxy(
           Mocks.mock_model(),
-          LemonAi.Types.Context.new(),
+          Context.new(),
           %ProxyStreamOptions{
             auth_token: "token",
             proxy_url: "http://localhost:#{port}"
@@ -258,7 +258,7 @@ defmodule LemonAgent.ProxyErrorTest do
       stream =
         Proxy.stream_proxy(
           Mocks.mock_model(),
-          LemonAi.Types.Context.new(),
+          Context.new(),
           %ProxyStreamOptions{
             auth_token: "token",
             proxy_url: "http://localhost:#{port}"
@@ -289,7 +289,7 @@ defmodule LemonAgent.ProxyErrorTest do
       stream =
         Proxy.stream_proxy(
           Mocks.mock_model(),
-          LemonAi.Types.Context.new(),
+          Context.new(),
           %ProxyStreamOptions{
             auth_token: "token",
             proxy_url: "http://localhost:#{port}"
@@ -327,7 +327,7 @@ defmodule LemonAgent.ProxyErrorTest do
       stream =
         Proxy.stream_proxy(
           Mocks.mock_model(),
-          LemonAi.Types.Context.new(),
+          Context.new(),
           %ProxyStreamOptions{
             auth_token: "token",
             proxy_url: "http://localhost:#{port}"
@@ -356,7 +356,7 @@ defmodule LemonAgent.ProxyErrorTest do
       stream =
         Proxy.stream_proxy(
           Mocks.mock_model(),
-          LemonAi.Types.Context.new(),
+          Context.new(),
           %ProxyStreamOptions{
             auth_token: "token",
             proxy_url: "http://localhost:#{port}"
@@ -393,7 +393,7 @@ defmodule LemonAgent.ProxyErrorTest do
       stream =
         Proxy.stream_proxy(
           Mocks.mock_model(),
-          LemonAi.Types.Context.new(),
+          Context.new(),
           %ProxyStreamOptions{
             auth_token: "token",
             proxy_url: "http://localhost:#{port}"
@@ -539,7 +539,7 @@ defmodule LemonAgent.ProxyErrorTest do
       stream =
         Proxy.stream_proxy(
           Mocks.mock_model(),
-          LemonAi.Types.Context.new(),
+          Context.new(),
           %ProxyStreamOptions{
             auth_token: "token",
             proxy_url: "http://localhost:#{port}",
@@ -573,7 +573,7 @@ defmodule LemonAgent.ProxyErrorTest do
       stream =
         Proxy.stream_proxy(
           Mocks.mock_model(),
-          LemonAi.Types.Context.new(),
+          Context.new(),
           %ProxyStreamOptions{
             auth_token: "token",
             proxy_url: "http://localhost:#{port}",
@@ -607,7 +607,7 @@ defmodule LemonAgent.ProxyErrorTest do
       stream =
         Proxy.stream_proxy(
           Mocks.mock_model(),
-          LemonAi.Types.Context.new(),
+          Context.new(),
           %ProxyStreamOptions{
             auth_token: "token",
             proxy_url: "http://localhost:#{port}",
@@ -633,7 +633,7 @@ defmodule LemonAgent.ProxyErrorTest do
       stream =
         Proxy.stream_proxy(
           Mocks.mock_model(),
-          LemonAi.Types.Context.new(),
+          Context.new(),
           %ProxyStreamOptions{
             auth_token: "token",
             proxy_url: "http://localhost:#{port}"
@@ -654,7 +654,7 @@ defmodule LemonAgent.ProxyErrorTest do
       stream =
         Proxy.stream_proxy(
           Mocks.mock_model(),
-          LemonAi.Types.Context.new(),
+          Context.new(),
           %ProxyStreamOptions{
             auth_token: "bad-token",
             proxy_url: "http://localhost:#{port}"
@@ -675,7 +675,7 @@ defmodule LemonAgent.ProxyErrorTest do
       stream =
         Proxy.stream_proxy(
           Mocks.mock_model(),
-          LemonAi.Types.Context.new(),
+          Context.new(),
           %ProxyStreamOptions{
             auth_token: "token",
             proxy_url: "http://localhost:#{port}"
@@ -696,7 +696,7 @@ defmodule LemonAgent.ProxyErrorTest do
       stream =
         Proxy.stream_proxy(
           Mocks.mock_model(),
-          LemonAi.Types.Context.new(),
+          Context.new(),
           %ProxyStreamOptions{
             auth_token: "token",
             proxy_url: "http://localhost:#{port}"
@@ -718,7 +718,7 @@ defmodule LemonAgent.ProxyErrorTest do
       stream =
         Proxy.stream_proxy(
           Mocks.mock_model(),
-          LemonAi.Types.Context.new(),
+          Context.new(),
           %ProxyStreamOptions{
             auth_token: "token",
             proxy_url: "http://localhost:#{port}"
@@ -769,7 +769,7 @@ defmodule LemonAgent.ProxyErrorTest do
       stream =
         Proxy.stream_proxy(
           Mocks.mock_model(),
-          LemonAi.Types.Context.new(),
+          Context.new(),
           %ProxyStreamOptions{
             auth_token: "token",
             proxy_url: "http://localhost:#{port}"
@@ -789,7 +789,7 @@ defmodule LemonAgent.ProxyErrorTest do
       stream =
         Proxy.stream_proxy(
           Mocks.mock_model(),
-          LemonAi.Types.Context.new(),
+          Context.new(),
           %ProxyStreamOptions{
             auth_token: "token",
             proxy_url: "http://localhost:59999"
@@ -841,7 +841,7 @@ defmodule LemonAgent.ProxyErrorTest do
       stream =
         Proxy.stream_proxy(
           Mocks.mock_model(),
-          LemonAi.Types.Context.new(),
+          Context.new(),
           %ProxyStreamOptions{
             auth_token: "token",
             proxy_url: "http://localhost:#{port}"
@@ -860,7 +860,7 @@ defmodule LemonAgent.ProxyErrorTest do
       stream =
         Proxy.stream_proxy(
           Mocks.mock_model(),
-          LemonAi.Types.Context.new(),
+          Context.new(),
           %ProxyStreamOptions{
             auth_token: "token",
             # Use localhost with closed port instead - faster than DNS resolution failure
@@ -897,7 +897,7 @@ defmodule LemonAgent.ProxyErrorTest do
       stream =
         Proxy.stream_proxy(
           Mocks.mock_model(),
-          LemonAi.Types.Context.new(),
+          Context.new(),
           %ProxyStreamOptions{
             auth_token: "token",
             proxy_url: "http://localhost:#{port}",
@@ -939,7 +939,7 @@ defmodule LemonAgent.ProxyErrorTest do
       stream =
         Proxy.stream_proxy(
           Mocks.mock_model(),
-          LemonAi.Types.Context.new(),
+          Context.new(),
           %ProxyStreamOptions{
             auth_token: "token",
             proxy_url: "http://localhost:#{port}"
@@ -977,7 +977,7 @@ defmodule LemonAgent.ProxyErrorTest do
       stream =
         Proxy.stream_proxy(
           Mocks.mock_model(),
-          LemonAi.Types.Context.new(),
+          Context.new(),
           %ProxyStreamOptions{
             auth_token: "token",
             proxy_url: "http://localhost:#{port}"
@@ -1022,7 +1022,7 @@ defmodule LemonAgent.ProxyErrorTest do
       stream =
         Proxy.stream_proxy(
           Mocks.mock_model(),
-          LemonAi.Types.Context.new(),
+          Context.new(),
           %ProxyStreamOptions{
             auth_token: "token",
             proxy_url: "http://localhost:#{port}"
@@ -1069,7 +1069,7 @@ defmodule LemonAgent.ProxyErrorTest do
       stream =
         Proxy.stream_proxy(
           Mocks.mock_model(),
-          LemonAi.Types.Context.new(),
+          Context.new(),
           %ProxyStreamOptions{
             auth_token: "token",
             proxy_url: "http://localhost:#{port}"
@@ -1108,7 +1108,7 @@ defmodule LemonAgent.ProxyErrorTest do
       stream =
         Proxy.stream_proxy(
           Mocks.mock_model(),
-          LemonAi.Types.Context.new(),
+          Context.new(),
           %ProxyStreamOptions{
             auth_token: "token",
             proxy_url: "http://localhost:#{port}"
@@ -1145,7 +1145,7 @@ defmodule LemonAgent.ProxyErrorTest do
       stream =
         Proxy.stream_proxy(
           Mocks.mock_model(),
-          LemonAi.Types.Context.new(),
+          Context.new(),
           %ProxyStreamOptions{
             auth_token: "token",
             proxy_url: "http://localhost:#{port}"
@@ -1176,7 +1176,7 @@ defmodule LemonAgent.ProxyErrorTest do
       stream =
         Proxy.stream_proxy(
           Mocks.mock_model(),
-          LemonAi.Types.Context.new(),
+          Context.new(),
           %ProxyStreamOptions{
             auth_token: "token",
             proxy_url: "http://localhost:#{port}"
@@ -1205,7 +1205,7 @@ defmodule LemonAgent.ProxyErrorTest do
       stream =
         Proxy.stream_proxy(
           Mocks.mock_model(),
-          LemonAi.Types.Context.new(),
+          Context.new(),
           %ProxyStreamOptions{
             auth_token: "token",
             proxy_url: "http://localhost:#{port}"
@@ -1245,7 +1245,7 @@ defmodule LemonAgent.ProxyErrorTest do
         stream =
           Proxy.stream_proxy(
             Mocks.mock_model(),
-            LemonAi.Types.Context.new(),
+            Context.new(),
             %ProxyStreamOptions{
               auth_token: "token",
               proxy_url: "http://localhost:#{port}"
@@ -1272,7 +1272,7 @@ defmodule LemonAgent.ProxyErrorTest do
       stream =
         Proxy.stream_proxy(
           Mocks.mock_model(),
-          LemonAi.Types.Context.new(),
+          Context.new(),
           %ProxyStreamOptions{
             auth_token: "token",
             proxy_url: "http://localhost:#{port}"
@@ -1317,7 +1317,7 @@ defmodule LemonAgent.ProxyErrorTest do
       stream =
         Proxy.stream_proxy(
           Mocks.mock_model(),
-          LemonAi.Types.Context.new(),
+          Context.new(),
           %ProxyStreamOptions{
             auth_token: "token",
             proxy_url: "http://localhost:#{port}"
@@ -1353,7 +1353,7 @@ defmodule LemonAgent.ProxyErrorTest do
       stream =
         Proxy.stream_proxy(
           Mocks.mock_model(),
-          LemonAi.Types.Context.new(),
+          Context.new(),
           %ProxyStreamOptions{
             auth_token: "token",
             proxy_url: "http://localhost:#{port}"
@@ -1381,7 +1381,7 @@ defmodule LemonAgent.ProxyErrorTest do
       stream =
         Proxy.stream_proxy(
           Mocks.mock_model(),
-          LemonAi.Types.Context.new(),
+          Context.new(),
           %ProxyStreamOptions{
             auth_token: "token",
             proxy_url: "http://localhost:#{port}"
@@ -1431,7 +1431,7 @@ defmodule LemonAgent.ProxyErrorTest do
       stream =
         Proxy.stream_proxy(
           Mocks.mock_model(),
-          LemonAi.Types.Context.new(),
+          Context.new(),
           %ProxyStreamOptions{
             auth_token: "token",
             proxy_url: "http://localhost:#{port}"
@@ -1476,7 +1476,7 @@ defmodule LemonAgent.ProxyErrorTest do
       stream =
         Proxy.stream_proxy(
           Mocks.mock_model(),
-          LemonAi.Types.Context.new(),
+          Context.new(),
           %ProxyStreamOptions{
             auth_token: "token",
             proxy_url: "http://localhost:#{port}"
@@ -1503,7 +1503,7 @@ defmodule LemonAgent.ProxyErrorTest do
       stream =
         Proxy.stream_proxy(
           Mocks.mock_model(),
-          LemonAi.Types.Context.new(),
+          Context.new(),
           %ProxyStreamOptions{
             auth_token: "token",
             proxy_url: "http://localhost:#{port}"
