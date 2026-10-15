@@ -12,7 +12,7 @@ calls for them.
 | Work where your files live | Local tools, project context, approvals, and persistent sessions | [Quickstart](getting-started/quickstart.md) |
 | Choose your models | Provider configuration, model selection, and documented routing controls | [Configuration](config.md) |
 | Separate different kinds of work | Profiles with their own workspaces and canonical conversations | [Profiles](user-guide/profiles.md) |
-| Keep useful context | Searchable memory, reusable skills, and reviewable learning from sources | [Memory](user-guide/memory.md), [Skills](user-guide/skills.md), [Learning](user-guide/learn-from-sources.md) |
+| Keep useful context | Searchable memory, reusable skills, and reviewable learning from sources; synthesized skills remain drafts until promotion | [Memory](user-guide/memory.md), [Skills](user-guide/skills.md), [Learning](user-guide/learn-from-sources.md) |
 | Reach your assistant from chat | Telegram and Discord adapters connected to the native runtime | [Setup](user-guide/setup.md#optional-telegram-or-discord), [Channel support](support.md#channel-support) |
 | Run work on another machine | Authenticated named execution nodes using destination-local workspaces and credentials | [Architecture](architecture/overview.md) |
 | Operate your own assistant | Diagnostics, backups, update plans, and receipt-bound rollback | [Support](support.md), [Backups](user-guide/backups.md), [Updates](user-guide/updates.md) |
