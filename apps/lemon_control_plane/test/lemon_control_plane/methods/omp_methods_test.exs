@@ -10,9 +10,9 @@ defmodule LemonControlPlane.Methods.OmpMethodsTest do
   @fake_omp Path.expand("../../support/fake_omp", __DIR__)
   @omp_env_keys [:executable, :agent_dir, :command_timeout_ms, :ready_timeout_ms]
 
-  @read_methods ~w(omp.status omp.sessions.list omp.sessions.get omp.sessions.discover)
+  @read_methods ~w(omp.status omp.sessions.list omp.sessions.get omp.sessions.discover omp.models omp.sessions.subagent)
   @write_methods ~w(omp.sessions.start omp.sessions.resume omp.sessions.send
-                    omp.sessions.cancel omp.sessions.close)
+                    omp.sessions.cancel omp.sessions.close omp.sessions.startMany omp.sessions.configure)
 
   setup do
     root = Path.join(System.tmp_dir!(), "lemon-omp-cp-#{System.unique_integer([:positive])}")
@@ -58,7 +58,7 @@ defmodule LemonControlPlane.Methods.OmpMethodsTest do
         assert method in Registry.list_methods()
       end
 
-      for method <- @write_methods ++ ["omp.status"] do
+      for method <- @write_methods ++ ~w(omp.status omp.models omp.sessions.subagent) do
         assert Registry.dispatch_mode(method) == :async
       end
 
@@ -100,6 +100,153 @@ defmodule LemonControlPlane.Methods.OmpMethodsTest do
       end
 
       assert LemonOmp.list(include_ended: false) == []
+    end
+  end
+
+  describe "expanded operator methods" do
+    test "resume continues without a caller prompt and forwards approval mode", %{
+      workspace: cwd,
+      agent_dir: agent_dir
+    } do
+      omp_id = "01a137c9-4e60-73f4-a776-ece03008a9fe"
+      write_session_file(agent_dir, cwd, omp_id)
+
+      assert {:ok, %{"session" => session}} =
+               Registry.dispatch(
+                 "omp.sessions.resume",
+                 %{
+                   "cwd" => cwd,
+                   "ompSessionId" => omp_id,
+                   "continue" => true,
+                   "approvalMode" => "always-ask"
+                 },
+                 ctx([:write])
+               )
+
+      assert session["approvalMode"] == "always-ask"
+      assert await_status(session["id"], "idle")["lastTurn"] == "completed"
+    end
+
+    test "catalog filters, batches, configuration and child transcripts", %{workspace: cwd} do
+      all = ctx([:read, :write])
+
+      assert {:ok, %{"models" => [%{"selector" => "fake/free", "free" => true}]}} =
+               Registry.dispatch(
+                 "omp.models",
+                 %{"provider" => "fake", "query" => "free", "freeOnly" => true, "limit" => 1},
+                 all
+               )
+
+      assert {:ok, %{"results" => [%{"index" => 0, "session" => session}]}} =
+               Registry.dispatch(
+                 "omp.sessions.startMany",
+                 %{
+                   "isolate" => false,
+                   "tasks" => [
+                     %{
+                       "cwd" => cwd,
+                       "prompt" => "HOLD",
+                       "approvalMode" => "write",
+                       "thinking" => "low",
+                       "model" => "fake/free"
+                     }
+                   ]
+                 },
+                 all
+               )
+
+      id = session["id"]
+      assert session["owner"] == %{"kind" => "operator"}
+      assert session["approvalMode"] == "write"
+      assert session["worktree"] == nil
+      await_status(id, "running")
+
+      assert {:ok, %{"session" => %{"id" => ^id, "thinking" => "low"}}} =
+               Registry.dispatch(
+                 "omp.sessions.configure",
+                 %{"id" => id, "model" => "fake/free", "thinking" => "low"},
+                 all
+               )
+
+      assert {:ok,
+              %{
+                "id" => ^id,
+                "subagentId" => "child",
+                "transcript" => %{"nextByte" => 42, "messages" => [_]}
+              }} =
+               Registry.dispatch(
+                 "omp.sessions.subagent",
+                 %{"id" => id, "subagentId" => "child", "limit" => 1},
+                 all
+               )
+
+      assert {:ok, %{"accepted" => true, "delivery" => "redirect"}} =
+               Registry.dispatch(
+                 "omp.sessions.send",
+                 %{"id" => id, "message" => "HOLD again", "mode" => "redirect"},
+                 all
+               )
+    end
+
+    test "bounds new parameters and validates whole batches", %{workspace: cwd} do
+      all = ctx([:read, :write])
+
+      for {method, params} <- [
+            {"omp.models", %{"limit" => 201}},
+            {"omp.models", %{"query" => String.duplicate("x", 129)}},
+            {"omp.sessions.subagent", %{"id" => "x", "subagentId" => "child", "limit" => 51}},
+            {"omp.sessions.configure", %{"id" => "x"}},
+            {"omp.sessions.start", %{"cwd" => cwd, "prompt" => "hi", "approvalMode" => "unsafe"}},
+            {"omp.sessions.resume",
+             %{"cwd" => cwd, "ompSessionId" => "abcd", "continue" => true, "prompt" => "hi"}},
+            {"omp.sessions.startMany", %{"tasks" => []}},
+            {"omp.sessions.startMany",
+             %{"tasks" => List.duplicate(%{"cwd" => cwd, "prompt" => "hi"}, 9)}}
+          ] do
+        assert {:error, {:invalid_params, _, _}} = Registry.dispatch(method, params, all)
+      end
+
+      assert {:error, {:invalid_params, _, %{"code" => "OMP_INVALID_TASK", "index" => 1}}} =
+               Registry.dispatch(
+                 "omp.sessions.startMany",
+                 %{"tasks" => [%{"cwd" => cwd, "prompt" => "hi"}, %{"cwd" => cwd}]},
+                 all
+               )
+
+      assert {:error, {:invalid_params, _, %{"code" => "OMP_NOT_A_GIT_REPO", "field" => "cwd"}}} =
+               Registry.dispatch(
+                 "omp.sessions.start",
+                 %{"cwd" => cwd, "prompt" => "hi", "isolate" => true},
+                 all
+               )
+
+      assert LemonOmp.list(include_ended: false) == []
+    end
+
+    test "public error mappings preserve partial application and uncertain ids" do
+      alias LemonControlPlane.Methods.OmpSupport, as: Support
+
+      for {reason, category, code} <- [
+            {:not_a_git_repo, :invalid_params, "OMP_NOT_A_GIT_REPO"},
+            {:worktree_failed, :unavailable, "OMP_WORKTREE_FAILED"},
+            {{:catalog_failed, "private"}, :unavailable, "OMP_CATALOG_FAILED"},
+            {{:invalid_task, 2, :invalid_prompt}, :invalid_params, "OMP_INVALID_TASK"}
+          ] do
+        assert {:error, {^category, _, %{"code" => ^code}}} = Support.error(reason)
+      end
+
+      assert {:error,
+              {:conflict, _,
+               %{
+                 "code" => "OMP_PARTIALLY_APPLIED",
+                 "applied" => ["model"],
+                 "failedStep" => "thinking",
+                 "retrySafe" => false
+               }}} =
+               Support.error({:partially_applied, ["model"], "thinking", :outcome_unknown})
+
+      assert {:error, {:unavailable, _, %{"id" => "fixed", "retrySafe" => false}}} =
+               Support.error({:outcome_unknown, "fixed"})
     end
   end
 
@@ -145,7 +292,8 @@ defmodule LemonControlPlane.Methods.OmpMethodsTest do
       assert {:error, {:invalid_params, _, %{"field" => "message"}}} =
                Registry.dispatch("omp.sessions.send", %{"id" => "omp_x", "message" => "  "}, all)
 
-      assert {:error, {:invalid_params, "mode must be steer or followUp", %{"field" => "mode"}}} =
+      assert {:error,
+              {:invalid_params, "mode must be steer, followUp or redirect", %{"field" => "mode"}}} =
                Registry.dispatch(
                  "omp.sessions.send",
                  %{"id" => "omp_x", "message" => "hi", "mode" => "interrupt"},
@@ -159,7 +307,7 @@ defmodule LemonControlPlane.Methods.OmpMethodsTest do
                  all
                )
 
-      assert {:error, {:invalid_params, _, %{"code" => "OMP_INVALID_PARAMS"}}} =
+      assert {:error, {:invalid_params, _, %{"field" => "thinking"}}} =
                Registry.dispatch(
                  "omp.sessions.start",
                  %{"prompt" => "hi", "cwd" => workspace, "thinking" => "galaxy-brain"},

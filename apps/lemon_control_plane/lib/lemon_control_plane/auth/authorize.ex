@@ -403,6 +403,8 @@ defmodule LemonControlPlane.Auth.Authorize do
       "sessions.fork",
       "node.invoke",
       "omp.sessions.start",
+      "omp.sessions.startMany",
+      "omp.sessions.configure",
       "omp.sessions.resume",
       "omp.sessions.send",
       "omp.sessions.cancel",
