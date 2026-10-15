@@ -51,6 +51,7 @@ defmodule LemonCore.Config.AgentTest do
 
       assert config.default_provider == "anthropic"
       assert config.default_model == "claude-sonnet-4-20250514"
+      assert config.default_provider_source == :inherited
       assert config.default_thinking_level == "medium"
       assert config.extension_paths == []
       assert config.extensions.auto_load_default_paths == false
@@ -70,6 +71,7 @@ defmodule LemonCore.Config.AgentTest do
       assert config.default_provider == "openai"
       assert config.default_model == "openai:gpt-5"
       assert config.default_thinking_level == "high"
+      assert config.default_provider_source == :explicit
     end
 
     test "environment variables override settings" do
@@ -90,6 +92,20 @@ defmodule LemonCore.Config.AgentTest do
       assert config.default_provider == "ollama"
       assert config.default_model == "llama3"
       assert config.default_thinking_level == "low"
+      assert config.default_provider_source == :explicit
+    end
+
+    test "model-only environment overrides inherit the file provider" do
+      System.delete_env("LEMON_DEFAULT_PROVIDER")
+      System.put_env("LEMON_DEFAULT_MODEL", "anthropic:claude-sonnet-5")
+
+      config =
+        Agent.resolve(%{
+          "defaults" => %{"provider" => "ollama", "model" => "qwen:7b"}
+        })
+
+      assert config.default_provider == "ollama"
+      assert config.default_provider_source == :inherited
     end
   end
 

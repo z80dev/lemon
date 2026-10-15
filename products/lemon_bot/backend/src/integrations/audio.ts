@@ -35,8 +35,30 @@ export interface AudioServices {
   authorizeReplay(principal: Principal, input: unknown, kind: 'speech' | 'transcription' | 'preview', botId?: string): Promise<void>;
   providerCapabilities(): Pick<P.Capabilities, 'stt' | 'tts'>;
   inventory(): { id: 'stt' | 'tts'; provider: string | null; configured: boolean }[];
+  voiceCatalog(principal: Principal): Promise<P.VoiceCatalog>;
 }
 const audioInstances = new WeakMap<BackendServices, AudioServices>();
+
+const openAIVoices = ['alloy', 'ash', 'ballad', 'coral', 'echo', 'fable', 'nova', 'onyx', 'sage', 'shimmer', 'verse', 'marin', 'cedar'];
+const builtInVoices: Record<NonNullable<P.VoiceCatalog['provider']>, P.ProviderVoice[]> = {
+  openai: openAIVoices.map(id => ({ id, name: id[0]!.toUpperCase() + id.slice(1), languages: [] })),
+  elevenlabs: [
+    { id: '21m00Tcm4TlvDq8ikWAM', name: 'Rachel', languages: [] },
+    { id: 'pNInz6obpgDQGcFmaJgB', name: 'Adam', languages: [] },
+    { id: 'ErXwobaYiN019PkySvjV', name: 'Antoni', languages: [] },
+    { id: 'EXAVITQu4vr4xnSDxMaL', name: 'Bella', languages: [] },
+  ],
+  google: [
+    { id: 'en-US-Standard-A', name: 'English (US) · A', languages: ['en-US'] },
+    { id: 'en-US-Standard-B', name: 'English (US) · B', languages: ['en-US'] },
+    { id: 'en-US-Standard-C', name: 'English (US) · C', languages: ['en-US'] },
+    { id: 'en-US-Standard-D', name: 'English (US) · D', languages: ['en-US'] },
+    { id: 'en-GB-Standard-A', name: 'English (UK) · A', languages: ['en-GB'] },
+    { id: 'fr-FR-Standard-A', name: 'French · A', languages: ['fr-FR'] },
+    { id: 'de-DE-Standard-A', name: 'German · A', languages: ['de-DE'] },
+    { id: 'es-ES-Standard-A', name: 'Spanish · A', languages: ['es-ES'] },
+  ],
+};
 
 /** Sniff original bytes and measure the container, never trust upload MIME/duration. */
 export function inspectAudio(input: Uint8Array): AudioInfo {
@@ -180,6 +202,11 @@ export function createAudioServices(services: BackendServices, overrides?: Audio
   let token: { value: string; expiresAt: number } | null = null;
   let tokenRefresh: Promise<{ value: string; expiresAt: number }> | null = null;
   const capabilities = () => ({ stt: (stt === 'openai' && !!env.LEMON_BOT_OPENAI_API_KEY) || (stt === 'deepgram' && !!env.LEMON_BOT_DEEPGRAM_API_KEY), tts: (tts === 'openai' && !!env.LEMON_BOT_OPENAI_API_KEY) || (tts === 'elevenlabs' && !!env.LEMON_BOT_ELEVENLABS_API_KEY) || (tts === 'google' && !!google) });
+  async function voiceCatalog(principal: Principal): Promise<P.VoiceCatalog> {
+    if (!(await services.integrations.effectivePolicy(principal)).productAccess) fail('policy_denied', 'Product access is disabled for this account.');
+    const provider = tts === 'openai' || tts === 'elevenlabs' || tts === 'google' ? tts : null;
+    return { provider, configured: capabilities().tts, voices: [{ id: 'default', name: 'Provider default', languages: [] }, ...(provider ? builtInVoices[provider] : [])] };
+  }
   async function upstream(url: string, init: RequestInit, limit = MAX_BYTES, deadline = performance.now() + timeout): Promise<Uint8Array> {
     const remaining = Math.min(timeout, deadline - performance.now()); if (remaining <= 0) fail('upstream_unavailable', 'Audio provider request failed or timed out.', false);
     const controller = new AbortController(), timer = setTimeout(() => controller.abort(), remaining);
@@ -260,7 +287,7 @@ export function createAudioServices(services: BackendServices, overrides?: Audio
     if (tts === 'openai') {
       const voice = body.voice.voiceId === 'default' ? 'alloy' : body.voice.voiceId;
       const customVoice = /^voice_[A-Za-z0-9_-]+$/.test(voice);
-      if (!customVoice && !['alloy', 'ash', 'ballad', 'coral', 'echo', 'fable', 'nova', 'onyx', 'sage', 'shimmer', 'verse', 'marin', 'cedar'].includes(voice)) fail('invalid_request', 'Unsupported OpenAI voice.');
+      if (!customVoice && !openAIVoices.includes(voice)) fail('invalid_request', 'Unsupported OpenAI voice.');
       bytes = await upstream('https://api.openai.com/v1/audio/speech', { method: 'POST', headers: { Authorization: `Bearer ${env.LEMON_BOT_OPENAI_API_KEY}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ model: 'gpt-4o-mini-tts', input: body.text, voice: customVoice ? { id: voice } : voice, speed: body.voice.speed, response_format: 'wav', ...(body.voice.language ? { instructions: `Use ${body.voice.language} pronunciation. Read the supplied text verbatim without translating, adding or omitting content.` } : {}) }) }, MAX_BYTES, deadline);
     } else if (tts === 'elevenlabs') {
       const voice = body.voice.voiceId === 'default' ? '21m00Tcm4TlvDq8ikWAM' : body.voice.voiceId;
@@ -324,7 +351,7 @@ export function createAudioServices(services: BackendServices, overrides?: Audio
     const attachment = await services.attachments.create(principal, bytes, metadata);
     return { attachment, download: services.attachments.download(principal, attachment.id) };
   }
-  const audio: AudioServices = { speech, transcribe, authorizeReplay, providerCapabilities: capabilities, inventory: () => [{ id: 'stt', provider: stt === 'openai' || stt === 'deepgram' ? stt : null, configured: capabilities().stt }, { id: 'tts', provider: tts === 'openai' || tts === 'elevenlabs' || tts === 'google' ? tts : null, configured: capabilities().tts }] };
+  const audio: AudioServices = { speech, transcribe, authorizeReplay, voiceCatalog, providerCapabilities: capabilities, inventory: () => [{ id: 'stt', provider: stt === 'openai' || stt === 'deepgram' ? stt : null, configured: capabilities().stt }, { id: 'tts', provider: tts === 'openai' || tts === 'elevenlabs' || tts === 'google' ? tts : null, configured: capabilities().tts }] };
   if (overrides === undefined) audioInstances.set(services, audio);
   return audio;
 }
@@ -332,6 +359,7 @@ export function createAudioRoutes(services: BackendServices, options?: AudioOpti
   const audio = createAudioServices(services, options);
   const user = (principal: Principal | null) => { if (!principal) fail('unauthenticated', 'Authentication required.'); return principal; };
   return [
+    { method: 'GET', path: '/v1/audio/voices', auth: 'member', status: 200, handler: c => audio.voiceCatalog(user(c.user)) },
     { method: 'POST', path: '/v1/audio/transcriptions', auth: 'member', status: 200, authorizeReplay: c => audio.authorizeReplay(user(c.user), c.body, 'transcription'), handler: c => audio.transcribe(user(c.user), c.body) },
     { method: 'POST', path: '/v1/audio/speech', auth: 'member', status: 200, authorizeReplay: c => audio.authorizeReplay(user(c.user), c.body, 'speech'), handler: c => audio.speech(user(c.user), c.body) },
     { method: 'POST', path: '/v1/bots/:id/voice/preview', auth: 'member', status: 200, authorizeReplay: c => audio.authorizeReplay(user(c.user), c.body, 'preview', c.params.id!), handler: c => { const principal = user(c.user), bot = ownedBot(services, principal, c.params.id!), body = parse(previewSchema, c.body); return audio.speech(principal, { clientNonce: body.clientNonce, text: 'Hello, I’m your Lemon Bot teammate. Ready when you are.', voice: body.voice ?? bot.voice }, { botId: bot.id, machineId: null, runId: null, sourceEntryId: null, generatedAtMs: null }); } },

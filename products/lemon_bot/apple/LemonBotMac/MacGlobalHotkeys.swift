@@ -77,7 +77,11 @@ final class MacGlobalHotkeys {
         guard flags & (UInt32(cmdKey) | UInt32(controlKey) | UInt32(optionKey)) != 0 else {
             throw HotkeyError.invalid("A global shortcut needs Command, Control, or Option.")
         }
-        let keys: [String: UInt32] = [
+        guard let code = keys[key] else { throw HotkeyError.invalid("Unsupported shortcut key: \(key).") }
+        return (code, flags)
+    }
+
+    static let keys: [String: UInt32] = [
             "a": 0, "s": 1, "d": 2, "f": 3, "h": 4, "g": 5, "z": 6, "x": 7, "c": 8, "v": 9,
             "b": 11, "q": 12, "w": 13, "e": 14, "r": 15, "y": 16, "t": 17, "1": 18, "2": 19,
             "3": 20, "4": 21, "6": 22, "5": 23, "9": 25, "7": 26, "8": 28, "0": 29,
@@ -86,9 +90,6 @@ final class MacGlobalHotkeys {
             "f1": 122, "f2": 120, "f3": 99, "f4": 118, "f5": 96, "f6": 97, "f7": 98,
             "f8": 100, "f9": 101, "f10": 109, "f11": 103, "f12": 111
         ]
-        guard let code = keys[key] else { throw HotkeyError.invalid("Unsupported shortcut key: \(key).") }
-        return (code, flags)
-    }
 }
 
 enum HotkeyError: LocalizedError {

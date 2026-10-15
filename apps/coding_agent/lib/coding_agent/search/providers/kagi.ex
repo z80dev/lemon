@@ -6,6 +6,7 @@ defmodule CodingAgent.Search.Providers.Kagi do
 
   @behaviour CodingAgent.Search.Provider
 
+  alias CodingAgent.Search.Operators
   alias CodingAgent.Search.Providers.KeyedHttp
   alias CodingAgent.Search.Result
 
@@ -21,7 +22,7 @@ defmodule CodingAgent.Search.Providers.Kagi do
   @impl true
   def search_features,
     do: %{
-      operators: CodingAgent.Search.Operators.syntax() ++ [:after, :before],
+      operators: Operators.syntax() ++ [:after, :before],
       freshness: [:relative, :range]
     }
 
@@ -32,12 +33,12 @@ defmodule CodingAgent.Search.Providers.Kagi do
   def search(request, context) do
     started_ms = System.monotonic_time(:millisecond)
     body = %{"query" => request.query, "limit" => request.count}
-    {first, last} = CodingAgent.Search.Operators.dates(request)
+    {first, last} = Operators.dates(request)
 
     filters =
       %{}
-      |> CodingAgent.Search.Operators.put_if("after", first)
-      |> CodingAgent.Search.Operators.put_if("before", last)
+      |> Operators.put_if("after", first)
+      |> Operators.put_if("before", last)
 
     body = if filters == %{}, do: body, else: Map.put(body, "filters", filters)
 

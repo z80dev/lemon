@@ -12,7 +12,11 @@ The phone completes approval explicitly and receives its own Keychain-backed rev
 
 ## Explicit companion and capture
 
-Open **Lemon Bot → Settings** to choose a Bot and optionally enable one compact companion. Global summon and push-to-talk are disabled by default. Enter combinations such as `control+option+space` or `command+shift+f8`; clear a field to disable it. Carbon registers only those combinations and reports registration conflicts. There is no global keyboard monitor or Accessibility permission.
+Open **Lemon Bot → Settings** to choose a Bot and optionally enable one compact companion. Global quick-composer and hold-to-talk shortcuts are disabled by default. Click a shortcut recorder, then press a key with Command, Control or Option. Escape cancels; Delete clears the shortcut. Choose **Save device-local settings** to apply. Global shortcuts pause while recording and registration conflicts are reported when saving. The recorder receives keys only while explicitly focused; there is no global keyboard monitor or Accessibility permission.
+
+An unset recorder shows **Record Shortcut**, changes to **Type shortcut…** during capture, and displays native modifier symbols afterward (for example, **⌃⌥Space**). This display does not change the stored shortcut.
+
+The **Conversation** menu lists **Previous Bot** (⌘[) and **Next Bot** (⌘]); these are the sole navigation bindings.
 
 Summon opens the selected Bot’s same shared mini-composer, labelled with account/workspace/machine. **Services → Send selection to Lemon Bot** imports only the selection provided by the invoking application; **Choose files** uses the native user-selected file picker. Content stays in that conversation’s draft until explicit Send. No screen reading, desktop streaming, clipboard polling/history, ambient listening or wake-word capture exists.
 

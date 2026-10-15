@@ -38,6 +38,13 @@ Every Bot has an assigned machine, a Lemon profile and an owner conversation. Ta
 
 Setup starts with a named assistant and a machine, with optional phone pairing. Usage shows provider spend and limits. Integrations and host controls depend on configured providers and permissions.
 
+Instance provider rows show the last observed Lemon provider failure and its time.
+The runtime retains one bounded, credential-free category summary per provider,
+including authentication and rate-limit failures; successful calls do not erase
+that history. It is in-memory diagnostic history, cleared when Lemon restarts,
+not a live provider probe. Raw provider messages, paths and credentials are never
+included in `providers[].lastError`.
+
 ## Running an integrated checkout
 
 Requirements: a running authenticated Lemon controller with the required profile, placement, node-I/O, memory and live-stream RPCs; Bun 1.4+; Node 24 for Vite tooling; and destination hosts with Lemon/provider credentials. Configure a supported default model on the controller with `lemon setup`; configure provider authentication locally on each destination host. Native builds use Xcode 26.3 and XcodeGen 2.46; signing and provisioning are required for installed Apple devices.

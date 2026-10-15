@@ -3,7 +3,9 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
 
   import ExUnit.CaptureLog
 
+  alias LemonChannels.Adapters.Discord.Inbound
   alias LemonChannels.Adapters.Discord.Transport
+  alias LemonChannels.Adapters.Discord.TriggerMode
   alias LemonChannels.Discord.KnownTargetStore
   alias LemonCore.Dedupe.Ets
   alias LemonCore.Store
@@ -174,7 +176,7 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
       )
 
     assert {:ok, inbound} =
-             LemonChannels.Adapters.Discord.Inbound.normalize(%{
+             Inbound.normalize(%{
                message: message,
                account_id: "default"
              })
@@ -874,7 +876,7 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
   end
 
   test "/cancel and /stop keep transport state when the response API returns another value" do
-    :ok = LemonCore.Dedupe.Ets.init(:lemon_channels_discord_dedupe)
+    :ok = Ets.init(:lemon_channels_discord_dedupe)
     _ = :ets.delete_all_objects(:lemon_channels_discord_dedupe)
     previous_responder = Application.get_env(:lemon_channels, :discord_interaction_responder)
 
@@ -916,7 +918,7 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
   end
 
   test "definite submission failure has no success reaction and permits redelivery" do
-    :ok = LemonCore.Dedupe.Ets.init(:lemon_channels_discord_dedupe)
+    :ok = Ets.init(:lemon_channels_discord_dedupe)
     _ = :ets.delete_all_objects(:lemon_channels_discord_dedupe)
 
     with_discord_api(fn ->
@@ -969,7 +971,7 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
   end
 
   test "malformed mutation acknowledgement keeps dedupe and suppresses a duplicate run" do
-    :ok = LemonCore.Dedupe.Ets.init(:lemon_channels_discord_dedupe)
+    :ok = Ets.init(:lemon_channels_discord_dedupe)
     _ = :ets.delete_all_objects(:lemon_channels_discord_dedupe)
 
     with_discord_api(fn ->
@@ -1086,7 +1088,7 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
   end
 
   test "duplicate message create events submit only one run through the runtime path" do
-    :ok = LemonCore.Dedupe.Ets.init(:lemon_channels_discord_dedupe)
+    :ok = Ets.init(:lemon_channels_discord_dedupe)
     _ = :ets.delete_all_objects(:lemon_channels_discord_dedupe)
 
     with_discord_api(fn ->
@@ -1139,7 +1141,7 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
   end
 
   test "trigger all routes unmentioned group messages through the runtime path" do
-    :ok = LemonCore.Dedupe.Ets.init(:lemon_channels_discord_dedupe)
+    :ok = Ets.init(:lemon_channels_discord_dedupe)
     _ = :ets.delete_all_objects(:lemon_channels_discord_dedupe)
 
     with_interaction_responder(fn ->
@@ -1252,7 +1254,7 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
   end
 
   test "trigger all routes thread messages when Discord omits parent channel context" do
-    :ok = LemonCore.Dedupe.Ets.init(:lemon_channels_discord_dedupe)
+    :ok = Ets.init(:lemon_channels_discord_dedupe)
     _ = :ets.delete_all_objects(:lemon_channels_discord_dedupe)
 
     with_discord_api(fn ->
@@ -1266,7 +1268,7 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
           topic_id: thread_id
         }
 
-        :ok = LemonChannels.Adapters.Discord.TriggerMode.set(scope, "default", :all)
+        :ok = TriggerMode.set(scope, "default", :all)
 
         state = discord_message_state()
         message_id = 1_503_803_470_493_300_000 + System.unique_integer([:positive])
@@ -1298,7 +1300,7 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
         assert_receive {:discord_react, ^thread_id, ^message_id, _}
 
         :ok =
-          LemonChannels.Adapters.Discord.TriggerMode.clear_topic(
+          TriggerMode.clear_topic(
             "default",
             thread_id,
             thread_id
@@ -1382,7 +1384,7 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
   # Routes one plain (unmentioned) Discord message through buffer + debounce
   # flush and returns the run request the router bridge received.
   defp submit_discord_text(text) do
-    :ok = LemonCore.Dedupe.Ets.init(:lemon_channels_discord_dedupe)
+    :ok = Ets.init(:lemon_channels_discord_dedupe)
 
     with_discord_api(fn ->
       with_router_bridge(fn ->
@@ -1394,7 +1396,7 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
           topic_id: thread_id
         }
 
-        :ok = LemonChannels.Adapters.Discord.TriggerMode.set(scope, "default", :all)
+        :ok = TriggerMode.set(scope, "default", :all)
 
         try do
           message_id = 1_503_803_470_493_300_000 + System.unique_integer([:positive])
@@ -1419,7 +1421,7 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
           run_request
         after
           :ok =
-            LemonChannels.Adapters.Discord.TriggerMode.clear_topic(
+            TriggerMode.clear_topic(
               "default",
               thread_id,
               thread_id

@@ -3,6 +3,7 @@ defmodule CodingAgent.Search.Providers.Searxng do
 
   @behaviour CodingAgent.Search.Provider
 
+  alias CodingAgent.Search.Operators
   alias CodingAgent.Search.Result
 
   @impl true
@@ -27,10 +28,10 @@ defmodule CodingAgent.Search.Providers.Searxng do
     query = %{"q" => request.query, "format" => "json"}
 
     query =
-      CodingAgent.Search.Operators.put_if(
+      Operators.put_if(
         query,
         "time_range",
-        CodingAgent.Search.Operators.relative(request,
+        Operators.relative(request,
           day: "day",
           week: "month",
           month: "month",

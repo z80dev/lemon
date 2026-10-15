@@ -29,6 +29,7 @@ defmodule CodingAgent.Eval.Kernel do
   use GenServer
 
   alias CodingAgent.BashExecutor
+  alias CodingAgent.Eval.Output
 
   @default_idle_timeout_ms 30 * 60 * 1000
   @startup_timeout_ms 20_000
@@ -364,7 +365,7 @@ defmodule CodingAgent.Eval.Kernel do
     if state.busy, do: Process.demonitor(state.busy.monitor, [:flush])
 
     if state.busy do
-      case CodingAgent.Eval.Output.read_displays(state.display_path) do
+      case Output.read_displays(state.display_path) do
         {:ok, displays} -> notify(state, {:result, %{"status" => "error", "outputs" => displays}})
         _ -> :ok
       end
@@ -421,7 +422,7 @@ defmodule CodingAgent.Eval.Kernel do
 
   defp handle_frame(%{"type" => "result", "id" => id} = frame, %{busy: %{id: id}} = state) do
     frame =
-      case CodingAgent.Eval.Output.read_displays(state.display_path) do
+      case Output.read_displays(state.display_path) do
         {:ok, displays} -> Map.put(frame, "outputs", displays)
         {:error, message} -> Map.merge(frame, %{"status" => "error", "error" => message})
       end

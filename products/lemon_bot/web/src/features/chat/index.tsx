@@ -13,7 +13,6 @@ import { AttachmentLink, RichText } from './files';
 import { IntentNotice, copyText, mergeEntries, useClock, useIntent } from './common';
 import './chat.css';
 export { FileViewer } from './files';
-export { VoiceOverlay } from './voice';
 
 function EventLine({ event }: { event: TranscriptEvent }) {
   const { snapshot, navigate } = useApp(); const botName = (id: string) => snapshot.bots.find(bot => bot.id === id)?.name || 'A Bot'; const machineName = (id: string) => snapshot.machines.find(machine => machine.id === id)?.name || 'another machine';

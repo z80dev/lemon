@@ -84,16 +84,14 @@ defmodule CodingAgent.Tools.WebGuard do
   end
 
   defp build_redirect_url(base_uri, location) when is_binary(location) do
-    try do
-      next = URI.merge(base_uri, location)
+    next = URI.merge(base_uri, location)
 
-      case to_string(next) do
-        "" -> {:error, {:redirect_error, "Invalid redirect location"}}
-        url -> {:ok, url}
-      end
-    rescue
-      _ -> {:error, {:redirect_error, "Invalid redirect location"}}
+    case to_string(next) do
+      "" -> {:error, {:redirect_error, "Invalid redirect location"}}
+      url -> {:ok, url}
     end
+  rescue
+    _ -> {:error, {:redirect_error, "Invalid redirect location"}}
   end
 
   defp detect_redirect_loop(next_url, visited) do
@@ -321,18 +319,16 @@ defmodule CodingAgent.Tools.WebGuard do
   end
 
   defp build_pinned_request_url(uri, pinned_host) do
-    try do
-      uri
-      |> Map.put(:host, pinned_host)
-      |> Map.put(:authority, nil)
-      |> URI.to_string()
-      |> case do
-        "" -> {:error, {:network_error, "Unable to build pinned request URL"}}
-        url -> {:ok, url}
-      end
-    rescue
-      _ -> {:error, {:network_error, "Unable to build pinned request URL"}}
+    uri
+    |> Map.put(:host, pinned_host)
+    |> Map.put(:authority, nil)
+    |> URI.to_string()
+    |> case do
+      "" -> {:error, {:network_error, "Unable to build pinned request URL"}}
+      url -> {:ok, url}
     end
+  rescue
+    _ -> {:error, {:network_error, "Unable to build pinned request URL"}}
   end
 
   defp ip_to_string({_, _, _, _} = ip), do: :inet.ntoa(ip) |> to_string()

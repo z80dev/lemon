@@ -707,8 +707,8 @@ export class CustomEditor extends Editor {
 			this.#options.onQuit?.(0);
 			return true;
 		}
-		if (matchesKey(data, "ctrl+g")) {
-			void this.#options.onExternalEdit?.();
+		if (this.#options.onExternalEdit && matchesKey(data, "ctrl+g")) {
+			void this.#options.onExternalEdit();
 			return true;
 		}
 		if (matchesKey(data, "escape")) {

@@ -18,7 +18,7 @@ Production assets are emitted to `web/dist`; the backend serves them outside `/v
 ## First use
 
 1. Connect to your product backend. An empty deployment requests the one-time owner setup code printed in its operator terminal. Otherwise sign in to your owner account.
-2. Attach your host using its **server-issued**, one-use join command. Run it on the destination and wait for verified online status. Configure the host's actual provider authentication and supervise its worker. Copying a command does not prove enrollment.
+2. **Connect a computer** using its **server-issued**, one-use join command. Run it on the destination and wait for verified online status. Configure the computer's actual provider authentication and supervise its worker. Copying a command does not prove enrollment.
 3. Create a named Bot with a focused job on that host, or review a template to create a separate owned copy. Co-resident Bots share the OS user's files, browser sessions and CLI credentials; personas are not host isolation.
 4. Open its chat and give it a concrete task. Text, references, real files and explicit voice input use placed conversations. Stop requests cancel a real run; only its terminal cancelled state proves it stopped, and prior external effects are not undone.
 
@@ -54,9 +54,28 @@ On touch screens, tap a message to show its 44px copy, reply and reaction contro
 session credential. Failed message history loads offer **Try again**, and active
 work is never represented as an empty conversation.
 
+Reply chips identify the original author and show a 40-character message preview.
+The Send button shows its keyboard hint on hover and keyboard focus.
+
+Feature destinations load on demand, including computer/terminal, Bot, settings,
+library and conversation screens. The web version comes from `package.json` at
+build time; device registration, About and minimum-version checks use that same
+version, with semantic-version precedence (including prereleases).
+
 User-facing copy calls the account container a **workspace** and the execution
 device a **machine**. **Computer user** means the machine's operating-system
 account. API and configuration identifiers retain their canonical names.
+
+Machine measurements show when they were last updated and recheck their age every
+15 seconds, even without new server data. File paths start in the destination's
+default folder (not necessarily its home folder); links outside allowed folders
+are blocked. Terminal output gaps mean earlier output is unavailable, not that a
+command succeeded; available sequence numbers remain under **Details**. Operation
+progress counts finished targets separately from queued or unknown outcomes.
+Memory source links open the source conversation, and template identifiers and
+revisions stay under **Details**. Channel and X setup distinguish provider
+availability from a connected account and show message support or requested
+permissions before authorization.
 
 ## Credential, cache, voice and unknown-outcome boundaries
 
@@ -65,6 +84,18 @@ Bearer sessions use tab-scoped session storage, not URLs or local-storage accoun
 Text/document previews are bounded to 8 MiB; table views bound rows/columns and do not evaluate formulas. The authorized unchanged original remains downloadable. Conversion errors and unsupported formats show explicit errors, not synthetic documents.
 
 Microphone capture begins only after explicit action, has stop/cancel controls and releases tracks. Dictation is reviewable **unsent** text. Active voice chat uses STT → ordinary message/run stream → TTS. Local browser speech fallbacks are labelled; backend audio providers are separately advertised capabilities. Background or lock-screen microphone continuity is not promised.
+
+Notification settings distinguish browser registration and subscription from
+server delivery for browsers and iPhones. If server delivery is not set up, ask
+your administrator to enable it; browser permission alone does not enable delivery.
+**Check browser status** reads the browser subscription without changing it.
+The in-app inbox keeps alerts even when browser notifications are off.
+
+Voice settings separately label **Server voice** and **Browser voice** samples.
+Server samples use the configured server provider; browser samples use the
+browser's voices. Browser dictation may send audio to the browser vendor.
+Saved microphone inputs that have not been connected in this visit are labelled
+**not connected yet** rather than presented as confirmed available devices.
 
 No mutation is automatically replayed after a lost response. Unknown outcomes retain draft input and fixed nonce/resource IDs, fence consequential intents and offer read-only reconciliation. Revisions bind edits. Destructive dialogs disclose exact affected/retained scope, expire, require typed confirmation and remain mounted until acknowledgment. Offline destructive actions and approvals are never queued. Read failures are errors, not synthetic empty lists or success. Realtime cursors are acknowledged only after authoritative event application; refresh never treats a watermark as a replacement snapshot.
 
