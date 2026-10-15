@@ -311,6 +311,7 @@ allow_tools = []
 # enabled = true
 # max_chars = 50000
 # timeout_seconds = 30
+# max_body_bytes = 5242880 # Streaming response cap (5 MiB).
 
 # [runtime.tools.web.fetch.firecrawl]
 # enabled = true
@@ -321,6 +322,11 @@ allow_tools = []
 # LEMON_BROWSER_HYBRID_PUBLIC_BACKEND=browser_use # required with hybrid
 # BROWSERBASE_API_KEY / BROWSERBASE_PROJECT_ID, BROWSER_USE_API_KEY,
 # FIRECRAWL_API_KEY, or CAMOFOX_URL / CAMOFOX_API_KEY configure hosted backends.
+
+# Conversation-only model exploration checkpoints (not filesystem rollback).
+#
+# [runtime.tools.checkpoint]
+# enabled = false
 
 # --- Computer Use (native apps through LCU; docs/tools/computer-use.md) ---
 

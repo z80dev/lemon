@@ -69,6 +69,7 @@ defmodule LemonCore.Config.Tools do
     :web,
     :wasm,
     :disclosure,
+    :checkpoint,
     :computer_use
   ]
 
@@ -146,7 +147,8 @@ defmodule LemonCore.Config.Tools do
             cache: web_cache_config()
           },
           wasm: wasm_config(),
-          disclosure: disclosure_config()
+          disclosure: disclosure_config(),
+          checkpoint: %{enabled: boolean()}
         }
 
   @doc """
@@ -163,6 +165,7 @@ defmodule LemonCore.Config.Tools do
       web: resolve_web(tools_settings),
       wasm: resolve_wasm(tools_settings),
       disclosure: resolve_disclosure(tools_settings),
+      checkpoint: resolve_checkpoint(tools_settings),
       computer_use: resolve_computer_use(tools_settings)
     }
   end
@@ -184,6 +187,13 @@ defmodule LemonCore.Config.Tools do
   end
 
   # Private functions for resolving each config section
+  defp resolve_checkpoint(settings) do
+    section = settings["checkpoint"]
+
+    if is_map(section),
+      do: %{enabled: Map.get(section, "enabled", false)},
+      else: %{enabled: false}
+  end
 
   defp resolve_auto_resize(settings) do
     Env.get(:lemon_auto_resize_images,
@@ -452,6 +462,7 @@ defmodule LemonCore.Config.Tools do
   def defaults do
     %{
       "auto_resize_images" => true,
+      "checkpoint" => %{"enabled" => false},
       "web" => %{
         "search" => %{
           "enabled" => true,

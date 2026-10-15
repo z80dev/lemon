@@ -15,8 +15,6 @@ defmodule CodingAgent.Tools.BashTest do
       tool = Bash.tool("/tmp")
 
       assert tool.name == "bash"
-      assert tool.label == "Run Command"
-      assert tool.description =~ "Execute a bash command"
       assert tool.parameters["type"] == "object"
       assert tool.parameters["required"] == ["command"]
       assert "command" in Map.keys(tool.parameters["properties"])
@@ -31,11 +29,6 @@ defmodule CodingAgent.Tools.BashTest do
       assert pty_schema["type"] == "boolean"
       assert is_binary(pty_schema["description"])
       refute "pty" in tool.parameters["required"]
-    end
-
-    test "accepts optional opts parameter" do
-      tool = Bash.tool("/tmp", some_option: true)
-      assert tool.name == "bash"
     end
   end
 

@@ -68,6 +68,10 @@ defmodule LemonCore.Config.Validator do
     errors = validate_tui(config.tui, errors)
     errors = validate_features(config.features, errors)
     errors = validate_memory(config.memory, errors)
+
+    errors =
+      validate_write_approval(errors, config.skills.write_approval, "skills.write_approval")
+
     errors = validate_automation(config.automation, errors)
 
     case errors do
@@ -685,6 +689,10 @@ defmodule LemonCore.Config.Validator do
   def validate_tools(tools, errors) do
     errors
     |> validate_boolean(Map.get(tools, :auto_resize_images), "tools.auto_resize_images")
+    |> validate_boolean(
+      get_in(tools, [Access.key(:checkpoint, %{}), :enabled]),
+      "tools.checkpoint.enabled"
+    )
     |> validate_computer_use(Map.get(tools, :computer_use))
   end
 
@@ -736,10 +744,15 @@ defmodule LemonCore.Config.Validator do
   """
   @spec validate_memory(Memory.t() | nil, [String.t()]) :: [String.t()]
   def validate_memory(%Memory{} = memory, errors) do
-    validate_boolean(errors, memory.auto_recall, "memory.auto_recall")
+    errors
+    |> validate_boolean(memory.auto_recall, "memory.auto_recall")
+    |> validate_write_approval(memory.write_approval, "memory.write_approval")
   end
 
   def validate_memory(_memory, errors), do: errors
+
+  defp validate_write_approval(errors, value, _path) when is_boolean(value), do: errors
+  defp validate_write_approval(errors, _value, path), do: ["#{path}: must be a boolean" | errors]
 
   @doc """
   Validates the `[automation]` section.

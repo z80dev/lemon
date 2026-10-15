@@ -322,6 +322,29 @@ mix lemon.skill remove <skill-key>
 
 ---
 
+## Review agent skill writes
+
+Enable human review of agent-authored procedural memory in `config.toml`:
+
+```toml
+[skills]
+write_approval = true
+```
+
+Off by default, this gates every mutating `skill_manage` action: create, edit,
+patch, delete, supporting-file writes/removals, pin/unpin, and archive/restore.
+`report` remains available without write approval. The existing execution
+approval UI shows the target/action and bounded, escaped, redacted content or
+patch summary; a digest binds the full mutation to its workspace. Approval is
+not an audit override: unsafe or pinned writes can still be refused.
+
+Declined, unavailable or expired approval means nothing is written. Unattended
+background review cannot create drafts or patch skills behind this gate; cron
+and channels without approval controls also fail closed. Interactive native
+sessions and Telegram/Discord use their existing approval flow. Explicit
+operator skill-management services retain their existing review rules.
+See [configuration](../config.md#memory) for timeout and memory-write settings.
+
 ## Quality Checks
 
 The audit engine (`LemonSkills.Audit.Engine`) runs deterministic security checks for:

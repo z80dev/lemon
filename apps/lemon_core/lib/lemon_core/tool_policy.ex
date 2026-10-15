@@ -84,7 +84,7 @@ defmodule LemonCore.ToolPolicy do
   @execution_json_items 131_072
   @execution_json_bytes 16_777_216
 
-  @read_tools ["read", "read_skill", "recall", "grep", "find", "ls"]
+  @read_tools ["read", "read_skill", "recall", "grep", "find", "ls", "checkpoint", "rewind"]
 
   @minimal_core_tools [
     "read",
@@ -92,7 +92,9 @@ defmodule LemonCore.ToolPolicy do
     "skill_manage",
     "remember",
     "recall",
+    "fs_checkpoint",
     "checkpoint",
+    "rewind",
     "write",
     "edit",
     "patch",
@@ -186,7 +188,7 @@ defmodule LemonCore.ToolPolicy do
     "edit",
     "patch",
     "ast_grep",
-    "checkpoint",
+    "fs_checkpoint",
     "skill_manage",
     "remember",
     "bash",

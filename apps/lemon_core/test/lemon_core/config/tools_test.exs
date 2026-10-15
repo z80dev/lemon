@@ -77,6 +77,13 @@ defmodule LemonCore.Config.ToolsTest do
       assert config.web.search.provider == "brave"
       assert config.web.fetch.enabled == true
       assert config.wasm.enabled == false
+      assert config.checkpoint.enabled == false
+    end
+
+    test "resolves the conversation checkpoint flag through the tools config plane" do
+      assert Tools.resolve(%{"tools" => %{"checkpoint" => %{"enabled" => true}}}).checkpoint.enabled
+
+      refute Tools.resolve(%{"tools" => %{"checkpoint" => %{"enabled" => false}}}).checkpoint.enabled
     end
 
     test "uses settings from config map" do

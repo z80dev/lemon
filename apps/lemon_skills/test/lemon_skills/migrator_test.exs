@@ -133,10 +133,17 @@ defmodule LemonSkills.MigratorTest do
     assert skipped >= 1
   end
 
-  test "handles empty skills directory gracefully" do
-    {:ok, result} = Migrator.migrate()
-    assert is_integer(result.classified)
-    assert is_integer(result.skipped)
+  test "handles empty skills directory gracefully", %{tmp_dir: tmp_dir} do
+    keys =
+      ~w(LEMON_AGENT_DIR LEMON_HARNESS_SKILLS_DIR LEMON_OMP_SKILLS_DIR LEMON_CLAUDE_SKILLS_DIR LEMON_CODEX_SKILLS_DIR)
+
+    empty_dir = Path.join(tmp_dir, "empty-skills")
+    File.mkdir_p!(empty_dir)
+
+    LemonCore.Testing.HermeticEnv.with_restored_env(keys, fn ->
+      Enum.each(keys, &System.put_env(&1, empty_dir))
+      assert {:ok, %{classified: 0, skipped: 0}} = Migrator.migrate()
+    end)
   end
 
   test "writes content_hash when SKILL.md exists", %{skills_dir: skills_dir} do
@@ -145,8 +152,8 @@ defmodule LemonSkills.MigratorTest do
     Migrator.migrate()
 
     {:ok, record} = Lockfile.get(:global, "hash-skill")
-    assert is_binary(record["content_hash"])
-    assert String.length(record["content_hash"]) == 64
+    content = File.read!(Path.join([skills_dir, "hash-skill", "SKILL.md"]))
+    assert record["content_hash"] == Base.encode16(:crypto.hash(:sha256, content), case: :lower)
   end
 
   test "returns {:error, _} when an unexpected exception occurs during migration" do

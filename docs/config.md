@@ -716,7 +716,29 @@ also stays off when `[features] session_search = "off"`.
 ```toml
 [memory]
 auto_recall = true
+write_approval = false # require human approval for remember mutations when true
 ```
+
+`memory.write_approval` gates every `remember` add, replacement, and deletion
+across user, memory, and project targets. Agent skill authoring has its own switch:
+
+```toml
+[skills]
+write_approval = false # require human approval for skill_manage mutations when true
+```
+
+Both switches default to `false` and use normal global/project config precedence.
+Enabled writes use the existing execution approval UI with bounded, escaped,
+credential-redacted target/action/content previews and a digest binding the full
+mutation to its owner/workspace. `skill_manage report` remains read-only.
+Approval never bypasses existing content screening, audit, pinning or isolation.
+Denial leaves the target unchanged; an unavailable/expired approval also denies.
+Prompts expire after 60 seconds unless the trusted runtime supplies a timeout.
+Background learning reviews (including draft creation), cron runs, and channels
+without approval controls fail closed without consuming saved grants.
+Interactive native sessions and Telegram/Discord use their existing approval flow.
+These switches gate agent tool writes, not explicit operator memory/skill services.
+
 
 ## Feature Flags
 
@@ -1559,6 +1581,7 @@ max_chars = 50000
 timeout_seconds = 30
 cache_ttl_minutes = 15
 max_redirects = 3
+max_body_bytes = 5242880 # Streaming response limit (5 MiB); body_too_large is terminal.
 readability = true
 allow_private_network = false
 allowed_hostnames = []
@@ -1639,6 +1662,19 @@ chrome = false
 declined_origins = []
 ```
 
+## Conversation checkpoints
+
+```toml
+[runtime.tools.checkpoint]
+enabled = false
+```
+
+Enable the paired model tools `checkpoint(goal)` and `rewind(report)` to collapse
+exploratory conversation into a retained branch summary. This never restores
+files and needs no confirmation; operator `/rewind` is unchanged.
+The filesystem tool is named `fs_checkpoint` (no `checkpoint` alias).
+See [checkpoint tools](tools/checkpoint.md).
+
 ## Tool Disclosure
 
 Every tool a session exposes sends its name, description and JSON schema with
@@ -1664,9 +1700,9 @@ pinned = []              # tool names that always stay directly exposed
   catalog exceeds `budget_tokens`; below it the tool list is unchanged.
 - **`coding`**: an experiment for coding sessions. Only the coding core stays
   directly exposed — `read`, `write`, `edit`, `patch`, `ls`, `find`, `grep`,
-  `ast_grep`, `lsp_diagnostics`, `checkpoint`, `bash`, `bash_output`,
+  `ast_grep`, `lsp_diagnostics`, `fs_checkpoint`, `bash`, `bash_output`,
   `kill_process`, `websearch`, `webfetch`, `read_skill`, `recall`, `todo`,
-  `ask`, `task`, `wait`, `agent_message` and `parent_question` — plus `pinned`
+  `ask`, enabled `checkpoint` / `rewind`, `task`, `wait`, `agent_message` and `parent_question` — plus `pinned`
   names. Every other resolved tool, including browser, media, automation and
   other optional built-ins, is deferred whenever there is one to defer;
   `budget_tokens` is not consulted. Whether this improves cost, latency or task

@@ -182,6 +182,7 @@ defmodule CodingAgent.Debug.Client do
     case Map.get(adapter, :connect_mode, :stdio) do
       :remote -> open_remote_transport(adapter)
       :socket -> open_socket_transport(adapter, cwd, env)
+      :socket_server -> open_server_transport(adapter, cwd, env)
       _stdio -> open_stdio_transport(adapter, cwd, env)
     end
   end
@@ -203,6 +204,53 @@ defmodule CodingAgent.Debug.Client do
          ) do
       {:ok, socket} -> {:ok, nil, socket}
       {:error, reason} -> {:error, "cannot connect to debug adapter: #{inspect(reason)}"}
+    end
+  end
+
+  # Standalone adapters listen on loopback; unlike Delve they do not dial back.
+  defp open_server_transport(adapter, cwd, env) do
+    with {:ok, listener} <- :gen_tcp.listen(0, ip: {127, 0, 0, 1}),
+         {:ok, number} <- :inet.port(listener) do
+      :gen_tcp.close(listener)
+      args = Enum.map(adapter.args, &String.replace(&1, "{port}", Integer.to_string(number)))
+
+      with {:ok, port} <- open_port(adapter.command, args, cwd, env) do
+        deadline = System.monotonic_time(:millisecond) + @socket_ready_timeout_ms
+
+        case connect_server(port, number, deadline) do
+          {:ok, socket} ->
+            {:ok, port, socket}
+
+          {:error, reason} ->
+            kill_port_tree(port)
+            {:error, reason}
+        end
+      end
+    else
+      {:error, reason} -> {:error, "cannot allocate debug adapter port: #{inspect(reason)}"}
+    end
+  end
+
+  defp connect_server(port, number, deadline) do
+    case :gen_tcp.connect({127, 0, 0, 1}, number, [:binary, packet: :raw, active: true], 100) do
+      {:ok, socket} ->
+        {:ok, socket}
+
+      {:error, reason} ->
+        if System.monotonic_time(:millisecond) >= deadline do
+          {:error,
+           "debug adapter did not listen within #{@socket_ready_timeout_ms}ms: #{inspect(reason)}"}
+        else
+          receive do
+            {^port, {:exit_status, status}} ->
+              {:error, "debug adapter exited (code #{status}) before listening"}
+
+            {^port, {:data, _logs}} ->
+              connect_server(port, number, deadline)
+          after
+            50 -> connect_server(port, number, deadline)
+          end
+        end
     end
   end
 

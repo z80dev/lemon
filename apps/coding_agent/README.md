@@ -149,12 +149,16 @@ CodingAgent.Supervisor (one_for_one)
 
 | Category | Tools |
 |----------|-------|
-| File I/O / Skills / Memory | `read`, `read_skill`, `skill_manage`, `remember`, `recall`, `checkpoint`, `write`, `edit`, `patch`, `lsp_diagnostics`, `ls` |
+| File I/O / Skills / Memory | `read`, `read_skill`, `skill_manage`, `remember`, `recall`, `fs_checkpoint`, `write`, `edit`, `patch`, `lsp_diagnostics`, `ls` |
 | Search | `grep`, `find`, `ast_grep` (when the real ast-grep CLI is installed) |
 | Execution | `bash`, `bash_output`, `kill_process`, `process_input` (see [shell and background processes](../../docs/tools/shell.md)), `debug` (DAP debugger; see [debugger](../../docs/tools/debug.md)) |
 | Web / Browser / Media | `websearch`, `webfetch`, `browser_tabs`, `browser_tab_open`, `browser_tab_activate`, `browser_tab_close`, `browser_navigate`, `browser_snapshot`, `browser_get_content`, `browser_click`, `browser_type`, `browser_hover`, `browser_select_option`, `browser_upload_file`, `browser_download`, `browser_press`, `browser_scroll`, `browser_back`, `browser_wait_for_selector`, `browser_evaluate`, `browser_events`, `browser_get_cookies`, `browser_set_cookies`, `browser_clear_state`, `browser_screenshot`, `browser_analyze`, `media_status`, `media_generate_image`, `media_generate_speech`, `media_transcribe_audio`, `media_analyze_image`, `media_generate_video` |
 | Task / Agent | `task`, `agent`, `parent_question`, [`todo`](../../docs/tools/todo.md), `kanban` |
 | System | `tool_auth`, `extensions_status` |
+
+Opt-in conversation-only `checkpoint(goal)` / `rewind(report)` collapse model
+exploration into retained findings without restoring files. Enable
+`[runtime.tools.checkpoint] enabled = true`; see [checkpoints](../../docs/tools/checkpoint.md).
 
 **Snapshot-anchored edits.** A local text `read` returns numbered physical lines
 and `[absolute/path#SNAPSHOT]`. Prefer `edit` with that snapshot and an `edits`
@@ -339,7 +343,7 @@ record only a safe error kind plus structured provider status/type when present,
 never the raw provider message.
 
 `write`, `edit`, and `patch` create filesystem checkpoints automatically when
-the tool context includes a session id. The `checkpoint` tool lists checkpoint
+the tool context includes a session id. The `fs_checkpoint` tool lists checkpoint
 history, previews filesystem diffs, restores all or selected paths, and deletes
 old checkpoints through `LemonCore.Checkpoint`. Checkpoint create, restore, and
 delete operations emit redacted introspection and run/session events for audit

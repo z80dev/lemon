@@ -1,10 +1,70 @@
 defmodule CodingAgent.Tools.LspDiagnosticsTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
   alias LemonAgent.Types.AgentToolResult
   alias CodingAgent.Tools.LspDiagnostics
 
   @moduletag :tmp_dir
+
+  test "Go uses vet and timeout kills the checker and its child process", %{tmp_dir: tmp_dir} do
+    previous_path = System.get_env("PATH")
+    bin = Path.join(tmp_dir, "bin")
+    File.mkdir_p!(bin)
+    executable = Path.join(bin, "go")
+    pid_file = Path.join(tmp_dir, "pids")
+    args_file = Path.join(tmp_dir, "args")
+
+    File.write!(executable, """
+    #!/bin/sh
+    printf '%s\\n' "$*" > '#{args_file}'
+    /bin/sleep 60 &
+    printf '%s %s\\n' "$$" "$!" > '#{pid_file}'
+    wait
+    """)
+
+    File.chmod!(executable, 0o755)
+    File.write!(Path.join(tmp_dir, "go.mod"), "module fixture\n")
+    path = Path.join(tmp_dir, "main.go")
+    File.write!(path, "package main\n")
+    System.put_env("PATH", bin <> ":" <> previous_path)
+
+    on_exit(fn ->
+      System.put_env("PATH", previous_path)
+
+      if File.exists?(pid_file) do
+        for pid <- String.split(File.read!(pid_file)) do
+          System.cmd("/bin/kill", ["-KILL", pid], stderr_to_stdout: true)
+        end
+      end
+    end)
+
+    assert {:ok, result} =
+             LspDiagnostics.diagnose_file(path, tmp_dir, diagnostics_timeout_ms: 1_000)
+
+    assert result.command_exit_status == 124
+    assert result.raw_output =~ "diagnostics timed out"
+    assert File.read!(args_file) == "vet ./...\n"
+    pids = String.split(File.read!(pid_file))
+    assert length(pids) == 2
+
+    for pid <- pids do
+      assert_process_gone(pid, 40)
+    end
+  end
+
+  defp assert_process_gone(pid, attempts) do
+    case System.cmd("/bin/kill", ["-0", pid], stderr_to_stdout: true) do
+      {_output, status} when status != 0 ->
+        :ok
+
+      _ when attempts > 0 ->
+        Process.sleep(50)
+        assert_process_gone(pid, attempts - 1)
+
+      _ ->
+        flunk("checker process #{pid} survived timeout")
+    end
+  end
 
   describe "diagnose_file/3" do
     test "reports clean Elixir syntax", %{tmp_dir: tmp_dir} do
@@ -127,7 +187,7 @@ defmodule CodingAgent.Tools.LspDiagnosticsTest do
         assert result.status == :diagnostics
         assert result.language == :go
 
-        assert [%{line: 3, column: 27, severity: "error", source: "go test"} = diagnostic | _] =
+        assert [%{line: 3, column: 27, severity: "error", source: "go vet"} = diagnostic | _] =
                  result.diagnostics
 
         assert diagnostic.message =~ "cannot use"

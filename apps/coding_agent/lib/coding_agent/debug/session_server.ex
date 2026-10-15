@@ -385,6 +385,53 @@ defmodule CodingAgent.Debug.SessionServer do
     end
   end
 
+  defp run_live(%{action: action, arguments: args}, ctx, state)
+       when action in [
+              "data_breakpoint_info",
+              "set_data_breakpoints",
+              "set_instruction_breakpoints",
+              "read_memory",
+              "disassemble"
+            ] do
+    {command, capability} =
+      case action do
+        "data_breakpoint_info" ->
+          {"dataBreakpointInfo", "supportsDataBreakpoints"}
+
+        "set_data_breakpoints" ->
+          {"setDataBreakpoints", "supportsDataBreakpoints"}
+
+        "set_instruction_breakpoints" ->
+          {"setInstructionBreakpoints", "supportsInstructionBreakpoints"}
+
+        "read_memory" ->
+          {"readMemory", "supportsReadMemoryRequest"}
+
+        "disassemble" ->
+          {"disassemble", "supportsDisassembleRequest"}
+      end
+
+    if state.session.capabilities[capability] == true do
+      case bounded_arguments(action, args) do
+        {:ok, args} ->
+          case dap_request(state, command, args, ctx) do
+            {:ok, body, state} ->
+              if byte_size(Jason.encode!(body)) <= @max_output_bytes,
+                do: {{:ok, %{snapshot: snapshot(state), body: body}}, state},
+                else: {{:error, "#{command} response exceeds the 128 KB limit"}, state}
+
+            {status, message, state} ->
+              {{status, message}, state}
+          end
+
+        {:error, message} ->
+          {{:error, message}, state}
+      end
+    else
+      {{:error, "Adapter does not advertise #{capability}; #{action} is unsupported"}, state}
+    end
+  end
+
   defp run_live(%{action: "custom_request", command: command} = req, ctx, state) do
     case dap_request(state, command, req[:arguments], ctx) do
       {:ok, body, state} -> {{:ok, %{snapshot: snapshot(state), body: body}}, state}
@@ -396,6 +443,18 @@ defmodule CodingAgent.Debug.SessionServer do
     {{:error, "Unsupported debug action: #{action}"}, state}
   end
 
+  defp bounded_arguments(action, args) when action in ["read_memory", "disassemble"] do
+    key = if action == "read_memory", do: "count", else: "instructionCount"
+
+    if is_integer(args[key]) and args[key] > 0 do
+      {:ok, Map.put(args, key, min(args[key], @max_output_bytes))}
+    else
+      {:error, "#{action} requires a positive integer #{key} in arguments"}
+    end
+  end
+
+  defp bounded_arguments(_action, args), do: {:ok, args}
+
   # ── Launch / attach ──────────────────────────────────────────────────────
 
   defp start_session(kind, request, ctx, state) do
@@ -406,7 +465,16 @@ defmodule CodingAgent.Debug.SessionServer do
 
       _ ->
         state = add_launch_breakpoints(%{state | session: nil}, request)
-        adapter = request.adapter
+
+        adapter =
+          if request.adapter.name == "rdbg" and kind == :launch do
+            %{
+              request.adapter
+              | args: request.adapter.args ++ ["ruby", request.program] ++ request.args
+            }
+          else
+            request.adapter
+          end
 
         case Client.start_link(adapter: adapter, cwd: request.cwd, owner: self()) do
           {:ok, client} ->
@@ -443,6 +511,7 @@ defmodule CodingAgent.Debug.SessionServer do
       line: line,
       condition: request[:condition],
       hit_condition: request[:hit_condition],
+      log_message: request[:log_message],
       verified: false,
       message: nil,
       id: nil
@@ -595,7 +664,7 @@ defmodule CodingAgent.Debug.SessionServer do
 
   defp send_all_source_breakpoints(state, ctx) do
     Enum.reduce_while(state.breakpoints, {:ok, state}, fn {file, entries}, {:ok, state} ->
-      case dap_request(state, "setBreakpoints", source_breakpoint_args(file, entries), ctx) do
+      case source_breakpoints_request(state, file, entries, ctx) do
         {:ok, body, state} ->
           mapped = map_breakpoints(entries, list(body, "breakpoints"), state.session)
           {:cont, {:ok, %{state | breakpoints: Map.put(state.breakpoints, file, mapped)}}}
@@ -661,7 +730,7 @@ defmodule CodingAgent.Debug.SessionServer do
 
     case live_session(state) do
       {:ok, _session} ->
-        case dap_request(state, "setBreakpoints", source_breakpoint_args(file, entries), ctx) do
+        case source_breakpoints_request(state, file, entries, ctx) do
           {:ok, body, state} ->
             mapped = map_breakpoints(entries, list(body, "breakpoints"), state.session)
             state = store.(state, mapped)
@@ -704,6 +773,15 @@ defmodule CodingAgent.Debug.SessionServer do
     end
   end
 
+  defp source_breakpoints_request(state, file, entries, ctx) do
+    if Enum.any?(entries, & &1[:log_message]) and
+         state.session.capabilities["supportsLogPoints"] != true do
+      {:error, "Adapter does not advertise supportsLogPoints; log_message is unsupported", state}
+    else
+      dap_request(state, "setBreakpoints", source_breakpoint_args(file, entries), ctx)
+    end
+  end
+
   defp source_breakpoint_args(file, entries) do
     %{
       "source" => %{"path" => file, "name" => Path.basename(file)},
@@ -712,6 +790,7 @@ defmodule CodingAgent.Debug.SessionServer do
           %{"line" => entry.line}
           |> put_present("condition", entry.condition)
           |> put_present("hitCondition", entry.hit_condition)
+          |> put_present("logMessage", entry[:log_message])
         end)
     }
   end
