@@ -1001,9 +1001,19 @@ cached for five minutes and an unreachable server contributes no models.
 Discovery caches are scoped to the endpoint, wire API, credential, headers and
 model defaults; one account's listing is not reused for another account or
 endpoint. Cache identifiers hash auth material. Registry-only preset lookup
-uses the current default endpoint and environment credential, while the picker
-uses its effective provider config. Discovery refuses redirects and URLs with
-embedded credentials, queries or fragments; use `headers` for endpoint auth.
+uses the current default endpoint and environment credential. The picker and
+native model selectors (including configured defaults, qualified selectors and
+provider-native colon IDs) instead use the full effective provider settings:
+the same endpoint, headers and first healthy selected-pool/default credential
+as requests. This also applies to dynamic presets with no explicit `models`
+list. Native lookup is cache-only; a scope without discovered metadata uses
+conservative preset context, output and capability defaults rather than another
+endpoint's or principal's cached values. An explicit preset provider retains
+native colon IDs (for example, Ollama's `qwen:7b`) even on a cold cache or after
+credential rotation; a registered provider prefix alone does not change that
+identity. Explicit model structs retain their caller-supplied metadata.
+Discovery refuses redirects and URLs with embedded credentials, queries or
+fragments; use `headers` for endpoint auth.
 
 Any other OpenAI-compatible endpoint can still use the `openai` provider with a
 custom `base_url`. Hosted provider ids with bundled catalogs (`opencode`,
@@ -1065,6 +1075,13 @@ input = ["text"]                   # "text" and/or "image"; default ["text"]
   Wire roots are protocol-specific: OpenAI APIs usually use `/v1`, Anthropic
   uses an origin/prefix to which `/v1/messages` is appended, and Google uses
   a root such as `/v1beta` to which `/models/<id>:streamGenerateContent` is appended.
+  Picker discovery and subsequent model resolution use the same first healthy
+  credential from the selected routing pool as native requests, followed by
+  the configured default credential candidate. An unresolved pool reference
+  does not authorize another pool or a built-in provider's ambient key.
+  Cache listings and model metadata are isolated by the actual resolved
+  credential (hashed, never stored in cache metadata), endpoint, wire API
+  and headers.
 - On a built-in provider (`anthropic`, `openai`, ...), `headers` are sent with
   every request and `[[providers.<id>.models]]` entries add catalog models or
   replace the catalog entry with the same id, inheriting the provider's wire API
