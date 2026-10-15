@@ -10,6 +10,13 @@ defmodule LemonCli.MigrateCommandTest do
     source = Path.join(root, "hermes")
     target = Path.join(root, "lemon")
 
+    original_home = System.get_env("HOME")
+    System.put_env("HOME", root)
+
+    on_exit(fn ->
+      if original_home, do: System.put_env("HOME", original_home), else: System.delete_env("HOME")
+    end)
+
     File.mkdir_p!(source)
     File.write!(Path.join(source, "SOUL.md"), "Hermes persona\n")
     on_exit(fn -> File.rm_rf!(root) end)
@@ -47,6 +54,28 @@ defmodule LemonCli.MigrateCommandTest do
 
     assert output =~ "Migration Preview"
     refute File.exists?(soul)
+  end
+
+  test "dry run displays unsupported Honcho settings and gated API key without leaking it", %{
+    source: source,
+    target: target
+  } do
+    File.cp!(
+      Path.expand("../fixtures/hermes/honcho.json", __DIR__),
+      Path.join(source, "honcho.json")
+    )
+
+    output =
+      capture_io(fn ->
+        assert CLI.run(["migrate", "hermes", "--dry-run", "--source", source, "--target", target]) ==
+                 0
+      end)
+
+    assert output =~ "unsupported: honcho (dialecticDepth)"
+    assert output =~ "unsupported: honcho (writeFrequency)"
+    assert output =~ "gated: honcho_secret"
+    refute output =~ "hk-fixture"
+    refute File.exists?(target)
   end
 
   test "declined confirmation writes nothing", %{source: source, target: target, soul: soul} do

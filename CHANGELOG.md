@@ -8,7 +8,13 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
-No unreleased changes yet.
+### Added
+
+- Hermes migration previews and imports supported Honcho settings from global or
+  profile-local JSON, preserves active-host precedence, and reports unsupported
+  options. API keys use the gated encrypted-secret path, with conflict protection
+  and no plaintext fallback. Honcho reads persistent global `[honcho]` settings
+  and encrypted credential references without adding a platform dependency.
 
 ---
 

@@ -79,6 +79,13 @@ bundled-skill sync; it is not reachable as `./bin/lemon update`.
 The removed Hermes-specific Mix tasks are deleted; use the unified migration
 CLI above.
 
+Hermes migration also previews global/profile-local Honcho settings, maps the
+supported subset into `[honcho]`, and reports unsupported options. API keys are
+gated behind `--preset full --migrate-secrets` and go through encrypted Lemon
+secrets; neither reports nor config contain their values. Existing Honcho settings
+and secrets require `--overwrite` to replace. See the
+[migration guide](../../docs/user-guide/migrate-from-hermes.md#honcho-configuration).
+
 ## Command registry and completion
 
 `LemonCli.CommandRegistry` is the single registry for CLI dispatch, top-level

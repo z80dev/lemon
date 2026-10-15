@@ -131,9 +131,16 @@ how much of a turn it may spend.
 Every variable is declared in `LemonHoncho.Env` and aggregated by `LemonCore.Env`
 through the `:env_registries` list, so `LemonCore.Env.by_area(:honcho)` documents them
 alongside the rest of the platform's configuration. Each also has an application-env twin — `config :lemon_honcho, recall_mode: :context`
-— which `LemonHoncho.Config` consults after the environment and before the default.
+— which `LemonHoncho.Config` consults after the environment. Global
+`config.toml` `[honcho]` settings come next, using the same snake-case names
+(`workspace`, `user_peer`, `recall_mode`, `timeout_ms`, etc.), then defaults.
+Project config is not used for personal-memory identity. `api_key_secret`
+references Lemon's encrypted store; plaintext `api_key` in TOML is ignored.
 A value that is present but unusable (a misspelled enum, a non-numeric integer) is
 treated as absent, because a config read on the way up must never take a node down.
+The [Hermes migration](../../docs/user-guide/migrate-from-hermes.md#honcho-configuration)
+imports supported Honcho settings and gated encrypted credentials without a
+platform-to-satellite dependency.
 
 ## How it plugs into the platform
 
