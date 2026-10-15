@@ -139,6 +139,38 @@ defmodule CodingAgent.Session.RunTranslatorTest do
     assert usage.cost.total == 0.25
   end
 
+  test "cancellation retains observed token breakdown when budget updates precede completion" do
+    first = %{
+      role: :assistant,
+      usage: %{input: 3, output: 2, cache_read: 4, cache_write: 1, total_tokens: 10}
+    }
+
+    aborted = %{
+      role: :assistant,
+      usage: %{input: 0, output: 0, cache_read: 0, cache_write: 0, total_tokens: 0}
+    }
+
+    budget = {:usage_budget_updated, %{run_usage: %{tokens: 10, cost_usd: 0.25}}}
+
+    # Exercise both queued-budget orders without relying on provider scheduling.
+    for events <- [
+          [{:message_end, first}, budget, {:message_end, aborted}],
+          [{:message_end, first}, {:message_end, aborted}, budget]
+        ] do
+      t = Enum.reduce(events, translator(), &RunTranslator.handle_event(&2, &1))
+      RunTranslator.handle_event(t, {:canceled, :user_requested})
+
+      assert_receive {:completed, %{ok: false, usage: usage}}
+      assert usage.input == 3
+      assert usage.output == 2
+      assert usage.cache_read == 4
+      assert usage.cache_write == 1
+      assert usage.total_tokens == 10
+      assert usage.cost.total == 0.25
+      assert length(usage.occurrences) == 2
+    end
+  end
+
   test "cancel intent drains terminal tool actions before one failed completion" do
     result = %AgentToolResult{
       content: [%TextContent{text: "observed partial output"}],

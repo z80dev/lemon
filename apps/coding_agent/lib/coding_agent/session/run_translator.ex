@@ -580,8 +580,14 @@ defmodule CodingAgent.Session.RunTranslator do
     else
       usage =
         case t.budget_usage do
-          nil -> Presentation.build_failure_usage(t.emitter_state, partial_state)
-          _ -> with_budget_usage(%{}, t)
+          nil ->
+            Presentation.build_failure_usage(t.emitter_state, partial_state)
+
+          _ ->
+            t.usage_occurrences
+            |> Enum.reverse()
+            |> Presentation.build_usage()
+            |> with_budget_usage(t)
         end
         |> with_metrics(t)
 
