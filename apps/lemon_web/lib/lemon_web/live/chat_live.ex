@@ -47,6 +47,7 @@ defmodule LemonWeb.ChatLive do
         home: %{prompt: "", cwd: "", profile: "", error: nil},
         intro: nil,
         workspaces: [],
+        workspaces_error: nil,
         profiles: [],
         default_cwd: SessionCwd.default()
       )
@@ -137,17 +138,20 @@ defmodule LemonWeb.ChatLive do
     case Backend.sessions(%{"limit" => 40}) do
       {:ok, sessions, _} ->
         sessions
-        |> Enum.flat_map(fn session ->
+        |> Enum.reduce_while([], fn session, workspaces ->
           case SessionCwd.recorded(session.key) do
-            {:ok, cwd} -> [cwd]
-            :error -> []
+            {:ok, cwd} -> {:cont, [cwd | workspaces]}
+            :error -> {:cont, workspaces}
+            {:error, :unavailable} -> {:halt, {:error, :unavailable}}
           end
         end)
-        |> Enum.uniq()
-        |> Enum.take(12)
+        |> case do
+          {:error, :unavailable} = error -> error
+          workspaces -> {:ok, workspaces |> Enum.reverse() |> Enum.uniq() |> Enum.take(12)}
+        end
 
       _ ->
-        []
+        {:error, :unavailable}
     end
   end
 
@@ -259,19 +263,20 @@ defmodule LemonWeb.ChatLive do
 
   def handle_event("sidebar-fork", %{"key" => key} = params, socket) do
     if known?(socket, key) do
-      cwd = SessionCwd.resolve(key)
+      with cwd when is_binary(cwd) <- SessionCwd.resolve(key),
+           {:ok, child} <- Backend.fork(key, cwd) do
+        SessionCwd.remember(child, cwd)
+        split = if params["split"] == "true", do: child
+        base = if split, do: socket.assigns.session_key || key, else: child
 
-      case Backend.fork(key, cwd) do
-        {:ok, child} ->
-          SessionCwd.remember(child, cwd)
-          split = if params["split"] == "true", do: child
-          base = if split, do: socket.assigns.session_key || key, else: child
-
-          {:noreply,
-           socket
-           |> load_sessions()
-           |> put_flash(:info, "Forked into a new session.")
-           |> push_patch(to: chat_path(base, if(base == child, do: nil, else: split)))}
+        {:noreply,
+         socket
+         |> load_sessions()
+         |> put_flash(:info, "Forked into a new session.")
+         |> push_patch(to: chat_path(base, if(base == child, do: nil, else: split)))}
+      else
+        {:error, :unavailable} ->
+          {:noreply, put_flash(socket, :error, "Session workspace is unavailable.")}
 
         {:error, {:outcome_unknown, _}} ->
           {:noreply,
@@ -410,10 +415,11 @@ defmodule LemonWeb.ChatLive do
   def handle_info(_message, socket), do: {:noreply, socket}
 
   @impl true
-  def handle_async(:workspaces, {:ok, workspaces}, socket),
-    do: {:noreply, assign(socket, :workspaces, workspaces)}
+  def handle_async(:workspaces, {:ok, {:ok, workspaces}}, socket),
+    do: {:noreply, assign(socket, workspaces: workspaces, workspaces_error: nil)}
 
-  def handle_async(:workspaces, _, socket), do: {:noreply, socket}
+  def handle_async(:workspaces, _, socket),
+    do: {:noreply, assign(socket, :workspaces_error, "Recent workspaces are unavailable.")}
 
   def handle_async(:profiles, {:ok, {:ok, profiles}}, socket),
     do: {:noreply, assign(socket, :profiles, profiles)}
@@ -715,6 +721,7 @@ defmodule LemonWeb.ChatLive do
           </div>
         </form>
         <p :if={@home.error} id="home-error" role="alert" class="mt-2 text-xs text-danger">{@home.error}</p>
+        <p :if={@workspaces_error} role="status" class="mt-2 text-xs text-muted">{@workspaces_error}</p>
         <div :if={@workspaces != []} class="mt-2 flex flex-wrap items-center gap-1.5">
           <span class="text-2xs text-subtle">Recent:</span>
           <button

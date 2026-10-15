@@ -13,6 +13,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport.CallbackHandler do
   alias LemonChannels.Adapters.Telegram.ModelPolicyAdapter
   alias LemonChannels.Adapters.Telegram.Transport.PerChatState
   alias LemonChannels.Adapters.Telegram.Transport.SessionRouting
+  alias LemonChannels.Adapters.Telegram.UserPrompt
   alias LemonChannels.SubmissionOutcome
   alias LemonCore.ChatScope
   alias LemonCore.SessionKey
@@ -39,6 +40,9 @@ defmodule LemonChannels.Adapters.Telegram.Transport.CallbackHandler do
     data = if is_binary(cb["data"]), do: cb["data"], else: ""
 
     cond do
+      String.starts_with?(data, "ask:") ->
+        UserPrompt.handle(state, cb)
+
       String.starts_with?(data, @idle_keepalive_continue_callback_prefix) ->
         run_id = String.trim_leading(data, @idle_keepalive_continue_callback_prefix)
 

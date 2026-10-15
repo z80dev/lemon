@@ -97,6 +97,11 @@ describe("saveDefaultModel", () => {
 });
 
 describe("saveTheme and loadConfig", () => {
+	test("reads notifications from the global TUI table", async () => {
+		writeConfig('[tui]\nnotifications = "bell"\n');
+		expect((await loadConfig()).tui?.notifications).toBe("bell");
+	});
+
 	test("round-trip through [tui] theme", async () => {
 		writeConfig(SETUP_WRITTEN);
 		await saveTheme("dark");

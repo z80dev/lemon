@@ -1,8 +1,11 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { AppShell } from "../../src/app.ts";
+import type { NotificationMode } from "../../src/config.ts";
 import { DEFAULT_METHODS, FakeControlPlane } from "../../src/dev/fake-server.ts";
 import { ControlPlaneClient } from "../../src/protocol/client.ts";
 import type { UserPromptRequested } from "../../src/protocol/user-prompt.ts";
+import { detectTerminalCapabilities } from "../../src/terminal/capabilities.ts";
+import { TerminalIntegration } from "../../src/terminal/integration.ts";
 import { initTheme, resetTheme } from "../../src/ui/theme/theme.ts";
 import { invalidateThemeAdapters } from "../../src/ui/theme/tui-adapters.ts";
 import { MemoryTerminal, renderPlain } from "../helpers/memory-terminal.ts";
@@ -17,7 +20,7 @@ afterEach(() => {
 	invalidateThemeAdapters();
 });
 
-async function boot() {
+async function boot(notifications?: NotificationMode) {
 	const server = await FakeControlPlane.start({
 		methods: [...DEFAULT_METHODS, "sessions.prompt.bind", "sessions.prompt.resolve"],
 	});
@@ -48,6 +51,17 @@ async function boot() {
 	});
 	teardown.push(() => app.stop());
 	await app.start();
+	if (notifications) {
+		const integration = new TerminalIntegration(
+			terminal,
+			app.store,
+			client,
+			"/repo",
+			detectTerminalCapabilities({ TERM_PROGRAM: "iTerm.app" }, true, notifications),
+		);
+		integration.start();
+		teardown.push(() => integration.stop());
+	}
 	return { app, server, terminal };
 }
 
@@ -67,6 +81,38 @@ function request(overrides: Partial<UserPromptRequested> = {}): UserPromptReques
 		...overrides,
 	};
 }
+
+test.each(["auto", "off", "bell"] as const)(
+	"opening a question uses %s notification mode without leaking question text",
+	async (mode) => {
+		const { app, server, terminal } = await boot(mode);
+		terminal.writes.length = 0;
+		const event = request({
+			questions: [{ id: "q", question: "PRIVATE QUESTION \x1b]9;injected\x07", options: [] }],
+		});
+		server.pushEvent("session.prompt.requested", event);
+		await waitFor(() => app.userPrompts.panel.visible);
+		const signals = () =>
+			terminal.writes.filter(
+				(write) =>
+					write === "\x07" ||
+					write.startsWith("\x1b]9;Lemon:") ||
+					write.startsWith("\x1b]777;notify;"),
+			);
+		expect(signals()).toEqual(
+			mode === "off"
+				? []
+				: mode === "bell"
+					? ["\x07"]
+					: ["\x1b]9;Lemon: Question waiting — Return to Lemon to answer\x07"],
+		);
+		// Replayed events and session switches must not notify twice.
+		app.client.events.emit("session.prompt.requested", event);
+		app.store.setFocused("other");
+		app.store.setFocused(SESSION);
+		expect(signals()).toHaveLength(mode === "off" ? 0 : 1);
+	},
+);
 
 test("binds the live TUI surface before submitting a chat", async () => {
 	const { app, server } = await boot();

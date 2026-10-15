@@ -29,7 +29,21 @@ defmodule LemonCore.StoreTest do
     def delete(_state, _table, _key), do: {:error, :sqlite_busy}
 
     @impl true
+    def list(%{list_response: response}, _table), do: response
     def list(_state, _table), do: {:error, :sqlite_busy}
+  end
+
+  defmodule RecentFailureBackend do
+    @behaviour LemonCore.Store.Backend
+
+    defdelegate init(opts), to: BusyBackend
+    defdelegate put(state, table, key, value), to: BusyBackend
+    defdelegate put_new(state, table, key, value), to: BusyBackend
+    defdelegate get(state, table, key), to: BusyBackend
+    defdelegate delete(state, table, key), to: BusyBackend
+    defdelegate list(state, table), to: BusyBackend
+
+    def list_recent(%{list_response: response}, :introspection_log, _limit), do: response
   end
 
   defmodule SecondDeleteFailureBackend do
@@ -257,6 +271,52 @@ defmodule LemonCore.StoreTest do
   end
 
   describe "introspection event storage contract" do
+    test "the introspection CLI refuses an unavailable history" do
+      original_state = swap_store_backend(BusyBackend, %{})
+
+      try do
+        assert_raise Mix.Error, "Introspection events are unavailable", fn ->
+          Mix.Tasks.Lemon.Introspection.run([])
+        end
+      after
+        :sys.replace_state(Store, fn _ -> original_state end)
+      end
+    end
+
+    test "listing and counting preserve backend errors through both query paths" do
+      original_state = :sys.get_state(Store)
+      on_exit(fn -> :sys.replace_state(Store, fn _ -> original_state end) end)
+
+      for backend <- [BusyBackend, RecentFailureBackend],
+          opts <- [[], [run_id: "introspection-backend-failure"]] do
+        swap_store_backend(backend, %{list_response: {:error, :sqlite_busy}})
+
+        assert Store.list_introspection_events(opts) == {:error, :sqlite_busy}
+        assert LemonCore.Introspection.list(opts) == {:error, :sqlite_busy}
+        assert LemonCore.IntrospectionStore.count(opts) == {:error, :sqlite_busy}
+      end
+    end
+
+    test "unexpected backend responses are errors, not an empty event history" do
+      original_state = :sys.get_state(Store)
+      on_exit(fn -> :sys.replace_state(Store, fn _ -> original_state end) end)
+
+      for backend <- [BusyBackend, RecentFailureBackend],
+          opts <- [[], [event_type: :run_completed]] do
+        swap_store_backend(backend, %{list_response: :unexpected})
+
+        assert Store.list_introspection_events(opts) ==
+                 {:error, {:unexpected_backend_response, :unexpected}}
+      end
+    end
+
+    test "failed Store calls do not look like an empty event history" do
+      assert Store.list_introspection_events(:missing_introspection_store, []) ==
+               {:error, :store_unavailable}
+
+      assert Store.list_introspection_events(self(), []) == {:error, :store_unavailable}
+    end
+
     test "append/list stores canonical events newest-first with filters and limit" do
       token = unique_token()
       run_id = run_id(token, :introspection)

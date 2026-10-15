@@ -942,7 +942,11 @@ defmodule LemonAi.Providers.OpenAICompletions do
             error_body = materialize_response_body(response)
 
             retry_delay =
-              if RetryHelper.retry_allowed?(attempt, policy) and
+              if not RetryHelper.rotate_rate_limit?(
+                   policy,
+                   {:http_error, response.status, error_body}
+                 ) and
+                   RetryHelper.retry_allowed?(attempt, policy) and
                    RetryHelper.retryable_http_error?(response.status, error_body) do
                 http_retry_delay_ms(attempt, policy, error_body, response.headers)
               else
@@ -1162,10 +1166,14 @@ defmodule LemonAi.Providers.OpenAICompletions do
   defp http_retry_delay_ms(attempt, policy, error_body, headers) do
     error_text = extract_error_message(error_body)
 
-    case RetryHelper.extract_retry_delay_ms(error_text, headers) do
-      nil -> RetryHelper.backoff_delay_ms(attempt, policy)
-      ms when ms > policy.max_retry_after_ms -> :give_up
-      ms -> ms
+    if RetryHelper.rotate_rate_limit?(policy, error_text) do
+      :give_up
+    else
+      case RetryHelper.extract_retry_delay_ms(error_text, headers) do
+        nil -> RetryHelper.backoff_delay_ms(attempt, policy)
+        ms when ms > policy.max_retry_after_ms -> :give_up
+        ms -> ms
+      end
     end
   end
 

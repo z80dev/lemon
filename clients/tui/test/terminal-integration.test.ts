@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import { TERMINAL } from "@oh-my-pi/pi-tui/terminal-capabilities";
 import { visibleWidth } from "@oh-my-pi/pi-tui/utils";
+import { resolveNotifications } from "../src/config.ts";
 import { FakeControlPlane } from "../src/dev/fake-server.ts";
 import { ControlPlaneClient } from "../src/protocol/client.ts";
 import { AppStore } from "../src/store/app-store.ts";
@@ -27,6 +28,66 @@ test("Tern detection respects non-TTY, dumb, hyperlink and notification opt-outs
 	expect(
 		detectTerminalCapabilities({ ...env, LEMON_TUI_NOTIFICATIONS: "0" }, true).notifications,
 	).toBe(false);
+});
+
+test("notification config is overridden by env, and auto rings only for unknown terminals", () => {
+	expect(resolveNotifications("bell", {})).toBe("bell");
+	expect(resolveNotifications("bell", { LEMON_TUI_NOTIFICATIONS: "off" })).toBe("off");
+	expect(resolveNotifications("bell", { LEMON_TUI_NOTIFICATIONS: "0" })).toBe("off");
+	expect(resolveNotifications("off", { LEMON_TUI_NOTIFICATIONS: "1" })).toBe("auto");
+	expect(resolveNotifications("off", { LEMON_TUI_NOTIFICATIONS: "osc" })).toBe("osc");
+	expect(resolveNotifications("off", { LEMON_TUI_NOTIFICATIONS: "bell" })).toBe("bell");
+	expect(detectTerminalCapabilities({ TERM_PROGRAM: "Apple_Terminal" }, true).notifications).toBe(
+		"bell",
+	);
+	expect(detectTerminalCapabilities({}, true, "osc").notifications).toBe("osc777");
+	expect(detectTerminalCapabilities({}, true, "off").notifications).toBe(false);
+	expect(detectTerminalCapabilities({}, false, "bell").notifications).toBe(false);
+});
+
+test.each(["bell", "off"] as const)("approvals and run completion share %s mode", (mode) => {
+	const terminal = new MemoryTerminal();
+	const store = new AppStore("attention");
+	store.setConnection("online");
+	const client = new ControlPlaneClient({ url: "ws://127.0.0.1:1/ws" });
+	const integration = new TerminalIntegration(
+		terminal,
+		store,
+		client,
+		"/repo",
+		detectTerminalCapabilities({}, true, mode),
+	);
+	try {
+		integration.start();
+		terminal.writes.length = 0;
+		store.addApproval({
+			approvalId: "approval",
+			runId: "run",
+			sessionKey: "attention",
+			agentId: null,
+			rationale: null,
+			requestedAtMs: Date.now(),
+			tool: "bash",
+			action: { command: "PRIVATE" },
+			expiresAtMs: Date.now() + 60000,
+		});
+		client.events.emit("agent", { type: "started", runId: "run", sessionKey: "attention" });
+		client.events.emit("agent", {
+			type: "completed",
+			runId: "run",
+			sessionKey: "attention",
+			ok: true,
+			answer: "",
+			durationMs: 1,
+		});
+		expect(terminal.writes.filter((write) => write === "\x07")).toHaveLength(
+			mode === "bell" ? 2 : 0,
+		);
+		expect(terminal.writes.join("")).not.toContain("PRIVATE");
+	} finally {
+		integration.stop();
+		client.close();
+	}
 });
 
 test("transcript marks preserve width, cached rows, and completion marks", () => {

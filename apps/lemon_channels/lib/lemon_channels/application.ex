@@ -30,6 +30,7 @@ defmodule LemonChannels.Application do
       LemonChannels.Outbox,
       # Durable supervision notices use Outbox admission and delivery receipts
       LemonChannels.Supervision,
+      LemonChannels.UserPromptSurface,
       # Adapter supervisor for channel adapters
       {DynamicSupervisor, strategy: :one_for_one, name: LemonChannels.AdapterSupervisor},
       # Optional inbound HTTP listener; binds a port only when configured

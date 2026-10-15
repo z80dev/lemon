@@ -235,6 +235,15 @@ defmodule LemonChannels.Telegram.FakeAPI do
     end)
   end
 
+  @doc "setMyCommands: records the default-scope public command menu."
+  def set_my_commands(_token, commands) do
+    record(:set_my_commands, [commands])
+
+    stubbed(:set_my_commands, [commands], fn ->
+      {:ok, %{"ok" => true, "result" => true}}
+    end)
+  end
+
   @doc "sendChatAction: always succeeds (Bot API parity; no transport call site today)."
   def send_chat_action(_token, chat_id, action) do
     record(:send_chat_action, [chat_id, action])
@@ -271,6 +280,14 @@ defmodule LemonChannels.Telegram.FakeAPI do
     stubbed(:download_file, [file_path], fn ->
       {:ok, call({:download_file, file_path})}
     end)
+  end
+
+  def download_file(token, file_path, max_bytes) do
+    case download_file(token, file_path) do
+      {:ok, bytes} when byte_size(bytes) <= max_bytes -> {:ok, bytes}
+      {:ok, _} -> {:error, :too_large}
+      other -> other
+    end
   end
 
   @doc "sendDocument: captures the call and returns a message with a `document` payload."

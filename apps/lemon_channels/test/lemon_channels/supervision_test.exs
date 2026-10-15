@@ -283,7 +283,7 @@ defmodule LemonChannels.SupervisionTest do
       worker(
         enqueue: fn payload ->
           send(parent, {:enqueue, payload})
-          {:error, :enqueue_timeout}
+          {:error, {:outcome_unknown, :enqueue_timeout}}
         end
       )
 

@@ -53,6 +53,7 @@ const COMMAND_KEYS: Record<string, LemonKeybinding> = {
 	tasktree: "lemon.tasks.toggle",
 	omp: "lemon.omp.toggle",
 	diff: "lemon.tools.diff",
+	copy: "lemon.clipboard.copyLast",
 	editor: "lemon.editor.external",
 };
 

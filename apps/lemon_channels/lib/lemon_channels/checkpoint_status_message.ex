@@ -111,7 +111,10 @@ defmodule LemonChannels.CheckpointStatusMessage do
       [] ->
         "Checkpoint Events\nnone"
 
-      events ->
+      {:error, _} ->
+        "Checkpoint Events\nunavailable"
+
+      events when is_list(events) ->
         [
           "Checkpoint Events",
           "Limit: #{limit}",
@@ -183,14 +186,18 @@ defmodule LemonChannels.CheckpointStatusMessage do
   defp path_count(_checkpoint), do: nil
 
   defp event_counts_line(opts) do
-    events = checkpoint_events(opts, 100)
+    case checkpoint_events(opts, 100) do
+      {:error, _} ->
+        "unavailable"
 
-    [
-      "created #{count_events(events, :checkpoint_created)}",
-      "restored #{count_events(events, :checkpoint_restored)}",
-      "deleted #{count_events(events, :checkpoint_deleted)}"
-    ]
-    |> Enum.join(", ")
+      events when is_list(events) ->
+        [
+          "created #{count_events(events, :checkpoint_created)}",
+          "restored #{count_events(events, :checkpoint_restored)}",
+          "deleted #{count_events(events, :checkpoint_deleted)}"
+        ]
+        |> Enum.join(", ")
+    end
   end
 
   defp recent_events_line(opts) do
@@ -198,7 +205,10 @@ defmodule LemonChannels.CheckpointStatusMessage do
       [] ->
         "none"
 
-      events ->
+      {:error, _} ->
+        "unavailable"
+
+      events when is_list(events) ->
         events
         |> Enum.map(&event_summary/1)
         |> Enum.join(", ")
@@ -209,16 +219,26 @@ defmodule LemonChannels.CheckpointStatusMessage do
     filters = checkpoint_event_filters(opts)
 
     @checkpoint_events
-    |> Enum.flat_map(fn event_type ->
-      filters
-      |> Keyword.put(:event_type, event_type)
-      |> Keyword.put(:limit, limit)
-      |> Introspection.list()
+    |> Enum.reduce_while([], fn event_type, events ->
+      case filters
+           |> Keyword.put(:event_type, event_type)
+           |> Keyword.put(:limit, limit)
+           |> Introspection.list() do
+        matching when is_list(matching) -> {:cont, matching ++ events}
+        {:error, _} -> {:halt, {:error, :introspection_unavailable}}
+      end
     end)
-    |> Enum.sort_by(&event_ts/1, :desc)
-    |> Enum.take(limit)
+    |> case do
+      events when is_list(events) ->
+        events |> Enum.sort_by(&event_ts/1, :desc) |> Enum.take(limit)
+
+      {:error, _} = error ->
+        error
+    end
   rescue
-    _ -> []
+    _ -> {:error, :introspection_unavailable}
+  catch
+    :exit, _ -> {:error, :introspection_unavailable}
   end
 
   defp checkpoint_event_filters(opts) do

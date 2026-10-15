@@ -8,6 +8,7 @@ defmodule CodingAgent.Session.Lifecycle do
 
   alias CodingAgent.Session.{
     BackgroundTasks,
+    BudgetLedger,
     CompactionLifecycle,
     CompactionManager,
     ModelResolver,
@@ -80,7 +81,20 @@ defmodule CodingAgent.Session.Lifecycle do
 
     settings_manager = Keyword.get(opts, :settings_manager) || SettingsManager.load(cwd)
     budget_limits = Keyword.get(opts, :budget_limits, settings_manager.budgets)
-    {session_manager, budget_usage} = CodingAgent.Session.BudgetLedger.initialize(session_manager)
+    {session_manager, budget_usage} = BudgetLedger.initialize(session_manager)
+
+    {:ok, budget_scope} =
+      LemonAgent.BudgetScope.start_link(
+        limits: budget_limits,
+        usage: budget_usage,
+        child_usage: BudgetLedger.restore_children(session_manager),
+        parent: Keyword.get(opts, :parent_budget_scope),
+        id: Keyword.get(opts, :run_id) || session_manager.header.id,
+        owner: session_pid
+      )
+
+    budget_limits = Map.put(budget_limits || %{}, :scope, budget_scope)
+    opts = Keyword.put(opts, :budget_scope, budget_scope)
 
     run_id = Keyword.get(opts, :run_id)
     session_key = Keyword.get(opts, :session_key, session_manager.header.id)
@@ -503,6 +517,7 @@ defmodule CodingAgent.Session.Lifecycle do
         parent_session: state.session_manager.header.id,
         session_id: state.session_manager.header.id,
         session_pid: self(),
+        budget_scope: Map.get(state.budget_limits, :scope),
         run_id: state.run_id,
         session_key: state.session_key,
         agent_id: state.agent_id,
@@ -584,7 +599,7 @@ defmodule CodingAgent.Session.Lifecycle do
         # Reset may discard queued events after abort. Capture already reported
         # spend from the agent first, and persist it in both old and new files.
         usage = LemonAgent.Agent.get_state(state.agent).budget_usage
-        state = CodingAgent.Session.BudgetLedger.update(state, %{session_usage: usage})
+        state = BudgetLedger.update(state, %{session_usage: usage})
 
         state =
           if was_streaming do
@@ -613,7 +628,8 @@ defmodule CodingAgent.Session.Lifecycle do
           |> SessionManager.append_entry(
             SessionManager.SessionEntry.thinking_level_change(state.thinking_level)
           )
-          |> CodingAgent.Session.BudgetLedger.append(state.budget_usage)
+          |> BudgetLedger.append(state.budget_usage)
+          |> BudgetLedger.append_children(BudgetLedger.restore_children(state.session_manager))
 
         new_path = SessionManager.session_file_path(state.cwd, new_session_manager.header.id)
 

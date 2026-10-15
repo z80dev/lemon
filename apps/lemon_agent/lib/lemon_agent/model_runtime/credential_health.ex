@@ -28,6 +28,8 @@ defmodule LemonAgent.ModelRuntime.CredentialHealth do
   # Backoff windows per failure category (base * 2^(failures - 1), capped).
   @rate_limit_base_ms 15_000
   @rate_limit_max_ms 300_000
+  @quota_base_ms 900_000
+  @quota_max_ms 3_600_000
   @auth_base_ms 300_000
   @auth_max_ms 3_600_000
   @short_base_ms 2_000
@@ -45,6 +47,8 @@ defmodule LemonAgent.ModelRuntime.CredentialHealth do
 
     * `:retry_after_ms` - provider-supplied retry-after; used verbatim for
       `:rate_limit` failures instead of the computed backoff.
+    * `:quota_exhausted` - use a 15-minute to one-hour backoff for exhausted
+      quota/credits, never shorter than the provider's retry-after hint.
   """
   @spec record_failure(atom() | String.t(), String.t(), atom(), keyword()) :: :ok
   def record_failure(provider, ref, category, opts \\ []) do
@@ -124,11 +128,11 @@ defmodule LemonAgent.ModelRuntime.CredentialHealth do
   end
 
   defp cooldown_ms(:rate_limit, failures, opts) do
-    case Keyword.get(opts, :retry_after_ms) do
-      retry_after_ms when is_integer(retry_after_ms) and retry_after_ms >= 0 ->
-        retry_after_ms
-
-      _ ->
+    if Keyword.get(opts, :quota_exhausted, false) do
+      backoff = LemonCore.Retry.capped_backoff(@quota_base_ms, failures - 1, @quota_max_ms)
+      max(backoff, valid_retry_after(opts) || 0)
+    else
+      valid_retry_after(opts) ||
         LemonCore.Retry.capped_backoff(@rate_limit_base_ms, failures - 1, @rate_limit_max_ms)
     end
   end
@@ -139,6 +143,13 @@ defmodule LemonAgent.ModelRuntime.CredentialHealth do
 
   defp cooldown_ms(_category, failures, _opts) do
     LemonCore.Retry.capped_backoff(@short_base_ms, failures - 1, @short_max_ms)
+  end
+
+  defp valid_retry_after(opts) do
+    case Keyword.get(opts, :retry_after_ms) do
+      ms when is_integer(ms) and ms >= 0 -> ms
+      _ -> nil
+    end
   end
 
   defp lookup(key) do

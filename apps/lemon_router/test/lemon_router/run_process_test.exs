@@ -9,10 +9,10 @@ defmodule LemonRouter.RunProcessTest do
   """
   use ExUnit.Case, async: false
 
-  alias LemonChannels.Telegram.{ResumeIndexStore, StateStore}
-  alias LemonCore.{ChatStateStore, RunRequest, SessionKey}
-  alias LemonCore.ResumeToken
   alias Elixir.LemonRouter.RunProcess
+  alias LemonChannels.Outbox.{Dedupe, RateLimiter}
+  alias LemonChannels.Telegram.{ResumeIndexStore, StateStore}
+  alias LemonCore.{ChatStateStore, ResumeToken, RunRequest, SessionKey}
   alias LemonRouter.PendingCompactionStore
 
   defmodule RunProcessTestOutboxAPI do
@@ -424,6 +424,29 @@ defmodule LemonRouter.RunProcessTest do
     end
   end
 
+  defp flush_answer_delta(run_pid, session_key, run_id, seq) do
+    # The local broadcast precedes this call from the same sender. Wait for
+    # RunProcess to finish admission before becoming another ingress producer.
+    assert %{run_id: ^run_id, saw_delta: true} = :sys.get_state(run_pid)
+
+    # Coalescers outlive runs, so a sequence number alone can match a previous
+    # run and let the flush race the current run's delta.
+    assert eventually(fn ->
+             case Registry.lookup(LemonRouter.CoalescerRegistry, {session_key, "telegram"}) do
+               [{coalescer_pid, _}] ->
+                 match?(
+                   %{run_id: ^run_id, last_seq: ^seq, overflowed: false},
+                   :sys.get_state(coalescer_pid)
+                 )
+
+               _ ->
+                 false
+             end
+           end)
+
+    LemonRouter.StreamCoalescer.flush(session_key, "telegram")
+  end
+
   describe "abort/2" do
     test "abort by non-existent run_id returns :ok" do
       # Abort on non-existent run should be safe
@@ -749,12 +772,12 @@ defmodule LemonRouter.RunProcessTest do
       start_if_needed(LemonChannels.Registry, fn -> LemonChannels.Registry.start_link([]) end)
       start_if_needed(LemonChannels.Outbox, fn -> LemonChannels.Outbox.start_link([]) end)
 
-      start_if_needed(LemonChannels.Outbox.RateLimiter, fn ->
-        LemonChannels.Outbox.RateLimiter.start_link([])
+      start_if_needed(RateLimiter, fn ->
+        RateLimiter.start_link([])
       end)
 
-      start_if_needed(LemonChannels.Outbox.Dedupe, fn ->
-        LemonChannels.Outbox.Dedupe.start_link([])
+      start_if_needed(Dedupe, fn ->
+        Dedupe.start_link([])
       end)
 
       start_if_needed(LemonChannels.PresentationState, fn ->
@@ -1441,12 +1464,12 @@ defmodule LemonRouter.RunProcessTest do
       start_if_needed(LemonChannels.Registry, fn -> LemonChannels.Registry.start_link([]) end)
       start_if_needed(LemonChannels.Outbox, fn -> LemonChannels.Outbox.start_link([]) end)
 
-      start_if_needed(LemonChannels.Outbox.RateLimiter, fn ->
-        LemonChannels.Outbox.RateLimiter.start_link([])
+      start_if_needed(RateLimiter, fn ->
+        RateLimiter.start_link([])
       end)
 
-      start_if_needed(LemonChannels.Outbox.Dedupe, fn ->
-        LemonChannels.Outbox.Dedupe.start_link([])
+      start_if_needed(Dedupe, fn ->
+        Dedupe.start_link([])
       end)
 
       start_if_needed(LemonChannels.PresentationState, fn ->
@@ -1509,14 +1532,7 @@ defmodule LemonRouter.RunProcessTest do
 
       :ok = LemonCore.Bus.broadcast(LemonCore.Bus.run_topic(run_id), delta_event_1)
 
-      assert eventually(fn ->
-               case Registry.lookup(LemonRouter.CoalescerRegistry, {session_key, "telegram"}) do
-                 [{coalescer_pid, _}] -> :sys.get_state(coalescer_pid).last_seq == 1
-                 _ -> false
-               end
-             end)
-
-      LemonRouter.StreamCoalescer.flush(session_key, "telegram")
+      flush_answer_delta(pid, session_key, run_id, 1)
 
       assert_receive {:delivered,
                       %LemonChannels.OutboundPayload{
@@ -1578,14 +1594,7 @@ defmodule LemonRouter.RunProcessTest do
 
       :ok = LemonCore.Bus.broadcast(LemonCore.Bus.run_topic(run_id), delta_event_2)
 
-      assert eventually(fn ->
-               case Registry.lookup(LemonRouter.CoalescerRegistry, {session_key, "telegram"}) do
-                 [{coalescer_pid, _}] -> :sys.get_state(coalescer_pid).last_seq == 2
-                 _ -> false
-               end
-             end)
-
-      LemonRouter.StreamCoalescer.flush(session_key, "telegram")
+      flush_answer_delta(pid, session_key, run_id, 2)
 
       assert_receive {:delivered,
                       %LemonChannels.OutboundPayload{
@@ -1645,12 +1654,12 @@ defmodule LemonRouter.RunProcessTest do
       start_if_needed(LemonChannels.Registry, fn -> LemonChannels.Registry.start_link([]) end)
       start_if_needed(LemonChannels.Outbox, fn -> LemonChannels.Outbox.start_link([]) end)
 
-      start_if_needed(LemonChannels.Outbox.RateLimiter, fn ->
-        LemonChannels.Outbox.RateLimiter.start_link([])
+      start_if_needed(RateLimiter, fn ->
+        RateLimiter.start_link([])
       end)
 
-      start_if_needed(LemonChannels.Outbox.Dedupe, fn ->
-        LemonChannels.Outbox.Dedupe.start_link([])
+      start_if_needed(Dedupe, fn ->
+        Dedupe.start_link([])
       end)
 
       start_if_needed(LemonChannels.PresentationState, fn ->
@@ -1687,6 +1696,31 @@ defmodule LemonRouter.RunProcessTest do
           peer_id: "12345"
         })
 
+      # Reproduce a preceding test/run leaving the same sequence number on this
+      # session's long-lived coalescer. It must not satisfy this run's barrier.
+      previous_run_id = "#{run_id}:previous"
+      previous_answer = "Previous run answer"
+
+      :ok =
+        LemonRouter.StreamCoalescer.ingest_delta(
+          session_key,
+          "telegram",
+          previous_run_id,
+          1,
+          previous_answer
+        )
+
+      [{coalescer_pid, _}] =
+        Registry.lookup(LemonRouter.CoalescerRegistry, {session_key, "telegram"})
+
+      assert %{run_id: ^previous_run_id, last_seq: 1} = :sys.get_state(coalescer_pid)
+
+      :ok =
+        LemonRouter.StreamCoalescer.finalize_run(session_key, "telegram", previous_run_id,
+          final_text: previous_answer,
+          dispatch?: false
+        )
+
       job =
         make_test_request(run_id, %{
           progress_msg_id: 111,
@@ -1713,14 +1747,7 @@ defmodule LemonRouter.RunProcessTest do
           })
         )
 
-      assert eventually(fn ->
-               case Registry.lookup(LemonRouter.CoalescerRegistry, {session_key, "telegram"}) do
-                 [{coalescer_pid, _}] -> :sys.get_state(coalescer_pid).last_seq == 1
-                 _ -> false
-               end
-             end)
-
-      LemonRouter.StreamCoalescer.flush(session_key, "telegram")
+      flush_answer_delta(pid, session_key, run_id, 1)
 
       assert_receive {:delivered,
                       %LemonChannels.OutboundPayload{
@@ -1791,14 +1818,7 @@ defmodule LemonRouter.RunProcessTest do
           })
         )
 
-      assert eventually(fn ->
-               case Registry.lookup(LemonRouter.CoalescerRegistry, {session_key, "telegram"}) do
-                 [{coalescer_pid, _}] -> :sys.get_state(coalescer_pid).last_seq == 2
-                 _ -> false
-               end
-             end)
-
-      LemonRouter.StreamCoalescer.flush(session_key, "telegram")
+      flush_answer_delta(pid, session_key, run_id, 2)
 
       assert_receive {:delivered,
                       %LemonChannels.OutboundPayload{
@@ -1890,12 +1910,12 @@ defmodule LemonRouter.RunProcessTest do
       start_if_needed(LemonChannels.Registry, fn -> LemonChannels.Registry.start_link([]) end)
       start_if_needed(LemonChannels.Outbox, fn -> LemonChannels.Outbox.start_link([]) end)
 
-      start_if_needed(LemonChannels.Outbox.RateLimiter, fn ->
-        LemonChannels.Outbox.RateLimiter.start_link([])
+      start_if_needed(RateLimiter, fn ->
+        RateLimiter.start_link([])
       end)
 
-      start_if_needed(LemonChannels.Outbox.Dedupe, fn ->
-        LemonChannels.Outbox.Dedupe.start_link([])
+      start_if_needed(Dedupe, fn ->
+        Dedupe.start_link([])
       end)
 
       start_if_needed(LemonChannels.PresentationState, fn ->
@@ -1994,12 +2014,12 @@ defmodule LemonRouter.RunProcessTest do
       start_if_needed(LemonChannels.Registry, fn -> LemonChannels.Registry.start_link([]) end)
       start_if_needed(LemonChannels.Outbox, fn -> LemonChannels.Outbox.start_link([]) end)
 
-      start_if_needed(LemonChannels.Outbox.RateLimiter, fn ->
-        LemonChannels.Outbox.RateLimiter.start_link([])
+      start_if_needed(RateLimiter, fn ->
+        RateLimiter.start_link([])
       end)
 
-      start_if_needed(LemonChannels.Outbox.Dedupe, fn ->
-        LemonChannels.Outbox.Dedupe.start_link([])
+      start_if_needed(Dedupe, fn ->
+        Dedupe.start_link([])
       end)
 
       :persistent_term.put({__MODULE__.RunProcessTestTelegramPlugin, :notify_pid}, self())
@@ -2096,12 +2116,12 @@ defmodule LemonRouter.RunProcessTest do
       start_if_needed(LemonChannels.Registry, fn -> LemonChannels.Registry.start_link([]) end)
       start_if_needed(LemonChannels.Outbox, fn -> LemonChannels.Outbox.start_link([]) end)
 
-      start_if_needed(LemonChannels.Outbox.RateLimiter, fn ->
-        LemonChannels.Outbox.RateLimiter.start_link([])
+      start_if_needed(RateLimiter, fn ->
+        RateLimiter.start_link([])
       end)
 
-      start_if_needed(LemonChannels.Outbox.Dedupe, fn ->
-        LemonChannels.Outbox.Dedupe.start_link([])
+      start_if_needed(Dedupe, fn ->
+        Dedupe.start_link([])
       end)
 
       start_if_needed(LemonChannels.PresentationState, fn ->
@@ -2195,12 +2215,12 @@ defmodule LemonRouter.RunProcessTest do
       start_if_needed(LemonChannels.Registry, fn -> LemonChannels.Registry.start_link([]) end)
       start_if_needed(LemonChannels.Outbox, fn -> LemonChannels.Outbox.start_link([]) end)
 
-      start_if_needed(LemonChannels.Outbox.RateLimiter, fn ->
-        LemonChannels.Outbox.RateLimiter.start_link([])
+      start_if_needed(RateLimiter, fn ->
+        RateLimiter.start_link([])
       end)
 
-      start_if_needed(LemonChannels.Outbox.Dedupe, fn ->
-        LemonChannels.Outbox.Dedupe.start_link([])
+      start_if_needed(Dedupe, fn ->
+        Dedupe.start_link([])
       end)
 
       start_if_needed(LemonChannels.PresentationState, fn ->
@@ -2293,12 +2313,12 @@ defmodule LemonRouter.RunProcessTest do
       start_if_needed(LemonChannels.Registry, fn -> LemonChannels.Registry.start_link([]) end)
       start_if_needed(LemonChannels.Outbox, fn -> LemonChannels.Outbox.start_link([]) end)
 
-      start_if_needed(LemonChannels.Outbox.RateLimiter, fn ->
-        LemonChannels.Outbox.RateLimiter.start_link([])
+      start_if_needed(RateLimiter, fn ->
+        RateLimiter.start_link([])
       end)
 
-      start_if_needed(LemonChannels.Outbox.Dedupe, fn ->
-        LemonChannels.Outbox.Dedupe.start_link([])
+      start_if_needed(Dedupe, fn ->
+        Dedupe.start_link([])
       end)
 
       :persistent_term.put({__MODULE__.RunProcessTestTelegramPlugin, :notify_pid}, self())
@@ -3115,12 +3135,12 @@ defmodule LemonRouter.RunProcessTest do
       start_if_needed(LemonChannels.Registry, fn -> LemonChannels.Registry.start_link([]) end)
       start_if_needed(LemonChannels.Outbox, fn -> LemonChannels.Outbox.start_link([]) end)
 
-      start_if_needed(LemonChannels.Outbox.RateLimiter, fn ->
-        LemonChannels.Outbox.RateLimiter.start_link([])
+      start_if_needed(RateLimiter, fn ->
+        RateLimiter.start_link([])
       end)
 
-      start_if_needed(LemonChannels.Outbox.Dedupe, fn ->
-        LemonChannels.Outbox.Dedupe.start_link([])
+      start_if_needed(Dedupe, fn ->
+        Dedupe.start_link([])
       end)
 
       start_if_needed(LemonChannels.PresentationState, fn ->
@@ -3255,12 +3275,12 @@ defmodule LemonRouter.RunProcessTest do
       start_if_needed(LemonChannels.Registry, fn -> LemonChannels.Registry.start_link([]) end)
       start_if_needed(LemonChannels.Outbox, fn -> LemonChannels.Outbox.start_link([]) end)
 
-      start_if_needed(LemonChannels.Outbox.RateLimiter, fn ->
-        LemonChannels.Outbox.RateLimiter.start_link([])
+      start_if_needed(RateLimiter, fn ->
+        RateLimiter.start_link([])
       end)
 
-      start_if_needed(LemonChannels.Outbox.Dedupe, fn ->
-        LemonChannels.Outbox.Dedupe.start_link([])
+      start_if_needed(Dedupe, fn ->
+        Dedupe.start_link([])
       end)
 
       start_if_needed(LemonChannels.PresentationState, fn ->

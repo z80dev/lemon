@@ -458,8 +458,14 @@ defmodule LemonEvals.Support do
       )
 
     case events do
-      [] -> :ok
-      _ -> {:error, "expected no missed_skill_observed events, got #{inspect(events)}"}
+      [] ->
+        :ok
+
+      {:error, _} ->
+        {:error, "introspection events are unavailable"}
+
+      events when is_list(events) ->
+        {:error, "expected no missed_skill_observed events, got #{inspect(events)}"}
     end
   end
 

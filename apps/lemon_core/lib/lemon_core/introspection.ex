@@ -16,6 +16,11 @@ defmodule LemonCore.Introspection do
   - `:provenance` - `:direct | :inferred | :unavailable`
   - `:payload` - redacted event-specific metadata
 
+  Listing returns a newest-first event list on success, including `[]` when
+  no events match. Backend failures return `{:error, reason}`; failed Store
+  calls return `{:error, :store_unavailable}`. Callers must not treat errors
+  as an empty history.
+
   ## Redaction Defaults
 
   - Prompt/response and obvious secret fields are removed.
@@ -101,7 +106,7 @@ defmodule LemonCore.Introspection do
   @doc """
   List introspection events through the store query API.
   """
-  @spec list(keyword()) :: [event()]
+  @spec list(keyword()) :: [event()] | {:error, term()}
   def list(opts \\ []) do
     IntrospectionStore.list(opts)
   end

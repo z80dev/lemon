@@ -24,6 +24,34 @@ defmodule LemonCore.Doctor.ChecksTest do
   end
 
   describe "Providers.run/1" do
+    for {provider, auth, expected} <- [
+          {"ollama", "", :pass},
+          {"custom", "auth = \"none\"", :pass},
+          {"ollama_cloud", "", :fail}
+        ] do
+      test "#{provider} credentials report #{expected} without an API key" do
+        tmp_dir =
+          Path.join(System.tmp_dir!(), "doctor_keyless_#{System.unique_integer([:positive])}")
+
+        File.mkdir_p!(Path.join(tmp_dir, ".lemon"))
+
+        File.write!(Path.join(tmp_dir, ".lemon/config.toml"), """
+        [defaults]
+        provider = "#{unquote(provider)}"
+        model = "test-model"
+        [providers.#{unquote(provider)}]
+        #{unquote(auth)}
+        """)
+
+        on_exit(fn -> File.rm_rf!(tmp_dir) end)
+
+        check =
+          Providers.run(project_dir: tmp_dir) |> Enum.find(&(&1.name == "providers.credentials"))
+
+        assert check.status == unquote(expected)
+      end
+    end
+
     test "a named missing secret is not a usable default credential" do
       tmp_dir =
         Path.join(System.tmp_dir!(), "doctor_missing_#{System.unique_integer([:positive])}")

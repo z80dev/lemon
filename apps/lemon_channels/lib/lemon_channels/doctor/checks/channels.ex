@@ -83,11 +83,18 @@ defmodule LemonChannels.Doctor.Checks.Channels do
           "Telegram voice transcription is disabled."
         )
 
+      Map.get(voice, :provider) == "local_transcript" ->
+        Check.warn(
+          "channels.telegram.voice_transcription",
+          "Telegram local speech-to-text is unavailable; voice messages will not start runs.",
+          "Use voice_transcription_provider = \"openai_transcribe\" and configure gateway.telegram.voice_transcription_api_key."
+        )
+
       Map.get(voice, :api_key_required) == true and Map.get(voice, :api_key_configured) != true ->
         Check.warn(
           "channels.telegram.voice_transcription",
           "Telegram voice transcription is enabled but provider credentials are missing.",
-          "Set gateway.telegram.voice_transcription_api_key or use voice_transcription_provider = \"local_transcript\"."
+          "Set gateway.telegram.voice_transcription_api_key with voice_transcription_provider = \"openai_transcribe\"."
         )
 
       true ->

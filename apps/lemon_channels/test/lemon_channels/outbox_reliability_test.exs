@@ -72,6 +72,40 @@ defmodule LemonChannels.OutboxReliabilityTest do
     end
   end
 
+  test "unclassified failures are terminal and ambiguous transport errors are unknown", ctx do
+    for reason <- [:timeout, {:closed, :socket}, {:http_error, 503, ""}, :unexpected_failure] do
+      payload = payload(ctx.account)
+      ref = payload.notify_ref
+      expected = LemonChannels.DeliveryError.classify(reason)
+      assert {:ok, _} = Outbox.enqueue(payload)
+      assert_receive {:write_attempt, ^ref, worker}, 1000
+      send(worker, {:finish, {:error, reason}})
+      assert_receive {:delivery_result, ^ref, {:error, ^expected}}, 1000
+      assert_group_drained(ctx.account)
+      refute_receive {:write_attempt, ^ref, _}, 0
+    end
+  end
+
+  @tag timeout: 10_000
+  test "enqueue timeout reports unknown admission without resending", ctx do
+    outbox = Process.whereis(Outbox)
+    payload = payload(ctx.account)
+    :ok = :sys.suspend(outbox)
+
+    try do
+      assert {:error, {:outcome_unknown, :enqueue_timeout}} = Outbox.enqueue(payload)
+    after
+      :sys.resume(outbox)
+    end
+
+    ref = payload.notify_ref
+    assert_receive {:write_attempt, ^ref, worker}, 1000
+    send(worker, {:finish, {:ok, :accepted}})
+    assert_receive {:delivery_result, ^ref, {:ok, :accepted}}, 1000
+    assert_group_drained(ctx.account)
+    refute_receive {:write_attempt, ^ref, _}, 0
+  end
+
   defp assert_failed_worker_releases_group(ctx, failure, exception_module) do
     outbox = Process.whereis(Outbox)
     first = payload(ctx.account)
