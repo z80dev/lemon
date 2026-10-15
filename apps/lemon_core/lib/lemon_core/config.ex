@@ -228,7 +228,8 @@ defmodule LemonCore.Config do
       auto_resize_images: tools.auto_resize_images,
       web: tools.web,
       wasm: tools.wasm,
-      disclosure: tools.disclosure
+      disclosure: tools.disclosure,
+      computer_use: tools.computer_use
     }
   end
 
