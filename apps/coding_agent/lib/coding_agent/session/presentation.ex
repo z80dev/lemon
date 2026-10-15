@@ -40,6 +40,7 @@ defmodule CodingAgent.Session.Presentation do
           agent_id: agent_id || "default",
           run_id: run_id,
           invocation_context_key: Keyword.get(opts, :invocation_context_key),
+          channel_identity: Keyword.get(opts, :channel_identity),
           memory_context_key: Keyword.get(opts, :memory_context_key),
           memory_context_verified: Keyword.get(opts, :memory_context_verified) == true,
           shared_memory_grant: Keyword.get(opts, :shared_memory_grant) == true,
@@ -75,6 +76,7 @@ defmodule CodingAgent.Session.Presentation do
     |> maybe_add_opt(:execution_context, Keyword.get(opts, :execution_context))
     |> maybe_add_opt(:approval_context, approval_context)
     |> maybe_add_opt(:invocation_context_key, Keyword.get(opts, :invocation_context_key))
+    |> maybe_add_opt(:channel_identity, Keyword.get(opts, :channel_identity))
     |> maybe_add_opt(:memory_context_key, Keyword.get(opts, :memory_context_key))
     |> maybe_add_opt(
       :memory_context_verified,

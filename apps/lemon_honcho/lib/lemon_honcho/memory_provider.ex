@@ -174,7 +174,7 @@ defmodule LemonHoncho.MemoryProvider do
 
     with true <- Config.configured?(config),
          {:ok, trimmed} <- usable_query(query),
-         {:ok, route} <- route(scope, opts) do
+         {:ok, route} <- route(scope, opts, config) do
       config
       |> fetch(route, trimmed, opts)
       |> to_documents(scope, opts)
@@ -201,12 +201,26 @@ defmodule LemonHoncho.MemoryProvider do
   defp normalize_scope(scope) when scope in @scopes, do: scope
   defp normalize_scope(_other), do: :all
 
-  defp route(scope, opts) do
+  defp route(scope, opts, config) do
     case {scope, present(Keyword.get(opts, :scope_key))} do
-      {:session, nil} -> :error
-      {:session, key} -> {:ok, session_route(key)}
-      {scoped, nil} when scoped in @scoped -> :error
-      {_scope, _key} -> {:ok, :workspace}
+      {:session, nil} ->
+        :error
+
+      {:session, key} ->
+        cache_key =
+          LemonHoncho.UserPeer.cache_key(
+            key,
+            config,
+            LemonHoncho.UserPeer.identity(key, Keyword.get(opts, :channel_identity))
+          )
+
+        {:ok, session_route(cache_key)}
+
+      {scoped, nil} when scoped in @scoped ->
+        :error
+
+      {_scope, _key} ->
+        {:ok, :workspace}
     end
   end
 

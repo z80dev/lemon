@@ -163,13 +163,6 @@ defmodule LemonHoncho.ContextContributor do
   # a number that is wrong by 250ms at most.
   @registry_default_timeout_ms 250
 
-  # The key the session manager derives from a request, mirroring its private
-  # `state_key/1`. Restated here for the same reason the tools restate it: the
-  # alternative is a call that tells us the key, which is a round trip to learn
-  # something already in the request.
-  @key_fields [:session_key, :session_id, :cwd]
-  @default_key "default"
-
   # Matches a single leading markdown heading line and the blank lines after it.
   # Written against the *shape* of a heading rather than against
   # `LemonHoncho.Context`'s wording, so a change to that module's heading text
@@ -269,7 +262,7 @@ defmodule LemonHoncho.ContextContributor do
   # default, since a request for more time is not a promise to use it.
   defp first_turn_wait?(%Config{} = config, request) do
     Config.configured?(config) and config.recall_mode != :tools and
-      injects?(config, request) and config.first_turn_wait_ms > 0 and cold?(request)
+      injects?(config, request) and config.first_turn_wait_ms > 0 and cold?(request, config)
   end
 
   defp injects?(%Config{} = config, request) do
@@ -280,16 +273,8 @@ defmodule LemonHoncho.ContextContributor do
   # running, or is too busy to answer, reports "not cold", because there is no
   # first-turn refresh to hold the turn open for and asking for extra time to
   # wait on a process that cannot answer would spend the deadline for nothing.
-  defp cold?(request), do: SessionManager.cold?(state_key(request))
-
-  defp state_key(request) do
-    @key_fields
-    |> Enum.map(&Map.get(request, &1))
-    |> Enum.find(@default_key, &present?/1)
-  end
-
-  defp present?(value) when is_binary(value), do: String.trim(value) != ""
-  defp present?(_value), do: false
+  defp cold?(request, config),
+    do: SessionManager.cold?(SessionManager.cache_key(request, config))
 
   # `split/1` guarantees both halves are already trimmed, so the only thing left
   # to decide is which of them has anything in it. The leading `# …` heading is

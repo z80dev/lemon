@@ -459,6 +459,7 @@ defmodule CodingAgent.SystemPrompt do
       session_id: Map.get(opts, :session_id),
       agent_id: Map.get(opts, :agent_id),
       run_id: Map.get(opts, :run_id),
+      channel_identity: if(session_scope == :main, do: Map.get(opts, :channel_identity)),
       invocation_context_key: Map.get(opts, :invocation_context_key),
       memory_context_key: Map.get(opts, :memory_context_key),
       memory_context_verified: Map.get(opts, :memory_context_verified),

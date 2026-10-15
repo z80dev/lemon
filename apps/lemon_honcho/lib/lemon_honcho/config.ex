@@ -54,6 +54,9 @@ defmodule LemonHoncho.Config do
           environment: String.t(),
           workspace: String.t(),
           user_peer: String.t(),
+          pin_user_peer: boolean(),
+          user_peer_aliases: %{String.t() => String.t()},
+          runtime_peer_prefix: String.t(),
           ai_peer: String.t(),
           timeout_ms: pos_integer(),
           recall_mode: recall_mode(),
@@ -76,6 +79,9 @@ defmodule LemonHoncho.Config do
             environment: "production",
             workspace: "lemon",
             user_peer: "user",
+            pin_user_peer: false,
+            user_peer_aliases: %{},
+            runtime_peer_prefix: "",
             ai_peer: "lemon",
             timeout_ms: 30_000,
             recall_mode: :hybrid,
@@ -123,6 +129,11 @@ defmodule LemonHoncho.Config do
       environment: resolve.("HONCHO_ENVIRONMENT", :environment, &parse_string/1, "production"),
       workspace: resolve.("HONCHO_WORKSPACE", :workspace, &parse_string/1, "lemon"),
       user_peer: user_peer(settings),
+      pin_user_peer: resolve.("LEMON_HONCHO_PIN_USER_PEER", :pin_user_peer, &parse_bool/1, false),
+      user_peer_aliases:
+        resolve.("LEMON_HONCHO_USER_PEER_ALIASES", :user_peer_aliases, &parse_aliases/1, %{}),
+      runtime_peer_prefix:
+        resolve.("LEMON_HONCHO_RUNTIME_PEER_PREFIX", :runtime_peer_prefix, &parse_prefix/1, ""),
       ai_peer: resolve.("HONCHO_AI_PEER", :ai_peer, &parse_string/1, "lemon"),
       timeout_ms: resolve.("HONCHO_TIMEOUT_MS", :timeout_ms, &parse_pos_int/1, 30_000),
       recall_mode: enum.(env(:recall_mode), :recall_mode, @recall_modes, :hybrid),
@@ -276,6 +287,27 @@ defmodule LemonHoncho.Config do
 
   defp parse_string(value) when is_atom(value), do: parse_string(Atom.to_string(value))
   defp parse_string(_value), do: :error
+
+  defp parse_prefix(value) when is_binary(value), do: {:ok, String.trim(value)}
+  defp parse_prefix(_), do: :error
+
+  defp parse_aliases(value) when is_binary(value) do
+    case Jason.decode(value) do
+      {:ok, aliases} when is_map(aliases) -> parse_aliases(aliases)
+      _ -> :error
+    end
+  end
+
+  defp parse_aliases(value) when is_map(value) do
+    if Enum.all?(value, fn {key, peer} ->
+         is_binary(key) and key != "" and is_binary(peer) and
+           Regex.match?(~r/^[A-Za-z0-9_-]{1,512}$/, peer)
+       end),
+       do: {:ok, value},
+       else: :error
+  end
+
+  defp parse_aliases(_), do: :error
 
   defp parse_bool(value) when is_boolean(value), do: {:ok, value}
 
