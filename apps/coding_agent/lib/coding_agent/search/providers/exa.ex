@@ -94,7 +94,7 @@ defmodule CodingAgent.Search.Providers.Exa do
 
     body = %{
       "urls" => [request.url],
-      "text" => %{"maxCharacters" => request.max_chars}
+      "text" => %{}
     }
 
     case post(context, "/contents", body) do
@@ -119,6 +119,7 @@ defmodule CodingAgent.Search.Providers.Exa do
            "fetchedAt" => DateTime.utc_now() |> DateTime.to_iso8601(),
            "tookMs" => max(System.monotonic_time(:millisecond) - started_ms, 0),
            "text" => wrapped.text,
+           "__full_text" => if(wrapped.truncated, do: text),
            "trustMetadata" => Result.fetch_trust_metadata(wrapped, title)
          }}
 

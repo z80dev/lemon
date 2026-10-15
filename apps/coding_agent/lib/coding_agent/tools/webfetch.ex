@@ -9,7 +9,7 @@ defmodule CodingAgent.Tools.WebFetch do
   GitHub blob URLs fetch raw file contents; issue and pull request URLs render
   through the public REST API (see `CodingAgent.Tools.WebFetchGitHub`).
   Other binary responses are rejected instead of being treated as readable text.
-  Raise `maxChars` to recover truncated text; omission uses the configured default.
+  Truncated text is retained as a session artifact; `maxChars` controls its preview.
   """
 
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
@@ -73,7 +73,7 @@ defmodule CodingAgent.Tools.WebFetch do
           "maxChars" => %{
             "type" => "integer",
             "description" =>
-              "Maximum characters to return (minimum 100; defaults to configured fetch limit). Increase to recover truncated content."
+              "Maximum preview characters (minimum 100; defaults to configured limit). Truncated full content is available through a session artifact."
           },
           "format" => %{
             "type" => "string",
@@ -128,40 +128,43 @@ defmodule CodingAgent.Tools.WebFetch do
   defp run_cached_fetch(url, extract_mode, max_chars, runtime, providers) do
     cache_key =
       WebCache.normalize_cache_key(
-        "fetch:text-v2:#{Enum.join(providers, ",")}:#{url}:#{Atom.to_string(extract_mode)}:#{max_chars}"
+        "fetch:text-v3:#{Enum.join(providers, ",")}:#{url}:#{Atom.to_string(extract_mode)}:#{max_chars}"
       )
 
-    case WebCache.read_cache(@fetch_cache_table, cache_key, runtime.cache_opts) do
-      {:hit, payload} ->
-        json_result(Map.put(payload, "cached", true))
+    result =
+      case WebCache.read_cache(@fetch_cache_table, cache_key, runtime.cache_opts) do
+        {:hit, payload} ->
+          {:ok, Map.put(payload, "cached", true)}
 
-      :miss ->
-        SingleFlight.run(
-          cache_key,
-          fn ->
-            case WebCache.read_cache(@fetch_cache_table, cache_key, runtime.cache_opts) do
-              {:hit, payload} ->
-                json_result(Map.put(payload, "cached", true))
+        :miss ->
+          SingleFlight.run(
+            cache_key,
+            fn ->
+              case WebCache.read_cache(@fetch_cache_table, cache_key, runtime.cache_opts) do
+                {:hit, payload} ->
+                  {:ok, Map.put(payload, "cached", true)}
 
-              :miss ->
-                with {:ok, payload} <-
-                       perform_fetch(url, extract_mode, max_chars, runtime, providers) do
-                  WebCache.write_cache(
-                    @fetch_cache_table,
-                    cache_key,
-                    payload,
-                    runtime.cache_ttl_ms,
-                    runtime.cache_max_entries,
-                    runtime.cache_opts
-                  )
+                :miss ->
+                  with {:ok, payload} <-
+                         perform_fetch(url, extract_mode, max_chars, runtime, providers) do
+                    WebCache.write_cache(
+                      @fetch_cache_table,
+                      cache_key,
+                      payload,
+                      runtime.cache_ttl_ms,
+                      runtime.cache_max_entries,
+                      runtime.cache_opts
+                    )
 
-                  json_result(payload)
-                end
-            end
-          end,
-          runtime.timeout_ms + 1_000
-        )
-    end
+                    {:ok, payload}
+                  end
+              end
+            end,
+            runtime.timeout_ms + 1_000
+          )
+      end
+
+    with {:ok, payload} <- result, do: json_result(payload, runtime)
   end
 
   defp perform_fetch(url, extract_mode, max_chars, runtime, providers) do
@@ -383,6 +386,7 @@ defmodule CodingAgent.Tools.WebFetch do
       "fetchedAt" => DateTime.utc_now() |> DateTime.to_iso8601(),
       "tookMs" => elapsed_ms(started_ms),
       "text" => wrapped.text,
+      "__full_text" => if(wrapped.truncated, do: text),
       "trustMetadata" => web_fetch_trust_metadata(wrapped, wrapped_title)
     }
   end
@@ -414,6 +418,7 @@ defmodule CodingAgent.Tools.WebFetch do
              "fetchedAt" => DateTime.utc_now() |> DateTime.to_iso8601(),
              "tookMs" => elapsed_ms(started_ms),
              "text" => wrapped.text,
+             "__full_text" => if(wrapped.truncated, do: firecrawl.text),
              "warning" => wrapped_warning,
              "trustMetadata" => trust_metadata
            }}
@@ -1072,7 +1077,24 @@ defmodule CodingAgent.Tools.WebFetch do
   defp format_reason(reason) when is_atom(reason), do: Atom.to_string(reason)
   defp format_reason(reason), do: inspect(reason)
 
-  defp json_result(payload) do
+  defp json_result(payload, runtime) do
+    {full, payload} = Map.pop(payload, "__full_text")
+
+    payload =
+      if is_binary(full) do
+        case CodingAgent.Artifacts.spill(full, runtime.cwd, runtime.tool_opts) do
+          {:ok, uri} ->
+            payload
+            |> Map.put("artifact_uri", uri)
+            |> Map.put("artifactNotice", "[Full content: #{uri}]")
+
+          {:error, error} ->
+            Map.put(payload, "artifact_error", error)
+        end
+      else
+        payload
+      end
+
     ExternalContent.untrusted_json_result(payload)
   end
 
@@ -1163,6 +1185,7 @@ defmodule CodingAgent.Tools.WebFetch do
       cache_ttl_ms: cache_ttl_ms,
       cache_max_entries: cache_max_entries,
       cache_opts: cache_opts,
+      tool_opts: opts,
       max_redirects: max_redirects,
       max_body_bytes:
         max(

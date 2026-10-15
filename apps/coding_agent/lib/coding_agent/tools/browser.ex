@@ -90,6 +90,7 @@ defmodule CodingAgent.Tools.Browser do
                 |> maybe_redact_browser_result(request)
                 |> maybe_add_navigation_policy(request)
                 |> maybe_write_screenshot(request, cwd, runtime)
+                |> maybe_spill_browser_content(request, cwd, runtime)
 
               emit_browser_update(on_update, tool_name, request, "completed", final_result)
 
@@ -112,6 +113,37 @@ defmodule CodingAgent.Tools.Browser do
         error
     end
   end
+
+  defp maybe_spill_browser_content(result, %{method: method}, cwd, runtime)
+       when is_map(result) and method in ["browser.snapshot", "browser.getContent"] do
+    {full, result} = Map.pop(result, "__full_content")
+    truncated? = result["truncated"] == true or result["textTruncated"] == true
+
+    cond do
+      not truncated? ->
+        result
+
+      is_map(full) ->
+        case CodingAgent.Artifacts.spill(
+               Jason.encode!(full, pretty: true),
+               cwd,
+               runtime.tool_opts
+             ) do
+          {:ok, uri} ->
+            result
+            |> Map.put("artifact_uri", uri)
+            |> Map.put("artifactNotice", "[Full content: #{uri}]")
+
+          {:error, error} ->
+            Map.put(result, "artifact_error", error)
+        end
+
+      true ->
+        Map.put(result, "artifact_error", "Browser backend did not supply complete content")
+    end
+  end
+
+  defp maybe_spill_browser_content(result, _request, _cwd, _runtime), do: result
 
   defp prepare_browser_request(
          %{method: "browser.setInputFiles", args: args} = request,

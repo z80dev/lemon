@@ -4,6 +4,10 @@
 
 ### Added
 
+- Truncated webfetch and browser snapshot/page-content results retain complete
+  sources as session-scoped artifacts and return readable `artifact://` handles.
+  Cached fetches register handles in the requesting session, never another caller.
+
 - LSP supports preview/apply file renames, server reload, advertised capabilities,
   and bounded workspace diagnostics from running clients. Document language IDs
   now come from the shared LemonLsp server catalog.

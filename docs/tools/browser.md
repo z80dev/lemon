@@ -8,6 +8,11 @@ evaluated output, and downloads are external content and are returned as
 untrusted output. For the search/fetch tools and the shared web overview, see
 [Web and Browser Tools](web.md).
 
+Truncated snapshots/page content include a session-scoped `artifact_uri` and
+`artifactNotice` for the complete pre-character-truncation source. See
+[full-content artifacts](web.md#full-content-after-truncation) for pagination,
+scope and backend/storage requirements.
+
 ## Enabling and configuration
 
 The default `local` backend needs the Node driver built once:
