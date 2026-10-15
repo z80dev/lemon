@@ -292,6 +292,7 @@ class Supervisor:
         self.project = project
         self.ledger = project.ledger()
         self.retrying: str | None = None
+        self.shutdown_evidence: dict[str, Any] | None = None
         self.lock_handle: Any = None
         self.client: Any = None
         self.epoch = 0
@@ -596,7 +597,8 @@ class Supervisor:
                 _block_task(self.ledger, attempt["task_id"], f"{reason}; worker cleanup not confirmed")
         self.ledger.update_runtime(mode="stopped", coordinator_pid=None, event="runtime.stopped",
                                    detail={**self.ledger.runtime()["detail"], "stop_reason": reason,
-                                           "cleanup_confirmed": confirmed})
+                                           "cleanup_confirmed": confirmed,
+                                           "shutdown": self.shutdown_evidence})
 
     def _shutdown_coordinator(self) -> bool:
         """Abort, cancel workers, close stdin and wait; force-kill the whole tree only as a last resort."""
@@ -612,15 +614,23 @@ class Supervisor:
         except Exception as exc:  # the process may already be gone
             print(f"{time.ctime()} abort during shutdown failed: {exc!r}", flush=True)
         tree = descendants(process.pid)
+        exit_code: int | None = None
         try:
             process.stdin.close()
-            process.wait(timeout=GRACEFUL_EXIT_S)
-            confirmed = not [pid for pid in tree if _alive(pid)]
+            exit_code = process.wait(timeout=GRACEFUL_EXIT_S)
         except (OSError, subprocess.TimeoutExpired):
-            confirmed = False
+            pass
+        deadline = time.monotonic() + 3  # orphaned tool shells get a moment to finish dying
+        survivors = [pid for pid in tree if _alive(pid)]
+        while survivors and time.monotonic() < deadline:
+            time.sleep(0.2)
+            survivors = [pid for pid in survivors if _alive(pid)]
+        confirmed = exit_code == 0 and not survivors
+        self.shutdown_evidence = {"exit_code": exit_code, "survivors": [_command(pid) for pid in survivors]}
+        print(f"{time.ctime()} coordinator shutdown: {self.shutdown_evidence}", flush=True)
         if not confirmed:
             kill_tree(process.pid)
-            for pid in tree:
+            for pid in survivors:
                 if _alive(pid):
                     os.kill(pid, signal.SIGKILL)
         client.stop()
@@ -628,6 +638,11 @@ class Supervisor:
         if reaped:
             print(f"{time.ctime()} removed {len(reaped)} finished worker workspaces", flush=True)
         return confirmed
+
+
+def _command(pid: int) -> str:
+    out = subprocess.run(["ps", "-o", "pid=,pgid=,command=", "-p", str(pid)], capture_output=True, text=True)
+    return out.stdout.strip()[:300] or str(pid)
 
 
 def _alive(pid: int) -> bool:

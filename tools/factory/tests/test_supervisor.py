@@ -159,6 +159,7 @@ class SupervisorTest(unittest.TestCase):
         _, stopped = self.home.cli("stop")
         self.assertEqual(stopped["runtime"]["state"], "stopped")
         self.assertFalse(stopped["runtime"]["unclean_previous_exit"])
+        self.assertTrue(stopped["runtime"]["detail"]["cleanup_confirmed"], stopped["runtime"]["detail"]["shutdown"])
         self.assertEqual(omp_processes(self.sessions), [])
         with self.assertRaises(ProcessLookupError):
             os.kill(coordinator, 0)
