@@ -500,7 +500,7 @@ The most mature adapter. Supports edit, delete, voice, images, files, reactions,
 | `Telegram.FileBatcher` | Telegram media/file batching strategy for renderer-owned outbound UX |
 | `Telegram.Inbound` | Normalizes raw Telegram updates to `InboundMessage` |
 | `Telegram.Outbound` | Delivers via Bot API with retry for rate limits and transient errors |
-| `Telegram.VoiceTranscriber` | OpenAI-compatible audio transcription |
+| `VoiceTranscriber` | Shared OpenAI-compatible audio transcription |
 
 **Support modules** (`lib/lemon_channels/telegram/`):
 
@@ -602,7 +602,7 @@ LemonChannels.Telegram.TriggerMode.set(scope, account_id, :mentions)
 Configured via transport config. Uses OpenAI-compatible API:
 
 ```elixir
-LemonChannels.Adapters.Telegram.VoiceTranscriber.transcribe(%{
+LemonChannels.VoiceTranscriber.transcribe(%{
   audio_bytes: binary,
   api_key: key,
   base_url: "https://api.openai.com/v1",
@@ -662,6 +662,26 @@ generated command-schema regression without inspecting Discord credentials.
   `auto_send_generated_images = true`), and is bounded by
   `auto_send_generated_max_files` plus `max_download_bytes`. Explicit
   file-send requests still use the normal attachment path.
+
+#### Voice Notes and Audio Attachments
+
+Discord transcribes `audio/*` attachments (including voice notes marked
+`IS_VOICE_MESSAGE`) after channel authorization. Downloads use the same bounded
+CDN downloader as images: HTTPS on `cdn.discordapp.com` or `media.discordapp.net`
+only, with redirects disabled and `voice_max_bytes` enforced.
+
+Discord intentionally shares the existing `[gateway.telegram]` voice settings:
+`voice_transcription` (default false), `voice_transcription_provider`,
+`voice_transcription_model`, `voice_transcription_base_url`,
+`voice_transcription_api_key`, and `voice_max_bytes` (default 10 MiB). Telegram
+does not need to be enabled. Credentials and base URL fall back to the OpenAI
+provider configuration, as on Telegram; no Discord-specific voice keys exist.
+
+Successful transcripts use Telegram's plain transcript text format, combined
+with any typed content; other attachment URLs remain. Disabled or failed
+transcription preserves the original attachment URL and sends Telegram's
+voice-error copy separately. `local_transcript` fails closed: no synthetic
+transcript is submitted. The shared implementation is `LemonChannels.VoiceTranscriber`.
 
 #### Configuration
 
@@ -868,7 +888,7 @@ Adapters run under `LemonChannels.AdapterSupervisor` (DynamicSupervisor).
 | `Adapters.Telegram.Transport.UpdateProcessor` | Auth, dedup, routing pipeline |
 | `Adapters.Telegram.Inbound` | Normalize to InboundMessage |
 | `Adapters.Telegram.Outbound` | Deliver via Bot API |
-| `Adapters.Telegram.VoiceTranscriber` | Audio transcription |
+| `VoiceTranscriber` | Shared audio transcription |
 | `Telegram.API` | Raw Bot API calls |
 | `Telegram.Delivery` | High-level enqueue helpers |
 | `Telegram.Formatter` | Markdown to entities |

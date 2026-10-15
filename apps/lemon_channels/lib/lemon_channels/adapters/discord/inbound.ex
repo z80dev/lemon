@@ -88,6 +88,7 @@ defmodule LemonChannels.Adapters.Discord.Inbound do
         reply_to_id: reply_to_id,
         reply_to_text: reply_to_text,
         reply_to_author_id: reply_to_author_id,
+        typed_content: message_content(message),
         attachments: attachment_maps
       }
     }

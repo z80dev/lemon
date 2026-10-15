@@ -18,7 +18,8 @@ defmodule LemonChannels.Adapters.Discord.Transport do
     Outbound,
     SlashCommands,
     TriggerMode,
-    UserPrompt
+    UserPrompt,
+    VoiceHandler
   }
 
   alias LemonChannels.Adapters.Telegram.Transport.MemoryReflection
@@ -300,7 +301,20 @@ defmodule LemonChannels.Adapters.Discord.Transport do
          true <- binding_allowed?(inbound, state),
          {:new, dedupe_ref} <- check_dedupe(inbound, state) do
       inbound = put_submission_dedupe_ref(inbound, dedupe_ref)
+
+      {inbound, voice_errors} = VoiceHandler.transcribe(inbound)
+
+      Enum.each(voice_errors, fn text ->
+        Outbound.send_with_components(
+          inbound.meta[:thread_id] || inbound.meta[:channel_id],
+          text,
+          [],
+          []
+        )
+      end)
+
       inbound = Inbound.attach_images(inbound)
+
       _ = maybe_index_known_target(state, inbound, message)
 
       if LemonChannels.UserPromptSurface.capture(inbound) == true,
