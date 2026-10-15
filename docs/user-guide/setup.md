@@ -139,6 +139,37 @@ If a provider verification fails, setup remains incomplete. Correct the
 credential or model and rerun `lemon setup provider`; do not expect a failed
 verification to be treated as a working setup.
 
+### Local servers and custom endpoints
+
+`lemon setup` and `lemon setup provider` include **local server** entries for
+Ollama, LM Studio, llama.cpp, vLLM, and LiteLLM. Their API key is optional:
+press Enter to save keyless authentication, or enter a key to store it in
+encrypted secrets. You can also select **Custom OpenAI-compatible endpoint**,
+choose a new provider name, and enter its API base URL (usually ending in `/v1`).
+Setup writes `[providers.<name>]` with `api = "openai_completions"` and
+`auth = "none"` when no key is supplied.
+
+When selecting a local default model, setup asks before probing the selected
+server's `GET {base_url}/models` endpoint. **No is the default**. Accept to pick
+from discovered model IDs, or decline and type a model ID. An unreachable or
+empty server also falls back to manual entry. Native IDs such as `qwen3:8b`
+are accepted. Passing `--model` skips discovery entirely.
+
+```bash
+lemon setup provider --provider ollama --set-default
+lemon model --provider lm-studio --set-default
+# Headless: no discovery or prompts, no key required:
+lemon model --non-interactive --provider ollama --set-default --model qwen3:8b
+```
+
+Headless setup accepts local presets but never probes for models. Custom
+endpoint creation is interactive; for automated custom configuration, use the
+[provider TOML reference](../config.md#custom-providers-and-models).
+Discovery consent is separate from setup's existing live verification:
+`lemon setup` / `lemon setup provider` still run their models-list live check
+when verification is enabled, including for keyless servers. Use `--skip-verify`
+to defer that check; `lemon model` does not run live verification.
+
 ### Automated or headless configuration
 
 The installer does not run setup when there is no TTY. It succeeds and prints

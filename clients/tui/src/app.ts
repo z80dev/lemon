@@ -72,6 +72,7 @@ import { resolveStartup, type StartupRequest, type StartupResolution } from "./s
 import { AppStore, type SubmissionMode } from "./store/app-store.ts";
 import type { QueueItem } from "./store/queue-store.ts";
 import type { SessionStore } from "./store/session-store.ts";
+import { refreshSetupStatus } from "./store/setup.ts";
 import type { CompactionDetails, NoticeLevel } from "./store/transcript-model.ts";
 import { detectTerminalCapabilities } from "./terminal/capabilities.ts";
 import { copyNotice, copyText } from "./terminal/clipboard.ts";
@@ -84,6 +85,7 @@ import { CustomEditor } from "./ui/components/custom-editor.ts";
 import { ModelPicker } from "./ui/components/model-picker.ts";
 import { confirmAction, PickerOverlay } from "./ui/components/pickers.ts";
 import { QueuePanelComponent } from "./ui/components/queue-panel.ts";
+import { ReadinessCard } from "./ui/components/readiness-card.ts";
 import { SessionSwitcher } from "./ui/components/session-switcher.ts";
 import {
 	type ContextSource,
@@ -549,6 +551,7 @@ export class AppShell {
 				// Every handshake, resumed or not: plan mode may have moved while away.
 				// A pending startup request refreshes after it has picked the session.
 				if (!this.#startup) void this.refreshPlanMode();
+				if (this.#sessionReady) void refreshSetupStatus(this.store, this.methods);
 				if (this.#sessionReady || this.#initialSessionLoad) return;
 				const startup = this.#startup;
 				this.#startup = undefined;
@@ -624,6 +627,7 @@ export class AppShell {
 				}
 			}),
 			this.store.events.on("mode-changed", () => this.#renderStatus()),
+			this.store.events.on("setup-changed", () => this.tui.requestRender()),
 			this.store.events.on("session-changed", () => {
 				this.syncQueuePanel();
 				this.#palette.close();
@@ -707,6 +711,7 @@ export class AppShell {
 		this.bannerContainer.addChild(this.#connectionLine);
 		this.statusLineContainer.addChild(this.#statusBar);
 		this.statusContainer.addChild(this.#taskTree.panel);
+		this.statusContainer.addChild(new ReadinessCard(this.store));
 		this.statusContainer.addChild(this.#omp.panel);
 		this.statusContainer.addChild(this.#working);
 

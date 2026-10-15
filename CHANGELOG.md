@@ -10,6 +10,17 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Pin skill-synthesis candidate timestamps in ordering fixtures and cover
+  recency/ID tie-breaking independently of wall-clock scheduling.
+
+- Derive computer-use approval test origins from configured control-plane/web
+  ports so non-default test listeners retain Lemon self-surface protection.
+
+- Preserve delegated run identity when polling recovers a durable completion, so
+  the task and RunGraph both become terminal even without a live watcher.
+- Make coordinator/session/watcher/environment regressions synchronize with their
+  actual lifecycle and isolate resource discovery from protocol fixtures.
+
 - Assert LSP owner cleanup by the exact managed server ID rather than a global
   active-count delta that races unrelated idle-server cleanup.
 
@@ -32,6 +43,13 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   bounded pasted-filename previews and appearance-aware code inset colors.
 
 ### Added
+
+- Setup offers local inference servers and custom OpenAI-compatible endpoints,
+  optional encrypted keys, and consent-based model discovery with manual fallback.
+
+- TUI startup shows pending setup steps above the prompt, hides them once ready,
+  and points empty model lists to `lemon setup provider`; `setup.status` exposes
+  read-only, content-free readiness for clients.
 
 - Telegram and Discord support chat-scoped `/approve [id]` and `/deny [id]`
   fallbacks for approval buttons, with unique prefixes and safe disambiguation.
