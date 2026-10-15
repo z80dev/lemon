@@ -31,6 +31,24 @@ then definitions, then use.
   expression: Python `repr()` (nothing for `None`) or Node's `util.inspect()`
   (nothing for `undefined`). Errors return the traceback or stack, limited to
   the cell's own frames; kernel state survives ordinary errors.
+- **Rich `display(value)`.** Both kernels emit PNG/JPEG bytes, Markdown and JSON
+  through a private 0600 JSONL side channel, separate from stdout. Images become
+  `ImageContent` blocks; Markdown and formatted JSON become text content blocks.
+  Byte buffers are detected by PNG/JPEG signatures. Strings default to Markdown;
+  other JSON-serializable values default to JSON. Explicit MIME bundles work:
+  `display({"text/markdown": "**hello**"})` and
+  `display({"application/json": {"answer": 42}})`. Python also accepts
+  `display(value, mime="image/png")` and standard `_repr_png_`, `_repr_jpeg_`,
+  `_repr_markdown_` and `_repr_json_` methods; JavaScript accepts the MIME type as
+  its second argument. Rich outputs are collected when the cell finishes and do
+  not alter the captured stdout. Limits are 1 MiB per serialized display,
+  4 MiB / 32 displays per cell; exceeding a limit returns a cell error without
+  resetting the kernel.
+- **Python magics.** A standalone `%pip install <arguments>` cell runs
+  `<kernel Python> -m pip install ...` in the kernel environment, without a shell
+  or resetting variables/imports. `%load "path with spaces.py"` executes a UTF-8
+  file in that same namespace; paths resolve from the kernel cwd. Installation
+  and load errors are ordinary cell errors and retain earlier state.
 - **Top-level `await`.** Works in both languages. Python cells run on a
   persistent asyncio event loop, so call `await coro()` rather than
   `asyncio.run(...)` from a cell that already awaits.
@@ -43,10 +61,13 @@ then definitions, then use.
 - **Output cap.** Like `bash`, the result keeps the last 50 KB / 2000 lines.
   Larger output is saved to a private file whose `artifact://` handle and path
   appear in the result; read it with `read` and `offset`/`limit`.
-- **Timeouts and cancellation.** When the deadline expires or the run is
-  cancelled, the kernel and every process it started are killed, and its state
-  is lost. The result says so, and the next call starts a fresh kernel and
-  reports that it did (`details.kernel_restarted`).
+- **Timeouts and cancellation.** A deadline first sends SIGINT and allows a
+  two-second grace period for the cell to unwind, preserving variables/imports
+  when it does. Python and Node synchronous execution support this interruption.
+  Uninterruptible native calls and pending JavaScript asynchronous work may not
+  unwind; after grace the kernel/process tree is killed and the next call starts
+  fresh. The result explicitly says whether state was preserved or lost.
+  Cancellation still kills immediately.
 - **Lifetime.** State survives successful native executor turns: saving and
   stopping the transient session process does not end the logical coding session.
   Its resumed turn reuses the same kernel. Explicit abort/stop, reset/delete,
@@ -79,6 +100,8 @@ fenced as untrusted shell output before it reaches the model.
 ## Limits
 
 Stdin is not available to cells (Python's `input()` raises `EOFError`). Cells
-run one at a time per kernel. Only this core cell protocol is ported from omp:
-there are no prelude helpers, `tool.*` callbacks, subagent or completion
-bridges, magics, or browser integration.
+run one at a time per kernel. There are no `tool.*` callbacks, subagent or
+completion bridges, or browser integration. JavaScript `%bun add` / `%npm`
+magics are intentionally not provided: JS resolves the project's `node_modules`,
+not a separate kernel package environment. Use the normal approved package-manager
+workflow for project dependencies, then import them without resetting the kernel.
