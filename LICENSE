@@ -19,3 +19,11 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+---
+
+The Lemon Bot lemon desktop pet artwork (products/lemon_bot/apple/LemonBotKit/
+Sources/LemonBotKit/Resources/Pets/lemon/) and its generator
+(products/lemon_bot/apple/scripts/generate_lemon_pet.py) are not covered by the
+MIT License above: they are dedicated to the public domain under CC0 1.0
+Universal. See the LICENSE file in that pet directory.

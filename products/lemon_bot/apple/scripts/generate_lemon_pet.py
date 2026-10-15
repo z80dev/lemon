@@ -1,20 +1,28 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: CC0-1.0
 """Draw Lemon Bot's original pixel pet, without external artwork or fonts.
 
 Requires Python 3 and Pillow 12. Generate a Codex V2 package and QA previews:
     python3 generate_lemon_pet.py --output /tmp/lemon-pet-art --check
-The output root contains lemon/{pet.json,spritesheet.png} and qa/ previews.
+The output root contains lemon/{pet.json,spritesheet.png,LICENSE} and qa/ previews.
 --check validates the files just generated (including every used/unused cell).
+--zip PATH also writes a shareable Codex pet ZIP (pet.json, spritesheet.png and
+LICENSE at its root) for community galleries.
 Art is drawn on a 48×52 grid, then enlarged 4× with nearest-neighbour sampling.
 The fixed palette, geometry and frame sequences make output deterministic.
+The artwork and this generator are dedicated to the public domain (CC0 1.0); see
+LemonBotKit/Sources/LemonBotKit/Resources/Pets/lemon/LICENSE.
 """
 
 import argparse
 import json
 import math
+import zipfile
 from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont, ImageOps
+
+LICENSE_FILE = Path(__file__).resolve().parent.parent / "LemonBotKit/Sources/LemonBotKit/Resources/Pets/lemon/LICENSE"
 
 
 ART_SIZE = (48, 52)
@@ -380,6 +388,7 @@ def check_package(root):
     """Validate the serialized package, not merely the in-memory drawing."""
     manifest = json.loads((root / "lemon" / "pet.json").read_text(encoding="utf-8"))
     assert manifest == MANIFEST, "Manifest differs from the built-in Lemon contract"
+    assert (root / "lemon" / "LICENSE").read_bytes() == LICENSE_FILE.read_bytes(), "Package is missing the CC0 LICENSE"
     with Image.open(root / "lemon" / manifest["spritesheetPath"]) as atlas:
         assert atlas.mode == "RGBA", f"Expected RGBA, got {atlas.mode}"
         assert atlas.size == ATLAS_SIZE, f"Unexpected atlas size: {atlas.size}"
@@ -412,6 +421,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, required=True, help="Root for lemon/ and qa/ directories")
     parser.add_argument("--check", action="store_true", help="Validate the generated package and contract timings")
+    parser.add_argument("--zip", type=Path, help="Also write a shareable Codex pet ZIP to this path")
     args = parser.parse_args()
     package = args.output / "lemon"
     package.mkdir(parents=True, exist_ok=True)
@@ -422,9 +432,24 @@ def main():
             atlas.paste(frame, (column * CELL[0], row * CELL[1]))
     atlas.save(package / "spritesheet.png", optimize=False, compress_level=9)
     (package / "pet.json").write_text(json.dumps(MANIFEST, indent=2) + "\n", encoding="utf-8")
+    (package / "LICENSE").write_bytes(LICENSE_FILE.read_bytes())
     write_qa(rows, args.output / "qa")
     if args.check:
         check_package(args.output)
+    if args.zip:
+        write_zip(package, args.zip)
+
+
+def write_zip(package, path):
+    """A reproducible Codex package: fixed order, timestamps and permissions."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as archive:
+        for name in ("pet.json", "spritesheet.png", "LICENSE"):
+            info = zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
+            info.compress_type = zipfile.ZIP_DEFLATED
+            info.external_attr = 0o644 << 16
+            archive.writestr(info, (package / name).read_bytes())
+    print(f"Wrote {path}")
 
 
 if __name__ == "__main__":
