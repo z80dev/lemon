@@ -10,6 +10,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Provider sign-in status and logout distinguish missing credentials from
+  encrypted-store, journal and master-key failures. Failed reads refuse the
+  command without deleting logins or clearing the selected OAuth authority;
+  logout also reports deletion failures without changing provider settings.
 - Native dynamic-preset resolution binds discovered context, output limits,
   reasoning and input capabilities to the effective endpoint, headers and
   selected credential. Default/environment cached metadata no longer bleeds into
