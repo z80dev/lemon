@@ -129,6 +129,9 @@ public final class PetLibrary {
     }
 
     private func importFolder(_ directory: URL) throws -> InstalledPet {
+        guard try directory.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink != true else {
+            throw PetPackageError.invalid("The pet folder is a symbolic link. Choose the actual pet folder instead.")
+        }
         let manifest = try folderManifest(directory)
         let sheet = try PetPackage.read(sheetURL(manifest.spritesheetPath, in: directory), limit: PetPackage.downloadLimit)
         return try install(manifest, sheet: sheet)
@@ -142,7 +145,7 @@ public final class PetLibrary {
         manifest.spritesheetPath = "spritesheet." + (try PetPackage.imageExtension(sheet))
         try fm.createDirectory(at: root, withIntermediateDirectories: true)
         let staging = root.appendingPathComponent(".import-" + UUID().uuidString, isDirectory: true)
-        try fm.createDirectory(at: staging, withIntermediateDirectories: false)
+        try fm.createDirectory(at: staging, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
         defer { try? fm.removeItem(at: staging) }
         try JSONEncoder().encode(manifest).write(to: staging.appendingPathComponent("pet.json"), options: .atomic)
         try sheet.write(to: staging.appendingPathComponent(manifest.spritesheetPath), options: .atomic)
@@ -158,10 +161,12 @@ public final class PetLibrary {
     private func download(_ url: URL, limit: Int, session: URLSession) async throws -> Data {
         let policy = PetDownloadPolicy(origin: url)
         let (bytes, response) = try await session.bytes(for: URLRequest(url: url), delegate: policy)
+        defer { bytes.task.cancel() }
         guard let response = response as? HTTPURLResponse, (200..<300).contains(response.statusCode),
               let finalURL = response.url, PetDownloadPolicy.sameOrigin(url, finalURL) else { throw PetPackageError.invalid("The pet couldn't be downloaded from that HTTPS origin. Choose a direct, accessible ZIP or pet.json URL.") }
         guard response.expectedContentLength <= limit else { throw PetPackage.sizeError(limit) }
         var data = Data()
+        if response.expectedContentLength > 0 { data.reserveCapacity(Int(response.expectedContentLength)) }
         for try await byte in bytes {
             guard data.count < limit else { throw PetPackage.sizeError(limit) }
             data.append(byte)

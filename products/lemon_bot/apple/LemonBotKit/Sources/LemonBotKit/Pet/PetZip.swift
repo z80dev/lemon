@@ -3,6 +3,13 @@ import Foundation
 
 /// A deliberately small ZIP reader. Entries are inflated to bounded memory, never extracted to paths.
 enum PetZip {
+    private static let archiveExtensions: Set<String> = ["zip", "gz", "tgz", "tar", "bz2", "xz", "7z", "rar", "jar", "zst", "cab", "xar"]
+    private static let archiveSignatures: [[UInt8]] = [
+        [0x50, 0x4b, 0x03, 0x04], [0x50, 0x4b, 0x05, 0x06], [0x50, 0x4b, 0x07, 0x08],
+        [0x1f, 0x8b], [0x42, 0x5a, 0x68], [0xfd, 0x37, 0x7a, 0x58, 0x5a, 0x00],
+        [0x37, 0x7a, 0xbc, 0xaf, 0x27, 0x1c], [0x52, 0x61, 0x72, 0x21, 0x1a, 0x07],
+        [0x28, 0xb5, 0x2f, 0xfd], [0x4d, 0x53, 0x43, 0x46], [0x78, 0x61, 0x72, 0x21]
+    ]
     private static let crcTable: [UInt32] = (0..<256).map { value in
         var crc = UInt32(value)
         for _ in 0..<8 { crc = (crc >> 1) ^ (crc & 1 == 1 ? 0xedb88320 : 0) }
@@ -19,8 +26,9 @@ enum PetZip {
         .invalid("This ZIP \(reason). Lemon Bot expects an unencrypted ZIP containing pet.json and a PNG or WebP spritesheet.")
     }
 
-    static func files(_ data: Data) throws -> [String: Data] {
-        guard data.count <= PetPackage.downloadLimit else { throw PetPackage.sizeError(PetPackage.downloadLimit) }
+    static func files(_ input: Data) throws -> [String: Data] {
+        guard input.count <= PetPackage.downloadLimit else { throw PetPackage.sizeError(PetPackage.downloadLimit) }
+        let data = input.startIndex == 0 ? input : Data(input)
         func u16(_ offset: Int) throws -> Int {
             guard offset >= 0, offset <= data.count - 2 else { throw invalid("is incomplete") }
             return Int(data[offset]) | Int(data[offset + 1]) << 8
@@ -79,8 +87,8 @@ enum PetZip {
                 guard output.isEmpty else { throw invalid("contains a directory with file contents") }
             } else {
                 let ext = (name as NSString).pathExtension.lowercased()
-                guard !["zip", "gz", "tgz", "tar", "bz2", "xz", "7z", "rar", "jar"].contains(ext),
-                      !output.starts(with: [0x50, 0x4b, 0x03, 0x04]), !output.starts(with: [0x1f, 0x8b]) else { throw invalid("contains a nested archive") }
+                guard !archiveExtensions.contains(ext), !archiveSignatures.contains(where: { output.starts(with: $0) }),
+                      !output.dropFirst(257).starts(with: "ustar".utf8) else { throw invalid("contains a nested archive") }
                 if !name.hasPrefix("__MACOSX/"), (name as NSString).lastPathComponent != ".DS_Store" { files[name] = output }
             }
             cursor = next
