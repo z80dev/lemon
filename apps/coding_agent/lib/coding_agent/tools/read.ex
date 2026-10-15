@@ -203,8 +203,32 @@ defmodule CodingAgent.Tools.Read do
     else
       params
       |> do_execute(signal, cwd, opts)
+      |> record_displayed_lines(opts)
       |> ToolResultTrust.untrusted(:local_file)
     end
+  end
+
+  defp record_displayed_lines(
+         %AgentToolResult{details: %{snapshot: tag, path: path}, content: content} = result,
+         opts
+       )
+       when is_binary(tag) do
+    body = Enum.map_join(content, "\n", fn %TextContent{text: text} -> text end)
+    complete? = get_in(result.details, [:truncation, :reason]) != "long_line"
+    record_numbered_lines(opts, path, tag, body, complete?)
+    result
+  end
+
+  defp record_displayed_lines(result, _opts), do: result
+
+  defp record_numbered_lines(opts, path, tag, body, complete? \\ true) do
+    lines =
+      Regex.scan(~r/^(\d+): /m, body, capture: :all_but_first)
+      |> Enum.map(fn [number] -> String.to_integer(number) end)
+
+    lines = if complete?, do: lines, else: Enum.drop(lines, -1)
+
+    FileReadTracker.record_seen_lines(opts, path, tag, lines)
   end
 
   defp do_execute(params, signal, cwd, opts) do
@@ -796,6 +820,14 @@ defmodule CodingAgent.Tools.Read do
     case summary do
       {:ok, summary} ->
         FileReadTracker.record_digest(opts, path, summary.digest)
+
+        record_numbered_lines(
+          opts,
+          path,
+          AnchoredEdit.snapshot_for_digest(summary.digest),
+          summary.text
+        )
+
         render_summary(path, summary, %{})
 
       :not_applicable ->
@@ -869,8 +901,18 @@ defmodule CodingAgent.Tools.Read do
             else: :not_applicable
 
         case summary do
-          {:ok, summary} -> render_summary(path, summary, %{acp_client: true})
-          :not_applicable -> render_acp_content(path, content, offset, limit, view, opts)
+          {:ok, summary} ->
+            record_numbered_lines(
+              opts,
+              path,
+              AnchoredEdit.snapshot_for_digest(summary.digest),
+              summary.text
+            )
+
+            render_summary(path, summary, %{acp_client: true})
+
+          :not_applicable ->
+            render_acp_content(path, content, offset, limit, view, opts)
         end
 
       {:error, reason} ->

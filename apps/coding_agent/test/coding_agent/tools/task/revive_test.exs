@@ -154,7 +154,10 @@ defmodule CodingAgent.Tools.Task.ReviveTest do
   test "failed revival admission reports failed and releases the idle session", %{tmp_dir: cwd} do
     child = launch(cwd, idle_ttl_ms: 0)
     entry = :sys.get_state(Control)[child.id]
-    context = put_in(entry.continuation.lifecycle[:task_supervisor], :missing_revive_supervisor)
+
+    context =
+      put_in(entry.continuation, [:lifecycle, :task_supervisor], :missing_revive_supervisor)
+
     Control.configure(child.id, context)
 
     assert %AgentToolResult{is_error: true, details: %{status: "failed", delivery: "failed"}} =

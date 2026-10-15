@@ -13,6 +13,17 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 - Keep finished native task children addressable: wake idle sessions or revive
   parked sessions with prior context through `write agent://`, with configurable
   idle TTL, explicit delivery receipts and coalesced concurrent revival.
+- Expose anchored-edit seen-line enforcement through the validated
+  `[runtime.tools.edit] enforce_seen_lines` config key (default false), carried
+  through session settings into registered edit tools.
+
+- Add default-on optional `i` tool intent in provider schemas, preserving original
+  transcripts while keeping intent out of execution arguments and telemetry;
+  show it in approval rationales and existing ACP tool-call titles.
+
+- Add opt-in `enforce_seen_lines` coding-tool options for snapshot-anchored edits:
+  remember displayed lines across read windows and refuse unseen targets or
+  insertion anchors with actionable range-read hints, including during recovery.
 
 - Add `ls tree: true`: depth-limited newest-first trees with file sizes,
   12 children per directory and explicit omitted-sibling counts.
@@ -25,6 +36,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   no approval by default and makes no network requests.
 
 ### Fixed
+
+- Bind TUI fake control-plane listeners to their advertised IPv4 loopback address,
+  preventing random test ports from reaching unrelated IPv4 services and timing
+  out during command-harness setup.
 
 - Make coordinator active-session lifecycle tests deterministic with per-test
   admission and explicit completion, timeout, cancellation and process-down fences

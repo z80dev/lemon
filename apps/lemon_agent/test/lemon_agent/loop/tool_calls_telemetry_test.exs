@@ -34,6 +34,19 @@ defmodule LemonAgent.Loop.ToolCallsTelemetryTest do
     end
   end
 
+  test "intent text never enters telemetry metadata or measurements" do
+    fixture = tool("intent", fn -> %AgentToolResult{content: []} end)
+
+    execute(
+      [fixture],
+      [%ToolCall{id: "intent", name: "intent", arguments: %{"i" => "Reading private settings"}}],
+      %AgentLoopConfig{},
+      nil
+    )
+
+    assert_pair("intent", :stop, false, false)
+  end
+
   test "raise, throw, exit and a killed worker emit exception exactly once" do
     for {name, execute} <- [
           {"raise", fn -> raise "secret exception" end},

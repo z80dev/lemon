@@ -386,6 +386,7 @@ defmodule LemonAgent.Types do
     - `retry_max_delay_ms` - Maximum retry delay (default: 30,000ms)
     - `tool_timeout_ms` - Per-tool task deadline (default 300,000 ms; `nil` uses the default, `:infinity` opts out); tools may declare their own `timeout_ms`
     - `tool_task_supervisor` - Task supervisor used to run tools (defaults to `LemonAgent.ToolTaskSupervisor`)
+    - `intent_tracing` - Inject optional provider-only `i` intent (default true)
     - `tool_schema_snapshot` - Per-run snapshot used for provider schemas and tool execution
     - `budget_limits` - Canonical cumulative caps; all nil/omitted disables accounting
     - `budget_usage` - Initial cumulative session usage
@@ -441,6 +442,7 @@ defmodule LemonAgent.Types do
             retry_max_delay_ms: non_neg_integer(),
             tool_timeout_ms: pos_integer() | :infinity | nil,
             tool_task_supervisor: Supervisor.supervisor() | nil,
+            intent_tracing: boolean(),
             tool_schema_snapshot: LemonAgent.Types.ToolSchemaSnapshot.t() | nil,
             budget_limits: map() | nil,
             budget_usage: LemonAgent.Budget.usage() | nil,
@@ -469,6 +471,7 @@ defmodule LemonAgent.Types do
               retry_max_delay_ms: 30_000,
               tool_timeout_ms: 300_000,
               tool_task_supervisor: nil,
+              intent_tracing: true,
               tool_schema_snapshot: nil,
               budget_limits: nil,
               budget_usage: nil,

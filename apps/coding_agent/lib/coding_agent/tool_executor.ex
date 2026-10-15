@@ -182,7 +182,7 @@ defmodule CodingAgent.ToolExecutor do
       tool_call_id: tool_call_id,
       tool: tool_name,
       action: project_action(tool_name, args),
-      rationale: "Tool execution: #{tool_name}",
+      rationale: LemonAgent.ToolIntent.current() || "Tool execution: #{tool_name}",
       expires_in_ms: timeout_ms
     })
   catch

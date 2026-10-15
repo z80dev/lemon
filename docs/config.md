@@ -1579,6 +1579,25 @@ mode; `require_approval`, parent floors, and explicitly configured MCP approval
 requirements remain mandatory. An `on_tool_call` hook's revised arguments are
 used for approval resolution and the approval preview, not the original input.
 
+## Anchored Edit Visibility
+
+Enable seen-line enforcement in user or project `.lemon/config.toml`:
+
+```toml
+[runtime.tools.edit]
+enforce_seen_lines = true # default false
+```
+
+Every replaced/deleted line and insertion anchor must have been displayed by a
+numbered read of that snapshot in the current session. Omitted summary bodies and
+window gaps do not count; refusals provide a range-read hint without writing.
+Historical recovery checks visibility before translating unchanged anchors.
+Plain `old_text`/`new_text` replacements are unaffected. The setting must be a
+boolean; default false preserves clients that construct tags without tracked
+reads. Tool hosts can explicitly override it with the `:enforce_seen_lines` option.
+See [file tools](tools/files-and-search.md#anchored-edit-recovery-and-formatting)
+for visibility and snapshot-retention details.
+
 ## Web Tools (`websearch` / `webfetch`)
 
 Lemon includes web tools under `runtime.tools.web`. For full setup and troubleshooting, see:
@@ -1717,6 +1736,29 @@ exploratory conversation into a retained branch summary. This never restores
 files and needs no confirmation; operator `/rewind` is unchanged.
 The filesystem tool is named `fs_checkpoint` (no `checkpoint` alias).
 See [checkpoint tools](tools/checkpoint.md).
+
+## Tool intent
+
+Tool schemas include an optional string `i` by default: a concise, 2–6 word
+present-participle phrase such as `"Reading model role settings"`. Lemon strips
+this presentation-only field before argument validation/coercion and execution,
+uses it as the approval rationale, and retains it in tool-call start event
+arguments (ACP uses it as the tool-call title). Intent is not authorization and
+is never added to tool-call telemetry. Persisted assistant arguments are unchanged.
+
+```toml
+[runtime.tools]
+intent_tracing = true # false omits the injected property from provider schemas
+```
+
+Direct `LemonAgent.Agent` and `CodingAgent.Session` callers can override this with
+`:intent_tracing`; stateless loops use `AgentLoopConfig.intent_tracing`. Disabling
+schema injection does not let stray presentation fields reach tools. A tool
+whose schema already defines `i` is exempt: Lemon preserves its native parameter
+and does not treat it as intent. Closed union alternatives receive the optional
+property individually. Lemon's OpenAI providers explicitly use non-strict tool
+schemas, so `i` remains optional without changing `required` or
+`additionalProperties`.
 
 ## Tool Disclosure
 

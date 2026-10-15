@@ -143,8 +143,28 @@ exactly one position in the current file; changed, ambiguous, unknown, or evicte
 anchors retain the snapshot-mismatch error without writing. Text replacements
 still reject changes since the last read. The session retains up to eight
 snapshots per path, each at most 256 KiB and 10,000 lines; larger files still
-support fresh-tag edits, but not historical recovery. This does not restrict
-edits to previously displayed lines.
+support fresh-tag edits, but not historical recovery.
+
+Set `[runtime.tools.edit] enforce_seen_lines = true` in user/project
+`.lemon/config.toml` to require every replaced/deleted line and each insertion
+anchor to have appeared in a numbered read of that exact snapshot. Tool hosts
+can explicitly override this with `:enforce_seen_lines` in shared tool options
+(alongside `session_id`). The default is
+false, matching omp and preserving existing clients that construct anchored edits
+without session-tracked reads. Plain `old_text`/`new_text` edits are unaffected.
+Unknown or evicted visibility records fail closed when enforcement is enabled.
+
+Full reads, offset/limit windows, selector context, and comma windows accumulate
+only their displayed line numbers per session/path/snapshot; omitted lines and
+partial long-line previews do not count. Structural summaries remain immutable
+and untagged, but their visible declaration lines are remembered for the same
+content digest; their omitted bodies are not. Raw reads and grep results do not
+emit snapshot tags and do not grant visibility. Refusals list unseen ranges with
+a concrete `read path:a-b` hint and never write. Re-read using that hint, then use
+the returned snapshot and coordinates. During historical recovery, visibility is
+checked on the original coordinates before the existing unique byte-identical
+anchor translation, not on unrelated lines at those positions in the new file.
+Successful edits do not mark undisplayed lines of their new snapshot as seen.
 
 Local `write`, `edit`, and `patch` accept `"format": true` (default false, unless
 enabled in tool options) to run an available formatter after writing. An explicit
