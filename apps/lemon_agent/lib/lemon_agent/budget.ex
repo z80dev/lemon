@@ -7,8 +7,9 @@ defmodule LemonAgent.Budget do
   catalog-estimated dollar totals, not billing invoices. Usage is normally reported
   only at completion: an in-flight request can exceed a positive cap. Zero or
   already-spent caps prevent starting requests; exhaustion prevents tools and retries.
-  Caps cover the prompt agent loop and its reported retry attempts, not separate
-  compaction/project-memory maintenance calls or other subagent sessions.
+  Caps cover the prompt agent loop, its reported retry attempts and native task/
+  swarm descendants, not separate compaction/project-memory maintenance calls.
+  Descendant totals are enforcement-only; provider usage reports remain per-session.
 
   Session totals are independent of conversation history. Start a new run with
   `new/2` and the previous session totals; never derive a reset from a cleared or
@@ -51,7 +52,9 @@ defmodule LemonAgent.Budget do
   def enabled?(nil), do: false
 
   def enabled?(limits),
-    do: Enum.any?(@caps, fn {key, _, _} -> not is_nil(Map.get(limits, key)) end)
+    do:
+      is_pid(Map.get(limits, :scope)) or
+        Enum.any?(@caps, fn {key, _, _} -> not is_nil(Map.get(limits, key)) end)
 
   @spec normalize_usage(term()) :: usage()
   def normalize_usage(usage) when is_map(usage) do
@@ -103,6 +106,22 @@ defmodule LemonAgent.Budget do
       | run_usage: add_usage(state.run_usage, usage),
         session_usage: add_usage(state.session_usage, usage)
     }
+  end
+
+  @doc "Warn when a dollar cap cannot reliably price the active model."
+  def unpriced_warning(limits, model) do
+    cost = Map.get(model, :cost)
+
+    cost_capped =
+      Enum.any?([:max_run_cost_usd, :max_session_cost_usd], &is_number(Map.get(limits, &1))) or
+        LemonAgent.BudgetScope.cost_capped?(Map.get(limits, :scope))
+
+    if cost_capped and
+         (is_nil(cost) or
+            Enum.all?([:input, :output, :cache_read, :cache_write], &(Map.get(cost, &1, 0) == 0))) do
+      "Usage budget warning: the active model has no known catalog price. " <>
+        "Dollar caps cannot bound unpriced usage; configure model pricing or token caps."
+    end
   end
 
   @spec check(t() | nil) :: details() | nil

@@ -8,7 +8,15 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
+### Changed
+
+- Native task and swarm subagent spend now counts toward parent run/session token
+  and dollar caps without duplicating per-session usage reports; exhausted parents
+  cannot spawn further children.
+
 ### Added
+
+- Dollar-capped sessions warn when the active model has no known catalog pricing.
 
 - Forward Telegram photos and image documents and Discord CDN image attachments
   to vision-capable models, with bounded downloads and text fallback on failure.

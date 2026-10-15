@@ -233,10 +233,21 @@ including spend outside the selected branch; subsequent spend is independent.
 A genuinely new, unrelated session starts a new session budget.
 
 These caps apply to the **prompt agent loop**, including its reported retry
-attempts and the decision to execute tools or request another turn. Compaction
-and project-memory maintenance model calls are **not counted** in these counters.
-Subagent sessions have their own run/session counters; this is not an aggregate
-account-wide billing limit.
+attempts and native `task`/swarm descendants. Child usage updates and completion
+reports count toward the parent's run and session limits exactly once; an
+exhausted parent cannot launch further children. Running children check ancestor
+limits before further requests/tools. An already in-flight request can overshoot
+a cap, including requests from concurrently running children.
+
+Descendant spend is stored separately for budget enforcement: each session's usage
+reports and billing records still contain only its own provider usage. Late async
+child usage charges the originating parent session, not a later prompt's run cap.
+Compaction and project-memory maintenance model calls are **not counted**.
+This is not an account-wide billing limit and does not cover router-delegated
+`agent` runs. Models with all-zero or missing catalog pricing emit a budget warning
+when a dollar cap is configured; requests remain allowed, so configure model
+pricing or token caps to bound unpriced usage. Task scheduler concurrency settings
+still apply; there is no hidden three-child or projected $0.10 budget gate.
 
 Tokens use the provider's reported total, or input + output + cache-read +
 cache-write when a total is unavailable. Long-lived cache writes are a subset of
