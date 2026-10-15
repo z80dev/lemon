@@ -26,8 +26,8 @@ defmodule LemonHoncho.Config do
   default for a satellite is "on if you gave it credentials". `configured?/1`
   is the question everything else asks: it is true only when the integration
   has somewhere to talk to (an API key or a base URL) *and* has not been
-  switched off. An unconfigured Honcho registers no memory provider and no
-  context contributor, so it costs a search nothing.
+  switched off. An unconfigured Honcho registers no memory provider, context
+  contributor or tools, so it adds neither search latency nor tool-schema tokens.
   """
 
   alias LemonCore.Config.Helpers

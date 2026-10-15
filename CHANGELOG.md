@@ -10,6 +10,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Honcho tool schemas now register only when the integration is configured and
+  enabled, matching its memory provider and context contributor instead of adding
+  five inactive tools to prompts on unconfigured hosts.
 - Native dynamic-preset resolution binds discovered context, output limits,
   reasoning and input capabilities to the effective endpoint, headers and
   selected credential. Default/environment cached metadata no longer bleeds into
