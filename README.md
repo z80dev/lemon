@@ -231,4 +231,6 @@ Inspired by [pi](https://github.com/badlogic/pi-mono),
 [oh-my-pi](https://github.com/can1357/oh-my-pi), [takopi](https://github.com/banteg/takopi),
 OpenClaw and Ironclaw. The skill library was bootstrapped from
 [Hermes Agent](https://github.com/NousResearch/hermes-agent).
-[MIT licensed](LICENSE). Named after a very good cat.
+[MIT licensed](LICENSE), except the Lemon Bot lemon desktop pet artwork, which is
+[CC0](products/lemon_bot/apple/LemonBotKit/Sources/LemonBotKit/Resources/Pets/lemon/LICENSE).
+Named after a very good cat.

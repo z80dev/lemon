@@ -68,6 +68,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   a folder, ZIP or HTTPS URL with size, dimension and path validation; pet
   packages are images only and never run code.
 
+- The lemon desktop pet artwork and its generator are dedicated to the public
+  domain under CC0 1.0 (the rest of Lemon stays MIT). The generator can export a
+  reproducible Codex pet ZIP with the license included, ready for pet galleries.
+
 - Inspect per-run lifecycle, tool outcomes, child tasks and usage with
   `lemon runs show <runId>` and TUI `/runs <runId>`, backed by redacted completion events.
 
