@@ -93,9 +93,9 @@ environment fallback and raises — naming the call — instead of opening a soc
 Whatever activates the integration under `mix test`, no request reaches a real
 workspace.
 
-Everything the integration would otherwise cost — a registered provider that searches,
-a contributor that runs on the turn path — is registered only when
-`LemonHoncho.configured?/0` is true, so an unconfigured build pays nothing.
+The memory provider, context contributor and all five tool schemas register at boot
+only when `LemonHoncho.configured?/0` is true (enabled, with an API key or base URL),
+so an unconfigured or explicitly disabled build adds no Honcho tools to agent prompts.
 
 ## Configuration
 
@@ -175,9 +175,8 @@ landed by then is cached for the next turn instead, which is what a shorter wait
 have produced one turn earlier. And budgets are per contributor, so Honcho's cold turn
 never extends anyone else's 250 ms.
 
-**Tools.** The five tools register with `LemonAgent.ToolRegistry` unconditionally,
-because a model that asks for memory on an unconfigured host should be told so rather
-than handed an error:
+**Tools.** The five tools register with `LemonAgent.ToolRegistry` only when configured
+at boot, under the same gate as the memory provider and context contributor:
 
 | Tool | Honcho capability it exposes | Refused when |
 |---|---|---|
@@ -187,10 +186,11 @@ than handed an error:
 | `honcho_profile` | Reading a peer card, or replacing it wholesale | writes, when `save_messages?` is false |
 | `honcho_conclude` | Three exclusive actions: `conclusion` creates, `query` searches, `delete_id` deletes | create and delete, when `save_messages?` is false |
 
-Two gates sit in front of all five, and both answer as ordinary tool results rather
-than errors. An unconfigured host says so and names the variable to set. And
-`recall_mode: :context` makes every one of them inactive — that mode means "memory
-reaches the model through the prompt, not through tool calls", so a call in that mode
+Two per-call gates remain in front of all five, and both answer as ordinary tool
+results rather than errors. If configuration becomes invalid after boot, a tool says
+so and names the variable to set. And `recall_mode: :context` makes every one inactive —
+that mode means "memory reaches the model through the prompt, not through tool calls",
+so a call in that mode
 is answered with a statement to that effect and no request is made.
 `recall_mode: :tools` is the mirror image: the tools work, and nothing is injected.
 

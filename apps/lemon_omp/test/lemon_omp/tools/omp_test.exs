@@ -32,10 +32,45 @@ defmodule LemonOmp.Tools.OmpTest do
     assert "action" in tool.parameters["required"]
 
     assert tool.parameters["properties"]["action"]["enum"] ==
-             ~w(start wait status list send cancel close resume discover)
+             ~w(start start_many wait status list send cancel close resume discover)
 
     assert tool.parameters["properties"]["approval_mode"]["enum"] == ~w(always-ask write yolo)
     assert tool.parameters["properties"]["approval_mode"]["description"] =~ "start, resume"
+
+    assert tool.parameters["properties"]["tasks"]["items"]["properties"]["approval_mode"]["enum"] ==
+             ~w(always-ask write yolo)
+  end
+
+  test "parallel workers forward approval modes and native routing context", ctx do
+    tool = Omp.tool(ctx.ws, session_key: ctx.key, session_id: "batch-native", run_id: "batch-run")
+    LemonCore.Bus.subscribe("exec_approvals")
+    workspaces = [ctx.ws, workspace!()]
+    modes = ["always-ask", "write"]
+
+    tasks =
+      Enum.zip_with(workspaces, modes, fn ws, mode ->
+        %{"cwd" => ws, "prompt" => "APPROVAL", "approval_mode" => mode}
+      end)
+
+    result = run(tool, %{"action" => "start_many", "tasks" => tasks}) |> assert_untrusted()
+    refute result.is_error
+    sessions = result.details["sessions"]
+    assert Enum.map(sessions, & &1["approvalMode"]) == modes
+
+    for {ws, mode} <- Enum.zip(workspaces, modes) do
+      assert File.read!(Path.join(ws, ".fake_omp.args")) =~ "--approval-mode #{mode}"
+    end
+
+    for _ <- sessions do
+      assert_receive %LemonCore.Event{type: :approval_requested, payload: %{pending: pending}},
+                     5_000
+
+      assert pending.session_id == "batch-native"
+      assert pending.run_id == "batch-run"
+      assert pending.session_key == ctx.key
+      assert Enum.any?(sessions, &(&1["id"] == pending.action["ompSession"]))
+      assert {:ok, _} = LemonCore.ExecApprovals.resolve(pending.id, :deny)
+    end
   end
 
   test "start and resume forward approval mode and native approval routing context", ctx do
@@ -322,5 +357,145 @@ defmodule LemonOmp.Tools.OmpTest do
     bad = run(ctx.tool, %{"action" => "discover", "cwd" => Path.join(ctx.ws, "missing")})
     assert bad.is_error
     assert %{"error" => "invalid_cwd"} = bad.details
+  end
+
+  test "start_many defaults cwd, preserves per-worker overrides and gathers usage", ctx do
+    other = workspace!()
+    parent = self()
+    update = &send(parent, {:combined, &1})
+
+    result =
+      run(
+        ctx.tool,
+        %{
+          "action" => "start_many",
+          "tasks" => [
+            %{"prompt" => "first worker"},
+            %{
+              "prompt" => "second worker",
+              "cwd" => other,
+              "model" => "fake/other",
+              "thinking" => "low"
+            }
+          ],
+          "wait" => true
+        },
+        update
+      )
+      |> assert_untrusted()
+
+    refute result.is_error
+
+    assert %{"action" => "start_many", "sessions" => [a, b], "errors" => [], "usage" => usage} =
+             result.details
+
+    assert a["cwd"] == ctx.ws
+    assert b["cwd"] == other
+    assert Enum.all?([a, b], &(&1["status"] == "idle" and &1["lastTurn"] == "completed"))
+    assert usage["totalTokens"] >= 340
+    assert usage["cost"] > 0
+    assert text(result) =~ a["id"]
+    assert text(result) =~ b["id"]
+    assert text(result) =~ "last turn completed"
+    assert text(result) =~ "Done: first worker"
+    assert text(result) =~ "Combined usage:"
+
+    assert_received {:combined,
+                     %AgentToolResult{
+                       trust: :untrusted,
+                       details: %{"action" => "start_many", "sessions" => [_, _]}
+                     }}
+  end
+
+  test "start_many reports partial failures per task and errors only when all failed", ctx do
+    other = workspace!()
+
+    result =
+      run(ctx.tool, %{
+        "action" => "start_many",
+        "tasks" => [%{"prompt" => "HOLD good"}, %{"prompt" => "REJECT", "cwd" => other}]
+      })
+      |> assert_untrusted()
+
+    refute result.is_error
+
+    assert %{
+             "sessions" => [%{"status" => "running"}],
+             "errors" => [%{"task" => 1, "error" => "rejected"}]
+           } = result.details
+
+    assert text(result) =~ "Task 2:"
+    assert text(result) =~ "Task refused"
+
+    failed =
+      run(ctx.tool, %{
+        "action" => "start_many",
+        "tasks" => [%{"prompt" => "REJECT", "cwd" => other}]
+      })
+
+    assert failed.is_error
+
+    assert %{"sessions" => [], "errors" => [%{"task" => 0, "error" => "rejected"}]} =
+             failed.details
+  end
+
+  test "start_many invalidates the entire batch before starting", ctx do
+    result =
+      run(ctx.tool, %{
+        "action" => "start_many",
+        "tasks" => [%{"prompt" => "HOLD valid"}, %{"prompt" => ""}]
+      })
+
+    assert result.is_error
+    assert result.details["error"] == "invalid_task"
+    assert text(result) =~ "task 2: prompt must"
+    refute File.exists?(Path.join(ctx.ws, ".fake_omp.pid"))
+  end
+
+  test "wait ids supports any/all and streams combined details", ctx do
+    parent = self()
+
+    %{"sessions" => [a, b]} =
+      run(ctx.tool, %{
+        "action" => "start_many",
+        "tasks" => [
+          %{"prompt" => "HOLD first"},
+          %{"prompt" => "HOLD second", "cwd" => workspace!()}
+        ]
+      }).details
+
+    ids = [a["id"], b["id"]]
+    assert {:ok, _} = LemonOmp.cancel(a["id"])
+    await_wire(a["id"], &(&1["status"] == "idle"))
+
+    any = run(ctx.tool, %{"action" => "wait", "ids" => ids, "wait_for" => "any"})
+    refute any.is_error
+
+    assert %{
+             "sessions" => [%{"status" => "idle"}, %{"status" => "running"}],
+             "reason" => "settled"
+           } = any.details
+
+    signal = LemonAgent.AbortSignal.new()
+    :ok = LemonAgent.AbortSignal.abort(signal)
+    aborted = run(ctx.tool, %{"action" => "wait", "ids" => ids}, nil, signal)
+    assert text(aborted) =~ "Stopped waiting"
+    assert aborted.details["reason"] == "aborted"
+
+    assert {:ok, _} = LemonOmp.send_message(b["id"], "finish", :steer)
+    all = run(ctx.tool, %{"action" => "wait", "ids" => ids}, &send(parent, {:many_wait, &1}))
+    refute all.is_error
+    assert Enum.all?(all.details["sessions"], &(&1["status"] == "idle"))
+
+    assert_received {:many_wait,
+                     %AgentToolResult{details: %{"action" => "wait", "sessions" => [_, _]}}}
+
+    missing = run(ctx.tool, %{"action" => "wait", "ids" => ids ++ ["omp_missing"]})
+    assert missing.is_error
+    assert missing.details["error"] == "not_found"
+
+    invalid = run(ctx.tool, %{"action" => "wait", "ids" => ids, "wait_for" => "wrong"})
+    assert invalid.is_error
+    assert invalid.details["error"] == "invalid_params"
   end
 end

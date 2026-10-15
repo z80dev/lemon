@@ -11,7 +11,8 @@ installed”). For the workflow, see [Delegating to omp](../user-guide/omp.md).
 | Action | Parameters | Result |
 | --- | --- | --- |
 | `start` | `prompt`; optional `cwd` (default: the conversation's cwd), `model`, `thinking`, `approval_mode`, `wait` | Starts `omp --mode rpc` in `cwd` and returns once omp accepted the prompt. With `wait: true`, blocks and streams progress until the turn ends, including pending approvals. |
-| `wait` | `id`; optional `timeout_seconds` (default 600, max 3600) | Blocks until the current turn ends, streaming progress. Returns a status report. Timeout or a Lemon abort stops waiting only; omp keeps working. |
+| `start_many` | `tasks` (array of objects: required `prompt`, optional `cwd`, `model`, `thinking`, `approval_mode`); optional `wait`, `timeout_seconds` | Starts workers concurrently after validating the entire batch and checking available capacity. Results keep task order; startup failures are reported per task. With `wait: true`, gathers all successful workers, streaming combined progress. |
+| `wait` | `id` or `ids` (array); optional `wait_for` (`all` default, `any`, for `ids`), `timeout_seconds` (default 600, max 3600) | Blocks until the current turn ends, or all/any selected workers settle, streaming progress. Timeout or a Lemon abort stops waiting only; omp keeps working. |
 | `status` | `id` | What the session is doing now: status, activity, running/recent tools, todos, subagents, usage and cost, latest output or last result. |
 | `list` | – | Sessions this conversation started (live and recently ended). |
 | `send` | `id`, `message`; optional `mode` (`steer` default, or `follow_up`) | Steers the running turn or queues a follow-up; an idle session starts a new turn with the message. |
@@ -31,6 +32,15 @@ conversation approval prompts/channel buttons by default; operators can use
 `exec.approval.resolve`. `LEMON_OMP_APPROVALS=decline` instead cancels them.
 Other blocking UI dialogs remain declined.
 
+`start_many` task directories default to the conversation cwd. Workers sharing
+one cwd can conflict; prefer separate directories or worktrees. A batch
+larger than the remaining live-session capacity is rejected before starting.
+Concurrent callers may still win slots during admission; those failures are
+reported per task. Partial startup failure is not a tool error unless every
+task fails. “Outcome unknown” retains the invocation id for reconciliation.
+Multi-worker reports include a line per worker and combined tokens/cost.
+`wait_for` applies only to multi-worker waits; `mode` remains the send mode.
+
 ## Scope and trust
 
 - A conversation sees and controls only sessions it started; any other id is
@@ -44,8 +54,12 @@ Other blocking UI dialogs remain declined.
 ## Result details
 
 Tool cards receive `details` of the form
-`{"action": "...", "session": {...}}` (or `"sessions": [...]` for `list` and
-`discover`). The session object is the same snapshot the control plane returns
+`{"action": "...", "session": {...}}` (or `"sessions": [...]` for `list`,
+`discover`, `start_many`, and multi-worker `wait`). Combined progress is
+throttled to about one update per 300 ms, with a final update always sent.
+Multi-worker results include combined `usage`; `start_many` also includes
+`errors` with a zero-based task index and safe error message. The session
+object is the same snapshot the control plane returns
 from `omp.sessions.get`: `id`, `ompSessionId`, `title`, `cwd`, `model`,
 `thinking`, `approvalMode` (the requested override, or `null` for omp's own
 configured mode), `status`, `lastTurn`, `activity`, `activeTools`, `recentTools`,

@@ -36,6 +36,8 @@
 #   APPROVAL_CANCEL_NOW  cancel immediately (registration race)
 #   APPROVAL_EXIT  exit when a follow_up arrives, leaving the approval pending
 #   OTHER_UI    emit input/editor/non-approval selects, all declined
+#   ACK_GATE    wait for DIR/.fake_omp_release before acknowledging the prompt
+#   REJECT      reject the prompt without starting a turn
 #   anything else completes the turn at once.
 
 all_args="$*"
@@ -178,6 +180,13 @@ while IFS= read -r line; do
     prompt)
       msg=$(field message)
       case "$msg" in
+        *REJECT*)
+          emit '{"type":"response","id":"'"$id"'","command":"prompt","success":false,"error":"Task refused"}'
+          continue
+          ;;
+        *ACK_GATE*)
+          while [ ! -f "$cwd/.fake_omp_release" ]; do sleep 0.02; done
+          ;;
         *LATE_ACK*)
           # omp may stream and finish a turn before acknowledging its prompt.
           start_turn

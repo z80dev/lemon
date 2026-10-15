@@ -252,7 +252,11 @@ defmodule LemonOmp.ApprovalsTest do
     id = start!(ctx, "OTHER_UI")
     wire = await_wire(id, &(&1["declinedPrompts"] == 3))
     assert wire["pendingApprovals"] == []
-    wait_until(fn -> Enum.count(received(ctx.ws), &(&1["type"] == "extension_ui_response")) == 3 end)
+
+    wait_until(fn ->
+      Enum.count(received(ctx.ws), &(&1["type"] == "extension_ui_response")) == 3
+    end)
+
     replies = Enum.filter(received(ctx.ws), &(&1["type"] == "extension_ui_response"))
     assert Enum.sort(Enum.map(replies, & &1["id"])) == ~w(ui-editor ui-input ui-select)
     assert Enum.all?(replies, &(&1["cancelled"] == true))
@@ -273,8 +277,18 @@ defmodule LemonOmp.ApprovalsTest do
     refute File.read!(Path.join(ctx.ws, ".fake_omp.args")) =~ "--approval-mode"
   end
 
+  test "batch validation rejects an invalid approval mode before starting any worker", ctx do
+    assert {:error, {:invalid_task, 1, :invalid_params}} =
+             LemonOmp.start_many([
+               %{cwd: ctx.ws, prompt: "valid", approval_mode: "write"},
+               %{cwd: ctx.ws, prompt: "invalid", approval_mode: "unsafe"}
+             ])
+
+    refute File.exists?(Path.join(ctx.ws, ".fake_omp.pid"))
+  end
+
   test "invalid approval modes are rejected before spawning", ctx do
-    for mode <- ["", "always", "YOLO", :yolo, false, 42, %{}] do
+    for mode <- [nil, "", "always", "YOLO", :yolo, false, 42, %{}] do
       assert {:error, :invalid_params} =
                LemonOmp.start(%{cwd: ctx.ws, prompt: "hi", approval_mode: mode})
     end

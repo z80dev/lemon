@@ -40,6 +40,19 @@ the [operator guide](../../docs/user-guide/omp.md).
 
 ## Verification
 
-From the umbrella root: `mix test apps/lemon_omp/test`. Tests use the fake
-omp script in `test/support`, never the real binary or `~/.omp`; they restore
-`:lemon_omp` application env and confirm OS processes are gone.
+From the umbrella root: `scripts/test path apps/lemon_omp/test`. By default,
+tests use the fake omp script in `test/support` and exclude `:omp_live`.
+They restore application env and confirm OS processes are gone.
+
+Opt in to the real-binary lifecycle smoke with:
+
+```bash
+LEMON_OMP_LIVE=1 scripts/test path apps/lemon_omp/test/lemon_omp/live_smoke_test.exs
+```
+
+This uses the developer's real `~/.omp/agent` credentials despite the test
+HOME sandbox, and writes session history there. Override with
+`LEMON_OMP_LIVE_AGENT_DIR`; choose the binary with `LEMON_OMP_BIN`.
+`LEMON_OMP_LIVE_MODEL` defaults to
+`openrouter/nvidia/nemotron-3-super-120b-a12b:free`; only `:free` models are
+accepted. It creates files only in a throwaway git workspace.

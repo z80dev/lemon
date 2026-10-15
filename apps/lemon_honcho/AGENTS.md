@@ -9,9 +9,9 @@ explicit tools and a memory provider through platform registries. See
 - Dependency direction is satellite → platform only. Platform apps must not
   reference `LemonHoncho` or add a dependency. Root release composition, the env
   registry entry and test isolation config are explicit integration points.
-- The application registers its own memory provider/context contributor only
-  when configured. Tools register even when unconfigured so requests receive a
-  normal explanatory result. Optional missing registries must not fail boot.
+- The application registers its memory provider, context contributor and tools only
+  when configured at boot. Per-tool configuration gates remain necessary if config
+  later becomes invalid. Optional missing registries must not fail boot.
 - Tests pin `enabled: false`, `start_session_manager: false` and the
   `LemonHoncho.Client.Tripwire` transport. Env can override enablement, so the
   tripwire is essential to stop a developer's real credentials leaking test data.
