@@ -5,6 +5,13 @@ defmodule CodingAgent.Tools.WebSearchOperatorsTest do
 
   setup do
     WebSearch.reset_rate_limit()
+    WebSearch.reset_cache(%{"persistent" => false})
+
+    on_exit(fn ->
+      WebSearch.reset_rate_limit()
+      WebSearch.reset_cache(%{"persistent" => false})
+    end)
+
     :ok
   end
 
@@ -137,10 +144,10 @@ defmodule CodingAgent.Tools.WebSearchOperatorsTest do
       "/tmp",
       Keyword.merge(
         [
-          cache_opts: %{"persistent" => false},
           settings_manager: %{
             tools: %{
               web: %{
+                cache: %{persistent: false},
                 search: %{
                   provider: "exa",
                   providers: %{exa: %{api_key: "test"}, tavily: %{api_key: "test"}}

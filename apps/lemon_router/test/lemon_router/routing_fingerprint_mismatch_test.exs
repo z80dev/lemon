@@ -29,29 +29,33 @@ defmodule LemonRouter.RoutingFingerprintMismatchTest do
     routing_name = :"rfm_#{System.unique_integer([:positive])}"
     memory_name = :"mem_#{System.unique_integer([:positive])}"
 
-    {:ok, feedback_pid} =
-      RoutingFeedbackStore.start_link(path: routing_dir, name: routing_name, min_sample_size: 1)
-
-    {:ok, memory_pid} = Store.start_link(path: memory_dir, name: memory_name)
-
-    {:ok, ingest_pid} =
-      GenServer.start_link(Ingest,
-        config_loader: fn ->
-          %{
-            features: %LemonCore.Config.Features{
-              session_search: :off,
-              routing_feedback: :"default-on"
-            }
-          }
-        end,
-        memory_store: memory_pid
+    feedback_pid =
+      start_supervised!(
+        {RoutingFeedbackStore, path: routing_dir, name: routing_name, min_sample_size: 1}
       )
 
-    on_exit(fn ->
-      if Process.alive?(ingest_pid), do: GenServer.stop(ingest_pid)
-      if Process.alive?(memory_pid), do: GenServer.stop(memory_pid)
-      if Process.alive?(feedback_pid), do: GenServer.stop(feedback_pid)
-    end)
+    memory_pid = start_supervised!({Store, path: memory_dir, name: memory_name})
+
+    ingest_pid =
+      start_supervised!(%{
+        id: Ingest,
+        start:
+          {GenServer, :start_link,
+           [
+             Ingest,
+             [
+               config_loader: fn ->
+                 %{
+                   features: %LemonCore.Config.Features{
+                     session_search: :off,
+                     routing_feedback: :"default-on"
+                   }
+                 }
+               end,
+               memory_store: memory_pid
+             ]
+           ]}
+      })
 
     %{feedback_pid: feedback_pid, ingest_pid: ingest_pid}
   end

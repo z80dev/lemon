@@ -18,7 +18,7 @@ defmodule LemonCore.Config.TUI do
   - `LEMON_TUI_DEBUG`
 
   The terminal client reads and writes `[tui] theme` itself (`/theme <name>`).
-  `[runtime] theme` is a separate runtime setting. A deprecated `[agent] theme`
+  Theme is not part of runtime agent settings. A deprecated `[agent] theme`
   is read as `[tui] theme` (see `LemonCore.Config.LegacyAgentMigration`).
   """
 

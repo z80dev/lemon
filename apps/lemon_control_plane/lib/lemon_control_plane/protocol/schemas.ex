@@ -137,6 +137,9 @@ defmodule LemonControlPlane.Protocol.Schemas do
       required: %{"profileId" => :string, "url" => :string, "token" => :string},
       optional: %{}
     },
+    "learning.timeline" => %{
+      optional: %{"profileId" => :string, "kind" => :string, "limit" => :integer}
+    },
 
     # Profile-scoped memory (destination-local for named-node profiles)
     "memory.list" => %{

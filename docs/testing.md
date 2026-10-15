@@ -42,6 +42,11 @@ name. Add `--validate-config` to also validate the runtime config.
 dependencies; set `LEMON_TEST_REUSE_NODE_MODULES=1` to reuse existing
 `node_modules` in local loops.
 
+When Bun is installed, `fast` also exercises the production TUI through the
+control plane. Install its locked dependencies in a fresh worktree first:
+`(cd clients/tui && bun install --frozen-lockfile)`. Release BEAM setup performs
+the same install before its deterministic gates.
+
 Product and packaged-boot smokes isolate their home/store directories and use
 valid, test-only 32-byte secrets keys; no live provider credential is needed.
 For packaged CLI coverage, run `scripts/verify_release_runtime_boot` in
@@ -110,6 +115,17 @@ replace a runtime executor or dispatcher must snapshot it with
 `Application.fetch_env/2` and restore the exact value (or absence) on exit.
 Cross-app wire tests should explicitly configure the real source-side runtime;
 replace only the destination executor when probing remote execution.
+
+Provider-registry fixtures must restore the exact API-to-module mappings they
+found, rather than leave the registry empty after extension tests. Provider
+stream fixtures use `LemonAi.Types.AssistantMessage` terminal payloads and call
+`EventStream.error/2` for errors, not a raw error followed by successful completion.
+Approval fixtures read pending requests through `LemonCore.ExecApprovalStore`;
+the underlying table also retains terminal resolution receipts.
+
+Coordinator cancellation fixtures wait for tracked admission guardians and sessions
+to exit before asserting an empty active set: a bounded batch result is not a
+synchronous shutdown receipt.
 
 Aggregation/property and per-delta cost tests should use the semantic dispatcher
 seam rather than synchronously rendering every accumulated snapshot through an

@@ -22,12 +22,13 @@ defmodule CodingAgent.Session.Planning do
   """
 
   alias CodingAgent.Extensions.ToolHooks
-  alias CodingAgent.Security.SecretObfuscator
   alias CodingAgent.Messages.CustomMessage
-  alias CodingAgent.SessionManager
+  alias CodingAgent.Security.SecretObfuscator
   alias CodingAgent.Session.ModelResolver
+  alias CodingAgent.SessionManager
   alias CodingAgent.SessionManager.SessionEntry
-  alias CodingAgent.Tools.{Edit, Write}
+  alias CodingAgent.Tools.{Edit, Write, WriteArchive, WriteSqlite}
+  alias LemonAgent.ModelRuntime.SessionPins
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonAi.Types.TextContent
 
@@ -177,7 +178,7 @@ defmodule CodingAgent.Session.Planning do
       session =
         SessionManager.append_entry(session, SessionEntry.model_change(model.provider, model.id))
 
-      LemonAgent.ModelRuntime.SessionPins.clear(session.header.id)
+      SessionPins.clear(session.header.id)
       session
     else
       session
@@ -519,7 +520,7 @@ defmodule CodingAgent.Session.Planning do
   defp plan_write?(_name, _params, _context), do: false
 
   defp plan_file?(path, context) do
-    is_nil(CodingAgent.Tools.WriteArchive.target(path)) and
+    is_nil(WriteArchive.target(path)) and is_nil(WriteSqlite.target(path)) and
       (path == context.plan_path or
          (Path.dirname(path) == context.plan_dir and Path.extname(path) == ".md"))
   end

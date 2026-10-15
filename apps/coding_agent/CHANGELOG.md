@@ -7,6 +7,10 @@
 - `write archive:member` adds or replaces ZIP/TAR/tar.gz/tgz members atomically,
   preserving unrelated member data and enforcing physical archive mutation guards.
 
+- `write` supports parameterized SQLite row inserts, primary-key/rowid updates
+  and keyed deletes in existing databases, with JSON scalar/column validation
+  and the normal mutation guards.
+
 - LSP supports preview/apply file renames, server reload, advertised capabilities,
   and bounded workspace diagnostics from running clients. Document language IDs
   now come from the shared LemonLsp server catalog.

@@ -530,7 +530,7 @@ defmodule LemonCli.OmpCommandTest do
            %{
              "selector" => "p/paid",
              "name" => "Paid model",
-             "contextWindow" => 64000,
+             "contextWindow" => 64_000,
              "costInput" => 0.5,
              "costOutput" => 2,
              "free" => false

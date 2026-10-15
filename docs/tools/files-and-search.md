@@ -164,7 +164,19 @@ app.db?q=SELECT name FROM users LIMIT 5  one read-only query (≤ 1000 rows)
 `where`, `order` and `q` reject comments, multiple statements and
 write/attach/pragma/transaction keywords; queries are interrupted after 10
 seconds. Database output is ordinary numbered text, so `offset`/`limit` page
-long results. Writing to databases is not supported.
+long results.
+
+`write app.db:users` inserts a row from a strict JSON object. Use
+`write app.db:users:42` to update fields by single-column primary key (including
+text keys), or rowid for tables without a primary key. Empty/whitespace content
+on a keyed selector deletes that row. `{}` inserts default values but is not a
+valid update. Composite primary keys and unavailable rowid fallbacks are refused.
+Values must be JSON scalars; column names are checked against `pragma_table_info`
+and SQL values are bound parameters. Database files must already exist; writes
+never create one. Query parameters are not accepted for writes. Connections use
+a 3-second busy timeout and physical database paths take the normal mutation lock,
+checkpoint, symlink and plan-mode guards. Existing literal selector-shaped files
+take precedence over SQLite interpretation.
 
 ## grep paging and ignore rules
 
