@@ -18,6 +18,7 @@ with the workflow you need; source modules and tests define implementation APIs.
 
 - [Setup/providers/channels](user-guide/setup.md) and [configuration reference](config.md)
 - [CLI and sessions](user-guide/cli.md), [TUI](../clients/tui/README.md) and [browser](user-guide/web.md)
+- [TUI slash-command reference](user-guide/tui-commands.md), generated from the terminal command registry
 - [Profiles](user-guide/profiles.md), [memory](user-guide/memory.md) and [Honcho](user-guide/honcho.md)
 - [Delegating to omp](user-guide/omp.md): run, watch, steer and resume omp sessions
 - [Skills](user-guide/skills.md), [instruction files and rules](user-guide/context-files.md),
@@ -34,6 +35,10 @@ with the workflow you need; source modules and tests define implementation APIs.
 ## Tools and skills
 
 - [Skill implementation/reference](skills.md) and [manifest schema](reference/skill-manifest-v2.md)
+- [Shell and background processes](tools/shell.md), [user questions](tools/ask.md),
+  [checkpoints/rewind](tools/checkpoint.md), [todo plans](tools/todo.md)
+  and [local tool issue reports](tools/report-issue.md)
+- [Computer use](tools/computer-use.md)
 - [File and search tools](tools/files-and-search.md), [Web/browser](tools/web.md), [browser tool](tools/browser.md), [Firecrawl](tools/firecrawl.md), [media](tools/media.md), [LSP](tools/lsp.md), [eval kernels](tools/eval.md), [debugger](tools/debug.md) and the [omp delegate](tools/omp.md)
 - [ACP](tools/acp.md), [OpenAI-compatible API](tools/openai-compatible-api.md),
   [extensions/MCP clients](extensions.md) and [WASM](tools/wasm.md)
@@ -73,8 +78,8 @@ overview and the app guides below, rather than keeping a second runtime catalog.
 
 ## Documentation site
 
-Markdown is the source of truth. The VitePress site uses Node.js 24 LTS+ and
-Python 3. From the repository root:
+Markdown is the source of truth. The VitePress site uses Node.js 24 LTS+,
+Python 3, and Bun 1.3.14+ for the TUI command-reference drift check. From the repository root:
 
 ```bash
 npm --prefix docs ci
@@ -88,6 +93,18 @@ through `scripts/generate_docs_llms.py`. These assets are ignored, not committed
 VitePress copies them into the site root. The generator fails if a curated page
 is missing. Its optional `--check` compares already generated files, not the git
 index. No clean-tree generated diff is required.
+
+`bun clients/tui/scripts/generate-commands-doc.ts` regenerates the committed
+TUI command reference without connecting to a daemon. Pass `--check` to fail on
+drift. `verify_docs_site` runs this check in the original checkout (the registry
+is its source), keeping documentation drift in the docs gate rather than only
+the client lane. Install TUI dependencies with
+`bun install --frozen-lockfile --cwd clients/tui` if needed.
+
+The same gate checks every Markdown page against the actual VitePress sidebar.
+Add user-facing pages to `docs/.vitepress/config.js`; intentionally unlisted
+contributor/internal pages need a reason in `scripts/check_docs_navigation.mjs`.
+Hidden directories, `generated`, `node_modules`, and `public` are excluded.
 
 `verify_docs_site` copies docs and the generator into a temporary workspace,
 installs locked dependencies, runs source-link tests, builds, checks both output

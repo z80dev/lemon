@@ -26,6 +26,8 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Added
 
+- Publish a generated TUI command and global-key reference, expose overlooked tool guides in site navigation, and guard against orphaned pages and command-reference drift.
+
 - Show Telegram and Discord typing indicators for chat-originated runs, with
   topic/thread-scoped refreshes and bounded cleanup on completion or cancellation.
 

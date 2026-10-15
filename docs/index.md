@@ -26,4 +26,14 @@ LemonSim adds deterministic, replay-verified simulation worlds for evaluating ag
 [Support](support.md) ·
 [Documentation index](README.md)
 
+### Terminal and tools
+
+[TUI slash commands](user-guide/tui-commands.md) ·
+[Shell and background processes](tools/shell.md) ·
+[User questions](tools/ask.md) ·
+[Checkpoints and rewind](tools/checkpoint.md) ·
+[Todo plans](tools/todo.md) ·
+[Tool issue reports](tools/report-issue.md) ·
+[Computer use](tools/computer-use.md)
+
 </div>

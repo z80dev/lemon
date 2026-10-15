@@ -54,7 +54,7 @@ defmodule LemonComputerUse.Env do
       type: :string,
       default: nil,
       doc:
-        "Node runtime for the LCU bridge. Defaults to LCU's own <root>/agent-tools/node/bin/node.",
+        "Node runtime for the LCU bridge. Defaults to LCU's own `<root>/agent-tools/node/bin/node`.",
       secret?: false,
       required?: false,
       area: :computer_use,
