@@ -8,6 +8,12 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
+### Added
+
+- Expanded the LSP registry from six to 42 primary language servers, with
+  installation hints, unique extension ownership, and case-insensitive
+  `LemonLsp.Servers.language_id/1` lookup.
+
 ### Fixed
 
 - Native dynamic-preset resolution binds discovered context, output limits,
