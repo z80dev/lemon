@@ -11,7 +11,7 @@ struct RoutineLibraryView: View {
     @State private var action = HubAction()
     var body: some View {
         List {
-            HubError(action: action)
+            HubError(action: action, store: store)
             HubBotPicker(store: store, selection: $botID).onChange(of: botID) { Task { await load() } }
             Picker("State", selection: $enabledFilter) { Text("All").tag("all"); Text("Active").tag("true"); Text("Paused").tag("false") }.onChange(of: enabledFilter) { Task { await load() } }
             ForEach(routines) { routine in NavigationLink { RoutineEditorView(store: store, initial: routine) } label: {
@@ -103,8 +103,8 @@ struct RoutineEditorView: View {
 
     private var editorForm: some View {
         Form {
-            HubError(action: action)
-            if let providerError { Text(providerError).foregroundStyle(.red).textSelection(.enabled) }
+            HubError(action: action, store: store)
+            ActionErrorView(message: providerError)
             routineIdentityFields
             triggerFields
             Button("Save routine") { Task { await saveRoutine() } }
@@ -149,7 +149,7 @@ struct RoutineEditorView: View {
     private func observeRunHistory() async {
         guard saved != nil else { return }
         while !Task.isCancelled {
-            await action.perform(readOnly: true) { try await loadRuns() }
+            await action.poll { try await loadRuns() }
             do { try await Task.sleep(for: .seconds(5)) } catch { break }
         }
     }
@@ -175,7 +175,8 @@ struct RoutineEditorView: View {
             runs.insert(run, at: 0)
             if run.status == "outcome_unknown" {
                 action.uncertain = true
-                action.error = "Test outcome_unknown; reconcile routine run \(run.id) before another intent."
+                action.uncertainResourceID = run.id
+                action.error = "We couldn't confirm whether this ran. Check its result below before trying again."
             }
         }
     }
@@ -232,11 +233,11 @@ struct RoutineEditorView: View {
 
     private func routineRunRow(_ run: RoutineRun) -> some View {
         VStack(alignment: .leading) {
-            Text("\(run.trigger) · \(run.status)").font(.headline)
+            Text("\(humanizedStatus(run.trigger)) · \(hubStatusLabel(run.status))").font(LBFont.rowTitle)
             Text("\(hubDate(run.startedAtMs)) · cost \(run.costUsd.map { String(format: "$%.4f", $0) } ?? "unknown")")
             if let error = run.error { Text(error).foregroundStyle(.red) }
-            Button("Open exact result conversation") { Task { await action.perform(readOnly: true) { try await store.openConversation(run.conversationId) } } }
-            Button("Reconcile run") { Task { await action.perform(readOnly: true) { let current: RoutineRun = try await store.read("/routine-runs/\(hubID(run.id))"); if let index = runs.firstIndex(where: { $0.id == current.id }) { runs[index] = current } } } }
+            Button("Open result") { Task { await action.perform(readOnly: true) { try await store.openConversation(run.conversationId) } } }
+            Button("Check status") { Task { await action.perform(readOnly: true) { let current: RoutineRun = try await store.read("/routine-runs/\(hubID(run.id))"); if let index = runs.firstIndex(where: { $0.id == current.id }) { runs[index] = current }; if action.uncertainResourceID == current.id, ["completed", "succeeded", "failed", "cancelled"].contains(current.status) { action.uncertain = false; action.uncertainResourceID = nil; action.error = nil } } } }
             if ["reserved", "queued", "running", "awaiting_input"].contains(run.status) {
                 Button("Request cancellation", role: .destructive) { Task { await action.perform {
                     let current: RoutineRun = try await store.mutate("POST", "/routine-runs/\(hubID(run.id))/cancel", body: [:]); if let index = runs.firstIndex(where: { $0.id == current.id }) { runs[index] = current }
@@ -327,7 +328,7 @@ struct RoutineEditorView: View {
             repeat { let page: HubPage<ChannelBinding> = try await store.read("/channels", query: pageCursor.map { ["cursor": $0] } ?? [:]); bindings = hubMerged(bindings, page.items, append: true, id: \.id); pageCursor = page.nextCursor } while pageCursor != nil
             channels = bindings; providerError = nil
             if !source.isEmpty { await loadDefinition() }
-        } catch { providerError = String(describing: error) }
+        } catch { providerError = humanErrorText(error) }
     }
     private func loadDefinition() async {
         guard !source.isEmpty else { definition = nil; return }

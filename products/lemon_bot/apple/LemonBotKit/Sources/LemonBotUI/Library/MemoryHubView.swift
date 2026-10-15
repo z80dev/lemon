@@ -28,7 +28,7 @@ public struct MemoryHubView: View {
     public init(store: LemonBotStore, botID: ID, memoryID: ID? = nil) { self.store = store; self.botID = botID; initialMemoryID = memoryID }
     public var body: some View {
         Form {
-            HubError(action: action)
+            HubError(action: action, store: store)
             Text("Memory is durable context in this Bot's profile, not current truth. Recheck authoritative live sources before consequential decisions. Identity and Job are separate.")
             Section("Search") {
                 TextField("Search memory", text: $query).onSubmit { Task { await load() } }
@@ -111,7 +111,7 @@ struct MemoryImportView: View {
     @State private var action = HubAction()
     var body: some View {
         Form {
-            HubError(action: action)
+            HubError(action: action, store: store)
             if let result {
                 Section("Acknowledged import result") {
                     Text(result.status)

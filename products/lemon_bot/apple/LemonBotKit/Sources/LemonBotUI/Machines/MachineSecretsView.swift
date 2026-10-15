@@ -15,7 +15,7 @@ struct MachineSecretsView: View {
     @State private var action = HubAction()
     var body: some View {
         Form {
-            HubError(action: action)
+            HubError(action: action, store: store)
             Text("Values are write-only and stored encrypted on this destination host. Bot scope is not OS isolation: privileged users and co-resident host processes retain full host access. Values never become chat drafts.")
             Section("Names only") {
                 ForEach(secrets) { secret in

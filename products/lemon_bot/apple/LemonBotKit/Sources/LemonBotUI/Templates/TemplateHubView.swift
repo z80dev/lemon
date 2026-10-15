@@ -12,7 +12,7 @@ public struct TemplateHubView: View {
     public init(store: LemonBotStore) { self.store = store }
     public var body: some View {
         List {
-            HubError(action: action)
+            HubError(action: action, store: store)
             TextField("Search reviewed templates", text: $query).onSubmit { Task { await load() } }
             Text("Templates are separate declarative copies. They do not grant access to the author's live Bot, learned memory, private history or credentials. Review instructions for confidential prose before publishing.")
             ForEach(templates) { template in
@@ -84,7 +84,7 @@ public struct TemplateDetailView: View {
     public init(store: LemonBotStore, templateID: ID) { self.store = store; self.templateID = templateID }
     public var body: some View {
         Form {
-            HubError(action: action)
+            HubError(action: action, store: store)
             if let template {
                 Section("Provenance and terms") {
                     Text("Publisher: \(template.provenance.publisher) · \(template.provenance.thirdParty ? "Third-party instructions, not first-party trust" : "Workspace author")")
@@ -144,7 +144,7 @@ struct TemplatePublishView: View {
     @State private var action = HubAction()
     var body: some View {
         Form {
-            HubError(action: action)
+            HubError(action: action, store: store)
             HubBotPicker(store: store, selection: $botID).onChange(of: botID) { content = nil; reviewed = false; published = nil }
             Button("Load actual declarative export for review") { Task { await action.perform(readOnly: true) { content = try await store.read("/bots/\(hubID(botID))/export") } } }.disabled(botID.isEmpty)
             if let content {

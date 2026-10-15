@@ -30,7 +30,7 @@ public struct SearchHubView: View {
     public init(store: LemonBotStore, conversationID: ID? = nil) { self.store = store; initialConversationID = conversationID }
     public var body: some View {
         List {
-            HubError(action: action)
+            HubError(action: action, store: store)
             Section("Authorized search filters") {
                 TextField("Search visible content", text: $query).onSubmit { Task { await search() } }
                 Picker("Kind", selection: $kind) { Text("All").tag("all"); Text("Messages").tag("message"); Text("Bots").tag("bot"); Text("Groups").tag("group"); Text("Files").tag("file"); Text("Routines").tag("routine"); Text("Skills").tag("skill"); Text("Memory").tag("memory") }

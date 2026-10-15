@@ -26,7 +26,7 @@ struct SkillLibraryView: View {
     @State private var action = HubAction()
     var body: some View {
         List {
-            HubError(action: action)
+            HubError(action: action, store: store)
             TextField("Search skills", text: $query).onSubmit { Task { await load() } }
             HubBotPicker(store: store, selection: $botID).onChange(of: botID) { Task { await load() } }
             ForEach(skills) { skill in NavigationLink { SkillEditorView(store: store, initial: skill) } label: {
@@ -65,7 +65,7 @@ struct SkillEditorView: View {
     @State private var action = HubAction()
     var body: some View {
         Form {
-            HubError(action: action)
+            HubError(action: action, store: store)
             if acknowledged { Text(machines.isEmpty ? "Saved in the library; no hosts were selected for installation." : "Saved after selected destination hosts acknowledged provisioning. Installation does not execute these instructions.").foregroundStyle(.green) }
             TextField("Name", text: $name)
             TextField("Description", text: $description)

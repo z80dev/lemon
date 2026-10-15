@@ -19,7 +19,7 @@ struct EmailSettingsView: View {
     private var exactAvailable: Bool { availability?.available == true && checkedProvider == providerID && checkedPart == localPart }
     var body: some View {
         Form {
-            AdminStatus(control: control, store: store)
+            AdminStatus(control: control, store: store, refresh: { await control.perform { try await load() } })
             Section("Actual account-owned mailboxes") {
                 ForEach(accounts) { account in
                     NavigationLink("\(account.address) · \(account.state)") { MailboxMessagesView(store: store, account: account) }
@@ -96,7 +96,7 @@ struct MailboxMessagesView: View {
     @State private var sender = ""
     var body: some View {
         Form {
-            AdminStatus(control: control, store: store)
+            AdminStatus(control: control, store: store, refresh: { await control.perform { try await load() } })
             Section("Actual provider mailbox search") {
                 Text(account.address).textSelection(.enabled)
                 Text("\(account.state) · \(account.immutableAddress ? "immutable address" : "provider-defined address lifecycle")")
@@ -162,7 +162,7 @@ struct XSettingsView: View {
     @State private var consent = false
     var body: some View {
         Form {
-            AdminStatus(control: control, store: store)
+            AdminStatus(control: control, store: store, refresh: { await control.perform { try await load() } })
             Section("Registered X provider — no implicit account linking") {
                 if let provider {
                     ProviderPrerequisites(label: provider.label, kind: provider.kind, configured: provider.configured, prerequisites: provider.prerequisites, capabilities: provider.capabilities)
