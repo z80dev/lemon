@@ -10,6 +10,8 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Run status preserves unavailable counts as unknown instead of zero and restores
+  UTC daily terminal totals after tracker restarts, including crashed runs.
 - Preserve delegated run identity when polling recovers a durable completion, so
   the task and RunGraph both become terminal even without a live watcher.
 - Make coordinator/session/watcher/environment regressions synchronize with their
@@ -38,6 +40,8 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Added
 
+- Status exposes `failed_today` and per-field run-count availability, with
+  null-safe TUI and web diagnostics.
 - Setup offers local inference servers and custom OpenAI-compatible endpoints,
   optional encrypted keys, and consent-based model discovery with manual fallback.
 

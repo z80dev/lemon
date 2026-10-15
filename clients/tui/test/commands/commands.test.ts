@@ -325,6 +325,16 @@ describe("diagnostics", () => {
 		expect(text).toContain("tui-session");
 	});
 
+	test("/status renders unavailable run counts as unknown", async () => {
+		harness.server.respondWith("status", {
+			runs: { active: null, queued: 0, completed_today: null, failed_today: null },
+		});
+		await harness.run("/status");
+		expect(harness.host.text).toContain(
+			"unknown active, 0 queued, unknown today, unknown failed today",
+		);
+	});
+
 	test("/status includes the focused profile and model", async () => {
 		harness.store.setFocused("agent:research:main");
 		harness.store.focused.setModel({ model: "openai:gpt-5" }, "local");

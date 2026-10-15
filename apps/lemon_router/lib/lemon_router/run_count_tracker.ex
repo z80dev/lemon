@@ -1,60 +1,61 @@
 defmodule LemonRouter.RunCountTracker do
   @moduledoc """
-  Tracks today's terminal runs via `[:lemon, :run, :stop]` telemetry.
+  Tracks terminal runs since midnight UTC, seeded from durable introspection
+  `run_completed` and `run_failed` events, not provider usage requests.
 
-  The queued count is read from live session coordinators, not reconstructed
-  from submit/start telemetry: merged followups, accepted steers and pre-start
-  cancellation can terminalize without an executor-start event.
-
-  A midnight reset timer clears `completed_today` at the start of each UTC day.
+  Run IDs deduplicate telemetry and durable terminal events. `completed_today`
+  includes all terminal runs; `failed_today` is the subset that failed.
+  Queued submissions are read from authoritative live session coordinators.
   """
-
   use GenServer
 
-  @idx_completed_today 1
-
-  # ── Client API ──────────────────────────────────────────────────────────
-
   def start_link(opts \\ []) do
-    name = Keyword.get(opts, :name, __MODULE__)
-    GenServer.start_link(__MODULE__, opts, name: name)
+    GenServer.start_link(__MODULE__, opts, name: Keyword.get(opts, :name, __MODULE__))
   end
 
-  @doc """
-  Returns the current queued count (submissions that have not yet started).
-  """
-  @spec queued() :: non_neg_integer()
-  def queued do
-    LemonRouter.SessionCoordinator.pending_count()
-  end
+  def queued, do: LemonRouter.SessionCoordinator.pending_count()
+  def completed_today, do: GenServer.call(__MODULE__, :completed_today, 100)
+  def failed_today, do: GenServer.call(__MODULE__, :failed_today, 100)
 
-  @doc """
-  Returns the number of runs completed since the last midnight UTC reset.
-  """
-  @spec completed_today() :: non_neg_integer()
-  def completed_today do
-    ref = counter_ref()
-    max(:counters.get(ref, @idx_completed_today), 0)
+  @doc false
+  def record_terminal(run_id, failed?) do
+    GenServer.cast(__MODULE__, {:terminal, run_id, failed?})
   end
-
-  # ── Server callbacks ────────────────────────────────────────────────────
 
   @impl true
   def init(_opts) do
-    ref = :counters.new(1, [:write_concurrency])
-    :persistent_term.put({__MODULE__, :counters}, ref)
+    :telemetry.attach(
+      "lemon_router.run_count_tracker.stop",
+      [:lemon, :run, :stop],
+      &__MODULE__.handle_stop/4,
+      nil
+    )
 
-    attach_telemetry()
     schedule_midnight_reset()
-
-    {:ok, %{counter_ref: ref}}
+    {:ok, seed()}
   end
 
   @impl true
-  def handle_info(:midnight_reset, state) do
-    :counters.put(state.counter_ref, @idx_completed_today, 0)
+  def handle_call(field, _from, state) when field in [:completed_today, :failed_today] do
+    value =
+      if state.available? do
+        if field == :completed_today,
+          do: map_size(state.runs),
+          else: Enum.count(state.runs, fn {_id, failed?} -> failed? end)
+      end
+
+    {:reply, value, state}
+  end
+
+  @impl true
+  def handle_cast({:terminal, run_id, failed?}, state) do
+    {:noreply, put_terminal(state, run_id, failed?)}
+  end
+
+  @impl true
+  def handle_info(:midnight_reset, _state) do
     schedule_midnight_reset()
-    {:noreply, state}
+    {:noreply, seed()}
   end
 
   @impl true
@@ -63,43 +64,47 @@ defmodule LemonRouter.RunCountTracker do
     :ok
   end
 
-  # ── Telemetry handlers (module function refs — required by :telemetry) ──
-
   @doc false
-  def handle_stop(_event, _measurements, _metadata, _config) do
-    :counters.add(counter_ref(), @idx_completed_today, 1)
+  def handle_stop(_event, measurements, metadata, _config) do
+    record_terminal(metadata.run_id, measurements[:ok] == false)
   end
 
-  # ── Internal helpers ────────────────────────────────────────────────────
+  defp seed do
+    midnight = DateTime.new!(Date.utc_today(), ~T[00:00:00], "Etc/UTC")
 
-  defp counter_ref do
-    :persistent_term.get({__MODULE__, :counters})
+    case LemonCore.IntrospectionStore.terminal_events_since(
+           DateTime.to_unix(midnight, :millisecond)
+         ) do
+      {:ok, events} ->
+        Enum.reduce(
+          events,
+          %{runs: %{}, available?: LemonCore.Introspection.enabled?()},
+          fn event, state ->
+            failed? =
+              event.event_type in [:run_failed, "run_failed"] or
+                Map.get(event.payload, :ok, Map.get(event.payload, "ok")) == false
+
+            put_terminal(state, event.run_id || event.event_id, failed?)
+          end
+        )
+
+      {:error, _} ->
+        %{runs: %{}, available?: false}
+    end
   end
 
-  defp attach_telemetry do
-    :telemetry.attach(
-      "lemon_router.run_count_tracker.stop",
-      [:lemon, :run, :stop],
-      &__MODULE__.handle_stop/4,
-      nil
-    )
+  defp put_terminal(state, run_id, failed?) do
+    %{state | runs: Map.update(state.runs, run_id, failed?, &(&1 or failed?))}
   end
 
   defp schedule_midnight_reset do
-    ms_until_midnight = ms_until_next_utc_midnight()
-    Process.send_after(self(), :midnight_reset, ms_until_midnight)
+    Process.send_after(self(), :midnight_reset, ms_until_next_utc_midnight())
   end
 
   @doc false
   def ms_until_next_utc_midnight do
     now = DateTime.utc_now()
-
-    midnight =
-      now
-      |> DateTime.to_date()
-      |> Date.add(1)
-      |> DateTime.new!(~T[00:00:00], "Etc/UTC")
-
+    midnight = now |> DateTime.to_date() |> Date.add(1) |> DateTime.new!(~T[00:00:00], "Etc/UTC")
     DateTime.diff(midnight, now, :millisecond)
   end
 end

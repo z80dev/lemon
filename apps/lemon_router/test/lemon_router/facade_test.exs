@@ -167,7 +167,13 @@ defmodule LemonRouter.FacadeTest do
       assert LemonRouter.active_runs() == {:error, :unavailable}
       assert LemonRouter.active_run_count() == 0
       refute LemonRouter.run_active?("run_1")
-      assert LemonRouter.counts() == %{active: 0, queued: 0, completed_today: 0}
+
+      assert LemonRouter.counts() == %{
+               active: nil,
+               queued: nil,
+               completed_today: nil,
+               failed_today: nil
+             }
     end
   end
 end
