@@ -267,18 +267,6 @@ defmodule LemonCore.Env.Declarations do
       apps: [:lemon_core]
     },
     %{
-      name: :lemon_theme,
-      env_var: "LEMON_THEME",
-      aliases: [],
-      type: :string,
-      default: "lemon",
-      doc: "Agent-level theme name (distinct from the TUI theme).",
-      secret?: false,
-      required?: false,
-      area: :agent,
-      apps: [:lemon_core]
-    },
-    %{
       name: :phx_server,
       env_var: "PHX_SERVER",
       aliases: [],

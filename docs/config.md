@@ -499,11 +499,9 @@ operator-token setting. Lemon does not yet implement the short-lived delegated
 browser-session exchange needed to authenticate that client safely. Never
 place the shared server token in `VITE_*` configuration.
 - `LEMON_PROVIDER_ROUTING_ENABLED`, `LEMON_PROVIDER_FALLBACK_PROVIDERS`, `LEMON_PROVIDER_ROUTING_REQUIRE_CREDENTIALS`
-- `LEMON_THEME`, `LEMON_DEBUG`
+- `LEMON_TUI_THEME`, `LEMON_TUI_DEBUG` — TUI appearance and debug mode
 - `LEMON_SECRET_OBFUSCATION_ENABLED` — overrides `[runtime.secret_obfuscation] enabled`
 - `<PROVIDER>_API_KEY`, `<PROVIDER>_BASE_URL` (e.g., `ANTHROPIC_API_KEY`, `OPENAI_BASE_URL`, `OPENCODE_API_KEY`, `ZAI_API_KEY`, `MINIMAX_API_KEY`); local servers use `OLLAMA_BASE_URL`/`OLLAMA_HOST`, `LM_STUDIO_BASE_URL`, `LLAMA_CPP_BASE_URL` and `LITELLM_BASE_URL` only when config sets no `base_url` (see [OpenAI-Compatible Endpoints](#openai-compatible-endpoints))
-- `LEMON_CODEX_EXTRA_ARGS`, `LEMON_CODEX_AUTO_APPROVE`
-- `LEMON_CLAUDE_YOLO`
 - `LEMON_WASM_ENABLED`, `LEMON_WASM_RUNTIME_PATH`, `LEMON_WASM_TOOL_PATHS`, `LEMON_WASM_AUTO_BUILD`
 - `LEMON_TERMINAL_BACKENDS_ALLOW`, `LEMON_TERMINAL_BACKENDS_DENY`, `LEMON_TERMINAL_BACKENDS_REQUIRE_APPROVAL`
 - `LEMON_DOCKER_TERMINAL_IMAGE`, `LEMON_DOCKER_TERMINAL_MEMORY`, `LEMON_DOCKER_TERMINAL_CPUS`, `LEMON_DOCKER_TERMINAL_PIDS_LIMIT`, `LEMON_DOCKER_TERMINAL_NETWORK`
@@ -788,6 +786,29 @@ failure. Fix syntax errors in the named file, then run
 `lemon config validate --verbose`. For removed settings, run
 `lemon config migrate`. Doctor records invalid configuration as failing checks
 and continues with the remaining diagnostics.
+
+Normal configuration loads, including `lemon config show` and
+`mix lemon.config show`, also validate and reject invalid resolved values rather
+than quietly running with them. `LemonCore.Config.Modular.load(validate: false)`
+is an explicit programmatic opt-out for inspecting unresolved validation issues;
+removed settings and malformed TOML are always rejected. Validation messages name
+the input files and expected TOML types or allowed choices, never the supplied
+value. Resolved errors list both files because environment and project overrides
+can combine with global settings.
+
+Both `show` commands use the same redacted summary: `false` and `0` are values;
+only absent values display `(not set)`. Fields overridden by declared environment
+variables are marked `(from LEMON_...)` (or the active alias), without printing
+environment secrets.
+
+Use `[tui] theme` or `LEMON_TUI_THEME` for appearance; this is the only runtime
+theme setting. Lemon runs agents natively rather than through vendor CLI engines.
+
+The example leaves Telegram credentials and project/chat bindings commented
+out; enable only real bindings and use `bot_token_secret` instead of writing a
+token into TOML. XMTP's `wallet_address`, `wallet_key`, and `private_key` support
+whole-value `${NAME}` environment references, resolved before the bridge connects.
+Unset references are omitted; use `wallet_key_secret` to read an encrypted secret.
 
 `lemon config migrate` rewrites the global config and the current project's
 config this way, and `lemon setup` does the same when it finds an existing

@@ -13,9 +13,9 @@ defmodule LemonCore.Config.Modular do
   1. Environment variables (highest priority)
   2. Project config (`.lemon/config.toml`)
   3. Global config (`~/.lemon/config.toml`)
+  4. Default values (lowest priority)
 
   Both config locations are configurable; see `LemonCore.Paths`.
-  4. Default values (lowest priority)
 
   ## Example Usage
 
@@ -95,7 +95,7 @@ defmodule LemonCore.Config.Modular do
   ## Options
 
     * `:project_dir` - Project directory to load config from (default: current directory)
-    * `:validate` - Whether to validate the config (default: false)
+    * `:validate` - Whether to validate the config (default: true); invalid config raises
 
   ## Examples
 
@@ -106,36 +106,32 @@ defmodule LemonCore.Config.Modular do
   @spec load(keyword()) :: t()
   def load(opts \\ []) do
     project_dir = Keyword.get(opts, :project_dir, File.cwd!())
-    validate? = Keyword.get(opts, :validate, false)
+    validate? = Keyword.get(opts, :validate, true)
 
-    # Load, map the legacy `[agent]` alias, reject removed settings, and resolve.
-    settings = load_merged_settings(project_dir)
-    warn_deprecated(settings)
+    {settings, sources} = load_merged_settings(project_dir)
+    warn_deprecated(sources)
     settings = LegacyAgentMigration.migrate_settings(settings)
-    check_deprecated_sections!(settings)
+    check_removed_sources!(sources)
     config = resolve_settings(settings)
-    check_model_roles!(config.model_roles)
+    check_model_roles!(config.model_roles, sources)
 
     case Validator.validate_budgets(config.budgets) do
-      :ok -> :ok
-      {:error, errors} -> raise ValidationError, message: "Invalid budgets", errors: errors
+      :ok ->
+        :ok
+
+      {:error, errors} ->
+        raise ValidationError, message: "Invalid budgets", errors: qualify_errors(errors, sources)
     end
 
-    # Validate if requested
     if validate? do
       case Validator.validate(config) do
         :ok ->
           config
 
         {:error, errors} ->
-          require Logger
-
-          Logger.warning("""
-          Configuration validation failed:
-          #{Enum.map_join(errors, "\n", &"  - #{&1}")}
-          """)
-
-          config
+          raise ValidationError,
+            message: "Configuration validation failed",
+            errors: qualify_errors(errors, sources)
       end
     else
       config
@@ -159,17 +155,7 @@ defmodule LemonCore.Config.Modular do
   """
   @spec load!(keyword()) :: t()
   def load!(opts \\ []) do
-    config = load(opts)
-
-    case Validator.validate(config) do
-      :ok ->
-        config
-
-      {:error, errors} ->
-        raise LemonCore.Config.ValidationError,
-          message: "Configuration validation failed",
-          errors: errors
-    end
+    load(Keyword.put(opts, :validate, true))
   end
 
   @doc """
@@ -189,9 +175,12 @@ defmodule LemonCore.Config.Modular do
   @spec load_with_validation(keyword()) :: {:ok, t()} | {:error, [String.t()]}
   def load_with_validation(opts \\ []) do
     project_dir = Keyword.get(opts, :project_dir, File.cwd!())
-    settings = load_merged_settings(project_dir)
+    {settings, sources} = load_merged_settings(project_dir)
 
-    validate_settings(settings)
+    case validate_settings(settings) do
+      {:ok, config} -> {:ok, config}
+      {:error, errors} -> {:error, qualify_errors(errors, sources)}
+    end
   rescue
     error in ValidationError -> {:error, [Exception.message(error)]}
   end
@@ -239,10 +228,14 @@ defmodule LemonCore.Config.Modular do
   """
   @spec deprecation_warnings(keyword()) :: [String.t()]
   def deprecation_warnings(opts \\ []) do
-    opts
-    |> Keyword.get(:project_dir, File.cwd!())
-    |> load_merged_settings()
-    |> Validator.deprecation_warnings()
+    {_settings, sources} =
+      opts
+      |> Keyword.get(:project_dir, File.cwd!())
+      |> load_merged_settings()
+
+    Enum.flat_map(sources, fn {path, settings} ->
+      Enum.map(Validator.deprecation_warnings(settings), &"#{path}: #{&1}")
+    end)
   end
 
   @doc """
@@ -276,8 +269,13 @@ defmodule LemonCore.Config.Modular do
     end
   end
 
-  defp warn_deprecated(settings) do
-    case Validator.deprecation_warnings(settings) do
+  defp warn_deprecated(sources) do
+    warnings =
+      Enum.flat_map(sources, fn {path, settings} ->
+        Enum.map(Validator.deprecation_warnings(settings), &"#{path}: #{&1}")
+      end)
+
+    case warnings do
       [] ->
         :ok
 
@@ -287,14 +285,39 @@ defmodule LemonCore.Config.Modular do
     end
   end
 
-  defp check_model_roles!(roles) do
+  defp check_model_roles!(roles, sources) do
     case Validator.validate_model_roles(roles) do
       :ok ->
         :ok
 
       {:error, errors} ->
-        raise ValidationError, message: "Invalid model roles", errors: errors
+        raise ValidationError,
+          message: "Invalid model roles",
+          errors: qualify_errors(errors, sources)
     end
+  end
+
+  defp check_removed_sources!(sources) do
+    errors =
+      Enum.flat_map(sources, fn {path, settings} ->
+        case Validator.validate_deprecated_sections(
+               LegacyAgentMigration.migrate_settings(settings)
+             ) do
+          :ok -> []
+          {:error, errors} -> Enum.map(errors, &"#{path}: #{&1}")
+        end
+      end)
+
+    if errors != [] do
+      raise ValidationError, message: "Configuration uses removed settings", errors: errors
+    end
+  end
+
+  # Resolved values can combine multiple files and environment overrides. List
+  # the input files rather than pretending to know a TOML line after resolution.
+  defp qualify_errors(errors, sources) do
+    paths = Enum.map_join(sources, ", ", fn {path, _settings} -> path end)
+    Enum.map(errors, &"#{paths}: #{&1}")
   end
 
   # Normalizes settings and resolves each section into the modular config struct.
@@ -347,11 +370,17 @@ defmodule LemonCore.Config.Modular do
   # Private functions
 
   defp load_merged_settings(project_dir) do
-    global_settings = load_toml_file(global_path())
-    project_settings = load_toml_file(project_path(project_dir))
+    sources =
+      [global_path(), project_path(project_dir)]
+      |> Enum.uniq()
+      |> Enum.map(fn path -> {Path.expand(path), load_toml_file(path)} end)
 
-    # Merge: project overrides global
-    LemonCore.MapHelpers.deep_merge(global_settings, project_settings)
+    settings =
+      Enum.reduce(sources, %{}, fn {_path, settings}, merged ->
+        LemonCore.MapHelpers.deep_merge(merged, settings)
+      end)
+
+    {settings, sources}
   end
 
   defp load_toml_file(path) do

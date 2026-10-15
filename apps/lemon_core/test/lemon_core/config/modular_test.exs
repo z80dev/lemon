@@ -47,6 +47,77 @@ defmodule LemonCore.Config.ModularTest do
     assert LemonCore.Config.load_file(Path.join(root, "missing.toml")) == %{}
   end
 
+  test "unknown choices fail normal loading without replacing or echoing them" do
+    root = Path.join(System.tmp_dir!(), "config_choices_#{System.unique_integer([:positive])}")
+    path = Path.join(root, ".lemon/config.toml")
+    File.mkdir_p!(Path.dirname(path))
+    on_exit(fn -> File.rm_rf!(root) end)
+
+    File.write!(path, "[defaults]\nthinking_level = \"private-unknown-choice\"\n")
+    error = assert_raise ValidationError, fn -> Modular.load(project_dir: root) end
+    assert Exception.message(error) =~ path
+    assert Exception.message(error) =~ "defaults.thinking_level"
+    assert Exception.message(error) =~ "medium"
+    refute Exception.message(error) =~ "private-unknown-choice"
+
+    assert {:error, errors} = Modular.load_with_validation(project_dir: root)
+    assert Enum.any?(errors, &String.contains?(&1, "defaults.thinking_level"))
+
+    assert Modular.load(project_dir: root, validate: false).agent.default_thinking_level ==
+             "private-unknown-choice"
+
+    File.write!(path, "[tui]\ntheme = \"private-unknown-choice\"\n")
+    assert_raise ValidationError, fn -> Modular.load(project_dir: root) end
+  end
+
+  test "removed settings and legacy warnings name the originating file" do
+    root = Path.join(System.tmp_dir!(), "config_sources_#{System.unique_integer([:positive])}")
+    path = Path.join(root, ".lemon/config.toml")
+    File.mkdir_p!(Path.dirname(path))
+    on_exit(fn -> File.rm_rf!(root) end)
+
+    File.write!(path, "[runtime.cli]\nenabled = true\n")
+    error = assert_raise ValidationError, fn -> Modular.load(project_dir: root) end
+    assert Enum.any?(error.errors, &String.starts_with?(&1, path <> ": "))
+
+    File.write!(path, "[agent]\ndefault_model = \"test-model\"\n")
+
+    assert Enum.any?(
+             Modular.deprecation_warnings(project_dir: root),
+             &String.starts_with?(&1, path <> ": ")
+           )
+  end
+
+  test "copyable example has no live placeholder bindings or plaintext Telegram token" do
+    path = Path.expand("../../../../../examples/config.example.toml", __DIR__)
+    assert {:ok, settings} = Toml.decode_file(path)
+    assert {:ok, _config} = Modular.validate_settings(settings)
+    refute Map.has_key?(settings["gateway"], "bindings")
+    refute Map.has_key?(settings["gateway"], "projects")
+    refute Map.has_key?(settings["gateway"], "telegram")
+    refute Map.has_key?(settings["runtime"], "theme")
+    assert settings["defaults"]["model"] == LemonCore.Config.Agent.resolve(%{}).default_model
+  end
+
+  test "provider invalid TOML types survive resolution for validation" do
+    secret = "private-value-not-for-diagnostics"
+
+    assert {:error, errors} =
+             Modular.validate_settings(%{
+               "providers" => %{
+                 "custom" => %{"api" => [secret]},
+                 "anthropic" => %{"auth_source" => 5, "api_key_secret" => [secret]}
+               }
+             })
+
+    for path <-
+          ~w(providers.custom.api providers.anthropic.auth_source providers.anthropic.api_key_secret) do
+      assert Enum.any?(errors, &String.starts_with?(&1, path <> ":"))
+    end
+
+    refute Enum.any?(errors, &String.contains?(&1, secret))
+  end
+
   describe "load/1" do
     test "returns a Modular config struct" do
       config = Modular.load()
@@ -263,7 +334,13 @@ defmodule LemonCore.Config.ModularTest do
           Modular.load(project_dir: project_dir)
         end
 
-      assert "The [runtime.cli] section has been removed; all subagent tasks run natively." in error.errors
+      assert Enum.any?(
+               error.errors,
+               &String.ends_with?(
+                 &1,
+                 "The [runtime.cli] section has been removed; all subagent tasks run natively."
+               )
+             )
     end
   end
 end

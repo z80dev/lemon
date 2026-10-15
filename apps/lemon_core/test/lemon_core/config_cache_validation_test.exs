@@ -4,11 +4,7 @@ defmodule LemonCore.ConfigCacheValidationTest do
   """
   use ExUnit.Case, async: false
 
-  import ExUnit.CaptureLog
-
   alias LemonCore.ConfigCache
-
-
 
   setup do
     # Create a temporary directory for test configs
@@ -59,89 +55,55 @@ defmodule LemonCore.ConfigCacheValidationTest do
   end
 
   describe "reload with validation" do
-    test "reload without validation does not log warnings", %{global_config: global_config} do
-      # Create a config with validation issues
-      File.write!(Path.join(global_config, "config.toml"), """
-      [defaults]
-      model = ""
-      """)
-
-      # Invalidate cache to force reload
-      ConfigCache.invalidate()
-
-      # Reload without validation should not log warnings
-      logs =
-        capture_log(fn ->
-          ConfigCache.reload(nil, [])
-        end)
-
-      refute logs =~ "Configuration validation warnings"
-    end
-
-    test "reload with validate: true logs warnings for invalid config", %{
+    test "reload rejects invalid configuration and names the file", %{
       global_config: global_config
     } do
-      # Create a config with validation issues
-      File.write!(Path.join(global_config, "config.toml"), """
-      [defaults]
-      model = ""
-      """)
-
-      # Invalidate cache to force reload
+      path = Path.join(global_config, "config.toml")
+      File.write!(path, "[defaults]\nmodel = \"\"\n")
       ConfigCache.invalidate()
 
-      # Reload with validation should log warnings
-      logs =
-        capture_log(fn ->
-          ConfigCache.reload(nil, validate: true)
-        end)
-
-      assert logs =~ "Configuration validation warnings"
-      assert logs =~ "agent.default_model"
+      error = assert_raise LemonCore.Config.ValidationError, fn -> ConfigCache.reload() end
+      assert Exception.message(error) =~ path
+      assert Exception.message(error) =~ "agent.default_model"
+      assert ConfigCache.available?()
     end
 
-    test "reload with validate: true does not log warnings for valid config", %{
+    test "failed reload preserves the last good cached configuration", %{
       global_config: global_config
     } do
-      # Create a valid config
-      File.write!(Path.join(global_config, "config.toml"), """
-      [defaults]
-      model = "claude-sonnet-4"
-      provider = "anthropic"
-      thinking_level = "medium"
-      """)
+      path = Path.join(global_config, "config.toml")
+      File.write!(path, "[defaults]\nmodel = \"last-good-model\"\n")
+      assert ConfigCache.reload().agent.default_model == "last-good-model"
 
-      # Invalidate cache to force reload
-      ConfigCache.invalidate()
+      File.write!(path, "[defaults]\nmodel = \"\"\n")
+      assert_raise LemonCore.Config.ValidationError, fn -> ConfigCache.reload() end
 
-      # Reload with validation should not log warnings for valid config
-      logs =
-        capture_log(fn ->
-          ConfigCache.reload(nil, validate: true)
-        end)
+      assert ConfigCache.get(nil, mtime_check_interval_ms: 60_000).agent.default_model ==
+               "last-good-model"
+    end
 
-      refute logs =~ "Configuration validation warnings"
+    test "valid reload replaces the cached configuration", %{global_config: global_config} do
+      path = Path.join(global_config, "config.toml")
+      File.write!(path, "[defaults]\nmodel = \"first-model\"\n")
+      assert ConfigCache.reload().agent.default_model == "first-model"
+
+      File.write!(path, "[defaults]\nmodel = \"replacement-model\"\n")
+      assert ConfigCache.reload().agent.default_model == "replacement-model"
+      assert ConfigCache.get().agent.default_model == "replacement-model"
     end
   end
 
   describe "get with automatic reload" do
-    test "get does not validate by default", %{global_config: global_config} do
-      # Create a config with validation issues
-      File.write!(Path.join(global_config, "config.toml"), """
-      [defaults]
-      model = ""
-      """)
-
-      # Invalidate cache
+    test "initial get validates and recovers after the file is corrected", %{
+      global_config: global_config
+    } do
+      path = Path.join(global_config, "config.toml")
+      File.write!(path, "[defaults]\nmodel = \"\"\n")
       ConfigCache.invalidate()
+      assert_raise LemonCore.Config.ValidationError, fn -> ConfigCache.get() end
 
-      # Get without validation should not log warnings
-      logs =
-        capture_log(fn ->
-          ConfigCache.get()
-        end)
-
-      refute logs =~ "Configuration validation warnings"
+      File.write!(path, "[defaults]\nmodel = \"corrected-model\"\n")
+      assert ConfigCache.get().agent.default_model == "corrected-model"
     end
   end
 end

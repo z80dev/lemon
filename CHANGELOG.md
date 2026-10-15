@@ -15,6 +15,13 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Configuration loads now reject invalid resolved values, report expected types
+  without echoing supplied values, and name input files. CLI and Mix summaries
+  agree on unset/false values and identify environment overrides.
+- Remove obsolete runtime-theme and vendor-CLI environment documentation, refresh
+  the generated environment registry, make example credentials/bindings opt-in,
+  and resolve XMTP wallet environment references before connecting.
+
 - All skill curator entry points now protect cron-referenced skills, including
   disabled jobs, while preserving explicit exemptions. Automatic archival fails
   closed with a reported reason when the automation provider is unavailable.
