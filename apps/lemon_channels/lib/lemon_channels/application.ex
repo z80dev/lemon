@@ -20,6 +20,8 @@ defmodule LemonChannels.Application do
       LemonChannels.Registry,
       # Channels-owned delivery presentation state (message ids / send-vs-edit)
       LemonChannels.PresentationState,
+      # Best-effort chat-originated run activity
+      LemonChannels.TypingIndicator,
       # Rate limiter
       LemonChannels.Outbox.RateLimiter,
       # Dedupe

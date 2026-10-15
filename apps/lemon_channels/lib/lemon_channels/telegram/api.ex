@@ -58,6 +58,14 @@ defmodule LemonChannels.Telegram.API do
 
   def create_forum_topic(_token, _chat_id, _name), do: {:error, :invalid_topic_name}
 
+  def send_chat_action(token, chat_id, thread_id, action) do
+    params =
+      %{"chat_id" => chat_id, "action" => action}
+      |> maybe_put("message_thread_id", thread_id)
+
+    request(token, "sendChatAction", params, @default_timeout)
+  end
+
   def send_message(token, chat_id, text, reply_to_or_opts \\ nil, parse_mode \\ nil)
 
   def send_message(token, chat_id, text, reply_to_or_opts, parse_mode)

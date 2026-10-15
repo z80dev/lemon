@@ -8,7 +8,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
-No unreleased changes yet.
+### Added
+
+- Show Telegram and Discord typing indicators for chat-originated runs, with
+  topic/thread-scoped refreshes and bounded cleanup on completion or cancellation.
 
 ---
 

@@ -23,7 +23,9 @@ defmodule LemonChannels.Runtime do
   A caller that already owns a stable reconciliation identity may pass
   `run_id: value`. A transport whose rendered prompt contains retry-local data
   may also pass `replay_content_identity`; ordinary channel transports omit
-  both and let the router allocate and bind the complete request.
+  both and let the router allocate and bind the complete request. Telegram and
+  Discord may pass `typing` refresher options; these are registered only after
+  acceptance and never change the submission result.
   """
   @spec submit_inbound(InboundMessage.t(), keyword()) :: :ok | failure()
   def submit_inbound(%InboundMessage{} = inbound, opts \\ []) when is_list(opts) do
@@ -36,8 +38,15 @@ defmodule LemonChannels.Runtime do
     |> maybe_put_replay_content_identity(Keyword.get(opts, :replay_content_identity))
     |> RouterBridge.submit_run()
     |> case do
-      {:ok, _run_id} -> :ok
-      {:error, _reason} = error -> error
+      {:ok, run_id} ->
+        if typing = Keyword.get(opts, :typing) do
+          LemonChannels.TypingIndicator.start_run(run_id, typing)
+        end
+
+        :ok
+
+      {:error, _reason} = error ->
+        error
     end
   end
 
@@ -50,7 +59,7 @@ defmodule LemonChannels.Runtime do
   @spec cancel_by_progress_msg(binary(), integer()) :: :ok | failure()
   def cancel_by_progress_msg(session_key, _progress_msg_id)
       when is_binary(session_key) and session_key != "" do
-    RouterBridge.abort_session(session_key, :user_requested)
+    cancel_session(session_key, :user_requested)
   end
 
   def cancel_by_progress_msg(session_key, _progress_msg_id),
@@ -60,7 +69,9 @@ defmodule LemonChannels.Runtime do
   def cancel_session(session_key, reason \\ :user_requested)
 
   def cancel_session(session_key, reason) when is_binary(session_key) and session_key != "" do
-    RouterBridge.abort_session(session_key, reason)
+    result = RouterBridge.abort_session(session_key, reason)
+    if result == :ok, do: LemonChannels.TypingIndicator.stop_session(session_key)
+    result
   end
 
   def cancel_session(session_key, _reason), do: {:error, {:invalid_session_key, session_key}}
@@ -69,7 +80,9 @@ defmodule LemonChannels.Runtime do
   def cancel_by_run_id(run_id, reason \\ :user_requested)
 
   def cancel_by_run_id(run_id, reason) when is_binary(run_id) and run_id != "" do
-    RouterBridge.abort_run(run_id, reason)
+    result = RouterBridge.abort_run(run_id, reason)
+    if result == :ok, do: LemonChannels.TypingIndicator.stop_run(run_id)
+    result
   end
 
   def cancel_by_run_id(run_id, _reason), do: {:error, {:invalid_run_id, run_id}}
@@ -79,7 +92,12 @@ defmodule LemonChannels.Runtime do
 
   def keep_run_alive(run_id, decision)
       when is_binary(run_id) and run_id != "" and decision in [:continue, :cancel] do
-    RouterBridge.keep_run_alive(run_id, decision)
+    result = RouterBridge.keep_run_alive(run_id, decision)
+
+    if result == :ok and decision == :cancel,
+      do: LemonChannels.TypingIndicator.stop_run(run_id)
+
+    result
   end
 
   def keep_run_alive(run_id, decision), do: {:error, {:invalid_keep_alive, run_id, decision}}

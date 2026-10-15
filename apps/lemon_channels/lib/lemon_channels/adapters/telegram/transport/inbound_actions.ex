@@ -147,7 +147,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport.InboundActions do
         message: Map.put(inbound.message || %{}, :text, stripped_prompt)
     }
 
-    case route_to_router(inbound) do
+    case route_to_router(state, inbound, chat_id, thread_id, session_key) do
       :ok ->
         track_accepted_submission(
           state,
@@ -269,8 +269,15 @@ defmodule LemonChannels.Adapters.Telegram.Transport.InboundActions do
     _ -> nil
   end
 
-  defp route_to_router(inbound) do
-    case LemonChannels.Runtime.submit_inbound(inbound) do
+  defp route_to_router(state, inbound, chat_id, thread_id, session_key) do
+    typing = [
+      target: {:telegram, state.account_id, chat_id, thread_id},
+      session_key: session_key,
+      interval_ms: 4_500,
+      send: fn -> state.api_mod.send_chat_action(state.token, chat_id, thread_id, "typing") end
+    ]
+
+    case LemonChannels.Runtime.submit_inbound(inbound, typing: typing) do
       :ok ->
         :ok
 

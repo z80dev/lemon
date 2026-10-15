@@ -552,7 +552,7 @@ defmodule LemonChannels.Adapters.Discord.Transport do
   end
 
   defp finish_submission(state, inbound, dedupe_refs) do
-    case route_to_router(inbound) do
+    case route_to_router(state, inbound) do
       :ok ->
         {:ok, track_accepted_submission(state, inbound)}
 
@@ -2616,8 +2616,19 @@ defmodule LemonChannels.Adapters.Discord.Transport do
     ModelPolicyAdapter.resolve_thinking_hint(state.account_id || "default", channel_id, thread_id)
   end
 
-  defp route_to_router(%InboundMessage{} = inbound) do
-    case LemonChannels.Runtime.submit_inbound(inbound) do
+  defp route_to_router(state, %InboundMessage{} = inbound) do
+    meta = inbound.meta || %{}
+    channel_id = meta[:channel_id]
+    thread_id = meta[:thread_id]
+
+    typing = [
+      target: {:discord, state.account_id, thread_id || channel_id},
+      session_key: meta[:session_key],
+      interval_ms: 8_000,
+      send: fn -> Outbound.start_typing(thread_id || channel_id) end
+    ]
+
+    case LemonChannels.Runtime.submit_inbound(inbound, typing: typing) do
       :ok ->
         :ok
 
