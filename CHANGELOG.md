@@ -10,6 +10,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Added
 
+- Extension tool-call, tool-result and session-start hooks can return bounded,
+  ordered `additional_context` for the model, including blocked tool calls,
+  without changing result trust, error status or mutation receipts.
+
 - Keep finished native task children addressable: wake idle sessions or revive
   parked sessions with prior context through `write agent://`, with configurable
   idle TTL, explicit delivery receipts and coalesced concurrent revival.
