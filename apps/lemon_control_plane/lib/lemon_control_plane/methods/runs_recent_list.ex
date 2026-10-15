@@ -12,6 +12,8 @@ defmodule LemonControlPlane.Methods.RunsRecentList do
 
   @behaviour LemonControlPlane.Method
 
+  alias LemonControlPlane.Methods.RunOutcome
+
   @default_limit 50
   @max_limit 200
 
@@ -135,7 +137,7 @@ defmodule LemonControlPlane.Methods.RunsRecentList do
       cond do
         (event[:event_type] || event["event_type"]) in [:run_failed, "run_failed"] -> "crashed"
         ok == true -> "completed"
-        LemonControlPlane.Methods.RunOutcome.aborted?(error) -> "aborted"
+        RunOutcome.aborted?(error) -> "aborted"
         true -> "error"
       end
 

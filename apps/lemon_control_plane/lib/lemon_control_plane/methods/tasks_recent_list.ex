@@ -7,6 +7,7 @@ defmodule LemonControlPlane.Methods.TasksRecentList do
 
   @behaviour LemonControlPlane.Method
 
+  alias LemonControlPlane.Methods.RunOutcome
   alias LemonCore.AgentRuntime
 
   @default_limit 100
@@ -252,7 +253,7 @@ defmodule LemonControlPlane.Methods.TasksRecentList do
       status in [:running, "running"] -> "active"
       status in [:completed, "completed"] -> "completed"
       timeout_error?(error) -> "timeout"
-      LemonControlPlane.Methods.RunOutcome.aborted?(error) -> "aborted"
+      RunOutcome.aborted?(error) -> "aborted"
       status in [:error, "error"] -> "error"
       true -> "error"
     end

@@ -3,6 +3,7 @@ defmodule LemonControlPlane.Methods.IntrospectionMethodsTest do
 
   alias LemonControlPlane.Methods.{
     ChatHistory,
+    CronRuns,
     SessionDetail,
     SessionsActive,
     SessionsActiveList,
@@ -86,18 +87,18 @@ defmodule LemonControlPlane.Methods.IntrospectionMethodsTest do
 
     with_introspection_failure(fn ->
       assert {:ok, %{"runs" => [%{"id" => id}]}} =
-               LemonControlPlane.Methods.CronRuns.handle(%{"id" => job_id}, %{})
+               CronRuns.handle(%{"id" => job_id}, %{})
 
       assert id == run.id
 
-      assert LemonControlPlane.Methods.CronRuns.handle(
+      assert CronRuns.handle(
                %{"id" => job_id, "includeIntrospection" => true},
                %{}
              ) == {:error, {:unavailable, "Introspection events are unavailable", nil}}
     end)
 
     assert {:ok, %{"runs" => [%{"introspection" => events}]}} =
-             LemonControlPlane.Methods.CronRuns.handle(
+             CronRuns.handle(
                %{"id" => job_id, "includeIntrospection" => true},
                %{}
              )

@@ -9,25 +9,25 @@ defmodule LemonControlPlane.Methods.RunsRecentListTest do
     @behaviour LemonCore.Store.Backend
 
     @impl true
-    defdelegate init(opts), to: LemonCore.Store.EtsBackend
+    defdelegate init(opts), to: EtsBackend
 
     @impl true
-    defdelegate put(state, table, key, value), to: LemonCore.Store.EtsBackend
+    defdelegate put(state, table, key, value), to: EtsBackend
 
     @impl true
-    defdelegate put_new(state, table, key, value), to: LemonCore.Store.EtsBackend
+    defdelegate put_new(state, table, key, value), to: EtsBackend
 
     @impl true
-    defdelegate get(state, table, key), to: LemonCore.Store.EtsBackend
+    defdelegate get(state, table, key), to: EtsBackend
 
     @impl true
-    defdelegate delete(state, table, key), to: LemonCore.Store.EtsBackend
+    defdelegate delete(state, table, key), to: EtsBackend
 
     @impl true
     def list(_state, :introspection_log),
       do: {:error, {:backend_failure, "api_key=private-backend-credential"}}
 
-    def list(state, table), do: LemonCore.Store.EtsBackend.list(state, table)
+    def list(state, table), do: EtsBackend.list(state, table)
   end
 
   setup do
