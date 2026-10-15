@@ -8,7 +8,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
-No unreleased changes yet.
+### Added
+
+- `recall` can browse owned recent sessions and scroll chronological, bounded
+  run summaries around a document/run ID without crossing owner/profile boundaries.
 
 ---
 

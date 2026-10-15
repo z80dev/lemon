@@ -23,6 +23,11 @@ LemonSkills provides a centralized system for extending agent capabilities throu
 not a Hex package; it ships as part of the reference runtime. It depends on
 `lemon_core`, `lemon_agent`, `lemon_ai`, `lemon_memory` and `lemon_media`.
 
+`recall` also browses recent owned sessions when called without a query. Use a
+returned `session` with optional `around` document/run ID and `window` (5 by
+default, maximum 20) to read chronological run summaries. Content remains
+untrusted and scoped to the current main-session owner, agent, and profile.
+
 ## Profile memory transfer
 
 `LemonSkills.ProfileMemoryTransfer` owns private memory copying, not placement.
