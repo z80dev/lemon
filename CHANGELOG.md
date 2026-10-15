@@ -18,6 +18,15 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 - Lemon Bot Apple clients explain uncached offline previews and expose sidebar
   section/selection accessibility state. Mac global shortcuts use an explicit
   native recorder, and Previous/Next Bot have one discoverable menu binding.
+- Apple voice settings use provider-specific built-in choices instead of requiring
+  raw voice IDs, while preserving existing custom voices and explicit saves.
+
+### Fixed
+
+- iOS share builds without App Group access explain the in-app Camera, Photos and
+  Files alternative without exposing signing identifiers or offering a futile retry.
+- Apple composer controls have iPhone-sized touch targets, a stable corner radius,
+  bounded pasted-filename previews and appearance-aware code inset colors.
 
 ---
 

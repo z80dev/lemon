@@ -274,7 +274,7 @@ public struct ConversationView: View {
                     HStack(alignment: .top, spacing: 6) {
                         ActionErrorView(message: message)
                         Button { action.error = nil; store.errorMessage = nil } label: { Image(systemName: "xmark") }
-                            .buttonStyle(GhostCircleButtonStyle(size: 24, filled: false)).accessibilityLabel("Dismiss error")
+                            .buttonStyle(GhostCircleButtonStyle(size: 24, filled: false, minimumTouchSize: LBMetric.composerHitSize)).accessibilityLabel("Dismiss error")
                     }
                 }
                 if let toast {
