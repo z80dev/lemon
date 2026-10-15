@@ -8,7 +8,14 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
-No unreleased changes yet.
+### Added
+
+- Cron schedules accept relative one-shots such as `in 30m` and timezone-aware
+  local ISO timestamps, rejecting past times and retiring after execution.
+- Successful prompt jobs can reply with exactly `[SILENT]` to retain history
+  without delivering a notification or session summary.
+- Cron lifecycle actions accept case-insensitive exact job names and refuse
+  ambiguous names with a list of candidates.
 
 ---
 

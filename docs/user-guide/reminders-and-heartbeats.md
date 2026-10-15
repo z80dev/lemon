@@ -94,6 +94,12 @@ You can also ask in plain language from any interface: "remind me at 3pm to
 call the bank", "every Friday at 5pm summarise this week's commits". The agent
 uses its `cron` tool, which supports:
 
+- `schedule: "in 30m"` — a relative one-shot delay (`m`, `h`, or `d`, positive
+  integer). The delay is pinned to an absolute instant when saved, not restarted
+  when Lemon restarts.
+- `schedule: "2027-01-15T09:30"` — an ISO local timestamp in the job's timezone,
+  optionally including seconds (`2027-01-15T09:30:45`). Past timestamps are
+  rejected. Relative delays and timestamps automatically set `once: true`.
 - `once: true` — a one-shot job that runs at its next scheduled time and is then
   removed.
 - `timezone` — `"UTC"` by default, `"local"` for the server's local time, or an
@@ -105,6 +111,21 @@ uses its `cron` tool, which supports:
 
 Jobs created from the TUI or browser are delivered to your paired owner chat.
 Ask the agent to list, pause, or remove its scheduled jobs the same way.
+
+Pause, resume, run, remove, and update accept an `id`/`jobId`, or a `name` when
+no id is supplied. Names match exactly, ignoring case. Unknown or duplicate
+names return an error listing candidates; Lemon never chooses among duplicates.
+For an update selected by name, put a new name in `patch.name`.
+
+### Quiet scheduled checks
+
+Any prompt job can finish successfully with exactly `[SILENT]` (surrounding
+whitespace is ignored) to record its run with `suppressed: true` without sending
+a chat message or forwarding a session summary. For example, ask a build check
+to reply `[SILENT]` when everything is healthy and explain failures otherwise.
+Failures are never suppressed, and output such as `Build says [SILENT]` is
+delivered normally. This does not apply to operator shell-command output.
+Heartbeats also keep their existing exact `HEARTBEAT_OK` convention.
 
 ### Timezones and daylight-saving changes
 
@@ -120,6 +141,11 @@ scheduled time runs only at its first occurrence. The second occurrence is
 never scheduled, even if the first has already passed or Lemon starts between
 the two. These rules also apply to server-local schedules. Lemon does not
 change the server's timezone or `TZ` environment variable to evaluate jobs.
+
+An ISO one-shot in a missing spring-forward time is rejected rather than moved
+to another time. A repeated fall-back timestamp resolves to its first instant;
+if that instant is already past, validation rejects it. Saved one-shot
+timestamps are absolute instants, so changing their timezone does not move them.
 
 Telegram `/remind`, heartbeats, and the daily brief keep using server-local
 time unless their underlying job is explicitly changed.

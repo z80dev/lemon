@@ -1611,8 +1611,11 @@ defmodule LemonAutomation.CronManager do
       [] ->
         with {:ok, params} <- validate_execution_target(params),
              {:ok, params} <- validate_add_feature_fields(params),
-             {:ok, schedule} <- validate_schedule(params[:schedule] || params["schedule"]) do
-          {:ok, Map.put(params, :schedule, schedule)}
+             {:ok, params} <- normalize_schedule_patch(params) do
+          {:ok, params}
+        else
+          {:error, reason} when is_binary(reason) -> {:error, {:invalid_schedule, reason}}
+          error -> error
         end
 
       keys ->
@@ -1620,16 +1623,15 @@ defmodule LemonAutomation.CronManager do
     end
   end
 
-  defp validate_schedule(schedule) do
-    case CronSchedule.normalize(schedule) do
-      {:ok, schedule} ->
-        case CronSchedule.parse(schedule) do
-          {:ok, _} -> {:ok, schedule}
-          {:error, reason} -> {:error, {:invalid_schedule, reason}}
-        end
+  defp prepare_schedule(params, schedule, timezone) do
+    case CronSchedule.prepare(schedule, timezone) do
+      {:ok, schedule, once} ->
+        params = params |> Map.delete("schedule") |> Map.put(:schedule, schedule)
+        params = if once, do: params |> Map.delete("once") |> Map.put(:once, true), else: params
+        {:ok, params}
 
       {:error, reason} ->
-        {:error, {:invalid_schedule, reason}}
+        {:error, reason}
     end
   end
 
@@ -1677,8 +1679,17 @@ defmodule LemonAutomation.CronManager do
              job.profile_id,
              job.admission
            ),
-         {:ok, params} <- normalize_schedule_patch(params) do
-      {:ok, params}
+         {:ok, params} <- normalize_schedule_patch(params, job.timezone) do
+      {:ok, preserve_timestamp_one_shot(job, params)}
+    end
+  end
+
+  defp preserve_timestamp_one_shot(job, params) do
+    if fetch_param(params, :schedule) == :error and fetch_param(params, :once) == {:ok, false} and
+         match?({:ok, {:once_at, _}}, CronSchedule.parse(job.schedule, job.timezone)) do
+      params |> Map.delete("once") |> Map.put(:once, true)
+    else
+      params
     end
   end
 
@@ -1959,22 +1970,12 @@ defmodule LemonAutomation.CronManager do
 
   defp has_any_key?(params, keys), do: Enum.any?(keys, &Map.has_key?(params, &1))
 
-  defp normalize_schedule_patch(params) do
+  defp normalize_schedule_patch(params, default_timezone \\ "UTC") do
     schedule = params[:schedule] || params["schedule"]
+    timezone = params[:timezone] || params["timezone"] || default_timezone
 
     if is_binary(schedule) do
-      case CronSchedule.normalize(schedule) do
-        {:ok, schedule} ->
-          normalized =
-            params
-            |> Map.delete("schedule")
-            |> Map.put(:schedule, schedule)
-
-          {:ok, normalized}
-
-        {:error, reason} ->
-          {:error, reason}
-      end
+      prepare_schedule(params, schedule, timezone)
     else
       {:ok, params}
     end
