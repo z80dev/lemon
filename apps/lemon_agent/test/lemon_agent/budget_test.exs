@@ -176,8 +176,11 @@ defmodule LemonAgent.BudgetTest do
     assert Enum.map(updates, & &1.run_usage.tokens) == [0, 3]
     assert List.last(updates).session_usage == %{tokens: 3, cost_usd: 0.1}
 
-    assert {:error, {:assistant_error, _}, %{new_messages: [_prompt, ^failure]}} =
+    assert {:error, {:assistant_error, _}, %{new_messages: [_prompt, reported_failure]}} =
              List.last(events)
+
+    assert %{output_committed: true, status: 503} = reported_failure.error_details
+    assert %{reported_failure | error_details: nil} == failure
   end
 
   test "reported error usage crossing the cap blocks retry and pairs requested tools" do
@@ -242,8 +245,11 @@ defmodule LemonAgent.BudgetTest do
     assert_received :direct_call
     refute_received :direct_call
 
-    assert {:error, {:budget_exceeded, %{used: 5}}, %{new_messages: [_prompt, ^failure]}} =
+    assert {:error, {:budget_exceeded, %{used: 5}}, %{new_messages: [_prompt, reported_failure]}} =
              List.last(events)
+
+    assert %{output_committed: true, status: 503} = reported_failure.error_details
+    assert %{reported_failure | error_details: nil} == failure
 
     refute Enum.any?(events, &match?({:provider_retry, _}, &1))
   end
