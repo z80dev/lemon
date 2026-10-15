@@ -47,6 +47,45 @@ A conversation can only see and control the omp sessions it started. Sessions
 you start from the TUI or CLI are operator sessions; manage those from the TUI
 or CLI.
 
+## Parallel workers
+
+Ask Lemon to split independent work across several omp workers. The `omp`
+tool's `start_many` action accepts a `tasks` array; each task has a `prompt`
+and optional `cwd`, `model`, and `thinking`. Omitted directories default to
+the conversation's cwd. **Workers sharing a directory can conflict**: use
+separate directories or git worktrees for edits.
+
+```json
+{
+  "action": "start_many",
+  "tasks": [
+    {"prompt": "Implement the parser", "cwd": "/src/parser-worktree"},
+    {"prompt": "Document the API", "cwd": "/src/docs-worktree"}
+  ],
+  "wait": true
+}
+```
+
+Starts run concurrently and return in task order. All task parameters are
+validated before any process starts, and batches larger than the remaining
+live-session capacity are rejected up front. Admission is still enforced for
+each start if another caller uses a slot concurrently. Individual startup
+failures are reported per task; successful workers keep running. An
+“outcome unknown” error includes the session id: check it before retrying.
+
+With `wait: true`, Lemon gathers all successful workers and streams combined
+progress, including token usage and cost. To gather workers later, use
+`{"action":"wait","ids":["omp_…","omp_…"],"wait_for":"all"}`.
+Set `wait_for` to `"any"` to return when the first worker settles. Timeout
+or abort stops only the wait, never the workers; cancel or close them
+explicitly when no longer needed.
+
+Elixir callers can use `LemonOmp.start_many(tasks, owner: owner)` and
+`LemonOmp.wait_many(ids, timeout_ms, owner: scope, mode: :all)`. The latter
+uses one Bus subscription and reports the full ordered snapshot list through
+`on_update` at most about every 300 ms, plus an unconditional final update.
+Ownership restrictions are identical to single-session access.
+
 ## From the TUI
 
 `/omp` (Alt+M, also in the command palette) opens the omp panel: live and
