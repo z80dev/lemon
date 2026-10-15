@@ -225,7 +225,7 @@ defmodule CodingAgent.Tools.TaskTest do
                )
 
       assert message =~ "Task execution identity is invalid"
-      assert message =~ "invalid_run_id"
+      assert message =~ "empty_execution_identifier"
     end
   end
 

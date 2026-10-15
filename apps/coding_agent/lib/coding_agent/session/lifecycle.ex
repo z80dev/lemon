@@ -28,6 +28,15 @@ defmodule CodingAgent.Session.Lifecycle do
   @spec initialize(keyword(), pid()) ::
           {:ok, Session.t(), Extensions.extension_status_report() | nil}
   def initialize(opts, session_pid) when is_list(opts) and is_pid(session_pid) do
+    opts =
+      case Session.validate_execution_options(opts) do
+        {:ok, opts} ->
+          opts
+
+        {:error, reason} ->
+          raise ArgumentError, "invalid session execution authority: #{inspect(reason)}"
+      end
+
     cwd = Keyword.fetch!(opts, :cwd)
     explicit_system_prompt = Keyword.get(opts, :system_prompt)
     prompt_template = Keyword.get(opts, :prompt_template)

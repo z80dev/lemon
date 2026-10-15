@@ -117,7 +117,7 @@ defmodule LemonControlPlane.Methods.ProfilesTest do
     assert {:ok, _} = ProfileChat.handle(%{"id" => "policy-cp", "prompt" => "hello"}, %{})
     assert_receive {:profile_request, request}
     assert request.tool_policy.deny == ["bash"]
-    assert request.tool_policy.approvals["write"] == "always"
+    assert request.tool_policy.approvals["write"] == :always
 
     assert {:error, {:invalid_request, _}} =
              ProfilesUpdate.handle(

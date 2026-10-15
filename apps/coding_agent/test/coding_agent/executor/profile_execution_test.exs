@@ -309,7 +309,7 @@ defmodule CodingAgent.Executor.ProfileExecutionTest do
             assert {:ok, decoded, _opts} =
                      Worker.execution_request(
                        outbound,
-                       %{default_cwd: root, name: "profile-fixture"},
+                       %Worker{default_cwd: root, name: "profile-fixture"},
                        run_id
                      )
 

@@ -405,6 +405,17 @@ defmodule CodingAgent.SessionTest do
                Session.start_link(execution_context: %{}, model: mock_model())
     end
 
+    test "direct lifecycle initialization cannot bypass execution authority validation" do
+      assert_raise ArgumentError,
+                   "invalid session execution authority: :invalid_execution_context",
+                   fn ->
+                     CodingAgent.Session.Lifecycle.initialize(
+                       default_opts(execution_context: %{}),
+                       self()
+                     )
+                   end
+    end
+
     test "intersects a supplied policy floor with execution authority" do
       alias LemonCore.{ExecutionContext, ToolPolicy}
       cwd = System.tmp_dir!()
@@ -1344,7 +1355,7 @@ defmodule CodingAgent.SessionTest do
     end
 
     @tag :tmp_dir
-    test "reset clears prior session file path and saves under new session id", %{
+    test "reset owns a new session file path and saves under the new session id", %{
       tmp_dir: tmp_dir
     } do
       explicit_path = Path.join(tmp_dir, "existing_session.jsonl")
@@ -1362,7 +1373,10 @@ defmodule CodingAgent.SessionTest do
       reset_state = Session.get_state(session)
       reset_id = reset_state.session_manager.header.id
       refute reset_id == initial_id
-      assert reset_state.session_file == nil
+      expected_path = CodingAgent.Session.Presentation.session_file_path(reset_id, tmp_dir)
+      assert reset_state.session_file == expected_path
+      assert reset_state.session_manager.file_path == expected_path
+      assert File.exists?(expected_path)
 
       :ok = Session.save(session)
       saved_state = Session.get_state(session)

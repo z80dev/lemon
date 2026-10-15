@@ -875,7 +875,7 @@ defmodule CodingAgent.ExecutionNode.WorkerTest do
       "native_lineage_run_id" => id
     }
 
-    args = %{"version" => 1, "runId" => id, "prompt" => "work", "meta" => meta}
+    args = remote_args("invoke", %{"runId" => id, "prompt" => "work", "meta" => meta})
     assert {:ok, request, _} = Worker.execution_request(args, state, "invoke")
     assert request.meta.invocation_proof_verified == true
 
@@ -915,20 +915,21 @@ defmodule CodingAgent.ExecutionNode.WorkerTest do
   test "canonical false proof and grant cannot be upgraded by JSON aliases", %{tmp_dir: tmp_dir} do
     state = %Worker{name: "newphy", default_cwd: tmp_dir}
 
-    args = %{
-      "version" => 1,
-      "prompt" => "work",
-      "meta" => %{
-        "memory_context_verified" => true,
-        "shared_memory_grant" => true,
-        "invocation_proof_verified" => true,
-        invocation_context_key: "actor",
-        memory_context_key: "audience",
-        memory_context_verified: false,
-        shared_memory_grant: false,
-        invocation_proof_verified: false
-      }
-    }
+    args =
+      remote_args("invoke", %{
+        "version" => 2,
+        "prompt" => "work",
+        "meta" => %{
+          "memory_context_verified" => true,
+          "shared_memory_grant" => true,
+          "invocation_proof_verified" => true,
+          invocation_context_key: "actor",
+          memory_context_key: "audience",
+          memory_context_verified: false,
+          shared_memory_grant: false,
+          invocation_proof_verified: false
+        }
+      })
 
     assert {:ok, request, _} = Worker.execution_request(args, state, "invoke")
     assert request.meta.memory_context_verified == false

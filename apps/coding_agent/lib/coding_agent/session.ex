@@ -332,7 +332,8 @@ defmodule CodingAgent.Session do
     end
   end
 
-  defp validate_execution_options(opts) when is_list(opts) do
+  @doc false
+  def validate_execution_options(opts) when is_list(opts) do
     alias LemonCore.{ExecutionContext, ToolPolicy}
 
     with {:ok, context} <- resolve_session_execution_context(opts),
@@ -350,7 +351,7 @@ defmodule CodingAgent.Session do
     end
   end
 
-  defp validate_execution_options(_opts), do: {:error, :invalid_session_options}
+  def validate_execution_options(_opts), do: {:error, :invalid_session_options}
 
   defp resolve_session_execution_context(opts) do
     case Keyword.get(opts, :execution_context) do
@@ -374,21 +375,28 @@ defmodule CodingAgent.Session do
         {:ok, context}
 
       path ->
-        with {:ok, session} <- CodingAgent.SessionManager.load_from_file(path),
-             {:ok, stored} <- CodingAgent.SessionManager.execution_context(session) do
-          if is_nil(stored) do
+        case CodingAgent.SessionManager.load_from_file(path) do
+          {:ok, session} ->
+            with {:ok, stored} <- CodingAgent.SessionManager.execution_context(session) do
+              if is_nil(stored) do
+                {:ok, context}
+              else
+                LemonCore.ExecutionContext.child(stored,
+                  run_id: context.run_id,
+                  attempt_id: context.attempt_id,
+                  tool_policy: context.tool_policy,
+                  capabilities: context.capabilities,
+                  limits: context.limits,
+                  cwd: Keyword.get(opts, :cwd) || session.header.cwd,
+                  provenance: context.provenance
+                )
+              end
+            end
+
+          {:error, _reason} ->
+            # Lifecycle owns the established resume-file error contract. It
+            # rejects this journal before any session can be admitted.
             {:ok, context}
-          else
-            LemonCore.ExecutionContext.child(stored,
-              run_id: context.run_id,
-              attempt_id: context.attempt_id,
-              tool_policy: context.tool_policy,
-              capabilities: context.capabilities,
-              limits: context.limits,
-              cwd: Keyword.get(opts, :cwd) || session.header.cwd,
-              provenance: context.provenance
-            )
-          end
         end
     end
   end
