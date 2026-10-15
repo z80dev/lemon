@@ -22,6 +22,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Changed
 
+- Add opt-in bounded background learning reviews, with private-memory ownership,
+  draft-only skill creation, restricted tools, per-session rate/concurrency
+  limits and no conversation/channel delivery; reminders remain the default.
 - Expand `lemon omp` with approval modes, isolated and parallel starts, explicit
   interrupted-session continuation, redirect, model browsing/configuration,
   subagent transcripts, and richer approval/worktree/discovery output.

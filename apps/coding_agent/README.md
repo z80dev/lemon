@@ -67,6 +67,11 @@ The contributor request includes the live `session_pid`, allowing volatile
 per-session counters without transcript copies or a dependency from the session
 runtime on the observer. LemonSkills uses this seam for
 [learning reminders](../../docs/user-guide/skills.md#learning-reminders).
+The opt-in learning-review seam separately freezes bounded prompt/final-answer
+summaries at completion and supplies existing model/auth resolution to
+`LemonSkills.BackgroundReview`. It never adds content to lifecycle telemetry,
+passes tool/reasoning payloads, or appends review output to session history.
+
 
 ### Supervision Tree
 

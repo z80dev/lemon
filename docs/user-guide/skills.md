@@ -39,6 +39,33 @@ Set `enabled` to `false` to disable both reminders. Thresholds must be positive
 integers; invalid values use the defaults. These are **skills.json** settings,
 not TOML settings. See the [configuration reference](../config.md#learning-reminders-skillsjson).
 
+### Optional background review
+
+To review a finished run silently instead of inserting a reminder, add
+`"background_review": {"enabled": true}` inside `learning_nudge`. This is **off
+by default**. The same turn/tool thresholds apply at run completion. Eligible
+sessions require a verified private memory owner; legacy, unverified, subagent,
+cron/sub-session and internal-followup runs do not trigger reviews.
+
+Each accepted trigger costs **one extra model run** (which may make several
+model responses while using tools). It uses the parent session's selected
+model and provider credentials by default. To use a cheaper model, set
+`background_review.model` to a normal Lemon model specification, for example
+`"openai:gpt-4o-mini"`; credentials must already be configured for that provider.
+No review output is posted to your conversation or channel.
+
+The isolated review receives only bounded, credential-redacted summaries of the
+finished prompt and visible final answer, labelled untrusted; no raw transcript,
+tool payloads, reasoning or bootstrap personal-memory files are copied. It may
+save private facts through `remember` (never using a shared grant), create skill
+drafts for normal review/promotion, or patch non-pinned skills through existing
+audits. It cannot run other tools, unpin/delete/promote skills or send messages.
+Defaults are one review per session per five minutes, never concurrent, at most
+three tool-use turns and a 60-second timeout. Counters/limits are volatile and
+reset with the live session/runtime. Triggers blocked by a limit are not queued.
+See [all review settings](../config.md#learning-reminders-skillsjson).
+
+
 ---
 
 ## What Is a Skill?

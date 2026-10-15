@@ -41,8 +41,15 @@ skills at least `stale_after_days` before automatic archival.
 sessions only. It contributes fixed, bounded volatile text after 10 user turns
 without `remember`, or after a completed run dispatches at least 15 tools without
 `skill_manage`. It uses content-free session telemetry, keeps only counters and
-booleans, and drops them when the owning session process exits. It never scans
-transcripts, reads personal memory, writes notes/skills, or calls a model.
+booleans, and drops them when the owning session process exits. By default it
+never scans transcripts, reads personal memory, writes notes/skills, or calls a
+model. Opt-in `learning_nudge.background_review` replaces reminders with a
+bounded, supervised, ephemeral `LemonAgent` review of finished-run summaries.
+Only verified private main-session owners qualify; internal/sub sessions do not.
+Reviews have only private `remember` and draft-create/non-pinned-patch
+`skill_manage`, no bootstrap memory, transcript persistence or channel delivery.
+They inherit model configuration (or resolve a configured model override),
+never shared grants, and are non-concurrent/rate-limited per live session.
 
 The existing global/project `skills.json` configuration accepts
 `learning_nudge.enabled` (default `true`), `memory_turn_interval` (10), and
