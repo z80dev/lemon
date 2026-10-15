@@ -4,6 +4,10 @@
 
 ### Added
 
+- Task batches honor each child's `async` and `thinking_level` overrides; mixed
+  batches join synchronous children while returning background receipts. Wait
+  yields a non-cancelling snapshot after 30 minutes or when steering arrives.
+
 - Foreground bash previews retain a 20 KiB head plus tail with an explicit middle
   elision marker. Spill notices prefer session artifact handles over raw paths,
   and unavailable PTYs report their fallback in both output and result details.
