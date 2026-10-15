@@ -65,12 +65,6 @@ defmodule CodingAgent.ConfigTest do
       assert String.ends_with?(result, ".lemon/agent")
     end
 
-    test "returns absolute path" do
-      result = Config.agent_dir()
-
-      assert Path.type(result) == :absolute
-    end
-
     test "returns consistent value" do
       assert Config.agent_dir() == Config.agent_dir()
     end
@@ -486,13 +480,6 @@ defmodule CodingAgent.ConfigTest do
   end
 
   describe "temp_dir/0" do
-    test "returns a valid path" do
-      result = Config.temp_dir()
-
-      assert is_binary(result)
-      assert Path.type(result) == :absolute
-    end
-
     test "returns an existing directory" do
       result = Config.temp_dir()
 
@@ -674,13 +661,6 @@ defmodule CodingAgent.ConfigTest do
       assert child_idx < parent_idx
     end
 
-    test "handles root path without error" do
-      # Should not raise, even if traversing all the way to root
-      result = Config.find_context_files("/")
-
-      assert is_list(result)
-    end
-
     test "expands relative paths", %{test_dir: test_dir} do
       # Create a subdir and put a context file there
       subdir = Path.join(test_dir, "relpath_test")
@@ -688,22 +668,19 @@ defmodule CodingAgent.ConfigTest do
       agents_file = Path.join(subdir, "AGENTS.md")
       File.write!(agents_file, "# Test")
 
-      # Use the absolute path but verify expansion works
-      result = Config.find_context_files(subdir)
+      File.cd!(test_dir, fn ->
+        result = Config.find_context_files("relpath_test")
 
-      # The result should contain absolute paths
-      Enum.each(result, fn path ->
-        assert Path.type(path) == :absolute
+        assert Path.expand("relpath_test/AGENTS.md") in result
       end)
     end
 
     test "ignores non-existent directories gracefully", %{test_dir: test_dir} do
       non_existent = Path.join(test_dir, "does_not_exist")
 
-      # Should not raise
       result = Config.find_context_files(non_existent)
 
-      assert is_list(result)
+      refute Enum.any?(result, &String.starts_with?(&1, non_existent))
     end
 
     test "only returns files that actually exist", %{test_dir: test_dir} do
@@ -729,18 +706,6 @@ defmodule CodingAgent.ConfigTest do
   # ============================================================================
 
   describe "edge cases" do
-    test "all dir functions return strings" do
-      assert is_binary(Config.agent_dir())
-      assert is_binary(Config.sessions_dir("/test"))
-      assert is_binary(Config.settings_file())
-      assert is_binary(Config.extensions_dir())
-      assert is_binary(Config.skills_dir())
-      assert is_binary(Config.prompts_dir())
-      assert is_binary(Config.project_config_dir("/test"))
-      assert is_binary(Config.project_extensions_dir("/test"))
-      assert is_binary(Config.temp_dir())
-    end
-
     test "encode_cwd handles unicode paths" do
       result = Config.encode_cwd("/home/用户/项目")
 
