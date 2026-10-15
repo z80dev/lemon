@@ -20,12 +20,13 @@ the request; stopped channels return empty configured/connected/details arrays.
 - `channels.configured` and `channels.connected` retain their existing meanings
   (registered adapters and running adapter processes). `channels.details` adds
   one `{id,state,lastError}` per configured adapter. State is `connected`,
-  `configured`, or `error`; Telegram polling and XMTP/WhatsApp bridge transitions
-  distinguish a live connection from merely starting a process. Startup failures
-  are retained too. Errors contain only a fixed sanitized `message` (at most 256
-  characters, no tokens or paths) and the observed wall-clock `atMs`. A successful
-  connection/poll clears the error. Uninstrumented adapters retain the existing
-  process-running connection indication, not a fabricated network probe.
+  `configured`, or `error`; Telegram polling, Discord READY/RESUMED events, and
+  XMTP/WhatsApp bridge transitions distinguish an observed live connection from
+  merely starting a process. Startup failures are retained too. Errors contain
+  only a fixed sanitized `message` (at most 256 characters, no tokens or paths)
+  and the observed wall-clock `atMs`. A successful connection/poll clears the
+  error. Unobserved adapters remain `configured` in details even when a process
+  is running; the legacy `connected` array keeps its process-running meaning.
 - `providers` contains `{id,configured,credential,default,lastError}` for providers
   selected by the configured default provider/model, configured in Lemon, or
   known to the model registry with local credentials present. `credential` is
