@@ -347,6 +347,16 @@ and performs the provider's live credential check by default. Use
 defer that live check when offline; a failed verification is not reported as a
 completed setup.
 
+The live models check uses the effective provider/model endpoint and headers,
+with the same credential-pool/default selection as native requests. Selected
+OAuth records resolve to their access token; the stored JSON and refresh token
+are never Bearer credentials. If that selected login is unavailable, verification
+fails before HTTP rather than reporting a successful skipped check or borrowing
+an inline, ambient, or legacy key. Legitimate keyless endpoints are checked
+without an Authorization header when no credential resolves. `--skip-verify`
+still avoids the live request, and focused `lemon model` onboarding remains
+offline by default.
+
 After a usable provider, setup offers an opt-in daily brief (default off). It
 writes `[automation] daily_brief = "HH:MM"` (server-local time) to the global
 config; the runtime reconciles the brief job at its next boot. Non-interactive

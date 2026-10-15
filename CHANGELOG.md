@@ -684,6 +684,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   current invocation rather than the session's startup provider.
   Same-provider rebinding replaces source-model header defaults while preserving
   genuine caller overrides; generated headers are not promoted to caller authority.
+- Setup verification resolves canonical credential authority and effective
+  endpoint/model settings, preventing OAuth-record disclosure and false successful
+  skips for unavailable selected logins. Offline, keyless and credential-pool
+  behavior remain supported.
 - **Todos follow the selected branch.** The `todo` tool's list is now journaled
   in the session history instead of living only in memory, so rewind, branch
   navigation, restart/resume and forks show the list that branch last wrote,
