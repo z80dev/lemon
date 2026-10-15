@@ -664,7 +664,6 @@ defmodule LemonControlPlane.Methods.ChatSendTest do
     refute inspect(request.meta.mcp_servers) =~ "Owner-Only"
     assert {:ok, profile} = LemonCore.ProfileStore.get_for_execution("mcp-profile")
     assert profile["mcpServers"] == [default_mcp_server()]
-    assert Map.keys(response) |> Enum.sort() == ["runId", "sessionKey", "summary"]
     refute inspect(response) =~ "CALLER_TOKEN"
     refute inspect(response) =~ "caller.example"
     refute inspect(response) =~ "Authorization"

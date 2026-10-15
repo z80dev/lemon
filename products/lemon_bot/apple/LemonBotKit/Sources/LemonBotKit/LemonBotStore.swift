@@ -293,7 +293,9 @@ import Observation
         value.bots = bots; value.machines = machines; value.conversations = conversations; value.sections = sections; value.notifications = notifications; value.activeRuns = runs; value.cursor = cursor
         try persistence.saveCache(AccountCache(accountID: account.id, snapshot: value, entries: entries, cursor: cursor))
     }
-    public func openConversation(_ id: ID) async throws {
+    /// Loads a conversation. `select: false` is for views that are already showing it: a slow load
+    /// must not pull the selection back after the user has moved to another conversation.
+    public func openConversation(_ id: ID, select: Bool = true) async throws {
         let value: Conversation = try await read("/conversations/\(HTTPTransport.pathID(id))")
         let page: Page<TranscriptEntry> = try await read("/conversations/\(HTTPTransport.pathID(id))/entries", query: ["limit": "200"])
         upsert(&conversations, value, id: { $0.id }, revision: { $0.revision }); entries[id] = page.items
@@ -303,7 +305,7 @@ import Observation
         else if let local = drafts[id], local.text == server.text, local.attachmentIDs == server.attachmentIds, local.replyToEntryID == server.replyToEntryId {
             drafts[id]?.revision = server.revision
         }
-        selectedConversationID = id
+        if select { selectedConversationID = id }
         try persistCache()
     }
     public func loadOlderEntries(conversationID: ID, cursor: Cursor? = nil) async throws -> Cursor? {
