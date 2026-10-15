@@ -8,7 +8,20 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
-No unreleased changes yet.
+### Changed
+
+- Lemon Bot clients are redesigned around messaging. Mac, iPhone and web share
+  one design: a sidebar with pinned lemon avatars and Bot status lines, a
+  floating Bot header that opens an Activity/Details/Library inspector, grouped
+  bubbles, a live working row with Stop, quiet failed-run rows with Details,
+  a floating composer, and admin grouped under Settings. The web app supports
+  iPhone Safari and Add to Home Screen.
+
+### Fixed
+
+- iOS builds without the App Group (for example, Personal Team installs) keep
+  in-app attachment staging working, and the passive staged-file refresh no
+  longer raises a stuck "native input" error.
 
 ---
 
