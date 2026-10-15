@@ -10,6 +10,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Added
 
+- Forward Telegram photos and image documents and Discord CDN image attachments
+  to vision-capable models, with bounded downloads and text fallback on failure.
+
 - Share one initialized language-server process per server/workspace/config
   across sessions, with reference-counted owners, configurable idle shutdown,
   central document versions, diagnostic fan-out and next-use crash recovery.

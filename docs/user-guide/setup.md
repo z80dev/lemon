@@ -238,6 +238,28 @@ the daily brief, and other scheduled results created outside a chat are sent
 there. In a paired chat, `/remind <when> <what>` sets a reminder. See
 [Reminders, heartbeats, and the daily brief](reminders-and-heartbeats.md).
 
+### Images in Telegram and Discord
+
+Send a Telegram photo or a document with an `image/*` MIME type to give a
+vision-capable model the image itself, not just an attachment link. Captions
+remain the prompt; a photo without a caption uses `[image]`. For Telegram
+photos, Lemon selects the largest available dimensions whose declared size
+fits the limit.
+
+Discord image attachments are fetched only over HTTPS from
+`cdn.discordapp.com` or `media.discordapp.net`; redirects are not followed.
+Attachment URLs remain in the prompt, including non-image files and images
+that could not be fetched.
+
+Image input uses fixed safety limits: **5 MiB per image** and **four images per
+message/submission**. Downloads stop at the byte limit. Failed or oversized
+images leave the text intact and add a short image-unavailable note; they do
+not stop the message from being submitted. Telegram messages combined by the
+debounce buffer share the four-image limit. Group mention/reply rules still
+apply. Existing Telegram `/file put` and configured file auto-put workflows
+keep their file-transfer behavior (upload-only mode does not start a model
+run). The selected model must support image input.
+
 Inspect redacted channel configuration (enabled state, credentials, binding and
 allowlist counts, registered transports) with:
 
