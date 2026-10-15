@@ -23,6 +23,8 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 - Lemon Bot Apple clients explain uncached offline previews and expose sidebar
   section/selection accessibility state. Mac global shortcuts use an explicit
   native recorder, and Previous/Next Bot have one discoverable menu binding.
+  Recorded shortcuts display native Mac modifier symbols while preserving their
+  saved combinations.
 
 ---
 

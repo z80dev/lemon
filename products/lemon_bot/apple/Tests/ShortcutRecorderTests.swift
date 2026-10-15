@@ -21,15 +21,13 @@ final class ShortcutRecorderTests: XCTestCase {
             XCTAssertTrue(button.performKeyEquivalent(with: event))
         }
         button.performClick(nil)
+        XCTAssertEqual(button.title, "Type shortcut…")
+        try capture(button, name: "recording")
         try press(0) // Bare keys cannot become global shortcuts.
         XCTAssertTrue(changes.isEmpty)
         try press(49, [.control, .option])
-        button.refreshTitle()
-        button.layoutSubtreeIfNeeded()
-        let bitmap = try XCTUnwrap(button.bitmapImageRepForCachingDisplay(in: button.bounds))
-        button.cacheDisplay(in: button.bounds, to: bitmap)
-        let png = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
-        try png.write(to: URL(fileURLWithPath: "/tmp/lemonbot3-shortcut-recorder.png"))
+        XCTAssertEqual(button.title, "⌃⌥Space")
+        try capture(button, name: "assigned")
         XCTAssertEqual(changes, ["control+option+space"])
         XCTAssertEqual(recording, [true, false])
         button.performClick(nil)
@@ -38,9 +36,26 @@ final class ShortcutRecorderTests: XCTestCase {
         button.performClick(nil)
         try press(51)
         XCTAssertEqual(changes.last, "")
+        XCTAssertEqual(button.title, "Record Shortcut")
         button.performClick(nil)
         _ = window.makeFirstResponder(nil)
         XCTAssertEqual(recording, [true, false, true, false, true, false, true, false])
+    }
+
+    private func capture(_ button: NSButton, name: String) throws {
+        button.layoutSubtreeIfNeeded()
+        let bitmap = try XCTUnwrap(button.bitmapImageRepForCachingDisplay(in: button.bounds))
+        button.cacheDisplay(in: button.bounds, to: bitmap)
+        let png = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
+        try png.write(to: URL(fileURLWithPath: "/tmp/lemonbot3-shortcut-\(name).png"))
+    }
+
+    func testNativeDisplayKeepsCanonicalModifierOrderAndKeyNames() {
+        XCTAssertEqual(MacShortcutRecorder.display("command+shift+option+control+a"), "⌃⌥⇧⌘A")
+        XCTAssertEqual(MacShortcutRecorder.display("command+return"), "⌘↩")
+        XCTAssertEqual(MacShortcutRecorder.display("control+tab"), "⌃⇥")
+        XCTAssertEqual(MacShortcutRecorder.display("option+escape"), "⌥⎋")
+        XCTAssertEqual(MacShortcutRecorder.display("command+shift+f8"), "⇧⌘F8")
     }
 
     func testEveryRecordableKeyParsesAndModifiersAreRequired() throws {
