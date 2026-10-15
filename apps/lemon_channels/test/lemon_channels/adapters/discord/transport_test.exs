@@ -707,6 +707,25 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
                    2_000
   end
 
+  test "resolved approval controls explain that nothing changed" do
+    with_interaction_responder(fn ->
+      interaction = component_interaction("missing-approval|abcdefghijklmnop|once")
+      state = discord_message_state()
+
+      assert {:noreply, ^state} =
+               Transport.handle_info(
+                 {:discord_event, {:INTERACTION_CREATE, interaction, nil}},
+                 state
+               )
+
+      assert_receive {:interaction_response, ^interaction, %{data: %{content: text}}}
+      assert text =~ "no longer pending"
+      assert text =~ "nothing changed"
+      refute text =~ "{"
+      refute text =~ ":not_pending"
+    end)
+  end
+
   test "cancel component aborts the run through the runtime path" do
     with_interaction_responder(fn ->
       with_router_bridge(fn ->

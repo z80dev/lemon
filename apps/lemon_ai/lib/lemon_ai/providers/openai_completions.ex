@@ -952,7 +952,12 @@ defmodule LemonAi.Providers.OpenAICompletions do
             case retry_delay do
               :give_up ->
                 error =
-                  LemonAi.Error.parse_http_error(response.status, error_body, response.headers)
+                  LemonAi.Error.parse_http_error(
+                    response.status,
+                    error_body,
+                    response.headers,
+                    initial_output.provider
+                  )
 
                 %{
                   initial_output
@@ -973,15 +978,23 @@ defmodule LemonAi.Providers.OpenAICompletions do
           RetryHelper.sleep(RetryHelper.backoff_delay_ms(attempt, policy))
           retry.()
         else
+          Logger.warning("Provider transport failed: #{inspect(reason)}")
+
           %{
             initial_output
             | stop_reason: :error,
-              error_message: "Transport error: #{inspect(reason)}"
+              error_message: LemonAi.Error.format_error(reason, initial_output.provider)
           }
         end
 
       {:error, error} ->
-        %{initial_output | stop_reason: :error, error_message: "Request error: #{inspect(error)}"}
+        Logger.warning("Provider request failed: #{inspect(error)}")
+
+        %{
+          initial_output
+          | stop_reason: :error,
+            error_message: LemonAi.Error.format_error(error, initial_output.provider)
+        }
     end
   end
 

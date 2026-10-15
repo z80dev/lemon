@@ -11,6 +11,7 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 ### Lemon Bot
 
 - Instance status exposes release/build metadata, provider credential health and channel errors. Owner-confirmed restart/stop can use a remote controller, with lifecycle completion observed from link events; clients use explicit available action lists.
+- Lemon Bot web shows build identity, provider credentials and timestamped channel health, with available-action lifecycle controls and clear local-launcher versus remote-controller guidance.
 
 ### Fixed
 
@@ -163,6 +164,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Chat, task, provider and goal/cron failures use plain-language recovery steps
+  instead of raw Elixir terms; provider authentication names the credential to
+  check, and Discord approvals distinguish expired controls from unavailable service.
 - Setup now hides pasted API keys, fails safely without a terminal, re-verifies
   existing providers before claiming completion, distinguishes pending onboarding
   from failure, and validates runtime input; packaged remediation, setup flags,

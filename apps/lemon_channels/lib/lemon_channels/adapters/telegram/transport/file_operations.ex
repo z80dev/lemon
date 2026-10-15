@@ -7,6 +7,8 @@ defmodule LemonChannels.Adapters.Telegram.Transport.FileOperations do
   calls, filesystem writes) but do not directly mutate GenServer state.
   """
 
+  require Logger
+
   alias LemonChannels.BindingResolver
   alias LemonChannels.Cwd
   alias LemonCore.ChatScope
@@ -153,7 +155,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport.FileOperations do
       msg =
         cond do
           ok_paths == [] ->
-            "Upload failed."
+            "Upload failed. Check the file size and destination write permissions, then try again."
 
           err_count == 0 ->
             "Uploaded #{length(ok_paths)} files:\n" <> Enum.map_join(ok_paths, "\n", &"- #{&1}")
@@ -632,11 +634,19 @@ defmodule LemonChannels.Adapters.Telegram.Transport.FileOperations do
              {:ok, bytes} <- state.api_mod.download_file(state.token, file_path) do
           {:ok, bytes}
         else
-          _ -> {:error, "Failed to download the file from Telegram."}
+          result ->
+            Logger.warning("Telegram file download failed: #{inspect(result)}")
+
+            {:error,
+             "Failed to download the file from Telegram. Send the attachment again and retry."}
         end
     end
   rescue
-    _ -> {:error, "Failed to download the file from Telegram."}
+    error ->
+      Logger.warning("Telegram file download failed: #{inspect(error)}")
+
+      {:error,
+       "Failed to download the file from Telegram. Check the connection, then send the attachment again."}
   end
 
   def enforce_bytes_limit(bytes, cfg, key, default_max) when is_binary(bytes) do
@@ -684,8 +694,14 @@ defmodule LemonChannels.Adapters.Telegram.Transport.FileOperations do
           )
 
         case zip_dir(abs, tmp) do
-          :ok -> {:ok, :zip, tmp, Path.basename(abs) <> ".zip"}
-          {:error, _} -> {:error, "Failed to zip directory."}
+          :ok ->
+            {:ok, :zip, tmp, Path.basename(abs) <> ".zip"}
+
+          {:error, reason} ->
+            Logger.warning("Telegram directory archive failed: #{inspect(reason)}")
+
+            {:error,
+             "Failed to zip directory. Check read permissions and available disk space, then try again."}
         end
 
       true ->
@@ -718,14 +734,23 @@ defmodule LemonChannels.Adapters.Telegram.Transport.FileOperations do
         |> maybe_put("caption", filename)
 
       case state.api_mod.send_document(state.token, chat_id, {:path, path}, opts) do
-        {:ok, _} -> :ok
-        _ -> {:error, "Failed to send file."}
+        {:ok, _} ->
+          :ok
+
+        result ->
+          Logger.warning("Telegram file send failed: #{inspect(result)}")
+
+          {:error,
+           "Failed to send file. Check the file size and that the bot can send documents in this chat, then try again."}
       end
     else
-      {:error, "This Telegram API module does not support sendDocument."}
+      {:error,
+       "File sending is unavailable with this Telegram adapter. Run `lemon doctor` to check the adapter configuration."}
     end
   rescue
-    _ -> {:error, "Failed to send file."}
+    error ->
+      Logger.warning("Telegram file send failed: #{inspect(error)}")
+      {:error, "Failed to send file. Check that the file exists and is readable, then try again."}
   end
 
   def file_usage do

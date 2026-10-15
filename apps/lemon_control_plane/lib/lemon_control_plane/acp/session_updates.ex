@@ -683,14 +683,23 @@ defmodule LemonControlPlane.ACP.SessionUpdates do
         if is_binary(content) and content != "" do
           status =
             case scalar_string(get(todo, :status)) do
-              n when n in ["completed", "abandoned"] -> "completed"
-              "in_progress" -> "in_progress"
+              n when n in ["pending", "in_progress", "completed", "blocked", "abandoned"] -> n
               _ -> "pending"
             end
 
           priority = scalar_string(get(todo, :priority))
           priority = if priority in ["high", "medium", "low"], do: priority, else: "medium"
-          [%{"content" => preview(content), "priority" => priority, "status" => status}]
+          entry = %{"content" => preview(content), "priority" => priority, "status" => status}
+
+          entry =
+            Enum.reduce([:phase, :blocker], entry, fn key, acc ->
+              case get(todo, key) do
+                value when is_binary(value) -> Map.put(acc, Atom.to_string(key), preview(value))
+                _ -> acc
+              end
+            end)
+
+          [entry]
         else
           []
         end

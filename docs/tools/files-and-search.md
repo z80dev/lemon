@@ -39,6 +39,13 @@ selectors (`:raw:50-80` or `:50-80:raw`) remain exact, without context, line
 numbers, or a snapshot header. Raw comma lists also stay exact and retain the
 `…` separators. `offset`/`limit`, open-ended and tail selectors do not add context.
 
+## Patch hunk matching
+
+Patch hunk context must identify a unique location. Exact matches take precedence;
+on an exact miss, `patch` tolerates indentation, horizontal whitespace, and smart
+quote/dash differences using the same normalization as text `edit`. Multiple
+normalized matches are rejected. Unchanged context keeps its original text.
+
 ## Safe overwrites
 
 `write` refuses to overwrite an existing file with content containing a read

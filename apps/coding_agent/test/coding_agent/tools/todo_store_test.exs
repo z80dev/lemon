@@ -1214,4 +1214,59 @@ defmodule CodingAgent.Tools.TodoStoreTest do
       assert "2" in ids
     end
   end
+
+  test "blocked and abandoned round-trip as atoms and strings without becoming actionable", %{
+    session_id: session_id
+  } do
+    todos = [
+      %{
+        id: "b",
+        content: "Blocked",
+        status: :blocked,
+        blocker: "access",
+        phase: "Deploy",
+        priority: :high
+      },
+      %{"id" => "a", "content" => "Abandoned", "status" => "abandoned", "priority" => "medium"},
+      %{id: "p", content: "Ready", status: :pending, priority: :low}
+    ]
+
+    TodoStore.put(session_id, todos)
+    assert TodoStore.get(session_id) == todos
+    details = TodoStore.result_details(TodoStore.get(session_id))
+    assert Enum.map(details.todos, & &1["status"]) == ["blocked", "abandoned", "pending"]
+
+    assert hd(details.plan.entries) == %{
+             content: "Blocked",
+             status: "blocked",
+             priority: "high",
+             blocker: "access",
+             phase: "Deploy"
+           }
+
+    assert Enum.at(details.plan.entries, 1).status == "abandoned"
+    assert TodoStore.get_actionable(session_id) == [List.last(todos)]
+
+    assert %{total: 3, blocked: 1, abandoned: 1, pending: 1, completed: 0, percentage: 0} =
+             TodoStore.get_progress(session_id)
+  end
+
+  test "normalization keeps the first active item and preserves keys, identity and priority" do
+    todos = [
+      %{id: "first", status: :in_progress, priority: :high},
+      %{"id" => "second", "status" => "in_progress", "priority" => "low"},
+      %{id: "third", status: :in_progress, priority: :medium},
+      %{id: "blocked", status: :blocked}
+    ]
+
+    assert TodoStore.normalize(todos) == [
+             hd(todos),
+             %{"id" => "second", "status" => "pending", "priority" => "low"},
+             %{id: "third", status: :pending, priority: :medium},
+             List.last(todos)
+           ]
+
+    assert TodoStore.normalize([]) == []
+    assert TodoStore.normalize([%{"status" => "pending"}]) == [%{"status" => "pending"}]
+  end
 end
