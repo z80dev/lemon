@@ -8,28 +8,6 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
-### Fixed
-
-- Re-enter setup for incomplete saved configurations on interactive launch, and
-  recognize keyless local providers and environment-only credentials in readiness,
-  doctor, and setup verification.
-
-- Make injected SVG rasterizer fixtures portable across BSD and GNU base64, and
-  explicitly exclude only the named real-rasterizer test when librsvg is absent.
-
-- Synchronize task-surface regression fixtures with the owning run's delta
-  admission before flushing a reused conversation coalescer.
-
-- Keep missing local provider API keys out of shared circuit-breaker health, so
-  they cannot block other sessions that have valid credentials.
-
-- Isolate intentional provider outages in ownership probes so their circuit and
-  rate-limit state cannot contaminate later cases or repeated runs.
-
----
-
-## [2026.10.13]
-
 ### Added
 
 - Share one initialized language-server process per server/workspace/config
@@ -92,6 +70,27 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   no approval by default and makes no network requests.
 
 ### Fixed
+
+- Re-enter setup for incomplete saved configurations on interactive launch, and
+  recognize keyless local providers and environment-only credentials in readiness,
+  doctor, and setup verification.
+
+- Make injected SVG rasterizer fixtures portable across BSD and GNU base64, and
+  explicitly exclude only the named real-rasterizer test when librsvg is absent.
+
+- Synchronize task-surface regression fixtures with the owning run's delta
+  admission before flushing a reused conversation coalescer.
+
+- Keep missing local provider API keys out of shared circuit-breaker health, so
+  they cannot block other sessions that have valid credentials.
+
+- Isolate intentional provider outages in ownership probes so their circuit and
+  rate-limit state cannot contaminate later cases or repeated runs.
+
+- Gate manual product releases on the source commit before bumping versions or
+  pushing tags, build artifacts from the prepared cut, and skip existing CalVer
+  tags without deleting unpublished orphan tags.
+
 
 - Bind TUI fake control-plane listeners to their advertised IPv4 loopback address,
   preventing random test ports from reaching unrelated IPv4 services and timing
