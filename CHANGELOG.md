@@ -11,6 +11,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 - Add `ls tree: true`: depth-limited newest-first trees with file sizes,
   12 children per directory and explicit omitted-sibling counts.
 
+---
+
+## [2026.10.11]
+
 - Read `path:conflicts` to index Git conflict regions, then resolve a session-scoped
   `conflict://N` with `write` and ours/theirs/base/both expansion tokens. Stale ids
   are rejected after file changes.
