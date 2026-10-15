@@ -100,6 +100,12 @@ runtime IDs as quoted TOML keys and require valid Honcho peer names. Empty maps
 and an empty prefix remain explicit empty values. These settings use the same
 preview and overwrite policy as other Honcho config.
 
+Omitted `pinUserPeer` stays at Lemon's default `false`: non-owner channel senders
+receive their own platform-qualified peers even with an empty prefix. A trusted
+channel owner retains `user_peer`; use `pin_user_peer = true` or explicit aliases
+to pool senders or retain a particular person's historical peer. See
+[gateway identity mapping](honcho.md#gateway-identity-mapping).
+
 Unsupported keys (including `dialecticDepth`, `writeFrequency`, granular
 observation and session overrides) and invalid values
 appear as `unsupported` items in the preview; Lemon does not pretend to implement
