@@ -15,6 +15,28 @@ defmodule LemonAi.CallDispatcherTest do
   end
 
   describe "LemonAi.CallDispatcher" do
+    test "retains only safe bounded last failure summaries across successful calls", %{
+      provider: provider
+    } do
+      assert CallDispatcher.last_error(provider) == nil
+      before = System.system_time(:millisecond)
+      secret = String.duplicate("token=sk-secret /private/account https://secret.example ", 1000)
+      reason = {:http_error, 401, secret}
+      assert {:error, ^reason} = CallDispatcher.dispatch(provider, fn -> {:error, reason} end)
+      error = CallDispatcher.last_error(to_string(provider))
+      assert %{"message" => message, "atMs" => at_ms} = error
+      assert message == "Provider authentication failed. Check the key with lemon setup."
+      assert String.length(message) <= 256
+      assert at_ms >= before
+      refute Jason.encode!(error) =~ "sk-secret"
+      refute Jason.encode!(error) =~ "/private"
+      refute Jason.encode!(error) =~ "secret.example"
+      assert {:ok, :done} = CallDispatcher.dispatch(provider, fn -> {:ok, :done} end)
+      assert CallDispatcher.last_error(provider) == error
+      assert {:error, :timeout} = CallDispatcher.dispatch(provider, fn -> {:error, :timeout} end)
+      assert CallDispatcher.last_error(provider)["message"] =~ "temporarily unavailable"
+    end
+
     test "dispatch allows requests when conditions are met", %{provider: provider} do
       # Start rate limiter and circuit breaker for this provider
       start_supervised!({RateLimiter, provider: provider, tokens_per_second: 10, max_tokens: 5})
@@ -207,6 +229,7 @@ defmodule LemonAi.CallDispatcherTest do
 
       {:ok, cb_after} = CircuitBreaker.get_state(provider)
       assert cb_after.failure_count == 0
+      assert CallDispatcher.last_error(provider)["message"] =~ "authentication failed"
     end
 
     for api <- [:anthropic_messages, :openai_completions, :openai_responses] do

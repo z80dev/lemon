@@ -8,10 +8,43 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
+### Fixed
+
+- Resolve qualified model selectors against their own provider when a preset or
+  default provider was inherited, while preserving native colon IDs for explicit
+  provider/model pairs.
+
 ### Added
+
+- Provider status and Lemon Bot instance panes now expose the last observed
+  provider failure with a timestamp and bounded, credential-free category summary.
+
+- Lemon Bot exposes an authenticated, provider-specific voice catalog for native
+  pickers without calling speech providers or generating billable audio.
+
+- Configure TUI shortcuts with `[tui.keys]`, including opt-in plan-mode toggle
+  and model cycling, with safe startup notices for invalid or conflicting bindings.
 
 - Agent runs continue up to three times after empty replies or malformed tool
   arguments, preserving streamed output and tool results without replaying tools.
+
+### Changed
+
+- Lemon Bot web explains channel and X setup, terminal access, file uploads and
+  machine-operation progress in plain language. Memory sources have descriptive
+  links, template identifiers stay under Details, and machine measurements
+  become visibly out of date while their page remains open.
+
+- Clarify Lemon Bot web notification setup and browser registration, distinguish
+  server and browser voice samples, and use plain-language microphone guidance.
+  Owner settings now name Network access, Startup scripts and Spend limits
+  consistently.
+
+- Lemon Bot Apple clients explain uncached offline previews and expose sidebar
+  section/selection accessibility state. Mac global shortcuts use an explicit
+  native recorder, and Previous/Next Bot have one discoverable menu binding.
+  Recorded shortcuts display native Mac modifier symbols while preserving their
+  saved combinations.
 
 ---
 

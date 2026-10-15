@@ -1,3 +1,9 @@
+# The first exec of `node` on a fresh CI runner pages its binary in from a
+# cold disk: measured 0.1-4.1 s across GitHub-hosted runners, ~20 ms after.
+# Execution-node inspection runs its Node helper under a 2 s deadline, so load
+# the binary once before tests race that one-time cost.
+if node = System.find_executable("node"), do: System.cmd(node, ["-e", "0"])
+
 ast_grep_opts =
   case System.get_env("LEMON_AST_GREP_EXECUTABLE") do
     nil -> []

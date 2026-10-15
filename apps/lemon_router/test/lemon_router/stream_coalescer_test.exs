@@ -3,10 +3,14 @@ defmodule LemonRouter.StreamCoalescerTest do
   use ExUnit.Case, async: false
   use ExUnitProperties
 
-  alias LemonCore.ResumeToken
+  alias Elixir.LemonRouter.StreamCoalescer
+  alias LemonChannels.Outbox.Dedupe
+  alias LemonChannels.Outbox.RateLimiter
+  alias LemonChannels.Telegram.ResumeIndexStore
+  alias LemonChannels.Telegram.Truncate
   alias LemonCore.DeliveryIntent
   alias LemonCore.DeliveryRoute
-  alias Elixir.LemonRouter.StreamCoalescer
+  alias LemonCore.ResumeToken
 
   defmodule StreamCoalescerTestTelegramPlugin do
     @moduledoc false
@@ -120,12 +124,12 @@ defmodule LemonRouter.StreamCoalescerTest do
       {:ok, _} = LemonChannels.Outbox.start_link([])
     end
 
-    if is_nil(Process.whereis(LemonChannels.Outbox.RateLimiter)) do
-      {:ok, _} = LemonChannels.Outbox.RateLimiter.start_link([])
+    if is_nil(Process.whereis(RateLimiter)) do
+      {:ok, _} = RateLimiter.start_link([])
     end
 
-    if is_nil(Process.whereis(LemonChannels.Outbox.Dedupe)) do
-      {:ok, _} = LemonChannels.Outbox.Dedupe.start_link([])
+    if is_nil(Process.whereis(Dedupe)) do
+      {:ok, _} = Dedupe.start_link([])
     end
 
     if is_nil(Process.whereis(LemonChannels.PresentationState)) do
@@ -1059,7 +1063,7 @@ defmodule LemonRouter.StreamCoalescerTest do
       delivered_chunks =
         collect_finalize_chunks(run_id, [first_chunk], 5)
 
-      expected_chunks = LemonChannels.Telegram.Truncate.split_messages(long_text)
+      expected_chunks = Truncate.split_messages(long_text)
       assert first_chunk == hd(expected_chunks)
       assert Enum.sort(delivered_chunks) == Enum.sort(expected_chunks)
       assert Enum.any?(delivered_chunks, &String.ends_with?(&1, "END-OF-LONG-REPLY"))
@@ -1199,7 +1203,7 @@ defmodule LemonRouter.StreamCoalescerTest do
 
       resume = %ResumeToken{engine: "codex", value: "thread_abc"}
 
-      _ = LemonChannels.Telegram.ResumeIndexStore.delete_thread("botx", 12_345, 777)
+      _ = ResumeIndexStore.delete_thread("botx", 12_345, 777)
 
       assert :ok =
                StreamCoalescer.finalize_run(session_key, channel_id, run_id,
@@ -1219,7 +1223,7 @@ defmodule LemonRouter.StreamCoalescerTest do
                      1_000
 
       assert eventually(fn ->
-               case LemonChannels.Telegram.ResumeIndexStore.get_resume("botx", 12_345, 777, 101) do
+               case ResumeIndexStore.get_resume("botx", 12_345, 777, 101) do
                  %ResumeToken{engine: "codex", value: "thread_abc"} -> true
                  _ -> false
                end
@@ -1315,7 +1319,7 @@ defmodule LemonRouter.StreamCoalescerTest do
              end)
 
       assert eventually(fn ->
-               LemonChannels.Outbox.Dedupe.check("telegram", idempotency_key) == :duplicate
+               Dedupe.check("telegram", idempotency_key) == :duplicate
              end)
 
       assert :ok =

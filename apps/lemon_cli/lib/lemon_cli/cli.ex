@@ -17,20 +17,24 @@ defmodule LemonCli.CLI do
   source and packaged installs.
   """
 
-  alias LemonCore.Backup
-  alias LemonCore.Config.Modular
+  alias LemonCli.CommandRegistry
+  alias LemonCli.LocalRuntime
+  alias LemonCli.Onboarding.LogSilencer
   alias LemonCli.Onboarding.Runner
   alias LemonCli.Setup.{Gateway, Provider, Wizard}
+  alias LemonCore.Backup
+  alias LemonCore.Config.Modular
+  alias LemonCore.Config.Summary
   alias LemonCore.Doctor
   alias LemonCore.Doctor.{Check, Report, SupportBundle}
+  alias LemonCore.Doctor.RuntimeModules
+  alias LemonCore.Runtime.{Env, Health}
   alias LemonCore.Secrets
   alias LemonCore.Secrets.EnvCatalog
   alias LemonCore.Secrets.KeyRotation
   alias LemonCore.Secrets.MasterKey
   alias LemonCore.Setup.Readiness
   alias LemonCore.Update.ConfigMigrator
-  alias LemonCli.LocalRuntime
-  alias LemonCli.CommandRegistry
 
   defmodule Error do
     @moduledoc """
@@ -73,7 +77,7 @@ defmodule LemonCli.CLI do
     :ok = :io.setopts(:standard_error, encoding: :unicode)
 
     exit_code =
-      LemonCli.Onboarding.LogSilencer.with_quiet_logs(
+      LogSilencer.with_quiet_logs(
         "--json" in argv or List.first(argv) in ["run", "-p", "--print", "acp", "setup"],
         fn -> run(argv) end
       )
@@ -179,7 +183,7 @@ defmodule LemonCli.CLI do
   defp help_requested?(args), do: Enum.any?(args, &(&1 in ["--help", "-h", "help"]))
 
   defp run_command(%{handler: handler}, args) do
-    apply(handler, :run, [args])
+    handler.run(args)
     @exit_ok
   end
 
@@ -382,7 +386,7 @@ defmodule LemonCli.CLI do
         ensure_apps_started!([:lemon_core])
 
         external_runtime? =
-          LemonCore.Runtime.Health.running?(LemonCore.Runtime.Env.resolve().control_port,
+          Health.running?(Env.resolve().control_port,
             timeout_ms: 500
           )
 
@@ -663,7 +667,7 @@ defmodule LemonCli.CLI do
   end
 
   defp print_config_summary(config) do
-    Enum.each(LemonCore.Config.Summary.lines(config), &IO.puts/1)
+    Enum.each(Summary.lines(config), &IO.puts/1)
   end
 
   defp print_config_usage(device) do
@@ -1114,7 +1118,7 @@ defmodule LemonCli.CLI do
 
       # lemon_cli does not depend on lemon_channels; the umbrella registers the
       # diagnostics module under :doctor_runtime.
-      case LemonCore.Doctor.RuntimeModules.fetch(:channel_diagnostics) do
+      case RuntimeModules.fetch(:channel_diagnostics) do
         nil ->
           IO.puts(:stderr, "Channel diagnostics are not available in this build.")
           @exit_error

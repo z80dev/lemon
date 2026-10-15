@@ -1,8 +1,8 @@
 defmodule LemonRouter.RunOrchestratorTest do
   use ExUnit.Case, async: false
 
-  alias LemonCore.RunRequest
   alias LemonCore.ResumeToken
+  alias LemonCore.RunRequest
   alias LemonRouter.{PendingCompactionStore, RunOrchestrator}
 
   @moduledoc """

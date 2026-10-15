@@ -4,6 +4,17 @@ import { useApp, type Route } from '../../app';
 import { Badge, EmptyState, Field, PageHeader, formatTime, useQuery } from '../../ui';
 import { useDeadlineClock, ActionNotice, BotSelect, CopyButton, ExternalLink, QueryState, canManage, usePages, useWorkAction } from './shared';
 
+const channelStateLabels: Record<ChannelBinding['state'] | ChannelSetupFlow['state'], string> = {
+  configured: 'Waiting for setup',
+  pending: 'Waiting for setup',
+  awaiting_admin: 'Waiting for administrator approval',
+  connected: 'Connected',
+  disconnected: 'Disconnected',
+  blocked: 'Blocked',
+  denied: 'Not approved',
+  failed: 'Connection failed',
+};
+
 export function ChannelsScreen({ route }: { route: Route }) {
   const { client, snapshot, online } = useApp();
   const action = useWorkAction();
@@ -68,7 +79,7 @@ export function ChannelsScreen({ route }: { route: Route }) {
       </form>
       {!managed && <p className="muted">Select a Bot you own to change channel setup.</p>}
       {flow && <div className="card stack">
-        <Badge tone={flow.state === 'connected' ? 'good' : 'warning'}>{flow.state.replaceAll('_', ' ')}</Badge>
+        <Badge tone={flow.state === 'connected' ? 'good' : 'warning'}>{channelStateLabels[flow.state]}</Badge>
         {flow.state === 'awaiting_admin' && <p>Provider workspace administrator approval is still pending. Installation is not complete.</p>}
         {flow.error && <p className="error-notice" role="alert">{flow.error}</p>}
         {['pending', 'awaiting_admin'].includes(flow.state) && <ExternalLink url={flow.authorizationUrl}>Open / reopen provider install</ExternalLink>}
@@ -110,7 +121,7 @@ function BindingEditor({ binding, reload }: { binding: ChannelBinding; reload: (
   const selectedBot = useQuery(`binding-bot:${binding.botId}`, () => client.call('GET /bots/:id', { params: { id: binding.botId } }));
   const bot = selectedBot.data;
   const managed = !!bot && canManage(bot, snapshot.user.id);
-  return <article className="panel stack"><div className="spread"><><h3>{bot?.name ?? binding.botId} · {binding.adapter} · {binding.accountId}</h3><QueryState query={selectedBot}>{selectedBot.data && <p>Maintained Bot: {selectedBot.data.name}</p>}</QueryState></><Badge tone={binding.state === 'connected' ? 'good' : 'warning'}>{binding.state}</Badge></div><p>Inbound: {binding.capabilities.inbound ? 'Supported' : 'Unavailable'} · Outbound: {binding.capabilities.outbound ? 'Supported' : 'Unavailable'} · Events: {binding.capabilities.events.join(', ') || 'None advertised'}</p>{binding.lastError && <p className="error-notice" role="alert">{binding.lastError}</p>}<ActionNotice action={action} reconcile={async () => { await client.call('GET /channels', { query: { botId: binding.botId } }); await reload(); }} /><form className="stack" onSubmit={event => { event.preventDefault(); void action.run(async () => { await client.call('PATCH /channels/:id', { params: { id: binding.id }, body: { target, enabled, revision: binding.revision, clientNonce: nonce() } }); await reload(); }); }}><fieldset disabled={!managed || !online || action.blocked} className="stack"><Field label="Channel / target"><input required value={target} onChange={event => setTarget(event.target.value)} /></Field><label className="row"><input type="checkbox" checked={enabled} onChange={event => setEnabled(event.target.checked)} />Enabled (separate from provider connection state)</label><button>Save binding</button></fieldset></form>{removing ? <div className="stack"><p>Remove this binding and request actual provider uninstall / revoke? The product Bot and its history remain. Provider failure may require workspace-admin cleanup; it is not a successful removal.</p><button className="danger" disabled={!managed || !online || action.blocked} onClick={() => void action.run(async () => { await client.call('DELETE /channels/:id', { params: { id: binding.id }, body: { revision: binding.revision, clientNonce: nonce() } }); await reload(); })}>Confirm remove channel</button><button onClick={() => setRemoving(false)}>Keep channel</button></div> : <button className="danger" disabled={!managed} onClick={() => setRemoving(true)}>Remove channel…</button>}</article>;
+  return <article className="panel stack"><div className="spread"><><h3>{bot?.name ?? binding.botId} · {binding.adapter} · {binding.accountId}</h3><QueryState query={selectedBot}>{selectedBot.data && <p>Maintained Bot: {selectedBot.data.name}</p>}</QueryState></><Badge tone={binding.state === 'connected' ? 'good' : 'warning'}>{channelStateLabels[binding.state]}</Badge></div><p>Receive messages: {binding.capabilities.inbound ? 'Can receive messages' : 'Not supported'} · Send messages: {binding.capabilities.outbound ? 'Can send messages' : 'Not supported'}</p>{binding.lastError && <p className="error-notice" role="alert">{binding.lastError}</p>}<ActionNotice action={action} reconcile={async () => { await client.call('GET /channels', { query: { botId: binding.botId } }); await reload(); }} /><form className="stack" onSubmit={event => { event.preventDefault(); void action.run(async () => { await client.call('PATCH /channels/:id', { params: { id: binding.id }, body: { target, enabled, revision: binding.revision, clientNonce: nonce() } }); await reload(); }); }}><fieldset disabled={!managed || !online || action.blocked} className="stack"><Field label="Channel / target"><input required value={target} onChange={event => setTarget(event.target.value)} /></Field><label className="row"><input type="checkbox" checked={enabled} onChange={event => setEnabled(event.target.checked)} />Enabled (separate from provider connection state)</label><button>Save binding</button></fieldset></form>{removing ? <div className="stack"><p>Remove this binding and request actual provider uninstall / revoke? The product Bot and its history remain. Provider failure may require workspace-admin cleanup; it is not a successful removal.</p><button className="danger" disabled={!managed || !online || action.blocked} onClick={() => void action.run(async () => { await client.call('DELETE /channels/:id', { params: { id: binding.id }, body: { revision: binding.revision, clientNonce: nonce() } }); await reload(); })}>Confirm remove channel</button><button onClick={() => setRemoving(false)}>Keep channel</button></div> : <button className="danger" disabled={!managed} onClick={() => setRemoving(true)}>Remove channel…</button>}</article>;
 }
 
 function PrincipalLinkForm({ bindings, reload }: { bindings: ChannelBinding[]; reload: () => Promise<void> }) { useDeadlineClock(); const { client, online } = useApp();

@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { formatKeyHint } from "@oh-my-pi/pi-tui/key-hint-format";
 import { CommandPalette } from "../../src/ui/controllers/command-palette.ts";
 import { initTheme, resetTheme } from "../../src/ui/theme/theme.ts";
 import { invalidateThemeAdapters } from "../../src/ui/theme/tui-adapters.ts";
@@ -41,6 +42,24 @@ afterEach(async () => {
 });
 
 describe("draft preservation", () => {
+	test("native hints show effective keys and omit unbound actions after resource discovery", async () => {
+		palette = new CommandPalette({
+			context: () => harness.context(),
+			getDraft: () => harness.host.getDraft(),
+			setDraft: (text) => harness.host.setDraft(text),
+			present: () => () => {},
+			repaint: () => {},
+			notice: (text, level) => harness.host.notice(text, level),
+			resources: { home: root, env: {} },
+			bindingKeys: (action) => (action === "lemon.picker.model" ? ["alt+p"] : []),
+		});
+		await palette.open();
+		const model = palette.overlay?.items.find((item) => item.value === "command:model");
+		const editor = palette.overlay?.items.find((item) => item.value === "command:editor");
+		expect(model?.native?.facts?.keys).toBe(formatKeyHint("alt+p"));
+		expect(editor?.native?.facts?.keys).toBeUndefined();
+	});
+
 	test("cancel leaves the exact multiline draft alone", async () => {
 		harness.host.draft = "unfinished draft\n  with whitespace";
 		await palette.open();
