@@ -345,8 +345,10 @@ defmodule CodingAgent.SessionEdgeCasesTest do
         {:ok, stream} = LemonAi.EventStream.start_link()
 
         Task.start(fn ->
-          LemonAi.EventStream.push(stream, {:error, "Test error", %{}})
-          LemonAi.EventStream.complete(stream, %{})
+          LemonAi.EventStream.error(
+            stream,
+            assistant_message("", stop_reason: :error, error_message: "Test error")
+          )
         end)
 
         {:ok, stream}
@@ -359,6 +361,11 @@ defmodule CodingAgent.SessionEdgeCasesTest do
 
       # Should receive error event
       assert_receive {:session_event, _session_id, {:error, _reason, _partial}}, 5000
+
+      assert_receive {:session_event, _session_id,
+                      {:message_end,
+                       %AssistantMessage{stop_reason: :error, error_message: "Test error"}}},
+                     5000
 
       # Wait for the run to wind down, then check state
       wait_for_streaming_complete(session)
