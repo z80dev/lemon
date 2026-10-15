@@ -20,6 +20,12 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   session-local JSONL log, with timestamp and optional tool name. It requires
   no approval by default and makes no network requests.
 
+### Fixed
+
+- Preserve file-operation details from native assistant tool calls during
+  compaction, including patch additions, updates, deletions, and rename paths,
+  so subsequent summaries retain the affected files.
+
 ---
 
 ## [2026.10.12]

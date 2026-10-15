@@ -1,12 +1,113 @@
 defmodule CodingAgent.Tools.WebFetchTest do
   use ExUnit.Case, async: false
 
+  alias CodingAgent.Tools.{ReadPdf, WebFetch}
   alias LemonAgent.AbortSignal
-  alias CodingAgent.Tools.WebFetch
 
   setup do
     WebFetch.reset_cache(persistent: false)
     :ok
+  end
+
+  @tag :tmp_dir
+  test "truncated direct, Firecrawl and Exa content has a complete artifact", %{tmp_dir: dir} do
+    full = String.duplicate("page content ", 400) <> "UNSEEN_TAIL"
+
+    for provider <- ["direct", "firecrawl", "exa"] do
+      opts = [
+        cache_opts: [persistent: false],
+        session_id: "web-#{provider}",
+        context_guardrails: %{spill_dir: Path.join(dir, provider)},
+        settings_manager: %{
+          tools: %{
+            web: %{
+              fetch: %{
+                firecrawl: %{enabled: true, api_key: "test"},
+                providers: %{exa: %{api_key: "test"}}
+              }
+            }
+          }
+        },
+        http_get: fn _, _ ->
+          {:ok, %Req.Response{status: 200, headers: [{"content-type", "text/plain"}], body: full}}
+        end,
+        http_post: fn _, options ->
+          body =
+            if provider == "exa" do
+              refute Map.has_key?(Keyword.fetch!(options, :json)["text"], "maxCharacters")
+              %{"results" => [%{"text" => full}]}
+            else
+              %{"success" => true, "data" => %{"markdown" => full}}
+            end
+
+          {:ok, %Req.Response{status: 200, body: body}}
+        end
+      ]
+
+      tool = WebFetch.tool(dir, opts)
+
+      result =
+        tool.execute.(
+          "artifact",
+          %{"url" => "https://8.8.8.8/#{provider}", "provider" => provider, "maxChars" => 1000},
+          nil,
+          nil
+        )
+
+      payload = decode_payload(result)
+      assert payload["truncated"]
+      uri = payload["artifact_uri"]
+      assert uri =~ "artifact://"
+      assert result.details["artifact_uri"] == uri
+      assert payload["artifactNotice"] =~ uri
+      assert {:ok, path} = CodingAgent.Artifacts.resolve(uri, dir, opts)
+      assert File.read!(path) == full
+      refute payload["text"] =~ "UNSEEN_TAIL"
+      refute Map.has_key?(payload, "__full_text")
+      assert result.trust == :untrusted
+    end
+  end
+
+  @tag :tmp_dir
+  test "cache hits register full content in the requesting session", %{tmp_dir: dir} do
+    parent = self()
+    full = String.duplicate("cached ", 500) <> "CACHE_TAIL"
+
+    common = [
+      cache_opts: [persistent: false],
+      http_get: fn _, _ ->
+        send(parent, :fetch)
+        {:ok, %Req.Response{status: 200, headers: [{"content-type", "text/plain"}], body: full}}
+      end
+    ]
+
+    [first, second] =
+      for session <- ["one", "two"] do
+        opts =
+          common ++
+            [session_id: session, context_guardrails: %{spill_dir: Path.join(dir, session)}]
+
+        tool = WebFetch.tool(dir, opts)
+
+        payload =
+          decode_payload(
+            tool.execute.(
+              "cached",
+              %{"url" => "https://8.8.8.8/cache-artifact", "maxChars" => 1000},
+              nil,
+              nil
+            )
+          )
+
+        assert {:ok, path} = CodingAgent.Artifacts.resolve(payload["artifact_uri"], dir, opts)
+        assert File.read!(path) == full
+        payload
+      end
+
+    assert second["cached"]
+    refute first["artifact_uri"] == second["artifact_uri"]
+    assert_received :fetch
+    refute_received :fetch
   end
 
   test "rejects binary responses even in raw html mode" do
@@ -646,7 +747,7 @@ defmodule CodingAgent.Tools.WebFetchTest do
     System.put_env("PATH", operator_bin)
 
     assert {:ok, %{name: :pdftotext, executable: ^executable}} =
-             CodingAgent.Tools.ReadPdf.backend(cwd, pdf_system_only: true)
+             ReadPdf.backend(cwd, pdf_system_only: true)
   end
 
   @tag :tmp_dir
@@ -667,7 +768,7 @@ defmodule CodingAgent.Tools.WebFetchTest do
 
     tool = WebFetch.tool(cwd, http_get: http_get, cache_opts: [persistent: false])
 
-    case CodingAgent.Tools.ReadPdf.backend(cwd, pdf_system_only: true) do
+    case ReadPdf.backend(cwd, pdf_system_only: true) do
       {:ok, %{name: backend}} ->
         result = tool.execute.("id", %{"url" => "https://8.8.8.8/doc.pdf"}, nil, nil)
         assert result.trust == :untrusted

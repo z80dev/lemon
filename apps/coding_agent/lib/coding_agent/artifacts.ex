@@ -29,6 +29,30 @@ defmodule CodingAgent.Artifacts do
     end
   end
 
+  @doc "Persists complete text in session storage and returns its readable handle."
+  @spec spill(binary(), String.t(), options()) :: {:ok, String.t()} | {:error, String.t()}
+  def spill(content, cwd, opts) when is_binary(content) do
+    with {:ok, directory} <- spill_dir(cwd, opts),
+         :ok <- File.mkdir_p(directory) do
+      path =
+        Path.join(
+          directory,
+          "tool-output-" <> Base.encode16(:crypto.strong_rand_bytes(12), case: :lower) <> ".txt"
+        )
+
+      with :ok <- File.write(path, content, [:binary, :exclusive]),
+           {:ok, uri} <- register_in_dir(path, directory) do
+        {:ok, uri}
+      else
+        {:error, _} ->
+          File.rm(path)
+          {:error, "Cannot save full content artifact"}
+      end
+    else
+      {:error, _} -> {:error, "Session artifact storage is unavailable"}
+    end
+  end
+
   @doc """
   Adds a retrievable handle to a tool result carrying an output file. A result
   whose `details.artifact_truncated` is true is labelled as partial output.

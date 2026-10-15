@@ -19,6 +19,53 @@ defmodule CodingAgent.Tools.BrowserTest do
     {:ok, tmp_dir: tmp_dir}
   end
 
+  test "truncated snapshots and page content save full session artifacts", %{tmp_dir: dir} do
+    full = String.duplicate("browser text ", 500) <> "BROWSER_TAIL"
+
+    for {name, method, field, flag} <- [
+          {"browser_snapshot", "browser.snapshot", "snapshot", "truncated"},
+          {"browser_get_content", "browser.getContent", "text", "textTruncated"}
+        ] do
+      request = fn ^method, _, _ ->
+        {:ok, %{field => "preview", flag => true, "__full_content" => %{field => full}}}
+      end
+
+      opts = [
+        browser_request: request,
+        session_id: name,
+        context_guardrails: %{spill_dir: Path.join(dir, name)}
+      ]
+
+      tool = browser_tool(name, dir, opts)
+
+      assert %AgentToolResult{trust: :untrusted, details: details, content: [%{text: text}]} =
+               run_browser_tool(tool, %{})
+
+      uri = details["artifact_uri"]
+      assert uri =~ "artifact://"
+      assert text =~ uri
+      assert details["artifactNotice"] =~ uri
+      assert {:ok, path} = CodingAgent.Artifacts.resolve(uri, dir, opts)
+      assert Jason.decode!(File.read!(path)) == %{field => full}
+      refute Map.has_key?(details, "__full_content")
+      refute text =~ "BROWSER_TAIL"
+    end
+  end
+
+  test "untruncated browser content does not create an artifact", %{tmp_dir: dir} do
+    tool =
+      browser_tool("browser_snapshot", dir,
+        browser_request: fn _, _, _ ->
+          {:ok, %{"snapshot" => "complete", "truncated" => false}}
+        end,
+        session_id: "complete"
+      )
+
+    assert %AgentToolResult{details: details} = run_browser_tool(tool, %{})
+    refute Map.has_key?(details, "artifact_uri")
+    refute File.exists?(Path.join(dir, ".lemon"))
+  end
+
   test "browser_navigate calls the supervised browser server" do
     parent = self()
 
