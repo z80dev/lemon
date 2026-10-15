@@ -8,6 +8,8 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
+### Added
+
 - Add `ls tree: true`: depth-limited newest-first trees with file sizes,
   12 children per directory and explicit omitted-sibling counts.
 
