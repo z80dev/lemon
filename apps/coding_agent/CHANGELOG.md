@@ -4,6 +4,10 @@
 
 ### Added
 
+- LSP supports preview/apply file renames, server reload, advertised capabilities,
+  and bounded workspace diagnostics from running clients. Document language IDs
+  now come from the shared LemonLsp server catalog.
+
 - Bare reads of source files with at least 300 lines and at most 2 MiB now return
   bounded structural summaries with declarations and explicit omitted ranges.
   Summaries are immutable, omit edit snapshots, and are rejected by overwrite
