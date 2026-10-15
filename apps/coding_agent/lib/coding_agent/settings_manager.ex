@@ -6,8 +6,8 @@ defmodule CodingAgent.SettingsManager do
   a struct that existing coding agent components can consume.
   """
 
+  alias LemonAgent.ModelRuntime.{CustomProviders, ModelRoles}
   alias LemonCore.Config, as: LemonConfig
-  alias LemonAgent.ModelRuntime.ModelRoles
 
   @type thinking_level :: :off | :auto | :minimal | :low | :medium | :high | :xhigh
 
@@ -21,6 +21,7 @@ defmodule CodingAgent.SettingsManager do
   @type task_settings :: %{
           max_depth: integer(),
           max_runtime_ms: non_neg_integer(),
+          idle_ttl_ms: non_neg_integer(),
           worktree_merge: String.t(),
           disabled_agents: [String.t()],
           agent_models: %{optional(String.t()) => String.t()}
@@ -127,6 +128,7 @@ defmodule CodingAgent.SettingsManager do
     task: %{
       max_depth: 2,
       max_runtime_ms: 0,
+      idle_ttl_ms: 300_000,
       worktree_merge: "none",
       disabled_agents: [],
       agent_models: %{}
@@ -213,6 +215,11 @@ defmodule CodingAgent.SettingsManager do
         case Map.get(task, :max_runtime_ms) do
           ms when is_integer(ms) and ms >= 0 -> ms
           _ -> defaults.max_runtime_ms
+        end,
+      idle_ttl_ms:
+        case Map.get(task, :idle_ttl_ms) do
+          ms when is_integer(ms) and ms >= 0 -> ms
+          _ -> defaults.idle_ttl_ms
         end,
       worktree_merge:
         case Map.get(task, :worktree_merge) do
@@ -361,7 +368,7 @@ defmodule CodingAgent.SettingsManager do
   defp normalize_provider(p) when is_binary(p) do
     normalized = p |> String.downcase() |> String.replace("-", "_")
 
-    if LemonAgent.ModelRuntime.CustomProviders.builtin?(normalized),
+    if CustomProviders.builtin?(normalized),
       do: String.to_atom(normalized),
       else: String.trim(p)
   end

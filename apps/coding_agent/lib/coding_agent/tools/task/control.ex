@@ -6,12 +6,15 @@ defmodule CodingAgent.Tools.Task.Control do
 
   Family messaging authenticates callers from captured session options, never
   message parameters. It exposes only immediate relatives and public identities.
-  Peer messages use `Session.steer/2`, not a new prompt turn. Unattached children
-  retain FIFO messages (64 messages / 256 KiB); message bodies are limited to 32 KiB.
+  Running peers receive steering input. Completed children remain idle until
+  their configured TTL parks the live session; a direct message starts a new
+  turn, restoring the persisted session when parked. Unattached children retain
+  FIFO messages (64 messages / 256 KiB); bodies are limited to 32 KiB.
   """
   use GenServer
 
   alias CodingAgent.{Session, TaskStore}
+  alias CodingAgent.Tools.Task.Async
   alias LemonAgent.AbortSignal
 
   @max_message_bytes 32 * 1024
@@ -49,6 +52,12 @@ defmodule CodingAgent.Tools.Task.Control do
 
   def attach_session(task_id, session, session_id \\ nil),
     do: GenServer.call(__MODULE__, {:session, task_id, session, session_id})
+
+  def configure(task_id, context),
+    do: GenServer.call(__MODULE__, {:configure, task_id, context})
+
+  def retain_session(task_id, session, resume),
+    do: GenServer.call(__MODULE__, {:retain_session, task_id, session, resume})
 
   @doc "Send peer content to a task ID, unique name, parent, or all immediate relatives."
   def send_message(target, text, opts) do
@@ -112,6 +121,10 @@ defmodule CodingAgent.Tools.Task.Control do
       worker_ref: nil,
       session: nil,
       session_id: nil,
+      phase: :running,
+      resume: nil,
+      continuation: nil,
+      idle_token: nil,
       metadata: metadata,
       messages: [],
       message_count: 0,
@@ -129,7 +142,7 @@ defmodule CodingAgent.Tools.Task.Control do
         {:reply, {:error, "Task aborted"}, state}
 
       entry ->
-        entry = %{entry | worker: worker, worker_ref: Process.monitor(worker)}
+        entry = %{detach_worker(entry) | worker: worker, worker_ref: Process.monitor(worker)}
         {:reply, :ok, Map.put(state, id, entry)}
     end
   end
@@ -161,8 +174,47 @@ defmodule CodingAgent.Tools.Task.Control do
     end
   end
 
+  def handle_call({:configure, id, context}, _from, state) do
+    {:reply, :ok, Map.update!(state, id, &%{&1 | continuation: context})}
+  end
+
+  def handle_call({:retain_session, id, session, resume}, _from, state) do
+    case state[id] do
+      %{session: ^session, cancelled: false} = entry ->
+        TaskStore.set_agent_state(id, :running, %{
+          session_id: entry.session_id,
+          session_file: resume.start_opts[:session_file],
+          cwd: resume.start_opts[:cwd]
+        })
+
+        {:reply, :ok, Map.put(state, id, %{entry | resume: resume})}
+
+      _ ->
+        {:reply, {:error, "Task aborted"}, state}
+    end
+  end
+
   def handle_call({:complete, id}, _from, state) do
-    {:reply, :ok, remove(state, id)}
+    case state[id] do
+      nil ->
+        {:reply, :ok, state}
+
+      entry ->
+        entry = detach_worker(entry)
+
+        if (status(entry, id) == :completed and entry.resume) && not entry.cancelled do
+          token = make_ref()
+          ttl = Keyword.get(entry.resume.opts, :idle_ttl_ms, 300_000)
+          if ttl > 0, do: Process.send_after(self(), {:park, id, token}, ttl)
+          TaskStore.set_agent_state(id, :idle)
+          {:reply, :ok, Map.put(state, id, %{entry | phase: :idle, idle_token: token})}
+        else
+          stop_child(entry)
+          phase = if entry.cancelled, do: :killed, else: :aborted
+          TaskStore.set_agent_state(id, phase)
+          {:reply, :ok, Map.put(state, id, %{entry | phase: phase, session: nil, resume: nil})}
+        end
+    end
   end
 
   def handle_call({:cancel_owned, target}, {owner, _}, state) do
@@ -208,20 +260,15 @@ defmodule CodingAgent.Tools.Task.Control do
          {:ok, recipients} <- resolve_target(target, family),
          envelope = peer_envelope(caller, text),
          :ok <- prepare_delivery(recipients, envelope) do
-      state =
-        Enum.reduce(recipients, state, fn recipient, acc ->
-          if recipient.id do
-            {:ok, entry} = deliver(recipient.entry, envelope)
-            Map.put(acc, recipient.id, entry)
-          else
-            Session.steer(recipient.entry.session, envelope)
-            acc
-          end
+      {state, deliveries} =
+        Enum.reduce(recipients, {state, []}, fn recipient, {acc, receipts} ->
+          {entry, delivery} = deliver_recipient(recipient, envelope)
+          acc = if recipient.id, do: Map.put(acc, recipient.id, entry), else: acc
+          receipt = Map.put(public_identity(recipient), :delivery, delivery)
+          {acc, [receipt | receipts]}
         end)
 
-      {:reply,
-       {:ok, %{sender: address(caller), recipients: Enum.map(recipients, &public_identity/1)}},
-       state}
+      {:reply, {:ok, %{sender: address(caller), recipients: Enum.reverse(deliveries)}}, state}
     else
       {:error, reason} -> {:reply, {:error, reason}, state}
     end
@@ -246,12 +293,31 @@ defmodule CodingAgent.Tools.Task.Control do
     {:noreply, state}
   end
 
+  def handle_info({:park, id, token}, state) do
+    case state[id] do
+      %{phase: :idle, idle_token: ^token} = entry ->
+        stop_child(entry)
+        TaskStore.set_agent_state(id, :parked)
+        {:noreply, Map.put(state, id, %{entry | phase: :parked, session: nil, idle_token: nil})}
+
+      _ ->
+        {:noreply, state}
+    end
+  end
+
   def handle_info({:DOWN, ref, :process, _pid, reason}, state) do
     state =
       Enum.reduce(state, state, fn {id, entry}, acc ->
         cond do
-          entry.parent_ref == ref or entry.owner_ref == ref ->
+          entry.owner_ref == ref ->
             Map.put(acc, id, cancel(id, entry))
+
+          entry.parent_ref == ref ->
+            entry = cancel(id, entry)
+            stop_child(entry)
+            if is_pid(entry.worker), do: Process.exit(entry.worker, :kill)
+            if is_pid(entry.worker), do: entry.on_failure.("Task aborted")
+            remove(acc, id)
 
           entry.worker_ref == ref ->
             stop_child(entry)
@@ -262,7 +328,8 @@ defmodule CodingAgent.Tools.Task.Control do
                 else: "Task worker exited: #{inspect(reason)}"
 
             entry.on_failure.(failure)
-            remove(acc, id)
+            TaskStore.set_agent_state(id, :aborted)
+            Map.put(acc, id, %{detach_worker(entry) | phase: :aborted, session: nil, resume: nil})
 
           true ->
             acc
@@ -277,8 +344,11 @@ defmodule CodingAgent.Tools.Task.Control do
       %{cancelled: true} = entry ->
         stop_child(entry)
         if is_pid(entry.worker), do: Process.exit(entry.worker, :kill)
-        entry.on_failure.("Task aborted")
-        {:noreply, remove(state, id)}
+        if is_pid(entry.worker), do: entry.on_failure.("Task aborted")
+        TaskStore.set_agent_state(id, :killed)
+
+        {:noreply,
+         Map.put(state, id, %{detach_worker(entry) | phase: :killed, session: nil, resume: nil})}
 
       _ ->
         {:noreply, state}
@@ -411,7 +481,9 @@ defmodule CodingAgent.Tools.Task.Control do
           Enum.filter(family, &(&1.id == target))
 
         true ->
-          Enum.filter(family, &(&1.entry.metadata[:name] == target))
+          named = Enum.filter(family, &(&1.entry.metadata[:name] == target))
+          live = Enum.filter(named, &(&1.status in [:queued, :running]))
+          if live == [], do: named, else: live
       end
 
     case matches do
@@ -429,8 +501,12 @@ defmodule CodingAgent.Tools.Task.Control do
     Enum.reduce_while(recipients, :ok, fn recipient, :ok ->
       result =
         cond do
-          recipient.status not in [:queued, :running] ->
-            {:error, "Agent #{address(recipient)} is #{recipient.status}"}
+          recipient.status not in [:queued, :running, :idle, :parked] ->
+            {:error,
+             "Agent #{address(recipient)} is #{recipient.status}; read history://#{recipient.id}"}
+
+          recipient.status in [:idle, :parked] ->
+            resumable(recipient)
 
           recipient.id ->
             queue_capacity(recipient.entry, text)
@@ -480,6 +556,64 @@ defmodule CodingAgent.Tools.Task.Control do
        else: :ok
   end
 
+  defp resumable(%{id: id, entry: entry}) do
+    cond do
+      is_nil(entry.resume) or is_nil(entry.continuation) ->
+        {:error, "Agent cannot resume; read history://#{id}"}
+
+      not File.dir?(entry.resume.start_opts[:cwd]) ->
+        {:error, "Agent workspace/worktree was removed; read history://#{id}"}
+
+      not File.regular?(entry.resume.start_opts[:session_file]) ->
+        {:error, "Agent transcript is unavailable; read history://#{id}"}
+
+      true ->
+        :ok
+    end
+  end
+
+  defp deliver_recipient(%{id: id, entry: entry, status: phase}, text)
+       when phase in [:idle, :parked] do
+    case TaskStore.begin_agent_turn(id) do
+      :ok ->
+        entry = %{entry | phase: :running, idle_token: nil}
+
+        case Async.resume(id, entry, text) do
+          {:ok, worker} ->
+            failure = fn reason ->
+              Async.finish_continuation(
+                id,
+                entry.continuation,
+                {:error, reason}
+              )
+            end
+
+            entry = %{
+              entry
+              | worker: worker,
+                worker_ref: Process.monitor(worker),
+                on_failure: failure
+            }
+
+            {entry, if(phase == :parked, do: :revived, else: :woken)}
+
+          {:error, _reason} ->
+            TaskStore.fail(id, "Failed to start child message turn")
+            TaskStore.set_agent_state(id, :aborted)
+            stop_child(entry)
+            {%{entry | phase: :aborted, session: nil, resume: nil}, :failed}
+        end
+
+      {:error, _reason} ->
+        {entry, :failed}
+    end
+  end
+
+  defp deliver_recipient(%{entry: entry}, text) do
+    {:ok, entry} = deliver(entry, text)
+    {entry, :injected}
+  end
+
   defp deliver(%{session: session} = entry, text) when is_pid(session) do
     Session.steer(session, text)
     {:ok, entry}
@@ -516,7 +650,17 @@ defmodule CodingAgent.Tools.Task.Control do
           AbortSignal.aborted?(entry.parent_signal) ->
         :cancelled
 
-      stored in [:completed, :error, :cancelled, :lost, :missing] ->
+      stored in [:error, :cancelled, :killed, :aborted, :lost, :missing] ->
+        stored
+
+      entry[:phase] == :idle and
+          (not is_pid(entry.session) or not Process.alive?(entry.session)) ->
+        :parked
+
+      entry[:phase] in [:idle, :parked, :aborted, :killed] ->
+        entry.phase
+
+      stored == :completed ->
         stored
 
       is_pid(entry.session) and not Process.alive?(entry.session) ->
@@ -539,6 +683,8 @@ defmodule CodingAgent.Tools.Task.Control do
   defp cancel(_id, %{cancelled: true} = entry), do: entry
 
   defp cancel(id, entry) do
+    TaskStore.cancel(id, "Task aborted")
+    TaskStore.set_agent_state(id, :killed)
     AbortSignal.abort(entry.signal)
     if is_pid(entry.session), do: Session.abort(entry.session)
     Process.send_after(self(), {:force_cancel, id}, 2_000)
@@ -555,6 +701,11 @@ defmodule CodingAgent.Tools.Task.Control do
   end
 
   defp stop_child(_), do: :ok
+
+  defp detach_worker(entry) do
+    if is_reference(entry.worker_ref), do: Process.demonitor(entry.worker_ref, [:flush])
+    %{entry | worker: nil, worker_ref: nil}
+  end
 
   defp remove(state, id) do
     case Map.pop(state, id) do

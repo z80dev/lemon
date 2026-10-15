@@ -297,6 +297,7 @@ defmodule CodingAgent.SettingsManagerTest do
           task: %{
             max_depth: 1,
             max_runtime_ms: "soon",
+            idle_ttl_ms: -1,
             worktree_merge: "patch",
             disabled_agents: ["reviewer", 7],
             agent_models: %{"scout" => " @smol ", "reviewer" => ""}
@@ -311,6 +312,7 @@ defmodule CodingAgent.SettingsManagerTest do
       assert SettingsManager.from_config(config).task == %{
                max_depth: 1,
                max_runtime_ms: 0,
+               idle_ttl_ms: 300_000,
                worktree_merge: "patch",
                disabled_agents: ["reviewer"],
                agent_models: %{"scout" => "@smol"}
@@ -533,7 +535,7 @@ defmodule CodingAgent.SettingsManagerTest do
       # `tool_search`/`tool_invoke`. This pins that
       # `LemonCore.Config.convert_tools/1` carries it through unmangled, so
       # build the section the same way the loader does.
-      disclosure = LemonCore.Config.Tools.resolve(%{}).disclosure
+      disclosure = Tools.resolve(%{}).disclosure
 
       config = %LemonConfig{
         providers: %{},

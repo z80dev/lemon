@@ -28,8 +28,8 @@ defmodule LemonCore.Config.ValidatorTest do
   """
   use ExUnit.Case, async: false
 
-  alias LemonCore.Config.Validator
   alias LemonCore.Config.Modular
+  alias LemonCore.Config.Validator
 
   setup do
     previous = Application.get_env(:lemon_core, :gateway_channels)
@@ -330,6 +330,7 @@ defmodule LemonCore.Config.ValidatorTest do
       valid = %{
         max_depth: -1,
         max_runtime_ms: 0,
+        idle_ttl_ms: 0,
         worktree_merge: "patch",
         disabled_agents: ["scout"],
         agent_models: %{"scout" => "@smol"}
@@ -343,6 +344,7 @@ defmodule LemonCore.Config.ValidatorTest do
             task: %{
               max_depth: -2,
               max_runtime_ms: -1,
+              idle_ttl_ms: -1,
               worktree_merge: "rebase",
               disabled_agents: "scout",
               agent_models: %{"scout" => ""}
@@ -351,7 +353,8 @@ defmodule LemonCore.Config.ValidatorTest do
           []
         )
 
-      for key <- ~w(max_depth max_runtime_ms worktree_merge disabled_agents agent_models) do
+      for key <-
+            ~w(max_depth max_runtime_ms idle_ttl_ms worktree_merge disabled_agents agent_models) do
         assert Enum.any?(errors, &String.starts_with?(&1, "runtime.task.#{key}:"))
       end
     end
