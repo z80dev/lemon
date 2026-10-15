@@ -8,6 +8,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
+- Bash supports session/project-scoped named services with log-regex or loopback
+  TCP readiness checks, restart-by-name, and existing process inspection/stop tools.
+
 - Opt-in model `checkpoint(goal)` / `rewind(report)` retain exploration findings
   as branch context without restoring files or prompting for confirmation.
   Enable `[runtime.tools.checkpoint] enabled = true` (default off). The former
