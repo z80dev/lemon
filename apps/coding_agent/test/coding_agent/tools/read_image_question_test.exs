@@ -106,7 +106,7 @@ defmodule CodingAgent.Tools.ReadImageQuestionTest do
 
     File.write!(
       rasterizer,
-      "#!/bin/sh\nprintf '%s' '#{Base.encode64(@png)}' | /usr/bin/base64 -D\n"
+      "#!/bin/sh\nprintf '%s' '#{Base.encode64(@png)}' | /usr/bin/base64 -d\n"
     )
 
     File.chmod!(rasterizer, 0o700)
