@@ -267,6 +267,26 @@ defmodule LemonOmp.SessionLifecycleTest do
               :settled} = LemonOmp.wait(id, 3_000, ctx.scope)
     end
 
+    test "an unacknowledged redirect does not hold an aborted session running", ctx do
+      ws = workspace!()
+      id = start!(ws, "HOLD the old turn", ctx)["id"]
+      await_wire(id, &(&1["activeTools"] != []))
+      put_app_env(:command_timeout_ms, 300)
+
+      assert {:error, :outcome_unknown} =
+               LemonOmp.send_message(id, "REDIRECT_GATE new task", :redirect, ctx.scope)
+
+      idle = await_wire(id, &(&1["status"] == "idle"), 4_000)
+      assert idle["lastTurn"] == "aborted"
+
+      # omp may still start the redirected turn later; its events win.
+      File.write!(Path.join(ws, ".fake_omp_redirect_ack"), "")
+      File.write!(Path.join(ws, ".fake_omp_redirect_start"), "")
+      await_wire(id, &(&1["status"] == "running"))
+      File.write!(Path.join(ws, ".fake_omp_redirect_finish"), "")
+      await_wire(id, &(&1["status"] == "idle" and &1["lastTurn"] == "completed"))
+    end
+
     test "redirect on an idle session delivers a plain prompt", ctx do
       ws = workspace!()
       id = start!(ws, "first task", ctx)["id"]

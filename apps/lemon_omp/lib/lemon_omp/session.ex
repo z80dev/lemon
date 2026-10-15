@@ -229,7 +229,22 @@ defmodule LemonOmp.Session do
         {:noreply, state}
 
       {entry, pending} ->
-        {:noreply, reply_pending(%{state | pending: pending}, entry, {:error, :outcome_unknown})}
+        state = reply_pending(%{state | pending: pending}, entry, {:error, :outcome_unknown})
+
+        # An unacknowledged redirect must not hold the session "running"
+        # forever: release its guard so omp's own events decide the status.
+        state =
+          if is_map_key(state.redirects, id) do
+            state = clear_redirect(state, id)
+
+            if state.projection.settling and not state.projection.redirecting,
+              do: handle_frame(state, {:event, "session_settled", %{}}),
+              else: state
+          else
+            state
+          end
+
+        {:noreply, state}
     end
   end
 
