@@ -130,6 +130,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Preserve observed input, output and cache-token breakdowns in cancelled and
+  failed native runs when budget accounting arrives before terminal completion.
+
 - Hermes provider-config import now reports conflicts instead of replacing
   existing values unless `--overwrite` is explicitly requested.
 
