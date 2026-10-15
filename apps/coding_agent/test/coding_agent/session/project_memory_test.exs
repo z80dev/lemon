@@ -479,9 +479,11 @@ defmodule CodingAgent.Session.ProjectMemoryTest do
   defp scoped(state, i), do: %{state | workspace_dir: state.workspace_dir <> "-#{i}"}
 
   defp capture_all(states, opts) do
-    for scoped <- states do
-      assert {:ok, _} = ProjectMemory.after_turn(scoped, turn("Use mix test."), opts)
-    end
+    workers =
+      for scoped <- states do
+        assert {:ok, worker} = ProjectMemory.after_turn(scoped, turn("Use mix test."), opts)
+        {worker, Process.monitor(worker)}
+      end
 
     for _ <- states do
       assert_receive {:extracting, pid, _}, 2_000
@@ -489,6 +491,15 @@ defmodule CodingAgent.Session.ProjectMemoryTest do
     end
 
     for scoped <- states, do: assert(:ok = ProjectMemory.flush(scoped, 5_000))
+
+    for {worker, ref} <- workers do
+      assert_receive {:DOWN, ^ref, :process, ^worker, :normal}, 5_000
+
+      # Prove this batch really left dead owners behind while pruning is paused.
+      keys = Registry.keys(CodingAgent.ProcessRegistry, worker)
+      assert Enum.any?(keys, &match?({ProjectMemory, :slot, _}, &1))
+      assert Enum.any?(keys, &match?({ProjectMemory, :project, _}, &1))
+    end
   end
 
   defp turn(text),

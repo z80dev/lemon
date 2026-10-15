@@ -51,7 +51,7 @@ defmodule CodingAgent.Wasm.ToolFactory do
     context_json = Keyword.fetch!(opts, :context_json)
     metadata = Keyword.fetch!(opts, :metadata)
 
-    fn tool_call_id, params, _signal, _on_update ->
+    fn tool_call_id, params, signal, _on_update ->
       params_json = Jason.encode!(params || %{})
       telemetry_metadata = telemetry_metadata(name, metadata, tool_call_id)
 
@@ -64,7 +64,7 @@ defmodule CodingAgent.Wasm.ToolFactory do
       started_at = System.monotonic_time(:microsecond)
 
       try do
-        case SidecarSession.invoke(sidecar_pid, name, params_json, context_json) do
+        case SidecarSession.invoke(sidecar_pid, name, params_json, context_json, 120_000, signal) do
           {:ok, invoke_result} ->
             emit_stop(telemetry_metadata, started_at, wasm_tool_status(invoke_result))
             build_success_result(name, invoke_result, metadata)
@@ -79,6 +79,7 @@ defmodule CodingAgent.Wasm.ToolFactory do
                 }
               ],
               details: %{reason: reason, wasm: metadata},
+              is_error: true,
               trust: :untrusted
             }
         end
@@ -148,6 +149,7 @@ defmodule CodingAgent.Wasm.ToolFactory do
       end
 
     %AgentToolResult{
+      is_error: wasm_tool_status(invoke_result) == :error,
       content: [%TextContent{text: text}],
       details: %{
         wasm: metadata,

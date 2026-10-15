@@ -20,9 +20,92 @@ defmodule CodingAgent.ControlPlaneProvider do
   def get_task(task_id), do: CodingAgent.TaskStore.get(task_id)
 
   def todo_progress(session_key) do
-    progress = CodingAgent.Tools.TodoStore.get_progress(session_key)
-    actionable_count = session_key |> CodingAgent.Tools.TodoStore.get_actionable() |> length()
-    Map.put(progress, :actionable_count, actionable_count)
+    case session_todos(session_key, nil) do
+      {:ok, todos, _revision} ->
+        todos
+        |> CodingAgent.Tools.TodoStore.progress()
+        |> Map.put(:actionable_count, length(CodingAgent.Tools.TodoStore.actionable(todos)))
+
+      {:error, _} ->
+        nil
+    end
+  end
+
+  @doc "Read the authoritative selected-branch list from a live session or its journal."
+  def session_todos(session_key, cwd) do
+    case live_session(session_key) do
+      nil ->
+        with {:ok, cwd} <- session_cwd(session_key, cwd),
+             {:ok, path} <- native_session_path(session_key, cwd),
+             {:ok, session} <- load_native_session(path) do
+          materialized_todos(session)
+        end
+
+      pid ->
+        live_todos(pid)
+    end
+  end
+
+  @doc "Read journal todos by native session ID for the progress snapshot API."
+  def native_session_todos(session_id, cwd)
+      when is_binary(session_id) and session_id != "" and is_binary(cwd) do
+    pid =
+      if Process.whereis(CodingAgent.SessionRegistry) do
+        case Registry.lookup(CodingAgent.SessionRegistry, session_id) do
+          [{pid, _}] -> pid
+          [] -> nil
+        end
+      end
+
+    if pid do
+      live_todos(pid)
+    else
+      path = CodingAgent.SessionManager.session_file_path(cwd, session_id)
+
+      with {:ok, session} <- load_native_session(path),
+           true <- session.header.id == session_id do
+        materialized_todos(session)
+      else
+        false -> {:error, :session_not_found}
+        {:error, _} = error -> error
+      end
+    end
+  end
+
+  def native_session_todos(_session_id, _cwd), do: {:error, :invalid_session_id}
+
+  defp live_todos(pid) do
+    case CodingAgent.Session.todos(pid) do
+      {:ok, _todos, _revision} = result -> result
+      {:error, reason, _revision} -> {:error, reason}
+    end
+  end
+
+  defp materialized_todos(session) do
+    {result, head} = CodingAgent.Session.Todos.materialize(session)
+
+    case result do
+      {:ok, todos} -> {:ok, todos, {0, head}}
+      {:error, _} = error -> error
+    end
+  end
+
+  defp session_cwd(_session_key, cwd) when is_binary(cwd), do: {:ok, cwd}
+
+  defp session_cwd(session_key, nil) do
+    case LemonCore.Introspection.list(
+           session_key: session_key,
+           event_type: :session_started,
+           limit: 1
+         ) do
+      [event | _] ->
+        payload = Map.get(event, :payload) || Map.get(event, "payload") || %{}
+        cwd = Map.get(payload, :cwd) || Map.get(payload, "cwd")
+        if is_binary(cwd) and cwd != "", do: {:ok, cwd}, else: {:error, :session_not_found}
+
+      _ ->
+        {:error, :session_not_found}
+    end
   end
 
   def feature_progress(cwd), do: CodingAgent.Tools.FeatureRequirements.get_progress(cwd)

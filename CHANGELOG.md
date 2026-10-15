@@ -670,6 +670,21 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   Capture accounting now serializes record mutations with reclamation, preserves
   live capture state across store-only restart, and rejects unpersisted
   reservations or unknown legacy artifact usage before process launch.
+- **Todos follow the selected branch.** The `todo` tool's list is now journaled
+  in the session history instead of living only in memory, so rewind, branch
+  navigation, restart/resume and forks show the list that branch last wrote,
+  with stable IDs, and plan mode/approved plan and todos always agree. A todo
+  write is reported as saved only after its journal entry is recorded, and a
+  write prepared before a branch switch is rejected. Sessions saved before this
+  change recover the latest successful todo write recorded on each branch;
+  checkpoint resume no longer copies a session-wide todo snapshot onto the
+  current branch. ACP load/resume and branch changes replace the client plan
+  from the same journal, including cleared lists; progress survives cache loss.
+  Restoring a branch never refunds spend, restores revoked policy or reruns tools.
+  WASM host calls now execute the same wrapped tools in supervised, Session-owned
+  workers, avoiding a todo journal self-call. Host requests retain invocation
+  ownership, abort signals and deadlines; cancellation/disposal kills pending
+  work, rejects queued late writes and preserves policy/approval failures as errors.
 
 ---
 

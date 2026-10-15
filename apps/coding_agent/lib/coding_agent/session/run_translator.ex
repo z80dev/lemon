@@ -285,6 +285,17 @@ defmodule CodingAgent.Session.RunTranslator do
     emit_approval_action(t, event)
   end
 
+  def handle_event(%__MODULE__{} = t, {:todos_changed, todos}) do
+    emit_action_event(t, %{
+      id: "todos",
+      kind: :note,
+      title: "Todo plan updated",
+      detail: %{type: :todos_changed, todos: todos},
+      phase: :completed,
+      ok: true
+    })
+  end
+
   def handle_event(%__MODULE__{} = t, {:provider_retry, details}) when is_map(details) do
     attempt = Map.get(details, :attempt, 1)
     max_retries = Map.get(details, :max_retries, attempt)

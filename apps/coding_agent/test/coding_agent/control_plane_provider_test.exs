@@ -66,9 +66,9 @@ defmodule CodingAgent.ControlPlaneProviderTest do
                {:error, :session_not_found}
     end
 
-    test "todo_progress carries the actionable count for the control plane to rename" do
-      progress = ControlPlaneProvider.todo_progress("no-such-session-#{System.unique_integer()}")
-      assert progress.actionable_count == 0
+    test "todo_progress reports unavailable for an unknown session" do
+      assert ControlPlaneProvider.todo_progress("no-such-session-#{System.unique_integer()}") ==
+               nil
     end
 
     test "wasm_sidecar_running? is a boolean" do
@@ -152,6 +152,87 @@ defmodule CodingAgent.ControlPlaneProviderTest do
 
       assert {:error, :destination_exists} =
                ControlPlaneProvider.session_fork(context.source, context.cwd, context.destination)
+    end
+
+    test "todo projections follow live navigation, cache loss, durable resume and fork",
+         context do
+      opts = [
+        cwd: context.cwd,
+        workspace_dir: Path.join(context.cwd, "workspace"),
+        session_file: context.path,
+        session_key: context.source,
+        model: LemonAgent.Test.Mocks.mock_model(),
+        tools: []
+      ]
+
+      pid = start_supervised!({CodingAgent.Session, opts})
+      empty_leaf = CodingAgent.Session.get_state(pid).session_manager.leaf_id
+
+      first =
+        CodingAgent.Tools.TodoWrite.execute(
+          "first",
+          %{
+            "todos" => [
+              %{"id" => "done", "content" => "Done", "status" => "completed"},
+              %{"id" => "next", "content" => "Next", "status" => "pending"}
+            ]
+          },
+          nil,
+          nil,
+          pid
+        )
+
+      assert %LemonAgent.Types.AgentToolResult{} = first
+      first_leaf = CodingAgent.Session.get_state(pid).session_manager.leaf_id
+      native_id = context.session.header.id
+      CodingAgent.Tools.TodoStore.delete(native_id)
+      CodingAgent.Tools.TodoStore.put(context.source, [%{"status" => "completed"}])
+
+      assert {:ok, first_todos, _} =
+               ControlPlaneProvider.session_todos(context.source, context.cwd)
+
+      assert first_todos == first.details.todos
+
+      assert %{total: 2, completed: 1, actionable_count: 1} =
+               ControlPlaneProvider.todo_progress(context.source)
+
+      assert :ok =
+               CodingAgent.Session.navigate_tree(pid, empty_leaf, summarize_abandoned: false)
+
+      assert {:ok, [], _} = ControlPlaneProvider.session_todos(context.source, context.cwd)
+      assert %{total: 0, actionable_count: 0} = ControlPlaneProvider.todo_progress(context.source)
+
+      assert :ok =
+               CodingAgent.Session.navigate_tree(pid, first_leaf, summarize_abandoned: false)
+
+      stop_supervised!(CodingAgent.Session)
+      CodingAgent.Tools.TodoStore.delete(native_id)
+
+      assert {:ok, ^first_todos, {0, ^first_leaf}} =
+               ControlPlaneProvider.session_todos(context.source, context.cwd)
+
+      assert %{total: 2, completed: 1, actionable_count: 1} =
+               ControlPlaneProvider.todo_progress(context.source)
+
+      assert :ok =
+               ControlPlaneProvider.session_fork(context.source, context.cwd, context.destination)
+
+      assert {:ok, ^first_todos, _} =
+               ControlPlaneProvider.session_todos(context.destination, context.cwd)
+
+      resumed = start_supervised!({CodingAgent.Session, opts})
+      assert {:ok, ^first_todos, _} = CodingAgent.Session.todos(resumed)
+
+      assert %LemonAgent.Types.AgentToolResult{} =
+               CodingAgent.Tools.TodoWrite.execute("clear", %{"todos" => []}, nil, nil, resumed)
+
+      assert {:ok, [], _} = ControlPlaneProvider.session_todos(context.source, context.cwd)
+
+      assert {:ok, ^first_todos, _} =
+               ControlPlaneProvider.session_todos(context.destination, context.cwd)
+
+      CodingAgent.Tools.TodoStore.delete(context.source)
+      CodingAgent.Tools.TodoStore.delete(native_id)
     end
 
     test "manual compaction works after the native session process has stopped", context do

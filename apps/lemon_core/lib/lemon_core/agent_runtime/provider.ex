@@ -42,6 +42,14 @@ defmodule LemonCore.AgentRuntime.Provider do
   @doc "Loads persisted native session messages for replay."
   @callback session_history(session_key(), Path.t()) :: {:ok, [map()]} | {:error, term()}
 
+  @doc """
+  Materializes the selected native branch's complete todo list, never its cache.
+  The revision is `{branch_generation, governing_entry_id}`; stopped sessions
+  have generation zero. It is not a cross-session identity or replay cursor.
+  """
+  @callback session_todos(session_key(), Path.t()) ::
+              {:ok, [map()], {non_neg_integer(), String.t() | nil}} | {:error, term()}
+
   @doc "Forks native session state into an independent destination resume mapping."
   @callback session_fork(session_key(), Path.t(), session_key()) :: :ok | {:error, term()}
 
@@ -176,6 +184,7 @@ defmodule LemonCore.AgentRuntime.Provider do
                       feature_progress: 1,
                       compact_session: 2,
                       session_history: 2,
+                      session_todos: 2,
                       session_fork: 3,
                       session_fork: 4,
                       session_tree: 3,

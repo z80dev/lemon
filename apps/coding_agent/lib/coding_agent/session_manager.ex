@@ -644,6 +644,25 @@ defmodule CodingAgent.SessionManager do
     |> Enum.filter(fn entry -> entry.parent_id == parent_id end)
   end
 
+  @doc """
+  Nearest `custom_type` custom entry on the selected branch, walking from the
+  leaf toward the root, or `nil`. Branch-derived state journaled as custom
+  entries (plan mode, todos) is read through this.
+  """
+  @spec latest_custom_entry(Session.t(), String.t()) :: SessionEntry.t() | nil
+  def latest_custom_entry(%Session{by_id: by_id, leaf_id: leaf_id}, custom_type),
+    do: find_custom_entry(by_id, leaf_id, custom_type)
+
+  defp find_custom_entry(_by_id, nil, _custom_type), do: nil
+
+  defp find_custom_entry(by_id, id, custom_type) do
+    case Map.get(by_id, id) do
+      %SessionEntry{type: :custom, custom_type: ^custom_type} = entry -> entry
+      %SessionEntry{parent_id: parent_id} -> find_custom_entry(by_id, parent_id, custom_type)
+      nil -> nil
+    end
+  end
+
   # ============================================================================
   # Context Building
   # ============================================================================

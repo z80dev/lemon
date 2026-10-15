@@ -2,7 +2,7 @@ defmodule CodingAgent.Progress do
   @moduledoc """
   Aggregates long-running harness progress for a coding-agent session.
 
-  Combines TodoStore progress with optional feature requirements progress
+  Combines journal-derived todos with optional feature requirements progress
   and returns a normalized snapshot suitable for control-plane/reporting
   surfaces.
   """
@@ -11,7 +11,7 @@ defmodule CodingAgent.Progress do
   alias CodingAgent.Tools.{FeatureRequirements, TodoStore}
 
   @type snapshot :: %{
-          todos: map(),
+          todos: map() | nil,
           features: map() | nil,
           checkpoints: map(),
           overall_percentage: non_neg_integer(),
@@ -20,8 +20,11 @@ defmodule CodingAgent.Progress do
 
   @spec snapshot(String.t(), String.t()) :: snapshot()
   def snapshot(session_id, cwd \\ ".") when is_binary(session_id) and is_binary(cwd) do
-    todo_progress = TodoStore.get_progress(session_id)
-    todo_next = TodoStore.get_actionable(session_id)
+    {todo_progress, todo_next} =
+      case CodingAgent.ControlPlaneProvider.native_session_todos(session_id, cwd) do
+        {:ok, todos, _revision} -> {TodoStore.progress(todos), TodoStore.actionable(todos)}
+        {:error, _} -> {nil, []}
+      end
 
     feature_progress =
       case FeatureRequirements.get_progress(cwd) do
@@ -47,6 +50,9 @@ defmodule CodingAgent.Progress do
     }
   end
 
+  defp overall_percentage(nil, feature_progress),
+    do: if(feature_progress, do: feature_progress[:percentage] || 0, else: 0)
+
   defp overall_percentage(todo_progress, nil), do: todo_progress[:percentage] || 0
 
   defp overall_percentage(todo_progress, feature_progress) do
@@ -66,11 +72,11 @@ defmodule CodingAgent.Progress do
 
   defp format_todo(todo) do
     %{
-      id: todo.id,
-      content: todo.content,
-      status: todo.status,
-      priority: todo.priority,
-      dependencies: todo.dependencies
+      id: todo["id"] || todo[:id],
+      content: todo["content"] || todo[:content],
+      status: todo["status"] || todo[:status],
+      priority: todo["priority"] || todo[:priority],
+      dependencies: todo["dependencies"] || todo[:dependencies] || []
     }
   end
 
