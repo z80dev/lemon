@@ -125,7 +125,8 @@ or `"snapshot"` (refresh). Earlier changes are not rolled back. Neither
 mutations nor unknown outcomes are retried automatically.
 
 Only live sessions can be configured, with the same ownership rules as sending
-a message. The control plane exposes this as `omp.sessions.configure`.
+a message. This is available through the chat tool, Elixir API, control-plane
+`omp.sessions.configure`, and CLI `lemon omp configure`.
 
 ## Parallel workers
 
@@ -288,17 +289,44 @@ the session's status, activity, todo progress and usage as they change.
 ```bash
 lemon omp status
 lemon omp start --cwd ~/src/app "Add input validation to lib/parser.ex"
+lemon omp start --cwd ~/src/app --approval-mode write --isolate "Fix the parser"
+lemon omp start-many --cwd ~/src/app --isolate --task "Fix parser" --task "Document API"
+lemon omp models --free --provider openrouter --limit 30
+lemon omp configure omp_3f9a1c2b7d4e --model provider/model --thinking low
+lemon omp subagent omp_3f9a1c2b7d4e CHILD-ID --limit 20
 lemon omp list
 lemon omp show omp_3f9a1c2b7d4e
 lemon omp send omp_3f9a1c2b7d4e "Skip the docs"
 lemon omp send --follow-up omp_3f9a1c2b7d4e "Then run the linter"
+lemon omp send --redirect omp_3f9a1c2b7d4e "Stop that; fix the parser instead"
 lemon omp cancel omp_3f9a1c2b7d4e
 lemon omp close omp_3f9a1c2b7d4e
 lemon omp discover --cwd ~/src/app
 lemon omp resume 01a137e9-baf8 --cwd ~/src/app "Continue with the tests"
+lemon omp resume 01a137e9-baf8 --cwd ~/src/app --continue --approval-mode write
 ```
 
 These talk to the running Lemon runtime; see [CLI](cli.md) for every option.
+
+`--approval-mode` accepts `always-ask`, `write`, or `yolo`; omission preserves
+omp's mode. `--continue` cannot accompany a prompt and does not restore
+subagents. `start-many` accepts 1–8 repeated `--task` prompts; all use the shared
+`--cwd`, `--model`, `--thinking`, `--approval-mode` and `--isolate` options.
+It prints one indexed id/status or error code/message per task.
+
+`models [query]` supports `--free`, `--provider` and `--limit` (max 200), and
+prints context and prices per million tokens or FREE. `subagent` reads a
+transcript tail with `--limit` up to 50. `configure` requires `--model` and/or
+`--thinking` and prints effective settings. A partially-applied error says
+which settings were acknowledged and which step failed; earlier changes
+remain applied, without rollback or automatic retry.
+
+`discover` shows the history source and marks interrupted turns (a hint, not
+proof of a crash). `show` includes approval mode and pending approval ids,
+worktree path/branch and kept/dirty/commit state, and subagent activity.
+Resolve approvals through the TUI or control-plane `exec.approval.resolve`;
+there is no CLI approval resolver. `send --redirect` and `--follow-up` are
+mutually exclusive.
 
 ## What Lemon reports
 
