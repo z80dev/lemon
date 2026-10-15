@@ -31,10 +31,10 @@ defmodule LemonChannels.Doctor.DiagnosticsTest do
       deny_globs = [".env", "**/*.pem"]
 
       [gateway.discord]
-      bot_token = "discord-token-secret"
+      bot_token = "synthetic-user-id.synthetic-time.synthetic-signature"
       bot_token_secret = "discord_bot_token_secret_name"
-      allowed_guild_ids = ["111111111111111111"]
-      allowed_channel_ids = ["222222222222222222"]
+      allowed_guild_ids = [111111111111111111]
+      allowed_channel_ids = [222222222222222222]
       deny_unbound_channels = true
       message_content_intent_enabled = true
 
@@ -126,7 +126,7 @@ defmodule LemonChannels.Doctor.DiagnosticsTest do
     rendered = inspect(status)
     refute rendered =~ "123456789:SECRET_TOKEN"
     refute rendered =~ "telegram_bot_token_secret_name"
-    refute rendered =~ "discord-token-secret"
+    refute rendered =~ "synthetic-user-id.synthetic-time.synthetic-signature"
     refute rendered =~ "discord_bot_token_secret_name"
     refute rendered =~ "111111111111111111"
     refute rendered =~ "222222222222222222"
