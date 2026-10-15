@@ -442,6 +442,8 @@ defmodule CodingAgent.Tools.BashTest do
       assert %AgentToolResult{content: [%TextContent{text: text}], details: details} = result
       assert details.truncated == true
       assert text =~ "[Output truncated."
+      assert String.starts_with?(text, "line1\n")
+      assert text =~ "bytes elided"
       # Should contain later lines (tail truncation keeps the end)
       assert text =~ "line3000"
     end
@@ -489,6 +491,61 @@ defmodule CodingAgent.Tools.BashTest do
         # Cleanup
         File.rm(details.full_output_path)
       end
+    end
+
+    test "spilled output keeps UTF-8 head and tail and advertises a readable artifact", %{
+      tmp_dir: cwd
+    } do
+      original = "START HEADER\n" <> String.duplicate("αβγ", 50_000) <> "\nEND FOOTER\n"
+      File.write!(Path.join(cwd, "output.txt"), original)
+      opts = [session_id: "headtail", context_guardrails: [spill_dir: Path.join(cwd, "spill")]]
+
+      assert %AgentToolResult{content: [%TextContent{text: text}], details: details} =
+               Bash.execute("large", %{"command" => "cat output.txt"}, nil, nil, cwd, opts)
+
+      on_exit(fn -> File.rm(details.full_output_path) end)
+      assert details.truncated
+      assert String.starts_with?(text, "START HEADER\n")
+      assert text =~ "END FOOTER\n"
+      assert text =~ "bytes elided"
+      assert String.valid?(text)
+      assert byte_size(text) < 51_000
+      assert text =~ details.artifact_uri
+      refute text =~ details.full_output_path
+      assert {:ok, path} = CodingAgent.Artifacts.resolve(details.artifact_uri, cwd, opts)
+      assert File.read!(path) == original
+
+      assert %AgentToolResult{content: [%TextContent{text: read_text}]} =
+               CodingAgent.Tools.Read.execute(
+                 "artifact",
+                 %{"path" => details.artifact_uri, "offset" => 1, "limit" => 1},
+                 nil,
+                 nil,
+                 cwd,
+                 opts
+               )
+
+      assert read_text =~ "START HEADER"
+    end
+
+    test "failed artifact registration retains the retrievable filesystem path", %{tmp_dir: cwd} do
+      store = Path.join(cwd, "not-a-directory")
+      File.write!(store, "blocked")
+      opts = [session_id: "fallback", context_guardrails: [spill_dir: store]]
+
+      assert %AgentToolResult{content: [%TextContent{text: text}], details: details} =
+               Bash.execute(
+                 "large",
+                 %{"command" => "for ((i=1; i<=3000; i++)); do echo line$i; done"},
+                 nil,
+                 nil,
+                 cwd,
+                 opts
+               )
+
+      on_exit(fn -> File.rm(details.full_output_path) end)
+      assert text =~ details.full_output_path
+      refute Map.has_key?(details, :artifact_uri)
     end
   end
 
@@ -972,5 +1029,41 @@ defmodule CodingAgent.Tools.BashTest do
       assert %AgentToolResult{content: [%TextContent{text: text}]} = result
       assert text =~ tmp_dir
     end
+  end
+end
+
+defmodule CodingAgent.Tools.BashPtyFallbackTest do
+  use ExUnit.Case, async: false
+
+  @moduletag :tmp_dir
+
+  test "missing script reports terminal fallback before output", %{tmp_dir: cwd} do
+    original_path = System.get_env("PATH")
+
+    on_exit(fn ->
+      if original_path, do: System.put_env("PATH", original_path), else: System.delete_env("PATH")
+    end)
+
+    System.put_env("PATH", cwd)
+    assert System.find_executable("script") == nil
+
+    result =
+      CodingAgent.Tools.Bash.execute(
+        "fallback",
+        %{"command" => "printf 'command output\\n'", "pty" => true},
+        nil,
+        nil,
+        cwd,
+        []
+      )
+
+    assert result.details.pty_fallback
+    assert result.details.exit_code == 0
+
+    assert hd(result.content).text ==
+             "pty requested but unavailable; ran without a terminal\n\ncommand output\n"
+
+    result = CodingAgent.Tools.Bash.execute("plain", %{"command" => "true"}, nil, nil, cwd, [])
+    refute result.details.pty_fallback
   end
 end
