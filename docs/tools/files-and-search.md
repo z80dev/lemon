@@ -6,6 +6,19 @@ selectors, SQLite views and search paging; snapshot-anchored edits and rich
 reads (archives, PDFs, notebooks, images) are described in the
 [coding_agent README](../../apps/coding_agent/README.md#built-in-tools).
 
+## Session internal URLs
+
+`local://name` stores a scratch file beneath the session artifact directory.
+Use it with `read`, `write`, or as a whole shell word in `bash`. Names are single
+path segments; traversal and symlinks are rejected. Scratch files are per-session,
+not shared automatically with child sessions.
+
+`read proc://` lists up to 200 processes owned by the current session.
+`read proc://<id>` returns status and recent output without consuming the
+`bash_output` cursor. `write proc://<id>` sends `content` verbatim to stdin;
+`write proc://<id>/kill` sends SIGTERM with the normal kill-process fallback.
+Foreign process IDs are not accessible.
+
 ## Read line selectors
 
 `read` pages text with `offset`/`limit`, or with a selector appended to `path`:
@@ -53,12 +66,30 @@ tag. The footer gives concrete `path:a-b` examples for omitted ranges; an explic
 numbered range read supplies the normal editable snapshot. `write` refuses both
 summary elision markers and the summary header/footer on existing targets.
 
-Any path selector (including `:raw`), explicit `offset`/`limit`, or `"summary":
-false` bypasses outlining. Tool hosts can set the `structural_summary: false`
+Any path selector (including `:raw`), explicit `offset`/`limit`, or
+`"summary": false` bypasses outlining. Tool hosts can set `structural_summary: false`
 option to disable it by default. Full-text reads still obey the usual 2000-line /
 50 KB budget. Non-code, smaller, and larger-than-2-MiB files retain normal read
 behavior; if there is nothing to elide, the normal view is returned. The outline
 also applies to authoritative ACP unsaved buffers, not their on-disk contents.
+
+## Anchored edit recovery and formatting
+
+Session-scoped anchored edits can recover an older snapshot tag after unrelated
+changes. Every referenced original line range must still occur byte-for-byte at
+exactly one position in the current file; changed, ambiguous, unknown, or evicted
+anchors retain the snapshot-mismatch error without writing. Text replacements
+still reject changes since the last read. The session retains up to eight
+snapshots per path, each at most 256 KiB and 10,000 lines; larger files still
+support fresh-tag edits, but not historical recovery. This does not restrict
+edits to previously displayed lines.
+
+Local `write`, `edit`, and `patch` accept `"format": true` (default false, unless
+enabled in tool options) to run an available formatter after writing. An explicit
+false overrides that default. Results report `formatted` and any `format_error`;
+formatter failure does not undo the write. Edit headers and patch per-file
+`snapshot` tags describe the post-format file, so they can be used directly for
+the next anchored edit. ACP writes retain client-managed formatting behavior.
 
 ## Patch hunk matching
 

@@ -123,6 +123,11 @@ defmodule CodingAgent.Session.Lifecycle do
 
     approval_context =
       resolve_approval_context(opts, session_manager.header.id, tool_policy)
+      |> then(fn context ->
+        if is_map(context) and session_scope != :main,
+          do: Map.delete(context, :channel_identity),
+          else: context
+      end)
 
     secret_obfuscator =
       CodingAgent.Security.SecretObfuscator.for_session(settings_manager, cwd)
@@ -155,6 +160,7 @@ defmodule CodingAgent.Session.Lifecycle do
       |> Keyword.put(:approval_context, approval_context)
       |> Keyword.put(:invocation_context_key, (approval_context || %{})[:invocation_context_key])
       |> Keyword.put(:invocation_mcp_servers, (approval_context || %{})[:invocation_mcp_servers])
+      |> Keyword.put(:channel_identity, (approval_context || %{})[:channel_identity])
       |> Keyword.put(:memory_context_key, (approval_context || %{})[:memory_context_key])
       |> Keyword.put(
         :memory_context_verified,
@@ -234,6 +240,7 @@ defmodule CodingAgent.Session.Lifecycle do
               tool_names: tool_names,
               profile_instructions: profile_instructions,
               invocation_context_key: (approval_context || %{})[:invocation_context_key],
+              channel_identity: (approval_context || %{})[:channel_identity],
               memory_context_key: (approval_context || %{})[:memory_context_key],
               memory_context_verified:
                 (approval_context || %{})[:memory_context_verified] == true,
@@ -498,6 +505,7 @@ defmodule CodingAgent.Session.Lifecycle do
         approval_context: state.approval_context,
         invocation_context_key: (state.approval_context || %{})[:invocation_context_key],
         invocation_mcp_servers: (state.approval_context || %{})[:invocation_mcp_servers],
+        channel_identity: (state.approval_context || %{})[:channel_identity],
         memory_context_key: (state.approval_context || %{})[:memory_context_key],
         memory_context_verified:
           (state.approval_context || %{})[:memory_context_verified] == true,
@@ -652,6 +660,9 @@ defmodule CodingAgent.Session.Lifecycle do
   defp resolve_approval_context(opts, session_id, tool_policy) do
     approval_context = Keyword.get(opts, :approval_context)
 
+    channel_identity =
+      Keyword.get(opts, :channel_identity, (approval_context || %{})[:channel_identity])
+
     native_managed? =
       CodingAgent.Tools.Task.Params.managed_context?(
         Map.merge(Map.new(opts), approval_context || %{})
@@ -700,13 +711,14 @@ defmodule CodingAgent.Session.Lifecycle do
     context =
       if is_nil(approval_context) &&
            (tool_policy || invocation_context_key || memory_context_key || memory_context_verified ||
-              shared_memory_grant || not is_nil(invocation_mcp_servers)) do
+              shared_memory_grant || channel_identity || not is_nil(invocation_mcp_servers)) do
         %{
           session_key: Keyword.get(opts, :session_key, session_id),
           session_id: session_id,
           agent_id: Keyword.get(opts, :agent_id, "default"),
           run_id: Keyword.get(opts, :run_id),
           invocation_context_key: invocation_context_key,
+          channel_identity: channel_identity,
           memory_context_key: memory_context_key,
           memory_context_verified: memory_context_verified,
           shared_memory_grant: shared_memory_grant,
@@ -728,9 +740,13 @@ defmodule CodingAgent.Session.Lifecycle do
 
     private = Map.new(Keyword.take(opts, private_native_fields()))
 
-    if is_map(context),
-      do: Map.merge(private, context) |> Map.put(:native_managed_context, native_managed?),
-      else: context
+    if is_map(context) do
+      Map.merge(private, context)
+      |> Map.put(:native_managed_context, native_managed?)
+      |> Map.put(:channel_identity, channel_identity)
+    else
+      context
+    end
   end
 
   defp private_native_fields do

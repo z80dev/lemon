@@ -49,6 +49,46 @@ defmodule LemonWeb.OmpComponents do
     """
   end
 
+  attr(:results, :list, required: true)
+  attr(:sessions, :map, required: true)
+
+  def worker_grid(assigns) do
+    workers =
+      Enum.map(assigns.results, fn result ->
+        Map.get(assigns.sessions, get_in(result, ["session", "id"]), result["session"])
+      end)
+      |> Enum.filter(&is_map/1)
+
+    usage =
+      Enum.reduce(workers, %{"totalTokens" => 0, "cost" => 0}, fn session, acc ->
+        Map.new(acc, fn {key, value} -> {key, value + ((session["usage"] || %{})[key] || 0)} end)
+      end)
+
+    assigns = assign(assigns, usage: usage)
+
+    ~H"""
+    <section :if={@results != []} id="omp-workers" aria-label="Parallel omp workers" class="border-b border-line p-4">
+      <h2 class="font-semibold">Parallel workers · {@usage["totalTokens"]} tokens · {cost(@usage["cost"])}</h2>
+      <div class="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <article :for={result <- @results} id={"omp-worker-#{result["index"]}"} class="card p-3">
+          <p class="text-xs">Task {result["index"] + 1}</p>
+          <%= if result["error"] do %>
+            <p class="text-danger">{result["error"]["code"]}: {result["error"]["message"]}</p>
+            <p :if={result["error"]["id"]} class="font-mono text-xs">{result["error"]["id"]}</p>
+          <% else %>
+            <% session = Map.get(@sessions, result["session"]["id"], result["session"]) %>
+            <.link patch={~p"/omp/#{session["id"]}"} class="text-accent-text">{label(session)}</.link>
+            <p>{session["status"]} · {session["lastTurn"]}</p>
+            <p class="whitespace-pre-wrap break-words">{String.slice(session["activity"] || session["result"] || session["lastText"] || "", 0, 300)}</p>
+            <p>{usage_text(session)}</p>
+            <p :for={todo <- Enum.take(session["todos"] || [], 4)} class="text-xs">{todo["status"]}: {todo["content"]}</p>
+          <% end %>
+        </article>
+      </div>
+    </section>
+    """
+  end
+
   attr(:status, :map, default: nil)
   attr(:status_state, :any, required: true)
 
@@ -411,6 +451,9 @@ defmodule LemonWeb.OmpComponents do
                       <span :if={sub["id"]} class="ml-1 font-mono text-2xs text-subtle">{sub["id"]}</span>
                     </p>
                     <p :if={sub["description"]} class="truncate text-xs text-muted">{sub["description"]}</p>
+                    <p :if={sub["activity"]} class="text-xs text-muted">{sub["activity"]}</p>
+                    <p class="text-xs text-muted">{sub["toolCalls"] || 0} tools · {usage_text(sub)}</p>
+                    <button :if={sub["id"]} type="button" class="btn btn-ghost btn-sm" phx-click="subagent" phx-value-id={sub["id"]}>Transcript tail</button>
                   </div>
                   <span class="shrink-0 text-xs text-muted">{sub["status"]}</span>
                 </li>
@@ -542,6 +585,11 @@ defmodule LemonWeb.OmpComponents do
     ~H"""
     <.modal id="omp-start-dialog" show size="lg" title="New omp session" description="omp runs as its own process with its own model and credentials." on_cancel={JS.push("cancel_start")}>
       <form id="omp-start-form" phx-submit="start" phx-change="start_change" class="space-y-4">
+        <label class="flex gap-2 text-sm">
+          <input type="hidden" name="start[batch]" value="false" />
+          <input id="omp-start-batch" type="checkbox" name="start[batch]" value="true" checked={@form["batch"] == true} />
+          Start parallel workers: one to eight prompts separated by blank lines (shared settings below)
+        </label>
         <.input
           id="omp-start-prompt"
           phx-mounted={JS.focus()}
@@ -590,6 +638,7 @@ defmodule LemonWeb.OmpComponents do
             spellcheck="false"
             input_class="font-mono"
           />
+          <.button id="omp-start-models" phx-click="open_models" phx-value-target="start" disabled={@starting?}>Browse omp models</.button>
           <.input
             id="omp-start-thinking"
             name="start[thinking]"

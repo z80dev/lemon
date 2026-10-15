@@ -8,6 +8,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
+- Lemon Web omp adds parallel worker starts and a live usage grid, searchable
+  free-marked model selection, live model/thinking configuration with explicit
+  partial-failure receipts, and bounded subagent transcript drill-down.
+
 ### Lemon Bot
 
 - Instance status exposes release/build metadata, provider credential health and channel errors. Owner-confirmed restart/stop can use a remote controller, with lifecycle completion observed from link events; clients use explicit available action lists.
@@ -36,6 +40,12 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Changed
 
+- Add opt-in bounded background learning reviews, with private-memory ownership,
+  draft-only skill creation, restricted tools, per-session rate/concurrency
+  limits and no conversation/channel delivery; reminders remain the default.
+- Honcho channel turns support pinned users, many-to-one sender aliases and
+  platform-qualified peer prefixes. Per-peer context follows each sender,
+  bot-authored turns are not uploaded, and Hermes migration imports these settings.
 - Bring Lemon Web's omp controls to parity with approval decisions and overrides,
   isolated starts, interrupted continuation, redirect, and worktree/discovery details.
 - Expand `lemon omp` with approval modes, isolated and parallel starts, explicit

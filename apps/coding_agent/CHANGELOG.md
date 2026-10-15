@@ -11,6 +11,15 @@
   `structural_summary: false` option retain full reads; ACP unsaved buffers use
   the same outline behavior.
 
+- Local edit and patch support the same opt-in formatting as write and return
+  post-format snapshot tags. Anchored edits recover recent session/path tags
+  only when every referenced original range remains byte-identical and unique;
+  snapshot history is bounded, and text-edit staleness checks are unchanged.
+
+- Session-scoped `local://name` scratch files support read, write and bash URL
+  expansion. `proc://` lists owned processes; process URLs peek output, write
+  stdin or terminate through `/kill`.
+
 - Find sorts the complete candidate set before applying `max_results`, with
   `sort: "mtime"` for newest-first (path tie-breaks) or the existing default
   `"path"`. Slash globs use full-path matching in fd as in the fallback;
