@@ -59,6 +59,15 @@ the authenticated destination WebSocket. The destination starts the same native
 executor/session path and returns one JSON-safe terminal result; no vendor CLI
 or subprocess agent runner is involved.
 
+Optional context contributors can observe content-free lifecycle telemetry:
+`[:coding_agent, :session, :tool_dispatched]` carries `session_pid`,
+`session_scope`, and `tool_name`; `[:coding_agent, :session, :run_completed]`
+carries only `session_pid` and `session_scope`. Measurements are empty maps.
+The contributor request includes the live `session_pid`, allowing volatile
+per-session counters without transcript copies or a dependency from the session
+runtime on the observer. LemonSkills uses this seam for
+[learning reminders](../../docs/user-guide/skills.md#learning-reminders).
+
 ### Supervision Tree
 
 ```

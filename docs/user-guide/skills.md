@@ -4,6 +4,41 @@ Skills are reusable knowledge modules that Lemon loads into context when relevan
 They capture task patterns, approaches, and domain knowledge so you don't have to
 repeat yourself across sessions.
 
+## Learning reminders
+
+Lemon occasionally prompts the main assistant to preserve useful knowledge:
+
+- After 10 user turns without a `remember` call, it suggests saving durable
+  facts/preferences with `remember`. Without a save, the reminder repeats every
+  10 turns, rather than on every subsequent message.
+- If the previous completed run dispatched at least 15 tools without calling
+  `skill_manage`, the next user turn suggests creating or patching a reusable
+  procedure with `skill_manage`. This suggestion appears once for that run.
+
+These are short, fixed reminders in volatile turn context, not automatic writes
+or background model calls. The assistant still decides whether anything is worth
+saving; tool and skill content remains untrusted. Subagents never receive or
+contribute to these reminders. Counters are isolated by live session process and
+reset when that session exits or Lemon restarts; historical transcripts are not
+scanned to rebuild them.
+
+Customize `learning_nudge` in `~/.lemon/agent/skills.json`, or override it in the
+project's `.lemon/skills.json`:
+
+```json
+{
+  "learning_nudge": {
+    "enabled": true,
+    "memory_turn_interval": 10,
+    "skill_tool_threshold": 15
+  }
+}
+```
+
+Set `enabled` to `false` to disable both reminders. Thresholds must be positive
+integers; invalid values use the defaults. These are **skills.json** settings,
+not TOML settings. See the [configuration reference](../config.md#learning-reminders-skillsjson).
+
 ---
 
 ## What Is a Skill?

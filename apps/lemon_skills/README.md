@@ -23,6 +23,21 @@ LemonSkills provides a centralized system for extending agent capabilities throu
 not a Hex package; it ships as part of the reference runtime. It depends on
 `lemon_core`, `lemon_agent`, `lemon_ai`, `lemon_memory` and `lemon_media`.
 
+## In-band learning reminders
+
+`LemonSkills.LearningNudge` is a supervised `ContextRegistry` contributor for main
+sessions only. It contributes fixed, bounded volatile text after 10 user turns
+without `remember`, or after a completed run dispatches at least 15 tools without
+`skill_manage`. It uses content-free session telemetry, keeps only counters and
+booleans, and drops them when the owning session process exits. It never scans
+transcripts, reads personal memory, writes notes/skills, or calls a model.
+
+The existing global/project `skills.json` configuration accepts
+`learning_nudge.enabled` (default `true`), `memory_turn_interval` (10), and
+`skill_tool_threshold` (15). See the
+[user guide](../../docs/user-guide/skills.md#learning-reminders) for cadence and
+configuration examples.
+
 ## Profile memory transfer
 
 `LemonSkills.ProfileMemoryTransfer` owns private memory copying, not placement.
