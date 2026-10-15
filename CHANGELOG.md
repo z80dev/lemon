@@ -14,6 +14,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Release preflight fixtures retain built-in provider registrations, distinguish
+  pending approvals from retained resolutions, and exercise typed provider errors
+  and asynchronous subagent cleanup without cross-test state leaks.
 - Skill usage recording no longer depends on the introspection handler. Pinned
   skills reject content edits, never-used skills retain a stale-age grace floor,
   and background curation preserves skills referenced by disabled or active cron jobs.

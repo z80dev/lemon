@@ -105,7 +105,9 @@ defmodule CodingAgent.Tools.WriteTest do
                  },
                  nil,
                  nil,
-                 cwd, acp_client_fs_write_text_file: true)
+                 cwd,
+                 acp_client_fs_write_text_file: true
+               )
 
       assert message =~ "truncated read output"
       assert File.read!(path) == "keep"

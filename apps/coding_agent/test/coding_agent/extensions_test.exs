@@ -5,6 +5,27 @@ defmodule CodingAgent.ExtensionsTest do
 
   @moduletag :tmp_dir
 
+  setup do
+    providers =
+      Map.new(LemonAi.ProviderRegistry.list(), fn api ->
+        {api, LemonAi.ProviderRegistry.get!(api)}
+      end)
+
+    on_exit(fn ->
+      Enum.each(LemonAi.ProviderRegistry.list() -- Map.keys(providers), fn api ->
+        LemonAi.ProviderRegistry.unregister(api)
+      end)
+
+      Enum.each(providers, fn {api, module} ->
+        if LemonAi.ProviderRegistry.get(api) != {:ok, module} do
+          LemonAi.ProviderRegistry.register(api, module)
+        end
+      end)
+    end)
+
+    :ok
+  end
+
   describe "load_extensions/1" do
     test "returns ok with empty list for non-existent paths" do
       result = Extensions.load_extensions(["/nonexistent/path"])
@@ -942,13 +963,6 @@ defmodule CodingAgent.ExtensionsTest do
   end
 
   describe "register_extension_providers/1" do
-    setup do
-      # Clear any previous state in the provider registry
-      LemonAi.ProviderRegistry.init()
-      on_exit(fn -> LemonAi.ProviderRegistry.clear() end)
-      :ok
-    end
-
     test "returns empty report for no extensions" do
       report = Extensions.register_extension_providers([])
 
@@ -1134,10 +1148,7 @@ defmodule CodingAgent.ExtensionsTest do
 
   describe "unregister_extension_providers/1" do
     setup do
-      LemonAi.ProviderRegistry.init()
-
       on_exit(fn ->
-        LemonAi.ProviderRegistry.clear()
         LemonMemory.Providers.unregister_provider("my_memory")
         LemonMemory.Providers.unregister_provider("string_memory")
       end)
@@ -1203,12 +1214,6 @@ defmodule CodingAgent.ExtensionsTest do
   # ============================================================================
 
   describe "provider conflict detection" do
-    setup do
-      LemonAi.ProviderRegistry.init()
-      on_exit(fn -> LemonAi.ProviderRegistry.clear() end)
-      :ok
-    end
-
     test "detects conflict when three extensions provide same provider name", %{tmp_dir: tmp_dir} do
       ext_a_code = """
       defmodule ThreeWayConflictExtA do
@@ -1351,12 +1356,6 @@ defmodule CodingAgent.ExtensionsTest do
   end
 
   describe "built-in provider shadowing scenarios" do
-    setup do
-      LemonAi.ProviderRegistry.init()
-      on_exit(fn -> LemonAi.ProviderRegistry.clear() end)
-      :ok
-    end
-
     test "built-in provider shadows single extension provider", %{tmp_dir: tmp_dir} do
       # Pre-register a built-in provider
       LemonAi.ProviderRegistry.register(:builtin_model, BuiltinModelModule)
@@ -1479,12 +1478,6 @@ defmodule CodingAgent.ExtensionsTest do
   end
 
   describe "deterministic ordering for conflicts" do
-    setup do
-      LemonAi.ProviderRegistry.init()
-      on_exit(fn -> LemonAi.ProviderRegistry.clear() end)
-      :ok
-    end
-
     test "winner is determined by alphabetical module name", %{tmp_dir: tmp_dir} do
       # Create extensions with specific module names to test ordering
       # "AAA" should come before "ZZZ" alphabetically
@@ -1606,7 +1599,7 @@ defmodule CodingAgent.ExtensionsTest do
       # Run multiple times to ensure consistency
       results =
         for _ <- 1..5 do
-          LemonAi.ProviderRegistry.clear()
+          LemonAi.ProviderRegistry.unregister(:consistent_provider)
 
           {:ok, extensions, _errors, _validation_errors} =
             Extensions.load_extensions_with_errors([tmp_dir])
@@ -1642,12 +1635,6 @@ defmodule CodingAgent.ExtensionsTest do
   end
 
   describe "non-:model provider type handling" do
-    setup do
-      LemonAi.ProviderRegistry.init()
-      on_exit(fn -> LemonAi.ProviderRegistry.clear() end)
-      :ok
-    end
-
     test "skips :storage type providers", %{tmp_dir: tmp_dir} do
       ext_code = """
       defmodule StorageProviderExt do
