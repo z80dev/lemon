@@ -129,6 +129,37 @@ defmodule LemonCli.HermesMigrationTest do
     assert Enum.any?(report["items"], &(&1["kind"] == "soul" and &1["status"] == "conflict"))
   end
 
+  test "provider config conflicts require overwrite, including custom config paths", ctx do
+    File.mkdir_p!(ctx.target)
+    path = Path.join(ctx.target, "custom.toml")
+
+    before = """
+    [defaults]
+    provider = "openai"
+    model = "openai:existing"
+    [providers.openai]
+    base_url = "http://localhost:1234/v1"
+    """
+
+    File.write!(path, before)
+    opts = [source: ctx.source, target: ctx.target, config_path: path]
+
+    preview = HermesMigration.preview(opts)
+    assert Enum.any?(preview["items"], &(&1["kind"] == "config" and &1["status"] == "conflict"))
+    HermesMigration.apply(opts)
+    assert File.read!(path) == before
+
+    report = HermesMigration.apply(Keyword.put(opts, :overwrite, true))
+    assert Toml.decode_file!(path)["defaults"]["model"] == "anthropic:claude-test"
+    assert File.exists?(Path.join(report["output_dir"], "backups/custom.toml"))
+    refute File.exists?(Path.join(ctx.target, "config.toml"))
+
+    refute Enum.any?(
+             HermesMigration.preview(opts)["items"],
+             &(&1["kind"] == "config" and &1["status"] == "conflict")
+           )
+  end
+
   test "creates a restorable pre-migration backup outside the backup payload", %{target: target} do
     File.mkdir_p!(Path.join([target, "agent", "workspace"]))
     File.write!(Path.join([target, "agent", "workspace", "MEMORY.md"]), "existing memory\n")

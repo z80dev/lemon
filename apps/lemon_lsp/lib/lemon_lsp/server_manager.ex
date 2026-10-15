@@ -852,7 +852,7 @@ defmodule LemonLsp.ServerManager do
   end
 
   defp acquire_owner(session, owner) do
-    if session.idle_timer, do: Process.cancel_timer(elem(session.idle_timer, 0))
+    _ = if session.idle_timer, do: Process.cancel_timer(elem(session.idle_timer, 0))
 
     lease =
       case Map.get(session.owners, owner) do
@@ -907,7 +907,7 @@ defmodule LemonLsp.ServerManager do
 
   defp demonitor_owner(session) do
     Enum.each(session.owners, fn {_owner, lease} -> Process.demonitor(lease.ref, [:flush]) end)
-    if session.idle_timer, do: Process.cancel_timer(elem(session.idle_timer, 0))
+    _ = if session.idle_timer, do: Process.cancel_timer(elem(session.idle_timer, 0))
 
     Enum.each(
       Map.keys(session.owners),
@@ -954,7 +954,6 @@ defmodule LemonLsp.ServerManager do
 
   defp validate_cwd(_cwd), do: {:error, :invalid_cwd}
 
-  defp maybe_cd(opts, nil), do: opts
   defp maybe_cd(opts, cwd), do: [{:cd, cwd} | opts]
 
   defp maybe_env(opts, env) when env == %{}, do: opts

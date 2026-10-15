@@ -8,15 +8,66 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
+### Changed
+
+- Setup finishes with a first coding prompt, a success check, optional Telegram
+  and Web UI commands, and an offer to open Lemon immediately after verification.
+
+- Add short, availability-gated system prompt guidance for questions, conversation
+  and filesystem checkpoints, structural code rewrites, language servers, debugging
+  and external agent delegation, with stable ordering for prompt caching.
+
+- Rotate to healthy alternate credentials or fallback candidates immediately on
+  rate limits; bench quota-exhausted credentials for 15 minutes to one hour.
+
+- Native task and swarm subagent spend now counts toward parent run/session token
+  and dollar caps without duplicating per-session usage reports; exhausted parents
+  cannot spawn further children.
+
 ### Added
 
 - Publish a generated TUI command and global-key reference, expose overlooked tool guides in site navigation, and guard against orphaned pages and command-reference drift.
 
----
+- Show Telegram and Discord typing indicators for chat-originated runs, with
+  topic/thread-scoped refreshes and bounded cleanup on completion or cancellation.
 
-## [2026.10.13]
+- Interactive setup audits an existing Hermes home and offers a confirmed,
+  backed-up import without secrets or overwriting conflicts.
 
-### Added
+- Add offline `lemon usage` date ranges and day/provider/model/session reports,
+  plus TUI `/cost --by` breakdowns with explicit completeness and session omissions.
+
+- Add read-only `lemon runs`, `lemon runs active`, `lemon cron runs`, and
+  `lemon logs` for headless operators, with bounded redacted offline launcher
+  logs and interruptible two-second follow polling.
+
+- Expose `ask` in Telegram and Discord native runs with origin-user-bound option
+  buttons, consumed free-text replies, and finite no-answer deadlines.
+
+- Surface-aware Telegram and Discord command help, including model, resume,
+  file, checkpoint, and goal controls, plus automatic registration of Telegram's
+  public `/` command menu without blocking transport startup on API failures.
+
+- Notify when a TUI `ask` question is waiting, with shared `[tui] notifications`
+  modes and a terminal-bell fallback for questions, approvals, and turn completion.
+- Add `/copy`, `/copy code [n]` (first block by default), `/copy prompt`, and
+  Alt+Shift+C, sharing OSC 52 plus local native clipboard fallbacks with message
+  Copy buttons; SSH never invokes host clipboard tools.
+
+- Cron schedules accept relative one-shots such as `in 30m` and timezone-aware
+  local ISO timestamps, rejecting past times and retiring after execution.
+- Successful prompt jobs can reply with exactly `[SILENT]` to retain history
+  without delivering a notification or session summary.
+- Cron lifecycle actions accept case-insensitive exact job names and refuse
+  ambiguous names with a list of candidates.
+
+- Show per-run tokens, recorded cost, model and provider in recent run history
+  and the TUI `/runs` output when usage records are available.
+
+- Dollar-capped sessions warn when the active model has no known catalog pricing.
+
+- Forward Telegram photos and image documents and Discord CDN image attachments
+  to vision-capable models, with bounded downloads and text fallback on failure.
 
 - Share one initialized language-server process per server/workspace/config
   across sessions, with reference-counted owners, configurable idle shutdown,
@@ -78,6 +129,51 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   no approval by default and makes no network requests.
 
 ### Fixed
+
+- Hermes provider-config import now reports conflicts instead of replacing
+  existing values unless `--overwrite` is explicitly requested.
+
+- Stop replaying ambiguous Telegram sends and outbox failures; preserve unknown
+  enqueue outcomes and deduplicate Discord transport retries with stable nonces.
+- Fail closed for Telegram's unimplemented `local_transcript` voice provider
+  instead of submitting synthetic transcript text to the model.
+
+- Classify aborted and crashed run history truthfully, include bounded redacted
+  error labels, filter before limiting, and report unavailable history instead of
+  an empty list when storage fails.
+
+- Cron restarts catch up one missed slot within a bounded grace window and retire
+  expired one-shot reminders instead of moving them to next year.
+- Cron run history is pruned hourly to 100 terminal runs per job by default,
+  preserving active attempts and pending retries.
+
+- Escape angle-bracket placeholders in generated configuration registry prose so
+  VitePress treats paths such as `<root>/agent-tools/node/bin/node` as text, not
+  unclosed HTML tags, while preserving existing inline code and alias line breaks.
+
+- Restore the LSP Dialyzer gate by explicitly discarding idle timer cancellation
+  results and removing an unreachable nil working-directory branch.
+
+- Re-enter setup for incomplete saved configurations on interactive launch, and
+  recognize keyless local providers and environment-only credentials in readiness,
+  doctor, and setup verification.
+
+- Make injected SVG rasterizer fixtures portable across BSD and GNU base64, and
+  explicitly exclude only the named real-rasterizer test when librsvg is absent.
+
+- Synchronize task-surface regression fixtures with the owning run's delta
+  admission before flushing a reused conversation coalescer.
+
+- Keep missing local provider API keys out of shared circuit-breaker health, so
+  they cannot block other sessions that have valid credentials.
+
+- Isolate intentional provider outages in ownership probes so their circuit and
+  rate-limit state cannot contaminate later cases or repeated runs.
+
+- Gate manual product releases on the source commit before bumping versions or
+  pushing tags, build artifacts from the prepared cut, and skip existing CalVer
+  tags without deleting unpublished orphan tags.
+
 
 - Bind TUI fake control-plane listeners to their advertised IPv4 loopback address,
   preventing random test ports from reaching unrelated IPv4 services and timing

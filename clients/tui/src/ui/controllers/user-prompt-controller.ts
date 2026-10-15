@@ -24,7 +24,6 @@ export interface UserPromptControllerOptions {
 export class UserPromptController {
 	readonly panel: UserPromptPanel;
 	readonly #options: UserPromptControllerOptions;
-	readonly #pending = new Map<string, UserPromptRequested>();
 	readonly #disposers: Array<() => void> = [];
 	#mounted = false;
 
@@ -50,19 +49,19 @@ export class UserPromptController {
 					);
 					return;
 				}
-				this.#pending.set(event.promptId, event);
+				store.addUserPrompt(event);
 				this.present();
 			}),
 			client.events.on("session.prompt.resolved", (event) => {
-				const pending = this.#pending.get(event.promptId);
+				const pending = store.userPrompts.get(event.promptId);
 				if (!pending || pending.sessionKey !== event.sessionKey || pending.runId !== event.runId)
 					return;
-				this.#pending.delete(event.promptId);
+				store.removeUserPrompt(event.promptId);
 				this.present();
 			}),
 			client.events.on("state", ({ state }) => {
 				if (state === "online") return;
-				this.#pending.clear();
+				store.clearUserPrompts();
 				this.present();
 			}),
 			store.events.on("session-changed", () => this.present()),
@@ -71,13 +70,15 @@ export class UserPromptController {
 
 	dispose(): void {
 		for (const dispose of this.#disposers.splice(0)) dispose();
-		this.#pending.clear();
+		this.#options.store.clearUserPrompts();
 		this.present();
 	}
 
 	present(): void {
 		const { store, container, tui, focusEditor } = this.#options;
-		const next = [...this.#pending.values()].find((event) => event.sessionKey === store.focusedKey);
+		const next = [...store.userPrompts.values()].find(
+			(event) => event.sessionKey === store.focusedKey,
+		);
 		if (next) {
 			this.panel.show(next);
 			if (!this.#mounted) {
@@ -96,7 +97,7 @@ export class UserPromptController {
 	}
 
 	async resolve(event: UserPromptRequested, answer: UserPromptAnswer): Promise<void> {
-		if (!this.#pending.has(event.promptId) || this.panel.busy) return;
+		if (!this.#options.store.userPrompts.has(event.promptId) || this.panel.busy) return;
 		this.panel.busy = true;
 		this.#options.tui.requestRender();
 		try {
@@ -106,7 +107,7 @@ export class UserPromptController {
 				runId: event.runId,
 				...answer,
 			});
-			this.#pending.delete(event.promptId);
+			this.#options.store.removeUserPrompt(event.promptId);
 		} catch (error) {
 			this.#options.notice(
 				`Question answer failed: ${error instanceof Error ? error.message : String(error)}. No answer was selected locally.`,

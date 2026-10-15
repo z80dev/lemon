@@ -2,6 +2,8 @@ defmodule LemonChannels.Adapters.Telegram.VoiceTranscriptionTest do
   alias Elixir.LemonChannels, as: LemonChannels
   use ExUnit.Case, async: false
 
+  alias LemonChannels.Adapters.Telegram.VoiceTranscriber
+
   defmodule VoiceTestRouter do
     use LemonCore.RouterBridge.Router
     use LemonCore.RouterBridge.RunOrchestrator
@@ -201,7 +203,15 @@ defmodule LemonChannels.Adapters.Telegram.VoiceTranscriptionTest do
     assert msg.meta[:voice_transcribed] == true
   end
 
-  test "local voice transcription provider routes without api key" do
+  test "local_transcript never produces a synthetic transcript" do
+    assert {:error, :no_local_stt} =
+             VoiceTranscriber.transcribe(
+               provider: "local_transcript",
+               audio_bytes: "AUDIO"
+             )
+  end
+
+  test "local voice transcription fails closed without submitting a run" do
     {:ok, _pid} =
       Elixir.LemonChannels.Adapters.Telegram.Transport.start_link(
         config: %{
@@ -218,10 +228,9 @@ defmodule LemonChannels.Adapters.Telegram.VoiceTranscriptionTest do
 
     VoiceMockAPI.set_updates([voice_update()])
 
-    assert_receive {:inbound, msg}
-    assert msg.message.text =~ "local voice transcript preview"
-    assert msg.message.text =~ "5 bytes"
-    assert msg.meta[:voice_transcribed] == true
+    assert_receive {:sent, text}, 1000
+    assert text =~ "Voice transcription failed"
+    refute_receive {:inbound, _msg}, 100
   end
 
   test "voice disabled replies and skips routing" do

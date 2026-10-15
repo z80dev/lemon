@@ -58,6 +58,27 @@ defmodule CodingAgent.Session.BudgetLedger do
     )
   end
 
+  @doc "Restore enforcement-only descendant spend, never provider usage."
+  def restore_children(session) do
+    session
+    |> SessionManager.entries()
+    |> Enum.reverse()
+    |> Enum.find_value(Budget.normalize_usage(nil), fn
+      %SessionEntry{type: :custom, custom_type: "lemon.subagent_budget_usage", data: usage} ->
+        Budget.normalize_usage(usage)
+
+      _ ->
+        nil
+    end)
+  end
+
+  def append_children(session, usage) do
+    SessionManager.append_entry(
+      session,
+      SessionEntry.custom("lemon.subagent_budget_usage", Budget.normalize_usage(usage))
+    )
+  end
+
   @spec update(map(), map()) :: map()
   def update(state, %{session_usage: usage}) do
     usage = Budget.normalize_usage(usage)

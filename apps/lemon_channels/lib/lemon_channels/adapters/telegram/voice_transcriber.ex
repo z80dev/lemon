@@ -16,16 +16,11 @@ defmodule LemonChannels.Adapters.Telegram.VoiceTranscriber do
 
     cond do
       not is_binary(audio_bytes) -> {:error, :missing_audio}
-      provider == "local_transcript" -> {:ok, local_transcript(audio_bytes, mime_type)}
+      provider == "local_transcript" -> {:error, :no_local_stt}
       provider != "openai_transcribe" -> {:error, {:unsupported_provider, provider}}
       not is_binary(api_key) or api_key == "" -> {:error, :missing_api_key}
       true -> do_transcribe(model, audio_bytes, base_url, api_key, mime_type)
     end
-  end
-
-  defp local_transcript(audio_bytes, mime_type) do
-    hash = :crypto.hash(:sha256, audio_bytes) |> Base.encode16(case: :lower) |> binary_part(0, 12)
-    "local voice transcript preview #{hash} #{byte_size(audio_bytes)} bytes #{mime_type}"
   end
 
   defp do_transcribe(model, audio_bytes, base_url, api_key, mime_type) do

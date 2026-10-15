@@ -173,6 +173,7 @@ defmodule LemonCli.HermesMigration do
 
     ctx = %{
       source_root: source_root,
+      config_path: path(opts[:config_path] || Path.join(target_root, "config.toml")),
       target_root: target_root,
       honcho_global_path:
         opts[:honcho_global_path] || Path.join([System.user_home!(), ".honcho", "config.json"]),
@@ -309,7 +310,7 @@ defmodule LemonCli.HermesMigration do
     if File.exists?(source) do
       case YamlElixir.read_from_file(source) do
         {:ok, config} ->
-          target = Path.join(ctx.target_root, "config.toml")
+          target = ctx.config_path
           patch_config_item(ctx, source, target, config || %{})
 
         {:error, reason} ->
@@ -348,6 +349,7 @@ defmodule LemonCli.HermesMigration do
   defp audit_honcho(opts, source, target) do
     migrate_honcho(%{
       source_root: source,
+      config_path: path(opts[:config_path] || Path.join(target, "config.toml")),
       target_root: target,
       honcho_global_path:
         opts[:honcho_global_path] || Path.join([System.user_home!(), ".honcho", "config.json"]),
@@ -370,7 +372,7 @@ defmodule LemonCli.HermesMigration do
   defp migrate_honcho(ctx) do
     local = Path.join(ctx.source_root, "honcho.json")
     source = if File.exists?(local), do: local, else: ctx.honcho_global_path
-    target = Path.join(ctx.target_root, "config.toml")
+    target = ctx.config_path
 
     with {:ok, bytes} <- File.read(source),
          {:ok, raw} when is_map(raw) <- Jason.decode(bytes),
@@ -999,23 +1001,44 @@ defmodule LemonCli.HermesMigration do
       |> Map.get("providers", %{})
       |> patch_providers(patched)
 
-    if patched == content do
-      item("config", source, target, "skipped", "No compatible Hermes config values found")
-    else
-      if ctx.execute? do
-        _ = backup_existing(ctx, target)
-        File.mkdir_p!(Path.dirname(target))
-        File.write!(target, patched)
-      end
+    cond do
+      patched == content ->
+        item("config", source, target, "skipped", "No compatible Hermes config values found")
 
-      item(
-        "config",
-        source,
-        target,
-        if(ctx.execute?, do: "migrated", else: "planned"),
-        "Mapped compatible config.yaml values into Lemon TOML"
-      )
+      not ctx.overwrite? and config_values_changed?(Toml.decode!(content), Toml.decode!(patched)) ->
+        item(
+          "config",
+          source,
+          target,
+          "conflict",
+          "Target config values exist and overwrite is disabled"
+        )
+
+      true ->
+        if ctx.execute? do
+          _ = backup_existing(ctx, target)
+          File.mkdir_p!(Path.dirname(target))
+          File.write!(target, patched)
+        end
+
+        item(
+          "config",
+          source,
+          target,
+          if(ctx.execute?, do: "migrated", else: "planned"),
+          "Mapped compatible config.yaml values into Lemon TOML"
+        )
     end
+  end
+
+  defp config_values_changed?(existing, patched) do
+    Enum.any?(existing, fn {key, value} ->
+      replacement = Map.get(patched, key)
+
+      if is_map(value) and is_map(replacement),
+        do: config_values_changed?(value, replacement),
+        else: value != replacement
+    end)
   end
 
   defp patch_model(content, model) do
@@ -1052,7 +1075,7 @@ defmodule LemonCli.HermesMigration do
 
   defp import_secret(ctx, name, value) do
     {table, key} = Map.fetch!(@secret_names, name)
-    config_path = Path.join(ctx.target_root, "config.toml")
+    config_path = ctx.config_path
 
     if ctx.execute? do
       case Secrets.set(name, value, provider: "hermes_migration") do

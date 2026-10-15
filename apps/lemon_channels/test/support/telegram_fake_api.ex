@@ -8,7 +8,7 @@ defmodule LemonChannels.Telegram.FakeAPI do
   `send_message/5`, `edit_message_text/5`, `answer_callback_query/3`,
   `delete_message/3`, `set_message_reaction/5`, `get_file/2`,
   `download_file/2`, `send_document/4`, `send_photo/4`, and
-  `send_media_group/4` — plus `delete_forum_topic/3` and `send_chat_action/3`
+  `send_media_group/4` — plus `delete_forum_topic/3` and `send_chat_action/4`
   for Bot API parity. No network traffic ever happens: inbound updates come
   from a local queue with real `getUpdates` offset semantics, and every
   outbound call is captured for introspection.
@@ -235,11 +235,20 @@ defmodule LemonChannels.Telegram.FakeAPI do
     end)
   end
 
-  @doc "sendChatAction: always succeeds (Bot API parity; no transport call site today)."
-  def send_chat_action(_token, chat_id, action) do
-    record(:send_chat_action, [chat_id, action])
+  @doc "setMyCommands: records the default-scope public command menu."
+  def set_my_commands(_token, commands) do
+    record(:set_my_commands, [commands])
 
-    stubbed(:send_chat_action, [chat_id, action], fn ->
+    stubbed(:set_my_commands, [commands], fn ->
+      {:ok, %{"ok" => true, "result" => true}}
+    end)
+  end
+
+  @doc "sendChatAction: records chat/thread scope and action."
+  def send_chat_action(_token, chat_id, thread_id, action) do
+    record(:send_chat_action, [chat_id, thread_id, action])
+
+    stubbed(:send_chat_action, [chat_id, thread_id, action], fn ->
       {:ok, %{"ok" => true, "result" => true}}
     end)
   end
@@ -271,6 +280,14 @@ defmodule LemonChannels.Telegram.FakeAPI do
     stubbed(:download_file, [file_path], fn ->
       {:ok, call({:download_file, file_path})}
     end)
+  end
+
+  def download_file(token, file_path, max_bytes) do
+    case download_file(token, file_path) do
+      {:ok, bytes} when byte_size(bytes) <= max_bytes -> {:ok, bytes}
+      {:ok, _} -> {:error, :too_large}
+      other -> other
+    end
   end
 
   @doc "sendDocument: captures the call and returns a message with a `document` payload."

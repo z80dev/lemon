@@ -77,6 +77,7 @@ import type {
 	ProfileResult,
 	ProfilesListResult,
 	ProfilesRosterResult,
+	RunsRecentListResult,
 	SessionDetailResult,
 	SessionExportFormat,
 	SessionSummary,
@@ -647,8 +648,11 @@ export class ControlPlaneMethods {
 		return this.#call(METHOD.runsActiveList, params, options);
 	}
 
-	runsRecentList(params?: Record<string, unknown>, options?: RequestOptions): Promise<unknown> {
-		return this.#call(METHOD.runsRecentList, params, options);
+	runsRecentList(
+		params?: Record<string, unknown>,
+		options?: RequestOptions,
+	): Promise<RunsRecentListResult> {
+		return this.#call<RunsRecentListResult>(METHOD.runsRecentList, params, options);
 	}
 
 	tasksActiveList(params?: Record<string, unknown>, options?: RequestOptions): Promise<unknown> {

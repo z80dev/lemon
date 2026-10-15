@@ -81,9 +81,16 @@ defmodule LemonChannels.Adapters.Telegram.Transport.Pipeline do
   def run(_event, state), do: {state, [:noop]}
 
   defp route_message(state, update, inbound, chat_id) do
+    original_inbound = inbound
+
     case UpdateProcessor.route_authorized_inbound_action(state, inbound) do
       {:ok, inbound} ->
-        {state, [{:index_known_target, update}, {:execute_inbound_message, inbound}]}
+        actions =
+          if LemonChannels.UserPromptSurface.capture(original_inbound) == true,
+            do: [{:index_known_target, update}],
+            else: [{:index_known_target, update}, {:execute_inbound_message, inbound}]
+
+        {state, actions}
 
       {:drop, :unpaired, inbound} ->
         {state, notify?} =

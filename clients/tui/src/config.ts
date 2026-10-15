@@ -2,6 +2,19 @@ import { promises as fsPromises } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
+export type NotificationMode = "auto" | "osc" | "bell" | "off";
+
+/** Environment wins over the global TUI setting; retain the original 0/1 switch. */
+export function resolveNotifications(
+	configured: unknown,
+	env: NodeJS.ProcessEnv = process.env,
+): NotificationMode {
+	const value = env.LEMON_TUI_NOTIFICATIONS ?? configured;
+	if (value === "0") return "off";
+	if (value === "osc" || value === "bell" || value === "off") return value;
+	return "auto";
+}
+
 /**
  * The slice of Lemon's `config.toml` the TUI reads. The file belongs to the
  * daemon (`LemonCore.Config`); the TUI reads its own presentation settings and
@@ -17,6 +30,7 @@ export interface LemonConfig {
 	/** Terminal presentation settings (`/theme <name>` writes `theme`). */
 	tui?: {
 		theme?: string;
+		notifications?: NotificationMode;
 	};
 }
 

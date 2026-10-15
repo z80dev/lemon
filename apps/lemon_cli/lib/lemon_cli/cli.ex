@@ -17,6 +17,8 @@ defmodule LemonCli.CLI do
   source and packaged installs.
   """
 
+  require Logger
+
   alias LemonCore.Backup
   alias LemonCore.Config.Modular
   alias LemonCli.Onboarding.Runner
@@ -27,6 +29,7 @@ defmodule LemonCli.CLI do
   alias LemonCore.Secrets.EnvCatalog
   alias LemonCore.Secrets.KeyRotation
   alias LemonCore.Secrets.MasterKey
+  alias LemonCore.Setup.Readiness
   alias LemonCore.Update.ConfigMigrator
   alias LemonCli.LocalRuntime
   alias LemonCli.CommandRegistry
@@ -47,16 +50,17 @@ defmodule LemonCli.CLI do
   @exit_error 1
   @exit_usage 2
 
-  @doc """
-  Returns whether the global configuration is missing.
-
-  Existing but invalid configuration and unavailable credentials need repair,
-  not a new-install wizard. Commands that load configuration surface those
-  failures with validation and migration guidance.
-  """
+  @doc "Returns whether the global configuration still needs offline setup."
   @spec setup_required?() :: boolean()
   def setup_required? do
-    not File.exists?(Path.expand(Modular.global_path()))
+    not Readiness.ready?(Readiness.status())
+  rescue
+    error ->
+      Logger.warning(
+        "Setup readiness check failed (#{inspect(error.__struct__)}); setup is required"
+      )
+
+      true
   end
 
   @doc """
@@ -207,6 +211,9 @@ defmodule LemonCli.CLI do
   defp run_command("backup", args), do: run_backup(args)
   defp run_command("context", args), do: LemonCli.ContextCommand.run(args)
   defp run_command("sessions", args), do: LemonCli.SessionsCommand.run(args)
+  defp run_command("runs", args), do: LemonCli.RunsCommand.run(args)
+  defp run_command("cron", args), do: LemonCli.RunsCommand.run_cron(args)
+  defp run_command("logs", args), do: LemonCli.LogsCommand.run(args)
   defp run_command("omp", args), do: LemonCli.OmpCommand.run(args)
   defp run_command("learn", args), do: LemonCli.LearnCommand.run(args)
   defp run_command("learning", args), do: LemonCli.LearningCommand.run(args)
@@ -289,7 +296,7 @@ defmodule LemonCli.CLI do
   defp run_setup_if_required(args) do
     if setup_required?() do
       IO.puts("Setup is required before Lemon can start; launching `lemon setup`.")
-      wizard_status = run_wizard(args)
+      wizard_status = run_wizard(args, launch: false)
 
       if setup_required?() do
         IO.puts(:stderr, "Setup is incomplete. Run `lemon setup` to finish configuration.")
@@ -302,8 +309,8 @@ defmodule LemonCli.CLI do
     end
   end
 
-  defp run_wizard(args) do
-    case Wizard.run(args, Runner.default_io(), usage_command: "lemon setup") do
+  defp run_wizard(args, opts \\ []) do
+    case Wizard.run(args, Runner.default_io(), Keyword.put(opts, :usage_command, "lemon setup")) do
       :ok -> @exit_ok
       {:error, reason} -> exit_code_for(reason)
     end

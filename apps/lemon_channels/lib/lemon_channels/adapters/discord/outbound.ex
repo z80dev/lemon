@@ -12,6 +12,18 @@ defmodule LemonChannels.Adapters.Discord.Outbound do
   @max_content_chars 1_900
   @max_file_count 10
 
+  @doc "Trigger typing in a channel or thread using Discord's channel endpoint."
+  def start_typing(channel_id) do
+    api =
+      case GatewayConfig.get(:discord, %{}) do
+        %{api_mod: mod} -> normalize_api_mod(mod)
+        %{"api_mod" => mod} -> normalize_api_mod(mod)
+        _ -> Nostrum.Api.Channel
+      end
+
+    api.start_typing(channel_id)
+  end
+
   @spec deliver(OutboundPayload.t()) :: {:ok, term()} | {:error, term()}
   def deliver(%OutboundPayload{kind: :text} = payload) do
     channel_id = peer_channel_id(payload)
@@ -20,8 +32,8 @@ defmodule LemonChannels.Adapters.Discord.Outbound do
          content when is_binary(content) <- to_string(payload.content),
          [first | rest] <- content_chunks(content),
          params <- text_params(first, payload),
-         {:ok, result} <- message_api().create(channel_id, params),
-         {:ok, extra_ids} <- send_extra_chunks(channel_id, rest) do
+         {:ok, result} <- create_message(channel_id, params, delivery_identity(payload)),
+         {:ok, extra_ids} <- send_extra_chunks(channel_id, rest, delivery_identity(payload)) do
       {:ok, %{message_id: extract_message_id(result), extra_message_ids: extra_ids}}
     else
       {:error, reason} -> {:error, reason}
@@ -47,7 +59,7 @@ defmodule LemonChannels.Adapters.Discord.Outbound do
     with {:ok, channel_id} <- peer_channel_id(payload),
          {:ok, msg_id} <- normalize_id(message_id),
          {:ok, result} <- message_api().edit(channel_id, msg_id, edit_params),
-         {:ok, extra_ids} <- send_extra_chunks(channel_id, rest) do
+         {:ok, extra_ids} <- send_extra_chunks(channel_id, rest, delivery_identity(payload)) do
       {:ok, %{message_id: extract_message_id(result) || msg_id, extra_message_ids: extra_ids}}
     else
       {:error, reason} -> {:error, reason}
@@ -92,7 +104,7 @@ defmodule LemonChannels.Adapters.Discord.Outbound do
   def deliver(%OutboundPayload{kind: :file, content: content} = payload) do
     with {:ok, channel_id} <- peer_channel_id(payload),
          {:ok, params} <- file_params(content, payload),
-         {:ok, result} <- message_api().create(channel_id, params) do
+         {:ok, result} <- create_message(channel_id, params, delivery_identity(payload)) do
       {:ok, %{message_id: extract_message_id(result)}}
     else
       {:error, reason} -> {:error, reason}
@@ -157,7 +169,7 @@ defmodule LemonChannels.Adapters.Discord.Outbound do
       |> put_safe_allowed_mentions()
       |> maybe_put_reply(opts)
 
-    case message_api().create(channel_id, params) do
+    case create_message(channel_id, params, make_ref()) do
       {:ok, result} -> {:ok, %{message_id: extract_message_id(result)}}
       {:error, reason} -> {:error, reason}
     end
@@ -206,16 +218,44 @@ defmodule LemonChannels.Adapters.Discord.Outbound do
     maybe_put_components(params, components)
   end
 
-  defp send_extra_chunks(_channel_id, []), do: {:ok, []}
+  defp delivery_identity(payload) do
+    {payload.account_id, payload.peer,
+     Map.get(payload.meta || %{}, :delivery_id) || payload.idempotency_key || make_ref()}
+  end
 
-  defp send_extra_chunks(channel_id, chunks) do
-    Enum.reduce_while(chunks, {:ok, []}, fn chunk, {:ok, ids} ->
-      case message_api().create(channel_id, %{content: chunk} |> put_safe_allowed_mentions()) do
+  defp create_message(channel_id, params, identity) do
+    # Nostrum may replay closed streams internally. Discord deduplicates those
+    # writes using the same nonce; outbox retries retain the delivery identity.
+    nonce =
+      :crypto.hash(:sha256, :erlang.term_to_binary(identity))
+      |> Base.url_encode64(padding: false)
+      |> binary_part(0, 25)
+
+    params = Map.merge(params, %{nonce: nonce, enforce_nonce: true})
+
+    case message_api().create(channel_id, params) do
+      {:error, reason} -> {:error, LemonChannels.DeliveryError.classify(reason)}
+      result -> result
+    end
+  end
+
+  defp send_extra_chunks(_channel_id, [], _identity), do: {:ok, []}
+
+  defp send_extra_chunks(channel_id, chunks, identity) do
+    chunks
+    |> Enum.with_index(1)
+    |> Enum.reduce_while({:ok, []}, fn {chunk, index}, {:ok, ids} ->
+      case create_message(
+             channel_id,
+             %{content: chunk} |> put_safe_allowed_mentions(),
+             {identity, index}
+           ) do
         {:ok, result} ->
           {:cont, {:ok, ids ++ [extract_message_id(result)]}}
 
         {:error, reason} ->
-          {:halt, {:error, reason}}
+          # An earlier chunk was accepted. Never replay the entire payload.
+          {:halt, {:error, {:outcome_unknown, reason}}}
 
         other ->
           {:halt, {:error, {:discord_chunk_send_failed, other}}}

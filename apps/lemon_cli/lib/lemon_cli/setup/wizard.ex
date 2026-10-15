@@ -13,6 +13,8 @@ defmodule LemonCli.Setup.Wizard do
   (flag-driven, CI-friendly) operation through the shared `io_callbacks` map.
   """
 
+  alias LemonCli.HermesMigration
+  alias LemonCli.Onboarding.PromptUI
   alias LemonCli.Onboarding.Runner
   alias LemonCli.Setup.{Gateway, Provider, Scaffold, Verification}
   alias LemonCore.Config.{Automation, Modular, TomlPatch}
@@ -129,6 +131,10 @@ defmodule LemonCli.Setup.Wizard do
     * `:skip_verify` - skip the post-onboarding live provider check
     * `:verifier` - injectable live-check function (testing; no network)
     * `:daily_brief` - `HH:MM` server-local time for the opt-in daily brief
+    * `:hermes_home` - override the detected Hermes home
+    * `:home` - override the home used for Hermes discovery (testing)
+    * `:launcher` - injectable zero-arity TUI launcher (testing)
+    * `:launch` - offer to open Lemon (default: true; false for the launcher's setup gate)
   """
   @spec run_full([String.t()], io_callbacks(), keyword()) :: :ok | {:error, term()}
   def run_full(_args, io, opts \\ []) do
@@ -138,6 +144,7 @@ defmodule LemonCli.Setup.Wizard do
     Runner.ensure_required_apps!()
 
     print_banner(io)
+    step_offer_hermes(config_path, io, non_interactive?, opts)
     print_status(io, Verification.setup_state(config_path: config_path))
 
     result =
@@ -160,6 +167,7 @@ defmodule LemonCli.Setup.Wizard do
          else: result
 
     print_summary(io, state, result)
+    step_offer_launch(io, state, result, non_interactive?, opts)
 
     case result do
       {:ok, _verification} -> :ok
@@ -558,17 +566,131 @@ defmodule LemonCli.Setup.Wizard do
     end
   end
 
+  defp interactive?(io, non_interactive?) do
+    not non_interactive? and
+      Map.get(io, :interactive?, &PromptUI.terminal?/0).()
+  end
+
+  defp step_offer_hermes(config_path, io, non_interactive?, opts) do
+    if interactive?(io, non_interactive?) do
+      source =
+        opts[:hermes_home] || System.get_env("HERMES_HOME") ||
+          Path.join(Keyword.get(opts, :home, System.user_home!()), ".hermes")
+
+      if File.dir?(Path.expand(source)) do
+        migration_opts = [
+          source: source,
+          target: Path.dirname(Path.expand(config_path)),
+          config_path: config_path,
+          preset: "user-data",
+          migrate_secrets: false,
+          overwrite: false
+        ]
+
+        audit = HermesMigration.audit(migration_opts)
+        skills = Enum.find(audit["items"], &(&1["kind"] == "skills"))
+        skill_count = get_in(skills, ["details", "skill_count"]) || 0
+
+        memory_count =
+          Enum.count(
+            audit["items"],
+            &(&1["kind"] in ["memory", "user_profile"] and
+                &1["status"] == "compatible")
+          )
+
+        config_count =
+          Enum.count(audit["items"], &(&1["kind"] == "config" and &1["status"] == "compatible"))
+
+        io.info.(
+          "Found Hermes home: #{skill_count} skills, #{memory_count} memory files, #{config_count} provider config."
+        )
+
+        io.info.(
+          "Import uses the user-data preset without secrets; use `lemon migrate hermes --migrate-secrets` to explicitly import credentials."
+        )
+
+        if prompt_yes_no?("Import Hermes data now?", false, io) do
+          import_hermes(migration_opts, io)
+        end
+      end
+    end
+  end
+
+  defp import_hermes(opts, io) do
+    preview = HermesMigration.preview(opts)
+
+    if HermesMigration.has_conflicts?(preview) do
+      io.error.(
+        "Hermes import has conflicts; nothing was imported. Resolve them or use `lemon migrate hermes --overwrite`."
+      )
+    else
+      case HermesMigration.create_backup(preview["target"]) do
+        result when result == :none or elem(result, 0) == :ok ->
+          report = HermesMigration.apply(opts)
+          summary = report["summary"]
+
+          io.info.(
+            "Hermes import: #{summary["migrated"]} migrated, #{summary["archived"]} archived, #{summary["error"]} errors. Report: #{report["output_dir"]}"
+          )
+
+        {:error, _reason} ->
+          io.error.("Could not back up the Lemon home; nothing was imported.")
+      end
+    end
+  end
+
+  defp step_offer_launch(io, state, result, non_interactive?, opts) do
+    if interactive?(io, non_interactive?) and Keyword.get(opts, :launch, true) and
+         Verification.pending_steps(state) == [] and match?({:ok, %{live: :ok}}, result) and
+         prompt_yes_no?("Open Lemon now?", true, io) do
+      launcher = Keyword.get(opts, :launcher, &launch_tui/0)
+
+      case launcher.() do
+        :ok -> :ok
+        {:error, _reason} -> io.error.("Could not open Lemon. Run `lemon` to try again.")
+      end
+    end
+  end
+
+  defp launch_tui do
+    case System.get_env("LEMON_LAUNCHER") || System.find_executable("lemon") do
+      launcher when is_binary(launcher) and launcher != "" ->
+        # System.cmd ports do not inherit stdin. Reattach the confirmed TTY
+        # explicitly, passing the launcher as data rather than shell source.
+        case System.cmd("/bin/sh", [
+               "-c",
+               "exec \"$1\" tui </dev/tty >/dev/tty 2>&1",
+               "lemon-setup",
+               launcher
+             ]) do
+          {_, 0} -> :ok
+          _ -> {:error, :launch_failed}
+        end
+
+      _ ->
+        {:error, :launcher_not_found}
+    end
+  rescue
+    _error in ErlangError -> {:error, :launch_failed}
+  end
+
   defp print_summary(io, state, result) do
     io.info.("")
 
     case {Verification.pending_steps(state), result} do
       {[], {:ok, %{live: :ok}}} ->
-        io.info.("Setup complete. Next steps:")
-        io.info.("  lemon                        — start coding in this directory")
-        io.info.("  lemon config validate        — verify configuration")
-        io.info.("  lemon setup provider         — onboard another AI provider")
-        io.info.("  lemon setup runtime          — change runtime profile / ports")
-        io.info.("  lemon doctor                 — run diagnostics")
+        io.info.("Setup complete.")
+        io.info.("Success check: a reply arrives and `lemon doctor` shows no FAIL.")
+        io.info.("Run `lemon` in your repository and try this first prompt:")
+
+        io.info.(
+          "  Read the repository instructions. Find how to run the tests. Add the test command to README if missing, run the focused tests, and show the diff."
+        )
+
+        io.info.(
+          "Optional next steps: `lemon gateway setup telegram` for Telegram; `lemon web` for the Web UI."
+        )
+
         io.info.("")
 
       {[], result} when result == :ok or elem(result, 0) == :ok ->
@@ -589,11 +711,6 @@ defmodule LemonCli.Setup.Wizard do
       {pending, _result} ->
         io.info.("Setup unfinished — pending steps:")
         print_pending(pending, state, io)
-
-        if result not in [:ok, {:error, :setup_incomplete}] and not match?({:ok, _}, result) do
-          io.info.("")
-          io.info.("Setup did not complete. Resolve the errors above, then run `lemon setup`.")
-        end
 
         io.info.("")
     end

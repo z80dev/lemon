@@ -68,6 +68,15 @@ original inline controls intact. The optional `/new` memory-reflection submit
 also preserves and safely classifies bridge failures; it logs no request,
 session, run, or raw error data and never retries an ambiguous submit.
 
+**Typing indicators**: Accepted Telegram and Discord chat requests show native
+typing activity while their runs are active. Telegram refreshes every 4.5 seconds
+in the originating chat/forum topic; Discord refreshes every 8 seconds in the
+originating channel/thread. Overlapping runs share one refresher per target.
+Refreshes stop on final answer, cancellation, terminal errors (including run
+crashes), or transport shutdown, with a ten-minute hard cap. The platform's last
+indicator expires naturally; typing API failures are debug-logged and never
+affect a run. Scheduled runs and direct notifications do not start typing.
+
 **Semantic outbound**: Router emits `LemonCore.DeliveryIntent` values into `LemonChannels.Dispatcher`. Channel renderers decide truncation, send-vs-edit, buttons, media batching, and other platform UX details, while `LemonChannels.PresentationState` tracks message ids, pending creates/edits, deferred chunk sets, and post-edit follow-up chunks per `{route, run, surface}` so coalesced Telegram and Discord updates do not lose overflow chunks, leak superseded tails, detach long-answer follow-up chunks from the original prompt thread, enqueue long-answer tails before the final edit ack, or strand those tails or deferred final edits if the ack arrives before they finish staging. Discord streaming snapshots are truncated to one editable message; finalized Discord text is split at the safe 1,900-character outbound size and delivered as an edit plus ordered follow-ups, and repeated identical finals are suppressed when a newer sequence replays the same answer. Final idempotency includes auto-send file metadata so a later final with the same text but newly attached files still delivers those attachments.
 
 **Direct outbound**: Adapter helpers and other low-level callers may still enqueue `OutboundPayload` structs into the Outbox. The Outbox applies chunking (splitting long messages at sentence/word boundaries), deduplication (idempotency keys with a 1-hour TTL), and rate limiting (token bucket per channel/account). Messages are then delivered via the adapter's `deliver/1` callback with exponential-backoff retry on transient failures.
@@ -104,6 +113,14 @@ surface while retaining native Lemon aliases such as `/new`, `/thinking`, and
 the existing router, session, task, and control-plane owners. In particular,
 Lemon `/stop` means cancelling the active conversation run, not killing every
 runtime process.
+
+Catalog entries include `surfaces`; `CommandCatalog.catalog("telegram")` and
+`catalog("discord")` return only that platform's accepted commands and aliases.
+Channel `/help` and `/commands` use this scoped view, including native model,
+resume, file, checkpoint, and goal commands. Telegram startup asynchronously
+registers `CommandCatalog.telegram_menu()` with Bot API `setMyCommands` in the
+default scope, excluding admin-only controls. Registration failures are logged
+without preventing polling or typed commands.
 
 Telegram and Discord execute the portable information/session commands through
 `LemonChannels.PortableCommand`. Queue and steer remain router-owned submission
@@ -301,6 +318,22 @@ store is an explicit error, not a successful notification or approval.
 See [automation remote supervision](../lemon_automation/README.md#remote-supervision)
 for target selection and CLI/TUI controls.
 
+### Interactive Questions
+
+Telegram and Discord native runs expose [`ask`](../../docs/tools/ask.md).
+Questions use bounded inline option buttons; multiple selections require
+**Done selecting**. Only the user who started the run may answer, in the
+originating account/chat/topic or thread. **Decline** and **Cancel** never
+choose an option.
+
+The originating user's next plain message while a question is pending is a
+custom/free-text answer, not another run; it needs no group mention. Commands
+and attachments retain their normal routing, as do messages outside a pending
+question. Ambiguous replies across forked sessions are consumed with a notice to use buttons.
+Questions expire after at most five minutes (or the tool's shorter deadline).
+Expired/stale buttons say `expired`. Run completion/cancellation unbinds the
+volatile surface. Execution approvals remain separate.
+
 ### Script Notifications
 
 Use `mix lemon.send` or the source wrapper `./bin/lemon send` to send a text notification or up to 10 file attachments from scripts:
@@ -353,6 +386,10 @@ payload = OutboundPayload.text(
 {:ok, ref} = Outbox.enqueue(payload)
 ```
 
+If enqueue returns `{:error, {:outcome_unknown, :enqueue_timeout}}`, admission
+may still finish and deliver the message. Do not resend automatically; retain
+any notification reference and reconcile a late delivery acknowledgement.
+
 ### Payload Kinds
 
 | Kind | Constructor | Description |
@@ -388,9 +425,19 @@ end
 
 ### Retry Behavior
 
-- Exponential backoff: 1s, 2s, 4s (3 max attempts by default)
-- 429 responses: parses `retry_after` from JSON `parameters.retry_after` or body text
-- Non-retryable errors: `:unknown_channel`, 4xx HTTP errors (except 429), worker exits
+- Exponential backoff: 1s, 2s, 4s (3 retries by default).
+- Only explicit pre-write failures (`failed_connect`, connection refused, DNS)
+  and HTTP 429 responses are retryable; rate limits honor `retry_after`.
+- Telegram sends, uploads and media groups with a receive timeout, closed
+  connection or HTTP 5xx return `{:error, {:outcome_unknown, reason}}` without
+  retrying or falling back to another send. Edits conservatively use the same
+  policy. Other unrecognized errors, adapter exceptions and worker exits are
+  terminal, never automatically requeued.
+- Discord creates include a delivery-stable nonce and `enforce_nonce` so
+  Nostrum's internal stream retries are idempotent. Returned ambiguous errors
+  are terminal/unknown rather than retried by the outbox.
+- An unknown outcome is not proof of failure: the platform may already display
+  the reply. Inspect it before explicitly sending again.
 - Max queue size: 5000 (configurable)
 
 ### Stats

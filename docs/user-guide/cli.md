@@ -30,6 +30,31 @@ directory, including on a cold daemon start.
 Source build and bootstrap diagnostics, including waits for another compiler,
 go to stderr; concurrent JSON commands keep stdout reserved for their result.
 
+### Recent runs in the TUI
+
+`/runs` reads recent terminal run history from `runs.recent.list`. Status is
+`completed`, `aborted`, `error`, or `crashed` (abnormal termination without a
+completion). If both terminal events exist for one run, the completion wins.
+Error labels are redacted and limited to 256 bytes. Unavailable storage produces
+`internal_error` with “Run history is unavailable”, not “no runs”.
+
+The API accepts `status`, `agentId`, `sessionKey`, and `limit` (default 50,
+maximum 200). Filters apply before the response limit, within the newest 1,000
+events of each terminal kind matching the agent/session scope. Summary
+`statusCounts` includes crashes; `errorCount` counts only `error`, not aborts or
+crashes.
+The newest 1,000 scoped `run_started` events supply missing start times (notably
+for crashes, which do not carry a duration).
+
+Rows also include nullable `tokens` (`input`, `output`, `total`), `costUsd`,
+`priceKnown`, `model`, and `provider`. `/runs` displays available usage without
+estimating missing prices. Usage is grouped by run ID from one query over the
+returned rows' known time windows, capped at 500 occurrences. If the window
+exceeds that cap, usage fields are null rather than partial totals. Missing
+records or an unknown start time also produce null fields; mixed models/providers
+have a null model/provider, and any unpriced occurrence makes the run's cost null
+and `priceKnown` false.
+
 ## Commands and availability
 
 ### Launcher lifecycle commands
@@ -86,6 +111,59 @@ both launchers inherit the control-plane/web/sim port environment. See the
 for availability, single-flight behavior, and release/custom-launcher limits.
 
 
+### Headless run and log inspection
+
+```bash
+lemon runs --status error --since 1h --limit 20
+lemon runs list --session agent:operator:main --agent operator --json
+lemon runs active
+lemon cron runs --job JOB_ID --status failed --since 2d
+lemon logs -n 50 --level warning
+lemon logs --follow --json
+```
+
+These commands do not start a runtime or submit work. Select its control port
+with `LEMON_CONTROL_PLANE_PORT` and authenticate using the same operator-token
+environment as other control-plane CLI clients. An unavailable runtime makes
+run queries fail with exit 1 and a `lemon daemon` instruction, not an empty list.
+Invalid arguments exit 2.
+
+`runs` defaults to recent history; `active` lists in-flight sessions. Human
+tables show UTC time, status, duration, model, cost, session/agent and a short
+run ID, plus tokens and error labels when the runtime supplies them. Older
+runtimes without usage/error fields display `-`. Recent statuses are
+`completed`, `aborted`, `crashed`, and `error`; older runtimes may not report
+crashes or correctly classify aborts. Recent client-side time filtering examines
+at most the newest 200 history rows returned by the runtime, not an unbounded
+archive. `--since` accepts positive integer minutes (`30m`), hours (`1h`), or
+days (`2d`), relative to invocation time; list limits are 1–200 (default 50).
+
+`cron runs` uses the cron status vocabulary: `pending`, `running`, `completed`,
+`failed`, `timeout`, and `aborted`. Without `--job`, it queries each currently
+configured job and returns the newest matching rows across those jobs. Deleted
+jobs can still be queried by their exact ID. JSON excludes job prompts, command
+text, run output, and arbitrary metadata.
+
+`logs` reads the runtime's bounded 1,000-entry ring. If the connection cannot
+be established, it reads the launcher log instead: source uses
+`~/.lemon/run/lemon-PORT.log`; packaged releases use the newest `erlang.log.N`
+under `$RELEASE_TMP/log` (default: the release's `tmp/log`).
+`LEMON_RUNTIME_LOG_FILE` selects an explicit file. File reads seek from the end,
+read at most 1 MiB, discard a cut first line, include a partial last line, and
+credential-redact every returned line. The header names the source without
+exposing its raw filesystem path. This is credential filtering, not removal of
+all potentially private log text.
+
+`--level` is a minimum severity. Offline, it recognizes bracketed log levels
+and excludes lines without a recognizable level. `--follow` polls every two
+seconds, uses a timestamp cursor with boundary deduplication online and
+overlapping bounded file tails offline; Ctrl-C exits without stopping the
+runtime (standard interrupt status 130). More than 1,000 new ring entries or 1 MiB of file data
+between polls can be lost. Identical entries at the same millisecond are
+deduplicated. JSON follow is a stream of one document per poll, each with
+`source` and `logs`; one-shot mode emits one document. A connected runtime's
+authentication/query failure remains an error, never an empty/offline success.
+
 ### CLI commands
 
 These commands are dispatched by `LemonCli.CLI` in both source checkouts and
@@ -99,6 +177,7 @@ packaged releases:
 | `blueprints` | Source and release | Starts the local runtime through the launcher if it is not healthy. |
 | `profile` | Source and release | `profile chat` starts the local runtime through the launcher if it is not healthy. |
 | `backup`, `context`, `sessions`, `learn` | Source and release | Manage backups, bounded context, durable sessions, and learning. |
+| `runs`, `cron runs`, `logs` | Source and release | Read-only operator inspection; requires a running runtime except for the redacted launcher-log fallback. |
 | `omp` | Source and release | Start, watch, steer, and resume omp coding-agent sessions owned by the runtime; starts the local runtime through the launcher if it is not healthy. |
 | `update` | Source and release | Release: full managed-update commands; source: `check` and `history` only, while plan/apply/rollback fail closed. Bare or unknown source update forms do not forward to Mix. Use `mix lemon.update` directly for source configuration migration and bundled-skill sync. |
 | `completion` | Source and release | Generate completion for the current launcher's available commands. |
@@ -146,6 +225,38 @@ Commands that document `--json` emit JSON on success. Redacted operational
 error JSON is supported by the profile, session, blueprint, provider, learning,
 and secret-source command families; other commands report errors as text on
 stderr. Invalid arguments remain human-readable usage errors.
+
+### Usage and cost reports
+
+`lemon usage` reads the local usage store directly and starts only `lemon_core`,
+not the runtime, router, or control plane. With no range or grouping options it
+keeps the current diagnostics (today, summary, quotas, and providers).
+
+```bash
+lemon usage --days 7 --by model
+lemon usage --since 2026-10-01 --until 2026-10-07 --by session
+lemon usage --days 7 --by day --json
+```
+
+`--days N` includes today and the preceding N−1 UTC dates (1–366, default 1).
+`--since` and `--until` are inclusive UTC dates; omitted `--until` is today,
+and an omitted `--since` is the end date. Do not combine `--days` with date
+boundaries. `--by day|provider|model|session` defaults to provider.
+Range/group JSON is the same bounded projection used by `usage.cost`; default
+diagnostics JSON retains its fields and adds `report` with that projection.
+
+In the TUI, `/cost 7d --by day` renders daily rows; `/cost month --by model`
+and `/cost --by session` show the other breakdowns. Existing `today`, `week`,
+`month`, and `Nd` ranges remain supported. The TUI requires a running runtime.
+
+Reports always show `incomplete` and omitted-session counts. Costs are known-cost
+subtotals: when pricing is unknown or historical costs lack attribution, a zero
+subtotal does **not** mean free execution. The wire projection cannot attribute
+unknown pricing to individual breakdown rows, so incomplete reports label all
+rows conservatively. Models are capped at 50 and sessions at the top 20 by cost;
+session omissions also include the daily ledger's bounded-session omissions.
+These summaries are for diagnostics, not exhaustive spend accounting.
+
 
 ## Setup
 

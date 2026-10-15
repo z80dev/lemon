@@ -32,6 +32,10 @@ defmodule LemonChannels.Dispatcher do
   def dispatch(%DeliveryIntent{} = intent) do
     started_at = System.monotonic_time()
 
+    if intent.kind in [:final_text, :stream_finalize] do
+      LemonChannels.TypingIndicator.stop_run(intent.run_id)
+    end
+
     result =
       renderer_for(intent)
       |> dispatch_with(intent)

@@ -3,6 +3,61 @@ defmodule CodingAgent.SystemPromptTest do
 
   alias CodingAgent.SystemPrompt
 
+  @guided_tools ~w(ask checkpoint rewind fs_checkpoint ast_grep lsp debug omp)
+
+  @tag :tmp_dir
+  test "optional tool guidance appears exactly when its tool is available", %{tmp_dir: tmp_dir} do
+    opts = %{
+      workspace_dir: Path.join(tmp_dir, "workspace"),
+      contributed_sections: [],
+      tool_names: []
+    }
+
+    empty_prompt = SystemPrompt.build(tmp_dir, opts)
+    default_prompt = SystemPrompt.build(tmp_dir, Map.delete(opts, :tool_names))
+
+    for tool <- @guided_tools do
+      entry = "Use `#{tool}`"
+      refute empty_prompt =~ entry
+      refute default_prompt =~ entry
+
+      prompt = SystemPrompt.build(tmp_dir, %{opts | tool_names: [tool]})
+      assert prompt =~ entry
+
+      for other <- @guided_tools -- [tool] do
+        refute prompt =~ "Use `#{other}`"
+      end
+
+      without_tool = SystemPrompt.build(tmp_dir, %{opts | tool_names: @guided_tools -- [tool]})
+      refute without_tool =~ entry
+    end
+  end
+
+  @tag :tmp_dir
+  test "optional tool guidance order ignores tool ordering and duplicates", %{tmp_dir: tmp_dir} do
+    opts = %{
+      workspace_dir: Path.join(tmp_dir, "workspace"),
+      contributed_sections: [],
+      tool_names: @guided_tools
+    }
+
+    prompt = SystemPrompt.build(tmp_dir, opts)
+
+    assert prompt ==
+             SystemPrompt.build(tmp_dir, %{
+               opts
+               | tool_names: Enum.reverse(@guided_tools) ++ @guided_tools
+             })
+
+    positions =
+      Enum.map(@guided_tools, fn tool ->
+        {position, _length} = :binary.match(prompt, "Use `#{tool}`")
+        position
+      end)
+
+    assert positions == Enum.sort(positions)
+  end
+
   @tag :tmp_dir
   test "injects workspace files into prompt", %{tmp_dir: tmp_dir} do
     workspace_dir = Path.join(tmp_dir, "workspace")

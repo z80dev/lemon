@@ -20,6 +20,8 @@ defmodule LemonChannels.Application do
       LemonChannels.Registry,
       # Channels-owned delivery presentation state (message ids / send-vs-edit)
       LemonChannels.PresentationState,
+      # Best-effort chat-originated run activity
+      LemonChannels.TypingIndicator,
       # Rate limiter
       LemonChannels.Outbox.RateLimiter,
       # Dedupe
@@ -30,6 +32,7 @@ defmodule LemonChannels.Application do
       LemonChannels.Outbox,
       # Durable supervision notices use Outbox admission and delivery receipts
       LemonChannels.Supervision,
+      LemonChannels.UserPromptSurface,
       # Adapter supervisor for channel adapters
       {DynamicSupervisor, strategy: :one_for_one, name: LemonChannels.AdapterSupervisor},
       # Optional inbound HTTP listener; binds a port only when configured

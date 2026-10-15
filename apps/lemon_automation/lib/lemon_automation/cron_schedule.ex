@@ -25,6 +25,12 @@ defmodule LemonAutomation.CronSchedule do
   - `every 30m`, `15 minutes` - Minute intervals that divide one hour
   - `hourly`, `every 2h` - Hour intervals that divide one day
   - `daily at 9am`, `weekdays at 09:30`, `weekly monday at 8am`
+  - `in 30m`, `in 2h`, `in 1d` - Relative one-shots
+  - `YYYY-MM-DDTHH:MM[:SS]` - One-shot wall-clock timestamp in the job timezone
+
+  `prepare/3` validates that one-shots are future instants and converts them to
+  absolute UTC ISO timestamps for storage. `parse/3` returns `{:once_at, ms}`
+  for these schedules; `next_runs/3` returns at most one occurrence.
 
   ## Timezones
 
@@ -114,35 +120,122 @@ defmodule LemonAutomation.CronSchedule do
   end
 
   @doc """
-  Parse a cron expression into a structured format.
+  Parse a schedule into cron fields or `{:once_at, unix_ms}`.
 
-  Returns `{:ok, parsed}` or `{:error, reason}`.
+  Parsing alone permits past instants; use `prepare/3` for creation/update
+  validation. Options include `:from` for relative delays and
+  `:time_zone_database` for local ISO timestamps.
   """
-  @spec parse(binary()) :: {:ok, parsed()} | {:error, binary()}
-  def parse(expression) when is_binary(expression) do
+  @spec parse(binary(), binary(), keyword()) ::
+          {:ok, parsed() | {:once_at, integer()}} | {:error, binary()}
+  def parse(expression, timezone \\ "UTC", opts \\ []) when is_binary(expression) do
     with {:ok, expression} <- normalize(expression) do
-      parts = String.split(expression, ~r/\s+/, trim: true)
-
-      case parts do
-        [minute, hour, day, month, weekday] ->
-          with {:ok, minute_vals} <- parse_field(minute, @minute_range, "minute"),
-               {:ok, hour_vals} <- parse_field(hour, @hour_range, "hour"),
-               {:ok, day_vals} <- parse_field(day, @day_range, "day"),
-               {:ok, month_vals} <- parse_field(month, @month_range, "month"),
-               {:ok, weekday_vals} <- parse_field(weekday, @weekday_range, "weekday") do
-            {:ok,
-             %{
-               minute: minute_vals,
-               hour: hour_vals,
-               day: day_vals,
-               month: month_vals,
-               weekday: normalize_weekdays(weekday_vals)
-             }}
-          end
-
-        _ ->
-          {:error, "Expected 5 fields (minute hour day month weekday), got #{length(parts)}"}
+      case parse_one_shot(expression, timezone, opts) do
+        :not_one_shot -> parse_cron(expression)
+        result -> result
       end
+    end
+  end
+
+  defp parse_cron(expression) do
+    parts = String.split(expression, ~r/\s+/, trim: true)
+
+    case parts do
+      [minute, hour, day, month, weekday] ->
+        with {:ok, minute_vals} <- parse_field(minute, @minute_range, "minute"),
+             {:ok, hour_vals} <- parse_field(hour, @hour_range, "hour"),
+             {:ok, day_vals} <- parse_field(day, @day_range, "day"),
+             {:ok, month_vals} <- parse_field(month, @month_range, "month"),
+             {:ok, weekday_vals} <- parse_field(weekday, @weekday_range, "weekday") do
+          {:ok,
+           %{
+             minute: minute_vals,
+             hour: hour_vals,
+             day: day_vals,
+             month: month_vals,
+             weekday: normalize_weekdays(weekday_vals)
+           }}
+        end
+
+      _ ->
+        {:error, "Expected 5 fields (minute hour day month weekday), got #{length(parts)}"}
+    end
+  end
+
+  @doc """
+  Validate a schedule for creation/update. One-shots must be in the future and
+  are pinned to an absolute UTC timestamp so relative delays never move on restart.
+  """
+  @spec prepare(binary(), binary(), keyword()) ::
+          {:ok, binary(), boolean()} | {:error, binary()}
+  def prepare(expression, timezone \\ "UTC", opts \\ []) do
+    with {:ok, normalized} <- normalize(expression),
+         {:ok, parsed} <- parse(normalized, timezone, opts) do
+      case parsed do
+        {:once_at, due} ->
+          prepare_one_shot(due, opts)
+
+        _cron ->
+          {:ok, normalized, false}
+      end
+    end
+  end
+
+  defp prepare_one_shot(due, opts) do
+    from = Keyword.get_lazy(opts, :from, &DateTime.utc_now/0)
+
+    if due <= DateTime.to_unix(from, :millisecond) do
+      {:error, "One-shot timestamp must be in the future"}
+    else
+      case DateTime.from_unix(due, :millisecond) do
+        {:ok, datetime} -> {:ok, DateTime.to_iso8601(datetime), true}
+        {:error, _} -> {:error, "One-shot timestamp is outside the supported date range"}
+      end
+    end
+  end
+
+  defp parse_one_shot(expression, timezone, opts) do
+    cond do
+      match = Regex.run(~r/^in\s+(\d+)\s*([mhd])$/i, expression) ->
+        [_, amount, unit] = match
+        amount = String.to_integer(amount)
+        seconds = %{"m" => 60, "h" => 3600, "d" => 86_400}[String.downcase(unit)]
+        from = Keyword.get_lazy(opts, :from, &DateTime.utc_now/0)
+
+        if amount > 0,
+          do: {:ok, {:once_at, DateTime.to_unix(from, :millisecond) + amount * seconds * 1000}},
+          else: {:error, "One-shot delay must be positive"}
+
+      Regex.match?(~r/^\d{4}-\d{2}-\d{2}T/, expression) ->
+        parse_timestamp(expression, timezone, opts)
+
+      true ->
+        :not_one_shot
+    end
+  end
+
+  defp parse_timestamp(expression, timezone, opts) do
+    if String.ends_with?(expression, "Z") do
+      case DateTime.from_iso8601(expression) do
+        {:ok, datetime, _offset} -> {:ok, {:once_at, DateTime.to_unix(datetime, :millisecond)}}
+        _ -> {:error, "Invalid ISO-8601 timestamp"}
+      end
+    else
+      parse_local_timestamp(expression, timezone, opts)
+    end
+  end
+
+  defp parse_local_timestamp(expression, timezone, opts) do
+    expression = if String.length(expression) == 16, do: expression <> ":00", else: expression
+    database = Keyword.get(opts, :time_zone_database, Calendar.get_time_zone_database())
+
+    with true <- Regex.match?(~r/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$/, expression),
+         {:ok, wall} <- NaiveDateTime.from_iso8601(expression),
+         {:ok, datetime} <- wall_to_utc(wall, timezone, database) do
+      {:ok, {:once_at, DateTime.to_unix(datetime, :millisecond)}}
+    else
+      :skip -> {:error, "One-shot timestamp falls in a daylight-saving gap"}
+      _ -> {:error, "Invalid ISO-8601 timestamp or timezone"}
     end
   end
 
@@ -192,7 +285,7 @@ defmodule LemonAutomation.CronSchedule do
     database = Keyword.get(opts, :time_zone_database, Calendar.get_time_zone_database())
 
     with true <- is_integer(count) and count > 0,
-         {:ok, parsed} <- parse(expression),
+         {:ok, parsed} <- parse(expression, timezone, opts),
          {:ok, date} <- source_date(from, timezone, database) do
       collect_next_runs(parsed, timezone, database, from, date, count, [])
     else
@@ -222,7 +315,10 @@ defmodule LemonAutomation.CronSchedule do
   """
   @spec matches?(binary(), DateTime.t()) :: boolean()
   def matches?(expression, datetime) do
-    case parse(expression) do
+    case parse(expression, datetime.time_zone) do
+      {:ok, {:once_at, due}} ->
+        DateTime.to_unix(datetime, :millisecond) == due
+
       {:ok, parsed} ->
         datetime.minute in parsed.minute and
           datetime.hour in parsed.hour and
@@ -515,6 +611,15 @@ defmodule LemonAutomation.CronSchedule do
 
   defp collect_next_runs(_parsed, _timezone, _database, _from, _date, 0, acc),
     do: Enum.reverse(acc)
+
+  defp collect_next_runs({:once_at, due}, _timezone, _database, from, _date, _count, _acc) do
+    with true <- due > DateTime.to_unix(from, :millisecond),
+         {:ok, datetime} <- DateTime.from_unix(due, :millisecond) do
+      [datetime]
+    else
+      _ -> []
+    end
+  end
 
   defp collect_next_runs(parsed, timezone, database, from, date, count, acc) do
     case find_next_run(parsed, timezone, database, from, date, 0) do

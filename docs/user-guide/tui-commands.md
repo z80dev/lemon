@@ -32,6 +32,12 @@ Regenerate from the repository root with `bun clients/tui/scripts/generate-comma
 | --- | --- | --- | --- |
 | /context | /ctx | — | show what fills the focused session's context window |
 
+## copy
+
+| Command | Aliases | Arguments | Description |
+| --- | --- | --- | --- |
+| /copy | — | [prompt &#124; code [n]] | Copy the last reply, a fenced code block, or the last user prompt |
+
 ## core
 
 | Command | Aliases | Arguments | Description |
@@ -51,7 +57,7 @@ Regenerate from the repository root with `bun clients/tui/scripts/generate-comma
 | --- | --- | --- | --- |
 | /status | — | — | daemon status and health |
 | /usage | — | — | token and quota usage |
-| /cost | — | [range] | spend breakdown |
+| /cost | — | [range] [--by day&#124;provider&#124;model&#124;session] | spend breakdown |
 | /logs | — | [count] [level] | tail the daemon log |
 
 ## fork
@@ -164,3 +170,4 @@ editor and picker-local shortcuts are outside this table.
 | alt+m | Show/hide omp delegate sessions |
 | alt+o | Collapse/expand all tool output |
 | alt+d | Inspect the latest edit diff |
+| alt+shift+c | Copy the last assistant reply |

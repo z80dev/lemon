@@ -925,6 +925,31 @@ export interface ModelsListResult {
 	[key: string]: unknown;
 }
 
+/** Read-only recent-run history; older daemons may omit the detail fields. */
+export interface RecentRunSummary {
+	runId: string;
+	/** Daemon-reported terminal state, including `crashed`. */
+	status?: Nullable<string>;
+	engine?: Nullable<string>;
+	sessionKey?: Nullable<string>;
+	agentId?: Nullable<string>;
+	durationMs?: Nullable<number>;
+	startedAtMs?: Nullable<number>;
+	completedAtMs?: Nullable<number>;
+	ok?: Nullable<boolean>;
+	error?: Nullable<string>;
+	tokens?: Nullable<{ input: number; output: number; total: number }>;
+	costUsd?: Nullable<number>;
+	priceKnown?: Nullable<boolean>;
+	model?: Nullable<string>;
+	provider?: Nullable<string>;
+}
+
+export interface RunsRecentListResult {
+	runs?: RecentRunSummary[];
+	[key: string]: unknown;
+}
+
 export interface GoalSetParams {
 	sessionKey?: string;
 	objective?: string;
