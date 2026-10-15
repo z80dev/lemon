@@ -10,6 +10,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Changed
 
+- Setup finishes with a first coding prompt, a success check, optional Telegram
+  and Web UI commands, and an offer to open Lemon immediately after verification.
+
 - Add short, availability-gated system prompt guidance for questions, conversation
   and filesystem checkpoints, structural code rewrites, language servers, debugging
   and external agent delegation, with stable ordering for prompt caching.
@@ -22,6 +25,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   cannot spawn further children.
 
 ### Added
+
+- Interactive setup audits an existing Hermes home and offers a confirmed,
+  backed-up import without secrets or overwriting conflicts.
 
 - Add offline `lemon usage` date ranges and day/provider/model/session reports,
   plus TUI `/cost --by` breakdowns with explicit completeness and session omissions.
@@ -118,6 +124,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   no approval by default and makes no network requests.
 
 ### Fixed
+
+- Hermes provider-config import now reports conflicts instead of replacing
+  existing values unless `--overwrite` is explicitly requested.
 
 - Stop replaying ambiguous Telegram sends and outbox failures; preserve unknown
   enqueue outcomes and deduplicate Discord transport retries with stable nonces.
