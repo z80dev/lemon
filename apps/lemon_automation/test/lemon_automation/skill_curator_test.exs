@@ -55,6 +55,36 @@ defmodule LemonAutomation.SkillCuratorTest do
     :ok
   end
 
+  test "references include disabled cron prompts and explicit skill metadata" do
+    jobs = [
+      %{enabled: false, prompt: "Use deploy-helper, then finish.", meta: %{}},
+      %{enabled: true, prompt: "not-other-helper-extra", meta: %{"skills" => ["metadata-only"]}}
+    ]
+
+    assert SkillCurator.referenced_skills(jobs, ["deploy-helper", "metadata-only", "other-helper"]) ==
+             ["deploy-helper", "metadata-only"]
+  end
+
+  @tag :tmp_dir
+  test "passes persisted cron references to the curator", %{tmp_dir: cwd} do
+    path = LemonSkills.Config.project_usage_file(cwd)
+    File.mkdir_p!(Path.dirname(path))
+    File.write!(path, Jason.encode!(%{"version" => 1, "skills" => %{"cron-skill" => %{}}}))
+
+    assert {:ok, _} =
+             SkillCurator.run_once(
+               enabled: true,
+               scope: :project,
+               cwd: cwd,
+               curator_mod: ReviewCurator,
+               router_mod: RouterStub,
+               cron_jobs_fun: fn -> [%{enabled: false, prompt: "Use cron-skill", meta: nil}] end
+             )
+
+    assert_received {:curator_run, opts}
+    assert opts[:exempt_skills] == ["cron-skill"]
+  end
+
   test "skips when disabled" do
     assert {:skip, :disabled} =
              SkillCurator.run_once(enabled: false, curator_mod: ReviewCurator)

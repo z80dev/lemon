@@ -51,6 +51,22 @@ defmodule LemonSkills.Tools.RecallTest do
     }
   end
 
+  test "browse and scroll expose only scoped session summaries", %{tmp_dir: dir, store: store} do
+    tool = recall_tool(dir, agent_id: "main", store: store)
+    browse = tool.execute.("browse", %{}, nil, nil)
+    assert text(browse) =~ "agent:main:telegram:1"
+    assert text(browse) =~ "2 runs"
+    refute text(browse) =~ "agent:other"
+    scroll = tool.execute.("scroll", %{"session" => "agent:main:telegram:1"}, nil, nil)
+    assert text(scroll) =~ "March 14th"
+    assert text(scroll) =~ "wooden gifts"
+    assert text(scroll) =~ "Untrusted"
+    refute text(scroll) =~ "private unrelated"
+
+    assert text(tool.execute.("foreign", %{"session" => "agent:other:telegram:1"}, nil, nil)) =~
+             "No matching"
+  end
+
   test "agent scope recalls this agent across projects without another agent's facts", %{
     tmp_dir: tmp_dir,
     search_fn: search_fn

@@ -897,15 +897,46 @@ defmodule LemonControlPlane.Protocol.Schemas do
     "omp.sessions.discover" => %{required: %{"cwd" => :string}, optional: %{"limit" => :integer}},
     "omp.sessions.start" => %{
       required: %{"prompt" => :string, "cwd" => :string},
-      optional: %{"model" => :string, "thinking" => :string}
+      optional: %{
+        "model" => :string,
+        "thinking" => :string,
+        "approvalMode" => :string,
+        "isolate" => :boolean
+      }
     },
     "omp.sessions.resume" => %{
       required: %{"ompSessionId" => :string, "cwd" => :string},
-      optional: %{"prompt" => :string, "model" => :string, "thinking" => :string}
+      optional: %{
+        "prompt" => :string,
+        "model" => :string,
+        "thinking" => :string,
+        "approvalMode" => :string,
+        "continue" => :boolean
+      }
     },
     "omp.sessions.send" => %{
       required: %{"id" => :string, "message" => :string},
       optional: %{"mode" => :string}
+    },
+    "omp.sessions.startMany" => %{
+      required: %{"tasks" => :list},
+      optional: %{"isolate" => :boolean}
+    },
+    "omp.models" => %{
+      optional: %{
+        "query" => :string,
+        "provider" => :string,
+        "freeOnly" => :boolean,
+        "limit" => :integer
+      }
+    },
+    "omp.sessions.subagent" => %{
+      required: %{"id" => :string, "subagentId" => :string},
+      optional: %{"limit" => :integer}
+    },
+    "omp.sessions.configure" => %{
+      required: %{"id" => :string},
+      optional: %{"model" => :string, "thinking" => :string}
     },
     "omp.sessions.cancel" => %{required: %{"id" => :string}},
     "omp.sessions.close" => %{required: %{"id" => :string}}

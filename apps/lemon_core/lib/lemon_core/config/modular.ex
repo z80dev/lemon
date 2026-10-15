@@ -192,6 +192,8 @@ defmodule LemonCore.Config.Modular do
     settings = load_merged_settings(project_dir)
 
     validate_settings(settings)
+  rescue
+    error in ValidationError -> {:error, [Exception.message(error)]}
   end
 
   @doc """
@@ -361,10 +363,17 @@ defmodule LemonCore.Config.Modular do
           {:ok, settings} ->
             settings
 
-          {:error, reason} ->
-            require Logger
-            Logger.warning("Failed to parse config file #{path}: #{inspect(reason)}")
-            %{}
+          {:error, {:invalid_toml, reason}} ->
+            raise ValidationError,
+              message:
+                "#{path}: invalid TOML: #{reason}. Run `lemon config validate --verbose` after fixing the syntax.",
+              errors: []
+
+          {:error, reason} when is_binary(reason) ->
+            raise ValidationError,
+              message:
+                "#{path}: invalid TOML: #{reason}. Run `lemon config validate --verbose` after fixing the syntax.",
+              errors: []
         end
 
       {:error, :enoent} ->
@@ -372,9 +381,10 @@ defmodule LemonCore.Config.Modular do
         %{}
 
       {:error, reason} ->
-        require Logger
-        Logger.warning("Failed to read config file #{path}: #{inspect(reason)}")
-        %{}
+        raise ValidationError,
+          message:
+            "#{path}: cannot read configuration: #{:file.format_error(reason)}. Run `lemon config validate --verbose` after checking file permissions.",
+          errors: []
     end
   end
 end

@@ -26,8 +26,19 @@ restart the runtime:
 LEMON_COMPUTER_USE_ENABLED=true
 ```
 
-`config :lemon_computer_use, enabled: true` works too; the environment wins.
-Optional settings:
+Or set it in `~/.lemon/config.toml`:
+
+```toml
+[runtime.tools.computer_use]
+enabled = true
+chrome = false                 # Chrome tabs; see below
+# lcu_root = "/opt/lcu/current"
+# node = "/path/to/node"
+declined_origins = []          # extra origins never approved
+```
+
+Environment variables take precedence over the file, and the file over
+`config :lemon_computer_use`. Optional settings:
 
 | Variable | Default | Meaning |
 | --- | --- | --- |

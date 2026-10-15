@@ -92,6 +92,87 @@ defmodule CodingAgent.Tools.WriteTest do
   # ============================================================================
 
   describe "execute/6 - overwriting existing files" do
+    test "ACP local targets reject truncated content before requesting a write", %{tmp_dir: cwd} do
+      path = Path.join(cwd, "acp.txt")
+      File.write!(path, "keep")
+
+      assert {:error, message} =
+               Write.execute(
+                 "write",
+                 %{
+                   "path" => path,
+                   "content" => "[Showing lines 1-2 of 5. Use offset=3 to continue.]"
+                 },
+                 nil,
+                 nil,
+                 cwd, acp_client_fs_write_text_file: true)
+
+      assert message =~ "truncated read output"
+      assert File.read!(path) == "keep"
+    end
+
+    test "preserves existing BOM and dominant CRLF without duplicating either", %{tmp_dir: cwd} do
+      path = Path.join(cwd, "format.txt")
+      bom = <<0xEF, 0xBB, 0xBF>>
+      File.write!(path, bom <> "one\r\ntwo\r\n")
+
+      for content <- ["new\ntext\n", bom <> "new\r\ntext\r\n"] do
+        assert %AgentToolResult{} =
+                 Write.execute(
+                   "write",
+                   %{"path" => path, "content" => content},
+                   nil,
+                   nil,
+                   cwd,
+                   []
+                 )
+
+        assert File.read!(path) == bom <> "new\r\ntext\r\n"
+      end
+    end
+
+    test "rejects actual truncated read output only for existing targets", %{tmp_dir: cwd} do
+      source = Path.join(cwd, "source.txt")
+      target = Path.join(cwd, "target.txt")
+
+      for {text, opts} <- [
+            {"one\ntwo\nthree\n", [max_lines: 1]},
+            {String.duplicate("x", 100), [max_bytes: 20]}
+          ] do
+        File.write!(source, text)
+        result = CodingAgent.Tools.Read.execute("read", %{"path" => source}, nil, nil, cwd, opts)
+        [%TextContent{text: truncated}] = result.content
+        File.write!(target, "keep")
+
+        assert {:error, message} =
+                 Write.execute(
+                   "write",
+                   %{"path" => target, "content" => truncated},
+                   nil,
+                   nil,
+                   cwd,
+                   []
+                 )
+
+        assert message =~ "content looks like a truncated read output"
+        assert message =~ "re-read the omitted range or use edit"
+        assert File.read!(target) == "keep"
+        File.rm!(target)
+
+        assert %AgentToolResult{} =
+                 Write.execute(
+                   "write",
+                   %{"path" => target, "content" => truncated},
+                   nil,
+                   nil,
+                   cwd,
+                   []
+                 )
+
+        assert File.read!(target) == truncated
+      end
+    end
+
     test "overwrites existing file content", %{tmp_dir: tmp_dir} do
       path = Path.join(tmp_dir, "existing.txt")
       File.write!(path, "original content")

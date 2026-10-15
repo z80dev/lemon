@@ -179,7 +179,9 @@ defmodule LemonSkills.Tools.SkillManage do
              {:ok, root} <- skills_root(scope, cwd),
              {:ok, name} <- name_for_action(action, params),
              :ok <- validate_name_for_action(action, name) do
-          dispatch(action, name, params, scope, root, cwd)
+          with :ok <- reject_pinned_content_edit(action, name, scope, cwd) do
+            dispatch(action, name, params, scope, root, cwd)
+          end
         end
       end
 
@@ -609,6 +611,12 @@ defmodule LemonSkills.Tools.SkillManage do
 
     header <> "\n" <> body
   end
+
+  defp reject_pinned_content_edit(action, name, scope, cwd)
+       when action in ["edit", "patch", "write_file", "remove_file"],
+       do: reject_pinned(name, scope, cwd, "editing its contents")
+
+  defp reject_pinned_content_edit(_action, _name, _scope, _cwd), do: :ok
 
   defp reject_pinned(name, scope, cwd, action) do
     if LemonSkills.Usage.pinned?(name, usage_opts(scope, cwd)) do
