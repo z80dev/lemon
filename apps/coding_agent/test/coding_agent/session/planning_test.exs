@@ -1,9 +1,13 @@
 defmodule CodingAgent.Session.PlanningTest do
   use ExUnit.Case, async: false
 
-  alias CodingAgent.{Session, SessionManager, SettingsManager}
-  alias CodingAgent.SessionManager.SessionEntry
+  alias CodingAgent.Security.SecretObfuscator
+  alias CodingAgent.Session
   alias CodingAgent.Session.Planning
+  alias CodingAgent.Session.WasmBridge
+  alias CodingAgent.SessionManager
+  alias CodingAgent.SessionManager.SessionEntry
+  alias CodingAgent.SettingsManager
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonAi.Types.{AssistantMessage, Model, ModelCost, TextContent, ToolCall}
 
@@ -379,7 +383,7 @@ defmodule CodingAgent.Session.PlanningTest do
     state = Session.get_state(session)
 
     placeholder =
-      CodingAgent.Security.SecretObfuscator.obfuscate(state.secret_obfuscator, secret)
+      SecretObfuscator.obfuscate(state.secret_obfuscator, secret)
 
     refute placeholder == secret
     plan_file = Path.join(Planning.plan_dir(state.session_manager), "bounded-plan.md")
@@ -393,7 +397,7 @@ defmodule CodingAgent.Session.PlanningTest do
       host_content = secret <> "/host-#{revision}"
 
       assert {:ok, _} =
-               CodingAgent.Session.WasmBridge.invoke_host_tool(
+               WasmBridge.invoke_host_tool(
                  session,
                  "write",
                  Jason.encode!(%{
@@ -623,13 +627,13 @@ defmodule CodingAgent.Session.PlanningTest do
     secret = "private-plan-secret"
 
     obfuscator =
-      CodingAgent.Security.SecretObfuscator.build(
+      SecretObfuscator.build(
         cwd: root,
         agent_dir: root,
         env: %{"API_KEY" => secret}
       )
 
-    placeholder = CodingAgent.Security.SecretObfuscator.obfuscate(obfuscator, secret)
+    placeholder = SecretObfuscator.obfuscate(obfuscator, secret)
     parent = self()
     outside = Path.join(root, "outside.md")
 

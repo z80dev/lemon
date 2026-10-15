@@ -2,8 +2,8 @@ defmodule CodingAgent.Tools.WriteSqliteTest do
   use ExUnit.Case, async: true
 
   alias CodingAgent.Tools.{Sqlite, Write}
-  alias LemonAgent.Types.AgentToolResult
   alias Exqlite.Sqlite3
+  alias LemonAgent.Types.AgentToolResult
 
   @moduletag :tmp_dir
 

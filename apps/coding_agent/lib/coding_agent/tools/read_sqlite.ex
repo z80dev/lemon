@@ -18,6 +18,7 @@ defmodule CodingAgent.Tools.ReadSqlite do
   """
 
   alias CodingAgent.Tools.ReadFormatText
+  alias CodingAgent.Tools.Sqlite
   alias Exqlite.Sqlite3
 
   import CodingAgent.Tools.Sqlite,
@@ -159,7 +160,7 @@ defmodule CodingAgent.Tools.ReadSqlite do
   # ── connection ─────────────────────────────────────────────────────────────
 
   defp with_connection(db_path, fun) do
-    CodingAgent.Tools.Sqlite.with_connection(db_path, :readonly, fn conn ->
+    Sqlite.with_connection(db_path, :readonly, fn conn ->
       run_with_deadline(conn, fn -> fun.(conn) end)
     end)
   end
