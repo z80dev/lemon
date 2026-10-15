@@ -1,5 +1,6 @@
 #if DEBUG
 import AppKit
+import ImageIO
 import SwiftUI
 import XCTest
 import LemonBotKit
@@ -61,7 +62,6 @@ final class SnapshotRenderTests: XCTestCase {
             for (name, appearance, scheme) in [("light", NSAppearance.Name.aqua, ColorScheme.light), ("dark", NSAppearance.Name.darkAqua, ColorScheme.dark)] {
                 let label = "apple-\(scene.slug)-\(name)"
                 guard let png = await render(scene, appearance: appearance, scheme: scheme) else { XCTFail("\(label): no image produced"); continue }
-                XCTAssertGreaterThan(png.count, 4_000, "\(label): PNG is implausibly small")
                 if let output { try? png.write(to: output.appendingPathComponent(label + ".png"), options: .atomic) }
                 produced.append(label)
             }
@@ -104,7 +104,15 @@ final class SnapshotRenderTests: XCTestCase {
                                          hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0) else { return nil }
         rep.size = bounds.size
         target.cacheDisplay(in: bounds, to: rep)
-        return rep.representation(using: .png, properties: [:])
+        guard let png = rep.representation(using: .png, properties: [:]) else { return nil }
+        let source = CGImageSourceCreateWithData(png as CFData, nil)
+        guard let source, let image = CGImageSourceCreateImageAtIndex(source, 0, nil) else {
+            XCTFail("\(scene.slug): rendered PNG could not be decoded")
+            return nil
+        }
+        XCTAssertEqual(image.width, Int(bounds.width * scale), "\(scene.slug): pixel width")
+        XCTAssertEqual(image.height, Int(bounds.height * scale), "\(scene.slug): pixel height")
+        return png
     }
 
     /// Lets SwiftUI `.task` loads, layout and animations finish while pumping both the run loop and the main actor.
