@@ -2,6 +2,7 @@ defmodule LemonCli.Setup.ScaffoldTest do
   use ExUnit.Case, async: true
 
   alias LemonCli.Setup.Scaffold
+  alias LemonCore.Config.Modular
 
   describe "generate/1" do
     test "names no provider, default or credential reference" do
@@ -25,7 +26,7 @@ defmodule LemonCli.Setup.ScaffoldTest do
 
     test "is valid TOML that passes config validation" do
       {:ok, settings} = Toml.decode(Scaffold.generate())
-      assert {:ok, _config} = LemonCore.Config.Modular.validate_settings(settings)
+      assert {:ok, _config} = Modular.validate_settings(settings)
     end
   end
 
