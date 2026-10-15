@@ -49,10 +49,11 @@ for crashes, which do not carry a duration).
 Rows also include nullable `tokens` (`input`, `output`, `total`), `costUsd`,
 `priceKnown`, `model`, and `provider`. `/runs` displays available usage without
 estimating missing prices. Usage is grouped by run ID from one query over the
-returned rows' time window, capped at 500 occurrences. If the window exceeds
-that cap, usage fields are null rather than partial totals. Missing records
-also produce null fields; mixed models/providers have a null model/provider,
-and any unpriced occurrence makes the run's cost null and `priceKnown` false.
+returned rows' known time windows, capped at 500 occurrences. If the window
+exceeds that cap, usage fields are null rather than partial totals. Missing
+records or an unknown start time also produce null fields; mixed models/providers
+have a null model/provider, and any unpriced occurrence makes the run's cost null
+and `priceKnown` false.
 
 ## Commands and availability
 

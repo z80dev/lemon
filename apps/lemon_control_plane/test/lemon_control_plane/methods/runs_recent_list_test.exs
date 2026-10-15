@@ -251,6 +251,25 @@ defmodule LemonControlPlane.Methods.RunsRecentListTest do
     assert row["costUsd"] == 0.125
   end
 
+  test "an unknown start never turns a narrower usage window into complete run totals", ctx do
+    event(ctx, :run_completed, %{ok: true, duration_ms: 100})
+    crashed = event(ctx, :run_failed, %{reason: "worker_crashed"}, offset: 1)
+
+    put_occurrences(ctx, crashed, [
+      %{at_ms: ctx.at_ms - 150, provider: "one", model: "first",
+        usage: %{input: 7, output: 3, cost: 0.125}},
+      %{at_ms: ctx.at_ms - 50, provider: "one", model: "first",
+        usage: %{input: 2, output: 3, cost: 0.125}}
+    ])
+
+    assert {:ok, %{"runs" => runs}} = recent(ctx)
+    row = Enum.find(runs, &(&1["runId"] == crashed))
+    assert row["startedAtMs"] == nil
+    assert row["tokens"] == nil
+    assert row["costUsd"] == nil
+    assert row["priceKnown"] == nil
+  end
+
   test "unpriced usage retains tokens without inventing cost or a single model", ctx do
     id = event(ctx, :run_completed, %{ok: true, duration_ms: 100})
 

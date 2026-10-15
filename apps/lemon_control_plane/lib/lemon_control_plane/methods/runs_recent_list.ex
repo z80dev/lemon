@@ -172,9 +172,24 @@ defmodule LemonControlPlane.Methods.RunsRecentList do
       else: label |> binary_part(0, byte_size(label) - 1) |> valid_label_prefix()
   end
 
-  defp attach_usage([]), do: {:ok, []}
-
   defp attach_usage(runs) do
+    known = Enum.filter(runs, &is_integer(&1["startedAtMs"]))
+
+    with {:ok, grouped} <- fetch_usage(known) do
+      {:ok, Enum.map(runs, fn run ->
+        records =
+          if is_integer(run["startedAtMs"]),
+            do: Map.get(grouped, run["runId"], []),
+            else: []
+
+        Map.merge(run, usage_fields(records))
+      end)}
+    end
+  end
+
+  defp fetch_usage([]), do: {:ok, %{}}
+
+  defp fetch_usage(runs) do
     timestamps =
       Enum.flat_map(runs, &[&1["startedAtMs"], &1["completedAtMs"]])
       |> Enum.filter(&is_integer/1)
@@ -188,12 +203,11 @@ defmodule LemonControlPlane.Methods.RunsRecentList do
              "toMs" => to_ms,
              "limit" => 500
            }) do
-      grouped =
-        if is_nil(page.next_cursor),
-          do: Enum.group_by(page.records, & &1.run_id),
-          else: %{}
-
-      {:ok, Enum.map(runs, &Map.merge(&1, usage_fields(Map.get(grouped, &1["runId"], []))))}
+      {:ok,
+       if(is_nil(page.next_cursor),
+         do: Enum.group_by(page.records, & &1.run_id),
+         else: %{}
+       )}
     end
   end
 
