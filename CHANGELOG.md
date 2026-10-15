@@ -8,6 +8,12 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
+### Fixed
+
+- Resolve qualified model selectors against their own provider when a preset or
+  default provider was inherited, while preserving native colon IDs for explicit
+  provider/model pairs.
+
 ### Added
 
 - Lemon Bot exposes an authenticated, provider-specific voice catalog for native

@@ -1179,9 +1179,13 @@ selected as `<id>:<model>` or `<id>/<model>` in `default_model`, `/model`,
 and they appear in the TUI `/model` picker once the provider has a credential.
 
 Qualified `[defaults] model` selectors resolve their provider before default
-provider routing, including when no `[defaults] provider` is set. Provider-native
-IDs such as `qwen3:32b`, and models explicitly listed under the selected provider,
-remain that provider's model IDs rather than being split as new selectors.
+provider routing when the provider was inherited from a lower-priority config
+file, an environment model-only override, or the built-in fallback. For example,
+a project model of `anthropic:claude-sonnet-5` overrides an inherited Ollama
+provider. A provider explicitly set in the same or a higher-priority source
+instead keeps the model ID native: `provider = "ollama"` with `model = "qwen:7b"`
+or even `model = "anthropic:claude-sonnet-5"` selects that exact Ollama model ID,
+regardless of discovery cache contents. Unknown prefixes remain native IDs.
 
 ```toml
 [providers.my-gateway]

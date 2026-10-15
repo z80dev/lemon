@@ -74,6 +74,39 @@ defmodule LemonCore.Config.ModularIntegrationTest do
     assert LemonCore.Config.to_map(config).budgets == config.budgets
   end
 
+  test "model-only project overrides retain provider inheritance through both load APIs", %{
+    mock_home: home,
+    tmp_dir: project
+  } do
+    File.mkdir_p!(Path.join(home, ".lemon"))
+    File.mkdir_p!(Path.join(project, ".lemon"))
+
+    File.write!(Path.join(home, ".lemon/config.toml"), """
+    [defaults]
+    provider = "ollama"
+    model = "qwen:7b"
+    """)
+
+    path = Path.join(project, ".lemon/config.toml")
+    File.write!(path, "[defaults]\nmodel = \"anthropic:claude-sonnet-5\"\n")
+
+    assert Modular.load(project_dir: project).agent.default_provider_source == :inherited
+    assert {:ok, config} = Modular.load_with_validation(project_dir: project)
+    assert config.agent.default_provider == "ollama"
+    assert config.agent.default_model == "anthropic:claude-sonnet-5"
+    assert config.agent.default_provider_source == :inherited
+
+    File.write!(path, """
+    [defaults]
+    provider = "ollama"
+    model = "anthropic:claude-sonnet-5"
+    """)
+
+    assert Modular.load(project_dir: project).agent.default_provider_source == :explicit
+    assert {:ok, config} = Modular.load_with_validation(project_dir: project)
+    assert config.agent.default_provider_source == :explicit
+  end
+
   test "omitted caps are unlimited and invalid caps fail validation and runtime loading", %{
     tmp_dir: project
   } do
