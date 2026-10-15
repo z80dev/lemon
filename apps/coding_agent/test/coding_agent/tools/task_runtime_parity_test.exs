@@ -159,7 +159,9 @@ defmodule CodingAgent.Tools.TaskRuntimeParityTest do
         assert {:ok, %{thinking_level: ^thinking}} =
                  Params.validate_run_params(
                    %{"prompt" => "x", "thinking_level" => thinking},
-                   "/tmp", settings_manager: settings())
+                   "/tmp",
+                   settings_manager: settings()
+                 )
       end
 
       assert {:error, "Async must be a boolean"} =

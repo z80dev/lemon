@@ -239,9 +239,11 @@ defmodule LemonCore.Config do
   defp convert_tools(tools) do
     %{
       auto_resize_images: tools.auto_resize_images,
+      approval_mode: tools.approval_mode,
       web: tools.web,
       wasm: tools.wasm,
       disclosure: tools.disclosure,
+      checkpoint: tools.checkpoint,
       computer_use: tools.computer_use
     }
   end

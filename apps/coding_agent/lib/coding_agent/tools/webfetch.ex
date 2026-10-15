@@ -12,14 +12,14 @@ defmodule CodingAgent.Tools.WebFetch do
   Truncated text is retained as a session artifact; `maxChars` controls its preview.
   """
 
-  alias LemonAgent.Types.{AgentTool, AgentToolResult}
-  alias LemonAgent.Security.ExternalContent
   alias CodingAgent.Search.Dispatcher, as: SearchDispatcher
   alias CodingAgent.Search.Registry, as: SearchRegistry
   alias CodingAgent.Search.SingleFlight
   alias CodingAgent.Tools.{ReadPdf, WebCache, WebFetchGitHub}
   alias CodingAgent.Tools.WebGuard
   alias CodingAgent.Utils.Http
+  alias LemonAgent.Security.ExternalContent
+  alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonCore.Secrets
 
   import LemonAgent.Tools.AbortHelpers, only: [check_abort: 1]
@@ -584,18 +584,16 @@ defmodule CodingAgent.Tools.WebFetch do
   end
 
   defp safe_readability_extract(runtime, html, extract_mode, url) do
-    try do
-      runtime.readability_extract.(html, extract_mode, url)
-    rescue
-      error ->
-        {:error, "Readability extraction failed: #{Exception.message(error)}"}
-    catch
-      :exit, reason ->
-        {:error, "Readability extraction failed: #{format_reason(reason)}"}
+    runtime.readability_extract.(html, extract_mode, url)
+  rescue
+    error ->
+      {:error, "Readability extraction failed: #{Exception.message(error)}"}
+  catch
+    :exit, reason ->
+      {:error, "Readability extraction failed: #{format_reason(reason)}"}
 
-      kind, reason ->
-        {:error, "Readability extraction failed (#{kind}): #{format_reason(reason)}"}
-    end
+    kind, reason ->
+      {:error, "Readability extraction failed (#{kind}): #{format_reason(reason)}"}
   end
 
   defp extract_with_readability(html, extract_mode, url) do

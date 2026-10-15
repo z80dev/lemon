@@ -1,8 +1,8 @@
 defmodule CodingAgent.Tools.WebFetchTest do
   use ExUnit.Case, async: false
 
+  alias CodingAgent.Tools.{ReadPdf, WebFetch}
   alias LemonAgent.AbortSignal
-  alias CodingAgent.Tools.WebFetch
 
   setup do
     WebFetch.reset_cache(persistent: false)
@@ -747,7 +747,7 @@ defmodule CodingAgent.Tools.WebFetchTest do
     System.put_env("PATH", operator_bin)
 
     assert {:ok, %{name: :pdftotext, executable: ^executable}} =
-             CodingAgent.Tools.ReadPdf.backend(cwd, pdf_system_only: true)
+             ReadPdf.backend(cwd, pdf_system_only: true)
   end
 
   @tag :tmp_dir
@@ -768,7 +768,7 @@ defmodule CodingAgent.Tools.WebFetchTest do
 
     tool = WebFetch.tool(cwd, http_get: http_get, cache_opts: [persistent: false])
 
-    case CodingAgent.Tools.ReadPdf.backend(cwd, pdf_system_only: true) do
+    case ReadPdf.backend(cwd, pdf_system_only: true) do
       {:ok, %{name: backend}} ->
         result = tool.execute.("id", %{"url" => "https://8.8.8.8/doc.pdf"}, nil, nil)
         assert result.trust == :untrusted

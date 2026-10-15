@@ -3,12 +3,13 @@ defmodule CodingAgent.Tools.Browser do
   Shared browser tool execution over the supervised LemonCore local browser server.
   """
 
+  alias CodingAgent.Tools.PathHelpers
+  alias LemonAgent.Security.ExternalContent
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonAi.Types.{ImageContent, TextContent}
-  alias LemonAgent.Security.ExternalContent
-  alias CodingAgent.Tools.PathHelpers
   alias LemonBrowser.Artifacts
   alias LemonBrowser.RoutePolicy
+  alias LemonSkills.Tools.MediaAnalyzeImage
 
   import LemonAgent.Tools.AbortHelpers, only: [check_abort: 1]
 
@@ -1195,7 +1196,7 @@ defmodule CodingAgent.Tools.Browser do
       |> Map.put("sendToChannel", request.send_to_channel)
       |> Map.put_new("prompt", "Summarize the current browser screenshot.")
 
-    tool = LemonSkills.Tools.MediaAnalyzeImage.tool(cwd, Map.get(runtime, :tool_opts, []))
+    tool = MediaAnalyzeImage.tool(cwd, Map.get(runtime, :tool_opts, []))
 
     case tool.execute.("browser-analyze", media_params, signal, nil) do
       %AgentToolResult{} = result -> {:ok, result.details}
@@ -1782,149 +1783,151 @@ end
 
 defmodule CodingAgent.Tools.BrowserNavigate do
   @moduledoc false
-  def tool(cwd, opts \\ []),
-    do: CodingAgent.Tools.Browser.tool(cwd, opts, CodingAgent.Tools.Browser.spec(:navigate))
+  alias CodingAgent.Tools.Browser
+  def tool(cwd, opts \\ []), do: Browser.tool(cwd, opts, Browser.spec(:navigate))
 end
 
 defmodule CodingAgent.Tools.BrowserTabs do
   @moduledoc false
-  def tool(cwd, opts \\ []),
-    do: CodingAgent.Tools.Browser.tool(cwd, opts, CodingAgent.Tools.Browser.spec(:tabs))
+  alias CodingAgent.Tools.Browser
+  def tool(cwd, opts \\ []), do: Browser.tool(cwd, opts, Browser.spec(:tabs))
 end
 
 defmodule CodingAgent.Tools.BrowserTabOpen do
   @moduledoc false
-  def tool(cwd, opts \\ []),
-    do: CodingAgent.Tools.Browser.tool(cwd, opts, CodingAgent.Tools.Browser.spec(:tab_open))
+  alias CodingAgent.Tools.Browser
+  def tool(cwd, opts \\ []), do: Browser.tool(cwd, opts, Browser.spec(:tab_open))
 end
 
 defmodule CodingAgent.Tools.BrowserTabActivate do
   @moduledoc false
-  def tool(cwd, opts \\ []),
-    do: CodingAgent.Tools.Browser.tool(cwd, opts, CodingAgent.Tools.Browser.spec(:tab_activate))
+  alias CodingAgent.Tools.Browser
+  def tool(cwd, opts \\ []), do: Browser.tool(cwd, opts, Browser.spec(:tab_activate))
 end
 
 defmodule CodingAgent.Tools.BrowserTabClose do
   @moduledoc false
-  def tool(cwd, opts \\ []),
-    do: CodingAgent.Tools.Browser.tool(cwd, opts, CodingAgent.Tools.Browser.spec(:tab_close))
+  alias CodingAgent.Tools.Browser
+  def tool(cwd, opts \\ []), do: Browser.tool(cwd, opts, Browser.spec(:tab_close))
 end
 
 defmodule CodingAgent.Tools.BrowserSnapshot do
   @moduledoc false
-  def tool(cwd, opts \\ []),
-    do: CodingAgent.Tools.Browser.tool(cwd, opts, CodingAgent.Tools.Browser.spec(:snapshot))
+  alias CodingAgent.Tools.Browser
+  def tool(cwd, opts \\ []), do: Browser.tool(cwd, opts, Browser.spec(:snapshot))
 end
 
 defmodule CodingAgent.Tools.BrowserGetContent do
   @moduledoc false
-  def tool(cwd, opts \\ []),
-    do: CodingAgent.Tools.Browser.tool(cwd, opts, CodingAgent.Tools.Browser.spec(:get_content))
+  alias CodingAgent.Tools.Browser
+  def tool(cwd, opts \\ []), do: Browser.tool(cwd, opts, Browser.spec(:get_content))
 end
 
 defmodule CodingAgent.Tools.BrowserClick do
   @moduledoc false
-  def tool(cwd, opts \\ []),
-    do: CodingAgent.Tools.Browser.tool(cwd, opts, CodingAgent.Tools.Browser.spec(:click))
+  alias CodingAgent.Tools.Browser
+  def tool(cwd, opts \\ []), do: Browser.tool(cwd, opts, Browser.spec(:click))
 end
 
 defmodule CodingAgent.Tools.BrowserType do
   @moduledoc false
-  def tool(cwd, opts \\ []),
-    do: CodingAgent.Tools.Browser.tool(cwd, opts, CodingAgent.Tools.Browser.spec(:type))
+  alias CodingAgent.Tools.Browser
+  def tool(cwd, opts \\ []), do: Browser.tool(cwd, opts, Browser.spec(:type))
 end
 
 defmodule CodingAgent.Tools.BrowserHover do
   @moduledoc false
-  def tool(cwd, opts \\ []),
-    do: CodingAgent.Tools.Browser.tool(cwd, opts, CodingAgent.Tools.Browser.spec(:hover))
+  alias CodingAgent.Tools.Browser
+  def tool(cwd, opts \\ []), do: Browser.tool(cwd, opts, Browser.spec(:hover))
 end
 
 defmodule CodingAgent.Tools.BrowserSelectOption do
   @moduledoc false
-  def tool(cwd, opts \\ []),
-    do: CodingAgent.Tools.Browser.tool(cwd, opts, CodingAgent.Tools.Browser.spec(:select_option))
+  alias CodingAgent.Tools.Browser
+  def tool(cwd, opts \\ []), do: Browser.tool(cwd, opts, Browser.spec(:select_option))
 end
 
 defmodule CodingAgent.Tools.BrowserUploadFile do
   @moduledoc false
-  def tool(cwd, opts \\ []),
-    do: CodingAgent.Tools.Browser.tool(cwd, opts, CodingAgent.Tools.Browser.spec(:upload_file))
+  alias CodingAgent.Tools.Browser
+  def tool(cwd, opts \\ []), do: Browser.tool(cwd, opts, Browser.spec(:upload_file))
 end
 
 defmodule CodingAgent.Tools.BrowserDownload do
   @moduledoc false
-  def tool(cwd, opts \\ []),
-    do: CodingAgent.Tools.Browser.tool(cwd, opts, CodingAgent.Tools.Browser.spec(:download))
+  alias CodingAgent.Tools.Browser
+  def tool(cwd, opts \\ []), do: Browser.tool(cwd, opts, Browser.spec(:download))
 end
 
 defmodule CodingAgent.Tools.BrowserPress do
   @moduledoc false
-  def tool(cwd, opts \\ []),
-    do: CodingAgent.Tools.Browser.tool(cwd, opts, CodingAgent.Tools.Browser.spec(:press))
+  alias CodingAgent.Tools.Browser
+  def tool(cwd, opts \\ []), do: Browser.tool(cwd, opts, Browser.spec(:press))
 end
 
 defmodule CodingAgent.Tools.BrowserScroll do
   @moduledoc false
-  def tool(cwd, opts \\ []),
-    do: CodingAgent.Tools.Browser.tool(cwd, opts, CodingAgent.Tools.Browser.spec(:scroll))
+  alias CodingAgent.Tools.Browser
+  def tool(cwd, opts \\ []), do: Browser.tool(cwd, opts, Browser.spec(:scroll))
 end
 
 defmodule CodingAgent.Tools.BrowserBack do
   @moduledoc false
-  def tool(cwd, opts \\ []),
-    do: CodingAgent.Tools.Browser.tool(cwd, opts, CodingAgent.Tools.Browser.spec(:back))
+  alias CodingAgent.Tools.Browser
+  def tool(cwd, opts \\ []), do: Browser.tool(cwd, opts, Browser.spec(:back))
 end
 
 defmodule CodingAgent.Tools.BrowserWaitForSelector do
   @moduledoc false
+  alias CodingAgent.Tools.Browser
+
   def tool(cwd, opts \\ []),
     do:
-      CodingAgent.Tools.Browser.tool(
+      Browser.tool(
         cwd,
         opts,
-        CodingAgent.Tools.Browser.spec(:wait_for_selector)
+        Browser.spec(:wait_for_selector)
       )
 end
 
 defmodule CodingAgent.Tools.BrowserEvaluate do
   @moduledoc false
-  def tool(cwd, opts \\ []),
-    do: CodingAgent.Tools.Browser.tool(cwd, opts, CodingAgent.Tools.Browser.spec(:evaluate))
+  alias CodingAgent.Tools.Browser
+  def tool(cwd, opts \\ []), do: Browser.tool(cwd, opts, Browser.spec(:evaluate))
 end
 
 defmodule CodingAgent.Tools.BrowserEvents do
   @moduledoc false
-  def tool(cwd, opts \\ []),
-    do: CodingAgent.Tools.Browser.tool(cwd, opts, CodingAgent.Tools.Browser.spec(:events))
+  alias CodingAgent.Tools.Browser
+  def tool(cwd, opts \\ []), do: Browser.tool(cwd, opts, Browser.spec(:events))
 end
 
 defmodule CodingAgent.Tools.BrowserGetCookies do
   @moduledoc false
-  def tool(cwd, opts \\ []),
-    do: CodingAgent.Tools.Browser.tool(cwd, opts, CodingAgent.Tools.Browser.spec(:get_cookies))
+  alias CodingAgent.Tools.Browser
+  def tool(cwd, opts \\ []), do: Browser.tool(cwd, opts, Browser.spec(:get_cookies))
 end
 
 defmodule CodingAgent.Tools.BrowserSetCookies do
   @moduledoc false
-  def tool(cwd, opts \\ []),
-    do: CodingAgent.Tools.Browser.tool(cwd, opts, CodingAgent.Tools.Browser.spec(:set_cookies))
+  alias CodingAgent.Tools.Browser
+  def tool(cwd, opts \\ []), do: Browser.tool(cwd, opts, Browser.spec(:set_cookies))
 end
 
 defmodule CodingAgent.Tools.BrowserClearState do
   @moduledoc false
-  def tool(cwd, opts \\ []),
-    do: CodingAgent.Tools.Browser.tool(cwd, opts, CodingAgent.Tools.Browser.spec(:clear_state))
+  alias CodingAgent.Tools.Browser
+  def tool(cwd, opts \\ []), do: Browser.tool(cwd, opts, Browser.spec(:clear_state))
 end
 
 defmodule CodingAgent.Tools.BrowserScreenshot do
   @moduledoc false
-  def tool(cwd, opts \\ []),
-    do: CodingAgent.Tools.Browser.tool(cwd, opts, CodingAgent.Tools.Browser.spec(:screenshot))
+  alias CodingAgent.Tools.Browser
+  def tool(cwd, opts \\ []), do: Browser.tool(cwd, opts, Browser.spec(:screenshot))
 end
 
 defmodule CodingAgent.Tools.BrowserAnalyze do
   @moduledoc false
-  def tool(cwd, opts \\ []),
-    do: CodingAgent.Tools.Browser.tool(cwd, opts, CodingAgent.Tools.Browser.spec(:analyze))
+  alias CodingAgent.Tools.Browser
+  def tool(cwd, opts \\ []), do: Browser.tool(cwd, opts, Browser.spec(:analyze))
 end
