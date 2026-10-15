@@ -5,10 +5,10 @@ import { ErrorNotice, Field, Loading, PageHeader, useQuery } from '../../ui';
 import { Check, collect, IntentNotice, Selection, useIntent } from './shared';
 
 export function GroupScreen({ id }: { id?: string }) {
-  const { client } = useApp();
+  const { client, navigate } = useApp();
   const group = useQuery(`group:${id ?? 'new'}`, () => id ? client.call('GET /conversations/:id', { params: { id } }) : Promise.resolve(undefined));
   if (id && !group.data) return <main className="page"><ErrorNotice error={group.error} />{group.loading && <Loading />}<button onClick={() => void group.reload()}>Reload group</button></main>;
-  if (group.data && group.data.kind !== 'group') return <main className="page"><p className="error-notice">This resource is not a group.</p></main>;
+  if (group.data && group.data.kind !== 'group') return <main className="page"><p className="error-notice">This isn’t a group chat.</p><button onClick={() => navigate({ screen: 'home' })}>Back to Bots</button></main>;
   return <GroupEditor key={id ?? 'new'} group={group.data} reload={group.reload} />;
 }
 function GroupEditor({ group, reload }: { group?: Conversation; reload: () => Promise<void> }) {

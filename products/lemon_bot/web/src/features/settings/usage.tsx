@@ -24,7 +24,7 @@ export function UsageSettings() {
   return <div className="stack">
     <section className="panel stack">
       <h2>Actual provider usage</h2>
-      <p className="muted">Your workspace usage · Routines and tests, group work and Bot handoffs count toward their recorded initiating user/routine. No Lemon subscription or billing plan is sold here.</p>
+      <p className="muted">Usage counts all work you start, including routines, tests, group chats and handoffs between Bots. Lemon Bot doesn’t sell a subscription; you pay your model providers directly.</p>
       <form className="stack" onSubmit={e => {
         e.preventDefault();
         const fromAtMs = Date.parse(`${from}T00:00:00Z`); const toAtMs = Date.parse(`${to}T00:00:00Z`);
@@ -57,9 +57,9 @@ export function UsageSettings() {
           <article className="card"><span className="muted">Input tokens</span><strong>{report.data.totals.inputTokens.toLocaleString()}</strong></article>
           <article className="card"><span className="muted">Output tokens</span><strong>{report.data.totals.outputTokens.toLocaleString()}</strong></article>
           <article className="card"><span className="muted">Requests</span><strong>{report.data.totals.requests.toLocaleString()}</strong></article>
-          <article className="card"><span className="muted">Measured cost</span><strong>{money(report.data.totals.costUsd)}</strong></article>
+          <article className="card"><span className="muted">Measured cost</span><strong>{report.data.incomplete ? 'Partial · ' : ''}{money(report.data.totals.costUsd)}</strong>{report.data.incomplete && <span className="muted small">Some providers’ prices are unknown.</span>}</article>
         </div>
-        <p className="muted small">Pricing source: {report.data.pricingSource ?? 'Not available — unknown prices remain unknown'}. External provider billing is authoritative; already admitted work may continue after a ceiling.</p>
+        <p className="muted small">{report.data.pricingSource ? `Prices come from ${report.data.pricingSource}. Your provider’s invoice is the final word.` : 'Prices are unavailable, so costs are shown as unknown, not $0.'} Work already started can finish even after a limit is reached.</p>
       </section>
       <section className="panel stack">
         <h2>Tokens by {labels[query.groupBy ?? 'bot'].toLowerCase()}</h2>

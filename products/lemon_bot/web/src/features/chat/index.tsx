@@ -5,7 +5,7 @@ import { useApp } from '../../app';
 import type { Route } from '../../app';
 import { AlertCircle, ArrowDown, Hand, Check, ChevronLeft, ChevronRight, CircleStop, Copy, MoreHorizontal, Reply, Search, Square, ThumbsUp, Wrench, X } from 'lucide-react';
 import { BotAvatar, EmptyState, ErrorNotice, Field, LemonFace, Loading, PageHeader, botStyle, formatTime, useQuery } from '../../ui';
-import { compactDuration, currentStep, humanize, liveRunStatuses, plainLine, relativeTime, separatorDate, stoppableRunStatuses, toolIcon } from '../../live';
+import { compactDuration, currentStep, humanize, liveRunStatuses, plainLine, relativeTime, separatorDate, stoppableRunStatuses, toolIcon, voiceStateLabels } from '../../live';
 import { TranscriptCard } from './cards';
 import { Composer } from './composer';
 import { BotPanel, type PanelTab } from './panel';
@@ -50,9 +50,10 @@ function EntryActions({ entry, changed, reply }: { entry: TranscriptEntry; chang
       <details className="chat-more-actions" ref={more}><summary aria-label="More actions" title="More"><MoreHorizontal size={15}/></summary><div className="menu" role="menu">
         <div className="menu-reactions">{moreReactions.map(emoji => { const own = !!entry.reactions.find(item => item.emoji === emoji)?.userIds.includes(snapshot.user.id); return <button key={emoji} role="menuitem" aria-label={`${own ? 'Remove' : 'Add'} ${emoji} reaction`} aria-pressed={own} disabled={reactionDisabled} onClick={() => { react(emoji, own); closeMore(); }}>{emoji}</button>; })}</div>
         {entry.actor.kind === 'bot' && <button role="menuitem" onClick={() => { setShowFeedback(true); closeMore(); }}>Give feedback</button>}
-        <button role="menuitem" onClick={() => { void copyText(entry.id).catch(reportError); closeMore(); }}>Copy message ID</button>
+        <button role="menuitem" onClick={() => { const link = new URL('/', location.origin); link.hash = new URLSearchParams({ screen: 'conversation', id: entry.conversationId, entryId: entry.id }).toString(); void copyText(link.href).catch(reportError); closeMore(); }}>Copy link to message</button>
       </div></details>
     </div>
+    {copied && <span className="sr-only" role="status">Message copied.</span>}
     {entry.reactions.some(reaction => reaction.userIds.length > 0) && <div className="chat-reactions">{entry.reactions.filter(reaction => reaction.userIds.length > 0).map(reaction => { const own = reaction.userIds.includes(snapshot.user.id); return <button key={reaction.emoji} className={own ? 'own' : ''} aria-pressed={own} aria-label={`${reaction.emoji} ${reaction.userIds.length}. ${own ? 'Remove your reaction' : 'Add reaction'}`} disabled={reactionDisabled} onClick={() => react(reaction.emoji, own)}>{reaction.emoji}{reaction.userIds.length > 1 && <span>{reaction.userIds.length}</span>}</button>; })}</div>}
     <IntentNotice intent={intent} reconcile={async () => changed(await client.call('GET /entries/:id', { params: { id: entry.id } }))} />
     {showFeedback && <form className="chat-feedback stack" onSubmit={event => { event.preventDefault(); void intent.run(async () => { await client.call('POST /entries/:id/feedback', { params: { id: entry.id }, body: { clientNonce: nonce(), sentiment, reasons, comment } }); setFeedbackSent(true); }); }}><Field label="Feedback"><select value={sentiment} onChange={event => setSentiment(event.target.value as FeedbackCreate['sentiment'])}><option value="good">Good</option><option value="bad">Bad</option></select></Field><fieldset><legend>Reasons (optional)</legend>{(['not_requested', 'inaccurate', 'low_quality', 'slow'] as const).map(reason => <label key={reason} className="row"><input type="checkbox" checked={reasons.includes(reason)} onChange={event => setReasons(current => event.target.checked ? [...current, reason] : current.filter(value => value !== reason))} />{reason.replaceAll('_', ' ')}</label>)}</fieldset><Field label="Comment"><textarea value={comment} onChange={event => setComment(event.target.value)} /></Field><div className="row"><button className="pill-button primary" disabled={!online || intent.busy || intent.uncertain}>Save feedback</button><button type="button" className="pill-button secondary" onClick={() => setShowFeedback(false)}>Close</button></div>{feedbackSent && <p role="status">Thanks — your feedback was saved. It does not approve an action.</p>}</form>}
@@ -66,7 +67,8 @@ function CopyValue({ label, value }: { label: string; value: string }) {
 /** Failed, stopped or unconfirmed run: one quiet left-aligned row. IDs appear only inside Details. */
 export function RunOutcomeRow({ run, retryText, showTime = false }: { run: Run; retryText?: string; showTime?: boolean }) {
   const [open, setOpen] = useState(false);
-  const label = run.status === 'cancelled' ? 'Stopped.' : run.status === 'outcome_unknown' ? 'Not sure this finished.' : 'Couldn’t finish this.';
+  const { navigate } = useApp();
+  const label = run.status === 'cancelled' ? 'Stopped.' : run.status === 'outcome_unknown' ? 'Status unknown' : 'Couldn’t finish this.';
   const canRetry = retryText !== undefined && run.status === 'failed' && !!run.error?.retrySafe;
   return <div className={`chat-outcome ${run.status}`} role="status">
     <div className="chat-outcome-line">
@@ -75,11 +77,11 @@ export function RunOutcomeRow({ run, retryText, showTime = false }: { run: Run; 
       <button className="chat-link" aria-expanded={open} onClick={() => setOpen(!open)}>Details</button>
       {showTime && <span className="chat-outcome-time">{relativeTime(run.completedAtMs ?? run.updatedAtMs)}</span>}
     </div>
+    {run.status === 'outcome_unknown' && <p>The Bot may have finished this. <button className="chat-link" onClick={() => navigate({ screen: 'activity', botId: run.botId })}>Check Activity</button> before asking again.</p>}
     {open && <div className="chat-outcome-box">
       {run.error && <p>{run.error.message}</p>}
       {run.status === 'cancelled' && <p>Stopped at your request. Anything already done was not undone.</p>}
-      {run.status === 'outcome_unknown' && <p>Work may already have happened. Check Activity before asking again.</p>}
-      <dl><dt>Status</dt><dd>{({ failed: 'Couldn’t finish', cancelled: 'Stopped', outcome_unknown: 'Unconfirmed' } as Record<string, string>)[run.status] || run.status}{run.error && <span className="faint"> · {run.error.code.replaceAll('_', ' ')}</span>}</dd>
+      <dl><dt>Status</dt><dd>{({ failed: 'Couldn’t finish', cancelled: 'Stopped', outcome_unknown: 'Status unknown' } as Record<string, string>)[run.status] || humanize(run.status)}{run.error && <span className="faint"> · {run.error.code.replaceAll('_', ' ')}</span>}</dd>
         {run.error?.requestId && <CopyValue label="Request ID" value={run.error.requestId}/>}
         <CopyValue label="Run ID" value={run.id}/></dl>
     </div>}
@@ -120,11 +122,11 @@ function EntryView({ entry, attachments, jump, reply, changed, context }: { entr
     }
     case 'user_attachment': content = <AttachmentLink id={entry.attachmentId} />; break;
     case 'tool_call': return <ToolGroup tools={[entry]}/>;
-    case 'mcp_app': shape = 'card'; content = <div className="stack"><h3>App snapshot</h3><span className="badge">{entry.state}</span><p>{entry.resourceUri}</p>{entry.state === 'available' && entry.snapshotAttachmentId ? <AttachmentLink id={entry.snapshotAttachmentId} /> : <p className="muted">Snapshot unavailable or expired. Ask the Bot to rerun it; opening this row executes nothing.</p>}<button className="pill-button secondary" onClick={() => navigate({ screen: 'connect.apps', id: entry.connectorId })}>Inspect connector</button></div>; break;
+    case 'mcp_app': shape = 'card'; content = <div className="stack"><h3>App snapshot</h3><span className="badge">{entry.state === 'available' ? 'Ready' : entry.state === 'expired' ? 'Expired' : 'Unavailable'}</span><details><summary>Details</summary><p>{entry.resourceUri}</p></details>{entry.state === 'available' && entry.snapshotAttachmentId ? <AttachmentLink id={entry.snapshotAttachmentId}/> : <p className="muted">This snapshot is no longer available. Ask the Bot to run it again.</p>}<button className="pill-button secondary" onClick={() => navigate({ screen: 'connect.apps', id: entry.connectorId })}>Open connection</button></div>; break;
     case 'notice': if (entry.severity === 'info' && !entry.requestId) { shape = 'system'; content = <div className="chat-event"><span>{entry.text}</span></div>; } else { shape = 'outcome'; content = <NoticeRow text={entry.text} severity={entry.severity} requestId={entry.requestId}/>; } break;
     case 'event': shape = 'system'; content = <div className="chat-event"><EventLine event={entry.event} /></div>; break;
-    case 'feedback': shape = 'system'; content = <div className="chat-event"><span>Feedback · {entry.feedback.sentiment}{entry.feedback.reasons.length > 0 && ` · ${entry.feedback.reasons.map(reason => reason.replaceAll('_', ' ')).join(', ')}`}{entry.feedback.comment && ` · “${entry.feedback.comment}”`}</span></div>; break;
-    case 'voice_call': shape = 'card'; content = <div className="stack"><h3>Voice chat · {entry.voiceSession.state}</h3><p>{Math.floor(entry.voiceSession.durationMs / 1000)}s · ended {formatTime(entry.voiceSession.endedAtMs)}</p><div className="row">{entry.voiceSession.transcriptEntryIds.map((id, index) => <button key={id} className="pill-button secondary compact" onClick={() => jump(id)}>Transcript {index + 1}</button>)}</div></div>; break;
+    case 'feedback': shape = 'system'; content = <div className="chat-event"><span>Thanks for the feedback.{entry.feedback.comment && ` “${entry.feedback.comment}”`}</span></div>; break;
+    case 'voice_call': shape = 'card'; content = <div className="stack"><h3>{voiceStateLabels[entry.voiceSession.state]}</h3><p>{Math.floor(entry.voiceSession.durationMs / 1000)}s{entry.voiceSession.endedAtMs !== null && ` · ended ${formatTime(entry.voiceSession.endedAtMs)}`}</p><div className="row">{entry.voiceSession.transcriptEntryIds.map((id, index) => <button key={id} className="pill-button secondary compact" onClick={() => jump(id)}>Transcript {index + 1}</button>)}</div></div>; break;
     default: shape = 'system'; content = <p className="error-notice">Unsupported transcript entry. Update this client.</p>;
   }
   const when = formatTime(entry.timestampMs);
@@ -134,7 +136,7 @@ function EntryView({ entry, attachments, jump, reply, changed, context }: { entr
   return <article className={`chat-entry ${mine ? 'chat-user-entry' : 'chat-bot-entry'} ${context.grouped ? 'grouped' : ''} ${shape === 'card' ? 'chat-card-entry' : ''}`} {...anchor} aria-label={`${entry.actor.displayName}, ${when}`} onMouseEnter={event => { const article = event.currentTarget; const bubble = article.querySelector<HTMLElement>(':scope > .chat-bubble, :scope > .chat-card'); const toolbar = article.querySelector<HTMLElement>(':scope > .chat-actions'); const column = article.closest<HTMLElement>('.chat-transcript'); if (!bubble || !toolbar || !column) return; const box = bubble.getBoundingClientRect(), area = column.getBoundingClientRect(); const room = mine ? box.left - area.left : area.right - box.right; article.dataset.actions = room >= toolbar.offsetWidth + 12 ? 'side' : 'below'; }} onContextMenu={event => { if (matchMedia('(hover: none)').matches) { event.preventDefault(); event.currentTarget.classList.add('actions-open'); } }} onTouchStart={event => { const target = event.currentTarget; const timer = window.setTimeout(() => { target.classList.add('actions-open'); const close = (outside: Event) => { if (!target.contains(outside.target as Node)) { target.classList.remove('actions-open'); document.removeEventListener('touchstart', close); } }; document.addEventListener('touchstart', close); }, 450); const cancel = () => { clearTimeout(timer); target.removeEventListener('touchend', cancel); target.removeEventListener('touchmove', cancel); }; target.addEventListener('touchend', cancel); target.addEventListener('touchmove', cancel); }}>
     {context.showName && !context.grouped && !mine && <header className="chat-name">{entry.actor.displayName}</header>}
     {entry.replyToEntryId && <ReplyQuote id={entry.replyToEntryId} jump={jump} />}
-    <div className={shape === 'card' ? 'chat-card' : 'chat-bubble'} title={when}>{content}</div>
+    <div className={shape === 'card' ? 'chat-card' : 'chat-bubble'} title={when} onClick={event => { if (matchMedia('(pointer: coarse)').matches && event.target instanceof Element && !event.target.closest('button,a,input,textarea,select,summary')) event.currentTarget.parentElement?.focus({ preventScroll: true }); }}>{content}</div>
     <time className="sr-only" dateTime={new Date(entry.timestampMs).toISOString()}>{when}</time>
     {actions && <EntryActions entry={entry} changed={changed} reply={reply} />}
   </article>;
@@ -265,13 +267,9 @@ function ConversationBody({ id, route }: { id: string; route: Route }) {
         <div className="menu" role="menu" onClick={event => { if ((event.target as Element).closest('button')) headerMenu.current?.removeAttribute('open'); }}>
           <button role="menuitem" onClick={() => setPanel('details')}>Details, media and export</button>
           <button role="menuitem" onClick={() => { setFindOpen(true); requestAnimationFrame(() => findInput.current?.focus()); }}>Find in chat<kbd>⌘F</kbd></button>
-          <button role="menuitem" onClick={() => navigate({ screen: 'search', tab: 'message' })}>Search this chat…</button>
-          <button role="menuitem" onClick={() => setPanel('details')}>New task</button>
           {conversation?.kind === 'group' && <button role="menuitem" onClick={() => navigate({ screen: 'group.edit', id })}>Edit group members</button>}
           <button role="menuitem" disabled={!online || !conversation} onClick={() => conversation && void client.call('POST /conversations/:id/read', { params: { id }, body: { clientNonce: nonce(), throughSeq: Math.max(0, lastRead.current - 1), unread: true } }).then(conversationQuery.setData).catch(setPageError)}>Mark unread</button>
           {stoppable.some(run => run.status !== 'outcome_unknown') && <button role="menuitem" disabled={!online || stopIntent.busy || stopIntent.uncertain} onClick={stopAll}>Stop</button>}
-          <hr/>
-          <button role="menuitem" className="danger-text" onClick={() => setPanel('details')}>Delete conversation…</button>
         </div>
       </details>
     </header>
@@ -279,18 +277,18 @@ function ConversationBody({ id, route }: { id: string; route: Route }) {
       <form onSubmit={event => { event.preventDefault(); setFindQuery(find.trim()); }}><Search size={15} aria-hidden="true"/><label className="sr-only" htmlFor={`find-${id}`}>Find in this conversation</label><input id={`find-${id}`} ref={findInput} autoFocus placeholder="Find in chat" value={find} maxLength={512} onChange={event => setFind(event.target.value)} onKeyDown={event => { if (event.key === 'Escape') { setFindOpen(false); setFind(''); setFindQuery(''); } }} /><button type="button" className="ghost-mini" aria-label="Close find" onClick={() => { setFindOpen(false); setFind(''); setFindQuery(''); }}><X size={14}/></button></form>
       {findQuery && <div className="chat-find-results"><ErrorNotice error={search.error} />{search.loading && <Loading />}{search.data?.items.map(hit => hit.kind === 'message' && <button key={hit.entry.id} onClick={() => void jump(hit.entry.id)}><strong>{hit.entry.actor.displayName}</strong> {hit.snippet}</button>)}{search.data && !search.data.items.length && <p className="muted">No matches.</p>}</div>}
     </div>}
-    <ErrorNotice error={conversationQuery.error || history.error || runQuery.error} />
-    {conversationQuery.loading && !conversation && <Loading />}
+    {!!(conversationQuery.error || history.error || runQuery.error) && <div className="chat-load-notice stack"><ErrorNotice error={conversationQuery.error || history.error || runQuery.error}/><button className="pill-button secondary" onClick={() => void Promise.all([conversationQuery.reload(), history.reload(), runQuery.reload()]).then(() => setLiveError(undefined)).catch(setLiveError)}>Try again</button></div>}
+    {conversationQuery.loading && !conversation && <Loading label="Loading conversation…"/>}
     {conversation && <div className={`chat-layout ${panel ? 'with-panel' : ''}`}>
       <div className="chat-main">
         <div className="chat-transcript" ref={scroller} onScroll={() => { const element = scroller.current; if (element) { pinned.current = element.scrollHeight - element.scrollTop - element.clientHeight < 100; if (pinned.current) setNewBelow(false); } }} aria-label="Conversation transcript">
           <div className={`chat-column ${settled ? 'settled' : ''}`}>
             {(older || jumped) && <div className="chat-paging">{older && <button disabled={paging || !online} onClick={() => void loadOlder()}>{paging ? 'Loading…' : 'Load earlier messages'}</button>}{jumped && <button onClick={() => void latest().catch(setPageError)}>Jump to latest</button>}</div>}
-            <ErrorNotice error={pageError || liveError || readError} />
-            {!!readError && <button className="pill-button secondary compact" onClick={() => { void client.call('GET /conversations/:id', { params: { id } }).then(actual => { lastRead.current = actual.lastReadSeq; conversationQuery.setData(actual); setReadError(undefined); readFailure.current = false; visibleThrough.current = actual.lastReadSeq; }).catch(setReadError); }}>Reconcile read marker (does not resolve gates)</button>}
-            {!!liveError && <button className="pill-button secondary compact" onClick={() => void history.reload().then(() => setLiveError(undefined)).catch(setLiveError)}>Reload messages</button>}
-            {history.loading && !entries.length && <Loading />}
-            {!history.loading && !history.error && !entries.length && <div className="chat-empty">{leadBot ? <BotAvatar bot={leadBot} size={72}/> : <LemonFace size={72}/>}<h2>{title}</h2><p className="muted">{leadBot?.job || leadBot?.title || 'Messages, files, questions and real work will appear here.'}</p></div>}
+            <ErrorNotice error={pageError || (!history.error && liveError) || readError}/>
+            {!!readError && <div className="stack"><p>Couldn’t save your place.</p><button className="pill-button secondary compact" onClick={() => { void client.call('GET /conversations/:id', { params: { id } }).then(actual => { lastRead.current = actual.lastReadSeq; conversationQuery.setData(actual); setReadError(undefined); readFailure.current = false; visibleThrough.current = actual.lastReadSeq; }).catch(setReadError); }}>Check saved place</button></div>}
+            {!!liveError && !history.error && <button className="pill-button secondary compact" onClick={() => void history.reload().then(() => setLiveError(undefined)).catch(setLiveError)}>Reload messages</button>}
+            {history.loading && !entries.length && <Loading label="Loading messages…"/>}
+            {!history.loading && !history.error && !entries.length && !step && !liveRuns.length && <div className="chat-empty">{leadBot ? <BotAvatar bot={leadBot} size={72}/> : <LemonFace size={72}/>}<h2>{title}</h2><p className="muted">{leadBot?.job || leadBot?.title || 'Messages, files and work will appear here.'}</p></div>}
             {entries.map((entry, index) => {
               if (entry.kind === 'user_attachment' && entry.batchId && entries.some(item => item.kind === 'message' && item.batchId === entry.batchId)) return null;
               if (entry.targetedUserId && entry.targetedUserId !== snapshot.user.id) return null;

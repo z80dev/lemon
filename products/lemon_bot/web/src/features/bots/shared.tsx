@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { LemonBotError, type Bot, type Machine, type Page } from '@lemon-bot/sdk';
 import { useApp } from '../../app';
-import { ErrorNotice, Field, Loading, useAction, useQuery } from '../../ui';
+import { ErrorNotice, Field, Loading, RecoveryNotice, useAction, useQuery } from '../../ui';
 
 export async function collect<T extends { id: string }>(load: (cursor?: string) => Promise<Page<T>>): Promise<T[]> {
   const items = new Map<string, T>();
@@ -24,7 +24,7 @@ export function useIntent(): Intent {
   return { ...action, uncertain, disabled: !online || action.busy || uncertain,
     markUnknown: () => setUncertain(true),
     run: <T,>(fn: () => Promise<T>) => action.run(async () => {
-      if (!online || uncertain) throw new Error('Offline or unresolved outcome. Reconcile before another intent.');
+      if (!online || uncertain) throw new Error('Reconnect and check the current status before making another change.');
       try { return await fn(); } catch (error) {
         if (!(error instanceof LemonBotError) || error.outcomeUnknown || !error.retrySafe) setUncertain(true);
         throw error;
@@ -34,7 +34,7 @@ export function useIntent(): Intent {
 }
 export function IntentNotice({ intent, reconcile }: { intent: Intent; reconcile?: () => Promise<unknown> }) {
   const read = useAction();
-  return <><ErrorNotice error={intent.error} /><ErrorNotice error={read.error} />{intent.uncertain && <div className="error-notice" role="status"><strong>Outcome unresolved — not success.</strong><p>Your input is retained. This operation will not be replayed. Inspect authoritative state and any resource IDs in the error before making a new intent.</p>{reconcile && <button disabled={read.busy} onClick={() => void read.run(reconcile)}>Reload authoritative state (read only)</button>}</div>}</>;
+  return <><ErrorNotice error={read.error}/><RecoveryNotice error={intent.error} uncertain={intent.uncertain} busy={read.busy} onCheck={reconcile ? () => read.run(reconcile) : undefined}/></>;
 }
 export function Check({ checked, onChange, children, disabled = false }: { checked: boolean; onChange: (value: boolean) => void; children: ReactNode; disabled?: boolean }) {
   return <label className="row"><input type="checkbox" checked={checked} disabled={disabled} onChange={event => onChange(event.target.checked)} />{children}</label>;

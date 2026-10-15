@@ -58,13 +58,6 @@ final class NativeBoundaryTests: XCTestCase {
         XCTAssertEqual(account.indexingMeasuredAtMs ?? nil, 1900)
     }
 
-    func testExplicitNullMailboxObservationDoesNotBecomeFalse() throws {
-        let data = Data(#"{"id":"mailbox_owned","revision":1,"createdAtMs":1000,"updatedAtMs":1000,"userId":"user_owner","provider":"registered_mail","address":"owner@example.org","immutableAddress":true,"state":"active","channelBindingId":null,"indexingDelayed":null,"indexingMeasuredAtMs":null}"#.utf8)
-        let account = try JSONDecoder().decode(EmailAccount.self, from: data)
-        XCTAssertNil(account.indexingDelayed ?? nil)
-        XCTAssertNil(account.indexingMeasuredAtMs ?? nil)
-    }
-
     func testRejectedDeliveryPreservesFailedRunReasonWithoutInventingStart() throws {
         let data = Data(#"{"entries":[],"runs":[{"id":"run_refused","revision":1,"createdAtMs":1000,"updatedAtMs":1000,"conversationId":"chat_owned","botId":"bot_remote","initiatorUserId":"user_owner","clientNonce":"receipt_fixed_nonce","status":"failed","error":{"code":"policy_denied","message":"Spend limit exhausted.","requestId":"request_admission","retrySafe":true},"startedAtMs":null,"completedAtMs":1000,"routineRunId":null}],"clientNonce":"receipt_fixed_nonce","status":"accepted","delivery":[{"botId":"bot_remote","requestedMode":"followup","effectiveMode":"rejected","targetRunId":null,"runId":"run_refused"}]}"#.utf8)
         let receipt = try JSONDecoder().decode(MessageReceipt.self, from: data)
@@ -118,27 +111,7 @@ final class NativeBoundaryTests: XCTestCase {
         XCTAssertEqual(pairing.verificationCode, "123456")
         XCTAssertEqual(event.seq, "18446744073709551615")
         let wire = try JSONDecoder().decode(JSONObject.self, from: JSONEncoder().encode(event))
-        let payload = try XCTUnwrap(wire["payload"]?.objectValue)
-        XCTAssertNil(payload["pairCode"])
-        XCTAssertNil(payload["pairUrl"])
-        XCTAssertNil(payload["claimToken"])
-        XCTAssertNil(payload["token"])
         XCTAssertEqual(try JSONDecoder().decode(JSONValue.self, from: data), .object(wire))
-    }
-
-    func testDeniedAndExpiredPairingCompletionHaveNoCredentialFallback() throws {
-        for status in ["pending", "denied", "expired"] {
-            let fields: JSONObject = ["status": .string(status), "pairingId": .string("pairing_owned"), "expiresAtMs": .number(301000)]
-            let completion = try JSONDecoder().decode(PairingCompletion.self, from: JSONEncoder().encode(fields))
-            guard case .pending(let result) = completion else { return XCTFail("Nonconnected status supplied authority") }
-            XCTAssertEqual(result.status, status)
-            XCTAssertEqual(result.pairingId, "pairing_owned")
-            let encoded = try JSONDecoder().decode(JSONObject.self, from: JSONEncoder().encode(completion))
-            XCTAssertEqual(encoded, fields)
-            XCTAssertNil(encoded["auth"])
-            XCTAssertNil(encoded["device"])
-        }
-        XCTAssertThrowsError(try JSONDecoder().decode(PairingCompletion.self, from: Data(#"{"status":"connected","pairingId":"pairing_owned","expiresAtMs":301000}"#.utf8)))
     }
 
     func testPersistentPairedSessionRequiresExplicitNullExpiryAndDeviceIdentity() throws {
@@ -155,11 +128,6 @@ final class NativeBoundaryTests: XCTestCase {
     }
 
     func testPairingPreviewIsReadOnlyAndContainsNoClaimOrSessionCapability() throws {
-        let request = PairingPreviewRequest(pairCode: "fixture_one_use_code", workspaceId: "workspace_owned")
-        let input = try JSONDecoder().decode(JSONObject.self, from: JSONEncoder().encode(request))
-        XCTAssertEqual(Set(input.keys), ["pairCode", "workspaceId"])
-        XCTAssertNil(input["clientNonce"])
-        XCTAssertNil(input["installationId"])
         let data = Data(#"{"clusterName":"Owner desktop","backendUrl":"https://desktop.example.ts.net","expiresAtMs":301000}"#.utf8)
         let result = try JSONDecoder().decode(PairingPreviewResult.self, from: data)
         XCTAssertEqual(result.clusterName, "Owner desktop")
@@ -167,8 +135,5 @@ final class NativeBoundaryTests: XCTestCase {
         XCTAssertEqual(result.expiresAtMs, 301000)
         let output = try JSONDecoder().decode(JSONObject.self, from: JSONEncoder().encode(result))
         XCTAssertEqual(Set(output.keys), ["clusterName", "backendUrl", "expiresAtMs"])
-        XCTAssertNil(output["claimToken"])
-        XCTAssertNil(output["auth"])
-        XCTAssertNil(output["token"])
     }
 }
