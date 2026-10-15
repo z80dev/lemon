@@ -2051,9 +2051,19 @@ defmodule LemonRouter.RunOrchestratorTest do
 
   describe "counts/0 non-placeholder behavior" do
     test "active reflects DynamicSupervisor children" do
-      counts = RunOrchestrator.counts()
-      assert is_integer(counts.active)
-      assert counts.active >= 0
+      before = RunOrchestrator.counts().active
+
+      {:ok, pid} =
+        DynamicSupervisor.start_child(
+          LemonRouter.RunSupervisor,
+          {Task, fn -> receive do: (:stop -> :ok) end}
+        )
+
+      on_exit(fn -> DynamicSupervisor.terminate_child(LemonRouter.RunSupervisor, pid) end)
+
+      assert RunOrchestrator.counts().active == before + 1
+      assert :ok = DynamicSupervisor.terminate_child(LemonRouter.RunSupervisor, pid)
+      assert RunOrchestrator.counts().active == before
     end
 
     test "completed_today is driven by telemetry, not hardcoded to 0" do

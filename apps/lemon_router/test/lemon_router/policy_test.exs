@@ -76,7 +76,7 @@ defmodule LemonRouter.PolicyTest do
   end
 
   describe "resolve_for_run/1" do
-    test "returns empty map for basic params" do
+    test "returns full access for basic params" do
       result =
         Policy.resolve_for_run(%{
           agent_id: "test",
@@ -84,7 +84,8 @@ defmodule LemonRouter.PolicyTest do
           origin: :control_plane
         })
 
-      assert is_map(result)
+      assert result.allow == :all
+      assert result.blocked_tools == []
     end
 
     test "returns empty map when no special policies are configured" do
@@ -99,7 +100,7 @@ defmodule LemonRouter.PolicyTest do
       assert result.blocked_tools == []
     end
 
-    test "returns empty map for channel origin without channel context" do
+    test "returns full access for channel origin without channel context" do
       result =
         Policy.resolve_for_run(%{
           agent_id: "channel-agent",
@@ -108,7 +109,8 @@ defmodule LemonRouter.PolicyTest do
           channel_context: nil
         })
 
-      assert is_map(result)
+      assert result.allow == :all
+      assert result.blocked_tools == []
     end
   end
 
