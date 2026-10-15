@@ -17,6 +17,11 @@
 
 ### Fixed
 
+- Grep pages are sorted by path and line across both engines. Partial ripgrep
+  errors preserve matches with warnings, and lookaround/backreferences select
+  PCRE2 or explain the unsupported Rust-regex construct. The Elixir fallback
+  now has a 30-second deadline, a 4 MiB leading-file window with oversized-file
+  counts, and stops once the requested page is filled.
 - Named-node file requests no longer return `filesystem_failed` when a parent
   symlink is swapped back to a directory while the path resolves. Each component
   is classified with one descriptor-relative `readlinkat`, so concurrent
