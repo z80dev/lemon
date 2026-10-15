@@ -133,14 +133,16 @@ public struct OnboardingView: View {
                 .sheet(isPresented: $findBackend) { ChooseLemonBotView(store: store) }
                 .task(id: connectionIssue?.origin) {
                     #if os(macOS)
-                    guard connectionIssue != nil, let url = URL(string: backend), ConnectionIssue.isLoopback(url) else { return }
+                    guard connectionIssue != nil, let url = URL(string: backend), ConnectionIssue.isLoopback(url), let client = try? HTTPTransport(baseURL: url) else { return }
+                    defer { client.session.invalidateAndCancel() }
                     while !Task.isCancelled, connectionIssue != nil {
                         do {
                             try await Task.sleep(for: .seconds(3))
-                            let setup: SetupStatus = try await HTTPTransport(baseURL: url).read("/setup", timeout: 2)
+                            let setup: SetupStatus = try await client.read("/setup", timeout: 2)
+                            let methods: [PublicOIDCProvider] = try await client.read("/auth/oidc/providers", timeout: 2)
                             setupRequired = setup.setupRequired; mode = setup.setupRequired ? "setup" : "login"
                             checkedURL = try HTTPTransport.normalizeBaseURL(url); connectionIssue = nil; action.error = nil
-                            providers = try await publicRequest(url, "/auth/oidc/providers")
+                            providers = methods
                         } catch is CancellationError { return }
                         catch { /* Continue credential-free discovery until the service answers. */ }
                     }
