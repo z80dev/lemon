@@ -275,6 +275,7 @@ export async function main(argv: string[] = Bun.argv.slice(2)): Promise<number> 
 			startup: startupRequest(options),
 			version,
 			themePreference: theme.preference,
+			notifications: config?.tui?.notifications,
 			onExit: (code) => resolve(code),
 		});
 		const shutdown = () => {

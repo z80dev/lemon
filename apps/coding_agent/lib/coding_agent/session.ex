@@ -55,6 +55,7 @@ defmodule CodingAgent.Session do
   alias CodingAgent.Extensions.AdditionalContext
   alias CodingAgent.Session.BackgroundTasks
   alias CodingAgent.Session.BranchState
+  alias CodingAgent.Session.BudgetLedger
   alias CodingAgent.Session.CompactionLifecycle
   alias CodingAgent.Session.CompactionManager
   alias CodingAgent.Session.ContextCheckpoint
@@ -1459,6 +1460,11 @@ defmodule CodingAgent.Session do
     event = strip_recalled_context_from_event(raw_event)
     state = handle_agent_event(event, state)
     {:noreply, state}
+  end
+
+  def handle_info({:subagent_budget_usage, usage}, state) do
+    session = BudgetLedger.append_children(state.session_manager, usage)
+    {:noreply, %{state | session_manager: session}}
   end
 
   def handle_info({:agent_event, {:usage_budget_updated, _usage} = event}, state) do

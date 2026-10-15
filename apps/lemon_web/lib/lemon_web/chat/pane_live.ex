@@ -89,6 +89,12 @@ defmodule LemonWeb.Chat.PaneLive do
     {"subagent_restricted", "Subagent restricted", "Edits need approval"}
   ]
   @approval_tools ~w(bash write edit patch)
+  @workspace_unavailable {:error,
+                          %{
+                            code: :unavailable,
+                            message: "Session workspace is unavailable",
+                            details: nil
+                          }}
 
   # ── Mount ───────────────────────────────────────────────────────────────
 
@@ -112,9 +118,13 @@ defmodule LemonWeb.Chat.PaneLive do
     {cwd, cwd_recorded?} = resolve_cwd(key)
 
     history =
-      case Backend.history(key, cwd) do
-        {:ok, rows} -> {:ok, Transcript.from_history(rows)}
-        {:error, error} -> {:error, Rpc.message(error)}
+      if is_binary(cwd) do
+        case Backend.history(key, cwd) do
+          {:ok, rows} -> {:ok, Transcript.from_history(rows)}
+          {:error, error} -> {:error, Rpc.message(error)}
+        end
+      else
+        {:error, "Session workspace is unavailable"}
       end
 
     {items, history_error} =
@@ -229,6 +239,7 @@ defmodule LemonWeb.Chat.PaneLive do
     case SessionCwd.recorded(key) do
       {:ok, cwd} -> {cwd, true}
       :error -> {SessionCwd.default(), false}
+      {:error, :unavailable} -> {nil, false}
     end
   end
 
@@ -298,6 +309,9 @@ defmodule LemonWeb.Chat.PaneLive do
     cond do
       not socket.assigns.setup_ready? ->
         {:noreply, assign(socket, :submit_error, Setup.message())}
+
+      is_nil(socket.assigns.cwd) ->
+        {:noreply, assign(socket, :submit_error, "Session workspace is unavailable")}
 
       socket.assigns.run.status == :unavailable ->
         {:noreply,
@@ -452,6 +466,9 @@ defmodule LemonWeb.Chat.PaneLive do
 
   def handle_event("compact", _params, socket) do
     cond do
+      is_nil(socket.assigns.cwd) ->
+        {:noreply, toast(socket, :warning, "Session workspace is unavailable")}
+
       socket.assigns.compacting ->
         {:noreply, socket}
 
@@ -577,7 +594,12 @@ defmodule LemonWeb.Chat.PaneLive do
   def handle_event("fork", params, socket) do
     socket = ensure_cwd(socket)
 
-    case Backend.fork(socket.assigns.session_key, socket.assigns.cwd) do
+    result =
+      if is_binary(socket.assigns.cwd),
+        do: Backend.fork(socket.assigns.session_key, socket.assigns.cwd),
+        else: @workspace_unavailable
+
+    case result do
       {:ok, child} ->
         SessionCwd.remember(child, socket.assigns.cwd)
 
@@ -812,6 +834,7 @@ defmodule LemonWeb.Chat.PaneLive do
   # durable delta cursor: events observed during a read invalidate it, and a
   # recovered active answer stays replacement-only until terminal truth.
   defp start_recovery(socket, retries \\ 0) do
+    socket = ensure_cwd(socket)
     recovery = socket.assigns.recovery
 
     if recovery.inflight do
@@ -831,7 +854,8 @@ defmodule LemonWeb.Chat.PaneLive do
           needed: true
       })
       |> start_async(:recovery, fn ->
-        {key, generation, revision, Backend.snapshot(key, cwd)}
+        result = if is_binary(cwd), do: Backend.snapshot(key, cwd), else: @workspace_unavailable
+        {key, generation, revision, result}
       end)
     end
   end
@@ -846,9 +870,14 @@ defmodule LemonWeb.Chat.PaneLive do
   end
 
   defp recovery_unavailable(socket) do
+    message =
+      if is_binary(socket.assigns.cwd),
+        do: "Current session recovery is unavailable. Lemon will retry.",
+        else: "Session workspace is unavailable"
+
     socket
     |> assign(:recovery, %{socket.assigns.recovery | inflight: false, needed: true})
-    |> assign(:history_error, "Current session recovery is unavailable. Lemon will retry.")
+    |> assign(:history_error, message)
   end
 
   defp apply_recovery(socket, %{"identity" => identity, "snapshot" => snapshot} = result) do
@@ -1754,15 +1783,27 @@ defmodule LemonWeb.Chat.PaneLive do
     cwd = socket.assigns.cwd
     identity = socket.assigns.recovery.identity
 
-    if identity,
-      do: start_recovery(socket),
-      else: start_async(socket, :plan, fn -> {identity, Backend.plan(key, cwd, "status")} end)
+    cond do
+      not is_binary(cwd) ->
+        assign(socket, :plan, %{socket.assigns.plan | error: "Session workspace is unavailable"})
+
+      identity ->
+        start_recovery(socket)
+
+      true ->
+        start_async(socket, :plan, fn -> {identity, Backend.plan(key, cwd, "status")} end)
+    end
   end
 
   defp change_plan(socket, action) do
     socket = ensure_cwd(socket)
 
-    case Backend.plan(socket.assigns.session_key, socket.assigns.cwd, action) do
+    result =
+      if is_binary(socket.assigns.cwd),
+        do: Backend.plan(socket.assigns.session_key, socket.assigns.cwd, action),
+        else: @workspace_unavailable
+
+    case result do
       {:ok, plan} ->
         text =
           if plan.mode == "plan",
@@ -1786,7 +1827,9 @@ defmodule LemonWeb.Chat.PaneLive do
 
     socket
     |> assign(:context, %{socket.assigns.context | status: :loading})
-    |> start_async(:context, fn -> Backend.context(key, cwd) end)
+    |> start_async(:context, fn ->
+      if is_binary(cwd), do: Backend.context(key, cwd), else: @workspace_unavailable
+    end)
   end
 
   defp on_tab_open(socket, "subagents"), do: refresh_subagents(socket)

@@ -88,6 +88,38 @@ defmodule LemonAi.Providers.RetrySafetyTest do
     end
   end
 
+  test "provider HTTP loops surface 429 immediately when a healthy alternate exists" do
+    parent = self()
+
+    Req.default_options(
+      adapter: fn request ->
+        send(parent, :provider_request)
+
+        {request,
+         %Req.Response{
+           status: 429,
+           headers: %{"retry-after" => ["30"]},
+           body: %{"error" => %{"message" => "rate limited"}}
+         }}
+      end
+    )
+
+    for {api, provider} <- [
+          {:anthropic_messages, :retry_rotate_anthropic},
+          {:openai_completions, :retry_rotate_completions},
+          {:openai_responses, :retry_rotate_responses}
+        ] do
+      CircuitBreaker.reset(provider)
+      opts = %{options() | provider_retry: %{alternate_available: true}}
+      assert {:ok, stream} = LemonAi.stream(model(api, provider), context(), opts)
+      assert {:error, terminal} = EventStream.result(stream, 1_000)
+      assert LemonAi.Error.classify(terminal) == :rate_limit
+      assert_receive :provider_request
+      refute_received :provider_request
+      refute_received {:provider_sleep, _}
+    end
+  end
+
   test "Anthropic never retries transport failures after output starts or whitespace" do
     for {block, delta, expected_event, provider} <- [
           {%{"type" => "text"}, %{"type" => "text_delta", "text" => " "}, :text_delta,
