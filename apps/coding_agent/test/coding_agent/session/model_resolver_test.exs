@@ -175,7 +175,12 @@ defmodule CodingAgent.Session.ModelResolverTest do
 
   test "a qualified default routes candidates for its selected provider and unqualified id" do
     settings = %SettingsManager{
-      default_model: %{provider: :anthropic, model_id: "openai:gpt-4", base_url: nil},
+      default_model: %{
+        provider: :anthropic,
+        provider_source: :inherited,
+        model_id: "openai:gpt-4",
+        base_url: nil
+      },
       providers: %{
         "openai" => %{},
         "azure_openai_responses" => %{api_key: "azure-ready-key"}
@@ -189,6 +194,108 @@ defmodule CodingAgent.Session.ModelResolverTest do
 
     model = ModelResolver.resolve_session_model(nil, settings)
     assert {model.provider, model.id} == {:azure_openai_responses, "gpt-4"}
+  end
+
+  test "qualified selectors replace inherited preset providers before routing" do
+    for selector <- ["anthropic:claude-sonnet-5", "anthropic/claude-sonnet-5"] do
+      settings = %SettingsManager{
+        default_model: %{
+          provider: :ollama,
+          provider_source: :inherited,
+          model_id: selector,
+          base_url: nil
+        },
+        provider_routing: %{enabled: false}
+      }
+
+      model = ModelResolver.resolve_session_model(nil, settings)
+      assert {model.provider, model.id} == {:anthropic, "claude-sonnet-5"}
+    end
+  end
+
+  test "project-qualified selectors override inherited Ollama defaults end to end" do
+    home = Path.join(System.tmp_dir!(), "model_provenance_#{System.unique_integer([:positive])}")
+    project = Path.join(home, "project")
+    original_home = System.fetch_env!("HOME")
+    File.mkdir_p!(Path.join(home, ".lemon"))
+    File.mkdir_p!(Path.join(project, ".lemon"))
+    System.put_env("HOME", home)
+
+    on_exit(fn ->
+      System.put_env("HOME", original_home)
+      File.rm_rf!(home)
+    end)
+
+    File.write!(Path.join(home, ".lemon/config.toml"), """
+    [defaults]
+    provider = "ollama"
+    model = "qwen:7b"
+    """)
+
+    File.write!(Path.join(project, ".lemon/config.toml"), """
+    [defaults]
+    model = "anthropic:claude-sonnet-5"
+    [runtime.provider_routing]
+    enabled = false
+    """)
+
+    settings =
+      project
+      |> LemonCore.Config.load_base_from_disk()
+      |> SettingsManager.from_config()
+
+    assert settings.default_model.provider == :ollama
+    assert settings.default_model.provider_source == :inherited
+    model = ModelResolver.resolve_session_model(nil, settings)
+    assert {model.provider, model.id} == {:anthropic, "claude-sonnet-5"}
+  end
+
+  test "model-only environment overrides inherit rather than pin the configured provider" do
+    System.put_env("LEMON_DEFAULT_MODEL", "anthropic:claude-sonnet-5")
+
+    agent =
+      LemonCore.Config.Agent.resolve(%{
+        "defaults" => %{"provider" => "ollama", "model" => "qwen:7b"},
+        "runtime" => %{"provider_routing" => %{"enabled" => false}}
+      })
+
+    settings =
+      SettingsManager.from_config(%LemonCore.Config{agent: Map.from_struct(agent)})
+
+    assert settings.default_model.provider_source == :inherited
+    model = ModelResolver.resolve_session_model(nil, settings)
+    assert {model.provider, model.id} == {:anthropic, "claude-sonnet-5"}
+  end
+
+  test "explicit preset provider and model pairs keep known provider prefixes native" do
+    for model_id <- ["qwen:7b", "anthropic:claude-sonnet-5"] do
+      agent =
+        LemonCore.Config.Agent.resolve(%{
+          "defaults" => %{"provider" => "ollama", "model" => model_id},
+          "runtime" => %{"provider_routing" => %{"enabled" => false}}
+        })
+
+      settings =
+        SettingsManager.from_config(%LemonCore.Config{agent: Map.from_struct(agent)})
+
+      assert settings.default_model.provider_source == :explicit
+      model = ModelResolver.resolve_session_model(nil, settings)
+      assert {model.provider, model.id, model.api} == {:ollama, model_id, :openai_completions}
+    end
+  end
+
+  test "unknown selector prefixes remain native even when the provider was inherited" do
+    settings = %SettingsManager{
+      default_model: %{
+        provider: :ollama,
+        provider_source: :inherited,
+        model_id: "native-unknown:7b"
+      },
+      provider_routing: %{enabled: false}
+    }
+
+    model = ModelResolver.resolve_session_model(nil, settings)
+    assert {model.provider, model.id} == {:ollama, "native-unknown:7b"}
   end
 
   test "default resolution preserves provider-native colon ids" do

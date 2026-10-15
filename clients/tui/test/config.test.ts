@@ -102,6 +102,30 @@ describe("saveTheme and loadConfig", () => {
 		expect((await loadConfig()).tui?.notifications).toBe("bell");
 	});
 
+	test("reads keys and overlays project bindings per action", async () => {
+		writeConfig(
+			'[tui.keys]\n"lemon.palette.open" = "alt+p"\n"lemon.plan.toggle" = "alt+shift+p"\n',
+		);
+		expect((await loadConfig()).tui?.keys).toEqual({
+			"lemon.palette.open": "alt+p",
+			"lemon.plan.toggle": "alt+shift+p",
+		});
+		const project = mkdtempSync(join(tmpdir(), "lemon-tui-project-"));
+		try {
+			mkdirSync(join(project, ".lemon"));
+			writeFileSync(
+				join(project, ".lemon", "config.toml"),
+				'[tui.keys]\n"lemon.palette.open" = ["alt+v", "alt+shift+v"]\n',
+			);
+			expect((await loadConfig(project)).tui?.keys).toEqual({
+				"lemon.palette.open": ["alt+v", "alt+shift+v"],
+				"lemon.plan.toggle": "alt+shift+p",
+			});
+		} finally {
+			rmSync(project, { recursive: true, force: true });
+		}
+	});
+
 	test("round-trip through [tui] theme", async () => {
 		writeConfig(SETUP_WRITTEN);
 		await saveTheme("dark");
