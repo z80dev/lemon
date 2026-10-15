@@ -124,6 +124,11 @@ Provider-registry fixtures must restore the exact API-to-module mappings they
 found, rather than leave the registry empty after extension tests. Provider
 stream fixtures use `LemonAi.Types.AssistantMessage` terminal payloads and call
 `EventStream.error/2` for errors, not a raw error followed by successful completion.
+
+Controlled provider-outage fixtures own their circuit-breaker and rate-limiter
+processes and await terminal health accounting before teardown; injected failures
+must not poison another case or a repeated run.
+
 Approval fixtures read pending requests through `LemonCore.ExecApprovalStore`;
 the underlying table also retains terminal resolution receipts.
 

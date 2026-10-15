@@ -122,11 +122,17 @@ defmodule CodingAgent.Session.LiveProviderOwnershipTest do
       refute report.private_values_in_logs_or_events
       assert report.passed
 
-      provider = "live-provider-ownership-failure"
-      assert Registry.lookup(LemonAi.CircuitBreakerRegistry, provider) == []
-      assert Registry.lookup(LemonAi.RateLimiterRegistry, provider) == []
-      assert LemonAi.CallDispatcher.get_active_requests(provider) == 0
-      assert LemonAgent.ModelRuntime.CredentialHealth.cooldown_until(provider, "default") == nil
+      for provider <- ["live-provider-ownership-startup", "live-provider-ownership-failure"] do
+        assert Registry.lookup(LemonAi.CircuitBreakerRegistry, provider) == []
+        assert Registry.lookup(LemonAi.RateLimiterRegistry, provider) == []
+        assert LemonAi.CallDispatcher.get_active_requests(provider) == 0
+        assert CredentialHealth.cooldown_until(provider, "default") == nil
+      end
+
+      assert CredentialHealth.cooldown_until(
+               "live-provider-ownership-startup",
+               "env:LIVE_OWNER_POOL"
+             ) == nil
     end
   end
 

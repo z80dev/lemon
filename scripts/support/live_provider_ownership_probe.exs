@@ -12,6 +12,7 @@ defmodule LemonScripts.LiveProviderOwnershipProbe do
   @private ~w(fixture-owner-a-pool fixture-owner-a-default fixture-owner-b-key
     fixture-owner-b-header fixture-owner-ambient fixture-owner-oauth-access
     fixture-owner-private-refresh)
+  @startup_provider "live-provider-ownership-startup"
   @failure_provider "live-provider-ownership-failure"
 
   def log(event, %{config: %{owner: owner, ref: ref}}),
@@ -301,13 +302,12 @@ defmodule LemonScripts.LiveProviderOwnershipProbe do
   end
 
   defp live_fallback(cwd, url) do
-    a = model(:groq, "gemma2-9b-it", :openai_completions, url)
-
-    # The intentional 503 belongs to this fixture, not the shared xAI service.
-    # Keep a stable private identity and give its health processes a run lifetime.
+    # Both endpoints belong to the fixture: real provider health and rate
+    # buckets must neither influence nor be consumed by repeated loopback runs.
 
     providers = %{
-      "groq" => %{
+      @startup_provider => %{
+        api: "openai_completions",
         api_key: "fixture-owner-a-default",
         base_url: url,
         headers: %{"x-provider-owner" => "a"}
@@ -320,30 +320,30 @@ defmodule LemonScripts.LiveProviderOwnershipProbe do
       }
     }
 
+    a = CustomProviders.lookup(providers, @startup_provider, "gemma2-9b-it")
     b = CustomProviders.lookup(providers, @failure_provider, "grok-3")
 
-    {:ok, health} =
-      Supervisor.start_link(
-        [
-          {LemonAi.CircuitBreaker, provider: @failure_provider},
-          {LemonAi.RateLimiter, provider: @failure_provider}
-        ],
-        strategy: :one_for_one
-      )
+    children =
+      for provider <- [@startup_provider, @failure_provider],
+          module <- [LemonAi.CircuitBreaker, LemonAi.RateLimiter] do
+        Supervisor.child_spec({module, provider: provider}, id: {module, provider})
+      end
+
+    {:ok, health} = Supervisor.start_link(children, strategy: :one_for_one)
 
     [{breaker, _}] = Registry.lookup(LemonAi.CircuitBreakerRegistry, @failure_provider)
 
     routing = %{
       enabled: true,
-      fallback_models: ["groq:gemma2-9b-it"],
+      fallback_models: ["#{@startup_provider}:gemma2-9b-it"],
       fallback_providers: [],
       require_credentials: true,
       default_pool: "owner",
       credential_pools: %{
         "owner" => %{
-          providers: ["groq"],
+          providers: [@startup_provider],
           strategy: "priority",
-          credentials: %{"groq" => ["env:LIVE_OWNER_POOL"]}
+          credentials: %{@startup_provider => ["env:LIVE_OWNER_POOL"]}
         }
       }
     }
@@ -369,24 +369,26 @@ defmodule LemonScripts.LiveProviderOwnershipProbe do
         {events, selection_recorded?(session, b)}
       end)
     after
-      Agent.stop(holder)
-
       try do
-        settle_failure_provider!(breaker, System.monotonic_time(:millisecond) + 5_000)
+        Agent.stop(holder)
+        settle_provider_work!(breaker, System.monotonic_time(:millisecond) + 5_000)
       after
         Supervisor.stop(health)
         CredentialHealth.record_success(@failure_provider, "default")
+        CredentialHealth.record_success(@startup_provider, "env:LIVE_OWNER_POOL")
       end
     end
   end
 
-  defp settle_failure_provider!(breaker, deadline) do
+  defp settle_provider_work!(breaker, deadline) do
     {:ok, state} = GenServer.call(breaker, :get_state)
 
-    # An owner DOWN can release the slot before the tracker accounts for its
-    # terminal result. Observe both before stopping health; otherwise a late
-    # tracker can recreate the provider services under the global supervisor.
+    # Owner DOWN can release a slot before terminal tracking commits health.
+    # This private sandbox's model tasks must all end before their health
+    # supervisor stops, including successful startup-provider callbacks.
     if state.failure_count == 1 and
+         Task.Supervisor.children(LemonAi.StreamTaskSupervisor) == [] and
+         LemonAi.CallDispatcher.get_active_requests(@startup_provider) == 0 and
          LemonAi.CallDispatcher.get_active_requests(@failure_provider) == 0 do
       :ok
     else
@@ -394,7 +396,7 @@ defmodule LemonScripts.LiveProviderOwnershipProbe do
         raise "fixture provider terminal accounting did not settle"
       else
         Process.sleep(10)
-        settle_failure_provider!(breaker, deadline)
+        settle_provider_work!(breaker, deadline)
       end
     end
   end

@@ -19,6 +19,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 - Keep missing local provider API keys out of shared circuit-breaker health, so
   they cannot block other sessions that have valid credentials.
 
+- Isolate intentional provider outages in ownership probes so their circuit and
+  rate-limit state cannot contaminate later cases or repeated runs.
+
 ---
 
 ## [2026.10.13]
