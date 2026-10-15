@@ -8,7 +8,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
-No unreleased changes yet.
+### Added
+
+- Agent runs continue up to three times after empty replies or malformed tool
+  arguments, preserving streamed output and stopping recovery before tool execution.
 
 ---
 

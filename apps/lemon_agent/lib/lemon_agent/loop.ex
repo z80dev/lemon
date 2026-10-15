@@ -535,6 +535,8 @@ defmodule LemonAgent.Loop do
 
     # Classification runs in the model-loop task and is cached per user prompt,
     # not repeated by tool turns or provider retries.
+    message_count_before_response = length(context.messages)
+
     {response, config} =
       case budget_check(config) do
         nil ->
@@ -558,7 +560,7 @@ defmodule LemonAgent.Loop do
 
     case response do
       {:ok, message, context} ->
-        new_messages = new_messages ++ [message]
+        new_messages = new_messages ++ Enum.drop(context.messages, message_count_before_response)
         transition_loop_state(stream, :normalizing_response, %{stop_reason: message.stop_reason})
 
         case {budget_check(config), message.stop_reason} do
@@ -638,6 +640,8 @@ defmodule LemonAgent.Loop do
                 transition_loop_state(stream, :executing_tools, %{
                   tool_call_count: length(tool_calls)
                 })
+
+                Streaming.tools_started(stream)
 
                 ToolCalls.execute_and_collect_tools(
                   context,
