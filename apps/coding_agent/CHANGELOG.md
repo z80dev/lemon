@@ -31,6 +31,9 @@
 
 ### Fixed
 
+- Patch hunks retry whitespace and typographic-punctuation normalization only
+  after an exact miss, reject ambiguous matches, and preserve original context.
+
 - Local overwrite format detection reads only a 64 KiB leading window rather
   than loading the entire existing file.
 
