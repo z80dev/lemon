@@ -203,13 +203,11 @@ defmodule LemonChannels.Adapters.Telegram.Transport.Poller do
   defp maybe_attempt_webhook_clear(state, _reason), do: state
 
   defp safe_get_updates(state) do
-    try do
-      state.api_mod.get_updates(state.token, state.offset, state.poll_interval_ms)
-    catch
-      :exit, reason ->
-        Logger.debug("Telegram get_updates exited: #{inspect(reason)}")
-        {:error, {:exit, reason}}
-    end
+    state.api_mod.get_updates(state.token, state.offset, state.poll_interval_ms)
+  catch
+    :exit, reason ->
+      Logger.debug("Telegram get_updates exited: #{inspect(reason)}")
+      {:error, {:exit, reason}}
   end
 
   defp max_update_id(updates, fallback),

@@ -117,6 +117,7 @@ for availability, single-flight behavior, and release/custom-launcher limits.
 lemon runs --status error --since 1h --limit 20
 lemon runs list --session agent:operator:main --agent operator --json
 lemon runs active
+lemon cron status --json
 lemon cron runs --job JOB_ID --status failed --since 2d
 lemon logs -n 50 --level warning
 lemon logs --follow --json
@@ -137,6 +138,10 @@ crashes or correctly classify aborts. Recent client-side time filtering examines
 at most the newest 200 history rows returned by the runtime, not an unbounded
 archive. `--since` accepts positive integer minutes (`30m`), hours (`1h`), or
 days (`2d`), relative to invocation time; list limits are 1–200 (default 50).
+
+`cron status` reports job totals, enabled jobs, and `failingJobs` (jobs with a
+nonzero persisted failure streak). Use `--json` for the complete cron status
+projection. See [cron failure alerts](reminders-and-heartbeats.md#failure-alerts-and-recovery).
 
 `cron runs` uses the cron status vocabulary: `pending`, `running`, `completed`,
 `failed`, `timeout`, and `aborted`. Without `--job`, it queries each currently

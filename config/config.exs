@@ -84,6 +84,7 @@ config :lemon_core, :doctor_checks, [
   LemonMemory.Doctor.Checks.Memory,
   LemonSkills.Doctor.Checks.Skills,
   LemonAutomation.Doctor.Checks.Synthesis,
+  LemonAutomation.Doctor.Checks.Cron,
   LemonChannels.Doctor.Checks.Channels
 ]
 

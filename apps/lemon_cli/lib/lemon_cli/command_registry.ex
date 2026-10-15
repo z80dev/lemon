@@ -452,9 +452,9 @@ defmodule LemonCli.CommandRegistry do
     },
     %{
       name: "cron",
-      summary: "Inspect cron run history",
-      usage: "lemon cron runs [options]",
-      subcommands: subcommands(~w(runs)),
+      summary: "Inspect cron status and run history",
+      usage: "lemon cron status [--json] | lemon cron runs [options]",
+      subcommands: subcommands(~w(status runs)),
       options: [
         option("--job ID", ["--job"], "Select one job; default all current jobs"),
         option(

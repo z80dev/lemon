@@ -14,7 +14,6 @@ defmodule CodingAgent.ExtensionLifecycle do
   - extension status report construction
   """
 
-  alias LemonAgent.Types.AgentTool
   alias CodingAgent.Config
   alias CodingAgent.Extensions
   alias CodingAgent.Extensions.ToolHooks
@@ -22,6 +21,7 @@ defmodule CodingAgent.ExtensionLifecycle do
   alias CodingAgent.ToolDisclosure
   alias CodingAgent.ToolExecutor
   alias CodingAgent.ToolRegistry
+  alias LemonAgent.Types.AgentTool
 
   @type lifecycle_result :: %{
           extensions: [module()],

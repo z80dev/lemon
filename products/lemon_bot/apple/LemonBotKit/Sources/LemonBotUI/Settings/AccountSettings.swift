@@ -221,7 +221,7 @@ struct PreferencesSettingsView: View {
                 }
             }
             Section("Voice") {
-                TextField("Voice ID", text: $voice)
+                ProviderVoicePicker(store: store, voiceID: $voice, language: $voiceLanguage)
                 Slider(value: $speed, in: 0.5...2, step: 0.1)
                 Text("Speed: \(speed, specifier: "%.1f")×")
                 TextField("Voice language (empty uses default)", text: $voiceLanguage)

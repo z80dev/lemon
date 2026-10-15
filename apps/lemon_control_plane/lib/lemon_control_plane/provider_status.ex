@@ -46,7 +46,8 @@ defmodule LemonControlPlane.ProviderStatus do
             "configured" => true,
             "credential" => credential,
             "default" => id == default,
-            "lastError" => nil
+            "lastError" =>
+              LemonAi.CallDispatcher.last_error(ProviderNames.canonical_name(id) || id)
           }
         ]
       else

@@ -106,6 +106,11 @@ final class FixtureURLProtocol: URLProtocol {
         switch parts {
         case ["sync"]: return found(world.snapshot)
         case ["instance"]: return found(world.instance(controllerDown: request.value(forHTTPHeaderField: "X-LB-Fixture-Controller-Down") == "true", runtimeRunning: request.value(forHTTPHeaderField: "X-LB-Fixture-Runtime-Running") == "true"))
+        case ["audio", "voices"]: return found(["provider": "openai", "configured": true, "voices": [
+            ["id": "default", "name": "Provider default", "languages": [String]()],
+            ["id": "alloy", "name": "Alloy", "languages": [String]()],
+            ["id": "coral", "name": "Coral", "languages": [String]()],
+        ]])
         case ["me"]: return found(world.user)
         case ["workspace"]: return found(world.workspace)
         case ["bots"]: return found(world.page(world.bots))

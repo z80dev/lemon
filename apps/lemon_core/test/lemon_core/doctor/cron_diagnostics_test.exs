@@ -4,6 +4,30 @@ defmodule LemonCore.Doctor.CronDiagnosticsTest do
   alias LemonCore.Doctor.CronDiagnostics
   alias LemonCore.Store
 
+  test "unread failures include retired one-shot jobs without exposing notice content" do
+    id = "cron_unread_#{System.unique_integer([:positive, :monotonic])}"
+    on_exit(fn -> Store.delete(:cron_failure_notices, id) end)
+
+    Store.put(:cron_failure_notices, id, %{
+      job_id: id,
+      failure_streak: 3,
+      last_status: :timeout,
+      summary: "private name and error",
+      reason: :no_route,
+      ts_ms: 1
+    })
+
+    status = CronDiagnostics.status(limit: 100)
+    assert status.unread_failing_job_count >= 1
+
+    assert Enum.any?(
+             status.unread_failing_jobs,
+             &(&1[:retired] == true and &1.failure_streak == 3 and &1.last_status == "timeout")
+           )
+
+    refute inspect(status) =~ "private name and error"
+  end
+
   test "summarizes cron jobs and runs without raw prompt, output, or identifiers" do
     token = System.unique_integer([:positive, :monotonic])
     job_id = "cron_diag_job_#{token}"

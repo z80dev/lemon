@@ -1,8 +1,8 @@
 defmodule LemonRouter.RouterTest do
   use ExUnit.Case, async: false
 
-  alias LemonRouter.Router
   alias LemonCore.{InboundMessage, RouterBridge, RunRequest}
+  alias LemonRouter.Router
 
   defmodule RunOrchestratorStubRouter do
     def submit(request) do

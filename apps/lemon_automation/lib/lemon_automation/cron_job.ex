@@ -46,6 +46,8 @@ defmodule LemonAutomation.CronJob do
   - `:created_at_ms` - Creation timestamp
   - `:updated_at_ms` - Last update timestamp
   - `:last_run_at_ms` - Last execution timestamp
+  - `:failure_state` - Scheduler-owned consecutive failure count and last terminal
+    status; old records default to zero failures and no last status
   - `:next_run_at_ms` - Next scheduled execution timestamp
   - `:meta` - Additional metadata map
 
@@ -100,6 +102,7 @@ defmodule LemonAutomation.CronJob do
     :last_run_at_ms,
     :next_run_at_ms,
     :meta,
+    failure_state: %{consecutive_failures: 0, last_status: nil},
     enabled: true,
     timezone: "UTC",
     jitter_sec: 0,
@@ -140,6 +143,7 @@ defmodule LemonAutomation.CronJob do
           created_at_ms: non_neg_integer() | nil,
           updated_at_ms: non_neg_integer() | nil,
           last_run_at_ms: non_neg_integer() | nil,
+          failure_state: %{consecutive_failures: non_neg_integer(), last_status: atom() | nil},
           next_run_at_ms: non_neg_integer() | nil,
           meta: map() | nil
         }
@@ -229,6 +233,27 @@ defmodule LemonAutomation.CronJob do
     %{job | last_run_at_ms: run_at_ms, updated_at_ms: LemonCore.Clock.now_ms()}
   end
 
+  @doc "Apply a terminal outcome without changing scheduling or admission."
+  @spec terminalize(t(), atom()) :: t()
+  def terminalize(%__MODULE__{} = job, status) do
+    streak =
+      case status do
+        :completed -> 0
+        failure when failure in [:failed, :timeout] -> failure_streak(job) + 1
+        _ -> failure_streak(job)
+      end
+
+    %{job | failure_state: %{consecutive_failures: streak, last_status: status}}
+  end
+
+  @doc "Terminal failures since the last successful run."
+  @spec failure_streak(t()) :: non_neg_integer()
+  def failure_streak(%__MODULE__{failure_state: state}), do: state.consecutive_failures
+
+  @doc "Last terminal run status, or nil before the first run."
+  @spec last_status(t()) :: atom() | nil
+  def last_status(%__MODULE__{failure_state: state}), do: state.last_status
+
   @doc """
   Set the next scheduled run time.
   """
@@ -283,6 +308,7 @@ defmodule LemonAutomation.CronJob do
       created_at_ms: job.created_at_ms,
       updated_at_ms: job.updated_at_ms,
       last_run_at_ms: job.last_run_at_ms,
+      failure_state: job.failure_state,
       next_run_at_ms: job.next_run_at_ms,
       meta: job.meta
     }
@@ -328,6 +354,7 @@ defmodule LemonAutomation.CronJob do
       created_at_ms: get_attr(map, :created_at_ms),
       updated_at_ms: get_attr(map, :updated_at_ms),
       last_run_at_ms: get_attr(map, :last_run_at_ms),
+      failure_state: restore_failure_state(get_attr(map, :failure_state)),
       next_run_at_ms: get_attr(map, :next_run_at_ms),
       meta: get_attr(map, :meta)
     }
@@ -342,6 +369,26 @@ defmodule LemonAutomation.CronJob do
   end
 
   def execution_mode(%__MODULE__{}), do: :agent
+
+  defp restore_failure_state(state) when is_map(state) do
+    streak = get_attr(state, :consecutive_failures, 0)
+
+    %{
+      consecutive_failures: if(is_integer(streak) and streak >= 0, do: streak, else: 0),
+      last_status: restore_status(get_attr(state, :last_status))
+    }
+  end
+
+  defp restore_failure_state(_), do: %{consecutive_failures: 0, last_status: nil}
+
+  defp restore_status(status) when status in [:completed, :failed, :timeout, :aborted],
+    do: status
+
+  defp restore_status("completed"), do: :completed
+  defp restore_status("failed"), do: :failed
+  defp restore_status("timeout"), do: :timeout
+  defp restore_status("aborted"), do: :aborted
+  defp restore_status(_), do: nil
 
   # Looks up an attribute by atom key first, then string key, with optional default.
   defp get_attr(map, key, default \\ nil) do
