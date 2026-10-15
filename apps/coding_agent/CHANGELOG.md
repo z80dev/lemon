@@ -4,6 +4,10 @@
 
 ### Added
 
+- Grep and find accept semicolon-separated roots, merge/deduplicate results before
+  paging, and report missing roots without discarding existing ones. Grep long
+  lines now show a match-centered 500-character window and the original column.
+
 - Grep supports `output_mode: content|files|count`, with paged paths or per-file
   matching-line counts and a total. Newline patterns search across lines in both backends.
 
