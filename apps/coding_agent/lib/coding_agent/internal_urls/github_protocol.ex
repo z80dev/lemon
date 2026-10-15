@@ -60,7 +60,9 @@ defmodule CodingAgent.InternalUrls.GitHubProtocol do
       {remote, 0} ->
         case Regex.run(
                ~r/\A(?:https?:\/\/github\.com\/|git@github\.com:|ssh:\/\/git@github\.com\/)([^\/\s]+)\/([^\/\s]+)\z/,
-               String.trim(remote), capture: :all_but_first) do
+               String.trim(remote),
+               capture: :all_but_first
+             ) do
           [owner, repo] ->
             {:ok, owner, String.replace_suffix(repo, ".git", "")}
 
