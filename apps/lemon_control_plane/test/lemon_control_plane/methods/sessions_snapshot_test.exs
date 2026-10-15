@@ -330,7 +330,10 @@ defmodule LemonControlPlane.Methods.SessionsSnapshotTest do
     Agent.update(c.state, &Map.put(&1, :barrier, 2))
     request = Task.async(fn -> SessionsSnapshot.handle(params(c), ctx([:read, :approvals])) end)
     assert_receive {:snapshot_barrier, 2, reader}, 5_000
-    assert {:ok, ^approval} = ExecApprovalStore.take_pending(approval.id, approval)
+
+    assert {:ok, %{decision: :deny}} =
+             LemonCore.ExecApprovals.resolve(approval.id, :deny, expected_pending: approval)
+
     send(reader, {:release_snapshot, 2})
 
     assert {:ok, %{"status" => "retry", "reason" => "snapshot_raced"} = raced} =

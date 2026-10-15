@@ -490,9 +490,11 @@ unavailable owner. Plan reports `status` plus bounded `value` when available.
 Phases are `running`, `completed`, `failed`, `cancelled`, `idle`, or `unknown`.
 `unknown` is not idle. A missing terminal tool receipt is outcome-unknown, not
 a permanently running tool or fabricated success. Process receipts retain their
-fixed identities and never cause a launch retry. Todo and process projections
-require the corresponding domain-owner read APIs; their absence is explicit
-`unavailable`.
+fixed identities and never cause a launch retry. Legacy process records without
+launch provenance retain their owner-scoped identity and status but report an
+outcome-unknown classification, never confirmed launch admission. Todo and
+process projections require the corresponding domain-owner read APIs; their
+absence is explicit `unavailable`.
 
 The encoded response is capped at 131,072 bytes. Message rows use a 40,960-byte
 collection budget, actions 16,384, answer text 16,384, each other collection

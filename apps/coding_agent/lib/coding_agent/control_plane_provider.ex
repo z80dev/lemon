@@ -203,10 +203,16 @@ defmodule CodingAgent.ControlPlaneProvider do
       CodingAgent.ProcessStore.list(:all)
       |> Enum.filter(fn {_id, record} -> record.owner == owner end)
       |> Enum.sort_by(&elem(&1, 0))
-      |> Enum.reduce_while({:ok, []}, fn {id, _record}, {:ok, receipts} ->
+      |> Enum.reduce_while({:ok, []}, fn {id, record}, {:ok, receipts} ->
         case apply(manager, :receipt, [id, owner]) do
-          {:ok, receipt} -> {:cont, {:ok, [receipt | receipts]}}
-          _ -> {:halt, {:error, :unavailable}}
+          {:ok, receipt} ->
+            {:cont, {:ok, [receipt | receipts]}}
+
+          {:error, :not_found} when not is_map_key(record, :launch_fingerprint) ->
+            {:cont, {:ok, [CodingAgent.ProcessStore.receipt(record) | receipts]}}
+
+          _ ->
+            {:halt, {:error, :unavailable}}
         end
       end)
       |> case do
