@@ -10,6 +10,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Pin skill-synthesis candidate timestamps in ordering fixtures and cover
+  recency/ID tie-breaking independently of wall-clock scheduling.
+
 - Derive computer-use approval test origins from configured control-plane/web
   ports so non-default test listeners retain Lemon self-surface protection.
 

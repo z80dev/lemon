@@ -243,6 +243,10 @@ that its exact managed server ID is gone. Unrelated idle-server cleanup can chan
 the shared manager's active count concurrently; global count deltas are not an
 ownership assertion.
 
+Recency/deduplication fixtures use explicit ingestion timestamps, not consecutive
+wall-clock reads. Exercise reversed input and equal-timestamp ID tie-breaking
+separately so crossing a millisecond cannot change the expected winner.
+
 Submission-shape fixtures use per-test run supervisors and capturing run processes,
 not real gateway work that can finish during another test's global count assertions.
 Own database fixtures with `start_supervised!` so shutdown finishes before directory
