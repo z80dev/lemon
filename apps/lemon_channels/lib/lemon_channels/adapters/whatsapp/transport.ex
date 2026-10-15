@@ -612,7 +612,7 @@ defmodule LemonChannels.Adapters.WhatsApp.Transport do
     if is_integer(max_bytes) and byte_size(audio_bytes) > max_bytes do
       {:error, :voice_too_large}
     else
-      LemonChannels.Adapters.Telegram.VoiceTranscriber.transcribe(%{
+      LemonChannels.VoiceTranscriber.transcribe(%{
         model: voice_cfg.model,
         base_url: voice_cfg.base_url,
         api_key: voice_cfg.api_key,
