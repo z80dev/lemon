@@ -393,6 +393,10 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
     end
 
     :ok
+  rescue
+    _ -> Logger.warning("Telegram pairing reply failed")
+  catch
+    _kind, _reason -> Logger.warning("Telegram pairing reply failed")
   end
 
   defp send_unpaired_notice(state, inbound) do

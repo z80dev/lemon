@@ -340,6 +340,8 @@ defmodule LemonChannels.Adapters.Discord.Transport do
     end
   rescue
     _ -> Logger.warning("discord pairing reply failed")
+  catch
+    _kind, _reason -> Logger.warning("discord pairing reply failed")
   end
 
   defp maybe_reply_pairing(_inbound, _state), do: :ok

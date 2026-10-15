@@ -64,6 +64,13 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
     end
   end
 
+  defmodule FailingPairingAPI do
+    def create(_channel_id, params) do
+      send(self(), {:failed_pairing_reply, params.content})
+      exit({:delivery_failed, params.content})
+    end
+  end
+
   defmodule ApprovalOutboxAPI do
     def edit(channel_id, message_id, params) do
       send(
@@ -126,6 +133,29 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
   end
 
   @gateway_config_key :"Elixir.LemonGateway.Config"
+
+  test "pairing API exits cannot put plaintext codes into crash logs" do
+    with_discord_api(fn ->
+      Application.put_env(:lemon_gateway, @gateway_config_key, %{
+        discord: %{api_mod: FailingPairingAPI}
+      })
+
+      state = Map.put(discord_message_state(), :unauthorized_dm_behavior, "pair")
+      message = discord_message("1503803470493257896", "hello") |> Map.delete("guild_id")
+
+      log =
+        capture_log(fn ->
+          assert {:noreply, ^state} =
+                   Transport.handle_info({:discord_event, {:MESSAGE_CREATE, message, nil}}, state)
+        end)
+
+      assert_receive {:failed_pairing_reply, reply}
+      assert [_, code] = Regex.run(~r/Pairing code: ([A-HJ-NP-Z2-9]{8})/, reply)
+      assert log =~ "pairing reply failed"
+      refute log =~ code
+      assert {:ok, _} = LemonChannels.Pairing.consume("discord", code)
+    end)
+  end
 
   test "default ignore preserves guild restrictions on non-allowlisted DMs" do
     with_discord_api(fn ->
