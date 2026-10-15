@@ -78,7 +78,8 @@ Canonical test lanes:
              --focused is a quick pre-check only, not a substitute for the app run
   premerge   Stop-on-failure diff checks: [--base REF] (default: origin/main)
   quality    CI check lane: compile -Werror, format check, credo, skip-tag guard, shellcheck, launcher
-             script tests, changelog guard, selector self-test, skill lint, mix lemon.quality, focused quality tests
+             script tests, changelog guard, selector self-test, skill lint, mix lemon.quality, focused quality tests;
+             [--base REF] (PR CI) limits format/credo to files changed since REF unless the diff is full scope
   clients    CI client lane: tui (typecheck, lint, bun test) and lemon-browser-node (typecheck, lint, build, vitest)
   coverage   Nightly lane: ExUnit excluding integration with --cover (per-app coverage thresholds)
   eval-fast  Small deterministic eval harness run: mix lemon.eval --iterations ${LEMON_EVAL_ITERATIONS:-3}
@@ -213,12 +214,38 @@ run_shellcheck() {
   shellcheck scripts/test
 }
 
+# `quality --base REF` (pull requests) formats and credo-checks only the files
+# changed since REF unless the diff selects full scope (formatter/Credo config,
+# mix files, scripts, ...). Credo's cross-file checks (Consistency.*,
+# DuplicatedCode) then only compare changed files, so main's full run remains
+# the authority for those.
 run_quality() {
   ensure_repo_root
   setup_test_env
+  local base=""
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --base)
+        if [ "$#" -lt 2 ]; then
+          echo "error: --base requires a ref" >&2
+          return 64
+        fi
+        base="$2"; shift 2 ;;
+      *) echo "error: quality accepts only --base REF" >&2; return 64 ;;
+    esac
+  done
   mix compile --warnings-as-errors
-  mix format --check-formatted
-  mix credo
+  if [ -n "$base" ]; then
+    collect_changed_files "$base"
+  fi
+  if [ -z "$base" ] || [ "$CHANGED_SCOPE" = "full" ]; then
+    mix format --check-formatted
+    mix credo
+  else
+    echo "quality: format/credo on ${#CHANGED_FORMAT[@]}/${#CHANGED_ELIXIR[@]} changed files since $base"
+    if [ "${#CHANGED_FORMAT[@]}" -gt 0 ]; then mix format --check-formatted "${CHANGED_FORMAT[@]}"; fi
+    if [ "${#CHANGED_ELIXIR[@]}" -gt 0 ]; then mix credo "${CHANGED_ELIXIR[@]}"; fi
+  fi
   check_skipped_tests
   scripts/check_changelog
   python3 scripts/test_changed_tests.py
@@ -396,11 +423,29 @@ premerge_step() (
   printf 'premerge: %s passed (%ss)\n' "$name" "$((SECONDS - started))"
 )
 
+# Sets CHANGED_SCOPE (full|apps|none) and the existing changed files since the
+# merge base with REF: CHANGED_FORMAT (.ex/.exs/.heex), CHANGED_ELIXIR
+# (.ex/.exs) and CHANGED_CHANGELOGS (CHANGELOG.md, existing or deleted).
+collect_changed_files() {
+  local selection path
+  CHANGED_FORMAT=() CHANGED_ELIXIR=() CHANGED_CHANGELOGS=()
+  selection="$(mktemp "$LEMON_TEST_TMPDIR/changed-files.XXXXXX")"
+  scripts/changed_tests --base "$1" --format json >"$selection"
+  CHANGED_SCOPE="$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["scope"])' "$selection")"
+  while IFS= read -r -d '' path; do
+    if [ -f "$path" ]; then
+      case "$path" in *.ex|*.exs|*.heex) CHANGED_FORMAT+=("$path") ;; esac
+      case "$path" in *.ex|*.exs) CHANGED_ELIXIR+=("$path") ;; esac
+    fi
+    case "$path" in CHANGELOG.md|*/CHANGELOG.md) CHANGED_CHANGELOGS+=("$path") ;; esac
+  done < <(selection_paths "$selection" changed_files)
+  rm -f "$selection"
+}
+
 run_premerge() {
   ensure_repo_root
   setup_test_env
-  local base="origin/main" selection path
-  local formatted=() elixir=() changelogs=()
+  local base="origin/main"
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --base)
@@ -412,33 +457,24 @@ run_premerge() {
       *) echo "error: premerge accepts only --base REF" >&2; return 64 ;;
     esac
   done
-  selection="$(mktemp "$LEMON_TEST_TMPDIR/premerge.XXXXXX")"
-  scripts/changed_tests --base "$base" --format json >"$selection"
-  while IFS= read -r -d '' path; do
-    if [ -f "$path" ]; then
-      case "$path" in *.ex|*.exs|*.heex) formatted+=("$path") ;; esac
-      case "$path" in *.ex|*.exs) elixir+=("$path") ;; esac
-    fi
-    case "$path" in CHANGELOG.md|*/CHANGELOG.md) changelogs+=("$path") ;; esac
-  done < <(selection_paths "$selection" changed_files)
-  if [ "${#formatted[@]}" -gt 0 ]; then
-    premerge_step format mix format --check-formatted "${formatted[@]}"
+  collect_changed_files "$base"
+  if [ "${#CHANGED_FORMAT[@]}" -gt 0 ]; then
+    premerge_step format mix format --check-formatted "${CHANGED_FORMAT[@]}"
   else
     echo "premerge: format skipped (no changed .ex/.exs/.heex files; 0s)"
   fi
-  if [ "${#elixir[@]}" -gt 0 ]; then
-    premerge_step credo mix credo "${elixir[@]}"
+  if [ "${#CHANGED_ELIXIR[@]}" -gt 0 ]; then
+    premerge_step credo mix credo "${CHANGED_ELIXIR[@]}"
   else
     echo "premerge: credo skipped (no changed .ex/.exs files; 0s)"
   fi
   premerge_step skip-tag-guard check_skipped_tests
-  if [ "${#changelogs[@]}" -gt 0 ]; then
-    premerge_step changelog scripts/check_changelog "${changelogs[@]}"
+  if [ "${#CHANGED_CHANGELOGS[@]}" -gt 0 ]; then
+    premerge_step changelog scripts/check_changelog "${CHANGED_CHANGELOGS[@]}"
   else
     echo "premerge: changelog skipped (no changed CHANGELOG.md; 0s)"
   fi
   premerge_step changed run_changed --base "$base"
-  rm -f "$selection"
   echo "Not covered: full suite runs on main after merge; dialyzer/install/sim-bench run in CI."
 }
 
