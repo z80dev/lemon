@@ -22,6 +22,7 @@ defmodule CodingAgent.Tools.Read do
   alias CodingAgent.Tools.ACPFileBridge
   alias CodingAgent.Tools.FileValidation
   alias CodingAgent.Tools.PathHelpers
+  alias CodingAgent.Tools.ReadSummary
 
   import LemonAgent.Tools.AbortHelpers, only: [aborted?: 1, check_abort: 1]
 
@@ -39,7 +40,8 @@ defmodule CodingAgent.Tools.Read do
   @doc false
   def truncated_output?(content) do
     Enum.any?(@truncation_patterns, &Regex.match?(&1, content)) or
-      Regex.match?(~r/(?:\A|\n)…(?:\n|\z)/, content)
+      Regex.match?(~r/(?:\A|\n)…(?: \[lines \d+-\d+ elided\])?(?:\n|\z)/, content) or
+      String.contains?(content, "[Structural summary;")
   end
 
   defp notice(template, values) do
@@ -60,6 +62,7 @@ defmodule CodingAgent.Tools.Read do
 
   - `:max_lines` - Maximum lines to return (default: 2000)
   - `:max_bytes` - Maximum bytes to return (default: 50KB)
+  - `:structural_summary` - Outline large code files on bare reads (default: true)
   """
   @spec tool(cwd :: String.t(), opts :: keyword()) :: AgentTool.t()
   def tool(cwd, opts \\ []) do
@@ -73,6 +76,8 @@ defmodule CodingAgent.Tools.Read do
           "(file:50-80, file:50+20, file:50 from line 50, file:-30 last 30 lines, file:raw or " <>
           "file:50-80:raw for exact unnumbered text, file:5,19-25 for disjoint windows) to page. " <>
           "A single non-raw bounded range includes 1 line before and 3 after; comma lists stay exact. " <>
+          "Bare reads of code files with at least 300 lines (up to 2 MiB) return an immutable structural summary; " <>
+          "re-read explicit ranges before editing, or pass summary: false for full text. " <>
           "Text output is capped at 2000 lines / 50KB. PDF page/page_limit and notebook cell/cell_limit select source units. " <>
           "Returned skill:// and artifact:// references are readable paths.",
       label: "Read File",
@@ -84,6 +89,11 @@ defmodule CodingAgent.Tools.Read do
             "type" => "string",
             "description" =>
               "A local path, skill://<key>[/relative-path], returned artifact://<id> handle, agent:// live roster, or agent://<task-id-or-name>[/json/path] owned task status/output. May end with a line selector such as :50-80, :5,19-25, :50+20, :50, :-30 or :raw"
+          },
+          "summary" => %{
+            "type" => "boolean",
+            "description" =>
+              "Outline large code files on bare reads (default: true); false returns full text"
           },
           "offset" => %{
             "type" => "integer",
@@ -191,6 +201,10 @@ defmodule CodingAgent.Tools.Read do
       opts
       |> Keyword.put(:raw, Map.get(view, :raw, false))
       |> Keyword.put(:selector_window, Map.has_key?(view, :windows))
+      |> Keyword.put(
+        :structural_summary,
+        Map.get(params, "summary", Keyword.get(opts, :structural_summary, true))
+      )
 
     with :ok <- validate_params(path, offset, limit),
          {:ok, resolved_path} <- resolve_path(path, cwd, opts),
@@ -730,7 +744,52 @@ defmodule CodingAgent.Tools.Read do
   # Text File Reading
   # ============================================================================
 
-  defp read_text_file(path, _stat, offset, limit, view, signal, opts, editable?) do
+  defp read_text_file(path, stat, offset, limit, view, signal, opts, editable?) do
+    summary =
+      if summary?(offset, limit, view, opts),
+        do: ReadSummary.read(path, stat, signal, opts),
+        else: :not_applicable
+
+    case summary do
+      {:ok, summary} ->
+        FileReadTracker.record_digest(opts, path, summary.digest)
+        render_summary(path, summary, %{})
+
+      :not_applicable ->
+        read_text_window(path, offset, limit, view, signal, opts, editable?)
+
+      {:error, _} = error ->
+        error
+    end
+  end
+
+  defp summary?(offset, limit, view, opts) do
+    is_nil(offset) and is_nil(limit) and not Map.get(view, :raw, false) and
+      Keyword.get(opts, :structural_summary, true) != false
+  end
+
+  defp render_summary(path, summary, extra) do
+    %AgentToolResult{
+      content: [%TextContent{text: summary.text}],
+      details:
+        Map.merge(
+          %{
+            path: path,
+            total_lines: summary.total_lines,
+            start_line: 1,
+            lines_shown: summary.lines_shown,
+            snapshot: nil,
+            immutable: true,
+            summary: true,
+            elided_ranges: summary.elided_ranges,
+            truncation: %{truncated: true, reason: "structural_summary"}
+          },
+          extra
+        )
+    }
+  end
+
+  defp read_text_window(path, offset, limit, view, signal, opts, editable?) do
     max_lines = Keyword.get(opts, :max_lines, @default_max_lines)
     max_bytes = Keyword.get(opts, :max_bytes, @default_max_bytes)
 
@@ -758,25 +817,36 @@ defmodule CodingAgent.Tools.Read do
   defp read_text_file_from_acp(path, offset, limit, view, opts) do
     case ACPFileBridge.read_text_file(path, offset, limit, opts) do
       {:ok, content} ->
-        max_lines = Keyword.get(opts, :max_lines, @default_max_lines)
-        max_bytes = Keyword.get(opts, :max_bytes, @default_max_bytes)
+        summary =
+          if summary?(offset, limit, view, opts),
+            do: ReadSummary.from_content(path, content, opts),
+            else: :not_applicable
 
-        with {:ok, window} <-
-               CodingAgent.Tools.ReadText.from_content(content, max_lines, max_bytes) do
-          window =
-            if normalize_offset(offset) == 0 and is_nil(limit),
-              do: Map.put(window, :digest, :erlang.md5(content)),
-              else: window
-
-          # The ACP client has already applied line/limit; do not slice twice.
-          render_window(path, window, normalize_offset(offset), max_bytes, %{
-            acp_client: true,
-            raw: Map.get(view, :raw, false)
-          })
+        case summary do
+          {:ok, summary} -> render_summary(path, summary, %{acp_client: true})
+          :not_applicable -> render_acp_content(path, content, offset, limit, view, opts)
         end
 
       {:error, reason} ->
         {:error, reason}
+    end
+  end
+
+  defp render_acp_content(path, content, offset, limit, view, opts) do
+    max_lines = Keyword.get(opts, :max_lines, @default_max_lines)
+    max_bytes = Keyword.get(opts, :max_bytes, @default_max_bytes)
+
+    with {:ok, window} <- CodingAgent.Tools.ReadText.from_content(content, max_lines, max_bytes) do
+      window =
+        if normalize_offset(offset) == 0 and is_nil(limit),
+          do: Map.put(window, :digest, :erlang.md5(content)),
+          else: window
+
+      # The ACP client has already applied line/limit; do not slice twice.
+      render_window(path, window, normalize_offset(offset), max_bytes, %{
+        acp_client: true,
+        raw: Map.get(view, :raw, false)
+      })
     end
   end
 

@@ -4,6 +4,13 @@
 
 ### Added
 
+- Bare reads of source files with at least 300 lines and at most 2 MiB now return
+  bounded structural summaries with declarations and explicit omitted ranges.
+  Summaries are immutable, omit edit snapshots, and are rejected by overwrite
+  safety checks. Selectors, offset/limit, `summary: false`, or the host's
+  `structural_summary: false` option retain full reads; ACP unsaved buffers use
+  the same outline behavior.
+
 - Find sorts the complete candidate set before applying `max_results`, with
   `sort: "mtime"` for newest-first (path tie-breaks) or the existing default
   `"path"`. Slash globs use full-path matching in fd as in the fallback;
