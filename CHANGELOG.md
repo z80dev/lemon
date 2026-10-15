@@ -8,6 +8,11 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
+### Added
+
+- MCP clients accept an optional asynchronous `notification_handler` callback for
+  server notifications, including tool, resource and prompt list changes.
+
 ### Fixed
 
 - Native dynamic-preset resolution binds discovered context, output limits,
