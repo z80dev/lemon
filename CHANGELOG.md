@@ -10,6 +10,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Keep bash streaming previews advancing after the first 50 KB, including delayed
+  output, while preserving bounded replacement snapshots and managed capture.
+
 - Resolve qualified model selectors against their own provider when a preset or
   default provider was inherited, while preserving native colon IDs for explicit
   provider/model pairs.
