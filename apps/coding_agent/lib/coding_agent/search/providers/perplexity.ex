@@ -6,6 +6,8 @@ defmodule CodingAgent.Search.Providers.Perplexity do
   alias CodingAgent.Search.Result
   alias LemonAgent.Security.ExternalContent
 
+  @perplexity_api_host "api.perplexity.ai"
+
   @impl true
   def id, do: "perplexity"
 
@@ -30,13 +32,16 @@ defmodule CodingAgent.Search.Providers.Perplexity do
     started_ms = System.monotonic_time(:millisecond)
     endpoint = String.trim_trailing(context.base_url, "/") <> "/chat/completions"
 
-    opts = [
-      headers: [
+    headers =
+      [
         {"content-type", "application/json"},
         {"authorization", "Bearer #{context.api_key}"},
         {"http-referer", "https://lemon.agent"},
         {"x-title", "Lemon Web Search"}
-      ],
+      ] ++ integration_headers(endpoint)
+
+    opts = [
+      headers: headers,
       json: %{
         "model" => context.model,
         "messages" => [%{"role" => "user", "content" => request.query}]
@@ -92,6 +97,19 @@ defmodule CodingAgent.Search.Providers.Perplexity do
   end
 
   defp normalize_citations(_, _request), do: []
+
+  defp integration_headers(endpoint) do
+    case URI.parse(endpoint).host do
+      host when is_binary(host) ->
+        if String.downcase(host) == @perplexity_api_host,
+          do: [{"x-pplx-integration", "lemon"}],
+          else: []
+
+      _ ->
+        []
+    end
+  end
+
   defp empty_default(""), do: "request failed"
   defp empty_default(value), do: value
 end

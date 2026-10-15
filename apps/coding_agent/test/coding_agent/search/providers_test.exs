@@ -55,7 +55,11 @@ defmodule CodingAgent.Search.ProvidersTest do
   end
 
   test "Perplexity wraps answer content and bounds citations" do
-    http_post = fn _url, _opts ->
+    parent = self()
+
+    http_post = fn url, opts ->
+      send(parent, {:perplexity_request, url, opts})
+
       {:ok,
        %Req.Response{
          status: 200,
@@ -78,6 +82,21 @@ defmodule CodingAgent.Search.ProvidersTest do
     assert payload["content"] =~ "EXTERNAL_UNTRUSTED_CONTENT"
     assert payload["citations"] == ["https://one.example", "https://two.example"]
     refute inspect(payload) =~ "pplx-secret"
+
+    assert_received {:perplexity_request, _, direct_opts}
+    assert {"x-pplx-integration", "lemon"} in direct_opts[:headers]
+
+    assert {:ok, _} =
+             Perplexity.search(@request, %{
+               api_key: "openrouter-secret",
+               base_url: "https://openrouter.ai/api/v1",
+               model: "perplexity/sonar",
+               timeout_ms: 100,
+               http_post: http_post
+             })
+
+    assert_received {:perplexity_request, _, openrouter_opts}
+    refute Enum.any?(openrouter_opts[:headers], &match?({"x-pplx-integration", _}, &1))
   end
 
   test "DuckDuckGo parses keyless HTML result links" do

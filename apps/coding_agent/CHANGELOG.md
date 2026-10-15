@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Added
+
+- Web-search requests sent directly to `api.perplexity.ai` now include an
+  `X-Pplx-Integration: lemon` header so Perplexity can attribute Lemon traffic.
+  Requests routed through OpenRouter or custom compatible endpoints are
+  unchanged.
+
 ### Changed
 
 - Consolidate memory tools as `remember` (compact USER.md/MEMORY.md facts) and
