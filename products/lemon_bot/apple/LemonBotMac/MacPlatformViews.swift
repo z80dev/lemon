@@ -22,6 +22,7 @@ struct MacMiniComposer: View {
                 }
             }
             if let error = controller.errorMessage { Text(error).foregroundStyle(.red).textSelection(.enabled) }
+            if controller.selectedBot == nil { SettingsLink { Text("Open Settings") } }
         }.padding().frame(minWidth: 440, minHeight: 280)
     }
 }
@@ -65,7 +66,12 @@ struct MacCompanionView: View {
                     }
                 }
             }.padding().frame(minWidth: 290, minHeight: 150)
-        } else { Text("The selected Bot is no longer available.").padding() }
+        } else {
+            VStack(spacing: 12) {
+                Text("The selected Bot is no longer available.")
+                SettingsLink { Text("Choose another Bot") }
+            }.padding()
+        }
     }
 }
 
@@ -154,6 +160,10 @@ struct MacVoiceView: View {
                     }
                     Button("Discard", role: .cancel) { controller.cancelCapture() }
                 }
+            }
+            if controller.uncertainVoiceSend {
+                Text("We couldn't confirm the last voice message. Check the conversation before sending again.").font(LBFont.meta).foregroundStyle(LB.warning)
+                Button("Start new voice message") { controller.startNewVoiceMessage() }.disabled(controller.busy)
             }
             if let text = controller.speechStatus { Text(text).font(.caption).textSelection(.enabled) }
             if let error = speech.errorMessage { Text(error).foregroundStyle(.orange).textSelection(.enabled) }

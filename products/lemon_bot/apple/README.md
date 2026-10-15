@@ -191,6 +191,9 @@ runtime control is configured. Stop and Restart explain the interruption and
 require explicit confirmation. Admins cannot issue owner-only lifecycle commands.
 When controls are unavailable, the backend's reason is shown. The shared pane
 is also available from **View instance details** in the connection panel.
+Status sections appear before Lifecycle. **Start** is unavailable while the Lemon link is connected.
+
+On Mac, switching Settings panes keeps unfinished Preferences and local-platform edits in place. Sign-out asks for confirmation. When a voice message isn't confirmed, check its conversation before choosing **Start new voice message**; this discards the reviewed recording, never resends it, and does not bypass any pending-message check.
 
 The pane refreshes every 10 seconds while visible, and every 2 seconds while a
 command is running, with Refresh and iOS pull-to-refresh for a manual read.
