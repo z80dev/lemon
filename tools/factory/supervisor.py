@@ -26,10 +26,10 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-import compat  # noqa: E402
-import omp_adapter  # noqa: E402
-import project as projects  # noqa: E402
-from store import ATTEMPT_LIVE, AdmissionRefused, FactoryError, Invalid, Ledger, RevisionConflict  # noqa: E402
+import compat
+import omp_adapter
+import project as projects
+from store import ATTEMPT_LIVE, AdmissionRefused, FactoryError, Invalid, Ledger, RevisionConflict
 
 RELEASE_ROOT = Path(__file__).resolve().parents[2]
 HEARTBEAT_S = 2.0

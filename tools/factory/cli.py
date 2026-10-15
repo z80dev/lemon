@@ -18,8 +18,8 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-import project as projects  # noqa: E402
-from store import ATTEMPT_LIVE, PRIORITIES, STATUSES, FactoryError, Invalid, Ledger  # noqa: E402
+import project as projects
+from store import ATTEMPT_LIVE, PRIORITIES, STATUSES, FactoryError, Invalid, Ledger
 
 SNAPSHOT_LIMIT = 12
 RELEASE_ROOT = Path(__file__).resolve().parents[2]

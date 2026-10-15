@@ -20,8 +20,8 @@ from .omp_fixture import AGENT_CONFIG, omp_available, wait_for
 
 sys.path.insert(0, str(FACTORY_DIR))
 
-import compat  # noqa: E402
-import omp_adapter  # noqa: E402
+import compat
+import omp_adapter
 
 
 def omp_processes(session_dir: Path) -> list[str]:
