@@ -23,21 +23,25 @@ defmodule LemonChannels.Runtime do
   A caller that already owns a stable reconciliation identity may pass
   `run_id: value`. A transport whose rendered prompt contains retry-local data
   may also pass `replay_content_identity`; ordinary channel transports omit
-  both and let the router allocate and bind the complete request. Telegram and
-  Discord may pass `typing` refresher options; these are registered only after
-  acceptance and never change the submission result.
+  both. This boundary allocates a run identity before submission so interactive
+  channel surfaces can bind the originating user without racing tool discovery.
+  Telegram and Discord may pass `typing` refresher options; these are registered
+  only after acceptance and never change the submission result.
   """
   @spec submit_inbound(InboundMessage.t(), keyword()) :: :ok | failure()
   def submit_inbound(%InboundMessage{} = inbound, opts \\ []) when is_list(opts) do
     emit_inbound_telemetry(inbound)
 
-    inbound
-    |> LemonChannels.RunRequestBuilder.from_inbound()
-    |> maybe_put_run_id(Keyword.get(opts, :run_id))
-    |> maybe_put_replay_identity(Keyword.get(opts, :replay_identity))
-    |> maybe_put_replay_content_identity(Keyword.get(opts, :replay_content_identity))
-    |> RouterBridge.submit_run()
-    |> case do
+    request =
+      inbound
+      |> LemonChannels.RunRequestBuilder.from_inbound()
+      |> maybe_put_run_id(Keyword.get(opts, :run_id) || channel_prompt_run_id(inbound))
+      |> maybe_put_replay_identity(Keyword.get(opts, :replay_identity))
+      |> maybe_put_replay_content_identity(Keyword.get(opts, :replay_content_identity))
+
+    _ = LemonChannels.UserPromptSurface.register(request)
+
+    case RouterBridge.submit_run(request) do
       {:ok, run_id} ->
         if typing = Keyword.get(opts, :typing) do
           LemonChannels.TypingIndicator.start_run(run_id, typing)
@@ -46,6 +50,9 @@ defmodule LemonChannels.Runtime do
         :ok
 
       {:error, _reason} = error ->
+        if LemonChannels.SubmissionOutcome.retry_safe?(error),
+          do: LemonChannels.UserPromptSurface.release(request.run_id)
+
         error
     end
   end
@@ -127,6 +134,12 @@ defmodule LemonChannels.Runtime do
   end
 
   def clear_telegram_thread_state(_, _, _), do: :ok
+
+  defp channel_prompt_run_id(%InboundMessage{channel_id: channel})
+       when channel in ["telegram", "discord"],
+       do: LemonCore.Id.run_id()
+
+  defp channel_prompt_run_id(_inbound), do: nil
 
   defp maybe_put_run_id(request, run_id) when is_binary(run_id) and run_id != "",
     do: %{request | run_id: run_id}

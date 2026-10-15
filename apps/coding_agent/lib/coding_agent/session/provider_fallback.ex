@@ -139,6 +139,7 @@ defmodule CodingAgent.Session.ProviderFallback do
         ctx.cwd
       )
       |> apply_credential_api_key(entry, model, ctx.settings, original_options)
+      |> with_alternate_signal(model, more_entries, rest, ctx)
 
     entry = Map.put(entry, :api_key, route_options.api_key)
 
@@ -227,7 +228,8 @@ defmodule CodingAgent.Session.ProviderFallback do
 
     if action in [:next_credential, :next_provider] do
       CredentialHealth.record_failure(model.provider, entry.ref, details.category,
-        retry_after_ms: retry_after_hint(reason)
+        retry_after_ms: retry_after_hint(reason),
+        quota_exhausted: LemonAi.Error.quota_exhausted?(details)
       )
 
       maybe_clear_pin(model, entry, ctx)
@@ -254,6 +256,22 @@ defmodule CodingAgent.Session.ProviderFallback do
 
   defp retry_after_hint({:error, _reason, message}), do: retry_after_hint(message)
   defp retry_after_hint(error), do: LemonAi.Providers.RetryHelper.error_retry_after_ms(error)
+
+  defp with_alternate_signal(options, model, entries, candidates, ctx) do
+    healthy? = fn provider, entry ->
+      is_binary(entry.api_key) and entry.api_key != "" and
+        not CredentialHealth.in_cooldown?(provider, entry.ref)
+    end
+
+    available? =
+      Enum.any?(entries, &healthy?.(model.provider, &1)) or
+        Enum.any?(candidates, fn candidate ->
+          Enum.any?(credential_entries(candidate, ctx), &healthy?.(candidate.provider, &1))
+        end)
+
+    overrides = Map.put(options.provider_retry || %{}, :alternate_available, available?)
+    %{options | provider_retry: overrides}
+  end
 
   # Ordered credential attempts for a provider candidate: pool credentials
   # first, the single-credential resolution as the final "default" entry

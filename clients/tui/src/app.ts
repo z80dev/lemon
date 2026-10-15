@@ -46,6 +46,7 @@ import {
 	type ComposerSubmission,
 	type SubmissionDisposition,
 } from "./composer/drafts.ts";
+import { type NotificationMode, resolveNotifications } from "./config.ts";
 import { editInExternalEditor } from "./external-editor.ts";
 import { getGitModeline } from "./git-utils.ts";
 import { ControlPlaneClient, type RequestOptions } from "./protocol/client.ts";
@@ -71,6 +72,8 @@ import { AppStore, type SubmissionMode } from "./store/app-store.ts";
 import type { QueueItem } from "./store/queue-store.ts";
 import type { SessionStore } from "./store/session-store.ts";
 import type { CompactionDetails, NoticeLevel } from "./store/transcript-model.ts";
+import { detectTerminalCapabilities } from "./terminal/capabilities.ts";
+import { copyNotice, copyText } from "./terminal/clipboard.ts";
 import { type ForkLaunch, openForkSession } from "./terminal/fork.ts";
 import { TerminalIntegration } from "./terminal/integration.ts";
 import { isApprovedDecision } from "./ui/components/approval-panel.ts";
@@ -136,6 +139,7 @@ export interface AppShellOptions {
 	 * terminal's OSC 11 reports for as long as the client runs.
 	 */
 	themePreference?: ThemePreference;
+	notifications?: NotificationMode;
 	/** Local roots for skills, prompts and file commands; tests inject a fixture home. */
 	resources?: Omit<PaletteSourceOptions, "cwd">;
 }
@@ -229,7 +233,11 @@ export class AppShell {
 			this.store,
 			this.client,
 			this.#cwd,
-			undefined,
+			detectTerminalCapabilities(
+				process.env,
+				Boolean(process.stdout.isTTY),
+				resolveNotifications(options.notifications),
+			),
 			() => {
 				if (this.tui.nativeRendering) this.tui.renderNow();
 			},
@@ -463,6 +471,9 @@ export class AppShell {
 				this.events.toggleToolOutputs();
 			},
 			openDiff: () => this.#toolInspector.open("diff"),
+			copyLastReply: async () => {
+				await this.submit("/copy");
+			},
 			notice: (text) => this.events.notice(text),
 		});
 	}
@@ -866,13 +877,18 @@ export class AppShell {
 		}
 	}
 
-	/** Native transcript controls: Copy goes to the clipboard over OSC 52, Switch model opens the picker. */
+	/** Native transcript controls share the command's clipboard path. */
 	#runTranscriptAction(action: TranscriptAction): void {
 		if (action.act === "copy") {
-			this.tui.terminal.write(`\x1b]52;c;${Buffer.from(action.text).toString("base64")}\x07`);
+			void this.#copyText(action.text);
 		} else if (action.act === "switch-model") {
 			this.#modelPicker.open();
 		}
+	}
+
+	async #copyText(text: string): Promise<void> {
+		const result = await copyText(text, { write: (sequence) => this.tui.terminal.write(sequence) });
+		this.events.notice(copyNotice(result), result.osc52 || result.native ? "info" : "warning");
 	}
 
 	/** Ctrl+C's first job. Returns true when there was a run to stop. */
@@ -1507,6 +1523,7 @@ export class AppShell {
 			requestExit: (code: number) => this.requestExit(code),
 			reconnect: () => this.client.reconnect(),
 			refreshStatus: () => this.#renderStatus(),
+			copyText: (text) => this.#copyText(text),
 			getDraft: () => this.#editor.getExpandedText(),
 			setDraft: (text: string) => {
 				this.#editor.setText(text);

@@ -127,7 +127,7 @@ Call-site migration to `LemonCore.Env.get/2` is out of scope for this pass and i
 | `LEMON_COMPUTER_USE_DECLINED_ORIGINS` | string | _(none)_ |  | `lemon_computer_use` | Comma-separated website origins computer use always declines (for example a custom Lemon Bot web origin). |
 | `LEMON_COMPUTER_USE_ENABLED` | boolean | `false` |  | `lemon_computer_use` | Opt in to native app control (`cua_js`/`cua_js_reset`) through the locally installed LCU runtime. |
 | `LEMON_COMPUTER_USE_LCU_ROOT` | string | _(none)_ |  | `lemon_computer_use` | Installed LCU release directory. Defaults to ~/.local/share/lcu/current (or /opt/lcu/current). |
-| `LEMON_COMPUTER_USE_NODE` | string | _(none)_ |  | `lemon_computer_use` | Node runtime for the LCU bridge. Defaults to LCU's own <root>/agent-tools/node/bin/node. |
+| `LEMON_COMPUTER_USE_NODE` | string | _(none)_ |  | `lemon_computer_use` | Node runtime for the LCU bridge. Defaults to LCU's own &lt;root&gt;/agent-tools/node/bin/node. |
 
 ### Endpoints
 

@@ -433,6 +433,55 @@ defmodule LemonCli.CommandRegistry do
       ]
     },
     %{
+      name: "runs",
+      summary: "Inspect recent or active runtime runs",
+      usage: "lemon runs [list|active] [options]",
+      subcommands: subcommands(~w(list active)),
+      options: [
+        option("--status S", ["--status"], "completed, aborted, crashed, or error (recent only)"),
+        option("--session KEY", ["--session"], "Filter session key"),
+        option("--agent ID", ["--agent"], "Filter agent"),
+        option("--since AGE", ["--since"], "Recent cutoff: 30m, 1h, or 2d"),
+        option("--limit N", ["--limit"], "Return 1..200 rows (default 50)"),
+        option("--json", ["--json"], "Emit JSON")
+      ],
+      details: [
+        "Requires a running runtime; never starts one. Recent filters inspect at most 200 returned history rows. Active lists in-flight sessions."
+      ]
+    },
+    %{
+      name: "cron",
+      summary: "Inspect cron run history",
+      usage: "lemon cron runs [options]",
+      subcommands: subcommands(~w(runs)),
+      options: [
+        option("--job ID", ["--job"], "Select one job; default all current jobs"),
+        option(
+          "--status S",
+          ["--status"],
+          "pending, running, completed, failed, timeout, or aborted"
+        ),
+        option("--since AGE", ["--since"], "Cutoff: 30m, 1h, or 2d"),
+        option("--limit N", ["--limit"], "Return 1..200 rows (default 50)"),
+        option("--json", ["--json"], "Emit JSON without job prompts or run output")
+      ]
+    },
+    %{
+      name: "logs",
+      summary: "Tail redacted runtime or offline launcher logs",
+      usage: "lemon logs [-n 50] [--level info|warning|error] [--follow] [--json]",
+      subcommands: [],
+      options: [
+        option("-n N", ["-n", "--lines"], "Return 1..1000 lines (default 50)"),
+        option("--level LEVEL", ["--level"], "Minimum severity: info, warning, or error"),
+        option("--follow", ["--follow"], "Poll every two seconds; Ctrl-C exits"),
+        option("--json", ["--json"], "Emit JSON; follow emits one document per poll")
+      ],
+      details: [
+        "Reads logs.tail while online, otherwise the launcher log. File reads are bounded to the last 1 MiB; unknown-level file lines are excluded with --level."
+      ]
+    },
+    %{
       name: "omp",
       summary: "Start, watch, and steer omp coding-agent sessions",
       usage: "lemon omp <command> [args] [options]",
@@ -718,8 +767,14 @@ defmodule LemonCli.CommandRegistry do
       "usage",
       LemonCore.Usage.CLI,
       "Inspect usage diagnostics",
-      "lemon usage [--json]",
-      [option("--json", ["--json"], "Emit redacted usage JSON")]
+      "lemon usage [--days N | --since YYYY-MM-DD --until YYYY-MM-DD] [--by day|provider|model|session] [--json]",
+      [
+        option("--days N", ["--days"], "Last N UTC dates including today (1–366)"),
+        option("--since YYYY-MM-DD", ["--since"], "Inclusive first UTC date"),
+        option("--until YYYY-MM-DD", ["--until"], "Inclusive last UTC date"),
+        option("--by GROUP", ["--by"], "day, provider (default), model, or session"),
+        option("--json", ["--json"], "Emit redacted usage JSON")
+      ]
     )
   ]
 

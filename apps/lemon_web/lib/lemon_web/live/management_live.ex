@@ -247,12 +247,14 @@ defmodule LemonWeb.ManagementLive do
       |> start_async(:fork, fn ->
         # The workspace is resolved inside the task so it never enters assigns;
         # the child inherits it so chat resumes in the same workspace.
-        cwd = SessionCwd.resolve(key)
-
-        case Rpc.call("sessions.fork", %{"sessionKey" => key, "cwd" => cwd}) do
-          {:ok, %{"sessionKey" => child}} = ok when is_binary(child) ->
-            SessionCwd.remember(child, cwd)
-            ok
+        with cwd when is_binary(cwd) <- SessionCwd.resolve(key),
+             {:ok, %{"sessionKey" => child}} = ok when is_binary(child) <-
+               Rpc.call("sessions.fork", %{"sessionKey" => key, "cwd" => cwd}) do
+          SessionCwd.remember(child, cwd)
+          ok
+        else
+          {:error, :unavailable} ->
+            {:error, {:unavailable, "Session workspace is unavailable", nil}}
 
           other ->
             other

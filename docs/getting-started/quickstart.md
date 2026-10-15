@@ -30,12 +30,14 @@ another model available to your account. With a Claude Pro or Max plan, choose
 supported; see [provider setup](../user-guide/setup.md).
 
 Skip the optional daily brief and runtime configuration for now. Setup is safe to
-rerun: a usable provider is kept, not logged in again. Do not paste credentials
-into chat or a repository.
+rerun: a usable provider is kept, not logged in again. If a Hermes home is found,
+setup first shows a read-only audit and offers a no-by-default import without
+secrets. Do not paste credentials into chat or a repository.
 
 ## 2. Make one useful change
 
-In your repository's terminal, start:
+Accept **Open Lemon now? [Y/n]** at the end of setup, or start it later from your
+repository's terminal:
 
 ```bash
 lemon tui
@@ -52,6 +54,9 @@ Read the repository instructions. Find how to run the tests. Add the test comman
 Watch the streamed answer, file edits and test output. Review the diff before
 keeping the change. A completed turn proves the provider and tools work together;
 a green diagnostic alone is not that proof.
+
+The setup success check is a reply arriving and `lemon doctor` showing no **FAIL**.
+Get this first conversation working before adding Telegram or the Web UI.
 
 Use **Ctrl+O** to choose a model and **Ctrl+X** to reopen a persisted session.
 While running, **Escape** stops the turn. While idle with an empty input,

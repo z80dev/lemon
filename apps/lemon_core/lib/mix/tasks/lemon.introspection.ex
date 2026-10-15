@@ -59,14 +59,17 @@ defmodule Mix.Tasks.Lemon.Introspection do
 
     query_opts = build_query_opts(opts)
 
-    events = LemonCore.Introspection.list(query_opts)
+    case LemonCore.Introspection.list(query_opts) do
+      {:error, _reason} ->
+        Mix.raise("Introspection events are unavailable")
 
-    if events == [] do
-      Mix.shell().info("No introspection events found.")
-    else
-      print_table(events)
-      Mix.shell().info("")
-      Mix.shell().info("#{length(events)} event(s) shown (limit: #{query_opts[:limit]})")
+      [] ->
+        Mix.shell().info("No introspection events found.")
+
+      events when is_list(events) ->
+        print_table(events)
+        Mix.shell().info("")
+        Mix.shell().info("#{length(events)} event(s) shown (limit: #{query_opts[:limit]})")
     end
   end
 
@@ -172,7 +175,12 @@ defmodule Mix.Tasks.Lemon.Introspection do
 
     row = format_row(header_cols, col_widths)
     Mix.shell().info(row)
-    separator = col_names() |> Enum.map(fn c -> String.duplicate("-", col_widths[c]) end) |> Enum.join("-+-")
+
+    separator =
+      col_names()
+      |> Enum.map(fn c -> String.duplicate("-", col_widths[c]) end)
+      |> Enum.join("-+-")
+
     Mix.shell().info(separator)
   end
 

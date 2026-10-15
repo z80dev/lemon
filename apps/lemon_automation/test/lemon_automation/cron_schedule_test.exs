@@ -3,6 +3,78 @@ defmodule LemonAutomation.CronScheduleTest do
 
   alias LemonAutomation.CronSchedule
 
+  describe "one-shot schedules" do
+    test "relative delays resolve once to absolute milliseconds" do
+      from = ~U[2026-12-31 23:45:12Z]
+
+      for {schedule, seconds} <- [{"in 30m", 1800}, {"in 2h", 7200}, {"in 1d", 86_400}] do
+        due = DateTime.to_unix(from, :millisecond) + seconds * 1000
+        assert {:ok, {:once_at, ^due}} = CronSchedule.parse(schedule, "UTC", from: from)
+        assert {:ok, canonical, true} = CronSchedule.prepare(schedule, "UTC", from: from)
+        assert CronSchedule.next_run_ms(canonical, "UTC", from: from) == due
+
+        assert CronSchedule.next_runs(canonical, "UTC", from: from, count: 5) ==
+                 [DateTime.from_unix!(due, :millisecond)]
+
+        assert CronSchedule.next_run_ms(canonical, "UTC",
+                 from: DateTime.from_unix!(due, :millisecond)
+               ) == nil
+      end
+    end
+
+    test "local ISO timestamps use the job timezone, including optional seconds" do
+      from = ~U[2026-07-01 00:00:00Z]
+
+      assert {:ok, "2026-07-15T13:30:00.000Z", true} =
+               CronSchedule.prepare("2026-07-15T09:30", "America/New_York", from: from)
+
+      assert {:ok, "2026-07-15T13:30:45.000Z", true} =
+               CronSchedule.prepare("2026-07-15T09:30:45", "America/New_York", from: from)
+
+      assert {:ok, "2026-07-15T09:30:00.000Z", true} =
+               CronSchedule.prepare("2026-07-15T09:30", "UTC", from: from)
+
+      zoned = DateTime.from_naive!(~N[2026-07-15 09:30:00], "America/New_York")
+      assert CronSchedule.matches?("2026-07-15T09:30", zoned)
+    end
+
+    test "validation rejects past and equal timestamps, zero delays and malformed dates" do
+      from = ~U[2026-07-15 09:30:00Z]
+
+      for schedule <- [
+            "2026-07-15T09:29",
+            "2026-07-15T09:30",
+            "in 0m",
+            "in -1h",
+            "in 999999999999d",
+            "2026-02-30T09:00",
+            "2026-07-16T09:00:00+01:00",
+            "2026-07-15T25:00"
+          ] do
+        assert {:error, _} = CronSchedule.prepare(schedule, "UTC", from: from)
+      end
+    end
+
+    test "DST gaps reject and folds select only the first instant" do
+      assert {:error, message} =
+               CronSchedule.prepare("2026-03-08T02:30", "America/New_York",
+                 from: ~U[2026-03-01 00:00:00Z]
+               )
+
+      assert message =~ "daylight-saving gap"
+
+      assert {:ok, "2026-11-01T05:30:00.000Z", true} =
+               CronSchedule.prepare("2026-11-01T01:30", "America/New_York",
+                 from: ~U[2026-11-01 00:00:00Z]
+               )
+
+      assert {:error, _} =
+               CronSchedule.prepare("2026-11-01T01:30", "America/New_York",
+                 from: ~U[2026-11-01 05:45:00Z]
+               )
+    end
+  end
+
   describe "normalize/1" do
     test "keeps 5-field cron expressions unchanged" do
       assert CronSchedule.normalize("0 9 * * 1-5") == {:ok, "0 9 * * 1-5"}

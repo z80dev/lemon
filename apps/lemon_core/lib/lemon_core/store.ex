@@ -574,16 +574,16 @@ defmodule LemonCore.Store do
     * `:until_ms` - Include events at or before this timestamp
     * `:limit` - Maximum number of events to return (default: #{@default_introspection_query_limit})
   """
-  @spec list_introspection_events(keyword()) :: [map()]
+  @spec list_introspection_events(keyword()) :: [map()] | {:error, term()}
   def list_introspection_events(opts \\ []) when is_list(opts),
     do: list_introspection_events(__MODULE__, opts)
 
   @doc """
   List introspection events from a specific store instance.
   """
-  @spec list_introspection_events(server(), keyword()) :: [map()]
+  @spec list_introspection_events(server(), keyword()) :: [map()] | {:error, term()}
   def list_introspection_events(server, opts) when is_list(opts) do
-    safe_store_call(server, {:list_introspection_events, opts}, [],
+    safe_store_call(server, {:list_introspection_events, opts}, {:error, :store_unavailable},
       op: :list_introspection_events,
       table: :introspection_log,
       key: :all
@@ -896,11 +896,11 @@ defmodule LemonCore.Store do
 
       {:error, reason} ->
         log_backend_error(:list, :introspection_log, :all, reason)
-        {:reply, [], state}
+        {:reply, {:error, reason}, state}
 
       other ->
         log_backend_unexpected(:list, :introspection_log, :all, other)
-        {:reply, [], state}
+        {:reply, {:error, {:unexpected_backend_response, other}}, state}
     end
   end
 

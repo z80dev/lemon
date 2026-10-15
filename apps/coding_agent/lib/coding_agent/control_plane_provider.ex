@@ -17,9 +17,9 @@ defmodule CodingAgent.ControlPlaneProvider do
 
   alias CodingAgent.Session.UserPrompt
 
-  def user_prompt_bind(session_key, connection, enabled) do
+  def user_prompt_bind(session_key, connection, enabled, opts \\ []) do
     if enabled,
-      do: UserPrompt.bind(session_key, connection),
+      do: UserPrompt.bind(session_key, connection, opts),
       else: UserPrompt.unbind(session_key, connection)
   end
 
@@ -114,7 +114,10 @@ defmodule CodingAgent.ControlPlaneProvider do
         cwd = Map.get(payload, :cwd) || Map.get(payload, "cwd")
         if is_binary(cwd) and cwd != "", do: {:ok, cwd}, else: {:error, :session_not_found}
 
-      _ ->
+      {:error, _} ->
+        {:error, :introspection_unavailable}
+
+      [] ->
         {:error, :session_not_found}
     end
   end

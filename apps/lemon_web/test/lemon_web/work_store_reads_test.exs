@@ -15,6 +15,21 @@ defmodule LemonWeb.WorkStoreReadsTest do
     def list(_, _), do: {:error, :sqlite_busy}
   end
 
+  test "workspace history failures do not select the remembered or default workspace" do
+    key = "agent:workspace-failure-#{System.unique_integer([:positive])}:main"
+    cwd = Path.join(System.tmp_dir!(), "remembered-workspace")
+    LemonWeb.SessionCwd.remember(key, cwd)
+    on_exit(fn -> Store.delete(:web_session_cwds, key) end)
+
+    with_busy_backend(fn ->
+      assert LemonWeb.SessionCwd.recorded(key) == {:error, :unavailable}
+      assert LemonWeb.SessionCwd.resolve(key) == {:error, :unavailable}
+    end)
+
+    assert LemonWeb.SessionCwd.recorded(key) == {:ok, cwd}
+    assert LemonWeb.SessionCwd.resolve(key) == cwd
+  end
+
   test "strict kanban reads preserve backend failure" do
     with_busy_backend(fn ->
       assert {:error, :store_unavailable} = KanbanStore.list_boards(strict: true)
