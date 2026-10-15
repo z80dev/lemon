@@ -1,9 +1,9 @@
 defmodule LemonChannels.KanbanStatusMessageTest do
   use ExUnit.Case, async: false
 
+  alias LemonAgent.Workspace.KanbanStore
   alias LemonChannels.Adapters.Telegram.Transport.Commands
   alias LemonChannels.KanbanStatusMessage
-  alias LemonAgent.Workspace.KanbanStore
 
   defmodule KanbanDispatcherStub do
     def start_board(board_id, opts) do

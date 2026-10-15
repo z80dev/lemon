@@ -42,7 +42,9 @@ struct LemonBotMacApp: App {
         }
     }
 
+    @CommandsBuilder
     private var workspaceCommands: some Commands {
+        BotNavigationCommands()
         CommandGroup(after: .newItem) {
             Button("Open quick composer") { platform.summon() }
             Divider()

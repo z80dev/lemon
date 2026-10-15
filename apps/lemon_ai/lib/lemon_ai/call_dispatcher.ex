@@ -150,6 +150,7 @@ defmodule LemonAi.CallDispatcher do
                 |> handle_dispatch_result(provider, slot_ref)
               rescue
                 error ->
+                  record_last_error(provider, error)
                   release_slot(slot_ref)
 
                   LemonAi.CircuitBreaker.record_failure(
@@ -224,6 +225,29 @@ defmodule LemonAi.CallDispatcher do
     GenServer.call(__MODULE__, :get_state)
   end
 
+  @doc "Last observed provider failure, with a bounded, credential-free summary."
+  def last_error(provider) do
+    if Process.whereis(__MODULE__) do
+      GenServer.call(__MODULE__, {:last_error, to_string(provider)})
+    end
+  end
+
+  defp record_last_error(provider, reason) do
+    message =
+      case LemonAi.Error.classify(reason) do
+        :auth -> "Provider authentication failed. Check the key with lemon setup."
+        :rate_limit -> "Provider rate limit exceeded. Check usage and account limits."
+        :context_length -> "The request exceeded the provider context limit."
+        :client -> "The provider rejected the request. Check the model configuration."
+        :server -> "The provider reported a server error."
+        :transient -> "The provider is temporarily unavailable. Check connectivity."
+        _ -> "The provider request failed. Check the Lemon host diagnostics."
+      end
+
+    error = %{"message" => message, "atMs" => System.system_time(:millisecond)}
+    GenServer.call(__MODULE__, {:record_last_error, to_string(provider), error})
+  end
+
   # ============================================================================
   # GenServer Callbacks
   # ============================================================================
@@ -234,12 +258,22 @@ defmodule LemonAi.CallDispatcher do
       concurrency_caps: %{},
       active_requests: %{},
       monitors: %{},
-      waiters: %{}
+      waiters: %{},
+      last_errors: %{}
     }
 
     Logger.debug("CallDispatcher started")
 
     {:ok, state}
+  end
+
+  @impl true
+  def handle_call({:last_error, provider}, _from, state) do
+    {:reply, Map.get(state.last_errors, provider), state}
+  end
+
+  def handle_call({:record_last_error, provider, error}, _from, state) do
+    {:reply, :ok, %{state | last_errors: Map.put(state.last_errors, provider, error)}}
   end
 
   @impl true
@@ -387,42 +421,40 @@ defmodule LemonAi.CallDispatcher do
   end
 
   defp track_stream_result(provider, slot_ref, stream_pid) do
-    try do
-      terminal_result = await_stream_terminal_result(stream_pid)
-      record_stream_terminal_result(provider, terminal_result)
-    rescue
-      error ->
-        Logger.warning(
-          "CallDispatcher stream tracking crashed for #{inspect(provider)}: #{Exception.message(error)}"
-        )
+    terminal_result = await_stream_terminal_result(stream_pid)
+    record_stream_terminal_result(provider, terminal_result)
+  rescue
+    error ->
+      Logger.warning(
+        "CallDispatcher stream tracking crashed for #{inspect(provider)}: #{Exception.message(error)}"
+      )
 
-        LemonAi.CircuitBreaker.record_failure(
-          provider,
-          {:stream_tracking_exception, Exception.message(error)}
-        )
-    catch
-      # A :shutdown exit of the tracked stream is a deliberate teardown — a
-      # consumer cancel propagated through a link cascade (e.g. the fallback
-      # wrapper's relay task being shut down), not a provider failure. Record
-      # neither success nor failure.
-      :exit, :shutdown ->
-        :ok
+      LemonAi.CircuitBreaker.record_failure(
+        provider,
+        {:stream_tracking_exception, Exception.message(error)}
+      )
+  catch
+    # A :shutdown exit of the tracked stream is a deliberate teardown — a
+    # consumer cancel propagated through a link cascade (e.g. the fallback
+    # wrapper's relay task being shut down), not a provider failure. Record
+    # neither success nor failure.
+    :exit, :shutdown ->
+      :ok
 
-      :exit, {:shutdown, _} ->
-        :ok
+    :exit, {:shutdown, _} ->
+      :ok
 
-      :exit, {{:shutdown, _}, _} ->
-        :ok
+    :exit, {{:shutdown, _}, _} ->
+      :ok
 
-      :exit, reason ->
-        Logger.warning(
-          "CallDispatcher stream tracking exited for #{inspect(provider)}: #{inspect(reason)}"
-        )
+    :exit, reason ->
+      Logger.warning(
+        "CallDispatcher stream tracking exited for #{inspect(provider)}: #{inspect(reason)}"
+      )
 
-        LemonAi.CircuitBreaker.record_failure(provider, {:stream_tracking_exit, reason})
-    after
-      release_slot(slot_ref)
-    end
+      LemonAi.CircuitBreaker.record_failure(provider, {:stream_tracking_exit, reason})
+  after
+    release_slot(slot_ref)
   end
 
   defp await_stream_terminal_result(stream_pid) do
@@ -473,7 +505,15 @@ defmodule LemonAi.CallDispatcher do
     LemonAi.CircuitBreaker.record_success(provider)
   end
 
+  defp record_stream_terminal_result(provider, {:error, {:canceled, _} = reason}) do
+    if LemonAi.Error.stream_terminal_breaker_failure?(reason) do
+      record_last_error(provider, reason)
+      LemonAi.CircuitBreaker.record_failure(provider, reason)
+    end
+  end
+
   defp record_stream_terminal_result(provider, {:error, reason}) do
+    record_last_error(provider, reason)
     # Stream-terminal errors are NOT automatically service failures: a
     # 401/429/400 can surface after the connection is established — the
     # provider rejects the request mid-stream, or the HTTP error body arrives
@@ -582,6 +622,7 @@ defmodule LemonAi.CallDispatcher do
         LemonAi.CircuitBreaker.record_success(provider)
 
       {:error, reason} ->
+        record_last_error(provider, reason)
         # Only count errors that indicate the SERVICE is unhealthy, not errors
         # caused by the request itself: client errors (400, 413), rate limits
         # (429), and auth errors (401/403) must not trip the circuit breaker.

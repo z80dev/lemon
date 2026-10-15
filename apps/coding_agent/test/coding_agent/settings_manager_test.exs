@@ -162,6 +162,7 @@ defmodule CodingAgent.SettingsManagerTest do
 
       assert settings.default_model == %{
                provider: :anthropic,
+               provider_source: :explicit,
                model_id: "claude-sonnet-4",
                base_url: nil
              }
@@ -184,6 +185,7 @@ defmodule CodingAgent.SettingsManagerTest do
 
       assert settings.default_model == %{
                provider: :openai,
+               provider_source: :explicit,
                model_id: "gpt-4",
                base_url: nil
              }
@@ -206,6 +208,7 @@ defmodule CodingAgent.SettingsManagerTest do
 
       assert settings.default_model == %{
                provider: :zai,
+               provider_source: :explicit,
                model_id: "glm-5",
                base_url: nil
              }
@@ -228,6 +231,7 @@ defmodule CodingAgent.SettingsManagerTest do
 
       assert settings.default_model == %{
                provider: :openai,
+               provider_source: :explicit,
                model_id: "gpt-4o",
                base_url: nil
              }
@@ -288,6 +292,26 @@ defmodule CodingAgent.SettingsManagerTest do
 
       assert settings.default_model.provider == :anthropic
       assert settings.default_model.model_id == "claude-3-opus"
+    end
+
+    test "retains inherited provider provenance without treating native ids as selectors" do
+      for {source, expected} <- [inherited: :inherited, explicit: :explicit] do
+        settings =
+          SettingsManager.from_config(%LemonConfig{
+            agent: %{
+              default_provider: "ollama",
+              default_provider_source: source,
+              default_model: "anthropic:claude-sonnet-5"
+            }
+          })
+
+        assert settings.default_model == %{
+                 provider: :ollama,
+                 provider_source: expected,
+                 model_id: "anthropic:claude-sonnet-5",
+                 base_url: nil
+               }
+      end
     end
 
     test "maps [runtime.task] and replaces invalid values with defaults" do

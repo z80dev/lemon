@@ -6,9 +6,9 @@ defmodule CodingAgent.Tools.Task do
   final assistant response.
   """
 
+  alias CodingAgent.Tools.Task.{Control, Execution, Messaging, Params, Result, Swarm, Wait}
   alias LemonAgent.AbortSignal
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
-  alias CodingAgent.Tools.Task.{Control, Execution, Messaging, Params, Result, Swarm, Wait}
 
   @doc """
   Returns the Task tool definition.

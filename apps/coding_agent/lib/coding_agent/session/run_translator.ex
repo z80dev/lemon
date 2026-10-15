@@ -1,6 +1,7 @@
 defmodule CodingAgent.Session.RunTranslator do
   @moduledoc false
 
+  alias CodingAgent.Executor.Usage
   alias CodingAgent.Session.Presentation
   alias LemonCore.ResumeToken
 
@@ -391,7 +392,7 @@ defmodule CodingAgent.Session.RunTranslator do
       if t.usage_occurrences == [] do
         occurrences =
           Enum.flat_map(messages, fn message ->
-            case CodingAgent.Executor.Usage.occurrence(message) do
+            case Usage.occurrence(message) do
               nil -> []
               occurrence -> [occurrence]
             end
@@ -451,7 +452,7 @@ defmodule CodingAgent.Session.RunTranslator do
   def handle_event(%__MODULE__{} = t, {:message_start, _msg}), do: t
 
   def handle_event(%__MODULE__{} = t, {:message_end, message}) do
-    case CodingAgent.Executor.Usage.occurrence(message) do
+    case Usage.occurrence(message) do
       nil -> t
       occurrence -> %{t | usage_occurrences: [occurrence | t.usage_occurrences]}
     end

@@ -4,6 +4,19 @@ Start a background command with `bash` and `run_in_background: true`. Its return
 `process_id` identifies the job. Process tools are session-scoped: another session
 cannot read, write or stop your processes.
 
+Ordinary foreground commands also start under the process manager. `timeout`
+limits the foreground wait (default 120000 ms, maximum 600000 ms), not the command
+lifetime: expiry returns `details.process_id` and `background: true` while the
+same process continues capturing output. Use `bash_output` to retrieve it; do not
+rerun the command. Abort signals before detachment still stop the workload.
+Session exit stops its owned jobs, including detached commands.
+
+PTY and ACP-client terminals are exceptions: their existing executor owns the
+terminal protocol/handle, not a local process-manager backend. They still kill
+on timeout. A local port cannot adopt an ACP client's remote terminal handle;
+supporting detachment there requires a managed terminal backend that retains
+that protocol ownership through session cleanup.
+
 ## Dedicated-tool routing
 
 `[runtime.tools.bash.interceptor] enabled = true` opts in to pre-launch routing
@@ -70,12 +83,14 @@ to stop it. Process ids remain valid for all existing process tools.
 
 ## Output
 
-Foreground `bash` keeps a leading window of about 20 KiB plus the output tail,
-retaining up to 50 KB / 2000 lines of command output. Omitted middle output is marked
-explicitly. Full output stays on disk; when a session artifact index is available,
-the spill notice and `details.artifact_uri` expose an `artifact://` handle readable
-with `read` and `offset`/`limit`. Without an index, the notice retains the output
-file path instead. Output capture does not load the full spill back into memory.
+Ordinary foreground `bash` presents up to 50 KB / 2000 lines with head/tail
+windows and records output under the same bounded capture policy as background
+jobs. Larger output includes a saved
+output reference; when a session artifact index is available this is an
+`artifact://` handle. The manager's per-process, owner and runtime artifact
+quotas still apply: detachment introduces no capture gap, but does not make
+output retention unlimited. `bash_output` reports capture limits and incomplete
+artifacts explicitly. PTY/ACP executors retain their existing output windows.
 
 `pty: true` uses the system `script` utility for foreground execution. If it is
 unavailable, the command still runs without a terminal, with a prepended

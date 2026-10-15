@@ -3,9 +3,9 @@ defmodule CodingAgent.Tools.FsCheckpoint do
   Checkpoint inspection and rollback tool.
   """
 
+  alias CodingAgent.Checkpoint
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonAi.Types.TextContent
-  alias CodingAgent.Checkpoint
 
   @doc """
   Returns the checkpoint tool definition.

@@ -126,6 +126,40 @@ describe("stages", () => {
 		expect(overlays).toHaveLength(0);
 		expect(harness.host.text).toContain("no models");
 	});
+
+	test("cycling uses the cached model order and wraps without opening a picker", async () => {
+		harness.store.focused.model = "claude-sonnet-4";
+		const picker = makePicker();
+		await picker.cycle();
+		expect(harness.store.focused.model).toBe("anthropic:claude-opus-4");
+		await picker.cycle();
+		expect(harness.store.focused.model).toBe("openai:gpt-4o");
+		await picker.cycle();
+		expect(harness.store.focused.model).toBe("anthropic:claude-sonnet-4");
+		expect(harness.server.requestsFor("models.list")).toHaveLength(1);
+		expect(harness.server.requestsFor("sessions.patch")).toHaveLength(3);
+		expect(overlays).toHaveLength(0);
+	});
+
+	test("cycling with no current model selects the first model", async () => {
+		await makePicker().cycle();
+		expect(harness.store.focused.model).toBe("anthropic:claude-sonnet-4");
+	});
+
+	test("cycling an empty list reports a notice without mutating the session", async () => {
+		harness.server.respondWith("models.list", { models: [] });
+		await makePicker().cycle();
+		expect(harness.host.text).toContain("no models");
+		expect(harness.server.requestsFor("sessions.patch")).toHaveLength(0);
+	});
+
+	test("failed cycling keeps the prior model and reports the failure", async () => {
+		harness.store.focused.model = "anthropic:claude-sonnet-4";
+		harness.server.failWith("sessions.patch", "FORBIDDEN", "not allowed");
+		await makePicker().cycle();
+		expect(harness.store.focused.model).toBe("anthropic:claude-sonnet-4");
+		expect(harness.host.text).toContain("could not set model");
+	});
 });
 
 describe("applying", () => {

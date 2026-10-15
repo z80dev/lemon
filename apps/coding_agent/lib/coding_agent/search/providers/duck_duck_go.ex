@@ -3,6 +3,7 @@ defmodule CodingAgent.Search.Providers.DuckDuckGo do
 
   @behaviour CodingAgent.Search.Provider
 
+  alias CodingAgent.Search.Operators
   alias CodingAgent.Search.Result
 
   @endpoint "https://html.duckduckgo.com/html/"
@@ -15,7 +16,7 @@ defmodule CodingAgent.Search.Providers.DuckDuckGo do
 
   @impl true
   def search_features,
-    do: %{operators: CodingAgent.Search.Operators.syntax(), freshness: [:relative]}
+    do: %{operators: Operators.syntax(), freshness: [:relative]}
 
   @impl true
   def available?(:search, _context), do: :ok
@@ -26,9 +27,9 @@ defmodule CodingAgent.Search.Providers.DuckDuckGo do
 
     params =
       %{"q" => request.query}
-      |> CodingAgent.Search.Operators.put_if(
+      |> Operators.put_if(
         "df",
-        CodingAgent.Search.Operators.relative(request, day: "d", week: "w", month: "m", year: "y")
+        Operators.relative(request, day: "d", week: "w", month: "m", year: "y")
       )
 
     url = @endpoint <> "?" <> URI.encode_query(params)
