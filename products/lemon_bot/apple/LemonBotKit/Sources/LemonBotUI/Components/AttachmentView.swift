@@ -30,7 +30,7 @@ struct AttachmentView: View {
             if let attachment {
                 if isInlineImage(attachment) && !thumbnailFailed { imageBody(attachment) } else { fileRow(attachment) }
                 if showDetails { details(attachment) }
-                if attachment.preview == "html" { CardNote(symbol: "shield", text: "HTML is shown as inert source, never executed with application credentials. Download the original for an external viewer.") }
+                if attachment.preview == "html" { CardNote(symbol: "shield", text: "HTML is shown as plain text and never run. Download the original to open it in another app.") }
             } else if action.inFlight { ProgressView("Loading attachment…").font(LBFont.meta).foregroundStyle(LB.muted) }
             ActionErrorView(message: action.error)
         }.task(id: attachmentID) {
@@ -102,8 +102,13 @@ struct AttachmentView: View {
         VStack(alignment: .leading, spacing: 2) {
             Text("\(attachment.filename) · \(attachment.mime)")
             if let bot = attachment.provenance.botId {
-                Text("Source: \(store.bots.first(where: { $0.id == bot })?.name ?? bot) · machine \(attachment.provenance.machineId ?? "unknown") · run \(attachment.provenance.runId ?? "unknown")")
-            } else { Text("Source: \(attachment.source) · no generating Bot attribution") }
+                Text("Made by \(store.bots.first(where: { $0.id == bot })?.name ?? "a Bot")")
+            } else { Text("Added to this conversation") }
+            DisclosureGroup("Details") {
+                let details = "Machine: \(attachment.provenance.machineId ?? "Not set")\nRun: \(attachment.provenance.runId ?? "Not set")"
+                Text(details)
+                Button("Copy") { copyText(details) }
+            }
             if let generated = attachment.provenance.generatedAtMs { Text("Generated \(timestamp(Double(generated)).formatted())") }
         }.cardMeta().textSelection(.enabled).padding(.horizontal, 14)
     }
@@ -219,7 +224,7 @@ struct VoiceMemoView: View {
                     action.error = player.currentItem?.error?.localizedDescription ?? player.error?.localizedDescription ?? "This device could not decode the audio. The original download remains available."
                 }
             } else {
-                let state = player.timeControlStatus == .playing ? "Playing" : player.timeControlStatus == .waitingToPlayAtSpecifiedRate ? "Preparing actual audio…" : "Paused"
+                let state = player.timeControlStatus == .playing ? "Playing" : player.timeControlStatus == .waitingToPlayAtSpecifiedRate ? "Preparing audio…" : "Paused"
                 if state != playbackState { playbackState = state }
                 if playing, let duration, player.timeControlStatus == .paused, position >= duration - 0.2 { playing = false }
             }

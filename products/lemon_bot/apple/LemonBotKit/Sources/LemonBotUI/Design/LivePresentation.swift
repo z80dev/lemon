@@ -98,7 +98,7 @@ func toolSymbol(_ tool: String) -> String {
 }
 
 /// Compact relative duration: "4s", "2m", "1h 5m".
-func compactDuration(from start: Date, to end: Date = .now) -> String {
+public func compactDuration(from start: Date, to end: Date = .now) -> String {
     let seconds = max(0, Int(end.timeIntervalSince(start)))
     if seconds < 60 { return "\(seconds)s" }
     if seconds < 3600 { return "\(seconds / 60)m" }

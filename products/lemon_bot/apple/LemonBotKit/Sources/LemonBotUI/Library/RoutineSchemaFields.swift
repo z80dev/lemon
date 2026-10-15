@@ -12,7 +12,7 @@ struct RoutineSchemaFields: View {
             if let property = properties[key]?.objectValue {
                 VStack(alignment: .leading) {
                     Text("\(key)\(required.contains(key) ? " · required" : " · optional")").font(.headline)
-                    if let description = property["description"]?.stringValue { Text(description).font(.caption) }
+                    if let description = property["description"]?.stringValue { Text(description).font(LBFont.meta) }
                     if !required.contains(key) {
                         Toggle("Set \(key)", isOn: Binding(get: { values[key] != nil }, set: { if $0 { values[key] = Self.defaultValue(property) } else { values.removeValue(forKey: key) } }))
                     }
@@ -33,8 +33,8 @@ struct RoutineSchemaFields: View {
                 Toggle(key, isOn: Binding(get: { values[key]?.boolValue ?? false }, set: { values[key] = .bool($0) })).onAppear { if required.contains(key), values[key] == nil { values[key] = .bool(false) } }
             case "integer", "number":
                 TextField(key, text: Binding(get: { values[key].map(Self.label) ?? "" }, set: { if let number = Double($0), number.isFinite { values[key] = .number(number) } else { values.removeValue(forKey: key) } }))
-                if let minimum = property["minimum"] { Text("Minimum: \(Self.label(minimum))").font(.caption) }
-                if let maximum = property["maximum"] { Text("Maximum: \(Self.label(maximum))").font(.caption) }
+                if let minimum = property["minimum"] { Text("Minimum: \(Self.label(minimum))").font(LBFont.meta) }
+                if let maximum = property["maximum"] { Text("Maximum: \(Self.label(maximum))").font(LBFont.meta) }
             case "object":
                 RoutineSchemaFields(schema: property, values: Binding(get: { values[key]?.objectValue ?? [:] }, set: { values[key] = .object($0) }))
             case "array":

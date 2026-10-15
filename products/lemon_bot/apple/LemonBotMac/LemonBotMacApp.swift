@@ -44,7 +44,7 @@ struct LemonBotMacApp: App {
 
     private var workspaceCommands: some Commands {
         CommandGroup(after: .newItem) {
-            Button("Summon mini composer") { platform.summon() }
+            Button("Open quick composer") { platform.summon() }
             Divider()
             Button("Dictate into current chat") { if let id = store.selectedConversationID { platform.beginDictation(conversationID: id) } }
                 .disabled(store.selectedConversationID == nil)
@@ -100,11 +100,11 @@ struct LemonBotMacApp: App {
     @ViewBuilder private var workspaceError: some View {
         if let error = platform.errorMessage {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Image(systemName: "exclamationmark.circle.fill").foregroundStyle(.red)
-                Text(error).font(.system(size: 13)).textSelection(.enabled).lineLimit(3)
+                Image(systemName: "exclamationmark.circle.fill").foregroundStyle(LB.danger)
+                Text(error).font(LBFont.rowSubtitle).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
                 if platform.selectedBot == nil && store.account != nil { SettingsLink { Text("Open Settings") } }
                 Button { platform.errorMessage = nil } label: { Image(systemName: "xmark") }
-                    .buttonStyle(.plain).foregroundStyle(.secondary).accessibilityLabel("Dismiss error")
+                    .buttonStyle(.plain).foregroundStyle(LB.muted).accessibilityLabel("Dismiss error")
             }
             .padding(.horizontal, 14).padding(.vertical, 9)
             .frame(maxWidth: 520)
@@ -151,7 +151,7 @@ private struct MacMenuBarView: View {
             Text(controller.store.machines.first { $0.id == bot.machineId }?.name ?? "Unknown machine")
         }
         Button("Open Lemon Bot") { openWindow(id: "workspace"); NSApp.activate(ignoringOtherApps: true) }
-        Button("Summon mini composer") { controller.summon() }.disabled(controller.selectedBot == nil)
+        Button("Open quick composer") { controller.summon() }.disabled(controller.selectedBot == nil).help("Choose a Bot in Settings first")
         Button("Return to voice chat") { controller.showVoicePanel() }.disabled(controller.store.voiceSession?.state != "active")
         SettingsLink { Text("Settings…") }
         Divider()

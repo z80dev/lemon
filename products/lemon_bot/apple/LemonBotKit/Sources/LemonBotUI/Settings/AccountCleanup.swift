@@ -25,14 +25,14 @@ struct AccountCleanupSettingsView: View {
                         VStack(alignment: .leading, spacing: 4) {
                             Text("User \(operation.userId)").font(.headline)
                             Text("\(operation.state) · product \(operation.productCleanup.state)")
-                            Text("Operation \(operation.id) · request \(operation.requestId)").font(.caption)
-                            Text("Updated \(adminDate(operation.updatedAtMs))").font(.caption).foregroundStyle(.secondary)
+                            Text("Operation \(operation.id) · request \(operation.requestId)").font(LBFont.meta)
+                            Text("Updated \(adminDate(operation.updatedAtMs))").font(LBFont.meta).foregroundStyle(LB.muted)
                         }
                     }
                 }
                 if cursor != nil { Button("Older cleanup operations") { Task { await load(more: true) } }.disabled(control.busy) }
                 if control.busy { ProgressView("Reading durable cleanup observations…") }
-                if let error = control.error { Text(error).foregroundStyle(.red).textSelection(.enabled) }
+                if let error = control.error { Text(error).foregroundStyle(LB.danger).textSelection(.enabled) }
             } else {
                 Text("Only the enabled workspace Owner can inspect bounded account-cleanup metadata. This is not access to another person's private history.")
             }
@@ -85,23 +85,23 @@ private struct AccountCleanupDetailView: View {
                     }
                     Section("Product cleanup") {
                         CleanupObservationView(result: operation.productCleanup)
-                        Text("Product-owned data removal is independent of provider availability. A missing private row does not prove an external grant was revoked.").font(.caption)
+                        Text("Product-owned data removal is independent of provider availability. A missing private row does not prove an external grant was revoked.").font(LBFont.meta)
                     }
                     Section("Actual provider targets") {
                         ForEach(Array(operation.providerCleanup.enumerated()), id: \.offset) { _, provider in
                             VStack(alignment: .leading, spacing: 4) {
                                 Text("\(provider.kind) · provider \(provider.providerId)").font(.headline)
                                 Text("Observed: \(provider.state) · \(adminDate(provider.updatedAtMs))")
-                                if let error = provider.errorCode { Text("Bounded error: \(error)").foregroundStyle(.orange) }
-                                if let receipt = provider.receiptId { Text("Original receipt: \(receipt)").font(.caption).textSelection(.enabled) }
+                                if let error = provider.errorCode { Text("Bounded error: \(error)").foregroundStyle(LB.warning) }
+                                if let receipt = provider.receiptId { Text("Original receipt: \(receipt)").font(LBFont.meta).textSelection(.enabled) }
                             }
                         }
-                        Text("Pending, failed or unknown provider cleanup is not completed. Refresh only reads the original receipt/status; it never re-dispatches deletion or revocation. Host files, backups and independently held external copies can remain.").font(.caption)
+                        Text("Pending, failed or unknown provider cleanup is not completed. Refresh only reads the original receipt/status; it never re-dispatches deletion or revocation. Host files, backups and independently held external copies can remain.").font(LBFont.meta)
                     }
                 }
                 Button("Refresh read-only observations") { Task { await load() } }.disabled(control.busy)
                 if control.busy { ProgressView("Reading actual cleanup observations…") }
-                if let error = control.error { Text(error).foregroundStyle(.red).textSelection(.enabled) }
+                if let error = control.error { Text(error).foregroundStyle(LB.danger).textSelection(.enabled) }
             } else { Text("Workspace Owner authority is required.") }
         }.navigationTitle("Cleanup observation").task(id: operationID) { await load() }
     }
@@ -123,7 +123,7 @@ private struct CleanupObservationView: View {
         VStack(alignment: .leading, spacing: 4) {
             Text("Observed: \(result.state)").font(.headline)
             Text("Updated: \(adminDate(result.updatedAtMs))")
-            if let error = result.errorCode { Text("Bounded error: \(error)").foregroundStyle(.orange) }
+            if let error = result.errorCode { Text("Bounded error: \(error)").foregroundStyle(LB.warning) }
         }
     }
 }
