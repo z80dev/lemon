@@ -27,7 +27,7 @@ defmodule LemonCore.Doctor.Checks.Config do
       Check.warn(
         "config.global_exists",
         "Global config not found: #{path}",
-        "Run `mix lemon.setup` to create a config scaffold."
+        "Run `lemon setup` to create a config scaffold."
       )
     end
   end
@@ -62,7 +62,7 @@ defmodule LemonCore.Doctor.Checks.Config do
           Check.fail(
             "config.global_valid",
             message,
-            "Fix the errors in #{path}. Run `mix lemon.config validate --verbose` for details."
+            "Run `lemon config validate --verbose` for details; use `lemon config migrate` for removed settings."
           )
       end
     end
@@ -84,7 +84,7 @@ defmodule LemonCore.Doctor.Checks.Config do
           Check.fail(
             "config.project_valid",
             message,
-            "Fix the errors in #{path}."
+            "Run `lemon config validate --verbose` for details; use `lemon config migrate` for removed settings."
           )
       end
     end

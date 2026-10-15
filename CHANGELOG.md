@@ -98,6 +98,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Configuration commands reject malformed TOML with file-specific guidance,
+  doctor continues after failed checks, and CLI validation and migration show
+  actionable recovery steps instead of internal error terms.
+
 - Provider-ownership probes inspect complete events and logs so large tool
   schemas cannot hide credential refusal or leaked values. Integration tests
   retain committed-output retry fences and drain bounded session subscriptions.

@@ -20,6 +20,15 @@ defmodule LemonCore.Doctor.Checks.Providers do
       check_provider_credentials(config, status),
       check_provider_routing(status)
     ]
+  rescue
+    _error in LemonCore.Config.ValidationError ->
+      [
+        Check.fail(
+          "providers.config",
+          "Provider checks cannot run because the configuration is invalid.",
+          "Run `lemon config validate --verbose`; use `lemon config migrate` for removed settings."
+        )
+      ]
   end
 
   defp check_default_provider(config) do

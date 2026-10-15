@@ -377,7 +377,8 @@ defmodule LemonCore.ConfigCache do
       :ok
     else
       raise LemonCore.ConfigCacheError,
-        message: "#{inspect(server)} is not available (application not started)"
+        message:
+          "Lemon config cache is not running. Run `lemon doctor` to check application startup."
     end
   end
 
