@@ -3,8 +3,8 @@
   "short_name": "Lemon Bot",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#f7f6f0",
-  "theme_color": "#f7f6f0",
+  "background_color": "#F8F8F4",
+  "theme_color": "#F8F8F4",
   "icons": [
     { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml" },
     { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png" },

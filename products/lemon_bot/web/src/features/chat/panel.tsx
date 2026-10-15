@@ -1,97 +1,123 @@
+import { useState, type ReactNode } from 'react';
 import type { Conversation, Run, TranscriptEntry } from '@lemon-bot/sdk';
-import { Activity, BookOpen, Brain, CalendarClock, ChevronRight, FolderOpen, Plug, Repeat, Settings2, Sparkles, Square, X } from 'lucide-react';
+import { nonce } from '@lemon-bot/sdk';
+import { Activity, BookOpen, Brain, Check, ChevronRight, Clock, Copy, FileText, GitBranch, Hand, History, Languages, LayoutGrid, ListChecks, Monitor, Pencil, Repeat, Settings2, ShieldCheck, Sparkles, Square, X, type LucideIcon } from 'lucide-react';
 import { useApp } from '../../app';
-import { BotAvatar, LemonFace, formatTime, presenceLabel } from '../../ui';
+import { BotAvatar, ErrorNotice, LemonFace, useAction, useQuery } from '../../ui';
+import { compactDuration, currentStep, humanize, liveRunStatuses, relativeTime, toolIcon } from '../../live';
 import { ConversationDetails } from './details';
-import { RunOutcomeRow } from './index';
+import { TypingDots } from './index';
 
 export type PanelTab = 'activity' | 'details' | 'library';
-const activeStatus: Record<string, true> = { reserved: true, queued: true, running: true, awaiting_input: true, outcome_unknown: true };
-const outcomeLabel: Record<Run['status'], string> = { reserved: 'Starting', queued: 'Queued', running: 'Working', awaiting_input: 'Needs your input', succeeded: 'Finished', failed: 'Couldn’t finish', cancelled: 'Stopped', outcome_unknown: 'Unconfirmed' };
+const outcomeLabel: Record<string, string> = { succeeded: 'Finished', failed: 'Couldn’t finish', cancelled: 'Stopped', outcome_unknown: 'Unconfirmed' };
 
-function duration(run: Run, now: number) {
-  if (run.startedAtMs === null) return '';
-  const seconds = Math.max(0, Math.round(((run.completedAtMs ?? now) - run.startedAtMs) / 1000));
-  return seconds < 60 ? `${seconds}s` : seconds < 3600 ? `${Math.floor(seconds / 60)}m ${seconds % 60}s` : `${Math.floor(seconds / 3600)}h ${Math.floor(seconds / 60) % 60}m`;
+/** Inspector row: icon column, title, meta, chevron (design system §5 Inspector). */
+function Row({ icon: Icon, title, meta, onClick, children }: { icon: LucideIcon; title: ReactNode; meta?: ReactNode; onClick?: () => void; children?: ReactNode }) {
+  const body = <><Icon size={17} className="inspector-row-icon" aria-hidden="true"/><span className="inspector-row-text"><strong>{title}</strong>{meta && <small>{meta}</small>}</span>{children}{onClick && <ChevronRight size={15} className="faint" aria-hidden="true"/>}</>;
+  return onClick ? <button className="inspector-row" onClick={onClick}>{body}</button> : <div className="inspector-row">{body}</div>;
 }
 
-/** Steps are the run's sanitized tool-call entries from the transcript. */
-function RunSteps({ run, entries }: { run: Run; entries: TranscriptEntry[] }) {
-  const steps = entries.filter(entry => entry.kind === 'tool_call' && entry.runId === run.id);
-  if (!steps.length) return null;
-  return <ol className="panel-steps">{steps.map(step => step.kind === 'tool_call' && <li key={step.id}><details><summary><span className={`chat-tool-dot ${step.status}`} aria-hidden="true"/><span className="panel-step-title">{step.title}</span><span className="muted">{step.status === 'started' ? 'running' : step.status}</span></summary><p><code>{step.tool}</code></p>{step.detail && <p>{step.detail}</p>}</details></li>)}</ol>;
+function RecentRun({ run }: { run: Run }) {
+  const { reportError } = useApp(); const [open, setOpen] = useState(false);
+  const duration = run.startedAtMs !== null && run.completedAtMs !== null ? ` · ${compactDuration(run.startedAtMs, run.completedAtMs)}` : '';
+  return <div className="recent-run">
+    <button className="recent-run-head" aria-expanded={open} onClick={() => setOpen(!open)}><span className={`outcome-dot ${run.status}`} aria-hidden="true"/><strong>{outcomeLabel[run.status] || humanize(run.status)}</strong><small>{relativeTime(run.completedAtMs ?? run.updatedAtMs)}{duration}</small><ChevronRight size={13} className="chevron faint" aria-hidden="true"/></button>
+    {open && <div className="recent-run-body">{run.error ? <p>{run.error.message}</p> : <p className="muted">{run.status === 'succeeded' ? 'Finished without errors.' : 'No error details.'}</p>}{run.error?.requestId && <button className="pill-button secondary compact" onClick={() => void navigator.clipboard.writeText(run.error?.requestId || '').catch(reportError)}><Copy size={12}/>Copy request ID</button>}</div>}
+  </div>;
 }
 
 export function BotPanel({ id, conversation, changed, runs, entries, tab, setTab, stop, stopDisabled }: { id: string; conversation: Conversation; changed: (conversation: Conversation) => void; runs: Run[]; entries: TranscriptEntry[]; tab: PanelTab; setTab: (tab: PanelTab | null) => void; stop: (run: Run) => void; stopDisabled: boolean }) {
-  const { snapshot, navigate } = useApp();
+  const { client, snapshot, navigate, online, refresh } = useApp();
   const bot = snapshot.bots.find(item => item.id === (conversation.leadBotId || conversation.botIds[0]));
   const machine = bot ? snapshot.machines.find(item => item.id === bot.machineId) : undefined;
-  const now = Date.now();
-  const active = runs.filter(run => activeStatus[run.status]);
-  const recent = runs.filter(run => !activeStatus[run.status]).sort((a, b) => (b.startedAtMs ?? b.createdAtMs) - (a.startedAtMs ?? a.createdAtMs)).slice(0, 20);
-  const botName = (botId: string) => snapshot.bots.find(item => item.id === botId)?.name || 'Bot';
-  const library: [string, string, typeof FolderOpen, () => void][] = bot ? [
-    ['Files', machine ? `On ${machine.name}` : 'Host files', FolderOpen, () => navigate({ screen: 'machine.detail', id: bot.machineId, botId: bot.id })],
-    ['Memory', 'What this Bot remembers', Brain, () => navigate({ screen: 'memory', id: bot.id, botId: bot.id })],
-    ['Routines', 'Scheduled work', Repeat, () => navigate({ screen: 'routines', botId: bot.id })],
-    ['Skills', `${bot.skillIds.length} enabled`, Sparkles, () => navigate({ screen: 'skills', botId: bot.id })],
-    ['Connected apps', 'Accounts this Bot can use', Plug, () => navigate({ screen: 'connect.apps', botId: bot.id })],
-    ['Templates', 'Start a similar Bot', BookOpen, () => navigate({ screen: 'templates' })],
-  ] : [];
+  const botRuns = useQuery(`inspector-runs:${bot?.id}`, () => bot ? client.call('GET /runs', { query: { botId: bot.id, limit: 30 } }) : Promise.resolve({ items: [], nextCursor: null }));
+  const upcoming = useQuery(`inspector-upcoming:${bot?.id}`, () => bot ? client.call('GET /upcoming', { query: { botId: bot.id, limit: 3 } }) : Promise.resolve({ items: [], nextCursor: null }));
+  const activity = useQuery(`inspector-activity:${bot?.id}`, () => bot ? client.call('GET /activity', { query: { botId: bot.id, limit: 3 } }) : Promise.resolve({ items: [], nextCursor: null }));
+  const action = useAction({ reconcileOnRefresh: true, available: online });
+  const live = runs.filter(run => liveRunStatuses[run.status]);
+  const step = currentStep(runs, entries, conversation);
+  const finished = (botRuns.data?.items ?? []).filter(run => !liveRunStatuses[run.status]).sort((a, b) => (b.completedAtMs ?? b.updatedAtMs) - (a.completedAtMs ?? a.updatedAtMs));
+  const lastFinished = finished.find(run => run.completedAtMs !== null);
+  const steps = entries.filter(entry => entry.kind === 'tool_call' && !!entry.runId && live.some(run => run.id === entry.runId)).slice(-8);
+  const tasks = snapshot.conversations.filter(room => room.kind === 'task' && room.parentConversationId === conversation.id).sort((a, b) => b.updatedAtMs - a.updatedAtMs);
+  const status = step?.needsInput || bot?.activity === 'needs_input' ? 'needs_input' : live.length ? 'working' : bot?.activity === 'offline' ? 'offline' : 'idle';
+  const statusLabel: Record<string, string> = { idle: 'Idle', working: 'Working', needs_input: 'Needs you', offline: 'Offline' };
+  const machineMeta = machine ? `${humanize(machine.status)}${machine.lastSeenAtMs ? ` · seen ${relativeTime(machine.lastSeenAtMs)}` : ''}` : 'Assigned machine';
+  const name = conversation.kind === 'dm' && bot ? bot.name : conversation.name;
   return <aside className="chat-panel" id={id} aria-label="Bot details and activity">
-    <div className="chat-panel-top"><button className="icon-button" aria-label="Close panel" onClick={() => setTab(null)}><X size={18}/></button></div>
+    <button className="ghost-circle panel-close" aria-label="Close details" onClick={() => setTab(null)}><X size={16}/></button>
     <div className="panel-hero">
-      {bot ? <BotAvatar bot={bot} size={76}/> : <LemonFace size={76}/>}
-      <h2>{conversation.kind === 'dm' && bot ? bot.name : conversation.name}</h2>
-      {bot && (bot.title || bot.job) && <p className="muted">{bot.title || bot.job}</p>}
-      {bot && <span className="presence-pill"><span className={`status-dot ${bot.activity}`} aria-hidden="true"/>{presenceLabel(bot.activity)}{machine && <> · {machine.name}</>}</span>}
+      {bot ? <BotAvatar bot={bot} size={72} presence={online}/> : <LemonFace size={72}/>}
+      <h2>{name}</h2>
+      {bot && (bot.title ? <p className="muted">{bot.title}</p> : <button className="add-label" onClick={() => navigate({ screen: 'bot.edit', id: bot.id, botId: bot.id })}>Add a label</button>)}
+      {bot && <div className="status-chips"><span className="chip"><span className={`status-dot ${status}`} aria-hidden="true"/>{statusLabel[status]}</span>{machine && <span className="chip"><span className={`status-dot ${machine.status === 'online' ? 'idle' : 'offline'}`} aria-hidden="true"/>{machine.name}</span>}</div>}
     </div>
-    <div className="segmented" role="tablist" aria-label="Panel sections">
+    <div className="segmented sliding" role="tablist" aria-label="Inspector sections" style={{ ['--tab-index' as string]: ['activity', 'details', 'library'].indexOf(tab) }}>
+      <span className="segmented-thumb" aria-hidden="true"/>
       {(['activity', 'details', 'library'] as const).map(value => <button key={value} role="tab" aria-selected={tab === value} className={tab === value ? 'selected' : ''} onClick={() => setTab(value)}>{value[0].toUpperCase() + value.slice(1)}</button>)}
     </div>
     <div className="chat-panel-body" role="tabpanel">
       {tab === 'activity' && <>
-        <section className="panel-section">
-          <h3>Now</h3>
-          {active.length === 0 && <p className="panel-idle">{bot?.activity === 'offline' ? 'Offline. Its host is not reachable right now.' : 'Nothing running. Send a message to start work.'}</p>}
-          {active.map(run => <div className="panel-run live" key={run.id}>
-            <div className="panel-run-head"><span className={`spinner ${run.status === 'awaiting_input' ? 'paused' : ''}`} aria-hidden="true"/><strong>{botName(run.botId)}</strong><span className="muted">{outcomeLabel[run.status]}{run.startedAtMs !== null && ` · ${duration(run, now)}`}</span>
-              <button className="chat-stop" aria-label="Stop this run" title="Stop" disabled={stopDisabled || run.status === 'outcome_unknown'} onClick={() => stop(run)}><Square size={11} fill="currentColor"/></button></div>
-            <RunSteps run={run} entries={entries}/>
-            <details className="panel-ids"><summary>IDs</summary><code>{run.id}</code></details>
-          </div>)}
+        <section className="now-card">
+          <div className="now-head"><span className={`status-dot ${status}`} aria-hidden="true"/><strong>{statusLabel[status]}</strong>{live.length > 0 && <button className="stop-pill danger" disabled={stopDisabled} onClick={() => live.forEach(stop)}><Square size={9} fill="currentColor"/>Stop</button>}</div>
+          {step ? <>
+            <div className="now-step">{step.needsInput ? <Hand size={16} className="warning-text" aria-hidden="true"/> : (() => { const Icon = toolIcon(step.tool || ''); return <Icon size={16} aria-hidden="true"/>; })()}<span>{step.title}</span>{step.sinceMs !== undefined && <small>{compactDuration(step.sinceMs)}</small>}</div>
+            {steps.length > 0 && <ol className="step-rows">{steps.map(entry => { if (entry.kind !== 'tool_call') return null; const Icon = toolIcon(entry.tool); return <li key={entry.id}><details><summary><Icon size={14} aria-hidden="true"/><span className="step-text"><span>{entry.title || humanize(entry.tool)}</span>{entry.detail && <small>{entry.detail.split('\n')[0]}</small>}</span>{entry.status === 'started' ? <TypingDots/> : entry.status === 'failed' ? <X size={13} className="danger-text" aria-label="Failed"/> : <Check size={13} className="faint" aria-label="Done"/>}</summary><pre>{entry.tool}{entry.detail ? `\n${entry.detail}` : ''}</pre></details></li>; })}</ol>}
+          </> : <><p className="now-idle">{status === 'offline' ? 'Offline — its machine isn’t reachable' : 'Idle — nothing running'}</p>{lastFinished && <small className="faint">Last finished {relativeTime(lastFinished.completedAtMs ?? lastFinished.updatedAtMs)}</small>}</>}
         </section>
-        <section className="panel-section">
-          <h3>Recent runs</h3>
-          {recent.length === 0 && <p className="muted small">No finished runs in this conversation yet.</p>}
-          {recent.map(run => <div className={`panel-run ${run.status}`} key={run.id}>
-            {run.status === 'succeeded' ? <><div className="panel-run-head"><span className="outcome-dot succeeded" aria-hidden="true"/><strong>{outcomeLabel[run.status]}</strong><span className="muted">{formatTime(run.completedAtMs ?? run.startedAtMs)}{run.startedAtMs !== null && ` · ${duration(run, now)}`}</span></div><RunSteps run={run} entries={entries}/><details className="panel-ids"><summary>IDs</summary><code>{run.id}</code></details></> : <RunOutcomeRow run={run} showTime/>}
-          </div>)}
+        {bot && <Row icon={Monitor} title={machine?.name || 'Machine'} meta={machineMeta} onClick={() => navigate({ screen: 'machine.detail', id: bot.machineId, botId: bot.id })}/>}
+        <section className="panel-section"><h3>Recent runs</h3>
+          <ErrorNotice error={botRuns.error}/>
+          {finished.slice(0, 8).map(run => <RecentRun key={run.id} run={run}/>)}
+          {botRuns.data && !finished.length && <p className="panel-empty">No finished runs yet</p>}
         </section>
-        {bot && <section className="panel-links">
-          <button onClick={() => navigate({ screen: 'activity', botId: bot.id })}><Activity size={16}/><span>All activity</span><ChevronRight size={16}/></button>
-          <button onClick={() => navigate({ screen: 'upcoming', botId: bot.id })}><CalendarClock size={16}/><span>Upcoming</span><ChevronRight size={16}/></button>
-        </section>}
+        <section className="panel-section"><h3>Upcoming</h3>
+          {(upcoming.data?.items ?? []).map(item => <Row key={item.id} icon={item.kind === 'routine' ? Repeat : Clock} title={item.title} meta={`${new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' }).format(new Date(item.dueAtMs))}${item.blockedReason ? ` · ${item.blockedReason}` : ''}`} onClick={() => navigate(item.routineId ? { screen: 'routines', id: item.routineId, botId: item.botId } : { screen: 'upcoming', botId: item.botId })}/>)}
+          {upcoming.data && !upcoming.data.items.length && <p className="panel-empty">Nothing scheduled</p>}
+        </section>
+        <section className="panel-section"><h3>Recent activity</h3>
+          {(activity.data?.items ?? []).map(item => <Row key={item.id} icon={Activity} title={item.title} meta={`${item.summary ? `${item.summary} · ` : ''}${relativeTime(item.occurredAtMs)}`} onClick={item.conversationId ? () => navigate({ screen: 'conversation', id: item.taskConversationId || item.conversationId || undefined, entryId: item.entryId || undefined }) : undefined}/>)}
+          {activity.data && !activity.data.items.length && <p className="panel-empty">No recent activity</p>}
+        </section>
+        <section className="panel-section"><h3>Tasks and threads</h3>
+          {tasks.map(room => <Row key={room.id} icon={GitBranch} title={room.name} meta={room.activity.length ? 'Working…' : relativeTime(room.updatedAtMs)} onClick={() => navigate({ screen: 'conversation', id: room.id })}/>)}
+          {!tasks.length && <p className="panel-empty">No tasks yet</p>}
+        </section>
+        {bot && <Row icon={ListChecks} title="All activity" onClick={() => navigate({ screen: 'activity', botId: bot.id })}/>}
       </>}
       {tab === 'details' && <>
-        {bot && <section className="panel-section">
-          <dl className="panel-facts">
-            {bot.job && <><dt>Job</dt><dd>{bot.job}</dd></>}
-            {bot.instructions && <><dt>Instructions</dt><dd className="panel-clamp">{bot.instructions}</dd></>}
-            <dt>Host</dt><dd>{machine ? `${machine.name} · ${machine.status}` : 'Assigned host'}</dd>
-            <dt>Notifications</dt><dd>{bot.sidebar.notificationsEnabled ? 'On' : 'Off'}</dd>
-          </dl>
-          <div className="panel-links">
-            <button onClick={() => navigate({ screen: 'bot.overview', id: bot.id, botId: bot.id })}><span>Bot overview</span><ChevronRight size={16}/></button>
-            <button onClick={() => navigate({ screen: 'bot.settings', id: bot.id, botId: bot.id })}><Settings2 size={16}/><span>Bot settings</span><ChevronRight size={16}/></button>
-          </div>
-        </section>}
-        <ConversationDetails conversation={conversation} changed={changed}/>
+        {bot && <>
+          <section className="panel-section"><h3>Persona</h3>
+            <Row icon={Pencil} title="Instructions" meta={bot.instructions ? <span className="clamp-2">{bot.instructions}</span> : 'None yet'} onClick={() => navigate({ screen: 'bot.edit', id: bot.id, botId: bot.id })}/>
+            <Row icon={Sparkles} title="Skills" meta={`${bot.skillIds.length} enabled`} onClick={() => navigate({ screen: 'skills', botId: bot.id })}/>
+            <Row icon={Settings2} title="Model and profile" meta="Model, runtime profile and limits" onClick={() => navigate({ screen: 'bot.settings', id: bot.id, botId: bot.id })}/>
+          </section>
+          <section className="panel-section"><h3>Placement</h3>
+            <Row icon={Monitor} title={machine?.name || 'Machine'} meta={machineMeta} onClick={() => navigate({ screen: 'machine.detail', id: bot.machineId, botId: bot.id })}/>
+            <Row icon={Languages} title="Voice and language" meta={`${bot.voice.voiceId || 'Default voice'} · ${bot.language || 'Auto language'}`} onClick={() => navigate({ screen: 'bot.edit', id: bot.id, botId: bot.id, tab: 'voice' })}/>
+            <label className="inspector-row toggle-row"><span className="inspector-row-text"><strong>Notifications</strong><small>Alerts when this Bot finishes or needs you</small></span><input type="checkbox" role="switch" checked={bot.sidebar.notificationsEnabled} disabled={!online || action.busy} onChange={event => void action.run(async () => { await client.call('PATCH /bots/:id/sidebar', { params: { id: bot.id }, body: { clientNonce: nonce(), revision: bot.revision, notificationsEnabled: event.target.checked } }); await refresh(); })}/></label>
+            <ErrorNotice error={action.error}/>
+          </section>
+          <section className="panel-section"><h3>Trust and history</h3>
+            <Row icon={ShieldCheck} title="Bot authorization" meta="What it may do on its own" onClick={() => navigate({ screen: 'bot.settings', id: bot.id, botId: bot.id })}/>
+            <Row icon={History} title="Preference history" onClick={() => navigate({ screen: 'preference.changes', id: bot.id, botId: bot.id })}/>
+            <Row icon={LayoutGrid} title="Connected apps" onClick={() => navigate({ screen: 'connect.apps', botId: bot.id })}/>
+            <Row icon={Pencil} title="Edit identity" meta="Name, label, avatar and job" onClick={() => navigate({ screen: 'bot.edit', id: bot.id, botId: bot.id })}/>
+          </section>
+        </>}
+        <section className="panel-section"><h3>This conversation</h3><ConversationDetails conversation={conversation} changed={changed}/></section>
+        {bot && <button className="quiet-link" onClick={() => navigate({ screen: 'bot.settings', id: bot.id, botId: bot.id })}>Duplicate, move, reset or delete…</button>}
       </>}
-      {tab === 'library' && <section className="panel-links">
-        {library.map(([label, hint, Icon, open]) => <button key={label} onClick={open}><Icon size={16}/><span>{label}<small>{hint}</small></span><ChevronRight size={16}/></button>)}
-        {!bot && <p className="muted">Open a Bot’s own chat to see its library.</p>}
+      {tab === 'library' && <section className="panel-section">
+        {bot ? <>
+          <Row icon={FileText} title="Reference files" meta={`${bot.referenceAttachmentIds.length} file${bot.referenceAttachmentIds.length === 1 ? '' : 's'}`} onClick={() => navigate({ screen: 'bot.overview', id: bot.id, botId: bot.id })}/>
+          <Row icon={Brain} title="Memory" meta="What this Bot remembers" onClick={() => navigate({ screen: 'memory', id: bot.id, botId: bot.id })}/>
+          <Row icon={Repeat} title="Routines" meta="This Bot’s scheduled work" onClick={() => navigate({ screen: 'routines', botId: bot.id })}/>
+          <Row icon={Sparkles} title="Skills library" onClick={() => navigate({ screen: 'skills', botId: bot.id })}/>
+          <Row icon={BookOpen} title="Templates" meta="Start a similar Bot" onClick={() => navigate({ screen: 'templates' })}/>
+        </> : <p className="panel-empty">Open a Bot’s own chat to see its library.</p>}
       </section>}
     </div>
   </aside>;
 }
+
