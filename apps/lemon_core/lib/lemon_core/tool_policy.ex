@@ -100,6 +100,7 @@ defmodule LemonCore.ToolPolicy do
     "bash",
     "bash_output",
     "kill_process",
+    "process_input",
     "eval",
     "grep",
     "find",
@@ -198,6 +199,7 @@ defmodule LemonCore.ToolPolicy do
     # which execute project code.
     "lsp_diagnostics",
     "kill_process",
+    "process_input",
     "agent",
     "task",
     "goal",

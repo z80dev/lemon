@@ -3,8 +3,9 @@ defmodule CodingAgent.Tools.BashOutput do
   `bash_output` tool: read new output from a background process started by
   `bash` with `run_in_background: true`.
 
-  Each call returns only the complete output lines produced since the
-  previous call for that process, followed by its status and exit code. A
+  By default each call returns only complete output lines produced since the
+  previous consuming call. With `peek: true`, return recent buffered lines
+  without advancing that cursor. Both include the process status and exit code. A
   session can only read processes it started. Truncated or dropped output includes
   the saved output file path; use `read` with line ranges to retrieve it. The
   saved file holds the head of the output up to the capture limit; when that
@@ -27,7 +28,7 @@ defmodule CodingAgent.Tools.BashOutput do
       description:
         "Read new output from a background process started with bash run_in_background. " <>
           "Returns only the output produced since the last bash_output call for that process, " <>
-          "plus its status (running, completed, error, killed) and exit code.",
+          "plus its status and exit code. Set peek: true to inspect recent output without advancing the read cursor.",
       label: "Read Process Output",
       parameters: %{
         "type" => "object",
@@ -35,6 +36,10 @@ defmodule CodingAgent.Tools.BashOutput do
           "process_id" => %{
             "type" => "string",
             "description" => "The process_id returned by bash with run_in_background"
+          },
+          "peek" => %{
+            "type" => "boolean",
+            "description" => "Return recent buffered output without consuming it (default false)"
           }
         },
         "required" => ["process_id"]
@@ -48,7 +53,7 @@ defmodule CodingAgent.Tools.BashOutput do
   def execute(_tool_call_id, params, _signal, _on_update, cwd, opts) do
     with {:ok, process_id} <- fetch_process_id(params),
          :ok <- authorize(process_id, opts),
-         {:ok, output} <- read(process_id) do
+         {:ok, output} <- read(process_id, Map.get(params, "peek", false)) do
       output
       |> format_output()
       |> CodingAgent.Artifacts.attach(cwd, opts)
@@ -75,13 +80,15 @@ defmodule CodingAgent.Tools.BashOutput do
   def describe_status(status, nil), do: to_string(status || :unknown)
   def describe_status(status, exit_code), do: "#{status} (exit code #{exit_code})"
 
-  defp read(process_id) do
-    case ProcessManager.read_output(process_id) do
+  defp read(process_id, peek) when is_boolean(peek) do
+    case ProcessManager.read_output(process_id, peek: peek) do
       {:ok, output} -> {:ok, output}
       {:error, :not_found} -> {:error, "No background process with id #{process_id}"}
       {:error, reason} -> {:error, "Failed to read process output: #{inspect(reason)}"}
     end
   end
+
+  defp read(_process_id, _peek), do: {:error, "peek must be a boolean"}
 
   defp format_output(output) do
     raw = Enum.join(output.lines, "\n")
