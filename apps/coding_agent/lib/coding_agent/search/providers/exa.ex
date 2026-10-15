@@ -3,6 +3,7 @@ defmodule CodingAgent.Search.Providers.Exa do
 
   @behaviour CodingAgent.Search.Provider
 
+  alias CodingAgent.Search.Operators
   alias CodingAgent.Search.Result
 
   @default_base_url "https://api.exa.ai"
@@ -51,15 +52,15 @@ defmodule CodingAgent.Search.Providers.Exa do
       }
     }
 
-    {first, last} = CodingAgent.Search.Operators.dates(request)
+    {first, last} = Operators.dates(request)
 
     body =
       body
-      |> CodingAgent.Search.Operators.put_if(
+      |> Operators.put_if(
         "startPublishedDate",
         if(first, do: first <> "T00:00:00Z")
       )
-      |> CodingAgent.Search.Operators.put_if(
+      |> Operators.put_if(
         "endPublishedDate",
         if(last, do: last <> "T00:00:00Z")
       )
@@ -94,7 +95,7 @@ defmodule CodingAgent.Search.Providers.Exa do
 
     body = %{
       "urls" => [request.url],
-      "text" => %{"maxCharacters" => request.max_chars}
+      "text" => %{}
     }
 
     case post(context, "/contents", body) do
@@ -119,6 +120,7 @@ defmodule CodingAgent.Search.Providers.Exa do
            "fetchedAt" => DateTime.utc_now() |> DateTime.to_iso8601(),
            "tookMs" => max(System.monotonic_time(:millisecond) - started_ms, 0),
            "text" => wrapped.text,
+           "__full_text" => if(wrapped.truncated, do: text),
            "trustMetadata" => Result.fetch_trust_metadata(wrapped, title)
          }}
 

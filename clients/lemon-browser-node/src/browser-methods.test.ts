@@ -2,12 +2,51 @@ import { describe, expect, it } from 'vitest';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import type { Page } from 'playwright-core';
 
 import { handleBrowserMethod } from './browser-methods.js';
 
 type Listener = (payload: unknown) => void;
 
 describe('handleBrowserMethod extra controls', () => {
+  it('retains complete pre-truncation snapshots for the session artifact writer', async () => {
+    const full = 'snapshot '.repeat(100) + 'SNAPSHOT_TAIL';
+    // This fixture implements only the Page methods exercised by snapshot.
+    const page = {
+      url: () => 'https://example.com',
+      title: async () => 'Example',
+      evaluate: async () => ({ title: 'Example', url: 'https://example.com', lines: [full], totalNodes: 1 }),
+    } as unknown as Page;
+    const result = await handleBrowserMethod(page, 'browser.snapshot', { maxChars: 80 });
+    expect(result).toMatchObject({
+      truncated: true,
+      snapshot: expect.not.stringContaining('SNAPSHOT_TAIL'),
+      __full_content: { snapshot: expect.stringContaining(full) },
+    });
+  });
+
+  it('retains full sanitized HTML and text before content truncation', async () => {
+    const full = 'content '.repeat(100) + 'CONTENT_TAIL';
+    // This fixture implements only the Page methods exercised by getContent.
+    const page = {
+      url: () => 'https://example.com',
+      title: async () => 'Example',
+      content: async () => `<html><script>noisy()</script><body>${full}</body></html>`,
+      evaluate: async () => full,
+    } as unknown as Page;
+    const result = await handleBrowserMethod(page, 'browser.getContent', { maxChars: 80, textMaxChars: 80 });
+    expect(result).toMatchObject({
+      truncated: true,
+      textTruncated: true,
+      text: expect.not.stringContaining('CONTENT_TAIL'),
+      __full_content: {
+        text: full,
+        html: expect.stringContaining('CONTENT_TAIL'),
+      },
+    });
+    expect(JSON.stringify(result)).not.toContain('noisy()');
+  });
+
   it('buffers console and dialog events', async () => {
     const listeners = new Map<string, Listener[]>();
     const dismissed: string[] = [];
