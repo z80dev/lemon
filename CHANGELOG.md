@@ -20,6 +20,11 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- The TUI stops retrying rejected operator credentials, shows token recovery
+  steps, and keeps offline prompts in the editor instead of silently queueing.
+  Connection failures and `/reconnect` report actionable outcomes; `/status`
+  includes profile/model, theme changes say whether they were saved, and
+  command suggestions no longer mistake `/faq` for the `/q` queue alias.
 - Make source and packaged launcher lifecycle results truthful: foreground health
   is visible to status, unreachable runtimes fail status, foreign listeners fail
   stop/restart, and failed daemon health waits clean up their processes. Validate

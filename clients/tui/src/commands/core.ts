@@ -5,6 +5,7 @@
  */
 
 import { saveTheme } from "../config.ts";
+import { describeError } from "../protocol/errors.ts";
 import {
 	installAppearance,
 	normalizePreference,
@@ -12,7 +13,7 @@ import {
 } from "../ui/theme/appearance.ts";
 import { DARK_PALETTE, LIGHT_PALETTE, type Palette, peekTheme } from "../ui/theme/theme.ts";
 import { indentBlock } from "./format.ts";
-import { describeError, type SlashCommand, SUBMISSION_MODES } from "./registry.ts";
+import { type SlashCommand, SUBMISSION_MODES } from "./registry.ts";
 
 /** The palettes `/theme` can install, by the name they are stored under. */
 export const THEMES: Record<string, { palette: Palette; appearance: "dark" | "light" }> = {
@@ -62,9 +63,14 @@ export const reconnectCommand: SlashCommand = {
 	name: "reconnect",
 	summary: "drop the control-plane socket and dial again",
 	group: "connection",
-	run(ctx) {
-		ctx.ui.notice("reconnecting…");
-		ctx.ui.reconnect();
+	async run(ctx) {
+		ctx.ui.notice(`reconnecting to ${ctx.client.url}…`);
+		try {
+			await ctx.ui.reconnect();
+			ctx.ui.notice(`connected to ${ctx.client.url}`);
+		} catch (error) {
+			ctx.ui.notice(`reconnect failed: ${describeError(error)}`, "error");
+		}
 	},
 };
 
@@ -149,15 +155,15 @@ export const themeCommand: SlashCommand = {
 			ctx.ui.setThemePreference?.(requested) ??
 			installAppearance(requested === "auto" ? "dark" : requested).appearance;
 		ctx.ui.themeChanged?.();
-		ctx.ui.notice(
+		const label =
 			requested === "auto"
 				? `theme: auto (${appearance})`
-				: `theme: ${peekTheme()?.name ?? requested}`,
-		);
+				: `theme: ${peekTheme()?.name ?? requested}`;
 		try {
 			await saveTheme(requested);
+			ctx.ui.notice(`${label} (saved)`);
 		} catch (error) {
-			ctx.ui.notice(`theme not persisted: ${describeError(error)}`, "warning");
+			ctx.ui.notice(`${label} (session only — could not save: ${describeError(error)})`, "warning");
 		}
 	},
 };

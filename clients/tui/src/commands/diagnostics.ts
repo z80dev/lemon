@@ -38,6 +38,10 @@ export const statusCommand: SlashCommand = {
 			`lemon ${pickString(server, "version") ?? "?"} · ${ctx.client.url} · ${ctx.client.state}`,
 		);
 		lines.push(
+			`profile: ${/^agent:([^:]+):main$/.exec(ctx.session.key)?.[1] ?? "none (ordinary chat)"}`,
+			`model: ${ctx.session.model ?? "not selected — /model to choose"}`,
+		);
+		lines.push(
 			...keyValueLines([
 				["uptime", humanDuration(pickNumber(server, "uptime_ms", "uptimeMs"))],
 				[

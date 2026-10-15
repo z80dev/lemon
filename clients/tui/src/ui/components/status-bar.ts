@@ -280,6 +280,21 @@ export function renderStatusLine(data: StatusBarData, width: number): string {
 	const theme = getTheme();
 	const segments = buildSegments(data);
 	const separator = " · ";
+	// Keep connection recovery and explicit queue counts readable before spending
+	// columns on the decorative gauge. Model and context facts stay pinned.
+	if (data.connection !== "online") {
+		const critical = segments.filter((segment) => segment.pinned || segment.id === "connection");
+		if (visibleWidth(critical.map((segment) => segment.text).join(separator)) > width) {
+			const context = segments.find((segment) => segment.id === "context");
+			if (context)
+				context.text = renderGauge(
+					data.contextTokens,
+					data.contextWindow,
+					data.contextSource,
+					true,
+				);
+		}
+	}
 	const kept = fitSegments(segments, width, separator.length);
 	const plain = kept.map((segment) => segment.text).join(separator);
 	const styled = kept
@@ -317,10 +332,9 @@ export function buildSegments(data: StatusBarData): Segment[] {
 	if (data.connection !== "online") {
 		segments.push({
 			id: "connection",
-			// `+2` rather than "(2 queued)": this segment matters most exactly when
-			// the row is tight, so it has to be cheap in columns.
-			text: data.queued > 0 ? `${data.connection} +${data.queued}` : data.connection,
-			slot: data.connection === "offline" ? "error" : "warning",
+			text: `${data.connection === "auth-rejected" ? "auth rejected" : data.connection === "offline" ? "offline" : `${data.connection}…`}${data.queued > 0 ? ` · ${data.queued} queued` : ""}`,
+			slot:
+				data.connection === "offline" || data.connection === "auth-rejected" ? "error" : "warning",
 			priority: 90,
 		});
 	}
@@ -550,7 +564,7 @@ export function fitSegments(segments: Segment[], width: number, separatorWidth: 
 
 /** `anthropic:claude-sonnet-4` -> `claude-sonnet-4`; long ids keep their tail. */
 export function shortModel(model: string | undefined): string {
-	if (!model) return "no model";
+	if (!model) return "no model — /model to choose";
 	const withoutProvider = model.includes(":") ? model.slice(model.indexOf(":") + 1) : model;
 	return withoutProvider.length > 28 ? `…${withoutProvider.slice(-27)}` : withoutProvider;
 }
@@ -568,12 +582,15 @@ export function renderGauge(
 	tokens: number | undefined,
 	window: number | undefined,
 	source: ContextSource = "context",
+	compactDisplay = false,
 ): string {
 	const theme = getTheme();
 	const ascii = theme.getSymbolPreset() === "ascii";
 	if (source === "aggregate") {
 		return tokens && tokens > 0 ? `use ${compact(tokens)}` : "use —";
 	}
+	if (compactDisplay && window && window > 0)
+		return `ctx ${compact(tokens ?? 0)}/${compact(window)}`;
 	if (!tokens || tokens <= 0) {
 		return window ? `${ascii ? "[--------]" : "[░░░░░░░░]"} 0% 0/${compact(window)}` : "ctx —";
 	}
