@@ -102,7 +102,9 @@ jobs:
           echo "shards: $partitions (scope $SCOPE, ${#apps[@]} apps)"
 
   # Cheapest, broadest signal first: format, credo, docs and architecture
-  # checks also cover prose-only changes, so this job never skips.
+  # checks also cover prose-only changes, so this job never skips. Pull
+  # requests format/credo-check only their changed files (unless the diff is
+  # full scope, e.g. formatter/Credo config); every other event checks all.
   check:
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -110,6 +112,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: ${{ github.event_name == 'pull_request' && '0' || '1' }}
+          filter: blob:none
 
       - name: BEAM setup
         id: beam
@@ -118,7 +123,9 @@ jobs:
           family: test
 
       - name: scripts/test quality
-        run: scripts/test quality
+        env:
+          BASE: ${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || '' }}
+        run: scripts/test quality ${BASE:+--base "$BASE"}
 
       - name: scripts/test eval-fast
         run: scripts/test eval-fast
