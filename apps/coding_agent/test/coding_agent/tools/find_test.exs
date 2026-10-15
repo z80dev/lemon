@@ -6,6 +6,42 @@ defmodule CodingAgent.Tools.FindTest do
   alias LemonAi.Types.TextContent
 
   @moduletag :tmp_dir
+  test "merges roots before limiting and reports missing roots", %{tmp_dir: root} do
+    for dir <- ["a", "b"], do: File.mkdir_p!(Path.join(root, dir))
+    File.write!(Path.join(root, "a/same.txt"), "")
+    File.write!(Path.join(root, "b/same.txt"), "")
+
+    for opts <- [[], [fd_available?: false]] do
+      result =
+        Find.execute(
+          "roots",
+          %{"pattern" => "*.txt", "path" => " b ; a; missing ; ; a", "max_results" => 1},
+          nil,
+          nil,
+          root,
+          opts
+        )
+
+      assert result.details.files == ["a/same.txt"]
+      assert result.details.truncated
+      assert result.details.missing_paths == [Path.join(root, "missing")]
+      assert Enum.any?(result.content, &(&1.text =~ "Missing search roots"))
+
+      assert {:error, _} =
+               Find.execute(
+                 "missing",
+                 %{"pattern" => "*", "path" => "missing;also-missing"},
+                 nil,
+                 nil,
+                 root,
+                 opts
+               )
+
+      assert {:error, _} =
+               Find.execute("empty", %{"pattern" => "*", "path" => " ; "}, nil, nil, root, opts)
+    end
+  end
+
   test "fallback exact names and exact result limits", %{tmp_dir: tmp_dir} do
     File.write!(Path.join(tmp_dir, "a.txt"), "")
     File.write!(Path.join(tmp_dir, "A.txt"), "")

@@ -94,6 +94,7 @@ defmodule LemonChannels.Adapters.Discord.Transport do
 
   @impl true
   def init(opts) do
+    LemonChannels.Registry.record_status("discord", :configured)
     base = LemonChannels.GatewayConfig.get(:discord, %{}) || %{}
 
     config =
@@ -137,6 +138,7 @@ defmodule LemonChannels.Adapters.Discord.Transport do
            }}
 
         {:error, reason} ->
+          LemonChannels.Registry.record_status("discord", {:error, reason})
           Logger.warning("discord adapter disabled: #{inspect(reason)}")
           :ignore
       end
@@ -2798,6 +2800,7 @@ defmodule LemonChannels.Adapters.Discord.Transport do
         nil
 
       {:error, reason} ->
+        LemonChannels.Registry.record_status("discord", {:error, reason})
         Logger.warning("discord consumer failed to start: #{inspect(reason)}")
         nil
     end
@@ -2948,7 +2951,11 @@ defmodule LemonChannels.Adapters.Discord.Transport do
 
     @transport LemonChannels.Adapters.Discord.Transport
 
-    def handle_event({_name, _payload, _ws_state} = event) do
+    def handle_event({name, _payload, _ws_state} = event) do
+      if name in [:READY, :RESUMED] do
+        LemonChannels.Registry.record_status("discord", :connected)
+      end
+
       if pid = Process.whereis(@transport) do
         send(pid, {:discord_event, event})
       end
