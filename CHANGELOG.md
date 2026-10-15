@@ -8,6 +8,8 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
+- Serialize environment-mutating diagnostic and configuration fixtures so a
+  temporary extension-disable flag cannot leak into unrelated tool inventories.
 - Isolate status metadata tests from CI commit variables while retaining packaged
   GitHub build provenance coverage, and wait for coordinator registry cleanup in
   controlled restart fixtures.

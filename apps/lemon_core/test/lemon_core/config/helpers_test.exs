@@ -2,7 +2,8 @@ defmodule LemonCore.Config.HelpersTest do
   @moduledoc """
   Tests for the Config.Helpers module.
   """
-  use ExUnit.Case, async: true
+  # Restoring a full environment snapshot must not race other test fixtures.
+  use ExUnit.Case, async: false
 
   alias LemonCore.Config.Helpers
 
