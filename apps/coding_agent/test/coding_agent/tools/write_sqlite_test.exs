@@ -144,6 +144,30 @@ defmodule CodingAgent.Tools.WriteSqliteTest do
     refute File.exists?(path)
   end
 
+  test "database writes use the physical path lock and busy timeout", %{tmp_dir: dir, db: db} do
+    parent = self()
+
+    task =
+      CodingAgent.MutationLock.with_lock(CodingAgent.MutationLock.path_key(db), fn ->
+        task =
+          Task.async(fn ->
+            send(parent, :starting_sqlite_write)
+            write(dir, "app.db:users:1", ~s({"name":"locked"}))
+          end)
+
+        assert_receive :starting_sqlite_write
+        assert Task.yield(task, 20) == nil
+        assert [["old"]] = rows(db, "SELECT name FROM users")
+        task
+      end)
+
+    assert %AgentToolResult{} = Task.await(task)
+    assert [["locked"]] = rows(db, "SELECT name FROM users")
+
+    assert {:ok, _, [[3000]], _} =
+             Sqlite.with_connection(db, :readwrite, &Sqlite.query(&1, "PRAGMA busy_timeout"))
+  end
+
   test "literal selector-shaped files retain normal write behavior", %{tmp_dir: dir} do
     path = Path.join(dir, "app.db:literal")
     File.write!(path, "before")
