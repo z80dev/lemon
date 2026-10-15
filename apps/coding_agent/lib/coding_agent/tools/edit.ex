@@ -39,6 +39,8 @@ defmodule CodingAgent.Tools.Edit do
   omitted; the existing diff and first changed line remain available.
   """
 
+  require Logger
+
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonAi.Types.TextContent
   alias CodingAgent.FileReadTracker
@@ -332,8 +334,12 @@ defmodule CodingAgent.Tools.Edit do
   defp format_error({:error, :aborted}, _path), do: {:error, "Operation aborted"}
   defp format_error({:error, reason}, _path) when is_binary(reason), do: {:error, reason}
 
-  defp format_error({:error, reason}, _path),
-    do: {:error, "Failed to edit file: #{inspect(reason)}"}
+  defp format_error({:error, reason}, _path) do
+    Logger.warning("Failed to edit file: #{inspect(reason)}")
+
+    {:error,
+     "Failed to edit file. Re-read the file and check write permissions before trying again."}
+  end
 
   defp maybe_put_diagnostics(details, nil), do: details
 

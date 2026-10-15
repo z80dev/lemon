@@ -5,6 +5,8 @@ defmodule LemonControlPlane.Methods.GoalPause do
 
   @behaviour LemonControlPlane.Method
 
+  require Logger
+
   @impl true
   def name, do: "goal.pause"
 
@@ -19,8 +21,14 @@ defmodule LemonControlPlane.Methods.GoalPause do
       {:error, {:invalid_request, "sessionKey is required", nil}}
     else
       case LemonAgent.Workspace.GoalStore.pause(session_key, run_id: param(params, "runId")) do
-        {:ok, goal} -> {:ok, format_goal(goal)}
-        {:error, reason} -> {:error, {:invalid_request, inspect(reason), nil}}
+        {:ok, goal} ->
+          {:ok, format_goal(goal)}
+
+        {:error, reason} ->
+          Logger.warning("Could not pause goal: #{inspect(reason)}")
+
+          {:error,
+           {:internal_error, "Could not pause goal. Run `lemon doctor` before trying again.", nil}}
       end
     end
   end

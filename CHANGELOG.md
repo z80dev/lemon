@@ -98,6 +98,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Chat, task, provider and goal/cron failures use plain-language recovery steps
+  instead of raw Elixir terms; provider authentication names the credential to
+  check, and Discord approvals distinguish expired controls from unavailable service.
+
 - Provider-ownership probes inspect complete events and logs so large tool
   schemas cannot hide credential refusal or leaked values. Integration tests
   retain committed-output retry fences and drain bounded session subscriptions.

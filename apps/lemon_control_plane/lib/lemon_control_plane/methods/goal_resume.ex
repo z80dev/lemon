@@ -5,6 +5,8 @@ defmodule LemonControlPlane.Methods.GoalResume do
 
   @behaviour LemonControlPlane.Method
 
+  require Logger
+
   @impl true
   def name, do: "goal.resume"
 
@@ -19,8 +21,15 @@ defmodule LemonControlPlane.Methods.GoalResume do
       {:error, {:invalid_request, "sessionKey is required", nil}}
     else
       case LemonAgent.Workspace.GoalStore.resume(session_key, run_id: param(params, "runId")) do
-        {:ok, goal} -> {:ok, format_goal(goal)}
-        {:error, reason} -> {:error, {:invalid_request, inspect(reason), nil}}
+        {:ok, goal} ->
+          {:ok, format_goal(goal)}
+
+        {:error, reason} ->
+          Logger.warning("Could not resume goal: #{inspect(reason)}")
+
+          {:error,
+           {:internal_error, "Could not resume goal. Run `lemon doctor` before trying again.",
+            nil}}
       end
     end
   end

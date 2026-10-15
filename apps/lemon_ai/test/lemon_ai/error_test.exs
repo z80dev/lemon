@@ -3,6 +3,39 @@ defmodule LemonAi.ErrorTest do
 
   alias LemonAi.Error
 
+  test "provider authentication copy preserves HTTP details and identifies credential remediation" do
+    for provider <- [:openai, "openai", :anthropic, :google] do
+      result =
+        Error.parse_http_error(401, %{"error" => %{"message" => "Invalid API key"}}, [], provider)
+
+      assert result.message =~ to_string(provider)
+      assert result.message =~ "HTTP 401"
+      assert result.message =~ "Invalid API key"
+      assert result.message =~ "API_KEY"
+      assert result.message =~ "lemon secrets set"
+      refute result.message =~ "{"
+      refute result.message =~ ":auth"
+      refute result.retryable
+    end
+  end
+
+  test "transport and unknown API copy names the provider without term syntax" do
+    message = Error.format_error({:unknown_api, :missing_api})
+    assert message =~ "\"missing_api\""
+    assert message =~ "lemon doctor"
+    refute message =~ ":missing_api"
+
+    for reason <- [:timeout, :closed, :econnrefused, :econnreset, :nxdomain] do
+      message = Error.format_error(reason, "local_provider")
+      assert message =~ "local_provider"
+      refute message =~ "{"
+      refute message =~ ":#{reason}"
+    end
+
+    assert Error.format_error(:econnrefused, :ollama) =~ "base_url"
+    assert Error.format_error(:econnrefused, :ollama) =~ "server is running"
+  end
+
   describe "parse_http_error/3" do
     test "parses rate limit error with headers" do
       headers = [
@@ -1033,22 +1066,25 @@ defmodule LemonAi.ErrorTest do
       assert msg =~ "closed"
     end
 
-    test "formats unknown tuple errors with inspection" do
+    test "formats unknown tuple errors without exposing terms" do
       msg = Error.format_error({:custom_error, "details", 123})
       assert msg =~ "unexpected error"
-      assert msg =~ "custom_error"
+      assert msg =~ "lemon doctor"
+      refute msg =~ "{"
+      refute msg =~ ":custom_error"
     end
 
-    test "formats map errors with inspection" do
+    test "formats map errors without exposing terms" do
       msg = Error.format_error(%{type: :validation, field: "email"})
       assert msg =~ "unexpected error"
-      assert msg =~ "validation"
+      refute msg =~ "%{"
+      refute msg =~ ":validation"
     end
 
     test "formats integer errors" do
       msg = Error.format_error(42)
       assert msg =~ "unexpected error"
-      assert msg =~ "42"
+      refute msg =~ "42"
     end
 
     test "formats empty string as error" do

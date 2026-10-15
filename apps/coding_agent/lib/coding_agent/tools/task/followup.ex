@@ -354,7 +354,11 @@ defmodule CodingAgent.Tools.Task.Followup do
   defp normalize_followup_answer(other), do: Result.visible_output_text(other)
 
   defp format_error(reason) when is_binary(reason), do: reason
-  defp format_error(reason), do: inspect(reason)
+
+  defp format_error(reason) do
+    Logger.warning("Task followup failed: #{inspect(reason)}")
+    "The task failed unexpectedly. Run `lemon doctor` before trying again."
+  end
 
   defp build_async_followup_message(text, task_id, run_id, delivery) do
     %{
