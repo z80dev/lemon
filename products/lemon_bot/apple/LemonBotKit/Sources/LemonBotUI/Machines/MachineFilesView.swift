@@ -27,7 +27,7 @@ public struct MachineFilesView: View {
     public init(store: LemonBotStore, machineID: ID) { self.store = store; self.machineID = machineID }
     public var body: some View {
         Form {
-            HubError(action: action)
+            HubError(action: action, store: store)
             if let transferProgress { Text(transferProgress).font(.caption) }
             Section("Destination-local path") {
                 Text("Paths are on the selected host, confined by its allowed roots. Files/logins are shared by co-resident Bots. This is not your phone's filesystem.")

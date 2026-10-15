@@ -12,7 +12,7 @@ struct WorkspaceSettingsView: View {
     @State private var enabled = true
     var body: some View {
         Form {
-            AdminStatus(control: control, store: store)
+            AdminStatus(control: control, store: store, refresh: { await control.perform { try await load() } })
             Section("Workspace") {
                 TextField("Name", text: $name); TextField("IANA timezone", text: $timezone)
                 Toggle("Workspace enabled", isOn: $enabled)
@@ -51,7 +51,7 @@ struct PolicySettingsView: View {
     @State private var machine = ""
     var body: some View {
         Form {
-            AdminStatus(control: control, store: store)
+            AdminStatus(control: control, store: store, refresh: { await control.perform { try await load() } })
             Section("Effective policy — actual composition") {
                 AdminBotPicker(store: store, value: $bot)
                 Button("Inspect effective policy") { Task { await control.perform { effective = try await store.read("/policies/effective", query: bot.isEmpty ? [:] : ["botId": bot], as: EffectivePolicy.self) } } }

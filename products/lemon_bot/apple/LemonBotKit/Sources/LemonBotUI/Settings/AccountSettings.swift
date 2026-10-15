@@ -21,7 +21,7 @@ struct AccountSettingsView: View {
     @AppStorage("LemonBot.safeAccountCleanupDiagnostics") private var cleanupDiagnostics = ""
     var body: some View {
         Form {
-            AdminStatus(control: control, store: store)
+            AdminStatus(control: control, store: store, refresh: { await control.perform { try await load() } })
             Section("Your account") {
                 TextField("Display name", text: $name)
                 TextField("Email", text: $email)
@@ -47,7 +47,7 @@ struct AccountSettingsView: View {
                         Task { await control.perform { try await store.restoreAccount(account) } }
                     }.disabled(control.busy)
                 }
-                AdminAction(title: "Sign out of current account", store: store, control: control) { try await store.signOut() }
+                AdminAction(title: "Sign out of current account", store: store, control: control, destructive: true) { try await store.signOut() }
             }
             Section("Product sessions") {
                 ForEach(sessions) { session in
@@ -333,7 +333,7 @@ struct AboutSettingsView: View {
     @State private var hosts: [AdminHostVersion] = []
     var body: some View {
         Form {
-            AdminStatus(control: control, store: store)
+            AdminStatus(control: control, store: store, refresh: { await control.perform { try await load() } })
             Section("Client") {
                 Text("Lemon Bot · \(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "Unknown client version")")
                 Text("Platform: \(ProcessInfo.processInfo.operatingSystemVersionString)")

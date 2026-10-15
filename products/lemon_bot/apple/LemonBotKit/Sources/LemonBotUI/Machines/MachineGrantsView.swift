@@ -10,7 +10,7 @@ struct MachineBotGrantsView: View {
     private var canManage: Bool { bot.ownerUserId == store.user?.id }
     var body: some View {
         DisclosureGroup("\(bot.name) · requested vs effective authorization") {
-            HubError(action: action)
+            HubError(action: action, store: store)
             ForEach(grants) { grant in
                 VStack(alignment: .leading) {
                     Text(grant.capabilityId).font(.headline)

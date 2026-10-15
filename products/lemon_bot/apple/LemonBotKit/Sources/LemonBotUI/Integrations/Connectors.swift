@@ -42,10 +42,10 @@ struct ConnectorSettingsView: View {
     private var bot: Bot? { store.bots.first { $0.id == botID } }
     var body: some View {
         Form {
-            AdminStatus(control: control, store: store)
+            AdminStatus(control: control, store: store, refresh: { await control.perform { try await loadBot() } })
             Section("Assigned Bot and account inventory") {
                 AdminBotPicker(store: store, value: $botID)
-                Button("Load selected Bot connectors and destination secret names") { Task { await control.perform { try await loadBot() } } }.disabled(botID.isEmpty || control.busy)
+                Button("Load this Bot's connectors") { Task { await control.perform { try await loadBot() } } }.disabled(botID.isEmpty || control.busy)
                 if let bot { Text("\(bot.name) · machine \(store.machines.first { $0.id == bot.machineId }?.name ?? bot.machineId)") }
                 ForEach(connectors) { connector in
                     NavigationLink("\(connector.name) · \(connector.accountLabel) · \(connector.state)") { ConnectorDetailSettingsView(store: store, connector: connector) }
@@ -71,6 +71,7 @@ struct ConnectorSettingsView: View {
                     setupResult = try await store.mutate("POST", "/bots/\(adminPath(bot.id))/connectors/setup", body: ["machineId": .string(bot.machineId), "name": .string(name), "url": .string(url), "accountLabel": .string(account), "authKind": .string(auth), "secretBindings": .array(auth == "secret_headers" ? bindings.map(\.body) : []), "requestedLevel": .string(level)], as: ConnectorSetupResult.self)
                     acceptedSharedHost = false; try await loadBot()
                 }.disabled(bot == nil || botID != selectedLoadedBot || !acceptedSharedHost || (auth == "secret_headers" && bindings.contains { $0.secretName.isEmpty }))
+                if !botID.isEmpty && botID != selectedLoadedBot { Text("Load this Bot's connectors to continue.").font(LBFont.meta).foregroundStyle(LB.muted) }
                 if let result = setupResult {
                     Text("Acknowledged connector \(result.connector.name) · \(result.connector.state) · machine \(result.machineId)")
                     ForEach(result.grants) { Text("\($0.capabilityId): requested \($0.requestedLevel), effective \($0.effectiveLevel) · \($0.reasons.joined(separator: "; "))") }

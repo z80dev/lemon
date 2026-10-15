@@ -10,7 +10,7 @@ public struct MachineHubView: View {
     public init(store: LemonBotStore) { self.store = store }
     public var body: some View {
         List {
-            HubError(action: action)
+            HubError(action: action, store: store)
             Section { Text("You retain SSH and full host access. Bots sharing a host share its OS user's files, browser sessions and CLI credentials. A persona is not an OS sandbox.") }
             ForEach(machines) { machine in
                 NavigationLink { MachineDetailView(store: store, machineID: machine.id) } label: {
@@ -48,7 +48,7 @@ struct MachineAttachView: View {
     @State private var action = HubAction()
     var body: some View {
         Form {
-            HubError(action: action)
+            HubError(action: action, store: store)
             if let result { MachineEnrollmentView(store: store, machineID: result.machine.id, initialInvite: result.invite) }
             else {
                 TextField("Friendly name", text: $name)
@@ -76,7 +76,7 @@ struct MachineEnrollmentView: View {
     @State private var action = HubAction()
     var body: some View {
         Section("Enrollment and repair") {
-            HubError(action: action)
+            HubError(action: action, store: store)
             Text("Run the one-use command on the destination. Configure provider credentials and working directory on that host, and supervise its worker with your service manager. Copying does not prove installation or enrollment.")
             Text("Actual machine status: \(machine?.status ?? "Loading")")
             ForEach(invites) { invite in
@@ -102,7 +102,7 @@ struct MachineEnrollmentView: View {
         .task {
             if let initialInvite { invites = [initialInvite] }
             while !Task.isCancelled {
-                await action.perform(readOnly: true) { try await refresh() }
+                await action.poll { try await refresh() }
                 do { try await Task.sleep(for: .seconds(3)) } catch { break }
             }
         }
@@ -129,7 +129,7 @@ public struct MachineDetailView: View {
     public init(store: LemonBotStore, machineID: ID) { self.store = store; self.machineID = machineID }
     public var body: some View {
         Form {
-            HubError(action: action)
+            HubError(action: action, store: store)
             if let machine {
                 Section("Owned host") {
                     Text("\(machine.nodeName) · \(machine.status)")
@@ -149,7 +149,7 @@ public struct MachineDetailView: View {
                         LabeledContent("Lemon / uptime", value: "\(host.lemonVersion) · \(host.uptimeSec)s")
                         LabeledContent("OS user / cwd", value: "\(host.user) · \(host.defaultCwd)")
                         Text("Measured \(hubDate(host.measuredAtMs))")
-                    } else { Text(hostError ?? "Loading measurements") }
+                    } else { ActionErrorView(message: hostError); if hostError == nil { Text("Loading measurements") } }
                 }
                 if let capabilities {
                     Section("Capabilities and actual OS grants") {
@@ -164,7 +164,7 @@ public struct MachineDetailView: View {
                         }
                     }
                 }
-                if let capabilityError { Section("Capability measurement unavailable") { Text(capabilityError).foregroundStyle(.red).textSelection(.enabled) } }
+                if let capabilityError { Section("Capability measurement unavailable") { ActionErrorView(message: capabilityError) } }
                 Section("Bots on this host") {
                     ForEach(store.bots.filter { $0.machineId == machineID }) { bot in
                         NavigationLink(bot.name) { BotOverviewView(store: store, botID: bot.id) }
@@ -182,7 +182,7 @@ public struct MachineDetailView: View {
                         Text("Backup: \(hubDate(management.lastBackupAtMs))")
                         Text("Network: \(management.supportsNetworkPolicy ? "Supported" : "Unsupported") · Egress: \(management.supportsEgress ? "Supported" : "Unsupported") · Setup: \(management.supportsSetup ? "Supported" : "Unsupported")")
                         NavigationLink("Review supported host operations") { HostOperationsView(store: store, machineID: machineID, supported: management.supportedActions) }
-                    } else { Text(managementError ?? "Loading configured driver") }
+                    } else { ActionErrorView(message: managementError); if managementError == nil { Text("Loading configured driver") } }
                 }
                 MachineEnrollmentView(store: store, machineID: machineID, initialInvite: nil)
                 Button("Preview detach", role: .destructive) { Task { await action.perform { preview = try await store.mutate("POST", "/machines/\(hubID(machineID))/preview", body: ["action": .string("detach")]) } } }
@@ -191,14 +191,14 @@ public struct MachineDetailView: View {
                     let _: HubDeleted = try await store.mutate("DELETE", "/machines/\(hubID(machineID))", body: preview.body(name: name)); self.preview = nil; try await load()
                 } } }
             }
-        }.navigationTitle(machine?.name ?? "Machine").toolbar { Button("Refresh") { Task { await action.perform(readOnly: true) { try await load() } } } }
+        }.navigationTitle(machine?.name ?? "Machine").toolbar { Button("Refresh") { Task { await action.checkStatus(store) { try await load() } } } }
             .task { await action.perform(readOnly: true) { try await load() } }
     }
     private func load() async throws {
         let value: Machine = try await store.read("/machines/\(hubID(machineID))"); machine = value; name = value.name
-        do { host = try await store.read("/machines/\(hubID(machineID))/host"); hostError = nil } catch { host = nil; hostError = String(describing: error) }
-        do { capabilities = try await store.read("/machines/\(hubID(machineID))/capabilities"); capabilityError = nil } catch { capabilities = nil; capabilityError = error.localizedDescription }
-        do { management = try await store.read("/machines/\(hubID(machineID))/management"); managementError = nil } catch { management = nil; managementError = String(describing: error) }
+        do { host = try await store.read("/machines/\(hubID(machineID))/host"); hostError = nil } catch { host = nil; hostError = humanErrorText(error) }
+        do { capabilities = try await store.read("/machines/\(hubID(machineID))/capabilities"); capabilityError = nil } catch { capabilities = nil; capabilityError = humanErrorText(error) }
+        do { management = try await store.read("/machines/\(hubID(machineID))/management"); managementError = nil } catch { management = nil; managementError = humanErrorText(error) }
     }
 }
 struct HostOperationsView: View {
@@ -214,7 +214,7 @@ struct HostOperationsView: View {
     init(store: LemonBotStore, machineID: ID? = nil, supported: [String] = ["update", "recover", "restart_worker", "stop_worker", "suspend", "recreate_environment", "delete_environment"]) { self.store = store; self.machineID = machineID; self.supported = supported }
     var body: some View {
         Form {
-            HubError(action: action)
+            HubError(action: action, store: store)
             Text("Operations require a configured driver and explicit authority. Recreate/delete affect only its isolated environment, never your host home or SSH. Acceptance is not completion. Uncertain operations are not replayed.")
             Section("Exact targets") {
                 ForEach(store.machines.filter { machineID == nil || $0.id == machineID }) { machine in
@@ -228,17 +228,18 @@ struct HostOperationsView: View {
             if let preview { HubConfirmationForm(store: store, preview: preview, action: action) { name in await action.perform {
                 var body = preview.body(name: name); body["machineIds"] = .array(selected.sorted().map(JSONValue.string)); body["action"] = .string(hostAction)
                 let operation: HostOperation = try await store.mutate("POST", "/host-operations", body: body); operations.insert(operation, at: 0); self.preview = nil
-                if operation.state == "outcome_unknown" { action.uncertain = true; action.error = "Host operation outcome_unknown; reconcile operation \(operation.id), do not start another operation." }
+                if operation.state == "outcome_unknown" { action.uncertain = true; action.uncertainResourceID = operation.id; action.error = "We couldn't confirm whether this ran. Check its result below before trying again." }
             } } }
             Section("Persisted operations / per-target outcomes") {
                 ForEach(operations) { operation in
                     VStack(alignment: .leading) {
-                        Text("\(operation.action) · \(operation.state)").font(.headline)
-                        Text(operation.id).font(.caption).textSelection(.enabled)
-                        ForEach(operation.results, id: \.machineId) { result in Text("\(result.machineId): \(result.state) · \(result.reason ?? "")") }
-                        Button("Reconcile operation") { Task { await action.perform(readOnly: true) {
+                        Text("\(humanizedStatus(operation.action)) · \(hubStatusLabel(operation.state))").font(LBFont.rowTitle)
+                        DisclosureGroup("Details") { Text(operation.id).textSelection(.enabled); Button("Copy") { copyText(operation.id) } }
+                        ForEach(operation.results, id: \.machineId) { result in Text("\(store.machines.first(where: { $0.id == result.machineId })?.name ?? "Machine"): \(hubStatusLabel(result.state)) · \(result.reason ?? "")") }
+                        Button("Check status") { Task { await action.perform(readOnly: true) {
                             let current: HostOperation = try await store.read("/host-operations/\(hubID(operation.id))")
                             if let index = operations.firstIndex(where: { $0.id == current.id }) { operations[index] = current }
+                            if action.uncertainResourceID == current.id, ["completed", "succeeded", "failed", "cancelled"].contains(current.state) { action.uncertain = false; action.uncertainResourceID = nil; action.error = nil }
                         } } }
                     }
                 }

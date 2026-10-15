@@ -4,14 +4,14 @@ public enum PairingClientError: Error, LocalizedError {
     case invalidLink, pendingConnection, notReady, expired, denied, wrongCluster, unconfirmed, rejected(String)
     public var errorDescription: String? {
         switch self {
-        case .invalidLink: return "This is not a valid Lemon Bot desktop pairing link. Use a fresh QR from your desktop; remote clusters require HTTPS."
+        case .invalidLink: return "That isn't a valid Lemon Bot pairing link. Scan a fresh QR from your Mac. Remote workspaces need an HTTPS address."
         case .pendingConnection: return "Finish or cancel the saved connection request before scanning another QR."
         case .notReady: return "Scan or paste a desktop pairing link before requesting a connection."
-        case .expired: return "This pairing request expired. Create a fresh QR on your desktop and reconnect explicitly."
-        case .denied: return "Your desktop denied this device. Create a fresh QR if you want to request a new connection."
-        case .wrongCluster: return "The backend response does not match the exact scanned cluster and device. No credential was installed."
-        case .unconfirmed: return "The connection result is unconfirmed. Reconcile this saved request; do not scan a second QR or create another credential."
-        case .rejected(let code): return "The desktop could not complete pairing (\(code)). No credential was installed."
+        case .expired: return "This request expired. Create a new QR code on your Mac."
+        case .denied: return "Your Mac denied this device. Create a new QR code to request a connection again."
+        case .wrongCluster: return "The server's workspace or device doesn't match the QR code. Nothing was installed. Scan a fresh QR from your Mac."
+        case .unconfirmed: return "We couldn't confirm the connection. Check your saved request before scanning another QR code."
+        case .rejected: return "Your Mac couldn't finish connecting this iPhone. Nothing was installed. Check your request."
         }
     }
 }

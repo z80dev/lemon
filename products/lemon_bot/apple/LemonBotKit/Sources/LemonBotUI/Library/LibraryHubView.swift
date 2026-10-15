@@ -26,7 +26,7 @@ struct SkillLibraryView: View {
     @State private var action = HubAction()
     var body: some View {
         List {
-            HubError(action: action)
+            HubError(action: action, store: store)
             TextField("Search skills", text: $query).onSubmit { Task { await load() } }
             HubBotPicker(store: store, selection: $botID).onChange(of: botID) { Task { await load() } }
             ForEach(skills) { skill in NavigationLink { SkillEditorView(store: store, initial: skill) } label: {
@@ -65,7 +65,7 @@ struct SkillEditorView: View {
     @State private var action = HubAction()
     var body: some View {
         Form {
-            HubError(action: action)
+            HubError(action: action, store: store)
             if acknowledged { Text(machines.isEmpty ? "Saved in the library; no hosts were selected for installation." : "Saved after selected destination hosts acknowledged provisioning. Installation does not execute these instructions.").foregroundStyle(.green) }
             TextField("Name", text: $name)
             TextField("Description", text: $description)
@@ -103,8 +103,8 @@ struct SkillEditorView: View {
             .fileImporter(isPresented: $importFile, allowedContentTypes: [.plainText, .text]) { result in
                 do {
                     let url = try result.get(); let scoped = url.startAccessingSecurityScopedResource(); defer { if scoped { url.stopAccessingSecurityScopedResource() } }
-                    let data = try Data(contentsOf: url); guard data.count <= 262_144, let text = String(data: data, encoding: .utf8) else { throw CocoaError(.fileReadInapplicableStringEncoding) }; markdown = text
-                } catch { action.error = String(describing: error) }
+                    let data = try Data(contentsOf: url); guard data.count <= 262_144, let text = String(data: data, encoding: .utf8) else { throw SkillImportError.invalidText }; markdown = text
+                } catch { action.error = humanErrorText(error) }
             }
             .confirmationDialog("Delete this skill and its managed host files? Other user files and history remain.", isPresented: $deletePresented) {
                 Button("Delete skill", role: .destructive) { guard let saved else { return }; Task { await action.perform { let _: HubDeleted = try await store.mutate("DELETE", "/skills/\(hubID(saved.id))", body: ["revision": .number(Double(saved.revision))]); dismiss() } } }.disabled(action.busy || action.uncertain || store.connectionState != "online")
@@ -112,3 +112,7 @@ struct SkillEditorView: View {
     }
 }
 private enum SkillHostError: LocalizedError { case notProvisioned; var errorDescription: String? { "This skill is not acknowledged on the Bot's assigned machine. Provision it there before adding it to the Bot." } }
+private enum SkillImportError: LocalizedError {
+    case invalidText
+    var errorDescription: String? { "Skill text must be UTF-8 text no larger than 256 KB." }
+}

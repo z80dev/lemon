@@ -137,12 +137,12 @@ An opaque creation timeout without returned IDs stays fenced when the server exp
 ## Connect iPhone to your desktop
 
 1. Configure the backend's reachable HTTPS `publicUrl`. **Tailscale Serve** is the recommended boring option when your Mac and phone already have Tailscale reachability. TLS must validate normally; a QR never attests an overlay or permits a remote HTTP/TLS bypass. HTTP loopback is only for same-machine development/Simulator; a physical phone's `127.0.0.1` is the phone, not the Mac. This client does not provision or sign in to Tailscale.
-2. On macOS choose **Connect iPhone → Create one-use QR code**. CoreImage renders the backend-issued `pairUrl`, with the exact cluster/origin and original five-minute expiry. **Copy one-use pairing link** provides an explicit paste alternative; treat the QR, clipboard copy and screenshots as temporary secrets. No operator token, desktop session token or permanent credential is encoded, logged or sent in push.
-3. On iPhone choose **Scan desktop QR** or paste the link. Camera permission and `AVCaptureMetadataOutput` capture start only from that explicit action and stop on leaving/backgrounding. Before requesting access, a nonconsuming, secret-bound `POST /pairings/preview` verifies the exact cluster name, origin and expiry. Strict bounded parsing rejects credentials, extra/duplicate query fields, unsafe origins and malformed one-use codes. A camera denial still leaves paste available.
-4. Choose **Request connection**. Claim consumes the one-use code and shows the phone's verification code. The Mac previews that exact device name and matching six-digit code; the owner explicitly **Approves once** or **Denies**. Approval alone is not a claim of successful phone installation.
-5. Choose **Check approval / finish connection**. A connected response supplies the phone's own device-bound product session; the app saves it to Keychain and restores normal account/Bot/conversation state without a manual desktop password. Pending claim/completion authority is also device-local Keychain state, so reopening can reconcile the original request rather than claiming another QR.
+2. On macOS choose **Connect iPhone → Create QR code**. Treat the QR, copied pairing link and screenshots as temporary secrets. No operator token, desktop session token or permanent credential is encoded.
+3. On iPhone choose **Scan QR code** or paste the link and choose **Check pasted link**. Check the workspace name, server address and expiry before choosing **Request connection**. Checking does not use up the code.
+4. Compare the device name and six-digit verification code on both devices. On the Mac choose **Approve this iPhone** or **Deny**. Approval does not mean the phone has finished connecting.
+5. On iPhone choose **Check my request** to finish connecting. Its own device-bound session is saved in Keychain; no desktop password is needed.
 
-Every claim and completion retains its original nonce before networking. Pending checks and an explicitly reconciled lost response reuse the same completion nonce and return the **same** Device/AuthSession, never another credential. A lost desktop issuance response similarly uses **Reconcile original QR request** to recover the original one-use QR with its original nonce. Private receipt replay ends at the original five-minute pairing deadline; after explicit expired/denied state, discard the local request and create a fresh QR as a separate human action. The successfully installed session itself remains valid until revoked.
+If a response is lost, **Check previous QR code** on Mac and **Check my request** on iPhone check the saved request rather than creating a second one. The QR keeps its original five-minute expiry. After an explicit expired or denied result, discard the saved request and create a new QR as a separate action. A successfully installed session stays valid until revoked.
 
 Revoke the phone through **Settings → Account → Registered devices** or **Product sessions**. Device removal revokes its bound session; the phone shows explicit reconnect, not fake offline success. Camera, speech, share-sheet staging and selected files remain independent of pairing; no ambient capture or automatic send is introduced.
 ## Connection recovery
@@ -191,6 +191,9 @@ runtime control is configured. Stop and Restart explain the interruption and
 require explicit confirmation. Admins cannot issue owner-only lifecycle commands.
 When controls are unavailable, the backend's reason is shown. The shared pane
 is also available from **View instance details** in the connection panel.
+Status sections appear before Lifecycle. **Start** is unavailable while the Lemon link is connected.
+
+On Mac, switching Settings panes keeps unfinished Preferences and local-platform edits in place. Sign-out asks for confirmation. When a voice message isn't confirmed, check its conversation before choosing **Start new voice message**; this discards the reviewed recording, never resends it, and does not bypass any pending-message check.
 
 The pane refreshes every 10 seconds while visible, and every 2 seconds while a
 command is running, with Refresh and iOS pull-to-refresh for a manual read.

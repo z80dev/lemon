@@ -10,7 +10,7 @@ import { SettingsScreen } from './features/settings';
 import { WorkScreen } from './features/work';
 import './settings-shell.css';
 
-type PaneId = 'account' | 'devices' | 'machines' | 'apps' | 'library' | 'policies' | 'usage' | 'network' | 'workspace' | 'preferences' | 'about';
+type PaneId = 'account' | 'devices' | 'machines' | 'apps' | 'library' | 'policies' | 'usage' | 'network' | 'workspace' | 'preferences' | 'instance' | 'about';
 interface Segment { screen: string; label: string; owner?: boolean; match?: (screen: string) => boolean }
 interface Pane { id: PaneId; title: string; subtitle: string; icon: ComponentType<LucideProps>; color: string; segments: Segment[] }
 
@@ -25,7 +25,8 @@ const panes: Pane[] = [
   { id: 'network', title: 'Network', subtitle: 'Outbound network rules for Bot work.', icon: Globe, color: '#2F7F8F', segments: [{ screen: 'settings.network', label: 'Network' }] },
   { id: 'workspace', title: 'Workspace', subtitle: 'Workspace name, Bot sections, providers and cleanup.', icon: Briefcase, color: '#7A6A3A', segments: [{ screen: 'settings.workspace', label: 'Workspace' }, { screen: 'settings.identity', label: 'Sign-in providers' }, { screen: 'settings.account-cleanup', label: 'Account cleanup', owner: true }] },
   { id: 'preferences', title: 'Preferences', subtitle: 'Appearance, notifications, voice and accessibility.', icon: SlidersHorizontal, color: '#6E766B', segments: [{ screen: 'settings.notifications', label: 'Notifications' }, { screen: 'settings.voice', label: 'Voice' }] },
-  { id: 'about', title: 'About', subtitle: 'Version, service status and diagnostics.', icon: Info, color: '#8E8E86', segments: [{ screen: 'settings.about', label: 'About' }] },
+  { id: 'instance', title: 'Lemon instance', subtitle: 'The Lemon Bot service, its Lemon link and runtime controls.', icon: Monitor, color: '#4F7D55', segments: [{ screen: 'settings.instance', label: 'Lemon instance' }] },
+  { id: 'about', title: 'About', subtitle: 'Web client, worker versions and support diagnostics.', icon: Info, color: '#8E8E86', segments: [{ screen: 'settings.about', label: 'About' }] },
 ];
 const account = panes[0];
 const listed = panes.slice(1);

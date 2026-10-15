@@ -35,6 +35,9 @@ struct BotLifecycleView: View {
                     SwiftUI.Section("Destination") {
                         if operation != "move" { TextField("New Bot name", text: $name) }
                         Picker("Online machine", selection: $machineID) { Text("Choose machine").tag(""); ForEach(store.machines.filter { $0.status == "online" && (operation != "move" || $0.id != bot.machineId) }) { machine in Text(machine.name).tag(machine.id) } }
+                        if !store.machines.contains(where: { $0.status == "online" && (operation != "move" || $0.id != bot.machineId) }) {
+                            Text(operation == "move" ? "No other machine is online to move to." : "No machine is online. Start one of your machines, then come back.").font(LBFont.meta).foregroundStyle(LB.warning)
+                        }
                         Toggle("I accept shared host files, browser sessions and CLI credentials", isOn: $sharedHostConsent)
                     }
                 }
@@ -68,7 +71,19 @@ struct BotLifecycleView: View {
                 if let receipt = action.receipt { Text(receipt).font(.caption) }
             }.disabled(action.busy || store.connectionState != "online")
                 .navigationTitle("\(bot.name) · lifecycle")
-                .toolbar { Button("Close") { dismiss() } }
+                .toolbar {
+                    Button("Close") { dismiss() }
+                    if action.uncertain {
+                        Button("Check current state") {
+                            Task { await action.perform {
+                                let _: Bot = try await store.read(resourcePath("bots", bot.id))
+                                try await store.refresh()
+                                action.uncertain = false
+                                action.receipt = "Current Bot state loaded. Review it before resetting again."
+                            } }
+                        }.disabled(action.inFlight || store.connectionState != "online")
+                    }
+                }
                 .sheet(isPresented: Binding(get: { confirmation != nil }, set: { if !$0 { confirmation = nil } })) {
                     if let confirmation { ScopeConfirmationView(store: store, confirmation: confirmation, title: operation.capitalized + " Bot") { body in try await confirm(body) } }
                 }
@@ -98,7 +113,7 @@ struct BotLifecycleView: View {
         case "reset":
             body["resetScopes"] = strings(resetScopes.sorted())
             let result: BotResetResult = try await store.mutate("POST", resourcePath("bots", bot.id, "/reset"), body: body)
-            action.receipt = "Reset \(result.status) · retained scopes: \(result.retainedScopes.joined(separator: ", "))"
+            action.receipt = result.status == "outcome_unknown" ? "We couldn't confirm the reset finished. Don't retry yet. Check the Bot's current state." : "Reset finished. Kept: \(result.retainedScopes.map { $0 == "connectors" ? "Connected apps" : $0.capitalized }.joined(separator: ", "))."
             if result.status == "outcome_unknown" { action.uncertain = true }
         default:
             let _: Deleted = try await store.mutate("DELETE", resourcePath("bots", bot.id), body: body)
