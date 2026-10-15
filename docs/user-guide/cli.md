@@ -59,6 +59,29 @@ Use `/runs <runId>` for the same per-run timeline as `lemon runs show <runId>`;
 `/runs` and `/runs <count>` retain the active/recent list. Run IDs are nonnumeric;
 a numeric argument continues to select a list count.
 
+## Channel pairing
+
+```bash
+lemon pairing list
+lemon pairing approve telegram <CODE>
+lemon pairing approve discord <CODE>
+lemon pairing deny telegram <CODE>
+```
+
+For channels configured with `unauthorized_dm_behavior = "pair"`, unknown human
+DMs receive a single-use code valid for one hour. Confirm the sender's identity
+out of band, then approve from the local operator CLI. `list` displays platform,
+masked chat ID, name and age, never codes. `deny` consumes without adding access.
+Wrong-platform, expired and already-used codes fail without changing config.
+
+These commands reuse/start the local runtime and require operator pairing access
+over direct loopback. Approval appends to the user gateway allowlist using the
+same patcher as `gateway setup`; project overrides still win. **Restart Lemon
+after approval** to refresh adapters' authorization state. Success exits 0,
+operation failures exit 1, and usage errors exit 2. No code is echoed in output.
+See [channel configuration](../config.md#telegram-and-discord-dm-pairing-codes)
+for default behavior, rate limits and lost-code handling.
+
 ## Commands and availability
 
 ### Launcher lifecycle commands

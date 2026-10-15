@@ -36,6 +36,10 @@ defmodule LemonControlPlane.Protocol.Schemas do
 
     # Channel methods
     "commands.catalog" => %{optional: %{}},
+    "channels.pairing" => %{
+      required: %{"action" => :string},
+      optional: %{"platform" => :string, "pairing_code" => :string}
+    },
     "background.start" => %{
       required: %{"prompt" => :string},
       optional: %{
