@@ -58,6 +58,17 @@ User-facing copy calls the account container a **workspace** and the execution
 device a **machine**. **Computer user** means the machine's operating-system
 account. API and configuration identifiers retain their canonical names.
 
+Machine measurements show when they were last updated and recheck their age every
+15 seconds, even without new server data. File paths start in the destination's
+default folder (not necessarily its home folder); links outside allowed folders
+are blocked. Terminal output gaps mean earlier output is unavailable, not that a
+command succeeded; available sequence numbers remain under **Details**. Operation
+progress counts finished targets separately from queued or unknown outcomes.
+Memory source links open the source conversation, and template identifiers and
+revisions stay under **Details**. Channel and X setup distinguish provider
+availability from a connected account and show message support or requested
+permissions before authorization.
+
 ## Credential, cache, voice and unknown-outcome boundaries
 
 Bearer sessions use tab-scoped session storage, not URLs or local-storage account lists. Saved backend/email/cluster chooser metadata contains no bearer. Private state is fetched after login and replaced on authoritative sync. Realtime revocation closes the authenticated workspace. Downloads use short-lived authorized tickets, not persisted file identities. HTML/document snapshots never gain app-origin scripting authority. The service worker caches no private API responses; push clicks navigate and authenticated reads reconcile the exact resource.

@@ -8,7 +8,12 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
-No unreleased changes yet.
+### Changed
+
+- Lemon Bot web explains channel and X setup, terminal access, file uploads and
+  machine-operation progress in plain language. Memory sources have descriptive
+  links, template identifiers stay under Details, and machine measurements
+  become visibly out of date while their page remains open.
 
 ---
 
