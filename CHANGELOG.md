@@ -8,7 +8,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
-No unreleased changes yet.
+### Lemon Bot
+
+- Instance status exposes release/build metadata, provider credential health and channel errors. Owner-confirmed restart/stop can use a remote controller, with lifecycle completion observed from link events; clients use explicit available action lists.
 
 ---
 

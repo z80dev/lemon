@@ -27,10 +27,10 @@ export function ConnectionPanel({ client, state, browserOnline, controlConnected
     <div aria-live="polite" role="status"><h2>{running && state === 'live' && controlConnected ? 'Lemon command in progress' : issue.title}</h2><p>Trying to reach <strong>{origin}</strong>{import.meta.env.DEV && origin === location.origin ? ' through the development proxy' : ''}</p><p>{running && state === 'live' && controlConnected ? 'The Lemon link is connected. Waiting for the command to finish.' : issue.reason}</p>{remaining > 0 ? <p className="small">Retrying in {remaining}s</p> : busy && <p className="small">Trying to connect…</p>}</div>
     <div className="row"><button className="primary" disabled={busy || !browserOnline} onClick={retry}>Try again</button>
       {controllerDown && canView && <button disabled={instance.busy || !browserOnline} onClick={() => void instance.mutate()}>Reconnect Lemon link</button>}
-      {controllerDown && instance.status?.runtime.controllable && role === 'owner' && <><button disabled={instance.busy || !browserOnline} onClick={() => void instance.mutate('start')}>Start Lemon</button><button disabled={instance.busy || !browserOnline} onClick={() => setRestart(true)}>Restart Lemon</button></>}
+      {controllerDown && role === 'owner' && <>{instance.status?.runtime.actions.includes('start') && <button disabled={instance.busy || !browserOnline} onClick={() => void instance.mutate('start')}>Start Lemon</button>}{instance.status?.runtime.actions.includes('restart') && <button disabled={instance.busy || !browserOnline} onClick={() => setRestart(true)}>Restart Lemon</button>}</>}
     </div>
-    {controllerDown && instance.status && !instance.status.runtime.controllable && <p className="small muted">{instance.status.runtime.reason || 'This service cannot start or restart Lemon on this host.'}</p>}
-    {controllerDown && instance.status?.runtime.controllable && role === 'admin' && <p className="small muted">Only workspace owners can start or restart Lemon.</p>}
+    {controllerDown && instance.status && !instance.status.runtime.actions.length && <p className="small muted">{instance.status.runtime.reason || 'This service cannot start or restart Lemon on this host.'}</p>}
+    {controllerDown && !!instance.status?.runtime.actions.length && role === 'admin' && <p className="small muted">Only workspace owners can start or restart Lemon.</p>}
     {canView && <div className="row"><button onClick={viewInstance}>View instance details</button></div>}
     {instance.status?.runtime.operation && <RuntimeOperationView operation={instance.status.runtime.operation}/>}
     <InstanceError error={instance.error} uncertain={instance.uncertain}/>
