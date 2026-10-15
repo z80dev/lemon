@@ -862,13 +862,13 @@ defmodule LemonWeb.OmpComponents do
 
   defp exit_text(%{"code" => code, "reason" => reason})
        when is_integer(code) and is_binary(reason),
-       do: "exit code #{code} · #{reason}"
+       do: "exit code #{code} · #{exit_text(%{"reason" => reason})}"
 
   defp exit_text(%{"code" => code}) when is_integer(code), do: "exit code #{code}"
   defp exit_text(%{"reason" => "closed"}), do: "closed on request"
   defp exit_text(%{"reason" => "idle_timeout"}), do: "closed after the idle timeout"
   defp exit_text(%{"reason" => "startup_timeout"}), do: "omp did not become ready in time"
-  defp exit_text(%{"reason" => reason}) when is_binary(reason), do: reason
+  defp exit_text(%{"reason" => reason}) when is_binary(reason), do: "ended unexpectedly"
   defp exit_text(_exit), do: "ended"
 
   def detail_error_text(:not_found),
