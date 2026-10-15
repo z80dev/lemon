@@ -16,7 +16,8 @@ defmodule LemonChannels.Adapters.Discord.Transport do
     ModelPolicyAdapter,
     Outbound,
     SlashCommands,
-    TriggerMode
+    TriggerMode,
+    UserPrompt
   }
 
   alias LemonChannels.Adapters.Telegram.Transport.MemoryReflection
@@ -299,7 +300,10 @@ defmodule LemonChannels.Adapters.Discord.Transport do
       inbound = put_submission_dedupe_ref(inbound, dedupe_ref)
       inbound = Inbound.attach_images(inbound)
       _ = maybe_index_known_target(state, inbound, message)
-      handle_inbound_message(state, inbound)
+
+      if LemonChannels.UserPromptSurface.capture(inbound) == true,
+        do: state,
+        else: handle_inbound_message(state, inbound)
     else
       :seen ->
         Logger.debug("discord: dropping duplicate message")
@@ -783,6 +787,25 @@ defmodule LemonChannels.Adapters.Discord.Transport do
     values = interaction |> map_get(:data) |> map_get(:values) || []
 
     cond do
+      String.starts_with?(custom_id, "ask:") ->
+        inbound = interaction_to_inbound(interaction, "", state)
+
+        result =
+          if allowed_inbound?(inbound, state) and binding_allowed?(inbound, state),
+            do: UserPrompt.handle(state, interaction),
+            else: {:error, :wrong_user}
+
+        notice =
+          case result do
+            :ok -> "Recorded"
+            {:error, :wrong_user} -> "Only the user who started this run may answer here."
+            {:error, :empty} -> "Choose at least one option first."
+            _ -> "expired"
+          end
+
+        respond_ephemeral(interaction, notice)
+        state
+
       String.starts_with?(custom_id, @cancel_callback_prefix <> ":") ->
         handle_cancel_component(interaction, custom_id)
         state

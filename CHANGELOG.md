@@ -23,6 +23,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Added
 
+- Expose `ask` in Telegram and Discord native runs with origin-user-bound option
+  buttons, consumed free-text replies, and finite no-answer deadlines.
+
 - Surface-aware Telegram and Discord command help, including model, resume,
   file, checkpoint, and goal controls, plus automatic registration of Telegram's
   public `/` command menu without blocking transport startup on API failures.

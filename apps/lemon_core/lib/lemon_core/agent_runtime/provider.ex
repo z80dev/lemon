@@ -23,6 +23,10 @@ defmodule LemonCore.AgentRuntime.Provider do
   @doc "Bind or unbind a live session user-prompt surface owned by a client connection."
   @callback user_prompt_bind(session_key(), pid(), boolean()) :: :ok | {:error, atom()}
 
+  @doc "Bind a prompt surface with a finite maximum deadline (milliseconds)."
+  @callback user_prompt_bind(session_key(), pid(), boolean(), keyword()) ::
+              :ok | {:error, atom()}
+
   @doc "Resolve a pending question for an exact prompt/session/run and bound client."
   @callback user_prompt_resolve(String.t(), session_key(), String.t() | nil, map(), pid()) ::
               :ok | {:error, atom()}
@@ -193,6 +197,7 @@ defmodule LemonCore.AgentRuntime.Provider do
 
   @optional_callbacks list_tasks: 0,
                       user_prompt_bind: 3,
+                      user_prompt_bind: 4,
                       user_prompt_resolve: 5,
                       get_task: 1,
                       todo_progress: 1,

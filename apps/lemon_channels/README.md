@@ -309,6 +309,22 @@ store is an explicit error, not a successful notification or approval.
 See [automation remote supervision](../lemon_automation/README.md#remote-supervision)
 for target selection and CLI/TUI controls.
 
+### Interactive Questions
+
+Telegram and Discord native runs expose [`ask`](../../docs/tools/ask.md).
+Questions use bounded inline option buttons; multiple selections require
+**Done selecting**. Only the user who started the run may answer, in the
+originating account/chat/topic or thread. **Decline** and **Cancel** never
+choose an option.
+
+The originating user's next plain message while a question is pending is a
+custom/free-text answer, not another run; it needs no group mention. Commands
+and attachments retain their normal routing, as do messages outside a pending
+question. Ambiguous replies across forked sessions are consumed with a notice to use buttons.
+Questions expire after at most five minutes (or the tool's shorter deadline).
+Expired/stale buttons say `expired`. Run completion/cancellation unbinds the
+volatile surface. Execution approvals remain separate.
+
 ### Script Notifications
 
 Use `mix lemon.send` or the source wrapper `./bin/lemon send` to send a text notification or up to 10 file attachments from scripts:
