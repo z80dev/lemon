@@ -63,6 +63,21 @@ defmodule LemonHoncho.ToolsCommonTest do
     :ok
   end
 
+  test "untracked channel tool calls use the turn peer while local tools keep configured peer" do
+    config = %Config{@open | runtime_peer_prefix: "gateway_"}
+    identity = %{channel_id: "discord", sender_id: "123"}
+
+    channel =
+      Common.scope(config,
+        session_key: "agent:demo:discord:default:dm:123",
+        channel_identity: identity
+      )
+
+    assert channel.peers.user == "gateway_discord_123"
+    local = Common.scope(config, session_key: "untracked-cli")
+    assert local.peers.user == config.user_peer
+  end
+
   describe "gate/2" do
     test "an unconfigured Honcho is refused for both accesses" do
       config = %Config{}

@@ -746,7 +746,7 @@ defmodule LemonHoncho.SessionManager do
   defp subagent?(request), do: Map.get(request, :session_scope) == :subagent
 
   defp serve_context(request, config, state) do
-    key = state_key(request)
+    key = cache_key(request, config)
     entry = entry_for(state, key, request, config)
     turn = entry.turns
     kind = turn_kind(entry, request)
@@ -936,7 +936,7 @@ defmodule LemonHoncho.SessionManager do
 
   defp ensure_ready(plan) do
     %{config: config, client: client} = plan
-    peers = %{user: config.user_peer, ai: config.ai_peer}
+    peers = plan.entry.peers
     flags = Config.observation_flags(config)
     session_id = SessionName.resolve(config, plan.resolve_opts)
     specs = [{peers.user, flags.user}, {peers.ai, flags.ai}]
@@ -1172,16 +1172,32 @@ defmodule LemonHoncho.SessionManager do
   ## Message upload
 
   defp flush_document(document, config, state) do
-    key = document.session_key || @default_key
+    identity =
+      LemonHoncho.UserPeer.identity(
+        document.session_key,
+        LemonCore.MapHelpers.get_key(document.meta || %{}, :channel_identity)
+      )
 
-    case messages_for(document, config) do
-      [] -> state
-      messages -> upload(key, messages, document, config, state)
+    if LemonHoncho.UserPeer.bot?(identity) do
+      state
+    else
+      request = %{
+        session_key: document.session_key || @default_key,
+        cwd: document.workspace_key,
+        channel_identity: identity
+      }
+
+      key = cache_key(request, config)
+      peer = LemonHoncho.UserPeer.resolve(config, identity)
+
+      case messages_for(document, %{config | user_peer: peer}) do
+        [] -> state
+        messages -> upload(key, messages, request, config, state)
+      end
     end
   end
 
-  defp upload(key, messages, document, config, state) do
-    request = %{session_key: key, cwd: document.workspace_key}
+  defp upload(key, messages, request, config, state) do
     entry = entry_for(state, key, request, config)
 
     plan = %{
@@ -1245,6 +1261,24 @@ defmodule LemonHoncho.SessionManager do
     |> Enum.find(@default_key, &present?/1)
   end
 
+  @doc false
+  def cache_key(request, config) do
+    LemonHoncho.UserPeer.cache_key(
+      state_key(request),
+      config,
+      channel_identity(request)
+    )
+  end
+
+  defp channel_identity(%{session_scope: :subagent}), do: nil
+
+  defp channel_identity(request) do
+    LemonHoncho.UserPeer.identity(
+      Map.get(request, :session_key),
+      Map.get(request, :channel_identity)
+    )
+  end
+
   # Both writers go through here, and both count as touching the session: a key
   # that is only ever uploaded to is as alive as one that is served, and the
   # eviction policy has to see it that way or a busy `sync_document/1` deployment
@@ -1267,7 +1301,7 @@ defmodule LemonHoncho.SessionManager do
   defp new_entry(%Config{} = config, request) do
     %{
       honcho_session_id: nil,
-      user_peer: config.user_peer,
+      user_peer: LemonHoncho.UserPeer.resolve(config, channel_identity(request)),
       ai_peer: config.ai_peer,
       turns: 0,
       last_context: "",

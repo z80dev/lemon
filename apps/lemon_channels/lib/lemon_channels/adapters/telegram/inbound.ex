@@ -67,6 +67,7 @@ defmodule LemonChannels.Adapters.Telegram.Inbound do
         if from do
           %{
             id: to_string(from["id"]),
+            bot: from["is_bot"] == true,
             username: from["username"],
             display_name:
               [from["first_name"], from["last_name"]]
