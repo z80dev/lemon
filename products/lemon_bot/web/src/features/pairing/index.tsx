@@ -2,12 +2,13 @@ import { useEffect, useRef, useState } from 'react';
 import { QRCodeSVG } from 'qrcode.react';
 import { LemonBotError, nonce, parsePairUrl, type AuthSession, type Device, type Mutation, type Pairing, type PairingApprove, type PairingDeny, type PairingIssued, type PairingStart } from '@lemon-bot/sdk';
 import { useApp } from '../../app';
-import { Badge, EmptyState, ErrorNotice, Field, Loading, PageHeader, formatTime, useQuery } from '../../ui';
+import { Badge, ConfirmDialog, EmptyState, ErrorNotice, Field, Loading, PageHeader, formatTime, useQuery } from '../../ui';
 import { collect } from '../bots/shared';
 import './pairing.css';
 
 interface PairingState { pairings: Pairing[]; devices: Device[]; sessions: AuthSession[] }
 interface PairingIntent { kind: 'create' | 'approve' | 'deny' | 'revoke'; clientNonce: string; resourceId: string | null; dispatchedAtMs: number }
+const pairingLabels: Record<Pairing['status'], string> = { waiting: 'Waiting for your iPhone', pending_approval: 'Waiting for approval', approved: 'Approved — finish on your iPhone', consumed: 'Connected', denied: 'Denied', expired: 'Expired' };
 
 export function PairingScreen() {
   const { client, snapshot, online, navigate } = useApp();
@@ -23,6 +24,7 @@ export function PairingScreen() {
   });
   const intentRef = useRef(intent); intentRef.current = intent;
   const [issued, setIssued] = useState<PairingIssued | null>(null);
+  const [revoking, setRevoking] = useState<Device>();
   const [busy, setBusy] = useState(false); const busyRef = useRef(false);
   const [error, setError] = useState<unknown>(); const [notice, setNotice] = useState('');
   const [now, setNow] = useState(Date.now());
@@ -58,7 +60,7 @@ export function PairingScreen() {
     const revoked = intent.kind === 'revoke' && !query.data.devices.some(item => item.id === intent.resourceId);
     if ((intent.kind !== 'revoke' && terminal) || revoked) {
       sessionStorage.removeItem(storageKey); intentRef.current = null; setIntent(null); setError(undefined);
-      setNotice(revoked ? 'Device revocation confirmed by the authoritative device list.' : `The pairing is ${pairing!.status.replaceAll('_', ' ')}. No mutation was repeated.`);
+      setNotice(revoked ? 'This device no longer has access.' : pairingLabels[pairing!.status]);
     }
   }, [intent, busy, query.data, query.error, storageKey]);
 
@@ -95,7 +97,7 @@ export function PairingScreen() {
     if (result.pairing.status === 'waiting' && result.pairing.expiresAtMs > Date.now()) {
       setIssued(result); setNotice('Scan this one-use QR with Lemon Bot on your iPhone, then compare the verification code below.');
     } else {
-      setIssued(null); setNotice(`The original request is ${result.pairing.status.replaceAll('_', ' ')}. A consumed or expired QR is not reusable.`);
+      setIssued(null); setNotice(`${pairingLabels[result.pairing.status]}. Used or expired QR codes can’t be reused.`);
     }
   }
 
@@ -122,7 +124,7 @@ export function PairingScreen() {
       setError(failure);
       if (failure instanceof LemonBotError && failure.code === 'expired') {
         sessionStorage.removeItem(storageKey); intentRef.current = null; setIntent(null);
-        setNotice('The original one-use issuance expired. Review a new pairing request; no credential was recreated.');
+        setNotice('This QR has expired. Create a new QR code to pair your iPhone.');
       }
     } finally { busyRef.current = false; setBusy(false); }
     void query.reload().catch(() => undefined);
@@ -152,11 +154,10 @@ export function PairingScreen() {
   }
 
   async function revoke(device: Device) {
-    if (!window.confirm(`Revoke ${device.name}? Its device-bound sessions lose access to this cluster. The iPhone will need to pair again.`)) return;
     const body: Mutation = { clientNonce: nonce() };
     await dispatch({ kind: 'revoke', clientNonce: body.clientNonce, resourceId: device.id, dispatchedAtMs: Date.now() }, async () => {
       await client.call('DELETE /devices/:id', { params: { id: device.id }, body });
-      setNotice('Device revocation acknowledged. Refreshing the authoritative session and device lists.');
+      setNotice('This device no longer has access. Checking the device list.');
     });
   }
 
@@ -165,39 +166,41 @@ export function PairingScreen() {
   const showQr = issued && (!current || current.status === 'waiting') && issued.pairing.expiresAtMs > now;
   const loopback = issued && ['localhost', '127.0.0.1', '[::1]'].includes(new URL(issued.pairing.backendUrl).hostname);
   return <section className="page stack">
-    <PageHeader title="Connect iPhone" eyebrow="Your cluster · your own device"><button disabled={query.loading} onClick={() => void query.reload().catch(() => undefined)}>Refresh pairing state</button></PageHeader>
-    <section className="panel stack"><h2>One approval, persistent connection</h2><p>The iPhone receives its own device-bound session and reconnects until you revoke it. Your browser stays signed in with its normal product session.</p><p className="muted">Configure the backend's reachable HTTPS public URL, usually with Tailscale Serve. Desktop and iPhone must already be able to reach it. This screen does not provision Tailscale or verify phone reachability. Localhost HTTP is only for same-machine development or Simulator, not a physical iPhone.</p><button className="primary" disabled={disabled || !!showQr} onClick={() => void create()}>{busy && intent?.kind === 'create' ? 'Creating one-use QR…' : 'Create one-use pairing QR'}</button></section>
+    <PageHeader title="Connect iPhone" eyebrow="Your workspace · your own device"><button disabled={query.loading} onClick={() => void query.reload().catch(() => undefined)}>Refresh</button></PageHeader>
+    <section className="panel stack"><h2>Connect once, stay connected</h2><p>Your iPhone gets its own sign-in and stays connected until you revoke access. Your browser stays signed in.</p><p className="muted">Your iPhone must be able to reach this Lemon Bot address, for example through Tailscale. Localhost only works with the iOS Simulator.</p><details><summary>Setup help</summary><p>Ask your administrator to configure a reachable HTTPS address for Lemon Bot. Tailscale Serve can provide one. Both devices need access to that address before pairing.</p></details><button className="primary" disabled={disabled || !!showQr} onClick={() => void create()}>{busy && intent?.kind === 'create' ? 'Creating QR code…' : 'Create QR code'}</button></section>
     <ErrorNotice error={error}/><ErrorNotice error={query.error}/>
     {notice && <p className="panel" role="status">{notice}</p>}
-    {intent && !busy && <section className="error-notice stack" role="alert"><h2>Keep this fixed intent</h2><p>The {intent.kind} receipt is not confirmed. No action is automatically repeated. Read current state before another consequential action.</p><p className="small">Intent nonce: <code>{intent.clientNonce}</code>{intent.resourceId && <> · Resource: <code>{intent.resourceId}</code></>}</p>{intent.kind === 'create' && <><p>The safe pairing list contains no QR secret. An empty list is not proof the mutation did not happen. You can explicitly request the original issuance receipt with this same nonce until its original five-minute deadline. This never creates another device/session, extends expiry or makes a consumed QR reusable.</p><button disabled={!online || busy} onClick={() => void recoverIssuance()}>Reconcile original QR issuance · same nonce</button></>}<button disabled={query.loading} onClick={() => void query.reload().catch(() => undefined)}>Read authoritative pairing/device state</button></section>}
-    {issued && showQr && <section className="panel pairing-issued stack"><h2>Scan with Lemon Bot for iOS</h2><div className="pairing-qr"><QRCodeSVG value={issued.pairUrl} size={256} level="M" marginSize={4} title="One-use Lemon Bot iPhone pairing QR"/></div><dl><dt>Cluster</dt><dd>{issued.pairing.clusterName}</dd><dt>Backend origin</dt><dd><code>{issued.pairing.backendUrl}</code></dd><dt>Expires</dt><dd>{formatTime(issued.pairing.expiresAtMs)} · {Math.max(0, Math.ceil((issued.pairing.expiresAtMs - now) / 1000))} seconds left</dd></dl>{loopback && <p className="error-notice">This QR points to localhost. It cannot connect a physical iPhone to this desktop. Configure a reachable HTTPS public URL before pairing your phone.</p>}<p className="muted small">One-use, five-minute link. No browser session, operator token or permanent credential is in the QR. The link is held only in this screen's memory, not saved or sent to an external QR service.</p></section>}
+    {intent && !busy && <section className="error-notice stack" role="alert"><h2>{intent.kind === 'create' ? 'We couldn’t confirm the QR was created.' : 'We couldn’t confirm this change.'}</h2><p>Nothing was sent again or approved automatically. Check the current status before trying again.</p>{intent.kind === 'create' && <><p>You can check the QR you started during its original five-minute lifetime. This does not create another QR or extend its expiry.</p><button disabled={!online || busy} onClick={() => void recoverIssuance()}>Check the QR I started</button></>}<button disabled={query.loading} onClick={() => void query.reload().catch(() => undefined)}>Check status</button><details><summary>Details</summary><p>Reference: <code>{intent.clientNonce}</code>{intent.resourceId && <> · Resource: <code>{intent.resourceId}</code></>}</p><button onClick={() => void navigator.clipboard.writeText(intent.clientNonce)}>Copy reference</button></details></section>}
+    {issued && showQr && <section className="panel pairing-issued stack"><h2>On your iPhone, choose “Scan QR code”</h2><div className="pairing-qr"><QRCodeSVG value={issued.pairUrl} size={256} level="M" marginSize={4} title="Lemon Bot iPhone pairing QR code"/></div><dl><dt>Workspace</dt><dd>{issued.pairing.clusterName}</dd><dt>Lemon Bot address</dt><dd><code>{issued.pairing.backendUrl}</code></dd><dt>Expires</dt><dd>{formatTime(issued.pairing.expiresAtMs)} · {Math.max(0, Math.ceil((issued.pairing.expiresAtMs - now) / 1000))} seconds left</dd></dl>{loopback && <p className="error-notice">This address only works on this computer or the iOS Simulator, not a physical iPhone. Ask your administrator for a reachable HTTPS address.</p>}<p className="muted small">This QR code works once and expires after five minutes. Compare the code shown on both devices before approving.</p></section>}
     {query.loading && !query.data && <Loading/>}
-    {query.data && <section className="stack"><h2>Pairing requests</h2>{query.data.pairings.length ? query.data.pairings.map(pairing => <PairingRequest key={pairing.id} pairing={pairing} now={now} disabled={disabled} decide={decide}/>) : <EmptyState title="No pending pairing requests">Create a QR, scan it in Lemon Bot for iOS, then return here to verify and approve your own device.</EmptyState>}</section>}
+    {query.data && <section className="stack"><h2>Pairing requests</h2>{query.data.pairings.length ? query.data.pairings.map(pairing => <PairingRequest key={pairing.id} pairing={pairing} now={now} disabled={disabled} decide={decide} create={create}/>) : <EmptyState title="No pending pairing requests">Create a QR code, scan it in Lemon Bot for iOS, then return here to compare the code and approve your iPhone.</EmptyState>}</section>}
     {query.data && <section className="panel stack"><h2>Your iPhones</h2>{query.data.devices.filter(device => device.platform === 'ios').map(device => {
       const sessions = query.data!.sessions.filter(session => session.deviceId === device.id);
-      return <article className="card stack" key={device.id}><div className="row spread"><strong>{device.name}</strong><Badge>iOS · {device.appVersion}</Badge></div><p>Last seen: {formatTime(device.lastSeenAtMs)}</p>{sessions.length ? <ul>{sessions.map(session => <li key={session.id}>Session: {session.expiresAtMs === null ? 'Until revoked' : `Expires ${formatTime(session.expiresAtMs)}`} · Last seen {formatTime(session.lastSeenAtMs)}</li>)}</ul> : <p className="muted">No active device session reported.</p>}<button className="danger" disabled={disabled} onClick={() => void revoke(device)}>Revoke this iPhone and its sessions</button></article>;
+      return <article className="card stack" key={device.id}><div className="row spread"><strong>{device.name}</strong><Badge>iOS · {device.appVersion}</Badge></div><p>Last seen: {formatTime(device.lastSeenAtMs)}</p>{sessions.length ? <ul>{sessions.map(session => <li key={session.id}>Session: {session.expiresAtMs === null ? 'Until revoked' : `Expires ${formatTime(session.expiresAtMs)}`} · Last seen {formatTime(session.lastSeenAtMs)}</li>)}</ul> : <p className="muted">No active device session reported.</p>}<button className="danger" disabled={disabled} onClick={() => setRevoking(device)}>Revoke this iPhone</button></article>;
     })}{!query.data.devices.some(device => device.platform === 'ios') && <p className="muted">No iPhone is registered on your account.</p>}<button onClick={() => navigate({ screen: 'settings.account' })}>Manage all account sessions and devices</button></section>}
+    {revoking && <ConfirmDialog title={`Revoke ${revoking.name}?`} disabled={disabled} onCancel={() => setRevoking(undefined)} onConfirm={async () => { await revoke(revoking); if (!intentRef.current) setRevoking(undefined); }}><p>Its sessions stop working on this Lemon Bot. The iPhone has to pair again.</p><ErrorNotice error={error}/></ConfirmDialog>}
   </section>;
 }
 
-function PairingRequest({ pairing, now, disabled, decide }: { pairing: Pairing; now: number; disabled: boolean; decide: (pairing: Pairing, decision: 'approve' | 'deny') => Promise<void> }) {
+function PairingRequest({ pairing, now, disabled, decide, create }: { pairing: Pairing; now: number; disabled: boolean; decide: (pairing: Pairing, decision: 'approve' | 'deny') => Promise<void>; create: () => Promise<void> }) {
   const [confirmation, setConfirmation] = useState('');
   useEffect(() => { setConfirmation(''); }, [pairing.verificationCode, pairing.revision]);
   const expired = pairing.expiresAtMs <= now;
   const pending = pairing.status === 'pending_approval' && !expired;
   return <article className="panel stack">
-    <div className="row spread"><h3>{pairing.deviceName || 'Waiting for an iPhone to scan'}</h3><Badge tone={pending ? 'warning' : pairing.status === 'consumed' ? 'good' : 'muted'}>{expired && ['waiting', 'pending_approval'].includes(pairing.status) ? 'Expiry reached · refresh to confirm' : pairing.status.replaceAll('_', ' ')}</Badge></div>
+    <div className="row spread"><h3>{pairing.deviceName || 'Waiting for an iPhone to scan'}</h3><Badge tone={pending ? 'warning' : pairing.status === 'consumed' ? 'good' : 'muted'}>{expired && ['waiting', 'pending_approval'].includes(pairing.status) ? 'Expired' : pairingLabels[pairing.status]}</Badge></div>
     <p>{pairing.clusterName} · <code>{pairing.backendUrl}</code></p><p>Expires: {formatTime(pairing.expiresAtMs)}</p>
     {pending && <>
       <p>Compare this code with the iPhone that you requested to connect. Approve only your own device.</p>
       <strong className="pairing-verification" aria-label={`Verification code ${pairing.verificationCode}`}>{pairing.verificationCode}</strong>
-      <Field label="Enter the matching code shown on your iPhone"><input value={confirmation} inputMode="numeric" pattern="[0-9]{6}" maxLength={6} autoComplete="off" onChange={event => setConfirmation(event.target.value.replace(/\D/g, ''))}/></Field>
-      <button className="primary" disabled={disabled || !pairing.verificationCode || confirmation !== pairing.verificationCode} onClick={() => void decide(pairing, 'approve')}>Approve this iPhone</button>
-      <button className="danger" disabled={disabled} onClick={() => void decide(pairing, 'deny')}>Deny this device</button>
+      <Field label="Enter the matching code shown on your iPhone" hint="If the codes don’t match, deny this request and scan a new QR code."><input value={confirmation} inputMode="numeric" pattern="[0-9]{6}" maxLength={6} autoComplete="off" onChange={event => setConfirmation(event.target.value.replace(/\D/g, ''))}/></Field>
+      <button className="primary" title="Type the 6-digit code from your iPhone first." disabled={disabled || !pairing.verificationCode || confirmation !== pairing.verificationCode} onClick={() => void decide(pairing, 'approve')}>Approve this iPhone</button>
+      <button className="danger" disabled={disabled} onClick={() => void decide(pairing, 'deny')}>Deny</button>
     </>}
     {pairing.status === 'waiting' && !expired && <p>The unused QR expires automatically. Once your iPhone requests connection, you can approve or deny that device.</p>}
     {pairing.status === 'approved' && <p>The device is approved. The phone must complete before this request expires; approval is not proof that the phone received its credential.</p>}
     {pairing.status === 'consumed' && <p>The phone completed this pairing. Its device-bound session remains valid until revoked.</p>}
     {pairing.status === 'denied' && <p>This request was denied and cannot connect.</p>}
+    {(expired || pairing.status === 'expired') && pairing.status !== 'consumed' && pairing.status !== 'denied' && <><p>This QR code has expired. Create a new one to pair.</p><button disabled={disabled} onClick={() => void create()}>Create a new QR code</button></>}
   </article>;
 }

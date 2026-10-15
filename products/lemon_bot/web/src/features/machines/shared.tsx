@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { LemonBotError } from '@lemon-bot/sdk';
 import type { Machine, Page } from '@lemon-bot/sdk';
 import { useApp } from '../../app';
-import { ErrorNotice, useAction, useQuery } from '../../ui';
+import { RecoveryNotice, useAction, useQuery } from '../../ui';
 
 export function usePages<T>(key: string, load: (cursor?: string) => Promise<Page<T>>, identity: (item: T) => string) {
   const query = useQuery(key, () => load());
@@ -36,7 +36,7 @@ export function useIntent(): MachineIntent {
     locked.current = true;
     try {
       return await action.run(async () => {
-        if (!online) throw new Error('Reconnect before changing this host. Nothing is queued offline.');
+        if (!online) throw new Error('You’re offline. Reconnect before changing this computer.');
         try { return await intent(); }
         catch (error) {
           if (!(error instanceof LemonBotError) || error.outcomeUnknown || error.code === 'outcome_unknown') setUncertain(true);
@@ -52,7 +52,7 @@ export function useIntent(): MachineIntent {
 }
 
 export function IntentNotice({ intent, reconcile }: { intent: MachineIntent; reconcile: () => Promise<unknown> }) {
-  return <><ErrorNotice error={intent.error} />{intent.uncertain && <div className="error-notice" role="alert"><p>The outcome is unknown. It may already have taken effect. Inspect authoritative state before creating another intent; no automatic retry is made.</p><button disabled={intent.busy} onClick={() => void intent.reconcile(reconcile)}>Reconcile with server</button></div>}</>;
+  return <RecoveryNotice error={intent.error} uncertain={intent.uncertain} busy={intent.busy} onCheck={() => intent.reconcile(reconcile)}/>;
 }
 
 export function usePoll(reload: () => Promise<unknown>, enabled = true, milliseconds = 10000) {

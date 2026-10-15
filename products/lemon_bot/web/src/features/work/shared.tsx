@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { LemonBotError, type Bot, type Page, type PageQuery } from '@lemon-bot/sdk';
 import { useApp } from '../../app';
-import { ErrorNotice, Field, Loading, safeExternal, useAction, useQuery } from '../../ui';
+import { ErrorNotice, Field, Loading, RecoveryNotice, safeExternal, useAction, useQuery } from '../../ui';
 
 export interface WorkAction {
   busy: boolean;
@@ -39,7 +39,7 @@ export function useDeadlineClock() {
 }
 
 export function ActionNotice({ action, reconcile }: { action: WorkAction; reconcile: () => Promise<unknown> }) {
-  return <><ErrorNotice error={action.error} />{action.uncertain && <div className="error-notice" role="alert"><p>The outcome is not confirmed. Your input is retained. Do not repeat this action until the current resources and provider state have been reconciled.</p><button disabled={action.busy} onClick={() => void action.reconcile(reconcile)}>Read current state to reconcile</button></div>}{!!action.error && !action.uncertain && <button disabled={action.busy} onClick={() => void action.reconcile(reconcile)}>Read current state — do not resend</button>}</>;
+  return <RecoveryNotice error={action.error} uncertain={action.uncertain} busy={action.busy} onCheck={() => action.reconcile(reconcile)}/>;
 }
 
 export function usePages<T>(key: string, load: (query: PageQuery) => Promise<Page<T>>) {
@@ -65,7 +65,7 @@ export function useInventory<T extends { id: string }>(key: string, load: (query
 
 
 export function QueryState({ query, children }: { query: { loading: boolean; error: unknown; data: unknown; reload?: () => Promise<void> }; children: ReactNode }) {
-  return <><ErrorNotice error={query.error} />{query.loading && <Loading />}{!!query.error && query.reload && <button type="button" disabled={query.loading} onClick={() => void query.reload?.()}>Refresh authoritative read</button>}{query.data !== undefined && <div hidden={!!query.error} aria-busy={query.loading}>{children}</div>}</>;
+  return <><ErrorNotice error={query.error}/>{query.loading && <Loading/>}{!!query.error && query.reload && <button type="button" disabled={query.loading} onClick={() => void query.reload?.()}>Try again</button>}{query.data !== undefined && <div hidden={!!query.error} aria-busy={query.loading}>{children}</div>}</>;
 }
 
 export function canManage(bot: Bot, userId: string) { return bot.ownerUserId === userId; }

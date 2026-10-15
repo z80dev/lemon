@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { LemonBotError } from '@lemon-bot/sdk';
 import type { TranscriptEntry } from '@lemon-bot/sdk';
-import { ErrorNotice } from '../../ui';
+import { RecoveryNotice } from '../../ui';
 
 export function mergeEntries(current: TranscriptEntry[], incoming: TranscriptEntry[]): TranscriptEntry[] {
   const entries = new Map(current.map(entry => [entry.id, entry]));
@@ -50,7 +50,7 @@ export function useIntent(): ChatIntent {
 }
 
 export function IntentNotice({ intent, reconcile }: { intent: ChatIntent; reconcile: () => Promise<void> }) {
-  return <>{intent.error !== undefined && <ErrorNotice error={intent.error} />}{intent.uncertain && <p className="error-notice" role="alert">Not confirmed. The action may already have happened. Do not repeat it. <button disabled={intent.busy} onClick={() => void intent.reconcile(reconcile)}>Reconcile current state</button></p>}{intent.error !== undefined && !intent.uncertain && <button disabled={intent.busy} onClick={() => void intent.reconcile(reconcile)}>Reload current revision</button>}</>;
+  return <RecoveryNotice error={intent.error} uncertain={intent.uncertain} busy={intent.busy} onCheck={() => intent.reconcile(reconcile)}/>;
 }
 
 export function useClock(interval = 1000) {
