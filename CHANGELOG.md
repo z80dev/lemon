@@ -8,6 +8,14 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
+### Added
+
+- Computer use: with `LEMON_COMPUTER_USE_ENABLED=true`, Lemon agents get
+  `cua_js`/`cua_js_reset` to operate native apps through the ChatGPT desktop
+  app's computer-use runtime via LCU. Per-app approval requests become Lemon
+  approvals (once or for the session); Lemon's own apps are never approved.
+  See [Computer use](docs/tools/computer-use.md).
+
 ### Fixed
 
 - Native dynamic-preset resolution binds discovered context, output limits,
