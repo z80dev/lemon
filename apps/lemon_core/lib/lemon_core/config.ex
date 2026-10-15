@@ -15,6 +15,8 @@ defmodule LemonCore.Config do
   `[agents]`, `[agent.tools]`).
   """
 
+  alias LemonCore.Config.{Features, Memory, Modular, Validator}
+
   defstruct providers: %{},
             model_roles: %{},
             budgets: %{},
@@ -116,7 +118,7 @@ defmodule LemonCore.Config do
 
     # Use Modular for the main config (this enforces deprecated section checks
     # and applies environment variable overrides during resolution).
-    modular = LemonCore.Config.Modular.load(project_dir: project_dir)
+    modular = Modular.load(project_dir: project_dir)
 
     # Also load raw settings for profiles/agents (not in Modular struct)
     raw = load_raw_settings(project_dir)
@@ -215,8 +217,8 @@ defmodule LemonCore.Config do
     %{
       write_approval: memory.write_approval,
       auto_recall:
-        LemonCore.Config.Memory.auto_recall?(memory) and
-          LemonCore.Config.Features.enabled?(features, :session_search)
+        Memory.auto_recall?(memory) and
+          Features.enabled?(features, :session_search)
     }
   end
 
@@ -240,6 +242,7 @@ defmodule LemonCore.Config do
     %{
       auto_resize_images: tools.auto_resize_images,
       approval_mode: tools.approval_mode,
+      edit: tools.edit,
       intent_tracing: tools.intent_tracing,
       web: tools.web,
       wasm: tools.wasm,
@@ -409,9 +412,9 @@ defmodule LemonCore.Config do
     budgets =
       config.budgets
       |> deep_merge_values(overrides["budgets"])
-      |> LemonCore.Config.Modular.resolve_budgets()
+      |> Modular.resolve_budgets()
 
-    case LemonCore.Config.Validator.validate_budgets(budgets) do
+    case Validator.validate_budgets(budgets) do
       :ok ->
         :ok
 
