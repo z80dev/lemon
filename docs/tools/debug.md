@@ -23,9 +23,9 @@ language:
 | `rdbg` | Ruby | `rdbg --open --host 127.0.0.1 --port <port> --command -- ruby <program> …` | `gem install debug` |
 
 A missing adapter produces an error with the install hint above.
-JavaScript sessions that request child debug sessions (`startDebugging`) remain
-unsupported and return a clear reverse-request error; single-session DAP requests
-and explicit remote DAP attachment use the normal transport.
+Adapters may request child sessions through DAP `startDebugging`. Lemon creates
+an independent DAP connection and launches or attaches with the provided
+configuration, preserving adapter-specific fields such as js-debug target IDs.
 
 ## Adapter selection
 
@@ -68,6 +68,22 @@ Every action accepts `timeout` in seconds (default 30, clamped to 5..300). Execu
 actions that do not stop within the timeout return "still running" rather than
 an error; use `pause` to interrupt.
 
+`status` / `sessions` include a recursive `children` list with session `id` and
+`parent_id`. Pass `debug_session_id` to any action to target that session;
+without it, actions target the root. For example:
+
+```json
+{"action": "sessions"}
+{"action": "stack_trace", "debug_session_id": "debug-1-1-1"}
+{"action": "continue", "debug_session_id": "debug-1-1-1"}
+```
+
+Children use the parent's adapter and working directory unless the adapter
+configuration supplies a directory. Server-mode adapters (including js-debug)
+reuse the parent's listening endpoint with a new connection. Child startup is
+asynchronous; inspect its status/error after creation. Parent termination,
+adapter exit, or coding-session teardown also disposes of all descendants.
+
 Source breakpoints accept `log_message` (DAP `logMessage`) instead of stopping.
 Log points and advanced breakpoint/memory/disassembly actions require the matching
 advertised adapter capability; unsupported operations fail without sending a request.
@@ -102,8 +118,8 @@ src/main.c:
 
 ## Behavior and limits
 
-- One active debug session per coding session. Terminate it before launching
-  another. Breakpoints may be set before `launch`; they are sent during the
+- One active root debug session per coding session, with adapter-requested children.
+  Terminate the root before launching another. Breakpoints may be set before `launch`; they are sent during the
   DAP configuration handshake and persist across relaunches in the same coding
   session.
 - When breakpoints are pending at launch, the program runs straight to them.
@@ -117,14 +133,13 @@ src/main.c:
   `terminate` disconnects without terminating them.
 - Debugpy port attach connects directly to the DAP endpoint exposed by
   `python -m debugpy --listen <port>`; no second local Python adapter is launched.
-- Adapter requests to open terminals (`runInTerminal`) or start child debug
-  sessions (`startDebugging`) are rejected; debuggee output arrives through
-  the adapter and is available via `output` (a 128 KiB rolling buffer; output
+- Adapter requests to open terminals (`runInTerminal`) are rejected;
+  `startDebugging` supports launch/attach child sessions. Debuggee output arrives
+  through the adapter and is available via `output` (a 128 KiB rolling buffer; output
   over 16 KiB is returned as a tail with the full buffer saved to a file).
 - Results are bounded: up to 200 variables per call, long values clipped, and
   each result capped at 32 KiB. Program output and values are treated as
   untrusted data before they reach the model.
 - `debug` executes programs, so policy treats it like `bash`: it is denied in
   `safe_mode`/`subagent_restricted` and not included in `read_only`.
-- Adapter configuration files (`dap.json`) and `vscode-js-debug` are not
-  supported.
+- Adapter configuration files (`dap.json`) are not supported.

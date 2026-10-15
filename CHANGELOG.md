@@ -42,6 +42,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 - Configure TUI shortcuts with `[tui.keys]`, including opt-in plan-mode toggle
   and model cycling, with safe startup notices for invalid or conflicting bindings.
 
+- The debug tool supports adapter-requested DAP child sessions, including js-debug
+  launch/attach configurations, child session targeting, and recursive teardown.
+
 ### Changed
 
 - Ordinary bash commands now continue under the session-owned process manager
