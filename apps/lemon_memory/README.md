@@ -145,7 +145,9 @@ while patching replaces only the unique span; ambiguous entries or repeated
 spans return `:ambiguous_match` without writing. Project selectors normalize
 whitespace like project facts. Patched results pass normal safety and capacity
 checks. Backdoor and credential-exfiltration instructions are screened as prompt
-injection. Accepted text bytes are preserved in bounded `preference_facts`
+injection on new writes and patched results, not retroactively on retained
+facts or replacement selectors. Existing secret/control/injection read checks
+remain in force. Accepted text bytes are preserved in bounded `preference_facts`
 metadata, independently of Document's
 2000-byte index summary. Secret, invisible-control, and injection screening is
 shared through `Safety.validate_note/2`; input is capped at 4096 bytes, total

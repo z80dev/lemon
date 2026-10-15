@@ -6,6 +6,11 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ## [Unreleased]
 
+### Fixed
+
+- Apply new backdoor/exfiltration screening only to new text and patched results,
+  so retained installation facts remain readable, editable and deletable.
+
 ### Added
 
 - Exact-first, unique-substring note/project patching and deletion, with atomic

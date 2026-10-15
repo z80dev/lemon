@@ -60,7 +60,7 @@ defmodule LemonMemory.Preferences do
          {:ok, owner} <- native_owner(context),
          {:ok, kind} <- normalize_kind(kind),
          :ok <- optional_text(text),
-         :ok <- optional_text(replaces),
+         :ok <- optional_stored_text(replaces),
          true <- text != nil or replaces != nil do
       owner = if ContextScope.shared_grant?(context), do: :shared, else: owner
 
@@ -91,7 +91,8 @@ defmodule LemonMemory.Preferences do
 
     case meta["preference_facts"] || meta[:preference_facts] do
       [text] when kind in ["user", "memory"] and is_binary(text) ->
-        if validate_text(text) == :ok and String.length(text) <= @caps[kind], do: [text], else: []
+        if Safety.validate_note(text, screen_exfiltration: false) == :ok and
+             String.length(text) <= @caps[kind], do: [text], else: []
 
       _ ->
         []
@@ -138,6 +139,9 @@ defmodule LemonMemory.Preferences do
 
   defp optional_text(nil), do: :ok
   defp optional_text(text), do: validate_text(text)
+
+  defp optional_stored_text(nil), do: :ok
+  defp optional_stored_text(text), do: Safety.validate_note(text, screen_exfiltration: false)
 
   defp load(context, identity, owner, opts) do
     case Store.list_owned_recent(server(opts), identity.agent_id, identity.home_digest, owner,
