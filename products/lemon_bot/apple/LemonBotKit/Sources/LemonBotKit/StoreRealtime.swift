@@ -17,6 +17,7 @@ extension LemonBotStore {
             while !Task.isCancelled {
                 guard let self, self.generation == current, let account = self.account, let transport = self.transport else { return }
                 self.connectionState = "connecting"
+                self.lastConnectionAttemptAt = Date(); self.nextRetryAt = nil
                 do {
                     var c = URLComponents(url: try transport.url("/realtime"), resolvingAgainstBaseURL: false)!
                     c.scheme = c.scheme == "https" ? "wss" : "ws"
@@ -43,7 +44,7 @@ extension LemonBotStore {
                             guard ready.userId == account.userID, ready.workspaceId == account.workspaceID else { throw ClientError.accountChanged }
                             _ = try WorkspaceCursor.normalized(ready.cursor)
                             self.connectionState = "syncing"
-                            if self.snapshot == nil { try await self.synchronize() }
+                            try await self.synchronize()
                             try await self.sendSocket(.subscribe(RealtimeClientFrameSubscribe(requestId: UUID().uuidString, cursor: self.cursor, conversationIds: [])), on: task)
                             heartbeat?.cancel()
                             heartbeat = Task { [weak self] in
@@ -70,11 +71,13 @@ extension LemonBotStore {
                     return
                 } catch {
                     guard !Task.isCancelled, self.generation == current else { return }
-                    self.connectionState = "disconnected"; self.errorMessage = error.localizedDescription
+                    self.connectionState = "disconnected"
                     let close = self.socket?.closeCode.rawValue
                     if close == 4401 || close == 4403 || (error as? BackendError)?.failure.code == "unauthenticated" || (error as? BackendError)?.failure.code == "forbidden" { self.markReconnectRequired(); return }
                     attempt += 1
                     let seconds = min(30.0, pow(2.0, Double(min(attempt, 5)))) + Double.random(in: 0...0.5)
+                    self.nextRetryAt = Date().addingTimeInterval(seconds)
+                    self.recordConnectionFailure(error)
                     do { try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000)) } catch { return }
                 }
             }
@@ -124,7 +127,8 @@ extension LemonBotStore {
             try await advanceCursor(event.seq, on: socket)
         case .caughtUp(let value):
             try await advanceCursor(value.cursor, on: socket)
-            connectionState = "online"; errorMessage = nil
+            connectionState = "online"; errorMessage = nil; nextRetryAt = nil
+            updateControllerIssue()
             try await setPresence(foreground: foreground, conversationID: visibleConversationID)
             for id in terminalSubscriptions {
                 try await sendSocket(.terminalSubscribe(RealtimeClientFrameTerminalSubscribe(terminalId: id, afterSeq: terminalSequences[id] ?? 0)), on: socket)

@@ -18,7 +18,7 @@ defmodule LemonOmp do
   sessions it started, and a foreign id is indistinguishable from a missing one.
   """
 
-  alias LemonOmp.{Config, Manager, Projection, Session, SessionFiles}
+  alias LemonOmp.{Config, Manager, Projection, Session, SessionFiles, Worktree}
 
   @thinking_levels ~w(off minimal low medium high xhigh max auto)
   @approval_modes ~w(always-ask write yolo)
@@ -34,6 +34,8 @@ defmodule LemonOmp do
   @type reason ::
           :not_installed
           | :invalid_cwd
+          | :not_a_git_repo
+          | :worktree_failed
           | :invalid_prompt
           | :invalid_params
           | :too_many_sessions
@@ -108,12 +110,14 @@ defmodule LemonOmp do
 
   @doc """
   Start an omp process for `params` (`prompt`, `cwd`, optional `model`,
-  `thinking`, `resume`, `continue`, `approval_mode`). `continue: true` requires
-  `resume` and no prompt; it sends a fixed request to review state and finish
-  unfinished work, not omp's interactive-only `--restore` or subagent recovery.
-  Approval mode is `always-ask`, `write` or `yolo`; omitting it keeps omp's
-  configured mode. Returns once omp acknowledged the prompt, or once it is ready
-  when resuming without one.
+  `thinking`, `resume`, `continue`, `approval_mode`, `isolate`). `continue: true`
+  requires `resume` and no prompt; it sends a fixed request to review state and
+  finish unfinished work, not omp's interactive-only `--restore` or subagent
+  recovery. Isolation creates a managed git worktree from HEAD, leaving changed
+  or committed work available on close. Resume uses the supplied cwd; use a kept
+  worktree's path to continue its work. Approval mode is `always-ask`, `write`
+  or `yolo`; omitting it keeps omp's configured mode. Returns once omp
+  acknowledged the prompt, or once it is ready when resuming without one.
   """
   @spec start(map(), keyword()) :: {:ok, map()} | {:error, reason()}
   def start(params, opts \\ []) when is_map(params) do
@@ -175,7 +179,8 @@ defmodule LemonOmp do
          {:ok, prompt} <- continuation_prompt(params, resume),
          {:ok, model} <- validate_optional(params["model"], @model_pattern),
          {:ok, thinking} <- validate_thinking(params["thinking"]),
-         {:ok, approval_mode} <- validate_approval_mode(params["approval_mode"]) do
+         {:ok, approval_mode} <- validate_approval_mode(params["approval_mode"]),
+         {:ok, isolation} <- Worktree.validate(cwd, params["isolate"]) do
       {:ok,
        [
          cwd: cwd,
@@ -183,7 +188,8 @@ defmodule LemonOmp do
          model: model,
          thinking: thinking,
          resume: resume,
-         approval_mode: approval_mode
+         approval_mode: approval_mode,
+         isolation: isolation
        ]}
     end
   end
@@ -193,10 +199,26 @@ defmodule LemonOmp do
   defp start_validated(params, executable, opts) do
     id = "omp_" <> Base.encode16(:crypto.strong_rand_bytes(6), case: :lower)
 
+    with {:ok, worktree} <- Worktree.create(params[:isolation], id) do
+      case start_in_worktree(params, executable, opts, id, worktree) do
+        {:error, reason} = error when reason not in [:outcome_unknown] ->
+          # Admission/spawn can fail before a Session owns cleanup.
+          if not match?({:ok, _, _}, Manager.lookup(id)), do: Worktree.cleanup(worktree)
+          error
+
+        result ->
+          result
+      end
+    end
+  end
+
+  defp start_in_worktree(params, executable, opts, id, worktree) do
     session_opts =
       Keyword.merge(params,
         id: id,
         executable: executable,
+        cwd: if(worktree, do: worktree.path, else: params[:cwd]),
+        worktree: worktree,
         owner: normalize_owner(Keyword.get(opts, :owner, %{kind: :operator}))
       )
 
@@ -436,6 +458,11 @@ defmodule LemonOmp do
     do: "omp is not installed (no `omp` executable on PATH; set LEMON_OMP_BIN to point at it)."
 
   def error_message(:invalid_cwd), do: "cwd must be an existing directory."
+
+  def error_message(:not_a_git_repo),
+    do: "isolate requires cwd inside a git work tree with a HEAD commit."
+
+  def error_message(:worktree_failed), do: "could not create the isolated git worktree."
   def error_message(:invalid_prompt), do: "prompt must be non-empty text (at most 64 KiB)."
   def error_message(:invalid_params), do: "invalid parameters."
 

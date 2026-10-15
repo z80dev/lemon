@@ -73,7 +73,7 @@ final class MacPlatformController: NSObject {
             guard let self else { return }
             if self.store.account == nil {
                 do { try await self.store.restoreSavedAccount() }
-                catch { self.errorMessage = error.localizedDescription }
+                catch { if self.store.connectionIssue == nil { self.errorMessage = error.localizedDescription } }
             }
             await self.accountChanged()
             while !Task.isCancelled {
@@ -105,7 +105,7 @@ final class MacPlatformController: NSObject {
         do {
             settings = store.localSettings ?? ClientLocalSettings(micCuesEnabled: true, compactCompanionEnabled: false, reducedMotion: "system")
             try hotkeys.configure(summon: store.account == nil ? nil : settings.summonShortcut, pushToTalk: store.account == nil ? nil : settings.pushToTalkShortcut)
-            if store.account != nil {
+            if store.account != nil, store.connectionState != "reconnect_required" {
                 try await store.registerDevice(platform: "macos", name: Host.current().localizedName ?? "Mac")
                 guard generation == accountGeneration else { return }
                 let permission = await UNUserNotificationCenter.current().notificationSettings()

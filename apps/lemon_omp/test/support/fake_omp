@@ -38,6 +38,7 @@
 #   OTHER_UI    emit input/editor/non-approval selects, all declined
 #   ACK_GATE    wait for DIR/.fake_omp_release before acknowledging the prompt
 #   REJECT      reject the prompt without starting a turn
+#   WRITE_FILE  create worker.txt in cwd before completing the turn
 #   anything else completes the turn at once.
 
 if [ "$1" = models ]; then
@@ -218,6 +219,10 @@ while IFS= read -r line; do
       start_turn
 
       case "$msg" in
+        *WRITE_FILE*)
+          printf 'worker change\n' >"$cwd/worker.txt"
+          complete_turn "$id" "Wrote worker.txt"
+          ;;
         *APPROVAL*)
           held=$id
           approval=ui-approval-1

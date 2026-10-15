@@ -9,10 +9,11 @@ final class FixtureURLProtocol: URLProtocol {
     /// `LB_FIXTURE_TRACE=1` logs every stubbed request to stderr.
     static let trace = ProcessInfo.processInfo.environment["LB_FIXTURE_TRACE"] != nil
     static var baseURL: URL { URL(string: "https://\(host)")! }
-    static func makeSession() -> URLSession {
+    static func makeSession(controllerDown: Bool = false, runtimeRunning: Bool = false) -> URLSession {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [FixtureURLProtocol.self]
         configuration.urlCache = nil
+        configuration.httpAdditionalHeaders = ["X-LB-Fixture-Controller-Down": controllerDown ? "true" : "false", "X-LB-Fixture-Runtime-Running": runtimeRunning ? "true" : "false"]
         return URLSession(configuration: configuration)
     }
 
@@ -56,6 +57,7 @@ final class FixtureURLProtocol: URLProtocol {
 
         switch parts {
         case ["sync"]: return found(world.snapshot)
+        case ["instance"]: return found(world.instance(controllerDown: request.value(forHTTPHeaderField: "X-LB-Fixture-Controller-Down") == "true", runtimeRunning: request.value(forHTTPHeaderField: "X-LB-Fixture-Runtime-Running") == "true"))
         case ["me"]: return found(world.user)
         case ["workspace"]: return found(world.workspace)
         case ["bots"]: return found(world.page(world.bots))

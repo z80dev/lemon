@@ -11,8 +11,8 @@ installed”). For the workflow, see [Delegating to omp](../user-guide/omp.md).
 | Action | Parameters | Result |
 | --- | --- | --- |
 | `models` | optional `query` (case-insensitive selector/name substring), `provider`, `free_only`, `limit` (default 30, max 200) | Cheapest-first catalog: selector, name, context window and input/output cost per million tokens or FREE. Pass a selector as `model` on start/start_many; prefer cheap/free models for simple tasks unless the user specified one. Prices are omp catalog data; OpenRouter `:free` routes may be withdrawn (404 “unavailable for free”), so be ready to fall back. |
-| `start` | `prompt`; optional `cwd` (default: the conversation's cwd), `model`, `thinking`, `approval_mode`, `wait` | Starts `omp --mode rpc` in `cwd` and returns once omp accepted the prompt. With `wait: true`, blocks and streams progress until the turn ends, including pending approvals. |
-| `start_many` | `tasks` (array of objects: required `prompt`, optional `cwd`, `model`, `thinking`, `approval_mode`); optional `wait`, `timeout_seconds` | Starts workers concurrently after validating the entire batch and checking available capacity. Results keep task order; startup failures are reported per task. With `wait: true`, gathers all successful workers, streaming combined progress. |
+| `start` | `prompt`; optional `cwd` (default: the conversation's cwd), `model`, `thinking`, `approval_mode`, `isolate` (boolean, default false), `wait` | Starts `omp --mode rpc` and returns once omp accepted the prompt. `isolate: true` creates a managed Git worktree/branch from HEAD; requires a Git cwd. With `wait: true`, blocks and streams progress until the turn ends, including pending approvals. |
+| `start_many` | `tasks` (array of start maps); optional `cwd`, `isolate` (batch defaults, each task can override), `wait`, `timeout_seconds` | Validates all tasks before creating any worktrees, then starts workers concurrently. Returns ordered sessions and per-task errors. With `wait: true`, gathers all successful workers and streams combined progress. |
 | `wait` | `id` or `ids` (array); optional `wait_for` (`all` default, `any`, for `ids`), `timeout_seconds` (default 600, max 3600) | Blocks until the current turn ends, or all/any selected workers settle, streaming progress. Timeout or a Lemon abort stops waiting only; omp keeps working. |
 | `status` | `id` | What the session is doing now: status, activity, running/recent tools, todos, subagents, usage and cost, latest output or last result. |
 | `list` | – | Sessions this conversation started (live and recently ended). |
@@ -37,14 +37,23 @@ conversation approval prompts/channel buttons by default; operators can use
 `exec.approval.resolve`. `LEMON_OMP_APPROVALS=decline` instead cancels them.
 Other blocking UI dialogs remain declined.
 
-`start_many` task directories default to the conversation cwd. Workers sharing
-one cwd can conflict; prefer separate directories or worktrees. A batch
-larger than the remaining live-session capacity is rejected before starting.
+`start_many` task directories default to the batch cwd or conversation cwd.
+Workers sharing one cwd can conflict; set `isolate: true` to give each a fresh
+managed worktree. A batch larger than the remaining capacity is rejected up front.
 Concurrent callers may still win slots during admission; those failures are
 reported per task. Partial startup failure is not a tool error unless every
 task fails. “Outcome unknown” retains the invocation id for reconciliation.
 Multi-worker reports include a line per worker and combined tokens/cost.
 `wait_for` applies only to multi-worker waits; `mode` remains the send mode.
+
+Isolated workers run in `<git common dir>/lemon-omp-worktrees/<id>` on branch
+`lemon-omp/<id>`. Reports include the path and merge/cherry-pick instructions.
+Closing removes only worktrees with no uncommitted changes and no new commits;
+others remain available with `worktree.kept`, `dirty` and `commits` counts
+(`null` if Git could not determine a count within the cleanup budget). Inspect
+and commit uncommitted work before merging. Resume uses the supplied `cwd`;
+to reuse kept work, pass its path without `isolate`. See
+[Parallel workers](../user-guide/omp.md#parallel-workers).
 
 ## Scope and trust
 
@@ -66,6 +75,8 @@ Multi-worker results include combined `usage`; `start_many` also includes
 `errors` with a zero-based task index and safe error message. The session
 object is the same snapshot the control plane returns
 from `omp.sessions.get`: `id`, `ompSessionId`, `title`, `cwd`, `model`,
+`worktree` (null or `path`, `branch`, `base` short SHA, `repo` main checkout root;
+after cleanup also `kept`, `dirty`, `commits`),
 `thinking`, `approvalMode` (the requested override, or `null` for omp's own
 configured mode), `status`, `lastTurn`, `activity`, `activeTools`, `recentTools`,
 `todos`, `subagents`, `usage` (`input`, `output`, `cacheRead`, `cacheWrite`,
