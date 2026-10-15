@@ -52,6 +52,10 @@ public enum LB {
     static let raised = Color(light: 0xFFFFFF, dark: 0x252722)
     /// Soft fill for chips and secondary buttons.
     static let fill = Color(light: 0x2B312A, dark: 0xFFFFFF, lightAlpha: 0.06, darkAlpha: 0.07)
+    /// Code inset on quiet assistant bubbles, warm rather than pure black.
+    static let codeInset = Color(light: 0x2B312A, dark: 0x080A07, lightAlpha: 0.07, darkAlpha: 0.45)
+    /// Code inset on a Bot-tinted owner bubble; preserve its contrasting ink.
+    static let tintedCodeInset = Color(light: 0x182016, dark: 0x10160E, lightAlpha: 0.15, darkAlpha: 0.22)
     /// Hovered row.
     static let hover = Color(light: 0x2B312A, dark: 0xFFFFFF, lightAlpha: 0.045, darkAlpha: 0.045)
     /// Selected row.
@@ -87,6 +91,11 @@ enum LBMetric {
     static let blockGap: CGFloat = 14
     static let transcriptMaxWidth: CGFloat = 760
     static let bubbleMaxWidth: CGFloat = 560
+    #if os(iOS)
+    static let composerHitSize: CGFloat = 44
+    #else
+    static let composerHitSize: CGFloat = 0
+    #endif
 }
 
 /// Typography: 15pt body on macOS; Dynamic-Type text styles on iOS.

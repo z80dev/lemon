@@ -117,6 +117,7 @@ for availability, single-flight behavior, and release/custom-launcher limits.
 lemon runs --status error --since 1h --limit 20
 lemon runs list --session agent:operator:main --agent operator --json
 lemon runs active
+lemon cron status --json
 lemon cron runs --job JOB_ID --status failed --since 2d
 lemon logs -n 50 --level warning
 lemon logs --follow --json
@@ -137,6 +138,10 @@ crashes or correctly classify aborts. Recent client-side time filtering examines
 at most the newest 200 history rows returned by the runtime, not an unbounded
 archive. `--since` accepts positive integer minutes (`30m`), hours (`1h`), or
 days (`2d`), relative to invocation time; list limits are 1–200 (default 50).
+
+`cron status` reports job totals, enabled jobs, and `failingJobs` (jobs with a
+nonzero persisted failure streak). Use `--json` for the complete cron status
+projection. See [cron failure alerts](reminders-and-heartbeats.md#failure-alerts-and-recovery).
 
 `cron runs` uses the cron status vocabulary: `pending`, `running`, `completed`,
 `failed`, `timeout`, and `aborted`. Without `--job`, it queries each currently
@@ -198,6 +203,13 @@ Use `lemon config migrate` for removed settings, or fix syntax and rerun
 `lemon config validate --verbose`. Unset summary values appear as `(not set)`;
 explicit `false` and zero values remain literal. A failing doctor check does not
 abort the report; use `lemon doctor --verbose` for details.
+
+`lemon doctor --live [--verbose] [--json]` opts in to bounded, non-generating
+connectivity checks for the default provider and configured Telegram/Discord
+bots. Without `--live`, doctor remains offline. Live checks run concurrently with
+five-second request timeouts and a six-second overall deadline; unsupported
+endpoints are skipped, failures exit `1`, and redacted results are included in
+JSON and bundles. See [diagnostic details](../support.md#before-opening-a-bug).
 
 Packaged version commands work before setup: they read build identity without
 running the runtime configuration providers or creating HOME state.
