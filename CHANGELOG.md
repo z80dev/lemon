@@ -8,6 +8,11 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
+### Changed
+
+- Remember supports exact-entry or unique-substring edits consistently across scoped
+  and legacy memory, with actionable ambiguity, safety, and capacity feedback.
+
 ### Added
 
 - Computer use can be configured in `[runtime.tools.computer_use]` (`enabled`,
