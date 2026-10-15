@@ -435,9 +435,9 @@ defmodule LemonCli.CommandRegistry do
     },
     %{
       name: "runs",
-      summary: "Inspect recent or active runtime runs",
-      usage: "lemon runs [list|active] [options]",
-      subcommands: subcommands(~w(list active)),
+      summary: "Inspect runtime runs and per-run timelines",
+      usage: "lemon runs [list|active] [options] | lemon runs show <runId> [--json]",
+      subcommands: subcommands(~w(list active show)),
       options: [
         option("--status S", ["--status"], "completed, aborted, crashed, or error (recent only)"),
         option("--session KEY", ["--session"], "Filter session key"),
@@ -447,7 +447,7 @@ defmodule LemonCli.CommandRegistry do
         option("--json", ["--json"], "Emit JSON")
       ],
       details: [
-        "Requires a running runtime; never starts one. Recent filters inspect at most 200 returned history rows. Active lists in-flight sessions."
+        "Requires a running runtime; never starts one. Recent filters inspect at most 200 returned history rows. Active lists in-flight sessions. Show renders a redacted per-run timeline with relative times, tool outcomes, subagents and usage (latest 500 entries)."
       ]
     },
     %{

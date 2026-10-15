@@ -21,6 +21,43 @@ send that token in `connect.params.auth.token`, not an HTTP header.
 Error `details` are optional JSON context; unsupported runtime terms are omitted,
 never inspected into wire responses, so the original code and message survive.
 
+## `runs.timeline.get`
+
+Scope: `operator.read` (like `runs.recent.list`). Parameters:
+`{"runId":"run_..."}`; the nonempty ID is limited to 256 bytes.
+
+Returns `{"runId":"...","entries":[...],"truncated":false,"usage":{...}}`.
+Each entry has `atMs`, `kind`, `label`, nullable `durationMs`, nullable `ok`, and
+`status`. Entries are chronological; times are wall-clock milliseconds.
+Lifecycle kinds retain the introspection names: `run_started`,
+`agent_loop_started`, `agent_turn_observed`, `agent_loop_ended`,
+`answer_finalize_started`, `answer_finalize_completed`, `run_completed`, and
+`run_failed`. A failed run has status `crashed`; completed outcomes distinguish
+`completed`, `aborted`, and `error`.
+
+`tool_call` entries pair dispatch/completion by tool-call ID and sit at dispatch
+time, with the completion's duration and outcome. Unmatched dispatches are
+`pending` with null outcome/duration; a retained completion without its dispatch
+is still shown at completion time. `subagent` entries come from the task store
+used by `tasks.recent.list`, including queued/running children whose exact
+`parentRunId` matches. Labels contain only lifecycle names, tool names or child
+task IDs, never arguments, results, descriptions, prompts or exception text.
+New tool completions persist content-free metadata and a bounded redacted error
+classification; historical dispatches without completions remain pending.
+
+The query examines the newest 1,000 introspection rows for the run and returns
+the latest 500 projected entries in chronological order. `truncated` is true if
+either bound is reached/exceeded (the 1,000-row source bound is conservative).
+Introspection retention also applies. `usage` reuses the recent-runs bounded
+ledger join: `tokens`, `costUsd`, `priceKnown`, `model`, and `provider` are nullable;
+missing start times/records or an overflowing 500-occurrence window never invent
+zero or partial totals. Mixed model/provider values are null.
+
+An unknown or expired run returns `NOT_FOUND`, not a successful empty timeline.
+Introspection, task lookup or usage storage failures return `INTERNAL_ERROR`
+with “Run timeline is unavailable”, never an empty result. No provider is called.
+
+
 
 ## `status`
 

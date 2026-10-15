@@ -150,6 +150,7 @@ defmodule CodingAgent.Session do
     :wasm_status,
     :plan_gate,
     branch_generation: 0,
+    tool_started_at: %{},
     wasm_host_calls: %{},
     auto_compaction: %CompactionLifecycle.State{},
     overflow_recovery: %OverflowRecovery.State{},
@@ -221,6 +222,7 @@ defmodule CodingAgent.Session do
           wasm_status: map() | nil,
           plan_gate: :atomics.atomics_ref() | nil,
           branch_generation: non_neg_integer(),
+          tool_started_at: %{String.t() => integer()},
           wasm_host_calls: %{reference() => map()},
           auto_compaction: CompactionLifecycle.State.t(),
           overflow_recovery: OverflowRecovery.State.t()

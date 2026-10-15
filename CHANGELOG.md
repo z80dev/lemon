@@ -27,6 +27,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Added
 
+- Inspect per-run lifecycle, tool outcomes, child tasks and usage with
+  `lemon runs show <runId>` and TUI `/runs <runId>`, backed by redacted completion events.
+
 - Discord voice notes and audio attachments can use the shared voice transcription
   settings, with bounded CDN downloads and URL fallback on failure.
 
