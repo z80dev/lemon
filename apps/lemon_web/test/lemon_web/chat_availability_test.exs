@@ -1,4 +1,4 @@
-defmodule LemonWeb.SetupPolishTest do
+defmodule LemonWeb.ChatAvailabilityTest do
   use ExUnit.Case, async: false
 
   import Phoenix.LiveViewTest
@@ -29,18 +29,6 @@ defmodule LemonWeb.SetupPolishTest do
     assert html =~ ~s(href="/diagnostics")
     assert html =~ "Check again"
     refute html =~ "create the local Lemon config"
-  end
-
-  test "the mobile rail adds dialog semantics and removes them on close" do
-    open = LemonWeb.Layouts.open_rail() |> Phoenix.HTML.Safe.to_iodata() |> IO.iodata_to_binary()
-
-    close =
-      LemonWeb.Layouts.close_rail() |> Phoenix.HTML.Safe.to_iodata() |> IO.iodata_to_binary()
-
-    assert open =~ "aria-modal"
-    assert open =~ "dialog"
-    assert close =~ "remove_attr"
-    assert close =~ "aria-modal"
   end
 
   test "active refresh failure is visible and clears on the next successful poll", %{conn: conn} do
