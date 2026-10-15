@@ -97,37 +97,39 @@ defmodule CodingAgent.Eval.Output do
 
   @doc "Read the bounded rich-display side channel, independently of stdout."
   def read_displays(path) do
-    with {:ok, data} <- File.open(path, [:read, :binary], &IO.binread(&1, 4 * 1024 * 1024 + 1)) do
-      cond do
-        data == :eof ->
-          {:ok, []}
+    case File.open(path, [:read, :binary], &IO.binread(&1, 4 * 1024 * 1024 + 1)) do
+      {:ok, data} ->
+        cond do
+          data == :eof ->
+            {:ok, []}
 
-        is_binary(data) and byte_size(data) <= 4 * 1024 * 1024 ->
-          records = String.split(data, "\n", trim: true)
+          is_binary(data) and byte_size(data) <= 4 * 1024 * 1024 ->
+            records = String.split(data, "\n", trim: true)
 
-          if length(records) <= 32 do
-            Enum.reduce_while(records, {:ok, []}, fn record, {:ok, blocks} ->
-              with true <- byte_size(record) <= 1024 * 1024,
-                   {:ok, decoded} <- Jason.decode(record),
-                   {:ok, block} <- display_block(decoded) do
-                {:cont, {:ok, [block | blocks]}}
-              else
-                _ -> {:halt, {:error, "Invalid or oversized rich display output"}}
+            if length(records) <= 32 do
+              Enum.reduce_while(records, {:ok, []}, fn record, {:ok, blocks} ->
+                with true <- byte_size(record) <= 1024 * 1024,
+                     {:ok, decoded} <- Jason.decode(record),
+                     {:ok, block} <- display_block(decoded) do
+                  {:cont, {:ok, [block | blocks]}}
+                else
+                  _ -> {:halt, {:error, "Invalid or oversized rich display output"}}
+                end
+              end)
+              |> case do
+                {:ok, blocks} -> {:ok, Enum.reverse(blocks)}
+                error -> error
               end
-            end)
-            |> case do
-              {:ok, blocks} -> {:ok, Enum.reverse(blocks)}
-              error -> error
+            else
+              {:error, "Rich display exceeds 32 outputs per cell"}
             end
-          else
-            {:error, "Rich display exceeds 32 outputs per cell"}
-          end
 
-        true ->
-          {:error, "Rich display exceeds the 4 MiB cell limit"}
-      end
-    else
-      _ -> {:error, "Could not read the rich display side channel"}
+          true ->
+            {:error, "Rich display exceeds the 4 MiB cell limit"}
+        end
+
+      _ ->
+        {:error, "Could not read the rich display side channel"}
     end
   end
 
