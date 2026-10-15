@@ -16,6 +16,7 @@ defmodule LemonGateway.Tools.SmsWaitForCode do
 
     %AgentTool{
       name: "sms_wait_for_code",
+      timeout_ms: :infinity,
       description:
         "Wait for an incoming SMS and extract a verification code (default: 4-8 digits). " <>
           "Useful for website registration/verification flows using the shared inbox number.",

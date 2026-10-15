@@ -48,6 +48,7 @@ defmodule LemonComputerUse.Tools.Common do
 
     %AgentTool{
       name: Map.fetch!(@names, original),
+      timeout_ms: :infinity,
       label: Map.fetch!(@labels, original),
       description: description,
       parameters: parameters,

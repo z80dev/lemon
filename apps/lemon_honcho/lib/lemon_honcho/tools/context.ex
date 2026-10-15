@@ -54,6 +54,7 @@ defmodule LemonHoncho.Tools.Context do
   def tool(opts \\ []) do
     %AgentTool{
       name: @tool_name,
+      timeout_ms: :infinity,
       description: @description,
       label: "Honcho Context",
       parameters: %{

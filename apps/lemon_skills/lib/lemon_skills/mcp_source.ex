@@ -1587,6 +1587,7 @@ defmodule LemonSkills.McpSource do
 
     {%AgentTool{
        name: tool_name,
+       timeout_ms: :infinity,
        description: description,
        parameters: parameters,
        label: "MCP #{original_name}",
@@ -1691,6 +1692,7 @@ defmodule LemonSkills.McpSource do
 
     {%AgentTool{
        name: tool_name,
+       timeout_ms: :infinity,
        description: description,
        parameters: parameters,
        label: "MCP #{suffix}",

@@ -29,6 +29,8 @@ defmodule LemonComputerUse.ServerTest do
 
     assert js.name == "cua_js"
     assert reset.name == "cua_js_reset"
+    assert js.timeout_ms == :infinity
+    assert reset.timeout_ms == :infinity
     assert js.description =~ "Fake js tool."
     assert js.description =~ "`cua_repl.js` is the `cua_js` tool"
     assert js.parameters["required"] == ["code"]
