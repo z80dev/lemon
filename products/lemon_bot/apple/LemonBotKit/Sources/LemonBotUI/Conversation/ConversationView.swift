@@ -528,6 +528,11 @@ struct TranscriptEntryView: View {
     @State private var reasons: Set<String> = []
     @State private var sentiment = "good"
     @State private var hovering = false
+    #if os(macOS)
+    private enum ActionFocus: Hashable { case row, react, copy, reply, more }
+    @FocusState private var actionFocus: ActionFocus?
+    private var showsActions: Bool { hovering || actionFocus != nil }
+    #endif
     @Environment(\.colorScheme) private var scheme
     @Environment(\.lbReduceMotion) private var reduceMotion
 
@@ -577,8 +582,14 @@ struct TranscriptEntryView: View {
         }
         .contentShape(Rectangle())
         .onHover { hovering = $0 }
+        #if os(macOS)
+        .focusable()
+        .focused($actionFocus, equals: .row)
+        .accessibilityActions { contextItems }
+        #else
         .accessibilityAction(named: "Reply") { reply() }
         .accessibilityAction(named: "React with thumbs up") { Task { await react("👍") } }
+        #endif
         .sheet(isPresented: $feedback) { feedbackSheet }
     }
 
@@ -645,28 +656,34 @@ struct TranscriptEntryView: View {
 
     // MARK: Actions
 
-    /// Keep actions visible to keyboard and pointer users. iOS uses the context menu.
+    /// Reveal Mac actions on hover or keyboard focus; named actions also support VoiceOver.
     @ViewBuilder private var hoverActions: some View {
         #if os(macOS)
         HStack(spacing: 1) {
             Button { Task { await react("👍") } } label: { Text("👍") }
                 .buttonStyle(GhostCircleButtonStyle(size: 26, filled: false)).help("React 👍").accessibilityLabel("React with thumbs up")
+                .focused($actionFocus, equals: .react)
             if let text = entry.text, !text.isEmpty {
                 Button { copyText(text) } label: { Image(systemName: "doc.on.doc") }
                     .buttonStyle(GhostCircleButtonStyle(size: 26, filled: false)).help("Copy").accessibilityLabel("Copy message")
+                    .focused($actionFocus, equals: .copy)
             }
             Button { reply() } label: { Image(systemName: "arrowshape.turn.up.left") }
                 .buttonStyle(GhostCircleButtonStyle(size: 26, filled: false)).help("Reply").accessibilityLabel("Reply")
+                .focused($actionFocus, equals: .reply)
             Menu { moreItems } label: { Image(systemName: "ellipsis") }
                 .menuStyle(.button).menuIndicator(.hidden).buttonStyle(GhostCircleButtonStyle(size: 26, filled: false)).fixedSize()
                 .help("More").accessibilityLabel("More actions")
+                .focused($actionFocus, equals: .more)
         }
         .padding(3)
         .background(Capsule().fill(LB.raised))
         .shadow(color: scheme == .light ? LB.shadow : .clear, radius: 8, y: 2)
-        .disabled(action.busy)
-        .opacity(hovering ? 1 : 0.65)
-        .lbAnimation(LBMotion.fade, value: hovering)
+        .disabled(action.busy || !showsActions)
+        .opacity(showsActions ? 1 : 0)
+        .allowsHitTesting(showsActions)
+        .accessibilityHidden(!showsActions)
+        .lbAnimation(LBMotion.fade, value: showsActions)
         #else
         EmptyView()
         #endif
