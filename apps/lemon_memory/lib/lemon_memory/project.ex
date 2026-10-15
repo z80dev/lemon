@@ -173,6 +173,20 @@ defmodule LemonMemory.Project do
     end
   end
 
+  @doc "Return scoped fact-count and byte usage with the same ownership checks as read."
+  def usage(context, opts \\ []) do
+    with {:ok, facts} <- read(context, opts) do
+      {:ok,
+       %{
+         used: length(facts),
+         cap: @max_facts,
+         bytes: byte_size(Enum.join(facts, "\n")),
+         byte_cap: @max_bytes,
+         facts: facts
+       }}
+    end
+  end
+
   @doc "Rehome an authorized project's identity without inventing native proof."
   def transfer_document_id(context, metadata) do
     with {:ok, identity} <- scope(context),

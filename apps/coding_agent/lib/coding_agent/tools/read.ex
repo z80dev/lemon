@@ -27,6 +27,24 @@ defmodule CodingAgent.Tools.Read do
 
   @default_max_lines 2000
   @default_max_bytes 50 * 1024
+  @continuation_notice "[Showing lines %{first}-%{last} of %{total}. Use offset=%{next} to continue.]"
+  @long_line_notice "[Line %{first} exceeds the %{budget}-byte read budget; only a prefix is shown. Full content remains at %{path}; use bash to inspect byte ranges on this line.]"
+  @truncation_patterns Enum.map([@continuation_notice, @long_line_notice], fn template ->
+                         ~r/%\{[^}]+\}/
+                         |> Regex.split(template, trim: false)
+                         |> Enum.map_join(".*?", &Regex.escape/1)
+                         |> Regex.compile!()
+                       end)
+
+  @doc false
+  def truncated_output?(content), do: Enum.any?(@truncation_patterns, &Regex.match?(&1, content))
+
+  defp notice(template, values) do
+    Enum.reduce(values, template, fn {key, value}, text ->
+      String.replace(text, "%{#{key}}", to_string(value))
+    end)
+  end
+
   @workspace_bootstrap_fallback_files MapSet.new(["SOUL.md", "USER.md"])
   @daily_memory_path_regex Regex.compile!(
                              "(?:^|[\\\\/])memory[\\\\/](\\d{4}-\\d{2}-\\d{2})\\.md$"
@@ -625,7 +643,7 @@ defmodule CodingAgent.Tools.Read do
               reason: "long_line",
               next_offset: next_offset,
               message:
-                "[Line #{start_line + 1} exceeds the #{max_bytes}-byte read budget; only a prefix is shown. Full content remains at #{path}; use bash to inspect byte ranges on this line.]"
+                notice(@long_line_notice, first: start_line + 1, budget: max_bytes, path: path)
             }
 
           reason ->
@@ -634,7 +652,12 @@ defmodule CodingAgent.Tools.Read do
               reason: reason,
               next_offset: next_offset,
               message:
-                "[Showing lines #{start_line + 1}-#{next_offset - 1} of #{total}. Use offset=#{next_offset} to continue.]"
+                notice(@continuation_notice,
+                  first: start_line + 1,
+                  last: next_offset - 1,
+                  total: total,
+                  next: next_offset
+                )
             }
         end
 
