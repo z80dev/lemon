@@ -42,7 +42,7 @@ The registry defines their help and completion; the launcher executes them:
 | `web [--no-open]` | Yes | Full profile only | Start the daemon if needed, wait for Web UI health, and print its URL; open a browser unless `--no-open` is set. |
 | `start` | Yes | Yes | Run the runtime in the foreground. |
 | `daemon` | Yes | Yes | Start the runtime in the background and wait for health. |
-| `stop`, `restart`, `status` | Yes | Yes | Manage or inspect the daemon using its pidfile. |
+| `stop`, `restart`, `status` | Yes | Yes | Manage an owned foreground/background runtime, or probe local runtime health. |
 | `remote`, `eval EXPR`, `rpc EXPR` | No | Yes | Use release VM remote/eval/RPC tools. |
 
 Source runtime options go after `start`, `daemon`, or `restart`:
@@ -50,6 +50,31 @@ Source runtime options go after `start`, `daemon`, or `restart`:
 `--sname name`, `--cookie C`, and `--no-distribution`. For example,
 `./bin/lemon start --no-distribution`. Runtime options are accepted after the
 relevant lifecycle command, not as bare launcher flags.
+
+All three ports must be integers from 1 through 65535. Environment defaults are
+`LEMON_CONTROL_PLANE_PORT=4040`, `LEMON_WEB_PORT=4080`, and
+`LEMON_SIM_UI_PORT=4090`; source `status` and `stop` also accept the port flags.
+Select the same control port and HOME for every lifecycle command.
+
+`status` exits 0 only when Lemon's control-plane health check succeeds, including
+foreground starts. Its first line includes the selected Lemon home; subsequent
+lines show the selected web/sim ports and log location. Source daemon logs are
+`~/.lemon/run/lemon-PORT.log` (`LEMON_RUNTIME_LOG_FILE` overrides this); release
+daemon logs are in `$RELEASE_TMP/log`, defaulting to `tmp/log` under the release.
+Foreground logs remain in the starting terminal. For an external runtime,
+status labels the home as the launcher's selected home, not the runtime's home.
+An unreachable control plane exits 1 even if the recorded process is still alive.
+
+`stop` never signals an unowned process. If another HOME/runtime holds the
+control port, `stop` and `restart` fail and ask you to stop it where it runs;
+`restart` does not silently reuse it and claim success. Restarting a stopped
+runtime starts it without an expected-stop error. A failed daemon health wait
+terminates the attempted launch and removes its runtime records.
+
+The authenticated `status` RPC additionally reports `server.profile` (the
+launcher's runtime profile, or null when unknown) and `server.default_model`
+(the configured model ID, or null when unavailable). It does not expose home
+paths or resolve provider credentials.
 
 Authenticated remote clients can call the admin-only `system.restart` and
 `system.stop` control-plane methods. They return acceptance before acting; restart
@@ -112,6 +137,11 @@ Success exits 0, operational failures exit 1, and invalid commands or
 arguments exit 2.
 
 `--help`, `-h`, and `help` print command help without running the command body.
+Source top-level and command help read the shared registry directly with Elixir,
+without Mix compilation, runtime startup, or credential creation. Other source
+commands require Elixir 1.19.5+, Erlang/OTP 28.5+, and Mix; lifecycle health checks
+require curl. Missing prerequisites produce an installation hint rather than a
+misleading stopped-runtime result.
 Commands that document `--json` emit JSON on success. Redacted operational
 error JSON is supported by the profile, session, blueprint, provider, learning,
 and secret-source command families; other commands report errors as text on

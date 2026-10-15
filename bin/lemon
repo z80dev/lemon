@@ -53,7 +53,60 @@ runtime_paths() {
 }
 runtime_paths
 
-process_identity() { ps -p "$1" -o lstart= 2>/dev/null; }
+validate_runtime_ports() {
+  local port
+  for port in "$PORT" "$WEB_PORT" "$SIM_PORT"; do
+    if [[ ! "$port" =~ ^[0-9]{1,5}$ ]] || ((10#$port < 1 || 10#$port > 65535)); then
+      error "invalid port value: $port (expected 1-65535)"
+      exit 2
+    fi
+  done
+}
+
+require_curl() {
+  command -v curl >/dev/null 2>&1 || {
+    error "curl is required for health checks; install it and retry"
+    exit 1
+  }
+}
+
+require_elixir() {
+  if ! command -v elixir >/dev/null 2>&1 || ! command -v mix >/dev/null 2>&1; then
+    error "Elixir and Mix are required for a source checkout (Elixir 1.19.5+, Erlang/OTP 28.5+); see docs/install.md, Source development"
+    exit 1
+  fi
+}
+
+# Read only the registry, without Mix, application boot, or credential creation.
+run_help() {
+  require_elixir
+  exec elixir -r "$LEMON_ROOT/apps/lemon_cli/lib/lemon_cli/command_registry.ex" \
+    -e '
+      alias LemonCli.CommandRegistry, as: Registry
+      case System.argv() do
+        [] -> IO.write(Registry.help())
+        [name | _] ->
+          case Registry.fetch(name) do
+            {:ok, entry} ->
+              if Registry.available?(entry, :source) do
+                IO.write(Registry.help(name))
+              else
+                IO.puts(:stderr, "Command #{name} is available only in a packaged release.")
+                System.halt(2)
+              end
+            :error ->
+              IO.puts(:stderr, "Unknown command: #{name}. Run lemon --help to list commands.")
+              System.halt(2)
+          end
+      end' -- "$@"
+}
+
+process_identity() {
+  local state
+  state="$(ps -p "$1" -o stat= 2>/dev/null)" || return 1
+  [[ "$state" != *Z* ]] || return 1
+  ps -p "$1" -o lstart= 2>/dev/null
+}
 
 owned_runtime_pid() {
   local pid born
@@ -114,6 +167,7 @@ control_port_in_use() {
 
 compile_source() {
   [ "${SOURCE_COMPILED:-0}" = 1 ] && return 0
+  require_elixir
   (cd "$LEMON_ROOT" && mix compile) || return
   SOURCE_COMPILED=1
 }
@@ -233,6 +287,8 @@ parse_runtime_options() {
     esac
     shift
   done
+  validate_runtime_ports
+  require_curl
   runtime_paths
 }
 
@@ -254,18 +310,12 @@ load_secrets_master_key() {
 
 # Starts the unified runtime in the foreground (exec) or background.
 start_runtime() {
-  local mode="$1" pid attempt
+  local mode="$1" reuse="${2:-1}" pid attempt
   local cmd=(mix run --no-start --no-halt --no-compile --no-deps-check -e 'LemonCore.Runtime.Boot.start!(:runtime_full)')
-  local port
-  for port in "$PORT" "$WEB_PORT" "$SIM_PORT"; do
-    if [[ ! "$port" =~ ^[0-9]{1,5}$ ]] || ((10#$port < 1 || 10#$port > 65535)); then
-      error "invalid port value: $port (expected 1-65535)"
-      exit 2
-    fi
-  done
   # Reuse guard before compiling or registering the Erlang node name: a
   # duplicate lemon@host registration would fail before the in-VM Boot guard.
   if control_plane_healthy; then
+    [ "$reuse" = 1 ] || { error "another runtime is serving port $PORT; restart did not replace it; stop it where it runs, then retry"; return 1; }
     info "a healthy Lemon runtime is already running on port $PORT; reusing it"
     if [ "$mode" = "daemon" ]; then return 0; fi
     exit 0
@@ -273,6 +323,7 @@ start_runtime() {
   acquire_start_lock || exit 1
   # Another launcher may have finished while this one waited.
   if control_plane_healthy; then
+    [ "$reuse" = 1 ] || { error "another runtime is serving port $PORT; restart did not replace it; stop it where it runs, then retry"; return 1; }
     release_start_lock
     info "a healthy Lemon runtime is already running on port $PORT; reusing it"
     return 0
@@ -296,6 +347,7 @@ start_runtime() {
   ensure_managed_token || exit 1
   export LEMON_DOTENV_DIR="${LEMON_DOTENV_DIR:-$LAUNCH_CWD}" LEMON_CONTROL_PLANE_PORT="$PORT"
   export LEMON_WEB_PORT="$WEB_PORT" LEMON_SIM_UI_PORT="$SIM_PORT"
+  export LEMON_RUNTIME_PROFILE=runtime_full
   [ -z "$DEBUG" ] || export LEMON_DEBUG=1 LEMON_LOG_LEVEL=debug
   load_secrets_master_key
 
@@ -328,7 +380,7 @@ start_runtime() {
   done
   error "Runtime did not become healthy on port $PORT. See $LOG_FILE"
   # Never leave a failed launch occupying ports or holding an unexplained pid.
-  kill -TERM "$pid" 2>/dev/null || true
+  stop_runtime || true
   rm -f "$PIDFILE"
   exit 1
 }
@@ -336,7 +388,11 @@ start_runtime() {
 stop_runtime() {
   local pid attempt
   if ! pid="$(owned_runtime_pid)"; then
-    error "not running (missing, stale, or unowned pid record in $PIDFILE); no process was signalled"
+    if control_port_in_use; then
+      error "port $PORT answers but is not managed by this HOME ($HOME); stop it where it runs"
+    else
+      error "no Lemon runtime answers on port $PORT; no process was signalled"
+    fi
     return 1
   fi
   kill -TERM "$pid"
@@ -347,6 +403,10 @@ stop_runtime() {
   [ "$(owned_runtime_pid || true)" != "$pid" ] || kill -KILL "$pid"
   rm -f "$PIDFILE"
   info "stopped"
+}
+
+status_context() {
+  printf '  web: port %s\n  sim: port %s\n  log: %s (foreground output stays in its terminal)\n' "$WEB_PORT" "$SIM_PORT" "$LOG_FILE"
 }
 
 open_browser() {
@@ -388,16 +448,29 @@ case "$COMMAND" in
 esac
 
 case "$COMMAND" in
-  --version|version) run_cli "$@" ;;
-  tui|web|start|daemon|stop|restart|status)
-    case "${2:-}" in -h|--help) run_cli help "$COMMAND" ;; esac
-    ;;
+  -h|--help) run_help ;;
+  help) shift; run_help "$@" ;;
+esac
+for argument in "${@:2}"; do
+  case "$argument" in
+    -h|--help|help)
+      case "$COMMAND" in
+        -p|--print) run_help run ;;
+        *) run_help "$COMMAND" ;;
+      esac
+      ;;
+  esac
+done
+case "$COMMAND" in --version|version) run_cli "$@" ;; esac
+validate_runtime_ports
+case "$COMMAND" in
+  tui|web|start|daemon|stop|restart|status|acp|run|-p|--print) require_curl ;;
 esac
 
 case "$COMMAND" in
   acp)
     shift
-    case "${1:-}" in -h|--help) run_cli acp --help ;; esac
+    case "${1:-}" in -h|--help) run_help acp ;; esac
     prepare_runtime_credential || exit 1
     if ! control_plane_healthy; then start_runtime daemon >&2; fi
     run_cli acp "$@"
@@ -472,8 +545,13 @@ case "$COMMAND" in
   restart)
     shift
     parse_runtime_options "$@"
-    stop_runtime || true
-    start_runtime daemon
+    if owned_runtime_pid >/dev/null; then
+      stop_runtime || exit 1
+    elif control_port_in_use; then
+      error "port $PORT answers but is not managed by this HOME ($HOME); stop it where it runs, then retry restart"
+      exit 1
+    fi
+    start_runtime daemon 0
     ;;
 
   status)
@@ -481,16 +559,20 @@ case "$COMMAND" in
     parse_runtime_options "$@"
     if ! pid="$(owned_runtime_pid)"; then
       if control_plane_healthy; then
-        echo "lemon: healthy on port $PORT (not managed by this HOME)"
+        echo "lemon: running, healthy on port $PORT (not managed by this HOME); home: $LEMON_HOME_DIR (launcher)"
+        status_context
         exit 0
       fi
-      echo "lemon: not running (missing, stale, or unowned pid record)"
+      echo "lemon: no Lemon runtime answers on port $PORT; home: $LEMON_HOME_DIR"
+      status_context
       exit 1
     fi
     if control_plane_healthy; then
-      echo "lemon: running (pid $pid), control-plane healthy on port $PORT"
+      echo "lemon: running (pid $pid), control-plane healthy on port $PORT; home: $LEMON_HOME_DIR"
+      status_context
     else
-      echo "lemon: running (pid $pid), control-plane not reachable on port $PORT"
+      echo "lemon: running (pid $pid), control-plane not reachable on port $PORT; home: $LEMON_HOME_DIR"
+      status_context
       exit 1
     fi
     ;;
