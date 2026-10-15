@@ -2,6 +2,7 @@ import SwiftUI
 import AVFoundation
 import Observation
 import LemonBotKit
+import LemonBotUI
 import UIKit
 
 @MainActor @Observable
@@ -336,8 +337,8 @@ struct NativeVoiceView: View {
                         }
                         Section("Voice settings") {
                             Toggle("Use Apple spoken voice instead of backend", isOn: $voice.preferAppleSpeech)
-                            TextField("Provider voice ID", text: $voiceID)
-                            TextField("Language (BCP-47, blank automatic)", text: $language).textInputAutocapitalization(.never)
+                            ProviderVoicePicker(store: store, voiceID: $voiceID, language: $language)
+                            TextField("Language (optional, e.g. en-US)", text: $language).textInputAutocapitalization(.never)
                             Slider(value: $speed, in: 0.5...2, step: 0.1)
                             Text("Speed: \(speed, specifier: "%.1f")×")
                             Picker("Local spoken voice", selection: $voice.nativeVoiceID) {
