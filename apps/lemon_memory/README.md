@@ -172,6 +172,10 @@ absent). All three require proven native private context; Store failures are
 errors, never a legacy-file fallback. Unknown retained workspace-file facts
 are not automatically shared with context-owned runs.
 
+`Preferences.usage(context, kind, opts)` reports safe scoped entries, used characters
+and the per-kind cap. `Project.usage(context, opts)` reports fact count, byte usage,
+and both caps. These reads preserve the same ownership checks as ordinary reads.
+
 `Project.read/2` combines only the exact private project and explicitly shared
 curated project namespace, within its existing fact/byte budget.
 `Project.search_history(context, query, requested_scope, opts)` searches local

@@ -9,6 +9,11 @@ skill-curation, and synthesis workers managed by a `one_for_one` supervisor.
 Heartbeats are not a separate process: they are cron jobs, and their policy runs
 inside `CronManager` terminalization.
 
+Background skill curation reads all persisted cron jobs, including disabled jobs,
+and passes referenced skill names as lifecycle exemptions to `LemonSkills.Curator`.
+References are complete names in prompt text or `meta.skill` / `meta.skills`;
+the skills app does not depend on automation.
+
 ```
 LemonAutomation.Supervisor
   |-- Task.Supervisor (LemonAutomation.TaskSupervisor)
