@@ -74,6 +74,128 @@ defmodule LemonCli.Onboarding.RunnerTest do
     {:ok, tmp_dir: tmp_dir}
   end
 
+  test "secret input disables echo before reading and restores its original state" do
+    for previous_echo <- [true, false] do
+      callbacks =
+        secret_callbacks(previous_echo, fn prompt ->
+          assert prompt == "API key: "
+          assert_received {:echo, false}
+          "synthetic-secret\n"
+        end)
+
+      assert Runner.read_secret("API key: ", callbacks) == "synthetic-secret\n"
+      assert_received {:echo, ^previous_echo}
+      assert_received {:newline, ""}
+      refute_received {:info, "synthetic-secret"}
+    end
+  end
+
+  test "secret input restores echo after a read exception or EOF" do
+    assert_raise RuntimeError, "read failed", fn ->
+      Runner.read_secret("API key: ", secret_callbacks(true, fn _ -> raise "read failed" end))
+    end
+
+    assert_received {:echo, false}
+    assert_received {:echo, true}
+
+    assert Runner.read_secret("API key: ", secret_callbacks(true, fn _ -> :eof end)) == :eof
+    assert_received {:echo, false}
+    assert_received {:echo, true}
+  end
+
+  test "secret input refuses a non-terminal or unavailable echo control without reading" do
+    callbacks = secret_callbacks(true, fn _ -> flunk("unsafe secret read") end)
+    no_tty = Map.put(callbacks, :getopts, fn -> [terminal: false, echo: false] end)
+
+    assert_raise Mix.Error, ~r/No interactive terminal.*lemon setup --non-interactive/, fn ->
+      Runner.read_secret("API key: ", no_tty)
+    end
+
+    no_echo_control = Map.put(callbacks, :setopts, fn _ -> {:error, :enotsup} end)
+
+    assert_raise Mix.Error, ~r/Could not hide secret input.*lemon model/, fn ->
+      Runner.read_secret("API key: ", no_echo_control)
+    end
+  end
+
+  test "unknown authentication mode lists accepted modes" do
+    spec = LemonCli.Onboarding.Providers.fetch!("anthropic")
+
+    error = assert_raise Mix.Error, fn -> Runner.run(["--auth", "typo"], spec) end
+    assert error.message =~ "oauth, api-key"
+    assert error.message =~ "lemon model --help"
+  end
+
+  test "prefixed model ids explain the bare id and show valid examples", %{tmp_dir: tmp_dir} do
+    spec = LemonCli.Onboarding.Providers.fetch!("openai")
+
+    error =
+      assert_raise Mix.Error, fn ->
+        Runner.run(
+          [
+            "--non-interactive",
+            "--token",
+            "synthetic",
+            "--set-default",
+            "--model",
+            "openai:gpt-5",
+            "--config-path",
+            Path.join(tmp_dir, "config.toml")
+          ],
+          spec,
+          io: build_io(self(), [], [])
+        )
+      end
+
+    assert error.message =~ "must not include a provider prefix"
+    assert error.message =~ "Use a bare model id"
+
+    assert error.message =~ hd(LemonAi.Models.get_models(:openai)).id or
+             error.message =~ "gpt-"
+
+    refute error.message =~ "Available:"
+  end
+
+  test "an empty model catalog gives recovery instead of an empty available list", %{
+    tmp_dir: tmp_dir
+  } do
+    spec = Provider.api_key("unregistered_polish_provider", "Test", "Test")
+
+    error =
+      assert_raise Mix.Error, fn ->
+        Runner.run(
+          [
+            "--non-interactive",
+            "--token",
+            "synthetic",
+            "--set-default",
+            "--model",
+            "missing",
+            "--config-path",
+            Path.join(tmp_dir, "config.toml")
+          ],
+          spec,
+          io: build_io(self(), [], [])
+        )
+      end
+
+    assert error.message =~ "No model ids are available"
+    assert error.message =~ "lemon models"
+    refute error.message =~ "Available:"
+  end
+
+  defp secret_callbacks(previous_echo, gets) do
+    %{
+      getopts: fn -> [terminal: true, echo: previous_echo] end,
+      setopts: fn opts ->
+        send(self(), {:echo, opts[:echo]})
+        :ok
+      end,
+      gets: gets,
+      puts: fn message -> send(self(), {:newline, message}) end
+    }
+  end
+
   test "writes oauth_secret for oauth providers and removes stale api_key_secret", %{
     tmp_dir: tmp_dir
   } do

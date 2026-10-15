@@ -41,8 +41,8 @@ defmodule Mix.Tasks.Lemon.Setup do
 
   ## Doctor subcommand
 
-  Validates the current configuration and checks application health.
-  Full diagnostics framework is delivered in M1-04 (`mix lemon.doctor`).
+  Runs diagnostics on the current configuration and application health.
+  You can also run `lemon doctor` directly.
   """
 
   @impl true

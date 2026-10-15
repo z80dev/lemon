@@ -1,5 +1,5 @@
 # Provider credentials — prefer secret refs (api_key_secret) over plaintext api_key.
-# Run `mix lemon.secrets.set <secret_name> <value>` to store keys in the encrypted keychain.
+# Run `lemon secrets set <secret_name> <value>` to store keys in the encrypted keychain.
 # Plaintext api_key is supported but discouraged; use it only for quick local testing.
 #
 # Control-plane operator authentication is environment-only so the shared secret

@@ -20,6 +20,7 @@ const STATUS_CHECKBOX: Record<string, string> = {
 	completed: "☑",
 	in_progress: "◐",
 	blocked: "⊘",
+	abandoned: "☒",
 	pending: "☐",
 };
 
@@ -31,6 +32,8 @@ interface TodoItem {
 	content: string;
 	status: string;
 	priority?: string;
+	phase?: string;
+	blocker?: string;
 }
 
 /**
@@ -41,6 +44,7 @@ interface TodoProgress {
 	completed: number;
 	in_progress: number;
 	blocked: number;
+	abandoned: number;
 	pending: number;
 	percentage: number;
 }
@@ -67,6 +71,8 @@ function parseTodoList(value: unknown[]): TodoItem[] {
 			content: item.content,
 			status: typeof item.status === "string" ? item.status : "pending",
 			priority: typeof item.priority === "string" ? item.priority : undefined,
+			phase: typeof item.phase === "string" ? item.phase : undefined,
+			blocker: typeof item.blocker === "string" ? item.blocker : undefined,
 		});
 	}
 	return todos;
@@ -94,6 +100,7 @@ function parseProgress(value: Record<string, unknown>): TodoProgress | undefined
 		completed,
 		in_progress: count("in_progress"),
 		blocked: count("blocked"),
+		abandoned: count("abandoned"),
 		pending: count("pending"),
 		percentage,
 	};
@@ -108,7 +115,9 @@ function parseProgress(value: Record<string, unknown>): TodoProgress | undefined
 function formatTodoLine(item: TodoItem): string {
 	const checkbox = STATUS_CHECKBOX[item.status] ?? STATUS_CHECKBOX.pending;
 	const priority = item.priority === "high" ? " (high)" : "";
-	return `${checkbox} ${item.content}${priority}`;
+	const phase = item.phase ? `[${item.phase}] ` : "";
+	const blocker = item.status === "blocked" && item.blocker ? ` — blocked: ${item.blocker}` : "";
+	return `${checkbox} ${phase}${item.content}${priority}${blocker}`;
 }
 
 /**
@@ -138,6 +147,9 @@ function summarizeTodos(todos: TodoItem[]): string {
 	if (counts.blocked) {
 		parts.push(`${counts.blocked} blocked`);
 	}
+	if (counts.abandoned) {
+		parts.push(`${counts.abandoned} abandoned`);
+	}
 	if (counts.completed) {
 		parts.push(`${counts.completed} done`);
 	}
@@ -160,6 +172,9 @@ function formatProgress(progress: TodoProgress): FormattedOutput {
 	}
 	if (progress.blocked > 0) {
 		details.push(`blocked: ${progress.blocked}`);
+	}
+	if (progress.abandoned > 0) {
+		details.push(`abandoned: ${progress.abandoned}`);
 	}
 	return {
 		summary: `${progress.completed}/${progress.total} done (${progress.percentage}%)`,

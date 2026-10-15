@@ -44,6 +44,7 @@ defmodule CodingAgent.Tools.Patch do
   alias CodingAgent.MutationLock
   alias CodingAgent.Tools.ACPFileBridge
   alias CodingAgent.Tools.CheckpointGuard
+  alias CodingAgent.Tools.FileFormatHelpers
   alias CodingAgent.Tools.FileValidation
   alias CodingAgent.Tools.LspDiagnostics
   alias CodingAgent.Tools.PathHelpers
@@ -1394,6 +1395,19 @@ defmodule CodingAgent.Tools.Patch do
   end
 
   defp find_pattern(lines, pattern) do
+    case find_exact_pattern(lines, pattern) do
+      :not_found ->
+        find_exact_pattern(
+          Enum.map(lines, &FileFormatHelpers.normalize_line/1),
+          Enum.map(pattern, &FileFormatHelpers.normalize_line/1)
+        )
+
+      result ->
+        result
+    end
+  end
+
+  defp find_exact_pattern(lines, pattern) do
     plen = length(pattern)
 
     cond do

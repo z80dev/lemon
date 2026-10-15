@@ -936,14 +936,20 @@ const TODO_STATUS: Record<string, TodoItem["status"]> = {
 	abandoned: "abandoned",
 };
 
-function todoItems(value: unknown): TodoItem[] {
+function todoItems(value: unknown): (TodoItem & { phase?: string })[] {
 	if (!Array.isArray(value)) return [];
-	const items: TodoItem[] = [];
+	const items: (TodoItem & { phase?: string })[] = [];
 	for (const entry of value) {
 		const todo = record(entry);
 		const content = str(todo?.content);
 		if (!todo || !content) continue;
-		items.push({ content, status: TODO_STATUS[String(todo.status)] ?? "pending" });
+		const status = TODO_STATUS[String(todo.status)] ?? "pending";
+		const blocker = status === "blocked" ? str(todo.blocker) : undefined;
+		items.push({
+			content: blocker ? `${content} — blocked: ${blocker}` : content,
+			status,
+			phase: str(todo.phase),
+		});
 	}
 	return items;
 }
@@ -969,6 +975,13 @@ function todoView(f: ToolFacts): NativeToolView {
 			body: f.settled ? [noteText("No todos")] : undefined,
 		};
 	}
+	const phases = new Map<string, TodoItem[]>();
+	for (const item of items) {
+		const name = item.phase ?? "";
+		const tasks = phases.get(name) ?? [];
+		tasks.push(item);
+		phases.set(name, tasks);
+	}
 	const closed = items.filter(
 		(item) => item.status === "completed" || item.status === "abandoned",
 	).length;
@@ -982,8 +995,10 @@ function todoView(f: ToolFacts): NativeToolView {
 		body: [
 			node(
 				"checklist",
-				// Lemon todos have no phases; a titled phase would repeat the head's count.
-				{ mode: "full", phases: todoChecklistPhases([{ name: "", tasks: items }]) },
+				{
+					mode: "full",
+					phases: todoChecklistPhases([...phases].map(([name, tasks]) => ({ name, tasks }))),
+				},
 				[],
 				"checklist",
 			),

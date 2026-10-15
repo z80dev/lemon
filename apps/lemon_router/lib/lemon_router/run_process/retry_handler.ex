@@ -57,7 +57,10 @@ defmodule LemonRouter.RunProcess.RetryHandler do
   def format_run_error({:assistant_error, msg}) when is_binary(msg),
     do: format_assistant_error(msg)
 
-  def format_run_error({:assistant_error, reason}), do: "assistant error: #{inspect(reason)}"
+  def format_run_error({:assistant_error, reason}) do
+    Logger.warning("Assistant run failed: #{inspect(reason)}")
+    "The model returned an error. Try again; if it keeps happening, run `lemon doctor`."
+  end
 
   def format_run_error({:gateway_run_down, {%module{} = exception, _stack}}) when is_atom(module),
     do: format_exception_message(exception)
@@ -76,7 +79,11 @@ defmodule LemonRouter.RunProcess.RetryHandler do
 
   def format_run_error(e) when is_binary(e), do: e
   def format_run_error(e) when is_atom(e), do: Atom.to_string(e)
-  def format_run_error(e), do: inspect(e)
+
+  def format_run_error(error) do
+    Logger.warning("Run failed: #{inspect(error)}")
+    "The model returned an error. Try again; if it keeps happening, run `lemon doctor`."
+  end
 
   # ---- Private helpers ----
 

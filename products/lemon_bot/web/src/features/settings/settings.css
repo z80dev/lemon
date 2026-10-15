@@ -30,6 +30,8 @@
 .settings-notice-body { white-space: pre-wrap; }
 .settings-page audio { width: min(100%, 32rem); }
 .settings-page :focus-visible { outline: 3px solid currentColor; outline-offset: 3px; }
+.instance-health .list-row > div { width: 100%; min-width: 0; }
+.instance-health p { margin-block: .6rem 0; }
 @media (max-width: 600px) {
   .settings-facts { grid-template-columns: 1fr; gap: .25rem; }
   .settings-facts dd { margin-block-end: .65rem; }

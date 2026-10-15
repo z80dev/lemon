@@ -90,6 +90,24 @@ describe("todoFormatter.formatResult", () => {
 		expect(result.details).toEqual([]);
 	});
 
+	it("preserves blocked and abandoned counts, phases and blocker notes", () => {
+		const result = todoFormatter.formatResult({
+			details: {
+				todos: [
+					{ content: "Deploy", status: "blocked", phase: "Release", blocker: "Need access" },
+					{ content: "Old approach", status: "abandoned" },
+				],
+			},
+		});
+		expect(result.summary).toBe("1 blocked, 1 abandoned");
+		expect(result.details).toEqual(["⊘ [Release] Deploy — blocked: Need access", "☒ Old approach"]);
+		const progress = todoFormatter.formatResult({
+			details: { total: 2, completed: 0, blocked: 1, abandoned: 1, percentage: 0 },
+		});
+		expect(progress.summary).toBe("0/2 done (0%)");
+		expect(progress.details).toEqual(["blocked: 1", "abandoned: 1"]);
+	});
+
 	it("marks tool errors", () => {
 		const result = todoFormatter.formatResult({
 			content: [{ type: "text", text: "Todo 1 status must be pending, in_progress, or completed" }],

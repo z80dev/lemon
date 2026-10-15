@@ -49,7 +49,9 @@ defmodule CodingAgent.Tools.TodoRead do
         details = TodoStore.result_details(todos)
         todos = details.todos
         output = Jason.encode!(todos, pretty: true)
-        open_count = Enum.count(todos, fn todo -> todo["status"] != "completed" end)
+
+        open_count =
+          Enum.count(todos, fn todo -> todo["status"] not in ["completed", "abandoned"] end)
 
         %AgentToolResult{
           content: [%TextContent{text: output}],

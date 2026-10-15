@@ -61,6 +61,12 @@ defmodule CodingAgent.Tools.Grep do
             "type" => "boolean",
             "description" => "Treat the pattern as a literal string instead of a regex"
           },
+          "output_mode" => %{
+            "type" => "string",
+            "enum" => ["content", "files", "count"],
+            "description" =>
+              "Return matching content (default), paths, or per-file counts and total"
+          },
           "context_lines" => %{
             "type" => "integer",
             "description" => "Number of lines of context to show around matches"
@@ -120,6 +126,7 @@ defmodule CodingAgent.Tools.Grep do
     literal = Map.get(params, "literal", false)
     context_lines = Map.get(params, "context_lines", @default_context_lines)
     skip = Map.get(params, "skip", 0)
+    output_mode = Map.get(params, "output_mode", "content")
 
     max_results =
       Map.get(params, "max_results", Keyword.get(opts, :max_results, @default_max_results))
@@ -128,6 +135,7 @@ defmodule CodingAgent.Tools.Grep do
          :ok <- validate_context_lines(context_lines),
          :ok <- validate_max_results(max_results),
          :ok <- validate_skip(skip),
+         :ok <- validate_output_mode(output_mode),
          {:ok, resolved_path} <- resolve_path(path, cwd, opts),
          :ok <- check_path_access(resolved_path),
          :ok <- check_abort(signal) do
@@ -137,6 +145,8 @@ defmodule CodingAgent.Tools.Grep do
         glob: glob,
         case_sensitive: case_sensitive,
         literal: literal,
+        output_mode: output_mode,
+        multiline: String.contains?(pattern, ["\n", "\\n"]),
         context_lines: context_lines,
         max_results: max_results,
         skip: skip,
@@ -213,6 +223,9 @@ defmodule CodingAgent.Tools.Grep do
   defp validate_skip(skip) do
     {:error, "skip must be a non-negative integer, got: #{inspect(skip)}"}
   end
+
+  defp validate_output_mode(mode) when mode in ["content", "files", "count"], do: :ok
+  defp validate_output_mode(_), do: {:error, "output_mode must be content, files, or count"}
 
   defp suggest_regex_fix(pattern) do
     cond do
@@ -403,6 +416,7 @@ defmodule CodingAgent.Tools.Grep do
     args = ["--json", "--line-number", "--color", "never"]
     args = if opts.case_sensitive, do: args, else: args ++ ["--ignore-case"]
     args = if opts.literal, do: args ++ ["--fixed-strings"], else: args
+    args = if opts.multiline, do: args ++ ["-U"], else: args
     args = if opts.hidden, do: args ++ ["--hidden"], else: args
     args = if opts.no_ignore, do: args ++ ["--no-ignore"], else: args
 
@@ -477,7 +491,7 @@ defmodule CodingAgent.Tools.Grep do
 
   defp run_elixir_search(opts) do
     with {:ok, matcher} <- compile_matcher(opts.pattern, opts.case_sensitive, opts.literal) do
-      limit = opts.skip + opts.max_results
+      limit = if opts.output_mode == "count", do: :infinity, else: opts.skip + opts.max_results
 
       {refs, count, oversized, incomplete?} =
         opts.fallback_files_fun.(opts.path, opts)
@@ -486,12 +500,19 @@ defmodule CodingAgent.Tools.Grep do
           if aborted?(opts.signal) do
             {:halt, {refs, count, oversized, true}}
           else
-            {matches, oversized?, more?} = search_file_refs(file, matcher, limit - count, opts)
+            remaining =
+              cond do
+                opts.output_mode == "files" -> 1
+                limit == :infinity -> :infinity
+                true -> limit - count
+              end
+
+            {matches, oversized?, more?} = search_file_refs(file, matcher, remaining, opts)
             count = count + length(matches)
 
             acc =
               {Enum.reverse(matches, refs), count, oversized + if(oversized?, do: 1, else: 0),
-               more? or count == limit}
+               (opts.output_mode == "content" and more?) or count == limit}
 
             if count == limit, do: {:halt, acc}, else: {:cont, acc}
           end
@@ -528,7 +549,7 @@ defmodule CodingAgent.Tools.Grep do
   end
 
   defp compile_matcher(pattern, case_sensitive, false) do
-    options = if case_sensitive, do: [], else: [:caseless]
+    options = if case_sensitive, do: [:multiline], else: [:multiline, :caseless]
 
     case Regex.compile(pattern, options) do
       {:ok, regex} -> {:ok, {:regex, regex}}
@@ -595,12 +616,16 @@ defmodule CodingAgent.Tools.Grep do
       {:ok, content, oversized?} ->
         refs =
           if String.valid?(content) and not String.contains?(content, <<0>>) do
-            content
-            |> String.split(~r/\r?\n/)
-            |> Stream.with_index(1)
-            |> Stream.filter(fn {line, _} -> opts.fallback_match_fun.(line, matcher) end)
-            |> Stream.map(fn {_, idx} -> %{file_path: file_path, line_number: idx} end)
-            |> Enum.take(limit)
+            if opts.multiline do
+              multiline_refs(content, matcher, file_path, limit)
+            else
+              content
+              |> String.split(~r/\r?\n/)
+              |> Stream.with_index(1)
+              |> Stream.filter(fn {line, _} -> opts.fallback_match_fun.(line, matcher) end)
+              |> Stream.map(fn {_, idx} -> %{file_path: file_path, line_number: idx} end)
+              |> take_refs(limit)
+            end
           else
             []
           end
@@ -610,6 +635,30 @@ defmodule CodingAgent.Tools.Grep do
       {:error, _} ->
         {[], false, false}
     end
+  end
+
+  defp take_refs(refs, :infinity), do: Enum.to_list(refs)
+  defp take_refs(refs, limit), do: Enum.take(refs, limit)
+
+  defp multiline_refs(content, matcher, file_path, limit) do
+    offsets =
+      case matcher do
+        {:regex, regex} ->
+          Regex.scan(regex, content, return: :index, capture: :first)
+          |> Enum.map(fn [{offset, _}] -> offset end)
+
+        {:literal, pattern, case_sensitive} ->
+          source = if case_sensitive, do: content, else: String.downcase(content)
+          :binary.matches(source, pattern) |> Enum.map(&elem(&1, 0))
+      end
+
+    offsets
+    |> Stream.map(fn offset ->
+      line = 1 + length(:binary.matches(binary_part(content, 0, offset), "\n"))
+      %{file_path: file_path, line_number: line}
+    end)
+    |> Stream.uniq_by(& &1.line_number)
+    |> take_refs(limit)
   end
 
   defp line_matches?(line, {:regex, regex}), do: Regex.match?(regex, line)
@@ -623,6 +672,57 @@ defmodule CodingAgent.Tools.Grep do
   end
 
   defp build_result_from_match_refs([], _opts), do: no_matches_result()
+
+  defp build_result_from_match_refs(refs, %{output_mode: mode} = opts)
+       when mode in ["files", "count"] do
+    counts = Enum.frequencies_by(refs, & &1.file_path)
+    entries = Enum.sort(counts)
+    page = entries |> Enum.drop(opts.skip) |> Enum.take(opts.max_results)
+    incomplete? = Map.get(opts, :incomplete, false)
+
+    {lines, shown, _, byte_limited?} =
+      Enum.reduce_while(page, {[], 0, 0, false}, fn {path, count}, {lines, shown, bytes, _} ->
+        line =
+          display_path(path, opts.path, directory_search?(opts.path)) <>
+            if(mode == "count", do: ": #{count}", else: "")
+
+        size = byte_size(line) + 1
+
+        if bytes + size > opts.max_bytes do
+          {:halt, {lines, shown, bytes, true}}
+        else
+          {:cont, {[line | lines], shown + 1, bytes + size, false}}
+        end
+      end)
+
+    more? = incomplete? or length(entries) > opts.skip + shown
+    total = length(refs)
+    qualifier = if incomplete?, do: "at least ", else: ""
+
+    summary =
+      if mode == "count",
+        do: "Total: #{qualifier}#{total} matches.",
+        else: "Found #{qualifier}#{length(entries)} matching files."
+
+    notice = if more?, do: "\n\n[Use skip=#{opts.skip + shown} for the next page.]", else: ""
+
+    details = %{
+      output_mode: mode,
+      match_count: total,
+      file_count: length(entries),
+      truncated: more? or byte_limited?
+    }
+
+    details = if more?, do: Map.put(details, :next_skip, opts.skip + shown), else: details
+    details = if mode == "count", do: Map.put(details, :counts, Map.new(counts)), else: details
+
+    %AgentToolResult{
+      content: [
+        %TextContent{text: summary <> "\n\n" <> Enum.join(Enum.reverse(lines), "\n") <> notice}
+      ],
+      details: details
+    }
+  end
 
   defp build_result_from_match_refs(match_refs, opts) do
     total_match_count = length(match_refs)

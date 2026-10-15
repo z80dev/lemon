@@ -39,6 +39,13 @@ selectors (`:raw:50-80` or `:50-80:raw`) remain exact, without context, line
 numbers, or a snapshot header. Raw comma lists also stay exact and retain the
 `…` separators. `offset`/`limit`, open-ended and tail selectors do not add context.
 
+## Patch hunk matching
+
+Patch hunk context must identify a unique location. Exact matches take precedence;
+on an exact miss, `patch` tolerates indentation, horizontal whitespace, and smart
+quote/dash differences using the same normalization as text `edit`. Multiple
+normalized matches are rejected. Unchanged context keeps its original text.
+
 ## Safe overwrites
 
 `write` refuses to overwrite an existing file with content containing a read
@@ -87,6 +94,14 @@ that limit is reached. A final page may therefore be empty. The notice and
 ```json
 {"pattern": "TODO", "max_results": 50, "skip": 50}
 ```
+
+`output_mode` defaults to `"content"`. `"files"` returns each matching path once;
+`"count"` returns per-file matching-line counts and the total across searched files
+(also in `details.counts` and `details.match_count`). In these modes `skip` and
+`max_results` page files, not individual matches. Count mode scans all files within
+the fallback's deadline and per-file byte bound, rather than stopping at a page.
+Patterns containing a literal newline or `\n` enable multiline search (`rg -U` or
+whole-file fallback matching); results identify the start line of each matching span.
 
 Hidden files and files ignored by `.gitignore`/`.ignore` are skipped by default,
 with ripgrep or the Elixir fallback (which uses `git check-ignore` inside a work

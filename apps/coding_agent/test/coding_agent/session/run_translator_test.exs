@@ -5,6 +5,27 @@ defmodule CodingAgent.Session.RunTranslatorTest do
   alias LemonAgent.Types.AgentToolResult
   alias LemonAi.Types.TextContent
 
+  test "session termination and tuple request failures use plain actionable copy" do
+    translator()
+    |> RunTranslator.handle_event({:agent_start})
+    |> RunTranslator.handle_session_down({:shutdown, %{private: :detail}})
+
+    assert_receive {:completed, %{ok: false, error: error}}
+    assert error =~ "Send your message again"
+    refute error =~ "{"
+    refute error =~ ":shutdown"
+
+    for reason <- [
+          {:provider_failed, %{private: :detail}},
+          {:assistant_error, {:provider_failed, :detail}}
+        ] do
+      error = CodingAgent.Session.Presentation.format_error(reason, %{})
+      assert error =~ "lemon doctor"
+      refute error =~ "{"
+      refute error =~ ":detail"
+    end
+  end
+
   defmodule TestEmitter do
     @behaviour CodingAgent.Session.RunTranslator.Emitter
 

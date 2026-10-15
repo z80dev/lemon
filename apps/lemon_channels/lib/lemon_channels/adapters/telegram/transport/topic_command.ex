@@ -3,6 +3,8 @@ defmodule LemonChannels.Adapters.Telegram.Transport.TopicCommand do
   Telegram-local `/topic` command handler extracted from the transport shell.
   """
 
+  require Logger
+
   alias LemonChannels.Adapters.Telegram.Transport.Commands
 
   @type callbacks :: %{
@@ -78,7 +80,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport.TopicCommand do
                 chat_id,
                 thread_id,
                 user_msg_id,
-                "Failed to create topic: #{description}"
+                topic_error_message(description)
               )
 
             state
@@ -102,7 +104,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport.TopicCommand do
                 chat_id,
                 thread_id,
                 user_msg_id,
-                "Failed to create topic."
+                topic_error_message(nil)
               )
 
             state
@@ -131,27 +133,10 @@ defmodule LemonChannels.Adapters.Telegram.Transport.TopicCommand do
   end
 
   defp topic_error_message(reason) do
-    case extract_topic_error_description(reason) do
-      desc when is_binary(desc) and desc != "" -> "Failed to create topic: #{desc}"
-      _ -> "Failed to create topic."
-    end
-  end
+    Logger.warning("Telegram topic creation failed: #{inspect(reason)}")
 
-  defp extract_topic_error_description(%{"description" => desc})
-       when is_binary(desc) and desc != "" do
-    desc
+    "Failed to create topic. Make the bot an admin with permission to manage topics, then try again."
   end
-
-  defp extract_topic_error_description({:http_error, _status, body}) when is_binary(body) do
-    case Jason.decode(body) do
-      {:ok, %{"description" => desc}} when is_binary(desc) and desc != "" -> desc
-      _ -> nil
-    end
-  rescue
-    _ -> nil
-  end
-
-  defp extract_topic_error_description(_), do: nil
 
   defp parse_int(nil), do: nil
   defp parse_int(i) when is_integer(i), do: i

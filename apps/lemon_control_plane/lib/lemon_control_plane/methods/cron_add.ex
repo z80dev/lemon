@@ -8,6 +8,8 @@ defmodule LemonControlPlane.Methods.CronAdd do
 
   @behaviour LemonControlPlane.Method
 
+  require Logger
+
   @impl true
   def name, do: "cron.add"
 
@@ -52,7 +54,10 @@ defmodule LemonControlPlane.Methods.CronAdd do
          }}
 
       {:error, {:missing_keys, keys}} ->
-        {:error, {:invalid_request, "Missing required fields: #{inspect(keys)}", nil}}
+        {:error,
+         {:invalid_request,
+          "Missing required fields: #{Enum.join(keys, ", ")}. Supply these fields and try again.",
+          nil}}
 
       {:error, {:invalid_schedule, reason}} ->
         {:error, {:invalid_request, "Invalid cron schedule: #{reason}", nil}}
@@ -61,7 +66,10 @@ defmodule LemonControlPlane.Methods.CronAdd do
         {:error, {:invalid_request, reason, nil}}
 
       {:error, reason} ->
-        {:error, {:internal_error, inspect(reason), nil}}
+        Logger.warning("Could not add cron job: #{inspect(reason)}")
+
+        {:error,
+         {:internal_error, "Could not add cron job. Run `lemon doctor` before trying again.", nil}}
     end
   end
 

@@ -187,7 +187,7 @@ defmodule CodingAgent.Tools.TodoPlanTest do
     {:ok, ^original, revision} = Session.todos(session_pid)
 
     for {field, value} <- [
-          {"status", "blocked"},
+          {"status", "unknown"},
           {"status", nil},
           {"priority", nil},
           {"id", ""}
