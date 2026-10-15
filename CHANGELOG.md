@@ -8,7 +8,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
-No unreleased changes yet.
+### Added
+
+- Lemon Bot exposes an authenticated, provider-specific voice catalog for native
+  pickers without calling speech providers or generating billable audio.
 
 ---
 
