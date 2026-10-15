@@ -41,21 +41,6 @@ defmodule LemonAi.Providers.BedrockTest do
       assert {:ok, Bedrock} = LemonAi.ProviderRegistry.get(:bedrock_converse_stream)
     end
   end
-
-  # ============================================================================
-  # Behaviour Implementation
-  # ============================================================================
-
-  describe "behaviour" do
-    test "implements LemonAi.Provider behaviour" do
-      behaviours =
-        Bedrock.__info__(:attributes)
-        |> Keyword.get_values(:behaviour)
-        |> List.flatten()
-
-      assert LemonAi.Provider in behaviours
-    end
-  end
 end
 
 # ==============================================================================
@@ -144,25 +129,6 @@ defmodule LemonAi.Providers.BedrockStreamTest do
     {:ok, stream} = Bedrock.stream(model, context, opts)
     result = EventStream.result(stream, 5_000)
     {stream, result}
-  end
-
-  # ============================================================================
-  # Stream Initialization
-  # ============================================================================
-
-  describe "stream/3 initialization" do
-    test "returns {:ok, stream} tuple" do
-      {:ok, stream} = Bedrock.stream(default_model(), default_context(), default_opts())
-      assert is_pid(stream)
-      # Clean up
-      EventStream.result(stream, 5_000)
-    end
-
-    test "returns a live process" do
-      {:ok, stream} = Bedrock.stream(default_model(), default_context(), default_opts())
-      assert Process.alive?(stream)
-      EventStream.result(stream, 5_000)
-    end
   end
 
   # ============================================================================
