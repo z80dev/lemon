@@ -91,7 +91,7 @@ defmodule LemonSkills.DiscoveryTest do
       assert results == []
     end
 
-    test "returns results within timeout" do
+    test "returns GitHub results within max_results" do
       HttpMock.stub(
         "https://api.github.com/search/repositories",
         {:ok, @github_search_one_result}
@@ -106,9 +106,7 @@ defmodule LemonSkills.DiscoveryTest do
 
       results = Discovery.discover("test", timeout: 5_000, max_results: 5)
 
-      assert is_list(results)
-      assert length(results) <= 5
-      assert results != []
+      assert length(results) == 1
     end
 
     test "respects max_results option" do
@@ -146,22 +144,11 @@ defmodule LemonSkills.DiscoveryTest do
       assert results != []
       [first | _] = results
 
-      # Check structure
-      assert is_map(first)
-      assert Map.has_key?(first, :entry)
-      assert Map.has_key?(first, :source)
-      assert Map.has_key?(first, :validated)
-      assert Map.has_key?(first, :url)
-
-      # Source should be an atom
-      assert is_atom(first.source)
-      assert first.source in [:github, :registry, :url]
-
-      # Validated should be boolean
-      assert is_boolean(first.validated)
-
-      # URL should be string
-      assert is_binary(first.url)
+      assert first.source == :github
+      assert first.entry.name == "lemon-skill-hello"
+      assert first.entry.key == "acme-lemon-skill-hello"
+      assert first.validated == false
+      assert first.url == "https://raw.githubusercontent.com/acme/lemon-skill-hello/main/SKILL.md"
     end
   end
 
@@ -356,7 +343,7 @@ defmodule LemonSkills.DiscoveryTest do
       )
 
       results = Discovery.discover("test", timeout: 5_000, max_results: 3)
-      assert is_list(results)
+      assert results == []
     end
   end
 

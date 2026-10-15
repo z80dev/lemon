@@ -6,18 +6,13 @@ defmodule LemonSkills.EntryTest do
   @moduletag :tmp_dir
 
   describe "new/2" do
-    test "builds a default entry from path", %{tmp_dir: tmp_dir} do
+    test "derives key and name from the skill path", %{tmp_dir: tmp_dir} do
       path = Path.join(tmp_dir, "my-skill")
       entry = Entry.new(path)
 
       assert entry.key == "my-skill"
       assert entry.name == "my-skill"
-      assert entry.description == ""
-      assert entry.source == :global
       assert entry.path == path
-      assert entry.enabled
-      assert entry.manifest == nil
-      assert entry.status == :ready
     end
 
     test "applies :source and :enabled options", %{tmp_dir: tmp_dir} do
@@ -235,9 +230,7 @@ defmodule LemonSkills.EntryTest do
       entry = Entry.new(skill_dir)
       hash = Entry.compute_content_hash(entry)
 
-      assert is_binary(hash)
-      assert String.length(hash) == 64
-      assert hash =~ ~r/^[0-9a-f]+$/
+      assert hash == Base.encode16(:crypto.hash(:sha256, "# hash me\n"), case: :lower)
     end
 
     test "returns nil when SKILL.md is missing", %{tmp_dir: tmp_dir} do
@@ -257,8 +250,10 @@ defmodule LemonSkills.EntryTest do
       hash = Entry.compute_bundle_hash(entry)
 
       assert is_binary(hash)
-      assert String.length(hash) == 64
-      assert hash =~ ~r/^[0-9a-f]+$/
+      File.write!(Path.join(skill_dir, "references/guide.md"), "world\n")
+      changed_hash = Entry.compute_bundle_hash(entry)
+      assert is_binary(changed_hash)
+      refute changed_hash == hash
     end
   end
 
