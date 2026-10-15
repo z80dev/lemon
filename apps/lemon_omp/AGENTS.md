@@ -24,6 +24,11 @@ the [operator guide](../../docs/user-guide/omp.md).
   (descendants included) after a grace period.
 - Strip `LEMON_*` variables from omp's environment. Reject caller-supplied
   paths other than the validated `cwd`; resume accepts session ids, not paths.
+- New history belongs in Lemon's configured private session directory, created
+  `0700` before spawn. Explicit omp session directories are flat, not cwd buckets.
+  Discovery reads that directory and omp's default buckets without mutation.
+  Resume derives its directory from the matched discovery entry, never from
+  caller paths or arbitrary header paths, and continues that source in place.
 
 ## Control and trust
 
@@ -51,9 +56,10 @@ workers) with:
 LEMON_OMP_LIVE=1 scripts/test path apps/lemon_omp/test/lemon_omp/live_smoke_test.exs
 ```
 
-This uses the developer's real `~/.omp/agent` credentials despite the test
-HOME sandbox, and writes session history there. Override with
-`LEMON_OMP_LIVE_AGENT_DIR`; choose the binary with `LEMON_OMP_BIN`.
+This reads the developer's real `~/.omp/agent` credentials despite the test HOME
+sandbox; `LEMON_OMP_LIVE_AGENT_DIR` overrides that credential/settings source.
+Every test pins `:session_dir` to a throwaway directory, so Lemon-run transcripts
+never go into the developer's omp history. Choose the binary with `LEMON_OMP_BIN`.
 `LEMON_OMP_LIVE_MODEL` defaults to
 `openrouter/nvidia/nemotron-3-super-120b-a12b:free`; only `:free` models are
-accepted. It creates files only in a throwaway git workspace.
+accepted. Workspace edits also stay in throwaway git workspaces.

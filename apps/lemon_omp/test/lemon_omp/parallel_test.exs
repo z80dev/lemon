@@ -33,7 +33,7 @@ defmodule LemonOmp.ParallelTest do
     assert wire["status"] == "idle"
 
     assert File.read!(Path.join(ws, ".fake_omp.args")) ==
-             "--mode rpc --cwd #{ws} --model fake/chosen --thinking low --resume fake-resumed-0002\n"
+             "--mode rpc --cwd #{ws} --session-dir #{LemonOmp.Config.session_dir()} --model fake/chosen --thinking low --resume fake-resumed-0002\n"
   end
 
   test "all three prompts are in flight before any acknowledgement; order and cleanup", ctx do

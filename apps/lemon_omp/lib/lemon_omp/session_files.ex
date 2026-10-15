@@ -2,7 +2,9 @@ defmodule LemonOmp.SessionFiles do
   @moduledoc """
   Read-only discovery of omp's on-disk sessions for a workspace.
 
-  omp stores each session as `<agent_dir>/sessions/<encoded cwd>/<timestamp>_<uuid>.jsonl`.
+  Lemon's explicit `--session-dir` is flat: `<session_dir>/<timestamp>_<uuid>.jsonl`.
+  omp's own default is `<agent_dir>/sessions/<encoded cwd>/<timestamp>_<uuid>.jsonl`.
+  Both sources are read, tagged `"lemon"` or `"omp"`, and filtered by header cwd.
   The first physical line is a fixed-width title slot
   (`{"type":"title","v":1,"title":...}`), the second the session header
   (`{"type":"session","id":...,"cwd":...}`), then tree-linked entries. A clean
@@ -15,8 +17,9 @@ defmodule LemonOmp.SessionFiles do
   then trusts only headers whose `cwd` resolves to the requested workspace.
 
   Each file is read in bounded slices — its head for identity and title, its
-  tail for the latest model and outcome — never in full, and only the newest
-  files are examined. Nothing here writes, locks or migrates omp state.
+  tail for the latest model and outcome — never in full. At most 2,000 filenames
+  per candidate directory are examined, newest first, until enough matching
+  sessions are found. Nothing here writes, locks or migrates omp state.
   """
 
   @head_bytes 16_384
@@ -27,6 +30,30 @@ defmodule LemonOmp.SessionFiles do
 
   @spec discover(String.t(), keyword()) :: {:ok, [map()]} | {:error, :invalid_cwd}
   def discover(cwd, opts \\ []) do
+    with {:ok, entries} <- discover_entries(cwd, opts) do
+      {:ok, Enum.map(entries, &Map.delete(&1, :session_dir))}
+    end
+  end
+
+  @doc false
+  def resolve_resume(cwd, prefix) do
+    with {:ok, entries} <- discover_entries(cwd, limit: @max_limit, resume: prefix) do
+      prefix = String.downcase(prefix)
+
+      matches =
+        Enum.filter(entries, &String.starts_with?(String.downcase(&1["ompSessionId"]), prefix))
+
+      exact = Enum.filter(matches, &(String.downcase(&1["ompSessionId"]) == prefix))
+
+      case if(exact == [], do: matches, else: exact) do
+        [entry] -> {:ok, Map.delete(entry, :session_dir), entry.session_dir}
+        [] -> {:error, :not_found}
+        _ -> {:error, :invalid_params}
+      end
+    end
+  end
+
+  defp discover_entries(cwd, opts) do
     with {:ok, sessions} <- discover_workspace(cwd, opts) do
       workers =
         LemonOmp.Worktree.kept(cwd)
@@ -44,7 +71,7 @@ defmodule LemonOmp.SessionFiles do
 
       {:ok,
        (workers ++ sessions)
-       |> Enum.uniq_by(& &1["ompSessionId"])
+       |> Enum.uniq_by(&{&1["ompSessionId"], &1.session_dir})
        |> Enum.sort_by(&(-&1["updatedAt"]))
        |> Enum.take(limit)}
     end
@@ -52,21 +79,41 @@ defmodule LemonOmp.SessionFiles do
 
   defp discover_workspace(cwd, opts) when is_binary(cwd) do
     limit = opts |> Keyword.get(:limit, @default_limit) |> clamp_limit()
-    sessions_dir = Keyword.get_lazy(opts, :sessions_dir, &LemonOmp.Config.sessions_dir/0)
+    omp_dir = Keyword.get_lazy(opts, :sessions_dir, &LemonOmp.Config.omp_sessions_dir/0)
+    lemon_dir = Keyword.get_lazy(opts, :session_dir, &LemonOmp.Config.session_dir/0)
     expanded = Path.expand(cwd)
 
     if File.dir?(expanded) do
       canonical = canonical_path(expanded)
 
-      sessions =
+      omp_dirs =
         canonical
         |> candidate_dir_names(expanded)
-        |> Enum.map(&Path.join(sessions_dir, &1))
-        |> Enum.uniq()
-        |> Enum.flat_map(&session_files/1)
-        |> Enum.sort_by(fn {_path, mtime} -> -mtime end)
-        |> Enum.take(limit * 2)
-        |> Enum.flat_map(fn {path, mtime} -> read_session(path, mtime, canonical) end)
+        |> Enum.map(&{Path.join(omp_dir, &1), "omp"})
+
+      dirs = if lemon_dir, do: [{lemon_dir, "lemon"} | omp_dirs], else: omp_dirs
+
+      sessions =
+        dirs
+        |> Enum.uniq_by(fn {dir, _source} -> canonical_path(dir) end)
+        |> Enum.flat_map(fn {dir, source} ->
+          dir
+          |> session_files()
+          |> Enum.sort_by(fn {_path, mtime} -> -mtime end)
+          |> Stream.flat_map(fn {path, mtime} ->
+            for entry <- read_session(path, mtime, canonical),
+                do: Map.merge(entry, %{"source" => source, :session_dir => dir})
+          end)
+          |> Stream.filter(fn entry ->
+            is_nil(opts[:resume]) or
+              String.starts_with?(
+                String.downcase(entry["ompSessionId"]),
+                String.downcase(opts[:resume])
+              )
+          end)
+          |> Enum.take(limit)
+        end)
+        |> Enum.sort_by(&(-&1["updatedAt"]))
         |> Enum.take(limit)
 
       {:ok, sessions}

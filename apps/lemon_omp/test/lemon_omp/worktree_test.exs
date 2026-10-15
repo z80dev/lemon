@@ -43,7 +43,7 @@ defmodule LemonOmp.WorktreeTest do
     assert wire["cwd"] == wt["path"]
 
     assert File.read!(Path.join(wt["path"], ".fake_omp.args")) ==
-             "--mode rpc --cwd #{wt["path"]}\n"
+             "--mode rpc --cwd #{wt["path"]} --session-dir #{LemonOmp.Config.session_dir()}\n"
 
     assert git!(ctx.cwd, ["status", "--porcelain"]) == ""
     os_pid = fake_pid(wt["path"])
@@ -223,6 +223,31 @@ defmodule LemonOmp.WorktreeTest do
     assert {:ok, resumed} = LemonOmp.start(%{cwd: ctx.cwd, resume: "fake-session"})
     assert resumed["cwd"] == wire["cwd"]
     assert resumed["worktree"] == wire["worktree"]
+
+    assert File.read!(Path.join(resumed["cwd"], ".fake_omp.args")) =~
+             "--session-dir #{LemonOmp.Config.omp_sessions_dir()}"
+
+    assert {:ok, ended} = LemonOmp.close(resumed["id"])
+    assert ended["worktree"]["kept"]
+    assert ended["worktree"]["dirty"] == 1
+  end
+
+  test "flat Lemon history discovers and resumes a kept worktree from its repository", ctx do
+    assert {:ok, wire} = LemonOmp.start(%{cwd: ctx.cwd, prompt: "WRITE_FILE", isolate: true})
+    assert {:ok, _, :settled} = LemonOmp.wait(wire["id"], 5_000)
+    assert {:ok, _} = LemonOmp.close(wire["id"])
+    session_fixture(wire["cwd"], "fake-session-lemon", nil, :lemon)
+
+    assert {:ok, [found]} = LemonOmp.discover(ctx.cwd)
+    assert found["source"] == "lemon"
+    assert found["worktree"]["path"] == wire["cwd"]
+    assert {:ok, resumed} = LemonOmp.start(%{cwd: ctx.cwd, resume: "fake-session-lemon"})
+    assert resumed["cwd"] == wire["cwd"]
+    assert resumed["worktree"] == wire["worktree"]
+
+    assert File.read!(Path.join(resumed["cwd"], ".fake_omp.args")) =~
+             "--session-dir #{LemonOmp.Config.session_dir()} --resume fake-session-lemon"
+
     assert {:ok, ended} = LemonOmp.close(resumed["id"])
     assert ended["worktree"]["kept"]
     assert ended["worktree"]["dirty"] == 1
@@ -324,11 +349,21 @@ defmodule LemonOmp.WorktreeTest do
     assert {:ok, _} = LemonOmp.close(resumed["id"])
   end
 
-  defp session_fixture(cwd, id, recorded_cwd \\ nil) do
-    agent = workspace!()
-    put_app_env(:agent_dir, agent)
-    [name | _] = LemonOmp.SessionFiles.candidate_dir_names(cwd, cwd)
-    dir = Path.join([agent, "sessions", name])
+  defp session_fixture(cwd, id, recorded_cwd \\ nil, source \\ :omp) do
+    root = workspace!()
+
+    dir =
+      case source do
+        :lemon ->
+          put_app_env(:session_dir, root)
+          root
+
+        :omp ->
+          put_app_env(:agent_dir, root)
+          [name | _] = LemonOmp.SessionFiles.candidate_dir_names(cwd, cwd)
+          Path.join([root, "sessions", name])
+      end
+
     File.mkdir_p!(dir)
 
     File.write!(

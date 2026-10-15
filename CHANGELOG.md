@@ -27,6 +27,13 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Added
 
+- Lemon-run omp sessions now keep private history under Lemon's per-user
+  `omp/sessions` directory instead of mixing with interactive omp sessions.
+  `LEMON_OMP_SESSION_DIR` / `config :lemon_omp, :session_dir` selects a custom
+  directory; `omp` opts out. Read-only discovery tags both sources and resume
+  continues the matching original history in place. Live smoke transcripts
+  now use temporary directories, not the developer's omp history.
+
 - Live omp workers can change model and/or thinking without restarting through
   owner-scoped `LemonOmp.configure/3` and the chat tool's `configure` action.
   Changes apply from the next model call, including during running turns;

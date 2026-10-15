@@ -507,10 +507,14 @@ defmodule LemonOmp.Tools.OmpTest do
 
     found = run(ctx.tool, %{"action" => "discover"}) |> assert_untrusted()
 
-    assert %{"action" => "discover", "sessions" => [%{"ompSessionId" => "01tool-0001"}]} =
+    assert %{
+             "action" => "discover",
+             "sessions" => [%{"ompSessionId" => "01tool-0001", "source" => "omp"}]
+           } =
              found.details
 
     assert text(found) =~ "- 01tool-0001 [empty] Stored work"
+    assert text(found) =~ "(source: omp)"
 
     bad = run(ctx.tool, %{"action" => "discover", "cwd" => Path.join(ctx.ws, "missing")})
     assert bad.is_error

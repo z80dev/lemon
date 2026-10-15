@@ -1,8 +1,8 @@
 #!/bin/sh
 # Test double for `omp --mode rpc` (newline-delimited JSON over stdio).
 #
-# LemonOmp spawns it as `fake_omp --mode rpc --cwd DIR [--model M]
-# [--thinking L] [--approval-mode A] [--resume ID]`. Lemon strips LEMON_* variables from the
+# LemonOmp spawns it as `fake_omp --mode rpc --cwd DIR [--session-dir DIR]
+# [--model M] [--thinking L] [--approval-mode A] [--resume ID]`. Lemon strips LEMON_* variables from the
 # child, so behaviour is selected per workspace instead:
 #
 #   DIR/.fake_omp_mode   startup mode (default: $FAKE_OMP_MODE, else normal)
@@ -90,6 +90,10 @@ while [ $# -gt 0 ]; do
       ;;
     --cwd)
       cwd=$2
+      shift
+      ;;
+    --session-dir)
+      [ -d "$2" ] || exit 8
       shift
       ;;
     --model)

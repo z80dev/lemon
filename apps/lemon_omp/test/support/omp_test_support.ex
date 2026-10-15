@@ -58,6 +58,15 @@ defmodule LemonOmp.TestSupport do
   """
   def use_fake_omp do
     put_app_env(:executable, @fake_omp)
+    previous = System.get_env("LEMON_OMP_SESSION_DIR")
+    System.delete_env("LEMON_OMP_SESSION_DIR")
+
+    on_exit(fn ->
+      if previous,
+        do: System.put_env("LEMON_OMP_SESSION_DIR", previous),
+        else: System.delete_env("LEMON_OMP_SESSION_DIR")
+    end)
+
     on_exit(&close_all_sessions/0)
   end
 

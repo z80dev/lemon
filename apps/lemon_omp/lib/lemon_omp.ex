@@ -219,9 +219,8 @@ defmodule LemonOmp do
   defp start_validated(params, executable, opts) do
     id = "omp_" <> Base.encode16(:crypto.strong_rand_bytes(6), case: :lower)
 
-    params = resolve_resume_worktree(params)
-
-    with {:ok, worktree} <- resume_or_create_worktree(params, id) do
+    with {:ok, params} <- resolve_resume(params),
+         {:ok, worktree} <- resume_or_create_worktree(params, id) do
       case start_in_worktree(params, executable, opts, id, worktree) do
         {:error, reason} = error when reason not in [:outcome_unknown] ->
           # Admission/spawn can fail before a Session owns cleanup.
@@ -234,29 +233,33 @@ defmodule LemonOmp do
     end
   end
 
-  defp resolve_resume_worktree(params) do
-    if params[:resume] && is_nil(params[:isolation]) do
-      matches =
-        case SessionFiles.discover(params[:cwd], limit: 100) do
-          {:ok, sessions} ->
-            Enum.filter(sessions, &String.starts_with?(&1["ompSessionId"], params[:resume]))
+  defp resolve_resume(params) do
+    if params[:resume] do
+      case SessionFiles.resolve_resume(params[:cwd], params[:resume]) do
+        {:ok, entry, session_dir} ->
+          params =
+            Keyword.merge(params,
+              resume: entry["ompSessionId"],
+              session_dir: session_dir,
+              session_source: entry["source"]
+            )
 
-          _ ->
-            []
-        end
+          worktree =
+            if is_nil(params[:isolation]) and entry["worktree"] do
+              Enum.find(Worktree.kept(params[:cwd]), &(&1.path == entry["worktree"]["path"]))
+            end
 
-      case matches do
-        [%{"worktree" => %{"path" => path}}] ->
-          case Enum.find(Worktree.kept(params[:cwd]), &(&1.path == path)) do
-            nil -> params
-            worktree -> Keyword.put(params, :resumed_worktree, worktree)
-          end
+          {:ok, Keyword.put(params, :resumed_worktree, worktree)}
 
-        _ ->
-          params
+        {:error, :not_found} ->
+          # Let omp resolve histories beyond discovery's bounded inventory.
+          {:ok, params}
+
+        {:error, reason} ->
+          {:error, reason}
       end
     else
-      params
+      {:ok, params}
     end
   end
 
@@ -531,15 +534,15 @@ defmodule LemonOmp do
   end
 
   @doc """
-  Read-only list of omp's stored sessions for workspace `cwd`, marking any
-  that a live Lemon invocation currently owns.
+  Read-only list of stored sessions from Lemon's history and omp's own default
+  for workspace `cwd`, tagged with `source` and marking live Lemon invocations.
   """
   @spec discover(String.t(), keyword()) :: {:ok, [map()]} | {:error, reason()}
   def discover(cwd, opts \\ [])
 
   def discover(cwd, opts) when is_binary(cwd) do
     with {:ok, sessions} <-
-           SessionFiles.discover(cwd, Keyword.take(opts, [:limit, :sessions_dir])) do
+           SessionFiles.discover(cwd, Keyword.take(opts, [:limit, :sessions_dir, :session_dir])) do
       live =
         for {_id, pid, wire} <- Manager.all(),
             Manager.live?(pid, wire),

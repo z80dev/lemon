@@ -105,6 +105,7 @@ defmodule LemonOmp.SessionFilesTest do
 
     assert session == %{
              "ompSessionId" => "01aaa",
+             "source" => "omp",
              "title" => "Refactor the parser",
              "cwd" => ctx.canonical,
              "createdAt" => 1_791_885_600_000,
