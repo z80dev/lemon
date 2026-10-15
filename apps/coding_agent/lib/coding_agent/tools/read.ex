@@ -24,6 +24,7 @@ defmodule CodingAgent.Tools.Read do
   alias CodingAgent.Tools.PathHelpers
   alias CodingAgent.Tools.ReadArchive
   alias CodingAgent.Tools.ReadFormats
+  alias CodingAgent.Tools.ReadImageQuestion
   alias CodingAgent.Tools.ReadSummary
   alias CodingAgent.Tools.ReadSvg
   alias CodingAgent.Tools.ReadText
@@ -87,6 +88,9 @@ defmodule CodingAgent.Tools.Read do
           "Bare reads of code files with at least 300 lines (up to 2 MiB) return an immutable structural summary; " <>
           "re-read explicit ranges before editing, or pass summary: false for full text. " <>
           "SVG/SVGZ default to text; use path.svg:img for a bounded PNG preview (requires rsvg-convert). " <>
+          "For image questions use path.png?q=question (or path.svg:img?q=question); " <>
+          "uses configured model_roles.vision or the active image-capable model and returns text. " <>
+          "Prefer a bare image path when the active model supports images. " <>
           "Text output is capped at 2000 lines / 50KB. PDF page/page_limit and notebook cell/cell_limit select source units. " <>
           "Returned skill:// and artifact:// references are readable paths.",
       label: "Read File",
@@ -234,6 +238,22 @@ defmodule CodingAgent.Tools.Read do
   end
 
   defp do_execute(params, signal, cwd, opts) do
+    case ReadImageQuestion.split_path(Map.get(params, "path"), cwd, opts) do
+      {:ok, source, question} ->
+        params
+        |> Map.put("path", source)
+        |> read_selected(signal, cwd, opts)
+        |> ReadImageQuestion.answer(question, signal, cwd, opts)
+
+      :none ->
+        read_selected(params, signal, cwd, opts)
+
+      {:error, _} = error ->
+        error
+    end
+  end
+
+  defp read_selected(params, signal, cwd, opts) do
     case apply_path_selector(params, cwd, opts) do
       {:ok, params, %{image: true}} ->
         with {:ok, path} <- resolve_path(params["path"], cwd, opts),

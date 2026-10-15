@@ -107,6 +107,30 @@ constructors can set `:svg_rasterizer`, `:svg_timeout_ms`, `:image_max_dimension
 and `:image_max_bytes`. `:img` is SVG-only and cannot be combined with text
 selectors or offset/limit. Existing literal filenames still take precedence.
 
+## Image questions
+
+`read photo.png?q=What%20is%20shown%3F` sends the image and decoded question to a
+vision-capable model and returns answer text instead of pixels. This works for
+the supported raster formats (PNG, JPEG, GIF and WebP), plus rendered SVG/SVGZ:
+`read drawing.svg:img?q=Describe%20the%20layout`. Prefer a bare image path when
+the active model already supports images, avoiding an extra model request.
+
+The configured `[model_roles] vision = "provider:model"` role takes precedence
+(role aliases are supported). Otherwise the session's current model must
+declare image input support. A text-only session without a vision role receives
+configuration guidance, never an implicit provider/model fallback. Credentials,
+custom model definitions and provider options use the ordinary session model
+resolver. Image questions make a separate provider request; ordinary image reads
+remain local. Answers request at most 1024 output tokens with a 30-second stream
+timeout, are capped at 8192 characters, and remain untrusted file-derived content.
+
+Only a `?q=` suffix on an existing local source is recognized. Existing literal
+filenames win, including names containing `?` or `?q=`; the last suffix whose
+base exists is selected. Question text accepts URL encoding (`+` for spaces,
+`%26` for `&`). Non-image sources are rejected; JSON and SQLite retain their
+own query syntax. Tool constructors may supply `:image_question_complete`
+(a three-argument model/context/options completion function) for isolated tests.
+
 ## Merge conflicts
 
 `read path:conflicts` indexes local Git conflict regions as `#N Lx-Ly` with
