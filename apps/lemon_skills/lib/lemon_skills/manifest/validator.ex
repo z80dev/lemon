@@ -26,7 +26,7 @@ defmodule LemonSkills.Manifest.Validator do
   # These limits are enforced at ingestion so every downstream renderer and
   # relevance query can treat the normalized manifest as bounded data.
   @max_name_bytes 128
-  @max_description_bytes 1_024
+  @max_description_bytes 4_096
   @max_list_items 32
   @max_list_item_bytes 128
   @unsafe_metadata ~r/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F\x{061C}\x{200E}\x{200F}\x{202A}-\x{202E}\x{2066}-\x{2069}]/u
@@ -87,6 +87,7 @@ defmodule LemonSkills.Manifest.Validator do
              "description",
              @max_description_bytes
            ),
+         :ok <- validate_description_length(manifest),
          :ok <- validate_metadata_list(manifest, "tags"),
          :ok <- validate_metadata_list(manifest, "keywords"),
          :ok <- validate_requires(manifest),
@@ -121,6 +122,9 @@ defmodule LemonSkills.Manifest.Validator do
           nil ->
             :ok
 
+          lemon when is_binary(lemon) ->
+            :ok
+
           lemon when is_map(lemon) ->
             validate_optional_metadata_string(lemon, "category", @max_list_item_bytes)
 
@@ -130,6 +134,18 @@ defmodule LemonSkills.Manifest.Validator do
 
       _ ->
         {:error, "metadata must be a map"}
+    end
+  end
+
+  defp validate_description_length(manifest) do
+    case Map.get(manifest, "description") do
+      value when is_binary(value) ->
+        if String.length(value) <= 1_024,
+          do: :ok,
+          else: {:error, "description is too long (max 1024 characters)"}
+
+      _ ->
+        :ok
     end
   end
 

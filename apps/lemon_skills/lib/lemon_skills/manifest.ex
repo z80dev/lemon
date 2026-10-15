@@ -22,6 +22,16 @@ defmodule LemonSkills.Manifest do
   - `verification` — a map describing how to check the skill works
   - `references` — list of paths or URLs to supplementary files
 
+  ## Agent Skills interoperability
+
+  Agent Skills YAML fields `license`, `compatibility`, `metadata`, and
+  experimental `allowed-tools` are retained, not converted into permissions.
+  The validator also supports Lemon's nested `metadata.lemon` extension; a
+  portable string-valued `metadata.lemon` remains ordinary metadata.
+  Validation intentionally permits legacy display names and missing fields,
+  while applying bounded single-line prompt-metadata safety constraints.
+  It is not a strict Agent Skills portability validator.
+
   ## Legacy skills
 
   Skills with only v1 fields continue to parse and validate without changes.

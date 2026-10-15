@@ -17,6 +17,9 @@
 
 ### Fixed
 
+- File overwrites reject truncated read output and preserve existing UTF-8 BOMs
+  and dominant CRLF endings, including ACP writes with available prior content.
+
 - Named-node file requests no longer return `filesystem_failed` when a parent
   symlink is swapped back to a directory while the path resolves. Each component
   is classified with one descriptor-relative `readlinkat`, so concurrent

@@ -74,6 +74,38 @@ defmodule CodingAgent.ExecutionNode.CapabilitiesTest do
     defdelegate tool_names(cwd, opts), to: DiagnosticsProbe
   end
 
+  defmodule ComputerUseProbe do
+    defdelegate executable(name), to: Probe
+    defdelegate shell_available?(), to: Probe
+    defdelegate root_access(opts), to: Probe
+    defdelegate browser_status(), to: Probe
+    defdelegate mcp_available?(), to: Probe
+    defdelegate command(name, args), to: Probe
+    def tool_names(_, _), do: {:ok, ~w(read bash cua_js cua_js_reset)}
+  end
+
+  test "computer use is measured from the destination's registered tools" do
+    assert {:ok, enabled} =
+             Capabilities.get(platform: {:unix, :darwin}, capability_probe: ComputerUseProbe)
+
+    item = Enum.find(enabled["items"], &(&1["id"] == "computer_use"))
+
+    assert %{
+             "category" => "os_app",
+             "supported" => true,
+             "configuredLevel" => "read_interact",
+             "osGrant" => "unknown",
+             "tools" => ["cua_js", "cua_js_reset"],
+             "reason" => "computer_use_enabled_per_app_approval"
+           } = item
+
+    assert {:ok, disabled} = Capabilities.get(platform: {:unix, :darwin}, capability_probe: Probe)
+    item = Enum.find(disabled["items"], &(&1["id"] == "computer_use"))
+
+    assert %{"supported" => false, "configuredLevel" => "off", "tools" => []} = item
+    assert item["reason"] == "computer_use_not_enabled"
+  end
+
   test "measured denial, grant, and unqueryable permissions remain distinct" do
     assert {:ok, snapshot} = Capabilities.get(platform: {:unix, :darwin}, capability_probe: Probe)
     by_id = Map.new(snapshot["items"], &{&1["id"], &1})

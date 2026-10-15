@@ -92,12 +92,32 @@ export function ompSessionLabel(session: OmpSession, maxLength = PREVIEW_MAX_LEN
 	return safeLine(session.title, maxLength) || session.id;
 }
 
+/** Bounded plain-text facts shared by tool cards and semantic session nodes. */
+export function ompExtraLines(value: unknown): string[] {
+	const raw = record(value);
+	const lines: string[] = [];
+	if (Array.isArray(raw.pendingApprovals)) {
+		for (const approval of raw.pendingApprovals.slice(0, 4)) {
+			lines.push(`waiting for approval: ${safeLine(str(record(approval).tool) ?? "tool", 60)}`);
+		}
+	}
+	const tree = record(raw.worktree);
+	if (Object.keys(tree).length) {
+		lines.push(
+			`worktree: ${safeLine(str(tree.branch) ?? str(tree.path) ?? "unknown", 100)}${tree.kept === true ? " · kept" : ""}${tree.dirty === true ? " · dirty" : ""}`,
+		);
+	}
+	return lines;
+}
+
 function sessionLines(session: OmpSession, details: Record<string, unknown>): string[] {
-	const lines: string[] = [`status: ${ompStatusText(session)}`];
+	const lines: string[] = [...ompExtraLines(details.session), `status: ${ompStatusText(session)}`];
 	const identity = session.ompSessionId
 		? `${session.id} · omp ${safeLine(session.ompSessionId, 40)}`
 		: session.id;
 	lines.push(`id: ${identity}`);
+	if (session.model) lines.push(`model: ${safeLine(session.model, 100)}`);
+	if (session.thinking) lines.push(`thinking: ${safeLine(session.thinking, 30)}`);
 	if (session.activity) lines.push(`activity: ${safeLine(session.activity)}`);
 	for (const tool of session.activeTools) {
 		const intent = tool.intent ? ` — ${safeLine(tool.intent, 120)}` : "";
@@ -111,6 +131,15 @@ function sessionLines(session: OmpSession, details: Record<string, unknown>): st
 	if (delivery) lines.push(`delivery: ${safeLine(delivery, 20)}`);
 	if (session.declinedPrompts > 0) {
 		lines.push(`declined prompts: ${session.declinedPrompts}`);
+	}
+	for (const child of (Array.isArray(record(details.session).subagents)
+		? (record(details.session).subagents as unknown[])
+		: []
+	).slice(0, 4)) {
+		const agent = record(child);
+		lines.push(
+			`↳ ${safeLine(str(agent.id) ?? "subagent", 40)} · ${safeLine(str(agent.status) ?? "unknown", 20)}${agent.activity ? ` · ${safeLine(str(agent.activity) ?? "", 100)}` : ""}`,
+		);
 	}
 	if (session.error) lines.push(`error: ${safeLine(session.error)}`);
 	const text = session.result ?? session.lastText;
@@ -144,6 +173,74 @@ function formatOmpResult(result: unknown, args: Record<string, unknown> = {}): F
 	const isError = obj.is_error === true;
 	const text = safeText(extractText(result)).trim();
 
+	if ((action === "start_many" || action === "wait") && Array.isArray(details.sessions)) {
+		const sessions = parseOmpSessions(details.sessions);
+		const lines = sessions
+			.slice(0, 8)
+			.map((worker) =>
+				[
+					safeLine(worker.id, 40),
+					ompStatusText(worker),
+					safeLine(worker.result ?? worker.activity ?? worker.lastText ?? worker.error ?? "", 100),
+					ompTodoProgress(worker.todos) ? `todos ${ompTodoProgress(worker.todos)}` : undefined,
+				]
+					.filter(Boolean)
+					.join(" · "),
+			);
+		const usage = record(details.usage);
+		const total =
+			typeof usage.totalTokens === "number" && Number.isFinite(usage.totalTokens)
+				? compactCount(usage.totalTokens)
+				: "?";
+		const cost =
+			typeof usage.cost === "number" && Number.isFinite(usage.cost)
+				? `$${usage.cost.toFixed(4)}`
+				: "?";
+		lines.push(`combined: ${total} tok · ${cost}`);
+		if (details.reason) lines.push(`wait: ${safeLine(str(details.reason) ?? "", 30)}`);
+		for (const value of (Array.isArray(details.errors) ? details.errors : []).slice(0, 8)) {
+			const error = record(value);
+			lines.push(
+				`task ${typeof error.task === "number" ? error.task + 1 : "?"}: ${safeLine(str(error.error) ?? "error", 50)} · ${safeLine(str(error.message) ?? "", 160)}`,
+			);
+		}
+		return {
+			summary: `${action} · ${sessions.length} workers`,
+			details: truncateLines(lines, DETAILS_MAX_LINES),
+			isError,
+		};
+	}
+	if (action === "models" && Array.isArray(details.models)) {
+		const lines = details.models.slice(0, DETAILS_MAX_LINES - 1).map((value) => {
+			const model = record(value);
+			const input =
+				typeof model.costInput === "number" && Number.isFinite(model.costInput)
+					? `$${model.costInput}`
+					: "?";
+			const output =
+				typeof model.costOutput === "number" && Number.isFinite(model.costOutput)
+					? `$${model.costOutput}`
+					: "?";
+			return `${safeLine(str(model.selector) ?? "unknown", 100)} · ctx ${typeof model.contextWindow === "number" ? compactCount(model.contextWindow) : "?"} · ${model.free === true ? "FREE" : `${input}/${output} per Mtok`}`;
+		});
+		lines.push("Catalog prices may change; free routes may be unavailable.");
+		return { summary: `models · ${details.models.length} models`, details: lines, isError };
+	}
+	if (action === "subagent" && Array.isArray(record(details.transcript).messages)) {
+		const messages = record(details.transcript).messages as unknown[];
+		const lines = messages.slice(-6).flatMap((value) => {
+			const message = record(value);
+			return [
+				`[${safeLine(str(message.role) ?? "unknown", 20)}${message.toolName ? ` ${safeLine(str(message.toolName) ?? "", 40)}` : ""}]`,
+				...truncateLines(safeText(str(message.text) ?? "").split("\n"), 3),
+			];
+		});
+		return {
+			summary: `subagent · ${safeLine(str(details.subagentId) ?? "", 60)}`,
+			details: truncateLines(lines, DETAILS_MAX_LINES),
+			isError,
+		};
+	}
 	if (action === "list" && Array.isArray(details.sessions)) {
 		const sessions = parseOmpSessions(details.sessions);
 		const busy = sessions.filter(isOmpSessionBusy).length;
@@ -157,7 +254,13 @@ function formatOmpResult(result: unknown, args: Record<string, unknown> = {}): F
 		const rows = parseOmpDiscoveredList(details.sessions);
 		return {
 			summary: `discover · ${rows.length} session${rows.length === 1 ? "" : "s"}`,
-			details: truncateLines(rows.map(discoveredLine), DETAILS_MAX_LINES),
+			details: truncateLines(
+				rows.slice(0, DETAILS_MAX_LINES).map((row, index) => {
+					const raw = record((details.sessions as unknown[])[index]);
+					return `${discoveredLine(row)}${raw.source ? ` · ${safeLine(str(raw.source) ?? "", 20)}` : ""}${raw.interrupted === true ? " · interrupted" : ""}${record(raw.worktree).branch ? ` · ${safeLine(str(record(raw.worktree).branch) ?? "", 60)}` : ""}`;
+				}),
+				DETAILS_MAX_LINES,
+			),
 			isError,
 		};
 	}
@@ -169,6 +272,7 @@ function formatOmpResult(result: unknown, args: Record<string, unknown> = {}): F
 				`${action} · ${ompSessionLabel(session)}`,
 				ompStatusText(session),
 				todos ? `todos ${todos}` : undefined,
+				ompExtraLines(details.session).find((line) => line.startsWith("waiting for approval:")),
 			]
 				.filter(Boolean)
 				.join(" · "),
@@ -207,6 +311,15 @@ export const ompFormatter: ToolFormatter = {
 		if (typeof args.timeout_seconds === "number") {
 			details.push(`timeout_seconds: ${args.timeout_seconds}`);
 		}
+		if (Array.isArray(args.tasks)) details.push(`workers: ${args.tasks.length}`);
+		if (Array.isArray(args.ids))
+			details.push(
+				`ids: ${args.ids
+					.slice(0, 8)
+					.map((id) => safeLine(str(id) ?? "?", 40))
+					.join(", ")}`,
+			);
+		if (args.continue === true) details.push("continue: true");
 		if (args.wait === true) details.push("wait: true");
 		if (body) details.push("", ...truncateLines(safeText(body).split("\n"), 10));
 		return {
