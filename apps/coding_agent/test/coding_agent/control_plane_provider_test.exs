@@ -7,6 +7,13 @@ defmodule CodingAgent.ControlPlaneProviderTest do
   use ExUnit.Case, async: false
 
   alias CodingAgent.ControlPlaneProvider
+  alias CodingAgent.Session.BudgetLedger
+  alias CodingAgent.Session.MessageSerialization
+  alias CodingAgent.Session.Presentation
+  alias CodingAgent.SessionManager.SessionEntry
+  alias CodingAgent.Tools.TodoStore
+  alias CodingAgent.Tools.TodoWrite
+  alias LemonAgent.Test.Mocks
 
   defmodule BusyBackend do
     @behaviour LemonCore.Store.Backend
@@ -95,7 +102,7 @@ defmodule CodingAgent.ControlPlaneProviderTest do
       session =
         CodingAgent.SessionManager.new(cwd)
         |> CodingAgent.SessionManager.append_entry(
-          CodingAgent.SessionManager.SessionEntry.model_change("openai-codex", "gpt-6.1-sol")
+          SessionEntry.model_change("openai-codex", "gpt-6.1-sol")
         )
         |> CodingAgent.SessionManager.append_message(%{
           "role" => "user",
@@ -110,7 +117,7 @@ defmodule CodingAgent.ControlPlaneProviderTest do
           "content" => "TODO: blue widgets"
         })
 
-      path = CodingAgent.Session.Presentation.session_file_path(session.header.id, cwd)
+      path = Presentation.session_file_path(session.header.id, cwd)
       :ok = CodingAgent.SessionManager.save_to_file(path, session)
 
       :ok =
@@ -141,7 +148,7 @@ defmodule CodingAgent.ControlPlaneProviderTest do
                ControlPlaneProvider.session_history(context.destination, context.cwd)
 
       child_path =
-        CodingAgent.Session.Presentation.session_file_path(child.last_resume_token, context.cwd)
+        Presentation.session_file_path(child.last_resume_token, context.cwd)
 
       assert {:ok, child_session} = CodingAgent.SessionManager.load_from_file(child_path)
       assert entries == CodingAgent.SessionManager.get_branch(child_session)
@@ -149,8 +156,8 @@ defmodule CodingAgent.ControlPlaneProviderTest do
       assert CodingAgent.SessionManager.build_session_context(child_session) ==
                CodingAgent.SessionManager.build_session_context(context.session)
 
-      assert CodingAgent.Session.BudgetLedger.restore(child_session) ==
-               CodingAgent.Session.BudgetLedger.restore(context.session)
+      assert BudgetLedger.restore(child_session) ==
+               BudgetLedger.restore(context.session)
 
       assert {:error, :destination_exists} =
                ControlPlaneProvider.session_fork(context.source, context.cwd, context.destination)
@@ -163,7 +170,7 @@ defmodule CodingAgent.ControlPlaneProviderTest do
         workspace_dir: Path.join(context.cwd, "workspace"),
         session_file: context.path,
         session_key: context.source,
-        model: LemonAgent.Test.Mocks.mock_model(),
+        model: Mocks.mock_model(),
         tools: []
       ]
 
@@ -171,7 +178,7 @@ defmodule CodingAgent.ControlPlaneProviderTest do
       empty_leaf = CodingAgent.Session.get_state(pid).session_manager.leaf_id
 
       first =
-        CodingAgent.Tools.TodoWrite.execute(
+        TodoWrite.execute(
           "first",
           %{
             "todos" => [
@@ -187,8 +194,8 @@ defmodule CodingAgent.ControlPlaneProviderTest do
       assert %LemonAgent.Types.AgentToolResult{} = first
       first_leaf = CodingAgent.Session.get_state(pid).session_manager.leaf_id
       native_id = context.session.header.id
-      CodingAgent.Tools.TodoStore.delete(native_id)
-      CodingAgent.Tools.TodoStore.put(context.source, [%{"status" => "completed"}])
+      TodoStore.delete(native_id)
+      TodoStore.put(context.source, [%{"status" => "completed"}])
 
       assert {:ok, first_todos, _} =
                ControlPlaneProvider.session_todos(context.source, context.cwd)
@@ -208,7 +215,7 @@ defmodule CodingAgent.ControlPlaneProviderTest do
                CodingAgent.Session.navigate_tree(pid, first_leaf, summarize_abandoned: false)
 
       stop_supervised!(CodingAgent.Session)
-      CodingAgent.Tools.TodoStore.delete(native_id)
+      TodoStore.delete(native_id)
 
       assert {:ok, ^first_todos, {0, ^first_leaf}} =
                ControlPlaneProvider.session_todos(context.source, context.cwd)
@@ -226,15 +233,15 @@ defmodule CodingAgent.ControlPlaneProviderTest do
       assert {:ok, ^first_todos, _} = CodingAgent.Session.todos(resumed)
 
       assert %LemonAgent.Types.AgentToolResult{} =
-               CodingAgent.Tools.TodoWrite.execute("clear", %{"todos" => []}, nil, nil, resumed)
+               TodoWrite.execute("clear", %{"todos" => []}, nil, nil, resumed)
 
       assert {:ok, [], _} = ControlPlaneProvider.session_todos(context.source, context.cwd)
 
       assert {:ok, ^first_todos, _} =
                ControlPlaneProvider.session_todos(context.destination, context.cwd)
 
-      CodingAgent.Tools.TodoStore.delete(context.source)
-      CodingAgent.Tools.TodoStore.delete(native_id)
+      TodoStore.delete(context.source)
+      TodoStore.delete(native_id)
     end
 
     test "manual compaction works after the native session process has stopped", context do
@@ -269,7 +276,7 @@ defmodule CodingAgent.ControlPlaneProviderTest do
       session =
         context.session
         |> CodingAgent.SessionManager.append_message(
-          CodingAgent.Session.MessageSerialization.serialize_message(assistant)
+          MessageSerialization.serialize_message(assistant)
         )
 
       :ok = CodingAgent.SessionManager.save_to_file(context.path, session)

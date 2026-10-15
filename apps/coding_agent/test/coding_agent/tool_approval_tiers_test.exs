@@ -1,8 +1,10 @@
 defmodule CodingAgent.ToolApprovalTiersTest do
   use ExUnit.Case, async: true
-  alias CodingAgent.{ToolExecutor, ToolPolicy, ToolRegistry}
   alias CodingAgent.Extensions.ToolHooks
+  alias CodingAgent.{ToolExecutor, ToolPolicy, ToolRegistry}
+  alias CodingAgent.Tools.WebFetch
   alias LemonAgent.Types.AgentTool
+  alias LemonCore.Config.Tools
 
   test "registry resolves approval against hook-rewritten LSP arguments" do
     parent = self()
@@ -72,7 +74,7 @@ defmodule CodingAgent.ToolApprovalTiersTest do
 
   test "canonical config seeds mode in registry while an explicit policy wins" do
     parent = self()
-    config = %{tools: LemonCore.Config.Tools.resolve(%{"tools" => %{"approval_mode" => "ask"}})}
+    config = %{tools: Tools.resolve(%{"tools" => %{"approval_mode" => "ask"}})}
 
     approval = fn _ ->
       send(parent, :asked)
@@ -159,12 +161,12 @@ defmodule CodingAgent.ToolApprovalTiersTest do
 
   test "canonical configured body cap reaches guarded fetch" do
     tools =
-      LemonCore.Config.Tools.resolve(%{
+      Tools.resolve(%{
         "tools" => %{"web" => %{"fetch" => %{"max_body_bytes" => 3}}}
       })
 
     tool =
-      CodingAgent.Tools.WebFetch.tool("/tmp",
+      WebFetch.tool("/tmp",
         settings_manager: %{tools: tools},
         cache_opts: %{"persistent" => false},
         http_get: fn _, _ -> {:ok, Req.Response.new(body: "oversized")} end

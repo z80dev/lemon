@@ -1,6 +1,7 @@
 defmodule CodingAgent.Session.ProviderFallbackResilienceTest do
   use ExUnit.Case, async: false
 
+  alias CodingAgent.Session.ModelResolver
   alias CodingAgent.Session.ProviderFallback
   alias CodingAgent.SettingsManager
   alias LemonAgent.ModelRuntime.{CredentialHealth, SessionPins}
@@ -148,7 +149,7 @@ defmodule CodingAgent.Session.ProviderFallbackResilienceTest do
     settings = %{settings | provider_routing: routing}
 
     primary =
-      CodingAgent.Session.ModelResolver.resolve_session_model(
+      ModelResolver.resolve_session_model(
         "azure_openai_responses:gpt-4",
         settings
       )

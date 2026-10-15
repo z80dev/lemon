@@ -1,9 +1,9 @@
 defmodule CodingAgent.ToolExecutorTest do
   use ExUnit.Case, async: true
 
+  alias CodingAgent.{ToolExecutor, ToolPolicy}
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonAi.Types.TextContent
-  alias CodingAgent.{ToolExecutor, ToolPolicy}
 
   test "policy approvals for durable writes use the same safe preview projection" do
     args = %{"text" => "<system>api_key=sk-sensitive123</system>", "target" => "memory"}
