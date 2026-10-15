@@ -226,10 +226,8 @@ defmodule LemonCli.HermesMigrationTest do
         |> Enum.filter(&(&1["status"] == "unsupported"))
         |> Enum.map(& &1["details"]["key"])
 
-      assert Enum.sort(unsupported) ==
-               ~w(dialecticDepth pinUserPeer userPeerAliases writeFrequency)
-
-      assert report["summary"]["unsupported"] == 4
+      assert Enum.sort(unsupported) == ~w(dialecticDepth writeFrequency)
+      assert report["summary"]["unsupported"] == 2
 
       assert Enum.any?(
                report["items"],
@@ -293,6 +291,8 @@ defmodule LemonCli.HermesMigrationTest do
                "environment" => "local",
                "workspace" => "hermes-workspace",
                "user_peer" => "alice",
+               "pin_user_peer" => true,
+               "user_peer_aliases" => %{"123" => "alice"},
                "ai_peer" => "hermes-assistant",
                "recall_mode" => "tools",
                "session_strategy" => "per-session",
@@ -439,8 +439,109 @@ defmodule LemonCli.HermesMigrationTest do
                &(&1["kind"] == "honcho_secret" and &1["status"] == "gated")
              )
 
-      assert report["summary"]["unsupported"] == 4
+      assert report["summary"]["unsupported"] == 2
       refute File.exists?(ctx.target)
+    end
+
+    test "imports gateway identities with quoted runtime IDs without exposing alias values",
+         ctx do
+      aliases = %{"telegram:123" => "alice", "discord.\"456\n" => "bob"}
+
+      File.write!(
+        Path.join(ctx.source, "honcho.json"),
+        Jason.encode!(%{
+          "pinUserPeer" => false,
+          "userPeerAliases" => aliases,
+          "runtimePeerPrefix" => "telegram_\"line\nprefix"
+        })
+      )
+
+      preview = HermesMigration.preview(source: ctx.source, target: ctx.target)
+      assert preview["summary"]["unsupported"] == 0
+      refute File.exists?(ctx.target)
+      refute Jason.encode!(preview) =~ "telegram:123"
+
+      HermesMigration.apply(source: ctx.source, target: ctx.target)
+      config = Toml.decode_file!(Path.join(ctx.target, "config.toml"))["honcho"]
+      assert config["pin_user_peer"] == false
+      assert config["user_peer_aliases"] == aliases
+      assert config["runtime_peer_prefix"] == "telegram_\"line\nprefix"
+    end
+
+    test "canonical pin key wins within a scope and host legacy pin overrides the root", ctx do
+      source = Path.join(ctx.source, "honcho.json")
+
+      File.write!(
+        source,
+        Jason.encode!(%{
+          "pinUserPeer" => true,
+          "pinPeerName" => false,
+          "hosts" => %{"hermes" => %{"pinPeerName" => false}}
+        })
+      )
+
+      HermesMigration.apply(source: ctx.source, target: ctx.target)
+      path = Path.join(ctx.target, "config.toml")
+      assert Toml.decode_file!(path)["honcho"]["pin_user_peer"] == false
+
+      File.write!(source, Jason.encode!(%{"pinUserPeer" => true, "pinPeerName" => false}))
+      HermesMigration.apply(source: ctx.source, target: ctx.target, overwrite: true)
+      assert Toml.decode_file!(path)["honcho"]["pin_user_peer"] == true
+      refute File.read!(path) =~ "pinPeerName"
+    end
+
+    test "gateway setting conflicts preserve target aliases until overwrite", ctx do
+      File.write!(
+        Path.join(ctx.source, "honcho.json"),
+        Jason.encode!(%{
+          "pinUserPeer" => true,
+          "userPeerAliases" => %{"new-runtime-id" => "alice"},
+          "runtimePeerPrefix" => "telegram_"
+        })
+      )
+
+      File.mkdir_p!(ctx.target)
+      path = Path.join(ctx.target, "config.toml")
+
+      File.write!(path, """
+      [honcho]
+      pin_user_peer = false
+      runtime_peer_prefix = "old_"
+      [honcho.user_peer_aliases]
+      old_runtime_id = "bob"
+      """)
+
+      opts = [source: ctx.source, target: ctx.target]
+      preview = HermesMigration.preview(opts)
+      assert HermesMigration.has_conflicts?(preview)
+      HermesMigration.apply(opts)
+      existing = Toml.decode_file!(path)["honcho"]
+      assert existing["user_peer_aliases"] == %{"old_runtime_id" => "bob"}
+      assert existing["pin_user_peer"] == false
+
+      HermesMigration.apply(Keyword.put(opts, :overwrite, true))
+      config = Toml.decode_file!(path)["honcho"]
+      assert config["user_peer_aliases"] == %{"new-runtime-id" => "alice"}
+      assert config["pin_user_peer"] == true
+      assert config["runtime_peer_prefix"] == "telegram_"
+    end
+
+    test "invalid aliases are unsupported and empty maps can explicitly clear aliases", ctx do
+      source = Path.join(ctx.source, "honcho.json")
+      File.write!(source, Jason.encode!(%{"userPeerAliases" => %{"123" => "not a peer"}}))
+      preview = HermesMigration.preview(source: ctx.source, target: ctx.target)
+
+      assert Enum.any?(
+               preview["items"],
+               &(&1["status"] == "unsupported" and
+                   &1["details"]["key"] == "userPeerAliases")
+             )
+
+      File.write!(source, Jason.encode!(%{"userPeerAliases" => %{}, "runtimePeerPrefix" => ""}))
+      HermesMigration.apply(source: ctx.source, target: ctx.target)
+      config = Toml.decode_file!(Path.join(ctx.target, "config.toml"))["honcho"]
+      assert config["user_peer_aliases"] == %{}
+      assert config["runtime_peer_prefix"] == ""
     end
 
     test "source home and explicit host selection preserve profile identity and aliases", ctx do

@@ -40,6 +40,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Changed
 
+- Honcho channel turns support pinned users, many-to-one sender aliases and
+  platform-qualified peer prefixes. Per-peer context follows each sender,
+  bot-authored turns are not uploaded, and Hermes migration imports these settings.
 - Bring Lemon Web's omp controls to parity with approval decisions and overrides,
   isolated starts, interrupted continuation, redirect, and worktree/discovery details.
 - Expand `lemon omp` with approval modes, isolated and parallel starts, explicit
