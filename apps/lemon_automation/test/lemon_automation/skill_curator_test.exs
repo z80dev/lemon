@@ -1,5 +1,5 @@
 defmodule LemonAutomation.SkillCuratorTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
   alias LemonAutomation.SkillCurator
 
@@ -61,28 +61,56 @@ defmodule LemonAutomation.SkillCuratorTest do
       %{enabled: true, prompt: "not-other-helper-extra", meta: %{"skills" => ["metadata-only"]}}
     ]
 
-    assert SkillCurator.referenced_skills(jobs, ["deploy-helper", "metadata-only", "other-helper"]) ==
+    assert LemonAutomation.CuratorReferences.references(jobs, [
+             "deploy-helper",
+             "metadata-only",
+             "other-helper"
+           ]) ==
              ["deploy-helper", "metadata-only"]
   end
 
   @tag :tmp_dir
-  test "passes persisted cron references to the curator", %{tmp_dir: cwd} do
+  test "API and automation curator paths exempt persisted disabled cron references", %{
+    tmp_dir: cwd
+  } do
     path = LemonSkills.Config.project_usage_file(cwd)
     File.mkdir_p!(Path.dirname(path))
-    File.write!(path, Jason.encode!(%{"version" => 1, "skills" => %{"cron-skill" => %{}}}))
 
-    assert {:ok, _} =
+    File.write!(
+      path,
+      Jason.encode!(%{
+        "version" => 1,
+        "skills" => %{
+          "cron-skill" => %{"created_by" => "agent", "created_at" => "2026-01-01T00:00:00Z"}
+        }
+      })
+    )
+
+    id = "curator-reference-#{System.unique_integer([:positive])}"
+
+    :ok =
+      LemonCore.Store.put(:cron_jobs, id, %{
+        "id" => id,
+        "enabled" => false,
+        "prompt" => "Use cron-skill"
+      })
+
+    on_exit(fn -> LemonAutomation.CronStore.delete_job(id) end)
+    opts = [scope: :project, cwd: cwd, now: ~U[2026-05-06 00:00:00Z]]
+    assert {:ok, result} = LemonSkills.curate_skills(opts)
+    assert result.auto_transitions.checked == 0
+
+    assert {:ok, result} =
              SkillCurator.run_once(
-               enabled: true,
-               scope: :project,
-               cwd: cwd,
-               curator_mod: ReviewCurator,
-               router_mod: RouterStub,
-               cron_jobs_fun: fn -> [%{enabled: false, prompt: "Use cron-skill", meta: nil}] end
+               Keyword.put(opts, :now, ~U[2026-05-14 00:00:00Z]) ++
+                 [
+                   enabled: true,
+                   router_mod: RouterStub
+                 ]
              )
 
-    assert_received {:curator_run, opts}
-    assert opts[:exempt_skills] == ["cron-skill"]
+    assert result.auto_transitions.checked == 0
+    refute LemonSkills.Config.skill_disabled?("cron-skill", cwd)
   end
 
   test "skips when disabled" do
