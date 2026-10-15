@@ -929,6 +929,7 @@ defmodule LemonChannels.Adapters.Discord.Transport do
       scope = %ChatScope{transport: :discord, chat_id: channel_id, topic_id: thread_id}
 
       context = %{
+        surface: "discord",
         session_key: session_key,
         cwd: BindingResolver.resolve_cwd(scope)
       }

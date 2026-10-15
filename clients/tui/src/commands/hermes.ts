@@ -304,7 +304,10 @@ export const btwCommand: SlashCommand = {
 /** Normalize a daemon catalog without imposing one response version on it. */
 export function serverCatalogLines(result: unknown, filter?: string): string[] {
 	const record = asRecord(result);
-	const rows = asArray(record?.commands ?? record?.items ?? record?.catalog);
+	const rows = asArray(record?.commands ?? record?.items ?? record?.catalog).filter((row) => {
+		const surfaces = asRecord(row)?.surfaces;
+		return !Array.isArray(surfaces) || surfaces.includes("tui");
+	});
 	const wanted = filter?.toLowerCase().replace(/^\//, "");
 	const matching = wanted
 		? rows.filter((row) => {

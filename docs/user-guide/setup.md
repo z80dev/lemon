@@ -236,6 +236,25 @@ allowlist counts, registered transports) with:
 lemon channels
 ```
 
+### Channel commands
+
+Send `/help` or `/commands` in the bot conversation to see commands accepted by
+that platform, including aliases. Telegram also populates the bot's `/` menu at
+startup from the same catalog. Admin-only controls are excluded from the public
+menu; a menu entry does not bypass chat authorization or command permissions.
+If Telegram rejects menu registration, the transport still starts and typed
+commands remain available.
+
+Both Telegram and Discord support `/model`, `/resume`, `/file`, `/checkpoint`,
+`/rollback`, `/goal`, `/kanban`, and `/media`, alongside `/queue`, `/steer`,
+`/status`, `/usage`, `/agents`, `/compress`, `/bg`, and `/btw`.
+Use `/new` on Telegram or `/session new` on Discord to start fresh; `/reset`
+works on both. `/cancel` and `/stop` cancel the active run.
+Telegram additionally offers `/whoami`, `/remind`, `/reminders`, and `/unremind`.
+Discord offers `/lemon <prompt>`, `/session info`, and `/redirect <correction>`.
+These lists describe discovery only: existing authorization and command behavior
+are unchanged.
+
 ## Source development
 
 A source checkout is for development, unsupported platforms, and release work.

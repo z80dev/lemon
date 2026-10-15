@@ -8,7 +8,11 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
-No unreleased changes yet.
+### Added
+
+- Surface-aware Telegram and Discord command help, including model, resume,
+  file, checkpoint, and goal controls, plus automatic registration of Telegram's
+  public `/` command menu without blocking transport startup on API failures.
 
 ---
 

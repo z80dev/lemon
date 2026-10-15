@@ -102,8 +102,8 @@ on another machine with that machine's own workspace and credentials.
 | Browser | `lemon web` | Diffs, tool cards, automation boards, usage, ⌘K palette, phone layout |
 | Scripts & CI | `lemon -p "…" --output json` | One-shot runs that return machine-readable results and exit nonzero on failure |
 | Tern | `lemon` in a pane, or `lemon tern install` | Native Tern surfaces and ACP chat |
-| Telegram | `lemon gateway setup telegram`, then message the bot | `/new`, `/resume`, `/model`, `/steer`, `/cancel`, `/file`, approval buttons |
-| Discord | `lemon gateway setup discord`, then mention the bot | Mention-triggered runs, threads, file delivery |
+| Telegram | `lemon gateway setup telegram`, then message the bot | `/help`, `/new`, `/resume`, `/model`, `/steer`, `/cancel`, `/file`, approval buttons; public commands in the `/` menu |
+| Discord | `lemon gateway setup discord`, then mention the bot | `/help`, `/session`, `/model`, `/resume`, `/file`, `/checkpoint`, `/goal`, mention-triggered runs and threads |
 
 Sessions persist across every surface. One run can start from Telegram and you
 can review it later in the web UI.
