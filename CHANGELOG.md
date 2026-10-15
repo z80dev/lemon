@@ -8,15 +8,6 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
-### Added
-
-- Unified configurable browser provider selection across browser tools, LCU Chrome
-  control, doctor and control-plane browser status. Auto selection prefers ready
-  LCU, then an authenticated relay, then local Chrome; explicit providers fail
-  closed. Diagnostics expose fixed redacted reasons without starting browsers.
-  Document provider configuration and the shared LCU native-host connector's
-  Codex/ChatGPT impact, backup requirements and rollback limitations.
-
 ### Fixed
 
 - Pin skill-synthesis candidate timestamps in ordering fixtures and cover
@@ -52,6 +43,13 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   bounded pasted-filename previews and appearance-aware code inset colors.
 
 ### Added
+
+- Unified configurable browser provider selection across browser tools, LCU Chrome
+  control, doctor and control-plane browser status. Auto selection prefers ready
+  LCU, then an authenticated relay, then local Chrome; explicit providers fail
+  closed. Diagnostics expose fixed redacted reasons without starting browsers.
+  Document provider configuration and the shared LCU native-host connector's
+  Codex/ChatGPT impact, backup requirements and rollback limitations.
 
 - Setup offers local inference servers and custom OpenAI-compatible endpoints,
   optional encrypted keys, and consent-based model discovery with manual fallback.
