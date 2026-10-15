@@ -35,5 +35,6 @@ kernel.on("exit", (status) => stop(status === null ? 1 : status));
 kernel.stdin.on("error", () => stop(1));
 process.stdin.on("end", () => stop(0));
 process.stdin.on("error", () => stop(1));
-for (const signal of ["SIGINT", "SIGTERM"]) process.on(signal, () => stop(1));
+process.on("SIGINT", () => { if (kernel.pid) process.kill(-kernel.pid, "SIGINT"); });
+process.on("SIGTERM", () => stop(1));
 process.stdin.pipe(kernel.stdin);
