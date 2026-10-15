@@ -201,7 +201,15 @@ defmodule LemonSkills.WorkspacePreferences do
          rendered = "- " <> String.replace(text, "\n", "\n  ") <> "\n",
          updated = append_under_heading(content, spec.heading, rendered),
          %AgentToolResult{} <-
-           write_checked(path, kind, spec, updated, "add", %{changed: true, duplicate: false}),
+           write_checked(
+             path,
+             kind,
+             spec,
+             updated,
+             "add",
+             %{changed: true, duplicate: false},
+             String.length(text)
+           ),
          {:ok, entries} <- read_entries(workspace_dir, kind),
          entry when not is_nil(entry) <- Enum.find(entries, &(&1.text == text)) do
       {:ok, entry.item}
@@ -466,7 +474,16 @@ defmodule LemonSkills.WorkspacePreferences do
       })
     else
       updated = append_under_heading(content, spec.heading, "- #{text}\n")
-      write_checked(path, target, spec, updated, "add", %{changed: true, duplicate: false})
+
+      write_checked(
+        path,
+        target,
+        spec,
+        updated,
+        "add",
+        %{changed: true, duplicate: false},
+        String.length(text)
+      )
     end
   end
 
@@ -497,7 +514,15 @@ defmodule LemonSkills.WorkspacePreferences do
             byte_size(content) - entry.start - entry.length
           )
 
-      write_checked(path, target, spec, updated, action, %{changed: true})
+      write_checked(
+        path,
+        target,
+        spec,
+        updated,
+        action,
+        %{changed: true},
+        if(text, do: String.length(text), else: 0)
+      )
     else
       {:error, :ambiguous_match} ->
         {:error,
@@ -511,19 +536,19 @@ defmodule LemonSkills.WorkspacePreferences do
     end
   end
 
-  defp write_checked(path, target, spec, content, action, details) do
+  defp write_checked(path, target, spec, content, action, details, entry_size) do
     content = String.trim_trailing(content) <> "\n"
 
     if String.length(content) > spec.max_chars do
       previous =
         case File.read(path) do
           {:ok, previous} -> previous
-          _ -> template_for(target, spec)
+          _ -> ""
         end
 
       {:error,
        "#{spec.file} at #{String.length(previous)}/#{spec.max_chars} chars; " <>
-         "attempted entry #{max(String.length(content) - String.length(previous), 0)} chars " <>
+         "attempted entry #{entry_size} chars " <>
          "would exceed the limit by #{String.length(content) - spec.max_chars} chars. " <>
          "Remove or shorten entries, then retry.\nCurrent entries:\n" <> previous}
     else
