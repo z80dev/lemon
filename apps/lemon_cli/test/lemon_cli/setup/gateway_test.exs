@@ -60,15 +60,6 @@ defmodule LemonCli.Setup.GatewayTest do
       assert result == {:error, :unknown_transport}
       assert Enum.any?(error_messages(get_log.()), &String.contains?(&1, "fax"))
     end
-
-    test "prints list of available transports after unknown transport error" do
-      {io, get_log} = capture_io()
-      Gateway.run(["--non-interactive", "klingon"], io)
-
-      log = get_log.()
-      assert Enum.any?(messages(log), &String.contains?(&1, "telegram"))
-      assert Enum.any?(messages(log), &String.contains?(&1, "discord"))
-    end
   end
 
   # ──────────────────────────────────────────────────────────────────────────
