@@ -156,11 +156,11 @@ defmodule LemonAgent.Agent do
   - `:budget_usage` - Initial cumulative session totals, independent of message history
   - `:max_tool_turns` - Max assistant tool-use turns before terminal fallback, or `:infinity`
     (default: 25; `CodingAgent.Session` passes `:infinity` unless `[runtime] max_tool_turns` is set)
-  - `:max_tool_concurrency` - Maximum overlapping calls for tools marked `parallel_safe`
+  - `:max_tool_concurrency` - Maximum overlapping calls for `parallel_safe` tools (default 8; `:infinity` opts out)
   - `:max_retries` - Transient provider retries per response (default: 3; 0 disables)
   - `:retry_base_delay_ms` - Initial exponential retry delay (default: 2,000ms)
   - `:retry_max_delay_ms` - Backoff cap (default: 30,000ms; explicit retry-after honored up to 120s)
-  - `:tool_timeout_ms` - Optional per-tool task timeout in milliseconds
+  - `:tool_timeout_ms` - Per-tool task deadline (default 300,000 ms; `:infinity` opts out; tools can override)
   - `:queue_call_timeout` - Timeout for loop queue polling GenServer calls (`:infinity` or ms, default: 30 minutes)
   - `:name` - Optional GenServer name
 
@@ -574,11 +574,11 @@ defmodule LemonAgent.Agent do
       stream_options: stream_options,
       stream_options_model: agent_state.model,
       max_tool_turns: Keyword.get(opts, :max_tool_turns, 25),
-      max_tool_concurrency: Keyword.get(opts, :max_tool_concurrency),
+      max_tool_concurrency: Keyword.get(opts, :max_tool_concurrency) || 8,
       max_retries: Keyword.get(opts, :max_retries, 3),
       retry_base_delay_ms: Keyword.get(opts, :retry_base_delay_ms, 2_000),
       retry_max_delay_ms: Keyword.get(opts, :retry_max_delay_ms, 30_000),
-      tool_timeout_ms: Keyword.get(opts, :tool_timeout_ms),
+      tool_timeout_ms: Keyword.get(opts, :tool_timeout_ms) || 300_000,
       queue_call_timeout: queue_call_timeout,
       waiters: []
     }

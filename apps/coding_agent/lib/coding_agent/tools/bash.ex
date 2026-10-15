@@ -55,6 +55,7 @@ defmodule CodingAgent.Tools.Bash do
   def tool(cwd, opts \\ []) do
     %AgentTool{
       name: "bash",
+      timeout_ms: :infinity,
       description:
         "Execute a bash command in the project root (or `cwd`). Foreground commands time out after " <>
           "`timeout` ms (default #{@default_timeout_ms}, max #{@max_timeout_ms}). For servers, " <>

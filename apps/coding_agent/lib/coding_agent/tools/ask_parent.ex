@@ -16,6 +16,7 @@ defmodule CodingAgent.Tools.AskParent do
   def tool(cwd, opts \\ []) do
     %AgentTool{
       name: "ask_parent",
+      timeout_ms: :infinity,
       description:
         "Ask the parent session a focused clarification question when you are blocked on a decision. " <>
           "Use this only for decisions or constraints you cannot safely infer yourself. " <>

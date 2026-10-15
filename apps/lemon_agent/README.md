@@ -166,6 +166,15 @@ Authentication, invalid-request and context-overflow errors are not transient re
 
 Tools default to sequential execution. Set `parallel_safe: true` only when overlapping invocations cannot conflict with mutations or depend on earlier calls. Contiguous safe calls run concurrently up to `max_tool_concurrency`; a sequential call waits for the preceding group and finishes before later calls start. Results enter model context in the assistant's original call order, regardless of completion order. Unknown tools and invalid arguments are returned as model-readable error results, so the model can correct them.
 
+The default `max_tool_concurrency` is **8** and the default `tool_timeout_ms` is
+**300,000 ms**. Omitted or `nil` settings use these defaults; `:infinity` explicitly
+opts out. A timed-out worker is terminated and returns an error-shaped tool result.
+Set `AgentTool.timeout_ms` (also accepted by `LemonAgent.new_tool/1`) to a positive
+millisecond override, or `:infinity` for a tool that owns its deadline or must
+legitimately wait. `nil` inherits the loop setting. Native task/wait and agent
+delegation, bash/process waits, eval, debug, ask/ask_parent and browser tools
+declare exemptions and retain their own cancellation/deadline semantics.
+
 
 ### Registry Pattern
 
