@@ -1,12 +1,11 @@
 defmodule CodingAgent.Tools.Task.Runner do
   @moduledoc false
 
+  alias CodingAgent.Session
+  alias CodingAgent.Tools.Task.{Control, Result}
   alias LemonAgent.AbortSignal
-
   alias LemonAgent.Types.AgentToolResult
   alias LemonAi.Types.TextContent
-  alias CodingAgent.Session
-  alias CodingAgent.Tools.Task.Result
 
   @await_poll_ms 200
   @default_task_session_timeout_ms nil
@@ -33,65 +32,116 @@ defmodule CodingAgent.Tools.Task.Runner do
       ) do
     case CodingAgent.start_session(start_opts) do
       {:ok, session} ->
-        session_id = Session.get_stats(session).session_id
-        on_update = with_session_id(on_update, session_id)
-        unsubscribe = Session.subscribe(session)
-        session_ref = Process.monitor(session)
-        timeout_ms = task_session_timeout_ms(opts)
-
-        deadline_ms =
-          if timeout_ms, do: System.monotonic_time(:millisecond) + timeout_ms, else: nil
-
-        try do
-          with :ok <- attach_control_session(opts[:task_id], session, session_id),
-               :ok <- Session.prompt(session, prompt) do
-            await = fn ->
-              await_result(
-                session,
-                session_ref,
-                session_id,
-                signal,
-                on_update,
-                description,
-                "",
-                "",
-                role_id,
-                timeout_ms,
-                deadline_ms,
-                task_session_poll_ms(opts)
-              )
-            end
-
-            details = %{
-              session_id: session_id,
-              description: description,
-              status: "completed",
-              role: role_id
-            }
-
-            await_valid_result(session, await, details, opts[:validate_output], @output_retries)
-          else
-            {:error, :already_streaming} ->
-              {:error, "Task session is already running"}
-
-            {:error, reason} ->
-              {:error, reason}
-          end
-        after
-          drain_session(session, session_ref, session_id)
-          Process.demonitor(session_ref, [:flush])
-
-          if is_function(unsubscribe, 0) do
-            unsubscribe.()
-          end
-
-          stop_session(session)
-        end
+        run_session(session, start_opts, prompt, description, signal, on_update, role_id, opts)
 
       {:error, reason} ->
         {:error, "Failed to start task session: #{inspect(reason)}"}
     end
   end
+
+  @doc false
+  def resume_session(session, resume, prompt, signal, on_update) do
+    if is_pid(session) and Process.alive?(session) do
+      run_session(
+        session,
+        resume.start_opts,
+        prompt,
+        resume.description,
+        signal,
+        on_update,
+        resume.role_id,
+        resume.opts
+      )
+    else
+      start_session_with_prompt(
+        resume.start_opts,
+        prompt,
+        resume.description,
+        signal,
+        on_update,
+        resume.role_id,
+        resume.opts
+      )
+    end
+  end
+
+  defp run_session(session, start_opts, prompt, description, signal, on_update, role_id, opts) do
+    session_id = Session.get_stats(session).session_id
+    on_update = with_session_id(on_update, session_id)
+    unsubscribe = Session.subscribe(session)
+    session_ref = Process.monitor(session)
+    timeout_ms = task_session_timeout_ms(opts)
+    deadline_ms = if timeout_ms, do: System.monotonic_time(:millisecond) + timeout_ms
+
+    try do
+      result =
+        with :ok <- attach_control_session(opts[:task_id], session, session_id),
+             :ok <- prompt_idle_session(session, prompt) do
+          await = fn ->
+            await_result(
+              session,
+              session_ref,
+              session_id,
+              signal,
+              on_update,
+              description,
+              "",
+              "",
+              role_id,
+              timeout_ms,
+              deadline_ms,
+              task_session_poll_ms(opts)
+            )
+          end
+
+          details = %{
+            session_id: session_id,
+            description: description,
+            status: "completed",
+            role: role_id
+          }
+
+          await_valid_result(session, await, details, opts[:validate_output], @output_retries)
+        end
+
+      unless retain_session(result, session, start_opts, description, role_id, opts),
+        do: stop_session(session)
+
+      result
+    catch
+      kind, reason ->
+        stop_session(session)
+        :erlang.raise(kind, reason, __STACKTRACE__)
+    after
+      drain_session(session, session_ref, session_id)
+      Process.demonitor(session_ref, [:flush])
+      if is_function(unsubscribe, 0), do: unsubscribe.()
+    end
+  end
+
+  defp retain_session(%AgentToolResult{}, session, start_opts, description, role_id, opts) do
+    if opts[:task_id] && Session.save(session) == :ok do
+      state = Session.get_state(session)
+
+      resume = %{
+        start_opts:
+          start_opts
+          |> Keyword.put(:session_file, state.session_file)
+          |> Keyword.put(:model, state.model)
+          |> Keyword.put(:thinking_level, state.thinking_level),
+        description: description,
+        role_id: role_id,
+        opts: opts
+      }
+
+      Control.retain_session(opts[:task_id], session, resume) == :ok
+    else
+      false
+    end
+  end
+
+  defp retain_session(_result, _session, _start_opts, _description, _role_id, _opts),
+    do: false
 
   # Re-prompts the same child session when its final output fails the caller's
   # validator. After the retries are spent, the last result is returned and the
@@ -152,7 +202,7 @@ defmodule CodingAgent.Tools.Task.Runner do
   defp attach_control_session(nil, _session, _session_id), do: :ok
 
   defp attach_control_session(task_id, session, session_id),
-    do: CodingAgent.Tools.Task.Control.attach_session(task_id, session, session_id)
+    do: Control.attach_session(task_id, session, session_id)
 
   defp await_result(
          session,

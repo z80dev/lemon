@@ -321,6 +321,7 @@ defmodule LemonCore.Config.Validator do
   defp validate_task_config(errors, task) when is_map(task) do
     max_depth = Map.get(task, :max_depth)
     max_runtime_ms = Map.get(task, :max_runtime_ms)
+    idle_ttl_ms = Map.get(task, :idle_ttl_ms)
     merge = Map.get(task, :worktree_merge)
     disabled = Map.get(task, :disabled_agents)
     models = Map.get(task, :agent_models)
@@ -330,6 +331,8 @@ defmodule LemonCore.Config.Validator do
        "runtime.task.max_depth: must be an integer >= -1"},
       {is_integer(max_runtime_ms) and max_runtime_ms >= 0,
        "runtime.task.max_runtime_ms: must be a nonnegative integer"},
+      {is_integer(idle_ttl_ms) and idle_ttl_ms >= 0,
+       "runtime.task.idle_ttl_ms: must be a nonnegative integer"},
       {merge in ["none", "patch", "branch"],
        "runtime.task.worktree_merge: must be one of none, patch, branch"},
       {is_list(disabled) and Enum.all?(disabled, &(is_binary(&1) and &1 != "")),

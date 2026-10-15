@@ -10,6 +10,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Added
 
+- Keep finished native task children addressable: wake idle sessions or revive
+  parked sessions with prior context through `write agent://`, with configurable
+  idle TTL, explicit delivery receipts and coalesced concurrent revival.
+
 - Add `ls tree: true`: depth-limited newest-first trees with file sizes,
   12 children per directory and explicit omitted-sibling counts.
 

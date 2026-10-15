@@ -58,6 +58,7 @@ defmodule LemonCore.Config.Agent do
       [runtime.task]
       max_depth = 2                 # -1 unlimited; 0 forbids the main session from spawning
       max_runtime_ms = 0            # 0 disables the per-child wall-clock limit
+      idle_ttl_ms = 300000          # 0 keeps completed children live until their parent ends
       worktree_merge = "none"       # none | patch | branch, used by worktree = true tasks
       disabled_agents = []          # persona IDs hidden from the task tool
       agent_models = {}             # persona ID => model or @role override
@@ -122,6 +123,7 @@ defmodule LemonCore.Config.Agent do
           task: %{
             max_depth: integer(),
             max_runtime_ms: non_neg_integer(),
+            idle_ttl_ms: non_neg_integer(),
             worktree_merge: String.t(),
             disabled_agents: [String.t()],
             agent_models: %{optional(String.t()) => String.t()}
@@ -342,6 +344,7 @@ defmodule LemonCore.Config.Agent do
     %{
       max_depth: Map.get(task, "max_depth", 2),
       max_runtime_ms: Map.get(task, "max_runtime_ms", 0),
+      idle_ttl_ms: Map.get(task, "idle_ttl_ms", 300_000),
       worktree_merge: Map.get(task, "worktree_merge", "none"),
       disabled_agents: Map.get(task, "disabled_agents", []),
       agent_models: Map.get(task, "agent_models", %{})

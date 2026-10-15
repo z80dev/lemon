@@ -6,10 +6,10 @@ defmodule CodingAgent.TaskStore do
   The actual ETS table is owned by `TaskStoreServer`, which serializes every
   mutation before updating ETS and DETS. Reads remain direct ETS lookups.
 
-  Lifecycle transitions are monotonic and idempotent: queued tasks may become
-  running or terminal, running tasks may become terminal, and terminal tasks
-  never change status or terminal payload. This makes late progress/start
-  messages and competing finish/fail calls safe.
+  Lifecycle transitions within a turn are monotonic and idempotent. Only the
+  task control owner may explicitly begin another turn on a completed idle or
+  parked child. `agent_state` tracks the live child's lifecycle independently
+  of the current turn's result; cancellation never permits another turn.
   """
 
   alias CodingAgent.TaskStoreServer
@@ -63,6 +63,17 @@ defmodule CodingAgent.TaskStore do
     end)
   end
 
+  @doc "Explicitly reopen a completed, addressable child for a new message turn."
+  def begin_agent_turn(task_id), do: TaskStoreServer.begin_agent_turn(task_id)
+
+  @doc "Persist the native child's lifecycle without changing its turn result."
+  def set_agent_state(task_id, state, attrs \\ %{})
+      when state in [:running, :idle, :parked, :aborted, :killed] do
+    TaskStoreServer.update_record(task_id, fn record ->
+      record |> Map.merge(attrs) |> Map.put(:agent_state, state)
+    end)
+  end
+
   @doc """
   Finish a task with a result payload.
   """
@@ -101,6 +112,7 @@ defmodule CodingAgent.TaskStore do
     TaskStoreServer.transition(task_id, :cancelled, fn record ->
       record
       |> Map.put(:status, :cancelled)
+      |> Map.put(:agent_state, :killed)
       |> Map.put(:error, reason)
       |> Map.put(:completed_at, System.system_time(:second))
     end)
