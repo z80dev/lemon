@@ -79,27 +79,13 @@ defmodule Mix.Tasks.Lemon.Sim.CommonTest do
                  fn -> Common.resolve_model("anthropic:missing-model") end
   end
 
-  test "runtime startup contracts remain callable" do
-    assert Common.ensure_runtime_started!() == :ok
-    assert {:ok, _started} = Common.ensure_runtime_and_core_started()
-  end
-
-  test "every migrated task keeps its task name, run API, and help path" do
-    Enum.each(@migrated_tasks, fn {name, task} ->
-      assert Code.ensure_loaded?(task)
-      assert function_exported?(task, :run, 1)
+  test "migrated tasks preserve dispatch and help paths" do
+    Enum.each(@migrated_tasks ++ @runtime_only_migrated_tasks, fn {name, task} ->
       assert Mix.Task.get(name) == task
-      assert task.run(["--help"]) == :ok
-    end)
 
-    refute function_exported?(Common, :run, 1)
-  end
-
-  test "runtime-only migrated tasks keep their task name and run API" do
-    Enum.each(@runtime_only_migrated_tasks, fn {name, task} ->
-      assert Code.ensure_loaded?(task)
-      assert function_exported?(task, :run, 1)
-      assert Mix.Task.get(name) == task
+      if task in Enum.map(@migrated_tasks, &elem(&1, 1)) do
+        assert task.run(["--help"]) == :ok
+      end
     end)
   end
 

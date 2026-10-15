@@ -32,7 +32,7 @@ defmodule LemonOmp.Tools.OmpTest do
     assert "action" in tool.parameters["required"]
 
     assert tool.parameters["properties"]["action"]["enum"] ==
-             ~w(start start_many wait status list send cancel close resume discover)
+             ~w(models start start_many wait status list send cancel close resume discover)
 
     assert tool.parameters["properties"]["approval_mode"]["enum"] == ~w(always-ask write yolo)
     assert tool.parameters["properties"]["approval_mode"]["description"] =~ "start, resume"

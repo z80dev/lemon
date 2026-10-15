@@ -6,7 +6,7 @@ defmodule LemonAutomation.CronManagerUnavailableTest do
   @moduledoc """
   Tests verifying that CronManager GenServer.call sites with explicit
   @call_timeout_ms 10_000 raise :exit when the process is unavailable,
-  and that the Gateway tool layer handles this gracefully.
+  and that the automation tool layer handles this gracefully.
   """
 
   describe "CronManager calls when process is unavailable" do
@@ -48,7 +48,7 @@ defmodule LemonAutomation.CronManagerUnavailableTest do
     end
   end
 
-  describe "Gateway tool layer handles CronManager unavailability" do
+  describe "automation tool layer handles CronManager unavailability" do
     setup do
       unregister_cron_manager!()
 
@@ -60,23 +60,14 @@ defmodule LemonAutomation.CronManagerUnavailableTest do
     end
 
     test "cron tool list action returns error instead of crashing" do
-      tool_mod = Module.concat([LemonGateway, Tools, Cron])
+      session_key = LemonCore.SessionKey.main("default")
+      tool = LemonAutomation.Tools.Cron.tool(".", session_key: session_key, agent_id: "default")
+      result = tool.execute.("call_1", %{"action" => "list"}, nil, nil)
 
-      if Code.ensure_loaded?(tool_mod) and function_exported?(tool_mod, :tool, 2) do
-        session_key = LemonCore.SessionKey.main("default")
-        tool = tool_mod.tool(".", session_key: session_key, agent_id: "default")
+      assert %{error: true} = result.details
 
-        # The tool's execute wraps GenServer.call in a try/catch :exit block
-        # via cron_call/2, so it should return an error result, not crash.
-        result = tool.execute.("call_1", %{"action" => "list"}, nil, nil)
-
-        text = LemonAgent.get_text(result)
-
-        # ensure_scheduler_started checks Process.whereis first, and since
-        # the name is unregistered, it returns an error about unavailability.
-        assert text =~ "unavailable" or text =~ "not running" or
-                 text =~ "failed" or text =~ "not started"
-      end
+      assert LemonAgent.get_text(result) ==
+               "Cron scheduler is unavailable (LemonAutomation.CronManager not started)."
     end
   end
 

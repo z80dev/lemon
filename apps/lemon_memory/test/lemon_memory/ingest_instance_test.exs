@@ -177,10 +177,6 @@ defmodule LemonMemory.IngestInstanceTest do
   end
 
   describe "addressing an instance is unambiguous" do
-    test "the default worker keeps the module name" do
-      assert is_pid(Process.whereis(Ingest))
-    end
-
     test "a second worker cannot claim the default name" do
       assert {:error, {:already_started, pid}} = Ingest.start_link([])
       assert pid == Process.whereis(Ingest)

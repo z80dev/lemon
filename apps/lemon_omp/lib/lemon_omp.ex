@@ -52,6 +52,9 @@ defmodule LemonOmp do
   @spec bus_topic() :: String.t()
   defdelegate bus_topic(), to: Manager
 
+  @doc "List omp models, cheapest first; filters: query, provider, free_only, limit (1–200)."
+  defdelegate models(opts \\ []), to: LemonOmp.Models, as: :list
+
   @doc "Whether omp is installed, its version, and live-session counts."
   @spec status() :: map()
   def status do
@@ -448,6 +451,7 @@ defmodule LemonOmp do
   def error_message(:not_ready), do: "that omp session is still starting."
   def error_message(:no_active_turn), do: "that omp session has no turn in progress."
   def error_message({:rejected, message}), do: "omp rejected the request: #{message}"
+  def error_message({:catalog_failed, message}), do: "omp model catalog failed: #{message}"
   def error_message({:startup_failed, message}), do: "omp failed to start: #{message}"
   def error_message(:startup_failed), do: "omp failed to start."
 

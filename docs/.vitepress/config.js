@@ -137,6 +137,7 @@ export default {
           { text: "Browser", link: "/tools/browser" },
           { text: "LSP", link: "/tools/lsp" },
           { text: "omp delegate", link: "/tools/omp" },
+          { text: "Computer use", link: "/tools/computer-use" },
           { text: "OpenAI-Compatible API", link: "/tools/openai-compatible-api" },
           { text: "ACP", link: "/tools/acp" },
           { text: "WASM", link: "/tools/wasm" },

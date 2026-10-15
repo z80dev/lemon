@@ -109,10 +109,12 @@ defmodule LemonOmp.ApprovalsTest do
     }
   end
 
-  test "operator approvals have no conversation session key and denial sends Deny", ctx do
-    id = start!(%{ctx | owner: %{kind: :operator}}, "APPROVAL")
+  test "operator approvals have an invocation session key and denial sends Deny", ctx do
+    owner = %{kind: :operator, session_key: "caller-supplied-key"}
+    id = start!(%{ctx | owner: owner}, "APPROVAL")
     pending = pending!(id)
-    assert pending.session_key == nil
+    assert pending.session_key == "omp:operator:" <> id
+    assert pending.invocation_context_key == nil
     assert pending.session_id == nil
     assert pending.run_id == nil
     assert {:ok, _} = ExecApprovals.resolve(pending.id, :deny)
@@ -120,6 +122,54 @@ defmodule LemonOmp.ApprovalsTest do
     wire = await_wire(id, &(&1["approvals"]["denied"] == 1))
     assert wire["pendingApprovals"] == []
     assert wire["approvals"] == %{"approved" => 0, "denied" => 1, "expired" => 0}
+  end
+
+  test "operator session grants approve repeats but never another invocation", ctx do
+    ctx = %{ctx | owner: %{kind: :operator}}
+    id_a = start!(ctx, "APPROVAL")
+    pending_a = pending!(id_a)
+    assert pending_a.session_key == "omp:operator:" <> id_a
+    assert pending_a.session_id == nil
+    assert pending_a.run_id == nil
+    assert pending_a.agent_id == "default"
+    assert pending_a.invocation_context_key == nil
+
+    assert {:ok, receipt} =
+             ExecApprovals.resolve(pending_a.id, :approve_session,
+               expected_session_key: pending_a.session_key
+             )
+
+    assert receipt.session_key == pending_a.session_key
+    await_wire(id_a, &(&1["status"] == "idle" and &1["approvals"]["approved"] == 1))
+
+    # The same fake tool select in a later turn uses the installed session grant.
+    assert {:ok, _} = LemonOmp.send_message(id_a, "APPROVAL", :steer)
+    wire_a = await_wire(id_a, &(&1["status"] == "idle" and &1["approvals"]["approved"] == 2))
+    assert wire_a["pendingApprovals"] == []
+    refute_receive %Event{type: :approval_requested}
+
+    id_b = start!(%{ctx | ws: workspace!()}, "APPROVAL")
+    pending_b = pending!(id_b)
+    assert pending_b.session_key == "omp:operator:" <> id_b
+    refute pending_b.session_key == pending_a.session_key
+    assert pending_b.action["details"] == pending_a.action["details"]
+    assert {:ok, _} = ExecApprovals.resolve(pending_b.id, :deny)
+    await_wire(id_b, &(&1["approvals"]["denied"] == 1))
+
+    # Production actions also contain ompSession. Use A's exact action with B's
+    # identity so differing action hashes cannot mask a shared session grant.
+    request =
+      pending_b
+      |> Map.take([:session_key, :session_id, :run_id, :agent_id, :tool])
+      |> Map.merge(%{action: pending_a.action, expires_in_ms: 5_000})
+
+    waiter = Task.async(fn -> ExecApprovals.request(request) end)
+    collision = pending!(id_a)
+    assert collision.session_key == pending_b.session_key
+    assert collision.action == pending_a.action
+    assert ExecApprovalStore.get_pending(collision.id) == collision
+    assert {:ok, _} = ExecApprovals.resolve(collision.id, :deny)
+    assert Task.await(waiter) == {:ok, :denied}
   end
 
   test "omp's timeout caps the configured timeout and sends cancelled plus timedOut", ctx do

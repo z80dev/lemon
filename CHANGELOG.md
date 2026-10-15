@@ -21,6 +21,13 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Added
 
+- Cached omp model catalog through `LemonOmp.models/1` and the `omp` tool's
+  `models` action, with cheap/free filtering, pricing and upstream availability warnings.
+- Computer use: with `LEMON_COMPUTER_USE_ENABLED=true`, Lemon agents get
+  `cua_js`/`cua_js_reset` to operate native apps through the ChatGPT desktop
+  app's computer-use runtime via LCU. Per-app approval requests become Lemon
+  approvals (once or for the session); Lemon's own apps are never approved.
+  See [Computer use](docs/tools/computer-use.md).
 - omp sessions can select an approval mode and bridge tool approval prompts to
   Lemon's conversation/channel approval UI or operator `exec.approval.resolve`.
   Snapshots and wait progress expose pending approvals and decision counts;
@@ -39,6 +46,8 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Operator-owned omp approvals bind session-scoped grants to one omp invocation,
+  preventing a grant from approving identical actions in another operator session.
 - New memory backdoor/exfiltration screening no longer invalidates retained facts
   or prevents editing/deleting them; new text and patched results remain screened.
 - Correct stale install, quickstart, browser authentication/routes, and TUI
