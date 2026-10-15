@@ -21,6 +21,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Added
 
+- omp sessions can select an approval mode and bridge tool approval prompts to
+  Lemon's conversation/channel approval UI or operator `exec.approval.resolve`.
+  Snapshots and wait progress expose pending approvals and decision counts;
+  cancelled dialogs and ended sessions clean up pending prompts.
 - MCP clients accept an optional asynchronous `notification_handler` callback for
   server notifications, including tool, resource and prompt list changes.
 - Expanded the LSP registry from six to 42 primary language servers, with

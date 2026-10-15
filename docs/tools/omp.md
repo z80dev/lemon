@@ -10,8 +10,8 @@ installed”). For the workflow, see [Delegating to omp](../user-guide/omp.md).
 
 | Action | Parameters | Result |
 | --- | --- | --- |
-| `start` | `prompt`; optional `cwd` (default: the conversation's cwd), `model`, `thinking`, `wait` | Starts `omp --mode rpc` in `cwd` and returns once omp accepted the prompt. With `wait: true`, blocks and streams progress until the turn ends. |
-| `start_many` | `tasks` (array of objects: required `prompt`, optional `cwd`, `model`, `thinking`); optional `wait`, `timeout_seconds` | Starts workers concurrently after validating the entire batch and checking available capacity. Results keep task order; startup failures are reported per task. With `wait: true`, gathers all successful workers, streaming combined progress. |
+| `start` | `prompt`; optional `cwd` (default: the conversation's cwd), `model`, `thinking`, `approval_mode`, `wait` | Starts `omp --mode rpc` in `cwd` and returns once omp accepted the prompt. With `wait: true`, blocks and streams progress until the turn ends, including pending approvals. |
+| `start_many` | `tasks` (array of objects: required `prompt`, optional `cwd`, `model`, `thinking`, `approval_mode`); optional `wait`, `timeout_seconds` | Starts workers concurrently after validating the entire batch and checking available capacity. Results keep task order; startup failures are reported per task. With `wait: true`, gathers all successful workers, streaming combined progress. |
 | `wait` | `id` or `ids` (array); optional `wait_for` (`all` default, `any`, for `ids`), `timeout_seconds` (default 600, max 3600) | Blocks until the current turn ends, or all/any selected workers settle, streaming progress. Timeout or a Lemon abort stops waiting only; omp keeps working. |
 | `status` | `id` | What the session is doing now: status, activity, running/recent tools, todos, subagents, usage and cost, latest output or last result. |
 | `list` | – | Sessions this conversation started (live and recently ended). |
@@ -19,10 +19,18 @@ installed”). For the workflow, see [Delegating to omp](../user-guide/omp.md).
 | `cancel` | `id` | Aborts the running turn; the process stays open. |
 | `close` | `id` | Ends the omp process; its session can be resumed. |
 | `discover` | optional `cwd` | omp's stored sessions for the workspace (read-only). |
-| `resume` | `omp_session_id` (id or unique prefix from `discover`); optional `prompt`, `cwd`, `model`, `thinking`, `wait` | Reopens a stored omp session as a new invocation. |
+| `resume` | `omp_session_id` (id or unique prefix from `discover`); optional `prompt`, `cwd`, `model`, `thinking`, `approval_mode`, `wait` | Reopens a stored omp session as a new invocation. |
 
 `id` is Lemon's invocation id (`omp_…`); `omp_session_id` is omp's own
 session id.
+
+`approval_mode` is `always-ask` (ask before writes and execution), `write`
+(ask before execution), or `yolo` (auto-approve ordinary tool calls). It overrides
+omp's mode for this invocation; omitting it preserves omp's configured mode.
+omp's explicit per-tool policies still apply. Approval selects bridge to Lemon's
+conversation approval prompts/channel buttons by default; operators can use
+`exec.approval.resolve`. `LEMON_OMP_APPROVALS=decline` instead cancels them.
+Other blocking UI dialogs remain declined.
 
 `start_many` task directories default to the conversation cwd. Workers sharing
 one cwd can conflict; prefer separate directories or worktrees. A batch
@@ -53,7 +61,15 @@ Multi-worker results include combined `usage`; `start_many` also includes
 `errors` with a zero-based task index and safe error message. The session
 object is the same snapshot the control plane returns
 from `omp.sessions.get`: `id`, `ompSessionId`, `title`, `cwd`, `model`,
-`status`, `lastTurn`, `activity`, `activeTools`, `recentTools`, `todos`,
-`subagents`, `usage` (`input`, `output`, `cacheRead`, `cacheWrite`,
+`thinking`, `approvalMode` (the requested override, or `null` for omp's own
+configured mode), `status`, `lastTurn`, `activity`, `activeTools`, `recentTools`,
+`todos`, `subagents`, `usage` (`input`, `output`, `cacheRead`, `cacheWrite`,
 `totalTokens`, `cost`), `contextPercent`, `lastText`, `result`, `error`,
-`declinedPrompts`, timestamps and `exit`. All strings are bounded.
+`declinedPrompts`, `pendingApprovals`, `approvals`, timestamps and `exit`.
+All strings are bounded.
+
+`pendingApprovals` lists `id` (Lemon's approval id), `tool`, sanitized `details`
+(at most 2000 characters) and `requestedAt` (Unix milliseconds). Activity reads
+`Waiting for approval: <tool>` while one is pending, and `wait` progress explains
+where to resolve it. `approvals` counts `approved`, `denied` and `expired`
+(timeouts/errors); abandoned dialogs are removed without counting a decision.

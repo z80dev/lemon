@@ -47,11 +47,17 @@ A conversation can only see and control the omp sessions it started. Sessions
 you start from the TUI or CLI are operator sessions; manage those from the TUI
 or CLI.
 
+For `start` or `resume`, the agent tool (and `LemonOmp.start/2`) accepts
+`approval_mode`: `always-ask` asks before writes and execution, `write` asks
+before execution, and `yolo` auto-approves ordinary tool calls. Omitting it
+leaves omp's own configured mode unchanged. Explicit omp tool policies still
+apply. Lemon passes an explicit mode as `--approval-mode <mode>`.
+
 ## Parallel workers
 
 Ask Lemon to split independent work across several omp workers. The `omp`
 tool's `start_many` action accepts a `tasks` array; each task has a `prompt`
-and optional `cwd`, `model`, and `thinking`. Omitted directories default to
+and optional `cwd`, `model`, `thinking`, and `approval_mode`. Omitted directories default to
 the conversation's cwd. **Workers sharing a directory can conflict**: use
 separate directories or git worktrees for edits.
 
@@ -131,9 +137,11 @@ These talk to the running Lemon runtime; see [CLI](cli.md) for every option.
 For each session Lemon keeps a bounded snapshot: status (`starting`,
 `running`, `idle`, `closed`, `failed`), the outcome of the last turn
 (`completed`, `error`, `aborted`), current activity, active and recent tools,
-todos, subagents, token usage and cost (omp's own totals), context use, the
-latest assistant text and the last turn's result. Text is clipped and stripped
-of control sequences. Ended sessions stay listed until the runtime restarts.
+todos, subagents, token usage and cost (omp's own totals), context use, pending
+approvals and approval outcome counters, the latest assistant text and the last
+turn's result. While approval is pending the activity says “Waiting for approval:
+&lt;tool&gt;”. Text is clipped and stripped of control sequences. Ended sessions
+stay listed until the runtime restarts.
 
 **Discovery** reads omp's session files for a workspace
 (`~/.omp/agent/sessions/…`, or `$PI_CODING_AGENT_DIR/sessions`) without
@@ -147,11 +155,17 @@ another omp).
 - **omp output is untrusted.** Everything quoted from omp — its replies,
   errors, todo text — reaches Lemon's model fenced as external data, never as
   instructions.
-- **Headless.** omp sometimes asks interactive questions (approvals, pickers).
-  Lemon has no surface to answer them, so it declines: confirms answer “no” and
-  other prompts are cancelled. The snapshot counts declined prompts. If your
-  omp is set to ask before writing, it will be unable to write; choose an omp
-  approval mode that suits unattended work.
+- **Approvals bridge.** omp's tool approval prompts appear in the owning
+  conversation's Lemon approval prompts and channel buttons (Telegram/Discord),
+  including native coding-session approval UI when the session identity is
+  available. Operators can resolve them with `exec.approval.resolve` using the
+  approval id in the snapshot's `pendingApprovals`. The session stays responsive
+  while it waits. Approve/deny decisions return to omp; expiry cancels the
+  prompt. Cancelling an omp dialog or closing/exiting its session removes the
+  corresponding Lemon approval too. `LEMON_OMP_APPROVALS=decline` restores
+  headless cancellation of tool approvals. Other blocking dialogs (confirm,
+  input, editor, unrelated selects) are still declined and counted in
+  `declinedPrompts`.
 - **Control fails closed.** Steering, follow-ups and cancellation go to one
   process invocation and are acknowledged only after omp accepts them. A
   closed or crashed session refuses them; resume it to continue (resuming is a
@@ -175,6 +189,8 @@ another omp).
 | `LEMON_OMP_BIN` | first `omp` on `PATH` | omp executable |
 | `LEMON_OMP_MAX_SESSIONS` | `4` | live omp processes |
 | `LEMON_OMP_IDLE_TIMEOUT_MS` | `1800000` | close idle processes (0 = never) |
+| `LEMON_OMP_APPROVALS` | `bridge` | route omp tool approvals to Lemon; `decline` cancels them |
+| `LEMON_OMP_APPROVAL_TIMEOUT_MS` | `600000` | maximum approval wait in ms, capped by omp's dialog timeout |
 | `PI_CODING_AGENT_DIR` / `PI_CONFIG_DIR` | omp's defaults | where discovery looks (omp's own variables) |
 
 See also the [`omp` tool reference](../tools/omp.md).

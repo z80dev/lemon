@@ -183,6 +183,7 @@ defmodule LemonOmp.ParallelTest do
     [wire] = workers(ctx, 1)
     id = wire["id"]
     parent = self()
+    started_at = System.monotonic_time(:millisecond)
 
     task =
       Task.async(fn ->
@@ -215,7 +216,9 @@ defmodule LemonOmp.ParallelTest do
     assert {:ok, [final], :settled} = Task.await(task, 6_000)
     ticks = collect_ticks([])
     assert length(ticks) >= 2
-    assert length(ticks) <= 4
+    # Scheduler load can stretch the burst beyond its nominal 800 ms.
+    elapsed = elem(List.last(ticks), 0) - started_at
+    assert length(ticks) <= div(elapsed, 300) + 1
     assert {_, [^final]} = List.last(ticks)
 
     # The unconditional final callback may be less than 300 ms after progress.

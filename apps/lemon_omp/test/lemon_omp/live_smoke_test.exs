@@ -111,6 +111,138 @@ defmodule LemonOmp.LiveSmokeTest do
     assert {:ok, %{"status" => "closed"}} = LemonOmp.close(resumed["id"])
   end
 
+  test "real omp tool approvals round-trip through Lemon's shared approvals", ctx do
+    put_app_env(:approvals, :bridge)
+    LemonCore.Bus.subscribe("exec_approvals")
+    on_exit(fn -> LemonCore.Bus.unsubscribe("exec_approvals") end)
+    owner = %{kind: :agent, session_key: "agent:omp-live:#{System.unique_integer([:positive])}"}
+
+    assert {:ok, started} =
+             LemonOmp.start(
+               %{
+                 cwd: ctx.cwd,
+                 model: ctx.model,
+                 thinking: "off",
+                 approval_mode: "always-ask",
+                 prompt:
+                   "Use the write tool to create approved.txt containing exactly yes. Then stop."
+               },
+               owner: owner
+             )
+
+    id = started["id"]
+    assert started["approvalMode"] == "always-ask"
+    pending = await_approval(id, 180_000)
+    assert pending.session_key == owner.session_key
+    assert String.starts_with?(pending.tool, "omp:")
+    wire = await_wire(id, &(&1["pendingApprovals"] != []), 5_000)
+    assert wire["activity"] =~ "Waiting for approval"
+
+    assert {:ok, %{outcome: :approved}} =
+             LemonCore.ExecApprovals.resolve(pending.id, :approve_once)
+
+    assert {:ok, approved, :settled} = LemonOmp.wait(id, 180_000)
+    assert approved["lastTurn"] == "completed"
+    assert approved["approvals"]["approved"] >= 1
+    assert approved["pendingApprovals"] == []
+    assert File.read!(Path.join(ctx.cwd, "approved.txt")) == "yes"
+
+    # Deny every approval for the next turn: the model may retry another way.
+    denier = spawn_link(fn -> deny_all(id) end)
+
+    assert {:ok, _} =
+             LemonOmp.send_message(
+               id,
+               "Use the write tool to create denied.txt containing exactly no. If it is denied, stop.",
+               :steer
+             )
+
+    assert {:ok, denied, :settled} = LemonOmp.wait(id, 180_000)
+    Process.unlink(denier)
+    Process.exit(denier, :kill)
+    assert denied["approvals"]["denied"] >= 1
+    refute File.exists?(Path.join(ctx.cwd, "denied.txt"))
+    assert {:ok, %{"status" => "closed"}} = LemonOmp.close(id)
+  end
+
+  test "real omp parallel workers start together and gather", ctx do
+    dirs =
+      for name <- ["alpha", "beta"] do
+        dir = Path.join(ctx.cwd, name)
+        File.mkdir_p!(dir)
+        {name, dir}
+      end
+
+    tasks =
+      for {name, dir} <- dirs do
+        %{
+          cwd: dir,
+          model: ctx.model,
+          thinking: "off",
+          approval_mode: "yolo",
+          prompt:
+            "Use the write tool to create #{name}.txt containing exactly #{name}. Then stop."
+        }
+      end
+
+    results = LemonOmp.start_many(tasks)
+    assert [{:ok, a}, {:ok, b}] = results
+    test_pid = self()
+
+    assert {:ok, wires, :settled} =
+             LemonOmp.wait_many([a["id"], b["id"]], 240_000,
+               on_update: fn wires -> send(test_pid, {:progress, wires}) end
+             )
+
+    assert Enum.all?(wires, &(&1["lastTurn"] == "completed"))
+    assert_receive {:progress, [_, _]}, 1_000
+
+    for {name, dir} <- dirs do
+      assert File.read!(Path.join(dir, "#{name}.txt")) == name
+    end
+
+    assert LemonOmp.Projection.combined_usage(wires)["totalTokens"] > 0
+    for wire <- wires, do: assert({:ok, _} = LemonOmp.close(wire["id"]))
+  end
+
+  defp await_approval(id, timeout) do
+    receive do
+      %LemonCore.Event{
+        type: :approval_requested,
+        payload: %{pending: %{action: action} = pending}
+      } ->
+        if action["ompSession"] == id, do: pending, else: await_approval(id, timeout)
+    after
+      timeout -> flunk("omp never asked for approval")
+    end
+  end
+
+  defp deny_all(id) do
+    LemonCore.Bus.subscribe("exec_approvals")
+
+    for {_id, _pid, wire} <- LemonOmp.Manager.all(),
+        wire["id"] == id,
+        approval <- wire["pendingApprovals"] || [] do
+      LemonCore.ExecApprovals.resolve(approval["id"], :deny)
+    end
+
+    deny_loop(id)
+  end
+
+  defp deny_loop(id) do
+    receive do
+      %LemonCore.Event{
+        type: :approval_requested,
+        payload: %{pending: %{action: action} = pending}
+      } ->
+        if action["ompSession"] == id, do: LemonCore.ExecApprovals.resolve(pending.id, :deny)
+        deny_loop(id)
+
+      _other ->
+        deny_loop(id)
+    end
+  end
+
   defp real_agent_dir! do
     # config/test.exs replaces HOME; ask the login shell's passwd-backed tilde expansion.
     {home, 0} = System.cmd("sh", ["-c", "eval echo ~\"$(id -un)\""])

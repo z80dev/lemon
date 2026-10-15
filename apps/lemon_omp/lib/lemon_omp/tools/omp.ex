@@ -30,9 +30,9 @@ defmodule LemonOmp.Tools.Omp do
   @description """
   Delegate a coding task to omp (oh-my-pi), an external coding agent that runs as a separate process in a \
   workspace, and observe or control it. Use it when the user asks to run something "in omp" or to hand work \
-  to omp. Actions: start (prompt, optional cwd/model/thinking; returns the session id at once — set wait=true \
+  to omp. Actions: start (prompt, optional cwd/model/thinking/approval_mode; returns the session id at once — set wait=true \
   to block and stream progress until the turn ends), start_many (tasks: array of {prompt, optional \
-  cwd/model/thinking}; starts parallel workers, wait=true gathers them all), wait (id, or ids with wait_for \
+  cwd/model/thinking/approval_mode}; starts parallel workers, wait=true gathers them all), wait (id, or ids with wait_for \
   "all" (default) or "any"; block until the turn(s) end), status (id; what the session is doing now: \
   activity, tools, todos, usage/cost, latest output), list (sessions \
   this conversation started), send (id, message; mode "steer" interrupts the running turn, "follow_up" \
@@ -71,6 +71,12 @@ defmodule LemonOmp.Tools.Omp do
                 "thinking" => %{
                   "type" => "string",
                   "enum" => ~w(off minimal low medium high xhigh max auto)
+                },
+                "approval_mode" => %{
+                  "type" => "string",
+                  "enum" => ~w(always-ask write yolo),
+                  "description" =>
+                    "This worker's approval mode; omit to use omp's configured mode."
                 }
               },
               "required" => ["prompt"]
@@ -90,6 +96,12 @@ defmodule LemonOmp.Tools.Omp do
             "type" => "string",
             "enum" => ~w(off minimal low medium high xhigh max auto),
             "description" => "omp thinking level (start, resume). Defaults to omp's setting."
+          },
+          "approval_mode" => %{
+            "type" => "string",
+            "enum" => ~w(always-ask write yolo),
+            "description" =>
+              "omp approval mode (start, resume): always-ask prompts for writes and execution, write prompts for execution, yolo auto-approves. Omit to use omp's configured mode. Prompts appear in Lemon's approval UI."
           },
           "wait" => %{
             "type" => "boolean",
@@ -149,9 +161,9 @@ defmodule LemonOmp.Tools.Omp do
 
   defp run("start", params, scope, owner_key, signal, on_update, opts) do
     params
-    |> Map.take(["prompt", "model", "thinking"])
+    |> Map.take(["prompt", "model", "thinking", "approval_mode"])
     |> Map.put("cwd", params["cwd"] || opts[:cwd])
-    |> LemonOmp.start(owner: %{kind: :agent, session_key: owner_key})
+    |> LemonOmp.start(owner: owner(owner_key, opts))
     |> after_start("start", params, scope, signal, on_update)
   end
 
@@ -163,14 +175,14 @@ defmodule LemonOmp.Tools.Omp do
           task = Map.new(task, fn {key, value} -> {to_string(key), value} end)
 
           task
-          |> Map.take(["prompt", "model", "thinking"])
+          |> Map.take(["prompt", "model", "thinking", "approval_mode"])
           |> Map.put("cwd", task["cwd"] || opts[:cwd])
 
         task ->
           task
       end)
 
-    case LemonOmp.start_many(tasks, owner: %{kind: :agent, session_key: owner}) do
+    case LemonOmp.start_many(tasks, owner: owner(owner, opts)) do
       {:error, reason} ->
         error_result("start_many", reason)
 
@@ -216,10 +228,10 @@ defmodule LemonOmp.Tools.Omp do
 
   defp run("resume", params, scope, owner_key, signal, on_update, opts) do
     params
-    |> Map.take(["prompt", "model", "thinking"])
+    |> Map.take(["prompt", "model", "thinking", "approval_mode"])
     |> Map.put("cwd", params["cwd"] || opts[:cwd])
     |> Map.put("resume", params["omp_session_id"])
-    |> LemonOmp.start(owner: %{kind: :agent, session_key: owner_key})
+    |> LemonOmp.start(owner: owner(owner_key, opts))
     |> after_start("resume", params, scope, signal, on_update)
   end
 
@@ -481,7 +493,11 @@ defmodule LemonOmp.Tools.Omp do
 
     "omp #{wire["id"]}: #{wire["status"]}" <>
       activity_suffix(wire) <>
-      if(todos != [], do: " (todos #{done}/#{length(todos)})", else: "")
+      if(todos != [], do: " (todos #{done}/#{length(todos)})", else: "") <>
+      if((wire["pendingApprovals"] || []) != [],
+        do: " (resolve via Lemon's approval prompts or exec.approval.resolve)",
+        else: ""
+      )
   end
 
   defp activity_suffix(%{"activity" => activity}) when is_binary(activity), do: " — " <> activity
@@ -492,6 +508,13 @@ defmodule LemonOmp.Tools.Omp do
 
   defp wait_seconds(value) when is_integer(value) and value > 0, do: min(value, @max_wait_seconds)
   defp wait_seconds(_value), do: @default_wait_seconds
+
+  defp owner(key, opts) do
+    opts
+    |> Keyword.take([:session_id, :run_id, :agent_id])
+    |> Map.new()
+    |> Map.merge(%{kind: :agent, session_key: key})
+  end
 
   defp owner_key(opts) do
     Enum.find_value([opts[:session_key], opts[:session_id]], fn
