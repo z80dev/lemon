@@ -7,6 +7,84 @@ defmodule CodingAgent.Tools.GrepTest do
 
   @moduletag :tmp_dir
 
+  describe "output modes and multiline" do
+    test "both backends page matching paths and count all matching lines", %{tmp_dir: root} do
+      a = Path.join(root, "a.txt")
+      b = Path.join(root, "b.txt")
+      File.write!(a, "needle\nneedle\n")
+      File.write!(b, "needle\n")
+
+      for rg? <- [true, false] do
+        opts = [
+          ripgrep_available?: rg?,
+          rg_cmd_fun: fn _, _, _ -> {rg_output([{b, 1}, {a, 2}, {a, 1}]), 0} end
+        ]
+
+        files =
+          Grep.execute(
+            "files",
+            %{"pattern" => "needle", "output_mode" => "files", "skip" => 1, "max_results" => 1},
+            nil,
+            nil,
+            root,
+            opts
+          )
+
+        assert result_text(files) =~ "\nb.txt"
+        refute result_text(files) =~ "a.txt"
+
+        counts =
+          Grep.execute(
+            "count",
+            %{"pattern" => "needle", "output_mode" => "count", "max_results" => 1},
+            nil,
+            nil,
+            root,
+            opts
+          )
+
+        assert result_text(counts) =~ "a.txt: 2"
+        assert result_text(counts) =~ "Total: 3 matches."
+        assert counts.details.counts == %{a => 2, b => 1}
+        assert counts.details.next_skip == 1
+      end
+    end
+
+    test "literal and escaped newlines enable whole-file matching with start lines", %{
+      tmp_dir: root
+    } do
+      file = Path.join(root, "multi.txt")
+      File.write!(file, "before\na\nb\na\nb\n")
+
+      for pattern <- ["a\nb", "a\\nb"], rg? <- [false, true] do
+        result =
+          Grep.execute("multi", %{"pattern" => pattern}, nil, nil, root,
+            ripgrep_available?: rg?,
+            rg_cmd_fun: fn _, args, _ ->
+              assert "-U" in args
+              {rg_output([{file, 2}, {file, 4}]), 0}
+            end
+          )
+
+        assert result.details.match_count == 2
+        assert result_text(result) =~ "multi.txt:2: a"
+        assert result_text(result) =~ "multi.txt:4: a"
+      end
+    end
+
+    test "rejects unknown modes", %{tmp_dir: root} do
+      assert {:error, "output_mode must be content, files, or count"} =
+               Grep.execute(
+                 "bad",
+                 %{"pattern" => "x", "output_mode" => "bad"},
+                 nil,
+                 nil,
+                 root,
+                 []
+               )
+    end
+  end
+
   describe "deterministic engines and bounded fallback" do
     test "rg sorts before paging even when output order changes", %{tmp_dir: root} do
       a = Path.join(root, "a.txt")

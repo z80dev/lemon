@@ -88,6 +88,14 @@ that limit is reached. A final page may therefore be empty. The notice and
 {"pattern": "TODO", "max_results": 50, "skip": 50}
 ```
 
+`output_mode` defaults to `"content"`. `"files"` returns each matching path once;
+`"count"` returns per-file matching-line counts and the total across searched files
+(also in `details.counts` and `details.match_count`). In these modes `skip` and
+`max_results` page files, not individual matches. Count mode scans all files within
+the fallback's deadline and per-file byte bound, rather than stopping at a page.
+Patterns containing a literal newline or `\n` enable multiline search (`rg -U` or
+whole-file fallback matching); results identify the start line of each matching span.
+
 Hidden files and files ignored by `.gitignore`/`.ignore` are skipped by default,
 with ripgrep or the Elixir fallback (which uses `git check-ignore` inside a work
 tree). Pass `"hidden": true` and/or `"no_ignore": true` to include them. `find`
