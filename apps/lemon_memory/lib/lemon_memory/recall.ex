@@ -75,7 +75,7 @@ defmodule LemonMemory.Recall do
       |> Enum.take(limit)
       |> render(
         user_facts,
-        Enum.take(preferences ++ Enum.map(project_facts, &("Project learning: " <> &1)), 24),
+        Enum.take(preferences ++ project_block(project_facts), 24),
         max_bytes - byte_size(@title) - 6
       )
     else
@@ -150,18 +150,37 @@ defmodule LemonMemory.Recall do
     do: user_facts(Keyword.get(opts, :workspace_dir))
 
   defp private_facts(context, {:ok, {:private, _}}, opts, terms) do
-    case Preferences.read(context, opts) do
-      {:ok, facts} ->
-        facts
-        |> Enum.sort_by(&(-Query.shared_term_count(terms, &1)))
-        |> Enum.map(&("Preference: " <> relevant_snippet(&1, terms)))
+    Enum.flat_map(["user", "memory"], fn kind ->
+      case Preferences.usage(context, kind, opts) do
+        {:ok, %{facts: [_ | _] = facts, used: used}} ->
+          entries =
+            facts
+            |> Enum.sort_by(&(-Query.shared_term_count(terms, &1)))
+            |> Enum.map(&("Preference: " <> relevant_snippet(&1, terms)))
 
-      _ ->
-        []
-    end
+          [store_block(LemonMemory.Usage.preferences(kind, used), entries)]
+
+        _ ->
+          []
+      end
+    end)
   end
 
   defp private_facts(_context, _owner, _opts, _terms), do: []
+
+  defp project_block([]), do: []
+
+  defp project_block(facts) do
+    [
+      store_block(
+        LemonMemory.Usage.project(facts),
+        Enum.map(facts, &("Project learning: " <> &1))
+      )
+    ]
+  end
+
+  defp store_block(header, entries),
+    do: header <> "\n" <> snippet(Enum.join(entries, "\n"), 768)
 
   # Match full accepted bytes before choosing a bounded excerpt, including a
   # query near the tail of a note whose index/management preview is truncated.
@@ -183,12 +202,14 @@ defmodule LemonMemory.Recall do
     case File.open(Path.join(workspace_dir, "USER.md"), [:read, :binary]) do
       {:ok, file} ->
         try do
-          case IO.binread(file, 2_048) do
-            content when is_binary(content) ->
+          case IO.binread(file, 65_537) do
+            content when is_binary(content) and byte_size(content) <= 65_536 ->
               content = binary_part(content, 0, utf8_boundary(content, byte_size(content)))
 
               if String.trim(content) != "",
-                do: "USER.md: " <> snippet(content, @user_snippet_bytes)
+                do:
+                  LemonMemory.Usage.preferences("user", String.length(content)) <>
+                    "\nUSER.md: " <> snippet(content, @user_snippet_bytes)
 
             _ ->
               nil

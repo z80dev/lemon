@@ -12,6 +12,8 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 - Remember supports exact-entry or unique-substring edits consistently across scoped
   and legacy memory, with actionable ambiguity, safety, and capacity feedback.
+- Agent prompt memory blocks show deterministic character/fact/byte capacity
+  headers and recommend consolidation above 80%; subagents remain isolated.
 
 ### Added
 

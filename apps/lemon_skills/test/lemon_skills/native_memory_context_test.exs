@@ -38,6 +38,31 @@ defmodule LemonSkills.NativeMemoryContextTest do
     %{store: store, a: a, b: %{a | memory_context_key: "private_bot_v1.actor-b"}, home: home}
   end
 
+  test "prompt blocks show full store usage, not excerpt sizes, only for main sessions", ctx do
+    user = "Birthday gift " <> String.duplicate("a", 1_100)
+    assert {:ok, _} = Preferences.remember(ctx.a, "user", user, nil, store: ctx.store)
+
+    assert {:ok, _} =
+             Preferences.remember(ctx.a, "memory", "Birthday gift", nil, store: ctx.store)
+
+    assert {:ok, _} = Project.remember(ctx.a, "Birthday gift convention.", nil, store: ctx.store)
+
+    assert {:ok, %{body: body}} =
+             MemoryRecall.contribute(ctx.a, store: ctx.store, auto_recall: true)
+
+    assert body =~ "USER PROFILE [81% — 1,114/1,375 chars]"
+    assert body =~ "Above 80% capacity: consolidate before adding."
+    assert body =~ "MEMORY [0% — 13/2,200 chars]"
+    assert body =~ "PROJECT MEMORY [1/24 facts, 25/2,000 bytes]"
+    assert :skip = MemoryRecall.contribute(%{ctx.a | session_scope: :subagent}, store: ctx.store)
+
+    shared = %{ctx.a | shared_memory_grant: true}
+    assert {:ok, _} = Preferences.remember(shared, "user", "Shared gift", nil, store: ctx.store)
+    assert {:ok, files} = Preferences.shared_bootstrap(ctx.b, store: ctx.store)
+    assert files["USER.md"] =~ "USER PROFILE [0% — 11/1,375 chars]"
+    refute files["USER.md"] =~ user
+  end
+
   test "native remember stays private despite model scope/grant claims and never modifies legacy files",
        ctx do
     before_user = File.read!(Path.join(ctx.home, "USER.md"))
@@ -203,7 +228,9 @@ defmodule LemonSkills.NativeMemoryContextTest do
              Project.remember(
                trusted_shared,
                "Birthday gift shared project uses paper wrapping.",
-               nil, store: ctx.store)
+               nil,
+               store: ctx.store
+             )
 
     assert {:ok, ["Birthday gift shared project uses paper wrapping."]} =
              Project.read(ctx.b, store: ctx.store)

@@ -175,6 +175,10 @@ are not automatically shared with context-owned runs.
 `Preferences.usage(context, kind, opts)` reports safe scoped entries, used characters
 and the per-kind cap. `Project.usage(context, opts)` reports fact count, byte usage,
 and both caps. These reads preserve the same ownership checks as ordinary reads.
+`Usage` formats deterministic capacity headers for shared bootstrap and bounded
+recall. Preference headers count saved characters; project headers include
+newline-separated UTF-8 bytes. Consolidation guidance appears strictly above
+80% of either applicable capacity, without timestamps or mutable session counters.
 
 `Project.read/2` combines only the exact private project and explicitly shared
 curated project namespace, within its existing fact/byte budget.

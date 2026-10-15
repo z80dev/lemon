@@ -5,6 +5,25 @@ defmodule CodingAgent.WorkspaceTest do
 
   @moduletag :tmp_dir
 
+  test "main bootstrap memory headers reflect file characters without modifying files", %{
+    tmp_dir: dir
+  } do
+    user = String.duplicate("x", 1_101)
+    File.write!(Path.join(dir, "USER.md"), user)
+    File.write!(Path.join(dir, "MEMORY.md"), "hello")
+    files = Workspace.load_bootstrap_files(workspace_dir: dir, session_scope: :main)
+
+    assert Enum.find(files, &(&1.name == "USER.md")).content =~
+             "USER PROFILE [80% — 1,101/1,375 chars]\nAbove 80% capacity: consolidate before adding."
+
+    assert Enum.find(files, &(&1.name == "MEMORY.md")).content =~
+             "MEMORY [0% — 5/2,200 chars]"
+
+    assert File.read!(Path.join(dir, "USER.md")) == user
+    children = Workspace.load_bootstrap_files(workspace_dir: dir, session_scope: :subagent)
+    refute Enum.any?(children, &(&1.name in ["USER.md", "MEMORY.md"]))
+  end
+
   @tag :tmp_dir
   test "ensure_workspace writes missing files without overwriting existing", %{tmp_dir: tmp_dir} do
     workspace_dir = Path.join(tmp_dir, "workspace")
@@ -68,7 +87,7 @@ defmodule CodingAgent.WorkspaceTest do
     memory = Enum.find(files, &(&1.name == "MEMORY.md"))
 
     assert memory != nil
-    assert memory.content == "long-term memory"
+    assert memory.content == "MEMORY [0% — 16/2,200 chars]\n\nlong-term memory"
   end
 
   @tag :tmp_dir
@@ -119,8 +138,13 @@ defmodule CodingAgent.WorkspaceTest do
     assert by_name["SOUL.md"].content == "controller-persona"
     assert by_name["README.md"].content == "profile-job"
     refute Map.has_key?(by_name, "IDENTITY.md")
-    assert by_name["USER.md"].content == "destination-only-user"
-    assert by_name["MEMORY.md"].content == "destination-only-memory"
+
+    assert by_name["USER.md"].content ==
+             "USER PROFILE [1% — 21/1,375 chars]\n\ndestination-only-user"
+
+    assert by_name["MEMORY.md"].content ==
+             "MEMORY [1% — 23/2,200 chars]\n\ndestination-only-memory"
+
     assert by_name["TOOLS.md"].content == "destination-tools"
     assert File.read!(Path.join(root, "SOUL.md")) == "destination-stale-persona"
     assert File.read!(Path.join(root, "USER.md")) == "destination-only-user"
@@ -164,7 +188,7 @@ defmodule CodingAgent.WorkspaceTest do
     files = Workspace.load_bootstrap_files(workspace_dir: root, profile_instructions: %{})
     local_user = Enum.find(files, &(&1.name == "USER.md"))
     refute local_user.missing
-    assert local_user.content == "local-user-preference"
+    assert local_user.content == "USER PROFILE [1% — 21/1,375 chars]\n\nlocal-user-preference"
   end
 
   @tag :tmp_dir

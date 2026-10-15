@@ -49,6 +49,15 @@ shared; appending one shared fact never promotes the rest of a file. Legacy
 unscoped sessions keep their previous file bootstrap behavior.
 Save reusable procedures as skills rather than memory facts.
 
+Prompt memory blocks report full store usage, for example
+`USER PROFILE [62% — 860/1,375 chars]`, `MEMORY [67% — 1,474/2,200 chars]`,
+and `PROJECT MEMORY [5/24 facts, 340/2,000 bytes]`. Above 80% of either
+applicable limit, a line reminds the agent to consolidate before adding.
+Scoped character counts exclude generated headings/bullets; legacy file counts
+include the saved file's formatting. Excerpts remain bounded even when the
+header reports the full store. Labels do not change stored notes or enter
+subagent prompts.
+
 ### Repository learnings
 
 Use `remember` with `{"target":"project","text":"Run targeted checks with scripts/test path."}`

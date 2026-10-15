@@ -212,7 +212,25 @@ defmodule CodingAgent.Workspace do
 
     (overlay_profile_instructions(required, profile_instructions, dir, max_chars) ++ memory)
     |> filter_bootstrap_files_for_session(session_scope)
+    |> legacy_usage_headers(memory_scope)
   end
+
+  defp legacy_usage_headers(files, {:ok, :legacy}) do
+    Enum.map(files, fn
+      %{name: name, content: text, missing: false} = file when name in ["USER.md", "MEMORY.md"] ->
+        kind = if name == "USER.md", do: "user", else: "memory"
+
+        %{
+          file
+          | content: LemonMemory.Usage.preferences(kind, String.length(text)) <> "\n\n" <> text
+        }
+
+      file ->
+        file
+    end)
+  end
+
+  defp legacy_usage_headers(files, _scope), do: files
 
   defp legacy_memory_file(dir, max_chars) do
     case find_first_existing_exact(dir, [@memory_file]) do
