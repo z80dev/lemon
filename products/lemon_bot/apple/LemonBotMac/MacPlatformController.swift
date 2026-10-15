@@ -130,8 +130,8 @@ final class MacPlatformController: NSObject {
     }
 
     func summon() {
-        guard store.account != nil else { NSApp.activate(ignoringOtherApps: true); return }
-        guard let bot = selectedBot else { errorMessage = "Choose a Bot in macOS settings before summoning its composer."; return }
+        guard store.account != nil else { errorMessage = "Sign in to Lemon Bot to use the quick composer."; NSApp.activate(ignoringOtherApps: true); return }
+        guard let bot = selectedBot else { errorMessage = "Choose a Bot in Lemon Bot Settings first."; NSApp.activate(ignoringOtherApps: true); return }
         panelConversationID = bot.mainConversationId
         if composerPanel == nil {
             composerPanel = makePanel(title: "Lemon Bot — Mini composer", id: "lemonbot.composer", size: NSSize(width: 520, height: 340))
@@ -191,6 +191,14 @@ final class MacPlatformController: NSObject {
     }
 
     func cancelCapture() { speech.cancel(); captureConversationID = nil }
+
+    func startNewVoiceMessage() {
+        guard uncertainVoiceSend, !busy else { return }
+        speech.cancel()
+        uncertainVoiceSend = false
+        errorMessage = nil
+        speechStatus = "Previous message wasn't confirmed. Check the conversation before sending a new message."
+    }
 
     func keepReviewedDraft() {
         guard let id = captureConversationID, !speech.transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
@@ -270,7 +278,7 @@ final class MacPlatformController: NSObject {
             guard generation == accountGeneration else { return }
             if receipt.status == "outcome_unknown" {
                 uncertainVoiceSend = true
-                errorMessage = "Voice message outcome unknown. Inspect this conversation’s entries and runs before another send; this message will not be replayed."
+                errorMessage = "We couldn't confirm this voice message was sent. Check the conversation before sending again."
             } else if receipt.delivery.contains(where: { $0.effectiveMode == "rejected" }) {
                 speech.cancel()
                 speechStatus = "Message saved; the Bot did not admit this work."
