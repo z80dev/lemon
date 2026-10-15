@@ -26,14 +26,20 @@ import {
 	RequestTimeoutError,
 } from "../protocol/errors.ts";
 import { type ControlPlaneMethods, METHOD, OMP_METHODS } from "../protocol/methods.ts";
-import { isOmpSessionBusy, isOmpSessionEnded, type OmpSession } from "../protocol/omp.ts";
+import {
+	isOmpSessionBusy,
+	isOmpSessionEnded,
+	type OmpApprovalMode,
+	type OmpSession,
+} from "../protocol/omp.ts";
 import type { OmpStore } from "../store/omp-store.ts";
 import type { CommandContext, SlashCommand } from "./registry.ts";
 
 /** Rows one `omp.sessions.list` asks for (the server clamps to 100). */
 export const OMP_LIST_LIMIT = 50;
 
-const USAGE = "usage: /omp [run <prompt> | status]";
+const USAGE =
+	"usage: /omp [run [--approval-mode always-ask|write|yolo] [--isolate] <prompt> | status]";
 
 /** Why omp cannot be used through this daemon, or undefined when it can. */
 export function ompUnavailableReason(
@@ -66,7 +72,13 @@ export function describeOmpError(error: unknown): string {
 	}
 	if (ControlPlaneError.is(error)) {
 		const message = safeLine(error.message, 200);
-		const details = error.details as { retrySafe?: unknown } | null | undefined;
+		const details = error.details as
+			| { retrySafe?: unknown; code?: unknown; applied?: unknown; failedStep?: unknown }
+			| null
+			| undefined;
+		if (details?.code === "OMP_PARTIALLY_APPLIED") {
+			return `${message} — partially applied (${Array.isArray(details.applied) ? details.applied.join(", ") : "unknown"}); failed at ${String(details.failedStep ?? "unknown")}; refresh before changing settings again`;
+		}
 		if (details?.retrySafe === false) {
 			return `${message} — outcome unknown; refresh before retrying`;
 		}
@@ -121,6 +133,22 @@ export function ompSessionLine(session: OmpSession): string {
 }
 
 async function runOmp(ctx: CommandContext, prompt: string): Promise<void> {
+	let approvalMode: OmpApprovalMode | undefined;
+	let isolate: boolean | undefined;
+	while (prompt.startsWith("--")) {
+		if (/^--isolate(?:\s|$)/.test(prompt)) {
+			isolate = true;
+			prompt = prompt.replace(/^--isolate\s*/, "");
+		} else {
+			const match = /^--approval-mode\s+(always-ask|write|yolo)(?:\s+|$)/.exec(prompt);
+			if (!match) {
+				ctx.ui.notice(USAGE, "warning");
+				return;
+			}
+			approvalMode = match[1] as OmpApprovalMode;
+			prompt = prompt.slice(match[0].length);
+		}
+	}
 	if (!prompt) {
 		ctx.ui.notice(USAGE, "warning");
 		return;
@@ -136,7 +164,12 @@ async function runOmp(ctx: CommandContext, prompt: string): Promise<void> {
 	}
 	const cwd = ctx.cwd ?? process.cwd();
 	try {
-		const { session } = await ctx.methods.ompSessionsStart({ prompt, cwd });
+		const { session } = await ctx.methods.ompSessionsStart({
+			prompt,
+			cwd,
+			...(approvalMode ? { approvalMode } : {}),
+			...(isolate ? { isolate } : {}),
+		});
 		ctx.store.omp.upsert(session);
 		const where = basename(cwd) || cwd;
 		ctx.ui.notice(

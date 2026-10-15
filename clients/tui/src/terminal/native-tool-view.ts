@@ -60,8 +60,13 @@ import {
 } from "@oh-my-pi/pi-tui/tools/web-search-types";
 import { formatCount } from "@oh-my-pi/pi-utils";
 import { safeLine, safeText } from "../formatters/base.ts";
-import { ompSessionLabel, ompStatusText, ompTodoProgress } from "../formatters/omp.ts";
-import { parseOmpDiscoveredList, parseOmpSession, parseOmpSessions } from "../protocol/omp.ts";
+import {
+	ompFormatter,
+	ompSessionLabel,
+	ompStatusText,
+	ompTodoProgress,
+} from "../formatters/omp.ts";
+import { parseOmpSession, parseOmpSessions } from "../protocol/omp.ts";
 import type { ToolBlock } from "../store/transcript-model.ts";
 import { ompAgentNode, ompDetailNodes } from "../ui/omp-nodes.ts";
 import { type ToolView, toolArgs, toolDetails } from "../ui/tool-view.ts";
@@ -1150,6 +1155,20 @@ function taskView(f: ToolFacts): NativeToolView {
  */
 function ompView(f: ToolFacts): NativeToolView {
 	const action = safeLine(str(f.details.action) ?? str(f.args.action) ?? "omp", 20);
+	if (
+		["start_many", "models", "subagent", "discover"].includes(action) ||
+		(action === "wait" && Array.isArray(f.details.sessions))
+	) {
+		const formatted = ompFormatter.formatResult(
+			{ details: f.details, is_error: f.failed, content: [{ type: "text", text: f.output }] },
+			f.args,
+		);
+		return {
+			tool: { title: "omp", target: formatted.summary, targetKind: "text", meta: [action] },
+			tone: f.failed ? "error" : undefined,
+			body: [noteText(formatted.details.join("\n"))],
+		};
+	}
 	if (f.failed) {
 		return {
 			tool: { title: "omp", meta: [action] },
@@ -1176,24 +1195,6 @@ function ompView(f: ToolFacts): NativeToolView {
 							}),
 						)
 					: [noteText("No omp sessions", "dim")],
-		};
-	}
-	if (action === "discover" && Array.isArray(f.details.sessions)) {
-		const rows = parseOmpDiscoveredList(f.details.sessions);
-		const lines = rows.map((row) => {
-			const live = row.liveId ? ` · live ${row.liveId}` : "";
-			return `${safeLine(row.ompSessionId, 13)}  ${safeLine(row.title, 80) || "(untitled)"} · ${safeLine(row.lastStatus, 20)}${live}`;
-		});
-		return {
-			tool: {
-				title: "omp",
-				target: formatCount("stored session", rows.length),
-				targetKind: "text",
-				meta: [action],
-			},
-			body: [
-				noteText(lines.join("\n") || "No stored omp sessions", lines.length > 0 ? "muted" : "dim"),
-			],
 		};
 	}
 	const session = parseOmpSession(f.details.session);

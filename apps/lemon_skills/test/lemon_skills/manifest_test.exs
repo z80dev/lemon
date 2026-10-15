@@ -306,7 +306,7 @@ defmodule LemonSkills.ManifestTest do
             %{"required_environment_variables" => ["SAFE", nil]},
             %{"requires_tools" => ["git\nforged"]},
             %{"metadata" => "not-a-map"},
-            %{"metadata" => %{"lemon" => "not-a-map"}}
+            %{"metadata" => %{"lemon" => ["not-a-map-or-string"]}}
           ] do
         assert {:error, reason} = Manifest.validate(manifest)
         assert is_binary(reason)

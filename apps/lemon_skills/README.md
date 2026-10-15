@@ -23,6 +23,12 @@ LemonSkills provides a centralized system for extending agent capabilities throu
 not a Hex package; it ships as part of the reference runtime. It depends on
 `lemon_core`, `lemon_agent`, `lemon_ai`, `lemon_memory` and `lemon_media`.
 
+Usage counters are recorded at the skill tool telemetry entry points, independently
+of introspection subscribers. Discovery-only prompt metadata is not a load.
+Pinned bundles reject content edits as well as archive/delete. The curator accepts
+`:exempt_skills` from its caller (automation owns cron lookups) and gives never-used
+skills at least `stale_after_days` before automatic archival.
+
 ## Profile memory transfer
 
 `LemonSkills.ProfileMemoryTransfer` owns private memory copying, not placement.
@@ -274,6 +280,13 @@ Instructions here.
 | `requires.config` | list | Required environment variables, checked via `System.get_env/1` |
 
 YAML frontmatter is parsed with `YamlElixir`; TOML frontmatter supports Lemon's flat scalar/list subset. Hermes platform aliases (`macos`, `windows`) and `prerequisites.commands` / `prerequisites.env_vars` are normalized to Lemon's platform and requirement fields.
+
+Agent Skills YAML fields `license`, `compatibility`, `metadata`, and experimental
+`allowed-tools` are preserved, including string-valued `metadata.lemon`.
+Descriptions accept up to 1024 Unicode characters within the 4096-byte safety
+bound. `allowed-tools` never grants tool permissions. See
+[interoperability and deliberate validation differences](../../docs/user-guide/skills.md#agent-skills-interoperability)
+for portable naming rules, resource directories, and legacy leniency.
 
 ## Importing official Hermes skills
 

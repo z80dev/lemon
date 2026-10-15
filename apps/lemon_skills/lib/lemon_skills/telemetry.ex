@@ -13,10 +13,12 @@ defmodule LemonSkills.Telemetry do
   @max_reason_chars 500
 
   def skill_load(metadata) do
+    LemonSkills.Usage.record_load(metadata)
     emit([:lemon_skills, :skill, :load], metadata)
   end
 
   def skill_write(metadata) do
+    LemonSkills.Usage.record_write(metadata)
     emit([:lemon_skills, :skill, :write], metadata)
   end
 
@@ -77,8 +79,6 @@ defmodule LemonSkills.Telemetry do
   defp normalize_value(_key, value), do: value
 
   defp record_introspection(event_type, metadata) do
-    record_usage(event_type, metadata)
-
     Introspection.record(
       event_type,
       Map.drop(metadata, [:run_id, :session_key, :session_id, :agent_id]),
@@ -89,8 +89,4 @@ defmodule LemonSkills.Telemetry do
       provenance: :direct
     )
   end
-
-  defp record_usage(:skill_load_observed, metadata), do: LemonSkills.Usage.record_load(metadata)
-  defp record_usage(:skill_write_observed, metadata), do: LemonSkills.Usage.record_write(metadata)
-  defp record_usage(_event_type, _metadata), do: :ok
 end
