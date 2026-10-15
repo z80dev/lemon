@@ -10,10 +10,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Lemon Bot
 
+- Apple clients explain backend, network, sign-in and Lemon-link failures with live retry timing, service discovery and shared recovery controls; sandboxed Macs offer copyable local-start commands rather than launching a daemon.
 - Name missing required Lemon Bot startup settings without a stack dump, keep
   operator configuration details in server diagnostics rather than owner errors,
   and clarify backend/SDK setup and contributor documentation.
-
 - Add truthful attached-instance status, controller reconnect (including rejected
   credentials), and opt-in owner-only local runtime start/stop/restart with
   bounded operation receipts. Publish TypeScript SDK helpers, Swift Codable
@@ -24,11 +24,23 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 - omp's chat tool and Elixir API can redirect a running turn atomically with
   `abort_and_prompt`. Existing waits follow the replacement turn; asynchronous
   prompt failures are reported without acknowledging the same command twice.
+- omp workers support opt-in per-worker Git worktree isolation through `isolate`
+  on starts and batch tasks, with managed branches, merge instructions, and
+  bounded cleanup that preserves uncommitted or committed work.
+- Cached omp model catalog through `LemonOmp.models/1` and the `omp` tool's
+  `models` action, with cheap/free filtering, pricing and upstream availability warnings.
 - Computer use: with `LEMON_COMPUTER_USE_ENABLED=true`, Lemon agents get
   `cua_js`/`cua_js_reset` to operate native apps through the ChatGPT desktop
   app's computer-use runtime via LCU. Per-app approval requests become Lemon
   approvals (once or for the session); Lemon's own apps are never approved.
   See [Computer use](docs/tools/computer-use.md).
+- Computer use can drive Chrome tabs (`LEMON_COMPUTER_USE_CHROME=true`, LCU's
+  `--chrome` surface through the official ChatGPT extension). Website access
+  requests become Lemon approvals for the origin; Lemon's own local web and
+  control-plane origins are never approved.
+- Computer use also never approves the Lemon Bot web client (its
+  `LEMON_BOT_PUBLIC_URL` origin and development port) or origins listed in
+  `LEMON_COMPUTER_USE_DECLINED_ORIGINS`.
 - omp sessions can select an approval mode and bridge tool approval prompts to
   Lemon's conversation/channel approval UI or operator `exec.approval.resolve`.
   Snapshots and wait progress expose pending approvals and decision counts;

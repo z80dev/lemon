@@ -15,6 +15,9 @@ defmodule LemonComputerUse.Config do
       imports LCU's shared harness client from `<root>/adapters/client.mjs`.
     * `:node` / `LEMON_COMPUTER_USE_NODE` — Node runtime for the bridge (default
       `<root>/agent-tools/node/bin/node`, the runtime LCU selected at setup).
+    * `:chrome` / `LEMON_COMPUTER_USE_CHROME` — also enable the runtime's
+      browser surface (`lcu --chrome`): Chrome tabs through the official
+      ChatGPT extension (default `false`). Requires `lcu browser install`.
     * `:connect_timeout_ms` — how long tool construction waits for the first
       connection (default 30 seconds).
 
@@ -30,6 +33,14 @@ defmodule LemonComputerUse.Config do
     case parse_bool(env("LEMON_COMPUTER_USE_ENABLED")) do
       value when is_boolean(value) -> value
       nil -> Application.get_env(@app, :enabled, false) == true
+    end
+  end
+
+  @spec chrome?() :: boolean()
+  def chrome? do
+    case parse_bool(env("LEMON_COMPUTER_USE_CHROME")) do
+      value when is_boolean(value) -> value
+      nil -> Application.get_env(@app, :chrome, false) == true
     end
   end
 
@@ -59,7 +70,7 @@ defmodule LemonComputerUse.Config do
   def command do
     case Application.get_env(@app, :command) do
       [_ | _] = argv -> argv
-      _ -> [Path.join(lcu_root(), "bin/lcu")]
+      _ -> [Path.join(lcu_root(), "bin/lcu") | if(chrome?(), do: ["--chrome"], else: [])]
     end
   end
 
@@ -81,6 +92,51 @@ defmodule LemonComputerUse.Config do
       _ -> @default_connect_timeout_ms
     end
   end
+
+  @doc """
+  Website origins computer use always declines, besides Lemon's local ports:
+  the Lemon Bot web client's origin (`LEMON_BOT_PUBLIC_URL`, which serves its
+  approvals surface) and any origins listed in
+  `LEMON_COMPUTER_USE_DECLINED_ORIGINS` (comma-separated) or
+  `config :lemon_computer_use, declined_origins: [...]`. Each entry is reduced
+  to its `scheme://host[:port]` origin; unparseable entries are ignored.
+  """
+  @spec declined_origins() :: [String.t()]
+  def declined_origins do
+    listed =
+      case env("LEMON_COMPUTER_USE_DECLINED_ORIGINS") do
+        nil -> []
+        value -> String.split(value, ",", trim: true)
+      end
+
+    configured =
+      case Application.get_env(@app, :declined_origins, []) do
+        list when is_list(list) -> list
+        _ -> []
+      end
+
+    [env("LEMON_BOT_PUBLIC_URL") | listed ++ configured]
+    |> Enum.flat_map(&origin_of/1)
+    |> Enum.uniq()
+  end
+
+  @doc false
+  @spec origin_of(term()) :: [String.t()]
+  def origin_of(value) when is_binary(value) do
+    case URI.parse(String.trim(value)) do
+      %URI{scheme: scheme, host: host, port: port}
+      when scheme in ["http", "https"] and is_binary(host) and host != "" ->
+        bracketed = if String.contains?(host, ":"), do: "[" <> host <> "]", else: host
+        default = if scheme == "https", do: 443, else: 80
+        suffix = if port in [nil, default], do: "", else: ":" <> Integer.to_string(port)
+        [scheme <> "://" <> String.downcase(bracketed) <> suffix]
+
+      _ ->
+        []
+    end
+  end
+
+  def origin_of(_value), do: []
 
   defp env(name) do
     case System.get_env(name) do

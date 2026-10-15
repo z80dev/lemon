@@ -23,7 +23,8 @@ approval routing and lifecycle. See [README](README.md) and the
 - Real identities: session = Lemon session id, turn = run id. Never reuse an
   ended turn id; end turns on `:run_completed` or session exit.
 - Approvals go through `ExecApprovals` and fail closed: errors, unknown scopes,
-  malformed or non-native-app requests cancel. Lemon's own apps are declined.
+  malformed requests cancel. Only native-app and exact http(s) website-origin
+  requests are answered. Lemon's own apps and local Lemon origins are declined.
   Never write LCU's always-allowed store.
 - The bridge gets a minimal environment (no provider credentials or `LEMON_*`)
   and the account's real home. Results are forwarded unchanged and untrusted.
@@ -33,4 +34,6 @@ approval routing and lifecycle. See [README](README.md) and the
 
 From the umbrella root: `scripts/test path apps/lemon_computer_use/test`
 (fake bridge in `test/support`, needs `node`). The live Calculator smoke needs
-LCU and the ChatGPT app: add `--include computer_use_live`.
+LCU and the ChatGPT app: add `--include computer_use_live`. The Chrome smoke
+(`--include computer_use_chrome_live`) also needs the ChatGPT extension
+connected; it opens and closes one tab on a local page.

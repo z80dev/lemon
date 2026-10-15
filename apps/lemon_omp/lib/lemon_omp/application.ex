@@ -14,6 +14,7 @@ defmodule LemonOmp.Application do
     # the snapshot table still exists.
     children = [
       LemonOmp.Manager,
+      LemonOmp.Models,
       {DynamicSupervisor, name: LemonOmp.SessionSupervisor, strategy: :one_for_one}
     ]
 

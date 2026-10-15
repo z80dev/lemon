@@ -30,7 +30,7 @@ defmodule LemonOmp.Session do
 
   use GenServer, restart: :temporary, shutdown: 5_000
 
-  alias LemonOmp.{Approval, Config, Manager, Projection, Rpc}
+  alias LemonOmp.{Approval, Config, Manager, Projection, Rpc, Worktree}
 
   @line_bytes 65_536
   @max_frame_bytes 4 * 1_048_576
@@ -107,6 +107,7 @@ defmodule LemonOmp.Session do
       Projection.new(
         id: id,
         cwd: Keyword.fetch!(opts, :cwd),
+        worktree: Worktree.wire(Keyword.get(opts, :worktree)),
         model: Keyword.get(opts, :model),
         thinking: Keyword.get(opts, :thinking),
         approval_mode: Keyword.get(opts, :approval_mode),
@@ -117,6 +118,7 @@ defmodule LemonOmp.Session do
     state = %{
       id: id,
       projection: projection,
+      worktree: Keyword.get(opts, :worktree),
       port: nil,
       os_pid: nil,
       stderr_path: stderr_path,
@@ -283,13 +285,20 @@ defmodule LemonOmp.Session do
     state = cancel_approvals(state, "omp session closed")
     if state.port, do: stop_process(state)
 
-    if state.projection.status not in [:closed, :failed] do
-      state
-      |> update_projection(
-        &Projection.finish(&1, :closed, %{code: nil, reason: state.close_reason || :closed})
-      )
-      |> publish("exited")
-    end
+    worktree = Worktree.cleanup(state.worktree)
+    state = update_projection(state, &%{&1 | worktree: worktree})
+
+    state =
+      if state.projection.status not in [:closed, :failed] do
+        update_projection(
+          state,
+          &Projection.finish(&1, :closed, %{code: nil, reason: state.close_reason || :closed})
+        )
+      else
+        state
+      end
+
+    publish(state, "exited")
 
     _ = File.rm(state.stderr_path)
     :ok

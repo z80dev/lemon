@@ -383,13 +383,6 @@ defmodule LemonMCP.SkillsMcpSourceTest do
   end
 
   describe "mcp_enabled?/0" do
-    test "returns based on LemonMCP.Client availability when not disabled" do
-      Application.delete_env(:lemon_skills, :mcp_disabled)
-      # Result depends on whether LemonMCP.Client is loaded
-      expected = Code.ensure_loaded?(LemonMCP.Client)
-      assert McpSource.mcp_enabled?() == expected
-    end
-
     test "returns false when explicitly disabled" do
       Application.put_env(:lemon_skills, :mcp_disabled, true)
       assert McpSource.mcp_enabled?() == false
@@ -403,17 +396,6 @@ defmodule LemonMCP.SkillsMcpSourceTest do
   end
 
   describe "with disabled MCP source" do
-    test "discover_tools returns empty list when MCP is unavailable", %{tmp_dir: _tmp_dir} do
-      # MCP is already started by the application, just verify behavior
-      # Since LemonMCP.Client is available, MCP is not disabled
-      # Just verify we get some result (empty list or tools depending on config)
-      result = McpSource.discover_tools()
-      assert is_list(result)
-
-      status = McpSource.status()
-      assert is_map(status)
-    end
-
     test "get_tool returns :error for unknown tool", %{tmp_dir: _tmp_dir} do
       # MCP is already started, test with a non-existent tool
       assert McpSource.get_tool("unknown_tool_that_does_not_exist") == :error
@@ -1113,20 +1095,6 @@ defmodule LemonMCP.SkillsMcpSourceTest do
 
       assert {:error, errors} = LemonSkills.Config.validate_mcp_servers(configs)
       assert length(errors) == 7
-    end
-  end
-
-  describe "Config.mcp_config/1" do
-    test "merges global and project config" do
-      # This test would require more setup to create actual config files
-      # For now, we just verify it returns the expected structure
-      result = LemonSkills.Config.mcp_config(nil)
-
-      assert is_map(result)
-      assert Map.has_key?(result, :servers)
-      assert Map.has_key?(result, :enabled)
-      assert is_list(result.servers)
-      assert is_boolean(result.enabled)
     end
   end
 

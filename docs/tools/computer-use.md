@@ -34,6 +34,8 @@ Optional settings:
 | `LEMON_COMPUTER_USE_ENABLED` | `false` | Opt-in switch. Off, nothing is registered and LCU never starts. |
 | `LEMON_COMPUTER_USE_LCU_ROOT` | `~/.local/share/lcu/current` (or `/opt/lcu/current`) | Installed LCU release. |
 | `LEMON_COMPUTER_USE_NODE` | `<root>/agent-tools/node/bin/node` | Node runtime for Lemon's bridge. |
+| `LEMON_COMPUTER_USE_CHROME` | `false` | Also control Chrome tabs (`lcu --chrome`); see [Chrome](#chrome). |
+| `LEMON_COMPUTER_USE_DECLINED_ORIGINS` | – | Extra website origins never approved, comma-separated. |
 
 When enabled, the runtime starts one bridge process at boot. Every session then
 gets the two tools below and a short **Computer use** system-prompt section
@@ -85,6 +87,30 @@ macOS too, require approval for the tool in your tool policy:
 [profiles.default.tool_policy]
 require_approval = ["bash", "write", "edit", "cua_js"]
 ```
+
+## Chrome
+
+With `LEMON_COMPUTER_USE_CHROME=true` the runtime also gets its browser surface:
+`cua.listBrowsers()`, `cua.getBrowser()`, `cua.createBrowserTab(browserId, url)`,
+`cua.getTab(...)` and per-tab observation and input. It drives your own Chrome
+through the official ChatGPT extension, which must be enabled in the Chrome
+profile; `lcu browser status` reports whether it is connected. If it is not, LCU
+documents `lcu browser install` (it repoints the extension's native-messaging
+host at LCU's relay, which other apps using that extension share), followed by
+a Chrome restart or toggling the extension.
+
+The runtime asks before it first uses each website. Lemon turns that into a
+Lemon approval for tool `computer_use` with action `{"origin": "<origin>"}`.
+Any approval lets the agent use that site for the rest of the session, because
+the runtime remembers site decisions per session itself; a denial refuses it.
+Only exact `http(s)://host[:port]` origins are accepted; anything else is
+refused. Lemon's own surfaces are always declined without asking, because
+they show Lemon approvals: the local control plane, Lemon Web and the Lemon Bot
+web development server (`localhost`, `127.0.0.1` or `[::1]` on the configured
+control and web ports and 4081), the Lemon Bot web client at
+`LEMON_BOT_PUBLIC_URL` when that is set in Lemon's environment, and any origins
+you list in `LEMON_COMPUTER_USE_DECLINED_ORIGINS` (comma-separated; use it for
+a Lemon Bot deployment whose backend runs elsewhere). Page content is untrusted like every other result.
 
 ## Turns and sessions
 

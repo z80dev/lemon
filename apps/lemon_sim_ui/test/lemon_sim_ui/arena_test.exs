@@ -583,6 +583,33 @@ defmodule LemonSimUi.ArenaTest do
     assert Arena.current_sim_id(arena) =~ ~r/^ww_/
   end
 
+  test "poker arena seats six players rather than the solo registry default", ctx do
+    assert LemonSim.Bench.Domains.get("poker").default_player_count == 4
+    parent = self()
+
+    start_supervised!(
+      {Arena,
+       domain: :poker,
+       name: nil,
+       enabled: true,
+       models: @pool,
+       league_dir: ctx.tmp_dir,
+       start_delay_ms: 0,
+       deps: %{
+         list_running: fn -> [] end,
+         list_states: fn -> [] end,
+         start_sim: fn :poker, opts ->
+           send(parent, {:default_poker_seats, opts})
+           {:ok, "pkr_default_seats"}
+         end
+       }}
+    )
+
+    assert_receive {:default_poker_seats, opts}, 1_000
+    assert opts[:player_count] == 6
+    assert Enum.sort(opts[:model_specs]) == Enum.sort(@pool ++ @pool)
+  end
+
   test "poker domain records ranked games through the generic path", ctx do
     arena = start_arena(ctx, domain: :poker)
     assert_receive {:start_sim, start_opts}, 1_000

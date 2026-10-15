@@ -35,6 +35,19 @@ defmodule LemonComputerUse.Env do
       apps: [:lemon_computer_use]
     },
     %{
+      name: :computer_use_chrome,
+      env_var: "LEMON_COMPUTER_USE_CHROME",
+      aliases: [],
+      type: :boolean,
+      default: false,
+      doc:
+        "Also control Chrome tabs (lcu --chrome) through the official ChatGPT extension; requires `lcu browser install`.",
+      secret?: false,
+      required?: false,
+      area: :computer_use,
+      apps: [:lemon_computer_use]
+    },
+    %{
       name: :computer_use_node,
       env_var: "LEMON_COMPUTER_USE_NODE",
       aliases: [],
@@ -42,6 +55,32 @@ defmodule LemonComputerUse.Env do
       default: nil,
       doc:
         "Node runtime for the LCU bridge. Defaults to LCU's own <root>/agent-tools/node/bin/node.",
+      secret?: false,
+      required?: false,
+      area: :computer_use,
+      apps: [:lemon_computer_use]
+    },
+    %{
+      name: :computer_use_declined_origins,
+      env_var: "LEMON_COMPUTER_USE_DECLINED_ORIGINS",
+      aliases: [],
+      type: :string,
+      default: nil,
+      doc:
+        "Comma-separated website origins computer use always declines (for example a custom Lemon Bot web origin).",
+      secret?: false,
+      required?: false,
+      area: :computer_use,
+      apps: [:lemon_computer_use]
+    },
+    %{
+      name: :computer_use_lemon_bot_public_url,
+      env_var: "LEMON_BOT_PUBLIC_URL",
+      aliases: [],
+      type: :string,
+      default: nil,
+      doc:
+        "The Lemon Bot backend's public origin (owned by the Lemon Bot backend); computer use declines it because its web client shows approvals.",
       secret?: false,
       required?: false,
       area: :computer_use,

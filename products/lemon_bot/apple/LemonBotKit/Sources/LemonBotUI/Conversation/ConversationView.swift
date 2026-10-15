@@ -370,6 +370,8 @@ public struct ConversationView: View {
     private func open() async {
         settled = false; atBottom = true; hasNewBelow = false; renderedReadSeq = 0; readTarget = 0; loadedRuns = []; runsError = nil
         if let conversation, conversation.unreadCount > 0 { unreadFromSeq = conversation.lastReadSeq + 1 } else { unreadFromSeq = nil }
+        // The shared connection panel owns revoked-device recovery; retain the cached transcript.
+        guard store.connectionState != "reconnect_required" else { settled = true; return }
         let runsTask = Task { await loadRuns() }
         await action.perform {
             try await store.openConversation(conversationID, select: false)

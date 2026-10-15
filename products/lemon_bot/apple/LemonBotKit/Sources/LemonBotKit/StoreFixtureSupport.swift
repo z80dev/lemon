@@ -14,5 +14,14 @@ extension LemonBotStore {
         connectionState = "online"
         errorMessage = nil
     }
+    public func pinFixtureConnectionFailure(_ error: Error, nextRetry: Date? = nil) {
+        stopSocket(); connectionState = "disconnected"
+        lastConnectionAttemptAt = Date(); nextRetryAt = nextRetry
+        recordConnectionFailure(error)
+    }
+    public func pinFixtureControllerDown(_ status: InstanceStatus) {
+        pinFixtureOnline(); instanceStatus = status
+        capabilities?.controlConnected = false; updateControllerIssue()
+    }
 }
 #endif
