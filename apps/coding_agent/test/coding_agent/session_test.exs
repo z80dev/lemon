@@ -1,5 +1,18 @@
 defmodule CodingAgent.SessionTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
+
+  setup do
+    tmp_dir =
+      Path.join(System.tmp_dir!(), "#{__MODULE__}_#{System.unique_integer([:positive])}")
+
+    File.mkdir_p!(tmp_dir)
+    on_exit(fn -> File.rm_rf!(tmp_dir) end)
+    Process.put({__MODULE__, :cwd}, tmp_dir)
+    {:ok, tmp_dir: tmp_dir}
+  end
+
+  defp session_cwd, do: Process.get({__MODULE__, :cwd})
+  defp workspace_dir, do: Path.join(session_cwd(), "workspace")
 
   alias CodingAgent.Config
   alias CodingAgent.Session
@@ -175,7 +188,11 @@ defmodule CodingAgent.SessionTest do
   defp default_opts(overrides) do
     Keyword.merge(
       [
-        cwd: System.tmp_dir!(),
+        cwd: session_cwd(),
+        workspace_dir: workspace_dir(),
+        tools: [],
+        extension_inventory: {[], []},
+        mcp_tools: [],
         model: mock_model(),
         # Use a mock stream function that returns a simple response
         stream_fn: mock_stream_fn_single(assistant_message("Hello!"))
@@ -186,8 +203,7 @@ defmodule CodingAgent.SessionTest do
 
   defp start_session(opts \\ []) do
     opts = default_opts(opts)
-    {:ok, session} = Session.start_link(opts)
-    session
+    start_supervised!(Supervisor.child_spec({Session, opts}, id: make_ref(), restart: :temporary))
   end
 
   defp wait_for_streaming_complete(session) do
@@ -211,7 +227,7 @@ defmodule CodingAgent.SessionTest do
       session = start_session()
       state = Session.get_state(session)
 
-      assert state.cwd == System.tmp_dir!()
+      assert state.cwd == session_cwd()
       assert state.model.id == "mock-model-1"
     end
 
@@ -340,9 +356,7 @@ defmodule CodingAgent.SessionTest do
     end
 
     test "spills oversized tool results to disk in transform_context" do
-      cwd =
-        Path.join(System.tmp_dir!(), "session_spill_test_#{System.unique_integer([:positive])}")
-
+      cwd = Path.join(session_cwd(), "spill")
       File.mkdir_p!(cwd)
       session = start_session(cwd: cwd)
       state = Session.get_state(session)
@@ -388,11 +402,7 @@ defmodule CodingAgent.SessionTest do
     end
 
     test "defaults cwd for direct session starts" do
-      {:ok, session} =
-        Session.start_link(
-          model: mock_model(),
-          stream_fn: mock_stream_fn_single(assistant_message("Hello!"))
-        )
+      {:ok, session} = Session.start_link(Keyword.delete(default_opts([]), :cwd))
 
       state = Session.get_state(session)
       assert state.cwd == File.cwd!()
@@ -418,7 +428,7 @@ defmodule CodingAgent.SessionTest do
 
     test "intersects a supplied policy floor with execution authority" do
       alias LemonCore.{ExecutionContext, ToolPolicy}
-      cwd = System.tmp_dir!()
+      cwd = session_cwd()
       {:ok, context} = ExecutionContext.new(run_id: "session-floor", cwd: cwd)
 
       session =
@@ -483,7 +493,9 @@ defmodule CodingAgent.SessionTest do
       # Model is resolved from settings; if not in settings, it raises ArgumentError
       Process.flag(:trap_exit, true)
       settings = %SettingsManager{default_model: nil}
-      result = Session.start_link(cwd: System.tmp_dir!(), settings_manager: settings)
+
+      result =
+        Session.start_link(Keyword.delete(default_opts(settings_manager: settings), :model))
 
       case result do
         {:error, _reason} ->
@@ -503,7 +515,7 @@ defmodule CodingAgent.SessionTest do
       {:ok, _pid} = Session.start_link(opts)
 
       state = Session.get_state(name)
-      assert state.cwd == System.tmp_dir!()
+      assert state.cwd == session_cwd()
     end
   end
 
@@ -609,7 +621,7 @@ defmodule CodingAgent.SessionTest do
     end
 
     test "appends extra_tools to default toolset" do
-      session = start_session(extra_tools: [echo_tool()])
+      session = start_session(tools: nil, extra_tools: [echo_tool()])
       state = Session.get_state(session)
 
       tool_names = Enum.map(state.tools, & &1.name)
@@ -635,7 +647,7 @@ defmodule CodingAgent.SessionTest do
     end
 
     test "builds default tools when none provided" do
-      session = start_session()
+      session = start_session(tools: nil)
       state = Session.get_state(session)
 
       # Default tools include read/write/edit/bash (extensions may add more)
@@ -770,18 +782,6 @@ defmodule CodingAgent.SessionTest do
 
     @tag :tmp_dir
     test "same session id under a different cwd starts fresh", %{tmp_dir: tmp_dir} do
-      agent_dir = Path.join(tmp_dir, "agent_home")
-      original_agent_dir = System.get_env("LEMON_AGENT_DIR")
-      System.put_env("LEMON_AGENT_DIR", agent_dir)
-
-      on_exit(fn ->
-        if original_agent_dir do
-          System.put_env("LEMON_AGENT_DIR", original_agent_dir)
-        else
-          System.delete_env("LEMON_AGENT_DIR")
-        end
-      end)
-
       cwd_a = Path.join(tmp_dir, "project_a")
       cwd_b = Path.join(tmp_dir, "project_b")
       File.mkdir_p!(cwd_a)
@@ -1242,7 +1242,7 @@ defmodule CodingAgent.SessionTest do
       state = Session.get_state(session)
 
       assert %Session{} = state
-      assert state.cwd == System.tmp_dir!()
+      assert state.cwd == session_cwd()
       assert state.is_streaming == false
     end
   end

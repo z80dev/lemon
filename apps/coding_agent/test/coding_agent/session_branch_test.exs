@@ -12,6 +12,16 @@ defmodule CodingAgent.SessionBranchTest do
   """
   use ExUnit.Case, async: true
 
+  setup do
+    tmp_dir =
+      Path.join(System.tmp_dir!(), "#{__MODULE__}_#{System.unique_integer([:positive])}")
+
+    File.mkdir_p!(tmp_dir)
+    on_exit(fn -> File.rm_rf!(tmp_dir) end)
+    Process.put({__MODULE__, :cwd}, tmp_dir)
+    {:ok, tmp_dir: tmp_dir}
+  end
+
   alias CodingAgent.Session
   alias CodingAgent.SessionManager
   alias CodingAgent.SessionManager.{SessionEntry}
@@ -163,7 +173,11 @@ defmodule CodingAgent.SessionBranchTest do
   defp default_opts(overrides) do
     Keyword.merge(
       [
-        cwd: System.tmp_dir!(),
+        cwd: Process.get({__MODULE__, :cwd}),
+        workspace_dir: Path.join(Process.get({__MODULE__, :cwd}), "workspace"),
+        tools: [],
+        extension_inventory: {[], []},
+        mcp_tools: [],
         model: mock_model(),
         stream_fn: mock_stream_fn_single(assistant_message("Hello!"))
       ],
@@ -173,8 +187,7 @@ defmodule CodingAgent.SessionBranchTest do
 
   defp start_session(opts \\ []) do
     opts = default_opts(opts)
-    {:ok, session} = Session.start_link(opts)
-    session
+    start_supervised!(Supervisor.child_spec({Session, opts}, id: make_ref(), restart: :temporary))
   end
 
   defp wait_for_streaming_complete(session, timeout \\ 5000) do
