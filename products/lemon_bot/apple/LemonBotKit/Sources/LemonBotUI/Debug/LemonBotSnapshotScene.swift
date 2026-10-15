@@ -9,6 +9,7 @@ public enum LemonBotSnapshotScene: String, CaseIterable {
     case instancePane, instanceRunning
     case actionRecovery, newBotNoMachine, inboxEmpty
     case appsAndChannels, groupEditor, botLifecycle
+    case composerFiles
 
     /// `sidebar-conversation`, used for output file names.
     public var slug: String {
@@ -19,7 +20,7 @@ public enum LemonBotSnapshotScene: String, CaseIterable {
         case .sidebarConversation: return .chiefOfStaff
         case .inspectorActivity, .composerActiveRun: return .activeRun
         case .failedRun: return .failedRun
-        case .settings, .actionRecovery, .newBotNoMachine, .inboxEmpty, .appsAndChannels, .groupEditor, .botLifecycle: return .chiefOfStaff
+        case .settings, .actionRecovery, .newBotNoMachine, .inboxEmpty, .appsAndChannels, .groupEditor, .botLifecycle, .composerFiles: return .chiefOfStaff
         case .emptyState: return .noSelection
         case .backendDown: return .backendDown
         case .controllerDown: return .controllerDown
@@ -38,6 +39,14 @@ public enum LemonBotSnapshotScene: String, CaseIterable {
         store.selectedConversationID = scene.scenario.conversationID
         switch scene {
         case .inspectorActivity: return AnyView(LemonBotRootView(store: store, inspector: InspectorPresentation(isPresented: true, tab: .activity)))
+        case .composerFiles:
+            if let id = scene.scenario.conversationID {
+                var draft = store.draft(for: id)
+                draft.text = "Review this file."
+                draft.fileURLs = [URL(fileURLWithPath: "/fixture/notes.pdf")]
+                store.drafts[id] = draft
+            }
+            return AnyView(LemonBotRootView(store: store))
         case .appsAndChannels:
             return AnyView(NavigationStack { IntegrationsHubView(store: store) })
         case .groupEditor:

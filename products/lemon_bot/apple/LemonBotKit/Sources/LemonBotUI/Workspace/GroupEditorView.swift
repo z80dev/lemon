@@ -30,12 +30,29 @@ struct GroupEditorView: View {
                     }
                 }
                 ActionErrorView(message: action.error)
-                Button(conversation == nil ? "Create group" : "Update group") { Task { await save() } }
-                    .disabled(action.busy || store.connectionState != "online" || !(2...6).contains(botIDs.count) || !botIDs.contains(lead) || name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 Text(store.isOnline ? "Add a name, 2–6 Bots and a lead Bot to save." : "Reconnect to save this group.").font(LBFont.meta).foregroundStyle(LB.muted)
-            }.navigationTitle(conversation == nil ? "New group" : "Group members")
-                .toolbar { Button("Cancel") { dismiss() } }
-        }.frame(minWidth: 320, minHeight: 520)
+            }.formStyle(.grouped)
+                .scrollContentBackground(.hidden)
+                .frame(maxWidth: 760)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                .background(LB.canvas)
+                .navigationTitle(conversation == nil ? "New group" : "Group members")
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Cancel") { dismiss() }.buttonStyle(.pill(.secondary, compact: true)).keyboardShortcut(.cancelAction)
+                    }
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button(conversation == nil ? "Create group" : "Save changes") { Task { await save() } }
+                            .buttonStyle(.pill(.primary(LB.lemon, LB.lemonInk), compact: true)).keyboardShortcut(.defaultAction)
+                            .disabled(action.busy || !store.isOnline || !(2...6).contains(botIDs.count) || !botIDs.contains(lead) || name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    }
+                }
+        }
+        #if os(macOS)
+        .frame(minWidth: 560, minHeight: 600)
+        #else
+        .frame(minWidth: 320, minHeight: 520)
+        #endif
     }
     private func selected(_ id: ID) -> Binding<Bool> {
         Binding(get: { botIDs.contains(id) }, set: { flag in

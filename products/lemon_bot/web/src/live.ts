@@ -1,10 +1,12 @@
-import type { Conversation, Run, TranscriptEntry } from '@lemon-bot/sdk';
+import type { Conversation, Draft, Run, TranscriptEntry, VoiceSession } from '@lemon-bot/sdk';
 import { Brain, Calendar, FileText, Globe, Mail, Pencil, Send, Sparkles, SquareTerminal, Wrench, type LucideIcon } from 'lucide-react';
 
 /** Shared live-work presentation, mirroring LivePresentation.swift so every client words work the same way. */
 export const liveRunStatuses: Record<string, true> = { reserved: true, queued: true, running: true, awaiting_input: true };
 /** Statuses the server still treats as active for Stop (includes unconfirmed outcomes). */
 export const stoppableRunStatuses: Record<string, true> = { ...liveRunStatuses, outcome_unknown: true };
+export const draftStateLabels: Record<Draft['state'], string> = { editable: 'Draft', sending: 'Sending…', sent: 'Sent', discarded: 'Discarded', failed: 'Not sent', outcome_unknown: 'Send status unknown' };
+export const voiceStateLabels: Record<VoiceSession['state'], string> = { active: 'Call in progress', ended: 'Call ended', failed: 'Call interrupted' };
 
 export interface LiveStep { title: string; tool?: string; sinceMs?: number; needsInput: boolean }
 

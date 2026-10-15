@@ -1,7 +1,7 @@
 import { useState, type ReactNode } from 'react';
 import { LemonBotError, type Page, type PageQuery, type Machine } from '@lemon-bot/sdk';
 import { useApp } from '../../app';
-import { ErrorNotice, Loading, useQuery } from '../../ui';
+import { ConfirmDialog, ErrorNotice, Loading, RecoveryNotice, useQuery } from '../../ui';
 
 export const words = (value: string) => value.split(/[\n,]/).map(item => item.trim()).filter(Boolean);
 export const label = (value: string) => value.replaceAll('_', ' ');
@@ -43,7 +43,7 @@ export function useIntent() {
   const [reviewed, setReviewed] = useState(false);
   async function perform<T>(intent: () => Promise<T>): Promise<T | undefined> {
     if (busy || uncertain) return undefined;
-    if (!online) { setError(new Error('Offline. Reconnect before changing owner settings. Nothing has been queued.')); return undefined; }
+    if (!online) { setError(new Error('You’re offline. Reconnect before changing these settings.')); return undefined; }
     setBusy(true); setError(undefined); setReviewed(false);
     try { return await intent(); }
     catch (cause) {
@@ -72,7 +72,7 @@ export interface Intent {
 }
 
 export function IntentNotice({ intent, reconcile }: { intent: Intent; reconcile: () => Promise<void> }) {
-  return <><ErrorNotice error={intent.error} />{!!intent.error && !intent.uncertain && <button type="button" disabled={intent.busy} onClick={() => void intent.reconcile(reconcile)}>Reload authoritative state before a new edit</button>}{intent.uncertain && <aside className="error-notice" role="alert"><p>The outcome is not confirmed. Your input is retained. Do not repeat this action until you have inspected authoritative state.</p><button type="button" disabled={intent.busy} onClick={() => void intent.reconcile(reconcile)}>Reconcile with server (read only)</button>{intent.reviewed && <><p>Review the refreshed records and any provider or host state. A successful read is not proof that the previous action succeeded.</p><button type="button" onClick={intent.resume}>I reviewed the state; enable a distinct new intent</button></>}</aside>}</>;
+  return <RecoveryNotice error={intent.error} uncertain={intent.uncertain} busy={intent.busy} onCheck={() => intent.reconcile(reconcile)} reviewed={intent.reviewed} onResume={intent.resume}/>;
 }
 
 export function Checks({ legend, options, value, onChange, disabled = false, hint }: { legend: string; options: { id: string; name: string; detail?: string }[]; value: string[]; onChange: (value: string[]) => void; disabled?: boolean; hint?: string }) {
@@ -91,6 +91,7 @@ export function machineOptions(machines: Machine[]) {
   return machines.filter(machine => machine.status !== 'revoked').map(machine => ({ id: machine.id, name: machine.name, detail: machine.status }));
 }
 
-export function DeleteButton({ name, disabled, onDelete }: { name: string; disabled: boolean; onDelete: () => void }) {
-  return <button type="button" className="danger" disabled={disabled} onClick={() => { if (window.confirm(`Delete ${name}? This changes only the named product configuration, not host files or external provider accounts.`)) onDelete(); }}>Delete {name}</button>;
+export function DeleteButton({ name, disabled, error, onDelete }: { name: string; disabled: boolean; error: unknown; onDelete: () => Promise<boolean> }) {
+  const [confirming, setConfirming] = useState(false);
+  return <><button type="button" className="danger" aria-label={`Delete ${name}`} disabled={disabled} onClick={() => setConfirming(true)}>Delete</button>{confirming && <ConfirmDialog title={`Delete ${name}?`} disabled={disabled} onCancel={() => setConfirming(false)} onConfirm={async () => { if (await onDelete()) setConfirming(false); }}><p>Your computers and provider accounts are not changed. Only this configuration is deleted.</p><ErrorNotice error={error}/></ConfirmDialog>}</>;
 }

@@ -48,7 +48,7 @@ struct MachineSecretsView: View {
                 } } }.disabled(name.isEmpty || value.isEmpty || (scope == "bot" && botID.isEmpty) || action.busy || action.uncertain || store.connectionState != "online")
                 Button("Clear secret input") { value = "" }
             }
-        }.navigationTitle("Host secrets").toolbar { Button("Refresh names") { Task { await load() } } }
+        }.formStyle(.grouped).navigationTitle("Host secrets").toolbar { Button("Refresh names") { Task { await load() } } }
             .task { await load() }.onDisappear { value = "" }
             .confirmationDialog("Delete named secret \(deleting?.name ?? "")? Existing history remains; future destination resolution will fail.", isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } })) {
                 Button("Delete named secret", role: .destructive) { guard let secret = deleting else { return }; Task { await action.perform {

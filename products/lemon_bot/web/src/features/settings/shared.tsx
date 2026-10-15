@@ -1,7 +1,7 @@
 import { useRef, useState, type ReactNode } from 'react';
 import { LemonBotError, type Page, type Cursor } from '@lemon-bot/sdk';
 import { useApp } from '../../app';
-import { ErrorNotice } from '../../ui';
+import { RecoveryNotice } from '../../ui';
 
 export async function allPages<T extends { id: string }>(load: (cursor?: Cursor) => Promise<Page<T>>): Promise<T[]> {
   const items = new Map<string, T>();
@@ -50,7 +50,7 @@ export interface Intent {
 }
 export function IntentNotice({ intent }: { intent: Intent }) {
   const { online } = useApp();
-  return <>{!online && <p role="status" className="error-notice">Offline. Changes are not queued. Reconnect before saving.</p>}<ErrorNotice error={intent.error} />{intent.unknown && <p role="alert">The outcome is not confirmed. Your input is retained. Read current server state before making another change; do not repeat an external action without checking its actual outcome.</p>}{intent.error != null && <button type="button" disabled={intent.busy || !online} onClick={() => void intent.reload()}>Reconcile with server</button>}</>;
+  return <>{!online && <p role="status" className="error-notice">You’re offline. Changes can’t be saved right now. Reconnect, then try again.</p>}<RecoveryNotice error={intent.error} uncertain={intent.unknown} busy={intent.busy} available={online} onCheck={intent.reload}/></>;
 }
 export function Toggle({ label, checked, onChange, disabled = false, hint }: { label: string; checked: boolean; onChange: (value: boolean) => void; disabled?: boolean; hint?: string }) {
   return <label className="settings-toggle"><span><strong>{label}</strong>{hint && <span className="muted small">{hint}</span>}</span><input type="checkbox" checked={checked} onChange={e => onChange(e.target.checked)} disabled={disabled} /></label>;

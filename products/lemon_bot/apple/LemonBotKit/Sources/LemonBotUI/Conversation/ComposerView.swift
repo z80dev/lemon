@@ -73,14 +73,14 @@ public struct ComposerView: View {
                 VStack(alignment: .leading, spacing: 12) {
                     Text("Last send details").font(.headline)
                     if let receipt { receiptDetails(receipt) }
-                    ForEach(reconciledRuns) { run in Text("Run \(run.id): \(run.status)").textSelection(.enabled) }
+                    ForEach(reconciledRuns) { run in runDeliveryDetails(run) }
                     Button("Close") { deliveryDetailsOpen = false }.buttonStyle(.pill(.secondary))
                 }.padding().frame(maxWidth: .infinity, alignment: .leading)
                     .presentationDetents([.medium, .large])
             }
             #endif
             .confirmationDialog("Attach pasted files to this conversation?", isPresented: Binding(get: { !pastedFiles.isEmpty }, set: { if !$0 { pastedFiles = [] } })) {
-                Button("Attach \(pastedFiles.count) selected files") { let urls = pastedFiles; pastedFiles = []; Task { await attach(urls) } }
+                Button("Attach \(pastedFiles.count) \(pastedFiles.count == 1 ? "file" : "files")") { let urls = pastedFiles; pastedFiles = []; Task { await attach(urls) } }
                 Button("Cancel", role: .cancel) { pastedFiles = [] }
             } message: { Text(pastedFiles.map(\.lastPathComponent).joined(separator: "\n")) }
             .task(id: conversationID) { await loadReferences() }
@@ -109,7 +109,7 @@ public struct ComposerView: View {
     }
     private var draftIsEmpty: Bool { draft.text.isEmpty && draft.attachmentIDs.isEmpty && draft.fileURLs.isEmpty && stagedFilenames.isEmpty }
     private var sendDisabled: Bool {
-        !online || action.inFlight || unresolvedAction || pendingMessageNonce != nil || !draft.fileURLs.isEmpty || (draft.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && draft.attachmentIDs.isEmpty)
+        !online || action.inFlight || unresolvedAction || pendingMessageNonce != nil || (draft.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && draft.attachmentIDs.isEmpty && draft.fileURLs.isEmpty)
     }
     private var multiline: Bool { draft.text.contains("\n") || draft.text.count > 70 }
     private var compactKeyboardLayout: Bool {
@@ -120,7 +120,7 @@ public struct ComposerView: View {
         #endif
     }
     private var hasDeliveryStatus: Bool {
-        !online || messageUncertain || actionError != nil || unresolvedAction || action.receipt != nil
+        !online || !draft.fileURLs.isEmpty || mode != "followup" || messageUncertain || actionError != nil || unresolvedAction || action.receipt != nil
             || (receipt != nil && !compactKeyboardLayout) || receipt?.status == "outcome_unknown"
             || receipt?.runs.contains(where: { $0.error != nil }) == true
             || (!reconciledRuns.isEmpty && !compactKeyboardLayout) || reconciledRuns.contains(where: { $0.error != nil })
@@ -170,14 +170,14 @@ public struct ComposerView: View {
             Button { platform("voice") } label: {
                 Image(systemName: "waveform").font(.system(size: 14, weight: .bold)).foregroundStyle(onTint).frame(width: 32, height: 32).background(tint, in: Circle())
             }
-            .buttonStyle(.plain).disabled(!online).opacity(online ? 1 : 0.4)
+            .buttonStyle(.plain).disabled(!online).opacity(online ? 1 : 0.5)
             .accessibilityLabel("Voice chat").help("Start a live voice chat")
         } else {
             Button { Task { await send() } } label: {
                 Image(systemName: "arrow.up").font(.system(size: 14, weight: .bold)).foregroundStyle(onTint).frame(width: 32, height: 32).background(tint, in: Circle())
             }
             .buttonStyle(.plain).keyboardShortcut(.return, modifiers: .command)
-            .disabled(sendDisabled).opacity(sendDisabled ? 0.4 : 1)
+            .disabled(sendDisabled).opacity(sendDisabled ? 0.5 : 1)
             .accessibilityLabel("Send").help("Send (⌘↩)")
         }
     }
@@ -186,6 +186,7 @@ public struct ComposerView: View {
         Menu {
             Button("Choose files") { files = true }.disabled(action.inFlight || draft.attachmentIDs.count + draft.fileURLs.count >= 6)
             Button("Paste selected files") { readPastedFiles() }.disabled(action.inFlight || draft.attachmentIDs.count + draft.fileURLs.count >= 6)
+            if draft.attachmentIDs.count + draft.fileURLs.count >= 6 { Text("6 of 6 files attached") }
             #if os(iOS)
             Button("Camera") { platform("camera") }
             Button("Photo library") { platform("photos") }
@@ -197,9 +198,9 @@ public struct ComposerView: View {
             Menu("Reference") { referenceItems }
             Menu("Delivery") {
                 Picker("Delivery", selection: $mode) {
-                    Text("Follow-up").tag("followup")
-                    Text("Steer").tag("steer")
-                    Text("Interrupt").tag("interrupt")
+                    Text("Send as follow-up").tag("followup")
+                    Text("Update running task").tag("steer")
+                    Text("Stop and send now").tag("interrupt")
                 }.pickerStyle(.inline)
             }
         } label: {
@@ -242,7 +243,7 @@ public struct ComposerView: View {
 
     @ViewBuilder private var deliveryModeChip: some View {
         if mode != "followup" {
-            chip(mode == "steer" ? "Steer" : "Interrupt", symbol: mode == "steer" ? "arrow.turn.up.right" : "bolt.fill", tint: LB.warning, removeLabel: "Use follow-up delivery") { mode = "followup" }
+            chip(mode == "steer" ? "Update running task" : "Stop and send now", symbol: mode == "steer" ? "arrow.turn.up.right" : "bolt.fill", tint: LB.warning, removeLabel: "Use follow-up delivery") { mode = "followup" }
                 .help("\(mode == "steer" ? "Update active work if the worker acknowledges it; otherwise queue a follow-up." : "Request cancellation and a new priority turn.") Completed external effects are not rolled back.")
         }
     }
@@ -266,7 +267,7 @@ public struct ComposerView: View {
             .padding(4).background(LB.fill, in: Capsule())
         }
         ForEach(draft.fileURLs, id: \.self) { url in
-            chip(url.lastPathComponent + " · not uploaded", symbol: "doc.badge.clock", removeLabel: "Remove local file") {
+            chip(url.lastPathComponent + " · Not sent", symbol: "doc.badge.clock", removeLabel: "Remove local file") {
                 Task { await action.perform { try store.removeDraftFile(url, conversationID: conversationID) } }
             }
         }
@@ -338,23 +339,30 @@ public struct ComposerView: View {
 
     @ViewBuilder private var deliveryStatus: some View {
         VStack(alignment: .leading, spacing: 6) {
-            if !online { Text("Offline — your draft is saved here.").font(LBFont.meta).foregroundStyle(LB.muted).help("Sending, upload and approvals are never queued automatically.") }
+            if !online { Text("Offline — your draft is saved here. Nothing sends until you reconnect and tap Send.").font(LBFont.meta).foregroundStyle(LB.muted) }
+            if !draft.fileURLs.isEmpty { Text("Upload or remove the selected files to send.").font(LBFont.meta).foregroundStyle(LB.muted) }
+            if mode != "followup" {
+                Text(mode == "steer" ? "Updates the running task if the Bot can accept it; otherwise sends a follow-up." : "Asks the Bot to stop and start your message next. Work already done isn't undone.").font(LBFont.meta).foregroundStyle(LB.muted)
+            }
             if messageUncertain {
                 HStack(spacing: 8) {
                     Label("Checking whether your last message was sent", systemImage: "exclamationmark.triangle.fill")
                         .font(LBFont.chip).foregroundStyle(LB.warning)
-                    Button("Check") { Task { await reconcile() } }.buttonStyle(.pill(.quiet, compact: true)).disabled(!online || action.inFlight)
+                    Button("Check status") { Task { await reconcile() } }.buttonStyle(.pill(.quiet, compact: true)).disabled(!online || action.inFlight)
                 }
                 .padding(.horizontal, 10).padding(.vertical, 5).background(LB.warning.opacity(0.12), in: Capsule())
                 .help("This message is held until its exact submission is confirmed. Nothing is resent.")
+                Text("Checking your last message first. Send is available once it's confirmed. Nothing is resent.").font(LBFont.meta).foregroundStyle(LB.muted)
+                Button("Reload conversation") { Task { await action.perform { try await store.openConversation(conversationID, select: false) } } }
+                    .buttonStyle(.pill(.quiet, compact: true)).disabled(!online || action.inFlight)
             }
             if let receipt {
                 ForEach(Array(receipt.delivery.enumerated()), id: \.offset) { _, delivery in
                     if let run = receipt.runs.first(where: { $0.id == delivery.runId }), let error = run.error {
-                        ActionErrorView(message: BackendError(status: 0, failure: ErrorEnvelopeError(code: error.code, message: error.message, requestId: error.requestId, retrySafe: error.retrySafe, details: error.details)).localizedDescription)
+                        ActionErrorView(message: humanErrorText(BackendError(status: 0, failure: ErrorEnvelopeError(code: error.code, message: error.message, requestId: error.requestId, retrySafe: error.retrySafe, details: error.details))))
                     }
                 }
-                if receipt.status == "outcome_unknown" { Text("Not confirmed yet — don't resend. Check the submission first.").foregroundStyle(LB.warning).font(LBFont.meta) }
+                if receipt.status == "outcome_unknown" { Text("Not confirmed yet. Check the conversation before sending again.").foregroundStyle(LB.warning).font(LBFont.meta) }
                 if !compactKeyboardLayout {
                     DisclosureGroup("Details") {
                         VStack(alignment: .leading, spacing: 2) { receiptDetails(receipt) }
@@ -363,12 +371,12 @@ public struct ComposerView: View {
                 }
             }
             ForEach(reconciledRuns) { run in
-                if let error = run.error { ActionErrorView(message: BackendError(status: 0, failure: ErrorEnvelopeError(code: error.code, message: error.message, requestId: error.requestId, retrySafe: error.retrySafe, details: error.details)).localizedDescription) }
+                if let error = run.error { ActionErrorView(message: humanErrorText(BackendError(status: 0, failure: ErrorEnvelopeError(code: error.code, message: error.message, requestId: error.requestId, retrySafe: error.retrySafe, details: error.details)))) }
             }
             if !reconciledRuns.isEmpty && !compactKeyboardLayout {
                 DisclosureGroup("Details") {
                     VStack(alignment: .leading, spacing: 2) {
-                        ForEach(reconciledRuns) { run in Text("Run \(run.id): \(run.status)").textSelection(.enabled) }
+                        ForEach(reconciledRuns) { run in runDeliveryDetails(run) }
                     }.frame(maxWidth: .infinity, alignment: .leading)
                 }.font(LBFont.meta).foregroundStyle(LB.muted)
             }
@@ -380,7 +388,17 @@ public struct ComposerView: View {
 
     @ViewBuilder private func receiptDetails(_ receipt: MessageReceipt) -> some View {
         ForEach(Array(receipt.delivery.enumerated()), id: \.offset) { _, delivery in
-            Text("\(store.bots.first(where: { $0.id == delivery.botId })?.name ?? delivery.botId): \(delivery.effectiveMode.replacingOccurrences(of: "_", with: " ").capitalized) · run \(delivery.runId)").textSelection(.enabled)
+            let botName = store.bots.first(where: { $0.id == delivery.botId })?.name ?? "Bot"
+            Text("\(botName): \(deliveryModeLabel(delivery.effectiveMode))").textSelection(.enabled)
+            if let run = receipt.runs.first(where: { $0.id == delivery.runId }) { runDeliveryDetails(run) }
+            Button("Copy details") { copyText("Bot: \(delivery.botId)\nRun: \(delivery.runId)\nDelivery: \(delivery.effectiveMode)") }.buttonStyle(.pill(.quiet, compact: true))
+        }
+    }
+
+    private func runDeliveryDetails(_ run: Run) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text("Run status: \(hubStatusLabel(run.status))")
+            Button("Copy run ID") { copyText(run.id) }.buttonStyle(.pill(.quiet, compact: true))
         }
     }
 
@@ -408,7 +426,7 @@ public struct ComposerView: View {
             }
         }
         Menu("Bots") { ForEach(store.bots) { bot in Button(bot.name) { addReference("bot", bot.id) } } }
-        Menu("Skills /") { ForEach(skills) { skill in Button(skill.name) { addReference("skill", skill.id) } } }
+        Menu("Skills") { ForEach(skills) { skill in Button(skill.name) { addReference("skill", skill.id) } } }
         Menu("Routines") { ForEach(routines) { routine in Button(routine.name) { addReference("routine", routine.id) } } }
         Menu("Apps") { ForEach(connectors) { connector in Button("\(connector.name) · \(connector.accountLabel)") { addReference("connector", connector.id) } } }
         Menu("Groups") { ForEach(store.conversations.filter { $0.kind == "group" }) { group in Button(group.name) { addReference("group", group.id) } } }
@@ -433,7 +451,7 @@ public struct ComposerView: View {
         #else
         pastedFiles = UIPasteboard.general.urls?.filter(\.isFileURL) ?? []
         #endif
-        if pastedFiles.isEmpty { action.error = "No selected files are on the clipboard. Choose files explicitly; clipboard history is never captured."; action.errorNonce = nil }
+        if pastedFiles.isEmpty { action.error = "No files found on the clipboard. Use Choose files instead."; action.errorNonce = nil }
     }
     private func attach(_ urls: [URL]) async {
         await action.perform {
@@ -464,10 +482,10 @@ public struct ComposerView: View {
     private func send() async {
         await action.perform {
             guard online else { throw ClientError.offline }
-            guard pendingMessageNonce == nil && !unresolvedAction else { throw ComposerError.message("This submission is fenced. Read the exact outcome before any new Send.") }
+            guard pendingMessageNonce == nil && !unresolvedAction else { throw ComposerError.message("Checking your last message first. Send is available once it's confirmed.") }
             let captured = draft
+            guard captured.fileURLs.isEmpty else { throw ComposerError.message("Upload or remove the selected files to send.") }
             guard !captured.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !captured.attachmentIDs.isEmpty else { throw ComposerError.message("Write a message or attach a ready file before Send.") }
-            guard captured.fileURLs.isEmpty else { throw ComposerError.message("Explicitly upload or remove selected local files before Send.") }
             unconfirmedDraft = captured
             let nonce = UUID().uuidString
             messageNonce = nonce
@@ -501,7 +519,7 @@ public struct ComposerView: View {
                 nonce = run.clientNonce
             }
             guard let nonce else {
-                action.receipt = "The server did not provide a submission identifier. Reload this conversation and inspect provider outcomes; this draft remains fenced."
+                action.receipt = "We couldn't check your last message automatically. Reload the conversation to see whether it was sent. Your draft is kept."
                 return
             }
             checkedNonce = nonce
@@ -528,3 +546,15 @@ public struct ComposerView: View {
     }
 }
 private enum ComposerError: LocalizedError { case message(String); var errorDescription: String? { if case .message(let value) = self { return value }; return nil } }
+
+func deliveryModeLabel(_ mode: String) -> String {
+    switch mode {
+    case "queued": return "Waiting for the Bot's turn"
+    case "steering": return "Updating running task"
+    case "interrupting": return "Stop and send requested"
+    case "started": return "Started, not finished"
+    case "rejected": return "Not started"
+    case "outcome_unknown": return "Result not confirmed"
+    default: return humanizedStatus(mode)
+    }
+}

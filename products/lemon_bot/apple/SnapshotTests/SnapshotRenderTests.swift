@@ -36,6 +36,15 @@ final class SnapshotRenderTests: XCTestCase {
         XCTAssertEqual(hubStatusLabel("outcome_unknown"), "Result not confirmed")
     }
 
+    func testDeliveryLabelsKeepStartSeparateFromCompletion() {
+        XCTAssertEqual(deliveryModeLabel("started"), "Started, not finished")
+        XCTAssertEqual(deliveryModeLabel("queued"), "Waiting for the Bot's turn")
+        XCTAssertEqual(deliveryModeLabel("steering"), "Updating running task")
+        XCTAssertEqual(deliveryModeLabel("interrupting"), "Stop and send requested")
+        XCTAssertEqual(deliveryModeLabel("outcome_unknown"), "Result not confirmed")
+        XCTAssertEqual(deliveryModeLabel("rejected"), "Not started")
+    }
+
     func testPollingKeepsActionFailureAndUnconfirmedFence() async {
         let action = HubAction()
         await action.perform { throw ClientError.outcomeUnknown("saved-action") }

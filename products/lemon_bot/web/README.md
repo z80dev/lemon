@@ -49,6 +49,15 @@ The canonical [API](../contracts/api.md), [cards](../contracts/cards.md) and [co
 
 Cmd/Ctrl K opens commands and search; Cmd/Ctrl Shift F searches Bots; Cmd/Ctrl N creates a Bot; Cmd/Ctrl B opens the compact roster; Cmd/Ctrl comma opens settings; Cmd/Ctrl Shift comma opens Bot settings; Cmd/Ctrl 1–9 selects visible Bots. Composer Enter sends and Shift Enter adds a line. Every shortcut has on-screen equivalents. Input fields and native browser-reserved shortcuts are not hijacked. Small screens use a roster drawer and responsive file/terminal layouts. Light/dark/system appearance, labelled controls, visible focus, semantic notices, skip navigation and reduced-motion styling are built in.
 
+On touch screens, tap a message to show its 44px copy, reply and reaction controls.
+**Copy link to message** opens the selected message after sign-in; it contains no
+session credential. Failed message history loads offer **Try again**, and active
+work is never represented as an empty conversation.
+
+User-facing copy calls the account container a **workspace** and the execution
+device a **machine**. **Computer user** means the machine's operating-system
+account. API and configuration identifiers retain their canonical names.
+
 ## Credential, cache, voice and unknown-outcome boundaries
 
 Bearer sessions use tab-scoped session storage, not URLs or local-storage account lists. Saved backend/email/cluster chooser metadata contains no bearer. Private state is fetched after login and replaced on authoritative sync. Realtime revocation closes the authenticated workspace. Downloads use short-lived authorized tickets, not persisted file identities. HTML/document snapshots never gain app-origin scripting authority. The service worker caches no private API responses; push clicks navigate and authenticated reads reconcile the exact resource.
@@ -73,6 +82,18 @@ Only owners can start/restart Lemon, and only when the backend advertises local
 runtime control. Restart requires confirmation. Running commands are observed
 with read-only polling and their output stays behind Details. An uncertain command
 receipt blocks further commands rather than sending it again.
+
+Across chat, settings, computers and connected services, **Check status** observes
+an unconfirmed change; it never sends that change again. Ordinary failed reads use
+**Refresh and check again**. Technical messages, request IDs and saved action
+references remain available under **Details** with Copy. Only an explicit user
+action can start another change after the current status has been reviewed.
+
+Deleting account data first shows its server-issued preview and typed confirmation.
+Removing an iPhone, a stored secret, a Bot section or a configuration uses the
+in-app confirmation dialog; cancelling sends no deletion request. Account deletion
+offers password or configured identity-provider confirmation without exposing
+sign-in implementation details.
 
 Owner account cleanup distinguishes product cleanup from actual provider receipt state, error and observation time. Ledger refresh cannot retry deletion/provider revocation or restore a deleted-user login.
 

@@ -6,6 +6,7 @@ import { ErrorNotice, Field, formatTime } from '../../ui';
 import { CaptureControls } from './capture';
 import { IntentNotice, mergeEntries, unknownOutcome, useClock, useIntent } from './common';
 import { RichText } from './files';
+import { voiceStateLabels } from '../../live';
 
 interface VoiceRequest { conversationId: string }
 let requested: VoiceRequest | null = null; const listeners = new Set<() => void>();
@@ -30,18 +31,18 @@ export function VoiceOverlay() {
     const page = await client.call('GET /conversations/:id/entries', { params: { id: actual.conversationId }, query: { limit: 200 } }); setEntries(page.items); liveEntries.current = page.items;
     if (pendingRef.current) {
       const receipt = await client.messageReceipt(current.conversationId, pendingRef.current.clientNonce);
-      if (receipt.status === 'outcome_unknown' || receipt.runs.some(run => run.status === 'reserved' || run.status === 'outcome_unknown') || receipt.delivery.length !== receipt.runs.length || receipt.delivery.some(target => target.effectiveMode === 'outcome_unknown')) throw new Error('Original utterance delivery is unresolved. The transcript is retained; do not repeat it.');
+      if (receipt.status === 'outcome_unknown' || receipt.runs.some(run => run.status === 'reserved' || run.status === 'outcome_unknown') || receipt.delivery.length !== receipt.runs.length || receipt.delivery.some(target => target.effectiveMode === 'outcome_unknown')) throw new Error('We still can’t confirm your last words were sent. Your transcript is kept. Check status before speaking again.');
       receipt.runs.forEach(run => runs.current.add(run.id)); setPendingUtterance(undefined); pendingRef.current = undefined; sessionStorage.removeItem(`${sessionKey}:utterance`);
       const failures = receipt.runs.flatMap(run => run.error ? [run.error.message] : []);
       if (failures.length) setSpeechError(new Error(failures.join('\n')));
     }
-    setStatus(actual.state === 'active' ? 'Call reconciled. Resume microphone explicitly.' : actual.state);
+    setStatus(actual.state === 'active' ? 'Call restored. Microphone is off. Tap Resume to continue.' : voiceStateLabels[actual.state]);
   }
   useEffect(() => {
     const saved = sessionStorage.getItem(sessionKey);
     const utterance = sessionStorage.getItem(`${sessionKey}:utterance`);
     if (utterance) { try { const value: unknown = JSON.parse(utterance); if (value && typeof value === 'object' && 'text' in value && typeof value.text === 'string' && 'clientNonce' in value && typeof value.clientNonce === 'string') setPendingUtterance({ text: value.text, clientNonce: value.clientNonce, safeToDraft: 'safeToDraft' in value && value.safeToDraft === true }); } catch { setSpeechError(new Error('The local voice review transcript could not be read. No call or utterance was restarted.')); } }
-    if (saved) client.call('GET /voice/sessions/:id', { params: { id: saved } }).then(actual => { if (actual.userId === snapshot.user.id) { setSession(actual); setSettings(actual.settings); setStatus('Restored call status; microphone off. Resume explicitly.'); } }).catch(setSpeechError);
+    if (saved) client.call('GET /voice/sessions/:id', { params: { id: saved } }).then(actual => { if (actual.userId === snapshot.user.id) { setSession(actual); setSettings(actual.settings); setStatus('Call restored. Microphone is off. Tap Resume to continue.'); } }).catch(setSpeechError);
     return () => { silence(); clearRequest(); };
   }, [client, snapshot.user.id]);
   useEffect(() => { if (session) sessionStorage.setItem(sessionKey, session.id); }, [session?.id, sessionKey]);
@@ -65,7 +66,7 @@ export function VoiceOverlay() {
     if (patch.muted) silence();
     await intent.run(async () => { const actual = await client.call('PATCH /voice/sessions/:id', { params: { id: current.id }, body: { revision: current.revision, clientNonce: nonce(), ...patch } }); setSession(actual); setSettings(actual.settings); });
   }
-  async function end() { const current = sessionRef.current; if (!current || !online) return; silence(); await endIntent.run(async () => { const actual = await client.call('POST /voice/sessions/:id/end', { params: { id: current.id }, body: { clientNonce: nonce() } }); setSession(actual); setStatus(actual.state); }); }
+  async function end() { const current = sessionRef.current; if (!current || !online) return; silence(); await endIntent.run(async () => { const actual = await client.call('POST /voice/sessions/:id/end', { params: { id: current.id }, body: { clientNonce: nonce() } }); setSession(actual); setStatus(voiceStateLabels[actual.state]); }); }
   async function send(text: string) {
     const current = sessionRef.current; setListening(false);
     if (!current || current.state !== 'active' || current.muted || !online || intent.uncertain) return;
@@ -73,8 +74,8 @@ export function VoiceOverlay() {
     const result = await intent.run(async () => {
       const receipt = await client.call('POST /conversations/:id/messages', { params: { id: current.conversationId }, body: { clientNonce, text, voiceSessionId: current.id } });
       receipt.runs.forEach(run => runs.current.add(run.id)); liveEntries.current = mergeEntries(liveEntries.current, receipt.entries); setEntries(liveEntries.current);
-      setStatus(receipt.status === 'outcome_unknown' ? 'Utterance delivery unknown. Do not repeat it.' : receipt.delivery.map(delivery => delivery.effectiveMode.replaceAll('_', ' ')).join(', '));
-      if (receipt.status === 'outcome_unknown') throw new Error('Voice utterance outcome unknown. Reconcile the conversation before resuming.');
+      setStatus(receipt.status === 'outcome_unknown' ? 'Couldn’t confirm your last words were sent. They’re in the transcript.' : receipt.delivery.some(delivery => delivery.effectiveMode === 'rejected') ? 'Some Bots couldn’t start. Check the conversation.' : 'Message received.');
+      if (receipt.status === 'outcome_unknown') throw new Error('We couldn’t confirm your last words were sent. Check the conversation before resuming.');
       return receipt;
     });
     if (result) {
@@ -112,7 +113,7 @@ export function VoiceOverlay() {
           await new Promise<void>((resolve, reject) => { const utterance = new SpeechSynthesisUtterance(segment); utterance.rate = voice.speed; if (voice.language) utterance.lang = voice.language; const selected = speechSynthesis.getVoices().find(item => item.voiceURI === voice.voiceId || item.name === voice.voiceId); if (selected) utterance.voice = selected; utterance.onend = () => resolve(); utterance.onerror = () => turnEpoch !== epoch.current ? resolve() : reject(new Error('Browser speech synthesis failed.')); speechSynthesis.speak(utterance); });
         }
       }
-    }).catch(error => { setSpeechError(error); silence(); setStatus('Speech failed. Resume explicitly after inspecting the transcript.'); });
+    }).catch(error => { setSpeechError(error); silence(); setStatus('Speech stopped. Review the transcript, then tap Resume to continue.'); });
     if (final) { const lastQueue = queue.current; void lastQueue.then(() => { if (queue.current === lastQueue && turnEpoch === epoch.current && sessionRef.current?.state === 'active' && !sessionRef.current.muted && !pendingRef.current) { speaking.current = false; setStatus('Ready for your next utterance'); setListening(true); } }); }
   }
   useEffect(() => {
@@ -129,15 +130,15 @@ export function VoiceOverlay() {
         }
         const next = { ...old, text: old.text + delta.text }; liveEntries.current = liveEntries.current.map(entry => entry.id === next.id ? next : entry); setEntries(liveEntries.current); enqueueSpeech(next, false);
       }
-      if (frame.event === 'run.upserted' && runs.current.has(frame.payload.id) && ['failed', 'cancelled', 'outcome_unknown'].includes(frame.payload.status)) { silence(); setStatus(`Run ${frame.payload.status.replaceAll('_', ' ')}. Completed effects are not rolled back.`); }
+      if (frame.event === 'run.upserted' && runs.current.has(frame.payload.id) && ['failed', 'cancelled', 'outcome_unknown'].includes(frame.payload.status)) { silence(); setStatus(frame.payload.status === 'outcome_unknown' ? 'The Bot’s status is unknown. Check the conversation before resuming.' : frame.payload.status === 'cancelled' ? 'Work stopped. Anything already done was not undone.' : 'The Bot couldn’t finish. Check the conversation.'); }
     });
   }, [realtime, client, snapshot.capabilities.tts, settings]);
   if (!request && !session && !speechError && !pendingUtterance) return null;
   const active = session?.state === 'active'; const duration = session ? active ? clock - session.startedAtMs : session.durationMs : 0;
   return <aside className="chat-voice-overlay panel stack" aria-label="Live voice call">
-    <div className="row spread"><h2>Voice {active ? 'call' : session?.state || 'review'}</h2>{session && <span>{Math.max(0, Math.floor(duration / 1000))}s</span>}</div>
+    <div className="row spread"><h2>{session ? voiceStateLabels[session.state] : 'Review call'}</h2>{session && <span>{Math.max(0, Math.floor(duration / 1000))}s</span>}</div>
     <p role="status">{status}</p>
-    {!online && <p className="error-notice">Connection offline; microphone stopped. Reconcile before resuming.</p>}
+    {!online && <p className="error-notice">You’re offline. The microphone is off. Reconnect and check call status before resuming.</p>}
     {request && <>
       <p>Start an explicit live call in {snapshot.conversations.find(conversation => conversation.id === request.conversationId)?.name || request.conversationId}. Your final utterances will send as ordinary messages.</p>
       {active && <p>Another call is active. End it explicitly before starting a new one.</p>}
@@ -150,7 +151,7 @@ export function VoiceOverlay() {
     <ErrorNotice error={speechError} />
     <IntentNotice intent={intent} reconcile={async () => { if (sessionRef.current) await reconcile(); else if (conflictId) { const actual = await client.call('GET /voice/sessions/:id', { params: { id: conflictId } }); setSession(actual); } else throw new Error('Call identity is not known. Inspect account/device call status before starting another call.'); }} />
     <IntentNotice intent={endIntent} reconcile={async () => { const current = sessionRef.current; if (!current) return; const actual = await client.call('GET /voice/sessions/:id', { params: { id: current.id } }); setSession(actual); if (actual.state === 'active') throw new Error('End is still not confirmed. Microphone remains off; check call status.'); }} />
-    {pendingUtterance && <div className="error-notice"><strong>{pendingUtterance.safeToDraft ? 'Not sent — preserved transcript' : 'Preserved utterance — not confirmed'}</strong><p>{pendingUtterance.text}</p>{pendingUtterance.safeToDraft && session ? <button onClick={() => { draftPrompt(session.conversationId, pendingUtterance.text); navigate({ screen: 'conversation', id: session.conversationId }); setPendingUtterance(undefined); pendingRef.current = undefined; sessionStorage.removeItem(`${sessionKey}:utterance`); }}>Review unsent transcript in composer</button> : <button onClick={() => void intent.reconcile(reconcile)}>Reconcile original utterance</button>}</div>}
+    {pendingUtterance && <div className="error-notice"><strong>{pendingUtterance.safeToDraft ? 'Not sent — review your words' : 'Couldn’t confirm your last words were sent'}</strong><p>{pendingUtterance.text}</p>{pendingUtterance.safeToDraft && session ? <button onClick={() => { draftPrompt(session.conversationId, pendingUtterance.text); navigate({ screen: 'conversation', id: session.conversationId }); setPendingUtterance(undefined); pendingRef.current = undefined; sessionStorage.removeItem(`${sessionKey}:utterance`); }}>Review in composer</button> : <button onClick={() => void intent.reconcile(reconcile)}>Check status</button>}</div>}
     {session && <>
       <div className="row">
         <button onClick={() => navigate({ screen: 'conversation', id: session.conversationId })}>Return to conversation</button>
@@ -164,9 +165,9 @@ export function VoiceOverlay() {
       {active && session.deviceId !== device?.id && <p>Call belongs to another device. End it explicitly before starting on this device.</p>}
       {active && !paused.current && session.deviceId === device?.id && !session.muted && !intent.uncertain && !intent.busy && !pendingUtterance && !speaking.current && <CaptureControls conversationId={session.conversationId} voiceSessionId={session.id} language={session.settings.language} autoStart={listening && online} onText={send} />}
       <details><summary>Voice / speed / language settings</summary>
-        <Field label="Provider voice ID (or default)"><input value={settings.voiceId} onChange={event => setSettings({ ...settings, voiceId: event.target.value })} /></Field>
-        <Field label="Speech speed"><input type="number" min={0.5} max={2} step={0.1} value={settings.speed} onChange={event => setSettings({ ...settings, speed: Number(event.target.value) })} /></Field>
-        <Field label="Language (BCP-47, blank detects automatically)"><input value={settings.language || ''} onChange={event => setSettings({ ...settings, language: event.target.value || null })} /></Field>
+        <Field label="Voice (default if blank)"><input value={settings.voiceId} onChange={event => setSettings({ ...settings, voiceId: event.target.value })}/></Field>
+        <Field label="Speech speed"><input type="number" min={0.5} max={2} step={0.1} value={settings.speed} onChange={event => setSettings({ ...settings, speed: Number(event.target.value) })}/></Field>
+        <Field label="Language (leave blank to detect automatically)"><input value={settings.language || ''} onChange={event => setSettings({ ...settings, language: event.target.value || null })}/></Field>
         <p className="muted">{snapshot.capabilities.tts ? 'Backend-generated speech' : 'Browser speech synthesis fallback (not persisted audio)'}</p>
         <button disabled={!active || intent.busy || intent.uncertain || !settings.voiceId.trim() || !Number.isFinite(settings.speed) || settings.speed < 0.5 || settings.speed > 2} onClick={() => void update({ settings })}>Apply call settings</button>
       </details>

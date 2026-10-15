@@ -205,8 +205,8 @@ struct ScopeConfirmationView: View {
                     } }
                 }.disabled(action.busy || name != confirmation.confirmName || store.connectionState != "online" || Double(confirmation.expiresAtMs) <= context.date.timeIntervalSince1970 * 1000)
                 }
-            }.navigationTitle(title)
-                .toolbar { Button("Cancel") { dismiss() } }
+            }.formStyle(.grouped).navigationTitle(title)
+                .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } } }
         }.frame(minWidth: 320, minHeight: 420)
     }
 }

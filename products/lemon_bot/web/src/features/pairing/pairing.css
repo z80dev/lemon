@@ -1,4 +1,5 @@
 .pairing-issued { align-items: start; }
-.pairing-qr { display: inline-flex; max-width: 100%; padding: 8px; border-radius: 12px; background: #fff; }
+/* QR codes require a white background to remain reliably scannable in every theme. */
+.pairing-qr { --qr-bg: #fff; display: inline-flex; max-width: 100%; padding: 8px; border-radius: 12px; background: var(--qr-bg); }
 .pairing-qr svg { display: block; width: min(256px, 100%); height: auto; }
-.pairing-verification { font: 700 2rem ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .25em; }
+.pairing-verification { font: 700 clamp(1.5rem, 6vw, 2rem) ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .25em; overflow-wrap: anywhere; }

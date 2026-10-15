@@ -15,7 +15,7 @@ struct VoiceCallSummaryView: View {
                     .frame(width: 26, height: 26).background(Circle().fill(LB.accent.opacity(0.14))).accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 1) {
                     Text("Voice chat · \(humanizedStatus(current.state))").font(LBFont.bodyEmphasis).foregroundStyle(LB.ink)
-                    Text("\(Int(current.durationMs / 1000)) seconds · voice \(current.settings.voiceId) · speed \(current.settings.speed)").cardMeta().lineLimit(1)
+                    Text("\(compactDuration(from: Date(timeIntervalSince1970: 0), to: Date(timeIntervalSince1970: Double(current.durationMs) / 1000))) · Speed \(current.settings.speed, specifier: "%.1f")×").cardMeta().lineLimit(1)
                 }
                 Spacer(minLength: 8)
                 if current.userId == store.user?.id {
@@ -27,14 +27,16 @@ struct VoiceCallSummaryView: View {
             }
             if !current.transcriptEntryIds.isEmpty || current.feedback != nil {
                 CardDetails {
-                    Text("Feedback: \(current.feedback ?? "not provided")")
+                    Text("Feedback: \(current.feedback.map(humanizedStatus) ?? "Not provided")")
+                    Text("Voice: \(current.settings.voiceId)").textSelection(.enabled)
                     ForEach(current.transcriptEntryIds, id: \.self) { id in
-                        Button("Open exact transcript entry \(id)") { Task { await action.perform { try await openEntry(id) } } }
+                        Button("Open transcript entry") { Task { await action.perform { try await openEntry(id) } } }
                             .buttonStyle(.pill(.quiet, compact: true)).disabled(action.busy || store.connectionState != "online")
+                        Button("Copy entry ID") { copyText(id) }.buttonStyle(.pill(.quiet, compact: true))
                     }
                 }
             }
-            CardNote(symbol: "info.circle", text: "Ending voice does not cancel work already running in chat. Voice memo playback and ordinary reviewed dictation are separate.")
+            CardNote(symbol: "info.circle", text: "Ending voice chat doesn't stop work already running. Dictation stays unsent until you review and send it.")
             ActionErrorView(message: action.error)
         }.padding(12).frame(maxWidth: LBMetric.bubbleMaxWidth, alignment: .leading)
             .background(RoundedRectangle(cornerRadius: LBMetric.cardRadius, style: .continuous).fill(LB.bubble))

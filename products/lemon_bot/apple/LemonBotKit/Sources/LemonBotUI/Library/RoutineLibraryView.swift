@@ -85,8 +85,8 @@ struct RoutineEditorView: View {
         editorForm
             .navigationTitle(saved?.name ?? "New routine")
             .toolbar {
-                Button("Close") { dismiss() }
-                Button("Refresh history") { Task { await action.perform(readOnly: true) { try await loadRuns() } } }
+                ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } }
+                ToolbarItem(placement: .primaryAction) { Button("Refresh history") { Task { await action.perform(readOnly: true) { try await loadRuns() } } } }
             }
             .task { apply(initial); await loadProviders() }
             .task(id: saved?.id) { await observeRunHistory() }
@@ -110,7 +110,7 @@ struct RoutineEditorView: View {
             Button("Save routine") { Task { await saveRoutine() } }
                 .disabled(botID.isEmpty || name.isEmpty || instruction.isEmpty || action.busy || action.uncertain || store.connectionState != "online")
             savedRoutineFields
-        }
+        }.formStyle(.grouped)
     }
 
     @ViewBuilder private var routineIdentityFields: some View {
@@ -139,9 +139,9 @@ struct RoutineEditorView: View {
                     Button("Copy key") { hubCopy(key.key) }
                     Button("Copy exact header") { hubCopy(key.header) }
                     Button("Copy POST URL") { hubCopy(key.url) }
-                }
+                }.formStyle(.grouped)
                 .navigationTitle("Webhook key")
-                .toolbar { Button("Done / erase local buffer") { webhookKey = nil; keyPresented = false } }
+                .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Done") { webhookKey = nil; keyPresented = false } } }
             }
         }
     }

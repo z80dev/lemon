@@ -2,7 +2,7 @@ import { createContext, useContext, useEffect, useMemo, useRef, useState, type R
 import { LemonBotClient, nonce, type Bot, type Conversation, type Device, type InstanceStatus, type RealtimeConnection, type RealtimeEvent, type RealtimeState, type Resource, type Snapshot } from '@lemon-bot/sdk';
 import { AuthScreen, savedAccounts, type WebSession } from './auth';
 import { ArrowDown, ChevronRight, GitBranch, History, Inbox, LayoutGrid, ListFilter, Menu, MoreHorizontal, Plus, Search, SquarePen } from 'lucide-react';
-import { AccountAvatar, BotAvatar, EmptyState, ErrorNotice, LemonFace, LemonMark, Loading, useAction } from './ui';
+import { AccountAvatar, BotAvatar, ConfirmDialog, EmptyState, ErrorNotice, LemonFace, LemonMark, Loading, useAction } from './ui';
 import { currentStep, previewText } from './live';
 import { SettingsRoute, isSettingsScreen } from './settings-shell';
 import { BotsScreen } from './features/bots';
@@ -215,7 +215,7 @@ function Workspace({ session, onLogout }: { session: WebSession; onLogout: (reas
   const requiredVersion = snapshot.capabilities.minClientVersions.web;
   const requiredParts = requiredVersion.split('.').map(Number);
   const updateRequired = requiredParts[0] > 1 || requiredParts[0] === 1 && (requiredParts[1] > 0 || requiredParts[2] > 0);
-  if (updateRequired) return <main className="boot stack"><div className="brand"><LemonMark/>Lemon Bot</div><h1>A client update is required</h1><p>This web client is 1.0.0; your backend requires {requiredVersion}. Ask the operator to build and deploy the matching web assets, then reload. Updating the client does not recreate your machines or remove work.</p><button className="primary" onClick={() => location.reload()}>Reload installed assets</button><button onClick={() => void logout()}>Sign out</button></main>;
+  if (updateRequired) return <main className="boot stack"><div className="brand"><LemonMark/>Lemon Bot</div><h1>This app needs an update</h1><p>Reload to get the latest available version. Your Bots and work are unaffected.</p><button className="primary" onClick={() => location.reload()}>Reload</button><details><summary>Details for your administrator</summary><p>This web client is 1.0.0; the service requires {requiredVersion}. Build and deploy matching web assets if reloading doesn’t update the app.</p></details><button onClick={() => void logout()}>Sign out</button></main>;
   const activeBot = snapshot.bots.find(bot => bot.id === (route.botId || (route.screen.startsWith('bot.') || route.screen === 'memory' ? route.id : undefined))) || (route.screen === 'conversation' ? snapshot.bots.find(bot => bot.mainConversationId === route.id || snapshot.conversations.find(room => room.id === route.id)?.botIds.includes(bot.id)) : undefined);
   const appearance = snapshot.user.preferences.appearance;
   const context: AppContextValue = { client, realtime, snapshot, device, online: browserOnline && connection === 'live' && snapshot.capabilities.controlConnected !== false, navigate, refresh, updateInstance: applyInstance, reportError, logout, forgetConversation, draftPrompt: (conversationId, text) => {
@@ -227,7 +227,7 @@ function Workspace({ session, onLogout }: { session: WebSession; onLogout: (reas
   const settingsScreen = isSettingsScreen(route.screen);
   const atHome = route.screen === 'home';
   const connected = connection === 'live' && browserOnline && snapshot.capabilities.controlConnected !== false;
-  return <AppContext.Provider value={context}><div className={`workspace ${sidebar ? 'sidebar-open' : ''} ${conversationScreen ? 'in-conversation' : ''} ${settingsScreen ? 'in-settings' : ''} ${atHome ? 'at-home' : ''} ${connected ? '' : 'disconnected'}`} data-theme={appearance}><a className="skip-link" href="#main-content">Skip to workspace content</a><Roster route={route} close={() => setSidebar(false)} openPalette={() => setPalette(true)} unreadInbox={unreadInbox} connection={connected ? null : connectionLabel(connection, browserOnline, snapshot.capabilities.controlConnected)} reconnect={retry} recovery={(!connected || runtimeRunning) && phone && atHome ? recoveryPanel : undefined}/><div className="workspace-main">{!conversationScreen && !atHome && !settingsScreen && <header className="workspace-bar"><button className="icon-button mobile-menu" aria-label="Open Bot list" onClick={() => setSidebar(value => !value)}><Menu size={20}/></button>{activeBot ? <button className="companion-anchor" onClick={() => navigate({ screen: 'conversation', id: activeBot.mainConversationId, botId: activeBot.id })}><BotAvatar bot={activeBot} size={22}/><strong>{activeBot.name}</strong></button> : <span/>}<div className="row workspace-tools"><button className="ghost-circle" aria-label="Search everything (⌘K)" title="Search (⌘K)" onClick={() => setPalette(true)}><Search size={15}/></button></div></header>}<main id="main-content" className="main-content" tabIndex={-1}>{!!error && <div className="global-error"><ErrorNotice error={error}/><button onClick={() => setError(undefined)}>Dismiss</button></div>}{(!connected || runtimeRunning) && !(phone && atHome) && route.screen !== 'settings.instance' && recoveryPanel}<Destination route={route} activeBot={activeBot}/></main></div>{palette && <Palette close={() => setPalette(false)}/>}<VoiceOverlay/></div></AppContext.Provider>;
+  return <AppContext.Provider value={context}><div className={`workspace ${sidebar ? 'sidebar-open' : ''} ${conversationScreen ? 'in-conversation' : ''} ${settingsScreen ? 'in-settings' : ''} ${atHome ? 'at-home' : ''} ${connected ? '' : 'disconnected'}`} data-theme={appearance}><a className="skip-link" href="#main-content">Skip to workspace content</a><Roster route={route} close={() => setSidebar(false)} openPalette={() => setPalette(true)} unreadInbox={unreadInbox} connection={connected ? null : connectionLabel(connection, browserOnline, snapshot.capabilities.controlConnected)} reconnect={retry} recovery={(!connected || runtimeRunning) && phone && atHome ? recoveryPanel : undefined}/><div className="workspace-main">{!conversationScreen && !atHome && !settingsScreen && <header className="workspace-bar"><button className="icon-button mobile-menu" aria-label="Open Bot list" onClick={() => setSidebar(value => !value)}><Menu size={20}/></button>{activeBot ? <button className="companion-anchor" onClick={() => navigate({ screen: 'conversation', id: activeBot.mainConversationId, botId: activeBot.id })}><BotAvatar bot={activeBot} size={22}/><strong>{activeBot.name}</strong></button> : <span/>}<div className="row workspace-tools"><button className="ghost-circle" aria-label="Search everything" title={`Search (${navigator.platform.includes('Mac') ? '⌘' : 'Ctrl+'}K)`} onClick={() => setPalette(true)}><Search size={15}/></button></div></header>}<main id="main-content" className="main-content" tabIndex={-1}>{!!error && <div className="global-error"><ErrorNotice error={error}/><button onClick={() => setError(undefined)}>Dismiss</button></div>}{(!connected || runtimeRunning) && !(phone && atHome) && route.screen !== 'settings.instance' && recoveryPanel}<Destination route={route} activeBot={activeBot}/></main></div>{palette && <Palette close={() => setPalette(false)}/>}<VoiceOverlay/></div></AppContext.Provider>;
 }
 function Destination({ route, activeBot }: { route: Route; activeBot?: Bot }) {
   const { snapshot, navigate } = useApp();
@@ -245,13 +245,13 @@ function Destination({ route, activeBot }: { route: Route; activeBot?: Bot }) {
 function DecisionLink({ route }: { route: Route }) {
   const { client, navigate, reportError } = useApp(); const [loading, setLoading] = useState(true);
   useEffect(() => { let cancelled = false; void (async () => { try { const approval = await client.call('GET /approvals/:id', { params: { id: route.id! } }); if (approval.botId !== route.botId || (route.tab && approval.conversationId !== route.tab) || (route.entryId && approval.entryId !== route.entryId)) throw new Error('Decision link identifiers do not match the authorized current request.'); await client.call('GET /entries/:id', { params: { id: approval.entryId } }); if (!cancelled) navigate({ screen: 'conversation', id: approval.conversationId, botId: approval.botId, entryId: approval.entryId }); } catch (failure) { if (!cancelled) { reportError(failure); setLoading(false); } } })(); return () => { cancelled = true; }; }, [route.id]);
-  return loading ? <Loading/> : <EmptyState title="Decision unavailable">It may have expired, been deleted, or no longer be accessible. Opening a link never approves an action.</EmptyState>;
+  return loading ? <Loading/> : <EmptyState title="Decision unavailable" action={<button onClick={() => navigate({ screen: 'home' })}>Back to your Bots</button>}>It may have expired, been deleted, or no longer be accessible. Opening a link never approves an action.</EmptyState>;
 }
 function Home() {
   const { snapshot, navigate } = useApp();
   const online = snapshot.machines.some(machine => machine.status === 'online');
-  if (snapshot.bots.length === 0) return <div className="home"><EmptyState title="Create your first Bot" action={<div className="row"><button className="primary" onClick={() => navigate({ screen: online ? 'bot.create' : 'machine.attach' })}>{online ? 'Create a Bot' : 'Attach your host'}</button><button onClick={() => navigate({ screen: 'templates' })}>Explore templates</button></div>}><p>Bots run on an enrolled host you own, even when this app is closed. Attach a trusted host, wait for verified online status, then give your Bot a name and a focused job.</p></EmptyState></div>;
-  return <div className="home"><EmptyState title="Message a Bot"><p>Pick a Bot on the left to pick up where you left off. Bots keep working on their machines while the app is closed.</p></EmptyState></div>;
+  if (snapshot.bots.length === 0) return <div className="home"><EmptyState title="Create your first Bot" action={<div className="row"><button className="primary" onClick={() => navigate({ screen: online ? 'bot.create' : 'machine.attach' })}>{online ? 'Create a Bot' : 'Connect a computer'}</button><button onClick={() => navigate({ screen: 'templates' })}>Explore templates</button></div>}><p>Bots run on a computer you connect to Lemon Bot, even when this app is closed. Connect one, wait for it to show online, then give your first Bot a name and a job.</p></EmptyState></div>;
+  return <div className="home"><EmptyState title="Message a Bot"><p>Pick a Bot to continue where you left off. Bots keep working on their computers while this app is closed.</p></EmptyState></div>;
 }
 interface Preview { entryId: string; text: string }
 /** Last-message previews keyed by conversation, refreshed when a conversation's lastEntryId changes. */
@@ -279,6 +279,7 @@ function Roster({ route, close, openPalette, unreadInbox, connection, reconnect,
   const { snapshot, client, navigate, refresh, online } = useApp();
   const [searching, setSearching] = useState(false); const [query, setQuery] = useState(''); const [unreadOnly, setUnreadOnly] = useState(false); const [showHidden, setShowHidden] = useState(false);
   const [menu, setMenu] = useState<MenuTarget>(); const [moreUnreads, setMoreUnreads] = useState(false);
+  const [deleteSection, setDeleteSection] = useState<Snapshot['sections'][number]>();
   const [phone, setPhone] = useState(() => matchMedia('(max-width: 760px)').matches); useEffect(() => { const query = matchMedia('(max-width: 760px)'); const change = () => setPhone(query.matches); query.addEventListener('change', change); return () => query.removeEventListener('change', change); }, []);
   const phoneHome = phone && route.screen === 'home';
   const scroller = useRef<HTMLDivElement>(null); const searchInput = useRef<HTMLInputElement>(null);
@@ -322,15 +323,15 @@ function Roster({ route, close, openPalette, unreadInbox, connection, reconnect,
     <div className="roster-top">
       <button className="roster-brand" aria-label="Lemon Bot home" onClick={() => navigate({ screen: 'home' })}><LemonMark size={26}/></button>
       <h1 className="roster-title">Chats</h1>
-      {connection && <span className="connection-pill"><span className="status-dot needs_input"/>{connection}</span>}
-      {connection && <button className="pill-button warning compact" onClick={reconnect}>Try again</button>}
+      {connection && <span className="connection-pill" role="status" aria-live="polite"><span className={`status-dot ${connection === 'Offline' || connection === 'Connection failed' || connection === 'Disconnected' ? 'offline' : 'needs_input'}`}/>{connection}</span>}
+      {connection && phone && !recovery && <button className="pill-button warning compact" onClick={reconnect}>Try again</button>}
       {phoneHome ? <details className="roster-filter"><summary className="ghost-circle" aria-label="Filter chats"><ListFilter size={18}/></summary><div className="menu" role="menu">
         <button role="menuitemcheckbox" aria-checked={unreadOnly} onClick={() => setUnreadOnly(value => !value)}>{unreadOnly ? '✓ ' : ''}Unread only</button>
         <button role="menuitemcheckbox" aria-checked={showHidden} onClick={() => setShowHidden(value => !value)}>{showHidden ? '✓ ' : ''}Show hidden</button>
         <button role="menuitem" onClick={openPalette}>Search everything</button>
         <button role="menuitem" onClick={() => navigate({ screen: 'group.create' })}>New group</button>
       </div></details> : <button className={`ghost-circle ${searching ? 'selected' : ''}`} aria-label="Search Bots and groups" aria-expanded={searching} title="Search" onClick={() => { setSearching(value => !value); if (searching) { setQuery(''); setUnreadOnly(false); } else requestAnimationFrame(() => searchInput.current?.focus()); }}><Search size={15}/></button>}
-      <button className="ghost-circle" aria-label="New Bot (⌘N)" title="New Bot (⌘N)" onClick={() => navigate({ screen: 'bot.create' })}>{phoneHome ? <SquarePen size={18}/> : <Plus size={16}/>}</button>
+      <button className="ghost-circle" aria-label="New Bot" title={`New Bot (${navigator.platform.includes('Mac') ? '⌘' : 'Ctrl+'}N)`} onClick={() => navigate({ screen: 'bot.create' })}>{phoneHome ? <SquarePen size={18}/> : <Plus size={16}/>}</button>
     </div>
     {recovery}
     {(searching || phoneHome) && <div className="roster-search"><label className="search-field"><Search size={15} aria-hidden="true"/><span className="sr-only">Search Bots and groups</span><input ref={searchInput} placeholder="Search Bots and groups" value={query} onChange={event => setQuery(event.target.value)} onKeyDown={event => { if (event.key === 'Escape') { setQuery(''); setSearching(false); setUnreadOnly(false); } }}/></label>{!phoneHome && <><button className={`pill-button compact ${unreadOnly ? 'unread-on' : 'secondary'}`} aria-pressed={unreadOnly} onClick={() => setUnreadOnly(value => !value)}>Unread</button><button className="pill-button compact secondary" onClick={openPalette}>All</button></>}</div>}
@@ -346,7 +347,7 @@ function Roster({ route, close, openPalette, unreadInbox, connection, reconnect,
           <details className="section-actions"><summary aria-label={`Edit ${section.name}`}><MoreHorizontal size={15}/></summary><div className="menu stack">
             <form onSubmit={event => { event.preventDefault(); const data = new FormData(event.currentTarget); void action.run(async () => { await client.call('PATCH /sections/:id', { params: { id: section.id }, body: { clientNonce: nonce(), revision: section.revision, name: String(data.get('name')) } }); await refresh(); }); }}><input name="name" aria-label="Section name" defaultValue={section.name} required/><button>Rename</button></form>
             <button onClick={() => void action.run(async () => { await client.call('PATCH /sections/:id', { params: { id: section.id }, body: { clientNonce: nonce(), revision: section.revision, rank: section.rank - 1 } }); await refresh(); })}>Move section up</button>
-            <button onClick={() => { if (window.confirm(`Delete section “${section.name}”? Its Bots move to Unassigned; no Bot is deleted.`)) void action.run(async () => { await client.call('DELETE /sections/:id', { params: { id: section.id }, body: { clientNonce: nonce(), revision: section.revision } }); await refresh(); }); }}>Delete section only</button>
+            <button onClick={() => setDeleteSection(section)}>Delete section only</button>
           </div></details>
         </div>
         {!section.collapsed && members.map(renderBot)}
@@ -365,8 +366,8 @@ function Roster({ route, close, openPalette, unreadInbox, connection, reconnect,
     </div>
     {moreUnreads && <button className="more-unreads" onClick={() => { const root = scroller.current; const box = root?.getBoundingClientRect(); const target = root && box ? [...root.querySelectorAll<HTMLElement>('[data-unread="true"]')].find(element => element.getBoundingClientRect().top > box.bottom - 8) : undefined; target?.scrollIntoView({ behavior: 'smooth', block: 'center' }); }}><ArrowDown size={14}/>More unreads</button>}
     <div className="roster-footer">
-      <button className="account-button" aria-label={`Settings — ${snapshot.user.displayName}`} title="Settings (⌘,)" onClick={() => navigate({ screen: 'settings' })}><AccountAvatar name={snapshot.user.displayName}/></button>
-      <button className="connect-pill" onClick={() => navigate({ screen: 'connect.apps' })}>Connect apps<LayoutGrid size={14}/></button>
+      <button className="account-button" aria-label={`Settings — ${snapshot.user.displayName}`} title={`Settings (${navigator.platform.includes('Mac') ? '⌘' : 'Ctrl+'},)`} onClick={() => navigate({ screen: 'settings' })}><AccountAvatar name={snapshot.user.displayName}/></button>
+      <button className="connect-pill" onClick={() => navigate({ screen: 'connect.apps' })}>Connections<LayoutGrid size={14}/></button>
     </div>
     {menu && <div className="menu context-menu" role="menu" style={{ left: menu.x, top: menu.y }} onClick={event => { if ((event.target as Element).closest('button')) setMenu(undefined); }}>
       <button role="menuitem" onClick={() => open(menu.bot)}>Open chat</button>
@@ -383,5 +384,5 @@ function Roster({ route, close, openPalette, unreadInbox, connection, reconnect,
       <hr/>
       <button role="menuitem" onClick={() => navigate({ screen: 'bot.settings', id: menu.bot.id, botId: menu.bot.id })}>Bot settings</button>
     </div>}
-  </aside></>;
+  </aside>{deleteSection && <ConfirmDialog title={`Delete section “${deleteSection.name}”?`} disabled={!online || action.busy} onCancel={() => setDeleteSection(undefined)} onConfirm={async () => { await action.run(async () => { await client.call('DELETE /sections/:id', { params: { id: deleteSection.id }, body: { clientNonce: nonce(), revision: deleteSection.revision } }); await refresh(); setDeleteSection(undefined); }); }}><p>Its Bots move to Unassigned. No Bot is deleted.</p><ErrorNotice error={action.error}/></ConfirmDialog>}</>;
 }
