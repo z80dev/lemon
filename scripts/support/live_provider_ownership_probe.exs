@@ -1,7 +1,7 @@
 defmodule LemonScripts.LiveProviderOwnershipProbe do
   @moduledoc false
   alias CodingAgent.{Session, SessionManager, SettingsManager}
-  alias LemonAgent.ModelRuntime.{Credentials, StreamOptions}
+  alias LemonAgent.ModelRuntime.{CredentialHealth, Credentials, CustomProviders, StreamOptions}
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonAi.Types.{Model, TextContent}
 
@@ -12,6 +12,7 @@ defmodule LemonScripts.LiveProviderOwnershipProbe do
   @private ~w(fixture-owner-a-pool fixture-owner-a-default fixture-owner-b-key
     fixture-owner-b-header fixture-owner-ambient fixture-owner-oauth-access
     fixture-owner-private-refresh)
+  @failure_provider "live-provider-ownership-failure"
 
   def log(event, %{config: %{owner: owner, ref: ref}}),
     do: send(owner, {ref, :log, event})
@@ -301,7 +302,9 @@ defmodule LemonScripts.LiveProviderOwnershipProbe do
 
   defp live_fallback(cwd, url) do
     a = model(:groq, "gemma2-9b-it", :openai_completions, url)
-    b = model(:xai, "grok-3", :openai_completions, url)
+
+    # The intentional 503 belongs to this fixture, not the shared xAI service.
+    # Keep a stable private identity and give its health processes a run lifetime.
 
     providers = %{
       "groq" => %{
@@ -309,12 +312,26 @@ defmodule LemonScripts.LiveProviderOwnershipProbe do
         base_url: url,
         headers: %{"x-provider-owner" => "a"}
       },
-      "xai" => %{
+      @failure_provider => %{
+        api: "openai_completions",
         api_key: "fixture-owner-b-key",
         base_url: url,
         headers: %{"Authorization" => "Bearer fixture-owner-b-header", "x-provider-owner" => "b"}
       }
     }
+
+    b = CustomProviders.lookup(providers, @failure_provider, "grok-3")
+
+    {:ok, health} =
+      Supervisor.start_link(
+        [
+          {LemonAi.CircuitBreaker, provider: @failure_provider},
+          {LemonAi.RateLimiter, provider: @failure_provider}
+        ],
+        strategy: :one_for_one
+      )
+
+    [{breaker, _}] = Registry.lookup(LemonAi.CircuitBreakerRegistry, @failure_provider)
 
     routing = %{
       enabled: true,
@@ -353,6 +370,32 @@ defmodule LemonScripts.LiveProviderOwnershipProbe do
       end)
     after
       Agent.stop(holder)
+
+      try do
+        settle_failure_provider!(breaker, System.monotonic_time(:millisecond) + 5_000)
+      after
+        Supervisor.stop(health)
+        CredentialHealth.record_success(@failure_provider, "default")
+      end
+    end
+  end
+
+  defp settle_failure_provider!(breaker, deadline) do
+    {:ok, state} = GenServer.call(breaker, :get_state)
+
+    # An owner DOWN can release the slot before the tracker accounts for its
+    # terminal result. Observe both before stopping health; otherwise a late
+    # tracker can recreate the provider services under the global supervisor.
+    if state.failure_count == 1 and
+         LemonAi.CallDispatcher.get_active_requests(@failure_provider) == 0 do
+      :ok
+    else
+      if System.monotonic_time(:millisecond) >= deadline do
+        raise "fixture provider terminal accounting did not settle"
+      else
+        Process.sleep(10)
+        settle_failure_provider!(breaker, deadline)
+      end
     end
   end
 

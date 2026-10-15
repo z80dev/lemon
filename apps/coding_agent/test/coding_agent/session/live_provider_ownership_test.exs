@@ -108,16 +108,26 @@ defmodule CodingAgent.Session.LiveProviderOwnershipTest do
 
   test "native live switch then fallback to startup provider strips foreign headers and selects pool key",
        %{root: root} do
-    report = run(root, :live_fallback)
-    assert report.a_requests == 2
-    assert report.b_requests == 1
-    assert report.answered
-    refute report.foreign_header_on_a
-    assert report.a_pool_selected
-    assert report.b_explicit_header_preserved
-    assert report.journal_matches_selection
-    refute report.private_values_in_logs_or_events
-    assert report.passed
+    # More runs than the default breaker threshold must each reach the real
+    # failing endpoint, rather than inheriting the previous run's 503 health.
+    for _ <- 1..8 do
+      report = run(root, :live_fallback)
+      assert report.a_requests == 2
+      assert report.b_requests == 1
+      assert report.answered
+      refute report.foreign_header_on_a
+      assert report.a_pool_selected
+      assert report.b_explicit_header_preserved
+      assert report.journal_matches_selection
+      refute report.private_values_in_logs_or_events
+      assert report.passed
+
+      provider = "live-provider-ownership-failure"
+      assert Registry.lookup(LemonAi.CircuitBreakerRegistry, provider) == []
+      assert Registry.lookup(LemonAi.RateLimiterRegistry, provider) == []
+      assert LemonAi.CallDispatcher.get_active_requests(provider) == 0
+      assert LemonAgent.ModelRuntime.CredentialHealth.cooldown_until(provider, "default") == nil
+    end
   end
 
   test "same-provider idle rebinding and fallback wrapping preserve explicit caller headers", %{

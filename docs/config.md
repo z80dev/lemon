@@ -1448,7 +1448,9 @@ refusal (including plan-role selection), successful keyless transitions,
 switch-then-fallback header isolation and same-provider rebinding with no caller
 headers and with genuine caller overrides, using fixture credentials and loopback
 HTTP only. Its refusal and credential-leak checks scan complete captured events
-and logs, including large tool-schema snapshots.
+and logs, including large tool-schema snapshots. The intentional fallback failure
+uses fixture-owned provider health processes, so repeated runs neither inherit
+nor contaminate the real provider's circuit breaker or request-rate bucket.
 
 Google Gemini CLI onboarding (`lemon model --provider gemini`, or
 `./bin/lemon model --provider gemini` from a checkout) resolves OAuth
