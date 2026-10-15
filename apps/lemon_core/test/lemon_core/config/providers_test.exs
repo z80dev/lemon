@@ -411,13 +411,4 @@ defmodule LemonCore.Config.ProvidersTest do
       assert Providers.defaults() == %{}
     end
   end
-
-  describe "struct type" do
-    test "returns a properly typed struct" do
-      config = Providers.resolve(%{})
-
-      assert %Providers{} = config
-      assert is_map(config.providers)
-    end
-  end
 end

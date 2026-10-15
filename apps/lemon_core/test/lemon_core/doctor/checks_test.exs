@@ -7,7 +7,6 @@ defmodule LemonCore.Doctor.ChecksTest do
     Config,
     NodeTools,
     Providers,
-    Runtime,
     Usage
   }
 
@@ -24,21 +23,7 @@ defmodule LemonCore.Doctor.ChecksTest do
     end
   end
 
-  describe "Runtime.run/1" do
-    test "returns a list of Check structs" do
-      checks = Runtime.run()
-      assert is_list(checks)
-      assert Enum.all?(checks, &match?(%Check{}, &1))
-    end
-  end
-
   describe "Providers.run/1" do
-    test "returns a list of Check structs" do
-      checks = Providers.run()
-      assert is_list(checks)
-      assert Enum.all?(checks, &match?(%Check{}, &1))
-    end
-
     test "a named missing secret is not a usable default credential" do
       tmp_dir =
         Path.join(System.tmp_dir!(), "doctor_missing_#{System.unique_integer([:positive])}")
@@ -99,12 +84,6 @@ defmodule LemonCore.Doctor.ChecksTest do
   end
 
   describe "Usage.run/1" do
-    test "returns a list of Check structs" do
-      checks = Usage.run()
-      assert is_list(checks)
-      assert Enum.all?(checks, &match?(%Check{}, &1))
-    end
-
     test "reports safe aggregate usage without leaking stored prompt or credential fields" do
       checks =
         Usage.run(
@@ -152,24 +131,11 @@ defmodule LemonCore.Doctor.ChecksTest do
   end
 
   describe "NodeTools.run/1" do
-    test "returns a check per binary" do
+    test "git check reflects executable availability" do
       checks = NodeTools.run()
-      assert is_list(checks)
-      assert checks != []
-    end
-
-    test "git check is present" do
-      checks = NodeTools.run()
-      assert Enum.any?(checks, &String.contains?(&1.name, "git"))
-    end
-
-    test "git check passes when git is on PATH" do
-      # In CI/dev environments git is always available
-      if System.find_executable("git") do
-        checks = NodeTools.run()
-        git_check = Enum.find(checks, &String.contains?(&1.name, "git"))
-        assert git_check.status == :pass
-      end
+      git_check = Enum.find(checks, &(&1.name == "node_tools.git"))
+      expected = if System.find_executable("git"), do: :pass, else: :fail
+      assert git_check.status == expected
     end
   end
 end

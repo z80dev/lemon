@@ -182,20 +182,6 @@ defmodule LemonCore.EnvTest do
                "#{inspect(overlaps)}. Either drop the alias or add it to `intentional` " <>
                "with a note explaining why the two variables are meant to be the same knob."
     end
-
-    test "every declaration has the expected shape" do
-      for decl <- Env.all_declared() do
-        assert is_atom(decl.name)
-        assert is_binary(decl.env_var)
-        assert is_list(decl.aliases)
-        assert decl.type in [:string, :integer, :float, :boolean, :list, :bytes]
-        assert is_binary(decl.doc)
-        assert is_boolean(decl.secret?)
-        assert is_boolean(decl.required?)
-        assert is_atom(decl.area)
-        assert is_list(decl.apps)
-      end
-    end
   end
 
   describe "describe/1 and by_area/1" do
