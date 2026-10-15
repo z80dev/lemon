@@ -8,7 +8,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
-No unreleased changes yet.
+### Added
+
+- Provider status and Lemon Bot instance panes now expose the last observed
+  provider failure with a timestamp and bounded, credential-free category summary.
 
 ---
 
