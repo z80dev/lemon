@@ -15,6 +15,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Web chat model-list and compaction failures now show plain-language next steps
+  pointing to Diagnostics instead of exposing service error terms.
+
 - All skill curator entry points now protect cron-referenced skills, including
   disabled jobs, while preserving explicit exemptions. Automatic archival fails
   closed with a reported reason when the automation provider is unavailable.
