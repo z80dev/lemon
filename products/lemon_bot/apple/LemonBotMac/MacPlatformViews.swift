@@ -120,8 +120,10 @@ struct MacVoiceView: View {
                         }), in: 0.5...2)
                         Text(String(format: "%.1f×", controller.voiceSettings?.speed ?? settings.speed))
                     }
-                    TextField("Voice (optional provider voice ID)", text: Binding(get: { controller.voiceSettings?.voiceId ?? "" }, set: { value in
+                    ProviderVoicePicker(store: controller.store, voiceID: Binding(get: { controller.voiceSettings?.voiceId ?? settings.voiceId }, set: { value in
                         settings.voiceId = value; controller.voiceSettings = settings
+                    }), language: Binding(get: { controller.voiceSettings?.language ?? "" }, set: { value in
+                        settings.language = value.isEmpty ? nil : value; controller.voiceSettings = settings
                     }))
                     TextField("Language (optional, e.g. en-US)", text: Binding(get: { controller.voiceSettings?.language ?? "" }, set: { value in
                         settings.language = value.isEmpty ? nil : value; controller.voiceSettings = settings

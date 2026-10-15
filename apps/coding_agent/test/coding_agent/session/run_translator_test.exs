@@ -1,6 +1,7 @@
 defmodule CodingAgent.Session.RunTranslatorTest do
   use ExUnit.Case, async: true
 
+  alias CodingAgent.Session.Presentation
   alias CodingAgent.Session.RunTranslator
   alias LemonAgent.Types.AgentToolResult
   alias LemonAi.Types.TextContent
@@ -19,7 +20,7 @@ defmodule CodingAgent.Session.RunTranslatorTest do
           {:provider_failed, %{private: :detail}},
           {:assistant_error, {:provider_failed, :detail}}
         ] do
-      error = CodingAgent.Session.Presentation.format_error(reason, %{})
+      error = Presentation.format_error(reason, %{})
       assert error =~ "lemon doctor"
       refute error =~ "{"
       refute error =~ ":detail"

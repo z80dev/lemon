@@ -14,7 +14,18 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   default provider was inherited, while preserving native colon IDs for explicit
   provider/model pairs.
 
+- iOS share builds without App Group access explain the in-app Camera, Photos and
+  Files alternative without exposing signing identifiers or offering a futile retry.
+- Apple composer controls have iPhone-sized touch targets, a stable corner radius,
+  bounded pasted-filename previews and appearance-aware code inset colors.
+
 ### Added
+
+- Add opt-in `lemon doctor --live` for bounded, redacted provider models-list and
+  Telegram/Discord bot identity checks without generating completions.
+
+- Rate-limited cron failure and recovery alerts, persistent failure streaks,
+  owner-chat fallback, and doctor warnings for failures without a delivery route.
 
 - Provider status and Lemon Bot instance panes now expose the last observed
   provider failure with a timestamp and bounded, credential-free category summary.
@@ -47,6 +58,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   native recorder, and Previous/Next Bot have one discoverable menu binding.
   Recorded shortcuts display native Mac modifier symbols while preserving their
   saved combinations.
+
+- Apple voice settings use provider-specific built-in choices instead of requiring
+  raw voice IDs, while preserving existing custom voices and explicit saves.
 
 ---
 

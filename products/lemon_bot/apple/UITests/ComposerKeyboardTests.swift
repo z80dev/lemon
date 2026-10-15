@@ -70,6 +70,12 @@ final class ComposerKeyboardTests: XCTestCase {
         XCTAssertTrue(keyboard.waitForExistence(timeout: 5))
         let send = app.buttons["Send"]
         XCTAssertTrue(send.isHittable)
+        for label in ["Send", "Dictate", "Add attachment, reference or delivery option"] {
+            // iOS also exposes a keyboard Dictate button with identifier "dictation".
+            let button = app.buttons.matching(NSPredicate(format: "label == %@ AND identifier != %@", label, "dictation")).firstMatch
+            XCTAssertGreaterThanOrEqual(button.frame.width, 44, "\(label) touch width")
+            XCTAssertGreaterThanOrEqual(button.frame.height, 44, "\(label) touch height")
+        }
         XCTAssertLessThanOrEqual(send.frame.maxY, keyboard.frame.minY)
         XCTAssertLessThanOrEqual(draft.frame.maxY, keyboard.frame.minY)
     }

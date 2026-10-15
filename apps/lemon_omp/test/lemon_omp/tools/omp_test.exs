@@ -4,6 +4,7 @@ defmodule LemonOmp.Tools.OmpTest do
 
   import LemonOmp.TestSupport
 
+  alias LemonAgent.Loop.ToolCalls
   alias LemonAgent.Types.AgentToolResult
   alias LemonAi.Types.TextContent
   alias LemonOmp.Tools.Omp
@@ -60,7 +61,7 @@ defmodule LemonOmp.Tools.OmpTest do
 
     runner =
       Task.async(fn ->
-        LemonAgent.Loop.ToolCalls.execute_and_collect_tools(
+        ToolCalls.execute_and_collect_tools(
           context,
           [],
           [call],

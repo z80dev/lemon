@@ -3,12 +3,13 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
   use ExUnit.Case, async: false
 
   alias CodingAgent.AsyncFollowups
-  alias Elixir.CodingAgent.Tools.Task
-  alias Elixir.CodingAgent.Tools.Task.Followup
-  alias Elixir.CodingAgent.TaskStore
-  alias Elixir.CodingAgent.RunGraph
   alias CodingAgent.Messages
   alias CodingAgent.Messages.CustomMessage
+  alias CodingAgent.Session.State
+  alias Elixir.CodingAgent.RunGraph
+  alias Elixir.CodingAgent.TaskStore
+  alias Elixir.CodingAgent.Tools.Task
+  alias Elixir.CodingAgent.Tools.Task.Followup
   alias LemonCore.RunRequest
 
   defmodule TaskAsyncStubRunOrchestrator do
@@ -39,7 +40,7 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
     def handle_async_followup(pid, message) do
       send(
         pid,
-        {:session_async_followup, CodingAgent.Session.State.build_async_followup_message(message)}
+        {:session_async_followup, State.build_async_followup_message(message)}
       )
 
       :ok
@@ -54,7 +55,7 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
     def handle_async_followup(pid, message) do
       send(
         pid,
-        {:session_async_followup, CodingAgent.Session.State.build_async_followup_message(message)}
+        {:session_async_followup, State.build_async_followup_message(message)}
       )
 
       :ok

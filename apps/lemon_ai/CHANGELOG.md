@@ -25,6 +25,9 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ### Changed
 
+- Normalize provider dependency aliases and test alias ordering for strict Credo;
+  provider behavior is unchanged.
+
 - **Breaking:** `AnthropicOAuth.login_device_flow/1` no longer runs
   `claude setup-token` or copies Claude Code's credentials file; it requires
   `:on_auth` and `:on_prompt`. A pasted setup token is still accepted.

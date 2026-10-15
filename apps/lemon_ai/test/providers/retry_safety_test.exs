@@ -1,8 +1,8 @@
 defmodule LemonAi.Providers.RetrySafetyTest do
   use ExUnit.Case, async: false
 
-  alias LemonAi.EventStream
   alias LemonAi.CircuitBreaker
+  alias LemonAi.EventStream
   alias LemonAi.Types.{Context, Model, ModelCost, StreamOptions, UserMessage}
 
   setup do

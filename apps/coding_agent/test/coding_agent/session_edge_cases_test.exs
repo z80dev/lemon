@@ -18,14 +18,14 @@ defmodule CodingAgent.SessionEdgeCasesTest do
 
   alias LemonAi.Types.{
     AssistantMessage,
-    TextContent,
-    ToolCall,
-    ToolResultMessage,
-    Usage,
     Cost,
     Model,
     ModelCost,
-    ThinkingContent
+    TextContent,
+    ThinkingContent,
+    ToolCall,
+    ToolResultMessage,
+    Usage
   }
 
   # ============================================================================

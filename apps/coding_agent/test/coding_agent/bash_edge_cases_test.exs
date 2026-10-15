@@ -13,10 +13,10 @@ defmodule CodingAgent.BashEdgeCasesTest do
   """
   use ExUnit.Case, async: true
 
-  alias CodingAgent.Tools.Bash
   alias CodingAgent.BashExecutor
-  alias LemonAgent.Types.AgentToolResult
+  alias CodingAgent.Tools.Bash
   alias LemonAgent.AbortSignal
+  alias LemonAgent.Types.AgentToolResult
   alias LemonAi.Types.TextContent
 
   @moduletag :tmp_dir
@@ -920,7 +920,7 @@ defmodule CodingAgent.BashEdgeCasesTest do
     test "command with backslashes and quotes", %{tmp_dir: tmp_dir} do
       {:ok, result} =
         BashExecutor.execute(
-          "echo \"it's a \\\"test\\\"\"",
+          ~s(echo "it's a \\"test\\""),
           tmp_dir
         )
 

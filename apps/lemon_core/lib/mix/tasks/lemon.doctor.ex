@@ -24,6 +24,7 @@ defmodule Mix.Tasks.Lemon.Doctor do
 
       --verbose, -v       Show all checks including passing and skipped ones.
       --json              Output results as a JSON document (CI-friendly).
+      --live              Opt in to bounded, non-generating connectivity checks.
       --project-dir PATH  Use a specific project directory for project-config checks.
       --bundle            Write a redacted support bundle zip.
       --bundle-path PATH  Write the support bundle to a specific path.
@@ -43,6 +44,7 @@ defmodule Mix.Tasks.Lemon.Doctor do
         switches: [
           verbose: :boolean,
           json: :boolean,
+          live: :boolean,
           project_dir: :string,
           bundle: :boolean,
           bundle_path: :string
@@ -50,7 +52,7 @@ defmodule Mix.Tasks.Lemon.Doctor do
         aliases: [v: :verbose]
       )
 
-    check_opts = Keyword.take(opts, [:project_dir])
+    check_opts = Keyword.take(opts, [:project_dir, :live])
     report = Doctor.report(check_opts)
 
     if opts[:json] do

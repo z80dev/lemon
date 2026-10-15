@@ -10,13 +10,13 @@ defmodule LemonAi.Providers.GoogleSharedComprehensiveTest do
   alias LemonAi.Providers.GoogleShared
 
   alias LemonAi.Types.{
-    Model,
-    Context,
-    UserMessage,
     AssistantMessage,
-    TextContent,
+    Context,
     ImageContent,
-    Tool
+    Model,
+    TextContent,
+    Tool,
+    UserMessage
   }
 
   # ============================================================================
