@@ -31,7 +31,7 @@ public enum LemonBotSnapshotScene: String, CaseIterable {
     }
     /// Point size of the offscreen window the scene is rendered into.
     public var windowSize: CGSize {
-        if self == .instancePane || self == .instanceRunning { return CGSize(width: 1100, height: 1500) }
+        if self == .instancePane || self == .instanceRunning { return CGSize(width: 1100, height: 1700) }
         return self == .settings ? CGSize(width: 900, height: 620) : CGSize(width: 1320, height: 840)
     }
 
