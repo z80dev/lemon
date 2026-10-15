@@ -5,14 +5,105 @@ defmodule LemonControlPlane.Methods.IntrospectionMethodsTest do
     ChatHistory,
     SessionDetail,
     SessionsActive,
+    SessionsActiveList,
     SessionsList,
-    SessionsPreview,
-    SessionsActiveList
+    SessionsPreview
   }
 
   alias LemonControlPlane.Protocol.Frames
   alias LemonCore.SessionKey
   alias LemonAi.Types.{Model, ModelCost}
+
+  defmodule IntrospectionFailureBackend do
+    @behaviour LemonCore.Store.Backend
+
+    def init(opts), do: {:ok, {Keyword.fetch!(opts, :backend), Keyword.fetch!(opts, :state)}}
+    def put(state, table, key, value), do: forward(state, :put, [table, key, value])
+    def put_new(state, table, key, value), do: forward(state, :put_new, [table, key, value])
+    def get(state, table, key), do: forward(state, :get, [table, key])
+    def delete(state, table, key), do: forward(state, :delete, [table, key])
+
+    def list(_state, :introspection_log),
+      do: {:error, {:sqlite_busy, "private-backend-detail"}}
+
+    def list(state, table), do: forward(state, :list, [table])
+
+    defp forward({backend, backend_state}, operation, args) do
+      case apply(backend, operation, [backend_state | args]) do
+        {:ok, value, next_state} -> {:ok, value, {backend, next_state}}
+        {:ok, next_state} -> {:ok, {backend, next_state}}
+        {:exists, next_state} -> {:exists, {backend, next_state}}
+        other -> other
+      end
+    end
+  end
+
+  defp with_introspection_failure(fun) do
+    original = :sys.get_state(LemonCore.Store)
+
+    :sys.replace_state(LemonCore.Store, fn state ->
+      %{
+        state
+        | backend: IntrospectionFailureBackend,
+          backend_state: {state.backend, state.backend_state}
+      }
+    end)
+
+    try do
+      fun.()
+    after
+      :sys.replace_state(LemonCore.Store, fn _ -> original end)
+    end
+  end
+
+  test "active session details fail explicitly when workspace history is unavailable", %{
+    agent_id: agent_id
+  } do
+    params = %{"agentId" => agent_id}
+
+    with_introspection_failure(fn ->
+      assert SessionsActiveList.handle(params, %{}) ==
+               {:error, {:unavailable, "Active session details are unavailable", nil}}
+    end)
+
+    assert {:ok, %{"sessions" => [%{"harness" => harness}]}} =
+             SessionsActiveList.handle(params, %{})
+
+    assert is_map(harness["requirements"])
+  end
+
+  test "cron timelines fail explicitly without breaking history-only reads", %{run_id: run_id} do
+    job_id = "cron_introspection_#{System.unique_integer([:positive])}"
+
+    run =
+      job_id
+      |> LemonAutomation.CronRun.new(:manual)
+      |> LemonAutomation.CronRun.start(run_id)
+      |> LemonAutomation.CronRun.complete("done")
+
+    LemonAutomation.CronStore.put_run(run)
+    on_exit(fn -> LemonAutomation.CronStore.delete_run(run.id) end)
+
+    with_introspection_failure(fn ->
+      assert {:ok, %{"runs" => [%{"id" => id}]}} =
+               LemonControlPlane.Methods.CronRuns.handle(%{"id" => job_id}, %{})
+
+      assert id == run.id
+
+      assert LemonControlPlane.Methods.CronRuns.handle(
+               %{"id" => job_id, "includeIntrospection" => true},
+               %{}
+             ) == {:error, {:unavailable, "Introspection events are unavailable", nil}}
+    end)
+
+    assert {:ok, %{"runs" => [%{"introspection" => events}]}} =
+             LemonControlPlane.Methods.CronRuns.handle(
+               %{"id" => job_id, "includeIntrospection" => true},
+               %{}
+             )
+
+    assert Enum.any?(events, &(&1["eventType"] == "session_started"))
+  end
 
   defmodule RouterBridgeStub do
     use LemonCore.RouterBridge.Router

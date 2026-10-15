@@ -2,7 +2,12 @@ defmodule LemonControlPlane.Methods.RunsRecentList do
   @moduledoc """
   Handler for the `runs.recent.list` method.
 
-  Lists recent completed/error/aborted runs using `LemonCore.Introspection.list/1`.
+  Lists recent completed/error/aborted/crashed runs using `LemonCore.Introspection.list/1`.
+  Filters precede the response limit within the newest 1,000 events of each terminal
+  kind. Completed events win over crash events for the same run. Usage is joined
+  from at most 500 occurrences in the returned runs' time window; if that window
+  exceeds the usage page, usage fields are null rather than misleading partial sums.
+  `errorCount` counts errors only; crashes and aborts have separate status counts.
   """
 
   @behaviour LemonControlPlane.Method
@@ -25,27 +30,26 @@ defmodule LemonControlPlane.Methods.RunsRecentList do
     limit = normalize_limit(get_param(params, "limit"), @default_limit, @max_limit)
     status_filter = get_param(params, "status")
 
-    runs = fetch_recent_runs(agent_id, session_key, limit, status_filter)
-
-    filters = %{
-      "agentId" => agent_id,
-      "sessionKey" => session_key,
-      "limit" => limit,
-      "status" => status_filter
-    }
-
-    {:ok, response(runs, filters)}
-  rescue
-    _ ->
+    with {:ok, runs} <- fetch_recent_runs(agent_id, session_key, limit, status_filter),
+         {:ok, runs} <- attach_usage(runs) do
       filters = %{
-        "agentId" => nil,
-        "sessionKey" => nil,
-        "limit" => @default_limit,
-        "status" => nil
+        "agentId" => agent_id,
+        "sessionKey" => session_key,
+        "limit" => limit,
+        "status" => status_filter
       }
 
-      {:ok, response([], filters)}
+      {:ok, response(runs, filters)}
+    else
+      _ -> unavailable()
+    end
+  rescue
+    _ -> unavailable()
+  catch
+    :exit, _ -> unavailable()
   end
+
+  defp unavailable, do: {:error, {:internal_error, "Run history is unavailable", nil}}
 
   defp response(runs, filters) do
     %{
@@ -84,34 +88,53 @@ defmodule LemonControlPlane.Methods.RunsRecentList do
   end
 
   defp fetch_recent_runs(agent_id, session_key, limit, status_filter) do
-    if Code.ensure_loaded?(LemonCore.Introspection) do
-      query_opts =
-        [event_type: :run_completed, limit: limit]
-        |> maybe_add_opt(:agent_id, agent_id)
-        |> maybe_add_opt(:session_key, session_key)
+    opts =
+      [limit: 1_000]
+      |> maybe_add_opt(:agent_id, agent_id)
+      |> maybe_add_opt(:session_key, session_key)
 
-      LemonCore.Introspection.list(query_opts)
-      |> Enum.map(&format_run_event/1)
-      |> Enum.filter(&filter_by_status(&1, status_filter))
-    else
-      []
+    with completed when is_list(completed) <-
+           LemonCore.Introspection.list(Keyword.put(opts, :event_type, :run_completed)),
+         failed when is_list(failed) <-
+           LemonCore.Introspection.list(Keyword.put(opts, :event_type, :run_failed)) do
+      runs =
+        (completed ++ failed)
+        |> Enum.uniq_by(&(&1[:run_id] || &1["run_id"]))
+        |> Enum.map(&format_run_event/1)
+        |> Enum.filter(&filter_by_status(&1, status_filter))
+        |> Enum.sort_by(& &1["completedAtMs"], :desc)
+        |> Enum.take(limit)
+
+      attach_start_times(runs, opts)
     end
-  rescue
-    _ -> []
-  catch
-    :exit, _ -> []
+  end
+
+  defp attach_start_times(runs, opts) do
+    with true <- Enum.any?(runs, &is_nil(&1["startedAtMs"])),
+         started when is_list(started) <-
+           LemonCore.Introspection.list(Keyword.put(opts, :event_type, :run_started)) do
+      starts = Enum.reduce(started, %{}, &Map.put_new(&2, &1[:run_id], &1[:ts_ms]))
+
+      {:ok, Enum.map(runs, fn run ->
+        Map.update!(run, "startedAtMs", &(&1 || starts[run["runId"]]))
+      end)}
+    else
+      false -> {:ok, runs}
+      {:error, _} = error -> error
+    end
   end
 
   defp format_run_event(event) when is_map(event) do
     payload = event[:payload] || event["payload"] || %{}
-    ok = payload[:ok] || payload["ok"]
-    error = payload[:error] || payload["error"]
+    ok = Map.get(payload, :ok, Map.get(payload, "ok"))
+    error = payload[:error] || payload["error"] || payload[:reason] || payload["reason"]
     duration_ms = payload[:duration_ms] || payload["duration_ms"]
 
     status =
       cond do
+        (event[:event_type] || event["event_type"]) in [:run_failed, "run_failed"] -> "crashed"
         ok == true -> "completed"
-        error in [:user_requested, :interrupted, :aborted] -> "aborted"
+        LemonControlPlane.Methods.RunOutcome.aborted?(error) -> "aborted"
         true -> "error"
       end
 
@@ -123,12 +146,83 @@ defmodule LemonControlPlane.Methods.RunsRecentList do
       "startedAtMs" => started_at_ms(event, duration_ms),
       "completedAtMs" => event[:ts_ms] || event["ts_ms"],
       "status" => status,
+      "error" => error_label(error),
       "durationMs" => duration_ms,
       "ok" => ok == true
     }
   end
 
-  defp format_run_event(_), do: nil
+  defp error_label(nil), do: nil
+  defp error_label(error) when is_atom(error), do: error |> Atom.to_string() |> error_label()
+
+  defp error_label(error) when is_binary(error) do
+    error
+    |> LemonCore.Redact.text()
+    |> truncate_label()
+  end
+
+  defp error_label(_), do: "unknown_error"
+
+  defp truncate_label(label) when byte_size(label) <= 256, do: label
+  defp truncate_label(label), do: label |> binary_part(0, 256) |> valid_label_prefix()
+
+  defp valid_label_prefix(label) do
+    if String.valid?(label),
+      do: label,
+      else: label |> binary_part(0, byte_size(label) - 1) |> valid_label_prefix()
+  end
+
+  defp attach_usage([]), do: {:ok, []}
+
+  defp attach_usage(runs) do
+    timestamps =
+      Enum.flat_map(runs, &[&1["startedAtMs"], &1["completedAtMs"]])
+      |> Enum.filter(&is_integer/1)
+
+    from_ms = Enum.min(timestamps)
+    to_ms = Enum.max(timestamps) + 1
+
+    with {:ok, page} <-
+           LemonCore.UsageRecords.query(%{
+             "fromMs" => max(from_ms, 0),
+             "toMs" => to_ms,
+             "limit" => 500
+           }) do
+      grouped =
+        if is_nil(page.next_cursor),
+          do: Enum.group_by(page.records, & &1.run_id),
+          else: %{}
+
+      {:ok, Enum.map(runs, &Map.merge(&1, usage_fields(Map.get(grouped, &1["runId"], []))))}
+    end
+  end
+
+  defp usage_fields([]) do
+    Map.new(["tokens", "costUsd", "priceKnown", "model", "provider"], &{&1, nil})
+  end
+
+  defp usage_fields(records) do
+    priced? = Enum.all?(records, &(&1.price_known and is_number(&1.cost_usd)))
+
+    %{
+      "tokens" => %{
+        "input" => Enum.sum(Enum.map(records, & &1.input_tokens)),
+        "output" => Enum.sum(Enum.map(records, & &1.output_tokens)),
+        "total" => Enum.sum(Enum.map(records, & &1.total_tokens))
+      },
+      "costUsd" => if(priced?, do: Enum.sum(Enum.map(records, & &1.cost_usd)), else: nil),
+      "priceKnown" => priced?,
+      "model" => single_value(records, :model),
+      "provider" => single_value(records, :provider)
+    }
+  end
+
+  defp single_value(records, key) do
+    case records |> Enum.map(&Map.get(&1, key)) |> Enum.uniq() do
+      [value] -> value
+      _ -> nil
+    end
+  end
 
   defp started_at_ms(event, duration_ms) do
     ts_ms = event[:ts_ms] || event["ts_ms"]

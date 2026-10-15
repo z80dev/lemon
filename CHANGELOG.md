@@ -8,7 +8,16 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
-No unreleased changes yet.
+### Added
+
+- Show per-run tokens, recorded cost, model and provider in recent run history
+  and the TUI `/runs` output when usage records are available.
+
+### Fixed
+
+- Classify aborted and crashed run history truthfully, include bounded redacted
+  error labels, filter before limiting, and report unavailable history instead of
+  an empty list when storage fails.
 
 ---
 

@@ -30,6 +30,30 @@ directory, including on a cold daemon start.
 Source build and bootstrap diagnostics, including waits for another compiler,
 go to stderr; concurrent JSON commands keep stdout reserved for their result.
 
+### Recent runs in the TUI
+
+`/runs` reads recent terminal run history from `runs.recent.list`. Status is
+`completed`, `aborted`, `error`, or `crashed` (abnormal termination without a
+completion). If both terminal events exist for one run, the completion wins.
+Error labels are redacted and limited to 256 bytes. Unavailable storage produces
+`internal_error` with “Run history is unavailable”, not “no runs”.
+
+The API accepts `status`, `agentId`, `sessionKey`, and `limit` (default 50,
+maximum 200). Filters apply before the response limit, within the newest 1,000
+events of each terminal kind matching the agent/session scope. Summary
+`statusCounts` includes crashes; `errorCount` counts only `error`, not aborts or
+crashes.
+The newest 1,000 scoped `run_started` events supply missing start times (notably
+for crashes, which do not carry a duration).
+
+Rows also include nullable `tokens` (`input`, `output`, `total`), `costUsd`,
+`priceKnown`, `model`, and `provider`. `/runs` displays available usage without
+estimating missing prices. Usage is grouped by run ID from one query over the
+returned rows' time window, capped at 500 occurrences. If the window exceeds
+that cap, usage fields are null rather than partial totals. Missing records
+also produce null fields; mixed models/providers have a null model/provider,
+and any unpriced occurrence makes the run's cost null and `priceKnown` false.
+
 ## Commands and availability
 
 ### Launcher lifecycle commands

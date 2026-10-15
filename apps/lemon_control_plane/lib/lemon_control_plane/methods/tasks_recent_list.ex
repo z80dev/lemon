@@ -252,7 +252,7 @@ defmodule LemonControlPlane.Methods.TasksRecentList do
       status in [:running, "running"] -> "active"
       status in [:completed, "completed"] -> "completed"
       timeout_error?(error) -> "timeout"
-      aborted_error?(error) -> "aborted"
+      LemonControlPlane.Methods.RunOutcome.aborted?(error) -> "aborted"
       status in [:error, "error"] -> "error"
       true -> "error"
     end
@@ -352,37 +352,6 @@ defmodule LemonControlPlane.Methods.TasksRecentList do
       is_map(error) and get_map(error, :error) in [:timeout, "timeout"] -> true
       is_binary(error) and String.contains?(String.downcase(error), "timeout") -> true
       true -> false
-    end
-  end
-
-  defp aborted_error?(error) do
-    cond do
-      error in [
-        :aborted,
-        :user_requested,
-        :interrupted,
-        "aborted",
-        "user_requested",
-        "interrupted"
-      ] ->
-        true
-
-      is_map(error) and
-          get_map(error, :error) in [
-            :aborted,
-            :user_requested,
-            :interrupted,
-            "aborted",
-            "user_requested",
-            "interrupted"
-          ] ->
-        true
-
-      is_binary(error) and String.contains?(String.downcase(error), "abort") ->
-        true
-
-      true ->
-        false
     end
   end
 
