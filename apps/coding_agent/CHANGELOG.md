@@ -4,6 +4,10 @@
 
 ### Added
 
+- `read file.json?q=filter` supports native jq-subset field/index traversal,
+  iteration, pipes, keys, length and scalar select comparisons, with ordinary
+  read-budget pagination and literal-filename precedence.
+
 - `write archive:member` adds or replaces ZIP/TAR/tar.gz/tgz members atomically,
   preserving unrelated member data and enforcing physical archive mutation guards.
 
