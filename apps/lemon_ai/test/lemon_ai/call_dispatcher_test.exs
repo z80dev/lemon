@@ -2,9 +2,10 @@ defmodule LemonAi.CallDispatcherTest do
   use ExUnit.Case, async: false
 
   alias LemonAi.CallDispatcher
-  alias LemonAi.RateLimiter
   alias LemonAi.CircuitBreaker
   alias LemonAi.EventStream
+  alias LemonAi.RateLimiter
+  alias LemonAi.Types.{Context, Model, UserMessage}
 
   # Use unique provider names per test to avoid conflicts
   setup do
@@ -217,10 +218,10 @@ defmodule LemonAi.CallDispatcherTest do
 
         start_supervised!({CircuitBreaker, provider: provider, failure_threshold: 3})
 
-        model = %LemonAi.Types.Model{id: "missing-key", provider: provider, api: @api}
+        model = %Model{id: "missing-key", provider: provider, api: @api}
 
         context =
-          LemonAi.Types.Context.new(messages: [%LemonAi.Types.UserMessage{content: "hello"}])
+          Context.new(messages: [%UserMessage{content: "hello"}])
 
         # Exercise the real provider's local credential refusal and asynchronous
         # dispatcher accounting beyond the breaker threshold, without resets.

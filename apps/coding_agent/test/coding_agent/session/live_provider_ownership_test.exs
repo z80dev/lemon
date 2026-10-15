@@ -4,6 +4,8 @@ Code.require_file(
 
 defmodule CodingAgent.Session.LiveProviderOwnershipTest do
   use ExUnit.Case, async: false
+
+  alias LemonAgent.ModelRuntime.{CredentialHealth, SessionPins}
   alias LemonScripts.LiveProviderOwnershipProbe
 
   setup do
@@ -15,8 +17,8 @@ defmodule CodingAgent.Session.LiveProviderOwnershipTest do
 
     File.mkdir!(root)
     owner = self()
-    LemonAgent.ModelRuntime.CredentialHealth.reset()
-    LemonAgent.ModelRuntime.SessionPins.reset()
+    CredentialHealth.reset()
+    SessionPins.reset()
 
     on_exit(fn ->
       case :logger.get_handler_config(:live_provider_ownership_probe) do
@@ -28,8 +30,8 @@ defmodule CodingAgent.Session.LiveProviderOwnershipTest do
       end
 
       File.rm_rf!(root)
-      LemonAgent.ModelRuntime.CredentialHealth.reset()
-      LemonAgent.ModelRuntime.SessionPins.reset()
+      CredentialHealth.reset()
+      SessionPins.reset()
     end)
 
     File.chmod!(root, 0o700)

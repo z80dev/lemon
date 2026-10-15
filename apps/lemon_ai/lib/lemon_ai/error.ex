@@ -18,6 +18,9 @@ defmodule LemonAi.Error do
   Retry timing metadata is a hint, not permission to retry.
   """
 
+  alias LemonAi.Models.Presets
+  alias LemonAi.Providers.RetryHelper
+
   require Logger
 
   @category_names %{
@@ -1218,7 +1221,7 @@ defmodule LemonAi.Error do
           ["FIREWORKS_API_KEY"]
 
         _ ->
-          Enum.find_value(LemonAi.Models.Presets.all(), [], fn preset ->
+          Enum.find_value(Presets.all(), [], fn preset ->
             if Atom.to_string(preset.id) == name, do: preset.env_vars
           end)
       end
@@ -1266,7 +1269,7 @@ defmodule LemonAi.Error do
   end
 
   defp get_retry_after(headers_map) do
-    LemonAi.Providers.RetryHelper.retry_after_ms(headers_map)
+    RetryHelper.retry_after_ms(headers_map)
   end
 
   defp parse_integer(value) when is_binary(value) do

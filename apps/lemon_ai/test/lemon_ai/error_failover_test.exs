@@ -2,6 +2,7 @@ defmodule LemonAi.ErrorFailoverTest do
   use ExUnit.Case, async: true
 
   alias LemonAi.Error
+  alias LemonAi.Providers.RetryHelper
   alias LemonAi.Types.{AssistantMessage, Usage}
 
   defp stream_error_event(error_message) do
@@ -336,7 +337,7 @@ defmodule LemonAi.ErrorFailoverTest do
           error <- [reason, {:error, reason}, %Req.TransportError{reason: reason}] do
         assert Error.classify(error) == :transient
         assert Error.retryable?(error)
-        assert LemonAi.Providers.RetryHelper.retryable_transport_error?(error)
+        assert RetryHelper.retryable_transport_error?(error)
       end
 
       for error <- [
@@ -347,7 +348,7 @@ defmodule LemonAi.ErrorFailoverTest do
           ] do
         assert Error.classify(error) == :unknown
         refute Error.retryable?(error)
-        refute LemonAi.Providers.RetryHelper.retryable_transport_error?(error)
+        refute RetryHelper.retryable_transport_error?(error)
       end
     end
   end
@@ -439,16 +440,16 @@ defmodule LemonAi.ErrorFailoverTest do
   describe "transport_retry_statuses/0" do
     test "RetryHelper sources its default set from Error" do
       for status <- Error.transport_retry_statuses() do
-        assert LemonAi.Providers.RetryHelper.retryable_http_status?(status)
+        assert RetryHelper.retryable_http_status?(status)
       end
 
-      refute LemonAi.Providers.RetryHelper.retryable_http_status?(400)
-      refute LemonAi.Providers.RetryHelper.retryable_http_status?(401)
+      refute RetryHelper.retryable_http_status?(400)
+      refute RetryHelper.retryable_http_status?(401)
     end
 
     test "Anthropic overloaded (529) and rate limits (429) retry in place" do
-      assert LemonAi.Providers.RetryHelper.retryable_http_status?(529)
-      assert LemonAi.Providers.RetryHelper.retryable_http_status?(429)
+      assert RetryHelper.retryable_http_status?(529)
+      assert RetryHelper.retryable_http_status?(429)
     end
   end
 end
