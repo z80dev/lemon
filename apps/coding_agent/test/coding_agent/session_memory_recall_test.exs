@@ -59,7 +59,7 @@ defmodule CodingAgent.SessionMemoryRecallTest do
     _ = :sys.get_state(ingest)
     assert [_ | _] = LemonMemory.Store.search("priya", scope: :agent, scope_key: agent_id)
 
-    %{agent_id: agent_id}
+    %{agent_id: agent_id, ingest: ingest}
   end
 
   defp start_session(agent_id, cwd, extra_opts \\ []) do
@@ -176,7 +176,7 @@ defmodule CodingAgent.SessionMemoryRecallTest do
   end
 
   test "actual session recall carries admitted private ownership through volatile and static prompt paths",
-       %{agent_id: agent_id} do
+       %{agent_id: agent_id, ingest: ingest} do
     cwd = Process.get(:recall_cwd)
     workspace = Process.get(:recall_workspace)
     File.mkdir_p!(workspace)
@@ -210,7 +210,7 @@ defmodule CodingAgent.SessionMemoryRecallTest do
         |> Map.put("home_digest", identity.home_digest)
 
       :ok =
-        LemonMemory.Ingest.handle_finalize_run(%{
+        LemonMemory.Ingest.handle_finalize_run(ingest, %{
           run_id: "#{agent_id}-#{run}",
           record: %{events: [], started_at: System.system_time(:millisecond)},
           summary: %{
@@ -224,7 +224,7 @@ defmodule CodingAgent.SessionMemoryRecallTest do
         })
     end
 
-    :sys.get_state(LemonMemory.Ingest)
+    :sys.get_state(ingest)
 
     assert {:ok, _} =
              LemonMemory.Preferences.remember(
@@ -267,17 +267,5 @@ defmodule CodingAgent.SessionMemoryRecallTest do
 
     assert File.read!(Path.join(workspace, "USER.md")) ==
              "Unproven birthday gift obsidian preference."
-  end
-
-  defp eventually(fun, attempts \\ 500)
-  defp eventually(_fun, 0), do: false
-
-  defp eventually(fun, attempts) do
-    if fun.() do
-      true
-    else
-      Process.sleep(20)
-      eventually(fun, attempts - 1)
-    end
   end
 end
