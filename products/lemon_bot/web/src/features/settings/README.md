@@ -24,6 +24,16 @@ null; ordinary sessions show their bounded expiry. Removing a device revokes its
 authority, not its local files. Phone pairing itself lives in the shell-owned
 `features/pairing` screen (`device.pairing`), not a second settings auth plane.
 
+`settings.instance` is the service/link/runtime destination shared by Settings,
+connection recovery and About. Owners/admins read the canonical `GET /instance`;
+members see an access explanation without issuing that request. Only owners see
+runtime actions. Start is disabled while connected, and Stop/Restart require a
+dialog explaining that Bots stop working. Commands run only on explicit clicks,
+never from polling. Reads refresh every 10 seconds while visible (2 seconds while
+a command runs), preserve stale details on read errors, and expose bounded command
+output and link errors behind Details with Copy controls.
+
+
 ## Browser integrations
 
 - The shell owns initial installation registration. Push settings PATCH only the
