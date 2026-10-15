@@ -4,8 +4,10 @@ defmodule CodingAgent.Tools.TaskSwarmTest do
   alias CodingAgent.TaskStore
   alias CodingAgent.Tools.Task.{Control, Result}
   alias LemonAgent.AbortSignal
+  alias LemonAgent.Test.Mocks
   alias LemonAgent.Types.AgentToolResult
   alias LemonAi.Types.{TextContent, ThinkingContent}
+  alias LemonCore.{ExecutionContext, ToolPolicy}
 
   setup do
     parent = self()
@@ -289,6 +291,147 @@ defmodule CodingAgent.Tools.TaskSwarmTest do
     assert hd(report.details.structured_output.tasks).structured_output == %{"ok" => true}
   end
 
+  test "admitted nodes inherit authority through the real coordinator identity", %{opts: opts} do
+    assert {:ok, parent} =
+             ExecutionContext.new(
+               run_id: "swarm-parent-#{System.unique_integer([:positive])}",
+               agent_id: "swarm-owner",
+               cwd: "/tmp",
+               tool_policy:
+                 ToolPolicy.custom(
+                   deny: ["bash"],
+                   require_approval: ["write"],
+                   max_file_size: 64
+                 ),
+               capabilities: ["read", "write", "task"],
+               limits: %{max_steps: 4, max_tokens: 2_048}
+             )
+
+    opts =
+      Keyword.merge(opts,
+        execution_context: parent,
+        run_id: parent.run_id,
+        tool_policy: ToolPolicy.from_profile(:full_access),
+        settings_manager: %CodingAgent.SettingsManager{}
+      )
+
+    tasks = [
+      Map.put(task_node("a"), "tool_policy", %{"profile" => "full_access"}),
+      task_node("b", ["a"])
+      |> Map.put("cwd", "/tmp/other")
+      |> Map.put("tool_policy", %{"profile" => "full_access"})
+    ]
+
+    receipt = launch(tasks, opts, cwd: "/tmp/default")
+
+    for {name, cwd} <- [{"a", "/tmp/default"}, {"b", "/tmp/other"}] do
+      assert_receive {:started, ^name, worker, _, context}, 2_000
+      authority = context.execution_context
+      assert authority.run_id == context.run_id
+      assert authority.run_id != receipt.details.run_id
+      assert authority.parent_run_id == receipt.details.run_id
+      assert context.parent_run_id == receipt.details.run_id
+      assert authority.provenance.delegated_by.run_id == receipt.details.run_id
+      assert authority.provenance.delegated_by.principal == parent.principal
+      assert authority.principal == parent.principal
+      assert authority.workspace_scope == %{root: cwd, mode: :read_write}
+      assert authority.capabilities == parent.capabilities
+      assert authority.limits == parent.limits
+      assert ExecutionContext.subset?(authority, parent)
+      assert ToolPolicy.allowed?(authority.tool_policy, "task")
+      assert ToolPolicy.requires_approval?(authority.tool_policy, "write")
+      refute ToolPolicy.allowed?(authority.tool_policy, "bash")
+      send(worker, {:finish, result(name)})
+    end
+
+    assert await_report(receipt).details.structured_output.status == "completed"
+  end
+
+  @tag :tmp_dir
+  test "native swarm sessions cannot widen inherited read-only authority", %{
+    opts: opts,
+    tmp_dir: cwd
+  } do
+    owner = self()
+    path = Path.join(cwd, "forbidden.txt")
+
+    assert {:ok, parent} =
+             ExecutionContext.new(
+               run_id: "swarm-parent-#{System.unique_integer([:positive])}",
+               agent_id: "swarm-owner",
+               cwd: cwd,
+               tool_policy: ToolPolicy.custom(allow: ["read", "task"]),
+               workspace_scope: %{root: cwd, mode: :read_only},
+               capabilities: ["read", "task"],
+               limits: %{max_steps: 4}
+             )
+
+    stream_fn = fn model, context, options ->
+      response =
+        case Enum.find(context.messages, &(Map.get(&1, :role) == :tool_result)) do
+          nil ->
+            send(owner, {:native_swarm_tools, Enum.map(context.tools, & &1.name)})
+
+            Mocks.assistant_message_with_tool_calls([
+              Mocks.tool_call("write", %{"path" => path, "content" => "MUST NOT WRITE"})
+            ])
+
+          tool_result ->
+            send(owner, {:native_swarm_tool_result, tool_result})
+            Mocks.assistant_message("Write refused.")
+        end
+
+      Mocks.mock_stream_fn_single(response).(model, context, options)
+    end
+
+    opts =
+      opts
+      |> Keyword.delete(:run_override)
+      |> Keyword.merge(
+        execution_context: parent,
+        run_id: parent.run_id,
+        tool_policy: ToolPolicy.from_profile(:full_access),
+        model: "openai-codex:gpt-6.1-sol",
+        settings_manager: %CodingAgent.SettingsManager{},
+        stream_fn: stream_fn
+      )
+
+    report =
+      CodingAgent.Tools.Task.execute(
+        "native-swarm-authority",
+        %{
+          "action" => "swarm",
+          "tasks" => [task_node("Worker")],
+          "tool_policy" => %{"profile" => "full_access"},
+          "async" => false,
+          "auto_followup" => false
+        },
+        nil,
+        nil,
+        cwd,
+        opts
+      )
+
+    assert report.details.structured_output.status == "completed"
+    assert_receive {:native_swarm_tools, names}, 2_000
+    assert "read" in names
+    assert "task" in names
+    refute "write" in names
+    refute "bash" in names
+    assert_receive {:native_swarm_tool_result, %{tool_name: "write", is_error: true}}, 2_000
+    refute File.exists?(path)
+  end
+
+  test "invalid inherited authority launches neither the coordinator nor nodes", %{opts: opts} do
+    assert {:error, message} =
+             launch([task_node("a")], Keyword.put(opts, :execution_context, %{}))
+
+    assert message =~ "Task execution authority is invalid"
+    owner = Control.owner(opts)
+    refute Enum.any?(TaskStore.list(), fn {_, record} -> record[:owner] == owner end)
+    refute_receive {:started, _, _, _, _}, 80
+  end
+
   defp task_node(name, dependencies \\ []) do
     %{"name" => name, "prompt" => "Do #{name}", "depends_on" => dependencies}
   end
@@ -303,9 +446,11 @@ defmodule CodingAgent.Tools.TaskSwarmTest do
     }
 
     params =
-      if Keyword.has_key?(options, :output_schema),
-        do: Map.put(params, "output_schema", options[:output_schema]),
-        else: params
+      Enum.reduce([:output_schema, :cwd], params, fn key, acc ->
+        if Keyword.has_key?(options, key),
+          do: Map.put(acc, Atom.to_string(key), options[key]),
+          else: acc
+      end)
 
     CodingAgent.Tools.Task.execute(
       "swarm-test",

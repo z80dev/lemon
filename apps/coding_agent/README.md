@@ -453,6 +453,8 @@ A top-level `context` string (at most 64 KiB; not allowed per item) is shared ba
 
 Use `action: "swarm"` for a dependency graph of up to 32 named tasks. Each node has a unique `name`, its normal task options, and optional `depends_on: ["OtherName"]`. The entire graph, names, native task parameters, and dependency edges are validated before any work starts; cycles, self-dependencies and unknown names are errors. Ready nodes are admitted in declaration order up to `concurrency` (1–32, default 8), including children waiting for global model capacity. Busy native child-budget slots also apply backpressure rather than turning ready nodes into failures. The coordinator consumes no model slot, so a cap of one still works.
 
+The coordinator inherits the caller's canonical execution authority rather than a model worker's default leaf policy. Every node is restricted to that authority during graph validation and bound to the admitted coordinator's run identity at launch. Explicit node policies cannot widen inherited tool/approval restrictions, capabilities, workspace scope, or numeric limits; allowed node delegation is not removed merely because the coordinator has no model session. Top-level `cwd`, like worktree and persona options, is a node default and does not narrow the coordinator's workspace to one child's directory.
+
 ```json
 {
   "action": "swarm",

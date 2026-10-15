@@ -2,9 +2,10 @@ defmodule CodingAgent.Tools.Task.Swarm.Graph do
   @moduledoc """
   Validates native task DAGs and projects bounded, visible swarm results.
 
-  Preparation validates every child before execution; budget/policy admission is
-  the scheduler's responsibility because it requires execution options. Child
-  names are explicit and unique after the normal task-name normalization.
+  Preparation validates every child and restricts its execution context to the
+  caller's authority before execution; budget/policy admission is the scheduler's
+  responsibility because it requires execution options. Child names are explicit
+  and unique after the normal task-name normalization.
 
   Dependency data is limited to successful direct peers and fenced with the
   standard untrusted-content envelope. The appended context is at most 32 KiB.
@@ -165,7 +166,8 @@ defmodule CodingAgent.Tools.Task.Swarm.Graph do
           |> Map.merge(Map.drop(task, @graph_keys))
           |> Map.put("name", name)
 
-        with {:ok, validated} <- Params.validate_run_params(params, cwd, opts) do
+        with {:ok, validated} <- Params.validate_run_params(params, cwd, opts),
+             {:ok, validated} <- Params.restrict_to_parent(validated, cwd, opts) do
           {:ok,
            %{
              name: validated.name,

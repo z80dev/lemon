@@ -103,6 +103,9 @@ defmodule CodingAgent.ToolRegistry do
 
   @doc """
   Get all enabled tools for a working directory.
+
+  An omitted or `nil` optional `:tool_policy` uses the full-access baseline.
+  Supplied policies still pass through canonical validation and approval gating.
   """
   @spec get_tools(String.t(), tool_opts()) :: [AgentTool.t()]
   def get_tools(cwd, opts \\ []) do
@@ -128,6 +131,12 @@ defmodule CodingAgent.ToolRegistry do
     enabled_only = Keyword.get(opts, :enabled_only, nil)
     include_extensions = Keyword.get(opts, :include_extensions, true)
     include_mcp = Keyword.get(opts, :include_mcp, true)
+
+    tool_policy =
+      case Keyword.get(opts, :tool_policy) do
+        nil -> ToolPolicy.from_profile(:full_access)
+        policy -> policy
+      end
 
     builtin = builtin_tool_tuples(cwd, opts)
     wasm_tools = normalize_wasm_tools(Keyword.get(opts, :wasm_tools, []))
@@ -155,9 +164,9 @@ defmodule CodingAgent.ToolRegistry do
 
     resolved_tools
     |> filter_tools(disabled, enabled_only)
-    |> filter_policy_blocked(Keyword.get(opts, :tool_policy))
+    |> filter_policy_blocked(tool_policy)
     |> maybe_wrap_approval(
-      Keyword.get(opts, :tool_policy),
+      tool_policy,
       Keyword.get(opts, :approval_context) ||
         Map.new(
           Keyword.take(opts, [
@@ -870,8 +879,6 @@ defmodule CodingAgent.ToolRegistry do
       MapSet.member?(enabled_set, name)
     end)
   end
-
-  defp filter_policy_blocked(tools, nil), do: tools
 
   defp filter_policy_blocked(tools, tool_policy) do
     Enum.filter(tools, fn {name, _tool, _source} ->

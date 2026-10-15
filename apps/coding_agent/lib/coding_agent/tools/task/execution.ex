@@ -211,7 +211,9 @@ defmodule CodingAgent.Tools.Task.Execution do
             run_override.(
               on_update_safe,
               signal,
-              Map.put(execution.lifecycle_context, :prompt, execution.prompt)
+              execution.lifecycle_context
+              |> Map.put(:prompt, execution.prompt)
+              |> Map.put(:execution_context, execution.validated.execution_context)
             )
 
           is_function(run_override, 2) ->

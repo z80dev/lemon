@@ -22,6 +22,70 @@ defmodule CodingAgent.ToolRegistryTest do
     :ok
   end
 
+  test "optional policy preserves direct safe tool execution", %{tmp_dir: tmp_dir} do
+    for policy_opts <- [[], [tool_policy: nil]] do
+      opts =
+        [
+          include_extensions: false,
+          include_mcp: false,
+          approval_request_fun: fn _ ->
+            flunk("optional policy unexpectedly requested approval")
+          end
+        ] ++ policy_opts
+
+      {:ok, debug} = ToolRegistry.get_tool(tmp_dir, "debug", opts)
+      assert {:error, "action is required"} = debug.execute.("invalid", %{}, nil, nil)
+
+      result = debug.execute.("status", %{"action" => "status"}, nil, nil)
+      assert Enum.map_join(result.content, "\n", & &1.text) == "No debug sessions."
+
+      {:ok, lsp} = ToolRegistry.get_tool(tmp_dir, "lsp", opts)
+      assert {:error, "action is required" <> _} = lsp.execute.("invalid", %{}, nil, nil)
+    end
+  end
+
+  test "malformed supplied policies do not become the optional baseline", %{tmp_dir: tmp_dir} do
+    for policy <- [false, %{"approvals" => %{"debug" => "invalid"}}] do
+      assert [] =
+               ToolRegistry.get_tools(tmp_dir,
+                 tool_policy: policy,
+                 include_extensions: false,
+                 include_mcp: false
+               )
+    end
+  end
+
+  test "explicit debug and lsp mutation approval remains fail closed", %{tmp_dir: tmp_dir} do
+    owner = self()
+
+    for {name, params} <- [
+          {"debug", %{"action" => "launch", "program" => "not-launched"}},
+          {"lsp", %{"action" => "rename", "apply" => true}}
+        ],
+        policy <- [
+          CodingAgent.ToolPolicy.custom(require_approval: [name]),
+          CodingAgent.ToolPolicy.custom(approvals: %{name => :dangerous})
+        ] do
+      {:ok, tool} =
+        ToolRegistry.get_tool(tmp_dir, name,
+          tool_policy: policy,
+          include_extensions: false,
+          include_mcp: false,
+          approval_request_fun: fn request ->
+            send(owner, {:mutation_approval, request})
+            {:ok, :denied}
+          end
+        )
+
+      result = tool.execute.("mutation", params, nil, nil)
+      assert result.is_error
+      assert result.details.reason == :approval_denied
+      assert_receive {:mutation_approval, request}
+      assert request.tool == name
+      assert request.action == params
+    end
+  end
+
   test "direct registry approval options retain private namespace and actual agent", %{
     tmp_dir: tmp_dir
   } do
