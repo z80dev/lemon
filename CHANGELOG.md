@@ -75,6 +75,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   VitePress treats paths such as `<root>/agent-tools/node/bin/node` as text, not
   unclosed HTML tags, while preserving existing inline code and alias line breaks.
 
+- Re-enter setup for incomplete saved configurations on interactive launch, and
+  recognize keyless local providers and environment-only credentials in readiness,
+  doctor, and setup verification.
+
 - Make injected SVG rasterizer fixtures portable across BSD and GNU base64, and
   explicitly exclude only the named real-rasterizer test when librsvg is absent.
 

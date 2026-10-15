@@ -1069,6 +1069,11 @@ values are normalized to a `/v1` root (`OLLAMA_HOST=gpu-box` becomes
 `http://gpu-box:11434/v1`). A `base_url` written in config must include the
 OpenAI-compatible root (usually `/v1`).
 
+Readiness, `lemon doctor`, and offline setup verification accept these local
+presets without an API key. Custom keyless endpoints must explicitly set
+`auth = "none"`; a localhost URL alone does not waive a hosted provider's
+credential requirement.
+
 ```toml
 [providers.ollama]
 base_url = "http://gpu-box:11434/v1"

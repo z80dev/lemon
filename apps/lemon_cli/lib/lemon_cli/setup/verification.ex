@@ -142,7 +142,10 @@ defmodule LemonCli.Setup.Verification do
   # Local readiness only proves storage availability. Live verification must
   # resolve the selected credential even when local readiness has no usable ref.
   defp assert_provider_complete(%{provider: provider, reason: :credential_not_usable}, opts) do
-    if Keyword.get(opts, :skip_verify, false),
+    config = Keyword.fetch!(opts, :config)
+    keyless? = Readiness.keyless_provider?(provider, provider_config(config, provider))
+
+    if Keyword.get(opts, :skip_verify, false) and not keyless?,
       do: provider_failure(provider, :credential_not_usable),
       else: :ok
   end
@@ -247,7 +250,7 @@ defmodule LemonCli.Setup.Verification do
     with {:ok, api_key} <- fetch_live_credential(config, provider, provider_cfg),
          {:ok, resolved_model} <- fetch_effective_model(resolved_model, provider, model) do
       keyless? =
-        CustomProviders.keyless?(provider_cfg) ||
+        Readiness.keyless_provider?(provider, provider_cfg) ||
           Map.get(resolved_model.compat || %{}, :allow_missing_api_key, false)
 
       if is_nil(api_key) and not keyless? do
