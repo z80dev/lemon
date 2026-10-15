@@ -6,6 +6,103 @@ defmodule CodingAgent.Tools.FindTest do
   alias LemonAi.Types.TextContent
 
   @moduletag :tmp_dir
+
+  test "both backends sort the complete candidate set before limiting", %{tmp_dir: root} do
+    files = for name <- ["z", "m", "a"], do: Path.join(root, name <> ".txt")
+    Enum.each(files, &File.write!(&1, ""))
+    [z, m, a] = files
+    File.touch!(z, 100)
+    File.touch!(m, 300)
+    File.touch!(a, 300)
+
+    for opts <- [
+          [fd_available?: false, wildcard_fun: fn _, _ -> files end],
+          [
+            fd_available?: true,
+            fd_run_fun: fn args, _, _ ->
+              assert Enum.chunk_every(args, 2, 1, :discard)
+                     |> Enum.member?(["--max-results", "100001"])
+
+              {:ok, Enum.join(files, "\n")}
+            end
+          ]
+        ] do
+      recent =
+        Find.execute(
+          "recent",
+          %{"pattern" => "*.txt", "sort" => "mtime", "max_results" => 2},
+          nil,
+          nil,
+          root,
+          opts
+        )
+
+      assert recent.details.files == ["a.txt", "m.txt"]
+      assert recent.details.truncated
+
+      by_path =
+        Find.execute(
+          "path",
+          %{"pattern" => "*.txt", "sort" => "path", "max_results" => 1},
+          nil,
+          nil,
+          root,
+          opts
+        )
+
+      assert by_path.details.files == ["a.txt"]
+    end
+  end
+
+  test "slash patterns use full paths and the same glob set in both backends", %{tmp_dir: root} do
+    for dir <- ["lib/deep", "nested/lib", "other"], do: File.mkdir_p!(Path.join(root, dir))
+
+    for file <- ["lib/a.ex", "lib/deep/no.ex", "nested/lib/b.ex", "other/no.ex"],
+        do: File.write!(Path.join(root, file), "")
+
+    expected = ["lib/a.ex", "nested/lib/b.ex"]
+
+    # Exercise the actual fd when installed as well as the wildcard backend.
+    for opts <- [[fd_available?: true], [fd_available?: false]] do
+      result = Find.execute("slash", %{"pattern" => "lib/*.ex"}, nil, nil, root, opts)
+      assert result.details.files == expected
+    end
+
+    result =
+      Find.execute("fd-args", %{"pattern" => "lib/*.ex"}, nil, nil, root,
+        fd_available?: true,
+        fd_run_fun: fn args, _, _ ->
+          assert "--full-path" in args
+          assert "**/lib/*.ex" in args
+          {:ok, Enum.map_join(expected, "\n", &Path.join(root, &1))}
+        end
+      )
+
+    assert result.details.files == expected
+  end
+
+  test "candidate ceiling errors instead of showing an arbitrary subset", %{tmp_dir: root} do
+    files = Enum.map(1..100_001, &Path.join(root, "#{&1}.txt"))
+
+    for opts <- [
+          [fd_available?: false, wildcard_fun: fn _, _ -> files end],
+          [fd_available?: true, fd_run_fun: fn _, _, _ -> {:ok, Enum.join(files, "\n")} end]
+        ] do
+      assert {:error, "Find exceeds 100000 candidates; narrow path or pattern"} =
+               Find.execute(
+                 "cap",
+                 %{"pattern" => "*", "no_ignore" => true, "max_results" => 1},
+                 nil,
+                 nil,
+                 root,
+                 opts
+               )
+    end
+
+    assert {:error, "sort must be mtime or path"} =
+             Find.execute("sort", %{"pattern" => "*", "sort" => "random"}, nil, nil, root, [])
+  end
+
   test "merges roots before limiting and reports missing roots", %{tmp_dir: root} do
     for dir <- ["a", "b"], do: File.mkdir_p!(Path.join(root, dir))
     File.write!(Path.join(root, "a/same.txt"), "")

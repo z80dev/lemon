@@ -131,3 +131,18 @@ matching. It searches only the leading 4 MiB of each file and reports the number
 of visited files with omitted tails in `details.skipped_oversized`. It skips
 binary and invalid UTF-8 files and stops scanning when the requested page is
 filled; use `next_skip` to continue.
+
+## Find ordering and path globs
+
+`find` collects and deduplicates the full candidate set across roots, sorts it,
+then applies `max_results`. `sort: "path"` remains the default, preserving the
+existing alphabetical/stable discovery contract. Use `sort: "mtime"` to surface
+recently modified entries first; equal timestamps are ordered by path.
+
+Patterns without `/` match basenames recursively. Patterns containing `/`, such
+as `lib/*.ex`, match path segments at any depth (including `nested/lib/a.ex`, but
+not `lib/deep/a.ex`); use `**` for recursive segments. The fd backend uses
+`--full-path` and a recursive prefix to match the same set as the Elixir fallback.
+Both backends reject scopes exceeding 100,000 matching candidates with a narrowing
+hint instead of sorting a traversal-order subset. The fd safety ceiling is
+independent of `max_results`.
