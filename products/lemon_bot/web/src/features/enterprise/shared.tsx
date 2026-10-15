@@ -91,7 +91,7 @@ export function machineOptions(machines: Machine[]) {
   return machines.filter(machine => machine.status !== 'revoked').map(machine => ({ id: machine.id, name: machine.name, detail: machine.status }));
 }
 
-export function DeleteButton({ name, disabled, onDelete }: { name: string; disabled: boolean; onDelete: () => Promise<void> }) {
+export function DeleteButton({ name, disabled, error, onDelete }: { name: string; disabled: boolean; error: unknown; onDelete: () => Promise<boolean> }) {
   const [confirming, setConfirming] = useState(false);
-  return <><button type="button" className="danger" aria-label={`Delete ${name}`} disabled={disabled} onClick={() => setConfirming(true)}>Delete</button>{confirming && <ConfirmDialog title={`Delete ${name}?`} disabled={disabled} onCancel={() => setConfirming(false)} onConfirm={onDelete}><p>Your computers and provider accounts are not changed. Only this configuration is deleted.</p></ConfirmDialog>}</>;
+  return <><button type="button" className="danger" aria-label={`Delete ${name}`} disabled={disabled} onClick={() => setConfirming(true)}>Delete</button>{confirming && <ConfirmDialog title={`Delete ${name}?`} disabled={disabled} onCancel={() => setConfirming(false)} onConfirm={async () => { if (await onDelete()) setConfirming(false); }}><p>Your computers and provider accounts are not changed. Only this configuration is deleted.</p><ErrorNotice error={error}/></ConfirmDialog>}</>;
 }

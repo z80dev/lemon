@@ -10,6 +10,7 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Lemon Bot
 
+- Web clients use plain-language recovery and account/pairing flows, retry failed history loads, hide technical references in Details, confirm deletions in-app, and improve touch actions, status labels and contrast.
 - Apple clients recover from failed Bot loads and terminal closes, explain unavailable actions, preserve Preferences across pane switches, and confirm sign-out.
 - Web Settings adds Lemon instance details, live service/link/runtime measurements, owner-confirmed lifecycle controls and operation output, with direct recovery and About links.
 - Apple clients use plain-language errors with copyable details, clearer iPhone pairing labels, and status checks for unconfirmed actions without automatically resending them.

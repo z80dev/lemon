@@ -13,7 +13,7 @@ import { InstanceSettings } from './instance';
 import './settings.css';
 
 export function SettingsScreen({ route }: { route: Route }) {
-  const { snapshot } = useApp();
+  const { snapshot, navigate } = useApp();
   let content;
   switch (route.screen) {
     case 'settings.workspace': content = <WorkspaceSettings />; break;
@@ -26,7 +26,7 @@ export function SettingsScreen({ route }: { route: Route }) {
     case 'settings.instance': content = <InstanceSettings />; break;
     case 'inbox': content = <InboxScreen />; break;
     case 'settings.account': content = <AccountSettings />; break;
-    default: content = <section className="panel"><h2>Settings page not found</h2><p>Select a section from the settings list.</p></section>;
+    default: content = <section className="panel"><h2>This page isn’t available.</h2><button onClick={() => navigate({ screen: 'settings.account' })}>Back to settings</button></section>;
   }
   return <main className="page settings-page">{route.screen === 'inbox' && <PageHeader title="Inbox" eyebrow={snapshot.workspace.name} />}{content}</main>;
 }

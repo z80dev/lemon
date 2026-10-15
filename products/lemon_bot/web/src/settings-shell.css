@@ -66,6 +66,10 @@
   .settings-shell .settings-back { display: inline-flex; align-items: center; justify-self: start; gap: 2px; padding: 8px 8px 8px 2px; border-radius: 999px; font-size: 16px; color: var(--accent); }
 }
 
+@media (pointer: coarse) {
+  .settings-shell .settings-phone-row, .settings-shell .settings-phone-account, .settings-shell .settings-back, .settings-shell .settings-segments button { min-height: 44px; }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .settings-shell :is(.settings-pane-row, .settings-segments button, .settings-phone-account, .settings-phone-row, .settings-back) { transition: none; }
 }

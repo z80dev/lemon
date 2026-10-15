@@ -1,5 +1,8 @@
 /* Conversation (design system §5): floating header pill over a scroll-edge fade, borderless 18px bubbles, floating composer. */
 .chat-page { flex: 1; min-height: 0; display: flex; flex-direction: column; position: relative; --ring: var(--canvas); }
+.chat-load-notice { margin: 76px 16px 8px; flex-shrink: 0; }
+.chat-load-notice > button { align-self: flex-start; }
+.chat-page > .loading { margin: 80px 16px 8px; }
 .chat-header { position: absolute; z-index: 20; top: 0; left: 0; right: 0; height: 76px; display: flex; justify-content: center; pointer-events: none; }
 .chat-edge { position: absolute; inset: 0; background: linear-gradient(var(--canvas) 0%, color-mix(in srgb, var(--canvas) 94%, transparent) 50%, transparent 100%); }
 .chat-header > :not(.chat-edge) { pointer-events: auto; }
@@ -248,9 +251,10 @@ button.inspector-row:hover:not(:disabled) { background: var(--bubble); backgroun
 .chat-capture { padding: .5rem; border: 1px solid color-mix(in srgb, currentColor 12%, transparent); border-radius: .6rem; }
 @media (pointer: coarse) {
   .chat-actions button, .chat-more-actions > summary, .menu .menu-reactions button { width: 44px; height: 44px; min-height: 44px; }
-  .chat-entry > .chat-actions { position: relative; inset: auto; margin-top: 6px; display: none; align-self: flex-start; transform: none; }
-  .chat-user-entry > .chat-actions { align-self: flex-end; }
+  .chat-entry[data-actions] > .chat-actions, .chat-entry:not([data-actions]) > .chat-actions { position: relative; inset: auto; margin-top: 6px; display: none; align-self: flex-start; transform: none; }
+  .chat-entry.chat-user-entry > .chat-actions { align-self: flex-end; }
   .chat-entry:focus-within > .chat-actions, .chat-entry.actions-open > .chat-actions { display: flex; }
+  .chat-entry[data-actions='below']:hover, .chat-entry[data-actions='below']:focus-within { padding-bottom: 0; }
   .chat-more-actions > .menu { top: 48px; }
 }
 
@@ -277,7 +281,7 @@ button.inspector-row:hover:not(:disabled) { background: var(--bubble); backgroun
   .chat-provenance { grid-template-columns: 1fr; } .chat-provenance dt { font-weight: bold; }
   .chat-voice-overlay { bottom: .5rem; right: .5rem; width: calc(100vw - 1rem); }
 }
-@media (hover: none) { .roster-item .bot-select { padding-right: 38px; } .row-more { opacity: .7; } .chat-entry:hover > .chat-actions { opacity: 0; pointer-events: none; } .chat-entry.actions-open > .chat-actions { opacity: 1; pointer-events: auto; } .chat-entry { -webkit-touch-callout: none; } }
+@media (hover: none) { .roster-item .bot-select { padding-right: 38px; } .row-more { opacity: .7; } .chat-entry:hover > .chat-actions { opacity: 0; pointer-events: none; } .chat-entry.actions-open > .chat-actions, .chat-entry:focus-within > .chat-actions { opacity: 1; pointer-events: auto; } .chat-entry { -webkit-touch-callout: none; } }
 .roster-item:hover .bot-select { padding-right: 38px; }
 .roster-filter { position: relative; margin-right: auto; }
 .roster-filter > summary { list-style: none; }

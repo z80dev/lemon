@@ -14,7 +14,7 @@ export function sessionEnded(error: unknown): boolean {
 }
 export function connectionIssue(state: RealtimeState, browserOnline: boolean, controlConnected: boolean | undefined, error: unknown) {
   if (state === 'unauthenticated' || state === 'forbidden' || sessionEnded(error)) return { layer: 'session', title: 'Your session ended. Sign in again.', reason: 'This browser is no longer signed in to Lemon Bot.' };
-  if (!browserOnline) return { layer: 'offline', title: 'Your browser is offline', reason: 'Reconnect to your network or Tailscale, then try again. Your saved drafts stay here; actions are not queued.' };
+  if (!browserOnline) return { layer: 'offline', title: 'Your browser is offline', reason: 'Reconnect to your network or Tailscale, then try again. Drafts stay in this browser. Approvals and deletions wait until you reconnect.' };
   if (state === 'live' && controlConnected === false) return { layer: 'controller', title: 'Lemon isn’t connected', reason: 'Lemon Bot is reachable, but its link to Lemon is down. Bots can’t work until Lemon reconnects.' };
   const status = error instanceof LemonBotError ? error.status : 0;
   if (status >= 500) return { layer: 'server', title: 'Lemon Bot is having a server problem', reason: status === 502 || status === 504 ? 'The proxy is answering, but it can’t reach the Lemon Bot service behind it.' : `The Lemon Bot service couldn’t complete the request (${status}). Try again shortly.` };
