@@ -16,6 +16,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Web chat model-list and compaction failures now show plain-language next steps
+  pointing to Diagnostics instead of exposing service error terms.
+
 - Channel status details no longer mistake a running adapter process for an
   observed connection; Discord READY/resume and startup failures update the
   redacted health projection.
