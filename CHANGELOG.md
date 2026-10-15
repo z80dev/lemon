@@ -71,6 +71,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Re-enter setup for incomplete saved configurations on interactive launch, and
+  recognize keyless local providers and environment-only credentials in readiness,
+  doctor, and setup verification.
+
 - Make injected SVG rasterizer fixtures portable across BSD and GNU base64, and
   explicitly exclude only the named real-rasterizer test when librsvg is absent.
 
