@@ -16,6 +16,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Changed
 
+- Expand `lemon omp` with approval modes, isolated and parallel starts, explicit
+  interrupted-session continuation, redirect, model browsing/configuration,
+  subagent transcripts, and richer approval/worktree/discovery output.
 - Extend the omp operator API with bounded parallel starts, model discovery,
   child transcripts, live configuration, approval overrides, isolated starts,
   interrupted-session continuation and redirect delivery; preserve actionable

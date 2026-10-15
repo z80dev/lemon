@@ -454,7 +454,14 @@ defmodule LemonCli.CommandRegistry do
         %{name: "show", summary: "Summarize one session: show ID"},
         %{name: "discover", summary: "List omp's stored sessions for a workspace"},
         %{name: "start", summary: "Start omp on a prompt: start [options] PROMPT..."},
-        %{name: "send", summary: "Steer or follow up: send ID [--follow-up] MESSAGE..."},
+        %{name: "start-many", summary: "Start parallel workers with repeated --task PROMPT"},
+        %{name: "models", summary: "List omp models: models [QUERY] [--free] [--provider P]"},
+        %{name: "subagent", summary: "Read a transcript tail: subagent ID SUBAGENT-ID"},
+        %{name: "configure", summary: "Change a worker: configure ID [--model M] [--thinking L]"},
+        %{
+          name: "send",
+          summary: "Steer, follow up or redirect: send ID [--follow-up|--redirect] MESSAGE..."
+        },
         %{name: "cancel", summary: "Abort the running turn; the session stays open"},
         %{name: "close", summary: "End the omp process; it stays resumable"},
         %{name: "resume", summary: "Reopen a stored session: resume OMP-ID [PROMPT...]"},
@@ -462,11 +469,34 @@ defmodule LemonCli.CommandRegistry do
       ],
       options: [
         option("--cwd PATH", ["--cwd"], "Workspace for start, resume, discover (default: .)"),
-        option("--model MODEL", ["--model"], "omp model for start or resume"),
-        option("--thinking LEVEL", ["--thinking"], "omp thinking level for start or resume"),
+        option(
+          "--model MODEL",
+          ["--model"],
+          "omp model for start, start-many, resume or configure"
+        ),
+        option(
+          "--thinking LEVEL",
+          ["--thinking"],
+          "Thinking level for start, start-many, resume or configure"
+        ),
+        option(
+          "--approval-mode MODE",
+          ["--approval-mode"],
+          "always-ask, write or yolo (start/start-many/resume)"
+        ),
+        option("--isolate", ["--isolate"], "Create managed Git worktrees (start/start-many)"),
+        option("--continue", ["--continue"], "Continue interrupted history on resume; no prompt"),
+        option("--task PROMPT", ["--task"], "Repeat 1–8 times for start-many"),
+        option("--free", ["--free"], "Only free omp models"),
+        option("--provider PROVIDER", ["--provider"], "Filter omp model provider"),
+        option("--redirect", ["--redirect"], "Stop the current turn and replace its prompt"),
         option("--follow-up", ["--follow-up"], "Queue a send after the running turn"),
         option("--all", ["--all"], "Include ended sessions in list"),
-        option("--limit N", ["--limit"], "Bound list or discover rows (max 100)"),
+        option(
+          "--limit N",
+          ["--limit"],
+          "Bound rows: list/discover max 100, models 200, subagent 50"
+        ),
         option("--json", ["--json"], "Emit JSON")
       ],
       details: [
