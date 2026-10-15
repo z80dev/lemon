@@ -1,5 +1,6 @@
 import XCTest
 import Foundation
+import Network
 @testable import LemonBotKit
 
 private final class ReconciliationCredentials: AccountCredentialStore {
@@ -135,5 +136,65 @@ private final class ReconciliationCredentials: AccountCredentialStore {
         let result = try await sending.value
         XCTAssertEqual(result, recorded)
         XCTAssertTrue(store.pendingIntents.isEmpty, "Late transport failure must not restore a settled nonce fence.")
+    }
+    func testForegroundReconciliationSettlesAPersistedMessageUsingOnlyGET() async throws {
+        let store = try store(), recorded = receipt()
+        store.pendingIntents = [MutationIntent(clientNonce: nonce, method: "POST", path: "/conversations/chat/messages", state: "outcome_unknown")]
+        TestHTTPProtocol.handler = { request in
+            XCTAssertEqual(request.httpMethod, "GET")
+            return (200, [:], try JSONEncoder().encode(recorded))
+        }
+        await store.reconcilePendingMessages()
+        XCTAssertTrue(store.pendingIntents.isEmpty)
+        XCTAssertEqual(store.reconciledMessageReceipts[nonce], recorded)
+        XCTAssertEqual(TestHTTPProtocol.requests.count, 1)
+    }
+    func testCaughtUpReconnectRechecksTheOriginalMessageReceipt() async throws {
+        let store = try store(), recorded = receipt()
+        store.pendingIntents = [MutationIntent(clientNonce: nonce, method: "POST", path: "/conversations/chat/messages", state: "outcome_unknown")]
+        TestHTTPProtocol.handler = { request in
+            XCTAssertEqual(request.httpMethod, "GET")
+            return (200, [:], try JSONEncoder().encode(recorded))
+        }
+        let ready = expectation(description: "Reconnect socket ready"), acknowledged = expectation(description: "Reconnect caught-up frame acknowledged")
+        let server = try AckSocketServer(ready: ready) { _ in acknowledged.fulfill() }
+        defer { server.close() }
+        await fulfillment(of: [ready], timeout: 5)
+        let port = try XCTUnwrap(server.listener.port)
+        let session = URLSession(configuration: .ephemeral)
+        let socket = session.webSocketTask(with: URL(string: "ws://127.0.0.1:\(port.rawValue)/realtime")!)
+        defer { socket.cancel(with: .goingAway, reason: nil); session.invalidateAndCancel() }
+        socket.resume()
+        let frame = try JSONDecoder().decode(RealtimeServerFrame.self, from: Data(#"{"type":"caught_up","cursor":"0"}"#.utf8))
+        try await store.process(frame, on: socket)
+        await fulfillment(of: [acknowledged], timeout: 5)
+        await waitUntil { store.pendingIntents.isEmpty }
+        XCTAssertTrue(store.pendingIntents.isEmpty)
+        XCTAssertEqual(store.reconciledMessageReceipts[nonce], recorded)
+        XCTAssertTrue(TestHTTPProtocol.requests.allSatisfy { $0.httpMethod == "GET" })
+    }
+    func testMissingOrUnavailableReceiptCannotEraseAnUncertainSend() async throws {
+        for status in [404, 503] {
+            let store = try store()
+            store.pendingIntents = [MutationIntent(clientNonce: nonce, method: "POST", path: "/conversations/chat/messages", state: "outcome_unknown")]
+            TestHTTPProtocol.handler = { _ in (status, [:], Data(#"{"error":{"code":"not_found","message":"No authoritative receipt","requestId":"lookup_failed","retrySafe":true}}"#.utf8)) }
+            await store.reconcilePendingMessages()
+            XCTAssertEqual(store.pendingIntents.count, 1)
+            XCTAssertTrue(store.reconciledMessageReceipts.isEmpty)
+            XCTAssertTrue(TestHTTPProtocol.requests.allSatisfy { $0.httpMethod == "GET" })
+        }
+    }
+    func testAReceiptForAnotherActorOrNonceCannotReleaseTheFence() async throws {
+        for foreignNonce in [false, true] {
+            let store = try store()
+            store.pendingIntents = [MutationIntent(clientNonce: nonce, method: "POST", path: "/conversations/chat/messages", state: "outcome_unknown")]
+            var invalid = receipt()
+            if foreignNonce { invalid.clientNonce = "another_message_nonce_123456" } else { invalid.runs[0].initiatorUserId = "another_owner" }
+            let data = try JSONEncoder().encode(invalid)
+            TestHTTPProtocol.handler = { _ in (200, [:], data) }
+            await store.reconcilePendingMessages()
+            XCTAssertEqual(store.pendingIntents.count, 1)
+            XCTAssertTrue(store.reconciledMessageReceipts.isEmpty)
+        }
     }
 }

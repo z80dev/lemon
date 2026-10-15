@@ -14,7 +14,7 @@ private final class AckCredentials: AccountCredentialStore {
 }
 
 /// A real loopback WebSocket handshake and one captured client frame, with no timer-driven synchronization.
-private final class AckSocketServer: @unchecked Sendable {
+final class AckSocketServer: @unchecked Sendable {
     let listener: NWListener
     private let queue = DispatchQueue(label: "LemonBotTests.ackSocket")
     private var connection: NWConnection?

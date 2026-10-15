@@ -120,7 +120,7 @@ public struct ComposerView: View {
         #endif
     }
     private var hasDeliveryStatus: Bool {
-        !online || messageUncertain || action.error != nil || action.uncertain || action.receipt != nil
+        !online || messageUncertain || actionError != nil || unresolvedAction || action.receipt != nil
             || (receipt != nil && !compactKeyboardLayout) || receipt?.status == "outcome_unknown"
             || receipt?.runs.contains(where: { $0.error != nil }) == true
             || (!reconciledRuns.isEmpty && !compactKeyboardLayout) || reconciledRuns.contains(where: { $0.error != nil })
@@ -272,7 +272,7 @@ public struct ComposerView: View {
         }
         if !draft.fileURLs.isEmpty {
             Button("Upload") { Task { await uploadSelectedFiles() } }
-                .buttonStyle(.pill(.quiet, compact: true)).disabled(!online || action.busy)
+                .buttonStyle(.pill(.quiet, compact: true)).disabled(!online || action.inFlight || unresolvedAction)
                 .help("Upload selected files to this conversation. Reconnecting never uploads or sends these files automatically.")
         }
         if !stagedFilenames.isEmpty {
@@ -308,7 +308,7 @@ public struct ComposerView: View {
     #if os(macOS)
     private func handleComposerKeyPress(_ press: KeyPress) -> KeyPress.Result {
         if press.modifiers.contains(.shift) { return .ignored }
-        guard online, !action.busy, pendingMessageNonce == nil, draft.fileURLs.isEmpty,
+        guard online, !action.inFlight, !unresolvedAction, pendingMessageNonce == nil, draft.fileURLs.isEmpty,
               !draft.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !draft.attachmentIDs.isEmpty else { return .handled }
         Task { await send() }
         return .handled
@@ -387,7 +387,7 @@ public struct ComposerView: View {
     private func handleSelectedFiles(_ result: Result<[URL], Error>) {
         switch result {
         case .success(let urls): Task { await attach(urls) }
-        case .failure(let error): action.error = error.localizedDescription
+        case .failure(let error): action.error = error.localizedDescription; action.errorNonce = nil
         }
     }
 
@@ -433,7 +433,7 @@ public struct ComposerView: View {
         #else
         pastedFiles = UIPasteboard.general.urls?.filter(\.isFileURL) ?? []
         #endif
-        if pastedFiles.isEmpty { action.error = "No selected files are on the clipboard. Choose files explicitly; clipboard history is never captured." }
+        if pastedFiles.isEmpty { action.error = "No selected files are on the clipboard. Choose files explicitly; clipboard history is never captured."; action.errorNonce = nil }
     }
     private func attach(_ urls: [URL]) async {
         await action.perform {
@@ -491,9 +491,10 @@ public struct ComposerView: View {
         applyMessageReconciliation()
     }
     private func reconcile() async {
+        var checkedNonce = pendingMessageNonce ?? action.uncertainNonce ?? receipt?.clientNonce
         await action.perform {
             guard online else { throw ClientError.offline }
-            var nonce = pendingMessageNonce ?? action.uncertainNonce ?? receipt?.clientNonce
+            var nonce = checkedNonce
             if nonce == nil, let id = action.uncertainRunID {
                 let run: Run = try await store.read(resourcePath("runs", id))
                 guard run.conversationId == conversationID else { return }
@@ -503,12 +504,15 @@ public struct ComposerView: View {
                 action.receipt = "The server did not provide a submission identifier. Reload this conversation and inspect provider outcomes; this draft remains fenced."
                 return
             }
+            checkedNonce = nonce
             let settled = try await store.reconcileMutation(nonce)
             guard store.account?.id == owningAccountID else { return }
             reconciledRuns = store.runs.filter { $0.conversationId == conversationID && $0.clientNonce == nonce }
             guard settled else { return }
             applyMessageReconciliation(nonce)
         }
+        if action.error != nil { action.errorNonce = checkedNonce }
+        applyMessageReconciliation(checkedNonce)
     }
     private func applyMessageReconciliation(_ nonce: String? = nil) {
         guard store.account?.id == owningAccountID, let nonce = nonce ?? messageNonce,
@@ -517,10 +521,10 @@ public struct ComposerView: View {
             store.setLocalDraft(conversationID: conversationID, text: "", attachmentIDs: [], replyTo: nil)
             store.setLocalComposerRouting(conversationID: conversationID, references: [], mentions: [], everyone: false)
         }
-        reconciledRuns = recorded.runs
+        reconciledRuns = []
         action.resolveUncertainty(nonce)
-        receipt = nil; unconfirmedDraft = nil
-        action.receipt = "The original message is recorded. No content was resubmitted; target errors remain shown."
+        receipt = recorded; unconfirmedDraft = nil
+        action.receipt = nil
     }
 }
 private enum ComposerError: LocalizedError { case message(String); var errorDescription: String? { if case .message(let value) = self { return value }; return nil } }
