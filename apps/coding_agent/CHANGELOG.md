@@ -4,6 +4,10 @@
 
 ### Added
 
+- LSP supports preview/apply file renames, server reload, advertised capabilities,
+  and bounded workspace diagnostics from running clients. Document language IDs
+  now come from the shared LemonLsp server catalog.
+
 - Foreground bash previews retain a 20 KiB head plus tail with an explicit middle
   elision marker. Spill notices prefer session artifact handles over raw paths,
   and unavailable PTYs report their fallback in both output and result details.
