@@ -689,6 +689,7 @@ defmodule LemonCore.Config.Validator do
   def validate_tools(tools, errors) do
     errors
     |> validate_boolean(Map.get(tools, :auto_resize_images), "tools.auto_resize_images")
+    |> validate_boolean(Map.get(tools, :intent_tracing), "tools.intent_tracing")
     |> validate_tool_approval_mode(Map.get(tools, :approval_mode))
     |> validate_positive_integer(
       get_in(tools, [Access.key(:web, %{}), :fetch, :max_body_bytes]),

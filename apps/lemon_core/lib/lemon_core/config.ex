@@ -240,6 +240,7 @@ defmodule LemonCore.Config do
     %{
       auto_resize_images: tools.auto_resize_images,
       approval_mode: tools.approval_mode,
+      intent_tracing: tools.intent_tracing,
       web: tools.web,
       wasm: tools.wasm,
       disclosure: tools.disclosure,

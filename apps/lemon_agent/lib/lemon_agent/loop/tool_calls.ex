@@ -469,7 +469,7 @@ defmodule LemonAgent.Loop.ToolCalls do
                 )
 
                 case prepare_tool_call(tool, tool_call) do
-                  {:ok, prepared_tool_call} ->
+                  {:ok, prepared_tool_call, intent} ->
                     case start_tool_task(
                            tool_task_supervisor,
                            parent,
@@ -477,7 +477,8 @@ defmodule LemonAgent.Loop.ToolCalls do
                            tool,
                            prepared_tool_call,
                            signal,
-                           stream
+                           stream,
+                           intent
                          ) do
                       {:ok, pid} ->
                         mon_ref = Process.monitor(pid)
@@ -543,8 +544,9 @@ defmodule LemonAgent.Loop.ToolCalls do
     end
   end
 
-  defp start_tool_task(tool_task_supervisor, parent, ref, tool, tool_call, signal, stream) do
+  defp start_tool_task(tool_task_supervisor, parent, ref, tool, tool_call, signal, stream, intent) do
     Task.Supervisor.start_child(tool_task_supervisor, fn ->
+      LemonAgent.ToolIntent.put(intent)
       {result, is_error} = execute_tool_call(tool, tool_call, signal, stream, parent, ref)
       send(parent, {:tool_task_result, ref, tool_call, result, is_error})
     end)
@@ -810,9 +812,11 @@ defmodule LemonAgent.Loop.ToolCalls do
   defp prepare_tool_call(nil, tool_call), do: {:error, unknown_tool_result(tool_call)}
 
   defp prepare_tool_call(tool, tool_call) do
-    case coerce_tool_arguments(tool.parameters, tool_call.arguments) do
+    {intent, arguments} = LemonAgent.ToolIntent.extract(tool.parameters, tool_call.arguments)
+
+    case coerce_tool_arguments(tool.parameters, arguments) do
       {:ok, arguments} ->
-        {:ok, %{tool_call | arguments: arguments}}
+        {:ok, %{tool_call | arguments: arguments}, intent}
 
       {:error, errors} ->
         {:error, invalid_arguments_result(errors)}

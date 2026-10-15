@@ -102,6 +102,7 @@ defmodule LemonAgent.Agent do
           retry_base_delay_ms: non_neg_integer(),
           retry_max_delay_ms: non_neg_integer(),
           tool_timeout_ms: pos_integer() | :infinity | nil,
+          intent_tracing: boolean(),
           queue_call_timeout: timeout(),
           waiters: list(waiter())
         }
@@ -127,6 +128,7 @@ defmodule LemonAgent.Agent do
           retry_base_delay_ms: non_neg_integer(),
           retry_max_delay_ms: non_neg_integer(),
           tool_timeout_ms: pos_integer() | :infinity | nil,
+          intent_tracing: boolean(),
           queue_call_timeout: timeout(),
           name: GenServer.name()
         ]
@@ -161,6 +163,7 @@ defmodule LemonAgent.Agent do
   - `:retry_base_delay_ms` - Initial exponential retry delay (default: 2,000ms)
   - `:retry_max_delay_ms` - Backoff cap (default: 30,000ms; explicit retry-after honored up to 120s)
   - `:tool_timeout_ms` - Per-tool task deadline (default 300,000 ms; `:infinity` opts out; tools can override)
+  - `:intent_tracing` - Include optional provider-only tool intent (default true)
   - `:queue_call_timeout` - Timeout for loop queue polling GenServer calls (`:infinity` or ms, default: 30 minutes)
   - `:name` - Optional GenServer name
 
@@ -579,6 +582,7 @@ defmodule LemonAgent.Agent do
       retry_base_delay_ms: Keyword.get(opts, :retry_base_delay_ms, 2_000),
       retry_max_delay_ms: Keyword.get(opts, :retry_max_delay_ms, 30_000),
       tool_timeout_ms: Keyword.get(opts, :tool_timeout_ms) || 300_000,
+      intent_tracing: Keyword.get(opts, :intent_tracing, true),
       queue_call_timeout: queue_call_timeout,
       waiters: []
     }
@@ -1079,6 +1083,7 @@ defmodule LemonAgent.Agent do
       retry_base_delay_ms: state.retry_base_delay_ms,
       retry_max_delay_ms: state.retry_max_delay_ms,
       tool_timeout_ms: state.tool_timeout_ms,
+      intent_tracing: state.intent_tracing,
       stream_options: stream_options,
       stream_fn: state.stream_fn
     }

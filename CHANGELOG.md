@@ -10,6 +10,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Added
 
+- Add default-on optional `i` tool intent in provider schemas, preserving original
+  transcripts while keeping intent out of execution arguments and telemetry;
+  show it in approval rationales and existing ACP tool-call titles.
+
 - Add `ls tree: true`: depth-limited newest-first trees with file sizes,
   12 children per directory and explicit omitted-sibling counts.
 

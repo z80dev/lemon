@@ -238,7 +238,7 @@ defmodule LemonAgent.Loop.Streaming do
         llm_context = %Context{
           system_prompt: context.system_prompt,
           messages: llm_messages,
-          tools: convert_tools_to_llm(context.tools)
+          tools: convert_tools_to_llm(context.tools, config.intent_tracing)
         }
 
         # Resolve stream function
@@ -781,12 +781,12 @@ defmodule LemonAgent.Loop.Streaming do
     }
   end
 
-  defp convert_tools_to_llm(agent_tools) do
+  defp convert_tools_to_llm(agent_tools, intent_tracing) do
     Enum.map(agent_tools, fn %AgentTool{} = tool ->
       %Tool{
         name: tool.name,
         description: tool.description,
-        parameters: tool.parameters
+        parameters: LemonAgent.ToolIntent.schema(tool.parameters, intent_tracing)
       }
     end)
   end
