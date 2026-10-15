@@ -164,7 +164,7 @@ defmodule LemonLsp.ServerManager do
   defp await_edit_callback(%Task{ref: ref} = task, request, deadline, owner_ref) do
     receive do
       {^ref, result} ->
-        Process.demonitor(ref, [:flush])
+        _ = Task.ignore(task)
         {:applied, result}
 
       {:DOWN, ^ref, :process, _pid, _reason} ->
