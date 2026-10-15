@@ -227,6 +227,11 @@ Coordinator cancellation fixtures wait for tracked admission guardians and sessi
 to exit before asserting an empty active set: a bounded batch result is not a
 synchronous shutdown receipt.
 
+LSP owner-lifecycle fixtures monitor the scoped client through exit, then assert
+that its exact managed server ID is gone. Unrelated idle-server cleanup can change
+the shared manager's active count concurrently; global count deltas are not an
+ownership assertion.
+
 Submission-shape fixtures use per-test run supervisors and capturing run processes,
 not real gateway work that can finish during another test's global count assertions.
 Own database fixtures with `start_supervised!` so shutdown finishes before directory
