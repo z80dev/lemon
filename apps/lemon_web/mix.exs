@@ -36,6 +36,7 @@ defmodule LemonWeb.MixProject do
       {:lemon_control_plane, in_umbrella: true},
       {:lemon_core, in_umbrella: true},
       {:lemon_memory, in_umbrella: true},
+      {:lemon_skills, in_umbrella: true},
       {:lemon_router, in_umbrella: true},
       {:phoenix, "~> 1.7.14"},
       {:phoenix_html, "~> 4.1"},

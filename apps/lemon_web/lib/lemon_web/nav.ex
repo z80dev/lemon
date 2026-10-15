@@ -82,6 +82,15 @@ defmodule LemonWeb.Nav do
       keywords: "recall remember notes documents"
     },
     %{
+      id: :learning,
+      label: "Learning",
+      path: "/learning",
+      icon: "sparkles",
+      group: "Knowledge",
+      shortcut: "l",
+      keywords: "journey timeline learned memory skills"
+    },
+    %{
       id: :mcp,
       label: "MCP",
       path: "/mcp",

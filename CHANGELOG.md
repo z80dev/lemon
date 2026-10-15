@@ -10,6 +10,8 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 - Add `lemon learning`: a bounded, redacted, profile-isolated timeline over
   existing memory and skill timestamps, with kind filters and JSON output.
+- Add a protected Learning page in Lemon Web, grouped by UTC day with profile
+  and kind filters, escaped previews, and links to existing memory/skill management.
 
 - Lemon Web omp adds parallel worker starts and a live usage grid, searchable
   free-marked model selection, live model/thinking configuration with explicit
