@@ -8,6 +8,11 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
+- Add opt-in `memory.write_approval` and `skills.write_approval` for human review
+  of agent-authored durable facts and skills through existing execution approvals.
+  Previews are bounded, escaped and redacted; denied/unavailable approval writes
+  nothing, and unattended background review, cron and unsupported channels fail closed.
+
 - Lemon Web omp adds parallel worker starts and a live usage grid, searchable
   free-marked model selection, live model/thinking configuration with explicit
   partial-failure receipts, and bounded subagent transcript drill-down.

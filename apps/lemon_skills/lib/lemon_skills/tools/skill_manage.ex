@@ -26,7 +26,13 @@ defmodule LemonSkills.Tools.SkillManage do
   @spec tool(keyword()) :: AgentTool.t()
   def tool(opts \\ []) do
     cwd = Keyword.get(opts, :cwd)
-    telemetry_context = telemetry_context(opts)
+
+    telemetry_context =
+      Map.put(
+        telemetry_context(opts),
+        :write_approval_context,
+        LemonSkills.WriteApproval.context(opts)
+      )
 
     %AgentTool{
       name: "skill_manage",
@@ -179,7 +185,8 @@ defmodule LemonSkills.Tools.SkillManage do
              {:ok, root} <- skills_root(scope, cwd),
              {:ok, name} <- name_for_action(action, params),
              :ok <- validate_name_for_action(action, name) do
-          with :ok <- reject_pinned_content_edit(action, name, scope, cwd) do
+          with :ok <- reject_pinned_content_edit(action, name, scope, cwd),
+               :ok <- approve_mutation(action, params, cwd, telemetry_context, tool_call_id) do
             dispatch(action, name, params, scope, root, cwd)
           end
         end
@@ -187,6 +194,20 @@ defmodule LemonSkills.Tools.SkillManage do
 
     emit_skill_write(result, params, tool_call_id, cwd, telemetry_context)
     result
+  end
+
+  defp approve_mutation("report", _params, _cwd, _context, _id), do: :ok
+
+  defp approve_mutation(_action, params, cwd, context, id) do
+    context = Map.get(context, :write_approval_context, context)
+
+    LemonSkills.WriteApproval.check(
+      :skills,
+      "skill_manage",
+      params,
+      Map.put(context, :cwd, cwd),
+      id
+    )
   end
 
   defp dispatch("create", name, params, scope, root, cwd) do
@@ -767,7 +788,7 @@ defmodule LemonSkills.Tools.SkillManage do
         tool_call_id: tool_call_id,
         cwd: cwd
       }
-      |> Map.merge(telemetry_context)
+      |> Map.merge(Map.delete(telemetry_context, :write_approval_context))
       |> LemonSkills.Telemetry.skill_write()
     end
   end
@@ -786,7 +807,7 @@ defmodule LemonSkills.Tools.SkillManage do
         tool_call_id: tool_call_id,
         cwd: cwd
       }
-      |> Map.merge(telemetry_context)
+      |> Map.merge(Map.delete(telemetry_context, :write_approval_context))
       |> LemonSkills.Telemetry.skill_write()
     end
   end

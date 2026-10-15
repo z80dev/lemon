@@ -12,9 +12,9 @@ defmodule LemonCore.Config.Memory do
   `[features] session_search`; with that off there is nothing to recall.
   """
 
-  defstruct auto_recall: true
+  defstruct auto_recall: true, write_approval: false
 
-  @type t :: %__MODULE__{auto_recall: boolean()}
+  @type t :: %__MODULE__{auto_recall: boolean(), write_approval: boolean()}
 
   @doc """
   Resolves the `[memory]` section. A missing section or key takes the default;
@@ -25,7 +25,10 @@ defmodule LemonCore.Config.Memory do
   def resolve(settings) when is_map(settings) do
     case settings["memory"] do
       %{} = memory ->
-        %__MODULE__{auto_recall: Map.get(memory, "auto_recall", true)}
+        %__MODULE__{
+          auto_recall: Map.get(memory, "auto_recall", true),
+          write_approval: Map.get(memory, "write_approval", false)
+        }
 
       _ ->
         %__MODULE__{}
