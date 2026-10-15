@@ -6,8 +6,9 @@ defmodule CodingAgent.Tools.AstGrep do
   `pattern`, optional `language`, and `paths` (local files, directories or globs).
   Search defaults to `["."]`; replacement requires an explicit nonempty scope.
   The CLI infers built-in languages from extensions when `language` is omitted.
-  Unsupported languages and invalid patterns return the CLI's error; there is
-  deliberately no regex fallback. Use an explicit language for ambiguous files.
+  Per-file CLI/parse failures are reported alongside successful files; all-failed
+  calls return an error. There is no regex fallback. Use an explicit language
+  for ambiguous files. `max_files` defaults to 1000 and refuses oversized scopes.
 
   Patterns use `$NAME` for one named syntax node, `$_` for an anonymous wildcard,
   and `$$$ARGS` for zero or more nodes. Repeating `$NAME` requires identical
@@ -39,15 +40,16 @@ defmodule CodingAgent.Tools.AstGrep do
 
   Options: `:ast_grep_timeout_ms` (30_000), `:max_bytes` (32_768), `:spill_dir`
   (system temp directory), plus the standard session/checkpoint options. Large
-  results spill complete JSONL match records to `full_output_path`; use `read`
-  with offset/limit to retrieve them. Visible positions are one-based; CLI JSON
+  results spill complete JSONL match records to `full_output_path`, with
+  `artifact_uri` and an artifact notice when session storage is available.
+  Use `read` with offset/limit to retrieve them. Visible positions are one-based; CLI JSON
   ranges and capture locations in the spill are zero-based, with exclusive ends.
   Tool output remains tagged as untrusted local search data.
   """
 
   alias CodingAgent.{FileReadTracker, MutationLock}
+  alias CodingAgent.Tools.AstGrep.{Backend, Scope}
   alias CodingAgent.Tools.{CheckpointGuard, FileValidation, PathHelpers}
-  alias CodingAgent.Tools.AstGrep.Backend
   alias LemonAgent.Security.ToolResultTrust
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonAi.Types.TextContent
@@ -117,6 +119,12 @@ defmodule CodingAgent.Tools.AstGrep do
             "minimum" => 1,
             "maximum" => 1000,
             "description" => "Visible matches (default 100); does not limit writes"
+          },
+          "max_files" => %{
+            "type" => "integer",
+            "minimum" => 1,
+            "default" => 1000,
+            "description" => "Refuse scopes exceeding this many files before searching or writing"
           }
         },
         "required" => ["action", "pattern"]
@@ -164,25 +172,94 @@ defmodule CodingAgent.Tools.AstGrep do
       with :ok <- check_abort(signal),
            {:ok, request} <- validate(params),
            {:ok, paths} <- resolve_paths(request.paths, cwd),
+           {:ok, paths} <- Scope.files(paths, request.max_files, signal),
            {:ok, executable} <- availability(opts),
-           {:ok, {output, status}} <-
-             Backend.run(
-               executable,
-               arguments(request, paths),
-               cwd,
-               signal,
-               Keyword.get(opts, :ast_grep_timeout_ms, 30_000)
-             ),
-           {:ok, matches} <- decode_matches(output, status),
+           {:ok, matches, errors} <- scan_files(executable, request, paths, signal, cwd, opts),
            matches <- normalize_matches(matches, cwd),
            :ok <- check_abort(signal) do
-        dispatch(request, matches, signal, cwd, opts)
+        dispatch(request, matches, signal, cwd, Keyword.put(opts, :cwd, cwd))
+        |> put_parse_errors(errors)
       end
 
     result
     |> format_error()
     |> ToolResultTrust.untrusted(:local_search)
   end
+
+  defp scan_files(executable, request, paths, signal, cwd, opts) do
+    timeout = Keyword.get(opts, :ast_grep_timeout_ms, 30_000)
+    deadline = System.monotonic_time(:millisecond) + timeout
+
+    Enum.reduce_while(paths, {:ok, [], [], 0, 0}, fn path,
+                                                     {:ok, matches, errors, succeeded, bytes} ->
+      remaining = deadline - System.monotonic_time(:millisecond)
+
+      cond do
+        remaining <= 0 ->
+          {:halt, {:error, "ast-grep timed out; narrow paths or increase :ast_grep_timeout_ms"}}
+
+        true ->
+          result =
+            with :ok <- check_abort(signal),
+                 {:ok, {output, status}} <-
+                   Backend.run(executable, arguments(request, [path]), cwd, signal, remaining),
+                 {:ok, found} <- decode_matches(output, status),
+                 do: {:ok, found, byte_size(output)}
+
+          case result do
+            {:ok, _found, size} when bytes + size > 16 * 1024 * 1024 ->
+              {:halt,
+               {:error,
+                "ast-grep output exceeds the 16 MiB planning limit; narrow paths or pattern. No edits were applied."}}
+
+            {:ok, found, size} ->
+              {:cont, {:ok, [found | matches], errors, succeeded + 1, bytes + size}}
+
+            {:error, reason} ->
+              case check_abort(signal) do
+                :ok ->
+                  {:cont,
+                   {:ok, matches,
+                    [%{path: path, error: bounded(to_string(reason), 2000)} | errors], succeeded,
+                    bytes}}
+
+                error ->
+                  {:halt, error}
+              end
+          end
+      end
+    end)
+    |> case do
+      {:ok, [], [error | _], 0, _bytes} ->
+        {:error, error.error}
+
+      {:ok, matches, errors, _, _bytes} ->
+        {:ok, matches |> Enum.reverse() |> Enum.concat(), Enum.reverse(errors)}
+
+      error ->
+        error
+    end
+  end
+
+  defp put_parse_errors(%AgentToolResult{} = result, errors) do
+    details =
+      result.details
+      |> Map.put(:parse_errors, Enum.take(errors, 20))
+      |> Map.put(:parse_errors_total, length(errors))
+
+    if errors == [] do
+      %{result | details: details}
+    else
+      notice = %TextContent{
+        text:
+          "[Skipped #{length(errors)} files with parse/CLI errors; see details.parse_errors (first 20).]"
+      }
+
+      %{result | details: details, content: result.content ++ [notice]}
+    end
+  end
+
+  defp put_parse_errors(result, _errors), do: result
 
   defp validate(params) when is_map(params) do
     action = params["action"]
@@ -199,6 +276,7 @@ defmodule CodingAgent.Tools.AstGrep do
     dry_run = Map.get(params, "dry_run", true)
     expected = params["expected_matches"]
     limit = Map.get(params, "max_results", 100)
+    max_files = Map.get(params, "max_files", 1000)
 
     cond do
       action not in ["search", "replace"] ->
@@ -229,6 +307,9 @@ defmodule CodingAgent.Tools.AstGrep do
       not is_integer(limit) or limit < 1 or limit > 1000 ->
         {:error, "max_results must be an integer from 1 to 1000"}
 
+      not is_integer(max_files) or max_files < 1 ->
+        {:error, "max_files must be a positive integer"}
+
       not is_nil(expected) and (not is_integer(expected) or expected < 0) ->
         {:error, "expected_matches must be a nonnegative integer"}
 
@@ -256,7 +337,8 @@ defmodule CodingAgent.Tools.AstGrep do
              rewrite: rewrite,
              dry_run: dry_run,
              expected: expected,
-             limit: limit
+             limit: limit,
+             max_files: max_files
            }}
         end
     end
@@ -605,8 +687,14 @@ defmodule CodingAgent.Tools.AstGrep do
 
     if truncated do
       with {:ok, path} <- spill(matches, opts) do
+        {reference, details} =
+          case CodingAgent.Artifacts.register(path, Keyword.fetch!(opts, :cwd), opts) do
+            {:ok, uri} -> {uri, Map.put(details, :artifact_uri, uri)}
+            {:error, _} -> {path, details}
+          end
+
         note =
-          "\n\n[Full JSONL matches saved to: #{path}. Use read with offset/limit. Display limits do not limit writes.]"
+          "\n\n[Full JSONL matches saved to: #{reference}. Use read with offset/limit. Display limits do not limit writes.]"
 
         %AgentToolResult{
           content: [
