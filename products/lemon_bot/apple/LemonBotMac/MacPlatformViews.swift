@@ -189,9 +189,13 @@ struct MacSettingsView: View {
                 Toggle("Show one compact selected-Bot companion", isOn: $value.compactCompanionEnabled)
             }
             Section("Explicit keyboard controls") {
-                TextField("Quick composer shortcut", text: $summon)
-                TextField("Hold to talk shortcut", text: $ptt)
-                Text("For example: control+option+space or command+shift+f8. Leave blank to turn off.").font(LBFont.meta)
+                LabeledContent("Quick composer shortcut") {
+                    MacShortcutRecorder(label: "Quick composer shortcut", shortcut: $summon, recordingChanged: controller.shortcutRecordingChanged)
+                }
+                LabeledContent("Hold to talk shortcut") {
+                    MacShortcutRecorder(label: "Hold to talk shortcut", shortcut: $ptt, recordingChanged: controller.shortcutRecordingChanged)
+                }
+                Text("Click to record a key with Command, Control or Option. Escape cancels; Delete turns the shortcut off. Save to apply.").font(LBFont.meta)
                 Toggle("Microphone on/off sounds", isOn: $value.micCuesEnabled)
                 Picker("Reduced motion", selection: $value.reducedMotion) {
                     Text("Follow system").tag("system"); Text("On").tag("on"); Text("Off").tag("off")
