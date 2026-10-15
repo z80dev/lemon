@@ -44,7 +44,8 @@ From the umbrella root: `scripts/test path apps/lemon_omp/test`. By default,
 tests use the fake omp script in `test/support` and exclude `:omp_live`.
 They restore application env and confirm OS processes are gone.
 
-Opt in to the real-binary lifecycle smoke with:
+Opt in to the real-binary smoke (lifecycle, approvals bridge, parallel
+workers) with:
 
 ```bash
 LEMON_OMP_LIVE=1 scripts/test path apps/lemon_omp/test/lemon_omp/live_smoke_test.exs

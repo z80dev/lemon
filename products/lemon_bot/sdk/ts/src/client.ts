@@ -1,6 +1,6 @@
 import type {
   Attachment, AttachmentUpload, Download, ErrorCode, JSONObject, Page, RestKey,
-  RestQuery, RestRequest, RestResponse, Run, Transcription, TranscriptionRequest,
+  RestQuery, RestRequest, RestResponse, Run, RuntimeAction, Transcription, TranscriptionRequest,
 } from '../../../contracts/protocol.ts';
 import { isErrorEnvelope, LemonBotError, localError } from './errors.ts';
 import { RealtimeConnection } from './realtime.ts';
@@ -98,6 +98,12 @@ export class LemonBotClient {
     this.baseUrl = normalizeBase(options.baseUrl);
     this.token = options.token;
     this.fetcher = options.fetch ?? globalThis.fetch.bind(globalThis);
+  }
+
+  instance() { return this.call('GET /instance'); }
+  reconnectController() { return this.call('POST /instance/reconnect', { body: { clientNonce: nonce() } }); }
+  runtimeAction(action: RuntimeAction, confirm = false) {
+    return this.call('POST /instance/runtime/:action', { params: { action }, body: { clientNonce: nonce(), confirm } });
   }
 
   async call<K extends RestKey>(key: K, ...args: CallArguments<NoInfer<K>>): Promise<RestResponse<K>> {

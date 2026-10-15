@@ -288,7 +288,7 @@ defmodule LemonOmp.ApprovalsTest do
   end
 
   test "invalid approval modes are rejected before spawning", ctx do
-    for mode <- [nil, "", "always", "YOLO", :yolo, false, 42, %{}] do
+    for mode <- ["always", "YOLO", :yolo, false, 42, %{}] do
       assert {:error, :invalid_params} =
                LemonOmp.start(%{cwd: ctx.ws, prompt: "hi", approval_mode: mode})
     end

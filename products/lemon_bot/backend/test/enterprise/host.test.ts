@@ -97,6 +97,8 @@ const nativeProcessReply = z.union([
 ]);
 class ActualProcess implements LemonService {
   connected = true;
+  controller: LemonService['controller'] = { url: 'ws://127.0.0.1:4040/ws', state: 'connected', connectedAtMs: 1, lastDisconnectedAtMs: null, lastError: null, nextRetryAtMs: null, methodCount: 0 };
+  reconnect() { this.start(); }
   methods = ['node.process.run', 'node.process.get', 'node.process.cancel'];
   private connections = new Set<() => void>();
   readonly processes = new Map<string, NativeProcessRecord>();

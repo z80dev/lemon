@@ -168,7 +168,7 @@ defmodule LemonOmp do
          {:ok, prompt} <- validate_prompt(params["prompt"], resume),
          {:ok, model} <- validate_optional(params["model"], @model_pattern),
          {:ok, thinking} <- validate_thinking(params["thinking"]),
-         {:ok, approval_mode} <- validate_approval_mode(Map.fetch(params, "approval_mode")) do
+         {:ok, approval_mode} <- validate_approval_mode(params["approval_mode"]) do
       {:ok,
        [
          cwd: cwd,
@@ -554,8 +554,9 @@ defmodule LemonOmp do
   defp validate_thinking(level) when level in @thinking_levels, do: {:ok, level}
   defp validate_thinking(_level), do: {:error, :invalid_params}
 
-  defp validate_approval_mode(:error), do: {:ok, nil}
-  defp validate_approval_mode({:ok, mode}) when mode in @approval_modes, do: {:ok, mode}
+  defp validate_approval_mode(nil), do: {:ok, nil}
+  defp validate_approval_mode(""), do: {:ok, nil}
+  defp validate_approval_mode(mode) when mode in @approval_modes, do: {:ok, mode}
   defp validate_approval_mode(_mode), do: {:error, :invalid_params}
 
   defp normalize_keys(params), do: Map.new(params, fn {key, value} -> {to_string(key), value} end)

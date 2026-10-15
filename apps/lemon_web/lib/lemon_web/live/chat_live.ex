@@ -96,7 +96,10 @@ defmodule LemonWeb.ChatLive do
         else
           {:noreply,
            socket
-           |> put_flash(:error, "That session link is not valid.")
+           |> put_flash(
+             :error,
+             "That session link is not valid. Pick a session from the sidebar."
+           )
            |> push_navigate(to: "/")}
         end
     end
@@ -125,8 +128,8 @@ defmodule LemonWeb.ChatLive do
 
   defp load_active(socket) do
     case Backend.active_sessions() do
-      {:ok, active} -> assign(socket, :active, active)
-      {:error, _} -> socket
+      {:ok, active} -> assign(socket, active: active, active_error: nil)
+      {:error, _} -> assign(socket, :active_error, "Could not refresh active runs. Retrying.")
     end
   end
 
@@ -507,6 +510,9 @@ defmodule LemonWeb.ChatLive do
         <.callout :if={@sessions_error} tone="warning" class="mx-2 mb-2" id="sessions-unavailable">
           Sessions are unavailable: {@sessions_error}
         </.callout>
+        <.callout :if={@active_error} tone="warning" class="mx-2 mb-2" id="active-runs-unavailable">
+          {@active_error}
+        </.callout>
         <nav class="min-h-0 flex-1 overflow-y-auto px-1.5 pb-3 scroll-thin" aria-label="Session list" id="session-list" phx-hook="ListNav">
           <p :if={@sessions == [] and !@sessions_error} class="px-2 py-6 text-center text-xs text-muted">
             {if @query == "", do: "No sessions yet.", else: "No sessions match."}
@@ -541,6 +547,7 @@ defmodule LemonWeb.ChatLive do
                 data-list-item
               >
                 <.status_dot :if={Map.has_key?(@active, session.key)} tone="info" pulse />
+                <span :if={Map.has_key?(@active, session.key)} class="sr-only">Running</span>
                 <.icon :if={!Map.has_key?(@active, session.key) && session.pinned} name="pin" class="h-3 w-3 shrink-0 text-accent-text" />
                 <.icon :if={!Map.has_key?(@active, session.key) && !session.pinned} name="message-square" class="h-3 w-3 shrink-0 text-subtle" />
                 <span class="min-w-0 flex-1">
@@ -652,6 +659,9 @@ defmodule LemonWeb.ChatLive do
         </div>
 
         <Setup.gate :if={!@setup_ready?} state={@setup_state} />
+        <.callout :if={@active_error} tone="warning" id="home-active-runs-unavailable">
+          {@active_error}
+        </.callout>
 
         <form
           id="home-form"
@@ -715,6 +725,9 @@ defmodule LemonWeb.ChatLive do
             title={cwd}
           >
             {Path.basename(cwd)}
+            <span :if={Enum.count(@workspaces, &(Path.basename(&1) == Path.basename(cwd))) > 1} class="text-subtle">
+              — {Path.dirname(cwd)}
+            </span>
           </button>
         </div>
 

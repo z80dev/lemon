@@ -10,7 +10,6 @@ defmodule LemonWeb.Router do
   use LemonWeb, :router
 
   pipeline :browser do
-    plug(:accepts, ["html"])
     plug(:fetch_session)
     plug(:fetch_live_flash)
     plug(:put_root_layout, html: {LemonWeb.Layouts, :root})
@@ -18,12 +17,16 @@ defmodule LemonWeb.Router do
     plug(:put_secure_browser_headers, %{"referrer-policy" => "no-referrer"})
   end
 
+  pipeline :accept_html do
+    plug(:accepts, ["html"])
+  end
+
   pipeline :operator do
     plug(LemonWeb.Plugs.RequireOperator)
   end
 
   scope "/", LemonWeb do
-    pipe_through(:browser)
+    pipe_through([:browser, :accept_html])
 
     get("/login", LoginController, :new)
     post("/login", LoginController, :create)
@@ -31,7 +34,7 @@ defmodule LemonWeb.Router do
   end
 
   scope "/", LemonWeb do
-    pipe_through([:browser, :operator])
+    pipe_through([:browser, :operator, :accept_html])
 
     get("/sessions/:session_key/export/:format", SessionExportController, :show)
     get("/profiles/:id/export", ProfileExportController, :show)

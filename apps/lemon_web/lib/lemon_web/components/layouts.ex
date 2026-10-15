@@ -12,6 +12,8 @@ defmodule LemonWeb.Layouts do
   def open_rail(js \\ %JS{}) do
     js
     |> JS.set_attribute({"data-open", "true"}, to: "#rail")
+    |> JS.set_attribute({"role", "dialog"}, to: "#rail")
+    |> JS.set_attribute({"aria-modal", "true"}, to: "#rail")
     |> JS.show(to: "#rail-backdrop")
     |> JS.focus_first(to: "#rail")
   end
@@ -20,6 +22,8 @@ defmodule LemonWeb.Layouts do
   def close_rail(js \\ %JS{}) do
     js
     |> JS.set_attribute({"data-open", "false"}, to: "#rail")
+    |> JS.remove_attribute("role", to: "#rail")
+    |> JS.remove_attribute("aria-modal", to: "#rail")
     |> JS.hide(to: "#rail-backdrop")
   end
 end

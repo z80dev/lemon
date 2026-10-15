@@ -14,6 +14,35 @@ class Socket implements ControlSocket {
 const config = { controlUrl: 'wss://controller.example/ws', operatorToken: 'server-only-test-token', trustedOverlay: false };
 
 describe('long-lived operator connection', () => {
+  test('projects link state and sanitized rejection, and explicit reconnect recovers rejected credentials', () => {
+    const sockets: Socket[] = [];
+    const service = createLemonService(config, { socket: () => { const socket = new Socket(); sockets.push(socket); return socket; } });
+    try {
+      expect(service.controller.state).toBe('stopped');
+      service.start(); expect(service.controller.state).toBe('connecting');
+      sockets[0]!.handlers!.open();
+      sockets[0]!.deliver({ type: 'res', id: sockets[0]!.sent[0]!.id, ok: false, error: { code: 'FORBIDDEN', message: config.operatorToken } });
+      expect(service.controller.state).toBe('rejected'); expect(service.controller.nextRetryAtMs).toBeNull();
+      expect(service.controller.lastError).toMatchObject({ code: 'controller_rejected', message: 'The controller rejected the operator token. Check LEMON_BOT_OPERATOR_TOKEN.' });
+      expect(JSON.stringify(service.controller)).not.toContain(config.operatorToken);
+      service.reconnect(); expect(sockets).toHaveLength(2); sockets[1]!.handshake();
+      expect(service.controller.state).toBe('connected'); expect(service.controller.connectedAtMs).toBeNumber(); expect(service.controller.lastError).toBeNull();
+      expect(service.controller.methodCount).toBe(2); sockets[1]!.close();
+      expect(service.controller.state).toBe('reconnecting'); expect(service.controller.connectedAtMs).toBeNull(); expect(service.controller.lastDisconnectedAtMs).toBeNumber(); expect(service.controller.nextRetryAtMs).toBeNumber();
+      service.reconnect(); expect(sockets).toHaveLength(3); expect(service.controller.nextRetryAtMs).toBeNull();
+    } finally { service.close(); }
+    expect(service.controller.state).toBe('stopped');
+  });
+  test('network, handshake timeout and protocol failures expose product diagnostics', () => {
+    vi.useFakeTimers();
+    const failed = createLemonService(config, { socket: () => { throw new Error('private error'); } });
+    const socket = new Socket(); const slow = createLemonService(config, { socket: () => socket, handshakeTimeoutMs: 10 });
+    try {
+      failed.start(); expect(failed.controller.lastError).toMatchObject({ code: 'controller_unreachable', message: 'Nothing answered at wss://controller.example/ws.' }); expect(failed.controller.nextRetryAtMs).toBeNumber();
+      slow.start(); vi.advanceTimersByTime(10); expect(slow.controller.lastError?.code).toBe('controller_handshake_timeout');
+      slow.reconnect(); socket.handlers!.frame('invalid JSON'); expect(slow.controller.lastError?.code).toBe('controller_protocol_violation');
+    } finally { failed.close(); slow.close(); vi.useRealTimers(); }
+  });
   test('uses the exact connect auth frame and correlates interleaved responses/events', async () => {
     const socket = new Socket(); const service = createLemonService(config, { socket: () => socket });
     const observed: unknown[] = []; service.onEvent((event, payload) => observed.push({ event, payload }));
