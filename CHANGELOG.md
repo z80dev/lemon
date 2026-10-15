@@ -10,6 +10,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Derive computer-use approval test origins from configured control-plane/web
+  ports so non-default test listeners retain Lemon self-surface protection.
+
 - Preserve delegated run identity when polling recovers a durable completion, so
   the task and RunGraph both become terminal even without a live watcher.
 - Make coordinator/session/watcher/environment regressions synchronize with their
