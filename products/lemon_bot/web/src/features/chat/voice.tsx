@@ -29,9 +29,11 @@ export function VoiceOverlay() {
     const actual = await client.call('GET /voice/sessions/:id', { params: { id: current.id } }); setSession(actual);
     const page = await client.call('GET /conversations/:id/entries', { params: { id: actual.conversationId }, query: { limit: 200 } }); setEntries(page.items); liveEntries.current = page.items;
     if (pendingRef.current) {
-      const journal = await client.call('GET /runs', { query: { conversationId: current.conversationId, clientNonce: pendingRef.current.clientNonce, limit: 200 } });
-      if (!journal.items.length || journal.items.some(run => run.status === 'reserved' || run.status === 'outcome_unknown')) throw new Error('Original utterance delivery is unresolved. The transcript is retained; do not repeat it.');
-      journal.items.forEach(run => runs.current.add(run.id)); setPendingUtterance(undefined); pendingRef.current = undefined; sessionStorage.removeItem(`${sessionKey}:utterance`);
+      const receipt = await client.messageReceipt(current.conversationId, pendingRef.current.clientNonce);
+      if (receipt.status === 'outcome_unknown' || receipt.runs.some(run => run.status === 'reserved' || run.status === 'outcome_unknown') || receipt.delivery.length !== receipt.runs.length || receipt.delivery.some(target => target.effectiveMode === 'outcome_unknown')) throw new Error('Original utterance delivery is unresolved. The transcript is retained; do not repeat it.');
+      receipt.runs.forEach(run => runs.current.add(run.id)); setPendingUtterance(undefined); pendingRef.current = undefined; sessionStorage.removeItem(`${sessionKey}:utterance`);
+      const failures = receipt.runs.flatMap(run => run.error ? [run.error.message] : []);
+      if (failures.length) setSpeechError(new Error(failures.join('\n')));
     }
     setStatus(actual.state === 'active' ? 'Call reconciled. Resume microphone explicitly.' : actual.state);
   }

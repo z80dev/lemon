@@ -109,21 +109,12 @@ export function Composer({ conversation, bot, replyId, clearReply, accepted }: {
   }
   async function reconcileMessage() {
     const clientNonce = journal.current || localRef.current.unknownNonce; if (!clientNonce) { await query.reload(); return; }
-    const page = await client.call('GET /runs', { query: { conversationId: conversation.id, clientNonce, limit: 200 } });
-    if (!page.items.length || page.items.some(run => run.status === 'outcome_unknown' || run.status === 'reserved')) throw new Error('The original message outcome is still unresolved. Keep this draft; do not resend.');
-    const history = await client.call('GET /conversations/:id/entries', { params: { id: conversation.id }, query: { limit: 200 } });
-    const matched = history.items.filter(entry => entry.clientNonce === clientNonce);
-    const recordedIds = sendIntent.lastError.current instanceof LemonBotError ? sendIntent.lastError.current.details?.entryIds : undefined;
-    if (Array.isArray(recordedIds)) for (const entryId of recordedIds) {
-      if (typeof entryId !== 'string' || matched.some(entry => entry.id === entryId)) continue;
-      const entry = await client.call('GET /entries/:id', { params: { id: entryId } });
-      if (entry.conversationId !== conversation.id || entry.clientNonce !== clientNonce) throw new Error('Recorded refusal entry does not match the original intent.');
-      matched.push(entry);
-    }
-    accepted({ entries: matched, runs: page.items });
-    journal.current = undefined; setLocal(current => ({ ...current, unknownNonce: undefined, acknowledged: true, refused: page.items.every(run => run.status === 'failed' && run.startedAtMs === null) }));
-    setDelivery({ runs: page.items, delivery: [] });
-    setError(new Error('The original message is present in the server run journal. Its text is retained for review, not a new send. Clear it explicitly when ready.'));
+    const receipt = await client.messageReceipt(conversation.id, clientNonce);
+    if (receipt.status === 'outcome_unknown' || receipt.runs.some(run => run.status === 'outcome_unknown' || run.status === 'reserved') || receipt.delivery.length !== receipt.runs.length || receipt.delivery.some(target => target.effectiveMode === 'outcome_unknown')) throw new Error('The original message outcome is still unresolved. Keep this draft; do not resend.');
+    accepted(receipt);
+    journal.current = undefined; setLocal(current => ({ ...current, unknownNonce: undefined, acknowledged: true, refused: receipt.delivery.length > 0 && receipt.delivery.every(target => target.effectiveMode === 'rejected') }));
+    setDelivery(receipt);
+    setError(new Error('The original message is present in its server submission receipt. Its text is retained for review, not a new send. Clear it explicitly when ready.'));
   }
   useEffect(() => { const focus = () => textarea.current?.focus(); const dictate = (event: KeyboardEvent) => { if ((event.metaKey || event.ctrlKey) && !event.shiftKey && event.key.toLowerCase() === 'd') { event.preventDefault(); setShowDictation(value => !value); } }; window.addEventListener('lemonbot:focus-composer', focus); window.addEventListener('keydown', dictate); return () => { window.removeEventListener('lemonbot:focus-composer', focus); window.removeEventListener('keydown', dictate); }; }, []);
   useEffect(() => { const element = textarea.current; if (!element) return; element.style.height = 'auto'; element.style.height = `${Math.min(element.scrollHeight, 220)}px`; }, [local.text]);

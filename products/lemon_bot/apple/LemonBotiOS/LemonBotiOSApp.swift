@@ -161,6 +161,7 @@ struct NativeLemonBotView: View {
                 if phase == .active {
                     voice.foreground = true
                     reloadShares()
+                    Task { await store.reconcilePendingMessages() }
                     Task {
                         guard store.account != nil, store.connectionState != "online", store.connectionState != "reconnect_required" else { return }
                         do { try await store.refresh() } catch { if store.connectionIssue == nil { localError = error.localizedDescription } }

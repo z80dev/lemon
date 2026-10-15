@@ -704,6 +704,7 @@ export interface RestEndpoints {
   'PUT /conversations/:id/composer': Endpoint<ComposerDraftUpdate, ComposerDraft>;
   'GET /conversations/:id/entries': Endpoint<undefined, Page<TranscriptEntry>, PageQuery & { beforeSeq?: number; afterSeq?: number }>;
   'POST /conversations/:id/messages': Endpoint<MessageSend, MessageReceipt>;
+  'GET /conversations/:id/messages/receipts/:nonce': Endpoint<undefined, MessageReceipt>;
   'GET /entries/:id': Endpoint<undefined, TranscriptEntry>;
   'POST /entries/:id/reactions': Endpoint<ReactionRequest, TranscriptEntry>;
   'DELETE /entries/:id/reactions': Endpoint<ReactionRequest, TranscriptEntry>;

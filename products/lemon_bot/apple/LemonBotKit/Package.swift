@@ -12,7 +12,7 @@ let package = Package(
     targets: [
         .target(name: "LemonBotKit", path: "Sources/LemonBotKit"),
         .target(name: "LemonBotUI", dependencies: ["LemonBotKit", .product(name: "SwiftTerm", package: "SwiftTerm")], path: "Sources/LemonBotUI"),
-        .testTarget(name: "LemonBotKitTests", dependencies: ["LemonBotKit"], path: "Tests/LemonBotKitTests")
+        .testTarget(name: "LemonBotKitTests", dependencies: ["LemonBotKit", "LemonBotUI"], path: "Tests/LemonBotKitTests")
     ],
     swiftLanguageVersions: [.v5]
 )

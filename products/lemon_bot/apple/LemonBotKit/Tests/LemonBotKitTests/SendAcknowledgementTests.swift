@@ -27,11 +27,21 @@ private final class PresenceConnections: @unchecked Sendable {
     func cancel() { lock.lock(); defer { lock.unlock() }; for value in values { value.cancel() }; values = [] }
 }
 
-private final class HeldSendHTTPProtocol: URLProtocol {
+final class HeldSendHTTPProtocol: URLProtocol {
     static var started: ((HeldSendHTTPProtocol) -> Void)?
+    static var receiptResponse: Data?
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
-    override func startLoading() { Self.started?(self) }
+    override func startLoading() {
+        guard request.httpMethod == "POST" else {
+            let response = HTTPURLResponse(url: request.url!, statusCode: Self.receiptResponse == nil ? 404 : 200, httpVersion: "HTTP/1.1", headerFields: [:])!
+            client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+            client?.urlProtocol(self, didLoad: Self.receiptResponse ?? Data(#"{"error":{"code":"not_found","message":"No authoritative receipt","requestId":"held_receipt","retrySafe":true}}"#.utf8))
+            client?.urlProtocolDidFinishLoading(self)
+            return
+        }
+        Self.started?(self)
+    }
     override func stopLoading() {}
     func respond() throws {
         var receipt = try JSONDecoder().decode(JSONObject.self, from: acceptedSendReceipt)
