@@ -21,6 +21,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Added
 
+- Add opt-in `lemon doctor --live` for bounded, redacted provider models-list and
+  Telegram/Discord bot identity checks without generating completions.
+
 - Rate-limited cron failure and recovery alerts, persistent failure streaks,
   owner-chat fallback, and doctor warnings for failures without a delivery route.
 
