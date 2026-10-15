@@ -74,7 +74,10 @@ defmodule LemonCli.LauncherLifecycleTest do
   test "source help preserves invalid and release-only command exit codes", ctx do
     for command <- ~w(not-a-command remote eval rpc) do
       assert {output, 2} = launch(ctx.source, ["help", command], ctx.env)
-      assert output =~ if(command == "not-a-command", do: "Unknown command", else: "packaged release")
+
+      assert output =~
+               if(command == "not-a-command", do: "Unknown command", else: "packaged release")
+
       refute output =~ "unexpected Mix"
       refute File.exists?(Path.join(ctx.home, ".lemon"))
     end

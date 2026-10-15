@@ -71,10 +71,10 @@ require_curl() {
 }
 
 require_elixir() {
-  command -v elixir >/dev/null 2>&1 && command -v mix >/dev/null 2>&1 || {
+  if ! command -v elixir >/dev/null 2>&1 || ! command -v mix >/dev/null 2>&1; then
     error "Elixir and Mix are required for a source checkout (Elixir 1.19.5+, Erlang/OTP 28.5+); see docs/install.md, Source development"
     exit 1
-  }
+  fi
 }
 
 # Read only the registry, without Mix, application boot, or credential creation.
@@ -95,7 +95,7 @@ run_help() {
                 System.halt(2)
               end
             :error ->
-              IO.puts(:stderr, "Unknown command: #{name}. Run `lemon --help` to list commands.")
+              IO.puts(:stderr, "Unknown command: #{name}. Run lemon --help to list commands.")
               System.halt(2)
           end
       end' -- "$@"
