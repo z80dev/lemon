@@ -9,6 +9,7 @@ import { UsageSettings } from './usage';
 import { AboutSettings } from './about';
 import { InboxScreen } from './inbox';
 import { AccountCleanupScreen } from './cleanup';
+import { InstanceSettings } from './instance';
 import './settings.css';
 
 export function SettingsScreen({ route }: { route: Route }) {
@@ -22,6 +23,7 @@ export function SettingsScreen({ route }: { route: Route }) {
     case 'settings.policies': content = <PolicySettings />; break;
     case 'settings.usage': content = <UsageSettings />; break;
     case 'settings.about': content = <AboutSettings />; break;
+    case 'settings.instance': content = <InstanceSettings />; break;
     case 'inbox': content = <InboxScreen />; break;
     case 'settings.account': content = <AccountSettings />; break;
     default: content = <section className="panel"><h2>Settings page not found</h2><p>Select a section from the settings list.</p></section>;

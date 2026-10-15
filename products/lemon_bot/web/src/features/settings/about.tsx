@@ -20,16 +20,14 @@ export function AboutSettings() {
       <ErrorNotice error={setup.error} /><ErrorNotice error={capabilities.error} />{setup.loading && <Loading />}
       <dl className="settings-facts">
         <dt>Web client</dt><dd>1.0.0</dd>
-        <dt>Product backend</dt><dd>{setup.data?.version ?? 'Unavailable / loading'}</dd>
-        <dt>Product API</dt><dd>{setup.data ? `v${setup.data.apiVersion}` : 'Unknown'}</dd>
         <dt>Platform</dt><dd>Web · {navigator.platform || 'Browser platform not reported'}</dd>
-        <dt>Browser network</dt><dd>{online ? 'Online' : 'Offline'}</dd>
-        <dt>Swarm control service</dt><dd>{capabilities.data ? capabilities.data.controlConnected ? 'Connected' : 'Disconnected — running truth requires reconciliation' : 'Unknown'}</dd>
+        <dt>Browser network</dt><dd>{navigator.onLine ? 'Online' : 'Offline'}</dd>
         <dt>Minimum supported web version</dt><dd>{capabilities.data?.minClientVersions.web ?? 'Unknown'}</dd>
         <dt>Current device</dt><dd>{device ? `${device.name} · ${device.id}` : 'Not registered'}</dd>
       </dl>
       {newerRequired && <p role="alert" className="error-notice">This client is below the configured minimum version. Ask the operator to deploy current web assets, reload, and reconcile before continuing.</p>}
       <div className="row">
+        <button onClick={() => navigate({ screen: 'settings.instance' })}>Lemon instance — service version & connection status</button>
         <button disabled={setup.loading || capabilities.loading} onClick={() => void Promise.all([setup.reload(), capabilities.reload(), machines.reload()]).catch(reportError)}>Retry service/version reads</button>
         <button onClick={() => navigate({ screen: 'machines' })}>Machine inventory & service status</button>
       </div>
