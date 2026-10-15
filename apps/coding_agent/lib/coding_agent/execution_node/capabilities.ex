@@ -20,7 +20,8 @@ defmodule CodingAgent.ExecutionNode.Capabilities do
             files(probe, catalog, opts),
             shell(probe, catalog),
             browser(probe, catalog),
-            connectors(probe)
+            connectors(probe),
+            computer_use(catalog)
           ] ++ desktop(os, probe, catalog)
 
         {:ok,
@@ -176,6 +177,29 @@ defmodule CodingAgent.ExecutionNode.Capabilities do
       "unknown",
       [],
       "connectors_and_permissions_are_session_scoped"
+    )
+  end
+
+  # Native app control is an optional satellite that registers `cua_js` only
+  # when the destination enabled it, so the destination's own tool catalog is
+  # the measurement. Its OS permissions belong to the computer-use helper and
+  # every app is approved per request, so the grant stays unknown here.
+  defp computer_use(catalog) do
+    tools = select(catalog, ~w(cua_js cua_js_reset))
+    enabled = "cua_js" in tools
+
+    item(
+      "computer_use",
+      "Computer use",
+      "os_app",
+      enabled,
+      if(enabled, do: "read_interact", else: "off"),
+      "unknown",
+      tools,
+      if(enabled,
+        do: "computer_use_enabled_per_app_approval",
+        else: "computer_use_not_enabled"
+      )
     )
   end
 

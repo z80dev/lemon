@@ -124,6 +124,10 @@ running outside a run uses one turn per session process.
 Tools are built where the session runs. A session on a named execution node
 gets computer use only if that node runs Lemon with computer use enabled, and it
 controls that node's desktop.
+Node capability inspection reports a `computer_use` item: supported and
+`read_interact` when the node registered `cua_js`, `off` otherwise. Its OS
+grant is always `unknown`, because the helper's macOS permissions cannot be
+queried without prompting and every app is approved per request.
 
 ## Troubleshooting
 
