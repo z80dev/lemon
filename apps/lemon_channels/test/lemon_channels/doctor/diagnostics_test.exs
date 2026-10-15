@@ -103,7 +103,9 @@ defmodule LemonChannels.Doctor.DiagnosticsTest do
     assert discord.inbound_replay.duplicate_message_suppression_supported == true
     assert discord.inbound_replay.persisted_idempotency_supported == true
     assert discord.slash_commands.schema_export_supported == true
-    assert discord.slash_commands.expected_command_count == 32
+    assert discord.slash_commands.expected_command_count == 34
+    assert "approve" in discord.slash_commands.expected_commands
+    assert "deny" in discord.slash_commands.expected_commands
     assert "checkpoint" in discord.slash_commands.expected_commands
     assert "rollback" in discord.slash_commands.expected_commands
     assert "kanban" in discord.slash_commands.expected_commands

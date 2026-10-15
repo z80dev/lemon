@@ -17,8 +17,8 @@ defmodule LemonSkills.Synthesis.CandidateSelectorTest do
       agent_id: "agent-1",
       workspace_key: nil,
       scope: :agent,
-      started_at_ms: System.system_time(:millisecond),
-      ingested_at_ms: System.system_time(:millisecond),
+      started_at_ms: 0,
+      ingested_at_ms: Keyword.get(overrides, :ingested_at_ms, 1_000),
       prompt_summary: Keyword.get(overrides, :prompt, @prompt),
       answer_summary: Keyword.get(overrides, :answer, @answer),
       tools_used: Keyword.get(overrides, :tools, ["bash"]),
@@ -218,11 +218,24 @@ defmodule LemonSkills.Synthesis.CandidateSelectorTest do
       assert length(result) == 1
     end
 
-    test "keeps first (most-recent) on duplicate" do
-      d1 = doc(prompt: @prompt)
-      d2 = %{doc(prompt: @prompt) | doc_id: "different-id"}
-      [kept] = CandidateSelector.select([d1, d2])
-      assert kept.doc_id == d1.doc_id
+    test "keeps the most-recent duplicate regardless of input order" do
+      d1 = doc(prompt: @prompt, ingested_at_ms: 2_000)
+      d2 = %{doc(prompt: @prompt, ingested_at_ms: 1_000) | doc_id: "different-id"}
+
+      for docs <- [[d1, d2], [d2, d1]] do
+        assert [kept] = CandidateSelector.select(docs)
+        assert kept.doc_id == d1.doc_id
+      end
+    end
+
+    test "equal ingestion timestamps break duplicate ties by descending document id" do
+      first = %{doc() | doc_id: "a"}
+      last = %{doc() | doc_id: "z"}
+
+      for docs <- [[first, last], [last, first]] do
+        assert [kept] = CandidateSelector.select(docs)
+        assert kept.doc_id == last.doc_id
+      end
     end
 
     test "preserves distinct documents" do

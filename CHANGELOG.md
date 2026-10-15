@@ -10,6 +10,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Pin skill-synthesis candidate timestamps in ordering fixtures and cover
+  recency/ID tie-breaking independently of wall-clock scheduling.
+
 - Derive computer-use approval test origins from configured control-plane/web
   ports so non-default test listeners retain Lemon self-surface protection.
 
@@ -50,6 +53,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 - TUI startup shows pending setup steps above the prompt, hides them once ready,
   and points empty model lists to `lemon setup provider`; `setup.status` exposes
   read-only, content-free readiness for clients.
+
+- Telegram and Discord support chat-scoped `/approve [id]` and `/deny [id]`
+  fallbacks for approval buttons, with unique prefixes and safe disambiguation.
 
 - Lemon Bot for Mac has an optional desktop pet: an original pixel lemon that
   floats above all windows and Spaces, reacts to thinking, tool work, approvals

@@ -1,9 +1,10 @@
 defmodule LemonChannels.Adapters.Discord.Approval do
   @moduledoc "Account- and conversation-bound Discord approval controls, delivered through Outbox."
 
-  alias LemonChannels.{BindingResolver, RemoteApproval}
   alias LemonChannels.Adapters.Discord.StatusRenderer
+  alias LemonChannels.BindingResolver
   alias LemonChannels.Discord.KnownTargetStore
+  alias LemonChannels.RemoteApproval
   alias LemonCore.ChatScope
 
   def send(state, payload, opts \\ []) do
@@ -67,6 +68,13 @@ defmodule LemonChannels.Adapters.Discord.Approval do
 
       {:error, _} = error ->
         error
+    end
+  end
+
+  def text_authorizer(state, interaction) do
+    fn target ->
+      matches?(Map.put(interaction, :message, %{id: "1"}), target) and
+        authorized?(state, target, get(interaction, :guild_id))
     end
   end
 

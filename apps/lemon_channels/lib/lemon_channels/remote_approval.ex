@@ -7,8 +7,8 @@ defmodule LemonChannels.RemoteApproval do
   click time and Core atomically compares it before consuming the decision.
   """
 
-  alias LemonCore.Events.ApprovalPending
   alias LemonChannels.{OutboundPayload, Outbox, Supervision}
+  alias LemonCore.Events.ApprovalPending
 
   def request(payload, channel, account, authorize, opts \\ []) do
     protect(fn ->
@@ -44,6 +44,62 @@ defmodule LemonChannels.RemoteApproval do
         {:error, _} = error -> error
         _ -> {:error, :rejected}
       end
+    end)
+  end
+
+  @doc "Resolve a chat-scoped text selection through the exact button snapshot boundary."
+  def resolve_text(selector, decision, channel, account, authorize, opts \\ [])
+      when decision in [:approve_once, :deny] do
+    protect(fn ->
+      with {:ok, rows} <-
+             Keyword.get(opts, :list, &LemonCore.ExecApprovalStore.fetch_pending_list/0).() do
+        candidates =
+          Enum.filter(rows, fn {_id, pending} ->
+            with {:ok, target} <- target(pending, channel, account, opts),
+                 true <- authorize.(target) do
+              is_nil(pending.expires_at_ms) or pending.expires_at_ms > LemonCore.Clock.now_ms()
+            else
+              _ -> false
+            end
+          end)
+          |> Enum.sort_by(fn {id, pending} -> {pending.requested_at_ms || 0, id} end, :desc)
+
+        matches =
+          cond do
+            selector == "" ->
+              candidates
+
+            Enum.any?(candidates, fn {id, _} -> id == selector end) ->
+              Enum.filter(candidates, fn {id, _} -> id == selector end)
+
+            valid_id?(selector) ->
+              Enum.filter(candidates, fn {id, _} -> String.starts_with?(id, selector) end)
+
+            true ->
+              []
+          end
+
+        case matches do
+          [{_, pending}] ->
+            resolve(callback(pending, decision), channel, account, authorize, opts)
+
+          [] ->
+            {:error, :not_pending}
+
+          many ->
+            ids = Enum.map(many, fn {id, _} -> unique_prefix(id, candidates) end)
+            {:error, {:ambiguous, ids}}
+        end
+      end
+    end)
+  end
+
+  defp unique_prefix(id, candidates) do
+    Enum.find_value(min(8, byte_size(id))..byte_size(id), id, fn length ->
+      prefix = binary_part(id, 0, length)
+
+      if Enum.count(candidates, fn {other, _} -> String.starts_with?(other, prefix) end) == 1,
+        do: prefix
     end)
   end
 
