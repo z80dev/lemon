@@ -16,6 +16,8 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Native config-watcher crashes fall back to polling instead of shutting down
+  the core application and its dependants.
 - Execution admission validates supplied tool policies and intersects inherited
   restrictions instead of accepting malformed or authority-widening overrides.
   Root and delegated execution contexts bind identity, workspace, capabilities

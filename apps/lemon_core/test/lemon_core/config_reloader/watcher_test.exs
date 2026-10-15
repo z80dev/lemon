@@ -96,6 +96,32 @@ defmodule LemonCore.ConfigReloader.WatcherTest do
       assert Process.alive?(pid)
     end
 
+    test "native watcher exit preserves config reloader and polling", %{project_dir: cwd} do
+      pid = start_watcher!(cwd: cwd)
+
+      state =
+        :sys.replace_state(pid, fn state ->
+          watcher_pid =
+            state.watcher_pid ||
+              spawn_link(fn ->
+                receive do
+                  :stop -> :ok
+                end
+              end)
+
+          %{state | watcher_pid: watcher_pid, mode: :native}
+        end)
+
+      Process.exit(state.watcher_pid, :kill)
+
+      assert_eventually(fn ->
+        state = :sys.get_state(pid)
+        state.mode == :polling and is_nil(state.watcher_pid)
+      end)
+
+      assert Process.alive?(pid)
+    end
+
     test "registers with module name via start_link/1" do
       result =
         Watcher.start_link(debounce_ms: @short_debounce_ms, poll_interval_ms: @short_poll_ms)
