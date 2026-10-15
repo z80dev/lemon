@@ -49,18 +49,23 @@ defmodule CodingAgent.Extensions.ToolHooksSessionTest do
         test_pid = :erlang.list_to_pid(#{inspect(test_pid)})
 
         [
-          on_session_start: fn event -> send(test_pid, {:session_start, event}) end,
+          on_session_start: fn event ->
+            send(test_pid, {:session_start, event})
+            {:additional_context, "session start guidance"}
+          end,
           on_session_shutdown: fn event -> send(test_pid, {:session_shutdown, event}) end,
           on_tool_call: fn
             %{tool_name: "read", args: args} ->
-              {:replace_args, %{args | "path" => String.replace(args["path"], "requested", "redirected")}}
+              %{replace_args: %{args | "path" => String.replace(args["path"], "requested", "redirected")},
+                additional_context: "read call guidance"}
 
             %{tool_name: "write"} ->
-              {:block, "writes are frozen"}
+              %{block: "writes are frozen", additional_context: "blocked write guidance"}
 
             _ ->
               :ok
-          end
+          end,
+          on_tool_result: fn _ -> {:additional_context, "result guidance"} end
         ]
       end
     end
@@ -80,6 +85,14 @@ defmodule CodingAgent.Extensions.ToolHooksSessionTest do
         stop_reason: :tool_use
       )
 
+    stream = Mocks.mock_stream_fn([response, Mocks.assistant_message("done")])
+    parent = self()
+
+    stream_fn = fn model, context, options ->
+      send(parent, {:model_context, context})
+      stream.(model, context, options)
+    end
+
     session =
       start_supervised!(
         {Session,
@@ -87,7 +100,7 @@ defmodule CodingAgent.Extensions.ToolHooksSessionTest do
            cwd: tmp_dir,
            workspace_dir: Path.join(tmp_dir, "workspace"),
            model: Mocks.mock_model(),
-           stream_fn: Mocks.mock_stream_fn([response, Mocks.assistant_message("done")]),
+           stream_fn: stream_fn,
            settings_manager: %SettingsManager{
              extension_paths: [ext_dir],
              extension_auto_load_default_paths: false,
@@ -106,9 +119,41 @@ defmodule CodingAgent.Extensions.ToolHooksSessionTest do
     assert_received {:session_event, _, {:tool_execution_end, "r1", "read", read, false}}
     assert Enum.map_join(read.content, "", & &1.text) =~ "redirected contents"
 
+    assert Enum.map_join(read.content, "", & &1.text) =~
+             "[hook context]\nread call guidance\nresult guidance"
+
     assert_received {:session_event, _, {:tool_execution_end, "w1", "write", write, true}}
     assert Enum.map_join(write.content, "", & &1.text) =~ "writes are frozen"
+
+    assert Enum.map_join(write.content, "", & &1.text) =~
+             "[hook context]\nblocked write guidance"
+
     refute File.exists?(blocked_path)
+
+    assert_received {:model_context, %{messages: messages}}
+
+    assert Enum.any?(messages, fn
+             %LemonAi.Types.UserMessage{content: "[hook context]\nsession start guidance"} -> true
+             _ -> false
+           end)
+
+    assert_received {:model_context, %{messages: next_messages}}
+
+    assert Enum.any?(next_messages, fn
+             %LemonAi.Types.ToolResultMessage{tool_call_id: "r1", content: content} ->
+               Enum.map_join(content, "", & &1.text) =~
+                 "[hook context]\nread call guidance\nresult guidance"
+
+             _ ->
+               false
+           end)
+
+    state = Session.get_state(session)
+
+    assert Enum.any?(SessionManager.entries(state.session_manager), fn entry ->
+             entry.type == :custom_message and entry.custom_type == "hook_context" and
+               entry.content == "[hook context]\nsession start guidance"
+           end)
 
     stop_supervised!(Session)
     assert_receive {:session_shutdown, %{session_id: ^session_id, reason: :shutdown}}, 2_000

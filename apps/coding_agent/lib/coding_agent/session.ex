@@ -52,6 +52,7 @@ defmodule CodingAgent.Session do
   alias LemonCore.Introspection
   alias CodingAgent.AsyncFollowups
   alias CodingAgent.Extensions
+  alias CodingAgent.Extensions.AdditionalContext
   alias CodingAgent.Session.BackgroundTasks
   alias CodingAgent.Session.BranchState
   alias CodingAgent.Session.CompactionLifecycle
@@ -1527,13 +1528,28 @@ defmodule CodingAgent.Session do
   end
 
   def handle_info(:run_session_start_hooks, state) do
-    CodingAgent.Extensions.SessionHooks.session_start(state.hooks, %{
-      session_id: state.session_manager.header.id,
-      cwd: state.cwd,
-      session_scope: state.session_scope
-    })
+    context =
+      CodingAgent.Extensions.SessionHooks.session_start(state.hooks, %{
+        session_id: state.session_manager.header.id,
+        cwd: state.cwd,
+        session_scope: state.session_scope
+      })
 
-    {:noreply, state}
+    case context do
+      {:additional_context, text} ->
+        message = %CustomMessage{
+          custom_type: "hook_context",
+          content: AdditionalContext.block(text),
+          display: false,
+          timestamp: System.system_time(:millisecond)
+        }
+
+        :ok = LemonAgent.Agent.append_message(state.agent, message)
+        {:noreply, Persistence.persist_message(state, message)}
+
+      :ok ->
+        {:noreply, state}
+    end
   end
 
   def handle_info({:auto_compaction_result, signature, result}, state) do

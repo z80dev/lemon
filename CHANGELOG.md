@@ -10,6 +10,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Added
 
+- Extension tool-call, tool-result and session-start hooks can return bounded,
+  ordered `additional_context` for the model, including blocked tool calls,
+  without changing result trust, error status or mutation receipts.
+
 - Add default-on optional `i` tool intent in provider schemas, preserving original
   transcripts while keeping intent out of execution arguments and telemetry;
   show it in approval rationales and existing ACP tool-call titles.

@@ -22,6 +22,10 @@ defmodule CodingAgent.Extensions.ToolHooks do
     * `{:replace_args, map}` — the tool runs with `map` instead of the model's
       arguments. When several handlers replace arguments the last one wins;
       handlers all see the original arguments, not each other's revisions.
+    * `{:additional_context, text}` — appends model-visible context to the result.
+      A map `%{additional_context: text, replace_args: map}` can combine context
+      with argument replacement; `%{block: reason, additional_context: text}`
+      can attach context to a blocked call.
     * anything else — no effect.
 
   A handler that raises, throws or exits fails closed: the call is blocked with
@@ -39,13 +43,22 @@ defmodule CodingAgent.Extensions.ToolHooks do
   or nil details retain the original details. Anything else is a no-op and a
   failing handler keeps the original result.
 
+  Both hooks accept `{:additional_context, text}`. Valid UTF-8 texts are stripped
+  of unsafe controls, joined in registration order (call hooks before result
+  hooks), and capped at 4,000 characters total per tool call. A separate
+  `[hook context]` text block is appended after any result replacement, including
+  on blocked calls and structured error results, without changing trust, error
+  status or mutation receipts. A failing handler contributes no context.
+
   When the tool returns an error result, `{:error, reason}`, or raises, the
   handlers observe it with `is_error: true` and the original error behavior is
-  preserved (replacements are ignored, raises are re-raised).
+  preserved (replacements are ignored, raises are re-raised). Context cannot be
+  attached to non-result errors or exceptions without changing their contract.
   """
 
   require Logger
 
+  alias CodingAgent.Extensions.AdditionalContext
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonAi.Types.TextContent
 
@@ -127,11 +140,11 @@ defmodule CodingAgent.Extensions.ToolHooks do
       event = Map.merge(base_event, %{tool_call_id: tool_call_id, args: params})
 
       case run_call_hooks(call_hooks, event) do
-        {:block, reason} ->
-          blocked_result(tool.name, reason)
+        {:block, reason, context} ->
+          tool.name |> blocked_result(reason) |> AdditionalContext.append(context)
 
-        {:ok, args} ->
-          event = %{event | args: args}
+        {:ok, args, context} ->
+          event = event |> Map.put(:args, args) |> Map.put(:additional_context, context)
           execute(args, tool_call_id, signal, on_update, original_execute, result_hooks, event)
       end
     end
@@ -141,32 +154,35 @@ defmodule CodingAgent.Extensions.ToolHooks do
 
   # ── on_tool_call ──────────────────────────────────────────────────────────
 
-  defp run_call_hooks([], event), do: {:ok, event.args}
-
   defp run_call_hooks(hooks, event) do
-    Enum.reduce_while(hooks, {:ok, event.args}, fn hook, {:ok, args} ->
-      case invoke_call_hook(hook, event) do
-        {:block, reason} -> {:halt, {:block, reason}}
-        {:replace_args, new_args} -> {:cont, {:ok, new_args}}
-        :pass -> {:cont, {:ok, args}}
+    Enum.reduce_while(hooks, {:ok, event.args, ""}, fn hook, {:ok, args, context} ->
+      response = invoke_call_hook(hook, event)
+      context = AdditionalContext.collect(context, Map.get(response, :additional_context))
+
+      case response do
+        %{block: reason} -> {:halt, {:block, bound_reason(reason), context}}
+        %{replace_args: new_args} when is_map(new_args) -> {:cont, {:ok, new_args, context}}
+        _ -> {:cont, {:ok, args, context}}
       end
     end)
   end
 
   defp invoke_call_hook(hook, event) do
     case hook.(event) do
-      {:block, reason} -> {:block, bound_reason(reason)}
-      {:replace_args, args} when is_map(args) -> {:replace_args, args}
-      _other -> :pass
+      {:block, reason} -> %{block: reason}
+      {:replace_args, args} when is_map(args) -> %{replace_args: args}
+      {:additional_context, text} -> %{additional_context: text}
+      %{} = response when not is_struct(response) -> response
+      _other -> %{}
     end
   rescue
     exception ->
       log_failure(:on_tool_call, event.tool_name, :error, exception)
-      {:block, @failed_reason}
+      %{block: @failed_reason}
   catch
     kind, reason ->
       log_failure(:on_tool_call, event.tool_name, kind, reason)
-      {:block, @failed_reason}
+      %{block: @failed_reason}
   end
 
   defp bound_reason(reason) when is_binary(reason) do
@@ -209,8 +225,17 @@ defmodule CodingAgent.Extensions.ToolHooks do
 
   # ── execution + on_tool_result ────────────────────────────────────────────
 
-  defp execute(args, tool_call_id, signal, on_update, original_execute, [], _event) do
-    original_execute.(tool_call_id, args, signal, on_update)
+  defp execute(args, tool_call_id, signal, on_update, original_execute, [], event) do
+    case original_execute.(tool_call_id, args, signal, on_update) do
+      %AgentToolResult{} = result ->
+        AdditionalContext.append(result, event.additional_context)
+
+      {:ok, %AgentToolResult{} = result} ->
+        {:ok, AdditionalContext.append(result, event.additional_context)}
+
+      outcome ->
+        outcome
+    end
   end
 
   defp execute(args, tool_call_id, signal, on_update, original_execute, result_hooks, event) do
@@ -235,12 +260,10 @@ defmodule CodingAgent.Extensions.ToolHooks do
         {:ok, apply_result_hooks(result_hooks, event, result)}
 
       %AgentToolResult{} = result ->
-        observe_error(result_hooks, event, result)
-        outcome
+        apply_result_hooks(result_hooks, event, result)
 
       {:ok, %AgentToolResult{} = result} ->
-        observe_error(result_hooks, event, result)
-        outcome
+        {:ok, apply_result_hooks(result_hooks, event, result)}
 
       {:error, reason} ->
         observe_error(result_hooks, event, error_result(error_text(reason)))
@@ -258,25 +281,33 @@ defmodule CodingAgent.Extensions.ToolHooks do
   end
 
   defp apply_result_hooks(hooks, event, result) do
-    event = Map.merge(event, %{result: result, is_error: false})
+    {context, event} = Map.pop(event, :additional_context, "")
+    event = Map.merge(event, %{result: result, is_error: result.is_error})
 
-    hooks
-    |> Enum.reduce(nil, fn hook, override ->
-      case invoke_result_hook(hook, event) do
-        {:replace, replacement} -> replacement
-        :pass -> override
-      end
-    end)
-    |> apply_override(result)
+    {override, context} =
+      Enum.reduce(hooks, {nil, context}, fn hook, {override, context} ->
+        case invoke_result_hook(hook, event) do
+          {:replace, replacement} when not result.is_error -> {replacement, context}
+          {:additional_context, text} -> {override, AdditionalContext.collect(context, text)}
+          _ -> {override, context}
+        end
+      end)
+
+    override |> apply_override(result) |> AdditionalContext.append(context)
   end
 
   defp observe_error(hooks, event, result) do
-    event = Map.merge(event, %{result: result, is_error: true})
+    event =
+      event |> Map.delete(:additional_context) |> Map.merge(%{result: result, is_error: true})
+
     Enum.each(hooks, &invoke_result_hook(&1, event))
   end
 
   defp invoke_result_hook(hook, event) do
     case hook.(event) do
+      {:additional_context, text} ->
+        {:additional_context, text}
+
       {:replace, %AgentToolResult{content: content, details: details}} when is_list(content) ->
         {:replace, %{content: content, details: details}}
 
