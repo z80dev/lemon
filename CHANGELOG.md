@@ -63,6 +63,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Lemon Bot for iPhone keeps the composer and Send button above the keyboard,
+  follows the latest message as the viewport resizes, and uses Return for a newline
+  instead of submitting and dismissing the keyboard; transcript dragging dismisses it interactively.
 - Operator-owned omp approvals bind session-scoped grants to one omp invocation,
   preventing a grant from approving identical actions in another operator session.
 - New memory backdoor/exfiltration screening no longer invalidates retained facts
