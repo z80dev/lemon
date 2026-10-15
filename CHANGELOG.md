@@ -10,6 +10,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Added
 
+- Add default-on `[runtime.tools.bash] git_guard` checks for destructive Git
+  commands before all shell launch modes, with a verified task-isolation worktree
+  exemption and actionable refusal messages.
+
 - Opt in to a dedicated managed Chrome user-data directory and profile with
   `LEMON_BROWSER_USER_DATA_DIR` / `LEMON_BROWSER_PROFILE_DIRECTORY`, with
   default-directory and profile-lock safety checks and fail-closed identity binding.

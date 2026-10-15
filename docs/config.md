@@ -1591,6 +1591,26 @@ mode; `require_approval`, parent floors, and explicitly configured MCP approval
 requirements remain mandatory. An `on_tool_call` hook's revised arguments are
 used for approval resolution and the approval preview, not the original input.
 
+## Bash Destructive Git Guard
+
+```toml
+[runtime.tools.bash]
+git_guard = true # default; false disables destructive Git checks
+```
+
+The boolean guard refuses Git commands that discard uncommitted work, delete
+stashes/unmerged branches, or force shared history without a lease. Checks run on
+expanded commands before every bash launch mode; refusals identify the operation,
+risk and disable setting. `reset --soft`/`--merge`/`--keep`, staged-only restore,
+`push --force-with-lease` and ordinary branch checkout remain allowed.
+See [shell tools](tools/shell.md#destructive-git-guard) for blocked forms.
+
+Effective cwd inside a `task` isolation worktree is exempt only with a matching
+task-store workspace record and Git worktree backlinks. Directory names alone do
+not qualify. Git `-C` and the bash `cwd` option are respected; uncertain cwd,
+repository/environment redirection or unavailable ownership records disable the
+exemption. This guard is not a security sandbox for dynamic shell evaluation.
+
 ## Bash Dedicated-Tool Routing
 
 Opt in to shell interception in user or project `.lemon/config.toml`:
