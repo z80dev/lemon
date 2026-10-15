@@ -75,7 +75,9 @@ defmodule LemonOmp.LiveSmokeTest do
     assert {:ok, _} =
              LemonOmp.send_message(
                id,
-               "Run sleep 60 using bash now. Do not do anything else.",
+               "Call bash with command `sleep 60`, timeout 90 and async false. " <>
+                 "This is a finite foreground command, not a service: omit the name and ready fields entirely. " <>
+                 "Do not do anything else.",
                :steer
              )
 
@@ -203,6 +205,55 @@ defmodule LemonOmp.LiveSmokeTest do
 
     assert LemonOmp.Projection.combined_usage(wires)["totalTokens"] > 0
     for wire <- wires, do: assert({:ok, _} = LemonOmp.close(wire["id"]))
+  end
+
+  test "real omp isolates parallel workers and keeps their uncommitted files", ctx do
+    assert {_, 0} = System.cmd("git", ["-C", ctx.cwd, "add", "."])
+
+    assert {_, 0} =
+             System.cmd("git", [
+               "-C",
+               ctx.cwd,
+               "-c",
+               "user.name=Smoke",
+               "-c",
+               "user.email=smoke@example.invalid",
+               "commit",
+               "--quiet",
+               "-m",
+               "smoke base"
+             ])
+
+    tasks =
+      for name <- ["alpha", "beta"] do
+        %{
+          cwd: ctx.cwd,
+          isolate: true,
+          model: ctx.model,
+          thinking: "off",
+          approval_mode: "yolo",
+          prompt:
+            "Use the write tool to create #{name}.txt containing exactly #{name}. Do not commit. Then stop."
+        }
+      end
+
+    assert [{:ok, a}, {:ok, b}] = LemonOmp.start_many(tasks)
+    refute a["cwd"] == b["cwd"]
+    for wire <- [a, b], do: kill_on_exit(:sys.get_state(session_pid(wire["id"])).os_pid)
+    assert {:ok, wires, :settled} = LemonOmp.wait_many([a["id"], b["id"]], 240_000)
+
+    for {wire, name, other} <- [{hd(wires), "alpha", "beta"}, {List.last(wires), "beta", "alpha"}] do
+      assert wire["lastTurn"] == "completed"
+      assert File.read!(Path.join(wire["cwd"], "#{name}.txt")) == name
+      refute File.exists?(Path.join(wire["cwd"], "#{other}.txt"))
+      refute File.exists?(Path.join(ctx.cwd, "#{name}.txt"))
+      os_pid = :sys.get_state(session_pid(wire["id"])).os_pid
+      assert {:ok, ended} = LemonOmp.close(wire["id"])
+      assert ended["worktree"]["kept"] == true
+      assert ended["worktree"]["dirty"] > 0
+      assert File.dir?(ended["worktree"]["path"])
+      wait_until(fn -> not os_alive?(os_pid) end, 20_000)
+    end
   end
 
   defp await_approval(id, timeout) do

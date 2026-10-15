@@ -558,7 +558,7 @@ defmodule LemonOmp.ProjectionTest do
 
       assert Map.keys(wire) |> Enum.sort() ==
                Enum.sort(
-                 ~w(id ompSessionId title cwd model thinking approvalMode owner status lastTurn activity
+                 ~w(id ompSessionId title cwd worktree model thinking approvalMode owner status lastTurn activity
                  startedAt updatedAt endedAt turns toolCalls activeTools recentTools todos subagents
                  usage contextPercent lastText result error declinedPrompts pendingApprovals approvals exit)
                )

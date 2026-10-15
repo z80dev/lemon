@@ -21,6 +21,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Added
 
+- omp workers support opt-in per-worker Git worktree isolation through `isolate`
+  on starts and batch tasks, with managed branches, merge instructions, and
+  bounded cleanup that preserves uncommitted or committed work.
+
 - omp sessions can select an approval mode and bridge tool approval prompts to
   Lemon's conversation/channel approval UI or operator `exec.approval.resolve`.
   Snapshots and wait progress expose pending approvals and decision counts;
