@@ -261,9 +261,20 @@ invented. Legacy sessions derive their starting ledger from all stored assistant
 messages, including inactive branches.
 
 Limits are checked before a request and after reported usage, before another
-request or tool execution. Providers normally report usage only at the end:
-**one in-flight request can overshoot a positive cap**. These are stopping
-policies, not hard billing caps. Already-exhausted or zero caps prevent requests.
+request or tool execution. Before sending, Lemon projects the next request's
+input plus maximum output tokens and catalog cost against both run and session
+caps. Input uses the latest measured prompt size in the outgoing history, or
+roughly one token per four characters of the system prompt, messages and tool
+schemas. Output uses the request's `max_tokens`, or the model default. Cached
+input is conservatively priced as ordinary input; catalog long-context prices
+apply when the estimated input crosses their threshold.
+
+A request is refused when recorded usage plus its projection exceeds a cap;
+projections are not charged to the usage ledger. Unknown/zero model pricing
+leaves dollar projections unavailable (the existing warning still applies), but
+token projections still work. These estimates are stopping policies, not hard
+billing guarantees: tokenization, cache writes and concurrent children can still
+cause actual usage to exceed a cap. Already-exhausted or zero caps prevent requests.
 Tool calls requested by the response that exhausts a cap are recorded as rejected
 error results without executing their side effects. Increase the configured cap
 if you intentionally want to continue an exhausted session.

@@ -16,7 +16,12 @@ defmodule CodingAgent.Session.BudgetLedgerTest do
       model: "budget-test",
       stop_reason: :stop,
       timestamp: 1,
-      usage: %Usage{input: 6, output: 4, total_tokens: 10, cost: %Cost{total: 0.25}}
+      usage: %Usage{
+        input: 60_000,
+        output: 40_000,
+        total_tokens: 100_000,
+        cost: %Cost{total: 0.25}
+      }
     }
   end
 
@@ -124,10 +129,15 @@ defmodule CodingAgent.Session.BudgetLedgerTest do
     prompt(child)
     assert_receive :provider_called
     assert %{scope: :session, used: 0.25} = LemonAgent.BudgetScope.check(parent_scope)
-    assert Session.get_state(child).budget_usage == %{tokens: 10, cost_usd: 0.25}
+    assert Session.get_state(child).budget_usage == %{tokens: 100_000, cost_usd: 0.25}
     state = Session.get_state(parent)
     assert state.budget_usage == %{tokens: 0, cost_usd: 0.0}
-    assert BudgetLedger.restore_children(state.session_manager) == %{tokens: 10, cost_usd: 0.25}
+
+    assert BudgetLedger.restore_children(state.session_manager) == %{
+             tokens: 100_000,
+             cost_usd: 0.25
+           }
+
     path = state.session_file
     GenServer.stop(parent)
     resumed = start_session(dir, %{max_session_cost_usd: 0.25}, session_file: path)
@@ -157,33 +167,33 @@ defmodule CodingAgent.Session.BudgetLedgerTest do
     assert budget_stop?(prompt(blocked), :run, 0)
     refute_receive :provider_called
 
-    allowed = start_session(dir, %{max_run_tokens: 0}, budget_limits: %{max_run_tokens: 20})
+    allowed = start_session(dir, %{max_run_tokens: 0}, budget_limits: %{max_run_tokens: 200_000})
     refute budget_stop?(prompt(allowed), :run, 0)
     assert_receive :provider_called
-    assert Session.get_state(allowed).budget_usage.tokens == 10
+    assert Session.get_state(allowed).budget_usage.tokens == 100_000
   end
 
   test "run counters reset while session usage accumulates across prompts and durable resume", %{
     tmp_dir: dir
   } do
-    limits = %{max_run_tokens: 11, max_session_tokens: 20}
+    limits = %{max_run_tokens: 110_000, max_session_tokens: 200_000}
     session = start_session(dir, limits)
-    refute budget_stop?(prompt(session), :run, 10)
+    refute budget_stop?(prompt(session), :run, 100_000)
     assert_receive :provider_called
-    assert budget_stop?(prompt(session), :session, 20)
+    assert budget_stop?(prompt(session), :session, 200_000)
     assert_receive :provider_called
-    assert Session.get_state(session).budget_usage == %{tokens: 20, cost_usd: 0.5}
+    assert Session.get_state(session).budget_usage == %{tokens: 200_000, cost_usd: 0.5}
 
     path = Session.get_state(session).session_file
     GenServer.stop(session)
     resumed = start_session(dir, limits, session_file: path)
-    assert budget_stop?(prompt(resumed), :session, 20)
+    assert budget_stop?(prompt(resumed), :session, 200_000)
     refute_receive :provider_called
   end
 
   test "rewind and clear do not refund an exhausted session", %{tmp_dir: dir} do
-    session = start_session(dir, %{max_session_tokens: 10})
-    assert budget_stop?(prompt(session), :session, 10)
+    session = start_session(dir, %{max_session_tokens: 100_000})
+    assert budget_stop?(prompt(session), :session, 100_000)
     assert_receive :provider_called
     state = Session.get_state(session)
 
@@ -200,16 +210,16 @@ defmodule CodingAgent.Session.BudgetLedgerTest do
                confirmation_token: preview["confirmationToken"]
              )
 
-    assert budget_stop?(prompt(session), :session, 10)
+    assert budget_stop?(prompt(session), :session, 100_000)
     refute_receive :provider_called
 
     assert :ok = Session.reset(session)
     assert Session.get_messages(session) == []
-    assert budget_stop?(prompt(session), :session, 10)
+    assert budget_stop?(prompt(session), :session, 100_000)
     refute_receive :provider_called
     state = Session.get_state(session)
     assert {:ok, persisted} = SessionManager.load_from_file(state.session_manager.file_path)
-    assert BudgetLedger.restore(persisted) == %{tokens: 10, cost_usd: 0.25}
+    assert BudgetLedger.restore(persisted) == %{tokens: 100_000, cost_usd: 0.25}
   end
 
   test "legacy off-branch spend and compaction survive a branch-only fork", %{tmp_dir: dir} do
@@ -225,7 +235,7 @@ defmodule CodingAgent.Session.BudgetLedgerTest do
     source =
       SessionManager.append_message(source, MessageSerialization.serialize_message(message()))
 
-    assert BudgetLedger.restore(source) == %{tokens: 20, cost_usd: 0.5}
+    assert BudgetLedger.restore(source) == %{tokens: 200_000, cost_usd: 0.5}
 
     {source, usage} = BudgetLedger.initialize(source)
     {same, ^usage} = BudgetLedger.initialize(source)
@@ -238,8 +248,8 @@ defmodule CodingAgent.Session.BudgetLedgerTest do
     assert {:ok, fork} = SessionManager.load_from_file(destination)
     assert BudgetLedger.restore(fork) == usage
 
-    forked = start_session(dir, %{max_session_tokens: 20}, session_file: destination)
-    assert budget_stop?(prompt(forked), :session, 20)
+    forked = start_session(dir, %{max_session_tokens: 200_000}, session_file: destination)
+    assert budget_stop?(prompt(forked), :session, 200_000)
     refute_receive :provider_called
   end
 
@@ -267,12 +277,12 @@ defmodule CodingAgent.Session.BudgetLedgerTest do
     {manager, usage} = BudgetLedger.initialize(manager)
     state = %{session_manager: manager, budget_usage: usage, budget_limits: %{}}
     state = Persistence.persist_message(state, message())
-    assert state.budget_usage == %{tokens: 10, cost_usd: 0.25}
+    assert state.budget_usage == %{tokens: 100_000, cost_usd: 0.25}
     # Reset's agent-side snapshot may lag when counting is disabled; never refund.
     state = BudgetLedger.update(state, %{session_usage: %{tokens: 0, cost_usd: 0}})
-    assert state.budget_usage.tokens == 10
-    session = start_session(dir, %{max_session_tokens: 10}, session_file: manager.file_path)
-    assert budget_stop?(prompt(session), :session, 10)
+    assert state.budget_usage.tokens == 100_000
+    session = start_session(dir, %{max_session_tokens: 100_000}, session_file: manager.file_path)
+    assert budget_stop?(prompt(session), :session, 100_000)
     refute_receive :provider_called
   end
 end

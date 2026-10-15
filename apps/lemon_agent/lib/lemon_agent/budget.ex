@@ -4,9 +4,9 @@ defmodule LemonAgent.Budget do
 
   Tokens include input, output, cache reads and cache writes. Hourly cache writes
   are a subset of cache writes, not an additional charge. Costs are the provider's
-  catalog-estimated dollar totals, not billing invoices. Usage is normally reported
-  only at completion: an in-flight request can exceed a positive cap. Zero or
-  already-spent caps prevent starting requests; exhaustion prevents tools and retries.
+  catalog-estimated dollar totals, not billing invoices. Before each request, the
+  loop checks estimated prompt tokens and the maximum output against remaining
+  caps. Estimates are not billing guarantees. Exhaustion prevents tools and retries.
   Caps cover the prompt agent loop, its reported retry attempts and native task/
   swarm descendants, not separate compaction/project-memory maintenance calls.
   Descendant totals are enforcement-only; provider usage reports remain per-session.
@@ -124,16 +124,65 @@ defmodule LemonAgent.Budget do
     end
   end
 
-  @spec check(t() | nil) :: details() | nil
-  def check(nil), do: nil
+  @doc "Project a request using catalog prices and its maximum output."
+  def project(model, context, options) do
+    input =
+      Enum.reduce(context.messages, nil, fn message, previous ->
+        usage = field(message, :usage)
 
-  def check(state) do
+        if is_map(usage) do
+          count =
+            token_count(field(usage, :input)) + token_count(field(usage, :cache_read)) +
+              token_count(field(usage, :cache_write))
+
+          if count > 0, do: count, else: previous
+        else
+          previous
+        end
+      end) || div(characters(context) + 3, 4)
+
+    output = token_count(options.max_tokens || model.max_tokens)
+    cost = Map.get(model, :cost)
+
+    dollars =
+      if is_map(cost) do
+        LemonAi.calculate_cost(model, %LemonAi.Types.Usage{input: input, output: output}).total
+      else
+        0.0
+      end
+
+    %{tokens: input + output, cost_usd: dollars}
+  end
+
+  defp characters(value) when is_binary(value), do: String.length(value)
+  defp characters(value) when is_list(value), do: Enum.reduce(value, 0, &(characters(&1) + &2))
+
+  defp characters(value) when is_map(value) do
+    :maps.fold(
+      fn
+        :__struct__, _item, count -> count
+        key, item, count -> count + characters(key) + characters(item)
+      end,
+      0,
+      value
+    )
+  end
+
+  defp characters(_value), do: 0
+
+  @spec check(t() | nil, usage()) :: details() | nil
+  def check(state, projected \\ @zero)
+  def check(nil, _projected), do: nil
+
+  def check(state, projected) do
     Enum.find_value(@caps, fn {key, scope, metric} ->
       limit = Map.get(state.limits, key)
       usage = if scope == :run, do: state.run_usage, else: state.session_usage
       used = Map.fetch!(usage, metric)
 
-      if is_number(limit) and used >= limit do
+      projection = Map.fetch!(projected, metric)
+
+      if is_number(limit) and (used >= limit or used + projection > limit) do
         unit = if metric == :tokens, do: "tokens", else: "USD (catalog-estimated)"
 
         %{
@@ -146,6 +195,10 @@ defmodule LemonAgent.Budget do
           session_usage: state.session_usage,
           message:
             "The #{scope} usage budget is exhausted: #{used} of #{limit} #{unit}. " <>
+              if(used < limit,
+                do: "The next request is projected to exceed it (#{projection} #{unit}). ",
+                else: ""
+              ) <>
               "No further model requests or tools will run. Increase budgets.#{key} to continue."
         }
       end

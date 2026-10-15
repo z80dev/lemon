@@ -81,6 +81,16 @@ final class PetPackageTests: XCTestCase {
         XCTAssertThrowsError(try library.remove(lemon))
     }
 
+    func testBundledLemonIsCC0AndItsShareableZIPImports() throws {
+        let lemon = try XCTUnwrap(library.installedPets().first { $0.id == "lemon" && $0.isBuiltIn })
+        let files = try ["pet.json", "spritesheet.png", "LICENSE"].map { ($0, try Data(contentsOf: lemon.directory.appendingPathComponent($0))) }
+        XCTAssertTrue(String(decoding: files[2].1, as: UTF8.self).contains("SPDX-License-Identifier: CC0-1.0"))
+        // The gallery ZIP layout (root pet.json, sheet and LICENSE) imports; extra files are ignored.
+        let imported = try library.importPackage(zipData: zip(files, deflated: true))
+        XCTAssertEqual(imported.id, "lemon-imported")
+        XCTAssertEqual(try library.loadSprite(imported).version, .v2)
+    }
+
     func testImageMagicDimensionsVersionAndEmptyRowsAreRejected() throws {
         XCTAssertThrowsError(try PetPackage.sprite(manifest: PetPackage.manifest(manifest(), fallbackName: "test"), sheet: Data("not a PNG".utf8)))
         let v2Manifest = try PetPackage.manifest(manifest(version: 2), fallbackName: "test")
