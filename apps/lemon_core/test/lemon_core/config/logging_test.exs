@@ -5,6 +5,7 @@ defmodule LemonCore.Config.LoggingTest do
   use LemonCore.Testing.Case, async: false
 
   alias LemonCore.Config.Logging
+  alias LemonCore.Config.Validator
 
   setup do
     # Store original env vars to restore later
@@ -130,7 +131,7 @@ defmodule LemonCore.Config.LoggingTest do
     test "preserves unknown levels for validation" do
       config = Logging.resolve(%{"logging" => %{"level" => "unknown"}})
       assert config.level == "unknown"
-      assert [_error] = LemonCore.Config.Validator.validate_logging(config, [])
+      assert [_error] = Validator.validate_logging(config, [])
     end
 
     test "returns nil when level not set" do

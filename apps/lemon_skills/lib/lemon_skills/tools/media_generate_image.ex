@@ -7,14 +7,14 @@ defmodule LemonSkills.Tools.MediaGenerateImage do
   service-account credentials).
   """
 
+  alias LemonAgent.ModelRuntime.{Credentials, ProviderNames}
+  alias LemonAgent.ProviderConfigResolver
+  alias LemonAgent.Tools.AbortHelpers
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonAi.Types.TextContent
-  alias LemonAgent.Tools.AbortHelpers
-  alias LemonAgent.ModelRuntime.ProviderNames
   alias LemonCore.Config
-  alias LemonMedia.MediaJobSupervisor
   alias LemonMedia.MediaJobs
-  alias LemonAgent.ProviderConfigResolver
+  alias LemonMedia.MediaJobSupervisor
 
   @topic "media_jobs"
   @default_timeout_ms 5_000
@@ -361,9 +361,7 @@ defmodule LemonSkills.Tools.MediaGenerateImage do
   defp openai_api_key(%{api_key: key}) when is_binary(key) and key != "", do: {:ok, key}
 
   defp openai_api_key(%{provider_cfg: provider_cfg}) do
-    case LemonAgent.ModelRuntime.Credentials.resolve_provider_api_key(:openai, provider_cfg,
-           provider_cfg: true
-         ) do
+    case Credentials.resolve_provider_api_key(:openai, provider_cfg, provider_cfg: true) do
       key when is_binary(key) and key != "" -> {:ok, key}
       _ -> {:error, :missing_openai_image_api_key}
     end

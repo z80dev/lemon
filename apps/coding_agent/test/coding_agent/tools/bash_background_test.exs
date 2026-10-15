@@ -13,13 +13,21 @@ defmodule CodingAgent.Tools.BashBackgroundTest do
   end
 
   describe "timeout parameter" do
-    test "kills a command that outlives the model-supplied timeout", %{tmp_dir: tmp_dir} do
-      params = %{"command" => "sleep 5; echo done", "timeout" => 200}
-      result = Bash.execute("c1", params, nil, nil, tmp_dir, [])
+    test "detaches a command that outlives the model-supplied timeout", %{
+      tmp_dir: tmp_dir,
+      session_id: session_id
+    } do
+      params = %{"command" => "sleep 0.4; echo done", "timeout" => 200}
+      opts = [session_id: session_id, session_pid: self()]
+      result = Bash.execute("c1", params, nil, nil, tmp_dir, opts)
 
-      assert %AgentToolResult{is_error: true, content: [%TextContent{text: text}]} = result
+      assert %AgentToolResult{is_error: false, content: [%TextContent{text: text}]} = result
       assert text =~ "timed out after 200 ms"
-      refute text =~ "done"
+      assert result.details.background
+      assert result.details.timed_out
+      assert is_binary(result.details.process_id)
+      output = await_output(result.details.process_id, opts, &(&1 =~ "Status: completed"))
+      assert output =~ "done"
     end
 
     test "overrides the configured default timeout", %{tmp_dir: tmp_dir} do

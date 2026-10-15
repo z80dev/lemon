@@ -2,8 +2,8 @@ defmodule CodingAgent.Tools.PatchTest do
   use ExUnit.Case, async: true
 
   alias CodingAgent.Tools.Patch
-  alias LemonAgent.Types.AgentToolResult
   alias LemonAgent.AbortSignal
+  alias LemonAgent.Types.AgentToolResult
   alias LemonAi.Types.TextContent
 
   @moduletag :tmp_dir

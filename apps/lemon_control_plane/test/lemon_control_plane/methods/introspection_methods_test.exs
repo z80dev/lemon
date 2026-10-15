@@ -1,6 +1,11 @@
 defmodule LemonControlPlane.Methods.IntrospectionMethodsTest do
   use ExUnit.Case, async: false
 
+  alias CodingAgent.Tools.FeatureRequirements
+  alias CodingAgent.Tools.TodoStore
+  alias CodingAgent.Tools.TodoWrite
+  alias LemonAi.Types.{Model, ModelCost}
+
   alias LemonControlPlane.Methods.{
     ChatHistory,
     CronRuns,
@@ -13,7 +18,6 @@ defmodule LemonControlPlane.Methods.IntrospectionMethodsTest do
 
   alias LemonControlPlane.Protocol.Frames
   alias LemonCore.SessionKey
-  alias LemonAi.Types.{Model, ModelCost}
 
   defmodule IntrospectionFailureBackend do
     @behaviour LemonCore.Store.Backend
@@ -208,7 +212,7 @@ defmodule LemonControlPlane.Methods.IntrospectionMethodsTest do
     now = DateTime.utc_now() |> DateTime.to_iso8601()
 
     :ok =
-      CodingAgent.Tools.FeatureRequirements.save_requirements(
+      FeatureRequirements.save_requirements(
         %{
           project_name: "Control Plane Harness Projection",
           original_prompt: "Track long-running task progress",
@@ -276,7 +280,7 @@ defmodule LemonControlPlane.Methods.IntrospectionMethodsTest do
       )
 
     assert %LemonAgent.Types.AgentToolResult{} =
-             CodingAgent.Tools.TodoWrite.execute(
+             TodoWrite.execute(
                "todo",
                %{
                  "todos" => [
@@ -300,7 +304,7 @@ defmodule LemonControlPlane.Methods.IntrospectionMethodsTest do
       restore_router_bridge(old_router_bridge)
       restore_session_coordinator(old_session_coordinator)
       LemonCore.Store.delete(:runs, run_id)
-      CodingAgent.Tools.TodoStore.delete(native["sessionId"])
+      TodoStore.delete(native["sessionId"])
       LemonCore.ChatStateStore.delete(session_key)
       LemonCore.RunStore.delete_session(session_key)
       File.rm_rf!(CodingAgent.Config.sessions_dir(requirements_cwd))

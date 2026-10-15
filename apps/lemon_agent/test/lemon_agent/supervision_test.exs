@@ -1,10 +1,10 @@
 defmodule LemonAgent.SupervisionTest do
   use ExUnit.Case, async: false
 
-  alias LemonAgent.Loop
   alias LemonAgent.EventStream
-  alias LemonAgent.Types.{AgentContext, AgentLoopConfig}
+  alias LemonAgent.Loop
   alias LemonAgent.Test.Mocks
+  alias LemonAgent.Types.{AgentContext, AgentLoopConfig}
 
   alias LemonAi.Types.{StreamOptions, UserMessage}
 

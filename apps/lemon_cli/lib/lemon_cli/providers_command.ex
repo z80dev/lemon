@@ -240,10 +240,19 @@ defmodule LemonCli.ProvidersCommand do
     |> Enum.each(fn provider ->
       IO.puts(
         "#{provider["provider"]}: configured=#{provider["configured"] == true} " <>
-          "credential_ready=#{provider["credentialReady"] == true}"
+          "credential_ready=#{provider["credentialReady"] == true}; " <>
+          render_circuit(provider["circuit"])
       )
     end)
   end
+
+  defp render_circuit(%{"state" => "open"} = circuit) do
+    seconds = ceil(circuit["timeUntilRecoveryMs"] / 1000)
+    "circuit open (recovers in #{seconds}s, #{circuit["failureCount"]} failures)"
+  end
+
+  defp render_circuit(%{"state" => state}), do: "circuit #{state}"
+  defp render_circuit(_), do: "circuit unknown"
 
   defp render_configuration(result) do
     mode = if result["applied"], do: "applied", else: "preview"

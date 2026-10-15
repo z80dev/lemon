@@ -1,6 +1,7 @@
 defmodule LemonSkills.MigratorTest do
   use ExUnit.Case, async: false
 
+  alias LemonCore.Testing.HermeticEnv
   alias LemonSkills.{Config, Lockfile, Migrator}
 
   @moduletag :tmp_dir
@@ -140,7 +141,7 @@ defmodule LemonSkills.MigratorTest do
     empty_dir = Path.join(tmp_dir, "empty-skills")
     File.mkdir_p!(empty_dir)
 
-    LemonCore.Testing.HermeticEnv.with_restored_env(keys, fn ->
+    HermeticEnv.with_restored_env(keys, fn ->
       Enum.each(keys, &System.put_env(&1, empty_dir))
       assert {:ok, %{classified: 0, skipped: 0}} = Migrator.migrate()
     end)

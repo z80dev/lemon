@@ -10,6 +10,7 @@ defmodule LemonCore.BusRegistryFallbackTest do
   use ExUnit.Case, async: false
 
   alias LemonCore.{Bus, Event}
+  alias LemonCore.Events.RoutingFeedback
 
   setup do
     original = Application.get_env(:lemon_core, :bus_backend)
@@ -140,7 +141,7 @@ defmodule LemonCore.BusRegistryFallbackTest do
       Bus.subscribe(topic)
 
       payload =
-        LemonCore.Events.RoutingFeedback.new(%{
+        RoutingFeedback.new(%{
           fingerprint_key: "fp_registry_fallback",
           outcome: :success,
           duration_ms: 12

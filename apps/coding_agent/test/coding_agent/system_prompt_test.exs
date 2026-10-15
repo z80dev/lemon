@@ -2,6 +2,7 @@ defmodule CodingAgent.SystemPromptTest do
   use ExUnit.Case, async: false
 
   alias CodingAgent.SystemPrompt
+  alias LemonSkills.Tools.Remember
 
   @guided_tools ~w(ask checkpoint rewind fs_checkpoint ast_grep lsp debug omp)
 
@@ -322,7 +323,7 @@ defmodule CodingAgent.SystemPromptTest do
     refute File.exists?(user_path)
 
     remember =
-      LemonSkills.Tools.Remember.tool(tmp_dir,
+      Remember.tool(tmp_dir,
         workspace_dir: workspace_dir,
         session_scope: :main
       )

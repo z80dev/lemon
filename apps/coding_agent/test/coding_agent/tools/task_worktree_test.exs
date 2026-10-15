@@ -1,25 +1,7 @@
+Code.require_file("../../support/task_worktree_case.ex", __DIR__)
+
 defmodule CodingAgent.Tools.Task.WorktreeTest do
-  use ExUnit.Case, async: true
-
-  alias CodingAgent.Tools.Task.Worktree
-
-  @moduletag :tmp_dir
-
-  setup %{tmp_dir: tmp_dir} do
-    git = System.find_executable("git") || raise "Git is required for worktree tests"
-    repo = Path.join(tmp_dir, "repository")
-    File.mkdir_p!(Path.join(repo, "nested/project"))
-    git!(git, repo, ["init", "-q", "-b", "main"])
-    git!(git, repo, ["config", "user.name", "Worktree Test"])
-    git!(git, repo, ["config", "user.email", "worktree@example.invalid"])
-    repo = git!(git, repo, ["rev-parse", "--show-toplevel"])
-    File.write!(Path.join(repo, "tracked.txt"), "committed\n")
-    File.write!(Path.join(repo, "nested/project/source.ex"), "tracked source\n")
-    File.write!(Path.join(repo, ".gitignore"), ".env\n.lemon/\n")
-    git!(git, repo, ["add", "."])
-    git!(git, repo, ["-c", "core.hooksPath=/dev/null", "commit", "-qm", "Initial tree"])
-    %{git: git, repo: repo}
-  end
+  use CodingAgent.Tools.Task.WorktreeCase, async: true
 
   test "creates a retained branch and checkout from HEAD, without local state", context do
     %{git: git, repo: repo} = context
@@ -250,6 +232,10 @@ defmodule CodingAgent.Tools.Task.WorktreeTest do
     assert branch_exists?(git, repo, prepared.branch)
     refute File.exists?(Path.join(repo, "detached.txt"))
   end
+end
+
+defmodule CodingAgent.Tools.Task.WorktreePatchTest do
+  use CodingAgent.Tools.Task.WorktreeCase, async: true
 
   describe "patch merge mode" do
     test "replays the parent's tracked and untracked work into a baseline commit", context do
@@ -403,6 +389,10 @@ defmodule CodingAgent.Tools.Task.WorktreeTest do
       assert File.read!(Path.join(repo, "tracked.txt")) == "parent wip\n"
     end
   end
+end
+
+defmodule CodingAgent.Tools.Task.WorktreeBranchTest do
+  use CodingAgent.Tools.Task.WorktreeCase, async: true
 
   describe "branch merge mode" do
     test "commits child work on the kept branch without touching the parent", context do
@@ -443,84 +433,104 @@ defmodule CodingAgent.Tools.Task.WorktreeTest do
       assert git!(git, repo, ["log", "-1", "--format=%s", prepared.branch]) == "Own commit"
     end
   end
+end
 
-  for mode <- ["patch", "branch"],
-      state <- ["staged", "committed"],
-      change <- ["pin", "addition", "deletion", "replacement"] do
-    test "#{mode} retains #{state} gitlink #{change} and the parent's exact checkout", context do
-      %{git: git, repo: repo, tmp_dir: tmp_dir} = context
-      mode = unquote(mode)
-      state = unquote(state)
-      change = unquote(change)
-      %{new_pin: new_pin} = local_submodule(git, repo, tmp_dir)
+for {module, mode, state} <- [
+      {CodingAgent.Tools.Task.WorktreePatchStagedGitlinkTest, "patch", "staged"},
+      {CodingAgent.Tools.Task.WorktreePatchCommittedGitlinkTest, "patch", "committed"},
+      {CodingAgent.Tools.Task.WorktreeBranchStagedGitlinkTest, "branch", "staged"},
+      {CodingAgent.Tools.Task.WorktreeBranchCommittedGitlinkTest, "branch", "committed"}
+    ] do
+  defmodule module do
+    use CodingAgent.Tools.Task.WorktreeCase, async: true
+    @mode mode
+    @state state
 
-      File.write!(Path.join(repo, "tracked.txt"), "parent staged\n")
-      git!(git, repo, ["add", "tracked.txt"])
-      File.write!(Path.join(repo, "tracked.txt"), "parent unstaged\n")
-      File.write!(Path.join(repo, "private.txt"), "parent untracked\n")
-      vendor = Path.join(repo, "vendor")
-      File.write!(Path.join(vendor, "local.txt"), "parent vendor staged\n")
-      git!(git, vendor, ["add", "local.txt"])
-      File.write!(Path.join(vendor, "version.txt"), "parent vendor unstaged\n")
-      parent = checkout_snapshot(git, repo)
-      parent_vendor = checkout_snapshot(git, Path.join(repo, "vendor"))
-      id = "#{mode}-#{state}-#{change}"
-      assert {:ok, prepared} = Worktree.prepare(repo, id, mode)
-      # The child submodule is intentionally uninitialized. Only the index pin
-      # changes, so an ignore-submodules=all inventory cannot see this work.
-      refute File.exists?(Path.join(prepared.cwd, "vendor/.git"))
-      change_gitlink(git, prepared.cwd, change, new_pin)
+    for change <- ["pin", "addition", "deletion", "replacement"] do
+      test "#{@mode} retains #{@state} gitlink #{change} and the parent's exact checkout",
+           context do
+        %{git: git, repo: repo, tmp_dir: tmp_dir} = context
+        mode = @mode
+        state = @state
+        change = unquote(change)
+        %{new_pin: new_pin} = local_submodule(git, repo, tmp_dir)
 
-      if state == "committed" do
-        git!(git, prepared.cwd, [
-          "-c",
-          "core.hooksPath=/dev/null",
-          "commit",
-          "-qm",
-          "Child gitlink change"
-        ])
-      end
-
-      child_head = git!(git, prepared.cwd, ["rev-parse", "HEAD"])
-      child_tree = git!(git, prepared.cwd, ["write-tree"])
-      child_index = git!(git, prepared.cwd, ["ls-files", "--stage", "-z"])
-      merge = Worktree.finalize(prepared, repo, id, "Keep gitlink work")
-
-      assert %{mode: ^mode, status: "error"} = merge
-      assert File.dir?(prepared.worktree_path)
-      assert branch_exists?(git, repo, prepared.branch)
-      assert git!(git, prepared.cwd, ["symbolic-ref", "--short", "HEAD"]) == prepared.branch
-      assert git!(git, repo, ["rev-parse", prepared.branch]) == child_head
-      assert git!(git, prepared.cwd, ["write-tree"]) == child_tree
-      assert git!(git, prepared.cwd, ["ls-files", "--stage", "-z"]) == child_index
-      assert checkout_snapshot(git, repo) == parent
-      assert checkout_snapshot(git, Path.join(repo, "vendor")) == parent_vendor
-      assert File.read!(Path.join(repo, "tracked.txt")) == "parent unstaged\n"
-      assert File.read!(Path.join(repo, "private.txt")) == "parent untracked\n"
-      assert File.read!(Path.join(repo, "vendor/version.txt")) == "parent vendor unstaged\n"
-
-      if change == "pin" do
-        assert git!(git, prepared.cwd, ["rev-parse", ":vendor"]) == new_pin
+        File.write!(Path.join(repo, "tracked.txt"), "parent staged\n")
+        git!(git, repo, ["add", "tracked.txt"])
+        File.write!(Path.join(repo, "tracked.txt"), "parent unstaged\n")
+        File.write!(Path.join(repo, "private.txt"), "parent untracked\n")
+        vendor = Path.join(repo, "vendor")
+        File.write!(Path.join(vendor, "local.txt"), "parent vendor staged\n")
+        git!(git, vendor, ["add", "local.txt"])
+        File.write!(Path.join(vendor, "version.txt"), "parent vendor unstaged\n")
+        parent = checkout_snapshot(git, repo)
+        parent_vendor = checkout_snapshot(git, Path.join(repo, "vendor"))
+        id = "#{mode}-#{state}-#{change}"
+        assert {:ok, prepared} = Worktree.prepare(repo, id, mode)
+        # The child submodule is intentionally uninitialized. Only the index pin
+        # changes, so an ignore-submodules=all inventory cannot see this work.
+        refute File.exists?(Path.join(prepared.cwd, "vendor/.git"))
+        change_gitlink(git, prepared.cwd, change, new_pin)
 
         if state == "committed" do
-          assert git!(git, repo, ["rev-parse", "#{prepared.branch}:vendor"]) == new_pin
-        else
-          assert git!(git, prepared.cwd, [
-                   "diff",
-                   "--cached",
-                   "--name-only",
-                   "--ignore-submodules=none",
-                   "HEAD"
-                 ]) == "vendor"
+          git!(git, prepared.cwd, [
+            "-c",
+            "core.hooksPath=/dev/null",
+            "commit",
+            "-qm",
+            "Child gitlink change"
+          ])
+        end
+
+        child_head = git!(git, prepared.cwd, ["rev-parse", "HEAD"])
+        child_tree = git!(git, prepared.cwd, ["write-tree"])
+        child_index = git!(git, prepared.cwd, ["ls-files", "--stage", "-z"])
+        merge = Worktree.finalize(prepared, repo, id, "Keep gitlink work")
+
+        assert %{mode: ^mode, status: "error"} = merge
+        assert File.dir?(prepared.worktree_path)
+        assert branch_exists?(git, repo, prepared.branch)
+        assert git!(git, prepared.cwd, ["symbolic-ref", "--short", "HEAD"]) == prepared.branch
+        assert git!(git, repo, ["rev-parse", prepared.branch]) == child_head
+        assert git!(git, prepared.cwd, ["write-tree"]) == child_tree
+        assert git!(git, prepared.cwd, ["ls-files", "--stage", "-z"]) == child_index
+        assert checkout_snapshot(git, repo) == parent
+        assert checkout_snapshot(git, Path.join(repo, "vendor")) == parent_vendor
+        assert File.read!(Path.join(repo, "tracked.txt")) == "parent unstaged\n"
+        assert File.read!(Path.join(repo, "private.txt")) == "parent untracked\n"
+        assert File.read!(Path.join(repo, "vendor/version.txt")) == "parent vendor unstaged\n"
+
+        if change == "pin" do
+          assert git!(git, prepared.cwd, ["rev-parse", ":vendor"]) == new_pin
+
+          if state == "committed" do
+            assert git!(git, repo, ["rev-parse", "#{prepared.branch}:vendor"]) == new_pin
+          else
+            assert git!(git, prepared.cwd, [
+                     "diff",
+                     "--cached",
+                     "--name-only",
+                     "--ignore-submodules=none",
+                     "HEAD"
+                   ]) == "vendor"
+          end
         end
       end
     end
   end
+end
 
-  for mode <- ["patch", "branch"] do
-    test "#{mode} does not overwrite a staged pin with the initialized checkout's old pin",
+for {module, mode} <- [
+      {CodingAgent.Tools.Task.WorktreePatchSubmoduleTest, "patch"},
+      {CodingAgent.Tools.Task.WorktreeBranchSubmoduleTest, "branch"}
+    ] do
+  defmodule module do
+    use CodingAgent.Tools.Task.WorktreeCase, async: true
+    @mode mode
+
+    test "#{@mode} does not overwrite a staged pin with the initialized checkout's old pin",
          %{git: git, repo: repo, tmp_dir: tmp_dir} do
-      mode = unquote(mode)
+      mode = @mode
       %{source: source, new_pin: new_pin, old_pin: old_pin} = local_submodule(git, repo, tmp_dir)
       id = "#{mode}-initialized-pin"
       assert {:ok, prepared} = Worktree.prepare(repo, id, mode)
@@ -537,9 +547,9 @@ defmodule CodingAgent.Tools.Task.WorktreeTest do
       assert branch_exists?(git, repo, prepared.branch)
     end
 
-    test "#{mode} still cleans a genuinely empty child with an unchanged submodule",
+    test "#{@mode} still cleans a genuinely empty child with an unchanged submodule",
          %{git: git, repo: repo, tmp_dir: tmp_dir} do
-      mode = unquote(mode)
+      mode = @mode
       local_submodule(git, repo, tmp_dir)
       parent = checkout_snapshot(git, repo)
       id = "#{mode}-idle-vendor"
@@ -555,9 +565,9 @@ defmodule CodingAgent.Tools.Task.WorktreeTest do
     end
 
     for change <- ["moved", "dirty"] do
-      test "#{mode} retains an initialized submodule's unstaged #{change} checkout", context do
+      test "#{@mode} retains an initialized submodule's unstaged #{change} checkout", context do
         %{git: git, repo: repo, tmp_dir: tmp_dir} = context
-        mode = unquote(mode)
+        mode = @mode
         change = unquote(change)
         %{old_pin: old_pin, new_pin: new_pin} = local_submodule(git, repo, tmp_dir)
         ignore_all_in_gitmodules(git, repo)
@@ -605,9 +615,9 @@ defmodule CodingAgent.Tools.Task.WorktreeTest do
       end
     end
 
-    test "#{mode} still cleans an initialized but unchanged submodule checkout",
+    test "#{@mode} still cleans an initialized but unchanged submodule checkout",
          %{git: git, repo: repo, tmp_dir: tmp_dir} do
-      mode = unquote(mode)
+      mode = @mode
       local_submodule(git, repo, tmp_dir)
       ignore_all_in_gitmodules(git, repo)
       parent = checkout_snapshot(git, repo)
@@ -623,6 +633,10 @@ defmodule CodingAgent.Tools.Task.WorktreeTest do
       assert checkout_snapshot(git, repo) == parent
     end
   end
+end
+
+defmodule CodingAgent.Tools.Task.WorktreeReversedGitlinkTest do
+  use CodingAgent.Tools.Task.WorktreeCase, async: true
 
   test "branch retains a committed pin and its staged reversal to the original baseline",
        %{git: git, repo: repo, tmp_dir: tmp_dir} do
@@ -648,123 +662,5 @@ defmodule CodingAgent.Tools.Task.WorktreeTest do
     assert git!(git, repo, ["rev-parse", "#{prepared.branch}:vendor"]) == new_pin
     assert git!(git, prepared.cwd, ["write-tree"]) == tree
     assert git!(git, prepared.cwd, ["rev-parse", ":vendor"]) == old_pin
-  end
-
-  defp local_submodule(git, repo, tmp_dir) do
-    source = Path.join(tmp_dir, "vendor-source")
-    File.mkdir_p!(source)
-    git!(git, source, ["init", "-q", "-b", "main"])
-    git!(git, source, ["config", "user.name", "Worktree Test"])
-    git!(git, source, ["config", "user.email", "worktree@example.invalid"])
-    File.write!(Path.join(source, "version.txt"), "original\n")
-    git!(git, source, ["add", "."])
-    git!(git, source, ["-c", "core.hooksPath=/dev/null", "commit", "-qm", "Original vendor"])
-    old_pin = git!(git, source, ["rev-parse", "HEAD"])
-
-    git!(git, repo, [
-      "-c",
-      "protocol.file.allow=always",
-      "submodule",
-      "add",
-      "--",
-      source,
-      "vendor"
-    ])
-
-    git!(git, repo, ["-c", "core.hooksPath=/dev/null", "commit", "-qm", "Pin local vendor"])
-    # The explicit detector must override both repository and submodule filters.
-    git!(git, repo, ["config", "diff.ignoreSubmodules", "all"])
-    git!(git, repo, ["config", "submodule.vendor.ignore", "all"])
-    File.write!(Path.join(source, "version.txt"), "updated\n")
-    git!(git, source, ["add", "."])
-    git!(git, source, ["-c", "core.hooksPath=/dev/null", "commit", "-qm", "Update vendor"])
-    %{source: source, old_pin: old_pin, new_pin: git!(git, source, ["rev-parse", "HEAD"])}
-  end
-
-  # Committed `.gitmodules` filters are what `git add` honours for gitlinks.
-  defp ignore_all_in_gitmodules(git, repo) do
-    git!(git, repo, ["config", "--file", ".gitmodules", "submodule.vendor.ignore", "all"])
-    git!(git, repo, ["add", ".gitmodules"])
-    git!(git, repo, ["-c", "core.hooksPath=/dev/null", "commit", "-qm", "Ignore vendor checkout"])
-  end
-
-  defp init_child_submodule(git, cwd) do
-    git!(git, cwd, [
-      "-c",
-      "protocol.file.allow=always",
-      "submodule",
-      "update",
-      "--init",
-      "-q",
-      "--",
-      "vendor"
-    ])
-
-    Path.join(cwd, "vendor")
-  end
-
-  defp change_gitlink(git, cwd, "pin", pin),
-    do: git!(git, cwd, ["update-index", "--cacheinfo", "160000,#{pin},vendor"])
-
-  defp change_gitlink(git, cwd, "addition", pin) do
-    path = "new vendor\tpin"
-    File.mkdir_p!(Path.join(cwd, path))
-    git!(git, cwd, ["update-index", "--add", "--cacheinfo", "160000,#{pin},#{path}"])
-  end
-
-  defp change_gitlink(git, cwd, "deletion", _pin),
-    do: git!(git, cwd, ["rm", "-f", "--", "vendor"])
-
-  defp change_gitlink(git, cwd, "replacement", _pin) do
-    File.rm_rf!(Path.join(cwd, "vendor"))
-    File.write!(Path.join(cwd, "vendor"), "ordinary file replacing a gitlink\n")
-    git!(git, cwd, ["add", "--", "vendor"])
-  end
-
-  defp checkout_snapshot(git, cwd) do
-    %{
-      head: git!(git, cwd, ["rev-parse", "HEAD"]),
-      index: git!(git, cwd, ["write-tree"]),
-      staged:
-        git!(git, cwd, [
-          "diff",
-          "--cached",
-          "--binary",
-          "--no-ext-diff",
-          "--ignore-submodules=none",
-          "HEAD"
-        ]),
-      unstaged:
-        git!(git, cwd, [
-          "diff",
-          "--binary",
-          "--no-ext-diff",
-          "--ignore-submodules=none"
-        ]),
-      status: git!(git, cwd, ["status", "--porcelain=v1", "-z", "--ignore-submodules=none"])
-    }
-  end
-
-  # useConfigOnly stops Git from inventing an identity from the host name.
-  defp unset_identity(git, repo) do
-    git!(git, repo, ["config", "--unset", "user.name"])
-    git!(git, repo, ["config", "--unset", "user.email"])
-    git!(git, repo, ["config", "user.useConfigOnly", "true"])
-  end
-
-  defp branch_exists?(git, cwd, branch) do
-    {_output, status} =
-      System.cmd(git, ["show-ref", "--verify", "--quiet", "refs/heads/#{branch}"],
-        cd: cwd,
-        stderr_to_stdout: true
-      )
-
-    status == 0
-  end
-
-  defp git!(git, cwd, args) do
-    {output, status} = System.cmd(git, args, cd: cwd, stderr_to_stdout: true)
-    assert status == 0, "Git command failed: #{inspect(args)}: #{output}"
-    String.trim_trailing(output, "\n")
   end
 end

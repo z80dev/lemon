@@ -28,9 +28,15 @@ stdout = sys.stdout.buffer
 if "--listen" in sys.argv:
     listener = socket.socket()
     listener.bind(("127.0.0.1", int(sys.argv[sys.argv.index("--listen") + 1])))
-    listener.listen(1)
-    connection, _ = listener.accept()
-    listener.close()
+    listener.listen()
+    while True:
+        connection, _ = listener.accept()
+        subprocess.Popen(
+            [sys.executable, __file__, LOG_PATH, "--connection-fd", str(connection.fileno())],
+            pass_fds=(connection.fileno(),))
+        connection.close()
+elif "--connection-fd" in sys.argv:
+    connection = socket.socket(fileno=int(sys.argv[sys.argv.index("--connection-fd") + 1]))
     stdin = connection.makefile("rb")
     stdout = connection.makefile("wb")
 
@@ -157,7 +163,7 @@ def handle(request):
             "supportsReadMemoryRequest": "--no-capabilities" not in sys.argv,
             "supportsDisassembleRequest": "--no-capabilities" not in sys.argv,
         })
-    elif command == "launch":
+    elif command in ("launch", "attach"):
         state["mode"] = args.get("fakeMode", "normal")
         state["stop_on_entry"] = args.get("stopOnEntry", False)
         state["launch_seq"] = request
@@ -175,7 +181,10 @@ def handle(request):
             send({"type": "request", "command": "runInTerminal",
                   "arguments": {"kind": "integrated", "args": ["/bin/echo", "hi"], "cwd": "/"}})
             send({"type": "request", "command": "startDebugging",
-                  "arguments": {"request": "launch", "configuration": {}}})
+                  "arguments": {"request": args.get("childRequest", "launch"),
+                                "configuration": args.get("childConfiguration", {
+                                    "program": "child", "stopOnEntry": True,
+                                    "__pendingTargetId": "target-42"})}})
         if state["mode"] != "no_initialized":
             event("initialized")
     elif command == "setBreakpoints":

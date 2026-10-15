@@ -99,6 +99,12 @@ Use temporary workspaces, controlled providers and supervised process cleanup.
 Tests touching global extension caches/process stores/env run non-async and
 restore state. Globally named test recorders must not be linked to a dying test;
 use monitor-confirmed teardown rather than `whereis`/stop races.
+For async process-service tests, inject test-scoped service/store names and keep
+restart checks on those same scoped instances. Git tests use a repository under
+each test's `tmp_dir`, repository-local identity and command-local Git config
+environment; never change HOME or the BEAM cwd. ExUnit schedules modules, not
+individual tests, concurrently: split expensive independent feature groups into
+async modules with shared case helpers rather than one serial-internal long pole.
 Test user-visible output/details, policy refusal, cancellation, restart and
 cross-session access. See [bootstrap](../../docs/assistant_bootstrap_contract.md)
 and [parent questions](../../docs/subagent-parent-questions.md) for detailed contracts.

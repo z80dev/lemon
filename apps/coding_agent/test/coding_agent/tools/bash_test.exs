@@ -2,8 +2,9 @@ defmodule CodingAgent.Tools.BashTest do
   use ExUnit.Case, async: true
 
   alias CodingAgent.Tools.Bash
-  alias LemonAgent.Types.AgentToolResult
+  alias CodingAgent.Tools.Read
   alias LemonAgent.AbortSignal
+  alias LemonAgent.Types.AgentToolResult
   alias LemonAi.Types.TextContent
 
   import CodingAgent.AsyncHelpers
@@ -517,7 +518,7 @@ defmodule CodingAgent.Tools.BashTest do
       assert File.read!(path) == original
 
       assert %AgentToolResult{content: [%TextContent{text: read_text}]} =
-               CodingAgent.Tools.Read.execute(
+               Read.execute(
                  "artifact",
                  %{"path" => details.artifact_uri, "offset" => 1, "limit" => 1},
                  nil,
@@ -1036,6 +1037,8 @@ end
 defmodule CodingAgent.Tools.BashPtyFallbackTest do
   use ExUnit.Case, async: false
 
+  alias CodingAgent.Tools.Bash
+
   @moduletag :tmp_dir
 
   test "missing script reports terminal fallback before output", %{tmp_dir: cwd} do
@@ -1049,7 +1052,7 @@ defmodule CodingAgent.Tools.BashPtyFallbackTest do
     assert System.find_executable("script") == nil
 
     result =
-      CodingAgent.Tools.Bash.execute(
+      Bash.execute(
         "fallback",
         %{"command" => "printf 'command output\\n'", "pty" => true},
         nil,
@@ -1067,7 +1070,7 @@ defmodule CodingAgent.Tools.BashPtyFallbackTest do
     # Managed non-PTY execution needs the ordinary workload-ownership utilities.
     if original_path, do: System.put_env("PATH", original_path), else: System.delete_env("PATH")
 
-    result = CodingAgent.Tools.Bash.execute("plain", %{"command" => "true"}, nil, nil, cwd, [])
+    result = Bash.execute("plain", %{"command" => "true"}, nil, nil, cwd, [])
     refute result.details.pty_fallback
   end
 end

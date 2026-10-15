@@ -59,7 +59,7 @@ defmodule LemonAi.Providers.BedrockStreamTest do
 
   alias LemonAi.EventStream
   alias LemonAi.Providers.Bedrock
-  alias LemonAi.Types.{Context, Model, StreamOptions, Usage, Cost}
+  alias LemonAi.Types.{Context, Cost, Model, StreamOptions, Usage}
 
   @aws_env_vars [
     "AWS_ACCESS_KEY_ID",

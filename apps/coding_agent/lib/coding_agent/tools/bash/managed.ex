@@ -78,26 +78,35 @@ defmodule CodingAgent.Tools.Bash.Managed do
   end
 
   defp preview(snapshot, opts, offset) do
-    # Read only the bounded presentation head. The manager owns capture and the
-    # artifact before launch, so detaching never transfers a port or replays work.
-    output =
-      case open_preview(snapshot.full_output_path) do
-        {:ok, file} ->
+    # Keep reads bounded, but advance the streaming cursor through the whole
+    # captured artifact rather than stopping at the presentation head.
+    case open_preview(snapshot.full_output_path) do
+      {:ok, file} ->
+        try do
           data = IO.binread(file, 50_000)
+          output = if is_binary(data), do: BashExecutor.sanitize_output(data), else: ""
+          offset = stream_output(file, Keyword.get(opts, :on_chunk), offset)
+          {output, offset}
+        after
           File.close(file)
-          if is_binary(data), do: data, else: ""
+        end
 
-        _ ->
-          Enum.join(snapshot.lines, "\n")
-      end
+      _ ->
+        {Enum.join(snapshot.lines, "\n"), offset}
+    end
+  end
 
-    size = byte_size(output)
-    callback = Keyword.get(opts, :on_chunk)
+  defp stream_output(_file, nil, offset), do: offset
 
-    if callback && size > offset,
-      do: callback.(BashExecutor.sanitize_output(binary_part(output, offset, size - offset)))
+  defp stream_output(file, callback, offset) do
+    case :file.pread(file, offset, 50_000) do
+      {:ok, chunk} ->
+        callback.(BashExecutor.sanitize_output(chunk))
+        stream_output(file, callback, offset + byte_size(chunk))
 
-    {BashExecutor.sanitize_output(output), size}
+      _ ->
+        offset
+    end
   end
 
   defp open_preview(nil), do: {:error, :not_started}

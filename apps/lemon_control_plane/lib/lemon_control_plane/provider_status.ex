@@ -2,6 +2,7 @@ defmodule LemonControlPlane.ProviderStatus do
   @moduledoc false
 
   alias LemonAgent.ModelRuntime.ProviderNames
+  alias LemonAgent.ModelRuntime.ProviderStatus, as: RuntimeProviderStatus
   alias LemonCore.{Config, Secrets}
 
   # Presence only: never resolve OAuth (which can refresh over the network),
@@ -46,6 +47,7 @@ defmodule LemonControlPlane.ProviderStatus do
             "configured" => true,
             "credential" => credential,
             "default" => id == default,
+            "circuit" => RuntimeProviderStatus.circuit(id),
             "lastError" =>
               LemonAi.CallDispatcher.last_error(ProviderNames.canonical_name(id) || id)
           }

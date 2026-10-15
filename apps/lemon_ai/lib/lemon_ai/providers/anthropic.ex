@@ -31,8 +31,18 @@ defmodule LemonAi.Providers.Anthropic do
 
   @behaviour LemonAi.Provider
 
+  alias LemonAi.Auth.{AnthropicOAuth, KimiCodeOAuth}
   alias LemonAi.EventStream
-  alias LemonAi.Providers.{HttpTrace, OpenCodeGoSession, RetryHelper}
+  alias LemonAi.Models.Presets
+
+  alias LemonAi.Providers.{
+    HttpTrace,
+    OpenCodeGoSession,
+    RequestHeaders,
+    RetryHelper,
+    StreamingHelper
+  }
+
   import LemonAi.Providers.AssistantMessageHelper
 
   alias LemonAi.Types.{
@@ -67,7 +77,7 @@ defmodule LemonAi.Providers.Anthropic do
 
   @impl true
   def stream(%Model{} = model, %Context{} = context, %StreamOptions{} = opts) do
-    LemonAi.Providers.StreamingHelper.start_streaming(model, context, opts, &do_stream/4)
+    StreamingHelper.start_streaming(model, context, opts, &do_stream/4)
   end
 
   # ============================================================================
@@ -276,7 +286,7 @@ defmodule LemonAi.Providers.Anthropic do
     do: ["ANTHROPIC_API_KEY"]
 
   defp provider_env_vars(provider) when is_atom(provider),
-    do: LemonAi.Models.Presets.env_vars(provider)
+    do: Presets.env_vars(provider)
 
   # Other binary providers are user-configured custom endpoints: they only get
   # their own credential, never the ambient Anthropic key.
@@ -970,11 +980,11 @@ defmodule LemonAi.Providers.Anthropic do
     is_copilot = provider in @copilot_providers
 
     is_anthropic_oauth =
-      anthropic_oauth_provider?(provider) and LemonAi.Auth.AnthropicOAuth.oauth_token?(api_key)
+      anthropic_oauth_provider?(provider) and AnthropicOAuth.oauth_token?(api_key)
 
     # Kimi Code OAuth tokens authenticate as a bearer with the Kimi CLI fingerprint.
     is_kimi_oauth =
-      provider in @kimi_providers and LemonAi.Auth.KimiCodeOAuth.oauth_token?(api_key)
+      provider in @kimi_providers and KimiCodeOAuth.oauth_token?(api_key)
 
     auth_headers =
       cond do
@@ -990,7 +1000,7 @@ defmodule LemonAi.Providers.Anthropic do
 
     beta_features =
       if is_anthropic_oauth do
-        @common_beta_features ++ LemonAi.Auth.AnthropicOAuth.oauth_beta_features()
+        @common_beta_features ++ AnthropicOAuth.oauth_beta_features()
       else
         @common_beta_features
       end
@@ -1030,8 +1040,8 @@ defmodule LemonAi.Providers.Anthropic do
 
     oauth_headers =
       cond do
-        is_anthropic_oauth -> LemonAi.Auth.AnthropicOAuth.oauth_headers()
-        is_kimi_oauth -> LemonAi.Auth.KimiCodeOAuth.request_headers()
+        is_anthropic_oauth -> AnthropicOAuth.oauth_headers()
+        is_kimi_oauth -> KimiCodeOAuth.request_headers()
         true -> []
       end
 
@@ -1044,7 +1054,7 @@ defmodule LemonAi.Providers.Anthropic do
           opts.headers || %{}
         ],
         %{},
-        fn headers, acc -> LemonAi.Providers.RequestHeaders.merge(acc, headers) end
+        fn headers, acc -> RequestHeaders.merge(acc, headers) end
       )
 
     headers = Map.new(base_headers ++ auth_headers ++ copilot_headers ++ oauth_headers)
@@ -1604,7 +1614,7 @@ defmodule LemonAi.Providers.Anthropic do
   defp map_stop_reason(_), do: :stop
 
   defp anthropic_oauth_request?(provider, api_key) do
-    anthropic_oauth_provider?(provider) and LemonAi.Auth.AnthropicOAuth.oauth_token?(api_key)
+    anthropic_oauth_provider?(provider) and AnthropicOAuth.oauth_token?(api_key)
   end
 
   defp build_system_prompt(system_prompt, true, cache_control) do
