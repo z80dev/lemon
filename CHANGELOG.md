@@ -23,6 +23,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   admission and explicit completion, timeout, cancellation and process-down fences
   instead of racing short deadlines against shared session startup.
 
+- Preserve file-operation details from native assistant tool calls during
+  compaction, including patch additions, updates, deletions, and rename paths,
+  so subsequent summaries retain the affected files.
+
 ---
 
 ## [2026.10.12]
