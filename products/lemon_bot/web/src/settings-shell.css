@@ -1,0 +1,71 @@
+/* Settings shell: two-column pane browser on desktop, iOS-style grouped list on phones. */
+.settings-shell { display: grid; grid-template-columns: 260px minmax(0, 1fr); min-height: 100%; background: var(--canvas); color: var(--ink); }
+.settings-shell :where(.settings-pane-row, .settings-segments button, .settings-phone-account, .settings-phone-row, .settings-back) { min-height: 0; border: 0; border-radius: 0; background: transparent; padding: 0; font-weight: inherit; text-align: left; transition: background 180ms ease-out, color 180ms ease-out; }
+.settings-shell :is(.settings-pane-row, .settings-segments button, .settings-phone-account, .settings-phone-row, .settings-back):active:not(:disabled) { transform: none; }
+
+/* Left column */
+.settings-side { background: var(--sidebar); padding: 20px 10px 16px; display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.settings-account-head { display: flex; align-items: center; gap: 12px; padding: 4px 8px; }
+.settings-account-text { display: flex; flex-direction: column; min-width: 0; line-height: 1.3; }
+.settings-account-text strong { font-size: 14px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.settings-account-text small { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.settings-pane-list { display: flex; flex-direction: column; gap: 2px; }
+.settings-shell .settings-pane-row { display: flex; align-items: center; gap: 10px; width: 100%; padding: 7px 8px; border-radius: 10px; font-size: 14px; font-weight: 500; color: var(--ink); }
+.settings-shell .settings-pane-row:hover { background: var(--hover); }
+.settings-shell .settings-pane-row.selected { background: var(--selected); }
+.settings-tile { flex: none; display: inline-flex; align-items: center; justify-content: center; box-shadow: inset 0 0 0 1px rgb(0 0 0 / .06); }
+
+/* Right column */
+.settings-main { min-width: 0; background: var(--canvas); }
+.settings-pane { max-width: 760px; padding: 32px 40px 70px; margin: 0 auto; }
+.settings-pane-head h1 { font-size: 26px; font-weight: 700; line-height: 1.2; }
+.settings-pane-head p { margin: 4px 0 0; font-size: 14px; color: var(--muted); }
+.settings-segments { display: flex; gap: 2px; width: fit-content; max-width: 100%; margin-top: 18px; padding: 3px; border-radius: 999px; background: var(--fill); overflow-x: auto; scrollbar-width: none; }
+.settings-segments::-webkit-scrollbar { display: none; }
+.settings-shell .settings-segments button { flex: none; padding: 6px 14px; border-radius: 999px; font-size: 12px; font-weight: 500; color: var(--muted); white-space: nowrap; transition: background 260ms cubic-bezier(0.25, 1, 0.5, 1), color 180ms ease-out; }
+.settings-shell .settings-segments button:hover { color: var(--ink); }
+.settings-shell .settings-segments button.selected { background: var(--raised); color: var(--ink); box-shadow: var(--float-shadow); }
+.settings-content { margin-top: 24px; }
+
+/* Existing screens keep their own markup; neutralize their page chrome inside the shell. */
+.settings-shell .settings-content .page, .settings-shell .settings-content .settings-page { max-width: none; width: auto; margin: 0; padding: 0; }
+.settings-shell .settings-content .page-header { margin-bottom: 16px; }
+.settings-shell .settings-content .page-header h1 { font-size: 18px; font-weight: 600; }
+.settings-shell .settings-content .page-header .eyebrow { display: none; }
+
+/* Phone-only chrome stays hidden on desktop. */
+.settings-phone-index, .settings-phone-bar { display: none; }
+.settings-done { border: 0; border-radius: 999px; background: var(--raised); color: var(--ink); box-shadow: var(--float-shadow); padding: 8px 16px; min-height: 0; font-size: 16px; font-weight: 600; }
+
+@media (max-width: 760px) {
+  .settings-shell { display: block; }
+  .settings-side { display: none; }
+  .settings-pane { padding: 4px 16px calc(50px + env(safe-area-inset-bottom)); }
+  .settings-pane-head { display: none; }
+  .settings-segments { margin-top: 8px; }
+  .settings-content { margin-top: 16px; }
+
+  /* Index: grouped list only. */
+  .settings-shell.is-index .settings-main { display: none; }
+  .settings-shell.is-index .settings-phone-index { display: block; padding: 8px 16px calc(32px + env(safe-area-inset-bottom)); }
+  .settings-phone-top { display: flex; justify-content: flex-end; padding-top: env(safe-area-inset-top); }
+  .settings-phone-title { font-size: 34px; font-weight: 700; margin: 4px 4px 16px; }
+  .settings-shell .settings-phone-account { display: flex; align-items: center; gap: 14px; width: 100%; padding: 12px 16px; border-radius: 16px; background: var(--raised); color: var(--faint); }
+  .settings-phone-account .settings-account-text { flex: 1; }
+  .settings-phone-account .settings-account-text strong { font-size: 16px; color: var(--ink); }
+  .settings-phone-account .settings-account-text small { font-size: 13px; }
+  .settings-phone-group { margin-top: 28px; border-radius: 16px; background: var(--raised); overflow: hidden; }
+  .settings-shell .settings-phone-row { position: relative; display: flex; align-items: center; gap: 14px; width: 100%; padding: 12px 16px; color: var(--faint); }
+  .settings-shell .settings-phone-row:hover { background: var(--hover); }
+  .settings-phone-row + .settings-phone-row::before { content: ''; position: absolute; top: 0; left: 60px; right: 0; height: 1px; background: var(--separator); }
+  .settings-phone-label { flex: 1; font-size: 16px; color: var(--ink); }
+
+  /* Pane: back bar + content. */
+  .settings-shell.is-pane .settings-phone-bar { position: sticky; top: 0; z-index: 2; display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; padding: 6px 8px; background: var(--canvas); border-bottom: 1px solid var(--separator); }
+  .settings-phone-bar strong { font-size: 16px; font-weight: 600; }
+  .settings-shell .settings-back { display: inline-flex; align-items: center; justify-self: start; gap: 2px; padding: 8px 8px 8px 2px; border-radius: 999px; font-size: 16px; color: var(--accent); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .settings-shell :is(.settings-pane-row, .settings-segments button, .settings-phone-account, .settings-phone-row, .settings-back) { transition: none; }
+}

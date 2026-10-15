@@ -11,9 +11,8 @@ import { InboxScreen } from './inbox';
 import { AccountCleanupScreen } from './cleanup';
 import './settings.css';
 
-const titles: Record<string, string> = { 'settings.account': 'Account', 'settings.workspace': 'Workspace', 'settings.notifications': 'Notifications', 'settings.voice': 'Voice', 'settings.policies': 'Policies & permissions', 'settings.usage': 'Usage', 'settings.about': 'About & diagnostics', 'settings.account-cleanup': 'Account cleanup', inbox: 'Inbox' };
 export function SettingsScreen({ route }: { route: Route }) {
-  const { navigate, snapshot } = useApp();
+  const { snapshot } = useApp();
   let content;
   switch (route.screen) {
     case 'settings.workspace': content = <WorkspaceSettings />; break;
@@ -25,7 +24,7 @@ export function SettingsScreen({ route }: { route: Route }) {
     case 'settings.about': content = <AboutSettings />; break;
     case 'inbox': content = <InboxScreen />; break;
     case 'settings.account': content = <AccountSettings />; break;
-    default: content = <section className="panel"><h2>Settings page not found</h2><p>Select a destination below.</p></section>;
+    default: content = <section className="panel"><h2>Settings page not found</h2><p>Select a section from the settings list.</p></section>;
   }
-  return <main className="page settings-page"><PageHeader title={titles[route.screen] ?? 'Settings'} eyebrow={snapshot.workspace.name} /><nav className="tabs settings-tabs" aria-label="Settings pages">{Object.entries(titles).filter(([screen]) => screen !== 'settings.account-cleanup' || snapshot.workspace.ownerUserId === snapshot.user.id).map(([screen, title]) => <button type="button" key={screen} className={route.screen === screen ? 'selected' : ''} aria-current={route.screen === screen ? 'page' : undefined} onClick={() => navigate({ screen })}>{title}</button>)}</nav>{content}</main>;
+  return <main className="page settings-page">{route.screen === 'inbox' && <PageHeader title="Inbox" eyebrow={snapshot.workspace.name} />}{content}</main>;
 }

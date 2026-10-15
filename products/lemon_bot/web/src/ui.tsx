@@ -49,7 +49,7 @@ export function ErrorNotice({ error }: { error: unknown }) {
   return <div className="error-notice" role="alert"><strong>{known && error.outcomeUnknown ? 'Outcome not confirmed' : 'Could not complete this request'}</strong><p>{error instanceof Error ? error.message : 'The service did not return a usable result.'}</p>{known && <><p className="small">{error.code.replaceAll('_', ' ')} · {error.requestId || 'No server request ID'}</p>{error.requestId && <button onClick={() => void navigator.clipboard.writeText(error.requestId)}>Copy request ID</button>}{error.outcomeUnknown && <><p>Work may already have started. Keep this intent and check its resource or run before sending again. Nothing is automatically replayed.</p>{error.clientNonce && <p className="small">Intent nonce: <code>{error.clientNonce}</code></p>}{error.resourceIds.length > 0 && <p className="small">Reserved resources: {error.resourceIds.join(', ')}</p>}</>}{error.code === 'revision_conflict' && <p>The resource changed on another device. Reload before editing.{error.currentRevision && ` Current server revision: ${error.currentRevision}.`}</p>}</>}</div>;
 }
 export function Loading() { return <div className="loading" role="status"><span className="loading-dot"/> Connecting to your workspace…</div>; }
-export function EmptyState({ title, children, action }: { title: string; children?: ReactNode; action?: ReactNode }) { return <div className="empty-state"><span className="empty-mark" aria-hidden="true">◒</span><h2>{title}</h2>{children && <div className="muted">{children}</div>}{action}</div>; }
+export function EmptyState({ title, children, action }: { title: string; children?: ReactNode; action?: ReactNode }) { return <div className="empty-state"><LemonMark size={76}/><h2>{title}</h2>{children && <div className="muted">{children}</div>}{action}</div>; }
 export function PageHeader({ title, eyebrow, children }: { title: string; eyebrow?: string; children?: ReactNode }) { return <header className="page-header"><div>{eyebrow && <div className="eyebrow">{eyebrow}</div>}<h1>{title}</h1></div><div className="row">{children}</div></header>; }
 export function Badge({ children, tone = 'muted' }: { children: ReactNode; tone?: 'good' | 'warning' | 'danger' | 'muted' }) { return <span className={`badge ${tone}`}>{children}</span>; }
 export function Field({ label, children, hint }: { label: string; children: ReactNode; hint?: string }) { return <label className="field"><span>{label}</span>{children}{hint && <small>{hint}</small>}</label>; }
@@ -68,9 +68,60 @@ export function ConfirmDialog({ confirmation, title, onConfirm, onCancel, disabl
   const focus = useRef<HTMLInputElement>(null); useEffect(() => { const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null; focus.current?.focus(); return () => { if (previous?.isConnected) previous.focus(); }; }, []);
   return <div className="modal-backdrop" onKeyDown={event => { trapDialogFocus(event); if (event.key === 'Escape' && !action.busy) onCancel(); }}><section className="modal stack" role="dialog" aria-modal="true" aria-labelledby="confirm-title"><h2 id="confirm-title">{title}</h2><p>This preview is bound to the exact resources and revision below. Host files, independent memory, provider sessions and backups are retained only as disclosed here.</p><ul>{confirmation.effects.map((effect, i) => <li key={i}>{effect}</li>)}</ul><div className="scope-effects">{confirmation.affected.map((effect, i) => <div key={i}><Badge>{effect.operation}</Badge> <strong>{effect.resourceType} · {effect.id}</strong><p>{effect.explanation}{effect.machineId && ` · Machine ${effect.machineId}`}</p></div>)}</div><Field label={`Type “${confirmation.confirmName}” to confirm`}><input ref={focus} value={name} autoComplete="off" onChange={event => setName(event.target.value)} /></Field><p className="small muted">{expired ? 'Preview expired. Cancel and request a new preview.' : `Expires ${formatTime(confirmation.expiresAtMs)} · revision ${confirmation.revision}`}</p><ErrorNotice error={action.error}/><div className="row"><button onClick={onCancel} disabled={action.busy}>Cancel</button><button className="danger" disabled={disabled || action.busy || expired || name !== confirmation.confirmName || !navigator.onLine} onClick={() => void action.run(() => onConfirm({ revision: confirmation.revision, confirmationToken: confirmation.confirmationToken, confirmName: name }))}>{action.busy ? 'Confirming…' : 'Confirm exact scope'}</button></div></section></div>;
 }
-export function BotAvatar({ bot, size = 40 }: { bot: Bot; size?: number }) {
-  const colors: Record<string, string> = { yellow: '#e6cc64', green: '#a9c8a0', blue: '#a9c7e4', pink: '#dbb3c2', purple: '#c1b8dc', orange: '#e4b68e' };
-  return <span className="avatar" style={{ width: size, height: size, background: colors[bot.avatar.color] || '#e6cc64', borderRadius: bot.avatar.shape === 'square' ? '28%' : '50%' }} aria-label={`${bot.name} avatar`}>{bot.avatar.kind === 'image' && bot.avatar.attachmentId ? <AvatarImage attachmentId={bot.avatar.attachmentId} name={bot.name}/> : <span aria-hidden="true" className="avatar-face">··<i/></span>}</span>;
+/** Per-Bot palette shared by every client (design system §1). `avatar` fills the mascot; `tint` is the user bubble, send button and header dot; `onTint` is text on `tint`. */
+export interface BotPalette { avatar: string; tint: string; onTint: string }
+const botPalettes: Record<string, BotPalette> = {
+  yellow: { avatar: '#EDD56C', tint: '#E6CC5A', onTint: '#2E3420' },
+  green: { avatar: '#A3CA98', tint: '#4F7D55', onTint: '#FFFFFF' },
+  blue: { avatar: '#A0C4EA', tint: '#3F6FA3', onTint: '#FFFFFF' },
+  pink: { avatar: '#E3AEC3', tint: '#A2557A', onTint: '#FFFFFF' },
+  purple: { avatar: '#BDB2E3', tint: '#6A5CA8', onTint: '#FFFFFF' },
+  orange: { avatar: '#EBB487', tint: '#B0643A', onTint: '#FFFFFF' },
+  red: { avatar: '#E6A79F', tint: '#A7473F', onTint: '#FFFFFF' },
+};
+export function botPalette(bot: Pick<Bot, 'avatar'> | undefined): BotPalette { return (bot && botPalettes[bot.avatar.color]) || botPalettes.yellow; }
+/** CSS custom properties carrying a Bot's palette, for bubbles, send button and dots. */
+export function botStyle(bot: Pick<Bot, 'avatar'> | undefined): Record<string, string> { const palette = botPalette(bot); return { '--bot-avatar': palette.avatar, '--bot-tint': palette.tint, '--bot-on-tint': palette.onTint }; }
+/** The mascot body: a soft lemon rotated −24° and fitted to the 100×100 box (design system §4). */
+export const lemonBlobPath = 'M0.83 71.82 C1.00 67.93 2.87 60.73 5.22 54.60 C2.70 29.01 11.75 12.25 29.78 4.20 C48.86 -4.32 67.38 0.13 82.74 17.43 C88.88 19.78 95.48 23.19 98.97 26.72 C99.80 31.44 97.87 39.93 96.06 45.83 C99.11 71.17 88.52 87.34 69.44 95.87 C50.35 104.39 31.83 99.94 15.53 80.52 C9.92 77.93 3.79 75.59 0.83 71.82 Z';
+const blobMask = `url("data:image/svg+xml,${encodeURIComponent(`<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><path d='${lemonBlobPath}'/></svg>`)}")`;
+/** The Lemon mascot: soft lemon blob with a wonky face. Vector at every size; the smile hides below 18px. */
+export function LemonFace({ color = botPalettes.yellow.avatar, size = 40, className, face = true }: { color?: string; size?: number; className?: string; face?: boolean }) {
+  return <svg className={`lemon-face ${className || ''}`} width={size} height={size} viewBox="0 0 100 100" aria-hidden="true" focusable="false">
+    <defs><radialGradient id="lemon-hl" cx="30%" cy="22%" r="55%"><stop offset="0" stopColor="#fff" stopOpacity=".32"/><stop offset="1" stopColor="#fff" stopOpacity="0"/></radialGradient></defs>
+    <path d={lemonBlobPath} fill={color}/>
+    <path d={lemonBlobPath} fill="url(#lemon-hl)"/>
+    <path d={lemonBlobPath} fill="none" stroke="#000" strokeOpacity=".06" strokeWidth={Math.max(1.2, 50 / size)}/>
+    {face && <>
+      <ellipse cx="47" cy="42" rx="4.2" ry="7" transform="rotate(10.3 47 42)" fill="#27301F" fillOpacity=".88"/>
+      <ellipse cx="63" cy="38.5" rx="4.8" ry="8.2" transform="rotate(6.9 63 38.5)" fill="#27301F" fillOpacity=".88"/>
+      {size >= 18 && <path d="M49 58.5 Q58.5 66 66.5 55.5" fill="none" stroke="#27301F" strokeOpacity=".88" strokeWidth="4.5" strokeLinecap="round"/>}
+    </>}
+  </svg>;
+}
+/** Brand mark: the mascot in lemon plus a leaf at the top-right. */
+export function LemonMark({ size = 30 }: { size?: number }) {
+  return <span className="brand-mark" style={{ width: size, height: size }} aria-hidden="true"><LemonFace color="#E9D474" size={size}/><svg className="brand-leaf" viewBox="0 0 100 100" width={size} height={size}><ellipse cx="80" cy="14" rx="15" ry="9" transform="rotate(-28 80 14)" fill="#6E9A5B"/></svg></span>;
+}
+const presenceLabels: Record<string, string> = { idle: 'Idle', working: 'Working', making: 'Working', needs_input: 'Needs you', offline: 'Offline' };
+export function presenceLabel(status: Bot['activity']): string { return presenceLabels[status] || status.replaceAll('_', ' '); }
+/** Bot avatar with optional presence (bottom-right, hidden for idle) and unread (top-right) badges. */
+export function BotAvatar({ bot, size = 40, presence = false, unread = false }: { bot: Bot; size?: number; presence?: boolean; unread?: boolean }) {
+  const palette = botPalette(bot);
+  const dot = Math.max(8, size * 0.24), unreadDot = Math.max(9, size * 0.2), ring = Math.max(2, size * 0.05);
+  const body = bot.avatar.kind === 'image' && bot.avatar.attachmentId
+    ? <span className="avatar-image" style={{ width: size, height: size, background: palette.avatar, WebkitMaskImage: blobMask, maskImage: blobMask }}><AvatarImage attachmentId={bot.avatar.attachmentId} name={bot.name}/></span>
+    : <LemonFace color={palette.avatar} size={size}/>;
+  return <span className="avatar" role="img" style={{ width: size, height: size }} aria-label={`${bot.name}${presence && bot.activity !== 'idle' ? `, ${presenceLabel(bot.activity)}` : ''}${unread ? ', unread' : ''}`}>
+    {body}
+    {presence && bot.activity !== 'idle' && <span className={`presence-badge ${bot.activity}`} style={{ width: dot, height: dot, borderWidth: ring }}/>}
+    {unread && <span className="unread-badge" style={{ width: unreadDot, height: unreadDot, borderWidth: ring }}/>}
+  </span>;
+}
+/** Account avatar: lemon circle with 1–2 initials. */
+export function AccountAvatar({ name, size = 34 }: { name: string; size?: number }) {
+  const initials = name.split(/\s+/).filter(Boolean).slice(0, 2).map(part => part[0]).join('').toUpperCase() || '?';
+  return <span className="account-avatar" style={{ width: size, height: size, fontSize: size * 0.4 }} aria-hidden="true">{initials}</span>;
 }
 function AvatarImage({ attachmentId, name }: { attachmentId: string; name: string }) {
   const { client } = useApp();
