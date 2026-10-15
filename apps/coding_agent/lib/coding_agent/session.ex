@@ -1126,6 +1126,21 @@ defmodule CodingAgent.Session do
     {:reply, {:ok, CodingAgent.Session.Rewind.tree(state.session_manager, opts)}, state}
   end
 
+  def handle_call({:context_checkpoint, operation, id, value}, _from, state) do
+    case CodingAgent.Session.ContextCheckpoint.request(
+           state.session_manager,
+           operation,
+           id,
+           value
+         ) do
+      {:ok, details, manager} ->
+        {:reply, {:ok, details}, %{state | session_manager: manager}}
+
+      {:error, _} = error ->
+        {:reply, error, state}
+    end
+  end
+
   def handle_call({:rewind, _entry_id, _opts}, _from, %{is_streaming: true} = state),
     do: {:reply, {:error, :busy}, state}
 

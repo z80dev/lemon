@@ -114,6 +114,31 @@ defmodule CodingAgent.Session.Rewind do
     }
   end
 
+  @doc """
+  Collapse model-owned exploration at an active branch boundary. Unlike operator
+  rewind this never restores files and does not require user confirmation.
+  The caller binds the boundary to its single-use checkpoint.
+  """
+  def collapse_context(session, boundary, report, details, retained_messages) do
+    if Enum.any?(SessionManager.get_branch(session), &(&1.id == boundary)) do
+      from = session.leaf_id
+
+      summary =
+        "Checkpoint complete. Continue from these findings; do not rewind again.\n\n" <> report
+
+      manager =
+        session
+        |> SessionManager.set_leaf_id(boundary)
+        |> SessionManager.append_entry(
+          SessionManager.SessionEntry.branch_summary(from, summary, details: details)
+        )
+
+      {:ok, Enum.reduce(retained_messages, manager, &SessionManager.append_message(&2, &1))}
+    else
+      {:error, :checkpoint_not_on_active_branch}
+    end
+  end
+
   def run(session, entry_id, opts \\ []) do
     if Keyword.get(opts, :allow_partial_restore, false) and
          not Keyword.get(opts, :restore_files, false) do

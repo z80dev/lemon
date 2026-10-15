@@ -8,6 +8,11 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
+- Opt-in model `checkpoint(goal)` / `rewind(report)` retain exploration findings
+  as branch context without restoring files or prompting for confirmation.
+  Enable `[runtime.tools.checkpoint] enabled = true` (default off). The former
+  filesystem `checkpoint` tool is now `fs_checkpoint`, with no alias.
+
 - Web search parses common query operators, reports dropped constraints, and
   preserves freshness across capable fallback providers. Guarded web fetches
   halt oversized response streams at a configurable 5 MiB default.

@@ -689,6 +689,10 @@ defmodule LemonCore.Config.Validator do
   def validate_tools(tools, errors) do
     errors
     |> validate_boolean(Map.get(tools, :auto_resize_images), "tools.auto_resize_images")
+    |> validate_boolean(
+      get_in(tools, [Access.key(:checkpoint, %{}), :enabled]),
+      "tools.checkpoint.enabled"
+    )
     |> validate_computer_use(Map.get(tools, :computer_use))
   end
 

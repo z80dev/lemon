@@ -26,6 +26,8 @@ defmodule CodingAgent.Session.State do
 
   def build_transform_context(nil, context_guardrail_opts, secret_obfuscator) do
     fn messages, signal ->
+      messages = CodingAgent.Session.ContextCheckpoint.project(messages)
+
       with {:ok, guarded} <-
              normalize_transform_result(
                ContextGuardrails.transform(messages, signal, context_guardrail_opts)
@@ -42,6 +44,8 @@ defmodule CodingAgent.Session.State do
   def build_transform_context(transform_fn, context_guardrail_opts, secret_obfuscator)
       when is_function(transform_fn, 2) do
     fn messages, signal ->
+      messages = CodingAgent.Session.ContextCheckpoint.project(messages)
+
       with {:ok, guarded} <-
              normalize_transform_result(
                ContextGuardrails.transform(messages, signal, context_guardrail_opts)

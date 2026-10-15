@@ -6,7 +6,7 @@ defmodule CodingAgent.MutationLock do
   mutate the workspace take locks here so they never interleave:
 
     * `{:session, id}` - taken by the tool registry around every mutating tool
-      (`write`, `edit`, `patch`, `bash`, `checkpoint`), so one session's
+      (`write`, `edit`, `patch`, `bash`, `fs_checkpoint`), so one session's
       mutating calls run one at a time while read-only calls stay parallel.
     * `{:path, absolute_path}` - taken by file-mutating tools around their
       read-modify-write, so concurrent edits of one file (from any session)

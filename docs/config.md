@@ -1662,6 +1662,19 @@ chrome = false
 declined_origins = []
 ```
 
+## Conversation checkpoints
+
+```toml
+[runtime.tools.checkpoint]
+enabled = false
+```
+
+Enable the paired model tools `checkpoint(goal)` and `rewind(report)` to collapse
+exploratory conversation into a retained branch summary. This never restores
+files and needs no confirmation; operator `/rewind` is unchanged.
+The filesystem tool is named `fs_checkpoint` (no `checkpoint` alias).
+See [checkpoint tools](tools/checkpoint.md).
+
 ## Tool Disclosure
 
 Every tool a session exposes sends its name, description and JSON schema with
@@ -1687,9 +1700,9 @@ pinned = []              # tool names that always stay directly exposed
   catalog exceeds `budget_tokens`; below it the tool list is unchanged.
 - **`coding`**: an experiment for coding sessions. Only the coding core stays
   directly exposed — `read`, `write`, `edit`, `patch`, `ls`, `find`, `grep`,
-  `ast_grep`, `lsp_diagnostics`, `checkpoint`, `bash`, `bash_output`,
+  `ast_grep`, `lsp_diagnostics`, `fs_checkpoint`, `bash`, `bash_output`,
   `kill_process`, `websearch`, `webfetch`, `read_skill`, `recall`, `todo`,
-  `ask`, `task`, `wait`, `agent_message` and `parent_question` — plus `pinned`
+  `ask`, enabled `checkpoint` / `rewind`, `task`, `wait`, `agent_message` and `parent_question` — plus `pinned`
   names. Every other resolved tool, including browser, media, automation and
   other optional built-ins, is deferred whenever there is one to defer;
   `budget_tokens` is not consulted. Whether this improves cost, latency or task

@@ -104,10 +104,10 @@ defmodule CodingAgent.ToolDisclosure do
   # Every read-only tool plan mode allows is here, so planning never needs the
   # bridge for a read.
   @coding_core %{
-    files: ~w(read write edit patch ls find grep ast_grep lsp_diagnostics checkpoint),
+    files: ~w(read write edit patch ls find grep ast_grep lsp_diagnostics fs_checkpoint),
     shell: ~w(bash bash_output kill_process process_input),
     research: ~w(websearch webfetch read_skill recall),
-    planning: ~w(todo ask),
+    planning: ~w(todo ask checkpoint rewind),
     delegation: ~w(task wait agent_message parent_question)
   }
 
