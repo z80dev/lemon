@@ -10,6 +10,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Run tool-schema snapshot events carry schemas without execute closures, so
+  sessions with many tools no longer exceed the 1 MiB subscriber event limit,
+  fence direct subscribers and drop `agent_end`.
+
 - Pin skill-synthesis candidate timestamps in ordering fixtures and cover
   recency/ID tie-breaking independently of wall-clock scheduling.
 

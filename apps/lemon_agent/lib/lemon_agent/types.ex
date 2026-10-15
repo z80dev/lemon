@@ -206,7 +206,7 @@ defmodule LemonAgent.Types do
             label: String.t(),
             parallel_safe: boolean(),
             timeout_ms: pos_integer() | :infinity | nil,
-            execute: execute_fn()
+            execute: execute_fn() | nil
           }
     defstruct name: "",
               description: "",
@@ -252,6 +252,17 @@ defmodule LemonAgent.Types do
         fingerprint: fingerprint,
         created_at_ms: System.system_time(:millisecond)
       }
+    end
+
+    @doc """
+    Schema-only copy for event subscribers, with every tool's `execute` set to
+    `nil`. Execute closures capture their builder's options, so an executable
+    snapshot grows with each tool's environment and can exceed subscriber
+    delivery limits. The run itself always executes from the full snapshot.
+    """
+    @spec without_executors(t()) :: t()
+    def without_executors(%__MODULE__{tools: tools} = snapshot) do
+      %{snapshot | tools: Enum.map(tools, &%{&1 | execute: nil})}
     end
 
     defp fingerprint(tools) do
@@ -493,7 +504,8 @@ defmodule LemonAgent.Types do
 
   ## Agent Lifecycle
   - `{:agent_start}` - Agent run has started
-  - `{:tool_schema_snapshot, snapshot}` - Tool schema was frozen for this run
+  - `{:tool_schema_snapshot, snapshot}` - Tool schema was frozen for this run;
+    schema-only, so its tools' `execute` is `nil`
   - `{:loop_state_transition, from, to, metadata}` - Loop lifecycle state changed
   - `{:agent_end, messages}` - Agent run has ended with final messages
 
