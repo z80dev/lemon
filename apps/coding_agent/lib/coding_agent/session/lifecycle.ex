@@ -324,9 +324,7 @@ defmodule CodingAgent.Session.Lifecycle do
     stream_fn =
       opts
       |> Keyword.get(:stream_fn)
-      |> ProviderFallback.maybe_wrap(model, settings_manager, cwd,
-        session_id: session_manager.header.id
-      )
+      |> ProviderFallback.maybe_wrap(settings_manager, cwd, session_id: session_manager.header.id)
 
     agent_registry_key = {session_manager.header.id, :main, 0}
     retry_settings = SettingsManager.get_retry_settings(settings_manager)

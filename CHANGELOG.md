@@ -678,6 +678,12 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   Capture accounting now serializes record mutations with reclamation, preserves
   live capture state across store-only restart, and rejects unpersisted
   reservations or unknown legacy artifact usage before process launch.
+- Native idle and live model switches bind provider-owned request options before
+  classification or completion. Selected-login refusal and keyless transitions
+  retain their intended authority; fallback credentials and headers use the
+  current invocation rather than the session's startup provider.
+  Same-provider rebinding replaces source-model header defaults while preserving
+  genuine caller overrides; generated headers are not promoted to caller authority.
 - **Todos follow the selected branch.** The `todo` tool's list is now journaled
   in the session history instead of living only in memory, so rewind, branch
   navigation, restart/resume and forks show the list that branch last wrote,

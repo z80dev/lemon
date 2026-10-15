@@ -1311,6 +1311,16 @@ The wrapper preserves explicit authentication-refusal results instead of
 converting them into unset API keys. In particular, missing or invalid Codex
 `auth_source` cannot enable provider-level fallback to ambient tokens.
 
+Idle and live model switches bind request options to their actual owning model
+before classification or completion. Selected-login refusal stays authoritative
+after a switch; switching to a keyless provider clears the previous authority.
+Fallback sanitation uses the current invocation's options owner, not the session's
+startup provider. Same-provider explicit headers and pool precedence are preserved.
+Same-provider rebinding retains the original caller header layer separately:
+provider defaults remain below the destination model's headers, and only genuine
+caller overrides take precedence. Headers derived from the source model never
+become caller overrides on a later request.
+
 Before output is committed, provider failures can move to the next model and
 rate/usage limits can rotate through configured credential-pool entries.
 Authentication failures refresh the same OAuth credential once on HTTP 401, then
@@ -1341,6 +1351,12 @@ For a manual source-checkout smoke run without live credentials, run
 an isolated native session and loopback fixture endpoint, rejects the primary
 model with HTTP 503, and verifies the configured alternate model answers and
 the session is persisted. The smoke script is not part of the CI test lane.
+
+`MIX_ENV=test mix run --no-start scripts/live_provider_ownership_smoke.exs`
+exercises public native Session and Agent model switches, missing-selected-login
+refusal, successful keyless transitions, switch-then-fallback header isolation and
+same-provider rebinding with no caller headers and with genuine caller overrides,
+using fixture credentials and loopback HTTP only.
 
 Google Gemini CLI onboarding (`lemon model --provider gemini`, or
 `./bin/lemon model --provider gemini` from a checkout) resolves OAuth

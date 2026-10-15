@@ -26,7 +26,7 @@ defmodule CodingAgent.Session.ProviderFallbackResilienceTest do
       {:ok, event_stream(events, empty)}
     end
 
-    wrapped = wrap(stream_fn, primary, model_settings())
+    wrapped = wrap(stream_fn, model_settings())
     assert {:error, %AssistantMessage{stop_reason: :error}} = result(wrapped, primary)
     assert_receive {:attempt, "gpt-4"}
     refute_receive {:attempt, _}, 0
@@ -41,7 +41,7 @@ defmodule CodingAgent.Session.ProviderFallbackResilienceTest do
       {:error, {:canceled, :timeout}}
     end
 
-    wrapped = wrap(stream_fn, primary, model_settings())
+    wrapped = wrap(stream_fn, model_settings())
     {:ok, output} = wrapped.(primary, %Context{}, %StreamOptions{})
     assert Enum.to_list(LemonAi.EventStream.events(output)) == [{:canceled, :timeout}]
     assert_receive {:attempt, "gpt-4"}
@@ -61,7 +61,7 @@ defmodule CodingAgent.Session.ProviderFallbackResilienceTest do
     end
 
     before = System.monotonic_time(:millisecond)
-    wrapped = wrap(stream_fn, primary, settings())
+    wrapped = wrap(stream_fn, settings())
     assert {:ok, _} = result(wrapped, primary)
     after_attempt = System.monotonic_time(:millisecond)
     deadline = CredentialHealth.cooldown_until(:openai, "env:PF_RESILIENCE_A")
@@ -106,47 +106,10 @@ defmodule CodingAgent.Session.ProviderFallbackResilienceTest do
         else: {:ok, terminal_stream(model, :stop, [%TextContent{text: "ok"}])}
     end
 
-    wrapped = wrap(stream_fn, primary, settings)
+    wrapped = wrap(stream_fn, settings)
     assert {:ok, _} = result(wrapped, primary)
     assert_receive {:azure_key, "fake-key-a", "fake-key-a"}
     assert_receive {:azure_key, "fake-key-b", "fake-key-b"}
-  end
-
-  test "a per-call provider switch rebuilds options even without fallbacks" do
-    parent = self()
-    original = primary()
-    settings = model_settings()
-    settings = %{settings | provider_routing: %{settings.provider_routing | fallback_models: []}}
-
-    switched =
-      CodingAgent.Session.ModelResolver.resolve_session_model(
-        "azure_openai_responses:gpt-4o",
-        settings
-      )
-
-    stream_fn = fn model, _, options ->
-      send(parent, {:switched_options, options})
-      {:ok, terminal_stream(model, :stop, [%TextContent{text: "ok"}])}
-    end
-
-    wrapped = wrap(stream_fn, original, settings)
-
-    {:ok, stream} =
-      wrapped.(switched, %Context{}, %StreamOptions{
-        api_key: "old-provider-key",
-        access_token: "old-token",
-        headers: %{"authorization" => "old-token"},
-        provider_options: %{openai: %{api_key: "old-provider-key"}},
-        max_tokens: 123
-      })
-
-    assert {:ok, %{provider: :azure_openai_responses}} = LemonAi.EventStream.result(stream, 1_000)
-    assert_receive {:switched_options, options}
-    assert options.api_key == "destination-key"
-    assert options.access_token == nil
-    assert options.headers == %{}
-    refute Map.has_key?(options.provider_options, :openai)
-    assert options.max_tokens == 123
   end
 
   setup do
@@ -187,7 +150,7 @@ defmodule CodingAgent.Session.ProviderFallbackResilienceTest do
         end
       end
 
-      wrapped = wrap(stream_fn, primary, settings, refresh_api_key: refresh)
+      wrapped = wrap(stream_fn, settings, refresh_api_key: refresh)
       assert {:ok, _} = result(wrapped, primary)
       assert_receive {:attempt, :openai, "gpt-4", "fake-key-a"}
       assert_receive {:refresh, :openai, "env:PF_RESILIENCE_A", "fake-key-a"}
@@ -225,7 +188,7 @@ defmodule CodingAgent.Session.ProviderFallbackResilienceTest do
           end
         end
 
-        wrapped = wrap(stream_fn, primary, settings(), refresh_api_key: refresh)
+        wrapped = wrap(stream_fn, settings(), refresh_api_key: refresh)
         assert {:ok, _} = result(wrapped, primary)
         assert_receive {:attempt, ^status, "fake-key-a"}
         assert_receive {:attempt, ^status, "fake-key-b"}
@@ -253,7 +216,7 @@ defmodule CodingAgent.Session.ProviderFallbackResilienceTest do
           failure(model, status, body, mode)
         end
 
-        wrapped = wrap(stream_fn, primary, settings())
+        wrapped = wrap(stream_fn, settings())
         assert {:error, message} = result(wrapped, primary)
         assert LemonAi.Error.classify(message) == category
         assert message.provider == :openai
@@ -276,7 +239,7 @@ defmodule CodingAgent.Session.ProviderFallbackResilienceTest do
       end
 
       before = System.monotonic_time(:millisecond)
-      wrapped = wrap(stream_fn, primary, settings())
+      wrapped = wrap(stream_fn, settings())
       assert {:ok, _} = result(wrapped, primary)
       after_attempt = System.monotonic_time(:millisecond)
       deadline = CredentialHealth.cooldown_until(:openai, "env:PF_RESILIENCE_A")
@@ -298,7 +261,7 @@ defmodule CodingAgent.Session.ProviderFallbackResilienceTest do
     end
 
     wrapped =
-      wrap(stream_fn, primary, settings(), refresh_api_key: fn _, _, _, _ -> {:ok, "fresh"} end)
+      wrap(stream_fn, settings(), refresh_api_key: fn _, _, _, _ -> {:ok, "fresh"} end)
 
     assert {:ok, _} = result(wrapped, primary)
     assert_receive {:attempt, "fake-key-a"}
@@ -318,7 +281,7 @@ defmodule CodingAgent.Session.ProviderFallbackResilienceTest do
     end
 
     wrapped =
-      wrap(stream_fn, primary, settings,
+      wrap(stream_fn, settings,
         refresh_api_key: fn _, _, "default", "stale" -> {:ok, "fresh"} end
       )
 
@@ -338,7 +301,7 @@ defmodule CodingAgent.Session.ProviderFallbackResilienceTest do
         else: {:ok, terminal_stream(model, :stop, [%TextContent{text: "same-provider"}])}
     end
 
-    wrapped = wrap(stream_fn, primary, settings, session_id: "same-model-pin")
+    wrapped = wrap(stream_fn, settings, session_id: "same-model-pin")
     assert {:ok, %{provider: :openai, model: "gpt-4o"}} = result(wrapped, primary)
     assert_receive {:attempt, :openai, "gpt-4", "primary-key"}
     assert_receive {:attempt, :openai, "gpt-4o", "primary-key"}
@@ -367,7 +330,7 @@ defmodule CodingAgent.Session.ProviderFallbackResilienceTest do
         else: {:ok, terminal_stream(model, :stop, [%TextContent{text: "cross-provider"}])}
     end
 
-    wrapped = wrap(stream_fn, primary, settings, session_id: "cross-model-pin")
+    wrapped = wrap(stream_fn, settings, session_id: "cross-model-pin")
 
     options = %StreamOptions{
       api_key: "caller-primary-secret",
@@ -453,7 +416,7 @@ defmodule CodingAgent.Session.ProviderFallbackResilienceTest do
           else: {:ok, event_stream(events, %{error | content: content})}
       end
 
-      wrapped = wrap(stream_fn, primary, model_settings())
+      wrapped = wrap(stream_fn, model_settings())
       assert {:error, %{model: "gpt-4"}} = result(wrapped, primary)
       assert_receive {:attempt, "gpt-4"}
       refute_receive {:attempt, _}, 0
@@ -469,7 +432,7 @@ defmodule CodingAgent.Session.ProviderFallbackResilienceTest do
       {:ok, event_stream([], %{error_message(model, 503, "unavailable") | stop_reason: :aborted})}
     end
 
-    wrapped = wrap(stream_fn, primary, model_settings())
+    wrapped = wrap(stream_fn, model_settings())
     assert {:error, %{stop_reason: :aborted}} = result(wrapped, primary)
     assert_receive {:attempt, "gpt-4"}
     refute_receive {:attempt, _}, 0
@@ -486,7 +449,7 @@ defmodule CodingAgent.Session.ProviderFallbackResilienceTest do
       {:ok, stream}
     end
 
-    wrapped = wrap(stream_fn, primary, model_settings())
+    wrapped = wrap(stream_fn, model_settings())
     {:ok, output} = wrapped.(primary, %Context{}, %StreamOptions{})
     assert Enum.to_list(LemonAi.EventStream.events(output)) == [{:canceled, :aborted}]
     assert_receive {:attempt, "gpt-4"}
@@ -526,11 +489,11 @@ defmodule CodingAgent.Session.ProviderFallbackResilienceTest do
     }
   end
 
-  defp wrap(stream_fn, model, settings, opts \\ []) do
+  defp wrap(stream_fn, settings, opts \\ []) do
     opts =
       Keyword.put_new(opts, :refresh_api_key, fn _, _, _, _ -> {:error, :not_refreshable} end)
 
-    ProviderFallback.maybe_wrap(stream_fn, model, settings, File.cwd!(), opts)
+    ProviderFallback.maybe_wrap(stream_fn, settings, File.cwd!(), opts)
   end
 
   defp result(wrapped, model) do

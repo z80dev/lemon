@@ -336,6 +336,10 @@ defmodule LemonAi.Types do
     `api_key_authoritative` marks caller-resolved credential authority. A missing
     or empty key then fails before provider fallback or HTTP, even on a keyless
     model. Leave it false for ordinary low-level environment/keyless resolution.
+
+    `caller_headers` retains the original caller override layer when Lemon-owned
+    options are rebuilt for another model. Derived provider/model headers must
+    not become caller overrides on the next request.
     """
     @type thinking_level :: :minimal | :low | :medium | :high | :xhigh
     @type t :: %__MODULE__{
@@ -346,6 +350,7 @@ defmodule LemonAi.Types do
             session_id: String.t() | nil,
             cwd: String.t() | nil,
             headers: map(),
+            caller_headers: map() | nil,
             reasoning: thinking_level() | nil,
             thinking_budgets: map(),
             stream_timeout: timeout(),
@@ -366,6 +371,7 @@ defmodule LemonAi.Types do
               session_id: nil,
               cwd: nil,
               headers: %{},
+              caller_headers: nil,
               reasoning: nil,
               thinking_budgets: %{},
               stream_timeout: 300_000,
