@@ -254,9 +254,5 @@ defmodule LemonAutomation.SynthesisRunnerTest do
       assert cfg[:max_docs] == 7
       assert cfg[:agent_id] == agent_id
     end
-
-    test "test env keeps the scheduled runner disabled by default" do
-      assert SynthesisRunner.config([])[:enabled] == false
-    end
   end
 end

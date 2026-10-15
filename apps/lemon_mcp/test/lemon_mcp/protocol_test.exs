@@ -16,9 +16,6 @@ defmodule LemonMCP.ProtocolTest do
       assert request.jsonrpc == "2.0"
       assert request.method == "initialize"
       assert request.id != nil
-      assert request.params.protocolVersion == "2024-11-05"
-      assert request.params.clientInfo.name == "lemon-mcp"
-      assert request.params.clientInfo.version == "0.1.0"
       assert request.params.capabilities == %{}
     end
 

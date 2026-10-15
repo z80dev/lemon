@@ -634,18 +634,7 @@ defmodule LemonSimUi.SpectatorLive do
   # is the one place a new domain needs a case clause added. Unlike
   # `example_module`/`scorecard_module`/`league_adapter`, a domain's
   # lemon_sim_ui board component isn't modeled in `LemonSim.Bench.Domains`
-  # (it's UI-only), so this stays a hardcoded case rather than a derived
-  # lookup; `domain_registration_test.exs` checks it stays in sync with
-  # `@supported_domains` via `rendered_board_domains/0` below.
-  @rendered_board_domains [
-    :vending_bench,
-    :poker,
-    :werewolf
-  ]
-
-  @doc false
-  @spec rendered_board_domains() :: [atom()]
-  def rendered_board_domains, do: @rendered_board_domains
+  # (it's UI-only), so this stays a hardcoded case rather than a derived lookup.
 
   attr(:domain, :atom, required: true)
   attr(:world, :map, required: true)

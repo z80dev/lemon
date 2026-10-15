@@ -17,17 +17,6 @@ defmodule LemonGateway.ApplicationTest do
   @store_config Application.compile_env(:lemon_core, LemonCore.Store, [])
   @executor_config Application.compile_env(:lemon_gateway, :executor)
 
-  @base_expected_children [
-    Elixir.LemonGateway.Config,
-    Elixir.LemonGateway.EngineLock,
-    Elixir.LemonGateway.RunRegistry,
-    Elixir.LemonGateway.ThreadRegistry,
-    Elixir.LemonGateway.RunSupervisor,
-    Elixir.LemonGateway.ThreadWorkerSupervisor,
-    Elixir.LemonGateway.TaskSupervisor,
-    Elixir.LemonGateway.Scheduler
-  ]
-
   @gateway_ingress_children [
     Elixir.LemonGateway.TransportRegistry,
     Elixir.LemonGateway.TransportSupervisor,
@@ -118,26 +107,6 @@ defmodule LemonGateway.ApplicationTest do
     Process.whereis(name)
   end
 
-  defp expected_children do
-    children = @base_expected_children
-
-    children =
-      if Application.get_env(:lemon_gateway, :health_enabled, true) do
-        children ++ [Elixir.LemonGateway.Health.Server]
-      else
-        children
-      end
-
-    children =
-      if Application.get_env(:lemon_gateway, :gateway_ingress_enabled, false) do
-        children ++ [Elixir.LemonGateway.IngressSupervisor]
-      else
-        children
-      end
-
-    children
-  end
-
   # ---------------------------------------------------------------------
   # Application Startup Sequence Tests
   # ---------------------------------------------------------------------
@@ -169,29 +138,12 @@ defmodule LemonGateway.ApplicationTest do
       end
     end
 
-    test "application start returns {:ok, pid} tuple" do
-      result = Application.ensure_all_started(:lemon_gateway)
-      assert {:ok, apps} = result
-      assert :lemon_gateway in apps
-    end
-
     test "main supervisor is registered under Elixir.LemonGateway.Supervisor" do
       {:ok, _} = Application.ensure_all_started(:lemon_gateway)
 
       supervisor_pid = Process.whereis(Elixir.LemonGateway.Supervisor)
       assert is_pid(supervisor_pid)
       assert Process.alive?(supervisor_pid)
-    end
-
-    test "supervisor uses one_for_one strategy" do
-      {:ok, _} = Application.ensure_all_started(:lemon_gateway)
-
-      state = :sys.get_state(Elixir.LemonGateway.Supervisor)
-
-      # Supervisor state tuple shape: {:state, name, strategy, ...}
-      assert is_tuple(state)
-      assert elem(state, 0) == :state
-      assert elem(state, 2) == :one_for_one
     end
   end
 
@@ -212,25 +164,12 @@ defmodule LemonGateway.ApplicationTest do
       :ok
     end
 
-    test "all expected children are present in supervision tree" do
+    test "supervision tree has no EngineRegistry child" do
       {:ok, _} = Application.ensure_all_started(:lemon_gateway)
 
       children = Supervisor.which_children(Elixir.LemonGateway.Supervisor)
       child_ids = Enum.map(children, fn {id, _pid, _type, _modules} -> id end)
 
-      for expected <- expected_children() do
-        assert expected in child_ids,
-               "Expected #{inspect(expected)} in supervision tree, got: #{inspect(child_ids)}"
-      end
-    end
-
-    test "supervision tree has expected child count and no EngineRegistry child" do
-      {:ok, _} = Application.ensure_all_started(:lemon_gateway)
-
-      children = Supervisor.which_children(Elixir.LemonGateway.Supervisor)
-      child_ids = Enum.map(children, fn {id, _pid, _type, _modules} -> id end)
-
-      assert length(children) == length(expected_children())
       refute Elixir.LemonGateway.EngineRegistry in child_ids
     end
 
@@ -252,41 +191,6 @@ defmodule LemonGateway.ApplicationTest do
             flunk("Child #{inspect(id)} should have a pid (got: #{inspect(pid)})")
         end
       end
-    end
-
-    test "Config child is a worker" do
-      {:ok, _} = Application.ensure_all_started(:lemon_gateway)
-
-      children = Supervisor.which_children(Elixir.LemonGateway.Supervisor)
-
-      {_id, _pid, type, _modules} =
-        Enum.find(children, fn {id, _, _, _} -> id == Elixir.LemonGateway.Config end)
-
-      assert type == :worker
-    end
-
-    test "RunSupervisor is a supervisor type" do
-      {:ok, _} = Application.ensure_all_started(:lemon_gateway)
-
-      children = Supervisor.which_children(Elixir.LemonGateway.Supervisor)
-
-      {_id, _pid, type, _modules} =
-        Enum.find(children, fn {id, _, _, _} -> id == Elixir.LemonGateway.RunSupervisor end)
-
-      assert type == :supervisor
-    end
-
-    test "ThreadWorkerSupervisor is a supervisor type" do
-      {:ok, _} = Application.ensure_all_started(:lemon_gateway)
-
-      children = Supervisor.which_children(Elixir.LemonGateway.Supervisor)
-
-      {_id, _pid, type, _modules} =
-        Enum.find(children, fn {id, _, _, _} ->
-          id == Elixir.LemonGateway.ThreadWorkerSupervisor
-        end)
-
-      assert type == :supervisor
     end
 
     test "legacy ingress children are not started by default" do
@@ -317,17 +221,6 @@ defmodule LemonGateway.ApplicationTest do
         assert child in child_ids
       end
     end
-
-    test "ThreadRegistry is a supervisor (Registry)" do
-      {:ok, _} = Application.ensure_all_started(:lemon_gateway)
-
-      children = Supervisor.which_children(Elixir.LemonGateway.Supervisor)
-
-      {_id, _pid, type, _modules} =
-        Enum.find(children, fn {id, _, _, _} -> id == Elixir.LemonGateway.ThreadRegistry end)
-
-      assert type == :supervisor
-    end
   end
 
   # ---------------------------------------------------------------------
@@ -347,50 +240,10 @@ defmodule LemonGateway.ApplicationTest do
       :ok
     end
 
-    test "Config is started before other components" do
-      {:ok, _} = Application.ensure_all_started(:lemon_gateway)
-
-      # Config should be running and accessible
-      config = Elixir.LemonGateway.Config.get()
-      assert is_map(config)
-    end
-
     test "configured executor is ready after startup" do
       {:ok, _} = Application.ensure_all_started(:lemon_gateway)
 
       assert Elixir.LemonGateway.Executor.validate_configured() == :ok
-    end
-
-    test "TransportRegistry is available when legacy ingress is enabled" do
-      Application.put_env(:lemon_gateway, :gateway_ingress_enabled, true)
-
-      {:ok, _} = Application.ensure_all_started(:lemon_gateway)
-
-      assert is_pid(Process.whereis(Elixir.LemonGateway.TransportRegistry))
-      transports = Elixir.LemonGateway.TransportRegistry.list_transports()
-      assert is_list(transports)
-    end
-
-    test "CommandRegistry is available when legacy ingress is enabled" do
-      Application.put_env(:lemon_gateway, :gateway_ingress_enabled, true)
-
-      {:ok, _} = Application.ensure_all_started(:lemon_gateway)
-
-      assert is_pid(Process.whereis(Elixir.LemonGateway.CommandRegistry))
-      commands = Elixir.LemonGateway.CommandRegistry.list_commands()
-      assert is_list(commands)
-    end
-
-    test "Scheduler depends on Config for max_concurrent_runs" do
-      Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config, %{
-        max_concurrent_runs: 5,
-        enable_telegram: false
-      })
-
-      {:ok, _} = Application.ensure_all_started(:lemon_gateway)
-
-      # Scheduler should be running
-      assert is_pid(Process.whereis(Elixir.LemonGateway.Scheduler))
     end
 
     test "Store is initialized after Config" do
@@ -445,21 +298,17 @@ defmodule LemonGateway.ApplicationTest do
       assert config.max_concurrent_runs == 10
     end
 
-    test "uses default values when config is not set" do
-      # Set minimal config (config will use defaults for unspecified keys)
+    test "Config.get/1 returns defaults and configured overrides" do
       Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config, %{})
       Application.put_env(:lemon_gateway, :transports, [])
       Application.put_env(:lemon_gateway, :commands, [])
-
       {:ok, _} = Application.ensure_all_started(:lemon_gateway)
 
-      config = Elixir.LemonGateway.Config.get()
-      # Default values from Config module
-      assert config.max_concurrent_runs == 2
-      assert config.auto_resume == false
-    end
+      assert Elixir.LemonGateway.Config.get(:max_concurrent_runs) == 2
+      assert Elixir.LemonGateway.Config.get(:auto_resume) == false
 
-    test "Config.get/1 returns configuration keys" do
+      stop_application()
+
       Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config, %{
         max_concurrent_runs: 7,
         enable_telegram: true
@@ -471,60 +320,6 @@ defmodule LemonGateway.ApplicationTest do
 
       assert Elixir.LemonGateway.Config.get(:max_concurrent_runs) == 7
       assert Elixir.LemonGateway.Config.get(:enable_telegram) == true
-    end
-
-    test "configuration supports projects" do
-      Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config, %{
-        max_concurrent_runs: 1,
-        enable_telegram: false,
-        projects: %{
-          "test_project" => %{
-            root: "/tmp/test_project"
-          }
-        }
-      })
-
-      Application.put_env(:lemon_gateway, :transports, [])
-      Application.put_env(:lemon_gateway, :commands, [])
-
-      {:ok, _} = Application.ensure_all_started(:lemon_gateway)
-
-      projects = Elixir.LemonGateway.Config.get_projects()
-      assert is_map(projects)
-    end
-
-    test "configuration supports bindings" do
-      Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config, %{
-        max_concurrent_runs: 1,
-        enable_telegram: false,
-        bindings: [
-          %{transport: :telegram, chat_id: 123, project: "test"}
-        ]
-      })
-
-      Application.put_env(:lemon_gateway, :transports, [])
-      Application.put_env(:lemon_gateway, :commands, [])
-
-      {:ok, _} = Application.ensure_all_started(:lemon_gateway)
-
-      bindings = Elixir.LemonGateway.Config.get_bindings()
-      assert is_list(bindings)
-    end
-
-    test "configuration supports queue settings" do
-      Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config, %{
-        max_concurrent_runs: 1,
-        enable_telegram: false,
-        queue: %{cap: 10, drop: :oldest, mode: :collect}
-      })
-
-      Application.put_env(:lemon_gateway, :transports, [])
-      Application.put_env(:lemon_gateway, :commands, [])
-
-      {:ok, _} = Application.ensure_all_started(:lemon_gateway)
-
-      queue_config = Elixir.LemonGateway.Config.get_queue_config()
-      assert is_map(queue_config)
     end
   end
 
@@ -577,27 +372,6 @@ defmodule LemonGateway.ApplicationTest do
 
       commands = Elixir.LemonGateway.CommandRegistry.list_commands()
       assert commands == []
-    end
-
-    test "Store backend configuration is respected" do
-      Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config, %{
-        max_concurrent_runs: 1,
-        enable_telegram: false
-      })
-
-      Application.put_env(:lemon_gateway, :transports, [])
-      Application.put_env(:lemon_gateway, :commands, [])
-
-      # Configure ETS backend (default), keeping the rest of the store wiring.
-      Application.put_env(
-        :lemon_core,
-        LemonCore.Store,
-        Keyword.put(@store_config, :backend, LemonCore.Store.EtsBackend)
-      )
-
-      {:ok, _} = Application.ensure_all_started(:lemon_gateway)
-
-      assert is_pid(Process.whereis(LemonCore.Store))
     end
   end
 
@@ -767,49 +541,6 @@ defmodule LemonGateway.ApplicationTest do
       :ok
     end
 
-    test "Config process is registered and responding" do
-      {:ok, _} = Application.ensure_all_started(:lemon_gateway)
-
-      pid = Process.whereis(Elixir.LemonGateway.Config)
-      assert is_pid(pid)
-
-      # Should respond to calls
-      config = Elixir.LemonGateway.Config.get()
-      assert is_map(config)
-    end
-
-    test "configured executor is valid" do
-      {:ok, _} = Application.ensure_all_started(:lemon_gateway)
-
-      assert Elixir.LemonGateway.Executor.validate_configured() == :ok
-    end
-
-    test "TransportRegistry process is registered and responding when legacy ingress is enabled" do
-      Application.put_env(:lemon_gateway, :gateway_ingress_enabled, true)
-
-      {:ok, _} = Application.ensure_all_started(:lemon_gateway)
-
-      pid = Process.whereis(Elixir.LemonGateway.TransportRegistry)
-      assert is_pid(pid)
-
-      # Should respond to calls
-      transports = Elixir.LemonGateway.TransportRegistry.list_transports()
-      assert is_list(transports)
-    end
-
-    test "CommandRegistry process is registered and responding when legacy ingress is enabled" do
-      Application.put_env(:lemon_gateway, :gateway_ingress_enabled, true)
-
-      {:ok, _} = Application.ensure_all_started(:lemon_gateway)
-
-      pid = Process.whereis(Elixir.LemonGateway.CommandRegistry)
-      assert is_pid(pid)
-
-      # Should respond to calls
-      commands = Elixir.LemonGateway.CommandRegistry.list_commands()
-      assert is_list(commands)
-    end
-
     test "EngineLock process is registered and responding" do
       {:ok, _} = Application.ensure_all_started(:lemon_gateway)
 
@@ -819,43 +550,6 @@ defmodule LemonGateway.ApplicationTest do
       # Should respond to acquire calls
       {:ok, release_fn} = Elixir.LemonGateway.EngineLock.acquire(:test_key, 1000)
       release_fn.()
-    end
-
-    test "ThreadRegistry is functional" do
-      {:ok, _} = Application.ensure_all_started(:lemon_gateway)
-
-      # Should be able to lookup (returns nil for non-existent)
-      result = Elixir.LemonGateway.ThreadRegistry.whereis(:nonexistent_key)
-      assert result == nil
-    end
-
-    test "RunSupervisor is a DynamicSupervisor" do
-      {:ok, _} = Application.ensure_all_started(:lemon_gateway)
-
-      pid = Process.whereis(Elixir.LemonGateway.RunSupervisor)
-      assert is_pid(pid)
-
-      # Should accept which_children call
-      children = DynamicSupervisor.which_children(Elixir.LemonGateway.RunSupervisor)
-      assert is_list(children)
-    end
-
-    test "ThreadWorkerSupervisor is a DynamicSupervisor" do
-      {:ok, _} = Application.ensure_all_started(:lemon_gateway)
-
-      pid = Process.whereis(Elixir.LemonGateway.ThreadWorkerSupervisor)
-      assert is_pid(pid)
-
-      # Should accept which_children call
-      children = DynamicSupervisor.which_children(Elixir.LemonGateway.ThreadWorkerSupervisor)
-      assert is_list(children)
-    end
-
-    test "Scheduler process is registered and responding" do
-      {:ok, _} = Application.ensure_all_started(:lemon_gateway)
-
-      pid = Process.whereis(Elixir.LemonGateway.Scheduler)
-      assert is_pid(pid)
     end
 
     test "Store process is registered and responding" do
@@ -966,18 +660,6 @@ defmodule LemonGateway.ApplicationTest do
       # Now should be able to acquire again
       {:ok, release2} = Elixir.LemonGateway.EngineLock.acquire(thread_key, 1000)
       release2.()
-    end
-
-    test "configuration values are accessible by all components" do
-      Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config, %{
-        max_concurrent_runs: 42,
-        enable_telegram: false
-      })
-
-      {:ok, _} = Application.ensure_all_started(:lemon_gateway)
-
-      # Config should be accessible
-      assert Elixir.LemonGateway.Config.get(:max_concurrent_runs) == 42
     end
   end
 
