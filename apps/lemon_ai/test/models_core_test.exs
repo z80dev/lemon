@@ -144,11 +144,8 @@ defmodule LemonAi.ModelsCoreTest do
     end
 
     test "returns false for text-only model" do
-      model = Models.get_model(:openai, "o3-mini")
-
-      if model do
-        refute Models.supports_vision?(model)
-      end
+      assert %Model{} = model = Models.get_model(:openai, "o3-mini")
+      refute Models.supports_vision?(model)
     end
 
     test "works with manually constructed model struct" do

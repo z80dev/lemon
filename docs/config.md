@@ -2060,9 +2060,20 @@ and project `<cwd>/.lemon/skills.json`. Project keys override global keys.
 | `enabled` | `true` | Enable main-session in-band reminders; `false` skips reminders and forgets that session's counters on its next turn. |
 | `memory_turn_interval` | `10` | User turns without `remember` before suggesting a save; repeats at this interval if no save is made. |
 | `skill_tool_threshold` | `15` | Tool dispatches in the previous completed run, without `skill_manage`, before a one-turn skill creation/patch suggestion. |
+| `background_review.enabled` | `false` | Replace in-band reminders with isolated reviews of completed eligible private main-session runs. |
+| `background_review.model` | parent model | Optional Lemon model specification (for example `openai:gpt-4o-mini`); uses configured provider credentials. |
+| `background_review.min_interval_ms` | `300000` | Minimum time between review submissions per live session (maximum 86400000); reviews never overlap. |
+| `background_review.max_digest_bytes` | `4096` | Maximum redacted untrusted digest bytes (clamped to 256–16384 to retain the trust envelope); individual summaries use memory ingest's 2000-byte truncation budget plus its truncation marker. |
+| `background_review.max_tool_turns` | `3` | Maximum assistant tool-use turns (maximum 10). |
+| `background_review.timeout_ms` | `60000` | Review execution timeout (maximum 300000). |
 
-Thresholds must be positive integers; invalid values fall back to the defaults.
-Configuration is read at the next user turn. The fixed text is bounded volatile
-context: no extra model calls, memory reads, automatic saves or transcript scans.
-Subagents are excluded, and live-session counters disappear on session exit or
-runtime restart. See [learning reminders](user-guide/skills.md#learning-reminders).
+Numeric settings must be positive integers; invalid values use their defaults.
+Configuration is read at the next user turn. With background review disabled,
+the fixed reminder text is bounded volatile context with no extra model calls,
+memory reads, automatic saves or transcript scans. Enabling background review
+costs **one additional model run per accepted trigger**, using the parent model
+unless `background_review.model` selects a cheaper configured model. Reviews use
+only private `remember` and draft-create/non-pinned-patch `skill_manage`, never
+shared grants or channel delivery. Subagents, cron/sub-sessions, review sessions
+and internal followups are excluded. Limits/counters disappear on session exit
+or restart. See [learning reminders](user-guide/skills.md#learning-reminders).

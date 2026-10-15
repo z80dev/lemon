@@ -147,6 +147,24 @@ defmodule CodingAgent.Tools.Read do
           cwd :: String.t(),
           opts :: keyword()
         ) :: AgentToolResult.t() | {:error, term()}
+  def execute(_id, %{"path" => "issue://" <> _ = path}, signal, _update, cwd, opts) do
+    if aborted?(signal),
+      do: {:error, "Operation aborted"},
+      else: CodingAgent.InternalUrls.GitHubProtocol.read(path, cwd, opts)
+  end
+
+  def execute(_id, %{"path" => "pr://" <> _ = path}, signal, _update, cwd, opts) do
+    if aborted?(signal),
+      do: {:error, "Operation aborted"},
+      else: CodingAgent.InternalUrls.GitHubProtocol.read(path, cwd, opts)
+  end
+
+  def execute(_id, %{"path" => "history://" <> _ = path}, signal, _update, _cwd, opts) do
+    if aborted?(signal),
+      do: {:error, "Operation aborted"},
+      else: CodingAgent.InternalUrls.HistoryProtocol.read(path, opts)
+  end
+
   def execute(_id, %{"path" => "proc://" <> _ = path}, signal, _update, cwd, opts) do
     if aborted?(signal),
       do: {:error, "Operation aborted"},

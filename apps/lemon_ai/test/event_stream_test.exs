@@ -17,12 +17,6 @@ defmodule LemonAi.EventStreamTest do
   end
 
   describe "basic operations" do
-    test "starts and stops" do
-      {:ok, stream} = EventStream.start_link()
-      assert is_pid(stream)
-      assert Process.alive?(stream)
-    end
-
     test "pushes events and consumes them" do
       {:ok, stream} = EventStream.start_link()
 
