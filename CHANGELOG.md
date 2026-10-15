@@ -8,6 +8,11 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
+### Added
+
+- Opt-in real omp lifecycle smoke using a free model, covering tool writes,
+  follow-ups, cancellation, process cleanup, discovery and resume.
+
 ### Fixed
 
 - Native dynamic-preset resolution binds discovered context, output limits,
