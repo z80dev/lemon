@@ -109,6 +109,11 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Stop replaying ambiguous Telegram sends and outbox failures; preserve unknown
+  enqueue outcomes and deduplicate Discord transport retries with stable nonces.
+- Fail closed for Telegram's unimplemented `local_transcript` voice provider
+  instead of submitting synthetic transcript text to the model.
+
 - Classify aborted and crashed run history truthfully, include bounded redacted
   error labels, filter before limiting, and report unavailable history instead of
   an empty list when storage fails.

@@ -2152,7 +2152,7 @@ If enabled, Telegram voice notes are transcribed and the transcript is routed as
 ```toml
 [gateway.telegram]
 voice_transcription = true
-voice_transcription_provider = "openai_transcribe"       # "openai_transcribe" | "local_transcript"
+voice_transcription_provider = "openai_transcribe"
 voice_transcription_model = "gpt-4o-mini-transcribe"  # optional
 voice_max_bytes = 10485760                            # optional (default: 10MB)
 
@@ -2160,12 +2160,13 @@ voice_max_bytes = 10485760                            # optional (default: 10MB)
 voice_transcription_base_url = "https://api.openai.com/v1"
 ```
 
-Use `voice_transcription_provider = "local_transcript"` for local transcript
-handling without an API key. Use `openai_transcribe` for real speech-to-text.
+Use `openai_transcribe` with provider credentials for real speech-to-text.
+`local_transcript` has no local STT implementation: it returns `:no_local_stt`,
+shows the existing voice-transcription failure message, and never submits a run.
+It does not generate preview text or transcribe audio.
 
-`mix lemon.doctor` checks this configuration: when voice transcription is
-disabled the check is skipped, and when the provider requires an API key that
-is missing it warns.
+`mix lemon.doctor` skips the check when transcription is disabled and warns
+when credentials are missing or `local_transcript` is selected.
 
 ## Telegram File Transfer
 
