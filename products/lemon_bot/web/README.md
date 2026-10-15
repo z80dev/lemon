@@ -78,10 +78,18 @@ never replays a work command. Expired or revoked sessions return to sign-in with
 an explicit explanation. Invalid saved sign-in callback data is discarded safely.
 
 Owners and admins can inspect a disconnected Lemon link and request a reconnect.
-Only owners can start/restart Lemon, and only when the backend advertises local
-runtime control. Restart requires confirmation. Running commands are observed
-with read-only polling and their output stays behind Details. An uncertain command
-receipt blocks further commands rather than sending it again.
+Only owners can run the runtime actions advertised by the backend. A launcher on
+the service host can start, stop or restart Lemon; remote controller control can
+restart or stop it, but cannot start Lemon while it is down. Missing actions show
+the service's explanation. Stop and restart require confirmation. Running commands
+are observed with read-only polling and their output stays behind Details. An
+uncertain command receipt blocks further commands rather than sending it again.
+
+**Settings → Instance** shows Lemon's version, release channel and short commit,
+per-channel connection state and last error, and provider credential health.
+Missing provider keys include a `lemon setup` instruction for the Lemon host;
+providers that do not need a key are labelled neutrally. Provider and channel
+errors include their observation time. This pane does not edit host credentials.
 
 Across chat, settings, computers and connected services, **Check status** observes
 an unconfirmed change; it never sends that change again. Ordinary failed reads use
