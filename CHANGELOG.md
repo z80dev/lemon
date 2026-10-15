@@ -10,6 +10,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Assert LSP owner cleanup by the exact managed server ID rather than a global
+  active-count delta that races unrelated idle-server cleanup.
+
 - Keep Telegram `/model` reply-keyboard choices stable for the picker conversation
   without repeating model/credential discovery on every navigation step.
 
