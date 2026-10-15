@@ -22,6 +22,23 @@ defmodule LemonMemory.Preferences do
     end
   end
 
+  @doc "Return scoped per-kind character usage and the full safe entries."
+  def usage(context, kind, opts \\ []) do
+    with {:ok, identity} <- Project.scope(context),
+         {:ok, owner} <- native_owner(context),
+         {:ok, kind} <- normalize_kind(kind),
+         {:ok, private} <- load(context, identity, owner, opts),
+         {:ok, shared} <- load(context, identity, :shared, opts) do
+      facts =
+        (private ++ shared)
+        |> Enum.filter(&(document_kind(&1) == kind))
+        |> Enum.flat_map(&facts/1)
+        |> Enum.uniq()
+
+      {:ok, %{used: Enum.sum(Enum.map(facts, &String.length/1)), cap: @caps[kind], facts: facts}}
+    end
+  end
+
   def read_shared(context, opts \\ []) do
     with {:ok, identity} <- Project.scope(context),
          {:ok, _} <- native_owner(context),
@@ -46,7 +63,9 @@ defmodule LemonMemory.Preferences do
           text =
             if notes == [],
               do: "",
-              else: heading <> "\n\n" <> Enum.map_join(notes, "\n", &("- " <> &1))
+              else:
+                LemonMemory.Usage.preferences(kind, Enum.sum(Enum.map(notes, &String.length/1))) <>
+                  "\n\n" <> heading <> "\n\n" <> Enum.map_join(notes, "\n", &("- " <> &1))
 
           {name, text}
         end

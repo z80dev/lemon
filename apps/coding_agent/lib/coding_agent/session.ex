@@ -911,7 +911,7 @@ defmodule CodingAgent.Session do
   def handle_call({:handle_async_followup, message_or_attrs}, _from, state) do
     state = CompactionLifecycle.cancel_for_new_prompt(state)
     message = State.build_async_followup_message(message_or_attrs)
-    {state, recalled} = refresh_turn_context(state, message_skill_context(message))
+    {state, recalled} = refresh_turn_context(state, message_skill_context(message), false)
     state = persist_message(state, message)
     outgoing = attach_recalled_context(message, recalled)
 
@@ -936,7 +936,7 @@ defmodule CodingAgent.Session do
   end
 
   def handle_call({:deliver_parent_question, text}, _from, state) do
-    {state, recalled} = refresh_turn_context(state, text)
+    {state, recalled} = refresh_turn_context(state, text, false)
 
     message = %LemonAi.Types.UserMessage{
       role: :user,
@@ -1885,15 +1885,18 @@ defmodule CodingAgent.Session do
   # would otherwise collect again while composing, paying every contributor
   # twice and, for a contributor whose text changes per turn, producing two
   # different answers for one turn.
-  @spec refresh_turn_context(t(), String.t()) :: {t(), [ContextRegistry.section()]}
-  defp refresh_turn_context(%{context_frozen: true} = state, _skill_context), do: {state, []}
+  @spec refresh_turn_context(t(), String.t(), boolean()) :: {t(), [ContextRegistry.section()]}
+  defp refresh_turn_context(state, skill_context, user_turn \\ true)
 
-  defp refresh_turn_context(state, skill_context) do
+  defp refresh_turn_context(%{context_frozen: true} = state, _skill_context, _user_turn),
+    do: {state, []}
+
+  defp refresh_turn_context(state, skill_context, user_turn) do
     relevant_skill_keys = relevant_skill_keys(state, skill_context)
 
     {system_sections, user_sections} =
       state
-      |> collect_contributed_sections(skill_context)
+      |> collect_contributed_sections(skill_context, user_turn)
       |> ContextRegistry.split()
 
     state = %{state | relevant_skill_keys: relevant_skill_keys}
@@ -1931,11 +1934,13 @@ defmodule CodingAgent.Session do
   # its own section and nothing more. This rescue covers the call itself, which
   # sits between the user pressing enter and the first token going out: no
   # failure here may become a turn that does not start.
-  @spec collect_contributed_sections(t(), String.t()) :: [ContextRegistry.section()]
-  defp collect_contributed_sections(state, skill_context) do
+  @spec collect_contributed_sections(t(), String.t(), boolean()) :: [ContextRegistry.section()]
+  defp collect_contributed_sections(state, skill_context, user_turn) do
     %{
       cwd: state.cwd,
       workspace_dir: state.workspace_dir,
+      session_pid: self(),
+      user_turn: user_turn,
       session_scope: state.session_scope,
       session_key: state.session_key,
       session_id: state.session_manager && state.session_manager.header.id,

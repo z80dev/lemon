@@ -15,8 +15,6 @@ defmodule LemonCore.Config do
   `[agents]`, `[agent.tools]`).
   """
 
-  require Logger
-
   defstruct providers: %{},
             model_roles: %{},
             budgets: %{},
@@ -138,9 +136,19 @@ defmodule LemonCore.Config do
         {:ok, map} ->
           stringify_keys(map)
 
+        {:error, {:invalid_toml, reason}} ->
+          raise LemonCore.Config.ValidationError,
+            message:
+              "#{expanded}: cannot load TOML: #{reason}. Run `lemon config validate --verbose` after fixing the file.",
+            errors: []
+
         {:error, reason} ->
-          Logger.warning("Failed to parse config TOML at #{expanded}: #{inspect(reason)}")
-          %{}
+          detail = if is_atom(reason), do: :file.format_error(reason), else: reason
+
+          raise LemonCore.Config.ValidationError,
+            message:
+              "#{expanded}: cannot load configuration: #{detail}. Run `lemon config validate --verbose` after fixing the file.",
+            errors: []
       end
     else
       %{}
@@ -228,7 +236,8 @@ defmodule LemonCore.Config do
       auto_resize_images: tools.auto_resize_images,
       web: tools.web,
       wasm: tools.wasm,
-      disclosure: tools.disclosure
+      disclosure: tools.disclosure,
+      computer_use: tools.computer_use
     }
   end
 

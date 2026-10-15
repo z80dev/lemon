@@ -79,14 +79,18 @@ export interface InstanceStatus {
 }
 export interface InstanceLemonStatus {
   version: string | null; uptimeMs: number | null; memoryMb: number | null;
+  build: { runtimeMode: string; channel: string | null; commit: string | null } | null;
   connections: { active: number; operators: number; nodes: number } | null;
   runs: { active: number; queued: number; completedToday: number } | null;
   activeSessions: number | null;
-  channels: { configured: string[]; connected: string[] } | null;
+  channels: { configured: string[]; connected: string[]; details: InstanceChannel[] } | null;
+  providers: InstanceProvider[] | null;
   skills: { installed: number; enabled: number } | null;
   nodes: { total: number; online: number } | null;
 }
-export interface InstanceRuntime { controllable: boolean; reason: string | null; operation: RuntimeOperation | null }
+export interface InstanceChannel { id: string; state: 'connected' | 'configured' | 'error'; lastError: { message: string; atMs: TimestampMs } | null }
+export interface InstanceProvider { id: string; configured: boolean; credential: 'present' | 'missing' | 'not_required'; isDefault: boolean; lastError: { message: string; atMs: TimestampMs } | null }
+export interface InstanceRuntime { actions: RuntimeAction[]; via: 'launcher' | 'controller' | null; reason: string | null; operation: RuntimeOperation | null }
 export interface RuntimeOperation { id: string; action: RuntimeAction; state: 'running' | 'succeeded' | 'failed'; startedAtMs: TimestampMs; completedAtMs: TimestampMs | null; exitCode: number | null; output: string }
 export interface RuntimeActionRequest extends Mutation { confirm?: boolean }
 export interface Machine extends Resource { nodeId: ID | null; nodeName: string; name: string; ownerUserId: ID; accessUserIds: ID[]; status: 'pending' | 'online' | 'offline' | 'revoked'; lastSeenAtMs: TimestampMs | null; labels: Record<string, string>; botIds: ID[] }

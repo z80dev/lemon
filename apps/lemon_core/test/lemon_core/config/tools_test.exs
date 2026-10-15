@@ -131,6 +131,32 @@ defmodule LemonCore.Config.ToolsTest do
     end
   end
 
+  describe "computer use configuration" do
+    test "is unset by default and kept as written" do
+      assert Tools.resolve(%{}).computer_use == %{
+               enabled: nil,
+               chrome: nil,
+               lcu_root: nil,
+               node: nil,
+               declined_origins: nil
+             }
+
+      config =
+        Tools.resolve(%{
+          "tools" => %{
+            "computer_use" => %{
+              "enabled" => true,
+              "chrome" => true,
+              "declined_origins" => ["https://bot.example.ts.net"]
+            }
+          }
+        })
+
+      assert %{enabled: true, chrome: true, declined_origins: ["https://bot.example.ts.net"]} =
+               config.computer_use
+    end
+  end
+
   describe "web search configuration" do
     test "uses default search settings" do
       config = Tools.resolve(%{})

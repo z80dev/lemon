@@ -15,7 +15,7 @@ defmodule CodingAgent.Tools.KillProcess do
     %AgentTool{
       name: "kill_process",
       description:
-        "Kill a background process (and its children) started with bash run_in_background.",
+        "Stop a background process and its children. Default term allows 2 seconds for cleanup before SIGKILL; kill sends SIGKILL immediately.",
       label: "Kill Process",
       parameters: %{
         "type" => "object",
@@ -23,6 +23,12 @@ defmodule CodingAgent.Tools.KillProcess do
           "process_id" => %{
             "type" => "string",
             "description" => "The process_id returned by bash with run_in_background"
+          },
+          "signal" => %{
+            "type" => "string",
+            "enum" => ["term", "kill"],
+            "description" =>
+              "term (default): SIGTERM then SIGKILL after 2 seconds; kill: immediate SIGKILL"
           }
         },
         "required" => ["process_id"]
@@ -35,13 +41,22 @@ defmodule CodingAgent.Tools.KillProcess do
           AgentToolResult.t() | {:error, String.t()}
   def execute(_tool_call_id, params, _signal, _on_update, _cwd, opts) do
     with {:ok, process_id} <- BashOutput.fetch_process_id(params),
-         :ok <- BashOutput.authorize(process_id, opts) do
-      kill(process_id)
+         :ok <- BashOutput.authorize(process_id, opts),
+         {:ok, signal} <- fetch_signal(params) do
+      kill(process_id, signal)
     end
   end
 
-  defp kill(process_id) do
-    case ProcessManager.kill(process_id, :sigkill) do
+  defp fetch_signal(params) do
+    case Map.get(params, "signal", "term") do
+      "term" -> {:ok, :sigterm}
+      "kill" -> {:ok, :sigkill}
+      _ -> {:error, "signal must be term or kill"}
+    end
+  end
+
+  defp kill(process_id, signal) do
+    case ProcessManager.kill(process_id, signal) do
       :ok ->
         {status, exit_code} =
           case ProcessManager.poll(process_id, lines: 0) do

@@ -53,6 +53,10 @@ Coding-session/file tools belong in `coding_agent`. Usage lives in the
   `recall(query, scope, limit)` searches scoped historical runs and workspace
   `memory/*.md` notes. Do not restore removed overlapping memory tools or conflate
   these tools with the lower-level `SessionSearch` feature/config name.
+- Remember selectors prefer an exact whole entry, otherwise require a unique
+  substring; patches change only that span and deletion removes the whole entry.
+- Prompt memory capacity labels report full store usage, not the bounded excerpt.
+  Capacity errors measure attempted text separately from file-format overhead.
 - Media work uses `lemon_media`; browser/LSP drivers own their supervised sessions.
   Keep public artifacts/errors bounded and redacted.
 - `McpSource` consumes external stdio/HTTP/SSE MCP services through supervised

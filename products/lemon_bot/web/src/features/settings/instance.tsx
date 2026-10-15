@@ -37,10 +37,10 @@ export function InstanceSettings() {
     <InstanceError error={instance.error} uncertain={instance.uncertain}/>
     {status && <>
       <section className="panel stack"><h2>Lifecycle</h2>
-        {status.runtime.controllable ? role === 'owner' ? <div className="row">
-          <button disabled={!available || instance.busy || link?.state === 'connected'} onClick={() => run('start')}>Start</button>
-          <button disabled={!available || instance.busy} onClick={() => run('restart')}>Restart</button>
-          <button className="danger" disabled={!available || instance.busy} onClick={() => run('stop')}>Stop</button>
+        {status.runtime.actions.length ? role === 'owner' ? <div className="row">
+          {status.runtime.actions.includes('start') && <button disabled={!available || instance.busy || link?.state === 'connected'} onClick={() => run('start')}>Start</button>}
+          {status.runtime.actions.includes('restart') && <button disabled={!available || instance.busy} onClick={() => run('restart')}>Restart</button>}
+          {status.runtime.actions.includes('stop') && <button className="danger" disabled={!available || instance.busy} onClick={() => run('stop')}>Stop</button>}
         </div> : <p className="muted">Only workspace owners can start, stop or restart Lemon.</p> : <p className="muted">{status.runtime.reason || 'This service cannot control Lemon on this host.'}</p>}
         {status.runtime.operation && <RuntimeOperationView operation={status.runtime.operation}/>}
       </section>

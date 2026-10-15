@@ -205,6 +205,22 @@ defmodule LemonSkills.UsageTest do
     refute upstream.stale_candidate
   end
 
+  test "telemetry records usage without an introspection handler", %{tmp_dir: cwd} do
+    LemonSkills.Telemetry.skill_load(%{key: "direct", result: :ok, source: :project, cwd: cwd})
+
+    LemonSkills.Telemetry.skill_write(%{
+      name: "direct",
+      result: :ok,
+      action: "patch",
+      scope: :project,
+      cwd: cwd
+    })
+
+    record = Usage.get("direct", scope: :project, cwd: cwd)
+    assert record["load_count"] == 1
+    assert record["write_count"] == 1
+  end
+
   defp restore_env(key, nil), do: System.delete_env(key)
   defp restore_env(key, value), do: System.put_env(key, value)
 end

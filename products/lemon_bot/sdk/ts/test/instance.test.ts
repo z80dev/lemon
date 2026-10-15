@@ -8,7 +8,8 @@ test('instance helpers use the product backend and nonce-bearing lifecycle reque
   const requests=boundary.requests;
   const client=new LemonBotClient({baseUrl:'https://lemon.example',token:'product-session',fetch:boundary.clientFetch});
   expect(await client.instance() as unknown).toEqual(fixture);await client.reconnectController();await client.runtimeAction('restart',true);
-  expect(requests.map(request=>[request.method,request.url])).toEqual([['GET','https://lemon.example/v1/instance'],['POST','https://lemon.example/v1/instance/reconnect'],['POST','https://lemon.example/v1/instance/runtime/restart']]);
+  const status=await client.instance();expect(status.lemon?.build?.channel).toBe('preview');expect(status.lemon?.channels?.details[1]?.lastError?.message).toBe('Channel connection failed.');expect(status.lemon?.providers?.map(provider=>[provider.credential,provider.isDefault])).toEqual([['present',true],['missing',false],['not_required',false]]);expect(status.runtime).toMatchObject({actions:['restart','stop'],via:'controller'});
+  expect(requests.map(request=>[request.method,request.url])).toEqual([['GET','https://lemon.example/v1/instance'],['POST','https://lemon.example/v1/instance/reconnect'],['POST','https://lemon.example/v1/instance/runtime/restart'],['GET','https://lemon.example/v1/instance']]);
   expect(requests[0]!.headers.get('Authorization')).toBe('Bearer product-session');
   const reconnect=await requests[1]!.json();const action=await requests[2]!.json();expect(reconnect.clientNonce).toBeString();expect(action.clientNonce).toBeString();expect(action.clientNonce).not.toBe(reconnect.clientNonce);expect(action.confirm).toBe(true);
 });

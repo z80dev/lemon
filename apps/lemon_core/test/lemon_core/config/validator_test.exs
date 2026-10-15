@@ -548,6 +548,30 @@ defmodule LemonCore.Config.ValidatorTest do
   end
 
   describe "validate_tools/2" do
+    test "validates the computer_use section" do
+      ok = %{
+        computer_use: %{
+          enabled: true,
+          chrome: false,
+          lcu_root: "/opt/lcu/current",
+          node: nil,
+          declined_origins: ["https://bot.example.ts.net", "http://127.0.0.1:4081"]
+        }
+      }
+
+      assert Validator.validate_tools(ok, []) == []
+
+      bad = %{
+        computer_use: %{enabled: "yes", chrome: 1, lcu_root: "", declined_origins: ["ftp://x"]}
+      }
+
+      errors = Validator.validate_tools(bad, [])
+
+      for path <- ~w(enabled chrome lcu_root declined_origins) do
+        assert Enum.any?(errors, &String.contains?(&1, "tools.computer_use." <> path)), path
+      end
+    end
+
     test "validates auto_resize_images" do
       errors = Validator.validate_tools(%{auto_resize_images: "yes"}, [])
       assert Enum.any?(errors, &String.contains?(&1, "tools.auto_resize_images"))

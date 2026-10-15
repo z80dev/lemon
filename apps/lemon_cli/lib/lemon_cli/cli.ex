@@ -20,7 +20,7 @@ defmodule LemonCli.CLI do
   alias LemonCore.Backup
   alias LemonCore.Config.Modular
   alias LemonCli.Onboarding.Runner
-  alias LemonCli.Setup.{Gateway, Provider, Verification, Wizard}
+  alias LemonCli.Setup.{Gateway, Provider, Wizard}
   alias LemonCore.Doctor
   alias LemonCore.Doctor.{Check, Report, SupportBundle}
   alias LemonCore.Secrets
@@ -48,27 +48,15 @@ defmodule LemonCli.CLI do
   @exit_usage 2
 
   @doc """
-  Returns whether interactive setup is still required.
+  Returns whether the global configuration is missing.
 
-  Setup derives the same state as the idempotent setup wizard. Configuration,
-  secret, and provider resolution failures intentionally fail closed. Both
-  launchers reach it through `lemon setup --if-required` before starting a
-  runtime for the TUI.
+  Existing but invalid configuration and unavailable credentials need repair,
+  not a new-install wizard. Commands that load configuration surface those
+  failures with validation and migration guidance.
   """
   @spec setup_required?() :: boolean()
   def setup_required? do
-    case ensure_lemon_core_started() do
-      :ok ->
-        Verification.setup_state()
-        |> Verification.pending_steps() != []
-
-      :error ->
-        true
-    end
-  rescue
-    _ -> true
-  catch
-    _, _ -> true
+    not File.exists?(Path.expand(Modular.global_path()))
   end
 
   @doc """
@@ -104,6 +92,16 @@ defmodule LemonCli.CLI do
     |> List.wrap()
     |> dispatch()
   rescue
+    error in LemonCore.Config.ValidationError ->
+      IO.puts(:stderr, "Error: #{Exception.message(error)}")
+
+      IO.puts(
+        :stderr,
+        "Run `lemon config validate --verbose`; use `lemon config migrate` for removed settings."
+      )
+
+      @exit_error
+
     error in [Error, LemonCore.CLI.Error, LemonAi.Models.CLI.Error] ->
       IO.puts(:stderr, "Error: #{error.message}")
       error.exit_code
@@ -367,7 +365,7 @@ defmodule LemonCli.CLI do
 
     cond do
       invalid != [] ->
-        print_usage_error("Invalid options: #{inspect(invalid)}", &print_doctor_usage/1)
+        print_usage_error(format_invalid_options(invalid, "doctor"), &print_doctor_usage/1)
 
       not valid_doctor_positionals?(opts, positional) ->
         print_usage_error(
@@ -400,7 +398,11 @@ defmodule LemonCli.CLI do
         if Report.ok?(report) do
           @exit_ok
         else
-          IO.puts(:stderr, "Diagnostics failed: #{report.fail} check(s) failed.")
+          IO.puts(
+            :stderr,
+            "Diagnostics failed: #{report.fail} check(s) failed. Run `lemon doctor --verbose` for details."
+          )
+
           @exit_error
         end
     end
@@ -431,7 +433,9 @@ defmodule LemonCli.CLI do
           end
 
         {:error, reason} ->
-          raise Error, message: "Failed to write support bundle: #{inspect(reason)}"
+          raise Error,
+            message:
+              "Could not write the support bundle: #{format_reason(reason)}. Check destination permissions, then run `lemon doctor --verbose`."
       end
     end
   end
@@ -492,7 +496,7 @@ defmodule LemonCli.CLI do
 
     case {invalid, positional} do
       {[_ | _], _} ->
-        print_usage_error("Invalid options: #{inspect(invalid)}", &print_config_usage/1)
+        print_usage_error(format_invalid_options(invalid, "config"), &print_config_usage/1)
 
       {[], ["validate"]} ->
         validate_config(opts)
@@ -556,9 +560,31 @@ defmodule LemonCli.CLI do
         @exit_error
 
       {:error, reason} ->
-        IO.puts(:stderr, "#{path}: migration failed: #{inspect(reason)}")
+        IO.puts(:stderr, format_migration_error(path, reason))
         @exit_error
     end
+  end
+
+  defp format_invalid_options(options, command) do
+    Enum.map_join(options, "; ", fn {option, _value} ->
+      "unknown option #{option} (see lemon #{command} --help)"
+    end)
+  end
+
+  defp format_migration_error(path, {:invalid_toml, {:invalid_toml, reason}}),
+    do: format_migration_error(path, {:invalid_toml, reason})
+
+  defp format_migration_error(path, {:invalid_toml, reason}) do
+    "#{path}: invalid TOML: #{reason}. Fix the syntax, then run `lemon config migrate`."
+  end
+
+  defp format_migration_error(path, {operation, reason})
+       when operation in [:read_failed, :write_failed] and is_atom(reason) do
+    "#{path}: could not #{if operation == :read_failed, do: "read", else: "write"} configuration: #{:file.format_error(reason)}. Check permissions, then run `lemon config migrate`."
+  end
+
+  defp format_migration_error(path, _reason) do
+    "#{path}: configuration migration could not complete. Run `lemon config validate --verbose`, then retry `lemon config migrate`."
   end
 
   defp validate_config(opts) do
@@ -569,6 +595,9 @@ defmodule LemonCli.CLI do
     load_opts = if project_dir, do: [project_dir: project_dir], else: []
 
     IO.puts("Validating Lemon configuration...")
+    IO.puts("Configuration files checked:")
+    IO.puts("  Global: #{Modular.global_path()}")
+    IO.puts("  Project: #{Modular.project_path(project_dir || File.cwd!())}")
 
     if project_dir do
       IO.puts("  Project directory: #{project_dir}")
@@ -586,6 +615,8 @@ defmodule LemonCli.CLI do
           print_config_summary(config)
         end
 
+        IO.puts("Next: run `lemon doctor` to check provider and runtime readiness.")
+
         @exit_ok
 
       {:error, errors} ->
@@ -595,14 +626,11 @@ defmodule LemonCli.CLI do
           IO.puts(:stderr, "  • #{error}")
         end)
 
-        if verbose? do
-          IO.puts("")
-          IO.puts("Configuration files checked:")
-          IO.puts("  Global: #{Modular.global_path()}")
-          IO.puts("  Project: #{Modular.project_path(project_dir || File.cwd!())}")
-        end
+        IO.puts(
+          :stderr,
+          "Fix the errors, then run `lemon config validate --verbose`; use `lemon config migrate` for removed settings."
+        )
 
-        IO.puts(:stderr, "Configuration validation failed")
         @exit_error
     end
   end
@@ -645,7 +673,7 @@ defmodule LemonCli.CLI do
     IO.puts("")
     IO.puts("Logging:")
     IO.puts("  Level: #{config.logging.level}")
-    IO.puts("  File: #{config.logging.file}")
+    IO.puts("  File: #{format_config_value(config.logging.file)}")
 
     IO.puts("")
     IO.puts("TUI:")
@@ -664,6 +692,9 @@ defmodule LemonCli.CLI do
       IO.puts("  (none configured)")
     end
   end
+
+  defp format_config_value(nil), do: "(not set)"
+  defp format_config_value(value), do: to_string(value)
 
   defp enabled_channels(gateway) do
     gateway
@@ -715,7 +746,9 @@ defmodule LemonCli.CLI do
     IO.puts("env_fallback: #{status.env_fallback}")
 
     if status.keychain_error do
-      IO.puts("keychain_error: #{inspect(status.keychain_error)}")
+      IO.puts(
+        "Keychain access failed: #{format_reason(status.keychain_error)}. Run `lemon secrets status` for recovery guidance."
+      )
     end
 
     IO.puts("owner: #{status.owner}")
@@ -760,7 +793,11 @@ defmodule LemonCli.CLI do
         @exit_error
 
       {:error, reason} ->
-        IO.puts(:stderr, "Failed to initialize secrets master key: #{inspect(reason)}")
+        IO.puts(
+          :stderr,
+          "Could not initialize the secrets master key: #{format_reason(reason)}. Run `lemon secrets init` after checking keychain access."
+        )
+
         @exit_error
     end
   end
@@ -815,7 +852,7 @@ defmodule LemonCli.CLI do
           {:error, {:keychain_failed, reason}} ->
             IO.puts(
               :stderr,
-              "Failed to read secrets master key from keychain: #{inspect(reason)}. " <>
+              "Could not read the secrets master key from keychain: #{format_reason(reason)}. " <>
                 "Run `lemon secrets status` for diagnostics, then re-run `lemon secrets init` " <>
                 "or set #{MasterKey.env_var()}."
             )
@@ -823,7 +860,11 @@ defmodule LemonCli.CLI do
             @exit_error
 
           {:error, reason} ->
-            IO.puts(:stderr, "Failed to store secret: #{inspect(reason)}")
+            IO.puts(
+              :stderr,
+              "Could not store the secret: #{format_reason(reason)}. Run `lemon secrets init`, then retry `lemon secrets set`."
+            )
+
             @exit_error
         end
 
@@ -882,7 +923,11 @@ defmodule LemonCli.CLI do
           @exit_ok
 
         {:error, reason} ->
-          IO.puts(:stderr, "Failed to delete secret: #{inspect(reason)}")
+          IO.puts(
+            :stderr,
+            "Could not delete the secret: #{format_reason(reason)}. Run `lemon secrets status` to check store readiness."
+          )
+
           @exit_error
       end
     end
@@ -1004,7 +1049,10 @@ defmodule LemonCli.CLI do
         :imported
 
       {:error, reason} ->
-        IO.puts("#{name}: error — #{inspect(reason)}")
+        IO.puts(
+          "#{name}: check failed: #{format_reason(reason)}. Run `lemon secrets status` for recovery guidance."
+        )
+
         {:error, reason}
     end
   end
@@ -1099,7 +1147,7 @@ defmodule LemonCli.CLI do
       OptionParser.parse(args, strict: [project_dir: :string, json: :boolean])
 
     if invalid != [] do
-      IO.puts(:stderr, "Invalid options: #{inspect(invalid)}")
+      IO.puts(:stderr, format_invalid_options(invalid, "channels"))
       @exit_usage
     else
       ensure_apps_started!([:lemon_core])
@@ -1412,17 +1460,21 @@ defmodule LemonCli.CLI do
           :ok
 
         {:error, reason} ->
-          raise Error, message: "Failed to start #{inspect(app)}: #{inspect(reason)}"
+          raise Error,
+            message:
+              "Could not start a required application: #{format_reason(reason)}. Run `lemon doctor --verbose` to check startup."
       end
     end)
   end
 
-  defp ensure_lemon_core_started do
-    case Application.ensure_all_started(:lemon_core) do
-      {:ok, _started} -> :ok
-      {:error, _reason} -> :error
-    end
-  end
+  defp format_reason(:enoent), do: "a required file is missing"
+  defp format_reason(:eacces), do: "permission denied"
+  defp format_reason(:eperm), do: "operation not permitted"
+  defp format_reason(:enospc), do: "the disk is full"
+  defp format_reason(:timeout), do: "the operation timed out"
+  defp format_reason(:locked), do: "the secret store is locked"
+  defp format_reason(:not_found), do: "the requested item was not found"
+  defp format_reason(_reason), do: "the operation could not complete"
 
   # ──────────────────────────────────────────────────────────────────────────
   # Usage

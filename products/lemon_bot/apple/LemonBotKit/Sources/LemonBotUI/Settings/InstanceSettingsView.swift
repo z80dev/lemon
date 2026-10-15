@@ -112,12 +112,12 @@ struct InstanceSettingsView: View {
     }
     private func lifecycle(_ runtime: InstanceRuntime) -> some View {
         Section("Lifecycle") {
-            if runtime.controllable {
+            if !runtime.actions.isEmpty {
                 if store.canControlInstance {
                     HStack {
-                        Button("Start") { run(.start) }.disabled(store.instanceStatus?.controller.state == .connected)
-                        Button("Restart") { confirmation = .restart }
-                        Button("Stop", role: .destructive) { confirmation = .stop }
+                        if runtime.actions.contains(.start) { Button("Start") { run(.start) }.disabled(store.instanceStatus?.controller.state == .connected) }
+                        if runtime.actions.contains(.restart) { Button("Restart") { confirmation = .restart } }
+                        if runtime.actions.contains(.stop) { Button("Stop", role: .destructive) { confirmation = .stop } }
                     }.buttonStyle(.pill(.secondary)).disabled(action.busy || operation?.state == .running || pendingRuntime)
                 } else { Text("Only workspace owners can start, stop or restart Lemon.").foregroundStyle(LB.muted) }
             } else { Text(runtime.reason ?? "This backend cannot control Lemon on this host.").foregroundStyle(LB.muted).textSelection(.enabled) }

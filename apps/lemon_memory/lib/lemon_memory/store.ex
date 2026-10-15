@@ -599,6 +599,29 @@ defmodule LemonMemory.Store do
     :exit, reason -> {:error, {:timeout_or_down, reason}}
   end
 
+  @doc "Read scoped history windows or session representatives, filtering before ranking."
+  def history_window(server, agent, home, selector, opts) do
+    with {:ok, mode, key} <- owner_query(selector) do
+      GenServer.call(
+        server,
+        {:history_window,
+         [
+           agent,
+           home,
+           mode,
+           key,
+           Keyword.get(opts, :session),
+           Keyword.get(opts, :around),
+           Keyword.get(opts, :limit, 5),
+           Keyword.get(opts, :workspace_root)
+         ]},
+        5_000
+      )
+    end
+  catch
+    :exit, reason -> {:error, {:timeout_or_down, reason}}
+  end
+
   @doc "Exact-ID read bound to indexed profile and private/shared ownership."
   def get_owned_document(server, id, agent, home, selector) do
     with {:ok, mode, key} <- owner_query(selector) do
@@ -924,6 +947,62 @@ defmodule LemonMemory.Store do
 
   def handle_call({:owned_search, params}, _from, state),
     do: {:reply, do_query_result(state, state.stmts.owned_search, params), state}
+
+  def handle_call({:history_window, params}, _from, state) do
+    sql = """
+    WITH eligible AS (
+      SELECT *, ROW_NUMBER() OVER (
+        PARTITION BY session_key ORDER BY COALESCE(started_at_ms, ingested_at_ms), doc_id
+      ) AS position,
+      COUNT(*) OVER (PARTITION BY session_key) AS run_count,
+      MAX(ingested_at_ms) OVER (PARTITION BY session_key) AS latest
+      FROM memory_documents
+      WHERE agent_id = ?1 AND home_digest = ?2
+        AND (memory_scope = ?3 OR (?3 = 'legacy' AND memory_scope IS NULL))
+        AND (memory_context_key = ?4 OR (?4 IS NULL AND memory_context_key IS NULL))
+        AND COALESCE(memory_kind, 'run') NOT IN ('user', 'memory', 'project_learning')
+        AND (?5 IS NULL OR session_key = ?5)
+        AND (?8 IS NULL OR repository_root = ?8)
+    ), selected AS (
+      SELECT * FROM eligible
+      WHERE (?5 IS NULL AND position = 1)
+         OR (?5 IS NOT NULL AND ?6 IS NULL)
+         OR (?5 IS NOT NULL AND position >= MAX(1,
+           (SELECT position FROM eligible WHERE doc_id = ?6 OR run_id = ?6 LIMIT 1)
+           - CAST((?7 - 1) / 2 AS INTEGER)))
+      ORDER BY CASE WHEN ?5 IS NULL THEN latest END DESC,
+               CASE WHEN ?6 IS NULL THEN position END DESC,
+               position ASC, doc_id
+      LIMIT ?7
+    )
+    SELECT doc_id, run_id, session_key, agent_id, workspace_key, scope,
+           started_at_ms, CASE WHEN ?5 IS NULL THEN latest ELSE ingested_at_ms END,
+           prompt_summary, answer_summary,
+           tools_used_blob, provider, model, outcome, meta_blob,
+           memory_scope, memory_context_key, home_digest, memory_kind, repository_root,
+           run_count
+    FROM selected
+    """
+
+    result =
+      with {:ok, stmt} <- Sqlite3.prepare(state.conn, sql) do
+        try do
+          with :ok <- Sqlite3.bind(stmt, params),
+               {:ok, rows} <- Sqlite3.fetch_all(state.conn, stmt) do
+            Enum.reduce_while(rows, {:ok, []}, fn row, {:ok, acc} ->
+              case decode_row(Enum.drop(row, -1)) do
+                {:ok, doc} -> {:cont, {:ok, [{doc, List.last(row)} | acc]}}
+                error -> {:halt, error}
+              end
+            end)
+          end
+        after
+          Sqlite3.release(state.conn, stmt)
+        end
+      end
+
+    {:reply, result, state}
+  end
 
   def handle_call({:owned_document, params}, _from, state) do
     result =

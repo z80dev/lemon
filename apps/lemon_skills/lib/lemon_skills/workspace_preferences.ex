@@ -201,7 +201,15 @@ defmodule LemonSkills.WorkspacePreferences do
          rendered = "- " <> String.replace(text, "\n", "\n  ") <> "\n",
          updated = append_under_heading(content, spec.heading, rendered),
          %AgentToolResult{} <-
-           write_checked(path, kind, spec, updated, "add", %{changed: true, duplicate: false}),
+           write_checked(
+             path,
+             kind,
+             spec,
+             updated,
+             "add",
+             %{changed: true, duplicate: false},
+             String.length(text)
+           ),
          {:ok, entries} <- read_entries(workspace_dir, kind),
          entry when not is_nil(entry) <- Enum.find(entries, &(&1.text == text)) do
       {:ok, entry.item}
@@ -466,49 +474,83 @@ defmodule LemonSkills.WorkspacePreferences do
       })
     else
       updated = append_under_heading(content, spec.heading, "- #{text}\n")
-      write_checked(path, target, spec, updated, "add", %{changed: true, duplicate: false})
+
+      write_checked(
+        path,
+        target,
+        spec,
+        updated,
+        "add",
+        %{changed: true, duplicate: false},
+        String.length(text)
+      )
     end
   end
 
   defp replace_note(path, target, spec, content, old_text, new_text) do
-    with :ok <- ensure_unique(content, old_text, "replaces") do
-      updated = String.replace(content, old_text, new_text)
-      write_checked(path, target, spec, updated, "replace", %{changed: true})
-    end
+    mutate_note(path, target, spec, content, old_text, new_text, "replace")
   end
 
   defp remove_note(path, target, spec, content, text) do
-    with :ok <- ensure_unique(content, text, "replaces") do
+    mutate_note(path, target, spec, content, text, nil, "remove")
+  end
+
+  defp mutate_note(path, target, spec, content, selector, text, action) do
+    with {:ok, entries} <- read_entries(Path.dirname(path), target),
+         {:ok, _, old, patched} <-
+           LemonMemory.NoteMatch.resolve(Enum.map(entries, & &1.text), selector, text),
+         :ok <- if(patched, do: screen_text(patched), else: :ok) do
+      entry = Enum.find(entries, &(&1.text == old))
+
+      replacement =
+        if patched, do: "- " <> String.replace(patched, "\n", "\n  ") <> "\n", else: ""
+
       updated =
-        content
-        |> String.replace("- #{text}\n", "")
-        |> String.replace(text, "")
-        |> String.replace(~r/\n{3,}/, "\n\n")
-        |> String.trim_trailing()
-        |> Kernel.<>("\n")
+        binary_part(content, 0, entry.start) <>
+          replacement <>
+          binary_part(
+            content,
+            entry.start + entry.length,
+            byte_size(content) - entry.start - entry.length
+          )
 
-      write_checked(path, target, spec, updated, "remove", %{changed: true})
+      write_checked(
+        path,
+        target,
+        spec,
+        updated,
+        action,
+        %{changed: true},
+        if(text, do: String.length(text), else: 0)
+      )
+    else
+      {:error, :ambiguous_match} ->
+        {:error,
+         "replaces is ambiguous; use longer unique text or the exact whole entry, then retry."}
+
+      {:error, :not_found} ->
+        {:error, "replaces was not found"}
+
+      error ->
+        error
     end
   end
 
-  defp ensure_unique(content, text, key) do
-    count =
-      Regex.scan(Regex.compile!(Regex.escape(text)), content)
-      |> length()
-
-    case count do
-      0 -> {:error, "#{key} was not found"}
-      1 -> :ok
-      _ -> {:error, "#{key} must match exactly one occurrence"}
-    end
-  end
-
-  defp write_checked(path, target, spec, content, action, details) do
+  defp write_checked(path, target, spec, content, action, details, entry_size) do
     content = String.trim_trailing(content) <> "\n"
 
     if String.length(content) > spec.max_chars do
+      previous =
+        case File.read(path) do
+          {:ok, previous} -> previous
+          _ -> ""
+        end
+
       {:error,
-       "#{spec.file} would exceed #{spec.max_chars} characters; keep compact memory curated"}
+       "#{spec.file} at #{String.length(previous)}/#{spec.max_chars} chars; " <>
+         "attempted entry #{entry_size} chars " <>
+         "would exceed the limit by #{String.length(content) - spec.max_chars} chars. " <>
+         "Remove or shorten entries, then retry.\nCurrent entries:\n" <> previous}
     else
       File.mkdir_p!(Path.dirname(path))
 
