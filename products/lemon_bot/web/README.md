@@ -54,9 +54,9 @@ On touch screens, tap a message to show its 44px copy, reply and reaction contro
 session credential. Failed message history loads offer **Try again**, and active
 work is never represented as an empty conversation.
 
-User-facing first-use copy calls the account container a **workspace** and the
-execution device a **computer**. API and configuration identifiers retain their
-canonical names.
+User-facing copy calls the account container a **workspace** and the execution
+device a **machine**. **Computer user** means the machine's operating-system
+account. API and configuration identifiers retain their canonical names.
 
 ## Credential, cache, voice and unknown-outcome boundaries
 
