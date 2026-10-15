@@ -8,6 +8,13 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
+### Security
+
+- Upgrade locked Mint from 1.10.1 to 1.10.2 to fix HTTP/1 response smuggling
+  (EEF-CVE-2026-94194), HTTP/2 decoded-header memory exhaustion
+  (CVE-2026-91043 / GHSA-9x8p-qrf4-jq7g), and oversized HTTP/2 frame buffering
+  (EEF-CVE-2026-92103), without changing dependency constraints or other locks.
+
 ### Changed
 
 - Setup finishes with a first coding prompt, a success check, optional Telegram
