@@ -60,7 +60,7 @@ export const statusCommand: SlashCommand = {
 				[
 					"runs",
 					runs
-						? `${pickNumber(runs, "active") ?? 0} active, ${pickNumber(runs, "queued") ?? 0} queued, ${pickNumber(runs, "completed_today") ?? 0} today`
+						? `${pickNumber(runs, "active") ?? "unknown"} active, ${pickNumber(runs, "queued") ?? "unknown"} queued, ${pickNumber(runs, "completed_today") ?? "unknown"} today, ${pickNumber(runs, "failed_today") ?? "unknown"} failed today`
 						: undefined,
 				],
 				[
