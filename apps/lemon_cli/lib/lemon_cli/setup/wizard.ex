@@ -21,6 +21,7 @@ defmodule LemonCli.Setup.Wizard do
   alias LemonCore.Runtime.{Env, Profile}
   alias LemonCore.Secrets
   alias LemonCore.Secrets.MasterKey
+  alias LemonCore.Setup.Readiness
   alias LemonCore.Update.ConfigMigrator
 
   @type io_callbacks :: %{
@@ -162,7 +163,7 @@ defmodule LemonCli.Setup.Wizard do
 
     result =
       if (result == :ok or match?({:ok, _}, result)) and
-           not LemonCore.Setup.Readiness.ready?(state),
+           not Readiness.ready?(state),
          do: {:error, :setup_incomplete},
          else: result
 
