@@ -10,6 +10,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Lemon Bot
 
+- Name missing required Lemon Bot startup settings without a stack dump, keep
+  operator configuration details in server diagnostics rather than owner errors,
+  and clarify backend/SDK setup and contributor documentation.
+
 - Add truthful attached-instance status, controller reconnect (including rejected
   credentials), and opt-in owner-only local runtime start/stop/restart with
   bounded operation receipts. Publish TypeScript SDK helpers, Swift Codable

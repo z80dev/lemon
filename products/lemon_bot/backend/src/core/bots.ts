@@ -136,7 +136,10 @@ export function baseBotMcpTemplate(s: BackendServices): McpDefinition {
 }
 function botEndpoint(s: BackendServices): URL {
   const url = new URL('/mcp', s.config.publicUrl);
-  if (url.protocol !== 'https:' || url.username || url.password || url.hostname === 'localhost' || url.hostname.endsWith('.localhost') || /^127\./.test(url.hostname) || url.hostname === '[::1]' || url.hostname === '0.0.0.0') fail('capability_unavailable', 'Configure a worker-reachable non-loopback HTTPS Lemon Bot public URL before provisioning scoped MCP.');
+  if (url.protocol !== 'https:' || url.username || url.password || url.hostname === 'localhost' || url.hostname.endsWith('.localhost') || /^127\./.test(url.hostname) || url.hostname === '[::1]' || url.hostname === '0.0.0.0') {
+    process.stderr.write('LEMON_BOT_PUBLIC_URL must be a worker-reachable non-loopback HTTPS origin for scoped MCP provisioning.\n');
+    fail('capability_unavailable', 'This server needs a secure address your machine can reach before Bot setup can finish. Ask the operator to configure it.');
+  }
   return url;
 }
 async function botProfileMcpTemplates(s: BackendServices, botId: string): Promise<McpDefinition[]> {
@@ -672,8 +675,11 @@ async function moveBot(s: BackendServices, c: RequestContext): Promise<P.Bot> {
 }
 async function generateAvatar(s: BackendServices, c: RequestContext): Promise<P.Attachment> {
   const p = user(c), input = parse(mutation.extend({ prompt: boundedText(4000, 1) }), c.body), bot = visible(s, p, pathId(c), true);
-  if (process.env.LEMON_BOT_IMAGE_PROVIDER !== 'openai') fail('capability_unavailable', 'Configure LEMON_BOT_IMAGE_PROVIDER=openai and LEMON_BOT_OPENAI_API_KEY for avatar generation.');
-  const key = process.env.LEMON_BOT_OPENAI_API_KEY; if (!key) fail('capability_unavailable', 'Avatar generation requires the configured OpenAI API key.');
+  if (process.env.LEMON_BOT_IMAGE_PROVIDER !== 'openai' || !process.env.LEMON_BOT_OPENAI_API_KEY) {
+    process.stderr.write('Avatar generation requires LEMON_BOT_IMAGE_PROVIDER=openai and LEMON_BOT_OPENAI_API_KEY.\n');
+    fail('capability_unavailable', 'Image generation is not enabled on this Lemon Bot server. Ask the operator to configure an image provider.');
+  }
+  const key = process.env.LEMON_BOT_OPENAI_API_KEY;
   let response: Response;
   try { response = await fetch('https://api.openai.com/v1/images/generations', { method: 'POST', headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ model: 'gpt-image-1', prompt: input.prompt, size: '1024x1024', n: 1, output_format: 'png' }), signal: AbortSignal.timeout(120000), redirect: 'error' }); }
   catch { fail('upstream_unavailable', 'Avatar generation provider did not respond.', false, { resourceIds: [bot.id] }); }
@@ -811,7 +817,10 @@ export async function syncBotPolicyFloor(s: BackendServices, actor: Principal, b
   if (s.store.list<P.Run>('runs', run => run.botId === bot.id && !terminal[run.status]).length) fail('conflict', 'Quiesce and reconcile native work before applying a management restriction.');
   await nativeIdle(s, bot);
   const previous = s.store.metadata<P.JSONObject>(`botControllerFloor:${bot.id}`);
-  if (!previous) fail('capability_unavailable', 'An acknowledged closed native floor is required for restriction-only management.');
+  if (!previous) {
+    process.stderr.write('Restriction management requires an acknowledged closed native floor.\n');
+    fail('capability_unavailable', 'This Bot’s existing tool permissions could not be verified. Ask the operator to check its setup before changing restrictions.');
+  }
   const measured = s.store.get<P.MachineCapabilities & { id: string }>('machineCapabilities', bot.machineId) ?? undefined;
   const restrictions = await workspaceNativeToolRestrictions(s, bot, previous, measured);
   const toolPolicy = hardenNativePolicy(previous, restrictions);
@@ -827,7 +836,10 @@ export async function syncBotPolicyFloor(s: BackendServices, actor: Principal, b
 function hardenNativePolicy(previous: P.JSONObject, restrictions: P.JSONObject): P.JSONObject {
   const schema = z.object({ profile: z.literal('custom'), allow: z.array(z.string()), deny: z.array(z.string()), blocked_tools: z.array(z.string()).default([]), require_approval: z.array(z.string()) }).strict();
   const before = schema.safeParse(previous), after = schema.safeParse(restrictions);
-  if (!before.success || !after.success) fail('capability_unavailable', 'Restriction management requires normalized closed native policy inventories.');
+  if (!before.success || !after.success) {
+    process.stderr.write('Restriction management requires normalized closed native policy inventories.\n');
+    fail('capability_unavailable', 'This Bot’s tool permissions could not be read safely. Ask the operator to check its setup before changing restrictions.');
+  }
   return { profile: 'custom', allow: before.data.allow.filter(tool => after.data.allow.includes(tool)), deny: [...new Set([...before.data.deny, ...after.data.deny])].sort(), blocked_tools: [...new Set([...before.data.blocked_tools, ...after.data.blocked_tools])].sort(), require_approval: [...new Set([...before.data.require_approval, ...after.data.require_approval])].sort() };
 }
 function previouslyAuthorizedViewers(s: BackendServices, collection: string, entity: unknown): string[] {
@@ -863,7 +875,10 @@ export async function syncBotConnectorRevocation(s: BackendServices, actor: Prin
   if (s.store.list<P.Run>('runs', run => run.botId === botId && !terminal[run.status]).length) fail('conflict', 'Revocation must terminally cancel and reconcile affected invocations first.');
   await nativeIdle(s, bot);
   const desired = s.store.metadata<DesiredProfile>(`botDesiredProfile:${botId}`);
-  if (!desired || desired.machineId !== bot.machineId || !desired.mcpServers.some(server => server.name === 'lemon-bot')) fail('capability_unavailable', 'An exact acknowledged MCP ceiling snapshot is required for scoped revocation.');
+  if (!desired || desired.machineId !== bot.machineId || !desired.mcpServers.some(server => server.name === 'lemon-bot')) {
+    process.stderr.write('Scoped revocation requires an exact acknowledged MCP ceiling snapshot.\n');
+    fail('capability_unavailable', 'This Bot’s connected-tool setup could not be verified. Ask the operator to check its setup before disconnecting tools.');
+  }
   requireMethods(s, ['profiles.get', 'profiles.update', 'profiles.sync']);
   const current = await s.lemon.call<{ profile: { id: string; mcpConfigFingerprint: string } }>('profiles.get', { id: bot.profileId }, { mutation: false });
   if (current.profile?.id !== bot.profileId || current.profile.mcpConfigFingerprint !== mcpFingerprint(desired.mcpServers)) fail('outcome_unknown', 'The current MCP configuration differs from the acknowledged scoped snapshot.', false, { resourceIds: [botId, connectorId] });

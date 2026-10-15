@@ -136,7 +136,10 @@ export async function createBackend(config:BackendConfiguration,key:Uint8Array):
 }
 
 export async function runBackend():Promise<void> {
-  const {config,key}=await loadConfiguration();const backend=await createBackend(config,key);const server=backend.start();
+  let configuration:{config:BackendConfiguration;key:Uint8Array};
+  try {configuration=await loadConfiguration();}
+  catch(error) {process.stderr.write(`${error instanceof Error?error.message:'Backend configuration could not be loaded.'}\n`);process.exit(1);}
+  const {config,key}=configuration;const backend=await createBackend(config,key);const server=backend.start();
   process.stdout.write(`Lemon Bot listening at ${config.publicUrl} (${server.hostname}:${server.port}).\n`);
   const shutdown=()=>{void backend.stop().then(()=>process.exit(0)).catch(()=>process.exit(1));};
   process.once('SIGINT',shutdown);process.once('SIGTERM',shutdown);
