@@ -338,7 +338,7 @@ describe("diagnostics", () => {
 		await harness.run("/usage");
 		expect(harness.host.text).toContain("48k in");
 		expect(harness.host.text).toContain("$1.23");
-		expect(harness.store.usage).toBeDefined();
+		expect(harness.store.usage?.summary).toEqual({ status: "within_limits", totalTokens: 60_000 });
 		expect(harness.host.statusRefreshes).toBeGreaterThan(0);
 	});
 
@@ -351,9 +351,8 @@ describe("diagnostics", () => {
 		});
 		await harness.run("/cost week");
 		const params = harness.server.requestsFor("usage.cost")[0].params as Record<string, unknown>;
-		expect(typeof params.startDate).toBe("string");
-		expect(typeof params.endDate).toBe("string");
 		expect(params.startDate as string).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+		expect(params.endDate as string).toMatch(/^\d{4}-\d{2}-\d{2}$/);
 		expect(params.range).toBeUndefined();
 		expect(harness.host.text).toContain("$4.50");
 		expect(harness.host.text).toContain("anthropic");
