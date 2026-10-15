@@ -8,6 +8,12 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
+No unreleased changes yet.
+
+---
+
+## [2026.10.8]
+
 ### Fixed
 
 - Lemon Bot standalone backend/web release artifacts now build with the Bun
