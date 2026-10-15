@@ -425,6 +425,31 @@ defmodule CodingAgent.BashExecutor do
     }
   end
 
+  @doc false
+  def captured_result(path, exit_code, cancelled) when is_binary(path) do
+    buffered = path |> read_output_tail(@default_max_bytes) |> sanitize_output()
+    size = File.stat!(path).size
+
+    truncated =
+      size > @default_max_bytes or
+        length(:binary.matches(buffered, "\n")) >= @default_max_lines
+
+    state = %{temp_file_path: path, max_bytes: @default_max_bytes, total_bytes: size}
+
+    output =
+      if truncated,
+        do: state |> head_tail_output(buffered) |> sanitize_output(),
+        else: buffered
+
+    %Result{
+      output: output,
+      exit_code: exit_code,
+      cancelled: cancelled,
+      truncated: truncated,
+      full_output_path: if(truncated, do: path)
+    }
+  end
+
   defp head_tail_output(state, buffered) do
     head_bytes = min(20 * 1024, div(state.max_bytes, 2))
     tail_bytes = state.max_bytes - head_bytes

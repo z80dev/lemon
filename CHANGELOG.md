@@ -8,7 +8,12 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
-No unreleased changes yet.
+### Changed
+
+- Ordinary bash commands now continue under the session-owned process manager
+  when their foreground wait expires, returning a process ID without rerunning
+  the command or interrupting output capture. PTY and ACP-client terminal
+  timeouts still terminate their commands.
 
 ---
 
