@@ -74,6 +74,8 @@ private enum UIResourceError: LocalizedError {
         error = nil
         defer { running = false }
         do { try await action() } catch {
+            // A view task cancelled by teardown or a reload is not a user-facing failure.
+            if error is CancellationError || (error as? URLError)?.code == .cancelled { return }
             self.error = error.localizedDescription
             if case ClientError.outcomeUnknown(let nonce) = error {
                 uncertain = true
@@ -101,82 +103,41 @@ struct ActionErrorView: View {
     let message: String?
     var body: some View {
         if let message {
-            HStack(alignment: .top) {
-                Image(systemName: "exclamationmark.triangle")
-                Text(message).textSelection(.enabled)
-                Button("Copy error") { copyText(message) }.buttonStyle(.borderless)
-            }.font(.callout).foregroundStyle(.red).padding(8)
-                .background(.red.opacity(0.07), in: RoundedRectangle(cornerRadius: 8))
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Image(systemName: "exclamationmark.circle.fill").foregroundStyle(LB.danger)
+                Text(message).foregroundStyle(LB.ink).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
+                Button("Copy") { copyText(message) }.buttonStyle(.pill(.quiet, compact: true)).accessibilityLabel("Copy error")
+            }.font(LBFont.rowSubtitle).padding(.horizontal, 12).padding(.vertical, 8)
+                .background(RoundedRectangle(cornerRadius: LBMetric.rowRadius, style: .continuous).fill(LB.danger.opacity(0.09)))
                 .accessibilityElement(children: .contain)
         }
-    }
-}
-struct StatusBadge: View {
-    let text: String
-    var body: some View {
-        Text(text.replacingOccurrences(of: "_", with: " ").capitalized)
-            .font(.caption).padding(.horizontal, 8).padding(.vertical, 3)
-            .background(.quaternary, in: Capsule())
     }
 }
 struct BotIdentityAnchor: View {
     let store: LemonBotStore
     let bot: Bot
     var body: some View {
-        HStack {
-            BotAvatarView(store: store, bot: bot).frame(width: 36, height: 36).accessibilityHidden(true)
-            VStack(alignment: .leading) {
-                Text(bot.name).font(.headline)
-                Text(store.machines.first(where: { $0.id == bot.machineId })?.name ?? bot.machineId)
-                    .font(.caption).foregroundStyle(.secondary)
+        HStack(spacing: 10) {
+            BotBadgedAvatar(store: store, bot: bot, size: 36, presence: AvatarPresence(activity: bot.activity, online: store.isOnline), ring: LB.canvas)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(bot.name).font(LBFont.rowTitle).foregroundStyle(LB.ink)
+                Text(store.machine(for: bot)?.name ?? "Unknown machine").font(LBFont.meta).foregroundStyle(LB.muted)
             }
-            Spacer()
-            StatusBadge(text: store.connectionState == "online" ? bot.activity : "last known: \(bot.activity)")
+            Spacer(minLength: 8)
+            StatusBadge(text: store.isOnline ? bot.activity : "last known: \(bot.activity)")
         }.accessibilityElement(children: .combine)
     }
 }
-struct BotAvatarView: View {
-    let store: LemonBotStore
-    let bot: Bot
-    init(store: LemonBotStore, bot: Bot) { self.store = store; self.bot = bot }
-    @State private var image: Image?
-    @State private var failed = false
-    var body: some View {
-        Group {
-            if let image { image.resizable().scaledToFill().clipShape(Circle()) }
-            else {
-                Image(systemName: failed ? "exclamationmark.circle" : bot.avatar.shape == "star" ? "star.circle.fill" : bot.avatar.shape == "square" ? "person.crop.square.fill" : "face.smiling.fill")
-                    .resizable().scaledToFit().foregroundStyle(characterColor)
-            }
-        }.task(id: bot.avatar.attachmentId) {
-            image = nil; failed = false
-            guard let id = bot.avatar.attachmentId else { return }
-            do {
-                let url = try await store.download(attachmentID: id)
-                #if os(macOS)
-                guard let native = NSImage(contentsOf: url) else { failed = true; return }
-                image = Image(nsImage: native)
-                #else
-                guard let native = UIImage(contentsOfFile: url.path) else { failed = true; return }
-                image = Image(uiImage: native)
-                #endif
-            } catch { failed = true }
-        }
-    }
-    private var characterColor: Color {
-        switch bot.avatar.color {
-        case "blue": return .blue
-        case "green": return .green
-        case "purple": return .purple
-        case "orange": return .orange
-        case "red": return .red
-        default: return .yellow
-        }
-    }
-}
+/// Calm centered state when nothing is selected.
 struct EmptySelectionView: View {
+    var title = "Message a Bot"
+    var message = "Pick a Bot on the left to pick up where you left off. Bots keep working on their machines while the app is closed."
     var body: some View {
-        ContentUnavailableView("Choose your assistant", systemImage: "sparkles", description: Text("Bots keep working on their assigned machine when you close the app. Choose a Bot or group of your Bots to see its work."))
+        VStack(spacing: 14) {
+            LemonMark(size: 76)
+            Text(title).font(LBFont.title).foregroundStyle(LB.ink)
+            Text(message).font(LBFont.body).foregroundStyle(LB.muted).multilineTextAlignment(.center).frame(maxWidth: 340)
+        }.padding(32).frame(maxWidth: .infinity, maxHeight: .infinity).background(LB.canvas)
     }
 }
 

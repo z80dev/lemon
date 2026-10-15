@@ -9,9 +9,17 @@ import UniformTypeIdentifiers
 @main
 struct LemonBotiOSApp: App {
     @UIApplicationDelegateAdaptor(LemonBotAppDelegate.self) private var delegate
-    @State private var store = LemonBotStore()
+    @State private var store = LemonBotiOSApp.makeStore()
     var body: some Scene {
         WindowGroup { NativeLemonBotView(store: store, delegate: delegate) }
+    }
+
+    private static func makeStore() -> LemonBotStore {
+        #if DEBUG
+        // Design review: `-LBFixtures` launches into an in-memory fixture workspace (no network, no Keychain).
+        if ProcessInfo.processInfo.arguments.contains("-LBFixtures") { return LemonBotFixtures.makeStore(scenario: .chiefOfStaff) }
+        #endif
+        return LemonBotStore()
     }
 }
 

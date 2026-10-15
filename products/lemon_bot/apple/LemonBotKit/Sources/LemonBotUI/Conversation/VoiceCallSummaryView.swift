@@ -10,18 +10,35 @@ struct VoiceCallSummaryView: View {
     private var current: VoiceSession { (updated?.revision ?? 0) > session.revision ? updated! : session }
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Label("Voice chat · \(current.state)", systemImage: "phone")
-            Text("\(Int(current.durationMs / 1000)) seconds · voice \(current.settings.voiceId) · speed \(current.settings.speed)")
-            Text("Feedback: \(current.feedback ?? "not provided")").font(.caption)
-            ForEach(current.transcriptEntryIds, id: \.self) { id in
-                Button("Open exact transcript entry \(id)") { Task { await action.perform { try await openEntry(id) } } }.font(.caption)
+            HStack(spacing: 10) {
+                Image(systemName: "phone.fill").font(.system(size: 12, weight: .semibold)).foregroundStyle(LB.accent)
+                    .frame(width: 26, height: 26).background(Circle().fill(LB.accent.opacity(0.14))).accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("Voice chat · \(humanizedStatus(current.state))").font(LBFont.bodyEmphasis).foregroundStyle(LB.ink)
+                    Text("\(Int(current.durationMs / 1000)) seconds · voice \(current.settings.voiceId) · speed \(current.settings.speed)").cardMeta().lineLimit(1)
+                }
+                Spacer(minLength: 8)
+                if current.userId == store.user?.id {
+                    HStack(spacing: 6) {
+                        Button { Task { await feedback("good") } } label: { Label("Good call", systemImage: "hand.thumbsup") }.buttonStyle(.pill(.secondary, compact: true))
+                        Button { Task { await feedback("bad") } } label: { Label("Bad call", systemImage: "hand.thumbsdown") }.buttonStyle(.pill(.secondary, compact: true))
+                    }.labelStyle(.iconOnly).disabled(action.busy || store.connectionState != "online")
+                }
             }
-            if current.userId == store.user?.id {
-                HStack { Button("Good call") { Task { await feedback("good") } }; Button("Bad call") { Task { await feedback("bad") } } }
+            if !current.transcriptEntryIds.isEmpty || current.feedback != nil {
+                CardDetails {
+                    Text("Feedback: \(current.feedback ?? "not provided")")
+                    ForEach(current.transcriptEntryIds, id: \.self) { id in
+                        Button("Open exact transcript entry \(id)") { Task { await action.perform { try await openEntry(id) } } }
+                            .buttonStyle(.pill(.quiet, compact: true)).disabled(action.busy || store.connectionState != "online")
+                    }
+                }
             }
-            Text("Ending voice does not cancel work already running in chat. Voice memo playback and ordinary reviewed dictation are separate.").font(.caption)
+            CardNote(symbol: "info.circle", text: "Ending voice does not cancel work already running in chat. Voice memo playback and ordinary reviewed dictation are separate.")
             ActionErrorView(message: action.error)
-        }.disabled(action.busy || store.connectionState != "online")
+        }.padding(12).frame(maxWidth: LBMetric.bubbleMaxWidth, alignment: .leading)
+            .background(RoundedRectangle(cornerRadius: LBMetric.cardRadius, style: .continuous).fill(LB.bubble))
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
     private func feedback(_ value: String) async {
         await action.perform { updated = try await store.mutate("PATCH", resourcePath("voice/sessions", current.id), body: ["revision": .number(Double(current.revision)), "feedback": .string(value)]) }
