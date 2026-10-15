@@ -8,7 +8,12 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
-No unreleased changes yet.
+- Isolate status metadata tests from CI commit variables while retaining packaged
+  GitHub build provenance coverage, and wait for coordinator registry cleanup in
+  controlled restart fixtures.
+- Repair TUI protocol-test lint, document the onboarding terminal error's
+  non-returning contract, and explicitly opt automated source-install onboarding
+  into non-interactive mode.
 
 ---
 
