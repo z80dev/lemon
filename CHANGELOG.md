@@ -15,6 +15,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   a graceful hard stop at 1.5x that auto-delivers partial findings. Revived runs
   receive fresh budgets, including structured-output correction requests.
 
+- Ask `read` image questions with `?q=` (including SVG `:img?q=`), using a
+  configured vision model role or the active image-capable model and returning
+  bounded, untrusted answer text instead of pixels.
+
 - Extension tool-call, tool-result and session-start hooks can return bounded,
   ordered `additional_context` for the model, including blocked tool calls,
   without changing result trust, error status or mutation receipts.
