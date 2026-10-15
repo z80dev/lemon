@@ -48,43 +48,52 @@ defmodule LemonControlPlane.Methods.CronRuns do
         )
 
       formatted_runs =
-        Enum.map(runs, fn run ->
-          format_run(
-            run,
-            include_output,
-            include_meta,
-            include_run_record,
-            include_introspection,
-            introspection_limit
-          )
+        Enum.reduce_while(runs, [], fn run, acc ->
+          case format_run(
+                 run,
+                 include_output,
+                 include_meta,
+                 include_run_record,
+                 include_introspection,
+                 introspection_limit
+               ) do
+            {:ok, formatted} -> {:cont, [formatted | acc]}
+            {:error, _} = error -> {:halt, error}
+          end
         end)
 
-      {:ok,
-       %{
-         "jobId" => job_id,
-         "runs" => formatted_runs,
-         "total" => length(formatted_runs),
-         "filters" => %{
-           "limit" => limit,
-           "status" => if(status, do: Atom.to_string(status), else: nil),
-           "sinceMs" => since_ms,
-           "includeOutput" => include_output,
-           "includeMeta" => include_meta,
-           "includeRunRecord" => include_run_record,
-           "includeIntrospection" => include_introspection,
-           "introspectionLimit" => introspection_limit
-         },
-         "summary" =>
-           summary(
-             runs,
-             status,
-             since_ms,
-             include_output,
-             include_meta,
-             include_run_record,
-             include_introspection
-           )
-       }}
+      case formatted_runs do
+        {:error, _} ->
+          {:error, {:unavailable, "Introspection events are unavailable", nil}}
+
+        formatted_runs when is_list(formatted_runs) ->
+          {:ok,
+           %{
+             "jobId" => job_id,
+             "runs" => Enum.reverse(formatted_runs),
+             "total" => length(formatted_runs),
+             "filters" => %{
+               "limit" => limit,
+               "status" => if(status, do: Atom.to_string(status), else: nil),
+               "sinceMs" => since_ms,
+               "includeOutput" => include_output,
+               "includeMeta" => include_meta,
+               "includeRunRecord" => include_run_record,
+               "includeIntrospection" => include_introspection,
+               "introspectionLimit" => introspection_limit
+             },
+             "summary" =>
+               summary(
+                 runs,
+                 status,
+                 since_ms,
+                 include_output,
+                 include_meta,
+                 include_run_record,
+                 include_introspection
+               )
+           }}
+      end
     end
   end
 
@@ -131,13 +140,15 @@ defmodule LemonControlPlane.Methods.CronRuns do
         fetch_run_record(router_run_id),
         include_run_record and is_binary(router_run_id)
       )
-      |> maybe_put(
-        "introspection",
-        fetch_introspection(router_run_id, introspection_limit),
-        include_introspection and is_binary(router_run_id)
-      )
 
-    base
+    if include_introspection and is_binary(router_run_id) do
+      case fetch_introspection(router_run_id, introspection_limit) do
+        events when is_list(events) -> {:ok, Map.put(base, "introspection", events)}
+        {:error, _} = error -> error
+      end
+    else
+      {:ok, base}
+    end
   end
 
   defp run_summary(run, include_output, include_meta, include_run_record, include_introspection) do
@@ -237,29 +248,30 @@ defmodule LemonControlPlane.Methods.CronRuns do
   end
 
   defp fetch_introspection(run_id, limit) do
-    if Code.ensure_loaded?(LemonCore.Introspection) do
-      LemonCore.Introspection.list(run_id: run_id, limit: limit)
-      |> Enum.map(fn event ->
-        %{
-          "eventId" => get_map(event, :event_id),
-          "eventType" => normalize_string(get_map(event, :event_type)),
-          "tsMs" => get_map(event, :ts_ms),
-          "payload" => serialize_term(get_map(event, :payload, %{})),
-          "runId" => get_map(event, :run_id),
-          "sessionKey" => get_map(event, :session_key),
-          "agentId" => get_map(event, :agent_id),
-          "parentRunId" => get_map(event, :parent_run_id),
-          "engine" => get_map(event, :engine),
-          "provenance" => normalize_string(get_map(event, :provenance))
-        }
-      end)
-    else
-      []
+    case LemonCore.Introspection.list(run_id: run_id, limit: limit) do
+      events when is_list(events) ->
+        Enum.map(events, fn event ->
+          %{
+            "eventId" => get_map(event, :event_id),
+            "eventType" => normalize_string(get_map(event, :event_type)),
+            "tsMs" => get_map(event, :ts_ms),
+            "payload" => serialize_term(get_map(event, :payload, %{})),
+            "runId" => get_map(event, :run_id),
+            "sessionKey" => get_map(event, :session_key),
+            "agentId" => get_map(event, :agent_id),
+            "parentRunId" => get_map(event, :parent_run_id),
+            "engine" => get_map(event, :engine),
+            "provenance" => normalize_string(get_map(event, :provenance))
+          }
+        end)
+
+      {:error, _} ->
+        {:error, :introspection_unavailable}
     end
   rescue
-    _ -> []
+    _ -> {:error, :introspection_unavailable}
   catch
-    :exit, _ -> []
+    :exit, _ -> {:error, :introspection_unavailable}
   end
 
   defp get_meta_value(meta, key) when is_map(meta) and is_binary(key) do

@@ -273,6 +273,14 @@ defmodule LemonChannels.Telegram.FakeAPI do
     end)
   end
 
+  def download_file(token, file_path, max_bytes) do
+    case download_file(token, file_path) do
+      {:ok, bytes} when byte_size(bytes) <= max_bytes -> {:ok, bytes}
+      {:ok, _} -> {:error, :too_large}
+      other -> other
+    end
+  end
+
   @doc "sendDocument: captures the call and returns a message with a `document` payload."
   def send_document(_token, chat_id, file, opts \\ %{}) do
     opts = normalize_opts(opts)

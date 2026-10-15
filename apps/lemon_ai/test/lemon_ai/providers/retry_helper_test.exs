@@ -1,7 +1,70 @@
 defmodule LemonAi.Providers.RetryHelperTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
   alias LemonAi.Providers.RetryHelper
+
+  test "healthy alternates surface rate limits without sleeping, not other errors" do
+    parent = self()
+    previous = Application.get_env(:lemon_ai, :provider_retry)
+
+    Application.put_env(:lemon_ai, :provider_retry,
+      sleep_fun: fn ms -> send(parent, {:sleep, ms}) end
+    )
+
+    on_exit(fn ->
+      if previous,
+        do: Application.put_env(:lemon_ai, :provider_retry, previous),
+        else: Application.delete_env(:lemon_ai, :provider_retry)
+    end)
+
+    policy =
+      RetryHelper.policy(%LemonAi.Types.StreamOptions{
+        provider_retry: %{alternate_available: true}
+      })
+
+    for headers <- [%{}, %{"retry-after" => "1"}, %{"retry-after" => "60"}] do
+      delay =
+        RetryHelper.http_retry_delay_ms(0, headers, policy, {:http_error, 429, "rate limited"})
+
+      assert delay == :give_up
+      if is_integer(delay), do: RetryHelper.sleep(delay)
+    end
+
+    refute_receive {:sleep, _}, 0
+
+    assert RetryHelper.http_retry_delay_ms(
+             0,
+             %{"retry-after" => "2"},
+             policy,
+             {:http_error, 503, "unavailable"}
+           ) == 2_000
+
+    delay =
+      RetryHelper.http_retry_delay_ms(
+        0,
+        %{"retry-after" => "2"},
+        RetryHelper.policy(),
+        {:http_error, 429, "rate limited"}
+      )
+
+    assert delay == 2_000
+    RetryHelper.sleep(delay)
+    assert_receive {:sleep, 2_000}
+  end
+
+  test "quota exhaustion classification remains rate_limit and exposes exhaustion" do
+    for error <- [
+          "insufficient_quota",
+          {:http_error, 429,
+           %{"error" => %{"code" => "insufficient_quota", "message" => "No credits"}}}
+        ] do
+      details = LemonAi.Error.to_error_details(error)
+      assert details.category == :rate_limit
+      assert LemonAi.Error.quota_exhausted?(details)
+    end
+
+    refute LemonAi.Error.quota_exhausted?({:http_error, 429, "requests per minute exceeded"})
+  end
 
   describe "extract_retry_delay_ms/2" do
     test "extracts retry-after headers" do

@@ -10,6 +10,16 @@ defmodule LemonWeb.ChatLiveTest do
   alias LemonCore.{Event, ExecApprovals, ExecApprovalStore}
   alias LemonCore.Events.{ApprovalPending, ApprovalRequested}
 
+  defmodule BusyBackend do
+    @behaviour LemonCore.Store.Backend
+    def init(_), do: {:ok, %{}}
+    def put(_, _, _, _), do: {:error, :sqlite_busy}
+    def put_new(_, _, _, _), do: {:error, :sqlite_busy}
+    def get(_, _, _), do: {:error, :sqlite_busy}
+    def delete(_, _, _), do: {:error, :sqlite_busy}
+    def list(_, _), do: {:error, {:sqlite_busy, "private-backend-detail"}}
+  end
+
   setup :configure_operator_token
 
   setup do
@@ -667,6 +677,30 @@ defmodule LemonWeb.ChatLiveTest do
     render_submit(pane, "send", %{"chat" => %{"prompt" => "nope", "mode" => "collect"}})
     refute_received {:rpc, "chat.send", _}
     refute render(pane) =~ "/private"
+  end
+
+  test "unavailable workspace history blocks default-workspace submissions and forks", %{
+    conn: conn
+  } do
+    original = :sys.get_state(LemonCore.Store)
+    :sys.replace_state(LemonCore.Store, &%{&1 | backend: BusyBackend, backend_state: %{}})
+
+    try do
+      {view, pane} = open(conn, key("workspace-unavailable"))
+      assert render(pane) =~ "Session workspace is unavailable"
+
+      render_submit(pane, "send", %{"chat" => %{"prompt" => "do not send", "mode" => "collect"}})
+      assert has_element?(pane, "[id^=submit-error-]", "Session workspace is unavailable")
+
+      render_click(pane, "fork", %{})
+      refute_received {:rpc, "chat.send", _}
+      refute_received {:rpc, "sessions.fork", _}
+      refute_received {:rpc, "chat.history", _}
+      refute render(pane) =~ "private-backend-detail"
+      GenServer.stop(view.pid, :normal)
+    after
+      :sys.replace_state(LemonCore.Store, fn _ -> original end)
+    end
   end
 
   test "readiness gate and upload failures block submission before chat.send", %{conn: conn} do

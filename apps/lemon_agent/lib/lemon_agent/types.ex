@@ -505,6 +505,7 @@ defmodule LemonAgent.Types do
   - `{:provider_retry, details}` - Transient provider retry scheduled, including delay and attempt
   - `{:provider_retry_end, details}` - Retry sequence succeeded, failed, or was canceled
   - `{:usage_budget_updated, totals}` - Latest run and cumulative session spending
+  - `{:budget_warning, details}` - Cost cap cannot reliably price the active model
   - `{:budget_exceeded, details}` - Actionable cumulative cap stop, followed by terminal error
 
   ## Message Lifecycle
@@ -535,6 +536,7 @@ defmodule LemonAgent.Types do
           | {:usage_budget_updated,
              %{run_usage: LemonAgent.Budget.usage(), session_usage: LemonAgent.Budget.usage()}}
           | {:budget_exceeded, details :: LemonAgent.Budget.details()}
+          | {:budget_warning, details :: %{message: String.t()}}
           | {:message_start, message :: agent_message()}
           | {:message_update, message :: agent_message(), assistant_event :: term()}
           | {:message_end, message :: agent_message()}

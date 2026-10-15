@@ -17,6 +17,7 @@ defmodule CodingAgent.SessionManager do
   - v2 -> v3: Rename "hookMessage" role to "custom"
   """
 
+  alias CodingAgent.Session.BudgetLedger
   alias CodingAgent.SessionManager.{Session, SessionHeader, SessionEntry}
 
   @current_version 3
@@ -442,10 +443,8 @@ defmodule CodingAgent.SessionManager do
         # Forks inherit all source spend, including off-branch and interrupted
         # requests; copying only the selected branch could otherwise evade caps.
         child =
-          CodingAgent.Session.BudgetLedger.append(
-            child,
-            CodingAgent.Session.BudgetLedger.restore(source)
-          )
+          BudgetLedger.append(child, BudgetLedger.restore(source))
+          |> BudgetLedger.append_children(BudgetLedger.restore_children(source))
 
         with {:ok, context} <- execution_context(source),
              {:ok, child} <- inherit_fork_execution_context(child, context),

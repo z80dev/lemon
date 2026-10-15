@@ -9,8 +9,17 @@ features are ordinary cron jobs run by the agent:
   checklist and only messages you when something needs attention.
 - **Daily brief** — an opt-in morning heartbeat, configured by `lemon setup`.
 
-Scheduled work needs Lemon to be running when the job is due. A paired chat is
-needed only for chat delivery; results remain available in run history.
+Scheduled work needs Lemon running. On restart, an enabled job catches up once
+if its stored slot is within half the gap to its next occurrence, clamped to
+2 minutes–2 hours. Catch-up runs have `catch_up: true` in history. Older slots
+are audited as skipped; expired one-off reminders are retired, not moved to
+next year. Paused jobs stay paused. Set `[automation] catch_up_missed = false`
+to disable catch-up.
+
+A paired chat is needed only for chat delivery. Run history retains the latest
+100 terminal runs per job, cleaned up hourly; active attempts and pending
+retries are never pruned. Configure `automation.run_retention_per_job` to change
+that limit.
 
 ---
 

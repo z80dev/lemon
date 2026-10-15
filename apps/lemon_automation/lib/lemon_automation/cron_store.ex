@@ -308,19 +308,27 @@ defmodule LemonAutomation.CronStore do
   end
 
   @doc """
-  Clean up old runs, keeping only the most recent N runs per job.
+  Clean up old terminal runs, keeping the most recent N per job. Active runs
+  and terminal runs with an undispatched retry are always retained.
   """
   @spec cleanup_old_runs(non_neg_integer()) :: :ok
-  def cleanup_old_runs(keep_per_job \\ 100) do
-    jobs = list_jobs()
+  def cleanup_old_runs(keep_per_job \\ 100)
+      when is_integer(keep_per_job) and keep_per_job >= 0 do
+    {:ok, rows} = LemonCore.Store.fetch_all(@runs_table)
 
-    Enum.each(jobs, fn job ->
-      runs = list_runs(job.id, limit: 10_000)
-      to_delete = runs |> Enum.filter(&CronRun.finished?/1) |> Enum.drop(keep_per_job)
-
-      Enum.each(to_delete, fn run ->
-        delete_run(run.id)
-      end)
+    rows
+    |> Enum.map(fn {_id, map} -> CronRun.from_map(map) end)
+    |> Enum.filter(fn run ->
+      CronRun.finished?(run) and
+        not (is_integer(meta_value(run.meta, :retry_due_at_ms)) and
+               is_nil(meta_value(run.meta, :retry_dispatched_run_id)))
+    end)
+    |> Enum.group_by(& &1.job_id)
+    |> Enum.each(fn {_job_id, runs} ->
+      runs
+      |> Enum.sort_by(& &1.started_at_ms, :desc)
+      |> Enum.drop(keep_per_job)
+      |> Enum.each(&delete_run(&1.id))
     end)
 
     :ok
