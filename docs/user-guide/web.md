@@ -89,10 +89,10 @@ A session opens at `/chat/<session-key>`:
   match counts; todo checklists; subagents with status and links. Each run ends
   with model, duration, tokens and cost.
 - **Composer:** Enter sends, Shift+Enter adds a line, attachments (up to five
-  files of 20 MB; paste or drop images). Images can total up to 10 MiB
-  (10,485,760 bytes, shown as “10 MB” in upload errors) per message. While Lemon works, choose **Follow-up**
-  (queued for after the run), **Steer** (guidance for the current run; ⌘Enter)
-  or **Redirect** (new direction, finished tool work kept), or **Stop**.
+  files of 20 MB; paste or drop images). Images can total at most 10 MB per
+  message. While Lemon works, choose **Follow-up** (queued for after the run),
+  **Steer** (guidance for the current run; ⌘Enter) or **Redirect** (new direction,
+  finished tool work kept), or **Stop**.
 - **Approvals** appear in the conversation: Approve once, for the session,
   always, or Deny. Answers given in the TUI or another tab clear the card.
 - **Plan mode** (⌘⇧P) keeps the agent read-only. Its proposal appears as a plan
