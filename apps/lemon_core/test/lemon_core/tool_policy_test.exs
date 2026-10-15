@@ -34,6 +34,18 @@ defmodule LemonCore.ToolPolicyTest do
            )
   end
 
+  test "context checkpoints remain read-tier without implicit user confirmation" do
+    policy = ToolPolicy.parse!(%{approval_mode: :ask})
+
+    for tool <- ~w(checkpoint rewind ask) do
+      assert ToolPolicy.tier(tool) == :read
+      refute ToolPolicy.requires_approval?(policy, tool)
+    end
+
+    assert ToolPolicy.tier("fs_checkpoint") == :write
+    assert ToolPolicy.requires_approval?(policy, "fs_checkpoint")
+  end
+
   test "tiers classify mutation, executable and argument-sensitive LSP surfaces" do
     for tool <- ~w(write edit patch ast_grep fs_checkpoint remember skill_manage) do
       assert ToolPolicy.tier(tool) == :write

@@ -104,6 +104,7 @@ import {
 } from "./ui/controllers/session-controller.ts";
 import { TaskTreeController } from "./ui/controllers/task-tree-controller.ts";
 import { ToolInspector } from "./ui/controllers/tool-inspector.ts";
+import { UserPromptController } from "./ui/controllers/user-prompt-controller.ts";
 import { RowFrameProvider } from "./ui/row-frame-provider.ts";
 import { AppearanceController, type ThemePreference } from "./ui/theme/appearance.ts";
 import { getTheme } from "./ui/theme/theme.ts";
@@ -152,6 +153,7 @@ export class AppShell {
 	readonly commandController: CommandController;
 	readonly input: InputController;
 	readonly approvals: ApprovalController;
+	readonly userPrompts: UserPromptController;
 	readonly sessions: SessionController;
 	readonly appearance: AppearanceController;
 
@@ -159,6 +161,7 @@ export class AppShell {
 	readonly chatContainer = new TranscriptContainer();
 	readonly queueContainer = new Container();
 	readonly approvalContainer = new Container();
+	readonly userPromptContainer = new Container();
 	readonly statusContainer = new Container();
 	readonly statusLineContainer = new Container();
 	readonly editorContainer = new Container();
@@ -252,7 +255,8 @@ export class AppShell {
 				this.#sessionReady &&
 				this.client.online &&
 				!this.selectors.isOpen &&
-				!this.approvals.panel.visible,
+				!this.approvals.panel.visible &&
+				!this.userPrompts.panel.visible,
 			composer: {
 				drafts: this.composerDrafts,
 				sessionKey: () => this.store.focusedKey,
@@ -307,6 +311,15 @@ export class AppShell {
 			notice: (text, level) => this.events.notice(text, level),
 			focusEditor: () => this.#restoreFocus(),
 			refreshStatus: () => this.#renderStatus(),
+		});
+		this.userPrompts = new UserPromptController({
+			client: this.client,
+			methods: this.methods,
+			store: this.store,
+			tui: this.tui,
+			container: this.userPromptContainer,
+			notice: (text, level) => this.events.notice(text, level),
+			focusEditor: () => this.#restoreFocus(),
 		});
 
 		this.#statusBar = new StatusBar({
@@ -431,7 +444,7 @@ export class AppShell {
 			tui: this.tui,
 			// A pending approval is modal: Ctrl+L must not clear the transcript out
 			// from under a question the daemon is blocked on.
-			hasOverlay: () => this.selectors.isOpen || this.approvals.panel.visible,
+			hasOverlay: () => this.#hasOverlay(),
 			openModelPicker: () => this.#modelPicker.open(),
 			openThinkingPicker: async () => {
 				await this.submit("/think");
@@ -503,6 +516,7 @@ export class AppShell {
 		this.input.attach();
 		this.events.attach();
 		this.approvals.attach();
+		this.userPrompts.attach();
 		this.#omp.attach();
 		this.#disposers.push(
 			this.tui.addInputListener((data) => this.#terminalIntegration.handleInput(data)),
@@ -617,6 +631,7 @@ export class AppShell {
 			() => this.#statusBar.dispose(),
 			() => this.selectors.dispose(),
 			() => this.approvals.dispose(),
+			() => this.userPrompts.dispose(),
 			() => this.input.dispose(),
 			() => this.#palette.close(),
 			() => this.#taskTree.dispose(),
@@ -689,6 +704,7 @@ export class AppShell {
 		this.tui.addChild(this.chatContainer);
 		this.tui.addChild(this.queueContainer);
 		this.tui.addChild(this.approvalContainer);
+		this.tui.addChild(this.userPromptContainer);
 		this.tui.addChild(this.statusContainer);
 		this.tui.addChild(this.statusLineContainer);
 		this.tui.addChild(this.editorContainer);
@@ -701,6 +717,7 @@ export class AppShell {
 				[
 					this.queueContainer,
 					this.approvalContainer,
+					this.userPromptContainer,
 					this.statusContainer,
 					this.statusLineContainer,
 					this.editorContainer,
@@ -818,7 +835,7 @@ export class AppShell {
 
 	/** True while a picker/switcher or a pending approval owns the keyboard. */
 	#hasOverlay(): boolean {
-		return this.selectors.isOpen || this.approvals.panel.visible;
+		return this.selectors.isOpen || this.approvals.panel.visible || this.userPrompts.panel.visible;
 	}
 
 	/** A click on a TSP composer fact: the same paths as the keys and commands for it. */
@@ -1037,6 +1054,13 @@ export class AppShell {
 
 	/** Where focus belongs once a modal panel goes away. */
 	#restoreFocus(): void {
+		if (this.userPrompts.panel.visible || this.approvals.panel.visible) {
+			this.tui.setFocus(
+				this.userPrompts.panel.visible ? this.userPrompts.panel : this.approvals.panel,
+			);
+			this.tui.requestRender();
+			return;
+		}
 		if (this.#queueFocused && this.#queuePanel.visible) {
 			this.tui.setFocus(this.#queuePanel);
 			this.tui.requestRender();
@@ -1385,6 +1409,9 @@ export class AppShell {
 		options: RequestOptions = {},
 	) {
 		assertSessionDirectory(sessionKey, this.#cwd);
+		if (this.client.online && this.methods.supports(METHOD.userPromptBind)) {
+			await this.methods.userPromptBind(sessionKey);
+		}
 		const media = images?.length ? { images } : undefined;
 		const requestOptions = { ...options, ...(media ? { queueIfOffline: false } : {}) };
 		const remembered = this.#profileSessions.get(sessionKey);

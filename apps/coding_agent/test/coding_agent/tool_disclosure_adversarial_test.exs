@@ -1621,8 +1621,15 @@ defmodule CodingAgent.ToolDisclosureAdversarialTest do
         )
 
       Session.subscribe(session)
+      session_id = Session.get_state(session).session_manager.header.id
       :ok = Session.prompt(session, "List the open browser tabs.")
-      assert_receive {:session_event, _, {:agent_end, _}}, 5_000
+
+      receive do
+        {:session_event, ^session_id, {:agent_end, _}} -> :ok
+        {:session_terminal, ^session_id, :completed} -> :ok
+      after
+        5_000 -> flunk("disclosure session did not complete")
+      end
 
       assert_received {:provider_context, 1, first}
       assert_received {:provider_context, 2, second}
@@ -1637,8 +1644,15 @@ defmodule CodingAgent.ToolDisclosureAdversarialTest do
       assert wire(second.tools) == wire(first.tools)
       assert wire(third.tools) == wire(first.tools)
 
+      messages = Session.get_messages(session)
+
+      assert %AssistantMessage{
+               stop_reason: :stop,
+               content: [%TextContent{text: "Listed the open tabs."}]
+             } = List.last(messages)
+
       results =
-        for %{role: :tool_result} = message <- Session.get_messages(session),
+        for %{role: :tool_result} = message <- messages,
             into: %{},
             do: {message.tool_call_id, message}
 

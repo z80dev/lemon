@@ -30,6 +30,9 @@ config :phoenix, :filter_parameters, [
 
 config :logger, :default_formatter,
   metadata: [
+    :action,
+    :conn_id,
+    :accepted_at_ms,
     :session_id,
     :original_message_count,
     :restored_message_count,

@@ -78,6 +78,7 @@ defmodule LemonControlPlane.Methods.Registry do
     LemonControlPlane.Methods.ProfilesSyncStatus,
     LemonControlPlane.Methods.MemoryTransfer,
     LemonControlPlane.Methods.MemoryTransferStatus,
+    LemonControlPlane.Methods.LearningTimeline,
     # Agents
     LemonControlPlane.Methods.AgentsList,
     # Skills
@@ -112,6 +113,8 @@ defmodule LemonControlPlane.Methods.Registry do
     LemonControlPlane.Methods.SessionsCompact,
     LemonControlPlane.Methods.SessionsTree,
     LemonControlPlane.Methods.SessionsRewind,
+    LemonControlPlane.Methods.SessionsPromptBind,
+    LemonControlPlane.Methods.SessionsPromptResolve,
     LemonControlPlane.Methods.SessionsNavigate,
     LemonControlPlane.Methods.SessionsLabel,
     LemonControlPlane.Methods.SessionsCreate,

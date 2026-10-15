@@ -4,6 +4,9 @@ defmodule LemonGateway.ConfigLoaderTest do
   alias LemonCore.Binding
   alias LemonGateway.{ConfigLoader, Project}
 
+  @wallet_key String.duplicate("a", 64)
+  @wallet_env_key String.duplicate("b", 64)
+
   setup do
     original_home = System.get_env("HOME")
     original_override = Application.get_env(:lemon_gateway, LemonGateway.Config)
@@ -69,7 +72,7 @@ defmodule LemonGateway.ConfigLoaderTest do
     [gateway.xmtp]
     env = "production"
     wallet_address = "0x97a90100d77d05e309cdeb7e2aaf91f0ef8ca5ac"
-    wallet_key = "pk-test"
+    wallet_key = "#{@wallet_key}"
     poll_interval_ms = 1500
     """)
 
@@ -87,7 +90,7 @@ defmodule LemonGateway.ConfigLoaderTest do
     assert config.queue.drop == :oldest
     assert config.xmtp.env == "production"
     assert config.xmtp.wallet_address == "0x97a90100d77d05e309cdeb7e2aaf91f0ef8ca5ac"
-    assert config.xmtp.wallet_key == "pk-test"
+    assert config.xmtp.wallet_key == @wallet_key
     assert config.xmtp.poll_interval_ms == 1500
 
     assert %{"demo" => %Project{root: "/tmp/demo"}} = config.projects
@@ -313,7 +316,7 @@ defmodule LemonGateway.ConfigLoaderTest do
     original_wallet_key = System.get_env("XMTP_WALLET_KEY")
 
     System.put_env("XMTP_WALLET_ADDRESS", "0x97a90100d77d05e309cdeb7e2aaf91f0ef8ca5ac")
-    System.put_env("XMTP_WALLET_KEY", "pk-from-env")
+    System.put_env("XMTP_WALLET_KEY", @wallet_env_key)
 
     on_exit(fn ->
       if is_nil(original_wallet_address) do
@@ -343,6 +346,6 @@ defmodule LemonGateway.ConfigLoaderTest do
 
     assert config.enable_xmtp == true
     assert config.xmtp.wallet_address == "0x97a90100d77d05e309cdeb7e2aaf91f0ef8ca5ac"
-    assert config.xmtp.wallet_key == "pk-from-env"
+    assert config.xmtp.wallet_key == @wallet_env_key
   end
 end

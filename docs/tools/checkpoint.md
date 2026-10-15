@@ -16,6 +16,9 @@ The active branch returns to the checkpoint turn and retains the report as a
 branch summary. The next model request sees the summary instead of the abandoned
 exploration. Completed sibling tools in the rewind batch remain in context.
 Original entries remain available through the session tree.
+The session owner supplies the retained prefix even if compaction removed the
+checkpoint receipt from the running model context. External tool metadata cannot
+authorize a rewrite or replace the retained report.
 
 Only one checkpoint may be active. A checkpoint becomes ready after its tool turn
 finishes. Rewind is single-use, refuses an empty report and refuses to cross a

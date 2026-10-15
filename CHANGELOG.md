@@ -12,6 +12,18 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   session-local JSONL log, with timestamp and optional tool name. It requires
   no approval by default and makes no network requests.
 
+- Read `path:conflicts` to index Git conflict regions, then resolve a session-scoped
+  `conflict://N` with `write` and ours/theirs/base/both expansion tokens. Stale ids
+  are rejected after file changes.
+
+- Native TUI sessions can now use `ask` through a session-level user-prompt port,
+  with question/answer RPC events, multi-choice and free-text UI, and optional
+  fail-closed deadlines. ACP form elicitation remains supported. Decline,
+  cancellation and disconnect never choose a recommendation or grant approvals.
+
+- Bash supports session/project-scoped named services with log-regex or loopback
+  TCP readiness checks, restart-by-name, and existing process inspection/stop tools.
+
 - Opt-in model `checkpoint(goal)` / `rewind(report)` retain exploration findings
   as branch context without restoring files or prompting for confirmation.
   Enable `[runtime.tools.checkpoint] enabled = true` (default off). The former
@@ -56,6 +68,11 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Release preflight fixtures retain built-in provider registrations, distinguish
+  pending approvals from retained resolutions, and exercise typed provider errors
+  and asynchronous subagent cleanup without cross-test state leaks.
+- The Learning page reads its bounded, profile-scoped timeline through the
+  authenticated control plane instead of adding a forbidden Web-to-Skills dependency.
 - The TUI stops retrying rejected operator credentials, shows token recovery
   steps, and keeps offline prompts in the editor instead of silently queueing.
   Connection failures and `/reconnect` report actionable outcomes; `/status`
