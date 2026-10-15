@@ -437,11 +437,37 @@ defmodule LemonChannels.Adapters.Discord.Transport do
         spawn(fn -> FileOperations.handle_attachment_auto_put(state, inbound) end)
       end
 
-    if should_ignore_for_trigger?(state, inbound, text) do
-      state
-    else
-      enqueue_buffer(state, inbound)
+    case Regex.run(~r/^\/(approve|deny)(?:\s+(.*))?$/s, String.trim(text)) do
+      [_, command | rest] ->
+        handle_approval_message(state, inbound, command, List.first(rest) || "")
+
+      _ ->
+        if should_ignore_for_trigger?(state, inbound, text) do
+          state
+        else
+          enqueue_buffer(state, inbound)
+        end
     end
+  end
+
+  defp handle_approval_message(state, inbound, command, args) do
+    meta = inbound.meta
+
+    interaction = %{
+      channel_id: meta[:thread_id] || meta[:channel_id],
+      guild_id: meta[:guild_id],
+      channel: if(meta[:thread_id], do: %{parent_id: meta[:channel_id]}, else: %{})
+    }
+
+    context = %{
+      surface: "discord",
+      account_id: state.account_id,
+      approval_authorize: Approval.text_authorizer(state, interaction)
+    }
+
+    {_, text} = LemonChannels.PortableCommand.handle(command, args, context)
+    _ = Outbound.send_with_components(meta[:thread_id] || meta[:channel_id], text, [], [])
+    state
   end
 
   defp submit_buffer(buffer, state) do
@@ -784,7 +810,8 @@ defmodule LemonChannels.Adapters.Discord.Transport do
       "reset" ->
         handle_new_session(interaction, state, option_value(interaction, "project"))
 
-      command when command in ~w(status usage agents tasks compress commands help bg btw) ->
+      command
+      when command in ~w(status usage agents tasks compress commands help bg btw approve deny) ->
         handle_portable_interaction(interaction, state, command)
 
       "checkpoint" ->
@@ -984,6 +1011,7 @@ defmodule LemonChannels.Adapters.Discord.Transport do
         "help" -> option_value(interaction, "filter")
         "bg" -> option_value(interaction, "prompt")
         "btw" -> option_value(interaction, "question")
+        name when name in ["approve", "deny"] -> option_value(interaction, "id")
         _ -> ""
       end
 
@@ -997,6 +1025,8 @@ defmodule LemonChannels.Adapters.Discord.Transport do
 
       context = %{
         surface: "discord",
+        account_id: state.account_id,
+        approval_authorize: Approval.text_authorizer(state, interaction),
         session_key: session_key,
         cwd: BindingResolver.resolve_cwd(scope)
       }

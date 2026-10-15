@@ -177,6 +177,8 @@ defmodule LemonChannels.CommandCatalog do
   @commands Enum.map(@commands, &Map.put(&1, "surfaces", ~w(telegram discord tui web)))
 
   @channel_commands [
+    {"approve", "Approve a pending tool request once.", "[id]", ~w(telegram discord), false},
+    {"deny", "Deny a pending tool request.", "[id]", ~w(telegram discord), false},
     {"model", "Choose the AI model for this chat.", "[model]", ~w(telegram discord), false},
     {"resume", "Switch to a previous session.", "[selector]", ~w(telegram discord), false},
     {"file", "Upload or download a project file.", "put|get", ~w(telegram discord), false},

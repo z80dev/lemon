@@ -166,6 +166,76 @@ defmodule LemonChannels.Adapters.Telegram.TransportFakeApiTest do
   end
 
   describe "transport round trip" do
+    test "text approval is chat-bound and approves once through the fake API" do
+      key = :"Elixir.LemonGateway.Config"
+      previous = Application.get_env(:lemon_gateway, key)
+
+      Application.put_env(:lemon_gateway, key, %{
+        telegram: %{bot_token: "fake-token", api_mod: FakeAPI}
+      })
+
+      on_exit(fn ->
+        if previous,
+          do: Application.put_env(:lemon_gateway, key, previous),
+          else: Application.delete_env(:lemon_gateway, key)
+      end)
+
+      chat_id = 331_003
+      foreign_id = 331_004
+      assert {:ok, _} = start_transport(%{allowed_chat_ids: [chat_id, foreign_id]})
+      id = LemonCore.Id.approval_id()
+
+      pending =
+        ApprovalPending.new(%{
+          id: id,
+          run_id: "run_#{id}",
+          session_key: "agent:test:child:#{id}",
+          tool: "bash",
+          action: %{command: "pwd"}
+        })
+
+      target = %{
+        channel_id: "telegram",
+        account_id: "default",
+        peer: %{kind: :dm, id: to_string(chat_id), thread_id: nil}
+      }
+
+      :ok = LemonChannels.Supervision.bind_run(pending.run_id, pending.session_key, target)
+      :ok = LemonCore.ExecApprovalStore.put_pending(id, pending)
+      on_exit(fn -> LemonCore.ExecApprovalStore.delete_pending(id) end)
+      FakeAPI.simulate_message(foreign_id, "/approve #{id}")
+
+      assert {:ok, _} =
+               FakeAPI.await_send(
+                 fn
+                   %{fun: :send_message, args: [^foreign_id, text, _, _]} ->
+                     String.contains?(text, "No matching pending approval")
+
+                   _ ->
+                     false
+                 end,
+                 2_000
+               )
+
+      assert {:ok, ^pending} = LemonCore.ExecApprovalStore.fetch_pending(id)
+      FakeAPI.simulate_message(chat_id, "/approve")
+
+      assert {:ok, _} =
+               FakeAPI.await_send(
+                 fn
+                   %{fun: :send_message, args: [^chat_id, "Approval: Approved (once)", _, _]} ->
+                     true
+
+                   _ ->
+                     false
+                 end,
+                 2_000
+               )
+
+      assert {:ok, nil} = LemonCore.ExecApprovalStore.fetch_pending(id)
+      refute_receive {:inbound, _}
+    end
+
     test "startup registers the public catalog menu without admin commands" do
       assert {:ok, _pid} = start_transport(%{})
       assert {:ok, %{args: [commands]}} = FakeAPI.await_send(:set_my_commands, 2_000)

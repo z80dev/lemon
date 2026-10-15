@@ -37,7 +37,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport.Commands do
 
   def rollback_command?(text, bot_username), do: telegram_command?(text, "rollback", bot_username)
 
-  @portable_execution_commands ~w(status usage agents tasks compress compact commands help bg btw queue q steer)
+  @portable_execution_commands ~w(status usage agents tasks compress compact commands help bg btw queue q steer approve deny)
 
   @doc "Returns command names dispatched through the portable command handler."
   def portable_commands, do: @portable_execution_commands
