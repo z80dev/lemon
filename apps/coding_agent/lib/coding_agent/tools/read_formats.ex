@@ -52,7 +52,8 @@ defmodule CodingAgent.Tools.ReadFormats do
     ReadJson,
     ReadNotebook,
     ReadPdf,
-    ReadSqlite
+    ReadSqlite,
+    ReadSvg
   }
 
   alias LemonAgent.Types.AgentToolResult
@@ -126,6 +127,9 @@ defmodule CodingAgent.Tools.ReadFormats do
 
       String.downcase(Path.extname(path)) == ".pdf" ->
         ReadPdf.read(path, params, signal, cwd, opts)
+
+      String.downcase(Path.extname(path)) == ".svgz" ->
+        ReadSvg.text(path, params, signal, opts)
 
       ReadImage.supported?(path) ->
         ReadImage.read(path, params, signal, opts)

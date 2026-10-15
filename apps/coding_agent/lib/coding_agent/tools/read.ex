@@ -25,6 +25,7 @@ defmodule CodingAgent.Tools.Read do
   alias CodingAgent.Tools.ReadArchive
   alias CodingAgent.Tools.ReadFormats
   alias CodingAgent.Tools.ReadSummary
+  alias CodingAgent.Tools.ReadSvg
   alias CodingAgent.Tools.ReadText
   alias CodingAgent.Tools.Task.Messaging
   alias LemonAgent.Security.ToolResultTrust
@@ -85,6 +86,7 @@ defmodule CodingAgent.Tools.Read do
           "A single non-raw bounded range includes 1 line before and 3 after; comma lists stay exact. " <>
           "Bare reads of code files with at least 300 lines (up to 2 MiB) return an immutable structural summary; " <>
           "re-read explicit ranges before editing, or pass summary: false for full text. " <>
+          "SVG/SVGZ default to text; use path.svg:img for a bounded PNG preview (requires rsvg-convert). " <>
           "Text output is capped at 2000 lines / 50KB. PDF page/page_limit and notebook cell/cell_limit select source units. " <>
           "Returned skill:// and artifact:// references are readable paths.",
       label: "Read File",
@@ -233,6 +235,12 @@ defmodule CodingAgent.Tools.Read do
 
   defp do_execute(params, signal, cwd, opts) do
     case apply_path_selector(params, cwd, opts) do
+      {:ok, params, %{image: true}} ->
+        with {:ok, path} <- resolve_path(params["path"], cwd, opts),
+             {:ok, result} <- ReadSvg.image(path, signal, cwd, opts) do
+          result
+        end
+
       {:ok, params, %{conflicts: true}} ->
         Conflicts.read(params["path"], cwd, opts)
 
@@ -402,7 +410,7 @@ defmodule CodingAgent.Tools.Read do
   # Path Line Selectors
   # ============================================================================
 
-  @selector_token ~r/\A(?:conflicts|raw|\d+(?:-\d*|\+\d+)?(?:,\d+(?:-\d*|\+\d+)?)*|-\d+)\z/
+  @selector_token ~r/\A(?:img|conflicts|raw|\d+(?:-\d*|\+\d+)?(?:,\d+(?:-\d*|\+\d+)?)*|-\d+)\z/
 
   # A trailing `:selector` (up to two, e.g. `:10-20:raw`) only applies when the
   # literal path is missing and the remaining base names a real source, so
@@ -454,6 +462,12 @@ defmodule CodingAgent.Tools.Read do
     end
   end
 
+  defp build_selector_view(params, base, ["img"]) do
+    if Map.get(params, "offset") || Map.get(params, "limit"),
+      do: {:error, ":img cannot be combined with offset/limit"},
+      else: {:ok, Map.put(params, "path", base), %{image: true}}
+  end
+
   defp build_selector_view(params, base, ["conflicts"]) do
     if Map.get(params, "offset") || Map.get(params, "limit"),
       do: {:error, ":conflicts cannot be combined with offset/limit"},
@@ -464,6 +478,9 @@ defmodule CodingAgent.Tools.Read do
     {raw_tokens, range_tokens} = Enum.split_with(tokens, &(&1 == "raw"))
 
     cond do
+      "img" in tokens ->
+        {:error, ":img cannot be combined with other selectors"}
+
       "conflicts" in tokens ->
         {:error, ":conflicts cannot be combined with other selectors"}
 
