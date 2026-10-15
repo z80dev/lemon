@@ -33,7 +33,8 @@ defmodule LemonChannels.Adapters.Telegram.Outbound do
     )
 
     chat_id = String.to_integer(payload.peer.id)
-    {text, md_opts} = format_text(payload.content, telegram_use_markdown(config))
+    markdown? = telegram_use_markdown(config) and (payload.meta || %{})[:plain_text] != true
+    {text, md_opts} = format_text(payload.content, markdown?)
     opts = build_send_opts(payload, md_opts)
     {token, api_mod} = telegram_config(config)
 

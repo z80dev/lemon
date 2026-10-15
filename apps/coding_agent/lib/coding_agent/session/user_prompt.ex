@@ -15,8 +15,9 @@ defmodule CodingAgent.Session.UserPrompt do
 
   def start_link(opts \\ []), do: GenServer.start_link(__MODULE__, opts, name: __MODULE__)
 
-  def bind(session_key, connection) when is_binary(session_key) and is_pid(connection),
-    do: GenServer.call(__MODULE__, {:bind, session_key, connection})
+  def bind(session_key, connection, opts \\ [])
+      when is_binary(session_key) and is_pid(connection),
+      do: GenServer.call(__MODULE__, {:bind, session_key, connection, opts})
 
   def unbind(session_key, connection),
     do: GenServer.call(__MODULE__, {:unbind, session_key, connection})
@@ -44,9 +45,15 @@ defmodule CodingAgent.Session.UserPrompt do
   def init(_opts), do: {:ok, %{surfaces: %{}, pending: %{}}}
 
   @impl true
-  def handle_call({:bind, key, connection}, _from, state) do
+  def handle_call({:bind, key, connection, opts}, _from, state) do
     state = remove_surface(state, key)
-    surface = %{pid: connection, monitor: Process.monitor(connection)}
+
+    surface = %{
+      pid: connection,
+      monitor: Process.monitor(connection),
+      max_timeout_ms: Keyword.get(opts, :max_timeout_ms, :infinity)
+    }
+
     state = put_in(state.surfaces[key], surface)
     # Rebinding the same session can recover an event missed while switching UI.
     Enum.each(state.pending, fn {_id, pending} ->
@@ -72,6 +79,15 @@ defmodule CodingAgent.Session.UserPrompt do
   def handle_call({:request, key, run_id, questions, opts}, from, state) do
     pid = get_in(state.surfaces, [key, :pid])
     timeout = Keyword.get(opts, :timeout_ms, :infinity)
+    maximum = get_in(state.surfaces, [key, :max_timeout_ms]) || :infinity
+
+    timeout =
+      cond do
+        timeout == :infinity -> maximum
+        is_integer(timeout) and timeout > 0 -> min(timeout, maximum)
+        true -> timeout
+      end
+
     signal = Keyword.get(opts, :signal)
 
     cond do

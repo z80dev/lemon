@@ -367,4 +367,26 @@ defmodule CodingAgent.Tools.AskTest do
       payload: %{"promptId" => ^second_id, "status" => "cancelled"}
     }
   end
+
+  test "channel surface caps infinite and oversized deadlines and preserves one pending prompt" do
+    key = "channel-ask-#{System.unique_integer([:positive])}"
+    :ok = LemonCore.Bus.subscribe("user_prompts")
+    :ok = UserPrompt.bind(key, self(), max_timeout_ms: 50)
+    task = Task.async(fn -> UserPrompt.request(key, "run", [], timeout_ms: 10_000) end)
+
+    assert_receive %LemonCore.Event{
+      type: :user_prompt_requested,
+      payload: %{"sessionKey" => ^key} = pending
+    }
+
+    assert pending["expiresAtMs"] - pending["requestedAtMs"] == 50
+    assert {:error, :prompt_pending} = UserPrompt.request(key, "run", [])
+    assert {:error, :timeout} = Task.await(task)
+
+    assert {:error, :not_found} =
+             UserPrompt.resolve(pending["promptId"], key, "run", %{"action" => "accept"}, self())
+
+    assert :ok = UserPrompt.unbind(key, self())
+    refute UserPrompt.bound?(key)
+  end
 end

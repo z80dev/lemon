@@ -8,7 +8,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
-No unreleased changes yet.
+### Added
+
+- Expose `ask` in Telegram and Discord native runs with origin-user-bound option
+  buttons, consumed free-text replies, and finite no-answer deadlines.
 
 ---
 
