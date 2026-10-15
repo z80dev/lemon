@@ -164,6 +164,14 @@ defmodule LemonMemory.Preferences do
     end
   end
 
+  defp validate_patch(nil, _kind), do: :ok
+
+  defp validate_patch(text, kind) do
+    if String.length(text) > @caps[kind],
+      do: {:error, :capacity_exceeded},
+      else: validate_text(text)
+  end
+
   defp mutate(context, identity, owner, kind, text, replaces, opts) do
     server = server(opts)
 
@@ -172,8 +180,11 @@ defmodule LemonMemory.Preferences do
        owner}
 
     :global.trans({lock, self()}, fn ->
-      with {:ok, all} <- load(context, identity, owner, opts) do
-        docs = Enum.filter(all, &(document_kind(&1) == kind))
+      with {:ok, all} <- load(context, identity, owner, opts),
+           docs = Enum.filter(all, &(document_kind(&1) == kind)),
+           {:ok, _matched, replaces, text} <-
+             LemonMemory.NoteMatch.resolve(Enum.flat_map(docs, &facts/1), replaces, text),
+           :ok <- validate_patch(text, kind) do
         matches = Enum.filter(docs, &(facts(&1) == [replaces]))
         duplicate = Enum.find(docs, &(facts(&1) == [text]))
 
