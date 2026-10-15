@@ -20,6 +20,7 @@ defmodule CodingAgent.Tools.Task do
 
     %AgentTool{
       name: "task",
+      timeout_ms: :infinity,
       description: description,
       label: "Run Task",
       parameters: %{

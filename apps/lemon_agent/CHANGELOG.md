@@ -16,6 +16,10 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
   revision. A login replacement or logout during a token request wins; the
   obsolete response cannot overwrite it or become selected authentication.
   Storage failures stop refresh resolution without replaying the request.
+- Tool execution defaults to a 300,000 ms deadline and at most eight concurrent
+  calls. `:infinity` explicitly opts out. `AgentTool.timeout_ms` overrides the
+  deadline; native task/wait, delegation, bash, eval, debug, question and browser
+  tools retain their own deadlines instead of racing the generic timer.
 
 ## [0.2.0] - 2026-10-13
 

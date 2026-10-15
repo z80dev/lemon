@@ -119,6 +119,9 @@ reports newly introduced diagnostics separately from pre-existing issues.
 Missing tools or unsupported file types return structured skipped results
 instead of failing the edit.
 
+External checkers use the deadline-aware process executor. A timeout terminates
+the checker process group and descendants, rather than only the BEAM caller.
+
 ## Local Checker Install Guide
 
 The preview runner uses local workspace tools when they are present:
@@ -130,7 +133,7 @@ The preview runner uses local workspace tools when they are present:
 | TypeScript | `.ts`, `.tsx`, `.jsx` | `tsc --noEmit --pretty false` when `tsconfig.json` exists, preferring workspace `node_modules/.bin/tsc` when present | Install TypeScript in the workspace or on `PATH`. |
 | Python | `.py` | `python3 -m py_compile` or `python -m py_compile` | Install Python 3. |
 | Rust | `.rs` | `cargo check --message-format=short` when `Cargo.toml` exists | Install Rust and Cargo. |
-| Go | `.go` | `go test ./...` when `go.mod` exists | Install Go. |
+| Go | `.go` | `go vet ./...` when `go.mod` exists (does not execute tests) | Install Go. |
 | C/C++ | `.c`, `.h`, `.cc`, `.cpp`, `.cxx`, `.hh`, `.hpp`, `.hxx` | `clang`/`gcc`/`cc` or `clang++`/`g++`/`c++` with `-fsyntax-only` | Install a C/C++ compiler; install `clangd` separately for supervised LSP sessions. |
 
 The runner intentionally skips TypeScript, Rust, and Go when the expected

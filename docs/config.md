@@ -716,7 +716,29 @@ also stays off when `[features] session_search = "off"`.
 ```toml
 [memory]
 auto_recall = true
+write_approval = false # require human approval for remember mutations when true
 ```
+
+`memory.write_approval` gates every `remember` add, replacement, and deletion
+across user, memory, and project targets. Agent skill authoring has its own switch:
+
+```toml
+[skills]
+write_approval = false # require human approval for skill_manage mutations when true
+```
+
+Both switches default to `false` and use normal global/project config precedence.
+Enabled writes use the existing execution approval UI with bounded, escaped,
+credential-redacted target/action/content previews and a digest binding the full
+mutation to its owner/workspace. `skill_manage report` remains read-only.
+Approval never bypasses existing content screening, audit, pinning or isolation.
+Denial leaves the target unchanged; an unavailable/expired approval also denies.
+Prompts expire after 60 seconds unless the trusted runtime supplies a timeout.
+Background learning reviews (including draft creation), cron runs, and channels
+without approval controls fail closed without consuming saved grants.
+Interactive native sessions and Telegram/Discord use their existing approval flow.
+These switches gate agent tool writes, not explicit operator memory/skill services.
+
 
 ## Feature Flags
 

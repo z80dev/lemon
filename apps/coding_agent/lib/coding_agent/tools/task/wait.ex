@@ -19,6 +19,7 @@ defmodule CodingAgent.Tools.Task.Wait do
   def tool(_cwd, opts \\ []) do
     %AgentTool{
       name: "wait",
+      timeout_ms: :infinity,
       label: "Wait for Child",
       description:
         "Wait for the first owned native task child result, leaving siblings running. " <>

@@ -59,6 +59,13 @@ Reviews have only private `remember` and draft-create/non-pinned-patch
 They inherit model configuration (or resolve a configured model override),
 never shared grants, and are non-concurrent/rate-limited per live session.
 
+Opt-in TOML `memory.write_approval` and `skills.write_approval` gate agent memory
+and skill mutations through `LemonCore.ExecApprovals`, with bounded redacted,
+escaped previews bound to the full mutation and workspace. Both default off.
+Background review (including draft creation) cannot bypass the gate and fails
+closed when enabled; interactive denials leave targets unchanged. See the
+[configuration reference](../../docs/config.md#memory).
+
 The existing global/project `skills.json` configuration accepts
 `learning_nudge.enabled` (default `true`), `memory_turn_interval` (10), and
 `skill_tool_threshold` (15). See the

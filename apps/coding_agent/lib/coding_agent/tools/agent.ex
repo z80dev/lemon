@@ -37,6 +37,7 @@ defmodule CodingAgent.Tools.Agent do
 
     %AgentTool{
       name: "agent",
+      timeout_ms: :infinity,
       description: build_description(),
       label: "Delegate To Agent",
       parameters: %{

@@ -8,6 +8,9 @@
   and bounded workspace diagnostics from running clients. Document language IDs
   now come from the shared LemonLsp server catalog.
 
+- Local Go diagnostics run `go vet ./...` rather than executing tests. External
+  diagnostic checker deadlines now terminate the OS process tree on timeout.
+
 - Bare reads of source files with at least 300 lines and at most 2 MiB now return
   bounded structural summaries with declarations and explicit omitted ranges.
   Summaries are immutable, omit edit snapshots, and are rejected by overwrite
@@ -62,6 +65,10 @@
   elision markers rather than copying omitted content into existing files.
 
 ### Changed
+
+- Deadline-owning task/wait, agent delegation, bash, eval, debug, question and
+  browser tools explicitly retain their own limits under the agent runtime's
+  new five-minute default tool deadline and eight-call concurrency cap.
 
 - Todo plans preserve `blocked` and `abandoned` statuses, optional phase/blocker
   notes and stable IDs in the journal and client projections. Writes keep only

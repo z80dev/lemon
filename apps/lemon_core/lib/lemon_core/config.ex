@@ -23,7 +23,8 @@ defmodule LemonCore.Config do
             logging: %{},
             gateway: %{},
             agents: %{},
-            memory: %{auto_recall: true},
+            memory: %{auto_recall: true, write_approval: false},
+            skills: %{write_approval: false},
             secrets: %LemonCore.Config.Secrets{}
 
   @type provider_config :: %{
@@ -45,7 +46,8 @@ defmodule LemonCore.Config do
           logging: map(),
           gateway: map(),
           agents: map(),
-          memory: %{auto_recall: boolean()},
+          memory: %{auto_recall: boolean(), write_approval: boolean()},
+          skills: %{write_approval: boolean()},
           secrets: LemonCore.Config.Secrets.t()
         }
 
@@ -178,6 +180,7 @@ defmodule LemonCore.Config do
       gateway: config.gateway,
       agents: config.agents,
       memory: config.memory,
+      skills: config.skills,
       secrets: secrets_to_map(config.secrets)
     }
   end
@@ -199,6 +202,7 @@ defmodule LemonCore.Config do
       gateway: convert_gateway(modular.gateway),
       agents: convert_agents(profiles, defaults),
       memory: convert_memory(modular.memory, modular.features),
+      skills: modular.skills,
       secrets: modular.secrets
     }
   end
@@ -209,6 +213,7 @@ defmodule LemonCore.Config do
   # that memory search is inactive.
   defp convert_memory(memory, features) do
     %{
+      write_approval: memory.write_approval,
       auto_recall:
         LemonCore.Config.Memory.auto_recall?(memory) and
           LemonCore.Config.Features.enabled?(features, :session_search)
@@ -421,6 +426,7 @@ defmodule LemonCore.Config do
       gateway: deep_merge_values(config.gateway, overrides["gateway"]),
       agents: deep_merge_values(config.agents, overrides["agents"]),
       memory: deep_merge_values(config.memory, overrides["memory"]),
+      skills: deep_merge_values(config.skills, overrides["skills"]),
       secrets: config.secrets
     }
   end

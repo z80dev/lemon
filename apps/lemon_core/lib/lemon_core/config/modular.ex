@@ -68,6 +68,7 @@ defmodule LemonCore.Config.Modular do
     :features,
     :memory,
     :automation,
+    skills: %{write_approval: false},
     budgets: %{},
     model_roles: %{}
   ]
@@ -84,6 +85,7 @@ defmodule LemonCore.Config.Modular do
           secrets: Secrets.t(),
           features: Features.t(),
           memory: Memory.t(),
+          skills: %{write_approval: boolean()},
           automation: Automation.t()
         }
 
@@ -336,6 +338,9 @@ defmodule LemonCore.Config.Modular do
       secrets: Secrets.resolve(settings),
       features: Features.resolve(settings),
       memory: Memory.resolve(settings),
+      skills: %{
+        write_approval: Map.get(Map.get(settings, "skills", %{}), "write_approval", false)
+      },
       automation: Automation.resolve(settings)
     }
   end
