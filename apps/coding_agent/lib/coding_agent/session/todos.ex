@@ -74,6 +74,7 @@ defmodule CodingAgent.Session.Todos do
     {_result, head} = materialize(state.session_manager)
 
     if expected == revision(state, head) do
+      todos = TodoStore.normalize(todos)
       entry = SessionEntry.custom(@entry_type, %{"version" => @version, "todos" => todos})
 
       try do
@@ -141,7 +142,7 @@ defmodule CodingAgent.Session.Todos do
       %{"id" => id, "content" => content, "status" => status, "priority" => priority}
       when is_binary(id) and is_binary(content) ->
         String.trim(id) != "" and String.trim(content) != "" and
-          status in ["pending", "in_progress", "completed", "blocked"] and
+          status in ["pending", "in_progress", "completed", "blocked", "abandoned"] and
           priority in ["high", "medium", "low"]
 
       _ ->
