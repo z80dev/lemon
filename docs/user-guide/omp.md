@@ -159,13 +159,14 @@ another omp).
   conversation's Lemon approval prompts and channel buttons (Telegram/Discord),
   including native coding-session approval UI when the session identity is
   available. Operators can resolve them with `exec.approval.resolve` using the
-  approval id in the snapshot's `pendingApprovals`. The session stays responsive
-  while it waits. Approve/deny decisions return to omp; expiry cancels the
-  prompt. Cancelling an omp dialog or closing/exiting its session removes the
-  corresponding Lemon approval too. `LEMON_OMP_APPROVALS=decline` restores
-  headless cancellation of tool approvals. Other blocking dialogs (confirm,
-  input, editor, unrelated selects) are still declined and counted in
-  `declinedPrompts`.
+  approval id in the snapshot's `pendingApprovals`. Session-scoped grants for
+  operator sessions apply only to that omp session, never another invocation.
+  The session stays responsive while it waits. Approve/deny decisions return to
+  omp; expiry cancels the prompt. Cancelling an omp dialog or closing/exiting its
+  session removes the corresponding Lemon approval too.
+  `LEMON_OMP_APPROVALS=decline` restores headless cancellation of tool approvals.
+  Other blocking dialogs (confirm, input, editor, unrelated selects) are still
+  declined and counted in `declinedPrompts`.
 - **Control fails closed.** Steering, follow-ups and cancellation go to one
   process invocation and are acknowledged only after omp accepts them. A
   closed or crashed session refuses them; resume it to continue (resuming is a

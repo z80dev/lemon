@@ -39,6 +39,8 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Operator-owned omp approvals bind session-scoped grants to one omp invocation,
+  preventing a grant from approving identical actions in another operator session.
 - New memory backdoor/exfiltration screening no longer invalidates retained facts
   or prevents editing/deleting them; new text and patched results remain screened.
 - Correct stale install, quickstart, browser authentication/routes, and TUI
