@@ -19,7 +19,9 @@ defmodule LemonControlPlane.Methods.StatusTest do
   end
 
   setup do
-    keys = ~w(RELEASE_NAME RELEASE_VSN LEMON_GIT_SHA LEMON_RELEASE_CHANNEL LEMON_LAUNCHER)
+    keys =
+      ~w(RELEASE_NAME RELEASE_VSN LEMON_GIT_SHA GITHUB_SHA SOURCE_VERSION VERCEL_GIT_COMMIT_SHA LEMON_RELEASE_CHANNEL LEMON_LAUNCHER)
+
     previous = Map.new(keys, &{&1, System.get_env(&1)})
     Enum.each(keys, &System.delete_env/1)
 
@@ -116,6 +118,14 @@ defmodule LemonControlPlane.Methods.StatusTest do
              "channel" => "preview",
              "commit" => nil
            }
+  end
+
+  test "packaged releases retain the GitHub build commit when no explicit override is set" do
+    System.put_env("RELEASE_NAME", "lemon_runtime_full")
+    System.put_env("GITHUB_SHA", "github-build-commit")
+
+    assert {:ok, result} = Status.handle(%{}, %{})
+    assert result["server"]["build"]["commit"] == "github-build-commit"
   end
 
   test "projects configured providers, missing credentials, keyless endpoints and defaults offline" do
