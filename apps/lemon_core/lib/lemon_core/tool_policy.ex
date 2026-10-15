@@ -238,9 +238,15 @@ defmodule LemonCore.ToolPolicy do
   @doc false
   def execution_max_items, do: @execution_json_items
 
-  @doc "Validate a native policy and preserve its bounded, sparse JSON projection."
+  @doc """
+  Validate a native policy and preserve its bounded, sparse JSON projection.
+
+  Durable native policies require explicit `always` or `never` approval gates;
+  conditional `dangerous` approval modes remain an execution-policy concern.
+  """
   def normalize(policy) when is_map(policy) do
-    with {:ok, validated} <- parse(policy) do
+    with {:ok, validated} <- parse(policy),
+         true <- Enum.all?(validated.approvals, fn {_tool, mode} -> mode in [:always, :never] end) do
       keys = policy |> supplied_keys() |> Enum.map(&Atom.to_string/1)
       {:ok, validated |> encode_policy() |> Map.take(keys)}
     else

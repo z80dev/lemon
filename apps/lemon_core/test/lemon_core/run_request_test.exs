@@ -50,7 +50,7 @@ defmodule LemonCore.RunRequestTest do
       assert request.tool_policy == %{"sandbox" => true}
     end
 
-    test "normalizes struct input and applies defaults to nil fields" do
+    test "normalizes struct defaults while preserving malformed supplied authority" do
       request =
         RunRequest.normalize(%RunRequest{
           session_key: "agent:session-derived:main",
@@ -63,7 +63,23 @@ defmodule LemonCore.RunRequestTest do
       assert request.agent_id == "session-derived"
       assert request.queue_mode == :collect
       assert request.meta == %{}
-      assert request.tool_policy == nil
+      assert request.tool_policy == "invalid"
+    end
+
+    test "preserves malformed atom- and string-keyed authority for admission rejection" do
+      for malformed <- [false, "invalid", [], 123] do
+        for attrs <- [
+              %{tool_policy: malformed, execution_context: malformed},
+              %{"tool_policy" => malformed, "execution_context" => malformed}
+            ] do
+          request = RunRequest.new(attrs)
+          assert request.tool_policy == malformed
+          assert request.execution_context == malformed
+        end
+      end
+
+      request = RunRequest.new(%{"tool_policy" => %{}, tool_policy: false})
+      assert request.tool_policy == false
     end
 
     test "normalizes blank or false model to nil" do

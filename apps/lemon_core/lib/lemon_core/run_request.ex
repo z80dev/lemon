@@ -161,7 +161,10 @@ defmodule LemonCore.RunRequest do
   def validate_invocation_context_key(_key), do: {:error, :invalid_invocation_context_key}
 
   defp field(params, key) when is_map(params) and is_atom(key) do
-    MapHelpers.get_key(params, key)
+    case Map.fetch(params, key) do
+      {:ok, value} -> value
+      :error -> Map.get(params, Atom.to_string(key))
+    end
   end
 
   defp session_agent_id(session_key) when is_binary(session_key),

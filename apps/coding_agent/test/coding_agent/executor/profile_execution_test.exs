@@ -276,18 +276,20 @@ defmodule CodingAgent.Executor.ProfileExecutionTest do
       assert_receive {:profile_dispatch, command}
       request = ExecutionRequest.from_command(command)
 
-      assert {:ok, execution_context} =
-               case(request.execution_context) do
-        nil ->
-          LemonCore.ExecutionContext.new(
-            run_id: request.run_id,
-            cwd: request.cwd,
-            tool_policy: request.tool_policy
-          )
+      context_result =
+        case request.execution_context do
+          nil ->
+            LemonCore.ExecutionContext.new(
+              run_id: request.run_id,
+              cwd: request.cwd,
+              tool_policy: request.tool_policy
+            )
 
-        context ->
-          LemonCore.ExecutionContext.validate(context)
-      end
+          context ->
+            LemonCore.ExecutionContext.validate(context)
+        end
+
+      assert {:ok, execution_context} = context_result
 
       request = %{request | execution_context: execution_context}
       meta = request.meta

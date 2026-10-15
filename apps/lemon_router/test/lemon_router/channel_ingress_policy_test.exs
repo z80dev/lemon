@@ -51,7 +51,7 @@ defmodule LemonRouter.ChannelIngressPolicyTest do
     tool_policy = build_submission(peer_kind: :group, peer_id: "-100123").tool_policy
 
     for tool <- ~w(bash write edit patch hashline_edit) do
-      assert get_in(tool_policy, [:approvals, tool]) == :always,
+      assert tool_policy.approvals[tool] == :always,
              "expected #{tool} to require approval in a group, got #{inspect(tool_policy)}"
     end
   end
@@ -59,8 +59,8 @@ defmodule LemonRouter.ChannelIngressPolicyTest do
   test "a Telegram DM is not subject to the group approval policy" do
     tool_policy = build_submission(peer_kind: :dm, peer_id: "4242").tool_policy
 
-    assert get_in(tool_policy, [:approvals, "bash"]) == nil
-    assert get_in(tool_policy, [:approvals, "edit"]) == nil
+    assert tool_policy.approvals["bash"] == nil
+    assert tool_policy.approvals["edit"] == nil
   end
 
   test "caller-supplied meta cannot replace the ingress channel context" do
@@ -71,7 +71,7 @@ defmodule LemonRouter.ChannelIngressPolicyTest do
         meta: %{channel_context: %{channel_id: "telegram", peer_kind: :dm}}
       ).tool_policy
 
-    assert get_in(tool_policy, [:approvals, "bash"]) == :always
+    assert tool_policy.approvals["bash"] == :always
   end
 
   test "channel runs default to the assistant home, not $HOME", %{agent_dir: agent_dir} do

@@ -126,6 +126,7 @@ defmodule CodingAgent.Executor.RemoteRequestCodecTest do
 
     request = %ExecutionRequest{
       run_id: "placement",
+      session_key: "agent:placement:main",
       prompt: "bounded work",
       execution_context: authority,
       tool_policy: %{allow: ["read"], require_approval: ["read"]},
@@ -152,7 +153,12 @@ defmodule CodingAgent.Executor.RemoteRequestCodecTest do
   end
 
   test "missing, forged, mismatched and malformed authority fail before encoding" do
-    request = %ExecutionRequest{run_id: "placement", prompt: "must not cross"}
+    request = %ExecutionRequest{
+      run_id: "placement",
+      session_key: "agent:placement:main",
+      prompt: "must not cross"
+    }
+
     assert {:error, :invalid_execution_context} = RemoteRequestCodec.encode(request)
 
     assert {:error, :invalid_execution_context} =

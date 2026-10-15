@@ -72,8 +72,11 @@ defmodule LemonCore.ToolPolicyTest do
     assert {:ok, %{"allow" => "all", "profile" => "custom"}} =
              ToolPolicy.normalize(%{allow: :all, profile: :custom})
 
-    assert {:ok, %{"approvals" => %{"bash" => "dangerous"}}} =
+    assert {:error, {:invalid_field, :tool_policy}} =
              ToolPolicy.normalize(%{approvals: %{"bash" => :dangerous}})
+
+    assert {:ok, policy} = ToolPolicy.parse(%{approvals: %{"bash" => :dangerous}})
+    assert ToolPolicy.approval_mode(policy, "bash") == :dangerous
   end
 
   test "native admission projections retain sparse shape and profile metadata" do
