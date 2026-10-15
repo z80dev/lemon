@@ -15,6 +15,11 @@ defmodule CodingAgent.Executor.SessionRunnerRecoveryTest do
       do: {:reply, {:error, :unavailable}, messages}
 
     def handle_call(:save, _from, messages), do: {:reply, :ok, messages}
+
+    def handle_call(:handoff_tool_resources, {caller, _tag}, messages) do
+      send(caller, :owner_resources_handed_off)
+      {:reply, :ok, messages}
+    end
   end
 
   test "overflow terminal recovers the complete owner answer exactly once, not the partial prefix" do
@@ -32,6 +37,7 @@ defmodule CodingAgent.Executor.SessionRunnerRecoveryTest do
                     %{__event__: :completed, ok: true, answer: "complete canonical answer"}}
 
     assert state.translator.completed_emitted
+    assert_received :owner_resources_handed_off
 
     # Even after owner teardown, a delayed terminal cannot re-read or revive it.
     refute Process.alive?(owner)
