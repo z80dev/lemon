@@ -39,7 +39,6 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   native recorder, and Previous/Next Bot have one discoverable menu binding.
   Recorded shortcuts display native Mac modifier symbols while preserving their
   saved combinations.
->>>>>>> origin/main
 
 ---
 
