@@ -58,15 +58,29 @@ defmodule LemonAgent.Loop.ContinuationTest do
     assert {:agent_end, _} = List.last(events)
   end
 
-  test "malformed arguments also exhaust into an assistant error without tool execution" do
+  test "malformed arguments after the cap use the existing argument-error tool result path" do
     bad = Mocks.assistant_message_with_tool_calls([Mocks.tool_call("echo", %{})])
-    events = run(List.duplicate(reply(bad), 4), [Mocks.echo_tool()])
-    assert Enum.count(events, &match?({:provider_retry, _}, &1)) == 3
-    refute Enum.any?(events, &match?({:tool_execution_start, _, _, _}, &1))
 
-    assert Enum.any?(events, fn
-             {:error, {:assistant_error, "malformed_tool_arguments"}, _} -> true
-             _ -> false
+    events =
+      run(
+        List.duplicate(reply(bad), 4) ++ [reply(Mocks.assistant_message("done"))],
+        [Mocks.echo_tool()]
+      )
+
+    assert Enum.count(events, &match?({:provider_retry, _}, &1)) == 3
+    assert Enum.count(events, &match?({:tool_execution_start, _, "echo", %{}}, &1)) == 1
+    assert {:agent_end, messages} = List.last(events)
+
+    assert Enum.any?(messages, fn
+             %{
+               role: :tool_result,
+               is_error: true,
+               details: %{error_type: :invalid_tool_arguments}
+             } ->
+               true
+
+             _ ->
+               false
            end)
   end
 
@@ -141,15 +155,24 @@ defmodule LemonAgent.Loop.ContinuationTest do
     assert Enum.any?(events, &match?({:provider_retry, %{category: :continuation}}, &1))
   end
 
-  test "no continuation after a tool executed even when earlier continuation succeeded" do
+  test "continuation after tool execution keeps results without re-executing tools" do
     call = Mocks.assistant_message_with_tool_calls([Mocks.tool_call("echo", %{"text" => "ok"})])
-    events = run([reply(empty()), reply(call), reply(empty())], [Mocks.echo_tool()])
-    assert Enum.count(events, &match?({:provider_retry, _}, &1)) == 1
-    assert Enum.count(events, &match?({:tool_execution_start, _, _, _}, &1)) == 1
 
-    assert Enum.any?(events, fn
-             {:error, {:assistant_error, "empty_assistant_response"}, _} -> true
-             _ -> false
-           end)
+    events =
+      run(
+        [reply(empty()), reply(call), reply(empty()), reply(Mocks.assistant_message("done"))],
+        [Mocks.echo_tool()]
+      )
+
+    assert Enum.count(events, &match?({:provider_retry, _}, &1)) == 2
+    assert Enum.count(events, &match?({:tool_execution_start, _, _, _}, &1)) == 1
+    assert {:agent_end, messages} = List.last(events)
+    assert List.last(messages).content == Mocks.assistant_message("done").content
+    assert_receive {:request, _}
+    assert_receive {:request, _}
+    assert_receive {:request, before_continuation}
+    assert_receive {:request, after_continuation}
+    assert before_continuation.messages == after_continuation.messages
+    assert Enum.any?(after_continuation.messages, &match?(%{role: :tool_result}, &1))
   end
 end

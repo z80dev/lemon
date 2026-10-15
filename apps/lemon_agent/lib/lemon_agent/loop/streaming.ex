@@ -22,16 +22,10 @@ defmodule LemonAgent.Loop.Streaming do
   @max_continuations 3
   @continuation_key {__MODULE__, :continuation}
 
-  @doc false
-  def tools_started(stream) do
-    {count, _started} = continuation_state(stream)
-    Process.put(@continuation_key, {stream, count, true})
-  end
-
   defp continuation_state(stream) do
     case Process.get(@continuation_key) do
-      {^stream, count, started} -> {count, started}
-      _ -> {0, false}
+      {^stream, count} -> count
+      _ -> 0
     end
   end
 
@@ -165,13 +159,13 @@ defmodule LemonAgent.Loop.Streaming do
          added,
          committed
        ) do
-    {count, tools_started} = continuation_state(stream)
+    count = continuation_state(stream)
 
-    if count < @max_continuations and not tools_started and
+    if count < @max_continuations and
          is_nil(Loop.budget_check(config)) and not aborted?(signal) and
          not redirect_requested?(signal) do
       attempt = count + 1
-      Process.put(@continuation_key, {stream, attempt, false})
+      Process.put(@continuation_key, {stream, attempt})
       empty = message.error_message == "empty_assistant_response"
       reason = if empty, do: "empty reply", else: "malformed tool arguments"
 
@@ -242,7 +236,12 @@ defmodule LemonAgent.Loop.Streaming do
 
       result
     else
-      message = strip_tool_calls(message)
+      message =
+        case message.error_message do
+          "malformed_tool_arguments" -> message.error_details.original_message
+          _ -> strip_tool_calls(message)
+        end
+
       {message, context} = finalize_message(message, failed_context, added, stream)
       {:ok, message, context}
     end
@@ -666,7 +665,10 @@ defmodule LemonAgent.Loop.Streaming do
         message
         | stop_reason: :error,
           error_message: "malformed_tool_arguments",
-          error_details: %{argument_errors: Enum.join(errors, "; ")}
+          error_details: %{
+            argument_errors: Enum.join(errors, "; "),
+            original_message: message
+          }
       }
     end
   end

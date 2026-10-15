@@ -641,8 +641,6 @@ defmodule LemonAgent.Loop do
                   tool_call_count: length(tool_calls)
                 })
 
-                Streaming.tools_started(stream)
-
                 ToolCalls.execute_and_collect_tools(
                   context,
                   new_messages,

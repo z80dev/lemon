@@ -11,7 +11,7 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 ### Added
 
 - Agent runs continue up to three times after empty replies or malformed tool
-  arguments, preserving streamed output and stopping recovery before tool execution.
+  arguments, preserving streamed output and tool results without replaying tools.
 
 ---
 

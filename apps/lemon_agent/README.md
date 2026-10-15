@@ -73,10 +73,10 @@ The supervisor uses a `:one_for_one` strategy. Each child is independent:
 
 ### Empty and malformed reply recovery
 
-Before executing any tools in a run, the loop can make up to three additional
-provider calls to recover an empty non-tool reply (including reasoning-only
+Across a run, the loop can make up to three additional provider calls to
+recover an empty non-tool reply (including reasoning-only
 stops) or malformed tool arguments. Argument checks reuse the execution path's
-schema/coercion rules and reject invalid streamed JSON before tools execute.
+schema/coercion rules and inspect streamed JSON before attempting recovery.
 This is separate from transient transport retries and shares the run's usage
 budget and cancellation signal.
 
@@ -84,9 +84,11 @@ Each continuation emits a `provider_retry` notice such as
 `empty reply, continuing (1/3)`. The short correction is request-local system
 guidance, not a synthetic human message in the transcript. Already committed
 assistant content remains in history, and the next reply appends rather than
-replaying it. Once a tool batch starts, automatic continuation is disabled for
-the rest of the run, regardless of tool success. Exhaustion keeps the existing
-terminal assistant error path (and the router's existing whole-run retry).
+replaying it. Continuations retain existing tool results and only re-call the
+provider; they never re-execute earlier tools. When no continuation is taken,
+malformed calls follow the ordinary tool argument-error result path so the
+model can self-correct. Empty-reply exhaustion keeps the existing terminal
+assistant error path (and the router's existing whole-run retry).
 Ordinary text-only final answers are not classified as unexpected stops.
 
 ### Events and Context
