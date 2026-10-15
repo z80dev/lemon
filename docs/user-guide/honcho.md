@@ -116,14 +116,26 @@ user_peer_aliases = { telegram_123 = "alice", discord_456 = "alice" }
 ```
 
 The first match wins: `pin_user_peer = true` uses `user_peer`; otherwise an
-alias for the channel-qualified runtime id wins; otherwise a nonempty
-`runtime_peer_prefix` is prepended to the runtime id; otherwise `user_peer`
-is used. For example, sender `123` on Telegram becomes `telegram_123`, and
-the prefix above produces `gateway_telegram_123`. Discord sender `123` has
-the distinct id `discord_123`. Aliases can intentionally map several ids to
-one person. Alias peer names must contain 1–512 ASCII letters, digits,
-underscores or hyphens. Generated names are sanitized and bounded, with a
-digest when normalization is needed to avoid collisions.
+alias for the channel-qualified runtime id wins; otherwise a transport-identified
+owner keeps `user_peer`; every other sender uses their platform-qualified runtime
+id, prepended with `runtime_peer_prefix` when it is nonempty. For example,
+sender `123` on Telegram defaults to `telegram_123`; the prefix above produces
+`gateway_telegram_123`. Discord sender `123` has the distinct id `discord_123`.
+Aliases can intentionally map several ids to one person. Alias peer names must
+contain 1–512 ASCII letters, digits, underscores or hyphens. Generated names
+are sanitized and bounded, with a digest when normalization is needed to avoid
+collisions.
+
+**Behavior change:** previously, an unaliased sender with no prefix shared
+`user_peer`. Non-owner channel senders now receive separate peers by default;
+their old pooled history is not copied. Restore pooling explicitly with
+`pin_user_peer = true`, or map selected sender ids to `user_peer` using aliases.
+The owner's existing history stays on `user_peer`. Owner recognition uses
+transport authorization configuration, never message text: Telegram senders
+whose positive user id is explicitly in `allowed_chat_ids` are owners, including
+when they speak in a group. Allowing a group/chat/guild does not make its other
+members owners. On transports without a configured human owner identity, use an
+explicit alias to preserve that person's existing peer.
 
 Environment equivalents are `LEMON_HONCHO_PIN_USER_PEER`,
 `LEMON_HONCHO_RUNTIME_PEER_PREFIX` and `LEMON_HONCHO_USER_PEER_ALIASES`

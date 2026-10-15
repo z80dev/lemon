@@ -30,6 +30,35 @@ defmodule LemonChannels.Adapters.Telegram.TransportUpdateProcessorTest do
     assert seen == %{accepted | meta: Map.delete(accepted.meta, :transport_dedupe_refs)}
   end
 
+  test "only explicitly allowlisted positive sender IDs attest owner identity" do
+    owner_id = System.unique_integer([:positive])
+    group_id = -System.unique_integer([:positive])
+
+    for {allowed, allow_all, sender, expected} <- [
+          {[owner_id], false, %{id: to_string(owner_id), bot: false}, true},
+          {[group_id], false, %{id: to_string(owner_id), bot: false}, false},
+          {[group_id, owner_id], false, %{id: to_string(owner_id), bot: false}, true},
+          {[], true, %{id: to_string(owner_id), bot: false}, false},
+          {[group_id], false, %{id: to_string(owner_id), bot: false, owner?: true}, false},
+          {[owner_id], false, %{id: to_string(owner_id), bot: true}, false},
+          {[owner_id], false, %{id: "#{owner_id}suffix", bot: false}, false}
+        ] do
+      chat_id = if group_id in allowed, do: group_id, else: owner_id
+      state = %{transport_state() | allowed_chat_ids: allowed, allow_all_chats: allow_all}
+
+      inbound =
+        base_inbound(
+          chat_id: chat_id,
+          message_id: System.unique_integer([:positive]),
+          text: "hello"
+        )
+
+      inbound = Map.put(inbound, :sender, sender)
+      assert {:ok, accepted} = UpdateProcessor.route_authorized_inbound_action(state, inbound)
+      assert accepted.sender.owner? == expected
+    end
+  end
+
   test "prepare_inbound preserves reply_to_text and update metadata" do
     state = transport_state()
     inbound = base_inbound(chat_id: 2_468, message_id: 11, text: "reply chain")

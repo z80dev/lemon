@@ -47,6 +47,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Changed
 
+- **Honcho behavior change:** unaliased non-owner gateway senders now get their
+  own platform-qualified peer even without a runtime prefix. Explicitly paired
+  Telegram owners retain `user_peer`; use `pin_user_peer = true` or aliases to
+  restore pooled memory. CLI/TUI/web identity is unchanged.
 - Add opt-in bounded background learning reviews, with private-memory ownership,
   draft-only skill creation, restricted tools, per-session rate/concurrency
   limits and no conversation/channel delivery; reminders remain the default.
