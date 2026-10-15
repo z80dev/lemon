@@ -5,6 +5,25 @@ defmodule LemonChannels.Adapters.Discord.Inbound do
 
   alias LemonCore.InboundMessage
 
+  @doc "Download bounded CDN image attachments after authorization."
+  def attach_images(inbound, download \\ &LemonChannels.ImageDownload.download/2) do
+    alias LemonChannels.ImageDownload
+
+    candidates =
+      Enum.filter(inbound.meta[:attachments] || [], &ImageDownload.image_mime?(&1[:content_type]))
+
+    ImageDownload.attach(inbound, candidates, fn attachment ->
+      with true <- ImageDownload.discord_url?(attachment[:url]),
+           false <-
+             is_integer(attachment[:size]) and attachment[:size] > ImageDownload.max_bytes(),
+           {:ok, bytes} <- download.(attachment.url, ImageDownload.max_bytes()) do
+        {:ok, bytes, attachment.content_type}
+      else
+        _ -> {:error, :image_unavailable}
+      end
+    end)
+  end
+
   @spec normalize(map()) :: {:ok, InboundMessage.t()} | {:error, term()}
   def normalize(%{message: message, account_id: account_id} = raw) do
     normalize_message(message, account_id, raw)

@@ -9,7 +9,7 @@ Usage: scripts/prepare_product_release [--auto | <version>]
 Validates the Unreleased changelog notes, chooses a CalVer version, updates all
 first-party product version metadata, and moves the notes into that version's
 section. The default is --auto: increment the current month's patch, or use
-patch zero when the month changes.
+patch zero when the month changes, skipping versions with existing Git tags.
 EOF
   exit 64
 }
@@ -42,6 +42,9 @@ if [ "$REQUESTED_VERSION" = "--auto" ]; then
   else
     VERSION="${YEAR_MONTH}.0"
   fi
+  while git show-ref --verify --quiet "refs/tags/v$VERSION"; do
+    VERSION="${YEAR_MONTH}.$((${VERSION##*.} + 1))"
+  done
 else
   VERSION="$REQUESTED_VERSION"
 fi
@@ -49,6 +52,11 @@ fi
 if ! printf '%s\n' "$VERSION" | grep -qE '^[0-9]{4}\.[0-9]{1,2}\.[0-9]+$'; then
   echo "ERROR: '$VERSION' is not a valid CalVer version (YYYY.MM.PATCH)" >&2
   exit 64
+fi
+
+if git show-ref --verify --quiet "refs/tags/v$VERSION"; then
+  echo "ERROR: tag v$VERSION already exists; choose an unused version" >&2
+  exit 65
 fi
 
 python3 - "$CURRENT_VERSION" "$VERSION" CHANGELOG.md <<'PYEOF'

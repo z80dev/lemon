@@ -380,7 +380,12 @@ defmodule LemonAi.Providers.OpenAICodexResponses do
 
         retry_delay =
           if retry_allowed? and RetryHelper.retryable_http_error?(status, error_text) do
-            RetryHelper.http_retry_delay_ms(attempt, response_headers, policy)
+            RetryHelper.http_retry_delay_ms(
+              attempt,
+              response_headers,
+              policy,
+              {:http_error, status, error_text}
+            )
           else
             :give_up
           end

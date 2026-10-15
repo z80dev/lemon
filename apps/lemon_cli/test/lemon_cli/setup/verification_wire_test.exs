@@ -9,6 +9,8 @@ Code.require_file(
 defmodule LemonCli.Setup.VerificationWireTest do
   use ExUnit.Case, async: false
 
+  alias LemonAi.Models.Presets
+  alias LemonCli.Setup.Verification
   alias LemonCore.Secrets
   alias LemonScripts.SetupVerificationProbe
   alias LemonScripts.SetupOnboardingProbe
@@ -50,6 +52,61 @@ defmodule LemonCli.Setup.VerificationWireTest do
     end)
 
     %{root: root}
+  end
+
+  for {provider, settings} <- [
+        {"ollama", ""},
+        {"local-custom",
+         "api = \"openai_completions\"\nbase_url = \"http://127.0.0.1:1234/v1\"\nauth = \"none\""}
+      ] do
+    test "#{provider} passes offline setup verification without credentials", %{root: root} do
+      path = Path.join(root, "config.toml")
+
+      File.write!(path, """
+      [defaults]
+      provider = "#{unquote(provider)}"
+      model = "test-model"
+      [providers.#{unquote(provider)}]
+      #{unquote(settings)}
+      """)
+
+      assert {:ok, %{live: :disabled}} =
+               Verification.verify_provider(config_path: path, skip_verify: true)
+    end
+  end
+
+  test "Ollama live verification receives no credential", %{root: root} do
+    path = Path.join(root, "config.toml")
+
+    File.write!(path, """
+    [defaults]
+    provider = "ollama"
+    model = "test-model"
+    """)
+
+    assert {:ok, %{live: :ok}} =
+             Verification.verify_provider(
+               config_path: path,
+               verification_model: Presets.model(:ollama, "test-model"),
+               verifier: fn input ->
+                 assert input.provider == "ollama"
+                 assert is_nil(input.api_key)
+                 {:ok, %{}}
+               end
+             )
+  end
+
+  test "offline setup rejects a cloud provider without credentials", %{root: root} do
+    path = Path.join(root, "config.toml")
+
+    File.write!(path, """
+    [defaults]
+    provider = "ollama_cloud"
+    model = "test-model"
+    """)
+
+    assert {:error, %{reason: :credential_not_usable}} =
+             Verification.verify_provider(config_path: path, skip_verify: true)
   end
 
   for provider <- [:litellm, :xai], scenario <- [:success, :raw_success] do
