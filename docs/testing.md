@@ -106,22 +106,37 @@ responsibilities. No live provider calls are needed for `premerge` or `changed`.
 
 | Workflow | Trigger | What it runs |
 | --- | --- | --- |
-| `ci.yml` | every PR and push to `main` | `check` → `scripts/test quality` + `eval-fast`; `test (1..4)` → `scripts/test fast --partitions 4`; `dialyzer` (advisory full run plus the `scripts/dialyzer_gate.sh` allowlist gate); `sim-bench` (`scripts/ci_sim_bench.sh`); `install` → `scripts/verify_source_install` + `scripts/verify_install_script`; `clients` → `scripts/test clients`; `wasm-runtime`; `history` (PRs only); `CI result` (the one status to require) |
-| `nightly.yml` | daily + dispatch | `scripts/test coverage`; the prompt/skill/overflow regression files with `--repeat-until-failure 5`; `scripts/test eval-fast` with 20 iterations |
+| `ci.yml` | every PR and push to `main`; called by `release.yml` and `nightly.yml`; dispatch | `changes` → `scripts/changed_tests` (PRs only); `check` → `scripts/test quality` + `eval-fast`; `test (n/N)` → `scripts/test fast --partitions N [selected app test dirs]`; `dialyzer` (advisory full run plus the `scripts/dialyzer_gate.sh` allowlist gate); `sim-bench` (`scripts/ci_sim_bench.sh`); `install` → `scripts/verify_source_install` + `scripts/verify_install_script`; `clients` → `scripts/test clients`; `wasm-runtime`; `history` (PRs only); `CI result` (the one status to require; summarizes failures) |
+| `nightly.yml` | daily + dispatch | the full `ci.yml`; `scripts/test coverage`; the prompt/skill/overflow regression files with `--repeat-until-failure 5`; `scripts/test eval-fast` with 20 iterations; the `nightly-red` issue |
 | `product-smoke.yml` | PRs touching `apps/**`, weekly, dispatch | Boots a `lemon_runtime_full` release against a local deterministic provider |
 | `release-smoke.yml` | release paths, weekly, dispatch | Release assembly and boot matrix |
 | `osv-scanner.yml` | lockfile changes, weekly | The only dependency-vulnerability scan (Mix, npm, Bun lockfiles) |
 | `docs-site.yml` | `docs/**` changes | VitePress build and link check |
-| `release.yml` | tag / dispatch | Skips the BEAM and client gates when `scripts/ci_verified_commit` finds a green `ci.yml` push run on the release commit or on an ancestor it differs from only by version fields and changelogs; otherwise runs `fast`, `quality`, `eval-fast`, the install checks and `clients`. Then builds and publishes artifacts. |
+| `release.yml` | tag / dispatch | Skips the gates when `scripts/ci_verified_commit` finds (or waits up to 30 minutes for) a green `ci.yml` push run on the release commit or on an ancestor it differs from only by version fields and changelogs; otherwise calls `ci.yml` itself, so the release runs the same sharded jobs. Then builds and publishes artifacts. |
 | `live-eval.yml` | dispatch | `scripts/test live-eval` with repository secrets |
 | `packaging.yml` | PRs touching the five Hex packages, `lemon_channels`, `installer/` or the packaging scripts; nightly; dispatch | `scripts/verify_packages` (consumer project and generated projects built from the unpacked Hex tarballs; advisory Elixir 1.15 leg) and `scripts/verify_generator` (both generator shapes against the checkout) |
 | `publish.yml` | `<package>-v<version>` tag / dispatch | `scripts/release_package --verify`, then `--publish-tagged` when `HEX_API_KEY` is set |
 
-In `ci.yml`, pull requests skip what their paths cannot affect: prose-only
-changes (`docs/**`, `*.md`) run only `check`; `clients` runs for `clients/**`;
-`wasm-runtime` runs for `native/**` and the WASM bridge. Pushes to `main` run
-every job, which is what lets a release reuse a main commit's green run. One
-`deps`/`_build` cache entry per `MIX_ENV` family (`test`, `dev`, `install`) is
+In `ci.yml`, pull requests run only what their diff can affect, chosen by
+`scripts/changed_tests --base origin/<base>` (see above): the `test` job runs the
+selected apps' test directories (one shard for small selections, four when
+`coding_agent` or more than six apps are selected, or for full scope); no
+selected app skips `test`, `dialyzer` and `install`; `sim-bench` runs when
+`lemon_sim` is selected; `clients` and `wasm-runtime` follow their lanes. `check`
+always runs. Every other event (pushes to `main`, release preflight, nightly,
+dispatch) runs every job, which is what lets a release reuse a main commit's
+green run. Cross-app effects that only appear in the shared umbrella BEAM (an app
+registering into another's runtime registry) are therefore caught by `main`'s
+full run, not by the pull request.
+
+Pushes to `main` are serialized: one run plus the newest pending one, so a
+burst of merges coalesces into a run of the latest commit. When a `main` run
+fails, `CI result` opens (or comments on) the `main-red` issue with the failing
+jobs and ExUnit tests (`scripts/ci_failure_report`); the next green run closes
+it. Check `gh issue list --label main-red` before merging and fix forward first.
+Nightly failures do the same with `nightly-red`.
+
+One `deps`/`_build` cache entry per `MIX_ENV` family (`test`, `dev`, `install`) is
 saved per main commit by `.github/actions/beam-setup` callers; pull requests
 restore main's newest entry and compile incrementally. To reproduce one test
 shard locally: `MIX_TEST_PARTITION=2 scripts/test fast --partitions 4`.

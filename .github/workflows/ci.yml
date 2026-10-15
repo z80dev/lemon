@@ -51,49 +51,55 @@ env:
   LC_ALL: C.UTF-8
 
 jobs:
+  # Pull requests: scripts/changed_tests maps the diff to affected umbrella apps
+  # (touched apps plus their in_umbrella reverse dependencies) and lanes. It is
+  # conservative: config, mix.exs/lock, scripts, workflows, release/installer
+  # files or any unknown path select the full suite. Every other event (main
+  # pushes, release preflight, nightly, manual dispatch) always runs everything.
   changes:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
-      code: ${{ github.event_name != 'pull_request' || steps.code.outputs.code == 'true' }}
-      clients: ${{ github.event_name != 'pull_request' || steps.paths.outputs.clients == 'true' }}
-      wasm: ${{ github.event_name != 'pull_request' || steps.paths.outputs.wasm == 'true' }}
+      code: ${{ github.event_name != 'pull_request' || steps.select.outputs.scope != 'none' }}
+      scope: ${{ github.event_name != 'pull_request' && 'full' || steps.select.outputs.scope }}
+      apps: ${{ steps.select.outputs.apps }}
+      test_paths: ${{ github.event_name != 'pull_request' && '' || steps.select.outputs.test_paths }}
+      partitions: ${{ github.event_name != 'pull_request' && '4' || steps.shards.outputs.partitions }}
+      matrix: ${{ github.event_name != 'pull_request' && '[1,2,3,4]' || steps.shards.outputs.matrix }}
+      clients: ${{ github.event_name != 'pull_request' || steps.select.outputs.clients == 'true' }}
+      wasm: ${{ github.event_name != 'pull_request' || steps.select.outputs.wasm == 'true' }}
 
     steps:
-      - name: Checkout
+      - name: Checkout with history
+        if: github.event_name == 'pull_request'
         uses: actions/checkout@v4
-
-      # Anything but prose and the docs site can change BEAM behaviour. The TUI
-      # counts: control-plane wire tests execute the compiled client.
-      - name: Detect code changes
-        if: github.event_name == 'pull_request'
-        uses: dorny/paths-filter@v4
-        id: code
         with:
-          predicate-quantifier: every
-          filters: |
-            code:
-              - '**'
-              - '!docs/**'
-              - '!**/*.md'
-              - '!clients/lemon-browser-node/**'
-              - '!.github/workflows/docs-site.yml'
+          fetch-depth: 0
+          filter: blob:none
 
-      - name: Detect client and WASM changes
+      - name: Select affected apps and lanes
         if: github.event_name == 'pull_request'
-        uses: dorny/paths-filter@v4
-        id: paths
-        with:
-          filters: |
-            clients:
-              - 'clients/**'
-              - 'scripts/test'
-              - '.github/workflows/ci.yml'
-            wasm:
-              - 'native/**'
-              - 'apps/coding_agent/lib/coding_agent/wasm/**'
-              - 'apps/coding_agent/test/coding_agent/wasm_integration_test.exs'
-              - '.github/workflows/ci.yml'
+        id: select
+        run: scripts/changed_tests --base "origin/${GITHUB_BASE_REF}" --format github
+
+      # Small selections run on one shard; the suite's long pole (coding_agent,
+      # ~4-5 min of ExUnit across shards) and broad selections keep four.
+      - name: Choose shard count
+        if: github.event_name == 'pull_request'
+        id: shards
+        env:
+          SCOPE: ${{ steps.select.outputs.scope }}
+          APPS: ${{ steps.select.outputs.apps }}
+        run: |
+          read -r -a apps <<< "$APPS"
+          if [ "$SCOPE" = full ] || [ "${#apps[@]}" -gt 6 ] || [[ " $APPS " == *" coding_agent "* ]]; then
+            partitions=4
+          else
+            partitions=1
+          fi
+          echo "partitions=$partitions" >> "$GITHUB_OUTPUT"
+          echo "matrix=$(seq -s, 1 "$partitions" | sed 's/^/[/; s/$/]/')" >> "$GITHUB_OUTPUT"
+          echo "shards: $partitions (scope $SCOPE, ${#apps[@]} apps)"
 
   # Cheapest, broadest signal first: format, credo, docs and architecture
   # checks also cover prose-only changes, so this job never skips.
@@ -127,7 +133,7 @@ jobs:
           key: ${{ steps.beam.outputs.cache-key }}
 
   test:
-    name: test (${{ matrix.partition }}/4)
+    name: test (${{ matrix.partition }}/${{ needs.changes.outputs.partitions }})
     needs: changes
     if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
@@ -136,7 +142,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        partition: [1, 2, 3, 4]
+        partition: ${{ fromJSON(needs.changes.outputs.matrix) }}
 
     steps:
       - name: Checkout
@@ -148,10 +154,16 @@ jobs:
           family: test
           bun: "true"
 
-      - name: scripts/test fast (partition ${{ matrix.partition }}/4)
+      # TEST_PATHS is empty for a full run; otherwise the selected app test
+      # directories (word-split on purpose).
+      - name: scripts/test fast (partition ${{ matrix.partition }}/${{ needs.changes.outputs.partitions }})
         env:
           MIX_TEST_PARTITION: ${{ matrix.partition }}
-        run: scripts/test fast --partitions 4
+          PARTITIONS: ${{ needs.changes.outputs.partitions }}
+          TEST_PATHS: ${{ needs.changes.outputs.test_paths }}
+        run: |
+          # shellcheck disable=SC2086
+          scripts/test fast --partitions "$PARTITIONS" $TEST_PATHS
 
   dialyzer:
     needs: changes
@@ -213,9 +225,11 @@ jobs:
             _build
           key: ${{ steps.beam.outputs.cache-key }}
 
+  # Only lemon_sim's suites; a change reaches them through lemon_sim itself or
+  # one of its umbrella dependencies (both select lemon_sim).
   sim-bench:
     needs: changes
-    if: needs.changes.outputs.code == 'true'
+    if: needs.changes.outputs.scope == 'full' || contains(format(' {0} ', needs.changes.outputs.apps), ' lemon_sim ')
     runs-on: ubuntu-latest
     timeout-minutes: 45
 
