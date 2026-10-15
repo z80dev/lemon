@@ -10,6 +10,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Added
 
+- Opt in to a dedicated managed Chrome user-data directory and profile with
+  `LEMON_BROWSER_USER_DATA_DIR` / `LEMON_BROWSER_PROFILE_DIRECTORY`, with
+  default-directory and profile-lock safety checks and fail-closed identity binding.
 - Add opt-in `[runtime.tools.bash.interceptor]` dedicated-tool routing with
   configurable rules, session-tool availability checks and piped-stdin exemptions,
   applied before foreground, background and named-service launches.

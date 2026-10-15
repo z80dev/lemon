@@ -107,6 +107,32 @@ defmodule LemonBrowser.Env do
       apps: [:lemon_browser]
     },
     %{
+      name: :lemon_browser_user_data_dir,
+      env_var: "LEMON_BROWSER_USER_DATA_DIR",
+      aliases: [],
+      type: :string,
+      default: nil,
+      doc:
+        "Dedicated Chrome user-data directory for managed launches; actions use its cookies and logins.",
+      secret?: false,
+      required?: false,
+      area: :browser,
+      apps: [:lemon_browser]
+    },
+    %{
+      name: :lemon_browser_profile_directory,
+      env_var: "LEMON_BROWSER_PROFILE_DIRECTORY",
+      aliases: [],
+      type: :string,
+      default: nil,
+      doc:
+        "Chrome profile directory within the managed user-data directory, such as Default or Profile 1.",
+      secret?: false,
+      required?: false,
+      area: :browser,
+      apps: [:lemon_browser]
+    },
+    %{
       name: :lemon_browser_attach_only,
       env_var: "LEMON_BROWSER_ATTACH_ONLY",
       aliases: [],
