@@ -2,6 +2,7 @@ defmodule CodingAgent.Tools.AskTest do
   use ExUnit.Case, async: true
   alias CodingAgent.Tools.Ask
   alias LemonCore.ACPClientBridge
+  alias CodingAgent.Session.UserPrompt
 
   setup do
     run_id = "ask-test-#{System.unique_integer([:positive])}"
@@ -109,5 +110,208 @@ defmodule CodingAgent.Tools.AskTest do
     assert text["selectedOptions"] == []
     assert multi["selectedOptions"] == ["B"]
     assert multi["customInput"] == "Custom"
+  end
+
+  test "a bound session surface advertises ask and receives real questions without ACP" do
+    key = "native-ask-#{System.unique_integer([:positive])}"
+    :ok = LemonCore.Bus.subscribe("user_prompts")
+    refute Ask.available?(session_key: key)
+    assert :ok = UserPrompt.bind(key, self())
+    assert Ask.available?(session_key: key)
+
+    question = %{
+      "id" => "q",
+      "question" => "Choose",
+      "options" => [%{"label" => "A"}, %{"label" => "B"}],
+      "recommended" => 1
+    }
+
+    task =
+      Task.async(fn ->
+        Ask.execute("call", %{"questions" => [question]}, nil, nil,
+          session_key: key,
+          run_id: "native-run"
+        )
+      end)
+
+    assert_receive %LemonCore.Event{
+      type: :user_prompt_requested,
+      payload: %{"sessionKey" => ^key} = pending
+    }
+
+    assert pending["questions"] == [Map.put(question, "multi", false)]
+    assert pending["expiresAtMs"] == nil
+
+    assert :ok =
+             UserPrompt.resolve(
+               pending["promptId"],
+               key,
+               "native-run",
+               %{"action" => "accept", "content" => %{"q0" => "A"}},
+               self()
+             )
+
+    result = Task.await(task)
+    refute result.is_error
+    assert hd(result.details.results)["selectedOptions"] == ["A"]
+
+    assert_receive %LemonCore.Event{
+      type: :user_prompt_resolved,
+      payload: %{"sessionKey" => ^key, "status" => "accept"}
+    }
+
+    assert :ok = UserPrompt.unbind(key, self())
+    refute Ask.available?(session_key: key)
+  end
+
+  test "session questions preserve free text and multi-select answers" do
+    key = "native-ask-multi-#{System.unique_integer([:positive])}"
+    :ok = LemonCore.Bus.subscribe("user_prompts")
+    :ok = UserPrompt.bind(key, self())
+
+    questions = [
+      %{"id" => "text", "question" => "Explain", "options" => []},
+      %{
+        "id" => "multi",
+        "question" => "Choose",
+        "options" => [%{"label" => "A"}, %{"label" => "B"}],
+        "multi" => true
+      }
+    ]
+
+    task =
+      Task.async(fn ->
+        Ask.execute("call", %{"questions" => questions}, nil, nil, session_key: key)
+      end)
+
+    assert_receive %LemonCore.Event{
+      type: :user_prompt_requested,
+      payload: %{"sessionKey" => ^key, "promptId" => id}
+    }
+
+    assert :ok =
+             UserPrompt.resolve(
+               id,
+               key,
+               nil,
+               %{
+                 "action" => "accept",
+                 "content" => %{"q0__other" => "actual text", "q1" => ["B"]}
+               },
+               self()
+             )
+
+    result = Task.await(task)
+    refute result.is_error
+    assert [text, multi] = result.details.results
+    assert text["customInput"] == "actual text"
+    assert multi["selectedOptions"] == ["B"]
+  end
+
+  test "decline, timeout, cancellation and surface disconnect fail closed" do
+    for outcome <- [:decline, :timeout, :cancelled, :client_down] do
+      key = "native-ask-#{outcome}-#{System.unique_integer([:positive])}"
+      :ok = LemonCore.Bus.subscribe("user_prompts")
+      :ok = UserPrompt.bind(key, self())
+      signal = LemonAgent.AbortSignal.new()
+
+      question = %{
+        "id" => "q",
+        "question" => "Choose",
+        "options" => [%{"label" => "recommended"}],
+        "recommended" => 0
+      }
+
+      params = %{"questions" => [question]}
+      params = if outcome == :timeout, do: Map.put(params, "timeout_ms", 20), else: params
+      task = Task.async(fn -> Ask.execute("call", params, signal, nil, session_key: key) end)
+
+      assert_receive %LemonCore.Event{
+        type: :user_prompt_requested,
+        payload: %{"sessionKey" => ^key, "promptId" => id}
+      }
+
+      case outcome do
+        :decline ->
+          assert :ok = UserPrompt.resolve(id, key, nil, %{"action" => "decline"}, self())
+
+        :timeout ->
+          :ok
+
+        :cancelled ->
+          LemonAgent.AbortSignal.abort(signal)
+
+        :client_down ->
+          assert :ok = UserPrompt.unbind(key, self())
+      end
+
+      result = Task.await(task)
+      assert result.is_error
+      refute Map.has_key?(result.details, :results)
+
+      assert_receive %LemonCore.Event{
+        type: :user_prompt_resolved,
+        payload: %{"sessionKey" => ^key}
+      }
+
+      assert {:error, :not_found} =
+               UserPrompt.resolve(id, key, nil, %{"action" => "accept"}, self())
+
+      LemonAgent.AbortSignal.clear(signal)
+    end
+  end
+
+  test "dead surface and dead waiter release pending questions" do
+    key = "native-ask-death-#{System.unique_integer([:positive])}"
+    :ok = LemonCore.Bus.subscribe("user_prompts")
+
+    surface =
+      spawn(fn ->
+        receive do
+          :stop -> :ok
+        end
+      end)
+
+    monitor = Process.monitor(surface)
+    :ok = UserPrompt.bind(key, surface)
+
+    task =
+      Task.async(fn ->
+        UserPrompt.request(key, nil, [%{"id" => "q", "question" => "Text?", "options" => []}])
+      end)
+
+    assert_receive %LemonCore.Event{
+      type: :user_prompt_requested,
+      payload: %{"sessionKey" => ^key, "promptId" => first_id}
+    }
+
+    send(surface, :stop)
+    assert_receive {:DOWN, ^monitor, :process, ^surface, :normal}
+    assert {:error, :client_down} = Task.await(task)
+
+    assert_receive %LemonCore.Event{
+      type: :user_prompt_resolved,
+      payload: %{"promptId" => ^first_id, "status" => "cancelled"}
+    }
+
+    refute UserPrompt.bound?(key)
+    :ok = UserPrompt.bind(key, self())
+
+    task =
+      Task.async(fn ->
+        UserPrompt.request(key, nil, [%{"id" => "q", "question" => "Text?", "options" => []}])
+      end)
+
+    assert_receive %LemonCore.Event{
+      type: :user_prompt_requested,
+      payload: %{"sessionKey" => ^key, "promptId" => second_id}
+    }
+
+    Task.shutdown(task, :brutal_kill)
+
+    assert_receive %LemonCore.Event{
+      type: :user_prompt_resolved,
+      payload: %{"promptId" => ^second_id, "status" => "cancelled"}
+    }
   end
 end

@@ -15,6 +15,16 @@ defmodule CodingAgent.ControlPlaneProvider do
 
   @behaviour LemonCore.AgentRuntime.Provider
 
+  def user_prompt_bind(session_key, connection, enabled) do
+    if enabled,
+      do: CodingAgent.Session.UserPrompt.bind(session_key, connection),
+      else: CodingAgent.Session.UserPrompt.unbind(session_key, connection)
+  end
+
+  def user_prompt_resolve(prompt_id, session_key, run_id, response, connection),
+    do:
+      CodingAgent.Session.UserPrompt.resolve(prompt_id, session_key, run_id, response, connection)
+
   def list_tasks, do: CodingAgent.TaskStore.list(:all)
 
   def get_task(task_id), do: CodingAgent.TaskStore.get(task_id)

@@ -112,6 +112,8 @@ defmodule LemonControlPlane.Methods.Registry do
     LemonControlPlane.Methods.SessionsCompact,
     LemonControlPlane.Methods.SessionsTree,
     LemonControlPlane.Methods.SessionsRewind,
+    LemonControlPlane.Methods.SessionsPromptBind,
+    LemonControlPlane.Methods.SessionsPromptResolve,
     LemonControlPlane.Methods.SessionsNavigate,
     LemonControlPlane.Methods.SessionsLabel,
     LemonControlPlane.Methods.SessionsCreate,

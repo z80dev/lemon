@@ -1,22 +1,27 @@
 defmodule CodingAgent.Tools.Ask do
   @moduledoc """
-  Ask the connected ACP user for decisions using negotiated form elicitation.
+  Ask an interactive user through a session prompt surface or ACP elicitation.
 
-  Available only for a run whose client advertised `elicitation.form` and whose
-  request bridge is registered. Answers come from the real client; declining,
-  cancelling, disconnection and timeout never choose a recommendation for the
-  user. Other clients do not advertise this tool.
+  Available only while a session user-prompt surface is bound, or a run's client
+  advertised `elicitation.form` and its bridge is registered. Answers come from
+  the real client; decline, cancellation, disconnection and timeout never choose
+  a recommendation for the user.
   """
 
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonAi.Types.TextContent
   alias LemonCore.ACPClientBridge
+  alias CodingAgent.Session.UserPrompt
 
   @max_questions 8
   @max_options 20
   @answer_bytes 4_000
 
   def available?(opts) do
+    acp_available?(opts) or UserPrompt.bound?(Keyword.get(opts, :session_key))
+  end
+
+  defp acp_available?(opts) do
     run_id = Keyword.get(opts, :run_id)
 
     Keyword.get(opts, :acp_client_elicitation_form, false) == true and
@@ -35,6 +40,11 @@ defmodule CodingAgent.Tools.Ask do
       parameters: %{
         "type" => "object",
         "properties" => %{
+          "timeout_ms" => %{
+            "type" => "integer",
+            "minimum" => 1,
+            "description" => "Optional deadline in milliseconds. Timeout never selects an answer."
+          },
           "questions" => %{
             "type" => "array",
             "minItems" => 1,
@@ -76,18 +86,42 @@ defmodule CodingAgent.Tools.Ask do
     with :ok <- connected(opts),
          :ok <- not_aborted(signal),
          {:ok, questions} <- questions(params),
+         {:ok, timeout} <- timeout(params, opts),
          :ok <- announce_waiting(on_update),
-         {:ok, response} <-
-           ACPClientBridge.request(
-             Keyword.fetch!(opts, :run_id),
-             "elicitation/create",
-             request(questions),
-             Keyword.get(opts, :elicitation_timeout_ms, 300_000)
-           ),
+         {:ok, response} <- request_answer(questions, signal, opts, timeout),
          :ok <- not_aborted(signal) do
       response_result(questions, response)
     else
       {:error, reason} -> failure(reason)
+    end
+  end
+
+  defp timeout(params, opts) do
+    value = Map.get(params, "timeout_ms", Keyword.get(opts, :user_prompt_timeout_ms, :infinity))
+
+    if value == :infinity or (is_integer(value) and value > 0),
+      do: {:ok, value},
+      else: {:error, :invalid_timeout}
+  end
+
+  defp request_answer(questions, signal, opts, timeout) do
+    if acp_available?(opts) do
+      timeout =
+        if timeout == :infinity,
+          do: Keyword.get(opts, :elicitation_timeout_ms, 300_000),
+          else: timeout
+
+      ACPClientBridge.request(
+        Keyword.fetch!(opts, :run_id),
+        "elicitation/create",
+        request(questions),
+        timeout
+      )
+    else
+      UserPrompt.request(Keyword.get(opts, :session_key), Keyword.get(opts, :run_id), questions,
+        timeout_ms: timeout,
+        signal: signal
+      )
     end
   end
 
@@ -339,15 +373,23 @@ defmodule CodingAgent.Tools.Ask do
            %{status: "timed_out", error_type: "timeout"}}
 
         :no_client ->
-          {"No form-capable ACP client is connected to this run.",
+          {"No interactive user-prompt surface is connected to this session.",
            %{error_type: "client_unavailable"}}
 
         :client_down ->
-          {"The ACP client disconnected before answering.", %{error_type: "client_unavailable"}}
+          {"The interactive client disconnected before answering.",
+           %{error_type: "client_unavailable"}}
 
         :invalid_response ->
           {"The client did not supply a valid answer for every question.",
            %{error_type: "invalid_client_response"}}
+
+        :prompt_pending ->
+          {"Another user question is already pending for this session.",
+           %{error_type: "prompt_pending"}}
+
+        :invalid_timeout ->
+          {"timeout_ms must be a positive integer.", %{error_type: "invalid_arguments"}}
 
         message when is_binary(message) ->
           {message, %{error_type: "invalid_arguments"}}

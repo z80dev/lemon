@@ -20,6 +20,13 @@ defmodule LemonCore.AgentRuntime.Provider do
   @type task_id :: String.t()
   @type session_key :: String.t()
 
+  @doc "Bind or unbind a live session user-prompt surface owned by a client connection."
+  @callback user_prompt_bind(session_key(), pid(), boolean()) :: :ok | {:error, atom()}
+
+  @doc "Resolve a pending question for an exact prompt/session/run and bound client."
+  @callback user_prompt_resolve(String.t(), session_key(), String.t() | nil, map(), pid()) ::
+              :ok | {:error, atom()}
+
   @doc "All known tasks as `{task_id, record}` pairs."
   @callback list_tasks() :: [{task_id(), map()}]
 
@@ -185,6 +192,8 @@ defmodule LemonCore.AgentRuntime.Provider do
   @callback wasm_sidecar_running?() :: boolean()
 
   @optional_callbacks list_tasks: 0,
+                      user_prompt_bind: 3,
+                      user_prompt_resolve: 5,
                       get_task: 1,
                       todo_progress: 1,
                       feature_progress: 1,
