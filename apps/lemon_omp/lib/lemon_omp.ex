@@ -243,12 +243,14 @@ defmodule LemonOmp do
   end
 
   @doc """
-  Steer the running turn (`:steer`), queue a follow-up (`:follow_up`), or —
-  when the session is idle — start a new turn with `message`.
+  Steer the running turn (`:steer`), queue a follow-up (`:follow_up`), or stop
+  it and start over atomically in omp (`:redirect`). When the session is idle,
+  every mode starts a new turn with `message`.
   """
-  @spec send_message(String.t(), String.t(), :steer | :follow_up, keyword()) ::
+  @spec send_message(String.t(), String.t(), :steer | :follow_up | :redirect, keyword()) ::
           {:ok, map()} | {:error, reason()}
-  def send_message(id, message, mode, opts \\ []) when mode in [:steer, :follow_up] do
+  def send_message(id, message, mode, opts \\ [])
+      when mode in [:steer, :follow_up, :redirect] do
     with {:ok, message} <- validate_message(message),
          {:ok, pid} <- fetch_live(id, opts) do
       Session.send_message(pid, message, mode)

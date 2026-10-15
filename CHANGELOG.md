@@ -22,6 +22,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Added
 
+- omp's chat tool and Elixir API can redirect a running turn atomically with
+  `abort_and_prompt`. Existing waits follow the replacement turn; asynchronous
+  prompt failures are reported without acknowledging the same command twice.
 - Explicit omp crash continuation (`resume` with `continue: true`) through a
   state-review prompt, plus a bounded read-only discovery `interrupted` hint.
   This does not revive subagents; omp's native `--restore` is interactive-only.
