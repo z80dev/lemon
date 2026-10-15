@@ -324,7 +324,7 @@ defmodule LemonAgent.AgentTest do
     test "accepts all valid thinking levels" do
       {:ok, agent} = start_agent()
 
-      for level <- [:off, :minimal, :low, :medium, :high, :xhigh] do
+      for level <- [:off, :minimal, :low, :medium, :high, :xhigh, :auto] do
         :ok = Agent.set_thinking_level(agent, level)
         state = Agent.get_state(agent)
         assert state.thinking_level == level

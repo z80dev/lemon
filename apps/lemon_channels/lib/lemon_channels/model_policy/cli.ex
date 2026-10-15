@@ -34,7 +34,7 @@ defmodule LemonChannels.ModelPolicy.CLI do
     * `--peer` - Peer/chat identifier (e.g., Discord channel ID, Telegram chat ID)
     * `--thread` - Thread/topic identifier
     * `--model` - Model ID (e.g., "claude-sonnet-4-20250514", "gpt-4o")
-    * `--thinking` - Thinking level (off, minimal, low, medium, high, xhigh)
+    * `--thinking` - Thinking level (off, minimal, low, medium, high, xhigh, auto)
     * `--reason` - Reason for setting this policy (stored in metadata)
     * `--all` - For clear command: clear all policies for the channel
   """
@@ -43,7 +43,7 @@ defmodule LemonChannels.ModelPolicy.CLI do
   alias LemonChannels.ModelPolicy.Route
 
   @placeholder_model_id "_thinking_only"
-  @thinking_levels ~w(off minimal low medium high xhigh)
+  @thinking_levels ~w(off minimal low medium high xhigh auto)
 
   def run(args) do
     LemonCore.CLI.start!(:lemon_core)

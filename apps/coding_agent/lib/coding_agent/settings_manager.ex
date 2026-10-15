@@ -9,7 +9,7 @@ defmodule CodingAgent.SettingsManager do
   alias LemonCore.Config, as: LemonConfig
   alias LemonAgent.ModelRuntime.ModelRoles
 
-  @type thinking_level :: :off | :minimal | :low | :medium | :high | :xhigh
+  @type thinking_level :: :off | :auto | :minimal | :low | :medium | :high | :xhigh
 
   @type model_config :: %{
           provider: String.t() | nil,

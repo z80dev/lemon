@@ -10,7 +10,8 @@ defmodule LemonRouter.ThinkingLevel do
     "low" => :low,
     "medium" => :medium,
     "high" => :high,
-    "xhigh" => :xhigh
+    "xhigh" => :xhigh,
+    "auto" => :auto
   }
 
   @allowed_strings Map.keys(@levels) |> Enum.sort()

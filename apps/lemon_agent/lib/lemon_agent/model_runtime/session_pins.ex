@@ -2,11 +2,10 @@ defmodule LemonAgent.ModelRuntime.SessionPins do
   @moduledoc """
   Best-effort per-session pinning of a committed fallback candidate.
 
-  When a session's turn commits on a non-primary provider and/or credential,
-  the fallback executor pins `{provider, credential_ref}` for that session so
-  later turns lead with the candidate that actually worked - provider prompt
-  caches are keyed per provider+credential, so bouncing back to a failing
-  primary (or a different credential) every turn destroys cache hit rates.
+  When a turn commits on a non-primary model and/or credential, the executor
+  pins `{provider, model_id, credential_ref}` so later turns lead with the
+  candidate that worked. Provider prompt caches are model- and credential-
+  specific. An optional nil model identity matches any model of the provider.
 
   Pins are advisory ordering hints, never gates: a missing table or a `nil` /
   `:global` scope simply means no pin. State lives in a public named ETS table
@@ -17,7 +16,7 @@ defmodule LemonAgent.ModelRuntime.SessionPins do
   clears them at session termination. To keep the table bounded in
   long-running daemons that churn through many sessions, the owning process
   sweeps out pins older than 7 days (the timestamp refreshes on every
-  `pin/3`) once an hour.
+  `pin/4`) once an hour.
   """
 
   use GenServer
@@ -31,18 +30,20 @@ defmodule LemonAgent.ModelRuntime.SessionPins do
   end
 
   @doc """
-  Pin `{provider, credential_ref}` for a session scope, replacing any
+  Pin `{provider, model_id, credential_ref}` for a session scope, replacing any
   existing pin. No-op for `nil`/`:global` scopes.
   """
-  @spec pin(term(), String.t(), String.t() | nil) :: :ok
-  def pin(session_scope, provider, credential_ref)
+  @spec pin(term(), String.t(), String.t() | nil, String.t() | nil) :: :ok
+  def pin(session_scope, provider, credential_ref, model_id)
 
-  def pin(session_scope, _provider, _credential_ref) when session_scope in [nil, :global], do: :ok
+  def pin(session_scope, _provider, _credential_ref, _model_id)
+      when session_scope in [nil, :global],
+      do: :ok
 
-  def pin(session_scope, provider, credential_ref) when is_binary(provider) do
+  def pin(session_scope, provider, credential_ref, model_id) when is_binary(provider) do
     :ets.insert(
       @table,
-      {session_scope, %{provider: provider, credential_ref: credential_ref},
+      {session_scope, %{provider: provider, model_id: model_id, credential_ref: credential_ref},
        System.system_time(:millisecond)}
     )
 
@@ -51,9 +52,27 @@ defmodule LemonAgent.ModelRuntime.SessionPins do
     ArgumentError -> :ok
   end
 
-  def pin(_session_scope, _provider, _credential_ref), do: :ok
+  def pin(_session_scope, _provider, _credential_ref, _model_id), do: :ok
 
-  @spec get(term()) :: %{provider: String.t(), credential_ref: String.t() | nil} | nil
+  @doc "Matches provider and optional model identity; absent/nil model identity is provider-wide."
+  @spec matches?(map() | nil, atom() | String.t(), String.t()) :: boolean()
+  def matches?(%{provider: pinned} = pin, provider, candidate_id) do
+    model_id = Map.get(pin, :model_id)
+
+    normalize_provider(pinned) == normalize_provider(provider) and
+      (is_nil(model_id) or model_id == candidate_id)
+  end
+
+  def matches?(_, _, _), do: false
+
+  defp normalize_provider(provider) do
+    LemonAgent.ModelRuntime.ProviderNames.canonical_name(provider) ||
+      provider |> to_string() |> String.downcase() |> String.replace("-", "_")
+  end
+
+  @spec get(term()) ::
+          %{provider: String.t(), model_id: String.t() | nil, credential_ref: String.t() | nil}
+          | nil
   def get(session_scope) when session_scope in [nil, :global], do: nil
 
   def get(session_scope) do

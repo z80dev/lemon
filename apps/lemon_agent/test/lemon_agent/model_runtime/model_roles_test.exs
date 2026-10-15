@@ -17,7 +17,7 @@ defmodule LemonAgent.ModelRuntime.ModelRolesTest do
   end
 
   test "unconfigured built-ins use only the caller's concrete fallback" do
-    for role <- ~w(default smol slow) do
+    for role <- ~w(default smol slow plan commit) do
       assert ModelRoles.resolve("@" <> role, %{}, "anthropic:active") ==
                {:ok, "anthropic:active"}
     end

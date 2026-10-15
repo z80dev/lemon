@@ -44,7 +44,7 @@ defmodule LemonAgent.Agent do
   use GenServer
   require Logger
 
-  alias LemonAgent.{AbortSignal, Budget}
+  alias LemonAgent.{AbortSignal, AutoThinking, Budget}
   alias LemonAgent.Types
   alias LemonAgent.Types.{AgentLoopConfig, AgentState}
   alias LemonAi.Types.StreamOptions
@@ -89,6 +89,10 @@ defmodule LemonAgent.Agent do
           stream_fn: stream_fn() | nil,
           session_id: String.t() | nil,
           get_api_key: get_api_key_fn() | nil,
+          resolve_stream_options: AgentLoopConfig.resolve_stream_options_fn() | nil,
+          resolve_thinking: AgentLoopConfig.resolve_thinking_fn() | nil,
+          thinking_prompt: term() | nil,
+          resolved_thinking: StreamOptions.thinking_level() | nil,
           thinking_budgets: map(),
           stream_options: StreamOptions.t(),
           max_tool_turns: pos_integer() | :infinity | nil,
@@ -110,6 +114,8 @@ defmodule LemonAgent.Agent do
           follow_up_mode: queue_mode(),
           session_id: String.t(),
           get_api_key: get_api_key_fn(),
+          resolve_stream_options: AgentLoopConfig.resolve_stream_options_fn(),
+          resolve_thinking: AgentLoopConfig.resolve_thinking_fn(),
           thinking_budgets: map(),
           stream_options: StreamOptions.t(),
           budget_limits: map(),
@@ -141,6 +147,8 @@ defmodule LemonAgent.Agent do
   - `:follow_up_mode` - How to consume follow-up queue: `:all` or `:one_at_a_time` (default)
   - `:session_id` - Optional session identifier for provider caching
   - `:get_api_key` - Function to dynamically resolve API keys
+  - `:resolve_stream_options` - Rebuilds options for live model/provider switches in the loop task
+  - `:resolve_thinking` - Bounded per-user-prompt classifier callback for configured `:auto`
   - `:thinking_budgets` - Map of thinking level budgets for token-based providers
   - `:stream_options` - StreamOptions for provider requests (temperature, max_tokens, etc.)
   - `:budget_limits` - Cumulative run/session token and estimated-dollar caps (nil = unlimited)
@@ -331,7 +339,7 @@ defmodule LemonAgent.Agent do
   @doc """
   Sets the thinking/reasoning level.
 
-  Valid levels: :off, :minimal, :low, :medium, :high, :xhigh
+  Valid levels: :off, :auto, :minimal, :low, :medium, :high, :xhigh
   """
   @spec set_thinking_level(GenServer.server(), Types.thinking_level()) :: :ok
   def set_thinking_level(agent, level) do
@@ -511,7 +519,8 @@ defmodule LemonAgent.Agent do
     agent_state = %AgentState{
       system_prompt: Map.get(initial_state_opts, :system_prompt, ""),
       model: Map.get(initial_state_opts, :model),
-      thinking_level: Map.get(initial_state_opts, :thinking_level, :off),
+      thinking_level:
+        AutoThinking.normalize_level(Map.get(initial_state_opts, :thinking_level, :off)),
       tools: Map.get(initial_state_opts, :tools, []),
       messages: Map.get(initial_state_opts, :messages, []),
       budget_limits:
@@ -547,6 +556,10 @@ defmodule LemonAgent.Agent do
       stream_fn: stream_fn,
       session_id: Keyword.get(opts, :session_id),
       get_api_key: Keyword.get(opts, :get_api_key),
+      resolve_stream_options: Keyword.get(opts, :resolve_stream_options),
+      resolve_thinking: Keyword.get(opts, :resolve_thinking),
+      thinking_prompt: nil,
+      resolved_thinking: nil,
       thinking_budgets: Keyword.get(opts, :thinking_budgets, %{}),
       stream_options: stream_options,
       max_tool_turns: Keyword.get(opts, :max_tool_turns, 25),
@@ -634,7 +647,9 @@ defmodule LemonAgent.Agent do
       state
       | agent_state: new_agent_state,
         steering_queue: [],
-        follow_up_queue: []
+        follow_up_queue: [],
+        thinking_prompt: nil,
+        resolved_thinking: nil
     }
 
     {:reply, :ok, new_state}
@@ -651,8 +666,10 @@ defmodule LemonAgent.Agent do
   end
 
   def handle_call({:set_thinking_level, level}, _from, state) do
-    new_agent_state = %{state.agent_state | thinking_level: level}
-    {:reply, :ok, %{state | agent_state: new_agent_state}}
+    new_agent_state = %{state.agent_state | thinking_level: AutoThinking.normalize_level(level)}
+
+    {:reply, :ok,
+     %{state | agent_state: new_agent_state, thinking_prompt: nil, resolved_thinking: nil}}
   end
 
   def handle_call({:set_tools, tools}, _from, state) do
@@ -697,6 +714,24 @@ defmodule LemonAgent.Agent do
 
   def handle_call(:get_state, _from, state) do
     {:reply, state.agent_state, state}
+  end
+
+  def handle_call(:get_model, _from, state) do
+    {:reply, state.agent_state.model, state}
+  end
+
+  def handle_call({:auto_thinking_resolved, abort_ref, marker, effort}, _from, state) do
+    state =
+      if state.agent_state.thinking_level == :auto and
+           ((is_nil(marker) and
+               (state.abort_ref == abort_ref or match?({:aborted, ^abort_ref}, state.abort_ref))) or
+              (state.abort_ref == abort_ref and not AbortSignal.aborted?(abort_ref))) do
+        %{state | thinking_prompt: marker, resolved_thinking: effort}
+      else
+        state
+      end
+
+    {:reply, :ok, state}
   end
 
   def handle_call(:get_session_id, _from, state) do
@@ -969,7 +1004,15 @@ defmodule LemonAgent.Agent do
 
   @spec build_loop_config(state(), reference(), pid()) :: AgentLoopConfig.t()
   defp build_loop_config(state, abort_ref, agent_pid) do
-    reasoning = reasoning_from_thinking_level(state.agent_state.thinking_level)
+    reasoning =
+      if state.agent_state.thinking_level == :auto do
+        if state.thinking_prompt,
+          do: state.resolved_thinking,
+          else: AutoThinking.default_effort(state.agent_state.model)
+      else
+        reasoning_from_thinking_level(state.agent_state.thinking_level)
+      end
+
     stream_options = build_stream_options(state, reasoning)
     queue_call_timeout = state.queue_call_timeout
 
@@ -978,6 +1021,21 @@ defmodule LemonAgent.Agent do
       convert_to_llm: state.convert_to_llm,
       transform_context: state.transform_context,
       get_api_key: state.get_api_key,
+      get_model: fn -> GenServer.call(agent_pid, :get_model, queue_call_timeout) end,
+      resolve_stream_options: state.resolve_stream_options,
+      resolve_thinking:
+        if(state.agent_state.thinking_level == :auto,
+          do: state.resolve_thinking || (&AutoThinking.resolve/3)
+        ),
+      thinking_prompt: state.thinking_prompt,
+      resolved_thinking: state.resolved_thinking,
+      on_thinking_resolved: fn marker, effort ->
+        GenServer.call(
+          agent_pid,
+          {:auto_thinking_resolved, abort_ref, marker, effort},
+          queue_call_timeout
+        )
+      end,
       budget_limits: state.agent_state.budget_limits,
       budget_usage: state.agent_state.budget_usage,
       budget:

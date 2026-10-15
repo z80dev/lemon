@@ -391,26 +391,7 @@ defmodule LemonAi.Error do
       false
   """
   @spec context_length_error?(term()) :: boolean()
-  def context_length_error?({:http_error, status, body}) when is_map(body) do
-    body = normalize_error_body(body)
-
-    context_length_error_code?(body) or
-      context_length_error_message?(status, body)
-  end
-
-  def context_length_error?({:http_error, status, body}) when is_binary(body) do
-    context_length_error_string?(status, body)
-  end
-
-  def context_length_error?(:context_length_exceeded), do: true
-
-  def context_length_error?(error) when is_binary(error) do
-    context_length_error_string?(nil, error)
-  end
-
-  def context_length_error?(%{category: :context_length}), do: true
-
-  def context_length_error?(_), do: false
+  def context_length_error?(error), do: classify(error) == :context_length
 
   @doc """
   Format rate limit information for display.
@@ -1332,21 +1313,6 @@ defmodule LemonAi.Error do
   # ============================================================================
   # Context Length Error Helpers
   # ============================================================================
-
-  defp context_length_error_code?(%{"error" => %{"code" => code}}) do
-    code in ["context_length_exceeded", "max_tokens_exceeded", "token_limit_exceeded"]
-  end
-
-  defp context_length_error_code?(%{"error" => %{"type" => type}}) do
-    type in ["context_length_exceeded", "max_tokens_exceeded"]
-  end
-
-  defp context_length_error_code?(_), do: false
-
-  defp context_length_error_message?(status, body) do
-    message = extract_provider_message(body) |> preserve_error_marker(body)
-    context_length_error_string?(status, message)
-  end
 
   defp context_length_error_string?(status, body) when is_binary(body) do
     downcased = String.downcase(body)

@@ -543,6 +543,7 @@ defmodule LemonCore.Config do
   defp parse_thinking_level("medium"), do: :medium
   defp parse_thinking_level("high"), do: :high
   defp parse_thinking_level("xhigh"), do: :xhigh
+  defp parse_thinking_level("auto"), do: :auto
   defp parse_thinking_level(level) when is_atom(level), do: level
   defp parse_thinking_level(_), do: :medium
 

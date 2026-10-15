@@ -134,11 +134,7 @@ defmodule LemonAgent.ModelRuntime.Credentials do
             {:error, :not_refreshable}
 
           true ->
-            [
-              provider_config_value(provider_cfg, :api_key_secret),
-              ProviderNames.default_secret_name(canonical)
-            ]
-            |> first_non_empty_binary()
+            generic_secret_name(provider_cfg, canonical)
             |> refresh_target_for(:generic)
         end
 
@@ -512,30 +508,50 @@ defmodule LemonAgent.ModelRuntime.Credentials do
 
   defp map_value(_, _), do: nil
 
-  # `auth_source = "oauth"` means the stored sign-in (api_key_secret) is the
-  # credential: an ambient API-key env var or plain api_key must not shadow it.
+  # `auth_source = "oauth"` makes the selected stored sign-in authoritative:
+  # oauth_secret > api_key_secret > default, never ambient env or inline keys.
   defp resolve_generic_api_key(provider, provider_cfg) do
-    oauth? = normalize_auth_source(provider_cfg) == :oauth
+    if normalize_auth_source(provider_cfg) == :oauth do
+      case generic_secret_name(provider_cfg, provider) do
+        secret_name when is_binary(secret_name) ->
+          resolve_secret_api_key(secret_name, env_fallback: false)
 
-    env_key =
-      if oauth?, do: nil, else: provider |> ProviderNames.env_vars() |> env_first()
+        _ ->
+          nil
+      end
+    else
+      env_key =
+        provider
+        |> ProviderNames.env_vars()
+        |> env_first()
 
-    cond do
-      present_value?(env_key) ->
-        env_key
+      cond do
+        present_value?(env_key) ->
+          env_key
 
-      not oauth? and present_value?(provider_config_value(provider_cfg, :api_key)) ->
-        provider_config_value(provider_cfg, :api_key)
+        present_value?(plain_api_key = provider_config_value(provider_cfg, :api_key)) ->
+          plain_api_key
 
-      present_value?(api_key_secret = provider_config_value(provider_cfg, :api_key_secret)) ->
-        resolve_secret_api_key(api_key_secret)
+        present_value?(api_key_secret = provider_config_value(provider_cfg, :api_key_secret)) ->
+          resolve_secret_api_key(api_key_secret)
 
-      present_value?(default_secret = ProviderNames.default_secret_name(provider)) ->
-        resolve_secret_api_key(default_secret)
+        present_value?(default_secret = ProviderNames.default_secret_name(provider)) ->
+          resolve_secret_api_key(default_secret)
 
-      true ->
-        nil
+        true ->
+          nil
+      end
     end
+  end
+
+  defp generic_secret_name(provider_cfg, provider) do
+    first_non_empty_binary([
+      if(normalize_auth_source(provider_cfg) == :oauth,
+        do: provider_config_value(provider_cfg, :oauth_secret)
+      ),
+      provider_config_value(provider_cfg, :api_key_secret),
+      ProviderNames.default_secret_name(provider)
+    ])
   end
 
   # Custom providers: `api_key_env` -> inline `api_key` -> `api_key_secret`.

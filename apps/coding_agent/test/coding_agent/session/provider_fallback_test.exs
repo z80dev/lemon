@@ -406,6 +406,7 @@ defmodule CodingAgent.Session.ProviderFallbackTest do
 
       assert LemonAgent.ModelRuntime.SessionPins.get(session_id) == %{
                provider: "azure_openai_responses",
+               model_id: "gpt-4",
                credential_ref: "default"
              }
 
@@ -449,6 +450,7 @@ defmodule CodingAgent.Session.ProviderFallbackTest do
 
       assert LemonAgent.ModelRuntime.SessionPins.get(session_id) == %{
                provider: "openai",
+               model_id: "gpt-4",
                credential_ref: "env:PF_KEY_B"
              }
 
@@ -489,6 +491,7 @@ defmodule CodingAgent.Session.ProviderFallbackTest do
 
       assert LemonAgent.ModelRuntime.SessionPins.get(session_id) == %{
                provider: "azure_openai_responses",
+               model_id: "gpt-4",
                credential_ref: "default"
              }
     end

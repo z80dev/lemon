@@ -1840,7 +1840,8 @@ defmodule CodingAgent.ExecutionNode.Worker do
       "low" => :low,
       "medium" => :medium,
       "high" => :high,
-      "xhigh" => :xhigh
+      "xhigh" => :xhigh,
+      "auto" => :auto
     }
 
     case meta[:thinking_level] do

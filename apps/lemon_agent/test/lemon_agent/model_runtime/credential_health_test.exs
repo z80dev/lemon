@@ -69,6 +69,11 @@ defmodule LemonAgent.ModelRuntime.CredentialHealthTest do
     )
   end
 
+  test "an explicit zero retry-after does not impose backoff" do
+    CredentialHealth.record_failure(:openai, "default", :rate_limit, retry_after_ms: 0)
+    refute CredentialHealth.in_cooldown?(:openai, "default")
+  end
+
   test "rate limit failures without retry_after use backoff" do
     CredentialHealth.record_failure(:openai, "default", :rate_limit)
 

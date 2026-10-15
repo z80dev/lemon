@@ -93,7 +93,27 @@ Non-blocking lifecycle observers can call
 subscriber and later sends `{:event_stream_result, reference, result}`. This
 guarantees that a subsequent cancellation cannot overtake result registration.
 
-`LemonAi.complete/3` is just `stream/3` + `EventStream.result/1` collected for you.
+`LemonAi.complete/3` collects the stream privately and retries classified transient
+completion errors, including resolved error messages, up to **three total attempts**.
+Its attempt budget replaces nested provider HTTP retries rather than multiplying
+them. Authentication, invalid requests, quota exhaustion and context overflow are
+not retried. Structured retry hints take priority over backoff; a hint longer than
+the default 30-second maximum wait surfaces the original failure instead of
+retrying earlier than requested.
+
+```elixir
+LemonAi.complete(model, context, retry: [max_attempts: 2, max_delay_ms: 10_000])
+# Disable completion retries:
+LemonAi.complete(model, context, retry: [max_attempts: 1])
+```
+
+`LemonAi.OneshotRetry.run/2` provides the same bounded policy for side-effect-free
+completion callbacks, with per-call `sleep_fun` and `cancelled?` hooks. Do not use
+it around tool execution or externally consumed streams. `LemonAi.stream/3` does
+not acquire oneshot retries; the agent loop refuses replay after any text,
+thinking or tool update, even if later partials erase the content. Metadata-only
+failed attempts do not leave dangling transcript starts, and reported usage from
+failed attempts remains charged to the cumulative agent budget.
 
 ## Tool use
 
