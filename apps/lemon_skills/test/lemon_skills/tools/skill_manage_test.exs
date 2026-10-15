@@ -43,6 +43,60 @@ defmodule LemonSkills.Tools.SkillManageTest do
     """
   end
 
+  test "pinned skill content is immutable until unpinned", %{tmp_dir: cwd} do
+    execute(cwd, %{"action" => "create", "name" => "protected", "content" => valid_skill()})
+
+    execute(cwd, %{
+      "action" => "write_file",
+      "name" => "protected",
+      "file_path" => "references/notes.txt",
+      "file_content" => "original"
+    })
+
+    execute(cwd, %{"action" => "pin", "name" => "protected"})
+
+    for params <- [
+          %{"action" => "edit", "content" => valid_skill("Changed")},
+          %{
+            "action" => "patch",
+            "old_string" => "original",
+            "new_string" => "changed",
+            "file_path" => "references/notes.txt"
+          },
+          %{
+            "action" => "write_file",
+            "file_path" => "references/notes.txt",
+            "file_content" => "changed"
+          },
+          %{"action" => "remove_file", "file_path" => "references/notes.txt"}
+        ] do
+      assert {:error, error} = execute(cwd, Map.put(params, "name", "protected"))
+      assert error =~ "pinned; unpin"
+    end
+
+    path =
+      Path.join([
+        LemonSkills.Config.project_skills_dir(cwd),
+        "protected",
+        "references",
+        "notes.txt"
+      ])
+
+    assert File.read!(path) == "original"
+    execute(cwd, %{"action" => "unpin", "name" => "protected"})
+
+    assert %LemonAgent.Types.AgentToolResult{} =
+             execute(cwd, %{
+               "action" => "patch",
+               "name" => "protected",
+               "old_string" => "original",
+               "new_string" => "changed",
+               "file_path" => "references/notes.txt"
+             })
+
+    assert LemonSkills.Usage.get("protected", scope: :project, cwd: cwd)["write_count"] >= 3
+  end
+
   describe "create" do
     test "emits skill write telemetry for successful writes", %{tmp_dir: tmp_dir} do
       enable_introspection()

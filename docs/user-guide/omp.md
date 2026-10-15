@@ -125,9 +125,8 @@ or `"snapshot"` (refresh). Earlier changes are not rolled back. Neither
 mutations nor unknown outcomes are retried automatically.
 
 Only live sessions can be configured, with the same ownership rules as sending
-a message. This is available through the chat tool and Elixir API; control-plane
-`omp.sessions.configure`, CLI `lemon omp configure`, and a TUI model switch are
-not yet exposed.
+a message. This is available through the chat tool, Elixir API, control-plane
+`omp.sessions.configure`, and CLI `lemon omp configure`.
 
 ## Parallel workers
 
@@ -211,7 +210,47 @@ uses one Bus subscription and reports the full ordered snapshot list through
 `on_update` at most about every 300 ms, plus an unconditional final update.
 Ownership restrictions are identical to single-session access.
 
+## Control-plane API
+
+Authenticated operators can use these methods (parameters use camelCase):
+
+| Method | Scope | Parameters / result |
+| --- | --- | --- |
+| `omp.sessions.start` | write | `cwd`, `prompt`; optional `model`, `thinking`, `approvalMode`, `isolate`. Returns `{session}`. |
+| `omp.sessions.resume` | write | `cwd`, `ompSessionId`; optional `prompt`, `model`, `thinking`, `approvalMode`, `continue`. `continue: true` cannot accompany a prompt. Returns `{session}`. |
+| `omp.sessions.startMany` | write | `tasks` (1–8 start maps), optional batch-default `isolate`. Returns ordered `{results: [{index, session} \| {index, error}]}`. Each task requires its own `cwd` and `prompt`; task isolation overrides the batch default. |
+| `omp.models` | read | Optional `query`, `provider`, `freeOnly`, `limit` (1–200). Returns `{models}` cheapest first. |
+| `omp.sessions.subagent` | read | `id`, `subagentId`, optional `limit` (1–50). Returns `{id, subagentId, transcript}` with sanitized messages and byte cursors. |
+| `omp.sessions.configure` | write | `id`, at least one of `model`, `thinking`. Returns `{session}`. |
+| `omp.sessions.send` | write | `id`, `message`, optional `mode`: `steer` (default), `followUp`, or `redirect`. Returns `{accepted: true, delivery}`; idle delivery is `prompt`. |
+
+These methods dispatch asynchronously so approvals and `omp.session` events keep
+flowing. Existing list/get/discover methods remain read-only. Discovery includes
+`source`, `interrupted`, and worktree path/branch when present; snapshots and event
+payloads retain the driver's approval, worktree and subagent details unchanged.
+Prompts and messages are limited to 16 KiB, paths to 4096 bytes, and model selectors
+to 128 bytes. Approval modes are `always-ask`, `write`, and `yolo`; thinking levels
+are `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, and `auto`.
+
+Errors carry a public `details.code`: `OMP_NOT_A_GIT_REPO` identifies `cwd`,
+`OMP_WORKTREE_FAILED` and `OMP_CATALOG_FAILED` report unavailable operations,
+and `OMP_INVALID_TASK` includes the zero-based failing task `index`. Whole-batch
+validation finishes before workers start. Per-task errors retain their public
+code and any uncertain invocation `id`. `OMP_PARTIALLY_APPLIED` includes `applied`,
+`failedStep`, and `retrySafe: false`; earlier configuration changes are not rolled
+back. Outcome-unknown errors also carry `retrySafe: false`: reconcile rather than
+automatically retrying.
+
 ## From the TUI
+
+Agent `omp` tool cards show parallel starts and multi-worker waits as compact
+worker rows with status, activity or result preview, todo progress, combined
+tokens/cost and individual task errors. Session cards highlight pending tool
+approvals and show isolated worktree branch/kept/dirty state and child activity.
+Model catalog cards show context size and prices (or FREE); subagent reads show a
+bounded transcript tail. Configuration and discovery receipts show the resulting
+session and the discovery source/interrupted state. All delegate text is inert,
+sanitized plain text; cards intentionally bound long output.
 
 `/omp` (Alt+M, also in the command palette) opens the omp panel: live and
 recent sessions with status, workspace, model, current activity, elapsed time
@@ -222,38 +261,72 @@ recent tools, todos, subagents, usage, latest output or result. Keys:
 | --- | --- |
 | Enter | open the detail view / back |
 | `s` / `f` | steer the running turn / queue a follow-up |
+| `R` | redirect: stop the current turn and start with a new message |
+| `m` | choose an omp model (`[free]` marks free models) and configure the selected session |
+| `[` / `]`, `a` / `n` | select a pending approval, then approve once / deny by its server ID |
+| `{` / `}`, `v` | select a subagent, then inspect its bounded transcript tail |
 | `c` | cancel the running turn |
 | `x` | close the omp process |
-| `d` | discover stored omp sessions for this workspace; Enter resumes one |
+| `d` | discover stored sessions, showing source and interrupted state; Enter resumes, `C` resumes an interrupted session with continue |
 | `r` | refresh |
 | Esc | close the panel |
 
-`/omp run <prompt>` starts a session in the TUI's working directory, and
+Detail includes approval mode and counters, pending requests, and isolated
+worktree path/branch, retained/dirty state, commit count and a merge hint.
+Configuration failures report any partially applied settings explicitly; refresh
+before deciding whether to change them again. Model selection and child transcripts
+stay in the panel; Escape returns without changing the editor draft.
+
+`/omp run [--approval-mode always-ask|write|yolo] [--isolate] <prompt>` starts a session in the TUI's working directory, and
 `/omp status` prints a one-line summary of live sessions. The panel and the
 status-bar badge (`omp N▶` while sessions run) update live from the runtime's
 `omp.session` events. When Lemon's agent uses the `omp` tool, its card shows
 the session's status, activity, todo progress and usage as they change.
 
-The chat tool and Elixir API also support **redirect** (stop the current turn
-and start over with a new message). The panel does not yet have a redirect key;
-`s` steers and `c` only cancels.
 
 ## From the CLI
 
 ```bash
 lemon omp status
 lemon omp start --cwd ~/src/app "Add input validation to lib/parser.ex"
+lemon omp start --cwd ~/src/app --approval-mode write --isolate "Fix the parser"
+lemon omp start-many --cwd ~/src/app --isolate --task "Fix parser" --task "Document API"
+lemon omp models --free --provider openrouter --limit 30
+lemon omp configure omp_3f9a1c2b7d4e --model provider/model --thinking low
+lemon omp subagent omp_3f9a1c2b7d4e CHILD-ID --limit 20
 lemon omp list
 lemon omp show omp_3f9a1c2b7d4e
 lemon omp send omp_3f9a1c2b7d4e "Skip the docs"
 lemon omp send --follow-up omp_3f9a1c2b7d4e "Then run the linter"
+lemon omp send --redirect omp_3f9a1c2b7d4e "Stop that; fix the parser instead"
 lemon omp cancel omp_3f9a1c2b7d4e
 lemon omp close omp_3f9a1c2b7d4e
 lemon omp discover --cwd ~/src/app
 lemon omp resume 01a137e9-baf8 --cwd ~/src/app "Continue with the tests"
+lemon omp resume 01a137e9-baf8 --cwd ~/src/app --continue --approval-mode write
 ```
 
 These talk to the running Lemon runtime; see [CLI](cli.md) for every option.
+
+`--approval-mode` accepts `always-ask`, `write`, or `yolo`; omission preserves
+omp's mode. `--continue` cannot accompany a prompt and does not restore
+subagents. `start-many` accepts 1–8 repeated `--task` prompts; all use the shared
+`--cwd`, `--model`, `--thinking`, `--approval-mode` and `--isolate` options.
+It prints one indexed id/status or error code/message per task.
+
+`models [query]` supports `--free`, `--provider` and `--limit` (max 200), and
+prints context and prices per million tokens or FREE. `subagent` reads a
+transcript tail with `--limit` up to 50. `configure` requires `--model` and/or
+`--thinking` and prints effective settings. A partially-applied error says
+which settings were acknowledged and which step failed; earlier changes
+remain applied, without rollback or automatic retry.
+
+`discover` shows the history source and marks interrupted turns (a hint, not
+proof of a crash). `show` includes approval mode and pending approval ids,
+worktree path/branch and kept/dirty/commit state, and subagent activity.
+Resolve approvals through the TUI or control-plane `exec.approval.resolve`;
+there is no CLI approval resolver. `send --redirect` and `--follow-up` are
+mutually exclusive.
 
 ## What Lemon reports
 

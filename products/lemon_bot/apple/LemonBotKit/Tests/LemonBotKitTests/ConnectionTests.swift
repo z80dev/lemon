@@ -77,7 +77,7 @@ private final class ConnectionCredentials: AccountCredentialStore {
         snapshot.capabilities.controlConnected = false; snapshot.member.role = "owner"
         snapshot.hasMore.bots = false; snapshot.hasMore.machines = false; snapshot.hasMore.conversations = false; snapshot.hasMore.notifications = false
         let data = try JSONEncoder().encode(snapshot)
-        let status = Data(#"{"measuredAtMs":1,"backend":{"version":"0.1.0","apiVersion":1,"startedAtMs":1,"publicUrl":"https://product.example"},"controller":{"url":"ws://127.0.0.1:4040/ws","state":"rejected","connectedAtMs":null,"lastDisconnectedAtMs":1,"lastError":{"code":"auth_rejected","message":"Controller refused the backend credential.","atMs":1},"nextRetryAtMs":null,"methodCount":0},"lemon":null,"lemonUnavailableReason":"Controller disconnected","runtime":{"controllable":true,"reason":null,"operation":null}}"#.utf8)
+        let status = Data(#"{"measuredAtMs":1,"backend":{"version":"0.1.0","apiVersion":1,"startedAtMs":1,"publicUrl":"https://product.example"},"controller":{"url":"ws://127.0.0.1:4040/ws","state":"rejected","connectedAtMs":null,"lastDisconnectedAtMs":1,"lastError":{"code":"auth_rejected","message":"Controller refused the backend credential.","atMs":1},"nextRetryAtMs":null,"methodCount":0},"lemon":null,"lemonUnavailableReason":"Controller disconnected","runtime":{"actions":["start","stop","restart"],"via":"launcher","reason":null,"operation":null}}"#.utf8)
         TestHTTPProtocol.handler = { request in
             switch request.url?.path {
             case "/v1/sync": return (200, [:], data)
@@ -113,7 +113,7 @@ private final class ConnectionCredentials: AccountCredentialStore {
         snapshot.member.role = "owner"; value.member = snapshot.member
         let kit = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
         var instance = try JSONDecoder().decode(InstanceStatus.self, from: Data(contentsOf: kit.appendingPathComponent("../../sdk/ts/test/fixtures/instance-status.json").standardizedFileURL))
-        instance.runtime.controllable = true; value.instanceStatus = instance; value.connectionState = "online"
+        instance.runtime.actions = [.start, .stop, .restart]; value.instanceStatus = instance; value.connectionState = "online"
         TestHTTPProtocol.handler = { request in
             let body = try JSONDecoder().decode(JSONObject.self, from: TestHTTPProtocol.body(request))
             XCTAssertEqual(request.url?.path, "/v1/instance/runtime/restart")
@@ -165,7 +165,7 @@ private final class ConnectionCredentials: AccountCredentialStore {
         value.member = try JSONDecoder().decode(Snapshot.self, from: WireFixtures.snapshot).member
         let kit = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
         value.instanceStatus = try JSONDecoder().decode(InstanceStatus.self, from: Data(contentsOf: kit.appendingPathComponent("../../sdk/ts/test/fixtures/instance-status.json").standardizedFileURL))
-        value.instanceStatus?.runtime.controllable = true
+        value.instanceStatus?.runtime.actions = [.start, .stop, .restart]
         value.member?.role = "owner"
         XCTAssertTrue(value.canViewInstance); XCTAssertTrue(value.canControlInstance)
         value.member?.role = "admin"

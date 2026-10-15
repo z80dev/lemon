@@ -55,6 +55,94 @@ defmodule LemonMemory.SessionSearch do
     end
   end
 
+  @doc "Chronological owned run summaries around a document/run ID, or the latest window."
+  def session(context, session, opts \\ []) when is_binary(session) and session != "" do
+    with {:ok, rows} <- history(context, Keyword.put(opts, :session, session)) do
+      {:ok,
+       rows
+       |> Enum.map(&elem(&1, 0))
+       |> Enum.sort_by(&{&1.started_at_ms || &1.ingested_at_ms, &1.doc_id})
+       |> bound_documents()}
+    end
+  end
+
+  @doc "Recent owned sessions, represented by their first prompt and full run count."
+  def recent_sessions(context, opts \\ []) do
+    with {:ok, rows} <- history(context, opts) do
+      {:ok,
+       Enum.map(Enum.reverse(rows), fn {doc, count} ->
+         %{
+           session: doc.session_key,
+           title: clip(doc.prompt_summary, 512),
+           timestamp: doc.ingested_at_ms,
+           run_count: count
+         }
+       end)}
+    end
+  end
+
+  @doc "Render a bounded browse page as untrusted conversation data."
+  def format_sessions(sessions) do
+    sessions
+    |> Enum.map_join("\n\n", fn item ->
+      "session: #{item.session} | #{format_timestamp(item.timestamp)} | #{item.run_count} runs\n#{item.title}"
+    end)
+    |> clip(65_536)
+  end
+
+  defp history(context, opts) do
+    with {:ok, identity} <- LemonMemory.Project.scope(context),
+         {:ok, {:private, _} = owner} <- LemonMemory.ContextScope.scope(context) do
+      if enabled?() do
+        window =
+          case Keyword.get(opts, :window, 5) do
+            n when is_integer(n) -> n |> max(1) |> min(20)
+            _ -> 5
+          end
+
+        LemonMemory.Store.history_window(
+          Keyword.get(opts, :store, LemonMemory.Store),
+          identity.agent_id,
+          identity.home_digest,
+          owner,
+          opts
+          |> Keyword.put(:limit, window)
+          |> Keyword.put(
+            :workspace_root,
+            if(Keyword.get(opts, :scope, :agent) in [:workspace, :project], do: identity.root)
+          )
+        )
+      else
+        {:ok, []}
+      end
+    else
+      {:ok, :legacy} -> {:error, :unproven_context}
+      error -> error
+    end
+  end
+
+  defp bound_documents(docs) do
+    Enum.map(docs, fn doc ->
+      %{
+        doc
+        | prompt_summary: clip(doc.prompt_summary, 1024),
+          answer_summary: clip(doc.answer_summary, 2048)
+      }
+    end)
+  end
+
+  defp clip(nil, _), do: ""
+
+  defp clip(text, bytes) do
+    text
+    |> String.graphemes()
+    |> Enum.reduce_while("", fn grapheme, acc ->
+      if byte_size(acc) + byte_size(grapheme) <= bytes,
+        do: {:cont, acc <> grapheme},
+        else: {:halt, acc}
+    end)
+  end
+
   @doc """
   Same as `search/2` but returns results formatted as a human-readable string
   suitable for injection into an agent's context.
@@ -69,13 +157,14 @@ defmodule LemonMemory.SessionSearch do
       ts = format_timestamp(doc.ingested_at_ms)
 
       """
-      [#{idx}] #{ts} | session: #{doc.session_key}
+      [#{idx}] #{ts} | session: #{doc.session_key} | doc: #{doc.doc_id} | run: #{doc.run_id}
       Q: #{doc.prompt_summary}
       A: #{doc.answer_summary}
       """
       |> String.trim()
     end)
     |> Enum.join("\n\n")
+    |> clip(65_536)
   end
 
   @doc "Whether local history search is enabled by the owning feature policy."

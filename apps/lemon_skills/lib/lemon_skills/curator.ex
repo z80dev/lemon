@@ -116,9 +116,10 @@ defmodule LemonSkills.Curator do
     usage_opts = usage_opts(opts)
 
     rows = Usage.report(report_opts(opts))
+    exempt = MapSet.new(Keyword.get(opts, :exempt_skills, []))
 
     Enum.reduce(rows, empty_counts(), fn row, counts ->
-      if row.agent_authored do
+      if row.agent_authored and not MapSet.member?(exempt, row.name) do
         counts
         |> increment(:checked)
         |> maybe_transition(row, usage_opts, stale_after_days)

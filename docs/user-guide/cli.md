@@ -76,6 +76,15 @@ The `runtime.build` doctor check reports the same build identity. Source builds
 use the umbrella CalVer and current checkout commit. Packaged releases use
 metadata stamped at assembly; an older artifact without metadata reports
 `unknown` rather than guessing a commit or channel from the updater settings.
+
+`lemon config validate` always lists its global and project configuration files
+and finishes with a next step. Malformed TOML and removed settings fail with exit
+code 1; `lemon config show` also reports these errors without a stack trace.
+Use `lemon config migrate` for removed settings, or fix syntax and rerun
+`lemon config validate --verbose`. Unset summary values appear as `(not set)`;
+explicit `false` and zero values remain literal. A failing doctor check does not
+abort the report; use `lemon doctor --verbose` for details.
+
 Packaged version commands work before setup: they read build identity without
 running the runtime configuration providers or creating HOME state.
 
@@ -591,18 +600,46 @@ is printed with terminal control characters removed.
 lemon omp status                         # installed?, version, live/max sessions
 lemon omp list [--all] [--limit N]       # live sessions; --all adds ended ones
 lemon omp show omp_3f9a1c2b7d4e          # bounded plain-text summary
-lemon omp start [--cwd PATH] [--model M] [--thinking LEVEL] fix the flaky test
+lemon omp start [--cwd PATH] [--model M] [--thinking LEVEL] [--approval-mode write] [--isolate] fix the flaky test
+lemon omp start-many --task "Fix parser" --task "Document API" --cwd PATH --isolate
+lemon omp models [query] [--free] [--provider P] [--limit N]
+lemon omp configure omp_3f9a1c2b7d4e [--model provider/id] [--thinking low]
+lemon omp subagent omp_3f9a1c2b7d4e CHILD-ID [--limit N]
 lemon omp watch omp_3f9a1c2b7d4e         # follow until the turn settles
-lemon omp send omp_3f9a1c2b7d4e [--follow-up] also update the docs
+lemon omp send omp_3f9a1c2b7d4e [--follow-up|--redirect] also update the docs
 lemon omp cancel omp_3f9a1c2b7d4e        # abort the turn; the process stays open
 lemon omp close omp_3f9a1c2b7d4e         # end the process; it stays resumable
 lemon omp discover [--cwd PATH] [--limit N]
 lemon omp resume 01a137e9 [--cwd PATH] [prompt...]
+lemon omp resume 01a137e9 --continue [--approval-mode write]
 ```
 
+`start` and `resume` accept `--approval-mode always-ask|write|yolo`; omitting it
+preserves omp's configured mode. `--continue` explicitly continues interrupted
+history and cannot accompany a prompt. `start --isolate` creates a managed Git
+worktree; `start-many` takes 1–8 repeated `--task` prompts and shares `--cwd`,
+`--model`, `--thinking`, `--approval-mode` and `--isolate` across tasks. Its
+output has one indexed success (id/status) or error (code/message) per task.
+Successful workers remain running if another task fails.
+
+`models` prints selector, name, context window and input/output prices per
+million tokens (or FREE), with a limit up to 200. `subagent` prints a bounded
+transcript tail (limit up to 50). `configure` requires at least one setting and
+prints the effective model/thinking. If configuration is partially applied, the
+error identifies acknowledged settings and the failed step: earlier changes
+are **not rolled back**, and the request must not be blindly retried.
+
+`discover` includes the history source (`lemon` or `omp`) and marks interrupted
+turns. This hint can also describe a live turn; check its live id before resuming.
+`show` includes approval mode, pending approval ids, managed worktree path/branch
+and kept/dirty/commit state, and child activity. Resolve approvals in the TUI
+or through control-plane `exec.approval.resolve` (there is no CLI approval resolver).
+
 `--cwd` defaults to the current directory. `send` steers the running turn
-(`--follow-up` queues the message after it) and starts a new turn on an idle
-session; messages are limited to 16 KiB. `watch` follows `omp.session` events,
+(`--follow-up` queues the message after it; `--redirect` stops it and starts
+over with the new message). These flags are mutually exclusive. An idle
+session starts a new turn in any mode; messages are limited to 16 KiB.
+`watch` follows `omp.session` events,
 re-reading the session every two seconds when none arrive; leaving it, including
 with Ctrl-C, never cancels the turn. A send, cancel, or start reported as not
 retry-safe may already have taken effect: check `lemon omp show ID` before

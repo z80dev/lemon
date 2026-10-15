@@ -90,6 +90,7 @@ defmodule CodingAgent.Session.EventHandler do
   def handle({:tool_execution_start, id, name, args}, state, _callbacks) do
     # Execute on_tool_execution_start hooks
     Extensions.execute_hooks(state.hooks, :on_tool_execution_start, [id, name, args])
+    observe_session(state, :tool_dispatched, %{tool_name: name})
 
     # Emit introspection event for tool call dispatch
     Introspection.record(
@@ -120,6 +121,7 @@ defmodule CodingAgent.Session.EventHandler do
     maybe_record_missed_skills(state, messages)
     maybe_record_missed_learning(state, messages)
     _ = CodingAgent.Session.ProjectMemory.after_turn(state, messages)
+    observe_session(state, :run_completed, %{})
 
     # Complete all event streams with the final event
     callbacks.complete_event_streams.(state, {:agent_end, messages})
@@ -157,6 +159,20 @@ defmodule CodingAgent.Session.EventHandler do
 
   def handle(_event, state, _callbacks) do
     state
+  end
+
+  # Content-free lifecycle seam for optional context contributors. Dispatch is
+  # observed before completion so subscribers can maintain cheap per-run counts
+  # without copying messages, tool arguments or results.
+  defp observe_session(state, event, metadata) do
+    :telemetry.execute(
+      [:coding_agent, :session, event],
+      %{},
+      Map.merge(metadata, %{
+        session_pid: self(),
+        session_scope: Map.get(state, :session_scope)
+      })
+    )
   end
 
   defp clear_terminal_queues(state) do

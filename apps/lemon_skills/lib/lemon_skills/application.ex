@@ -15,9 +15,11 @@ defmodule LemonSkills.Application do
     # Automatic per-turn memory recall. Registered once at boot; the contributor
     # itself skips turns when `[memory] auto_recall = false`.
     LemonAgent.ContextRegistry.register(:memory_recall, LemonSkills.MemoryRecall)
+    LemonAgent.ContextRegistry.register(:learning_nudge, LemonSkills.LearningNudge)
 
     children = [
       LemonSkills.Registry,
+      LemonSkills.LearningNudge,
       # MCP source for external tool discovery
       {LemonSkills.McpSource, []},
       {DynamicSupervisor, strategy: :one_for_one, name: LemonSkills.McpSession.Supervisor},

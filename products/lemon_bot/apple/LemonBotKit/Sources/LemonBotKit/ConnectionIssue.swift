@@ -75,7 +75,7 @@ public struct DiscoveredBackend: Identifiable, Equatable, Sendable {
 
 extension LemonBotStore {
     public var canViewInstance: Bool { member?.role == "owner" || member?.role == "admin" }
-    public var canControlInstance: Bool { member?.role == "owner" && instanceStatus?.runtime.controllable == true }
+    public var canControlInstance: Bool { member?.role == "owner" && instanceStatus?.runtime.actions.isEmpty == false }
     public func retryNow() async throws {
         nextRetryAt = nil
         connectionIssue?.nextRetryAt = nil
@@ -105,7 +105,7 @@ extension LemonBotStore {
         instanceStatus = status; capabilities?.controlConnected = status.controller.state == .connected; updateControllerIssue()
     }
     public func performRuntimeAction(_ action: RuntimeAction, confirmed: Bool = false) async throws {
-        guard canControlInstance, action == .start || confirmed else { throw ClientError.offline }
+        guard canControlInstance, instanceStatus?.runtime.actions.contains(action) == true, action == .start || confirmed else { throw ClientError.offline }
         var body: JSONObject = [:]
         if action != .start { body["confirm"] = .bool(true) }
         let operation: RuntimeOperation = try await mutate("POST", "/instance/runtime/\(action.rawValue)", body: body)

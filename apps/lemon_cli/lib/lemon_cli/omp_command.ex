@@ -31,7 +31,7 @@ defmodule LemonCli.OmpCommand do
   @bidi_regex ~r/[\x{061C}\x{200E}\x{200F}\x{202A}-\x{202E}\x{2066}-\x{2069}]/u
 
   @common [json: :boolean]
-  @start_options [cwd: :string, model: :string, thinking: :string]
+  @start_options [cwd: :string, model: :string, thinking: :string, approval_mode: :string]
 
   @spec run([String.t()]) :: 0 | 1 | 2
   def run(args) when is_list(args) do
@@ -84,27 +84,39 @@ defmodule LemonCli.OmpCommand do
   end
 
   defp plan(["start" | args]) do
-    with {:ok, opts, words} <- parse(args, @common ++ @start_options),
+    with {:ok, opts, words} <- parse(args, @common ++ @start_options ++ [isolate: :boolean]),
+         :ok <- approval_mode(opts),
          {:ok, prompt} <- text(words, "start requires a prompt.") do
       params =
         %{"cwd" => cwd(opts), "prompt" => prompt}
         |> put("model", opts[:model])
         |> put("thinking", opts[:thinking])
+        |> put("approvalMode", opts[:approval_mode])
+        |> put("isolate", opts[:isolate])
 
       {:ok, {:start, params}, opts[:json] == true}
     end
   end
 
   defp plan(["resume" | args]) do
-    case parse(args, @common ++ @start_options) do
+    case parse(args, @common ++ @start_options ++ [continue: :boolean]) do
       {:ok, opts, [omp_session_id | words]} ->
-        params =
-          %{"ompSessionId" => omp_session_id, "cwd" => cwd(opts)}
-          |> put("prompt", if(words == [], do: nil, else: Enum.join(words, " ")))
-          |> put("model", opts[:model])
-          |> put("thinking", opts[:thinking])
+        with :ok <- approval_mode(opts),
+             :ok <-
+               exclusive(
+                 opts[:continue] == true and words != [],
+                 "--continue cannot accompany a prompt."
+               ) do
+          params =
+            %{"ompSessionId" => omp_session_id, "cwd" => cwd(opts)}
+            |> put("prompt", if(words == [], do: nil, else: Enum.join(words, " ")))
+            |> put("model", opts[:model])
+            |> put("thinking", opts[:thinking])
+            |> put("approvalMode", opts[:approval_mode])
+            |> put("continue", opts[:continue])
 
-        {:ok, {:resume, params}, opts[:json] == true}
+          {:ok, {:resume, params}, opts[:json] == true}
+        end
 
       {:ok, _opts, []} ->
         {:error, "resume requires an omp session id (see `lemon omp discover`)."}
@@ -115,11 +127,22 @@ defmodule LemonCli.OmpCommand do
   end
 
   defp plan(["send" | args]) do
-    case parse(args, @common ++ [follow_up: :boolean]) do
+    case parse(args, @common ++ [follow_up: :boolean, redirect: :boolean]) do
       {:ok, opts, [id | words]} ->
         with {:ok, message} <- text(words, "send requires a message."),
-             :ok <- message_size(message) do
-          mode = if opts[:follow_up], do: "followUp", else: "steer"
+             :ok <- message_size(message),
+             :ok <-
+               exclusive(
+                 opts[:follow_up] == true and opts[:redirect] == true,
+                 "--follow-up and --redirect are mutually exclusive."
+               ) do
+          mode =
+            cond do
+              opts[:redirect] -> "redirect"
+              opts[:follow_up] -> "followUp"
+              true -> "steer"
+            end
+
           params = %{"id" => id, "message" => message, "mode" => mode}
           {:ok, {:send, params}, opts[:json] == true}
         end
@@ -129,6 +152,71 @@ defmodule LemonCli.OmpCommand do
 
       error ->
         error
+    end
+  end
+
+  defp plan(["start-many" | args]) do
+    with {:ok, opts, []} <-
+           parse(args, @common ++ @start_options ++ [task: :keep, isolate: :boolean]),
+         :ok <- approval_mode(opts),
+         tasks = Keyword.get_values(opts, :task),
+         true <- length(tasks) in 1..8 and Enum.all?(tasks, &(String.trim(&1) != "")) do
+      shared =
+        %{"cwd" => cwd(opts)}
+        |> put("model", opts[:model])
+        |> put("thinking", opts[:thinking])
+        |> put("approvalMode", opts[:approval_mode])
+        |> put("isolate", opts[:isolate])
+
+      {:ok, {:start_many, %{"tasks" => Enum.map(tasks, &Map.put(shared, "prompt", &1))}},
+       opts[:json] == true}
+    else
+      {:ok, _, _} -> {:error, "start-many takes only options; repeat --task PROMPT."}
+      false -> {:error, "start-many requires 1 to 8 non-empty --task prompts."}
+      error -> error
+    end
+  end
+
+  defp plan(["models" | args]) do
+    with {:ok, opts, words} <-
+           parse(args, @common ++ [free: :boolean, provider: :string, limit: :integer]),
+         {:ok, limit} <- limit(opts, 200),
+         true <- length(words) <= 1 do
+      params =
+        %{}
+        |> put("query", List.first(words))
+        |> put("provider", opts[:provider])
+        |> put("freeOnly", opts[:free])
+        |> put("limit", limit)
+
+      {:ok, {:models, params}, opts[:json] == true}
+    else
+      false -> {:error, "models accepts at most one query."}
+      error -> error
+    end
+  end
+
+  defp plan(["subagent" | args]) do
+    with {:ok, opts, [id, subagent_id]} <- parse(args, @common ++ [limit: :integer]),
+         {:ok, limit} <- limit(opts, 50) do
+      {:ok, {:subagent, %{"id" => id, "subagentId" => subagent_id} |> put("limit", limit)},
+       opts[:json] == true}
+    else
+      {:ok, _, _} -> {:error, "subagent requires a session id and subagent id."}
+      error -> error
+    end
+  end
+
+  defp plan(["configure" | args]) do
+    with {:ok, opts, [id]} <- parse(args, @common ++ [model: :string, thinking: :string]),
+         true <-
+           Enum.any?([opts[:model], opts[:thinking]], &(is_binary(&1) and String.trim(&1) != "")) do
+      params = %{"id" => id} |> put("model", opts[:model]) |> put("thinking", opts[:thinking])
+      {:ok, {:configure, params}, opts[:json] == true}
+    else
+      {:ok, _, _} -> {:error, "configure requires exactly one session id."}
+      false -> {:error, "configure requires --model or --thinking."}
+      error -> error
     end
   end
 
@@ -157,13 +245,21 @@ defmodule LemonCli.OmpCommand do
     end
   end
 
-  defp limit(opts) do
+  defp limit(opts, max_limit \\ @max_limit) do
     case opts[:limit] do
       nil -> {:ok, nil}
-      limit when limit in 1..@max_limit -> {:ok, limit}
-      _limit -> {:error, "--limit must be between 1 and #{@max_limit}."}
+      limit when is_integer(limit) and limit >= 1 and limit <= max_limit -> {:ok, limit}
+      _limit -> {:error, "--limit must be between 1 and #{max_limit}."}
     end
   end
+
+  defp approval_mode(opts) do
+    if opts[:approval_mode] in [nil, "always-ask", "write", "yolo"],
+      do: :ok,
+      else: {:error, "--approval-mode must be always-ask, write, or yolo."}
+  end
+
+  defp exclusive(value, message), do: if(value, do: {:error, message}, else: :ok)
 
   defp text(words, message) do
     text = Enum.join(words, " ")
@@ -210,6 +306,10 @@ defmodule LemonCli.OmpCommand do
   defp method(:send), do: {"omp.sessions.send", @control_timeout_ms}
   defp method(:cancel), do: {"omp.sessions.cancel", @control_timeout_ms}
   defp method(:close), do: {"omp.sessions.close", @control_timeout_ms}
+  defp method(:start_many), do: {"omp.sessions.startMany", @start_timeout_ms}
+  defp method(:models), do: {"omp.models", 30_000}
+  defp method(:subagent), do: {"omp.sessions.subagent", @control_timeout_ms}
+  defp method(:configure), do: {"omp.sessions.configure", @start_timeout_ms}
 
   defp request(method, params, timeout_ms),
     do: client().request(method, params, timeout_ms: timeout_ms)
@@ -298,6 +398,8 @@ defmodule LemonCli.OmpCommand do
   defp call_error(reason), do: reason
 
   ## Human output
+  defp value(nil), do: "unknown"
+  defp value(value), do: to_string(value)
 
   defp print(:status, _params, %{"available" => true} = status) do
     IO.puts("omp: available (#{clean_line(status["version"] || "version unknown")})")
@@ -331,18 +433,48 @@ defmodule LemonCli.OmpCommand do
     )
   end
 
-  defp print(:show, _params, %{"summary" => summary}), do: IO.puts(clean_text(summary))
+  defp print(:show, _params, payload) do
+    IO.puts(clean_text(payload["summary"] || ""))
+    session = payload["session"] || %{}
+    IO.puts("Approval mode: #{clean_line(session["approvalMode"] || "omp default")}")
+
+    Enum.each(session["pendingApprovals"] || [], fn approval ->
+      IO.puts(
+        "Pending approval #{clean_line(approval["id"])}: #{clean_line(approval["tool"])} — #{clean_line(approval["details"])}"
+      )
+    end)
+
+    if (session["pendingApprovals"] || []) != [] do
+      IO.puts("Resolve pending approvals through the TUI or control-plane exec.approval.resolve.")
+    end
+
+    if worktree = session["worktree"] do
+      IO.puts("Worktree: #{clean_line(worktree["path"])} (#{clean_line(worktree["branch"])})")
+
+      IO.puts(
+        "  kept: #{value(worktree["kept"])}; dirty: #{value(worktree["dirty"])}; commits: #{value(worktree["commits"])}"
+      )
+    end
+
+    Enum.each(session["subagents"] || [], fn child ->
+      IO.puts(
+        "Subagent #{clean_line(child["id"])} [#{clean_line(child["status"])}]: #{clean_line(child["activity"] || child["description"])}"
+      )
+    end)
+  end
 
   defp print(:discover, params, %{"sessions" => []}),
     do: IO.puts("No stored omp sessions for #{params["cwd"]}.")
 
   defp print(:discover, _params, %{"sessions" => sessions}) do
     table(
-      ["OMP SESSION", "LAST", "UPDATED", "LIVE", "TITLE"],
+      ["OMP SESSION", "SOURCE", "LAST", "UPDATED", "LIVE", "TITLE"],
       Enum.map(sessions, fn session ->
         [
           clean_line(session["ompSessionId"] || ""),
-          clean_line(session["lastStatus"] || ""),
+          clean_line(session["source"] || "-"),
+          clean_line(session["lastStatus"] || "") <>
+            if(session["interrupted"], do: " (interrupted)", else: ""),
           date_time(session["updatedAt"]),
           session["liveId"] || if(session["activeElsewhere"], do: "elsewhere", else: "-"),
           clean_line(session["title"] || "")
@@ -357,6 +489,44 @@ defmodule LemonCli.OmpCommand do
     verb = if operation == :start, do: "Started", else: "Resumed"
     IO.puts("#{verb} omp session #{session["id"]} (#{session["status"]}) in #{session["cwd"]}")
     IO.puts("Watch: lemon omp watch #{session["id"]}")
+  end
+
+  defp print(:start_many, _params, %{"results" => results}) do
+    Enum.each(results, fn
+      %{"index" => index, "session" => session} ->
+        IO.puts("#{index}: #{clean_line(session["id"])} (#{clean_line(session["status"])})")
+
+      %{"index" => index, "error" => error} ->
+        IO.puts("#{index}: #{clean_line(error["code"])}: #{safe_message(error["message"])}")
+    end)
+  end
+
+  defp print(:models, _params, %{"models" => models}) do
+    table(
+      ["SELECTOR", "NAME", "CONTEXT", "$IN/MTOK", "$OUT/MTOK"],
+      Enum.map(models, fn model ->
+        [
+          clean_line(model["selector"]),
+          clean_line(model["name"]),
+          value(model["contextWindow"]),
+          if(model["free"], do: "FREE", else: value(model["costInput"])),
+          if(model["free"], do: "FREE", else: value(model["costOutput"]))
+        ]
+      end)
+    )
+  end
+
+  defp print(:subagent, _params, %{"transcript" => %{"messages" => messages}}) do
+    Enum.each(messages, fn message ->
+      tool = if message["toolName"], do: " (#{clean_line(message["toolName"])})", else: ""
+      IO.puts("#{clean_line(message["role"])}#{tool}: #{clean_text(message["text"])}")
+    end)
+  end
+
+  defp print(:configure, _params, %{"session" => session}) do
+    IO.puts(
+      "Configured #{clean_line(session["id"])}: model #{clean_line(session["model"])}; thinking #{clean_line(session["thinking"])}"
+    )
   end
 
   defp print(:send, %{"id" => id}, %{"delivery" => delivery}),
@@ -448,6 +618,15 @@ defmodule LemonCli.OmpCommand do
     else
       IO.puts(:stderr, "omp request failed [#{code}]: #{message}")
 
+      if details["code"] == "OMP_PARTIALLY_APPLIED" do
+        applied = Enum.map_join(details["applied"] || [], ", ", &clean_line/1)
+
+        IO.puts(
+          :stderr,
+          "Applied: #{applied}. Failed step: #{clean_line(details["failedStep"])}. Earlier changes were not rolled back."
+        )
+      end
+
       if retry_unsafe? do
         hint = if id, do: "lemon omp show #{id}", else: "lemon omp list"
         IO.puts(:stderr, "Not retry-safe: check `#{hint}` before trying again.")
@@ -461,7 +640,7 @@ defmodule LemonCli.OmpCommand do
     details = if is_map(error["details"]), do: error["details"], else: %{}
 
     {safe_code(error["code"]), safe_message(error["message"]),
-     Map.take(details, ~w(code retrySafe id field))}
+     Map.take(details, ~w(code retrySafe id field applied failedStep))}
   end
 
   defp safe_error({:control_plane_unavailable, _reason}),

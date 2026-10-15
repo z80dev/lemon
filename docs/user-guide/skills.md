@@ -4,6 +4,41 @@ Skills are reusable knowledge modules that Lemon loads into context when relevan
 They capture task patterns, approaches, and domain knowledge so you don't have to
 repeat yourself across sessions.
 
+## Learning reminders
+
+Lemon occasionally prompts the main assistant to preserve useful knowledge:
+
+- After 10 user turns without a `remember` call, it suggests saving durable
+  facts/preferences with `remember`. Without a save, the reminder repeats every
+  10 turns, rather than on every subsequent message.
+- If the previous completed run dispatched at least 15 tools without calling
+  `skill_manage`, the next user turn suggests creating or patching a reusable
+  procedure with `skill_manage`. This suggestion appears once for that run.
+
+These are short, fixed reminders in volatile turn context, not automatic writes
+or background model calls. The assistant still decides whether anything is worth
+saving; tool and skill content remains untrusted. Subagents never receive or
+contribute to these reminders. Counters are isolated by live session process and
+reset when that session exits or Lemon restarts; historical transcripts are not
+scanned to rebuild them.
+
+Customize `learning_nudge` in `~/.lemon/agent/skills.json`, or override it in the
+project's `.lemon/skills.json`:
+
+```json
+{
+  "learning_nudge": {
+    "enabled": true,
+    "memory_turn_interval": 10,
+    "skill_tool_threshold": 15
+  }
+}
+```
+
+Set `enabled` to `false` to disable both reminders. Thresholds must be positive
+integers; invalid values use the defaults. These are **skills.json** settings,
+not TOML settings. See the [configuration reference](../config.md#learning-reminders-skillsjson).
+
 ---
 
 ## What Is a Skill?
@@ -41,6 +76,30 @@ Key fields:
 | `description` | One-line summary shown in skill listings |
 | `requires_tools` | Tools that must be available for this skill to activate |
 | `metadata.lemon.category` | Routing category (`engineering`, `knowledge`, `filesystem`, `general`) |
+
+### Agent Skills interoperability
+
+Lemon reads the [Agent Skills specification](https://agentskills.io/specification)
+YAML format and discovers bundles under `.agents/skills` as well as its native
+roots. Portable skills require `name` (1–64 lowercase letters/digits/hyphens,
+no leading/trailing or consecutive hyphens, matching the directory) and
+`description` (1–1024 characters). `license`, `compatibility`, string-to-string
+`metadata`, and experimental `allowed-tools` are preserved in the manifest.
+`scripts/`, `references/`, and `assets/` are optional resources, not automatically
+executed or loaded during discovery. `allowed-tools` is advisory data: it does
+not grant permissions or bypass Lemon's tool policy or approval checks.
+
+Lemon intentionally accepts legacy nonportable bundles: missing frontmatter,
+missing name/description, display names outside the portable naming rules,
+directory/name mismatches, and names up to 128 bytes. Empty or wrongly typed
+present names/descriptions and malformed YAML are rejected and skipped.
+Descriptions support up to 1024 Unicode characters (4096 bytes), but Lemon's
+prompt-metadata safety policy additionally requires a single line and rejects
+control/bidi characters; use YAML folded scalars (`>-`) for wrapped prose.
+Unlike strict spec validation, compatibility length and allowed-tools types
+are not checked, and metadata can contain nested Lemon extensions.
+Use the specification's `skills-ref validate` for strict portability checks;
+successful Lemon discovery is not a strict conformance certificate.
 
 ---
 
@@ -422,6 +481,15 @@ Lemon tracks load/write counts and lifecycle state outside `SKILL.md` in
 `skills.usage.json`. Agent-authored skills can be reported, pinned, archived,
 or restored with `skill_manage`.
 
+Successful `read_skill` views (including status/file views) increment the load
+counter; successful `skill_manage` writes and patches increment the write counter.
+Discovery/relevance auto-injection contains metadata, not skill instructions, so
+it does not count as a load. Counters are independent of introspection telemetry.
+Pinned skills cannot be edited, patched, have supporting files written/removed,
+deleted, or archived through `skill_manage`: unpin first.
+Never-loaded skills cannot be automatically archived before `stale_after_days`,
+even when `archive_after_days` is configured shorter.
+
 For a maintenance pass:
 
 ```bash
@@ -449,6 +517,14 @@ for active router sessions to drain, applies the same interval/pause gates, and
 submits the curator prompt to the configured agent only when review is required.
 Those background reviews default to the learning tools only: `read_skill`,
 `skill_manage`, `remember`, and `recall`.
+
+Background automatic stale/archive transitions also exempt skills referenced by
+any persisted cron job, including disabled/paused jobs. Cron jobs have no dedicated
+skill field: the automation layer checks `meta.skill` / `meta.skills` and complete
+skill names in prompt text (not substrings of longer skill names). This conservative
+name matching may preserve a skill mentioned only as background context. The
+lower-level curator accepts `exempt_skills`; direct API/CLI maintenance callers
+must supply exemptions when they want the same cron protection.
 
 ---
 

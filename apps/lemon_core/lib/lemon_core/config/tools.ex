@@ -24,6 +24,13 @@ defmodule LemonCore.Config.Tools do
       max_chars = 50000
       readability = true
 
+      # Native app control through LCU (optional lemon_computer_use app).
+      # LEMON_COMPUTER_USE_* environment variables take precedence.
+      [runtime.tools.computer_use]
+      enabled = false
+      chrome = false
+      declined_origins = []
+
       [runtime.tools.wasm]
       enabled = false
       auto_build = true
@@ -61,7 +68,8 @@ defmodule LemonCore.Config.Tools do
     :auto_resize_images,
     :web,
     :wasm,
-    :disclosure
+    :disclosure,
+    :computer_use
   ]
 
   @type web_search_config :: %{
@@ -154,7 +162,24 @@ defmodule LemonCore.Config.Tools do
       auto_resize_images: resolve_auto_resize(tools_settings),
       web: resolve_web(tools_settings),
       wasm: resolve_wasm(tools_settings),
-      disclosure: resolve_disclosure(tools_settings)
+      disclosure: resolve_disclosure(tools_settings),
+      computer_use: resolve_computer_use(tools_settings)
+    }
+  end
+
+  # `[runtime.tools.computer_use]` is read by the optional lemon_computer_use
+  # app, which applies its own environment overrides first. Values stay as
+  # written (nil when absent) so the validator can report a wrong type and the
+  # consumer can tell "unset" from "false".
+  defp resolve_computer_use(settings) do
+    section = if is_map(settings["computer_use"]), do: settings["computer_use"], else: %{}
+
+    %{
+      enabled: section["enabled"],
+      chrome: section["chrome"],
+      lcu_root: section["lcu_root"],
+      node: section["node"],
+      declined_origins: section["declined_origins"]
     }
   end
 
