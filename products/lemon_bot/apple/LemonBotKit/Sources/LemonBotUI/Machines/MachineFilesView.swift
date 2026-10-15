@@ -90,7 +90,7 @@ public struct MachineFilesView: View {
                 Button(overwrite ? "Choose upload to replace selected file" : "Choose upload into this directory") { uploadPresented = true }
                     .disabled(action.busy || action.uncertain || store.connectionState != "online" || (overwrite && selected?.kind != "file"))
             }
-        }.navigationTitle("Host files")
+        }.formStyle(.grouped).navigationTitle("Host files")
             .task { await action.perform(readOnly: true) { let host: HostInfo = try await store.read("/machines/\(hubID(machineID))/host"); path = host.defaultCwd; try await refresh() } }
             .quickLookPreview($previewURL)
             .fileMover(isPresented: $exportPresented, file: exportURL) { result in if case .failure(let error) = result { action.error = String(describing: error) } }

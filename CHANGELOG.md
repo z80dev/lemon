@@ -10,6 +10,7 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Lemon Bot
 
+- Apple conversation and composer screens explain uploads, unconfirmed sends and offline drafts without resending, simplify delivery/gate/privacy copy, and use grouped Mac sheet layouts with clear actions.
 - Web clients use plain-language recovery and account/pairing flows, retry failed history loads, hide technical references in Details, confirm deletions in-app, and improve touch actions, status labels and contrast.
 - Web machine enrollment uses consistent machine labels and clearer trust and connection guidance; Bot creation recovery headings explain checking existing Bots and groups before creating another.
 - Apple clients simplify Bot lifecycle, account deletion, apps, notifications and voice copy, use workspace/machine terminology, and apply shared semantic color and typography tokens.

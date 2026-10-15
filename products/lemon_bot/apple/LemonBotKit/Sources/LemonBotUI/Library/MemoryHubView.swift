@@ -73,7 +73,7 @@ public struct MemoryHubView: View {
                 } } }
                 Text("Export contains only authorized scope. Forgetting leaves independent transcripts and operator backups; the preview shows exact effects.").font(LBFont.meta)
             }
-        }.navigationTitle("Memory")
+        }.formStyle(.grouped).navigationTitle("Memory")
             .task {
                 if let initialMemoryID {
                     await action.perform(readOnly: true) {
@@ -155,7 +155,7 @@ struct MemoryImportView: View {
                     preview = value; selected = Set(value.candidates.filter(\.selectedByDefault).map(\.id)); reviewed = false
                 } } }.disabled((attachment == nil && text.isEmpty) || action.busy || action.uncertain || store.connectionState != "online")
             }
-        }.navigationTitle("Reviewed memory import").toolbar { Button("Close") { dismiss() } }
+        }.formStyle(.grouped).navigationTitle("Reviewed memory import").toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } } }
             .fileImporter(isPresented: $importFile, allowedContentTypes: [.data, .json, .plainText, .zip]) { result in
                 switch result {
                 case .success(let url): Task { await action.perform {

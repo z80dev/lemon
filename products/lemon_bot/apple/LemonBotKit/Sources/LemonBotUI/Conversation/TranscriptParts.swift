@@ -297,6 +297,7 @@ struct IssueRow: View {
     let title: String
     var tint: Color = LB.danger
     var retry: (() -> Void)?
+    var retryExplanation: String?
     var detail: IssueDetail?
     @State private var expanded = false
     @Environment(\.lbReduceMotion) private var reduceMotion
@@ -307,7 +308,7 @@ struct IssueRow: View {
                 Text(title).foregroundStyle(LB.muted).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
                 if let retry {
                     Button("Retry", action: retry).buttonStyle(.plain).fontWeight(.semibold).foregroundStyle(LB.ink)
-                        .help("Puts your message back in the composer so you can send it again")
+                        .accessibilityHint(retryExplanation ?? "Try again")
                 }
                 if detail != nil {
                     if retry != nil { Text("·").foregroundStyle(LB.faint).accessibilityHidden(true) }
@@ -317,6 +318,7 @@ struct IssueRow: View {
             }.font(LBFont.meta)
             if expanded, let detail {
                 VStack(alignment: .leading, spacing: 6) {
+                    if let retryExplanation, retry != nil { Text(retryExplanation).font(LBFont.meta).foregroundStyle(LB.muted) }
                     if let message = detail.message { Text(message).font(LBFont.rowSubtitle).foregroundStyle(LB.ink).textSelection(.enabled) }
                     ForEach(detail.fields) { field in
                         HStack(spacing: 6) {
@@ -342,6 +344,7 @@ struct RunFailureRow: View {
     let run: Run
     var retry: (() -> Void)?
     var loadError: String?
+    var refresh: (() -> Void)?
     var body: some View {
         let unknown = run.status == "outcome_unknown"
         var fields: [IssueField] = []
@@ -349,13 +352,19 @@ struct RunFailureRow: View {
         fields.append(IssueField(label: "Run ID", value: run.id))
         var notes: [String] = []
         if unknown { notes.append("Check the result before asking again; this was not resent.") }
-        if let loadError { notes.append("Couldn't refresh run history: \(loadError)") }
+        if loadError != nil { notes.append("Run history couldn't refresh. Any status shown may be out of date.") }
         let message = run.error?.message
         let detail = IssueDetail(message: message?.isEmpty == false ? message : (unknown ? "The Bot may or may not have finished this." : "No error message was recorded."),
                                  fields: [IssueField(label: "Status", value: humanizedStatus(run.status))] + fields,
                                  note: notes.isEmpty ? nil : notes.joined(separator: " "))
-        return IssueRow(title: unknown ? "Not sure this finished." : "Couldn't finish this.", tint: unknown ? LB.warning : LB.danger,
-                        retry: run.status == "failed" && run.error?.retrySafe == true ? retry : nil, detail: detail)
+        return VStack(alignment: .leading, spacing: 8) {
+            IssueRow(title: unknown ? "Not sure this finished." : "Couldn't finish this.", tint: unknown ? LB.warning : LB.danger,
+                     retry: run.status == "failed" && run.error?.retrySafe == true ? retry : nil,
+                     retryExplanation: "Restores your message to the composer. Nothing is sent automatically.", detail: detail)
+            if let loadError {
+                IssueRow(title: "Couldn't refresh run history.", retry: refresh, detail: IssueDetail(message: loadError))
+            }
+        }
     }
 }
 
@@ -380,6 +389,7 @@ struct ToolActivityRow: View {
     @State private var openTools: Set<ID> = []
     @Environment(\.lbReduceMotion) private var reduceMotion
     var body: some View {
+        let failedCount = tools.reduce(0) { $0 + ($1.status == "failed" ? 1 : 0) }
         VStack(alignment: .leading, spacing: 2) {
             if tools.count == 1, let tool = tools.first {
                 line(tool)
@@ -387,11 +397,11 @@ struct ToolActivityRow: View {
                 Button { lbWithAnimation(reduceMotion, LBMotion.snappy) { expanded.toggle() } } label: {
                     HStack(spacing: 6) {
                         Image(systemName: "wrench.and.screwdriver").frame(width: 14)
-                        Text("Used \(tools.count) tools")
+                        Text("Used \(tools.count) tools\(failedCount == 0 ? "" : " · \(failedCount) failed")")
                         status(for: tools)
                         Image(systemName: "chevron.right").font(.system(size: 9, weight: .semibold)).rotationEffect(.degrees(expanded ? 90 : 0))
                     }
-                    .font(LBFont.meta).foregroundStyle(tools.contains { $0.status == "failed" } ? LB.danger : LB.muted)
+                    .font(LBFont.meta).foregroundStyle(failedCount > 0 ? LB.danger : LB.muted)
                     .padding(.horizontal, 8).padding(.vertical, 4).rowHighlight(selected: false, radius: 8)
                 }.buttonStyle(.plain)
                     .accessibilityHint(expanded ? "Hide tools" : "Show tools")

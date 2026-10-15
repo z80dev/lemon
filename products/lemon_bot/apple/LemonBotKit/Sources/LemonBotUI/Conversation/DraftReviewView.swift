@@ -28,7 +28,7 @@ struct DraftReviewView: View {
                 }
             }
             if editing && editable { Button("Add files") { files = true }.buttonStyle(.pill(.secondary, compact: true)).disabled(action.busy) }
-            CardNote(symbol: "paperplane", text: "Only Send authorizes these exact recipients, thread, body and files. Saving edits does not send. Reactions, opening and approval policy never send this draft.")
+            CardNote(symbol: "paperplane", text: "Only Send delivers this draft to the recipients shown. Editing, reactions and approvals don't send it.")
             CardActions {
                 Group {
                     Button("Send") { Task { await submit("POST", "/send") } }.buttonStyle(.cardPrimary)
@@ -43,8 +43,11 @@ struct DraftReviewView: View {
                     }
                 }.disabled(!editable || action.busy)
             }
-            if current.state == "sending" { ProgressView("Send authorized · awaiting actual provider confirmation").font(LBFont.meta).foregroundStyle(LB.muted) }
-            if current.state == "outcome_unknown" { CardNote(symbol: "exclamationmark.triangle.fill", text: "Send outcome is not confirmed. Inspect the actual provider before any new send. Do not automatically retry or discard a possibly sent message.", tint: LB.warning) }
+            if store.conversations.first(where: { $0.id == current.conversationId })?.kind == "group" {
+                Text("Group drafts can't be edited here. Open the Bot's conversation to send.").cardMeta()
+            } else if !store.isOnline { Text("Reconnect to edit or send this draft.").cardMeta() }
+            if current.state == "sending" { ProgressView("Sending — waiting for confirmation").font(LBFont.meta).foregroundStyle(LB.muted) }
+            if current.state == "outcome_unknown" { CardNote(symbol: "exclamationmark.triangle.fill", text: "We couldn't confirm this was sent. Check the service before sending again or discarding this draft.", tint: LB.warning) }
             if let error = current.error { ActionErrorView(message: error) }
             ActionErrorView(message: action.error)
             CardDetails {
@@ -56,6 +59,7 @@ struct DraftReviewView: View {
                 case .message(let message): Text("Channel binding: \(message.channelBindingId)").textSelection(.enabled)
                 }
                 if let providerID = current.providerMessageId { Text("Confirmed provider message: \(providerID)").textSelection(.enabled) }
+                Button("Copy details") { copyText("Owner: \(current.ownerUserId)\nProvider message: \(current.providerMessageId ?? "Not confirmed")") }.buttonStyle(.pill(.quiet, compact: true))
             }
         }.fileImporter(isPresented: $files, allowedContentTypes: [.item], allowsMultipleSelection: true) { result in
             switch result { case .success(let urls): Task { await attach(urls) }; case .failure(let error): action.error = error.localizedDescription }

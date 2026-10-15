@@ -157,7 +157,7 @@ struct TemplatePublishView: View {
                 Button("Export JSON without publishing") { do { exportDocument = HubJSONDocument(data: try JSONEncoder().encode(content)); exportPresented = true } catch { action.error = String(describing: error) } }
                 if let published { Text("Published \(published.audience) template \(published.content.name)"); NavigationLink("Inspect published template") { TemplateDetailView(store: store, templateID: published.id) } }
             }
-        }.navigationTitle("Review publication").toolbar { Button("Close") { dismiss() } }
+        }.formStyle(.grouped).navigationTitle("Review publication").toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } } }
             .fileExporter(isPresented: $exportPresented, document: exportDocument, contentType: .json, defaultFilename: "lemon-template") { if case .failure(let error) = $0 { action.error = String(describing: error) } }
     }
 }

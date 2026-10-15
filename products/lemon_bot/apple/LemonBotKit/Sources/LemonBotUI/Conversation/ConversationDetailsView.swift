@@ -19,8 +19,9 @@ struct ConversationDetailsView: View {
                     SwiftUI.Section("Identity and participants") {
                         Text(room.name).font(.headline)
                         StatusBadge(text: room.kind)
-                        Text("Owner: \(room.ownerUserId)")
-                        if let lead = room.leadBotId { Text("Lead Bot: \(store.bots.first(where: { $0.id == lead })?.name ?? lead)") }
+                        Text(room.ownerUserId == store.user?.id ? "Owner: You" : "Owner: Another workspace member")
+                        if let lead = room.leadBotId { Text("Lead Bot: \(store.bots.first(where: { $0.id == lead })?.name ?? "Unavailable Bot")") }
+                        DisclosureGroup("Details") { Text("Owner ID: \(room.ownerUserId)"); Button("Copy") { copyText(room.ownerUserId) } }
                         ForEach(store.bots.filter { room.botIds.contains($0.id) }) { bot in NavigationLink { BotOverviewView(store: store, botID: bot.id) } label: { BotIdentityAnchor(store: store, bot: bot) } }
                         if room.kind == "group" { Text("This group contains your own Bots. Selected Bots can access the group's inputs and files; credentials stay in their write-only destination flow.").font(.caption) }
                     }
@@ -31,17 +32,17 @@ struct ConversationDetailsView: View {
                         }
                     }
                 }
-                SwiftUI.Section("Your explicit content export consent") {
+                SwiftUI.Section("Export") {
                     Toggle("Allow this conversation's content to be exported", isOn: $exportEnabled)
-                    Text("Off by default. Export also requires your workspace policy and explicit owner consent. Revocation stops new or undelivered packets but cannot erase already acknowledged external collector copies.").font(.caption)
-                    Button("Save my consent") { Task { await saveConsent() } }.disabled(consent == nil || action.busy || store.connectionState != "online")
-                    if let consent { Text("Recorded: \(consent.enabled ? "enabled" : "disabled") · revision \(consent.revision)").font(.caption) }
+                    Text("Off by default. Your workspace policy and the owner's permission must also allow export. Turning this off stops future exports, but copies already sent to outside tools can't be deleted.").font(LBFont.meta)
+                    Button("Save my choice") { Task { await saveConsent() } }.disabled(consent == nil || action.busy || store.connectionState != "online")
+                    if let consent { Text("Recorded: \(consent.enabled ? "Enabled" : "Disabled")").font(LBFont.meta) }
                 }
                 SwiftUI.Section("Authorized media and deliverables") {
                     ForEach(files) { file in AttachmentView(store: store, attachmentID: file.id) }
                 }
                 ActionErrorView(message: action.error)
-            }.navigationTitle("Conversation details").toolbar { Button("Close") { dismiss() } }
+            }.formStyle(.grouped).navigationTitle("Conversation details").toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } } }
                 .task(id: conversationID) { await action.perform {
                     room = try await store.read(resourcePath("conversations", conversationID))
                     consent = try await store.read(resourcePath("conversations", conversationID, "/export-consent"))

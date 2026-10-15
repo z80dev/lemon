@@ -208,7 +208,8 @@ struct TranscriptCardView: View {
                 NavigationLink { ConversationView(store: store, conversationID: value.targetConversationId) } label: { Text("Open task") }
                     .buttonStyle(.cardPrimary).accessibilityLabel("Open authorized task").help("Open authorized task")
             case .unsupported(let value):
-                CardNote(symbol: "exclamationmark.triangle", text: "Message type \(value.type) requires a newer Lemon Bot client. No action was authorized.", tint: LB.warning)
+                CardNote(symbol: "exclamationmark.triangle", text: "This update needs a newer version of Lemon Bot to show. No action was authorized.", tint: LB.warning)
+                CardDetails { Text("Message type: \(value.type)"); Button("Copy") { copyText(value.type) } }
                 if let text = value.text { Text(text).font(LBFont.body).foregroundStyle(LB.ink).textSelection(.enabled) }
                 if let id = value.attachmentId { AttachmentView(store: store, attachmentID: id) }
             }
@@ -309,7 +310,7 @@ struct ConnectorCardView: View {
         VStack(alignment: .leading, spacing: 8) {
             CardHeader(symbol: "puzzlepiece.extension", title: "\(current.name) · \(current.accountLabel)") { StatusBadge(text: current.state) }
             Text("Server \(URL(string: current.url)?.host ?? current.url) · Your account").cardMeta()
-                .help("Your account · requested tool access is separate from approval to act")
+            Text("Connects your account. Tool approval is separate.").cardMeta()
             ActionErrorView(message: current.lastError)
             CardActions {
                 if mayManage {
@@ -326,6 +327,7 @@ struct ConnectorCardView: View {
                 NavigationLink { IntegrationsHubView(store: store) } label: { Text("Configure") }
                     .buttonStyle(.pill(.quiet)).accessibilityLabel("Configure apps, tools and accounts").help("Configure apps, tools and accounts")
             }
+            if !store.isOnline { Text("Reconnect to manage this connected app.").cardMeta() }
             if let auth { Text("Authorization: \(humanizedStatus(auth.state))").cardMeta() }
             ActionErrorView(message: action.error)
         }.sheet(isPresented: Binding(get: { confirmation != nil }, set: { if !$0 { confirmation = nil } })) {
@@ -377,7 +379,8 @@ struct TemplateShareCardView: View {
                 Text("Connectors needed: \(template.content.connectorNames.joined(separator: ", "))").cardMeta()
                 TextField("New Bot name", text: $importName).cardField()
                 CardChoice(placeholder: "Choose online machine", selection: $machineID, options: store.machines.filter { $0.status == "online" }.map { (value: $0.id, label: $0.name) })
-                Toggle("I reviewed the declarative instructions and shared-host credential exposure", isOn: $reviewed).cardToggle()
+                if !store.machines.contains(where: { $0.status == "online" }) { Text("No machine is online. Start one to import this template.").cardMeta() }
+                Toggle("I've read the instructions and understand this Bot shares this machine's files and logins", isOn: $reviewed).cardToggle()
                 if template.provenance.thirdParty { Toggle("I accept the third-party terms", isOn: $acceptedTerms).cardToggle() }
             }
             CardActions {

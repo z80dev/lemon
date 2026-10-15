@@ -16,7 +16,9 @@ struct GateStatusView: View {
                         StatusBadge(text: expired ? "expired" : gate.state)
                         Text(metaText(now: context.date, expired: expired)).cardMeta()
                     }
-                    if gate.state != "pending" { Text(["denied", "declined", "expired", "cancelled"].contains(gate.state) ? "No action was authorized." : gate.state == "approved" ? "Permission recorded; execution is not yet proven." : gate.state == "outcome_unknown" ? "Outcome not confirmed. Do not replay this action." : "Authoritative response recorded.").cardMeta() }
+                    if gate.state != "pending" { Text(["denied", "declined", "expired", "cancelled"].contains(gate.state) ? "No action was authorized." : gate.state == "approved" ? "Allowed. We haven't confirmed it ran." : gate.state == "outcome_unknown" ? "We couldn't confirm this ran. Don't repeat it; check the result first." : "Response recorded.").cardMeta() }
+                    if expired || gate.state == "expired" { Text("This request expired. Ask the Bot to make a new one.").cardMeta() }
+                    else if gate.state == "pending" && !store.isOnline { Text("Reconnect to respond.").cardMeta() }
                 }
             }
             if details { CardDetails { GateDetailLines(store: store, gate: gate) } }
@@ -72,7 +74,8 @@ struct ApprovalReviewView: View {
                 ForEach(Array(proposal.inputs.keys.sorted()), id: \.self) { key in
                     Text("\(key): \(inputSummary(proposal.inputs[key]!))").textSelection(.enabled)
                 }
-                Text("Review: \(proposal.review) · policy: \(proposal.policyMode)\(proposal.ruleId.map { " · rule \($0)" } ?? "")")
+                Text("Review: \(humanizedStatus(proposal.review)) · Policy: \(humanizedStatus(proposal.policyMode))")
+                Button("Copy support details") { copyText("Connector: \(proposal.scope.connectorId ?? "Not set")\nRun: \(proposal.scope.runId ?? "Not set")\nRule: \(proposal.ruleId ?? "Not set")") }.buttonStyle(.pill(.quiet, compact: true))
                 GateDetailLines(store: store, gate: proposal.gate)
             }
             TimelineView(.periodic(from: .now, by: 1)) { _ in
@@ -155,8 +158,9 @@ struct QuestionAnswerView: View {
                     numberText[field.id] = text
                     if let number = Double(text), number.isFinite { answers[field.id] = .number(number) } else { answers.removeValue(forKey: field.id) }
                 })).cardField()
-                if field.min != nil || field.max != nil { Text("Range: \(field.min.map { String($0) } ?? "unbounded") – \(field.max.map { String($0) } ?? "unbounded")").cardMeta() }
-                if !(numberText[field.id] ?? "").isEmpty && answers[field.id] == nil { Text("Enter a finite number.").font(LBFont.meta).foregroundStyle(LB.danger) }
+                if let minimum = field.min { Text("At least \(minimum.formatted())").cardMeta() }
+                if let maximum = field.max { Text("Up to \(maximum.formatted())").cardMeta() }
+                if !(numberText[field.id] ?? "").isEmpty && answers[field.id] == nil { Text("Enter a number.").font(LBFont.meta).foregroundStyle(LB.danger) }
             case "multiline":
                 TextField(field.label, text: stringBinding(field), axis: .vertical).lineLimit(3...8).cardField()
             default: TextField(field.label, text: stringBinding(field)).cardField()
@@ -219,7 +223,7 @@ struct SecretRequestView: View {
             if !current.description.isEmpty { Text(current.description).font(LBFont.body).foregroundStyle(LB.ink) }
             cardFact("Scope", "\(current.scope) · Bot \(store.bots.first(where: { $0.id == current.botId })?.name ?? current.botId) · machine \(store.machines.first(where: { $0.id == current.machineId })?.name ?? current.machineId)")
                 .font(LBFont.rowSubtitle).textSelection(.enabled)
-            CardNote(symbol: "lock.shield", text: "Write-only destination storage. Co-resident Bots and the privileged machine owner may access shared host credentials. The value is never saved in this composer or transcript.", tint: LB.warning)
+            CardNote(symbol: "lock.shield", text: "Stored for the destination only. Other Bots on this machine and the machine owner can read it. It's never saved in chat.", tint: LB.warning)
             SecureField("Secret value", text: $value).cardField().disabled(!gateAllowsAction(store, current.gate))
             GateStatusView(store: store, gate: current.gate, details: false)
             CardDetails {
@@ -262,7 +266,7 @@ struct HumanStepView: View {
             CardActions {
                 NavigationLink { MachineDetailView(store: store, machineID: current.machineId) } label: { Text("Open machine") }.buttonStyle(.pill(.secondary, compact: true))
                 if hostAccess {
-                    NavigationLink { MachineTerminalView(store: store, machineID: current.machineId) } label: { Text("Open terminal") }.buttonStyle(.pill(.secondary, compact: true))
+                    NavigationLink { MachineTerminalView(store: store, machineID: current.machineId) } label: { Text("Open terminal (full access)") }.buttonStyle(.pill(.secondary, compact: true))
                         .accessibilityLabel("Open terminal, full host access").help("Open terminal · full host access")
                 }
                 if let external = current.externalUrl, let url = safeExternalURL(external), url.scheme == "https" {

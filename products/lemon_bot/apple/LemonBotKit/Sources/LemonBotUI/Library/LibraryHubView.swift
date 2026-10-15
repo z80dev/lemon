@@ -98,7 +98,7 @@ struct SkillEditorView: View {
                 } } }.disabled(!saved.enabled || targetBotID.isEmpty || action.busy || action.uncertain || store.connectionState != "online")
                 Button("Delete skill and its installed files", role: .destructive) { deletePresented = true }
             }
-        }.navigationTitle(saved?.name ?? "New skill").toolbar { Button("Close") { dismiss() } }
+        }.formStyle(.grouped).navigationTitle(saved?.name ?? "New skill").toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } } }
             .task { if let initial { saved = initial; name = initial.name; description = initial.description; markdown = initial.markdown; enabled = initial.enabled; botID = initial.botId ?? ""; machines = Set(initial.machineIds) } }
             .fileImporter(isPresented: $importFile, allowedContentTypes: [.plainText, .text]) { result in
                 do {
