@@ -15,10 +15,10 @@ struct InstanceSettingsView: View {
         Form {
             if store.canViewInstance {
                 if let status = store.instanceStatus {
+                    lifecycle(status.runtime)
                     backend(status.backend)
                     controller(status.controller)
                     lemon(status)
-                    lifecycle(status.runtime)
                     Section {
                         Text("Measured \(timestamp(status.measuredAtMs).formatted())").font(LBFont.meta).foregroundStyle(LB.muted)
                         Text("Refreshes every 10 seconds while open, or every 2 seconds during a command.").font(LBFont.meta).foregroundStyle(LB.muted)
