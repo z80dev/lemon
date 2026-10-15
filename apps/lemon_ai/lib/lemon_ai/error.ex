@@ -11,10 +11,15 @@ defmodule LemonAi.Error do
   `classify/1` is shared by HTTP, transport and stream-terminal errors.
   `retryable?/1` retries rate limits, transient/network failures and server
   errors, but never authentication, client or context-overflow failures.
+  Missing local API keys are authentication failures, not provider outages, and
+  must not contribute to the provider-wide circuit breaker.
   Account quota/credit/spend exhaustion is classified as `:rate_limit` for
   credential failover, but is not retryable against the same credential.
   Retry timing metadata is a hint, not permission to retry.
   """
+
+  alias LemonAi.Models.Presets
+  alias LemonAi.Providers.RetryHelper
 
   require Logger
 
@@ -702,6 +707,8 @@ defmodule LemonAi.Error do
       String.contains?(downcased, "authentication") or
       String.contains?(downcased, "invalid api key") or
       String.contains?(downcased, "invalid_api_key") or
+      String.contains?(downcased, "no api key provided") or
+      String.contains?(downcased, "api key is required") or
       String.contains?(downcased, "invalid x-api-key") or
       String.contains?(downcased, "api key not valid") or
       String.contains?(downcased, "permission denied") or
@@ -1214,7 +1221,7 @@ defmodule LemonAi.Error do
           ["FIREWORKS_API_KEY"]
 
         _ ->
-          Enum.find_value(LemonAi.Models.Presets.all(), [], fn preset ->
+          Enum.find_value(Presets.all(), [], fn preset ->
             if Atom.to_string(preset.id) == name, do: preset.env_vars
           end)
       end
@@ -1262,7 +1269,7 @@ defmodule LemonAi.Error do
   end
 
   defp get_retry_after(headers_map) do
-    LemonAi.Providers.RetryHelper.retry_after_ms(headers_map)
+    RetryHelper.retry_after_ms(headers_map)
   end
 
   defp parse_integer(value) when is_binary(value) do

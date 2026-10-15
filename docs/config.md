@@ -1420,6 +1420,10 @@ environment references cannot refresh. Provider retry hints are retained for
 credential cooldowns. The model/credential that commits is pinned for subsequent
 turns in that session, preserving provider caches.
 
+Missing local API keys are credential failures, not provider outages. They remain
+non-retryable against the same credential and do not open the provider-wide
+circuit breaker or block another session with valid credentials.
+
 For generic OAuth providers, `auth_source = "oauth"` makes the selected stored
 login authoritative for both initial resolution and 401 refresh:
 `oauth_secret`, then `api_key_secret`, then the provider's default secret name.
@@ -1449,7 +1453,9 @@ refusal (including plan-role selection), successful keyless transitions,
 switch-then-fallback header isolation and same-provider rebinding with no caller
 headers and with genuine caller overrides, using fixture credentials and loopback
 HTTP only. Its refusal and credential-leak checks scan complete captured events
-and logs, including large tool-schema snapshots.
+and logs, including large tool-schema snapshots. The intentional fallback failure
+uses fixture-owned provider health processes, so repeated runs neither inherit
+nor contaminate the real provider's circuit breaker or request-rate bucket.
 
 Google Gemini CLI onboarding (`lemon model --provider gemini`, or
 `./bin/lemon model --provider gemini` from a checkout) resolves OAuth
