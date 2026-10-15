@@ -27,8 +27,8 @@ public struct MachineFilesView: View {
     public init(store: LemonBotStore, machineID: ID) { self.store = store; self.machineID = machineID }
     public var body: some View {
         Form {
-            HubError(action: action)
-            if let transferProgress { Text(transferProgress).font(.caption) }
+            HubError(action: action, store: store)
+            if let transferProgress { Text(transferProgress).font(LBFont.meta) }
             Section("Destination-local path") {
                 Text("Paths are on the selected host, confined by its allowed roots. Files/logins are shared by co-resident Bots. This is not your phone's filesystem.")
                 TextField("Host directory", text: $path)
@@ -49,7 +49,7 @@ public struct MachineFilesView: View {
                         let stat: FileInfo = try await store.read("/machines/\(hubID(machineID))/files/stat", query: ["path": file.path]); selected = stat; destination = stat.path; preview = nil
                         if stat.kind == "directory" { path = stat.path; try await refresh() }
                     } } } label: {
-                        HStack { Image(systemName: file.kind == "directory" ? "folder" : "doc"); VStack(alignment: .leading) { Text(file.name); Text("\(file.kind) · \(file.size) bytes · \(file.mime ?? "Unknown type")").font(.caption) } }
+                        HStack { Image(systemName: file.kind == "directory" ? "folder" : "doc"); VStack(alignment: .leading) { Text(file.name); Text("\(file.kind) · \(file.size) bytes · \(file.mime ?? "Unknown type")").font(LBFont.meta) } }
                     }
                 }
                 if cursor != nil { Button("More files") { Task { await load(more: true) } } }
@@ -69,7 +69,7 @@ public struct MachineFilesView: View {
                             if !importConversationID.isEmpty { body["conversationId"] = .string(importConversationID) }
                             imported = try await store.mutate("POST", "/machines/\(hubID(machineID))/files/import", body: body)
                         } } }.disabled(action.busy || action.uncertain || store.connectionState != "online")
-                        if let imported { Text("Imported \(imported.filename) · attachment \(imported.id)"); Text("Provenance: Bot \(imported.provenance.botId ?? "none") / machine \(imported.provenance.machineId ?? "none") / run \(imported.provenance.runId ?? "none")").font(.caption) }
+                        if let imported { Text("Imported \(imported.filename) · attachment \(imported.id)"); Text("Provenance: Bot \(imported.provenance.botId ?? "none") / machine \(imported.provenance.machineId ?? "none") / run \(imported.provenance.runId ?? "none")").font(LBFont.meta) }
                     }
                     TextField("New absolute destination / rename", text: $destination)
                     Button("Move (never overwrites)") { Task { await action.perform {

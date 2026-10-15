@@ -18,6 +18,10 @@ import Observation
     public var capabilities: Capabilities?
     public var connectionState = "disconnected"
     public var errorMessage: String?
+    public var connectionIssue: ConnectionIssue?
+    public var instanceStatus: InstanceStatus?
+    public internal(set) var nextRetryAt: Date?
+    public internal(set) var lastConnectionAttemptAt: Date?
     public var selectedConversationID: ID? {
         didSet {
             guard !restoringSelection, let account else { return }
@@ -37,6 +41,7 @@ import Observation
     public internal(set) var cursor: Cursor = "0"
     public internal(set) var latestResources: [String: RealtimePayload] = [:]
     public internal(set) var pendingIntents: [MutationIntent] = []
+    public internal(set) var reconciledMessageReceipts: [String: MessageReceipt] = [:]
     public internal(set) var typingByConversation: [ID: [ID: RealtimeTyping]] = [:]
     public internal(set) var pairingLink: PairingLink?
     public internal(set) var pendingPairing: PendingPairingPreview?
@@ -50,6 +55,8 @@ import Observation
     @ObservationIgnored var transport: HTTPTransport?
     @ObservationIgnored var socket: URLSessionWebSocketTask?
     @ObservationIgnored var socketTask: Task<Void, Never>?
+    @ObservationIgnored var messageReconciliationTask: Task<Void, Never>?
+    @ObservationIgnored var messageReconciliationRequested = false
     @ObservationIgnored var terminalSequences: [ID: Int] = [:]
     @ObservationIgnored var terminalSubscriptions: Set<ID> = []
     @ObservationIgnored var generation = UUID()
@@ -213,19 +220,23 @@ import Observation
     }
     public func refresh() async throws {
         guard connectionState != "reconnect_required" else { throw ClientError.signedOut }
-        stopSocket(); connectionState = "syncing"
-        do { try await synchronize(); startSocket() }
+        let current = generation
+        stopSocket(); connectionState = "syncing"; lastConnectionAttemptAt = Date(); nextRetryAt = nil
+        do { try await synchronize(); try assertGeneration(current); startSocket() }
         catch {
+            guard generation == current else { throw error }
+            if error is CancellationError || (error as? URLError)?.code == .cancelled { throw error }
             if connectionState != "reconnect_required" { connectionState = "disconnected" }
-            errorMessage = connectionState == "reconnect_required" ? "This device connection was revoked or is no longer authorized. Reconnect explicitly with your desktop." : error.localizedDescription
-            if connectionState != "reconnect_required", error is URLError { startSocket() }
+            recordConnectionFailure(error)
+            if connectionState != "reconnect_required" { startSocket() }
             throw error
         }
     }
     func markReconnectRequired() {
         stopSocket(); generation = UUID(); transport = nil
         connectionState = "reconnect_required"
-        errorMessage = "This device connection was revoked or is no longer authorized. Reconnect explicitly with your desktop."
+        nextRetryAt = nil
+        recordConnectionFailure(ClientError.signedOut)
     }
     func synchronize() async throws {
         let current = generation
@@ -242,6 +253,13 @@ import Observation
             entries[id] = page.items
         }
         try assertGeneration(current); try persistCache()
+        if capabilities?.controlConnected == false {
+            if canViewInstance {
+                do { _ = try await refreshInstance() }
+                catch { try assertGeneration(current) }
+            }
+            updateControllerIssue()
+        } else { connectionIssue = nil }
     }
     public func allPages<T: Codable & Hashable>(_ path: String, query: [String: String] = [:], as: T.Type = T.self) async throws -> [T] {
         var result: [T] = [], next: String?, seen: Set<String> = [], indices: [ID: Int] = [:]
@@ -279,11 +297,14 @@ import Observation
     }
     private func clearLiveState() {
         connectionState = "disconnected"
+        connectionIssue = nil; instanceStatus = nil; nextRetryAt = nil; lastConnectionAttemptAt = nil
         user = nil; workspace = nil; member = nil; capabilities = nil; bots = []; machines = []; conversations = []; sections = []; notifications = []; runs = []
         entries = [:]; drafts = [:]; terminalFrames = [:]; terminalGaps = [:]; terminalExits = [:]; terminalExitFrames = [:]; terminalSequences = [:]; terminalSubscriptions = []
         voiceSession = nil; navigationTarget = nil; localSettings = nil; selectedConversationID = nil; deviceID = nil; snapshot = nil; cursor = "0"; latestResources = [:]; errorMessage = nil
         visibleConversationID = nil
         pendingIntents = []
+        messageReconciliationTask?.cancel(); messageReconciliationTask = nil; messageReconciliationRequested = false
+        reconciledMessageReceipts = [:]
         pairings = []; pairingURL = nil; pairingQRID = nil
         typingByConversation = [:]
     }
@@ -315,13 +336,31 @@ import Observation
         let page: Page<TranscriptEntry> = try await read("/conversations/\(HTTPTransport.pathID(conversationID))/entries", query: query)
         for entry in page.items { upsertEntry(entry) }; try persistCache(); return page.nextCursor
     }
-    public func send(conversationID: ID, text: String, attachmentIDs: [ID], replyTo: ID? = nil, mode: String = "followup", mentions: [ID] = [], everyone: Bool = false, references: [Reference] = [], voiceSessionID: ID? = nil) async throws -> MessageReceipt {
-        var body: JSONObject = ["text": .string(text), "attachmentIds": .array(attachmentIDs.map(JSONValue.string)), "mode": .string(mode), "mentions": .array(mentions.map(JSONValue.string)), "everyone": .bool(everyone), "references": try JSONValue.encoding(references)]
+    public func send(conversationID: ID, text: String, attachmentIDs: [ID], replyTo: ID? = nil, mode: String = "followup", mentions: [ID] = [], everyone: Bool = false, references: [Reference] = [], voiceSessionID: ID? = nil, clientNonce: String = UUID().uuidString) async throws -> MessageReceipt {
+        let nonce = clientNonce, current = generation
+        var body: JSONObject = ["clientNonce": .string(nonce), "text": .string(text), "attachmentIds": .array(attachmentIDs.map(JSONValue.string)), "mode": .string(mode), "mentions": .array(mentions.map(JSONValue.string)), "everyone": .bool(everyone), "references": try JSONValue.encoding(references)]
         if let replyTo { body["replyToEntryId"] = .string(replyTo) }; if let voiceSessionID { body["voiceSessionId"] = .string(voiceSessionID) }
-        let receipt: MessageReceipt = try await mutate("POST", "/conversations/\(HTTPTransport.pathID(conversationID))/messages", body: body)
+        var receipt: MessageReceipt
+        do { receipt = try await mutate("POST", "/conversations/\(HTTPTransport.pathID(conversationID))/messages", body: body) }
+        catch {
+            guard pendingIntents.contains(where: { $0.clientNonce == nonce }) || reconciledMessageReceipts[nonce] != nil else { throw error }
+            await reconcilePendingMessages()
+            try assertGeneration(current)
+            guard let recorded = reconciledMessageReceipts[nonce] else { throw error }
+            receipt = recorded
+        }
+        if receipt.status == "outcome_unknown" {
+            await reconcilePendingMessages()
+            try assertGeneration(current)
+            if let recorded = reconciledMessageReceipts[nonce] { receipt = recorded }
+        }
         for entry in receipt.entries { upsertEntry(entry) }; for run in receipt.runs { upsert(&runs, run, id: { $0.id }, revision: { $0.revision }) }
         do { try persistCache() } catch { errorMessage = error.localizedDescription }
         return receipt
+    }
+    /// Read the original actor/conversation/nonce reservation without submitting another message.
+    public func messageReceipt(conversationID: ID, clientNonce: String) async throws -> MessageReceipt {
+        try await read("/conversations/\(HTTPTransport.pathID(conversationID))/messages/receipts/\(HTTPTransport.pathID(clientNonce))")
     }
     public func draft(for id: ID) -> LocalComposerDraft { drafts[id] ?? LocalComposerDraft() }
     @discardableResult public func setLocalDraft(conversationID: ID, text: String, attachmentIDs: [ID], replyTo: ID? = nil) -> Bool {

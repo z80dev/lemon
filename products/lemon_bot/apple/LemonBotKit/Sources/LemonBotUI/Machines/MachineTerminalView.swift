@@ -12,7 +12,7 @@ import UIKit
     let store: LemonBotStore
     var terminal: LemonBotKit.Terminal?
     var error: String?
-    var title = "PTY"
+    var title = "Terminal"
     var fedSequence = 0
     var inputFenced = false
     private var pending: Task<Void, Never>?
@@ -52,7 +52,7 @@ import UIKit
     func prepareNewShell() async {
         inputFenced = true
         await pending?.value
-        pending = nil; terminal = nil; fedSequence = 0; error = nil; title = "PTY"; inputFenced = false
+        pending = nil; terminal = nil; fedSequence = 0; error = nil; title = "Terminal"; inputFenced = false
     }
 }
 public struct MachineTerminalView: View {
@@ -67,21 +67,32 @@ public struct MachineTerminalView: View {
     public init(store: LemonBotStore, machineID: ID) { self.store = store; self.machineID = machineID; _session = State(initialValue: NativePTYSession(store: store)) }
     public var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HubError(action: action)
-            if let error = session.error { Text(error).foregroundStyle(.red).textSelection(.enabled) }
+            HubError(action: action, store: store)
+            if let error = session.error { Text(error).foregroundStyle(LB.danger).textSelection(.enabled) }
             Text("\(session.title) · \(store.connectionState) · device-owned shell").font(.headline)
             if let terminal = session.terminal {
-                Text("\(terminal.cwd) · \(terminal.cols)×\(terminal.rows) · \(terminal.state)").font(.caption)
-                if store.connectionState != "online" { Text("Disconnected: no input is queued. The same device may reattach within the server's 60-second grace period.").foregroundStyle(.orange) }
-                if let gap = store.terminalGaps[terminal.id] { Text("Output gap: retained sequences \(gap.earliestSeq)…\(gap.latestSeq). Earlier output was lost; this is not a complete transcript.").foregroundStyle(.orange) }
+                Text("\(terminal.cwd) · \(terminal.cols)×\(terminal.rows) · \(terminal.state)").font(LBFont.meta)
+                if store.connectionState != "online" { Text("Disconnected: no input is queued. The same device may reattach within the server's 60-second grace period.").foregroundStyle(LB.warning) }
+                if let gap = store.terminalGaps[terminal.id] { Text("Output gap: retained sequences \(gap.earliestSeq)…\(gap.latestSeq). Earlier output was lost; this is not a complete transcript.").foregroundStyle(LB.warning) }
                 if let exit = store.terminalExitFrames[terminal.id] { Text("Shell exited · code \(exit.code.map(String.init) ?? "not reported"). This does not stop Bot work.") }
                 NativeTerminalSurface(session: session, frames: store.terminalFrames[terminal.id] ?? [], gap: store.terminalGaps[terminal.id])
                     .id(terminal.id).frame(minHeight: 300).disabled(terminal.state != "open" || session.inputFenced || store.connectionState != "online" || store.terminalExitFrames[terminal.id] != nil)
                 HStack {
-                    Button("Reattach / reconcile") { Task { await action.perform(readOnly: true) { try await session.subscribe() } } }
+                    Button("Check shell status") { Task {
+                        await action.checkStatus(store) { try await session.subscribe() }
+                        if !action.uncertain { session.inputFenced = session.terminal?.state != "open" }
+                    } }
                     Button("Close shell", role: .destructive) { Task { await action.perform {
+                        let wasFenced = session.inputFenced
                         session.inputFenced = true
-                        session.terminal = try await store.mutate("DELETE", "/terminals/\(hubID(terminal.id))", body: [:])
+                        do { session.terminal = try await store.mutate("DELETE", "/terminals/\(hubID(terminal.id))", body: [:]) }
+                        catch {
+                            var unconfirmed = (error as? BackendError)?.failure.code == "outcome_unknown"
+                            if case ClientError.outcomeUnknown = error { unconfirmed = true }
+                            if case ClientError.unresolvedMutation = error { unconfirmed = true }
+                            session.inputFenced = wasFenced || unconfirmed
+                            throw error
+                        }
                     } } }.disabled(terminal.state != "open" || action.busy || action.uncertain || store.connectionState != "online")
                 }
                 if terminal.state == "closed" || store.terminalExitFrames[terminal.id] != nil {
@@ -93,7 +104,7 @@ public struct MachineTerminalView: View {
                 Stepper("Columns \(cols)", value: $cols, in: 20...500)
                 Stepper("Rows \(rows)", value: $rows, in: 5...300)
                 Toggle("I confirm full host access", isOn: $accepted)
-                Button("Open interactive PTY") { Task { await action.perform {
+                Button("Open terminal") { Task { await action.perform {
                     guard let device = store.deviceID else { throw NativeTerminalError.deviceRequired }
                     var body: JSONObject = ["deviceId": .string(device), "cols": .number(Double(cols)), "rows": .number(Double(rows))]
                     if !cwd.isEmpty { body["cwd"] = .string(cwd) }
@@ -105,7 +116,7 @@ public struct MachineTerminalView: View {
             .onChange(of: store.connectionState) { _, state in if state == "online", session.terminal != nil { Task { await action.perform(readOnly: true) { try await session.subscribe() } } } }
     }
 }
-private enum NativeTerminalError: LocalizedError { case deviceRequired; var errorDescription: String? { "Register this installation as an owned device before opening a PTY." } }
+private enum NativeTerminalError: LocalizedError { case deviceRequired; var errorDescription: String? { "Register this device as trusted before opening a terminal." } }
 
 @MainActor final class NativeTerminalCoordinator: NSObject, @MainActor TerminalViewDelegate {
     let session: NativePTYSession

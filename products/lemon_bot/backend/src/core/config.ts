@@ -1,22 +1,30 @@
 import { randomBytes, createCipheriv, createDecipheriv } from 'node:crypto';
-import { mkdir, readFile, writeFile, chmod, stat } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
+import { mkdir, readFile, writeFile, chmod, stat, access } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { join, resolve, isAbsolute } from 'node:path';
 import { z } from 'zod';
 import type { BackendConfiguration } from './services';
 import { parseOperatorConfiguration } from '../integrations/config';
 import { defaultWebRoot } from './layout';
 export function isLoopback(host:string):boolean { return host==='localhost'||host==='127.0.0.1'||host==='[::1]'||host==='::1'; }
+export async function validateRuntimeLauncher(path: string | undefined): Promise<void> {
+  if (path === undefined) return;
+  try { if (!isAbsolute(path) || !(await stat(path)).isFile()) throw new Error(); await access(path, constants.X_OK); }
+  catch { throw new Error('LEMON_BOT_RUNTIME_LAUNCHER must be an absolute path to an existing executable launcher.'); }
+}
 export async function loadConfiguration(environment:Record<string,string|undefined>=process.env):Promise<{config:BackendConfiguration;key:Uint8Array}> {
-  const required=z.string().min(1);
-  const dataDir=resolve(required.parse(environment.LEMON_BOT_DATA_DIR));
-  const operatorToken=required.parse(environment.LEMON_BOT_OPERATOR_TOKEN);
-  const controlUrl=new URL(required.parse(environment.LEMON_BOT_CONTROL_URL));
-  const publicUrl=new URL(required.parse(environment.LEMON_BOT_PUBLIC_URL));
+  const required=(name:string):string=>{const value=environment[name];if(!value)throw new Error(`${name} is required. See the env table in products/lemon_bot/backend/README.md.`);return value;};
+  const dataDir=resolve(required('LEMON_BOT_DATA_DIR'));
+  const operatorToken=required('LEMON_BOT_OPERATOR_TOKEN');
+  const controlUrl=new URL(required('LEMON_BOT_CONTROL_URL'));
+  const publicUrl=new URL(required('LEMON_BOT_PUBLIC_URL'));
   const trustedOverlay=environment.LEMON_BOT_TRUSTED_OVERLAY==='true';
   if(!['ws:','wss:'].includes(controlUrl.protocol)||controlUrl.pathname!=='/ws'||controlUrl.username||controlUrl.password||controlUrl.search||controlUrl.hash) throw new Error('LEMON_BOT_CONTROL_URL must be the credential-free exact /ws WebSocket endpoint.');
   if(!['http:','https:'].includes(publicUrl.protocol)||publicUrl.username||publicUrl.password||publicUrl.search||publicUrl.hash||publicUrl.pathname!=='/')throw new Error('LEMON_BOT_PUBLIC_URL must be a credential-free product origin.');
   if(controlUrl.protocol!=='wss:'&&!isLoopback(controlUrl.hostname)&&!trustedOverlay)throw new Error('Off-loopback control-plane transport requires WSS or explicit LEMON_BOT_TRUSTED_OVERLAY=true.');
   if(publicUrl.protocol!=='https:'&&!isLoopback(publicUrl.hostname)&&!trustedOverlay)throw new Error('Off-loopback public transport requires HTTPS or explicit trusted encrypted overlay.');
+  const runtimeLauncher=environment.LEMON_BOT_RUNTIME_LAUNCHER;
+  await validateRuntimeLauncher(runtimeLauncher);
   await mkdir(dataDir,{recursive:true,mode:0o700});await chmod(dataDir,0o700);
   const keyPath=join(dataDir,'master.key'); let key:Buffer;
   if(environment.LEMON_BOT_ENCRYPTION_KEY) {key=Buffer.from(environment.LEMON_BOT_ENCRYPTION_KEY,'base64');if(key.length!==32)throw new Error('LEMON_BOT_ENCRYPTION_KEY must encode exactly 32 bytes.');}
@@ -35,7 +43,7 @@ export async function loadConfiguration(environment:Record<string,string|undefin
   const port=z.coerce.number().int().min(1).max(65535).parse(environment.LEMON_BOT_PORT??4080);
   const host=environment.LEMON_BOT_HOST??'127.0.0.1';
   const webRoot=resolve(environment.LEMON_BOT_WEB_ROOT??defaultWebRoot());
-  return {config:{publicUrl:publicUrl.origin,controlUrl:controlUrl.href,operatorToken,dataDir,host,port,trustedOverlay,operator,webRoot},key};
+  return {config:{publicUrl:publicUrl.origin,controlUrl:controlUrl.href,operatorToken,dataDir,host,port,trustedOverlay,operator,webRoot,runtimeLauncher},key};
 }
 export function createPrivateCodec(key:Uint8Array):{encrypt(value:unknown):string;decrypt<T=unknown>(value:string):T} {
   return {

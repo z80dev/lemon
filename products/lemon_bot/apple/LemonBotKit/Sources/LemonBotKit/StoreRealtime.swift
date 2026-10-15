@@ -17,6 +17,7 @@ extension LemonBotStore {
             while !Task.isCancelled {
                 guard let self, self.generation == current, let account = self.account, let transport = self.transport else { return }
                 self.connectionState = "connecting"
+                self.lastConnectionAttemptAt = Date(); self.nextRetryAt = nil
                 do {
                     var c = URLComponents(url: try transport.url("/realtime"), resolvingAgainstBaseURL: false)!
                     c.scheme = c.scheme == "https" ? "wss" : "ws"
@@ -43,7 +44,7 @@ extension LemonBotStore {
                             guard ready.userId == account.userID, ready.workspaceId == account.workspaceID else { throw ClientError.accountChanged }
                             _ = try WorkspaceCursor.normalized(ready.cursor)
                             self.connectionState = "syncing"
-                            if self.snapshot == nil { try await self.synchronize() }
+                            try await self.synchronize()
                             try await self.sendSocket(.subscribe(RealtimeClientFrameSubscribe(requestId: UUID().uuidString, cursor: self.cursor, conversationIds: [])), on: task)
                             heartbeat?.cancel()
                             heartbeat = Task { [weak self] in
@@ -70,11 +71,13 @@ extension LemonBotStore {
                     return
                 } catch {
                     guard !Task.isCancelled, self.generation == current else { return }
-                    self.connectionState = "disconnected"; self.errorMessage = error.localizedDescription
+                    self.connectionState = "disconnected"
                     let close = self.socket?.closeCode.rawValue
                     if close == 4401 || close == 4403 || (error as? BackendError)?.failure.code == "unauthenticated" || (error as? BackendError)?.failure.code == "forbidden" { self.markReconnectRequired(); return }
                     attempt += 1
                     let seconds = min(30.0, pow(2.0, Double(min(attempt, 5)))) + Double.random(in: 0...0.5)
+                    self.nextRetryAt = Date().addingTimeInterval(seconds)
+                    self.recordConnectionFailure(error)
                     do { try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000)) } catch { return }
                 }
             }
@@ -92,8 +95,7 @@ extension LemonBotStore {
         switch frame {
         case .auth, .subscribe, .ack: throw ClientError.invalidFrame
         case .presence(let value):
-            foreground = value.foreground; visibleConversationID = value.conversationId
-            try await sendSocket(frame, on: socket)
+            try await setPresence(foreground: value.foreground, conversationID: value.conversationId)
         case .terminalSubscribe(let value):
             terminalSubscriptions.insert(value.terminalId)
             let last = terminalSequences[value.terminalId] ?? value.afterSeq ?? 0
@@ -109,7 +111,13 @@ extension LemonBotStore {
         self.foreground = foreground
         visibleConversationID = conversationID
         guard connectionState == "online", let socket else { return }
-        try await sendSocket(.presence(RealtimeClientFramePresence(foreground: foreground, conversationId: conversationID)), on: socket)
+        do { try await sendSocket(.presence(RealtimeClientFramePresence(foreground: foreground, conversationId: conversationID)), on: socket) }
+        catch {
+            // Refresh/background reconnect can replace the socket while its presence write awaits.
+            // That obsolete connection says nothing about a message POST or the current presence.
+            guard self.socket === socket else { return }
+            throw error
+        }
     }
     func process(_ frame: RealtimeServerFrame, on socket: URLSessionWebSocketTask) async throws {
         switch frame {
@@ -119,11 +127,13 @@ extension LemonBotStore {
             try await advanceCursor(event.seq, on: socket)
         case .caughtUp(let value):
             try await advanceCursor(value.cursor, on: socket)
-            connectionState = "online"; errorMessage = nil
+            connectionState = "online"; errorMessage = nil; nextRetryAt = nil
+            updateControllerIssue()
             try await setPresence(foreground: foreground, conversationID: visibleConversationID)
             for id in terminalSubscriptions {
                 try await sendSocket(.terminalSubscribe(RealtimeClientFrameTerminalSubscribe(terminalId: id, afterSeq: terminalSequences[id] ?? 0)), on: socket)
             }
+            scheduleMessageReconciliation()
         case .watermark(let value): try await advanceCursor(value.cursor, on: socket)
         case .error(let value):
             if value.error.code == "cursor_expired" {
@@ -180,7 +190,8 @@ extension LemonBotStore {
     }
     func advanceCursor(_ value: Cursor, on socket: URLSessionWebSocketTask) async throws {
         try commitCursor(value)
-        try await sendSocket(.ack(RealtimeClientFrameAck(cursor: cursor)), on: socket)
+        // HTTP sync may have a newer global watermark; ACK only what this socket delivered.
+        try await sendSocket(.ack(RealtimeClientFrameAck(cursor: value)), on: socket)
     }
     func commitCursor(_ value: Cursor) throws {
         let normalized = try WorkspaceCursor.normalized(value)
@@ -225,7 +236,9 @@ extension LemonBotStore {
             // Retain current local edits; cross-device server changes only replace an untouched local draft.
             if drafts[value.conversationId] == nil { drafts[value.conversationId] = LocalComposerDraft(text: value.text, attachmentIDs: value.attachmentIds, replyToEntryID: value.replyToEntryId, revision: value.revision) }
             if let account, let draft = drafts[value.conversationId] { try persistence.saveDraft(draft, conversationID: value.conversationId, accountID: account.id) }
-        case .entryUpserted(let value): upsertEntry(value)
+        case .entryUpserted(let value):
+            upsertEntry(value)
+            if let nonce = value.clientNonce { scheduleMessageReconciliation(clientNonce: nonce) }
         case .entryDeleted(let value): entries[value.conversationId]?.removeAll { $0.id == value.id }
         case .entryDelta(let delta):
             if let index = entries[delta.conversationId]?.firstIndex(where: { $0.id == delta.entryId }),
@@ -237,7 +250,9 @@ extension LemonBotStore {
                 guard authoritative.conversationId == delta.conversationId, authoritative.runId == delta.runId else { throw ClientError.invalidFrame }
                 upsertEntry(authoritative)
             }
-        case .runUpserted(let value): upsert(&runs, value, id: { $0.id }, revision: { $0.revision })
+        case .runUpserted(let value):
+            upsert(&runs, value, id: { $0.id }, revision: { $0.revision })
+            scheduleMessageReconciliation(clientNonce: value.clientNonce)
         case .notificationUpserted(let value): upsert(&notifications, value, id: { $0.id }, revision: { $0.revision })
         case .notificationDeleted(let value): notifications.removeAll { $0.id == value.id }
         case .voiceUpserted(let value): if value.userId == user?.id { voiceSession = value }

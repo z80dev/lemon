@@ -9,8 +9,7 @@ struct MacMiniComposer: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             MacTargetLabel(controller: controller, conversationID: conversationID)
-            Text("Only the text and files you explicitly choose are shared. Nothing is sent until Send.")
-                .font(.caption).foregroundStyle(.secondary)
+            Text("Only the text and files you explicitly choose are shared. Nothing is sent until Send.").font(LBFont.meta).foregroundStyle(LB.muted)
             ComposerView(store: controller.store, conversationID: conversationID, compact: true)
             HStack {
                 Button("Choose files…") { controller.chooseFiles(conversationID: conversationID) }
@@ -21,7 +20,8 @@ struct MacMiniComposer: View {
                     NSApp.windows.first { $0.identifier?.rawValue == "lemonbot.main" }?.makeKeyAndOrderFront(nil)
                 }
             }
-            if let error = controller.errorMessage { Text(error).foregroundStyle(.red).textSelection(.enabled) }
+            if let error = controller.errorMessage { Text(error).foregroundStyle(LB.danger).textSelection(.enabled) }
+            if controller.selectedBot == nil { SettingsLink { Text("Open Settings") } }
         }.padding().frame(minWidth: 440, minHeight: 280)
     }
 }
@@ -35,9 +35,8 @@ struct MacTargetLabel: View {
         let machine = controller.store.machines.first { $0.id == bot?.machineId }
         VStack(alignment: .leading, spacing: 4) {
             Text(bot?.name ?? room?.name ?? "Choose a conversation").font(.headline)
-            Text("\(controller.store.account?.displayName ?? "Not signed in") · \(controller.store.workspace?.name ?? "") · \(machine?.name ?? "Unknown machine")")
-                .font(.caption).foregroundStyle(.secondary)
-            if let room { Text(room.name).font(.caption) }
+            Text("\(controller.store.account?.displayName ?? "Not signed in") · \(controller.store.workspace?.name ?? "") · \(machine?.name ?? "Unknown machine")").font(LBFont.meta).foregroundStyle(LB.muted)
+            if let room { Text(room.name).font(LBFont.meta) }
         }
     }
 }
@@ -50,7 +49,7 @@ struct MacCompanionView: View {
             VStack(alignment: .leading, spacing: 10) {
                 MacTargetLabel(controller: controller, conversationID: bot.mainConversationId)
                 Label(bot.activity.replacingOccurrences(of: "_", with: " ").capitalized, systemImage: bot.activity == "offline" ? "wifi.slash" : "circle.fill")
-                Text("Status comes from your Bot’s latest backend state.").font(.caption).foregroundStyle(.secondary)
+                Text("Status comes from your Bot’s latest backend state.").font(LBFont.meta).foregroundStyle(LB.muted)
                 HStack {
                     Button("Compose") { controller.summon() }
                     Button("Overview") {
@@ -65,7 +64,12 @@ struct MacCompanionView: View {
                     }
                 }
             }.padding().frame(minWidth: 290, minHeight: 150)
-        } else { Text("The selected Bot is no longer available.").padding() }
+        } else {
+            VStack(spacing: 12) {
+                Text("The selected Bot is no longer available.")
+                SettingsLink { Text("Choose another Bot") }
+            }.padding()
+        }
     }
 }
 
@@ -79,10 +83,10 @@ struct MacVoiceView: View {
         VStack(alignment: .leading, spacing: 14) {
             MacTargetLabel(controller: controller, conversationID: controller.captureConversationID ?? session?.conversationId)
             Label(speech.state == .recording ? "Microphone on — explicitly capturing your voice" : "Microphone off", systemImage: speech.state == .recording ? "mic.fill" : "mic.slash")
-                .foregroundStyle(speech.state == .recording ? Color.red : Color.secondary)
+                .foregroundStyle(speech.state == .recording ? LB.danger : LB.muted)
                 .accessibilityLabel(speech.state == .recording ? "Microphone on" : "Microphone off")
             if active, let session {
-                Text("Active voice chat · \(session.muted ? "Muted" : "Ready") · \(session.durationMs / 1000) seconds")
+                Text("Voice chat · \(session.muted ? "Muted" : "Ready") · \(compactDuration(from: Date(timeIntervalSince1970: 0), to: Date(timeIntervalSince1970: Double(session.durationMs) / 1000)))")
                 HStack {
                     Button(session.muted ? "Unmute" : "Mute") { Task { await controller.updateCall(muted: !session.muted) } }
                     Button("Return to chat") {
@@ -103,8 +107,9 @@ struct MacVoiceView: View {
                     }.frame(maxHeight: 130)
                 }
                 HStack {
-                    Button("Good call") { Task { await controller.updateCall(feedback: "good") } }
-                    Button("Bad call") { Task { await controller.updateCall(feedback: "bad") } }
+                    Text("How was this call?")
+                    Button("Good") { Task { await controller.updateCall(feedback: "good") } }
+                    Button("Bad") { Task { await controller.updateCall(feedback: "bad") } }
                 }.disabled(!controller.online || controller.busy)
                 if var settings = controller.voiceSettings {
                     HStack {
@@ -115,13 +120,13 @@ struct MacVoiceView: View {
                         }), in: 0.5...2)
                         Text(String(format: "%.1f×", controller.voiceSettings?.speed ?? settings.speed))
                     }
-                    TextField("Voice identifier", text: Binding(get: { controller.voiceSettings?.voiceId ?? "" }, set: { value in
+                    TextField("Voice (optional provider voice ID)", text: Binding(get: { controller.voiceSettings?.voiceId ?? "" }, set: { value in
                         settings.voiceId = value; controller.voiceSettings = settings
                     }))
-                    TextField("Language (BCP-47; blank for automatic)", text: Binding(get: { controller.voiceSettings?.language ?? "" }, set: { value in
+                    TextField("Language (optional, e.g. en-US)", text: Binding(get: { controller.voiceSettings?.language ?? "" }, set: { value in
                         settings.language = value.isEmpty ? nil : value; controller.voiceSettings = settings
                     }))
-                    Button("Apply voice settings") { Task { await controller.updateCall(settings: controller.voiceSettings) } }
+                    Button("Save voice") { Task { await controller.updateCall(settings: controller.voiceSettings) } }
                         .disabled(!controller.online || controller.busy)
                 }
             }
@@ -129,35 +134,38 @@ struct MacVoiceView: View {
                 ProgressView(speech.state == .requestingPermission ? "Waiting for microphone/Speech permission…" : "Finishing transcription…")
             }
             if speech.state == .recording {
-                Button("Stop and review") { speech.release() }
+                Button("Stop") { speech.release() }
             } else if speech.state == .idle {
-                Button("Record utterance…") {
+                Button("Record") {
                     if let id = controller.captureConversationID ?? session?.conversationId { controller.beginDictation(conversationID: id) }
                 }.disabled(active && (session?.muted == true))
-                Text("Record explicitly, then Stop and review. The configured push-to-talk shortcut captures only while held. Escape discards.")
-                    .font(.caption).foregroundStyle(.secondary)
+                Text("Record, stop, then review. Hold your talk shortcut to record only while pressed. Escape discards.").font(LBFont.meta).foregroundStyle(LB.muted)
             }
             if speech.state == .review {
                 Text("Review and edit — nothing has been sent.").font(.headline)
                 TextEditor(text: $speech.transcript).frame(minHeight: 110)
                 if speech.needsBackendTranscription {
-                    Button("Transcribe recorded audio with backend") { Task { await controller.transcribeRecording() } }
+                    Button("Turn speech into text") { Task { await controller.transcribeRecording() } }
                         .disabled(!controller.online || controller.busy)
-                    Text("This explicitly uploads this recording to your backend’s configured transcription provider.").font(.caption)
+                    Text("Uploads this recording to the speech-to-text provider set up on your server.").font(LBFont.meta)
                 }
                 HStack {
-                    Button("Keep as unsent draft") { controller.keepReviewedDraft() }
+                    Button("Save as draft") { controller.keepReviewedDraft() }
                         .disabled(speech.transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || controller.uncertainVoiceSend)
                     if active && controller.reviewForCall {
-                        Button("Send reviewed utterance") { Task { await controller.sendReviewedVoice() } }
+                        Button("Send") { Task { await controller.sendReviewedVoice() } }
                             .disabled(!controller.online || controller.busy || session?.muted == true || speech.transcript.isEmpty || controller.uncertainVoiceSend)
                     }
                     Button("Discard", role: .cancel) { controller.cancelCapture() }
                 }
             }
-            if let text = controller.speechStatus { Text(text).font(.caption).textSelection(.enabled) }
-            if let error = speech.errorMessage { Text(error).foregroundStyle(.orange).textSelection(.enabled) }
-            if let error = controller.errorMessage { Text(error).foregroundStyle(.red).textSelection(.enabled) }
+            if controller.uncertainVoiceSend {
+                Text("We couldn't confirm the last voice message. Check the conversation before sending again.").font(LBFont.meta).foregroundStyle(LB.warning)
+                Button("Start new voice message") { controller.startNewVoiceMessage() }.disabled(controller.busy)
+            }
+            if let text = controller.speechStatus { Text(text).font(LBFont.meta).textSelection(.enabled) }
+            if let error = speech.errorMessage { Text(error).foregroundStyle(LB.warning).textSelection(.enabled) }
+            if let error = controller.errorMessage { Text(error).foregroundStyle(LB.danger).textSelection(.enabled) }
             if controller.busy { ProgressView() }
             Button("Stop playback") { controller.stopPlayback() }
             }.padding()
@@ -181,9 +189,9 @@ struct MacSettingsView: View {
                 Toggle("Show one compact selected-Bot companion", isOn: $value.compactCompanionEnabled)
             }
             Section("Explicit keyboard controls") {
-                TextField("Global summon", text: $summon)
-                TextField("Hold push-to-talk", text: $ptt)
-                Text("Examples: control+option+space or command+shift+f8. Blank disables. Carbon registers only these combinations; no keyboard history is captured.").font(.caption)
+                TextField("Quick composer shortcut", text: $summon)
+                TextField("Hold to talk shortcut", text: $ptt)
+                Text("For example: control+option+space or command+shift+f8. Leave blank to turn off.").font(LBFont.meta)
                 Toggle("Microphone on/off sounds", isOn: $value.micCuesEnabled)
                 Picker("Reduced motion", selection: $value.reducedMotion) {
                     Text("Follow system").tag("system"); Text("On").tag("on"); Text("Off").tag("off")
@@ -203,17 +211,16 @@ struct MacSettingsView: View {
                 }
                 .disabled(controller.speech.state != .idle)
                 Button("Refresh microphone inputs") { controller.speech.refreshInputDevices() }
-                Button("Play real backend Bot voice sample") { if let id = value.selectedBotId { Task { await controller.previewVoice(botID: id) } } }
+                Button("Play voice sample") { if let id = value.selectedBotId { Task { await controller.previewVoice(botID: id) } } }
                     .disabled(value.selectedBotId == nil || !controller.online || controller.busy)
-                Text("The fixed sample does not create a chat or run. Backend provider failures display their actual prerequisites; persisted voice memos are played from their authorized audio attachments in chat.").font(.caption)
+                Text("Playing a sample doesn't create a chat or task. If it can't play, the error says what's missing.").font(LBFont.meta)
                 Button("Enable macOS notifications…") { Task { await controller.requestNotifications() } }
-                if let status = controller.speechStatus { Text(status).font(.caption) }
+                if let status = controller.speechStatus { Text(status).font(LBFont.meta) }
             }
             Section("Privacy") {
-                Text("No ambient listening, clipboard history, screen capture, or desktop streaming. To share selected content from another app, explicitly choose Services → Send selection to Lemon Bot; review it in the mini-composer. Choose files only through the file picker. Hotkeys and companion are disabled by default and stored for this device/account.")
-                    .font(.caption)
+                Text("No listening, clipboard history or screen capture happens in the background. To share text, right-click selected text → Services → Send to Lemon Bot, then review it in the quick composer. Choose files with the file picker. Shortcuts and the companion are off by default and saved for this device and account.").font(LBFont.meta)
             }
-            if let error = controller.errorMessage { Text(error).foregroundStyle(.red).textSelection(.enabled) }
+            if let error = controller.errorMessage { Text(error).foregroundStyle(LB.danger).textSelection(.enabled) }
         }.formStyle(.grouped)
             .onAppear { load(); controller.speech.refreshInputDevices() }
             .onChange(of: controller.settings) { _, _ in load() }

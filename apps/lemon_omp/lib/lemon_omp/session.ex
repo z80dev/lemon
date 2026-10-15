@@ -30,7 +30,7 @@ defmodule LemonOmp.Session do
 
   use GenServer, restart: :temporary, shutdown: 5_000
 
-  alias LemonOmp.{Config, Manager, Projection, Rpc}
+  alias LemonOmp.{Approval, Config, Manager, Projection, Rpc, Worktree}
 
   @line_bytes 65_536
   @max_frame_bytes 4 * 1_048_576
@@ -40,6 +40,7 @@ defmodule LemonOmp.Session do
   @stderr_tail_bytes 900
   @settle_fallback_ms 2_000
   @exit_grace_ms 1_500
+  @max_pending_approvals 32
 
   @type start_opts :: [
           id: String.t(),
@@ -48,6 +49,7 @@ defmodule LemonOmp.Session do
           prompt: String.t() | nil,
           model: String.t() | nil,
           thinking: String.t() | nil,
+          approval_mode: String.t() | nil,
           resume: String.t() | nil,
           owner: map()
         ]
@@ -64,13 +66,21 @@ defmodule LemonOmp.Session do
   @spec await_started(pid(), timeout()) :: {:ok, map()} | {:error, term()}
   def await_started(pid, timeout), do: safe_call(pid, :await_started, timeout)
 
-  @spec send_message(pid(), String.t(), :steer | :follow_up) ::
+  @spec send_message(pid(), String.t(), :steer | :follow_up | :redirect) ::
           {:ok, map()} | {:error, term()}
   def send_message(pid, message, mode),
     do: safe_call(pid, {:send_message, message, mode}, Config.command_timeout_ms() + 2_000)
 
+  @spec configure(pid(), [{String.t(), String.t(), map()}]) :: {:ok, map()} | {:error, term()}
+  def configure(pid, commands),
+    do: safe_call(pid, {:configure, commands}, 3 * Config.command_timeout_ms() + 2_000)
+
   @spec cancel(pid()) :: {:ok, map()} | {:error, term()}
   def cancel(pid), do: safe_call(pid, :cancel, Config.command_timeout_ms() + 2_000)
+
+  @spec subagent(pid(), String.t(), pos_integer()) :: {:ok, map()} | {:error, term()}
+  def subagent(pid, subagent_id, limit),
+    do: safe_call(pid, {:subagent, subagent_id, limit}, Config.command_timeout_ms() + 2_000)
 
   @spec close(pid()) :: :ok
   def close(pid) do
@@ -105,8 +115,10 @@ defmodule LemonOmp.Session do
       Projection.new(
         id: id,
         cwd: Keyword.fetch!(opts, :cwd),
+        worktree: Worktree.wire(Keyword.get(opts, :worktree)),
         model: Keyword.get(opts, :model),
         thinking: Keyword.get(opts, :thinking),
+        approval_mode: Keyword.get(opts, :approval_mode),
         owner: Keyword.get(opts, :owner, %{kind: :operator}),
         prompt: Keyword.get(opts, :prompt)
       )
@@ -114,6 +126,7 @@ defmodule LemonOmp.Session do
     state = %{
       id: id,
       projection: projection,
+      worktree: Keyword.get(opts, :worktree),
       port: nil,
       os_pid: nil,
       stderr_path: stderr_path,
@@ -126,6 +139,8 @@ defmodule LemonOmp.Session do
       start_waiters: [],
       started: nil,
       pending: %{},
+      redirects: %{},
+      approvals: %{},
       seq: 0,
       ready_timer: nil,
       idle_timer: nil,
@@ -162,6 +177,7 @@ defmodule LemonOmp.Session do
     {type, delivery} =
       case {state.projection.status, mode} do
         {:running, :follow_up} -> {"follow_up", "followUp"}
+        {:running, :redirect} -> {"abort_and_prompt", "redirect"}
         {:running, _steer} -> {"steer", "steer"}
         {_idle, _mode} -> {"prompt", "prompt"}
       end
@@ -169,12 +185,26 @@ defmodule LemonOmp.Session do
     {:noreply, request(state, type, %{"message" => message}, {:send, from, delivery})}
   end
 
+  def handle_call({:configure, _commands}, _from, %{ready?: false} = state),
+    do: {:reply, {:error, :not_ready}, state}
+
+  def handle_call({:configure, commands}, from, state),
+    do: {:noreply, configure_next(state, from, [], commands)}
+
   def handle_call(:cancel, _from, %{projection: %{status: status}} = state)
       when status != :running,
       do: {:reply, {:error, :no_active_turn}, state}
 
   def handle_call(:cancel, from, state),
     do: {:noreply, request(state, "abort", %{}, {:cancel, from})}
+
+  def handle_call({:subagent, _id, _limit}, _from, %{ready?: false} = state),
+    do: {:reply, {:error, :not_ready}, state}
+
+  def handle_call({:subagent, id, limit}, from, state) do
+    {:noreply,
+     request(state, "get_subagent_messages", %{"subagentId" => id}, {:subagent, from, limit})}
+  end
 
   @impl true
   def handle_cast(:close, state), do: {:stop, :normal, %{state | close_reason: :closed}}
@@ -188,7 +218,7 @@ defmodule LemonOmp.Session do
     reason = state.close_reason || if(code == 0, do: :exited, else: :crashed)
     status = if reason in [:closed, :idle_timeout, :exited], do: :closed, else: :failed
     error = if status == :failed, do: exit_error(state, code)
-    state = %{state | port: nil, os_pid: nil}
+    state = cancel_approvals(%{state | port: nil, os_pid: nil}, "omp exited")
 
     # Publish the terminal snapshot before answering waiters, so a caller that
     # sees the error never reads a snapshot (or live count) still "starting".
@@ -221,7 +251,22 @@ defmodule LemonOmp.Session do
         {:noreply, state}
 
       {entry, pending} ->
-        {:noreply, reply_pending(%{state | pending: pending}, entry, {:error, :outcome_unknown})}
+        state = reply_pending(%{state | pending: pending}, entry, {:error, :outcome_unknown})
+
+        # An unacknowledged redirect must not hold the session "running"
+        # forever: release its guard so omp's own events decide the status.
+        state =
+          if is_map_key(state.redirects, id) do
+            state = clear_redirect(state, id)
+
+            if state.projection.settling and not state.projection.redirecting,
+              do: handle_frame(state, {:event, "session_settled", %{}}),
+              else: state
+          else
+            state
+          end
+
+        {:noreply, state}
     end
   end
 
@@ -246,19 +291,51 @@ defmodule LemonOmp.Session do
     {:noreply, %{state | last_publish: now_ms()}}
   end
 
+  def handle_info({:approval_result, dialog_id, approval_id, result}, state) do
+    case state.approvals[dialog_id] do
+      %{id: ^approval_id} ->
+        {outcome, fields} = approval_reply(result)
+        reply = Map.merge(%{"type" => "extension_ui_response", "id" => dialog_id}, fields)
+        if state.port, do: write(state, reply)
+        {:noreply, finish_approval(state, dialog_id, outcome)}
+
+      _ ->
+        # omp may have cancelled the dialog while the operator resolved it.
+        {:noreply, state}
+    end
+  end
+
+  def handle_info({:EXIT, pid, _reason}, state) when is_pid(pid) do
+    case Enum.find(state.approvals, fn {_dialog, entry} -> entry.pid == pid end) do
+      {dialog_id, entry} ->
+        handle_info({:approval_result, dialog_id, entry.id, {:error, :waiter_exited}}, state)
+
+      nil ->
+        {:noreply, state}
+    end
+  end
+
   def handle_info(_message, state), do: {:noreply, state}
 
   @impl true
   def terminate(_reason, state) do
+    state = cancel_approvals(state, "omp session closed")
     if state.port, do: stop_process(state)
 
-    if state.projection.status not in [:closed, :failed] do
-      state
-      |> update_projection(
-        &Projection.finish(&1, :closed, %{code: nil, reason: state.close_reason || :closed})
-      )
-      |> publish("exited")
-    end
+    worktree = Worktree.cleanup(state.worktree)
+    state = update_projection(state, &%{&1 | worktree: worktree})
+
+    state =
+      if state.projection.status not in [:closed, :failed] do
+        update_projection(
+          state,
+          &Projection.finish(&1, :closed, %{code: nil, reason: state.close_reason || :closed})
+        )
+      else
+        state
+      end
+
+    publish(state, "exited")
 
     _ = File.rm(state.stderr_path)
     :ok
@@ -316,10 +393,10 @@ defmodule LemonOmp.Session do
     end
   end
 
-  defp handle_frame(state, {:response, id, _command, result}) do
+  defp handle_frame(state, {:response, id, command, result}) do
     case Map.pop(state.pending, id) do
       {nil, _pending} ->
-        state
+        handle_late_response(state, id, command, result)
 
       {entry, pending} ->
         if entry.timer, do: Process.cancel_timer(entry.timer)
@@ -327,20 +404,35 @@ defmodule LemonOmp.Session do
     end
   end
 
-  defp handle_frame(state, {:ui_request, id, method, _frame}) do
-    case Rpc.decline_ui_request(id, method) do
+  defp handle_frame(state, {:ui_request, _id, "cancel", %{"targetId" => target}}) do
+    case state.approvals[target] do
       nil ->
         state
 
-      reply ->
-        write(state, reply)
-
-        update_projection(state, fn projection ->
-          %{projection | declined_prompts: projection.declined_prompts + 1}
-        end)
-        |> schedule_publish()
+      entry ->
+        Approval.cancel(entry.pid, entry.id, "omp cancelled approval")
+        finish_approval(state, target, nil)
     end
   end
+
+  defp handle_frame(
+         state,
+         {:ui_request, id, "select", %{"options" => ["Approve", "Deny"]} = frame}
+       ) do
+    cond do
+      Map.has_key?(state.approvals, id) ->
+        state
+
+      Config.approvals() == :bridge and map_size(state.approvals) < @max_pending_approvals ->
+        request_approval(state, id, frame)
+
+      true ->
+        decline_ui_request(state, id, "select")
+    end
+  end
+
+  defp handle_frame(state, {:ui_request, id, method, _frame}),
+    do: decline_ui_request(state, id, method)
 
   defp handle_frame(state, {:host_request, id, frame}) do
     write(state, Rpc.reject_host_request(id, frame))
@@ -351,7 +443,14 @@ defmodule LemonOmp.Session do
     before = state.projection
 
     state =
-      if type == "agent_start", do: %{state | agent_starts: state.agent_starts + 1}, else: state
+      if type == "agent_start" do
+        # Keep the current redirect's id for omp's asynchronous prompt failure,
+        # but discard ids from earlier turns. A new start releases the idle guard.
+        redirects = Map.reject(state.redirects, fn {_id, seen} -> seen < state.agent_starts end)
+        %{state | agent_starts: state.agent_starts + 1, redirects: redirects}
+      else
+        state
+      end
 
     state = update_projection(state, &Projection.apply_event(&1, type, frame))
     after_status = state.projection.status
@@ -407,16 +506,32 @@ defmodule LemonOmp.Session do
   defp handle_response(state, %{kind: {:send, from, delivery}} = entry, {:ok, _data}) do
     GenServer.reply(from, {:ok, %{"delivery" => delivery}})
 
-    if delivery == "prompt" do
-      state |> cancel_idle() |> mark_running_after_ack(entry) |> publish_now("updated")
-    else
-      state
+    case delivery do
+      "prompt" ->
+        state |> cancel_idle() |> mark_running_after_ack(entry) |> publish_now("updated")
+
+      "redirect" ->
+        state |> cancel_idle() |> mark_running_after_ack(entry) |> publish_now("redirected")
+
+      _ ->
+        state
     end
   end
 
-  defp handle_response(state, %{kind: {:send, from, _delivery}}, {:error, message, _code}) do
+  defp handle_response(state, %{kind: {:send, from, delivery}} = entry, {:error, message, _code}) do
     GenServer.reply(from, {:error, {:rejected, Projection.clean(message, 500)}})
-    state
+
+    if delivery == "redirect" do
+      state = clear_redirect(state, entry.id)
+
+      if state.projection.settling and not state.projection.redirecting do
+        handle_frame(state, {:event, "session_settled", %{}})
+      else
+        schedule_publish(state)
+      end
+    else
+      state
+    end
   end
 
   defp handle_response(state, %{kind: {:cancel, from}}, {:ok, _data}) do
@@ -429,6 +544,70 @@ defmodule LemonOmp.Session do
     state
   end
 
+  defp handle_response(state, %{kind: {:subagent, from, limit}}, {:ok, data}) do
+    GenServer.reply(from, {:ok, Projection.subagent_transcript(data, limit)})
+    state
+  end
+
+  defp handle_response(state, %{kind: {:subagent, from, _limit}}, {:error, message, _code}) do
+    GenServer.reply(from, {:error, {:rejected, Projection.clean(message, 500)}})
+    state
+  end
+
+  defp handle_response(
+         state,
+         %{kind: {:configure, from, applied, field, rest}},
+         {:ok, _data}
+       ),
+       do: configure_next(state, from, applied ++ [field], rest)
+
+  defp handle_response(
+         state,
+         %{kind: {:configure, from, applied, field, _rest}},
+         {:error, message, _code}
+       ),
+       do:
+         configure_failed(
+           state,
+           from,
+           applied,
+           field,
+           {:rejected, Projection.clean(message, 500)}
+         )
+
+  defp handle_response(
+         state,
+         %{kind: {:configure_snapshot, from, applied, failure}},
+         {:ok, data}
+       )
+       when is_map(data) do
+    state =
+      state |> update_projection(&Projection.apply_state(&1, data)) |> publish_now("configured")
+
+    reply =
+      if failure,
+        do: configure_error(applied, failure),
+        else: {:ok, Projection.to_wire(state.projection)}
+
+    GenServer.reply(from, reply)
+    state
+  end
+
+  defp handle_response(
+         state,
+         %{kind: {:configure_snapshot, from, applied, failure}},
+         result
+       ) do
+    reason =
+      case result do
+        {:error, message, _code} -> {:rejected, Projection.clean(message, 500)}
+        _ -> {:rejected, "omp returned an invalid session state"}
+      end
+
+    GenServer.reply(from, configure_error(applied, failure || {"snapshot", reason}))
+    state
+  end
+
   defp handle_response(state, %{kind: :stats}, {:ok, data}) when is_map(data),
     do: state |> update_projection(&Projection.apply_stats(&1, data)) |> schedule_publish()
 
@@ -436,6 +615,112 @@ defmodule LemonOmp.Session do
     do: state |> update_projection(&Projection.apply_state(&1, data)) |> schedule_publish()
 
   defp handle_response(state, _entry, _result), do: state
+
+  # abort_and_prompt acknowledges before its new prompt finishes. omp can then
+  # send a second, failing response with the same id: it is a turn error, not a
+  # second command reply. Keep the caller's accepted result and settle the turn.
+  defp handle_late_response(state, id, "abort_and_prompt", {:error, message, _code})
+       when is_map_key(state.redirects, id) do
+    state
+    |> clear_redirect(id)
+    |> handle_frame(
+      {:event, "prompt_result", %{"status" => "error", "error" => %{"message" => message}}}
+    )
+  end
+
+  defp handle_late_response(state, _id, _command, _result), do: state
+
+  defp clear_redirect(state, id) do
+    redirects = Map.delete(state.redirects, id)
+    redirecting = Enum.any?(redirects, fn {_id, seen} -> seen == state.agent_starts end)
+
+    %{state | redirects: redirects}
+    |> update_projection(&%{&1 | redirecting: redirecting})
+  end
+
+  defp decline_ui_request(state, id, method) do
+    case Rpc.decline_ui_request(id, method) do
+      nil ->
+        state
+
+      reply ->
+        write(state, reply)
+
+        update_projection(state, fn projection ->
+          %{projection | declined_prompts: projection.declined_prompts + 1}
+        end)
+        |> schedule_publish()
+    end
+  end
+
+  defp request_approval(state, dialog_id, frame) do
+    approval_id = LemonCore.Id.approval_id()
+    details = Projection.clean(frame["title"], 2_000)
+
+    tool =
+      case Regex.run(~r/^Allow tool:[ \t]*([^\n]+)/m, details, capture: :all_but_first) do
+        [name] -> name |> String.trim() |> Projection.clean(64)
+        _ -> ""
+      end
+
+    timeout =
+      case frame["timeout"] do
+        ms when is_integer(ms) and ms >= 0 -> min(ms, Config.approval_timeout_ms())
+        _ -> Config.approval_timeout_ms()
+      end
+
+    params =
+      state.projection.owner
+      |> Map.take([:session_key, :session_id, :run_id, :agent_id])
+      # Operators have no conversation key; bind their grants to this invocation.
+      |> Map.put_new(:session_key, "omp:operator:" <> state.id)
+      |> Map.merge(%{
+        approval_id: approval_id,
+        tool: if(tool == "", do: "omp", else: "omp:" <> tool),
+        action: %{
+          "type" => "omp_tool",
+          "ompSession" => state.id,
+          "tool" => if(tool == "", do: "omp", else: tool),
+          "details" => details
+        },
+        rationale: Projection.clean("omp session #{state.id} in #{state.projection.cwd}", 300),
+        expires_in_ms: timeout
+      })
+
+    waiter = Approval.start(self(), dialog_id, params)
+    entry = %{id: approval_id, pid: waiter}
+
+    %{state | approvals: Map.put(state.approvals, dialog_id, entry)}
+    |> update_projection(
+      &Projection.request_approval(&1, approval_id, params.action["tool"], details)
+    )
+    |> publish_now("approval_requested")
+  end
+
+  defp approval_reply({:ok, :approved, _scope}), do: {:approved, %{"value" => "Approve"}}
+  defp approval_reply({:ok, :denied}), do: {:denied, %{"value" => "Deny"}}
+
+  defp approval_reply({:error, :timeout}),
+    do: {:expired, %{"cancelled" => true, "timedOut" => true}}
+
+  defp approval_reply(_error), do: {:expired, %{"cancelled" => true}}
+
+  defp finish_approval(state, dialog_id, outcome) do
+    {entry, approvals} = Map.pop!(state.approvals, dialog_id)
+
+    %{state | approvals: approvals}
+    |> update_projection(&Projection.resolve_approval(&1, entry.id, outcome))
+    |> publish_now("approval_resolved")
+  end
+
+  defp cancel_approvals(state, reason) do
+    Enum.reduce(state.approvals, state, fn {dialog_id, entry}, acc ->
+      Approval.cancel(entry.pid, entry.id, reason)
+
+      %{acc | approvals: Map.delete(acc.approvals, dialog_id)}
+      |> update_projection(&Projection.resolve_approval(&1, entry.id, nil))
+    end)
+  end
 
   defp mark_running(%Projection{status: status} = projection) when status in [:starting, :idle],
     do: %{projection | status: :running, activity: projection.activity || "Starting turn"}
@@ -456,6 +741,28 @@ defmodule LemonOmp.Session do
 
   defp maybe_request_state(state), do: state
 
+  defp configure_next(state, from, applied, [{field, type, fields} | rest]),
+    do: request(state, type, fields, {:configure, from, applied, field, rest})
+
+  defp configure_next(state, from, applied, []),
+    do: request(state, "get_state", %{}, {:configure_snapshot, from, applied, nil})
+
+  defp configure_failed(state, from, [], _field, reason) do
+    GenServer.reply(from, {:error, reason})
+    state
+  end
+
+  defp configure_failed(state, from, applied, field, :not_running) do
+    GenServer.reply(from, configure_error(applied, {field, :not_running}))
+    state
+  end
+
+  defp configure_failed(state, from, applied, field, reason),
+    do: request(state, "get_state", %{}, {:configure_snapshot, from, applied, {field, reason}})
+
+  defp configure_error(applied, {field, reason}),
+    do: {:error, {:partially_applied, applied, field, reason}}
+
   defp request(state, type, fields, kind) do
     seq = state.seq + 1
     id = "lemon-#{seq}"
@@ -467,8 +774,15 @@ defmodule LemonOmp.Session do
         _ -> Process.send_after(self(), {:command_timeout, id}, Config.command_timeout_ms())
       end
 
-    entry = %{kind: kind, timer: timer, agent_starts: state.agent_starts}
-    %{state | seq: seq, pending: Map.put(state.pending, id, entry)}
+    entry = %{id: id, kind: kind, timer: timer, agent_starts: state.agent_starts}
+    state = %{state | seq: seq, pending: Map.put(state.pending, id, entry)}
+
+    if type == "abort_and_prompt" do
+      %{state | redirects: Map.put(state.redirects, id, state.agent_starts)}
+      |> update_projection(&%{&1 | redirecting: true})
+    else
+      state
+    end
   end
 
   defp write(%{port: nil}, _frame), do: :ok
@@ -485,6 +799,25 @@ defmodule LemonOmp.Session do
 
   defp reply_pending(state, %{kind: {:cancel, from}}, reply),
     do: tap(state, fn _ -> GenServer.reply(from, reply) end)
+
+  defp reply_pending(state, %{kind: {:subagent, from, _limit}}, reply),
+    do: tap(state, fn _ -> GenServer.reply(from, reply) end)
+
+  defp reply_pending(
+         state,
+         %{kind: {:configure, from, applied, field, _rest}},
+         {:error, reason}
+       ),
+       do: configure_failed(state, from, applied, field, reason)
+
+  defp reply_pending(
+         state,
+         %{kind: {:configure_snapshot, from, applied, failure}},
+         {:error, reason}
+       ) do
+    GenServer.reply(from, configure_error(applied, failure || {"snapshot", reason}))
+    state
+  end
 
   defp reply_pending(state, %{kind: :initial_prompt}, {:error, :outcome_unknown}) do
     # omp never acknowledged the prompt: report it as unknown, not as a failure.
@@ -575,6 +908,7 @@ defmodule LemonOmp.Session do
       ["--mode", "rpc", "--cwd", cwd]
       |> add_flag("--model", Keyword.get(opts, :model))
       |> add_flag("--thinking", Keyword.get(opts, :thinking))
+      |> add_flag("--approval-mode", Keyword.get(opts, :approval_mode))
       |> add_flag("--resume", Keyword.get(opts, :resume))
 
     File.mkdir_p!(Path.dirname(stderr_path))

@@ -1609,11 +1609,11 @@ defmodule LemonWeb.Chat.PaneLive do
          socket
          |> notice_item(
            "danger",
-           "Lemon could not start that run. Check runtime status and try again."
+           "Lemon could not start that run. Check /diagnostics and try again."
          )
          |> assign(
            :submit_error,
-           "Lemon could not start that run. Check runtime status and try again."
+           "Lemon could not start that run. Check /diagnostics and try again."
          )}
     end
   end
@@ -2030,8 +2030,8 @@ defmodule LemonWeb.Chat.PaneLive do
               <.button type="submit" size="sm" variant="primary" mutation>Save</.button>
               <.button size="sm" variant="ghost" phx-click="cancel-rename">Cancel</.button>
             </form>
+            <h2 :if={!@renaming} class="min-w-0">
             <button
-              :if={!@renaming}
               type="button"
               id={"title-#{@dom_key}"}
               class="group flex min-w-0 items-center gap-1.5 rounded-md px-1.5 py-1 text-left hover:bg-surface-2"
@@ -2039,10 +2039,11 @@ defmodule LemonWeb.Chat.PaneLive do
               title="Rename session"
             >
               <.icon :if={@meta.pinned} name="pin" class="h-3.5 w-3.5 shrink-0 text-accent-text" />
-              <h2 class="truncate text-[13.5px] font-semibold text-fg">{@title}</h2>
+              <span class="truncate text-[13.5px] font-semibold text-fg">{@title}</span>
               <.icon name="pencil" class="h-3 w-3 shrink-0 text-subtle opacity-0 group-hover:opacity-100" />
             </button>
-            <div :if={!@renaming} class="hidden min-w-0 items-center gap-1.5 sm:flex">
+            </h2>
+            <div :if={!@renaming} class="flex min-w-0 items-center gap-1.5">
               <.status_badge run={@run} approvals={@approvals} dom_key={@dom_key} />
               <.badge :if={@plan.mode == "plan"} tone="plan" icon="list-checks" id={"plan-indicator-#{@dom_key}"}>Plan</.badge>
             </div>
@@ -2052,6 +2053,7 @@ defmodule LemonWeb.Chat.PaneLive do
                 id={"plan-toggle-#{@dom_key}"}
                 class={["btn btn-ghost btn-sm", @plan.mode == "plan" && "text-plan"]}
                 phx-click="toggle-plan"
+                aria-label="Plan mode"
                 aria-pressed={to_string(@plan.mode == "plan")}
                 title="Toggle plan mode (⌘⇧P)"
                 data-requires-connection
@@ -2200,7 +2202,7 @@ defmodule LemonWeb.Chat.PaneLive do
               <span class="relative h-1.5 w-12 overflow-hidden rounded-full bg-surface-2" aria-hidden="true">
                 <span class={["absolute inset-y-0 left-0 rounded-full", gauge_tone(@ctx_pct)]} style={"width: #{min(@ctx_pct || 0, 100)}%"}></span>
               </span>
-              {if @ctx_pct, do: Inspector.format_percent(@ctx_pct), else: "ctx"}
+              {if @ctx_pct, do: Inspector.format_percent(@ctx_pct), else: "Context: unknown"}
             </button>
           </div>
         </header>
@@ -2345,7 +2347,7 @@ defmodule LemonWeb.Chat.PaneLive do
                   <.kbd keys="enter" /> send <.kbd keys="shift+enter" /> newline
                   <span :if={@run.status == :running}>· <.kbd keys="mod+enter" /> steer</span>
                 </span>
-                <p :if={@submit_error} id={"submit-error-#{@dom_key}"} role="alert" class="min-w-0 flex-1 truncate px-1 text-xs text-danger" title={@submit_error}>
+                <p :if={@submit_error} id={"submit-error-#{@dom_key}"} role="alert" class="min-w-0 flex-1 whitespace-normal break-words px-1 text-xs text-danger" title={@submit_error}>
                   {@submit_error}
                 </p>
                 <div :if={!@submit_error} class="flex-1"></div>

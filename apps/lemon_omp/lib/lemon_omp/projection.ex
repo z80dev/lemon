@@ -35,8 +35,11 @@ defmodule LemonOmp.Projection do
             omp_session_id: nil,
             title: nil,
             cwd: nil,
+            worktree: nil,
             model: nil,
+            model_confirmed: false,
             thinking: nil,
+            approval_mode: nil,
             owner: %{kind: :operator},
             status: :starting,
             last_turn: nil,
@@ -64,7 +67,10 @@ defmodule LemonOmp.Projection do
             result: nil,
             error: nil,
             declined_prompts: 0,
+            pending_approvals: [],
+            approvals: %{approved: 0, denied: 0, expired: 0},
             settling: false,
+            redirecting: false,
             exit: nil
 
   @type t :: %__MODULE__{}
@@ -77,13 +83,41 @@ defmodule LemonOmp.Projection do
     %__MODULE__{
       id: Keyword.fetch!(attrs, :id),
       cwd: Keyword.fetch!(attrs, :cwd),
+      worktree: Keyword.get(attrs, :worktree),
       model: Keyword.get(attrs, :model),
       thinking: Keyword.get(attrs, :thinking),
+      approval_mode: Keyword.get(attrs, :approval_mode),
       owner: Keyword.get(attrs, :owner, %{kind: :operator}),
       title: title_from_prompt(Keyword.get(attrs, :prompt)),
       started_at: now,
       updated_at: now
     }
+  end
+
+  @doc "Record a shared Lemon approval awaiting a decision."
+  @spec request_approval(t(), String.t(), String.t(), String.t()) :: t()
+  def request_approval(state, id, tool, details) do
+    approval = %{
+      "id" => id,
+      "tool" => clean(tool, 64),
+      "details" => clean(details, 2_000),
+      "requestedAt" => now_ms()
+    }
+
+    %{state | pending_approvals: state.pending_approvals ++ [approval], updated_at: now_ms()}
+  end
+
+  @doc "Remove a pending approval; abandoned dialogs do not count as decisions."
+  @spec resolve_approval(t(), String.t(), :approved | :denied | :expired | nil) :: t()
+  def resolve_approval(state, id, outcome) do
+    {removed, pending} = Enum.split_with(state.pending_approvals, &(&1["id"] == id))
+
+    approvals =
+      if removed != [] and outcome in [:approved, :denied, :expired],
+        do: Map.update!(state.approvals, outcome, &(&1 + 1)),
+        else: state.approvals
+
+    %{state | pending_approvals: pending, approvals: approvals, updated_at: now_ms()}
   end
 
   @doc "Apply one decoded omp event. Unknown events only touch `updated_at`."
@@ -95,7 +129,15 @@ defmodule LemonOmp.Projection do
   end
 
   defp event(state, "agent_start", _frame),
-    do: %{state | status: :running, activity: "Thinking", error: nil, stream_text: ""}
+    do: %{
+      state
+      | status: :running,
+        activity: "Thinking",
+        error: nil,
+        stream_text: "",
+        settling: false,
+        redirecting: false
+    }
 
   defp event(state, "turn_start", _frame), do: %{state | turns: state.turns + 1}
 
@@ -117,7 +159,15 @@ defmodule LemonOmp.Projection do
   end
 
   defp event(state, "message_end", %{"message" => %{"role" => "assistant"} = message}) do
-    state = state |> add_usage(message["usage"]) |> put_if(:model, message_model(message))
+    state = add_usage(state, message["usage"])
+
+    # An in-flight call can finish with the old model after configure's state
+    # refresh. Its receipt is not the selected model for the next call.
+    state =
+      if state.model_confirmed,
+        do: state,
+        else: put_if(state, :model, message_model(message))
+
     text = message |> message_text() |> clean(nil)
 
     state =
@@ -194,16 +244,17 @@ defmodule LemonOmp.Projection do
 
   defp event(state, "model_changed", frame) do
     case model_label(frame["model"]) do
-      nil -> state
-      model -> %{state | model: model}
+      nil -> %{state | model_confirmed: false}
+      model -> %{state | model: model, model_confirmed: true}
     end
   end
 
   defp event(state, "subagent_lifecycle", %{"payload" => payload}) when is_map(payload),
     do: upsert_subagent(state, payload, clean(payload["status"], 32))
 
-  defp event(state, "subagent_progress", %{"payload" => payload}) when is_map(payload),
-    do: upsert_subagent(state, payload, nil)
+  defp event(state, "subagent_progress", %{"payload" => %{"progress" => progress} = payload})
+       when is_map(progress),
+       do: upsert_subagent(state, payload, clean(progress["status"], 32))
 
   defp event(state, "agent_end", frame) do
     # The turn's verdict arrives next in `prompt_result` (or `session_settled`);
@@ -248,11 +299,11 @@ defmodule LemonOmp.Projection do
 
     %{
       state
-      | status: :idle,
-        activity: nil,
+      | status: if(state.redirecting, do: :running, else: :idle),
+        activity: if(state.redirecting, do: "Redirecting turn"),
         active_tools: [],
         stream_text: "",
-        settling: false,
+        settling: state.redirecting,
         result: result
     }
   end
@@ -262,8 +313,9 @@ defmodule LemonOmp.Projection do
   def apply_state(state, data) when is_map(data) do
     state
     |> put_if(:omp_session_id, clean(data["sessionId"], 128))
-    |> put_if(:model, model_label(data["model"]))
-    |> put_if(:thinking, clean(data["thinkingLevel"], 16))
+    |> Map.put(:model, model_label(data["model"]))
+    |> Map.put(:model_confirmed, true)
+    |> Map.put(:thinking, blank_to_nil(clean(data["thinkingLevel"], 16)))
     |> put_if(:title, clean(data["sessionName"], @max_title))
     |> put_if(:context_percent, percent(get_in(data, ["contextUsage", "percent"])))
     |> then(fn state ->
@@ -315,6 +367,7 @@ defmodule LemonOmp.Projection do
         active_tools: [],
         stream_text: "",
         settling: false,
+        redirecting: false,
         ended_at: now_ms(),
         updated_at: now_ms(),
         error: error,
@@ -330,12 +383,18 @@ defmodule LemonOmp.Projection do
       "ompSessionId" => state.omp_session_id,
       "title" => state.title,
       "cwd" => state.cwd,
+      "worktree" => state.worktree,
       "model" => state.model,
       "thinking" => state.thinking,
+      "approvalMode" => state.approval_mode,
       "owner" => owner_wire(state.owner),
       "status" => Atom.to_string(state.status),
       "lastTurn" => state.last_turn && Atom.to_string(state.last_turn),
-      "activity" => state.activity,
+      "activity" =>
+        case state.pending_approvals do
+          [approval | _] -> "Waiting for approval: #{approval["tool"]}"
+          [] -> state.activity
+        end,
       "startedAt" => state.started_at,
       "updatedAt" => state.updated_at,
       "endedAt" => state.ended_at,
@@ -372,7 +431,19 @@ defmodule LemonOmp.Projection do
             "id" => sub.id,
             "agent" => sub.agent,
             "status" => sub.status,
-            "description" => sub.description
+            "description" => sub.description,
+            "index" => sub.index,
+            "parentToolCallId" => sub.parent_tool_call_id,
+            "activity" => sub.activity,
+            "toolCalls" => sub.tool_calls,
+            "recentTools" => sub.recent_tools,
+            "usage" => sub.usage,
+            "model" => sub.model,
+            "startedAt" => sub.started_at,
+            "endedAt" => sub.ended_at,
+            "durationMs" => sub.duration_ms,
+            "lastText" => sub.last_text,
+            "error" => sub.error
           }
         end),
       "usage" => %{
@@ -388,8 +459,33 @@ defmodule LemonOmp.Projection do
       "result" => state.result,
       "error" => state.error,
       "declinedPrompts" => state.declined_prompts,
+      "pendingApprovals" => state.pending_approvals,
+      "approvals" => %{
+        "approved" => state.approvals.approved,
+        "denied" => state.approvals.denied,
+        "expired" => state.approvals.expired
+      },
       "exit" => state.exit && %{"code" => state.exit.code, "reason" => to_s(state.exit.reason)}
     }
+  end
+
+  @doc "Sum usage across wire snapshots, without changing any session totals."
+  @spec combined_usage([map()]) :: map()
+  def combined_usage(wires) do
+    zero = %{
+      "input" => 0,
+      "output" => 0,
+      "cacheRead" => 0,
+      "cacheWrite" => 0,
+      "totalTokens" => 0,
+      "cost" => 0.0
+    }
+
+    Enum.reduce(wires, zero, fn wire, total ->
+      Map.new(total, fn {key, value} ->
+        {key, value + (get_in(wire, ["usage", key]) || 0)}
+      end)
+    end)
   end
 
   @doc """
@@ -408,6 +504,7 @@ defmodule LemonOmp.Projection do
           if(wire["ompSessionId"], do: " (omp #{wire["ompSessionId"]})", else: ""),
         "Title: #{wire["title"] || "untitled"}",
         "Workspace: #{wire["cwd"]}",
+        worktree_summary(wire["worktree"]),
         "Status: #{status_line(wire)}",
         wire["activity"] && "Current activity: #{wire["activity"]}",
         wire["model"] && "Model: #{wire["model"]}",
@@ -419,6 +516,7 @@ defmodule LemonOmp.Projection do
         recent_tools_line(wire["recentTools"] || []),
         todos_block(todos),
         subagents_line(wire["subagents"] || []),
+        pending_approvals_line(wire["pendingApprovals"] || []),
         wire["declinedPrompts"] > 0 &&
           "Declined #{wire["declinedPrompts"]} interactive omp prompt(s) (Lemon runs omp headless).",
         wire["error"] && "Error: #{wire["error"]}",
@@ -427,6 +525,30 @@ defmodule LemonOmp.Projection do
       |> Enum.filter(&is_binary/1)
 
     Enum.join(lines, "\n")
+  end
+
+  @doc "Explain where isolated work lives and how to integrate it."
+  def worktree_summary(nil), do: nil
+
+  def worktree_summary(%{"kept" => false} = worktree) do
+    "Isolated worktree: #{worktree["path"]} (base #{worktree["base"]})." <>
+      " Removed with branch #{worktree["branch"]} because it had no changes or new commits."
+  end
+
+  def worktree_summary(worktree) do
+    disposition =
+      case worktree["kept"] do
+        true ->
+          " Kept (#{worktree["dirty"] || "unknown"} dirty paths, #{worktree["commits"] || "unknown"} commits)."
+
+        nil ->
+          ""
+      end
+
+    "Isolated worktree: #{worktree["path"]} (base #{worktree["base"]})." <>
+      disposition <>
+      " In #{worktree["repo"]}, git merge #{worktree["branch"]} or cherry-pick its commits." <>
+      " omp may leave changes uncommitted; inspect and commit them in the worktree first."
   end
 
   defp status_line(%{"status" => "idle", "lastTurn" => turn}) when is_binary(turn),
@@ -448,6 +570,14 @@ defmodule LemonOmp.Projection do
     do: ", context #{:erlang.float_to_binary(percent / 1, decimals: 1)}%"
 
   defp context_suffix(_percent), do: ""
+
+  defp pending_approvals_line([]), do: nil
+
+  defp pending_approvals_line(approvals) do
+    "Pending approvals: " <>
+      Enum.map_join(approvals, ", ", &"#{&1["tool"]} (#{&1["id"]})") <>
+      ". Resolve through Lemon's approval prompts/channel buttons or operator exec.approval.resolve."
+  end
 
   defp active_tools_line([]), do: nil
 
@@ -472,12 +602,22 @@ defmodule LemonOmp.Projection do
       Enum.map_join(todos, "\n", fn todo -> "  [#{todo["status"]}] #{todo["content"]}" end)
   end
 
-  defp subagents_line([]), do: nil
+  @doc "Compact per-subagent lines for status and streamed tool progress."
+  def subagents_summary([]), do: nil
 
-  defp subagents_line(subs) do
+  def subagents_summary(subs) do
     "Subagents: " <>
-      Enum.map_join(subs, ", ", fn sub -> "#{sub["agent"] || sub["id"]} (#{sub["status"]})" end)
+      Enum.map_join(subs, "\n  ", fn sub ->
+        detail = sub["activity"] || sub["error"] || sub["lastText"]
+        line = "#{sub["agent"] || sub["id"]} (#{sub["status"]})"
+        if detail, do: line <> " — " <> one_line(detail, 160), else: line
+      end)
   end
+
+  defp subagents_line(subs), do: subagents_summary(subs)
+
+  defp one_line(text, max),
+    do: text |> String.replace(~r/\s+/u, " ") |> clean(max)
 
   defp text_block(%{"status" => "running", "lastText" => text}) when is_binary(text),
     do: "Latest output:\n" <> text
@@ -590,11 +730,15 @@ defmodule LemonOmp.Projection do
   end
 
   defp upsert_subagent(state, payload, status) do
+    progress = if is_map(payload["progress"]), do: payload["progress"], else: %{}
+    id = blank_to_nil(clean(progress["id"] || payload["id"], 128))
+    index = payload["index"]
+
     key =
-      case {payload["index"], payload["id"]} do
-        {index, _} when is_integer(index) -> {:index, index}
-        {_, id} when is_binary(id) -> {:id, id}
-        _ -> nil
+      cond do
+        id -> {:id, id}
+        is_integer(index) and index >= 0 -> {:index, index}
+        true -> nil
       end
 
     cond do
@@ -611,22 +755,158 @@ defmodule LemonOmp.Projection do
             agent: nil,
             status: "running",
             description: nil,
+            index: nil,
+            parent_tool_call_id: nil,
+            activity: nil,
+            tool_calls: nil,
+            recent_tools: [],
+            usage: nil,
+            model: nil,
+            started_at: now_ms(),
+            ended_at: nil,
+            duration_ms: nil,
+            last_text: nil,
+            error: nil,
             order: map_size(state.subagents)
           })
 
+        status = normalize_subagent_status(status) || existing.status
+        terminal? = status in ["completed", "failed", "aborted"]
+        tool = clean(progress["currentTool"], 64)
+        intent = clean(progress["lastIntent"], @max_intent)
+
         updated = %{
           existing
-          | id: blank_to_nil(clean(payload["id"], 128)) || existing.id,
+          | id: id || existing.id,
+            index: if(is_integer(index) and index >= 0, do: index, else: existing.index),
+            parent_tool_call_id:
+              blank_to_nil(clean(payload["parentToolCallId"], 128)) ||
+                existing.parent_tool_call_id,
             agent: blank_to_nil(clean(payload["agent"], 64)) || existing.agent,
-            status: normalize_subagent_status(status) || existing.status,
+            status: status,
             description:
-              blank_to_nil(clean(payload["description"] || payload["task"], @max_intent)) ||
-                existing.description
+              blank_to_nil(
+                clean(
+                  progress["description"] || payload["description"] || payload["task"],
+                  @max_intent
+                )
+              ) || existing.description,
+            activity:
+              cond do
+                terminal? -> nil
+                tool != "" -> tool_activity(tool, intent)
+                intent != "" -> intent
+                progress != %{} -> nil
+                true -> existing.activity
+              end,
+            tool_calls: optional_int(progress["toolCount"]) || existing.tool_calls,
+            recent_tools: subagent_tools(progress["recentTools"], existing.recent_tools),
+            usage: subagent_usage(progress, existing.usage),
+            model:
+              model_label(
+                progress["resolvedModelIdentity"] || progress["resolvedModel"] ||
+                  progress["modelOverride"]
+              ) || existing.model,
+            ended_at: if(terminal?, do: existing.ended_at || now_ms(), else: nil),
+            duration_ms: optional_int(progress["durationMs"]) || existing.duration_ms,
+            last_text: subagent_output(progress["recentOutput"]) || existing.last_text,
+            error:
+              if progress == %{} do
+                existing.error
+              else
+                subagent_error(progress["retryFailure"]) || subagent_error(progress["retryState"])
+              end
         }
 
         %{state | subagents: Map.put(state.subagents, key, updated)}
     end
   end
+
+  defp subagent_error(%{"errorMessage" => message}),
+    do: blank_to_nil(clean(message, @max_error))
+
+  defp subagent_error(_failure), do: nil
+
+  defp subagent_tools(tools, _existing) when is_list(tools) do
+    tools
+    |> Enum.take(@max_recent_tools)
+    |> Enum.flat_map(fn
+      %{"tool" => tool} = entry ->
+        [%{"name" => clean(tool, 64), "endedAt" => optional_int(entry["endMs"])}]
+
+      _ ->
+        []
+    end)
+  end
+
+  defp subagent_tools(_tools, existing), do: existing
+
+  defp subagent_usage(progress, existing) do
+    # omp's tokens excludes cache reads; do not label this as totalTokens.
+    values =
+      %{
+        "tokens" => optional_int(progress["tokens"]),
+        "cost" => optional_number(progress["cost"]),
+        "contextTokens" => optional_int(progress["contextTokens"]),
+        "contextWindow" => optional_int(progress["contextWindow"])
+      }
+      |> Map.reject(fn {_key, value} -> is_nil(value) end)
+
+    if values == %{}, do: existing, else: Map.merge(existing || %{}, values)
+  end
+
+  defp subagent_output(lines) when is_list(lines) do
+    # omp sends up to eight recent lines, newest first.
+    lines
+    |> Enum.take(8)
+    |> Enum.reverse()
+    |> Enum.map(&clean(&1, 500))
+    |> Enum.join("\n")
+    |> clean(500)
+    |> blank_to_nil()
+  end
+
+  defp subagent_output(_lines), do: nil
+
+  @doc "Bound and sanitize a get_subagent_messages response, without exposing session paths."
+  @spec subagent_transcript(term(), pos_integer()) :: map()
+  def subagent_transcript(data, limit) do
+    data = if is_map(data), do: data, else: %{}
+    limit = min(max(limit, 1), 50)
+    messages = if is_list(data["messages"]), do: data["messages"], else: []
+
+    tail =
+      messages
+      |> Enum.take(-limit)
+      |> Enum.flat_map(fn
+        %{} = message ->
+          text =
+            case message["content"] do
+              text when is_binary(text) -> clean(text, 2_000)
+              _ -> message |> message_text() |> clean(2_000)
+            end
+
+          item = %{"role" => clean(message["role"], 32), "text" => text}
+          tool = blank_to_nil(clean(message["toolName"], 64))
+          [if(tool, do: Map.put(item, "toolName", tool), else: item)]
+
+        _ ->
+          []
+      end)
+
+    %{
+      "messages" => tail,
+      "fromByte" => optional_int(data["fromByte"]),
+      "nextByte" => optional_int(data["nextByte"]),
+      "reset" => data["reset"] == true
+    }
+  end
+
+  defp optional_int(value) when is_integer(value) and value >= 0, do: value
+  defp optional_int(_value), do: nil
+
+  defp optional_number(value) when is_number(value) and value >= 0, do: value
+  defp optional_number(_value), do: nil
 
   defp normalize_subagent_status("started"), do: "running"
   defp normalize_subagent_status(""), do: nil

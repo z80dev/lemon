@@ -49,6 +49,30 @@ defmodule LemonOmp.Env do
       apps: [:lemon_omp]
     },
     %{
+      name: :omp_approvals,
+      env_var: "LEMON_OMP_APPROVALS",
+      aliases: [],
+      type: :string,
+      default: "bridge",
+      doc: "Tool approval prompts: bridge to Lemon approvals (default), or decline.",
+      secret?: false,
+      required?: false,
+      area: :omp,
+      apps: [:lemon_omp]
+    },
+    %{
+      name: :omp_approval_timeout_ms,
+      env_var: "LEMON_OMP_APPROVAL_TIMEOUT_MS",
+      aliases: [],
+      type: :integer,
+      default: 600_000,
+      doc: "Maximum wait for an omp tool approval, capped by the omp dialog timeout.",
+      secret?: false,
+      required?: false,
+      area: :omp,
+      apps: [:lemon_omp]
+    },
+    %{
       name: :omp_agent_dir,
       env_var: "PI_CODING_AGENT_DIR",
       aliases: [],

@@ -123,7 +123,7 @@ struct ExportSettingsView: View {
     @State private var consentConversation = ""
     var body: some View {
         Form {
-            AdminStatus(control: control, store: store)
+            AdminStatus(control: control, store: store, refresh: { await control.perform { try await load() } })
             Section("Your content export consent") {
                 Text("Content consent is off by default. Export requires your workspace content policy and explicit owner consent. Revoking stops new and undelivered queued content; already acknowledged collector copies and operator backups cannot be erased by this switch.")
                 Picker("Conversation", selection: $consentConversation) { Text("Choose authorized conversation").tag(""); ForEach(conversations) { Text($0.name.isEmpty ? $0.id : $0.name).tag($0.id) } }
@@ -163,7 +163,7 @@ struct ExportSettingsView: View {
                 Section("Authoritative export outcomes") {
                     ForEach(records) { record in
                         Text("\(record.kind) · \(record.state) · \(adminDate(Double(record.fromAtMs))) to \(adminDate(Double(record.toAtMs)))")
-                        if let error = record.error { Text(error).foregroundStyle(.red).textSelection(.enabled) }
+                        if let error = record.error { Text(error).foregroundStyle(LB.danger).textSelection(.enabled) }
                         Text("Last delivered cursor: \(record.lastDeliveredCursor ?? "none")")
                         Button("Refresh this export") { Task { await control.perform {
                             let value = try await store.read("/exports/\(adminPath(record.id))", as: ExportRecord.self)
@@ -223,7 +223,7 @@ struct ContentConsentSettingsView: View {
                 guard let consent else { return }
                 self.consent = try await store.mutate("PUT", "/conversations/\(adminPath(conversationID))/export-consent", body: ["revision": .number(Double(consent.revision)), "enabled": .bool(enabled)], as: ContentExportConsent.self)
             }.disabled(consent == nil)
-            if let error = control.error { Text(error).foregroundStyle(.red).textSelection(.enabled) }
+            if let error = control.error { Text(error).foregroundStyle(LB.danger).textSelection(.enabled) }
         }.task { await control.perform { let value = try await store.read("/conversations/\(adminPath(conversationID))/export-consent", as: ContentExportConsent.self); consent = value; enabled = value.enabled } }
     }
 }

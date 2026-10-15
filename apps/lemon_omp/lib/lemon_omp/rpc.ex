@@ -86,9 +86,9 @@ defmodule LemonOmp.Rpc do
   The reply a headless host owes a blocking extension UI request, or `nil`
   for fire-and-forget methods (`notify`, `setStatus`, `setWidget`, ...).
 
-  Lemon has no surface to answer omp's dialogs, so it declines them: confirms
-  answer `false` and every other blocking method is cancelled. Declining is
-  the fail-closed answer — omp proceeds as if the user said no.
+  Non-approval dialogs have no answer surface: confirms answer `false` and
+  every other blocking method is cancelled. `LemonOmp.Session` bridges tool
+  approval selects separately before falling back to this fail-closed reply.
   """
   @spec decline_ui_request(String.t(), String.t()) :: map() | nil
   def decline_ui_request(id, "confirm"),

@@ -64,7 +64,7 @@ export function fixture(store = entityStore(), principal: Principal = { kind: 'u
       consumeReauth: (userId, token) => (access ??= createAccessService(services)).consumeReauth(userId, token),
     },
     mutations: { execute: async (_context, operation) => operation(), checkRevision(resource, revision) { if (resource.revision !== revision) throw new IntegrationError('revision_conflict', 'Changed.'); }, preview: denied, confirm: denied, digest: value => createHash('sha256').update(JSON.stringify(value)).digest('base64url') },
-    lemon: { connected: true, methods: [], call: async () => denied(), onEvent: () => () => undefined, onConnected: () => () => undefined, start() {}, close() {} },
+    lemon: { controller: { url: 'ws://127.0.0.1:4040/ws', state: 'connected', connectedAtMs: 1, lastDisconnectedAtMs: null, lastError: null, nextRetryAtMs: null, methodCount: 0 }, reconnect() {}, connected: true, methods: [], call: async () => denied(), onEvent: () => () => undefined, onConnected: () => () => undefined, start() {}, close() {} },
     runtime: {
       async submit(who, conversation, selectedBot, message) {
         submissions.push({ principal: who, conversationId: conversation.id, message });

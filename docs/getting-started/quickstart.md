@@ -5,9 +5,9 @@ larger work. You need a supported macOS or Linux machine, an interactive termina
 `curl`, `tar`, `python3`, and a model-provider account. Prebuilt releases include
 Elixir and the terminal client; model requests use your provider's account.
 
-> **Release availability:** the published `2026.08.1` release predates the current
-> Tern and agent-workflow features below. Until a newer release is published, use
-> [source development](../install.md#source-development) for those features.
+> **Release availability:** install the latest stable release for this guide.
+> Preview releases are also available on the
+> [releases page](https://github.com/z80dev/lemon/releases).
 
 ## 1. Install and connect ChatGPT
 
@@ -107,12 +107,13 @@ lemon web --no-open
 
 Open the printed local URL. Sessions show stored conversations; **Automation**
 shows goals and kanban dispatch with status, progress, results and run links.
-See the [web guide](../user-guide/web.md#manage-automated-coding-work).
+See the [web guide](../user-guide/web.md#automation-and-blueprints).
 
-Management pages are opt-in. Follow [management access](../user-guide/web.md#management-access)
-to set `LEMON_WEB_ACCESS_TOKEN` before starting the daemon; use `lemon restart`
-if it is already running. Without a configured token, management pages return
-503 rather than exposing your work records. Keep the token private.
+The browser uses the control-plane operator token
+(`LEMON_CONTROL_PLANE_OPERATOR_TOKEN`), which the launcher manages automatically.
+Follow [sign in](../user-guide/web.md#sign-in); without a configured token, the
+UI returns 503 unless explicit tokenless loopback compatibility is enabled.
+Keep the token private.
 
 ## 4. Grow the workflow, not the setup ceremony
 
@@ -124,7 +125,7 @@ if it is already running. Without a configured token, management pages return
   Code (`.claude/agents/`) agent definitions are picked up too;
   see [subagents and commands](https://github.com/z80dev/lemon/blob/main/apps/coding_agent/README.md#subagents-and-commands).
 - **MCP tools:** inspect configured servers with `lemon mcp list`. Then follow
-  the [MCP guide](../skills.md#manage-named-mcp-servers) to add and test a server before relying
+  the [Skills guide: managing MCP servers](../skills.md#manage-named-mcp-servers) to add and test a server before relying
   on its tools. Server processes can execute code; configure only servers you
   trust.
 - **Durable goals and kanban:** ask the agent to create a repository goal and a
@@ -135,7 +136,7 @@ if it is already running. Without a configured token, management pages return
   the records in the dashboard before starting a bounded goal loop or board
   dispatch. Goal loops edit their target directory directly; Git-backed kanban
   tasks use separate worktrees whose changes need review before merging. See
-  [automation controls](../user-guide/web.md#manage-automated-coding-work) and the
+  [automation controls](../user-guide/web.md#automation-and-blueprints) and the
   [coding automation guide](../user-guide/reminders-and-heartbeats.md#coding-goals-and-scheduled-coding-jobs).
 
 ## If the first turn fails

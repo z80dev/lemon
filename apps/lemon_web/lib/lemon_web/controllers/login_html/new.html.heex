@@ -30,7 +30,7 @@
         >
           <input type="hidden" name="_csrf_token" value={get_csrf_token()} />
           <input type="hidden" name="return_to" value={@return_to} />
-          <.callout :if={error_message(@error)} tone="danger" id="login-error">
+          <.callout :if={error_message(@error)} tone="danger" id="login-error" role="alert">
             {error_message(@error)}
           </.callout>
           <div>
@@ -45,7 +45,7 @@
               spellcheck="false"
               required
               autofocus
-              aria-describedby="token-hint"
+              aria-describedby={if error_message(@error), do: "token-hint login-error", else: "token-hint"}
               aria-invalid={@error == :invalid_token && "true"}
             />
             <p id="token-hint" class="field-hint">

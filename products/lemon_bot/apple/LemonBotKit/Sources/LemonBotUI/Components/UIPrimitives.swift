@@ -67,46 +67,68 @@ private enum UIResourceError: LocalizedError {
     var busy: Bool { running || uncertain }
     var inFlight: Bool { running }
     var error: String?
+    var errorNonce: String?
     var receipt: String?
     func perform(_ action: () async throws -> Void) async {
         guard !running else { return }
         running = true
-        error = nil
+        error = nil; errorNonce = nil
         defer { running = false }
         do { try await action() } catch {
             // A view task cancelled by teardown or a reload is not a user-facing failure.
             if error is CancellationError || (error as? URLError)?.code == .cancelled { return }
-            self.error = error.localizedDescription
+            self.error = humanErrorText(error)
             if case ClientError.outcomeUnknown(let nonce) = error {
                 uncertain = true
                 uncertainNonce = nonce
+                errorNonce = nonce
             } else if case ClientError.unresolvedMutation(let intent) = error {
                 uncertain = true
                 uncertainNonce = intent.clientNonce
                 uncertainRunID = intent.runID
+                errorNonce = intent.clientNonce
             } else if let backend = error as? BackendError {
                 let runIDs = backend.failure.details?["runIds"]?.arrayValue?.compactMap(\.stringValue) ?? []
                 let entryIDs = backend.failure.details?["entryIds"]?.arrayValue?.compactMap(\.stringValue) ?? []
-                if !runIDs.isEmpty { self.error = (self.error ?? "") + "\nExact runs: " + runIDs.joined(separator: ", ") }
-                if !entryIDs.isEmpty { self.error = (self.error ?? "") + "\nRecorded entries: " + entryIDs.joined(separator: ", ") }
                 if backend.failure.code == "outcome_unknown" || (backend.failure.details?["clientNonce"]?.stringValue != nil && !runIDs.isEmpty && !entryIDs.isEmpty) {
                     uncertain = true
                     uncertainNonce = backend.failure.details?["clientNonce"]?.stringValue
+                    errorNonce = uncertainNonce
                     uncertainRunID = backend.failure.details?["runId"]?.stringValue ?? backend.failure.details?["runIds"]?.arrayValue?.first?.stringValue
                 }
             }
         }
     }
+    func resolveUncertainty(_ nonce: String) {
+        if uncertainNonce == nonce { uncertain = false; uncertainNonce = nil; uncertainRunID = nil }
+        if errorNonce == nonce { error = nil; errorNonce = nil }
+    }
 }
 
 struct ActionErrorView: View {
     let message: String?
+    private static let diagnosticMarkers = ["\nDetails: ", "\nRequest: ", "\nExact runs: ", "\nRecorded entries: "]
+    private func detailsStart(in text: String) -> String.Index? {
+        var first: String.Index?
+        for marker in Self.diagnosticMarkers {
+            if let index = text.range(of: marker)?.lowerBound, first == nil || index < first! { first = index }
+        }
+        return first
+    }
     var body: some View {
         if let message {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Image(systemName: "exclamationmark.circle.fill").foregroundStyle(LB.danger)
-                Text(message).foregroundStyle(LB.ink).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
-                Button("Copy") { copyText(message) }.buttonStyle(.pill(.quiet, compact: true)).accessibilityLabel("Copy error")
+            let diagnosticStart = detailsStart(in: message)
+            VStack(alignment: .leading, spacing: 8) {
+                Label(diagnosticStart.map { String(message[..<$0]) } ?? message, systemImage: "exclamationmark.circle.fill")
+                    .foregroundStyle(LB.danger).textSelection(.enabled)
+                if let diagnosticStart {
+                    DisclosureGroup("Details") {
+                        Text(String(message[diagnosticStart...]).trimmingCharacters(in: .whitespacesAndNewlines)).textSelection(.enabled)
+                        Button("Copy") { copyText(message) }.buttonStyle(.pill(.quiet, compact: true))
+                    }
+                } else {
+                    Button("Copy") { copyText(message) }.buttonStyle(.pill(.quiet, compact: true))
+                }
             }.font(LBFont.rowSubtitle).padding(.horizontal, 12).padding(.vertical, 8)
                 .background(RoundedRectangle(cornerRadius: LBMetric.rowRadius, style: .continuous).fill(LB.danger.opacity(0.09)))
                 .accessibilityElement(children: .contain)
@@ -155,7 +177,7 @@ struct ScopeConfirmationView: View {
     var body: some View {
         NavigationStack {
             Form {
-                SwiftUI.Section("Review exact effects") {
+                SwiftUI.Section("Review what will change") {
                     ForEach(Array(confirmation.effects.enumerated()), id: \.offset) { _, effect in Text(effect) }
                     ForEach(Array(confirmation.affected.enumerated()), id: \.offset) { _, effect in
                         VStack(alignment: .leading) {
@@ -166,13 +188,16 @@ struct ScopeConfirmationView: View {
                     }
                 }
                 SwiftUI.Section("Confirm \(confirmation.confirmName)") {
-                    Text("Type the exact name. This preview expires at \(timestamp(Double(confirmation.expiresAtMs)).formatted()).")
+                    Text("Type \(confirmation.confirmName) to confirm. This preview expires \(timestamp(Double(confirmation.expiresAtMs)), style: .relative).")
                     TextField(confirmation.confirmName, text: $name)
                     Text("No operation is queued while offline. Host files, backups and provider sessions remain unless this preview explicitly says otherwise.").font(.caption)
                 }
                 ActionErrorView(message: action.error)
-                if action.uncertain { Text("Outcome not confirmed. This intent is fenced; inspect the exact target before another operation. No retry is automatic.").foregroundStyle(.orange) }
+                if action.uncertain { Text("We couldn't confirm this finished. Close this sheet and check the item before trying again. Nothing was resent automatically.").foregroundStyle(LB.warning) }
                 TimelineView(.periodic(from: .now, by: 1)) { context in
+                if Double(confirmation.expiresAtMs) <= context.date.timeIntervalSince1970 * 1000 {
+                    Text("This preview expired. Close this sheet and preview again.").foregroundStyle(LB.warning)
+                }
                 Button(title, role: .destructive) {
                     Task { await action.perform {
                         try await onConfirm(["revision": .number(Double(confirmation.revision)), "confirmationToken": .string(confirmation.confirmationToken), "confirmName": .string(name)])

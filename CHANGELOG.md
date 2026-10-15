@@ -14,6 +14,77 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   obsolete wrappers, unused renderer/coalescer behaviours and unused translation
   backends are removed without changing active tool or simulation behavior.
 
+### Lemon Bot
+
+- Apple clients simplify Bot lifecycle, account deletion, apps, notifications and voice copy, use workspace/machine terminology, and apply shared semantic color and typography tokens.
+- Apple clients recover from failed Bot loads and terminal closes, explain unavailable actions, preserve Preferences across pane switches, and confirm sign-out.
+- Web Settings adds Lemon instance details, live service/link/runtime measurements, owner-confirmed lifecycle controls and operation output, with direct recovery and About links.
+- Apple clients use plain-language errors with copyable details, clearer iPhone pairing labels, and status checks for unconfirmed actions without automatically resending them.
+- Web clients explain service, network, session and Lemon-link failures with live retry timing, real connection restart and owner recovery actions instead of silent sign-out or stuck disconnected screens.
+- Apple Settings adds a shared Lemon instance pane with live backend/controller/Lemon measurements, owner-confirmed start/stop/restart, operation polling and output details, plus direct recovery/About links.
+- Apple clients explain backend, network, sign-in and Lemon-link failures with live retry timing, service discovery and shared recovery controls; sandboxed Macs offer copyable local-start commands rather than launching a daemon.
+- Name missing required Lemon Bot startup settings without a stack dump, keep
+  operator configuration details in server diagnostics rather than owner errors,
+  and clarify backend/SDK setup and contributor documentation.
+- Add truthful attached-instance status, controller reconnect (including rejected
+  credentials), and opt-in owner-only local runtime start/stop/restart with
+  bounded operation receipts. Publish TypeScript SDK helpers, Swift Codable
+  mirrors and a shared backend-produced fixture.
+
+### Added
+
+- Live omp workers can change model and/or thinking without restarting through
+  owner-scoped `LemonOmp.configure/3` and the chat tool's `configure` action.
+  Changes apply from the next model call, including during running turns;
+  correlated acknowledgements, refreshed snapshots and partial-application
+  errors preserve truthful outcomes without rollback or automatic retries.
+- omp discovery includes sessions in kept managed Git worktrees, and resume
+  automatically reuses a validated worktree in the caller's repository with
+  conservative cleanup ownership restored.
+
+- omp task subagents expose bounded activity, tool counts, tokens/cost, model,
+  duration, final output and retry errors in status and streamed progress.
+  Owner-scoped `LemonOmp.subagent/3` and the `omp` tool's `subagent` action read
+  sanitized transcript tails from live parent sessions.
+- omp's chat tool and Elixir API can redirect a running turn atomically with
+  `abort_and_prompt`. Existing waits follow the replacement turn; asynchronous
+  prompt failures are reported without acknowledging the same command twice.
+- Explicit omp crash continuation (`resume` with `continue: true`) through a
+  state-review prompt, plus a bounded read-only discovery `interrupted` hint.
+  This does not revive subagents; omp's native `--restore` is interactive-only.
+- omp workers support opt-in per-worker Git worktree isolation through `isolate`
+  on starts and batch tasks, with managed branches, merge instructions, and
+  bounded cleanup that preserves uncommitted or committed work.
+- Cached omp model catalog through `LemonOmp.models/1` and the `omp` tool's
+  `models` action, with cheap/free filtering, pricing and upstream availability warnings.
+- Computer use: with `LEMON_COMPUTER_USE_ENABLED=true`, Lemon agents get
+  `cua_js`/`cua_js_reset` to operate native apps through the ChatGPT desktop
+  app's computer-use runtime via LCU. Per-app approval requests become Lemon
+  approvals (once or for the session); Lemon's own apps are never approved.
+  See [Computer use](docs/tools/computer-use.md).
+- Computer use can drive Chrome tabs (`LEMON_COMPUTER_USE_CHROME=true`, LCU's
+  `--chrome` surface through the official ChatGPT extension). Website access
+  requests become Lemon approvals for the origin; Lemon's own local web and
+  control-plane origins are never approved.
+- Computer use also never approves the Lemon Bot web client (its
+  `LEMON_BOT_PUBLIC_URL` origin and development port) or origins listed in
+  `LEMON_COMPUTER_USE_DECLINED_ORIGINS`.
+- omp sessions can select an approval mode and bridge tool approval prompts to
+  Lemon's conversation/channel approval UI or operator `exec.approval.resolve`.
+  Snapshots and wait progress expose pending approvals and decision counts;
+  cancelled dialogs and ended sessions clean up pending prompts.
+- MCP clients accept an optional asynchronous `notification_handler` callback for
+  server notifications, including tool, resource and prompt list changes.
+- Expanded the LSP registry from six to 42 primary language servers, with
+  installation hints, unique extension ownership, and case-insensitive
+  `LemonLsp.Servers.language_id/1` lookup.
+- Parallel omp workers: the `omp` tool can start a validated batch concurrently
+  with `start_many`, gather all or any worker with `wait` and `ids`, stream
+  throttled combined progress, and report per-task failures and total usage.
+  The Elixir facade exposes `start_many/2` and `wait_many/3` with owner scoping.
+- Opt-in real omp lifecycle smoke using a free model, covering tool writes,
+  follow-ups, cancellation, process cleanup, discovery and resume.
+
 ### Fixed
 
 - Native config-watcher crashes fall back to polling instead of shutting down
@@ -35,6 +106,26 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   encrypted-store, journal and master-key failures. Failed reads refuse the
   command without deleting logins or clearing the selected OAuth authority;
   logout also reports deletion failures without changing provider settings.
+- Keep omp worktree cleanup ownership until the Session monitor and pending
+  cleanup finish, even when ended-session cache eviction runs after an early
+  terminal snapshot.
+
+- Lemon Bot for iPhone keeps the composer and Send button above the keyboard,
+  follows the latest message as the viewport resizes, and uses Return for a newline
+  instead of submitting and dismissing the keyboard; transcript dragging dismisses it interactively.
+- Operator-owned omp approvals bind session-scoped grants to one omp invocation,
+  preventing a grant from approving identical actions in another operator session.
+- New memory backdoor/exfiltration screening no longer invalidates retained facts
+  or prevents editing/deleting them; new text and patched results remain screened.
+- Correct stale install, quickstart, browser authentication/routes, and TUI
+  instructions, provider-model examples, and documentation navigation.
+- Durable preference/project memory supports exact-first unique-substring
+  patch/delete and rejects persistent backdoor/exfiltration instructions.
+- Web chat keeps run status visible on mobile, distinguishes unavailable checks,
+  improves recovery guidance, and makes login and navigation more accessible.
+- Honcho tool schemas now register only when the integration is configured and
+  enabled, matching its memory provider and context contributor instead of adding
+  five inactive tools to prompts on unconfigured hosts.
 - Native dynamic-preset resolution binds discovered context, output limits,
   reasoning and input capabilities to the effective endpoint, headers and
   selected credential. Default/environment cached metadata no longer bleeds into
@@ -46,6 +137,11 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 - Native provider routing preserves credential-rejection sentinels instead of
   clearing them, so Codex cannot fall back to ambient tokens without a valid
   `auth_source`.
+
+### Removed
+
+- The broken `bin/lemon-dev` launcher, which passed flags the TUI no longer
+  accepts. Use `./bin/lemon` (source runtime plus TUI) or `./bin/lemon-tui`.
 
 ---
 

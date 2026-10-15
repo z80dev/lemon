@@ -1,9 +1,9 @@
 # Lemon Bot backend
 
-A separate Bun HTTP/WebSocket owner-assistant service attached to an existing Lemon controller. Each named Bot runs for the person who owns it, on that person's execution host. Groups coordinate 2–6 of that owner's Bots; workspace roles never grant another person's live Bot access. There are no Team Bots, managers, publication grants or cross-user connector lending. The product is not Lemon Web, the TUI, a second swarm, or a second agent scheduler. Wire resources and authorization are defined in [the canonical API](../contracts/api.md), [protocol](../contracts/protocol.ts), and [cards](../contracts/cards.md).
+A Bun HTTP/WebSocket service for personally owned assistants attached to an existing Lemon controller. Each named Bot runs for its owner on that person’s machine. Groups coordinate 2–6 of the same owner’s Bots. See the [API](../contracts/api.md), [protocol](../contracts/protocol.ts), and [cards](../contracts/cards.md) for wire resources and authorization.
 
 ## Run
-### Verified standalone installation
+### Standalone installation
 
 The canonical release installer supports `--profile lemon_bot` on Linux x86_64,
 Linux arm64 and macOS arm64. Follow the [versioned release installation
@@ -40,7 +40,7 @@ bun run start
 
 The public origin must be reachable from execution hosts for the bot MCP endpoint. Use reachable HTTPS, normally Tailscale Serve, for managed Bot provisioning and phone connections. A loopback public URL supports same-machine API/Simulator development but is not evidence that an enrolled worker shares the backend's network namespace. Supply the configured public origin through the proxy; arbitrary browser origins are rejected. Authenticated product clients connect to `/v1` and `/v1/realtime`, never directly to the controller.
 
-Operator `approvedPrivateMcpOrigins` binds private first-party origins explicitly. The parser permits literal-loopback HTTP only for the exact configured first-party origin; this does not grant arbitrary loopback/private connector destinations or prove placement locality. Managed Bot provisioning still refuses loopback without an authoritative same-host binding. Operator settings are validated as `OperatorConfiguration`; there is no untyped extras bag.
+Operator `approvedPrivateMcpOrigins` explicitly approves private first-party origins. Literal-loopback HTTP is permitted only for the configured first-party origin. Bot provisioning still requires a reachable address and verified machine placement. See the [provider guide](../providers.md) for the validated operator configuration.
 
 | Environment | Requirement / default |
 | --- | --- |
@@ -53,12 +53,15 @@ Operator `approvedPrivateMcpOrigins` binds private first-party origins explicitl
 | `LEMON_BOT_CONFIG_FILE` | Optional operator JSON file; otherwise DATA_DIR/config.json. Missing file uses the validated empty provider configuration. |
 | `LEMON_BOT_TRUSTED_OVERLAY` | Default false. Set exactly `true` only when off-loopback HTTP/WS is protected by an operator-trusted encrypted overlay. Not a general TLS bypass. |
 | `LEMON_BOT_WEB_ROOT` | Optional explicit web assets directory; otherwise source `web/dist` or packaged `bot/web`. |
+| `LEMON_BOT_RUNTIME_LAUNCHER` | Optional absolute path to an existing executable Lemon launcher (`<checkout>/bin/lemon` or installed `lemon`); invalid paths fail startup. Enables owner-only start/stop/restart only for a loopback controller. |
+
+Workspace Owners and Admins can inspect the attached instance with `GET /v1/instance` and reconnect its controller link with `POST /v1/instance/reconnect`. Owners alone can invoke `POST /v1/instance/runtime/start`, `/stop`, or `/restart` when the launcher is configured and the controller is local. Stop/restart require `confirm:true`; POSTs require `clientNonce`. A 202 response is an operation receipt, not proof the controller is healthy: poll instance status for completion and connection state. Launcher commands run without a shell, with all `LEMON_BOT_*` environment variables stripped, a five-minute deadline, and a 4096-byte output tail. Runtime operations are in-memory and disappear on backend restart.
 
 Provider, identity, push, image, network/egress and host-management configuration belongs to the integration team's [provider guide](../providers.md) and the canonical operator configuration. Missing credentials affect only dependent operations and report a precise prerequisite. Bot tokens and product sessions are different principals; neither exposes the Lemon operator token. Configured backend secret references resolve only explicit private environment/file sources. Destination MCP header `${LEMON_SECRET:NAME}` values resolve only on the execution machine.
 
 ## Runtime prerequisites
 
-Use the platform implementation shipped with this product, including placed `chat.send`/profile execution, fixed submission receipts, actual cancellation/steer outcomes, named-node live events, enrollment invites, policy-rooted files, PTYs, write-only secrets, profile MCP clients, profile-scoped memory and native policy floors. Capabilities advertise the methods actually discovered from the connected controller. Unsupported or offline operations fail explicitly; absence of an acknowledgment is not reported as success.
+The controller must support Bot profiles, machine placement, message submission and cancellation, live events, enrollment, files, terminals, secrets, connected tools and profile memory. Capabilities reflect support discovered from the connected controller. Unsupported or offline operations fail explicitly.
 
 Scheduled agent work remains Lemon cron. Its pre-launch admission callback authenticates an independent private controller secret, binds the exact routine/profile/creator/workspace/job and reserved run identities, and checks current product ACL, policies and spend ceilings **before** dispatch. Configure `LEMON_CRON_ADMISSION_ALLOWED_ORIGINS` on the controller with the exact product origin. HTTPS is required except explicitly allowlisted literal loopback HTTP (`127.0.0.1` or `[::1]`) for local development. The narrow authenticated `cron.admission.set` RPC provisions generated per-routine credentials into the controller's encrypted secret store; clients never receive them. A denied, unavailable, mismatched or timed-out admission does not launch a run and is not automatically retried. Routines using external providers also require the declared event/adapter credentials. One-off reminders are notification outbox deadlines, not cron agent jobs.
 
@@ -72,11 +75,11 @@ Co-resident Bots share the OS user's files/browser/CLI identities: product autho
 
 Mutations reserve their nonce and fixed IDs before external work. Identical concurrent intents share their exact receipt, different bodies conflict, and replay rechecks current resource ACL and authentication authority. Public local-auth replay revalidates current credentials. Pending/uncertain effects survive restart as fenced state; the service reconciles only owning read-only receipts/history, never automatically replays a mutation. A user-visible accepted run is not a completed task, cancellation requested is not terminal cancellation, approval is not execution, and explicit draft Send is separate from permission gates.
 
-The 18 product MCP tools authenticate an opaque native-invocation proof before inspecting tool arguments. A per-bot setup credential does not authorize a caller-selected run or conversation. Proof credentials live in reserved destination-local `lemon_bot/` secret names; ordinary secret editing and connector bindings must not repurpose that namespace. Handoffs retain the actual owner and verified return audience. Group routing wakes each selected owned Bot once; a proven refused target is **rejected**, not queued or uncertain. Memory uses the owned assigned Lemon profile rather than a second SQLite notes store.
+Product MCP tools verify the calling Bot and run before reading tool arguments. Credentials use reserved destination-local `lemon_bot/` secret names. Handoffs preserve the owner and verified reply destination. Groups route work to selected owned Bots; rejected targets are reported separately. Memory is stored in the assigned Lemon profile.
 
 Account deletion revokes sessions and fences token issuance before cleanup. It completes reachable product cleanup independently of provider failures; an unconfirmed external revocation remains `outcome_unknown`. The remaining workspace Owner can inspect the bounded, read-only `/v1/account-teardowns` list and detail resources after the deleted account loses its sessions. These expose stages, timestamps, request IDs and actual provider receipt observations—not private transcripts, credentials, login restoration, or a replay button. The final Owner must explicitly transfer ownership before deletion.
 
-Realtime state changes/events commit together before publication. Resume applies current ownership; deletion events retain scoped tombstones and expired replay requires a fresh atomic `/sync` snapshot. Terminal output has a separate bounded spool and opening-user/device authority. Voice state has a durable disconnect grace and terminal transcript summary; microphone capture, dictation review and STT/TTS loops remain client-owned. No per-bot desktop or screen streaming is provided.
+Realtime changes and events commit together before publication. Reconnect restores only currently authorized data; an expired cursor requires a fresh `/sync` snapshot. Terminal output has separate buffering and device authorization. Voice sessions retain a disconnect grace period and transcript summary; microphone capture, dictation review and speech playback are controlled by the client.
 
 ## Connect an iPhone
 
@@ -88,15 +91,14 @@ Pending completion evolves with the same nonce. Lost completion responses replay
 
 Reopening a paired app restores its saved cluster/account selection. Offline state keeps the saved connection without automatically replaying mutations. Revoked credentials require an explicit reconnect.
 
-## Central verification
+## Contributor checks
 
-Implementation workers intentionally do not run installation, compilation, tests, formatting or linting. After all product/platform teams are merged, the integration owner should run:
+From this directory:
 
 ```sh
 bun install
-bun run typecheck
 bun test
-bun run start
+bun run typecheck
 ```
 
 The packaged `scripts/verify_release_runtime_boot --single <tarball> --profile lemon_bot`
@@ -111,4 +113,4 @@ On HTTP failure the gate prints only status/API classification and bounded,
 allowlisted native-image diagnostic classifications. It never prints raw backend
 errors, private logs, setup codes, session tokens or filesystem paths.
 
-Behavioral tests cover actual persistence, authentication/ACL, nonce conflicts/concurrency/restart fences, revision/confirmation binding, group routing, targeted gate races/deadlines, attachment tickets/ranges/provenance, voice concurrency, and runtime adapter boundaries. These commands are prescribed checks, not a claim that they were exercised. Live verification also requires an enrolled host and real provider configuration for the corresponding integrations.
+Live verification requires an enrolled machine and real provider configuration for the integrations being exercised.

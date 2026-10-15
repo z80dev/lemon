@@ -73,7 +73,7 @@ final class MacPlatformController: NSObject {
             guard let self else { return }
             if self.store.account == nil {
                 do { try await self.store.restoreSavedAccount() }
-                catch { self.errorMessage = error.localizedDescription }
+                catch { if self.store.connectionIssue == nil { self.errorMessage = error.localizedDescription } }
             }
             await self.accountChanged()
             while !Task.isCancelled {
@@ -105,7 +105,7 @@ final class MacPlatformController: NSObject {
         do {
             settings = store.localSettings ?? ClientLocalSettings(micCuesEnabled: true, compactCompanionEnabled: false, reducedMotion: "system")
             try hotkeys.configure(summon: store.account == nil ? nil : settings.summonShortcut, pushToTalk: store.account == nil ? nil : settings.pushToTalkShortcut)
-            if store.account != nil {
+            if store.account != nil, store.connectionState != "reconnect_required" {
                 try await store.registerDevice(platform: "macos", name: Host.current().localizedName ?? "Mac")
                 guard generation == accountGeneration else { return }
                 let permission = await UNUserNotificationCenter.current().notificationSettings()
@@ -130,11 +130,11 @@ final class MacPlatformController: NSObject {
     }
 
     func summon() {
-        guard store.account != nil else { NSApp.activate(ignoringOtherApps: true); return }
-        guard let bot = selectedBot else { errorMessage = "Choose a Bot in macOS settings before summoning its composer."; return }
+        guard store.account != nil else { errorMessage = "Sign in to Lemon Bot to use the quick composer."; NSApp.activate(ignoringOtherApps: true); return }
+        guard let bot = selectedBot else { errorMessage = "Choose a Bot in Lemon Bot Settings first."; NSApp.activate(ignoringOtherApps: true); return }
         panelConversationID = bot.mainConversationId
         if composerPanel == nil {
-            composerPanel = makePanel(title: "Lemon Bot — Mini composer", id: "lemonbot.composer", size: NSSize(width: 520, height: 340))
+            composerPanel = makePanel(title: "Lemon Bot — Quick composer", id: "lemonbot.composer", size: NSSize(width: 520, height: 340))
         }
         composerPanel?.contentView = NSHostingView(rootView: MacMiniComposer(controller: self, conversationID: bot.mainConversationId))
         composerPanel?.center()
@@ -169,7 +169,7 @@ final class MacPlatformController: NSObject {
     func beginDictation(conversationID: ID) {
         guard store.account != nil, speech.state == .idle else { return }
         if let session = store.voiceSession, session.state == "active", session.conversationId == conversationID, session.muted {
-            errorMessage = "Unmute the active voice chat before recording an utterance."
+            errorMessage = "Unmute voice chat before recording a voice message."
             return
         }
         stopPlayback()
@@ -191,6 +191,14 @@ final class MacPlatformController: NSObject {
     }
 
     func cancelCapture() { speech.cancel(); captureConversationID = nil }
+
+    func startNewVoiceMessage() {
+        guard uncertainVoiceSend, !busy else { return }
+        speech.cancel()
+        uncertainVoiceSend = false
+        errorMessage = nil
+        speechStatus = "Previous message wasn't confirmed. Check the conversation before sending a new message."
+    }
 
     func keepReviewedDraft() {
         guard let id = captureConversationID, !speech.transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
@@ -225,7 +233,7 @@ final class MacPlatformController: NSObject {
             errorMessage = "Save or send this conversation’s draft before starting voice chat. Voice chat starts from an empty composer."
             return
         }
-        guard let device = store.deviceID else { errorMessage = "Register this Mac with the backend before starting voice chat."; return }
+        guard let device = store.deviceID else { errorMessage = "This Mac isn't connected yet. Sign in again to start voice chat."; return }
         let generation = accountGeneration
         busy = true
         defer { busy = false }
@@ -270,10 +278,10 @@ final class MacPlatformController: NSObject {
             guard generation == accountGeneration else { return }
             if receipt.status == "outcome_unknown" {
                 uncertainVoiceSend = true
-                errorMessage = "Voice message outcome unknown. Inspect this conversation’s entries and runs before another send; this message will not be replayed."
+                errorMessage = "We couldn't confirm this voice message was sent. Check the conversation before sending again."
             } else if receipt.delivery.contains(where: { $0.effectiveMode == "rejected" }) {
                 speech.cancel()
-                speechStatus = "Message saved; the Bot did not admit this work."
+                speechStatus = "Message saved, but the Bot hasn't picked it up yet."
                 errorMessage = receipt.runs.compactMap { $0.status == "failed" ? $0.error?.message : nil }.joined(separator: "\n")
             } else {
                 speech.cancel()
@@ -354,11 +362,11 @@ final class MacPlatformController: NSObject {
                 let url = try await store.download(attachmentID: result.attachment.id)
                 guard !Task.isCancelled, playback == playbackGeneration else { return }
                 try await play(url, playback: playback)
-                speechStatus = "Playing backend Bot voice."
+                speechStatus = "Playing Bot voice."
             } catch {
                 guard !Task.isCancelled, playback == playbackGeneration else { return }
                 errorMessage = error.localizedDescription
-                speechStatus = "On-device speech fallback — backend voice unavailable (see exact error)."
+                speechStatus = "Bot voice couldn't play. Reading it aloud on this Mac instead."
                 let utterance = AVSpeechUtterance(string: segment)
                 utterance.voice = session.settings.language.flatMap { AVSpeechSynthesisVoice(language: $0) }
                 utterance.rate = AVSpeechUtteranceDefaultSpeechRate * Float(session.settings.speed)
@@ -381,7 +389,7 @@ final class MacPlatformController: NSObject {
             let url = try await store.download(attachmentID: result.attachment.id)
             guard playback == playbackGeneration, account == accountGeneration else { return }
             try await play(url, playback: playback)
-            speechStatus = "Backend voice sample; no message or run created."
+            speechStatus = "Voice sample played. No message or task was created."
         } catch { errorMessage = error.localizedDescription }
     }
 

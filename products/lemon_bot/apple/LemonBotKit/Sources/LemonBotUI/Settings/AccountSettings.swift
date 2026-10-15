@@ -21,7 +21,7 @@ struct AccountSettingsView: View {
     @AppStorage("LemonBot.safeAccountCleanupDiagnostics") private var cleanupDiagnostics = ""
     var body: some View {
         Form {
-            AdminStatus(control: control, store: store)
+            AdminStatus(control: control, store: store, refresh: { await control.perform { try await load() } })
             Section("Your account") {
                 TextField("Display name", text: $name)
                 TextField("Email", text: $email)
@@ -35,7 +35,8 @@ struct AccountSettingsView: View {
             }
             Section("Password") {
                 SecureField("Current password", text: $currentPassword)
-                SecureField("New password (12–1024 UTF-8 bytes)", text: $newPassword)
+                SecureField("New password", text: $newPassword)
+                Text("Use at least 12 letters, numbers or symbols. Some characters count more toward the 1,024-byte storage limit.").font(LBFont.meta)
                 AdminAction(title: "Change password and revoke other sessions", store: store, control: control) {
                     _ = try await store.mutate("PUT", "/me/password", body: ["currentPassword": .string(currentPassword), "newPassword": .string(newPassword)], as: Empty.self)
                     currentPassword = ""; newPassword = ""; try await loadSessions()
@@ -47,13 +48,13 @@ struct AccountSettingsView: View {
                         Task { await control.perform { try await store.restoreAccount(account) } }
                     }.disabled(control.busy)
                 }
-                AdminAction(title: "Sign out of current account", store: store, control: control) { try await store.signOut() }
+                AdminAction(title: "Sign out of current account", store: store, control: control, destructive: true) { try await store.signOut() }
             }
             Section("Product sessions") {
                 ForEach(sessions) { session in
                     VStack(alignment: .leading) {
                         Text(session.current ? "Current session" : session.id)
-                        Text("Last seen \(adminDate(Double(session.lastSeenAtMs))) · \(session.expiresAtMs.map { "expires \(adminDate(Double($0)))" } ?? "until revoked")").font(.caption)
+                        Text("Last seen \(adminDate(Double(session.lastSeenAtMs))) · \(session.expiresAtMs.map { "expires \(adminDate(Double($0)))" } ?? "until revoked")").font(LBFont.meta)
                         AdminAction(title: "Revoke session", store: store, control: control, destructive: true) {
                             _ = try await store.mutate("DELETE", "/auth/sessions/\(adminPath(session.id))", body: [:], as: Deleted.self)
                             if session.current { try await store.signOut() } else { try await loadSessions() }
@@ -67,8 +68,8 @@ struct AccountSettingsView: View {
                 }
             }
             Section("Account-wide deletion") {
-                Text("Deletion revokes product access and removes the previewed owner resources across all devices. Host files, browser sessions, destination credentials, external provider authorizations/subscriptions and retained operator backups are separate. Mailbox retirement is only complete when the provider acknowledges it; unknown cleanup is not success.")
-                Text("Sessions revoke immediately, even when external cleanup is not yet confirmed. An enabled workspace Owner can inspect the fixed operation in Settings → Read-only account cleanup observations. Safe operation/user/request diagnostics below can be handed to that Owner; they never restore your deleted login or retry deletion.")
+                Text("Deleting your account signs you out everywhere and removes the Bot data listed in the preview. Machine files, connected-app logins, email accounts and backups are cleaned up separately.")
+                Text("Anything still pending is listed under Workspace → Account cleanup observations. Share the report below with your workspace owner if you need help. It can't restore your account or repeat the deletion.")
                 SecureField("Password for one-use reauthentication", text: $reauthPassword)
                 AdminAction(title: "Reauthenticate", store: store, control: control) {
                     let result = try await store.mutate("POST", "/auth/reauth", body: ["password": .string(reauthPassword)], as: ReauthResult.self)
@@ -87,10 +88,10 @@ struct AccountSettingsView: View {
             }
             if !cleanupDiagnostics.isEmpty {
                 Section("Safe account-cleanup handoff diagnostics") {
-                    Text(cleanupDiagnostics).font(.caption).textSelection(.enabled)
+                    Text(cleanupDiagnostics).font(LBFont.meta).textSelection(.enabled)
                     Button("Copy safe cleanup diagnostics") { copyText(cleanupDiagnostics) }
                     Button("Clear this local diagnostic copy") { cleanupDiagnostics = "" }
-                    Text("This contains only opaque operation/user/request identifiers and observation time, not credentials or a read capability.").font(.caption)
+                    Text("This contains only opaque operation/user/request identifiers and observation time, not credentials or a read capability.").font(LBFont.meta)
                 }
             }
             Button("Refresh account, sessions and devices") { Task { await control.perform { try await load() } } }
@@ -136,7 +137,7 @@ struct DeviceSettingsRow: View {
     @State private var enabled = false
     var body: some View {
         VStack(alignment: .leading) {
-            Text("\(device.platform) · \(device.appVersion) · last seen \(adminDate(Double(device.lastSeenAtMs)))").font(.caption)
+            Text("\(device.platform) · \(device.appVersion) · last seen \(adminDate(Double(device.lastSeenAtMs)))").font(LBFont.meta)
             TextField("Device name", text: $name)
             Toggle("Push enabled", isOn: $enabled)
             AdminAction(title: "Save device", store: store, control: control) {
@@ -146,7 +147,7 @@ struct DeviceSettingsRow: View {
             AdminAction(title: "Remove registered device", store: store, control: control, destructive: true) {
                 _ = try await store.mutate("DELETE", "/devices/\(adminPath(device.id))", body: [:], as: Deleted.self); try await refresh()
             }
-            if let error = control.error { Text(error).foregroundStyle(.red).textSelection(.enabled) }
+            if let error = control.error { Text(error).foregroundStyle(LB.danger).textSelection(.enabled) }
         }.onAppear { name = device.name; enabled = device.pushEnabled }
     }
 }
@@ -203,7 +204,7 @@ struct PreferencesSettingsView: View {
                     } }
                 }
                 Button("Refresh OS permission status") { Task { await loadPermission() } }
-                Text("APNs: \(store.capabilities?.apns == true ? "configured" : "not configured"); in-app inbox remains available.")
+                Text("Push alerts: \(store.capabilities?.apns == true ? "Set up" : "Not set up on this server"). The in-app inbox always works.")
                 Button("Open OS notification settings") {
                     #if os(iOS)
                     NotificationCenter.default.post(name: .init("LemonBot.platformSettingsRequest"), object: nil)
@@ -224,18 +225,18 @@ struct PreferencesSettingsView: View {
                 Slider(value: $speed, in: 0.5...2, step: 0.1)
                 Text("Speed: \(speed, specifier: "%.1f")×")
                 TextField("Voice language (empty uses default)", text: $voiceLanguage)
-                Text("Backend transcription: \(store.capabilities?.stt == true ? "configured" : "unconfigured") · backend speech: \(store.capabilities?.tts == true ? "configured" : "unconfigured")")
-                Text("Dictation is explicitly started and stays unsent for review. Microphone input and on-device speech are controlled by this device, not a remote Bot host.")
-                AdminAction(title: "Preview configured backend voice", store: store, control: control) {
+                Text("Voice input: \(store.capabilities?.stt == true ? "Available" : "Unavailable") · Spoken replies: \(store.capabilities?.tts == true ? "Available" : "Unavailable")")
+                Text("Dictation stays unsent for review. This device controls its microphone and local speech.")
+                AdminAction(title: "Play Bot voice sample", store: store, control: control) {
                     let result = try await store.mutate("POST", "/audio/speech", body: ["text": .string("Hello, I’m your Lemon Bot teammate. Ready when you are."), "voice": voiceBody], as: SpeechResult.self)
                     let url = try await store.download(attachmentID: result.attachment.id)
                     player = try AVAudioPlayer(contentsOf: url); player?.play()
                 }
-                Picker("On-device sample voice (separate from backend voice ID)", selection: $deviceVoice) {
+                Picker("Sample voice on this device only", selection: $deviceVoice) {
                     Text("System default").tag("")
                     ForEach(AVSpeechSynthesisVoice.speechVoices(), id: \.identifier) { Text("\($0.name) · \($0.language)").tag($0.identifier) }
                 }
-                Button("Preview on-device speech — not backend audio") {
+                Button("Play on this device") {
                     synthesizer.stopSpeaking(at: .immediate)
                     let sample = AVSpeechUtterance(string: "Hello, I’m your Lemon Bot teammate. Ready when you are.")
                     sample.voice = deviceVoice.isEmpty ? AVSpeechSynthesisVoice(language: voiceLanguage.isEmpty ? nil : voiceLanguage) : AVSpeechSynthesisVoice(identifier: deviceVoice)
@@ -319,7 +320,7 @@ struct LocalSettingsView: View {
                         try store.saveLocalSettings(settings); error = nil
                     } catch { self.error = error.localizedDescription }
                 }
-                if let error { Text(error).foregroundStyle(.red) }
+                if let error { Text(error).foregroundStyle(LB.danger) }
             }
         }.navigationTitle("Local settings").onAppear {
             if let value = store.localSettings { summon = value.summonShortcut ?? ""; ptt = value.pushToTalkShortcut ?? ""; cues = value.micCuesEnabled; companion = value.compactCompanionEnabled; selectedBot = value.selectedBotId ?? ""; motion = value.reducedMotion }
@@ -330,17 +331,13 @@ struct LocalSettingsView: View {
 struct AboutSettingsView: View {
     let store: LemonBotStore
     @State private var control = AdminControl()
-    @State private var setup: SetupStatus?
     @State private var hosts: [AdminHostVersion] = []
     var body: some View {
         Form {
-            AdminStatus(control: control, store: store)
-            Section("Product and service") {
+            AdminStatus(control: control, store: store, refresh: { await control.perform { try await load() } })
+            Section("Client") {
                 Text("Lemon Bot · \(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "Unknown client version")")
                 Text("Platform: \(ProcessInfo.processInfo.operatingSystemVersionString)")
-                if let setup { Text("Backend \(setup.version) · API \(setup.apiVersion)") }
-                Text("Service connection: \(store.connectionState)")
-                Text("Controller: \(store.capabilities?.controlConnected == true ? "connected" : "unavailable")")
                 if let versions = store.capabilities?.minClientVersions {
                     Text("Minimum supported clients: macOS \(versions.macos) · iOS \(versions.ios) · web \(versions.web)")
                 }
@@ -348,14 +345,16 @@ struct AboutSettingsView: View {
                 Text("Self-hosted usage, no Lemon subscription or trial. External provider billing and cancellation remain with that provider.")
                 ForEach(hosts) { version in Text("\(version.name): Lemon \(version.host.lemonVersion) · \(version.host.os) \(version.host.osVersion)") }
             }
+            Section("Service diagnostics") {
+                NavigationLink("Lemon instance") { InstanceSettingsView(store: store) }
+            }
             Section("Copy diagnostics — never includes credentials or transcript") {
                 Text("Account: \(store.user?.id ?? "none")\nWorkspace: \(store.workspace?.id ?? "none")\nConversation: \(store.selectedConversationID ?? "none")\nTime: \(Date().formatted())\nRead attempts: \(control.attempts)\nLast attempt: \(control.lastAttempt?.formatted() ?? "none")\nService: \(store.connectionState)\nLast error: \(store.errorMessage ?? control.error ?? "none")").textSelection(.enabled)
             }
-            Button("Refresh service diagnostics") { Task { await control.perform { try await load() } } }
+            Button("Refresh client diagnostics") { Task { await control.perform { try await load() } } }
         }.navigationTitle("About").task { await control.perform { try await load() } }
     }
     private func load() async throws {
-        setup = try await store.read("/setup", as: SetupStatus.self)
         hosts = []
         for machine in store.machines where machine.status == "online" {
             let host = try await store.read("/machines/\(adminPath(machine.id))/host", as: HostInfo.self)

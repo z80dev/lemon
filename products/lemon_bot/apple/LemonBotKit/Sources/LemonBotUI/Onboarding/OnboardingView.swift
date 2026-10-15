@@ -14,7 +14,9 @@ private struct PublicOIDCProvider: Decodable, Identifiable {
 public struct OnboardingView: View {
     private let store: LemonBotStore
     @Environment(\.dismiss) private var dismiss
-    @State private var backend = "http://127.0.0.1:4080"
+    @State private var backend: String
+    @State private var connectionIssue: ConnectionIssue?
+    @State private var findBackend = false
     @State private var mode = "login"
     @State private var email = ""
     @State private var password = ""
@@ -30,14 +32,21 @@ public struct OnboardingView: View {
     #if os(iOS)
     @State private var showPairing = false
     #endif
-    public init(store: LemonBotStore) { self.store = store }
+    public init(store: LemonBotStore, initialURL: URL? = nil) {
+        self.store = store
+        #if os(iOS) && !targetEnvironment(simulator)
+        _backend = State(initialValue: initialURL.map(ConnectionIssue.origin(for:)) ?? "")
+        #else
+        _backend = State(initialValue: initialURL.map(ConnectionIssue.origin(for:)) ?? "http://127.0.0.1:4080")
+        #endif
+    }
     public var body: some View {
         NavigationStack {
             Form {
                 #if os(iOS)
                 SwiftUI.Section("Connect to your desktop") {
-                    Text("Your iPhone connects to your own desktop cluster. Scan its one-use QR or paste a pairing link, compare verification codes, then approve on the Mac. No desktop password required.")
-                    Button(store.pendingPairing == nil ? "Scan or paste desktop pairing link" : "Resume pending desktop connection") { showPairing = true }
+                    Text("Connect to your Mac's workspace. Scan its QR code or paste the link, then compare verification codes before approving on your Mac.")
+                    Button(store.pendingPairing == nil ? "Scan QR code or paste link" : "Check my request") { showPairing = true }
                 }
                 #endif
                 SwiftUI.Section("Your persistent assistant") {
@@ -58,21 +67,36 @@ public struct OnboardingView: View {
                         }
                     }
                 }
-                SwiftUI.Section("Product backend") {
-                    TextField("https://bot.example", text: $backend).autocorrectionDisabled()
-                    Button("Check setup and sign-in methods · read only") { Task { await discover() } }.disabled(action.inFlight)
+                SwiftUI.Section("Lemon Bot server") {
+                    TextField("https://your-desktop.your-tailnet.ts.net", text: $backend).autocorrectionDisabled()
+                    Button("Check setup and sign-in methods") { Task { await discover() } }.disabled(action.inFlight)
                     if checkedURL != nil {
                         Text(setupRequired ? "Owner setup required. Obtain the one-use setup code from the backend operator terminal." : "Use your local account or configured identity provider.").font(.caption)
                     }
+                    if let issue = connectionIssue {
+                        Text(issue.title).font(LBFont.rowTitle).foregroundStyle(LB.warning)
+                        Text(issue.reason).font(LBFont.body)
+                        #if os(macOS)
+                        if let url = URL(string: backend), ConnectionIssue.isLoopback(url) { LocalLemonStartHelp() }
+                        #endif
+                        DisclosureGroup("Details") {
+                            Text(issue.detail).font(LBFont.code).textSelection(.enabled)
+                            Button("Copy details") { copyText(issue.detail) }
+                        }
+                    }
+                    #if os(macOS)
+                    Button("Find Lemon Bot on this Mac") { findBackend = true }
+                    #endif
                 }
                 if checkedURL != nil {
                     SwiftUI.Section("Account") {
                         Picker("Sign in method", selection: $mode) {
                             Text("Sign in").tag("login")
-                            if setupRequired { Text("Create owner").tag("setup") }
+                            if setupRequired { Text("Create workspace").tag("setup") }
                         }
                         TextField("Email", text: $email).autocorrectionDisabled()
-                        SecureField("Password (at least 12 bytes for a new account)", text: $password)
+                        SecureField("Password", text: $password)
+                        if mode == "setup" { Text("Use at least 12 letters, numbers or symbols.").font(LBFont.meta) }
                         if mode != "login" { TextField("Display name", text: $displayName) }
                         if mode == "setup" {
                             SecureField("One-use setup code", text: $setupCode)
@@ -89,7 +113,7 @@ public struct OnboardingView: View {
                                     Task { await oidcLogin(provider) }
                                 }.disabled(action.busy || !provider.enabled)
                             }
-                            Text("The system browser verifies your identity. PKCE protects the one-use completion code; no password is shared with this app.").font(.caption)
+                            Text("Your browser confirms your identity. Your sign-in password isn't shared with this app.").font(LBFont.meta)
                         }
                     }
                 }
@@ -101,12 +125,30 @@ public struct OnboardingView: View {
                         Button("Clear local diagnostic copy") { cleanupDiagnostics = "" }
                     }
                 }
-                ActionErrorView(message: action.error)
+                if connectionIssue == nil { ActionErrorView(message: action.error) }
                 if action.inFlight { ProgressView("Connecting…") }
             }.formStyle(.grouped).navigationTitle("Welcome to Lemon Bot")
                 .frame(maxWidth: 700)
                 .toolbar { if store.account != nil { Button("Close") { dismiss() } } }
-                .onChange(of: backend) { _, _ in checkedURL = nil; providers = [] }
+                .onChange(of: backend) { _, _ in checkedURL = nil; providers = []; connectionIssue = nil }
+                .sheet(isPresented: $findBackend) { ChooseLemonBotView(store: store) }
+                .task(id: connectionIssue?.origin) {
+                    #if os(macOS)
+                    guard connectionIssue != nil, let url = URL(string: backend), ConnectionIssue.isLoopback(url), let client = try? HTTPTransport(baseURL: url) else { return }
+                    defer { client.session.invalidateAndCancel() }
+                    while !Task.isCancelled, connectionIssue != nil {
+                        do {
+                            try await Task.sleep(for: .seconds(3))
+                            let setup: SetupStatus = try await client.read("/setup", timeout: 2)
+                            let methods: [PublicOIDCProvider] = try await client.read("/auth/oidc/providers", timeout: 2)
+                            setupRequired = setup.setupRequired; mode = setup.setupRequired ? "setup" : "login"
+                            checkedURL = try HTTPTransport.normalizeBaseURL(url); connectionIssue = nil; action.error = nil
+                            providers = methods
+                        } catch is CancellationError { return }
+                        catch { /* Continue credential-free discovery until the service answers. */ }
+                    }
+                    #endif
+                }
                 #if os(iOS)
                 .sheet(isPresented: $showPairing) {
                     NavigationStack {
@@ -123,7 +165,7 @@ public struct OnboardingView: View {
         }
     }
     private func validatedURL() throws -> URL {
-        guard let url = URL(string: backend) else { throw LoginError.message("Enter a product backend URL, not controller credentials.") }
+        guard let url = URL(string: backend) else { throw LoginError.message("Enter your Lemon Bot server address, for example https://bot.example.") }
         return try HTTPTransport.normalizeBaseURL(url)
     }
     private func publicRequest<T: Decodable>(_ base: URL, _ path: String, body: JSONObject? = nil) async throws -> T {
@@ -134,12 +176,18 @@ public struct OnboardingView: View {
     private func discover() async {
         await action.perform {
             let url = try validatedURL()
-            let setup: SetupStatus = try await publicRequest(url, "/setup")
-            setupRequired = setup.setupRequired
-            if !setup.setupRequired { action.uncertain = false }
-            mode = setup.setupRequired ? "setup" : "login"
-            checkedURL = url
-            providers = try await publicRequest(url, "/auth/oidc/providers")
+            do {
+                let setup: SetupStatus = try await HTTPTransport(baseURL: url).read("/setup", timeout: 2)
+                setupRequired = setup.setupRequired
+                connectionIssue = nil
+                if !setup.setupRequired { action.uncertain = false }
+                mode = setup.setupRequired ? "setup" : "login"
+                checkedURL = url
+                providers = try await publicRequest(url, "/auth/oidc/providers")
+            } catch {
+                connectionIssue = ConnectionIssue.classify(error, baseURL: url)
+                throw error
+            }
         }
     }
     private func localLogin() async {

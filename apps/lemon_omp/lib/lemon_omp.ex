@@ -18,13 +18,15 @@ defmodule LemonOmp do
   sessions it started, and a foreign id is indistinguishable from a missing one.
   """
 
-  alias LemonOmp.{Config, Manager, Projection, Session, SessionFiles}
+  alias LemonOmp.{Config, Manager, Projection, Session, SessionFiles, Worktree}
 
   @thinking_levels ~w(off minimal low medium high xhigh max auto)
+  @approval_modes ~w(always-ask write yolo)
   @model_pattern ~r/\A[A-Za-z0-9][A-Za-z0-9._:\/@+-]{0,127}\z/
   @resume_pattern ~r/\A[0-9A-Za-z][0-9A-Za-z-]{3,63}\z/
   @max_prompt_bytes 65_536
   @max_message_bytes 16_384
+  @continuation_prompt "Your previous omp process was interrupted mid-task. Review the conversation and the workspace state, then continue the unfinished work; do not redo completed steps."
   @default_list_limit 50
   @max_list_limit 100
 
@@ -32,6 +34,8 @@ defmodule LemonOmp do
   @type reason ::
           :not_installed
           | :invalid_cwd
+          | :not_a_git_repo
+          | :worktree_failed
           | :invalid_prompt
           | :invalid_params
           | :too_many_sessions
@@ -40,6 +44,7 @@ defmodule LemonOmp do
           | :not_ready
           | :no_active_turn
           | {:rejected, String.t()}
+          | {:partially_applied, [String.t()], String.t(), reason()}
           | {:startup_failed, String.t()}
           | :startup_failed
           | :outcome_unknown
@@ -50,6 +55,9 @@ defmodule LemonOmp do
   @doc "Bus topic carrying `:omp_session` events."
   @spec bus_topic() :: String.t()
   defdelegate bus_topic(), to: Manager
+
+  @doc "List omp models, cheapest first; filters: query, provider, free_only, limit (1–200)."
+  defdelegate models(opts \\ []), to: LemonOmp.Models, as: :list
 
   @doc "Whether omp is installed, its version, and live-session counts."
   @spec status() :: map()
@@ -102,64 +110,255 @@ defmodule LemonOmp do
   end
 
   @doc """
+  Read a live subagent's sanitized transcript tail (default 20, maximum 50
+  messages; each text is at most 2000 characters). Ownership matches `get/2`.
+  Returns omp's byte cursor metadata, but never its session-file path.
+  """
+  @spec subagent(String.t(), String.t(), keyword()) :: {:ok, map()} | {:error, reason()}
+  def subagent(id, subagent_id, opts \\ []) do
+    with true <-
+           is_binary(subagent_id) and byte_size(subagent_id) in 1..128 and
+             String.trim(subagent_id) != "",
+         {:ok, pid} <- fetch_live(id, opts) do
+      limit = clamp(Keyword.get(opts, :limit), 20, 50)
+      Session.subagent(pid, subagent_id, limit)
+    else
+      false -> {:error, :invalid_params}
+      {:error, _} = error -> error
+    end
+  end
+
+  @doc """
   Start an omp process for `params` (`prompt`, `cwd`, optional `model`,
-  `thinking`, `resume`). Returns once omp acknowledged the prompt, or once it is
-  ready when resuming without one.
+  `thinking`, `resume`, `continue`, `approval_mode`, `isolate`). `continue: true`
+  requires `resume` and no prompt; it sends a fixed request to review state and
+  finish unfinished work, not omp's interactive-only `--restore` or subagent
+  recovery. Isolation creates a managed git worktree from HEAD, leaving changed
+  or committed work available on close. Resume finds registered kept Lemon
+  worktrees belonging to the cwd's repository. Approval mode is `always-ask`, `write`
+  or `yolo`; omitting it keeps omp's configured mode. Returns once omp
+  acknowledged the prompt, or once it is ready when resuming without one.
   """
   @spec start(map(), keyword()) :: {:ok, map()} | {:error, reason()}
   def start(params, opts \\ []) when is_map(params) do
+    with {:ok, executable} <- executable(),
+         {:ok, params} <- validate_start(params) do
+      start_validated(params, executable, opts)
+    end
+  end
+
+  @doc """
+  Validate every task before starting any, then start concurrently within the
+  live-session cap. Results retain input order, including outcome-unknown ids.
+  Invalid task indexes are zero-based. Admission is also enforced per start.
+  """
+  @spec start_many([map()], keyword()) ::
+          [{:ok, map()} | {:error, reason()}]
+          | {:error, {:invalid_task, non_neg_integer(), reason()} | reason()}
+  def start_many(tasks, opts \\ [])
+
+  def start_many(tasks, opts) when is_list(tasks) do
+    with {:ok, params} <- validate_tasks(tasks),
+         true <- length(params) <= Config.max_sessions() - Manager.live_count(),
+         {:ok, executable} <- executable() do
+      params
+      |> Task.async_stream(&start_validated(&1, executable, opts),
+        max_concurrency: Config.max_sessions(),
+        ordered: true,
+        timeout: :infinity
+      )
+      |> Enum.map(fn {:ok, result} -> result end)
+    else
+      false -> {:error, :too_many_sessions}
+      {:error, _} = error -> error
+    end
+  end
+
+  def start_many(_tasks, _opts), do: {:error, :invalid_params}
+
+  defp validate_tasks(tasks) do
+    tasks
+    |> Enum.with_index()
+    |> Enum.reduce_while({:ok, []}, fn {task, index}, {:ok, acc} ->
+      case validate_start(task) do
+        {:ok, params} -> {:cont, {:ok, [params | acc]}}
+        {:error, reason} -> {:halt, {:error, {:invalid_task, index, reason}}}
+      end
+    end)
+    |> case do
+      {:ok, params} -> {:ok, Enum.reverse(params)}
+      error -> error
+    end
+  end
+
+  defp validate_start(params) when is_map(params) do
     params = normalize_keys(params)
 
-    with {:ok, executable} <- executable(),
-         {:ok, cwd} <- validate_cwd(params["cwd"]),
+    with {:ok, cwd} <- validate_cwd(params["cwd"]),
          {:ok, resume} <- validate_optional(params["resume"], @resume_pattern),
-         {:ok, prompt} <- validate_prompt(params["prompt"], resume),
+         {:ok, prompt} <- continuation_prompt(params, resume),
          {:ok, model} <- validate_optional(params["model"], @model_pattern),
-         {:ok, thinking} <- validate_thinking(params["thinking"]) do
-      id = "omp_" <> Base.encode16(:crypto.strong_rand_bytes(6), case: :lower)
+         {:ok, thinking} <- validate_thinking(params["thinking"]),
+         {:ok, approval_mode} <- validate_approval_mode(params["approval_mode"]),
+         {:ok, isolation} <- Worktree.validate(cwd, params["isolate"]) do
+      {:ok,
+       [
+         cwd: cwd,
+         prompt: prompt,
+         model: model,
+         thinking: thinking,
+         resume: resume,
+         approval_mode: approval_mode,
+         isolation: isolation
+       ]}
+    end
+  end
 
-      session_opts = [
+  defp validate_start(_params), do: {:error, :invalid_params}
+
+  defp start_validated(params, executable, opts) do
+    id = "omp_" <> Base.encode16(:crypto.strong_rand_bytes(6), case: :lower)
+
+    params = resolve_resume_worktree(params)
+
+    with {:ok, worktree} <- resume_or_create_worktree(params, id) do
+      case start_in_worktree(params, executable, opts, id, worktree) do
+        {:error, reason} = error when reason not in [:outcome_unknown] ->
+          # Admission/spawn can fail before a Session owns cleanup.
+          if not match?({:ok, _, _}, Manager.lookup(id)), do: Worktree.cleanup(worktree)
+          error
+
+        result ->
+          result
+      end
+    end
+  end
+
+  defp resolve_resume_worktree(params) do
+    if params[:resume] && is_nil(params[:isolation]) do
+      matches =
+        case SessionFiles.discover(params[:cwd], limit: 100) do
+          {:ok, sessions} ->
+            Enum.filter(sessions, &String.starts_with?(&1["ompSessionId"], params[:resume]))
+
+          _ ->
+            []
+        end
+
+      case matches do
+        [%{"worktree" => %{"path" => path}}] ->
+          case Enum.find(Worktree.kept(params[:cwd]), &(&1.path == path)) do
+            nil -> params
+            worktree -> Keyword.put(params, :resumed_worktree, worktree)
+          end
+
+        _ ->
+          params
+      end
+    else
+      params
+    end
+  end
+
+  defp resume_or_create_worktree(params, id) do
+    case params[:resumed_worktree] do
+      nil -> Worktree.create(params[:isolation], id)
+      worktree -> {:ok, worktree}
+    end
+  end
+
+  defp start_in_worktree(params, executable, opts, id, worktree) do
+    session_opts =
+      Keyword.merge(params,
         id: id,
         executable: executable,
-        cwd: cwd,
-        prompt: prompt,
-        model: model,
-        thinking: thinking,
-        resume: resume,
+        cwd: if(worktree, do: worktree.path, else: params[:cwd]),
+        worktree: worktree,
         owner: normalize_owner(Keyword.get(opts, :owner, %{kind: :operator}))
-      ]
+      )
 
-      with {:ok, pid} <- Manager.start_session(session_opts, Config.max_sessions()) do
-        case Session.await_started(pid, Config.ready_timeout_ms() + Config.command_timeout_ms()) do
-          {:error, {:rejected, _message}} = error ->
-            # omp is up but refused the task; nothing will run, so do not leave
-            # an idle process behind.
-            :ok = Session.close(pid)
-            error
+    with {:ok, pid} <- Manager.start_session(session_opts, Config.max_sessions()) do
+      case Session.await_started(pid, Config.ready_timeout_ms() + Config.command_timeout_ms()) do
+        {:error, {:rejected, _message}} = error ->
+          # omp is up but refused the task; nothing will run, so do not leave
+          # an idle process behind.
+          :ok = Session.close(pid)
+          error
 
-          {:error, :outcome_unknown} ->
-            # omp never acknowledged the prompt, so it may or may not run. Keep
-            # the process and hand back its fixed id so the caller can
-            # reconcile (status) or close it instead of retrying blind.
-            {:error, {:outcome_unknown, id}}
+        {:error, :outcome_unknown} ->
+          # omp never acknowledged the prompt, so it may or may not run. Keep
+          # the process and hand back its fixed id so the caller can
+          # reconcile (status) or close it instead of retrying blind.
+          {:error, {:outcome_unknown, id}}
 
-          result ->
-            result
-        end
+        result ->
+          result
       end
     end
   end
 
   @doc """
-  Steer the running turn (`:steer`), queue a follow-up (`:follow_up`), or —
-  when the session is idle — start a new turn with `message`.
+  Steer the running turn (`:steer`), queue a follow-up (`:follow_up`), or stop
+  it and start over atomically in omp (`:redirect`). When the session is idle,
+  every mode starts a new turn with `message`.
   """
-  @spec send_message(String.t(), String.t(), :steer | :follow_up, keyword()) ::
+  @spec send_message(String.t(), String.t(), :steer | :follow_up | :redirect, keyword()) ::
           {:ok, map()} | {:error, reason()}
-  def send_message(id, message, mode, opts \\ []) when mode in [:steer, :follow_up] do
+  def send_message(id, message, mode, opts \\ [])
+      when mode in [:steer, :follow_up, :redirect] do
     with {:ok, message} <- validate_message(message),
          {:ok, pid} <- fetch_live(id, opts) do
       Session.send_message(pid, message, mode)
+    end
+  end
+
+  @doc """
+  Change a live session's `model` selector (`provider/id`) and/or `thinking`.
+  Model is applied first, then thinking; changes affect the next model call,
+  including during a running turn, without restarting or aborting the session.
+
+  Success returns the snapshot refreshed from omp. If a later step fails after
+  acknowledged changes, returns
+  `{:error, {:partially_applied, applied_fields, failed_step, reason}}`;
+  `failed_step` is `"model"`, `"thinking"` or `"snapshot"`. Nothing is rolled
+  back or automatically retried, including an `:outcome_unknown` result.
+  """
+  @spec configure(String.t(), map(), keyword()) :: {:ok, map()} | {:error, reason()}
+  def configure(id, params, opts \\ [])
+
+  def configure(id, params, opts) when is_map(params) do
+    params = normalize_keys(params)
+
+    with {:ok, model} <- validate_optional(params["model"], @model_pattern),
+         {:ok, thinking} <- validate_thinking(params["thinking"]),
+         {:ok, commands} <- configure_commands(model, thinking),
+         {:ok, pid} <- fetch_live(id, opts) do
+      Session.configure(pid, commands)
+    end
+  end
+
+  def configure(_id, _params, _opts), do: {:error, :invalid_params}
+
+  defp configure_commands(nil, nil), do: {:error, :invalid_params}
+
+  defp configure_commands(model, thinking) do
+    with {:ok, commands} <- model_command(model) do
+      thinking_command =
+        if thinking, do: [{"thinking", "set_thinking_level", %{"level" => thinking}}], else: []
+
+      {:ok, commands ++ thinking_command}
+    end
+  end
+
+  defp model_command(nil), do: {:ok, []}
+
+  defp model_command(selector) do
+    case String.split(selector, "/", parts: 2) do
+      [provider, model_id] when provider != "" and model_id != "" ->
+        {:ok, [{"model", "set_model", %{"provider" => provider, "modelId" => model_id}}]}
+
+      _ ->
+        {:error, :invalid_params}
     end
   end
 
@@ -191,6 +390,8 @@ defmodule LemonOmp do
 
     try do
       with {:ok, wire} <- get(id, opts) do
+        notify(opts[:on_update], wire)
+
         if wire["status"] in ["running", "starting"] do
           deadline = System.monotonic_time(:millisecond) + timeout_ms
           wait_loop(id, wire, deadline, opts)
@@ -201,6 +402,85 @@ defmodule LemonOmp do
     after
       LemonCore.Bus.unsubscribe(topic)
       flush_events()
+    end
+  end
+
+  @doc """
+  Wait for all sessions (or any one with `mode: :any`) using one Bus
+  subscription. Updates contain the full input-ordered list, at most once per
+  300 ms plus an unconditional final update. Timeout/abort only stop waiting.
+  """
+  @spec wait_many([String.t()], non_neg_integer(), keyword()) ::
+          {:ok, [map()], :settled | :timeout | :aborted} | {:error, :not_found}
+  def wait_many(ids, timeout_ms, opts \\ []) do
+    topic = bus_topic()
+    LemonCore.Bus.subscribe(topic)
+
+    try do
+      with {:ok, wires} <- fetch_many(ids, opts) do
+        state = %{
+          ids: ids,
+          wires: Map.new(wires, &{&1["id"], &1}),
+          deadline: System.monotonic_time(:millisecond) + timeout_ms,
+          last_update: System.monotonic_time(:millisecond),
+          dirty: false
+        }
+
+        wait_many_loop(state, opts)
+      end
+    after
+      LemonCore.Bus.unsubscribe(topic)
+      flush_events()
+    end
+  end
+
+  defp fetch_many(ids, opts) do
+    Enum.reduce_while(ids, {:ok, []}, fn id, {:ok, acc} ->
+      case get(id, opts) do
+        {:ok, wire} -> {:cont, {:ok, [wire | acc]}}
+        error -> {:halt, error}
+      end
+    end)
+    |> case do
+      {:ok, wires} -> {:ok, Enum.reverse(wires)}
+      error -> error
+    end
+  end
+
+  defp wait_many_loop(state, opts) do
+    wires = Enum.map(state.ids, &Map.fetch!(state.wires, &1))
+    now = System.monotonic_time(:millisecond)
+    settled? = &(&1["status"] in ["idle", "closed", "failed"])
+
+    reason =
+      cond do
+        wires == [] -> :settled
+        opts[:mode] == :any and Enum.any?(wires, settled?) -> :settled
+        opts[:mode] != :any and Enum.all?(wires, settled?) -> :settled
+        aborted?(opts[:signal]) -> :aborted
+        now >= state.deadline -> :timeout
+        true -> nil
+      end
+
+    if reason do
+      notify(opts[:on_update], wires)
+      {:ok, wires, reason}
+    else
+      state =
+        if state.dirty and now - state.last_update >= 300 do
+          notify(opts[:on_update], wires)
+          %{state | last_update: now, dirty: false}
+        else
+          state
+        end
+
+      receive do
+        %LemonCore.Event{type: :omp_session, payload: %{"session" => %{"id" => id} = next}}
+        when is_map_key(state.wires, id) ->
+          wait_many_loop(%{state | wires: Map.put(state.wires, id, next), dirty: true}, opts)
+      after
+        min(100, max(state.deadline - now, 0)) -> wait_many_loop(state, opts)
+      end
     end
   end
 
@@ -285,8 +565,17 @@ defmodule LemonOmp do
     do: "omp is not installed (no `omp` executable on PATH; set LEMON_OMP_BIN to point at it)."
 
   def error_message(:invalid_cwd), do: "cwd must be an existing directory."
+
+  def error_message(:not_a_git_repo),
+    do: "isolate requires cwd inside a git work tree with a HEAD commit."
+
+  def error_message(:worktree_failed), do: "could not create the isolated git worktree."
   def error_message(:invalid_prompt), do: "prompt must be non-empty text (at most 64 KiB)."
   def error_message(:invalid_params), do: "invalid parameters."
+
+  def error_message({:invalid_task, index, reason}),
+    do: "task #{index + 1}: " <> error_message(reason)
+
   def error_message(:invalid_message), do: "message must be non-empty text (at most 16 KiB)."
 
   def error_message(:too_many_sessions),
@@ -300,8 +589,14 @@ defmodule LemonOmp do
   def error_message(:not_ready), do: "that omp session is still starting."
   def error_message(:no_active_turn), do: "that omp session has no turn in progress."
   def error_message({:rejected, message}), do: "omp rejected the request: #{message}"
+  def error_message({:catalog_failed, message}), do: "omp model catalog failed: #{message}"
   def error_message({:startup_failed, message}), do: "omp failed to start: #{message}"
   def error_message(:startup_failed), do: "omp failed to start."
+
+  def error_message({:partially_applied, applied, step, reason}),
+    do:
+      "Applied #{Enum.join(applied, ", ")}; #{step} failed: " <>
+        error_message(reason) <> " Earlier changes were not rolled back."
 
   def error_message({:outcome_unknown, id}),
     do:
@@ -339,8 +634,12 @@ defmodule LemonOmp do
 
   defp owns?(_owner, _wire), do: false
 
-  defp normalize_owner(%{kind: :agent, session_key: key}) when is_binary(key) and key != "",
-    do: %{kind: :agent, session_key: key}
+  defp normalize_owner(%{kind: :agent, session_key: key} = owner)
+       when is_binary(key) and key != "",
+       do: Map.take(owner, [:kind, :session_key, :session_id, :run_id, :agent_id])
+
+  defp normalize_owner(owner) when is_map(owner),
+    do: owner |> Map.take([:session_id, :run_id, :agent_id]) |> Map.put(:kind, :operator)
 
   defp normalize_owner(_owner), do: %{kind: :operator}
 
@@ -357,6 +656,21 @@ defmodule LemonOmp do
   end
 
   defp validate_cwd(_cwd), do: {:error, :invalid_cwd}
+
+  defp continuation_prompt(params, resume) do
+    case params["continue"] do
+      true when is_binary(resume) ->
+        if is_nil(params["prompt"]),
+          do: {:ok, @continuation_prompt},
+          else: {:error, :invalid_params}
+
+      value when value in [nil, false] ->
+        validate_prompt(params["prompt"], resume)
+
+      _ ->
+        {:error, :invalid_params}
+    end
+  end
 
   defp validate_prompt(prompt, resume) when is_binary(prompt) do
     trimmed = String.trim(prompt)
@@ -401,6 +715,11 @@ defmodule LemonOmp do
   defp validate_thinking(""), do: {:ok, nil}
   defp validate_thinking(level) when level in @thinking_levels, do: {:ok, level}
   defp validate_thinking(_level), do: {:error, :invalid_params}
+
+  defp validate_approval_mode(nil), do: {:ok, nil}
+  defp validate_approval_mode(""), do: {:ok, nil}
+  defp validate_approval_mode(mode) when mode in @approval_modes, do: {:ok, mode}
+  defp validate_approval_mode(_mode), do: {:error, :invalid_params}
 
   defp normalize_keys(params), do: Map.new(params, fn {key, value} -> {to_string(key), value} end)
 

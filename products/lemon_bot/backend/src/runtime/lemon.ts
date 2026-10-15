@@ -85,6 +85,12 @@ export function createLemonService(config: Pick<BackendConfiguration, 'controlUr
   let maxPayload = 16_777_216;
   const service: ConnectedLemonService = {
     connected: false, methods: [],
+    controller: { url: url.href, state: 'stopped', connectedAtMs: null, lastDisconnectedAtMs: null, lastError: null, nextRetryAtMs: null, methodCount: 0 },
+    reconnect() {
+      running = false; clearTimeout(reconnect); reconnect = undefined;
+      const previous = socket; loseConnection(); previous?.close();
+      attempt = 0; running = true; connect();
+    },
     call<T = unknown>(method: string, params: Record<string, unknown> = {}, callOptions = {}): Promise<T> {
       if (!service.connected || !socket) return Promise.reject(new ApiError('upstream_unavailable', 'The controller is not connected.'));
       if (!service.methods.includes(method)) return Promise.reject(new ApiError('capability_unavailable', 'The controller does not advertise the required method.'));
@@ -110,7 +116,7 @@ export function createLemonService(config: Pick<BackendConfiguration, 'controlUr
     onConnected(listener) { connected.add(listener); return () => { connected.delete(listener); }; },
     onDisconnected(listener) { disconnected.add(listener); return () => { disconnected.delete(listener); }; },
     start() { if (running) return; running = true; connect(); },
-    close() { running = false; clearTimeout(reconnect); reconnect = undefined; socket?.close(); loseConnection(); },
+    close() { running = false; clearTimeout(reconnect); reconnect = undefined; const previous = socket; loseConnection(); previous?.close(); service.controller.state = 'stopped'; service.controller.nextRetryAtMs = null; },
   };
   function uncertain(mutation: boolean, ids: string[]) {
     return mutation ? new ApiError('outcome_unknown', 'The dispatched operation has an unknown outcome; do not resubmit.', false, { resourceIds: ids }) : new ApiError('upstream_unavailable', 'The controller response was interrupted.');
@@ -121,6 +127,10 @@ export function createLemonService(config: Pick<BackendConfiguration, 'controlUr
     clearTimeout(handshake); handshake = undefined;
     const wasConnected = service.connected;
     service.connected = false;
+    service.controller.connectedAtMs = null;
+    service.controller.lastDisconnectedAtMs = Date.now();
+    service.methods = []; service.controller.methodCount = 0;
+    if (running && !service.controller.lastError) linkError('controller_unreachable', `Nothing answered at ${url.href}.`);
     for (const item of pending.values()) { clearTimeout(item.timer); item.reject(uncertain(item.mutation, item.ids)); }
     pending.clear();
     if (wasConnected) for (const listener of disconnected) listener();
@@ -129,45 +139,53 @@ export function createLemonService(config: Pick<BackendConfiguration, 'controlUr
   function scheduleReconnect() {
     if (running && !reconnect) {
       const cap = Math.min(options.reconnectMaxMs ?? 30_000, (options.reconnectMinMs ?? 500) * 2 ** Math.min(attempt++, 16));
-      reconnect = setTimeout(() => { reconnect = undefined; connect(); }, cap * (0.5 + (options.random ?? Math.random)() * 0.5));
+      const delay = cap * (0.5 + (options.random ?? Math.random)() * 0.5);
+      service.controller.state = 'reconnecting'; service.controller.nextRetryAtMs = Date.now() + delay;
+      reconnect = setTimeout(() => { reconnect = undefined; connect(); }, delay);
     }
   }
   function connect() {
     if (!running || socket) return;
+    service.controller.state = attempt ? 'reconnecting' : 'connecting'; service.controller.nextRetryAtMs = null;
     let current: ControlSocket;
     try { current = (options.socket ?? nativeSocket)(config.controlUrl); } catch {
       // Use the same backoff even for constructor-level network errors.
+      linkError('controller_unreachable', `Nothing answered at ${url.href}.`);
       scheduleReconnect(); return;
     }
     socket = current; lastSeq = -1;
-    handshake = setTimeout(() => { if (socket === current) { current.close(); loseConnection(); } }, options.handshakeTimeoutMs ?? 10_000);
+    handshake = setTimeout(() => { if (socket === current) { linkError('controller_handshake_timeout', 'The controller did not finish connecting in time.'); loseConnection(); current.close(); } }, options.handshakeTimeoutMs ?? 10_000);
     current.listen({
       open() {
         if (socket !== current) return;
         handshakeId = crypto.randomUUID();
         try { current.send(JSON.stringify({ type: 'req', id: handshakeId, method: 'connect', params: { role: 'operator', client: { id: 'lemon_bot', version: '1' }, auth: { token: config.operatorToken } } })); } catch { current.close(); loseConnection(); }
       },
-      closed() { if (socket === current) loseConnection(); },
+      closed() { if (socket === current) { if (!service.controller.lastError) linkError('controller_unreachable', `Nothing answered at ${url.href}.`); loseConnection(); } },
       frame(data) {
         if (socket !== current) return;
-        if (typeof data !== 'string' || Buffer.byteLength(data, 'utf8') > maxPayload) { current.close(); loseConnection(); return; }
+        if (typeof data !== 'string' || Buffer.byteLength(data, 'utf8') > maxPayload) { protocolFailure(current); return; }
         let decoded: unknown;
-        try { decoded = JSON.parse(data); } catch { current.close(); loseConnection(); return; }
+        try { decoded = JSON.parse(data); } catch { protocolFailure(current); return; }
         const result = frameSchema.safeParse(decoded);
-        if (!result.success) { current.close(); loseConnection(); return; }
+        if (!result.success) { protocolFailure(current); return; }
         const frame = result.data;
         if (frame.type === 'hello-ok') {
-          if (frame.auth.role !== 'operator' || !handshakeId) { running = false; current.close(); loseConnection(); return; }
-          if (service.connected) { current.close(); loseConnection(); return; }
+          if (frame.auth.role !== 'operator' || !handshakeId) { running = false; linkError('controller_rejected', 'The controller rejected the operator token. Check LEMON_BOT_OPERATOR_TOKEN.'); service.controller.state = 'rejected'; loseConnection(); current.close(); return; }
+          if (service.connected) { protocolFailure(current); return; }
           clearTimeout(handshake); handshake = undefined;
           maxPayload = frame.policy?.maxPayload ?? 16_777_216;
           service.methods = frame.features.methods; service.connected = true; attempt = 0;
+          service.controller.state = 'connected'; service.controller.connectedAtMs = Date.now(); service.controller.lastError = null; service.controller.nextRetryAtMs = null; service.controller.methodCount = service.methods.length;
           for (const listener of connected) listener();
         } else if (frame.type === 'res') {
           if (!service.connected && frame.id === handshakeId) {
             // Invalid server credential needs operator repair, not a retry storm.
-            if (frame.error?.code === 'UNAUTHORIZED' || frame.error?.code === 'FORBIDDEN') running = false;
-            current.close(); loseConnection(); return;
+            if (frame.error?.code === 'UNAUTHORIZED' || frame.error?.code === 'FORBIDDEN') {
+              running = false; service.controller.state = 'rejected';
+              linkError('controller_rejected', 'The controller rejected the operator token. Check LEMON_BOT_OPERATOR_TOKEN.');
+            } else linkError('controller_protocol_violation', 'The controller returned an invalid connection response.');
+            loseConnection(); current.close(); return;
           }
           const item = pending.get(frame.id);
           if (!item) return;
@@ -185,5 +203,7 @@ export function createLemonService(config: Pick<BackendConfiguration, 'controlUr
       },
     });
   }
+  function linkError(code: string, message: string) { service.controller.lastError = { code, message, atMs: Date.now() }; }
+  function protocolFailure(current: ControlSocket) { linkError('controller_protocol_violation', 'The controller sent an invalid protocol message.'); loseConnection(); current.close(); }
   return service;
 }

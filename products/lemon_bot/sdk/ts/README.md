@@ -36,9 +36,9 @@ try {
   if (!(error instanceof LemonBotError)) throw error;
   if (error.outcomeUnknown) {
     // Retain unsent UI input and the original intent/nonce. No resend here.
-    const runs = await client.reconcileRuns(clientNonce, { conversationId });
-    // Inspect run statuses; an empty result is not proof nothing happened.
-    // GET error.resourceIds through the corresponding authorized resource routes.
+    const receipt = await client.messageReceipt(conversationId, clientNonce);
+    // Only a complete receipt accounts for every original group target.
+    // Unknown/missing receipts retain the nonce fence; rejected targets retain their run errors.
   } else if (error.code === 'revision_conflict') {
     // Inspect error.currentRevision/currentResource, GET the resource, review changes.
     // Do not overwrite another device's update or blindly replay the old request.
@@ -48,7 +48,7 @@ try {
 
 `LemonBotError` exposes `code`, `message`, `requestId`, `status`, `retrySafe`, `details`, `outcomeUnknown`, `clientNonce`, `resourceIds`, `currentRevision` and `currentResource`. `status:0` means no HTTP response. Reserved IDs and server details survive errors. A network loss or unreadable receipt after mutation dispatch is `outcome_unknown`, with `retrySafe:false`; an authoritative 2xx receipt containing an unknown outcome is also rejected as `LemonBotError`, with its receipt in `currentResource`. A signal already aborted before dispatch is not an unknown mutation. Offline/read errors reject and never become empty collections. `retrySafe` is server information, not permission for the SDK to repeat anything. Ordinary resource reconciliation is explicit GET only; the documented pairing issuance/completion receipt reconciliations require a separate explicit same-nonce request. Unknown resource/run states remain unknown until verified.
 
-A mixed **own-Bot group** receipt may contain `delivery.effectiveMode:"rejected"` while other owned targets are admitted. That is a successful typed receipt, not blanket uncertainty: inspect the referenced `receipt.runs` row's actual error. A proven zero-admission error remains its policy/machine refusal and may carry saved `entryIds`/`runIds` in details; `resourceIds` includes these IDs, and the original nonce remains available for GET reconciliation. Correcting a prerequisite does not automatically resend the recorded message or admitted targets. Groups have one human owner and 2–6 Bots owned by that same user; no human membership/leave/transfer or Team DM wire remains.
+A mixed **own-Bot group** receipt may contain `delivery.effectiveMode:"rejected"` while other owned targets are admitted. Inspect the referenced `receipt.runs` row’s error. Correcting a prerequisite does not automatically resend the recorded message or admitted targets. Groups have one human owner and 2–6 Bots owned by that same user.
 
 ## Desktop-to-iPhone pairing
 
@@ -88,7 +88,7 @@ Preview is explicitly non-consuming, nonce-free read data despite using POST. In
 
 Phone completion retains one fixed `PairingComplete.clientNonce` across pending observation and lost connected receipt reconciliation. Canonical `PairingCompletion` returns pending/denied/expired, or connected with the same device and product session. Private receipt replay is bounded to the original five-minute pairing deadline; a later attempt must re-pair. The resulting `AuthSession.expiresAtMs === null` means **until revoked**, not unknown/expired: show that coherently in device/session lists. Revoke through existing device/session endpoints; no refresh-token plane. Consumers store a paired phone's own bearer privately (Keychain on iOS), not the owner's browser token.
 
-No Team Bot visibility/managers/publish/live team-copy, Team-scoped memory/skills or shared connector/ConnectorConsent/connector_grant contracts remain. Owner OAuth authorization and native capability/tool-policy review still apply. Declarative Workspace/Public templates create separate reviewed owned copies, not access to the publisher's live Bot. Existing explicitly configured operator/admin APIs remain wire-compatible but are not first-run assistant prerequisites.
+The SDK covers personally owned Bots, profile memory, skills and owned integrations. Owner OAuth authorization and native capability/tool-policy review apply. Workspace/Public templates create separate reviewed owned copies. Optional operator/admin APIs depend on server configuration.
 
 
 ## Real attachment bytes and voice
@@ -156,6 +156,11 @@ Cursors compare as unsigned decimal bigint; ACL-filtered gaps are valid. `compar
 
 Connection states: `connecting`, `authenticating`, `syncing`, `replaying`, `live`, `reconnecting`, `unauthenticated`, `forbidden`, `error`, `closed`. Authentication/revocation closes are terminal; user login must establish a new valid session. Heartbeat uses protocol ping/pong and disconnects after 60 seconds without activity. Reconnect reauthenticates and resumes from the safe applied cursor, never replays REST requests or WS voice/typing/presence commands. `send` transmits now or throws; nothing is queued offline. Explicit changed conversation selection requires a prior safe snapshot cursor and refetch of any added conversation's missing history. Do not treat last ack as proof skipped conversations were loaded.
 
+`nextRetryAtMs` exposes the actual scheduled socket reconnect deadline (or `null`
+outside backoff) for countdown UI. Read it in `onState` or while rendering a timer.
+For an explicit full recovery, close the existing connection, fetch a fresh
+snapshot, then create/start a new connection from that snapshot's cursor.
+
 Terminal listeners receive gap/exit frames including nullable exit codes. `terminal_subscribe` is the only terminal command resumed, from the last fully applied output sequence. Input/resize/close remain typed REST calls with explicit nonces and are never replayed. Terminal output has its own number sequence, separate from the durable workspace cursor.
 
 ## Checks
@@ -167,7 +172,7 @@ bun run check
 bun run test
 ```
 
-Consumer tests exercise encoded REST requests, revisions/nonces/errors, actual multipart and binary/range responses, signed-origin credential isolation, voice upload/STT, uncertain outcomes and GET reconciliation, ordered async socket application/persistence/ack, cursor reset/reconnect/auth revocation, heartbeat and terminal reattachment without mutation replay. No source-text/wiring assertions. These commands were not run in the parallel implementation slice; the integrating lead owns verification.
+Consumer tests exercise encoded REST requests, revisions/nonces/errors, multipart and binary/range responses, signed-origin credential isolation, voice upload/STT, uncertain outcomes and GET reconciliation, ordered socket application/persistence/ack, cursor reset/reconnect/auth revocation, heartbeat and terminal reattachment without mutation replay.
 
 
 Owner account-cleanup observation uses only canonical `GET /account-teardowns` and `GET /account-teardowns/:id`. Recorded provider `outcome_unknown` remains typed read data, distinct from completed product cleanup; the SDK never interprets the ledger as authorization to repeat account deletion or provider revocation.

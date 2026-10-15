@@ -3,7 +3,7 @@ import AppKit
 import SwiftUI
 import XCTest
 import LemonBotKit
-import LemonBotUI
+@testable import LemonBotUI
 
 /// Renders the REAL macOS views over the fixture workspace to PNGs (light + dark) for design review.
 /// Output: `$LB_SNAPSHOT_DIR` (default `/tmp/lb-ux/after`) as `apple-<scene-kebab>-<light|dark>.png`.
@@ -11,6 +11,44 @@ import LemonBotUI
 @MainActor
 final class SnapshotRenderTests: XCTestCase {
     private let scale: CGFloat = 2
+
+    func testDisconnectedBadgeIsNotConnectedGreen() {
+        if case .bad = StatusTone("disconnected") {} else { XCTFail("Disconnected must render as a failure") }
+        if case .bad = StatusTone("Last known: disconnected") {} else { XCTFail("Prefixed disconnected must render as a failure") }
+        if case .good = StatusTone("connected") {} else { XCTFail("Connected must keep its successful tone") }
+    }
+    func testInstanceUptimeUsesHumanUnits() {
+        XCTAssertEqual(instanceUptime(12_000), "12s")
+        XCTAssertEqual(instanceUptime(65_000), "1m 5s")
+        XCTAssertEqual(instanceUptime(3_660_000), "1h 1m")
+        XCTAssertEqual(instanceUptime(90_000_000), "1d 1h")
+    }
+
+    func testHumanErrorsSeparateDiagnosticsAndPreservePairingGuidance() {
+        let text = humanErrorText(ClientError.outcomeUnknown("original-reference"))
+        XCTAssertTrue(text.hasPrefix("We couldn't confirm"))
+        XCTAssertFalse(text.components(separatedBy: "\nDetails: ")[0].contains("original-reference"))
+        XCTAssertTrue(text.contains("original-reference"))
+        XCTAssertEqual(humanErrorText(PairingClientError.pendingConnection), PairingClientError.pendingConnection.localizedDescription)
+        XCTAssertTrue(humanErrorText(URLError(.notConnectedToInternet)).hasPrefix("You're offline."))
+        XCTAssertEqual(pairingStatusLabel("pending_approval"), "Waiting for approval on your Mac")
+        XCTAssertEqual(hubStatusLabel("outcome_unknown"), "Result not confirmed")
+    }
+
+    func testPollingKeepsActionFailureAndUnconfirmedFence() async {
+        let action = HubAction()
+        await action.perform { throw ClientError.outcomeUnknown("saved-action") }
+        let original = action.error
+        await action.poll {}
+        XCTAssertEqual(action.error, original)
+        XCTAssertTrue(action.uncertain)
+        XCTAssertEqual(action.uncertainNonce, "saved-action")
+        await action.poll { throw URLError(.notConnectedToInternet) }
+        XCTAssertEqual(action.error, original)
+        XCTAssertNotNil(action.pollingError)
+        XCTAssertFalse(action.busy)
+    }
+
 
     func testRenderAllScenesInLightAndDark() async throws {
         _ = NSApplication.shared

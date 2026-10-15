@@ -28,7 +28,7 @@ public struct MemoryHubView: View {
     public init(store: LemonBotStore, botID: ID, memoryID: ID? = nil) { self.store = store; self.botID = botID; initialMemoryID = memoryID }
     public var body: some View {
         Form {
-            HubError(action: action)
+            HubError(action: action, store: store)
             Text("Memory is durable context in this Bot's profile, not current truth. Recheck authoritative live sources before consequential decisions. Identity and Job are separate.")
             Section("Search") {
                 TextField("Search memory", text: $query).onSubmit { Task { await load() } }
@@ -38,7 +38,7 @@ public struct MemoryHubView: View {
                 ForEach(memories) { memory in
                     VStack(alignment: .leading) {
                         Text(memory.text).textSelection(.enabled)
-                        Text("\(memory.kind) · source \(memory.sourceEntryId ?? "explicit manual entry")").font(.caption)
+                        Text("\(memory.kind) · source \(memory.sourceEntryId ?? "explicit manual entry")").font(LBFont.meta)
                         HStack {
                             Button("Correct") { editing = memory; text = memory.text; kind = memory.kind }
                             Button("Preview forget", role: .destructive) { Task { await action.perform { forgetting = memory; confirmation = try await store.mutate("POST", "/memory/\(hubID(memory.id))/preview", body: ["action": .string("forget")]) } } }
@@ -71,7 +71,7 @@ public struct MemoryHubView: View {
                     let value: MemoryExport = try await store.read("/bots/\(hubID(botID))/memory/export")
                     exportDocument = HubJSONDocument(data: try JSONEncoder().encode(value)); exportPresented = true
                 } } }
-                Text("Export contains only authorized scope. Forgetting leaves independent transcripts and operator backups; the preview shows exact effects.").font(.caption)
+                Text("Export contains only authorized scope. Forgetting leaves independent transcripts and operator backups; the preview shows exact effects.").font(LBFont.meta)
             }
         }.navigationTitle("Memory")
             .task {
@@ -111,12 +111,12 @@ struct MemoryImportView: View {
     @State private var action = HubAction()
     var body: some View {
         Form {
-            HubError(action: action)
+            HubError(action: action, store: store)
             if let result {
                 Section("Acknowledged import result") {
                     Text(result.status)
                     ForEach(result.items) { Text($0.text) }
-                    if !result.failedCandidateIds.isEmpty { Text("Failed candidates: \(result.failedCandidateIds.joined(separator: ", "))").foregroundStyle(.red) }
+                    if !result.failedCandidateIds.isEmpty { Text("Failed candidates: \(result.failedCandidateIds.joined(separator: ", "))").foregroundStyle(LB.danger) }
                     Text("Only acknowledged facts above were saved. Uncertain results must be reconciled; never automatically repeat an import.")
                 }
             } else if let preview {
@@ -129,8 +129,8 @@ struct MemoryImportView: View {
                     ForEach(preview.candidates, id: \.id) { candidate in
                         VStack(alignment: .leading) {
                             Toggle(candidate.text, isOn: Binding(get: { selected.contains(candidate.id) }, set: { if $0 { selected.insert(candidate.id) } else { selected.remove(candidate.id) }; reviewed = false }))
-                            Text("\(candidate.kind) · \(candidate.source.filename ?? "text") · \(candidate.source.locator)").font(.caption)
-                            Text(candidate.source.excerpt).font(.caption).textSelection(.enabled)
+                            Text("\(candidate.kind) · \(candidate.source.filename ?? "text") · \(candidate.source.locator)").font(LBFont.meta)
+                            Text(candidate.source.excerpt).font(LBFont.meta).textSelection(.enabled)
                         }
                     }
                 }

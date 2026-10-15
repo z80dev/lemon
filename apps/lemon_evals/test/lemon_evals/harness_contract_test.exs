@@ -40,132 +40,28 @@ defmodule LemonEvals.HarnessContractTest do
       assert "live_model_coding_repair_contract" in live_names
     end
 
-    test "live-model memory eval reports missing credentials without provider access", %{
+    test "live-model evals report missing credentials without provider access", %{
       tmp_dir: tmp_dir
     } do
-      result = Harness.live_model_memory_trace_contract_eval(tmp_dir, live_api_key: "")
-
-      assert result.name == "live_model_memory_trace_contract"
-      assert result.status == :fail
-      assert result.details.reason =~ "LEMON_EVAL_API_KEY"
-    end
-
-    test "live-model remember eval reports missing credentials without provider access", %{
-      tmp_dir: tmp_dir
-    } do
-      result = Harness.live_model_remember_contract_eval(tmp_dir, live_api_key: "")
-
-      assert result.name == "live_model_remember_contract"
-      assert result.status == :fail
-      assert result.details.reason =~ "LEMON_EVAL_API_KEY"
-    end
-
-    test "live-model workspace memory file eval reports missing credentials without provider access",
-         %{
-           tmp_dir: tmp_dir
-         } do
-      result = Harness.live_model_workspace_memory_file_contract_eval(tmp_dir, live_api_key: "")
-
-      assert result.name == "live_model_workspace_memory_file_contract"
-      assert result.status == :fail
-      assert result.details.reason =~ "LEMON_EVAL_API_KEY"
-    end
-
-    test "live-model skill eval reports missing credentials without provider access", %{
-      tmp_dir: tmp_dir
-    } do
-      result = Harness.live_model_skill_learning_contract_eval(tmp_dir, live_api_key: "")
-
-      assert result.name == "live_model_skill_learning_contract"
-      assert result.status == :fail
-      assert result.details.reason =~ "LEMON_EVAL_API_KEY"
-    end
-
-    test "live-model relevant skill usage eval reports missing credentials without provider access",
-         %{
-           tmp_dir: tmp_dir
-         } do
-      result = Harness.live_model_relevant_skill_usage_contract_eval(tmp_dir, live_api_key: "")
-
-      assert result.name == "live_model_relevant_skill_usage_contract"
-      assert result.status == :fail
-      assert result.details.reason =~ "LEMON_EVAL_API_KEY"
-    end
-
-    test "live-model curator eval reports missing credentials without provider access", %{
-      tmp_dir: tmp_dir
-    } do
-      result = Harness.live_model_skill_curator_contract_eval(tmp_dir, live_api_key: "")
-
-      assert result.name == "live_model_skill_curator_contract"
-      assert result.status == :fail
-      assert result.details.reason =~ "LEMON_EVAL_API_KEY"
-    end
-
-    test "live-model cron block eval reports missing credentials without provider access", %{
-      tmp_dir: tmp_dir
-    } do
-      result = Harness.live_model_cron_block_contract_eval(tmp_dir, live_api_key: "")
-
-      assert result.name == "live_model_cron_block_contract"
-      assert result.status == :fail
-      assert result.details.reason =~ "LEMON_EVAL_API_KEY"
-    end
-
-    test "live-model untrusted prompt injection eval reports missing credentials without provider access",
-         %{
-           tmp_dir: tmp_dir
-         } do
-      result =
-        Harness.live_model_untrusted_prompt_injection_contract_eval(tmp_dir, live_api_key: "")
-
-      assert result.name == "live_model_untrusted_prompt_injection_contract"
-      assert result.status == :fail
-      assert result.details.reason =~ "LEMON_EVAL_API_KEY"
-    end
-
-    test "live-model parallel delegation eval reports missing credentials without provider access",
-         %{
-           tmp_dir: tmp_dir
-         } do
-      result = Harness.live_model_parallel_delegation_contract_eval(tmp_dir, live_api_key: "")
-
-      assert result.name == "live_model_parallel_delegation_contract"
-      assert result.status == :fail
-      assert result.details.reason =~ "LEMON_EVAL_API_KEY"
-    end
-
-    test "live-model delegation artifact eval reports missing credentials without provider access",
-         %{
-           tmp_dir: tmp_dir
-         } do
-      result = Harness.live_model_delegation_artifact_contract_eval(tmp_dir, live_api_key: "")
-
-      assert result.name == "live_model_delegation_artifact_contract"
-      assert result.status == :fail
-      assert result.details.reason =~ "LEMON_EVAL_API_KEY"
-    end
-
-    test "live-model leaf toolset eval reports missing credentials without provider access",
-         %{
-           tmp_dir: tmp_dir
-         } do
-      result = Harness.live_model_leaf_toolset_contract_eval(tmp_dir, live_api_key: "")
-
-      assert result.name == "live_model_leaf_toolset_contract"
-      assert result.status == :fail
-      assert result.details.reason =~ "LEMON_EVAL_API_KEY"
-    end
-
-    test "live-model coding repair eval reports missing credentials without provider access",
-         %{
-           tmp_dir: tmp_dir
-         } do
-      result = Harness.live_model_coding_repair_contract_eval(tmp_dir, live_api_key: "")
-
-      assert result.name == "live_model_coding_repair_contract"
-      assert result.status == :fail
-      assert result.details.reason =~ "LEMON_EVAL_API_KEY"
+      for contract <- [
+            :live_model_memory_trace_contract,
+            :live_model_remember_contract,
+            :live_model_workspace_memory_file_contract,
+            :live_model_skill_learning_contract,
+            :live_model_relevant_skill_usage_contract,
+            :live_model_skill_curator_contract,
+            :live_model_cron_block_contract,
+            :live_model_untrusted_prompt_injection_contract,
+            :live_model_parallel_delegation_contract,
+            :live_model_delegation_artifact_contract,
+            :live_model_leaf_toolset_contract,
+            :live_model_coding_repair_contract
+          ] do
+        result = apply(Harness, :"#{contract}_eval", [tmp_dir, [live_api_key: ""]])
+        assert result.name == Atom.to_string(contract)
+        assert result.status == :fail, "#{contract} must reject missing credentials"
+        assert result.details.reason =~ "LEMON_EVAL_API_KEY"
+      end
     end
   end
 end

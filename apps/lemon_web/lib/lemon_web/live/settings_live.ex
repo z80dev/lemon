@@ -142,7 +142,11 @@ defmodule LemonWeb.SettingsLive do
        when code in [:invalid_thinking_level, :invalid_action, :missing_parameter],
        do: "That value is not supported."
 
-  defp error_text(_code), do: "Configuration is temporarily unavailable. Nothing was written."
+  defp error_text(code) when code in [:timeout, :unavailable, :runtime_unavailable],
+    do: "The runtime did not answer. Try again. Nothing was written."
+
+  defp error_text(_code),
+    do: LemonWeb.Rpc.message(nil) <> " Check /diagnostics and try again. Nothing was written."
 
   # ── Render ──────────────────────────────────────────────────────────────
 
@@ -251,7 +255,7 @@ defmodule LemonWeb.SettingsLive do
             </p>
 
             <.callout :if={not @defaults_available?} tone="warning" class="mb-3" id="defaults-unavailable">
-              Session defaults could not be read from the configuration.
+              Session defaults could not be read from the configuration. Check /diagnostics for the configuration status.
             </.callout>
             <div id="defaults-feedback" aria-live="polite">
               <.callout :if={@notice} tone="success" class="mb-3">{@notice}</.callout>

@@ -67,8 +67,11 @@ struct BotEditorView: View {
                         }
                         NavigationLink("Review a workspace or third-party template instead") { TemplateHubView(store: store) }
                         Picker("Machine", selection: $machineID) { Text("Choose an online machine").tag(""); ForEach(store.machines.filter { $0.status == "online" }) { machine in Text(machine.name).tag(machine.id) } }
+                        if !store.machines.contains(where: { $0.status == "online" }) {
+                            Text("No machine is online. Start one of your machines, then come back.").font(LBFont.meta).foregroundStyle(LB.warning)
+                        }
                         Toggle("I trust this host and accept shared files, browser logins and CLI credentials", isOn: $consent)
-                        Text("Bots on one OS user are not isolated. Use separate hosts/users for hard isolation.").font(.caption)
+                        Text("Bots on one OS user are not isolated. Use separate hosts/users for hard isolation.").font(LBFont.meta)
                     }
                 }
                 SwiftUI.Section("Avatar") {
@@ -86,7 +89,7 @@ struct BotEditorView: View {
                     if let avatarID { AttachmentView(store: store, attachmentID: avatarID) }
                     TextField("Image generation prompt", text: $generatedPrompt)
                     Button("Generate with configured image provider") { Task { await generate() } }.disabled(action.busy || bot == nil || generatedPrompt.isEmpty || store.connectionState != "online")
-                    Text("Generation returns an unattached real image. Crop or explicitly save it as the Bot avatar; missing provider prerequisite is shown exactly.").font(.caption)
+                    Text("Generation returns an unattached real image. Crop or explicitly save it as the Bot avatar; missing provider prerequisite is shown exactly.").font(LBFont.meta)
                 }
                 if bot == nil {
                     SwiftUI.Section("Focused Job") {
@@ -100,7 +103,7 @@ struct BotEditorView: View {
                     Text("Speed: \(speed, specifier: "%.1f")×")
                     TextField("Voice language (BCP-47 or blank for auto)", text: $voiceLanguage)
                     TextField("Reply language (blank for automatic)", text: $language)
-                    Text("Every durable voice/language edit records an inspectable PreferenceChange with conflict-safe Undo.").font(.caption)
+                    Text("Voice and language changes are saved to this Bot's history. You can undo them under Preferences history.").font(LBFont.meta)
                 }
                 if bot != nil {
                     SwiftUI.Section("Reference files") {
@@ -110,8 +113,11 @@ struct BotEditorView: View {
                     SwiftUI.Section("Your notification preference") { Toggle("Notifications for this Bot", isOn: $notify) }
                 }
                 ActionErrorView(message: action.error)
-                if let receipt = action.receipt { Text(receipt).font(.caption) }
-                Button(bot == nil ? "Create Bot" : "Save reviewed identity / settings") { Task { await save() } }.disabled(action.busy || name.isEmpty || store.connectionState != "online" || (bot == nil && (machineID.isEmpty || !consent)))
+                if let receipt = action.receipt { Text(receipt).font(LBFont.meta) }
+                Button(bot == nil ? "Create Bot" : "Save changes") { Task { await save() } }.disabled(action.busy || name.isEmpty || store.connectionState != "online" || (bot == nil && (machineID.isEmpty || !consent)))
+                if store.connectionState != "online" { Text("Reconnect to save changes.").font(LBFont.meta).foregroundStyle(LB.muted) }
+                else if name.isEmpty { Text("Add a name to save.").font(LBFont.meta).foregroundStyle(LB.muted) }
+                else if bot == nil && (machineID.isEmpty || !consent) { Text("Choose an online machine and accept its shared files and logins to create this Bot.").font(LBFont.meta).foregroundStyle(LB.muted) }
             }.formStyle(.grouped).navigationTitle(bot == nil ? "New Bot" : "Edit \(bot!.name)")
                 .toolbar { Button("Cancel") { dismiss() } }
                 .fileImporter(isPresented: $avatarPicker, allowedContentTypes: [.image]) { result in

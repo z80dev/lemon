@@ -195,6 +195,11 @@ Choose the model with `LEMON_EVAL_PROVIDER`, `LEMON_EVAL_MODEL`,
 `scripts/test path` isolates `LEMON_STORE_PATH`, so resolve secret-store-backed
 provider keys into their env var before running live integration tests.
 
+The omp real-binary smoke (lifecycle, approvals bridge, parallel workers) is opt-in:
+`LEMON_OMP_LIVE=1 scripts/test path apps/lemon_omp/test/lemon_omp/live_smoke_test.exs`.
+It uses omp's own credentials and a zero-cost model, not Lemon provider keys.
+See [omp verification](../apps/lemon_omp/AGENTS.md#verification) for overrides.
+
 The remaining manual smoke scripts are not run by CI:
 `scripts/live_telegram_matrix.py` (with `scripts/telegram_driver.py`),
 `scripts/live_discord_matrix.py`, `scripts/live_provider_fallback_smoke.exs`,

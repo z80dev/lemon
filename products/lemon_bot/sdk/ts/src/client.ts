@@ -1,6 +1,6 @@
 import type {
   Attachment, AttachmentUpload, Download, ErrorCode, JSONObject, Page, RestKey,
-  RestQuery, RestRequest, RestResponse, Run, Transcription, TranscriptionRequest,
+  RestQuery, RestRequest, RestResponse, Run, RuntimeAction, Transcription, TranscriptionRequest,
 } from '../../../contracts/protocol.ts';
 import { isErrorEnvelope, LemonBotError, localError } from './errors.ts';
 import { RealtimeConnection } from './realtime.ts';
@@ -100,6 +100,12 @@ export class LemonBotClient {
     this.fetcher = options.fetch ?? globalThis.fetch.bind(globalThis);
   }
 
+  instance() { return this.call('GET /instance'); }
+  reconnectController() { return this.call('POST /instance/reconnect', { body: { clientNonce: nonce() } }); }
+  runtimeAction(action: RuntimeAction, confirm = false) {
+    return this.call('POST /instance/runtime/:action', { params: { action }, body: { clientNonce: nonce(), confirm } });
+  }
+
   async call<K extends RestKey>(key: K, ...args: CallArguments<NoInfer<K>>): Promise<RestResponse<K>> {
     const options = (args[0] ?? {}) as WireOptions;
     const space = key.indexOf(' ');
@@ -179,6 +185,11 @@ export class LemonBotClient {
   /** Explicit read reconciliation. This never replays the uncertain mutation. */
   async reconcileRuns(clientNonce: string, query: ReconcileRunsQuery = {}): Promise<Page<Run>> {
     return this.call('GET /runs', { query: { ...query, clientNonce } });
+  }
+
+  /** Observe the complete original target reservation; an empty/partial run list is not enough. */
+  messageReceipt(conversationId: string, clientNonce: string) {
+    return this.call('GET /conversations/:id/messages/receipts/:nonce', { params: { id: conversationId, nonce: clientNonce } });
   }
 
   /** Upload audio first, then request real backend STT; never sends a chat message. */

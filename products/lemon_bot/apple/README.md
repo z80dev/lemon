@@ -137,14 +137,76 @@ An opaque creation timeout without returned IDs stays fenced when the server exp
 ## Connect iPhone to your desktop
 
 1. Configure the backend's reachable HTTPS `publicUrl`. **Tailscale Serve** is the recommended boring option when your Mac and phone already have Tailscale reachability. TLS must validate normally; a QR never attests an overlay or permits a remote HTTP/TLS bypass. HTTP loopback is only for same-machine development/Simulator; a physical phone's `127.0.0.1` is the phone, not the Mac. This client does not provision or sign in to Tailscale.
-2. On macOS choose **Connect iPhone → Create one-use QR code**. CoreImage renders the backend-issued `pairUrl`, with the exact cluster/origin and original five-minute expiry. **Copy one-use pairing link** provides an explicit paste alternative; treat the QR, clipboard copy and screenshots as temporary secrets. No operator token, desktop session token or permanent credential is encoded, logged or sent in push.
-3. On iPhone choose **Scan desktop QR** or paste the link. Camera permission and `AVCaptureMetadataOutput` capture start only from that explicit action and stop on leaving/backgrounding. Before requesting access, a nonconsuming, secret-bound `POST /pairings/preview` verifies the exact cluster name, origin and expiry. Strict bounded parsing rejects credentials, extra/duplicate query fields, unsafe origins and malformed one-use codes. A camera denial still leaves paste available.
-4. Choose **Request connection**. Claim consumes the one-use code and shows the phone's verification code. The Mac previews that exact device name and matching six-digit code; the owner explicitly **Approves once** or **Denies**. Approval alone is not a claim of successful phone installation.
-5. Choose **Check approval / finish connection**. A connected response supplies the phone's own device-bound product session; the app saves it to Keychain and restores normal account/Bot/conversation state without a manual desktop password. Pending claim/completion authority is also device-local Keychain state, so reopening can reconcile the original request rather than claiming another QR.
+2. On macOS choose **Connect iPhone → Create QR code**. Treat the QR, copied pairing link and screenshots as temporary secrets. No operator token, desktop session token or permanent credential is encoded.
+3. On iPhone choose **Scan QR code** or paste the link and choose **Check pasted link**. Check the workspace name, server address and expiry before choosing **Request connection**. Checking does not use up the code.
+4. Compare the device name and six-digit verification code on both devices. On the Mac choose **Approve this iPhone** or **Deny**. Approval does not mean the phone has finished connecting.
+5. On iPhone choose **Check my request** to finish connecting. Its own device-bound session is saved in Keychain; no desktop password is needed.
 
-Every claim and completion retains its original nonce before networking. Pending checks and an explicitly reconciled lost response reuse the same completion nonce and return the **same** Device/AuthSession, never another credential. A lost desktop issuance response similarly uses **Reconcile original QR request** to recover the original one-use QR with its original nonce. Private receipt replay ends at the original five-minute pairing deadline; after explicit expired/denied state, discard the local request and create a fresh QR as a separate human action. The successfully installed session itself remains valid until revoked.
+If a response is lost, **Check previous QR code** on Mac and **Check my request** on iPhone check the saved request rather than creating a second one. The QR keeps its original five-minute expiry. After an explicit expired or denied result, discard the saved request and create a new QR as a separate action. A successfully installed session stays valid until revoked.
 
 Revoke the phone through **Settings → Account → Registered devices** or **Product sessions**. Device removal revokes its bound session; the phone shows explicit reconnect, not fake offline success. Camera, speech, share-sheet staging and selected files remain independent of pairing; no ambient capture or automatic send is introduced.
+## Connection recovery
+
+The sidebar connection pill opens the same recovery panel on Mac and iPhone.
+Mac also shows it above the conversation after a failed connection attempt;
+normal initial synchronization does not flash an error. The panel distinguishes
+an unreachable Lemon Bot service, device network/TLS/DNS problems, server/proxy
+errors, revoked sign-in and a reachable backend whose Lemon link is down. It
+shows the target account/address, last error details with Copy, and the live
+retry countdown. **Try again** bypasses the current backoff. Cached conversations
+and unsent drafts remain available.
+
+**Choose another Lemon Bot…** lists saved accounts and performs credential-free,
+two-second public setup probes at saved origins and the two local development
+addresses. Discovery is not a LAN scan or automatic sign-in. A discovered origin
+opens prefilled onboarding; **Enter address…** accepts another secure address.
+Physical iPhones start with an empty address and a tailnet HTTPS placeholder,
+not the phone's own loopback address. Simulator keeps the development default.
+
+When the backend is reachable, owners can start/restart Lemon through its
+configured runtime launcher; owners/admins can reconnect a rejected or stopped
+Lemon link. Restart requires confirmation. Running operations are observed by
+read-only polling and expose the backend's bounded command output, never an
+automatic mutation replay. An unconfigured launcher reports its actual reason.
+
+The Mac app remains sandboxed: when the backend itself is down at a loopback
+address, **Start it on this Mac** offers `lemon daemon`, the integrated-checkout
+backend command, setup documentation and **Open Terminal**. It never spawns
+Lemon or reads an operator token. Background reconnect detects the service when
+it returns; failed local onboarding also probes until it answers. These local
+commands and Terminal actions are not shown on iPhone.
+
+## Lemon instance
+
+**Settings → Lemon instance** shows the backend this account is attached to,
+its version/address/start time, the Lemon controller link and its last error,
+and the live Lemon version, uptime, memory, runs, sessions, nodes, channels and
+skills. Missing measurements stay unavailable instead of becoming zero. Owners
+and admins can view it and reconnect the link; other members see an explanation
+without fetching privileged instance data. About links here for service status
+and keeps client/worker compatibility and safe handoff diagnostics separate.
+
+Owners can **Start**, **Restart** or **Stop** only when the backend reports
+runtime control is configured. Stop and Restart explain the interruption and
+require explicit confirmation. Admins cannot issue owner-only lifecycle commands.
+When controls are unavailable, the backend's reason is shown. The shared pane
+is also available from **View instance details** in the connection panel.
+Status sections appear before Lifecycle. **Start** is unavailable while the Lemon link is connected.
+
+On Mac, switching Settings panes keeps unfinished Preferences and local-platform edits in place. Sign-out asks for confirmation. When a voice message isn't confirmed, check its conversation before choosing **Start new voice message**; this discards the reviewed recording, never resends it, and does not bypass any pending-message check.
+
+The clients call the shared account space a **workspace** and a computer running Bots a **machine**. **Apps & channels** contains Connected apps, Chat channels, Email and X. Connecting an account does not approve tools or send messages. Email addresses are checked, requested, approved and then claimed as separate steps.
+
+**Open quick composer** opens the Mac's compact draft window. In voice chat, choose **Record**, **Stop**, review the text, then **Send** or **Save as draft**. **Turn speech into text** uploads only the selected recording to the server's configured speech-to-text provider.
+
+The pane refreshes every 10 seconds while visible, and every 2 seconds while a
+command is running, with Refresh and iOS pull-to-refresh for a manual read.
+Operation state and bounded output are the backend's actual receipt, with Copy
+inside Details. A lost command response stays fenced; refresh never replays it.
+The `instance-pane` and `instance-running` Mac snapshot scenes exercise the
+settings registration and active-operation display in light and dark.
+
+
 
 
 ## Native workspace
@@ -153,11 +215,24 @@ The app is messaging-first. The sidebar holds search and new-Bot buttons, pinned
 
 The primary navigation is your named Bot roster, with pinned Bots, synced sections, groups of your own Bots, hidden Bots and unread/activity indicators. macOS uses roster, conversation and inspector; iOS adapts split navigation to the available width. Bot identity, Job and assigned-profile Memory remain distinct. The selected Bot shows its actual owned desktop/swarm host, current work and reviewed artifacts, with Activity + Upcoming, Ideas that draft rather than execute, preference inspection/Undo, native capability review, templates and milestone evidence. Live Team Bots, managers, publishing, membership controls and enterprise-first navigation are absent; workspace/public templates remain reviewed declarative copies, not live access grants.
 
+On iPhone the composer stays in the bottom safe area above the software keyboard,
+including its Send button. Return (including Shift+Return on a hardware keyboard)
+inserts a newline; tap Send or use ⌘Return to send without dismissing the keyboard.
+Long drafts scroll inside the multiline editor; landscape limits its visible
+height so the transcript and Send button still have room above the keyboard.
+In landscape, **+ → Last send details** retains receipt details without taking
+space from the transcript; errors and unconfirmed outcomes remain visible inline.
+Drag the transcript downward to dismiss the keyboard interactively. A transcript
+already at the latest message stays there when the keyboard or composer resizes;
+reading older messages does not force a jump to the bottom.
+
 Groups have one human owner and two to six Bots owned by that person. There are no human invitations, successor transfer or Group Leave. Deletion uses the existing exact preview/confirmation and verified active/unknown-work lifecycle. Authoritative conversation deletion removes only this account's room draft and copied staging files, not selected originals or another account's cache. Legacy cached foreign live Bots/rooms do not regain visibility during offline restoration.
 
 The transcript renders the declared entry/card families with attributable actors and durable states. Questions are ordinary non-secret fields; secrets use a masked write-only destination flow. Approvals show the exact target, Bot, host, review scope and consequences. Only the targeted user can explicitly act before expiry; approval is not proof an external action completed. Email/Slack/channel drafts expose edited recipients, target/thread, body and files before Send. Unknown delivery is not Sent. Replies, reactions and feedback never resolve gates. Stop reports the server's actual run state; queued, steering and interrupting labels come from the receipt.
 
-A saved authored message does not mean every target admitted work. Per-target **Rejected** delivery retains the matching failed run's actual refusal reason, with no fabricated start or blanket unknown result; mixed group receipts keep admitted work independent. Explicit reconciliation uses the reserved IDs/nonce rather than dispatching another message.
+A saved authored message does not mean every target admitted work. Per-target **Rejected** delivery retains the matching failed run's actual refusal reason, with no fabricated start or blanket unknown result; mixed group receipts keep admitted work independent. Message reconciliation reads the original actor/conversation/nonce receipt rather than dispatching another message.
+
+After a lost/late HTTP acknowledgement or an envelope-less relay 502/504, native clients automatically read that receipt. Matching realtime entry/run observations, a caught-up reconnect and app foreground also recheck pending messages. A complete receipt clears the composer fence/error and only the unchanged captured draft; a partial group, missing reservation or unavailable read stays uncertain. Rejected/failed targets retain their actual errors. No message POST is automatically replayed.
 
 Gate and destructive controls require an online authenticated connection; they are never queued for offline replay. Native OIDC uses `ASWebAuthenticationSession` with the exact one-time `flowId`/`completionCode` callback and the original PKCE verifier. File previews authorize first; HTML is shown inert rather than executing embedded scripts in a privileged client, and voice memos use authorized persisted audio with native playback controls.
 
@@ -181,6 +256,8 @@ Voice uses Apple Speech for dictation and an explicit visible active-call loop, 
 
 Notifications register the current installation to the current product account. iOS uses its actual APNs token; macOS uses local notifications. Same-device foreground viewed-conversation suppression does not clear inbox/unread or pending gates. Token-free `lemonbot://workspace/...` links fetch and authorize the exact task/entry/approval/machine/routine before navigation, never automatically approve.
 
+Foreground presence belongs to its realtime connection, independently of message delivery. A refresh or background reconnect can retire a presence write; that old socket's failure is not a delivery failure on the replacement connection. Current-connection failures remain visible, and a missing message HTTP acknowledgement retains its original nonce until authoritative read-only reconciliation settles it. Realtime ACKs use the delivered frame's cursor, not a newer global HTTP snapshot watermark.
+
 ## Centralized checks
 
 Implementation agents intentionally do **not** run generation, builds, tests, formatters or live provider checks. The integration owner should run the commands above, then:
@@ -193,11 +270,24 @@ xcodebuild -project LemonBot.xcodeproj -scheme LemonBotMac \
   -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO test
 ```
 
-DEBUG-only visual check. The `LemonBotSnapshots` scheme renders the real views with in-process fixture data, in light and dark, to `/tmp/lb-ux/after/apple-*.png`. Set `TEST_RUNNER_LB_SNAPSHOT_DIR` to write somewhere else. The iOS app launched with `-LBFixtures` in a Debug build opens the same fixture workspace.
+DEBUG-only visual check. The `LemonBotSnapshots` scheme renders the real views with in-process fixture data, in light and dark, to `/tmp/lb-ux/after/apple-*.png`. Set `TEST_RUNNER_LB_SNAPSHOT_DIR` to write somewhere else. The iOS app launched with `-LBFixtures` in a Debug build opens the same fixture workspace. Fixture message sends record text in memory for that fixture session only; they never execute Bot work or contact a backend. Other non-bookkeeping mutations remain read-only.
+Use `-LBFixtures -LBFixtureScene backend-down` (or `controller-down` /
+`reconnect-required`) to inspect the shared connection sheet on an isolated iOS
+simulator. The Mac snapshot slugs match these names and include light/dark views.
 
 ```sh
 xcodebuild -project LemonBot.xcodeproj -scheme LemonBotSnapshots \
   -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO test -only-testing:LemonBotSnapshotTests
+```
+
+The `LemonBotKeyboard` UI-test scheme exercises short and multiline drafts, soft
+Return, visible Send with the keyboard up, and transcript following in portrait
+and landscape on a dedicated iPhone simulator:
+
+```sh
+xcodebuild -project LemonBot.xcodeproj -scheme LemonBotKeyboard \
+  -destination 'platform=iOS Simulator,id=<your-simulator-UDID>' \
+  -derivedDataPath /tmp/lemonbot-keyboard-build CODE_SIGNING_ALLOWED=NO test
 ```
 
 Exercise a real backend and attached host: setup/login/OIDC and account switch; desktop HTTPS-publicUrl QR issuance; phone scan/paste exact preview, matching-code approve/deny, pending reopen, lost issuance/claim/completion receipt recovery, expired re-pair, Keychain restart, offline return, same Bot/conversation restore and device/session revocation. Also exercise draft retention; streaming reconnect and cursor expiry; stale/expired gates; uncertain send reconciliation; owner groups and profile memory; files and interactive PTY; voice permissions/review/mute/end; interrupted share import; notifications/task links; provider prerequisites and applied host policy. Build/test success does not substitute for real camera permission, physical-device TLS/Tailscale reachability, signing/APNs or configured host/provider probes.
@@ -211,7 +301,7 @@ The owner-assistant cutover adds strict named pairing Codable DTOs and nullable 
 
 Wire-array decoding and encoding preserve the exact feedback-reason, export-stream and X-media literal sets, rejecting unsupported elements without dropping fields or substituting opaque JSON. Optional array omission remains distinct from invalid null. Nullable actor IDs and public `protocol:`/`as:` argument labels use unambiguous Swift types and identifiers.
 
-Native conversation input handles Return key events with their modifiers, retaining Shift+Return for a newline. Decision eligibility reads stay on the main actor, and replaying a finished voice memo awaits the native seek before playback. Composer and routine-editor composition is split into typed view sections and explicit action handlers while retaining draft/file/routing controls, delivery reconciliation, trigger consent, run history and one-time webhook-key review. The native VT delegate conformance is main-actor isolated to match its UI-thread callback invariant, and destructive-preview completion callbacks are explicitly labeled.
+On macOS, native conversation input handles Return key events with their modifiers, retaining Shift+Return for a newline; iOS uses multiline Return and the visible Send button. Decision eligibility reads stay on the main actor, and replaying a finished voice memo awaits the native seek before playback. Composer and routine-editor composition is split into typed view sections and explicit action handlers while retaining draft/file/routing controls, delivery reconciliation, trigger consent, run history and one-time webhook-key review. The native VT delegate conformance is main-actor isolated to match its UI-thread callback invariant, and destructive-preview completion callbacks are explicitly labeled.
 
 Store lifecycle tests inject an isolated credential store within the test target; production still defaults to Keychain and reports credential-access/deletion failures without an insecure fallback. Cursor-expiry fixtures serve complete authorized resource pagination and opened transcripts, checking read-only recovery, access eviction and local-draft retention without requiring a private request order.
 

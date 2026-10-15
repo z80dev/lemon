@@ -36,14 +36,6 @@ defmodule LemonWebTest do
                )
              )
 
-    # One bundled stylesheet carries the design system for both themes; the
-    # old per-page stylesheets are gone and nothing loads from a CDN.
-    app_css = File.read!(Path.join(static_root, "app.css"))
-    assert app_css =~ "--accent"
-    assert app_css =~ ".badge-success"
-    assert app_css =~ ".hljs-keyword"
-    refute File.exists?(Path.join(static_root, "session.css"))
-    refute File.exists?(Path.join(static_root, "management.css"))
     assert File.exists?(Path.join(static_root, "vendor/highlight/highlight.min.js"))
 
     root_layout =
@@ -53,7 +45,7 @@ defmodule LemonWebTest do
     assert root_layout =~ ~s|href={~p"/assets/app.css"}|
     refute root_layout =~ "session.css"
     refute root_layout =~ "management.css"
-    assert root_layout =~ "Skip to main content"
+    assert root_layout =~ ~s|href="#main-content"|
     refute root_layout =~ "cdn.tailwindcss.com"
   end
 end

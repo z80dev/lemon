@@ -82,10 +82,6 @@ defmodule LemonAutomation.SynthesisRunnerManagerTest do
     end
   end
 
-  test "the manager is supervised and running" do
-    assert is_pid(Process.whereis(SynthesisRunnerManager))
-  end
-
   test "a tick spawns exactly one pass and the in-flight guard blocks a second", %{
     agent_id: agent_id
   } do

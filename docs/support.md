@@ -175,9 +175,9 @@ resource, scope, and redirect context, and MCP sampling approval requests
 include redacted request hash, model, token, message, role, and content-kind
 metadata. Operators can
 resolve pending approvals from the terminal
-with `/approval approve|once|session|agent|global|deny <approval-id>`; `/approval` and
-`/approval list` refresh the current pending approval snapshot through
-`exec.approvals.get`. Approval timeouts also arrive as
+with `/approve [n] [once|session|agent|global]` or `/deny [n]`; `/approvals`
+refreshes the current pending approval snapshot through `exec.approvals.get`.
+Here `n` is the 1-based list index. Approval timeouts also arrive as
 `exec.approval.resolved` notifications with `decision: "timeout"` so terminal
 operators see when a pending request expired.
 

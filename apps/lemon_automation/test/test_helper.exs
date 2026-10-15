@@ -16,6 +16,10 @@ Application.put_env(:lemon_automation, :cron_drift_guard, enabled: false)
 
 ExUnit.start(capture_log: true)
 
+unless System.get_env("LEMON_TEST_ALLOW_LIVE_CREDENTIALS") == "1" do
+  ExUnit.configure(exclude: [:automation_live])
+end
+
 ExUnit.after_suite(fn _ ->
   _ = Application.stop(:lemon_channels)
   _ = Application.stop(:lemon_gateway)

@@ -10,12 +10,12 @@ struct MachineBotGrantsView: View {
     private var canManage: Bool { bot.ownerUserId == store.user?.id }
     var body: some View {
         DisclosureGroup("\(bot.name) · requested vs effective authorization") {
-            HubError(action: action)
+            HubError(action: action, store: store)
             ForEach(grants) { grant in
                 VStack(alignment: .leading) {
                     Text(grant.capabilityId).font(.headline)
                     Text("Requested \(grant.requestedLevel) · effective \(grant.effectiveLevel)")
-                    ForEach(grant.reasons, id: \.self) { Text($0).font(.caption) }
+                    ForEach(grant.reasons, id: \.self) { Text($0).font(LBFont.meta) }
                     if canManage {
                         Menu("Set requested access") {
                             ForEach(["off", "read_only", "read_interact"], id: \.self) { level in
@@ -30,7 +30,7 @@ struct MachineBotGrantsView: View {
             }
             if cursor != nil { Button("More grants") { Task { await load(more: true) } } }
             Button("Refresh effective grants") { Task { await load() } }
-            Text("Requested access cannot exceed the measured machine capability, actual OS permission or required policy. Unsupported native policy mapping is reported by the backend, not a cosmetic permission switch.").font(.caption)
+            Text("Requested access cannot exceed the measured machine capability, actual OS permission or required policy. Unsupported native policy mapping is reported by the backend, not a cosmetic permission switch.").font(LBFont.meta)
         }.task { await load() }
     }
     private func load(more: Bool = false) async { await action.perform(readOnly: true) {

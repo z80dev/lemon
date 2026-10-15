@@ -103,7 +103,8 @@ defmodule LemonOmp.Manager do
       case DynamicSupervisor.start_child(LemonOmp.SessionSupervisor, {LemonOmp.Session, opts}) do
         {:ok, pid} ->
           ref = Process.monitor(pid)
-          {:reply, {:ok, pid}, %{state | monitors: Map.put(state.monitors, ref, opts[:id])}}
+          owned = {opts[:id], opts[:worktree]}
+          {:reply, {:ok, pid}, %{state | monitors: Map.put(state.monitors, ref, owned)}}
 
         {:error, {:shutdown, {:spawn_failed, _reason}}} ->
           {:reply, {:error, :startup_failed}, state}
@@ -116,32 +117,50 @@ defmodule LemonOmp.Manager do
 
   @impl true
   def handle_cast({:ended, _id}, state) do
-    evict_ended()
+    evict_ended(state.monitors)
     {:noreply, state}
   end
 
   @impl true
   def handle_info({:DOWN, ref, :process, _pid, reason}, state) do
-    {id, monitors} = Map.pop(state.monitors, ref)
+    {owned, monitors} = Map.pop(state.monitors, ref)
 
-    with id when is_binary(id) <- id,
-         [{^id, pid, wire}] <- :ets.lookup(@table, id),
-         true <- wire["status"] not in ["closed", "failed"] do
-      now = System.system_time(:millisecond)
-
+    with {id, worktree} when is_binary(id) <- owned,
+         [{^id, pid, wire}] <- :ets.lookup(@table, id) do
       wire =
-        Map.merge(wire, %{
-          "status" => "failed",
-          "activity" => nil,
-          "activeTools" => [],
-          "endedAt" => now,
-          "updatedAt" => now,
-          "error" => "the Lemon process supervising omp stopped unexpectedly",
-          "exit" => %{"code" => nil, "reason" => down_reason(reason)}
-        })
+        if wire["status"] not in ["closed", "failed"] do
+          now = System.system_time(:millisecond)
 
-      publish(pid, wire, "exited")
+          wire =
+            Map.merge(wire, %{
+              "status" => "failed",
+              "activity" => nil,
+              "activeTools" => [],
+              "pendingApprovals" => [],
+              "endedAt" => now,
+              "updatedAt" => now,
+              "error" => "the Lemon process supervising omp stopped unexpectedly",
+              "exit" => %{"code" => nil, "reason" => down_reason(reason)}
+            })
+
+          publish(pid, wire, "exited")
+          wire
+        else
+          wire
+        end
+
+      if worktree && not Map.has_key?(wire["worktree"] || %{}, "kept") do
+        # A hard-killed Session cannot run terminate/2. Give omp's stdin EOF
+        # shutdown time to finish before inspecting the owned worktree.
+        Task.start(fn ->
+          Process.sleep(1_500)
+          cleaned = LemonOmp.Worktree.cleanup(worktree)
+          publish(pid, Map.put(wire, "worktree", cleaned), "exited")
+        end)
+      end
     end
+
+    evict_ended(monitors)
 
     {:noreply, %{state | monitors: monitors}}
   end
@@ -153,12 +172,19 @@ defmodule LemonOmp.Manager do
   defp down_reason({:shutdown, _}), do: "shutdown"
   defp down_reason(_reason), do: "crashed"
 
-  defp evict_ended do
+  defp evict_ended(monitors) do
+    owned_ids = MapSet.new(monitors, fn {_ref, {id, _worktree}} -> id end)
+    # Terminal publication can precede DOWN or asynchronous worktree cleanup;
+    # the snapshot is still required to finish that ownership lifecycle.
+
     ended =
       @table
       |> :ets.tab2list()
-      |> Enum.filter(fn {_id, _pid, wire} -> wire["status"] in ["closed", "failed"] end)
-      |> Enum.sort_by(fn {_id, _pid, wire} -> -(wire["endedAt"] || 0) end)
+      |> Enum.filter(fn {id, _pid, wire} ->
+        wire["status"] in ["closed", "failed"] and not MapSet.member?(owned_ids, id) and
+          (is_nil(wire["worktree"]) or Map.has_key?(wire["worktree"], "kept"))
+      end)
+      |> Enum.sort_by(fn {_id, _pid, wire} -> -(wire["endedAt"] || wire["startedAt"] || 0) end)
 
     ended
     |> Enum.drop(@max_ended)

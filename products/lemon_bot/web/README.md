@@ -59,6 +59,21 @@ Microphone capture begins only after explicit action, has stop/cancel controls a
 
 No mutation is automatically replayed after a lost response. Unknown outcomes retain draft input and fixed nonce/resource IDs, fence consequential intents and offer read-only reconciliation. Revisions bind edits. Destructive dialogs disclose exact affected/retained scope, expire, require typed confirmation and remain mounted until acknowledgment. Offline destructive actions and approvals are never queued. Read failures are errors, not synthetic empty lists or success. Realtime cursors are acknowledged only after authoritative event application; refresh never treats a watermark as a replacement snapshot.
 
+## Connection recovery
+
+The connection panel names the product service origin (the browser origin through
+the Vite proxy in development), distinguishes network/service/proxy failures from
+a disconnected Lemon link, and shows the actual retry countdown. **Try again**
+replaces the realtime connection after fetching a fresh workspace snapshot; it
+never replays a work command. Expired or revoked sessions return to sign-in with
+an explicit explanation. Invalid saved sign-in callback data is discarded safely.
+
+Owners and admins can inspect a disconnected Lemon link and request a reconnect.
+Only owners can start/restart Lemon, and only when the backend advertises local
+runtime control. Restart requires confirmation. Running commands are observed
+with read-only polling and their output stays behind Details. An uncertain command
+receipt blocks further commands rather than sending it again.
+
 Owner account cleanup distinguishes product cleanup from actual provider receipt state, error and observation time. Ledger refresh cannot retry deletion/provider revocation or restore a deleted-user login.
 
 ## Central integration checks

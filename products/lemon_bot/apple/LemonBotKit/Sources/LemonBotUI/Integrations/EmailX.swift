@@ -19,16 +19,16 @@ struct EmailSettingsView: View {
     private var exactAvailable: Bool { availability?.available == true && checkedProvider == providerID && checkedPart == localPart }
     var body: some View {
         Form {
-            AdminStatus(control: control, store: store)
-            Section("Actual account-owned mailboxes") {
+            AdminStatus(control: control, store: store, refresh: { await control.perform { try await load() } })
+            Section("Your email addresses") {
                 ForEach(accounts) { account in
                     NavigationLink("\(account.address) · \(account.state)") { MailboxMessagesView(store: store, account: account) }
                     Text("\(account.provider) · \(account.immutableAddress ? "immutable address" : "provider-defined lifecycle")")
                     MailboxIndexingStatus(account: account)
                 }
-                Text("One claimed account-owned address. Email alone never wakes a Bot: explicitly matching authenticated/scanned sender/domain routines do. Mail read/search uses the provider's real index; this is not a guaranteed product inbox/new-mail notification service. All outbound mail, replies and routines require an editable draft and explicit Send.")
+                Text("Email never wakes a Bot on its own. Only routines you set up for specific senders can. Search uses your provider's index, so new mail may take a while to appear. Every outgoing email is a draft until you tap Send.")
             }
-            Section("Choose registered provisioning provider") {
+            Section("Choose an email provider") {
                 Picker("Provider", selection: $providerID) {
                     Text("Choose provider").tag("")
                     ForEach(providers, id: \.id) { Text("\($0.label) · \($0.domain)").tag($0.id) }
@@ -37,10 +37,10 @@ struct EmailSettingsView: View {
                     ProviderPrerequisites(label: provider.label, kind: provider.kind, configured: provider.configured, prerequisites: provider.prerequisites, capabilities: provider.capabilities)
                     Text("Address lifecycle: \(provider.immutableAddresses ? "immutable" : "provider-defined") · actual provisioning \(provider.supportsProvisioning ? "supported" : "unavailable") · unsubscribe \(provider.supportsUnsubscribe ? "supported" : "unavailable")")
                 }
-                TextField("Exact local part", text: $localPart).disabled(proposal != nil)
-                Text("Up to 64 lowercase letters/digits/dot/hyphen/underscore, starts and ends with letter/digit. Reserved names, uniqueness and throttling are validated by the actual provider.")
+                TextField("Address name (before @)", text: $localPart).disabled(proposal != nil)
+                Text("Use up to 64 lowercase letters, numbers, dots, hyphens or underscores. Start and end with a letter or number. Your provider checks availability and reserved names.")
                 AdminBotPicker(store: store, value: $botID, ownedOnly: true).disabled(proposal != nil)
-                AdminAction(title: "Check exact address availability", store: store, control: control) {
+                AdminAction(title: "Check availability", store: store, control: control) {
                     availability = try await store.mutate("POST", "/email/address/check", body: ["providerId": .string(providerID), "localPart": .string(localPart)], as: EmailAddressAvailability.self)
                     checkedProvider = providerID; checkedPart = localPart
                 }.disabled(provider?.configured != true || provider?.supportsProvisioning != true || localPart.isEmpty || proposal != nil)
@@ -48,40 +48,47 @@ struct EmailSettingsView: View {
                     Text("\(availability.address) · \(availability.available ? "available at check time" : "unavailable") · \(availability.immutable ? "immutable" : "provider-defined lifecycle")")
                     if let reason = availability.reason { Text(reason).textSelection(.enabled) }
                 }
-                AdminAction(title: "Create exact permissions proposal (does not claim)", store: store, control: control) {
+                AdminAction(title: "Request this address", store: store, control: control) {
                     let target = EmailClaimIntent(providerID: providerID, localPart: localPart, botID: botID)
                     proposal = try await store.mutate("POST", "/email/address/approval", body: ["providerId": .string(target.providerID), "localPart": .string(target.localPart), "botId": .string(target.botID)], as: Approval.self)
                     intent = target
                 }.disabled(!exactAvailable || botID.isEmpty || proposal != nil)
+                Text("Requesting asks for approval. It doesn't create or claim the address yet.").font(LBFont.meta)
             }
             if let proposal, let intent {
-                Section("Review exact proposed claim") {
+                Section("Review address request") {
                     Text(proposal.title).font(.headline); Text(proposal.description)
-                    Text("Target: \(proposal.target) · provider \(intent.providerID) · local part \(intent.localPart) · Bot \(intent.botID)")
-                    Text("\(proposal.category) · \(proposal.gate.state) · scope \(proposal.scope.label) · machine \(proposal.scope.machineLabel)")
+                    Text("\(intent.localPart)@\(providers.first(where: { $0.id == intent.providerID })?.domain ?? "selected provider")")
+                    Text("Provider: \(providers.first(where: { $0.id == intent.providerID })?.label ?? "Email provider") · Bot: \(store.bots.first(where: { $0.id == intent.botID })?.name ?? "Selected Bot")")
+                    DisclosureGroup("Details") {
+                        let details = "Provider: \(intent.providerID)\nBot: \(intent.botID)\nTarget: \(proposal.target)"
+                        Text(details).textSelection(.enabled)
+                        Button("Copy") { copyText(details) }
+                    }
+                    Text("\(humanizedStatus(proposal.gate.state)) · \(proposal.scope.label) · \(proposal.scope.machineLabel)")
                     ForEach(proposal.scope.consequences, id: \.self) { Text($0) }
                     Text("Expires \(adminDate(Double(proposal.gate.expiresAtMs)))")
                     if proposal.gate.state == "pending" {
                         ForEach(["approve_once", "deny"], id: \.self) { decision in
-                            AdminAction(title: decision == "approve_once" ? "Approve exact claim once" : "Deny claim", store: store, control: control) {
+                            AdminAction(title: decision == "approve_once" ? "Approve once" : "Deny", store: store, control: control) {
                                 self.proposal = try await store.mutate("POST", "/approvals/\(adminPath(proposal.id))/resolve", body: ["revision": .number(Double(proposal.revision)), "decision": .string(decision)], as: Approval.self)
                             }.disabled(proposal.gate.targetUserId != store.user?.id || Double(proposal.gate.expiresAtMs) <= Date().timeIntervalSince1970 * 1000)
                         }
                     }
-                    AdminAction(title: "Claim only the approved exact address", store: store, control: control) {
+                    AdminAction(title: "Claim approved address", store: store, control: control) {
                         _ = try await store.mutate("POST", "/email/address/claim", body: ["providerId": .string(intent.providerID), "localPart": .string(intent.localPart), "approvalId": .string(proposal.id)], as: EmailAccount.self)
                         self.proposal = nil; self.intent = nil; availability = nil; try await load()
                     }.disabled(proposal.gate.state != "approved" || proposal.gate.targetUserId != store.user?.id || Double(proposal.gate.expiresAtMs) <= Date().timeIntervalSince1970 * 1000)
-                    Button("Refresh proposal / reconcile without claiming") { Task { await control.perform {
+                    Button("Refresh request") { Task { await control.perform {
                         self.proposal = try await store.read("/approvals/\(adminPath(proposal.id))", as: Approval.self); try await load()
                     } } }
                     if proposal.gate.state == "denied" || proposal.gate.state == "expired" || proposal.gate.state == "cancelled" {
-                        Text("No claim was authorized. A new explicit request needs another availability check and proposal.")
+                        Text("This address wasn't approved. Check availability again to start a new request.")
                         Button("Start a new address request") { self.proposal = nil; self.intent = nil; availability = nil }
                     }
                 }
             }
-            Button("Refresh mailbox/provider status (never reclaims)") { Task { await control.perform { try await load() } } }
+            Button("Refresh email status") { Task { await control.perform { try await load() } } }
         }.navigationTitle("Email").task { await control.perform { try await load() } }
     }
     private func load() async throws { providers = try await store.read("/email/providers", as: [EmailProviderInfo].self); accounts = try await adminReadAll(store, "/email/accounts", as: EmailAccount.self) }
@@ -96,7 +103,7 @@ struct MailboxMessagesView: View {
     @State private var sender = ""
     var body: some View {
         Form {
-            AdminStatus(control: control, store: store)
+            AdminStatus(control: control, store: store, refresh: { await control.perform { try await load() } })
             Section("Actual provider mailbox search") {
                 Text(account.address).textSelection(.enabled)
                 Text("\(account.state) · \(account.immutableAddress ? "immutable address" : "provider-defined address lifecycle")")
@@ -162,36 +169,36 @@ struct XSettingsView: View {
     @State private var consent = false
     var body: some View {
         Form {
-            AdminStatus(control: control, store: store)
-            Section("Registered X provider — no implicit account linking") {
+            AdminStatus(control: control, store: store, refresh: { await control.perform { try await load() } })
+            Section("X on this server") {
                 if let provider {
                     ProviderPrerequisites(label: provider.label, kind: provider.kind, configured: provider.configured, prerequisites: provider.prerequisites, capabilities: provider.capabilities)
-                    Text("Actual public Bot handle: \(provider.publicHandle)")
-                    Text("OAuth scopes: \(provider.oauthScopes.joined(separator: ", "))")
+                    Text("Public Bot handle: \(provider.publicHandle)")
+                    Text("Account permissions: \(provider.oauthScopes.joined(separator: ", "))")
                     Text("Allowed media: \(provider.allowedMedia.joined(separator: ", ")) · disallowed countries: \(provider.deniedCountries.joined(separator: ", "))")
                 } else {
-                    Text("No eligible registered X provider. Operator must configure xProvider OAuth/API/public handle/signature gateway and native redirect allowlist in the private provider configuration. No account or public confirmation is fabricated.")
+                    Text("X isn't set up on this server yet. Ask whoever runs your Lemon Bot server to finish X setup.")
                 }
-                Text("Public source reading does not need private account access. Protected tools require their own explicit MCP account scopes. Only your own explicit mention of the registered public handle wakes your selected private main Bot, under actual region/media/moderation/spend rules. Short public acceptance is sent only after a real accepted receipt; results remain private.")
+                Text("Reading public posts doesn't connect your private account. When you mention this server's public Bot from your linked account, your chosen Bot can start work within your workspace's limits. Results stay private. Connecting here doesn't give other tools access to your account.")
             }
             Section("Connect your X account") {
                 AdminBotPicker(store: store, value: $botID, ownedOnly: true)
-                Toggle("I reviewed actual OAuth scopes, public mention behavior and private Bot destination", isOn: $consent)
-                AdminAction(title: "Start explicit X OAuth connection", store: store, control: control) {
+                Toggle("I've reviewed the account permissions, public mentions and selected Bot", isOn: $consent)
+                AdminAction(title: "Connect X account", store: store, control: control) {
                     result = try await store.mutate("POST", "/x/connections", body: ["mainBotId": .string(botID), "redirectUri": .string("lemonbot://auth/complete")], as: XConnectResult.self)
                     consent = false
                 }.disabled(!consent || botID.isEmpty || provider?.configured != true)
                 if let result {
                     Text("\(result.connection.state) · selected Bot \(result.connection.mainBotId)")
-                    if let url = URL(string: result.authorizationUrl), url.scheme == "https" { Button("Open / reopen X authorization") { openURL(url) } }
-                    Button("Check actual OAuth result") { Task { await control.perform { try await load() } } }
+                    if let url = URL(string: result.authorizationUrl), url.scheme == "https" { Button("Continue on X") { openURL(url) } }
+                    Button("Check connection") { Task { await control.perform { try await load() } } }
                 }
             }
             Section("Own connected accounts and main Bots") {
                 ForEach(connections) { connection in XConnectionSettingsRow(store: store, connection: connection, refresh: load) }
             }
-            Button("Refresh actual account/provider status") { Task { await control.perform { try await load() } } }
-        }.navigationTitle("X integration").task { await control.perform { try await load() } }
+            Button("Refresh X status") { Task { await control.perform { try await load() } } }
+        }.navigationTitle("X").task { await control.perform { try await load() } }
     }
     private func load() async throws { provider = try await store.read("/x/provider", as: Optional<XProviderInfo>.self); connections = try await adminReadAll(store, "/x/connections", as: XConnection.self) }
 }
@@ -206,11 +213,11 @@ struct XConnectionSettingsRow: View {
         VStack(alignment: .leading) {
             if let username = connection.username, let externalID = connection.externalAccountId {
                 Text("@\(username) · \(connection.state) · verified external account \(externalID)")
-                if connection.state != "connected" { Text("Last verified identity only; this is not an active authorization grant.").font(.caption).foregroundStyle(.secondary) }
+                if connection.state != "connected" { Text("Last verified identity only; this is not an active authorization grant.").font(.caption).foregroundStyle(LB.muted) }
             } else {
                 Text("Account not yet verified · \(connection.state)")
             }
-            if let error = connection.lastError { Text(error).foregroundStyle(.red).textSelection(.enabled) }
+            if let error = connection.lastError { Text(error).foregroundStyle(LB.danger).textSelection(.enabled) }
             AdminBotPicker(store: store, value: $botID, ownedOnly: true)
             Toggle("Enable my mention integration", isOn: $enabled)
             AdminAction(title: "Save exact main Bot and enable state", store: store, control: control) {
@@ -219,7 +226,7 @@ struct XConnectionSettingsRow: View {
             AdminAction(title: "Disconnect X account", store: store, control: control, destructive: true) {
                 _ = try await store.mutate("DELETE", "/x/connections/\(adminPath(connection.id))", body: adminRevision(connection.revision), as: Deleted.self); try await refresh()
             }
-            if let error = control.error { Text(error).foregroundStyle(.red).textSelection(.enabled) }
+            if let error = control.error { Text(error).foregroundStyle(LB.danger).textSelection(.enabled) }
         }.onAppear { botID = connection.mainBotId; enabled = connection.enabled }
     }
 }
@@ -229,14 +236,12 @@ private struct MailboxIndexingStatus: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             if (account.indexingDelayed ?? nil) == true {
-                Label("Provider reports delayed indexing; recent mail may not appear yet.", systemImage: "clock.badge.exclamationmark")
-                    .foregroundStyle(.orange)
+                Label("Provider reports delayed indexing; recent mail may not appear yet.", systemImage: "clock.badge.exclamationmark").foregroundStyle(LB.warning)
             } else if (account.indexingDelayed ?? nil) == nil {
-                Text("Provider indexing status has not been measured.").foregroundStyle(.secondary)
+                Text("Provider indexing status has not been measured.").foregroundStyle(LB.muted)
             }
             if let measured = account.indexingMeasuredAtMs ?? nil {
-                Text("Index observation: \(adminDate(measured)) · \(Date(timeIntervalSince1970: measured / 1000).formatted(.relative(presentation: .named)))")
-                    .foregroundStyle(.secondary)
+                Text("Index observation: \(adminDate(measured)) · \(Date(timeIntervalSince1970: measured / 1000).formatted(.relative(presentation: .named)))").foregroundStyle(LB.muted)
             }
         }.font(.caption)
     }

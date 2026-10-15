@@ -19,10 +19,10 @@ struct ChannelSettingsView: View {
     private var provider: ChannelProviderInfo? { providers.first { $0.id == providerID } }
     var body: some View {
         Form {
-            AdminStatus(control: control, store: store)
-            Section("Channel bindings — not MCP posting accounts") {
-                ForEach(channels) { channel in NavigationLink("\(channel.adapter) · \(channel.target) · \(channel.state) · \(channel.enabled ? "enabled" : "disabled")") { ChannelDetailSettingsView(store: store, binding: channel) } }
-                Text("Mapped external actors use their enabled product identity and budget. An unlinked person is refused, never silently charged to the Bot owner. Thread participation and listener triggers are separate from ordinary plugin posting consent.")
+            AdminStatus(control: control, store: store, refresh: { await control.perform { try await load() } })
+            Section("Chat channels") {
+                ForEach(channels) { channel in NavigationLink("\(channel.adapter.capitalized) · \(channel.target) · \(humanizedStatus(channel.state)) · \(channel.enabled ? "Enabled" : "Disabled")") { ChannelDetailSettingsView(store: store, binding: channel) } }
+                Text("People must link their account before using a Bot in a channel. Their own permissions and budget apply; unlinked people can't charge work to the Bot owner. Connecting a posting tool is a separate step.")
             }
             Section("Install or authorize a registered provider") {
                 AdminBotPicker(store: store, value: $bot)
@@ -35,19 +35,19 @@ struct ChannelSettingsView: View {
                     Text("Per-Bot app install: \(provider.supportsBotAppInstall ? "supported" : "not supported")")
                 }
                 TextField("Account label", text: $label)
-                AdminAction(title: "Start provider install / authorization", store: store, control: control) {
+                AdminAction(title: "Connect channel", store: store, control: control) {
                     guard let provider else { throw AdminFormError("Choose a registered provider.") }
                     setup = try await store.mutate("POST", "/channels/setup", body: ["botId": .string(bot), "adapter": .string(provider.adapter), "providerId": .string(provider.id), "accountLabel": .string(label), "redirectUri": .string("lemonbot://auth/complete")], as: ChannelSetupFlow.self)
                 }.disabled(bot.isEmpty || provider?.configured != true)
                 if let setup {
-                    Text("Install: \(setup.state) · Bot \(setup.botId)")
-                    if let error = setup.error { Text(error).foregroundStyle(.red).textSelection(.enabled) }
-                    if let string = setup.authorizationUrl, let url = URL(string: string), url.scheme == "https" { Button("Open / reopen provider installation") { openURL(url) } }
-                    Button("Check actual install status") { Task { await control.perform {
+                    Text("\(setup.state == "awaiting_admin" ? "Waiting for a workspace admin to approve" : humanizedStatus(setup.state)) · \(store.bots.first(where: { $0.id == setup.botId })?.name ?? "Selected Bot")")
+                    if let error = setup.error { Text(error).foregroundStyle(LB.danger).textSelection(.enabled) }
+                    if let string = setup.authorizationUrl, let url = URL(string: string), url.scheme == "https" { Button("Continue setup") { openURL(url) } }
+                    Button("Check setup status") { Task { await control.perform {
                         self.setup = try await store.read("/channels/setup/\(adminPath(setup.id))", as: ChannelSetupFlow.self)
                         channels = try await adminReadAll(store, "/channels", as: ChannelBinding.self)
                     } } }
-                    Text("Awaiting admin is not installed. Welcome/invite/removal use the provider's actual permissions. A denied or failed install never becomes connected merely because this screen closes.")
+                    Text("Setup isn't complete until approval and installation finish. Closing this screen doesn't cancel setup or turn a failed install into a connection.")
                 }
             }
             Section("Existing operator-configured adapter binding") {
@@ -59,14 +59,14 @@ struct ChannelSettingsView: View {
                     _ = try await store.mutate("POST", "/channels", body: ["botId": .string(bot), "adapter": .string(adapter), "accountId": .string(accountID), "target": .string(target), "enabled": .bool(enabled)], as: ChannelBinding.self); try await load()
                 }.disabled(bot.isEmpty || accountID.isEmpty || target.isEmpty)
             }
-            Section("Own verified external principal links") {
+            Section("Your linked accounts") {
                 ForEach(links) { link in
                     Text("\(link.channelBindingId) · verified external \(link.externalUserId) → product \(link.userId) · \(link.verified ? "verified" : "not verified")")
-                    AdminAction(title: "Remove this principal link", store: store, control: control, destructive: true) {
+                    AdminAction(title: "Unlink account", store: store, control: control, destructive: true) {
                         _ = try await store.mutate("DELETE", "/channels/principal-links/\(adminPath(link.id))", body: adminRevision(link.revision), as: Deleted.self); try await load()
                     }
                 }
-                Text("Open a binding to initiate a one-use proof through your actual authenticated external account. No arbitrary user-ID mapping is accepted.")
+                Text("Open a channel and choose Link my account to confirm it's you.")
             }
             Button("Refresh channels, links and providers") { Task { await control.perform { try await load() } } }
         }.navigationTitle("Channels").task { await control.perform { try await load() } }
@@ -95,7 +95,7 @@ struct ChannelDetailSettingsView: View {
                 Text("\(value.adapter) · account \(value.accountId) · Bot \(value.botId) · \(value.state)")
                 Text("Inbound \(value.capabilities.inbound ? "supported" : "unavailable") · outbound \(value.capabilities.outbound ? "supported" : "unavailable")")
                 ForEach(value.capabilities.events, id: \.self) { Text($0) }
-                if let error = value.lastError { Text(error).foregroundStyle(.red).textSelection(.enabled) }
+                if let error = value.lastError { Text(error).foregroundStyle(LB.danger).textSelection(.enabled) }
                 TextField("Exact target", text: $target); Toggle("Enabled", isOn: $enabled)
                 AdminAction(title: "Save binding", store: store, control: control) {
                     current = try await store.mutate("PATCH", "/channels/\(adminPath(binding.id))", body: ["revision": .number(Double(value.revision)), "target": .string(target), "enabled": .bool(enabled)], as: ChannelBinding.self)

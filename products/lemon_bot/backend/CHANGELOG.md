@@ -1,5 +1,10 @@
 # Backend changelog
 
+## Unreleased
+
+- Fixed Apple clients reporting a retired foreground-presence socket's error after a reconnect during an acknowledged message send. Current socket failures and uncertain message nonce fencing remain intact.
+- Added owner-scoped read-only message receipts that retain the full original group target set and current run outcomes. Native clients automatically reconcile lost/late relay acknowledgements without resending, preserve refused/unknown targets, and acknowledge only the cursor delivered by each realtime frame.
+
 ## 0.1.0
 
 - Added the separate Bun/SQLite product API and static web serving, durable local account/member/device authorization, encrypted private credentials and exact nonce receipts.

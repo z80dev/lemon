@@ -44,7 +44,10 @@ async function destination(endpoint: string, options: PushOptions): Promise<{ ur
   const env = options.env ?? process.env;
   let url: URL; try { url = new URL(endpoint); } catch { return fail('invalid_request', 'Invalid Web Push endpoint.'); }
   const origins = env.LEMON_BOT_WEB_PUSH_ORIGINS?.split(',').map(s => s.trim()).filter(Boolean) ?? DEFAULT_ORIGINS;
-  if (url.protocol !== 'https:' || url.username || url.password || url.hash || (url.port && url.port !== '443') || !origins.includes(url.origin) || isIP(url.hostname)) fail('invalid_request', 'Web Push endpoint is not an allowed HTTPS push service.');
+  if (url.protocol !== 'https:' || url.username || url.password || url.hash || (url.port && url.port !== '443') || !origins.includes(url.origin) || isIP(url.hostname)) {
+    process.stderr.write('Web Push registration rejected: check endpoint validity and LEMON_BOT_WEB_PUSH_ORIGINS.\n');
+    fail('invalid_request', 'This push service is not supported by this server. Ask the operator to check push notification setup.');
+  }
   let addresses: { address: string; family: number }[];
   const deadline = Promise.withResolvers<never>(), timer = setTimeout(() => deadline.reject(new Error('DNS timeout.')), options.timeoutMs ?? 15_000);
   try { addresses = await Promise.race([(options.resolve ?? (host => lookup(host, { all: true })))(url.hostname), deadline.promise]); } catch { return fail('upstream_unavailable', 'Push service DNS resolution failed or timed out.'); } finally { clearTimeout(timer); }
@@ -56,7 +59,10 @@ export async function validatePushRegistration(registration: P.PushRegistration,
   if (registration.kind === 'apns') {
     const topics = env.LEMON_BOT_APNS_TOPICS?.split(',').map(s => s.trim()).filter(Boolean) ?? [];
     const environments = env.LEMON_BOT_APNS_ENVIRONMENTS?.split(',').map(s => s.trim()) ?? ['sandbox', 'production'];
-    if (!/^[a-fA-F0-9]{64}$/.test(registration.token) || !APNS_TOPIC.test(registration.topic) || !topics.includes(registration.topic) || !environments.includes(registration.environment) || !['sandbox', 'production'].includes(registration.environment)) fail('invalid_request', 'APNs token, topic or environment is not allowed.');
+    if (!/^[a-fA-F0-9]{64}$/.test(registration.token) || !APNS_TOPIC.test(registration.topic) || !topics.includes(registration.topic) || !environments.includes(registration.environment) || !['sandbox', 'production'].includes(registration.environment)) {
+      process.stderr.write('APNs registration rejected: check token validity, LEMON_BOT_APNS_TOPICS and LEMON_BOT_APNS_ENVIRONMENTS.\n');
+      fail('invalid_request', 'This device could not register for push notifications. Ask the operator to check the server’s Apple push setup.');
+    }
   } else if (registration.kind === 'web_push') {
     const publicKey = decode(registration.keys.p256dh, 65); decode(registration.keys.auth, 16);
     try { ECDH.convertKey(publicKey, 'prime256v1', undefined, undefined, 'uncompressed'); } catch { fail('invalid_request', 'Invalid Web Push P-256 key.'); }
