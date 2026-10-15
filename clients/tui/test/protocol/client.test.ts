@@ -102,10 +102,11 @@ describe("handshake", () => {
 			rejectHandshake: { code: "UNAUTHORIZED", message: "bad token" },
 		});
 		const client = makeClient(server.url);
-		const queued = client.request("chat.send", { prompt: "before rejection" });
-		const queuedFailure = expect(queued).rejects.toBeInstanceOf(AuthenticationError);
+		const queuedFailure = client
+			.request("chat.send", { prompt: "before rejection" })
+			.catch((error) => error);
 		await expect(client.connect()).rejects.toBeInstanceOf(AuthenticationError);
-		await queuedFailure;
+		expect(await queuedFailure).toBeInstanceOf(AuthenticationError);
 		expect(client.state).toBe("auth-rejected");
 		await expect(client.request("chat.send", { prompt: "after rejection" })).rejects.toBeInstanceOf(
 			AuthenticationError,
