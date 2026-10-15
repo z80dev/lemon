@@ -34,7 +34,7 @@ public struct ConversationView: View {
 
     private static let bottomID = "transcript-bottom"
     #if os(macOS)
-    private static let topInset: CGFloat = 64
+    private static let topInset: CGFloat = 76
     #else
     private static let topInset: CGFloat = 12
     #endif
@@ -280,6 +280,16 @@ public struct ConversationView: View {
     @ViewBuilder private func chrome(matches: [ID], current: ID?) -> some View {
         #if os(macOS)
         ZStack(alignment: .top) {
+            // Scroll edge: messages pass under a soft fade instead of colliding with the pill.
+            LinearGradient(stops: [
+                .init(color: LB.canvas, location: 0),
+                .init(color: LB.canvas.opacity(0.94), location: 0.5),
+                .init(color: LB.canvas.opacity(0), location: 1)
+            ], startPoint: .top, endPoint: .bottom)
+            .frame(maxWidth: .infinity)
+            .frame(height: 76)
+            .allowsHitTesting(false)
+            .ignoresSafeArea(.container, edges: .top)
             headerPill(floating: true).padding(.top, 10)
             HStack { Spacer(); actionsMenu.background(Circle().fill(LB.raised)) }.padding(.top, 8).padding(.trailing, 14)
             if findOpen { findBar(matches: matches, current: current).padding(.top, 52).transition(.opacity.combined(with: .move(edge: .top))) }
@@ -362,7 +372,7 @@ public struct ConversationView: View {
         if let conversation, conversation.unreadCount > 0 { unreadFromSeq = conversation.lastReadSeq + 1 } else { unreadFromSeq = nil }
         let runsTask = Task { await loadRuns() }
         await action.perform {
-            try await store.openConversation(conversationID)
+            try await store.openConversation(conversationID, select: false)
             let page: Page<TranscriptEntry> = try await store.read(resourcePath("conversations", conversationID, "/entries"))
             olderCursor = page.nextCursor
             merge(page.items)

@@ -149,6 +149,8 @@ Revoke the phone through **Settings → Account → Registered devices** or **Pr
 
 ## Native workspace
 
+The app is messaging-first. The sidebar holds search and new-Bot buttons, pinned Bot avatars, Inbox and Activity entries, Bot rows (lemon avatar, name, label chip, last-message preview, unread dot), groups and tasks, and at the bottom the account avatar (opens Settings) and **Connect apps**. A conversation has a floating Bot pill that toggles the inspector (Activity, Details, Library), grouped bubbles, a live "working…" row and a floating composer. Machines, connectors, channels, policies, usage and exports, account, devices, **Connect iPhone** and workspace admin live in **Settings**: the standard Settings window on macOS, a pushed list on iOS. Design tokens and shared components are in `LemonBotKit/Sources/LemonBotUI/Design/`.
+
 The primary navigation is your named Bot roster, with pinned Bots, synced sections, groups of your own Bots, hidden Bots and unread/activity indicators. macOS uses roster, conversation and inspector; iOS adapts split navigation to the available width. Bot identity, Job and assigned-profile Memory remain distinct. The selected Bot shows its actual owned desktop/swarm host, current work and reviewed artifacts, with Activity + Upcoming, Ideas that draft rather than execute, preference inspection/Undo, native capability review, templates and milestone evidence. Live Team Bots, managers, publishing, membership controls and enterprise-first navigation are absent; workspace/public templates remain reviewed declarative copies, not live access grants.
 
 Groups have one human owner and two to six Bots owned by that person. There are no human invitations, successor transfer or Group Leave. Deletion uses the existing exact preview/confirmation and verified active/unknown-work lifecycle. Authoritative conversation deletion removes only this account's room draft and copied staging files, not selected originals or another account's cache. Legacy cached foreign live Bots/rooms do not regain visibility during offline restoration.
@@ -189,6 +191,13 @@ swift test --package-path LemonBotKit
 # Native destructive-scope/error/pagination/task-target decoding tests:
 xcodebuild -project LemonBot.xcodeproj -scheme LemonBotMac \
   -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO test
+```
+
+DEBUG-only visual check. The `LemonBotSnapshots` scheme renders the real views with in-process fixture data, in light and dark, to `/tmp/lb-ux/after/apple-*.png`. Set `TEST_RUNNER_LB_SNAPSHOT_DIR` to write somewhere else. The iOS app launched with `-LBFixtures` in a Debug build opens the same fixture workspace.
+
+```sh
+xcodebuild -project LemonBot.xcodeproj -scheme LemonBotSnapshots \
+  -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO test -only-testing:LemonBotSnapshotTests
 ```
 
 Exercise a real backend and attached host: setup/login/OIDC and account switch; desktop HTTPS-publicUrl QR issuance; phone scan/paste exact preview, matching-code approve/deny, pending reopen, lost issuance/claim/completion receipt recovery, expired re-pair, Keychain restart, offline return, same Bot/conversation restore and device/session revocation. Also exercise draft retention; streaming reconnect and cursor expiry; stale/expired gates; uncertain send reconciliation; owner groups and profile memory; files and interactive PTY; voice permissions/review/mute/end; interrupted share import; notifications/task links; provider prerequisites and applied host policy. Build/test success does not substitute for real camera permission, physical-device TLS/Tailscale reachability, signing/APNs or configured host/provider probes.
