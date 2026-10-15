@@ -119,4 +119,22 @@ defmodule LemonWeb.DiagnosticsLiveTest do
     assert has_element?(view, "#doctor-unavailable")
     refute html =~ "doctor boom"
   end
+
+  test "null run counts render unknown in the live card and copied diagnostics", %{conn: conn} do
+    {:ok, started} = Application.ensure_all_started(:lemon_router)
+    on_exit(fn -> Enum.each(Enum.reverse(started), &Application.stop/1) end)
+    :ok = Supervisor.terminate_child(LemonRouter.Supervisor, LemonRouter.RunCountTracker)
+
+    try do
+      {:ok, view, _html} = live(conn, "/diagnostics")
+      html = render_async(view)
+      assert html =~ "unknown today"
+      assert html =~ "unknown failed today"
+      copy = view |> element("#diagnostics-copy") |> render()
+      assert copy =~ "unknown today"
+      assert copy =~ "unknown failed today"
+    after
+      Supervisor.restart_child(LemonRouter.Supervisor, LemonRouter.RunCountTracker)
+    end
+  end
 end

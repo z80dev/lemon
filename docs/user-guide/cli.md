@@ -182,6 +182,20 @@ See the [timeline method reference](../reference/control-plane.md#runstimelinege
 nonzero persisted failure streak). Use `--json` for the complete cron status
 projection. See [cron failure alerts](reminders-and-heartbeats.md#failure-alerts-and-recovery).
 
+`lemon cron list [--failing] [--json]` lists job IDs, names, schedules, enabled
+state, next-run timestamps, failure streaks, and last statuses. `--failing` keeps
+jobs with a nonzero failure streak. No cron command starts a runtime.
+
+Use `lemon cron pause <id|name>`, `resume <id|name>`, or `run <id|name>` to
+disable scheduled launches, re-enable them, or trigger a manual run through the
+runtime's normal validation. Names match exactly, case-insensitively; duplicate
+names are refused with candidate IDs. Exact IDs take precedence.
+
+`lemon cron remove <id|name>` asks for confirmation. Non-interactive callers
+must explicitly pass `--yes`; cancellation never removes the job. The TUI offers
+the same management actions with `/cron` (list by default); `/cron remove`
+opens a confirmation picker with Cancel selected first.
+
 `cron runs` uses the cron status vocabulary: `pending`, `running`, `completed`,
 `failed`, `timeout`, and `aborted`. Without `--job`, it queries each currently
 configured job and returns the newest matching rows across those jobs. Deleted
@@ -221,7 +235,7 @@ packaged releases:
 | `blueprints` | Source and release | Starts the local runtime through the launcher if it is not healthy. |
 | `profile` | Source and release | `profile chat` starts the local runtime through the launcher if it is not healthy. |
 | `backup`, `context`, `sessions`, `learn` | Source and release | Manage backups, bounded context, durable sessions, and learning. |
-| `runs`, `cron runs`, `logs` | Source and release | Read-only operator inspection; requires a running runtime except for the redacted launcher-log fallback. |
+| `runs`, `cron`, `logs` | Source and release | Inspect runs/logs and manage scheduled jobs; requires a running runtime except for the redacted launcher-log fallback. |
 | `omp` | Source and release | Start, watch, steer, and resume omp coding-agent sessions owned by the runtime; starts the local runtime through the launcher if it is not healthy. |
 | `update` | Source and release | Release: full managed-update commands; source: `check` and `history` only, while plan/apply/rollback fail closed. Bare or unknown source update forms do not forward to Mix. Use `mix lemon.update` directly for source configuration migration and bundled-skill sync. |
 | `completion` | Source and release | Generate completion for the current launcher's available commands. |

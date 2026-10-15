@@ -26,8 +26,8 @@ defmodule LemonRouter.SessionCoordinator do
   alias LemonRouter.{
     PhasePublisher,
     QueueEffect,
-    RunStarter,
     RunReceiptStore,
+    RunStarter,
     SessionState,
     SessionTransitions,
     Submission
@@ -242,7 +242,7 @@ defmodule LemonRouter.SessionCoordinator do
   def pending_count do
     DynamicSupervisor.which_children(LemonRouter.SessionCoordinatorSupervisor)
     |> Enum.reduce(0, fn {_id, pid, _type, _modules}, count ->
-      count + GenServer.call(pid, :pending_count)
+      count + GenServer.call(pid, :pending_count, 100)
     end)
   end
 

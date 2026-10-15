@@ -182,6 +182,7 @@ export const METHOD = {
 	cronPause: "cron.pause",
 	cronResume: "cron.resume",
 	cronRemove: "cron.remove",
+	cronRun: "cron.run",
 	logsTail: "logs.tail",
 	configGet: "config.get",
 	configSet: "config.set",
@@ -756,6 +757,10 @@ export class ControlPlaneMethods {
 
 	cronRemove(params: { id: string }, options?: RequestOptions): Promise<Record<string, unknown>> {
 		return this.#call<Record<string, unknown>>(METHOD.cronRemove, params, options);
+	}
+
+	cronRun(params: { id: string }, options?: RequestOptions): Promise<Record<string, unknown>> {
+		return this.#call<Record<string, unknown>>(METHOD.cronRun, params, options);
 	}
 
 	// -- misc ---------------------------------------------------------------

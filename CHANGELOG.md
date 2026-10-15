@@ -16,6 +16,8 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 - Derive computer-use approval test origins from configured control-plane/web
   ports so non-default test listeners retain Lemon self-surface protection.
 
+- Run status preserves unavailable counts as unknown instead of zero and restores
+  UTC daily terminal totals after tracker restarts, including crashed runs.
 - Preserve delegated run identity when polling recovers a durable completion, so
   the task and RunGraph both become terminal even without a live watcher.
 - Make coordinator/session/watcher/environment regressions synchronize with their
@@ -51,12 +53,20 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   Document provider configuration and the shared LCU native-host connector's
   Codex/ChatGPT impact, backup requirements and rollback limitations.
 
+- Status exposes `failed_today` and per-field run-count availability, with
+  null-safe TUI and web diagnostics.
+
+- Manage scheduled jobs with `lemon cron` and TUI `/cron`: inspect failures,
+  pause/resume, trigger manually, and remove with confirmation by ID or exact name.
 - Setup offers local inference servers and custom OpenAI-compatible endpoints,
   optional encrypted keys, and consent-based model discovery with manual fallback.
 
 - TUI startup shows pending setup steps above the prompt, hides them once ready,
   and points empty model lists to `lemon setup provider`; `setup.status` exposes
   read-only, content-free readiness for clients.
+
+- Telegram and Discord support chat-scoped `/approve [id]` and `/deny [id]`
+  fallbacks for approval buttons, with unique prefixes and safe disambiguation.
 
 - Lemon Bot for Mac has an optional desktop pet: an original pixel lemon that
   floats above all windows and Spaces, reacts to thinking, tool work, approvals

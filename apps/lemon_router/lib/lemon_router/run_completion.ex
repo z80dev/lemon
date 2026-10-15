@@ -2,6 +2,7 @@ defmodule LemonRouter.RunCompletion do
   @moduledoc false
 
   alias LemonCore.{Bus, ExecutionCommand, RunStore}
+  alias LemonRouter.RunProcess.CompactionTrigger
 
   # Runs removed before an executor owns them still need the same durable
   # terminal receipt as executed runs. Persist before notifying waiters.
@@ -26,6 +27,21 @@ defmodule LemonRouter.RunCompletion do
     case RunStore.finalize(command.run_id, summary) do
       :ok ->
         :ok = LemonRouter.RunReceiptStore.retain_terminal_evidence(command.run_id)
+
+        # Pre-executor terminalizations have no RunProcess to write history.
+        # A stable event ID lets a live RunProcess enrich the same receipt.
+        LemonCore.Introspection.record(
+          :run_completed,
+          %{
+            ok: completed.ok,
+            error: CompactionTrigger.safe_error_label(Map.get(completed, :error)),
+            duration_ms: event.payload.duration_ms
+          },
+          event_id: "run_completed:#{command.run_id}",
+          run_id: command.run_id,
+          session_key: command.session_key,
+          engine: "lemon"
+        )
 
         LemonCore.Telemetry.emit(
           [:lemon, :run, :stop],

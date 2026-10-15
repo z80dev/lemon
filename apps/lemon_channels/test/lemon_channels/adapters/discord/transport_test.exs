@@ -8,6 +8,7 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
   alias LemonChannels.Adapters.Discord.TriggerMode
   alias LemonChannels.Discord.KnownTargetStore
   alias LemonCore.Dedupe.Ets
+  alias LemonCore.Events.ApprovalPending
   alias LemonCore.Store
 
   @bot_user_id 1_476_753_643_834_183_690
@@ -463,10 +464,65 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
     assert commands["stop"].description == "Alias for /cancel"
   end
 
+  test "text deny bypasses mention triggers and never becomes a prompt" do
+    with_discord_api(fn ->
+      state = discord_message_state()
+      channel_id = 1_475_727_417_372_049_419
+      pending = text_approval(channel_id)
+      message = discord_message("1503803470493299991", "/deny #{pending.id}", channel_id)
+
+      assert {:noreply, ^state} =
+               Transport.handle_info({:discord_event, {:MESSAGE_CREATE, message, nil}}, state)
+
+      assert_receive {:discord_create, ^channel_id, %{content: "Approval: Denied"}}
+      assert {:ok, nil} = LemonCore.ExecApprovalStore.fetch_pending(pending.id)
+    end)
+  end
+
+  test "slash approve selects the only pending approval once" do
+    with_interaction_responder(fn ->
+      state = discord_message_state()
+      slash = interaction("approve", [])
+      pending = text_approval(String.to_integer(slash.channel_id))
+
+      assert {:noreply, ^state} =
+               Transport.handle_info({:discord_event, {:INTERACTION_CREATE, slash, nil}}, state)
+
+      assert_receive {:interaction_response, ^slash,
+                      %{type: 4, data: %{content: "Approval: Approved (once)", flags: 64}}}
+
+      assert {:ok, nil} = LemonCore.ExecApprovalStore.fetch_pending(pending.id)
+    end)
+  end
+
+  defp text_approval(channel_id) do
+    id = LemonCore.Id.approval_id()
+
+    pending =
+      ApprovalPending.new(%{
+        id: id,
+        run_id: "run_#{id}",
+        session_key: "agent:test:child:#{id}",
+        tool: "bash",
+        action: %{command: "pwd"}
+      })
+
+    target = %{
+      channel_id: "discord",
+      account_id: "default",
+      peer: %{kind: :group, id: to_string(channel_id), thread_id: nil}
+    }
+
+    :ok = LemonChannels.Supervision.bind_run(pending.run_id, pending.session_key, target)
+    :ok = LemonCore.ExecApprovalStore.put_pending(id, pending)
+    on_exit(fn -> LemonCore.ExecApprovalStore.delete_pending(id) end)
+    pending
+  end
+
   test "exports portable status, task, compaction, help, and side-run commands" do
     commands = Map.new(Transport.slash_commands(), &{&1.name, &1})
 
-    for name <- ~w(status usage agents tasks compress commands help bg btw) do
+    for name <- ~w(status usage agents tasks compress commands help bg btw approve deny) do
       assert Map.has_key?(commands, name)
     end
 

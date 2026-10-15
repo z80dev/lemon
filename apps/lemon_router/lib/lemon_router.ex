@@ -83,7 +83,7 @@ defmodule LemonRouter do
         }
 
   @metadata_timeout_ms 100
-  @zero_counts %{active: 0, queued: 0, completed_today: 0}
+  @unavailable_counts %{active: nil, queued: nil, completed_today: nil, failed_today: nil}
 
   @doc """
   Whether the router runtime is up and able to accept work.
@@ -173,27 +173,26 @@ defmodule LemonRouter do
 
   @typedoc "Run counts as reported by the orchestrator."
   @type run_counts :: %{
-          active: non_neg_integer(),
-          queued: non_neg_integer(),
-          completed_today: non_neg_integer()
+          active: non_neg_integer() | nil,
+          queued: non_neg_integer() | nil,
+          completed_today: non_neg_integer() | nil,
+          failed_today: non_neg_integer() | nil
         }
 
   @doc """
   Orchestrator run counts.
 
-  Always returns the full shape: when the router is not running, every counter
-  is zero rather than the key being absent, so callers can read the fields
-  without guarding.
+  Always returns the full shape. Unavailable counters are nil, not invented zeros.
   """
   @spec counts() :: run_counts()
   def counts do
     if is_pid(Process.whereis(LemonRouter.RunOrchestrator)) do
       LemonRouter.RunOrchestrator.counts()
     else
-      @zero_counts
+      @unavailable_counts
     end
   catch
-    :exit, _ -> @zero_counts
+    :exit, _ -> @unavailable_counts
   end
 
   defp describe_active_run({run_id, pid}) when is_pid(pid) do

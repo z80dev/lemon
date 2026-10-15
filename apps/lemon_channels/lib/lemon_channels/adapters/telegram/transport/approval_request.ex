@@ -1,8 +1,8 @@
 defmodule LemonChannels.Adapters.Telegram.Transport.ApprovalRequest do
   @moduledoc "Telegram approval requests and callbacks use the shared exact-snapshot boundary."
 
-  alias LemonChannels.RemoteApproval
   alias LemonChannels.Adapters.Telegram.Transport.UpdateProcessor
+  alias LemonChannels.RemoteApproval
 
   def send(state, payload, opts \\ []) do
     with {:ok, pending, target} <-
@@ -67,6 +67,13 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ApprovalRequest do
         state.api_mod.answer_callback_query(state.token, cb["id"], %{
           "text" => "Approval rejected or unavailable; request unchanged"
         })
+    end
+  end
+
+  def text_authorizer(state, message) do
+    fn target ->
+      authorized?(state, target) and
+        callback_matches?(%{"message" => message}, target)
     end
   end
 

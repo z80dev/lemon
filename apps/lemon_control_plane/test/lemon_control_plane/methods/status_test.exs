@@ -125,6 +125,25 @@ defmodule LemonControlPlane.Methods.StatusTest do
     refute Map.has_key?(browser, "checks")
   end
 
+  test "daily count failures stay null with per-field availability" do
+    {:ok, started} = Application.ensure_all_started(:lemon_router)
+    on_exit(fn -> Enum.each(Enum.reverse(started), &Application.stop/1) end)
+    :ok = Supervisor.terminate_child(LemonRouter.Supervisor, LemonRouter.RunCountTracker)
+
+    try do
+      assert {:ok, result} = Status.handle(%{}, %{})
+      assert is_integer(result["runs"]["active"])
+      assert result["runs"]["completed_today"] == nil
+      assert result["runs"]["failed_today"] == nil
+      assert result["subsystems"]["router"]["status"] == "unavailable"
+      assert result["subsystems"]["router"]["fields"]["active"] == "available"
+      assert result["subsystems"]["router"]["fields"]["completed_today"] == "unavailable"
+      assert result["subsystems"]["router"]["fields"]["failed_today"] == "unavailable"
+    after
+      Supervisor.restart_child(LemonRouter.Supervisor, LemonRouter.RunCountTracker)
+    end
+  end
+
   test "reports the umbrella CalVer in status and hello, with env-only build metadata" do
     assert {:ok, source} = File.read(Path.expand("../../../../../mix.exs", __DIR__))
     [_, version] = Regex.run(~r/version:\s*"([^"]+)"/, source)

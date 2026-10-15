@@ -29,8 +29,8 @@ defmodule LemonRouter.RunProcess do
 
   alias LemonCore.{Bus, Events, ExecutionCommand, Introspection}
   alias LemonRouter.MediaJobRecorder
-  alias LemonRouter.SurfaceManager
   alias LemonRouter.RunProcess.{ArtifactTracker, CompactionTrigger, RetryHandler, Watchdog}
+  alias LemonRouter.SurfaceManager
 
   @gateway_submit_retry_base_ms 100
   @gateway_submit_retry_max_ms 2_000
@@ -326,11 +326,14 @@ defmodule LemonRouter.RunProcess do
         duration_ms: duration_ms,
         saw_delta: state.saw_delta
       },
+      event_id: "run_completed:#{state.run_id}",
       run_id: state.run_id,
       session_key: state.session_key,
       engine: "lemon",
       provenance: :direct
     )
+
+    LemonRouter.RunCountTracker.record_terminal(state.run_id, ok? == false)
 
     # If we were monitoring the gateway run process, stop monitoring it before we exit so
     # we don't race a :DOWN message and emit a synthetic completion.
@@ -732,6 +735,8 @@ defmodule LemonRouter.RunProcess do
         engine: "lemon",
         provenance: :direct
       )
+
+      LemonRouter.RunCountTracker.record_terminal(state.run_id, true)
 
       Bus.broadcast(
         Bus.run_topic(state.run_id),
