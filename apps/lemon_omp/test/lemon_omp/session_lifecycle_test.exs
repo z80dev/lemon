@@ -83,6 +83,29 @@ defmodule LemonOmp.SessionLifecycleTest do
     end
   end
 
+  test "explicit crash continuation requires a resume id and no prompt" do
+    ws = workspace!()
+
+    for params <- [
+          %{cwd: ws, continue: true},
+          %{cwd: ws, resume: "01abcd", continue: true, prompt: "extra"},
+          %{cwd: ws, resume: "01abcd", continue: "true"}
+        ] do
+      assert {:error, :invalid_params} = LemonOmp.start(params)
+    end
+
+    refute File.exists?(Path.join(ws, ".fake_omp.pid"))
+    assert {:ok, started} = LemonOmp.start(%{cwd: ws, resume: "01abcd", continue: true})
+    assert started["status"] == "running"
+    assert {:ok, finished, :settled} = LemonOmp.wait(started["id"], 10_000)
+    assert finished["lastTurn"] == "completed"
+
+    assert Enum.any?(received(ws), fn command ->
+             command["type"] == "prompt" and
+               command["message"] =~ "previous omp process was interrupted"
+           end)
+  end
+
   describe "a turn" do
     test "start returns a running snapshot, publishes on the bus and settles with results", ctx do
       LemonCore.Bus.subscribe(LemonOmp.bus_topic())

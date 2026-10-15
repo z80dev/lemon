@@ -21,6 +21,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Added
 
+- Explicit omp crash continuation (`resume` with `continue: true`) through a
+  state-review prompt, plus a bounded read-only discovery `interrupted` hint.
+  This does not revive subagents; omp's native `--restore` is interactive-only.
+
 - Cached omp model catalog through `LemonOmp.models/1` and the `omp` tool's
   `models` action, with cheap/free filtering, pricing and upstream availability warnings.
 - Computer use: with `LEMON_COMPUTER_USE_ENABLED=true`, Lemon agents get
