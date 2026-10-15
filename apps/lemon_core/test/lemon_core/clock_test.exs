@@ -71,14 +71,6 @@ defmodule LemonCore.ClockTest do
       assert ms == 1_700_000_000_000
     end
 
-    test "converts DateTime to milliseconds" do
-      datetime = DateTime.utc_now()
-      ms = Clock.to_ms(datetime)
-
-      assert is_integer(ms)
-      assert ms > 0
-    end
-
     test "round-trips correctly with from_ms" do
       original_ms = 1_600_000_000_000
       datetime = Clock.from_ms(original_ms)

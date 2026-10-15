@@ -11,6 +11,7 @@ defmodule CodingAgent.Tools.WebSearch do
   alias LemonAgent.Security.ExternalContent
   alias CodingAgent.Search.Registry, as: SearchRegistry
   alias CodingAgent.Search.SingleFlight
+  alias CodingAgent.Search.{Operators, Provider}
   alias CodingAgent.Tools.WebCache
   alias LemonCore.Secrets
 
@@ -93,7 +94,13 @@ defmodule CodingAgent.Tools.WebSearch do
       },
       "freshness" => %{
         "type" => "string",
-        "description" => "Brave-only time filter: pd, pw, pm, py, or YYYY-MM-DDtoYYYY-MM-DD."
+        "description" =>
+          "Time filter: pd, pw, pm, py, or YYYY-MM-DDtoYYYY-MM-DD; uses capable providers in the chain."
+      },
+      "recency" => %{
+        "type" => "string",
+        "enum" => ["day", "week", "month", "year"],
+        "description" => "Relative time filter (alias for freshness)."
       },
       "maxChars" => %{
         "type" => "integer",
@@ -150,10 +157,9 @@ defmodule CodingAgent.Tools.WebSearch do
            :ok <- enforce_rate_limit(),
            {:ok, query} <- normalize_query(Map.get(params, "query")),
            {:ok, runtime} <- apply_provider_overrides(runtime, params),
-           {:ok, freshness} <- normalize_freshness(Map.get(params, "freshness")),
+           {:ok, freshness} <- normalize_recency(params),
            :ok <- check_abort(signal),
            request <- normalize_request_params(params, runtime),
-           :ok <- validate_freshness_provider(freshness, runtime.provider),
            :ok <- check_abort(signal) do
         run_search(query, freshness, request, runtime)
       end
@@ -177,39 +183,10 @@ defmodule CodingAgent.Tools.WebSearch do
   defp run_search(query, freshness, request, runtime) do
     providers = [runtime.provider | runtime.fallback_providers] |> Enum.uniq()
 
-    if not is_nil(freshness) and runtime.provider == "brave" and
-         Enum.any?(runtime.fallback_providers, &(&1 != "brave")) do
-      run_with_freshness_blocked_fallback(query, freshness, request, runtime)
-    else
+    if is_nil(freshness) or Enum.any?(providers, &supports_freshness?(&1, freshness)) do
       run_provider_chain(providers, providers, query, freshness, request, runtime, [])
-    end
-  end
-
-  defp run_with_freshness_blocked_fallback(query, freshness, request, runtime) do
-    reason = "Failover skipped because freshness is only supported by Brave."
-
-    case run_provider_attempt("brave", query, freshness, request, runtime) do
-      {:ok, payload, cached?} ->
-        payload
-        |> annotate_payload("brave", "brave", failover_payload(false, false, "brave", nil))
-        |> Map.put("provider_attempts", [%{"provider" => "brave", "status" => "ok"}])
-        |> maybe_mark_cached(cached?)
-        |> json_result()
-
-      {:setup_error, payload} ->
-        payload
-        |> annotate_payload("brave", "brave", failover_payload(false, false, "brave", reason))
-        |> Map.put("provider_attempts", [
-          %{
-            "provider" => "brave",
-            "status" => "error",
-            "reason" => failure_summary({:setup_error, payload})
-          }
-        ])
-        |> json_result()
-
-      {:runtime_error, failure_reason} ->
-        {:error, "#{failure_reason} (#{reason})"}
+    else
+      {:error, "No provider in the search chain supports the requested freshness filter"}
     end
   end
 
@@ -236,10 +213,8 @@ defmodule CodingAgent.Tools.WebSearch do
        ) do
     requested_provider = hd(all_providers)
 
-    if not is_nil(freshness) and provider != "brave" do
-      failure =
-        {:runtime_error,
-         "Failover to #{provider} skipped because freshness is only supported by Brave."}
+    if not is_nil(freshness) and not supports_freshness?(provider, freshness) do
+      failure = {:runtime_error, "#{provider} does not support the requested freshness filter"}
 
       run_provider_chain(
         rest,
@@ -358,7 +333,19 @@ defmodule CodingAgent.Tools.WebSearch do
              http_post: runtime.http_post
            }),
          :ok <- spec.module.available?(:search, context) do
-      spec.module.search(Map.merge(request, %{query: query, freshness: freshness}), context)
+      prepared = Operators.prepare(query, Provider.search_features(spec.module))
+
+      provider_request =
+        Map.merge(request, %{
+          query: prepared.query,
+          freshness: freshness,
+          operator_tokens: prepared.tokens
+        })
+
+      case spec.module.search(provider_request, context) do
+        {:ok, payload} -> {:ok, Operators.finish(payload, query, prepared)}
+        error -> error
+      end
     else
       {:error, :not_found} -> {:error, "websearch provider is not registered: #{provider}"}
       {:error, reason} -> {:error, provider_error_text(provider, reason)}
@@ -437,18 +424,10 @@ defmodule CodingAgent.Tools.WebSearch do
   defp failure_summary({:runtime_error, reason}), do: inspect(reason)
 
   defp build_cache_key(query, freshness, request, provider) do
-    key =
-      if provider == "brave" do
-        "#{provider}:#{query}:#{request.count}:#{request.country || "default"}:" <>
-          "#{request.search_lang || "default"}:#{request.ui_lang || "default"}:#{freshness || "default"}:" <>
-          "#{request.max_chars}:#{request.snippet_max_chars}:#{request.max_citations}:#{request.citation_max_chars}"
-      else
-        "#{provider}:#{query}:#{request.count}:#{request.country || "default"}:" <>
-          "#{request.search_lang || "default"}:#{request.ui_lang || "default"}:" <>
-          "#{request.max_chars}:#{request.snippet_max_chars}:#{request.max_citations}:#{request.citation_max_chars}"
-      end
-
-    WebCache.normalize_cache_key(key)
+    {:operators_v1, provider, query, freshness, request}
+    |> :erlang.term_to_binary()
+    |> Base.encode16(case: :lower)
+    |> WebCache.normalize_cache_key()
   end
 
   defp resolve_api_config("perplexity", runtime) do
@@ -696,8 +675,6 @@ defmodule CodingAgent.Tools.WebSearch do
     end
   end
 
-  defp normalize_freshness(nil), do: {:ok, nil}
-
   defp normalize_freshness(value) when is_binary(value) do
     trimmed = String.trim(value)
 
@@ -728,11 +705,29 @@ defmodule CodingAgent.Tools.WebSearch do
 
   defp normalize_freshness(_), do: {:error, "freshness must be a string"}
 
-  defp validate_freshness_provider(nil, _provider), do: :ok
-  defp validate_freshness_provider(_freshness, "brave"), do: :ok
+  defp normalize_recency(params) do
+    case {Map.get(params, "freshness"), Map.get(params, "recency")} do
+      {nil, nil} ->
+        {:ok, nil}
 
-  defp validate_freshness_provider(_freshness, _provider) do
-    {:error, "freshness is only supported by the Brave websearch provider"}
+      {nil, recency} when recency in ["day", "week", "month", "year"] ->
+        {:ok, %{"day" => "pd", "week" => "pw", "month" => "pm", "year" => "py"}[recency]}
+
+      {nil, _} ->
+        {:error, "recency must be day, week, month, or year"}
+
+      {freshness, _} ->
+        normalize_freshness(freshness)
+    end
+  end
+
+  defp supports_freshness?(provider, freshness) do
+    with {:ok, spec} <- SearchRegistry.fetch(provider) do
+      support = Map.get(Provider.search_features(spec.module), :freshness, [])
+      if freshness in ["pd", "pw", "pm", "py"], do: :relative in support, else: :range in support
+    else
+      _ -> false
+    end
   end
 
   defp valid_iso_date?(value) do

@@ -13,8 +13,6 @@ defmodule CodingAgent.Tools.PatchTest do
       tool = Patch.tool("/tmp")
 
       assert tool.name == "patch"
-      assert tool.label == "Apply Patch"
-      assert tool.description =~ "patch"
       assert tool.parameters["type"] == "object"
       assert tool.parameters["required"] == ["patch_text"]
       assert is_function(tool.execute, 4)

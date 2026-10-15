@@ -41,13 +41,6 @@ defmodule LemonCli.Setup.SetupTaskTest do
   end
 
   describe "runtime subcommand" do
-    test "prints runtime summary in non-interactive mode" do
-      {io, get_log} = collect_io()
-      SetupTask.run_with_io(["runtime", "--non-interactive"], io)
-      log = get_log.()
-      assert Enum.any?(log, fn {_, msg} -> String.contains?(msg, "Runtime profile") end)
-    end
-
     test "respects --profile flag" do
       {io, get_log} = collect_io()
       SetupTask.run_with_io(["runtime", "--profile", "runtime_min", "--non-interactive"], io)

@@ -216,6 +216,10 @@ defmodule CodingAgent.ToolExecutor do
     Map.put(params, "args", project_action(name, args))
   end
 
+  def project_action(tool_name, args) when tool_name in ["remember", "skill_manage"] do
+    LemonSkills.WriteApproval.project_action(args)
+  end
+
   def project_action(_tool_name, args), do: args
 
   defp safe_approval_error(reason) when reason in [:approval_unavailable, :service_unavailable],

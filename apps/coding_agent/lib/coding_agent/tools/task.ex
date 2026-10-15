@@ -20,6 +20,7 @@ defmodule CodingAgent.Tools.Task do
 
     %AgentTool{
       name: "task",
+      timeout_ms: :infinity,
       description: description,
       label: "Run Task",
       parameters: %{
@@ -238,6 +239,7 @@ defmodule CodingAgent.Tools.Task do
         "schema_mode",
         "model",
         "thinking_level",
+        "async",
         "cwd",
         "worktree",
         "merge",
@@ -317,10 +319,12 @@ defmodule CodingAgent.Tools.Task do
 
     validated =
       Enum.map(tasks, fn task ->
-        child = Map.merge(defaults, task) |> Map.put("async", true)
+        child = Map.merge(defaults, task)
 
         child =
-          if params["async"] == false, do: Map.put(child, "auto_followup", false), else: child
+          if Map.get(child, "async", true) == false,
+            do: Map.put(child, "auto_followup", false),
+            else: child
 
         Params.validate_run_params(child, cwd, opts)
       end)
@@ -331,22 +335,45 @@ defmodule CodingAgent.Tools.Task do
         Enum.map(validated, fn {:ok, child} ->
           with {:ok, child} <- Params.restrict_to_parent(child, cwd, opts),
                :ok <- Params.check_budget_and_policy(child, opts) do
-            Execution.run(tool_call_id, child, signal, on_update, cwd, opts)
+            Execution.run(tool_call_id, %{child | async: true}, signal, on_update, cwd, opts)
           end
         end)
 
       receipts =
-        Enum.map(results, fn
-          %AgentToolResult{details: details} -> details
-          {:error, reason} -> %{status: "error", error: reason}
+        Enum.zip_with(results, validated, fn result, {:ok, child} ->
+          details =
+            case result do
+              %AgentToolResult{details: details} -> details
+              {:error, reason} -> %{status: "error", error: reason}
+            end
+
+          Map.put(details, :async, child.async)
         end)
 
       task_ids = for %{task_id: id} <- receipts, do: id
 
-      if params["async"] == false and task_ids != [] do
-        case Result.do_join(%{"task_ids" => task_ids}, signal) do
+      sync_ids = for %{task_id: id, async: false} <- receipts, do: id
+      background = Enum.filter(receipts, & &1.async)
+
+      if sync_ids != [] do
+        case Result.do_join(%{"task_ids" => sync_ids}, signal) do
           %AgentToolResult{} = result ->
-            %{result | details: Map.put(result.details, :launches, receipts)}
+            content =
+              if background == [],
+                do: result.content,
+                else:
+                  result.content ++
+                    [
+                      %LemonAi.Types.TextContent{
+                        text: "Background tasks: " <> Jason.encode!(background)
+                      }
+                    ]
+
+            %{
+              result
+              | content: content,
+                details: Map.merge(result.details, %{launches: receipts, task_ids: task_ids})
+            }
 
           error ->
             error

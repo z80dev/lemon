@@ -13,7 +13,7 @@ defmodule Mix.Tasks.Lemon.Config do
       # Validate configuration for a specific project
       mix lemon.config validate --project-dir /path/to/project
 
-      # Show current configuration (without validation)
+      # Show validated current configuration
       mix lemon.config show
 
   ## Exit Codes
@@ -123,50 +123,6 @@ defmodule Mix.Tasks.Lemon.Config do
   end
 
   defp print_config_summary(config) do
-    Mix.shell().info("")
-    Mix.shell().info("Agent:")
-    Mix.shell().info("  Default model: #{config.agent.default_model || "(not set)"}")
-    Mix.shell().info("  Default provider: #{config.agent.default_provider || "(not set)"}")
-    Mix.shell().info("  Thinking level: #{config.agent.default_thinking_level || "(not set)"}")
-
-    Mix.shell().info("")
-    Mix.shell().info("Gateway:")
-    Mix.shell().info("  Max concurrent runs: #{config.gateway.max_concurrent_runs || "(not set)"}")
-    Mix.shell().info("  Auto resume: #{config.gateway.auto_resume || "(not set)"}")
-    Mix.shell().info("  Channels enabled: #{enabled_channels(config.gateway)}")
-
-    Mix.shell().info("")
-    Mix.shell().info("Logging:")
-    Mix.shell().info("  Level: #{config.logging.level || "(not set)"}")
-    Mix.shell().info("  File: #{config.logging.file || "(not set)"}")
-
-    Mix.shell().info("")
-    Mix.shell().info("TUI:")
-    Mix.shell().info("  Theme: #{config.tui.theme || "(not set)"}")
-    Mix.shell().info("  Debug: #{config.tui.debug || "(not set)"}")
-
-    Mix.shell().info("")
-    Mix.shell().info("Providers:")
-
-    if config.providers.providers && map_size(config.providers.providers) > 0 do
-      Enum.each(config.providers.providers, fn {name, provider_config} ->
-        has_key = if provider_config.api_key, do: "✓", else: "✗"
-        Mix.shell().info("  #{name}: API key #{has_key}")
-      end)
-    else
-      Mix.shell().info("  (none configured)")
-    end
-  end
-
-  defp enabled_channels(gateway) do
-    gateway
-    |> Map.get(:enabled_channels, %{})
-    |> Enum.filter(fn {_id, enabled?} -> enabled? end)
-    |> Enum.map(fn {id, _enabled?} -> to_string(id) end)
-    |> Enum.sort()
-    |> case do
-      [] -> "(none)"
-      ids -> Enum.join(ids, ", ")
-    end
+    Enum.each(LemonCore.Config.Summary.lines(config), fn line -> Mix.shell().info(line) end)
   end
 end

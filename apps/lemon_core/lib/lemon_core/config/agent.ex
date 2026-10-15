@@ -19,7 +19,6 @@ defmodule LemonCore.Config.Agent do
 
       [runtime]
       extension_paths = ["./my-extensions"]
-      theme = "lemon"
       # Optional safety cap on tool-using turns per prompt. Unset (the
       # default) or 0 means unlimited: a turn ends when the model stops
       # calling tools.
@@ -71,7 +70,6 @@ defmodule LemonCore.Config.Agent do
   - `LEMON_EXTENSIONS_ENABLED`
   - `LEMON_EXTENSIONS_AUTO_LOAD_DEFAULT_PATHS`
   - `LEMON_SECRET_OBFUSCATION_ENABLED`
-  - `LEMON_THEME`
   """
 
   alias LemonCore.Env
@@ -86,7 +84,6 @@ defmodule LemonCore.Config.Agent do
     :shell,
     :extensions,
     :extension_paths,
-    :theme,
     :budget_defaults,
     :provider_routing,
     :secret_obfuscation,
@@ -119,7 +116,6 @@ defmodule LemonCore.Config.Agent do
             auto_load_default_paths: boolean()
           },
           extension_paths: [String.t()],
-          theme: String.t(),
           budget_defaults: %{max_children: integer()},
           provider_routing: map(),
           secret_obfuscation: %{enabled: boolean()},
@@ -151,7 +147,6 @@ defmodule LemonCore.Config.Agent do
       shell: resolve_shell(agent_settings),
       extensions: resolve_extensions(agent_settings),
       extension_paths: resolve_extension_paths(agent_settings),
-      theme: resolve_theme(agent_settings),
       budget_defaults: resolve_budget_defaults(agent_settings),
       provider_routing: resolve_provider_routing(agent_settings),
       secret_obfuscation: resolve_secret_obfuscation(agent_settings),
@@ -329,10 +324,6 @@ defmodule LemonCore.Config.Agent do
     else
       settings["extension_paths"] || []
     end
-  end
-
-  defp resolve_theme(settings) do
-    Env.get(:lemon_theme, default: settings["theme"] || "lemon")
   end
 
   defp resolve_budget_defaults(settings) do

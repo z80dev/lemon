@@ -62,6 +62,7 @@ only readiness, stable provenance, counts, byte counts, and error kinds.
 | Preview/resolve bounded context | `lemon context preview|resolve ...` | `./bin/lemon context preview|resolve ...` |
 | Manage durable sessions | `lemon sessions list` | `./bin/lemon sessions list` |
 | Review/confirm learning from bounded sources | `lemon learn '@file:guide.md'` | `./bin/lemon learn '@file:guide.md'` |
+| Browse a profile's learning timeline | `lemon learning --profile research` | `./bin/lemon learning --profile research` |
 | Migrate Hermes data | `lemon migrate hermes audit` | `./bin/lemon migrate hermes audit` |
 | Join a named execution node | `lemon node join ...` | `./bin/lemon node join ...` |
 | Print version | `lemon version` | `./bin/lemon version` |

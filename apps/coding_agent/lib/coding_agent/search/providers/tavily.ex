@@ -15,6 +15,13 @@ defmodule CodingAgent.Search.Providers.Tavily do
   def capabilities, do: [:search]
 
   @impl true
+  def search_features,
+    do: %{
+      mapped_operators: [:site, :exclude_site, :after, :before],
+      freshness: [:relative, :range]
+    }
+
+  @impl true
   def available?(:search, context), do: KeyedHttp.available?(id(), "TAVILY_API_KEY", context)
 
   @impl true
@@ -28,6 +35,25 @@ defmodule CodingAgent.Search.Providers.Tavily do
       "include_answer" => false,
       "include_raw_content" => false
     }
+
+    {first, last} = CodingAgent.Search.Operators.dates(request)
+
+    body =
+      body
+      |> CodingAgent.Search.Operators.put_if("start_date", first)
+      |> CodingAgent.Search.Operators.put_if("end_date", last)
+
+    tokens = Map.get(request, :operator_tokens, [])
+
+    body =
+      Enum.reduce(
+        [{:site, "include_domains"}, {:exclude_site, "exclude_domains"}],
+        body,
+        fn {kind, key}, acc ->
+          domains = Enum.filter(tokens, &(&1.kind == kind)) |> Enum.map(& &1.value)
+          if domains == [], do: acc, else: Map.put(acc, key, domains)
+        end
+      )
 
     opts =
       KeyedHttp.request_opts(context, [

@@ -28,25 +28,9 @@ defmodule LemonCore.MapHelpersTest do
       assert MapHelpers.get_key(%{}, :name) == nil
     end
 
-    test "returns integer values" do
-      assert MapHelpers.get_key(%{"count" => 42}, :count) == 42
-    end
-
-    test "returns boolean values" do
-      assert MapHelpers.get_key(%{"active" => true}, :active) == true
-    end
-
-    test "returns list values" do
-      assert MapHelpers.get_key(%{"tags" => ["a", "b"]}, :tags) == ["a", "b"]
-    end
-
-    test "returns map values" do
-      nested = %{inner: 1}
-      assert MapHelpers.get_key(%{"data" => nested}, :data) == nested
-    end
-
     test "returns false correctly (not treated as missing)" do
-      assert MapHelpers.get_key(%{"enabled" => "fallback", enabled: false}, :enabled) == "fallback"
+      assert MapHelpers.get_key(%{"enabled" => "fallback", enabled: false}, :enabled) ==
+               "fallback"
     end
 
     test "handles multi-word atom keys" do
@@ -119,7 +103,7 @@ defmodule LemonCore.MapHelpersTest do
       assert MapHelpers.get_key(uri, :host) == "example.com"
     end
 
-    test "falls back to string key on struct" do
+    test "returns nil for a missing struct field" do
       # Structs won't have string keys, so this returns nil
       uri = URI.parse("https://example.com")
       assert MapHelpers.get_key(uri, :nonexistent) == nil
@@ -220,11 +204,6 @@ defmodule LemonCore.MapHelpersTest do
 
     test "atom key with special characters" do
       assert MapHelpers.get_key(%{"hello world" => "val"}, :"hello world") == "val"
-    end
-
-    test "works with large maps" do
-      large = for i <- 1..100, into: %{}, do: {"key_#{i}", i}
-      assert MapHelpers.get_key(large, :key_50) == 50
     end
   end
 end

@@ -149,12 +149,16 @@ CodingAgent.Supervisor (one_for_one)
 
 | Category | Tools |
 |----------|-------|
-| File I/O / Skills / Memory | `read`, `read_skill`, `skill_manage`, `remember`, `recall`, `checkpoint`, `write`, `edit`, `patch`, `lsp_diagnostics`, `ls` |
+| File I/O / Skills / Memory | `read`, `read_skill`, `skill_manage`, `remember`, `recall`, `fs_checkpoint`, `write`, `edit`, `patch`, `lsp_diagnostics`, `ls` |
 | Search | `grep`, `find`, `ast_grep` (when the real ast-grep CLI is installed) |
 | Execution | `bash`, `bash_output`, `kill_process`, `process_input` (see [shell and background processes](../../docs/tools/shell.md)), `debug` (DAP debugger; see [debugger](../../docs/tools/debug.md)) |
 | Web / Browser / Media | `websearch`, `webfetch`, `browser_tabs`, `browser_tab_open`, `browser_tab_activate`, `browser_tab_close`, `browser_navigate`, `browser_snapshot`, `browser_get_content`, `browser_click`, `browser_type`, `browser_hover`, `browser_select_option`, `browser_upload_file`, `browser_download`, `browser_press`, `browser_scroll`, `browser_back`, `browser_wait_for_selector`, `browser_evaluate`, `browser_events`, `browser_get_cookies`, `browser_set_cookies`, `browser_clear_state`, `browser_screenshot`, `browser_analyze`, `media_status`, `media_generate_image`, `media_generate_speech`, `media_transcribe_audio`, `media_analyze_image`, `media_generate_video` |
 | Task / Agent | `task`, `agent`, `parent_question`, [`todo`](../../docs/tools/todo.md), `kanban` |
 | System | `tool_auth`, `extensions_status` |
+
+Opt-in conversation-only `checkpoint(goal)` / `rewind(report)` collapse model
+exploration into retained findings without restoring files. Enable
+`[runtime.tools.checkpoint] enabled = true`; see [checkpoints](../../docs/tools/checkpoint.md).
 
 **Snapshot-anchored edits.** A local text `read` returns numbered physical lines
 and `[absolute/path#SNAPSHOT]`. Prefer `edit` with that snapshot and an `edits`
@@ -339,7 +343,7 @@ record only a safe error kind plus structured provider status/type when present,
 never the raw provider message.
 
 `write`, `edit`, and `patch` create filesystem checkpoints automatically when
-the tool context includes a session id. The `checkpoint` tool lists checkpoint
+the tool context includes a session id. The `fs_checkpoint` tool lists checkpoint
 history, previews filesystem diffs, restores all or selected paths, and deletes
 old checkpoints through `LemonCore.Checkpoint`. Checkpoint create, restore, and
 delete operations emit redacted introspection and run/session events for audit
@@ -461,7 +465,7 @@ When a provider omits the task `description` field but sends a valid `prompt`, L
 When a native task omits `model`, it uses `[runtime.task].agent_models[<persona>]` when configured, then its named persona's `model` or model `role` default, then the configured `task` model role when present, otherwise the live parent session model at execution time. Explicit task `model` always wins. Telegram/session-scoped model overrides therefore still apply to children without a separate task/persona model selection. A persona's thinking level and `output` schema likewise default the child's `thinking_level` and `output_schema` unless the call sets them (an explicit `false`/`true` schema included). Personas listed in `[runtime.task].disabled_agents` are hidden from the tool's agent list and refused at launch.
 Task workers monitor their native sessions: a crash, provider failure, abort, or configured `task_session_timeout_ms` is reported as an error, never promoted to success because partial text or a tool result exists. The default model wait is unbounded unless `[runtime.task].max_runtime_ms` sets a per-child limit; parent cancellation and worker/session death still end it.
 
-Use one `task` call with `tasks: [{description, prompt, ...}, ...]` for up to 32 independent children. Each child inherits common top-level options, launches in the background, and returns a `task_id`/`run_id` receipt; `async: false` launches the entire batch before joining. Native tasks share a monitored semaphore with a default cap of eight running children; excess children queue without starting model calls. Dead holders and queued callers release capacity. Individual failures are retained alongside successful sibling results.
+Use one `task` call with `tasks: [{description, prompt, ...}, ...]` for up to 32 independent children. Each child inherits common top-level options and may override `async` and `thinking_level`. All children launch before joining only those with effective `async: false`; async siblings keep running and their receipts remain in the result. Top-level `async: false` therefore joins all children unless an item overrides it. Native tasks share a monitored semaphore with a default cap of eight running children; excess children queue without starting model calls. Dead holders and queued callers release capacity. Individual failures are retained alongside successful sibling results.
 
 A top-level `context` string (at most 64 KiB; not allowed per item) is shared background for every child of a single run, batch, or swarm. Each child receives `<context>\n…\n</context>\n\n<assignment>\n…prompt…\n</assignment>`; tool-only guardrails ("use read tools only") are inferred from the assignment, never from the context. Swarm dependency results follow the assignment.
 
@@ -515,6 +519,7 @@ Use `agent_message` with `{to: "agent://Worker", message: "..."}`, or `write` wi
 Sender identity is authenticated from captured session options, never supplied message fields. Messages are labeled untrusted peer content and use the recipient's steering queue, without starting another prompt turn. Unattached children retain FIFO messages, capped at 64 messages / 256 KiB including envelopes; individual UTF-8 message bodies are capped at 32 KiB. Broadcast checks all recipient queue capacities before sending. An accepted receipt means queued peer input, not a completed response or permission to override system/tool restrictions.
 
 The `wait` tool (also `task action=wait`) blocks until the first owned native child returns a result, including failure or cancellation, without stopping siblings. With no `task_ids`, it includes already-finished but unobserved children, then marks only the returned winner observed; the next implicit wait consumes the next result. Explicit `task_ids` restrict the set and may revisit an earlier result. No outstanding/unobserved children is an immediate error. Waiting uses existing join cancellation, parent-question yielding, and winner-only followup suppression; this primitive does not wait on shell/background-process jobs.
+Wait has a 30-minute safety cap: it returns `timed_out: true` with a snapshot of child statuses, leaving children running and eligible for the next wait. Pending steering or peer messages in the current invocation return `interrupted: true` instead, without consuming the message. A yielded wait releases followup reservations and does not mark any child observed.
 
 For example, after launching a child named `Reviewer`, the parent can make these separate tool calls (the message receipt does not replace waiting for the child's result):
 

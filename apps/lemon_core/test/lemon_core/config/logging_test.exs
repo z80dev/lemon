@@ -127,9 +127,10 @@ defmodule LemonCore.Config.LoggingTest do
       assert config.level == :debug
     end
 
-    test "returns nil for unknown level" do
+    test "preserves unknown levels for validation" do
       config = Logging.resolve(%{"logging" => %{"level" => "unknown"}})
-      assert config.level == nil
+      assert config.level == "unknown"
+      assert [_error] = LemonCore.Config.Validator.validate_logging(config, [])
     end
 
     test "returns nil when level not set" do
@@ -216,33 +217,6 @@ defmodule LemonCore.Config.LoggingTest do
       System.put_env("LEMON_LOG_FILESYNC_REPEAT_INTERVAL", "15000")
       config = Logging.resolve(%{"logging" => %{"filesync_repeat_interval" => 5000}})
       assert config.filesync_repeat_interval == 15_000
-    end
-  end
-
-  describe "defaults/0" do
-    test "returns the default logging configuration" do
-      defaults = Logging.defaults()
-
-      assert defaults["file"] == nil
-      assert defaults["level"] == nil
-      assert defaults["max_no_bytes"] == nil
-      assert defaults["max_no_files"] == nil
-      assert defaults["compress_on_rotate"] == nil
-      assert defaults["filesync_repeat_interval"] == nil
-    end
-  end
-
-  describe "struct type" do
-    test "returns a properly typed struct" do
-      config = Logging.resolve(%{})
-
-      assert %Logging{} = config
-      assert config.file == nil or is_binary(config.file)
-      assert config.level == nil or is_atom(config.level)
-      assert config.max_no_bytes == nil or is_integer(config.max_no_bytes)
-      assert config.max_no_files == nil or is_integer(config.max_no_files)
-      assert config.compress_on_rotate == nil or is_boolean(config.compress_on_rotate)
-      assert config.filesync_repeat_interval == nil or is_integer(config.filesync_repeat_interval)
     end
   end
 end

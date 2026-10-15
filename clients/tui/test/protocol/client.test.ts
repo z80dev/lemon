@@ -2,6 +2,8 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { FakeControlPlane } from "../../src/dev/fake-server.ts";
 import { acceptDeltaSeq, ControlPlaneClient } from "../../src/protocol/client.ts";
 import {
+	AuthenticationError,
+	describeError,
 	ControlPlaneError,
 	HandshakeError,
 	MethodUnavailableError,
@@ -95,12 +97,35 @@ describe("handshake", () => {
 		expect(connect[0].params).not.toHaveProperty("token");
 	});
 
-	test("an auth rejection rejects connect()", async () => {
+	test("auth rejection stops retries, leaves connecting, and refuses queued prompts", async () => {
 		const server = await withServer({
 			rejectHandshake: { code: "UNAUTHORIZED", message: "bad token" },
 		});
 		const client = makeClient(server.url);
-		await expect(client.connect()).rejects.toBeInstanceOf(HandshakeError);
+		const queuedFailure = client
+			.request("chat.send", { prompt: "before rejection" })
+			.catch((error) => error);
+		await expect(client.connect()).rejects.toBeInstanceOf(AuthenticationError);
+		expect(await queuedFailure).toBeInstanceOf(AuthenticationError);
+		expect(client.state).toBe("auth-rejected");
+		await expect(client.request("chat.send", { prompt: "after rejection" })).rejects.toBeInstanceOf(
+			AuthenticationError,
+		);
+		expect(client.queued).toHaveLength(0);
+		expect(server.requestsFor("connect")).toHaveLength(1);
+		await expect(client.reconnect()).rejects.toBeInstanceOf(AuthenticationError);
+		expect(server.requestsFor("connect")).toHaveLength(2);
+		expect(client.state).toBe("auth-rejected");
+	});
+
+	test("connection timeout names the URL and recovery steps without wire jargon", async () => {
+		const client = makeClient("ws://127.0.0.1:1/ws");
+		const error = await client.connect(30).catch((failure) => failure);
+		expect(error).toBeInstanceOf(HandshakeError);
+		expect(describeError(error)).toContain("Lemon isn't running at ws://127.0.0.1:1/ws");
+		expect(describeError(error)).toContain("lemon start");
+		expect(describeError(error)).toContain("/reconnect");
+		expect(describeError(error)).not.toContain("handshake");
 	});
 });
 

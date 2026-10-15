@@ -110,7 +110,7 @@ api_key_secret = "google_api_key"
 
 [defaults]
 provider = "anthropic"
-model = "claude-sonnet-5"
+model = "claude-sonnet-4-20250514"
 thinking_level = "medium"
 # Use "auto" for per-prompt effort selection; configure a classifier role below.
 #
@@ -120,7 +120,6 @@ thinking_level = "medium"
 # commit = "@smol"
 
 [runtime]
-theme = "default"
 extension_paths = []
 
 # Provider routing can be managed without exposing credentials:
@@ -203,19 +202,19 @@ mode = "collect"
 cap = 50
 drop = "oldest"
 
-[gateway.telegram]
-bot_token = "123456:token"
-allowed_chat_ids = [12345678]
+# [gateway.telegram]
+# bot_token_secret = "TELEGRAM_BOT_TOKEN"
+# allowed_chat_ids = [12345678]
 # default_account_id = "default"
 # default_chat_id = 12345678
 # default_thread_id = 35
-poll_interval_ms = 1000
-edit_throttle_ms = 1000
-debounce_ms = 1000
-allow_queue_override = false
-account_id = "default"
-offset = 0
-drop_pending_updates = false
+# poll_interval_ms = 1000
+# edit_throttle_ms = 1000
+# debounce_ms = 1000
+# allow_queue_override = false
+# account_id = "default"
+# offset = 0
+# drop_pending_updates = false
 
 [gateway.xmtp]
 # XMTP network: production | dev | local
@@ -266,15 +265,15 @@ timeout_ms = 300000
 # Empty means the conservative gateway.a2a.default_allow_tools list.
 allow_tools = []
 
-[gateway.projects.example]
-root = "/path/to/project"
-
-[[gateway.bindings]]
-transport = "telegram"
-chat_id = 12345678
-topic_id = 0
-project = "example"
-queue_mode = "collect"
+# [gateway.projects.example]
+# root = "/path/to/project"
+#
+# [[gateway.bindings]]
+# transport = "telegram"
+# chat_id = 12345678
+# topic_id = 0
+# project = "example"
+# queue_mode = "collect"
 
 # --- Logging ---
 
@@ -312,6 +311,7 @@ queue_mode = "collect"
 # enabled = true
 # max_chars = 50000
 # timeout_seconds = 30
+# max_body_bytes = 5242880 # Streaming response cap (5 MiB).
 
 # [runtime.tools.web.fetch.firecrawl]
 # enabled = true
@@ -322,6 +322,11 @@ queue_mode = "collect"
 # LEMON_BROWSER_HYBRID_PUBLIC_BACKEND=browser_use # required with hybrid
 # BROWSERBASE_API_KEY / BROWSERBASE_PROJECT_ID, BROWSER_USE_API_KEY,
 # FIRECRAWL_API_KEY, or CAMOFOX_URL / CAMOFOX_API_KEY configure hosted backends.
+
+# Conversation-only model exploration checkpoints (not filesystem rollback).
+#
+# [runtime.tools.checkpoint]
+# enabled = false
 
 # --- Computer Use (native apps through LCU; docs/tools/computer-use.md) ---
 

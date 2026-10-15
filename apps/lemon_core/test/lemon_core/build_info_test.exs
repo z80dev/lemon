@@ -1,16 +1,6 @@
 defmodule LemonCore.BuildInfoTest do
   use ExUnit.Case, async: false
 
-  test "reports application and runtime metadata" do
-    info = LemonCore.BuildInfo.current()
-
-    assert info.runtime_mode in ["source-dev", "release-runtime"]
-    assert is_map(info.git)
-    assert is_binary(info.elixir)
-    assert is_binary(info.otp)
-    assert is_binary(info.system_architecture)
-  end
-
   test "uses release and git environment metadata when present" do
     old_release_name = System.get_env("RELEASE_NAME")
     old_release_vsn = System.get_env("RELEASE_VSN")

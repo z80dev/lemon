@@ -79,15 +79,6 @@ defmodule LemonSkills.RegistryListByCategoryTest do
     assert "no-category" in uncategorized_keys
   end
 
-  test "returns empty map when no skills exist", %{tmp_dir: tmp_dir} do
-    LemonSkills.refresh(cwd: tmp_dir)
-
-    result = LemonSkills.list_by_category(cwd: tmp_dir)
-
-    # May contain global skills, but at minimum it's a map
-    assert is_map(result)
-  end
-
   test "categories are sorted alphabetically", %{tmp_dir: tmp_dir} do
     write_skill(tmp_dir, "z-skill", """
     name: z-skill

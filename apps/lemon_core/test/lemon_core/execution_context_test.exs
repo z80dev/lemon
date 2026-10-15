@@ -61,7 +61,7 @@ defmodule LemonCore.ExecutionContextTest do
              "edit",
              "patch",
              "ast_grep",
-             "checkpoint",
+             "fs_checkpoint",
              "bash",
              "eval",
              "debug",

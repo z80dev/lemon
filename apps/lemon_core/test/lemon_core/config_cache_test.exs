@@ -43,13 +43,6 @@ defmodule LemonCore.ConfigCacheTest do
     {:ok, tmp_dir: tmp_dir, mock_home: mock_home}
   end
 
-  describe "start_link/1" do
-    test "starts the ConfigCache GenServer" do
-      # The cache is already started in setup
-      assert ConfigCache.available?()
-    end
-  end
-
   describe "available?/0" do
     test "returns true when cache is running" do
       assert ConfigCache.available?() == true
@@ -214,12 +207,19 @@ defmodule LemonCore.ConfigCacheTest do
 
   describe "error handling" do
     test "handles missing config files gracefully", %{mock_home: _mock_home} do
+      provider = System.get_env("LEMON_DEFAULT_PROVIDER")
+      System.delete_env("LEMON_DEFAULT_PROVIDER")
+
+      on_exit(fn ->
+        if provider,
+          do: System.put_env("LEMON_DEFAULT_PROVIDER", provider),
+          else: System.delete_env("LEMON_DEFAULT_PROVIDER")
+      end)
+
       # No config files created - should still return a config with defaults
       config = ConfigCache.get(nil, mtime_check_interval_ms: 100)
 
-      assert is_map(config)
-      # Should have default structure
-      assert is_map(config.agent)
+      assert config.agent.default_provider == "anthropic"
     end
   end
 

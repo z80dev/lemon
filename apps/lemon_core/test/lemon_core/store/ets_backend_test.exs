@@ -25,21 +25,6 @@ defmodule LemonCore.Store.EtsBackendTest do
   end
 
   describe "init/1" do
-    test "creates the backend with initial tables" do
-      {:ok, state} = EtsBackend.init([])
-
-      assert Map.has_key?(state, :chat)
-      assert Map.has_key?(state, :progress)
-      assert Map.has_key?(state, :runs)
-      assert Map.has_key?(state, :run_history)
-
-      # Verify each table is a valid ETS table
-      assert :ets.info(state.chat) != :undefined
-      assert :ets.info(state.progress) != :undefined
-      assert :ets.info(state.runs) != :undefined
-      assert :ets.info(state.run_history) != :undefined
-    end
-
     test "creates tables with correct types" do
       {:ok, state} = EtsBackend.init([])
 

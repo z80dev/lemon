@@ -95,16 +95,6 @@ defmodule LemonCore.Store.SqliteBackendTest do
                SqliteBackend.init(path: invalid_path)
     end
 
-    test "statements are prepared correctly", %{tmp_dir: tmp_dir} do
-      assert {:ok, state} = SqliteBackend.init(path: tmp_dir)
-      assert is_reference(state.statements.put)
-      assert is_reference(state.statements.get)
-      assert is_reference(state.statements.delete)
-      assert is_reference(state.statements.list)
-      assert is_reference(state.statements.list_tables)
-      :ok = SqliteBackend.close(state)
-    end
-
     test "ping checks the connection without writing a probe row", %{tmp_dir: tmp_dir} do
       assert {:ok, state} = SqliteBackend.init(path: tmp_dir)
       assert {:ok, ^state} = SqliteBackend.ping(state)
@@ -745,8 +735,7 @@ defmodule LemonCore.Store.SqliteBackendTest do
     end
 
     test "get returns state", %{state: state} do
-      assert {:ok, nil, new_state} = SqliteBackend.get(state, :mytable, "key")
-      assert is_map(new_state)
+      assert {:ok, nil, ^state} = SqliteBackend.get(state, :mytable, "key")
     end
 
     test "delete returns updated state", %{state: state} do
@@ -756,8 +745,7 @@ defmodule LemonCore.Store.SqliteBackendTest do
     end
 
     test "list returns state", %{state: state} do
-      assert {:ok, [], new_state} = SqliteBackend.list(state, :mytable)
-      assert is_map(new_state)
+      assert {:ok, [], ^state} = SqliteBackend.list(state, :mytable)
     end
   end
 

@@ -15,6 +15,7 @@
 
 import type { SubmissionDisposition } from "../composer/drafts.ts";
 import type { ControlPlaneClient } from "../protocol/client.ts";
+import { describeError } from "../protocol/errors.ts";
 import type { ControlPlaneMethods, MethodName } from "../protocol/methods.ts";
 import type { ChatHistoryMessage, SessionsContextResult } from "../protocol/types.ts";
 import type { AppStore, SubmissionMode } from "../store/app-store.ts";
@@ -65,7 +66,7 @@ export interface CommandHost {
 	clearTranscript(): void;
 	requestExit(code: number): void;
 	/** Force a reconnect of the control-plane socket. */
-	reconnect(): void;
+	reconnect(): Promise<void>;
 	/** Recompute the status bar (model/context/branch inputs changed). */
 	refreshStatus(): void;
 	/** Current editor text. */
@@ -392,14 +393,12 @@ export class CommandRegistry {
 		const names = this.names();
 		return (
 			names.find((candidate) => candidate.startsWith(name.slice(0, 3)) && name.length >= 3) ??
-			names.find((candidate) => candidate.includes(name) || name.includes(candidate))
+			names.find(
+				(candidate) =>
+					candidate.length >= 3 && (candidate.includes(name) || name.includes(candidate)),
+			)
 		);
 	}
-}
-
-export function describeError(error: unknown): string {
-	if (error instanceof Error) return error.message;
-	return String(error);
 }
 
 /** Submission modes `/mode` sets and Alt+Enter cycles. */

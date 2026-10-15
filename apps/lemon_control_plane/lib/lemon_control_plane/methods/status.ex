@@ -144,6 +144,9 @@ defmodule LemonControlPlane.Methods.Status do
             "commit" => info.git.commit
           }
         end),
+      "profile" => runtime_profile(),
+      "default_model" =>
+        optional(nil, fn -> model_id(LemonCore.Config.load().agent.default_model) end),
       "uptime_ms" => uptime,
       "memory_mb" => Float.round(memory_bytes / 1_048_576, 2),
       "otp_release" => to_string(:erlang.system_info(:otp_release)),
@@ -151,6 +154,19 @@ defmodule LemonControlPlane.Methods.Status do
       "beam" => beam_status()
     }
   end
+
+  defp runtime_profile do
+    case System.get_env("LEMON_RUNTIME_PROFILE") do
+      profile when profile in ["runtime_min", "runtime_full", "sim_broadcast_platform"] -> profile
+      _ -> nil
+    end
+  end
+
+  defp model_id(value) when is_binary(value) and byte_size(value) <= 256 do
+    if Regex.match?(~r/\A[a-zA-Z0-9][a-zA-Z0-9_.:\/@-]*\z/, value), do: value
+  end
+
+  defp model_id(_), do: nil
 
   defp beam_status do
     %{

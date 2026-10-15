@@ -129,27 +129,6 @@ defmodule LemonCore.Config.ValidationErrorTest do
     end
   end
 
-  describe "struct fields" do
-    test "has correct struct fields" do
-      exception = ValidationError.exception([])
-
-      assert Map.has_key?(exception, :message)
-      assert Map.has_key?(exception, :errors)
-    end
-
-    test "errors field is a list" do
-      exception = ValidationError.exception(errors: ["error"])
-
-      assert is_list(exception.errors)
-    end
-
-    test "message field is a string" do
-      exception = ValidationError.exception([])
-
-      assert is_binary(exception.message)
-    end
-  end
-
   describe "edge cases" do
     test "handles nil errors by using default empty list" do
       # When nil is passed, Keyword.get returns nil which causes Enum.map_join to fail

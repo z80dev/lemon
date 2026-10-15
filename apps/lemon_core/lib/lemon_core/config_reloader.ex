@@ -62,7 +62,8 @@ defmodule LemonCore.ConfigReloader do
   - `:force` - bypass digest comparison and force reload (default: `false`)
   - `:reason` - why the reload was triggered (`:watcher`, `:poll`, `:manual`, `:secrets_event`)
   - `:cwd` - override the working directory for config lookup
-  - `:validate` - run config validation (default: `true`)
+
+  Canonical configuration is always validated before applying a reload.
   """
   @spec reload(keyword()) :: {:ok, reload_result()} | {:error, term()}
   def reload(opts \\ []) do
@@ -170,7 +171,6 @@ defmodule LemonCore.ConfigReloader do
     force = Keyword.get(opts, :force, false)
     reason = Keyword.get(opts, :reason, :manual)
     cwd = Keyword.get(opts, :cwd, state.cwd)
-    validate = Keyword.get(opts, :validate, true)
 
     telemetry_meta = %{reload_id: reload_id, reason: reason, sources: sources}
 
@@ -224,7 +224,7 @@ defmodule LemonCore.ConfigReloader do
         end
 
         # 4. Reload canonical config
-        new_config = LemonCore.Config.reload(cwd, validate: validate)
+        new_config = LemonCore.Config.reload(cwd)
 
         # 5. Compute redacted diff
         old_map = if state.last_snapshot, do: config_to_comparable(state.last_snapshot), else: %{}

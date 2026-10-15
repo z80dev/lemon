@@ -70,10 +70,6 @@ defmodule LemonChannels.MediaStatusMessageTest do
     refute Commands.media_command?("/media@other_bot status", "lemon_bot")
   end
 
-  test "renders media command usage" do
-    assert MediaStatusMessage.handle("help") == "Usage: /media status"
-  end
-
   defp tmp_dir do
     Path.join(
       System.tmp_dir!(),

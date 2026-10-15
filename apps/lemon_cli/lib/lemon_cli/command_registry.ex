@@ -493,6 +493,23 @@ defmodule LemonCli.CommandRegistry do
       ]
     },
     %{
+      name: "learning",
+      summary: "Browse the current profile's learning timeline",
+      usage:
+        "lemon learning [--profile ID] [--kind memory|user|project|skill] [--limit N] [--json]",
+      subcommands: [],
+      options: [
+        option("--profile ID", ["--profile"], "Local profile (default: default assistant)"),
+        option("--kind KIND", ["--kind"], "Filter memory, user, project, or skill events"),
+        option("--limit N", ["--limit"], "Maximum events, 1–100 (default 50)"),
+        option("--json", ["--json"], "Emit one redacted JSON document")
+      ],
+      details: [
+        "Newest first. Existing creation/latest-update timestamps only, not a complete historical log. Previews show current redacted content.",
+        "Use the existing memory management and skill commands to edit/delete; this command never mutates state."
+      ]
+    },
+    %{
       name: "learn",
       summary: "Review and confirm bounded learning from sources",
       usage: "lemon learn [review|confirm] <reference>... [options]",

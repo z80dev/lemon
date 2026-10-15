@@ -81,8 +81,8 @@ defmodule LemonCore.ConfigReloader.DigestTest do
       digest = Digest.files_digest([path])
 
       assert digest.source == :files
-      assert is_list(digest.fingerprints)
-      assert length(digest.fingerprints) == 1
+      assert [fingerprint] = digest.fingerprints
+      assert fingerprint.path == Path.expand(path)
       assert is_integer(digest.computed_at_ms)
     end
   end
@@ -160,7 +160,10 @@ defmodule LemonCore.ConfigReloader.DigestTest do
 
     test "detects new source added" do
       old = %{}
-      new = %{secrets: Digest.secrets_digest([%{owner: "x", name: "y", updated_at: 1, version: "v1"}])}
+
+      new = %{
+        secrets: Digest.secrets_digest([%{owner: "x", name: "y", updated_at: 1, version: "v1"}])
+      }
 
       {changed, _merged} = Digest.compare(old, new)
 

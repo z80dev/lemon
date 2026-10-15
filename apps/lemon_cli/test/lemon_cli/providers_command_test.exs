@@ -165,13 +165,12 @@ defmodule LemonCli.ProvidersCommandTest do
              Jason.decode(error)
   end
 
-  test "providers help exits successfully without starting a mutation" do
-    output =
-      capture_io(fn ->
-        assert CLI.run(["providers", "--help"]) == 0
-      end)
+  test "providers help exits successfully without starting a mutation", ctx do
+    capture_io(fn ->
+      assert CLI.run(["providers", "--help"]) == 0
+    end)
 
-    assert output =~ "lemon providers fallback"
-    assert output =~ "secret:NAME"
+    refute File.exists?(ctx.global_config)
+    refute File.exists?(ctx.project_config)
   end
 end

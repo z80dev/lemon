@@ -15,6 +15,9 @@ defmodule CodingAgent.Search.Providers.Perplexity do
   def capabilities, do: [:search]
 
   @impl true
+  def search_features, do: %{freshness: []}
+
+  @impl true
   def available?(:search, %{api_key: key}) when is_binary(key) and key != "", do: :ok
 
   def available?(:search, _context) do

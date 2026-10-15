@@ -39,6 +39,7 @@ defmodule CodingAgent.Tools.Debug do
   def tool(cwd, opts \\ []) do
     %AgentTool{
       name: "debug",
+      timeout_ms: :infinity,
       description: description(),
       label: "Debug",
       parameters: parameters(),

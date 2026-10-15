@@ -538,6 +538,12 @@ defmodule CodingAgent.Session do
     GenServer.call(session, :get_state)
   end
 
+  @doc "Return whether this invocation has pending steering, without consuming it."
+  @spec has_steering_messages?(GenServer.server(), reference() | nil) :: boolean()
+  def has_steering_messages?(session, signal) do
+    GenServer.call(session, {:has_steering_messages, signal}, 2_000)
+  end
+
   @doc """
   Get session statistics including message count, token usage, etc.
   """
@@ -978,6 +984,10 @@ defmodule CodingAgent.Session do
     {:reply, state, state}
   end
 
+  def handle_call({:has_steering_messages, signal}, _from, state) do
+    {:reply, LemonAgent.Agent.has_steering_messages?(state.agent, signal), state}
+  end
+
   def handle_call(:get_stats, _from, state) do
     agent_state = LemonAgent.Agent.get_state(state.agent)
     messages = agent_state.messages
@@ -1114,6 +1124,21 @@ defmodule CodingAgent.Session do
 
   def handle_call({:tree, opts}, _from, state) do
     {:reply, {:ok, CodingAgent.Session.Rewind.tree(state.session_manager, opts)}, state}
+  end
+
+  def handle_call({:context_checkpoint, operation, id, value}, _from, state) do
+    case CodingAgent.Session.ContextCheckpoint.request(
+           state.session_manager,
+           operation,
+           id,
+           value
+         ) do
+      {:ok, details, manager} ->
+        {:reply, {:ok, details}, %{state | session_manager: manager}}
+
+      {:error, _} = error ->
+        {:reply, error, state}
+    end
   end
 
   def handle_call({:rewind, _entry_id, _opts}, _from, %{is_streaming: true} = state),

@@ -90,6 +90,50 @@ defmodule CodingAgent.Tools.LspTest do
     assert text!(result) =~ "fake problem v2"
   end
 
+  test "catalog language IDs, capabilities and reload", ctx do
+    for path <- ["sample.rb", "sample.cs", "sample.swift", "sample.tsx", "unknown.xyz"] do
+      assert Client.language_id(path) == LemonLsp.Servers.language_id(path)
+    end
+
+    result = run(ctx, %{"action" => "capabilities", "file" => "src/main.c"})
+    assert result.details.capabilities["renameProvider"]["prepareProvider"]
+    [%{pid: before}] = Client.list(ctx.session_id)
+    assert %AgentToolResult{} = run(ctx, %{"action" => "reload", "file" => "src/main.c"})
+    [%{pid: after_reload}] = Client.list(ctx.session_id)
+    refute before == after_reload
+    refute Process.alive?(before)
+    assert %AgentToolResult{} = run(ctx, %{"action" => "reload"})
+    [%{pid: after_scope}] = Client.list(ctx.session_id)
+    refute after_reload == after_scope
+  end
+
+  test "workspace diagnostics aggregate published files without starting servers", ctx do
+    assert run(ctx, %{"action" => "diagnostics", "file" => "*"}).details.count == 0
+    assert Client.list(ctx.session_id) == []
+    run(ctx, %{"action" => "diagnostics", "file" => "src/main.c"})
+    File.write!(Path.join(ctx.tmp, "src/second.c"), "int second;\n")
+    run(ctx, %{"action" => "diagnostics", "file" => "src/second.c"})
+    result = run(ctx, %{"action" => "diagnostics", "file" => "*"})
+    assert result.details.count == 2
+    assert text!(result) =~ "src/main.c:1:1"
+    assert text!(result) =~ "src/second.c:1:1"
+  end
+
+  test "file rename previews edits before moving and notifies only after apply", ctx do
+    params = %{"action" => "rename_file", "file" => "src/main.c", "new_name" => "src/moved.c"}
+    original = File.read!(Path.join(ctx.tmp, "src/main.c"))
+    preview = run(ctx, params)
+    assert text!(preview) =~ "File rename preview"
+    assert File.read!(Path.join(ctx.tmp, "src/main.c")) == original
+    refute File.exists?(Path.join(ctx.tmp, "src/moved.c"))
+    applied = run(ctx, Map.put(params, "apply", true))
+    assert applied.details.applied
+    refute File.exists?(Path.join(ctx.tmp, "src/main.c"))
+    assert File.read!(Path.join(ctx.tmp, "src/moved.c")) == "// renamed\n" <> original
+    state = run(ctx, %{"action" => "request", "file" => "src/moved.c", "query" => "fake/renamed"})
+    assert text!(state) =~ "moved.c"
+  end
+
   test "rename previews by default and applies atomically with apply: true", ctx do
     path = Path.join(ctx.tmp, "src/main.c")
     original = File.read!(path)
@@ -371,6 +415,7 @@ defmodule CodingAgent.Tools.LspTest do
       def handle(%{"method" => "initialize", "id" => id}, state) do
         reply(id, %{
           "capabilities" => %{
+            "workspace" => %{"fileOperations" => %{"willRename" => %{}, "didRename" => %{}}},
             "renameProvider" => %{"prepareProvider" => true},
             "codeActionProvider" => %{"resolveProvider" => true},
             "executeCommandProvider" => %{"commands" => ["fake.fix"]}
@@ -474,6 +519,20 @@ defmodule CodingAgent.Tools.LspTest do
           %{"result" => %{"applied" => true}} = await("apply-3")
         end
         reply(id, nil)
+        state
+      end
+
+      def handle(%{"method" => "workspace/willRenameFiles", "id" => id, "params" => %{"files" => [file]}}, state) do
+        reply(id, %{"changes" => %{file["oldUri"] => [%{"range" => range(0, 0, 0), "newText" => "// renamed\n"}]}})
+        state
+      end
+
+      def handle(%{"method" => "workspace/didRenameFiles", "params" => %{"files" => files}}, state) do
+        Map.put(state, :renamed, files)
+      end
+
+      def handle(%{"method" => "fake/renamed", "id" => id}, state) do
+        reply(id, Map.get(state, :renamed, []))
         state
       end
 

@@ -150,7 +150,15 @@ defmodule LemonSkills.LockfileTest do
       {:ok, decoded} = Jason.decode(raw)
 
       assert decoded["version"] == 1
-      assert is_map(decoded["skills"])
+
+      assert %{
+               "my-skill" => %{
+                 "key" => "my-skill",
+                 "source_kind" => "git",
+                 "content_hash" => "abc123"
+               }
+             } =
+               decoded["skills"]
     end
 
     test "creates parent directory when absent", %{tmp_dir: tmp_dir} do
@@ -199,9 +207,10 @@ defmodule LemonSkills.LockfileTest do
       num_writers = 10
       keys = Enum.map(1..num_writers, fn i -> "concurrent-skill-#{i}" end)
 
-      tasks = Enum.map(keys, fn key ->
-        Task.async(fn -> Lockfile.put(scope, sample_record(key)) end)
-      end)
+      tasks =
+        Enum.map(keys, fn key ->
+          Task.async(fn -> Lockfile.put(scope, sample_record(key)) end)
+        end)
 
       Enum.each(tasks, &Task.await/1)
 

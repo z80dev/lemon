@@ -244,6 +244,7 @@ defmodule CodingAgent.Tools.WebFetch do
       ],
       timeout_ms: runtime.timeout_ms,
       max_redirects: runtime.max_redirects,
+      max_body_bytes: runtime.max_body_bytes,
       allow_private_network: runtime.allow_private_network,
       allowed_hostnames: runtime.allowed_hostnames,
       resolve_host: runtime.resolve_host,
@@ -952,9 +953,14 @@ defmodule CodingAgent.Tools.WebFetch do
   defp format_guard_error({:invalid_url, message}), do: message
   defp format_guard_error({:redirect_error, message}), do: message
   defp format_guard_error({:network_error, message}), do: message
+
+  defp format_guard_error({:body_too_large, %{max_body_bytes: limit}}),
+    do: "body_too_large: response exceeds #{limit} bytes"
+
   defp format_guard_error(reason), do: format_reason(reason)
 
   defp direct_guard_error?({:invalid_url, _}), do: true
+  defp direct_guard_error?({:body_too_large, _}), do: true
   defp direct_guard_error?(_), do: false
 
   defp format_primary_error({:http_error, status, response}) do
@@ -1158,6 +1164,12 @@ defmodule CodingAgent.Tools.WebFetch do
       cache_max_entries: cache_max_entries,
       cache_opts: cache_opts,
       max_redirects: max_redirects,
+      max_body_bytes:
+        max(
+          normalize_integer(get_map_value(fetch_cfg, :max_body_bytes, 5 * 1024 * 1024)) ||
+            5 * 1024 * 1024,
+          1
+        ),
       user_agent:
         normalize_optional_string(get_map_value(fetch_cfg, :user_agent, nil)) ||
           @default_fetch_user_agent,

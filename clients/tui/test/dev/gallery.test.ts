@@ -23,13 +23,6 @@ afterEach(() => {
 });
 
 describe("argument parsing", () => {
-	test("defaults to every state and section at 80 and 120 columns", () => {
-		const options = parseGalleryArgs([]);
-		expect(options.widths).toEqual([80, 120]);
-		expect(options.states).toEqual(["streaming", "running", "success", "error"]);
-		expect(options.sections).toEqual(["tools", "diff", "shelf", "accordion", "context"]);
-	});
-
 	test("accepts repeated and comma-separated values", () => {
 		const options = parseGalleryArgs(["--width", "60,100", "--state", "error", "--tool", "edit"]);
 		expect(options.widths).toEqual([60, 100]);

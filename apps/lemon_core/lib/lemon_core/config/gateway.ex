@@ -176,7 +176,7 @@ defmodule LemonCore.Config.Gateway do
     Map.new(modules, fn module ->
       id = module.id()
       configured = resolve_bool_field(settings["enable_#{id}"], false)
-      {id, module.enabled?(configured) == true}
+      {id, module.enabled?(configured)}
     end)
   end
 
@@ -288,7 +288,7 @@ defmodule LemonCore.Config.Gateway do
   defp resolve_bool_field(val, _default) when is_boolean(val), do: val
   defp resolve_bool_field("true", _default), do: true
   defp resolve_bool_field("false", _default), do: false
-  defp resolve_bool_field(_, default), do: default
+  defp resolve_bool_field(value, _default), do: value
 
   defp normalize_optional_string(nil), do: nil
   defp normalize_optional_string(""), do: nil

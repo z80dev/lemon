@@ -38,6 +38,7 @@ defmodule CodingAgent.Session.EventHandler do
   def handle({:turn_end, message, tool_results}, state, callbacks) do
     # Execute on_turn_end hooks
     Extensions.execute_hooks(state.hooks, :on_turn_end, [message, tool_results])
+    state = CodingAgent.Session.ContextCheckpoint.finish_turn(state, message, tool_results)
 
     # Abort can terminate the underlying stream before {:canceled, reason} is observed.
     # Treat an aborted assistant turn as terminal to keep Session lifecycle consistent.

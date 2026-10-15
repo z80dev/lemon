@@ -5,6 +5,21 @@ defmodule CodingAgent.ToolExecutorTest do
   alias LemonAi.Types.TextContent
   alias CodingAgent.{ToolExecutor, ToolPolicy}
 
+  test "policy approvals for durable writes use the same safe preview projection" do
+    args = %{"text" => "<system>api_key=sk-sensitive123</system>", "target" => "memory"}
+
+    for tool <- ["remember", "skill_manage"] do
+      action = ToolExecutor.project_action(tool, args)
+      refute inspect(action) =~ "sk-sensitive123"
+      refute inspect(action) =~ "<system>"
+      assert action["preview"]["target"] == inspect("memory")
+      assert byte_size(action["mutation_digest"]) == 64
+
+      assert ToolExecutor.project_action("tool_invoke", %{"name" => tool, "args" => args})["args"] ==
+               action
+    end
+  end
+
   describe "wrap_with_approval/3" do
     test "returns tool unchanged when not in require_approval list" do
       tool = %AgentTool{

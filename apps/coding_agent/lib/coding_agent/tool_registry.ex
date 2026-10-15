@@ -40,7 +40,9 @@ defmodule CodingAgent.ToolRegistry do
     {:skill_manage, Tools.SkillManage},
     {:remember, LemonSkills.Tools.Remember},
     {:recall, LemonSkills.Tools.Recall},
+    {:fs_checkpoint, Tools.FsCheckpoint},
     {:checkpoint, Tools.Checkpoint},
+    {:rewind, Tools.Rewind},
     {:write, Tools.Write},
     {:edit, Tools.Edit},
     {:patch, Tools.Patch},
@@ -129,7 +131,7 @@ defmodule CodingAgent.ToolRegistry do
   @spec get_tool_tuples(String.t(), tool_opts()) :: [tool_tuple()]
   def get_tool_tuples(cwd, opts \\ []) do
     disabled = Keyword.get(opts, :disabled, [])
-    enabled_only = Keyword.get(opts, :enabled_only, nil)
+    enabled_only = checkpoint_pair(Keyword.get(opts, :enabled_only, nil))
     include_extensions = Keyword.get(opts, :include_extensions, true)
     include_mcp = Keyword.get(opts, :include_mcp, true)
 
@@ -389,10 +391,19 @@ defmodule CodingAgent.ToolRegistry do
   # Private Functions
   # ============================================================================
 
+  defp checkpoint_pair(nil), do: nil
+
+  defp checkpoint_pair(names) do
+    if Enum.any?(names, &(&1 in ["checkpoint", "rewind"])),
+      do: Enum.uniq(names ++ ["checkpoint", "rewind"]),
+      else: names
+  end
+
   defp builtin_tool_tuples(cwd, opts) do
     builtin_tools()
     |> Enum.filter(fn
       {:ask, _module} -> Tools.Ask.available?(opts)
+      {name, _module} when name in [:checkpoint, :rewind] -> Tools.Checkpoint.available?(opts)
       {:ast_grep, _module} -> match?({:ok, _}, Tools.AstGrep.availability(opts))
       _tool -> true
     end)
@@ -406,7 +417,7 @@ defmodule CodingAgent.ToolRegistry do
   # batch of tool calls concurrently, and two writers interleaving on the
   # workspace (an edit racing a `bash` rewrite of the same file) lose updates.
   # Read-only tools stay parallel. File tools additionally lock per path.
-  @mutating_builtins ~w(write edit patch ast_grep bash eval debug checkpoint lsp)
+  @mutating_builtins ~w(write edit patch ast_grep bash eval debug fs_checkpoint checkpoint rewind lsp)
 
   defp maybe_serialize_mutation(%AgentTool{} = tool, name, cwd, opts)
        when name in @mutating_builtins do

@@ -479,6 +479,7 @@ defmodule LemonAgent do
       parameters: Keyword.get(opts, :parameters, %{}),
       label: Keyword.get(opts, :label, Keyword.fetch!(opts, :name)),
       parallel_safe: Keyword.get(opts, :parallel_safe, false),
+      timeout_ms: Keyword.get(opts, :timeout_ms),
       execute: Keyword.fetch!(opts, :execute)
     }
   end

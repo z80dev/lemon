@@ -26,7 +26,7 @@ defmodule LemonHoncho.UserPeer do
 
   def runtime_id(_), do: nil
 
-  @doc "Pin, alias, prefixed runtime id, then configured peer; local sessions always use the latter."
+  @doc "Pin, alias, owner peer, then platform-qualified runtime peer; local sessions keep the configured peer."
   def resolve(%Config{} = config, identity) do
     case runtime_id(identity) do
       nil ->
@@ -40,11 +40,11 @@ defmodule LemonHoncho.UserPeer do
           peer = config.user_peer_aliases[runtime_id] ->
             valid_peer(peer, config.user_peer)
 
-          config.runtime_peer_prefix != "" ->
-            sanitize(config.runtime_peer_prefix <> runtime_id)
+          owner?(identity) ->
+            config.user_peer
 
           true ->
-            config.user_peer
+            sanitize(config.runtime_peer_prefix <> runtime_id)
         end
     end
   end
@@ -52,6 +52,10 @@ defmodule LemonHoncho.UserPeer do
   def bot?(%{is_bot: true}), do: true
   def bot?(%{"is_bot" => true}), do: true
   def bot?(_), do: false
+
+  defp owner?(%{owner?: true}), do: true
+  defp owner?(%{"owner?" => true}), do: true
+  defp owner?(_), do: false
 
   defp valid_peer(peer, fallback) do
     if is_binary(peer) and Regex.match?(~r/^[A-Za-z0-9_-]{1,512}$/, peer),

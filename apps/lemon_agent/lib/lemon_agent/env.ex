@@ -1,6 +1,6 @@
 defmodule LemonAgent.Env do
   @moduledoc """
-  Environment variables read by `agent_core` — the agent loop, model runtime, and credential resolution.
+  Environment variables read by `lemon_agent` — the agent loop, model runtime, and credential resolution.
 
   Aggregated by `LemonCore.Env` through the `:env_registries` list; see
   `LemonCore.Env.Registry`.

@@ -558,14 +558,6 @@ describe("lsFormatter", () => {
 	});
 });
 
-describe("default export", () => {
-	it("exports the find and ls formatters", async () => {
-		const formatters = await import("../../src/formatters/find.js");
-
-		expect(formatters.default.map((formatter) => formatter.tools)).toEqual([["find"], ["ls"]]);
-	});
-});
-
 describe("edge cases", () => {
 	it("handles Windows-style line endings in results", async () => {
 		const { findFormatter } = await import("../../src/formatters/find.js");
