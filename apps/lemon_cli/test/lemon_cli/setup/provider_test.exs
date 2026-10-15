@@ -57,6 +57,52 @@ defmodule LemonCli.Setup.ProviderTest do
     {:ok, tmp_dir: tmp_dir, config_path: Path.join(tmp_dir, "config.toml")}
   end
 
+  test "non-terminal provider setup fails before scaffolding or prompting" do
+    io =
+      capturing_io()
+      |> Map.put(:interactive?, fn -> false end)
+      |> Map.put(:prompt, fn _ -> flunk("non-terminal setup prompted") end)
+      |> Map.put(:secret, fn _ -> flunk("non-terminal setup read a secret") end)
+
+    assert_raise Mix.Error, ~r/No interactive terminal.*lemon setup --non-interactive/, fn ->
+      Provider.run([], io)
+    end
+
+    refute File.exists?(LemonCore.Config.global_path())
+  end
+
+  test "EOF in the selector is not presented as cancellation" do
+    set_master_key_env()
+    io = Map.put(capturing_io(), :select, fn _ -> {:error, :end_of_input} end)
+
+    error = assert_raise Mix.Error, fn -> Provider.run([], io) end
+    assert error.message =~ "lemon model --non-interactive"
+    refute error.message =~ "cancelled"
+  end
+
+  test "invalid provider indexes and names show the valid range and ids" do
+    set_master_key_env()
+    responses = start_supervised!({Agent, fn -> ["0", "999", "unknown", "openai", "n"] end})
+
+    io =
+      capturing_io()
+      |> Map.put(:prompt, fn _ ->
+        Agent.get_and_update(responses, fn [value | rest] -> {value, rest} end)
+      end)
+      |> Map.put(:secret, fn _ -> "synthetic-provider-key" end)
+
+    assert :ok = Provider.run([], io)
+    events = drain_events([])
+    range = "1–#{length(LemonCli.Onboarding.Providers.list())}"
+    assert error_event?(events, &String.contains?(&1, range))
+    assert error_event?(events, &String.contains?(&1, "openai"))
+    assert info_event?(events, &String.contains?(&1, "onboarding will continue now"))
+    refute info_event?(events, &String.contains?(&1, "re-run this command"))
+
+    assert {:ok, "synthetic-provider-key"} =
+             Secrets.get("llm_openai_api_key", prefer_env: false, env_fallback: false)
+  end
+
   describe "run/2 — scaffold error propagation" do
     test "returns {:error, {:scaffold_failed, _}} when config directory is unwritable" do
       io = capturing_io()
@@ -351,6 +397,38 @@ defmodule LemonCli.Setup.ProviderTest do
       assert failure.step == :live
       assert failure.message =~ "lemon setup provider"
       assert failure.message =~ "--skip-verify"
+    end
+
+    test "live verification uses the same environment-backed reference as readiness", %{
+      config_path: path
+    } do
+      set_master_key_env()
+      env_name = "LEMON_POLISH_SETUP_API_KEY"
+      previous = System.get_env(env_name)
+      previous_openai = System.get_env("OPENAI_API_KEY")
+      System.put_env(env_name, "synthetic-env-only-key")
+      System.delete_env("OPENAI_API_KEY")
+
+      on_exit(fn ->
+        if previous, do: System.put_env(env_name, previous), else: System.delete_env(env_name)
+
+        if previous_openai,
+          do: System.put_env("OPENAI_API_KEY", previous_openai),
+          else: System.delete_env("OPENAI_API_KEY")
+      end)
+
+      write_config(path, defaults: true, secret_ref: env_name)
+      assert Verification.setup_state(config_path: path).provider.complete
+      assert {:error, :not_found} = Secrets.get(env_name, prefer_env: false, env_fallback: false)
+
+      assert {:ok, %{live: :ok}} =
+               Verification.verify_provider(
+                 config_path: path,
+                 verifier: fn input ->
+                   assert input.api_key == "synthetic-env-only-key"
+                   {:ok, %{}}
+                 end
+               )
     end
   end
 

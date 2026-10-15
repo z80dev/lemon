@@ -47,6 +47,7 @@ defmodule Mix.Tasks.Lemon.Onboard.CodexTest do
     output =
       capture_io(fn ->
         Codex.run([
+          "--non-interactive",
           "--token",
           "codex-token-123",
           "--config-path",
@@ -76,6 +77,7 @@ defmodule Mix.Tasks.Lemon.Onboard.CodexTest do
 
     capture_io(fn ->
       Codex.run([
+        "--non-interactive",
         "--token",
         "codex-token-123",
         "--config-path",
@@ -103,6 +105,7 @@ defmodule Mix.Tasks.Lemon.Onboard.CodexTest do
     assert_raise Mix.Error, ~r/Unknown model/, fn ->
       capture_io(fn ->
         Codex.run([
+          "--non-interactive",
           "--token",
           "codex-token-123",
           "--config-path",

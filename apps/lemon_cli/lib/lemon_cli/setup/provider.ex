@@ -62,11 +62,12 @@ defmodule LemonCli.Setup.Provider do
   """
   @spec run([String.t()], map(), keyword()) :: :ok | {:error, term()}
   def run(args, io, opts \\ []) when is_list(args) and is_map(io) do
-    Runner.ensure_required_apps!()
-
     case Enum.filter(args, &(&1 in ["--status", "--logout"])) do
       [] ->
-        run_onboarding(args, io, opts)
+        case configure(args, io, opts) do
+          {:ok, _verification} -> :ok
+          {:error, _reason} = error -> error
+        end
 
       [flag] ->
         run_auth_action(flag, List.delete(args, flag), io)
@@ -76,7 +77,10 @@ defmodule LemonCli.Setup.Provider do
     end
   end
 
-  defp run_onboarding(args, io, opts) do
+  @doc false
+  def configure(args, io, opts \\ []) do
+    unless "--non-interactive" in args or "-n" in args, do: Runner.ensure_interactive!(io)
+    Runner.ensure_required_apps!()
     {skip_verify?, rest} = extract_skip_verify(args)
     skip_verify? = skip_verify? or Keyword.get(opts, :skip_verify, false)
     live_verify? = Keyword.get(opts, :live_verify, false)
@@ -84,11 +88,17 @@ defmodule LemonCli.Setup.Provider do
     with :ok <- ensure_secrets_ready(io),
          :ok <- maybe_bootstrap_config(io),
          :ok <- onboard(rest, io) do
-      verify_onboarded_config(rest, skip_verify? or not live_verify?, io, opts)
+      verify_config(
+        extract_config_path(rest),
+        io,
+        Keyword.put(opts, :skip_verify, skip_verify? or not live_verify?)
+      )
     end
   end
 
   defp run_auth_action(flag, args, io) do
+    Runner.ensure_required_apps!()
+
     case extract_provider_arg(args) do
       {nil, _rest} ->
         Runner.fail!("#{flag} needs a provider, for example `lemon model anthropic #{flag}`.")
@@ -135,8 +145,8 @@ defmodule LemonCli.Setup.Provider do
   # Post-onboarding verification
   # ──────────────────────────────────────────────────────────────────────────
 
-  defp verify_onboarded_config(args, skip_verify?, io, opts) do
-    config_path = extract_config_path(args)
+  @doc false
+  def verify_config(config_path, io, opts \\ []) do
     provider_state = Verification.setup_state(config_path: config_path).provider
 
     if provider_state.provider && provider_state.model do
@@ -147,7 +157,7 @@ defmodule LemonCli.Setup.Provider do
         opts
         |> Keyword.take([:verifier, :config, :verification_model, :cwd])
         |> Keyword.put(:config_path, config_path)
-        |> Keyword.put(:skip_verify, skip_verify?)
+        |> Keyword.put(:skip_verify, Keyword.get(opts, :skip_verify, false))
         |> Verification.verification_options()
 
       case Verification.verify_provider(verification_opts) do
@@ -157,10 +167,10 @@ defmodule LemonCli.Setup.Provider do
               "(credential usable#{live_detail(live, result)})."
           )
 
-          :ok
+          {:ok, result}
 
         {:error, %{message: message}} ->
-          io.error.("Verification failed — setup is not complete.")
+          io.error.("Verification failed. Run `lemon setup provider` to check the provider.")
           io.error.(message)
           {:error, :verification_failed}
       end
@@ -168,7 +178,7 @@ defmodule LemonCli.Setup.Provider do
       io.info.("")
       io.info.("Credentials stored, but no default provider/model was set.")
       io.info.("Run `lemon setup provider --set-default` to make this provider the default.")
-      :ok
+      {:ok, nil}
     end
   end
 
@@ -216,7 +226,7 @@ defmodule LemonCli.Setup.Provider do
       case result do
         {:ok, path} ->
           io.info.("Created minimal config: #{path}")
-          io.info.("Edit it to add your preferred defaults, then re-run this command.")
+          io.info.("Provider onboarding will continue now; you can edit other defaults later.")
           io.info.("")
           :ok
 
@@ -224,7 +234,10 @@ defmodule LemonCli.Setup.Provider do
           :ok
 
         {:error, reason} ->
-          io.error.("Failed to create config scaffold: #{inspect(reason)}")
+          io.error.(
+            "Could not create the config scaffold. Check permissions, then run `lemon setup`."
+          )
+
           {:error, {:scaffold_failed, reason}}
       end
     end
@@ -245,7 +258,7 @@ defmodule LemonCli.Setup.Provider do
           |> Enum.map(& &1.id)
           |> Enum.join(", ")
 
-        Runner.fail!("Unknown provider #{inspect(value)}. Available providers: #{names}")
+        Runner.fail!("Unknown provider. Choose #{names} with `lemon model --provider NAME`.")
     end
   end
 
@@ -310,10 +323,9 @@ defmodule LemonCli.Setup.Provider do
       String.match?(trimmed, ~r/^\d+$/) ->
         idx = String.to_integer(trimmed)
 
-        case Enum.at(providers, idx - 1) do
+        case if(idx > 0, do: Enum.at(providers, idx - 1)) do
           nil ->
-            io.error.("Invalid index #{idx}.")
-            parse_provider_choice(io.prompt.("Choose provider: "), providers, default_index, io)
+            retry_provider_choice(providers, default_index, io)
 
           provider ->
             provider
@@ -322,13 +334,23 @@ defmodule LemonCli.Setup.Provider do
       true ->
         case Providers.find(trimmed) do
           nil ->
-            io.error.("Unknown provider #{inspect(trimmed)}.")
-            parse_provider_choice(io.prompt.("Choose provider: "), providers, default_index, io)
+            retry_provider_choice(providers, default_index, io)
 
           provider ->
             provider
         end
     end
+  end
+
+  defp retry_provider_choice(providers, default_index, io) do
+    ids = Enum.map_join(providers, ", ", & &1.id)
+
+    io.error.(
+      "Invalid provider selection. Enter 1–#{length(providers)} or a provider id: #{ids}."
+    )
+
+    choice = io.prompt.("Choose provider (1–#{length(providers)} or provider id): ")
+    parse_provider_choice(choice, providers, default_index, io)
   end
 
   defp default_provider_index(providers, config_path) do
@@ -404,8 +426,8 @@ defmodule LemonCli.Setup.Provider do
   # IO helpers
   # ──────────────────────────────────────────────────────────────────────────
 
-  defp normalize_input(nil), do: ""
-  defp normalize_input(:eof), do: ""
+  defp normalize_input(nil), do: Runner.no_terminal!()
+  defp normalize_input(:eof), do: Runner.no_terminal!()
   defp normalize_input(value) when is_binary(value), do: String.trim(value)
   defp normalize_input(value) when is_list(value), do: value |> List.to_string() |> String.trim()
   defp normalize_input(value), do: value |> to_string() |> String.trim()
@@ -421,6 +443,8 @@ defmodule LemonCli.Setup.Provider do
             :cancel
 
           {:error, reason} ->
+            if reason == :end_of_input, do: Runner.no_terminal!()
+
             io.error.(
               "Interactive onboarding UI unavailable (#{format_selector_error(reason)}). Falling back to prompt mode."
             )
@@ -440,8 +464,7 @@ defmodule LemonCli.Setup.Provider do
     is_function(Map.get(io, :select), 1) and PromptUI.available?()
   end
 
-  defp format_selector_error(:not_available), do: "no interactive terminal detected"
   defp format_selector_error(:no_selection), do: "selector exited before a choice was made"
   defp format_selector_error(:invalid_selector_params), do: "invalid selector parameters"
-  defp format_selector_error(reason), do: inspect(reason)
+  defp format_selector_error(_reason), do: "the selector could not be started"
 end
