@@ -224,7 +224,6 @@ import Observation
             guard generation == current else { throw error }
             if error is CancellationError || (error as? URLError)?.code == .cancelled { throw error }
             if connectionState != "reconnect_required" { connectionState = "disconnected" }
-            errorMessage = connectionState == "reconnect_required" ? "This device connection was revoked or is no longer authorized. Reconnect explicitly with your desktop." : error.localizedDescription
             recordConnectionFailure(error)
             if connectionState != "reconnect_required" { startSocket() }
             throw error
@@ -233,7 +232,6 @@ import Observation
     func markReconnectRequired() {
         stopSocket(); generation = UUID(); transport = nil
         connectionState = "reconnect_required"
-        errorMessage = "This device connection was revoked or is no longer authorized. Reconnect explicitly with your desktop."
         nextRetryAt = nil
         recordConnectionFailure(ClientError.signedOut)
     }

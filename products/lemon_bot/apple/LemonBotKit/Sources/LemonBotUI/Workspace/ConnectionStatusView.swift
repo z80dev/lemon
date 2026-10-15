@@ -26,7 +26,7 @@ public struct ConnectionStatusView: View {
                     }
                     Spacer(minLength: 0)
                 }
-                Text(issue.reason).font(LBFont.body).fixedSize(horizontal: false, vertical: true)
+                Text(issue.reason).font(LBFont.body)
                 TimelineView(.periodic(from: .now, by: 1)) { context in
                     if let deadline = store.nextRetryAt ?? issue.nextRetryAt, deadline > context.date {
                         Text("Retrying in \(Int(ceil(deadline.timeIntervalSince(context.date))))s").font(LBFont.meta).foregroundStyle(LB.muted)
@@ -79,12 +79,18 @@ public struct ConnectionStatusView: View {
             Button("Restart Lemon", role: .destructive) { run(.restart) }
         } message: { Text("Bots stop working while Lemon restarts. They can work again once it reconnects.") }
         .task(id: store.connectionIssue?.layer == .controllerDown) {
-            guard store.connectionIssue?.layer == .controllerDown, store.canViewInstance else { return }
+            guard store.connectionIssue?.layer == .controllerDown else { return }
             while !Task.isCancelled {
                 do {
-                    let status = try await store.refreshInstance()
-                    if status.controller.state == .connected { return }
-                    try await Task.sleep(for: .seconds(status.runtime.operation?.state == .running ? 2 : 10))
+                    if store.canViewInstance {
+                        let status = try await store.refreshInstance()
+                        if status.controller.state == .connected { return }
+                    } else {
+                        let capabilities: Capabilities = try await store.read("/capabilities")
+                        store.capabilities = capabilities
+                        if capabilities.controlConnected { store.connectionIssue = nil; return }
+                    }
+                    try await Task.sleep(for: .seconds(store.instanceStatus?.runtime.operation?.state == .running ? 2 : 10))
                 } catch is CancellationError { return }
                 catch { action.error = error.localizedDescription; do { try await Task.sleep(for: .seconds(10)) } catch { return } }
             }

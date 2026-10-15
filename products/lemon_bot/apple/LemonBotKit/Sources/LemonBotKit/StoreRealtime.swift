@@ -71,7 +71,7 @@ extension LemonBotStore {
                     return
                 } catch {
                     guard !Task.isCancelled, self.generation == current else { return }
-                    self.connectionState = "disconnected"; self.errorMessage = error.localizedDescription
+                    self.connectionState = "disconnected"
                     let close = self.socket?.closeCode.rawValue
                     if close == 4401 || close == 4403 || (error as? BackendError)?.failure.code == "unauthenticated" || (error as? BackendError)?.failure.code == "forbidden" { self.markReconnectRequired(); return }
                     attempt += 1

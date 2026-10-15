@@ -227,6 +227,9 @@ xcodebuild -project LemonBot.xcodeproj -scheme LemonBotMac \
 ```
 
 DEBUG-only visual check. The `LemonBotSnapshots` scheme renders the real views with in-process fixture data, in light and dark, to `/tmp/lb-ux/after/apple-*.png`. Set `TEST_RUNNER_LB_SNAPSHOT_DIR` to write somewhere else. The iOS app launched with `-LBFixtures` in a Debug build opens the same fixture workspace.
+Use `-LBFixtures -LBFixtureScene backend-down` (or `controller-down` /
+`reconnect-required`) to inspect the shared connection sheet on an isolated iOS
+simulator. The Mac snapshot slugs match these names and include light/dark views.
 
 ```sh
 xcodebuild -project LemonBot.xcodeproj -scheme LemonBotSnapshots \
