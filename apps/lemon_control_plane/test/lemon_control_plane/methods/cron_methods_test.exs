@@ -40,6 +40,33 @@ defmodule LemonControlPlane.Methods.CronMethodsTest do
     {:ok, job: job}
   end
 
+  test "cron list and status expose failure streaks and filter failing jobs", %{job: job} do
+    run = job.id |> CronRun.new(:manual) |> CronRun.start(nil)
+    CronStore.put_run(run)
+    send(CronManager, {:run_complete, run.id, {:error, "timeout"}})
+    # A synchronous manager read fences the terminalization message.
+    assert Enum.find(CronManager.list(), &(&1.id == job.id)).failure_state.consecutive_failures ==
+             1
+
+    assert {:ok, %{"jobs" => jobs}} = CronList.handle(%{"failing" => true}, %{})
+
+    assert Enum.any?(
+             jobs,
+             &(&1["id"] == job.id and &1["failureStreak"] == 1 and &1["lastStatus"] == "failed")
+           )
+
+    assert Enum.all?(jobs, &(&1["failureStreak"] > 0))
+    assert {:ok, %{"failingJobs" => count, "summary" => summary}} = CronStatus.handle(%{}, %{})
+    assert count >= 1
+    assert summary["failingJobs"] == count
+
+    run = job.id |> CronRun.new(:manual) |> CronRun.start(nil)
+    CronStore.put_run(run)
+    send(CronManager, {:run_complete, run.id, {:ok, "[SILENT]"}})
+    assert {:ok, %{"jobs" => jobs}} = CronList.handle(%{"failing" => true}, %{})
+    refute Enum.any?(jobs, &(&1["id"] == job.id))
+  end
+
   test "cron.update rejects sessionKey patch", %{job: job} do
     assert {:error, {:invalid_request, msg, nil}} =
              CronUpdate.handle(

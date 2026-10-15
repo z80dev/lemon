@@ -95,6 +95,26 @@ export class ModelPicker {
 		return this.#persistGlobally;
 	}
 
+	/** Cycle in models.list order, wrapping to the first entry. Session-only. */
+	async cycle(): Promise<void> {
+		const session = this.#host.session();
+		try {
+			const entries = await ensureModels({ store: this.#host.store, methods: this.#host.methods });
+			if (entries.length === 0) {
+				this.#host.notice("no models to choose from (models.list returned nothing)", "warning");
+				return;
+			}
+			const index = entries.findIndex((entry) => isCurrent(entry, session.model));
+			const next = entries[(index + 1) % entries.length]!;
+			await this.#apply(`${next.provider}:${next.id}`, session, entries, false);
+		} catch (error) {
+			this.#host.notice(
+				`could not cycle model: ${error instanceof Error ? error.message : String(error)}`,
+				"error",
+			);
+		}
+	}
+
 	/** Fetch (or reuse) the model list and open the provider stage. */
 	async open(): Promise<void> {
 		this.#entries = await ensureModels({ store: this.#host.store, methods: this.#host.methods });
@@ -281,10 +301,18 @@ export class ModelPicker {
 		}
 		const modelId = item.value;
 		this.close();
-		const session = this.#host.session();
+		await this.#apply(modelId, this.#host.session(), this.#entries, this.#persistGlobally);
+	}
+
+	async #apply(
+		modelId: string,
+		session: SessionStore,
+		entries: ModelEntry[],
+		persistGlobally: boolean,
+	): Promise<void> {
 		try {
 			await this.#host.methods.sessionsPatch({ sessionKey: session.key, model: modelId });
-			const entry = this.#entries.find(
+			const entry = entries.find(
 				(candidate) => `${candidate.provider}:${candidate.id}` === modelId,
 			);
 			session.setModel(
@@ -300,10 +328,8 @@ export class ModelPicker {
 			);
 			return;
 		}
-		if (!this.#persistGlobally) return;
-		const entry = this.#entries.find(
-			(candidate) => `${candidate.provider}:${candidate.id}` === modelId,
-		);
+		if (!persistGlobally) return;
+		const entry = entries.find((candidate) => `${candidate.provider}:${candidate.id}` === modelId);
 		const provider = entry?.provider ?? modelId.split(":", 1)[0]!;
 		try {
 			await saveDefaultModel(provider, modelId);

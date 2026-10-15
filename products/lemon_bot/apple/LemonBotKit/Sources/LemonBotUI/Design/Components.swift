@@ -7,13 +7,15 @@ import LemonBotKit
 struct GhostCircleButtonStyle: ButtonStyle {
     var size: CGFloat = 32
     var filled = true
+    var minimumTouchSize: CGFloat = 0
     func makeBody(configuration: Configuration) -> some View {
-        GhostCircleBody(configuration: configuration, size: size, filled: filled)
+        GhostCircleBody(configuration: configuration, size: size, filled: filled, minimumTouchSize: minimumTouchSize)
     }
     private struct GhostCircleBody: View {
         let configuration: Configuration
         let size: CGFloat
         let filled: Bool
+        let minimumTouchSize: CGFloat
         @State private var hovering = false
         @Environment(\.isEnabled) private var enabled
         var body: some View {
@@ -23,6 +25,7 @@ struct GhostCircleButtonStyle: ButtonStyle {
                 .foregroundStyle(LB.ink)
                 .frame(width: size, height: size)
                 .background(Circle().fill(configuration.isPressed ? LB.selected : hovering ? LB.selected : filled ? LB.fill : .clear))
+                .frame(minWidth: minimumTouchSize, minHeight: minimumTouchSize)
                 .contentShape(Circle())
                 .opacity(enabled ? 1 : 0.4)
                 .onHover { hovering = $0 }
@@ -35,13 +38,15 @@ struct PillButtonStyle: ButtonStyle {
     enum Kind { case primary(Color, Color), secondary, quiet, destructive }
     var kind: Kind = .secondary
     var compact = false
+    var minimumTouchSize: CGFloat = 0
     func makeBody(configuration: Configuration) -> some View {
-        PillBody(configuration: configuration, kind: kind, compact: compact)
+        PillBody(configuration: configuration, kind: kind, compact: compact, minimumTouchSize: minimumTouchSize)
     }
     private struct PillBody: View {
         let configuration: Configuration
         let kind: Kind
         let compact: Bool
+        let minimumTouchSize: CGFloat
         @State private var hovering = false
         @Environment(\.isEnabled) private var enabled
         var body: some View {
@@ -53,6 +58,7 @@ struct PillButtonStyle: ButtonStyle {
                 .padding(.vertical, compact ? 5 : 7)
                 .background(Capsule().fill(background))
                 .overlay { if hovering || configuration.isPressed { Capsule().fill(Color.primary.opacity(configuration.isPressed ? 0.12 : 0.06)) } }
+                .frame(minWidth: minimumTouchSize, minHeight: minimumTouchSize)
                 .contentShape(Capsule())
                 .opacity(enabled ? 1 : 0.45)
                 .onHover { hovering = $0 }
@@ -136,6 +142,13 @@ struct RowHighlight: ViewModifier {
 }
 extension View {
     func rowHighlight(selected: Bool, radius: CGFloat = LBMetric.rowRadius) -> some View { modifier(RowHighlight(selected: selected, radius: radius)) }
+}
+
+extension View {
+    /// Reserve nonoverlapping iPhone touch space without enlarging the icon artwork.
+    func composerTouchTarget() -> some View {
+        frame(minWidth: LBMetric.composerHitSize, minHeight: LBMetric.composerHitSize).contentShape(Rectangle())
+    }
 }
 
 /// Three bouncing dots: the Bot is preparing a reply.

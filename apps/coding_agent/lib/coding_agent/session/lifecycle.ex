@@ -4,6 +4,7 @@ defmodule CodingAgent.Session.Lifecycle do
 
   alias CodingAgent.ExtensionLifecycle
   alias CodingAgent.Extensions
+  alias CodingAgent.Security.SecretObfuscator
   alias CodingAgent.Session
 
   alias CodingAgent.Session.{
@@ -21,11 +22,16 @@ defmodule CodingAgent.Session.Lifecycle do
     WasmBridge
   }
 
+  alias CodingAgent.Session.BranchState
+  alias CodingAgent.Session.Ownership
+  alias CodingAgent.Session.Planning
   alias CodingAgent.SessionManager
   alias CodingAgent.SettingsManager
-  alias CodingAgent.ToolPolicy
   alias CodingAgent.SystemPrompt.Environment, as: SystemPromptEnvironment
+  alias CodingAgent.ToolPolicy
+  alias CodingAgent.Tools.Task.Params
   alias CodingAgent.Workspace
+  alias LemonAgent.ModelRuntime.StreamOptions
 
   @spec initialize(keyword(), pid()) ::
           {:ok, Session.t(), Extensions.extension_status_report() | nil}
@@ -149,7 +155,7 @@ defmodule CodingAgent.Session.Lifecycle do
       end)
 
     secret_obfuscator =
-      CodingAgent.Security.SecretObfuscator.for_session(settings_manager, cwd)
+      SecretObfuscator.for_session(settings_manager, cwd)
 
     wasm_boot =
       WasmBridge.maybe_start_wasm_sidecar(
@@ -207,13 +213,13 @@ defmodule CodingAgent.Session.Lifecycle do
         secret_obfuscator: secret_obfuscator
       )
 
-    plan_gate = CodingAgent.Session.Planning.new_gate()
+    plan_gate = Planning.new_gate()
 
     tools =
-      CodingAgent.Session.Planning.tools(
+      Planning.tools(
         lifecycle.tools,
         session_manager,
-        CodingAgent.Session.Planning.runtime_context(
+        Planning.runtime_context(
           %{
             plan_gate: plan_gate,
             cwd: cwd,
@@ -276,7 +282,7 @@ defmodule CodingAgent.Session.Lifecycle do
       end
 
     system_prompt =
-      CodingAgent.Session.Planning.system_prompt(base_system_prompt, session_manager)
+      Planning.system_prompt(base_system_prompt, session_manager)
 
     convert_to_llm = &CodingAgent.Messages.to_llm/1
 
@@ -313,7 +319,7 @@ defmodule CodingAgent.Session.Lifecycle do
         if next_model.provider == previous_model.provider do
           options
         else
-          LemonAgent.ModelRuntime.StreamOptions.sanitize_for_provider_switch(options)
+          StreamOptions.sanitize_for_provider_switch(options)
         end
 
       options = ModelResolver.build_stream_options(next_model, settings_manager, options, cwd)
@@ -560,11 +566,11 @@ defmodule CodingAgent.Session.Lifecycle do
       )
 
     tools =
-      CodingAgent.Session.Planning.tools(
+      Planning.tools(
         lifecycle.tools,
         state.session_manager,
         state
-        |> CodingAgent.Session.Planning.runtime_context(self())
+        |> Planning.runtime_context(self())
         |> Map.put(:hooks, lifecycle.hooks)
       )
 
@@ -634,7 +640,7 @@ defmodule CodingAgent.Session.Lifecycle do
         new_path = SessionManager.session_file_path(state.cwd, new_session_manager.header.id)
 
         new_session_manager =
-          CodingAgent.Session.Ownership.transfer(state.session_file, new_path, fn ->
+          Ownership.transfer(state.session_file, new_path, fn ->
             SessionManager.persist(new_session_manager, new_path)
           end)
 
@@ -655,7 +661,7 @@ defmodule CodingAgent.Session.Lifecycle do
         state =
           State.reset_runtime(state, new_session_manager, System.system_time(:millisecond))
           |> Map.put(:session_file, new_path)
-          |> CodingAgent.Session.BranchState.restore()
+          |> BranchState.restore()
 
         {:ok, state}
 
@@ -694,9 +700,7 @@ defmodule CodingAgent.Session.Lifecycle do
       Keyword.get(opts, :channel_identity, (approval_context || %{})[:channel_identity])
 
     native_managed? =
-      CodingAgent.Tools.Task.Params.managed_context?(
-        Map.merge(Map.new(opts), approval_context || %{})
-      )
+      Params.managed_context?(Map.merge(Map.new(opts), approval_context || %{}))
 
     invocation_context_key =
       LemonCore.MapHelpers.get_key(approval_context, :invocation_context_key) ||

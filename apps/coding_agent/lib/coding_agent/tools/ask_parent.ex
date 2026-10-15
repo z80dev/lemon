@@ -3,10 +3,10 @@ defmodule CodingAgent.Tools.AskParent do
   Child-only tool for escalating a clarification request to the parent session.
   """
 
+  alias CodingAgent.ParentQuestions
   alias LemonAgent.AbortSignal
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonAi.Types.TextContent
-  alias CodingAgent.ParentQuestions
   alias LemonCore.Bus
 
   @default_timeout_ms 300_000

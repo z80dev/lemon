@@ -263,7 +263,7 @@ export async function main(argv: string[] = Bun.argv.slice(2)): Promise<number> 
 	const [{ AppShell }, { initAppearanceTheme }, config, version] = await Promise.all([
 		import("./app.ts"),
 		import("./ui/theme/appearance.ts"),
-		loadConfig().catch(() => undefined),
+		loadConfig(process.cwd()).catch(() => undefined),
 		resolveVersion(),
 	]);
 	const theme = initAppearanceTheme({ configured: config?.tui?.theme });
@@ -276,6 +276,7 @@ export async function main(argv: string[] = Bun.argv.slice(2)): Promise<number> 
 			version,
 			themePreference: theme.preference,
 			notifications: config?.tui?.notifications,
+			keybindings: config?.tui?.keys,
 			onExit: (code) => resolve(code),
 		});
 		const shutdown = () => {

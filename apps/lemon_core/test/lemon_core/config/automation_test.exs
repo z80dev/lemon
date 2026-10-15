@@ -53,4 +53,21 @@ defmodule LemonCore.Config.AutomationTest do
                Automation.validate(%Automation{run_retention_per_job: invalid}, [])
     end
   end
+
+  test "cron failure cooldown defaults to six hours and validates overrides" do
+    assert Automation.resolve(%{}).failure_alert_cooldown_ms == 21_600_000
+
+    for value <- [0, 1, 21_600_000] do
+      config = Automation.resolve(%{"cron" => %{"failure_alert_cooldown_ms" => value}})
+      assert config.failure_alert_cooldown_ms == value
+      assert Automation.validate(config, []) == []
+    end
+
+    for value <- [-1, nil, false, "3600", 1.5] do
+      config = Automation.resolve(%{"cron" => %{"failure_alert_cooldown_ms" => value}})
+
+      assert ["cron.failure_alert_cooldown_ms: must be a non-negative integer"] =
+               Automation.validate(config, [])
+    end
+  end
 end

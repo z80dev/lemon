@@ -11,37 +11,38 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
 
   require Logger
 
-  alias LemonChannels.BindingResolver
-  alias LemonChannels.Cwd
-  alias LemonChannels.SubmissionOutcome
-  alias LemonChannels.Telegram.{OffsetStore, PollerLock}
-  alias LemonChannels.Telegram.Delivery
-  alias LemonChannels.Telegram.TransportShared
-  alias LemonCore.ChatScope
-  alias LemonCore.ProjectBindingStore
-  alias LemonCore.MapHelpers
-  alias LemonChannels.Adapters.Telegram.Transport.Commands
+  alias LemonChannels.Adapters.Telegram.ModelPolicyAdapter
   alias LemonChannels.Adapters.Telegram.Transport.ActionRunner
+  alias LemonChannels.Adapters.Telegram.Transport.ApprovalRequest
   alias LemonChannels.Adapters.Telegram.Transport.CallbackHandler
   alias LemonChannels.Adapters.Telegram.Transport.ChatPreferences
   alias LemonChannels.Adapters.Telegram.Transport.CommandRouter
-  alias LemonChannels.Adapters.Telegram.Transport.ModelPicker
+  alias LemonChannels.Adapters.Telegram.Transport.Commands
   alias LemonChannels.Adapters.Telegram.Transport.FileOperations
   alias LemonChannels.Adapters.Telegram.Transport.InboundActions
   alias LemonChannels.Adapters.Telegram.Transport.MemoryReflection
   alias LemonChannels.Adapters.Telegram.Transport.MessageBuffer
+  alias LemonChannels.Adapters.Telegram.Transport.ModelPicker
   alias LemonChannels.Adapters.Telegram.Transport.Normalize
-  alias LemonChannels.Adapters.Telegram.Transport.Pipeline
-  alias LemonChannels.Adapters.Telegram.ModelPolicyAdapter
-  alias LemonChannels.Adapters.Telegram.Transport.Poller
   alias LemonChannels.Adapters.Telegram.Transport.PerChatState
+  alias LemonChannels.Adapters.Telegram.Transport.Pipeline
+  alias LemonChannels.Adapters.Telegram.Transport.Poller
   alias LemonChannels.Adapters.Telegram.Transport.ResumeSelection
   alias LemonChannels.Adapters.Telegram.Transport.RuntimeState
-  alias LemonChannels.Adapters.Telegram.Transport.VoiceHandler
-  alias LemonChannels.Adapters.Telegram.Transport.TopicCommand
   alias LemonChannels.Adapters.Telegram.Transport.SessionRouting
+  alias LemonChannels.Adapters.Telegram.Transport.TopicCommand
   alias LemonChannels.Adapters.Telegram.Transport.UpdateProcessor
+  alias LemonChannels.Adapters.Telegram.Transport.VoiceHandler
+  alias LemonChannels.BindingResolver
+  alias LemonChannels.Cwd
+  alias LemonChannels.SubmissionOutcome
+  alias LemonChannels.Telegram.Delivery
+  alias LemonChannels.Telegram.{OffsetStore, PollerLock}
+  alias LemonChannels.Telegram.TransportShared
+  alias LemonCore.ChatScope
   alias LemonCore.Config
+  alias LemonCore.MapHelpers
+  alias LemonCore.ProjectBindingStore
 
   @default_poll_interval 1_000
   @default_dedupe_ttl 600_000
@@ -1532,7 +1533,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
   end
 
   defp send_approval_request(state, payload) when is_map(state) and is_map(payload) do
-    LemonChannels.Adapters.Telegram.Transport.ApprovalRequest.send(state, payload)
+    ApprovalRequest.send(state, payload)
   end
 
   defp send_approval_request(_state, _payload), do: :ok
@@ -1586,24 +1587,22 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
   defp normalize_api_mod(""), do: LemonChannels.Telegram.API
 
   defp normalize_api_mod(mod) when is_binary(mod) do
-    try do
-      module =
-        if String.starts_with?(mod, "Elixir.") do
-          String.to_existing_atom(mod)
-        else
-          String.to_existing_atom("Elixir." <> mod)
-        end
+    module =
+      if String.starts_with?(mod, "Elixir.") do
+        String.to_existing_atom(mod)
+      else
+        String.to_existing_atom("Elixir." <> mod)
+      end
 
-      module
-    rescue
-      ArgumentError ->
-        Logger.warning(
-          "telegram api_mod #{inspect(mod)} does not resolve to a loaded module; " <>
-            "falling back to the real Telegram API"
-        )
+    module
+  rescue
+    ArgumentError ->
+      Logger.warning(
+        "telegram api_mod #{inspect(mod)} does not resolve to a loaded module; " <>
+          "falling back to the real Telegram API"
+      )
 
-        LemonChannels.Telegram.API
-    end
+      LemonChannels.Telegram.API
   end
 
   defp normalize_api_mod(_), do: LemonChannels.Telegram.API

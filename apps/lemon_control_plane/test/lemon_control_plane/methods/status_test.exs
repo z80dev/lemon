@@ -2,7 +2,9 @@ defmodule LemonControlPlane.Methods.StatusTest do
   # Stops lemon_channels in one test, so it cannot share the VM with async tests.
   use ExUnit.Case, async: false
 
+  alias LemonChannels.Adapters.Discord.Transport.Consumer
   alias LemonControlPlane.Methods.{Health, Status}
+  alias LemonControlPlane.Protocol.Frames
 
   defmodule Channel do
     use Agent
@@ -101,7 +103,7 @@ defmodule LemonControlPlane.Methods.StatusTest do
              "commit" => "sample-build-commit"
            }
 
-    hello = LemonControlPlane.Protocol.Frames.encode_hello_ok(%{}) |> Jason.decode!()
+    hello = Frames.encode_hello_ok(%{}) |> Jason.decode!()
     assert hello["server"]["version"] == version
   end
 
@@ -126,6 +128,26 @@ defmodule LemonControlPlane.Methods.StatusTest do
 
     assert {:ok, result} = Status.handle(%{}, %{})
     assert result["server"]["build"]["commit"] == "github-build-commit"
+  end
+
+  test "provider status exposes the actual redacted timestamped last failure" do
+    provider = "status-error-#{System.unique_integer([:positive])}"
+    reason = {:http_error, 401, "token=secret /private/key"}
+
+    assert {:error, ^reason} =
+             LemonAi.CallDispatcher.dispatch(provider, fn -> {:error, reason} end)
+
+    config = %{
+      agent: %{default_provider: provider, default_model: "example"},
+      providers: %{provider => %{auth: "none"}}
+    }
+
+    row = Enum.find(LemonControlPlane.ProviderStatus.snapshot(config), &(&1["id"] == provider))
+    assert %{"message" => message, "atMs" => at_ms} = row["lastError"]
+    assert is_integer(at_ms)
+    assert String.length(message) <= 256
+    refute Jason.encode!(row) =~ "secret"
+    refute Jason.encode!(row) =~ "/private"
   end
 
   test "projects configured providers, missing credentials, keyless endpoints and defaults offline" do
@@ -205,7 +227,7 @@ defmodule LemonControlPlane.Methods.StatusTest do
     assert {:ok, failed} = Status.handle(%{}, %{})
     assert Enum.find(failed["channels"]["details"], &(&1["id"] == "discord"))["state"] == "error"
 
-    LemonChannels.Adapters.Discord.Transport.Consumer.handle_event({:READY, %{}, nil})
+    Consumer.handle_event({:READY, %{}, nil})
     assert {:ok, connected} = Status.handle(%{}, %{})
 
     assert %{"state" => "connected", "lastError" => nil} =

@@ -701,21 +701,19 @@ defmodule LemonChannels.Adapters.Telegram.Outbound do
   defp normalize_api_mod(""), do: LemonChannels.Telegram.API
 
   defp normalize_api_mod(mod) when is_binary(mod) do
-    try do
-      if String.starts_with?(mod, "Elixir.") do
-        String.to_existing_atom(mod)
-      else
-        String.to_existing_atom("Elixir." <> mod)
-      end
-    rescue
-      ArgumentError ->
-        Logger.warning(
-          "telegram api_mod #{inspect(mod)} does not resolve to a loaded module; " <>
-            "falling back to the real Telegram API"
-        )
-
-        LemonChannels.Telegram.API
+    if String.starts_with?(mod, "Elixir.") do
+      String.to_existing_atom(mod)
+    else
+      String.to_existing_atom("Elixir." <> mod)
     end
+  rescue
+    ArgumentError ->
+      Logger.warning(
+        "telegram api_mod #{inspect(mod)} does not resolve to a loaded module; " <>
+          "falling back to the real Telegram API"
+      )
+
+      LemonChannels.Telegram.API
   end
 
   defp normalize_api_mod(_), do: LemonChannels.Telegram.API

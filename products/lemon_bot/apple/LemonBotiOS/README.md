@@ -6,6 +6,11 @@ The native SwiftUI application embeds `LemonBotRootView(store:)`, using the same
 
 The app target includes this directory excluding `ShareExtension/`. The share target includes `ShareExtension/ShareViewController.swift` and `Shared/ShareInbox.swift`; it does not link LemonBotKit or access account credentials. The share-extension handoff requires both targets to be signed with the App Group `group.org.lemonbot.shared`. Builds without it (for example, Personal Team device installs) keep in-app camera/photo/file staging in the app's own container, and the extension reports that sharing is unavailable. App bundle/topic defaults to `org.lemonbot.ios`, extension to `org.lemonbot.ios.share`.
 
+When a share-extension build lacks App Group access, its review sheet explains
+that sharing is unavailable and directs you to Camera, Photos or Files inside
+Lemon Bot. It does not offer a retry that cannot fix signing. The App Group
+identifier appears only in the developer log, not the error shown to users.
+
 `APS_ENVIRONMENT` must be `development` for a sandbox-signed build or `production` for a production-signed build, consistent with the provisioning profile. Both `Info.plist` (`LemonBotAPNSEnvironment`) and the app entitlement (`aps-environment`) expand that same build setting. The app converts the actual OS device-token bytes to lowercase hexadecimal and maps `development` to the backend's `sandbox` registration environment. It never fabricates a simulator token or infers environment from an unrelated debug flag. Production APNs needs the operator's real key ID, team ID, private `.p8` key and allowlisted bundle topic; backend errors preserve the exact prerequisite and request ID.
 
 Only local networking is exempted in App Transport Security for loopback development. An installed phone normally needs a reachable HTTPS backend; the phone's loopback address is not a development Mac's loopback address.
