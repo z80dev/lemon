@@ -1329,7 +1329,7 @@ defmodule CodingAgent.Session do
   end
 
   def handle_cast({:follow_up, text}, state) do
-    {state, recalled} = refresh_turn_context(state, text)
+    {state, recalled} = refresh_turn_context(state, text, false)
 
     message = %LemonAi.Types.UserMessage{
       role: :user,
@@ -1938,6 +1938,7 @@ defmodule CodingAgent.Session do
   defp collect_contributed_sections(state, skill_context, user_turn) do
     %{
       cwd: state.cwd,
+      skill_cwd: CodingAgent.Workspace.skill_cwd(state.cwd, state),
       workspace_dir: state.workspace_dir,
       session_pid: self(),
       user_turn: user_turn,
@@ -1946,6 +1947,8 @@ defmodule CodingAgent.Session do
       session_id: state.session_manager && state.session_manager.header.id,
       agent_id: state.agent_id,
       run_id: state.run_id,
+      learning_review_options: CodingAgent.Session.LearningReview.options(state),
+      tool_policy: state.tool_policy,
       channel_identity:
         if(state.session_scope == :main, do: (state.approval_context || %{})[:channel_identity]),
       query: if(is_binary(skill_context), do: skill_context, else: "")
