@@ -1,5 +1,5 @@
-import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
-import { LemonBotClient, nonce, type Bot, type Conversation, type Device, type RealtimeConnection, type RealtimeEvent, type Resource, type Snapshot } from '@lemon-bot/sdk';
+import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { LemonBotClient, nonce, type Bot, type Conversation, type Device, type InstanceStatus, type RealtimeConnection, type RealtimeEvent, type RealtimeState, type Resource, type Snapshot } from '@lemon-bot/sdk';
 import { AuthScreen, savedAccounts, type WebSession } from './auth';
 import { ArrowDown, ChevronRight, GitBranch, History, Inbox, LayoutGrid, ListFilter, Menu, MoreHorizontal, Plus, Search, SquarePen } from 'lucide-react';
 import { AccountAvatar, BotAvatar, EmptyState, ErrorNotice, LemonFace, LemonMark, Loading, useAction } from './ui';
@@ -13,6 +13,8 @@ import { SettingsScreen } from './features/settings';
 import { OwnerControlsScreen } from './features/enterprise';
 import { PairingScreen } from './features/pairing';
 import { ActivityScreen, Palette, SearchScreen } from './navigation';
+import { ConnectionPanel } from './connection';
+import { connectionLabel, sessionEnded } from './connection-state';
 
 export interface Route { screen: string; id?: string; botId?: string; tab?: string; entryId?: string; conversationId?: string; taskConversationId?: string }
 export interface AppContextValue { client: LemonBotClient; realtime: RealtimeConnection | null; snapshot: Snapshot; device: Device | null; online: boolean; navigate: (route: Route) => void; refresh: () => Promise<void>; reportError: (error: unknown) => void; draftPrompt: (conversationId: string, text: string) => void; logout: () => Promise<void>; forgetConversation: (conversationId: string) => void }
@@ -79,6 +81,7 @@ function applySnapshotEvent(snapshot: Snapshot, event: RealtimeEvent): Snapshot 
 export function App() {
   const [session, setSession] = useState<WebSession | null>(() => { try { const stored = JSON.parse(sessionStorage.getItem('lemonbot.session') || 'null'); return stored && typeof stored.baseUrl === 'string' && typeof stored.token === 'string' && typeof stored.workspaceId === 'string' ? stored : null; } catch { return null; } });
   const [initialBackend, setInitialBackend] = useState<string>();
+  const [signInNotice, setSignInNotice] = useState<string>();
   const forget = () => { const keys = Object.keys(sessionStorage); for (const key of keys) if (key.startsWith('lemonbot.')) sessionStorage.removeItem(key); setSession(null); };
   useEffect(() => {
     const change = (event: Event) => {
@@ -92,13 +95,20 @@ export function App() {
     };
     window.addEventListener('lemonbot:account-target', change); return () => window.removeEventListener('lemonbot:account-target', change);
   }, [session]);
-  return session ? <Workspace key={`${session.baseUrl}:${session.token}`} session={session} onLogout={forget} /> : <AuthScreen onAuth={setSession} initialBackend={initialBackend}/>;
+  return session ? <Workspace key={`${session.baseUrl}:${session.token}`} session={session} onLogout={reason => { setInitialBackend(session.baseUrl); setSignInNotice(reason); forget(); }} /> : <AuthScreen onAuth={value => { setSignInNotice(undefined); setSession(value); }} initialBackend={initialBackend} notice={signInNotice}/>;
 }
-function Workspace({ session, onLogout }: { session: WebSession; onLogout: () => void }) {
+function Workspace({ session, onLogout }: { session: WebSession; onLogout: (reason?: string) => void }) {
   const client = useMemo(() => new LemonBotClient({ baseUrl: session.baseUrl, token: session.token }), [session]);
   const [snapshot, setSnapshot] = useState<Snapshot>(); const snapshotRef = useRef<Snapshot | undefined>(undefined);
   const [device, setDevice] = useState<Device | null>(null); const [realtime, setRealtime] = useState<RealtimeConnection | null>(null);
-  const [error, setError] = useState<unknown>(); const [connection, setConnection] = useState('connecting'); const [browserOnline, setBrowserOnline] = useState(navigator.onLine);
+  const [error, setError] = useState<unknown>(); const [connectionError, setConnectionError] = useState<unknown>();
+  const [connection, setConnection] = useState<RealtimeState>('connecting'); const [browserOnline, setBrowserOnline] = useState(navigator.onLine);
+  const [attempt, setAttempt] = useState(0), [bootRetryAt, setBootRetryAt] = useState<number | null>(null);
+  const [lastAttemptAt, setLastAttemptAt] = useState(Date.now());
+  const bootFailures = useRef(0);
+  const [runtimeRunning, setRuntimeRunning] = useState(false);
+  const [phone, setPhone] = useState(() => matchMedia('(max-width: 760px)').matches);
+  useEffect(() => { const media = matchMedia('(max-width: 760px)'); const change = () => setPhone(media.matches); media.addEventListener('change', change); return () => media.removeEventListener('change', change); }, []);
   const [route, setRoute] = useState<Route>(initialRoute); const [palette, setPalette] = useState(false); const [sidebar, setSidebar] = useState(false);
   const routeRef = useRef(route); routeRef.current = route;
   const reportError = (failure: unknown) => setError(failure);
@@ -113,7 +123,7 @@ function Workspace({ session, onLogout }: { session: WebSession; onLogout: () =>
     }
     if (routeRef.current.screen === 'conversation' && routeRef.current.id === conversationId) navigate({ screen: 'home' });
   };
-  const sync = async () => {
+  const sync = async (isCurrent: () => boolean = () => true) => {
     const value = await client.call('GET /sync');
     // Snapshot bounds are explicit. Page each flagged collection, keeping newer revisions.
     if (value.hasMore.bots) { let cursor: string | undefined; do { const page = await client.call('GET /bots', { query: { limit: 200, cursor } }); for (const item of page.items) value.bots = upsert(value.bots, item); cursor = page.nextCursor || undefined; } while (cursor); }
@@ -121,15 +131,20 @@ function Workspace({ session, onLogout }: { session: WebSession; onLogout: () =>
     if (value.hasMore.conversations) { let cursor: string | undefined; do { const page = await client.call('GET /conversations', { query: { limit: 200, cursor } }); for (const item of page.items) value.conversations = upsert(value.conversations, item); cursor = page.nextCursor || undefined; } while (cursor); }
     if (value.hasMore.notifications) { let cursor: string | undefined; do { const page = await client.call('GET /notifications', { query: { limit: 200, cursor } }); for (const item of page.items) value.notifications = upsert(value.notifications, item); cursor = page.nextCursor || undefined; } while (cursor); }
     if (value.sections.length >= 200) { let cursor: string | undefined; do { const page = await client.call('GET /sections', { query: { limit: 200, cursor } }); for (const item of page.items) value.sections = upsert(value.sections, item); cursor = page.nextCursor || undefined; } while (cursor); }
-    update(value); return value;
+    if (isCurrent()) update(value); return value;
   };
-  const refresh = async () => { await sync(); window.dispatchEvent(new Event('lemon:refresh')); };
+  const refresh = async () => { try { await sync(); window.dispatchEvent(new Event('lemon:refresh')); } catch (failure) { if (sessionEnded(failure)) onLogout('Your session ended. Sign in again.'); throw failure; } };
+  const retry = () => { realtime?.close(); setRealtime(null); setBootRetryAt(null); setConnection('connecting'); setAttempt(value => value + 1); };
+  const applyInstance = (status: InstanceStatus) => { const current = snapshotRef.current; if (current) update({ ...current, capabilities: { ...current.capabilities, controlConnected: status.controller.state === 'connected' } }); };
+  useEffect(() => { if (bootRetryAt === null) return; const timer = setTimeout(() => setAttempt(value => value + 1), Math.max(0, bootRetryAt - Date.now())); return () => clearTimeout(timer); }, [bootRetryAt]);
   const logout = async () => { try { await client.call('POST /auth/logout', { body: { clientNonce: nonce() } }); } catch (failure) { setError(failure); } finally { realtime?.close(); sessionStorage.removeItem(`lemonbot.cursor:${session.baseUrl}:${session.workspaceId}`); onLogout(); } };
   useEffect(() => {
     let disposed = false; let socket: RealtimeConnection | undefined;
+    setConnection('connecting'); setBootRetryAt(null); setLastAttemptAt(Date.now());
     void (async () => {
       try {
-        const value = await sync(); if (disposed) return;
+        const value = await sync(() => !disposed); if (disposed) return;
+        bootFailures.current = 0;
         let registration: Device | undefined;
         try { let installationId = localStorage.getItem('lemonbot.installation'); if (!installationId) { installationId = nonce(); localStorage.setItem('lemonbot.installation', installationId); }
           registration = await client.call('POST /devices', { body: { clientNonce: nonce(), installationId, platform: 'web', name: 'Web browser', appVersion: '1.0.0' } }); if (disposed) return; setDevice(registration);
@@ -138,13 +153,31 @@ function Workspace({ session, onLogout }: { session: WebSession; onLogout: () =>
           if (disposed) return; if (snapshotRef.current) update(applySnapshotEvent(snapshotRef.current, event));
           if (event.event === 'conversation.deleted') forgetConversation(event.payload.id);
           window.dispatchEvent(new CustomEvent('lemon:event', { detail: event }));
-        }, onState: (state, failure) => { if (disposed) return; setConnection(state); if (failure) reportError(failure); if (state === 'unauthenticated' || state === 'forbidden') { sessionStorage.removeItem('lemonbot.session'); onLogout(); } }, onReset: async () => { const fresh = await sync(); window.dispatchEvent(new Event('lemon:refresh')); return fresh; }, saveCursor: cursor => sessionStorage.setItem(`lemonbot.cursor:${session.baseUrl}:${session.workspaceId}`, cursor) });
+        }, onState: (state, failure) => {
+          if (disposed) return;
+          setConnection(state);
+          if (failure) setConnectionError(failure);
+          if (state === 'connecting' || state === 'authenticating') setLastAttemptAt(Date.now());
+          if (state === 'live') setConnectionError(undefined);
+          if (state === 'unauthenticated' || state === 'forbidden' || sessionEnded(failure)) onLogout('Your session ended. Sign in again.');
+        }, onReset: async () => { const fresh = await sync(() => !disposed); if (!disposed) window.dispatchEvent(new Event('lemon:refresh')); return fresh; }, saveCursor: cursor => sessionStorage.setItem(`lemonbot.cursor:${session.baseUrl}:${session.workspaceId}`, cursor) });
         setRealtime(socket); socket.start();
-      } catch (failure) { if (!disposed) { setError(failure); setConnection('error'); } }
+      } catch (failure) { if (!disposed) {
+        if (sessionEnded(failure)) { onLogout('Your session ended. Sign in again.'); return; }
+        setConnectionError(failure); setConnection('error');
+        const delay = Math.min(30000, 500 * 2 ** Math.min(bootFailures.current++, 6));
+        setBootRetryAt(Date.now() + delay);
+      } }
     })();
     return () => { disposed = true; socket?.close(); };
-  }, [client]);
+  }, [client, attempt]);
   useEffect(() => { const change = () => setRoute(initialRoute()); const online = () => setBrowserOnline(navigator.onLine); window.addEventListener('hashchange', change); window.addEventListener('online', online); window.addEventListener('offline', online); return () => { window.removeEventListener('hashchange', change); window.removeEventListener('online', online); window.removeEventListener('offline', online); }; }, []);
+  useEffect(() => {
+    if (!snapshot || snapshot.capabilities.controlConnected !== false) return;
+    let disposed = false;
+    const timer = setInterval(() => { if (document.visibilityState === 'visible') void client.call('GET /capabilities').then(capabilities => { const current = snapshotRef.current; if (!disposed && current) update({ ...current, capabilities }); }).catch(failure => { if (!disposed && sessionEnded(failure)) onLogout('Your session ended. Sign in again.'); }); }, 10000);
+    return () => { disposed = true; clearInterval(timer); };
+  }, [client, snapshot?.capabilities.controlConnected]);
   useEffect(() => {
     if (!snapshot) return;
     const query = new URLSearchParams(location.hash.replace(/^#/, ''));
@@ -176,14 +209,16 @@ function Workspace({ session, onLogout }: { session: WebSession; onLogout: () =>
       else if (/^[1-9]$/.test(event.key)) { const bot = ordered[Number(event.key) - 1]; if (bot) { event.preventDefault(); navigate({ screen: 'conversation', id: bot.mainConversationId, botId: bot.id }); } }
     }; window.addEventListener('keydown', keyboard); return () => window.removeEventListener('keydown', keyboard);
   }, []);
-  if (!snapshot) return <main className="boot stack"><div className="brand"><LemonMark/>Lemon Bot</div>{error ? <><ErrorNotice error={error}/><button onClick={() => void refresh().catch(reportError)}>Reconnect to backend</button><button onClick={onLogout}>Choose another account</button></> : <Loading/>}</main>;
+  const connecting = ['connecting', 'authenticating', 'syncing', 'replaying'].includes(connection);
+  const recoveryPanel = <ConnectionPanel client={client} state={connection} browserOnline={browserOnline} controlConnected={snapshot?.capabilities.controlConnected} error={connectionError} nextRetryAtMs={bootRetryAt ?? realtime?.nextRetryAtMs ?? null} lastAttemptAtMs={lastAttemptAt} retry={retry} busy={connecting} role={snapshot?.member.role} onInstance={applyInstance} onRunning={setRuntimeRunning}/>;
+  if (!snapshot) return <main className="boot stack"><div className="brand"><LemonMark/>Lemon Bot</div>{recoveryPanel}<button onClick={() => onLogout()}>Choose another account</button></main>;
   const requiredVersion = snapshot.capabilities.minClientVersions.web;
   const requiredParts = requiredVersion.split('.').map(Number);
   const updateRequired = requiredParts[0] > 1 || requiredParts[0] === 1 && (requiredParts[1] > 0 || requiredParts[2] > 0);
   if (updateRequired) return <main className="boot stack"><div className="brand"><LemonMark/>Lemon Bot</div><h1>A client update is required</h1><p>This web client is 1.0.0; your backend requires {requiredVersion}. Ask the operator to build and deploy the matching web assets, then reload. Updating the client does not recreate your machines or remove work.</p><button className="primary" onClick={() => location.reload()}>Reload installed assets</button><button onClick={() => void logout()}>Sign out</button></main>;
   const activeBot = snapshot.bots.find(bot => bot.id === (route.botId || (route.screen.startsWith('bot.') || route.screen === 'memory' ? route.id : undefined))) || (route.screen === 'conversation' ? snapshot.bots.find(bot => bot.mainConversationId === route.id || snapshot.conversations.find(room => room.id === route.id)?.botIds.includes(bot.id)) : undefined);
   const appearance = snapshot.user.preferences.appearance;
-  const context: AppContextValue = { client, realtime, snapshot, device, online: browserOnline && connection === 'live', navigate, refresh, reportError, logout, forgetConversation, draftPrompt: (conversationId, text) => {
+  const context: AppContextValue = { client, realtime, snapshot, device, online: browserOnline && connection === 'live' && snapshot.capabilities.controlConnected !== false, navigate, refresh, reportError, logout, forgetConversation, draftPrompt: (conversationId, text) => {
     sessionStorage.setItem(`lemonbot.prompt:${snapshot.workspace.id}:${snapshot.user.id}:${conversationId}`, text);
     window.dispatchEvent(new CustomEvent('lemonbot:draft-prompt', { detail: { conversationId, text } })); navigate({ screen: 'conversation', id: conversationId, botId: snapshot.conversations.find(room => room.id === conversationId)?.botIds[0] });
   } };
@@ -191,8 +226,8 @@ function Workspace({ session, onLogout }: { session: WebSession; onLogout: () =>
   const conversationScreen = route.screen === 'conversation';
   const settingsScreen = isSettingsScreen(route.screen);
   const atHome = route.screen === 'home';
-  const connected = connection === 'live' && browserOnline;
-  return <AppContext.Provider value={context}><div className={`workspace ${sidebar ? 'sidebar-open' : ''} ${conversationScreen ? 'in-conversation' : ''} ${settingsScreen ? 'in-settings' : ''} ${atHome ? 'at-home' : ''} ${connected ? '' : 'disconnected'}`} data-theme={appearance}><a className="skip-link" href="#main-content">Skip to workspace content</a><Roster route={route} close={() => setSidebar(false)} openPalette={() => setPalette(true)} unreadInbox={unreadInbox} connection={!browserOnline ? 'Offline' : connection === 'live' ? null : 'Syncing'} reconnect={() => void refresh().catch(reportError)}/><div className="workspace-main">{!conversationScreen && !atHome && !settingsScreen && <header className="workspace-bar"><button className="icon-button mobile-menu" aria-label="Open Bot list" onClick={() => setSidebar(value => !value)}><Menu size={20}/></button>{activeBot ? <button className="companion-anchor" onClick={() => navigate({ screen: 'conversation', id: activeBot.mainConversationId, botId: activeBot.id })}><BotAvatar bot={activeBot} size={22}/><strong>{activeBot.name}</strong></button> : <span/>}<div className="row workspace-tools"><button className="ghost-circle" aria-label="Search everything (⌘K)" title="Search (⌘K)" onClick={() => setPalette(true)}><Search size={15}/></button></div></header>}<main id="main-content" className="main-content" tabIndex={-1}>{!!error && <div className="global-error"><ErrorNotice error={error}/><button onClick={() => setError(undefined)}>Dismiss</button></div>}{!context.online && <div className="connection-banner" role="status">{browserOnline ? 'Reconnecting. What you see may be out of date; work on your machines continues.' : 'Offline — your draft is saved here. Approvals and destructive actions are never queued.'}</div>}<Destination route={route} activeBot={activeBot}/></main></div>{palette && <Palette close={() => setPalette(false)}/>}<VoiceOverlay/></div></AppContext.Provider>;
+  const connected = connection === 'live' && browserOnline && snapshot.capabilities.controlConnected !== false;
+  return <AppContext.Provider value={context}><div className={`workspace ${sidebar ? 'sidebar-open' : ''} ${conversationScreen ? 'in-conversation' : ''} ${settingsScreen ? 'in-settings' : ''} ${atHome ? 'at-home' : ''} ${connected ? '' : 'disconnected'}`} data-theme={appearance}><a className="skip-link" href="#main-content">Skip to workspace content</a><Roster route={route} close={() => setSidebar(false)} openPalette={() => setPalette(true)} unreadInbox={unreadInbox} connection={connected ? null : connectionLabel(connection, browserOnline, snapshot.capabilities.controlConnected)} reconnect={retry} recovery={(!connected || runtimeRunning) && phone && atHome ? recoveryPanel : undefined}/><div className="workspace-main">{!conversationScreen && !atHome && !settingsScreen && <header className="workspace-bar"><button className="icon-button mobile-menu" aria-label="Open Bot list" onClick={() => setSidebar(value => !value)}><Menu size={20}/></button>{activeBot ? <button className="companion-anchor" onClick={() => navigate({ screen: 'conversation', id: activeBot.mainConversationId, botId: activeBot.id })}><BotAvatar bot={activeBot} size={22}/><strong>{activeBot.name}</strong></button> : <span/>}<div className="row workspace-tools"><button className="ghost-circle" aria-label="Search everything (⌘K)" title="Search (⌘K)" onClick={() => setPalette(true)}><Search size={15}/></button></div></header>}<main id="main-content" className="main-content" tabIndex={-1}>{!!error && <div className="global-error"><ErrorNotice error={error}/><button onClick={() => setError(undefined)}>Dismiss</button></div>}{(!connected || runtimeRunning) && !(phone && atHome) && recoveryPanel}<Destination route={route} activeBot={activeBot}/></main></div>{palette && <Palette close={() => setPalette(false)}/>}<VoiceOverlay/></div></AppContext.Provider>;
 }
 function Destination({ route, activeBot }: { route: Route; activeBot?: Bot }) {
   const { snapshot, navigate } = useApp();
@@ -240,7 +275,7 @@ function usePreviews(conversations: Conversation[]) {
 }
 function sidebarDate(ms: number) { const date = new Date(ms), now = new Date(); if (date.toDateString() === now.toDateString()) return new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' }).format(date); if (now.getTime() - ms < 6 * 86400000) return date.toDateString() === new Date(now.getTime() - 86400000).toDateString() ? 'Yesterday' : new Intl.DateTimeFormat(undefined, { weekday: 'short' }).format(date); return new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' }).format(date); }
 interface MenuTarget { bot: Bot; x: number; y: number }
-function Roster({ route, close, openPalette, unreadInbox, connection, reconnect }: { route: Route; close: () => void; openPalette: () => void; unreadInbox: number; connection: string | null; reconnect: () => void }) {
+function Roster({ route, close, openPalette, unreadInbox, connection, reconnect, recovery }: { route: Route; close: () => void; openPalette: () => void; unreadInbox: number; connection: string | null; reconnect: () => void; recovery?: ReactNode }) {
   const { snapshot, client, navigate, refresh, online } = useApp();
   const [searching, setSearching] = useState(false); const [query, setQuery] = useState(''); const [unreadOnly, setUnreadOnly] = useState(false); const [showHidden, setShowHidden] = useState(false);
   const [menu, setMenu] = useState<MenuTarget>(); const [moreUnreads, setMoreUnreads] = useState(false);
@@ -288,7 +323,7 @@ function Roster({ route, close, openPalette, unreadInbox, connection, reconnect 
       <button className="roster-brand" aria-label="Lemon Bot home" onClick={() => navigate({ screen: 'home' })}><LemonMark size={26}/></button>
       <h1 className="roster-title">Chats</h1>
       {connection && <span className="connection-pill"><span className="status-dot needs_input"/>{connection}</span>}
-      {connection && <button className="pill-button warning compact" onClick={reconnect}>Reconnect</button>}
+      {connection && <button className="pill-button warning compact" onClick={reconnect}>Try again</button>}
       {phoneHome ? <details className="roster-filter"><summary className="ghost-circle" aria-label="Filter chats"><ListFilter size={18}/></summary><div className="menu" role="menu">
         <button role="menuitemcheckbox" aria-checked={unreadOnly} onClick={() => setUnreadOnly(value => !value)}>{unreadOnly ? '✓ ' : ''}Unread only</button>
         <button role="menuitemcheckbox" aria-checked={showHidden} onClick={() => setShowHidden(value => !value)}>{showHidden ? '✓ ' : ''}Show hidden</button>
@@ -297,6 +332,7 @@ function Roster({ route, close, openPalette, unreadInbox, connection, reconnect 
       </div></details> : <button className={`ghost-circle ${searching ? 'selected' : ''}`} aria-label="Search Bots and groups" aria-expanded={searching} title="Search" onClick={() => { setSearching(value => !value); if (searching) { setQuery(''); setUnreadOnly(false); } else requestAnimationFrame(() => searchInput.current?.focus()); }}><Search size={15}/></button>}
       <button className="ghost-circle" aria-label="New Bot (⌘N)" title="New Bot (⌘N)" onClick={() => navigate({ screen: 'bot.create' })}>{phoneHome ? <SquarePen size={18}/> : <Plus size={16}/>}</button>
     </div>
+    {recovery}
     {(searching || phoneHome) && <div className="roster-search"><label className="search-field"><Search size={15} aria-hidden="true"/><span className="sr-only">Search Bots and groups</span><input ref={searchInput} placeholder="Search Bots and groups" value={query} onChange={event => setQuery(event.target.value)} onKeyDown={event => { if (event.key === 'Escape') { setQuery(''); setSearching(false); setUnreadOnly(false); } }}/></label>{!phoneHome && <><button className={`pill-button compact ${unreadOnly ? 'unread-on' : 'secondary'}`} aria-pressed={unreadOnly} onClick={() => setUnreadOnly(value => !value)}>Unread</button><button className="pill-button compact secondary" onClick={openPalette}>All</button></>}</div>}
     <div className="roster-scroll" ref={scroller}>
       {pinned.length > 0 && <div className="pinned-row" role="list" aria-label="Pinned Bots">{pinned.map(bot => <button key={bot.id} role="listitem" className={`pinned-tile ${selectedBot(bot) ? 'selected' : ''}`} data-unread={bot.sidebar.unread} onClick={() => open(bot)} onContextMenu={event => { event.preventDefault(); openMenu(bot, event.clientX, event.clientY); }}><BotAvatar bot={bot} size={56} presence={!connection} unread={bot.sidebar.unread}/><span>{bot.name}</span></button>)}</div>}

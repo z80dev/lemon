@@ -15,7 +15,7 @@ export function productUrl(value: string) {
 export function savedAccounts(): SavedAccount[] {
   try { const value: unknown = JSON.parse(localStorage.getItem('lemonbot.accounts') || '[]'); return Array.isArray(value) ? value.filter((row): row is SavedAccount => !!row && typeof row === 'object' && 'baseUrl' in row && typeof row.baseUrl === 'string' && 'email' in row && typeof row.email === 'string') : []; } catch { return []; }
 }
-export function AuthScreen({ onAuth, initialBackend }: { onAuth: (session: WebSession) => void; initialBackend?: string }) {
+export function AuthScreen({ onAuth, initialBackend, notice }: { onAuth: (session: WebSession) => void; initialBackend?: string; notice?: string }) {
   const [baseUrl, setBaseUrl] = useState(initialBackend || `${location.origin}/v1`);
   const [backendInput, setBackendInput] = useState(baseUrl);
   const [backendError, setBackendError] = useState<unknown>();
@@ -39,8 +39,18 @@ export function AuthScreen({ onAuth, initialBackend }: { onAuth: (session: WebSe
     if (query.get('screen')?.startsWith('settings.') || !query.has('completionCode') || !query.has('flowId')) return;
     const raw = sessionStorage.getItem('lemonbot.oidc.login');
     if (!raw) { setBackendError(new Error('This sign-in callback has no matching local PKCE flow. Start sign-in again.')); return; }
-    const pending: { baseUrl: string; flowId: string; verifier: string } = JSON.parse(raw);
-    if (pending.flowId !== query.get('flowId')) { setBackendError(new Error('Sign-in flow does not match this browser.')); return; }
+    let pending: { baseUrl: string; flowId: string; verifier: string };
+    try {
+      const value: unknown = JSON.parse(raw);
+      if (!value || typeof value !== 'object' || !('baseUrl' in value) || typeof value.baseUrl !== 'string' || !('flowId' in value) || typeof value.flowId !== 'string' || !value.flowId || !('verifier' in value) || typeof value.verifier !== 'string' || !value.verifier) throw new Error('Invalid stored sign-in flow.');
+      pending = { baseUrl: productUrl(value.baseUrl), flowId: value.flowId, verifier: value.verifier };
+      if (pending.flowId !== query.get('flowId')) throw new Error('Sign-in flow does not match this browser.');
+    } catch {
+      sessionStorage.removeItem('lemonbot.oidc.login');
+      history.replaceState(null, '', location.pathname + location.hash);
+      setBackendError(new Error('The saved sign-in flow is no longer usable. Start sign-in again.'));
+      return;
+    }
     const completionCode = query.get('completionCode')!;
     history.replaceState(null, '', location.pathname + location.hash); setPendingOIDC(true);
     void action.run(async () => {
@@ -49,7 +59,7 @@ export function AuthScreen({ onAuth, initialBackend }: { onAuth: (session: WebSe
       sessionStorage.removeItem('lemonbot.oidc.login'); finish(result, pending.baseUrl);
     }).finally(() => setPendingOIDC(false));
   }, []);
-  return <main className="auth-layout"><section className="auth-story"><div className="brand"><LemonMark/> Lemon Bot</div><div><div className="eyebrow">Your personal assistant</div><h1>Your Bots.<br/>Your hosts.</h1><p>Named assistants with focused jobs on machines you own. Your Bots keep working when you close this window.</p><div className="auth-companion" aria-hidden="true"><LemonFace size={128}/></div></div><p className="small">Your hosts. Your accounts. Your choice.<br/>Bot personas are not OS sandboxes: Bots on one host share that OS user’s files and logins.</p></section><section className="auth-form"><div className="auth-card stack"><div className="eyebrow">Connect to your cluster</div><h2>{mode === 'setup' ? 'Create your owner account' : 'Welcome back'}</h2><form onSubmit={event => { event.preventDefault(); try { const url = productUrl(backendInput); setBaseUrl(url); setBackendError(undefined); } catch (error) { setBackendError(error); } }}><Field label="Product backend URL" hint="Connect to Lemon Bot, never the swarm operator endpoint."><div className="row"><input type="url" required value={backendInput} onChange={event => setBackendInput(event.target.value)} /><button>Connect</button></div></Field></form><ErrorNotice error={backendError || setup.error}/>{setup.loading && !setup.data ? <Loading/> : setup.data && <><form className="stack" onSubmit={event => { event.preventDefault(); void action.run(async () => { const result = mode === 'setup' ? await client.call('POST /setup', { body: { clientNonce: nonce(), setupCode, email, password, displayName, workspaceName } }) : await client.call('POST /auth/login', { body: { clientNonce: nonce(), email, password } }); finish(result); }); }}>
+  return <main className="auth-layout"><section className="auth-story"><div className="brand"><LemonMark/> Lemon Bot</div><div><div className="eyebrow">Your personal assistant</div><h1>Your Bots.<br/>Your hosts.</h1><p>Named assistants with focused jobs on machines you own. Your Bots keep working when you close this window.</p><div className="auth-companion" aria-hidden="true"><LemonFace size={128}/></div></div><p className="small">Your hosts. Your accounts. Your choice.<br/>Bot personas are not OS sandboxes: Bots on one host share that OS user’s files and logins.</p></section><section className="auth-form"><div className="auth-card stack">{notice && <p className="auth-session-notice" role="status" aria-live="polite">{notice}</p>}<div className="eyebrow">Connect to Lemon Bot</div><h2>{mode === 'setup' ? 'Create your owner account' : 'Welcome back'}</h2><form onSubmit={event => { event.preventDefault(); try { const url = productUrl(backendInput); setBaseUrl(url); setBackendError(undefined); } catch (error) { setBackendError(error); } }}><Field label="Product backend URL" hint="Connect to Lemon Bot, never the Lemon operator endpoint."><div className="row"><input type="url" required value={backendInput} onChange={event => setBackendInput(event.target.value)} /><button>Connect</button></div></Field></form><ErrorNotice error={backendError || setup.error}/>{setup.loading && !setup.data ? <Loading/> : setup.data && <><form className="stack" onSubmit={event => { event.preventDefault(); void action.run(async () => { const result = mode === 'setup' ? await client.call('POST /setup', { body: { clientNonce: nonce(), setupCode, email, password, displayName, workspaceName } }) : await client.call('POST /auth/login', { body: { clientNonce: nonce(), email, password } }); finish(result); }); }}>
       {mode === 'setup' && <><Field label="One-time owner setup code" hint="Printed in the backend operator terminal. Never the Lemon operator token."><input required value={setupCode} autoComplete="off" onChange={event => setSetupCode(event.target.value)}/></Field><Field label="Workspace name"><input required maxLength={120} value={workspaceName} onChange={event => setWorkspaceName(event.target.value)}/></Field></>}
       {mode !== 'login' && <Field label="Your name"><input required maxLength={120} value={displayName} autoComplete="name" onChange={event => setDisplayName(event.target.value)}/></Field>}
       <Field label="Email"><input required type="email" value={email} autoComplete="username" onChange={event => setEmail(event.target.value)}/></Field><Field label="Password" hint={mode !== 'login' ? 'At least 12 characters.' : undefined}><input type="password" required minLength={mode === 'login' ? undefined : 12} value={password} autoComplete={mode === 'login' ? 'current-password' : 'new-password'} onChange={event => setPassword(event.target.value)}/></Field><ErrorNotice error={action.error}/><button className="primary" disabled={action.busy || pendingOIDC}>{action.busy ? 'Connecting…' : mode === 'setup' ? 'Create owner & cluster' : 'Sign in'}</button></form>

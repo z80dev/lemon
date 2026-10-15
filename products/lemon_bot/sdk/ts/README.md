@@ -156,6 +156,11 @@ Cursors compare as unsigned decimal bigint; ACL-filtered gaps are valid. `compar
 
 Connection states: `connecting`, `authenticating`, `syncing`, `replaying`, `live`, `reconnecting`, `unauthenticated`, `forbidden`, `error`, `closed`. Authentication/revocation closes are terminal; user login must establish a new valid session. Heartbeat uses protocol ping/pong and disconnects after 60 seconds without activity. Reconnect reauthenticates and resumes from the safe applied cursor, never replays REST requests or WS voice/typing/presence commands. `send` transmits now or throws; nothing is queued offline. Explicit changed conversation selection requires a prior safe snapshot cursor and refetch of any added conversation's missing history. Do not treat last ack as proof skipped conversations were loaded.
 
+`nextRetryAtMs` exposes the actual scheduled socket reconnect deadline (or `null`
+outside backoff) for countdown UI. Read it in `onState` or while rendering a timer.
+For an explicit full recovery, close the existing connection, fetch a fresh
+snapshot, then create/start a new connection from that snapshot's cursor.
+
 Terminal listeners receive gap/exit frames including nullable exit codes. `terminal_subscribe` is the only terminal command resumed, from the last fully applied output sequence. Input/resize/close remain typed REST calls with explicit nonces and are never replayed. Terminal output has its own number sequence, separate from the durable workspace cursor.
 
 ## Checks
