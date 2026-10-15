@@ -21,6 +21,8 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Added
 
+- Cached omp model catalog through `LemonOmp.models/1` and the `omp` tool's
+  `models` action, with cheap/free filtering, pricing and upstream availability warnings.
 - omp sessions can select an approval mode and bridge tool approval prompts to
   Lemon's conversation/channel approval UI or operator `exec.approval.resolve`.
   Snapshots and wait progress expose pending approvals and decision counts;
