@@ -21,16 +21,17 @@ defmodule LemonWeb.LearningLiveTest do
     {:ok, paths} = ProfileStore.paths("alice", profile_opts)
     home = paths["workspace"]
     File.mkdir_p!(Path.join(home, ".lemon"))
-    old = Application.get_env(:lemon_web, :learning_timeline_fun)
+    old = Application.fetch_env(:lemon_control_plane, :learning_timeline_fun)
 
-    Application.put_env(:lemon_web, :learning_timeline_fun, fn profile, opts ->
+    Application.put_env(:lemon_control_plane, :learning_timeline_fun, fn profile, opts ->
       Timeline.for_profile(profile, opts ++ [server: store, profile_opts: profile_opts])
     end)
 
     on_exit(fn ->
-      if old,
-        do: Application.put_env(:lemon_web, :learning_timeline_fun, old),
-        else: Application.delete_env(:lemon_web, :learning_timeline_fun)
+      case old do
+        {:ok, value} -> Application.put_env(:lemon_control_plane, :learning_timeline_fun, value)
+        :error -> Application.delete_env(:lemon_control_plane, :learning_timeline_fun)
+      end
     end)
 
     for {id, kind, date, text} <- [

@@ -148,19 +148,16 @@ defmodule CodingAgent.ProfileToolPolicyTest do
     }
 
     File.write!(config, "[profiles.corrupt\ninvalid")
-    policy = SessionRunner.execution_tool_policy(request, root)
-    refute ToolPolicy.allowed?(policy, "read")
-    refute ToolPolicy.allowed?(policy, "bash")
+
+    assert_raise LemonCore.Config.ValidationError, ~r/invalid TOML/, fn ->
+      SessionRunner.execution_tool_policy(request, root)
+    end
+
     File.rm!(config)
     File.mkdir!(config)
-    unavailable = SessionRunner.execution_tool_policy(request, root)
-    refute ToolPolicy.allowed?(unavailable, "read")
 
-    assert {:error, :not_found} =
-             ToolRegistry.get_tool(root, "read",
-               include_extensions: false,
-               include_mcp: false,
-               tool_policy: unavailable
-             )
+    assert_raise LemonCore.Config.ValidationError, ~r/cannot read configuration/, fn ->
+      SessionRunner.execution_tool_policy(request, root)
+    end
   end
 end

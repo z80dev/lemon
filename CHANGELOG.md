@@ -52,6 +52,11 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Release preflight fixtures retain built-in provider registrations, distinguish
+  pending approvals from retained resolutions, and exercise typed provider errors
+  and asynchronous subagent cleanup without cross-test state leaks.
+- The Learning page reads its bounded, profile-scoped timeline through the
+  authenticated control plane instead of adding a forbidden Web-to-Skills dependency.
 - The TUI stops retrying rejected operator credentials, shows token recovery
   steps, and keeps offline prompts in the editor instead of silently queueing.
   Connection failures and `/reconnect` report actionable outcomes; `/status`

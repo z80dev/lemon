@@ -1,5 +1,5 @@
 defmodule LemonWeb.LearningLive do
-  @moduledoc "Operator timeline using the same bounded LemonSkills.Timeline read model as the CLI."
+  @moduledoc "Operator timeline using the bounded control-plane learning projection."
   use LemonWeb, :live_view
 
   @kinds ~w(all memory user project skill)
@@ -63,7 +63,11 @@ defmodule LemonWeb.LearningLive do
   defp valid_profile?(_), do: false
 
   defp load(socket) do
-    case timeline(socket.assigns.profile, kind: socket.assigns.kind, limit: 100) do
+    case LemonWeb.Rpc.call("learning.timeline", %{
+           "profileId" => socket.assigns.profile,
+           "kind" => socket.assigns.kind,
+           "limit" => 100
+         }) do
       {:ok, %{"items" => items}} ->
         groups = Enum.chunk_by(items, &day/1) |> Enum.map(&{day(hd(&1)), &1})
         assign(socket, groups: groups, count: length(items), error: nil)
@@ -76,17 +80,6 @@ defmodule LemonWeb.LearningLive do
             "Learning timeline unavailable. Check the local profile and memory/skill storage, then refresh."
         )
     end
-  end
-
-  defp timeline(profile, opts) do
-    case Application.get_env(:lemon_web, :learning_timeline_fun) do
-      fun when is_function(fun, 2) -> fun.(profile, opts)
-      _ -> LemonSkills.Timeline.for_profile(profile, opts)
-    end
-  rescue
-    _ -> {:error, :timeline_unavailable}
-  catch
-    _, _ -> {:error, :timeline_unavailable}
   end
 
   defp day(item),
