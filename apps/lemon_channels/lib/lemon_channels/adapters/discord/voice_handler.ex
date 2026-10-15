@@ -39,6 +39,14 @@ defmodule LemonChannels.Adapters.Discord.VoiceHandler do
           {:ok, text} when is_binary(text) and text != "" ->
             {List.delete(remaining, attachment), transcripts ++ [String.trim(text)], errors}
 
+          {:error, :disabled} ->
+            errors =
+              if inbound.meta[:voice_message] == true,
+                do: errors ++ [error_text(:disabled)],
+                else: errors
+
+            {remaining, transcripts, errors}
+
           {:error, reason} ->
             {remaining, transcripts, errors ++ [error_text(reason)]}
 

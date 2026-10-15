@@ -84,8 +84,22 @@ defmodule LemonChannels.Adapters.Discord.VoiceHandlerTest do
 
   test "disabled transcription keeps URL and reports existing disabled copy without downloading" do
     original = inbound()
+    assert original.meta.voice_message
 
     assert {^original, ["Voice transcription is disabled."]} =
+             VoiceHandler.transcribe(
+               original,
+               %{config() | enabled: false},
+               fn _, _ -> flunk("downloaded") end,
+               Provider
+             )
+  end
+
+  test "disabled transcription silently preserves ordinary audio attachment URLs" do
+    original = inbound(%{}, "", 0)
+    refute original.meta.voice_message
+
+    assert {^original, []} =
              VoiceHandler.transcribe(
                original,
                %{config() | enabled: false},

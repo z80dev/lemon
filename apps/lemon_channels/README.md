@@ -678,10 +678,12 @@ does not need to be enabled. Credentials and base URL fall back to the OpenAI
 provider configuration, as on Telegram; no Discord-specific voice keys exist.
 
 Successful transcripts use Telegram's plain transcript text format, combined
-with any typed content; other attachment URLs remain. Disabled or failed
-transcription preserves the original attachment URL and sends Telegram's
-voice-error copy separately. `local_transcript` fails closed: no synthetic
-transcript is submitted. The shared implementation is `LemonChannels.VoiceTranscriber`.
+with any typed content; other attachment URLs remain. Disabled transcription
+preserves the original attachment URL: actual voice messages receive the disabled
+notice, while ordinary audio uploads remain silent. Enabled transcription failures
+preserve the URL and send Telegram's voice-error copy separately.
+`local_transcript` fails closed: no synthetic transcript is submitted.
+The shared implementation is `LemonChannels.VoiceTranscriber`.
 
 #### Configuration
 
