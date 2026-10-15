@@ -206,6 +206,35 @@ defmodule CodingAgent.Tools.Task.ReviveTest do
     for n <- 1..8, do: assert(transcript =~ "message #{n}")
   end
 
+  @tag :tmp_dir
+  test "parked budget-exhausted children get a fresh count and auto-deliver partials", %{
+    tmp_dir: cwd
+  } do
+    child =
+      launch(cwd,
+        idle_ttl_ms: 20,
+        request_budget: 2,
+        request_budget_notice: false,
+        validate_output: fn _ -> {:error, "keep working"} end
+      )
+
+    assert {:ok, %{result: %{details: %{request_count: 3, budget_exhausted: true}}}} =
+             TaskStore.get_record(child.id)
+
+    assert_phase(child.id, :parked)
+
+    assert %AgentToolResult{details: %{delivery: "revived"}} =
+             Messaging.send(child.id, "Continue the investigation", child.opts)
+
+    assert_receive {:model_call, 6, _, _}, 5_000
+    assert_receive {:child_reply, reply}, 5_000
+    assert inspect(reply.content) =~ "answer-6"
+    assert inspect(reply.content) =~ "stopped at request budget 3"
+
+    assert {:ok, %{result: %{details: %{request_count: 3, budget_exhausted: true}}}} =
+             TaskStore.get_record(child.id)
+  end
+
   defp launch(cwd, options) do
     owner = self()
     count = :atomics.new(1, [])
@@ -260,7 +289,9 @@ defmodule CodingAgent.Tools.Task.ReviveTest do
       stream_fn: stream_fn
     ]
 
-    runner_opts = [task_id: id, idle_ttl_ms: options[:idle_ttl_ms], task_session_poll_ms: 10]
+    runner_opts =
+      [task_id: id, idle_ttl_ms: options[:idle_ttl_ms], task_session_poll_ms: 10] ++
+        Keyword.take(options, [:request_budget, :request_budget_notice, :validate_output])
 
     assert :ok =
              Async.run_async(

@@ -10,6 +10,11 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Added
 
+- Native task subagents now have a configurable soft assistant-request budget
+  (default 200, per-item override, `0` disables), one optional wrap-up steer, and
+  a graceful hard stop at 1.5x that auto-delivers partial findings. Revived runs
+  receive fresh budgets, including structured-output correction requests.
+
 - Extension tool-call, tool-result and session-start hooks can return bounded,
   ordered `additional_context` for the model, including blocked tool calls,
   without changing result trust, error status or mutation receipts.

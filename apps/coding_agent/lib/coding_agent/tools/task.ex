@@ -124,6 +124,12 @@ defmodule CodingAgent.Tools.Task do
             "description" =>
               "strict (default) fails on invalid output after retries; permissive returns text plus structured_output_error"
           },
+          "request_budget" => %{
+            "type" => "integer",
+            "minimum" => 0,
+            "description" =>
+              "Per-run soft assistant request budget; 0 disables. Wrap up at the budget; stop with partial output at ceil(1.5x)."
+          },
           "async" => %{
             "type" => "boolean",
             "description" => "Default/recommended true: return receipt immediately; false waits"
@@ -237,6 +243,7 @@ defmodule CodingAgent.Tools.Task do
         "agent",
         "output_schema",
         "schema_mode",
+        "request_budget",
         "model",
         "thinking_level",
         "async",
