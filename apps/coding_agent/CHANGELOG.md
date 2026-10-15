@@ -7,6 +7,9 @@
 - Session-scoped `local://name` scratch files support read, write and bash URL
   expansion. `proc://` lists owned processes; process URLs peek output, write
   stdin or terminate through `/kill`.
+- Read supports GitHub `issue://` and `pr://` views and indexed PR diffs, preferring
+  authenticated `gh` for private repositories. `history://task_id` shows a bounded
+  visible transcript of an owned child task without hidden reasoning.
 
 - Find sorts the complete candidate set before applying `max_results`, with
   `sort: "mtime"` for newest-first (path tie-breaks) or the existing default

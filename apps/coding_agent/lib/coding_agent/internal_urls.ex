@@ -23,7 +23,8 @@ defmodule CodingAgent.InternalUrls do
   def internal_url?("notes://" <> _), do: true
 
   def internal_url?(path) when is_binary(path) do
-    String.valid?(path) and Regex.match?(~r/\A(?:skill|artifact|local|proc):/i, path)
+    String.valid?(path) and
+      Regex.match?(~r/\A(?:skill|artifact|local|proc|issue|pr|history):/i, path)
   end
 
   def internal_url?(_path), do: false
