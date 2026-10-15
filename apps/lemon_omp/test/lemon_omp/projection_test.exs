@@ -86,6 +86,37 @@ defmodule LemonOmp.ProjectionTest do
       assert state.result == "All done"
     end
 
+    test "redirect holds the aborted verdict running until a fresh agent_start" do
+      state =
+        %{running() | redirecting: true}
+        |> apply_all([
+          {"agent_end", %{"isTerminal" => true}},
+          {"prompt_result", %{"status" => "aborted"}},
+          {"session_settled", %{}}
+        ])
+
+      assert state.status == :running
+      assert state.last_turn == :aborted
+      assert state.activity == "Redirecting turn"
+      assert state.settling
+
+      state = apply_all(state, [{"agent_start", %{}}, {"turn_start", %{}}])
+      assert state.status == :running
+      refute state.settling
+      refute state.redirecting
+
+      state =
+        apply_all(state, [
+          assistant_end("New result"),
+          {"agent_end", %{"isTerminal" => true}},
+          {"prompt_result", %{"status" => "completed"}}
+        ])
+
+      assert state.status == :idle
+      assert state.last_turn == :completed
+      assert state.result == "New result"
+    end
+
     test "a non-terminal agent_end does not start settling" do
       state = apply_all(running(), [{"agent_end", %{"isTerminal" => false}}])
       assert state.status == :running
@@ -558,7 +589,7 @@ defmodule LemonOmp.ProjectionTest do
 
       assert Map.keys(wire) |> Enum.sort() ==
                Enum.sort(
-                 ~w(id ompSessionId title cwd model thinking approvalMode owner status lastTurn activity
+                 ~w(id ompSessionId title cwd worktree model thinking approvalMode owner status lastTurn activity
                  startedAt updatedAt endedAt turns toolCalls activeTools recentTools todos subagents
                  usage contextPercent lastText result error declinedPrompts pendingApprovals approvals exit)
                )

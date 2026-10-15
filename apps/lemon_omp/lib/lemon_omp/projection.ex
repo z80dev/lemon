@@ -35,6 +35,7 @@ defmodule LemonOmp.Projection do
             omp_session_id: nil,
             title: nil,
             cwd: nil,
+            worktree: nil,
             model: nil,
             thinking: nil,
             approval_mode: nil,
@@ -68,6 +69,7 @@ defmodule LemonOmp.Projection do
             pending_approvals: [],
             approvals: %{approved: 0, denied: 0, expired: 0},
             settling: false,
+            redirecting: false,
             exit: nil
 
   @type t :: %__MODULE__{}
@@ -80,6 +82,7 @@ defmodule LemonOmp.Projection do
     %__MODULE__{
       id: Keyword.fetch!(attrs, :id),
       cwd: Keyword.fetch!(attrs, :cwd),
+      worktree: Keyword.get(attrs, :worktree),
       model: Keyword.get(attrs, :model),
       thinking: Keyword.get(attrs, :thinking),
       approval_mode: Keyword.get(attrs, :approval_mode),
@@ -125,7 +128,15 @@ defmodule LemonOmp.Projection do
   end
 
   defp event(state, "agent_start", _frame),
-    do: %{state | status: :running, activity: "Thinking", error: nil, stream_text: ""}
+    do: %{
+      state
+      | status: :running,
+        activity: "Thinking",
+        error: nil,
+        stream_text: "",
+        settling: false,
+        redirecting: false
+    }
 
   defp event(state, "turn_start", _frame), do: %{state | turns: state.turns + 1}
 
@@ -278,11 +289,11 @@ defmodule LemonOmp.Projection do
 
     %{
       state
-      | status: :idle,
-        activity: nil,
+      | status: if(state.redirecting, do: :running, else: :idle),
+        activity: if(state.redirecting, do: "Redirecting turn"),
         active_tools: [],
         stream_text: "",
-        settling: false,
+        settling: state.redirecting,
         result: result
     }
   end
@@ -345,6 +356,7 @@ defmodule LemonOmp.Projection do
         active_tools: [],
         stream_text: "",
         settling: false,
+        redirecting: false,
         ended_at: now_ms(),
         updated_at: now_ms(),
         error: error,
@@ -360,6 +372,7 @@ defmodule LemonOmp.Projection do
       "ompSessionId" => state.omp_session_id,
       "title" => state.title,
       "cwd" => state.cwd,
+      "worktree" => state.worktree,
       "model" => state.model,
       "thinking" => state.thinking,
       "approvalMode" => state.approval_mode,
@@ -468,6 +481,7 @@ defmodule LemonOmp.Projection do
           if(wire["ompSessionId"], do: " (omp #{wire["ompSessionId"]})", else: ""),
         "Title: #{wire["title"] || "untitled"}",
         "Workspace: #{wire["cwd"]}",
+        worktree_summary(wire["worktree"]),
         "Status: #{status_line(wire)}",
         wire["activity"] && "Current activity: #{wire["activity"]}",
         wire["model"] && "Model: #{wire["model"]}",
@@ -488,6 +502,30 @@ defmodule LemonOmp.Projection do
       |> Enum.filter(&is_binary/1)
 
     Enum.join(lines, "\n")
+  end
+
+  @doc "Explain where isolated work lives and how to integrate it."
+  def worktree_summary(nil), do: nil
+
+  def worktree_summary(%{"kept" => false} = worktree) do
+    "Isolated worktree: #{worktree["path"]} (base #{worktree["base"]})." <>
+      " Removed with branch #{worktree["branch"]} because it had no changes or new commits."
+  end
+
+  def worktree_summary(worktree) do
+    disposition =
+      case worktree["kept"] do
+        true ->
+          " Kept (#{worktree["dirty"] || "unknown"} dirty paths, #{worktree["commits"] || "unknown"} commits)."
+
+        nil ->
+          ""
+      end
+
+    "Isolated worktree: #{worktree["path"]} (base #{worktree["base"]})." <>
+      disposition <>
+      " In #{worktree["repo"]}, git merge #{worktree["branch"]} or cherry-pick its commits." <>
+      " omp may leave changes uncommitted; inspect and commit them in the worktree first."
   end
 
   defp status_line(%{"status" => "idle", "lastTurn" => turn}) when is_binary(turn),

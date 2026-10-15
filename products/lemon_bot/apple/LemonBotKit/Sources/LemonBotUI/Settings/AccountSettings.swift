@@ -330,17 +330,13 @@ struct LocalSettingsView: View {
 struct AboutSettingsView: View {
     let store: LemonBotStore
     @State private var control = AdminControl()
-    @State private var setup: SetupStatus?
     @State private var hosts: [AdminHostVersion] = []
     var body: some View {
         Form {
             AdminStatus(control: control, store: store)
-            Section("Product and service") {
+            Section("Client") {
                 Text("Lemon Bot · \(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "Unknown client version")")
                 Text("Platform: \(ProcessInfo.processInfo.operatingSystemVersionString)")
-                if let setup { Text("Backend \(setup.version) · API \(setup.apiVersion)") }
-                Text("Service connection: \(store.connectionState)")
-                Text("Controller: \(store.capabilities?.controlConnected == true ? "connected" : "unavailable")")
                 if let versions = store.capabilities?.minClientVersions {
                     Text("Minimum supported clients: macOS \(versions.macos) · iOS \(versions.ios) · web \(versions.web)")
                 }
@@ -348,14 +344,16 @@ struct AboutSettingsView: View {
                 Text("Self-hosted usage, no Lemon subscription or trial. External provider billing and cancellation remain with that provider.")
                 ForEach(hosts) { version in Text("\(version.name): Lemon \(version.host.lemonVersion) · \(version.host.os) \(version.host.osVersion)") }
             }
+            Section("Service diagnostics") {
+                NavigationLink("Lemon instance") { InstanceSettingsView(store: store) }
+            }
             Section("Copy diagnostics — never includes credentials or transcript") {
                 Text("Account: \(store.user?.id ?? "none")\nWorkspace: \(store.workspace?.id ?? "none")\nConversation: \(store.selectedConversationID ?? "none")\nTime: \(Date().formatted())\nRead attempts: \(control.attempts)\nLast attempt: \(control.lastAttempt?.formatted() ?? "none")\nService: \(store.connectionState)\nLast error: \(store.errorMessage ?? control.error ?? "none")").textSelection(.enabled)
             }
-            Button("Refresh service diagnostics") { Task { await control.perform { try await load() } } }
+            Button("Refresh client diagnostics") { Task { await control.perform { try await load() } } }
         }.navigationTitle("About").task { await control.perform { try await load() } }
     }
     private func load() async throws {
-        setup = try await store.read("/setup", as: SetupStatus.self)
         hosts = []
         for machine in store.machines where machine.status == "online" {
             let host = try await store.read("/machines/\(adminPath(machine.id))/host", as: HostInfo.self)

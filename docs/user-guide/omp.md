@@ -38,6 +38,9 @@ session id (for example `omp_3f9a1c2b7d4e`). Then:
 - “Tell omp to skip the docs” — steers the running turn; “after that, also
   run the linter” queues a follow-up. A message to an idle session starts a
   new turn.
+- “Stop that; instead, fix the parser” — redirects omp: aborts its current turn
+  and starts over with the new message in one omp command. A wait already in
+  progress follows the redirected turn, rather than ending at the aborted turn.
 - “Cancel the omp run” — aborts the current turn; the session stays open.
 - “Close it” — ends the omp process. Its history stays on disk.
 - “Which omp sessions exist here?” / “resume the last one” — lists omp's stored
@@ -52,6 +55,23 @@ For `start` or `resume`, the agent tool (and `LemonOmp.start/2`) accepts
 before execution, and `yolo` auto-approves ordinary tool calls. Omitting it
 leaves omp's own configured mode unchanged. Explicit omp tool policies still
 apply. Lemon passes an explicit mode as `--approval-mode <mode>`.
+
+### Continuing after a crash
+
+For an interrupted session, explicitly request
+`{"action":"resume","omp_session_id":"…","continue":true,"wait":true}`.
+Elixir callers use `LemonOmp.start(%{cwd: cwd, resume: omp_id, continue: true})`.
+`continue` is boolean, requires a resume id, and cannot accompany a prompt.
+It reopens history with `--resume` and sends a fixed instruction to review the
+conversation/workspace and finish unfinished work without redoing completed
+steps. This is a new model turn, not replay of the interrupted OS command.
+Nothing resumes automatically.
+
+omp 18.11's `--restore` is **interactive-only**, rejects RPC mode and prompts,
+and therefore cannot provide its interrupted-turn/subagent restoration here.
+Lemon's explicit continuation does not revive subagents. Discovery's
+`interrupted` hint identifies an unfinished last turn in the bounded file tail;
+it is not proof of a crash (a live session can also have an unfinished turn).
 
 ## Choosing a model
 
@@ -72,16 +92,17 @@ Be ready to select a fallback. Listing models does not make a model call.
 
 Ask Lemon to split independent work across several omp workers. The `omp`
 tool's `start_many` action accepts a `tasks` array; each task has a `prompt`
-and optional `cwd`, `model`, `thinking`, and `approval_mode`. Omitted directories default to
-the conversation's cwd. **Workers sharing a directory can conflict**: use
-separate directories or git worktrees for edits.
+and optional `cwd`, `model`, `thinking`, `approval_mode`, and boolean `isolate`.
+Omitted directories default to the conversation's cwd. Set `isolate: true`
+to give each worker its own managed Git worktree instead of editing shared files.
 
 ```json
 {
   "action": "start_many",
+  "isolate": true,
   "tasks": [
-    {"prompt": "Implement the parser", "cwd": "/src/parser-worktree"},
-    {"prompt": "Document the API", "cwd": "/src/docs-worktree"}
+    {"prompt": "Implement the parser", "cwd": "/src/app"},
+    {"prompt": "Document the API", "cwd": "/src/app"}
   ],
   "wait": true
 }
@@ -100,6 +121,37 @@ progress, including token usage and cost. To gather workers later, use
 Set `wait_for` to `"any"` to return when the first worker settles. Timeout
 or abort stops only the wait, never the workers; cancel or close them
 explicitly when no longer needed.
+
+`isolate` is available on `start`, on each batch task (overriding the tool's
+batch default), and in the Elixir facade's start/task maps. `cwd` must be inside
+a Git work tree with a HEAD commit. Each isolated worker gets a fresh
+`lemon-omp/<invocation id>` branch from that checkout's current HEAD, and runs
+at the root of a worktree under
+`<git common dir>/lemon-omp-worktrees/<invocation id>`. Lemon derives this path;
+callers cannot supply it. Keeping it in Git's common directory avoids main
+checkout status noise and temporary-directory cleanup. Uncommitted changes in
+the original checkout are **not** copied to workers.
+
+Snapshots include `worktree` (`path`, `branch`, `base`, `repo`), and reports
+explain how to integrate the work. Inspect the worker directory first: omp may
+leave changes uncommitted. Commit those changes there, then run
+`git merge lemon-omp/<invocation id>` in the main checkout (or cherry-pick the
+desired commits). Resolve conflicts normally; isolation does not merge for you.
+
+On close, idle timeout, process exit or Session crash, Lemon removes a worktree
+and its branch only if there are no uncommitted changes and no commits beyond
+its base. Otherwise it keeps both and reports `kept: true`, `dirty`
+(changed/untracked paths) and `commits` (commits beyond base). Cleanup is bounded;
+if Git cannot establish safety, it keeps the work and unknown counts are `null`.
+It never force-removes dirty worktrees. Only Lemon-created worktrees are eligible
+for automatic cleanup. Remove kept work manually with `git worktree remove <path>`
+and `git branch -d <branch>` once integrated.
+
+Resume uses the **given cwd**, not automatic worktree lookup by omp session id.
+To continue kept isolated work, pass its `worktree.path` as `cwd` when resuming,
+without `isolate`; this reuses the directory without claiming ownership or
+automatically deleting it on close. `isolate: true` always creates a fresh worktree.
+
 
 Elixir callers can use `LemonOmp.start_many(tasks, owner: owner)` and
 `LemonOmp.wait_many(ids, timeout_ms, owner: scope, mode: :all)`. The latter
@@ -129,6 +181,10 @@ recent tools, todos, subagents, usage, latest output or result. Keys:
 status-bar badge (`omp N▶` while sessions run) update live from the runtime's
 `omp.session` events. When Lemon's agent uses the `omp` tool, its card shows
 the session's status, activity, todo progress and usage as they change.
+
+The chat tool and Elixir API also support **redirect** (stop the current turn
+and start over with a new message). The panel does not yet have a redirect key;
+`s` steers and `c` only cancels.
 
 ## From the CLI
 
@@ -182,8 +238,8 @@ another omp).
   `LEMON_OMP_APPROVALS=decline` restores headless cancellation of tool approvals.
   Other blocking dialogs (confirm, input, editor, unrelated selects) are still
   declined and counted in `declinedPrompts`.
-- **Control fails closed.** Steering, follow-ups and cancellation go to one
-  process invocation and are acknowledged only after omp accepts them. A
+- **Control fails closed.** Steering, follow-ups, redirects and cancellation go
+  to one process invocation and are acknowledged only after omp accepts them. A
   closed or crashed session refuses them; resume it to continue (resuming is a
   new invocation with a new id). If omp does not answer in time the result is
   “outcome unknown” — check the status before retrying, because the request

@@ -24,7 +24,13 @@ public struct ComposerView: View {
     @State private var messageNonce: String?
     @State private var reconciledRuns: [Run] = []
     @State private var stagedFilenames: [String] = []
+    #if os(macOS)
     @FocusState private var focused: Bool
+    #else
+    @State private var focused = false
+    @State private var deliveryDetailsOpen = false
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
+    #endif
     public init(store: LemonBotStore, conversationID: ID, compact: Bool = false) {
         self.store = store
         self.conversationID = conversationID
@@ -62,6 +68,17 @@ public struct ComposerView: View {
     public var body: some View {
         composerContent
             .fileImporter(isPresented: $files, allowedContentTypes: [.item], allowsMultipleSelection: true, onCompletion: handleSelectedFiles)
+            #if os(iOS)
+            .sheet(isPresented: $deliveryDetailsOpen) {
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("Last send details").font(.headline)
+                    if let receipt { receiptDetails(receipt) }
+                    ForEach(reconciledRuns) { run in Text("Run \(run.id): \(run.status)").textSelection(.enabled) }
+                    Button("Close") { deliveryDetailsOpen = false }.buttonStyle(.pill(.secondary))
+                }.padding().frame(maxWidth: .infinity, alignment: .leading)
+                    .presentationDetents([.medium, .large])
+            }
+            #endif
             .confirmationDialog("Attach pasted files to this conversation?", isPresented: Binding(get: { !pastedFiles.isEmpty }, set: { if !$0 { pastedFiles = [] } })) {
                 Button("Attach \(pastedFiles.count) selected files") { let urls = pastedFiles; pastedFiles = []; Task { await attach(urls) } }
                 Button("Cancel", role: .cancel) { pastedFiles = [] }
@@ -95,14 +112,36 @@ public struct ComposerView: View {
         !online || action.inFlight || unresolvedAction || pendingMessageNonce != nil || !draft.fileURLs.isEmpty || (draft.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && draft.attachmentIDs.isEmpty)
     }
     private var multiline: Bool { draft.text.contains("\n") || draft.text.count > 70 }
+    private var compactKeyboardLayout: Bool {
+        #if os(iOS)
+        verticalSizeClass == .compact
+        #else
+        false
+        #endif
+    }
+    private var hasDeliveryStatus: Bool {
+        !online || messageUncertain || action.error != nil || action.uncertain || action.receipt != nil
+            || (receipt != nil && !compactKeyboardLayout) || receipt?.status == "outcome_unknown"
+            || receipt?.runs.contains(where: { $0.error != nil }) == true
+            || (!reconciledRuns.isEmpty && !compactKeyboardLayout) || reconciledRuns.contains(where: { $0.error != nil })
+    }
 
     private var composerContent: some View {
         VStack(alignment: .leading, spacing: 8) {
             contextChips
             pill
+            #if os(iOS)
+            if hasDeliveryStatus { deliveryStatus }
+            #else
             deliveryStatus
+            #endif
         }
-        .padding(.horizontal, 16).padding(.bottom, 14)
+        .padding(.horizontal, 16)
+        #if os(iOS)
+        .padding(.bottom, compactKeyboardLayout ? 0 : focused ? 4 : 14)
+        #else
+        .padding(.bottom, 14)
+        #endif
         .frame(maxWidth: LBMetric.transcriptMaxWidth)
         .frame(maxWidth: .infinity)
     }
@@ -139,7 +178,7 @@ public struct ComposerView: View {
             }
             .buttonStyle(.plain).keyboardShortcut(.return, modifiers: .command)
             .disabled(sendDisabled).opacity(sendDisabled ? 0.4 : 1)
-            .accessibilityLabel("Send").help("Send (↩)")
+            .accessibilityLabel("Send").help("Send (⌘↩)")
         }
     }
 
@@ -150,6 +189,9 @@ public struct ComposerView: View {
             #if os(iOS)
             Button("Camera") { platform("camera") }
             Button("Photo library") { platform("photos") }
+            if compactKeyboardLayout && (receipt != nil || !reconciledRuns.isEmpty) {
+                Button("Last send details") { deliveryDetailsOpen = true }
+            }
             #endif
             Divider()
             Menu("Reference") { referenceItems }
@@ -240,7 +282,16 @@ public struct ComposerView: View {
         }
     }
 
-    private var messageInput: some View {
+    @ViewBuilder private var messageInput: some View {
+        #if os(iOS)
+        IOSComposerInput(text: text, focused: $focused, maximumLines: verticalSizeClass == .compact ? 2 : compact ? 4 : 8)
+            .overlay(alignment: .topLeading) {
+                if draft.text.isEmpty {
+                    Text(placeholder).font(LBFont.body).foregroundStyle(LB.faint)
+                        .allowsHitTesting(false).accessibilityHidden(true)
+                }
+            }
+        #else
         TextField(placeholder, text: text, axis: .vertical)
             .lineLimit(compact ? 1...4 : 1...8)
             .textFieldStyle(.plain)
@@ -251,8 +302,10 @@ public struct ComposerView: View {
             .submitLabel(.send)
             .onSubmit { Task { await send() } }
             .onKeyPress(keys: [.return], phases: .down, action: handleComposerKeyPress)
+        #endif
     }
 
+    #if os(macOS)
     private func handleComposerKeyPress(_ press: KeyPress) -> KeyPress.Result {
         if press.modifiers.contains(.shift) { return .ignored }
         guard online, !action.busy, pendingMessageNonce == nil, draft.fileURLs.isEmpty,
@@ -260,6 +313,7 @@ public struct ComposerView: View {
         Task { await send() }
         return .handled
     }
+    #endif
 
     @ViewBuilder private var routingContext: some View {
         if everyone { chip("@everyone", symbol: "at", removeLabel: "Remove @everyone") { everyone = false } }
@@ -301,18 +355,17 @@ public struct ComposerView: View {
                     }
                 }
                 if receipt.status == "outcome_unknown" { Text("Not confirmed yet — don't resend. Check the submission first.").foregroundStyle(LB.warning).font(LBFont.meta) }
-                DisclosureGroup("Details") {
-                    VStack(alignment: .leading, spacing: 2) {
-                        ForEach(Array(receipt.delivery.enumerated()), id: \.offset) { _, delivery in
-                            Text("\(store.bots.first(where: { $0.id == delivery.botId })?.name ?? delivery.botId): \(delivery.effectiveMode.replacingOccurrences(of: "_", with: " ").capitalized) · run \(delivery.runId)").textSelection(.enabled)
-                        }
-                    }.frame(maxWidth: .infinity, alignment: .leading)
-                }.font(LBFont.meta).foregroundStyle(LB.muted)
+                if !compactKeyboardLayout {
+                    DisclosureGroup("Details") {
+                        VStack(alignment: .leading, spacing: 2) { receiptDetails(receipt) }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }.font(LBFont.meta).foregroundStyle(LB.muted)
+                }
             }
             ForEach(reconciledRuns) { run in
                 if let error = run.error { ActionErrorView(message: BackendError(status: 0, failure: ErrorEnvelopeError(code: error.code, message: error.message, requestId: error.requestId, retrySafe: error.retrySafe, details: error.details)).localizedDescription) }
             }
-            if !reconciledRuns.isEmpty {
+            if !reconciledRuns.isEmpty && !compactKeyboardLayout {
                 DisclosureGroup("Details") {
                     VStack(alignment: .leading, spacing: 2) {
                         ForEach(reconciledRuns) { run in Text("Run \(run.id): \(run.status)").textSelection(.enabled) }
@@ -323,6 +376,12 @@ public struct ComposerView: View {
             if unresolvedAction && !messageUncertain { Text("An upload isn't confirmed. Nothing is retried automatically — check your files before trying again.").font(LBFont.meta).foregroundStyle(LB.warning) }
             if let receipt = action.receipt { Text(receipt).font(LBFont.meta).foregroundStyle(LB.muted) }
         }.padding(.horizontal, 8)
+    }
+
+    @ViewBuilder private func receiptDetails(_ receipt: MessageReceipt) -> some View {
+        ForEach(Array(receipt.delivery.enumerated()), id: \.offset) { _, delivery in
+            Text("\(store.bots.first(where: { $0.id == delivery.botId })?.name ?? delivery.botId): \(delivery.effectiveMode.replacingOccurrences(of: "_", with: " ").capitalized) · run \(delivery.runId)").textSelection(.enabled)
+        }
     }
 
     private func handleSelectedFiles(_ result: Result<[URL], Error>) {

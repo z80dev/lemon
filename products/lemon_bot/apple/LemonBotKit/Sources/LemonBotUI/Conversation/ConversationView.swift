@@ -31,6 +31,9 @@ public struct ConversationView: View {
     @State private var settled = false
     @State private var toast: StatusToast?
     @Environment(\.lbReduceMotion) private var reduceMotion
+    #if os(iOS)
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
+    #endif
 
     private static let bottomID = "transcript-bottom"
     #if os(macOS)
@@ -120,9 +123,17 @@ public struct ConversationView: View {
         let rows = TranscriptLayout.rows(entries: entries, runs: runs, unreadFromSeq: unreadFromSeq ?? ((conversation?.unreadCount ?? 0) > 0 ? (conversation?.lastReadSeq ?? 0) + 1 : nil))
         let matches = findMatches(entries)
         let current = matches.isEmpty ? nil : matches[min(max(findIndex, 0), matches.count - 1)]
-        return VStack(spacing: 0) {
+        return Group {
+            #if os(iOS)
+            // The composer belongs to the keyboard-adjusted safe area, not the transcript's content.
             transcript(rows, entries: entries, typing: showTyping, highlight: findOpen && !find.isEmpty ? current : flashID)
-            bottomStack
+                .safeAreaInset(edge: .bottom, spacing: 0) { bottomStack.background(LB.canvas) }
+            #else
+            VStack(spacing: 0) {
+                transcript(rows, entries: entries, typing: showTyping, highlight: findOpen && !find.isEmpty ? current : flashID)
+                bottomStack
+            }
+            #endif
         }
         .background(LB.canvas)
         .overlay(alignment: .top) { chrome(matches: matches, current: current) }
@@ -166,11 +177,22 @@ public struct ConversationView: View {
                         .onDisappear { leftBottomAt = .now; atBottom = false }
                 }
                 .frame(maxWidth: LBMetric.transcriptMaxWidth)
-                .padding(.horizontal, 20).padding(.top, Self.topInset).padding(.bottom, 12)
+                .padding(.horizontal, 20).padding(.top, Self.topInset)
+                #if os(iOS)
+                .padding(.bottom, verticalSizeClass == .compact ? 0 : 12)
+                #else
+                .padding(.bottom, 12)
+                #endif
                 .frame(maxWidth: .infinity)
                 .animation(settled && !reduceMotion ? LBMotion.spring : nil, value: rows.map(\.id) + [typing ? "typing" : ""])
             }
             .defaultScrollAnchor(.bottom)
+            #if os(iOS)
+            .scrollDismissesKeyboard(.interactively)
+            .onGeometryChange(for: CGFloat.self) { $0.size.height - $0.safeAreaInsets.top - $0.safeAreaInsets.bottom } action: { _ in
+                follow(proxy, animated: false, force: false)
+            }
+            #endif
             .overlay(alignment: .bottom) {
                 if !atBottom && !rows.isEmpty {
                     JumpToLatestPill(hasNew: hasNewBelow, tint: palette) {
@@ -264,7 +286,12 @@ public struct ConversationView: View {
                 }
             }
             .frame(maxWidth: LBMetric.transcriptMaxWidth)
-            .padding(.horizontal, 16).padding(.top, 4)
+            .padding(.horizontal, 16)
+            #if os(iOS)
+            .padding(.top, visibleError != nil || toast != nil || store.currentStep(in: conversationID) != nil ? 4 : 0)
+            #else
+            .padding(.top, 4)
+            #endif
             .frame(maxWidth: .infinity)
             .lbAnimation(LBMotion.snappy, value: store.currentStep(in: conversationID))
             ComposerView(store: store, conversationID: conversationID).id(conversationID)

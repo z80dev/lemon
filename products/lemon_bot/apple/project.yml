@@ -112,6 +112,21 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: org.lemonbot.native.tests
         GENERATE_INFOPLIST_FILE: YES
         ENABLE_HARDENED_RUNTIME: NO
+  LemonBotKeyboardTests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: UITests
+    dependencies:
+      - target: LemonBotiOS
+      - package: LemonBotKit
+        product: LemonBotUI
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: org.lemonbot.keyboard.tests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_TARGET_NAME: LemonBotiOS
+        ENABLE_HARDENED_RUNTIME: NO
   LemonBotSnapshotTests:
     type: bundle.unit-test
     platform: macOS
@@ -128,6 +143,14 @@ targets:
         GENERATE_INFOPLIST_FILE: YES
         ENABLE_HARDENED_RUNTIME: NO
 schemes:
+  LemonBotKeyboard:
+    build:
+      targets:
+        LemonBotiOS: all
+        LemonBotKeyboardTests: [test]
+    test:
+      config: Debug
+      targets: [LemonBotKeyboardTests]
   LemonBotSnapshots:
     build:
       targets:

@@ -39,6 +39,7 @@ public struct ConnectionStatusView: View {
                     VStack(alignment: .leading, spacing: 8) { recoveryButtons }
                 }
                 if issue.layer == .controllerDown { controllerActions }
+                if store.canViewInstance, issue.layer != .signedOutOrRevoked { Button("View instance details") { instanceDetails = true }.buttonStyle(.borderless) }
                 #if os(macOS)
                 if issue.layer == .backendUnreachable, let url = URL(string: issue.origin), ConnectionIssue.isLoopback(url) { LocalLemonStartHelp() }
                 #endif
@@ -72,7 +73,7 @@ public struct ConnectionStatusView: View {
             }
         }
         .sheet(isPresented: $instanceDetails) {
-            NavigationStack { ConnectionInstanceDetailsView(store: store).toolbar { Button("Close") { instanceDetails = false } } }
+            NavigationStack { InstanceSettingsView(store: store).toolbar { Button("Close") { instanceDetails = false } } }
                 .frame(minWidth: 320, minHeight: 400)
         }
         .confirmationDialog("Restart Lemon?", isPresented: $restart, titleVisibility: .visible) {
@@ -118,7 +119,6 @@ public struct ConnectionStatusView: View {
             if let state = store.instanceStatus?.controller.state, [.rejected, .stopped, .reconnecting].contains(state) {
                 Button("Reconnect Lemon link") { Task { await action.perform { try await store.reconnectLemonLink() } } }.buttonStyle(.pill(.secondary)).disabled(action.busy)
             }
-            if store.canViewInstance { Button("View instance details") { instanceDetails = true }.buttonStyle(.borderless) }
         }
     }
     private func run(_ runtimeAction: RuntimeAction) {
@@ -134,12 +134,17 @@ struct RuntimeOperationView: View {
                 if operation.state == .running { ProgressView().controlSize(.small) }
                 Text("Lemon \(operation.action.rawValue) · \(operation.state.rawValue)").font(LBFont.metaEmphasis)
             }
-            if !operation.output.isEmpty {
-                DisclosureGroup("Command output") {
-                    Text(operation.output).font(LBFont.code).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
-                    Button("Copy output") { copyText(operation.output) }
-                }.font(LBFont.meta)
-            }
+            DisclosureGroup("Details · command output") {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Started \(timestamp(operation.startedAtMs).formatted())")
+                    if let completed = operation.completedAtMs { Text("Finished \(timestamp(completed).formatted())") }
+                    if let code = operation.exitCode { Text("Exit code: \(code)") }
+                    if !operation.output.isEmpty {
+                        Text(operation.output).font(LBFont.code).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
+                        Button("Copy output") { copyText(operation.output) }
+                    }
+                }.padding(.top, 4)
+            }.font(LBFont.meta)
         }
     }
 }
@@ -206,19 +211,3 @@ struct ChooseLemonBotView: View {
     private func discover() async { discovering = true; discovered = await store.discoverBackends(); discovering = false }
 }
 
-/// Bounded read-only diagnostics used by the recovery panel; the Settings pane adds lifecycle and live metrics.
-private struct ConnectionInstanceDetailsView: View {
-    let store: LemonBotStore
-    var body: some View {
-        Form {
-            if let status = store.instanceStatus {
-                LabeledContent("Lemon Bot", value: status.backend.version)
-                LabeledContent("Address", value: status.backend.publicUrl)
-                LabeledContent("Lemon link", value: status.controller.state.rawValue)
-                LabeledContent("Controller", value: status.controller.url)
-                if let error = status.controller.lastError { Text(error.message).textSelection(.enabled) }
-                if let reason = status.lemonUnavailableReason { Text(reason) }
-            }
-        }.navigationTitle("Lemon instance")
-    }
-}

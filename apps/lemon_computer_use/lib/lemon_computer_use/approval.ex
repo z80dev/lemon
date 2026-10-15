@@ -154,14 +154,18 @@ defmodule LemonComputerUse.Approval do
   @spec lemon_origin?(String.t()) :: boolean()
   def lemon_origin?(origin) do
     %URI{host: host, port: port} = URI.parse(origin)
-    host in ["localhost", "127.0.0.1", "::1"] and port in lemon_ports()
+
+    (host in ["localhost", "127.0.0.1", "::1"] and port in lemon_ports()) or
+      origin in LemonComputerUse.Config.declined_origins()
   end
 
+  # Lemon's control plane and web UI, plus the Lemon Bot web client's
+  # development server (4081), on loopback.
   defp lemon_ports do
     env = LemonCore.Runtime.Env.resolve()
-    [env.control_port, env.web_port]
+    [env.control_port, env.web_port, 4081]
   rescue
-    _ -> [4040, 4080]
+    _ -> [4040, 4080, 4081]
   end
 
   @doc false
