@@ -255,8 +255,8 @@ defmodule CodingAgent.Session.ModelResolver do
     model_id = Map.get(config, :model_id)
     base_url = Map.get(config, :base_url)
     provider = canonical_registry_provider(provider)
-    identity_settings = with_default_base_url(settings, provider, base_url)
-    {provider, model_id} = default_model_identity(provider, model_id, identity_settings)
+    provider_source = Map.get(config, :provider_source, :explicit)
+    {provider, model_id} = default_model_identity(provider, model_id, provider_source, settings)
     provider = route_default_provider(provider, model_id, settings)
     lookup_settings = with_default_base_url(settings, provider, base_url)
 
@@ -314,10 +314,10 @@ defmodule CodingAgent.Session.ModelResolver do
     end
   end
 
-  # A qualified selector can arrive wrapped in the configuration's fallback
-  # provider. Normalize it before routing. Dynamic presets accept native ids
-  # even without cached metadata, so a cache miss cannot disprove their identity.
-  defp default_model_identity(provider, model_id, settings) when is_binary(model_id) do
+  # Only inherited providers can be replaced by a qualified selector. Explicit
+  # provider/model pairs are native identities, independent of discovery caches.
+  defp default_model_identity(provider, model_id, :inherited, settings)
+       when is_binary(model_id) do
     parts =
       case String.split(model_id, ":", parts: 2) do
         [_id] -> String.split(model_id, "/", parts: 2)
@@ -333,17 +333,17 @@ defmodule CodingAgent.Session.ModelResolver do
               nil -> nil
             end
 
-        if qualified_provider && not Presets.preset?(provider) &&
-             is_nil(known_model(provider, model_id, settings)),
-           do: {qualified_provider, id},
-           else: {provider, model_id}
+        if qualified_provider,
+          do: {qualified_provider, id},
+          else: {provider, model_id}
 
       _ ->
         {provider, model_id}
     end
   end
 
-  defp default_model_identity(provider, model_id, _settings), do: {provider, model_id}
+  defp default_model_identity(provider, model_id, _provider_source, _settings),
+    do: {provider, model_id}
 
   # Defaults may supply a URL independently of the provider table. Bind that
   # effective URL before consulting discovery metadata, preserving the existing

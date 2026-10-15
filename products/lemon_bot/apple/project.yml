@@ -104,6 +104,8 @@ targets:
     platform: macOS
     sources:
       - path: Tests
+      - path: LemonBotMac/MacGlobalHotkeys.swift
+      - path: LemonBotMac/MacShortcutRecorder.swift
     dependencies:
       - package: LemonBotKit
         product: LemonBotKit

@@ -100,6 +100,7 @@ public struct LemonBotRootView: View {
         }
         .navigationSplitViewStyle(.balanced)
         .background { shortcuts }
+        .focusedSceneValue(\.navigateBot, orderedBots.isEmpty ? nil : adjacentBot)
     }
 
     @ViewBuilder private var detail: some View {
@@ -128,10 +129,10 @@ public struct LemonBotRootView: View {
             Button("Search everything") { search = true }.keyboardShortcut("k", modifiers: .command)
             Button("New Bot") { newBot = true }.keyboardShortcut("n", modifiers: .command).disabled(!store.isOnline)
             Button("Find Bots") { filterFocusRequest += 1 }.keyboardShortcut("f", modifiers: [.command, .shift])
+            #if os(iOS)
             Button("Previous Bot") { adjacentBot(-1) }.keyboardShortcut("[", modifiers: .command)
             Button("Next Bot") { adjacentBot(1) }.keyboardShortcut("]", modifiers: .command)
-            Button("Previous Bot") { adjacentBot(-1) }.keyboardShortcut(.upArrow, modifiers: .option)
-            Button("Next Bot") { adjacentBot(1) }.keyboardShortcut(.downArrow, modifiers: .option)
+            #endif
             Button("Toggle Bot details") { lbWithAnimation(reduceMotion) { inspector.toggle() } }.keyboardShortcut("i", modifiers: [.command, .option])
             Button("Bot details") { inspector.show(.details) }.keyboardShortcut(",", modifiers: [.command, .shift])
             Button("Connect apps") { openSettings(.apps) }.keyboardShortcut("m", modifiers: [.command, .shift])

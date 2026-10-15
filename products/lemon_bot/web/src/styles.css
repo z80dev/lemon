@@ -61,6 +61,7 @@ legend { font-weight: 620; padding: 0 6px; }
 .segmented.sliding button.selected { background: transparent; }
 .segmented-thumb { position: absolute; top: 3px; bottom: 3px; left: 3px; width: calc((100% - 6px) / 3); border-radius: 999px; background: var(--selected); transform: translateX(calc(var(--tab-index, 0) * 100%)); transition: transform 360ms cubic-bezier(.22,1,.36,1); }
 .badge, .chip { display: inline-flex; align-items: center; gap: 4px; width: fit-content; white-space: nowrap; border-radius: 999px; padding: 2px 8px; font-size: 11px; font-weight: 500; background: var(--fill); color: var(--muted); line-height: 1.5; border: 0; min-height: 0; }
+.badge { font-size: 12px; }
 button.chip { padding: 4px 10px; font-size: 12px; }
 .badge.good { background: color-mix(in srgb, #6c9274 22%, transparent); color: var(--accent); }
 .badge.warning { background: var(--warn-soft); color: var(--warning); }
@@ -129,11 +130,13 @@ button.chip { padding: 4px 10px; font-size: 12px; }
 /* Sidebar (design system §5): no borders, soft fills, 40pt avatars. */
 .roster { --ring: var(--sidebar); background: var(--sidebar); display: flex; flex-direction: column; width: 290px; min-width: 240px; max-width: 380px; resize: horizontal; overflow: hidden; min-height: 0; position: relative; z-index: 10; padding-top: env(safe-area-inset-top); }
 .roster-top { height: 52px; display: flex; align-items: center; gap: 8px; padding: 0 14px; flex-shrink: 0; }
-.roster:has(.connection-pill) .roster-top { flex-wrap: wrap; height: auto; min-height: 52px; padding-block: 8px; }
+.roster:has(.connection-pill) .roster-top { height: auto; min-height: 52px; padding-block: 8px; }
 .roster-brand { border: 0; background: none; padding: 0; min-height: 0; display: inline-flex; margin-right: auto; }
 .roster-brand:hover:not(:disabled) { background: none; }
 .roster-title { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
-.connection-pill { display: inline-flex; align-items: center; gap: 4px; flex-shrink: 0; white-space: nowrap; font-size: 12px; font-weight: 500; color: var(--muted); background: var(--fill); border-radius: 999px; padding: 3px 8px; }
+.connection-pill { display: inline-flex; align-items: center; gap: 4px; flex-shrink: 1; min-width: 0; white-space: nowrap; font-size: 12px; font-weight: 500; color: var(--muted); background: var(--fill); border-radius: 999px; padding: 3px 8px; }
+.connection-pill-label { overflow: hidden; text-overflow: ellipsis; }
+.roster-top > .ghost-circle, .roster-brand { flex-shrink: 0; }
 .roster-search { display: flex; align-items: center; gap: 6px; padding: 0 14px 8px; animation: snappy-in 260ms cubic-bezier(.25,1,.5,1); }
 .search-field { flex: 1; display: flex; align-items: center; gap: 6px; background: var(--fill); border-radius: 12px; padding: 0 10px; color: var(--muted); min-width: 0; }
 .search-field input { border: 0; background: transparent; padding: 7px 0; min-height: 32px; font-size: 13px; }

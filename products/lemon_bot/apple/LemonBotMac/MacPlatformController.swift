@@ -117,6 +117,15 @@ final class MacPlatformController: NSObject {
         } catch { errorMessage = error.localizedDescription }
     }
 
+    func shortcutRecordingChanged(_ recording: Bool) {
+        if recording {
+            hotkeys.unregister()
+        } else {
+            do { try hotkeys.configure(summon: settings.summonShortcut, pushToTalk: settings.pushToTalkShortcut) }
+            catch { errorMessage = error.localizedDescription }
+        }
+    }
+
     func saveSettings(_ value: ClientLocalSettings) {
         do {
             try hotkeys.configure(summon: value.summonShortcut, pushToTalk: value.pushToTalkShortcut)

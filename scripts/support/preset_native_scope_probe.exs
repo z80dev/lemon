@@ -177,8 +177,8 @@ defmodule LemonScripts.PresetNativeScopeProbe do
 
       defaults = [
         %{provider: :ollama, model_id: "qwen:small"},
-        %{provider: :openai, model_id: "ollama:shared"},
-        %{provider: :openai, model_id: "ollama/shared"},
+        %{provider: :openai, provider_source: :inherited, model_id: "ollama:shared"},
+        %{provider: :openai, provider_source: :inherited, model_id: "ollama/shared"},
         %{provider: :ollama, model_id: "lm_studio:shared"}
       ]
 

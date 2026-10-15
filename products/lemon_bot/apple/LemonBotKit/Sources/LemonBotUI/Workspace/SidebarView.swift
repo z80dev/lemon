@@ -219,7 +219,7 @@ struct SidebarView: View {
                     let selected = bot.id == selectedBotID
                     Button { openConversation(bot.mainConversationId) } label: {
                         VStack(spacing: 6) {
-                            BotBadgedAvatar(store: store, bot: bot, size: 56, presence: presence(bot), unread: bot.sidebar.unread, ring: selected ? LB.sidebar : LB.sidebar)
+                            BotBadgedAvatar(store: store, bot: bot, size: 56, presence: presence(bot), unread: bot.sidebar.unread, ring: LB.sidebar)
                             Text(bot.name).font(LBFont.meta).foregroundStyle(LB.ink).lineLimit(1).truncationMode(.tail)
                         }
                         .frame(width: 84).padding(.vertical, 10)
@@ -228,6 +228,7 @@ struct SidebarView: View {
                     .buttonStyle(.plain)
                     .contextMenu { botMenu(bot) }
                     .accessibilityLabel("\(bot.name)\(bot.sidebar.unread ? ", unread" : "")")
+                    .accessibilityAddTraits(selected ? .isSelected : [])
                 }
             }.padding(.horizontal, 4)
         }.scrollIndicators(.never)
@@ -277,6 +278,9 @@ struct SidebarView: View {
                 let members = listBots.filter { $0.sidebar.sectionId == section.id }
                 if !members.isEmpty {
                     sectionHeader(section)
+                    if !store.isOnline {
+                        Text("Available when online.").font(LBFont.meta).foregroundStyle(LB.muted).padding(.horizontal, 12).sidebarRow()
+                    }
                     if !section.collapsed { ForEach(members) { bot in botRow(bot) } }
                 }
             }
@@ -291,7 +295,10 @@ struct SidebarView: View {
                 Spacer()
             }.padding(.horizontal, 12).padding(.top, 14).padding(.bottom, 4).contentShape(Rectangle())
         }.buttonStyle(.plain).disabled(!store.isOnline)
-            .accessibilityLabel("\(section.name), \(section.collapsed ? "collapsed" : "expanded")")
+            .accessibilityLabel(section.name)
+            .accessibilityAddTraits(.isHeader)
+            .accessibilityValue(section.collapsed ? "Collapsed" : "Expanded")
+            .accessibilityHint(store.isOnline ? "Double-tap to \(section.collapsed ? "expand" : "collapse")." : "Available when online.")
             .sidebarRow()
     }
 
@@ -347,7 +354,7 @@ struct SidebarView: View {
                 Text(step.needsInput ? "Needs you" : step.title + "…").lineLimit(1)
             }.font(LBFont.rowSubtitle).foregroundStyle(step.needsInput ? LB.warning : LB.accent)
         } else {
-            Text(previews[bot.mainConversationId]?.text ?? (bot.job.isEmpty ? "No messages yet" : bot.job))
+            Text(previews[bot.mainConversationId]?.text ?? (!store.isOnline ? "Messages load when you're online." : (bot.job.isEmpty ? "No messages yet" : bot.job)))
                 .font(LBFont.rowSubtitle).foregroundStyle(LB.muted).lineLimit(1)
         }
     }
