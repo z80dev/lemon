@@ -22,7 +22,7 @@ describe("user-facing protocol failures", () => {
 		for (const [error, recovery] of cases) {
 			const message = describeError(error);
 			expect(message).toContain(recovery);
-			expect(message).not.toMatch(/chat\.send|sessions\.patch|1006|HANDSHAKE|method \"|request \"/);
+			expect(message).not.toMatch(/chat\.send|sessions\.patch|1006|HANDSHAKE|method "|request "/);
 		}
 	});
 

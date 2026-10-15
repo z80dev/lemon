@@ -206,11 +206,13 @@ export async function handleBrowserMethod(page: Page, method: string, args: any)
         url: page.url(),
         title: await page.title().catch(() => null),
       };
+      const fullContent: Record<string, string> = {};
 
       if (includeHtml) {
         const rawHtml = await page.content();
         const html = stripNoisyHtml(rawHtml);
         const htmlSlice = truncateText(html, maxChars);
+        fullContent.html = html;
 
         result.html = htmlSlice.text;
         result.truncated = htmlSlice.truncated;
@@ -225,10 +227,16 @@ export async function handleBrowserMethod(page: Page, method: string, args: any)
           return typeof value === 'string' ? value : String(value);
         });
 
-        const textSlice = truncateText(normalizeWhitespace(pageText), textMaxChars);
+        const text = normalizeWhitespace(pageText);
+        fullContent.text = text;
+        const textSlice = truncateText(text, textMaxChars);
         result.text = textSlice.text;
         result.textTruncated = textSlice.truncated;
         result.originalTextChars = textSlice.originalChars;
+      }
+
+      if (result.truncated === true || result.textTruncated === true) {
+        result.__full_content = fullContent;
       }
 
       return result;
@@ -401,6 +409,7 @@ export async function handleBrowserMethod(page: Page, method: string, args: any)
         snapshot: snapshotSlice.text,
         truncated: snapshotSlice.truncated,
         originalChars: snapshotSlice.originalChars,
+        ...(snapshotSlice.truncated ? { __full_content: { snapshot: combined } } : {}),
         displayedNodes: Array.isArray(data.lines) ? data.lines.length : 0,
         totalNodes: Number(data.totalNodes ?? 0) || 0,
       };

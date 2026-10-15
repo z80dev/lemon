@@ -3,8 +3,8 @@ import { FakeControlPlane } from "../../src/dev/fake-server.ts";
 import { acceptDeltaSeq, ControlPlaneClient } from "../../src/protocol/client.ts";
 import {
 	AuthenticationError,
-	describeError,
 	ControlPlaneError,
+	describeError,
 	HandshakeError,
 	MethodUnavailableError,
 	NotConnectedError,

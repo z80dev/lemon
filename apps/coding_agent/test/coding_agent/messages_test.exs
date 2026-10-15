@@ -4,18 +4,18 @@ defmodule CodingAgent.MessagesTest do
   alias CodingAgent.Messages
 
   alias CodingAgent.Messages.{
-    UserMessage,
     AssistantMessage,
-    ToolResultMessage,
     BashExecutionMessage,
-    CustomMessage,
     BranchSummaryMessage,
     CompactionSummaryMessage,
-    TextContent,
+    CustomMessage,
     ImageContent,
+    TextContent,
     ThinkingContent,
     ToolCall,
-    Usage
+    ToolResultMessage,
+    Usage,
+    UserMessage
   }
 
   describe "to_llm/1" do
@@ -730,7 +730,7 @@ defmodule CodingAgent.MessagesTest do
       assert Messages.get_tool_calls(%CompactionSummaryMessage{summary: "", timestamp: 0}) == []
     end
 
-    test "returns empty list for LemonAi.Types messages" do
+    test "returns empty list for LemonAi.Types messages without tool calls" do
       assert Messages.get_tool_calls(%LemonAi.Types.UserMessage{content: "test", timestamp: 0}) ==
                []
 
@@ -739,6 +739,32 @@ defmodule CodingAgent.MessagesTest do
                model: "test",
                timestamp: 0
              }) == []
+    end
+
+    test "extracts native tool calls without losing their arguments or order" do
+      read = %LemonAi.Types.ToolCall{
+        id: "read",
+        name: "read",
+        arguments: %{"path" => "lib/input.ex"}
+      }
+
+      write = %LemonAi.Types.ToolCall{
+        id: "write",
+        name: "write",
+        arguments: %{"path" => "lib/output.ex", "content" => "updated"}
+      }
+
+      message = %LemonAi.Types.AssistantMessage{
+        content: [
+          %LemonAi.Types.TextContent{text: "Working"},
+          read,
+          %LemonAi.Types.ThinkingContent{thinking: "Next step"},
+          write
+        ],
+        stop_reason: :tool_use
+      }
+
+      assert Messages.get_tool_calls(message) == [read, write]
     end
   end
 

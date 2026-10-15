@@ -49,6 +49,28 @@ external-content tools:
 - `browser_analyze`: capture a managed screenshot and pass it through
   `media_analyze_image` in one supervised BEAM-owned operation.
 
+## Full content after truncation
+
+When `webfetch`, `browser_snapshot` or `browser_get_content` truncates displayed
+content, a session-scoped artifact retains the complete pre-truncation text.
+The result's JSON/details include `artifact_uri` (`artifact://…`) and a one-line
+`artifactNotice`. Use `read` on that handle with line selectors or `offset`/`limit`;
+artifact reads remain untrusted. Untruncated results do not create artifacts.
+
+Webfetch artifacts contain the full extracted text from direct, Firecrawl or Exa
+extraction, not necessarily the original HTML. Cached and concurrent fetches
+register artifacts separately for each requesting session. Browser artifacts are
+JSON objects with complete `snapshot`, `html` and/or `text` fields, after normal
+HTML sanitization and whitespace normalization but before character truncation.
+Snapshot inspection options (`selector`, `maxNodes`, `interactiveOnly`) still
+define its scope.
+
+Artifact storage requires the tool host's session context. Storage failures, or
+browser backends that report truncation without supplying the complete source,
+return `artifact_error` instead of a misleading handle to partial output. The
+Node browser driver supplies complete sources internally and the tool removes
+those private payloads before returning visible results.
+
 ## Search and extraction providers
 
 Both web tools use `CodingAgent.Search.Provider` and the shared

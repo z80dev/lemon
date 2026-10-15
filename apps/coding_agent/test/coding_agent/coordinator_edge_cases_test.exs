@@ -12,6 +12,7 @@ defmodule CodingAgent.CoordinatorEdgeCasesTest do
   use ExUnit.Case, async: true
 
   alias CodingAgent.Coordinator
+  alias CodingAgent.TestSupport.ControlledCoordinatorSession, as: ControlledSession
 
   alias LemonAi.Types.{
     Model,
@@ -56,6 +57,25 @@ defmodule CodingAgent.CoordinatorEdgeCasesTest do
   defp start_coordinator(opts) do
     opts = default_coordinator_opts(opts)
     {:ok, coordinator} = Coordinator.start_link(opts)
+    coordinator
+  end
+
+  defp start_controlled_coordinator(cwd, opts \\ []) do
+    coordinator =
+      start_supervised!({Coordinator, default_coordinator_opts(Keyword.put(opts, :cwd, cwd))})
+
+    supervisor = start_supervised!({DynamicSupervisor, strategy: :one_for_one})
+    test_pid = self()
+
+    starter = fn _opts ->
+      DynamicSupervisor.start_child(supervisor, %{
+        id: make_ref(),
+        start: {ControlledSession, :start_link, [[test_pid: test_pid]]},
+        restart: :temporary
+      })
+    end
+
+    :sys.replace_state(coordinator, &%{&1 | session_starter: starter})
     coordinator
   end
 
@@ -657,37 +677,63 @@ defmodule CodingAgent.CoordinatorEdgeCasesTest do
 
     @tag :tmp_dir
     test "list_active returns empty after work completes", %{tmp_dir: tmp_dir} do
-      coordinator = start_coordinator(cwd: tmp_dir)
+      coordinator = start_controlled_coordinator(tmp_dir)
+      task = Task.async(fn -> Coordinator.run_subagents(coordinator, [%{prompt: "Task"}]) end)
 
-      specs = [%{prompt: "Task"}]
-      _results = Coordinator.run_subagents(coordinator, specs, timeout: 50)
+      assert_receive {:session_prompted, session, "Task"}, 1_000
+      session_ref = Process.monitor(session)
+      assert [_id] = Coordinator.list_active(coordinator)
 
-      # The batch can reply on its deadline before session cleanup removes the subagent.
-      assert_eventually(fn -> Coordinator.list_active(coordinator) == [] end, 5_000)
+      send(session, {:complete, "completed task"})
+
+      assert [%{status: :completed, result: "completed task", error: nil}] = Task.await(task)
+      assert_receive {:DOWN, ^session_ref, :process, ^session, :shutdown}, 1_000
+      assert Coordinator.list_active(coordinator) == []
     end
 
     @tag :tmp_dir
     test "list_active returns empty after timeout", %{tmp_dir: tmp_dir} do
-      coordinator = start_coordinator(cwd: tmp_dir)
-
+      coordinator = start_controlled_coordinator(tmp_dir)
       specs = [%{prompt: "Task 1"}, %{prompt: "Task 2"}]
-      _results = Coordinator.run_subagents(coordinator, specs, timeout: 10)
+      task = Task.async(fn -> Coordinator.run_subagents(coordinator, specs) end)
 
-      # After timeout, should be cleaned up
-      assert_eventually(fn -> Coordinator.list_active(coordinator) == [] end, 5_000)
+      sessions =
+        for %{prompt: prompt} <- specs do
+          assert_receive {:session_prompted, session, ^prompt}, 1_000
+          {session, Process.monitor(session)}
+        end
+
+      assert length(Coordinator.list_active(coordinator)) == 2
+      %{batches: batches} = :sys.get_state(coordinator)
+      [batch_ref] = Map.keys(batches)
+      send(coordinator, {:batch_timeout, batch_ref})
+
+      assert [%{status: :timeout, error: :timeout}, %{status: :timeout, error: :timeout}] =
+               Task.await(task)
+
+      for {session, ref} <- sessions do
+        assert_receive {:DOWN, ^ref, :process, ^session, :shutdown}, 1_000
+      end
+
+      assert Coordinator.list_active(coordinator) == []
     end
 
     @tag :tmp_dir
     test "list_active returns empty after abort_all", %{tmp_dir: tmp_dir} do
-      coordinator = start_coordinator(cwd: tmp_dir, default_timeout: 30_000)
+      coordinator = start_controlled_coordinator(tmp_dir, default_timeout: 30_000)
 
-      spawn(fn ->
-        Coordinator.run_subagents(coordinator, [%{prompt: "Task"}], timeout: 10_000)
-      end)
+      task =
+        Task.async(fn ->
+          Coordinator.run_subagents(coordinator, [%{prompt: "Task"}], timeout: 10_000)
+        end)
 
-      assert_eventually(fn -> Coordinator.list_active(coordinator) != [] end, 5_000)
-      :ok = Coordinator.abort_all(coordinator)
-      assert_eventually(fn -> Coordinator.list_active(coordinator) == [] end, 5_000)
+      assert_receive {:session_prompted, session, "Task"}, 1_000
+      session_ref = Process.monitor(session)
+      assert [_id] = Coordinator.list_active(coordinator)
+      assert :ok = Coordinator.abort_all(coordinator)
+      assert [%{status: :aborted, error: :aborted}] = Task.await(task)
+      assert_receive {:DOWN, ^session_ref, :process, ^session, :shutdown}, 1_000
+      assert Coordinator.list_active(coordinator) == []
     end
   end
 

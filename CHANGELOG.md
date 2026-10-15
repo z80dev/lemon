@@ -8,6 +8,34 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
+### Added
+
+- Add `ls tree: true`: depth-limited newest-first trees with file sizes,
+  12 children per directory and explicit omitted-sibling counts.
+
+- Emit content-free tool-call start/stop/exception telemetry with native-unit
+  duration, tool name, error outcome and timeout flag, including failed workers.
+
+- Add `report_issue` for short tool-misbehavior notes in a private, bounded
+  session-local JSONL log, with timestamp and optional tool name. It requires
+  no approval by default and makes no network requests.
+
+### Fixed
+
+- Make coordinator active-session lifecycle tests deterministic with per-test
+  admission and explicit completion, timeout, cancellation and process-down fences
+  instead of racing short deadlines against shared session startup.
+
+- Preserve file-operation details from native assistant tool calls during
+  compaction, including patch additions, updates, deletions, and rename paths,
+  so subsequent summaries retain the affected files.
+
+---
+
+## [2026.10.12]
+
+### Added
+
 - Read `path:conflicts` to index Git conflict regions, then resolve a session-scoped
   `conflict://N` with `write` and ours/theirs/base/both expansion tokens. Stale ids
   are rejected after file changes.
@@ -56,86 +84,6 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   SMS verification, computer use and configurable Honcho requests instead of
   cutting them off at the generic five-minute tool deadline.
 
-### Lemon Bot
-
-- Instance status exposes release/build metadata, provider credential health and channel errors. Owner-confirmed restart/stop can use a remote controller, with lifecycle completion observed from link events; clients use explicit available action lists.
-- Apple clients show Lemon build, provider credentials and channel errors, with action-aware local launcher and remote lifecycle controls.
-- Lemon Bot web shows build identity, provider credentials and timestamped channel health, with available-action lifecycle controls and clear local-launcher versus remote-controller guidance.
-
-### Fixed
-
-- Release preflight fixtures retain built-in provider registrations, distinguish
-  pending approvals from retained resolutions, and exercise typed provider errors
-  and asynchronous subagent cleanup without cross-test state leaks.
-- The Learning page reads its bounded, profile-scoped timeline through the
-  authenticated control plane instead of adding a forbidden Web-to-Skills dependency.
-- The TUI stops retrying rejected operator credentials, shows token recovery
-  steps, and keeps offline prompts in the editor instead of silently queueing.
-  Connection failures and `/reconnect` report actionable outcomes; `/status`
-  includes profile/model, theme changes say whether they were saved, and
-  command suggestions no longer mistake `/faq` for the `/q` queue alias.
-- Make source and packaged launcher lifecycle results truthful: foreground health
-  is visible to status, unreachable runtimes fail status, foreign listeners fail
-  stop/restart, and failed daemon health waits clean up their processes. Validate
-  lifecycle ports, explain missing Mix/curl, show selected home/ports/logs, and
-  render source help without compiling or creating credentials. Status RPC adds
-  the runtime profile and configured default model ID without exposing home paths.
-- Configuration loads now reject invalid resolved values, report expected types
-  without echoing supplied values, and name input files. CLI and Mix summaries
-  agree on unset/false values and identify environment overrides.
-- Remove obsolete runtime-theme and vendor-CLI environment documentation, refresh
-  the generated environment registry, make example credentials/bindings opt-in,
-  and resolve XMTP wallet environment references before connecting.
-- Normalize non-OpenAI control-plane HTTP errors to code/message envelopes,
-  name authentication headers and credential sources, omit non-JSON error
-  details safely, and distinguish unavailable status subsystems from empty results.
-- Web chat model-list and compaction failures now show plain-language next steps
-  pointing to Diagnostics instead of exposing service error terms.
-
-- Channel status details no longer mistake a running adapter process for an
-  observed connection; Discord READY/resume and startup failures update the
-  redacted health projection.
-- All skill curator entry points now protect cron-referenced skills, including
-  disabled jobs, while preserving explicit exemptions. Automatic archival fails
-  closed with a reported reason when the automation provider is unavailable.
-- Recall browse/scroll now require the same verified private ownership as history
-  search; legacy or partially verified contexts fail closed.
-- Skill usage recording no longer depends on the introspection handler. Pinned
-  skills reject content edits, never-used skills retain a stale-age grace floor,
-  and background curation preserves skills referenced by disabled or active cron jobs.
-
-### Changed
-
-- **Honcho behavior change:** unaliased non-owner gateway senders now get their
-  own platform-qualified peer even without a runtime prefix. Explicitly paired
-  Telegram owners retain `user_peer`; use `pin_user_peer = true` or aliases to
-  restore pooled memory. CLI/TUI/web identity is unchanged.
-- Add opt-in bounded background learning reviews, with private-memory ownership,
-  draft-only skill creation, restricted tools, per-session rate/concurrency
-  limits and no conversation/channel delivery; reminders remain the default.
-- Honcho channel turns support pinned users, many-to-one sender aliases and
-  platform-qualified peer prefixes. Per-peer context follows each sender,
-  bot-authored turns are not uploaded, and Hermes migration imports these settings.
-- Bring Lemon Web's omp controls to parity with approval decisions and overrides,
-  isolated starts, interrupted continuation, redirect, and worktree/discovery details.
-- Expand `lemon omp` with approval modes, isolated and parallel starts, explicit
-  interrupted-session continuation, redirect, model browsing/configuration,
-  subagent transcripts, and richer approval/worktree/discovery output.
-- Extend the omp operator API with bounded parallel starts, model discovery,
-  child transcripts, live configuration, approval overrides, isolated starts,
-  interrupted-session continuation and redirect delivery; preserve actionable
-  partial-application and outcome-unknown errors.
-- Preserve portable Agent Skills string-valued metadata (including `metadata.lemon`)
-  and support 1024-character Unicode descriptions. Add conformance/discovery
-  coverage for spec fields and bundled resources; document legacy leniency and
-  clarify that synthesized skills remain drafts until promotion.
-- Remember supports exact-entry or unique-substring edits consistently across scoped
-  and legacy memory, with actionable ambiguity, safety, and capacity feedback.
-- Agent prompt memory blocks show deterministic character/fact/byte capacity
-  headers and recommend consolidation above 80%; subagents remain isolated.
-
-### Added
-
 - Admin-only control-plane `system.restart` and `system.stop` acknowledge before
   acting, serialize runtime lifecycle requests, and preserve launcher ports and
   source distribution identity across a detached restart.
@@ -167,39 +115,6 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   after a completed run uses at least 15 tools without `skill_manage`.
   Configurable through global/project `skills.json`, these bounded volatile
   reminders exclude subagents and make no extra model calls.
-
----
-
-## [2026.10.10]
-
-### Changed
-
-- Internal callers use canonical agent trust/abort helpers and `LemonCore.Id`;
-  obsolete wrappers, unused renderer/coalescer behaviours and unused translation
-  backends are removed without changing active tool or simulation behavior.
-
-### Lemon Bot
-
-- Apple Mac message actions appear only on hover or keyboard focus, with matching VoiceOver actions and context menus instead of permanent transcript toolbars.
-- Apple conversation and composer screens explain uploads, unconfirmed sends and offline drafts without resending, simplify delivery/gate/privacy copy, and use grouped Mac sheet layouts with clear actions.
-- Web clients use plain-language recovery and account/pairing flows, retry failed history loads, hide technical references in Details, confirm deletions in-app, and improve touch actions, status labels and contrast.
-- Web machine enrollment uses consistent machine labels and clearer trust and connection guidance; Bot creation recovery headings explain checking existing Bots and groups before creating another.
-- Apple clients simplify Bot lifecycle, account deletion, apps, notifications and voice copy, use workspace/machine terminology, and apply shared semantic color and typography tokens.
-- Apple clients recover from failed Bot loads and terminal closes, explain unavailable actions, preserve Preferences across pane switches, and confirm sign-out.
-- Web Settings adds Lemon instance details, live service/link/runtime measurements, owner-confirmed lifecycle controls and operation output, with direct recovery and About links.
-- Apple clients use plain-language errors with copyable details, clearer iPhone pairing labels, and status checks for unconfirmed actions without automatically resending them.
-- Web clients explain service, network, session and Lemon-link failures with live retry timing, real connection restart and owner recovery actions instead of silent sign-out or stuck disconnected screens.
-- Apple Settings adds a shared Lemon instance pane with live backend/controller/Lemon measurements, owner-confirmed start/stop/restart, operation polling and output details, plus direct recovery/About links.
-- Apple clients explain backend, network, sign-in and Lemon-link failures with live retry timing, service discovery and shared recovery controls; sandboxed Macs offer copyable local-start commands rather than launching a daemon.
-- Name missing required Lemon Bot startup settings without a stack dump, keep
-  operator configuration details in server diagnostics rather than owner errors,
-  and clarify backend/SDK setup and contributor documentation.
-- Add truthful attached-instance status, controller reconnect (including rejected
-  credentials), and opt-in owner-only local runtime start/stop/restart with
-  bounded operation receipts. Publish TypeScript SDK helpers, Swift Codable
-  mirrors and a shared backend-produced fixture.
-
-### Added
 
 - Lemon-run omp sessions now keep private history under Lemon's per-user
   `omp/sessions` directory instead of mixing with interactive omp sessions.
@@ -260,7 +175,95 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 - Opt-in real omp lifecycle smoke using a free model, covering tool writes,
   follow-ups, cancellation, process cleanup, discovery and resume.
 
+### Changed
+
+- **Honcho behavior change:** unaliased non-owner gateway senders now get their
+  own platform-qualified peer even without a runtime prefix. Explicitly paired
+  Telegram owners retain `user_peer`; use `pin_user_peer = true` or aliases to
+  restore pooled memory. CLI/TUI/web identity is unchanged.
+- Add opt-in bounded background learning reviews, with private-memory ownership,
+  draft-only skill creation, restricted tools, per-session rate/concurrency
+  limits and no conversation/channel delivery; reminders remain the default.
+- Honcho channel turns support pinned users, many-to-one sender aliases and
+  platform-qualified peer prefixes. Per-peer context follows each sender,
+  bot-authored turns are not uploaded, and Hermes migration imports these settings.
+- Bring Lemon Web's omp controls to parity with approval decisions and overrides,
+  isolated starts, interrupted continuation, redirect, and worktree/discovery details.
+- Expand `lemon omp` with approval modes, isolated and parallel starts, explicit
+  interrupted-session continuation, redirect, model browsing/configuration,
+  subagent transcripts, and richer approval/worktree/discovery output.
+- Extend the omp operator API with bounded parallel starts, model discovery,
+  child transcripts, live configuration, approval overrides, isolated starts,
+  interrupted-session continuation and redirect delivery; preserve actionable
+  partial-application and outcome-unknown errors.
+- Preserve portable Agent Skills string-valued metadata (including `metadata.lemon`)
+  and support 1024-character Unicode descriptions. Add conformance/discovery
+  coverage for spec fields and bundled resources; document legacy leniency and
+  clarify that synthesized skills remain drafts until promotion.
+- Remember supports exact-entry or unique-substring edits consistently across scoped
+  and legacy memory, with actionable ambiguity, safety, and capacity feedback.
+- Agent prompt memory blocks show deterministic character/fact/byte capacity
+  headers and recommend consolidation above 80%; subagents remain isolated.
+
+- Internal callers use canonical agent trust/abort helpers and `LemonCore.Id`;
+  obsolete wrappers, unused renderer/coalescer behaviours and unused translation
+  backends are removed without changing active tool or simulation behavior.
+
+### Removed
+
+- The broken `bin/lemon-dev` launcher, which passed flags the TUI no longer
+  accepts. Use `./bin/lemon` (source runtime plus TUI) or `./bin/lemon-tui`.
+
 ### Fixed
+
+- Serialize environment-mutating diagnostic and configuration fixtures so a
+  temporary extension-disable flag cannot leak into unrelated tool inventories.
+- Isolate status metadata tests from CI commit variables while retaining packaged
+  GitHub build provenance coverage, and wait for coordinator registry cleanup in
+  controlled restart fixtures.
+- Repair TUI protocol-test lint, document the onboarding terminal error's
+  non-returning contract, and explicitly opt automated source-install onboarding
+  into non-interactive mode.
+
+- Release preflight fixtures retain built-in provider registrations, distinguish
+  pending approvals from retained resolutions, and exercise typed provider errors
+  and asynchronous subagent cleanup without cross-test state leaks.
+- The Learning page reads its bounded, profile-scoped timeline through the
+  authenticated control plane instead of adding a forbidden Web-to-Skills dependency.
+- The TUI stops retrying rejected operator credentials, shows token recovery
+  steps, and keeps offline prompts in the editor instead of silently queueing.
+  Connection failures and `/reconnect` report actionable outcomes; `/status`
+  includes profile/model, theme changes say whether they were saved, and
+  command suggestions no longer mistake `/faq` for the `/q` queue alias.
+- Make source and packaged launcher lifecycle results truthful: foreground health
+  is visible to status, unreachable runtimes fail status, foreign listeners fail
+  stop/restart, and failed daemon health waits clean up their processes. Validate
+  lifecycle ports, explain missing Mix/curl, show selected home/ports/logs, and
+  render source help without compiling or creating credentials. Status RPC adds
+  the runtime profile and configured default model ID without exposing home paths.
+- Configuration loads now reject invalid resolved values, report expected types
+  without echoing supplied values, and name input files. CLI and Mix summaries
+  agree on unset/false values and identify environment overrides.
+- Remove obsolete runtime-theme and vendor-CLI environment documentation, refresh
+  the generated environment registry, make example credentials/bindings opt-in,
+  and resolve XMTP wallet environment references before connecting.
+- Normalize non-OpenAI control-plane HTTP errors to code/message envelopes,
+  name authentication headers and credential sources, omit non-JSON error
+  details safely, and distinguish unavailable status subsystems from empty results.
+- Web chat model-list and compaction failures now show plain-language next steps
+  pointing to Diagnostics instead of exposing service error terms.
+
+- Channel status details no longer mistake a running adapter process for an
+  observed connection; Discord READY/resume and startup failures update the
+  redacted health projection.
+- All skill curator entry points now protect cron-referenced skills, including
+  disabled jobs, while preserving explicit exemptions. Automatic archival fails
+  closed with a reported reason when the automation provider is unavailable.
+- Recall browse/scroll now require the same verified private ownership as history
+  search; legacy or partially verified contexts fail closed.
+- Skill usage recording no longer depends on the introspection handler. Pinned
+  skills reject content edits, never-used skills retain a stale-age grace floor,
+  and background curation preserves skills referenced by disabled or active cron jobs.
 
 - Chat, task, provider and goal/cron failures use plain-language recovery steps
   instead of raw Elixir terms; provider authentication names the credential to
@@ -327,10 +330,30 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   clearing them, so Codex cannot fall back to ambient tokens without a valid
   `auth_source`.
 
-### Removed
+### Lemon Bot
 
-- The broken `bin/lemon-dev` launcher, which passed flags the TUI no longer
-  accepts. Use `./bin/lemon` (source runtime plus TUI) or `./bin/lemon-tui`.
+- Instance status exposes release/build metadata, provider credential health and channel errors. Owner-confirmed restart/stop can use a remote controller, with lifecycle completion observed from link events; clients use explicit available action lists.
+- Apple clients show Lemon build, provider credentials and channel errors, with action-aware local launcher and remote lifecycle controls.
+- Lemon Bot web shows build identity, provider credentials and timestamped channel health, with available-action lifecycle controls and clear local-launcher versus remote-controller guidance.
+
+- Apple Mac message actions appear only on hover or keyboard focus, with matching VoiceOver actions and context menus instead of permanent transcript toolbars.
+- Apple conversation and composer screens explain uploads, unconfirmed sends and offline drafts without resending, simplify delivery/gate/privacy copy, and use grouped Mac sheet layouts with clear actions.
+- Web clients use plain-language recovery and account/pairing flows, retry failed history loads, hide technical references in Details, confirm deletions in-app, and improve touch actions, status labels and contrast.
+- Web machine enrollment uses consistent machine labels and clearer trust and connection guidance; Bot creation recovery headings explain checking existing Bots and groups before creating another.
+- Apple clients simplify Bot lifecycle, account deletion, apps, notifications and voice copy, use workspace/machine terminology, and apply shared semantic color and typography tokens.
+- Apple clients recover from failed Bot loads and terminal closes, explain unavailable actions, preserve Preferences across pane switches, and confirm sign-out.
+- Web Settings adds Lemon instance details, live service/link/runtime measurements, owner-confirmed lifecycle controls and operation output, with direct recovery and About links.
+- Apple clients use plain-language errors with copyable details, clearer iPhone pairing labels, and status checks for unconfirmed actions without automatically resending them.
+- Web clients explain service, network, session and Lemon-link failures with live retry timing, real connection restart and owner recovery actions instead of silent sign-out or stuck disconnected screens.
+- Apple Settings adds a shared Lemon instance pane with live backend/controller/Lemon measurements, owner-confirmed start/stop/restart, operation polling and output details, plus direct recovery/About links.
+- Apple clients explain backend, network, sign-in and Lemon-link failures with live retry timing, service discovery and shared recovery controls; sandboxed Macs offer copyable local-start commands rather than launching a daemon.
+- Name missing required Lemon Bot startup settings without a stack dump, keep
+  operator configuration details in server diagnostics rather than owner errors,
+  and clarify backend/SDK setup and contributor documentation.
+- Add truthful attached-instance status, controller reconnect (including rejected
+  credentials), and opt-in owner-only local runtime start/stop/restart with
+  bounded operation receipts. Publish TypeScript SDK helpers, Swift Codable
+  mirrors and a shared backend-produced fixture.
 
 ---
 

@@ -4,6 +4,18 @@
 
 ### Added
 
+- Truncated webfetch and browser snapshot/page-content results retain complete
+  sources as session-scoped artifacts and return readable `artifact://` handles.
+  Cached fetches register handles in the requesting session, never another caller.
+
+- `ast_grep` refuses scopes above `max_files` (default 1000), retains successful
+  files alongside bounded per-file parse/CLI errors, and exposes session artifact
+  handles for complete spilled match results.
+
+- `read file.json?q=filter` supports native jq-subset field/index traversal,
+  iteration, pipes, keys, length and scalar select comparisons, with ordinary
+  read-budget pagination and literal-filename precedence.
+
 - `write archive:member` adds or replaces ZIP/TAR/tar.gz/tgz members atomically,
   preserving unrelated member data and enforcing physical archive mutation guards.
 
