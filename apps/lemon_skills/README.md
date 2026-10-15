@@ -23,6 +23,11 @@ LemonSkills provides a centralized system for extending agent capabilities throu
 not a Hex package; it ships as part of the reference runtime. It depends on
 `lemon_core`, `lemon_agent`, `lemon_ai`, `lemon_memory` and `lemon_media`.
 
+`recall` also browses recent owned sessions when called without a query. Use a
+returned `session` with optional `around` document/run ID and `window` (5 by
+default, maximum 20) to read chronological run summaries. Content remains
+untrusted and scoped to the current main-session owner, agent, and profile.
+
 Usage counters are recorded at the skill tool telemetry entry points, independently
 of introspection subscribers. Discovery-only prompt metadata is not a load.
 Pinned bundles reject content edits as well as archive/delete. The curator accepts

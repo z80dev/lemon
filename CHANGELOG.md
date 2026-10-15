@@ -42,6 +42,8 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 - TUI omp delegates support redirect, interrupted-session continuation, approval
   mode and isolated starts; the typed control-plane client exposes batch starts,
   model discovery, configuration and subagent transcripts.
+- `recall` can browse owned recent sessions and scroll chronological, bounded
+  run summaries around a document/run ID without crossing owner/profile boundaries.
 - The omp panel resolves pending approvals through the shared approval controller,
   selects free-marked omp models, and drills into subagent transcript tails.
 

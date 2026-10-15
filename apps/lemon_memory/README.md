@@ -186,6 +186,13 @@ the server and bounded result count. Recall uses that same owning API, full
 preference metadata before bounded rendering, and canonical shared bootstrap
 facts rather than unproven raw files. No provider/network/model fallback exists.
 
+`SessionSearch.session(context, session_key, opts)` reads chronological owned
+run summaries around `:around` (document/run ID), or the latest `:window`
+(default 5, maximum 20). `recent_sessions(context, opts)` returns first-prompt
+representatives and run counts. Both apply indexed ownership/profile filters
+before window selection, refuse subagents, and respect the session-search flag.
+Scroll prompt/answer summaries are capped at 1024/2048 bytes respectively.
+
 Authorized profile copies first inspect `Store.document_ownership/1` on the
 unchanged source snapshot and canonicalize portable ownership from that result,
 never from raw flags alone. `Project.transfer_document_id(destination, metadata)`
