@@ -351,8 +351,28 @@ defmodule LemonChannels.Adapters.Telegram.Transport.UpdateProcessor do
 
     message = Map.put(inbound.message, :text, text_after_queue)
 
-    %{inbound | message: message, meta: meta}
+    sender =
+      case Map.get(inbound, :sender) do
+        sender when is_map(sender) -> Map.put(sender, :owner?, owner_sender?(sender, state))
+        _ -> nil
+      end
+
+    inbound |> Map.put(:message, message) |> Map.put(:meta, meta) |> Map.put(:sender, sender)
   end
+
+  # Positive allowlisted private-chat IDs identify specific Telegram humans.
+  # A negative group-chat ID authorizes that chat, never every participant.
+  defp owner_sender?(%{id: id} = sender, state) when is_binary(id) do
+    case Integer.parse(id) do
+      {sender_id, ""} when sender_id > 0 ->
+        Map.get(sender, :bot) != true and sender_id in (Map.get(state, :allowed_chat_ids) || [])
+
+      _ ->
+        false
+    end
+  end
+
+  defp owner_sender?(_, _), do: false
 
   defp parse_queue_override(text, allow_override) do
     if allow_override do

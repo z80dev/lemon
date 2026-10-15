@@ -91,8 +91,7 @@ defmodule LemonChannels.Telegram.TruncateTest do
 
       for chunk <- chunks do
         assert String.length(chunk) <= @max_length
-        # Neither chunk should start or end with a partial word
-        # (except possibly the second chunk which starts after a space)
+        assert Enum.all?(String.split(chunk), &(&1 == "abc"))
       end
     end
   end

@@ -31,8 +31,7 @@ defmodule LemonCore.Config.AgentTest do
         "LEMON_SHELL_COMMAND_PREFIX",
         "LEMON_EXTENSION_PATHS",
         "LEMON_EXTENSIONS_ENABLED",
-        "LEMON_EXTENSIONS_AUTO_LOAD_DEFAULT_PATHS",
-        "LEMON_THEME"
+        "LEMON_EXTENSIONS_AUTO_LOAD_DEFAULT_PATHS"
       ]
       |> Enum.each(&System.delete_env/1)
 
@@ -53,7 +52,6 @@ defmodule LemonCore.Config.AgentTest do
       assert config.default_provider == "anthropic"
       assert config.default_model == "claude-sonnet-4-20250514"
       assert config.default_thinking_level == "medium"
-      assert config.theme == "lemon"
       assert config.extension_paths == []
       assert config.extensions.auto_load_default_paths == false
     end
@@ -64,9 +62,6 @@ defmodule LemonCore.Config.AgentTest do
           "provider" => "openai",
           "model" => "openai:gpt-5",
           "thinking_level" => "high"
-        },
-        "runtime" => %{
-          "theme" => "ocean"
         }
       }
 
@@ -75,22 +70,19 @@ defmodule LemonCore.Config.AgentTest do
       assert config.default_provider == "openai"
       assert config.default_model == "openai:gpt-5"
       assert config.default_thinking_level == "high"
-      assert config.theme == "ocean"
     end
 
     test "environment variables override settings" do
       System.put_env("LEMON_DEFAULT_PROVIDER", "ollama")
       System.put_env("LEMON_DEFAULT_MODEL", "llama3")
       System.put_env("LEMON_DEFAULT_THINKING_LEVEL", "low")
-      System.put_env("LEMON_THEME", "dark")
 
       settings = %{
         "defaults" => %{
           "provider" => "openai",
           "model" => "gpt-4o",
           "thinking_level" => "high"
-        },
-        "runtime" => %{"theme" => "ocean"}
+        }
       }
 
       config = Agent.resolve(settings)
@@ -98,7 +90,6 @@ defmodule LemonCore.Config.AgentTest do
       assert config.default_provider == "ollama"
       assert config.default_model == "llama3"
       assert config.default_thinking_level == "low"
-      assert config.theme == "dark"
     end
   end
 
@@ -625,7 +616,6 @@ defmodule LemonCore.Config.AgentTest do
       assert is_map(config.provider_routing)
       assert is_map(config.shell)
       assert is_list(config.extension_paths)
-      assert is_binary(config.theme)
     end
   end
 end

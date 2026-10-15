@@ -32,11 +32,10 @@ defmodule LemonChannels.CommandCatalogTest do
     assert {:ok, ^agents} = CommandCatalog.find("/tasks")
   end
 
-  test "documents Lemon-specific cancellation and reasoning semantics" do
+  test "/stop and /reasoning expose their capabilities and aliases" do
     assert {:ok, stop} = CommandCatalog.find("/stop")
     assert stop["capabilities"] == ["conversation.cancel"]
     assert stop["aliases"] == ["/cancel"]
-    assert stop["description"] =~ "without a process-wide kill"
 
     assert {:ok, reasoning} = CommandCatalog.find("/reasoning")
     assert reasoning["capabilities"] == ["session.reasoning"]

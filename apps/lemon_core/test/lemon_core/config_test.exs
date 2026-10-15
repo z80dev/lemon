@@ -54,6 +54,21 @@ defmodule LemonCore.ConfigTest do
     :ok
   end
 
+  test "unknown override keys remain strings instead of allocating atoms" do
+    key = "unregistered_config_#{System.unique_integer([:positive])}"
+    assert_raise ArgumentError, fn -> String.to_existing_atom(key) end
+
+    config =
+      Config.load(nil,
+        cache: false,
+        overrides: %{"gateway" => %{key => 42, "auto_resume" => true}}
+      )
+
+    assert config.gateway[key] == 42
+    assert config.gateway.auto_resume == true
+    assert_raise ArgumentError, fn -> String.to_existing_atom(key) end
+  end
+
   test "merges global and project config with overrides", %{home: home} do
     global_dir = Path.join(home, ".lemon")
     File.mkdir_p!(global_dir)
@@ -141,12 +156,12 @@ defmodule LemonCore.ConfigTest do
     debug = false
     """)
 
-    System.put_env("LEMON_TUI_THEME", "ocean")
+    System.put_env("LEMON_TUI_THEME", "dark")
     System.put_env("LEMON_TUI_DEBUG", "true")
 
     config = Config.load()
 
-    assert config.tui.theme == "ocean"
+    assert config.tui.theme == "dark"
     assert config.tui.debug == true
   after
     System.delete_env("LEMON_TUI_THEME")
@@ -257,9 +272,6 @@ defmodule LemonCore.ConfigTest do
     model = "openai:gpt-5"
     thinking_level = "high"
 
-    [runtime]
-    theme = "default"
-
     [runtime.tools.web.search]
     provider = "perplexity"
 
@@ -273,7 +285,6 @@ defmodule LemonCore.ConfigTest do
     assert config.agent.default_provider == "openai"
     assert config.agent.default_model == "openai:gpt-5"
     assert config.agent.default_thinking_level == :high
-    assert config.agent.theme == "default"
     assert config.agent.tools.web.search.provider == "perplexity"
 
     assert config.agents["default"].name == "Default Profile"
@@ -307,9 +318,6 @@ defmodule LemonCore.ConfigTest do
     [defaults]
     model = "anthropic:some-model"
 
-    [runtime]
-    theme = "runtime-theme"
-
     [profiles.default]
     name = "Runtime Profile"
     model = "openai:new-profile-model"
@@ -318,7 +326,6 @@ defmodule LemonCore.ConfigTest do
     config = Config.load()
 
     assert config.agent.default_model == "anthropic:some-model"
-    assert config.agent.theme == "runtime-theme"
     assert config.agents["default"].name == "Runtime Profile"
     assert config.agents["default"].model == "openai:new-profile-model"
   end

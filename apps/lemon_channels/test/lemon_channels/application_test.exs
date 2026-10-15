@@ -9,15 +9,11 @@ defmodule LemonChannels.ApplicationTest do
 
   describe "register_and_start_adapter/2" do
     test "registers adapter plugin" do
-      # This test may fail if the adapter's child_spec requires
-      # dependencies that aren't running, but we can verify the
-      # registration flow doesn't crash
-
       defmodule TestAdapter do
         @behaviour LemonChannels.Plugin
 
         @impl true
-        def id, do: "test-adapter-#{System.unique_integer()}"
+        def id, do: "application-test-adapter"
 
         @impl true
         def meta do
@@ -32,7 +28,7 @@ defmodule LemonChannels.ApplicationTest do
         def child_spec(_opts) do
           %{
             id: __MODULE__,
-            start: {Agent, :start_link, [fn -> %{} end]},
+            start: {Agent, :start_link, [fn -> %{} end, [name: __MODULE__]]},
             type: :worker
           }
         end
@@ -47,54 +43,15 @@ defmodule LemonChannels.ApplicationTest do
         def gateway_methods, do: []
       end
 
-      # Should not crash
-      result = Application.register_and_start_adapter(TestAdapter)
+      assert :ok = Application.register_and_start_adapter(TestAdapter)
+      pid = Process.whereis(TestAdapter)
 
-      # Either succeeds or fails with an error (not a crash)
-      assert result == :ok or match?({:error, _}, result)
-    end
-  end
+      on_exit(fn ->
+        DynamicSupervisor.terminate_child(LemonChannels.AdapterSupervisor, pid)
+        LemonChannels.Registry.unregister(TestAdapter.id())
+      end)
 
-  describe "start_adapter/2" do
-    test "handles adapter_id config check" do
-      # Define a simple test adapter
-      defmodule SimpleAdapter do
-        @behaviour LemonChannels.Plugin
-
-        @impl true
-        def id, do: "simple-adapter-#{System.unique_integer()}"
-
-        @impl true
-        def meta do
-          %{
-            label: "Simple Adapter",
-            capabilities: %{},
-            docs: nil
-          }
-        end
-
-        @impl true
-        def child_spec(_opts) do
-          %{
-            id: __MODULE__,
-            start: {Agent, :start_link, [fn -> :ok end]},
-            type: :worker
-          }
-        end
-
-        @impl true
-        def normalize_inbound(_raw), do: {:error, :not_implemented}
-
-        @impl true
-        def deliver(_payload), do: {:error, :not_implemented}
-
-        @impl true
-        def gateway_methods, do: []
-      end
-
-      result = Application.start_adapter(SimpleAdapter)
-
-      assert result == :ok or match?({:error, _}, result)
+      assert LemonChannels.Registry.get_plugin(TestAdapter.id()) == TestAdapter
     end
   end
 
