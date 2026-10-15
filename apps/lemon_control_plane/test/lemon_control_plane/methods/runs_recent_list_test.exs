@@ -256,10 +256,18 @@ defmodule LemonControlPlane.Methods.RunsRecentListTest do
     crashed = event(ctx, :run_failed, %{reason: "worker_crashed"}, offset: 1)
 
     put_occurrences(ctx, crashed, [
-      %{at_ms: ctx.at_ms - 150, provider: "one", model: "first",
-        usage: %{input: 7, output: 3, cost: 0.125}},
-      %{at_ms: ctx.at_ms - 50, provider: "one", model: "first",
-        usage: %{input: 2, output: 3, cost: 0.125}}
+      %{
+        at_ms: ctx.at_ms - 150,
+        provider: "one",
+        model: "first",
+        usage: %{input: 7, output: 3, cost: 0.125}
+      },
+      %{
+        at_ms: ctx.at_ms - 50,
+        provider: "one",
+        model: "first",
+        usage: %{input: 2, output: 3, cost: 0.125}
+      }
     ])
 
     assert {:ok, %{"runs" => runs}} = recent(ctx)

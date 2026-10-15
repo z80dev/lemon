@@ -115,9 +115,10 @@ defmodule LemonControlPlane.Methods.RunsRecentList do
            LemonCore.Introspection.list(Keyword.put(opts, :event_type, :run_started)) do
       starts = Enum.reduce(started, %{}, &Map.put_new(&2, &1[:run_id], &1[:ts_ms]))
 
-      {:ok, Enum.map(runs, fn run ->
-        Map.update!(run, "startedAtMs", &(&1 || starts[run["runId"]]))
-      end)}
+      {:ok,
+       Enum.map(runs, fn run ->
+         Map.update!(run, "startedAtMs", &(&1 || starts[run["runId"]]))
+       end)}
     else
       false -> {:ok, runs}
       {:error, _} = error -> error
@@ -176,14 +177,15 @@ defmodule LemonControlPlane.Methods.RunsRecentList do
     known = Enum.filter(runs, &is_integer(&1["startedAtMs"]))
 
     with {:ok, grouped} <- fetch_usage(known) do
-      {:ok, Enum.map(runs, fn run ->
-        records =
-          if is_integer(run["startedAtMs"]),
-            do: Map.get(grouped, run["runId"], []),
-            else: []
+      {:ok,
+       Enum.map(runs, fn run ->
+         records =
+           if is_integer(run["startedAtMs"]),
+             do: Map.get(grouped, run["runId"], []),
+             else: []
 
-        Map.merge(run, usage_fields(records))
-      end)}
+         Map.merge(run, usage_fields(records))
+       end)}
     end
   end
 
