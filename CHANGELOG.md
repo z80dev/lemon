@@ -8,7 +8,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
-No unreleased changes yet.
+- Preserve portable Agent Skills string-valued metadata (including `metadata.lemon`)
+  and support 1024-character Unicode descriptions. Add conformance/discovery
+  coverage for spec fields and bundled resources; document legacy leniency and
+  clarify that synthesized skills remain drafts until promotion.
 
 ---
 
