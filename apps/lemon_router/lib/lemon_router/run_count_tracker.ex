@@ -65,8 +65,11 @@ defmodule LemonRouter.RunCountTracker do
   end
 
   @doc false
+  # A raising telemetry handler is detached permanently, so never pattern-match
+  # on metadata; a missing run ID still counts once under a unique key.
   def handle_stop(_event, measurements, metadata, _config) do
-    record_terminal(metadata.run_id, measurements[:ok] == false)
+    run_id = Map.get(metadata, :run_id) || make_ref()
+    record_terminal(run_id, Map.get(measurements, :ok) == false)
   end
 
   defp seed do
