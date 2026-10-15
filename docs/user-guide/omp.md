@@ -241,6 +241,27 @@ code and any uncertain invocation `id`. `OMP_PARTIALLY_APPLIED` includes `applie
 back. Outcome-unknown errors also carry `retrySafe: false`: reconcile rather than
 automatically retrying.
 
+## From Lemon Web
+
+Open `/omp` to start, inspect, resume and control delegate sessions. New sessions
+offer an approval-mode override and **Isolate** (a managed Git worktree).
+Leave approval mode at **omp default** to preserve omp's configured policy.
+Session details show the mode, approval counters and pending tool approvals:
+**Approve** approves that request once; **Deny** refuses it.
+
+Use **Steer** for guidance, **Follow-up** to queue work, or **Redirect** to abort
+the current turn and start the replacement message. Receipts report the actual
+delivery returned by omp; an idle session can receive the message as a prompt.
+An unconfirmed mutation is never retried automatically.
+
+Resume discovery marks Lemon/omp sources, interrupted sessions and isolated
+branches. For interrupted sessions, leave the message empty to offer **Continue
+interrupted work**; this starts a new continuation turn, not an OS-command replay.
+Resume can also override approval mode. Isolated-session details show the path,
+branch, base and cleanup state, with a `git merge <branch>` hint. Inspect and
+commit any worker changes before merging; Web does not merge automatically.
+Delegate output is escaped plain text, never executable HTML.
+
 ## From the TUI
 
 Agent `omp` tool cards show parallel starts and multi-worker waits as compact
