@@ -14,9 +14,16 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   configured vision model role or the active image-capable model and returning
   bounded, untrusted answer text instead of pixels.
 
+- Extension tool-call, tool-result and session-start hooks can return bounded,
+  ordered `additional_context` for the model, including blocked tool calls,
+  without changing result trust, error status or mutation receipts.
+
+- Keep finished native task children addressable: wake idle sessions or revive
+  parked sessions with prior context through `write agent://`, with configurable
+  idle TTL, explicit delivery receipts and coalesced concurrent revival.
+
 - Read SVG/SVGZ markup as text and render explicit `:img` views as bounded PNG
   previews with librsvg; decoded SVGZ sources enforce the rich-read size limit.
-
 - Expose anchored-edit seen-line enforcement through the validated
   `[runtime.tools.edit] enforce_seen_lines` config key (default false), carried
   through session settings into registered edit tools.

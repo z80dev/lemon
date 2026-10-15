@@ -4,7 +4,7 @@ defmodule CodingAgent.Tools.ReadImageQuestion do
   alias CodingAgent.Session
   alias CodingAgent.Session.ModelResolver
   alias CodingAgent.SettingsManager
-  alias CodingAgent.Tools.PathHelpers
+  alias CodingAgent.Tools.{PathHelpers, ReadImage, ReadJson, ReadSqlite, ReadSvg}
   alias LemonAgent.Types.AgentToolResult
   alias LemonAi.Types.{Context, ImageContent, Model, TextContent, UserMessage}
   import LemonAgent.Tools.AbortHelpers, only: [check_abort: 1]
@@ -26,18 +26,25 @@ defmodule CodingAgent.Tools.ReadImageQuestion do
         source = binary_part(path, 0, position)
         target = String.replace_suffix(source, ":img", "")
         resolved = PathHelpers.resolve_path(target, cwd, opts)
-        extension = String.downcase(Path.extname(target))
 
-        if File.regular?(resolved) and
-             extension not in ~w(.json .jsonl .ndjson .db .db3 .sqlite .sqlite3) do
+        if File.regular?(resolved) and is_nil(ReadJson.split_path(resolved <> "?q=")) and
+             is_nil(ReadSqlite.split_path(resolved <> "?q=")) do
           question = binary_part(path, position + size, byte_size(path) - position - size)
-          {:ok, source, question}
+          image_question(source, target, question)
         end
       end)
     end
   end
 
   def split_path(_, _cwd, _opts), do: :none
+
+  defp image_question(source, target, question) do
+    if ReadImage.supported?(source) or
+         (String.ends_with?(source, ":img") and ReadSvg.supported?(target)),
+       do: {:ok, source, question},
+       else:
+         {:error, "?q= requires an image path; use SVG/SVGZ :img?q= to ask about a rendered SVG"}
+  end
 
   def answer(%AgentToolResult{content: content} = result, question, signal, cwd, opts) do
     case Enum.find(content, &match?(%ImageContent{}, &1)) do

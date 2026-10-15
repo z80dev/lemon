@@ -335,7 +335,195 @@ defmodule CodingAgent.Extensions.ToolHooksTest do
     end
   end
 
+  describe "additional context" do
+    test "call and result handlers append context in order after replacement, preserving receipts" do
+      original = %AgentToolResult{
+        content: [%TextContent{text: "raw"}],
+        details: %{checkpoint_id: "real", path: "/work/file"},
+        trust: :untrusted
+      }
+
+      hooks = [
+        on_tool_call: [
+          fn _ -> {:additional_context, "call one"} end,
+          fn _ -> %{replace_args: %{"x" => 2}, additional_context: "call two"} end
+        ],
+        on_tool_result: [
+          fn _ -> {:additional_context, "result one"} end,
+          fn _ -> {:replace, %{content: [%TextContent{text: "display"}]}} end,
+          fn _ -> {:additional_context, "result two"} end
+        ]
+      ]
+
+      assert {:ok, result} = run(recording_tool(self(), {:ok, original}), hooks)
+      assert_received {:executed, %{"x" => 2}}
+
+      assert result.content == [
+               %TextContent{text: "display"},
+               %TextContent{text: "[hook context]\ncall one\ncall two\nresult one\nresult two"}
+             ]
+
+      assert result.details == original.details
+      assert result.trust == :untrusted
+      refute result.is_error
+    end
+
+    test "call-only context is appended without result hooks" do
+      result =
+        run(recording_tool(self()),
+          on_tool_call: [fn _ -> {:additional_context, "call context"} end]
+        )
+
+      assert text(result) == "ran[hook context]\ncall context"
+    end
+
+    test "context shares one bounded Unicode budget across both hook events" do
+      result =
+        run(recording_tool(self()),
+          on_tool_call: [fn _ -> {:additional_context, String.duplicate("é", 3_000)} end],
+          on_tool_result: [
+            fn _ -> {:additional_context, String.duplicate("界", 3_000)} end,
+            fn _ -> {:additional_context, "not included"} end
+          ]
+        )
+
+      assert [_, %TextContent{text: "[hook context]\n" <> context}] = result.content
+      assert String.valid?(context)
+      assert String.length(context) == 4_000
+      assert String.starts_with?(context, String.duplicate("é", 3_000) <> "\n界")
+      assert String.ends_with?(context, "…")
+      refute context =~ "not included"
+    end
+
+    test "invalid, empty and unsafe context is ignored or sanitized" do
+      result =
+        run(recording_tool(self()),
+          on_tool_call:
+            Enum.map([<<255>>, nil, %{}, " \n ", "  safe\0\e text  "], fn value ->
+              fn _ -> {:additional_context, value} end
+            end)
+        )
+
+      assert text(result) == "ran[hook context]\nsafe text"
+    end
+
+    test "blocked calls include preceding and blocking-handler context and still short-circuit" do
+      test_pid = self()
+
+      result =
+        run(recording_tool(test_pid),
+          on_tool_call: [
+            fn _ -> {:additional_context, "first"} end,
+            fn _ -> %{block: "denied", additional_context: "why"} end,
+            fn _ -> send(test_pid, :later) end
+          ],
+          on_tool_result: [fn _ -> send(test_pid, :result_hook) end]
+        )
+
+      assert result.is_error
+      assert result.details.reason == :hook_blocked
+      assert text(result) =~ "[hook context]\nfirst\nwhy"
+      refute_received {:executed, _}
+      refute_received :later
+      refute_received :result_hook
+    end
+
+    test "failing call handlers drop their context and fail closed, retaining earlier context" do
+      for fail <- [
+            fn context -> raise context end,
+            fn context -> throw({:additional_context, context}) end,
+            fn context -> exit({:additional_context, context}) end
+          ] do
+        result =
+          run(recording_tool(self()),
+            on_tool_call: [
+              fn _ -> {:additional_context, "kept"} end,
+              fn _ -> fail.("discarded") end
+            ]
+          )
+
+        assert result.is_error
+        assert text(result) =~ "[hook context]\nkept"
+        refute text(result) =~ "discarded"
+        refute_received {:executed, _}
+      end
+    end
+
+    test "failing result handlers drop their context and fail open" do
+      result =
+        run(recording_tool(self()),
+          on_tool_result: [
+            fn _ -> {:additional_context, "first"} end,
+            fn _ -> throw({:additional_context, "discarded"}) end,
+            fn _ -> exit({:additional_context, "discarded"}) end,
+            fn _ -> raise "discarded" end,
+            fn _ -> {:additional_context, "last"} end
+          ]
+        )
+
+      refute result.is_error
+      assert text(result) == "ran[hook context]\nfirst\nlast"
+    end
+
+    test "structured tool errors retain status, trust and receipts while gaining context" do
+      original = %AgentToolResult{
+        content: [%TextContent{text: "partial failure"}],
+        is_error: true,
+        trust: :untrusted,
+        details: %{partial: true, checkpoint_id: "receipt", written_paths: ["/work/file"]}
+      }
+
+      for outcome <- [original, {:ok, original}] do
+        result =
+          run(recording_tool(self(), outcome),
+            on_tool_call: [fn _ -> {:additional_context, "call"} end],
+            on_tool_result: [
+              fn _ -> {:replace, %{content: [%TextContent{text: "hidden"}]}} end,
+              fn %{is_error: true} -> {:additional_context, "result"} end
+            ]
+          )
+
+        result = if is_tuple(result), do: elem(result, 1), else: result
+        assert result.is_error
+        assert result.trust == original.trust
+        assert result.details == original.details
+        assert text(result) == "partial failure[hook context]\ncall\nresult"
+      end
+    end
+
+    test "non-result errors and raised tools retain their original contracts" do
+      hooks = [
+        on_tool_call: [fn _ -> {:additional_context, "call"} end],
+        on_tool_result: [fn _ -> {:additional_context, "result"} end]
+      ]
+
+      assert {:error, :aborted} = run(tool(fn _, _, _, _ -> {:error, :aborted} end), hooks)
+
+      assert_raise RuntimeError, "tool crashed", fn ->
+        run(tool(fn _, _, _, _ -> raise "tool crashed" end), hooks)
+      end
+    end
+  end
+
   describe "session lifecycle hooks" do
+    test "start context is ordered, bounded and excludes failed handlers" do
+      hooks = [
+        on_session_start: [
+          fn _ -> {:additional_context, "first\0"} end,
+          fn _ -> throw({:additional_context, "discarded"}) end,
+          fn _ -> {:additional_context, "second"} end,
+          fn _ -> {:additional_context, String.duplicate("é", 5_000)} end
+        ],
+        on_session_shutdown: [fn _ -> {:additional_context, "ignored"} end]
+      ]
+
+      assert {:additional_context, context} = SessionHooks.session_start(hooks, %{})
+      assert String.starts_with?(context, "first\nsecond\né")
+      assert String.length(context) == 4_000
+      refute context =~ "discarded"
+      assert :ok = SessionHooks.session_shutdown(hooks, %{})
+    end
+
     test "isolate failures and stop waiting for a hung handler" do
       test_pid = self()
 

@@ -6,7 +6,17 @@ defmodule CodingAgent.Tools.Task.Execution do
   alias CodingAgent.Session
   alias CodingAgent.TaskProgressBindingStore
   alias CodingAgent.TaskStore
-  alias CodingAgent.Tools.Task.{Async, Control, Followup, Params, Runner, Worktree}
+
+  alias CodingAgent.Tools.Task.{
+    Async,
+    Control,
+    Followup,
+    Params,
+    Result,
+    Runner,
+    StructuredOutput,
+    Worktree
+  }
 
   @spec run(
           String.t() | nil,
@@ -39,7 +49,7 @@ defmodule CodingAgent.Tools.Task.Execution do
                execution.lifecycle_context
              ) do
           :ok when execution.async? ->
-            CodingAgent.Tools.Task.Result.build_async_result(execution.lifecycle_context)
+            Result.build_async_result(execution.lifecycle_context)
 
           :ok ->
             await_sync_result(execution, signal)
@@ -108,6 +118,8 @@ defmodule CodingAgent.Tools.Task.Execution do
           name: validated[:name],
           role: role_id,
           queue_mode: validated.resolved_queue_mode,
+          output_schema: validated[:output_schema],
+          schema_mode: validated[:schema_mode],
           meta: validated.meta,
           parent_session_pid: Keyword.get(opts, :session_pid),
           task_owner_pid: Keyword.get(opts, :task_owner_pid),
@@ -239,7 +251,7 @@ defmodule CodingAgent.Tools.Task.Execution do
 
               result =
                 Runner.start_session_with_prompt(
-                  CodingAgent.Tools.Task.Params.build_session_opts(
+                  Params.build_session_opts(
                     workspace.cwd,
                     build_child_session_opts(opts, execution),
                     validated
@@ -263,11 +275,7 @@ defmodule CodingAgent.Tools.Task.Execution do
                           Map.merge(
                             result.details,
                             workspace
-                            |> Map.merge(
-                              CodingAgent.Tools.Task.Result.lineage_details(
-                                execution.lifecycle_context
-                              )
-                            )
+                            |> Map.merge(Result.lineage_details(execution.lifecycle_context))
                             |> Map.merge(%{
                               task_id: execution.task_id,
                               run_id: execution.run_id
@@ -298,12 +306,19 @@ defmodule CodingAgent.Tools.Task.Execution do
   end
 
   defp runner_timeout_opts(cwd, opts) do
-    runner_opts = Keyword.take(opts, [:task_session_timeout_ms, :task_session_poll_ms])
+    runner_opts =
+      Keyword.put([], :idle_ttl_ms, Params.task_settings(cwd, opts).idle_ttl_ms)
+
+    runner_opts =
+      Keyword.merge(
+        runner_opts,
+        Keyword.take(opts, [:task_session_timeout_ms, :task_session_poll_ms])
+      )
 
     if Keyword.has_key?(runner_opts, :task_session_timeout_ms) do
       runner_opts
     else
-      case CodingAgent.Tools.Task.Params.task_settings(cwd, opts).max_runtime_ms do
+      case Params.task_settings(cwd, opts).max_runtime_ms do
         ms when ms > 0 -> Keyword.put(runner_opts, :task_session_timeout_ms, ms)
         _ -> runner_opts
       end
@@ -314,7 +329,7 @@ defmodule CodingAgent.Tools.Task.Execution do
   defp output_validator_opts(%{output_schema: schema}) when not is_nil(schema) do
     [
       validate_output: fn text ->
-        case CodingAgent.Tools.Task.StructuredOutput.decode(text, schema) do
+        case StructuredOutput.decode(text, schema) do
           {:ok, _value} -> :ok
           {:error, _reason} = error -> error
         end
@@ -324,14 +339,15 @@ defmodule CodingAgent.Tools.Task.Execution do
 
   defp output_validator_opts(_validated), do: []
 
-  defp validate_output(%LemonAgent.Types.AgentToolResult{} = result, validated) do
+  @doc false
+  def validate_output(%LemonAgent.Types.AgentToolResult{} = result, validated) do
     case validated[:output_schema] do
       nil ->
         result
 
       schema ->
-        text = CodingAgent.Tools.Task.Result.visible_output_text(result)
-        decoded = CodingAgent.Tools.Task.StructuredOutput.decode(text, schema)
+        text = Result.visible_output_text(result)
+        decoded = StructuredOutput.decode(text, schema)
 
         case {decoded, validated[:schema_mode]} do
           {{:ok, output}, _mode} ->
@@ -346,7 +362,7 @@ defmodule CodingAgent.Tools.Task.Execution do
     end
   end
 
-  defp validate_output(error, _validated), do: error
+  def validate_output(error, _validated), do: error
 
   defp prepare_workspace(%{validated: %{worktree: true} = validated} = execution, opts) do
     mode =
@@ -410,7 +426,7 @@ defmodule CodingAgent.Tools.Task.Execution do
     }
 
   defp await_sync_result(execution, signal) do
-    case CodingAgent.Tools.Task.Result.do_join(%{"task_ids" => [execution.task_id]}, signal) do
+    case Result.do_join(%{"task_ids" => [execution.task_id]}, signal) do
       %LemonAgent.Types.AgentToolResult{details: %{status: "needs_parent_answer"}} = result ->
         result
 

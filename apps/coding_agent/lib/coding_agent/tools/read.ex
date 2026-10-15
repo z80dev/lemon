@@ -247,6 +247,9 @@ defmodule CodingAgent.Tools.Read do
 
       :none ->
         read_selected(params, signal, cwd, opts)
+
+      {:error, _} = error ->
+        error
     end
   end
 

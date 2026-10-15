@@ -68,8 +68,9 @@ defmodule CodingAgent.Extensions.Extension do
   - `:on_session_shutdown` - `fn %{session_id, cwd, reason} -> any` - Called when the
     session terminates
 
-  The hooks above observe only; their return values are ignored. Two hooks can
-  intercept tool execution (see `CodingAgent.Extensions.ToolHooks`):
+  The hooks above observe only, except `:on_session_start`, which may return
+  `{:additional_context, text}` (see `CodingAgent.Extensions.SessionHooks`).
+  Two hooks can intercept tool execution (see `CodingAgent.Extensions.ToolHooks`):
 
   - `:on_tool_call` - `fn %{tool_call_id, tool_name, args, cwd, session_id} -> ...` -
     runs before the tool; return `{:block, reason}` to stop it or
@@ -78,6 +79,9 @@ defmodule CodingAgent.Extensions.Extension do
     session_id} -> ...` - runs after the tool; on success return
     `{:replace, %AgentToolResult{}}` or `{:replace, %{content: ..., details: ...}}`
     to override the result content/details.
+
+  Both interception hooks may return `{:additional_context, text}` to append
+  bounded model-visible context without changing the result's trust or receipts.
   """
 
   @doc """

@@ -35,6 +35,16 @@ It is a concise transcript, not raw session events: hidden reasoning, tool-call
 internals and foreign tasks are excluded. History is capped at 12,000 Unicode
 characters and tagged untrusted. Expired TaskStore entries are unavailable.
 
+`read agent://` lists the scoped native task family, including idle and parked
+children. `write agent://<task-id-or-name>` sends peer content: running children
+receive steering input (`delivery: injected`), completed live children begin
+a new turn (`woken`), and parked children reload their saved conversation
+(`revived`). Replies arrive through task async auto-delivery, not in the write
+receipt. Failed worker admission reports `failed`. Cancelled/killed children
+and removed workspaces cannot revive; their error points to `history://<id>`.
+See [native task settings](../config.md#native-task-subagents-runtimetask) for
+the idle TTL and retention rules.
+
 ## Directory trees
 
 `ls` with `tree: true` shows a depth-limited directory tree (default

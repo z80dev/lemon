@@ -3,14 +3,23 @@ defmodule CodingAgent.Tools.Task.Async do
 
   require Logger
 
-  alias LemonAgent.Types.AgentToolResult
   alias CodingAgent.BudgetEnforcer
   alias CodingAgent.Parallel
   alias CodingAgent.RunGraph
   alias CodingAgent.TaskProgressBindingStore
   alias CodingAgent.TaskStore
-  alias CodingAgent.Tools.Task.{Control, Followup, LiveBridge, Projection}
-  alias CodingAgent.Tools.Task.Result
+
+  alias CodingAgent.Tools.Task.{
+    Control,
+    Execution,
+    Followup,
+    LiveBridge,
+    Projection,
+    Result,
+    Runner
+  }
+
+  alias LemonAgent.Types.AgentToolResult
   alias LemonCore.Introspection
 
   @type launch_error :: :task_supervisor_unavailable | :task_capacity_reached | :task_start_failed
@@ -33,6 +42,11 @@ defmodule CodingAgent.Tools.Task.Async do
       lifecycle_context[:task_owner_pid]
     )
 
+    Control.configure(task_id, %{
+      followup: followup_context,
+      lifecycle: lifecycle_context
+    })
+
     case start_async_worker(supervisor, fn ->
            Logger.debug(
              "Task tool async start task_id=#{inspect(task_id)} run_id=#{inspect(run_id)}"
@@ -41,7 +55,6 @@ defmodule CodingAgent.Tools.Task.Async do
            with :ok <- Control.attach_worker(task_id) do
              result = safe_run(task_id, run_id, run_fun, lifecycle_context)
              finalize_async(task_id, run_id, result, followup_context, lifecycle_context)
-             Control.complete(task_id)
            end
          end) do
       {:ok, _pid} ->
@@ -61,6 +74,60 @@ defmodule CodingAgent.Tools.Task.Async do
     end
   end
 
+  @doc false
+  def resume(task_id, entry, text) do
+    context = entry.continuation
+
+    start_async_worker(context.lifecycle[:task_supervisor] || CodingAgent.TaskSupervisor, fn ->
+      with :ok <- Control.attach_worker(task_id) do
+        update = wrap_on_update(task_id, context.lifecycle, context.lifecycle[:on_update])
+
+        result =
+          safe_run(
+            nil,
+            nil,
+            fn ->
+              Runner.resume_session(
+                entry.session,
+                entry.resume,
+                text,
+                entry.signal,
+                update
+              )
+              |> Execution.validate_output(context.lifecycle)
+            end,
+            context.lifecycle
+          )
+
+        persist_continuation(task_id, result)
+        emit_terminal_update(task_id, context.lifecycle[:run_id], result, context.lifecycle)
+        Control.complete(task_id)
+        finish_continuation(task_id, context, result)
+      end
+    end)
+  end
+
+  defp persist_continuation(task_id, {:ok, %AgentToolResult{} = result}),
+    do: TaskStore.finish(task_id, result)
+
+  defp persist_continuation(task_id, {:ok, {:error, reason}}),
+    do: TaskStore.fail(task_id, reason)
+
+  defp persist_continuation(task_id, {:error, reason}),
+    do: TaskStore.fail(task_id, reason)
+
+  @doc false
+  def finish_continuation(task_id, context, result) do
+    persist_continuation(task_id, result)
+
+    maybe_send_async_followup(
+      Map.put(context.followup, :auto_followup, true),
+      task_id,
+      context.lifecycle[:run_id],
+      result
+    )
+  end
+
   @spec wrap_on_update(String.t() | nil, map(), (AgentToolResult.t() -> :ok) | nil) ::
           (AgentToolResult.t() -> :ok) | nil
   def wrap_on_update(nil, _lifecycle_context, on_update), do: on_update
@@ -78,7 +145,7 @@ defmodule CodingAgent.Tools.Task.Async do
             result
             | details:
                 (result.details || %{})
-                |> Map.merge(CodingAgent.Tools.Task.Result.lineage_details(lifecycle_context))
+                |> Map.merge(Result.lineage_details(lifecycle_context))
                 |> Map.merge(%{
                   task_id: task_id,
                   run_id: lifecycle_context[:run_id],
@@ -151,18 +218,21 @@ defmodule CodingAgent.Tools.Task.Async do
         maybe_finish_run(run_id, tool_result)
         emit_task_terminal_event(task_id, run_id, {:ok, tool_result}, lifecycle_context)
         maybe_record_budget_completion(run_id, tool_result)
+        complete_control(task_id)
         maybe_send_async_followup(followup_context, task_id, run_id, {:ok, tool_result})
 
       {:ok, {:error, reason}} ->
         terminalize_error(task_id, run_id, reason)
         emit_task_terminal_event(task_id, run_id, {:error, reason}, lifecycle_context)
         maybe_record_budget_completion(run_id, %{error: reason})
+        complete_control(task_id)
         maybe_send_async_followup(followup_context, task_id, run_id, {:error, reason})
 
       {:error, reason} ->
         terminalize_error(task_id, run_id, reason)
         emit_task_terminal_event(task_id, run_id, {:error, reason}, lifecycle_context)
         maybe_record_budget_completion(run_id, %{error: reason})
+        complete_control(task_id)
         maybe_send_async_followup(followup_context, task_id, run_id, {:error, reason})
 
       {:ok, other} ->
@@ -170,6 +240,7 @@ defmodule CodingAgent.Tools.Task.Async do
         maybe_finish_run(run_id, other)
         emit_task_terminal_event(task_id, run_id, {:ok, other}, lifecycle_context)
         maybe_record_budget_completion(run_id, other)
+        complete_control(task_id)
         maybe_send_async_followup(followup_context, task_id, run_id, {:ok, other})
 
       other ->
@@ -177,8 +248,13 @@ defmodule CodingAgent.Tools.Task.Async do
         TaskStore.fail(task_id, other)
         emit_task_terminal_event(task_id, run_id, {:error, other}, lifecycle_context)
         maybe_record_budget_completion(run_id, %{error: other})
+        complete_control(task_id)
         maybe_send_async_followup(followup_context, task_id, run_id, {:error, other})
     end
+  end
+
+  defp complete_control(task_id) do
+    unless self() == Process.whereis(Control), do: Control.complete(task_id)
   end
 
   defp maybe_send_async_followup(followup_context, task_id, run_id, outcome) do
@@ -347,7 +423,7 @@ defmodule CodingAgent.Tools.Task.Async do
       is_error: status in ["error", "aborted"],
       details:
         result_details
-        |> Map.merge(CodingAgent.Tools.Task.Result.lineage_details(context))
+        |> Map.merge(Result.lineage_details(context))
         |> Map.merge(%{
           task_id: task_id,
           run_id: run_id,

@@ -148,6 +148,15 @@ Hook errors are caught and logged but don't stop other hooks or the agent.
 Session start/shutdown handlers run in a separate process with a 2-second
 budget for the whole event; a handler still running at the deadline is killed.
 
+`on_session_start` may return `{:additional_context, text}`. Completed handlers'
+texts are sanitized, joined in registration order and capped at 4,000 characters
+for the event. The session appends a hidden `hook_context` custom message,
+labelled `[hook context]`, to model context and session history before the first
+prompt. Failed handlers contribute nothing; if the event times out, its context
+is discarded. Shutdown remains observe-only. Lemon has no user-prompt-submit
+hook or Claude-Code-style command-hook configuration/JSON bridge; these return
+contracts apply to Elixir extension handlers only.
+
 ### Intercepting Tool Calls
 
 Two hooks can change what a tool does. They wrap every session tool —
@@ -195,6 +204,11 @@ end
 - `{:replace_args, map}` runs the tool with `map`. Arguments are not
   re-validated. If several handlers replace arguments, the last one wins; every
   handler sees the model's original arguments.
+- `{:additional_context, text}` adds context to the eventual tool result.
+  `%{replace_args: map, additional_context: text}` combines argument replacement
+  and context; `%{block: reason, additional_context: text}` combines a block and
+  context. Earlier handlers' context survives a later block, and later handlers
+  still do not run.
 - Any other return value has no effect.
 - A handler that raises, throws or exits blocks the call (fail closed). The log
   records the tool name and failure class, not the arguments.
@@ -220,6 +234,19 @@ cwd, session_id}`, where `args` are the arguments the tool ran with:
   handlers observe it with `is_error: true`; the original error is kept and
   any exception is re-raised.
 - A failing handler is logged and the original result is kept.
+- `{:additional_context, text}` adds context, including on structured error
+  results. Non-result errors such as `{:error, reason}` and exceptions retain
+  their original contracts and cannot carry appended content.
+
+Call and result context is valid UTF-8 text with unsafe controls stripped and
+surrounding whitespace trimmed; invalid or empty values are ignored. Texts are
+joined in registration order (call hooks first, then result hooks), with a
+**4,000-character combined cap per tool call**, including separators and any
+truncation ellipsis. After all result replacements, one separate text block
+labelled `[hook context]` is appended. Context does not change trust level,
+error status or mutation receipts; blocked calls can carry it too. A failing
+handler contributes no context while retaining its existing fail-closed (call)
+or fail-open (result) behavior.
 
 The `on_tool_execution_start`/`on_tool_execution_end` hooks still observe the
 call as the model issued it and the final result.
