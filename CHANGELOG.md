@@ -36,6 +36,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Added
 
+- Control-plane status reports the real Lemon release version, build identity,
+  offline provider credential presence, timestamped redacted channel health,
+  lifecycle availability and safe summary counts.
 - Computer use can be configured in `[runtime.tools.computer_use]` (`enabled`,
   `chrome`, `lcu_root`, `node`, `declined_origins`); environment variables still
   take precedence. Execution-node capability inspection reports a

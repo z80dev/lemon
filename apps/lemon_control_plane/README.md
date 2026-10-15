@@ -77,6 +77,15 @@ legitimately arrive first. Failure and budget-stop completions remain
 Slow/approval-gated handlers run asynchronously so events and approval resolution
 can continue while their correlated request remains pending.
 
+### System status
+
+`status` (`operator.read`) reports the real Lemon release CalVer, env/stamped
+build metadata, offline provider credential presence, per-channel redacted health,
+and runtime lifecycle availability alongside the existing counters. See the
+[system method reference](../../docs/reference/control-plane.md#status) for exact
+fields and their limits; credential presence is not a provider network probe.
+
+
 ### Verified approval resolution
 
 `exec.approval.resolve` requires the approvals scope and accepts:
