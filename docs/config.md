@@ -782,6 +782,13 @@ moved:
 | `theme` | `[tui]` `theme` |
 | anything else, including `[agent.<sub>]` tables | `[runtime]` / `[runtime.<sub>]` (an existing `[runtime]` key wins) |
 
+Malformed TOML is a load error, not an empty configuration; missing files still
+use defaults. `lemon config validate` lists both checked files on success and
+failure. Fix syntax errors in the named file, then run
+`lemon config validate --verbose`. For removed settings, run
+`lemon config migrate`. Doctor records invalid configuration as failing checks
+and continues with the remaining diagnostics.
+
 `lemon config migrate` rewrites the global config and the current project's
 config this way, and `lemon setup` does the same when it finds an existing
 file. Both keep comments and unrelated tables, write the original to

@@ -32,6 +32,21 @@ defmodule LemonCore.Config.ModularTest do
     :ok
   end
 
+  test "malformed project TOML fails load and validation with its filename" do
+    root = Path.join(System.tmp_dir!(), "config_truth_#{System.unique_integer([:positive])}")
+    path = Path.join(root, ".lemon/config.toml")
+    File.mkdir_p!(Path.dirname(path))
+    File.write!(path, "value = \n")
+    on_exit(fn -> File.rm_rf!(root) end)
+
+    error = assert_raise ValidationError, fn -> Modular.load(project_dir: root) end
+    assert Exception.message(error) =~ path
+    assert {:error, errors} = Modular.load_with_validation(project_dir: root)
+    assert Enum.any?(errors, &String.contains?(&1, path))
+    assert_raise ValidationError, fn -> LemonCore.Config.load_file(path) end
+    assert LemonCore.Config.load_file(Path.join(root, "missing.toml")) == %{}
+  end
+
   describe "load/1" do
     test "returns a Modular config struct" do
       config = Modular.load()
