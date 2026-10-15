@@ -320,28 +320,36 @@ defmodule CodingAgent.Tools.BashTest do
       AbortSignal.clear(signal)
     end
 
-    test "timeout option kills a long-running command as an error", %{tmp_dir: tmp_dir} do
+    test "timeout detaches without rerunning or losing output", %{tmp_dir: tmp_dir} do
       result =
         Bash.execute(
           "call_1",
-          %{"command" => "echo 'started'; sleep 10; echo 'finished'"},
+          %{
+            "command" =>
+              "echo once >> count; printf 'started\\n'; sleep 0.3; printf 'finished\\n'"
+          },
           nil,
           nil,
           tmp_dir,
-          timeout_ms: 1_000
+          timeout_ms: 100,
+          session_id: tmp_dir,
+          session_pid: self()
         )
 
-      assert %AgentToolResult{
-               content: [%TextContent{text: text}],
-               details: details,
-               is_error: true
-             } = result
-
-      assert text =~ "timed out after 1000 ms"
-      assert text =~ "started"
-      refute text =~ "finished"
-      assert details.exit_code == nil
+      assert %AgentToolResult{details: details, is_error: false} = result
+      assert details.background
       assert details.timed_out
+      assert is_binary(details.process_id)
+
+      assert_eventually(fn ->
+        {:ok, state} = CodingAgent.ProcessManager.poll(details.process_id)
+        state.status == :completed
+      end)
+
+      {:ok, output} = CodingAgent.ProcessManager.read_output(details.process_id)
+      assert output.exit_code == 0
+      assert File.read!(output.full_output_path) == "started\nfinished\n"
+      assert File.read!(Path.join(tmp_dir, "count")) == "once\n"
     end
 
     test "cleanup after abort does not leak resources", %{tmp_dir: tmp_dir} do
@@ -1055,6 +1063,9 @@ defmodule CodingAgent.Tools.BashPtyFallbackTest do
 
     assert hd(result.content).text ==
              "pty requested but unavailable; ran without a terminal\n\ncommand output\n"
+
+    # Managed non-PTY execution needs the ordinary workload-ownership utilities.
+    if original_path, do: System.put_env("PATH", original_path), else: System.delete_env("PATH")
 
     result = CodingAgent.Tools.Bash.execute("plain", %{"command" => "true"}, nil, nil, cwd, [])
     refute result.details.pty_fallback

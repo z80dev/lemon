@@ -27,6 +27,11 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Changed
 
+- Ordinary bash commands now continue under the session-owned process manager
+  when their foreground wait expires, returning a process ID without rerunning
+  the command or interrupting output capture. PTY and ACP-client terminal
+  timeouts still terminate their commands.
+
 - Lemon Bot web explains channel and X setup, terminal access, file uploads and
   machine-operation progress in plain language. Memory sources have descriptive
   links, template identifiers stay under Details, and machine measurements
