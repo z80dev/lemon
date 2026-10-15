@@ -4,6 +4,11 @@
 
 ### Added
 
+- Find sorts the complete candidate set before applying `max_results`, with
+  `sort: "mtime"` for newest-first (path tie-breaks) or the existing default
+  `"path"`. Slash globs use full-path matching in fd as in the fallback;
+  scopes exceeding 100,000 candidates fail with a narrowing hint.
+
 - Grep and find accept semicolon-separated roots, merge/deduplicate results before
   paging, and report missing roots without discarding existing ones. Grep long
   lines now show a match-centered 500-character window and the original column.
