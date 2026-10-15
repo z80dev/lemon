@@ -8,7 +8,16 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
-No unreleased changes yet.
+### Fixed
+
+- Native dynamic-preset resolution binds discovered context, output limits,
+  reasoning and input capabilities to the effective endpoint, headers and
+  selected credential. Default/environment cached metadata no longer bleeds into
+  configured native sessions; qualified defaults, provider-native colon IDs and
+  existing credential fallback semantics remain supported.
+- Custom-provider discovery and cache-only model resolution use the selected
+  healthy credential-pool principal, keeping picker and native request authority
+  aligned without exposing another pool or ambient provider credentials.
 
 ---
 

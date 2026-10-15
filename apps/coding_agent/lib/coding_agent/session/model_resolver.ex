@@ -7,7 +7,8 @@ defmodule CodingAgent.Session.ModelResolver do
   secrets, and provider-specific stream option building.
   """
   alias CodingAgent.SettingsManager
-  alias LemonAgent.ModelRuntime.ModelRoles
+  alias LemonAgent.ModelRuntime.{CustomProviders, ModelRoles}
+  alias LemonAi.Models.Presets
 
   # ============================================================================
   # Model Resolution
@@ -105,9 +106,9 @@ defmodule CodingAgent.Session.ModelResolver do
   defp find_model_prefer_configured(model_id, %CodingAgent.SettingsManager{} = settings) do
     configured = configured_provider_atoms(settings)
 
-    # known_model/2: preset providers answer get_model/2 for any ID.
+    # Match only known ids in each configured provider's effective scope.
     Enum.find_value(configured, fn provider ->
-      LemonAi.Models.known_model(provider, model_id)
+      known_model(provider, model_id, settings)
     end) || LemonAi.Models.find_by_id(model_id)
   end
 
@@ -235,7 +236,10 @@ defmodule CodingAgent.Session.ModelResolver do
     model_id = Map.get(config, :model_id)
     base_url = Map.get(config, :base_url)
     provider = canonical_registry_provider(provider)
+    identity_settings = with_default_base_url(settings, provider, base_url)
+    {provider, model_id} = default_model_identity(provider, model_id, identity_settings)
     provider = route_default_provider(provider, model_id, settings)
+    lookup_settings = with_default_base_url(settings, provider, base_url)
 
     model =
       case provider do
@@ -245,15 +249,12 @@ defmodule CodingAgent.Session.ModelResolver do
         provider_atom when is_atom(provider_atom) ->
           # model_id may be prefixed (e.g. "zai:glm-5-turbo"); try as-is first,
           # then strip the provider prefix for a direct registry lookup.
-          LemonAgent.ModelRuntime.CustomProviders.lookup(
-            settings.providers,
-            provider_atom,
-            model_id
-          ) ||
-            LemonAi.Models.get_model(provider_atom, model_id) ||
+          CustomProviders.lookup(lookup_settings, provider_atom, model_id) ||
+            registry_model(provider_atom, model_id, lookup_settings) ||
             case String.split(model_id, ":", parts: 2) do
               [_prefix, bare_id] when bare_id != "" ->
-                LemonAi.Models.get_model(provider_atom, bare_id)
+                CustomProviders.lookup(lookup_settings, provider_atom, bare_id) ||
+                  registry_model(provider_atom, bare_id, lookup_settings)
 
               _ ->
                 nil
@@ -273,7 +274,7 @@ defmodule CodingAgent.Session.ModelResolver do
                 model_id
             end
 
-          lookup_model(provider_str, model_id, settings)
+          lookup_model(provider_str, model_id, lookup_settings)
       end
 
     case model do
@@ -293,6 +294,63 @@ defmodule CodingAgent.Session.ModelResolver do
         apply_provider_base_url(model, settings)
     end
   end
+
+  # A qualified selector can arrive wrapped in the configuration's fallback
+  # provider. Normalize it before routing. Dynamic presets accept native ids
+  # even without cached metadata, so a cache miss cannot disprove their identity.
+  defp default_model_identity(provider, model_id, settings) when is_binary(model_id) do
+    parts =
+      case String.split(model_id, ":", parts: 2) do
+        [_id] -> String.split(model_id, "/", parts: 2)
+        qualified -> qualified
+      end
+
+    case parts do
+      [prefix, id] when prefix != "" and id != "" ->
+        qualified_provider =
+          provider_to_atom(prefix) ||
+            case CustomProviders.custom_provider(settings.providers, prefix) do
+              {config_id, _config} -> config_id
+              nil -> nil
+            end
+
+        if qualified_provider && not Presets.preset?(provider) &&
+             is_nil(known_model(provider, model_id, settings)),
+           do: {qualified_provider, id},
+           else: {provider, model_id}
+
+      _ ->
+        {provider, model_id}
+    end
+  end
+
+  defp default_model_identity(provider, model_id, _settings), do: {provider, model_id}
+
+  # Defaults may supply a URL independently of the provider table. Bind that
+  # effective URL before consulting discovery metadata, preserving the existing
+  # provider-table-over-default URL precedence.
+  defp with_default_base_url(settings, provider, url)
+       when not is_nil(provider) and is_binary(url) and url != "" do
+    cfg =
+      LemonAgent.ModelRuntime.ProviderNames.provider_config(settings.providers, provider) ||
+        CustomProviders.config_for(settings, provider) || %{}
+
+    if non_empty_string(Map.get(cfg, :base_url) || Map.get(cfg, "base_url")) do
+      settings
+    else
+      config_id =
+        Enum.find_value(settings.providers, to_string(provider), fn {id, _cfg} ->
+          if canonical_registry_provider(to_string(id)) == provider, do: id
+        end)
+
+      %{
+        settings
+        | providers: Map.put(settings.providers, config_id, Map.put(cfg, :base_url, url))
+      }
+    end
+  end
+
+  defp with_default_base_url(settings, _provider, _url), do: settings
 
   @spec runtime_fallback_models(
           LemonAi.Types.Model.t(),
@@ -338,15 +396,12 @@ defmodule CodingAgent.Session.ModelResolver do
   @spec apply_provider_base_url(LemonAi.Types.Model.t(), CodingAgent.SettingsManager.t()) ::
           LemonAi.Types.Model.t()
   def apply_provider_base_url(model, %CodingAgent.SettingsManager{providers: providers}) do
-    provider_key =
-      case model.provider do
-        p when is_atom(p) -> Atom.to_string(p)
-        p when is_binary(p) -> p
-        _ -> nil
-      end
+    provider_cfg =
+      LemonAgent.ModelRuntime.ProviderNames.provider_config(providers, model.provider) ||
+        CustomProviders.config_for(providers, model.provider)
 
-    provider_cfg = provider_key && Map.get(providers, provider_key)
-    base_url = provider_cfg && Map.get(provider_cfg, :base_url)
+    base_url =
+      provider_cfg && (Map.get(provider_cfg, :base_url) || Map.get(provider_cfg, "base_url"))
 
     if is_binary(base_url) and base_url != "" and base_url != model.base_url do
       %{model | base_url: base_url}
@@ -413,21 +468,39 @@ defmodule CodingAgent.Session.ModelResolver do
     end
   end
 
-  # User-defined `[providers.<id>]` models (custom providers and additions to
-  # built-in providers) take precedence over the registry.
-  defp lookup_model(provider, model_id, %SettingsManager{providers: providers})
-       when is_binary(provider) and is_binary(model_id) do
-    LemonAgent.ModelRuntime.CustomProviders.lookup(providers, provider, model_id) ||
-      lookup_model(provider, model_id)
+  # Configured models and dynamic presets resolve in the full effective scope.
+  # Registry-only fallback is safe for static providers, never preset metadata.
+  defp lookup_model(provider, model_id, %SettingsManager{} = settings)
+       when not is_nil(provider) and (is_binary(provider) or is_atom(provider)) and
+              is_binary(model_id) do
+    provider_atom = canonical_registry_provider(provider)
+
+    CustomProviders.lookup(settings, provider, model_id) ||
+      if is_atom(provider_atom) do
+        registry_model(provider_atom, model_id, settings) ||
+          provider_model(provider_atom, model_id)
+      end
   end
 
   defp lookup_model(provider, model_id, _settings), do: lookup_model(provider, model_id)
 
+  defp known_model(provider, model_id, settings) do
+    CustomProviders.known_model(settings, provider, model_id) ||
+      if is_atom(provider) and not is_nil(provider) and not Presets.preset?(provider),
+        do: LemonAi.Models.known_model(provider, model_id)
+  end
+
+  defp registry_model(provider, model_id, settings) do
+    if Presets.preset?(provider),
+      do: CustomProviders.lookup(settings, provider, model_id),
+      else: LemonAi.Models.get_model(provider, model_id)
+  end
+
   # Bare ids also match models listed under a custom provider.
-  defp find_custom_model(model_id, %SettingsManager{providers: providers})
+  defp find_custom_model(model_id, %SettingsManager{} = settings)
        when is_binary(model_id) do
-    providers
-    |> LemonAgent.ModelRuntime.CustomProviders.models()
+    settings
+    |> CustomProviders.models()
     |> Enum.find(&(&1.id == model_id))
   end
 
@@ -586,12 +659,13 @@ defmodule CodingAgent.Session.ModelResolver do
   defp provider_to_atom(provider) when is_binary(provider) do
     normalized = normalize_registry_provider_name(provider)
 
-    Enum.find(LemonAi.Models.get_providers(), fn known ->
-      known
-      |> Atom.to_string()
-      |> normalize_registry_provider_name()
-      |> Kernel.==(normalized)
-    end)
+    Presets.resolve(provider) ||
+      Enum.find(LemonAi.Models.get_providers(), fn known ->
+        known
+        |> Atom.to_string()
+        |> normalize_registry_provider_name()
+        |> Kernel.==(normalized)
+      end)
   end
 
   defp provider_to_atom(_), do: nil
