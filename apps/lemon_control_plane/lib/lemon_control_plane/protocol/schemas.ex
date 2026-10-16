@@ -739,6 +739,107 @@ defmodule LemonControlPlane.Protocol.Schemas do
         "modelId" => :string
       }
     },
+    "providers.management.device.start" => %{
+      required: %{
+        "targetId" => :string,
+        "providerId" => :string,
+        "loginId" => :string,
+        "ownerId" => :string,
+        "sessionId" => :string
+      }
+    },
+    "providers.management.device.poll" => %{
+      required: %{
+        "targetId" => :string,
+        "providerId" => :string,
+        "loginId" => :string,
+        "ownerId" => :string,
+        "sessionId" => :string
+      }
+    },
+    "providers.management.device.challenge" => %{
+      required: %{
+        "targetId" => :string,
+        "providerId" => :string,
+        "loginId" => :string,
+        "ownerId" => :string,
+        "sessionId" => :string
+      }
+    },
+    "providers.management.device.cancel" => %{
+      required: %{
+        "targetId" => :string,
+        "providerId" => :string,
+        "loginId" => :string,
+        "ownerId" => :string,
+        "sessionId" => :string
+      }
+    },
+    "node.providers.management.device.start" => %{
+      required: %{
+        "nodeId" => :string,
+        "targetId" => :string,
+        "providerId" => :string,
+        "loginId" => :string,
+        "ownerId" => :string,
+        "sessionId" => :string
+      }
+    },
+    "node.providers.management.device.poll" => %{
+      required: %{
+        "nodeId" => :string,
+        "targetId" => :string,
+        "providerId" => :string,
+        "loginId" => :string,
+        "ownerId" => :string,
+        "sessionId" => :string
+      }
+    },
+    "node.providers.management.device.challenge" => %{
+      required: %{
+        "nodeId" => :string,
+        "targetId" => :string,
+        "providerId" => :string,
+        "loginId" => :string,
+        "ownerId" => :string,
+        "sessionId" => :string
+      }
+    },
+    "node.providers.management.device.cancel" => %{
+      required: %{
+        "nodeId" => :string,
+        "targetId" => :string,
+        "providerId" => :string,
+        "loginId" => :string,
+        "ownerId" => :string,
+        "sessionId" => :string
+      }
+    },
+    "providers.management.device.complete" => %{
+      required: %{
+        "targetId" => :string,
+        "providerId" => :string,
+        "loginId" => :string,
+        "ownerId" => :string,
+        "sessionId" => :string,
+        "completionId" => :string,
+        "challengeNonce" => :string,
+        "commit" => :boolean
+      }
+    },
+    "node.providers.management.device.complete" => %{
+      required: %{
+        "nodeId" => :string,
+        "targetId" => :string,
+        "providerId" => :string,
+        "loginId" => :string,
+        "ownerId" => :string,
+        "sessionId" => :string,
+        "completionId" => :string,
+        "challengeNonce" => :string,
+        "commit" => :boolean
+      }
+    },
 
     # Node methods
     "node.pair.invite" => %{

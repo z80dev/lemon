@@ -9,9 +9,29 @@
 - Phone-pairing CLI cleanup revokes only its temporary product session, preserving unrelated owner logins and optional OIDC provider sessions even on denial or failed preflight.
 - Added a durable Bot backend identity, minimal public `/v1/setup` product/pairing descriptor and authenticated `/v1/identity` workspace binding. Shared origin preflight refuses wrong services, physical-phone loopback, identity/workspace mismatch, redirects and TLS bypass. Pairing QR links now require `backend/instance/cluster/code`; existing nonce, consent, expiry and revocation semantics remain intact.
 - Added owner-only target-bound model-provider capability/status listing, write-only API-key add/replace and local disconnect on the execution machine, and a separate explicit default-model action. Product sessions/origin checks and current actual host ownership apply to initial requests and nonce replay; credentials never enter product storage or receipts.
+- Added owner/session/target-bound Codex (`openai_codex`, the canonical runtime provider ID) device-login start, poll and cancel for the controller and actual owned execution nodes. Fixed nonces reconcile fresh target-only lifecycle state, including `lost` after runtime restart; only the exact provider verification URL, bounded code and status metadata reach clients. Current bearer/device authority, trusted origin, capabilities and ownership are checked around dispatch; product SQLite retains only safe admission receipts, never device grants or tokens.
 - Added tolerant build/provider/channel instance health and owner-confirmed remote controller restart/stop, observing reconnect/disconnect completion with a 300-second deadline. Replaced the runtime-control boolean with explicit actions and launcher/controller routing.
 
 ### Fixed
+
+- Codex OAuth success no longer persists credentials autonomously. Each normal
+  poll first obtains an internal target challenge, then rechecks exact current
+  owner/session/device/policy/target authority and durable revocation generation
+  in a synchronous transaction before authorizing that exact nonce once. Its
+  five-second deadline uses only the target's monotonic clock, including the
+  serialized persistence check; product/controller wall-clock skew cannot extend
+  authorization. Challenges remain memory-only and target restart invalidates
+  them. Revocation advances durable authority generation immediately, even with
+  the controller or target offline; no reservation blocks it. Durable login
+  bindings stay revoked after authority is restored or a target is re-paired.
+  Already-issued authorization has a bounded five-second write-admission window;
+  an admitted persistence transaction may finish afterward. Unknown fixed
+  completion IDs survive restart as settlement-only records without challenges,
+  reconciling the same binding/ID without writing. Generic rejection never clears
+  uncertainty; only exact acknowledgement or scoped definitive
+  `provider_binding_rejected` evidence releases the journal. Public eight-field
+  results remain unchanged; coverage uses mock OAuth/transport through the real
+  Lemon adapter.
 
 - Fixed Apple clients reporting a retired foreground-presence socket's error after a reconnect during an acknowledged message send. Current socket failures and uncertain message nonce fencing remain intact.
 - Added owner-scoped read-only message receipts that retain the full original group target set and current run outcomes. Native clients automatically reconcile lost/late relay acknowledgements without resending, preserve refused/unknown targets, and acknowledge only the cursor delivered by each realtime frame.

@@ -114,6 +114,15 @@ export interface ProviderTargetRequest extends Mutation { targetId: string }
 /** Transient request only. Never persist this field in drafts, browser storage or product SQLite. */
 export interface ProviderApiKeySet extends ProviderTargetRequest { value: string }
 export interface ProviderDefaultSet extends ProviderTargetRequest { providerId: string; modelId: string }
+/** Start uses clientNonce as loginId; poll/cancel keep that route ID and use their own fixed nonce. */
+export interface ProviderDeviceLoginRequest extends ProviderTargetRequest {}
+export type ProviderDeviceLoginStatus = 'starting' | 'pending' | 'completed' | 'denied' | 'expired' | 'cancelled' | 'lost' | 'failed';
+/** Safe target projection only. Pending OAuth state and all tokens stay on the execution target. */
+export interface ProviderDeviceLogin {
+  loginId: string; targetId: string; providerId: 'openai_codex'; status: ProviderDeviceLoginStatus;
+  verificationUrl: 'https://auth.openai.com/codex/device' | null;
+  userCode: string | null; expiresAtMs: TimestampMs | null; pollIntervalMs: number | null;
+}
 export interface Machine extends Resource { nodeId: ID | null; nodeName: string; name: string; ownerUserId: ID; accessUserIds: ID[]; status: 'pending' | 'online' | 'offline' | 'revoked'; lastSeenAtMs: TimestampMs | null; labels: Record<string, string>; botIds: ID[] }
 export interface HostInfo { hostname: string; os: string; osVersion: string; arch: string; cpuCount: number; memTotalBytes: number; memFreeBytes: number; diskTotalBytes: number; diskFreeBytes: number; uptimeSec: number; lemonVersion: string; defaultCwd: string; user: string; measuredAtMs: TimestampMs }
 export interface MachineInvite extends Resource { machineId: ID; inviteCode: string; joinCommand: string; expiresAtMs: TimestampMs; status: 'pending' | 'joined' | 'expired' | 'revoked'; enrollment: 'invited' | 'waiting_for_join' | 'connecting' | 'verifying' | 'online' | 'expired' | 'failed' | 'revoked'; lastError: string | null }
@@ -676,10 +685,16 @@ export interface RestEndpoints {
   'PUT /instance/providers/:providerId/api-key': Endpoint<ProviderApiKeySet, ProviderManagement>;
   'POST /instance/providers/:providerId/disconnect': Endpoint<ProviderTargetRequest, ProviderManagement>;
   'POST /instance/providers/default': Endpoint<ProviderDefaultSet, ProviderManagement>;
+  'POST /instance/providers/:providerId/device-login': Endpoint<ProviderDeviceLoginRequest, ProviderDeviceLogin>;
+  'POST /instance/providers/:providerId/device-login/:loginId/poll': Endpoint<ProviderDeviceLoginRequest, ProviderDeviceLogin>;
+  'POST /instance/providers/:providerId/device-login/:loginId/cancel': Endpoint<ProviderDeviceLoginRequest, ProviderDeviceLogin>;
   'GET /machines/:id/providers': Endpoint<undefined, ProviderManagement>;
   'PUT /machines/:id/providers/:providerId/api-key': Endpoint<ProviderApiKeySet, ProviderManagement>;
   'POST /machines/:id/providers/:providerId/disconnect': Endpoint<ProviderTargetRequest, ProviderManagement>;
   'POST /machines/:id/providers/default': Endpoint<ProviderDefaultSet, ProviderManagement>;
+  'POST /machines/:id/providers/:providerId/device-login': Endpoint<ProviderDeviceLoginRequest, ProviderDeviceLogin>;
+  'POST /machines/:id/providers/:providerId/device-login/:loginId/poll': Endpoint<ProviderDeviceLoginRequest, ProviderDeviceLogin>;
+  'POST /machines/:id/providers/:providerId/device-login/:loginId/cancel': Endpoint<ProviderDeviceLoginRequest, ProviderDeviceLogin>;
   'GET /sync': Endpoint<undefined, Snapshot>;
   'GET /machines': Endpoint<undefined, Page<Machine>, PageQuery>;
   'POST /machines': Endpoint<MachineAttach, MachineAttachResult>;

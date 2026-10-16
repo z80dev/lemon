@@ -5,7 +5,9 @@ defmodule LemonCli.Setup.ProviderManagement do
   The authorized transport supplies `:target` (`id`, `nodeId`, `hostname`) and
   validates the caller's exact target identity before invoking a mutation. This
   module does not authorize callers or accept workspace/profile configuration.
-  All public operations return the same bounded, credential-free projection.
+  Provider operations return a bounded, credential-free projection; public device
+  operations return only their eight-field login status. The internal challenge
+  operation additionally returns the target-issued, nonsecret completion nonce.
 
   API keys are stored only in encrypted `LemonCore.Secrets`; config contains a
   target-config-specific reference. Disconnect removes local credentials, not
@@ -28,6 +30,16 @@ defmodule LemonCli.Setup.ProviderManagement do
   global/project paths. Such files are validated and saved without reloading
   unrelated runtime configuration; setup verifies the selected file separately.
 
+  Codex device login uses `device_start/2`, `device_poll/2` and
+  `device_cancel/2` with the exact five-field transport binding. Successful OAuth
+  waits in the sensitive worker until internal `device_challenge/2` issues a
+  target-local nonce and `device_complete/2` supplies it with a durably single-use
+  completion ID. The five-second monotonic deadline is rechecked inside the
+  serialized persistence transaction; no remote wall clock authorizes a write.
+  Revocation never waits for completion; `commit: false` reconciles without writing.
+  Replacing/disconnecting credentials still serialize with completion and never
+  select a new default.
+
   `:config_path`, `:cwd`, `:secrets`, `:write_fun` and `:reload_fun` are local test
   seams, never RPC parameters. Production uses the target machine's global config,
   encrypted store and runtime config reload.
@@ -35,7 +47,7 @@ defmodule LemonCli.Setup.ProviderManagement do
 
   alias LemonAgent.ModelRuntime.ProviderNames
   alias LemonCli.Onboarding.{Provider, Providers, Runner}
-  alias LemonCli.Setup.ProviderAuth
+  alias LemonCli.Setup.{DeviceLogin, ProviderAuth}
   alias LemonCore.{Config, Secrets}
   alias LemonCore.Config.TomlPatch
 
@@ -49,29 +61,77 @@ defmodule LemonCli.Setup.ProviderManagement do
     end
   end
 
+  def device_start(params, opts \\ []), do: device_operation(:start, params, opts)
+  def device_poll(params, opts \\ []), do: device_operation(:poll, params, opts)
+  def device_challenge(params, opts \\ []), do: device_operation(:challenge, params, opts)
+  def device_cancel(params, opts \\ []), do: device_operation(:cancel, params, opts)
+  def device_complete(params, opts \\ []), do: device_operation(:complete, params, opts)
+
+  defp device_operation(operation, params, opts) do
+    with {:ok, _target} <- target(opts) do
+      apply(DeviceLogin, operation, [params, opts])
+    end
+  end
+
+  @doc false
+  def persist_device_login(secret, opts) when is_map(secret) do
+    encoded = LemonAi.Auth.OpenAICodexOAuth.encode_secret(secret)
+
+    with true <- byte_size(encoded) <= 65_536,
+         true <- secret["type"] == "openai_codex_oauth",
+         true <- present?(secret["access_token"]) and present?(secret["refresh_token"]),
+         {:ok, spec} <- provider("openai_codex") do
+      locked(path(opts), fn ->
+        with {:ok, content, config} <- read_config(path(opts)),
+             {:ok, project} <- project_config(opts) do
+          spec = configured_spec(spec, config)
+          name = managed_secret_name("openai_codex", path(opts))
+
+          with :ok <- unshared(config, project, spec, [name]) do
+            persist_locked(
+              path(opts),
+              [{name, {:set, encoded, spec.oauth_secret_provider}}],
+              &Runner.update_provider_auth_config(&1, spec, :device, name),
+              content,
+              opts
+            )
+          end
+        end
+      end)
+    else
+      _ -> {:error, :unavailable}
+    end
+  rescue
+    _ -> {:error, :unavailable}
+  catch
+    _, _ -> {:error, :unavailable}
+  end
+
   def set_api_key(provider_id, value, opts \\ []) do
     with {:ok, target} <- target(opts),
          {:ok, spec} <- provider(provider_id),
          true <- "api_key" in Providers.management_methods(provider_id),
          :ok <- valid_key(value) do
-      locked(path(opts), fn ->
-        with {:ok, content, config} <- read_config(path(opts)) do
-          spec = configured_spec(spec, config)
-          name = managed_secret_name(provider_id, path(opts))
+      credential_mutation(target, provider_id, opts, fn ->
+        locked(path(opts), fn ->
+          with {:ok, content, config} <- read_config(path(opts)) do
+            spec = configured_spec(spec, config)
+            name = managed_secret_name(provider_id, path(opts))
 
-          with {:ok, project} <- project_config(opts),
-               :ok <- unshared(config, project, spec, [name]),
-               :ok <-
-                 persist_locked(
-                   path(opts),
-                   [{name, {:set, String.trim(value), "provider_management"}}],
-                   &Runner.update_provider_auth_config(&1, spec, :api_key, name),
-                   content,
-                   opts
-                 ) do
-            listing(target, opts)
+            with {:ok, project} <- project_config(opts),
+                 :ok <- unshared(config, project, spec, [name]),
+                 :ok <-
+                   persist_locked(
+                     path(opts),
+                     [{name, {:set, String.trim(value), "provider_management"}}],
+                     &Runner.update_provider_auth_config(&1, spec, :api_key, name),
+                     content,
+                     opts
+                   ) do
+              listing(target, opts)
+            end
           end
-        end
+        end)
       end)
     else
       false -> {:error, :unsupported_method}
@@ -82,36 +142,38 @@ defmodule LemonCli.Setup.ProviderManagement do
   def disconnect(provider_id, opts \\ []) do
     with {:ok, target} <- target(opts),
          {:ok, spec} <- provider(provider_id) do
-      locked(path(opts), fn ->
-        with {:ok, content, config} <- read_config(path(opts)) do
-          spec = configured_spec(spec, config)
+      credential_mutation(target, provider_id, opts, fn ->
+        locked(path(opts), fn ->
+          with {:ok, content, config} <- read_config(path(opts)) do
+            spec = configured_spec(spec, config)
 
-          cfg =
-            ProviderNames.provider_config(Map.get(config, "providers", %{}), provider_id) || %{}
+            cfg =
+              ProviderNames.provider_config(Map.get(config, "providers", %{}), provider_id) || %{}
 
-          names =
-            [
-              cfg["api_key_secret"],
-              cfg["oauth_secret"],
-              ProviderNames.default_secret_name(provider_id),
-              ProviderNames.oauth_default_secret_name(provider_id)
-            ]
-            |> Enum.filter(&present?/1)
-            |> Enum.uniq()
+            names =
+              [
+                cfg["api_key_secret"],
+                cfg["oauth_secret"],
+                ProviderNames.default_secret_name(provider_id),
+                ProviderNames.oauth_default_secret_name(provider_id)
+              ]
+              |> Enum.filter(&present?/1)
+              |> Enum.uniq()
 
-          with {:ok, project} <- project_config(opts),
-               :ok <- unshared(config, project, spec, names),
-               :ok <-
-                 persist_locked(
-                   path(opts),
-                   Enum.map(names, &{&1, :delete}),
-                   &clear_credentials(&1, spec),
-                   content,
-                   opts
-                 ) do
-            listing(target, opts)
+            with {:ok, project} <- project_config(opts),
+                 :ok <- unshared(config, project, spec, names),
+                 :ok <-
+                   persist_locked(
+                     path(opts),
+                     Enum.map(names, &{&1, :delete}),
+                     &clear_credentials(&1, spec),
+                     content,
+                     opts
+                   ) do
+              listing(target, opts)
+            end
           end
-        end
+        end)
       end)
     end
   end
@@ -136,6 +198,11 @@ defmodule LemonCli.Setup.ProviderManagement do
     end
   end
 
+  defp credential_mutation(target, "openai_codex", opts, fun),
+    do: DeviceLogin.with_cancelled(target.id, "openai_codex", fun, opts)
+
+  defp credential_mutation(_target, _provider_id, _opts, fun), do: fun.()
+
   @doc false
   # Shared by terminal onboarding and logout. The patch runs inside the same
   # config lock as the API; secret snapshots precede every mutation.
@@ -154,7 +221,8 @@ defmodule LemonCli.Setup.ProviderManagement do
     with true <- byte_size(updated) <= @max_config_bytes and length(changes) <= 8,
          {:ok, _} <- decode(updated),
          {:ok, snapshots} <- snapshots(changes, secrets),
-         {:ok, existed?} <- config_exists(config_path) do
+         {:ok, existed?} <- config_exists(config_path),
+         :ok <- authorization_current(opts) do
       case apply_changes(changes, secrets, []) do
         {:ok, applied} ->
           case write_config(config_path, updated, opts) do
@@ -212,6 +280,21 @@ defmodule LemonCli.Setup.ProviderManagement do
     _ -> {:error, :unavailable}
   catch
     _, _ -> {:error, :unavailable}
+  end
+
+  defp authorization_current(opts) do
+    case Keyword.get(opts, :authorization_deadline) do
+      nil ->
+        :ok
+
+      deadline when is_integer(deadline) ->
+        clock =
+          Keyword.get(opts, :device_monotonic_time, fn -> System.monotonic_time(:millisecond) end)
+
+        if deadline > clock.(),
+          do: :ok,
+          else: {:error, :authorization_expired}
+    end
   end
 
   defp snapshots(changes, secrets) do

@@ -135,11 +135,8 @@ defmodule LemonControlPlane.Auth.TokenStore do
   @doc """
   Revoke a token, removing it from the store.
   """
-  @spec revoke(String.t()) :: :ok
-  def revoke(token) when is_binary(token) do
-    Store.delete(@store_namespace, token)
-    :ok
-  end
+  @spec revoke(String.t()) :: :ok | {:error, term()}
+  def revoke(token) when is_binary(token), do: Store.delete(@store_namespace, token)
 
   def revoke(_), do: :ok
 
@@ -239,6 +236,23 @@ defmodule LemonControlPlane.Auth.TokenStore do
   end
 
   def current_node_generation(_node_id), do: nil
+
+  @doc false
+  def provider_completion_authority(node_id, now_ms \\ System.system_time(:millisecond)) do
+    with {:ok, head} <- Store.fetch(@head_namespace, head_key("node", node_id)),
+         token when is_binary(token) <- head_token(head),
+         {:ok, info} when is_map(info) <- Store.fetch(@store_namespace, token),
+         expiry when is_integer(expiry) <- get_field(info, :expires_at_ms),
+         true <- now_ms < expiry,
+         identity when is_map(identity) <- get_field(info, :identity),
+         {:ok, _} <- validate_current_identity(token, identity),
+         generation when is_integer(generation) <- get_field(identity, :sessionGeneration) do
+      {:ok, %{generation: generation}}
+    else
+      _ -> {:error, :forbidden}
+    end
+  end
+
   @doc "Reads the durable session generation, including zero for a never-issued session."
   def fetch_node_generation(node_id) when is_binary(node_id) and node_id != "" do
     with {:ok, head} <- Store.fetch(@head_namespace, head_key("node", node_id)) do

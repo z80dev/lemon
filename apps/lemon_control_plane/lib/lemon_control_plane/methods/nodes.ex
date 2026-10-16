@@ -284,7 +284,8 @@ defmodule LemonControlPlane.Methods.NodesRevoke do
          }
        }}
     else
-      _ -> {:error, Errors.internal_error("Unable to revoke node credentials")}
+      _ ->
+        {:error, Errors.internal_error("Unable to revoke node credentials")}
     end
   catch
     :exit, _ -> {:error, Errors.unavailable("Node registry is unavailable")}

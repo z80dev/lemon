@@ -554,10 +554,22 @@ defmodule LemonAi.Auth.OpenAICodexOAuthTest do
                token_url: "https://auth.test/device/exchange",
                req_options: [plug: plug],
                on_auth: fn _, _ -> :ok end,
+               on_device_code: fn metadata -> send(test_pid, {:device_metadata, metadata}) end,
                sleep: fn _ -> :ok end
              )
 
     assert_received :exchanged
+    assert_received {:device_metadata, metadata}
+
+    assert Enum.sort(Map.keys(metadata)) ==
+             [:expires_at_ms, :poll_interval_ms, :user_code, :verification_url]
+
+    assert metadata.verification_url == "https://auth.openai.com/codex/device"
+    assert metadata.user_code == "USER"
+    assert metadata.poll_interval_ms == 4_000
+    assert metadata.expires_at_ms > System.system_time(:millisecond)
+    refute inspect(metadata) =~ "device-id"
+    refute inspect(metadata) =~ "issued-verifier"
   end
 
   test "device expiry includes time spent showing authorization instructions" do
@@ -612,6 +624,156 @@ defmodule LemonAi.Auth.OpenAICodexOAuthTest do
 
     assert_received :device_polled
     refute_received :device_polled
+  end
+
+  test "mock device transport honors the full provider interval before its first poll" do
+    parent = self()
+
+    Req.Test.stub(__MODULE__, fn conn ->
+      case conn.request_path do
+        "/api/accounts/deviceauth/usercode" ->
+          Req.Test.json(conn, %{
+            "device_auth_id" => "private-device-id",
+            "user_code" => "MOCK-USER",
+            "interval" => 10,
+            "expires_in" => 60
+          })
+
+        "/api/accounts/deviceauth/token" ->
+          Plug.Conn.send_resp(conn, 403, Jason.encode!(%{"error" => "access_denied"}))
+
+        _ ->
+          flunk("denied mock grant must never exchange a token")
+      end
+    end)
+
+    assert {:error, :access_denied} =
+             OpenAICodexOAuth.login_device_code(
+               on_auth: fn _, _ -> :ok end,
+               sleep: fn milliseconds -> send(parent, {:slept, milliseconds}) end
+             )
+
+    assert_received {:slept, 13_000}
+    refute_received {:slept, _}
+  end
+
+  test "mock explicit denial and expiry are terminal instead of bare 403 pending" do
+    for {status, error, expected} <- [
+          {400, "access_denied", :access_denied},
+          {403, "access_denied", :access_denied},
+          {403, "expired_token", :device_code_expired}
+        ] do
+      Req.Test.stub(__MODULE__, fn conn ->
+        case conn.request_path do
+          "/api/accounts/deviceauth/usercode" ->
+            Req.Test.json(conn, %{
+              "device_auth_id" => "private-device-id",
+              "user_code" => "MOCK-USER",
+              "interval" => 1,
+              "expires_in" => 60
+            })
+
+          "/api/accounts/deviceauth/token" ->
+            Plug.Conn.send_resp(conn, status, Jason.encode!(%{"error" => error}))
+
+          _ ->
+            flunk("terminal mock grant must never exchange a token")
+        end
+      end)
+
+      assert {:error, ^expected} =
+               OpenAICodexOAuth.login_device_code(
+                 on_auth: fn _, _ -> :ok end,
+                 sleep: fn _ -> :ok end
+               )
+    end
+  end
+
+  test "mock device metadata bounds lifetime and rejects unsafe interval or code" do
+    parent = self()
+
+    Req.Test.stub(__MODULE__, fn conn ->
+      case conn.request_path do
+        "/api/accounts/deviceauth/usercode" ->
+          Req.Test.json(conn, %{
+            "device_auth_id" => "private-device-id",
+            "user_code" => "MOCK-USER",
+            "interval" => 57,
+            "expires_in" => 999_999
+          })
+
+        "/api/accounts/deviceauth/token" ->
+          Plug.Conn.send_resp(conn, 400, Jason.encode!(%{"error" => "access_denied"}))
+      end
+    end)
+
+    before = System.system_time(:millisecond)
+
+    assert {:error, :access_denied} =
+             OpenAICodexOAuth.login_device_code(
+               on_auth: fn _, _ -> :ok end,
+               on_device_code: fn metadata -> send(parent, {:bounded_metadata, metadata}) end,
+               sleep: fn _ -> :ok end
+             )
+
+    assert_received {:bounded_metadata, metadata}
+    assert metadata.poll_interval_ms == 60_000
+    assert metadata.expires_at_ms >= before + 900_000
+    assert metadata.expires_at_ms <= System.system_time(:millisecond) + 900_000
+
+    for override <- [
+          %{"interval" => 58},
+          %{"interval" => 0},
+          %{"expires_in" => 0},
+          %{"device_auth_id" => nil},
+          %{"user_code" => nil},
+          %{"user_code" => String.duplicate("A", 65)},
+          %{"user_code" => "MOCK?private-device-id"},
+          %{"device_auth_id" => String.duplicate("A", 4097)}
+        ] do
+      Req.Test.stub(__MODULE__, fn conn ->
+        assert conn.request_path == "/api/accounts/deviceauth/usercode"
+
+        Req.Test.json(
+          conn,
+          Map.merge(
+            %{
+              "device_auth_id" => "private-device-id",
+              "user_code" => "MOCK-USER",
+              "interval" => 5,
+              "expires_in" => 60
+            },
+            override
+          )
+        )
+      end)
+
+      assert {:error, :invalid_device_authorization_response} =
+               OpenAICodexOAuth.login_device_code(
+                 on_auth: fn _, _ -> flunk("invalid mock metadata must not be published") end,
+                 sleep: fn _ -> flunk("invalid mock metadata must not poll") end
+               )
+    end
+  end
+
+  test "mock device authorization rejects missing required fields without publishing or polling" do
+    for body <- [
+          %{},
+          %{"device_auth_id" => "private-device-id"},
+          %{"user_code" => "MOCK-USER"}
+        ] do
+      Req.Test.stub(__MODULE__, fn conn ->
+        assert conn.request_path == "/api/accounts/deviceauth/usercode"
+        Req.Test.json(conn, body)
+      end)
+
+      assert {:error, :invalid_device_authorization_response} =
+               OpenAICodexOAuth.login_device_code(
+                 on_auth: fn _, _ -> flunk("missing mock fields must not be published") end,
+                 on_device_code: fn _ -> flunk("missing mock fields must not expose metadata") end,
+                 sleep: fn _ -> flunk("missing mock fields must not poll") end
+               )
+    end
   end
 
   defp cli_login(seconds) do

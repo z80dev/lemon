@@ -1034,10 +1034,20 @@ post-response privacy check.
 | `providers.management.api_key.set` | admin | `{targetId,providerId,value}` | Updated redacted listing |
 | `providers.management.disconnect` | admin | `{targetId,providerId}` | Updated redacted listing |
 | `providers.management.default.set` | admin | `{targetId,providerId,modelId}` | Updated redacted listing |
+| `providers.management.device.start` | admin | `{targetId,providerId,loginId,ownerId,sessionId}` | Public device login state |
+| `providers.management.device.poll` | admin | `{targetId,providerId,loginId,ownerId,sessionId}` | Public device login state |
+| `providers.management.device.challenge` | admin (internal) | `{targetId,providerId,loginId,ownerId,sessionId}` | Public device login state plus nullable `challengeNonce` |
+| `providers.management.device.cancel` | admin | `{targetId,providerId,loginId,ownerId,sessionId}` | Public device login state |
+| `providers.management.device.complete` | admin (internal) | `{targetId,providerId,loginId,ownerId,sessionId,completionId,challengeNonce,commit}` | Public device login state |
 | `node.providers.management.list` | admin | `{nodeId}` | Redacted provider listing for the destination |
 | `node.providers.management.api_key.set` | admin | `{nodeId,targetId,providerId,value}` | Updated destination listing |
 | `node.providers.management.disconnect` | admin | `{nodeId,targetId,providerId}` | Updated destination listing |
 | `node.providers.management.default.set` | admin | `{nodeId,targetId,providerId,modelId}` | Updated destination listing |
+| `node.providers.management.device.start` | admin | `{nodeId,targetId,providerId,loginId,ownerId,sessionId}` | Destination public device login state |
+| `node.providers.management.device.poll` | admin | `{nodeId,targetId,providerId,loginId,ownerId,sessionId}` | Destination public device login state |
+| `node.providers.management.device.challenge` | admin (internal) | `{nodeId,targetId,providerId,loginId,ownerId,sessionId}` | Destination public device login state plus nullable `challengeNonce` |
+| `node.providers.management.device.cancel` | admin | `{nodeId,targetId,providerId,loginId,ownerId,sessionId}` | Destination public device login state |
+| `node.providers.management.device.complete` | admin (internal) | `{nodeId,targetId,providerId,loginId,ownerId,sessionId,completionId,challengeNonce,commit}` | Destination public device login state |
 | `node.pair.invite` | pairing | `{nodeName,nodeId?,purpose?,labels?,expiresInMs?}` | `{inviteId,inviteCode,joinCommand,expiresAtMs,summary}` |
 | `node.pair.invite.revoke` | pairing | `{inviteId}` | `{inviteId,revoked:true}` |
 | `node.capabilities.get` | read | `{nodeId}` | `{nodeId,os,measuredAtMs,stale,items}` |
@@ -1071,7 +1081,7 @@ List first and bind every write to the returned exact `target.id`. The controlle
 has a durable target identity; destination targets bind the authenticated durable
 node ID. A mismatch fails before the provider service mutates anything.
 
-All operations return `{target:{id,nodeId,hostname},default:{providerId,modelId},
+Non-device operations return `{target:{id,nodeId,hostname},default:{providerId,modelId},
 providers:[...]}`. Provider rows contain only capability/configuration/readiness
 metadata: `id`, `displayName`, `methods`, `configured`, `status`,
 `lastValidation`, `environmentOverrides`, and `configurationOverrides`. No API
@@ -1081,8 +1091,80 @@ fields and require bounded nonempty strings (256 bytes for target/provider/model
 IDs, 251 bytes for node IDs, 16 KiB for API-key values). Target and node IDs use
 only ASCII letters, digits, `_`, `.`, `:`, and `-`. Listing is static resolver
 inspection, not a provider call.
-Writes return the same listing shape; environment, project configuration, and
+Non-device writes return the same listing shape; environment, project configuration, and
 credential-pool precedence remain visible rather than being silently overwritten.
+
+Codex device operations require `providerId: "openai_codex"` and exact bounded
+identity strings for `targetId`, `loginId`, `ownerId` and `sessionId` (at most
+256 ASCII letters, digits, `_`, `.`, `:`, or `-`). `loginId` is the product's
+fixed start mutation `clientNonce`, not a new value for each poll or cancel;
+the latter retain that login ID while using their own product mutation nonces.
+`ownerId` is an opaque hash binding the product workspace/user and `sessionId`
+is an opaque hash binding the authenticated product session, not credentials.
+The target runtime stores and compares the full binding; an existing login
+cannot be inspected or cancelled using another owner or session.
+
+Device results contain only `{loginId,targetId,providerId,status,verificationUrl,
+userCode,expiresAtMs,pollIntervalMs}`. Status is one of `starting`, `pending`,
+`completed`, `denied`, `expired`, `cancelled`, `lost`, or `failed`. URL, code,
+expiry and polling interval are nullable when unavailable. The only permitted
+verification URL is `https://auth.openai.com/codex/device`; open it in the user's
+normal browser, never a phone-local callback. The target alone performs provider
+polling, token exchange and existing encrypted credential/config persistence.
+`device.poll` reads server state; clients must respect the returned interval.
+Unknown login state after runtime restart is `lost`, never inferred success.
+Reconcile uncertain operations using the same binding and fixed login ID.
+Starting a new login supersedes an older one for the same owner/target/provider;
+cancel and completion are serialized by the target runtime.
+
+`device.challenge` is an internal product-to-target operation with the same five
+binding fields as poll (`nodeId` is additionally required for named nodes). It
+returns the eight public fields plus `challengeNonce`, null unless OAuth tokens
+are ready and the requesting authority matches the login's original authority.
+The target generates 32 cryptographically random bytes encoded as unpadded URL-safe
+Base64, with its own **5,000-millisecond monotonic deadline**. Repeated challenge
+reads preserve an existing unexpired nonce and never extend its deadline.
+Challenges are never persisted; target restart invalidates them. The internal
+challenge field must never be returned to public product clients.
+
+`device.complete` is the internal authorization/settlement RPC, not a public
+OAuth-token exchange. Its eight required fields are shown above, plus `nodeId`
+for named nodes. It returns only the eight public fields, never completion IDs,
+challenges or tokens. `completionId` has the same bounded identity syntax as the
+login binding; `challengeNonce` is a string and may be empty only for `commit:
+false`; `commit` is a boolean. Unknown fields are rejected.
+
+For `commit: true`, each authenticated product poll obtains the challenge first,
+then rechecks the current owner/session/device, machine authority and durable
+revocation generation inside its issuance transaction before authorizing the
+exact nonce. The controller validates the named node's current session token and
+generation and pins the inspected PID/generation at dispatch, without creating
+or forwarding any wall-clock authorization deadline. Before writing, the target
+requires its matching, unused nonce and unexpired monotonic deadline, rechecking
+that same deadline inside serialized credential persistence. Product, controller
+and target wall-clock skew or backward jumps cannot extend this window.
+Revocation and replacement never reserve or wait for completion, even offline.
+Fresh authorization stops on revocation; an already-issued authorization has at
+most the remainder of the original five-second window and one write admission.
+
+For `commit: false`, send the **same completion ID and exact login binding**.
+This is non-writing reconciliation: it may return an already applied result or
+durably consume the authorization so a delayed original request cannot write.
+It never installs credentials or authorizes another provider exchange. The
+controller routes it to the current target connection without checking the
+original token or generation, so settlement remains reachable after token expiry,
+revocation, re-pairing, or controller/target restart. The target still enforces
+the exact target/provider/login/owner/session binding.
+
+Retain unresolved fixed completion IDs in the product's durable journal without
+their challenge nonce, using `challengeNonce: ""` and `commit: false` for
+settlement. Never retry an unknown write with a new ID or
+turn a later generic `forbidden`, offline or pre-dispatch settlement failure into
+proof that the original request did not apply. Only the exact destination reason
+`provider_binding_rejected` maps to `FORBIDDEN` with
+`{reason:"provider_binding_rejected",retrySafe:false,mutationMayHaveApplied:false}`;
+this statement is scoped to the rejected request's binding, not arbitrary earlier
+requests. Unresolved journal entries do not prevent immediate revocation.
 
 The optional CLI provider setup service is loaded at runtime without a control
 plane dependency on the CLI app. Named-node operations use authenticated NodeIO

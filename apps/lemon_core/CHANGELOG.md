@@ -30,6 +30,18 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ### Added
 
+- Provider management supports target-, owner-, and session-bound Codex device
+  start/poll/cancel dispatch with a fixed login identity. Internal challenge
+  transport carries an ephemeral destination-generated nonce; single-use
+  completion binds that exact nonce to its target-local five-second monotonic
+  deadline, without cross-machine authorization timestamps. Challenges are never
+  persisted and restart invalidates them. Non-writing fixed-ID settlement remains
+  reachable after node-token expiry, session replacement and restart; unresolved
+  completions never block revocation or re-pairing. Exact destination binding
+  rejection has its own `provider_binding_rejected` classification. Public results
+  remain bounded status/code fields and the exact OpenAI verification URL, never
+  challenges, private OAuth state or tokens.
+
 - Optional destination-local provider management boundary with bounded write-only
   credential requests and a durable controller target identity. Provider setup
   remains runtime-optional; core does not depend on the CLI application.

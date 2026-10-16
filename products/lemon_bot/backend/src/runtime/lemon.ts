@@ -43,9 +43,16 @@ function upstreamFailure(code: string, details: Record<string, unknown> | undefi
   const processMethod = method === 'node.process.run' || method === 'node.process.get' || method === 'node.process.cancel';
   const reason = typeof details?.reason === 'string' ? details.reason : '';
   const processReason = processMethod && processAdmissionReasons.has(reason);
-  const verifiedNoEffect = processReason && details?.mutationMayHaveApplied === false;
+  const bindingRejection = (method === 'providers.management.device.complete' || method === 'node.providers.management.device.complete')
+    && code === 'FORBIDDEN' && reason === 'provider_binding_rejected' && details?.retrySafe === false && details?.mutationMayHaveApplied === false;
+  const verifiedNoEffect = bindingRejection || processReason && details?.mutationMayHaveApplied === false;
   const unknown = !verifiedNoEffect && (details?.retrySafe === false || details?.code === 'SUBMISSION_OUTCOME_UNKNOWN' || mutation && (details?.mutationMayHaveApplied === true || ['INTERNAL_ERROR', 'TIMEOUT'].includes(code)));
   const safeDetails: JSONObject = { resourceIds: ids };
+  if (bindingRejection) {
+    safeDetails.reason = 'provider_binding_rejected';
+    safeDetails.mutationMayHaveApplied = false;
+    return new ApiError('forbidden', 'The provider login binding was rejected by its execution target.', false, safeDetails);
+  }
   if (processMethod) {
     if (processReason) safeDetails.reason = reason;
     if (typeof details?.mutationMayHaveApplied === 'boolean') safeDetails.mutationMayHaveApplied = details.mutationMayHaveApplied;

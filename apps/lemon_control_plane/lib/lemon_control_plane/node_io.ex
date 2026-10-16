@@ -96,6 +96,14 @@ defmodule LemonControlPlane.NodeIO do
       {:lemon_node_result, ^invoke_id, {:error, {:remote, "target_mismatch"}}} ->
         {:error, Errors.error(:conflict, "Provider target does not match this machine")}
 
+      {:lemon_node_result, ^invoke_id, {:error, {:remote, "provider_binding_rejected"}}} ->
+        {:error,
+         Errors.error(:forbidden, "Provider login binding rejected by destination", %{
+           "reason" => "provider_binding_rejected",
+           "retrySafe" => false,
+           "mutationMayHaveApplied" => false
+         })}
+
       {:lemon_node_result, ^invoke_id, {:error, {:remote, reason}}}
       when reason in ["process_receipt_limit", "process_limit", "process_busy"] ->
         {:error,
@@ -137,7 +145,8 @@ defmodule LemonControlPlane.NodeIO do
            %{"reason" => reason, "retrySafe" => false}
          )}
 
-      {:lemon_node_result, ^invoke_id, {:error, {:remote, "permission_denied"}}} ->
+      {:lemon_node_result, ^invoke_id, {:error, {:remote, reason}}}
+      when reason in ["permission_denied", "forbidden"] ->
         {:error,
          Errors.error(:forbidden, "Destination denied access", %{
            "reason" => "permission_denied",

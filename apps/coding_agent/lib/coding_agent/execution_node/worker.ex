@@ -49,7 +49,10 @@ defmodule CodingAgent.ExecutionNode.Worker do
   ]
   @shell_methods ["node.shell.open", "node.shell.input", "node.shell.resize", "node.shell.close"]
   @process_methods ["node.process.run", "node.process.get", "node.process.cancel"]
-  @provider_methods ~w(node.providers.management.list node.providers.management.api_key.set node.providers.management.disconnect node.providers.management.default.set)
+  @provider_methods Enum.map(
+                      LemonCore.ProviderManagement.operations(),
+                      &("node.providers.management." <> &1)
+                    )
   @process_capability %{
     "version" => 1,
     "maxStdinBytes" => 1_048_576,
@@ -782,14 +785,23 @@ defmodule CodingAgent.ExecutionNode.Worker do
             (not is_binary(state.node_id) or payload["nodeId"] != state.node_id) ->
           {:noreply, send_invoke_error(state, invoke_id, :node_mismatch)}
 
+        method in @provider_methods and
+            (not is_integer(payload["nodeGeneration"]) or payload["nodeGeneration"] < 0) ->
+          {:noreply, send_invoke_error(state, invoke_id, :invalid_node_generation)}
+
         method in @provider_methods ->
           node_id = state.node_id
           cwd = state.default_cwd
           operation = String.replace_prefix(method, "node.providers.management.", "")
+          authority = {self(), payload["nodeGeneration"]}
 
           {:noreply,
            start_service_task(state, invoke_id, :provider_management_failed, fn ->
-             LemonCore.ProviderManagement.execute(operation, args, node_id: node_id, cwd: cwd)
+             LemonCore.ProviderManagement.execute(operation, args,
+               node_id: node_id,
+               cwd: cwd,
+               authority: authority
+             )
            end)}
 
         method == "node.runtime.features" ->
@@ -1120,6 +1132,8 @@ defmodule CodingAgent.ExecutionNode.Worker do
        when reason in [
               :target_mismatch,
               :invalid_request,
+              :forbidden,
+              :provider_binding_rejected,
               :invalid_provider,
               :unsupported_method,
               :invalid_api_key,

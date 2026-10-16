@@ -5,6 +5,11 @@ defmodule LemonCli.Application do
   @impl true
   def start(_type, _args) do
     :ok = LemonCore.ProviderManagement.register(LemonCli.Setup.ProviderManagement)
-    Supervisor.start_link([], strategy: :one_for_one, name: LemonCli.Supervisor)
+
+    Supervisor.start_link(
+      [LemonCli.Setup.DeviceLogin],
+      strategy: :one_for_one,
+      name: LemonCli.Supervisor
+    )
   end
 end

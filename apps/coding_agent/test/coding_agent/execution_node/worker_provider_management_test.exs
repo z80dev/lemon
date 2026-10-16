@@ -24,6 +24,40 @@ defmodule CodingAgent.ExecutionNode.WorkerProviderManagementTest do
     end
   end
 
+  # Explicit offline service mock: no provider transport or credential persistence.
+  defmodule OfflineDeviceServiceMock do
+    for operation <- [
+          :device_start,
+          :device_poll,
+          :device_challenge,
+          :device_cancel,
+          :device_complete
+        ] do
+      def unquote(operation)(params, opts) do
+        test = Application.fetch_env!(:coding_agent, :provider_device_boundary_test)
+        send(test, {:offline_device_call, unquote(operation), params, opts})
+
+        if params["sessionId"] == "foreign-session" do
+          {:error, :forbidden}
+        else
+          {:ok,
+           %{
+             loginId: params["loginId"],
+             targetId: opts[:target].id,
+             providerId: "openai_codex",
+             status: "pending",
+             verificationUrl: "https://auth.openai.com/codex/device",
+             userCode: "MOCK-CODE",
+             expiresAtMs: 1_900_000_000_000,
+             pollIntervalMs: 5_000,
+             challengeNonce: String.duplicate("n", 43),
+             accessToken: "OFFLINE_WORKER_DEVICE_TOKEN_NEVER_ECHO"
+           }}
+        end
+      end
+    end
+  end
+
   test "worker advertises every destination provider method" do
     for operation <- LemonCore.ProviderManagement.operations() do
       assert Worker.capabilities()["node.providers.management." <> operation] == true
@@ -130,6 +164,9 @@ defmodule CodingAgent.ExecutionNode.WorkerProviderManagementTest do
 
           "default.set" ->
             %{"targetId" => listing.target.id, "providerId" => "openai", "modelId" => "fixture"}
+
+          "device." <> _ ->
+            device_params(listing.target.id)
         end
 
       id = operation <> "-" <> field
@@ -159,6 +196,7 @@ defmodule CodingAgent.ExecutionNode.WorkerProviderManagementTest do
         %{
           "invokeId" => id,
           "nodeId" => "cwd-provider-node",
+          "nodeGeneration" => 1,
           "method" => "node.providers.management." <> operation,
           "args" => args
         }}}
@@ -200,6 +238,7 @@ defmodule CodingAgent.ExecutionNode.WorkerProviderManagementTest do
             %{
               "invokeId" => "offline-provider-write",
               "nodeId" => "provider-node-a",
+              "nodeGeneration" => 1,
               "method" => "node.providers.management.api_key.set",
               "args" => %{
                 "targetId" => "node:provider-node-b",
@@ -236,5 +275,134 @@ defmodule CodingAgent.ExecutionNode.WorkerProviderManagementTest do
                     %{"invokeId" => "offline-provider-name-only", "error" => error}, _}
 
     assert inspect(error) =~ "node_mismatch"
+  end
+
+  @tag :tmp_dir
+  test "worker dispatches device binding locally, projects public results and rejects foreign targets",
+       %{tmp_dir: root} do
+    previous = LemonCore.ProviderManagement.service()
+    previous_test = Application.fetch_env(:coding_agent, :provider_device_boundary_test)
+    Application.put_env(:lemon_core, :provider_management_service, OfflineDeviceServiceMock)
+    Application.put_env(:coding_agent, :provider_device_boundary_test, self())
+
+    on_exit(fn ->
+      if previous,
+        do: Application.put_env(:lemon_core, :provider_management_service, previous),
+        else: Application.delete_env(:lemon_core, :provider_management_service)
+
+      case previous_test do
+        {:ok, value} -> Application.put_env(:coding_agent, :provider_device_boundary_test, value)
+        :error -> Application.delete_env(:coding_agent, :provider_device_boundary_test)
+      end
+    end)
+
+    worker =
+      start_supervised!(
+        {Worker,
+         node_name: "offline-device-worker",
+         controller: "ws://localhost:4040/ws",
+         token: "offline-test-token",
+         cwd: root,
+         socket_module: OfflineSocketMock,
+         socket_opts: [test: self()],
+         notify_pid: self()}
+      )
+
+    assert_receive {:offline_socket, socket}
+
+    send(
+      worker,
+      {:execution_node_socket, socket,
+       {:connected, %{"auth" => %{"clientId" => "cwd-provider-node"}}}}
+    )
+
+    assert_receive {:execution_node_worker, ^worker, {:status, :online, "cwd-provider-node"}}
+    params = device_params("node:cwd-provider-node")
+
+    logs =
+      capture_log(fn ->
+        for {operation, function} <- [
+              {"device.start", :device_start},
+              {"device.poll", :device_poll},
+              {"device.challenge", :device_challenge},
+              {"device.cancel", :device_cancel},
+              {"device.complete", :device_complete}
+            ] do
+          params =
+            if operation == "device.complete",
+              do:
+                Map.merge(params, %{
+                  "completionId" => "mock-completion",
+                  "challengeNonce" => String.duplicate("n", 43),
+                  "commit" => true
+                }),
+              else: params
+
+          invoke_provider(worker, socket, operation, operation, params)
+          assert_receive {:offline_device_call, ^function, ^params, opts}, 5_000
+          assert opts[:cwd] == root
+          assert opts[:target].id == params["targetId"]
+          assert opts[:target].nodeId == "cwd-provider-node"
+          assert opts[:authority] == {worker, 1}
+
+          assert_receive {:offline_request, "node.invoke.result",
+                          %{"invokeId" => ^operation, "result" => result}, _},
+                         5_000
+
+          assert result["loginId"] == params["loginId"]
+          assert result["status"] == "pending"
+
+          fields =
+            ~w(loginId targetId providerId status verificationUrl userCode expiresAtMs pollIntervalMs)
+
+          fields =
+            if operation == "device.challenge", do: ["challengeNonce" | fields], else: fields
+
+          assert Enum.sort(Map.keys(result)) == Enum.sort(fields)
+
+          if operation == "device.challenge" do
+            assert result["challengeNonce"] == String.duplicate("n", 43)
+          else
+            refute Map.has_key?(result, "challengeNonce")
+          end
+
+          refute inspect(result) =~ "OFFLINE_WORKER_DEVICE_TOKEN"
+          refute inspect(result) =~ root
+
+          id = "foreign-" <> operation
+          invoke_provider(worker, socket, id, operation, %{params | "targetId" => "node:foreign"})
+
+          assert_receive {:offline_request, "node.invoke.result",
+                          %{"invokeId" => ^id, "error" => error}, _},
+                         5_000
+
+          assert error == "target_mismatch"
+          refute_received {:offline_device_call, _, _, _}
+        end
+
+        invoke_provider(worker, socket, "foreign-session", "device.poll", %{
+          params
+          | "sessionId" => "foreign-session"
+        })
+
+        assert_receive {:offline_device_call, :device_poll, _, _}, 5_000
+
+        assert_receive {:offline_request, "node.invoke.result",
+                        %{"invokeId" => "foreign-session", "error" => "forbidden"}, _},
+                       5_000
+      end)
+
+    refute logs =~ "OFFLINE_WORKER_DEVICE_TOKEN"
+    refute logs =~ root
+  end
+
+  defp device_params(target) do
+    %{
+      "targetId" => target,
+      "providerId" => "openai_codex",
+      "loginId" => "fixed-product-nonce",
+      "ownerId" => "owner-hash",
+      "sessionId" => "session-hash"
+    }
   end
 end

@@ -4,6 +4,14 @@ defmodule LemonCli.Setup.ProviderManagementRegistrationTest do
   test "CLI application registers destination setup support at runtime" do
     assert {:ok, _} = Application.ensure_all_started(:lemon_cli)
     assert LemonCore.ProviderManagement.service() == LemonCli.Setup.ProviderManagement
+    assert is_pid(Process.whereis(LemonCli.Setup.DeviceLogin))
+
+    assert {LemonCli.Setup.DeviceLogin, _, :worker, [LemonCli.Setup.DeviceLogin]} =
+             List.keyfind(
+               Supervisor.which_children(LemonCli.Supervisor),
+               LemonCli.Setup.DeviceLogin,
+               0
+             )
 
     for profile <- [:runtime_min, :runtime_full] do
       assert :lemon_cli in LemonCore.Runtime.Profile.app_list(profile)
@@ -30,7 +38,7 @@ defmodule LemonCli.Setup.ProviderManagementRegistrationTest do
 
   test "one-shot version command starts no additional applications or CLI children" do
     assert {:ok, _} = Application.ensure_all_started(:lemon_cli)
-    assert Supervisor.which_children(LemonCli.Supervisor) == []
+    children = Supervisor.which_children(LemonCli.Supervisor)
     before = Application.started_applications() |> Enum.map(&elem(&1, 0)) |> Enum.sort()
 
     ExUnit.CaptureIO.capture_io(fn ->
@@ -38,6 +46,6 @@ defmodule LemonCli.Setup.ProviderManagementRegistrationTest do
     end)
 
     assert Application.started_applications() |> Enum.map(&elem(&1, 0)) |> Enum.sort() == before
-    assert Supervisor.which_children(LemonCli.Supervisor) == []
+    assert Supervisor.which_children(LemonCli.Supervisor) == children
   end
 end
