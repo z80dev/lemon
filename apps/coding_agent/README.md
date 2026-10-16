@@ -354,6 +354,16 @@ old checkpoints through `LemonCore.Checkpoint`. Checkpoint create, restore, and
 delete operations emit redacted introspection and run/session events for audit
 and live status surfaces. `CodingAgent.Checkpoint` remains the compatibility
 wrapper that adds todo and requirement state for coding-agent resume flows.
+
+Session rewind uses only checkpoints captured by mutation tools as restore
+sources. IDs echoed by `fs_checkpoint list` or `fs_checkpoint diff` never authorize
+restoring files. Manual `fs_checkpoint restore`, unknown filesystem-checkpoint
+actions, and interrupted restores fail closed for file-restoring rewind because
+they do not capture the files they overwrite. These safeguards also apply to
+historical filesystem-tool calls named `checkpoint`; history-only rewind remains
+available. Persisted conversation-only `checkpoint(goal)` calls do not block file
+restoration, even when interrupted. See [checkpoint tools](../../docs/tools/checkpoint.md).
+
 `exec` also supports configured risky-shell checkpoints: pass
 `checkpoint_paths` for files that should be snapshotted before destructive
 commands such as `rm`, `mv`, `sed -i`, `find ... -delete`, `git reset`, or

@@ -3,6 +3,8 @@ defmodule CodingAgent.SessionRewindTest do
 
   alias CodingAgent.Session.Rewind
   alias CodingAgent.SessionManager
+  alias CodingAgent.Tools.FsCheckpoint, as: CheckpointTool
+  alias CodingAgent.Tools.Edit
   alias CodingAgent.Tools.Lsp.Text
   alias LemonCore.Checkpoint
 
@@ -750,6 +752,222 @@ defmodule CodingAgent.SessionRewindTest do
       full = persisted_invocation(target, "debug", %{"action" => "status"}, bridged, outcome)
       {:ok, preview, _} = Rewind.run(full, target.leaf_id, restore_files: true)
       assert preview["unrestorableTools"] == []
+    end
+  end
+
+  test "checkpoint diff ids are not restore sources and checkpoint restore fails closed", %{
+    session: session,
+    dir: dir
+  } do
+    path = Path.join(dir, "file.txt")
+    File.write!(path, "v0\n")
+    opts = [session_id: session.header.id]
+
+    edit = fn old_text, new_text ->
+      arguments = %{"path" => path, "old_text" => old_text, "new_text" => new_text}
+      {arguments, Edit.execute("edit", arguments, nil, nil, dir, opts)}
+    end
+
+    first_prompt = user(session, "first edit")
+    {args, first} = edit.("v0", "v1")
+    first_id = first.details.checkpoint_id
+
+    after_first =
+      first_prompt
+      |> persisted_invocation("edit", args, false, :success, first.details)
+      |> SessionManager.persist(session.file_path)
+
+    second_prompt = user(after_first, "second edit")
+    {args, second} = edit.("v1", "v2")
+
+    after_second =
+      second_prompt
+      |> persisted_invocation("edit", args, false, :success, second.details)
+      |> SessionManager.persist(session.file_path)
+
+    assert File.read!(path) == "v2\n"
+
+    for tool <- ["checkpoint", "fs_checkpoint"], bridged <- [false, true] do
+      inspect_prompt = user(after_second, "inspect the first checkpoint")
+      diff_args = %{"action" => "diff", "checkpoint_id" => first_id}
+      diff = CheckpointTool.execute("diff", diff_args, nil, nil, dir, opts)
+      assert diff.details.checkpoint_id == first_id
+
+      inspected =
+        persisted_invocation(inspect_prompt, tool, diff_args, bridged, :success, diff.details)
+
+      {:ok, preview, _} = Rewind.run(inspected, inspect_prompt.leaf_id, restore_files: true)
+      assert preview["restorePaths"] == []
+      assert preview["unrestorableTools"] == []
+
+      assert {:ok, receipt, _} =
+               Rewind.run(inspected, inspect_prompt.leaf_id,
+                 restore_files: true,
+                 dry_run: false,
+                 confirmation_token: preview["confirmationToken"]
+               )
+
+      assert receipt["restoredPaths"] == []
+      assert File.read!(path) == "v2\n"
+    end
+
+    for tool <- ["checkpoint", "fs_checkpoint"],
+        bridged <- [false, true],
+        outcome <- [:success, :interrupted] do
+      File.write!(path, "v2\n")
+      restore_prompt = user(after_second, "restore the first checkpoint")
+      restore_args = %{"action" => "restore", "checkpoint_id" => first_id}
+      restore = CheckpointTool.execute("restore", restore_args, nil, nil, dir, opts)
+      assert restore.details.checkpoint_id == first_id
+      assert File.read!(path) == "v0\n"
+
+      restored =
+        persisted_invocation(
+          restore_prompt,
+          tool,
+          restore_args,
+          bridged,
+          outcome,
+          restore.details
+        )
+
+      for {target, paths} <- [{restore_prompt, []}, {first_prompt, [path]}] do
+        {:ok, preview, _} = Rewind.run(restored, target.leaf_id, restore_files: true)
+        assert preview["restorePaths"] == paths
+        assert preview["unrestorableTools"] == [tool]
+        refute preview["canAllowPartialRestore"]
+
+        assert {:error, :unrestorable_effects} =
+                 Rewind.run(restored, target.leaf_id,
+                   restore_files: true,
+                   dry_run: false,
+                   confirmation_token: preview["confirmationToken"]
+                 )
+
+        assert File.read!(path) == "v0\n"
+      end
+
+      {:ok, history_only, _} = Rewind.run(restored, restore_prompt.leaf_id)
+
+      assert {:ok, _, _} =
+               Rewind.run(restored, restore_prompt.leaf_id,
+                 dry_run: false,
+                 confirmation_token: history_only["confirmationToken"]
+               )
+    end
+
+    for tool <- ["checkpoint", "fs_checkpoint"] do
+      orphan_prompt = user(after_second, "restore without a persisted call")
+      orphan = tool_result(orphan_prompt, tool, first_id)
+      {:ok, preview, _} = Rewind.run(orphan, orphan_prompt.leaf_id, restore_files: true)
+      assert preview["unrestorableTools"] == [tool]
+      assert preview["restorePaths"] == []
+    end
+  end
+
+  test "conversation checkpoints after recoverable edits do not block filesystem rewind", %{
+    session: session,
+    dir: dir
+  } do
+    for bridged <- [false, true], outcome <- [:success, :failed, :interrupted] do
+      path = Path.join(dir, "exploration-#{bridged}-#{outcome}.txt")
+      File.write!(path, "original\n")
+      target = user(session, "edit then explore")
+      arguments = %{"path" => path, "old_text" => "original", "new_text" => "edited"}
+      edit = Edit.execute("edit", arguments, nil, nil, dir, session_id: session.header.id)
+      assert File.read!(path) == "edited\n"
+
+      edited =
+        target
+        |> persisted_invocation("edit", arguments, false, :success, edit.details)
+        |> SessionManager.persist(session.file_path)
+
+      full =
+        persisted_invocation(
+          edited,
+          "checkpoint",
+          %{"goal" => "explore the change"},
+          bridged,
+          outcome
+        )
+
+      assert {:ok, preview, _} = Rewind.run(full, target.leaf_id, restore_files: true)
+      assert preview["unrestorableTools"] == []
+      assert preview["restorePaths"] == [path]
+
+      assert {:ok, result, _} =
+               Rewind.run(full, target.leaf_id,
+                 restore_files: true,
+                 dry_run: false,
+                 confirmation_token: preview["confirmationToken"]
+               )
+
+      assert result["restoredPaths"] == [path]
+      assert File.read!(path) == "original\n"
+    end
+  end
+
+  test "goal metadata cannot exempt unidentified or filesystem checkpoint calls", %{
+    session: session
+  } do
+    target = user(session, "unidentified checkpoint")
+
+    for tool <- ["checkpoint", "fs_checkpoint"],
+        bridged <- [false, true],
+        outcome <- [:success, :interrupted],
+        arguments <-
+          [
+            %{"goal" => "explore", "action" => "restore"},
+            %{"goal" => "explore", "action" => "unknown"},
+            %{"goal" => "explore", "action" => nil},
+            %{"goal" => nil},
+            %{"goal" => 42}
+          ] ++ if(tool == "fs_checkpoint", do: [%{"goal" => "explore"}], else: []) do
+      full = persisted_invocation(target, tool, arguments, bridged, outcome)
+      {:ok, preview, _} = Rewind.run(full, target.leaf_id, restore_files: true)
+      assert preview["unrestorableTools"] == [tool]
+    end
+
+    for tool <- ["checkpoint", "fs_checkpoint", "tool_invoke"] do
+      orphan =
+        SessionManager.append_message(target, %{
+          "role" => "tool_result",
+          "tool_name" => tool,
+          "tool_call_id" => "missing",
+          "content" => [],
+          "details" => %{"goal" => "explore", "name" => "checkpoint"}
+        })
+
+      {:ok, preview, _} = Rewind.run(orphan, target.leaf_id, restore_files: true)
+      assert preview["unrestorableTools"] == [tool]
+    end
+  end
+
+  test "unknown checkpoint actions fail closed while explicit inspection is exempt", %{
+    session: session
+  } do
+    target = user(session, "checkpoint action")
+
+    for tool <- ["checkpoint", "fs_checkpoint"],
+        bridged <- [false, true],
+        outcome <- [:success, :failed, :interrupted],
+        action <- ["list", "diff", "delete", "unknown", nil] do
+      full = persisted_invocation(target, tool, %{"action" => action}, bridged, outcome)
+      {:ok, preview, _} = Rewind.run(full, target.leaf_id, restore_files: true)
+
+      if action in ["list", "diff", "delete"] do
+        assert preview["unrestorableTools"] == []
+      else
+        assert preview["unrestorableTools"] == [tool]
+        refute preview["canAllowPartialRestore"]
+
+        assert {:error, :unrestorable_effects} =
+                 Rewind.run(full, target.leaf_id,
+                   restore_files: true,
+                   dry_run: false,
+                   confirmation_token: preview["confirmationToken"]
+                 )
+      end
     end
   end
 
