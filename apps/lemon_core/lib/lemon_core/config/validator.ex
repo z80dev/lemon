@@ -409,12 +409,40 @@ defmodule LemonCore.Config.Validator do
       id = module.id()
 
       case section_value(sections, gateway, id) do
-        nil -> acc
-        section when is_map(section) -> module.validate(section, acc)
-        _ -> ["gateway.#{id}: must be a map" | acc]
+        nil ->
+          acc
+
+        section when is_map(section) ->
+          acc
+          |> then(&module.validate(section, &1))
+          |> validate_voice_replies(section[:voice_replies], "gateway.#{id}.voice_replies")
+
+        _ ->
+          ["gateway.#{id}: must be a map" | acc]
       end
     end)
   end
+
+  defp validate_voice_replies(errors, nil, _path), do: errors
+
+  defp validate_voice_replies(errors, replies, path) when is_map(replies) do
+    errors = validate_boolean(errors, replies[:enabled], "#{path}.enabled")
+
+    price = replies[:price_per_million_characters]
+
+    errors =
+      if is_nil(price) or (is_number(price) and price >= 0),
+        do: errors,
+        else: ["#{path}.price_per_million_characters: must be a non-negative number" | errors]
+
+    Enum.reduce([:provider, :model, :base_url, :api_key, :api_key_secret, :voice], errors, fn key,
+                                                                                              acc ->
+      validate_non_empty_string(acc, replies[key], "#{path}.#{key}")
+    end)
+  end
+
+  defp validate_voice_replies(errors, _replies, path),
+    do: ["#{path}: must be a map" | errors]
 
   defp section_value(sections, _gateway, id) when is_map(sections), do: Map.get(sections, id)
   defp section_value(_sections, gateway, id), do: Map.get(gateway, id)

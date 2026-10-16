@@ -34,6 +34,15 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
   credential requests and a durable controller target identity. Provider setup
   remains runtime-optional; core does not depend on the CLI application.
   Node-registry crash/status diagnostics redact request messages, reasons and state.
+- Gateway configuration supports opt-in per-channel `voice_replies` settings
+  with independently configurable speech provider, model, voice, endpoint and
+  credentials. Voice replies remain disabled by default.
+  Channels without a `voice_replies` table retain their registered resolver's
+  section unchanged, including legacy gateway flattening and secret-ref fields.
+- Channel voice replies support optional per-model
+  `price_per_million_characters` pricing when speech responses omit cost.
+  Canonical usage occurrences preserve input character counts with either the
+  configured cost or explicit unknown cost, including after ledger restart.
 
 - `LemonCore.ExecApprovals.expire_owner/1` expires every pending approval of an
   ended run (`{:run, run_id}`) or native session (`{:session, session_id}`) at

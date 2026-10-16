@@ -183,9 +183,38 @@ defmodule LemonCore.Config.Gateway do
   defp resolve_channels(settings, modules) do
     Map.new(modules, fn module ->
       id = module.id()
-      {id, module.resolve(settings[Atom.to_string(id)] || %{})}
+      section = settings[Atom.to_string(id)] || %{}
+
+      resolved = module.resolve(section)
+
+      resolved =
+        if Map.has_key?(section, "voice_replies") do
+          Map.put(resolved, :voice_replies, resolve_voice_replies(section["voice_replies"]))
+        else
+          resolved
+        end
+
+      {id, resolved}
     end)
   end
+
+  defp resolve_voice_replies(nil), do: %{enabled: false}
+
+  defp resolve_voice_replies(settings) when is_map(settings) do
+    %{
+      enabled: resolve_bool_field(settings["enabled"], false),
+      provider: normalize_optional_string(settings["provider"]),
+      model: normalize_optional_string(settings["model"]),
+      base_url: normalize_optional_string(settings["base_url"]),
+      api_key: normalize_optional_string(settings["api_key"]),
+      api_key_secret: normalize_optional_string(settings["api_key_secret"]),
+      voice: normalize_optional_string(settings["voice"]),
+      price_per_million_characters: settings["price_per_million_characters"]
+    }
+    |> reject_nil_values()
+  end
+
+  defp resolve_voice_replies(value), do: value
 
   defp resolve_require_engine_lock(settings) do
     Env.get(:lemon_gateway_require_engine_lock,

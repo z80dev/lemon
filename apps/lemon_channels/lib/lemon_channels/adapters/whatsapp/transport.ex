@@ -699,6 +699,19 @@ defmodule LemonChannels.Adapters.WhatsApp.Transport do
     })
   end
 
+  defp dispatch_outbound(port_server, %{kind: :send_voice} = payload, correlation_id) do
+    Bridge.send_media(port_server, %{
+      id: correlation_id,
+      jid: payload.jid,
+      audio_base64: payload.audio_base64,
+      media_type: "audio",
+      ptt: true,
+      mime_type: payload.mime_type,
+      filename: payload.filename,
+      reply_to: payload[:reply_to_id]
+    })
+  end
+
   defp dispatch_outbound(port_server, %{kind: :send_media} = payload, correlation_id) do
     media_type =
       cond do

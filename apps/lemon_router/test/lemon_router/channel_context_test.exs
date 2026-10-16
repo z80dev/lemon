@@ -60,6 +60,19 @@ defmodule LemonRouter.ChannelContextTest do
              }
     end
 
+    test "propagates only explicit inbound voice markers" do
+      for meta <- [%{inbound_voice: true}, %{"inbound_voice" => true}] do
+        assert %{inbound_voice: true} = ChannelContext.coalescer_meta_from_request(%{meta: meta})
+      end
+
+      for value <- [nil, false, "true", 1] do
+        refute Map.has_key?(
+                 ChannelContext.coalescer_meta_from_request(%{meta: %{inbound_voice: value}}),
+                 :inbound_voice
+               )
+      end
+    end
+
     test "parse_int/1 parses integer strings safely" do
       assert ChannelContext.parse_int("42") == 42
       assert ChannelContext.parse_int(99) == 99

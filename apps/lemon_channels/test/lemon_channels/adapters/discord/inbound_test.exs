@@ -3,6 +3,24 @@ defmodule LemonChannels.Adapters.Discord.InboundTest do
 
   alias LemonChannels.Adapters.Discord.Inbound
 
+  test "marks native voice messages but not ordinary audio attachments" do
+    for {flags, expected} <- [{8192, true}, {0, false}] do
+      raw = %{
+        message: %{
+          "id" => "11",
+          "channel_id" => "222",
+          "flags" => flags,
+          "author" => %{"id" => "99"},
+          "attachments" => [%{"url" => "https://example.com/audio.ogg"}]
+        },
+        account_id: "default"
+      }
+
+      assert {:ok, inbound} = Inbound.normalize(raw)
+      assert inbound.meta.inbound_voice == expected
+    end
+  end
+
   test "normalizes guild message with attachments" do
     raw = %{
       message: %{

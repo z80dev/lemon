@@ -16,6 +16,11 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   physical iPhone/Tailscale and provider-onboarding acceptance runbook; no
   networking, service, credential or device changes are performed.
 
+- Telegram final transcript edits confirm delivery when Telegram reports that
+  the message is already unchanged, including retries after a lost acknowledgement,
+  so opt-in voice synthesis proceeds exactly once. Voice usage falls back to
+  configured model-specific character pricing when speech APIs omit usage;
+  unpriced requests retain their character count and explicitly unknown cost.
 - Lemon Bot iPhone pairing verifies the advertised backend and workspace before
   connecting, shows device/code/expiry while waiting for desktop approval, and
   restores saved sessions read-only without replaying sends or approvals.
@@ -115,6 +120,14 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   already-running Lemon Bot from source or packaged Lemon. It uses interactive
   owner product login, HTTPS preflight, explicit exact-request approval, and
   consumed-link confirmation without starting services or accepting secret flags.
+- Opt-in channel voice replies mirror inbound voice messages using the configured
+  TTS provider, always retain the text transcript, and fall back to text on
+  synthesis failure. Speech runs asynchronously after every transcript chunk is
+  confirmed, with stable final-answer deduplication and a 20 MiB audio limit.
+  Successful streamed final edits count toward transcript delivery, while
+  intermediate tool-turn handoffs never claim the completed answer's identity.
+  Synthesis usage records cost when known without inventing a zero price for
+  unpriced speech.
 - Telegram gateway setup prints the `https://t.me/<bot_username>` link once the bot token validates.
 - TUI prompt history persists across sessions by default in the private local
   SQLite database `~/.lemon/tui-history/history.sqlite3` (mode `0600`, directory

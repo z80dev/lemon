@@ -2417,6 +2417,47 @@ silence_timeout_ms = 5000
 Canonical voice settings are loaded from `gateway.voice`. Legacy `:lemon_gateway` app env
 fallbacks remain only as temporary compatibility shims and should not be used for new setup.
 
+## Channel Voice Replies
+
+Voice replies are opt-in separately for each channel, under
+`[gateway.<channel>.voice_replies]`; they are unrelated to the phone-call
+transport at `[gateway.voice]`.
+
+```toml
+[gateway.telegram.voice_replies]
+enabled = true
+provider = "openai"
+model = "gpt-4o-mini-tts"
+voice = "alloy"
+base_url = "https://api.openai.com/v1"
+api_key_secret = "openai_api_key"
+# api_key = "..." # optional direct credential; prefer encrypted secrets
+```
+
+The same table can be configured for other channel IDs. `enabled` defaults to
+`false`; provider, model, endpoint and credentials are independent of chat-model
+settings. Only replies to inbound voice messages are eligible. The text answer
+is always delivered as the transcript, including when speech synthesis fails.
+Speech synthesis is asynchronous and starts only after all final transcript
+chunks are confirmed delivered. If transcript delivery fails, audio is withheld.
+Provider responses are limited to 20 MiB; oversized audio leaves text-only delivery.
+Credentials may be supplied with `api_key` or an encrypted-store reference
+`api_key_secret`; secret-resolution failures must not fall back to a different key.
+
+`price_per_million_characters` optionally sets the configured speech model's
+USD price per million input characters (a non-negative number). Set it only
+from your provider's applicable model tariff; there is no built-in assumed
+price. Update it when changing models, and leave it absent for models billed
+only by tokens or audio duration. When speech returns no reported cost (as
+OpenAI's binary speech response does), Lemon computes
+`input_characters * price_per_million_characters / 1_000_000`. An explicitly
+reported provider cost takes precedence, including zero. The canonical usage
+ledger retains `input_characters` (Elixir `String.length/1`, Unicode graphemes)
+alongside token counts, without retaining speech text. With no applicable price,
+it retains the character count and records `cost_usd: nil`, `price_known: false`;
+it never treats missing pricing as free speech or invents token usage.
+
+
 ## Telegram Voice Transcription
 
 If enabled, Telegram voice notes are transcribed and the transcript is routed as a normal text message.

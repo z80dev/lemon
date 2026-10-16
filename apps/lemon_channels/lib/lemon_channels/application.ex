@@ -22,6 +22,8 @@ defmodule LemonChannels.Application do
       LemonChannels.Registry,
       # Channels-owned delivery presentation state (message ids / send-vs-edit)
       LemonChannels.PresentationState,
+      {Task.Supervisor, name: LemonChannels.VoiceReplyTaskSupervisor},
+      LemonChannels.VoiceReplyDelivery,
       # Best-effort chat-originated run activity
       LemonChannels.TypingIndicator,
       # Rate limiter

@@ -490,7 +490,7 @@ defmodule LemonRouter.StreamCoalescerTest do
 
       assert :ok =
                StreamCoalescer.finalize_run(session_key, channel_id, run_id,
-                 meta: %{user_msg_id: 9},
+                 meta: %{user_msg_id: 9, terminal_answer: false},
                  final_text: "Final answer"
                )
 
@@ -508,9 +508,82 @@ defmodule LemonRouter.StreamCoalescerTest do
                           thread_id: "777"
                         },
                         body: %{text: "Final answer", seq: 0},
-                        meta: %{surface: :answer, user_msg_id: 9}
+                        meta: %{surface: :answer, user_msg_id: 9, terminal_answer: true}
                       }},
                      1_000
+    end
+
+    test "turn commits and handoffs finalize segments without claiming the terminal answer" do
+      previous_dispatcher = Application.get_env(:lemon_router, :dispatcher)
+      Application.put_env(:lemon_router, :dispatcher, IntentDispatcherStub)
+      :persistent_term.put({IntentDispatcherStub, :test_pid}, self())
+
+      on_exit(fn ->
+        :persistent_term.erase({IntentDispatcherStub, :test_pid})
+
+        if is_nil(previous_dispatcher) do
+          Application.delete_env(:lemon_router, :dispatcher)
+        else
+          Application.put_env(:lemon_router, :dispatcher, previous_dispatcher)
+        end
+      end)
+
+      for boundary <- [:commit, :handoff] do
+        suffix = System.unique_integer([:positive])
+        session_key = "agent:turn-boundary:telegram:bot:dm:#{suffix}"
+        run_id = "run-turn-boundary-#{suffix}"
+
+        assert :ok =
+                 StreamCoalescer.ingest_delta(session_key, "telegram", run_id, 1, "Checking now.",
+                   meta: %{inbound_voice: true, terminal_answer: true}
+                 )
+
+        assert eventually(fn ->
+                 StreamCoalescer.current_text(session_key, "telegram", run_id) == "Checking now."
+               end)
+
+        case boundary do
+          :commit ->
+            assert :ok = StreamCoalescer.commit_turn(session_key, "telegram", run_id)
+
+          :handoff ->
+            assert {:ok, "Checking now."} =
+                     StreamCoalescer.handoff_turn(session_key, "telegram", run_id, :status)
+        end
+
+        assert_receive {:dispatched_intent,
+                        %DeliveryIntent{
+                          run_id: ^run_id,
+                          kind: :stream_finalize,
+                          body: %{text: "Checking now."},
+                          meta: %{surface: :answer, inbound_voice: true, terminal_answer: false}
+                        }},
+                       1_000
+
+        assert :ok =
+                 StreamCoalescer.ingest_delta(session_key, "telegram", run_id, 2, "Result",
+                   meta: %{inbound_voice: true, terminal_answer: false}
+                 )
+
+        assert eventually(fn ->
+                 StreamCoalescer.current_text(session_key, "telegram", run_id) == "Result"
+               end)
+
+        assert :ok =
+                 StreamCoalescer.finalize_run(session_key, "telegram", run_id,
+                   final_text: "The completed answer.",
+                   meta: %{terminal_answer: false}
+                 )
+
+        assert_receive {:dispatched_intent,
+                        %DeliveryIntent{
+                          run_id: ^run_id,
+                          kind: :stream_finalize,
+                          body: %{text: "The completed answer."},
+                          meta: %{surface: :answer, inbound_voice: true, terminal_answer: true}
+                        }},
+                       1_000
+      end
     end
 
     test "finalize_run returns an error when the dispatcher rejects the final intent" do

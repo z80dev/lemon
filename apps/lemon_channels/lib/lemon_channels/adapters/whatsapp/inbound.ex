@@ -49,9 +49,7 @@ defmodule LemonChannels.Adapters.WhatsApp.Inbound do
     from_me = event["from_me"] || false
 
     if from_me do
-      Logger.debug(
-        "WhatsApp inbound skipping from_me message: message_id=#{event["message_id"]}"
-      )
+      Logger.debug("WhatsApp inbound skipping from_me message: message_id=#{event["message_id"]}")
 
       {:error, :from_me}
     else
@@ -111,6 +109,7 @@ defmodule LemonChannels.Adapters.WhatsApp.Inbound do
         is_group: is_group,
         mentioned_jids: mentioned_jids,
         media_type: media_type,
+        inbound_voice: media_type == "audio" and event["ptt"] == true,
         media_path: media_path,
         media_mime: media_mime,
         from_me: false,

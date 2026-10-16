@@ -218,6 +218,7 @@ defmodule LemonRouter.SurfaceManager do
           |> coalescer_meta()
           |> maybe_put_resume(resume)
           |> Map.merge(extra_meta)
+          |> Map.put(:terminal_answer, true)
 
         if state[:saw_delta] == true do
           resolved_final_text = streamed_final_text(state, channel_id, final_text)
@@ -309,7 +310,12 @@ defmodule LemonRouter.SurfaceManager do
           route: route,
           kind: :final_text,
           body: %{text: answer, seq: index},
-          meta: %{surface: :answer, fanout: true, fanout_index: index}
+          meta:
+            Map.merge(Map.take(coalescer_meta(state), [:inbound_voice]), %{
+              surface: :answer,
+              fanout: true,
+              fanout_index: index
+            })
         }
 
         case dispatcher().dispatch(intent) do

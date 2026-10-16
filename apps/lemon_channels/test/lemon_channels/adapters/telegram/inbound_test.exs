@@ -3,6 +3,22 @@ defmodule LemonChannels.Adapters.Telegram.InboundTest do
 
   alias LemonChannels.Adapters.Telegram.Inbound
 
+  test "marks native voice notes but not audio documents as inbound voice" do
+    message = %{
+      "message_id" => 10,
+      "date" => 1_700_000_000,
+      "chat" => %{"id" => 123, "type" => "private"},
+      "from" => %{"id" => 456}
+    }
+
+    for {field, expected} <- [{"voice", true}, {"document", false}, {"audio", false}] do
+      media = %{"file_id" => "audio-file", "mime_type" => "audio/ogg"}
+      update = %{"update_id" => 1, "message" => Map.put(message, field, media)}
+      assert {:ok, inbound} = Inbound.normalize(update)
+      assert inbound.meta.inbound_voice == expected
+    end
+  end
+
   test "normalizes Telegram photo messages into meta.photo" do
     update = %{
       "update_id" => 1,

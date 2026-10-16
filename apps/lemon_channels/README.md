@@ -391,6 +391,21 @@ Exit code `0` means send/list/help succeeded, `1` means platform delivery failed
 
 This ownership boundary matters: channels own truncation, send-vs-edit behavior, tool-status rendering, file/media batching, and Telegram message-id indices. Rendering should be a projection of canonical events plus channel capabilities. Router owns run semantics, session defaults, and prompt rewriting. In particular, pending compaction prompt mutation happens in the router submission path, not in channel transports.
 
+Voice replies are opt-in under `[gateway.<channel>.voice_replies]` (see the
+[configuration reference](../../docs/config.md)). Telegram sends native voice
+messages and WhatsApp sends push-to-talk audio. On voice-capable channels,
+only an inbound voice message can trigger synthesis of the final answer.
+The final text is the transcript. Speech synthesis runs in channels-owned
+background supervision only after every transcript chunk is confirmed delivered;
+failed transcript edits or chunks withhold audio. Tool-turn handoffs are not
+completed answers and never trigger speech or claim its delivery identity.
+A coalescer timeout/fallback shares the same terminal-answer identity and cannot
+start a second synthesis.
+Synthesis or audio-delivery failure leaves that text available. Audio is limited
+to 20 MiB while receiving it and before enqueueing. Streaming snapshots and
+ordinary text messages never trigger speech. Speech usage is recorded separately,
+and unavailable provider pricing remains unknown rather than becoming zero.
+
 ## Outbox Pipeline
 
 The Outbox (`LemonChannels.Outbox`) is a GenServer-based delivery queue.

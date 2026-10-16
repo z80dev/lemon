@@ -3,6 +3,9 @@ defmodule LemonChannels.Adapters.Telegram.Outbound do
   Outbound message delivery for Telegram.
 
   Wraps the existing LemonChannels.Telegram.API for message delivery.
+
+  Voice payload content is `%{audio_bytes: binary, mime_type: mime, filename: filename}`.
+  Audio is uploaded through `sendVoice`; transcripts are separate text payloads.
   """
 
   require Logger
@@ -92,6 +95,15 @@ defmodule LemonChannels.Adapters.Telegram.Outbound do
               )
 
               {:ok, result}
+
+            {:error, {:http_error, 400, body}} = error when is_binary(body) ->
+              if telegram_edit_not_modified?(body) do
+                # The requested transcript is already present, including after
+                # an accepted edit whose acknowledgement was lost.
+                {:ok, %{"message_id" => msg_id}}
+              else
+                error
+              end
 
             {:error, reason} ->
               Logger.warning(
@@ -222,6 +234,37 @@ defmodule LemonChannels.Adapters.Telegram.Outbound do
     end
   end
 
+  defp deliver_payload(
+         %OutboundPayload{
+           kind: :voice,
+           content: %{audio_bytes: bytes, mime_type: mime, filename: filename}
+         } = payload,
+         config
+       )
+       when is_binary(bytes) and byte_size(bytes) > 0 and is_binary(mime) and
+              is_binary(filename) do
+    {token, api_mod} = telegram_config(config)
+
+    cond do
+      not Code.ensure_loaded?(api_mod) ->
+        {:error, :telegram_api_not_available}
+
+      not is_binary(token) or token == "" ->
+        {:error, :telegram_not_configured}
+
+      true ->
+        chat_id = String.to_integer(payload.peer.id)
+        opts = build_send_opts(payload, nil)
+
+        with_retry(fn ->
+          api_mod.send_voice(token, chat_id, {:binary, filename, mime, bytes}, opts)
+        end)
+    end
+  end
+
+  defp deliver_payload(%OutboundPayload{kind: :voice}, _config),
+    do: {:error, :invalid_voice_payload}
+
   defp deliver_payload(%OutboundPayload{kind: kind}, _config) do
     Logger.error("Telegram outbound unsupported payload kind: #{inspect(kind)}")
     {:error, {:unsupported_kind, kind}}
@@ -285,6 +328,17 @@ defmodule LemonChannels.Adapters.Telegram.Outbound do
   defp normalize_text(text) when is_binary(text), do: text
   defp normalize_text(nil), do: ""
   defp normalize_text(text), do: to_string(text)
+
+  defp telegram_edit_not_modified?(body) do
+    case Jason.decode(body) do
+      {:ok, %{"description" => description}} when is_binary(description) ->
+        description == "Bad Request: message is not modified" or
+          String.starts_with?(description, "Bad Request: message is not modified:")
+
+      _ ->
+        false
+    end
+  end
 
   defp telegram_delete_not_found?(body) when is_binary(body) do
     case Jason.decode(body) do

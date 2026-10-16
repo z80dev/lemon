@@ -5,6 +5,10 @@ defmodule LemonChannels.Adapters.WhatsApp.Outbound do
   Delivers OutboundPayload structs to WhatsApp by forwarding to the internal
   WhatsApp transport process, which communicates with the WhatsApp bridge via
   port commands.
+
+  Voice payload content is `%{audio_bytes: binary, mime_type: mime, filename: filename}`.
+  Bytes travel inline through the bridge and are sent as push-to-talk audio with
+  the supplied MIME type and filename. Transcripts are separate text payloads.
   """
 
   require Logger
@@ -121,6 +125,26 @@ defmodule LemonChannels.Adapters.WhatsApp.Outbound do
         {:error, reason}
     end
   end
+
+  def deliver(
+        %OutboundPayload{
+          kind: :voice,
+          content: %{audio_bytes: bytes, mime_type: mime, filename: filename}
+        } = payload
+      )
+      when is_binary(bytes) and byte_size(bytes) > 0 and is_binary(mime) and
+             is_binary(filename) do
+    Transport.deliver(%{
+      kind: :send_voice,
+      jid: payload.peer.id,
+      audio_base64: Base.encode64(bytes),
+      mime_type: mime,
+      filename: filename,
+      reply_to_id: payload.reply_to
+    })
+  end
+
+  def deliver(%OutboundPayload{kind: :voice}), do: {:error, :invalid_voice_payload}
 
   def deliver(
         %OutboundPayload{kind: :reaction, content: %{message_id: message_id, emoji: emoji}} =

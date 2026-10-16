@@ -63,6 +63,11 @@ defmodule LemonRouter.ChannelContext do
       show_running_prefix?:
         present_progress_reference?(meta[:progress_msg_id] || meta["progress_msg_id"])
     }
+    |> then(fn result ->
+      if (meta[:inbound_voice] || meta["inbound_voice"]) == true,
+        do: Map.put(result, :inbound_voice, true),
+        else: result
+    end)
   end
 
   def coalescer_meta_from_request(_), do: %{}

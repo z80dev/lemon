@@ -43,7 +43,9 @@ defmodule LemonChannels.Adapters.Discord.Renderer do
          components = StatusRenderer.components(intent),
          chunks <- normalize_text(intent, text),
          text_hash = text_hash({chunks, components, final_file_signature(intent)}) do
-      if duplicate?(state, intent.kind, seq, text_hash) do
+      LemonChannels.VoiceReplyDelivery.expect(intent, chunks)
+
+      if is_nil(intent.meta[:voice_reply_id]) and duplicate?(state, intent.kind, seq, text_hash) do
         :ok
       else
         case send_text_chunks(intent, route, state, surface, seq, text_hash, chunks, components) do
