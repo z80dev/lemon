@@ -1950,6 +1950,54 @@ files and needs no confirmation; operator `/rewind` is unchanged.
 The filesystem tool is named `fs_checkpoint` (no `checkpoint` alias).
 See [checkpoint tools](tools/checkpoint.md).
 
+## Semantic find
+
+`semantic_find` maps a plain-language behavior description ("where a failed upload
+is retried") to ranked `path:line` locations. It is **off by default** and is
+separate from `find` (file-name globs) and `grep` (regex). The tool is not
+registered, and not shown to the model, unless it is enabled **and** a small model
+is explicitly configured.
+
+```toml
+[runtime.tools.semantic_find]
+enabled = false      # opt in with true
+# model = "@smol"    # optional; defaults to model_roles.tiny, then model_roles.smol
+max_tokens = 8000    # per-call cap on prompt + completion tokens (512-200000)
+
+[model_roles]
+smol = "openai:gpt-4o-mini"
+```
+
+- **Model.** `semantic_find.model` (a concrete `provider:model` or a configured
+  `@role`) wins; otherwise the explicitly configured `model_roles.tiny`, then
+  `model_roles.smol`. The active session model is never used as a fallback: with
+  no small model configured the tool stays unavailable.
+  Role chains must resolve completely; missing roles never fall back to the main
+  model. Only OpenAI (`openai_completions` / `openai_responses`) and Anthropic
+  (`anthropic_messages`) APIs are currently audited for a provider-side output
+  ceiling and byte-level prompt bound. Other provider/API pairs, including
+  `openai-codex`, fail closed and leave the tool unavailable.
+- **Cost.** Every call that finds candidates makes one small-model request with no
+  tools and at most `max_tokens` tokens: the completion ceiling (a quarter of the
+  cap, between 128 and 1024 tokens) is sent as the request's output limit, and the
+  candidate list is trimmed using one token per UTF-8 byte plus 256 tokens for
+  message framing (an upper bound, not an average token estimate), reserving the
+  completion allowance before dispatch. A
+  description with no keyword hits makes no model call. The cap bounds one call;
+  there is no separate per-session limit, and these calls are not counted against
+  the [cumulative usage budgets](#cumulative-usage-budgets).
+- **Usage.** The provider-reported tokens for each call are recorded in the usage
+  ledger under the session's run and session key (provider/model of the small
+  model), so they appear in `usage.cost`, usage records and the usage page like
+  any other model request. A price Lemon cannot attest stays unknown rather than
+  becoming an estimate. The tool result's `details.usage` repeats the numbers.
+- **How it searches.** There is no embedding index or other persistent store. Each
+  call scans the requested roots (skipping hidden, ignored, dependency/build,
+  binary and oversized files, with file-count and byte caps), scores lines against
+  the description's keywords, and lets the model only choose among the numbered
+  lines it was sent, so it cannot invent a location. Repository text sent to the
+  small model is untrusted data, and results are marked untrusted.
+
 ## Tool intent
 
 Tool schemas include an optional string `i` by default: a concise, 2–6 word

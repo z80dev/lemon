@@ -19,6 +19,10 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
   hook (`{LemonCore.ExecApprovalExpiry, :handle_finalize_run}`, wired in
   `config/config.exs`) and `session_ended/1`. Expiry races a resolver or timeout
   through the same atomic exact-record transition: first writer wins.
+- `[runtime.tools.semantic_find]` (`enabled` default `false`, optional `model`,
+  `max_tokens` 512-200000, default 8000) configures the opt-in `semantic_find`
+  coding tool; the `read_only` and `minimal_core` tool profiles allow it when it
+  is enabled.
 
 - `LemonCore.Secrets.get_with_revision/2` and `set_if_revision/4` provide
   incarnation-bound conditional credential saves. A revision is scoped to the

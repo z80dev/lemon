@@ -342,6 +342,11 @@ with ripgrep or the Elixir fallback (which uses `git check-ignore` inside a work
 tree). Pass `"hidden": true` and/or `"no_ignore": true` to include them. `find`
 has the same `hidden`/`no_ignore` switches.
 
+`semantic_find` is an opt-in, model-backed search for when you know the behavior but
+not the names: it ranks `path:line` candidates from a small model under a per-call
+token cap. It is unavailable unless enabled; see
+[Semantic find](../config.md#semantic-find) for configuration, cost and usage reporting.
+
 Lookaround and backreferences automatically use ripgrep's PCRE2 engine when
 available (capability is probed once and cached). Without PCRE2, these patterns
 return an error identifying the unsupported construct and Rust regex engine;

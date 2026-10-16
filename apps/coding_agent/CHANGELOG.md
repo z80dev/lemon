@@ -4,6 +4,19 @@
 
 ### Added
 
+- Opt-in `semantic_find` tool maps a plain-language behavior description to
+  `path:line` code locations. It is off by default and registered only when
+  `[runtime.tools.semantic_find] enabled = true` and an explicit small model
+  (`semantic_find.model`, else `model_roles.tiny`/`smol`) is configured; it never
+  uses the active session model. Candidate lines come from a bounded local scan
+  (no embedding index or second store), the model only chooses among numbered
+  candidates, and `max_tokens` (default 8000) caps every call. Provider-reported
+  usage is recorded through `LemonCore.UsageLedger` against the run and session,
+  with an unknown price left unknown. Distinct from `find` (file-name globs).
+  Complete role chains resolve without fallback. Prompt budgeting reserves a
+  byte-level upper bound and message overhead before completion; unaudited
+  provider/API pairs (including Codex without an output limit) fail closed.
+
 - Truncated webfetch and browser snapshot/page-content results retain complete
   sources as session-scoped artifacts and return readable `artifact://` handles.
   Cached fetches register handles in the requesting session, never another caller.

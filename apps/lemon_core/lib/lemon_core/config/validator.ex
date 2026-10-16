@@ -713,6 +713,7 @@ defmodule LemonCore.Config.Validator do
       get_in(tools, [Access.key(:checkpoint, %{}), :enabled]),
       "tools.checkpoint.enabled"
     )
+    |> validate_semantic_find(Map.get(tools, :semantic_find))
     |> validate_computer_use(Map.get(tools, :computer_use))
   end
 
@@ -738,6 +739,27 @@ defmodule LemonCore.Config.Validator do
   end
 
   defp validate_edit(errors, _), do: ["runtime.tools.edit: must be a table" | errors]
+
+  defp validate_semantic_find(errors, nil), do: errors
+
+  defp validate_semantic_find(errors, %{} = section) do
+    errors
+    |> validate_boolean(section[:enabled], "runtime.tools.semantic_find.enabled")
+    |> validate_non_empty_string(section[:model], "runtime.tools.semantic_find.model")
+    |> validate_semantic_find_max_tokens(section[:max_tokens])
+  end
+
+  defp validate_semantic_find(errors, _),
+    do: ["runtime.tools.semantic_find: must be a table" | errors]
+
+  defp validate_semantic_find_max_tokens(errors, nil), do: errors
+
+  defp validate_semantic_find_max_tokens(errors, value)
+       when is_integer(value) and value in 512..200_000,
+       do: errors
+
+  defp validate_semantic_find_max_tokens(errors, _value),
+    do: ["runtime.tools.semantic_find.max_tokens: must be an integer from 512 to 200000" | errors]
 
   defp validate_lsp(errors, nil), do: errors
 

@@ -250,6 +250,7 @@ defmodule LemonCore.Config do
       wasm: tools.wasm,
       disclosure: tools.disclosure,
       checkpoint: tools.checkpoint,
+      semantic_find: tools.semantic_find,
       browser: tools.browser,
       computer_use: tools.computer_use
     }
