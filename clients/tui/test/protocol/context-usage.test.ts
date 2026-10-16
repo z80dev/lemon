@@ -78,6 +78,11 @@ describe("parseSessionsContext", () => {
 		const raw = reportedContextFixture("s1");
 		raw.usage = { tokens: "lots" };
 		expect(parseSessionsContext(raw).usage).toBeUndefined();
+		// A missing or invalid cost is unknown, never read as zero.
+		raw.usage = { tokens: 1, input: 1, output: 0 };
+		expect(parseSessionsContext(raw).usage?.costUsd).toBeUndefined();
+		raw.usage = { tokens: 1, input: 1, output: 0, costUsd: -3 };
+		expect(parseSessionsContext(raw).usage?.costUsd).toBeUndefined();
 	});
 
 	test("drops unknown category ids but keeps their tokens as an honest remainder", () => {

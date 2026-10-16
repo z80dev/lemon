@@ -311,6 +311,13 @@ export class EventController {
 	#onAgent(event: AgentEvent): void {
 		const owner = this.#sessionFor(event.sessionKey);
 		owner.recoveryEventVersion += 1;
+		// Spend is session-wide, not a projection: it counts once per run whether or
+		// not the event passes the ownership fences below, and whether the session
+		// is snapshot-managed (where the event only requests recovery) or not.
+		if (event.type === "completed") {
+			owner.addRunCost(event.runId, (event as AgentCompletedEvent).usage);
+			this.#onStatusChanged?.();
+		}
 		if (!owner.acceptsEvent(event.runId, event.identity)) {
 			this.#requestRecovery(owner);
 			return;

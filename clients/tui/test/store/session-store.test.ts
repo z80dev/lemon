@@ -566,3 +566,73 @@ test("replacing history clears synthetic run indexes as well as visible blocks",
 	expect(session.blocks).toHaveLength(1);
 	expect(session.assistantFor("history:entry")?.text).toBe("active text");
 });
+
+describe("SessionStore cumulative cost", () => {
+	test("sums run costs, never invents zero, and marks missing costs partial", () => {
+		const session = new SessionStore("s");
+		session.addRunCost("r1", { totalTokens: 5 });
+		expect(session.sessionCostUsd).toBeUndefined();
+		expect(session.sessionCostPartial).toBe(true);
+
+		const fresh = new SessionStore("t");
+		fresh.addRunCost("r1", { costUsd: 0.25 });
+		fresh.addRunCost("r2", { costUsd: 0.5 });
+		expect(fresh.sessionCostUsd).toBeCloseTo(0.75);
+		expect(fresh.sessionCostPartial).toBe(false);
+		fresh.addRunCost("r3", { costUsd: null });
+		expect(fresh.sessionCostUsd).toBeCloseTo(0.75);
+		expect(fresh.sessionCostPartial).toBe(true);
+	});
+
+	test("counts each run once", () => {
+		const session = new SessionStore("s");
+		session.addRunCost("r1", { costUsd: 0.25 });
+		session.addRunCost("r1", { costUsd: 0.25 });
+		session.addRunCost("r2", {});
+		session.addRunCost("r2", { costUsd: 9 });
+		expect(session.sessionCostUsd).toBeCloseTo(0.25);
+		expect(session.costedRunCount).toBe(2);
+	});
+
+	test("a terminal run seen only in a snapshot is partial until its completion is counted", () => {
+		const session = new SessionStore("s");
+		session.noteTerminalRun("r1");
+		expect(session.sessionCostPartial).toBe(true);
+		session.addRunCost("r1", { costUsd: 0.1 });
+		expect(session.sessionCostPartial).toBe(false);
+		session.noteTerminalRun("r1");
+		expect(session.sessionCostPartial).toBe(false);
+	});
+
+	test("unobserved history keeps the total a lower bound", () => {
+		const session = new SessionStore("s");
+		session.markCostUnobserved();
+		session.addRunCost("r1", { costUsd: 0.25 });
+		expect(session.sessionCostUsd).toBeCloseTo(0.25);
+		expect(session.sessionCostPartial).toBe(true);
+	});
+
+	test("the daemon ledger seeds only a positive amount, and only while quiescent", () => {
+		const zero = new SessionStore("a");
+		zero.seedPriorCost(0, true);
+		expect(zero.sessionCostUsd).toBeUndefined();
+		expect(zero.sessionCostPartial).toBe(false);
+
+		const seeded = new SessionStore("b");
+		seeded.seedPriorCost(1.5, true);
+		expect(seeded.sessionCostUsd).toBeCloseTo(1.5);
+		expect(seeded.sessionCostPartial).toBe(true);
+		seeded.addRunCost("r1", { costUsd: 0.25 });
+		expect(seeded.sessionCostUsd).toBeCloseTo(1.75);
+
+		const busy = new SessionStore("c");
+		busy.seedPriorCost(1.5, false);
+		expect(busy.sessionCostUsd).toBeUndefined();
+		expect(busy.sessionCostPartial).toBe(true);
+
+		const counted = new SessionStore("d");
+		counted.addRunCost("r1", { costUsd: 0.25 });
+		counted.seedPriorCost(1.5, true);
+		expect(counted.sessionCostUsd).toBeCloseTo(0.25);
+	});
+});

@@ -173,6 +173,22 @@ describe("breakpoints", () => {
 		expect(stripAnsi(renderStatusLine(data({ runCostUsd: Number.NaN }), 200))).not.toContain("$");
 	});
 
+	test("session cost is cumulative, a lower bound when partial, and unknown rather than zero", () => {
+		const known = stripAnsi(
+			renderStatusLine(data({ sessionCost: { usd: 1.234, partial: false } }), 200),
+		);
+		expect(known).toContain("session $1.23");
+		const partial = stripAnsi(
+			renderStatusLine(data({ sessionCost: { usd: 0.5, partial: true } }), 200),
+		);
+		expect(partial).toContain("session ≥$0.50");
+		const unknown = stripAnsi(
+			renderStatusLine(data({ sessionCost: { usd: undefined, partial: true } }), 200),
+		);
+		expect(unknown).toContain("session cost unknown");
+		expect(unknown).not.toContain("$0");
+	});
+
 	test("busy composer exposes submission mode and interrupt before optional branch metadata", () => {
 		const plain = stripAnsi(
 			renderStatusLine(data({ busy: true, mode: "steer", pendingPrompts: 2 }), 120),

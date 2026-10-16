@@ -107,14 +107,14 @@ export function sessionUsageLine(usage: {
 	output: number;
 	cacheRead: number;
 	cacheWrite: number;
-	costUsd: number;
+	costUsd: number | undefined;
 }): string {
 	const cache = usage.cacheRead + usage.cacheWrite;
 	const cacheDetail =
 		cache > 0
 			? ` (${humanNumber(usage.cacheRead)} read, ${humanNumber(usage.cacheWrite)} write)`
 			: "";
-	return `tokens ${humanNumber(usage.input)} in / ${humanNumber(usage.output)} out / ${humanNumber(cache)} cache${cacheDetail} · cost ${humanCost(usage.costUsd) ?? "$0"} (estimate)`;
+	return `tokens ${humanNumber(usage.input)} in / ${humanNumber(usage.output)} out / ${humanNumber(cache)} cache${cacheDetail} · cost ${humanCost(usage.costUsd) ?? "unknown"} (estimate)`;
 }
 
 /** `label: value` lines, skipping every entry whose value is absent. */

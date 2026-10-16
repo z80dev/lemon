@@ -382,6 +382,8 @@ export class SessionController {
 			// A run that completed meanwhile reported something newer.
 			if (usage.sessionKey !== session.key || session.usage || session.contextMeasurement) return;
 			session.applyContextMeasurement(usage.usedTokens, usage.window);
+			// Earlier spend the live events never carried; a lower bound at best.
+			session.seedPriorCost(usage.usage?.costUsd, !session.busy);
 			if (session.key === this.#store.focusedKey) this.#refreshStatus?.();
 		} catch (error) {
 			if (error instanceof NotConnectedError || error instanceof RequestTimeoutError) {
@@ -408,7 +410,11 @@ export class SessionController {
 				includeFullText: true,
 			});
 			const messages = (result?.messages ?? []) as ChatHistoryMessage[];
-			if (messages.length > 0) synthesizeHistory(session, messages);
+			if (messages.length > 0) {
+				synthesizeHistory(session, messages);
+				// Earlier runs' spend was not observed here: never total it as zero.
+				if (messages.some((message) => message.role === "assistant")) session.markCostUnobserved();
+			}
 		} catch (error) {
 			// A session with no stored history is the common case and answers with
 			// an error on some daemons; either way an empty transcript is correct.
@@ -570,6 +576,15 @@ export class SessionController {
 				),
 			);
 			synthesizeHistory(session, snapshot.actions);
+			// Runs this client never watched finish (resumed history) have spend it
+			// cannot see; a run it did watch is already counted by its own event.
+			if (
+				session.costedRunCount === 0 &&
+				snapshot.messages.some(
+					(message) => message.role === "assistant" && !(runId && message.runId === runId),
+				)
+			)
+				session.markCostUnobserved();
 			for (const action of snapshot.actions) {
 				const block = action.toolCallId ? session.byActionId.get(action.toolCallId) : undefined;
 				if (block && action.phase === "started" && snapshot.phase === "running")
@@ -649,6 +664,7 @@ export class SessionController {
 				session.activeRunId = runId;
 				session.busy = !snapshot.terminal;
 				if (snapshot.terminal) {
+					session.noteTerminalRun(runId);
 					session.finalizeRun(runId, {
 						ok: snapshot.phase !== "failed",
 						interrupted: snapshot.phase === "cancelled",

@@ -156,10 +156,11 @@ function sessionUsage(raw: unknown): ContextSessionUsage | undefined {
 	const input = count(pickNumber(raw, "input"));
 	const output = count(pickNumber(raw, "output"));
 	if (tokens === undefined || input === undefined || output === undefined) return undefined;
+	// A missing or invalid cost stays unknown here; callers must not read it as zero.
 	const costUsd = pickNumber(raw, "costUsd");
 	return {
 		tokens,
-		costUsd: costUsd !== undefined && costUsd >= 0 ? costUsd : 0,
+		costUsd: costUsd !== undefined && costUsd >= 0 ? costUsd : undefined,
 		input,
 		output,
 		cacheRead: count(pickNumber(raw, "cacheRead")) ?? 0,
