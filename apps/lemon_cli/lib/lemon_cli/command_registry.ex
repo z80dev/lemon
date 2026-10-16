@@ -86,6 +86,26 @@ defmodule LemonCli.CommandRegistry do
       ]
     },
     %{
+      name: "connect",
+      summary: "Pair an iPhone with an already-running Lemon Bot backend",
+      usage: "lemon connect iphone --backend ORIGIN [--origin HTTPS_ORIGIN]",
+      subcommands: [
+        %{name: "iphone", summary: "Interactively sign in and approve one exact iPhone request"}
+      ],
+      options: [
+        option(
+          "--backend ORIGIN",
+          ["--backend"],
+          "Required intended, already-running Bot backend"
+        ),
+        option(
+          "--origin HTTPS_ORIGIN",
+          ["--origin"],
+          "Public HTTPS origin (defaults to backend publicUrl)"
+        )
+      ]
+    },
+    %{
       name: "run",
       summary: "Run a prompt non-interactively (-p, --print)",
       usage: "lemon run [PROMPT] [--output text|json|stream-json] [options]",

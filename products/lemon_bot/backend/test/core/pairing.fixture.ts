@@ -15,6 +15,7 @@ import { createMutationService } from '../../src/core/mutations';
 import { createPairingRoutes, createPairingService, type PairingService } from '../../src/core/pairing';
 import { Router } from '../../src/core/router';
 import { createLemonService } from '../../src/runtime/lemon';
+import { createIdentityServices } from '../../src/enterprise/identity';
 
 export interface PairingFixture {
   readonly services: BackendServices;
@@ -62,7 +63,8 @@ export async function pairingFixture(): Promise<PairingFixture> {
     const gates = createGateService(services); services.gates = gates; closeGates = gates.close;
     pairingService = createPairingService(services);
     router = new Router(services);
-    router.register([...createAccountRoutes(services), ...createPairingRoutes(services)]);
+    const identity = createIdentityServices(services);
+    router.register([...createAccountRoutes(services, { async onLogoutUser(userId) { await identity.endProviderSessions(userId); } }), ...createPairingRoutes(services)]);
   }
   open();
   const workspace: P.Workspace = services!.resource('workspace', { name: 'My exact desktop cluster', ownerUserId: 'owner', enabled: true, timezone: 'UTC' });

@@ -82,7 +82,8 @@ export interface BotPreflightOptions {
 }
 export interface BotPreflightResult { origin: string; setup: SetupStatus; identity: BackendIdentity | null }
 
-function requireSystemTLS(): void {
+/** Refuse runtime-wide TLS bypasses before any CLI discovery or owner login. */
+export function requireBotSystemTLS(): void {
   const runtime = globalThis as typeof globalThis & { process?: { env?: Record<string, string | undefined> } };
   if (runtime.process?.env?.NODE_TLS_REJECT_UNAUTHORIZED === '0' || runtime.process?.env?.BUN_TLS_REJECT_UNAUTHORIZED === '0') {
     throw new BotPreflightError('tls_required', 'Remove the runtime TLS verification bypass before pairing.');
@@ -112,7 +113,7 @@ async function readDescriptor(response: Response): Promise<unknown> {
 
 /** Bounded read-only probes. No mutation retries, discovery, redirects or TLS exceptions. */
 export async function preflightBotOrigin(options: BotPreflightOptions): Promise<BotPreflightResult> {
-  requireSystemTLS();
+  requireBotSystemTLS();
   const use = options.use ?? 'phone';
   const origin = validateBotOrigin(options.origin, use);
   const signal = options.signal ? AbortSignal.any([options.signal, AbortSignal.timeout(10000)]) : AbortSignal.timeout(10000);
