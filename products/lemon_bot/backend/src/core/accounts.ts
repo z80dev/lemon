@@ -8,7 +8,7 @@ import { clearUserConversationState } from './conversations';
 import { deleteUserPairings, revokeWorkspacePairings } from './pairing';
 import { hasProductAccess } from '../enterprise/policy';
 import { prepareProviderTeardown } from '../enterprise/teardown';
-import { productVersion } from './version';
+import { backendDescriptor } from './identity';
 
 const name = z.string().trim().min(1).max(120);
 const email = z.string().trim().toLowerCase().pipe(z.email().max(254));
@@ -264,7 +264,12 @@ export function createAccountRoutes(services: BackendServices, hooks: Revocation
     return { items, affected, fingerprint: cleanupFingerprint(actor.userId), providerBinding: provider.binding, metadataKeys: accountMetadataKeys(actor.userId) };
   }
   const routes: Route[] = [
-    { method: 'GET', path: '/v1/setup', auth: 'public', status: 200, handler: () => ({ setupRequired: store.metadata<string>('workspaceId') === null, version: productVersion, apiVersion: 1 } satisfies P.SetupStatus) },
+    { method: 'GET', path: '/v1/setup', auth: 'public', status: 200, handler: () => ({ ...backendDescriptor(services), setupRequired: store.metadata<string>('workspaceId') === null } satisfies P.SetupStatus) },
+    { method: 'GET', path: '/v1/identity', auth: 'member', status: 200, handler: context => {
+      const actor = principal(context.user);
+      if (actor.kind !== 'user' || actor.sessionId === null) fail('unauthenticated', 'A product account session is required.');
+      return { ...backendDescriptor(services), workspaceId: actor.workspaceId } satisfies P.BackendIdentity;
+    } },
     { method: 'POST', path: '/v1/setup', auth: 'public', status: 200, handler: async context => {
       const body = parse(setupSchema, context.body); rateLimit('setup');
       if (store.metadata('workspaceId') !== null) fail('conflict', 'Workspace is already configured.');

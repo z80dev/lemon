@@ -29,7 +29,11 @@ export interface MemberInvite extends Resource { email: string; role: 'admin' | 
 /** null expiry is reserved for a device-paired session until revocation; normal login sessions retain bounded expiry. */
 export interface AuthSession extends Resource { userId: ID; deviceId: ID | null; expiresAtMs: TimestampMs | null; lastSeenAtMs: TimestampMs; current: boolean }
 export interface AuthResult { token: string; session: AuthSession; user: User; workspace: Workspace; member: Member }
-export interface SetupStatus { setupRequired: boolean; version: string; apiVersion: 1 }
+/** Public-safe product fingerprint; no account, workspace name, owner or credentials. */
+export interface BackendDescriptor { product: 'lemon_bot'; apiVersion: 1; version: string; instanceId: ID; publicUrl: string; capabilities: { pairing: boolean } }
+export interface SetupStatus extends BackendDescriptor { setupRequired: boolean }
+/** Establish the expected identity using the existing configured product session. */
+export interface BackendIdentity extends BackendDescriptor { workspaceId: ID }
 export interface SetupRequest extends Mutation { setupCode: string; email: string; password: string; displayName: string; workspaceName: string }
 export interface LoginRequest extends Mutation { email: string; password: string; deviceId?: ID }
 export interface AcceptInviteRequest extends Mutation { inviteToken: string; email: string; password: string; displayName: string }
@@ -55,7 +59,7 @@ export interface Pairing extends Resource { workspaceId: ID; ownerUserId: ID; cl
 export interface PairingStart extends Mutation {}
 /** pairUrl is a short-lived one-use secret, returned only directly to the authenticated issuing owner. */
 export interface PairingIssued { pairing: Pairing; pairUrl: string }
-export interface PairingLink { backendUrl: string; workspaceId: ID; pairCode: string }
+export interface PairingLink { backendUrl: string; instanceId: ID; workspaceId: ID; pairCode: string }
 /** Read-only secret-bound preview; no clientNonce, code consumption, approval or credentials. */
 export interface PairingPreviewRequest { pairCode: string; workspaceId: ID }
 export interface PairingPreviewResult { clusterName: string; backendUrl: string; expiresAtMs: TimestampMs }
@@ -613,6 +617,7 @@ export interface RestEndpoints {
   'GET /downloads/:ticket': Endpoint<undefined, BinaryBody>;
   'GET /connectors/oauth/callback': Endpoint<undefined, ConnectorAuth, OAuthCallbackQuery>;
   'GET /setup': Endpoint<undefined, SetupStatus>;
+  'GET /identity': Endpoint<undefined, BackendIdentity>;
   'POST /setup': Endpoint<SetupRequest, AuthResult>;
   'POST /auth/login': Endpoint<LoginRequest, AuthResult>;
   'POST /auth/invites/accept': Endpoint<AcceptInviteRequest, AuthResult>;

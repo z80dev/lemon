@@ -710,23 +710,27 @@ public struct PairingIssued: Codable, Hashable {
 
 public struct PairingLink: Codable, Hashable {
     public var backendUrl: String
+    public var instanceId: ID
     public var workspaceId: ID
     public var pairCode: String
-    public init(backendUrl: String, workspaceId: ID, pairCode: String) {
+    public init(backendUrl: String, instanceId: ID, workspaceId: ID, pairCode: String) {
         self.backendUrl = backendUrl
+        self.instanceId = instanceId
         self.workspaceId = workspaceId
         self.pairCode = pairCode
     }
-    enum CodingKeys: String, CodingKey { case backendUrl, workspaceId, pairCode }
+    enum CodingKeys: String, CodingKey { case backendUrl, instanceId, workspaceId, pairCode }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         backendUrl = try c.decode(String.self, forKey: .backendUrl)
+        instanceId = try c.decode(ID.self, forKey: .instanceId)
         workspaceId = try c.decode(ID.self, forKey: .workspaceId)
         pairCode = try c.decode(String.self, forKey: .pairCode)
     }
     public func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
         try c.encode(backendUrl, forKey: .backendUrl)
+        try c.encode(instanceId, forKey: .instanceId)
         try c.encode(workspaceId, forKey: .workspaceId)
         try c.encode(pairCode, forKey: .pairCode)
     }

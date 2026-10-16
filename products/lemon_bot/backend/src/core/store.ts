@@ -1,4 +1,5 @@
 import { Database } from 'bun:sqlite';
+import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import type { EntityStore } from './services';
 import { fail } from './errors';
@@ -18,6 +19,9 @@ export class Store implements EntityStore {
       CREATE INDEX IF NOT EXISTS events_time ON events(timestamp_ms);
       CREATE TABLE IF NOT EXISTS nonces(scope TEXT NOT NULL,nonce TEXT NOT NULL,hash TEXT NOT NULL,state TEXT NOT NULL,receipt TEXT,resource_ids TEXT NOT NULL DEFAULT '[]',created_at_ms INTEGER NOT NULL,PRIMARY KEY(scope,nonce));
       CREATE TABLE IF NOT EXISTS confirmations(token_digest TEXT PRIMARY KEY,user_id TEXT NOT NULL,target_id TEXT NOT NULL,revision INTEGER NOT NULL,action TEXT NOT NULL,name TEXT NOT NULL,binding TEXT NOT NULL,expires_at_ms INTEGER NOT NULL,consumed INTEGER NOT NULL DEFAULT 0);`);
+    this.transaction(() => {
+      if (!this.db.query("SELECT 1 FROM metadata WHERE key='instanceId'").get()) this.setMetadata('instanceId', randomUUID());
+    });
   }
   get<T>(collection: string, id: string): T | null {
     const row = this.db.query('SELECT value FROM entities WHERE collection=? AND id=?').get(collection,id) as { value:string } | null;

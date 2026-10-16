@@ -1,10 +1,10 @@
 import { describe, expect, test } from 'bun:test';
-import { LemonBotClient, parsePairUrl, type Pairing, type PairingClaimResult, type PairingCompletion, type PairingIssued, type PairingPreviewResult } from '../src/index.ts';
+import { LemonBotClient, parsePairUrl, preflightBotOrigin, validateBotIdentity, type Pairing, type PairingClaimResult, type PairingCompletion, type PairingIssued, type PairingPreviewResult } from '../src/index.ts';
 import { fetchBoundary, snapshot } from './fixtures.ts';
 
 const origin = 'https://desktop.example.ts.net';
 const code = 'a'.repeat(43);
-const pairUrl = `lemonbot://pair?backend=${encodeURIComponent(origin)}&cluster=workspace_1&code=${code}`;
+const pairUrl = `lemonbot://pair?backend=${encodeURIComponent(origin)}&instance=backend_1&cluster=workspace_1&code=${code}`;
 const pairing: Pairing = {
   id: 'pairing_1', revision: 1, createdAtMs: 1, updatedAtMs: 1, workspaceId: 'workspace_1',
   ownerUserId: 'user_1', clusterName: 'My desktop', backendUrl: origin, status: 'waiting',
@@ -12,8 +12,20 @@ const pairing: Pairing = {
 };
 
 describe('owner pairing boundary', () => {
+  test('exports shared preflight and identity validation without product credentials in the initial probe', async () => {
+    const descriptor = { product: 'lemon_bot' as const, apiVersion: 1 as const, version: '0.1.0', setupRequired: false, instanceId: 'backend_1', publicUrl: origin, capabilities: { pairing: true } };
+    const boundary = fetchBoundary(request => {
+      expect(request.url).toBe(`${origin}/v1/setup`);
+      expect(request.headers.get('Authorization')).toBeNull();
+      return Response.json(descriptor);
+    });
+    const result = await preflightBotOrigin({ origin, expectedInstanceId: 'backend_1', fetch: boundary.clientFetch });
+    expect(result.setup.instanceId).toBe('backend_1'); expect(result.identity).toBeNull();
+    expect(validateBotIdentity({ ...descriptor, workspaceId: pairing.workspaceId }, { instanceId: 'backend_1', workspaceId: pairing.workspaceId }).workspaceId).toBe(pairing.workspaceId);
+  });
+
   test('strict parsing preserves exact origin, opaque cluster and one-use secret', () => {
-    expect(parsePairUrl(pairUrl)).toEqual({ backendUrl: origin, workspaceId: 'workspace_1', pairCode: code });
+    expect(parsePairUrl(pairUrl)).toEqual({ backendUrl: origin, instanceId: 'backend_1', workspaceId: 'workspace_1', pairCode: code });
     expect(parsePairUrl(pairUrl.replace(encodeURIComponent(origin), encodeURIComponent('http://127.0.0.1:4080'))).backendUrl).toBe('http://127.0.0.1:4080');
     const opaque = pairUrl.replace('workspace_1', encodeURIComponent('cluster + local'));
     expect(parsePairUrl(opaque).workspaceId).toBe('cluster + local');
@@ -22,6 +34,7 @@ describe('owner pairing boundary', () => {
   test('rejects credentials, fragments, duplicate/unknown keys, routes and non-HTTPS remote origins', () => {
     for (const value of [
       pairUrl + '&code=' + code, pairUrl + '&token=secret', pairUrl + '#', pairUrl + '#secret',
+      pairUrl.replace('&instance=backend_1', ''), pairUrl + '&instance=other', pairUrl.replace('backend_1', ''),
       pairUrl.replace('lemonbot://pair?', 'lemonbot://pair:443?'),
       pairUrl.replace('lemonbot://pair?', 'lemonbot://user@pair?'),
       pairUrl.replace('lemonbot://pair?', 'lemonbot://pair/extra?'),

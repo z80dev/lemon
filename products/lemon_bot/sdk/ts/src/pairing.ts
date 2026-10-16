@@ -14,25 +14,26 @@ export function parsePairUrl(value: string): PairingLink {
     || (url.pathname !== '' && url.pathname !== '/') || url.hash) {
     throw localError('invalid_request', 'Invalid pairing link authority or path.');
   }
-  const fields: Partial<Record<'backend' | 'cluster' | 'code', string>> = {};
+  const fields: Partial<Record<'backend' | 'instance' | 'cluster' | 'code', string>> = {};
   for (const parameter of url.search.slice(1).split('&')) {
     const separator = parameter.indexOf('=');
-    if (separator < 0) throw localError('invalid_request', 'Pairing links require exactly one backend, cluster and code.');
+    if (separator < 0) throw localError('invalid_request', 'Pairing links require exactly one backend, instance, cluster and code.');
     let key: string, decoded: string;
     try {
       key = decodeURIComponent(parameter.slice(0, separator).replace(/\+/g, ' '));
       decoded = decodeURIComponent(parameter.slice(separator + 1).replace(/\+/g, ' '));
     } catch { throw localError('invalid_request', 'Pairing link has invalid percent encoding.'); }
-    if ((key !== 'backend' && key !== 'cluster' && key !== 'code') || fields[key] !== undefined) {
-      throw localError('invalid_request', 'Pairing links require exactly one backend, cluster and code.');
+    if ((key !== 'backend' && key !== 'instance' && key !== 'cluster' && key !== 'code') || fields[key] !== undefined) {
+      throw localError('invalid_request', 'Pairing links require exactly one backend, instance, cluster and code.');
     }
     fields[key] = decoded;
   }
-  const { backend: backendUrl, cluster: workspaceId, code: pairCode } = fields;
-  if (backendUrl === undefined || workspaceId === undefined || pairCode === undefined) {
-    throw localError('invalid_request', 'Pairing links require exactly one backend, cluster and code.');
+  const { backend: backendUrl, instance: instanceId, cluster: workspaceId, code: pairCode } = fields;
+  if (backendUrl === undefined || instanceId === undefined || workspaceId === undefined || pairCode === undefined) {
+    throw localError('invalid_request', 'Pairing links require exactly one backend, instance, cluster and code.');
   }
-  if (!workspaceId || workspaceId.length > 128 || /[\u0000-\u001f\u007f]/.test(workspaceId)
+  if (!instanceId || instanceId.length > 128 || /[\u0000-\u001f\u007f]/.test(instanceId)
+    || !workspaceId || workspaceId.length > 128 || /[\u0000-\u001f\u007f]/.test(workspaceId)
     || !/^[A-Za-z0-9_-]{43}$/.test(pairCode)) {
     throw localError('invalid_request', 'Pairing cluster or one-use code is invalid.');
   }
@@ -44,5 +45,5 @@ export function parsePairUrl(value: string): PairingLink {
     || (backend.protocol !== 'https:' && !(backend.protocol === 'http:' && loopback))) {
     throw localError('invalid_request', 'Pairing backend requires HTTPS; loopback HTTP is only for same-machine development.');
   }
-  return { backendUrl, workspaceId, pairCode };
+  return { backendUrl, instanceId, workspaceId, pairCode };
 }

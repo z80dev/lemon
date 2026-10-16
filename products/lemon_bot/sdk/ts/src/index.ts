@@ -4,6 +4,8 @@ export type { ByteRange, CallOptions, ClientOptions, DownloadOptions, ReconcileR
 export { LemonBotError } from './errors.ts';
 export type { ErrorContext } from './errors.ts';
 export { parsePairUrl } from './pairing.ts';
+export { BotPreflightError, preflightBotOrigin, validateBotIdentity, validateBotOrigin, validateBotSetup } from '../../../contracts/preflight.ts';
+export type { BotOriginUse, BotPreflightCode, BotPreflightOptions, BotPreflightResult } from '../../../contracts/preflight.ts';
 export { RealtimeConnection, compareCursors } from './realtime.ts';
 export type { RealtimeOptions, RealtimeState } from './realtime.ts';
 export { applyEntryDelta, mergeRevisions, reduceEntryEvent, upsertRevision } from './reducers.ts';

@@ -28,11 +28,12 @@ extension PairingLink: CustomStringConvertible, CustomDebugStringConvertible {
               !raw.unicodeScalars.contains(where: { CharacterSet.whitespacesAndNewlines.contains($0) || CharacterSet.controlCharacters.contains($0) }),
               let parts = URLComponents(string: raw), parts.scheme == "lemonbot", parts.host == "pair",
               parts.path.isEmpty || parts.path == "/", parts.user == nil, parts.password == nil, parts.port == nil, parts.fragment == nil,
-              let items = parts.queryItems, items.count == 3, items.map(\.name).sorted() == ["backend", "cluster", "code"],
+              let items = parts.queryItems, items.count == 4, items.map(\.name).sorted() == ["backend", "cluster", "code", "instance"],
               let backend = items.first(where: { $0.name == "backend" })?.value,
+              let instance = items.first(where: { $0.name == "instance" })?.value,
               let workspace = items.first(where: { $0.name == "cluster" })?.value,
               let code = items.first(where: { $0.name == "code" })?.value,
-              boundedID(workspace), boundedSecret(code),
+              boundedID(instance), boundedID(workspace), boundedSecret(code),
               backend.utf8.count <= 2048, let url = URL(string: backend),
               let endpoint = URLComponents(url: url, resolvingAgainstBaseURL: false),
               endpoint.path.isEmpty || endpoint.path == "/",
@@ -41,7 +42,7 @@ extension PairingLink: CustomStringConvertible, CustomDebugStringConvertible {
               !host.contains("%"), !host.contains("\\"), !backend.contains("\\"),
               endpoint.port.map({ (1...65535).contains($0) }) ?? true else { throw PairingClientError.invalidLink }
         _ = try HTTPTransport.normalizeBaseURL(url)
-        return PairingLink(backendUrl: try exactOrigin(url), workspaceId: workspace, pairCode: code)
+        return PairingLink(backendUrl: try exactOrigin(url), instanceId: instance, workspaceId: workspace, pairCode: code)
     }
     static func boundedID(_ value: String) -> Bool {
         !value.isEmpty && value.utf16.count <= 128 && value.unicodeScalars.allSatisfy { $0.value > 32 && $0 != "/" }

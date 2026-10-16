@@ -250,7 +250,7 @@ extension ProtocolTests {
             }
         }
         try roundTrip(PairingStart.self, #"{"clientNonce":"start_fixed"}"#)
-        try roundTrip(PairingLink.self, #"{"backendUrl":"https://desktop.example.ts.net","workspaceId":"workspace_owned","pairCode":"short_lived_fixture_code"}"#)
+        try roundTrip(PairingLink.self, #"{"backendUrl":"https://desktop.example.ts.net","instanceId":"backend_owned","workspaceId":"workspace_owned","pairCode":"short_lived_fixture_code"}"#)
         try roundTrip(PairingPreviewRequest.self, #"{"pairCode":"short_lived_fixture_code","workspaceId":"workspace_owned"}"#)
         try roundTrip(PairingPreviewResult.self, #"{"clusterName":"Owner desktop","backendUrl":"https://desktop.example.ts.net","expiresAtMs":1790000300000}"#)
         try roundTrip(PairingClaim.self, #"{"clientNonce":"claim_fixed","pairCode":"short_lived_fixture_code","workspaceId":"workspace_owned","installationId":"installation_phone","deviceName":"Owner iPhone","appVersion":"1.0"}"#)
@@ -259,7 +259,7 @@ extension ProtocolTests {
         try roundTrip(PairingDeny.self, #"{"clientNonce":"deny_fixed","revision":2}"#)
         try roundTrip(PairingComplete.self, #"{"clientNonce":"complete_fixed","claimToken":"fixture_claim_token"}"#)
         let pairing = try JSONDecoder().decode(Pairing.self, from: WireFixtures.pairing)
-        let issued = PairingIssued(pairing: pairing, pairUrl: "lemonbot://pair?backend=https%3A%2F%2Fdesktop.example.ts.net&cluster=workspace_owned&code=short_lived_fixture_code")
+        let issued = PairingIssued(pairing: pairing, pairUrl: "lemonbot://pair?backend=https%3A%2F%2Fdesktop.example.ts.net&instance=backend_owned&cluster=workspace_owned&code=short_lived_fixture_code")
         XCTAssertEqual(try JSONDecoder().decode(PairingIssued.self, from: JSONEncoder().encode(issued)), issued)
         let encoded = try JSONDecoder().decode(JSONObject.self, from: JSONEncoder().encode(issued))
         XCTAssertEqual(Set(encoded.keys), ["pairing", "pairUrl"])

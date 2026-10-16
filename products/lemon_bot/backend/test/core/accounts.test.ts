@@ -23,7 +23,7 @@ describe('account lifecycle', () => {
   test('setup atomically creates owner, session and workspace, consumes its digest and prevents repeats', async () => {
     const f = accounts(); for (const collection of ['users', 'members', 'workspaces']) for (const value of f.store.list<{ id: string }>(collection)) f.store.remove(collection, value.id);
     f.store.setMetadata('workspaceId', null); const setupCode = opaqueToken(); f.store.setMetadata('setupCodeDigest', f.services.mutations.digest(setupCode));
-    expect(await f.call<P.SetupStatus>('GET', '/v1/setup', undefined, null)).toEqual({ setupRequired: true, version: '0.1.0', apiVersion: 1 });
+    expect(await f.call<P.SetupStatus>('GET', '/v1/setup', undefined, null)).toEqual({ product: 'lemon_bot', setupRequired: true, version: '0.1.0', apiVersion: 1, instanceId: expect.any(String), publicUrl: f.services.config.publicUrl, capabilities: { pairing: true } });
     const body = { clientNonce: opaqueToken(), setupCode, email: ' First@Example.com ', password: testPassword, displayName: 'First', workspaceName: 'Work' };
     const result = await f.call<P.AuthResult>('POST', '/v1/setup', body, null);
     expect(result.user.email).toBe('first@example.com'); expect(result.member.role).toBe('owner'); expect(result.workspace.ownerUserId).toBe(result.user.id);

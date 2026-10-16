@@ -39,7 +39,7 @@ private final class PairingCredentialStore: AccountCredentialStore {
     private func link(backend: String? = nil, workspace: ID = "resource", code: String? = nil) -> String {
         var parts = URLComponents()
         parts.scheme = "lemonbot"; parts.host = "pair"
-        parts.queryItems = [URLQueryItem(name: "backend", value: backend ?? origin), URLQueryItem(name: "cluster", value: workspace), URLQueryItem(name: "code", value: code ?? self.code)]
+        parts.queryItems = [URLQueryItem(name: "backend", value: backend ?? origin), URLQueryItem(name: "instance", value: "backend_1"), URLQueryItem(name: "cluster", value: workspace), URLQueryItem(name: "code", value: code ?? self.code)]
         return parts.string!
     }
     private func preview(_ expiry: TimestampMs) -> PairingPreviewResult { PairingPreviewResult(clusterName: "My desktop", backendUrl: origin, expiresAtMs: expiry) }
@@ -75,6 +75,9 @@ private final class PairingCredentialStore: AccountCredentialStore {
     func testPairingParserBoundsExactSingletonsAndTLS() throws {
         let parsed = try PairingLink.parse(link())
         XCTAssertEqual(parsed.workspaceId, "resource")
+        XCTAssertEqual(parsed.instanceId, "backend_1")
+        XCTAssertThrowsError(try PairingLink.parse(link().replacingOccurrences(of: "&instance=backend_1", with: "")))
+        XCTAssertThrowsError(try PairingLink.parse(link() + "&instance=other"))
         XCTAssertEqual(parsed.backendURL?.absoluteString, "https://product.example/v1")
         XCTAssertFalse(parsed.description.contains(code))
         XCTAssertEqual(try PairingLink.parse(link(backend: "http://127.0.0.1:4080")).origin, "http://127.0.0.1:4080")
