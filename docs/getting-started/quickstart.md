@@ -1,50 +1,68 @@
 # Start coding with Lemon in five minutes
 
-Connect a model, make one small repository change, and keep the same session for
-larger work. You need a supported macOS or Linux machine, an interactive terminal,
-`curl`, `tar`, `python3`, and a model-provider account. Prebuilt releases include
-Elixir and the terminal client; model requests use your provider's account.
+Install Lemon, connect a model, make one small repository change, and keep the
+same session for larger work. You need an interactive terminal on macOS (Apple
+Silicon) or Linux (x86_64 or ARM64), `curl`, `tar`, `python3`, and an account
+with a model provider. The prebuilt release bundles its own Erlang/Elixir
+runtime and the terminal client, so you do not install either. Model requests
+use your provider's account.
 
-> **Release availability:** install the latest stable release for this guide.
-> Preview releases are also available on the
-> [releases page](https://github.com/z80dev/lemon/releases).
+Other platforms or a container: see [Install](../install.md).
 
-## 1. Install and connect ChatGPT
+## 1. Install and connect a model
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/z80dev/lemon/main/install.sh | sh -s -- --skip-setup
-export PATH="$HOME/.lemon/bin:$PATH"
-lemon setup
+curl -fsSL https://raw.githubusercontent.com/z80dev/lemon/main/install.sh | sh
 ```
 
-The installer verifies both runtime and TUI checksums and adds `~/.lemon/bin`
-to PATH in your shell rc file; the `export` line covers the current terminal.
+The installer verifies the runtime and terminal-UI checksums, installs them under
+`~/.lemon`, adds `~/.lemon/bin` to PATH for new shells, and then starts
+`lemon setup` in your terminal.
 
 In setup, choose **OpenAI Codex**, then **Sign in with ChatGPT (browser OAuth)**.
-Alternatively, explicitly choose **Import existing Codex CLI ChatGPT login
-(read-only copy)** if you already use Codex. Import is opt-in, not an automatic
-read of another client's credentials. Accept the offered default model, or select
-another model available to your account. With a Claude Pro or Max plan, choose
-**Anthropic**, then **Sign in with Claude Pro/Max (browser)** instead (or run
-`lemon model anthropic` later). Other providers and API-key login are also
-supported; see [provider setup](../user-guide/setup.md).
+If you already use the Codex CLI, you can instead choose **Import existing Codex
+CLI ChatGPT login (read-only copy)**; import is opt-in and never automatic. With a
+Claude Pro or Max plan, choose **Anthropic**, then **Sign in with Claude Pro/Max
+(browser)**. Other providers, local servers (Ollama, LM Studio, llama.cpp, vLLM,
+LiteLLM) and API-key login are also supported; see
+[Set up Lemon](../user-guide/setup.md). Accept the offered default model, or pick
+another one your account can use.
 
 Skip the optional daily brief and runtime configuration for now. Setup is safe to
 rerun: a usable provider is kept, not logged in again. If a Hermes home is found,
 setup first shows a read-only audit and offers a no-by-default import without
 secrets. Do not paste credentials into chat or a repository.
 
+Setup prints **Setup complete** only after a passing live credential check. If
+you installed with `--skip-setup`, had no terminal when installing, or stopped
+setup early, run it now:
+
+```bash
+lemon setup
+```
+
+(If `lemon` is not found in the terminal you installed from, open a new
+terminal or run `export PATH="$HOME/.lemon/bin:$PATH"`.)
+
+Confirm the install:
+
+```bash
+lemon version
+```
+
 ## 2. Make one useful change
 
 Accept **Open Lemon now? [Y/n]** at the end of setup, or start it later from your
-repository's terminal:
+repository's terminal. The TUI opens in the directory where you launch it, so
+change into your project first:
 
 ```bash
-lemon tui
+cd path/to/your/repo
+lemon
 ```
 
-Lemon starts or reuses its local daemon and opens the standalone TUI in that
-directory. Bare `lemon` is equivalent, including in a Tern pane, where the TUI
+Bare `lemon` in an interactive terminal is the same as `lemon tui`. It starts or
+reuses Lemon's local daemon and opens the terminal UI. In a Tern pane, the TUI
 uses Tern's native surfaces. Send this small, reviewable first task:
 
 ```text
@@ -55,12 +73,13 @@ Watch the streamed answer, file edits and test output. Review the diff before
 keeping the change. A completed turn proves the provider and tools work together;
 a green diagnostic alone is not that proof.
 
-The setup success check is a reply arriving and `lemon doctor` showing no **FAIL**.
+Setup's success check is a reply arriving and `lemon doctor` showing no **FAIL**.
 Get this first conversation working before adding Telegram or the Web UI.
 
 Use **Ctrl+O** to choose a model and **Ctrl+X** to reopen a persisted session.
 While running, **Escape** stops the turn. While idle with an empty input,
-**Ctrl+C twice** quits the TUI without stopping the daemon.
+**Ctrl+C twice** quits the TUI without stopping the daemon (`lemon stop` stops
+it).
 
 To revisit an earlier prompt, enter:
 
@@ -77,7 +96,7 @@ switches branches, labels entries and forks from any point) are described in the
 
 If a turn fails or you stop it, `/retry` rewinds that turn (history only) and
 resends the prompt. To pick up where you left off next time, start the TUI with
-`lemon -c` (latest session) or `lemon -r` (session picker).
+`lemon -c` (latest session from this directory) or `lemon -r` (session picker).
 
 ## 3. Choose your interface
 
@@ -92,6 +111,24 @@ lemon -p "Explain this repository; do not edit files." --output json
 See the [CLI guide](../user-guide/cli.md) for stdin, streaming JSON, continuation
 and explicit tool-approval policy. Bare `lemon` requires a terminal.
 
+**Web dashboard:** the default full installation also includes a local browser
+interface:
+
+```bash
+lemon web --no-open
+```
+
+Open the printed local URL (or run `lemon web` to open it for you). Sessions show
+stored conversations; **Automation** shows goals and kanban dispatch with status,
+progress, results and run links. See the
+[web guide](../user-guide/web.md#automation-and-blueprints).
+
+The browser uses the control-plane operator token
+(`LEMON_CONTROL_PLANE_OPERATOR_TOKEN`), which the launcher manages automatically.
+Follow [sign in](../user-guide/web.md#sign-in); without a configured token, the
+UI returns 503 unless explicit tokenless loopback compatibility is enabled.
+Keep the token private. `lemon web` is not part of the `min` profile.
+
 **Tern:** type `lemon` in a Tern pane for the TUI on Tern's native surfaces.
 To also get palette actions and Tern's native ACP chat, register Lemon once:
 
@@ -104,21 +141,12 @@ palette, or `tern acp lemon` for the ACP chat, where Tern owns the chat, tool
 cards and permissions and Lemon owns the coding session. See the
 [Tern guide](../user-guide/tern.md) for registration paths and troubleshooting.
 
-**Web dashboard:** the default full installation also includes:
+**Telegram or Discord:** add a chat channel after the terminal works:
+`lemon gateway setup telegram` or `lemon gateway setup discord`. See
+[Set up Lemon](../user-guide/setup.md#optional-telegram-or-discord).
 
-```bash
-lemon web --no-open
-```
-
-Open the printed local URL. Sessions show stored conversations; **Automation**
-shows goals and kanban dispatch with status, progress, results and run links.
-See the [web guide](../user-guide/web.md#automation-and-blueprints).
-
-The browser uses the control-plane operator token
-(`LEMON_CONTROL_PLANE_OPERATOR_TOKEN`), which the launcher manages automatically.
-Follow [sign in](../user-guide/web.md#sign-in); without a configured token, the
-UI returns 503 unless explicit tokenless loopback compatibility is enabled.
-Keep the token private.
+**Mac app:** the native macOS application is Lemon Bot, built from source
+today. See [Install: Mac app](../install.md#mac-app).
 
 ## 4. Grow the workflow, not the setup ceremony
 
@@ -144,6 +172,15 @@ Keep the token private.
   [automation controls](../user-guide/web.md#automation-and-blueprints) and the
   [coding automation guide](../user-guide/reminders-and-heartbeats.md#coding-goals-and-scheduled-coding-jobs).
 
+## Keep Lemon current
+
+```bash
+lemon update check
+```
+
+`check` compares your release with the published one. Apply an update only after
+reading its plan; see [Update, roll back, and uninstall](../user-guide/updates.md).
+
 ## If the first turn fails
 
 ```bash
@@ -165,5 +202,8 @@ timeout and share a six-second overall live-check deadline. Unsupported/OAuth-on
 endpoints are skipped; no completion is generated. Failures count as `FAIL` and
 exit `1`; `--json` includes live results. Output omits raw responses, keys and URLs.
 For credential changes, use the [setup guide](../user-guide/setup.md); for logs
-and redacted support bundles, use [Support](../support.md). Never post tokens,
-raw secrets or an unreviewed bundle.
+(`lemon logs`) and redacted support bundles, use [Support](../support.md). Never
+post tokens, raw secrets or an unreviewed bundle.
+
+Installer problems (`command not found`, checksum or glibc messages) are covered in
+[Install troubleshooting](../install.md#troubleshooting).

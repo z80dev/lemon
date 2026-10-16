@@ -1,10 +1,26 @@
-# Safely update and roll back Lemon
+# Update, roll back, and uninstall Lemon
 
 Installer-managed `lemon_runtime_min`, `lemon_runtime_full`, and simulation
 releases expose a preview-confirm update lifecycle. Lemon stages a verified
 version, atomically moves the `~/.lemon/versions/current` pointer, and restarts
 an already-running **verified own managed daemon** using the selected release.
 An installation with no running daemon stays stopped.
+
+## Choose an update path
+
+| Your install | Update with | Notes |
+| --- | --- | --- |
+| Installer release (`~/.lemon`) | `lemon update check`, `plan`, `apply` | Preview-confirm, checkpoint, rollback receipt. This page. |
+| Any `lemonup` selection, including a source checkout | `lemonup update` | Installs the latest stable release if missing and activates it. See [Install](../install.md#switching-between-releases-and-source-with-lemonup). |
+| Installer release, to reinstall or when `lemon update` cannot run | Re-run `install.sh` with `--skip-setup` | Installs the newest version beside the old one and flips `versions/current`. No plan digest, checkpoint or receipt, and it does not restart a running daemon: run `lemon restart` afterwards. Old versions stay in `~/.lemon/versions/` until you remove them. |
+| Source checkout | Your Git workflow | See [Source checkouts](#source-checkouts-and-other-layouts). |
+| Container image | Pull and start a newer image tag | Not managed by `lemon update`; keep the `/data` volume. |
+
+Check which release you are running at any time:
+
+```bash
+lemon version --verbose
+```
 
 ## Check and plan
 
@@ -203,3 +219,87 @@ Keep the same host, channel, and explicit version settings between plan and
 apply. If using `--channel` or `--version`, repeat them on apply. This seam
 changes only the artifact host; managed-layout, exact-digest, checksum, archive,
 receipt, and daemon-ownership checks remain mandatory.
+
+## Uninstall
+
+Lemon has no `lemon uninstall` command and installs no system service, so
+removal is deleting what the installer created
+(`install.sh` layout: `~/.lemon/versions`, `~/.lemon/bin`). Your data in
+`~/.lemon` is separate from the program files, so you choose whether to keep it.
+
+1. **Optional: back up your state.** Config, sessions, and the store are
+   included by default; credentials only with `--include-credentials`
+   ([Back up and restore](backups.md)). The default destination is
+   `~/.lemon/backups/`, which is inside the Lemon home, so if you plan to
+   [remove all data](#remove-all-data) write the bundle somewhere else with
+   `--output` (the path must not already exist):
+
+   ```bash
+   lemon backup create --output ~/lemon-final.lemonbackup
+   lemon backup verify ~/lemon-final.lemonbackup
+   ```
+
+2. **Stop the runtime.** It exits non-zero if nothing was running; that is fine.
+
+   ```bash
+   lemon stop
+   ```
+
+3. **Optional: sign out of subscription logins.** Deletes the stored OAuth
+   login for a provider (repeat per provider, for example `anthropic` or
+   `openai-codex`):
+
+   ```bash
+   lemon model anthropic --logout
+   ```
+
+4. **Remove the program, keep your data.** This deletes every installed
+   release, the launcher, update receipts and checkpoints, and installer
+   scratch space; `config.toml`, `store/`, `agent/`, and secrets stay:
+
+   ```bash
+   rm -rf ~/.lemon/versions ~/.lemon/bin ~/.lemon/updates ~/.lemon/tmp
+   ```
+
+5. **Remove the PATH entry.** The installer appended two lines to your shell
+   rc file (`~/.zshrc`, `~/.bashrc`, or fish `config.fish`): the comment
+   `# added by the lemon installer` and the PATH line after it. Delete both.
+
+To remove a single old release instead, use `lemonup uninstall <version>`; it
+refuses to delete the active `versions/current`.
+
+### Remove all data
+
+This permanently deletes your configuration, sessions, memory, the secrets
+master key (when file-backed), and `~/.lemon/backups/`. If you might want any
+of it back, first create a bundle outside `~/.lemon` with `--output` (see
+step 1 above), run `lemon backup verify` on it, and keep it on storage you
+control. A backup left in the default `~/.lemon/backups/` is deleted with the
+rest. Credentials are excluded unless you add `--include-credentials`; treat
+such a bundle as sensitive.
+
+```bash
+rm -rf ~/.lemon
+```
+
+On macOS the secrets master key may live in the Keychain instead of a file.
+Delete that entry too:
+
+```bash
+security delete-generic-password -s "Lemon Secrets" -a default
+```
+
+Also revoke any provider API keys or bot tokens (Telegram, Discord) you gave
+Lemon, at the provider; deleting local files does not revoke them.
+
+### Other layouts
+
+- **Source checkout:** delete the checkout directory. `~/.lemon` is shared with
+  installed releases; remove it only as above. If `~/.lemon/bin/lemon` points at
+  the checkout (`lemonup use local`), run `lemonup use <version>` first, or
+  delete the link.
+- **Standalone `lemon_bot` backend:** delete `~/.local/bin/lemon-bot` and
+  `~/.lemon/lemon_bot`. The latter holds the backend's database, attachments,
+  and encryption key, so back it up first if you need it.
+- **Container:** `docker rm -f lemon` removes the container. `docker volume rm
+  lemon-data` (your volume name) deletes everything on `/data`.
