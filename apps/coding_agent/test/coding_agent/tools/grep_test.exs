@@ -1042,6 +1042,26 @@ defmodule CodingAgent.Tools.GrepTest do
       assert text =~ "text.txt"
       refute text =~ "binary.bin"
     end
+
+    if System.find_executable("rg") do
+      test "ripgrep keeps an over-budget non-UTF-8 match line", %{tmp_dir: tmp_dir} do
+        # Latin-1 text has no NUL byte, so ripgrep searches it.
+        path = Path.join(tmp_dir, "latin1.txt")
+        File.write!(path, "caf" <> <<0xE9>> <> " findme " <> String.duplicate("x", 200) <> "\n")
+
+        result =
+          Grep.execute("call_1", %{"pattern" => "findme", "path" => path}, nil, nil, tmp_dir,
+            ripgrep_available?: true,
+            max_bytes: 40
+          )
+
+        assert %AgentToolResult{content: [%TextContent{text: text}], details: details} = result
+        assert details.match_count == 1
+        assert details.truncated
+        assert text =~ "latin1.txt:1: caf" <> <<0xE9>> <> " findme x"
+        assert text =~ "40B limit reached"
+      end
+    end
   end
 
   describe "tool integration" do

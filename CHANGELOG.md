@@ -14,6 +14,8 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   requester/publisher, so native tools reliably receive approval and denial
   decisions, including **Refine plan** responses to `propose_plan`. Cancellation
   also rejects permission requests that register after the approval is resolved.
+- Grep keeps invalid UTF-8 bytes from an over-budget first ripgrep match
+  instead of crashing while truncating it.
 - Setup/readiness preserve native colon model IDs, including multi-colon IDs.
   Live setup strips only actual provider qualification, honors declared/discovered
   full IDs in the effective provider scope and model overrides, and rejects known

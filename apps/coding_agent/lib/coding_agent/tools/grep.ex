@@ -872,6 +872,7 @@ defmodule CodingAgent.Tools.Grep do
               case :unicode.characters_to_binary(prefix) do
                 text when is_binary(text) -> text
                 {:incomplete, text, _} -> text
+                {:error, _valid, _invalid} -> prefix
               end
 
             {:halt, {[prefix], cache, true, 1, byte_size(prefix), true}}
