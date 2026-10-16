@@ -336,6 +336,39 @@ defmodule LemonCli.Onboarding.Providers do
 
   def find(_), do: nil
 
+  @doc """
+  Phone-provisionable methods for a canonical runtime provider.
+
+  These device grants are backed by the actual device authorization/polling
+  implementations, not the historically named `login_device_flow/1` browser
+  callback entry point used by Anthropic, OpenRouter and Google.
+  """
+  def management_methods(provider_id) do
+    case find(provider_id) do
+      %Provider{custom: false} = spec ->
+        api_key = if :api_key in spec.auth_modes, do: ["api_key"], else: []
+
+        device =
+          case spec.oauth_module do
+            LemonAi.Auth.OpenAICodexOAuth -> :login_device_code
+            LemonAi.Auth.GitHubCopilotOAuth -> :login_device_flow
+            LemonAi.Auth.KimiCodeOAuth -> :login_device_flow
+            LemonAi.Auth.XAIOAuth -> :login_device_flow
+            _ -> nil
+          end
+
+        device? =
+          device && Code.ensure_loaded?(spec.oauth_module) &&
+            function_exported?(spec.oauth_module, device, 1)
+
+        methods = api_key ++ if(device?, do: ["device_code"], else: [])
+        if methods == [], do: ["unsupported"], else: methods
+
+      _ ->
+        ["unsupported"]
+    end
+  end
+
   @spec fetch!(String.t() | atom()) :: Provider.t()
   def fetch!(value) do
     case find(value) do

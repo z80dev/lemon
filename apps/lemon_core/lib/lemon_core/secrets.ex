@@ -46,6 +46,7 @@ defmodule LemonCore.Secrets do
   @type name :: String.t()
   @type error_reason :: atom() | tuple()
   @opaque revision :: binary()
+  @opaque snapshot :: {pid(), owner(), name(), String.t(), map()}
 
   @type secret_metadata :: %{
           required(:owner) => owner(),
@@ -281,6 +282,87 @@ defmodule LemonCore.Secrets do
       revision = entry_revision(server, owner, name, entry)
       touch_entry(server, owner, name, entry)
       {:ok, plaintext, revision}
+    end
+  end
+
+  @doc """
+  Captures a credential and its metadata for compensating a serialized mutation.
+
+  Reads only the encrypted store, without touching usage metadata. Expired values
+  can be captured too, so compensation preserves their original expiry. Snapshots
+  are opaque, ephemeral credential-bearing data: never log, inspect or persist
+  them. The caller must serialize its whole mutation and compensation sequence.
+  """
+  @spec snapshot(name(), keyword()) :: {:ok, snapshot()} | {:error, error_reason()}
+  def snapshot(name, opts \\ []) do
+    with {:ok, name} <- normalize_name(name),
+         {:ok, owner} <- normalize_owner(opts),
+         {:ok, server} <- storage_owner(opts),
+         {:ok, entry} <- Store.fetch(server, @table, {owner, name}) do
+      cond do
+        is_nil(entry) or Receipts.receipt_only?(entry) ->
+          {:error, :not_found}
+
+        not value_entry?(entry) ->
+          {:error, :invalid_secret_record}
+
+        true ->
+          with {:ok, master_key, _source} <- MasterKey.resolve(opts),
+               {:ok, plaintext} <- KeyRotation.decrypt(entry, master_key) do
+            {:ok, {server, owner, name, plaintext, entry}}
+          end
+      end
+    end
+  end
+
+  @doc """
+  Restores a snapshot to its original Store process, owner and name.
+
+  Re-encrypts under the current key while holding the secrets mutation lease.
+  Provider, absolute expiry, timestamps and usage metadata are preserved, even
+  when expiry elapsed during the failed operation. Restoration creates a new
+  incarnation, so it never revives a previous conditional-write revision.
+  """
+  @spec restore(name(), snapshot(), keyword()) ::
+          {:ok, secret_metadata()} | {:error, error_reason()}
+  def restore(name, snapshot, opts \\ []) do
+    with {:ok, name} <- normalize_name(name),
+         {:ok, owner} <- normalize_owner(opts),
+         {:ok, server} <- storage_owner(opts) do
+      case snapshot do
+        {^server, ^owner, ^name, value, entry} when is_binary(value) and is_map(entry) ->
+          Lock.with_write_lock(
+            fn ->
+              with {:ok, rows} <- fetch_receipt_rows(server),
+                   {:ok, _} <- Receipts.find(rows, owner, nil, nil),
+                   {:ok, master_key, _source} <- MasterKey.resolve(opts),
+                   {:ok, encrypted} <- encrypt_record(entry, value, master_key, []) do
+                record =
+                  Enum.reduce(
+                    [
+                      :provider,
+                      :expires_at,
+                      :created_at,
+                      :updated_at,
+                      :usage_count,
+                      :last_used_at
+                    ],
+                    encrypted,
+                    fn key, acc -> Map.put(acc, key, get_field(entry, key)) end
+                  )
+
+                with :ok <- persist_record(server, owner, name, record, []) do
+                  emit_secret_event(owner, name, :set)
+                  {:ok, metadata(owner, name, record)}
+                end
+              end
+            end,
+            server
+          )
+
+        _ ->
+          {:error, :invalid_secret_snapshot}
+      end
     end
   end
 

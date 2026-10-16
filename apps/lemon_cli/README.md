@@ -9,6 +9,11 @@ The runtime CLI is included in `lemon_runtime_min` and `lemon_runtime_full`
 artifacts. The `sim_broadcast_platform` artifact intentionally does not bundle
 `lemon_cli`; it supports only its release-specific `doctor --bundle` path.
 
+At application startup, `lemon_cli` registers its destination-local provider
+management service with `LemonCore.ProviderManagement`. Both controller and named
+worker runtimes use this registration; core-only runtimes without CLI setup
+support return `unavailable` without attempting credential writes.
+
 ## Release CLI contract
 
 The packaged launcher sends runtime CLI arguments through `LemonCli.CLI` as
@@ -393,6 +398,12 @@ setup remains incomplete, it directs the user to `lemon setup`.
 credential in encrypted secrets, updates the provider configuration, and can
 set the default provider/model. Use the full `lemon setup` journey when config
 and secrets may not exist yet or when live provider verification is required.
+
+Onboarding serializes credential/config changes, writes TOML atomically, and
+compensates failed writes or runtime reloads. `--config-path` selects the file
+to save and verify. Only changes to the runtime's global or current project
+configuration trigger its reload; another selected file does not activate or
+validate unrelated runtime configuration.
 
 ## Gateway setup
 

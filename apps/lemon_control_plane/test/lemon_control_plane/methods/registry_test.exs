@@ -129,11 +129,11 @@ defmodule LemonControlPlane.Methods.RegistryTest do
              Registry.dispatch(method, %{}, ctx)
   end
 
-  test "dispatch/3 rescues handler exceptions and returns internal_error" do
+  test "dispatch/3 rescues handler exceptions without returning private exception messages" do
     method = register_for_cleanup(RaisingHandler)
     ctx = ctx_with_scopes([])
 
-    assert {:error, {:internal_error, "Method execution failed", "boom from registry test"}} =
+    assert {:error, {:internal_error, "Method execution failed"}} =
              Registry.dispatch(method, %{}, ctx)
   end
 

@@ -19,7 +19,8 @@ defmodule LemonCli.MixProject do
 
   def application do
     [
-      extra_applications: [:logger, :inets]
+      extra_applications: [:logger, :inets],
+      mod: {LemonCli.Application, []}
     ]
   end
 

@@ -15,6 +15,7 @@ import { Router } from './core/router';
 import { createRealtime, type RealtimeData, type RealtimeService } from './core/realtime';
 import { createSyncRoutes } from './core/sync';
 import { createInstanceRoutes } from './core/instance';
+import { createProviderRoutes } from './core/providers';
 import { createLemonService } from './runtime/lemon';
 import { createRuntimeService } from './runtime/runs';
 import { createRuntimeAdmissionRoutes } from './runtime/admission';
@@ -81,7 +82,7 @@ export async function createBackend(config:BackendConfiguration,key:Uint8Array):
   const accounts=createAccountService(services);
   const pairings=createPairingService(services);
   router.register([
-    ...createAccountRoutes(services,hooks),...createSyncRoutes(services),...createInstanceRoutes(services,startedAtMs),...createMachineRoutes(services),
+    ...createAccountRoutes(services,hooks),...createSyncRoutes(services),...createInstanceRoutes(services,startedAtMs),...createProviderRoutes(services),...createMachineRoutes(services),
     ...createBotRoutes(services),...createConversationRoutes(services),...createMcpRoutes(services),
     ...createGateRoutes(services),...createResourceRoutes(services),...createAttachmentRoutes(services),
     ...createVoiceRoutes(services),...createExperienceRoutes(services),...createIntegrationRoutes(services),

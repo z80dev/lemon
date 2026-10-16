@@ -42,6 +42,29 @@ defmodule LemonCore.SecretsTest do
     refute Secrets.exists?("expired_secret", env_fallback: false)
   end
 
+  test "snapshot and restore preserve metadata without reviving conditional revisions" do
+    name = "snapshot_secret"
+    expires_at = Clock.now_ms() + 60_000
+
+    assert {:ok, _} =
+             Secrets.set(name, "original", provider: "original_provider", expires_at: expires_at)
+
+    assert {:ok, "original", revision} = Secrets.get_with_revision(name)
+    assert {:ok, [before]} = Secrets.list()
+    assert {:ok, snapshot} = Secrets.snapshot(name)
+    assert {:ok, [^before]} = Secrets.list()
+    assert :ok = Secrets.delete(name)
+    assert {:ok, restored} = Secrets.restore(name, snapshot)
+    assert restored == before
+    assert {:ok, "original"} = Secrets.get(name)
+
+    assert {:error, :stale_revision} =
+             Secrets.set_if_revision(name, "stale_refresh", revision)
+
+    assert {:error, :invalid_secret_snapshot} = Secrets.restore("another_secret", snapshot)
+    assert {:error, :invalid_secret_snapshot} = Secrets.restore(name, snapshot, owner: "another")
+  end
+
   test "list never returns plaintext values" do
     assert {:ok, _} = Secrets.set("alpha", "first")
     assert {:ok, _} = Secrets.set("beta", "second")
@@ -121,7 +144,9 @@ defmodule LemonCore.SecretsTest do
     test "imports secret from environment variable" do
       System.put_env("IMPORT_TEST_KEY", "imported-value-123")
 
-      assert {:ok, metadata} = Secrets.import_from_env("imported_secret", env_name: "IMPORT_TEST_KEY")
+      assert {:ok, metadata} =
+               Secrets.import_from_env("imported_secret", env_name: "IMPORT_TEST_KEY")
+
       assert metadata.name == "imported_secret"
 
       assert {:ok, "imported-value-123"} = Secrets.get("imported_secret")
@@ -139,7 +164,8 @@ defmodule LemonCore.SecretsTest do
     end
 
     test "returns error when env var not found" do
-      assert {:error, :env_not_found} = Secrets.import_from_env("missing", env_name: "NONEXISTENT_VAR")
+      assert {:error, :env_not_found} =
+               Secrets.import_from_env("missing", env_name: "NONEXISTENT_VAR")
     end
 
     test "returns error when env var is empty" do
@@ -153,10 +179,11 @@ defmodule LemonCore.SecretsTest do
     test "deletes env var after import when delete_after is true" do
       System.put_env("DELETE_ME", "delete-value")
 
-      assert {:ok, _} = Secrets.import_from_env("deleted_secret",
-        env_name: "DELETE_ME",
-        delete_after: true
-      )
+      assert {:ok, _} =
+               Secrets.import_from_env("deleted_secret",
+                 env_name: "DELETE_ME",
+                 delete_after: true
+               )
 
       assert System.get_env("DELETE_ME") == nil
       assert {:ok, "delete-value"} = Secrets.get("deleted_secret")
@@ -165,10 +192,11 @@ defmodule LemonCore.SecretsTest do
     test "preserves env var when delete_after is false" do
       System.put_env("KEEP_ME", "keep-value")
 
-      assert {:ok, _} = Secrets.import_from_env("kept_secret",
-        env_name: "KEEP_ME",
-        delete_after: false
-      )
+      assert {:ok, _} =
+               Secrets.import_from_env("kept_secret",
+                 env_name: "KEEP_ME",
+                 delete_after: false
+               )
 
       assert System.get_env("KEEP_ME") == "keep-value"
     after
@@ -178,10 +206,11 @@ defmodule LemonCore.SecretsTest do
     test "passes options to set/3" do
       System.put_env("OPTS_TEST", "opts-value")
 
-      assert {:ok, metadata} = Secrets.import_from_env("opts_secret",
-        env_name: "OPTS_TEST",
-        provider: "env_import"
-      )
+      assert {:ok, metadata} =
+               Secrets.import_from_env("opts_secret",
+                 env_name: "OPTS_TEST",
+                 provider: "env_import"
+               )
 
       assert metadata.provider == "env_import"
     after

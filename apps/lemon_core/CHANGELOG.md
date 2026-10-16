@@ -30,6 +30,11 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ### Added
 
+- Optional destination-local provider management boundary with bounded write-only
+  credential requests and a durable controller target identity. Provider setup
+  remains runtime-optional; core does not depend on the CLI application.
+  Node-registry crash/status diagnostics redact request messages, reasons and state.
+
 - `LemonCore.ExecApprovals.expire_owner/1` expires every pending approval of an
   ended run (`{:run, run_id}`) or native session (`{:session, session_id}`) at
   once, with no grace window: the record becomes a redacted `:expired` receipt,
@@ -58,6 +63,10 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 - Markdown session export now backslash-escapes special characters (`_`, `*`,
   backticks, brackets, `<>`, `#`) instead of emitting a literal `\1`
   backreference in place of the character (#64).
+- Failed provider-credential mutations restore secret metadata through the owning
+  encrypted store, preserving the original provider, timestamps, usage and
+  absolute expiry. A credential expiring during compensation remains expired
+  instead of becoming an immortal credential.
 
 - Restore refuses before staging or changing state while a source or packaged
   launcher daemon owns the target, including relocated/root-relative stores,
