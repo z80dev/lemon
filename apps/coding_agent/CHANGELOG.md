@@ -133,6 +133,10 @@
 
 ### Fixed
 
+- Native-followup context tests restore their global coordinator even when setup
+  fails, preventing foreign submissions and later cron cancellation tests from
+  inheriting a fixture dispatcher.
+
 - Managed process capture attachments validate the exact launch owner and
   fingerprint without resetting output or logs. Cleared launches retain durable
   receipts and reject late capture writes; failed accounting or capture cleanup

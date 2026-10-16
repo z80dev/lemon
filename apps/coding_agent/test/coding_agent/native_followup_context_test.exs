@@ -99,41 +99,33 @@ defmodule CodingAgent.NativeFollowupContextTest do
     def cancel(context), do: send(context.runner_pid, :stop)
   end
 
-  setup do
-    assert {:ok, _} = Application.ensure_all_started(:lemon_router)
-    assert {:ok, _} = Application.ensure_all_started(:lemon_control_plane)
+  setup context do
+    if context[:fixture] == :environment_only, do: :ok, else: native_fixture()
+  end
+
+  defp native_fixture do
     suffix = Integer.to_string(System.unique_integer([:positive, :monotonic]))
     prefix = "native-consumer-" <> suffix
     profile_id = prefix <> "-profile"
     root = Path.join(System.tmp_dir!(), prefix)
-    File.mkdir_p!(root)
+    configure_fixture_environment(root, profile_id, suffix)
 
-    keys = [
-      {:lemon_core, :paths},
-      {:lemon_core, Secrets},
-      {:lemon_router, :native_followup_allowed_origins},
-      {:lemon_router, :session_coordinator},
-      {:lemon_router, :native_context_consumer}
-    ]
+    on_exit(fn ->
+      {:ok, entries} = Secrets.list()
 
-    previous = Map.new(keys, fn {app, key} = pair -> {pair, Application.fetch_env(app, key)} end)
-    previous_origin = System.get_env("LEMON_NATIVE_FOLLOWUP_ALLOWED_ORIGINS")
-    secret_env = "NATIVE_CONTEXT_CONSUMER_KEY_" <> suffix
-    System.put_env(secret_env, Base.encode64(:crypto.strong_rand_bytes(32)))
-    System.delete_env("LEMON_NATIVE_FOLLOWUP_ALLOWED_ORIGINS")
+      for entry <- entries,
+          String.starts_with?(entry.name, "native_followup/" <> profile_id <> "/"),
+          do: Secrets.delete(entry.name)
 
-    Application.put_env(:lemon_core, :paths,
-      home_state_dir: root,
-      global_config: Path.join(root, "config.toml")
-    )
+      Store.delete(:native_followup_admission_configs, profile_id)
 
-    Application.put_env(:lemon_core, Secrets, key_providers: [:env], env_var: secret_env)
-    Application.put_env(:lemon_router, :session_coordinator, Coordinator)
+      for {id, _} <- Store.list(RunOrchestrator.admission_table()),
+          is_binary(id) and String.starts_with?(id, prefix),
+          do: Store.delete(RunOrchestrator.admission_table(), id)
+    end)
 
-    Application.put_env(:lemon_router, :native_context_consumer, %{
-      pid: self(),
-      profile_id: profile_id
-    })
+    assert {:ok, _} = Application.ensure_all_started(:lemon_router)
+    assert {:ok, _} = Application.ensure_all_started(:lemon_control_plane)
 
     bandit =
       start_supervised!(
@@ -143,7 +135,13 @@ defmodule CodingAgent.NativeFollowupContextTest do
     assert {:ok, {{127, 0, 0, 1}, port}} = ThousandIsland.listener_info(bandit)
     origin = "http://127.0.0.1:#{port}"
     Application.put_env(:lemon_router, :native_followup_allowed_origins, [origin])
-    {:ok, owner} = GenServer.start_link(RunOrchestrator, [])
+
+    owner =
+      start_supervised!(%{
+        id: :native_followup_owner,
+        start: {GenServer, :start_link, [RunOrchestrator, []]}
+      })
+
     run_id = prefix <> "-root"
 
     assert {:ok, _} =
@@ -216,20 +214,25 @@ defmodule CodingAgent.NativeFollowupContextTest do
       end
     ]
 
+    %{opts: opts, root: root, source: source, profile: profile_id}
+  end
+
+  defp configure_fixture_environment(root, profile_id, suffix) do
+    keys = [
+      {:lemon_core, :paths},
+      {:lemon_core, Secrets},
+      {:lemon_router, :native_followup_allowed_origins},
+      {:lemon_router, :session_coordinator},
+      {:lemon_router, :native_context_consumer}
+    ]
+
+    previous = Map.new(keys, fn {app, key} = pair -> {pair, Application.fetch_env(app, key)} end)
+    previous_origin = System.get_env("LEMON_NATIVE_FOLLOWUP_ALLOWED_ORIGINS")
+    secret_env = "NATIVE_CONTEXT_CONSUMER_KEY_" <> suffix
+    # Register before any mutation or fallible setup. This synchronous module's
+    # callbacks finish before ExUnit starts another module, even if setup fails.
+
     on_exit(fn ->
-      if Process.alive?(owner), do: GenServer.stop(owner)
-      {:ok, entries} = Secrets.list()
-
-      for entry <- entries,
-          String.starts_with?(entry.name, "native_followup/" <> profile_id <> "/"),
-          do: Secrets.delete(entry.name)
-
-      Store.delete(:native_followup_admission_configs, profile_id)
-
-      for {id, _} <- Store.list(RunOrchestrator.admission_table()),
-          is_binary(id) and String.starts_with?(id, prefix),
-          do: Store.delete(RunOrchestrator.admission_table(), id)
-
       for {{app, key}, value} <- previous do
         case value do
           {:ok, prior} -> Application.put_env(app, key, prior)
@@ -245,7 +248,78 @@ defmodule CodingAgent.NativeFollowupContextTest do
       File.rm_rf!(root)
     end)
 
-    %{opts: opts, root: root, source: source, profile: profile_id}
+    File.mkdir_p!(root)
+    System.put_env(secret_env, Base.encode64(:crypto.strong_rand_bytes(32)))
+    System.delete_env("LEMON_NATIVE_FOLLOWUP_ALLOWED_ORIGINS")
+
+    Application.put_env(:lemon_core, :paths,
+      home_state_dir: root,
+      global_config: Path.join(root, "config.toml")
+    )
+
+    Application.put_env(:lemon_core, Secrets, key_providers: [:env], env_var: secret_env)
+    Application.put_env(:lemon_router, :session_coordinator, Coordinator)
+
+    Application.put_env(:lemon_router, :native_context_consumer, %{
+      pid: self(),
+      profile_id: profile_id
+    })
+  end
+
+  @tag fixture: :environment_only
+  test "failed fixture setup restores the coordinator before an unrelated cron abort" do
+    assert {:ok, _} = Application.ensure_all_started(:lemon_control_plane)
+    assert {:ok, _} = Application.ensure_all_started(:lemon_automation)
+    previous_coordinator = Application.fetch_env(:lemon_router, :session_coordinator)
+    previous_consumer = Application.fetch_env(:lemon_router, :native_context_consumer)
+    orchestrator = Process.whereis(RunOrchestrator)
+    suffix = Integer.to_string(System.unique_integer([:positive, :monotonic]))
+    profile_id = "native-failed-setup-" <> suffix
+    root = Path.join(System.tmp_dir!(), profile_id)
+
+    # Registered first, this runs after the fixture's real ExUnit on_exit callback.
+    # No manual restoration can hide a leak from the simulated setup assertion.
+    on_exit(fn ->
+      assert Application.fetch_env(:lemon_router, :session_coordinator) == previous_coordinator
+      assert Application.fetch_env(:lemon_router, :native_context_consumer) == previous_consumer
+      refute File.exists?(root)
+
+      {:ok, job} =
+        LemonAutomation.CronManager.add(%{
+          name: profile_id,
+          schedule: "0 0 1 1 *",
+          enabled: false,
+          agent_id: profile_id,
+          session_key: LemonCore.SessionKey.main(profile_id),
+          prompt: "unrelated cron work",
+          timezone: "UTC"
+        })
+
+      router_id = profile_id <> "-router"
+
+      try do
+        run =
+          job.id
+          |> LemonAutomation.CronRun.new(:manual)
+          |> LemonAutomation.CronRun.start(router_id)
+
+        assert :ok = LemonAutomation.CronStore.put_run(run)
+
+        assert {:ok, %{"aborted" => true, "status" => "aborted", "routerRunId" => ^router_id}} =
+                 LemonControlPlane.Methods.CronAbort.handle(%{"runId" => run.id}, %{})
+
+        assert Process.whereis(RunOrchestrator) == orchestrator
+      after
+        LemonAutomation.CronManager.remove(job.id)
+        Store.delete(RunOrchestrator.abort_tombstone_table(), router_id)
+      end
+    end)
+
+    assert_raise ExUnit.AssertionError, ~r/fixture setup assertion/, fn ->
+      configure_fixture_environment(root, profile_id, suffix)
+      assert Application.fetch_env!(:lemon_router, :session_coordinator) == Coordinator
+      flunk("fixture setup assertion")
+    end
   end
 
   test "Agent dispatch renews F through configured issuer and never copies old proof", ctx do
