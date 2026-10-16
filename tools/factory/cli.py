@@ -155,6 +155,11 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     ledger: Ledger = project.ledger()
     actor = _actor(args)
 
+    if cmd == "dashboard":
+        import dashboard
+
+        return dashboard.serve(project, host=args.host, port=args.port)
+
     if cmd == "add":
         request = {"request": " ".join(args.request), "priority": args.priority, "title": args.title,
                    "acceptance": args.acceptance or [], "parent_id": args.parent,
@@ -267,6 +272,9 @@ def parser() -> argparse.ArgumentParser:
     lst.add_argument("--status", help="comma-separated statuses")
     sub.add_parser("status")
     sub.add_parser("snapshot", help="bounded coordinator snapshot")
+    dash = sub.add_parser("dashboard", help="serve the read-only live dashboard on loopback")
+    dash.add_argument("--host", default="127.0.0.1", help="loopback only; any other address is refused")
+    dash.add_argument("--port", type=int, default=8765, help="0 picks a free port")
     events = sub.add_parser("events")
     events.add_argument("--after", type=int, default=0)
     events.add_argument("--limit", type=int, default=100)

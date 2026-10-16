@@ -99,6 +99,20 @@ inbox ─triage→ queued ─implement/repair worker→ ready ─reviewer→ ver
   `factory autostart` installs a launchd agent running `ensure` at login and every
   five minutes from the installed `current` release; `--disable` removes it.
 
+## Dashboard
+
+```bash
+python3 tools/factory/cli.py dashboard            # http://127.0.0.1:8765/ ; --port N, --port 0 for a free port
+```
+
+A read-only, loopback-only page (`tools/factory/dashboard/`, standard library only) showing runtime
+health, tasks by pipeline status, live attempts, integration PR/CI state with the stored CI failure
+log tail, the event feed and the supervisor log tail. It re-reads the ledger through `store.Ledger`
+and `supervisor.health` and refreshes every two seconds. It prints one JSON line with the URL, then
+serves until interrupted. It binds `127.0.0.1` only (other `--host` values are refused), answers
+only `GET`/`HEAD` (everything else is `405`), rejects non-loopback `Host` headers, has no controls,
+and renders all ledger, CI and log text HTML-escaped. For a remote factory, tunnel the port over SSH.
+
 ## Guarantees and limits
 
 - Single host, single user, cooperative trusted-owner threat model. Worktrees and
