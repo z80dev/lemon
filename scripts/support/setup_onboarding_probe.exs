@@ -1,22 +1,49 @@
 defmodule LemonScripts.SetupOnboardingProbe do
   @moduledoc false
 
+  alias LemonCli.Setup.{Provider, Verification, Wizard}
+
   # Exercise real public setup provider and wizard callers with deterministic
   # API-key onboarding, local config, and actual Httpc rather than a verifier.
-  def run(root, entry, live? \\ true) do
+  def run(root, entry, live? \\ true, opts \\ []) do
     {:ok, listener} = :gen_tcp.listen(0, [:binary, active: false, ip: {127, 0, 0, 1}])
     {:ok, {{127, 0, 0, 1}, port}} = :inet.sockname(listener)
     owner = self()
     server = spawn(fn -> serve(listener, owner) end)
     path = Path.join(root, "onboarding_#{entry}.toml")
     url = "http://127.0.0.1:#{port}/v1"
-    previous = Map.new(~w(OPENAI_BASE_URL OPENAI_API_KEY), &{&1, System.get_env(&1)})
+    provider = Keyword.get(opts, :provider, "openai")
+    model = Keyword.get(opts, :model, "gpt-5")
+
+    previous =
+      Map.new(
+        ~w(OPENAI_BASE_URL OPENAI_API_KEY QWEN_BASE_URL QWEN_API_KEY LEMON_DEFAULT_PROVIDER LEMON_DEFAULT_MODEL),
+        &{&1, System.get_env(&1)}
+      )
+
     System.put_env("OPENAI_BASE_URL", url)
-    System.delete_env("OPENAI_API_KEY")
+    System.put_env("QWEN_BASE_URL", url)
+
+    Enum.each(
+      ~w(OPENAI_API_KEY QWEN_API_KEY LEMON_DEFAULT_PROVIDER LEMON_DEFAULT_MODEL),
+      &System.delete_env/1
+    )
+
+    if override = opts[:effective_model], do: System.put_env("LEMON_DEFAULT_MODEL", override)
+
+    declaration =
+      if native_model = opts[:native_model],
+        do: "\n[[providers.#{provider}.models]]\nid = \"#{native_model}\"\n",
+        else: ""
 
     File.write!(
       path,
-      "[providers.openai]\nbase_url = \"#{url}\"\n[providers.openai.headers]\nX-Verification-Scope = \"fixture-provider-scope\"\n"
+      """
+      [providers.#{provider}]
+      base_url = "#{url}"
+      [providers.#{provider}.headers]
+      X-Verification-Scope = "fixture-provider-scope"
+      """ <> declaration
     )
 
     io = %{
@@ -30,10 +57,10 @@ defmodule LemonScripts.SetupOnboardingProbe do
       result =
         case entry do
           :provider ->
-            LemonCli.Setup.Provider.run(
+            Provider.run(
               [
                 "--provider",
-                "openai",
+                provider,
                 "--token",
                 "fixture-onboarded-access",
                 "--secret-name",
@@ -42,22 +69,31 @@ defmodule LemonScripts.SetupOnboardingProbe do
                 path,
                 "--set-default",
                 "--model",
-                "gpt-5",
+                model,
                 "--non-interactive"
               ],
-              io, live_verify: live?)
+              io,
+              live_verify: live?
+            )
 
           :wizard ->
-            LemonCli.Setup.Wizard.run_full([], io,
+            Wizard.run_full([], io,
               config_path: path,
-              provider: "openai",
+              provider: provider,
               token: "fixture-onboarded-access",
-              model: "gpt-5",
+              model: model,
               non_interactive: true,
               skip_verify: not live?
             )
         end
 
+      bound =
+        Verification.verification_options(
+          config_path: path,
+          skip_verify: not live?
+        )
+
+      expected_id = opts[:expected_model] || opts[:effective_model] || model
       records = drain([])
       wire = for {:onboarding_wire, bytes} <- records, do: bytes
       events = for {:setup_event, msg} <- records, do: msg
@@ -65,6 +101,8 @@ defmodule LemonScripts.SetupOnboardingProbe do
       %{
         requests: length(wire),
         success: result == :ok,
+        verification_failed: result == {:error, :verification_failed},
+        exact_model_id: match?(%{id: ^expected_id}, bound[:verification_model]),
         correct_access:
           wire != [] and
             Enum.all?(

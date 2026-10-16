@@ -194,6 +194,94 @@ defmodule LemonCli.Setup.VerificationWireTest do
     refute result.event_credential_leak
   end
 
+  for scenario <- [
+        :literal,
+        :qualified,
+        :multiple,
+        :env,
+        :effective,
+        :custom,
+        :custom_qualified,
+        :declared,
+        :scoped_native
+      ] do
+    @scenario scenario
+    test "#{scenario}: verification preserves full native colon identity on actual HTTP", %{
+      root: root
+    } do
+      result = SetupVerificationProbe.run_identity(root, @scenario)
+      assert result.readiness_complete
+      assert result.exact_model_id
+      assert result.live_ok
+      assert result.requests == 1
+      assert result.models_get
+      assert result.correct_access
+      assert result.correct_scope_header
+      refute result.event_credential_leak
+    end
+  end
+
+  for scenario <- [:foreign, :foreign_alias, :foreign_custom, :ambient_foreign] do
+    @scenario scenario
+    test "#{scenario}: real foreign qualification is refused before HTTP", %{root: root} do
+      result = SetupVerificationProbe.run_identity(root, @scenario)
+      assert result.mismatch
+      refute result.live_ok
+      assert result.requests == 0
+      refute result.event_credential_leak
+    end
+  end
+
+  test "offline verification retains scoped native full IDs without resolving live identity", %{
+    root: root
+  } do
+    result = SetupVerificationProbe.run_identity(root, :scoped_skip)
+    assert result.readiness_complete
+    assert result.disabled
+    assert result.retained_model
+    assert result.requests == 0
+    refute result.event_credential_leak
+  end
+
+  for entry <- [:provider, :wizard], scenario <- [:literal, :qualified, :foreign] do
+    @entry entry
+    @scenario scenario
+    test "#{entry} #{@scenario}: public onboarding retains colon model or refuses foreign override",
+         %{root: root} do
+      effective_model =
+        case @scenario do
+          :literal -> "qwen3:32b"
+          :qualified -> "openai:qwen3:32b"
+          :foreign -> "anthropic:claude-sonnet-4-6"
+        end
+
+      opts = [
+        provider: "openai",
+        model: "gpt-5",
+        effective_model: effective_model,
+        expected_model: "qwen3:32b",
+        native_model: "qwen3:32b"
+      ]
+
+      result = SetupOnboardingProbe.run(root, @entry, true, opts)
+
+      if @scenario == :foreign do
+        refute result.success
+        assert result.verification_failed
+        assert result.requests == 0
+      else
+        assert result.success
+        assert result.exact_model_id
+        assert result.requests == 1
+        assert result.models_get
+        assert result.correct_access
+        assert result.correct_scope_header
+      end
+
+      refute result.event_credential_leak
+    end
+  end
+
   defp assert_clean(result) do
     refute result.wrong_principal
     refute result.wire_credential_leak

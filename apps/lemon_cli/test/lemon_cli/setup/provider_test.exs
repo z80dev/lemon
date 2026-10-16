@@ -446,6 +446,9 @@ defmodule LemonCli.Setup.ProviderTest do
 
       [providers.openai]
         api_key_secret = "mismatch_secret"
+
+      [providers.anthropic]
+        api_key_secret = "foreign_mismatch_secret"
       """)
 
       state = Verification.setup_state(config_path: config_path)

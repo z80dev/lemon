@@ -145,6 +145,21 @@ If a provider verification fails, setup remains incomplete. Correct the
 credential or model and rerun `lemon setup provider`; do not expect a failed
 verification to be treated as a working setup.
 
+Native model IDs retain their colons: with `defaults.provider = "ollama"`,
+both `qwen3:32b` and `ollama:qwen3:32b` select model `qwen3:32b`.
+Only a known provider or configured custom-provider prefix is qualification;
+an explicitly declared full model ID remains literal. For dynamic presets,
+discovered full IDs are recognized only in the effective endpoint/credential/
+header cache scope, never an unrelated default/environment cache. Setup applies
+the same rule to effective `LEMON_DEFAULT_MODEL` overrides, accepts provider
+aliases, and refuses real foreign-provider qualification before any HTTP request.
+Local readiness is dependency-free and recognizes only configured provider
+names (case and `-`/`_` variants); it does not own the runtime provider/alias
+catalog. With `--skip-verify`, identity checks use locally configured prefixes
+rather than resolving credentials to disambiguate dynamic preset caches.
+A local ready state or skipped live check alone is not proof that a
+runtime-qualified selector or effective override passed live setup verification.
+
 ### Local servers and custom endpoints
 
 `lemon setup` and `lemon setup provider` include **local server** entries for
