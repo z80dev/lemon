@@ -95,6 +95,7 @@ export default {
             items: [
               { text: "Reminders & heartbeats", link: "/user-guide/reminders-and-heartbeats" },
               { text: "Attaching a bot machine", link: "/user-guide/attaching-a-bot-machine" },
+              { text: "Phone & provider acceptance", link: "/user-guide/phone-acceptance" },
               { text: "Node files, secrets & processes", link: "/user-guide/node-files-and-secrets" },
             ],
           },
