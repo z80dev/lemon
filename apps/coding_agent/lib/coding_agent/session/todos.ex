@@ -35,6 +35,8 @@ defmodule CodingAgent.Session.Todos do
   * An entry with an unsupported version (or an unreadable version 1 entry)
     governs its branch but cannot be read: reads fail instead of falling back
     to older state, and a complete write replaces it non-destructively.
+    Branch projections report `:todos_unavailable` until a readable list is
+    selected or written; unreadable truth never emits an empty-plan clear.
   """
 
   alias CodingAgent.SessionManager
@@ -85,7 +87,7 @@ defmodule CodingAgent.Session.Todos do
         manager ->
           state = %{state | session_manager: manager}
           project(state, {:ok, todos})
-          Notifier.broadcast_event(state, {:todos_changed, todos})
+          state = notify_change(state, {:ok, todos})
           {:ok, todos, revision(state, manager.leaf_id), state}
       end
     else
@@ -98,16 +100,23 @@ defmodule CodingAgent.Session.Todos do
   def sync(state) do
     {result, _head} = materialize(state.session_manager)
     project(state, result)
-    # A restored branch replaces the client projection, including clearing an
-    # unreadable entry. Reads still fail closed; no older list is substituted.
-    todos =
-      case result do
-        {:ok, todos} -> todos
-        {:error, _} -> []
-      end
+    notify_change(state, result)
+  end
 
-    Notifier.broadcast_event(state, {:todos_changed, todos})
-    state
+  defp notify_change(state, result) do
+    if state.todo_projection != result do
+      # An unreadable branch is not an empty plan. Consumers retain their last
+      # known projection as unavailable until the journal yields a readable list.
+      event =
+        case result do
+          {:ok, todos} -> {:todos_changed, todos}
+          {:error, _} -> {:todos_unavailable, :unsupported_todo_entry}
+        end
+
+      Notifier.broadcast_event(state, event)
+    end
+
+    %{state | todo_projection: result}
   end
 
   @doc """

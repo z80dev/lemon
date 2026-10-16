@@ -169,10 +169,18 @@ carrying the breakdown under `_meta.lemon.context`. The total is the
 provider-reported size of the latest request (plus estimates for newer
 messages); category splits are ~4 characters/token estimates scaled to it.
 
-Plans preserve task priorities and completion state. Retry, compaction and
-subagent lifecycle events use native notices, compaction and subagent updates.
-The runtime preserves message and tool ids so a client can append streams and
-update cards rather than duplicating them.
+Plans preserve task priorities and completion state and come only from the
+selected branch's todo journal, including on load, resume and fork. An unreadable
+journal plan emits a warning without clearing the last known plan; historical
+tool receipts, reminder events and auto-clear hints cannot replace journal truth.
+A successful empty journal write clears a nonempty plan. Native subscriptions
+initialize from existing journal plans (including explicitly cleared plans), but
+pristine branches do not enqueue an empty snapshot and unchanged lists do not
+produce duplicate live plan events.
+
+Retry, compaction and subagent lifecycle events use native notices, compaction
+and subagent updates. The runtime preserves message and tool ids so a client can
+append streams and update cards rather than duplicating them.
 
 Cancelled tools retain their actual terminal receipt and any real partial output
 in ACP, terminal and web history. Unknown mutation outcomes stay explicitly

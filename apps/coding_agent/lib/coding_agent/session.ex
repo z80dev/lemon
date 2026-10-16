@@ -82,6 +82,7 @@ defmodule CodingAgent.Session do
   alias LemonAgent.ContextRegistry
   alias LemonAgent.ModelRuntime.SessionPins
   alias LemonAgent.Types.AgentTool
+  alias LemonCore.Bus.Delivery
   alias LemonCore.Introspection
 
   # ============================================================================
@@ -152,6 +153,7 @@ defmodule CodingAgent.Session do
     :plan_gate,
     :terminal_event,
     branch_generation: 0,
+    todo_projection: {:ok, []},
     tool_started_at: %{},
     wasm_host_calls: %{},
     auto_compaction: %CompactionLifecycle.State{},
@@ -231,6 +233,7 @@ defmodule CodingAgent.Session do
             | {:turn_end, LemonAi.Types.AssistantMessage.t(), list()}
             | nil,
           branch_generation: non_neg_integer(),
+          todo_projection: {:ok, [map()]} | {:error, term()},
           tool_started_at: %{String.t() => integer()},
           wasm_host_calls: %{reference() => map()},
           auto_compaction: CompactionLifecycle.State.t(),
@@ -517,7 +520,12 @@ defmodule CodingAgent.Session do
   @doc """
   Subscribe to session events.
 
-  Events are sent as `{:session_event, session_id, event}`.
+  Events are sent as `{:session_event, session_id, event}`. Each new
+  subscription first receives the selected branch's journal todo truth, sent
+  only to that subscriber: `{:todos_changed, todos}`, or
+  `{:todos_unavailable, :unsupported_todo_entry}` when the governing journal
+  entry cannot be read (never an empty list in its place). A branch with no
+  todo entry or legacy plan emits no initial empty event.
 
   ## Options
 
@@ -1001,17 +1009,27 @@ defmodule CodingAgent.Session do
 
   def handle_call({:subscribe, pid, :stream, opts}, _from, state) do
     {:ok, stream, new_state} = Notifier.subscribe_stream(state, pid, opts)
+
+    {_ref, %{delivery: delivery}} =
+      Enum.find(new_state.event_streams, &match?({_ref, %{stream: ^stream}}, &1))
+
+    if event = initial_todos(new_state) do
+      Delivery.send(delivery, {:"$gen_cast", {:push, event}})
+    end
+
     {:reply, {:ok, stream}, new_state}
   end
 
   def handle_call({:subscribe, pid, :direct, opts}, _from, state) do
     {unsubscribe, new_state} = Notifier.subscribe_direct(state, pid, self(), opts)
+    send_initial_todos(new_state, pid)
     {:reply, unsubscribe, new_state}
   end
 
   # Legacy subscribe call for backwards compatibility
   def handle_call({:subscribe, pid}, _from, state) do
     {unsubscribe, new_state} = Notifier.subscribe_direct(state, pid, self())
+    send_initial_todos(new_state, pid)
     {:reply, unsubscribe, new_state}
   end
 
@@ -2310,6 +2328,29 @@ defmodule CodingAgent.Session do
   end
 
   defp maybe_subscribe_exec_approvals(_state), do: :ok
+
+  # Only the new handle receives selected-branch truth; existing listeners must
+  # not see a duplicate, and an unreadable entry must never look like a clear.
+  defp send_initial_todos(state, pid) do
+    [{^pid, _ref, delivery} | _] = state.event_listeners
+    if event = initial_todos(state), do: Delivery.send(delivery, event)
+  end
+
+  defp initial_todos(state) do
+    event =
+      case Todos.materialize(state.session_manager) do
+        {{:ok, []}, nil} ->
+          nil
+
+        {{:ok, todos}, _head} ->
+          {:todos_changed, todos}
+
+        {{:error, {:unsupported_todo_entry, _version}}, _head} ->
+          {:todos_unavailable, :unsupported_todo_entry}
+      end
+
+    if event, do: {:session_event, state.session_manager.header.id, event}
+  end
 
   defp approval_event_payload(payload, state) when is_map(payload) do
     pending = map_value(payload, :pending)

@@ -20,6 +20,11 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 - Serialize bounded Bus admission across concurrent publishers without treating
   lock contention as overflow. Monitored admission workers bound pending requests,
   release waiters on shutdown, and fence unavailable admission after a finite wait.
+- Session recovery selects only an unambiguous native root and scopes descendant
+  approvals to that owner's active tasks. New subscribers receive the selected
+  journal todo plan immediately; unreadable plans warn without clearing known
+  state, and stale tool receipts or reminders cannot replace journal truth.
+
 - Approving a channel pairing code now updates the running Telegram/Discord
   adapter's allowlist, so the sender's next message is accepted without
   restarting the gateway or daemon. New `lemon pairing revoke <platform>

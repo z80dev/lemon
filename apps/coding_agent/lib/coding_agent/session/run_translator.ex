@@ -37,6 +37,7 @@ defmodule CodingAgent.Session.RunTranslator do
     task_actions: %{},
     reasoning_accumulator: nil,
     started_emitted: false,
+    todo_snapshot_received: false,
     completed_emitted: false,
     delta_seq: 0,
     first_token_emitted: false,
@@ -291,14 +292,33 @@ defmodule CodingAgent.Session.RunTranslator do
     emit_approval_action(t, event)
   end
 
+  # The targeted subscription snapshot precedes agent_start. An initially empty
+  # journal is authoritative for plan consumers, but is not a visible action.
+  def handle_event(
+        %__MODULE__{started_emitted: false, todo_snapshot_received: false} = t,
+        {:todos_changed, []}
+      ),
+      do: %{t | todo_snapshot_received: true}
+
   def handle_event(%__MODULE__{} = t, {:todos_changed, todos}) do
-    emit_action_event(t, %{
+    emit_action_event(%{t | todo_snapshot_received: true}, %{
       id: "todos",
       kind: :note,
       title: "Todo plan updated",
       detail: %{type: :todos_changed, todos: todos},
       phase: :completed,
       ok: true
+    })
+  end
+
+  def handle_event(%__MODULE__{} = t, {:todos_unavailable, reason}) do
+    emit_action_event(%{t | todo_snapshot_received: true}, %{
+      id: "todos",
+      kind: :note,
+      title: "Todo plan unavailable",
+      detail: %{type: :todos_unavailable, reason: reason},
+      phase: :completed,
+      ok: false
     })
   end
 

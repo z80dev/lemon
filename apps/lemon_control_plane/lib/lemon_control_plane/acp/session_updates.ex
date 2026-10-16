@@ -27,7 +27,6 @@ defmodule LemonControlPlane.ACP.SessionUpdates do
     :session_id,
     :cwd,
     :context_window,
-    plan_from_tools: true,
     tools: %{},
     thoughts: %{},
     message_id: nil,
@@ -42,7 +41,6 @@ defmodule LemonControlPlane.ACP.SessionUpdates do
       session_id: session_id,
       cwd: Keyword.get(opts, :cwd),
       context_window: Keyword.get(opts, :context_window),
-      plan_from_tools: Keyword.get(opts, :plan_from_tools, true),
       message_id: "message_#{System.unique_integer([:positive, :monotonic])}"
     }
   end
@@ -126,11 +124,21 @@ defmodule LemonControlPlane.ACP.SessionUpdates do
     tool_result(state, id, name, args, result, if(is_error, do: "failed", else: "completed"))
   end
 
-  def map_event(state, {:todos_changed, todos}),
-    do: emit(%{state | plan_from_tools: false}, plan(todos))
+  # Only the session journal owns the plan. Tool receipts, reminders and
+  # auto-clear hints cannot replace it, including after an unavailable read.
+  def map_event(state, {:todos_changed, todos}) when is_list(todos),
+    do: emit(state, plan(todos))
 
-  def map_event(state, {:todo_reminder, todos}), do: emit(state, plan(todos))
-  def map_event(state, {:todo_auto_clear}), do: emit(state, plan([]))
+  def map_event(state, {:todos_changed, _}), do: map_event(state, {:todos_unavailable, nil})
+
+  def map_event(state, {:todos_unavailable, _reason}) do
+    emit(state, %{
+      "sessionUpdate" => "notice",
+      "severity" => "warning",
+      "title" => "The session todo plan is unavailable."
+    })
+  end
+
   def map_event(state, {:provider_retry, details}), do: retry_update(state, details)
   def map_event(state, {:provider_retry_end, details}), do: retry_update(state, details)
   def map_event(state, {:compaction_start, info}), do: compaction(state, info, "in_progress")
@@ -210,12 +218,11 @@ defmodule LemonControlPlane.ACP.SessionUpdates do
   end
 
   defp map_named_event(state, "todos_changed", event),
-    do: map_event(state, {:todos_changed, get(event, :todos) || []})
+    do: map_event(state, {:todos_changed, get(event, :todos)})
 
-  defp map_named_event(state, "todo_reminder", event),
-    do: emit(state, plan(get(event, :todos) || []))
+  defp map_named_event(state, "todos_unavailable", event),
+    do: map_event(state, {:todos_unavailable, get(event, :reason)})
 
-  defp map_named_event(state, "todo_auto_clear", _event), do: emit(state, plan([]))
   defp map_named_event(state, "provider_retry", event), do: retry_update(state, event)
   defp map_named_event(state, "provider_retry_end", event), do: retry_update(state, event)
 
@@ -281,7 +288,10 @@ defmodule LemonControlPlane.ACP.SessionUpdates do
 
     cond do
       get(detail, :type) in [:todos_changed, "todos_changed"] ->
-        map_event(state, {:todos_changed, get(detail, :todos) || []})
+        map_event(state, {:todos_changed, get(detail, :todos)})
+
+      get(detail, :type) in [:todos_unavailable, "todos_unavailable"] ->
+        map_event(state, {:todos_unavailable, get(detail, :reason)})
 
       kind == "reasoning" ->
         reasoning_update(state, id, get(detail, :reasoning) || %{})
@@ -386,17 +396,6 @@ defmodule LemonControlPlane.ACP.SessionUpdates do
       |> put_nonempty("locations", result_locations(state, result, args, name))
 
     updates = [update]
-    todos = todo_entries(name, args, result)
-    plan_entries = get(get(get(result, :details), :plan), :entries)
-
-    updates =
-      cond do
-        status != "completed" -> updates
-        not state.plan_from_tools -> updates
-        is_list(plan_entries) -> updates ++ [plan(plan_entries)]
-        is_list(todos) -> updates ++ [plan(todos)]
-        true -> updates
-      end
 
     updates =
       if name in ["task", "agent"] do
@@ -659,18 +658,6 @@ defmodule LemonControlPlane.ACP.SessionUpdates do
     do: Regex.match?(~r/^[a-z][a-z0-9+.-]*:\/\//i, raw)
 
   defp internal_path?(_raw), do: false
-
-  defp todo_entries(name, args, result) when name in ["todo", "todo_write"] do
-    details = get(result, :details) || %{}
-
-    get(details, :todos) ||
-      case get(details, :phases) do
-        phases when is_list(phases) -> Enum.flat_map(phases, &list(get(&1, :tasks)))
-        _ -> if get(args, :action) == "write", do: get(args, :todos)
-      end
-  end
-
-  defp todo_entries(_name, _args, _result), do: nil
 
   defp plan(todos) do
     entries =

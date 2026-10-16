@@ -2,6 +2,7 @@ defmodule LemonControlPlane.ACP.TodoJournalTest do
   use ExUnit.Case, async: false
 
   alias CodingAgent.{ControlPlaneProvider, Session, SessionManager}
+  alias CodingAgent.SessionManager.SessionEntry
   alias CodingAgent.Tools.{TodoStore, TodoWrite}
   alias LemonControlPlane.ACP
   alias LemonCore.Store
@@ -60,6 +61,7 @@ defmodule LemonControlPlane.ACP.TodoJournalTest do
       )
 
     Session.subscribe(pid)
+    refute_receive {:session_event, _, {:todos_changed, []}}
 
     first = write(pid, "Selected")
     assert_receive {:session_event, _, {:todos_changed, selected_todos}}
@@ -146,6 +148,285 @@ defmodule LemonControlPlane.ACP.TodoJournalTest do
     assert plans(invoke("session/load", %{"sessionId" => child_id, "cwd" => cwd})) == [
              entries(first)
            ]
+
+    assert {:ok, manager} = SessionManager.load_from_file(path)
+
+    manager =
+      SessionManager.append_entry(
+        manager,
+        SessionEntry.custom("lemon.todo", %{
+          "version" => 999,
+          "todos" => []
+        })
+      )
+
+    :ok = SessionManager.save_to_file(path, manager)
+    updates = invoke("session/load", %{"sessionId" => id, "cwd" => cwd})
+    assert plans(updates) == []
+    assert_unavailable(updates)
+  end
+
+  @tag :tmp_dir
+  test "pristine subscriptions and unchanged writes are silent but real clears remain visible",
+       %{tmp_dir: cwd} do
+    alias CodingAgent.Executor.SessionRunner.Emitter
+    alias CodingAgent.Session.RunTranslator
+    alias LemonControlPlane.ACP.SessionUpdates
+
+    pid =
+      start_supervised!(
+        {Session,
+         cwd: cwd, workspace_dir: Path.join(cwd, "workspace"), model: fixture_model(), tools: []}
+      )
+
+    id = Session.get_state(pid).session_manager.header.id
+
+    on_exit(fn ->
+      TodoStore.delete(id)
+      File.rm_rf!(CodingAgent.Config.sessions_dir(cwd))
+    end)
+
+    Session.subscribe(pid)
+    refute_receive {:session_event, ^id, _}
+    assert {:ok, stream} = Session.subscribe(pid, mode: :stream)
+    assert LemonAgent.EventStream.stats(stream).queue_size == 0
+    LemonAgent.EventStream.cancel(stream, :test_complete)
+
+    assert {:ok, [], revision} = Session.todos(pid)
+    assert {:ok, [], _} = Session.write_todos(pid, [], revision)
+    refute_receive {:session_event, ^id, {:todos_changed, _}}
+
+    # An explicitly journaled empty plan still initializes a new projection.
+    Session.subscribe(pid)
+    assert_receive {:session_event, ^id, {:todos_changed, []} = initial}
+    {updates, _} = SessionUpdates.map_event(SessionUpdates.new(id), initial)
+    assert plans(updates) == [[]]
+
+    run_ref = make_ref()
+
+    translator =
+      RunTranslator.new(
+        emitter: Emitter,
+        emitter_state: %Emitter{sink_pid: self(), run_ref: run_ref, session: pid},
+        engine: "lemon",
+        label: "Todo projection",
+        session_id: id,
+        cwd: cwd
+      )
+      |> RunTranslator.handle_event(initial)
+
+    refute_receive {:engine_event, ^run_ref, _}
+
+    write(pid, "Plan before start")
+    assert_receive {:session_event, ^id, {:todos_changed, todos} = changed}
+    translator = RunTranslator.handle_event(translator, changed)
+    assert_receive {:engine_event, ^run_ref, %{action: %{detail: %{todos: ^todos}}}}
+
+    assert {:ok, ^todos, revision} = Session.todos(pid)
+    assert {:ok, ^todos, _} = Session.write_todos(pid, todos, revision)
+    same_plan_leaf = Session.get_state(pid).session_manager.leaf_id
+    assert :ok = Session.navigate_tree(pid, same_plan_leaf, summarize_abandoned: false)
+    refute_receive {:session_event, ^id, {:todos_changed, _}}
+
+    # A real pre-start clear is visible, unlike the initial snapshot.
+    assert {:ok, ^todos, revision} = Session.todos(pid)
+    assert {:ok, [], _} = Session.write_todos(pid, [], revision)
+    assert_receive {:session_event, ^id, {:todos_changed, []} = cleared}
+    translator = RunTranslator.handle_event(translator, cleared)
+    assert_receive {:engine_event, ^run_ref, %{action: %{detail: %{todos: []}}, ok: true}}
+
+    translator = RunTranslator.handle_event(translator, {:agent_start})
+    assert_receive {:engine_event, ^run_ref, %{__event__: :started}}
+    write(pid, "Plan after start")
+    assert_receive {:session_event, ^id, {:todos_changed, _} = changed}
+    translator = RunTranslator.handle_event(translator, changed)
+    assert_receive {:engine_event, ^run_ref, %{action: %{detail: %{type: :todos_changed}}}}
+    assert {:ok, [_todo], revision} = Session.todos(pid)
+    assert {:ok, [], _} = Session.write_todos(pid, [], revision)
+    assert_receive {:session_event, ^id, {:todos_changed, []} = cleared}
+    RunTranslator.handle_event(translator, cleared)
+    assert_receive {:engine_event, ^run_ref, %{action: %{detail: %{todos: []}}, ok: true}}
+
+    assert {:ok, [], revision} = Session.todos(pid)
+    assert {:ok, [], _} = Session.write_todos(pid, [], revision)
+    refute_receive {:session_event, ^id, {:todos_changed, _}}
+  end
+
+  @tag :tmp_dir
+  test "unreadable live branches warn without clearing the last journal plan through native and bus consumers",
+       %{tmp_dir: cwd} do
+    alias CodingAgent.Executor.SessionRunner.Emitter
+    alias CodingAgent.Session.RunTranslator
+    alias CodingAgent.SessionManager.SessionEntry
+    alias LemonControlPlane.ACP.SessionUpdates
+
+    known = [
+      %{"id" => "known", "content" => "Known", "status" => "pending", "priority" => "high"}
+    ]
+
+    for {name, bad_data} <- [
+          {"future", %{"version" => 999, "todos" => []}},
+          {"unreadable", %{"version" => 1, "todos" => ["invalid"]}}
+        ] do
+      manager =
+        SessionManager.new(cwd)
+        |> SessionManager.append_entry(
+          SessionEntry.custom("lemon.todo", %{"version" => 1, "todos" => known})
+        )
+
+      good_leaf = manager.leaf_id
+      manager = SessionManager.append_entry(manager, SessionEntry.custom("lemon.todo", bad_data))
+      bad_leaf = manager.leaf_id
+      path = Path.join(cwd, name <> ".jsonl")
+      :ok = SessionManager.save_to_file(path, manager)
+
+      pid =
+        start_supervised!(
+          {Session,
+           cwd: cwd,
+           workspace_dir: Path.join(cwd, "workspace"),
+           session_file: path,
+           model: fixture_model(),
+           tools: []}
+        )
+
+      on_exit(fn -> TodoStore.delete(manager.header.id) end)
+      Session.subscribe(pid)
+      assert_receive {:session_event, _, {:todos_unavailable, :unsupported_todo_entry} = initial}
+      {updates, projection} = SessionUpdates.map_event(SessionUpdates.new(name), initial)
+      assert plans(updates) == []
+      assert_unavailable(updates)
+
+      assert :ok = Session.navigate_tree(pid, good_leaf, summarize_abandoned: false)
+      assert_receive {:session_event, _, {:todos_changed, ^known} = known_event}
+      {known_updates, projection} = SessionUpdates.map_event(projection, known_event)
+      assert [known_plan] = plans(known_updates)
+
+      assert :ok = Session.navigate_tree(pid, bad_leaf, summarize_abandoned: false)
+      assert_receive {:session_event, _, {:todos_unavailable, :unsupported_todo_entry} = event}
+      refute_receive {:session_event, _, {:todos_changed, []}}
+      assert {:error, {:unsupported_todo_entry, _}, _} = Session.todos(pid)
+
+      {updates, projection} = SessionUpdates.map_event(projection, event)
+      assert plans(updates) == []
+      assert_unavailable(updates)
+
+      # Exercise the real translator/emitter before JSON encoding bus payloads.
+      run_ref = make_ref()
+
+      translator =
+        RunTranslator.new(
+          emitter: Emitter,
+          emitter_state: %Emitter{
+            sink_pid: self(),
+            run_ref: run_ref,
+            session: pid
+          },
+          engine: "lemon",
+          label: "Todo projection",
+          cwd: cwd
+        )
+
+      RunTranslator.handle_event(translator, event)
+      assert_receive {:engine_event, ^run_ref, %{ok: false} = payload}
+      wire_event = Jason.decode!(Jason.encode!(%{type: :engine_action, payload: payload}))
+      {updates, projection} = SessionUpdates.map_event(projection, wire_event)
+      assert plans(updates) == []
+      assert_unavailable(updates)
+
+      # Receipts and non-journal hints cannot fabricate an available plan.
+      for stale <- [
+            {:tool_execution_end, "late", "todo", %{details: %{todos: [], plan: %{entries: []}}},
+             false},
+            {:todo_reminder, []},
+            {:todo_auto_clear},
+            %{"type" => "todo_reminder", "todos" => []},
+            %{"type" => "todo_auto_clear"}
+          ] do
+        {updates, _} = SessionUpdates.map_event(projection, stale)
+        assert plans(updates) == []
+      end
+
+      assert :ok = Session.navigate_tree(pid, good_leaf, summarize_abandoned: false)
+      assert_receive {:session_event, _, {:todos_changed, ^known} = restored}
+      {updates, projection} = SessionUpdates.map_event(projection, restored)
+      assert plans(updates) == [known_plan]
+
+      assert {:ok, ^known, revision} = Session.todos(pid)
+      assert {:ok, [], _} = Session.write_todos(pid, [], revision)
+      assert_receive {:session_event, _, {:todos_changed, []} = cleared}
+      {updates, _} = SessionUpdates.map_event(projection, cleared)
+      assert plans(updates) == [[]]
+      stop_supervised!(Session)
+    end
+  end
+
+  defp assert_unavailable(updates) do
+    assert Enum.any?(updates, fn
+             %{
+               "params" => %{
+                 "update" => %{
+                   "sessionUpdate" => "notice",
+                   "severity" => "warning",
+                   "title" => "The session todo plan is unavailable."
+                 }
+               }
+             } ->
+               true
+
+             _ ->
+               false
+           end)
+  end
+
+  @tag :tmp_dir
+  test "new direct and stream subscriptions receive only their own journal snapshot", %{
+    tmp_dir: cwd
+  } do
+    pid =
+      start_supervised!(
+        {Session,
+         cwd: cwd, workspace_dir: Path.join(cwd, "workspace"), model: fixture_model(), tools: []}
+      )
+
+    id = Session.get_state(pid).session_manager.header.id
+
+    on_exit(fn ->
+      TodoStore.delete(id)
+      File.rm_rf!(CodingAgent.Config.sessions_dir(cwd))
+    end)
+
+    Session.subscribe(pid)
+    refute_receive {:session_event, ^id, {:todos_changed, []}}
+    write(pid, "Selected")
+    assert_receive {:session_event, ^id, {:todos_changed, todos}}
+    owner = self()
+
+    subscriber =
+      spawn_link(fn ->
+        unsubscribe = Session.subscribe(pid)
+
+        receive do
+          event -> send(owner, {:initial_direct, event})
+        end
+
+        receive do
+          :stop -> unsubscribe.()
+        end
+      end)
+
+    assert_receive {:initial_direct, {:session_event, ^id, {:todos_changed, ^todos}}}
+    refute_receive {:session_event, ^id, {:todos_changed, _}}
+    send(subscriber, :stop)
+
+    assert {:ok, stream} = Session.subscribe(pid, mode: :stream)
+
+    assert Enum.take(LemonAgent.EventStream.events(stream), 1) == [
+             {:session_event, id, {:todos_changed, todos}}
+           ]
+
+    refute_receive {:session_event, ^id, {:todos_changed, _}}
+    LemonAgent.EventStream.cancel(stream, :test_complete)
   end
 
   defp fixture_model do

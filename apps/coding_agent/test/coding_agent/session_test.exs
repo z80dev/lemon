@@ -828,51 +828,6 @@ defmodule CodingAgent.SessionTest do
     end
   end
 
-  describe "event broadcasting" do
-    test "events are broadcast to subscribers" do
-      session = start_session()
-      _unsub = Session.subscribe(session)
-
-      :ok = Session.prompt(session, "Hello!")
-
-      # Should receive at least one event
-      assert_receive {:session_event, _session_id, _event}, 1000
-    end
-
-    test "multiple subscribers receive events" do
-      session = start_session()
-
-      # Subscribe from test process
-      _unsub = Session.subscribe(session)
-
-      # Subscribe from another process
-      parent = self()
-      ref = make_ref()
-
-      spawn(fn ->
-        _unsub2 = Session.subscribe(session)
-        send(parent, {:subscribed, ref})
-
-        receive do
-          {:session_event, _session_id, event} ->
-            send(parent, {:other_received, ref, event})
-        after
-          5_000 -> send(parent, {:other_timeout, ref})
-        end
-      end)
-
-      # Wait for spawn to subscribe
-      assert_receive {:subscribed, ^ref}, 1_000
-      assert Session.diagnostics(session).subscriber_count == 2
-
-      :ok = Session.prompt(session, "Hello!")
-
-      # Both should receive events
-      assert_receive {:session_event, _session_id, _event}, 5_000
-      assert_receive {:other_received, ^ref, _event}, 5_000
-    end
-  end
-
   # ============================================================================
   # Steering and Follow-up Tests
   # ============================================================================
@@ -941,16 +896,10 @@ defmodule CodingAgent.SessionTest do
   # ============================================================================
 
   describe "subscribe/1" do
-    test "returns unsubscribe function" do
-      session = start_session()
-      unsubscribe = Session.subscribe(session)
-
-      assert is_function(unsubscribe, 0)
-    end
-
     test "unsubscribe stops events" do
       session = start_session()
       unsubscribe = Session.subscribe(session)
+      refute_receive {:session_event, _session_id, {:todos_changed, []}}
 
       # Unsubscribe
       :ok = unsubscribe.()

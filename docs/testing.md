@@ -249,6 +249,8 @@ separately so crossing a millisecond cannot change the expected winner.
 
 Submission-shape fixtures use per-test run supervisors and capturing run processes,
 not real gateway work that can finish during another test's global count assertions.
+Fixtures that deliberately submit real router work run synchronously, abort their
+exact run IDs on exit, and await `RunRegistry` removal before teardown completes.
 Own database fixtures with `start_supervised!` so shutdown finishes before directory
 cleanup; checking `Process.alive?` before stopping a test-linked process is a race.
 Atom-safety tests check that each generated untrusted token still fails

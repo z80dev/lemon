@@ -1,5 +1,6 @@
 defmodule LemonControlPlane.Methods.ControlPlaneMethodsTest do
-  use ExUnit.Case, async: true
+  # Real routed runs share the runtime observed by presence/monitoring tests.
+  use ExUnit.Case, async: false
 
   @moduledoc """
   Tests for control-plane method implementations.
@@ -455,6 +456,8 @@ defmodule LemonControlPlane.Methods.ControlPlaneMethodsTest do
           %{}
         )
 
+      cleanup_run_on_exit(result["runId"])
+
       assert is_binary(result["runId"])
       assert result["sessionKey"] == session_key
       assert result["summary"]["runId"] == result["runId"]
@@ -484,6 +487,8 @@ defmodule LemonControlPlane.Methods.ControlPlaneMethodsTest do
                  %{}
                )
 
+      cleanup_run_on_exit(result["runId"])
+
       assert result["summary"]["queueMode"] == "redirect"
     end
   end
@@ -493,6 +498,29 @@ defmodule LemonControlPlane.Methods.ControlPlaneMethodsTest do
 
     test "NodePairRequest returns error when nodeName is missing" do
       {:error, _} = NodePairRequest.handle(%{"nodeType" => "browser"}, %{})
+    end
+  end
+
+  defp cleanup_run_on_exit(run_id) do
+    on_exit(fn ->
+      assert :ok = LemonRouter.abort_run(run_id, :test_cleanup)
+      await_run_unregistered(run_id)
+    end)
+  end
+
+  # A submission receipt is not completion, and Registry processes exit signals
+  # asynchronously. Do not leave live or disappearing runs for the next test.
+  defp await_run_unregistered(run_id, attempts \\ 500) do
+    case Registry.select(LemonRouter.RunRegistry, [{{run_id, :_, :_}, [], [true]}]) do
+      [] ->
+        :ok
+
+      _ when attempts > 0 ->
+        Process.sleep(10)
+        await_run_unregistered(run_id, attempts - 1)
+
+      _ ->
+        flunk("submitted run remains registered after cleanup: #{run_id}")
     end
   end
 end

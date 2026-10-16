@@ -146,8 +146,8 @@ defmodule CodingAgent.ControlPlaneProvider do
   def feature_progress(cwd), do: FeatureRequirements.get_progress(cwd)
 
   def compact_session(session_key, opts) do
-    case live_session(session_key) do
-      nil ->
+    case compact_sessions(session_key) do
+      [] ->
         with cwd when is_binary(cwd) <- Keyword.get(opts, :cwd),
              {:ok, path} <- native_session_path(session_key, cwd),
              {:ok, pid} <-
@@ -162,8 +162,11 @@ defmodule CodingAgent.ControlPlaneProvider do
           {:error, _} = error -> error
         end
 
-      pid ->
+      [pid] ->
         CodingAgent.Session.compact(pid, opts)
+
+      _unavailable_or_ambiguous ->
+        {:error, :unavailable}
     end
   end
 
@@ -177,8 +180,8 @@ defmodule CodingAgent.ControlPlaneProvider do
 
   @doc "Read the current native branch, including offline rewind, without starting a session."
   def session_recovery_snapshot(session_key, cwd) do
-    case live_session(session_key) do
-      nil ->
+    case live_sessions(session_key) do
+      [] ->
         with cwd when is_binary(cwd) <- recovery_cwd(session_key, cwd),
              {:ok, path} <- native_session_path(session_key, cwd),
              {:ok, session} <- CodingAgent.SessionManager.load_from_file(path),
@@ -189,7 +192,7 @@ defmodule CodingAgent.ControlPlaneProvider do
           {:error, _} = error -> error
         end
 
-      pid ->
+      [pid] ->
         with {:ok, snapshot} <- CodingAgent.Session.recovery_snapshot(pid) do
           attempt =
             {pid, snapshot.run_id}
@@ -199,6 +202,9 @@ defmodule CodingAgent.ControlPlaneProvider do
 
           {:ok, Map.put(snapshot, :attempt, attempt)}
         end
+
+      _ambiguous_owners ->
+        {:error, :unavailable}
     end
   end
 
@@ -257,6 +263,10 @@ defmodule CodingAgent.ControlPlaneProvider do
     else
       {:error, :unavailable}
     end
+  rescue
+    _ -> {:error, :unavailable}
+  catch
+    :exit, _ -> {:error, :unavailable}
   end
 
   def session_process_receipts(_owner), do: {:error, :unavailable}
@@ -404,9 +414,13 @@ defmodule CodingAgent.ControlPlaneProvider do
   last save recorded (see `CodingAgent.Session.ContextUsage`).
   """
   def session_context_usage(session_key, cwd) do
-    case live_session(session_key) do
-      nil -> durable_context_usage(session_key, cwd)
-      pid -> live_context_usage(pid, session_key, cwd)
+    # Context accounting has its own serialized read and retirement fallback.
+    # Do not insert a state probe before it: a retiring owner may be suspended
+    # until the context read arrives. Recovery still requires strict inspection.
+    case registered_sessions(session_key) do
+      [] -> durable_context_usage(session_key, cwd)
+      [{_native_id, pid}] -> live_context_usage(pid, session_key, cwd)
+      _ambiguous -> {:error, :unavailable}
     end
   end
 
@@ -630,17 +644,72 @@ defmodule CodingAgent.ControlPlaneProvider do
   end
 
   defp live_session(session_key) do
-    if Process.whereis(CodingAgent.SessionRegistry) do
-      case Registry.lookup(CodingAgent.SessionRegistry, session_key) do
-        [{pid, _}] ->
-          if Process.alive?(pid), do: pid
-
-        [] ->
-          CodingAgent.SessionRegistry
-          |> Registry.select([{{:_, :"$1", %{session_key: session_key}}, [], [:"$1"]}])
-          |> Enum.find(&Process.alive?/1)
-      end
+    case live_sessions(session_key) do
+      [pid] -> pid
+      [] -> nil
+      _unavailable_or_ambiguous -> exit(:unavailable)
     end
+  end
+
+  # Direct registrations predate native session metadata and support compaction
+  # without the native state/recovery protocol. Never use them for root recovery.
+  defp compact_sessions(session_key) do
+    case live_sessions(session_key) do
+      owners when is_list(owners) ->
+        direct =
+          if Process.whereis(CodingAgent.SessionRegistry) do
+            CodingAgent.SessionRegistry
+            |> Registry.lookup(session_key)
+            |> Enum.reject(fn {_pid, metadata} ->
+              is_map(metadata) and Map.has_key?(metadata, :session_key)
+            end)
+            |> Enum.map(fn {pid, _metadata} -> pid end)
+          else
+            []
+          end
+
+        Enum.uniq(owners ++ direct)
+
+      {:error, :unavailable} = error ->
+        error
+    end
+  end
+
+  defp live_sessions(session_key) do
+    session_key
+    |> registered_sessions()
+    |> Enum.reduce_while([], fn {native_id, pid}, owners ->
+      case root_session_owner?(pid, native_id, session_key) do
+        true -> {:cont, [pid | owners]}
+        false -> {:cont, owners}
+        {:error, :unavailable} = error -> {:halt, error}
+      end
+    end)
+  end
+
+  defp registered_sessions(session_key) do
+    if Process.whereis(CodingAgent.SessionRegistry) do
+      Registry.select(CodingAgent.SessionRegistry, [
+        {{:"$1", :"$2", %{session_key: session_key}}, [], [{{:"$1", :"$2"}}]}
+      ])
+    else
+      []
+    end
+  end
+
+  # Task children share the routing key, but never the native owner. Journal
+  # parentage does not identify children: a user fork is still a root session.
+  defp root_session_owner?(pid, native_id, session_key) do
+    case CodingAgent.Session.get_state(pid) do
+      %{session_key: ^session_key, session_manager: %{header: %{id: ^native_id}}} = state ->
+        state.task_child != true
+
+      _ ->
+        false
+    end
+  catch
+    :exit, _ ->
+      if Process.alive?(pid), do: {:error, :unavailable}, else: false
   end
 
   def background_start(prompt, opts), do: CodingAgent.BackgroundRun.start(prompt, opts)
