@@ -701,6 +701,7 @@ defmodule CodingAgent.ProcessSession do
   end
 
   defp finish_workload(state) do
+    state = finalize_output(state)
     if state.workload_timer, do: Process.cancel_timer(state.workload_timer)
 
     {status, exit_code} =
@@ -914,31 +915,36 @@ defmodule CodingAgent.ProcessSession do
   defp failed_start(process_id, opts, output_path, output_file) do
     File.close(output_file)
     claimed? = is_binary(Keyword.get(opts, :launch_fingerprint))
+    removed = File.rm(output_path) in [:ok, {:error, :enoent}]
 
-    # Retain an accounting record if removal fails, so a later reservation
-    # cannot forget an artifact still occupying disk. A claimed launch keeps its
-    # record and receives a confirmed startup-failure receipt instead.
     try do
-      case File.rm(output_path) do
-        result when result in [:ok, {:error, :enoent}] ->
-          ProcessStore.put_output(process_id, %{
-            artifact_capacity: 0,
-            artifact_bytes: 0,
-            finalized: true
-          })
+      # No Port was opened. Release lifetime capacity independently of capture
+      # cleanup; an unremovable artifact must keep its separate disk charge.
+      if claimed?, do: ProcessStore.confirm_termination(process_id, :startup_failed)
 
-          if claimed?,
-            do: ProcessStore.confirm_termination(process_id, :startup_failed),
-            else: ProcessStore.delete(process_id)
+      if removed do
+        ProcessStore.put_output(process_id, %{
+          artifact_capacity: 0,
+          artifact_bytes: 0,
+          finalized: true
+        })
 
-        _ ->
-          if claimed?,
-            do: ProcessStore.confirm_termination(process_id, :startup_failed),
-            else: ProcessStore.mark_error(process_id, :process_start_failed)
+        ProcessStore.delete(process_id)
+      else
+        case ProcessStore.get(process_id) do
+          {:ok, record, _logs} ->
+            output = Map.put(Map.get(record, :output) || %{}, :finalized, true)
+            ProcessStore.put_output(process_id, output)
+
+          _ ->
+            :ok
+        end
+
+        if not claimed?, do: ProcessStore.mark_error(process_id, :process_start_failed)
       end
     catch
-      # The accounting owner may be unavailable. The pre-Port file was still
-      # closed/removed first; any persisted reservation remains conservative.
+      # Closed capture cleanup happens first. Unavailable accounting cannot
+      # erase a durable reservation or authorize a fresh logical launch.
       :exit, _reason -> throw(:process_start_failed)
     end
 
@@ -1144,6 +1150,8 @@ defmodule CodingAgent.ProcessSession do
   defp flush_partial_line(%{partial_line: ""} = state), do: state
 
   defp flush_partial_line(state), do: finish_line(state, false)
+
+  defp finalize_output(%{output_finalized: true} = state), do: state
 
   # Runs once, when the process exits (or the session stops first): the
   # partial line joins the tail, the artifact is closed and its reservation

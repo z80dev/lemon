@@ -714,8 +714,16 @@ defmodule CodingAgent.ProcessManager do
         {:error, :process_not_terminal}
 
       {:ok, _, _} ->
-        if ProcessSession.alive?(process_id), do: ProcessSession.stop(process_id)
-        ProcessStore.delete(process_id)
+        # The owner decides terminality before the observer is stopped; an
+        # unknown held workload must retain its reconciliation process.
+        case ProcessStore.delete(process_id) do
+          :ok ->
+            if ProcessSession.alive?(process_id), do: ProcessSession.stop(process_id)
+            :ok
+
+          {:error, _} = error ->
+            error
+        end
 
       {:error, :not_found} ->
         {:error, :not_found}
