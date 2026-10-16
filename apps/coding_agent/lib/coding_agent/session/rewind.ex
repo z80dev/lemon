@@ -13,6 +13,12 @@ defmodule CodingAgent.Session.Rewind do
   Effect classification unwraps persisted `tool_invoke` targets while matching
   results by the unchanged outer tool name and call ID. Missing bridge identity
   remains unrestorable; bridge result metadata cannot claim a pure target.
+  Only checkpoints captured by mutating tools are restore sources; checkpoint ids
+  echoed by inspection results never authorize restoring files. Manual filesystem
+  checkpoint restores and unknown actions are unrestorable because they do not
+  capture the files they overwrite.
+  Persisted `checkpoint(goal)` invocations are conversation-only, including when
+  interrupted; result metadata alone cannot establish that identity.
   """
 
   alias CodingAgent.SessionManager
@@ -21,6 +27,9 @@ defmodule CodingAgent.Session.Rewind do
   @confirmation_table :session_rewinds
   @confirmation_ttl_ms 5 * 60 * 1000
   @mutation_tools ~w(write edit patch apply_patch bash)
+  @checkpoint_capture_tools ~w(write edit patch ast_grep lsp)
+  @checkpoint_tools ~w(checkpoint fs_checkpoint)
+  @checkpoint_inspection_actions ~w(list diff delete)
   @debug_inspection_actions ~w(status sessions output threads stack_trace scopes)
   @max_review_commands 100
   @max_command_chars 2048
@@ -216,7 +225,8 @@ defmodule CodingAgent.Session.Rewind do
         Map.get(confirmation, :review) != review or confirmation.unavailable != unavailable ->
         {:error, :stale_confirmation}
 
-      restore_files and Enum.any?(unavailable, &(&1 in ["eval", "debug"])) ->
+      restore_files and
+          Enum.any?(unavailable, &(&1 in (["eval", "debug"] ++ @checkpoint_tools))) ->
         {:error, :unrestorable_effects}
 
       restore_files and Enum.any?(unavailable, &(&1 != "bash")) ->
@@ -414,14 +424,16 @@ defmodule CodingAgent.Session.Rewind do
           checkpoint_ids =
             field(details, :checkpoint_ids) || List.wrap(field(details, :checkpoint_id))
 
-          debug_arguments = invocation.arguments
+          arguments = invocation.arguments
 
           cond do
             name in ["eval", "tool_invoke"] or
-                (name == "debug" and not debug_inspection?(debug_arguments)) ->
+              (name == "debug" and not debug_inspection?(arguments)) or
+                checkpoint_mutation?(invocation) ->
               {paths, [name | unavailable]}
 
-            is_list(checkpoint_ids) and checkpoint_ids != [] ->
+            name in @checkpoint_capture_tools and is_list(checkpoint_ids) and
+                checkpoint_ids != [] ->
               Enum.reduce(checkpoint_ids, {paths, unavailable}, fn checkpoint_id,
                                                                    {paths, unavailable} ->
                 case checkpoint_files(checkpoint_id, session.header.cwd) do
@@ -441,7 +453,7 @@ defmodule CodingAgent.Session.Rewind do
                     {paths, unavailable}
 
                   {:error, _} ->
-                    {paths, [name || "unknown" | unavailable]}
+                    {paths, [name | unavailable]}
                 end
               end)
 
@@ -488,6 +500,7 @@ defmodule CodingAgent.Session.Rewind do
 
     name in @mutation_tools or name in ["eval", "tool_invoke"] or
       (name == "debug" and not debug_inspection?(arguments)) or
+      checkpoint_mutation?(call) or
       (name == "ast_grep" and field(arguments, :action) == "replace" and
          field(arguments, :dry_run) == false) or
       (name == "lsp" and field(arguments, :apply) == true)
@@ -547,6 +560,20 @@ defmodule CodingAgent.Session.Rewind do
 
   defp debug_inspection?(arguments),
     do: field(arguments, :action) in @debug_inspection_actions
+
+  defp checkpoint_mutation?(invocation) do
+    invocation.name in @checkpoint_tools and
+      field(invocation.arguments, :action) not in @checkpoint_inspection_actions and
+      not conversation_checkpoint?(invocation)
+  end
+
+  defp conversation_checkpoint?(%{name: "checkpoint", outer_name: _, arguments: arguments})
+       when is_map(arguments) do
+    is_binary(field(arguments, :goal)) and
+      not Map.has_key?(arguments, :action) and not Map.has_key?(arguments, "action")
+  end
+
+  defp conversation_checkpoint?(_), do: false
 
   defp checkpoint_files(id, cwd) when is_binary(id) do
     with {:ok, checkpoint} <- Checkpoint.load(id),

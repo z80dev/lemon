@@ -30,6 +30,9 @@ These tools do **not** snapshot or restore files, undo shell commands or restore
 external state. They do not ask for confirmation because they collapse only the
 model's own exploration. The operator `/rewind` preview/confirmation and optional
 file restoration workflow is unchanged.
+Persisted `checkpoint({"goal": "..."})` calls do not block operator file
+restoration of earlier recoverable edits, even when bridged or interrupted.
+This exemption requires the recorded invocation, not just result metadata.
 
 ## Filesystem history: `fs_checkpoint`
 
@@ -45,5 +48,10 @@ when filesystem inspection or restoration is intended.
 Normal write/edit/patch operations still create filesystem checkpoints
 independently of the conversation checkpoint feature flag. Filesystem restoration
 remains a mutating operation subject to the session's approval and tool policy.
+Operator rewind uses captures from mutating tools, not checkpoint IDs echoed by
+inspection results. Manual filesystem restores and unknown checkpoint actions
+cannot be undone by operator file restoration and fail closed, including
+interrupted calls and historical action-shaped `checkpoint` invocations.
+History-only rewind remains available.
 The TUI uses its generic tool card for `fs_checkpoint`, `checkpoint` and `rewind`;
 no legacy filesystem-specific renderer or tool-name alias is retained.

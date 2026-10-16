@@ -256,6 +256,11 @@
   instead of re-reading parent session state per node, and persona `spawns`
   keeps its `task` grant under preset tool-policy floors while other
   leaf-worker denials remain.
+- Session rewind ignores checkpoint inspection IDs as restore sources and refuses
+  filesystem restoration across manual, unknown, or interrupted checkpoint
+  restores, including bridged and historical filesystem-checkpoint calls.
+  Persisted conversation-only `checkpoint(goal)` calls remain safe to rewind,
+  including direct, bridged, and interrupted calls following recoverable edits.
 - Rewind regression workspaces resolve trusted temporary-directory aliases before
   deriving checkpoint paths, so macOS exercises recursive capture/restore and
   symlink-parent refusal rather than failing on the system temporary-directory alias.
