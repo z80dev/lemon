@@ -138,15 +138,45 @@ An opaque creation timeout without returned IDs stays fenced when the server exp
 
 ## Connect iPhone to your desktop
 
-1. Configure the backend's reachable HTTPS `publicUrl`. **Tailscale Serve** is the recommended boring option when your Mac and phone already have Tailscale reachability. TLS must validate normally; a QR never attests an overlay or permits a remote HTTP/TLS bypass. HTTP loopback is only for same-machine development/Simulator; a physical phone's `127.0.0.1` is the phone, not the Mac. This client does not provision or sign in to Tailscale.
-2. On macOS choose **Connect iPhone → Create QR code**. Treat the QR, copied pairing link and screenshots as temporary secrets. No operator token, desktop session token or permanent credential is encoded.
+1. Configure the already running backend's reachable HTTPS `publicUrl`. **Tailscale Serve** is the recommended option when your Mac and phone already have Tailscale reachability. The Mac guide explains installation/login, same tailnet, ACL, MagicDNS, TLS and backend prerequisites. The app never changes Serve or starts a backend: any operator-chosen setup outside the app must use an unused HTTPS listener/port, preserve existing routes, and never use Funnel. TLS must validate normally; a QR never permits a bypass. A physical phone's `127.0.0.1` is the phone, not the Mac.
+2. On macOS choose **Connect iPhone → Check connection readiness**. Review the exact advertised HTTPS Tailscale origin, instance and workspace verified against the existing authenticated backend, then choose **Create QR code**. The guide refuses loopback, wrong-service and mismatched identity rather than switching backends. See the [Mac guide](LemonBotMac/README.md#connect-iphone). Treat the QR, copied link and screenshots as temporary secrets; no desktop session or operator credential is encoded.
 3. On iPhone choose **Scan QR code** or paste the link and choose **Check pasted link**. Check the workspace name, server address and expiry before choosing **Request connection**. Checking does not use up the code.
-4. Compare the device name and six-digit verification code on both devices. On the Mac choose **Approve this iPhone** or **Deny**. Approval does not mean the phone has finished connecting.
-5. On iPhone choose **Check my request** to finish connecting. Its own device-bound session is saved in Keychain; no desktop password is needed.
+4. Compare the device name and six-digit verification code on both devices. On the Mac select **The exact device name and code match my iPhone**, then **Approve this iPhone**, or **Deny**. Approval does not mean the phone has finished connecting.
+5. The Mac observes request status while the window is active, without replaying approval, until completion or the original expiry. **Connected — iPhone completed pairing** means the backend reports the phone completed its session. On iPhone **Check my request** can finish/reconcile the same saved receipt. Its own device-bound session is saved in Keychain; no desktop password is needed.
 
 If a response is lost, **Check previous QR code** on Mac and **Check my request** on iPhone check the saved request rather than creating a second one. The QR keeps its original five-minute expiry. After an explicit expired or denied result, discard the saved request and create a new QR as a separate action. A successfully installed session stays valid until revoked.
 
 Revoke the phone through **Settings → Account → Registered devices** or **Product sessions**. Device removal revokes its bound session; the phone shows explicit reconnect, not fake offline success. Camera, speech, share-sheet staging and selected files remain independent of pairing; no ambient capture or automatic send is introduced.
+
+### Shared native preflight API
+
+`LemonBotKit/BotPreflight.swift` implements the [shared predicate](../contracts/preflight.md)
+without AppKit or UI dependencies:
+
+- `BotPreflight.validateOrigin(_:use:)` accepts an exact canonical origin.
+  `BotOriginUse.phone` is the default and rejects loopback/unspecified addresses;
+  `.sameMachine` permits local HTTP only for an explicitly local baseline/Simulator.
+- `BotPreflightClient(session:).identity(origin:token:use:)` reads the authenticated
+  `BackendIdentity` baseline. A supplied URLSession contributes only trusted test
+  URLProtocol classes, never TLS/redirect policy.
+- `preflight(origin:expectedInstanceID:session:use:)` checks public setup before
+  sending any credential. Optional `BotPreflightSession(token:workspaceID:)`
+  additionally verifies candidate authenticated identity. Its `BotPreflightResult`
+  contains `origin`, `setup` (`BotSetupDescriptor`) and optional `identity`;
+  public-only probes never claim workspace verification.
+- `BotPreflight.validateSetup(_:expectedInstanceID:use:)` and
+  `validateIdentity(_:expectedInstanceID:workspaceID:use:)` enforce the contract
+  on decoded descriptors. `BotPreflightError` contains safe actionable categories,
+  never response bodies or proof/session values.
+
+`StoredAccount.instanceID` is an optional Keychain-backed pin, absent in older
+saved accounts. Owner readiness pins it after successful verification. Consumers
+must compare any existing pin and workspace before accepting a new baseline;
+the descriptor reader alone cannot decide which configured account is trusted.
+Phone completion/reconnect must use its own session and the QR/saved expected IDs,
+not owner credentials. Mac-only readiness and bounded observation decisions live
+in `OwnerPairing.swift`; they never provision a network route.
+
 ## Connection recovery
 
 The sidebar connection pill opens the same recovery panel on Mac and iPhone.
