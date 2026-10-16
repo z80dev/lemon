@@ -4,6 +4,68 @@ defmodule LemonCore.Setup.ReadinessTest do
   alias LemonCore.Doctor.ProviderDiagnostics
   alias LemonCore.Setup.Readiness
 
+  for {provider, config_provider, model, reason} <- [
+        {"ollama", "ollama", "qwen3:32b", nil},
+        {"ollama", "ollama", "qwen3:32b:instruct", nil},
+        {"ollama", "ollama", "ollama:qwen3:32b", nil},
+        {"local-gateway", "LOCAL_GATEWAY", "LOCAL_GATEWAY:qwen3:32b", nil},
+        {"ollama", "ollama", "foreign_gateway:qwen3:32b", :model_provider_mismatch},
+        {"ollama", "ollama", ":32b", nil},
+        {"ollama", "ollama", "foreign_gateway:", nil}
+      ] do
+    test "persisted #{provider} / #{model} derives local provider identity" do
+      path =
+        Path.join(
+          System.tmp_dir!(),
+          "readiness_identity_#{System.unique_integer([:positive])}.toml"
+        )
+
+      on_exit(fn -> File.rm!(path) end)
+
+      File.write!(path, """
+      [defaults]
+      provider = "#{unquote(provider)}"
+      model = "#{unquote(model)}"
+      [providers.#{unquote(config_provider)}]
+      api_key = "fixture-local-key"
+      [providers.foreign-gateway]
+      api_key = "fixture-foreign-key"
+      """)
+
+      state = Readiness.status(config_path: path).provider
+      assert state.provider == unquote(provider)
+      assert state.model == unquote(model)
+      assert state.reason == unquote(reason)
+      assert state.complete == is_nil(unquote(reason))
+      assert state.credential_ready
+    end
+  end
+
+  test "an explicitly declared namespaced id is not foreign provider qualification" do
+    path =
+      Path.join(
+        System.tmp_dir!(),
+        "readiness_declared_#{System.unique_integer([:positive])}.toml"
+      )
+
+    on_exit(fn -> File.rm!(path) end)
+
+    File.write!(path, """
+    [defaults]
+    provider = "local-gateway"
+    model = "openai:private:32b"
+    [providers.LOCAL_GATEWAY]
+    api_key = "fixture-local-key"
+    [[providers.LOCAL_GATEWAY.models]]
+    id = "openai:private:32b"
+    [providers.openai]
+    api_key = "fixture-foreign-key"
+    """)
+
+    assert %{complete: true, reason: nil, model: "openai:private:32b", credential_ready: true} =
+             Readiness.status(config_path: path).provider
+  end
+
   test "environment-only credentials agree with doctor and reject blank values" do
     path =
       Path.join(System.tmp_dir!(), "readiness_env_#{System.unique_integer([:positive])}.toml")

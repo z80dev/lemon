@@ -10,6 +10,11 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Setup/readiness preserve native colon model IDs, including multi-colon IDs.
+  Live setup strips only actual provider qualification, honors declared/discovered
+  full IDs in the effective provider scope and model overrides, and rejects known
+  foreign provider/custom-provider selectors before HTTP.
+
 - Approving a channel pairing code now updates the running Telegram/Discord
   adapter's allowlist, so the sender's next message is accepted without
   restarting the gateway or daemon. New `lemon pairing revoke <platform>

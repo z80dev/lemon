@@ -14,13 +14,18 @@ LemonCli.Onboarding.Runner.ensure_required_apps!()
 
 try do
   rows =
-    for scenario <- [:success, :raw_success, :expired, :unavailable, :encoded, :keyless, :skip] do
+    for scenario <-
+          if(System.get_env("SETUP_VERIFICATION_IDENTITY_ONLY") == "1",
+            do: [],
+            else: [:success, :raw_success, :expired, :unavailable, :encoded, :keyless, :skip]
+          ) do
       result = LemonScripts.SetupVerificationProbe.run(root, scenario)
       IO.puts(Jason.encode!(Map.put(result, :scenario, scenario)))
       {scenario, result}
     end
 
-  if System.get_env("SETUP_VERIFICATION_EXPECT_FIXED") == "1" do
+  if System.get_env("SETUP_VERIFICATION_EXPECT_FIXED") == "1" and
+       System.get_env("SETUP_VERIFICATION_IDENTITY_ONLY") != "1" do
     xai_rows =
       for scenario <- [:success, :raw_success, :expired, :unavailable, :encoded] do
         result = LemonScripts.SetupVerificationProbe.run(root, scenario, :xai)
@@ -80,6 +85,78 @@ try do
 
     unless r.success and r.requests == 0 and not r.event_credential_leak,
       do: raise("Offline model onboarding assertions failed; see bounded results above")
+  end
+
+  for scenario <- [
+        :literal,
+        :qualified,
+        :multiple,
+        :env,
+        :effective,
+        :custom,
+        :custom_qualified,
+        :declared,
+        :scoped_native,
+        :scoped_skip,
+        :foreign,
+        :foreign_alias,
+        :foreign_custom,
+        :ambient_foreign
+      ] do
+    r = LemonScripts.SetupVerificationProbe.run_identity(root, scenario)
+    IO.puts(Jason.encode!(Map.merge(r, %{identity_scenario: scenario})))
+
+    if System.get_env("SETUP_VERIFICATION_EXPECT_FIXED") == "1" do
+      valid? =
+        cond do
+          scenario == :scoped_skip ->
+            r.readiness_complete and r.disabled and r.retained_model and r.requests == 0
+
+          scenario in [:foreign, :foreign_alias, :foreign_custom, :ambient_foreign] ->
+            r.mismatch and not r.live_ok and r.requests == 0
+
+          true ->
+            r.readiness_complete and r.live_ok and r.exact_model_id and r.requests == 1 and
+              r.models_get and r.correct_access and r.correct_scope_header
+        end
+
+      unless valid? and not r.event_credential_leak,
+        do: raise("Colon model identity assertions failed; see bounded results above")
+    end
+  end
+
+  for entry <- [:provider, :wizard], scenario <- [:literal, :qualified, :foreign] do
+    # Public onboarding validates its selected catalog model before verification.
+    # Exercise colon IDs through its effective-config override, not an unsupported picker entry.
+    effective_model =
+      case scenario do
+        :literal -> "qwen3:32b"
+        :qualified -> "openai:qwen3:32b"
+        :foreign -> "anthropic:claude-sonnet-4-6"
+      end
+
+    opts = [
+      provider: "openai",
+      model: "gpt-5",
+      effective_model: effective_model,
+      expected_model: "qwen3:32b",
+      native_model: "qwen3:32b"
+    ]
+
+    r = LemonScripts.SetupOnboardingProbe.run(root, entry, true, opts)
+    IO.puts(Jason.encode!(Map.merge(r, %{identity_entry: entry, identity_scenario: scenario})))
+
+    if System.get_env("SETUP_VERIFICATION_EXPECT_FIXED") == "1" do
+      valid? =
+        if scenario == :foreign,
+          do: r.verification_failed and not r.success and r.requests == 0,
+          else:
+            r.success and r.exact_model_id and r.requests == 1 and r.models_get and
+              r.correct_access and r.correct_scope_header
+
+      unless valid? and not r.event_credential_leak,
+        do: raise("Public onboarding colon identity assertions failed; see bounded results above")
+    end
   end
 after
   LemonCore.Secrets.table()

@@ -1,7 +1,7 @@
 defmodule LemonScripts.SetupVerificationProbe do
   @moduledoc false
-  alias LemonCore.Secrets
   alias LemonCli.Setup.Verification
+  alias LemonCore.Secrets
 
   def log(event, %{config: %{owner: owner}}), do: send(owner, {:verification_log, event})
 
@@ -141,6 +141,162 @@ defmodule LemonScripts.SetupVerificationProbe do
     end
   end
 
+  # Colon identity coverage uses actual public verification and local HTTP.
+  # The bound model is observed too: GET /models alone cannot prove its id.
+  def run_identity(root, scenario) do
+    scoped? = scenario in [:scoped_native, :scoped_skip, :ambient_foreign]
+    {listener, url, server} = endpoint(:configured, ["lm_studio:shared"])
+    {ambient_listener, ambient_url, ambient_server} = endpoint(:ambient, ["lm_studio:shared"])
+
+    previous =
+      Map.new(
+        ~w(LEMON_DEFAULT_PROVIDER LEMON_DEFAULT_MODEL LITELLM_BASE_URL LITELLM_API_KEY),
+        &{&1, System.get_env(&1)}
+      )
+
+    Enum.each(Map.keys(previous), &System.delete_env/1)
+    System.put_env("LITELLM_BASE_URL", ambient_url)
+
+    model_id =
+      cond do
+        scoped? -> "lm_studio:shared"
+        scenario == :multiple -> "qwen3:32b:instruct"
+        true -> "qwen3:32b"
+      end
+
+    provider =
+      cond do
+        scoped? -> "litellm"
+        scenario in [:custom, :custom_qualified] -> "local-gateway"
+        true -> "ollama"
+      end
+
+    model =
+      case scenario do
+        s when s in [:qualified, :env, :effective] -> "ollama:#{model_id}"
+        :custom_qualified -> "LOCAL_GATEWAY:#{model_id}"
+        :foreign -> "openai:gpt-4"
+        :foreign_alias -> "codex:gpt-5"
+        :foreign_custom -> "foreign_gateway:#{model_id}"
+        :declared -> "openai:private:32b"
+        _ -> model_id
+      end
+
+    cfg = %{
+      api: "openai_completions",
+      api_key: "fixture-identity-access",
+      base_url: url,
+      headers: %{"X-Verification-Scope" => "fixture-provider-scope"}
+    }
+
+    cfg = if scenario == :declared, do: Map.put(cfg, :models, [%{id: model}]), else: cfg
+    providers = %{provider => cfg}
+
+    providers =
+      if scenario == :foreign_custom,
+        do: Map.put(providers, "foreign-gateway", cfg),
+        else: providers
+
+    path = Path.join(root, "identity_#{scenario}.toml")
+
+    declaration =
+      if scenario == :declared,
+        do: "\n[[providers.#{provider}.models]]\nid = \"#{model}\"\n",
+        else: ""
+
+    File.write!(
+      path,
+      """
+      [defaults]
+      provider = "#{provider}"
+      model = "#{model}"
+      [providers.#{provider}]
+      api = "openai_completions"
+      api_key = "fixture-identity-access"
+      base_url = "#{url}"
+      [providers.#{provider}.headers]
+      X-Verification-Scope = "fixture-provider-scope"
+      """ <> declaration
+    )
+
+    try do
+      if scoped? do
+        discovery_opts =
+          if scenario in [:scoped_native, :scoped_skip],
+            do: [base_url: url, api_key: cfg.api_key, headers: cfg.headers],
+            else: [base_url: ambient_url, api_key: nil, headers: %{}]
+
+        {:ok, discovered} =
+          LemonAi.Models.discover_preset(
+            :litellm,
+            Keyword.put(discovery_opts, :force_refresh, true)
+          )
+
+        unless Enum.any?(discovered, &(&1.id == model_id)),
+          do: raise("Scoped identity discovery fixture did not prime its real local cache")
+
+        # Discovery requests are fixture preparation, not verification requests.
+        drain([])
+      end
+
+      if scenario == :env, do: System.put_env("LEMON_DEFAULT_MODEL", model_id)
+      opts = [config_path: path, skip_verify: scenario == :scoped_skip]
+
+      opts =
+        if scenario == :env do
+          opts
+        else
+          effective_id = if scenario == :effective, do: model_id, else: model
+
+          Keyword.put(opts, :config, %{
+            providers: providers,
+            agent: %{default_provider: provider, default_model: effective_id}
+          })
+        end
+
+      bound = Verification.verification_options(opts)
+      result = Verification.verify_provider(bound)
+      records = drain([])
+      wire = for {:verification_wire, :configured, bytes} <- records, do: bytes
+      expected_id = if scenario == :declared, do: model, else: model_id
+
+      %{
+        live_ok: match?({:ok, %{live: :ok}}, result),
+        disabled: match?({:ok, %{live: :disabled}}, result),
+        retained_model: match?({:ok, %{model: ^model}}, result),
+        mismatch: match?({:error, %{reason: :model_provider_mismatch}}, result),
+        readiness_complete: Verification.setup_state(config_path: path).provider.complete,
+        exact_model_id: match?(%{id: ^expected_id}, bound[:verification_model]),
+        requests: Enum.count(records, &match?({:verification_wire, _, _}, &1)),
+        models_get:
+          wire != [] and Enum.all?(wire, &String.starts_with?(&1, "GET /v1/models HTTP/")),
+        correct_access:
+          wire != [] and
+            Enum.all?(
+              wire,
+              &String.contains?(&1, "authorization: Bearer fixture-identity-access\r\n")
+            ),
+        correct_scope_header:
+          wire != [] and
+            Enum.all?(
+              wire,
+              &(String.downcase(&1) =~ "x-verification-scope: fixture-provider-scope\r\n")
+            ),
+        event_credential_leak: String.contains?(inspect(result), "fixture-identity-access")
+      }
+    after
+      :gen_tcp.close(listener)
+      Process.exit(server, :kill)
+      :gen_tcp.close(ambient_listener)
+      Process.exit(ambient_server, :kill)
+
+      Enum.each(previous, fn
+        {name, nil} -> System.delete_env(name)
+        {name, value} -> System.put_env(name, value)
+      end)
+    end
+  end
+
   defp payload(scenario) when scenario in [:success, :raw_success, :skip],
     do: %{
       "type" => "xai_oauth",
@@ -166,20 +322,20 @@ defmodule LemonScripts.SetupVerificationProbe do
     {:ok, _} = Secrets.set(name, value)
   end
 
-  defp endpoint(scope) do
+  defp endpoint(scope, ids \\ ["fixture-model"]) do
     {:ok, listener} = :gen_tcp.listen(0, [:binary, active: false, ip: {127, 0, 0, 1}])
     {:ok, {{127, 0, 0, 1}, port}} = :inet.sockname(listener)
     owner = self()
-    server = spawn(fn -> serve(listener, scope, owner) end)
+    server = spawn(fn -> serve(listener, scope, owner, ids) end)
     {listener, "http://127.0.0.1:#{port}/v1", server}
   end
 
-  defp serve(listener, scope, owner) do
+  defp serve(listener, scope, owner, ids) do
     case :gen_tcp.accept(listener) do
       {:ok, socket} ->
         bytes = receive_headers(socket, "")
         send(owner, {:verification_wire, scope, bytes})
-        body = ~s({"data":[{"id":"fixture-model"}]})
+        body = Jason.encode!(%{data: Enum.map(ids, &%{id: &1})})
 
         :gen_tcp.send(
           socket,
@@ -188,7 +344,7 @@ defmodule LemonScripts.SetupVerificationProbe do
         )
 
         :gen_tcp.close(socket)
-        serve(listener, scope, owner)
+        serve(listener, scope, owner, ids)
 
       {:error, _} ->
         :ok

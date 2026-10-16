@@ -27,6 +27,7 @@ defmodule LemonCli.Setup.Verification do
 
   alias LemonAgent.ModelRuntime.{Credentials, CustomProviders, ProviderNames}
   alias LemonAi.Models
+  alias LemonAi.Models.Presets
   alias LemonAi.Providers.RequestHeaders
   alias LemonCore.Config
   alias LemonCore.Config.{Agent, LegacyAgentMigration, Modular, Providers}
@@ -97,7 +98,7 @@ defmodule LemonCli.Setup.Verification do
   @spec verify_provider(keyword()) :: {:ok, verify_ok()} | {:error, verify_failure()}
   def verify_provider(opts \\ []) do
     config = Keyword.get(opts, :config) || effective_config(opts)
-    provider_state = effective_provider_state(setup_state(opts).provider, config)
+    provider_state = effective_provider_state(setup_state(opts).provider, config, opts)
     opts = bind_verification_options(opts, config, provider_state)
 
     with :ok <- assert_provider_complete(provider_state, opts) do
@@ -116,7 +117,7 @@ defmodule LemonCli.Setup.Verification do
   @spec verification_options(keyword()) :: keyword()
   def verification_options(opts \\ []) do
     config = Keyword.get(opts, :config) || effective_config(opts)
-    provider_state = effective_provider_state(setup_state(opts).provider, config)
+    provider_state = effective_provider_state(setup_state(opts).provider, config, opts)
     bind_verification_options(opts, config, provider_state)
   end
 
@@ -271,7 +272,7 @@ defmodule LemonCli.Setup.Verification do
     resolved_model = Keyword.get(opts, :verification_model)
 
     with {:ok, api_key} <- fetch_live_credential(config, provider, provider_cfg),
-         {:ok, resolved_model} <- fetch_effective_model(resolved_model, provider, model) do
+         {:ok, resolved_model} <- fetch_effective_model(resolved_model, config, provider, model) do
       keyless? =
         Readiness.keyless_provider?(provider, provider_cfg) ||
           Map.get(resolved_model.compat || %{}, :allow_missing_api_key, false)
@@ -302,10 +303,10 @@ defmodule LemonCli.Setup.Verification do
     end
   end
 
-  defp fetch_effective_model(nil, _provider, _model), do: {:skip, :unknown_model}
+  defp fetch_effective_model(nil, _config, _provider, _model), do: {:skip, :unknown_model}
 
-  defp fetch_effective_model(resolved_model, provider, model) do
-    model_id = model |> String.split(":", parts: 2) |> List.last()
+  defp fetch_effective_model(resolved_model, config, provider, model) do
+    {_model_provider, model_id} = model_identity(config, provider, model)
 
     if normalize_provider_name(to_string(resolved_model.provider)) ==
          normalize_provider_name(provider) and resolved_model.id == model_id,
@@ -317,12 +318,14 @@ defmodule LemonCli.Setup.Verification do
   defp effective_model(_config, _provider, nil), do: nil
 
   defp effective_model(config, provider, model) do
-    model_id = model |> String.split(":", parts: 2) |> List.last()
+    {model_provider, model_id} = model_identity(config, provider, model)
     registry_provider = registry_provider_atom(provider)
 
     resolved_model =
-      CustomProviders.lookup(config, provider, model_id) ||
-        (registry_provider && Models.get_model(registry_provider, model_id))
+      if normalize_provider_name(model_provider) == normalize_provider_name(provider) do
+        CustomProviders.lookup(config, provider, model_id) ||
+          (registry_provider && Models.get_model(registry_provider, model_id))
+      end
 
     if resolved_model do
       provider_cfg = provider_config(config, provider)
@@ -384,7 +387,7 @@ defmodule LemonCli.Setup.Verification do
     end
   end
 
-  defp effective_provider_state(state, config) do
+  defp effective_provider_state(state, config, opts) do
     agent = Map.get(config, :agent) || %{}
 
     # Do not turn implicit runtime defaults into newly completed setup steps.
@@ -393,11 +396,11 @@ defmodule LemonCli.Setup.Verification do
 
     model = state.model && (normalize_optional_string(agent[:default_model]) || state.model)
 
+    {model_provider, _model_id} =
+      model_identity(config, provider, model, not Keyword.get(opts, :skip_verify, false))
+
     mismatch? =
-      case provider && model && String.split(model, ":", parts: 2) do
-        [prefix, _id] -> normalize_provider_name(prefix) != normalize_provider_name(provider)
-        _ -> false
-      end
+      provider && normalize_provider_name(model_provider) != normalize_provider_name(provider)
 
     reason =
       cond do
@@ -409,6 +412,58 @@ defmodule LemonCli.Setup.Verification do
       end
 
     %{state | provider: provider, model: model, reason: reason, complete: is_nil(reason)}
+  end
+
+  # A colon is provider qualification only for a known/configured provider.
+  # Explicitly served full ids win; synthesis must not capture foreign selectors.
+  defp model_identity(config, provider, model, resolve_scope? \\ true)
+  defp model_identity(_config, provider, nil, _resolve_scope?), do: {provider, nil}
+
+  defp model_identity(config, provider, model, resolve_scope?) do
+    case String.split(model, ":", parts: 2) do
+      [prefix, id] when prefix != "" and id != "" ->
+        qualified? = qualified_prefix?(config, prefix, resolve_scope?)
+        registry_provider = provider && registry_provider_atom(provider)
+        provider_cfg = provider && provider_config(config, provider)
+        entries = provider_cfg && (provider_cfg[:models] || provider_cfg["models"])
+
+        declared? =
+          Enum.any?(entries || [], fn entry ->
+            (entry[:id] || entry["id"]) == model
+          end)
+
+        known_model =
+          if qualified? && registry_provider do
+            known_identity_model(config, registry_provider, model, resolve_scope?)
+          end
+
+        native? = declared? || not is_nil(known_model)
+        if qualified? and not native?, do: {prefix, id}, else: {provider, model}
+
+      _ ->
+        {provider, model}
+    end
+  end
+
+  defp qualified_prefix?(config, prefix, true) do
+    CustomProviders.builtin?(prefix) ||
+      not is_nil(CustomProviders.custom_provider(config, prefix))
+  end
+
+  defp qualified_prefix?(config, prefix, false) do
+    # Offline identity cannot use an unbound cache or resolve live credentials.
+    not is_nil(
+      ProviderNames.provider_config(config, prefix) ||
+        CustomProviders.config_for(config, prefix)
+    )
+  end
+
+  defp known_identity_model(config, provider, model, resolve_scope?) do
+    if Presets.preset?(provider) do
+      if resolve_scope?, do: CustomProviders.known_model(config, provider, model)
+    else
+      Models.known_model(provider, model)
+    end
   end
 
   defp normalize_optional_string(value) when is_binary(value) do

@@ -103,7 +103,9 @@ defmodule LemonCore.Setup.Readiness do
 
     provider_cfg =
       provider &&
-        get_in(settings, ["providers", provider])
+        Enum.find_value(settings["providers"] || %{}, fn {name, cfg} ->
+          if normalize_provider_name(name) == normalize_provider_name(provider), do: cfg
+        end)
 
     provider_cfg = if is_map(provider_cfg), do: provider_cfg, else: %{}
 
@@ -111,11 +113,20 @@ defmodule LemonCore.Setup.Readiness do
 
     reason =
       cond do
-        is_nil(provider) -> :missing_default_provider
-        is_nil(model) -> :missing_default_model
-        not credential_ready? -> credential_reason || :credential_not_usable
-        model_provider_mismatch?(provider, model) -> :model_provider_mismatch
-        true -> nil
+        is_nil(provider) ->
+          :missing_default_provider
+
+        is_nil(model) ->
+          :missing_default_model
+
+        not credential_ready? ->
+          credential_reason || :credential_not_usable
+
+        model_provider_mismatch?(provider, model, settings, provider_cfg) ->
+          :model_provider_mismatch
+
+        true ->
+          nil
       end
 
     %{
@@ -156,10 +167,25 @@ defmodule LemonCore.Setup.Readiness do
 
   defp secret_usable?(_), do: false
 
-  defp model_provider_mismatch?(provider, model) do
+  # Core has no provider catalog: local readiness recognizes configured provider
+  # keys, while live setup verification also checks runtime providers/aliases.
+  # Unknown prefixes remain literal native ids, as do explicitly declared ids.
+  defp model_provider_mismatch?(provider, model, settings, provider_cfg) do
+    declared? =
+      Enum.any?(provider_cfg["models"] || [], fn entry -> entry["id"] == model end)
+
     case String.split(model, ":", parts: 2) do
-      [prefix, _model_id] -> normalize_provider_name(prefix) != normalize_provider_name(provider)
-      [_only] -> false
+      [prefix, id] when prefix != "" and id != "" ->
+        configured? =
+          Enum.any?(Map.keys(settings["providers"] || %{}), fn name ->
+            normalize_provider_name(name) == normalize_provider_name(prefix)
+          end)
+
+        configured? and not declared? and
+          normalize_provider_name(prefix) != normalize_provider_name(provider)
+
+      _ ->
+        false
     end
   end
 
