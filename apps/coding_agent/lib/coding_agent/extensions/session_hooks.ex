@@ -95,6 +95,7 @@ defmodule CodingAgent.Extensions.SessionHooks do
   end
 
   defp invoke(handler, event_name, event) do
+    LemonCore.NativeProcess.unsupported!()
     handler.(event)
   rescue
     exception ->

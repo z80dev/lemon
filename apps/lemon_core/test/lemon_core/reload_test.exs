@@ -97,6 +97,44 @@ defmodule LemonCore.ReloadTest do
   end
 
   describe "reload_extension/2" do
+    test "records unknown ownership before top-level code, retaining it after failure", %{
+      tmp_dir: tmp_dir
+    } do
+      original = Application.fetch_env(:lemon_core, :native_process_ledger)
+      :ok = LemonCore.NativeProcess.configure!(Path.join(tmp_dir, "native-ledger.dets"))
+      ledger = Process.whereis(LemonCore.NativeProcess)
+
+      on_exit(fn ->
+        if Process.alive?(ledger), do: GenServer.stop(ledger)
+
+        case original do
+          {:ok, value} -> Application.put_env(:lemon_core, :native_process_ledger, value)
+          :error -> Application.delete_env(:lemon_core, :native_process_ledger)
+        end
+      end)
+
+      path = Path.join(tmp_dir, "native_ownership.exs")
+      marker = Path.join(tmp_dir, "top-level-ran")
+      assert {:ok, %{status: :error}} = Reload.reload_extension(path)
+      assert [] == LemonCore.NativeProcess.snapshot()
+
+      File.write!(
+        path,
+        """
+        [{_, %{backend: :unsupported, capacity_held: true}, _}] =
+          LemonCore.NativeProcess.snapshot()
+        File.write!(#{inspect(marker)}, "ownership recorded")
+        raise "failure after top-level execution"
+        """
+      )
+
+      assert {:ok, %{status: :error}} = Reload.reload_extension(path)
+      assert File.read!(marker) == "ownership recorded"
+
+      assert [{_, %{backend: :unsupported, capacity_held: true}, _}] =
+               LemonCore.NativeProcess.snapshot()
+    end
+
     test "reloads a valid extension file", %{tmp_dir: tmp_dir} do
       path = Path.join(tmp_dir, "reload_extension_ok.ex")
 

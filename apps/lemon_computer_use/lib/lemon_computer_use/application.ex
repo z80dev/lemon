@@ -35,6 +35,8 @@ defmodule LemonComputerUse.Application do
   # section contribute themselves through the platform registries.
   defp contribute do
     if Code.ensure_loaded?(LemonAgent.ToolRegistry) do
+      # LCU owns native-app effects outside Lemon's managed launch seams.
+      # Keep the default unknown provenance for construction and execution fences.
       Enum.each(@tools, fn {name, module} -> LemonAgent.ToolRegistry.register(name, module) end)
     end
 

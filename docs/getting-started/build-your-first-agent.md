@@ -106,10 +106,20 @@ contributed at runtime through `LemonAgent.ToolRegistry`:
 def tools do
   builtin = [MyAgent.Tools.WordCount.tool()]
   taken = Enum.map(builtin, &String.to_atom(&1.name))
-  contributed = for {_name, module} <- LemonAgent.ToolRegistry.available(taken), do: module.tool()
+
+  contributed =
+    for {_name, module, ownership} <- LemonAgent.ToolRegistry.available(taken) do
+      LemonAgent.ToolRegistry.build_tool(ownership, fn -> module.tool() end)
+    end
+
   builtin ++ contributed
 end
 ```
+
+The registry returns ownership-bearing triples. `build_tool/2` preserves that
+provenance: external registrations default to `:unknown` and are fenced before
+both construction and execution; explicitly managed platform tools keep their
+managed launch behavior.
 
 **It starts the loop.** `LemonAgent.new_agent/1` starts a GenServer holding the
 conversation. `ask/2` prompts it and waits:

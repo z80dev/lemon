@@ -123,7 +123,7 @@ defmodule LemonHoncho.Application do
   defp register_tools do
     if Code.ensure_loaded?(LemonAgent.ToolRegistry) do
       Enum.each(@tools, fn {name, module} ->
-        LemonAgent.ToolRegistry.register(name, module)
+        LemonAgent.ToolRegistry.register(name, module, native_process_ownership: :managed)
       end)
     end
 

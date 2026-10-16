@@ -16,6 +16,10 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ### Changed
 
+- Tool registrations expose explicit `{name, module, native_process_ownership}`
+  provenance. Unknown contributed tools durably fence module loading,
+  construction and execution when native evaluation tracking is enabled;
+  audited managed registrations retain their normal launch accounting.
 - Normalize aliases and use implicit function-level exception handling in the
   agent loop and its regression tests; runtime behavior is unchanged.
 - Anthropic OAuth resolution fails closed: a stored Lemon login that cannot

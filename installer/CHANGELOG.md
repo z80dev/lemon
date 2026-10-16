@@ -5,6 +5,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- Generated agents consume ownership-bearing tool registration triples and fence
+  unknown contributions before construction and execution with `build_tool/2`.
+
 ### Added
 
 - `mix lemon.new --hex` generates a project that depends on the published

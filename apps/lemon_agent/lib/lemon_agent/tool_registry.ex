@@ -54,6 +54,13 @@ defmodule LemonAgent.ToolRegistry do
   `execute/4` — that returns a "not configured" result rather than raising when
   its credentials are missing, so it is safe to register unconditionally.
   Registering from the application callback is what makes ordering irrelevant.
+
+  Registrations carry native-process provenance: `:unknown` (the default) fences
+  module loading, construction and execution as arbitrary code when the optional
+  native launch ledger is enabled. Use `native_process_ownership: :managed` only
+  for audited tools whose native work goes through the managed launch seams.
+  `all/0` and `available/1` return `{name, module, ownership}` triples; consumers
+  must preserve the provenance when constructing and wrapping tools.
   """
 
   require Logger
@@ -61,18 +68,25 @@ defmodule LemonAgent.ToolRegistry do
   @key {__MODULE__, :registered}
 
   @type tool_name :: atom()
-  @type entry :: {tool_name(), module()}
+  @type native_process_ownership :: :managed | :unknown
+  @type entry :: {tool_name(), module(), native_process_ownership()}
 
   @doc """
   Register `module` under `name`, replacing any previous registration for it.
   """
-  @spec register(tool_name(), module()) :: :ok
-  def register(name, module) when is_atom(name) and is_atom(module) do
-    unless function_exported?(module, :tool, 2) or Code.ensure_loaded?(module) do
+  @spec register(tool_name(), module(), keyword()) :: :ok
+  def register(name, module, opts \\ []) when is_atom(name) and is_atom(module) do
+    ownership = Keyword.get(opts, :native_process_ownership, :unknown)
+
+    unless ownership in [:managed, :unknown] do
+      raise ArgumentError, "invalid native process ownership"
+    end
+
+    unless function_exported?(module, :tool, 2) or loadable?(module, ownership) do
       Logger.warning("[LemonAgent.ToolRegistry] #{inspect(module)} is not loadable")
     end
 
-    put(List.keystore(stored(), name, 0, {name, module}))
+    put(List.keystore(stored(), name, 0, {name, module, ownership}))
   end
 
   @doc "Remove the registration for `name`."
@@ -89,7 +103,7 @@ defmodule LemonAgent.ToolRegistry do
   """
   @spec all() :: [entry()]
   def all do
-    Enum.filter(stored(), fn {_name, module} -> Code.ensure_loaded?(module) end)
+    Enum.filter(stored(), fn {_name, module, ownership} -> loadable?(module, ownership) end)
   end
 
   @doc """
@@ -98,7 +112,42 @@ defmodule LemonAgent.ToolRegistry do
   """
   @spec available(taken :: [tool_name()]) :: [entry()]
   def available(taken) when is_list(taken) do
-    Enum.reject(all(), fn {name, _module} -> name in taken end)
+    Enum.reject(all(), fn {name, _module, _ownership} -> name in taken end)
+  end
+
+  @doc """
+  Construct a contributed tool while preserving its native-process provenance.
+
+  Unknown constructors and every invocation of their returned tool execute only
+  after durable uncertainty has been recorded. Constructor or execution errors
+  never clear that record. Managed tools keep their existing launch accounting.
+  The constructor callback supports consumers with different `tool/*` arities.
+  """
+  @spec build_tool(native_process_ownership(), (-> LemonAgent.Types.AgentTool.t())) ::
+          LemonAgent.Types.AgentTool.t()
+  def build_tool(:managed, constructor) when is_function(constructor, 0), do: constructor.()
+
+  def build_tool(:unknown, constructor) when is_function(constructor, 0) do
+    LemonCore.NativeProcess.unsupported!()
+    %LemonAgent.Types.AgentTool{} = tool = constructor.()
+    execute = tool.execute
+
+    %{
+      tool
+      | execute: fn tool_call_id, params, signal, on_update ->
+          LemonCore.NativeProcess.unsupported!()
+          execute.(tool_call_id, params, signal, on_update)
+        end
+    }
+  end
+
+  defp loadable?(module, ownership) do
+    if ownership == :unknown and :code.is_loaded(module) == false and
+         :code.which(module) != :non_existing do
+      LemonCore.NativeProcess.unsupported!()
+    end
+
+    Code.ensure_loaded?(module)
   end
 
   # The raw table. Registration reads and writes this rather than `all/0` so

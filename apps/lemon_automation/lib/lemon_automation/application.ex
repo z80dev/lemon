@@ -33,7 +33,9 @@ defmodule LemonAutomation.Application do
   # offer it. `LemonAgent.ToolRegistry` is a dependency of this app, so no
   # presence guard is needed.
   defp register_tools do
-    LemonAgent.ToolRegistry.register(:cron, LemonAutomation.Tools.Cron)
+    LemonAgent.ToolRegistry.register(:cron, LemonAutomation.Tools.Cron,
+      native_process_ownership: :managed
+    )
   end
 
   # Reconcile the opt-in `[automation] daily_brief` job once CronManager is up.

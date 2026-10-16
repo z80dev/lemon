@@ -27,6 +27,71 @@ defmodule LemonOmp.Tools.OmpTest do
     result
   end
 
+  describe "registered tool native ownership" do
+    setup ctx do
+      previous = Application.fetch_env(:lemon_core, :native_process_ledger)
+      :ok = LemonCore.NativeProcess.configure!(Path.join(ctx.ws, "native-ledger.dets"))
+      ledger = Process.whereis(LemonCore.NativeProcess)
+
+      on_exit(fn ->
+        close_all_sessions()
+        if Process.alive?(ledger), do: GenServer.stop(ledger)
+
+        case previous do
+          {:ok, value} -> Application.put_env(:lemon_core, :native_process_ledger, value)
+          :error -> Application.delete_env(:lemon_core, :native_process_ledger)
+        end
+      end)
+
+      :ok
+    end
+
+    test "unknown registration fences construction and the real delegate launch", ctx do
+      assert {:omp, Omp, :unknown} in LemonAgent.ToolRegistry.all()
+
+      tool =
+        LemonAgent.ToolRegistry.build_tool(:unknown, fn ->
+          assert [{_, %{backend: :unsupported, capacity_held: true}, _}] =
+                   LemonCore.NativeProcess.snapshot()
+
+          tool = Omp.tool(ctx.ws, session_key: ctx.key)
+          execute = tool.execute
+
+          %{
+            tool
+            | execute: fn id, params, signal, update ->
+                assert length(LemonCore.NativeProcess.snapshot()) == 2
+                refute File.exists?(Path.join(ctx.ws, ".fake_omp.args"))
+                execute.(id, params, signal, update)
+              end
+          }
+        end)
+
+      result = run(tool, %{"action" => "start", "prompt" => "HOLD fenced launch"})
+      refute result.is_error
+      assert File.exists?(Path.join(ctx.ws, ".fake_omp.args"))
+
+      assert Enum.count(LemonCore.NativeProcess.snapshot(), fn
+               {_, %{backend: :unsupported, capacity_held: true}, _} -> true
+               _ -> false
+             end) >= 2
+    end
+
+    test "unavailable ledger refuses execution before delegate effects", ctx do
+      assert {:omp, Omp, :unknown} in LemonAgent.ToolRegistry.all()
+
+      tool =
+        LemonAgent.ToolRegistry.build_tool(:unknown, fn ->
+          Omp.tool(ctx.ws, session_key: ctx.key)
+        end)
+
+      GenServer.stop(LemonCore.NativeProcess)
+      assert catch_exit(run(tool, %{"action" => "start", "prompt" => "must not launch"}))
+      refute File.exists?(Path.join(ctx.ws, ".fake_omp.args"))
+      refute File.exists?(Path.join(ctx.ws, ".fake_omp.pid"))
+    end
+  end
+
   test "describes itself as the omp tool" do
     tool = Omp.tool()
     assert tool.name == "omp"

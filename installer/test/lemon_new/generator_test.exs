@@ -42,6 +42,15 @@ defmodule LemonNew.GeneratorTest do
     end
   end
 
+  test "preserves contributed tool ownership before invoking constructors", %{tmp: tmp} do
+    {project, _} = generate(tmp)
+    agent = read(project, "lib/my_agent/agent.ex")
+
+    assert agent =~ "for {_name, module, ownership} <- LemonAgent.ToolRegistry.available(taken)"
+    assert agent =~ "LemonAgent.ToolRegistry.build_tool(ownership, fn -> module.tool() end)"
+    refute agent =~ "for {_name, module} <-"
+  end
+
   test "names modules after the application", %{tmp: tmp} do
     {project, _} = generate(tmp)
 

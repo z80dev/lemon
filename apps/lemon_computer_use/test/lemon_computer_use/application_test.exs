@@ -4,7 +4,7 @@ defmodule LemonComputerUse.ApplicationTest do
   test "disabled (the default) registers no tools, no prompt section and starts no bridge" do
     refute LemonComputerUse.enabled?()
 
-    refute Enum.any?(LemonAgent.ToolRegistry.all(), fn {name, _} ->
+    refute Enum.any?(LemonAgent.ToolRegistry.all(), fn {name, _, _ownership} ->
              name in [:cua_js, :cua_js_reset]
            end)
 

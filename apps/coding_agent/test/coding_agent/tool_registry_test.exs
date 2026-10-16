@@ -22,6 +22,212 @@ defmodule CodingAgent.ToolRegistryTest do
     :ok
   end
 
+  # F-0107 also records confirmed local launches during discovery. These tests
+  # observe arbitrary-code ownership, not those unrelated launch witnesses.
+  def ownership_records do
+    Enum.filter(LemonCore.NativeProcess.snapshot(), fn
+      {_, %{backend: :unsupported}, _} -> true
+      _ -> false
+    end)
+  end
+
+  defmodule NativeOwnershipTool do
+    def tool(_cwd, _opts) do
+      send(self(), {:constructor_ownership, length(ownership_records())})
+
+      %LemonAgent.Types.AgentTool{
+        name: "ownership_probe",
+        label: "Ownership probe",
+        description: "Ownership probe",
+        parameters: %{},
+        execute: fn _, _, _, _ ->
+          send(self(), {:execute_ownership, length(ownership_records())})
+          {:error, :callback_failed}
+        end
+      }
+    end
+
+    defp ownership_records, do: CodingAgent.ToolRegistryTest.ownership_records()
+  end
+
+  defmodule NativeOwnershipExtension do
+    def name, do: "ownership-extension"
+    def version, do: "1.0.0"
+    def tools(cwd), do: NativeOwnershipTool.tool(cwd, []) |> List.wrap()
+  end
+
+  describe "native ownership boundaries" do
+    setup %{tmp_dir: tmp_dir} do
+      original_env = Application.fetch_env(:lemon_core, :native_process_ledger)
+      registry_key = {LemonAgent.ToolRegistry, :registered}
+      original_registry = :persistent_term.get(registry_key, [])
+      :persistent_term.put(registry_key, [])
+      :ok = LemonCore.NativeProcess.configure!(Path.join(tmp_dir, "native-ledger.dets"))
+      ledger = Process.whereis(LemonCore.NativeProcess)
+
+      on_exit(fn ->
+        if Process.alive?(ledger), do: GenServer.stop(ledger)
+        :persistent_term.put(registry_key, original_registry)
+        ToolRegistry.invalidate_extension_cache()
+
+        case original_env do
+          {:ok, value} -> Application.put_env(:lemon_core, :native_process_ledger, value)
+          :error -> Application.delete_env(:lemon_core, :native_process_ledger)
+        end
+      end)
+
+      :ok
+    end
+
+    test "builtin discovery and managed contributions do not imply unknown ownership", %{
+      tmp_dir: tmp_dir
+    } do
+      tools = ToolRegistry.get_tools(tmp_dir, include_extensions: false, include_mcp: false)
+      assert Enum.any?(tools, &(&1.name == "read"))
+      assert ownership_records() == []
+
+      LemonAgent.ToolRegistry.register(:ownership_probe, NativeOwnershipTool,
+        native_process_ownership: :managed
+      )
+
+      assert {:ok, tool} =
+               ToolRegistry.get_tool(tmp_dir, "ownership_probe",
+                 include_extensions: false,
+                 include_mcp: false
+               )
+
+      assert_received {:constructor_ownership, 0}
+      assert {:error, :callback_failed} = tool.execute.("probe", %{}, nil, nil)
+      assert_received {:execute_ownership, 0}
+      assert ownership_records() == []
+    end
+
+    test "unknown registered constructors and execute callbacks record before dispatch", %{
+      tmp_dir: tmp_dir
+    } do
+      LemonAgent.ToolRegistry.register(:ownership_probe, NativeOwnershipTool)
+      assert ownership_records() == []
+
+      assert {:ok, tool} =
+               ToolRegistry.get_tool(tmp_dir, "ownership_probe",
+                 include_extensions: false,
+                 include_mcp: false
+               )
+
+      assert_received {:constructor_ownership, 1}
+      assert {:error, :callback_failed} = tool.execute.("probe", %{}, nil, nil)
+      assert_received {:execute_ownership, 2}
+      assert length(ownership_records()) == 2
+    end
+
+    test "cached extension execute callbacks remain unknown after an error", %{tmp_dir: tmp_dir} do
+      ToolRegistry.prime_extension_cache(tmp_dir, [], [NativeOwnershipExtension])
+
+      assert {:ok, tool} =
+               ToolRegistry.get_tool(tmp_dir, "ownership_probe",
+                 extension_paths: [],
+                 include_mcp: false
+               )
+
+      assert_received {:constructor_ownership, 1}
+      assert {:error, :callback_failed} = tool.execute.("probe", %{}, nil, nil)
+      assert_received {:execute_ownership, 2}
+
+      assert Enum.all?(ownership_records(), fn
+               {_, %{backend: :unsupported, capacity_held: true}, _} -> true
+               _ -> false
+             end)
+
+      assert length(ownership_records()) == 2
+    end
+
+    test "custom and extra tools record only on execution, including reloaded extras", %{
+      tmp_dir: tmp_dir
+    } do
+      custom = NativeOwnershipTool.tool(tmp_dir, [])
+      extra = %{custom | name: "extra_probe"}
+
+      opts = [
+        cwd: tmp_dir,
+        settings_manager: %{extension_paths: [], extension_auto_load_default_paths: false},
+        tool_opts: [
+          include_mcp: false,
+          tool_policy: LemonCore.ToolPolicy.custom(approval_mode: :yolo)
+        ],
+        extra_tools: [extra]
+      ]
+
+      initial = CodingAgent.ExtensionLifecycle.initialize([custom_tools: [custom]] ++ opts)
+      assert ownership_records() == []
+
+      for tool <- initial.tools do
+        assert {:error, :callback_failed} = tool.execute.("probe", %{}, nil, nil)
+      end
+
+      assert_received {:execute_ownership, 1}
+      assert_received {:execute_ownership, 2}
+      reloaded = CodingAgent.ExtensionLifecycle.reload(opts)
+      assert length(ownership_records()) == 2
+      reloaded_extra = Enum.find(reloaded.tools, &(&1.name == "extra_probe"))
+      assert {:error, :callback_failed} = reloaded_extra.execute.("probe", %{}, nil, nil)
+      assert_received {:execute_ownership, 3}
+    end
+
+    test "unknown module on_load sees ownership before constructor dispatch", %{tmp_dir: tmp_dir} do
+      module = Module.concat(__MODULE__, "OnLoad#{System.unique_integer([:positive])}")
+      marker = Path.join(tmp_dir, "on-load-ownership")
+      armed = Path.join(tmp_dir, "on-load-armed")
+
+      source = """
+      defmodule #{inspect(module)} do
+        @on_load :observe
+        def observe do
+          if File.exists?(#{inspect(armed)}) do
+            [{_, %{backend: :unsupported, capacity_held: true}, _}] =
+              CodingAgent.ToolRegistryTest.ownership_records()
+            File.write!(#{inspect(marker)}, "recorded")
+          end
+          :ok
+        end
+        def tool(_, _), do: raise("constructor failed")
+      end
+      """
+
+      # Arm the callback only after preparing and unloading its BEAM.
+      [{^module, binary}] = Code.compile_string(source)
+      :code.purge(module)
+      :code.delete(module)
+      File.write!(armed, "")
+      beam = Path.join(tmp_dir, "#{module}.beam")
+      File.write!(beam, binary)
+      true = :code.add_patha(String.to_charlist(tmp_dir))
+
+      on_exit(fn ->
+        :code.del_path(String.to_charlist(tmp_dir))
+        :code.purge(module)
+        :code.delete(module)
+      end)
+
+      LemonAgent.ToolRegistry.register(:ownership_probe, module)
+      assert File.read!(marker) == "recorded"
+
+      assert [{_, %{backend: :unsupported, capacity_held: true}, _}] =
+               ownership_records()
+
+      assert_raise RuntimeError, "constructor failed", fn ->
+        ToolRegistry.get_tools(tmp_dir, include_extensions: false, include_mcp: false)
+      end
+
+      records = ownership_records()
+      assert length(records) == 2
+
+      assert Enum.all?(records, fn
+               {_, %{backend: :unsupported, capacity_held: true}, _} -> true
+               _ -> false
+             end)
+    end
+  end
+
   test "optional policy preserves direct safe tool execution", %{tmp_dir: tmp_dir} do
     for policy_opts <- [[], [tool_policy: nil]] do
       opts =

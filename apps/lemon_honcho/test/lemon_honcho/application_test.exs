@@ -88,13 +88,13 @@ defmodule LemonHoncho.ApplicationTest do
       Application.put_env(:lemon_honcho, unquote(setting), unquote(value))
 
       assert {:ok, _} = Application.ensure_all_started(:lemon_honcho)
-      assert honcho_tools() == @tools
+      assert honcho_tools() == Enum.map(@tools, fn {name, module} -> {name, module, :managed} end)
       assert Keyword.get(ContextRegistry.all(), :honcho) == LemonHoncho.ContextContributor
     end
   end
 
   defp honcho_tools do
-    Enum.filter(ToolRegistry.all(), fn {name, _module} ->
+    Enum.filter(ToolRegistry.all(), fn {name, _module, _ownership} ->
       String.starts_with?(Atom.to_string(name), "honcho_")
     end)
   end

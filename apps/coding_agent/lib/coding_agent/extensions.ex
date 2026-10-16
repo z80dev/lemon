@@ -368,6 +368,8 @@ defmodule CodingAgent.Extensions do
       ensure_tool_types_loaded()
 
       try do
+        LemonCore.NativeProcess.unsupported!()
+
         ext.tools(cwd)
         |> Enum.map(fn tool -> {tool, ext} end)
       rescue
@@ -405,6 +407,8 @@ defmodule CodingAgent.Extensions do
     |> Enum.filter(&has_callback?(&1, :providers, 0))
     |> Enum.flat_map(fn ext ->
       try do
+        LemonCore.NativeProcess.unsupported!()
+
         ext.providers()
         |> Enum.map(fn provider_spec ->
           # Normalize the provider spec with defaults
@@ -632,6 +636,7 @@ defmodule CodingAgent.Extensions do
     |> Enum.filter(&has_callback?(&1, :hooks, 0))
     |> Enum.flat_map(fn ext ->
       try do
+        LemonCore.NativeProcess.unsupported!()
         ext.hooks()
       rescue
         _ -> []
@@ -669,6 +674,7 @@ defmodule CodingAgent.Extensions do
 
     for hook_fn <- hook_fns do
       try do
+        LemonCore.NativeProcess.unsupported!()
         apply(hook_fn, args)
       rescue
         e ->
@@ -1125,6 +1131,7 @@ defmodule CodingAgent.Extensions do
 
   defp safe_extension_name(ext) do
     if has_callback?(ext, :name, 0) do
+      LemonCore.NativeProcess.unsupported!()
       ext.name()
     else
       inspect(ext)
@@ -1285,6 +1292,7 @@ defmodule CodingAgent.Extensions do
   defp validate_name_callback(module, errors) do
     if function_exported?(module, :name, 0) do
       try do
+        LemonCore.NativeProcess.unsupported!()
         result = module.name()
 
         if is_binary(result) do
@@ -1303,6 +1311,7 @@ defmodule CodingAgent.Extensions do
   defp validate_version_callback(module, errors) do
     if function_exported?(module, :version, 0) do
       try do
+        LemonCore.NativeProcess.unsupported!()
         result = module.version()
 
         if is_binary(result) do
@@ -1323,6 +1332,7 @@ defmodule CodingAgent.Extensions do
       try do
         # Use the extension's own directory or a fallback for validation
         cwd = if path, do: Path.dirname(path), else: "/"
+        LemonCore.NativeProcess.unsupported!()
         result = module.tools(cwd)
 
         if is_list(result) do
@@ -1341,6 +1351,7 @@ defmodule CodingAgent.Extensions do
   defp validate_hooks_callback(module, errors) do
     if function_exported?(module, :hooks, 0) do
       try do
+        LemonCore.NativeProcess.unsupported!()
         result = module.hooks()
 
         if Keyword.keyword?(result) do
@@ -1359,6 +1370,7 @@ defmodule CodingAgent.Extensions do
   defp validate_capabilities_callback(module, errors) do
     if function_exported?(module, :capabilities, 0) do
       try do
+        LemonCore.NativeProcess.unsupported!()
         result = module.capabilities()
 
         if is_list(result) do
@@ -1377,6 +1389,7 @@ defmodule CodingAgent.Extensions do
   defp validate_config_schema_callback(module, errors) do
     if function_exported?(module, :config_schema, 0) do
       try do
+        LemonCore.NativeProcess.unsupported!()
         result = module.config_schema()
 
         if is_map(result) do
@@ -1395,6 +1408,7 @@ defmodule CodingAgent.Extensions do
   defp validate_providers_callback(module, errors) do
     if function_exported?(module, :providers, 0) do
       try do
+        LemonCore.NativeProcess.unsupported!()
         result = module.providers()
 
         if is_list(result) do
@@ -1421,6 +1435,7 @@ defmodule CodingAgent.Extensions do
   defp safe_call(module, function, args, default) do
     if function_exported?(module, function, length(args)) do
       try do
+        LemonCore.NativeProcess.unsupported!()
         apply(module, function, args)
       rescue
         _ -> default

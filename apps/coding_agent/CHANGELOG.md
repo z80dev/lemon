@@ -12,6 +12,10 @@
   JavaScript eval records whole-workload uncertainty before starting its host:
   terminating the host alone cannot certify cleanup of the detached kernel.
 
+- Tool provenance survives registry construction and session initialization,
+  rebuild and reload. Custom/extra tools and extension constructors, callbacks
+  and hooks record durable native-work uncertainty before arbitrary code runs,
+  retaining that uncertainty after errors without fencing managed builtins.
 - Native Bash launches participate in opt-in durable evaluation tracking before
   execution. Process sessions, eval kernels and document backends share core
   process-group proofs without changing untracked launch behavior; PTY tracking
