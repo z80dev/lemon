@@ -173,6 +173,8 @@
 - Interrupted LSP server-requested edits retain captured paths in `affected_paths`
   and warn when a checkpoint's edit outcome is unknown, while preserving confirmed
   `changed_files` and merging affected paths across batches.
+- Workspace-level LSP requests and symbol searches rebind handed-off clients to
+  the current session owner before use, so owner death releases their leases.
 
 - Disclosure telemetry coverage isolates the initializing process and exercises
   a foreign initialization deterministically, preventing unrelated sessions from

@@ -1398,40 +1398,44 @@ defmodule CodingAgent.Tools.Lsp do
   end
 
   # Running clients for this scope, else servers whose root marker sits in
-  # the working directory itself (started on demand at the cwd).
+  # the working directory itself (started on demand at the cwd). Both bind the
+  # client to the calling session process before any workspace request runs.
   defp workspace_clients(ctx) do
     servers = Map.new(LemonLsp.Servers.list(ctx.cwd), &{&1.id, &1})
 
-    case current_clients(ctx) do
-      [] ->
-        servers
-        |> Map.values()
-        |> Enum.filter(fn server ->
-          server.available and
-            Enum.any?(server.root_markers, &File.exists?(Path.join(ctx.cwd, &1)))
-        end)
-        |> Enum.sort_by(& &1.id)
-        |> Enum.flat_map(fn server ->
-          case Client.ensure(
-                 {ctx.scope, server.id, ctx.cwd},
-                 server,
-                 Keyword.get(ctx.opts, :session_pid),
-                 Keyword.get(ctx.opts, :session_key),
-                 ctx.cwd
-               ) do
-            {:ok, pid} -> [{server, pid}]
-            {:error, _} -> []
-          end
-        end)
+    candidates =
+      case current_clients(ctx) do
+        [] ->
+          servers
+          |> Map.values()
+          |> Enum.filter(fn server ->
+            server.available and
+              Enum.any?(server.root_markers, &File.exists?(Path.join(ctx.cwd, &1)))
+          end)
+          |> Enum.sort_by(& &1.id)
+          |> Enum.map(&{&1, ctx.cwd})
 
-      running ->
-        Enum.flat_map(running, fn %{server_id: id, pid: pid} ->
-          case servers[id] do
-            nil -> []
-            server -> [{server, pid}]
-          end
-        end)
-    end
+        running ->
+          Enum.flat_map(running, fn %{server_id: id, root: root} ->
+            case servers[id] do
+              nil -> []
+              server -> [{server, root}]
+            end
+          end)
+      end
+
+    Enum.flat_map(candidates, fn {server, root} ->
+      case Client.ensure(
+             {ctx.scope, server.id, root},
+             server,
+             Keyword.get(ctx.opts, :session_pid),
+             Keyword.get(ctx.opts, :session_key),
+             ctx.cwd
+           ) do
+        {:ok, pid} -> [{server, pid}]
+        {:error, _} -> []
+      end
+    end)
   end
 
   defp server_for(path, cwd) do

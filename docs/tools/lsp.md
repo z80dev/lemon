@@ -99,9 +99,11 @@ One initialized OS process is shared per (server id, workspace root, effective
 server configuration), across durable coding sessions and direct manager users.
 Session-scoped clients hold reference-counted leases. Native turns hand off
 clients only after saving and every resource handoff succeed; otherwise resources
-are disposed. Resumed turns bind the same durable identity. Reset rebuilds tools
-for the fresh session id and releases old-id leases. Explicit abort signals the
-run before disposal; explicit stop, logical delete, unexpected owner death and
+are disposed. Resumed turns bind the same durable identity. Workspace-level raw
+requests and symbol searches also rebind clients to the current owner before use,
+so owner death releases the rebound client's lease. Reset rebuilds tools for the
+fresh session id and releases old-id leases. Explicit abort signals the run before
+disposal; explicit stop, logical delete, unexpected owner death and
 10 idle minutes also release that client's lease, without stopping a server
 another session still owns.
 
