@@ -3,13 +3,24 @@ defmodule LemonControlPlane.ACP.ClientRequests do
   Run-scoped concurrent ACP client calls.
 
   Terminal exit waits must not block output polling, kill requests, or unrelated
-  file operations. The bridge owns request workers and terminates them with the
+  file operations. The bridge owns callback workers and terminates them with the
   prompt owner; responses are correlated by the core client bridge reference.
+  Withdrawing a permission stops only its callback, never the native requester
+  which may still be publishing the approval's resolution. Cancellation remains
+  effective until the requester exits, including before request registration.
   """
   use GenServer
 
   def start_link(run_id, owner, exchange) do
     GenServer.start_link(__MODULE__, {run_id, owner, exchange})
+  end
+
+  @doc "Withdraw a requester's pending callback without stopping the requester."
+  def cancel_request(run_id, requester) when is_binary(run_id) and is_pid(requester) do
+    case LemonCore.ACPClientBridge.whereis(run_id) do
+      nil -> :ok
+      bridge -> GenServer.cast(bridge, {:cancel_request, requester})
+    end
   end
 
   @impl true
@@ -19,7 +30,13 @@ defmodule LemonControlPlane.ACP.ClientRequests do
     case LemonCore.ACPClientBridge.register(run_id) do
       :ok ->
         {:ok,
-         %{owner: owner, owner_ref: Process.monitor(owner), exchange: exchange, pending: %{}}}
+         %{
+           owner: owner,
+           owner_ref: Process.monitor(owner),
+           exchange: exchange,
+           pending: %{},
+           cancelled: %{}
+         }}
 
       error ->
         {:stop, error}
@@ -27,6 +44,25 @@ defmodule LemonControlPlane.ACP.ClientRequests do
   end
 
   @impl true
+  def handle_cast({:cancel_request, requester}, state) do
+    cancelled =
+      Map.put_new_lazy(state.cancelled, requester, fn -> Process.monitor(requester) end)
+
+    state = %{state | cancelled: cancelled}
+
+    case Enum.find(state.pending, fn {_id, request} -> request.payload.reply_to == requester end) do
+      nil -> {:noreply, state}
+      {id, request} -> {:noreply, withdraw_request(state, id, request)}
+    end
+  end
+
+  @impl true
+  def handle_info({:acp_client_request, %{reply_to: requester} = payload}, state)
+      when is_map_key(state.cancelled, requester) do
+    reply(payload, failure())
+    {:noreply, state}
+  end
+
   def handle_info({:acp_client_request, payload}, state) do
     bridge = self()
     id = make_ref()
@@ -65,7 +101,12 @@ defmodule LemonControlPlane.ACP.ClientRequests do
   def handle_info({:DOWN, ref, :process, _pid, _reason}, %{owner_ref: ref} = state),
     do: {:stop, :normal, state}
 
-  def handle_info({:DOWN, ref, :process, _pid, _reason}, state) do
+  def handle_info({:DOWN, ref, :process, pid, _reason}, state) do
+    state =
+      if Map.get(state.cancelled, pid) == ref,
+        do: %{state | cancelled: Map.delete(state.cancelled, pid)},
+        else: state
+
     case Enum.find(state.pending, fn {_id, request} ->
            request.monitor == ref or request.requester == ref
          end) do
@@ -73,11 +114,7 @@ defmodule LemonControlPlane.ACP.ClientRequests do
         {:noreply, state}
 
       {id, request} ->
-        Process.demonitor(request.monitor, [:flush])
-        Process.demonitor(request.requester, [:flush])
-        Process.exit(request.pid, :kill)
-        reply(request.payload, failure())
-        {:noreply, %{state | pending: Map.delete(state.pending, id)}}
+        {:noreply, withdraw_request(state, id, request)}
     end
   end
 
@@ -91,6 +128,14 @@ defmodule LemonControlPlane.ACP.ClientRequests do
     end)
 
     :ok
+  end
+
+  defp withdraw_request(state, id, request) do
+    Process.demonitor(request.monitor, [:flush])
+    Process.demonitor(request.requester, [:flush])
+    Process.exit(request.pid, :kill)
+    reply(request.payload, failure())
+    %{state | pending: Map.delete(state.pending, id)}
   end
 
   defp reply(%{reply_to: pid, ref: ref}, response) when is_pid(pid),

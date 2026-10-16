@@ -130,6 +130,10 @@ Human permission requests use the approval's lifetime, rather than a generic
 disconnect withdraws pending client requests with `$/cancel_request` so native
 dialogs cannot remain stranded. Permission cards share the native tool id and
 bounded preview data with their corresponding tool call.
+Resolution withdraws any still-open client callback without terminating the
+native approval publisher, so retiring a completed dialog cannot interrupt
+delivery of its decision to the waiting tool. Withdrawal also rejects requests
+that have not registered yet, preventing a late dialog for a resolved approval.
 
 `session/cancel` cancels the session's active turn. `$/cancel_request` maps the
 original prompt request id to its session and cancels that turn, waking any

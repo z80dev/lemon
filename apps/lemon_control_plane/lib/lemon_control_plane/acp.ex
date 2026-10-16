@@ -1267,7 +1267,10 @@ defmodule LemonControlPlane.ACP do
           %{type: :approval_resolved, payload: payload} ->
             id = map_get(payload, :approval_id)
             {pid, pending} = Map.pop(Map.get(result, :approval_requests, %{}), id)
-            if is_pid(pid), do: Process.exit(pid, :kill)
+            # The requester may still be publishing this decision to native
+            # waiters. Withdraw its client callback without killing the publisher.
+            if is_pid(pid),
+              do: LemonControlPlane.ACP.ClientRequests.cancel_request(result.run_id, pid)
 
             update_wait_loop(
               Map.put(result, :approval_requests, pending),

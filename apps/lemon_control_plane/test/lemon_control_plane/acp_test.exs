@@ -60,6 +60,24 @@ defmodule LemonControlPlane.ACPTest do
     end
   end
 
+  def pause_permission_resolution(_event, _measurements, %{run_id: run_id} = metadata, {
+        run_id,
+        owner,
+        continuation
+      }) do
+    monitor = Process.monitor(owner)
+    send(owner, {:permission_resolution_paused, self(), metadata})
+
+    receive do
+      {:continue_permission_resolution, ^continuation} -> :ok
+      {:DOWN, ^monitor, :process, ^owner, _reason} -> :ok
+    end
+
+    Process.demonitor(monitor, [:flush])
+  end
+
+  def pause_permission_resolution(_event, _measurements, _metadata, _config), do: :ok
+
   setup do
     keys =
       Enum.map(
@@ -1028,6 +1046,18 @@ defmodule LemonControlPlane.ACPTest do
 
     session_id = new_session()
     session = Store.get(:acp_sessions, session_id)
+    continuation = make_ref()
+    handler = {__MODULE__, :permission_resolution, continuation}
+
+    :ok =
+      :telemetry.attach(
+        handler,
+        [:lemon, :approvals, :resolved],
+        &__MODULE__.pause_permission_resolution/4,
+        {"run_acp_plan", parent, continuation}
+      )
+
+    on_exit(fn -> :telemetry.detach(handler) end)
 
     prompt_task =
       Task.async(fn ->
@@ -1091,6 +1121,29 @@ defmodule LemonControlPlane.ACPTest do
              {"allow-once", "Approve and execute"},
              {"reject-once", "Refine plan"}
            ]
+
+    assert_receive {:permission_resolution_paused, resolver,
+                    %{approval_id: approval_id, decision: :deny}}
+
+    assert {:ok, %{resolution: %{outcome: :denied, decision: :deny}}} =
+             LemonCore.ExecApprovalStore.fetch_record(approval_id)
+
+    monitor = Process.monitor(resolver)
+
+    try do
+      # Force the broadcast prefix where ACP sees the notification before the
+      # native waiter. The real publisher is paused before its Bus broadcast,
+      # so killing it here would leave a persisted denial but no waiter reply.
+      send(
+        prompt_task.pid,
+        LemonCore.Event.new(:approval_resolved, %{approval_id: approval_id, decision: :deny})
+      )
+
+      refute_receive {:DOWN, ^monitor, :process, ^resolver, _reason}
+    after
+      send(resolver, {:continue_permission_resolution, continuation})
+      Process.demonitor(monitor, [:flush])
+    end
 
     assert {:ok, :denied} = Task.await(approval)
 
