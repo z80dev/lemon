@@ -30,7 +30,9 @@ defmodule LemonOmp.Application do
   # installed; the tool then answers with a normal "not installed" result.
   defp register_tools do
     if Code.ensure_loaded?(LemonAgent.ToolRegistry) do
-      Enum.each(@tools, fn {name, module} -> LemonAgent.ToolRegistry.register(name, module) end)
+      Enum.each(@tools, fn {name, module} ->
+        LemonAgent.ToolRegistry.register(name, module)
+      end)
     end
 
     :ok

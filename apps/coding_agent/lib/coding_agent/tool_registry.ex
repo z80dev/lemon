@@ -298,14 +298,15 @@ defmodule CodingAgent.ToolRegistry do
   """
   @spec builtin_tool_names() :: [atom()]
   def builtin_tool_names do
-    Enum.map(builtin_tools(), fn {name, _} -> name end)
+    Enum.map(builtin_tools(), fn {name, _, _} -> name end)
   end
 
   # Built-ins plus whatever satellite apps registered at boot (see
   # `LemonAgent.ToolRegistry`), appended after the built-ins so the tool-order
   # prefix stays stable for prompt caching. Built-ins win on name collisions.
   defp builtin_tools do
-    @builtin_tools ++ LemonAgent.ToolRegistry.available(Enum.map(@builtin_tools, &elem(&1, 0)))
+    Enum.map(@builtin_tools, fn {name, module} -> {name, module, :managed} end) ++
+      LemonAgent.ToolRegistry.available(Enum.map(@builtin_tools, &elem(&1, 0)))
   end
 
   @doc """
@@ -508,31 +509,46 @@ defmodule CodingAgent.ToolRegistry do
 
     builtin_tools()
     |> Enum.filter(fn
-      {:ask, _module} ->
+      {:ask, _module, _ownership} ->
         Tools.Ask.available?(opts)
 
-      {name, _module} when name in [:checkpoint, :rewind] ->
+      {name, _module, _ownership} when name in [:checkpoint, :rewind] ->
         Tools.Checkpoint.available?(Keyword.put(opts, :cwd, cwd))
 
-      {:ast_grep, _module} ->
+      {:ast_grep, _module, _ownership} ->
         match?({:ok, _}, Tools.AstGrep.availability(opts))
 
-      {:semantic_find, _module} ->
+      {:semantic_find, _module, _ownership} ->
         Tools.SemanticFind.available?(Keyword.put(opts, :cwd, cwd))
 
-      {name, _module} when name in @browser_tool_names ->
+      {name, _module, _ownership} when name in @browser_tool_names ->
         browser? and resolution.provider != "lcu"
 
       _tool ->
         true
     end)
-    |> Enum.map(fn {name, module} ->
+    |> Enum.map(fn {name, module, ownership} ->
       tool_opts = if name in @browser_tool_names, do: browser_opts, else: opts
+      if ownership == :unknown, do: LemonCore.NativeProcess.unsupported!()
+      tool = module.tool(cwd, tool_opts)
+      tool = if ownership == :unknown, do: wrap_unmanaged_tool(tool), else: tool
       name = Atom.to_string(name)
 
-      {name, module.tool(cwd, tool_opts) |> maybe_serialize_mutation(name, cwd, tool_opts),
-       :builtin}
+      {name, maybe_serialize_mutation(tool, name, cwd, tool_opts), :builtin}
     end)
+  end
+
+  @doc false
+  def wrap_unmanaged_tool(%AgentTool{} = tool) do
+    execute = tool.execute
+
+    %{
+      tool
+      | execute: fn tool_call_id, params, signal, on_update ->
+          LemonCore.NativeProcess.unsupported!()
+          execute.(tool_call_id, params, signal, on_update)
+        end
+    }
   end
 
   # Mutating builtins run one at a time per session: the agent loop executes a
@@ -647,6 +663,7 @@ defmodule CodingAgent.ToolRegistry do
       started_at = System.monotonic_time(:microsecond)
 
       try do
+        LemonCore.NativeProcess.unsupported!()
         result = original_execute.(tool_call_id, params, signal, on_update)
         duration_us = System.monotonic_time(:microsecond) - started_at
 

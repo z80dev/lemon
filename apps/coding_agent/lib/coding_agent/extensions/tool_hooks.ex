@@ -168,6 +168,8 @@ defmodule CodingAgent.Extensions.ToolHooks do
   end
 
   defp invoke_call_hook(hook, event) do
+    LemonCore.NativeProcess.unsupported!()
+
     case hook.(event) do
       {:block, reason} -> %{block: reason}
       {:replace_args, args} when is_map(args) -> %{replace_args: args}
@@ -304,6 +306,8 @@ defmodule CodingAgent.Extensions.ToolHooks do
   end
 
   defp invoke_result_hook(hook, event) do
+    LemonCore.NativeProcess.unsupported!()
+
     case hook.(event) do
       {:additional_context, text} ->
         {:additional_context, text}

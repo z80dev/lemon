@@ -167,7 +167,10 @@ defmodule LemonHoncho.SessionName do
   end
 
   defp git_toplevel(cwd) do
-    case System.cmd("git", ["rev-parse", "--show-toplevel"], cd: cwd, stderr_to_stdout: true) do
+    case LemonCore.NativeProcess.cmd("git", ["rev-parse", "--show-toplevel"],
+           cd: cwd,
+           stderr_to_stdout: true
+         ) do
       {output, 0} -> toplevel_basename(output)
       {_output, _status} -> nil
     end

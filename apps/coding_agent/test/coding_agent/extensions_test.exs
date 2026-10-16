@@ -26,6 +26,135 @@ defmodule CodingAgent.ExtensionsTest do
     :ok
   end
 
+  defmodule NativeOwnershipExtension do
+    def name, do: observed(:name, "native-ownership")
+    def version, do: observed(:version, "1.0.0")
+    def tools(_cwd), do: observed(:tools, [])
+    def hooks, do: observed(:hooks, [])
+    def capabilities, do: observed(:capabilities, [])
+    def config_schema, do: observed(:config_schema, %{})
+    def providers, do: observed(:providers, [])
+
+    defp observed(callback, value) do
+      send(self(), {:ownership_callback, callback, length(LemonCore.NativeProcess.snapshot())})
+      value
+    end
+  end
+
+  describe "native ownership boundaries" do
+    setup %{tmp_dir: tmp_dir} do
+      original = Application.fetch_env(:lemon_core, :native_process_ledger)
+      :ok = LemonCore.NativeProcess.configure!(Path.join(tmp_dir, "native-ledger.dets"))
+      ledger = Process.whereis(LemonCore.NativeProcess)
+
+      on_exit(fn ->
+        if Process.alive?(ledger), do: GenServer.stop(ledger)
+
+        case original do
+          {:ok, value} -> Application.put_env(:lemon_core, :native_process_ledger, value)
+          :error -> Application.delete_env(:lemon_core, :native_process_ledger)
+        end
+      end)
+
+      :ok
+    end
+
+    test "validation records each callback before invoking it" do
+      assert {:error, _} = Extensions.validate_extension(__MODULE__)
+      assert LemonCore.NativeProcess.snapshot() == []
+      assert :ok = Extensions.validate_extension(NativeOwnershipExtension)
+
+      for {callback, count} <-
+            Enum.with_index(
+              [:name, :version, :tools, :hooks, :capabilities, :config_schema, :providers],
+              1
+            ) do
+        assert_received {:ownership_callback, ^callback, ^count}
+      end
+    end
+
+    test "tool, provider, hook discovery and metadata callbacks record ownership" do
+      assert [] = Extensions.get_tools([NativeOwnershipExtension], "/")
+      assert_received {:ownership_callback, :tools, 1}
+      assert [] = Extensions.get_providers([NativeOwnershipExtension])
+      assert_received {:ownership_callback, :providers, 2}
+      assert [] = Extensions.get_hooks([NativeOwnershipExtension])
+      assert_received {:ownership_callback, :hooks, 3}
+      assert [_] = Extensions.get_info([NativeOwnershipExtension])
+      assert_received {:ownership_callback, :name, count}
+      assert count > 3
+    end
+
+    test "all executable hook paths record before dispatch and retain failures" do
+      owner = self()
+
+      observe = fn label ->
+        send(owner, {:hook_ownership, label, length(LemonCore.NativeProcess.snapshot())})
+      end
+
+      assert :ok = Extensions.execute_hooks([], :missing)
+      assert LemonCore.NativeProcess.snapshot() == []
+
+      Extensions.execute_hooks(
+        [
+          on_test: [
+            fn ->
+              observe.(:event)
+              raise "hook failure"
+            end
+          ]
+        ],
+        :on_test
+      )
+
+      assert_received {:hook_ownership, :event, 1}
+
+      CodingAgent.Extensions.SessionHooks.session_start(
+        [on_session_start: [fn _ -> observe.(:session) end]],
+        %{}
+      )
+
+      assert_received {:hook_ownership, :session, 2}
+
+      tool = %LemonAgent.Types.AgentTool{
+        name: "ownership",
+        execute: fn _, _, _, _ -> %LemonAgent.Types.AgentToolResult{content: []} end
+      }
+
+      wrapped =
+        CodingAgent.Extensions.ToolHooks.wrap_tool(
+          tool,
+          [
+            on_tool_call: [fn _ -> observe.(:call) end],
+            on_tool_result: [fn _ -> observe.(:result) end]
+          ],
+          %{}
+        )
+
+      wrapped.execute.("call", %{}, nil, nil)
+      assert_received {:hook_ownership, :call, 3}
+      assert_received {:hook_ownership, :result, 4}
+
+      session = "native-hook-#{System.unique_integer([:positive])}"
+
+      try do
+        CodingAgent.CompactionHooks.register_hook(session, fn -> observe.(:compaction) end)
+        assert %{succeeded: 1} = CodingAgent.CompactionHooks.execute_hooks(session)
+        assert_received {:hook_ownership, :compaction, 5}
+      after
+        CodingAgent.CompactionHooks.unregister_all_hooks(session)
+      end
+
+      records = LemonCore.NativeProcess.snapshot()
+      assert length(records) == 5
+
+      assert Enum.all?(records, fn
+               {_, %{backend: :unsupported, capacity_held: true}, _} -> true
+               _ -> false
+             end)
+    end
+  end
+
   describe "load_extensions/1" do
     test "returns ok with empty list for non-existent paths" do
       result = Extensions.load_extensions(["/nonexistent/path"])

@@ -49,6 +49,7 @@ defmodule LemonAutomation.CronCommandRunner do
       env
       |> Enum.map(fn {key, value} -> {to_string(key), to_string(value)} end)
       |> Enum.reject(fn {key, _value} -> String.trim(key) == "" end)
+      |> Enum.map(fn {key, value} -> {String.to_charlist(key), String.to_charlist(value)} end)
 
     {:ok, env}
   end
@@ -67,7 +68,7 @@ defmodule LemonAutomation.CronCommandRunner do
       [:binary, :exit_status, :stderr_to_stdout, :hide, args: ["-lc", command], env: env]
       |> maybe_put_cwd(cwd)
 
-    port = Port.open({:spawn_executable, shell}, opts)
+    port = LemonCore.NativeProcess.open({:spawn_executable, shell}, opts)
     collect(port, [], 0, false, monotonic_ms() + timeout_ms)
   rescue
     error -> {:error, Exception.message(error)}

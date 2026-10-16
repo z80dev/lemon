@@ -5,7 +5,7 @@ defmodule LemonHoncho.SessionNameTest do
   id, and truncation must not merge two distinct long keys into one session.
   """
 
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
   alias LemonHoncho.Config
   alias LemonHoncho.SessionName
@@ -62,6 +62,71 @@ defmodule LemonHoncho.SessionNameTest do
 
         assert SessionName.resolve(config, cwd: nested) == "my-repo"
       end
+    end
+  end
+
+  describe "per_repo native-process provenance" do
+    @describetag :tmp_dir
+
+    setup %{tmp_dir: tmp_dir} do
+      original_ledger = Application.fetch_env(:lemon_core, :native_process_ledger)
+      original_path = System.get_env("PATH")
+      bin = Path.join(tmp_dir, "bin")
+      cwd = Path.join(tmp_dir, "fallback-directory")
+      File.mkdir_p!(bin)
+      File.mkdir_p!(cwd)
+
+      git = Path.join(bin, "git")
+
+      File.write!(git, """
+      #!/bin/sh
+      printf '%s\\n' "$@" > git-ran
+      printf '/repo/provenance-root\\n'
+      """)
+
+      File.chmod!(git, 0o755)
+      System.put_env("PATH", bin <> ":" <> (original_path || ""))
+
+      on_exit(fn ->
+        if pid = Process.whereis(LemonCore.NativeProcess), do: GenServer.stop(pid)
+
+        if :dets.info(:lemon_native_processes_dets) != :undefined,
+          do: :dets.close(:lemon_native_processes_dets)
+
+        case original_ledger do
+          {:ok, value} -> Application.put_env(:lemon_core, :native_process_ledger, value)
+          :error -> Application.delete_env(:lemon_core, :native_process_ledger)
+        end
+
+        if original_path,
+          do: System.put_env("PATH", original_path),
+          else: System.delete_env("PATH")
+      end)
+
+      %{cwd: cwd, ledger: Path.join(tmp_dir, "native-processes.dets")}
+    end
+
+    test "records the git lookup before returning the repository name", context do
+      :ok = LemonCore.NativeProcess.configure!(context.ledger)
+      config = %Config{session_strategy: :per_repo}
+
+      assert SessionName.resolve(config, cwd: context.cwd) == "provenance-root"
+      assert File.read!(Path.join(context.cwd, "git-ran")) == "rev-parse\n--show-toplevel\n"
+
+      assert [{_id, %{backend: :local, workload_identity: identity}, %{}}] =
+               LemonCore.NativeProcess.snapshot()
+
+      assert LemonCore.ProcessGroup.valid_identity?(identity)
+    end
+
+    test "an unavailable ledger prevents git execution but allows directory fallback", context do
+      Application.put_env(:lemon_core, :native_process_ledger, context.ledger)
+      refute Process.whereis(LemonCore.NativeProcess)
+      config = %Config{session_strategy: :per_repo}
+
+      assert SessionName.resolve(config, cwd: context.cwd) == "fallback-directory"
+      refute File.exists?(Path.join(context.cwd, "git-ran"))
+      refute File.exists?(context.ledger)
     end
   end
 

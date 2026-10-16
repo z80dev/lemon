@@ -224,11 +224,99 @@ defmodule LemonAutomation.Tools.CronTest do
   end
 
   test "the application registers the tool with the agent tool registry" do
-    assert {:cron, Cron} in LemonAgent.ToolRegistry.all()
+    assert {:cron, Cron, :managed} in LemonAgent.ToolRegistry.all()
 
     tool = Cron.tool(".", session_key: LemonCore.SessionKey.main("default"))
     assert tool.name == "cron"
     assert tool.parameters["required"] == ["action"]
+  end
+
+  test "registered cron run persists intent and witness before command effects" do
+    alias LemonCore.{NativeProcess, ProcessGroup}
+
+    %{directory: directory, ledger: ledger} = native_ledger_context()
+    assert :ok = NativeProcess.configure!(ledger)
+    marker = Path.join(directory, "started")
+    {tool, job} = registered_command_job(directory)
+    test = self()
+    capture_gate = :atomics.new(1, [])
+
+    release_capture = fn server ->
+      if :atomics.compare_exchange(capture_gate, 1, 1, 2) == :ok do
+        send(server, :release_cron_capture)
+      end
+    end
+
+    debug = fn state, event, _extra ->
+      case event do
+        {:in, {:"$gen_call", {caller, _}, {:captured, _path, id, identity}}} ->
+          :atomics.put(capture_gate, 1, 1)
+          send(test, {:cron_capture, self(), caller, id, identity})
+          receive do: (:release_cron_capture -> :ok)
+
+        _ ->
+          :ok
+      end
+
+      state
+    end
+
+    :ok = :sys.install(NativeProcess, {debug, nil})
+
+    on_exit(fn ->
+      if server = Process.whereis(NativeProcess) do
+        release_capture.(server)
+        :sys.remove(server, debug)
+      end
+    end)
+
+    refute call_tool(tool, %{"action" => "run", "id" => job.id}).details[:error]
+    assert_receive {:cron_capture, server, caller, id, identity}, 5_000
+
+    try do
+      assert ProcessGroup.valid_identity?(identity)
+
+      assert [{^id, %{workload_identity: nil, capacity_held: true}, %{}}] =
+               persisted_native_rows(directory, ledger, id, "intent")
+
+      refute File.exists?(marker)
+      true = :erlang.suspend_process(caller)
+      release_capture.(server)
+      assert :ok = :sys.remove(server, debug)
+
+      assert [{^id, %{workload_identity: witness, capacity_held: true}, %{}}] =
+               persisted_native_rows(directory, ledger, id, "witness")
+
+      assert ProcessGroup.valid_identity?(witness)
+      assert Map.drop(witness, [:members]) == Map.drop(identity, [:members])
+      assert Map.take(witness.members, Map.keys(identity.members)) == identity.members
+      refute File.exists?(marker)
+    after
+      release_capture.(server)
+
+      try do
+        :erlang.resume_process(caller)
+      catch
+        :error, :badarg -> :ok
+      end
+    end
+
+    await_command_run(job.id, :completed)
+    assert File.read!(marker) == "cron-env"
+    assert [run] = LemonAutomation.CronStore.list_runs(job.id)
+    assert run.output == "cron-env"
+  end
+
+  test "registered cron run has no command effects when its configured ledger is unavailable" do
+    %{directory: directory, ledger: ledger} = native_ledger_context()
+    Application.put_env(:lemon_core, :native_process_ledger, ledger)
+    refute Process.whereis(LemonCore.NativeProcess)
+    {tool, job} = registered_command_job(directory)
+
+    refute call_tool(tool, %{"action" => "run", "id" => job.id}).details[:error]
+    await_command_run(job.id, :failed)
+    refute File.exists?(Path.join(directory, "started"))
+    refute File.exists?(ledger)
   end
 
   test "returns an unavailable error while the scheduler is not running" do
@@ -532,6 +620,87 @@ defmodule LemonAutomation.Tools.CronTest do
 
     assert job.next_run_at_ms ==
              DateTime.to_unix(DateTime.new!(Date.new!(year, 7, 15), ~T[13:30:45]), :millisecond)
+  end
+
+  defp native_ledger_context do
+    original = Application.fetch_env(:lemon_core, :native_process_ledger)
+    directory = Path.join(System.tmp_dir!(), "cron-native-#{System.unique_integer([:positive])}")
+    File.mkdir_p!(directory)
+
+    on_exit(fn ->
+      if pid = Process.whereis(LemonCore.NativeProcess) do
+        for {_id, record, %{}} <- LemonCore.NativeProcess.snapshot() do
+          if LemonCore.ProcessGroup.valid_identity?(record.workload_identity) do
+            LemonCore.ProcessGroup.signal_workload_group(record.workload_identity, :sigkill)
+          end
+        end
+
+        GenServer.stop(pid)
+      end
+
+      table = :lemon_native_processes_dets
+      if :dets.info(table) != :undefined, do: :dets.close(table)
+
+      case original do
+        {:ok, value} -> Application.put_env(:lemon_core, :native_process_ledger, value)
+        :error -> Application.delete_env(:lemon_core, :native_process_ledger)
+      end
+
+      File.rm_rf!(directory)
+    end)
+
+    %{directory: directory, ledger: Path.join(directory, "processes.dets")}
+  end
+
+  defp registered_command_job(directory) do
+    assert {:cron, module, :managed} =
+             Enum.find(LemonAgent.ToolRegistry.all(), &(elem(&1, 0) == :cron))
+
+    tool = module.tool(directory, session_key: LemonCore.SessionKey.main("default"))
+
+    {:ok, job} =
+      LemonAutomation.CronManager.add(%{
+        name: "native command",
+        schedule: "hourly",
+        enabled: false,
+        command: "printf '%s' \"$CRON_NATIVE_TEST\" > started; printf '%s' \"$CRON_NATIVE_TEST\"",
+        cwd: directory,
+        env: %{"CRON_NATIVE_TEST" => "cron-env"},
+        timeout_ms: 5_000
+      })
+
+    {tool, job}
+  end
+
+  defp persisted_native_rows(directory, ledger, id, suffix) do
+    copy = Path.join(directory, suffix <> ".dets")
+    File.cp!(ledger, copy)
+
+    {:ok, table} =
+      :dets.open_file(:cron_native_test_copy, file: String.to_charlist(copy), repair: false)
+
+    try do
+      :dets.lookup(table, id)
+    after
+      :dets.close(table)
+    end
+  end
+
+  defp await_command_run(job_id, status, attempts \\ 250)
+
+  defp await_command_run(job_id, status, 0) do
+    assert [%{status: ^status}] = LemonAutomation.CronStore.list_runs(job_id)
+  end
+
+  defp await_command_run(job_id, status, attempts) do
+    case LemonAutomation.CronStore.list_runs(job_id) do
+      [%{status: ^status}] ->
+        :ok
+
+      _ ->
+        Process.sleep(20)
+        await_command_run(job_id, status, attempts - 1)
+    end
   end
 
   defp use_silent_submitter do

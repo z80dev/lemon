@@ -289,6 +289,8 @@ defmodule Lemon.Reload do
 
         try do
           Code.compiler_options(ignore_module_conflict: true)
+          # Compilation runs arbitrary top-level extension code, even if it fails.
+          LemonCore.NativeProcess.unsupported!()
 
           modules =
             Code.compile_file(path)

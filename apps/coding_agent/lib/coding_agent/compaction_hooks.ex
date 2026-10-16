@@ -233,6 +233,7 @@ defmodule CodingAgent.CompactionHooks do
       pid =
         spawn(fn ->
           try do
+            LemonCore.NativeProcess.unsupported!()
             result = hook.fn.()
             send(caller, {:hook_result, ref, {:ok, result}})
           rescue

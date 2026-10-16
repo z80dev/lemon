@@ -383,7 +383,10 @@ defmodule CodingAgent.ExtensionLifecycleDisclosureTest do
         assert result.tool_disclosure.reason == :custom_tools
         refute result.tool_disclosure.active
         assert result.tool_disclosure.profile == profile
-        assert result.tools == [custom]
+        assert [wrapped] = result.tools
+        assert %{wrapped | execute: custom.execute} == custom
+        refute wrapped.execute == custom.execute
+        assert %AgentToolResult{content: []} = wrapped.execute.("custom", %{}, nil, nil)
       end
     end
 

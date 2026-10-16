@@ -128,7 +128,9 @@ def tools do
   taken = Enum.map(builtin, &String.to_atom(&1.name))
 
   contributed =
-    for {_name, module} <- LemonAgent.ToolRegistry.available(taken), do: module.tool()
+    for {_name, module, ownership} <- LemonAgent.ToolRegistry.available(taken) do
+      LemonAgent.ToolRegistry.build_tool(ownership, fn -> module.tool() end)
+    end
 
   builtin ++ contributed
 end
@@ -250,6 +252,14 @@ LemonAgent.ToolRegistry.register(:weather, MyLib.Tools.Weather)
 as the tools above. Your `tools/0` already picks it up: `available/1` returns
 every registration whose name does not collide with one of yours, so a
 dependency can never quietly replace a tool you wrote.
+
+Registrations are `{name, module, ownership}` triples. External tools default to
+`:unknown`; `build_tool/2` records unsupported native-process ownership before
+calling their constructors and wraps their execution with the same fence. Keep
+that helper around the constructor rather than discarding provenance. Only tools
+whose native effects use the platform's managed launch seams should register with
+`native_process_ownership: :managed`; this is an ownership assertion, not a way
+to opt arbitrary external code out of the fence.
 
 This is how integrations that live in their own repositories plug in — the
 platform has no compile-time knowledge of them at all.

@@ -79,13 +79,17 @@ defmodule <%= @app_module %>.Agent do
   `LemonAgent.ToolRegistry.register(:name, Module)` when its application starts.
   `available/1` drops any registration whose name collides with one of ours, so
   a dependency can never quietly replace a tool you wrote.
+  Contributions retain their native-process ownership provenance: unknown tools
+  are fenced before construction and execution by `build_tool/2`.
   """
   def tools do
     builtin = [<%= @app_module %>.Tools.WordCount.tool()]
     taken = Enum.map(builtin, &String.to_atom(&1.name))
 
     contributed =
-      for {_name, module} <- LemonAgent.ToolRegistry.available(taken), do: module.tool()
+      for {_name, module, ownership} <- LemonAgent.ToolRegistry.available(taken) do
+        LemonAgent.ToolRegistry.build_tool(ownership, fn -> module.tool() end)
+      end
 
     builtin ++ contributed
   end
