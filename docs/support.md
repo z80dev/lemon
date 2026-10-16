@@ -385,6 +385,13 @@ failures count as `FAIL` (exit `1`). `--json` and support bundles include live
 results, but not tokens, raw provider bodies or endpoint URLs. A successful
 models-list request is not proof that a generation request will succeed.
 
+By default `--live` checks only the default provider. To verify others, add
+`--provider NAME` for one named provider or `--provider all` for the default plus
+every configured provider (at most eight; the rest are reported as one skipped
+result). Each provider gets its own `providers.live.<id>` result using the same
+bounded models-list request, so one rejected key or unreachable endpoint does not
+hide the others. `--provider` requires `--live`; without it doctor stays offline.
+
 For source-dev installs, generate a reviewed redacted bundle:
 
 ```bash

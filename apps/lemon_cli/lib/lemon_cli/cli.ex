@@ -371,6 +371,7 @@ defmodule LemonCli.CLI do
           verbose: :boolean,
           json: :boolean,
           live: :boolean,
+          provider: :string,
           project_dir: :string,
           bundle: :boolean,
           bundle_path: :string
@@ -381,6 +382,12 @@ defmodule LemonCli.CLI do
     cond do
       invalid != [] ->
         print_usage_error(format_invalid_options(invalid, "doctor"), &print_doctor_usage/1)
+
+      not valid_doctor_provider?(opts) ->
+        print_usage_error(
+          "--provider requires --live and a provider name (or `all`).",
+          &print_doctor_usage/1
+        )
 
       not valid_doctor_positionals?(opts, positional) ->
         print_usage_error(
@@ -399,6 +406,7 @@ defmodule LemonCli.CLI do
         report =
           opts
           |> Keyword.take([:project_dir, :live])
+          |> put_live_provider(opts[:provider])
           |> Keyword.put(:external_runtime?, external_runtime?)
           |> Doctor.report()
 
@@ -420,6 +428,16 @@ defmodule LemonCli.CLI do
 
           @exit_error
         end
+    end
+  end
+
+  defp put_live_provider(doctor_opts, nil), do: doctor_opts
+  defp put_live_provider(doctor_opts, name), do: Keyword.put(doctor_opts, :live_provider, name)
+
+  defp valid_doctor_provider?(opts) do
+    case Keyword.fetch(opts, :provider) do
+      :error -> true
+      {:ok, name} -> opts[:live] == true and String.trim(name) != ""
     end
   end
 

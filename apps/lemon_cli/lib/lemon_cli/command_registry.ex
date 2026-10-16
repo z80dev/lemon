@@ -241,6 +241,11 @@ defmodule LemonCli.CommandRegistry do
         option("--verbose, -v", ["--verbose", "-v"], "Show passing and skipped checks"),
         option("--json", ["--json"], "Output one JSON document"),
         option("--live", ["--live"], "Opt in to bounded, non-generating connectivity checks"),
+        option(
+          "--provider NAME|all",
+          ["--provider"],
+          "With --live, check one named provider or every configured provider (default: the default provider only)"
+        ),
         option("--project-dir PATH", ["--project-dir"], "Use a specific project directory"),
         option("--bundle [PATH]", ["--bundle"], "Write a redacted support bundle"),
         option("--bundle-path PATH", ["--bundle-path"], "Set the support bundle path")
