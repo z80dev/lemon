@@ -12,6 +12,7 @@ Behaviour is selected by the launch argument "fakeMode":
   fail_launch     launch fails with "cannot launch: boom"
   crash           writes to stderr and exits(3) when launch arrives
   no_initialized  never sends the initialized event
+  hold_disconnect never answers disconnect (holds the server's disposal wait)
 
 The launch spawns `sleep 300` as a stand-in debuggee and reports its pid in a
 `process` event, so tests can verify the debuggee is killed with the adapter.
@@ -256,6 +257,8 @@ def handle(request):
         kill_debuggee()
         event("terminated")
     elif command == "disconnect":
+        if state["mode"] == "hold_disconnect":
+            return
         respond(request, {})
         kill_debuggee()
         sys.exit(0)

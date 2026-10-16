@@ -69,6 +69,10 @@ Every action accepts `timeout` in seconds (default 30, clamped to 5..300). Execu
 actions that do not stop within the timeout return "still running" rather than
 an error; use `pause` to interrupt.
 
+Debug waits also stop when the originating invocation worker exits. A WASM host
+deadline therefore releases the debug server promptly without cancelling the
+parent run or other host invocations, even after its local abort flag is reclaimed.
+
 `status` / `sessions` include a recursive `children` list with session `id` and
 `parent_id`. Pass `debug_session_id` to any action to target that session;
 without it, actions target the root. For example:
@@ -126,9 +130,12 @@ src/main.c:
 - When breakpoints are pending at launch, the program runs straight to them.
   Without breakpoints the adapter's stop-on-entry default applies (for
   `lldb-dap` that is the process entry point, before `main`).
-- Successful native executor turns preserve the debugger across save/stop/resume
-  of the transient session process. Explicit abort/stop or logical reset/delete,
-  failed launch, unexpected owner death and 10-minute idle expiry dispose of it.
+- Native turns preserve the debugger across save/stop/resume only after saving
+  and every resource handoff succeed; failure disposes the resources. Reset
+  rebuilds tools for the fresh session id and disposes old-id resources.
+  Explicit abort signals the run before disposal so blocked tool calls can
+  unwind. Explicit stop, logical delete, failed launch, unexpected owner death
+  (including during adapter disposal) and 10-minute idle expiry also dispose of it.
 - Locally launched adapters and their debuggees are killed on teardown; a crashed
   adapter also disposes of its launched debuggee. Attached targets are not owned:
   `terminate` disconnects without terminating them.

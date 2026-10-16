@@ -1,8 +1,8 @@
 defmodule CodingAgent.Session.Presentation do
   @moduledoc false
 
-  alias LemonAi.Types.StreamOptions
   alias CodingAgent.SessionManager
+  alias LemonAi.Types.StreamOptions
   alias LemonCore.ResumeToken
 
   require Logger
@@ -280,14 +280,15 @@ defmodule CodingAgent.Session.Presentation do
     CodingAgent.SessionManager.session_file_path(cwd, session_id)
   end
 
+  # Preserve resources only after both persistence and the complete handoff
+  # succeed. Otherwise normal Session termination disposes them.
   def finalize_session(state, preserve_tool_resources \\ false) do
     session = state.session
 
     if is_pid(session) and Process.alive?(session) do
       case safe_save_session(session) do
         :ok ->
-          if preserve_tool_resources, do: CodingAgent.Session.handoff_tool_resources(session)
-          :ok
+          if preserve_tool_resources, do: handoff_tool_resources(session, state.session_id)
 
         {:error, reason} ->
           Logger.warning("LemonRunner finalize_session save failed: #{inspect(reason)}")
@@ -299,32 +300,42 @@ defmodule CodingAgent.Session.Presentation do
     state
   end
 
+  defp handoff_tool_resources(session, session_id) do
+    case CodingAgent.Session.handoff_tool_resources(session) do
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning("LemonRunner finalize_session handoff failed: #{inspect(reason)}")
+    end
+  catch
+    :exit, reason ->
+      # An uncertain handoff may have detached resources from a lost owner.
+      Logger.warning("LemonRunner finalize_session handoff failed: #{inspect({:exit, reason})}")
+      CodingAgent.ToolResources.stop(session_id)
+  end
+
   @spec safe_save_session(pid()) :: :ok | {:error, term()}
   def safe_save_session(session) do
-    try do
-      _ = CodingAgent.Session.save(session)
-      :ok
-    rescue
-      exception ->
-        {:error, {:exception, exception}}
-    catch
-      :exit, reason ->
-        {:error, {:exit, reason}}
-    end
+    CodingAgent.Session.save(session)
+  rescue
+    exception ->
+      {:error, {:exception, exception}}
+  catch
+    :exit, reason ->
+      {:error, {:exit, reason}}
   end
 
   @spec safe_stop_session(pid()) :: :ok
   def safe_stop_session(session) do
-    try do
-      GenServer.stop(session, :normal)
+    GenServer.stop(session, :normal)
+    :ok
+  rescue
+    _ ->
       :ok
-    rescue
-      _ ->
-        :ok
-    catch
-      :exit, _reason ->
-        :ok
-    end
+  catch
+    :exit, _reason ->
+      :ok
   end
 
   @doc false

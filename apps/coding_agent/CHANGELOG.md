@@ -169,6 +169,16 @@
   across successful save/stop/resume boundaries. Durable session registry keys
   remain the owner; reset/delete, explicit abort/stop, unexpected owner death and
   idle expiry still dispose of them.
+- Native tool-resource handoff requires a successful save; uncertain handoffs
+  explicitly dispose resources. Abort signals blocked tools before disposal,
+  and reset rebuilds tool closures and approval/hook contexts for the fresh ID.
+- Debug servers stop when their owner exits during adapter disposal, including
+  teardown with child sessions. WASM host-call cancellation is invocation-local:
+  a timed-out sibling does not abort the parent, while parent abort cancels all
+  outstanding calls.
+- Debug adapter waits also observe the originating invocation worker's lifetime,
+  so a cancelled WASM host call releases the debug server even after its local
+  abort signal has been reclaimed; the parent and sibling calls remain usable.
 - Eval cleanup retains the exited kernel's process-group identity so crashed
   roots cannot orphan subprocesses; JavaScript uses a detached group host with
   pipe-EOF teardown. Kernel input preserves UTF-8 across reads and output spills

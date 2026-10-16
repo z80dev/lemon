@@ -3,11 +3,18 @@ defmodule CodingAgent.Executor.SessionRunner do
 
   use GenServer
 
-  alias CodingAgent.Session.Presentation
   alias CodingAgent.Executor.RemoteRequestCodec
+  alias CodingAgent.Session.Presentation
   alias CodingAgent.Session.RunTranslator
+  alias CodingAgent.Tools.Task.Params
   alias LemonCore.ResumeToken
   alias LemonGateway.ExecutionRequest
+  alias LemonGateway.Tools.DiscordSendFile
+  alias LemonGateway.Tools.SmsClaimMessage
+  alias LemonGateway.Tools.SmsGetInboxNumber
+  alias LemonGateway.Tools.SmsListMessages
+  alias LemonGateway.Tools.SmsWaitForCode
+  alias LemonGateway.Tools.TelegramSendImage
 
   require Logger
 
@@ -38,7 +45,7 @@ defmodule CodingAgent.Executor.SessionRunner do
     alias CodingAgent.Session.Presentation
     alias LemonGateway.Event
 
-    defstruct [:sink_pid, :run_ref, :session]
+    defstruct [:sink_pid, :run_ref, :session, :session_id]
 
     @impl true
     def emit_started(state, fields) do
@@ -236,7 +243,7 @@ defmodule CodingAgent.Executor.SessionRunner do
         shared_memory_grant:
           Map.get(meta, :shared_memory_grant, Map.get(meta, "shared_memory_grant")) == true,
         invocation_mcp_servers: Map.get(meta, :mcp_servers),
-        native_managed_context: CodingAgent.Tools.Task.Params.managed_metadata?(meta),
+        native_managed_context: Params.managed_metadata?(meta),
         native_lineage_handle: Map.get(meta, :native_lineage_handle),
         native_lineage_run_id: Map.get(meta, :native_lineage_run_id),
         native_source_profile_id: Map.get(meta, :profile_id),
@@ -288,7 +295,11 @@ defmodule CodingAgent.Executor.SessionRunner do
         translator = %{
           state.translator
           | session_id: session_id,
-            emitter_state: %{state.translator.emitter_state | session: session}
+            emitter_state: %{
+              state.translator.emitter_state
+              | session: session,
+                session_id: session_id
+            }
         }
 
         {:ok,
@@ -507,10 +518,10 @@ defmodule CodingAgent.Executor.SessionRunner do
     cwd = request.cwd || get_opt(opts, :cwd) || File.cwd!()
 
     sms_tools = [
-      LemonGateway.Tools.SmsGetInboxNumber.tool(cwd),
-      LemonGateway.Tools.SmsWaitForCode.tool(cwd, session_key: request.session_key),
-      LemonGateway.Tools.SmsListMessages.tool(cwd, session_key: request.session_key),
-      LemonGateway.Tools.SmsClaimMessage.tool(cwd, session_key: request.session_key)
+      SmsGetInboxNumber.tool(cwd),
+      SmsWaitForCode.tool(cwd, session_key: request.session_key),
+      SmsListMessages.tool(cwd, session_key: request.session_key),
+      SmsClaimMessage.tool(cwd, session_key: request.session_key)
     ]
 
     workspace_dir = profile_workspace(request.meta || %{})
@@ -518,7 +529,7 @@ defmodule CodingAgent.Executor.SessionRunner do
     cond do
       telegram_session?(request) ->
         [
-          LemonGateway.Tools.TelegramSendImage.tool(
+          TelegramSendImage.tool(
             cwd,
             session_key: request.session_key,
             workspace_dir: workspace_dir
@@ -528,7 +539,7 @@ defmodule CodingAgent.Executor.SessionRunner do
 
       discord_session?(request) ->
         [
-          LemonGateway.Tools.DiscordSendFile.tool(
+          DiscordSendFile.tool(
             cwd,
             session_key: request.session_key,
             workspace_dir: workspace_dir

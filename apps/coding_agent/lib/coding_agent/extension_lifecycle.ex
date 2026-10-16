@@ -220,6 +220,57 @@ defmodule CodingAgent.ExtensionLifecycle do
   end
 
   @doc """
+  Rebuild tools for new options from the already loaded extensions and hooks.
+
+  Used when reset changes the session identity captured by tool closures, without
+  reloading extensions or providers. Custom toolsets retain their startup tools.
+  """
+  @spec rebuild_tools(keyword()) :: %{
+          tools: [AgentTool.t()],
+          tool_catalog: ToolDisclosure.catalog(),
+          tool_disclosure: ToolDisclosure.report()
+        }
+  def rebuild_tools(opts) do
+    cwd = Keyword.fetch!(opts, :cwd)
+    settings_manager = Keyword.fetch!(opts, :settings_manager)
+    tool_opts = Keyword.get(opts, :tool_opts, [])
+    tool_policy = Keyword.get(opts, :tool_policy, Keyword.get(tool_opts, :tool_policy))
+
+    approval_context =
+      Keyword.get(opts, :approval_context, Keyword.get(tool_opts, :approval_context))
+
+    tool_opts =
+      tool_opts
+      |> Keyword.put(:extension_paths, extension_paths(cwd, settings_manager))
+      |> Keyword.put(:wasm_tools, Keyword.get(opts, :wasm_tools, []))
+      |> Keyword.put(:wasm_status, Keyword.get(opts, :wasm_status))
+      |> Keyword.put(:tool_policy, tool_policy)
+      |> Keyword.put(:approval_context, approval_context)
+      |> ToolRegistry.put_browser_provider_resolution()
+
+    disclosure_cfg =
+      ToolDisclosure.config(settings_manager, Keyword.get(tool_opts, :tool_disclosure))
+
+    {tools, tool_catalog, disclosure_report} =
+      build_tools(
+        cwd,
+        tool_opts,
+        Keyword.fetch!(opts, :extensions),
+        Keyword.get(opts, :custom_tools),
+        Keyword.get(opts, :extra_tools, []),
+        tool_policy,
+        approval_context,
+        disclosure_cfg,
+        Keyword.fetch!(opts, :hooks),
+        Keyword.get(opts, :secret_obfuscator)
+      )
+
+    emit_disclosure_telemetry(disclosure_report)
+
+    %{tools: tools, tool_catalog: tool_catalog, tool_disclosure: disclosure_report}
+  end
+
+  @doc """
   Resolve extension search paths for a working directory and settings.
   """
   @spec extension_paths(String.t(), term()) :: [String.t()]

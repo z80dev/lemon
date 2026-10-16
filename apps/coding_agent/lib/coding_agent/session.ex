@@ -117,6 +117,7 @@ defmodule CodingAgent.Session do
     :mcp_session_id,
     :acp_mcp_session_id,
     :extra_tools,
+    :tool_opts,
     :tool_disclosure,
     :tool_catalog,
     :session_scope,
@@ -188,6 +189,7 @@ defmodule CodingAgent.Session do
           mcp_session_id: String.t() | nil,
           acp_mcp_session_id: String.t() | nil,
           extra_tools: [AgentTool.t()],
+          tool_opts: keyword(),
           tool_disclosure: keyword() | map() | nil,
           tool_catalog: CodingAgent.ToolDisclosure.catalog(),
           session_scope: :main | :subagent,
@@ -1415,8 +1417,6 @@ defmodule CodingAgent.Session do
   end
 
   def handle_cast(:abort, state) do
-    CodingAgent.ToolResources.stop(state.session_manager.header.id)
-    state = %{state | tool_resources_handed_off: false}
     had_pending_prompt = not is_nil(state.pending_prompt_timer_ref)
 
     state =
@@ -1430,6 +1430,11 @@ defmodule CodingAgent.Session do
     Control.cancel_parent(self())
 
     LemonAgent.Agent.abort(state.agent)
+
+    # Signal the run before disposing resources so blocked tool calls can unwind
+    # instead of holding abort until the resource's supervisor shutdown timeout.
+    CodingAgent.ToolResources.stop(state.session_manager.header.id)
+    state = %{state | tool_resources_handed_off: false}
 
     if had_pending_prompt do
       # If abort lands before deferred prompt dispatch, emit a terminal canceled

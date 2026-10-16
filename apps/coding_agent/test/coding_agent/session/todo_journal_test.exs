@@ -247,6 +247,106 @@ defmodule CodingAgent.Session.TodoJournalTest do
     end
   end
 
+  test "host-local cancellation leaves shared-run siblings writable while parent abort stops both",
+       %{tmp_dir: root} do
+    test_pid = self()
+
+    for reason <- [:timeout, :caller_down, :parent_abort] do
+      session =
+        start_session(root,
+          tool_policy: ToolPolicy.custom(allow: ["todo"], require_approval: ["todo"]),
+          approval_context: %{
+            approval_request_fun: fn _request ->
+              send(test_pid, {:approval_waiting, self()})
+
+              receive do
+                :approve -> {:ok, :approved, :once}
+              end
+            end
+          }
+        )
+
+      parent_signal = LemonAgent.AbortSignal.new()
+      on_exit(fn -> LemonAgent.AbortSignal.clear(parent_signal) end)
+
+      context = %{
+        owner: self(),
+        signal: parent_signal,
+        deadline: System.monotonic_time(:millisecond) + 30_000
+      }
+
+      invoke = fn content ->
+        Task.async(fn ->
+          WasmBridge.invoke_host_request(
+            session,
+            "todo",
+            Jason.encode!(%{"action" => "write", "todos" => [%{"content" => content}]}),
+            context
+          )
+        end)
+      end
+
+      first = invoke.("Cancelled")
+      assert_receive {:approval_waiting, first_worker}, 5_000
+      sibling = invoke.("Sibling")
+      assert_receive {:approval_waiting, sibling_worker}, 5_000
+      first_monitor = Process.monitor(first_worker)
+      sibling_monitor = Process.monitor(sibling_worker)
+      calls = Session.get_state(session).wasm_host_calls
+      {first_ref, first_request} = Enum.find(calls, fn {_, r} -> r.task.pid == first_worker end)
+      {_, sibling_request} = Enum.find(calls, fn {_, r} -> r.task.pid == sibling_worker end)
+      assert first_request.parent_signal == parent_signal
+      assert sibling_request.parent_signal == parent_signal
+      refute first_request.signal == sibling_request.signal
+      refute first_request.signal == parent_signal
+      refute sibling_request.signal == parent_signal
+
+      case reason do
+        :timeout ->
+          :sys.replace_state(session, fn state ->
+            request = %{first_request | deadline: System.monotonic_time(:millisecond) - 1}
+            %{state | wasm_host_calls: Map.put(state.wasm_host_calls, first_ref, request)}
+          end)
+
+          send(session, {:wasm_host_check, first_ref})
+          assert {:error, :timeout} = Task.await(first, 5_000)
+
+        :caller_down ->
+          Task.shutdown(first, :brutal_kill)
+
+        :parent_abort ->
+          LemonAgent.AbortSignal.abort(parent_signal)
+          assert {:error, :aborted} = Task.await(first, 5_000)
+      end
+
+      assert_receive {:DOWN, ^first_monitor, :process, ^first_worker, _}, 5_000
+      send(first_worker, :approve)
+
+      if reason == :parent_abort do
+        assert {:error, :aborted} = Task.await(sibling, 5_000)
+        assert {:ok, [], _} = Session.todos(session)
+      else
+        refute LemonAgent.AbortSignal.aborted?(parent_signal)
+        refute LemonAgent.AbortSignal.aborted?(sibling_request.signal)
+        assert Process.alive?(sibling_worker)
+        send(sibling_worker, :approve)
+        assert {:ok, _} = Task.await(sibling, 5_000)
+        assert {:ok, [%{"content" => "Sibling"}], _} = Session.todos(session)
+      end
+
+      assert_receive {:DOWN, ^sibling_monitor, :process, ^sibling_worker, _}, 5_000
+      assert Session.get_state(session).wasm_host_calls == %{}
+
+      assert {:ok, persisted} =
+               SessionManager.load_from_file(Session.get_state(session).session_file)
+
+      assert {{:ok, todos}, _} = Todos.materialize(persisted)
+
+      assert Enum.map(todos, & &1["content"]) ==
+               if(reason == :parent_abort, do: [], else: ["Sibling"])
+    end
+  end
+
   test "production sidecar callback binds the real todo writer to its invoking task and signal",
        %{tmp_dir: root} do
     test_pid = self()
@@ -286,7 +386,8 @@ defmodule CodingAgent.Session.TodoJournalTest do
     assert_receive {:sidecar_approval_waiting, worker}, 5_000
     [{_ref, request}] = Map.to_list(Session.get_state(session).wasm_host_calls)
     assert request.owner == caller.pid
-    assert request.signal == signal
+    assert request.parent_signal == signal
+    assert is_reference(request.signal) and request.signal != signal
     assert request.deadline <= System.monotonic_time(:millisecond) + 120_000
     assert request.task.pid == worker
     monitor = Process.monitor(worker)

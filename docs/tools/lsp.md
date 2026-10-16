@@ -93,11 +93,13 @@ Behavior:
 
 One initialized OS process is shared per (server id, workspace root, effective
 server configuration), across durable coding sessions and direct manager users.
-Session-scoped clients hold reference-counted leases. Successful native turns
-hand off their client before the transient session process stops; resumed turns
-bind the same durable identity. Explicit abort/stop, logical reset/delete,
-unexpected owner death and 10 idle minutes release that client's lease, without
-stopping a server another session still owns.
+Session-scoped clients hold reference-counted leases. Native turns hand off
+clients only after saving and every resource handoff succeed; otherwise resources
+are disposed. Resumed turns bind the same durable identity. Reset rebuilds tools
+for the fresh session id and releases old-id leases. Explicit abort signals the
+run before disposal; explicit stop, logical delete, unexpected owner death and
+10 idle minutes also release that client's lease, without stopping a server
+another session still owns.
 
 The last release starts an idle grace period: configure
 `[runtime.tools.lsp] idle_timeout_ms = 30000` (the default); `0` stops immediately.

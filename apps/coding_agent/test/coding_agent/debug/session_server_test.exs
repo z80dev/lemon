@@ -339,6 +339,35 @@ defmodule CodingAgent.Debug.SessionServerTest do
     assert message =~ "has terminated"
   end
 
+  test "the owner exiting during post-termination disposal stops the server", ctx do
+    owner = spawn(fn -> receive do: (:stop -> :ok) end)
+
+    assert {:ok, %{state: :stopped}} =
+             launch(ctx, %{"fakeMode" => "hold_disconnect"}, owner: owner)
+
+    server = SessionServer.whereis(ctx.key)
+    ref = Process.monitor(server)
+
+    # The program runs to completion; disposal then waits on a disconnect the
+    # adapter never answers, and the owner exits inside that wait.
+    task = Task.async(fn -> call(ctx.key, %{action: "continue"}, owner: owner) end)
+
+    assert_eventually(fn -> Enum.any?(commands(ctx.log), &match?({"disconnect", _}, &1)) end,
+      timeout: 5_000
+    )
+
+    Process.exit(owner, :kill)
+
+    assert_receive {:DOWN, ^ref, :process, ^server, :normal}, 5_000
+    assert {:ok, %{state: :terminated}} = Task.await(task, 5_000)
+
+    # No lease is left behind: a later turn starts its own session.
+    assert_eventually(fn -> SessionServer.whereis(ctx.key) == nil end, timeout: 5_000)
+    next_owner = spawn(fn -> receive do: (:stop -> :ok) end)
+    on_exit(fn -> send(next_owner, :stop) end)
+    assert {:ok, %{state: :stopped}} = launch(ctx, %{}, owner: next_owner)
+  end
+
   test "continue reports a timeout while the program keeps running, then pause stops it", ctx do
     assert {:ok, %{state: :stopped}} = launch(ctx, %{"fakeMode" => "hang"})
 
@@ -373,6 +402,73 @@ defmodule CodingAgent.Debug.SessionServerTest do
 
     assert {:ok, %{snapshot: %{id: ^id, process_id: ^debuggee}}} =
              call(ctx.key, %{action: "status"})
+  end
+
+  test "a WASM host deadline releases a blocked debug server without cancelling siblings", ctx do
+    alias CodingAgent.Session.WasmBridge
+    alias LemonAgent.Types.AgentTool
+
+    # Match the Session GenServer that owns these linked host workers.
+    Process.flag(:trap_exit, true)
+
+    assert {:ok, %{state: :stopped}} = launch(ctx, %{"fakeMode" => "hang"})
+    parent = AbortSignal.new()
+    on_exit(fn -> AbortSignal.clear(parent) end)
+    test_pid = self()
+
+    tool = %AgentTool{
+      name: "debug",
+      description: "debug fixture",
+      parameters: %{},
+      execute: fn _, _, signal, _ ->
+        send(test_pid, {:invocation_signal, signal})
+        call(ctx.key, %{action: "continue"}, timeout_ms: 30_000, signal: signal)
+      end
+    }
+
+    state = %{
+      wasm_host_calls: %{},
+      wasm_tool_names: [],
+      tool_catalog: %{"debug" => %{tool: tool, source: :native}},
+      session_manager: CodingAgent.SessionManager.new(ctx.cwd),
+      plan_gate: CodingAgent.Session.Planning.new_gate(),
+      cwd: ctx.cwd,
+      run_id: nil,
+      session_key: nil,
+      agent_id: nil,
+      approval_context: %{}
+    }
+
+    tag = make_ref()
+
+    context = %{
+      owner: self(),
+      signal: parent,
+      deadline: System.monotonic_time(:millisecond) + 5_000
+    }
+
+    assert {:noreply, state} =
+             WasmBridge.start_host_call(state, {self(), tag}, "debug", "{}", context)
+
+    assert_receive {:invocation_signal, signal}, 1_000
+    assert_eventually(fn -> Enum.any?(commands(ctx.log), &match?({"continue", _}, &1)) end)
+    [{ref, request}] = Map.to_list(state.wasm_host_calls)
+    Process.cancel_timer(request.timer)
+    request = %{request | deadline: System.monotonic_time(:millisecond) - 1}
+    state = %{state | wasm_host_calls: %{ref => request}}
+    assert %{wasm_host_calls: calls} = WasmBridge.check_host_call(state, ref)
+    assert calls == %{}
+    assert_receive {^tag, {:error, :timeout}}, 1_000
+    refute AbortSignal.aborted?(parent)
+    refute AbortSignal.aborted?(signal)
+
+    # The independently supervised server must not keep waiting for 30 seconds
+    # after the host worker and its transient cancellation flag are gone.
+    assert {:ok, %{snapshot: %{status: :running}}} =
+             call(ctx.key, %{action: "status"}, timeout_ms: 500, signal: parent)
+
+    assert {:ok, %{state: :stopped}} =
+             call(ctx.key, %{action: "pause"}, timeout_ms: 500, signal: parent)
   end
 
   test "a missing initialized event times out and kills the adapter", ctx do
