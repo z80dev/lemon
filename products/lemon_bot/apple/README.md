@@ -218,12 +218,59 @@ reconnect a rejected or stopped Lemon link. Restart requires confirmation.
 Running operations are observed by read-only polling and expose the backend's
 bounded output, never an automatic mutation replay.
 
-The Mac app remains sandboxed: when the backend itself is down at a loopback
-address, **Start it on this Mac** offers `lemon daemon`, the integrated-checkout
-backend command, setup documentation and **Open Terminal**. It never spawns
-Lemon or reads an operator token. Background reconnect detects the service when
-it returns; failed local onboarding also probes until it answers. These local
-commands and Terminal actions are not shown on iPhone.
+The Mac app remains sandboxed: when the backend itself is unreachable at a
+loopback address, **Start Lemon** copies a prepared command and opens Terminal.
+**Paste it into Terminal and press Return** to run `lemon start` and the Lemon Bot
+backend as your current user. Nothing executes until you paste and submit it.
+The button is also available after a failed setup/sign-in check on first launch
+or while signed out; a successful health probe resumes setup/sign-in discovery,
+without requiring an authenticated account.
+
+The command searches `~/.lemon/bin/lemon` (the native installer launcher),
+`~/.local/bin/lemon`, `~/bin/lemon`, then Homebrew/local installed launchers,
+before falling back to `<checkout>/bin/lemon`. Discovery uses explicit paths,
+not shell aliases or `PATH`. Bun is searched in `~/.bun/bin`, Homebrew
+and `/usr/local/bin`. The checkout defaults to `~/lemon`. For another location:
+
+```sh
+defaults write org.lemonbot.mac lemonCheckoutPath -string "/absolute/path/to/lemon"
+```
+
+The checkout must contain `products/lemon_bot/backend`, with its existing backend
+environment and dependencies configured. The app never reads an operator token,
+creates scripts, changes entitlements, installs launchd jobs, escalates privileges
+or starts services without a click. **Start it on this Mac** retains the separate
+manual commands and setup link. These local commands and Terminal actions are
+not shown on iPhone.
+
+Success is shown only after the public setup health probe passes. After Terminal
+opens, the hand-off makes at most 60 probes, with a two-second request timeout and
+one-second intervals between probes (up to 120 seconds of request budgets plus
+59 seconds of waits, excluding Terminal opening and system scheduling). This is
+not a 60-second overall deadline. Exhaustion shows a bounded, redacted reason;
+inspect Terminal for command failures. Leaving the view, changing backend or
+switching accounts cancels the hand-off polling, not commands already submitted
+in Terminal. Normal background reconnect/discovery is independent.
+
+### Manual Terminal hand-off checklist
+
+- With a saved account and its loopback backend down, confirm **Start Lemon**
+  appears. Click once: Terminal opens and the command is on the clipboard, but
+  no service starts until you paste and press Return. Confirm both Lemon and
+  Lemon Bot start as the current user and success appears only after health.
+- Repeat on first launch with no saved account, and while signed out: check the
+  local server address, click **Start Lemon**, paste and run. Confirm the app
+  discovers owner setup or available sign-in methods without authenticated
+  store refresh. Test both an uninitialized and an already configured backend.
+- Test installed launchers and a source-only `<checkout>/bin/lemon`, including a
+  checkout path containing spaces and an apostrophe. Inspect the pasted command
+  before submitting it; no generated executable script should be created.
+- Leave the command unsubmitted or use a checkout without Bun/backend dependencies:
+  confirm no false success, eventual bounded/redacted failure, and retry works.
+- Leave the panel or change accounts/backend during polling. Confirm the old
+  attempt cannot update the new view or trigger its discovery/reconnect.
+- Confirm a remote origin never offers local start, iPhone shows no local
+  command/Terminal actions, and App Sandbox remains enabled.
 
 ## Lemon instance
 

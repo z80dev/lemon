@@ -77,7 +77,10 @@ public struct OnboardingView: View {
                         Text(issue.title).font(LBFont.rowTitle).foregroundStyle(LB.warning)
                         Text(issue.reason).font(LBFont.body)
                         #if os(macOS)
-                        if let url = URL(string: backend), ConnectionIssue.isLoopback(url) { LocalLemonStartHelp() }
+                        if issue.layer == .backendUnreachable, let url = URL(string: backend), ConnectionIssue.isLoopback(url) {
+                            StartLemonButton(url: url, accountID: store.account?.id) { await discover() }
+                            LocalLemonStartHelp()
+                        }
                         #endif
                         DisclosureGroup("Details") {
                             Text(issue.detail).font(LBFont.code).textSelection(.enabled)
@@ -177,12 +180,16 @@ public struct OnboardingView: View {
             let url = try validatedURL()
             do {
                 let setup: SetupStatus = try await HTTPTransport(baseURL: url).read("/setup", timeout: 2)
+                let methods: [PublicOIDCProvider] = try await publicRequest(url, "/auth/oidc/providers")
+                try Task.checkCancellation()
                 setupRequired = setup.setupRequired
                 connectionIssue = nil
                 if !setup.setupRequired { action.uncertain = false }
                 mode = setup.setupRequired ? "setup" : "login"
                 checkedURL = url
-                providers = try await publicRequest(url, "/auth/oidc/providers")
+                providers = methods
+            } catch is CancellationError {
+                throw CancellationError()
             } catch {
                 connectionIssue = ConnectionIssue.classify(error, baseURL: url)
                 throw error
