@@ -22,7 +22,7 @@ defmodule CodingAgent.Tools.WebFetch do
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonCore.Secrets
 
-  import LemonAgent.Tools.AbortHelpers, only: [check_abort: 1]
+  import LemonAgent.Tools.AbortHelpers, only: [aborted?: 1, check_abort: 1]
 
   @default_fetch_max_chars 20_000
   @default_fetch_max_redirects 3
@@ -112,20 +112,20 @@ defmodule CodingAgent.Tools.WebFetch do
           read_integer(params, ["maxChars", "max_chars"], nil)
           |> normalize_max_chars(runtime.max_chars)
 
-        run_fetch(url, extract_mode, max_chars, runtime, params)
+        run_fetch(url, extract_mode, max_chars, runtime, params, signal)
       end
     else
       {:error, "webfetch is disabled by configuration"}
     end
   end
 
-  defp run_fetch(url, extract_mode, max_chars, runtime, params) do
+  defp run_fetch(url, extract_mode, max_chars, runtime, params, signal) do
     with {:ok, providers} <- extraction_providers(runtime, params) do
-      run_cached_fetch(url, extract_mode, max_chars, runtime, providers)
+      run_cached_fetch(url, extract_mode, max_chars, runtime, providers, signal)
     end
   end
 
-  defp run_cached_fetch(url, extract_mode, max_chars, runtime, providers) do
+  defp run_cached_fetch(url, extract_mode, max_chars, runtime, providers, signal) do
     cache_key =
       WebCache.normalize_cache_key(
         "fetch:text-v3:#{Enum.join(providers, ",")}:#{url}:#{Atom.to_string(extract_mode)}:#{max_chars}"
@@ -139,28 +139,35 @@ defmodule CodingAgent.Tools.WebFetch do
         :miss ->
           SingleFlight.run(
             cache_key,
-            fn ->
+            fn flight_signal ->
               case WebCache.read_cache(@fetch_cache_table, cache_key, runtime.cache_opts) do
                 {:hit, payload} ->
                   {:ok, Map.put(payload, "cached", true)}
 
                 :miss ->
-                  with {:ok, payload} <-
-                         perform_fetch(url, extract_mode, max_chars, runtime, providers) do
-                    WebCache.write_cache(
-                      @fetch_cache_table,
-                      cache_key,
-                      payload,
-                      runtime.cache_ttl_ms,
-                      runtime.cache_max_entries,
-                      runtime.cache_opts
-                    )
+                  runtime = %{runtime | abort_signal: flight_signal}
 
-                    {:ok, payload}
+                  with :ok <- check_abort(flight_signal),
+                       {:ok, payload} <-
+                         perform_fetch(url, extract_mode, max_chars, runtime, providers),
+                       :ok <- check_abort(flight_signal) do
+                    SingleFlight.commit(flight_signal, fn ->
+                      WebCache.write_cache(
+                        @fetch_cache_table,
+                        cache_key,
+                        payload,
+                        runtime.cache_ttl_ms,
+                        runtime.cache_max_entries,
+                        runtime.cache_opts
+                      )
+
+                      {:ok, payload}
+                    end)
                   end
               end
             end,
-            runtime.timeout_ms + 1_000
+            runtime.timeout_ms + 1_000,
+            signal: signal
           )
       end
 
@@ -188,7 +195,9 @@ defmodule CodingAgent.Tools.WebFetch do
     case SearchDispatcher.run(:extract, request,
            providers: providers,
            provider_contexts: contexts,
-           timeout_ms: runtime.timeout_ms
+           timeout_ms: runtime.timeout_ms,
+           signal: runtime.abort_signal,
+           authorize: fn -> SingleFlight.authorize(runtime.abort_signal) end
          ) do
       {:ok, payload, metadata} ->
         {:ok,
@@ -196,6 +205,9 @@ defmodule CodingAgent.Tools.WebFetch do
          |> Map.put("providerRequested", metadata.requested_provider)
          |> Map.put("providerUsed", metadata.provider_used)
          |> Map.put("providerAttempts", safe_provider_attempts(metadata.attempts))}
+
+      {:error, "Operation aborted"} = error ->
+        error
 
       {:error, {:provider_terminal, _provider, reason, _attempts}} ->
         {:error, to_string(reason)}
@@ -363,7 +375,9 @@ defmodule CodingAgent.Tools.WebFetch do
          )}
 
       {:error, reason} ->
-        {:error, format_primary_error({:extract_error, reason})}
+        if aborted?(runtime.abort_signal),
+          do: {:error, {:terminal, "Operation aborted"}},
+          else: {:error, format_primary_error({:extract_error, reason})}
     end
   end
 
@@ -543,13 +557,29 @@ defmodule CodingAgent.Tools.WebFetch do
   defp extract_pdf(body, _extract_mode, runtime) do
     dir = Path.join(System.tmp_dir!(), "lemon-webfetch-#{System.unique_integer([:positive])}")
     path = Path.join(dir, "document.pdf")
+    owner = self()
+
+    # Provider cancellation can force-kill this process, bypassing its after block.
+    # Keep staged-file cleanup outside that lifecycle, like the backend guardian.
+    cleanup =
+      spawn(fn ->
+        monitor = Process.monitor(owner)
+
+        receive do
+          {:pdf_cleanup_complete, ^owner} ->
+            Process.demonitor(monitor, [:flush])
+
+          {:DOWN, ^monitor, :process, ^owner, _reason} ->
+            File.rm_rf(dir)
+        end
+      end)
 
     try do
       with :ok <- File.mkdir_p(dir),
            :ok <- File.chmod(dir, 0o700),
            :ok <- File.write(path, body),
            {:ok, %{text: text, backend: backend}} <-
-             ReadPdf.extract_text(path, runtime.cwd, runtime.pdf_opts, nil) do
+             ReadPdf.extract_text(path, runtime.cwd, runtime.pdf_opts, runtime.abort_signal) do
         {:ok, %{text: text, title: nil, extractor: "pdf:#{backend}"}}
       else
         {:error, reason} when is_binary(reason) -> {:error, reason}
@@ -557,6 +587,7 @@ defmodule CodingAgent.Tools.WebFetch do
       end
     after
       File.rm_rf(dir)
+      send(cleanup, {:pdf_cleanup_complete, owner})
     end
   end
 
@@ -1173,6 +1204,7 @@ defmodule CodingAgent.Tools.WebFetch do
 
     %{
       cwd: Keyword.get_lazy(opts, :cwd, &File.cwd!/0),
+      abort_signal: nil,
       pdf_opts: Keyword.take(opts, [:pdf_python]),
       enabled: truthy?(get_map_value(fetch_cfg, :enabled, true)),
       max_chars:
