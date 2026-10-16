@@ -198,7 +198,10 @@ defmodule CodingAgent.Tools.Lsp.WorkspaceEdit do
   Apply planned operations to disk.
 
   Returns changed paths, summary lines and checkpoint on success or a mid-way
-  failure. The error receipt retains the preimage of every planned target.
+  failure. The error receipt retains the preimage of every planned target and
+  lists paths written before the failure, including created parent directories,
+  leftover temp files, files created before a failed write and partially deleted
+  trees. Created parents and partially deleted trees are reported by their root.
   """
   @spec apply([op()], String.t(), keyword(), reference() | nil, map()) ::
           {:ok, %{changed: [String.t()], applied: [String.t()], checkpoint: map() | nil}}
@@ -349,26 +352,36 @@ defmodule CodingAgent.Tools.Lsp.WorkspaceEdit do
 
         {:error, reason} ->
           {:halt, {:error, partial_error(reason, changed), changed, applied}}
+
+        {:error, reason, written} ->
+          changed = changed ++ written
+          {:halt, {:error, partial_error(reason, changed), changed, applied}}
       end
     end)
   end
 
   defp commit_op(%{kind: :text, path: path, original: original, content: content} = op, cwd) do
-    with {:ok, ^original} <- read(path),
-         :ok <- atomic_write(path, content) do
-      {:ok, [path],
-       "Applied #{plural(length(op.edits), "edit")} to #{Text.display_path(path, cwd)}"}
-    else
-      {:ok, _changed} -> {:error, "File changed while applying the edit: #{path}"}
-      error -> error
+    case read(path) do
+      {:ok, ^original} ->
+        with {:ok, created} <- atomic_write(path, content) do
+          {:ok, created ++ [path],
+           "Applied #{plural(length(op.edits), "edit")} to #{Text.display_path(path, cwd)}"}
+        end
+
+      {:ok, _changed} ->
+        {:error, "File changed while applying the edit: #{path}"}
+
+      error ->
+        error
     end
   end
 
   defp commit_op(%{kind: :text, path: path, edits: edits}, cwd) do
     with {:ok, original} <- read(path),
          {:ok, content} <- edited(original, edits, path),
-         :ok <- atomic_write(path, content) do
-      {:ok, [path], "Applied #{plural(length(edits), "edit")} to #{Text.display_path(path, cwd)}"}
+         {:ok, created} <- atomic_write(path, content) do
+      {:ok, created ++ [path],
+       "Applied #{plural(length(edits), "edit")} to #{Text.display_path(path, cwd)}"}
     end
   end
 
@@ -377,8 +390,8 @@ defmodule CodingAgent.Tools.Lsp.WorkspaceEdit do
 
     cond do
       exists? and options["overwrite"] == true ->
-        with :ok <- atomic_write(path, ""),
-             do: {:ok, [path], "Created #{Text.display_path(path, cwd)} (overwrote)"}
+        with {:ok, created} <- atomic_write(path, ""),
+             do: {:ok, created ++ [path], "Created #{Text.display_path(path, cwd)} (overwrote)"}
 
       exists? and options["ignoreIfExists"] == true ->
         {:ok, [], nil}
@@ -387,9 +400,19 @@ defmodule CodingAgent.Tools.Lsp.WorkspaceEdit do
         {:error, "Cannot create #{path}: it already exists"}
 
       true ->
-        with :ok <- mkdir_parent(path),
-             :ok <- fs(File.write(path, "", [:exclusive]), path),
-             do: {:ok, [path], "Created #{Text.display_path(path, cwd)}"}
+        with {:ok, created} <- mkdir_parent(path) do
+          case File.write(path, "", [:exclusive]) do
+            :ok ->
+              {:ok, created ++ [path], "Created #{Text.display_path(path, cwd)}"}
+
+            # Without :eexist the exclusive open succeeded, so a remaining file is ours.
+            {:error, reason} ->
+              left =
+                if reason != :eexist and match?({:ok, _}, File.lstat(path)), do: [path], else: []
+
+              {:error, fs_message(reason, path), created ++ left}
+          end
+        end
     end
   end
 
@@ -407,10 +430,15 @@ defmodule CodingAgent.Tools.Lsp.WorkspaceEdit do
         {:error, "Cannot rename #{from} over existing directory #{to}"}
 
       true ->
-        with :ok <- mkdir_parent(to),
-             :ok <- fs(File.rename(from, to), from) do
-          {:ok, [from, to],
-           "Renamed #{Text.display_path(from, cwd)} → #{Text.display_path(to, cwd)}"}
+        with {:ok, created} <- mkdir_parent(to) do
+          case fs(File.rename(from, to), from) do
+            :ok ->
+              {:ok, created ++ [from, to],
+               "Renamed #{Text.display_path(from, cwd)} → #{Text.display_path(to, cwd)}"}
+
+            {:error, reason} ->
+              {:error, reason, created}
+          end
         end
     end
   end
@@ -439,10 +467,24 @@ defmodule CodingAgent.Tools.Lsp.WorkspaceEdit do
     end
   end
 
+  # A failed recursive delete may already have removed part of the tree.
   defp rm_rf(path) do
+    before = tree_fingerprint(path)
+
     case File.rm_rf(path) do
-      {:ok, _} -> :ok
-      {:error, reason, file} -> fs({:error, reason}, file)
+      {:ok, _} ->
+        :ok
+
+      {:error, reason, file} ->
+        unchanged? = before != :unknown and tree_fingerprint(path) == before
+        {:error, fs_message(reason, file), if(unchanged?, do: [], else: [path])}
+    end
+  end
+
+  defp tree_fingerprint(path) do
+    case LemonCore.Checkpoint.filesystem_fingerprint(path) do
+      {:ok, fingerprint} -> fingerprint
+      {:error, _} -> :unknown
     end
   end
 
@@ -461,7 +503,8 @@ defmodule CodingAgent.Tools.Lsp.WorkspaceEdit do
   end
 
   # Replace `path` through a sibling temp file so readers never observe a
-  # partially written file. The original file mode is preserved.
+  # partially written file. The original file mode is preserved. Returns the
+  # parent directory this created, or every path left behind on failure.
   defp atomic_write(path, content) do
     tmp =
       Path.join(
@@ -475,24 +518,49 @@ defmodule CodingAgent.Tools.Lsp.WorkspaceEdit do
         _ -> nil
       end
 
-    with :ok <- mkdir_parent(path),
-         :ok <- fs(File.write(tmp, content, [:exclusive]), tmp),
-         :ok <- if(mode, do: fs(File.chmod(tmp, mode), tmp), else: :ok),
-         :ok <- fs(File.rename(tmp, path), path) do
-      :ok
-    else
-      error ->
-        _ = File.rm(tmp)
-        error
+    with {:ok, created} <- mkdir_parent(path) do
+      with :ok <- fs(File.write(tmp, content, [:exclusive]), tmp),
+           :ok <- if(mode, do: fs(File.chmod(tmp, mode), tmp), else: :ok),
+           :ok <- fs(File.rename(tmp, path), path) do
+        {:ok, created}
+      else
+        {:error, reason} ->
+          left = if File.rm(tmp) in [:ok, {:error, :enoent}], do: [], else: [tmp]
+          {:error, reason, created ++ left}
+      end
     end
   end
 
-  defp mkdir_parent(path), do: fs(File.mkdir_p(Path.dirname(path)), Path.dirname(path))
+  # Creates missing parents and reports the topmost directory it created.
+  defp mkdir_parent(path) do
+    dir = Path.dirname(path)
+    missing = missing_ancestor(dir)
+
+    case File.mkdir_p(dir) do
+      :ok ->
+        {:ok, List.wrap(missing)}
+
+      {:error, reason} ->
+        created = if missing && match?({:ok, _}, File.lstat(missing)), do: [missing], else: []
+        {:error, fs_message(reason, dir), created}
+    end
+  end
+
+  defp missing_ancestor(dir) do
+    case File.lstat(dir) do
+      {:ok, _} ->
+        nil
+
+      {:error, _} ->
+        parent = Path.dirname(dir)
+        if parent == dir, do: dir, else: missing_ancestor(parent) || dir
+    end
+  end
 
   defp fs(:ok, _path), do: :ok
+  defp fs({:error, reason}, path), do: {:error, fs_message(reason, path)}
 
-  defp fs({:error, reason}, path),
-    do: {:error, FileValidation.format_file_error(reason, path, "file")}
+  defp fs_message(reason, path), do: FileValidation.format_file_error(reason, path, "file")
 
   defp partial_error(reason, []), do: reason
 

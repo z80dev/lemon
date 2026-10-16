@@ -271,6 +271,55 @@ defmodule CodingAgent.Tools.Lsp.WorkspaceEditTest do
     assert File.read!(existing) == "keep"
   end
 
+  test "failed operations report every path they already wrote", %{tmp: tmp} do
+    opts = [filesystem_checkpoints: false]
+    first = Path.join(tmp, "first.c")
+    nested = Path.join(tmp, "nested")
+
+    # The rename creates destination parents before discovering its missing source.
+    {:ok, ops} =
+      WorkspaceEdit.plan(%{
+        "documentChanges" => [
+          %{"kind" => "create", "uri" => uri(tmp, "first.c")},
+          %{
+            "kind" => "rename",
+            "oldUri" => uri(tmp, "missing.c"),
+            "newUri" => uri(tmp, "nested/deep/moved.c")
+          }
+        ]
+      })
+
+    assert {:error, reason, receipt} = WorkspaceEdit.apply(ops, tmp, opts, nil, %{tool: "lsp"})
+    assert receipt.changed == [first, nested]
+    assert receipt.applied == ["Created first.c"]
+    assert reason =~ "2 path(s) were already changed: #{first}, #{nested}"
+    assert File.dir?(Path.join(nested, "deep"))
+
+    # A recursive delete can remove descendants before failing on a locked parent.
+    tree = Path.join(tmp, "tree")
+    locked = Path.join(tree, "locked")
+    removed = Path.join([locked, "sub", "x.c"])
+    File.mkdir_p!(Path.dirname(removed))
+    File.write!(removed, "x")
+    File.chmod!(locked, 0o555)
+    on_exit(fn -> File.chmod(locked, 0o755) end)
+
+    {:ok, ops} =
+      WorkspaceEdit.plan(%{
+        "documentChanges" => [
+          %{"kind" => "delete", "uri" => uri(tmp, "tree"), "options" => %{"recursive" => true}}
+        ]
+      })
+
+    assert {:error, reason, receipt} = WorkspaceEdit.apply(ops, tmp, opts, nil, %{tool: "lsp"})
+    assert receipt.changed == [tree]
+    assert receipt.applied == []
+    assert reason =~ "1 path(s) were already changed: #{tree}"
+    refute File.exists?(removed)
+    assert File.dir?(Path.dirname(removed))
+    File.chmod!(locked, 0o755)
+  end
+
   test "abort after checkpoint publication retains the receipt without writing", %{tmp: tmp} do
     paths = Application.get_env(:lemon_core, :paths, [])
 
