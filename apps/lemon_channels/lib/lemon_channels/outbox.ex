@@ -17,7 +17,10 @@ defmodule LemonChannels.Outbox do
   same payload, and therefore the same idempotency key, instead of being
   dropped. A duplicate message is preferred over a silently lost one. This
   deliberately exempts outbox message delivery from the repository rule that an
-  `:outcome_unknown` mutation is never automatically retried.
+  `:outcome_unknown` mutation is never automatically retried. The shapes the
+  outbox treats as unknown live in `LemonChannels.DeliveryError.outcome_unknown?/1`.
+  SMTP reports a lost connection once DATA was issued, and the WhatsApp bridge
+  reports an exception thrown by its send call, as unknown.
 
   Retries are bounded by `max_attempts` (default 3 retries), one budget shared
   by all retryable failures, with exponential backoff. When the budget is spent
@@ -246,7 +249,7 @@ defmodule LemonChannels.Outbox do
     if retryable_reason?(reason) and entry.attempts < max_attempts() do
       {entry, delay_ms} = schedule_retry(entry, reason)
 
-      if unknown_outcome?(reason) do
+      if LemonChannels.DeliveryError.outcome_unknown?(reason) do
         Logger.warning(
           "Retrying delivery after unknown outcome (at-least-once; a duplicate is possible): " <>
             "attempt=#{entry.attempts}/#{max_attempts()} reason=#{inspect(reason, limit: 50)} " <>
@@ -762,22 +765,7 @@ defmodule LemonChannels.Outbox do
   defp retryable_reason?({:failed_connect, _reason}), do: true
   defp retryable_reason?(:econnrefused), do: true
   defp retryable_reason?(:nxdomain), do: true
-  defp retryable_reason?(reason), do: unknown_outcome?(reason)
-
-  # The platform may already have accepted the write; at-least-once policy
-  # retries these with the same idempotency key. The Discord `*_crashed`
-  # wrappers are rescued adapter exceptions and `{:smtp, :timeout}` is the
-  # email adapter's deadline, which can expire while awaiting acknowledgement
-  # after the message was sent. Definite SMTP rejections and local validation
-  # failures are not listed here and stay terminal.
-  defp unknown_outcome?(:outcome_unknown), do: true
-  defp unknown_outcome?({:outcome_unknown, _detail}), do: true
-  defp unknown_outcome?({:worker_exit, _reason}), do: true
-  defp unknown_outcome?({:discord_send_crashed, _error}), do: true
-  defp unknown_outcome?({:discord_file_crashed, _error}), do: true
-  defp unknown_outcome?({:discord_edit_crashed, _error}), do: true
-  defp unknown_outcome?({:smtp, :timeout}), do: true
-  defp unknown_outcome?(_reason), do: false
+  defp retryable_reason?(reason), do: LemonChannels.DeliveryError.outcome_unknown?(reason)
 
   defp queue_full?(state, incoming_count)
        when is_integer(incoming_count) and incoming_count > 0 do

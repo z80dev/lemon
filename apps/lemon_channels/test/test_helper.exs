@@ -46,7 +46,10 @@ _ = Application.stop(:lemon_gateway)
 {:ok, _} = Application.ensure_all_started(:lemon_gateway)
 {:ok, _} = Application.ensure_all_started(:lemon_channels)
 
-ExUnit.start(capture_log: true)
+# Tests that shell out to Node are excluded (not skipped) on hosts without it.
+exclude_tags = if System.find_executable("node"), do: [], else: [:node]
+
+ExUnit.start(capture_log: true, exclude: exclude_tags)
 
 # An umbrella `mix test` runs every later app suite in this VM, and this
 # callback runs after each of them too: restart everything it stops, or the

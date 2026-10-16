@@ -15,9 +15,11 @@ defmodule LemonChannels.Adapters.Email.OutboundTest do
   """
   use ExUnit.Case, async: false
 
+  import LemonChannels.FakeSmtpRelay
+
   alias LemonChannels.Adapters.Email
   alias LemonChannels.Adapters.Email.Outbound
-  alias LemonChannels.OutboundPayload
+  alias LemonChannels.{DeliveryError, OutboundPayload}
 
   setup do
     previous = Application.get_env(:lemon_channels, Email)
@@ -29,6 +31,10 @@ defmodule LemonChannels.Adapters.Email.OutboundTest do
   defp restore(previous), do: Application.put_env(:lemon_channels, Email, previous)
 
   defp configure(opts), do: Application.put_env(:lemon_channels, Email, opts)
+
+  defp configure_relay(port) do
+    configure(from: "agent@lemon.test", smtp_relay: "127.0.0.1", smtp_port: port)
+  end
 
   defp payload(overrides \\ []) do
     [
@@ -360,9 +366,180 @@ defmodule LemonChannels.Adapters.Email.OutboundTest do
 
       assert {:error, {:smtp, :timeout}} = result
       # Comfortably under gen_smtp's 20-minute read timeout: the deadline fired.
-      assert elapsed_us < 5_000_000, "deliver/1 took #{div(elapsed_us, 1000)}ms — deadline did not fire"
+      assert elapsed_us < 5_000_000,
+             "deliver/1 took #{div(elapsed_us, 1000)}ms — deadline did not fire"
 
       await(server)
+    end
+  end
+
+  describe "deliver/1 — outcome of a failure around DATA" do
+    # gen_smtp reports a connection lost during MAIL FROM, RCPT TO and DATA as
+    # the same `:network_failure`, so `deliver/1` notes whether DATA was issued.
+    # Only then may the relay already hold the message.
+
+    test "a connection lost once DATA is issued is an unknown outcome" do
+      test = self()
+
+      {port, server} =
+        smtp_server(fn socket ->
+          # The relay takes the whole message, then drops the connection before
+          # it can acknowledge it.
+          send(test, {:relay_body, receive_message(socket)})
+        end)
+
+      configure_relay(port)
+
+      assert {:error, reason} = Outbound.deliver(payload())
+
+      assert {:outcome_unknown,
+              {:smtp, {:error, :send, {:network_failure, _host, {:error, :closed}}}}} = reason
+
+      assert DeliveryError.outcome_unknown?(reason)
+      assert_receive {:relay_body, body}, 1_000
+      assert body =~ "here you go"
+      await(server)
+    end
+
+    test "a connection lost before DATA is a definite, terminal failure" do
+      {port, server} =
+        smtp_server(fn socket ->
+          tcp_send(socket, "220 fake ESMTP")
+          _ehlo = tcp_recv(socket)
+          tcp_send(socket, "250 fake")
+          _mail_from = tcp_recv(socket)
+          tcp_send(socket, "250 ok")
+          # RCPT TO arrives and the relay hangs up without answering.
+          _rcpt_to = tcp_recv(socket)
+        end)
+
+      configure_relay(port)
+
+      assert {:error,
+              {:smtp, {:error, :send, {:network_failure, _host, {:error, :closed}}}} = reason} =
+               Outbound.deliver(payload())
+
+      refute DeliveryError.outcome_unknown?(reason)
+      await(server)
+    end
+
+    test "a rejection after DATA is a definite, terminal failure" do
+      for {reply, failure} <- [
+            {"554 5.7.1 message rejected", :permanent_failure},
+            {"451 4.3.0 try again later", :temporary_failure}
+          ] do
+        {port, server} =
+          smtp_server(fn socket ->
+            _body = receive_message(socket)
+            tcp_send(socket, reply)
+          end)
+
+        configure_relay(port)
+
+        assert {:error, {:smtp, {:error, :send, {^failure, _host, _message}}} = reason} =
+                 Outbound.deliver(payload())
+
+        refute DeliveryError.outcome_unknown?(reason)
+        await(server)
+      end
+    end
+
+    test "a failure before the message is sent stays terminal" do
+      configure_relay(closed_port())
+
+      assert {:error, reason} = Outbound.deliver(payload())
+      refute DeliveryError.outcome_unknown?(reason)
+    end
+  end
+
+  describe "outbox delivery of a message lost after DATA" do
+    alias LemonChannels.Outbox
+    alias LemonChannels.Outbox.{Dedupe, RateLimiter}
+    alias LemonChannels.Registry
+
+    setup do
+      for module <- [Registry, RateLimiter, Dedupe, Outbox] do
+        if is_nil(Process.whereis(module)), do: start_supervised!(module)
+      end
+
+      :ok = Registry.register(Email)
+
+      on_exit(fn ->
+        if Process.whereis(Registry), do: Registry.unregister(Email.id())
+      end)
+    end
+
+    @tag capture_log: true
+    test "is redelivered with the same payload and confirmed once the relay accepts it" do
+      test = self()
+
+      {port, server} =
+        smtp_server([
+          fn socket -> send(test, {:relay_body, 1, receive_message(socket)}) end,
+          fn socket -> send(test, {:relay_body, 2, accept_message(socket)}) end
+        ])
+
+      configure_relay(port)
+      ref = make_ref()
+      key = "smtp-after-data-#{System.unique_integer([:positive])}"
+
+      payload =
+        payload(
+          idempotency_key: key,
+          notify_pid: self(),
+          notify_ref: ref,
+          meta: %{notify_tag: :delivery_result}
+        )
+
+      assert {:ok, _} = Outbox.enqueue(payload)
+
+      assert_receive {:relay_body, 1, first}, 2_000
+      refute_receive {:delivery_result, ^ref, _}, 200
+
+      # The retry backs off for a second; the unknown outcome is not reported.
+      assert_receive {:relay_body, 2, second}, 4_000
+      assert first =~ "here you go"
+      assert second =~ "here you go"
+      assert_receive {:delivery_result, ^ref, {:ok, message_id}}, 2_000
+      assert is_binary(message_id)
+      assert Dedupe.check(Email.id(), key) == :duplicate
+      await(server)
+    end
+
+    @tag capture_log: true
+    test "a rejection after DATA is reported terminal and never redelivered" do
+      test = self()
+
+      {port, server} =
+        smtp_server([
+          fn socket ->
+            send(test, {:relay_body, 1, receive_message(socket)})
+            tcp_send(socket, "554 5.7.1 message rejected")
+          end,
+          fn socket -> send(test, {:relay_body, 2, accept_message(socket)}) end
+        ])
+
+      configure_relay(port)
+      ref = make_ref()
+
+      payload =
+        payload(
+          idempotency_key: "smtp-rejected-#{System.unique_integer([:positive])}",
+          notify_pid: self(),
+          notify_ref: ref,
+          meta: %{notify_tag: :delivery_result}
+        )
+
+      assert {:ok, _} = Outbox.enqueue(payload)
+      assert_receive {:relay_body, 1, _body}, 2_000
+
+      assert_receive {:delivery_result, ^ref,
+                      {:error, {:smtp, {:error, :send, {:permanent_failure, _host, _message}}}}},
+                     500
+
+      # The shortest retry backoff is one second.
+      refute_receive {:relay_body, 2, _}, 1_300
+      Task.shutdown(server, :brutal_kill)
     end
   end
 
@@ -481,68 +658,5 @@ defmodule LemonChannels.Adapters.Email.OutboundTest do
       assert envelope.in_reply_to == "later@example.com"
       assert "later@example.com" in envelope.references
     end
-  end
-
-  # ---------------------------------------------------------------------------
-  # Throwaway SMTP relay
-  # ---------------------------------------------------------------------------
-
-  # A loopback TCP listener on an ephemeral port whose accepted connection is
-  # handled by `fun`, letting a test script exactly the failing dialogue a real
-  # relay would speak. Returns the port and the server task to await.
-  defp smtp_server(fun) when is_function(fun, 1) do
-    {:ok, listen} =
-      :gen_tcp.listen(0,
-        mode: :binary,
-        packet: :line,
-        active: false,
-        reuseaddr: true,
-        ip: {127, 0, 0, 1}
-      )
-
-    {:ok, port} = :inet.port(listen)
-
-    server =
-      Task.async(fn ->
-        try do
-          case :gen_tcp.accept(listen, 5_000) do
-            {:ok, socket} ->
-              try do
-                fun.(socket)
-              after
-                :gen_tcp.close(socket)
-              end
-
-            {:error, _} ->
-              :ok
-          end
-        after
-          :gen_tcp.close(listen)
-        end
-      end)
-
-    {port, server}
-  end
-
-  defp tcp_send(socket, line), do: :gen_tcp.send(socket, line <> "\r\n")
-
-  defp tcp_recv(socket) do
-    case :gen_tcp.recv(socket, 0, 5_000) do
-      {:ok, data} -> data
-      {:error, _} = error -> error
-    end
-  end
-
-  # Wait for the relay task so a failed dialogue surfaces here rather than as a
-  # stray log line after the test has moved on.
-  defp await(server), do: Task.await(server, 10_000)
-
-  # A loopback port with nothing listening: bind one, read its number, release
-  # it. A connect there gets ECONNREFUSED rather than hanging.
-  defp closed_port do
-    {:ok, socket} = :gen_tcp.listen(0, ip: {127, 0, 0, 1}, reuseaddr: true)
-    {:ok, port} = :inet.port(socket)
-    :gen_tcp.close(socket)
-    port
   end
 end

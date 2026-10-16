@@ -661,14 +661,25 @@ defmodule LemonChannels.Adapters.WhatsApp.Transport do
 
   defp handle_command_result(_event, state), do: state
 
-  defp handle_command_error(%{"id" => correlation_id, "error" => error_msg} = _event, state) do
+  # The bridge flags a send exception thrown after the message reached Baileys
+  # (`outcome_unknown: true`): the platform may already have relayed it, so it
+  # is reported as an unknown outcome and the outbox redelivers it
+  # at-least-once. An unflagged error is definite (not connected, unreadable
+  # media file) and stays a plain, terminal error.
+  defp handle_command_error(%{"id" => correlation_id, "error" => error_msg} = event, state) do
     case Map.pop(state.pending_commands, correlation_id) do
       {nil, _} ->
         state
 
       {{from, timer_ref}, pending_commands} ->
         Process.cancel_timer(timer_ref)
-        GenServer.reply(from, {:error, error_msg})
+
+        reply =
+          if event["outcome_unknown"] == true,
+            do: {:error, {:outcome_unknown, error_msg}},
+            else: {:error, error_msg}
+
+        GenServer.reply(from, reply)
         %{state | pending_commands: pending_commands}
     end
   end

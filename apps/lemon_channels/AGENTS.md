@@ -60,8 +60,14 @@ and script notifications.
   `{:outcome_unknown, _}` and never retry them internally; the outbox owns that
   retry. Unrecognized errors and definite rejections stay terminal, and the
   exception covers no other mutation (inbound submission, enqueue timeouts).
-  SMTP network failures after DATA and WhatsApp bridge send exceptions are
-  still terminal (tracked in F-0059).
+  `DeliveryError.outcome_unknown?/1` is the one classifier of what counts as
+  unknown; `outbox_adapter_contract_test.exs` asserts every built-in adapter
+  normalizes its ambiguous sends to it, so a new adapter extends that test.
+  Return unknown only where the message may already have been accepted: an SMTP
+  connection lost once DATA was issued and a WhatsApp bridge `sendMessage`
+  exception (flagged `outcome_unknown` by the bridge) are unknown; SMTP
+  rejections, a connection lost before DATA, and a WhatsApp failure before the
+  send call (not connected, unreadable media) stay terminal.
   Honor rate-limit hints.
 - Telegram markdown entity offsets are UTF-16, not bytes/graphemes. Truncation
   must preserve native resume lines and table column boundaries.
