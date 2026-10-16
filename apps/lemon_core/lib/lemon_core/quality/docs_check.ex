@@ -8,6 +8,12 @@ defmodule LemonCore.Quality.DocsCheck do
   entry (synthetic test repositories) fall back to a filesystem scan.
   """
 
+  # Inline link: `[text](destination "optional title")`. The destination is
+  # either `<...>` or a run without whitespace; the optional title (`"..."`,
+  # `'...'` or `(...)`) is matched separately so it never becomes part of the
+  # destination.
+  @link_regex ~r/\[[^\]]+\]\(\s*(?<destination>(?:<[^>]*>|[^\s)]+))(?:\s+(?<title>"[^"]*"|'[^']*'|\([^)]*\)))?\s*\)/
+
   @type issue :: %{
           code: atom(),
           message: String.t(),
@@ -116,8 +122,8 @@ defmodule LemonCore.Quality.DocsCheck do
 
   @spec broken_links(String.t(), String.t(), String.t()) :: [String.t()]
   defp broken_links(content, root, file_path) do
-    ~r/\[[^\]]+\]\(([^)]+)\)/
-    |> Regex.scan(content, capture: :all_but_first)
+    @link_regex
+    |> Regex.scan(content, capture: [:destination])
     |> List.flatten()
     |> Enum.map(&String.trim/1)
     |> Enum.filter(&local_link?/1)
