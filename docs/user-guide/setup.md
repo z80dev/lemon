@@ -1,28 +1,34 @@
 # Set up Lemon
 
-For a prebuilt Lemon install, the shortest path is one command followed by the
-interactive setup handoff:
+Setup connects Lemon to a model provider and records a default model. For a
+prebuilt install it runs automatically at the end of the installer:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/z80dev/lemon/main/install.sh | sh
 ```
 
 The installer verifies and installs the release, then starts `lemon setup` for
-`full` and `min` profiles when it can read `/dev/tty`. Complete the provider,
+the `full` and `min` profiles when it can read `/dev/tty`. Complete the provider,
 authentication, and default-model prompts, then accept **Open Lemon now? [Y/n]**
 to start the TUI immediately. To open it later:
 
 ```bash
-$HOME/.lemon/bin/lemon
+lemon
 ```
 
-The installer adds `~/.lemon/bin` to PATH for new shells; then use `lemon`.
-That is your first chat. The TUI starts the daemon when needed. To use a local
-browser instead, run `lemon web`; it starts the full runtime when needed,
-checks the same readiness state, and opens the page only after Web health is
-confirmed. Full installer
-behavior, including platform support and updates, is in the
-[Install guide](../install.md).
+The installer adds `~/.lemon/bin` to PATH for new shells; until you open one,
+use `$HOME/.lemon/bin/lemon`. That is your first chat. The TUI starts the daemon
+when needed. To use a local browser instead, run `lemon web`; it starts the full
+runtime when needed, checks the same readiness state, and opens the page only
+after Web health is confirmed. Installer flags, platform support, containers and
+source installs are in the [Install guide](../install.md); updating is in
+[Update, roll back, and uninstall](updates.md).
+
+Setup writes to `~/.lemon`: `config.toml` for configuration, the encrypted
+secrets store for credentials (its master key is kept in the macOS Keychain
+entry **Lemon Secrets** or, when file-backed, `~/.lemon/secrets_master_key`),
+and the durable store under `~/.lemon/store`. See [Configuration](../config.md)
+for the file format.
 
 ## What setup does—and does not do
 
@@ -349,12 +355,9 @@ are unchanged.
 ## Source development
 
 A source checkout is for development, unsupported platforms, and release work.
-Only this path needs the development toolchain:
-
-- Elixir 1.19.5+
-- Erlang/OTP 28.5+
-- Bun 1.3.14+ for TUI client development
-- Node.js 24 LTS+ for web client development
+Only this path needs the development toolchain (Elixir 1.19.5+, Erlang/OTP
+28.5+, Bun 1.3.14+, and Node.js 24 LTS+ for the web client); see
+[Install: source development](../install.md#source-development).
 
 ```bash
 git clone https://github.com/z80dev/lemon.git
@@ -364,11 +367,11 @@ mix deps.get
 mix compile
 ./bin/lemon setup
 ./bin/lemon doctor
-./bin/lemon-tui
+./bin/lemon
 ```
 
-Use the source wrapper for Lemon commands, rather than installed `lemon`
-commands:
+Use the source wrapper in place of installed `lemon` for every command in this
+guide:
 
 ```bash
 ./bin/lemon model --provider anthropic
@@ -388,14 +391,21 @@ For non-interactive source configuration, use the same wrapper forms:
   --model claude-sonnet-4-20250514 --set-default
 ```
 
-`./bin/lemon-tui` is the source-development TUI entry point once the source
-runtime is configured. A fresh launcher-owned runtime receives a generated,
-process-scoped operator token and is stopped when the TUI exits. Attaching to
-an existing or persistent runtime requires exporting its matching
-`LEMON_CONTROL_PLANE_OPERATOR_TOKEN`; the launcher does not read or persist the
-daemon's credential.
+`./bin/lemon-tui` is the development TUI entry point. A runtime it starts itself
+receives a generated, process-scoped operator token and is stopped when the TUI
+exits, even if you supplied a token. When a runtime is already healthy, the
+launcher loads the private, port-scoped credential of a `./bin/lemon daemon`
+runtime from `~/.lemon/run/control-plane-<port>.token`; for a runtime started
+another way, export its `LEMON_CONTROL_PLANE_OPERATOR_TOKEN` before attaching.
+Start `./bin/lemon daemon` separately when the runtime should outlive the TUI.
 
-Supplying a token does not make a runtime started by `./bin/lemon-tui`
-persistent: the launcher still stops it when the client exits. Start
-`./bin/lemon daemon` separately, then attach with the same token, when the
-runtime should outlive the TUI.
+## Troubleshooting setup
+
+| Symptom | What to do |
+| --- | --- |
+| Setup exits before prompting | It needs an interactive terminal. In scripts, use `lemon setup --non-interactive` and then `lemon model --non-interactive ...` ([headless configuration](#automated-or-headless-configuration)). |
+| Provider verification failed | Setup stays incomplete. Fix the credential or model, rerun `lemon setup provider`, or defer the live check with `--skip-verify` when offline. |
+| Not sure what is configured | `lemon config validate`, `lemon secrets status`, `lemon providers status`. |
+| Revoked key or connectivity problem | `lemon doctor --live --verbose` makes bounded, non-generating requests. |
+| First `lemon` launch asks for setup again | An interrupted provider setup is offered again on the next interactive launch; finish it with `lemon setup`. |
+| Start over | Rerun `lemon setup`. To change provider or model only, use `lemon model` or `lemon setup provider`. |
