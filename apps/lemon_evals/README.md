@@ -100,6 +100,95 @@ No authorized live paired evidence is recorded here: keep current defaults and
 keep the coding profile opt-in; any promotion remains pending an approved bounded
 run and sanitized report. Schema-size diagnostics alone do not justify promotion.
 
+### Resumable multi-provider disclosure campaign (#107)
+
+`--campaign` runs the repeated paired disclosure comparison across providers as
+one resumable command: every provider x task x variant x repetition trial runs
+sequentially through the same production client and external verifiers as
+`--paired`, each in a fresh runtime, home, config, store, operator token and
+fixture. Variants are `baseline` (legacy disclosure) and the opt-in `coding`
+profile; the campaign never changes defaults. Without `--live` it writes only
+`plan.json` (the schedule, experiment identity and pricing basis) and makes no
+model call. Unlike `--paired`, it has no plan-digest/spend-approval gate: `--live`
+is the operator's explicit authorization, so use provider accounts you are willing
+to spend on. Only `OPENAI_CODEX_API_KEY` (for `openai-codex`) and `ZAI_API_KEY`
+(for `zai`) are forwarded, each only to its own provider's trials; no other
+ambient credential or Lemon setting reaches a trial.
+
+The 144-trial campaign (12 tasks x 2 variants x 3 paired repeats x 2 providers,
+660-second per-trial timeout) is this single command, run from the umbrella root:
+
+```bash
+# Operator-provided credentials and paths (outside the checkout); not recorded here.
+export OPENAI_CODEX_API_KEY=...   # ChatGPT/Codex token for openai-codex
+export ZAI_API_KEY=...            # for zai
+mix lemon.eval.coding --campaign --live --resume \
+  --providers openai-codex:gpt-6.1-sol,zai:glm-5.3 \
+  --variants baseline,coding --repetitions 3 --seed 107 --timeout 660 \
+  --control-plane-port 4290 \
+  --profile-python /OPERATOR/PATH/profile-venv/bin/python \
+  --output-dir /OPERATOR/PATH/disclosure-campaign
+```
+
+Omit `--live` first to inspect the plan. Options: `--providers` (default as
+above), `--variants` (default `baseline,coding`), `--repetitions` (campaign
+default 3), `--seed` (default 107), `--timeout` (per trial, default 660, covering
+runtime boot, fixture work, the client and verification), `--control-plane-port`
+(the isolated runtime's fixed port; default is a free port per trial; the
+campaign aborts, recording nothing, if it is already in use), `--output-dir`
+(required; must be outside the source checkout), `--tasks` (subset, for a smoke
+run), `--config` (optional base TOML that omits `runtime.tools.disclosure`; no
+secrets), `--profile-python` (Python 3.11+ with `tiktoken`; default is the runner's
+interpreter). A live run requires a compiled development build of this exact
+checkout (`mix compile`) and the source launcher `bin/lemon`. `--paired`,
+`--compare-omp`, `--model`, `--output`, `--failure-dir`, `--run-timeout`, `--plan`
+and `--approve-plan-digest` cannot be combined with `--campaign`.
+
+Stable IDs are `PROVIDER:TASK:pair:NNNN` for a pair and `PAIR:VARIANT` for a trial;
+each provider has its own seeded schedule whose within-pair order alternates
+(AB/BA) for counterbalancing. `--output-dir` holds `manifest.json` (experiment
+identity), an append-only `trials.jsonl` (one sanitized, fsynced row per finished
+trial), and `report.json` / `report.md`, rewritten after every trial. Interrupt at
+any time (Ctrl-C) and re-run the **same command**: `--resume` skips recorded
+trials, reruns only the interrupted one, and refuses a directory created by a
+different revision, working-tree digest, option set or fixture. A directory that
+already holds a campaign is refused without `--resume`. Failed, timed-out and
+unverified trials are final recorded outcomes and are not retried; start a new
+directory to rerun them. Exit status is 0 when every scheduled trial is recorded
+(trial failures are data, not command failure), 130 on interruption, and nonzero
+when incomplete or misconfigured.
+
+The report lists, per provider and variant, the verified success rate (the
+independent verifier and observed disclosure profile must pass), timeouts, mean
+wall time, token usage (`sum` is null unless every attempted trial reported the
+counter, with `observed_sum` and counts alongside), and the equivalent-spend
+column. It also gives candidate-minus-baseline paired verified-success and
+wall-time differences per provider (task-cluster bootstrap intervals), the exact
+revision, source and compiled-build digests, and sanitized commands. It contains
+no prompts, model output, workspace paths or credentials.
+
+**Equivalent spend is a list-price equivalent, not billed.** Per trial it is
+`(uncached input x input + cached input x cache read + cache write x cache write
++ output x output price) / 1,000,000`, using the public list price from the model
+catalog: Codex trials use the OpenAI API list price for the same model
+(`apps/lemon_ai/priv/models/open_ai.json`), GLM trials use
+`apps/lemon_ai/priv/models/zai.json`. The report records each provider's catalog
+file, its SHA-256, model, per-million prices and formula under
+`equivalent_spend_basis`. Failed and timed-out trials are included; a trial missing
+any of the four counters is unpriced (null, never zero), which makes the variant
+total and cost per verified success null with status `incomplete_missing_counters`
+(the partial `observed_total_usd` is kept). Cost per verified success is undefined
+(`undefined_zero_successes`) when a variant has no verified success. Subscription
+plans, discounts, provider caching and long-context pricing tiers are not
+modeled. Runtime-reported `costUsd` is kept separately as `runtime_reported_cost`.
+
+The offline regression tests (local fixtures only, no provider, credential or
+network access) run with:
+
+```bash
+python3 -m unittest discover -s apps/lemon_evals/priv -p 'test_coding_benchmark_*.py' -v
+```
+
 ### Comparing omp on identical tasks
 
 ```bash

@@ -72,6 +72,22 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   bound (`session ≥$0.42`), and a session with no known cost shows
   `session cost unknown` instead of $0.00. The daemon's `sessions.context`
   ledger reports a missing cost as zero, so a resumed total is never exact.
+- `mix lemon.eval.coding --campaign`: a resumable, offline-tested multi-provider
+  run of repeated paired disclosure trials (baseline vs the opt-in coding profile)
+  for the #107 evidence campaign. One documented command takes the providers,
+  variants, repeats, per-trial timeout, isolated control-plane port and output
+  directory; trials get stable provider/task/variant/pair/trial IDs,
+  counterbalanced order, and a fresh runtime, home, store and fixture each, with
+  only the named provider's credential forwarded. Failed and timed-out trials are
+  retained, missing counters stay null, and `--resume` continues after
+  interruption without re-running recorded trials. The sanitized report adds a
+  computed equivalent-spend column (recorded tokens x public catalog list price,
+  with the pricing basis recorded and labelled "list-price equivalent, not
+  billed"; Codex uses the OpenAI API list price for the same model, GLM the Z.AI
+  catalog), cost per verified success (undefined at zero successes), paired
+  wall-time differences, exact revision and sanitized commands. Without `--live`
+  it only writes a plan; tests use local fixtures and make no paid calls.
+
 - Unified configurable browser provider selection across browser tools, LCU Chrome
   control, doctor and control-plane browser status. Auto selection prefers ready
   LCU, then an authenticated relay, then local Chrome; explicit providers fail

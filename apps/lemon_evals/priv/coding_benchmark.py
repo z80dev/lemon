@@ -12,6 +12,7 @@ import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor
 from coding_benchmark_tasks import additional_tasks
+from coding_benchmark_campaign import CampaignError, DEFAULT_PROVIDERS, DEFAULT_VARIANTS, run_campaign
 from coding_benchmark_paired import number, run_paired
 
 
@@ -184,7 +185,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
     parser.add_argument('--lemon', required=True)
     parser.add_argument('--model', default='openai-codex:gpt-6.1-sol')
-    parser.add_argument('--output', required=True)
+    parser.add_argument('--output')
     parser.add_argument('--timeout', type=int, default=660)
     parser.add_argument('--failure-dir', help='Opt-in private failure bundles; may contain raw model output')
     parser.add_argument('--compare-omp', action='store_true')
@@ -199,8 +200,17 @@ def main():
     parser.add_argument('--plan', help='Operator-approved bounded JSON plan')
     parser.add_argument('--approve-plan-digest', help='Explicit SHA256 approval of exact canonical plan')
     parser.add_argument('--live', action='store_true', help='Authorize live calls only with exact approved plan')
-    parser.add_argument('--profile-python', default=sys.executable, help='Python 3.11+ environment with tiktoken installed')
+    parser.add_argument('--profile-python', help='Python 3.11+ environment with tiktoken installed; default: this interpreter')
+    parser.add_argument('--campaign', action='store_true',
+                        help='Resumable multi-provider paired campaign; plan-only unless --live')
+    parser.add_argument('--providers', default=DEFAULT_PROVIDERS, help='Comma-separated provider:model (openai-codex, zai)')
+    parser.add_argument('--variants', default=DEFAULT_VARIANTS, help='Comma-separated disclosure variants')
+    parser.add_argument('--control-plane-port', type=int, help='Fixed isolated runtime control-plane port (default: a free port per trial)')
+    parser.add_argument('--output-dir', help='Campaign directory for manifest, per-trial records and sanitized report')
+    parser.add_argument('--resume', action='store_true', help='Continue (or start) a campaign in --output-dir')
     args = parser.parse_args()
+    args.profile_python_explicit = args.profile_python is not None
+    args.profile_python = args.profile_python or sys.executable
     lemon = str(Path(args.lemon).resolve())
     agents = [('lemon', lemon, args.model)]
     if args.compare_omp:
@@ -212,6 +222,21 @@ def main():
         names = set(args.tasks.split(','))
         if not names <= {case['name'] for case in cases}: parser.error('unknown task selection')
         cases = [case for case in cases if case['name'] in names]
+    campaign_flags = {'--providers', '--variants', '--control-plane-port', '--output-dir', '--resume'}
+    given = {argument.split('=', 1)[0] for argument in sys.argv[1:]}
+    if args.campaign:
+        if args.paired or args.compare_omp or args.plan or args.approve_plan_digest or args.output or given & {'--run-timeout', '--model', '--failure-dir'}:
+            parser.error('--campaign cannot be combined with --paired, --compare-omp, --plan, --approve-plan-digest, --output, --run-timeout, --failure-dir or --model (use --providers)')
+        if '--repetitions' not in given:
+            args.repetitions = 3
+        try:
+            return run_campaign(args, cases, run_case)
+        except (CampaignError, ValueError, OSError, subprocess.SubprocessError) as error:
+            parser.error(f'Campaign configuration failed: {error}')
+    if given & campaign_flags:
+        parser.error('campaign options require --campaign')
+    if not args.output:
+        parser.error('--output is required')
     if args.paired:
         try:
             return run_paired(args, cases, run_case)
