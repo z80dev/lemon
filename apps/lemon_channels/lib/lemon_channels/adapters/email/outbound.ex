@@ -29,6 +29,16 @@ defmodule LemonChannels.Adapters.Email.Outbound do
     * The "Attachment references" list appended to the body from the run's
       output files. In this pipeline a file is its own `:file` payload and is
       attached to its own message, so there is nothing to reference.
+
+  ## Delivery outcome
+
+  A rejection (4xx/5xx reply, authentication failure) and a failure before the
+  message was sent (connection refused, a connection lost before DATA) are
+  definite and terminal. A connection lost once DATA was issued, and the
+  `smtp_timeout` deadline, may follow the relay accepting the message, so they
+  are unknown outcomes (`{:error, {:outcome_unknown, _}}` and
+  `{:error, {:smtp, :timeout}}`) that the outbox redelivers at-least-once; see
+  `LemonChannels.DeliveryError.outcome_unknown?/1`.
   """
 
   require Logger
@@ -322,11 +332,23 @@ defmodule LemonChannels.Adapters.Email.Outbound do
       # exchange instead, and is killed if it overruns.
       task =
         Task.async(fn ->
-          :gen_smtp_client.send_blocking({envelope.from, [envelope.to], message}, smtp_opts)
+          # gen_smtp calls a function body only after MAIL FROM and RCPT TO were
+          # accepted, immediately before it issues DATA. Noting that moment is
+          # the only way to tell a connection lost before DATA, which proves
+          # nothing was sent, from one lost once DATA was issued, where the relay
+          # may already have queued the message: gen_smtp reports both as the
+          # same `:network_failure`.
+          body = fn ->
+            Process.put(:smtp_data_issued, true)
+            message
+          end
+
+          result = :gen_smtp_client.send_blocking({envelope.from, [envelope.to], body}, smtp_opts)
+          {result, Process.get(:smtp_data_issued, false)}
         end)
 
       case Task.yield(task, deadline) || Task.shutdown(task, :brutal_kill) do
-        {:ok, result} -> interpret_receipt(result)
+        {:ok, {result, data_issued?}} -> interpret_receipt(result, data_issued?)
         {:exit, reason} -> {:error, {:smtp, {:exit, reason}}}
         nil -> {:error, {:smtp, :timeout}}
       end
@@ -334,6 +356,16 @@ defmodule LemonChannels.Adapters.Email.Outbound do
   end
 
   defp send_message(_envelope, _message), do: {:error, :invalid_message}
+
+  # A connection lost once DATA was issued may follow the relay accepting the
+  # message, so the outcome is unknown and the outbox redelivers it
+  # at-least-once. Every other failure is a definite rejection or happened before
+  # the message was sent, and stays terminal.
+  defp interpret_receipt({:error, :send, {:network_failure, _host, _reason}} = failure, true) do
+    {:error, {:outcome_unknown, {:smtp, failure}}}
+  end
+
+  defp interpret_receipt(receipt, _data_issued?), do: interpret_receipt(receipt)
 
   defp interpret_receipt(receipt) when is_binary(receipt), do: :ok
 

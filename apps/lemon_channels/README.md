@@ -459,8 +459,21 @@ end
   `{:outcome_unknown, reason}`, adapter exceptions, worker exits).
 - Unknown outcomes are retried at-least-once for the covered channels, by design: a
   duplicate message is preferred over a lost one. Intermediate unknown
-  outcomes are not reported to the notifier and a Warning is logged per retry. SMTP network failures after DATA and WhatsApp
-  bridge send exceptions are still terminal (tracked in F-0059).
+  outcomes are not reported to the notifier and a Warning is logged per retry.
+- SMTP: a connection lost once DATA was issued (the relay may already hold the
+  message) is an unknown outcome and is redelivered. gen_smtp reports a loss
+  during MAIL FROM, RCPT TO and DATA as the same network failure, so the email
+  adapter notes whether DATA was issued. Relay rejections (4xx/5xx replies,
+  authentication failures), a connection lost before DATA, connection refused
+  and the like are definite and terminal; the `smtp_timeout` deadline stays
+  unknown.
+- WhatsApp: the bridge flags an exception thrown by its `sendMessage` call
+  `outcome_unknown` and the transport returns `{:error, {:outcome_unknown, message}}`,
+  as it already does for an acknowledgement timeout or a lost transport process.
+  An error before that call (not connected, unreadable media file) is
+  unflagged, definite and terminal.
+- XMTP: a transport call that exits mid-delivery is an unknown outcome; a
+  transport that is not running is a definite failure.
 - Dedupe still suppresses re-sends of confirmed deliveries: a key is marked
   only on confirmed delivery, a repeated enqueue of a confirmed key returns
   `{:error, :duplicate}`, and a pending retry whose key was confirmed meanwhile
@@ -1024,6 +1037,8 @@ mix test apps/lemon_channels/test/lemon_channels/outbox_test.exs
 | `media_status_message_test.exs` | Telegram `/media` command recognition and redacted status formatting |
 | `capabilities_test.exs` | Includes X adapter capability lookup |
 | `port_bridge_contract_test.exs` | Shared XMTP/WhatsApp PortServer API, parser, event-tag, and reconnect contract |
+| `outbox_adapter_contract_test.exs` | Every built-in adapter's `deliver/1` against fake transports: ambiguous sends normalize to outcome-unknown, definite failures stay terminal |
+| `adapters/whatsapp/bridge_script_test.exs` | Runs `whatsapp_bridge.mjs` under Node with a fake Baileys package: send exceptions flag `outcome_unknown` |
 
 ### Mock Adapter Pattern
 

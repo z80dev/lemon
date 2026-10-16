@@ -245,6 +245,20 @@ async function handleConnect(command) {
 
 // --- Send commands ---
 
+// A send fails definitively when it never reached Baileys: the bridge is not
+// connected, or the media file could not be read. Once `sock.sendMessage` has
+// been called, an exception (a closed socket, a timed-out acknowledgement)
+// does not prove the message was not relayed, so the failure is flagged
+// `outcome_unknown` and the Elixir side redelivers it at-least-once.
+function emitSendError(command, err, outcomeUnknown) {
+  emit({
+    type: "command_error",
+    id: command.id,
+    error: err?.message || String(err),
+    outcome_unknown: outcomeUnknown,
+  });
+}
+
 async function handleSendText(command) {
   if (!state.sock || !state.connected) {
     emit({ type: "command_error", id: command.id, error: "not connected" });
@@ -258,7 +272,7 @@ async function handleSendText(command) {
     const result = await state.sock.sendMessage(command.jid, { text: command.text }, opts);
     emit({ type: "command_result", id: command.id, ok: true, data: { message_id: result?.key?.id || null } });
   } catch (err) {
-    emit({ type: "command_error", id: command.id, error: err?.message || String(err) });
+    emitSendError(command, err, true);
   }
 }
 
@@ -267,6 +281,7 @@ async function handleSendMedia(command) {
     emit({ type: "command_error", id: command.id, error: "not connected" });
     return;
   }
+  let dispatched = false;
   try {
     const buffer = fs.readFileSync(command.file_path);
     let msg = {};
@@ -277,10 +292,11 @@ async function handleSendMedia(command) {
     else if (mediaType === "audio") msg = { audio: buffer, ptt: command.ptt || false, mimetype: "audio/ogg; codecs=opus" };
     else msg = { document: buffer, fileName: path.basename(command.file_path), caption: command.caption || undefined, mimetype: command.mime_type || "application/octet-stream" };
 
+    dispatched = true;
     const result = await state.sock.sendMessage(command.jid, msg);
     emit({ type: "command_result", id: command.id, ok: true, data: { message_id: result?.key?.id || null } });
   } catch (err) {
-    emit({ type: "command_error", id: command.id, error: err?.message || String(err) });
+    emitSendError(command, err, dispatched);
   }
 }
 
@@ -298,7 +314,7 @@ async function handleSendReaction(command) {
     });
     emit({ type: "command_result", id: command.id, ok: true, data: {} });
   } catch (err) {
-    emit({ type: "command_error", id: command.id, error: err?.message || String(err) });
+    emitSendError(command, err, true);
   }
 }
 

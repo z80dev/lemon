@@ -179,6 +179,12 @@ defmodule LemonChannels.Adapters.Xmtp.Transport do
     _ -> %{}
   end
 
+  @doc """
+  Hands the payload to the transport. A call that exits (the transport crashed
+  or stopped answering mid-call) may already have forwarded the message to the
+  bridge, so it is an unknown outcome the outbox redelivers at-least-once; the
+  one exit that proves nothing was sent is a transport that was never there.
+  """
   @spec deliver(OutboundPayload.t()) :: {:ok, term()} | {:error, term()}
   def deliver(%OutboundPayload{} = payload) do
     case Process.whereis(__MODULE__) do
@@ -186,7 +192,8 @@ defmodule LemonChannels.Adapters.Xmtp.Transport do
       _ -> {:error, :xmtp_not_running}
     end
   catch
-    :exit, reason -> {:error, reason}
+    :exit, {:noproc, _} -> {:error, :xmtp_not_running}
+    :exit, reason -> {:error, {:outcome_unknown, reason}}
   end
 
   @spec normalize_inbound_message(map()) :: {:ok, InboundMessage.t()} | {:error, term()}

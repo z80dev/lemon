@@ -180,8 +180,18 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   budget instead of being dropped, and dedupe still suppresses confirmed sends.
   The root `AGENTS.md` never-retry rule for `:outcome_unknown` now exempts
   outbox message delivery only, since a duplicate message costs less than a lost
-  one. SMTP network failures after DATA and WhatsApp bridge send exceptions are
-  still terminal (tracked in F-0059).
+  one.
+
+- SMTP and WhatsApp deliveries that may already have reached the platform now
+  follow that at-least-once outbox policy. An email whose connection to the
+  relay is lost once DATA was issued, and a WhatsApp send whose bridge `sendMessage`
+  call threw, are reported as `{:outcome_unknown, _}` and redelivered with the same
+  payload and idempotency key; the bridge flags such errors `outcome_unknown`.
+  XMTP deliveries whose transport call exits are treated the same way. Rejections
+  (4xx/5xx replies, authentication failures), a connection lost before DATA and
+  failures before a message is handed to Baileys (not connected, unreadable media
+  file) stay terminal. An adapter contract test now asserts every built-in adapter
+  normalizes ambiguous send outcomes to outcome-unknown.
 
 - Usage budgets now check projected input and maximum output cost/tokens before
   sending model requests, stopping requests that would exceed run or session caps.

@@ -192,7 +192,16 @@ dedupe mechanism. Only a confirmed delivery marks the key as sent and
 suppresses re-sends. This is a deliberate exception to the repository rule that
 an `:outcome_unknown` mutation is never retried automatically, and it covers
 outbox message delivery only.
-Note: SMTP network failures after DATA and WhatsApp bridge send exceptions are still terminal (tracked in F-0059).
+
+Report an ambiguous write as outcome-unknown only where the message may already
+have been accepted. The built-in adapters draw the line like this: an SMTP
+connection lost once DATA was issued and a WhatsApp bridge `sendMessage`
+exception are unknown and are redelivered; an SMTP rejection, a connection lost
+before DATA and a WhatsApp failure before the send call stay terminal. The
+outbox decides what counts as unknown with `LemonChannels.DeliveryError.outcome_unknown?/1`,
+and `outbox_adapter_contract_test.exs` asserts that every built-in adapter
+normalizes its ambiguous sends to it against a fake transport — extend it when
+you add an adapter.
 
 One more thing worth internalising about `meta/0`: **omit a capability rather
 than inventing a value for it.** `LemonChannels.Capabilities.from_legacy/1`
