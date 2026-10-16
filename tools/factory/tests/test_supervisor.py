@@ -251,6 +251,35 @@ class SupervisorTest(unittest.TestCase):
         self.assertNotEqual(first, new)
         self.assertFalse(self.status()["runtime"]["detail"]["refreshing"])
 
+    def test_new_main_holds_admission_until_live_attempts_finish_then_refreshes(self) -> None:
+        git(self.home.repo, "remote", "set-url", "origin", str(self.home.origin))
+        self.set_policy(base_refresh_interval_s=1, implementation_slots=2)
+        first = self.start()["runtime"]["detail"]["base_sha"]
+        epoch = str(self.status()["runtime"]["epoch"])
+        for title in ("long-running worker", "waits for the new base"):
+            self.home.cli("add", title)
+        for tid in ("F-0001", "F-0002"):
+            self.home.cli("transition", tid, "queued", "--expected-revision", "1", "--reason", "triaged")
+        attempt = self.home.cli("reserve", "F-0001", "--expected-revision", "2", "--epoch", epoch)[1]["attempt"]["id"]
+        self.home.cli("attempt", attempt, "--status", "launched", "--worker-ref", attempt, "--epoch", epoch)
+        (self.home.repo / "next.txt").write_text("next\n")
+        git(self.home.repo, "add", "next.txt")
+        git(self.home.repo, "commit", "-q", "-m", "next")
+        git(self.home.repo, "push", "-q", "origin", "HEAD:main")
+        new = git(self.home.repo, "rev-parse", "HEAD")
+        # A live worker keeps the refresh pending; new work is held instead of cloning the stale base.
+        wait_for(lambda: self.status()["runtime"]["detail"].get("refreshing"), timeout=60)
+        code, refused = self.home.cli("reserve", "F-0002", "--expected-revision", "2", "--epoch", epoch, check=False)
+        self.assertEqual((code, refused["error"]), (5, "admission_refused"))
+        time.sleep(3)
+        self.assertEqual(self.status()["runtime"]["detail"]["base_sha"], first)
+        self.home.cli("attempt", attempt, "--status", "failed", "--epoch", epoch)
+        wait_for(lambda: self.status()["runtime"]["detail"]["base_sha"] == new, timeout=60)
+        self.assertFalse(self.status()["runtime"]["detail"]["refreshing"])
+        self.assertEqual(git(self.home.state_dir / "checkout", "rev-parse", "HEAD"), new)
+        code, admitted = self.home.cli("reserve", "F-0002", "--expected-revision", "2", "--epoch", epoch, check=False)
+        self.assertEqual(code, 0, admitted)
+
     def test_user_checkout_edits_are_never_touched(self) -> None:
         edit = self.home.repo / "README.md"
         edit.write_text("user's uncommitted edit\n")
