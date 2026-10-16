@@ -960,6 +960,101 @@ defmodule LemonAgent.AgentQueueTest do
     end
   end
 
+  test "acknowledged follow-up during tools is consumed before the only agent_end" do
+    observer = self()
+
+    tool = %LemonAgent.Types.AgentTool{
+      name: "gated_tool",
+      description: "Wait for the test",
+      parameters: %{"type" => "object", "properties" => %{}},
+      label: "Gate",
+      execute: fn _id, _params, _signal, _on_update ->
+        send(observer, {:tool_blocked, self()})
+
+        receive do
+          :release_tool -> :ok
+        end
+
+        %LemonAgent.Types.AgentToolResult{
+          content: [%LemonAi.Types.TextContent{type: :text, text: "Done"}]
+        }
+      end
+    }
+
+    stream_fn =
+      Mocks.mock_stream_fn([
+        Mocks.assistant_message_with_tool_calls([Mocks.tool_call("gated_tool", %{})]),
+        Mocks.assistant_message("Tools complete"),
+        Mocks.assistant_message("Question answered")
+      ])
+
+    {:ok, agent} = start_agent(tools: [tool], stream_fn: stream_fn)
+    unsubscribe = CoreAgent.subscribe(agent, self())
+    on_exit(unsubscribe)
+    :ok = CoreAgent.prompt(agent, "Initial")
+    assert_receive {:tool_blocked, worker}, 2_000
+    question = Mocks.user_message("Child question")
+    assert :ok = CoreAgent.follow_up(agent, question)
+    assert :sys.get_state(agent).follow_up_queue == [question]
+    refute_received {:agent_event, {:agent_end, _}}
+    send(worker, :release_tool)
+    assert :ok = CoreAgent.wait_for_idle(agent, timeout: 2_000)
+    assert_receive {:agent_event, {:agent_end, messages}}, 2_000
+    assert question in messages
+    assert Enum.count(messages, &match?(%{role: :assistant}, &1)) == 3
+    assert :sys.get_state(agent).follow_up_queue == []
+    refute_received {:agent_event, {:agent_end, _}}
+  end
+
+  for {failure, reason} <- [provider_error: :test_provider_failure, aborted: :aborted] do
+    test "a #{failure} follow-up cannot publish the earlier successful turn as agent_end" do
+      reason = unquote(reason)
+      observer = self()
+      first_response = Mocks.mock_stream_fn_single(Mocks.assistant_message("Initial success"))
+      calls = :counters.new(1, [:atomics])
+
+      stream_fn = fn model, context, options ->
+        :counters.add(calls, 1, 1)
+
+        case :counters.get(calls, 1) do
+          1 ->
+            first_response.(model, context, options)
+
+          2 ->
+            send(observer, {:follow_up_blocked, self()})
+
+            receive do
+              :fail_follow_up -> :ok
+            end
+
+            {:error, reason}
+        end
+      end
+
+      {:ok, agent} = start_agent(stream_fn: stream_fn, max_retries: 0)
+      unsubscribe = CoreAgent.subscribe(agent, self())
+      on_exit(unsubscribe)
+      :ok = CoreAgent.follow_up(agent, Mocks.user_message("Follow up"))
+      :ok = CoreAgent.prompt(agent, "Initial")
+      assert_receive {:follow_up_blocked, loop}, 2_000
+      pending = Mocks.user_message("Must remain queued")
+      assert :ok = CoreAgent.follow_up(agent, pending)
+      send(loop, :fail_follow_up)
+      assert :ok = CoreAgent.wait_for_idle(agent, timeout: 2_000)
+      refute_received {:agent_event, {:agent_end, _}}
+      assert :counters.get(calls, 1) == 2
+      assert :sys.get_state(agent).follow_up_queue == [pending]
+      assert :sys.get_state(agent).running_task == nil
+
+      accepted_after_failure = Mocks.user_message("Accepted while idle")
+      assert :ok = CoreAgent.follow_up(agent, accepted_after_failure)
+      assert :sys.get_state(agent).follow_up_queue == [pending, accepted_after_failure]
+      assert :sys.get_state(agent).running_task == nil
+      assert :counters.get(calls, 1) == 2
+      refute_received {:agent_event, {:agent_end, _}}
+    end
+  end
+
   # ============================================================================
   # Edge Cases and Integration
   # ============================================================================
@@ -973,7 +1068,7 @@ defmodule LemonAgent.AgentQueueTest do
       assert internal_state.follow_up_queue == []
     end
 
-    test "queue operations are cast (non-blocking)" do
+    test "steering queue operations are cast (non-blocking)" do
       {:ok, agent} = start_agent()
 
       # Casts must return even while the agent cannot process messages

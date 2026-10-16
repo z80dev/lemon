@@ -18,6 +18,7 @@ defmodule CodingAgent.ParentQuestions do
   @type request_id :: String.t()
   @type request_record :: map()
 
+  @doc "Create a request that cannot release a parent join until delivery is acknowledged."
   @spec request(map()) :: {:ok, request_record()} | {:error, term()}
   def request(attrs) when is_map(attrs) do
     ensure_table()
@@ -40,6 +41,12 @@ defmodule CodingAgent.ParentQuestions do
             error
         end
     end
+  end
+
+  @doc false
+  @spec mark_delivered(request_id()) :: :ok | {:error, :not_found}
+  def mark_delivered(request_id) when is_binary(request_id) do
+    ParentQuestionStoreServer.mark_delivered(request_id)
   end
 
   @spec answer(request_id(), String.t(), keyword()) :: :ok | {:error, term()}
@@ -150,14 +157,19 @@ defmodule CodingAgent.ParentQuestions do
     end
   end
 
-  @doc "Return the first open question raised by any of the joined task ids."
+  @doc "Return the first waiting question acknowledged by its parent for the joined task ids."
   @spec waiting_for_task_ids([String.t()]) :: {:ok, request_record()} | {:error, :not_found}
   def waiting_for_task_ids(task_ids) when is_list(task_ids) do
     task_ids = MapSet.new(task_ids)
 
+    # ask_parent publishes before notifying Session. Do not release the active
+    # join until the follow-up is in the Agent's queue, or the loop can end first.
     list(status: :waiting)
     |> Enum.find_value({:error, :not_found}, fn {_request_id, record} ->
-      if MapSet.member?(task_ids, Map.get(record, :task_id)), do: {:ok, record}, else: false
+      if not Map.get(record, :delivery_pending, true) and
+           MapSet.member?(task_ids, Map.get(record, :task_id)),
+         do: {:ok, record},
+         else: false
     end)
   end
 
@@ -209,6 +221,7 @@ defmodule CodingAgent.ParentQuestions do
         %{
           id: request_id,
           status: :waiting,
+          delivery_pending: true,
           inserted_at: now,
           updated_at: now,
           description: nil,

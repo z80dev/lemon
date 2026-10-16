@@ -161,12 +161,21 @@ Parent question submitted as request <request_id>. Waiting for answer.
 
 1. A child session calls `ask_parent`.
 2. Lemon validates that the session has a live parent context and no open parent-question request for the same child run.
-3. Lemon persists a parent-question request record.
-4. Lemon emits `:parent_question_requested` to child and parent run topics and records introspection.
-5. Lemon calls `Session.deliver_parent_question/2`. An idle parent starts a
-   turn immediately; a streaming parent receives the same visible follow-up.
-   A parent blocked in `task` or `agent` join yields with
-   `needs_parent_answer` when the matching request opens.
+3. Lemon persists a parent-question request record with delivery pending and
+   emits `:parent_question_requested` to child and parent run topics and introspection.
+4. Lemon calls `Session.deliver_parent_question/2`. An idle parent starts a
+   turn; a streaming parent receives the same visible follow-up. Agent follow-up
+   enqueueing is acknowledged synchronously.
+5. Only after that acknowledgement does `ask_parent` mark the request delivered.
+   A parent blocked in a matching `task` or `agent` join yields
+   `needs_parent_answer` only for a delivered request. While Session notification
+   handling is delayed, the join keeps the parent Agent active. The question
+   therefore enters the existing loop before its final queue poll, rather than
+   depending on Session's asynchronously updated streaming flag or starting a
+   post-terminal continuation. There is one `agent_end` after the question answer,
+   and the existing error, cancellation and recoverable context-overflow lifecycle
+   remains authoritative. Failed delivery terminalizes the request without
+   releasing a join as though enqueueing had succeeded.
 6. The child blocks waiting for an answer or timeout.
 7. The parent answers through a resolver path.
 8. Lemon persists the answer, emits `:parent_question_answered`, and wakes the waiting `ask_parent` tool execution.
@@ -202,6 +211,7 @@ Add a new store module, likely `CodingAgent.ParentQuestions`, modeled after `Cod
 %{
   id: request_id,
   status: :waiting | :answered | :timed_out | :cancelled | :error,
+  delivery_pending: boolean(), # true until the parent acknowledges enqueueing
   inserted_at: integer(),
   updated_at: integer(),
   parent_run_id: String.t(),

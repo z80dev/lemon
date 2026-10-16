@@ -14,8 +14,40 @@ defmodule CodingAgent.ExecutorTest do
 
   alias CodingAgent.Executor
   alias CodingAgent.Executor.SessionRunner, as: ExecutorSessionRunner
+  alias CodingAgent.{ParentQuestions, RunGraph, Session, TaskStore, TaskStoreServer}
+  alias CodingAgent.Tools.AskParent
+  alias LemonAgent.Types.AgentToolResult
   alias LemonCore.{ExecutionContext, NodeRegistry, ResumeToken, ToolPolicy}
   alias LemonGateway.ExecutionRequest
+
+  defmodule QuestionDeliveryBarrier do
+    def deliver_parent_question(observer, text) do
+      ref = make_ref()
+      send(observer, {:question_delivery, self(), ref, text})
+
+      receive do
+        {^ref, result} -> result
+      after
+        5_000 -> raise "parent question delivery was not acknowledged"
+      end
+    end
+  end
+
+  defmodule QuestionSummaryProvider do
+    def stream(_model, context, _options) do
+      observer = Application.fetch_env!(:coding_agent, :executor_parent_question_test_owner)
+      send(observer, {:question_compaction, self(), context})
+
+      receive do
+        {:respond, response} ->
+          {:ok, stream} = LemonAi.EventStream.start_link()
+          LemonAi.EventStream.complete(stream, response)
+          {:ok, stream}
+      after
+        5_000 -> raise "parent question compaction was not released"
+      end
+    end
+  end
 
   @tag :tmp_dir
   test "transient instrumentation preserves native execution and existing stream options", %{
@@ -177,6 +209,178 @@ defmodule CodingAgent.ExecutorTest do
   end
 
   describe "start_run/3 direct session runner" do
+    @tag :tmp_dir
+    @tag :parent_question_regression
+    test "a suspended question delivery keeps the real task join active until enqueue acknowledgement",
+         %{tmp_dir: tmp_dir} do
+      run = parent_question_run(tmp_dir)
+      assert_question_run_active(run)
+      answer = "Use the second option for the child question."
+      answer_question_child(run, answer)
+      send(run.provider, {:respond, assistant_message(answer)})
+
+      assert {:engine_event, run_ref, %{__event__: :completed, ok: true, answer: ^answer}} =
+               List.last(collect_until_completed(run.run_ref))
+
+      assert run_ref == run.run_ref
+      session_id = run.session_id
+      assert_receive {:session_event, ^session_id, {:agent_end, messages}}, 5_000
+      assert List.last(messages) |> LemonAi.get_text() == answer
+
+      assert Enum.any?(messages, fn
+               %AssistantMessage{} = message -> LemonAi.get_text(message) == run.join_answer
+               _ -> false
+             end)
+
+      assert_question_run_stopped(run)
+      refute_receive {:session_event, ^session_id, {:agent_end, _}}, 0
+      refute_receive {:engine_event, ^run_ref, %{__event__: :completed}}, 0
+    end
+
+    @tag :tmp_dir
+    @tag :parent_question_regression
+    test "an in-loop question error cannot complete the executor with the earlier join answer", %{
+      tmp_dir: tmp_dir
+    } do
+      run = parent_question_run(tmp_dir)
+      assert_question_run_active(run)
+      answer_question_child(run, "The parent provider will fail.")
+      error = "question provider failed"
+
+      send(
+        run.provider,
+        {:respond, %{assistant_message([]) | stop_reason: :error, error_message: error}}
+      )
+
+      assert {:engine_event, run_ref, %{__event__: :completed, ok: false, error: failure}} =
+               List.last(collect_until_completed(run.run_ref))
+
+      assert run_ref == run.run_ref
+      assert failure =~ error
+      session_id = run.session_id
+
+      assert_receive {:session_event, ^session_id, {:error, {:assistant_error, ^error}, _}},
+                     5_000
+
+      assert_question_run_stopped(run)
+      refute_receive {:session_event, ^session_id, {:agent_end, _}}, 0
+      refute_receive {:engine_event, ^run_ref, %{__event__: :completed}}, 0
+    end
+
+    @tag :tmp_dir
+    @tag :parent_question_regression
+    test "an in-loop question abort cannot leak a successful executor terminal event", %{
+      tmp_dir: tmp_dir
+    } do
+      run = parent_question_run(tmp_dir)
+      assert_question_run_active(run)
+      answer_question_child(run, "The parent provider will abort.")
+      send(run.provider, {:respond, %{assistant_message([]) | stop_reason: :aborted}})
+
+      assert {:engine_event, run_ref, %{__event__: :completed, ok: false, error: failure}} =
+               List.last(collect_until_completed(run.run_ref))
+
+      assert run_ref == run.run_ref
+      assert failure =~ "Cancelled"
+      assert_question_run_stopped(run)
+      session_id = run.session_id
+      refute_receive {:session_event, ^session_id, {:agent_end, _}}, 0
+      refute_receive {:engine_event, ^run_ref, %{__event__: :completed}}, 0
+    end
+
+    @tag :tmp_dir
+    @tag :parent_question_regression
+    test "question context overflow holds executor completion through compaction and recovery", %{
+      tmp_dir: tmp_dir
+    } do
+      previous_owner = Application.get_env(:coding_agent, :executor_parent_question_test_owner)
+      Application.put_env(:coding_agent, :executor_parent_question_test_owner, self())
+      LemonAi.ProviderRegistry.register(:executor_parent_question_test, QuestionSummaryProvider)
+
+      on_exit(fn ->
+        LemonAi.ProviderRegistry.unregister(:executor_parent_question_test)
+
+        if previous_owner == nil do
+          Application.delete_env(:coding_agent, :executor_parent_question_test_owner)
+        else
+          Application.put_env(:coding_agent, :executor_parent_question_test_owner, previous_owner)
+        end
+      end)
+
+      model = %{
+        mock_model()
+        | api: :executor_parent_question_test,
+          provider: :executor_parent_question_test
+      }
+
+      run = parent_question_run(tmp_dir, model: model)
+      answer = "The recovered parent answer is to keep the existing boundary."
+      answer_question_child(run, answer)
+      assert_question_run_active(run)
+
+      send(
+        run.provider,
+        {:respond,
+         %{
+           assistant_message([])
+           | stop_reason: :error,
+             error_message: "context_length_exceeded",
+             error_details: %{category: :context_length, output_committed: false}
+         }}
+      )
+
+      session_id = run.session_id
+
+      assert_receive {:session_event, ^session_id, {:compaction_start, %{reason: :overflow}}},
+                     5_000
+
+      assert_receive {:question_compaction, summary_provider, _context}, 5_000
+      state = Session.get_state(run.session)
+      assert state.overflow_recovery.in_progress
+      assert state.is_streaming
+      assert state.terminal_event == nil
+      assert Process.alive?(run.runner)
+      refute_receive {:session_event, ^session_id, {:agent_end, _}}, 0
+      refute_receive {:session_event, ^session_id, {:error, _, _}}, 0
+      run_ref = run.run_ref
+      refute_receive {:engine_event, ^run_ref, %{__event__: :completed}}, 0
+      send(summary_provider, {:respond, assistant_message("Earlier join history summarized.")})
+
+      assert_receive {:session_event, ^session_id, {:compaction_complete, _}}, 5_000
+      assert_receive {:question_provider, recovered_provider, recovered_context}, 5_000
+
+      assert Enum.any?(recovered_context.messages, fn
+               %{role: :user, content: content} when is_binary(content) ->
+                 String.contains?(content, run.question)
+
+               _ ->
+                 false
+             end)
+
+      recovered_state = Session.get_state(run.session)
+      refute recovered_state.overflow_recovery.in_progress
+      assert recovered_state.overflow_recovery.attempted
+
+      assert Enum.count(
+               CodingAgent.SessionManager.entries(recovered_state.session_manager),
+               &(&1.type == :compaction)
+             ) == 1
+
+      assert_question_run_active(run)
+      send(recovered_provider, {:respond, assistant_message(answer)})
+
+      assert {:engine_event, ^run_ref, %{__event__: :completed, ok: true, answer: ^answer}} =
+               List.last(collect_until_completed(run_ref))
+
+      assert_receive {:session_event, ^session_id, {:agent_end, messages}}, 5_000
+      assert List.last(messages) |> LemonAi.get_text() == answer
+      assert_question_run_stopped(run)
+      refute_receive {:session_event, ^session_id, {:agent_end, _}}, 0
+      refute_receive {:session_event, ^session_id, {:error, _, _}}, 0
+      refute_receive {:session_event, ^session_id, {:compaction_start, _}}, 0
+      refute_receive {:engine_event, ^run_ref, %{__event__: :completed}}, 0
+    end
+
     @tag :tmp_dir
     test "validates supplied authority before starting a local session", %{tmp_dir: tmp_dir} do
       req =
@@ -1047,6 +1251,267 @@ defmodule CodingAgent.ExecutorTest do
         Process.flag(:trap_exit, previous_trap_exit)
       end
     end
+  end
+
+  defp parent_question_run(tmp_dir, opts \\ []) do
+    observer = self()
+    child_run_id = RunGraph.new_run(%{status: :running})
+    task_id = TaskStore.new_task(%{run_id: child_run_id, status: :running})
+    child_scope_id = "executor-question-#{task_id}"
+    question = "Which boundary should the blocked child keep?"
+    join_answer = "The join yielded for clarification; this is not the final answer."
+    gate = make_ref()
+    join_gate = :atomics.new(1, [])
+
+    stream_fn = fn _model, context, _options ->
+      send(observer, {:question_provider, self(), context})
+
+      receive do
+        {:respond, response} -> {:ok, response_to_event_stream(response)}
+      after
+        5_000 -> raise "parent question provider was not released"
+      end
+    end
+
+    # Isolate this run from host memory extraction and automatic compaction.
+    File.mkdir_p!(Path.join(tmp_dir, ".lemon"))
+
+    File.write!(
+      Path.join(tmp_dir, ".lemon/config.toml"),
+      "[features]\nsession_search = \"off\"\n"
+    )
+
+    req =
+      request(tmp_dir,
+        run_id: "parent-question-#{task_id}",
+        prompt: String.duplicate("Wait for the blocked child's boundary decision. ", 100),
+        stream_fn: stream_fn,
+        meta: %{agent_id: "main", model: Keyword.get(opts, :model, mock_model())}
+      )
+
+    assert {:ok, run_ref, %{runner_pid: runner}} =
+             Executor.start_run(req, %{stream_fn: stream_fn}, self())
+
+    session = :sys.get_state(runner).session
+    state = Session.get_state(session)
+    session_id = state.session_manager.header.id
+    agent = state.agent
+    session_ref = Process.monitor(session)
+    runner_ref = Process.monitor(runner)
+    _unsubscribe = Session.subscribe(session)
+
+    on_exit(fn ->
+      if Process.alive?(session), do: :sys.resume(session)
+      if Process.alive?(runner), do: GenServer.stop(runner)
+
+      case ParentQuestions.open_request_for_child_scope(child_scope_id) do
+        {:ok, request} -> ParentQuestions.cancel(request.id, :test_cleanup)
+        {:error, :not_found} -> :ok
+      end
+
+      TaskStoreServer.delete_task(task_id)
+      RunGraph.delete_run(child_run_id)
+      File.rm_rf!(CodingAgent.SessionManager.get_session_dir(tmp_dir))
+    end)
+
+    assert_receive {:question_provider, first_provider, _context}, 5_000
+
+    :ok =
+      TaskStoreServer.update_record(task_id, fn record ->
+        Map.put(record, :owner, {session_id, "main"})
+      end)
+
+    :sys.replace_state(session, fn current ->
+      %{
+        current
+        | settings_manager: %CodingAgent.SettingsManager{
+            compaction_enabled: false,
+            keep_recent_tokens: 1,
+            model_roles: %{},
+            providers: %{executor_parent_question_test: %{api_key: "fake-key"}},
+            extension_auto_load_default_paths: false
+          }
+      }
+    end)
+
+    # SessionRunner supplies the real builtin task tool. Gate its serialized join
+    # reservation rather than replacing that tool or changing executor startup.
+    join_barrier = fn
+      :waiting,
+      {:in, {:"$gen_call", {joiner, _tag}, {:begin_auto_followup_join, [^task_id], _token}}},
+      _extra ->
+        :atomics.put(join_gate, 1, 1)
+        send(observer, {:question_join_started, self(), joiner})
+
+        receive do
+          {^gate, :join} ->
+            :atomics.put(join_gate, 1, 2)
+            :released
+        after
+          5_000 ->
+            :atomics.put(join_gate, 1, 2)
+            raise "parent question task join was not released"
+        end
+
+      status, _event, _extra ->
+        status
+    end
+
+    assert :ok = :sys.install(TaskStoreServer, {join_barrier, :waiting})
+
+    on_exit(fn ->
+      if :atomics.compare_exchange(join_gate, 1, 1, 2) == :ok do
+        send(Process.whereis(TaskStoreServer), {gate, :join})
+      end
+
+      :sys.remove(TaskStoreServer, join_barrier)
+    end)
+
+    join_call =
+      tool_call("task", %{"action" => "join", "task_ids" => [task_id]}, id: "question-join")
+
+    send(first_provider, {:respond, assistant_message_with_tool_calls([join_call])})
+    assert_receive {:question_join_started, store, joiner}, 5_000
+    assert :ok = :sys.suspend(session)
+
+    {child, sender, delivery_ref, delivery, request_id} =
+      try do
+        child =
+          Task.Supervisor.async_nolink(CodingAgent.TaskSupervisor, fn ->
+            AskParent.execute(
+              "executor-child-question",
+              %{"question" => question, "why_blocked" => "The parent must choose the boundary."},
+              nil,
+              nil,
+              tmp_dir,
+              parent_session_module: QuestionDeliveryBarrier,
+              parent_session_pid: observer,
+              parent_session_key: req.session_key,
+              parent_agent_id: "main",
+              parent_run_id: req.run_id,
+              child_run_id: child_run_id,
+              child_scope_id: child_scope_id,
+              task_id: task_id,
+              task_description: "Blocked boundary child"
+            )
+          end)
+
+        on_exit(fn ->
+          monitor = Process.monitor(child.pid)
+          Process.exit(child.pid, :kill)
+          assert_receive {:DOWN, ^monitor, :process, _pid, _reason}, 5_000
+        end)
+
+        assert_receive {:question_delivery, sender, delivery_ref, text}, 5_000
+        assert {:ok, pending} = ParentQuestions.open_request_for_child_scope(child_scope_id)
+        assert pending.delivery_pending
+        assert {:error, :not_found} = ParentQuestions.waiting_for_task_ids([task_id])
+        delivery = :gen_server.send_request(session, {:deliver_parent_question, text})
+
+        # A return trace is a barrier on the real join's source-gate check, not
+        # a timing assertion that the loop happened not to finish yet.
+        assert 1 =
+                 :erlang.trace_pattern(
+                   {ParentQuestions, :waiting_for_task_ids, 1},
+                   [{:_, [], [{:return_trace}]}],
+                   []
+                 )
+
+        on_exit(fn ->
+          :erlang.trace_pattern({ParentQuestions, :waiting_for_task_ids, 1}, false, [])
+        end)
+
+        assert 1 = :erlang.trace(joiner, true, [:call, {:tracer, observer}])
+        send(store, {gate, :join})
+
+        assert_receive {:trace, ^joiner, :return_from,
+                        {ParentQuestions, :waiting_for_task_ids, 1}, {:error, :not_found}},
+                       5_000
+
+        :erlang.trace(joiner, false, [:call])
+        assert LemonAgent.Agent.get_state(agent).is_streaming
+        assert Process.alive?(joiner)
+        assert Process.alive?(session)
+        assert Process.alive?(runner)
+        assert {:ok, %{auto_followup_join_tokens: [_]}} = TaskStore.get_record(task_id)
+        refute_receive {:question_provider, _, _}, 0
+        refute_receive {:session_event, ^session_id, {:agent_end, _}}, 0
+        refute_receive {:engine_event, ^run_ref, %{__event__: :completed}}, 0
+        {child, sender, delivery_ref, delivery, pending.id}
+      after
+        :ok = :sys.resume(session)
+      end
+
+    assert {:reply, :ok} = :gen_server.receive_response(delivery, 5_000)
+    assert [_question] = :sys.get_state(agent).follow_up_queue
+    assert {:ok, %{delivery_pending: true}, _events} = ParentQuestions.get(request_id)
+    assert {:error, :not_found} = ParentQuestions.waiting_for_task_ids([task_id])
+    send(sender, {delivery_ref, :ok})
+
+    assert_receive {:session_event, ^session_id,
+                    {:tool_execution_end, "question-join", "task",
+                     %AgentToolResult{
+                       details: %{status: "needs_parent_answer", request_id: ^request_id}
+                     }, false}},
+                   5_000
+
+    assert {:ok, %{delivery_pending: false}, _events} = ParentQuestions.get(request_id)
+    assert_receive {:question_provider, after_join_provider, _context}, 5_000
+    send(after_join_provider, {:respond, assistant_message(join_answer)})
+    assert_receive {:question_provider, question_provider, context}, 5_000
+    assert List.last(context.messages).role == :user
+    assert List.last(context.messages).content =~ question
+
+    %{
+      run_ref: run_ref,
+      runner: runner,
+      runner_ref: runner_ref,
+      session: session,
+      session_ref: session_ref,
+      session_id: session_id,
+      agent: agent,
+      provider: question_provider,
+      child: child,
+      child_run_id: child_run_id,
+      task_id: task_id,
+      request_id: request_id,
+      session_key: req.session_key,
+      question: question,
+      join_answer: join_answer
+    }
+  end
+
+  defp assert_question_run_active(run) do
+    assert Process.alive?(run.session)
+    assert Process.alive?(run.runner)
+    assert LemonAgent.Agent.get_state(run.agent).is_streaming
+    state = Session.get_state(run.session)
+    assert state.is_streaming
+    assert state.terminal_event == nil
+    session_id = run.session_id
+    run_ref = run.run_ref
+    refute_receive {:session_event, ^session_id, {:agent_end, _}}, 0
+    refute_receive {:session_event, ^session_id, {:error, _, _}}, 0
+    refute_receive {:session_event, ^session_id, {:canceled, _}}, 0
+    refute_receive {:engine_event, ^run_ref, %{__event__: :completed}}, 0
+  end
+
+  defp answer_question_child(run, answer) do
+    assert :ok =
+             ParentQuestions.answer(run.request_id, answer,
+               session_key: run.session_key,
+               agent_id: "main"
+             )
+
+    assert %AgentToolResult{details: %{status: "answered"}} = Task.await(run.child, 5_000)
+    assert :ok = TaskStore.finish(run.task_id, answer)
+    assert :ok = RunGraph.finish(run.child_run_id, answer)
+  end
+
+  defp assert_question_run_stopped(run) do
+    %{session_ref: session_ref, session: session, runner_ref: runner_ref, runner: runner} = run
+    assert_receive {:DOWN, ^session_ref, :process, ^session, _}, 5_000
+    assert_receive {:DOWN, ^runner_ref, :process, ^runner, _}, 5_000
   end
 
   defp request(tmp_dir, opts) do

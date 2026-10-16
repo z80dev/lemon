@@ -264,6 +264,8 @@ defmodule CodingAgent.Tools.Task.WaitTest do
                why_blocked: "Needs a parent decision"
              })
 
+    assert :ok = ParentQuestions.mark_delivered(question.id)
+
     assert %AgentToolResult{details: %{status: "needs_parent_answer", request_id: request_id}} =
              Wait.execute(%{}, nil, @opts)
 
