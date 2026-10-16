@@ -44,14 +44,16 @@ function descriptor(value: unknown): Record<string, unknown> {
 }
 
 /** Validate the public fingerprint before sending any pairing proof or product credential. */
-export function validateBotSetup(value: unknown, expectedInstanceId: string, use: BotOriginUse = 'phone'): SetupStatus {
+export function validateBotSetup(value: unknown, expectedInstanceId: string, use: BotOriginUse = 'phone', setup: 'required' | 'configured' = 'configured'): SetupStatus {
   const row = descriptor(value);
   if (typeof row.setupRequired !== 'boolean') throw wrongService();
   if (!identifier(expectedInstanceId) || row.instanceId !== expectedInstanceId) {
     throw new BotPreflightError('instance_mismatch', 'The backend identity changed or does not match the configured Bot backend. Reconnect explicitly; do not replace it automatically.');
   }
   validateBotOrigin(row.publicUrl as string, use);
-  if (row.setupRequired || !object(row.capabilities).pairing) throw new BotPreflightError('pairing_unavailable', 'This Bot backend is not configured for phone pairing.');
+  if (row.setupRequired !== (setup === 'required') || !object(row.capabilities).pairing) {
+    throw new BotPreflightError('pairing_unavailable', setup === 'required' ? 'This Bot backend is already configured. Use the existing account.' : 'This Bot backend is not configured for phone pairing.');
+  }
   return value as SetupStatus;
 }
 
@@ -70,6 +72,8 @@ export interface BotPreflightOptions {
   origin: string;
   expectedInstanceId: string;
   use?: BotOriginUse;
+  /** Explicit local owner bootstrap only; ordinary pairing still requires an existing workspace. */
+  setup?: 'required' | 'configured';
   /** Only the caller's product session, never an operator credential. Omit on phone before completion. */
   session?: { token: string; workspaceId: string };
   signal?: AbortSignal;
@@ -125,7 +129,7 @@ export async function preflightBotOrigin(options: BotPreflightOptions): Promise<
       throw new BotPreflightError('unavailable', 'Cannot reach the Bot API with verified TLS. Check backend, Tailscale login/tailnet/ACL, DNS and certificate trust.');
     }
   }
-  const setup = validateBotSetup(await probe('setup'), options.expectedInstanceId, use);
+  const setup = validateBotSetup(await probe('setup'), options.expectedInstanceId, use, options.setup);
   const identity = options.session ? validateBotIdentity(await probe('identity', options.session.token),
     { instanceId: options.expectedInstanceId, workspaceId: options.session.workspaceId }, use) : null;
   return { origin, setup, identity };

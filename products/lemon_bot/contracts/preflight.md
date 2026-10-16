@@ -108,6 +108,28 @@ These checks prove the API contract and identity on the selected TLS endpoint,
 not physical-device reachability or synchronization. Real iPhone/Tailscale and
 bidirectional workspace sync require separate operator-owned acceptance.
 
+### Explicit initial-owner bootstrap
+
+Ordinary pairing still requires `setupRequired:false`; it never accepts an empty
+instance as an existing workspace. The trusted local backend operator command
+`lemon-bot setup` instead reads the expected instance ID from the already existing
+private DATA_DIR and invokes the **same** TypeScript preflight with
+`setup:'required'`. That explicit mode requires `setupRequired:true` while keeping
+every descriptor, identity, size, deadline, origin and TLS predicate above. It
+does not authenticate or mint credentials. Native existing-workspace pairing
+predicates are unchanged.
+
+This command additionally requires the configured tailnet HTTPS origin to equal
+the returned advertised origin (no alias selection/discovery at bootstrap).
+`setup --print-origin` accepts either local configured/empty state, probes the
+matching descriptor and writes only the verified origin; it never issues a proof.
+Only explicit owner setup shows a separate five-minute sensitive proof directly
+on the controlling terminal. No proof is sent in the preflight, origin, URL, QR,
+argv or logs. The HTTP claim still uses the existing same-origin JSON `/v1/setup`
+form/API, with expiry, attempt limits and atomic consumption; see the
+[operator workflow](../backend/README.md#provider-free-owner-setup). There is no
+provider/default-model precondition and no new bootstrap HTTP issuing endpoint.
+
 ## Pairing progress and uncertain outcomes
 
 No new public socket, auth mechanism or credential-issuing endpoint is needed.

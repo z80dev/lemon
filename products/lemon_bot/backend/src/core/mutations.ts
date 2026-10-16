@@ -10,12 +10,16 @@ function canonical(value:unknown):string {
   if(value!==null && typeof value==='object') return '{'+Object.entries(value).sort(([a],[b])=>a.localeCompare(b)).map(([key,item])=>JSON.stringify(key)+':'+canonical(item)).join(',')+'}';
   return JSON.stringify(value);
 }
+/** Shared keyed canonical digest for trusted local proof issuance and HTTP mutation custody. */
+export function createMutationDigest(key:Uint8Array):MutationService['digest'] {
+  return (value:unknown)=>createHmac('sha256',key).update(canonical(value)).digest('hex');
+}
 const confirmationBody=z.object({confirmationToken:z.string().min(16).max(512),confirmName:z.string(),revision:z.number().int().positive().optional()}).passthrough();
 interface Reservation { hash:string;state:string;receipt:string|null;resource_ids:string }
 interface ConfirmationRow {user_id:string;target_id:string;revision:number;action:string;name:string;binding:string;expires_at_ms:number;consumed:number}
 export function createMutationService(services:BackendServices,key:Uint8Array):MutationService {
   const pending=new Map<string,Promise<unknown>>();
-  const digest=(value:unknown)=>createHmac('sha256',key).update(canonical(value)).digest('hex');
+  const digest=createMutationDigest(key);
   const db=services.store.db;
   const replayVisible=(context:RequestContext,value:unknown):void=>{
     const checked=new Set<string>();

@@ -9,6 +9,7 @@ import { deleteUserPairings, revokeWorkspacePairings } from './pairing';
 import { hasProductAccess } from '../enterprise/policy';
 import { prepareProviderTeardown } from '../enterprise/teardown';
 import { backendDescriptor } from './identity';
+import { beginOwnerSetupClaim, consumeOwnerSetupProof } from './setup';
 
 const name = z.string().trim().min(1).max(120);
 const email = z.string().trim().toLowerCase().pipe(z.email().max(254));
@@ -272,17 +273,15 @@ export function createAccountRoutes(services: BackendServices, hooks: Revocation
     } },
     { method: 'POST', path: '/v1/setup', auth: 'public', status: 200, handler: async context => {
       const body = parse(setupSchema, context.body); rateLimit('setup');
-      if (store.metadata('workspaceId') !== null) fail('conflict', 'Workspace is already configured.');
-      if (store.metadata<string>('setupCodeDigest') !== services.mutations.digest(body.setupCode)) fail('unauthenticated', 'Invalid setup code.');
+      beginOwnerSetupClaim(services, body.setupCode);
       const passwordHash = await Bun.password.hash(body.password, { algorithm: 'argon2id' });
       const created = store.transaction(() => {
-        if (store.metadata('workspaceId') !== null) fail('conflict', 'Workspace is already configured.');
-        if (store.metadata<string>('setupCodeDigest') !== services.mutations.digest(body.setupCode)) fail('unauthenticated', 'Invalid setup code.');
+        consumeOwnerSetupProof(services, body.setupCode);
         const user = makeUser(body.email, body.displayName);
         const member = services.resource('member', { userId: user.id, email: user.email, displayName: user.displayName, role: 'owner' as const, enabled: true });
         const workspace = services.resource('workspace', { name: body.workspaceName, ownerUserId: user.id, enabled: true, timezone: 'UTC' });
         store.put('users', user); store.put('members', member); store.put('workspaces', workspace); store.put('credentials', { id: user.id, passwordHash });
-        store.setMetadata('workspaceId', workspace.id); store.setMetadata('setupCodeDigest', null); store.setMetadata('setupCode', null);
+        store.setMetadata('workspaceId', workspace.id);
         return { authResult: services.auth.session(user.id) };
       });
       return created.authResult;
