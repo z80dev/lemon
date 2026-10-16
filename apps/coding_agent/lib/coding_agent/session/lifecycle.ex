@@ -459,6 +459,8 @@ defmodule CodingAgent.Session.Lifecycle do
       mcp_session_id: Keyword.get(opts, :mcp_session_id),
       acp_mcp_session_id: Keyword.get(opts, :acp_mcp_session_id),
       extra_tools: extra_tools,
+      # Retain startup tool options without transcript payloads for fresh-ID resets.
+      tool_opts: Keyword.drop(tool_opts, [:initial_messages, :context_snapshot]),
       # Kept so a reload recomputes disclosure with the same per-session
       # override the session started with -- `reload_extensions/1` rebuilds
       # `tool_opts` from state rather than from the original opts.
@@ -662,6 +664,7 @@ defmodule CodingAgent.Session.Lifecycle do
         state =
           State.reset_runtime(state, new_session_manager, System.system_time(:millisecond))
           |> Map.put(:session_file, new_path)
+          |> rebuild_tools(previous_session_id)
           |> BranchState.restore()
 
         {:ok, state}
@@ -679,6 +682,60 @@ defmodule CodingAgent.Session.Lifecycle do
     LemonAgent.Agent.abort(state.agent)
     LemonAgent.Agent.wait_for_idle(state.agent, timeout: reset_abort_wait_ms)
   end
+
+  # Rebuild closures and hook/approval contexts for the fresh journal identity
+  # without reloading extensions. BranchState restores the effective tools.
+  defp rebuild_tools(state, previous_session_id) do
+    session_id = state.session_manager.header.id
+
+    approval_context =
+      rebind_approval_context(state.approval_context, previous_session_id, session_id)
+
+    state = %{state | approval_context: approval_context}
+    wasm = WasmBridge.reload_wasm_tools(state)
+
+    tool_opts =
+      Keyword.merge(state.tool_opts,
+        model: state.model,
+        thinking_level: state.thinking_level,
+        parent_session: session_id,
+        session_id: session_id,
+        approval_context: approval_context,
+        wasm_tools: wasm.wasm_tools,
+        wasm_status: wasm.wasm_status
+      )
+
+    built =
+      ExtensionLifecycle.rebuild_tools(
+        cwd: state.cwd,
+        settings_manager: state.settings_manager,
+        tool_opts: tool_opts,
+        extensions: state.extensions,
+        hooks: state.hooks,
+        custom_tools: Keyword.get(tool_opts, :tools),
+        extra_tools: state.extra_tools,
+        wasm_tools: wasm.wasm_tools,
+        wasm_status: wasm.wasm_status,
+        tool_policy: state.tool_policy,
+        approval_context: approval_context,
+        secret_obfuscator: state.secret_obfuscator
+      )
+
+    %{
+      state
+      | tool_opts: tool_opts,
+        base_tools: built.tools,
+        tool_catalog: built.tool_catalog,
+        wasm_sidecar_pid: wasm.sidecar_pid,
+        wasm_tool_names: wasm.wasm_tool_names,
+        wasm_status: wasm.wasm_status
+    }
+  end
+
+  defp rebind_approval_context(%{session_id: previous} = context, previous, session_id),
+    do: %{context | session_id: session_id}
+
+  defp rebind_approval_context(context, _previous, _session_id), do: context
 
   defp load_or_create_session(cwd, nil, session_id, parent_session) do
     SessionManager.new(cwd, id: session_id, parent_session: parent_session)

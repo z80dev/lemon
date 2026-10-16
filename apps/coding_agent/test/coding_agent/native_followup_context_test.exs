@@ -8,10 +8,14 @@ defmodule CodingAgent.NativeFollowupContextTest do
 
   defmodule Coordinator do
     def submit(_key, submission) do
-      send(
-        Application.fetch_env!(:lemon_router, :native_context_consumer_pid),
-        {:native_dispatch, submission}
-      )
+      %{pid: pid, profile_id: profile_id} =
+        Application.fetch_env!(:lemon_router, :native_context_consumer)
+
+      # Other tests' supervised tasks may finish after their test process exits.
+      # This global coordinator replacement records only this fixture's owner.
+      if submission.execution_request.meta[:agent_id] == profile_id do
+        send(pid, {:native_dispatch, submission})
+      end
 
       :ok
     end
@@ -52,7 +56,7 @@ defmodule CodingAgent.NativeFollowupContextTest do
   defmodule ForbiddenRouter do
     def submit(request) do
       send(
-        Application.fetch_env!(:lemon_router, :native_context_consumer_pid),
+        Application.fetch_env!(:lemon_router, :native_context_consumer).pid,
         {:forbidden_legacy_dispatch, request}
       )
 
@@ -79,7 +83,7 @@ defmodule CodingAgent.NativeFollowupContextTest do
         })
 
       {:ok, fresh_id} = opts.native_followup_submit.(source, fresh)
-      owner = Application.fetch_env!(:lemon_router, :native_context_consumer_pid)
+      owner = Application.fetch_env!(:lemon_router, :native_context_consumer).pid
       send(owner, {:remote_native_conduit, request, fresh_id})
 
       runner =
@@ -100,6 +104,7 @@ defmodule CodingAgent.NativeFollowupContextTest do
     assert {:ok, _} = Application.ensure_all_started(:lemon_control_plane)
     suffix = Integer.to_string(System.unique_integer([:positive, :monotonic]))
     prefix = "native-consumer-" <> suffix
+    profile_id = prefix <> "-profile"
     root = Path.join(System.tmp_dir!(), prefix)
     File.mkdir_p!(root)
 
@@ -108,7 +113,7 @@ defmodule CodingAgent.NativeFollowupContextTest do
       {:lemon_core, Secrets},
       {:lemon_router, :native_followup_allowed_origins},
       {:lemon_router, :session_coordinator},
-      {:lemon_router, :native_context_consumer_pid}
+      {:lemon_router, :native_context_consumer}
     ]
 
     previous = Map.new(keys, fn {app, key} = pair -> {pair, Application.fetch_env(app, key)} end)
@@ -124,7 +129,11 @@ defmodule CodingAgent.NativeFollowupContextTest do
 
     Application.put_env(:lemon_core, Secrets, key_providers: [:env], env_var: secret_env)
     Application.put_env(:lemon_router, :session_coordinator, Coordinator)
-    Application.put_env(:lemon_router, :native_context_consumer_pid, self())
+
+    Application.put_env(:lemon_router, :native_context_consumer, %{
+      pid: self(),
+      profile_id: profile_id
+    })
 
     bandit =
       start_supervised!(
@@ -135,7 +144,6 @@ defmodule CodingAgent.NativeFollowupContextTest do
     origin = "http://127.0.0.1:#{port}"
     Application.put_env(:lemon_router, :native_followup_allowed_origins, [origin])
     {:ok, owner} = GenServer.start_link(RunOrchestrator, [])
-    profile_id = prefix <> "-profile"
     run_id = prefix <> "-root"
 
     assert {:ok, _} =
@@ -362,6 +370,44 @@ defmodule CodingAgent.NativeFollowupContextTest do
           LemonPlatformTest.EventsFixtures.run_completed(answer: "done")
         )
       )
+  end
+
+  test "the dispatch recorder excludes unrelated runs admitted during this fixture", ctx do
+    foreign_profile = ctx.profile <> "-foreign"
+    assert {:ok, _} = ProfileStore.create(%{"id" => foreign_profile})
+
+    foreign =
+      LemonCore.RunRequest.new(%{
+        run_id: ctx.source.run_id <> "-foreign",
+        agent_id: foreign_profile,
+        session_key: LemonCore.SessionKey.main(foreign_profile),
+        prompt: "delayed work from another test"
+      })
+
+    # A previously launched task can finish while this fixture has replaced the
+    # global coordinator. Its real dispatch must not become our next assertion's
+    # submission (in particular a local request with no :node metadata).
+    assert {:ok, foreign_id} = RunOrchestrator.submit(foreign)
+    assert foreign_id == foreign.run_id
+    refute_receive {:native_dispatch, _}
+
+    assert :ok =
+             Followup.maybe_send_async_followup(
+               Params.inherited_execution_context(ctx.opts)
+               |> Map.merge(%{
+                 parent_session_key: ctx.opts[:session_key],
+                 parent_agent_id: ctx.profile
+               }),
+               nil,
+               "child-complete",
+               %{ok: true, answer: "owned child answer"}
+             )
+
+    assert_receive {:native_issuer, id, %{"runId" => id}, {:ok, lineage}}, 2_000
+    assert lineage["sourceRootRunId"] == ctx.source.run_id
+    assert_receive {:native_dispatch, admitted}
+    assert admitted.execution_request.run_id == id
+    assert admitted.execution_request.meta.profile_id == ctx.profile
   end
 
   test "actual authenticated Worker socket publishes floor and submits F only to controller",

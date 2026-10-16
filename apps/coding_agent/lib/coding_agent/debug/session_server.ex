@@ -85,7 +85,8 @@ defmodule CodingAgent.Debug.SessionServer do
     ctx = %{
       timeout_ms: timeout_ms,
       deadline: System.monotonic_time(:millisecond) + timeout_ms,
-      signal: Keyword.get(opts, :signal)
+      signal: Keyword.get(opts, :signal),
+      caller: self()
     }
 
     with {:ok, pid} <- ensure_server(key, action, opts) do
@@ -203,8 +204,10 @@ defmodule CodingAgent.Debug.SessionServer do
         {:stop, :normal, {:error, "coding session ended"}, state}
 
       reply ->
-        state = state |> dispose_if_terminated() |> schedule_idle()
-        {:reply, reply, state}
+        case dispose_if_terminated(state) do
+          {:ok, state} -> {:reply, reply, schedule_idle(state)}
+          {:owner_down, state} -> {:stop, :normal, reply, state}
+        end
     end
   end
 
@@ -236,13 +239,18 @@ defmodule CodingAgent.Debug.SessionServer do
           state
       end
 
-    {:noreply, dispose_if_terminated(state)}
+    case dispose_if_terminated(state) do
+      {:ok, state} -> {:noreply, state}
+      {:owner_down, state} -> {:stop, :normal, state}
+    end
   end
 
   def handle_info({:dap, client, payload}, %{session: %{client: client}} = state)
       when is_pid(client) do
-    state = state |> apply_payload(payload) |> dispose_if_terminated()
-    {:noreply, state}
+    case state |> apply_payload(payload) |> dispose_if_terminated() do
+      {:ok, state} -> {:noreply, state}
+      {:owner_down, state} -> {:stop, :normal, state}
+    end
   end
 
   def handle_info({:dap, _stale_client, _payload}, state), do: {:noreply, state}
@@ -1063,6 +1071,9 @@ defmodule CodingAgent.Debug.SessionServer do
     end
   end
 
+  # Disposal waits on the adapter, so the owner's DOWN can be consumed here.
+  # Report it so the caller stops the server like any other owner loss rather
+  # than keeping a dead owner that no live session could rebind.
   defp dispose_if_terminated(%{session: %{status: :terminated, client: client}} = state)
        when is_pid(client) do
     state = stop_children(state)
@@ -1073,27 +1084,24 @@ defmodule CodingAgent.Debug.SessionServer do
       signal: nil
     }
 
-    state =
-      try do
-        case dap_request(
-               state,
-               "disconnect",
-               %{"terminateDebuggee" => state.session.kind == :launch},
-               ctx
-             ) do
-          {_, _, state} -> state
-        end
-      catch
-        {:owner_down, state} -> state
+    try do
+      case dap_request(
+             state,
+             "disconnect",
+             %{"terminateDebuggee" => state.session.kind == :launch},
+             ctx
+           ) do
+        {_, _, state} -> {:ok, stop_client(state)}
       end
-
-    stop_client(state)
+    catch
+      {:owner_down, state} -> {:owner_down, stop_client(state)}
+    end
   end
 
   defp dispose_if_terminated(%{session: %{status: :terminated}} = state),
-    do: stop_children(state)
+    do: {:ok, stop_children(state)}
 
-  defp dispose_if_terminated(state), do: state
+  defp dispose_if_terminated(state), do: {:ok, state}
 
   defp stop_client(state) do
     case state.session do
@@ -1232,7 +1240,7 @@ defmodule CodingAgent.Debug.SessionServer do
         now = System.monotonic_time(:millisecond)
 
         cond do
-          AbortSignal.aborted?(ctx.signal) ->
+          AbortSignal.aborted?(ctx.signal) or caller_down?(ctx) ->
             {:aborted, state}
 
           now >= ctx.deadline ->
@@ -1263,6 +1271,12 @@ defmodule CodingAgent.Debug.SessionServer do
         end
     end
   end
+
+  # The invocation worker can be killed after its local abort flag is reclaimed.
+  # Keep cancellation observable independently of that transient ETS entry.
+  # Preserve the original caller when routing an operation to a child server.
+  defp caller_down?(%{caller: caller}), do: not Process.alive?(caller)
+  defp caller_down?(_ctx), do: false
 
   defp stop_children(state) do
     Enum.each(state.children, fn {_id, pid} ->

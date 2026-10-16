@@ -9,6 +9,7 @@ defmodule CodingAgent.Session.WasmBridge do
 
   require Logger
 
+  alias CodingAgent.Session.Planning
   alias CodingAgent.Wasm.Config, as: WasmConfig
   alias CodingAgent.Wasm.SidecarSession
   alias CodingAgent.Wasm.SidecarSupervisor
@@ -232,8 +233,13 @@ defmodule CodingAgent.Session.WasmBridge do
   @doc false
   def start_host_call(state, from, tool_name, params_json, context) do
     deadline = min(context.deadline, System.monotonic_time(:millisecond) + @host_timeout_ms)
-    signal = context.signal
-    request = %{from: from, owner: context.owner, signal: signal, deadline: deadline}
+
+    request = %{
+      from: from,
+      owner: context.owner,
+      parent_signal: context.signal,
+      deadline: deadline
+    }
 
     case host_request_status(request) do
       {:error, _} = error ->
@@ -243,6 +249,13 @@ defmodule CodingAgent.Session.WasmBridge do
         # Capture the already policy/approval/plan-wrapped closure, never a fresh
         # registry lookup. Execution must not occupy the journal-owning GenServer.
         tool = find_host_tool(state, tool_name)
+
+        # Only this invocation owns the child signal. Parent cancellation is
+        # observed by the existing request checks, never written by cleanup.
+        # AbortSignal treats an unregistered reference as inactive. Allocate
+        # lazily so an untrappable Session death cannot leave an idle ETS row.
+        signal = make_ref()
+        request = Map.put(request, :signal, signal)
 
         case start_host_worker(tool_name, params_json, tool, signal) do
           {:ok, task} ->
@@ -262,6 +275,7 @@ defmodule CodingAgent.Session.WasmBridge do
              %{state | wasm_host_calls: Map.put(state.wasm_host_calls, task.ref, request)}}
 
           {:error, _} ->
+            AbortSignal.clear(signal)
             {:reply, {:error, :host_worker_unavailable}, state}
         end
     end
@@ -340,7 +354,7 @@ defmodule CodingAgent.Session.WasmBridge do
       not Process.alive?(elem(request.from, 0)) -> {:error, :caller_down}
       not Process.alive?(request.owner) -> {:error, :caller_down}
       System.monotonic_time(:millisecond) >= request.deadline -> {:error, :timeout}
-      AbortSignal.aborted?(request.signal) -> {:error, :aborted}
+      AbortSignal.aborted?(request.parent_signal) -> {:error, :aborted}
       true -> :ok
     end
   end
@@ -412,6 +426,7 @@ defmodule CodingAgent.Session.WasmBridge do
     Process.demonitor(request.caller_ref, [:flush])
     Process.demonitor(request.owner_ref, [:flush])
     Process.cancel_timer(request.timer)
+    AbortSignal.clear(request.signal)
   end
 
   @spec maybe_handle_reserved_host_target(String.t(), String.t()) ::
@@ -465,10 +480,10 @@ defmodule CodingAgent.Session.WasmBridge do
          false <- tool_name in state.wasm_tool_names,
          %{tool: tool, source: source} <- Map.get(catalog, tool_name),
          false <- match?({:wasm, _}, source) do
-      CodingAgent.Session.Planning.host_tool(
+      Planning.host_tool(
         tool,
         state.session_manager,
-        CodingAgent.Session.Planning.runtime_context(state, self())
+        Planning.runtime_context(state, self())
       )
     else
       _ -> nil
