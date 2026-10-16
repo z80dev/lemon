@@ -45,9 +45,83 @@ NODE_COOKIE="${LEMON_GATEWAY_NODE_COOKIE:-${LEMON_GATEWAY_COOKIE:-lemon_gateway_
 DISTRIBUTED=1
 DEBUG=""
 
+# Match Path.expand before deciding whether a store path names a database file.
+# Keep symlink resolution separate: a file alias must retain its own extension.
+lexical_path() {
+  local path="$1" resolved="" component
+  [ -n "$path" ] || return 1
+  case "$path" in
+    \~) path="$HOME" ;;
+    \~/*) path="$HOME/${path#\~/}" ;;
+  esac
+  [[ "$path" = /* ]] || path="$PWD/$path"
+  while [ -n "$path" ]; do
+    path="${path#/}"
+    component="${path%%/*}"
+    if [ "$path" = "$component" ]; then path=""; else path="${path#*/}"; fi
+    case "$component" in
+      ""|.) ;;
+      ..) resolved="${resolved%/*}" ;;
+      *) resolved="$resolved/$component" ;;
+    esac
+  done
+  printf '%s\n' "${resolved:-/}"
+}
+
+# Resolve existing symlinks while also normalizing missing path components.
+# Walking components keeps a missing-directory/../alias path comparable to an
+# existing alias without requiring realpath or booting Elixir.
+canonical_path() {
+  local path="$1" resolved=/ component link links=0
+  [ -n "$path" ] || return 1
+  case "$path" in
+    \~) path="$HOME" ;;
+    \~/*) path="$HOME/${path#\~/}" ;;
+  esac
+  [[ "$path" = /* ]] || path="$PWD/$path"
+  while [ -n "$path" ]; do
+    path="${path#/}"
+    component="${path%%/*}"
+    if [ "$path" = "$component" ]; then path=""; else path="${path#*/}"; fi
+    case "$component" in
+      ""|.) ;;
+      ..)
+        resolved="${resolved%/*}"
+        [ -n "$resolved" ] || resolved=/
+        ;;
+      *)
+        if [ "$resolved" = / ]; then
+          resolved="/$component"
+        else
+          resolved="$resolved/$component"
+        fi
+        if [ -L "$resolved" ]; then
+          link="$(readlink "$resolved")" || return 1
+          links=$((links + 1))
+          [ "$links" -le 40 ] || return 1
+          resolved="${resolved%/*}"
+          [ -n "$resolved" ] || resolved=/
+          [[ "$link" != /* ]] || resolved=/
+          if [ -n "$path" ]; then path="$link/$path"; else path="$link"; fi
+        fi
+        ;;
+    esac
+  done
+  printf '%s\n' "$resolved"
+}
+
+paths_overlap() {
+  [ "$1" = / ] || [ "$2" = / ] || {
+    case "$1/" in "$2"/*) return 0 ;; esac
+    case "$2/" in "$1"/*) return 0 ;; esac
+    return 1
+  }
+}
+
 # Lifecycle state is per control-plane port, including when --port is supplied.
 runtime_paths() {
   PIDFILE="${LEMON_RUNTIME_PID_FILE:-$STATE_DIR/lemon-$PORT.pid}"
+  [[ "$PIDFILE" = /* ]] || PIDFILE="$LAUNCH_CWD/$PIDFILE"
   LOG_FILE="${LEMON_RUNTIME_LOG_FILE:-$STATE_DIR/lemon-$PORT.log}"
   LOCK_DIR="$STATE_DIR/lemon-$PORT.lock"
 }
@@ -109,12 +183,44 @@ process_identity() {
 }
 
 owned_runtime_pid() {
-  local pid born
-  [ -f "$PIDFILE" ] && [ ! -L "$PIDFILE" ] && [ -O "$PIDFILE" ] || return 1
-  { IFS= read -r pid; IFS= read -r born; } < "$PIDFILE" || return 1
-  [[ "$pid" =~ ^[0-9]+$ ]] && [ -n "$born" ] || return 1
-  [ "$(process_identity "$pid")" = "$born" ] || return 1
+  local file="${1:-$PIDFILE}" pid born=""
+  [ -f "$file" ] && [ ! -L "$file" ] && [ -O "$file" ] || return 1
+  { IFS= read -r pid; IFS= read -r born || true; } < "$file" || return 1
+  [[ "$pid" =~ ^[1-9][0-9]*$ ]] || return 1
+  if [ -n "$born" ]; then
+    [ "$(process_identity "$pid")" = "$born" ] || return 1
+  else
+    # Packaged/legacy PID-only records block startup, but cannot authorize
+    # source-launcher signals: stop callers never opt into probe mode.
+    [ "${2:-}" = probe ] || return 1
+    process_identity "$pid" >/dev/null || return 1
+  fi
   printf '%s' "$pid"
+}
+
+# A later invocation may no longer have the original PIDFILE override. Keep
+# the published PID record authoritative without overlooking a live process
+# recorded under either the requested override or the legacy default.
+managed_runtime_pidfile() {
+  local registered="" fourth="" _ file paths="$STATE_DIR/lemon-$PORT.paths"
+  if [ -f "$paths" ] && [ ! -L "$paths" ] && [ -O "$paths" ]; then
+    {
+      IFS= read -r _
+      IFS= read -r _
+      IFS= read -r registered
+      IFS= read -r fourth || true
+      [ -z "$fourth" ] || registered="$fourth"
+    } < "$paths" || true
+  fi
+  [[ "$registered" = /* ]] || registered=""
+  for file in "$registered" "$PIDFILE" "$STATE_DIR/lemon-$PORT.pid"; do
+    [ -n "$file" ] || continue
+    if owned_runtime_pid "$file" probe >/dev/null; then
+      printf '%s\n' "$file"
+      return 0
+    fi
+  done
+  return 1
 }
 
 record_runtime_pid() {
@@ -157,6 +263,76 @@ acquire_start_lock() {
     sleep 0.25
   done
   error "startup is locked at $LOCK_DIR; check its owner before removing an abandoned lock"
+  return 1
+}
+
+# A restore publishes its completed owner/target lock before its final runtime
+# check. Publish startup ownership before checking that lock, so either side
+# sees the other. Only temporary run metadata may change until this check.
+runtime_state_paths() {
+  local store="${LEMON_STORE_PATH:-$LEMON_HOME_DIR/store}" trailing="" lower primary
+  case "$store" in
+    /*|\~|\~/*) ;;
+    *) store="$LEMON_ROOT/$store" ;;
+  esac
+  [[ "$store" != */ ]] || trailing=/
+  store="$(lexical_path "$store")" || return 1
+  primary="$store/store.sqlite3"
+  lower="$(printf '%s' "$store" | tr '[:upper:]' '[:lower:]')"
+  if [ "$trailing" != / ] && [ ! -d "$store" ]; then
+    case "${lower##*/}" in
+      .db|.sqlite|.sqlite3) ;;
+      *.db|*.sqlite|*.sqlite3)
+        primary="$store"
+        store="${store%/*}"
+        [ -n "$store" ] || store=/
+        ;;
+    esac
+  fi
+  canonical_path "$LEMON_HOME_DIR" || return 1
+  canonical_path "$store" || return 1
+  canonical_path "$primary"
+}
+
+record_runtime_paths() {
+  local temporary paths pidfile
+  paths="$(runtime_state_paths)" || return 1
+  pidfile="$PIDFILE"
+  [[ "$pidfile" = /* ]] || pidfile="$PWD/$pidfile"
+  temporary="$(mktemp "$STATE_DIR/.paths.XXXXXX")"
+  printf '%s\n%s\n' "$paths" "$pidfile" > "$temporary"
+  chmod 600 "$temporary"
+  mv "$temporary" "$STATE_DIR/lemon-$PORT.paths"
+}
+
+restore_in_progress() {
+  local lock owner target canonical_target mine paths
+  local mine_paths=()
+  paths="$(runtime_state_paths)" || {
+    error "cannot resolve state paths for backup restore coordination; fix the paths, then retry"
+    return 0
+  }
+  while IFS= read -r mine; do
+    mine_paths+=("$mine")
+  done <<< "$paths"
+  for lock in "$STATE_DIR"/restore-*.lock; do
+    [ -d "$lock" ] || continue
+    owner=""
+    target=""
+    { IFS= read -r owner < "$lock/owner"; } 2>/dev/null || true
+    if ! [[ "$owner" =~ ^[1-9][0-9]*$ ]] || ! kill -0 "$owner" 2>/dev/null; then continue; fi
+    { IFS= read -r target < "$lock/target"; } 2>/dev/null || true
+    canonical_target=""
+    if [[ "$target" = /* ]]; then
+      canonical_target="$(canonical_path "$target" 2>/dev/null || true)"
+    fi
+    for mine in "${mine_paths[@]}"; do
+      if [ -z "$canonical_target" ] || paths_overlap "$canonical_target" "$mine"; then
+        error "a backup restore (pid $owner) is replacing ${target:-Lemon state}; wait for it to finish, then retry"
+        return 0
+      fi
+    done
+  done
   return 1
 }
 
@@ -312,7 +488,7 @@ load_secrets_master_key() {
 
 # Starts the unified runtime in the foreground (exec) or background.
 start_runtime() {
-  local mode="$1" reuse="${2:-1}" pid attempt
+  local mode="$1" reuse="${2:-1}" pid attempt file
   local cmd=(mix run --no-start --no-halt --no-compile --no-deps-check -e 'LemonCore.Runtime.Boot.start!(:runtime_full)')
   # Reuse guard before compiling or registering the Erlang node name: a
   # duplicate lemon@host registration would fail before the in-VM Boot guard.
@@ -330,13 +506,30 @@ start_runtime() {
     info "a healthy Lemon runtime is already running on port $PORT; reusing it"
     return 0
   fi
+  if file="$(managed_runtime_pidfile)"; then
+    pid="$(owned_runtime_pid "$file" probe || true)"
+    error "managed runtime pid ${pid:-recorded in $file} is alive but unhealthy; inspect $LOG_FILE, then run './bin/lemon stop' before retrying"
+    exit 1
+  fi
   if control_port_in_use; then
     error "port $PORT is occupied but does not answer Lemon health checks; free it or use --port <port>"
     exit 1
   fi
-  if pid="$(owned_runtime_pid)"; then
-    error "managed runtime pid $pid is alive but unhealthy; inspect $LOG_FILE, then run './bin/lemon stop' before retrying"
+  # Never displace a live runtime's ownership record, even if it is unhealthy.
+  # The start lock and paths cover compilation as well as the eventual boot.
+  record_runtime_paths
+  if restore_in_progress; then
+    release_start_lock
     exit 1
+  fi
+  if [ -n "${LEMON_STORE_PATH:-}" ]; then
+    case "$LEMON_STORE_PATH" in
+      \~) LEMON_STORE_PATH="$HOME" ;;
+      \~/*) LEMON_STORE_PATH="$HOME/${LEMON_STORE_PATH#\~/}" ;;
+      /*) ;;
+      *) LEMON_STORE_PATH="$LEMON_ROOT/$LEMON_STORE_PATH" ;;
+    esac
+    export LEMON_STORE_PATH
   fi
   rm -f "$PIDFILE"
   if [ "$DISTRIBUTED" = "1" ]; then
@@ -388,8 +581,8 @@ start_runtime() {
 }
 
 stop_runtime() {
-  local pid attempt
-  if ! pid="$(owned_runtime_pid)"; then
+  local pid attempt file
+  if ! file="$(managed_runtime_pidfile)" || ! pid="$(owned_runtime_pid "$file")"; then
     if control_port_in_use; then
       error "port $PORT answers but is not managed by this HOME ($HOME); stop it where it runs"
     else
@@ -399,11 +592,11 @@ stop_runtime() {
   fi
   kill -TERM "$pid"
   for ((attempt = 0; attempt < 30; attempt++)); do
-    [ "$(owned_runtime_pid || true)" = "$pid" ] || break
+    [ "$(owned_runtime_pid "$file" || true)" = "$pid" ] || break
     sleep 1
   done
-  [ "$(owned_runtime_pid || true)" != "$pid" ] || kill -KILL "$pid"
-  rm -f "$PIDFILE"
+  [ "$(owned_runtime_pid "$file" || true)" != "$pid" ] || kill -KILL "$pid"
+  rm -f "$file"
   info "stopped"
 }
 
@@ -463,7 +656,7 @@ for argument in "${@:2}"; do
       ;;
   esac
 done
-case "$COMMAND" in --version|version) run_cli "$@" ;; esac
+case "$COMMAND" in --version|version|backup) run_cli "$@" ;; esac
 validate_runtime_ports
 case "$COMMAND" in
   tui|web|start|daemon|stop|restart|status|acp|run|-p|--print) require_curl ;;
@@ -547,7 +740,7 @@ case "$COMMAND" in
   restart)
     shift
     parse_runtime_options "$@"
-    if owned_runtime_pid >/dev/null; then
+    if managed_runtime_pidfile >/dev/null; then
       stop_runtime || exit 1
     elif control_port_in_use; then
       error "port $PORT answers but is not managed by this HOME ($HOME); stop it where it runs, then retry restart"
@@ -559,7 +752,7 @@ case "$COMMAND" in
   status)
     shift
     parse_runtime_options "$@"
-    if ! pid="$(owned_runtime_pid)"; then
+    if ! file="$(managed_runtime_pidfile)" || ! pid="$(owned_runtime_pid "$file")"; then
       if control_plane_healthy; then
         echo "lemon: running, healthy on port $PORT (not managed by this HOME); home: $LEMON_HOME_DIR (launcher)"
         status_context

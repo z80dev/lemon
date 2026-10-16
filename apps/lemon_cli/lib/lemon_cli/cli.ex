@@ -1360,6 +1360,11 @@ defmodule LemonCli.CLI do
   defp backup_error(:backup_restore_locked),
     do: {"operation_locked", "Another backup or restore operation is already running."}
 
+  defp backup_error(:daemon_running),
+    do:
+      {"daemon_running",
+       "A Lemon daemon is running or starting against the restore target; nothing was changed. Stop it with `lemon stop` using its original HOME, control-plane port, and LEMON_RUNTIME_PID_FILE (if overridden), then retry the restore."}
+
   defp backup_error({:sqlite_snapshot_failed, _path, _stage}),
     do:
       {"sqlite_snapshot_failed",

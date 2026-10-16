@@ -16,7 +16,8 @@ defmodule LemonCore.Backup do
   `VACUUM INTO` is the online-backup primitive. Every other file is copied
   byte-for-byte and must not change during the copy.
 
-  Restore verifies the complete bundle before touching the destination. It is
+  Restore verifies the complete bundle before touching the destination and
+  refuses without changing state while a launcher-managed daemon uses it. It is
   additive by default and refuses conflicting files. An overwrite is accepted
   only when the caller supplies both `overwrite: true` and a confirmation
   derived from the verified manifest digest plus the expanded target root;
@@ -36,12 +37,35 @@ defmodule LemonCore.Backup do
 
   Backup files are opaque: Lemon never parses or prints their contents. CLI
   and list/status results expose only aggregate metadata.
+
+  Launchers publish `run/lemon-<port>.paths` below the user's state directory:
+  the canonical home state directory, logical companion-store directory,
+  physical primary database path, and actual PID-file path (including
+  `LEMON_RUNTIME_PID_FILE` overrides), one per line. Restore checks live PID
+  records, startup locks, and launcher health probes for overlapping state
+  paths, including relocated stores and file-symlinked databases. Older
+  three-line records omit the physical database; two-line records also use the
+  default PID file. PID records without paths own their home state directory.
+  Runtimes started outside the launchers are detectable only through those
+  records or the default-home health probe; operators must stop them manually.
+
+  After verifying the whole bundle, restore publishes
+  `run/restore-<target-hash>.lock` with its owner PID and canonical target in
+  both the invoking and target state directories, then checks daemon ownership
+  again before staging. Launchers publish their paths under their start lock
+  before checking restore locks, so either restore sees a starting runtime or
+  startup sees the restore, including when their HOME values differ.
+  Both restore locks remain held through staging, apply, and rollback.
+  `:runtime_probe` accepts a `(port -> boolean)` probe, and
+  `:after_runtime_check` accepts a zero-arity synchronization hook invoked under
+  the lifecycle lock after the final check, before staging.
   """
 
   import Bitwise
 
   alias Exqlite.Sqlite3
   alias LemonCore.Paths
+  alias LemonCore.Runtime.Health
 
   @compile {:no_warn_undefined, Exqlite.Sqlite3}
 
@@ -58,6 +82,7 @@ defmodule LemonCore.Backup do
   @sqlite_header "SQLite format 3\0"
   @sqlite_sidecar_suffixes ["-wal", "-shm", "-journal"]
   @sqlite_busy_timeout_ms 5_000
+  @default_control_plane_port 4040
 
   @always_excluded_roots MapSet.new([
                            "backups",
@@ -188,9 +213,16 @@ defmodule LemonCore.Backup do
          {:ok, summary} <- verify(bundle, Keyword.put(opts, :target, target)),
          {:ok, manifest, manifest_digest} <- read_verified_manifest(bundle),
          {:ok, entries} <- validate_manifest(manifest),
+         :ok <- ensure_no_daemon(target, opts),
          {:ok, result} <-
-           with_lock(target, fn ->
-             do_restore(bundle, target, manifest, manifest_digest, entries, summary, opts)
+           with_runtime_lock(target, opts, fn ->
+             with :ok <- ensure_no_daemon(target, opts) do
+               after_runtime_check(opts)
+
+               with_lock(target, fn ->
+                 do_restore(bundle, target, manifest, manifest_digest, entries, summary, opts)
+               end)
+             end
            end) do
       {:ok, result}
     end
@@ -1103,6 +1135,242 @@ defmodule LemonCore.Backup do
       {:error, :enoent} -> :ok
       {:ok, _stat} -> {:error, :path_exists}
       {:error, reason} -> {:error, {:stat_failed, reason}}
+    end
+  end
+
+  defp ensure_no_daemon(target, opts) do
+    homes = Enum.uniq([source_root(opts), target])
+    target = canonical_path(target)
+
+    if Enum.any?(homes, &registered_runtime?(&1, target, opts)) or
+         (target == canonical_path(source_root(opts)) and
+            probe_running?(opts, control_plane_port())) do
+      {:error, :daemon_running}
+    else
+      :ok
+    end
+  end
+
+  defp registered_runtime?(home, target, opts) do
+    run = Path.join(home, "run")
+
+    case File.ls(run) do
+      {:ok, names} ->
+        names
+        |> Enum.flat_map(fn name ->
+          case Regex.run(~r/\Alemon-(\d+)\.(?:pid|lock|paths)\z/, name) do
+            [_, port] -> [port]
+            _ -> []
+          end
+        end)
+        |> Enum.uniq()
+        |> Enum.any?(&registered_port_uses?(run, home, &1, target, opts))
+
+      {:error, _reason} ->
+        false
+    end
+  end
+
+  defp registered_port_uses?(run, home, port, target, opts) do
+    prefix = Path.join(run, "lemon-#{port}")
+    {paths, pid_file} = runtime_record(prefix, home)
+
+    Enum.any?(paths, &paths_overlap?(canonical_path(&1), target)) and
+      (live_pid_file?(pid_file) or live_pid_file?(prefix <> ".pid") or
+         live_pid_file?(Path.join(prefix <> ".lock", "owner")) or
+         probe_running?(opts, String.to_integer(port)))
+  end
+
+  defp runtime_record(prefix, home) do
+    case read_regular_file(prefix <> ".paths") do
+      {:ok, contents} ->
+        case String.split(contents, "\n", trim: true) do
+          [state, store, primary, pid_file] ->
+            {[state, store, primary], pid_file}
+
+          [state, store, pid_file] ->
+            {[state, store], pid_file}
+
+          [_ | _] = paths ->
+            {paths, prefix <> ".pid"}
+
+          _ ->
+            {[home], prefix <> ".pid"}
+        end
+
+      _ ->
+        {[home], prefix <> ".pid"}
+    end
+  end
+
+  defp read_regular_file(path) do
+    case File.lstat(path) do
+      {:ok, %File.Stat{type: :regular}} -> File.read(path)
+      _ -> {:error, :unsafe_runtime_record}
+    end
+  end
+
+  # Source records bind liveness to a process start time; legacy/release PID
+  # records may contain only the PID. Never signal a process from this probe.
+  defp live_pid_file?(path) do
+    with {:ok, contents} <- read_regular_file(path),
+         [pid | rest] <- String.split(contents, "\n"),
+         {pid, ""} when pid > 0 <- Integer.parse(String.trim(pid)) do
+      process_alive?(pid, rest |> List.first("") |> String.trim())
+    else
+      _ -> false
+    end
+  end
+
+  defp process_alive?(pid, born) do
+    pid = Integer.to_string(pid)
+
+    case System.cmd("ps", ["-p", pid, "-o", "stat="], stderr_to_stdout: true) do
+      {state, 0} ->
+        not String.contains?(state, "Z") and (born == "" or process_start_time(pid) == born)
+
+      {_output, _status} ->
+        false
+    end
+  rescue
+    # Failure to execute the liveness probe is not evidence of a stopped daemon.
+    _ -> true
+  end
+
+  defp process_start_time(pid) do
+    case System.cmd("ps", ["-p", pid, "-o", "lstart="], stderr_to_stdout: true) do
+      {output, 0} -> String.trim(output)
+      _ -> nil
+    end
+  end
+
+  defp probe_running?(opts, port) do
+    case Keyword.get(opts, :runtime_probe) do
+      probe when is_function(probe, 1) -> probe.(port) == true
+      _ -> System.get_env("LEMON_LAUNCHER") not in [nil, ""] and Health.running?(port)
+    end
+  end
+
+  defp control_plane_port do
+    case Integer.parse(System.get_env("LEMON_CONTROL_PLANE_PORT") || "") do
+      {port, ""} when port in 1..65_535 -> port
+      _ -> @default_control_plane_port
+    end
+  end
+
+  defp paths_overlap?(left, right), do: path_within?(left, right) or path_within?(right, left)
+
+  defp path_within?(path, root),
+    do: path == root or String.starts_with?(path, String.trim_trailing(root, "/") <> "/")
+
+  defp canonical_path(path), do: resolve_path(Path.split(Path.expand(path)), "", 0)
+
+  defp resolve_path([], acc, _links), do: acc
+  defp resolve_path(["/" | rest], "", links), do: resolve_path(rest, "/", links)
+
+  defp resolve_path([part | rest], acc, links) do
+    candidate = Path.join(acc, part)
+
+    case File.read_link(candidate) do
+      {:ok, link} when links < 40 ->
+        resolve_path(Path.split(Path.expand(link, acc)) ++ rest, "", links + 1)
+
+      _ ->
+        resolve_path(rest, candidate, links)
+    end
+  end
+
+  defp after_runtime_check(opts) do
+    case Keyword.get(opts, :after_runtime_check) do
+      hook when is_function(hook, 0) -> hook.()
+      _ -> :ok
+    end
+  end
+
+  # Publish in both homes so launchers owned by either HOME see the restore.
+  # Hold every lock through staging, apply, and rollback; unwind partial
+  # acquisition and remove directories created solely for coordination.
+  defp with_runtime_lock(target, opts, fun) do
+    runs =
+      [source_root(opts), target]
+      |> Enum.map(&canonical_path/1)
+      |> Enum.uniq()
+      |> Enum.sort()
+      |> Enum.map(&Path.join(&1, "run"))
+
+    with_runtime_locks(runs, canonical_path(target), fun)
+  end
+
+  defp with_runtime_locks([], _target, fun), do: fun.()
+
+  defp with_runtime_locks([run | rest], target, fun) do
+    digest = :crypto.hash(:sha256, target) |> Base.encode16(case: :lower)
+    lock = Path.join(run, "restore-#{digest}.lock")
+    created = missing_ancestors(run)
+
+    try do
+      with :ok <- mkdir_p_private(run),
+           :ok <- acquire_runtime_lock(run, lock, target) do
+        try do
+          with_runtime_locks(rest, target, fun)
+        after
+          File.rm_rf(lock)
+        end
+      end
+    after
+      Enum.each(created, &File.rmdir/1)
+    end
+  end
+
+  defp acquire_runtime_lock(run, lock, target, retry? \\ true) do
+    staging = Path.join(run, ".restore-lock.#{unique_suffix()}")
+
+    try do
+      with :ok <- mkdir_p_private(staging),
+           :ok <- write_synced(Path.join(staging, "owner"), "#{System.pid()}\n"),
+           :ok <- write_synced(Path.join(staging, "target"), target <> "\n") do
+        case File.rename(staging, lock) do
+          :ok ->
+            :ok
+
+          {:error, _reason} ->
+            if retry? and reap_runtime_lock(lock),
+              do: acquire_runtime_lock(run, lock, target, false),
+              else: {:error, :backup_restore_locked}
+        end
+      end
+    after
+      File.rm_rf(staging)
+    end
+  end
+
+  defp reap_runtime_lock(lock) do
+    reaping = Path.join(lock, "reaping")
+
+    case File.mkdir(reaping) do
+      :ok ->
+        try do
+          if not live_pid_file?(Path.join(lock, "owner")) do
+            File.rm(Path.join(lock, "owner"))
+            File.rm(Path.join(lock, "target"))
+            true
+          else
+            false
+          end
+        after
+          File.rmdir(reaping)
+          File.rmdir(lock)
+        end
+
+      _ ->
+        false
+    end
+  end
+
+  defp missing_ancestors(path) do
+    case File.lstat(path) do
+      {:error, :enoent} -> [path | missing_ancestors(Path.dirname(path))]
+      _ -> []
     end
   end
 

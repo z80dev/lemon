@@ -168,6 +168,59 @@ is never replayed into restored data. Bundles written before snapshots used
 `VACUUM INTO` list their `-wal`/`-shm` as ordinary files; those are restored
 with the database like any other entry.
 
+## Restore refuses while Lemon is running
+
+After verifying the entire bundle, restore refuses with `daemon_running` before
+staging files or changing the destination whenever a launcher-managed Lemon
+daemon uses the target. This applies to both `./bin/lemon` source runtimes and
+packaged `lemon` releases, including an unhealthy daemon or one still starting.
+An overwrite confirmation does not bypass this protection.
+
+The launchers record their canonical user-state directory, logical companion-store
+directory, physical primary database path, and actual PID-file path in
+`~/.lemon/run/lemon-<port>.paths`. A live PID record, live startup-lock owner, or
+responding control plane protects any restore target that equals, contains, or
+lies inside those state paths. Symlinked paths are resolved before comparison.
+Relocating the store with `LEMON_STORE_PATH` or changing
+`LEMON_RUNTIME_PID_FILE` does not hide the runtime. Relative store paths resolve
+against the source/release root, not the directory from which the launcher was
+called. An explicit `.db`, `.sqlite`, or `.sqlite3` file protects both its logical
+companion-store directory and the physical database, including a file symlink
+whose destination lies outside that directory.
+
+Stop the daemon using the same home, control-plane port, and PID-file override
+that started it, then retry:
+
+```bash
+lemon stop
+lemon backup restore /secure/offline/lemon-2026-08-30.lemonbackup
+
+# Example for a customized daemon:
+LEMON_CONTROL_PLANE_PORT=5050 LEMON_RUNTIME_PID_FILE=/srv/lemon/runtime.pid lemon stop
+```
+
+A live `<target>/run/lemon-<port>.pid` also protects that target; a recorded
+process start time must still match. Older launcher records without `.paths`
+protect their home state directory. Restore into an isolated `--target` is
+allowed when no live runtime owns an overlapping path.
+
+Restore publishes `run/restore-<target-hash>.lock` in both the invoking home state
+directory and the target directory, holding both locks from the final ownership
+check, before staging, through apply or rollback. This also coordinates launchers
+whose `HOME` differs from the restoring process and whose `~/.lemon` is the target.
+A launcher starting during that interval refuses with a “backup restore” error;
+wait for restore to finish, then start again. A crashed restore's lock no longer
+blocks startup once its owner process is gone. Startup checks existing live
+runtime ownership before publishing new paths, so a rejected launch cannot conceal a live
+runtime by overwriting its record. Backup commands do not bootstrap launcher
+credentials or other runtime state.
+
+Runtimes started entirely outside these launchers do not publish ownership
+records. They are detected only if they have matching PID records or answer
+the default-home control-plane health probe. Stop such externally managed
+runtimes yourself before restoring; arbitrary external runtime discovery is
+outside this guarantee.
+
 ## JSON and exit codes
 
 Every subcommand supports `--json`. A successful command writes exactly one
