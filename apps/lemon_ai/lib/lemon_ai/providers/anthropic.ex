@@ -331,12 +331,10 @@ defmodule LemonAi.Providers.Anthropic do
       "No API key provided for Kimi. Set KIMI_API_KEY (or MOONSHOT_API_KEY) or pass api_key in options."
 
   defp missing_api_key_error(:opencode),
-    do:
-      "No API key provided for OpenCode. Set OPENCODE_API_KEY (or ANTHROPIC_API_KEY) or pass api_key in options."
+    do: "No API key provided for OpenCode. Set OPENCODE_API_KEY or pass api_key in options."
 
   defp missing_api_key_error("opencode"),
-    do:
-      "No API key provided for OpenCode. Set OPENCODE_API_KEY (or ANTHROPIC_API_KEY) or pass api_key in options."
+    do: "No API key provided for OpenCode. Set OPENCODE_API_KEY or pass api_key in options."
 
   defp missing_api_key_error(_),
     do: "No API key provided for Anthropic. Set ANTHROPIC_API_KEY or pass api_key in options."

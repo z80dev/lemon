@@ -208,6 +208,17 @@ defmodule LemonAi.Providers.AnthropicStreamingTest do
     )
   end
 
+  test "opencode missing key guidance does not advertise ambient Anthropic fallback" do
+    with_env(%{"OPENCODE_API_KEY" => nil, "ANTHROPIC_API_KEY" => "ambient"}, fn ->
+      context = Context.new(messages: [%UserMessage{content: "Hi"}])
+      {:ok, stream} = Anthropic.stream(opencode_model(), context, %StreamOptions{})
+
+      assert {:error, %{error_message: msg}} = EventStream.result(stream, 1_000)
+      assert msg =~ "OPENCODE_API_KEY"
+      refute msg =~ "ANTHROPIC_API_KEY"
+    end)
+  end
+
   test "Kimi never borrows ANTHROPIC_API_KEY from another principal" do
     test_pid = self()
 
