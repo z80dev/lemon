@@ -273,6 +273,11 @@ defmodule LemonCli.Setup.GatewayTest do
       assert config =~ "allowed_chat_ids = [4242, -1001234567890]"
       refute config =~ @telegram_token
       refute Enum.any?(messages(get_log.()), &String.contains?(&1, @telegram_token))
+
+      assert Enum.any?(
+               messages(get_log.()),
+               &(&1 == "Open your bot: https://t.me/lemon_test_bot")
+             )
     end
 
     test "interactive pairing captures the chat that sends /start and acknowledges it" do
@@ -356,6 +361,7 @@ defmodule LemonCli.Setup.GatewayTest do
 
       assert Enum.any?(error_messages(get_log.()), &String.contains?(&1, "401"))
       refute Enum.any?(messages(get_log.()), &String.contains?(&1, @telegram_token))
+      refute Enum.any?(messages(get_log.()), &String.contains?(&1, "t.me/"))
     end
   end
 
