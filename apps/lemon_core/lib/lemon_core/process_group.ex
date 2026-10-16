@@ -89,13 +89,26 @@ defmodule LemonCore.ProcessGroup do
     end
   end
 
-  def signal_workload_group(identity, signal, root_exited \\ false)
-      when signal in [:sigterm, :sigkill] do
+  def signal_workload_group(identity, signal, root_exited \\ false) do
+    signal_workload_group(identity, signal, root_exited, fn _observed -> :ok end)
+  end
+
+  @doc """
+  Revalidate ownership, then persist the final observed witness before signalling.
+
+  `before_signal` must return `:ok` only after its durability barrier succeeds.
+  Any other return, exception or exit refuses the signal.
+  """
+  def signal_workload_group(identity, signal, root_exited, before_signal)
+      when signal in [:sigterm, :sigkill] and is_function(before_signal, 1) do
     case workload_group_status(identity, root_exited) do
       {:alive, %{pgid: pgid} = observed} ->
-        case signal_process_group(pgid, signal) do
+        result =
+          with :ok <- before_signal.(observed), do: signal_process_group(pgid, signal)
+
+        case result do
           :ok -> {:ok, observed}
-          :error -> {:error, :workload_unobservable, observed}
+          _ -> {:error, :workload_unobservable, observed}
         end
 
       :terminated ->

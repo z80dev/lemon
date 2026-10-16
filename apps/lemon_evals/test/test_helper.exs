@@ -1,4 +1,8 @@
-ExUnit.configure(exclude: [:integration])
+excluded =
+  if :os.type() == {:unix, :darwin}, do: [:integration], else: [:integration, :darwin_only]
+
+ExUnit.configure(exclude: excluded)
+
 ExUnit.start(capture_log: true)
 
 Code.require_file(
