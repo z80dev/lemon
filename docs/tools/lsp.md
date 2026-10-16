@@ -88,6 +88,10 @@ Behavior:
   state for repeated as well as disjoint paths. A failed action reports
   `success: false`; its receipt still identifies any committed paths and
   recoverable checkpoints.
+  If an interrupted server-requested edit has no final outcome, `affected_paths`
+  identifies captured paths that may have changed, with an uncertainty warning;
+  the receipt does not claim those paths stayed untouched. `changed_files` still
+  reports confirmed mutations from completed batches.
 - `status` lists every registered server as installed, missing (with its
   install hint) or running for this session.
 

@@ -856,13 +856,11 @@ defmodule CodingAgent.Tools.Lsp do
     {:ok, receipts} = Agent.start_link(fn -> [] end)
     on_checkpoint = Keyword.get(ctx.opts, :on_checkpoint)
 
+    # A published checkpoint precedes the batch's writes; until that batch
+    # reports its outcome, every captured path may have changed.
     opts =
       Keyword.put(ctx.opts, :on_checkpoint, fn checkpoint ->
-        if checkpoint do
-          details = CheckpointGuard.put_details(%{applied: false, changed_files: []}, checkpoint)
-          Agent.update(receipts, &[{:ok, {"", details}} | &1])
-        end
-
+        if checkpoint, do: Agent.update(receipts, &[{:checkpoint, checkpoint} | &1])
         if on_checkpoint, do: on_checkpoint.(checkpoint)
       end)
 
@@ -900,7 +898,8 @@ defmodule CodingAgent.Tools.Lsp do
           )
         end)
 
-      {text, details, failures} = receipts |> Agent.get(&Enum.reverse/1) |> apply_receipts()
+      {text, details, failures} =
+        receipts |> Agent.get(&Enum.reverse/1) |> apply_receipts(ctx.cwd)
 
       response =
         case result do
@@ -935,8 +934,39 @@ defmodule CodingAgent.Tools.Lsp do
     end
   end
 
-  defp apply_receipts(receipts) do
+  defp apply_receipts(receipts, cwd) do
+    reported =
+      receipts
+      |> Enum.flat_map(fn
+        {:ok, {_text, details}} -> checkpoint_ids(details)
+        {:partial_error, _reason, details} -> checkpoint_ids(details)
+        _ -> []
+      end)
+      |> MapSet.new()
+
     Enum.reduce(receipts, {"", %{}, []}, fn
+      {:checkpoint, checkpoint}, {text, details, failures} ->
+        details = merge_apply_details(details, CheckpointGuard.put_details(%{}, checkpoint))
+
+        if MapSet.member?(reported, checkpoint.id) do
+          {text, details, failures}
+        else
+          paths =
+            checkpoint
+            |> get_in([:state, :filesystem, :files])
+            |> List.wrap()
+            |> Enum.map(&Text.display_path(&1.path, cwd))
+
+          unreported = %{success: false, affected_paths: paths}
+
+          {text, merge_apply_details(details, unreported),
+           failures ++
+             [
+               "Workspace edit after checkpoint #{checkpoint.id} did not report its outcome; " <>
+                 "these paths may have changed: #{Enum.join(paths, ", ")}"
+             ]}
+        end
+
       {:ok, {more, more_details}}, {text, details, failures} ->
         {text <> more, merge_apply_details(details, more_details), failures}
 
@@ -952,7 +982,7 @@ defmodule CodingAgent.Tools.Lsp do
     checkpoints = Enum.uniq(checkpoint_ids(left) ++ checkpoint_ids(right))
 
     Map.merge(left, right, fn
-      :changed_files, a, b -> Enum.uniq(a ++ b)
+      key, a, b when key in [:changed_files, :affected_paths] -> Enum.uniq(a ++ b)
       :applied, a, b -> a or b
       :success, a, b -> a and b
       _key, _a, b -> b

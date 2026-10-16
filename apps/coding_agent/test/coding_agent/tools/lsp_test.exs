@@ -302,6 +302,10 @@ defmodule CodingAgent.Tools.LspTest do
 
     refute result.details.success
     assert result.details.checkpoint_ids == [first_id, second_id]
+    assert result.details.changed_files == ["src/main.c"]
+    # The in-flight batch never reported, so its captured paths are not claimed untouched.
+    assert result.details.affected_paths == ["src/main.c"]
+    assert text!(result) =~ "checkpoint #{second_id} did not report its outcome"
 
     for id <- Enum.reverse(result.details.checkpoint_ids) do
       assert {:ok, _} = CodingAgent.Checkpoint.restore_filesystem(id)
