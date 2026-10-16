@@ -495,6 +495,36 @@ run_premerge() {
   echo "the full suite (main after merge), dialyzer/install/sim-bench (CI)."
 }
 
+# Under the factory, umbrella lanes that compile or run BEAM tests are gated by
+# the shared heavy runner. The runner re-executes this script with the same lane
+# and arguments once it holds a heavy lease. A process that inherited a lease
+# (FACTORY_HEAVY_LEASE_FD and FACTORY_HEAVY_LEASE_TOKEN) proceeds only if the
+# runner validates it; any validation failure is fatal. There is deliberately
+# no unvalidated environment bypass; outside the factory nothing changes.
+route_heavy_lane() {
+  [ -n "${FACTORY_PROJECT:-}" ] || return 0
+  local runner="${FACTORY_HEAVY_RUNNER:-}" python="${FACTORY_PYTHON:-python3}"
+  if [ -z "$runner" ] || [ ! -f "$runner" ]; then
+    cat >&2 <<EOF
+error: scripts/test $LANE is a heavy lane and FACTORY_PROJECT is set, but the factory heavy runner is unavailable (FACTORY_HEAVY_RUNNER=${runner:-<unset>}).
+Refusing to run unleased; launch through the factory supervisor, or unset FACTORY_PROJECT outside the factory.
+EOF
+    exit 70
+  fi
+  if [ -n "${FACTORY_HEAVY_LEASE_FD:-}" ] && [ -n "${FACTORY_HEAVY_LEASE_TOKEN:-}" ]; then
+    if "$python" "$runner" validate >/dev/null; then
+      return 0
+    fi
+    echo "error: scripts/test $LANE: inherited factory heavy lease failed validation; refusing to run." >&2
+    exit 70
+  fi
+  exec "$python" "$runner" run -- "$ROOT/scripts/test" "$LANE" "$@"
+}
+
+case "$LANE" in
+  fast|coverage|changed|premerge|quality|eval-fast|live-eval|path|all) route_heavy_lane "$@" ;;
+esac
+
 case "$LANE" in
   help|-h|--help) usage ;;
   fast) run_fast "$@" ;;

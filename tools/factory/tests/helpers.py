@@ -27,7 +27,7 @@ class FactoryHome:
     def __init__(self) -> None:
         self.root = Path(tempfile.mkdtemp(prefix="factory-home-"))
         self.env = {
-            **os.environ,
+            **{key: value for key, value in os.environ.items() if not key.startswith("FACTORY_")},
             "FACTORY_CONFIG_HOME": str(self.root / "config"),
             "FACTORY_STATE_HOME": str(self.root / "state"),
             "FACTORY_DATA_HOME": str(self.root / "data"),

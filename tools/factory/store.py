@@ -16,7 +16,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 BUSY_TIMEOUT_MS = 5000
 
 PRIORITIES = ("urgent", "high", "normal", "low")
@@ -94,6 +94,9 @@ CREATE TABLE IF NOT EXISTS attempts (
   head_sha TEXT,
   branch TEXT,
   outcome TEXT,
+  write_set TEXT NOT NULL DEFAULT '["**"]',
+  overlap_override TEXT,
+  overlap_conflicts TEXT NOT NULL DEFAULT '[]',
   created_at REAL NOT NULL,
   updated_at REAL NOT NULL
 );
@@ -203,6 +206,7 @@ def _task_row(row: sqlite3.Row) -> dict[str, Any]:
 def _attempt_row(row: sqlite3.Row) -> dict[str, Any]:
     attempt = dict(row)
     attempt["outcome"] = json.loads(attempt["outcome"]) if attempt["outcome"] else None
+    attempt["write_set"] = json.loads(attempt["write_set"])
     return attempt
 
 
@@ -261,7 +265,16 @@ class Ledger:
                 conn.execute("INSERT INTO meta VALUES ('schema_version', ?)", (str(SCHEMA_VERSION),))
             elif int(row["value"]) > SCHEMA_VERSION:
                 raise FactoryError(f"ledger schema {row['value']} is newer than this factory ({SCHEMA_VERSION})")
-            elif int(row["value"]) < SCHEMA_VERSION:  # additive migrations: new tables only
+            elif int(row["value"]) < SCHEMA_VERSION:
+                columns = {column["name"] for column in conn.execute("PRAGMA table_info(attempts)")}
+                if "write_set" not in columns:
+                    # Old reservations have no trustworthy snapshot: never use the
+                    # task's possibly edited scope to narrow their protection.
+                    conn.execute("""ALTER TABLE attempts ADD COLUMN write_set TEXT NOT NULL DEFAULT '["**"]'""")
+                if "overlap_override" not in columns:
+                    conn.execute("ALTER TABLE attempts ADD COLUMN overlap_override TEXT")
+                if "overlap_conflicts" not in columns:
+                    conn.execute("ALTER TABLE attempts ADD COLUMN overlap_conflicts TEXT NOT NULL DEFAULT '[]'")
                 conn.execute("UPDATE meta SET value = ? WHERE key = 'schema_version'", (str(SCHEMA_VERSION),))
             conn.execute(
                 "INSERT OR IGNORE INTO runtime (project_id, updated_at) VALUES (?, ?)",
@@ -549,11 +562,11 @@ class Ledger:
         self, task_id: str, expected_revision: int, stage: str, *, epoch: int, actor: str, request_key: str | None,
         base_sha: str | None = None, max_live: int | None = None, max_per_day: int | None = None,
     ) -> dict[str, Any]:
-        """Deterministic admission: runtime mode, epoch fencing, capacity, budget, task state and dependencies."""
+        """Atomically check admission; write sets are informational only."""
         if stage not in STAGE_REQUIRES:
             raise Invalid(f"stage must be one of {sorted(STAGE_REQUIRES)}")
-        request_digest = digest("reserve", {"task_id": task_id, "rev": expected_revision, "stage": stage,
-                                            "epoch": epoch})
+        request = {"task_id": task_id, "rev": expected_revision, "stage": stage, "epoch": epoch}
+        request_digest = digest("reserve", request)
         with self.write() as conn:
             replay = self._replay(conn, request_key, "reserve", request_digest)
             if replay is not None:
@@ -598,8 +611,10 @@ class Ledger:
             now = time.time()
             conn.execute(
                 "INSERT INTO attempts (id, project_id, task_id, task_revision, stage, epoch, status, base_sha,"
-                " created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 'reserved', ?, ?, ?)",
-                (attempt_id, self.project_id, task_id, expected_revision, stage, epoch, base_sha, now, now),
+                " write_set, created_at, updated_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, 'reserved', ?, ?, ?, ?)",
+                (attempt_id, self.project_id, task_id, expected_revision, stage, epoch, base_sha,
+                 json.dumps(task["write_set"]), now, now),
             )
             # Implementation/repair make the task active; a review leaves it READY while it runs.
             conn.execute(
@@ -607,8 +622,10 @@ class Ledger:
                 " revision = revision + 1, updated_at = ? WHERE id = ?",
                 (stage, attempt_id, now, task_id),
             )
-            self._event(conn, "attempt.reserved", actor, {"attempt_id": attempt_id, "stage": stage, "epoch": epoch},
-                        task_id, request_key)
+            self._event(conn, "attempt.reserved", actor, {
+                "attempt_id": attempt_id, "stage": stage, "epoch": epoch,
+                "write_set": task["write_set"],
+            }, task_id, request_key)
             self._remember(conn, request_key, "reserve", request_digest, {"attempt_id": attempt_id})
             return self.get_attempt_in(conn, attempt_id)
 
