@@ -22,8 +22,8 @@ defmodule CodingAgent.Tools.Browser do
     {resolution, opts} =
       Keyword.pop_lazy(opts, :browser_provider_resolution, &LemonCore.BrowserProvider.resolve/0)
 
-    # Each tool closure lands in the per-run tool schema snapshot event, so keep
-    # only what routing and the description read, not per-provider diagnostics.
+    # Routing reads the selection and, when nothing is available, its reason;
+    # per-provider diagnostics stay in doctor and control-plane status.
     resolution = Map.take(resolution, [:requested, :provider, :reason])
 
     runtime = %{
@@ -62,10 +62,7 @@ defmodule CodingAgent.Tools.Browser do
     %AgentTool{
       name: spec.name,
       timeout_ms: :infinity,
-      description:
-        spec.description <>
-          "\n\nBrowser provider: #{resolution.requested} -> #{resolution.provider || "none"}. " <>
-          resolution.reason,
+      description: describe(spec, resolution),
       label: spec.label,
       parameters: maybe_add_target_parameter(spec.parameters, spec),
       execute: fn tool_call_id, params, signal, on_update ->
@@ -73,6 +70,14 @@ defmodule CodingAgent.Tools.Browser do
       end
     }
   end
+
+  # One short provider line on the entry-point tool. The detection reason is
+  # left to doctor and control-plane status, and to the error a request returns
+  # when no provider is available.
+  defp describe(%{name: "browser_navigate", description: description}, resolution),
+    do: description <> "\n\nBrowser provider: #{resolution.provider || "none"}."
+
+  defp describe(spec, _resolution), do: spec.description
 
   def execute(_tool_call_id, params, signal, on_update, cwd, runtime, spec) do
     with :ok <- check_abort(signal),

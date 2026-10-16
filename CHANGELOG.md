@@ -53,7 +53,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 - Unified configurable browser provider selection across browser tools, LCU Chrome
   control, doctor and control-plane browser status. Auto selection prefers ready
   LCU, then an authenticated relay, then local Chrome; explicit providers fail
-  closed. Diagnostics expose fixed redacted reasons without starting browsers.
+  closed. Diagnostics expose fixed redacted reasons without starting browsers;
+  tool lists probe the provider at most once per build, never when browser tools
+  are excluded, and name only the selected provider in tool descriptions.
   Document provider configuration and the shared LCU native-host connector's
   Codex/ChatGPT impact, backup requirements and rollback limitations.
 

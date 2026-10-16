@@ -65,8 +65,9 @@ the tools stay listed and their description and results say why.
 | `cua_js_reset` | – | Resets the JavaScript session. Apps and windows are left as they are. |
 
 Schemas are the runtime's own, unchanged. Lemon appends its tool-name mapping
-and the resolved browser provider and redacted reason to the runtime descriptions,
-so the agent can discover the available surface. The first `cua_js` call returns
+and whether the running bridge exposes Chrome (it does when `lcu` was the
+resolved browser provider at connect), so the agent can discover the available
+surface. The first `cua_js` call returns
 the full API guide and confirmation policy. Results
 (text and screenshots) are forwarded as the runtime returned them and marked
 untrusted: window titles, UI text and screenshots from other apps are data,

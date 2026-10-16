@@ -4,10 +4,10 @@ defmodule LemonComputerUse.Tools.Common do
   computer-use server's `js` and `js_reset` descriptors.
 
   The input schema is the runtime's own, unchanged. Its description is followed
-  by Lemon's tool-name mapping and the resolved browser surface. Results are
-  forwarded as the runtime returned them — text and images, with its error flag
-  — and marked untrusted: they carry window titles, UI text and screenshots of
-  arbitrary apps, so instructions inside them are data.
+  by Lemon's tool-name mapping and whether the running bridge exposes Chrome.
+  Results are forwarded as the runtime returned them — text and images, with its
+  error flag — and marked untrusted: they carry window titles, UI text and
+  screenshots of arbitrary apps, so instructions inside them are data.
   """
 
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
@@ -40,8 +40,10 @@ defmodule LemonComputerUse.Tools.Common do
 
   @spec tool(String.t(), keyword()) :: AgentTool.t()
   def tool(original, opts) when original in ["js", "js_reset"] do
+    catalog = Server.cached_catalog() || catalog()
+
     {description, parameters} =
-      case Server.cached_catalog() || catalog() do
+      case catalog do
         %{tools: tools} -> describe(original, tools)
         {:error, reason} -> unavailable(original, reason)
       end
@@ -50,23 +52,18 @@ defmodule LemonComputerUse.Tools.Common do
       name: Map.fetch!(@names, original),
       timeout_ms: :infinity,
       label: Map.fetch!(@labels, original),
-      description: description <> "\n\n" <> browser_surface(),
+      description: description <> "\n\n" <> browser_surface(catalog),
       parameters: parameters,
       execute: &execute(original, &1, &2, &3, &4, opts)
     }
   end
 
-  defp browser_surface do
-    resolution = LemonCore.BrowserProvider.resolve()
-    provider = resolution.provider || "none"
+  # The bridge records whether it was launched with LCU's Chrome surface, so
+  # building these tools never probes the browser provider.
+  defp browser_surface(%{chrome: true}), do: "Use this computer-use runtime for Chrome."
 
-    surface =
-      if provider == "lcu",
-        do: "Use this computer-use runtime for Chrome.",
-        else: "Chrome is not exposed in this runtime; use the browser_* tools instead."
-
-    "Browser provider: #{resolution.requested} -> #{provider}. #{resolution.reason} #{surface}"
-  end
+  defp browser_surface(_catalog),
+    do: "Chrome is not exposed in this runtime; use the browser_* tools instead."
 
   defp catalog do
     case Server.catalog() do

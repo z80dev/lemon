@@ -76,6 +76,8 @@ defmodule CodingAgent.ExtensionLifecycle do
       |> Keyword.put(:wasm_status, wasm_status)
       |> Keyword.put(:tool_policy, tool_policy)
       |> Keyword.put(:approval_context, approval_context)
+      # Tools and the conflict report share one browser provider probe.
+      |> ToolRegistry.put_browser_provider_resolution()
 
     disclosure_cfg =
       ToolDisclosure.config(settings_manager, Keyword.get(tool_opts, :tool_disclosure))
@@ -166,6 +168,7 @@ defmodule CodingAgent.ExtensionLifecycle do
       tool_opts
       |> Keyword.put(:tool_policy, tool_policy)
       |> Keyword.put(:approval_context, approval_context)
+      |> ToolRegistry.put_browser_provider_resolution()
 
     disclosure_cfg =
       ToolDisclosure.config(settings_manager, Keyword.get(tool_opts, :tool_disclosure))

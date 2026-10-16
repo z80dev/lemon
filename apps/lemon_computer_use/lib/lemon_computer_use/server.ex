@@ -51,7 +51,8 @@ defmodule LemonComputerUse.Server do
             waiters: [],
             elicitations: %{},
             turns: %{},
-            run_topics: MapSet.new()
+            run_topics: MapSet.new(),
+            chrome?: false
 
   # ── Public API ──────────────────────────────────────────────────────────
 
@@ -291,9 +292,16 @@ defmodule LemonComputerUse.Server do
   end
 
   defp start_op(:connect, state) do
-    case ensure_bridge(state) do
+    # Resolve the command once per connect; the catalog records whether this
+    # bridge exposes Chrome so tool builds never re-probe the browser provider.
+    command = Config.command()
+
+    case ensure_bridge(state, command) do
       {:ok, state} ->
-        dispatch(state, :connect, %{type: "connect", command: Config.command()})
+        dispatch(%{state | chrome?: "--chrome" in command}, :connect, %{
+          type: "connect",
+          command: command
+        })
 
       {:error, reason, state} ->
         state |> connect_failed(reason) |> run_next()
@@ -411,7 +419,12 @@ defmodule LemonComputerUse.Server do
 
   defp complete(state, :connect, {:ok, %{"instructions" => instructions, "tools" => tools}})
        when is_list(tools) do
-    :persistent_term.put(@catalog_key, %{instructions: instructions || "", tools: tools})
+    :persistent_term.put(@catalog_key, %{
+      instructions: instructions || "",
+      tools: tools,
+      chrome: state.chrome?
+    })
+
     %{state | connected?: true, last_error: nil} |> reply_waiters({:ok, cached_catalog()})
   end
 
@@ -561,13 +574,12 @@ defmodule LemonComputerUse.Server do
 
   # ── Bridge process ──────────────────────────────────────────────────────
 
-  defp ensure_bridge(%{port: port} = state) when is_port(port), do: {:ok, state}
+  defp ensure_bridge(%{port: port} = state, _command) when is_port(port), do: {:ok, state}
 
-  defp ensure_bridge(state) do
+  defp ensure_bridge(state, [lcu | _]) do
     root = Config.lcu_root()
     node = Config.node()
     script = Config.bridge_script()
-    [lcu | _] = Config.command()
 
     cond do
       not File.regular?(lcu) ->

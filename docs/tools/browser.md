@@ -37,6 +37,12 @@ never silently switch to another provider, browser identity, or profile.
 browser subsystem uses the same read-only core resolver; neither diagnostic
 starts a browser or installs anything.
 
+A session's tool list resolves the provider once, and not at all when
+`disabled`, `enabled_only` or the tool policy exclude every `browser_*` tool.
+Tool descriptions name only the selected provider (on `browser_navigate`); the
+detection reason appears in `lemon doctor`, control-plane `status`, and the error
+a browser request returns when no provider is available.
+
 With `lcu`, Chrome control is exposed through [`cua_js`](computer-use.md#chrome),
 not the `browser_*` tool family. It starts the shared computer-use runtime,
 including native app APIs under the existing app approval policy. The explicit
