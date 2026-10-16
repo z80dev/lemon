@@ -146,6 +146,11 @@
   fails, preventing foreign submissions and later cron cancellation tests from
   inheriting a fixture dispatcher.
 
+- Native `eval` binds the kernel's reported pid and process group as a
+  `ps`-verified witness at startup and, on reset, abort, owner loss, idle
+  disposal and crash, stops that group including children reparented after
+  their launcher exits. A ready frame naming a foreign group is refused and
+  never signalled; unrelated processes are untouched.
 - Managed process capture attachments validate the exact launch owner and
   fingerprint without resetting output or logs. Cleared launches retain durable
   receipts and reject late capture writes; failed accounting or capture cleanup

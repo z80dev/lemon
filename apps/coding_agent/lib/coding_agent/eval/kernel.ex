@@ -19,6 +19,17 @@ defmodule CodingAgent.Eval.Kernel do
   next run reports that it started a fresh kernel and why the previous one
   ended. Without an owner pid the slot stops entirely after its idle timeout.
 
+  Each driver leads its own OS process group (the JavaScript kernel is a
+  detached child of `js_kernel_host.js`, so its group differs from the port
+  process) and reports its pid in the `ready` frame. That frame is only a
+  claim: the slot binds the pid only when `ps` shows it leading its own group
+  and being the port process itself or its direct child with the same birth.
+  The group is then signalled only while that witness still matches, so
+  children reparented away from the kernel but still in its group die with it.
+  On Unix a kernel whose group cannot be proven this way is killed through the
+  port process tree and the run is refused, rather than reporting a stoppable
+  kernel that is not.
+
   Caller messages for an accepted run `ref`:
 
     * `{:lemon_eval, ref, {:output, binary}}` - raw user output bytes
@@ -49,6 +60,7 @@ defmodule CodingAgent.Eval.Kernel do
     :idle_timer,
     :port,
     :os_pid,
+    :kernel_group,
     :marker,
     :busy,
     :lost_reason,
@@ -207,7 +219,7 @@ defmodule CodingAgent.Eval.Kernel do
   end
 
   def handle_info({port, {:exit_status, status}}, %{port: port} = state) do
-    if state.os_pid, do: BashExecutor.kill_process_tree(state.os_pid)
+    kill_os_processes(state, true)
     state = flush_buffer(state)
 
     if state.busy do
@@ -218,7 +230,15 @@ defmodule CodingAgent.Eval.Kernel do
     if state.display_path, do: File.rm(state.display_path)
     state = complete_interrupt(state, :killed)
 
-    {:noreply, arm_idle(%{state | port: nil, os_pid: nil, busy: nil, lost_reason: :crashed})}
+    {:noreply,
+     arm_idle(%{
+       state
+       | port: nil,
+         os_pid: nil,
+         kernel_group: nil,
+         busy: nil,
+         lost_reason: :crashed
+     })}
   end
 
   def handle_info({:EXIT, port, _reason}, %{port: port} = state), do: {:noreply, state}
@@ -293,6 +313,7 @@ defmodule CodingAgent.Eval.Kernel do
         state
         | port: port,
           os_pid: os_pid,
+          kernel_group: nil,
           marker: marker,
           buffer: "",
           generation: state.generation + 1,
@@ -323,15 +344,16 @@ defmodule CodingAgent.Eval.Kernel do
         state = %{state | buffer: buffer}
         startup_output = [startup_output | raw]
 
-        if Enum.any?(frames, &match?(%{"type" => "ready"}, &1)),
-          do: {:ok, state},
-          else: await_ready(state, deadline, startup_output)
+        case Enum.find(frames, &match?(%{"type" => "ready"}, &1)) do
+          nil -> await_ready(state, deadline, startup_output)
+          ready -> bind_kernel_group(state, ready)
+        end
 
       {^port, {:exit_status, status}} ->
         output = startup_tail([startup_output, state.buffer])
 
         {:error, "kernel exited during startup (status #{status})#{output}",
-         %{state | port: nil, os_pid: nil, buffer: "", lost_reason: :crashed}}
+         %{state | port: nil, os_pid: nil, kernel_group: nil, buffer: "", lost_reason: :crashed}}
     after
       remaining ->
         output = startup_tail([startup_output, state.buffer])
@@ -347,10 +369,71 @@ defmodule CodingAgent.Eval.Kernel do
     end
   end
 
+  defp bind_kernel_group(state, ready) do
+    case {owned_kernel_group(ready, state.os_pid), :os.type()} do
+      {{:ok, group}, _os} ->
+        {:ok, %{state | kernel_group: group}}
+
+      {:error, {:win32, _}} ->
+        # No process groups or `ps`; the port tree kill (`taskkill /T`) applies.
+        {:ok, state}
+
+      {:error, _unix} ->
+        state = kill_kernel(state, :crashed)
+
+        {:error,
+         "could not prove the kernel's own process group (needs ps); refusing to run code whose processes could not be stopped",
+         state}
+    end
+  end
+
+  defp owned_kernel_group(%{"pid" => pid}, port_pid)
+       when is_integer(pid) and is_integer(port_pid) do
+    with {:ok, group} <- BashExecutor.capture_workload_group(pid),
+         true <- pid == port_pid or port_child?(group, port_pid) do
+      {:ok, group}
+    else
+      _ -> :error
+    end
+  end
+
+  defp owned_kernel_group(_ready, _port_pid), do: :error
+
+  # The claimed leader must be a direct child of the live port process, observed
+  # with the same birth as the group witness (so not a recycled pid).
+  defp port_child?(%{root_pid: pid, root_birth: birth}, port_pid) do
+    with ps when is_binary(ps) <- Enum.find(["/bin/ps", "/usr/bin/ps"], &File.regular?/1),
+         {output, 0} <-
+           System.cmd(ps, ["-o", "ppid=,lstart=", "-p", Integer.to_string(pid)],
+             stderr_to_stdout: true
+           ),
+         [parent, observed_birth] <- String.split(String.trim(output), ~r/\s+/, parts: 2),
+         {^port_pid, ""} <- Integer.parse(parent) do
+      observed_birth == birth
+    else
+      _ -> false
+    end
+  rescue
+    _ -> false
+  end
+
+  # Signal the witnessed kernel group first, while its leader can still prove
+  # ownership, then the port process tree. After the port exited, a kernel
+  # group rooted at the port pid is known to have exited, so a live process
+  # with that pid is a recycled identity and is never signalled.
+  defp kill_os_processes(state, port_exited) do
+    if state.kernel_group do
+      root_exited = port_exited and state.kernel_group.root_pid == state.os_pid
+      BashExecutor.signal_workload_group(state.kernel_group, :sigkill, root_exited)
+    end
+
+    if state.os_pid, do: BashExecutor.kill_process_tree(state.os_pid)
+  end
+
   defp kill_kernel(%{port: nil} = state, _reason), do: state
 
   defp kill_kernel(%{port: port} = state, reason) do
-    if state.os_pid, do: BashExecutor.kill_process_tree(state.os_pid)
+    kill_os_processes(state, false)
 
     # Relay output that was produced before the kill.
     state = drain_port(state)
@@ -373,7 +456,16 @@ defmodule CodingAgent.Eval.Kernel do
 
     if state.display_path, do: File.rm(state.display_path)
     state = complete_interrupt(state, :killed)
-    %{state | port: nil, os_pid: nil, busy: nil, buffer: "", lost_reason: reason}
+
+    %{
+      state
+      | port: nil,
+        os_pid: nil,
+        kernel_group: nil,
+        busy: nil,
+        buffer: "",
+        lost_reason: reason
+    }
   end
 
   defp complete_interrupt(%{interruption: nil} = state, _outcome), do: state

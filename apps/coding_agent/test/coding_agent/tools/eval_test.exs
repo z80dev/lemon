@@ -60,6 +60,40 @@ defmodule CodingAgent.Tools.EvalTest do
     match?({_, 0}, System.cmd("kill", ["-0", Integer.to_string(os_pid)], stderr_to_stdout: true))
   end
 
+  # A cell whose `sleep` outlives its shell: reparented away from the kernel but
+  # still in the kernel's own process group.
+  defp background_sleep_cell,
+    do:
+      ~S|require("node:child_process").execSync("sleep 60 >/dev/null 2>&1 & echo $!").toString().trim()|
+
+  defp group_child(ctx) do
+    [pid] = Regex.run(~r/\d+/, text(run(ctx, "js", background_sleep_cell())))
+    pid = String.to_integer(pid)
+    assert_group_child(ctx, pid)
+    pid
+  end
+
+  defp assert_group_child(ctx, pid) do
+    %{kernel_group: %{pgid: pgid}, os_pid: host_pid} = :sys.get_state(slot!(ctx, "js"))
+    {output, 0} = System.cmd("/bin/ps", ["-o", "pgid=,ppid=", "-p", Integer.to_string(pid)])
+    [child_pgid, parent] = output |> String.split() |> Enum.map(&String.to_integer/1)
+    assert pgid != host_pid
+    assert child_pgid == pgid
+    refute parent in [pgid, host_pid]
+  end
+
+  # An unrelated process the kernel must never signal.
+  defp unrelated_sleep do
+    port = Port.open({:spawn_executable, System.find_executable("sleep")}, args: ["60"])
+    {:os_pid, pid} = Port.info(port, :os_pid)
+
+    on_exit(fn ->
+      System.cmd("kill", ["-9", Integer.to_string(pid)], stderr_to_stdout: true)
+    end)
+
+    pid
+  end
+
   describe "tool contract" do
     test "rejects invalid parameters before starting a kernel", ctx do
       for {params, message} <- [
@@ -448,6 +482,48 @@ defmodule CodingAgent.Tools.EvalTest do
 
       run(ctx, "js", "1", reset: true)
       if @python, do: assert(text(run(ctx, "py", "shared")) == "'py'")
+    end
+
+    test "reset, abort and owner loss kill reparented kernel-group children only", ctx do
+      sentinel = unrelated_sleep()
+
+      reset_child = group_child(ctx)
+      run(ctx, "js", "1", reset: true)
+      assert_eventually(fn -> not os_alive?(reset_child) end, timeout: 5_000)
+
+      test_pid = self()
+      signal = AbortSignal.new()
+      on_update = fn update -> send(test_pid, {:update, text(update)}) end
+      code = "console.log(#{background_sleep_cell()})\nwhile (true) {}"
+      task = Task.async(fn -> run(ctx, "js", code, signal: signal, on_update: on_update) end)
+      assert_receive {:update, <<digit, _::binary>> = update} when digit in ?0..?9, 20_000
+      [abort_child] = Regex.run(~r/^\d+/, update)
+      abort_child = String.to_integer(abort_child)
+      assert_group_child(ctx, abort_child)
+      AbortSignal.abort(signal)
+      assert Task.await(task, 10_000).details.status == :aborted
+      assert_eventually(fn -> not os_alive?(abort_child) end, timeout: 5_000)
+
+      owner_child = group_child(ctx)
+      slot = slot!(ctx, "js")
+      ref = Process.monitor(slot)
+      Process.exit(ctx.owner, :kill)
+      assert_receive {:DOWN, ^ref, :process, ^slot, _}, 5_000
+      assert_eventually(fn -> not os_alive?(owner_child) end, timeout: 5_000)
+
+      assert os_alive?(sentinel)
+    end
+
+    test "idle timeout kills reparented kernel-group children only", ctx do
+      sentinel = unrelated_sleep()
+      opts = [opts: [eval_idle_timeout_ms: 500]]
+      # The idle kill may land before membership could be inspected.
+      [child] = Regex.run(~r/\d+/, text(run(ctx, "js", background_sleep_cell(), opts)))
+      child = String.to_integer(child)
+
+      assert_eventually(fn -> not os_alive?(child) end, timeout: 5_000)
+      assert text(run(ctx, "js", "1", opts)) =~ "previous one ended (idle timeout)"
+      assert os_alive?(sentinel)
     end
   end
 

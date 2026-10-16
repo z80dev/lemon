@@ -754,8 +754,11 @@ reader.on("error", (error) => {
   process.exit(70);
 });
 
+// `pid` lets CodingAgent.Eval.Kernel bind this detached group leader (not the
+// host) before any cell can spawn into the group.
 send({
   type: "ready",
   runtime: typeof Bun !== "undefined" ? "bun" : "node",
   version: typeof Bun !== "undefined" ? Bun.version : process.versions.node,
+  pid: process.pid,
 });
