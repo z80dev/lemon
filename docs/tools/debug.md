@@ -30,8 +30,9 @@ configuration, preserving adapter-specific fields such as js-debug target IDs.
 ## Adapter selection
 
 An explicit `adapter` always wins. Otherwise the program's extension picks the
-adapter (`.py` → `debugpy`, `.go` → `dlv`, C-family/Rust/Swift sources →
-`lldb-dap`/`gdb`). Extensionless programs (compiled binaries) use the first
+adapter (`.py` → `debugpy`, `.go` → `dlv`, `.js`/`.ts` family → `js-debug`,
+`.rb` → `rdbg`, `.cs`/`.fs` → `netcoredbg`, C-family/Rust/Zig/Swift sources →
+`lldb-dap`/`gdb`/`codelldb`). Extensionless programs (compiled binaries) use the first
 installed of `gdb`, then `lldb-dap`, preferring adapters whose project root
 markers (`Cargo.toml`, `go.mod`, `Makefile`, …) are found above the program.
 Only `dlv` accepts a directory (Go package) as `program`; for `dlv`, `.go`

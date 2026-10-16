@@ -58,10 +58,14 @@ Every response is version `1` and contains:
 - structured omissions for unsupported, unsafe, over-budget, truncated, or
   unavailable material.
 
-The useful CLI bounds are `--max-bytes`, `--max-input-bytes`, `--max-items`,
-`--max-pages`, `--max-depth`, and `--timeout-ms`. The operation timeout is
-hard-capped at 60 seconds. Limits are per invocation by design: a shared config
-file cannot silently raise a caller's review budget.
+The useful CLI bounds are `--max-bytes` (selected output, default 120000, at
+most 2000000), `--max-input-bytes` (per-source input, default 8000000, at most
+64000000), `--max-items` (default 200, at most 5000), `--max-pages` (default 80,
+at most 1000), `--max-depth` (default 6, at most 32), and `--timeout-ms`
+(default 15000). Out-of-range values are clamped. The operation timeout is
+hard-capped at 60 seconds. `--root` defaults to the current directory and must
+be a real directory, not a symlink. Limits are per invocation by design: a shared
+config file cannot silently raise a caller's review budget.
 
 Sensitive-looking assignments, bearer credentials, and private-key blocks are
 redacted from selected text. URL output strips credentials, query strings, and

@@ -16,6 +16,26 @@ redacted metadata, and managed local artifacts.
 - `media_generate_video`: model-facing video generation through
   `LemonMedia.MediaJobSupervisor`.
 
+## Defaults and limits
+
+When `provider` is omitted, every tool uses its deterministic local preview
+provider (`local_svg`, `local_wav`, `local_transcript`, `local_vision`,
+`local_mp4`). Pass a provider-backed value explicitly for real generation or
+analysis. Common optional parameters are `filename` (always written under the
+managed artifact directory), `maxRetries` (default 1, clamped to 0–3),
+`sendToChannel` (default false) and `timeoutMs`, which is clamped to 100 ms up to
+a per-tool maximum:
+
+| Tool | Default `timeoutMs` | Maximum | Input limit |
+| --- | --- | --- | --- |
+| `media_generate_image` | 5000 | 30000 | |
+| `media_generate_speech` | 10000 | 120000 | |
+| `media_transcribe_audio` | 15000 | 120000 | 25 MiB audio file |
+| `media_analyze_image` | 15000 | 120000 | 20 MiB image file |
+| `media_generate_video` | 20000 | 300000 | |
+
+`media_status` takes an optional `limit` (default 10, clamped to 0–50) of recent jobs.
+
 ## Image Generation
 
 `media_generate_image` supports three providers:
@@ -201,6 +221,12 @@ instead of raw prompt text, creates the provider job, polls until completion,
 downloads the final MP4 into the managed artifact directory, retries bounded
 transient provider failures, redacts provider errors and provider job ids, and
 can request generated-file channel delivery metadata.
+
+Optional video parameters: `size`, `seconds` (Vertex clamps to 1–60), `maxPolls`
+(default 30, clamped 1–120) and `pollIntervalMs` (default 2000, clamped 0–30000)
+for OpenAI status polling, and `storageUri` for a Vertex Veo Google Cloud Storage
+output URI. Without `storageUri`, Lemon expects inline video bytes from the
+operation response.
 
 Vertex Veo jobs resolve `providers.google_vertex` service-account credentials,
 exchange them for a Google access token, call Vertex AI

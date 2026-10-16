@@ -275,7 +275,7 @@ Key resolution behavior:
 ```toml
 [runtime.tools.web.search]
 enabled = true
-provider = "brave"                    # "brave" | "perplexity" | "duckduckgo" | "searxng"
+provider = "brave"                    # brave | exa | perplexity | tavily | kagi | jina | duckduckgo | searxng | extension id
 max_results = 5
 timeout_seconds = 30
 cache_ttl_minutes = 15

@@ -18,7 +18,8 @@ lemon learn \
   --json
 ```
 
-A source checkout uses `./bin/lemon learn ...` with the same arguments. Review
+A source checkout uses `./bin/lemon learn ...` with the same arguments (`review`
+is the default action and can be omitted; up to 16 references per command). Review
 returns:
 
 - selected source/item/byte and omission counts;
@@ -75,10 +76,14 @@ draft.
 - URLs use DNS/IP-pinned public HTTP(S) fetching and revalidate every redirect.
 - PDF, Office, notebook, archive, folder, and text extraction use the same
   explicit limits documented in [Context references](context-references.md).
-- `--project` writes the candidate draft under the project `.lemon` scope;
-  otherwise it uses the existing global draft scope.
-- `--agent-id` selects the durable memory owner. `--session-key` is available
-  for an explicit canonical learning session.
+- `--project` writes the candidate draft under `<root>/.lemon/skill_drafts`;
+  otherwise it uses the global draft scope (`~/.lemon/agent/skill_drafts`).
+- `--agent-id` selects the durable memory owner (default `default`; lowercase
+  letters, digits, `_` and `-`). `--session-key` is available for an explicit
+  canonical learning session.
+- `--root` defaults to the current directory. The context limit flags
+  `--max-bytes`, `--max-input-bytes`, `--max-items`, `--max-pages`,
+  `--max-depth`, and `--timeout-ms` work as in `lemon context`.
 - Learning uses only the deterministic skill audit. It never sends selected
   source content to the optional LLM audit reviewer.
 

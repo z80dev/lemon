@@ -109,8 +109,10 @@ See [all review settings](../config.md#learning-reminders-skillsjson).
 
 A skill is a directory containing:
 
-- **`SKILL.md`** — the skill body: YAML frontmatter (metadata) + Markdown content
-- **`AGENTS.md`** (optional) — instructions for AI agents using this skill
+- **`SKILL.md`** — the skill body: YAML (`---`) or TOML (`+++`) frontmatter
+  (metadata) followed by Markdown content
+- Optional supporting files under `references/`, `templates/`, `scripts/` and
+  `assets/`, which `read_skill` or `read` can load on demand
 
 ### Skill frontmatter (manifest v2)
 
@@ -132,14 +134,18 @@ metadata:
 ...
 ```
 
-Key fields:
+Common fields (see the [manifest reference](../reference/skill-manifest-v2.md)
+for the full schema, limits and validation rules):
 
 | Field | Purpose |
 |---|---|
-| `name` | Human-readable display name |
+| `name` | Human-readable display name (defaults to the directory name) |
 | `description` | One-line summary shown in skill listings |
-| `requires_tools` | Tools that must be available for this skill to activate |
-| `metadata.lemon.category` | Routing category (`engineering`, `knowledge`, `filesystem`, `general`) |
+| `requires_tools` | Tools that must be found on `PATH` for the skill to be ready |
+| `requires.bins` / `required_environment_variables` | Binaries and environment variables that must be present for the skill to be ready |
+| `platforms` | Operating systems where the skill applies (`linux`, `darwin`, `win32`, `any`) |
+| `metadata.lemon.category` | Optional category string used for grouping and browsing (for example `engineering`) |
+| `hide` | `true` keeps the skill out of the model-visible prompt listing while leaving it loadable by name |
 
 ### Agent Skills interoperability
 
@@ -216,42 +222,122 @@ detection apply equally to all roots.
 
 ---
 
+## Managing Skills with `lemon skill`
+
+`lemon skill` works in installed releases and source checkouts (`./bin/lemon skill`);
+`mix lemon.skill` is a thin wrapper over the same command. Run `lemon skill --help`
+for the full option list. Options that take a value use the `--name=value` form
+(for example `--cwd=/path/to/project`). Commands read the current directory's
+project skills unless `--cwd=PATH` is given.
+
 ## Listing Skills
 
 ```bash
-mix lemon.skill list
+lemon skill list            # installed skills: key, enabled/disabled, source, description
+lemon skill list --global   # global skills only, ignoring the project
+lemon skill browse          # activation state and trust level (active and not-ready skills)
+lemon skill browse --active
+lemon skill browse --not-ready   # skills with missing binaries, variables or tools
+lemon skill browse --all         # also disabled, platform-incompatible and blocked skills
+lemon skill search <query>       # installed skills plus GitHub results (--no-online for local only)
+lemon skill discover <query>     # GitHub skill discovery
 ```
 
-Shows all installed skills with name, source, and status.
-
-Filter by category:
-
-```bash
-mix lemon.skill list --category engineering
-```
+In Lemon Web, **Skills** (`/skills`) lists installed skills with search,
+filters and enable/disable, and also browses and installs from the official
+Hermes catalog.
 
 ---
 
 ## Inspecting a Skill
 
 ```bash
-mix lemon.skill inspect <skill-key>
+lemon skill inspect <skill-key>    # alias: lemon skill info <skill-key>
 ```
 
-Prints the full skill content including frontmatter, description, and body.
+Prints the skill's path, activation state, provenance (source, trust level,
+install/update times, audit status), content hashes and drift, requirement
+status (binaries, environment variables, tools) and declared references. It does
+not print the skill body; open `SKILL.md` or use `read_skill` for that.
 
-Check for manifest issues:
+Check readiness and drift:
 
 ```bash
-mix lemon.skill check <skill-key>
+lemon skill check <skill-key>
 ```
 
-Shows readiness, local drift, and upstream status for the installed skill.
+Shows readiness, local drift (content changed since install) and upstream status
+for the installed skill.
+
+---
+
+## Installing Skills
+
+```bash
+lemon skill install <source>          # global: ~/.lemon/agent/skill/
+lemon skill install <source> --local  # project: <cwd>/.lemon/skill/
+lemon skill install <source> --force  # overwrite an existing installation
+```
+
+Accepted `<source>` forms:
+
+| Form | Source |
+|---|---|
+| `/abs/path`, `./rel`, `../rel` | Local directory |
+| `https://…`, `http://…`, `git@…`, `git+<url>` | Git repository |
+| `gh:<owner>/<repo>` | GitHub shorthand |
+| `hermes:optional/<category>/<skill>`, `hermes:bundled/<category>/<skill>` | Official Hermes catalog (`lemon skill hermes [query]` lists IDs; supports `--category=`, `--collection=`, `--details`) |
+| `<namespace>/<category>/<name>` (for example `official/devops/k8s-rollout`) | Skill registry (`https://skills.lemon.agent` by default; `config :lemon_skills, :registry_url`) |
+
+Installs are staged, audited, then activated, and provenance is recorded in
+`~/.lemon/agent/skills.lock.json` (global) or `<cwd>/.lemon/skills.lock.json`
+(project).
+
+### Trust and approval
+
+The source determines the trust level: `builtin` (bundled with Lemon), `official`
+(`official/…` registry namespace), `trusted` (local path) or `community`
+(everything else). Built-in skills skip the audit and need no approval. All other
+skills are audited on install and update, and installing, updating or removing
+one requires approval through the normal execution-approval flow. An audit `:warn`
+verdict needs an additional explicit approval; a `:block` verdict is refused
+unless you approve a separate, clearly labelled security override for that exact
+bundle.
+
+---
+
+## Updating Skills
+
+```bash
+lemon skill update <skill-key>
+```
+
+Reports local modifications and upstream changes first, then re-fetches the
+skill from its recorded source when the upstream content differs from what is
+installed. Update one skill at a time; there is no update-all option.
+
+---
+
+## Removing Skills
+
+```bash
+lemon skill remove <skill-key>           # asks for confirmation
+lemon skill remove <skill-key> --force   # skip the confirmation prompt
+```
+
+Removes the skill directory, its lockfile record and its audit state.
+
+---
+
+## Agent Tools for Skills
 
 Agents also have a `read_skill` tool in the default native Lemon tool set. The
 system prompt lists installed skills by key and tells the agent to call
 `read_skill` before following any clearly relevant skill, so skill instructions
 can be loaded on demand without injecting every full `SKILL.md` body up front.
+`read_skill` takes a `key` plus an optional `view` (`full`, `summary`,
+`section` with `section`, or `file` with `path`), `include_status`,
+`include_manifest` and `max_chars`.
 
 The coding `read` tool also accepts `skill://<skill-key>` for the raw `SKILL.md`
 and `skill://<skill-key>/references/example.md` for a supporting file. These use
@@ -272,53 +358,6 @@ repeatable steps: commands, preconditions, checks, rollback paths, API quirks, o
 project conventions that should guide future runs. Use `remember` for compact
 durable facts and `recall` for previous run history or longer memory notes.
 Use `todo` only for the active run's work queue.
-
----
-
-## Installing Skills
-
-### From a local path
-
-```bash
-mix lemon.skill install /path/to/skill-directory
-```
-
-Copies the skill into `~/.lemon/agent/skill/` (global) or `.lemon/skill/` (project).
-
-### From a remote source
-
-```bash
-mix lemon.skill install github:org/repo//skills/my-skill
-```
-
-Source types: `github:`, `gitlab:`, `local:`, `registry:`.
-
-### From the official registry
-
-```bash
-mix lemon.skill browse         # Browse available skills
-mix lemon.skill install registry:lemon-official/git-workflow
-```
-
-Trust policy: built-in skills skip audit. All other skills are audited on install/update; `:warn`
-verdicts require explicit approval and `:block` verdicts are refused.
-
----
-
-## Updating Skills
-
-```bash
-mix lemon.skill update <skill-key>   # Update one skill
-mix lemon.skill update --all         # Update all skills from their sources
-```
-
----
-
-## Removing Skills
-
-```bash
-mix lemon.skill remove <skill-key>
-```
 
 ---
 
@@ -362,13 +401,13 @@ changes.
 
 If configured, Lemon also runs `LemonSkills.Audit.LlmReviewer` to classify higher-level suspicious or malicious intent across the bundle payload.
 
-Run `mix lemon.skill check <key>` to see readiness, drift, and the installed skill's current status.
+Run `lemon skill check <key>` to see readiness, drift, and the installed skill's current status.
 
 Install/update behavior:
 
 - `:pass` continues normally
 - `:warn` requires explicit approval before the skill is kept
-- `:block` refuses the operation
+- `:block` refuses the operation unless you approve a separate security override for that exact bundle
 
 Optional LLM audit config:
 
@@ -378,10 +417,17 @@ config :lemon_skills, :audit_llm,
   model: "openai:gpt-4o-mini"
 ```
 
+If the LLM review is enabled but cannot complete (unknown model, invalid reply),
+the audit records a `:warn` finding instead of silently passing.
+
 Audit state files:
 
 - global: `~/.lemon/agent/skills.audit.json`
 - project: `<cwd>/.lemon/skills.audit.json`
+
+To lint skill bundles for manifest compliance and audit cleanliness (for example
+before publishing), run `mix lemon.skill.lint [PATH ...] [--strict] [--json]` in a
+source checkout; with no path it lints the built-in skills.
 
 ---
 
@@ -470,10 +516,10 @@ Or through JSON-RPC:
 {"type":"req","id":"5","method":"blueprints.activate","params":{"bundleId":"daily-note","profileId":"operator","confirmationDigest":"<digest from preview>"}}
 ```
 
-Or open the token-required Web management page at `/manage/blueprints`. The
-browser lists safe IDs/counts, validates the selected entry, and previews the
+Or open **Blueprints** (`/blueprints`) in Lemon Web (operator sign-in required).
+The browser lists safe IDs/counts, validates the selected entry, and previews the
 same exact profile skill and cron actions. Type the displayed digest to apply.
-The Web socket deliberately omits free-form manifest prose as well as prompts,
+The Web page deliberately omits free-form manifest prose as well as prompts,
 skill bodies, commands, environment values, paths, tokens, and secrets.
 
 The Bun TUI uses the same catalog and activation service:
@@ -522,45 +568,51 @@ use the catalog-scoped RPC.
 
 ## Skill Drafts (Synthesized Skills)
 
-Lemon can automatically generate draft skills from your past successful runs.
-Enable the feature flag first:
+Lemon generates draft skills from your past successful runs. The
+`skill_synthesis_drafts` feature flag is `"default-on"`, and a scheduled pass
+(every 6 hours by default) writes drafts from recent agent memory. Drafts are
+inert: they sit in the draft store until you publish them. Disable generation
+with `[features] skill_synthesis_drafts = "off"` or stop only the scheduled pass
+with `config :lemon_automation, :synthesis_runner, enabled: false`.
 
-```toml
-[features]
-skill_synthesis_drafts = "default-on"
-```
-
-Then generate drafts from recent agent memory:
+Generate drafts manually from recent agent memory:
 
 ```bash
-mix lemon.skill draft generate --agent <agent-id>
+lemon skill draft generate --agent=<agent-id>   # also --max-docs=N (default 50), --local --cwd=PATH
 ```
 
 Review a draft:
 
 ```bash
-mix lemon.skill draft list
-mix lemon.skill draft review <draft-key>
+lemon skill draft list
+lemon skill draft review <draft-key>
 ```
 
 Promote a draft to an installed skill (after manual review):
 
 ```bash
-mix lemon.skill draft publish <draft-key>
+lemon skill draft publish <draft-key>
 ```
 
 Delete a draft:
 
 ```bash
-mix lemon.skill draft delete <draft-key>
+lemon skill draft delete <draft-key>
 ```
+
+Drafts are global unless you pass `--local` (project drafts under `--cwd=PATH` or
+the current directory). `--force` overwrites an existing skill on `publish` and
+skips the confirmation on `delete`.
 
 > **Note:** Synthesized drafts require human review before promotion. The audit
 > engine runs automatically during generation. Drafts with `:block` findings are
 > deleted immediately, and drafts with `:warn` findings are kept but require
 > approval on promotion.
 
-See [`docs/user-guide/adaptive.md`](adaptive.md) for the full synthesis pipeline.
+You can also turn bounded local or remote sources into one memory note and one
+skill draft with [`lemon learn`](learn-from-sources.md).
+
+See [adaptive learning](adaptive.md) for the full synthesis pipeline.
 
 ## Skill Curation
 
@@ -580,9 +632,14 @@ even when `archive_after_days` is configured shorter.
 For a maintenance pass:
 
 ```bash
-mix lemon.skill curator status
-mix lemon.skill curator run --prompt
+lemon skill curator status    # state, run count and agent-authored candidates
+lemon skill curator run       # apply the lifecycle transitions
+lemon skill curator run --prompt   # also print the agent review prompt
+lemon skill curator pause     # pause scheduled curator checks (resume: lemon skill curator resume)
 ```
+
+Options: `--local` with `--cwd=PATH` for project skills (default: global),
+`--stale-after-days=N` (default 30) and `--archive-after-days=N` (default 90).
 
 The run marks idle agent-authored skills `stale`, archives long-idle candidates
 by disabling them, and reactivates stale skills that were used again. It never
@@ -599,11 +656,14 @@ machine-readable audit record; the markdown report is the quick human review.
 When a background curator run submits an agent review, the report records the
 submitted review run id.
 
-The runtime also has an idle background curator path. When enabled, Lemon waits
+The runtime also has an idle background curator path, on by default. Lemon waits
 for active router sessions to drain, applies the same interval/pause gates, and
 submits the curator prompt to the configured agent only when review is required.
 Those background reviews default to the learning tools only: `read_skill`,
-`skill_manage`, `remember`, and `recall`.
+`skill_manage`, `remember`, and `recall`. Tune it with
+`config :lemon_automation, :skill_curator` (`enabled`, `interval_hours` default
+168, `min_idle_hours` default 2, `stale_after_days`, `archive_after_days`,
+`agent_id` default `"default"`, `session_key` default `agent:<agent_id>:main`).
 
 All curator entry points (background, API, CLI and Mix tasks) exempt skills
 referenced by any persisted cron job, including disabled/paused jobs. Cron jobs
@@ -620,25 +680,37 @@ the curator summary and persisted report explain why.
 
 | Scope | Path |
 |---|---|
-| Global | `~/.lemon/agent/skill/` |
-| Project | `<cwd>/.lemon/skill/` |
+| Global | `~/.lemon/agent/skill/` (plus the compatibility roots in [Discovery and Precedence](#discovery-and-precedence)) |
+| Project | `<cwd>/.lemon/skill/` (plus `.agents/skills` and the other project roots) |
 | Global drafts | `~/.lemon/agent/skill_drafts/` |
 | Project drafts | `<cwd>/.lemon/skill_drafts/` |
 
 Project skills take precedence over global skills with the same key.
 
+State files sit beside `skills.json` in `~/.lemon/agent/` (global) or
+`<cwd>/.lemon/` (project):
+
+| File | Contents |
+|---|---|
+| `skills.json` | Per-scope skill settings: `disabled` list, per-skill config, `learning_nudge` |
+| `skills.lock.json` | Install provenance: source, trust level, content/bundle hashes, audit status |
+| `skills.audit.json` | Detailed audit results |
+| `skills.usage.json` | Load/write counters and lifecycle state |
+| `skills.curator.json` | Curator pause state and last run |
+
 ---
 
 ## Feature Flags
 
-Skills-related feature flags in `~/.lemon/config.toml`:
+Skill drafts are controlled by a single flag in `~/.lemon/config.toml`:
 
 ```toml
 [features]
-skill_manifest_v2            = "default-on"   # manifest v2 parser (required for new skills)
-progressive_skill_loading_v2 = "default-on"   # lazy body loading (saves context tokens)
-skills_hub_v2                = "default-on"   # full hub UX
-skill_synthesis_drafts       = "off"          # auto-generate drafts from memory
+skill_synthesis_drafts = "default-on"   # "off" disables draft generation
 ```
 
-*Last reviewed: 2026-08-30*
+It can also be switched with `LEMON_FEATURE_SKILL_SYNTHESIS_DRAFTS=off`. See
+[feature flags](../config.md#feature-flags). No other skills behavior is
+feature-flagged.
+
+*Last reviewed: 2026-10-15*

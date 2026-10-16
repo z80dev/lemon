@@ -13,8 +13,8 @@ By default, Lemon scans default extension directories for diagnostics and
 manifest metadata without executing third-party code. Code execution requires
 either explicit `extension_paths` configuration or
 `auto_load_default_paths = true` for the default global/project directories.
-Set `[runtime.extensions] enabled = false` to disable all extension code
-execution while keeping manifest diagnostics and support-bundle visibility.
+Set `[runtime.extensions] enabled = false` to stop the tool registry from loading
+extension paths while keeping manifest diagnostics and support-bundle visibility.
 
 ## Extension Behaviour
 
@@ -76,7 +76,7 @@ def tools(_cwd) do
       label: "My Tool",
       execute: fn _id, %{"input" => input}, _signal, _on_update ->
         %LemonAgent.Types.AgentToolResult{
-          content: [%{type: "text", text: "Result: #{input}"}]
+          content: [%LemonAi.Types.TextContent{text: "Result: #{input}"}]
         }
       end
     }
@@ -91,23 +91,30 @@ end
 - `parameters` - JSON Schema for tool parameters
 - `label` - Human-readable display name
 - `execute` - Function with signature `(tool_use_id, args, abort_signal, on_update) -> AgentToolResult`
+- `parallel_safe` - Optional; `true` allows overlapping calls of this tool within one tool batch (default `false`)
+- `timeout_ms` - Optional execution deadline in milliseconds; `nil` inherits the loop default (300,000 ms) and `:infinity` disables the deadline
 
 ### Tool Execute Function
 
 The execute function receives:
 - `tool_use_id` - Unique ID for this tool invocation
 - `args` - Map of parsed arguments matching your parameters schema
-- `abort_signal` - An `AbortSignal` for checking if execution should stop
-- `on_update` - Callback for streaming partial updates
+- `abort_signal` - An abort signal reference (see `LemonAgent.AbortSignal`) or `nil`; long-running tools should check `LemonAgent.AbortSignal.aborted?/1`
+- `on_update` - Callback taking a partial `AgentToolResult` for streaming updates, or `nil`
 
-Return an `LemonAgent.Types.AgentToolResult`:
+Return a `LemonAgent.Types.AgentToolResult`, `{:ok, result}`, or `{:error, reason}`
+(the model receives an error result). Content blocks are `LemonAi.Types.TextContent`
+or `LemonAi.Types.ImageContent` structs:
 
 ```elixir
 %LemonAgent.Types.AgentToolResult{
-  content: [%{type: "text", text: "output"}],
+  content: [%LemonAi.Types.TextContent{text: "output"}],
   is_error: false  # optional, defaults to false
 }
 ```
+
+When tool disclosure is active, extension tools may be deferred behind the
+`tool_search`/`tool_invoke` bridge tools; see [Tool Disclosure](config.md#tool-disclosure).
 
 ## Registering Hooks
 
@@ -312,8 +319,9 @@ The schema follows JSON Schema conventions with optional extensions:
 Extensions can register custom providers that integrate with the core system.
 Model providers add AI model backends. Memory providers implement
 `LemonMemory.Provider` and can participate in safety-screened memory ingest
-and scoped `recall` search through `LemonMemory.Providers`. Search
-and/or `extract` capabilities.
+and scoped `recall` search through `LemonMemory.Providers`. Search providers
+implement `CodingAgent.Search.Provider` (web search and/or `extract` capabilities)
+and register in `CodingAgent.Search.Registry`.
 
 ```elixir
 @impl true
@@ -410,6 +418,7 @@ end
 ```
 
 See the `LemonAi.Provider` module documentation for full details on implementing providers.
+`get_env_api_key/0` is an optional extra callback.
 
 Memory providers must implement the `LemonMemory.Provider` behaviour:
 
@@ -445,6 +454,9 @@ isolates provider failures, deduplicates search results by document id, and
 reports only redacted provider shape in
 support bundles.
 
+Search provider `config` supports `priority` (integer, default `0`); the whole
+`config` map is also passed to the registry with the provider.
+
 ## Extension Discovery
 
 Extension manifests are discovered from:
@@ -454,7 +466,7 @@ Extension manifests are discovered from:
 
 Extension code is loaded from:
 
-1. **Explicit runtime paths**: `[runtime] extension_paths = ["./trusted-extensions"]`
+1. **Explicit runtime paths**: `[runtime] extension_paths = ["~/trusted-extensions"]` (or `LEMON_EXTENSION_PATHS`, comma-separated, which takes precedence over the config value)
 2. **Default directories** only when `[runtime.extensions] auto_load_default_paths = true`
 
 Supported file patterns:
@@ -463,7 +475,7 @@ Supported file patterns:
 
 ```toml
 [runtime]
-extension_paths = ["./trusted-extensions"]
+extension_paths = ["~/trusted-extensions"]
 
 [runtime.extensions]
 enabled = true
@@ -471,10 +483,9 @@ auto_load_default_paths = false
 ```
 
 The same default-directory switch can be set with
-`LEMON_EXTENSIONS_AUTO_LOAD_DEFAULT_PATHS=true`. Set
-`LEMON_EXTENSIONS_ENABLED=false` as an emergency stop for extension code
-execution. Treat `extension_paths` as an explicit trust boundary: Lemon can
-compile and execute files in those directories when extensions are enabled.
+`LEMON_EXTENSIONS_AUTO_LOAD_DEFAULT_PATHS=true`; `LEMON_EXTENSIONS_ENABLED=false`
+overrides `[runtime.extensions] enabled`. Treat `extension_paths` as an explicit
+trust boundary: Lemon can compile and execute files in those directories.
 
 ## Extension Manifests
 
@@ -522,6 +533,21 @@ The validator accepts a manifest path or an extension directory, does not load
 extension code, and fails if required package fields are missing or unsupported
 capability-hosting metadata is declared.
 
+Validation rules (from `LemonCore.Extensions.Manifest`): the file must be a JSON
+object of at most 256 KiB with a non-empty `name` (lowercase letters, digits,
+`.`, `_`, `-`), a non-empty `version` and a `schema_version`. `capabilities` is
+a list of non-empty strings. Optional metadata is limited to these values:
+
+| Field | Allowed values |
+|-------|----------------|
+| `providers[].type` (with a `name`) | `model`, `memory`, `tool_executor`, `storage` |
+| `host` / `hosts[]` (string or `{"type": ...}`) | `beam`, `wasm`, `mcp`, `external` |
+| `distribution` (`source`) | `local`, `git`, `github`, `registry`, `archive` |
+| `audit` (`status`) | `pending`, `passed`, `warn`, `blocked`, `unknown` |
+
+Manifest provider types are package metadata and are separate from the Elixir
+`providers/0` types (`:model`, `:memory`, `:search`).
+
 ## Example Extension
 
 See `examples/extensions/hello_world_extension.ex` for a complete working example.
@@ -552,7 +578,7 @@ defmodule HelloWorldExtension do
         label: "Hello",
         execute: fn _id, %{"name" => name}, _signal, _on_update ->
           %LemonAgent.Types.AgentToolResult{
-            content: [%{type: "text", text: "Hello, #{name}!"}]
+            content: [%LemonAi.Types.TextContent{text: "Hello, #{name}!"}]
           }
         end
       }
@@ -570,24 +596,25 @@ end
 
 ## Tool Precedence
 
-All tools (built-in and extension) are assembled through `CodingAgent.ToolRegistry`, which provides:
+All tools (built-in, WASM, extension and MCP) are assembled through `CodingAgent.ToolRegistry`, which provides:
 - Centralized conflict detection
 - Per-session enable/disable via `:disabled` and `:enabled_only` options
 - Extension path customization via `:extension_paths` option
 
 When multiple tools share the same name, the following precedence rules apply:
 
-1. **Built-in tools always win** - Core tools (read, write, edit, bash, etc.) take priority over extension tools
-2. **First loaded extension wins** - Extensions are loaded in alphabetical order by module name, so earlier modules take precedence
+1. **Built-in tools always win** - Core tools (read, write, edit, bash, etc.) take priority over WASM, extension and MCP tools
+2. **Then WASM, then extension, then MCP tools** - a lower-precedence tool with an already-taken name is shadowed
+3. **First loaded extension wins** - Extensions are sorted alphabetically by module name, so earlier modules take precedence
 
 When a conflict is detected, a warning is logged that includes:
 - The conflicting tool name
-- The module that was shadowed
-- Whether it was shadowed by a built-in or an earlier extension
+- The source that was shadowed
+- The source that won (built-in, WASM, or an extension module)
 
 Example warning:
 ```
-[warning] Tool name conflict: extension tool 'read' from MyExtension is shadowed by built-in tool
+[warning] Tool name conflict: 'read' from extension MyExtension is shadowed by built-in
 ```
 
 This ensures deterministic tool resolution across sessions while allowing extensions to add new tools without risking silent conflicts.
@@ -643,8 +670,10 @@ report = CodingAgent.ToolRegistry.tool_conflict_report(cwd)
 #     }
 #   ],
 #   total_tools: 14,
-#   builtin_count: 13,
+#   builtin_count: 11,
+#   wasm_count: 1,
 #   extension_count: 1,
+#   mcp_count: 1,
 #   shadowed_count: 2,
 #   load_errors: [
 #     %{
@@ -659,16 +688,17 @@ report = CodingAgent.ToolRegistry.tool_conflict_report(cwd)
 The report includes:
 - `conflicts` - List of conflict entries, each containing:
   - `tool_name` - The conflicting tool name
-  - `winner` - Source that won (`:builtin` or `{:extension, module()}`)
-  - `shadowed` - List of `{:extension, module()}` tuples that were shadowed
+  - `winner` - Source that won (`:builtin`, `{:wasm, name_or_path}` or `{:extension, module()}`)
+  - `shadowed` - List of `{:wasm, name_or_path}` or `{:extension, module()}` tuples that were shadowed
 - `total_tools` - Total number of tools available after conflict resolution
-- `builtin_count` - Number of built-in tools
-- `extension_count` - Number of extension tools (after shadowing)
+- `builtin_count` - Number of built-in tools available (excludes unavailable optional tools)
+- `wasm_count`, `extension_count`, `mcp_count` - Number of WASM, extension and MCP tools after shadowing
 - `shadowed_count` - Total number of shadowed tools
 - `load_errors` - List of extension load errors, each containing:
   - `source_path` - Path to the file that failed to load
   - `error` - The error exception/term
   - `error_message` - Human-readable error message
+- `wasm` - WASM runtime status passed in with the `:wasm_status` option, or `nil`
 
 This is useful for:
 - Debugging why a custom tool isn't appearing
@@ -746,13 +776,16 @@ end
     }
   ],
 
-  # Tool conflict report from ToolRegistry
+  # Tool conflict report from ToolRegistry (see "Tool Conflict Report API")
   tool_conflicts: %{
     conflicts: [...],
     total_tools: 14,
-    builtin_count: 13,
+    builtin_count: 11,
+    wasm_count: 1,
     extension_count: 1,
-    shadowed_count: 0
+    mcp_count: 1,
+    shadowed_count: 0,
+    load_errors: [...]
   },
 
   # Provider registration report
@@ -768,7 +801,12 @@ end
   # Summary counts
   total_loaded: 2,
   total_errors: 1,
-  loaded_at: 1706745600000
+  loaded_at: 1706745600000,
+
+  # Added by the session: WASM runtime status (when WASM tools are configured)
+  # and the tool-disclosure report (active profile, exposed/deferred tools)
+  wasm: %{...},
+  tool_disclosure: %{...}
 }
 ```
 
@@ -853,9 +891,22 @@ The tool returns a markdown-formatted report including:
 ## Tool Registry
 - **Total tools:** 17
 - **Built-in:** 16
+- **From WASM:** 0
 - **From extensions:** 1
 - **Shadowed:** 0
+
+## Tool Disclosure
+- **Active:** false (inactive)
+- **Estimated schema tokens:** 12000 (budget 40000)
 ```
+
+Conflicts are listed under a `### Conflicts` heading in the Tool Registry section,
+and a `## WASM Runtime` section appears when WASM status is available. The Tool
+Disclosure section shows whether tool disclosure is active (see
+[Tool Disclosure](config.md#tool-disclosure)); with `include_details: true` and
+active disclosure it also lists the disclosed and hidden tool names. A `reload`
+action returns the same sections under an `# Extensions Reloaded` heading with a
+`Reloaded at` line.
 
 When `include_details: true`, extension entries also show:
 - Source file path
@@ -869,11 +920,14 @@ The `reload` action allows the agent to refresh the extension system without res
 - Existing extensions have been modified
 - Extensions have been removed and should no longer be loaded
 
+Reload is refused with an error while the session is streaming, and requires an
+active session (there is nothing to reload in fallback mode).
+
 When reload is triggered:
-1. All currently loaded extension modules are purged from the code server
-2. Extensions are re-discovered from all configured paths
-3. The tool registry is rebuilt with conflict detection
-4. The session's tools and hooks are updated
+1. Providers registered by the previous load are unregistered and all loaded extension modules are purged from the code server
+2. The tool registry's extension cache is invalidated and extensions are re-discovered from all configured paths
+3. Extension providers are registered again
+4. The session's tools (with conflict detection and tool disclosure) and hooks are rebuilt
 5. A new `{:extension_status_report, report}` event is broadcast
 
 ```elixir
@@ -886,7 +940,7 @@ extensions_status {"action": "reload"}
 
 ### Fallback Mode and Cached Errors
 
-When the `extensions_status` tool is called without an active session context (e.g., no session_id or session not found), it operates in "fallback mode". In this mode, it retrieves:
+When the `extensions_status` tool is called without an active session context (no session id, or the session is not found), it operates in "fallback mode". In this mode, it retrieves:
 
 - **Loaded extensions** from the global extension registry
 - **Tool conflicts** computed for the current working directory

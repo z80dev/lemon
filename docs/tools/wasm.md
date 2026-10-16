@@ -31,10 +31,15 @@ cache_dir = ""
 max_tool_invoke_depth = 4
 ```
 
+`LEMON_WASM_*` environment variables (`ENABLED`, `AUTO_BUILD`, `RUNTIME_PATH`,
+`TOOL_PATHS`, `DEFAULT_MEMORY_LIMIT`, `DEFAULT_TIMEOUT_MS`, `DEFAULT_FUEL_LIMIT`,
+`CACHE_COMPILED`, `CACHE_DIR`, `MAX_TOOL_INVOKE_DEPTH`) override these keys; see
+[Configuration](../config.md#wasm-tools).
+
 Discovery roots:
 
 1. `<cwd>/.lemon/wasm-tools`
-2. `~/.lemon/agent/wasm-tools`
+2. `<agent dir>/wasm-tools` (`~/.lemon/agent/wasm-tools` by default; `LEMON_AGENT_DIR` changes the agent dir)
 3. `runtime.tools.wasm.tool_paths`
 
 Each module is discovered as:

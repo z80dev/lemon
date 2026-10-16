@@ -23,7 +23,7 @@ off ↔ default-on
 |---|---|
 | `"off"` | Feature is disabled. Code is a no-op. |
 | `"opt-in"` | Legacy state: behaves like `"off"` unless the caller explicitly opts in. Still parsed for configs written before the 2026-08-14 promotion. |
-| `"default-on"` | Feature is enabled unless the operator disables it. |
+| `"default-on"` | Feature is enabled unless the operator disables it. `"on"` is accepted as an alias. |
 
 **Shipped defaults:**
 
@@ -40,7 +40,7 @@ All three are on out of the box; each exists as an operator kill switch.
 
 ## Disabling a Feature (Operator)
 
-To turn a feature off:
+1. Turn the feature off in `config.toml`:
 
 ```toml
 [features]
@@ -48,18 +48,24 @@ routing_feedback       = "off"
 skill_synthesis_drafts = "off"
 ```
 
-Or without touching config (no restart needed for env vars):
+   or set the environment variable for the Lemon process (the environment
+   overrides TOML):
 
 ```bash
 export LEMON_FEATURE_ROUTING_FEEDBACK=off
 export LEMON_FEATURE_SKILL_SYNTHESIS_DRAFTS=off
 ```
 
+2. Restart Lemon (`lemon restart`) so the running process picks it up.
+
 3. Confirm the feature is inactive:
 
 ```bash
-mix lemon.doctor
+lemon doctor
 ```
+
+   With `skill_synthesis_drafts = "off"`, the `automation.skill_synthesis`
+   check reports that the synthesis runner is inactive.
 
 4. Before re-enabling, file an issue with: what the problem was, any logs,
    and what action triggered it.
@@ -78,7 +84,7 @@ loop is actually doing:
   the scheduled runner looks stalled (no pass for 3× its interval).
 - Generated drafts are inert until promoted: review with
   `mix lemon.skill draft review <key>`, promote with
-  `mix lemon.skill draft promote <key>`.
+  `mix lemon.skill draft publish <key>` (or `lemon skill draft ...`).
 
 ---
 
@@ -88,4 +94,4 @@ loop is actually doing:
 - [`docs/user-guide/memory.md`](memory.md) — memory documents and session search
 - `LemonCore.Config.Features` — flag states, defaults, and env-var overrides
 
-*Last reviewed: 2026-08-14*
+*Last reviewed: 2026-10-15*
