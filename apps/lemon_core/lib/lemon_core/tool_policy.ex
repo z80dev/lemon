@@ -98,7 +98,17 @@ defmodule LemonCore.ToolPolicy do
   @execution_json_items 131_072
   @execution_json_bytes 16_777_216
 
-  @read_tools ["read", "read_skill", "recall", "grep", "find", "ls", "checkpoint", "rewind"]
+  @read_tools [
+    "read",
+    "read_skill",
+    "recall",
+    "grep",
+    "find",
+    "semantic_find",
+    "ls",
+    "checkpoint",
+    "rewind"
+  ]
 
   @minimal_core_tools [
     "read",
@@ -120,6 +130,7 @@ defmodule LemonCore.ToolPolicy do
     "eval",
     "grep",
     "find",
+    "semantic_find",
     "ls",
     "report_issue",
     "webfetch",

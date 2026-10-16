@@ -23,6 +23,8 @@ defmodule CodingAgent.ToolPolicyTest do
       refute ToolPolicy.allowed?(policy, "remember")
       assert ToolPolicy.allowed?(policy, "grep")
       assert ToolPolicy.allowed?(policy, "find")
+      assert ToolPolicy.allowed?(policy, "semantic_find")
+      assert ToolPolicy.tier("semantic_find") == :read
       refute ToolPolicy.allowed?(policy, "write")
       refute ToolPolicy.allowed?(policy, "bash")
     end

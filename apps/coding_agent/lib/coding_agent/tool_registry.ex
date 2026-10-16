@@ -57,6 +57,7 @@ defmodule CodingAgent.ToolRegistry do
     {:grep, Tools.Grep},
     {:ast_grep, Tools.AstGrep},
     {:find, Tools.Find},
+    {:semantic_find, Tools.SemanticFind},
     {:ls, Tools.Ls},
     {:report_issue, Tools.ReportIssue},
     {:webfetch, Tools.WebFetch},
@@ -515,6 +516,9 @@ defmodule CodingAgent.ToolRegistry do
 
       {:ast_grep, _module} ->
         match?({:ok, _}, Tools.AstGrep.availability(opts))
+
+      {:semantic_find, _module} ->
+        Tools.SemanticFind.available?(Keyword.put(opts, :cwd, cwd))
 
       {name, _module} when name in @browser_tool_names ->
         browser? and resolution.provider != "lcu"

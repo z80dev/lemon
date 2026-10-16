@@ -33,6 +33,43 @@ defmodule LemonCore.Config.ToolsTest do
            )
   end
 
+  test "semantic_find defaults off and validates its table" do
+    assert Tools.defaults()["semantic_find"] == %{
+             "enabled" => false,
+             "model" => nil,
+             "max_tokens" => 8_000
+           }
+
+    assert Tools.resolve(%{}).semantic_find == %{enabled: false, model: nil, max_tokens: 8_000}
+
+    config =
+      Tools.resolve(%{
+        "tools" => %{
+          "semantic_find" => %{"enabled" => true, "model" => "@smol", "max_tokens" => 4_000}
+        }
+      })
+
+    assert config.semantic_find == %{enabled: true, model: "@smol", max_tokens: 4_000}
+    assert Validator.validate_tools(config, []) == []
+
+    bad =
+      Tools.resolve(%{
+        "tools" => %{
+          "semantic_find" => %{"enabled" => "yes", "model" => "", "max_tokens" => 10}
+        }
+      })
+
+    errors = Validator.validate_tools(bad, [])
+    assert "runtime.tools.semantic_find.enabled: must be a boolean" in errors
+    assert "runtime.tools.semantic_find.model: cannot be empty" in errors
+
+    assert "runtime.tools.semantic_find.max_tokens: must be an integer from 512 to 200000" in errors
+
+    table = Tools.resolve(%{"tools" => %{"semantic_find" => true}})
+
+    assert "runtime.tools.semantic_find: must be a table" in Validator.validate_tools(table, [])
+  end
+
   test "approval modes resolve and validate without changing legacy defaults" do
     assert Tools.resolve(%{}).approval_mode == nil
 

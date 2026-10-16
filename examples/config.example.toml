@@ -348,6 +348,16 @@ allow_tools = []
 # [runtime.tools.checkpoint]
 # enabled = false
 
+# Opt-in semantic code search (docs/config.md#semantic-find). Off by default.
+# Needs an explicit small model (model below, else model_roles.tiny / smol); every
+# call spends at most max_tokens prompt + completion tokens on that model and is
+# recorded in normal usage/cost reporting.
+#
+# [runtime.tools.semantic_find]
+# enabled = false
+# model = "@smol"
+# max_tokens = 8000
+
 # --- Computer Use (native apps through LCU; docs/tools/computer-use.md) ---
 
 # [runtime.tools.computer_use]

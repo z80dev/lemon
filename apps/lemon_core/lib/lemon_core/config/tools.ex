@@ -70,6 +70,7 @@ defmodule LemonCore.Config.Tools do
   alias LemonCore.Env
 
   @lsp_defaults %{"servers" => %{}, "idle_timeout_ms" => 30_000}
+  @semantic_find_max_tokens 8_000
 
   defstruct [
     :auto_resize_images,
@@ -82,6 +83,7 @@ defmodule LemonCore.Config.Tools do
     :wasm,
     :disclosure,
     :checkpoint,
+    :semantic_find,
     :browser,
     :computer_use
   ]
@@ -168,6 +170,11 @@ defmodule LemonCore.Config.Tools do
           wasm: wasm_config(),
           disclosure: disclosure_config(),
           checkpoint: %{enabled: boolean()},
+          semantic_find: %{
+            enabled: boolean(),
+            model: String.t() | nil,
+            max_tokens: pos_integer()
+          },
           browser: map(),
           computer_use: map()
         }
@@ -192,6 +199,7 @@ defmodule LemonCore.Config.Tools do
       wasm: resolve_wasm(tools_settings),
       disclosure: resolve_disclosure(tools_settings),
       checkpoint: resolve_checkpoint(tools_settings),
+      semantic_find: resolve_semantic_find(tools_settings),
       browser: resolve_browser(tools_settings),
       computer_use: resolve_computer_use(tools_settings)
     }
@@ -268,6 +276,23 @@ defmodule LemonCore.Config.Tools do
     if is_map(section),
       do: %{enabled: Map.get(section, "enabled", false)},
       else: %{enabled: false}
+  end
+
+  # Opt-in model-backed code search. Values are carried as written so the
+  # validator can report a wrong type; `CodingAgent.Tools.SemanticFind` treats
+  # anything but `enabled = true` as off.
+  defp resolve_semantic_find(settings) do
+    case Map.get(settings, "semantic_find", %{}) do
+      section when is_map(section) ->
+        %{
+          enabled: Map.get(section, "enabled", false),
+          model: Map.get(section, "model"),
+          max_tokens: Map.get(section, "max_tokens", @semantic_find_max_tokens)
+        }
+
+      invalid ->
+        invalid
+    end
   end
 
   defp resolve_auto_resize(settings) do
@@ -540,6 +565,11 @@ defmodule LemonCore.Config.Tools do
       "auto_resize_images" => true,
       "checkpoint" => %{"enabled" => false},
       "edit" => %{"enforce_seen_lines" => true},
+      "semantic_find" => %{
+        "enabled" => false,
+        "model" => nil,
+        "max_tokens" => @semantic_find_max_tokens
+      },
       "bash" => Bash.defaults(),
       "lsp" => @lsp_defaults,
       "browser" => %{"provider" => "auto"},
