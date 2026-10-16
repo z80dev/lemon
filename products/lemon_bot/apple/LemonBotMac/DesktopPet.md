@@ -73,6 +73,42 @@ For a transparent PNG of the actual live panel (no Screen Recording permission),
 
 The `LemonBotSnapshots` scheme’s `PetSnapshotTests/testPetMoods` writes one PNG per mood plus a hover/detail scene. Set `TEST_RUNNER_LB_SNAPSHOT_DIR=/tmp/lb-ux/pet` when invoking `xcodebuild test`.
 
+## Testing
+
+### Automated (no GUI)
+
+The decisions behind the overlay live in `LemonBotKit/Sources/LemonBotKit/Pet/` (`PetActivity.swift`, `PetInteraction.swift`) and take plain values, so they run without a window or a desktop session. `MacPetController` feeds them real pointer, screen and status values and applies the answers to the panel. From the `apple` directory:
+
+```sh
+DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
+  swift test --package-path LemonBotKit --filter 'PetInteractionTests|PetActivityTests'
+```
+
+| Behaviour | Covered logic | Tests |
+| --- | --- | --- |
+| Click-through | alpha-mask hit test (`PetAlphaMask`, threshold, edge clamping), sprite/bubble hit regions, hidden bubble, mouse-ignore rule while dragging, gaze range | `PetInteractionTests` |
+| Drag | 3 pt threshold, window origin follows the pointer, run-left/right direction, click vs. drag release, display clamp, default corner, per-display offsets | `PetInteractionTests` |
+| Click-to-open | status deep link → route, otherwise open the workspace | `PetInteractionTests`, deep-link validation in `PetActivityTests` |
+| Live run events | run/notification/transcript state → mood, bubble, link and expiry; mood change → animation, once-only done jump, sound cue, expiry refresh delay | `PetActivityTests`, `PetInteractionTests` |
+
+### Manual checklist (needs a real desktop)
+
+These depend on AppKit windowing, the WindowServer or the live backend and are not automated. Run a Debug or release Mac build signed in to a real backend, with the pet shown. Tick each on any release that touches the pet, `MacPetController` or `MacPetContentView`.
+
+- [ ] **Click-through:** clicking a transparent corner of the pet window reaches the app beneath; clicking an opaque sprite pixel or the bubble does not. Still true after the animation advances to a frame with a different silhouette.
+- [ ] **No focus theft:** hovering, clicking and dragging the pet never makes it the key window or moves keyboard focus from the frontmost app.
+- [ ] **Drag:** dragging follows the pointer smoothly, plays the run-left/right animation, releases without opening Lemon Bot, and the pet stays on screen. Drag it past each screen edge and Dock; it clamps within the usable area.
+- [ ] **Position persistence:** the position survives hide/show and relaunch; with two displays it is remembered per display. Unplug the display it was on: it returns to the main display's bottom-right corner. **Reset position** does the same.
+- [ ] **Click-to-open:** with a run needing approval, clicking the pet or bubble opens that conversation. With nothing pending, it opens/focuses the workspace, also from another app, another Space and a full-screen app.
+- [ ] **Overlay level:** the pet floats above ordinary windows and appears on every Space and over full-screen apps. It does not appear in Cmd-Tab or Mission Control window cycling.
+- [ ] **Hover and gaze:** hover waves once and shows the detail text; moving away restores the bubble. (V2 pets) an idle pet looks toward a nearby pointer.
+- [ ] **Context menu:** right-click offers Open Lemon Bot, Pet Settings… and Hide Pet, and each works.
+- [ ] **Live events:** against a real backend, start a run that uses a tool, then one that needs approval, one that completes and one that fails. The pet moves thinking → working → needs input → done/failed without refreshing the app, the Done!/Run failed bubbles disappear after about 6 s/60 s, and stopping the backend shows Offline.
+- [ ] **Sounds:** with **Play sounds** on, only needs-input, done and failed play a cue; work, hover and dragging are silent.
+- [ ] **Visibility cost:** hide the pet, or cover it with a full-screen window; animation and status timers stop (idle CPU near zero in Activity Monitor).
+- [ ] **Reduced motion:** toggling System Settings → Accessibility → Display → Reduce motion switches to a static frame without relaunching.
+- [ ] **Accessibility:** VoiceOver reads the pet as a button with the current status, and its press action opens Lemon Bot.
+
 ## Editing and sharing the lemon
 
 The built-in lemon is original Lemon Bot artwork, dedicated to the public domain under [CC0 1.0](../LemonBotKit/Sources/LemonBotKit/Resources/Pets/lemon/LICENSE): copy, modify, redistribute or submit it anywhere, no attribution required. Its generator, `scripts/generate_lemon_pet.py` (Python 3 + Pillow; deterministic), is CC0 too. The rest of Lemon remains MIT licensed. Codex's `pet.json` has no license or author field, so the license travels as a `LICENSE` file inside the package.

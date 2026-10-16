@@ -164,6 +164,11 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Changed
 
+- The Lemon Bot desktop pet's click-through, drag, click-to-open and live-status
+  reaction logic now lives in `LemonBotKit` (`PetInteraction`) and is covered by
+  automated Swift tests; behaviour is unchanged. The remaining GUI-only checks are
+  listed in `DesktopPet.md` as a manual checklist.
+
 - Outbox message delivery is now at-least-once for the channels whose adapters report an unknown outcome: an unknown
   outcome (`{:outcome_unknown, _}`, adapter exception or worker exit) is retried
   with the same payload and idempotency key within the bounded `max_attempts`
