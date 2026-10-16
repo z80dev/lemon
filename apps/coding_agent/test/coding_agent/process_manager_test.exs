@@ -6,6 +6,28 @@ defmodule CodingAgent.ProcessManagerTest do
 
   import CodingAgent.AsyncHelpers
 
+  # Exit only after the stop request arrives, deterministically exercising a
+  # concurrent session exit rather than relying on scheduler timing.
+  defmodule ExitingSession do
+    use GenServer, restart: :temporary
+
+    def start_link({process_id, reason}) do
+      GenServer.start_link(__MODULE__, reason,
+        name: {:via, Registry, {CodingAgent.ProcessRegistry, process_id}}
+      )
+    end
+
+    @impl true
+    def init(reason), do: {:ok, reason, {:continue, :await_stop}}
+
+    @impl true
+    def handle_continue(:await_stop, reason) do
+      receive do
+        {:system, _from, {:terminate, :normal}} -> {:stop, reason, reason}
+      end
+    end
+  end
+
   @finished [:completed, :error, :killed]
 
   defp await_record(process_id) do
@@ -394,6 +416,59 @@ defmodule CodingAgent.ProcessManagerTest do
 
       assert :ok = ProcessManager.clear(process_id)
       assert {:error, :not_found} = ProcessStore.get(process_id)
+    end
+
+    for reason <- [
+          :normal,
+          :noproc,
+          :launch_canceled,
+          {:shutdown, :owner_down},
+          :unexpected_failure
+        ] do
+      @exit_reason reason
+      test "tolerates a concurrent #{inspect(reason)} session exit" do
+        process_id = ProcessStore.new_process(%{status: :rejected, output: %{finalized: true}})
+        pid = start_supervised!({ExitingSession, {process_id, @exit_reason}})
+        ref = Process.monitor(pid)
+
+        log =
+          ExUnit.CaptureLog.capture_log(fn ->
+            assert :ok = ProcessManager.clear(process_id)
+          end)
+
+        assert_receive {:DOWN, ^ref, :process, ^pid, @exit_reason}
+        assert {:error, :not_found} = ProcessStore.get(process_id)
+
+        if @exit_reason == :unexpected_failure do
+          assert log =~ "Process session exited abnormally during cleanup"
+        else
+          refute log =~ "Process session exited abnormally during cleanup"
+        end
+      end
+    end
+
+    test "store-wide cleanup tolerates a concurrently canceled session" do
+      process_id = ProcessStore.new_process(%{status: :rejected, output: %{finalized: true}})
+      pid = start_supervised!({ExitingSession, {process_id, :launch_canceled}})
+      ref = Process.monitor(pid)
+
+      assert :ok = ProcessStore.clear()
+      assert_receive {:DOWN, ^ref, :process, ^pid, :launch_canceled}
+      assert {:error, :not_found} = ProcessStore.get(process_id)
+    end
+
+    test "session cleanup is idempotent after the session has gone" do
+      assert :ok = CodingAgent.ProcessSession.stop("already-stopped")
+    end
+
+    test "session cleanup preserves stop failures while the target is alive" do
+      process_id = "self-stop-#{System.unique_integer([:positive])}"
+      assert {:ok, _} = Registry.register(CodingAgent.ProcessRegistry, process_id, nil)
+
+      assert {:calling_self, _call} =
+               catch_exit(CodingAgent.ProcessSession.stop(process_id))
+
+      assert Process.alive?(self())
     end
   end
 
