@@ -2,14 +2,20 @@ defmodule LemonChannels.Outbox.Dedupe do
   @moduledoc """
   Deduplication for outbound messages.
 
-  Uses idempotency keys to prevent duplicate deliveries.
+  Uses idempotency keys to prevent duplicate deliveries. Keys are marked only
+  after a delivery is confirmed (`{:ok, _}`). A delivery with an unknown outcome
+  is retried at-least-once by the outbox and does not mark its key until a retry
+  is confirmed, so dedupe suppresses re-sends of confirmed deliveries only.
   """
 
   use GenServer
 
   require Logger
 
-  @default_ttl_ms 60 * 60 * 1000  # 1 hour
+  alias LemonCore.Dedupe.Ets
+
+  # 1 hour
+  @default_ttl_ms 60 * 60 * 1000
   @call_timeout_ms 2_000
   @cleanup_interval_ms 60_000
   @table :lemon_channels_outbox_dedupe
@@ -33,7 +39,7 @@ defmodule LemonChannels.Outbox.Dedupe do
   end
 
   @doc """
-  Mark an idempotency key as delivered.
+  Mark an idempotency key as delivered. Call only for a confirmed delivery.
   """
   @spec mark(channel_id :: binary(), key :: binary()) :: :ok
   def mark(channel_id, key) do
@@ -42,7 +48,7 @@ defmodule LemonChannels.Outbox.Dedupe do
 
   @impl true
   def init(_opts) do
-    _ = LemonCore.Dedupe.Ets.init(@table)
+    _ = Ets.init(@table)
     schedule_cleanup()
     {:ok, %{ttl_ms: @default_ttl_ms}}
   end
@@ -50,7 +56,8 @@ defmodule LemonChannels.Outbox.Dedupe do
   @impl true
   def handle_call({:check, channel_id, key}, _from, state) do
     full_key = {channel_id, key}
-    if LemonCore.Dedupe.Ets.seen?(@table, full_key, state.ttl_ms) do
+
+    if Ets.seen?(@table, full_key, state.ttl_ms) do
       {:reply, :duplicate, state}
     else
       {:reply, :new, state}
@@ -60,13 +67,13 @@ defmodule LemonChannels.Outbox.Dedupe do
   @impl true
   def handle_cast({:mark, channel_id, key}, state) do
     full_key = {channel_id, key}
-    _ = LemonCore.Dedupe.Ets.mark(@table, full_key)
+    _ = Ets.mark(@table, full_key)
     {:noreply, state}
   end
 
   @impl true
   def handle_info(:cleanup, state) do
-    _ = LemonCore.Dedupe.Ets.cleanup_expired(@table, state.ttl_ms)
+    _ = Ets.cleanup_expired(@table, state.ttl_ms)
     schedule_cleanup()
     {:noreply, state}
   end

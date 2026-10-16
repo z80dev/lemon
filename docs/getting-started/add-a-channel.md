@@ -183,6 +183,17 @@ capabilities claim `edit_support`, and the outbox retries and reports. Terminate
 the adapter over one bad payload and every other conversation on that channel
 goes with it. Hence the catch-all clause at the end of `deliver/1`.
 
+Return an ambiguous write (a timeout, a closed connection, a 5xx) as
+`{:error, {:outcome_unknown, reason}}` rather than retrying inside the adapter.
+Outbox delivery is at-least-once for channels whose adapters report an unknown outcome: it retries an unknown
+outcome a bounded number of times with the same payload and `idempotency_key`,
+so pass that key (or another delivery-stable token) to the platform if it has a
+dedupe mechanism. Only a confirmed delivery marks the key as sent and
+suppresses re-sends. This is a deliberate exception to the repository rule that
+an `:outcome_unknown` mutation is never retried automatically, and it covers
+outbox message delivery only.
+Note: SMTP network failures after DATA and WhatsApp bridge send exceptions are still terminal (tracked in F-0059).
+
 One more thing worth internalising about `meta/0`: **omit a capability rather
 than inventing a value for it.** `LemonChannels.Capabilities.from_legacy/1`
 treats anything absent as unsupported, which is the safe direction. Claiming

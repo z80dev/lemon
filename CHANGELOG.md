@@ -142,6 +142,15 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Changed
 
+- Outbox message delivery is now at-least-once for the channels whose adapters report an unknown outcome: an unknown
+  outcome (`{:outcome_unknown, _}`, adapter exception or worker exit) is retried
+  with the same payload and idempotency key within the bounded `max_attempts`
+  budget instead of being dropped, and dedupe still suppresses confirmed sends.
+  The root `AGENTS.md` never-retry rule for `:outcome_unknown` now exempts
+  outbox message delivery only, since a duplicate message costs less than a lost
+  one. SMTP network failures after DATA and WhatsApp bridge send exceptions are
+  still terminal (tracked in F-0059).
+
 - Usage budgets now check projected input and maximum output cost/tokens before
   sending model requests, stopping requests that would exceed run or session caps.
 
