@@ -144,6 +144,22 @@ green run. Cross-app effects that only appear in the shared umbrella BEAM (an ap
 registering into another's runtime registry) are therefore caught by `main`'s
 full run, not by the pull request.
 
+Every executing CI job records its actual Git HEAD, PR head/base (or pushed
+checkout), run ID and attempt immediately after the canonical unnamed checkout,
+before repository-controlled code. `Record tested checkout identity` uses
+isolated Python; keep its name, command and position compatible with the factory
+verifier. The always-running `CI result` also checks out and attests, even when
+optional lanes skip. Skipped jobs have no log identity and must not be configured
+as individually required factory lanes. The history gate deliberately checks out
+the PR head rather than the test merge, so it must not be required alongside
+merge-checkout lanes by a verifier that requires identical tested SHAs.
+
+Run `python3 scripts/test_ci_checkout_identity.py` for the hermetic producer/
+consumer contract test (also run by `check`). It uses fake GitHub metadata and
+a labelled snapshot of the factory consumer, not a local factory installation.
+Failed-job reruns bind each lane to its own attempt; omitted successful lanes
+are resolved from earlier attempts of the same run by the consumer.
+
 Pushes to `main` are serialized: one run plus the newest pending one, so a
 burst of merges coalesces into a run of the latest commit. When a `main` run
 fails, `CI result` opens (or comments on) the `main-red` issue with the failing
