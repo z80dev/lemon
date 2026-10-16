@@ -1,6 +1,6 @@
 # Mix task reference
 
-Lemon ships ~70 `mix lemon.*` tasks across the umbrella. `mix help | grep lemon`
+Lemon ships 54 `mix lemon.*` tasks across the umbrella (plus `mix lemon.new` from the installer archive). `mix help | grep lemon`
 lists them alphabetically with no grouping, which makes the tooling hard to
 discover. This page groups every task by purpose. For a live, grouped listing
 from the CLI, run:
@@ -85,6 +85,7 @@ initializes a missing master key itself and does not replace an existing one.
 | `mix lemon.secrets.check` | Check secret resolution sources (env vs. store). |
 | `mix lemon.secrets.delete KEY` | Delete a stored secret. |
 | `mix lemon.secrets.import_env` | Import env-based secrets into the encrypted store. |
+| `mix lemon.secrets.rotate_key` | Rotate the secrets master key and re-encrypt stored secrets. |
 | `mix lemon.voice.secrets` | Interactively set voice API secrets. |
 
 ## Diagnostics
@@ -113,6 +114,7 @@ Read-only, redacted health and configuration reports. Safe to run anywhere.
 | `mix lemon.check_duplicate_tests` | Check for duplicate test module names. |
 | `mix lemon.extension.validate` | Validate Lemon extension package manifests. |
 | `mix lemon.eval` | Run the coding-quality eval harness. |
+| `mix lemon.eval.coding` | Run the opt-in live production-CLI coding benchmark. |
 
 ## Data, stores & messaging
 
@@ -121,6 +123,7 @@ Durable state and outbound notifications.
 | Task | Purpose |
 | --- | --- |
 | `mix lemon.store.migrate_jsonl_to_sqlite` | Migrate Lemon store data from JSONL files to SQLite. |
+| `mix lemon.honcho` | Inspect the Honcho memory satellite (`status` / `sessions` / `ping` / `context`). |
 | `mix lemon.memory` | Manage the durable memory store (`stats` / `prune` / `erase`). |
 | `mix lemon.policy` | Manage per-route model policies (channel / account / peer / thread). |
 | `mix lemon.send` | Send a Telegram or Discord notification from a script. |
@@ -140,7 +143,7 @@ Durable state and outbound notifications.
 
 ## Sim & arena
 
-`lemon_sim` contributes **10** tasks. They fall into four sub-groups.
+`lemon_sim` contributes **11** tasks, and `lemon_sim_ui` adds `mix lemon.sim.demo`. They fall into five sub-groups.
 
 ### Scenario runners (self-play)
 
@@ -154,6 +157,12 @@ Each runs one scenario's self-play example. All share the common flags
 mix lemon.sim.tic_tac_toe --offline-strategy random --seed 42 --no-persist --max-turns 10
 mix lemon.sim.vending_bench --preset ci --offline-strategy baseline --sim-id vb_ci
 ```
+
+### Demo
+
+| Task | Purpose |
+| --- | --- |
+| `mix lemon.sim.demo` | Boot the sim UI and watch a keyless offline Werewolf game. |
 
 ### Replay renderers
 

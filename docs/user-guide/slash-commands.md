@@ -35,7 +35,7 @@ scope, and the first command with a given name wins in this order:
 
 `LEMON_AGENT_DIR` relocates the `~/.lemon/agent` roots. Dot-files, files over
 64 KiB, names containing whitespace, and nesting deeper than four directories
-are ignored.
+are ignored. At most 500 files are read per root.
 
 ## Markdown commands
 
@@ -71,7 +71,7 @@ Explicitly empty quoted arguments (`""` or `''`) keep their positional slot.
 | Placeholder | Value |
 | --- | --- |
 | `$1` … `$9` (any number) | that argument, or empty when missing |
-| `$ARGUMENTS`, `$@`, `{{args}}` | the whole argument text as typed |
+| `$ARGUMENTS`, `$@`, `{{args}}` (also `{{arguments}}`, `{{ARGUMENTS}}`) | the whole argument text as typed |
 
 Substitution happens once: argument text containing `$1` is not expanded
 again. When a template has no placeholder and arguments were given, they are

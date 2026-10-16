@@ -891,6 +891,8 @@ Use only these top-level sections:
 - `tui`
 - `logging`
 - `automation`
+- `cron` (failure-alert cooldown only; see [Cron failure alerts](#cron-failure-alerts))
+- `memory` and `skills` (see [Memory](#memory))
 
 A deprecated `[agent]` table still loads, with a warning in the log, `lemon
 doctor` and `lemon config validate`. It is read exactly as if it had been
@@ -2072,6 +2074,11 @@ programmatically with `CodingAgent.Session.start_link(tool_disclosure: [profile:
 - `logging`: optional file logging configuration.
 - `automation`: opt-in proactive automation (`daily_brief`).
 - `cron`: cron failure-alert cooldown settings.
+- `memory`: per-turn automatic recall and `remember` write approval; `skills`: `write_approval` for `skill_manage` ([Memory](#memory)).
+- `budgets`: cumulative usage budgets ([Cumulative usage budgets](#cumulative-usage-budgets)).
+- `features`: feature flags ([Feature Flags](#feature-flags)).
+- `secrets.sources.<source_id>`: external secret sources ([External secret sources](#external-secret-sources)).
+- `gateway.a2a`: A2A peer transport ([A2A peers](#a2a-peers)).
 
 ## Automation
 
@@ -2119,6 +2126,46 @@ immediately. `0` disables the cooldown. Incident state survives restarts.
 Recovery notices are separate from cooldown reminders. See the
 [failure-alert workflow](user-guide/reminders-and-heartbeats.md#failure-alerts-and-recovery)
 for routing, silent successes, and local doctor warnings.
+
+## Gateway core settings
+
+Top-level `[gateway]` keys (defaults from `LemonCore.Config.Gateway`):
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `max_concurrent_runs` | `2` | Gateway-wide concurrent run limit (`LEMON_GATEWAY_MAX_CONCURRENT_RUNS`). |
+| `default_cwd` | unset | Fallback working directory for unbound chats (`LEMON_GATEWAY_DEFAULT_CWD`). |
+| `auto_resume` | `false` | Resume interrupted sessions on start. |
+| `enable_telegram`, `enable_discord`, `enable_xmtp`, `enable_webhook`, `enable_a2a` | `false` | Enable the named channel; `enable_<id>` is read per registered channel (and `LEMON_GATEWAY_ENABLE_<ID>` overrides it). |
+| `require_engine_lock` | `true` | Serialize runs per engine session (`LEMON_GATEWAY_REQUIRE_ENGINE_LOCK`). |
+| `engine_lock_timeout_ms` | `60000` | Engine lock wait budget (`LEMON_GATEWAY_ENGINE_LOCK_TIMEOUT_MS`). |
+
+`enable_webhook`, `require_engine_lock` and `engine_lock_timeout_ms` are
+validated as boolean, boolean and positive integer respectively.
+
+## A2A peers
+
+`[gateway.a2a]` configures the A2A v1.0 peer transport; enable it with
+`gateway.enable_a2a = true`. See the [A2A peers guide](user-guide/a2a-peers.md)
+for setup. The listener binds loopback `127.0.0.1:9901` by default; remote binds
+require token secret names (validated at load).
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `host`, `port` | `127.0.0.1`, `9901` | Listener bind (`LEMON_A2A_HOST`, `LEMON_A2A_PORT`). |
+| `public_url` | unset | Advertised URL (`LEMON_A2A_PUBLIC_URL`). |
+| `name`, `description` | `Lemon`, a short description | Agent card identity. |
+| `agent_id` | `default` | Lemon agent profile that answers peers. |
+| `skills` | `["coordination", "coding"]` | Advertised skills. |
+| `reply_timeout_ms` | `300000` | Positive integer (`LEMON_A2A_REPLY_TIMEOUT_MS`). |
+| `rate_limit_per_minute` | `60` | Positive integer (`LEMON_A2A_RATE_LIMIT_PER_MINUTE`). |
+| `max_context_turns` | `100` | Positive integer (`LEMON_A2A_MAX_CONTEXT_TURNS`). |
+| `default_allow_tools` | `read read_skill recall grep find ls webfetch websearch kanban peer` | Tools inbound peer runs may use unless a peer overrides it. |
+
+Each `[gateway.a2a.peers.<name>]` sets `url`, `token_secret` (or separate
+`inbound_token_secret` / `outbound_token_secret`), `agent_id`, `capabilities`,
+`timeout_ms` and `allow_tools` (empty means `default_allow_tools`). Tokens are
+secret names, never literal values.
 
 ## Gateway Projects and Bindings
 

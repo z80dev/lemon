@@ -69,7 +69,7 @@ references:
 | Field | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
 | `name` | string | No | Directory name | Skill identifier used in CLI and registry. |
-| `description` | string | **Yes** | `""` | Used for relevance matching. Present values are limited to 1,024 UTF-8 bytes. |
+| `description` | string | **Yes** | `""` | Used for relevance matching. Present values are limited to 1,024 characters and 4,096 UTF-8 bytes. |
 | `version` | string | No | — | Semantic version string. |
 | `author` | string | No | — | Author or org name. |
 | `tags` | list of strings | No | `[]` | Free-form tags for filtering. |
@@ -138,7 +138,7 @@ references:
 
 ## Validation rules
 
-1. Present `name` and `description` values must be non-empty, single-line, valid UTF-8 strings without control or bidirectional formatting characters. Their limits are 128 and 1,024 bytes respectively. Omitting either field remains compatible with legacy directory-name/empty-description defaults.
+1. Present `name` and `description` values must be non-empty, single-line, valid UTF-8 strings without control or bidirectional formatting characters. `name` is limited to 128 UTF-8 bytes; `description` to 1,024 characters and 4,096 UTF-8 bytes. Omitting either field remains compatible with legacy directory-name/empty-description defaults.
 2. `tags` and `keywords` must each be lists of at most 32 safe strings, with each item limited to 128 UTF-8 bytes.
 3. `platforms` values must be one of `linux`, `darwin`, `win32`, `any`; `macos` and `windows` are accepted as compatibility aliases. Unknown values are rejected.
 4. `requires_tools`, `fallback_for_tools`, `required_environment_variables` must be lists when present.

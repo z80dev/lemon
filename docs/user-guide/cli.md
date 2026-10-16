@@ -868,6 +868,869 @@ retry-safe may already have taken effect: check `lemon omp show ID` before
 retrying. When omp is not installed, `status` says so and `start` fails with
 `UNAVAILABLE`; set `LEMON_OMP_BIN` for a non-`PATH` install.
 
+## Command and option reference
+
+Every command, subcommand and option below is read from the shared
+`LemonCli.CommandRegistry`, which also drives `lemon --help`,
+`lemon help <command>` and shell completion. Narrative sections above and in the
+linked guides explain behavior; this section is the exhaustive syntax list.
+Run `lemon help <command>` for the same data on your installed version.
+Launcher lifecycle commands (`tui`, `web`, `start`, `daemon`, `stop`, `restart`,
+`status`) are described under [Launcher lifecycle commands](#launcher-lifecycle-commands).
+
+#### `lemon acp`
+
+Serve ACP over stdio using the local runtime.
+
+```text
+lemon acp
+```
+
+#### `lemon tern`
+
+Install Lemon's Tern palette plugin and ACP agent.
+
+```text
+lemon tern install [--config-dir PATH]
+```
+
+| Subcommand | Purpose |
+| --- | --- |
+| `install` | Install the palette plugin and register `tern acp lemon` |
+
+| Option | Purpose |
+| --- | --- |
+| `--config-dir PATH` | Tern configuration directory (not a config file) |
+
+#### `lemon run`
+
+Run a prompt non-interactively (-p, --print).
+
+```text
+lemon run [PROMPT] [--output text|json|stream-json] [options]
+```
+
+| Option | Purpose |
+| --- | --- |
+| `--output FORMAT` | text, json, or stream-json |
+| `--model MODEL` | Provider:model override |
+| `--cwd PATH` | Working directory |
+| `--session KEY` | Resume a session |
+| `--continue` | Continue the latest CLI session |
+| `--approval-policy deny\|allow` | Deny or allow approval requests |
+| `--allowed-tools LIST` | Comma-separated tool allowlist |
+| `--denied-tools LIST` | Comma-separated tool denylist |
+
+#### `lemon setup`
+
+Run first-time setup and configuration.
+
+```text
+lemon setup [provider|runtime|gateway|doctor] [options]
+```
+
+| Subcommand | Purpose |
+| --- | --- |
+| `provider` | Configure an AI provider |
+| `runtime` | Configure runtime profile and port bindings |
+| `gateway` | Configure gateway adapters |
+| `doctor` | Run diagnostics or write a support bundle (alias for doctor) |
+
+| Option | Purpose |
+| --- | --- |
+| `--non-interactive, -n` | Skip prompts |
+| `--config-path PATH` | Config file to read or write |
+| `--skip-verify` | Defer live provider verification |
+| `--daily-brief HH:MM` | Daily brief time (non-interactive) |
+| `--set-default` | Set the provider and model as defaults |
+| `--provider NAME` | Provider to sign in to (openai-codex for ChatGPT) |
+| `--token TOKEN` | Credential for non-interactive provider setup |
+| `--auth oauth\|device\|api_key\|codex-cli` | Authentication mode (import is opt-in) |
+| `--codex-auth-path PATH` | Auth file for --auth codex-cli only |
+| `--model MODEL` | Model to make the default after onboarding |
+| `--if-required` | Exit immediately unless setup is still required |
+
+#### `lemon model`
+
+Configure an AI provider.
+
+```text
+lemon model [provider] [options]
+```
+
+| Option | Purpose |
+| --- | --- |
+| `--provider NAME` | Provider id |
+| `--token TOKEN` | Provider credential |
+| `--auth oauth\|device\|api_key\|codex-cli` | Authentication mode (import is opt-in) |
+| `--codex-auth-path PATH` | Auth file for --auth codex-cli only |
+| `--non-interactive` | Require --token, --auth device or --auth codex-cli |
+| `--secret-name NAME` | Secret to store, inspect, or log out |
+| `--model MODEL` | Default model with --set-default |
+| `--set-default` | Set the provider and model as defaults |
+| `--config-path PATH` | Config file to update |
+| `--status` | Show the provider's sign-in and credential status |
+| `--logout` | Delete the stored OAuth login and its config |
+
+Without a provider, Lemon displays an interactive picker. Credentials are stored in the encrypted secrets store and referenced from config.toml.
+
+`lemon model anthropic` signs in with a Claude Pro/Max subscription in the browser; `--status` and `--logout` need a provider.
+
+`lemon model openai-codex --auth device` signs in to ChatGPT with a device code (no local callback); `openrouter`, `xai`, `kimi_coding` and `zai` also offer subscription sign-in.
+
+#### `lemon gateway`
+
+Configure a gateway adapter.
+
+```text
+lemon gateway setup [--transport NAME] [options]
+```
+
+| Subcommand | Purpose |
+| --- | --- |
+| `setup` | Configure Telegram or Discord |
+
+| Option | Purpose |
+| --- | --- |
+| `--transport NAME, -t NAME` | Gateway adapter |
+| `--non-interactive, -n` | Skip prompts |
+| `--token TOKEN` | Bot token to store in encrypted secrets |
+| `--chat-id ID` | Telegram chat to allow (repeatable) |
+| `--pair-timeout SECONDS` | Telegram /start pairing wait |
+
+Telegram setup pairs the bot with your chat: send /start to the bot when prompted, or pass --chat-id. An unpaired bot ignores every chat.
+
+#### `lemon pairing`
+
+Review and approve channel pairing requests.
+
+```text
+lemon pairing list | approve <telegram|discord> <CODE> | deny <telegram|discord> <CODE>
+lemon pairing revoke <telegram|discord> <CHAT_ID>
+```
+
+| Subcommand | Purpose |
+| --- | --- |
+| `list` | List pending requests without codes |
+| `approve` | Consume a code and allow its chat |
+| `deny` | Consume a code without allowing its chat |
+| `revoke` | Remove a paired chat from the allowlist (accepted by the command, not yet listed in registry help) |
+
+Local operator only. Approval updates the user gateway config; restart the runtime to apply the allowlist.
+
+#### `lemon doctor`
+
+Run diagnostics or write a support bundle.
+
+```text
+lemon doctor [options]
+```
+
+| Option | Purpose |
+| --- | --- |
+| `--verbose, -v` | Show passing and skipped checks |
+| `--json` | Output one JSON document |
+| `--live` | Opt in to bounded, non-generating connectivity checks |
+| `--project-dir PATH` | Use a specific project directory |
+| `--bundle [PATH]` | Write a redacted support bundle |
+| `--bundle-path PATH` | Set the support bundle path |
+
+#### `lemon config`
+
+Validate, show or migrate configuration.
+
+```text
+lemon config [validate|show|migrate] [options]
+```
+
+| Subcommand | Purpose |
+| --- | --- |
+| `validate` | Validate the resolved configuration |
+| `show` | Show the resolved configuration summary |
+| `migrate` | Rewrite deprecated sections in global and project config (keeps a backup) |
+
+| Option | Purpose |
+| --- | --- |
+| `--verbose, -v` | Verbose output |
+| `--project-dir, -p PATH` | Project directory for project config |
+
+#### `lemon mcp`
+
+Manage and test named MCP servers.
+
+```text
+lemon mcp add NAME (--stdio COMMAND [-- ARG...] | --http URL) [options]
+lemon mcp list [--all]|remove NAME|test NAME|enable NAME|disable NAME [options]
+```
+
+| Subcommand | Purpose |
+| --- | --- |
+| `add` | Add |
+| `list` | List |
+| `remove` | Remove |
+| `test` | Test |
+| `enable` | Enable |
+| `disable` | Disable |
+
+| Option | Purpose |
+| --- | --- |
+| `--global` | Use the global agent MCP file instead of project config |
+| `--cwd PATH` | Project root (default: current directory) |
+| `--all` | list: effective servers incl. other tools' configs, with source and state |
+| `--stdio COMMAND` | Executable; pass its arguments after -- |
+| `--http URL` | Streamable HTTP MCP endpoint |
+| `--env KEY=VALUE` | Stdio environment entry (repeatable) |
+| `--header KEY=VALUE` | HTTP header (repeatable) |
+| `--approval always\|never` | Server approval default (add: always) |
+| `--tool-approval TOOL=always\|never` | Exact remote tool override (repeatable) |
+| `--replace` | Replace a unique existing name, preserving extensions |
+| `--json` | Emit redacted JSON |
+
+#### `lemon secrets`
+
+Manage encrypted secrets.
+
+```text
+lemon secrets <command> [args]
+```
+
+| Subcommand | Purpose |
+| --- | --- |
+| `status` | Show safe secrets-store status |
+| `init` | Initialize the master key |
+| `set` | Store one secret |
+| `list` | List metadata without values |
+| `delete` | Delete one secret |
+| `check` | Check configured credential sources |
+| `import-env` | Import selected environment credentials |
+| `rotate-key` | Preview or apply a master-key rotation |
+| `sources` | Inspect or test external secret sources |
+
+| Option | Purpose |
+| --- | --- |
+| `--target file\|keychain` | Master-key target for init |
+| `--provider NAME` | Metadata provider for set |
+| `--expires-at N` | Expiry timestamp for set |
+| `--dry-run` | Preview environment imports |
+| `--force` | Confirm the selected replacement operation |
+| `--confirm TOKEN` | Exact rotate-key preview token |
+| `--project-dir PATH` | Project directory for source config |
+| `--source-id ID` | Test one external source |
+| `--json` | Emit redacted source readiness JSON |
+
+rotate-key previews by default and changes nothing. Applying requires the exact preview token, refuses while a Lemon runtime is running, and re-encrypts every stored secret under a new master key written to the Keychain entry or key file that supplied the current one.
+
+#### `lemon channels`
+
+Inspect channel configuration.
+
+```text
+lemon channels [options]
+```
+
+| Option | Purpose |
+| --- | --- |
+| `--project-dir PATH` | Project root to read config from |
+| `--json` | Emit redacted channel diagnostics JSON |
+
+#### `lemon providers`
+
+Inspect provider readiness and manage routing.
+
+```text
+lemon providers [status|fallback|pool] [options]
+```
+
+| Subcommand | Purpose |
+| --- | --- |
+| `status` | Status |
+| `fallback` | Fallback |
+| `pool` | Pool |
+
+| Option | Purpose |
+| --- | --- |
+| `--provider NAME, -p NAME` | Filter or add a provider |
+| `--include-catalog` | Include every known provider |
+| `--project-dir PATH` | Resolve project configuration |
+| `--scope global\|project` | Configuration target |
+| `--config-path PATH` | Explicit configuration path |
+| `--dry-run` | Preview without writing |
+| `--confirm VALUE` | Exact destructive-change confirmation |
+| `--strategy priority\|round_robin` | Credential-pool strategy |
+| `--activate` | Make the selected pool the default |
+| `--json` | Emit one redacted JSON document |
+
+Fallback commands: list, add PROVIDER, remove PROVIDER, clear.
+
+Pool commands: list, set POOL, delete POOL, and credential add/remove/clear. Credential references remain in the existing encrypted store or environment; values are never copied into TOML or status output.
+
+Mutations preserve comments, preview safely, and require the exact confirmation value when removing configured routing state.
+
+#### `lemon blueprints`
+
+Review and activate cataloged skill automation blueprints.
+
+```text
+lemon blueprints [list|inspect|validate|preview|activate] [options]
+```
+
+| Subcommand | Purpose |
+| --- | --- |
+| `list` | List |
+| `inspect` | Inspect |
+| `validate` | Validate |
+| `preview` | Preview |
+| `activate` | Activate |
+
+| Option | Purpose |
+| --- | --- |
+| `--profile ID` | Target profile for preview or activation |
+| `--confirm DIGEST` | Exact digest from a fresh preview |
+| `--json` | Emit one sanitized JSON document |
+
+With no arguments, the command lists the local catalog. A bundle ID plus --profile is shorthand for preview and never mutates state.
+
+Activation accepts catalog IDs only and requires the exact confirmation digest from a fresh plan. Bundle paths, archives, commands, environment overrides, and secret values are not CLI inputs.
+
+#### `lemon profile`
+
+Manage isolated agent profiles.
+
+```text
+lemon profile <command> [options]
+```
+
+| Subcommand | Purpose |
+| --- | --- |
+| `list` | List |
+| `show` | Show |
+| `create` | Create |
+| `clone` | Clone |
+| `rename` | Rename |
+| `export` | Export |
+| `delete` | Delete |
+| `roster` | Roster |
+| `chat` | Chat |
+
+| Option | Purpose |
+| --- | --- |
+| `--json` | Emit JSON |
+| `--name NAME` | Profile display name |
+| `--model MODEL` | Profile or chat model |
+| `--node NODE` | Named execution node |
+| `--queue-mode MODE` | Chat queue mode |
+| `--confirm ID` | Exact profile deletion confirmation |
+| `--force` | Replace an existing export file |
+
+Lifecycle commands keep profiles under the canonical Lemon home. Exports are selected-file snapshots that never include sessions or memory. Selected files are not scrubbed, so review an export for inline secrets before sharing it.
+
+#### `lemon backup`
+
+Back up or restore durable user state.
+
+```text
+lemon backup <contract|create|list|verify|restore> [options]
+```
+
+| Subcommand | Purpose |
+| --- | --- |
+| `contract` | Contract |
+| `create` | Create |
+| `list` | List |
+| `verify` | Verify |
+| `restore` | Restore |
+
+| Option | Purpose |
+| --- | --- |
+| `--output PATH` | Output bundle path |
+| `--root PATH` | Backup root to list |
+| `--target PATH` | Restore target |
+| `--include-credentials` | Include local credentials |
+| `--overwrite` | Allow verified differing files |
+| `--confirm TOKEN` | Exact verify token |
+| `--json` | Emit one JSON document |
+
+Restore verifies before mutation. By default a backup omits only the `cookie`, `env`, and `secrets_master_key` files and the `nodes/execution/` credential directory; `--include-credentials` adds them. `config.toml` and other included files are copied byte-for-byte and are not scrubbed, so inline API keys or tokens in them are preserved. Treat every backup as sensitive. Secret values and backed-up file contents are never printed.
+
+Exit codes: 0 success; 1 verification or operational failure; 2 invalid command or options.
+
+#### `lemon context`
+
+Preview or resolve bounded context references.
+
+```text
+lemon context <preview|resolve> <reference>... [options]
+```
+
+| Subcommand | Purpose |
+| --- | --- |
+| `preview` | Preview |
+| `resolve` | Resolve |
+
+| Option | Purpose |
+| --- | --- |
+| `--root PATH` | Root for confined file references |
+| `--json` | Emit JSON |
+| `--max-bytes N` | Bound selected bytes |
+| `--max-items N` | Bound selected items |
+| `--max-depth N` | Bound folder traversal depth |
+| `--max-pages N` | Bound document pages |
+| `--timeout-ms N` | Bound external resolution time |
+
+#### `lemon sessions`
+
+Inspect and manage durable sessions.
+
+```text
+lemon sessions <command> [options]
+```
+
+| Subcommand | Purpose |
+| --- | --- |
+| `list` | List |
+| `search` | Search |
+| `stats` | Stats |
+| `show` | Show |
+| `history` | History |
+| `context` | Context |
+| `title` | Title |
+| `pin` | Pin |
+| `unpin` | Unpin |
+| `archive` | Archive |
+| `restore` | Restore |
+| `export` | Export |
+| `prune` | Prune |
+| `delete` | Delete |
+
+| Option | Purpose |
+| --- | --- |
+| `--json` | Emit one redacted JSON document |
+| `--limit N` | Bound rows or history entries |
+| `--offset N` | Skip list/search rows |
+| `--group-limit N` | Bound stats dimension entries |
+| `--agent-id ID` | Filter by agent id |
+| `--pinned \| --unpinned` | Filter pin state |
+| `--archived \| --active` | Filter archive state |
+| `--format json\|jsonl\|markdown\|html` | Redacted export format |
+| `--cwd PATH` | Project directory for context (default: current) |
+| `--clear` | Clear a session title |
+| `--output PATH` | Write export content to a private file |
+| `--force` | Replace an existing regular export file |
+| `--older-than AGE\|DATE` | Prune cutoff, for example 30d |
+| `--all` | Allow non-archived prune candidates |
+| `--include-pinned` | Allow pinned prune candidates |
+| `--confirm TOKEN` | Exact preview or delete confirmation |
+
+Stats returns exact aggregate counts with bounded, redacted agent and origin dimensions. History and exports are always redacted. Prune previews by default and executes only with the exact token from an unchanged candidate set. Delete requires the exact session key.
+
+Context shows a native session's context-window usage by category (system prompt, tools, skills, context files, memory, messages, free space); splits are estimates scaled to the provider-reported total.
+
+#### `lemon runs`
+
+Inspect runtime runs and per-run timelines.
+
+```text
+lemon runs [list|active] [options] | lemon runs show <runId> [--json]
+```
+
+| Subcommand | Purpose |
+| --- | --- |
+| `list` | List |
+| `active` | Active |
+| `show` | Show |
+
+| Option | Purpose |
+| --- | --- |
+| `--status S` | completed, aborted, crashed, or error (recent only) |
+| `--session KEY` | Filter session key |
+| `--agent ID` | Filter agent |
+| `--since AGE` | Recent cutoff: 30m, 1h, or 2d |
+| `--limit N` | Return 1..200 rows (default 50) |
+| `--json` | Emit JSON |
+
+Requires a running runtime; never starts one. Recent filters inspect at most 200 returned history rows. Active lists in-flight sessions. Show renders a redacted per-run timeline with relative times, tool outcomes, subagents and usage (latest 500 entries).
+
+#### `lemon cron`
+
+Manage cron jobs and inspect run history.
+
+```text
+lemon cron list [--failing] [--json] | pause|resume|run <id|name> | remove <id|name> [--yes] | status [--json] | runs [options]
+```
+
+| Subcommand | Purpose |
+| --- | --- |
+| `list` | List |
+| `pause` | Pause |
+| `resume` | Resume |
+| `run` | Run |
+| `remove` | Remove |
+| `status` | Status |
+| `runs` | Runs |
+
+| Option | Purpose |
+| --- | --- |
+| `--failing` | List only jobs with a nonzero failure streak |
+| `--yes` | Confirm removal without an interactive prompt |
+| `--job ID` | Select one job; default all current jobs |
+| `--status S` | pending, running, completed, failed, timeout, or aborted |
+| `--since AGE` | Cutoff: 30m, 1h, or 2d |
+| `--limit N` | Return 1..200 rows (default 50) |
+| `--json` | Emit JSON without job prompts or run output |
+
+#### `lemon logs`
+
+Tail redacted runtime or offline launcher logs.
+
+```text
+lemon logs [-n 50] [--level info|warning|error] [--follow] [--json]
+```
+
+| Option | Purpose |
+| --- | --- |
+| `-n N` (alias `--lines N`) | Return 1..1000 lines (default 50) |
+| `--level LEVEL` | Minimum severity: info, warning, or error |
+| `--follow` | Poll every two seconds; Ctrl-C exits |
+| `--json` | Emit JSON; follow emits one document per poll |
+
+Reads logs.tail while online, otherwise the launcher log. File reads are bounded to the last 1 MiB; unknown-level file lines are excluded with --level.
+
+#### `lemon omp`
+
+Start, watch, and steer omp coding-agent sessions.
+
+```text
+lemon omp <command> [args] [options]
+```
+
+| Subcommand | Purpose |
+| --- | --- |
+| `status` | Show whether omp is installed and live-session counts |
+| `list` | List live omp sessions (--all includes ended ones) |
+| `show` | Summarize one session: show ID |
+| `discover` | List omp's stored sessions for a workspace |
+| `start` | Start omp on a prompt: start [options] PROMPT... |
+| `start-many` | Start parallel workers with repeated --task PROMPT |
+| `models` | List omp models: models [QUERY] [--free] [--provider P] |
+| `subagent` | Read a transcript tail: subagent ID SUBAGENT-ID |
+| `configure` | Change a worker: configure ID [--model M] [--thinking L] |
+| `send` | Steer, follow up or redirect: send ID [--follow-up\|--redirect] MESSAGE... |
+| `cancel` | Abort the running turn; the session stays open |
+| `close` | End the omp process; it stays resumable |
+| `resume` | Reopen a stored session: resume OMP-ID [PROMPT...] |
+| `watch` | Follow a session until its turn settles |
+
+| Option | Purpose |
+| --- | --- |
+| `--cwd PATH` | Workspace for start, resume, discover (default: .) |
+| `--model MODEL` | omp model for start, start-many, resume or configure |
+| `--thinking LEVEL` | Thinking level for start, start-many, resume or configure |
+| `--approval-mode MODE` | always-ask, write or yolo (start/start-many/resume) |
+| `--isolate` | Create managed Git worktrees (start/start-many) |
+| `--continue` | Continue interrupted history on resume; no prompt |
+| `--task PROMPT` | Repeat 1–8 times for start-many |
+| `--free` | Only free omp models |
+| `--provider PROVIDER` | Filter omp model provider |
+| `--redirect` | Stop the current turn and replace its prompt |
+| `--follow-up` | Queue a send after the running turn |
+| `--all` | Include ended sessions in list |
+| `--limit N` | Bound rows: list/discover max 100, models 200, subagent 50 |
+| `--json` | Emit JSON |
+
+omp runs inside the Lemon runtime, which starts first when needed. Without a subcommand, lemon omp lists live sessions. Text from omp is untrusted and printed with control characters removed.
+
+Leaving watch (including Ctrl-C) never cancels the omp turn. A send or cancel reported as not retry-safe may already have taken effect; check `lemon omp show ID` before retrying.
+
+#### `lemon learning`
+
+Browse the current profile's learning timeline.
+
+```text
+lemon learning [--profile ID] [--kind memory|user|project|skill] [--limit N] [--json]
+```
+
+| Option | Purpose |
+| --- | --- |
+| `--profile ID` | Local profile (default: default assistant) |
+| `--kind KIND` | Filter memory, user, project, or skill events |
+| `--limit N` | Maximum events, 1–100 (default 50) |
+| `--json` | Emit one redacted JSON document |
+
+Newest first. Existing creation/latest-update timestamps only, not a complete historical log. Previews show current redacted content.
+
+Use the existing memory management and skill commands to edit/delete; this command never mutates state.
+
+#### `lemon learn`
+
+Review and confirm bounded learning from sources.
+
+```text
+lemon learn [review|confirm] <reference>... [options]
+```
+
+| Subcommand | Purpose |
+| --- | --- |
+| `review` | Review |
+| `confirm` | Confirm |
+
+| Option | Purpose |
+| --- | --- |
+| `--root PATH` | Root for confined local sources |
+| `--agent-id ID` | Durable memory owner |
+| `--session-key KEY` | Explicit learning session |
+| `--project` | Use the project draft scope |
+| `--confirm DIGEST` | Exact digest from a fresh review |
+| `--json` | Emit one sanitized JSON document |
+
+Review is the default and never writes state. Confirm re-resolves every source and fails closed when source content, audit state, or destination conflicts changed.
+
+Output contains hashes, counts, audit codes, and conflict state only; source text, prompts, paths, URLs, secret names, and secret values are omitted.
+
+#### `lemon update`
+
+Safely plan, apply, inspect, or roll back Lemon releases.
+
+```text
+lemon update <check|plan|apply|history|rollback> [options]
+```
+
+| Subcommand | Purpose |
+| --- | --- |
+| `check` | Check |
+| `plan` | Plan |
+| `apply` | Apply |
+| `history` | History |
+| `rollback` | Rollback |
+
+| Option | Purpose |
+| --- | --- |
+| `--channel CHANNEL` | Override the release channel |
+| `--version VERSION` | Use an exact published version |
+| `--confirm DIGEST` | Exact fresh plan or rollback digest |
+| `--receipt ID` | Exact update receipt for rollback |
+| `--limit N` | Bound history receipts |
+| `--json` | Emit one redacted JSON document |
+
+Planning is non-mutating. Managed-release apply requires the exact digest from a fresh plan; rollback requires both the exact apply receipt and its rollback digest.
+
+Source checkouts support read-only check/history. Plan, apply, and rollback fail closed because source updates belong to the operator's reviewed git workflow.
+
+#### `lemon completion`
+
+Generate shell completion scripts.
+
+```text
+lemon completion <bash|zsh|fish>
+```
+
+| Subcommand | Purpose |
+| --- | --- |
+| `bash` | Bash |
+| `zsh` | Zsh |
+| `fish` | Fish |
+
+The generated script matches the invoking launcher. Release VM tools (remote, eval, rpc) are only advertised by packaged installs.
+
+#### `lemon migrate`
+
+Import user data from a Hermes home.
+
+```text
+lemon migrate hermes [audit] [options]
+```
+
+| Subcommand | Purpose |
+| --- | --- |
+| `hermes` | Preview, then import a Hermes home into Lemon |
+| `audit` | Read-only compatibility audit (`migrate hermes audit`) |
+
+| Option | Purpose |
+| --- | --- |
+| `--source PATH` | Hermes home (default: ~/.hermes) |
+| `--target PATH` | Lemon home (default: ~/.lemon) |
+| `--workspace-dir PATH` | Assistant workspace override |
+| `--preset user-data\|full` | Import scope (default: user-data) |
+| `--migrate-secrets` | Import allowlisted secrets |
+| `--skill-conflict skip\|rename` | Existing skill policy |
+| `--dry-run` | Preview without writing |
+| `--yes` | Apply without prompting |
+| `--overwrite` | Replace conflicting target files |
+| `--no-backup` | Skip the pre-migration zip backup |
+| `--json` | Emit the audit as JSON |
+
+Migration always previews first and refuses conflicts unless --overwrite is set. Without --yes it asks before writing. Secret values are never printed or written to reports.
+
+#### `lemon node`
+
+Inspect worker compatibility or join a named execution node.
+
+```text
+lemon node join --name NAME --controller wss://HOST/ws [options]
+lemon node capabilities [--json] [--require-bot] [--expected-version VERSION]
+```
+
+| Subcommand | Purpose |
+| --- | --- |
+| `join` | Pair with or reconnect to a controller |
+| `capabilities` | Inspect installed worker API compatibility without starting a runtime |
+
+| Option | Purpose |
+| --- | --- |
+| `--json` | Print worker compatibility JSON (capabilities) |
+| `--require-bot` | Fail if required bot worker APIs are absent (capabilities) |
+| `--expected-version VERSION` | Require the exact installed worker CalVer (capabilities) |
+| `--name NAME` | Unique execution node name |
+| `--controller URL` | Controller control-plane WebSocket |
+| `--pair` | Pair and store a controller-issued node token |
+| `--invite-code-stdin` | Read one bounded enrollment or repair code from stdin (implies --pair) |
+| `--node-id ID` | Durable controller node ID |
+| `--repair` | Operator-authorized legacy credential repair |
+| `--allow-insecure-controller` | Allow non-loopback ws:// |
+| `--cwd PATH` | Default local working directory |
+| `--allowed-root PATH` | Allowed host file/shell root (repeatable) |
+
+#### `lemon version`
+
+Print the Lemon version (--version includes build identity).
+
+```text
+lemon version [--verbose]
+```
+
+| Option | Purpose |
+| --- | --- |
+| `--verbose` | Show source/release, commit, and channel |
+
+#### `lemon send`
+
+Send a Telegram or Discord notification.
+
+```text
+lemon send --to TARGET [options] [message]
+```
+
+| Option | Purpose |
+| --- | --- |
+| `--to TARGET` | Telegram or Discord target |
+| `--account NAME` | Channel account |
+| `--subject TEXT` | Message subject |
+| `--file PATH` | Read body from a file, or - for stdin |
+| `--attach PATH` | Attach a local file (repeatable) |
+| `--thread ID, --topic ID` | Thread or topic |
+| `--reply-to ID` | Reply to a platform message |
+| `--list [PLATFORM]` | List known targets |
+| `--dry-run` | Validate without sending |
+| `--quiet` | Suppress normal output |
+| `--json` | Emit JSON |
+
+#### `lemon media`
+
+Inspect media generation diagnostics.
+
+```text
+lemon media [options]
+```
+
+| Option | Purpose |
+| --- | --- |
+| `--project-dir PATH` | Project root |
+| `--limit N` | Recent jobs to show |
+| `--json` | Emit redacted JSON |
+
+#### `lemon models`
+
+List the model catalog.
+
+```text
+lemon models [options]
+```
+
+| Option | Purpose |
+| --- | --- |
+| `--provider NAME` | Filter by provider |
+| `--vision` | Only image-capable models |
+| `--thinking` | Only reasoning-capable models |
+| `--limit N` | Maximum rows |
+| `--json` | Emit catalog and summary JSON |
+| `--discover` | Query a preset provider endpoint for its models |
+| `--base-url URL` | Endpoint for --discover |
+
+#### `lemon policy`
+
+Manage model policies.
+
+```text
+lemon policy <list|set|get|clear> [channel] [options]
+```
+
+| Subcommand | Purpose |
+| --- | --- |
+| `list` | List |
+| `set` | Set |
+| `get` | Get |
+| `clear` | Clear |
+
+| Option | Purpose |
+| --- | --- |
+| `--account ID` | Channel account |
+| `--peer ID` | Peer or chat |
+| `--thread ID` | Thread or topic |
+| `--model MODEL` | Model override |
+| `--thinking LEVEL` | Thinking override |
+| `--reason TEXT` | Policy metadata reason |
+| `--all` | Clear all policies for the channel |
+
+#### `lemon skill`
+
+Manage installed skills.
+
+```text
+lemon skill <command> [args]
+```
+
+| Subcommand | Purpose |
+| --- | --- |
+| `list` | List |
+| `browse` | Browse |
+| `search` | Search |
+| `discover` | Discover |
+| `hermes` | Hermes |
+| `install` | Install |
+| `update` | Update |
+| `remove` | Remove |
+| `inspect` | Inspect |
+| `check` | Check |
+| `info` | Info |
+| `draft` | Draft |
+| `curator` | Curator |
+
+| Option | Purpose |
+| --- | --- |
+| `--cwd PATH` | Project workspace |
+| `--local` | Install only in the project |
+| `--global` | Use global skills |
+| `--force` | Confirm overwrite or removal |
+| `--no-online` | Search only installed skills |
+| `--active` | Browse only active skills |
+| `--not-ready` | Browse skills missing dependencies |
+| `--all` | Include hidden skills when browsing |
+
+#### `lemon usage`
+
+Inspect usage diagnostics.
+
+```text
+lemon usage [--days N | --since YYYY-MM-DD --until YYYY-MM-DD] [--by day|provider|model|session] [--json]
+```
+
+| Option | Purpose |
+| --- | --- |
+| `--days N` | Last N UTC dates including today (1–366) |
+| `--since YYYY-MM-DD` | Inclusive first UTC date |
+| `--until YYYY-MM-DD` | Inclusive last UTC date |
+| `--by GROUP` | day, provider (default), model, or session |
+| `--json` | Emit redacted usage JSON |
+
 ## Shell completion
 
 Completion scripts are generated from the same registry used by CLI dispatch
