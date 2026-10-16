@@ -14,6 +14,9 @@ struct InstanceSettingsView: View {
     var body: some View {
         Form {
             if store.canViewInstance {
+                Section {
+                    NavigationLink("Manage providers") { ProvidersSettingsView(store: store) }
+                }
                 if let status = store.instanceStatus {
                     backend(status.backend)
                     controller(status.controller)
@@ -101,23 +104,20 @@ struct InstanceSettingsView: View {
         }
     }
     private func providers(_ providers: [InstanceProvider]?, measuredAtMs: TimestampMs) -> some View {
-        Section("Providers") {
+        Section("Provider diagnostic history — controller") {
+            Text("Last observed failures only, not a live readiness check. Successful calls do not erase this history; restarting Lemon does.")
             if let providers {
                 if providers.isEmpty { Text("No providers configured").foregroundStyle(LB.muted) }
                 ForEach(providers, id: \.id) { provider in
                     VStack(alignment: .leading, spacing: 6) {
                         HStack {
                             Text(instanceServiceName(provider.id))
-                            if provider.isDefault { LabelChip(text: "Default", tint: LB.accent) }
                             Spacer()
                             switch provider.credential {
                             case .present: LabelChip(text: "Key available", tint: LB.success)
                             case .missing: LabelChip(text: "Key missing", tint: LB.warning)
                             case .notRequired: LabelChip(text: "Key not required")
                             }
-                        }
-                        if provider.credential == .missing {
-                            Text("Add a key with `lemon setup` on the Lemon host.").font(LBFont.meta).foregroundStyle(LB.warning)
                         }
                         if let error = provider.lastError { healthError(error, measuredAtMs: measuredAtMs) }
                     }

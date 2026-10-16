@@ -72,9 +72,9 @@ it. `setup --print-origin` is the existing read-only configured-service discover
 path when its private environment is already correctly supplied.
 
 Provider management API (F-0076), Codex device login (F-0077), and Providers UI
-(F-0079) are outstanding code dependencies for the second checklist. Recheck
-merge availability at execution time; missing code is not a signing/network error.
-Do not substitute CLI credentials, fake login or another onboarding implementation.
+(F-0079) must be merged and deployed together for the second checklist. Recheck
+the installed builds at execution time; source implementation is not deployment
+or physical/provider evidence. Do not substitute CLI credentials or fake login.
 
 See the [Apple build guide](../../products/lemon_bot/apple/README.md) for the
 canonical packaging/signing instructions and metadata in `apple/project.yml`.
@@ -136,7 +136,7 @@ No model request is authorized by this checklist.
 
 ## Checklist B — provider onboarding acceptance (F-0080)
 
-Blocked on F-0076/F-0077/F-0079 until merged and available on all relevant clients.
+Requires the F-0076/F-0077/F-0079 implementation deployed on all relevant clients.
 Use the same isolated workspace and coordinate F-0069/F-0075; no new accounts,
 live credential replacement or model invocation is authorized by preparation.
 
@@ -158,6 +158,22 @@ live credential replacement or model invocation is authorized by preparation.
 5. Deliberately select the provider/model and Bot/machine; do not infer defaults.
    A real model request requires separate explicit authorization **at execution
    time**. Without it, record model execution as not tested, not passed.
+6. In the browser at the same trusted instance origin, review **Execution target**,
+   capability/status and **Current default**. Open the Codex verification page
+   only with its explicit browser action; exercise the displayed URL/code fallback
+   if the browser blocks new tabs. Return to the active settings view and verify
+   the same login reaches its actual status. Hidden-tab suspension is not failure
+   or permission to start another grant.
+7. On a disposable/mock credential target, check API-key entry starts empty and is
+   cleared after submit/failure, cancel, target/account switch and backgrounding.
+   Do not use a real key for screenshot or failure-injection evidence. Browser
+   autocomplete hints cannot constrain extensions, password managers or recording.
+8. Cancel **Change default** and confirm the effective default is unchanged;
+   approve it separately only on the authorized isolated target. Confirm
+   add/replace/login never change it implicitly. Review and cancel **Disconnect**
+   to inspect its local-only, not-provider-revocation disclosure without affecting
+   an existing credential; actual removal requires a disposable target or separate
+   approval. Record unknown outcomes as unresolved, never replay them automatically.
 
 ## Evidence and one-message request
 

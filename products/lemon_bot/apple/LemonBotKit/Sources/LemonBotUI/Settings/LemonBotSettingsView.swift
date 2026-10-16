@@ -9,7 +9,7 @@ import UIKit
 // beside the pane content; iOS pushes panes from a grouped list.
 
 public enum SettingsPane: String, CaseIterable, Identifiable, Hashable {
-    case account, devices, instance, machines, apps, library, policies, usage, network, workspace, preferences, platform, about
+    case account, devices, instance, providers, machines, apps, library, policies, usage, network, workspace, preferences, platform, about
 
     public var id: String { rawValue }
 
@@ -18,6 +18,7 @@ public enum SettingsPane: String, CaseIterable, Identifiable, Hashable {
         case .account: "Account"
         case .devices: "Devices"
         case .instance: "Lemon instance"
+        case .providers: "Providers"
         case .machines: "Machines"
         case .apps: "Apps & channels"
         case .library: "Library"
@@ -41,6 +42,7 @@ public enum SettingsPane: String, CaseIterable, Identifiable, Hashable {
         case .account: "person.crop.circle"
         case .devices: "iphone"
         case .instance: "server.rack"
+        case .providers: "key"
         case .machines: "desktopcomputer"
         case .apps: "square.grid.2x2"
         case .library: "books.vertical"
@@ -65,6 +67,7 @@ public enum SettingsPane: String, CaseIterable, Identifiable, Hashable {
         case .account: Color(hex: 0x8A9A5B)
         case .devices: Color(hex: 0x3F6FA3)
         case .instance: Color(hex: 0x5F7847)
+        case .providers: Color(hex: 0x5F7847)
         case .machines: Color(hex: 0x5F6B73)
         case .apps: Color(hex: 0x6A5CA8)
         case .library: Color(hex: 0xB0643A)
@@ -83,6 +86,7 @@ public enum SettingsPane: String, CaseIterable, Identifiable, Hashable {
         case .account: "Your profile, saved accounts and sign-in."
         case .devices: "Connect a phone and manage devices signed in to your account."
         case .instance: "The attached Lemon, its service and lifecycle controls."
+        case .providers: "Manage sign-in and the default on your execution target."
         case .machines: "The computers your Bots work on."
         case .apps: "Connected apps, channels, email and X."
         case .library: "Skills, routines, templates and Bot memory."
@@ -125,7 +129,7 @@ public struct LemonBotSettingsView<Platform: View>: View {
     }
 
     private var panes: [SettingsPane] {
-        SettingsPane.allCases.filter { $0 != .platform || !(Platform.self is EmptyView.Type) }
+        SettingsPane.allCases.filter { ($0 != .platform || !(Platform.self is EmptyView.Type)) && ($0 != .providers || store.member?.role == "owner") }
     }
 
     @ViewBuilder private func content(_ pane: SettingsPane) -> some View {
@@ -133,6 +137,7 @@ public struct LemonBotSettingsView<Platform: View>: View {
         case .account: AccountPane(store: store)
         case .devices: DevicesPane(store: store)
         case .instance: InstanceSettingsView(store: store)
+        case .providers: ProvidersSettingsView(store: store)
         case .machines: MachineHubView(store: store)
         case .apps: IntegrationsHubView(store: store)
         case .library: LibraryHubView(store: store)

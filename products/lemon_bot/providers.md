@@ -103,6 +103,71 @@ and environment precedence. An explicit default write changes only the global
 default; an active higher-priority override can therefore leave the effective
 selection unchanged.
 
+### Providers settings on Web, iPhone and Mac
+
+Open **Settings → Providers** on the already running Bot
+backend. The shared Apple settings serve both iPhone and Mac; Web uses the same
+product API and terminology, not a separate credential service. Only a workspace
+Owner can manage providers. Choose the controller or an execution machine you
+own, then review the backend/workspace and exact **Execution target** hostname,
+target ID and node ID before changing anything. Changing targets does not copy
+credentials. An offline or unsupported target is unavailable, not an empty
+provider inventory.
+
+Each provider shows its advertised sign-in methods, configured state and
+**Ready**, **Needs login**, **Expired** or **Configured** status. **Last validation**
+is a target-local static resolver check, not a live account/quota/model probe.
+Environment and configuration override warnings explain why saving a credential
+may not make it effective. **Current default** is shown separately.
+
+- **Add API key** or **Replace credential** opens an empty, secure, write-only
+  field. Submit sends it once to the selected target and immediately clears the
+  field, including on failure. Cancel, leaving the editor and backgrounding also
+  discard input. It is not saved as a draft, restored, copied to diagnostics,
+  persisted in browser storage or placed in the phone's Keychain.
+- **Re-authenticate** starts a supported device login. For Codex, review the
+  displayed user code and choose the browser action explicitly; enter the code
+  at the displayed verification URL. The client observes this same login and
+  offers Cancel. Denied, expired, cancelled, lost and failed logins are explicit.
+  Completion reloads provider state; it does not itself attest runtime readiness.
+- **Disconnect** asks for confirmation. It removes only the target-local provider
+  configuration/credential; it does not revoke keys or grants at the provider,
+  and independent environment or external credentials may still resolve.
+- **Change default** is a separate provider/model selection with confirmation.
+  Adding, replacing, signing in or disconnecting never chooses a default, and a
+  default change does not rewrite Bots or profiles.
+
+An unconfirmed response keeps its original operation identity. **Check status**
+never silently resubmits a key, disconnect or default change. Device-login
+reconciliation is an explicit check of the same login and fixed action nonce,
+not another authorization grant. Reopening or reconnecting is not consent to
+retry an unknown mutation. Do not paste credentials into errors or support
+reports.
+
+On iPhone and Mac, automatic observation follows the advertised grant expiry;
+**Check status** can still reconcile the same fixed poll after observation stops
+or the code expires. Device-login journal entries retain only the initiating
+nonsecret product session ID, target and fixed operation identity. Signing in
+again under the same account does not authorize replay of the previous session's
+login. After explicitly checking the exact target's current status, choose
+**Retire previous session’s local login fence** if that session is no longer
+reachable, then separately choose a new sign-in. Retirement removes only the
+local block: it does not claim the old operation settled, cancel its grant or
+revoke an already stored credential. Older journals without a session identity
+use this same non-replaying recovery path.
+
+The browser password field requests `autocomplete=off` and uses neither
+`localStorage` nor `sessionStorage` for its value. Browsers/extensions/password
+managers can ignore autocomplete hints; Web cannot prevent screenshots, screen
+recording, extension access or memory inspection. Native secure entry and
+privacy-sensitive presentation likewise do not promise protection from every
+screen-capture mechanism. Use a trusted device/browser, avoid screenshots while
+entering credentials and review provider access separately when revocation is
+needed. Opening the verification page requires an explicit user action; when
+new tabs or app switching are restricted, manually open the displayed HTTPS
+verification URL and enter the code. No camera or callback interception is
+required, and polling pauses when the settings are not active.
+
 ### Codex device sign-in
 
 Use the exact canonical `openai_codex` provider ID, only when that target advertises

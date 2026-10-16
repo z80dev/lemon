@@ -14,6 +14,13 @@
 
 ### Added
 
+- Owner-only Providers settings use the shared product API for controller or
+  owned-machine status, write-only API-key add/replace, Codex device sign-in with
+  explicit browser navigation and cancellation, and confirmed local disconnect.
+  Current default selection is separate and requires confirmation; credential
+  actions never change it. Secret input is cleared after every submission and
+  never persisted or echoed in errors; unknown outcomes are never auto-retried.
+
 - Messaging-first polish. Conversations drop the page heading for a floating Bot pill that toggles a right-hand panel (Activity: live run, steps and recent outcomes with Stop; Details: Bot facts, settings links and the existing conversation details; Library: files, memory, routines, skills, connected apps). On phones the panel opens as a full-screen sheet.
 - Transcript: grouped, borderless bubbles with date separators; user bubbles use the Bot's color. Reactions, reply, copy and feedback appear on hover, or on long-press/context menu on touch. Existing reactions show as small chips.
 - A failed, stopped or unconfirmed run shows as one quiet "Couldn't finish this. Retry · Details" row in place of an empty assistant bubble. Run IDs, error codes and diagnostic request IDs appear only under Details. Retry puts your original message back in the composer for review; it never resends automatically.

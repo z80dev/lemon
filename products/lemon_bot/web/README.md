@@ -99,6 +99,15 @@ Saved microphone inputs that have not been connected in this visit are labelled
 
 No mutation is automatically replayed after a lost response. Unknown outcomes retain draft input and fixed nonce/resource IDs, fence consequential intents and offer read-only reconciliation. Revisions bind edits. Destructive dialogs disclose exact affected/retained scope, expire, require typed confirmation and remain mounted until acknowledgment. Offline destructive actions and approvals are never queued. Read failures are errors, not synthetic empty lists or success. Realtime cursors are acknowledged only after authoritative event application; refresh never treats a watermark as a replacement snapshot.
 
+Provider API-key input is an exception to retained drafts: it is always cleared
+on submit, including failure, and never stored in local or session storage.
+The password field requests `autocomplete=off`; browsers and extensions may
+ignore that hint, and Web cannot prevent screenshots or screen recording.
+Codex sign-in opens the verification URL only from an explicit browser action;
+the displayed URL/code remain a manual fallback if new tabs are blocked.
+Device polling pauses outside the active settings view. All tokens and OAuth
+exchange remain on the execution target, not in browser state.
+
 ## Connection recovery
 
 The connection panel names the product service origin (the browser origin through
@@ -117,10 +126,12 @@ are observed with read-only polling and their output stays behind Details. An
 uncertain command receipt blocks further commands rather than sending it again.
 
 **Settings → Instance** shows Lemon's version, release channel and short commit,
-per-channel connection state and last error, and provider credential health.
-Missing provider keys include a `lemon setup` instruction for the Lemon host;
-providers that do not need a key are labelled neutrally. Provider and channel
-errors include their observation time. This pane does not edit host credentials.
+per-channel connection state and last error. The owner-only **Settings → Providers** section
+manages credentials on the controller or a selected owned execution machine:
+add/replace a write-only API key, Codex device sign-in, confirmed local disconnect,
+and a separate confirmed default provider/model change. Provider readiness and
+last resolver validation remain distinct from credential storage and provider
+failure history. See the shared [Providers workflow and browser limitations](../providers.md#providers-settings-on-web-iphone-and-mac).
 
 Across chat, settings, computers and connected services, **Check status** observes
 an unconfirmed change; it never sends that change again. Ordinary failed reads use

@@ -58,14 +58,15 @@ test('stop confirmation does not promise remote start and keeps explicit confirm
   expect(restart).toContain('disabled=""');
 });
 
-test('providers show default, credential health, setup guidance and timestamped actual errors', () => {
+test('provider diagnostic history is distinct from management and effective default', () => {
   const providers = status.lemon!.providers!.map(provider => ({ ...provider, lastError: provider.lastError && { ...provider.lastError, atMs: Date.now() - 120000 } }));
   const markup = renderToStaticMarkup(<ProviderHealth providers={providers}/>);
-  expect(markup).toContain('<h2>Providers</h2>');
-  expect(markup.match(/>Default</g)).toHaveLength(1);
+  expect(markup).toContain('<h2>Provider diagnostic history</h2>');
+  expect(markup).not.toContain('>Default<');
   expect(markup).toContain('badge good">Key available');
   expect(markup).toContain('badge warning">Key missing');
-  expect(markup).toContain('Add a key with <code>lemon setup</code> on the Lemon host.');
+  expect(markup).toContain('Manage credentials in Settings → Providers.');
+  expect(markup).not.toContain('lemon setup');
   expect(markup).toContain('badge muted">Key not required');
   expect(markup).not.toContain('not_required');
   expect(markup).toContain('Provider authentication failed.');

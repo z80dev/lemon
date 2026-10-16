@@ -33,6 +33,22 @@ never from polling. Reads refresh every 10 seconds while visible (2 seconds whil
 a command runs), preserve stale details on read errors, and expose bounded command
 output and link errors behind Details with Copy controls.
 
+`settings.providers` is the owner-only Providers destination. It uses the shared
+provider API for the controller or an actually owned execution machine, displays
+the exact workspace/backend/target and separates effective default from
+credential readiness. API-key input is transient DOM secure entry, never an app
+draft or storage value, and is cleared synchronously on submit and on leaving
+the editor. Disconnect and default changes have separate confirmations.
+
+Only nonsecret operation identity enters the session-bound provider intent
+journal. A status read does not prove an unknown credential/default/disconnect
+operation settled; an explicit reviewed-status action is needed to start a new
+intent without replaying the old one. Codex uses its real fixed login/action
+nonces and explicit browser navigation; an unknown outcome stops polling until
+the owner explicitly checks that same login. Codes/URLs are memory-only, and
+backgrounding discards them. See the canonical [Providers workflow and browser
+limitations](../../../../providers.md#providers-settings-on-web-iphone-and-mac).
+
 
 ## Browser integrations
 
