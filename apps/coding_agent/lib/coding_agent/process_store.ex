@@ -548,7 +548,7 @@ defmodule CodingAgent.ProcessStore do
     # Stop sessions outside the store server: their terminate callback writes
     # final capture statistics through that server.
     Enum.each(list(), fn {id, _record} ->
-      if CodingAgent.ProcessSession.alive?(id), do: CodingAgent.ProcessSession.stop(id)
+      CodingAgent.ProcessSession.stop(id)
     end)
 
     ProcessStoreServer.clear(CodingAgent.ProcessStoreServer)

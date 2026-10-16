@@ -718,7 +718,7 @@ defmodule CodingAgent.ProcessManager do
         # unknown held workload must retain its reconciliation process.
         case ProcessStore.delete(process_id) do
           :ok ->
-            if ProcessSession.alive?(process_id), do: ProcessSession.stop(process_id)
+            ProcessSession.stop(process_id)
             :ok
 
           {:error, _} = error ->

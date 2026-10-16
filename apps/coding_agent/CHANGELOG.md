@@ -170,6 +170,11 @@
 
 ### Fixed
 
+- Clearing terminal background processes tolerates sessions that exit concurrently,
+  including canceled queued launches. Cleanup resolves the session once, preserves
+  failures against a still-live session, and logs unexpected concurrent exits
+  without exposing process data.
+
 - Interrupted LSP server-requested edits retain captured paths in `affected_paths`
   and warn when a checkpoint's edit outcome is unknown, while preserving confirmed
   `changed_files` and merging affected paths across batches.

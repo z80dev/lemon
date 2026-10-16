@@ -46,6 +46,8 @@ defmodule CodingAgent.ProcessSession do
 
   use GenServer
 
+  require Logger
+
   alias CodingAgent.{BashExecutor, ProcessStore}
   alias LemonCore.TerminalBackends
   alias LemonCore.TerminalBackends.{Docker, Ssh}
@@ -143,9 +145,17 @@ defmodule CodingAgent.ProcessSession do
 
   @doc """
   Stop the session (does not kill the process if already exited).
+
+  Already-stopped sessions and concurrent exits are successful cleanup. Unexpected
+  concurrent exit reasons are logged without exposing process data; a stop failure
+  while the resolved session is still alive continues to exit the caller.
   """
+  @spec stop(String.t()) :: :ok
   def stop(process_id) do
-    GenServer.stop(via_tuple(process_id), :normal)
+    case GenServer.whereis(via_tuple(process_id)) do
+      nil -> :ok
+      pid -> stop_session(pid)
+    end
   end
 
   @doc """
@@ -579,6 +589,32 @@ defmodule CodingAgent.ProcessSession do
 
   defp via_tuple(process_id) do
     {:via, Registry, {CodingAgent.ProcessRegistry, process_id}}
+  end
+
+  defp stop_session(pid) do
+    GenServer.stop(pid, :normal)
+  catch
+    :exit, reason ->
+      # Resolve once so a registry change cannot make us check a different owner.
+      # Liveness before stop/1 cannot prevent the session exiting during the call.
+      if Process.alive?(pid) do
+        :erlang.raise(:exit, reason, __STACKTRACE__)
+      else
+        log_stop_exit(reason)
+        :ok
+      end
+  end
+
+  defp log_stop_exit({reason, {GenServer, :stop, _args}}), do: log_stop_exit(reason)
+  defp log_stop_exit({reason, {:sys, :terminate, _args}}), do: log_stop_exit(reason)
+
+  defp log_stop_exit(reason) when reason in [:noproc, :normal, :shutdown, :launch_canceled],
+    do: :ok
+
+  defp log_stop_exit({:shutdown, _reason}), do: :ok
+
+  defp log_stop_exit(_reason) do
+    Logger.warning("Process session exited abnormally during cleanup")
   end
 
   defp ensure_pending_owner(process_id, opts) do
