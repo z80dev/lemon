@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Base refresh under continuous work
+
+- The coordinator base refreshed only when no attempt happened to be live, so a
+  busy factory kept dispatching new work on a stale `main`. A moved base now holds
+  new reservations until live attempts finish, then refreshes and wakes the
+  coordinator.
+
 ### F-0046 — heavy-work leases and informational write sets
 
 - Concurrent tasks may edit the same files. Optional `write_set` declarations

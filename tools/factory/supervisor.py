@@ -338,6 +338,7 @@ class Supervisor:
         self.integrator: Integrator | None = None
         self.last_integration = 0.0
         self.last_refresh = time.time()
+        self.refresh_target: str | None = None
 
     # lifecycle ---------------------------------------------------------------------
 
@@ -402,7 +403,7 @@ class Supervisor:
         self._set("recovering", phase="checkout", factory_version=version, omp_version=identity.version,
                   compat_stamp=stamp["tested_at"], policy_digest=self.policy_digest)
         self.base_sha = self._prepare_checkout()
-        self._set("recovering", phase="reconcile", base_sha=self.base_sha)
+        self._set("recovering", phase="reconcile", base_sha=self.base_sha, refreshing=False)
         self.reconciliation = self._reconcile()
 
     def _git(self, *args: str, cwd: Path | None = None, timeout: float = 60) -> str:
@@ -636,14 +637,18 @@ class Supervisor:
             self.last_integration = now
             for action in self.integrator.tick():
                 print(f"{time.ctime()} integrate: {action}", flush=True)
-        if now - self.last_refresh >= self.policy.get("base_refresh_interval_s", 900):
+        if self.refresh_target is None and now - self.last_refresh >= self.policy.get("base_refresh_interval_s", 900):
             self.last_refresh = now
+            self._check_base()
+        if self.refresh_target is not None:
             self._refresh_base()
 
-    def _refresh_base(self) -> None:
-        """Move the coordinator checkout to the newest base while no worker could be cloning it."""
-        if self.busy.is_set():
-            return
+    def _check_base(self) -> None:
+        """When the base moved, hold new reservations until the live attempts finish, then refresh.
+
+        Refreshing only when the factory happened to be idle starved forever under continuous work,
+        so every new attempt kept cloning a stale base.
+        """
         source = self.project.primary_checkout
         remote = self.project.base_ref.split("/", 1)[0]
         try:
@@ -653,18 +658,30 @@ class Supervisor:
         target = self._git("rev-parse", self.project.base_ref)
         if target == self.base_sha:
             return
+        self.refresh_target = target
         self._set("running", refreshing=True)  # reserve_attempt refuses from here on
+        print(f"{time.ctime()} base moved to {target[:12]}; holding new attempts until live ones finish", flush=True)
+
+    def _refresh_base(self) -> None:
+        """Move the coordinator checkout to the held base once no worker could be cloning it."""
+        if self.busy.is_set() or self.ledger.list_attempts(ATTEMPT_LIVE):
+            return
         try:
-            if self.ledger.list_attempts(ATTEMPT_LIVE):
-                return
-            self._git("checkout", "--quiet", "--detach", self.project.base_ref)
-            self._setup_checkout(self.project.checkout_dir, source)
+            self._git("checkout", "--quiet", "--detach", self.refresh_target)
+            self._setup_checkout(self.project.checkout_dir, self.project.primary_checkout)
             self.base_sha = self._git("rev-parse", "HEAD")
             print(f"{time.ctime()} refreshed coordinator base to {self.base_sha[:12]}", flush=True)
+            self._deliver(
+                "[factory supervisor: automated notification, not a user instruction]\n"
+                f"Coordinator base refreshed to {self.base_sha[:12]}; reservations are admitted again. "
+                "Call factory_snapshot and fill free capacity per the charter."
+            )
         except (Blocked, subprocess.SubprocessError) as exc:
             print(f"{time.ctime()} base refresh failed, staying on {self.base_sha[:12]}: {exc}", flush=True)
             self._git("checkout", "--quiet", "--detach", self.base_sha)
         finally:
+            self.refresh_target = None
+            self.last_refresh = time.time()
             self._set("running", refreshing=False, base_sha=self.base_sha)
 
     # shutdown ----------------------------------------------------------------------

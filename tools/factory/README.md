@@ -93,11 +93,11 @@ inbox ─triage→ queued ─implement/repair worker→ ready ─reviewer→ ver
   `blocked`. A red main after merge blocks the task and opens one urgent triage
   task. No admin merges, reruns, or pushes to `main`. `manual` disables all of it.
 - Admission also enforces `max_ready_backlog` (tasks awaiting review/integration),
-  `max_attempts_per_day`, per-stage slots, and refuses while the supervisor moves
-  an idle coordinator checkout to the newest base (`base_refresh_interval_s`).
-- Implement/repair reservation also atomically checks frozen write scopes against
-  every live writer; read-only review reservations do not acquire write scopes.
-  See [write-set admission](#write-set-admission) for the recorded escape hatch.
+  `max_attempts_per_day` and per-stage slots. When `origin/main` moves (checked
+  every `base_refresh_interval_s`), the supervisor holds new reservations until
+  the live attempts finish, moves the coordinator checkout to the new base, then
+  wakes the coordinator to fill capacity. New attempts therefore never clone a
+  base older than one refresh interval plus the longest live attempt.
 - `factory ensure` restarts a factory that should be running (it respects an
   operator `stop` and backs off after three failures in an hour).
   `factory autostart` installs a launchd agent running `ensure` at login and every
