@@ -8,6 +8,9 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ### Security
 
+- Process-group signalling accepts a durability callback after final ownership
+  revalidation; failed persistence refuses the signal while retaining the
+  absolute executable and fixed-argument kill boundary.
 - URL query assignments now classify `&`-separated `key=value` pairs independently,
   retaining public pairs after unquoted sensitive values in default, `drop_keys`
   and strict modes. Only conservative unquoted URL characters qualify; queries

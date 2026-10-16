@@ -100,6 +100,18 @@ No authorized live paired evidence is recorded here: keep current defaults and
 keep the coding profile opt-in; any promotion remains pending an approved bounded
 run and sanitized report. Schema-size diagnostics alone do not justify promotion.
 
+Paired runtime integrations bind a fresh `LEMON_EVAL_PROCESS_STORE` with
+`LemonEvals.PairedCleanup.configure!/0` **before** application boot, then call
+`verify!/0` after boot to require ownership of both that store and its adjacent
+`.native` ledger. Configuration refuses existing evidence and creates owner-only
+files. After the owning runtime has stopped, `PairedCleanup.recover/1` can run
+under `mix run --no-start`: it boots no runtime and visits both ledgers even if
+one fails. Only birth-bound local process groups are signalled. The final
+revalidated membership is durably saved in its original ledger before signalling;
+failed persistence prevents the signal. Missing, malformed, stale, lost or
+unsupported evidence fails closed without releasing capacity. Remote workloads
+and descendants that escape their process group are not proven clean.
+
 ### Resumable multi-provider disclosure campaign (#107)
 
 `--campaign` runs the repeated paired disclosure comparison across providers as
