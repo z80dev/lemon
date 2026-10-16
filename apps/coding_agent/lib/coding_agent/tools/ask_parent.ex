@@ -185,7 +185,7 @@ defmodule CodingAgent.Tools.AskParent do
 
     case context.parent_session_module.deliver_parent_question(context.parent_session_pid, text) do
       :ok ->
-        :ok
+        ParentQuestions.mark_delivered(request.id)
 
       {:error, reason} ->
         _ = ParentQuestions.fail(request.id, reason)

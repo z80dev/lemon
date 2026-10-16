@@ -419,10 +419,14 @@ defmodule LemonAgent.Agent do
   and no steering messages. Use this for messages that should wait until the
   agent completes its current work. Pass `system_prompt: prompt` to apply a
   per-turn prompt refresh when the queued message is consumed.
+
+  Returns `:ok` only after the message has been enqueued. This acknowledges
+  acceptance, not consumption: an idle agent does not start automatically, and
+  messages accepted after the final queue poll remain queued for a future run.
   """
   @spec follow_up(GenServer.server(), Types.agent_message(), keyword()) :: :ok
   def follow_up(agent, message, opts \\ []) do
-    GenServer.cast(agent, {:follow_up, queued_message(message, opts)})
+    GenServer.call(agent, {:follow_up, queued_message(message, opts)})
   end
 
   @doc """
@@ -599,6 +603,10 @@ defmodule LemonAgent.Agent do
       new_state = start_loop(messages, state)
       {:reply, :ok, new_state}
     end
+  end
+
+  def handle_call({:follow_up, message}, _from, state) do
+    {:reply, :ok, enqueue_follow_up(state, message)}
   end
 
   def handle_call(:continue, _from, state) do
@@ -843,10 +851,6 @@ defmodule LemonAgent.Agent do
 
   def handle_cast({:redirect, message}, state) do
     {:noreply, apply_redirect(state, message)}
-  end
-
-  def handle_cast({:follow_up, message}, state) do
-    {:noreply, enqueue_follow_up(state, message)}
   end
 
   def handle_cast({:unsubscribe, pid}, state) do

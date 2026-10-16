@@ -45,6 +45,12 @@ defmodule CodingAgent.ParentQuestionStoreServer do
     GenServer.call(server, {:create, record}, 10_000)
   end
 
+  @doc "Acknowledge parent enqueueing before a waiting request can release its task join."
+  @spec mark_delivered(String.t(), GenServer.server()) :: :ok | {:error, :not_found}
+  def mark_delivered(request_id, server \\ __MODULE__) when is_binary(request_id) do
+    GenServer.call(server, {:mark_delivered, request_id}, 10_000)
+  end
+
   @doc "Atomically transition a waiting request and return the winning record."
   @spec transition(String.t(), atom(), map(), term(), GenServer.server()) ::
           {:ok, map()} | {:error, term()}
@@ -101,6 +107,26 @@ defmodule CodingAgent.ParentQuestionStoreServer do
       do_insert_record(request_id, record, [])
       {:reply, {:ok, record}, state}
     end
+  end
+
+  def handle_call({:mark_delivered, request_id}, _from, state) do
+    state = ensure_tables(state)
+
+    reply =
+      case :ets.lookup(@table, request_id) do
+        [{^request_id, %{status: :waiting} = record, events}] ->
+          updated = %{record | delivery_pending: false, updated_at: System.system_time(:second)}
+          do_insert_record(request_id, updated, events)
+          :ok
+
+        [{^request_id, _terminal_record, _events}] ->
+          :ok
+
+        [] ->
+          {:error, :not_found}
+      end
+
+    {:reply, reply, state}
   end
 
   def handle_call(

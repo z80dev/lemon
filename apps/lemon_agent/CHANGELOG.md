@@ -23,6 +23,13 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
   deadline; native task/wait, delegation, bash, eval, debug, question and browser
   tools retain their own deadlines instead of racing the generic timer.
 
+### Fixed
+
+- `Agent.follow_up/3` acknowledges enqueue synchronously, so callers can order
+  delivery before releasing active tools. Acceptance does not start an idle
+  agent or continue a completed, failed or cancelled run automatically; normal
+  in-loop follow-ups retain the ordinary single terminal lifecycle.
+
 ## [0.2.0] - 2026-10-13
 
 First release as a standalone package. `lemon_agent` is the `:lemon_agent`

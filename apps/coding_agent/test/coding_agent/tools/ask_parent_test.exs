@@ -22,6 +22,17 @@ defmodule CodingAgent.Tools.AskParentTest do
     end
   end
 
+  defmodule DeliveryBarrier do
+    def deliver_parent_question(observer, text) do
+      ref = make_ref()
+      send(observer, {:question_delivery, self(), ref, text})
+
+      receive do
+        {^ref, result} -> result
+      end
+    end
+  end
+
   setup do
     try do
       ParentQuestions.clear()
@@ -339,8 +350,15 @@ defmodule CodingAgent.Tools.AskParentTest do
         stream_fn: stream_fn
       )
 
+    unsubscribe = Session.subscribe(parent_session)
+    on_exit(unsubscribe)
+    join_call_id = join_call.id
+
     :ok = Session.prompt(parent_session, "Wait for the child")
-    wait_until(fn -> Session.get_state(parent_session).is_streaming end)
+
+    assert_receive {:session_event, _session_id,
+                    {:tool_execution_start, ^join_call_id, "task", _args}},
+                   2_000
 
     child =
       Task.async(fn ->
@@ -360,13 +378,10 @@ defmodule CodingAgent.Tools.AskParentTest do
         )
       end)
 
-    wait_until(fn ->
-      not Session.get_state(parent_session).is_streaming and
-        Enum.any?(
-          Session.get_messages(parent_session),
-          &(message_text(&1) =~ "address the child's question")
-        )
-    end)
+    assert_receive {:session_event, _session_id, {:agent_end, messages}}, 2_000
+    assert Enum.any?(messages, &(message_text(&1) =~ "address the child's question"))
+    refute Session.get_state(parent_session).is_streaming
+    refute_received {:session_event, _session_id, {:agent_end, _messages}}
 
     [{request_id, _record}] = ParentQuestions.list_for_parent("agent:main:main", "main")
 
@@ -378,6 +393,168 @@ defmodule CodingAgent.Tools.AskParentTest do
 
     assert %AgentToolResult{details: %{status: "answered"}} = Task.await(child, 2_000)
     refute TaskStore.auto_followup_suppressed?(task_id)
+  end
+
+  test "a child question cannot release the parent join before delivery is acknowledged" do
+    observer = self()
+    run_id = RunGraph.new_run(%{status: :running})
+    task_id = TaskStore.new_task(%{run_id: run_id, status: :running})
+    join_call = Mocks.tool_call("task", %{"action" => "join", "task_ids" => [task_id]})
+    task_tool = TaskTool.tool("/tmp")
+
+    gated_tool = %{
+      task_tool
+      | execute: fn id, args, signal, update ->
+          send(observer, {:join_started, self()})
+          receive do: (:join -> :ok)
+          send(observer, {:join_question, ParentQuestions.waiting_for_task_ids([task_id])})
+          task_tool.execute.(id, args, signal, update)
+        end
+    }
+
+    stream_fn = fn model, context, options ->
+      send(observer, {:model_request, self(), context})
+
+      receive do
+        {:respond, response} ->
+          Mocks.mock_stream_fn_single(response).(model, context, options)
+      end
+    end
+
+    parent_session =
+      start_supervised!(
+        {Session,
+         cwd: "/tmp",
+         model: Mocks.mock_model(),
+         session_key: "agent:main:main",
+         agent_id: "main",
+         tools: [gated_tool],
+         stream_fn: stream_fn}
+      )
+
+    unsubscribe = Session.subscribe(parent_session)
+    on_exit(unsubscribe)
+    :ok = Session.prompt(parent_session, "Wait for the child")
+    assert_receive {:model_request, first_model, _context}, 2_000
+    send(first_model, {:respond, Mocks.assistant_message_with_tool_calls([join_call])})
+    assert_receive {:join_started, joiner}, 2_000
+    agent = Session.get_state(parent_session).agent
+
+    # Reproduce the original ordering: notification is queued in a suspended
+    # Session while the Agent can still execute. The matching join must remain
+    # active, so an old terminal event cannot overtake accepted delivery.
+    :ok = :sys.suspend(parent_session)
+
+    {child, sender, ref, delivery} =
+      try do
+        child =
+          Task.async(fn ->
+            AskParent.execute(
+              "late_join_question",
+              %{"question" => "Which boundary?", "why_blocked" => "Need a decision."},
+              nil,
+              nil,
+              "/tmp",
+              parent_session_module: DeliveryBarrier,
+              parent_session_pid: observer,
+              parent_session_key: "agent:main:main",
+              parent_agent_id: "main",
+              parent_run_id: "late_parent_run",
+              child_run_id: run_id,
+              child_scope_id: "late_child_scope",
+              task_id: task_id
+            )
+          end)
+
+        assert_receive {:question_delivery, sender, ref, text}, 2_000
+        delivery = :gen_server.send_request(parent_session, {:deliver_parent_question, text})
+        send(joiner, :join)
+        assert_receive {:join_question, {:error, :not_found}}, 2_000
+        assert {:error, :not_found} = ParentQuestions.waiting_for_task_ids([task_id])
+        assert LemonAgent.Agent.get_state(agent).is_streaming
+        refute_received {:model_request, _model, _context}
+        {child, sender, ref, delivery}
+      after
+        :ok = :sys.resume(parent_session)
+      end
+
+    assert {:reply, :ok} = :gen_server.receive_response(delivery, 2_000)
+    assert [%{message: %{content: queued_text}}] = :sys.get_state(agent).follow_up_queue
+    assert queued_text =~ "Which boundary?"
+    send(sender, {ref, :ok})
+
+    assert_receive {:model_request, second_model, _context}, 2_000
+    send(second_model, {:respond, Mocks.assistant_message("The join yielded for clarification.")})
+
+    assert_receive {:session_event, _session_id,
+                    {:tool_execution_end, _call_id, "task",
+                     %AgentToolResult{
+                       details: %{status: "needs_parent_answer", request_id: request_id}
+                     }, false}},
+                   2_000
+
+    assert_receive {:model_request, question_model, context}, 2_000
+    assert Enum.any?(context.messages, &(message_text(&1) =~ "Which boundary?"))
+    assert_receive {:session_event, _session_id, {:agent_start}}, 2_000
+    refute_received {:session_event, _session_id, {:agent_end, _messages}}
+    assert Session.get_state(parent_session).is_streaming
+
+    send(
+      question_model,
+      {:respond, Mocks.assistant_message("I can now address the child's question.")}
+    )
+
+    assert_receive {:session_event, _session_id, {:agent_end, messages}}, 2_000
+    assert Enum.any?(messages, &(message_text(&1) =~ "address the child's question"))
+    assert Enum.any?(messages, &(message_text(&1) =~ "join yielded for clarification"))
+    refute_received {:session_event, _session_id, {:agent_end, _messages}}
+    refute Session.get_state(parent_session).is_streaming
+
+    assert :ok =
+             ParentQuestions.answer(request_id, "Keep the existing boundary",
+               session_key: "agent:main:main",
+               agent_id: "main"
+             )
+
+    assert %AgentToolResult{details: %{status: "answered"}} = Task.await(child, 2_000)
+    refute TaskStore.auto_followup_suppressed?(task_id)
+  end
+
+  test "failed question delivery does not release a join as an accepted notification" do
+    observer = self()
+    task_id = "failed_delivery_task"
+
+    child =
+      Task.async(fn ->
+        AskParent.execute(
+          "failed_delivery",
+          %{"question" => "Which boundary?", "why_blocked" => "Need a decision."},
+          nil,
+          nil,
+          "/tmp",
+          parent_session_module: DeliveryBarrier,
+          parent_session_pid: observer,
+          parent_session_key: "agent:main:main",
+          parent_agent_id: "main",
+          child_scope_id: "failed_delivery_scope",
+          task_id: task_id
+        )
+      end)
+
+    assert_receive {:question_delivery, sender, ref, _text}, 2_000
+
+    [{request_id, %{delivery_pending: true}}] =
+      ParentQuestions.list_for_parent("agent:main:main", "main")
+
+    assert {:error, :not_found} = ParentQuestions.waiting_for_task_ids([task_id])
+    send(sender, {ref, {:error, :session_unavailable}})
+
+    assert {:error, message} = Task.await(child, 2_000)
+    assert message =~ "Failed to send question to parent"
+    assert {:ok, %{status: :error}, _events} = ParentQuestions.get(request_id)
+    assert :ok = ParentQuestions.mark_delivered(request_id)
+    assert {:ok, %{status: :error}, _events} = ParentQuestions.get(request_id)
+    assert {:error, :not_found} = ParentQuestions.waiting_for_task_ids([task_id])
   end
 
   test "build_session_opts injects ask_parent for eligible child sessions" do

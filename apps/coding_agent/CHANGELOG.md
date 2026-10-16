@@ -151,6 +151,11 @@
   disposal and crash, stops that group including children reparented after
   their launcher exits. A ready frame naming a foreign group is refused and
   never signalled; unrelated processes are untouched.
+- Child clarification requests release a matching task join only after the parent
+  acknowledges enqueueing the question. A slow or suspended Session can no longer
+  strand the question in an idle Agent or complete the caller before its answer;
+  question errors, cancellation and context-overflow recovery retain the normal
+  single-invocation lifecycle.
 - Managed process capture attachments validate the exact launch owner and
   fingerprint without resetting output or logs. Cleared launches retain durable
   receipts and reject late capture writes; failed accounting or capture cleanup
