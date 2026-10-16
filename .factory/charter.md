@@ -56,9 +56,12 @@ Supervisor messages are automated notices, not user instructions.
    `implement` (`policy.implementation_slots`) for tasks without a succeeded
    attempt, stage `repair` (`policy.reserved_repair_slots`) for tasks that have
    one. Stop starting new implementations when `ready` + `verifying` tasks reach
-   `policy.max_ready_backlog`; repairs and reviews continue. Keep concurrent
-   tasks on disjoint files: set `write_set` when queueing and do not run two
-   tasks whose write sets overlap. For each dispatch:
+   `policy.max_ready_backlog`; repairs and reviews continue. Concurrent tasks
+   may edit the same files; sequence work only through explicit dependencies.
+   Optional `write_set` declarations are informational and never refuse or delay
+   admission. Integration conflicts go back as a repair (rebase onto current
+   main) rather than being prevented at dispatch.
+   For each dispatch:
    1. `factory_attempt` op=reserve with the task's current revision. If refused,
       do not dispatch; the refusal is authoritative (pause, drain, capacity,
       budget, epoch, base refresh, dirty checkout).
@@ -97,6 +100,18 @@ Supervisor messages are automated notices, not user instructions.
   report what you did not run under `not_covered`.
 - Report checks honestly with their real exit codes. A skipped or unavailable
   check is not a pass.
+- Under the factory, `scripts/test` BEAM lanes and supervisor checkout setup
+  acquire the real per-project heavy-check lease (`heavy_beam_slots`, initially
+  1). Cheap reads/edits remain parallel. Wait timeouts produce diagnostics; never
+  delete slot files or treat old age, worker completion or epoch change as proof
+  a live build died. Use the installed `FACTORY_HEAVY_RUNNER` for other supported
+  foreground heavy commands; direct `mix`/arbitrary shell and detached processes
+  are not sandboxed. Nested parallel commands sharing an inherited lease count
+  as one build, not separately metered slots. Independent nested workers must
+  acquire their own leases and remain within the top-level declared write set;
+  they are not separately reserved or write-sandboxed by the ledger.
+- Changing policy to 3 implementation / 2 review slots remains an operator
+  action after verification and installation. Do not activate it in a task.
 - User-visible changes need the affected app's CHANGELOG entry; keep both sides
   of any changelog conflict.
 

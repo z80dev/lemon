@@ -30,6 +30,7 @@ import compat
 from integrator import Integrator
 import omp_adapter
 import project as projects
+import resources
 from store import ATTEMPT_LIVE, AdmissionRefused, FactoryError, Invalid, Ledger, RevisionConflict
 
 RELEASE_ROOT = Path(__file__).resolve().parents[2]
@@ -390,6 +391,7 @@ class Supervisor:
     def _prepare(self) -> None:
         self._set("recovering", "runtime.recovering", phase="validating")
         self.policy = load_policy(self.project)
+        resources.HeavyChecks(self.project.state_dir, resources.capacity(self.policy)).cleanup()
         self.integrator = Integrator(self.project, self.ledger, self.policy)
         version = release_version()
         if version.startswith("unreleased:") and not self.policy.get("allow_unreleased", False):
@@ -449,8 +451,12 @@ class Supervisor:
             with open(log, "a") as out:
                 out.write(f"\n$ {' '.join(command)}  # {time.ctime()}\n")
                 out.flush()
-                result = subprocess.run(command, cwd=checkout, stdout=out, stderr=subprocess.STDOUT,
-                                        timeout=self.policy.get("checkout_setup_timeout_s", 1800))
+                result = subprocess.run(
+                    [sys.executable, str(RELEASE_ROOT / "tools" / "factory" / "resources.py"),
+                     "run", "--execution-timeout", str(self.policy.get("checkout_setup_timeout_s", 1800)),
+                     "--", *command],
+                    cwd=checkout, env={**os.environ, **self._omp_env()}, stdout=out, stderr=subprocess.STDOUT,
+                )
             if result.returncode != 0:
                 raise Blocked(f"checkout setup {' '.join(command)} exited {result.returncode}; see {log}")
         dirty = self._git("status", "--porcelain", "--untracked-files=all")
@@ -482,7 +488,8 @@ class Supervisor:
         return summary
 
     def _omp_env(self) -> dict[str, str]:
-        env = {
+        env = dict(self.policy.get("omp", {}).get("env", {}))
+        env.update({
             "FACTORY_ROLE": "coordinator",
             "FACTORY_PROJECT": self.project.id,
             "FACTORY_EPOCH": str(self.epoch),
@@ -490,8 +497,10 @@ class Supervisor:
             "FACTORY_CONFIG_HOME": str(projects.config_home()),
             "FACTORY_STATE_HOME": str(projects.state_home()),
             "FACTORY_PYTHON": sys.executable,
-        }
-        env.update(self.policy.get("omp", {}).get("env", {}))
+            "FACTORY_HEAVY_RUNNER": str(RELEASE_ROOT / "tools" / "factory" / "resources.py"),
+            "FACTORY_HEAVY_LEASE_FD": "",
+            "FACTORY_HEAVY_LEASE_TOKEN": "",
+        })
         return env
 
     def _launch(self) -> None:
@@ -713,6 +722,9 @@ class Supervisor:
                     os.kill(pid, signal.SIGKILL)
         client.stop()
         reaped = reap_isolation_workspaces(process.pid)
+        # Attempt completion or a coordinator exit alone is not proof a build died.
+        # Cleanup only reclaims records whose lock and recorded processes are gone.
+        resources.HeavyChecks(self.project.state_dir, resources.capacity(self.policy)).cleanup()
         if reaped:
             print(f"{time.ctime()} removed {len(reaped)} finished worker workspaces", flush=True)
         return confirmed

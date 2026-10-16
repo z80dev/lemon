@@ -174,12 +174,14 @@ class SupervisorTest(unittest.TestCase):
         epoch = str(self.status()["runtime"]["epoch"])
         for tid in ("F-0001", "F-0002"):
             self.home.cli("transition", tid, "queued", "--expected-revision", "1", "--reason", "triaged")
+            self.home.cli("edit", tid, "--expected-revision", "2", "--set-json",
+                          json.dumps({"write_set": [f"recovery/{tid}"]}))
         policy_path = self.home.state_dir / "policy.json"
         policy = json.loads(policy_path.read_text())
         policy["implementation_slots"] = 2
         policy_path.write_text(json.dumps(policy))
-        a = self.home.cli("reserve", "F-0001", "--expected-revision", "2", "--epoch", epoch)[1]["attempt"]["id"]
-        b = self.home.cli("reserve", "F-0002", "--expected-revision", "2", "--epoch", epoch)[1]["attempt"]["id"]
+        a = self.home.cli("reserve", "F-0001", "--expected-revision", "3", "--epoch", epoch)[1]["attempt"]["id"]
+        b = self.home.cli("reserve", "F-0002", "--expected-revision", "3", "--epoch", epoch)[1]["attempt"]["id"]
         for attempt in (a, b):
             self.home.cli("attempt", attempt, "--status", "launched", "--worker-ref", attempt, "--epoch", epoch)
         # Worker a retained its branch; worker b left nothing.

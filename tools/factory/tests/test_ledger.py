@@ -234,6 +234,49 @@ class AdmissionTest(unittest.TestCase):
         code, payload = self.reserve("F-0001")
         self.assertIn("await review/integration", payload["message"])
 
+    def test_overlapping_cli_reservations_are_both_admitted_across_writer_stages(self) -> None:
+        (self.home.state_dir / "policy.json").write_text(
+            '{"implementation_slots": 1, "reserved_repair_slots": 1, "review_slots": 1}'
+        )
+        results = self.home.cli_parallel([
+            ["reserve", tid, "--expected-revision", "2", "--stage", stage,
+             "--epoch", str(self.epoch), "--request-key", f"race-{tid}"]
+            for tid, stage in (("F-0001", "implement"), ("F-0002", "repair"))
+        ])
+        self.assertEqual([code for code, _ in results], [0, 0])
+        self.assertEqual(len(self.ledger.list_attempts()), 2)
+        reserved = [e for e in self.ledger.events_after(0) if e["type"] == "attempt.reserved"]
+        self.assertEqual(len(reserved), 2)
+
+    def test_identical_write_sets_are_informational_during_concurrent_admission(self) -> None:
+        (self.home.state_dir / "policy.json").write_text('{"implementation_slots": 2, "review_slots": 1}')
+        for tid in ("F-0001", "F-0002"):
+            self.ledger.edit_task(tid, 2, {"write_set": ["apps/shared/**"]}, actor="test", request_key=None)
+        results = self.home.cli_parallel([
+            ["reserve", tid, "--expected-revision", "3", "--epoch", str(self.epoch)]
+            for tid in ("F-0001", "F-0002")
+        ])
+        self.assertEqual([code for code, _ in results], [0, 0])
+        self.assertEqual(len(self.ledger.list_attempts()), 2)
+        for attempt in self.ledger.list_attempts():
+            self.assertEqual(attempt["write_set"], ["apps/shared/**"])
+
+    def test_reservation_cannot_bypass_backlog_or_dirty_checkout(self) -> None:
+        policy = self.home.state_dir / "policy.json"
+        policy.write_text('{"implementation_slots": 1, "max_ready_backlog": 0}')
+        code, refused = self.reserve("F-0001")
+        self.assertEqual(code, 5)
+        self.assertIn("await review/integration", refused["message"])
+        policy.write_text('{"implementation_slots": 1, "review_slots": 1}')
+        checkout = self.home.state_dir / "checkout"
+        git(self.home.repo, "worktree", "add", "-q", "--detach", str(checkout))
+        self.ledger.update_runtime(detail={"base_sha": git(checkout, "rev-parse", "HEAD")})
+        (checkout / "untracked.txt").write_text("preserve this\n")
+        code, refused = self.reserve("F-0001")
+        self.assertEqual(code, 5)
+        self.assertIn("local changes", refused["message"])
+        self.assertEqual(self.ledger.list_attempts(), [])
+
     def test_ensure_respects_operator_stop_and_backs_off_repeated_failures(self) -> None:
         self.ledger.request_mode("stopped", actor="operator")
         _, respected = self.home.cli("ensure")

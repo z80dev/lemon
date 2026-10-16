@@ -274,7 +274,8 @@ function registerCoordinator(pi: ExtensionAPI): void {
 		label: "Factory attempt",
 		description:
 			"op=reserve: admission-checked reservation BEFORE dispatching a native task worker (refused while paused, " +
-			"draining, over capacity, on a stale epoch, with unmet dependencies or a dirty coordinator checkout). " +
+			"draining, over capacity, on a stale epoch, with unmet dependencies, or a dirty checkout). " +
+			"Write sets are informational; concurrent tasks may edit the same files. " +
 			"op=record: record status launched|running|succeeded|failed|cancelled with worker_ref, branch, head_sha, outcome_json.",
 		approval: "write",
 		loadMode: "essential",

@@ -20,6 +20,7 @@ plain shell   ─┘   (cli.py)   (SQLite) └─ one `omp --mode rpc` coordinat
 |`tools/factory/cli.py`|The only implementation of ledger rules; every command prints one JSON object|
 |`tools/factory/store.py`|SQLite ledger: tasks, attempts, events, request keys, runtime|
 |`tools/factory/supervisor.py`|Supervisor daemon and start/stop/pause/drain operations|
+|`tools/factory/resources.py`|Cross-worker heavy-check leases: kernel semaphore, live-owner fencing and timeout diagnostics|
 |`tools/factory/compat.py`|OMP seam suite gate and compatibility stamp|
 |`tools/factory/omp-overlay.yml`|The only OMP settings the factory pins (async workers, structured output, isolation without apply)|
 |`integrations/omp-factory/`|OMP plugin: console `factory` tool, `/factory` command, coordinator tools, `lemon-factory` skill|
@@ -94,10 +95,73 @@ inbox ─triage→ queued ─implement/repair worker→ ready ─reviewer→ ver
 - Admission also enforces `max_ready_backlog` (tasks awaiting review/integration),
   `max_attempts_per_day`, per-stage slots, and refuses while the supervisor moves
   an idle coordinator checkout to the newest base (`base_refresh_interval_s`).
+- Implement/repair reservation also atomically checks frozen write scopes against
+  every live writer; read-only review reservations do not acquire write scopes.
+  See [write-set admission](#write-set-admission) for the recorded escape hatch.
 - `factory ensure` restarts a factory that should be running (it respects an
   operator `stop` and backs off after three failures in an hour).
   `factory autostart` installs a launchd agent running `ensure` at login and every
   five minutes from the installed `current` release; `--disable` removes it.
+
+## Heavy-check leases
+
+The supervisor supplies `FACTORY_PROJECT`, explicit config/state homes, and
+`FACTORY_HEAVY_RUNNER` (the installed release's `resources.py`) to the coordinator
+and its workers. Under that context, `scripts/test` routes `fast`, `coverage`,
+`changed`, `premerge`, `quality`, `eval-fast`, `live-eval`, `path` and `all` through
+the runner before doing any work. Missing runners or invalid inherited leases
+fail closed. `help`, `clients`, `smoke` (a pointer, not a build), and invalid lanes
+do not acquire a lease. With no `FACTORY_PROJECT`, the script follows its original
+path and does not require Python or read factory state. Supervisor checkout setup
+commands also go through the lease; cheap reads/edits and worker admission do not.
+
+The per-project semaphore reads the approved policy's `heavy_beam_slots` (default
+1 for older policies). It does **not** change implementation/review slot counts.
+Raising those to 3 implementation / 2 review slots remains an operator policy
+decision after verification and installation, not an automatic activation.
+
+For another cooperative heavy command, use the installed runner:
+
+```bash
+"${FACTORY_PYTHON:-python3}" "$FACTORY_HEAVY_RUNNER" run --timeout 600 -- mix compile
+```
+
+Acquisition waits at most `--timeout` seconds (default 1800, or
+`FACTORY_HEAVY_TIMEOUT_S`). `--execution-timeout` separately bounds command
+execution: the runner sends TERM, escalates to KILL after one second, reaps the
+child, and confirms the command group is dead before reporting failure or
+releasing its lease. Unknown group liveness fails closed. Checkout setup uses
+this internal deadline (`checkout_setup_timeout_s`), not an outer timeout that
+could kill the runner and orphan a compiler before checkout restoration.
+Timeout exits 75 with a JSON diagnostic on stderr listing capacity, slot,
+owner PID/start identity, command process group, age, epoch and blocking reason.
+An admission-mutex timeout is reported separately. Old age marks a lease stale
+for diagnosis only: **neither age, epoch, heartbeat loss nor attempt completion
+allows eviction of a live build**.
+
+Each permanent slot inode has a kernel `flock` and atomically written owner
+metadata. The runner records its child's process group before permitting exec,
+and the command inherits the locked fd. Completion closes the fd; if descendants
+are still alive, the recorded group continues fencing reuse even if they closed
+the inherited fd. Crash/restart cleanup only reclaims an unlocked slot after
+the recorded owner and command group are proven dead; unknown liveness and
+corrupt metadata fail closed. Never delete/replace slot lock files to “unstick”
+a live or unknown owner. Capacity reductions count existing live slots too.
+Nested commands in the same build group may reuse a matching inherited
+fd/token only after inode, token, group and kernel-lock validation.
+
+## Informational write sets
+
+Tasks may optionally declare a `write_set`; reservations retain a snapshot for
+context, not admission control. Concurrent tasks may edit the same files, and
+empty, unknown, or overlapping declarations never refuse or delay admission.
+Sequence work only through explicit `dependencies`, which must be done before
+admission. Existing runtime, epoch, capacity, same-task live-attempt, budget,
+backlog, and clean-checkout gates still apply.
+
+Review and integration handle overlapping edits. Integration conflicts go back
+as a repair that rebases onto current main, rather than being prevented at
+dispatch. There is no write-set override mechanism.
 
 ## Guarantees and limits
 
@@ -122,14 +186,37 @@ inbox ─triage→ queued ─implement/repair worker→ ready ─reviewer→ ver
 - Not yet built: check-runner receipts bound to source identity, inherited-failure
   attribution beyond a triage task, GitHub issue import, and measured optimization
   (remaining scope of seeded P04–P08).
+- Resource enforcement is cooperative, not a shell sandbox: direct `mix`, other
+  scripts, deliberately unset `FACTORY_*` context, or arbitrary shell commands
+  bypass the routed entrypoints. Separate projects have separate semaphores even
+  on one host. Detached descendants that both leave the recorded process group
+  and close the lease fd cannot be tracked; supported foreground builds must not
+  do that. Multiple parallel commands deliberately sharing one inherited lease
+  count as one build, not independent slots.
+- Native/nested workers inherit factory context, not independent ledger
+  reservations. A worker that loses the lease fd or changes process group cannot
+  reuse its parent's marker (validation fails closed); start independent checks
+  without inherited lease credentials so they acquire their own slot, and never
+  dispatch nested work outside declared scopes. Nested write sets and actual
+  file writes are not sandbox-enforced. Write-set declarations are informational,
+  not locks; review and integration handle overlapping changes.
 
 ## Tests
 
 ```bash
+python3 -m compileall -q tools/factory
 python3 -m unittest discover -s tools/factory/tests -t tools/factory
+bash -n scripts/test
+shellcheck scripts/test  # when available
 ```
 
 `test_omp_seams` and `test_supervisor` drive the installed `omp` with a
 deterministic scripted provider (`omp_adapter/fixture_provider.ts`) in a private
 agent directory: no network and no paid calls. `factory compat` runs the seam
 suite and refuses to stamp a build that fails it.
+
+The resource tests use private `FactoryHome` config/state/data directories and
+fixture processes rather than real umbrella builds. Factory CLI subprocess
+fixtures strip inherited `FACTORY_*` variables before setting their temporary
+homes; run the suite without ambient factory context as well. The native-worker
+gate test uses the scripted OMP provider and a stub `mix`, not live credentials.
