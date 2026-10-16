@@ -44,6 +44,25 @@ defmodule LemonCore.Quality.DocsCheckTest do
            ]
   end
 
+  test "parses an optional link title separately from the destination", %{root: root} do
+    write(root, "docs/target.md", "# Target\n")
+
+    write(root, "docs/guide/page.md", """
+    [double](../target.md "Title") [single](../target.md 'Title') [paren](../target.md (Title))
+    [angle](<../target.md> "Title") [anchor](../target.md#x "Title with ) paren")
+    """)
+
+    assert {:ok, %{issues: []}} = DocsCheck.run(root: root)
+
+    write(root, "docs/guide/broken.md", ~s|[x](../missing.md "Title")|)
+
+    assert {:error, report} = DocsCheck.run(root: root)
+
+    assert Enum.map(report.issues, & &1.message) == [
+             "Broken local markdown link in docs/guide/broken.md: ../missing.md"
+           ]
+  end
+
   test "in a Git checkout only tracked docs are checked", %{root: root} do
     write(root, "docs/tracked.md", "# Tracked\n")
     write(root, "docs/untracked.md", "[broken](nowhere.md)")
