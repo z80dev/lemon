@@ -1,0 +1,3 @@
+# Concurrent branches append entries to the same changelog sections. Keep both
+# sides instead of stopping the merge, rebase or cherry-pick on a conflict.
+CHANGELOG.md merge=union
