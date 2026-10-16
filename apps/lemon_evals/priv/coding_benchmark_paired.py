@@ -2,6 +2,7 @@
 
 No provider request is made until an exact bounded operator plan is approved.
 """
+from contextlib import contextmanager
 import hashlib
 import json
 import math
@@ -11,9 +12,11 @@ import random
 import re
 import secrets
 import signal
+import shutil
 import socket
 import statistics
 import subprocess
+import stat
 import sys
 import tempfile
 import time
@@ -61,19 +64,27 @@ def paired_configuration(base, variant):
 
 
 def isolated_environment(root, config, variant, credentials, ports):
+    # Fix SDK paths against the original HOME/cwd, before isolating either.
+    original_home = Path.home()
+    toolchain = {key: str(Path(os.environ.get(key, original_home / directory)).expanduser().resolve())
+                 for key, directory in (('MIX_HOME', '.mix'), ('HEX_HOME', '.hex'))}
     root = Path(root)
     home, cwd = root / 'home', root / 'config'
     home.mkdir(parents=True, mode=0o700)
     (home / '.lemon').mkdir(mode=0o700)
     cwd.mkdir(mode=0o700)
+    (root / 'tmp').mkdir(mode=0o700)
     path = home / '.lemon' / 'config.toml'
     path.write_text(config)
     path.chmod(0o600)
     # Never inherit ordinary Lemon settings, proxy endpoints, dotenv, or provider state.
-    env = {key: os.environ[key] for key in ('PATH', 'LANG', 'LC_ALL', 'TMPDIR') if key in os.environ}
+    env = {key: os.environ[key] for key in ('PATH', 'LANG', 'LC_ALL') if key in os.environ}
     env.update(credentials)
+    env.update(toolchain)
     env.update({'HOME': str(home), 'LEMON_AGENT_PROFILES_CWD': str(cwd),
                 'LEMON_DOTENV_DIR': str(cwd), 'LEMON_STORE_PATH': str(root / 'store'),
+                'LEMON_EVAL_PROCESS_STORE': str(root / 'processes.dets'),
+                'TMPDIR': str(root / 'tmp'),
                 'LEMON_CONTROL_PLANE_PORT': str(ports[0]), 'LEMON_WEB_PORT': str(ports[1]),
                 'LEMON_SIM_UI_PORT': str(ports[2]), 'LEMON_CONTROL_PLANE_OPERATOR_TOKEN': secrets.token_hex(32),
                 'LEMON_TOOL_DISCLOSURE_PROFILE': 'legacy' if variant == 'baseline' else 'coding',
@@ -178,24 +189,239 @@ def write_report(path, report):
     temporary.replace(destination)
 
 
-def terminate(process):
+def terminate_runtime_group(process):
+    """Bound shutdown of the runner session, not independently grouped workloads."""
     if process is None:
         return
-    # The entire runtime group (including bash/process children) belongs to this attempt.
     try:
         os.killpg(process.pid, signal.SIGTERM)
         process.wait(timeout=5)
-    except ProcessLookupError:
-        pass
-    except subprocess.TimeoutExpired:
+    except (ProcessLookupError, subprocess.TimeoutExpired):
         pass
     finally:
-        # Reaping the leader does not imply its children honored SIGTERM.
+        # Reaping the leader does not imply its same-group children honored TERM.
         try:
             os.killpg(process.pid, signal.SIGKILL)
         except ProcessLookupError:
             pass
-        process.wait()
+        process.wait(timeout=5)
+
+
+def require_trial_root(state, descriptor):
+    original = os.fstat(descriptor)
+    current = os.stat(state, follow_symlinks=False)
+    if ((current.st_dev, current.st_ino) != (original.st_dev, original.st_ino)
+            or current.st_uid != os.getuid() or not stat.S_ISDIR(current.st_mode)):
+        raise PermissionError('trial root identity changed')
+
+
+def trial_file(state, descriptor, name, mode='r'):
+    """Open only owned, single-link regular files in the pinned trial root."""
+    require_trial_root(state, descriptor)
+    flags = os.O_RDONLY if mode == 'r' else os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    fd = os.open(name, flags | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600, dir_fd=descriptor)
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_nlink != 1:
+            raise PermissionError('unsafe trial file')
+        return os.fdopen(fd, mode)
+    except BaseException:
+        os.close(fd)
+        raise
+
+
+def trial_file_exists(state, descriptor, name):
+    try:
+        with trial_file(state, descriptor, name):
+            return True
+    except FileNotFoundError:
+        return False
+
+
+def recovery_command(project_root, environment, root_fd):
+    """Load precompiled BEAMs with ledger resolution pinned by the kernel cwd.
+
+    Darwin cannot traverse /dev/fd/N/ledger. A tiny exec-only child instead
+    fchdirs through the inherited root FD before BEAM starts. Relative DETS
+    filenames (including repair temporaries) then stay in that original inode,
+    even if a surviving workload renames or replaces the trial pathname.
+    """
+    ebins = sorted((Path(project_root).resolve() / '_build' /
+                    environment.get('MIX_ENV', 'dev') / 'lib').glob('*/ebin'))
+    expression = ('result = LemonEvals.PairedCleanup.recover(System.fetch_env!("LEMON_EVAL_PROCESS_STORE")); '
+                  'System.halt(if result == :ok, do: 0, else: 1)')
+    bootstrap = ('import os, sys; os.fchdir(int(sys.argv[1])); os.close(int(sys.argv[1])); '
+                 'os.execvpe(sys.argv[2], sys.argv[2:], os.environ)')
+    return [sys.executable, '-c', bootstrap, str(root_fd), 'elixir',
+            *[item for path in ebins for item in ('-pa', str(path))], '-e', expression]
+
+
+def terminate(process, *, project_root, environment, root_fd=None):
+    """Verify both private ledgers after graceful OR forced runtime exit."""
+    if process is None:
+        return True  # Popen never acquired a runtime; no work could be admitted.
+    recovery = None
+    owned_descriptor = None
+    try:
+        terminate_runtime_group(process)
+        ledger = Path(environment['LEMON_EVAL_PROCESS_STORE'])
+        if root_fd is None:
+            owned_descriptor = os.open(ledger.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            root_fd = owned_descriptor
+        require_trial_root(ledger.parent, root_fd)
+        # Precompiled code loading only: no Mix project, Boot or provider config.
+        env = {key: environment[key] for key in
+               ('PATH', 'LANG', 'LC_ALL', 'TMPDIR', 'HOME', 'MIX_ENV', 'MIX_HOME', 'HEX_HOME', 'ERL_FLAGS')
+               if key in environment}
+        env['LEMON_EVAL_PROCESS_STORE'] = ledger.name
+        log_fd = os.open('cleanup.log',
+                         os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW | os.O_NONBLOCK,
+                         0o600, dir_fd=root_fd)
+        with os.fdopen(log_fd, 'wb') as log:
+            info = os.fstat(log.fileno())
+            if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_nlink != 1:
+                return False
+            os.fchmod(log.fileno(), 0o600)
+            recovery = subprocess.Popen(
+                recovery_command(project_root, env, root_fd),
+                cwd=project_root, env=env, stdin=subprocess.DEVNULL, pass_fds=(root_fd,),
+                stdout=log, stderr=log, start_new_session=True)
+            return recovery.wait(timeout=20) == 0
+    except (OSError, ValueError, KeyError, subprocess.SubprocessError):
+        return False
+    finally:
+        if owned_descriptor is not None:
+            os.close(owned_descriptor)
+        if recovery is not None and recovery.poll() is None:
+            try:
+                os.killpg(recovery.pid, signal.SIGKILL)
+                recovery.wait(timeout=5)
+            except (OSError, subprocess.SubprocessError):
+                pass
+
+
+def repair_trial_directory(directory, *, parent_fd=None):
+    """Repair owned directories through pinned FDs, never fixture symlinks."""
+    identity = os.stat(directory, dir_fd=parent_fd, follow_symlinks=False)
+    if not stat.S_ISDIR(identity.st_mode) or identity.st_uid != os.getuid():
+        raise PermissionError('trial directory ownership changed')
+    path_only = getattr(os, 'O_PATH', 0)
+    flags = os.O_DIRECTORY | os.O_NOFOLLOW | (path_only or os.O_RDONLY)
+    try:
+        descriptor = os.open(directory, flags, dir_fd=parent_fd)
+    except PermissionError:
+        # Darwin search-only descriptors pin executable but unreadable dirs.
+        # No searchable descriptor means fail closed, never pathname chmod.
+        if sys.platform != 'darwin':
+            raise
+        descriptor = os.open(directory, os.O_DIRECTORY | os.O_NOFOLLOW |
+                             getattr(os, 'O_SEARCH', 0x40100000), dir_fd=parent_fd)
+    try:
+        pinned = os.fstat(descriptor)
+        if ((pinned.st_dev, pinned.st_ino) != (identity.st_dev, identity.st_ino)
+                or pinned.st_uid != os.getuid() or not stat.S_ISDIR(pinned.st_mode)):
+            raise PermissionError('trial directory identity changed')
+        if path_only:
+            # proc names the checked inode, not an agent-controlled path.
+            pinned_path = f'/proc/self/fd/{descriptor}'
+            os.chmod(pinned_path, 0o700)
+            readable = os.open(pinned_path, os.O_RDONLY | os.O_DIRECTORY)
+            os.close(descriptor)
+            descriptor = readable
+        else:
+            os.fchmod(descriptor, 0o700)
+            # Search-only descriptors cannot enumerate directories. Reopen only
+            # after permission repair, then validate before using the new FD.
+            readable = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                               dir_fd=parent_fd)
+            reopened = os.fstat(readable)
+            if (reopened.st_dev, reopened.st_ino) != (pinned.st_dev, pinned.st_ino):
+                os.close(readable)
+                raise PermissionError('trial directory identity changed')
+            os.close(descriptor)
+            descriptor = readable
+        with os.scandir(descriptor) as children:
+            for child in children:
+                if child.is_dir(follow_symlinks=False):
+                    repair_trial_directory(child.name, parent_fd=descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def dispose_trial_state(state, *, root_fd=None):
+    """Dispose through the original root FD; never traverse a replaced pathname."""
+    if not os.access(state.parent, os.W_OK | os.X_OK):
+        raise PermissionError('trial parent does not permit disposal')
+    if not shutil.rmtree.avoids_symlink_attacks:
+        raise PermissionError('descriptor-safe disposal unavailable')
+    parent = os.open(state.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    descriptor = None
+    try:
+        descriptor = (os.dup(root_fd) if root_fd is not None else
+                      os.open(state.name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent))
+        original = os.fstat(descriptor)
+
+        def require_original_root():
+            current = os.stat(state.name, dir_fd=parent, follow_symlinks=False)
+            if ((current.st_dev, current.st_ino) != (original.st_dev, original.st_ino)
+                    or current.st_uid != os.getuid() or not stat.S_ISDIR(current.st_mode)):
+                raise PermissionError('trial root identity changed')
+
+        require_original_root()
+        repair_trial_directory('.', parent_fd=descriptor)
+        require_original_root()
+        # Anchor every recursive removal to the pinned root, never its pathname.
+        with os.scandir(descriptor) as children:
+            for child in children:
+                require_original_root()
+                if child.is_dir(follow_symlinks=False):
+                    shutil.rmtree(child.name, dir_fd=descriptor)
+                else:
+                    os.unlink(child.name, dir_fd=descriptor)
+        require_original_root()
+        os.rmdir(state.name, dir_fd=parent)
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        os.close(parent)
+
+
+@contextmanager
+def trial_state():
+    """Retain private evidence until teardown AND finalization are verified."""
+    state = Path(tempfile.mkdtemp(prefix='lemon-paired-runtime-'))
+    descriptor = os.open(state, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    cleanup = {'complete': False, 'disposal_complete': False, 'disposal_failed': False,
+               'finalization_failed': False, 'interrupted': False, 'root_fd': descriptor}
+    try:
+        yield state, cleanup
+    except BaseException as error:
+        cleanup['finalization_failed'] = True
+        cleanup['interrupted'] = not isinstance(error, Exception)
+    finally:
+        try:
+            original = os.fstat(descriptor)
+            if original.st_uid != os.getuid() or not stat.S_ISDIR(original.st_mode):
+                raise PermissionError('trial root ownership changed')
+            os.fchmod(descriptor, 0o700)
+            if cleanup['complete'] and not cleanup['finalization_failed']:
+                current = state.lstat()
+                if ((current.st_dev, current.st_ino) != (original.st_dev, original.st_ino)
+                        or not stat.S_ISDIR(current.st_mode)):
+                    raise PermissionError('trial root identity changed')
+                dispose_trial_state(state, root_fd=descriptor)
+                cleanup['disposal_complete'] = True
+        except BaseException as error:
+            # Even disposal interrupts must return through the paid row's owner.
+            cleanup['disposal_failed'] = True
+            cleanup['interrupted'] = cleanup['interrupted'] or not isinstance(error, Exception)
+        finally:
+            try:
+                os.close(descriptor)
+            except BaseException as error:
+                cleanup['disposal_complete'] = False
+                cleanup['disposal_failed'] = True
+                cleanup['interrupted'] = cleanup['interrupted'] or not isinstance(error, Exception)
 
 
 def runtime_ports():
@@ -211,11 +437,18 @@ def runtime_ports():
             sock.close()
 
 
-def collect_profile(path, run_id=None, turns=None):
+def collect_profile(path, run_id=None, turns=None, *, root_fd=None):
     """Only allowlisted numeric diagnostics and catalog hashes leave private state."""
     rows = []
-    if Path(path).exists():
-        for line in Path(path).read_text().splitlines():
+    try:
+        source = (trial_file(Path(path).parent, root_fd, Path(path).name) if root_fd is not None
+                  else open(path))
+    except FileNotFoundError:
+        source = None
+    if source is not None:
+        with source:
+            lines = source.read().splitlines()
+        for line in lines:
             try:
                 value = json.loads(line)
                 if isinstance(value, dict):
@@ -300,11 +533,13 @@ def sanitize_row(row):
         if isinstance(value, str) and re.fullmatch(r'[A-Za-z0-9_:-]{1,180}', value):
             clean[key] = value
     clean['agent'] = 'lemon'
-    for key in ('passed', 'attempted', 'verifier_passed', 'tests_passed', 'spend_complete'):
+    for key in ('passed', 'attempted', 'verifier_passed', 'tests_passed', 'spend_complete',
+                'cleanup_complete', 'disposal_complete', 'finalization_failed'):
         clean[key] = row.get(key) if type(row.get(key)) is bool else None
     failures = {'timeout', 'run_deadline', 'spend_limit', 'missing_spend', 'runtime_failed',
                 'invalid_cli_json', 'agent_failed', 'verifier_failed', 'unexpected_mutation',
-                'tests_failed', 'invocation_failed', 'recovery_not_observed', 'disclosure_not_observed'}
+                'tests_failed', 'invocation_failed', 'recovery_not_observed', 'disclosure_not_observed',
+                'cleanup_unverified', 'disposal_unverified', 'finalization_failed'}
     clean['failure'] = row.get('failure') if row.get('failure') in failures else None
     for key in ('repetition', 'order', 'turns', 'tokens', 'uncached_input_tokens', 'cached_input_tokens',
                 'cache_write_tokens', 'output_tokens', 'tool_errors', 'cost_usd', 'wall_seconds',
@@ -373,7 +608,9 @@ def source_identity(root):
 
 RUNTIME_EXPRESSION = (
     'File.cd!(System.fetch_env!("LEMON_AGENT_PROFILES_CWD")); '
+    'LemonEvals.PairedCleanup.configure!(); '
     'LemonCore.Runtime.Boot.start!(:runtime_full); '
+    'LemonEvals.PairedCleanup.verify!(); '
     'unless Process.whereis(LemonControlPlane.Supervisor), '
     'do: raise("paired runtime did not acquire its own listener"); '
     'expected = System.fetch_env!("LEMON_TOOL_DISCLOSURE_PROFILE"); '
@@ -395,6 +632,14 @@ def runtime_command(root):
     return ['mix', 'run', '--no-start', '--no-halt', '--no-compile', '--no-deps-check', '-e', RUNTIME_EXPRESSION]
 
 
+class TrialInterrupted(KeyboardInterrupt):
+    """An interrupted attempt whose teardown evidence must be persisted."""
+
+    def __init__(self, row):
+        super().__init__()
+        self.row = row
+
+
 def execute_trial(root, entry, case, configuration, model, credentials, ports, args, run_case,
                   fixture_digest, run_deadline=None, runtime_argv=None):
     """Run one attempt in a fresh runtime, home, store and fixture; teardown always runs.
@@ -403,16 +648,16 @@ def execute_trial(root, entry, case, configuration, model, credentials, ports, a
     """
     runtime = None
     attempt_start = time.monotonic()
-    with tempfile.TemporaryDirectory(prefix='lemon-paired-runtime-') as temporary:
-        state = Path(temporary)
-        env = isolated_environment(state, configuration, entry['variant'], credentials, ports)
-        profile = state / 'profile.jsonl'
-        metadata = state / 'runtime.json'
-        env.update({'LEMON_EVAL_PROFILE': str(profile), 'LEMON_EVAL_PYTHON': args.profile_python,
-                    'LEMON_EVAL_METADATA': str(metadata), 'LEMON_EVAL_STATE': str(state)})
-        # Load project code first, then change config cwd before boot. This is the
-        # same runtime boot and production CLI, with a dev-only profiling adapter.
+    row = {**failed_row(entry, None), 'attempted': True, 'spend_complete': False}
+    outcome_observed = False
+    interrupted = False
+    with trial_state() as (state, cleanup):
+        env = {}
+        profile, metadata = state / 'profile.jsonl', state / 'runtime.json'
         try:
+            env = isolated_environment(state, configuration, entry['variant'], credentials, ports)
+            env.update({'LEMON_EVAL_PROFILE': str(profile), 'LEMON_EVAL_PYTHON': args.profile_python,
+                        'LEMON_EVAL_METADATA': str(metadata), 'LEMON_EVAL_STATE': str(state)})
             runtime = subprocess.Popen(runtime_argv or runtime_command(root),
                                        cwd=root, env=env, stdin=subprocess.DEVNULL,
                                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
@@ -435,36 +680,101 @@ def execute_trial(root, entry, case, configuration, model, credentials, ports, a
             attempt_args.environment = env
             attempt_args.attempt_deadline = deadline
             attempt_args.trial_id = entry['trial_id']
+            attempt_args.fixture_root = state / 'fixture'
             row = {**run_case(case, 'lemon', args.lemon, model, attempt_args), **entry}
-            row['runtime_versions'] = json.loads(metadata.read_text())
-            (state / 'flush.request').write_text('flush')
-            while not (state / 'flush.done').exists() and time.monotonic() < deadline and runtime.poll() is None:
+            outcome_observed = True
+            row['attempted'], row['spend_complete'] = True, False
+            with trial_file(state, cleanup['root_fd'], 'runtime.json') as source:
+                row['runtime_versions'] = json.load(source)
+            with trial_file(state, cleanup['root_fd'], 'flush.request', 'w') as request:
+                request.write('flush')
+            while not trial_file_exists(state, cleanup['root_fd'], 'flush.done') and time.monotonic() < deadline and runtime.poll() is None:
                 time.sleep(0.05)
         except subprocess.TimeoutExpired:
-            row = failed_row(entry, 'timeout')
+            row['passed'] = False
+            row['failure'] = row.get('failure') or 'timeout'
+            cleanup['finalization_failed'] = outcome_observed
         except (OSError, ValueError, subprocess.SubprocessError):
-            row = failed_row(entry, 'runtime_failed')
+            row['passed'] = False
+            row['failure'] = row.get('failure') or 'runtime_failed'
+            cleanup['finalization_failed'] = outcome_observed
+        except TrialInterrupted as error:
+            row = {**error.row, **entry, 'attempted': True, 'spend_complete': False}
+            interrupted = True
+            cleanup['finalization_failed'] = True
+        except BaseException as error:
+            interrupted = not isinstance(error, Exception)
+            cleanup['finalization_failed'] = True
+            row['passed'] = False
+            row['failure'] = row.get('failure') or 'finalization_failed'
         finally:
-            terminate(runtime)
-        row['schema_diagnostics'] = collect_profile(profile, row.get('run_id'), row.get('turns'))
-        row['schema_diagnostics']['flush_complete'] = (state / 'flush.done').exists()
-        expected_profile = 'legacy' if entry['variant'] == 'baseline' else 'coding'
-        if row['passed'] and row['schema_diagnostics']['applied_profiles'] != [expected_profile]:
-            row['passed'], row['failure'] = False, 'disclosure_not_observed'
-        # This is an outcome-level recovery indicator, not a guess at tool calls.
-        if number(row.get('tool_errors')) is not None:
-            row['tool_error_recoveries'] = int(row['tool_errors'] > 0 and row['passed'])
-        row['discovery_failures'] = row['schema_diagnostics']['discovery_failures']
-        row['incorrect_tool_calls'] = row['schema_diagnostics']['incorrect_tool_calls']
-        row['spend_complete'] = (
-            number(row.get('cost_usd')) is not None
-            and row['schema_diagnostics']['flush_complete']
-            and row['schema_diagnostics']['parent_usage_complete'])
-        row['attempted'] = True
+            try:
+                cleanup['complete'] = terminate(runtime, project_root=root, environment=env,
+                                                root_fd=cleanup['root_fd'])
+            except BaseException as error:
+                interrupted = interrupted or not isinstance(error, Exception)
+                cleanup['complete'] = False
+        if not cleanup['complete']:
+            row['passed'] = False
+            row['failure'] = row.get('failure') or 'cleanup_unverified'
+        try:
+            row['schema_diagnostics'] = collect_profile(profile, row.get('run_id'), row.get('turns'),
+                                                        root_fd=cleanup['root_fd'])
+            row['schema_diagnostics']['flush_complete'] = trial_file_exists(state, cleanup['root_fd'], 'flush.done')
+            expected_profile = 'legacy' if entry['variant'] == 'baseline' else 'coding'
+            if row['passed'] and row['schema_diagnostics']['applied_profiles'] != [expected_profile]:
+                row['passed'], row['failure'] = False, 'disclosure_not_observed'
+            if number(row.get('tool_errors')) is not None:
+                row['tool_error_recoveries'] = int(row['tool_errors'] > 0 and row['passed'])
+            row['discovery_failures'] = row['schema_diagnostics']['discovery_failures']
+            row['incorrect_tool_calls'] = row['schema_diagnostics']['incorrect_tool_calls']
+            row['spend_complete'] = (
+                number(row.get('cost_usd')) is not None
+                and row['schema_diagnostics']['flush_complete']
+                and row['schema_diagnostics']['parent_usage_complete'])
+        except BaseException as error:
+            interrupted = interrupted or not isinstance(error, Exception)
+            cleanup['finalization_failed'] = True
+    try:
+        row['cleanup_complete'] = cleanup['complete']
+        interrupted = interrupted or cleanup['interrupted']
+        row['disposal_complete'] = cleanup['disposal_complete']
+        row['finalization_failed'] = cleanup['finalization_failed']
+        if cleanup['finalization_failed']:
+            row['passed'] = False
+            row['spend_complete'] = False
+            row['failure'] = row.get('failure') or 'finalization_failed'
+        if not cleanup['complete']:
+            row['passed'] = False
+            row['failure'] = row.get('failure') or 'cleanup_unverified'
+        elif cleanup['disposal_failed']:
+            row['passed'] = False
+            row['failure'] = row.get('failure') or 'disposal_unverified'
+        # These facts do not depend on fallible profiling or disposal.
         row['wall_seconds'] = round(time.monotonic() - attempt_start, 4)
         row['configuration_digest'] = digest(configuration)
         row['fixture_digest'] = fixture_digest
-    return row
+        if interrupted:
+            raise TrialInterrupted(row)
+        return row
+    except TrialInterrupted:
+        raise
+    except BaseException:
+        row.update(passed=False, spend_complete=False, finalization_failed=True,
+                   cleanup_complete=cleanup['complete'], disposal_complete=cleanup['disposal_complete'])
+        row['failure'] = row.get('failure') or 'finalization_failed'
+        raise TrialInterrupted(row) from None
+
+
+def teardown_failure(row):
+    """Safety stop independent of a trial's prior failure or paid counters."""
+    if row.get('cleanup_complete') is False:
+        return 'cleanup_unverified'
+    if row.get('finalization_failed') is True:
+        return 'finalization_failed'
+    if row.get('disposal_complete') is False:
+        return 'disposal_unverified'
+    return None
 
 
 def run_paired(args, cases, run_case):
@@ -522,28 +832,50 @@ def run_paired(args, cases, run_case):
     cases_by_name = {case['name']: case for case in cases}
     measured = 0.0
     for entry in entries:
+        interrupted = False
         remaining = args.run_timeout - (time.monotonic() - start)
         if stop_reason or remaining <= 0 or measured + plan['per_attempt_spend_ceiling_usd'] > plan['max_spend_usd']:
             stop_reason = stop_reason or ('run_deadline' if remaining <= 0 else 'spend_limit')
             row = {**failed_row(entry, stop_reason), 'attempted': False, 'cost_usd': 0}
         else:
-            row = execute_trial(root, entry, cases_by_name[entry['task']], configurations[entry['variant']],
-                                args.model, credentials, runtime_ports(), args, run_case,
-                                experiment['fixture_digests'][entry['task']],
-                                run_deadline=start + args.run_timeout)
-        # Runtime IDs, prompts and arbitrary metadata never leave private state.
-        row = sanitize_row(row)
-        report['results'].append(row)
-        cost = number(row.get('cost_usd'))
-        if cost is not None:
-            measured += cost
-        if row['attempted'] and (cost is None or row.get('spend_complete') is False):
-            stop_reason = 'missing_spend'
-        elif cost is not None and cost > plan['per_attempt_spend_ceiling_usd']:
-            stop_reason = 'spend_limit'
-        report['summary'] = summarize(report['results'], args.seed)
-        report['stop_reason'] = stop_reason
-        write_report(args.output, report)
+            try:
+                row = execute_trial(root, entry, cases_by_name[entry['task']], configurations[entry['variant']],
+                                    args.model, credentials, runtime_ports(), args, run_case,
+                                    experiment['fixture_digests'][entry['task']],
+                                    run_deadline=start + args.run_timeout)
+            except TrialInterrupted as error:
+                row, interrupted = error.row, True
+        raw_row = row
+        recorded_count = len(report['results'])
+        try:
+            # Runtime IDs, prompts and arbitrary metadata never leave private state.
+            row = sanitize_row(row)
+            report['results'].append(row)
+            cost = number(row.get('cost_usd'))
+            if cost is not None:
+                measured += cost
+            stop_reason = stop_reason or teardown_failure(row)
+            if stop_reason not in ('cleanup_unverified', 'disposal_unverified', 'finalization_failed'):
+                if row['attempted'] and (cost is None or row.get('spend_complete') is False):
+                    stop_reason = 'missing_spend'
+                elif cost is not None and cost > plan['per_attempt_spend_ceiling_usd']:
+                    stop_reason = 'spend_limit'
+            report['summary'] = summarize(report['results'], args.seed)
+            report['stop_reason'] = stop_reason
+            write_report(args.output, report)
+        except BaseException as error:
+            raw_row.update(passed=False, spend_complete=False, finalization_failed=True)
+            raw_row['failure'] = raw_row.get('failure') or 'finalization_failed'
+            row = sanitize_row(raw_row)
+            report['results'][recorded_count:] = [row]
+            report['summary'] = summarize(report['results'], args.seed)
+            report['stop_reason'] = teardown_failure(row)
+            write_report(args.output, report)
+            if isinstance(error, Exception):
+                raise
+            return 130
+        if interrupted:
+            return 130
     report['complete'] = True
     report['elapsed_seconds'] = round(time.monotonic() - start, 4)
     report['all_attempt_measured_spend_usd'] = measured

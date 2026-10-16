@@ -12,11 +12,36 @@ import time
 import tomllib
 import unittest
 from collections import Counter, defaultdict
+from contextlib import contextmanager
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, call, patch
 
 import coding_benchmark as benchmark
 import coding_benchmark_paired as paired
+
+
+def dispose_test_trial_state(state):
+    """Remove only test-owned fixtures, including roots replaced by these tests."""
+    if state.is_symlink():
+        state.unlink()
+    elif state.exists():
+        paired.repair_trial_directory(state)
+        paired.dispose_trial_state(state)
+
+
+@contextmanager
+def assertion_safe_trial_state(test):
+    """Reraise test failures outside production's exception-recording context."""
+    error = None
+    with paired.trial_state() as (state, cleanup):
+        test.addCleanup(dispose_test_trial_state, state)
+        try:
+            yield state, cleanup
+        except BaseException as caught:
+            error = caught
+    if error is not None:
+        raise error.with_traceback(error.__traceback__)
+
 
 
 def canonical_digest(value):
@@ -188,6 +213,8 @@ auto_approve = true
             'PATH': os.environ.get('PATH', ''),
             'HOME': '/private/ordinary-user-home',
             'LEMON_STORE_PATH': '/private/ordinary-store',
+            'LEMON_EVAL_PROCESS_STORE': '/private/ordinary-process-store',
+            'TMPDIR': '/private/ordinary-tmp',
             'LEMON_DOTENV_DIR': '/private/ordinary-dotenv',
             'LEMON_AGENT_PROFILES_CWD': '/private/ordinary-project',
             'LEMON_CONTROL_PLANE_PORT': '9999',
@@ -214,6 +241,9 @@ auto_approve = true
                 self.assertEqual(config_file.stat().st_mode & 0o777, 0o600)
                 self.assertEqual(home.stat().st_mode & 0o077, 0)
                 self.assertTrue(Path(env['LEMON_STORE_PATH']).is_relative_to(root))
+                self.assertTrue(Path(env['LEMON_EVAL_PROCESS_STORE']).is_relative_to(root))
+                self.assertTrue(Path(env['TMPDIR']).is_relative_to(root))
+                self.assertEqual(Path(env['TMPDIR']).stat().st_mode & 0o777, 0o700)
                 self.assertTrue(Path(env['LEMON_AGENT_PROFILES_CWD']).is_relative_to(root))
                 self.assertEqual(env['LEMON_DOTENV_DIR'], env['LEMON_AGENT_PROFILES_CWD'])
                 self.assertEqual(env['LEMON_TOOL_DISCLOSURE_PROFILE'],
@@ -226,12 +256,32 @@ auto_approve = true
                     self.assertNotIn(key, env)
                 self.assertNotIn('ambient-operator-secret', env.values())
                 self.assertNotIn('ambient-master-secret', env.values())
-            for key in ['HOME', 'LEMON_STORE_PATH', 'LEMON_AGENT_PROFILES_CWD',
-                        'LEMON_CONTROL_PLANE_OPERATOR_TOKEN', 'LEMON_SECRETS_MASTER_KEY']:
+            for key in ['HOME', 'LEMON_STORE_PATH', 'LEMON_EVAL_PROCESS_STORE', 'TMPDIR',
+                        'LEMON_AGENT_PROFILES_CWD', 'LEMON_CONTROL_PLANE_OPERATOR_TOKEN',
+                        'LEMON_SECRETS_MASTER_KEY']:
                 self.assertNotEqual(environments[0][key], environments[1][key])
             marker = Path(environments[0]['HOME']) / 'attempt-one-only'
             marker.write_text('private state')
             self.assertFalse((Path(environments[1]['HOME']) / marker.name).exists())
+
+    def test_sdk_homes_are_resolved_before_replacing_home_and_runtime_cwd(self):
+        with tempfile.TemporaryDirectory() as directory:
+            original_home = Path(directory) / 'operator-home'
+            for index, overrides in enumerate([
+                {},
+                {'MIX_HOME': '~/installed-mix', 'HEX_HOME': 'relative-installed-hex'},
+            ]):
+                ambient = {'HOME': str(original_home), **overrides}
+                with self.subTest(overrides=overrides), patch.dict(os.environ, ambient, clear=True):
+                    environment = paired.isolated_environment(
+                        Path(directory) / str(index), self.base, 'baseline', {}, [4201, 4301, 4401])
+                    expected_mix = original_home / ('installed-mix' if overrides else '.mix')
+                    expected_hex = (Path.cwd() / overrides['HEX_HOME']
+                                    if overrides else original_home / '.hex')
+                    self.assertEqual(environment['MIX_HOME'], str(expected_mix.resolve()))
+                    self.assertEqual(environment['HEX_HOME'], str(expected_hex.resolve()))
+                    self.assertNotEqual(environment['HOME'], str(original_home))
+                    self.assertEqual(os.environ['HOME'], str(original_home))
 
 
 def outcome(task, repetition, variant, passed, cost, wall, failure=None, **metrics):
@@ -622,6 +672,80 @@ class RedactionAndDryPlanTests(unittest.TestCase):
                 paired.run_paired(args, cases, forbidden_case)
 
 
+class FixtureAssertionSafetyTests(unittest.TestCase):
+    def test_body_failures_propagate_after_production_teardown_and_do_not_leak(self):
+        for error in (AssertionError('fixture assertion'), RuntimeError('fixture error'),
+                      KeyboardInterrupt(), SystemExit(3)):
+            with self.subTest(error=type(error).__name__):
+                owner = unittest.TestCase()
+                self.addCleanup(owner.doCleanups)
+                with self.assertRaises(type(error)) as caught:
+                    with assertion_safe_trial_state(owner) as (state, cleanup):
+                        (state / 'private-evidence').write_text('fixture')
+                        raise error
+                self.assertIs(caught.exception, error)
+                self.assertFalse(cleanup['finalization_failed'])
+                self.assertFalse(cleanup['interrupted'])
+                with self.assertRaises(OSError):
+                    os.fstat(cleanup['root_fd'])
+                self.assertTrue(state.exists())
+                self.assertTrue(owner.doCleanups())
+                self.assertFalse(state.exists())
+
+    @unittest.skipUnless(os.name == 'posix', 'native fixture uses POSIX FIFOs')
+    def test_unexpected_native_recovery_success_fails_the_actual_gate(self):
+        import test_paired_native_cleanup as native
+
+        gate = native.NativeCleanupTests(
+            'test_missing_identity_remains_unverified_and_unsignalled')
+        # Run this single TestCase directly, bypassing its BEAM-discovering class setup.
+        gate.command, gate.sdk_bins = ['offline-native-fixture'], []
+        sentinel = Mock()
+        sentinel.poll.return_value = None
+        runtime = Mock(pid=12345)
+        runtime.poll.return_value = None
+        identity = {'root_pid': 23456, 'pgid': 23456, 'root_birth': 'fixture-birth',
+                    'ownership_lost': False, 'members': {'23456': 'fixture-birth'}}
+        witness = {'pid': 23456, 'pgid': 23456, 'birth': 'fixture-birth'}
+        states = []
+
+        def launch(argv, **kwargs):
+            if argv[0] != 'offline-native-fixture':
+                return sentinel
+            state = Path(kwargs['env']['LEMON_EVAL_CLEANUP_ROOT'])
+            states.append(state)
+            (state / 'native.json').write_text(json.dumps({
+                'identity': identity, 'ledger': 'process_manager', 'id': 'fixture-id',
+                'tracked_before_boot': False, 'root_exited': False,
+            }))
+            (state / 'processes.dets').write_bytes(b'private fixture evidence')
+            return runtime
+
+        def unexpected_success(process, **kwargs):
+            self.assertIs(process, runtime)
+            runtime.poll.return_value = runtime.returncode = -paired.signal.SIGKILL
+            return True
+
+        result = unittest.TestResult()
+        with patch.object(native.paired, 'runtime_ports', return_value=[4201, 4301, 4401]), \
+                patch.object(native.paired, 'isolated_environment', return_value={}), \
+                patch.object(native.subprocess, 'Popen', side_effect=launch), \
+                patch.object(native, 'group_rows', return_value=[witness]), \
+                patch.object(native.paired, 'terminate', side_effect=unexpected_success) as recover, \
+                patch.object(native, 'emergency_stop') as emergency:
+            gate.run(result)
+        recover.assert_called_once()
+        self.assertEqual(result.testsRun, 1)
+        self.assertEqual(result.errors, [])
+        self.assertEqual(len(result.failures), 1, 'unexpected success passed the native gate')
+        self.assertIn('True is not False', result.failures[0][1])
+        emergency.assert_called_once_with(identity)
+        sentinel.kill.assert_called_once_with()
+        sentinel.wait.assert_called_once_with(timeout=5)
+        self.assertEqual(len(states), 1)
+        self.assertFalse(states[0].exists(), 'failed gate leaked its private fixture')
+
+
 class ProcessCleanupTests(unittest.TestCase):
     def parent_script(self, directory, return_normally):
         ready, escaped = Path(directory) / 'ready', Path(directory) / 'escaped'
@@ -659,7 +783,7 @@ class ProcessCleanupTests(unittest.TestCase):
             try:
                 self.assertEqual(process.stdout.readline().strip(), 'ready')
             finally:
-                paired.terminate(process)
+                paired.terminate_runtime_group(process)
                 process.stdout.close()
             time.sleep(0.2)
             self.assertFalse(escaped.exists())
@@ -672,6 +796,355 @@ class ProcessCleanupTests(unittest.TestCase):
             time.sleep(0.2)
             self.assertFalse(escaped.exists())
 
+    def test_runtime_boot_configures_ownership_before_start_and_verifies_afterward(self):
+        argv = paired.runtime_command(Path(__file__).resolve().parents[3])
+        self.assertEqual(argv[:2], ['mix', 'run'])
+        for flag in ['--no-start', '--no-halt', '--no-compile', '--no-deps-check']:
+            self.assertIn(flag, argv)
+        expression = argv[argv.index('-e') + 1]
+        configure = expression.index('LemonEvals.PairedCleanup.configure!()')
+        boot = expression.index('LemonCore.Runtime.Boot.start!(:runtime_full)')
+        verify = expression.index('LemonEvals.PairedCleanup.verify!()')
+        self.assertLess(configure, boot)
+        self.assertLess(boot, verify)
+        self.assertLess(verify, expression.index('LemonEvals.PayloadProfile.install!'))
+
+    def test_runtime_group_waits_are_bounded_even_when_term_is_ignored(self):
+        process = Mock(pid=12345)
+        process.wait.side_effect = [subprocess.TimeoutExpired('runtime', 5), 0]
+        with patch.object(paired.os, 'killpg') as killpg:
+            paired.terminate_runtime_group(process)
+        self.assertEqual(process.wait.call_args_list, [call(timeout=5), call(timeout=5)])
+        self.assertEqual(killpg.call_args_list, [
+            call(process.pid, paired.signal.SIGTERM),
+            call(process.pid, paired.signal.SIGKILL),
+        ])
+
+    def test_unstarted_runtime_needs_no_recovery_process(self):
+        with patch.object(paired.subprocess, 'Popen') as launch:
+            self.assertTrue(paired.terminate(None, project_root=Path.cwd(), environment={}))
+        launch.assert_not_called()
+
+    def test_recovery_runs_only_after_runtime_stop_without_provider_credentials(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            environment = paired.isolated_environment(
+                root / 'state', ConfigurationIsolationTests.base, 'coding',
+                {'BENCHMARK_PROVIDER_API_KEY': 'private-approved-credential'}, [4201, 4301, 4401])
+            environment.update({'ERL_FLAGS': '+S 2:2', 'HTTPS_PROXY': 'private-proxy',
+                                'OPENAI_API_KEY': 'private-unapproved-credential'})
+            ebins = [root / '_build' / environment.get('MIX_ENV', 'dev') / 'lib' / app / 'ebin'
+                     for app in ('lemon_core', 'lemon_evals')]
+            for ebin in ebins:
+                ebin.mkdir(parents=True)
+            events = []
+            runtime = Mock()
+            recovery = Mock()
+            recovery.wait.return_value = 0
+            recovery.poll.return_value = 0
+
+            def stop(process):
+                self.assertIs(process, runtime)
+                events.append('stop')
+
+            def launch(*args, **kwargs):
+                events.append('recover')
+                return recovery
+
+            with patch.object(paired, 'terminate_runtime_group', side_effect=stop), \
+                    patch.object(paired.subprocess, 'Popen', side_effect=launch) as popen:
+                self.assertTrue(paired.terminate(runtime, project_root=root, environment=environment))
+            self.assertEqual(events, ['stop', 'recover'])
+            argv = popen.call_args.args[0]
+            self.assertEqual(argv[:2], [sys.executable, '-c'])
+            descriptor = int(argv[3])
+            self.assertEqual(argv[4], 'elixir')
+            self.assertEqual(argv[5:-2], [
+                item for ebin in ebins for item in ('-pa', str(ebin.resolve()))])
+            self.assertEqual(argv[-2], '-e')
+            self.assertNotIn('mix', argv)
+            self.assertNotIn('--no-halt', argv)
+            expression = argv[argv.index('-e') + 1]
+            self.assertIn('LemonEvals.PairedCleanup.recover(', expression)
+            self.assertNotIn('Boot.start!', expression)
+            self.assertNotIn('Application.', expression)
+            self.assertNotIn('PayloadProfile', expression)
+            options = popen.call_args.kwargs
+            self.assertEqual(options['pass_fds'], (descriptor,))
+            allowed = {'PATH', 'LANG', 'LC_ALL', 'TMPDIR', 'HOME', 'MIX_ENV',
+                       'MIX_HOME', 'HEX_HOME', 'ERL_FLAGS'}
+            expected_environment = {key: value for key, value in environment.items()
+                                    if key in allowed}
+            expected_environment['LEMON_EVAL_PROCESS_STORE'] = 'processes.dets'
+            self.assertEqual(options['env'], expected_environment)
+            # Execute the actual bootstrap with every process operation intercepted:
+            # it must only pin the inherited directory, close its FD and exec Elixir.
+            operations = Mock()
+            with patch.object(os, 'fchdir', operations.pin), \
+                    patch.object(os, 'close', operations.close), \
+                    patch.object(os, 'execvpe', operations.execute), \
+                    patch.object(os, 'environ', expected_environment), \
+                    patch.object(sys, 'argv', ['-c', *argv[3:]]):
+                exec(argv[2], {})
+            self.assertEqual(operations.mock_calls, [
+                call.pin(descriptor),
+                call.close(descriptor),
+                call.execute('elixir', argv[4:], expected_environment),
+            ])
+            self.assertEqual(options['cwd'], root)
+            self.assertEqual(options['stdin'], subprocess.DEVNULL)
+            self.assertTrue(options['start_new_session'])
+            self.assertIs(options['stdout'], options['stderr'])
+            log_path = Path(environment['LEMON_EVAL_PROCESS_STORE']).parent / 'cleanup.log'
+            self.assertEqual(log_path.stat().st_mode & 0o777, 0o600)
+            recovery.wait.assert_called_once_with(timeout=20)
+
+    def test_replaced_trial_root_cannot_redirect_recovery_or_log_mutation(self):
+        for existing in (False, True):
+            with self.subTest(existing=existing), tempfile.TemporaryDirectory() as directory:
+                external = Path(directory) / 'external'
+                external.mkdir(mode=0o700)
+                log = external / 'cleanup.log'
+                if existing:
+                    log.write_bytes(b'operator evidence')
+                    log.chmod(0o640)
+                with assertion_safe_trial_state(self) as (state, cleanup):
+                    retained = state.with_name(state.name + '-retained')
+                    self.addCleanup(dispose_test_trial_state, retained)
+                    (state / 'processes.dets').write_bytes(b'ownership evidence')
+                    state.rename(retained)
+                    state.symlink_to(external, target_is_directory=True)
+                    with patch.object(paired, 'terminate_runtime_group') as stop, \
+                            patch.object(paired.subprocess, 'Popen') as launch:
+                        cleanup['complete'] = paired.terminate(
+                            Mock(), project_root=Path(directory),
+                            environment={'LEMON_EVAL_PROCESS_STORE': str(state / 'processes.dets')},
+                            root_fd=cleanup['root_fd'])
+                    stop.assert_called_once()
+                    launch.assert_not_called()
+                try:
+                    self.assertFalse(cleanup['complete'])
+                    self.assertFalse(cleanup['disposal_complete'])
+                    self.assertEqual(external.stat().st_mode & 0o777, 0o700)
+                    self.assertEqual(log.exists(), existing)
+                    if existing:
+                        self.assertEqual(log.read_bytes(), b'operator evidence')
+                        self.assertEqual(log.stat().st_mode & 0o777, 0o640)
+                    self.assertEqual((retained / 'processes.dets').read_bytes(), b'ownership evidence')
+                finally:
+                    state.unlink()
+                    paired.dispose_trial_state(retained)
+
+    def test_finalization_files_reject_replaced_roots_and_fixture_links(self):
+        with tempfile.TemporaryDirectory() as directory:
+            external = Path(directory) / 'external'
+            external.mkdir()
+            secret = external / 'runtime.json'
+            secret.write_text('operator evidence')
+            secret.chmod(0o640)
+            with assertion_safe_trial_state(self) as (state, cleanup):
+                (state / 'runtime.json').symlink_to(secret)
+                with self.assertRaises(OSError):
+                    paired.trial_file(state, cleanup['root_fd'], 'runtime.json')
+                (state / 'flush.request').symlink_to(secret)
+                with self.assertRaises(OSError):
+                    paired.trial_file(state, cleanup['root_fd'], 'flush.request', 'w')
+                retained = state.with_name(state.name + '-retained')
+                self.addCleanup(dispose_test_trial_state, retained)
+                state.rename(retained)
+                state.symlink_to(external, target_is_directory=True)
+                with self.assertRaises(PermissionError):
+                    paired.trial_file(state, cleanup['root_fd'], 'runtime.json')
+            try:
+                self.assertEqual(secret.read_text(), 'operator evidence')
+                self.assertEqual(secret.stat().st_mode & 0o777, 0o640)
+            finally:
+                state.unlink()
+                paired.dispose_trial_state(retained)
+
+    def test_recovery_log_cannot_follow_a_fixture_symlink(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            state = root / 'state'
+            state.mkdir()
+            external = root / 'external'
+            external.write_bytes(b'private operator evidence')
+            (state / 'cleanup.log').symlink_to(external)
+            environment = {'LEMON_EVAL_PROCESS_STORE': str(state / 'processes.dets')}
+            with patch.object(paired, 'terminate_runtime_group'), \
+                    patch.object(paired.subprocess, 'Popen') as launch:
+                self.assertFalse(paired.terminate(Mock(), project_root=root, environment=environment))
+            launch.assert_not_called()
+            self.assertEqual(external.read_bytes(), b'private operator evidence')
+
+    def test_failed_or_timed_out_recovery_never_proves_cleanup(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            environment = {'LEMON_EVAL_PROCESS_STORE': str(root / 'processes.dets')}
+            for outcome in ['failed', 'timeout']:
+                with self.subTest(outcome=outcome):
+                    recovery = Mock(pid=12345)
+                    if outcome == 'timeout':
+                        recovery.wait.side_effect = [subprocess.TimeoutExpired('recovery', 20), 0]
+                        recovery.poll.return_value = None
+                    else:
+                        recovery.wait.return_value = 1
+                        recovery.poll.return_value = 1
+                    with patch.object(paired, 'terminate_runtime_group'), \
+                            patch.object(paired.subprocess, 'Popen', return_value=recovery), \
+                            patch.object(paired.os, 'killpg') as killpg:
+                        self.assertFalse(paired.terminate(
+                            Mock(), project_root=root, environment=environment))
+                    if outcome == 'timeout':
+                        killpg.assert_called_once_with(recovery.pid, paired.signal.SIGKILL)
+                        self.assertEqual(recovery.wait.call_args_list,
+                                         [call(timeout=20), call(timeout=5)])
+                    else:
+                        killpg.assert_not_called()
+                        recovery.wait.assert_called_once_with(timeout=20)
+
+    def test_darwin_unpinnable_directory_fails_without_permission_repair(self):
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / 'target'
+            target.mkdir(mode=0o500)
+            with patch.object(paired.sys, 'platform', 'darwin'), \
+                    patch.object(paired.os, 'open', side_effect=PermissionError('cannot pin')), \
+                    self.assertRaises(PermissionError):
+                paired.repair_trial_directory(target)
+            self.assertEqual(target.stat().st_mode & 0o777, 0o500)
+
+    def test_darwin_unreadable_directory_replacement_is_not_chmodded(self):
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / 'target'
+            target.mkdir(mode=0o700)
+            original = Path(directory) / 'original'
+            real_open = os.open
+            calls = []
+
+            def replace_on_open(path, flags, **kwargs):
+                calls.append(flags)
+                if len(calls) == 1:
+                    target.rename(original)
+                    target.mkdir(mode=0o500)
+                    raise PermissionError('unreadable directory')
+                # Emulate Darwin search-only pinning on any contract-test host.
+                return real_open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, **kwargs)
+
+            with patch.object(paired.sys, 'platform', 'darwin'), \
+                    patch.object(paired.os, 'open', side_effect=replace_on_open), \
+                    self.assertRaisesRegex(PermissionError, 'identity changed'):
+                paired.repair_trial_directory(target)
+            self.assertEqual(target.stat().st_mode & 0o777, 0o500)
+            self.assertEqual(len(calls), 2)
+
+    def test_unverified_cleanup_retains_private_state_even_with_forged_done_file(self):
+        with assertion_safe_trial_state(self) as (state, cleanup):
+            (state / 'cleanup.done').write_text('not an ownership witness')
+            (state / 'processes.dets').write_bytes(b'private durable evidence')
+        try:
+            self.assertFalse(cleanup['complete'])
+            self.assertFalse(cleanup['disposal_complete'])
+            self.assertEqual(state.stat().st_mode & 0o777, 0o700)
+            self.assertEqual((state / 'processes.dets').read_bytes(), b'private durable evidence')
+        finally:
+            paired.dispose_trial_state(state)
+
+    def test_verified_cleanup_removes_trial_state(self):
+        with assertion_safe_trial_state(self) as (state, cleanup):
+            (state / 'private-output').write_text('private')
+            cleanup['complete'] = True
+        self.assertFalse(state.exists())
+        self.assertTrue(cleanup['disposal_complete'])
+
+    def test_retained_root_permissions_are_repaired_through_its_original_descriptor(self):
+        with assertion_safe_trial_state(self) as (state, cleanup):
+            (state / 'processes.dets').write_bytes(b'private ownership evidence')
+            state.chmod(0o000)
+        try:
+            self.assertFalse(cleanup['complete'])
+            self.assertFalse(cleanup['disposal_complete'])
+            self.assertEqual(state.stat().st_mode & 0o777, 0o700)
+            self.assertEqual((state / 'processes.dets').read_bytes(),
+                             b'private ownership evidence')
+        finally:
+            paired.dispose_trial_state(state)
+
+    def test_replaced_root_symlink_cannot_redirect_permission_repair_or_disposal(self):
+        with tempfile.TemporaryDirectory() as directory:
+            external = Path(directory) / 'external'
+            external.mkdir(mode=0o500)
+            with assertion_safe_trial_state(self) as (state, cleanup):
+                (state / 'processes.dets').write_bytes(b'private ownership evidence')
+                retained = state.with_name(state.name + '-retained')
+                self.addCleanup(dispose_test_trial_state, retained)
+                state.rename(retained)
+                retained.chmod(0o000)
+                state.symlink_to(external, target_is_directory=True)
+                cleanup['complete'] = True
+            try:
+                self.assertTrue(cleanup['complete'])
+                self.assertFalse(cleanup['disposal_complete'])
+                self.assertTrue(cleanup['disposal_failed'])
+                self.assertTrue(state.is_symlink())
+                self.assertEqual(external.stat().st_mode & 0o777, 0o500)
+                self.assertEqual(retained.stat().st_mode & 0o777, 0o700)
+                self.assertEqual((retained / 'processes.dets').read_bytes(),
+                                 b'private ownership evidence')
+            finally:
+                state.unlink()
+                paired.dispose_trial_state(retained)
+                external.chmod(0o700)
+
+    def test_disposal_never_repairs_or_deletes_an_external_symlink_target(self):
+        with tempfile.TemporaryDirectory() as directory:
+            external = Path(directory) / 'external'
+            external.mkdir(mode=0o700)
+            marker = external / 'marker'
+            marker.write_text('unrelated private data')
+            external.chmod(0o500)
+            try:
+                with assertion_safe_trial_state(self) as (state, cleanup):
+                    (state / 'external-link').symlink_to(external, target_is_directory=True)
+                    cleanup['complete'] = True
+                self.assertFalse(state.exists())
+                self.assertTrue(cleanup['disposal_complete'])
+                self.assertEqual(external.stat().st_mode & 0o777, 0o500)
+                self.assertEqual(marker.read_text(), 'unrelated private data')
+            finally:
+                external.chmod(0o700)
+
+
+    def test_root_replacement_during_disposal_cannot_delete_the_replacement(self):
+        dispose = paired.dispose_trial_state
+        retained = None
+
+        def replace_before_disposal(state, **kwargs):
+            nonlocal retained
+            retained = state.with_name(state.name + '-retained')
+            self.addCleanup(dispose_test_trial_state, retained)
+            state.rename(retained)
+            state.mkdir(mode=0o700)
+            (state / 'unrelated-marker').write_text('unrelated private data')
+            state.chmod(0o500)
+            dispose(state, **kwargs)
+
+        with patch.object(paired, 'dispose_trial_state', side_effect=replace_before_disposal):
+            with assertion_safe_trial_state(self) as (state, cleanup):
+                (state / 'processes.dets').write_bytes(b'private ownership evidence')
+                cleanup['complete'] = True
+        try:
+            self.assertTrue(cleanup['complete'])
+            self.assertFalse(cleanup['disposal_complete'])
+            self.assertTrue(cleanup['disposal_failed'])
+            self.assertEqual(state.stat().st_mode & 0o777, 0o500)
+            self.assertEqual((state / 'unrelated-marker').read_text(), 'unrelated private data')
+            self.assertEqual((retained / 'processes.dets').read_bytes(),
+                             b'private ownership evidence')
+        finally:
+            state.chmod(0o700)
+            dispose(state)
+            if retained is not None:
+                dispose(retained)
 
 class RealFixtureExecutionTests(unittest.TestCase):
     """Exercise the real fixture/client/verifier path with a local deterministic CLI."""
@@ -726,6 +1199,42 @@ class RealFixtureExecutionTests(unittest.TestCase):
         return benchmark.run_case(self.case(mode), 'lemon', str(self.cli),
                                   'offline:model', args)
 
+    def test_verifier_interrupt_keeps_observed_paid_counters_and_prior_failure(self):
+        command = benchmark.command
+
+        def interrupt_verifier(argv, *args, **kwargs):
+            if argv[:2] == [sys.executable, '-c']:
+                raise KeyboardInterrupt
+            return command(argv, *args, **kwargs)
+
+        with assertion_safe_trial_state(self) as (state, cleanup):
+            args = SimpleNamespace(timeout=2, failure_dir=None, environment=self.environment,
+                                   fixture_root=state / 'fixture')
+            with patch.object(benchmark, 'command', side_effect=interrupt_verifier):
+                with self.assertRaises(paired.TrialInterrupted) as caught:
+                    benchmark.run_case(self.case('failure'), 'lemon', str(self.cli),
+                                       'offline:model', args)
+            row = caught.exception.row
+            self.assertFalse(row['passed'])
+            self.assertEqual(row['failure'], 'agent_failed')
+            self.assertEqual(row['cost_usd'], 0.125)
+            self.assertEqual(row['tokens'], 21)
+            self.assertTrue((state / 'fixture').exists())
+            cleanup['complete'] = True
+
+    def test_failure_bundle_interrupt_keeps_paid_counters(self):
+        with assertion_safe_trial_state(self) as (state, cleanup):
+            args = SimpleNamespace(timeout=2, failure_dir=str(state / 'bundles'),
+                                   environment=self.environment, fixture_root=state / 'fixture')
+            with patch.object(benchmark.shutil, 'copytree', side_effect=KeyboardInterrupt):
+                with self.assertRaises(paired.TrialInterrupted) as caught:
+                    benchmark.run_case(self.case('failure'), 'lemon', str(self.cli),
+                                       'offline:model', args)
+            self.assertEqual(caught.exception.row['failure'], 'agent_failed')
+            self.assertEqual(caught.exception.row['cost_usd'], 0.125)
+            self.assertEqual(caught.exception.row['tokens'], 21)
+            cleanup['complete'] = True
+
     def test_success_and_failure_use_fresh_fixtures_and_independent_verification(self):
         success = self.run_case('success')
         failed = self.run_case('failure')
@@ -760,6 +1269,313 @@ class RealFixtureExecutionTests(unittest.TestCase):
                         'cached_input_tokens', 'output_tokens', 'tool_errors']:
             self.assertIsNone(row[counter], counter)
         self.assertGreaterEqual(row['wall_seconds'], 0)
+
+    def test_paired_fixture_survives_case_until_verified_runtime_teardown(self):
+        with assertion_safe_trial_state(self) as (state, cleanup):
+            args = SimpleNamespace(timeout=2, failure_dir=None, environment=self.environment,
+                                   fixture_root=state / 'fixture')
+            row = benchmark.run_case(self.case('success'), 'lemon', str(self.cli),
+                                     'offline:model', args)
+            self.assertTrue(row['passed'])
+            self.assertEqual((args.fixture_root / 'prior-attempt.txt').read_text(), 'attempt-local')
+            cleanup['complete'] = True
+        self.assertFalse(state.exists())
+
+
+class TrialDisposalConsumerTests(unittest.TestCase):
+    """Real fixtures, private directories and reports; only runtime boot is local."""
+
+    def consume(self, fault=None):
+        with tempfile.TemporaryDirectory(prefix='lemon-disposal-consumer-') as directory:
+            root = Path(directory)
+            trial_parent = root / 'trials'
+            trial_parent.mkdir(mode=0o700)
+            disposal_probe = trial_parent / 'empty-disposal-probe'
+            disposal_probe.mkdir(mode=0o700)
+            source = root / 'apps' / 'lemon_evals' / 'priv' / 'coding_benchmark_paired.py'
+            source.parent.mkdir(parents=True)
+            source.write_text('offline consumer source\n')
+            beam = root / '_build' / 'dev' / 'lib' / 'offline' / 'ebin' / 'offline.beam'
+            beam.parent.mkdir(parents=True)
+            beam.write_bytes(b'offline consumer build identity')
+            subprocess.run(['git', 'init', '-q', str(root)], check=True)
+            subprocess.run(['git', 'add', '.'], cwd=root, check=True)
+            subprocess.run(['git', '-c', 'user.name=Offline Consumer',
+                            '-c', 'user.email=offline@example.invalid',
+                            'commit', '-qm', 'offline fixture'], cwd=root, check=True)
+            config = root / 'base.toml'
+            config.write_text(ConfigurationIsolationTests.base)
+            cli = root / 'bin' / 'lemon'
+            cli.parent.mkdir()
+            cli.write_text('#!' + sys.executable + '\n' + textwrap.dedent('''\
+                import json, os, pathlib, sys
+                root = pathlib.Path(sys.argv[sys.argv.index('--cwd') + 1])
+                assert (root / 'fixture.txt').read_text() == 'fixture input'
+                cache = pathlib.Path(os.environ['HOME']) / 'go' / 'pkg' / 'mod'
+                cache.mkdir(parents=True)
+                (cache / 'module.txt').write_text('private module cache')
+                for item in [cache, cache.parent, cache.parent.parent]:
+                    item.chmod(0o500)
+                nested = root / 'readonly' / 'nested'
+                nested.mkdir(parents=True)
+                (nested / 'result').write_text('private fixture output')
+                nested.chmod(0o100 if sys.platform == 'darwin' else 0o000)
+                nested.parent.chmod(0o500)
+                print(json.dumps({
+                    'ok': False, 'answer': 'verified answer', 'run_id': 'offline-run',
+                    'usage': {'inputTokens': 11, 'cacheReadTokens': 7,
+                              'outputTokens': 3, 'totalTokens': 21, 'costUsd': 0.125},
+                    'metrics': {'turns': 1, 'tool_errors': 1},
+                }))
+            '''))
+            cli.chmod(0o700)
+            runtime_code = textwrap.dedent('''\
+                import http.server, json, os, pathlib, threading, time
+                state = pathlib.Path(os.environ['LEMON_EVAL_STATE'])
+                class Health(http.server.BaseHTTPRequestHandler):
+                    def do_GET(self):
+                        self.send_response(200)
+                        self.end_headers()
+                        self.wfile.write(b'{"ok": true}')
+                    def log_message(self, *args):
+                        pass
+                server = http.server.HTTPServer(
+                    ('127.0.0.1', int(os.environ['LEMON_CONTROL_PLANE_PORT'])), Health)
+                threading.Thread(target=server.serve_forever, daemon=True).start()
+                profile = os.environ['LEMON_TOOL_DISCLOSURE_PROFILE']
+                key = {'run_id': 'offline-run', 'session_id': 'offline-session',
+                       'request_index': 1}
+                events = [
+                    dict(key, event='payload'),
+                    dict(key, event='usage', provider_usage={
+                        'input_tokens': 11, 'output_tokens': 3, 'cache_read_tokens': 7}),
+                    {'event': 'disclosure_applied', 'profile': profile,
+                     'diagnostic_events_version': 1},
+                ]
+                pathlib.Path(os.environ['LEMON_EVAL_PROFILE']).write_text(
+                    ''.join(json.dumps(event) + '\\n' for event in events))
+                pathlib.Path(os.environ['LEMON_EVAL_METADATA']).write_text(
+                    json.dumps({'elixir': 'offline', 'otp': 'offline'}))
+                while True:
+                    if (state / 'flush.request').exists():
+                        (state / 'flush.done').write_text('ok')
+                    time.sleep(0.01)
+            ''')
+            args = SimpleNamespace(
+                lemon=str(cli), model='offline:model', compare_omp=False,
+                config=str(config), timeout=10, run_timeout=60, repetitions=1,
+                seed=17, profile_python=sys.executable, live=False,
+                output=str(root / '.git' / 'consumer-report.json'), plan=None, approve_plan_digest=None,
+                failure_dir=None,
+            )
+            case = {'name': 'offline_fixture', 'prompt': 'offline attempt',
+                    'files': {'fixture.txt': 'fixture input'},
+                    'verify': "import os\nassert os.environ['BENCHMARK_ANSWER'] == 'verified answer'\n"}
+            real_execute_trial = paired.execute_trial
+            real_mkdtemp = tempfile.mkdtemp
+            states, calls, retained_until_cleanup = [], [], []
+            disposal_refusals = []
+
+            def execute_trial(*arguments, **kwargs):
+                return real_execute_trial(
+                    *arguments, **kwargs, runtime_argv=[sys.executable, '-c', runtime_code])
+
+            def new_trial(*arguments, **kwargs):
+                if kwargs.get('prefix') == 'lemon-paired-runtime-':
+                    kwargs['dir'] = trial_parent
+                return real_mkdtemp(*arguments, **kwargs)
+
+            def stop_runtime(process, **kwargs):
+                state = Path(kwargs['environment']['LEMON_EVAL_STATE'])
+                retained_until_cleanup.append((state / 'fixture' / 'fixture.txt').exists())
+                paired.terminate_runtime_group(process)
+                if fault == 'cleanup_exception':
+                    raise RuntimeError('private unexpected cleanup error')
+                return fault != 'cleanup_false'  # Local adapter has no native admission/ledger.
+
+            def run_case(case, agent, executable, model, attempt_args):
+                calls.append(attempt_args.trial_id)
+                state = attempt_args.fixture_root.parent
+                states.append(state)
+                # Keep independent evidence to check retention, not a forged witness.
+                (state / 'processes.dets').write_bytes(b'private ownership evidence')
+                row = benchmark.run_case(case, agent, executable, model, attempt_args)
+                if fault == 'parent_permissions':
+                    trial_parent.chmod(0o500)
+                    try:
+                        disposal_probe.rmdir()
+                    except PermissionError:
+                        disposal_refusals.append(True)
+                    else:
+                        raise AssertionError('read-only trial parent unexpectedly allowed deletion')
+                elif fault == 'metadata':
+                    (state / 'runtime.json').write_text('invalid private metadata')
+                return row
+
+            try:
+                with patch.object(paired, '__file__', str(source)), \
+                        patch.object(paired, 'execute_trial', side_effect=execute_trial), \
+                        patch.object(paired.tempfile, 'mkdtemp', side_effect=new_trial), \
+                        patch.object(paired, 'terminate', side_effect=stop_runtime), \
+                        patch.dict(os.environ, {'BENCHMARK_PROVIDER_API_KEY': 'offline-only'}):
+                    self.assertEqual(paired.run_paired(args, [case], run_case), 0)
+                    plan = json.loads(Path(args.output).read_text())['plan']
+                    plan.update(approved=True, max_spend_usd=1,
+                                per_attempt_spend_ceiling_usd=0.25,
+                                provider_budget_enforced=True,
+                                credential_env=['BENCHMARK_PROVIDER_API_KEY'])
+                    args.plan = str(root / '.git' / 'consumer-approved.json')
+                    Path(args.plan).write_text(json.dumps(plan))
+                    args.approve_plan_digest = canonical_digest(plan)
+                    args.live = True
+                    if fault == 'disposal_exception':
+                        with patch.object(paired, 'dispose_trial_state',
+                                          side_effect=RuntimeError('private disposal error')):
+                            status = paired.run_paired(args, [case], run_case)
+                    elif fault == 'profile_exception':
+                        with patch.object(paired, 'collect_profile',
+                                          side_effect=RuntimeError('private profile error')):
+                            status = paired.run_paired(args, [case], run_case)
+                    elif fault == 'report_interrupt':
+                        write_report = paired.write_report
+                        interrupted = []
+
+                        def interrupt_once(path, report):
+                            if report.get('results') and not interrupted:
+                                interrupted.append(True)
+                                raise KeyboardInterrupt
+                            return write_report(path, report)
+
+                        with patch.object(paired, 'write_report', side_effect=interrupt_once):
+                            status = paired.run_paired(args, [case], run_case)
+                    else:
+                        status = paired.run_paired(args, [case], run_case)
+                report_text = Path(args.output).read_text()
+                return {
+                    'status': status, 'report': json.loads(report_text), 'calls': calls,
+                    'exists': [state.exists() for state in states],
+                    'private': [state.stat().st_mode & 0o777 == 0o700
+                                for state in states if state.exists()],
+                    'evidence': [(state / 'processes.dets').read_bytes().decode()
+                                 for state in states if state.exists()],
+                    'retained_until_cleanup': retained_until_cleanup,
+                    'os_disposal_refused': bool(disposal_refusals),
+                    'redacted': all(secret not in report_text for secret in
+                                    [directory, 'private disposal error',
+                                     'private unexpected cleanup error', 'private profile error']),
+                }
+            finally:
+                trial_parent.chmod(0o700)
+                for state in states:
+                    if state.exists():
+                        paired.dispose_trial_state(state)
+
+    def assert_retained_attempt(self, result, reason, process_cleanup):
+        report = result['report']
+        self.assertEqual(result['status'], 1)
+        self.assertEqual(len(result['calls']), 1)
+        self.assertEqual(report['stop_reason'], reason)
+        self.assertEqual(len(report['results']), 2)
+        attempted, skipped = report['results']
+        self.assertTrue(attempted['attempted'])
+        self.assertEqual(attempted['failure'], 'agent_failed')
+        self.assertEqual(attempted['cost_usd'], 0.125)
+        self.assertEqual(attempted['turns'], 1)
+        self.assertEqual(attempted['tokens'], 21)
+        self.assertEqual(attempted['uncached_input_tokens'], 11)
+        self.assertEqual(attempted['cached_input_tokens'], 7)
+        self.assertIsNone(attempted['cache_write_tokens'])
+        self.assertEqual(attempted['output_tokens'], 3)
+        self.assertEqual(attempted['tool_errors'], 1)
+        self.assertEqual(attempted['cleanup_complete'], process_cleanup)
+        self.assertFalse(attempted['disposal_complete'])
+        self.assertEqual(attempted['finalization_failed'], reason == 'finalization_failed')
+        self.assertFalse(skipped['attempted'])
+        self.assertEqual(skipped['failure'], reason)
+        self.assertEqual(report['all_attempt_measured_spend_usd'], 0.125)
+        self.assertEqual(result['exists'], [True])
+        self.assertEqual(result['private'], [True])
+        self.assertEqual(result['evidence'], ['private ownership evidence'])
+        self.assertEqual(result['retained_until_cleanup'], [True])
+        self.assertTrue(result['redacted'])
+
+    def test_readonly_home_and_fixture_disposal_uses_real_consumer(self):
+        result = self.consume()
+        self.assertEqual(len(result['calls']), 2)
+        self.assertEqual(result['exists'], [False, False])
+        self.assertEqual(result['retained_until_cleanup'], [True, True])
+        self.assertIsNone(result['report']['stop_reason'])
+        self.assertEqual(result['report']['all_attempt_measured_spend_usd'], 0.25)
+        for row in result['report']['results']:
+            self.assertTrue(row['attempted'])
+            self.assertTrue(row['cleanup_complete'])
+            self.assertTrue(row['disposal_complete'])
+            self.assertFalse(row['finalization_failed'])
+            self.assertEqual(row['failure'], 'agent_failed')
+            self.assertEqual(row['cost_usd'], 0.125)
+            self.assertTrue(row['spend_complete'])
+        self.assertTrue(result['redacted'])
+
+    @unittest.skipUnless(hasattr(os, 'O_PATH'), 'requires the Linux descriptor contract')
+    def test_linux_consumer_does_not_require_nofollow_chmod_support(self):
+        real_chmod = os.chmod
+
+        def supported_chmod(path, mode, **kwargs):
+            if kwargs.get('follow_symlinks') is False:
+                raise NotImplementedError('platform does not support no-follow chmod')
+            return real_chmod(path, mode, **kwargs)
+
+        with patch.object(os, 'chmod', side_effect=supported_chmod):
+            self.test_readonly_home_and_fixture_disposal_uses_real_consumer()
+
+    def test_actual_disposal_failure_retains_paid_row_in_isolated_consumer(self):
+        # A private subprocess confines permission changes and drops root before
+        # creating its fixture, so this is a real OS refusal, not an rmtree mock.
+        script = textwrap.dedent('''\
+            import json, os
+            from test_coding_benchmark_paired import TrialDisposalConsumerTests
+            if os.geteuid() == 0:
+                os.setgroups([])
+                os.setgid(65534)
+                os.setuid(65534)
+            print(json.dumps(TrialDisposalConsumerTests().consume('parent_permissions')))
+        ''')
+        process = subprocess.run([sys.executable, '-c', script],
+                                 cwd=Path(__file__).parent, capture_output=True,
+                                 text=True, timeout=30)
+        self.assertEqual(process.returncode, 0, process.stderr)
+        result = json.loads(process.stdout)
+        self.assert_retained_attempt(result, 'disposal_unverified', True)
+        self.assertTrue(result['os_disposal_refused'])
+
+    def test_unexpected_disposal_exception_retains_paid_row(self):
+        self.assert_retained_attempt(self.consume('disposal_exception'),
+                                     'disposal_unverified', True)
+
+    def test_unexpected_cleanup_exception_retains_paid_row(self):
+        self.assert_retained_attempt(self.consume('cleanup_exception'),
+                                     'cleanup_unverified', False)
+
+    def test_unverified_cleanup_retains_paid_row(self):
+        self.assert_retained_attempt(self.consume('cleanup_false'), 'cleanup_unverified', False)
+
+    def test_metadata_exception_after_paid_row_does_not_replace_it(self):
+        self.assert_retained_attempt(self.consume('metadata'), 'finalization_failed', True)
+
+    def test_unexpected_profile_exception_retains_paid_row(self):
+        self.assert_retained_attempt(self.consume('profile_exception'),
+                                     'finalization_failed', True)
+
+    def test_direct_paired_report_interrupt_persists_paid_attempt_before_exit(self):
+        result = self.consume('report_interrupt')
+        self.assertEqual(result['status'], 130)
+        self.assertEqual(len(result['calls']), 1)
+        self.assertEqual(len(result['report']['results']), 1)
+        row = result['report']['results'][0]
+        self.assertEqual(row['cost_usd'], 0.125)
+        self.assertEqual(row['failure'], 'agent_failed')
+        self.assertTrue(row['finalization_failed'])
+        self.assertFalse(result['report']['complete'])
 
 
 if __name__ == '__main__':

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Opt-in production CLI benchmark. Only aggregate, code-authored data is retained."""
 import argparse
+from contextlib import nullcontext
 import json
 import os
 from pathlib import Path
@@ -13,7 +14,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from coding_benchmark_tasks import additional_tasks
 from coding_benchmark_campaign import CampaignError, DEFAULT_PROVIDERS, DEFAULT_VARIANTS, run_campaign
-from coding_benchmark_paired import number, run_paired
+from coding_benchmark_paired import TrialInterrupted, number, run_paired
 
 
 def task(name, prompt, files, verify):
@@ -107,7 +108,12 @@ def parse_omp(output):
 
 
 def run_case(case, agent, executable, model, args):
-    with tempfile.TemporaryDirectory(prefix='lemon-coding-bench-' + agent + '-') as tmp:
+    # Paired fixtures must survive until independent native groups are proven dead.
+    fixture_root = getattr(args, 'fixture_root', None)
+    if fixture_root is not None:
+        Path(fixture_root).mkdir(mode=0o700)
+    with (nullcontext(fixture_root) if fixture_root is not None else
+          tempfile.TemporaryDirectory(prefix='lemon-coding-bench-' + agent + '-')) as tmp:
         root = Path(tmp)
         deadline = getattr(args, 'attempt_deadline', None)
         environment = getattr(args, 'environment', None)
@@ -125,6 +131,7 @@ def run_case(case, agent, executable, model, args):
         else:
             argv = [executable, '-p', prompt, '--mode', 'json', '--model', model, '--cwd', str(root), '--no-session', '--no-title', '--auto-approve', '--max-time', str(args.timeout)]
         verifier_passed = tests_passed = None
+        interrupted = False
         try:
             for fixture_argv in [['git','init','-q'], ['git','add','.'], ['git','-c','user.name=Lemon Benchmark','-c','user.email=benchmark@example.invalid','commit','-qm','fixture']]:
                 command(fixture_argv, root, check=True, env=environment, deadline=deadline)
@@ -154,21 +161,31 @@ def run_case(case, agent, executable, model, args):
             failure = 'timeout'
         except (OSError, subprocess.CalledProcessError):
             failure = 'invocation_failed'
+        except BaseException:
+            if fixture_root is None:
+                raise
+            interrupted = True
+            failure = failure or 'finalization_failed'
         usage = result.get('usage') if isinstance(result.get('usage'), dict) else {}
         metrics = result.get('metrics') if isinstance(result.get('metrics'), dict) else {}
         tool_errors = number(metrics.get('tool_errors', usage.get('tool_errors')))
         if case['name'] == 'tool_failure_recovery' and not failure:
             if not isinstance(tool_errors, int) or tool_errors < 1: failure = 'recovery_not_observed'
-        if failure and args.failure_dir:
-            bundle = Path(args.failure_dir) / agent / getattr(args, 'trial_id', case['name']).replace(':', '-')
-            bundle.mkdir(parents=True, mode=0o700, exist_ok=False)
-            shutil.copytree(root, bundle / 'repo')
-            (bundle / 'verify.py').write_text(case['verify'])
-            for label, completed in [('cli', invocation), ('verifier', verifier), ('tests', tests)]:
-                if completed is not None:
-                    (bundle / (label + '.stdout')).write_text(completed.stdout)
-                    (bundle / (label + '.stderr')).write_text(completed.stderr)
-        return {'task': case['name'], 'agent': agent, 'passed': failure is None, 'failure': failure,
+        if failure and args.failure_dir and not interrupted:
+            try:
+                bundle = Path(args.failure_dir) / agent / getattr(args, 'trial_id', case['name']).replace(':', '-')
+                bundle.mkdir(parents=True, mode=0o700, exist_ok=False)
+                shutil.copytree(root, bundle / 'repo')
+                (bundle / 'verify.py').write_text(case['verify'])
+                for label, completed in [('cli', invocation), ('verifier', verifier), ('tests', tests)]:
+                    if completed is not None:
+                        (bundle / (label + '.stdout')).write_text(completed.stdout)
+                        (bundle / (label + '.stderr')).write_text(completed.stderr)
+            except BaseException:
+                if fixture_root is None:
+                    raise
+                interrupted = True
+        row = {'task': case['name'], 'agent': agent, 'passed': failure is None, 'failure': failure,
                 'verifier_passed': verifier_passed, 'tests_passed': tests_passed,
                 'turns': number(metrics.get('turns', usage.get('turns'))), 'tokens': number(usage.get('totalTokens')),
                 'uncached_input_tokens': number(usage.get('inputTokens')), 'cached_input_tokens': number(usage.get('cacheReadTokens')),
@@ -179,6 +196,9 @@ def run_case(case, agent, executable, model, args):
                 'incorrect_tool_calls': number(metrics.get('incorrect_tool_calls')),
                 'tool_error_recoveries': number(metrics.get('tool_error_recoveries')),
                 'tool_errors': tool_errors, 'run_id': result.get('run_id')}
+        if interrupted:
+            raise TrialInterrupted(row)
+        return row
 
 
 def main():

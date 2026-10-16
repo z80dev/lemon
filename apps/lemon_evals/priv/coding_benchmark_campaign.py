@@ -141,6 +141,39 @@ def append_trial(path, row):
         os.fsync(handle.fileno())
 
 
+def persist_trial(path, row, provider, basis, scheduled_ids):
+    """Preserve an attempted row before propagating post-trial failures or interrupts.
+
+    An interrupted append may have written nothing, a partial line, or the entire row. Reconcile
+    the durable log before completing it, rather than blindly appending a duplicate paid attempt.
+    """
+    error = None
+    try:
+        row['provider'] = provider
+        row['equivalent_spend_usd'], row['equivalent_spend_status'] = pricing.equivalent_spend(row, basis)
+        row = paired.sanitize_row(row)
+    except BaseException as failure:
+        error = failure
+        row['passed'], row['spend_complete'], row['finalization_failed'] = False, False, True
+        row['failure'] = row.get('failure') or 'finalization_failed'
+        row['equivalent_spend_usd'], row['equivalent_spend_status'] = None, 'missing_counters'
+        row = paired.sanitize_row(row)
+    try:
+        append_trial(path, row)
+    except BaseException as failure:
+        if error is None or isinstance(failure, KeyboardInterrupt):
+            error = failure
+        recorded = read_trials(path, scheduled_ids)
+        if not any(saved['trial_id'] == row['trial_id'] for saved in recorded):
+            append_trial(path, row)
+        else:
+            # The full line may have reached the file before flush/fsync was interrupted.
+            with open(path, 'a') as handle:
+                handle.flush()
+                os.fsync(handle.fileno())
+    return row, error
+
+
 def counter_summary(rows, key, convert=paired.number):
     values = [convert(row.get(key)) for row in rows]
     observed = [value for value in values if value is not None]
@@ -342,7 +375,12 @@ def run_campaign(args, cases, run_case, root=None, runtime_argv=None):
         paired.write_report(manifest, {'schema_version': SCHEMA_VERSION, 'suite': 'disclosure_campaign_manifest',
                                        'experiment_id': experiment_id, 'experiment': experiment})
     rows = read_trials(trials, {entry['trial_id'] for entry in scheduled})
+    scheduled_ids = {entry['trial_id'] for entry in scheduled}
     done = {row['trial_id'] for row in rows}
+    # A prior unsafe teardown is terminal even when the original trial failure
+    # was different. Resume must not silently skip it and admit more paid work.
+    if any(paired.teardown_failure(row) for row in rows):
+        raise CampaignError('campaign stopped on unverified cleanup, disposal or finalization; retained evidence requires independent recovery')
     cases_by_name = {case['name']: case for case in cases}
     models = dict(providers)
     if done:
@@ -356,19 +394,38 @@ def run_campaign(args, cases, run_case, root=None, runtime_argv=None):
             ports = paired.runtime_ports()
             if port is not None:
                 ports[0] = port
-            row = paired.execute_trial(root, entry, cases_by_name[entry['task']], configurations[entry['variant']],
-                                       models[entry['provider']], credentials[entry['provider']], ports, args, run_case,
-                                       experiment['fixture_digests'][entry['task']], runtime_argv=runtime_argv)
-            row['provider'] = entry['provider']
-            row['equivalent_spend_usd'], row['equivalent_spend_status'] = pricing.equivalent_spend(row, bases[entry['provider']])
-            row = paired.sanitize_row(row)
-            append_trial(trials, row)
+            interrupted = False
+            row = None
+            persistence_error = None
+            try:
+                try:
+                    row = paired.execute_trial(root, entry, cases_by_name[entry['task']], configurations[entry['variant']],
+                                               models[entry['provider']], credentials[entry['provider']], ports, args, run_case,
+                                               experiment['fixture_digests'][entry['task']], runtime_argv=runtime_argv)
+                except paired.TrialInterrupted as error:
+                    row = error.row
+                    interrupted = True
+            finally:
+                # Once execute_trial hands back a row, no intervening exception may discard it.
+                if row is not None:
+                    row, persistence_error = persist_trial(trials, row, entry['provider'], bases[entry['provider']],
+                                                           scheduled_ids)
             rows.append(row)
             outcome = 'PASS' if row['passed'] else 'FAIL (' + str(row['failure']) + ')'
             print(f'[{len(rows)}/{len(scheduled)}] {entry["trial_id"]}: {outcome}', flush=True)
             write_outputs(out, build_report(experiment, experiment_id, command, providers, variants, scheduled, rows, bases,
                                             args.seed, len(rows) == len(scheduled)))
+            if interrupted:
+                raise KeyboardInterrupt
+            if persistence_error is not None:
+                raise persistence_error
+            if paired.teardown_failure(row):
+                return 1
     except KeyboardInterrupt:
+        # An interrupt can arrive after the append but before the in-memory list/report update.
+        rows = read_trials(trials, scheduled_ids)
+        write_outputs(out, build_report(experiment, experiment_id, command, providers, variants, scheduled, rows, bases,
+                                        args.seed, len(rows) == len(scheduled)))
         print('Interrupted; re-run the same command with --resume to continue.', file=sys.stderr, flush=True)
         return 130
     write_outputs(out, build_report(experiment, experiment_id, command, providers, variants, scheduled, rows, bases,
