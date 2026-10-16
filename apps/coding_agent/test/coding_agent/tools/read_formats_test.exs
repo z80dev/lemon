@@ -328,7 +328,7 @@ defmodule CodingAgent.Tools.ReadFormatsTest do
   test "immediate commands survive delayed group witnessing" do
     capture = fn pid ->
       Process.sleep(100)
-      CodingAgent.BashExecutor.capture_workload_group(pid)
+      LemonCore.ProcessGroup.capture_workload_group(pid)
     end
 
     for _ <- 1..10 do
@@ -351,7 +351,7 @@ defmodule CodingAgent.Tools.ReadFormatsTest do
       signal = AbortSignal.new()
 
       capture = fn pid ->
-        group = CodingAgent.BashExecutor.capture_workload_group(pid)
+        group = LemonCore.ProcessGroup.capture_workload_group(pid)
         send(parent, {:witnessed, self()})
 
         receive do

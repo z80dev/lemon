@@ -220,7 +220,7 @@ defmodule CodingAgent.Tools.ReadFormatCommand do
   end
 
   defp stop_backend(port, group, root_exited) do
-    if group, do: BashExecutor.signal_workload_group(group, :sigkill, root_exited)
+    if group, do: LemonCore.ProcessGroup.signal_workload_group(group, :sigkill, root_exited)
     close(port)
   end
 
@@ -258,7 +258,7 @@ defmodule CodingAgent.Tools.ReadFormatCommand do
   # before the process-group witness is checked and surviving children stopped.
   # On Unix an unwitnessed backend is killed through its still-open port and refused.
   defp guard_backend(port, opts) do
-    capture = Keyword.get(opts, :capture_group, &BashExecutor.capture_workload_group/1)
+    capture = Keyword.get(opts, :capture_group, &LemonCore.ProcessGroup.capture_workload_group/1)
 
     with {:os_pid, os_pid} <- Port.info(port, :os_pid),
          {:ok, group} <- capture.(os_pid) do
