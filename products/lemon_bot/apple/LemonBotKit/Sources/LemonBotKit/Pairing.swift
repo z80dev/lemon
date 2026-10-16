@@ -200,6 +200,7 @@ extension LemonBotStore {
     }
     public func createPairing() async throws {
         guard connectionState == "online" else { throw ClientError.offline }
+        try await requireOwnerPairingPreflight()
         let result: PairingIssued = try await mutate("POST", "/pairings", body: [:])
         try installPairingIssuance(result)
     }
@@ -207,6 +208,7 @@ extension LemonBotStore {
     public func reconcilePairingIssuance() async throws {
         guard connectionState == "online", let account else { throw ClientError.offline }
         guard let intent = pendingIntents.first(where: { $0.method == "POST" && $0.path == "/pairings" }), intent.state != "in_flight" else { throw PairingClientError.notReady }
+        try await requireOwnerPairingPreflight()
         let current = generation
         do {
             let result: PairingIssued = try await activeTransport().mutate("POST", "/pairings", body: ["clientNonce": .string(intent.clientNonce)])
@@ -223,6 +225,7 @@ extension LemonBotStore {
         guard let account else { throw ClientError.signedOut }
         let link = try PairingLink.parse(result.pairUrl)
         guard result.pairing.ownerUserId == account.userID, result.pairing.workspaceId == account.workspaceID,
+              link.instanceId == account.instanceID, link.origin == ownerPairingPreflight?.origin,
               link.workspaceId == account.workspaceID, link.backendURL != nil,
               let endpoint = URL(string: result.pairing.backendUrl),
               try PairingLink.exactOrigin(endpoint) == link.origin,
@@ -232,14 +235,26 @@ extension LemonBotStore {
         upsert(&pairings, result.pairing, id: { $0.id }, revision: { $0.revision })
     }
     public func refreshPairings() async throws {
+        // The list contains only pending requests. Keep observed IDs (including terminal
+        // receipts) so approval cannot disappear before the phone consumes it.
+        let observed = pairings
         let values: [Pairing] = try await read("/pairings")
         guard let account, values.allSatisfy({ $0.ownerUserId == account.userID && $0.workspaceId == account.workspaceID }) else { throw PairingClientError.wrongCluster }
-        pairings = values
+        for value in values { upsert(&pairings, value, id: { $0.id }, revision: { $0.revision }) }
+        let tracked = Dictionary((observed + pairings).map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        for value in tracked.values where OwnerPairingProgress.shouldObserve([value]) {
+            let status: Pairing = try await read("/pairings/\(HTTPTransport.pathID(value.id))")
+            guard status.id == value.id, status.ownerUserId == account.userID,
+                  status.workspaceId == account.workspaceID, status.expiresAtMs == value.expiresAtMs else { throw PairingClientError.wrongCluster }
+            upsert(&pairings, status, id: { $0.id }, revision: { $0.revision })
+        }
         for intent in pendingIntents where intent.path.hasPrefix("/pairings/") {
             let parts = intent.path.split(separator: "/")
             guard parts.count == 3, ["approve", "deny"].contains(String(parts[2])) else { continue }
             let id = String(parts[1]).removingPercentEncoding ?? String(parts[1])
             let value: Pairing = try await read("/pairings/\(HTTPTransport.pathID(id))")
+            guard value.id == id, value.ownerUserId == account.userID,
+                  value.workspaceId == account.workspaceID else { throw PairingClientError.wrongCluster }
             upsert(&pairings, value, id: { $0.id }, revision: { $0.revision })
             if value.status == "expired" || (parts[2] == "approve" && ["approved", "consumed"].contains(value.status)) || (parts[2] == "deny" && value.status == "denied") { finishIntent((account.id, intent.clientNonce)) }
         }
@@ -249,12 +264,14 @@ extension LemonBotStore {
         guard connectionState == "online", pairing.status == "pending_approval", let code = pairing.verificationCode,
               pairing.ownerUserId == account?.userID, pairing.workspaceId == account?.workspaceID,
               pairing.expiresAtMs > Date().timeIntervalSince1970 * 1000 else { throw PairingClientError.notReady }
+        try await requireOwnerPairingPreflight()
         let value: Pairing = try await mutate("POST", "/pairings/\(HTTPTransport.pathID(pairing.id))/approve", body: ["revision": .number(Double(pairing.revision)), "verificationCode": .string(code)])
         upsert(&pairings, value, id: { $0.id }, revision: { $0.revision }); pairingURL = nil
     }
     public func denyPairing(_ pairing: Pairing) async throws {
         guard connectionState == "online", ["waiting", "pending_approval"].contains(pairing.status),
               pairing.ownerUserId == account?.userID, pairing.workspaceId == account?.workspaceID else { throw PairingClientError.notReady }
+        try await requireOwnerPairingPreflight()
         let value: Pairing = try await mutate("POST", "/pairings/\(HTTPTransport.pathID(pairing.id))/deny", body: ["revision": .number(Double(pairing.revision))])
         upsert(&pairings, value, id: { $0.id }, revision: { $0.revision }); pairingURL = nil
     }

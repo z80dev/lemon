@@ -49,6 +49,7 @@ import Observation
     public internal(set) var pairingError: String?
     public internal(set) var pairings: [Pairing] = []
     public internal(set) var pairingURL: String?
+    public internal(set) var ownerPairingPreflight: BotPreflightResult?
 
     @ObservationIgnored let keychain: any AccountCredentialStore
     @ObservationIgnored let persistence: ClientPersistence
@@ -306,6 +307,7 @@ import Observation
         messageReconciliationTask?.cancel(); messageReconciliationTask = nil; messageReconciliationRequested = false
         reconciledMessageReceipts = [:]
         pairings = []; pairingURL = nil; pairingQRID = nil
+        ownerPairingPreflight = nil
         typingByConversation = [:]
     }
     func persistCache() throws {

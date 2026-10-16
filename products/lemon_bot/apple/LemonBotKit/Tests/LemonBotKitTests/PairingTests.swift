@@ -231,16 +231,21 @@ private final class PairingCredentialStore: AccountCredentialStore {
         let store = store(credentials, persistence)
         let saved = try store.saveAuthenticatedAccount(auth, baseURL: URL(string: "http://127.0.0.1:4080")!, deviceID: nil, installationID: nil)
         store.account = saved; store.transport = try HTTPTransport(baseURL: saved.baseURL, token: saved.token, session: TestHTTPProtocol.session()); store.connectionState = "online"
-        let pairing = Pairing(id: "pairing_1", revision: 1, createdAtMs: 1, updatedAtMs: 1, workspaceId: snapshot.workspace.id, ownerUserId: snapshot.user.id, clusterName: "My desktop", backendUrl: origin, status: "waiting", expiresAtMs: deadline)
-        let issued = PairingIssued(pairing: pairing, pairUrl: link(workspace: snapshot.workspace.id))
+        let advertised = BotPreflightFixtures.origin
+        let pairing = Pairing(id: "pairing_1", revision: 1, createdAtMs: 1, updatedAtMs: 1, workspaceId: snapshot.workspace.id, ownerUserId: snapshot.user.id, clusterName: "My desktop", backendUrl: advertised, status: "waiting", expiresAtMs: deadline)
+        let issued = PairingIssued(pairing: pairing, pairUrl: link(backend: advertised, workspace: snapshot.workspace.id))
         var bodies: [JSONObject] = []
         TestHTTPProtocol.handler = { request in
+            if request.httpMethod == "GET" {
+                return (200, ["Content-Type": "application/json"], try BotPreflightFixtures.descriptor(workspaceID: request.url?.path == "/v1/identity" ? snapshot.workspace.id : nil))
+            }
             XCTAssertEqual(request.url?.host, "127.0.0.1")
             XCTAssertEqual(request.url?.path, "/v1/pairings")
             bodies.append(try JSONDecoder().decode(JSONObject.self, from: TestHTTPProtocol.body(request)))
             if bodies.count == 1 { throw URLError(.timedOut) }
             return (200, [:], try JSONEncoder().encode(issued))
         }
+        try await store.verifyOwnerPairingOrigin()
         do { try await store.createPairing(); XCTFail("Lost QR response must remain fenced") } catch ClientError.outcomeUnknown {}
         XCTAssertEqual(store.pendingIntents.count, 1)
         XCTAssertNil(store.pairingURL)
@@ -248,6 +253,6 @@ private final class PairingCredentialStore: AccountCredentialStore {
         XCTAssertEqual(bodies.count, 2); XCTAssertEqual(bodies[0], bodies[1])
         XCTAssertTrue(store.pendingIntents.isEmpty)
         XCTAssertEqual(store.pairingURL, issued.pairUrl)
-        XCTAssertEqual(store.pairings.first?.backendUrl, origin)
+        XCTAssertEqual(store.pairings.first?.backendUrl, advertised)
     }
 }

@@ -14,9 +14,12 @@ public struct StoredAccount: Codable, Hashable, Identifiable {
     public var sessionID: ID?
     public var sessionExpiresAtMs: TimestampMs?
     public var installationID: String?
-    public init(id: String, baseURL: URL, email: String, displayName: String, token: String, userID: String, workspaceID: String, deviceID: ID? = nil, sessionID: ID? = nil, sessionExpiresAtMs: TimestampMs? = nil, installationID: String? = nil) {
+    /// Pinned only after an authenticated identity check; absent in accounts saved before preflight.
+    public var instanceID: String?
+    public init(id: String, baseURL: URL, email: String, displayName: String, token: String, userID: String, workspaceID: String, deviceID: ID? = nil, sessionID: ID? = nil, sessionExpiresAtMs: TimestampMs? = nil, installationID: String? = nil, instanceID: String? = nil) {
         self.id = id; self.baseURL = baseURL; self.email = email; self.displayName = displayName; self.token = token; self.userID = userID; self.workspaceID = workspaceID
         self.deviceID = deviceID; self.sessionID = sessionID; self.sessionExpiresAtMs = sessionExpiresAtMs; self.installationID = installationID
+        self.instanceID = instanceID
     }
 }
 
