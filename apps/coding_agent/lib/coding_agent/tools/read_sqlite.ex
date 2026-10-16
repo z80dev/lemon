@@ -242,13 +242,20 @@ defmodule CodingAgent.Tools.ReadSqlite do
     end
   end
 
+  # The key arrives as text. Untyped (BLOB-affinity) key columns never equate text
+  # '1' with integer 1, so also offer the number whose canonical text is exactly
+  # the key ('1', '2.5'; not '001' or '1.0'). Typed columns behave as with `=`;
+  # both IN operands are constants, so the key index is still used.
   defp render(conn, {:row, table, key}) do
     with {:ok, _} <- table_sql(conn, table),
          {:ok, lookup} <- row_lookup(conn, table),
          {:ok, columns, rows, _} <-
-           query(conn, "SELECT * FROM #{ident(table)} WHERE #{lookup} = ? LIMIT 1", [
-             key
-           ]) do
+           query(
+             conn,
+             "SELECT * FROM #{ident(table)} WHERE #{lookup} IN (?1, CASE WHEN " <>
+               "CAST(CAST(?1 AS NUMERIC) AS TEXT) = ?1 THEN CAST(?1 AS NUMERIC) END) LIMIT 1",
+             [key]
+           ) do
       case rows do
         [row] ->
           {:ok,

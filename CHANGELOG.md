@@ -140,6 +140,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   domain under CC0 1.0 (the rest of Lemon stays MIT). The generator can export a
   reproducible Codex pet ZIP with the license included, ready for pet galleries.
 
+- `read` of SQLite `file.db:table:key` now matches canonical numeric keys in
+  untyped primary-key columns (`1`, `2.5`) without coercing noncanonical text
+  keys (`001`, `1.0`); typed columns are unchanged.
+
 - Inspect per-run lifecycle, tool outcomes, child tasks and usage with
   `lemon runs show <runId>` and TUI `/runs <runId>`, backed by redacted completion events.
 
