@@ -1,6 +1,8 @@
 defmodule CodingAgent.Tools.WebFetchTest do
   use ExUnit.Case, async: false
 
+  import CodingAgent.AsyncHelpers
+
   alias CodingAgent.Tools.{ReadPdf, WebFetch}
   alias LemonAgent.AbortSignal
 
@@ -544,6 +546,96 @@ defmodule CodingAgent.Tools.WebFetchTest do
     refute payload["text"] =~ ~s(\n  "hello")
   end
 
+  for outcome <- [:success, :failure] do
+    @tag provider_outcome: outcome
+    test "aborted callers cannot publish or fall back before the next poll (#{outcome})",
+         %{provider_outcome: outcome} do
+      parent = self()
+      tool = blocking_fetch_tool(parent)
+      args = %{"url" => "https://8.8.8.8/abort-before-poll-#{outcome}"}
+      signals = [AbortSignal.new(), AbortSignal.new()]
+      on_exit(fn -> Enum.each(signals, &AbortSignal.clear/1) end)
+      first = Task.async(fn -> tool.execute.("first", args, hd(signals), nil) end)
+      assert_receive {:blocked_http, upstream}, 5_000
+      second = Task.async(fn -> tool.execute.("second", args, List.last(signals), nil) end)
+      flight = await_fetch_callers([first.pid, second.pid])
+      flight_ref = Process.monitor(flight.task.pid)
+
+      abort_fetch_before_poll(signals)
+      refute AbortSignal.aborted?(flight.signal)
+      send(upstream, if(outcome == :success, do: :complete_http, else: :fail_http))
+
+      assert Task.await(first, 5_000) == {:error, "Operation aborted"}
+      assert Task.await(second, 5_000) == {:error, "Operation aborted"}
+      assert_receive {:DOWN, ^flight_ref, :process, _, _}, 5_000
+      refute_received :fallback_started
+
+      # A fresh provider invocation, rather than a cache hit, witnesses that the
+      # completed but unauthorized response was never published.
+      replacement = Task.async(fn -> tool.execute.("replacement", args, nil, nil) end)
+      assert_receive {:blocked_http, replacement_upstream}, 5_000
+      send(replacement_upstream, :complete_http)
+      payload = replacement |> Task.await(5_000) |> decode_payload()
+      refute payload["cached"]
+      assert payload["text"] =~ "replacement fetched"
+      refute_received :fallback_started
+    end
+  end
+
+  test "aborting every caller kills blocked HTTP work without fallback or cached results" do
+    parent = self()
+    tool = blocking_fetch_tool(parent)
+    args = %{"url" => "https://8.8.8.8/abort-all"}
+    signals = [AbortSignal.new(), AbortSignal.new()]
+    first = Task.async(fn -> tool.execute.("first", args, hd(signals), nil) end)
+    assert_receive {:blocked_http, upstream}, 5_000
+    upstream_ref = Process.monitor(upstream)
+    second = Task.async(fn -> tool.execute.("second", args, List.last(signals), nil) end)
+    flight = await_fetch_callers([first.pid, second.pid])
+    flight_ref = Process.monitor(flight.task.pid)
+
+    Enum.each(signals, &AbortSignal.abort/1)
+    assert Task.await(first, 5_000) == {:error, "Operation aborted"}
+    assert Task.await(second, 5_000) == {:error, "Operation aborted"}
+    assert_receive {:DOWN, ^upstream_ref, :process, ^upstream, _}, 5_000
+    assert_receive {:DOWN, ^flight_ref, :process, _, _}, 5_000
+    refute_received :fallback_started
+
+    replacement = Task.async(fn -> tool.execute.("replacement", args, nil, nil) end)
+    assert_receive {:blocked_http, replacement_upstream}, 5_000
+    refute replacement_upstream == upstream
+    send(replacement_upstream, :complete_http)
+    payload = replacement |> Task.await(5_000) |> decode_payload()
+    assert payload["text"] =~ "replacement fetched"
+    refute payload["cached"]
+    refute_received :fallback_started
+  end
+
+  test "aborting one caller preserves blocked HTTP work for the remaining caller" do
+    parent = self()
+    tool = blocking_fetch_tool(parent)
+    args = %{"url" => "https://8.8.8.8/abort-one"}
+    signal = AbortSignal.new()
+    first = Task.async(fn -> tool.execute.("first", args, signal, nil) end)
+    assert_receive {:blocked_http, upstream}, 5_000
+    second = Task.async(fn -> tool.execute.("second", args, nil, nil) end)
+    await_fetch_callers([first.pid, second.pid])
+
+    AbortSignal.abort(signal)
+    assert Task.await(first, 5_000) == {:error, "Operation aborted"}
+    assert Process.alive?(upstream)
+    send(upstream, :complete_http)
+    payload = second |> Task.await(5_000) |> decode_payload()
+    assert payload["text"] =~ "replacement fetched"
+    refute payload["cached"]
+    refute_received {:blocked_http, _}
+    refute_received :fallback_started
+
+    cached = tool.execute.("cached", args, nil, nil) |> decode_payload()
+    assert cached["cached"]
+    refute_received {:blocked_http, _}
+  end
+
   test "handles already-aborted signal" do
     signal = AbortSignal.new()
     AbortSignal.abort(signal)
@@ -751,6 +843,62 @@ defmodule CodingAgent.Tools.WebFetchTest do
   end
 
   @tag :tmp_dir
+  test "aborting a fetched PDF extraction releases backend descendants and staged PDF", %{
+    tmp_dir: tmp_dir
+  } do
+    cwd = Path.join(tmp_dir, "project")
+    File.mkdir_p!(cwd)
+    operator_bin = external_toolchain()
+    pid_file = Path.join(tmp_dir, "backend.pid")
+    child_file = Path.join(tmp_dir, "backend-child.pid")
+    path_file = Path.join(tmp_dir, "document.path")
+    executable = Path.join(operator_bin, "pdftotext")
+
+    File.write!(executable, """
+    #!/bin/sh
+    for arg do
+      case "$arg" in *.pdf) printf '%s' "$arg" > "#{path_file}";; esac
+    done
+    (/bin/sleep 60 </dev/null >/dev/null 2>&1 & echo $! > "#{child_file}")
+    echo $$ > "#{pid_file}"
+    exec /bin/sleep 60
+    """)
+
+    File.chmod!(executable, 0o700)
+    isolate_path(tmp_dir)
+    System.put_env("PATH", operator_bin)
+
+    signal = AbortSignal.new()
+    url = "https://8.8.8.8/slow-#{System.unique_integer([:positive])}.pdf"
+    task = Task.async(fn -> pdf_tool(cwd).execute.("slow-pdf", %{"url" => url}, signal, nil) end)
+
+    assert_eventually(
+      fn -> File.exists?(pid_file) and File.read!(pid_file) =~ ~r/^\d+\n$/ end,
+      timeout: 5_000
+    )
+
+    backend = pid_file |> File.read!() |> String.trim() |> String.to_integer()
+    child = child_file |> File.read!() |> String.trim() |> String.to_integer()
+
+    on_exit(fn ->
+      for pid <- [backend, child] do
+        System.cmd("/bin/kill", ["-KILL", Integer.to_string(pid)], stderr_to_stdout: true)
+      end
+    end)
+
+    assert os_alive?(backend)
+    assert os_alive?(child)
+    staged_path = File.read!(path_file)
+    assert File.exists?(staged_path)
+    AbortSignal.abort(signal)
+    assert Task.await(task, 5_000) == {:error, "Operation aborted"}
+
+    # Extraction must unwind, not merely release the SingleFlight caller.
+    assert_eventually(fn -> not File.exists?(staged_path) end, timeout: 5_000)
+    assert_eventually(fn -> not os_alive?(backend) and not os_alive?(child) end, timeout: 5_000)
+  end
+
+  @tag :tmp_dir
   test "PDF responses become page text or an actionable backend error", %{tmp_dir: tmp_dir} do
     project_marker = install_pdf_sentinel(tmp_dir)
     cwd = Path.join(tmp_dir, "nested")
@@ -890,6 +1038,86 @@ defmodule CodingAgent.Tools.WebFetchTest do
     |> String.split(marker)
     |> length()
     |> Kernel.-(1)
+  end
+
+  defp os_alive?(pid),
+    do:
+      match?(
+        {_, 0},
+        System.cmd("/bin/kill", ["-0", Integer.to_string(pid)], stderr_to_stdout: true)
+      )
+
+  defp blocking_fetch_tool(parent) do
+    build_tool(
+      settings_manager: %{
+        tools: %{
+          web: %{
+            fetch: %{
+              firecrawl: %{enabled: true, api_key: "test"}
+            }
+          }
+        }
+      },
+      http_get: fn _, _ ->
+        send(parent, {:blocked_http, self()})
+
+        receive do
+          :complete_http ->
+            {:ok,
+             %Req.Response{
+               status: 200,
+               headers: [{"content-type", "text/plain"}],
+               body: "replacement fetched"
+             }}
+
+          :fail_http ->
+            {:error, :controlled_provider_failure}
+        end
+      end,
+      http_post: fn _, _ ->
+        send(parent, :fallback_started)
+        {:error, :unexpected_fallback}
+      end
+    )
+  end
+
+  defp abort_fetch_before_poll(signals) do
+    :sys.replace_state(CodingAgent.Search.SingleFlight, fn state ->
+      if state.abort_timer do
+        case Process.cancel_timer(state.abort_timer) do
+          false ->
+            receive do
+              :check_aborts -> :ok
+            after
+              5_000 -> raise "abort timer notification was not delivered"
+            end
+
+          _remaining_ms ->
+            :ok
+        end
+      end
+
+      Enum.each(signals, &AbortSignal.abort/1)
+      %{state | abort_timer: nil}
+    end)
+  end
+
+  defp await_fetch_callers(pids) do
+    server = CodingAgent.Search.SingleFlight
+
+    matching_flight = fn ->
+      server
+      |> :sys.get_state()
+      |> Map.fetch!(:by_key)
+      |> Map.values()
+      |> Enum.find(fn flight ->
+        callers = Enum.map(flight.callers, fn %{from: {pid, _}} -> pid end)
+        Enum.all?(pids, &(&1 in callers))
+      end)
+    end
+
+    assert_eventually(fn -> matching_flight.() != nil end, timeout: 5_000)
+    matching_flight.()
   end
 
   defp build_tool(opts \\ []) do

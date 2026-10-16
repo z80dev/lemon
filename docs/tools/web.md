@@ -22,6 +22,11 @@ external-content tools:
   even a capability probe can execute; permitting `webfetch` does not grant
   project code execution. Without a backend the error names the install/trust
   options. Extracted PDF text remains fenced, untrusted web data.
+  Concurrent identical fetches share work: canceling one caller releases only
+  that caller, while canceling every caller aborts the shared operation.
+  The shared abort signal stops active direct, Firecrawl, and Exa requests as
+  well as fetched PDF extraction, including backend descendants. An abandoned
+  fetch never starts a fallback provider or publishes its result to the cache.
   GitHub `blob/<ref>/<path>` URLs fetch the raw file
   from `raw.githubusercontent.com`, and `issues/<n>` / `pull/<n>` URLs render
   title, state, labels, body and the first 100 comments from the public REST

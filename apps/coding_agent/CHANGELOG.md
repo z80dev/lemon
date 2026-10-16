@@ -165,6 +165,15 @@
 - Disclosure telemetry coverage isolates the initializing process and exercises
   a foreign initialization deterministically, preventing unrelated sessions from
   substituting their measurements in the once-per-initialize assertion.
+- Shared `webfetch` requests detach cancelled callers independently; when every
+  caller aborts, provider requests and PDF extraction stop without paid fallback
+  or cache publication. Provider admission and cache publication refresh caller
+  cancellation even before the next abort poll; publication is atomic with its
+  live-flight authorization, so cancellation cannot detach a flight mid-write.
+  Persistence runs outside the shared server so stalled writes cannot block
+  unrelated search/fetch admission, cancellation or completion. The original
+  flight deadline stops stalled publication; already-completed writes are not
+  rolled back. Replacement requests keep their own flight lifecycle.
 
 - Document backend guardians retain a witnessed process-group leader until
   cleanup, so timeout, abort and caller death stop even redirected descendants
