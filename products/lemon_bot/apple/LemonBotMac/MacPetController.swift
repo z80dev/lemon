@@ -78,7 +78,7 @@ final class MacPetController: NSObject {
     @ObservationIgnored private var frameDurations: [Int] = []
     @ObservationIgnored private var content: MacPetContentView?
     @ObservationIgnored private var sprite: PetSprite?
-    @ObservationIgnored private var masks: [ObjectIdentifier: MacPetAlphaMask] = [:]
+    @ObservationIgnored private var masks: [ObjectIdentifier: PetAlphaMask] = [:]
     @ObservationIgnored private var currentImage: CGImage?
     @ObservationIgnored private var animation = PetAnimation.idle
     @ObservationIgnored private var frameIndex = 0
@@ -93,10 +93,8 @@ final class MacPetController: NSObject {
     @ObservationIgnored private var observationGeneration = 0
     /// Per animation, the fraction of the cell above its tallest frame's artwork; the balloon sits just above it.
     @ObservationIgnored private var artTops: [PetAnimation: CGFloat] = [:]
-    @ObservationIgnored private var dragging = false
-    @ObservationIgnored private var pointerDown: NSPoint?
-    @ObservationIgnored private var dragOrigin = NSPoint.zero
-    @ObservationIgnored private var previousDragX: CGFloat = 0
+    @ObservationIgnored private var dragTracker = PetDragTracker()
+    private var dragging: Bool { dragTracker.isDragging }
     @ObservationIgnored private var oneShot = false
     @ObservationIgnored private var donePlayed = false
     @ObservationIgnored private var reducedMotion = false
@@ -196,10 +194,9 @@ final class MacPetController: NSObject {
     }
 
     private func applyStatus(_ next: PetStatus) {
-        if next != status {
-            let previous = status.mood
+        if let change = PetReaction.change(from: status, to: next) {
             status = next
-            if previous != next.mood {
+            if change.moodChanged {
                 donePlayed = false
                 playSound(for: next.mood)
                 restartAnimation()
@@ -213,8 +210,8 @@ final class MacPetController: NSObject {
 
     private func scheduleStatusExpiry() {
         statusTimer?.invalidate(); statusTimer = nil
-        guard visible, MacPetLaunch.mood == nil, let until = status.validUntil else { return }
-        statusTimer = timer(after: max(0.05, until.timeIntervalSinceNow)) { $0.refreshStatus() }
+        guard visible, MacPetLaunch.mood == nil, let delay = PetReaction.expiryDelay(status) else { return }
+        statusTimer = timer(after: delay) { $0.refreshStatus() }
     }
 
     private func motionChanged() {
@@ -256,12 +253,12 @@ final class MacPetController: NSObject {
         if let sprite {
             for animation in PetAnimation.allCases {
                 for image in sprite.frames(for: animation) {
-                    let mask = MacPetAlphaMask(image)
+                    let mask = PetAlphaMask(image)
                     masks[ObjectIdentifier(image)] = mask
                     artTops[animation] = min(artTops[animation] ?? 1, mask.topFraction)
                 }
             }
-            for image in sprite.lookFrames.compactMap({ $0 }) { masks[ObjectIdentifier(image)] = MacPetAlphaMask(image) }
+            for image in sprite.lookFrames.compactMap({ $0 }) { masks[ObjectIdentifier(image)] = PetAlphaMask(image) }
         }
         updateBubble()
         restartAnimation()
@@ -386,7 +383,8 @@ final class MacPetController: NSObject {
     private func restartAnimation() {
         guard started else { return }
         if dragging { return }
-        play(status.mood == .done && donePlayed ? .idle : status.mood.animation, once: status.mood == .done && !donePlayed)
+        let plan = PetReaction.animation(for: status.mood, donePlayed: donePlayed)
+        play(plan.animation, once: plan.once)
     }
 
     private func play(_ animation: PetAnimation, once: Bool = false) {
@@ -476,19 +474,17 @@ final class MacPetController: NSObject {
     }
 
     func hitsSprite(_ point: NSPoint) -> Bool {
-        guard let rect = content?.spriteView.frame, rect.contains(point), let image = currentImage,
-              let mask = masks[ObjectIdentifier(image)] else { return false }
-        return mask.opaque(x: (point.x - rect.minX) / rect.width, y: (point.y - rect.minY) / rect.height)
+        PetHitTesting.hitsSprite(point, spriteFrame: content?.spriteView.frame ?? .zero, mask: currentImage.flatMap { masks[ObjectIdentifier($0)] })
     }
 
     func hitsBubble(_ point: NSPoint) -> Bool {
-        guard let bubble = content?.bubble, !bubble.isHidden else { return false }
-        return bubble.frame.contains(point)
+        guard let bubble = content?.bubble else { return false }
+        return PetHitTesting.hitsBubble(point, bubbleFrame: bubble.frame, bubbleHidden: bubble.isHidden)
     }
 
     private func updateHitTesting() {
         let point = localPointer()
-        panel?.ignoresMouseEvents = !dragging && !hitsSprite(point) && !hitsBubble(point)
+        panel?.ignoresMouseEvents = PetHitTesting.ignoresMouseEvents(dragging: dragging, overSprite: hitsSprite(point), overBubble: hitsBubble(point))
     }
 
     private func pointerMoved() {
@@ -502,44 +498,39 @@ final class MacPetController: NSObject {
             updateBubble()
             if over { play(.waving, once: true) }
         }
-        guard !reducedMotion, status.mood == .idle, !hovered, !oneShot else { return }
+        guard PetGaze.follows(reducedMotion: reducedMotion, mood: status.mood, hovered: hovered, oneShot: oneShot) else { return }
         let center = panel.convertPoint(toScreen: NSPoint(x: content.spriteView.frame.midX, y: content.spriteView.frame.midY))
         let dx = NSEvent.mouseLocation.x - center.x, dy = NSEvent.mouseLocation.y - center.y
-        let distance = hypot(dx, dy)
-        if distance > 28, distance < 260, let image = sprite?.lookFrame(degrees: atan2(dx, dy) * 180 / .pi) {
+        if let degrees = PetGaze.degrees(dx: dx, dy: dy), let image = sprite?.lookFrame(degrees: degrees) {
             animationTimer?.invalidate(); animationTimer = nil
             setImage(image)
         } else if animationTimer == nil { showFrame(); scheduleFrame() }
     }
 
     func mouseDown() {
-        pointerDown = NSEvent.mouseLocation
-        dragOrigin = panel?.frame.origin ?? .zero
-        previousDragX = NSEvent.mouseLocation.x
+        dragTracker.begin(pointer: NSEvent.mouseLocation, panelOrigin: panel?.frame.origin ?? .zero)
     }
 
     func mouseDragged() {
-        guard let down = pointerDown, let panel else { return }
-        let point = NSEvent.mouseLocation
-        guard dragging || hypot(point.x - down.x, point.y - down.y) > 3 else { return }
-        dragging = true
+        guard let panel, let step = dragTracker.drag(to: NSEvent.mouseLocation) else { return }
         panel.ignoresMouseEvents = false
-        let direction: PetAnimation = point.x < previousDragX ? .runningLeft : .runningRight
-        if animation != direction { play(direction) }
-        previousDragX = point.x
-        panel.setFrameOrigin(NSPoint(x: dragOrigin.x + point.x - down.x, y: dragOrigin.y + point.y - down.y))
+        if animation != step.direction { play(step.direction) }
+        panel.setFrameOrigin(step.origin)
     }
 
     func mouseUp() {
-        guard pointerDown != nil else { return }
-        pointerDown = nil
-        if dragging { dragging = false; clampAndSave(); restartAnimation(); pointerMoved() }
-        else { activate() }
+        switch dragTracker.end() {
+        case .none: break
+        case .dragEnded: clampAndSave(); restartAnimation(); pointerMoved()
+        case .click: activate()
+        }
     }
 
     func activate() {
-        if let url = status.deepLink { Task { await platform.route(url); focusWorkspace() } }
-        else { focusWorkspace() }
+        switch PetClickAction.resolve(status) {
+        case .route(let url): Task { await platform.route(url); focusWorkspace() }
+        case .openWorkspace: focusWorkspace()
+        }
     }
 
     private func focusWorkspace() {
@@ -571,7 +562,7 @@ final class MacPetController: NSObject {
     private func restorePosition() {
         guard let panel else { return }
         if let screen = NSScreen.screens.first(where: { displayKey($0) == preferences.display }), let saved = preferences.positions[displayKey(screen)] {
-            panel.setFrameOrigin(NSPoint(x: screen.visibleFrame.minX + saved.x, y: screen.visibleFrame.minY + saved.y))
+            panel.setFrameOrigin(PetPlacement.origin(forOffset: CGPoint(x: saved.x, y: saved.y), in: screen.visibleFrame))
             clampAndSave()
         } else { resetPosition() }
     }
@@ -579,7 +570,7 @@ final class MacPetController: NSObject {
     func resetPosition() {
         if panel == nil { preferences.display = nil; persist(); return }
         guard let panel, let screen = mainScreen else { return }
-        panel.setFrameOrigin(NSPoint(x: screen.visibleFrame.maxX - panel.frame.width - 24, y: screen.visibleFrame.minY + 24))
+        panel.setFrameOrigin(PetPlacement.defaultOrigin(panelWidth: panel.frame.width, visible: screen.visibleFrame))
         clampAndSave()
     }
 
@@ -588,12 +579,12 @@ final class MacPetController: NSObject {
         let center = NSPoint(x: panel.frame.midX, y: panel.frame.midY)
         guard let screen = NSScreen.screens.first(where: { $0.frame.contains(center) }) ?? mainScreen else { return }
         let visible = screen.visibleFrame
-        let origin = NSPoint(x: min(max(panel.frame.minX, visible.minX), max(visible.minX, visible.maxX - panel.frame.width)),
-                             y: min(max(panel.frame.minY, visible.minY), max(visible.minY, visible.maxY - panel.frame.height)))
+        let origin = PetPlacement.clamp(origin: panel.frame.origin, size: panel.frame.size, visible: visible)
         panel.setFrameOrigin(origin)
         let key = displayKey(screen)
         preferences.display = key
-        preferences.positions[key] = MacPetPreferences.Position(x: origin.x - visible.minX, y: origin.y - visible.minY)
+        let offset = PetPlacement.offset(of: origin, in: visible)
+        preferences.positions[key] = MacPetPreferences.Position(x: offset.x, y: offset.y)
         persist()
     }
 
@@ -605,9 +596,7 @@ final class MacPetController: NSObject {
     }
 
     private func playSound(for mood: PetMood) {
-        guard preferences.enabled, preferences.soundEnabled else { return }
-        let name: String
-        switch mood { case .needsInput: name = "Tink"; case .done: name = "Pop"; case .failed: name = "Basso"; default: return }
+        guard preferences.enabled, preferences.soundEnabled, let name = PetReaction.soundName(for: mood) else { return }
         sound = NSSound(named: NSSound.Name(name))?.copy() as? NSSound
         sound?.volume = 0.2
         sound?.play()
@@ -692,30 +681,4 @@ final class MacPetController: NSObject {
 private final class MacPetPanel: NSPanel {
     override var canBecomeKey: Bool { false }
     override var canBecomeMain: Bool { false }
-}
-
-/// Half-resolution alpha planes keep pointer tracking O(1), without reading the atlas on mouse moves.
-private struct MacPetAlphaMask {
-    private let width = 96
-    private let height = 104
-    private var pixels: [UInt8]
-    init(_ image: CGImage) {
-        pixels = [UInt8](repeating: 0, count: 96 * 104)
-        pixels.withUnsafeMutableBytes { bytes in
-            guard let context = CGContext(data: bytes.baseAddress, width: 96, height: 104, bitsPerComponent: 8, bytesPerRow: 96,
-                                          space: CGColorSpaceCreateDeviceGray(), bitmapInfo: CGImageAlphaInfo.alphaOnly.rawValue) else { return }
-            context.interpolationQuality = .none
-            context.draw(image, in: CGRect(x: 0, y: 0, width: 96, height: 104))
-        }
-    }
-    /// Fraction of the cell height above the topmost opaque row (1 when empty).
-    var topFraction: CGFloat {
-        guard let index = pixels.firstIndex(where: { $0 > 25 }) else { return 1 }
-        return CGFloat(index / width) / CGFloat(height)
-    }
-    func opaque(x: CGFloat, y: CGFloat) -> Bool {
-        let column = min(width - 1, max(0, Int(x * CGFloat(width))))
-        let row = min(height - 1, max(0, Int((1 - y) * CGFloat(height))))
-        return pixels[row * width + column] > 25
-    }
 }
