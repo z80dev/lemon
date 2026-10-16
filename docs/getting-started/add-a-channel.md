@@ -8,6 +8,10 @@ best first contribution to Lemon itself.
 
 Start from the project in [Build your first agent](build-your-first-agent.md).
 
+This page is for writing a channel adapter. To connect Telegram or Discord to a
+running Lemon (token, pairing, allowlists), use `lemon gateway setup` as
+described in [Setup](../user-guide/setup.md#optional-telegram-or-discord).
+
 ## The console you already have
 
 `lib/my_agent/console.ex` is a channel in the loose sense. It is worth reading
@@ -252,11 +256,13 @@ surface.
 
 ## Writing a real channel
 
-The built-in adapters — Telegram, Discord, WhatsApp, XMTP, email — are the
-worked examples, and `LemonPlatformTest.PluginCase`'s moduledoc is the contract
-in prose. A new channel adapter is the ideal first contribution to Lemon; if you
-build one, it can equally live in its own repository, exactly like the X
-integration does.
+The built-in adapters (Telegram, Discord, WhatsApp, XMTP and email) are the
+worked examples; they are started from `config :lemon_channels, :adapters` in
+`config/config.exs`. `LemonPlatformTest.PluginCase`'s moduledoc is the contract
+in prose. A new channel adapter is the ideal first contribution to Lemon. It can
+equally live in its own repository and register at runtime as shown above;
+vendor-specific social integrations such as X ship that way rather than in
+this repo.
 
 ## Next
 

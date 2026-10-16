@@ -89,6 +89,8 @@ operator sockets. See [A2A](../user-guide/a2a-peers.md).
 | `lemon_automation` | Cron/reminders/heartbeat policy, goal loops, kanban and blueprints |
 | `lemon_browser`, `lemon_media`, `lemon_lsp` | Supervised browser, media and language-server capabilities |
 | `lemon_mcp` | Client library for external MCP tools/resources/prompts |
+| `lemon_omp` | omp (oh-my-pi) delegate driver for external agent sessions; not an executor |
+| `lemon_computer_use` | Native app control through LCU (`cua_js` tools): transport, approval routing, lifecycle |
 | `lemon_honcho` | Optional satellite registering external memory/context/tools |
 | `lemon_evals`, `lemon_platform_test` | Evaluation harness and extension contract tests |
 | `lemon_sim`, `lemon_sim_ui` | Simulation kernel/scenarios/artifacts and Phoenix control room |

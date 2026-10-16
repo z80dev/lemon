@@ -1,25 +1,12 @@
 # Phase 3.1 — Typed Bus Events: Catalog and Design
 
-Status: **implemented.** Catalog and design written 2026-08-10 against `2805c5b5`; pre-work and
-stages S1–S12 landed the same day, and **S13 — removing the `Access` shim — landed 2026-08-13**
-together with the `EventBridge` conversion it was waiting on. See §8 for the record of what each
-stage did and §9 for S13. The catalog in §2 describes the tree *before* typing — it is the record
-of what was found, and the migration tables in §8–§9 say which rows have since changed.
-
-> **R2 is spent.** The headline recommendation below to implement `Access` for one deprecation
-> cycle was taken, served its purpose, and has been reversed. Read §4.3 and §6.3 as history:
-> payload structs no longer implement `Access`, and a consumer that may still receive a legacy
-> map coerces it once at its entry point with `LemonCore.Events.coerce/2`. §9 is the end state.
-
-Scope: every `LemonCore.Bus.broadcast/2` call site in the umbrella (78 in `lib/`, 144 more in
-`test/`), the topics they publish to, and every process that subscribes. This was item **3.1** of
-the platform-split plan ([`docs/platform-split.md`](../platform-split.md) is now its status
-page), whose risk row predicted that "catalog first will reveal undocumented consumer
-assumptions." It does — §6 lists thirteen, two
-of which are live bugs.
-
-This document is the canonical catalog for bus topics and payload types.
-`apps/lemon_core/README.md` describes the higher-level core boundary.
+Status: **implemented.** Platform contract topics carry typed payload structs from
+`LemonCore.Events` inside the unchanged `LemonCore.Event` envelope. This page is the
+canonical catalog of bus topics, registered event types, payload fields, the delivery and
+recovery boundary, and the versioning rules. `apps/lemon_core/AGENTS.md` and
+`apps/lemon_core/README.md` describe the higher-level core boundary; the authoritative
+registry is `LemonCore.Events.registry/0`
+(`apps/lemon_core/lib/lemon_core/events.ex`).
 
 > **Top-level execution end state.** `engine` remains in run events, completion
 > records, and `ResumeToken` as provenance, with the fixed value `"lemon"` for
@@ -31,8 +18,8 @@ This document is the canonical catalog for bus topics and payload types.
 
 ## Current delivery and recovery boundary
 
-This section describes the runtime boundary added for #88/#89; the numbered
-catalog below remains the historical typed-event migration audit.
+This section describes how bounded delivery and recovery work today. The
+numbered sections below catalog the typed event contract.
 
 `LemonCore.Bus` still owns publication. Bounded subscribers opt into
 `Bus.subscribe(topic, delivery: handle)` using one `Bus.Delivery` handle across
@@ -104,50 +91,19 @@ native run completion have their existing owner paths; transient status replay
 for those other adapters is not provided by `sessions.snapshot`. Named-node
 live streaming is a separately owned platform contract and is not merged or
 replaced here.
-Process retained-output/artifact quotas belong to #105; admission and stable
-process receipts belong to #103/#104. Neither quota nor model-facing truncation
-is a substitute for pre-mailbox admission.
+Process retained-output quotas and stable process receipts are owned by the
+execution-node and process contracts, not by the Bus. Neither a quota nor
+model-facing truncation is a substitute for pre-mailbox admission.
 Likewise, the snapshot's JSON size limit is not a bound on its source-owner
 read: native branch collection, owner replies and revision hashing remain
 proportional to the retained authoritative transcript.
 
-### Focused acceptance fixtures
+### Regression coverage
 
-The fixtures below are synchronized behavior/security coverage for each
-follow-through checkbox. They are **not a claim that checks were run**: central
-integration must execute them and attach the tested revision plus the observed
-queue/byte assertions to the implementation PR.
-
-| Issue / acceptance | Retained focused coverage |
-| --- | --- |
-| #88 noisy/slow consumer bounds without owner stall | `bus_delivery_test.exs`, `bus_bounded_subscription_test.exs`, `notifier_backpressure_test.exs`, `event_bridge_backpressure_test.exs`, router coalescer tests, and `chat_live_test.exs` suspend consumers before a bounded burst, then assert admission/byte bounds and independent canonical completion. |
-| #88 explicit loss indication; recoverable answer | Native notifier/runner recovery and bridge overflow tests assert resync plus owner-answer recovery; TUI session-controller and connected Web pane tests replace uncertain answer text from `sessions.snapshot`. |
-| #88 approval/cancellation/terminal truth under pressure | Native cancel/failure compact-terminal fixtures, snapshot approval/terminal races, TUI approval replacement, and connected Web remount tests retain owner truth, not stale actionable cards. |
-| #88 late terminal/resources cannot revive work | Delivery death/replacement tests, tagged-epoch rejection (pane and bridge), native runner exactly-once completion, router finalized gates including synchronous late finalizers, socket post-overflow fencing, and client terminal-regression tests. |
-| #88 supported boundaries accurate | Queue inventory and remaining raw owner/adapter paths above; these are intentional nonclaims, not inferred coverage from one stream test. |
-| #89 disconnected tool completion | Snapshot tool/result authority tests, TUI real-socket disconnect fixture, and connected Web pane remount recover the terminal receipt and canonical answer once. |
-| #89 approval decided while disconnected | Snapshot synchronized decision-between-reads retry, TUI stale-request rejection, and Web remount/late-request tests. |
-| #89 owned process/child activity | Snapshot exact-owner filtering/unavailable-read fixtures, TUI task/process replacement, and Web inspector replacement preserve fixed IDs and completed/lost/unknown classifications. |
-| #89 rewind / branch todo-plan replacement | Native selected-branch identity tests, TUI rewind replacement, and Web delayed-read race replace the abandoned branch's transcript/todos/plan. Domain mutation tests remain owned by #102. |
-| #89 stale session/branch/revision/attempt results | Snapshot identity-change retry plus client deferred-response/selection and overflow-without-data races, live idle rewind invocation rejection, obsolete-run event fencing, and same-attempt terminal non-regression. |
-| #89 dropped/coalesced progress | The same bounded fanout → resync → snapshot path above; no durable token replay fixture or new event store. |
-| #89 TUI and Web/remote, access and size | Real TUI WebSocket wrapper tests and connected LiveView tests consume the same RPC contract; snapshot authorization/native-header/owner-filter tests deny foreign access and enforce redacted 131,072-byte responses. Operators intentionally retain global read scope. |
-
-Small-fixture thresholds are explicit: the core eight-entry / 256-byte fixture
-admits eight events plus one resync marker and at most one compact terminal
-notification; encoded retained terms must fit `8 × 256 + encoded_resync + 1024`
-bytes and the frozen-process memory assertion is below 256,000 bytes. The Web
-fixture publishes 1,000 small events to a suspended pane and permits at most
-270 queued messages (256 deliveries, one resync, plus LiveView control allowance).
-These are asserted thresholds to measure centrally, not reported measurements.
-The byte-admission regression also retains a 256-byte slice of a 16,384-byte
-binary and rejects that backing in both data and compact control slots; encoded
-size alone would admit it and pin the larger binary.
-
-Run once from the umbrella worktree after all slices are integrated:
+Run the focused bus/recovery suites once from the umbrella root, then the TUI client suites:
 
 ```bash
-mix test \
+scripts/test path \
   apps/lemon_core/test/lemon_core/bus_delivery_test.exs \
   apps/lemon_core/test/lemon_core/bus_bounded_subscription_test.exs \
   apps/lemon_core/test/lemon_core/bus_test.exs \
@@ -155,18 +111,10 @@ mix test \
   apps/lemon_agent/test/lemon_agent/event_stream_test.exs \
   apps/coding_agent/test/coding_agent/session_backpressure_test.exs \
   apps/coding_agent/test/coding_agent/session_recovery_test.exs \
-  apps/coding_agent/test/coding_agent/control_plane_provider_test.exs \
   apps/coding_agent/test/coding_agent/session/notifier_backpressure_test.exs \
   apps/coding_agent/test/coding_agent/session/session_runner_recovery_test.exs \
-  apps/coding_agent/test/coding_agent/session/run_translator_test.exs \
-  apps/coding_agent/test/coding_agent/tools/task/runner_test.exs \
-  apps/coding_agent/test/coding_agent/coordinator_test.exs \
-  apps/coding_agent/test/coding_agent/session_agent_event_terminal_test.exs \
   apps/lemon_control_plane/test/lemon_control_plane/event_bridge_backpressure_test.exs \
   apps/lemon_control_plane/test/lemon_control_plane/methods/sessions_snapshot_test.exs \
-  apps/lemon_control_plane/test/lemon_control_plane/methods/chat_history_tools_test.exs \
-  apps/lemon_control_plane/test/lemon_control_plane/methods/sessions_read_test.exs \
-  apps/lemon_control_plane/test/lemon_control_plane/ws/connection_test.exs \
   apps/lemon_router/test/lemon_router/coalescer_backpressure_test.exs \
   apps/lemon_router/test/lemon_router/stream_coalescer_test.exs \
   apps/lemon_router/test/lemon_router/tool_status_coalescer_test.exs \
@@ -175,11 +123,18 @@ mix test \
 bun --cwd clients/tui test \
   test/ui/session-controller.test.ts \
   test/protocol/client.test.ts \
-  test/ui/task-tree.test.ts \
   test/ui/event-controller.test.ts \
-  test/store/session-store.test.ts \
-  test/store/task-store.test.ts
+  test/store/session-store.test.ts
 ```
+
+They suspend a consumer before a bounded burst and assert the admission and byte bounds,
+the resync marker, owner-answer recovery, tagged-epoch rejection of late producers, and
+approval/terminal truth under pressure. The core small fixture admits eight events plus
+one resync marker and at most one compact terminal notification (encoded retained terms
+fit `8 × 256 + encoded_resync + 1024` bytes); the Web fixture publishes 1,000 small events
+to a suspended pane and permits at most 270 queued messages. The byte-admission regression
+retains a 256-byte slice of a 16,384-byte binary and rejects that backing: encoded size
+alone would admit it and pin the larger binary.
 
 For a configured runtime, the central interactive smoke entry points are:
 
@@ -198,87 +153,61 @@ projection. Rotate/revoke access and verify reconnect refuses the old
 credential. Do not treat an interactive smoke as a replacement for the
 synchronized overflow/race fixtures above.
 
+## 1. Design principles
 
-
-## 1. Headline recommendations
-
-**R1 — Type the payload, keep the envelope.** `LemonCore.Event` stays exactly as it is; what
-becomes a struct is `event.payload`. Consumers keep matching `%Event{type: :delta}` and gain the
-option to match `%Event{type: :delta, payload: %Events.Delta{}}`. Replacing the envelope with
-per-event structs would break the five deliberate *forwarders* (`run_process`, `acp`,
-`session_live`, discord, telegram) that match `%Event{} = event` precisely because they must
-relay types they do not know about.
-
-**R2 — Implement `Access` on the Events structs for one deprecation cycle.** This is the
-load-bearing decision. `LemonControlPlane.EventBridge` reads payloads through `payload[:key]` in
-**114 places**; `Access` is not implemented for structs, so without a shim, typing a single
-payload crashes the control plane's entire WS fanout. With the shim, each publisher can switch
-independently and consumers migrate on their own schedule. Without it, `:run_completed` alone is a
-twelve-subscriber flag day. See §4.3.
-
-**R3 — The platform contract is 7 topics, not the 15 that exist.** `nodes`, `presence`,
-`run_graph:*`, `parent_question:*`, `kanban*` and the sim/arena family have their publisher and
-every subscriber inside a single app (or a single matched app pair). They should get documented
-shapes in their owning app, not `LemonCore.Events.*` structs. Putting sim or kanban payload types
-in `lemon_core` would re-domain the package that Phase 1 just spent ten items de-domaining. See §3.
-
-**R4 — Keep event payload validation at the publisher boundary.**
-The control plane no longer exposes arbitrary event injection; registered
-payloads are validated before the bus broadcasts them. See §6.8.
-
-**R5 — Fix the three real bugs the catalog surfaced as their own commits, before typing.**
-They are independent of this phase and each is a few lines: the raw-map `:run_failed` (§6.1), the
-heartbeat completion extractor that always yields `nil` (§6.13), and the four
-`Process.whereis(LemonCore.PubSub)` gates that silently drop events under the Registry backend
-(§6.6).
+- **Type the payload, keep the envelope.** `LemonCore.Event` (`type`, `ts_ms`, `meta`,
+  `payload`) is the stable envelope; `event.payload` is a struct for registered types.
+  Consumers match `%Event{type: :delta}` and, where they need fields,
+  `%Event{type: :delta, payload: %Events.Delta{}}`. Forwarders (router `run_process`, ACP,
+  `session_live`, Discord, Telegram) match `%Event{} = event` so they can relay types they
+  do not know about.
+- **The platform contract is the registered topics.** A topic is contract when its payload
+  crosses an app boundary or reaches the control plane and its clients (§3). Topics whose
+  publisher and every subscriber live in one app document their shape in the owning app and
+  have no `LemonCore.Events.*` struct.
+- **Validate at the publisher.** `Bus.broadcast_event/4` checks a registered type's payload
+  against its struct: it raises in `:dev`/`:test` and coerces in `:prod`. The control plane
+  does not expose arbitrary event injection.
+- **No `Access` on payloads.** Consumers pattern-match or read fields; anything that may hold
+  a legacy map coerces once at its entry point with `LemonCore.Events.coerce/2` (§4.3).
 
 ## 2. Catalog
 
-Envelope column: **E** = `%LemonCore.Event{}`; **raw** = a bare map or tuple sent with no envelope.
+Envelope is always `%LemonCore.Event{}` unless noted **raw**. "Typed" means the type is in
+`LemonCore.Events.registry/0`. Subscribers are listed by module; call-site lines move, so
+grep `Bus.subscribe` and `Bus.broadcast` for the exact sites.
 
-### 2.1 `run:<run_id>` — 12 subscribers, 6 apps
+### 2.1 `run:<run_id>`
 
-The busiest topic and the only one whose subscriber set spans the whole umbrella.
+The busiest topic and the only one whose subscribers span the umbrella.
 
-| Event type | Publisher | Payload (actual keys) | Env |
-|---|---|---|---|
-| `:run_started` | native executor | `%{run_id, session_key, engine: "lemon"}` | E |
-| `:delta` | `lemon_gateway/run.ex:443` | `%{run_id, ts_ms, seq, text, meta}` | E |
-| `:run_completed` | native executor | `%{completed: %{engine: "lemon", resume, ok, answer, error, usage, meta, run_id, session_key}, duration_ms}` | E |
-| `:run_completed` (synthetic) | `lemon_router/run_process.ex:498,538,609`; `run_process/watchdog.ex:239` | same, `meta.synthetic == true` | E |
-| `:run_failed` | `lemon_router/run_process.ex:691` (`terminate/2`) | `%{type: :run_failed, run_id, session_key, reason}` | **raw** |
-| `:run_phase_changed` | `lemon_gateway/run.ex:773`; `lemon_router/phase_publisher.ex:86` | `LemonCore.RunPhaseEvent.build/1` → `%{type, run_id, session_key, conversation_key, phase, previous_phase, source, at}` | E |
-| `:engine_started` | native executor | `%{engine: "lemon", resume, title, meta, run_id, session_key}` | E |
-| `:engine_completed` | native executor | same fixed-provenance keys as `completed` above | E |
-| `:engine_action` | native executor; `LemonCore.Event.engine_reasoning/1` | `%{engine: "lemon", phase, ok, message, level, action: %{id, kind, title, detail}}` | E |
-| `:engine_event` | native executor (fallback) | arbitrary native-executor event map | E |
-| `:checkpoint_created` / `_restored` / `_deleted` | `lemon_core/checkpoint.ex:321` | varies by kind; meta = checkpoint context | E |
-| `:acp_client_request` *(removed)* | was `coding_agent/tools/acp_file_bridge.ex` | `%{method, params, reply_to: pid(), ref: reference()}` — converted to a direct call via `LemonCore.ACPClientBridge`; no longer on the bus (§6.7, §8) | E |
-| `:run_graph_changed` | `coding_agent/run_graph_server.ex:421,426` | `%{run_id, parent_run_id, session_key, status, event, timestamp_ms}` | E |
-| `:task_started` / `_completed` / `_error` / `_timeout` / `_aborted` | `coding_agent/tools/task/async.ex:305,309` | `%{task_id, run_id, parent_run_id, session_key, agent_id, …}` | E |
-| `:task_projected_child_action` | `coding_agent/tools/task/live_bridge.ex:71` | projected `engine_action` payload | E |
-| `:parent_question_*` | `coding_agent/parent_questions.ex:343,347` | full question record (13 keys) | E |
-| **anything** | `control_plane/methods/events_ingest.ex:147`, `system_event.ex:161` | **any map** | E |
+| Event type | Publisher | Payload |
+|---|---|---|
+| `:run_started` (typed) | `LemonGateway.Run` | `Events.RunStarted` (`run_id`, `session_key`, `engine: "lemon"`, optional `model`, `provider`, `thinking_level`) |
+| `:delta` (typed) | `LemonGateway.Run` | `Events.Delta` (`run_id`, `seq`, `text`, `ts_ms`, `meta`) |
+| `:run_completed` (typed) | `LemonGateway.Run`; synthetic completions from `LemonRouter.RunProcess`, `RunProcess.Watchdog`, `SessionCoordinator`, `LemonGateway.Scheduler` and `ThreadWorker` (admission failures) | `Events.RunCompleted` wrapping `Events.Completion`; synthetic ones carry `meta.synthetic == true` |
+| `:run_failed` (typed) | `LemonRouter.RunProcess` (abnormal termination) | `Events.RunFailed` (`run_id`, `session_key`, `reason`) |
+| `:run_phase_changed` (typed) | `LemonRouter.PhasePublisher` (the only publisher; the gateway tracks phases but does not broadcast them) | `Events.RunPhaseChanged`, built with `RunPhaseChanged.build/1` |
+| `:engine_action` (typed) | `LemonGateway.Run`; `CodingAgent.Tools.Task.LiveBridge` and `Task.Async` for projected child actions; `LemonCore.Event.engine_reasoning/1` | `Events.EngineAction` wrapping `Events.Action` |
+| `:engine_started`, `:engine_completed`, `:engine_event` | `LemonGateway.Run` (native executor events) | plain maps; `:engine_event` is the escape hatch for unrecognised native events (not registered) |
+| `:checkpoint_created` / `_restored` / `_deleted` | `LemonCore.Checkpoint`; remote ones relayed by `LemonGateway.Run` | map (checkpoint id/kind, tool, action, path counts) — also on `session:<key>` (not registered) |
+| `:task_started` / `_completed` / `_error` / `_timeout` / `_aborted` | `CodingAgent.Tools.Task.Async` | map (`task_id`, `run_id`, `parent_run_id`, `session_key`, `agent_id`, …); published to the child run and the parent run |
+| `:run_graph_changed` | `CodingAgent.RunGraphServer` | map (`run_id`, `parent_run_id`, `session_key`, `status`, …); child and parent run topics |
+| `:parent_question_*` | `CodingAgent.ParentQuestions` | full question record; child and parent run topics (also `parent_question:<id>`, §2.9) |
 
-Subscribers:
+`LemonCore.ACPClientBridge` (a node-local `Registry`) carries ACP client filesystem
+requests as direct request/reply calls, not bus events (`:no_client`, `:client_down`,
+`:timeout`).
 
-| # | Subscriber | Subscribes at | Matches |
-|---|---|---|---|
-| 1 | `LemonRouter.RunProcess` | `run_process.ex:133` | `:run_started`, `:run_completed`, `:delta`, `:engine_action`, `:task_projected_child_action`, **catch-all `%Event{}` → forwards to session topic** |
-| 2 | `LemonRouter.AsyncTaskSurfaceSubscriber` | `async_task_surface_subscriber.ex:81` | `:engine_action` + terminal types |
-| 3 | `CodingAgent.Tools.Task.LiveBridge` | `live_bridge.ex:53` | `:engine_action` + terminal types |
-| 4 | `CodingAgent.Tools.Agent` | `tools/agent.ex:697` | `:delta`, `:run_completed` |
-| 5 | `LemonControlPlane.EventBridge` | `event_bridge.ex:347` (ref-counted, dynamic) | everything, via `map_event/1` |
-| 6 | `LemonControlPlane.ACP` | `acp.ex:360` | `:run_completed`, `:approval_requested`, catch-all (client fs requests now arrive as direct `{:acp_client_request, payload}` messages, not bus events — §6.7) |
-| 7 | control-plane SSE (`/v1/chat/completions`) | `http/router.ex:137` | `:delta`, `:engine_action`, `:run_completed` |
-| 8 | `Methods.AgentWait` | `agent_wait.ex:39` | `:run_completed` |
-| 9 | `LemonAutomation.RunSubmitter` | `run_submitter.ex:22` (via `RunCompletionWaiter`) | `:run_completed`, `:run_failed` |
-| 10 | `LemonAutomation.KanbanRunWorker` | `kanban_run_worker.ex:19` (via `RunCompletionWaiter`) | same |
-| 11 | `LemonAutomation.HeartbeatManager` | `heartbeat_manager.ex:630` | `:run_completed`, `:run_failed` |
-| 12 | webhook transport | `transports/webhook/response.ex:61,100,148` | `:run_completed` |
-| 13 | telegram plugin | `telegram/transport.ex:737` | `:run_completed`, catch-all |
-
-> **Note (2026-09-27):** `LemonAutomation.HeartbeatManager` has since been removed. Heartbeat suppression now runs synchronously in `CronManager` terminalization via `LemonAutomation.Heartbeat`, so rows and findings in this audit that cite `heartbeat_manager.ex` are historical.
+Subscribers include `LemonRouter.RunProcess` (also forwards run events to the session
+topic), `LemonRouter.AsyncTaskSurfaceSubscriber`, `CodingAgent.Tools.Task.LiveBridge`,
+`CodingAgent.Tools.Agent` (completion waits), the execution-node worker
+(`CodingAgent.ExecutionNode.Worker`), `LemonChannels.TypingIndicator`,
+`LemonChannels.UserPromptSurface`, the Discord/Telegram transports,
+`LemonComputerUse.Server`, control-plane `Methods.AgentWait`, `ACP`, the SSE route in
+`LemonControlPlane.HTTP.Router` and the A2A runner/router, the gateway webhook transport
+(`transports/webhook/response.ex`), `LemonAutomation.RunCompletionWaiter`,
+`LemonWeb.ShellLive`, and `LemonControlPlane.EventBridge` (ref-counted, dynamic).
 
 #### Named execution-node transport
 
@@ -300,114 +229,119 @@ death. No live-event replay survives a disconnected invocation. Wire envelopes,
 limits and decision shapes are documented in the
 source file `apps/lemon_control_plane/README.md`, under “Live named-node runs”.
 
-### 2.2 `session:<session_key>` — 4 subscribers
+### 2.2 `session:<session_key>`
 
-| Event type | Publisher | Payload | Env |
-|---|---|---|---|
-| *(forwarded from `run:*`)* | `lemon_router/run_process.ex:242,295,362,390,420` | unchanged from source | E |
-| `:checkpoint_*` | `lemon_core/checkpoint.ex:325` | as §2.1 | E |
-| `:goal_*` | `agent_core/workspace/goal_store.ex:523` | `%{goal_id, agent_id, status, objective_bytes, continuation_count, last_run_id, loop_verdict, loop_status, loop_auto_enabled}` | E |
-| `:coalesced_output` | `lemon_router/stream_coalescer.ex:483` | `%{type: :coalesced_output, session_key, channel_id, run_id, text, seq}` | **raw** |
-| `:cron_*` (base session) | `lemon_automation/cron_manager.ex:1110` | cron payload | E |
-| **anything** | `events_ingest.ex:147`, `system_event.ex:161` | any map | E |
+| Event type | Publisher | Payload |
+|---|---|---|
+| everything forwarded from `run:*` | `LemonRouter.RunProcess` | unchanged from source |
+| `:checkpoint_*` | `LemonCore.Checkpoint` | as §2.1 |
+| `:goal_*` | `LemonAgent.Workspace.GoalStore` | `Events.GoalChanged` (also on `goals`) |
+| `:run_completed` (cron summary) | `LemonAutomation.CronManager` | `Events.RunCompleted`, `meta.origin == :cron` |
+| `:stream_resync` | `LemonRouter.CoalescerIngress` after bounded-ingress overflow | `%{reason: :overflow}` (not registered) |
+| `:coalesced_output` | `LemonRouter.StreamCoalescer` | **raw** `%{type: :coalesced_output, session_key, channel_id, run_id, text, seq}` — no envelope |
 
-Subscribers: `lemon_web/live/session_live.ex:17`, `discord/transport.ex:3408`,
-`telegram/transport.ex:729`, `LemonControlPlane.EventBridge` (dynamic).
+Subscribers: `LemonWeb.Chat.PaneLive` (bounded delivery handle), the Discord and Telegram
+transports, and `LemonControlPlane.EventBridge` (dynamic).
 
-### 2.3 `exec_approvals` — 7 subscribers
+### 2.3 `exec_approvals`
 
-| Event type | Publisher | Payload | Env |
-|---|---|---|---|
-| `:approval_requested` | `lemon_core/exec_approvals.ex:117` | `%{approval_id, pending: %{id, run_id, session_id, session_key, agent_id, tool, action, rationale, requested_at_ms, expires_at_ms}}` | E |
-| `:approval_resolved` | `lemon_core/exec_approvals.ex:174` (decision), `:378` (timeout) | `%{approval_id, decision, pending}` | E |
-| `:approval_requested` | `control_plane/methods/exec_approval_request.ex:57` | same shape | E |
+| Event type | Publisher | Payload |
+|---|---|---|
+| `:approval_requested` | `LemonCore.ExecApprovals` | `Events.ApprovalRequested` (`approval_id`, `pending: Events.ApprovalPending`) |
+| `:approval_resolved` | `LemonCore.ExecApprovals` (decision, timeout, cancellation) | `Events.ApprovalResolved` (`approval_id`, `decision`, `pending`) |
 
-Subscribers: `exec_approvals.ex:77` (the requester itself, awaiting resolution),
-`coding_agent/session.ex:1139`, `discord:3414`, `telegram:1354`, `control_plane/acp.ex:361`,
-`EventBridge`, `lemon_web/live/session_live.ex` (chat approval panel, filtered to the tab's
-session key).
+Subscribers: `ExecApprovals` itself (the requester awaiting resolution),
+`CodingAgent.Session`, `CodingAgent.ExecutionNode.Worker`, the Discord and Telegram
+transports, control-plane `ACP`, `EventBridge`, and `LemonWeb` (`ShellLive`,
+`SkillsLive`, and `Chat.PaneLive` filtered to the pane's session).
 
-### 2.4 `cron` — 2 subscribers
+### 2.4 `cron`
 
-Nine types published from `lemon_automation/events.ex` (`:cron_tick`, `:cron_job_created`,
-`:cron_job_updated`, `:cron_job_deleted`, `:cron_run_started`, `:cron_run_completed`,
-`:cron_lifecycle_action`, `:heartbeat_suppressed`, `:heartbeat_alert`), all `Event`-wrapped with
-documented payloads — this module is the closest thing the repo has to a typed-event precedent.
+All published by `LemonAutomation.Events`, all typed: `:cron_tick`, `:cron_job_created` /
+`_updated` / `_deleted` (`Events.CronJobChanged`), `:cron_run_started`,
+`:cron_run_completed`, `:cron_lifecycle_action`, `:heartbeat_suppressed`,
+`:heartbeat_alert`. Heartbeat suppression runs synchronously during `CronManager`
+terminalization via `LemonAutomation.Heartbeat`; there is no separate heartbeat manager.
+Subscribers: `EventBridge` and `LemonWeb.WorkManagementLive`.
 
-**Plus four hand-built `%LemonCore.Event{}` literals in `heartbeat_manager.ex:496,547,566,586`**
-that publish `:cron_run_started` / `:cron_run_completed` with a *different* payload shape,
-bypassing `Events` entirely (§6.10).
+### 2.5 `system`
 
-Subscribers: `heartbeat_manager.ex:149`, `EventBridge`. (`events.ex:29` is a moduledoc example,
-not a subscription.)
+Typed, all with `Events.*` payloads: `:config_reloaded` and `:config_reload_failed`
+(`LemonCore.ConfigReloader`), `:secret_changed` (`LemonCore.Secrets`; owner, name and
+action only, never the value), `:talk_mode_changed` (registered, no in-repo publisher
+today). Subscribers: `EventBridge` and `LemonWeb.Chat.PaneLive`; `EventBridge` maps none of
+the four to a WS event (§6).
 
-### 2.5 `system` — 1 subscriber
+### 2.6 `goals`
 
-| Event type | Publisher | Payload | Env |
-|---|---|---|---|
-| `:config_reloaded` | `lemon_core/config_reloader.ex:260` | `%{reload_id, reason, changed_sources, changed_paths, diff}` | E |
-| `:config_reload_failed` | `lemon_core/config_reloader.ex:316` | `%{reload_id, reason, error}` | E |
-| `:secret_changed` | `lemon_core/secrets.ex:432` | `%{owner, name, action}` | E |
+`:goal_set`, `_paused`, `_resumed`, `_completed`, `_cleared`, `_continuation_submitted`,
+`_loop_verdict`, `_loop_status`, published by `LemonAgent.Workspace.GoalStore` as
+`Events.GoalChanged` on `goals` and on the goal's `session:<key>`. All map to the WS
+`goal` event. Subscribers: `EventBridge`, `LemonWeb.WorkManagementLive`.
 
-Subscriber: `EventBridge` only — and it has **no mapping clause for the first three**, so
-`:config_reloaded`, `:config_reload_failed` and `:secret_changed` are published into a topic where
-the only listener silently discards them.
+### 2.7 `routing_feedback`
 
-### 2.6 Single-app topics (recommend: no `LemonCore.Events.*` struct)
+`:routing_feedback` (`Events.RoutingFeedback`: `fingerprint_key`, `outcome`, `duration_ms`),
+published by `LemonMemory.Ingest`, consumed by `LemonRouter.RoutingFeedbackStore`.
 
-| Topic | Publisher | Subscriber | Notes |
-|---|---|---|---|
-| `nodes` | 6 × `control_plane/methods/node_*.ex` | `EventBridge` | both ends in `lemon_control_plane` |
-| `presence` | `control_plane/presence.ex:231` | `EventBridge` | both ends in `lemon_control_plane` |
-| `goals` | `agent_core/workspace/goal_store.ex:522` | `EventBridge` | **cross-app**, 1 consumer — cheap to type |
-| `kanban`, `kanban:<board_id>` | `agent_core/workspace/kanban_store.ex:653,654` | **none** | zero subscribers repo-wide |
-| `routing_feedback` | `lemon_memory/ingest.ex:175` | `lemon_router/routing_feedback_store.ex:217` | **cross-app**, already pattern-matched on exact keys |
-| `run_graph:<run_id>` | `coding_agent/run_graph_server.ex:400` | `coding_agent/run_graph.ex:327` | payload is the bare tuple `{:run_graph, :state_changed, run_id}` — **raw** |
-| `parent_question:<request_id>` | `coding_agent/parent_questions.ex:340` | `coding_agent/tools/ask_parent.ex:262` | matches on `meta.request_id` only, ignores payload |
-| `sim:<id>`, `sim:<id>:decisions` | `lemon_sim/kernel/bus.ex:30,36` | `lemon_sim_ui/arena.ex:504,520`, LiveViews | payload embeds a whole `%LemonSim.State{}` |
-| `sim:lobby` | `lemon_sim_ui/sim_manager.ex:1739` | 4 LiveViews + `arena.ex:179` | empty payload |
-| `arena:<domain>:league` | `lemon_sim_ui/arena.ex:752` | `arena_leaderboard_live.ex:21` | `%{game_id}` |
-| hosted-game topic | `hosted_game/room_server.ex:1676` | `hosted_werewolf_live.ex` (4 sites) | `%{room_id}` |
-| `channels` | *(was none in `lib/`; since 2026-08-16 `lemon_channels/dispatcher.ex` publishes `:channel_delivery` — §10)* | `EventBridge` | now a typed contract topic |
-| `logs` | **none** | **none** | documented in the Bus contract; dead |
+### 2.8 `channels`
 
-### 2.7 Envelope discipline, summarised
+`:channel_delivery` (`Events.ChannelDelivery`) is the observation of every outbound
+dispatch. `LemonChannels.Dispatcher.dispatch/1` emits it after the renderer's result is
+known, from a helper that rescues and logs, so a crashed bus backend or serialization
+issue never breaks a real send. It gates on `Bus.running?/0` and has a
+`[:lemon, :channels, :dispatch]` telemetry twin (see [telemetry](../telemetry.md)).
 
-Of 78 `lib/` publish sites, **75 use `%LemonCore.Event{}`**. The three that do not:
+| Field | Meaning |
+|---|---|
+| `intent_id`, `run_id`, `session_key` | copied from the `LemonCore.DeliveryIntent` |
+| `channel_id`, `account_id`, `peer_kind`, `peer_id`, `thread_id` | the `DeliveryRoute` |
+| `kind` | the intent kind (`:final_text`, `:stream_snapshot`, …) |
+| `text_preview` | bounded excerpt of the outbound text, never the full body |
+| `ok` / `error` | dispatch result; `error` is a bounded `inspect/2` of the reason |
+| `duration_ms`, `ts_ms` | dispatch duration and wall-clock emit time |
 
-- `run_process.ex:691` — `%{type: :run_failed, run_id, session_key, reason}` (§6.1)
-- `stream_coalescer.ex:483` — `%{type: :coalesced_output, …}`
-- `run_graph_server.ex:400` — `{:run_graph, :state_changed, run_id}` (a signal, not an event; fine)
+`EventBridge` maps it to `channel.delivery` and all non-node clients receive it without
+topic subscriptions.
 
-A fourth latent shape exists: `LemonGateway.DependencyManager.build_event/3` returns
-`{event_type, payload}` when `LemonCore.Event` is not loadable (§6.9).
+### 2.9 App-internal and other topics (no `LemonCore.Events.*` struct)
+
+| Topic | Publisher → subscriber | Notes |
+|---|---|---|
+| `nodes` | control-plane `node.*` methods → `EventBridge`, `LemonWeb.NodesLive` | `:node_pair_requested`, `:node_pair_resolved`, `:node_invoke_completed` |
+| `presence` | `LemonControlPlane.Presence` → `EventBridge` | `:presence_changed` |
+| `user_prompts` | `CodingAgent.Session.UserPrompt` → `LemonChannels.UserPromptSurface`, `EventBridge` | `:user_prompt_requested`, `:user_prompt_resolved` (public projection, string keys) |
+| `omp` | `LemonOmp.Manager` → `EventBridge`, `LemonWeb.OmpLive` | `:omp_session` snapshots (`LemonOmp.bus_topic/0`) |
+| `run_graph:<run_id>` | `CodingAgent.RunGraphServer` → `CodingAgent.RunGraph` | bare tuple `{:run_graph, :state_changed, run_id}` — a signal, not an event |
+| `parent_question:<request_id>` | `CodingAgent.ParentQuestions` → `Tools.AskParent` | the event is a doorbell; the consumer re-reads state from `ParentQuestions.get/1` |
+| `background_run:<id>` | `CodingAgent.BackgroundRun.Worker` | envelope events mirrored to the task store |
+| `sessions:lifecycle` | `LemonCore.RunStore.delete_history/1` → `CodingAgent.ToolResources` | tuple `{:session_history_deleted, session_key, cutoff}` |
+| `a2a:task:<id>` | `LemonControlPlane.A2A.Runner` → A2A runner/router | tuple `{:a2a_task_terminal, task_id}` |
+| `lemon_web:runs` | `LemonWeb.ShellLive.RunEvents` → `ShellLive` | tuple `{:lemon_web_run, phase, info}` |
+| `sim:*`, `arena:*`, hosted-game topics | `lemon_sim` / `lemon_sim_ui` | matched pair shipped together; payloads can embed a whole `%LemonSim.State{}` |
+
+The `kanban*` broadcasts were deleted (zero subscribers; durable record is the
+`Introspection.record/3` call), and `logs` has never had a publisher.
 
 ## 3. Contract vs app-internal
 
-The plan says to type "every published topic." That over-reaches. The test is whether a payload
-crosses an app boundary *and* has a consumer that is not its publisher's sibling.
+A topic is platform contract when its payload crosses an app boundary and has a consumer that
+is not its publisher's sibling. Contract topics, all registered in `LemonCore.Events`:
 
-**Platform contract — type these (7):**
+| Topic | Why it is contract |
+|---|---|
+| `run:<id>` | consumed by router, coding_agent, control plane (WS, SSE, ACP, A2A), automation, gateway, channels, web |
+| `session:<key>` | consumed by the web UI and channel plugins |
+| `exec_approvals` | consumed by channel plugins, ACP, coding_agent, web |
+| `cron` | crosses `lemon_automation` → `lemon_control_plane` → WS clients |
+| `system` | publishers in `lemon_core`; reaches WS clients and the web pane |
+| `goals` | crosses `lemon_agent` → `lemon_control_plane` → WS clients |
+| `routing_feedback` | crosses `lemon_memory` → `lemon_router` |
+| `channels` | outbound delivery observations from `lemon_channels` |
 
-| Topic | Subscribers | Why it is contract |
-|---|---|---|
-| `run:<id>` | 12 | Consumed by router, coding_agent, control plane (WS + SSE + ACP), automation, gateway, channels |
-| `session:<key>` | 4 | Consumed by the web UI and two channel plugins |
-| `exec_approvals` | 7 | Consumed by two channel plugins, the ACP server, coding_agent and the web chat |
-| `cron` | 2 | Crosses `lemon_automation` → `lemon_control_plane` → WS clients |
-| `system` | 1 | Publishers in `lemon_core` and `lemon_control_plane`; reaches WS clients |
-| `goals` | 1 | Crosses `agent_core` → `lemon_control_plane` → WS clients |
-| `routing_feedback` | 1 | Crosses `lemon_memory` → `lemon_router`; the pilot (§5) |
-
-**App-internal — document the shape in the owning app, do not add a core struct:** `nodes`,
-`presence` (both ends in `lemon_control_plane`); `run_graph:*`, `parent_question:*` (both ends in
-`coding_agent`); the five sim/arena topics (`lemon_sim` + `lemon_sim_ui`, a matched pair shipped
-together).
-
-**Delete rather than type:** `kanban` and `kanban:<board_id>` (zero subscribers — either the UI
-that was going to consume them never landed, or it was removed); `channels` and `logs` (zero
-publishers; remove from the Bus moduledoc's "must be stable" list, which is the only place they
-are asserted to exist).
+Everything in §2.9 is app-internal: document the shape in the owning app, and do not add a
+core struct — it would push domain types back into `lemon_core`. A publisher on an
+app-internal topic may still use `Bus.broadcast_event/4`: unregistered types pass through.
 
 ## 4. Design
 
@@ -415,174 +349,69 @@ are asserted to exist).
 
 ```
 %LemonCore.Event{
-  type:    :run_completed,                  # unchanged — the dispatch key
-  ts_ms:   1_754_800_000_000,               # unchanged
-  meta:    %{run_id: …, session_key: …},    # unchanged — routing identity
-  payload: %LemonCore.Events.RunCompleted{} # ← this is what 3.1 changes
+  type:    :run_completed,                  # the dispatch key
+  ts_ms:   1_754_800_000_000,               # wall-clock milliseconds
+  meta:    %{run_id: …, session_key: …},    # routing identity
+  payload: %LemonCore.Events.RunCompleted{} # typed for registered types
 }
 ```
 
-`meta` deliberately stays a free map. Every subscriber reads `meta.run_id` / `meta.session_key` /
-`meta.origin` / `meta.synthetic` / `meta.request_id` / `meta.task_id` / `meta.parent_run_id`, and
-different publishers supply different subsets. Typing `meta` is a separate, larger change with no
-consumer benefit; a documented `@type meta` in `LemonCore.Event` is enough.
+`meta` deliberately stays a free map, read with `Access`. Subscribers read
+`meta.run_id` / `session_key` / `origin` / `synthetic` / `request_id` / `task_id` /
+`parent_run_id`, and different publishers supply different subsets. Typing `meta` has no
+consumer benefit.
 
-### 4.2 Proposed structs
+### 4.2 Registered payloads
 
-All live in `apps/lemon_core/lib/lemon_core/events/`, one module per file, each with
-`@enforce_keys` for required fields, a `@type t`, `new/1` (keyword or map → struct, raising on
-unknown keys), and `from_map/1` (lenient, for legacy maps arriving over the wire).
+All live in `apps/lemon_core/lib/lemon_core/events/`, one module per file, built with
+`use LemonCore.Events.Payload` (struct, `@enforce_keys`, `@derive Jason.Encoder`,
+`event_type/0`, `event_version/0`, `fields/0`, strict `new/1`, lenient `from_map/1`).
+Bold fields are enforced.
 
-`run:<id>`:
+| Topic | Event type → module | Fields |
+|---|---|---|
+| `run:*` | `run_started` → `RunStarted` | **run_id**, session_key, engine, model, provider, thinking_level |
+| | `delta` → `Delta` | **run_id**, **seq**, **text**, ts_ms, meta |
+| | `run_completed` → `RunCompleted` | **completed** (`Completion`), duration_ms |
+| | `run_failed` → `RunFailed` | **run_id**, session_key, **reason** |
+| | `run_phase_changed` → `RunPhaseChanged` | **run_id**, session_key, conversation_key, **phase**, previous_phase, **source**, at |
+| | `engine_action` → `EngineAction` | **action** (`Action`), engine, phase (`:started \| :updated \| :completed`, default `:updated`), ok, message, level |
+| `exec_approvals` | `approval_requested` → `ApprovalRequested` | **approval_id**, **pending** (`ApprovalPending`) |
+| | `approval_resolved` → `ApprovalResolved` | **approval_id**, **decision** (`:approve_once`, `:approve_session`, `:approve_agent`, `:approve_global`, `:deny`, `:timeout`, `:cancelled`), pending |
+| `cron` | `cron_tick` → `CronTick` | **timestamp_ms** |
+| | `cron_run_started` → `CronRunStarted` | **cron_run_id**, router_run_id, **job_id**, job_name, agent_id, session_key, triggered_by, started_at_ms, run |
+| | `cron_run_completed` → `CronRunCompleted` | **cron_run_id**, router_run_id, **job_id**, agent_id, session_key, status, duration_ms, output, error, suppressed, run |
+| | `cron_job_created` / `_updated` / `_deleted` → `CronJobChanged` | **action**, **job_id**, name, agent_id, job |
+| | `cron_lifecycle_action` → `CronLifecycleAction` | **audit** |
+| | `heartbeat_alert` → `HeartbeatAlert` | **agent_id**, job_id, job_name, run_id, response, severity |
+| | `heartbeat_suppressed` → `HeartbeatSuppressed` | **agent_id**, job_id, job_name, run_id |
+| `system` | `config_reloaded` → `ConfigReloaded` | **reload_id**, reason, changed_sources, changed_paths, diff |
+| | `config_reload_failed` → `ConfigReloadFailed` | **reload_id**, reason, **error** |
+| | `secret_changed` → `SecretChanged` | **owner**, **name**, **action** |
+| | `talk_mode_changed` → `TalkModeChanged` | **session_key**, **mode** |
+| `goals` | `goal_set`, `_paused`, `_resumed`, `_completed`, `_cleared`, `_continuation_submitted`, `_loop_verdict`, `_loop_status` → `GoalChanged` | **goal_id**, agent_id, session_key, status, objective_bytes, continuation_count, last_run_id, loop_verdict, loop_status, loop_auto_enabled |
+| `routing_feedback` | `routing_feedback` → `RoutingFeedback` | **fingerprint_key**, **outcome**, duration_ms |
+| `channels` | `channel_delivery` → `ChannelDelivery` | **intent_id**, run_id, session_key, **channel_id**, account_id, peer_kind, peer_id, thread_id, **kind**, text_preview, **ok**, error, duration_ms, ts_ms |
 
-```elixir
-defmodule LemonCore.Events.RunStarted do
-  @enforce_keys [:run_id]
-  defstruct [:run_id, :session_key, :engine]
-  # run_id: String.t(); session_key: String.t() | nil; engine: "lemon"
-end
+Nested payloads, never published alone (`LemonCore.Events.nested_modules/0`):
 
-defmodule LemonCore.Events.Delta do
-  @enforce_keys [:run_id, :seq, :text]
-  defstruct [:run_id, :seq, :text, :ts_ms, meta: %{}]
-  # seq: non_neg_integer(); text: String.t(); ts_ms: non_neg_integer() | nil
-end
+| Module | Fields |
+|---|---|
+| `Completion` | **ok**, answer, error, engine, resume (`%{engine, value}`; top-level resumption accepts only `engine: "lemon"`), usage (a plain map owned by `LemonAi`), run_id, session_key, meta |
+| `Action` | **id**, **kind** (`:tool`, `:command`, `:file_change`, `:web_search`, `:subagent`, `:reasoning`, `:note`, `:approval`, `:compaction`), **title**, detail |
+| `ApprovalPending` | **id**, run_id, session_id, session_key, agent_id, invocation_context_key (private: excluded from JSON), **tool**, tool_call_id, action, rationale, requested_at_ms, expires_at_ms |
 
-defmodule LemonCore.Events.RunCompleted do
-  @enforce_keys [:completed]
-  defstruct [:completed, :duration_ms]
-  # completed: LemonCore.Events.Completion.t(); duration_ms: non_neg_integer() | nil
-end
+`Events.registry/0` maps type → module, `payload_module/1` and `registered?/1` look one up,
+and `modules/0` includes the nested modules.
 
-defmodule LemonCore.Events.Completion do
-  @enforce_keys [:ok]
-  defstruct [:ok, :answer, :error, :engine, :resume, :usage, :run_id, :session_key, meta: %{}]
-  # ok: boolean(); answer: String.t() | nil; error: term() | nil
-  # resume: LemonCore.ResumeToken.t() | %{engine: String.t(), value: term()} | nil;
-  # top-level resumption accepts only `engine: "lemon"`
-  # usage: map() | nil  ← left as map; LemonAi.Tokens owns its shape
-end
+Not typed on purpose: `:engine_event` (native-executor escape hatch), `:engine_started` /
+`:engine_completed`, `:checkpoint_*`, `:task_*`, `:run_graph_changed`, `:parent_question_*`,
+`:stream_resync`, `:coalesced_output`, and the app-internal topics in §2.9.
 
-defmodule LemonCore.Events.RunFailed do
-  @enforce_keys [:run_id, :reason]
-  defstruct [:run_id, :session_key, :reason]
-end
+### 4.3 Versioning and compatibility
 
-defmodule LemonCore.Events.EngineAction do
-  @enforce_keys [:action]
-  defstruct [:action, :engine, :phase, :ok, :message, :level]
-  # engine: "lemon"; action: LemonCore.Events.Action.t()
-  # phase: :started | :updated | :completed
-  # ok: boolean() | nil; level: atom() | nil
-end
-
-defmodule LemonCore.Events.Action do
-  @enforce_keys [:id, :kind, :title]
-  defstruct [:id, :kind, :title, detail: %{}]
-  # kind: :tool | :command | :file_change | :web_search | :subagent | :reasoning | :note
-  #   ← today validated as *either* atom or string in Event.validate_action_payload!/1;
-  #     the struct should normalise to atom and the legacy path accept both.
-end
-
-defmodule LemonCore.Events.RunPhaseChanged do
-  @enforce_keys [:run_id, :phase, :source]
-  defstruct [:run_id, :session_key, :conversation_key, :phase, :previous_phase, :source, :at]
-  # phase/previous_phase validated by LemonCore.RunPhase.valid?/1 — this struct replaces
-  # LemonCore.RunPhaseEvent.build/1, which is already 90% of the design.
-end
-```
-
-`exec_approvals`:
-
-```elixir
-defmodule LemonCore.Events.ApprovalRequested do
-  @enforce_keys [:approval_id, :pending]
-  defstruct [:approval_id, :pending]
-end
-
-defmodule LemonCore.Events.ApprovalResolved do
-  @enforce_keys [:approval_id, :decision]
-  defstruct [:approval_id, :decision, :pending]
-  # decision: :approve_once | :approve_session | :approve_agent | :approve_global | :deny | :timeout
-end
-
-defmodule LemonCore.Events.ApprovalPending do
-  @enforce_keys [:id, :tool]
-  defstruct [:id, :run_id, :session_id, :session_key, :agent_id, :tool, :action,
-             :rationale, :requested_at_ms, :expires_at_ms]
-  # This map is already stored in ExecApprovalStore and read by five consumers with
-  # identical key expectations — it is a struct in all but name.
-end
-```
-
-`cron` (in `lemon_core` because `EventBridge` in `lemon_control_plane` consumes them and neither
-app may depend on the other):
-
-```elixir
-LemonCore.Events.CronRunStarted     # run_id, cron_run_id, job_id, job_name, agent_id,
-                                    # session_key, triggered_by, started_at_ms
-LemonCore.Events.CronRunCompleted   # run_id, cron_run_id, job_id, status, suppressed,
-                                    # agent_id, session_key, duration_ms, error, output
-LemonCore.Events.CronTick           # timestamp_ms
-LemonCore.Events.CronJobChanged     # action (:created|:updated|:deleted), job_id, name, job
-LemonCore.Events.CronLifecycleAction # audit record
-LemonCore.Events.HeartbeatAlert     # agent_id, job_id, job_name, run_id, response, severity
-LemonCore.Events.HeartbeatSuppressed # agent_id, job_id, job_name, run_id
-```
-
-Note `CronRunStarted`/`CronRunCompleted` drop the nested `run:`/`job:` sub-maps in favour of the
-flat fields EventBridge actually reads. That flattening is the point: it forces the
-`heartbeat_manager` divergence (§6.10) to be resolved rather than papered over with `||`.
-
-`system`, `goals`, `routing_feedback`:
-
-```elixir
-LemonCore.Events.ConfigReloaded      # reload_id, reason, changed_sources, changed_paths, diff
-LemonCore.Events.ConfigReloadFailed  # reload_id, reason, error
-LemonCore.Events.SecretChanged       # owner, name, action
-LemonCore.Events.TalkModeChanged     # session_key, mode
-LemonCore.Events.GoalChanged         # action, goal_id, agent_id, session_key, status,
-                                      # objective_bytes, continuation_count, last_run_id,
-                                      # loop_verdict, loop_status, loop_auto_enabled
-LemonCore.Events.RoutingFeedback     # fingerprint_key, outcome, duration_ms
-```
-
-**Deliberately not typed:** `:acp_client_request` (§6.7 — it was an RPC carrying a live pid and a
-ref, and a value type would have legitimised that; it has since been removed from the bus entirely
-and is now a direct call), `:engine_event` (an explicit native-executor output
-escape hatch), `:custom_event` (user-defined by construction), and everything
-on the app-internal topics in §3.
-
-### 4.3 Versioning and the compatibility cycle
-
-Each struct module carries `@event_version 1` and appears in a `LemonCore.Events.registry/0`
-mapping `event_type → module`. The registry is what the contract kit (§5.3), the control-plane
-injectors (R4) and `EventBridge` all validate against.
-
-Compatibility for one release cycle rests on two mechanisms:
-
-1. **`from_map/1` on every struct.** A consumer that receives a legacy map coerces it:
-   `payload = Events.RunCompleted.from_map(payload)`. This is how a *new* consumer tolerates an
-   *old* publisher while publishers migrate one at a time.
-
-2. **`Access` implemented on every Events struct** (`fetch/2`, `get_and_update/3`, `pop/2`,
-   delegating to `Map`). This is how an *old* consumer tolerates a *new* publisher, and it is what
-   makes the migration incremental instead of a flag day. The concrete number: `EventBridge` alone
-   reads payloads via `payload[:key]` 114 times across 26 `map_event_type/3` clauses. It also has a
-   struct-safe `get_field/2` helper in the same file, used inconsistently — the clauses for
-   `:engine_action`, `:approval_*`, `:goal_*`, `:checkpoint_*` use it; the clauses for
-   `:run_started`, `:run_completed`, `:delta`, `:cron_*`, `:presence_changed`, `:heartbeat*`,
-   `:node_*`, `:task_*` use `Access`. Without the shim, typing `:run_completed` breaks WS fanout
-   for every client on the first publish.
-
-   The shim is explicitly one cycle: each `Access` implementation gets `@deprecated "Pattern-match
-   the struct or use Map.get/2; Access on Events structs is removed in the next major."` A
-   contract-kit assertion (§5.3) fails if an Events module ships without a removal note.
-
-   *(History: the shim was removed in S13 on 2026-08-13, before 0.2 — §9. The contract-kit
-   assertion now checks the opposite, that no payload module implements `Access`.)*
-
-Semver rule for a published struct (`lemon_core` is a Hex package):
+Each payload module reports `event_version/0` (currently 1 for all), bumped only for a
+breaking field change. `LemonCore` is a Hex package, so a registered struct follows semver:
 
 | Change | Bump |
 |---|---|
@@ -591,443 +420,108 @@ Semver rule for a published struct (`lemon_core` is a Hex package):
 | Make an optional field required, or remove a field | **major** |
 | Change a field's type or an enum's members | **major** |
 | Rename an event type atom | **major** |
-| Remove the `Access` shim | ~~**major**~~ — done pre-0.2 instead, while every consumer was still in-repo (§9) |
+
+Compatibility mechanics:
+
+1. **`from_map/1` on every struct** accepts string keys, drops unknown keys, coerces nested
+   payloads and passes structs through. `Events.coerce/2` applies it by type; consumers that
+   may receive a legacy map (hand-built test payloads, events relayed from another node)
+   coerce once at their entry point and never carry key-probing downstream.
+2. **`cast/2`** is the strict counterpart for trust boundaries: it returns
+   `{:error, reason}` instead of relaying a malformed payload.
+3. **`new/1`** is strict about keys, not nested types: `RunCompleted.new(%{completed: %{ok: true}})`
+   builds a valid struct whose `completed` is a plain map, so nested reads in consumers use
+   the struct-and-map-safe `get_field/2` rather than field access.
+4. **No `Access`.** `payload[:key]` raises on a payload struct. The contract kit asserts that
+   no payload module implements `Access`.
+5. **JSON.** Payloads derive `Jason.Encoder` (JSONL store backend, control plane). Fields
+   declared `private_fields` are excluded; wire projections use allowlists.
 
 ### 4.4 Interaction with the bridges
 
-**`LemonCore.Introspection`** — no change needed, and this is a genuinely pleasant finding.
-`introspection.ex:151` already opens with `sanitize_value(%{__struct__: _} = struct, opts)` →
-`Map.from_struct/1`, so struct payloads persist identically to today's maps. The ~20 call sites
-that pass the same map to both `Introspection.record/3` and `Bus.broadcast/2` can pass the struct
-to both unchanged. The kit should assert this rather than leave it to luck.
-
-**`LemonControlPlane.EventBridge`** — the real work of this phase lives here. Recommended end
-state: each `map_event_type/3` clause pattern-matches its struct
-(`defp map_event_type(:run_completed, %Events.RunCompleted{} = p, meta)`), so a field rename
-becomes a compile error in the exact place that publishes the JSON name to WS clients. Keep an
-explicit field-by-field mapping — do *not* derive the wire JSON from struct keys, or an internal
-rename silently becomes a public API break. Retain a legacy clause per type
-(`defp map_event_type(:run_completed, p, meta) when is_map(p)` → `from_map/1` then delegate) for
-the compatibility cycle. The catch-all `map_event_type(_, _, _), do: nil` at `event_bridge.ex:880`
-should additionally log-once-per-type for any atom present in `Events.registry/0`, which is how
-§6.5's silent drops become visible.
-
-**`LemonCore.EventBridge`** (the dynamic-dispatch shim in core) — no interaction. Its surface is
-`subscribe_run/1` and `unsubscribe_run/1`; it never touches a payload.
-
-**`LemonCore.RouterBridge`** — no interaction. It contains zero references to `Bus` or `Event`; it
-is a submit facade.
-
-**`LemonCore.Bus`** — two changes worth bundling. Its moduledoc "Topic Contract (must be stable)"
-list is wrong in both directions: it omits `goals`, `kanban*`, `presence`, `run_graph:*`,
-`parent_question:*` and the sim/arena family, and it lists `channels` and `logs`, which have no
-publishers. Replace it with a pointer to this document plus the `Events.registry/0` table. Second,
-add `Bus.broadcast_event/3` (`topic, type, payload`) that asserts the payload's struct matches the
-registry entry for the type in `:dev`/`:test` and is a pass-through in `:prod` — the enforcement
-point that makes "consumers pattern-match on structs" actually hold.
-
-## 5. Migration sequencing
-
-Ordered by blast radius ascending, so the mechanism is proven on cheap topics before it reaches
-`run:*`. Each numbered item is one commit unless noted.
-
-**Pre-work (independent of typing; land first):**
-
-- **P1.** Fix `:run_failed` to use the `Event` envelope (§6.1) — 1 publisher, 3 consumers.
-- **P2.** Fix `extract_heartbeat_output/1` (§6.13) — 1 file.
-- **P3.** Replace the four `Process.whereis(LemonCore.PubSub)` gates with `Bus.pubsub?/0`-agnostic
-  publishing (§6.6) — `checkpoint.ex`, `goal_store.ex`, `kanban_store.ex`, `stream_coalescer.ex`.
-- **P5.** Fold `heartbeat_manager`'s four hand-built cron events into `LemonAutomation.Events`
-  (§6.10) — **blocks S5.**
-- **P6.** Delete the `kanban`/`kanban:<id>` publishes, and `channels`/`logs` from the Bus
-  moduledoc (§3).
-
-**Typing, in order:**
-
-| # | Topic / type | Subscribers | Notes |
-|---|---|---|---|
-| S1 | `LemonCore.Events` scaffold + `registry/0` + `Access` shim + `from_map/1` contract | — | No behaviour change; the kit lands with it |
-| S2 | `routing_feedback` | 1 | **The pilot.** The consumer already destructures exact keys; this proves the mechanism end-to-end in ~40 lines |
-| S3 | `goals` | 1 | Cross-app, one `EventBridge` clause |
-| S4 | `system` (`:config_reloaded`, `:config_reload_failed`, `:secret_changed`) | 1 | Decide drop-vs-map for the first three (§6.5) as part of it |
-| S5 | `cron` (7 types) | 2 | After P5. Largest *publisher* count (13 sites), small consumer count |
-| S6 | `exec_approvals` (3 types incl. `ApprovalPending`) | 6 | First multi-app consumer set; `pending` is shared with `ExecApprovalStore`, so the store's read path migrates with it |
-| S7 | `run:*` — `:run_phase_changed` | **0** | Free: published twice per transition and consumed by nobody (§6.4). Retires `LemonCore.RunPhaseEvent` |
-| S8 | `run:*` — `:run_started` | 3 | |
-| S9 | `run:*` — `:delta` | 5 | Highest volume; check the `Access` shim's cost under load here |
-| S10 | `run:*` — `:engine_action` + `Action` | 5 | Also covers `Event.engine_reasoning/1`, which already validates this payload by hand — replace that validation with the struct |
-| S11 | `run:*` — `:run_completed` + `Completion` + `:run_failed` | **12** | The big one; do it last, alone, and expect to touch `RunCompletionWaiter`'s seven receive clauses (§6.2) |
-| S12 | `session:*` | 4 | Mostly falls out of S8–S11, since `run_process` forwards the same events. `:coalesced_output` gets an envelope here |
-| S13 | Remove the `Access` shim; `Bus.broadcast_event/4` enforcement raises in `:dev`/`:test` and coerces in `:prod` | — | **Done 2026-08-13 — see §9.** Landed pre-0.2, not at the next major: the shim's whole cost is a semver-major promise, and while every consumer is still in this repo it is a mechanical change rather than a break anyone downstream has to absorb |
-
-Test-side blast radius is larger than lib-side and is the real cost driver: **144
-`Bus.broadcast` call sites in `test/`** hand-construct payloads —
-`lemon_control_plane` 57, `lemon_router` 52, `coding_agent` 18, `lemon_core` 10, `lemon_sim_ui` 4,
-`lemon_automation` 2, `lemon_gateway` 1. The `Access` shim (R2) does not help these, because they
-*build* payloads. Mitigation: ship a `LemonPlatformTest.EventsFixtures` module in S1 with
-`run_completed(overrides \\ [])`-style builders, and convert tests topic-by-topic alongside each S
-step. Roughly 60% of those sites are `:run_completed` or `:delta`, so S9 and S11 carry most of it.
-
-### 5.3 What the contract kit should assert
-
-New `LemonPlatformTest.EventsCase`, `use`-able by any app (and by extension authors publishing
-their own events):
-
-1. **Registry completeness** — every module under `LemonCore.Events.*` appears in
-   `registry/0`, and every registry value is a loadable module exporting `new/1` and `from_map/1`.
-2. **Round-trip** — `x |> Map.from_struct() |> Mod.from_map()` equals `x`, for a generated
-   example of each struct. This is what guarantees the legacy-map acceptance path is honest.
-3. **Introspection compatibility** — `LemonCore.Introspection.build_event(type, struct, opts)`
-   succeeds and yields the same sanitized payload as the equivalent map. Locks in §4.4.
-4. **Envelope discipline** — publishing each registry type through `Bus.broadcast_event/3`
-   delivers a `%LemonCore.Event{}` whose `payload` is the expected struct.
-5. **Backend parity** — every assertion in (4) runs twice, once with
-   `config :lemon_core, :bus_backend, :pubsub` and once with `:registry`. This is the assertion
-   class that would have caught §6.6, and it costs one `for backend <- [:pubsub, :registry]`.
-6. **Deprecation hygiene** — any module implementing `Access` carries a `@deprecated` with a
-   removal note (guards R2's one-cycle promise against becoming permanent).
-7. **Native lifecycle ordering** — assert the fixed executor's in-process
-   `{:engine_event, run_ref, …}` protocol and its bus projection:
-   `:run_started` → `:delta`\* → `:run_completed` on `run:<id>`, with typed
-   payloads in that order. Every lifecycle payload records `engine: "lemon"`;
-   the bus contract has no pluggable top-level executor surface.
-
-## 6. Risks and the undocumented consumer assumptions
-
-The plan predicted these; here they are, with the two live bugs first.
-
-**6.1 `:run_failed` is published raw and consumed as an envelope — live bug.**
-`run_process.ex:691` (`terminate/2`) publishes `%{type: :run_failed, run_id:, session_key:,
-reason:}` with no `Event` wrapper and no `:payload` key. But
-`heartbeat_manager.ex:643` waits on `%LemonCore.Event{type: :run_failed, payload: payload}` — a
-clause that can never match. A timer heartbeat whose run dies abnormally blocks for the full 30 s
-timeout instead of failing fast. `RunCompletionWaiter` gets this right by accident, via a separate
-`%{type: :run_failed, reason: reason}` clause.
-
-**6.2 `RunCompletionWaiter` has seven receive clauses for one published shape.**
-`run_completion_waiter.ex` accepts `%Event{type: :run_completed}`, `{:run_completed, payload}`,
-`%{type: :run_completed, payload: …}`, a bare `%{completed: %{answer:, ok: true}}`, a bare
-`%{completed: %{ok: false, error:}}`, `%Event{type: :run_failed}` and
-`%{type: :run_failed, reason:}`. Only two are reachable today. The bare-`%{completed:}` clauses
-and the tuple clause are fossils — the tuple one is the `DependencyManager.build_event/3` fallback
-(§6.9). `agent_wait.ex:71`, `acp.ex` and `webhook/response.ex:305` each carry their own subset of
-the same defensive fan. Typing `:run_completed` is the opportunity to delete about 15 dead clauses
-across four apps; not doing so preserves the ambiguity the structs are meant to remove.
-
-**6.3 `EventBridge` reads payloads via `Access` in 114 places.** Detailed in R2/§4.3. This is the
-single biggest mechanical risk in the phase and the reason the `Access` shim is not optional.
-
-**6.4 `:run_phase_changed` has zero subscribers** but is published on every phase transition by
-*both* `lemon_gateway/run.ex:773` and `lemon_router/phase_publisher.ex:86` — two publishers, one
-topic, no consumers, and `EventBridge` has no mapping clause so it would not surface even if a WS
-client asked. Either the router or the gateway publisher is redundant. Typing it (S7) is free; the
-real question the lead should settle is whether it should be published at all.
-
-**6.5 `EventBridge`'s catch-all silently drops published types.** `map_event_type(_, _, _),
-do: nil` at `event_bridge.ex:880` swallows `:config_reloaded`, `:config_reload_failed`,
-`:secret_changed`, `:engine_started`, `:engine_completed`, `:engine_event` and
-`:run_phase_changed` — all published onto topics `EventBridge` subscribes to. Nothing logs.
-(`:acp_client_request` was in this list too; it is no longer a bus event — §6.7.) Any future event
-type is dropped the same way, which means "add an event" currently has no failure mode that anyone
-notices.
-
-**6.6 Four publishers gate on `Process.whereis(LemonCore.PubSub)` — live bug.**
-`checkpoint.ex:318`, `goal_store.ex:520`, `kanban_store.ex:651` and `stream_coalescer.ex:481`
-check for the `Phoenix.PubSub` process before broadcasting. Under the Registry fallback backend —
-which `bus.ex:118-123` documents as a supported configuration, and which tests select via
-`config :lemon_core, :bus_backend, :registry` — that process does not exist, so checkpoints, goal
-events, kanban events and coalesced output are silently never published. `Bus.broadcast/2` already
-handles both backends; the gates are wrong, not merely redundant.
-
-**6.7 `:acp_client_request` carried a pid and a ref over a cluster-wide broadcast — resolved.**
-`acp_file_bridge.ex` used to publish `%{method, params, reply_to: self(), ref: ref}` on `run:<id>`
-and then block in `receive` for `{:acp_client_response, ^ref, response}`. That was
-request/response RPC wearing an event's clothes: order-dependent, single-consumer, and its
-payload could not be serialised, persisted or replayed like every other event on that topic; under
-`Phoenix.PubSub` it was also delivered to every node. It is now a direct call. `LemonCore.ACPClientBridge`
-is a node-local `Registry` in `lemon_core`: the ACP prompt-turn handler (`LemonControlPlane.ACP`)
-`register/1`s under its `run_id` while it waits, and the filesystem tool calls
-`ACPClientBridge.request(run_id, method, params, timeout)`, which looks up the handler and does a
-monitored `send`/`receive`. The reply path (`{:acp_client_response, ref, response}` back to the
-requester) is unchanged; only the delivery of the request moved off the bus. Failure modes mirror
-`LemonCore.RouterBridge`: `{:error, :no_client}` (no handler registered — now fails fast instead of
-hanging for the full timeout), `{:error, :client_down}` (handler died mid-request, caught via
-monitor), `{:error, :timeout}`.
-
-**6.8 Control-plane event injection is not supported.**
-Event payloads are validated at the publisher boundary before the bus broadcasts
-registered typed events.
-
-**6.9 A second wire shape exists behind an optional-dependency check.**
-`DependencyManager.build_event/3` (`dependency_manager.ex:84`) returns `{event_type, payload}` —
-a bare tuple — when `LemonCore.Event` is not loadable, and `emit_to_bus/4` in
-`lemon_gateway/run.ex:718` broadcasts whatever it returns. Inside the umbrella `lemon_core` is
-always present, so this path is dead; it exists because the gateway was once meant to run without
-core. It should be deleted, not typed. It is the origin of `RunCompletionWaiter`'s tuple clause.
-
-**6.10 The `cron` topic carries two incompatible payload shapes for the same event type.**
-`LemonAutomation.Events.emit_run_started/2` publishes
-`%{run: CronRun.to_map(run), cron_run_id, router_run_id, job_id, job_name, agent_id, session_key,
-triggered_by}`. `heartbeat_manager.ex:496` publishes the same `:cron_run_started` type as
-`%{run: %{id, job_id, agent_id, session_key, prompt, status}, job: %{id, name, agent_id}}` — a
-nested `job` map the other shape lacks, and no `job_name`. `EventBridge`'s clause reads
-`job[:name] || payload[:job_name]`, `run[:run_id] || payload[:router_run_id] || run[:id]` and
-`run[:job_id]`; those `||` chains are a direct fossil of this divergence, and there is no way to
-tell from the WS payload which publisher produced an event. P5 must resolve this before `cron`
-can be typed, and resolving it is a behaviour change (heartbeat cron events will gain a stable
-`job_name` and `router_run_id`) that the lead should sign off.
-
-**6.11 `kanban` and `kanban:<board_id>` have no subscribers; `channels` and `logs` have no
-publishers.** The latter two are in the Bus moduledoc's "Standard topics (must be stable)" list,
-and `EventBridge` subscribes to `channels` at startup although no module publishes to it — the
-only way to put an event on `channels` is the control-plane injector of §6.8. The documented
-contract and the real one have never matched.
-
-**6.12 `parent_question:<id>`'s consumer ignores the payload entirely.**
-`ask_parent.ex:283` matches `%LemonCore.Event{meta: %{request_id: ^request_id}}` and then re-reads
-state from `ParentQuestions.get/1`. The 13-key payload that `parent_questions.ex:315` carefully
-assembles is used only by the persisted event log and `Introspection`. Worth knowing before
-anyone spends effort typing it: the bus event here is a doorbell, not a message.
-
-**6.13 Timer heartbeats always record a `nil` result — live bug.**
-`heartbeat_manager.ex:655` extracts output with `payload[:output] || payload[:answer] ||
-payload[:result]` (plus string variants) from a `:run_completed` payload whose actual keys are
-`:completed` and `:duration_ms`; the answer lives at `payload.completed.answer`. Every timer
-heartbeat therefore reports `{:ok, nil}`, which the caller then broadcasts as
-`:cron_run_completed` with `output: nil`. Independent of typing (P2), but a typed
-`RunCompleted`/`Completion` pair makes this class of miss a compile-time question instead of a
-silent nil.
-
-## 7. What Phase A concludes
-
-The plan's framing — "give each published topic a struct" — should be narrowed to *seven contract
-topics and about 25 event types*, with the app-internal topics documented in their owning apps.
-The mechanism should be a typed `payload` inside the existing envelope, with an `Access` shim for
-one cycle, because that is what converts a twelve-subscriber flag day into thirteen independent
-commits.
-
-The catalog's most useful output is not the struct list; it is that the bus's real contract has
-drifted far enough from its documented one that four publishers are silently disabled under a
-supported backend, eight event types are published to a listener that discards them, two live bugs
-sit in the run-completion path, and an admin-scoped RPC method can forge any of it. Typing the
-payloads is worth doing, but P1–P6 are worth doing first and are independently valuable if 3.1 is
-ever deprioritised.
-
-## 8. Implementation status
-
-Landed 2026-08-10, after the design above was reviewed.
-
-**Pre-work (§5), all landed:**
-
-| Item | What changed |
-|---|---|
-| P1 | `:run_failed` now publishes a `LemonCore.Event` envelope (`run_process.ex`), making `HeartbeatManager`'s previously unmatchable clause live. Its error extraction now reads `:reason` first, which is the key the publisher actually sends. |
-| P2 | `extract_heartbeat_output/1` reads `payload.completed.answer`, so timer heartbeats record their real output instead of `nil`. |
-| P3 | New `LemonCore.Bus.running?/0` asks the *active* backend whether it is up. The four publishers that checked `Process.whereis(LemonCore.PubSub)` (`checkpoint.ex`, `goal_store.ex`, `kanban_store.ex`, `stream_coalescer.ex`) now use it, so they are no longer silently inert under the Registry fallback. |
-| P5 | `HeartbeatManager`'s four hand-built cron events are gone; it builds synthetic `CronJob`/`CronRun` structs and calls `LemonAutomation.Events`, so both emitters produce one payload shape. Timer heartbeats consequently gain `job_name`, `router_run_id`, `agent_id` and `session_key`, which they never carried before. |
-
-**Typing (§5 stages):**
-
-| Stage | Topic / type | Status |
-|---|---|---|
-| S1 | `LemonCore.Events` registry, `Events.Payload` macro, `Access` shim, `Bus.broadcast_event/4` | done |
-| S2 | `routing_feedback` | done — publisher and consumer both typed, consumer keeps a legacy-map clause |
-| S3 | `goals` | done |
-| S4 | `system` (`:config_reloaded`, `:config_reload_failed`, `:secret_changed`) | done |
-| S5 | `cron` (7 types) | done |
-| S6 | `exec_approvals` (3 types incl. `ApprovalPending`) | done — also aligned the control-plane publisher, which used `created_at_ms` where core uses `requested_at_ms` and omitted the top-level `approval_id` |
-| S7 | `:run_phase_changed` | done — `LemonCore.RunPhaseEvent` now delegates to `Events.RunPhaseChanged` and is deprecated |
-| S8–S11 | `run:*` — `:run_started`, `:delta`, `:engine_action`, `:run_completed`, `:run_failed` | done |
-| S12 | `session:*` | follows from S8–S11 (the router forwards the same events). `:coalesced_output` is still an unenveloped raw map |
-| S13 | Remove the `Access` shim | **done 2026-08-13 — §9** |
-
-**Contract kit:** `LemonPlatformTest.EventsCase` asserts registry completeness, `from_map/1`
-round-trip and string-key acceptance, strict `new/1`, Introspection parity between struct and
-map payloads, JSON encodability, `broadcast_event/4` envelope discipline **under both bus
-backends**, and that no payload module implements `Access`. It runs against the
-platform's own registry at
-`apps/lemon_platform_test/test/compliance/core_events_test.exs`.
-
-**Two design decisions that changed during implementation:**
-
-1. **Payloads derive `Jason.Encoder`.** Not in the original design. The JSONL store backend
-   encodes with Jason and the approval `pending` record is persisted, so a bare struct would
-   have raised `Protocol.UndefinedError` there. `jason` is a hard dependency of `lemon_core`,
-   so deriving is free.
-2. **`EventBridge`'s 26 `Access`-reading clauses were left alone.** The shim carries them
-   unchanged — verified by 770 control-plane, 1072 gateway, 547 router, 3958 coding_agent and
-   201 automation tests passing with no consumer edits. What *was* added is the diagnostic the
-   design asked for: the catch-all now warns once per event type when a type in
-   `Events.registry/0` reaches it unmapped, so a missing mapping stops being silent. Converting
-   those clauses to struct patterns — the change that makes a field rename a compile error — is
-   the remaining work in this area and is worth its own pass.
-
-**Phase B — the remaining pre-work, landed after the design was accepted:**
-
-| Item | What changed |
-|---|---|
-| P6 (§6.11) | The `kanban` and `kanban:<board_id>` broadcasts are deleted — zero subscribers repo-wide, and the durable record was always the `Introspection.record/3` call beside them, which stays. The `LemonCore.Bus` moduledoc's topic contract is rewritten: it now separates the seven typed contract topics from the app-internal ones, and says plainly that `channels` and `logs` never had a publisher. |
-| §6.4 | The gateway no longer publishes `:run_phase_changed`; `LemonRouter.PhasePublisher` is the single publisher, since the router owns the phase graph. The gateway keeps tracking and validating its own transitions (`maybe_track_phase/2`) because that is what surfaces an out-of-order phase in its logs — it just no longer broadcasts a duplicate. |
-| §6.2 | `LemonGateway.DependencyManager.build_event/3`'s unreachable `{event_type, payload}` tuple fallback is gone, and with it the tuple receive clauses in `RunCompletionWaiter` and `webhook/response.ex` that existed only to catch it. `RunCompletionWaiter` also loses its two envelope-less `%{completed: ...}` clauses and its two pre-P1 `:run_failed` shapes, going from seven receive clauses to four. The remaining bare-map clauses (`%{type: ..., payload: ...}`) are kept deliberately: an envelope-less map is the documented legacy shape and stays accepted for one cycle, whereas a tuple never was. |
-| §6.7 | `:acp_client_request` stays out of the registry, and is **no longer a bus event at all.** It was converted to a direct call: `LemonCore.ACPClientBridge` (a node-local `Registry` in `lemon_core`) lets the coding-agent filesystem tool find the ACP prompt-turn handler for its run and make a synchronous request/reply against it, with a `RouterBridge`-style failure contract (`:no_client` / `:client_down` / `:timeout`). The pid+ref no longer travel over a cluster-wide broadcast, and a run with no connected client fails fast instead of hanging for the full timeout. |
-
-**Two bugs the validate-or-reject work surfaced in the Phase A code, both now fixed:**
-
-1. **Overridden `from_map/1` never ran.** `LemonCore.Events.Payload` defines a generic
-   `from_map/1` that matches any map, so the custom clauses in `RunCompleted`,
-   `EngineAction`, `Action` and the two approval payloads — the ones that coerce a *nested*
-   payload — were shadowed and dead. A `run_completed` arriving as JSON kept its `completed`
-   field as a raw map, and `EngineAction` never normalised `phase`/`kind` to atoms. The kit's
-   round-trip assertion missed it because `Map.from_struct/1` on a well-formed struct already
-   contains the nested struct, so the generic clause happened to produce an equal result. Fixed
-   with `defoverridable from_map: 1, new: 1`; the kit gained a nested-coercion assertion that
-   feeds each payload a fully flattened map, which does catch it.
-2. **`false` collapsed to `nil`.** The `get_field/2` helper in `Action` and `EngineAction` used
-   `Map.get(attrs, :key) || Map.get(attrs, "key")`, which reads atom-or-string keys correctly
-   for everything except `false` — so a native action's `ok: false`, the flag
-   that says the action *failed*, silently became `nil`. Caught by
-   `LemonGateway.RunTest`. Fixed with
-   `Map.fetch/2`, plus a kit assertion that round-trips every payload with its booleans
-   falsified.
-
-Bug 3's fix gained the regression test the design asked for:
-`bus_registry_fallback_test.exs` now asserts `running?/0` follows the *active* backend rather
-than `LemonCore.PubSub`, and that a typed struct payload survives `broadcast_event/4` intact
-under the Registry fallback.
-
-**Still open as of §8 (2026-08-10) — §9 closes the second item:**
-
-- **Test-side fixtures.** `LemonPlatformTest.EventsFixtures` has since been written (builders
-  with defaults and overrides for every registered payload, including nested-field lifting), but
-  the `Bus.broadcast` sites in `test/` still hand-build raw maps. They keep working: consumers
-  coerce at their entry points, so a hand-built map is turned into its struct on arrival.
-- ~~**`EventBridge`'s 26 `Access`-reading clauses.**~~ Converted in S13 — see §9.
-- **`:coalesced_output`** is still published as an unenveloped raw map on `session:<key>`.
-
-**Known in-flight at time of writing:** the Farcaster transport deletion (task #29) has landed —
-`apps/lemon_gateway/lib/lemon_gateway/transports/` now holds only `email` and `webhook`, and
-neither Farcaster nor the email port appears anywhere in this catalog (Farcaster never used the
-Bus; the email adapter at `apps/lemon_channels/lib/lemon_channels/adapters/email/` has no Bus
-call sites). The email port (task #27) is therefore not expected to change any row above. The one
-row that would move is webhook's `run:<id>` subscription (`transports/webhook/response.ex`), if
-webhook is ever relocated — per decision D2 in `docs/platform-split.md` it stays in the gateway,
-so it should not be.
-
-## 9. S13 — removing the `Access` shim
-
-Landed 2026-08-13, pre-0.2. The shim was scheduled for "the next major" because removing it is a
-breaking change (§4.3's semver table). Doing it now inverts that cost: while every consumer is
-still inside this repo, it is a mechanical change with a compiler to check it; after 0.2 it is a
-promise to strangers. Nothing downstream depends on `Access` on a payload yet, so there is nothing
-to break.
-
-### 9.1 What the shim is replaced by
-
-One rule, applied everywhere: **a consumer pattern-matches the payload struct or reads a field,
-and any consumer that might receive something else coerces once at its entry point** with
-`LemonCore.Events.coerce/2`. Bracket tolerance is never carried downstream into the mapping code.
-
-`coerce/2`, `cast/2`, `new/1` and `from_map/1` are unchanged. The producer-side leniency they
-provide is the mechanism this change relies on, not a casualty of it: `from_map/1` still accepts
-string keys, drops unknown ones and coerces nested payloads, which is exactly what makes a legacy
-map safe to convert on arrival.
-
-### 9.2 Consumers converted
-
-| App | Site | Was | Now |
-|---|---|---|---|
-| `lemon_control_plane` | `event_bridge.ex` — 18 `map_event_type/3` clauses covering 25 registered types, plus `map_cron_job_event/2` | `payload[:key]`, `run[:id]`, `job[:name]` | each clause heads on its struct (`%Events.RunCompleted{} = payload`) and reads fields; `map_event/1` coerces once |
-| `lemon_control_plane` | `methods/agent_wait.ex` | `payload[:completed] \|\| payload` in two receive clauses | one `completed_result/2` that coerces, then matches `%Events.RunCompleted{completed: completed}` |
-| `lemon_automation` | `run_completion_waiter.ex` | `payload[:reason]`; `result[:output]`/`result["output"]` on a possibly-struct | coerces both terminal types; struct clauses first, and the free-form-map clause is now guarded `not is_struct/1`. The two envelope-less-map receive clauses are gone — no publisher has emitted one since P1 |
-| `lemon_automation` | `heartbeat_manager.ex` | `event.payload[:run]`/`[:output]`; `payload[:reason] \|\| payload["reason"] \|\| …` | matches `%Events.CronRunCompleted{run:, output:}`; `heartbeat_failure_reason/1` matches `%Events.RunFailed{reason:}` |
-| `coding_agent` | `tools/agent.ex` | `payload[:completed] \|\| payload["completed"] \|\| payload` | `normalize_completion/2` heads on `%Events.RunCompleted{}`; the shared `build_completion/3` reads the nested completion with `map_get/2` because the run store hands it the same shape as a plain map |
-| `lemon_channels` | `adapters/discord/transport.ex`, `adapters/telegram/transport/approval_request.ex` | `payload[:approval_id] \|\| payload["approval_id"]`, `pending[:tool] \|\| pending["tool"]`, … | the `with` chain heads on `%Events.ApprovalRequested{}` then `%Events.ApprovalPending{}`, binding `tool` and `action` in the pattern. Both functions wrap themselves in `rescue`, so key probing here would have failed **silently**: the approval prompt would simply stop arriving |
-
-`lemon_core`'s own `exec_approvals.ex` wait loop, `lemon_web`'s `session_live.ex`, the router's
-`run_process.ex`/`surface_manager.ex`/`tool_status_coalescer.ex`, `control_plane/acp.ex`, the SSE
-route and `webhook/response.ex` needed no change: they already read payloads through
-`Map.get`/`Map.fetch`/`MapHelpers` or pure pattern matching, which work on a struct.
-
-### 9.3 Nested payloads: why some reads stay `get_field/2`
-
-`Completion`, `Action` and `ApprovalPending` are always structs when they arrive through
-`from_map/1` or from any in-repo publisher, but `new/1` is strict about *keys*, not about nested
-*types* — `RunCompleted.new(%{completed: %{ok: true}})` builds a valid `RunCompleted` whose
-`completed` is a plain map. So a nested read uses the struct-and-map-safe `get_field/2` (a
-`Map.get/2` wrapper) rather than a field access that would crash on that shape. Top-level reads
-are plain field accesses, which is where the compile-error guarantee matters: they are what names
-the JSON keys sent to WS clients.
-
-`meta` is still deliberately a free map (§4.1) and is still read with `Access`. That is not a
-leftover: typing `meta` is a separate change with no consumer benefit.
-
-### 9.4 What the removal made visible
-
-A registered type whose payload is *not* its struct no longer produces a half-empty frame; it
-misses its typed clause and reaches `EventBridge`'s catch-all. That catch-all now distinguishes
-the two reasons it can be hit — "registered type with no client mapping" (§6.5, unchanged) and
-"payload is not its struct and could not be coerced" — because the fix differs. Both warn once
-per type.
-
-Two bare-map publishers of registered types were fixed rather than tolerated, so the invariant
-holds at the source:
-
-- `lemon_router/run_process.ex` — the synthetic `:run_completed` for a started run with no gateway
-  pid now builds `Events.RunCompleted`/`Events.Completion`, like the other synthetic completions
-  beside it.
-- `lemon_automation/cron_manager.ex` — the cron summary forwarded onto the base session topic now
-  carries `Events.RunCompleted`. Its run-store summary deliberately keeps `completed` as a plain
-  map, because that is the shape the store's readers (`chat_history`, `sessions_preview`,
-  `resume_selection`) expect.
-
-One remains, and is left alone on purpose: `CodingAgent.Tools.Task.Projection` publishes
-`:engine_action` as a bare map through `LemonCore.Event.engine_action/2`. Typing it means coercing
-inside `engine_action/2`, which would normalise `action.kind` from a string to an atom for every
-publisher — the gateway already emits atoms through `Events.EngineAction.from_map/1`, so consumers
-cope with both, but flipping the rest is a behaviour change that belongs with the deletion of
-`Event.validate_action_payload!/1` (S10's unfinished half), not with this one.
-
-### 9.5 The guard against regression
-
-`LemonPlatformTest.EventsCase` assertion 8 was "any module implementing `Access` carries a
-`@deprecated` removal note". It is now the opposite: `implements_access?/1` must be false for
-every payload module. The shim cannot come back without failing the contract suite.
-
-`Bus.broadcast_event/4` also stopped relaying a mismatch untouched in `:prod`. It coerces there
-instead — with consumers pattern-matching structs, passing a legacy map through would drop the
-event at every subscriber rather than degrade it. `:dev`/`:test` still raise, which is what keeps
-publishers honest.
-## 10. Addendum (2026-08-16) — `:channel_delivery` gives `channels` its first publisher
-
-The `channels` topic spent its whole life as a subscriber with no publisher (§6.11):
-`EventBridge` subscribed at startup, and the only way to put an event on the topic was the
-control-plane injectors of §6.8. That is no longer true. The final outbound funnel —
-`LemonChannels.Dispatcher.dispatch/1`, the router-facing semantic delivery entrypoint — was
-the one hop in the message flow invisible on the bus: tests wanting to assert "lemon would
-have sent exactly this to Telegram" had nothing to hook.
-
-**Event.** `:channel_delivery`, payload `LemonCore.Events.ChannelDelivery`, registered in
-`LemonCore.Events.registry/0` under a new `channels` section — which makes `channels` the
-eighth typed contract topic (amending R3's seven).
-
-| Field | Meaning |
-|---|---|
-| `intent_id`, `run_id`, `session_key` | copied from the `LemonCore.DeliveryIntent` |
-| `channel_id`, `account_id`, `peer_kind`, `peer_id`, `thread_id` | the `DeliveryRoute` |
-| `kind` | the intent kind (`:final_text`, `:stream_snapshot`, …) |
-| `text_preview` | bounded excerpt of the outbound text (≤ 200 chars + ellipsis), never the full body |
-| `ok` / `error` | dispatch result; `error` is a bounded `inspect/2` of the reason |
-| `duration_ms`, `ts_ms` | dispatch duration and wall-clock emit time |
-
-**Emission discipline.** The dispatcher emits *after* the renderer's result is known, from a
-helper that rescues and logs — a crashed bus backend or serialization issue can never break a
-real send. It gates on `Bus.running?/0` per §6.6, and emits a
-`[:lemon, :channels, :dispatch]` telemetry twin (see `docs/telemetry.md`).
-
-**Fanout.** `EventBridge` maps `:channel_delivery` → `channel.delivery`
-(`topic_for_event("channel.delivery") → ["channels"]`), and
-`Frames.supported_events/0` lists the event. All non-node clients receive
-events without topic subscriptions.
-
-**Kit.** `LemonPlatformTest.EventsFixtures.channel_delivery/1` builds the payload; the
-compliance suite covers the module through the registry as with every other typed payload.
+- **`LemonCore.Introspection`**: `sanitize_value/2` converts structs with `Map.from_struct/1`,
+  so struct payloads persist the same as maps. Publishers pass the struct to both
+  `Introspection.record/3` and `Bus.broadcast/2` unchanged.
+- **`LemonControlPlane.EventBridge`**: `project/1` is the single projection to operator wire
+  events (WS fanout; in-process operator clients such as the web UI call it too). It
+  coerces once, then each `map_event_type/3` clause heads on its struct, so a field rename
+  is a compile error at the place that publishes the JSON name to WS clients. The
+  field-by-field mapping is explicit — wire JSON is never derived from struct keys. The
+  bridge subscribes with a tagged bounded `Bus.Delivery`; see the delivery boundary above.
+- **`LemonCore.EventBridge`** (the dynamic-dispatch shim in core) exposes `subscribe_run/1` /
+  `unsubscribe_run/1` and never touches a payload. **`LemonCore.RouterBridge`** is a submit
+  facade with no Bus references.
+- **`Bus.broadcast_event/4`** (`topic, type, payload, meta \\ nil`) is the publishing path
+  for contract topics. Unregistered types pass through as-is. The `:enforce_event_payloads`
+  application env (default on in `:dev`/`:test`) selects raise vs coerce.
+- **`Bus.running?/0`** asks the *active* backend (Phoenix.PubSub or the local-node Registry
+  fallback, `Bus.backend/0`) whether it is up. Publishers that emit as a side effect of a
+  durable write gate on it, never on `Process.whereis(LemonCore.PubSub)`, which is inert under
+  the Registry fallback.
+
+## 5. Contract kit
+
+`LemonPlatformTest.EventsCase` is `use`-able by any app and by extension authors who publish
+their own events:
+
+```elixir
+defmodule MyApp.EventsContractTest do
+  use LemonPlatformTest.EventsCase, modules: [MyApp.Events.ThingHappened]
+end
+```
+
+With no `:modules` it covers everything in `LemonCore.Events.modules/0`; the platform's own run
+is `apps/lemon_platform_test/test/compliance/core_events_test.exs`. It asserts:
+
+1. **Registry completeness** — every registered type resolves to a loaded module exporting
+   `new/1`, `from_map/1` and `event_version/0`.
+2. **Round-trip** — `from_map(Map.from_struct(x)) == x`, including fully flattened nested
+   maps and payloads whose booleans are falsified (`ok: false` must stay `false`).
+3. **String keys** — `from_map/1` accepts string-keyed maps from the control plane.
+4. **Unknown keys** — `new/1` raises, `from_map/1` drops them.
+5. **Introspection compatibility** — a struct sanitizes to the same map its untyped form did.
+6. **JSON encodability** — `Jason.encode/1` succeeds.
+7. **Envelope discipline and backend parity** — `Bus.broadcast_event/4` delivers the struct
+   intact and rejects a mismatched payload, run under **both** `:pubsub` and `:registry`
+   backends (`config :lemon_core, :bus_backend, ...`).
+8. **No `Access`** on any payload module.
+
+`LemonPlatformTest.EventsFixtures` builds valid payloads for tests (`run_started/1`,
+`delta/1`, `run_completed/1`, `run_failed/1`, `approval_*`, `cron_*`, `channel_delivery/1`,
+`completion/1`, `action/1`, each taking keyword overrides). Hand-built raw maps in tests
+still work because consumers coerce at their entry points.
+
+## 6. Known gaps and consumer assumptions
+
+- **Registered types with no WS mapping.** `EventBridge` maps run started/completed, delta,
+  engine action, goals, approvals, channel delivery, cron, heartbeat alert/suppressed and
+  tick. It does **not** map `:run_failed`, `:run_phase_changed`, `:config_reloaded`,
+  `:config_reload_failed`, `:secret_changed`, `:talk_mode_changed` or `:routing_feedback`.
+  The catch-all logs one warning per such type — and a second distinct warning when a
+  registered type arrives with a payload that is not (and cannot be coerced into) its
+  struct — then drops the event. Unregistered types without a clause are dropped silently.
+- **Untyped publishers on registered types.** `CodingAgent.Tools.Task.Projection` builds
+  `:engine_action` through `LemonCore.Event.engine_action/2`, which validates a plain-map
+  payload by hand (`validate_action_payload!/1`); consumers coerce, so it works, but it is
+  the one typed event still published as a bare map.
+- **Unenveloped session output.** `:coalesced_output` on `session:<key>` is a raw map with no
+  `LemonCore.Event` wrapper.
+- **Raw subscriptions are unbounded.** See "Remaining best-effort paths" above.
+- **`parent_question:<id>` is a doorbell.** The consumer ignores the payload and re-reads
+  `ParentQuestions.get/1`; do not rely on that payload for anything but the persisted event
+  log and `Introspection`.
+
+## 7. History
+
+The typed-event migration landed in 2026-08 before the 0.2 release, in stages: a
+`LemonCore.Events` registry and `Events.Payload` macro with a temporary `Access` shim, then
+`routing_feedback`, `goals`, `system`, `cron`, `exec_approvals` and finally the `run:*`
+types; the shim was removed on 2026-08-13 once `EventBridge` and the other consumers were
+converted to struct patterns. Notable fixes along the way: `:run_failed` now uses the
+`LemonCore.Event` envelope; timer-heartbeat completion output is read from
+`completed.answer`; publishers gate on `Bus.running?/0` instead of `Process.whereis/1`;
+the gateway no longer publishes a duplicate `:run_phase_changed`; the bare-tuple
+`DependencyManager.build_event/3` fallback and its receive clauses were deleted;
+`:acp_client_request` left the bus for `LemonCore.ACPClientBridge`; and the `kanban*`
+broadcasts were deleted. `:channel_delivery` (2026-08-16) gave `channels` its first publisher.
+`apps/lemon_core/CHANGELOG.md` carries the dated record.

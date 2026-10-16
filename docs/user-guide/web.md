@@ -1,6 +1,6 @@
 # Use Lemon in a Browser
 
-Last reviewed: 2026-10-13
+Last reviewed: 2026-10-15
 
 The full Lemon runtime includes Lemon Web: a browser workspace for coding
 sessions plus every operator surface (automation, skills, memory, MCP, nodes,
@@ -14,7 +14,8 @@ lemon web --no-open  # only print the address
 ```
 
 The default address is `http://127.0.0.1:4080/`. Set `LEMON_WEB_PORT` before
-launch to choose another port. A source checkout uses `./bin/lemon web`.
+launch to choose another port (a source checkout also accepts `--web-port N` on
+`./bin/lemon start|daemon`). A source checkout uses `./bin/lemon web`.
 `lemon web` requires the `lemon_runtime_full` release profile; reinstall with
 `LEMON_PROFILE=full` if the launcher reports the minimal profile.
 
@@ -196,10 +197,14 @@ activation requires retyping the fresh digest.
 
 ## Remote access
 
-Lemon Web binds to localhost in the supported launch path. For remote use,
-terminate TLS in front of Lemon (the session cookie is marked `Secure` on HTTPS
-requests) and keep the operator token private. Never enable tokenless loopback
-compatibility behind a reverse proxy.
+A source checkout (`./bin/lemon start|daemon`) binds Lemon Web to `127.0.0.1`.
+A packaged release configures its endpoint on all interfaces
+(`config/runtime.exs`), so restrict the port with a firewall or bind it behind a
+reverse proxy unless you intend LAN access. Set `LEMON_WEB_HOST`,
+`LEMON_WEB_URL_SCHEME` and `LEMON_WEB_URL_PORT` for the public URL (defaults
+`localhost`, `https`, `443`). Terminate TLS in front of Lemon (the session cookie
+is marked `Secure` on HTTPS requests) and keep the operator token private. Never
+enable tokenless loopback compatibility behind a reverse proxy.
 
 ## Recovery
 

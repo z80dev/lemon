@@ -9,10 +9,14 @@ This document describes the supported ways to run Lemon and when to use each.
 Run directly from the source tree using Mix.  No release assembly needed.
 
 ```bash
-# Start the full runtime from source
-bin/lemon
+# Open the TUI, starting the runtime if needed
+./bin/lemon
 
-# Or start a specific profile
+# Run the runtime in the foreground / background
+./bin/lemon start
+./bin/lemon daemon
+
+# Or run it directly with Mix
 mix run --no-halt
 ```
 
@@ -57,11 +61,13 @@ profile and applies user-install defaults before delegating to
 `bin/<profile>`. Its lifecycle commands include `tui`, `web`, `start`,
 `daemon`, `stop`, `restart`, and `status`; release VM tools are `remote`,
 `eval`, and `rpc`. The full and minimal runtime profiles dispatch `setup`,
-`model`, `gateway`, `doctor`, `config`, `secrets`, `channels`, `providers`,
-`blueprints`, `profile`, `backup`, `context`, `sessions`, `learn`, `update`,
-`completion`, `migrate`, `node`, and `version` through the shared CLI.
-`doctor --bundle [path]` generates a redacted support bundle. The sim profile
-does not bundle the runtime CLI, but does support `doctor --bundle`. With no
+`model`, `gateway`, `doctor`, `config`, `secrets`, `mcp`, `channels`,
+`providers`, `blueprints`, `profile`, `backup`, `context`, `sessions`, `runs`,
+`cron`, `logs`, `omp`, `learn`, `update`, `completion`, `migrate`, `node`,
+`acp`, `run`, and `version` through the shared CLI (`lemon --help` lists the
+exact set). `doctor --bundle [path]` generates a redacted support bundle. The
+sim profile does not bundle the runtime CLI, but supports `doctor --bundle`,
+`update`, and `version`. With no
 arguments the launcher opens the TUI in an interactive terminal; without a TTY
 it prints usage and exits.
 The launcher never builds Elixir source from user input. `doctor` argv is
@@ -77,8 +83,8 @@ lemon daemon    # background start, recording pid and version root in ~/.lemon/r
 lemon status    # pidfile plus a control-plane /healthz probe
 lemon stop      # stops through the recorded root, so it works across a flip
 lemon update plan
-lemon update apply --confirm <exact-plan-digest>
-lemon stop && lemon daemon   # restart to apply a staged version
+lemon update apply --confirm <exact-plan-digest>   # also restarts a running daemon
+lemon restart   # manual restart, e.g. after changing config or env
 ```
 
 ```bash
@@ -97,16 +103,19 @@ or native dependencies remain actionable warnings.
 Updating stages the checksum/size-authenticated runtime and matching TUI
 artifacts together for full/min profiles, then flips the symlink; the sim
 profile has no TUI artifact. Planning is non-mutating and apply needs its exact
-fresh digest. There are no hot upgrades. Inspect the successful apply receipt
-with `lemon update history`, then roll back only that receipt-bound checkpoint:
+fresh digest. There are no hot upgrades: if a verified managed daemon was
+running, apply restarts it onto the new version itself (a stopped install stays
+stopped), so no separate `lemon stop`/`lemon daemon` is needed. Inspect the
+successful apply receipt with `lemon update history`, then roll back only that
+receipt-bound checkpoint:
 
 ```bash
 lemon update rollback --receipt <apply-receipt-id> \
   --confirm <rollback-digest>
 ```
 
-Rollback never chooses a retained version by recency and again needs a restart
-to take effect. See [the update safety contract](../user-guide/updates.md).
+Rollback never chooses a retained version by recency and restarts a running
+managed daemon the same way. See [the update safety contract](../user-guide/updates.md).
 
 Environment knobs, the uninstall procedure, and the platform support table live
 in `docs/install.md`. `scripts/verify_install_script` proves this flow against a
@@ -128,11 +137,12 @@ release notes under `CHANGELOG.md`'s Unreleased section, then dispatch from
 gh workflow run release.yml --ref main -f channel=stable -f draft=false
 ```
 
-The workflow derives and commits the next CalVer, tags the exact commit,
-builds and native-verifies every runtime and TUI artifact, publishes the
-multi-arch container and GitHub Release, and finally promotes the mutable
-container channel tags. See `docs/release/versioning_and_channels.md` for the
-full contract and explicit-version/draft inputs.
+The workflow gates the source commit with `ci.yml`, derives and commits the next
+CalVer, tags the exact commit, builds and native-verifies every runtime, TUI,
+and standalone `lemon_bot` artifact, publishes the multi-arch container and
+GitHub Release, and finally promotes the mutable container channel tags. See
+`docs/release/versioning_and_channels.md` for the full contract and
+explicit-version/draft inputs.
 
 ### Build
 
@@ -164,8 +174,10 @@ makes the release log "Could not warm up static assets" at boot and serve
 undigested assets.
 
 Releases are written to `_build/prod/rel/<profile>/`. Release automation also
-builds the `lemon_tui` pseudo-profile as a Bun binary, producing 11 published
-artifacts total: three min, three full, two sim, and three TUI artifacts.
+builds the `lemon_tui` pseudo-profile as a Bun binary and the standalone
+`lemon_bot` backend (`products/lemon_bot/scripts/build_release`), producing 14
+published artifacts total: three min, three full, two sim, three TUI, and three
+`lemon_bot` artifacts.
 
 Mix's `:tar` release step already produces the clean runtime archive. Publish
 that file directly rather than compressing the assembled directory again.
@@ -345,6 +357,7 @@ endpoint during release boot before the eval expression is executed.
 | `lemon_runtime_full` | + automation, skills, web, sim-ui; MCP client library loaded on demand | Full local runtime with UI |
 | `sim_broadcast_platform` | lemon_core, lemon_sim, lemon_sim_ui | Public sim broadcast deployment |
 | `lemon_tui` | `tui/bin/lemon-tui` | Bun-compiled client pseudo-profile, not a BEAM release |
+| `lemon_bot` | `bot/bin/lemon-bot`, packaged web build | Standalone Bun-compiled backend; not a BEAM release (see `docs/release/versioning_and_channels.md`) |
 
 ---
 

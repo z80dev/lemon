@@ -64,6 +64,13 @@ validation unless at least one inbound peer token secret is present. Across
 machines, use HTTPS/WSS termination or a verified encrypted overlay and set
 `public_url` to the URL peers can actually reach.
 
+`enable_a2a`, `host`, `port`, `public_url`, `reply_timeout_ms`,
+`rate_limit_per_minute` and `max_context_turns` can also be overridden with
+`LEMON_GATEWAY_ENABLE_A2A`, `LEMON_A2A_HOST`, `LEMON_A2A_PORT`,
+`LEMON_A2A_PUBLIC_URL`, `LEMON_A2A_REPLY_TIMEOUT_MS`,
+`LEMON_A2A_RATE_LIMIT_PER_MINUTE` and `LEMON_A2A_MAX_CONTEXT_TURNS`; see the
+[config registry](../config-registry.md).
+
 ## Hermes configuration
 
 Hermes' A2A platform listens on port 9900 by default. Its configuration shape
@@ -126,8 +133,11 @@ supervisor if the initiating HTTP or SSE connection closes.
 Every task lookup/list/cancel operation is scoped to the authenticated peer.
 Inbound peer text is wrapped as external untrusted content before model use.
 Outbound responses are returned to the Lemon model with `trust: :untrusted`.
-Inbound runs use a conservative read/coordination tool allowlist by default;
-`allow_tools` can broaden it for one explicitly trusted peer.
+Inbound runs use a conservative read/coordination tool allowlist: `read`,
+`read_skill`, `recall`, `grep`, `find`, `ls`, `webfetch`, `websearch`, `kanban`
+and `peer`. Set `default_allow_tools` under `[gateway.a2a]` to change it for all
+peers, or `allow_tools` on one peer to replace it for that peer (a non-empty
+peer list takes precedence).
 
 The inbound A2A `messageId` is also the durable replay key. Resending the same
 message for the same authenticated peer returns the original task, including

@@ -1,6 +1,6 @@
 # Release Checklist and Support Policy
 
-Last reviewed: 2026-08-16
+Last reviewed: 2026-10-15
 
 This document defines the operational checklist for Lemon 1.0 release
 candidates, rollback handling, and public support boundaries.
@@ -12,11 +12,11 @@ The initial stable 1.0 release artifact support target is:
 | Area | Supported for 1.0 | Notes |
 | --- | --- | --- |
 | Release artifacts | `linux-x86_64`, `linux-arm64`, `darwin-arm64` tarballs | Built by `.github/workflows/release.yml` on pinned `ubuntu-24.04`, `ubuntu-24.04-arm`, and `macos-15` runners; Linux artifacts carry a glibc 2.39 baseline |
-| Release profiles | `lemon_runtime_min`, `lemon_runtime_full`, and `lemon_tui` on all platforms; `sim_broadcast_platform` on Linux | All BEAM runtime artifacts must boot from extracted tarballs; the three `lemon_tui` artifacts are Bun binaries verified on native runners; the sim profile also verifies local assets, access control, and persistent spectator state |
+| Release profiles | `lemon_runtime_min`, `lemon_runtime_full`, `lemon_tui`, and the standalone `lemon_bot` backend on all platforms; `sim_broadcast_platform` on Linux | 14 tarballs total. All BEAM runtime artifacts must boot from extracted tarballs; the three `lemon_tui` artifacts are Bun binaries verified on native runners; each `lemon_bot` artifact is a compiled Bun backend boot-verified on its native runner; the sim profile also verifies local assets, access control, and persistent spectator state |
 | Source install | Linux and macOS, best effort | Requires Elixir 1.19.5+ and Erlang/OTP 28.5+ |
 | Windows and macOS `x86_64` | Not supported for 1.0 | Use WSL, the container image, or source-level experimentation |
 | Install script | Supported with scope | `install.sh` on the `stable` channel for the three platform tags; `preview`/`nightly` require a pinned `LEMON_VERSION` |
-| Update | Supported with scope | `lemon update` stages runtime plus TUI artifacts atomically for full/min installs, then flips the symlink plus operator restart, with `lemon update rollback --receipt ID --confirm DIGEST`. No hot upgrades, no background auto-update |
+| Update | Supported with scope | `lemon update` stages runtime plus TUI artifacts atomically for full/min installs, flips the `versions/current` symlink, and restarts an already-running verified managed daemon on the selected release (a stopped install stays stopped); `lemon update rollback --receipt ID --confirm DIGEST` does the same for the retained prior release. No hot upgrades, no background auto-update |
 | Container image | `ghcr.io/z80dev/lemon` multi-arch | `amd64` and `arm64` under one tag |
 | Hosted Lemon service | Not supported for 1.0 | Lemon is local-first/self-hosted |
 | Stable remote channel | Telegram | Text-first support boundary; other channel adapters are preview unless promoted |
@@ -26,13 +26,15 @@ local artifact proof, and support-bundle verification for each target.
 
 ## Release Candidate Checklist
 
-The Release workflow automates the repeatable candidate gates against the exact
-tagged commit. It validates version/changelog consistency and release notes,
-runs `scripts/verify_source_install`,
-`scripts/verify_install_script`, `scripts/test fast`, `scripts/test quality`,
-`scripts/test clients`, and `scripts/test eval-fast`, then builds and
-boot-verifies the published artifacts. Do not repeat these manually for an
-ordinary release.
+The Release workflow automates the repeatable candidate gates. Before it cuts
+a version, it requires a green `ci.yml` run on the exact source commit (reused
+through `scripts/ci_verified_commit`, otherwise by calling `ci.yml`, which runs
+`scripts/test fast`, `quality`, `eval-fast` and `clients`,
+`scripts/verify_source_install` and `scripts/verify_install_script`, the
+Dialyzer gate, sim bench and the WASM runtime lane). It validates
+version/changelog consistency and release notes, then builds and boot-verifies
+the published artifacts on native runners and re-verifies the assembled
+manifest. Do not repeat these manually for an ordinary release.
 
 The remaining checks in this section are credentialed or human-observed
 promotion evidence. Run only the checks relevant to a surface whose support
@@ -79,27 +81,34 @@ steps.
 - [ ] Build and package the `clients/tui` Bun binary for
       `linux-x86_64`, `linux-arm64`, and `darwin-arm64` as the `lemon_tui`
       artifacts.
-- [ ] Verify SHA-256 for all 11 tarballs and include all 11 in `manifest.json`.
+- [ ] Verify SHA-256 for all 14 tarballs and include all 14 in `manifest.json`.
 - [ ] Run `scripts/verify_release_artifacts {artifact-directory}` against the
-      assembled artifact directory. The verifier must see
-      the BEAM runtime tarballs plus the three `lemon_tui` tarballs (11 total).
+      assembled artifact directory. The verifier must see the full profile x
+      platform matrix: the BEAM runtime tarballs, the three `lemon_tui`
+      tarballs and the three `lemon_bot` tarballs (14 total).
 - [ ] Run `scripts/verify_release_runtime_boot {artifact-directory}` against
-      the assembled artifact directory. The verifier extracts the eight BEAM
-      tarballs and skips the `lemon_tui` pseudo-profile. Min/full check
+      the assembled artifact directory (`--platform TAG` to pick another
+      platform; default is the host's). The verifier boots every BEAM tarball
+      and each `lemon_bot` tarball for that platform and skips the `lemon_tui`
+      pseudo-profile. Min/full check
       `/healthz` and generate support bundles through release `eval`; the sim profile checks `/readyz`, digested assets, admin
-      denial, a persisted Werewolf spectator fixture, and restart recovery.
+      denial, a persisted Werewolf spectator fixture, and restart recovery;
+      `lemon_bot` checks the packaged web build and `/v1/setup`.
       When hosted rooms are enabled, also run
       `npm --prefix apps/lemon_sim_ui/assets run smoke:hosted-werewolf` against
       the candidate with five isolated sessions, then restart against the same
       volume and verify host/player reconnect. Production hosted proof requires
       HTTPS, a 32-byte creation token, private/no-store responses, and protected
       metrics with no credentials or raw provider errors.
-- [ ] Run product smoke against the release candidate.
+- [ ] Run product smoke against the release candidate
+      (`scripts/product_smoke_local --release`, or dispatch
+      `product-smoke.yml`).
 - [ ] When the release touches a real external integration, run the matching
       manual smoke: `scripts/live_telegram_matrix.py`,
       `scripts/live_discord_matrix.py`, `scripts/live_provider_fallback_smoke.exs`,
-      `scripts/live_mcp_stdio_smoke.exs`, or
-      `scripts/live_cron_runtime_restart_smoke.exs`.
+      `scripts/live_provider_ownership_smoke.exs`, or
+      `scripts/live_cron_runtime_restart_smoke.exs`. MCP has no live smoke
+      script; its client and transports are covered by `apps/lemon_mcp/test`.
 - [ ] Run `scripts/verify_docs_site`. It installs docs dependencies in a temp
       copy, builds the VitePress site, and
       checks markdown links without leaving generated artifacts in the repo.
@@ -199,14 +208,16 @@ The `version` input is optional. Blank derives the next CalVer from the current
 UTC month and `mix.exs`; `-f version=2026.08.2` requests an explicit,
 strictly-increasing version. The workflow then:
 
-1. consumes and validates the Unreleased changelog notes
-2. updates every first-party product version
+1. gates the dispatch's exact source commit with `ci.yml` (a green `main` push
+   run is reused; otherwise `ci.yml` is called), before any file or tag changes
+2. consumes and validates the Unreleased changelog notes, then updates every
+   first-party product version
 3. commits the release cut to `main` and creates its annotated tag
-4. runs the canonical fast, quality, deterministic eval, and client lanes
-   against the exact tagged commit
-5. builds and verifies all native artifacts and the multi-arch container
-6. publishes the GitHub Release, `manifest.json`, `install.sh`, and all 11
-   tarballs
+4. builds every native artifact from the tag, boot-verifying each on its
+   native runner, and builds and smoke-tests the multi-arch container
+5. verifies the assembled manifest and artifacts
+6. publishes the GitHub Release, `manifest.json`, `install.sh`, `join-node.sh`,
+   and all 14 tarballs
 7. promotes the selected container channel; stable also promotes `latest`
 
 Release runs are serialized. A failed preparation creates neither a commit nor
@@ -228,8 +239,9 @@ The expected assets are:
 - three `lemon_runtime_full` tarballs
 - two Linux `sim_broadcast_platform` tarballs
 - three `lemon_tui` tarballs
+- three `lemon_bot` tarballs
 - `manifest.json` schema 2
-- `install.sh`
+- `install.sh` and `join-node.sh`
 
 For an intentionally prepared new external tag, direct tag push remains
 supported:
@@ -246,14 +258,19 @@ Rollback means recommending or restoring a previous known-good release artifact.
 Rollback is always an operator action; nothing rolls back on its own.
 
 For runtimes installed by `install.sh` into `~/.lemon`, the two most recent
-previous versions are retained on disk:
+previous versions are retained on disk. `lemon update rollback` restarts a
+running managed daemon onto the prior release itself; a stopped install stays
+stopped, so there is no separate stop/start step:
 
 ```bash
 lemon update history
 lemon update rollback --receipt <apply-receipt-id> --confirm <rollback-digest>
-lemon stop && lemon daemon
 lemon status
 ```
+
+If the command exits `1` with `daemon_restart_failed`, the rollback is already
+committed but the daemon did not restart: fix the startup problem, then run
+`lemon daemon`. See [Update, roll back, and uninstall](../user-guide/updates.md).
 
 For manual tarball and container installs, use the full procedure:
 
@@ -295,7 +312,8 @@ Supported with scope:
 - Remote update through `lemon update` for runtimes installed in that layout.
   Update is a non-mutating plan followed by exact-confirm, checksum/size
   verification, archive confinement, atomic symlink flip, private content-free
-  receipt, and operator restart. Rollback requires the exact apply
+  receipt, and a restart of an already-running verified managed daemon onto
+  the selected release (a stopped install stays stopped). Rollback requires the exact apply
   receipt/digest and verified retained checkpoint. Manual tarball and container
   installs are not managed by the updater. Schema-2 manifests are
   checksum-authenticated but not publisher-signed.
@@ -307,7 +325,7 @@ Not supported for stable 1.0:
 - macOS `x86_64` release artifacts.
 - Unverified platform-specific packaging, including OS package managers
   (Homebrew, apt, AUR) and desktop bundles.
-- Hot code upgrades. Applying an update always requires a restart.
+- Hot code upgrades. An applied update always restarts the node (`lemon update` restarts a running managed daemon for you).
 - Background or unattended auto-update. `[runtime] auto_update` is read and
   reported only; there is no update timer.
 - Signed or notarized macOS binaries.

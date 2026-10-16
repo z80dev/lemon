@@ -252,8 +252,11 @@ extraction, validates the staged launcher version, then atomically flips
 `~/.lemon/versions/current`. A post-flip failure restores the prior pointer.
 Successful apply writes a content-free receipt; rollback accepts no path and
 requires that exact receipt/digest plus an unchanged current pointer and
-checkpoint checksum. Both operations require a restart; Lemon does not
-hot-upgrade a running node.
+checkpoint checksum. Both operations restart a daemon that was already running
+(verified as this install's own managed daemon) onto the selected release; a
+stopped install stays stopped, and Lemon does not hot-upgrade a running node.
+If the restart fails after selection, the command exits `1` with
+`daemon_restart_failed` and the selection stays committed.
 
 Schema 2 authenticates the artifact against the manifest's checksum and size.
 It is **not publisher-signed**: no detached manifest proof or trusted publisher
@@ -263,24 +266,11 @@ streamed to disk with a declared/post-download hard size check; the current
 body crosses its declaration, so the refused file is deleted after the bounded
 response completes. See [the update guide](../user-guide/updates.md).
 
-**Source checkouts** use `mix lemon.update` (or the no-subcommand source wrapper
-`./bin/lemon update`), which remains a stage-1 local maintenance task and never
-replaces binaries. `./bin/lemon update check|history` expose read-only release
-visibility and receipts; packaged `plan`, `apply`, and `rollback` fail closed
-with Git workflow guidance. The same source
-wrapper family exposes `./bin/lemon setup ...` and `./bin/lemon doctor ...` as
-delegates for the setup and diagnostics Mix tasks, plus
-`./bin/lemon channels ...` to inspect redacted Telegram and Discord
-configuration, `./bin/lemon config ...` for config inspection and validation,
-`./bin/lemon models ...` for model catalog discovery,
-`./bin/lemon providers ...` for redacted provider configuration, and
-`./bin/lemon policy ...` for route-specific model policy management. It also
-exposes `./bin/lemon media ...` for generated-media job status,
-`./bin/lemon secrets ...` as an allowlisted dispatcher for the existing
-secret-store tasks, `./bin/lemon skill ...` for the existing skill lifecycle
-task, and `./bin/lemon usage ...` for redacted usage/cost diagnostics.
-
-It runs:
+**Source checkouts** update with your reviewed Git workflow. `./bin/lemon update
+check|history` expose read-only release visibility and receipts; `plan`,
+`apply`, and `rollback` fail closed with Git workflow guidance. The
+contributor-only `mix lemon.update` task is not exposed through `./bin/lemon
+update`. It runs:
 
 1. Version reporting.
 2. Config migration for deprecated TOML sections.
@@ -291,8 +281,8 @@ It does not:
 - download release tarballs
 - swap the active runtime binary
 
-Those are the installed-runtime path above; a source checkout updates with
-`git pull`.
+Those are the installed-runtime path above. `./bin/lemon --help` lists the
+full command set shared by the source and packaged launchers.
 
 ## Runtime update settings
 
