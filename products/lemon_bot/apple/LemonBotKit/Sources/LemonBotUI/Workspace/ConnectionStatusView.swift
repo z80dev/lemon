@@ -41,7 +41,10 @@ public struct ConnectionStatusView: View {
                 if issue.layer == .controllerDown { controllerActions }
                 if store.canViewInstance, issue.layer != .signedOutOrRevoked { Button("View instance details") { instanceDetails = true }.buttonStyle(.borderless) }
                 #if os(macOS)
-                if issue.layer == .backendUnreachable, let url = URL(string: issue.origin), ConnectionIssue.isLoopback(url) { LocalLemonStartHelp() }
+                if issue.layer == .backendUnreachable, let url = URL(string: issue.origin), ConnectionIssue.isLoopback(url) {
+                    StartLemonButton(url: url, accountID: store.account?.id) { try? await store.retryNow() }
+                    LocalLemonStartHelp()
+                }
                 #endif
                 if let operation = store.instanceStatus?.runtime.operation { RuntimeOperationView(operation: operation) }
                 if action.error != nil { Text("The action couldn’t finish. Check Details before trying again.").font(LBFont.meta).foregroundStyle(LB.danger) }
@@ -174,7 +177,7 @@ struct LocalLemonStartHelp: View {
         DisclosureGroup("Start it on this Mac") {
             VStack(alignment: .leading, spacing: 8) {
                 Text("Open Terminal in your Lemon checkout. Start Lemon, then start Lemon Bot in another tab with your existing backend environment configured. This app will detect it when it comes online.").font(LBFont.meta)
-                command("lemon daemon")
+                command("lemon start")
                 command(backendCommand)
                 HStack {
                     Button("Open Terminal") {
@@ -187,6 +190,69 @@ struct LocalLemonStartHelp: View {
     }
     private func command(_ value: String) -> some View {
         HStack { Text(value).font(LBFont.code).textSelection(.enabled); Spacer(minLength: 8); Button("Copy") { copyText(value) }.buttonStyle(.pill(.secondary, compact: true)) }
+    }
+}
+#endif
+
+#if os(macOS)
+/// Explicit clipboard hand-off to Terminal, followed by bounded health polling.
+struct StartLemonButton: View {
+    let url: URL
+    let accountID: String?
+    let onHealthy: @MainActor () async -> Void
+    @State private var state: LemonStartState = .idle
+    @State private var pollingTask: Task<Void, Never>?
+    @State private var attemptID: UUID?
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Button("Start Lemon") { start() }.buttonStyle(.lemonPrimary).disabled(state.isBusy)
+                if state.isBusy { ProgressView().controlSize(.small) }
+                if let message { Text(message).font(LBFont.meta).foregroundStyle(LB.muted) }
+            }
+            if case .failed(let reason) = state { Text(reason).font(LBFont.meta).foregroundStyle(LB.danger).textSelection(.enabled) }
+        }
+        .onDisappear { cancel() }
+        .onChange(of: accountID) { _, _ in cancel() }
+        .onChange(of: url) { _, _ in cancel() }
+    }
+    private var message: String? {
+        switch state {
+        case .openingTerminal: return "Copying command and opening Terminal…"
+        case .waitingForHealth: return "Command copied. Paste into Terminal and press Return. Waiting for Lemon Bot…"
+        case .started: return "Lemon Bot is running."
+        case .idle, .failed: return nil
+        }
+    }
+    private func start() {
+        let url = url
+        let home = getpwuid(getuid()).map { String(cString: $0.pointee.pw_dir) } ?? NSHomeDirectory()
+        let id = UUID()
+        attemptID = id
+        state = .openingTerminal
+        pollingTask = Task {
+            let starter = LocalLemonStarter(handoff: TerminalWorkspaceHandoff(), isHealthy: {
+                guard let client = try? HTTPTransport(baseURL: url) else { return false }
+                defer { client.session.invalidateAndCancel() }
+                return (try? await client.read("/setup", timeout: 2, as: SetupStatus.self)) != nil
+            }, homeDirectory: home)
+            let final = await starter.start { next in
+                Task { @MainActor in
+                    guard attemptID == id, state.isBusy else { return }
+                    if next.isBusy { state = next }
+                }
+            }
+            guard !Task.isCancelled, attemptID == id else { return }
+            state = final
+            if final == .started { await onHealthy() }
+            if attemptID == id { pollingTask = nil }
+        }
+    }
+    private func cancel() {
+        pollingTask?.cancel()
+        pollingTask = nil
+        attemptID = nil
+        state = .idle
     }
 }
 #endif
