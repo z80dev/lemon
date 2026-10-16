@@ -41,7 +41,9 @@ defmodule LemonChannels.Adapters.Telegram.Renderer do
          state <- PresentationState.get(route, intent.run_id, surface),
          text_hash =
            text_hash({chunks, status_reply_markup(intent), final_file_signature(intent)}) do
-      if duplicate?(state, intent.kind, seq, text_hash) do
+      LemonChannels.VoiceReplyDelivery.expect(intent, chunks)
+
+      if is_nil(intent.meta[:voice_reply_id]) and duplicate?(state, intent.kind, seq, text_hash) do
         :ok
       else
         case send_text_chunks(intent, route, state, surface, seq, text_hash, chunks) do
@@ -167,7 +169,8 @@ defmodule LemonChannels.Adapters.Telegram.Renderer do
                surface,
                seq,
                text_hash,
-               pending_resume(intent)
+               pending_resume(intent),
+               not is_nil(intent.meta[:voice_reply_id])
              ) do
           {:reserved, notify_ref} ->
             payload =

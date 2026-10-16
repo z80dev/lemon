@@ -6,8 +6,15 @@ defmodule LemonChannels.Adapters.Telegram.OutboundTest do
 
   defmodule ScriptedApi do
     def send_message(_, _, _, _, _), do: attempt(:send_message)
+    def edit_message_text(_, _, _, _, _), do: attempt(:edit_message_text)
     def send_photo(_, _, _, _), do: attempt(:send_photo)
     def send_document(_, _, _, _), do: attempt(:send_document)
+
+    def send_voice(_, chat_id, file, opts) do
+      send(self(), {:voice_upload, chat_id, file, opts})
+      attempt(:send_voice)
+    end
+
     def send_media_group(_, _, _, _), do: attempt(:send_media_group)
 
     defp attempt(method) do
@@ -15,6 +22,36 @@ defmodule LemonChannels.Adapters.Telegram.OutboundTest do
       [result | rest] = Process.get(:send_results)
       Process.put(:send_results, rest)
       result
+    end
+  end
+
+  test "voice preserves Ogg and MP3 bytes, MIME, filename, reply and topic" do
+    put_telegram_config(%{bot_token: "token", api_mod: ScriptedApi})
+
+    for {mime, filename} <- [{"audio/ogg", "reply.ogg"}, {"audio/mpeg", "reply.mp3"}] do
+      bytes = <<0, 255, 1, 2>>
+      Process.put(:send_results, [{:ok, %{"message_id" => 42}}])
+
+      payload = %OutboundPayload{
+        channel_id: "telegram",
+        account_id: "acct",
+        peer: %{kind: :dm, id: "123", thread_id: "777"},
+        kind: :voice,
+        content: %{audio_bytes: bytes, mime_type: mime, filename: filename},
+        reply_to: "456"
+      }
+
+      assert {:ok, %{"message_id" => 42}} = Outbound.deliver(payload)
+      assert_receive {:voice_upload, 123, {:binary, ^filename, ^mime, ^bytes}, opts}
+      assert opts.reply_to_message_id == 456
+      assert opts.message_thread_id == 777
+      assert_receive {:accepted_write, :send_voice, _}
+
+      Process.put(:send_results, [{:error, :timeout}])
+      assert {:error, {:outcome_unknown, :timeout}} = Outbound.deliver(payload)
+      assert_receive {:voice_upload, _, _, _}
+      assert_receive {:accepted_write, :send_voice, _}
+      refute_receive {:accepted_write, _, _}, 0
     end
   end
 
@@ -289,6 +326,39 @@ defmodule LemonChannels.Adapters.Telegram.OutboundTest do
     assert is_map(opts)
     assert is_list(opts[:entities])
     assert Enum.any?(opts[:entities], &(&1["type"] == "bold"))
+  end
+
+  test "edit: only the not-modified description confirms the existing message" do
+    put_telegram_config(%{bot_token: "token", api_mod: ScriptedApi})
+
+    payload = %OutboundPayload{
+      channel_id: "telegram",
+      account_id: "acct",
+      peer: %{kind: :dm, id: "123"},
+      kind: :edit,
+      content: %{message_id: "456", text: "Already present"}
+    }
+
+    for description <- [
+          "Bad Request: message is not modified",
+          "Bad Request: message is not modified: specified new message content is unchanged"
+        ] do
+      body = Jason.encode!(%{"description" => description})
+      Process.put(:send_results, [{:error, {:http_error, 400, body}}])
+      assert {:ok, %{"message_id" => 456}} = Outbound.deliver(payload)
+    end
+
+    for {status, body} <- [
+          {400, Jason.encode!(%{"description" => "Bad Request: message to edit not found"})},
+          {400, Jason.encode!(%{"description" => "Bad Request: message can't be edited"})},
+          {400, Jason.encode!(%{"other" => "Bad Request: message is not modified"})},
+          {400, "Bad Request: message is not modified"},
+          {403, Jason.encode!(%{"description" => "Bad Request: message is not modified"})}
+        ] do
+      reason = {:http_error, status, body}
+      Process.put(:send_results, [{:error, reason}])
+      assert {:error, ^reason} = Outbound.deliver(payload)
+    end
   end
 
   test "delete: 400 message to delete not found is treated as success" do

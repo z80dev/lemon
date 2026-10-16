@@ -260,6 +260,38 @@ defmodule LemonChannels.Telegram.API do
   end
 
   @doc """
+  Send a voice message. Accepts the same path or binary tuples as `send_document/4`.
+  Binary tuples preserve the supplied filename and audio MIME type.
+  """
+  def send_voice(token, chat_id, file, opts \\ %{}) do
+    opts = if is_map(opts), do: opts, else: Enum.into(opts, %{})
+    boundary = build_boundary("lemon-voice")
+
+    {body, content_type} =
+      build_media_multipart(boundary, chat_id, "voice", file, opts, "audio/ogg")
+
+    url = "https://api.telegram.org/bot#{token}/sendVoice"
+    headers = [{~c"content-type", to_charlist(content_type)}]
+    http_opts = [timeout: 60_000, connect_timeout: 30_000]
+
+    case LemonCore.Httpc.request(
+           :post,
+           {to_charlist(url), headers, to_charlist(content_type), body},
+           http_opts,
+           body_format: :binary
+         ) do
+      {:ok, {{_, 200, _}, _headers, resp_body}} ->
+        Jason.decode(resp_body)
+
+      {:ok, {{_, status, _}, _headers, resp_body}} ->
+        {:error, {:http_error, status, resp_body}}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  @doc """
   Send a photo to Telegram.
 
   `file` may be:

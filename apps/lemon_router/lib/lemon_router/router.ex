@@ -197,6 +197,7 @@ defmodule LemonRouter.Router do
         Map.merge(Map.delete(meta, "channel_identity"), %{
           channel_id: msg.channel_id,
           account_id: msg.account_id,
+          inbound_voice: (meta[:inbound_voice] || meta["inbound_voice"]) == true,
           peer: msg.peer,
           sender: msg.sender,
           channel_identity: inbound_channel_identity(msg),

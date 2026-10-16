@@ -35,7 +35,9 @@ defmodule LemonChannels.Adapters.Generic.Renderer do
          seq <- extract_seq(intent),
          state <- PresentationState.get(route, intent.run_id, surface),
          text_hash = text_hash(text) do
-      if duplicate?(state, seq, text_hash) do
+      LemonChannels.VoiceReplyDelivery.expect(intent, [text])
+
+      if is_nil(intent.meta[:voice_reply_id]) and duplicate?(state, seq, text_hash) do
         :ok
       else
         send_text(intent, route, state, surface, seq, text_hash, text)

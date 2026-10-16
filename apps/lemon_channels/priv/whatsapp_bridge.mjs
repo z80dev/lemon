@@ -218,6 +218,7 @@ async function handleConnect(command) {
             reply_to_text: replyCtx.reply_to_text,
             mentioned_jids: replyCtx.mentioned_jids,
             media_type: mediaInfo?.type || null,
+            ptt: mediaInfo?.type === "audio" && mediaInfo.msg?.ptt === true,
             media_path: mediaPath,
             media_mime: mediaInfo?.mime || null,
             from_me: msg.key.fromMe || false,
@@ -283,17 +284,23 @@ async function handleSendMedia(command) {
   }
   let dispatched = false;
   try {
-    const buffer = fs.readFileSync(command.file_path);
+    const buffer = command.audio_base64
+      ? Buffer.from(command.audio_base64, "base64")
+      : fs.readFileSync(command.file_path);
     let msg = {};
     const mediaType = command.media_type || "document";
 
     if (mediaType === "image") msg = { image: buffer, caption: command.caption || undefined };
     else if (mediaType === "video") msg = { video: buffer, caption: command.caption || undefined };
-    else if (mediaType === "audio") msg = { audio: buffer, ptt: command.ptt || false, mimetype: "audio/ogg; codecs=opus" };
+    else if (mediaType === "audio") msg = { audio: buffer, ptt: command.ptt || false, mimetype: command.mime_type || "audio/ogg; codecs=opus", fileName: command.filename || undefined };
     else msg = { document: buffer, fileName: path.basename(command.file_path), caption: command.caption || undefined, mimetype: command.mime_type || "application/octet-stream" };
 
+    const opts = {};
+    if (command.reply_to) {
+      opts.quoted = { key: { remoteJid: command.jid, id: command.reply_to, fromMe: false } };
+    }
     dispatched = true;
-    const result = await state.sock.sendMessage(command.jid, msg);
+    const result = await state.sock.sendMessage(command.jid, msg, opts);
     emit({ type: "command_result", id: command.id, ok: true, data: { message_id: result?.key?.id || null } });
   } catch (err) {
     emitSendError(command, err, dispatched);

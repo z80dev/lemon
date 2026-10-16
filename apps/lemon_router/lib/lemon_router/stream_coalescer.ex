@@ -15,6 +15,11 @@ defmodule LemonRouter.StreamCoalescer do
   hands them to `LemonChannels.Dispatcher`. Channel-specific presentation lives
   entirely in `lemon_channels`.
 
+  Turn-boundary finalizations carry `meta.terminal_answer: false`: they finish
+  a presentation segment, not the run's answer. Only `finalize_run/4` emits
+  `meta.terminal_answer: true`, so channels can reserve final-answer effects
+  such as speech synthesis for the completed answer.
+
   Each delta must fit the bounded ingress envelope. An oversized delta or a
   full ingress queue fences transient output: `current_text/3` returns `nil`
   while resync is required. Recovery requires authoritative `:final_text`
@@ -478,7 +483,7 @@ defmodule LemonRouter.StreamCoalescer do
     if state.overflowed and not is_binary(final_text) do
       {:reply, {:error, :resync_required}, state}
     else
-      case do_finalize_with_result(state, final_text, dispatch?) do
+      case do_finalize_with_result(state, final_text, dispatch?, true) do
         {:ok, state} ->
           delivery =
             LemonRouter.CoalescerIngress.complete(
@@ -589,13 +594,13 @@ defmodule LemonRouter.StreamCoalescer do
   end
 
   defp do_finalize(state, final_text) do
-    case do_finalize_with_result(state, final_text, true) do
+    case do_finalize_with_result(state, final_text, true, false) do
       {:ok, state} -> state
       {:error, _reason, state} -> state
     end
   end
 
-  defp do_finalize_with_result(state, final_text, dispatch?) do
+  defp do_finalize_with_result(state, final_text, dispatch?, terminal_answer?) do
     text =
       cond do
         is_binary(final_text) and final_text != "" -> final_text
@@ -616,11 +621,12 @@ defmodule LemonRouter.StreamCoalescer do
             state,
             "⚠️ Empty response from model — no output was generated.",
             nil,
-            dispatch?
+            dispatch?,
+            terminal_answer?
           )
 
         _ ->
-          dispatch_or_mark_finalized(state, text, text, dispatch?)
+          dispatch_or_mark_finalized(state, text, text, dispatch?, terminal_answer?)
       end
 
     cancel_timer(state.flush_timer)
@@ -640,15 +646,17 @@ defmodule LemonRouter.StreamCoalescer do
     end
   end
 
-  defp dispatch_or_mark_finalized(state, intent_text, last_sent_text, false)
+  defp dispatch_or_mark_finalized(state, intent_text, last_sent_text, false, _terminal_answer?)
        when is_binary(intent_text) do
     {:ok, %{state | last_sent_text: last_sent_text, finalized: true}}
   end
 
-  defp dispatch_or_mark_finalized(state, intent_text, last_sent_text, true)
+  defp dispatch_or_mark_finalized(state, intent_text, last_sent_text, true, terminal_answer?)
        when is_binary(intent_text) do
     case build_intent(state, :stream_finalize, intent_text) do
       {:ok, intent} ->
+        intent = %{intent | meta: Map.put(intent.meta, :terminal_answer, terminal_answer?)}
+
         case dispatcher().dispatch(intent) do
           :ok ->
             {:ok, %{state | last_sent_text: last_sent_text, finalized: true}}

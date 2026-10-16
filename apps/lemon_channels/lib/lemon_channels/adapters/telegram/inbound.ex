@@ -179,6 +179,7 @@ defmodule LemonChannels.Adapters.Telegram.Inbound do
           topic_id: message["message_thread_id"],
           topic_name: topic_name(message),
           media_group_id: message["media_group_id"],
+          inbound_voice: is_map(voice) and map_size(voice) > 0,
           photo: photo,
           document:
             if is_map(document) and map_size(document) > 0 do

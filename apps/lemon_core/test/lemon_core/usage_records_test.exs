@@ -32,6 +32,35 @@ defmodule LemonCore.UsageRecordsTest do
 
   defp query(store, params), do: UsageStore.records(params, store: store)
 
+  test "speech character metadata and unknown costs survive ledger persistence", ctx do
+    for {run, cost, known} <- [{"speech-priced", 0.00016, true}, {"speech-unknown", nil, false}] do
+      usage = %{
+        run_id: run,
+        occurrence: "voice_reply:delivery",
+        session_key: "agent:bot:main",
+        agent_id: "bot",
+        at_ms: 1000,
+        provider: "openai",
+        model: "configured-tts",
+        input: 0,
+        output: 0,
+        input_characters: 8,
+        cost: cost,
+        price_known: known
+      }
+
+      assert :ok = UsageLedger.record(ctx.ledger, usage)
+    end
+
+    stop_supervised!(UsageLedger)
+    start_supervised!({UsageLedger, name: ctx.ledger, store: ctx.store})
+    assert {:ok, page} = query(ctx.store, %{"fromMs" => 1000, "toMs" => 1001})
+    assert length(page.records) == 2
+    assert Enum.all?(page.records, &(&1.input_characters == 8))
+    assert Enum.any?(page.records, &(&1.cost_usd == 0.00016 and &1.price_known))
+    assert Enum.any?(page.records, &(is_nil(&1.cost_usd) and not &1.price_known))
+  end
+
   test "all sessions paginate beyond top twenty with exact half-open cursor boundaries", ctx do
     for i <- 0..26 do
       assert :ok =

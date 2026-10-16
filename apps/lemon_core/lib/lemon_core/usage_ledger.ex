@@ -66,7 +66,8 @@ defmodule LemonCore.UsageLedger do
   @doc """
   Records one usage occurrence synchronously (callers outside the Store hook).
   `entry` carries native `:run_id`, `:occurrence`, `:session_key`, `:agent_id`,
-  `:at_ms`, provider/model, token counts and nullable `:cost`/`:price_known`.
+  `:at_ms`, provider/model, token counts, optional `:input_characters`, and
+  nullable `:cost`/`:price_known`.
   """
   @spec record(GenServer.server(), map()) :: :ok | {:error, term()}
   def record(server \\ __MODULE__, entry) when is_map(entry),
@@ -232,6 +233,7 @@ defmodule LemonCore.UsageLedger do
       input_tokens: entry.input,
       output_tokens: entry.output,
       total_tokens: Map.get(entry, :total_tokens, entry.input + entry.output),
+      input_characters: Map.get(entry, :input_characters),
       cost_usd: entry.cost,
       price_known: Map.get(entry, :price_known, not is_nil(entry.cost))
     }

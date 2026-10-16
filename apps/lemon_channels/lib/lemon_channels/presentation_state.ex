@@ -91,7 +91,8 @@ defmodule LemonChannels.PresentationState do
           surface(),
           non_neg_integer(),
           integer() | nil,
-          term() | nil
+          term() | nil,
+          boolean()
         ) ::
           {:reserved, reference()} | {:duplicate, entry()} | {:existing, entry()}
   def reserve_pending_create(
@@ -100,13 +101,14 @@ defmodule LemonChannels.PresentationState do
         surface,
         seq,
         text_hash,
-        pending_resume \\ nil
+        pending_resume \\ nil,
+        force \\ false
       )
       when is_binary(run_id) and is_integer(seq) do
     GenServer.call(
       __MODULE__,
       {:reserve_pending_create, key(route, run_id, surface), route, run_id, surface, seq,
-       text_hash, pending_resume}
+       text_hash, pending_resume, force}
     )
   end
 
@@ -277,14 +279,15 @@ defmodule LemonChannels.PresentationState do
   end
 
   def handle_call(
-        {:reserve_pending_create, key, route, run_id, surface, seq, text_hash, pending_resume},
+        {:reserve_pending_create, key, route, run_id, surface, seq, text_hash, pending_resume,
+         force},
         _from,
         state
       ) do
     {entry, state} = get_with_stale_gc(key, route, run_id, surface, state)
 
     cond do
-      entry.last_seq == seq and entry.last_text_hash == text_hash ->
+      not force and entry.last_seq == seq and entry.last_text_hash == text_hash ->
         {:reply, {:duplicate, entry}, state}
 
       present_message_id?(entry.platform_message_id) or is_reference(entry.pending_create_ref) ->
@@ -550,7 +553,9 @@ defmodule LemonChannels.PresentationState do
           _ ->
             put_entry(state, key, entry)
         end
-      _ -> put_entry(state, key, entry)
+
+      _ ->
+        put_entry(state, key, entry)
     end
   rescue
     _ -> put_entry(state, key, entry)

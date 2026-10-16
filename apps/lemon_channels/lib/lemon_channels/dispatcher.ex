@@ -31,6 +31,7 @@ defmodule LemonChannels.Dispatcher do
   @spec dispatch(DeliveryIntent.t()) :: :ok | {:error, term()}
   def dispatch(%DeliveryIntent{} = intent) do
     started_at = System.monotonic_time()
+    intent = LemonChannels.VoiceReplyDelivery.prepare(intent)
 
     if intent.kind in [:final_text, :stream_finalize] do
       LemonChannels.TypingIndicator.stop_run(intent.run_id)

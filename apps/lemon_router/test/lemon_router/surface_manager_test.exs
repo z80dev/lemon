@@ -167,6 +167,9 @@ defmodule LemonRouter.SurfaceManagerTest do
         session_key: session_key,
         prompt: "fanout",
         meta: %{
+          user_msg_id: 42,
+          progress_msg_id: 43,
+          source: %{message_id: 42, peer_id: "primary"},
           fanout_routes: [
             %{channel_id: "telegram", account_id: "default", peer_kind: :dm, peer_id: "primary"},
             %{channel_id: "telegram", account_id: "default", peer_kind: :dm, peer_id: "111"},
@@ -192,7 +195,7 @@ defmodule LemonRouter.SurfaceManagerTest do
                       kind: :final_text,
                       body: %{text: "Fanout answer", seq: seq_a},
                       route: %{peer_id: peer_a},
-                      meta: %{fanout: true, fanout_index: fanout_index_a}
+                      meta: %{fanout: true, fanout_index: fanout_index_a} = meta_a
                     }},
                    1_000
 
@@ -201,7 +204,7 @@ defmodule LemonRouter.SurfaceManagerTest do
                       kind: :final_text,
                       body: %{text: "Fanout answer", seq: seq_b},
                       route: %{peer_id: peer_b},
-                      meta: %{fanout: true, fanout_index: fanout_index_b}
+                      meta: %{fanout: true, fanout_index: fanout_index_b} = meta_b
                     }},
                    1_000
 
@@ -211,6 +214,58 @@ defmodule LemonRouter.SurfaceManagerTest do
     assert Enum.sort([peer_a, peer_b]) == ["111", "222"]
     assert Enum.sort([seq_a, seq_b]) == [1, 2]
     assert Enum.sort([fanout_index_a, fanout_index_b]) == [1, 2]
+    assert meta_a == %{surface: :answer, fanout: true, fanout_index: fanout_index_a}
+    assert meta_b == %{surface: :answer, fanout: true, fanout_index: fanout_index_b}
+  end
+
+  test "voice fanout carries only destination-independent voice metadata" do
+    session_key =
+      SessionKey.channel_peer(%{
+        agent_id: "test-agent",
+        channel_id: "telegram",
+        account_id: "default",
+        peer_kind: :dm,
+        peer_id: "primary"
+      })
+
+    state = %{
+      run_id: "run-voice-fanout",
+      session_key: session_key,
+      execution_request: %LemonCore.ExecutionCommand{
+        run_id: "run-voice-fanout",
+        session_key: session_key,
+        prompt: "voice fanout",
+        meta: %{
+          inbound_voice: true,
+          user_msg_id: 42,
+          progress_msg_id: 43,
+          source: %{message_id: 42, peer_id: "primary"},
+          fanout_routes: [
+            %{channel_id: "telegram", account_id: "default", peer_kind: :dm, peer_id: "111"}
+          ]
+        }
+      }
+    }
+
+    event =
+      Event.new(
+        :run_completed,
+        %{completed: %{ok: true, answer: "Voice fanout answer"}},
+        %{run_id: state.run_id, session_key: session_key}
+      )
+
+    assert :ok = SurfaceManager.fanout_final_answer(state, event)
+
+    assert_receive {:dispatched_intent,
+                    %DeliveryIntent{
+                      kind: :final_text,
+                      body: %{text: "Voice fanout answer", seq: 1},
+                      route: %{peer_id: "111"},
+                      meta: meta
+                    }},
+                   1_000
+
+    assert meta == %{surface: :answer, fanout: true, fanout_index: 1, inbound_voice: true}
   end
 
   test "finalize_answer/3 falls back to direct final_text dispatch when coalescer finalize fails" do
@@ -232,7 +287,7 @@ defmodule LemonRouter.SurfaceManagerTest do
         run_id: "run-fallback",
         session_key: session_key,
         prompt: "fallback",
-        meta: %{user_msg_id: 42}
+        meta: %{user_msg_id: 42, inbound_voice: true}
       }
     }
 
@@ -243,14 +298,14 @@ defmodule LemonRouter.SurfaceManagerTest do
         %{run_id: state.run_id, session_key: session_key}
       )
 
-    assert :ok = SurfaceManager.finalize_answer(state, event, %{})
+    assert :ok = SurfaceManager.finalize_answer(state, event, %{terminal_answer: false})
 
     assert_receive {:dispatched_intent,
                     %DeliveryIntent{
                       intent_id: "run-fallback:finalize-fallback",
                       kind: :final_text,
                       body: %{text: "Fallback answer", seq: 0},
-                      meta: %{surface: :answer},
+                      meta: %{surface: :answer, inbound_voice: true, terminal_answer: true},
                       route: %{peer_id: "primary"}
                     }},
                    1_000
@@ -274,7 +329,7 @@ defmodule LemonRouter.SurfaceManagerTest do
         run_id: "run-streamed-final",
         session_key: session_key,
         prompt: "streamed final",
-        meta: %{user_msg_id: 42}
+        meta: %{user_msg_id: 42, inbound_voice: true}
       }
     }
 
@@ -285,20 +340,21 @@ defmodule LemonRouter.SurfaceManagerTest do
         %{run_id: state.run_id, session_key: session_key}
       )
 
-    assert :ok = SurfaceManager.finalize_answer(state, event, %{})
+    assert :ok = SurfaceManager.finalize_answer(state, event, %{terminal_answer: false})
 
     assert_receive {:stream_coalescer_finalize, ^session_key, "telegram", "run-streamed-final",
                     opts},
                    1_000
 
     assert opts[:dispatch?] == false
+    assert opts[:meta][:terminal_answer] == true
 
     assert_receive {:dispatched_intent,
                     %DeliveryIntent{
                       intent_id: "run-streamed-final:streamed-finalize",
                       kind: :stream_finalize,
                       body: %{text: "Streamed final answer", seq: 0},
-                      meta: %{surface: :answer},
+                      meta: %{surface: :answer, inbound_voice: true, terminal_answer: true},
                       route: %{peer_id: "primary"}
                     }},
                    1_000
@@ -341,7 +397,7 @@ defmodule LemonRouter.SurfaceManagerTest do
                     %DeliveryIntent{
                       kind: :stream_finalize,
                       body: %{text: "Recovered streamed answer", seq: 0},
-                      meta: %{surface: :answer},
+                      meta: %{surface: :answer, terminal_answer: true},
                       route: %{peer_id: "primary"}
                     }},
                    1_000

@@ -3,50 +3,66 @@ defmodule LemonChannels.Adapters.WhatsApp.Bridge do
   alias LemonChannels.Adapters.WhatsApp.PortServer
 
   def connect(port_server, cfg) do
-    payload = %{
-      "op" => "connect",
-      "credentials_path" => cfg_value(cfg, :credentials_path),
-      "session_name" => cfg_value(cfg, :session_name),
-      "pairing_phone" => cfg_value(cfg, :pairing_phone)
-    } |> drop_nil_values()
+    payload =
+      %{
+        "op" => "connect",
+        "credentials_path" => cfg_value(cfg, :credentials_path),
+        "session_name" => cfg_value(cfg, :session_name),
+        "pairing_phone" => cfg_value(cfg, :pairing_phone)
+      }
+      |> drop_nil_values()
+
     PortServer.command(port_server, payload)
   end
 
   def send_text(port_server, params) do
     # params has: id, jid, text, reply_to
-    payload = %{
-      "op" => "send_text",
-      "id" => params.id,
-      "jid" => params.jid,
-      "text" => params.text,
-      "reply_to" => params[:reply_to]
-    } |> drop_nil_values()
+    payload =
+      %{
+        "op" => "send_text",
+        "id" => params.id,
+        "jid" => params.jid,
+        "text" => params.text,
+        "reply_to" => params[:reply_to]
+      }
+      |> drop_nil_values()
+
     PortServer.command(port_server, payload)
   end
 
   def send_media(port_server, params) do
-    # params has: id, jid, file_path, media_type, caption, ptt
-    payload = %{
-      "op" => "send_media",
-      "id" => params.id,
-      "jid" => params.jid,
-      "file_path" => params.file_path,
-      "media_type" => params.media_type,
-      "caption" => params[:caption],
-      "ptt" => params[:ptt] || false
-    } |> drop_nil_values()
+    # Media can be file-backed or inline base64 audio.
+    payload =
+      %{
+        "op" => "send_media",
+        "id" => params.id,
+        "jid" => params.jid,
+        "file_path" => params[:file_path],
+        "audio_base64" => params[:audio_base64],
+        "mime_type" => params[:mime_type],
+        "filename" => params[:filename],
+        "reply_to" => params[:reply_to],
+        "media_type" => params.media_type,
+        "caption" => params[:caption],
+        "ptt" => params[:ptt] || false
+      }
+      |> drop_nil_values()
+
     PortServer.command(port_server, payload)
   end
 
   def send_reaction(port_server, params) do
-    payload = %{
-      "op" => "send_reaction",
-      "id" => params.id,
-      "jid" => params.jid,
-      "message_id" => params.message_id,
-      "emoji" => params.emoji,
-      "from_me" => params[:from_me] || false
-    } |> drop_nil_values()
+    payload =
+      %{
+        "op" => "send_reaction",
+        "id" => params.id,
+        "jid" => params.jid,
+        "message_id" => params.message_id,
+        "emoji" => params.emoji,
+        "from_me" => params[:from_me] || false
+      }
+      |> drop_nil_values()
+
     PortServer.command(port_server, payload)
   end
 

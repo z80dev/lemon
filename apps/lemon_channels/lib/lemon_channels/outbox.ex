@@ -29,6 +29,13 @@ defmodule LemonChannels.Outbox do
   enqueue with the same idempotency key, and a pending retry whose key was
   confirmed meanwhile, are suppressed with `{:error, :duplicate}`. Unrecognized
   errors and definite rejections are never retried.
+
+  Voice transcript delivery reports every terminal physical chunk to
+  `VoiceReplyDelivery`, independently of presentation notifications. Receipt
+  tokens are `{enqueue_ref, chunk_index}` and remain unchanged across retries.
+  Confirmed duplicates count as transcript success. Voice transcript chunks
+  retain separate stable dedupe keys so a confirmed head never confirms a
+  failed tail, and queued transcript edits are not superseded.
   """
 
   use GenServer
@@ -110,8 +117,18 @@ defmodule LemonChannels.Outbox do
   @impl true
   def handle_call({:enqueue, payload}, _from, state) do
     # Check idempotency
-    case check_idempotency(payload) do
+    case check_enqueue_idempotency(payload) do
       :duplicate ->
+        ref = make_ref()
+
+        payload
+        |> maybe_chunk_payload()
+        |> Enum.with_index()
+        |> Enum.each(fn {chunk, index} ->
+          token = {chunk.idempotency_key || ref, index}
+          LemonChannels.VoiceReplyDelivery.receipt(chunk, {:ok, :duplicate}, token)
+        end)
+
         {:reply, {:error, :duplicate}, state}
 
       :ok ->
@@ -207,7 +224,7 @@ defmodule LemonChannels.Outbox do
           {:ok, _delivery_ref} ->
             # Mark as delivered for idempotency
             mark_delivered(entry.payload)
-            maybe_notify_delivery(entry.payload, result)
+            notify_delivery(entry, result)
 
             # Continue processing queue
             send(self(), :process_queue)
@@ -276,12 +293,26 @@ defmodule LemonChannels.Outbox do
           "meta=#{inspect(failure_meta)}"
       )
 
-      maybe_notify_delivery(entry.payload, {:error, reason})
+      notify_delivery(entry, {:error, reason})
 
       # Continue processing queue even after failure
       send(self(), :process_queue)
       state
     end
+  end
+
+  # Voice confirmation observes every physical chunk, including continuations
+  # without presentation notification refs. Retry attempts retain this token.
+  defp notify_delivery(entry, result) do
+    receipt_result = if result == {:error, :duplicate}, do: {:ok, :duplicate}, else: result
+
+    LemonChannels.VoiceReplyDelivery.receipt(
+      entry.payload,
+      receipt_result,
+      {entry.payload.idempotency_key || entry.ref, entry.chunk_index}
+    )
+
+    maybe_notify_delivery(entry.payload, result)
   end
 
   defp maybe_notify_delivery(%OutboundPayload{notify_pid: pid, notify_ref: ref} = payload, result)
@@ -338,8 +369,8 @@ defmodule LemonChannels.Outbox do
         chunk_payload = %OutboundPayload{
           payload
           | content: chunk_content,
-            # Only use idempotency key for first chunk
-            idempotency_key: if(index == 0, do: payload.idempotency_key, else: nil),
+            # Voice transcript continuations need independent confirmation.
+            idempotency_key: chunk_idempotency_key(payload, index),
             # Only first chunk notifies PresentationState
             notify_pid: notify_pid,
             notify_ref: notify_ref,
@@ -411,6 +442,7 @@ defmodule LemonChannels.Outbox do
         |> Enum.reject(fn queued ->
           queued.group_key == entry.group_key and
             match?(%OutboundPayload{kind: :edit}, queued.payload) and
+            not voice_transcript?(queued.payload) and
             edit_target_message_id(queued.payload) == message_id
         end)
         |> :queue.from_list()
@@ -482,7 +514,9 @@ defmodule LemonChannels.Outbox do
     check_idempotency(payload) == :duplicate
   end
 
-  defp retry_already_confirmed?(_entry), do: false
+  defp retry_already_confirmed?(entry) do
+    voice_transcript?(entry.payload) and check_idempotency(entry.payload) == :duplicate
+  end
 
   defp suppress_confirmed_retry(entry) do
     Logger.info(
@@ -490,7 +524,7 @@ defmodule LemonChannels.Outbox do
         "meta=#{inspect(outbox_failure_meta(entry))}"
     )
 
-    maybe_notify_delivery(entry.payload, {:error, :duplicate})
+    notify_delivery(entry, {:error, :duplicate})
   end
 
   defp dequeue_next_available(queue, processing_groups) do
@@ -665,6 +699,28 @@ defmodule LemonChannels.Outbox do
     )
 
     result
+  end
+
+  defp voice_transcript?(payload) do
+    not is_nil(get_in(payload.meta || %{}, [:intent_meta, :voice_reply_id]))
+  end
+
+  defp chunk_idempotency_key(payload, 0), do: payload.idempotency_key
+
+  defp chunk_idempotency_key(payload, index) do
+    if voice_transcript?(payload) and is_binary(payload.idempotency_key),
+      do: "#{payload.idempotency_key}:chunk:#{index}",
+      else: nil
+  end
+
+  defp check_enqueue_idempotency(payload) do
+    if voice_transcript?(payload) do
+      if Enum.all?(maybe_chunk_payload(payload), &(check_idempotency(&1) == :duplicate)),
+        do: :duplicate,
+        else: :ok
+    else
+      check_idempotency(payload)
+    end
   end
 
   defp check_idempotency(%{idempotency_key: nil}), do: :ok

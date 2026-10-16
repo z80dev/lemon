@@ -76,7 +76,9 @@ defmodule LemonCore.Config.GatewayTest do
       assert config.default_cwd == nil
       assert config.auto_resume == false
       assert config.enabled_channels[:stub] == false
+
       assert config.channels[:stub] == %{resolved: true, raw: %{}}
+
       assert config.require_engine_lock == true
       assert config.engine_lock_timeout_ms == 60_000
       assert config.projects == %{}
@@ -84,6 +86,85 @@ defmodule LemonCore.Config.GatewayTest do
       assert config.sms == %{}
       refute Map.has_key?(config, :default_engine)
       refute Map.has_key?(config, :engines)
+    end
+
+    test "normalizes voice replies independently for each channel" do
+      replies = %{
+        "enabled" => true,
+        "provider" => "openai",
+        "model" => "gpt-4o-mini-tts",
+        "base_url" => "https://tts.example/v1",
+        "api_key" => "test-key",
+        "api_key_secret" => "tts-key",
+        "voice" => "alloy",
+        "price_per_million_characters" => 20
+      }
+
+      config = Gateway.resolve(%{"gateway" => %{"stub" => %{"voice_replies" => replies}}})
+
+      assert config.channels.stub.voice_replies == %{
+               enabled: true,
+               provider: "openai",
+               model: "gpt-4o-mini-tts",
+               base_url: "https://tts.example/v1",
+               api_key: "test-key",
+               api_key_secret: "tts-key",
+               voice: "alloy",
+               price_per_million_characters: 20
+             }
+    end
+
+    test "keeps explicitly disabled voice replies in the resolved channel section" do
+      config =
+        Gateway.resolve(%{
+          "gateway" => %{"stub" => %{"voice_replies" => %{"enabled" => false}}}
+        })
+
+      assert config.channels.stub.voice_replies == %{enabled: false}
+      assert Validator.validate_gateway(config, []) == []
+    end
+
+    test "validates voice reply opt-in and table shape" do
+      config =
+        Gateway.resolve(%{
+          "gateway" => %{"stub" => %{"voice_replies" => %{"enabled" => "sometimes"}}}
+        })
+
+      assert "gateway.stub.voice_replies.enabled: must be a boolean" in Validator.validate_gateway(
+               config,
+               []
+             )
+
+      config = Gateway.resolve(%{"gateway" => %{"stub" => %{"voice_replies" => true}}})
+
+      assert "gateway.stub.voice_replies: must be a map" in Validator.validate_gateway(config, [])
+    end
+
+    test "validates configured model character pricing" do
+      for price <- [nil, 0, 20, 0.5] do
+        config =
+          Gateway.resolve(%{
+            "gateway" => %{
+              "stub" => %{"voice_replies" => %{"price_per_million_characters" => price}}
+            }
+          })
+
+        assert Validator.validate_gateway(config, []) == []
+      end
+
+      for price <- [-1, "20", true] do
+        config =
+          Gateway.resolve(%{
+            "gateway" => %{
+              "stub" => %{"voice_replies" => %{"price_per_million_characters" => price}}
+            }
+          })
+
+        assert "gateway.stub.voice_replies.price_per_million_characters: must be a non-negative number" in Validator.validate_gateway(
+                 config,
+                 []
+               )
+      end
     end
 
     test "uses settings from config map" do
@@ -234,7 +315,10 @@ defmodule LemonCore.Config.GatewayTest do
 
       config = Gateway.resolve(settings)
 
-      assert config.channels[:stub] == %{resolved: true, raw: %{"foo" => "bar"}}
+      assert config.channels[:stub] == %{
+               resolved: true,
+               raw: %{"foo" => "bar"}
+             }
     end
 
     test "enabled?/1 receives the enable_stub TOML value and its result lands in enabled_channels" do
