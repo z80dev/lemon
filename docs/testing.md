@@ -211,6 +211,14 @@ replace a runtime executor or dispatcher must snapshot it with
 Cross-app wire tests should explicitly configure the real source-side runtime;
 replace only the destination executor when probing remote execution.
 
+Register restoration callbacks before the first mutation or fallible setup
+assertion, not at the end of setup: ExUnit cannot run a callback that a failed
+setup never registered. Keep restoration separate from fallible resource cleanup.
+The synchronous native-followup fixture also scopes its recorder to its own
+profile because background tasks can outlive another test. Its setup-failure
+regression lets ExUnit restore the override before exercising an unrelated
+`cron.abort`, so restoration is checked at the same boundary as the next suite.
+
 Provider-registry fixtures must restore the exact API-to-module mappings they
 found, rather than leave the registry empty after extension tests. Provider
 stream fixtures use `LemonAi.Types.AssistantMessage` terminal payloads and call
