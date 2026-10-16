@@ -25,6 +25,26 @@ variables layered over the inherited environment; names must match
 `^[A-Za-z_][A-Za-z0-9_]*$` and values cannot contain NUL. Both apply to
 foreground, PTY, background, service and ACP-terminal runs.
 
+Foreground calls also keep shell state between calls within one session: the
+final cwd and exported environment (as differences from the host environment)
+are recorded in memory and applied to the next call, including background and
+service starts. New and child sessions start fresh; saved state is discarded when
+the owning session process ends or is replaced. A cwd that resolves (symlinks
+included) outside the session workspace is not persisted. Shell functions
+(including exported Bash functions), aliases, jobs and variables unset from the
+host environment are not persisted. `reset: true` discards the session's saved
+state before the command runs. Resetting the session also discards its saved state
+and invalidates captures from the previous session identity. State is captured by an EXIT trap through
+precreated owner-only files in a private, unpredictable temporary directory;
+these files are removed after capture. Commands that replace the trap or detach
+on timeout do not update saved state. Detached and queued commands retain capture
+cleanup until completion, without retaining their captured environment in memory.
+
+ACP client-terminal calls are stateless: each starts from the supplied session
+cwd and explicit `env`, without reading or updating saved shell state. Client
+terminals may use a separate filesystem, so no host-local capture paths or
+capture traps are sent to them. Use explicit `cwd` and `env` on each ACP call.
+
 Whole-word `skill://`, `artifact://` and `local://` references in `command`
 (bare or in matching quotes) are replaced with their shell-quoted absolute paths
 before launch; an unresolvable reference fails the call without running anything.

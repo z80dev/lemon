@@ -34,6 +34,7 @@ defmodule CodingAgent.Application do
       {Task.Supervisor, name: CodingAgent.Search.TaskSupervisor},
       CodingAgent.Search.SingleFlight,
       CodingAgent.Tools.TodoStoreOwner,
+      CodingAgent.Tools.Bash.ShellState,
       CodingAgent.Session.UserPrompt,
       CodingAgent.MutationLock,
       CodingAgent.FileReadTracker,

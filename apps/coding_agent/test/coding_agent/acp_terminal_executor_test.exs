@@ -49,6 +49,70 @@ defmodule CodingAgent.ACPTerminalExecutorTest do
     assert List.last(methods) == "terminal/release"
   end
 
+  @tag :tmp_dir
+  test "sequential Bash calls on a separate client filesystem remain stateless", %{
+    run_id: run_id,
+    tmp_dir: tmp_dir
+  } do
+    workspace = Path.join(tmp_dir, "host")
+    client_workspace = Path.join(tmp_dir, "client")
+    File.mkdir_p!(workspace)
+    File.mkdir_p!(Path.join(client_workspace, "child"))
+    session_id = LemonCore.Id.run_id()
+    session_pid = self()
+
+    opts = [
+      run_id: run_id,
+      session_id: session_id,
+      session_pid: session_pid,
+      acp_client_terminal: true
+    ]
+
+    commands = [
+      {"cd child; export LEMON_ACP_STATE=changed", ""},
+      {"printf '%s\\n%s' \"$PWD\" \"${LEMON_ACP_STATE-fresh}\"", client_workspace <> "\nfresh"}
+    ]
+
+    for {command, expected_output} <- commands do
+      task =
+        Task.async(fn ->
+          CodingAgent.Tools.Bash.execute(
+            "acp-state",
+            %{"command" => command},
+            nil,
+            nil,
+            workspace,
+            opts
+          )
+        end)
+
+      create = request("terminal/create")
+      # The fake client has its own workspace and accepts only the original
+      # command, never a wrapper referring to Lemon-host capture storage.
+      assert create.params["args"] == ["-c", command]
+      assert create.params["cwd"] == workspace
+      assert Map.get(create.params, "env", []) == []
+
+      {output, exit_code} =
+        System.cmd(create.params["command"], create.params["args"],
+          cd: client_workspace,
+          env: [{"LEMON_ACP_STATE", nil}],
+          stderr_to_stdout: true
+        )
+
+      assert exit_code == 0
+      assert output == expected_output
+      reply(create, %{"terminalId" => "stateless"})
+      reply(request("terminal/wait_for_exit"), %{"exitCode" => exit_code})
+      {result, methods} = finish(task, %{"output" => output, "truncated" => false})
+      refute result.is_error
+      assert List.last(methods) == "terminal/release"
+    end
+
+    assert %{cwd: nil, env: %{}} =
+             CodingAgent.Tools.Bash.ShellState.get(session_id, workspace, self())
+  end
+
   test "timeout kills before taking final output and releases the client terminal", %{
     run_id: run_id
   } do

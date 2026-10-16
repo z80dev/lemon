@@ -1242,6 +1242,63 @@ defmodule CodingAgent.SessionTest do
       assert Path.basename(saved_state.session_file) == "#{reset_id}.jsonl"
     end
 
+    test "reset discards shell state, rebinds bash, and rejects old captures", %{tmp_dir: cwd} do
+      alias CodingAgent.Tools.Bash.ShellState
+
+      File.mkdir_p!(Path.join(cwd, "sub"))
+      session = start_session(cwd: cwd, tools: nil)
+      before = Session.get_state(session)
+      old_id = before.session_manager.header.id
+      old_bash = Enum.find(before.base_tools, &(&1.name == "bash"))
+
+      result =
+        old_bash.execute.(
+          "before-reset",
+          %{"command" => "cd sub; export LEMON_RESET_SECRET=previous"},
+          nil,
+          nil
+        )
+
+      refute result.is_error
+      captured = ShellState.get(old_id, cwd, session)
+      assert captured.env["LEMON_RESET_SECRET"] == "previous"
+      assert String.ends_with?(captured.cwd, "/sub")
+
+      assert :ok = Session.reset(session)
+      after_reset = Session.get_state(session)
+      new_id = after_reset.session_manager.header.id
+      refute old_id == new_id
+      refute Map.has_key?(:sys.get_state(ShellState).sessions, old_id)
+      refute Map.has_key?(:sys.get_state(ShellState).monitors, captured.token)
+
+      cwd_file = Path.join(cwd, "late-cwd")
+      env_file = Path.join(cwd, "late-env")
+      File.write!(cwd_file, Path.join(cwd, "sub") <> "\n")
+      File.write!(env_file, "LEMON_RESET_SECRET=late" <> <<0>>)
+      assert :ok = ShellState.capture(old_id, captured.token, cwd, cwd_file, env_file, %{})
+      refute Map.has_key?(:sys.get_state(ShellState).sessions, old_id)
+
+      bash = Enum.find(after_reset.base_tools, &(&1.name == "bash"))
+      refute bash.execute == old_bash.execute
+
+      result =
+        bash.execute.(
+          "after-reset",
+          %{"command" => "pwd -P; printf 'secret=%s\\n' \"$LEMON_RESET_SECRET\""},
+          nil,
+          nil
+        )
+
+      refute result.is_error
+      text = Enum.map_join(result.content, "", & &1.text)
+      assert text =~ "secret=\n"
+      refute text =~ "previous"
+      refute text =~ "late"
+      refute text =~ "/sub"
+      assert ShellState.get(new_id, cwd, session).env == %{}
+      refute Map.has_key?(:sys.get_state(ShellState).sessions, old_id)
+    end
+
     @tag :tmp_dir
     test "reset re-registers session id when registration is enabled", %{tmp_dir: tmp_dir} do
       registry = :"session_registry_#{System.unique_integer([:positive])}"
