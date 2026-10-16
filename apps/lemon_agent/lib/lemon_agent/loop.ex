@@ -406,7 +406,10 @@ defmodule LemonAgent.Loop do
   end
 
   defp emit_tool_schema_snapshot(stream, %ToolSchemaSnapshot{} = snapshot) do
-    EventStream.push(stream, {:tool_schema_snapshot, snapshot})
+    EventStream.push(
+      stream,
+      {:tool_schema_snapshot, ToolSchemaSnapshot.without_executors(snapshot)}
+    )
 
     LemonCore.Telemetry.emit(
       [:lemon_agent, :tool_schema_snapshot, :created],

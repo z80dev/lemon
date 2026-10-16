@@ -77,7 +77,7 @@ async function httpReachable(endpoint, discoveryUrl) {
 }
 
 async function inspect(config) {
-  const modulePath = path.join(path.dirname(config.driverPath), 'chrome.js');
+  const modulePath = path.join(path.dirname(config.driverPath), 'index.js');
   const { defaultChromeExecutable, cdpDiscoveryUrl } = await import(pathToFileURL(modulePath).href);
   const executable = process.env.LEMON_BROWSER_EXECUTABLE?.trim() || defaultChromeExecutable();
   let installed = false;

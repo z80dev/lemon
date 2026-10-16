@@ -36,12 +36,16 @@ extension toolbar icon once; the visible `L` badge means that tab is opted in.
 Click it again to detach immediately. Tabs opened by Lemon through an already
 opted-in relay session are scoped automatically.
 
-Point Lemon at the token-gated direct CDP WebSocket:
+Select the relay through Lemon's [unified browser provider](../../docs/tools/browser.md#choosing-a-browser-provider):
 
 ```bash
-export LEMON_BROWSER_CDP_ENDPOINT="ws://127.0.0.1:9224/cdp?token=$LEMON_BROWSER_RELAY_TOKEN"
-export LEMON_BROWSER_ATTACH_ONLY=true
+export LEMON_BROWSER_PROVIDER=relay
 ```
+
+The default `auto` provider can also choose a configured, connected relay, after
+checking LCU. When running the Node driver directly rather than through Lemon,
+attach with `LEMON_BROWSER_CDP_ENDPOINT="ws://127.0.0.1:9224/cdp?token=$LEMON_BROWSER_RELAY_TOKEN"`;
+endpoint attachment is always attach-only.
 
 The relay rejects non-loopback binding, rejects browser-originated CDP
 connections, requires constant-time token authentication on discovery and both

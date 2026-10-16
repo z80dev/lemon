@@ -323,7 +323,13 @@ allow_tools = []
 # enabled = true
 # api_key = "fc-..."
 
-# Browser backend selection is environment-based so secrets stay out of TOML:
+# Unified browser selection (docs/tools/browser.md#choosing-a-browser-provider).
+# auto: connected LCU -> authenticated MV3 relay -> managed local Chrome.
+# Explicit providers fail closed; selection never installs LCU/native hosts.
+# LEMON_BROWSER_PROVIDER overrides this setting. Hosted credentials stay in env/secrets.
+# [runtime.tools.browser]
+# provider = "auto" # lcu|relay|local|cdp|browserbase|browser_use|firecrawl|camofox|controller|hybrid
+# Legacy backend selection remains supported:
 # LEMON_BROWSER_BACKEND=local|controller|hybrid|browserbase|browser_use|firecrawl|camofox
 # LEMON_BROWSER_HYBRID_PUBLIC_BACKEND=browser_use # required with hybrid
 # BROWSERBASE_API_KEY / BROWSERBASE_PROJECT_ID, BROWSER_USE_API_KEY,
@@ -338,7 +344,6 @@ allow_tools = []
 
 # [runtime.tools.computer_use]
 # enabled = false
-# chrome = false
 # declined_origins = []
 
 # --- WASM Tool Configuration ---

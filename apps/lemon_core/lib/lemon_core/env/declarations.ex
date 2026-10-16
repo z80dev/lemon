@@ -1314,6 +1314,18 @@ defmodule LemonCore.Env.Declarations do
       apps: [:lemon_core]
     },
     %{
+      name: :lemon_browser_provider,
+      env_var: "LEMON_BROWSER_PROVIDER",
+      aliases: [],
+      type: :string,
+      default: "auto",
+      doc: "Browser provider id; auto prefers connected LCU, then relay, then local.",
+      secret?: false,
+      required?: false,
+      area: :tools_browser,
+      apps: [:lemon_core]
+    },
+    %{
       name: :lemon_web_search_provider,
       env_var: "LEMON_WEB_SEARCH_PROVIDER",
       aliases: [],

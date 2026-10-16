@@ -24,11 +24,14 @@ defmodule LemonCore.Config.Tools do
       max_chars = 50000
       readability = true
 
+      # Browser selection is passive; explicit providers never fall back.
+      [runtime.tools.browser]
+      provider = "auto"
+
       # Native app control through LCU (optional lemon_computer_use app).
       # LEMON_COMPUTER_USE_* environment variables take precedence.
       [runtime.tools.computer_use]
       enabled = false
-      chrome = false
       declined_origins = []
 
       [runtime.tools.wasm]
@@ -50,6 +53,7 @@ defmodule LemonCore.Config.Tools do
   Environment variables override file configuration:
   - `LEMON_WEB_SEARCH_ENABLED`, `LEMON_WEB_SEARCH_PROVIDER`
   - `LEMON_WEB_FETCH_ENABLED`, `LEMON_WEB_FETCH_MAX_CHARS`
+  - `LEMON_BROWSER_PROVIDER`
   - `LEMON_WASM_ENABLED`, `LEMON_WASM_AUTO_BUILD`
   - `LEMON_TOOL_DISCLOSURE_ENABLED`, `LEMON_TOOL_DISCLOSURE_BUDGET_TOKENS`,
     `LEMON_TOOL_DISCLOSURE_CATALOG_TOKENS`, `LEMON_TOOL_DISCLOSURE_PROFILE`
@@ -78,6 +82,7 @@ defmodule LemonCore.Config.Tools do
     :wasm,
     :disclosure,
     :checkpoint,
+    :browser,
     :computer_use
   ]
 
@@ -162,7 +167,9 @@ defmodule LemonCore.Config.Tools do
           },
           wasm: wasm_config(),
           disclosure: disclosure_config(),
-          checkpoint: %{enabled: boolean()}
+          checkpoint: %{enabled: boolean()},
+          browser: map(),
+          computer_use: map()
         }
 
   @doc """
@@ -185,8 +192,41 @@ defmodule LemonCore.Config.Tools do
       wasm: resolve_wasm(tools_settings),
       disclosure: resolve_disclosure(tools_settings),
       checkpoint: resolve_checkpoint(tools_settings),
+      browser: resolve_browser(tools_settings),
       computer_use: resolve_computer_use(tools_settings)
     }
+  end
+
+  defp resolve_browser(settings) do
+    case Map.get(settings, "browser", %{}) do
+      section when is_map(section) ->
+        provider =
+          Env.get(:lemon_browser_provider,
+            default: Map.get(section, "provider", legacy_browser_backend() || "auto")
+          )
+
+        section |> Map.delete("provider") |> Map.put(:provider, provider)
+
+      invalid ->
+        invalid
+    end
+  end
+
+  # The old default :local is not an explicit choice. Preserve explicit backend
+  # environment selections and non-default application settings without making
+  # the historical default defeat auto detection.
+  defp legacy_browser_backend do
+    case Env.string("LEMON_BROWSER_BACKEND") do
+      nil ->
+        case Application.get_env(:lemon_browser, :backend) do
+          backend when backend in [nil, :local, "local"] -> nil
+          backend when is_atom(backend) -> Atom.to_string(backend)
+          backend -> backend
+        end
+
+      backend ->
+        backend
+    end
   end
 
   # `[runtime.tools.computer_use]` is read by the optional lemon_computer_use
@@ -198,7 +238,6 @@ defmodule LemonCore.Config.Tools do
 
     %{
       enabled: section["enabled"],
-      chrome: section["chrome"],
       lcu_root: section["lcu_root"],
       node: section["node"],
       declined_origins: section["declined_origins"]
@@ -503,6 +542,7 @@ defmodule LemonCore.Config.Tools do
       "edit" => %{"enforce_seen_lines" => false},
       "bash" => Bash.defaults(),
       "lsp" => @lsp_defaults,
+      "browser" => %{"provider" => "auto"},
       "web" => %{
         "search" => %{
           "enabled" => true,

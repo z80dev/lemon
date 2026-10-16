@@ -105,6 +105,11 @@ defmodule CodingAgent.ToolRegistry do
     {:extensions_status, Tools.ExtensionsStatus}
   ]
 
+  @browser_tool_names @builtin_tools
+                      |> Enum.map(&elem(&1, 0))
+                      |> Enum.filter(&String.starts_with?(Atom.to_string(&1), "browser_"))
+  @browser_tool_name_strings Enum.map(@browser_tool_names, &Atom.to_string/1)
+
   @doc """
   Get all enabled tools for a working directory.
 
@@ -130,20 +135,32 @@ defmodule CodingAgent.ToolRegistry do
   approval-wrapped one.
   """
   @spec get_tool_tuples(String.t(), tool_opts()) :: [tool_tuple()]
-  def get_tool_tuples(cwd, opts \\ []) do
-    disabled = Keyword.get(opts, :disabled, [])
-    enabled_only = checkpoint_pair(Keyword.get(opts, :enabled_only, nil))
+  def get_tool_tuples(cwd, opts \\ []), do: tool_tuples(cwd, opts, true)
+
+  @doc """
+  Resolve the browser provider once for a build that can include browser tools.
+
+  Returns `opts` unchanged when they already carry `:browser_provider_resolution`
+  or when `:disabled`, `:enabled_only` and `:tool_policy` exclude every browser
+  tool. Callers that build tools and the conflict report from the same options
+  call this first so one build probes the provider at most once.
+  """
+  @spec put_browser_provider_resolution(tool_opts()) :: tool_opts()
+  def put_browser_provider_resolution(opts) do
+    if Keyword.get(opts, :browser_provider_resolution) != nil or
+         not browser_tools_requested?(tool_filters(opts)) do
+      opts
+    else
+      Keyword.put(opts, :browser_provider_resolution, LemonCore.BrowserProvider.resolve())
+    end
+  end
+
+  defp tool_tuples(cwd, opts, browser_wanted?) do
+    {disabled, enabled_only, tool_policy} = filters = tool_filters(opts)
     include_extensions = Keyword.get(opts, :include_extensions, true)
     include_mcp = Keyword.get(opts, :include_mcp, true)
 
-    tool_policy =
-      case Keyword.get(opts, :tool_policy) do
-        nil -> ToolPolicy.from_profile(:full_access)
-        policy -> policy
-      end
-
-    settings = Keyword.get(opts, :settings_manager) || %{}
-    tools_config = Map.get(settings, :tools, %{}) || %{}
+    tools_config = tools_config(opts)
     edit_config = Map.get(tools_config, :edit, Map.get(tools_config, "edit", %{}))
     bash_config = Map.get(tools_config, :bash, Map.get(tools_config, "bash", %{}))
     opts = Keyword.put_new(opts, :bash_config, bash_config)
@@ -159,19 +176,12 @@ defmodule CodingAgent.ToolRegistry do
         )
       )
 
-    tool_policy =
-      case ToolPolicy.parse(tool_policy) do
-        {:ok, policy} ->
-          ToolPolicy.with_default_approval_mode(
-            policy,
-            Map.get(tools_config, :approval_mode, Map.get(tools_config, "approval_mode"))
-          )
+    # Only browser tools receive the provider resolution; other tool closures
+    # capture `opts`, and none of them read it.
+    {resolution, opts} = Keyword.pop(opts, :browser_provider_resolution)
+    browser? = browser_wanted? and browser_tools_requested?(filters)
+    builtin = builtin_tool_tuples(cwd, opts, browser?, resolution)
 
-        {:error, _} ->
-          tool_policy
-      end
-
-    builtin = builtin_tool_tuples(cwd, opts)
     wasm_tools = normalize_wasm_tools(Keyword.get(opts, :wasm_tools, []))
     mcp_tools = mcp_tool_tuples(cwd, opts, include_mcp)
 
@@ -230,8 +240,11 @@ defmodule CodingAgent.ToolRegistry do
   @spec get_tool(String.t(), tool_name(), tool_opts()) ::
           {:ok, AgentTool.t()} | {:error, :not_found}
   def get_tool(cwd, name, opts \\ []) when is_binary(name) do
-    tools = get_tools(cwd, opts)
     normalized_name = String.trim(name)
+
+    # Building browser tools resolves the browser provider, so only a browser
+    # tool lookup builds them.
+    tuples = tool_tuples(cwd, opts, normalized_name in @browser_tool_name_strings)
 
     if normalized_name != name do
       LemonCore.Telemetry.emit(
@@ -241,9 +254,9 @@ defmodule CodingAgent.ToolRegistry do
       )
     end
 
-    case Enum.find(tools, fn tool -> tool.name == normalized_name end) do
+    case Enum.find(tuples, fn {_name, tool, _source} -> tool.name == normalized_name end) do
       nil -> {:error, :not_found}
-      tool -> {:ok, tool}
+      {_name, tool, _source} -> {:ok, tool}
     end
   end
 
@@ -379,13 +392,17 @@ defmodule CodingAgent.ToolRegistry do
 
   Counts describe the resolved, capability-available inventory. `builtin_count`
   excludes unavailable optional tools, unlike the static `builtin_tool_names/0` list.
+  Browser tools are included only when the options' `:disabled`, `:enabled_only`
+  and `:tool_policy` filters can enable one, so the provider is otherwise not probed.
   """
   @spec tool_conflict_report(String.t(), tool_opts()) :: conflict_report()
   def tool_conflict_report(cwd, opts \\ []) do
     include_extensions = Keyword.get(opts, :include_extensions, true)
     include_mcp = Keyword.get(opts, :include_mcp, true)
 
-    builtin = builtin_tool_tuples(cwd, opts)
+    {resolution, opts} = Keyword.pop(opts, :browser_provider_resolution)
+    browser? = browser_tools_requested?(tool_filters(opts))
+    builtin = builtin_tool_tuples(cwd, opts, browser?, resolution)
     wasm_tools = normalize_wasm_tools(Keyword.get(opts, :wasm_tools, []))
     mcp_tools = mcp_tool_tuples(cwd, opts, include_mcp)
 
@@ -439,7 +456,55 @@ defmodule CodingAgent.ToolRegistry do
       else: names
   end
 
-  defp builtin_tool_tuples(cwd, opts) do
+  defp tool_filters(opts) do
+    tool_policy =
+      case Keyword.get(opts, :tool_policy) do
+        nil -> ToolPolicy.from_profile(:full_access)
+        policy -> policy
+      end
+
+    tool_policy =
+      case ToolPolicy.parse(tool_policy) do
+        {:ok, policy} ->
+          tools_config = tools_config(opts)
+
+          ToolPolicy.with_default_approval_mode(
+            policy,
+            Map.get(tools_config, :approval_mode, Map.get(tools_config, "approval_mode"))
+          )
+
+        {:error, _} ->
+          tool_policy
+      end
+
+    {Keyword.get(opts, :disabled, []), checkpoint_pair(Keyword.get(opts, :enabled_only, nil)),
+     tool_policy}
+  end
+
+  defp tools_config(opts) do
+    settings = Keyword.get(opts, :settings_manager) || %{}
+    Map.get(settings, :tools, %{}) || %{}
+  end
+
+  # Filters are name-based, so a build whose filters drop every browser name
+  # can skip building (and resolving) browser tools without changing its result.
+  defp browser_tools_requested?({disabled, enabled_only, tool_policy}) do
+    Enum.any?(@browser_tool_name_strings, fn name ->
+      match?(
+        [_ | _],
+        [{name, nil, :builtin}]
+        |> filter_tools(disabled, enabled_only)
+        |> filter_policy_blocked(tool_policy)
+      )
+    end)
+  end
+
+  # The provider is resolved at most once per build, and only when a browser
+  # tool can survive the build's filters.
+  defp builtin_tool_tuples(cwd, opts, browser?, resolution) do
+    resolution = if browser?, do: resolution || LemonCore.BrowserProvider.resolve()
+    browser_opts = Keyword.put(opts, :browser_provider_resolution, resolution)
+
     builtin_tools()
     |> Enum.filter(fn
       {:ask, _module} ->
@@ -451,12 +516,18 @@ defmodule CodingAgent.ToolRegistry do
       {:ast_grep, _module} ->
         match?({:ok, _}, Tools.AstGrep.availability(opts))
 
+      {name, _module} when name in @browser_tool_names ->
+        browser? and resolution.provider != "lcu"
+
       _tool ->
         true
     end)
     |> Enum.map(fn {name, module} ->
+      tool_opts = if name in @browser_tool_names, do: browser_opts, else: opts
       name = Atom.to_string(name)
-      {name, module.tool(cwd, opts) |> maybe_serialize_mutation(name, cwd, opts), :builtin}
+
+      {name, module.tool(cwd, tool_opts) |> maybe_serialize_mutation(name, cwd, tool_opts),
+       :builtin}
     end)
   end
 

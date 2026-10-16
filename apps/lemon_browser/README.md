@@ -58,10 +58,11 @@ running, the pending/completed/failed counts, the last error, and the resolved
 driver configuration.
 
 `LemonBrowser.request/4` is the public, backend-neutral entrypoint. It uses the
-configured `:lemon_browser, :backend` (default `:local`) or an explicit
-`backend:` option. Unknown and unavailable backends fail closed instead of
-silently switching to another browser identity or profile. Runtime packages can
-implement `LemonBrowser.Backend` and register it with
+unified browser provider (default `auto`) or an explicit internal `backend:`
+option. Explicit selections fail closed instead of switching browser identity
+or profile. When LCU is selected, Chrome is exposed through `cua_js`, not this
+facade. See [Choosing a browser provider](../../docs/tools/browser.md#choosing-a-browser-provider).
+Runtime packages can implement `LemonBrowser.Backend` and register it with
 `LemonBrowser.BackendRegistry`; built-in backend IDs cannot be replaced.
 
 Built-ins are `local`, `controller`, `hybrid`, `browserbase`, `browser_use`,
@@ -119,6 +120,7 @@ the requests in flight fail; the next request starts a fresh one.
 
 | Variable | Default | Purpose |
 |---|---|---|
+| `LEMON_BROWSER_PROVIDER` | `auto` | Unified provider selection (`auto`, `lcu`, `relay`, `local`, `cdp`, or a configured hosted/backend ID) |
 | `LEMON_BROWSER_DRIVER_PATH` | — | Path to the driver program |
 | `LEMON_BROWSER_CDP_ENDPOINT` | — | CDP websocket endpoint to attach to instead of launching a browser |
 | `LEMON_BROWSER_ATTACH_ONLY` | `false` | Only attach to an existing browser, never launch one |

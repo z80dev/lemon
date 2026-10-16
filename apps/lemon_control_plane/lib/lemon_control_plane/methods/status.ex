@@ -68,6 +68,7 @@ defmodule LemonControlPlane.Methods.Status do
       snapshot(%{"installed" => 0, "enabled" => 0}, &skills_status/0)
 
     {providers, providers_state} = snapshot([], &LemonControlPlane.ProviderStatus.snapshot/0)
+    browser = LemonCore.BrowserProvider.resolve()
 
     {:ok,
      %{
@@ -83,7 +84,13 @@ defmodule LemonControlPlane.Methods.Status do
          "router" => router_state,
          "channels" => channels_state,
          "skills" => skills_state,
-         "providers" => providers_state
+         "providers" => providers_state,
+         "browser" => %{
+           "available" => browser.provider != nil,
+           "requested" => browser.requested,
+           "provider" => browser.provider,
+           "reason" => browser.reason
+         }
        },
        "summary" => summary(server, connections, runs, channels, skills, providers)
      }}

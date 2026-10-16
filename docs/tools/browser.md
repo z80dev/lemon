@@ -13,9 +13,70 @@ Truncated snapshots/page content include a session-scoped `artifact_uri` and
 [full-content artifacts](web.md#full-content-after-truncation) for pagination,
 scope and backend/storage requirements.
 
+## Choosing a browser provider
+
+Set one browser identity for Lemon in your config:
+
+```toml
+[runtime.tools.browser]
+provider = "auto"
+```
+
+`LEMON_BROWSER_PROVIDER` overrides this setting. Providers are `auto`, `lcu`,
+`relay`, `local`, `cdp`, `browserbase`, `browser_use`, `firecrawl`, `camofox`,
+`controller`, and `hybrid`. `auto` probes **LCU → authenticated MV3 relay →
+managed local Chrome**, selecting the first available provider. It does not
+automatically select paid hosted providers. Existing explicit legacy backend
+configuration remains supported; prefer the unified provider setting for new
+configuration.
+
+An explicit provider is **fail-closed**: missing prerequisites or a failed action
+never silently switch to another provider, browser identity, or profile.
+`lemon doctor` reports the requested provider, the selected provider (or
+`unavailable`), and an actionable redacted reason. The control-plane `status`
+browser subsystem uses the same read-only core resolver; neither diagnostic
+starts a browser or installs anything.
+
+A session's tool list resolves the provider once, and not at all when
+`disabled`, `enabled_only` or the tool policy exclude every `browser_*` tool.
+Tool descriptions name only the selected provider (on `browser_navigate`); the
+detection reason appears in `lemon doctor`, control-plane `status`, and the error
+a browser request returns when no provider is available.
+
+With `lcu`, Chrome control is exposed through [`cua_js`](computer-use.md#chrome),
+not the `browser_*` tool family. It starts the shared computer-use runtime,
+including native app APIs under the existing app approval policy. The explicit
+native computer-use switch can also enable that runtime independently of browser
+selection; LCU does not provide a browser-only mode.
+LCU must already be installed, its browser connector configured, and the relay
+actively connected to Chrome. Installation or an enabled extension alone does
+not establish readiness; auto-selection never runs setup. For local browser
+tools, build the Node driver below. For `cdp`,
+configure `LEMON_BROWSER_CDP_ENDPOINT`; for `relay`, configure the authenticated
+MV3 relay and its token. Hosted providers require their corresponding credentials.
+
+### LCU connector warning and rollback
+
+**Before running `lcu browser install`, back up the existing native-messaging host
+manifest(s) for `com.openai.codexextension` in the intended browser account.**
+Installation repoints the official ChatGPT extension's native host at LCU's relay.
+That account-level change can affect **Codex/ChatGPT Chrome control**, not just
+Lemon. It does not install or enable the extension itself.
+
+The installed LCU CLI source supports `lcu browser install` and `lcu browser status`;
+it has **no browser revert/uninstall command**. To revert, restore the exact
+pre-install native-host manifest backup so it again points to the original
+Codex/ChatGPT host, then restart Chrome or toggle the extension. Without a backup,
+use the official Codex/ChatGPT app's connector registration workflow to register
+its own host again. Upstream LCU's removal guide also describes removing its
+manifest and private relay copy, but deleting a manifest alone does **not**
+restore an overwritten official host. See
+[LCU installation/removal guidance](https://github.com/amontlabs/lcu/blob/main/docs/INSTALLATION.md).
+Lemon never performs these changes for you.
+
 ## Enabling and configuration
 
-The default `local` backend needs the Node driver built once:
+The managed `local` provider needs the Node driver built once:
 
 ```bash
 cd clients/lemon-browser-node
@@ -28,6 +89,7 @@ Environment variables read by `lemon_browser` (from
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
+| `LEMON_BROWSER_PROVIDER` | `auto` | Unified provider selection; see [Choosing a browser provider](#choosing-a-browser-provider). |
 | `LEMON_BROWSER_BACKEND` | `local` | Backend id: `local`, `controller`, `hybrid`, `browserbase`, `browser_use`, `firecrawl`, or `camofox`. |
 | `LEMON_BROWSER_DRIVER_PATH` | unset | Path to the driver program. Otherwise `clients/lemon-browser-node/dist/local-driver.js` is used relative to the working directory. |
 | `LEMON_BROWSER_CDP_ENDPOINT` | unset | CDP websocket endpoint to attach to instead of launching a browser. |
@@ -43,11 +105,11 @@ Environment variables read by `lemon_browser` (from
 | `BROWSER_USE_API_KEY` | unset | Browser Use Cloud hosted sessions. |
 | `FIRECRAWL_API_KEY` | unset | Firecrawl hosted browser sessions. |
 | `CAMOFOX_URL` / `CAMOFOX_API_KEY` | unset | Camofox REST/Firefox server and optional bearer key. |
-| `LEMON_CHROME_EXECUTABLE` | unset | Chrome/Chromium executable for the local driver, if it is not discovered automatically. |
+| `LEMON_BROWSER_EXECUTABLE` | unset | Chrome/Chromium executable for the local driver, if it is not discovered automatically. |
 
-The backend can also be selected with the application environment key
-`:lemon_browser, :backend`; an explicit `backend:` option on
-`LemonBrowser.request/4` overrides it.
+The legacy backend can also be selected with the application environment key
+`:lemon_browser, :backend`. Use the unified provider setting above to keep
+diagnostics and model-facing tool availability consistent.
 
 Managed profile settings also accept application config
 `config :lemon_browser, user_data_dir: "/dedicated/chrome-data", profile_directory: "Profile 1"`;
@@ -61,10 +123,13 @@ supervision tree stays up.
 
 ## Backend selection
 
-- `local` (default): launches local Chrome/Chromium and connects over CDP on
-  `127.0.0.1`. With `LEMON_BROWSER_CDP_ENDPOINT` set, it attaches to that
-  endpoint instead. Attach mode never launches a replacement browser, and
-  stopping an attached session never closes the user's browser.
+- `local`: launches managed local Chrome/Chromium and connects over CDP on
+  `127.0.0.1`. Unified `local` selection (including `auto` choosing local)
+  ignores attachment settings and does not attach to an existing browser.
+- `cdp`: explicitly attaches to `LEMON_BROWSER_CDP_ENDPOINT`. It never launches
+  a replacement browser, and stopping the session never closes the user's browser.
+  Legacy backend overrides can retain their own attachment configuration; prefer
+  the explicit `cdp` provider for consistent selection and diagnostics.
 - `controller`: dispatches only to an authenticated controller bound to an exact
   controller, browser profile, session, and optional run. Tickets are single-use,
   short-lived, and carry an allowlisted capability set (`tabs`, `navigate`,
@@ -175,7 +240,7 @@ Notes:
   `clients/lemon-browser-node`, or set `LEMON_BROWSER_DRIVER_PATH`.
 - `node executable not found on PATH`: install Node.js 24 LTS or later.
 - `Could not find Chrome/Chromium executable`: install Chrome/Chromium or set
-  `LEMON_CHROME_EXECUTABLE`.
+  `LEMON_BROWSER_EXECUTABLE`.
 - `browser navigation blocked metadata endpoint`: the target is a cloud metadata
   address; it is blocked on all routes.
 - `browser_upload_file path must be under the current project` /

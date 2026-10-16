@@ -142,6 +142,8 @@ defmodule LemonAgent.LoopTest do
 
       assert snapshot.tool_names == ["echo", "add"]
       assert snapshot.id =~ ~r/^tool_schema_[a-f0-9]{16}_[a-z0-9]+$/
+      assert Enum.map(snapshot.tools, & &1.name) == ["echo", "add"]
+      assert Enum.all?(snapshot.tools, &is_nil(&1.execute))
     end
 
     test "emits explicit loop state transitions for a tool turn" do

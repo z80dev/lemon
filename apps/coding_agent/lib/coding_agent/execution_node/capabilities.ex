@@ -408,7 +408,7 @@ defmodule CodingAgent.ExecutionNode.Capabilities.Probe do
       status = LemonBrowser.status()
 
       if Map.get(status, :backend, Map.get(status, "backend")) in [:local, "local"],
-        do: local_browser_status(),
+        do: local_browser_status(get_in(status, [:provider_resolution, :provider])),
         else: {:ok, status}
     else
       {:error, :not_installed}
@@ -419,10 +419,11 @@ defmodule CodingAgent.ExecutionNode.Capabilities.Probe do
     :exit, _ -> {:error, :inspection_unavailable}
   end
 
-  defp local_browser_status do
-    helper = Path.join(to_string(:code.priv_dir(:coding_agent)), "node_browser_inspect.mjs")
+  defp local_browser_status(provider) do
+    helper = Path.join(to_string(:code.priv_dir(:lemon_browser)), "node_browser_inspect.mjs")
+    opts = LemonBrowser.ProviderProbe.driver_options(provider)
 
-    with {:ok, config} <- LemonBrowser.LocalServer.inspection_config(),
+    with {:ok, config} <- LemonBrowser.LocalServer.configuration(opts),
          {:ok, output} <- HostCommand.run("node", [helper], input: Jason.encode!(config) <> "\n"),
          {:ok,
           %{

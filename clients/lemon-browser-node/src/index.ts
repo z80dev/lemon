@@ -2,7 +2,7 @@ import { LemonSocket } from './lemon-socket.js';
 import { ChromeSession } from './chrome.js';
 import { dispatchBrowserRequest } from './driver-dispatch.js';
 
-export { ChromeSession } from './chrome.js';
+export { ChromeSession, defaultChromeExecutable, cdpDiscoveryUrl } from './chrome.js';
 export { dispatchBrowserRequest } from './driver-dispatch.js';
 export { RelayBridge } from './relay/bridge.js';
 export { startRelayServer } from './relay/server.js';

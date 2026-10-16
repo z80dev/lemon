@@ -52,6 +52,11 @@ defmodule LemonBrowser.LocalServer do
     GenServer.call(server, {:request, method, args, timeout_ms}, timeout_ms + 5_000)
   end
 
+  @doc false
+  def request(server, method, args, timeout_ms, opts) do
+    GenServer.call(server, {:request, method, args, timeout_ms, opts}, timeout_ms + 5_000)
+  end
+
   @spec status() :: map()
   def status, do: status(@name)
 
@@ -75,6 +80,25 @@ defmodule LemonBrowser.LocalServer do
     GenServer.call(server, :inspection_config, 1_000)
   catch
     :exit, _ -> {:error, :inspection_unavailable}
+  end
+
+  @doc false
+  def configuration(opts \\ []) do
+    with {:ok, _node} <- find_node(),
+         {:ok, driver} <- find_driver(opts) do
+      summary = driver_config_summary(opts)
+
+      {:ok,
+       %{
+         "driverPath" => driver,
+         "endpoint" => configured_endpoint(opts),
+         "port" => summary[:cdp_port] || 18_800,
+         "launchesBrowser" => summary[:launches_browser],
+         "attachOnly" => summary[:attach_only]
+       }}
+    else
+      _ -> {:error, :not_installed}
+    end
   end
 
   @impl true
@@ -111,24 +135,20 @@ defmodule LemonBrowser.LocalServer do
   end
 
   def handle_call(:inspection_config, _from, state) do
-    result =
-      with {:ok, _node} <- find_node(),
-           {:ok, driver} <- find_driver(state.driver_opts) do
-        summary = driver_config_summary(state.driver_opts)
+    {:reply, configuration(state.driver_opts), state}
+  end
 
-        {:ok,
-         %{
-           "driverPath" => driver,
-           "endpoint" => configured_endpoint(state.driver_opts),
-           "port" => summary[:cdp_port] || 18_800,
-           "launchesBrowser" => summary[:launches_browser],
-           "attachOnly" => summary[:attach_only]
-         }}
-      else
-        _ -> {:error, :not_installed}
+  def handle_call({:request, method, args, timeout_ms, opts}, from, state) do
+    driver_opts =
+      case Keyword.get(opts, :browser_provider) do
+        provider when provider in ["local", "relay", "cdp"] ->
+          Keyword.merge(state.driver_opts, LemonBrowser.ProviderProbe.driver_options(provider))
+
+        _ ->
+          state.driver_opts
       end
 
-    {:reply, result, state}
+    handle_call({:request, method, args, timeout_ms}, from, %{state | driver_opts: driver_opts})
   end
 
   def handle_call({:request, method, args, timeout_ms}, from, state) do
@@ -253,7 +273,8 @@ defmodule LemonBrowser.LocalServer do
           :binary,
           :exit_status,
           :hide,
-          {:args, args}
+          {:args, args},
+          {:env, driver_env(state.driver_opts)}
         ])
 
       {:ok,
@@ -267,6 +288,18 @@ defmodule LemonBrowser.LocalServer do
        }}
     else
       {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp driver_env(opts) do
+    if Keyword.has_key?(opts, :cdp_endpoint) do
+      [
+        {~c"LEMON_BROWSER_CDP_ENDPOINT", String.to_charlist(configured_endpoint(opts))},
+        {~c"LEMON_BROWSER_ATTACH_ONLY",
+         if(Keyword.get(opts, :attach_only, false), do: ~c"true", else: ~c"false")}
+      ]
+    else
+      []
     end
   end
 
@@ -444,7 +477,7 @@ defmodule LemonBrowser.LocalServer do
 
   defp configured_endpoint(opts) do
     case Keyword.get(opts, :cdp_endpoint) do
-      value when is_binary(value) and value != "" -> value
+      value when is_binary(value) -> value
       _ -> Env.get(:lemon_browser_cdp_endpoint) |> to_string_safe()
     end
   end
@@ -465,8 +498,8 @@ defmodule LemonBrowser.LocalServer do
     endpoint = configured_endpoint(opts)
 
     attach_only? =
-      Keyword.get(opts, :attach_only, false) == true or
-        Env.get(:lemon_browser_attach_only) == true or endpoint != ""
+      Keyword.get(opts, :attach_only, Env.get(:lemon_browser_attach_only)) == true or
+        endpoint != ""
 
     # Note: intentionally not `Env.get/2` -- LEMON_BROWSER_CDP_PORT only
     # accepts *positive* integers (0/negative fall back to the default),

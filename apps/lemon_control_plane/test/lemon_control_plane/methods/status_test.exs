@@ -90,6 +90,41 @@ defmodule LemonControlPlane.Methods.StatusTest do
     assert result["summary"]["cleanup"]["includesSecretValues"] == false
   end
 
+  test "browser subsystem projects only the shared resolver's redacted selection" do
+    keys = [:browser_provider_probe, :browser_provider_lcu_probe]
+    previous = Map.new(keys, &{&1, Application.fetch_env(:lemon_core, &1)})
+
+    Application.put_env(:lemon_core, :browser_provider_lcu_probe, fn ->
+      {:error, "token=private /private/host"}
+    end)
+
+    Application.put_env(:lemon_core, :browser_provider_probe, fn _ ->
+      {:error, "token=private /private/host"}
+    end)
+
+    on_exit(fn ->
+      Enum.each(previous, fn
+        {key, {:ok, value}} -> Application.put_env(:lemon_core, key, value)
+        {key, :error} -> Application.delete_env(:lemon_core, key)
+      end)
+    end)
+
+    expected = LemonCore.BrowserProvider.resolve()
+    assert {:ok, result} = Status.handle(%{}, %{})
+    browser = result["subsystems"]["browser"]
+
+    assert browser == %{
+             "available" => expected.provider != nil,
+             "requested" => expected.requested,
+             "provider" => expected.provider,
+             "reason" => expected.reason
+           }
+
+    refute Jason.encode!(browser) =~ "token=private"
+    refute Jason.encode!(browser) =~ "/private/host"
+    refute Map.has_key?(browser, "checks")
+  end
+
   test "daily count failures stay null with per-field availability" do
     {:ok, started} = Application.ensure_all_started(:lemon_router)
     on_exit(fn -> Enum.each(Enum.reverse(started), &Application.stop/1) end)

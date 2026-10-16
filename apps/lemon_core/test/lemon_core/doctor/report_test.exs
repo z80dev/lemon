@@ -51,6 +51,21 @@ defmodule LemonCore.Doctor.ReportTest do
     end
   end
 
+  test "default output includes passing browser selection and reason" do
+    report =
+      Report.from_checks([
+        Check.pass("browser.provider", "auto -> local: Managed browser is ready."),
+        Check.pass("ordinary.check", "Hidden passing detail.")
+      ])
+
+    output = ExUnit.CaptureIO.capture_io(fn -> Report.print(report) end)
+
+    assert output =~ "browser.provider"
+    assert output =~ "auto -> local: Managed browser is ready."
+    refute output =~ "ordinary.check"
+    refute output =~ "Hidden passing detail."
+  end
+
   describe "to_json/1" do
     test "returns a valid JSON string" do
       report = Report.from_checks(sample_checks())

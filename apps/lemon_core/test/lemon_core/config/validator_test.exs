@@ -583,7 +583,6 @@ defmodule LemonCore.Config.ValidatorTest do
       ok = %{
         computer_use: %{
           enabled: true,
-          chrome: false,
           lcu_root: "/opt/lcu/current",
           node: nil,
           declined_origins: ["https://bot.example.ts.net", "http://127.0.0.1:4081"]
@@ -593,12 +592,12 @@ defmodule LemonCore.Config.ValidatorTest do
       assert Validator.validate_tools(ok, []) == []
 
       bad = %{
-        computer_use: %{enabled: "yes", chrome: 1, lcu_root: "", declined_origins: ["ftp://x"]}
+        computer_use: %{enabled: "yes", lcu_root: "", declined_origins: ["ftp://x"]}
       }
 
       errors = Validator.validate_tools(bad, [])
 
-      for path <- ~w(enabled chrome lcu_root declined_origins) do
+      for path <- ~w(enabled lcu_root declined_origins) do
         assert Enum.any?(errors, &String.contains?(&1, "tools.computer_use." <> path)), path
       end
     end
