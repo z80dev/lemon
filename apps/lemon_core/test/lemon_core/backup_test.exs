@@ -3,6 +3,7 @@ defmodule LemonCore.BackupTest do
 
   import Bitwise
 
+  alias Exqlite.Sqlite3
   alias LemonCore.Backup
 
   @moduletag :tmp_dir
@@ -255,6 +256,221 @@ defmodule LemonCore.BackupTest do
              Backup.restore(fixture.bundle, target: symlink_target)
 
     assert File.ls!(real_target) == []
+  end
+
+  describe "SQLite snapshots" do
+    test "a backup taken during WAL writes is consistent and omits live sidecars", %{
+      tmp_dir: tmp_dir
+    } do
+      fixture = fixture(tmp_dir)
+      db = Path.join(fixture.source, "store/state.sqlite3")
+      File.rm!(db)
+      conn = open_wal_db!(db)
+
+      Enum.each(1..200, &insert_item!(conn, &1))
+      assert File.stat!(db <> "-wal").size > 0
+
+      writer_conn = open_wal_db!(db)
+      parent = self()
+
+      writer =
+        Task.async(fn ->
+          send(parent, :writer_ready)
+          write_until_stopped(writer_conn, 200)
+        end)
+
+      assert_receive :writer_ready
+      summary = create!(fixture)
+      send(writer.pid, :stop)
+      assert Task.await(writer) >= 200
+
+      assert summary.verified
+      assert {:ok, _} = Backup.verify(fixture.bundle)
+
+      data = Path.join(fixture.bundle, "data/store")
+      assert File.ls!(data) == ["state.sqlite3"]
+      manifest = fixture.bundle |> Path.join("manifest.json") |> File.read!() |> Jason.decode!()
+      assert manifest["exclusions"]["observed_counts"]["sqlite_sidecar"] >= 1
+
+      copy = Path.join(tmp_dir, "copy.db")
+      File.cp!(Path.join(data, "state.sqlite3"), copy)
+      {:ok, check} = Sqlite3.open(copy)
+      assert [["ok"]] = query!(check, "PRAGMA integrity_check")
+
+      assert [[count, max_id]] = query!(check, "SELECT count(*), max(id) FROM items")
+      assert count >= 200
+      assert count == max_id
+      Sqlite3.close(check)
+      Sqlite3.close(conn)
+      Sqlite3.close(writer_conn)
+    end
+
+    test "restore displaces a stale WAL beside a replaced database", %{tmp_dir: tmp_dir} do
+      fixture = fixture(tmp_dir)
+      db = Path.join(fixture.source, "store/state.sqlite3")
+      File.rm!(db)
+      conn = open_wal_db!(db)
+      Enum.each(1..5, &insert_item!(conn, &1))
+      create!(fixture)
+      Sqlite3.close(conn)
+
+      target = Path.join(tmp_dir, "restore-home/.lemon")
+      File.mkdir_p!(Path.join(target, "store"))
+      File.write!(Path.join(target, "store/state.sqlite3"), "old")
+      File.write!(Path.join(target, "store/state.sqlite3-wal"), "stale wal")
+      File.chmod!(Path.join(target, "store/state.sqlite3"), 0o600)
+
+      assert {:error, {:restore_conflicts, 2}} = Backup.restore(fixture.bundle, target: target)
+      assert {:ok, verified} = Backup.verify(fixture.bundle, target: target)
+
+      assert {:ok, restored} =
+               Backup.restore(fixture.bundle,
+                 target: target,
+                 overwrite: true,
+                 confirmation: verified.overwrite_confirmation
+               )
+
+      assert restored.overwritten_count == 2
+      refute File.exists?(Path.join(target, "store/state.sqlite3-wal"))
+
+      assert File.read!(Path.join(restored.rollback_path, "store/state.sqlite3-wal")) ==
+               "stale wal"
+    end
+
+    test "a pre-patch bundle's manifest-listed WAL is restored, not displaced as stale", %{
+      tmp_dir: tmp_dir
+    } do
+      fixture = fixture(tmp_dir)
+      {wal_bytes, rows} = legacy_bundle!(fixture, 25)
+      assert {:ok, _} = Backup.verify(fixture.bundle)
+
+      # Target database absent; an identical WAL holding committed rows is
+      # already in place. Nothing is a conflict and nothing is displaced.
+      absent = Path.join(tmp_dir, "legacy-absent/.lemon")
+      File.mkdir_p!(Path.join(absent, "store"))
+      File.write!(Path.join(absent, "store/state.sqlite3-wal"), wal_bytes)
+      File.chmod!(Path.join(absent, "store/state.sqlite3-wal"), 0o600)
+
+      assert {:ok, restored} = Backup.restore(fixture.bundle, target: absent)
+      assert restored.overwritten_count == 0
+      assert restored.rollback_path == nil
+      assert restored.identical_count == 1
+      assert File.read!(Path.join(absent, "store/state.sqlite3-wal")) == wal_bytes
+      assert db_row_count(Path.join(absent, "store/state.sqlite3")) == rows
+
+      # Target database different, identical WAL beside it: only the database
+      # conflicts, and the committed WAL-only rows survive the overwrite.
+      differing = Path.join(tmp_dir, "legacy-different/.lemon")
+      File.mkdir_p!(Path.join(differing, "store"))
+      File.write!(Path.join(differing, "store/state.sqlite3"), "old")
+      File.chmod!(Path.join(differing, "store/state.sqlite3"), 0o600)
+      File.write!(Path.join(differing, "store/state.sqlite3-wal"), wal_bytes)
+      File.chmod!(Path.join(differing, "store/state.sqlite3-wal"), 0o600)
+
+      assert {:error, {:restore_conflicts, 1}} = Backup.restore(fixture.bundle, target: differing)
+      assert {:ok, verified} = Backup.verify(fixture.bundle, target: differing)
+
+      assert {:ok, overwritten} =
+               Backup.restore(fixture.bundle,
+                 target: differing,
+                 overwrite: true,
+                 confirmation: verified.overwrite_confirmation
+               )
+
+      assert overwritten.overwritten_count == 1
+      assert File.read!(Path.join(overwritten.rollback_path, "store/state.sqlite3")) == "old"
+      assert File.read!(Path.join(differing, "store/state.sqlite3-wal")) == wal_bytes
+      assert db_row_count(Path.join(differing, "store/state.sqlite3")) == rows
+    end
+  end
+
+  # A bundle in the pre-patch layout: the raw database plus its live -wal as
+  # manifest entries, with every row committed only in the WAL.
+  defp legacy_bundle!(fixture, rows) do
+    db = Path.join(fixture.source, "store/state.sqlite3")
+    File.rm!(db)
+    conn = open_wal_db!(db)
+    Enum.each(1..rows, &insert_item!(conn, &1))
+    create!(fixture)
+
+    data = Path.join(fixture.bundle, "data/store")
+    File.cp!(db, Path.join(data, "state.sqlite3"))
+    File.cp!(db <> "-wal", Path.join(data, "state.sqlite3-wal"))
+    Sqlite3.close(conn)
+    Enum.each(["state.sqlite3", "state.sqlite3-wal"], &File.chmod!(Path.join(data, &1), 0o600))
+
+    entry = fn name ->
+      bytes = File.read!(Path.join(data, name))
+
+      %{
+        "path" => "store/" <> name,
+        "bytes" => byte_size(bytes),
+        "sha256" => :crypto.hash(:sha256, bytes) |> Base.encode16(case: :lower),
+        "mode" => 0o600
+      }
+    end
+
+    entries = [entry.("state.sqlite3"), entry.("state.sqlite3-wal")]
+
+    rewrite_manifest!(fixture.bundle, fn manifest ->
+      files =
+        Enum.reject(manifest["files"], &(&1["path"] in Enum.map(entries, fn e -> e["path"] end))) ++
+          entries
+
+      %{
+        manifest
+        | "files" => files,
+          "file_count" => length(files),
+          "total_bytes" => Enum.reduce(files, 0, &(&1["bytes"] + &2))
+      }
+    end)
+
+    {File.read!(Path.join(data, "state.sqlite3-wal")), rows}
+  end
+
+  defp db_row_count(path) do
+    {:ok, conn} = Sqlite3.open(path)
+    [[count]] = query!(conn, "SELECT count(*) FROM items")
+    Sqlite3.close(conn)
+    count
+  end
+
+  defp open_wal_db!(path) do
+    {:ok, conn} = Sqlite3.open(path)
+    :ok = Sqlite3.execute(conn, "PRAGMA busy_timeout=5000")
+    :ok = Sqlite3.execute(conn, "PRAGMA journal_mode=WAL")
+    :ok = Sqlite3.execute(conn, "PRAGMA wal_autocheckpoint=0")
+
+    :ok =
+      Sqlite3.execute(
+        conn,
+        "CREATE TABLE IF NOT EXISTS items (id INTEGER PRIMARY KEY, note TEXT NOT NULL)"
+      )
+
+    conn
+  end
+
+  defp insert_item!(conn, id) do
+    :ok = Sqlite3.execute(conn, "INSERT INTO items (id, note) VALUES (#{id}, 'row-#{id}')")
+  end
+
+  defp write_until_stopped(conn, id) do
+    receive do
+      :stop -> id
+    after
+      0 ->
+        case Sqlite3.execute(conn, "INSERT INTO items (id, note) VALUES (#{id + 1}, 'w')") do
+          :ok -> write_until_stopped(conn, id + 1)
+          {:error, _busy} -> write_until_stopped(conn, id)
+        end
+    end
+  end
+
+  defp query!(conn, sql) do
+    {:ok, stmt} = Sqlite3.prepare(conn, sql)
+    {:ok, rows} = Sqlite3.fetch_all(conn, stmt)
+    :ok = Sqlite3.release(conn, stmt)
+    rows
   end
 
   defp rewrite_manifest!(bundle, fun) do

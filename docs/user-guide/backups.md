@@ -76,6 +76,16 @@ platform permits, verifies the completed partial bundle, then exposes the final
 path with one atomic directory rename. A failed create removes the partial path
 and never reports it as a backup.
 
+SQLite databases are never raw-copied, because a live database in WAL mode is
+not a consistent file by itself. Lemon recognises a database by its file header
+(any name) and snapshots it with SQLite's `VACUUM INTO`, which reads one
+transaction-consistent snapshot while writers keep running and includes
+committed WAL content. The live `-wal`, `-shm`, and `-journal` sidecars are
+therefore left out of the bundle (counted as `sqlite_sidecar` in the manifest).
+Every other file is copied byte for byte and must not change during the copy.
+A database that cannot be snapshotted fails the whole create; Lemon never falls
+back to a raw copy of it.
+
 Choose another final path with `--output`:
 
 ```bash
@@ -150,6 +160,13 @@ so an operator can identify the authorized restore. If apply fails, Lemon
 removes newly installed files and moves the displaced originals back. If that
 rollback cannot finish, Lemon retains the rollback material and reports a
 fail-closed error.
+
+When a restored database replaces or lands beside leftover `-wal`, `-shm`, or
+`-journal` files, those leftovers count as differing files: they need the same
+`--overwrite --confirm` and are moved to the rollback directory, so an old WAL
+is never replayed into restored data. Bundles written before snapshots used
+`VACUUM INTO` list their `-wal`/`-shm` as ordinary files; those are restored
+with the database like any other entry.
 
 ## JSON and exit codes
 

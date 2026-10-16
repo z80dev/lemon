@@ -7,13 +7,24 @@ defmodule LemonCore.Backup do
   bundle appears with one directory rename, so an interrupted create never
   leaves a path that can be mistaken for a complete backup.
 
+  SQLite databases (recognised by their file header, regardless of name) are
+  never raw-copied: each is snapshotted with `VACUUM INTO`, which reads one
+  consistent transaction snapshot and is safe while a WAL-mode writer is
+  active. The snapshot contains the WAL's committed content, so the live
+  `-wal`, `-shm`, and `-journal` sidecars are excluded from the bundle. The
+  `exqlite` dependency exposes no `sqlite3_backup` binding, which is why
+  `VACUUM INTO` is the online-backup primitive. Every other file is copied
+  byte-for-byte and must not change during the copy.
+
   Restore verifies the complete bundle before touching the destination. It is
   additive by default and refuses conflicting files. An overwrite is accepted
   only when the caller supplies both `overwrite: true` and a confirmation
   derived from the verified manifest digest plus the expanded target root;
-  displaced files are kept in a mode-0700 sibling rollback directory.
-  Structural conflicts (symlinks, special files, or a file where a parent
-  directory is needed) always fail closed.
+  displaced files are kept in a mode-0700 sibling rollback directory. Stale
+  SQLite sidecars beside a database being installed count as
+  conflicts and are displaced the same way, so an old WAL is never replayed
+  into a restored database. Structural conflicts (symlinks, special files, or
+  a file where a parent directory is needed) always fail closed.
 
   The default contract includes durable configuration, stores, sessions,
   skills, and workspace files. It excludes installed versions and launchers,
@@ -29,7 +40,10 @@ defmodule LemonCore.Backup do
 
   import Bitwise
 
+  alias Exqlite.Sqlite3
   alias LemonCore.Paths
+
+  @compile {:no_warn_undefined, Exqlite.Sqlite3}
 
   @schema 1
   @contract_version 1
@@ -41,6 +55,9 @@ defmodule LemonCore.Backup do
   @max_path_bytes 1_024
   @copy_chunk_bytes 1024 * 1024
   @allowed_restore_modes MapSet.new([0o400, 0o500, 0o600, 0o700])
+  @sqlite_header "SQLite format 3\0"
+  @sqlite_sidecar_suffixes ["-wal", "-shm", "-journal"]
+  @sqlite_busy_timeout_ms 5_000
 
   @always_excluded_roots MapSet.new([
                            "backups",
@@ -187,8 +204,9 @@ defmodule LemonCore.Backup do
       with :ok <- ensure_parent(output),
            :ok <- ensure_absent(output),
            :ok <- mkdir_p_private(Path.join(partial, @data_dir)),
-           {:ok, source_files, excluded} <- collect_source_files(source, include_credentials?),
-           {:ok, manifest_entries} <- copy_source_files(source, partial, source_files),
+           {:ok, source_files, excluded, sqlite} <-
+             collect_source_files(source, include_credentials?),
+           {:ok, manifest_entries} <- copy_source_files(source, partial, source_files, sqlite),
            manifest <- build_manifest(manifest_entries, excluded, include_credentials?),
            :ok <- write_manifest(partial, manifest),
            {:ok, _summary} <- verify(partial),
@@ -213,7 +231,9 @@ defmodule LemonCore.Backup do
              confirmation,
              summary.overwrite_confirmation
            ),
-         {:ok, conflicts, identical} <- classify_destination(target, entries),
+         {:ok, found_conflicts, identical} <- classify_destination(target, entries),
+         {:ok, sidecars} <- stale_sqlite_sidecars(bundle, target, entries, identical),
+         conflicts = Enum.uniq(found_conflicts ++ sidecars),
          :ok <- authorize_conflicts(conflicts, overwrite?),
          {:ok, stage} <- stage_restore(bundle, target, entries, identical),
          {:ok, result} <-
@@ -223,7 +243,45 @@ defmodule LemonCore.Backup do
   end
 
   defp collect_source_files(root, include_credentials?) do
-    walk_source(root, "", include_credentials?, [], %{})
+    with {:ok, files, excluded} <- walk_source(root, "", include_credentials?, [], %{}) do
+      sqlite =
+        for {relative, _stat} <- files,
+            sqlite_file?(Path.join(root, relative)),
+            into: MapSet.new(),
+            do: relative
+
+      {kept, excluded} =
+        Enum.reduce(files, {[], excluded}, fn {relative, _stat} = file, {kept, counts} ->
+          if sqlite_sidecar?(relative, sqlite) do
+            {kept, increment_excluded(counts, "sqlite_sidecar")}
+          else
+            {[file | kept], counts}
+          end
+        end)
+
+      {:ok, Enum.reverse(kept), excluded, sqlite}
+    end
+  end
+
+  defp sqlite_file?(path) do
+    case File.open(path, [:read, :binary]) do
+      {:ok, io} ->
+        try do
+          IO.binread(io, byte_size(@sqlite_header)) == @sqlite_header
+        after
+          File.close(io)
+        end
+
+      {:error, _reason} ->
+        false
+    end
+  end
+
+  defp sqlite_sidecar?(relative, sqlite) do
+    Enum.any?(@sqlite_sidecar_suffixes, fn suffix ->
+      String.ends_with?(relative, suffix) and
+        MapSet.member?(sqlite, String.replace_suffix(relative, suffix, ""))
+    end)
   end
 
   defp walk_source(root, relative, include_credentials?, files, excluded) do
@@ -281,16 +339,17 @@ defmodule LemonCore.Backup do
     end
   end
 
-  defp copy_source_files(source, partial, files) do
+  defp copy_source_files(source, partial, files, sqlite) do
     Enum.reduce_while(files, {:ok, []}, fn {relative, stat}, {:ok, entries} ->
       source_path = Path.join(source, relative)
       destination = Path.join([partial, @data_dir, relative])
 
       with {:ok, mode} <- source_restore_mode(stat.mode),
-           {:ok, digest} <- copy_and_digest(source_path, destination, stat) do
+           {:ok, bytes, digest} <-
+             copy_entry(source_path, destination, stat, relative, sqlite) do
         entry = %{
           "path" => relative,
-          "bytes" => stat.size,
+          "bytes" => bytes,
           "sha256" => digest,
           "mode" => mode
         }
@@ -317,6 +376,92 @@ defmodule LemonCore.Backup do
     else
       {:error, {:source_changed, _} = reason} -> {:error, reason}
       {:error, reason} -> {:error, {:copy_failed, reason}}
+    end
+  end
+
+  defp copy_entry(source, destination, stat, relative, sqlite) do
+    if MapSet.member?(sqlite, relative) do
+      snapshot_sqlite(source, destination, relative)
+    else
+      with {:ok, digest} <- copy_and_digest(source, destination, stat) do
+        {:ok, stat.size, digest}
+      end
+    end
+  end
+
+  # A live database is changing by design, so it is not subject to the
+  # unchanged-during-copy check; VACUUM INTO writes one consistent snapshot.
+  defp snapshot_sqlite(source, destination, relative) do
+    with :ok <- ensure_sqlite_available(relative),
+         :ok <- mkdir_p_private(Path.dirname(destination)),
+         :ok <- vacuum_into(source, destination, relative),
+         :ok <- chmod_and_sync(destination, 0o600),
+         {:ok, %{bytes: bytes, sha256: digest}} <- file_digest(destination) do
+      {:ok, bytes, digest}
+    else
+      {:error, {:sqlite_snapshot_failed, _path, _stage}} = error -> error
+      {:error, reason} -> {:error, {:copy_failed, reason}}
+    end
+  end
+
+  defp ensure_sqlite_available(relative) do
+    if Code.ensure_loaded?(Sqlite3),
+      do: :ok,
+      else: {:error, {:sqlite_snapshot_failed, safe_path(relative), :sqlite_unavailable}}
+  end
+
+  defp vacuum_into(source, destination, relative) do
+    failed = fn stage -> {:error, {:sqlite_snapshot_failed, safe_path(relative), stage}} end
+
+    case Sqlite3.open(source) do
+      {:ok, conn} ->
+        try do
+          with :ok <-
+                 map_sqlite(
+                   Sqlite3.execute(conn, "PRAGMA busy_timeout=#{@sqlite_busy_timeout_ms}"),
+                   failed,
+                   :busy_timeout
+                 ) do
+            literal = String.replace(destination, "'", "''")
+            map_sqlite(Sqlite3.execute(conn, "VACUUM INTO '#{literal}'"), failed, :vacuum_into)
+          end
+        after
+          Sqlite3.close(conn)
+        end
+
+      _ ->
+        failed.(:open)
+    end
+  end
+
+  defp map_sqlite(:ok, _failed, _stage), do: :ok
+  defp map_sqlite(_error, failed, stage), do: failed.(stage)
+
+  defp stale_sqlite_sidecars(bundle, target, entries, identical) do
+    identical = MapSet.new(identical)
+    manifest_paths = MapSet.new(entries, & &1["path"])
+
+    entries
+    |> Enum.reject(&MapSet.member?(identical, &1["path"]))
+    |> Enum.filter(&sqlite_file?(Path.join([bundle, @data_dir, &1["path"]])))
+    |> Enum.flat_map(fn entry ->
+      Enum.map(@sqlite_sidecar_suffixes, &(entry["path"] <> &1))
+    end)
+    # A sidecar the manifest lists (pre-patch bundles carried live -wal/-shm
+    # files) is bundle content, not a stale leftover: normal classification
+    # compares and installs it, so committed WAL-only rows survive.
+    |> Enum.reject(&MapSet.member?(manifest_paths, &1))
+    |> Enum.reduce_while({:ok, []}, fn relative, {:ok, found} ->
+      case File.lstat(Path.join(target, relative)) do
+        {:ok, %File.Stat{type: :regular}} -> {:cont, {:ok, [relative | found]}}
+        {:ok, %File.Stat{}} -> {:halt, {:error, :structural_restore_conflict}}
+        {:error, :enoent} -> {:cont, {:ok, found}}
+        {:error, reason} -> {:halt, {:error, {:destination_stat_failed, reason}}}
+      end
+    end)
+    |> case do
+      {:ok, found} -> {:ok, Enum.reverse(found)}
+      error -> error
     end
   end
 
@@ -1027,6 +1172,7 @@ defmodule LemonCore.Backup do
       "runtime pid/socket/lock state",
       "temporary files, caches, logs, support bundles, and prior backups",
       "restore rollback directories",
+      "SQLite -wal/-shm/-journal sidecars (their committed content is in the database snapshot)",
       "symlinks and special files",
       "platform keychain contents",
       "project-local .lemon directories"

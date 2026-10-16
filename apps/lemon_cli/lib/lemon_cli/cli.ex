@@ -1360,6 +1360,11 @@ defmodule LemonCli.CLI do
   defp backup_error(:backup_restore_locked),
     do: {"operation_locked", "Another backup or restore operation is already running."}
 
+  defp backup_error({:sqlite_snapshot_failed, _path, _stage}),
+    do:
+      {"sqlite_snapshot_failed",
+       "A SQLite database could not be snapshotted consistently; no bundle was created."}
+
   defp backup_error({:unsupported_backup_schema, _schema}),
     do: {"unsupported_schema", "This backup schema is not supported by this Lemon version."}
 

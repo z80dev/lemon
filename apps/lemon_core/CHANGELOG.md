@@ -17,6 +17,19 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ### Fixed
 
+- `LemonCore.Backup` snapshots SQLite databases (identified by file header)
+  with `VACUUM INTO` instead of a raw file copy, so a backup taken while a
+  WAL-mode writer is active is internally consistent. Live `-wal`, `-shm`, and
+  `-journal` sidecars of a snapshotted database are excluded from the bundle
+  (counted as `sqlite_sidecar`); other files keep the byte-exact copy and
+  unchanged-during-copy check. The bundle format, credential inclusion, and
+  overwrite/manifest-digest confirmation are unchanged.
+- Restore treats stale SQLite `-wal`/`-shm`/`-journal` files beside a database
+  it is about to install as overwrite conflicts, displacing them to the
+  rollback directory so an old WAL is never replayed into restored data.
+  Sidecars the manifest itself lists (bundles written before the `VACUUM INTO`
+  change) are bundle content and are classified and installed normally, so
+  committed WAL-only rows are never dropped.
 - `LemonCore.NodeRegistry` name-or-ID selectors resolve an exact live durable
   ID before a unique live name; an authorized durable ID never falls back to
   another node's name while offline. `native_privacy_context_supported?/1` is
