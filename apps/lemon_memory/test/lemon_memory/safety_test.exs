@@ -47,6 +47,20 @@ defmodule LemonMemory.SafetyTest do
       end
     end
 
+    test "refuses secrets beside query markers and quoted or spaced query values" do
+      for {sample, expected} <- [
+            {"password:hunter2?check", "[REDACTED]"},
+            {~s(gateway?token="hidden"), "gateway?[REDACTED]"},
+            {"gateway?token= hidden", "gateway?[REDACTED]"},
+            {"gateway?session=public&token=private-value", "gateway?session=public&[REDACTED]"}
+          ] do
+        assert Safety.contains_secret?(sample), sample
+        assert Safety.note_refusal_reason(sample), sample
+        assert {^expected, count} = Safety.redact(sample)
+        assert count > 0
+      end
+    end
+
     test "refuses quoted, nested, and percent-encoded credential shapes" do
       for sample <- [
             ~S(run 'PASSWORD=first&mode=last' now),

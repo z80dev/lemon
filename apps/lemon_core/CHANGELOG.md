@@ -8,6 +8,15 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ### Security
 
+- URL query assignments now classify `&`-separated `key=value` pairs independently,
+  retaining public pairs after unquoted sensitive values in default, `drop_keys`
+  and strict modes. Only conservative unquoted URL characters qualify; queries
+  containing quotes, fragments or ambiguous syntax retain the legacy output.
+  The exact redaction marker is an inert value, quoted or unquoted, preserving
+  idempotence without admitting other quoted values. Recognition is frozen on
+  the original input so earlier redactions cannot create query context.
+  Strict sensitivity, including session/private keys in queries, remains unchanged,
+  as do ordinary sensitive-key rules and non-query assignment extents.
 - `LemonCore.Redact.text/2` runs a linear-time tokenizer after the regex pass,
   so percent-encoded keys and delimiters (`%74oken=…`, `token%3D…`,
   `%access_key`), assignments nested behind a non-sensitive wrapper

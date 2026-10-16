@@ -8,6 +8,170 @@ defmodule LemonCore.RedactTest do
     defstruct [:api_key, :metadata]
   end
 
+  test "URL query pairs redact independently in every position" do
+    for {query, expected} <- [
+          {"mode=ready", "mode=ready"},
+          {"session=public&mode=ready&other=unchanged",
+           "session=public&mode=ready&other=unchanged"},
+          {"token=hidden", "token=[REDACTED]"},
+          {"token=hidden&session=public", "token=[REDACTED]&session=public"},
+          {"api_key=first&session=public&password=last",
+           "api_key=[REDACTED]&session=public&password=[REDACTED]"},
+          {~s(token="hidden"&session=public), "token=[REDACTED]&session=public"},
+          {"session=public&token=hidden&status=ready",
+           "session=public&token=[REDACTED]&status=ready"},
+          {"session=public&token=hidden", "session=public&token=[REDACTED]"},
+          {~s(api_key="first"&session=public&password=last),
+           "api_key=[REDACTED]&session=public&password=[REDACTED]"},
+          {"a=b&&status=ready&", "a=b&&status=ready&"}
+        ],
+        prefix <- ["gateway", "https://example.test/path", "/relative/path"] do
+      input = prefix <> "?" <> query
+      output = prefix <> "?" <> expected
+      assert Redact.text(input) == output
+      assert Redact.text(output, count: true) == {output, 0}
+    end
+
+    assert Redact.text("gateway?session=public&token=hidden#section") ==
+             "gateway?session=public&token=[REDACTED]"
+
+    assert Redact.text("gateway?session=public&token=hidden", drop_keys: true) ==
+             "gateway?session=public&[REDACTED]"
+  end
+
+  test "genuine query redaction is idempotent in all four modes" do
+    for opts <- [[], [drop_keys: true], [strict: true], [strict: true, drop_keys: true]],
+        input <- [
+          "gateway?token=hidden&mode=public",
+          "gateway?mode=public&session=hidden&other=ready",
+          "gateway?token=\"[REDACTED]\"&mode=public",
+          "gateway?token=[REDACTED]&mode=public"
+        ] do
+      output = Redact.text(input, opts)
+      assert Redact.text(output, Keyword.put(opts, :count, true)) == {output, 0}
+      assert output =~ "mode=public"
+    end
+  end
+
+  test "near-miss quoted markers do not establish genuine query context" do
+    for {value, default, dropped} <- [
+          {~s("[REDACTED]x"), ~s(gateway?token=[REDACTED]"[REDACTED]x"&other=hidden),
+           ~s(gateway?[REDACTED]"[REDACTED]x"&other=hidden)},
+          {~s("x[REDACTED]"), ~s(gateway?token=[REDACTED]"x[REDACTED]"&other=hidden),
+           ~s(gateway?[REDACTED]"x[REDACTED]"&other=hidden)}
+        ] do
+      input = "gateway?token=ab&mode=" <> value <> "&other=hidden"
+      assert Redact.text(input) == default
+      assert Redact.text(input, drop_keys: true) == dropped
+      assert Redact.text(input, strict: true) == ~s(gateway?token="[REDACTED]")
+      assert Redact.text(input, strict: true, drop_keys: true) == dropped
+    end
+  end
+
+  test "unquoted sensitive-first queries retain public suffixes" do
+    assert Redact.text("gateway?token=hidden&session=public") ==
+             "gateway?token=[REDACTED]&session=public"
+
+    assert Redact.text("gateway?token=hidden&session=public", drop_keys: true) ==
+             "gateway?[REDACTED]&session=public"
+
+    assert Redact.text("https://h/x?token=a&mode=1") ==
+             "https://h/x?token=[REDACTED]&mode=1"
+  end
+
+  test "strict URL queries retain public pairs without relaxing config fields" do
+    for {input, expected} <- [
+          {"gateway?token=hidden&session=public",
+           "gateway?token=\"[REDACTED]\"&session=[REDACTED]"},
+          {"gateway?session=public&token=hidden&status=ready",
+           "gateway?session=\"[REDACTED]\"&token=[REDACTED]&status=ready"},
+          {"gateway?session=public&token=hidden",
+           "gateway?session=\"[REDACTED]\"&token=[REDACTED]"},
+          {"gateway?token=hidden&status=ready", "gateway?token=\"[REDACTED]\"&status=ready"},
+          {"gateway?token=ab&cd", "gateway?token=\"[REDACTED]\""},
+          {"session=public", "session=\"[REDACTED]\""}
+        ] do
+      assert Redact.text(input, strict: true) == expected
+      assert Redact.text(expected, strict: true) == expected
+    end
+  end
+
+  test "strict query sensitivity includes session and private in every position" do
+    for key <- ["session", "private"],
+        position <- 0..2,
+        drop? <- [false, true],
+        tokenizer? <- [false, true] do
+      pairs = List.insert_at(["mode=1", "status=ready"], position, key <> "=hidden")
+
+      replacement =
+        if drop?,
+          do: "[REDACTED]",
+          else: key <> "=" <> if(position == 0, do: "\"[REDACTED]\"", else: "[REDACTED]")
+
+      expected = List.replace_at(pairs, position, replacement)
+
+      assert Redact.text("gateway?" <> Enum.join(pairs, "&"),
+               strict: true,
+               drop_keys: drop?,
+               tokenizer: tokenizer?
+             ) ==
+               "gateway?" <> Enum.join(expected, "&")
+    end
+
+    assert Redact.text("https://h/x?mode=1&session=s&token=t", strict: true) ==
+             "https://h/x?mode=1&session=[REDACTED]&token=[REDACTED]"
+  end
+
+  test "ordinary text and existing assignment shapes retain main's outputs" do
+    for {input, expected} <- [
+          {"session=public&token=private-value", "session=public&token=[REDACTED]"},
+          {"token=private-value&session=public", "token=[REDACTED]"},
+          {"password=ab&cd", "password=[REDACTED]"},
+          {"password=&cd", "password=[REDACTED]"},
+          {"env 'PASSWORD=first&mode=last' tool", "env 'PASSWORD=[REDACTED]' tool"},
+          {~s(PASSWORD="first&status=ready"), "PASSWORD=[REDACTED]"},
+          {"message=public&api_key=hidden", "message=public&api_key=[REDACTED]"},
+          {"session=public;token=hidden", "session=public;token=[REDACTED]"},
+          {"gateway?session=public&%74oken=hidden", "gateway?session=public&%74oken=[REDACTED]"},
+          {"Is this ordinary text? Yes & no.", "Is this ordinary text? Yes & no."},
+          {"status=ready model=claude", "status=ready model=claude"},
+          {"token='first second'", "token=[REDACTED]"},
+          {"Authorization: Bearer first.second", "Authorization: [REDACTED]"}
+        ] do
+      assert Redact.text(input) == expected
+    end
+  end
+
+  @tag timeout: 15_000
+  test "long queries and non-query assignments remain bounded" do
+    pairs = String.duplicate("a=b&", 100_000)
+
+    for input <- ["gateway?" <> pairs <> "token=hidden", pairs] do
+      task = Task.async(fn -> Redact.text(input) end)
+      output = Task.await(task, 5_000)
+      assert output == String.replace(input, "token=hidden", "token=[REDACTED]")
+    end
+  end
+
+  @tag timeout: 15_000
+  test "repeated sensitive query pairs remain bounded" do
+    task = Task.async(fn -> Redact.text("gateway?" <> String.duplicate("token=a&", 100_000)) end)
+
+    assert Task.await(task, 5_000) ==
+             "gateway?" <> String.duplicate("token=[REDACTED]&", 100_000)
+  end
+
+  test "query detection does not weaken sensitive assignments" do
+    for {input, expected, without_keys} <- [
+          {"password:hunter2?check", "password:[REDACTED]", "[REDACTED]"},
+          {~s(gateway?token="hidden"), "gateway?token=[REDACTED]", "gateway?[REDACTED]"},
+          {"gateway?token= hidden", "gateway?token= [REDACTED]", "gateway?[REDACTED]"}
+        ] do
+      assert Redact.text(input) == expected
+      assert Redact.text(input, drop_keys: true) == without_keys
+    end
+  end
+
   test "credential values disappear without losing surrounding operational text" do
     secrets = [
       "sk-abcdefgh",
@@ -189,28 +353,24 @@ defmodule LemonCore.RedactTest do
     end
   end
 
-  @legacy_corpus [
-    "password:hunter2?check",
-    ~S(gateway?token="hidden"),
-    "https://example.test/?token=hidden&mode=ok",
-    "token=a&token=b&token=c",
-    ~S({"api_key":"first second","status":"ready"}),
-    ~S(message="api_key=first" status=ready),
-    "Authorization: Bearer first.second status=ready",
-    "status=ready model=claude",
-    "the tokenizer uses 42 tokens",
-    "api_key =\nmodel=claude",
-    ~S(token="unterminated api_key='x),
-    ~S(%zz=%token=x%),
-    "%",
-    "=:=:",
-    "password=prefix%22api_key=first%22suffix"
-  ]
+  @main_baseline (
+                   {rows, _} =
+                     Code.eval_file(Path.join(__DIR__, "redact_main_baseline.exs"))
 
-  test "output is never less redacted than the legacy regex pass" do
-    for input <- @legacy_corpus ++ @shapes, opts <- [[], [drop_keys: true], [strict: true]] do
-      assert_monotonic(input, opts)
+                   rows
+                 )
+
+  test "non-query assignments retain frozen main outputs in every mode" do
+    for {input, opts, expected} <- @main_baseline do
+      assert Redact.text(input, opts) == expected
     end
+  end
+
+  test "queries with fragments fall back to main while short URL-like tokens qualify" do
+    assert Redact.text("https://h/x?token=a&mode=1#frag") ==
+             "https://h/x?token=[REDACTED]"
+
+    assert Redact.text("a?b=c&token=x") == "a?b=c&token=[REDACTED]"
   end
 
   test "encoded wrapper inside an outer assignment keeps the full legacy redaction" do
@@ -219,23 +379,10 @@ defmodule LemonCore.RedactTest do
     assert Redact.text(input, drop_keys: true) == "[REDACTED]"
   end
 
-  property "random credential-shaped text is never less redacted than legacy" do
-    fragment =
-      one_of([
-        member_of(~w(token api_key password message%20text %74oken %access_key %bearer status)),
-        member_of(["=", ":", "%3D", "&", "'", ~S("), " ", "%22", "%27", "\\", "?", "[REDACTED]"]),
-        string(:alphanumeric, max_length: 6),
-        string(:printable, max_length: 4)
-      ])
-
-    check all(
-            parts <- list_of(fragment, max_length: 30),
-            opts <- member_of([[], [drop_keys: true], [strict: true]])
-          ) do
-      input = Enum.join(parts)
-      assert_monotonic(input, opts)
-      output = Redact.text(input, opts)
-      assert Redact.text(output, opts) == output
+  property "sampled non-query inputs match a frozen main baseline" do
+    check all({input, opts, expected} <- member_of(@main_baseline)) do
+      assert Redact.text(input, opts) == expected
+      assert Redact.text(expected, opts) == expected
     end
   end
 
@@ -277,24 +424,5 @@ defmodule LemonCore.RedactTest do
   defp time(input, opts \\ []) do
     {micros, _} = :timer.tc(fn -> Redact.text(input, opts) end)
     micros
-  end
-
-  # The tokenizer only replaces spans of the legacy output with markers, so every
-  # marker-free piece of the result appears in the legacy output, in order.
-  defp assert_monotonic(input, opts) do
-    legacy = Redact.text(input, Keyword.put(opts, :tokenizer, false))
-    output = Redact.text(input, opts)
-
-    output
-    |> String.split("[REDACTED]", trim: true)
-    |> Enum.reduce(0, fn piece, offset ->
-      case :binary.match(legacy, piece, scope: {offset, byte_size(legacy) - offset}) do
-        {at, size} ->
-          at + size
-
-        :nomatch ->
-          flunk("#{inspect(input)} #{inspect(opts)}: #{inspect(output)} vs #{inspect(legacy)}")
-      end
-    end)
   end
 end

@@ -13,6 +13,15 @@ defmodule LemonCore.Redact do
   depth/item/byte bounds, and fixed runtime-error summaries. In particular, apply
   redaction before truncating text, not after cutting a credential in half.
 
+  Inside a conservative unquoted URL-like token after `?`, an `&key=value`
+  starts an independent query pair, so non-sensitive query pairs are retained.
+  Keys use ASCII letters, digits, `.`, `_`, `%`, or `-`; values also allow `~` and `+`.
+  Queries containing quotes, fragments or ambiguous syntax retain the legacy
+  output, except that the literal `[REDACTED]` and `"[REDACTED]"` are inert
+  values so repeated redaction stays idempotent. Strict sensitivity, including
+  session and private keys, is unchanged. Outside qualifying queries,
+  assignment behavior is unchanged.
+
   ## Tokenizer pass
 
   The regex pass runs first on the original input, exactly as without the
@@ -67,7 +76,7 @@ defmodule LemonCore.Redact do
   @private_key ~r/-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----.*?(?:-----END [A-Z0-9 ]*PRIVATE KEY-----|\z)/s
   @credentials ~r/(?:sk-[A-Za-z0-9_-]{8,}|(?i:(?:gh[pousr]_|github_pat_)[A-Za-z0-9_]{8,}|xox[a-z]-[A-Za-z0-9-]{8,})|AKIA[A-Z0-9]{16}|AIza[A-Za-z0-9_-]{35}|\beyJ(?:[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}|[A-Za-z0-9+\/_-]{30,}(?:\.[A-Za-z0-9+\/_-]+)*=*))/
   @authorization ~r/\bbearer\s+[A-Za-z0-9._~+\/=:-]+/i
-  @assignment ~r/((?<![\w.-])["']?[A-Za-z0-9_.-]*(?:#{@key_pattern}|session|private)[A-Za-z0-9_.-]*["']?[ \t]*[:=][ \t]*)(basic[ \t]+[A-Za-z0-9._~+\/=:-]+|""".*?(?:"""|\z)|'''.*?(?:'''|\z)|"(?:\\.|[^"\\])*(?:"|\z)|'(?:\\.|[^'\\])*(?:'|\z)|\[REDACTED\]|[^\s,;"'{}\[\]]+)/is
+  @assignment ~r/((?<![\w.-])["']?[A-Za-z0-9_.-]*(?:#{@key_pattern}|session|private)[A-Za-z0-9_.-]*["']?[ \t]*[:=][ \t]*)(basic[ \t]+[A-Za-z0-9._~+\/=:-]+|""".*?(?:"""|\z)|'''.*?(?:'''|\z)|"(?:\\.|[^"\\])*(?:"|\z)|'(?:\\.|[^'\\])*(?:'|\z)|\[REDACTED\]|[^\s,;&"'{}\[\]]+|&)/is
   @config_assignment ~r/^([ \t]*[^#\n=\[]*?=[ \t]*)([^\n]+)$/m
   @pairing_code ~r/((?:pairing code:\s*|lemon pairing (?:approve|deny) (?:telegram|discord)\s+))[A-HJ-NP-Z2-9]{8}\b/i
   @hex_key ~r/0x[a-fA-F0-9]{64}/
@@ -99,11 +108,11 @@ defmodule LemonCore.Redact do
 
     tokenizer? = Keyword.get(opts, :tokenizer, true)
 
-    {legacy, count, passes} =
-      {value, 0, []}
+    {legacy, count, passes, _queries} =
+      {value, 0, [], genuine_queries(value)}
       |> replace(@private_key, fn _ -> @marker end)
       |> replace(@authorization, fn _ -> @marker end)
-      |> replace(@assignment, fn [original, prefix, secret] ->
+      |> replace(@assignment, fn [original, prefix, secret], _query? ->
         if sensitive_key?(prefix) or (strict? and strict_key?(prefix)) do
           cond do
             drop_keys? -> @marker
@@ -157,9 +166,27 @@ defmodule LemonCore.Redact do
 
   defp strict(result, true, drop_keys?) do
     result
-    |> replace(@config_assignment, fn [original, prefix, _value] ->
+    |> replace(@config_assignment, fn [original, prefix, value], query? ->
+      query? = query? and query_prefix?(prefix)
+
       if sensitive_key?(prefix) or strict_key?(prefix) do
-        if drop_keys?, do: @marker, else: prefix <> "\"" <> @marker <> "\""
+        # Only a suffix adjacent to an unquoted query value is recoverable.
+        # An ampersand after a fragment or inside quotes belongs to the legacy
+        # secret extent, not to another query pair.
+        suffix =
+          if query? do
+            case Regex.run(
+                   ~r/\A(?:[A-Za-z0-9._~%+-]*|"\[REDACTED\]"|\[REDACTED\])((?:&[A-Za-z0-9._~%+-]+=(?:[A-Za-z0-9._~%+-]*|"\[REDACTED\]"|\[REDACTED\]))+)\z/,
+                   value
+                 ) do
+              [_, pairs] -> pairs
+              nil -> ""
+            end
+          else
+            ""
+          end
+
+        if drop_keys?, do: @marker <> suffix, else: prefix <> "\"" <> @marker <> "\"" <> suffix
       else
         original
       end
@@ -329,7 +356,9 @@ defmodule LemonCore.Redact do
 
       bytes
       |> :binary.matches(["=", ":"])
-      |> Enum.reduce({[], %{}}, fn {i, 1}, state -> delimiter(ctx, i, state) end)
+      |> Enum.reduce({[], %{}}, fn {i, 1}, state ->
+        delimiter(ctx, i, state)
+      end)
       |> elem(0)
       |> Enum.reverse()
     else
@@ -389,7 +418,8 @@ defmodule LemonCore.Redact do
     opener = if key_start > 0, do: :binary.at(ctx.bytes, key_start - 1)
     wrapper = if opener in @quotes and not key_quoted?, do: opener
 
-    if key != "" and (sensitive_key?(key) or (ctx.strict? and strict_key?(key))) do
+    if key != "" and
+         (sensitive_key?(key) or (ctx.strict? and strict_key?(key))) do
       v = skip_forward(ctx, i + 1)
 
       {wrapped?, cache} =
@@ -502,31 +532,231 @@ defmodule LemonCore.Redact do
 
   # Build once from match offsets rather than repeatedly copying the growing
   # string; count actual replacements, not markers from an earlier pass.
-  defp replace({text, count, passes}, regex, replacement) do
-    case Regex.scan(regex, text, return: :index) do
+  # Stop unquoted query values at '&', but retain the legacy extent everywhere
+  # else. Both the context events and regex cursor advance monotonically: an
+  # ampersand suffix is never scanned again for each preceding query pair.
+  defp assignment_matches(text, events) do
+    assignment_matches(text, 0, events, false, [])
+  end
+
+  defp assignment_matches(text, offset, events, query?, acc) do
+    case Regex.run(@assignment, text, offset: offset, return: :index) do
+      nil ->
+        Enum.reverse(acc)
+
+      [{start, size}, prefix, {value_start, value_size}] = spans ->
+        {events, starts_in_query?} = query_context(text, events, start, query?)
+        stop = start + size
+        {events, query?} = query_context(text, events, stop, starts_in_query?)
+        {prefix_start, prefix_size} = prefix
+
+        query_assignment? =
+          text
+          |> binary_part(prefix_start, prefix_size)
+          |> String.trim_trailing()
+          |> String.ends_with?("=")
+
+        split_query? = starts_in_query? and query? and query_assignment?
+
+        boundary =
+          if value_size == 1 and binary_part(text, value_start, 1) == "&",
+            do: value_start,
+            else: stop
+
+        split_query? = split_query? and query_pair_at?(text, boundary)
+        value = binary_part(text, value_start, value_size)
+
+        stop =
+          cond do
+            split_query? and value == "&" ->
+              value_start
+
+            not split_query? and stop < byte_size(text) and
+              (value == "&" or :binary.at(text, stop) == ?&) and
+              not String.starts_with?(value, ["\"", "'", "[REDACTED]"]) and
+                not Regex.match?(~r/^basic[ \t]/i, value) ->
+              case :binary.match(
+                     text,
+                     [" ", "\t", "\r", "\n", "\f", "\v", ",", ";", "\"", "'", "{", "}", "[", "]"],
+                     scope: {stop, byte_size(text) - stop}
+                   ) do
+                :nomatch -> byte_size(text)
+                {at, _} -> at
+              end
+
+            true ->
+              stop
+          end
+
+        spans =
+          if stop == start + size,
+            do: spans,
+            else: [{start, stop - start}, prefix, {value_start, stop - value_start}]
+
+        assignment_matches(text, stop, events, query?, [spans | acc])
+    end
+  end
+
+  defp query_pair_at?(text, at) do
+    at < byte_size(text) and :binary.at(text, at) == ?& and
+      (at + 1 == byte_size(text) or
+         Regex.match?(~r/\A&[A-Za-z0-9_.%-]+=/, binary_part(text, at, byte_size(text) - at)))
+  end
+
+  # Quotes are opaque, and fragments cannot start another query. An assignment
+  # before '?' is not a URL-like token (for example, session="?").
+  defp query_events(text, at, _state, _quote, _start, acc) when at == byte_size(text),
+    do: Enum.reverse(acc)
+
+  defp query_events(text, at, state, quote, start, acc) do
+    byte = :binary.at(text, at)
+
+    {state, quote, start, acc, step} =
+      cond do
+        quote != nil ->
+          {delimiter, width, resume} = quote
+
+          if at + width <= byte_size(text) and
+               binary_part(text, at, width) == delimiter and
+               (width == 3 or not escaped?(text, at - 1, false)) do
+            {resume, nil, at + width, acc, width}
+          else
+            {state, quote, start, acc, 1}
+          end
+
+        state == :query and byte == ?" and at + 12 <= byte_size(text) and
+            binary_part(text, at, 12) == "\"[REDACTED]\"" ->
+          {state, nil, start, acc, 12}
+
+        byte in [?", ?'] ->
+          delimiter = <<byte, byte, byte>>
+
+          width =
+            if at + 3 <= byte_size(text) and binary_part(text, at, 3) == delimiter, do: 3, else: 1
+
+          resume = if state == :fragment, do: :fragment, else: :assignment
+
+          {:token, {binary_part(text, at, width), width, resume}, at + width, [{at, false} | acc],
+           width}
+
+        byte in [?\s, ?\t, ?\r, ?\n, ?\f, ?\v, ?;, ?,] ->
+          {:token, nil, at + 1, [{at, false} | acc], 1}
+
+        byte == ?# ->
+          {:fragment, nil, start, [{at, false} | acc], 1}
+
+        byte == ?? and state == :token and at > start ->
+          if conservative_query?(text, start, at),
+            do: {:query, nil, start, [{at, true} | acc], 1},
+            else: {:assignment, nil, start, acc, 1}
+
+        byte == ?? and state == :token ->
+          {:assignment, nil, start, acc, 1}
+
+        byte == ?= and state == :token ->
+          {:assignment, nil, start, acc, 1}
+
+        true ->
+          {state, nil, start, acc, 1}
+      end
+
+    query_events(text, at + step, state, quote, start, acc)
+  end
+
+  # Qualification is deliberately narrow and scans each token only once:
+  # invalid tokens never re-enter :token before a whitespace boundary.
+  # Markers are accepted because later regex passes see earlier replacements.
+  defp conservative_query?(text, start, question) do
+    prefix = binary_part(text, start, question - start)
+    tail = binary_part(text, question + 1, byte_size(text) - question - 1)
+
+    Regex.match?(~r/\A[A-Za-z0-9:\/._~%+-]+\z/, prefix) and
+      Regex.match?(
+        ~r/\A[A-Za-z0-9_.%-]+=(?:[A-Za-z0-9._~%+-]*|"\[REDACTED\]"|\[REDACTED\])(?:&(?:[A-Za-z0-9_.%-]+=(?:[A-Za-z0-9._~%+-]*|"\[REDACTED\]"|\[REDACTED\]))?)*(?:\z|\s)/,
+        tail
+      )
+  end
+
+  defp query_context(text, [{at, query?} | rest], start, _query?) when at < start,
+    do: query_context(text, rest, start, query?)
+
+  defp query_context(_text, events, _start, query?), do: {events, query?}
+
+  # Freeze recognition on the original input. Redacting a fragment, quote, or
+  # malformed value in an earlier pass must never manufacture a genuine query.
+  # The same linear endpoint mapping used by the tokenizer carries these
+  # approved regions through every regex replacement.
+  defp genuine_queries(text) do
+    {regions, start} =
+      text
+      |> query_events(0, :token, nil, 0, [])
+      |> Enum.reduce({[], nil}, fn
+        {at, true}, {acc, nil} -> {acc, at}
+        {at, false}, {acc, start} when start != nil -> {[{start, at} | acc], nil}
+        _, state -> state
+      end)
+
+    regions = if start, do: [{start, byte_size(text)} | regions], else: regions
+    Enum.reverse(regions)
+  end
+
+  defp region_events(regions),
+    do: Enum.flat_map(regions, fn {a, b} -> [{a, true}, {b, false}] end)
+
+  defp query_prefix?(prefix) do
+    {_events, query?} =
+      query_context(prefix, query_events(prefix, 0, :token, nil, 0, []), byte_size(prefix), false)
+
+    query? and Regex.match?(~r/[?&][A-Za-z0-9_.-]+[ \t]*=[ \t]*\z/, prefix)
+  end
+
+  defp replace({text, count, passes, queries}, regex, replacement) do
+    events = region_events(queries)
+
+    matches =
+      if regex.source == @assignment.source,
+        do: assignment_matches(text, events),
+        else: Regex.scan(regex, text, return: :index)
+
+    case matches do
       [] ->
-        {text, count, passes}
+        {text, count, passes, queries}
 
       matches ->
-        {parts, offset, count, changed} =
-          Enum.reduce(matches, {[], 0, count, []}, fn [{start, size} | _] = spans,
-                                                      {parts, offset, count, changed} ->
-            captures = Enum.map(spans, fn {at, length} -> binary_part(text, at, length) end)
-            original = hd(captures)
-            redacted = replacement.(captures)
-            prefix = binary_part(text, offset, start - offset)
+        {parts, offset, count, changed, _, _} =
+          Enum.reduce(
+            matches,
+            {[], 0, count, [], events, false},
+            fn [{start, size} | _] = spans, {parts, offset, count, changed, events, query?} ->
+              context_at =
+                if regex.source == @config_assignment.source,
+                  do: elem(Enum.at(spans, 2), 0),
+                  else: start
 
-            {count, changed} =
-              if original == redacted,
-                do: {count, changed},
-                else: {count + 1, [changed_span(start, size, original, redacted) | changed]}
+              {events, query?} = query_context(text, events, context_at, query?)
+              captures = Enum.map(spans, fn {at, length} -> binary_part(text, at, length) end)
+              original = hd(captures)
 
-            {[redacted, prefix | parts], start + size, count, changed}
-          end)
+              redacted =
+                if is_function(replacement, 2),
+                  do: replacement.(captures, query?),
+                  else: replacement.(captures)
+
+              prefix = binary_part(text, offset, start - offset)
+
+              {count, changed} =
+                if original == redacted,
+                  do: {count, changed},
+                  else: {count + 1, [changed_span(start, size, original, redacted) | changed]}
+
+              {[redacted, prefix | parts], start + size, count, changed, events, query?}
+            end
+          )
 
         suffix = binary_part(text, offset, byte_size(text) - offset)
         text = IO.iodata_to_binary(Enum.reverse([suffix | parts]))
-        {text, count, [Enum.reverse(changed) | passes]}
+        changed = Enum.reverse(changed)
+        {text, count, [changed | passes], map_through(queries, [changed])}
     end
   end
 
