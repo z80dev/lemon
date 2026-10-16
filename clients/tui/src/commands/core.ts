@@ -59,6 +59,27 @@ export const clearCommand: SlashCommand = {
 	},
 };
 
+export const clearHistoryCommand: SlashCommand = {
+	name: "clear-history",
+	summary: "forget remembered prompts (↑ recall) and clear saved prompt history",
+	group: "general",
+	run(ctx) {
+		if (!ctx.ui.clearPromptHistory) {
+			ctx.ui.notice("this client has no prompt history to clear", "warning");
+			return;
+		}
+		try {
+			ctx.ui.clearPromptHistory();
+			ctx.ui.notice("prompt history cleared");
+		} catch (error) {
+			ctx.ui.notice(
+				`prompt history cleared in memory, but persistent history could not be cleared: ${describeError(error)}`,
+				"error",
+			);
+		}
+	},
+};
+
 export const reconnectCommand: SlashCommand = {
 	name: "reconnect",
 	summary: "drop the control-plane socket and dial again",

@@ -24,6 +24,27 @@ export function resolveNotifications(
 }
 
 /**
+ * `[tui] prompt_history`: on unless the setting is present and not `true`, so a
+ * mistyped opt-out (`"off"`, `"false"`) never leaves prompts on disk.
+ */
+export function resolvePromptHistory(configured: unknown): boolean {
+	return (configured ?? true) === true;
+}
+
+/**
+ * Whether to persist history given what `loadConfig` produced. A failed load
+ * may be hiding an explicit opt-out (a broken project file next to a global
+ * `prompt_history = false`), so it disables persistence rather than assuming
+ * the default.
+ */
+export function promptHistoryEnabled(
+	config: LemonConfig | undefined,
+	loadFailed: boolean,
+): boolean {
+	return !loadFailed && resolvePromptHistory(config?.tui?.prompt_history);
+}
+
+/**
  * The slice of Lemon's `config.toml` the TUI reads. The file belongs to the
  * daemon (`LemonCore.Config`); the TUI reads its own presentation settings and
  * edits single keys in place, never re-serializing the file.
@@ -39,6 +60,8 @@ export interface LemonConfig {
 	tui?: {
 		theme?: string;
 		notifications?: NotificationMode;
+		/** Persist ↑ recall to `~/.lemon/tui-history/history.sqlite3`; `false` turns it off (default on). */
+		prompt_history?: boolean;
 		keys?: unknown;
 	};
 }

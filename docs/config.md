@@ -111,6 +111,7 @@ max_tool_invoke_depth = 4
 theme = "lemon"
 debug = false
 notifications = "auto" # auto | osc | bell | off (Bun terminal client)
+prompt_history = true # persist ↑ prompt recall to ~/.lemon/tui-history/history.sqlite3 (Bun terminal client)
 
 [logging]
 # Optional: write logs to a file for later analysis.
@@ -720,6 +721,80 @@ remap the original owner in the same table before reusing its key. Existing
 context-specific default overlaps are retained. Without `[tui.keys]`, all
 existing defaults stay unchanged. These client-owned settings are accepted by
 `lemon config validate`; action/key validation happens in the TUI at startup.
+
+### TUI prompt history
+
+The Bun TUI remembers submitted prompts across sessions for ↑ / ↓ recall.
+Persistence is **on by default**. Only submission writes prompt records: typing,
+recalling and discarding drafts do not persist them. Discarded drafts remain
+recallable in the current session's in-memory ring.
+
+History is a local SQLite database at
+`~/.lemon/tui-history/history.sqlite3` (`$HOME/.lemon`). It uses Bun's built-in
+SQLite, not a daemon, external database service or third-party storage package.
+The history directory must be owned by the current user and mode `0700`; database
+and any SQLite sidecars are mode `0600`, even with a permissive umask. Existing
+loose file modes are tightened. Symlinked or hardlinked history files, symlinked
+user-directory components, foreign-owned files and insecure directories are
+rejected rather than followed. An existing `.lemon` directory may be `0755`, but
+must not be writable by other users.
+
+Each append, oldest-first prune and clear is a short SQLite `BEGIN IMMEDIATE`
+transaction. Records are ordered by the database's transaction serialization,
+not file names or modification times. Concurrent TUIs cannot overwrite one
+another from stale recall snapshots. An adjacent repeat is suppressed against
+the last committed prompt. SQLite's busy timeout is 1.5 seconds per lock wait:
+contention fails with an actionable notice rather than polling indefinitely.
+Storage errors leave this session's in-memory recall usable.
+
+The retained-history bounds remain **100 prompts and 256 KiB** (UTF-8 bytes of
+the JSON-encoded prompts including one newline each), dropping the oldest first.
+A prompt larger than 256 KiB is session-only. These are **logical content limits,
+not a byte-exact filesystem quota**. SQLite has page, index and schema overhead.
+The database uses full auto-vacuum to return freed pages at commit, a page-count
+allocation ceiling with room for overhead and an in-flight append, and DELETE
+rollback journaling with a zero retained-journal limit. Connections close after
+each operation; normal operation creates no growing WAL/SHM files. Temporary
+rollback journals also consume disk space during transactions. This policy bounds
+growth without claiming an unproven hard cap on database plus sidecar bytes.
+SQLite FULL synchronous commits and rollback-journal recovery protect committed
+records after a process crash.
+
+On first use, the TUI imports bounded tails of legacy
+`~/.lemon/tui-history.jsonl`, its numbered backups and timestamp/pid/random suffix
+files. Older files are imported in a deterministic order, current JSONL last;
+the original cross-file transaction order cannot be reconstructed. Invalid
+lines are skipped and the same retention bounds apply. The import and a
+one-time migration marker commit together before the sources are removed.
+A crash during cleanup cannot import them twice. Close older TUI versions
+before upgrading: they do not participate in SQLite transactions.
+
+Prompts may contain secrets. The database stays on your machine; the daemon
+never reads it and doctor support bundles do not include it. `lemon backup`
+copies durable `~/.lemon` state, so clear history first if you do not want prompts
+in a backup. Clearing is not cryptographic erasure of old backups, filesystem
+snapshots or previously deleted blocks.
+
+- `/clear-history` empties this TUI's recall rings and transactionally deletes
+  saved rows, sets the migration fence and removes retained legacy sources,
+  even with persistence disabled. The SQLite database stays in place so open
+  writers cannot split onto an unlinked database. A concurrent append committed
+  before clear is removed; one serialized after clear may survive. No stale
+  client snapshot or delayed legacy cleanup can resurrect cleared records.
+  Other TUIs' in-memory recall rings are not erased. Permission, lock and cleanup
+  failures report an error, never a successful clear; a failed legacy cleanup
+  may leave source files on disk, but the committed migration fence prevents
+  reimport. Retry `/clear-history` after fixing the reported problem.
+- `[tui] prompt_history = false` (global or project config) turns persistence off:
+  load and append do no history I/O, and recall lasts for the current session
+  only. Any other non-`true` value also turns it off. Existing history remains
+  until `/clear-history`. If config cannot be loaded (for example a project
+  config syntax error), the TUI warns and keeps persistence off for that run.
+
+```toml
+[tui]
+prompt_history = false
+```
 
 
 Async followup queue defaults for background `task` completions and delegated `agent`

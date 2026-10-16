@@ -43,6 +43,7 @@ export class RecordingHost implements CommandHost {
 	readonly createdSessions: Array<{ sessionKey?: string; prompt?: string }> = [];
 	readonly forgottenSessions: string[] = [];
 	readonly contextPanels: SessionsContextResult[] = [];
+	clearPromptHistory?: () => void;
 
 	notice(text: string, level: NoticeLevel = "info"): void {
 		this.notices.push({ text, level });

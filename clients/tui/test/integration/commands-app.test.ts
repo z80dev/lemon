@@ -3,12 +3,13 @@
  * asserted on what the frame says.
  */
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { visibleWidth } from "@oh-my-pi/pi-tui/utils";
 import { AppShell } from "../../src/app.ts";
+import { PromptHistoryStore } from "../../src/composer/prompt-history.ts";
 import { FakeControlPlane } from "../../src/dev/fake-server.ts";
 import { ControlPlaneClient } from "../../src/protocol/client.ts";
 import { initTheme, resetTheme } from "../../src/ui/theme/theme.ts";
@@ -31,7 +32,11 @@ afterEach(() => {
 	invalidateThemeAdapters();
 });
 
-async function bootApp(sessionKey = "tui-test", cwd = process.cwd()) {
+async function bootApp(
+	sessionKey = "tui-test",
+	cwd = process.cwd(),
+	promptHistory?: PromptHistoryStore,
+) {
 	// Local discovery (file commands, palette) must never read the real home.
 	const home = mkdtempSync(join(tmpdir(), "lemon-tui-home-"));
 	teardown.push(() => rmSync(home, { recursive: true, force: true }));
@@ -88,6 +93,7 @@ async function bootApp(sessionKey = "tui-test", cwd = process.cwd()) {
 		client,
 		terminal,
 		cwd,
+		promptHistory,
 		resources: { home, env: {} },
 		onExit: (code) => exits.push(code),
 		// Deterministic branch: the real poll would depend on the checkout.
@@ -192,6 +198,95 @@ describe("slash commands in the app", () => {
 		expect(chatText(app)).toContain("hello");
 		await app.submit("/clear");
 		expect(chatText(app)).not.toContain("hello");
+	});
+
+	test("/clear-history empties SQLite in place even with persistence disabled", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "lemon-tui-history-"));
+		teardown.push(() => rmSync(dir, { recursive: true, force: true }));
+		const file = join(dir, "tui-history", "history.sqlite3");
+		new PromptHistoryStore(file).append("old secret");
+		const legacy = join(dir, "tui-history.jsonl");
+		writeFileSync(legacy, `${JSON.stringify("legacy secret")}\n`, { mode: 0o600 });
+		const { app, server } = await bootApp(
+			"tui-test",
+			process.cwd(),
+			new PromptHistoryStore(file, { enabled: false }),
+		);
+		expect(app.editor.history).toEqual([]);
+		app.editor.handleInput("local discarded draft");
+		app.editor.handleInput("\x03");
+		expect(app.editor.history).toEqual(["local discarded draft"]);
+		app.editor.setText("/clear-history");
+		app.editor.handleInput("\r");
+		await waitFor(() => chatText(app).includes("prompt history cleared"), {
+			what: "the editor's clear-history command",
+		});
+		expect(app.editor.history).toEqual([]);
+		expect(existsSync(file)).toBe(true);
+		expect(existsSync(legacy)).toBe(false);
+		expect(new PromptHistoryStore(file).load()).toEqual([]);
+		expect(server.requestsFor("chat.send")).toHaveLength(0);
+	});
+
+	test.skipIf(process.getuid?.() === 0)(
+		"/clear-history cannot resurrect a retained legacy source after cleanup fails",
+		async () => {
+			const dir = mkdtempSync(join(tmpdir(), "lemon-tui-history-retained-"));
+			teardown.push(() => rmSync(dir, { recursive: true, force: true }));
+			const file = join(dir, "tui-history", "history.sqlite3");
+			new PromptHistoryStore(file).append("old secret");
+			const legacy = join(dir, "tui-history.jsonl");
+			writeFileSync(legacy, `${JSON.stringify("retained secret")}\n`, { mode: 0o600 });
+			const { app } = await bootApp(
+				"tui-test",
+				process.cwd(),
+				new PromptHistoryStore(file, { enabled: false }),
+			);
+			// SQLite can still write inside its 0700 child directory, but removal
+			// of a source in this non-writable parent must fail with real EACCES.
+			chmodSync(dir, 0o500);
+			try {
+				app.editor.handleInput("local discarded secret");
+				app.editor.handleInput("\x03");
+				app.editor.setText("/clear-history");
+				app.editor.handleInput("\r");
+				await waitFor(
+					() => /persistent\s+history\s+could\s+not\s+be\s+cleared/.test(chatText(app)),
+					{
+						what: "the persistent-history failure notice",
+					},
+				);
+				expect(app.editor.history).toEqual([]);
+				expect(chatText(app)).not.toMatch(/(?:^|\n)prompt history cleared(?:\n|$)/);
+				expect(existsSync(file)).toBe(true);
+				expect(existsSync(legacy)).toBe(true);
+			} finally {
+				chmodSync(dir, 0o700);
+			}
+			expect(new PromptHistoryStore(file).load()).toEqual([]);
+		},
+	);
+
+	test("a history load permission failure becomes a startup warning", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "lemon-tui-history-load-"));
+		teardown.push(() => rmSync(dir, { recursive: true, force: true }));
+		const store = new PromptHistoryStore(join(dir, "tui-history", "history.sqlite3"));
+		const load = spyOn(store, "load").mockImplementation(() => {
+			throw new Error("EACCES: history directory denied");
+		});
+		try {
+			const { app } = await bootApp("tui-test", process.cwd(), store);
+			await waitFor(() => chatText(app).includes("prompt history could not be loaded"), {
+				what: "the history startup warning",
+			});
+			expect(chatText(app)).toContain("EACCES: history directory denied");
+			app.editor.handleInput("still usable");
+			app.editor.handleInput("\x03");
+			app.editor.handleInput("\x1b[A");
+			expect(app.editor.getText()).toBe("still usable");
+		} finally {
+			load.mockRestore();
+		}
 	});
 
 	test("an unknown command stays local", async () => {

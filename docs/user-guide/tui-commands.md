@@ -45,6 +45,7 @@ Regenerate from the repository root with `bun clients/tui/scripts/generate-comma
 | /help | /? | [command] | list commands, or explain one |
 | /quit | /exit | — | leave the client (the daemon keeps running) |
 | /clear | — | — | clear the transcript and the terminal scrollback |
+| /clear-history | — | — | forget remembered prompts (↑ recall) and clear saved prompt history |
 | /mode | — | [queue&#124;steer&#124;redirect&#124;interrupt] | how a prompt submitted during a run is handled |
 | /theme | — | [dark&#124;light&#124;auto] | switch the color theme (auto follows the terminal background) |
 | /editor | — | — | edit the draft in $EDITOR (also Ctrl+G) |
@@ -155,6 +156,21 @@ Regenerate from the repository root with `bun clients/tui/scripts/generate-comma
 | /tasktree | — | — | show or hide the live subagent tree |
 | /output | — | — | browse complete tool output receipts |
 | /diff | — | — | inspect the latest edit diff without card truncation |
+
+## Prompt history
+
+The ↑ / ↓ prompt recall persists across sessions in
+`~/.lemon/tui-history/history.sqlite3` (SQLite, mode `0600`, private `0700` directory).
+Transactions retain at most 100 prompts and 256 KiB of encoded prompt content;
+SQLite pages and its temporary rollback journal need additional disk space.
+
+- `/clear-history` forgets remembered prompts, clears saved rows and removes legacy sources.
+- Set `prompt_history = false` under `[tui]` in user or project config to stop
+  saving and loading history. Existing history remains until `/clear-history`.
+
+Only submitted prompts are saved; discarded drafts stay in memory for this session.
+Prompts may contain secrets. See [TUI prompt history](../config.md#tui-prompt-history)
+for storage bounds, migration, concurrent clear semantics and backup considerations.
 
 ## Configurable keybindings
 

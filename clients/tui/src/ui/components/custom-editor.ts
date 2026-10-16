@@ -50,6 +50,7 @@ import type {
 import type { PendingImage } from "../../composer/images.ts";
 import { type ComposerIO, ComposerMedia } from "../../composer/media.ts";
 import { IMAGE_PATH, parsePastedPaths } from "../../composer/paths.ts";
+import type { PromptHistoryStore } from "../../composer/prompt-history.ts";
 import type { NoticeLevel } from "../../store/transcript-model.ts";
 import type { ComposerFacts, ComposerFactsSource } from "./status-bar.ts";
 
@@ -135,6 +136,8 @@ export interface CustomEditorOptions {
 	onSelectThinking?: () => void;
 	/** Keys named in the TSP chips' tooltips. */
 	controlKeys?: { model?: string; thinking?: string };
+	/** Where sent prompts persist across sessions; unset keeps the recall ring in memory only. */
+	promptHistory?: PromptHistoryStore;
 }
 
 /** The bar's controls, rebuilt only when what they show changes. */
@@ -148,12 +151,14 @@ export class CustomEditor extends Editor {
 	readonly #options: CustomEditorOptions;
 	readonly #now: () => number;
 
-	/** Sent prompts, oldest first. */
+	/** Submitted prompts and discarded drafts, oldest first. */
 	readonly #history: string[] = [];
 	/** Position while walking history; undefined when not recalling. */
 	#historyIndex: number | undefined;
 	/** The draft that was on screen when recall started. */
 	#stashed = "";
+	/** Set once a save fails, so a read-only home produces one notice, not one per prompt. */
+	#historyWarned = false;
 	#exitArmedAt = 0;
 	#escapeAt = 0;
 	#nativeSubmitting = false;
@@ -198,6 +203,18 @@ export class CustomEditor extends Editor {
 			// Installing the hook is what stops Alt+Enter inserting a newline.
 			this.onAltEnter = () => options.onCycleMode?.();
 		}
+		try {
+			const stored = options.promptHistory?.load() ?? [];
+			this.#history.push(...stored.slice(-HISTORY_LIMIT));
+		} catch (error) {
+			// Hosts finish wiring their notice handler after constructing the editor.
+			queueMicrotask(() =>
+				options.notice?.(
+					`prompt history could not be loaded (${error instanceof Error ? error.message : String(error)}); ↑ recall still works this session`,
+					"warning",
+				),
+			);
+		}
 		if (options.composer) {
 			this.#media = new ComposerMedia({
 				drafts: options.composer.drafts,
@@ -221,7 +238,7 @@ export class CustomEditor extends Editor {
 		}
 	}
 
-	/** Sent prompts, oldest first (the ↑ ring). */
+	/** Submitted prompts and discarded drafts, oldest first (the ↑ ring). */
 	get history(): readonly string[] {
 		return this.#history;
 	}
@@ -250,13 +267,42 @@ export class CustomEditor extends Editor {
 		this.#escapeAt = 0;
 	}
 
-	/** Push a prompt onto the recall ring without sending it. */
+	/** Remember a submitted prompt or discarded draft locally, without touching storage. */
 	#rememberPrompt(text: string): void {
 		const trimmed = text.trim();
 		if (trimmed.length === 0) return;
 		if (this.#history[this.#history.length - 1] === text) return;
 		this.#history.push(text);
 		if (this.#history.length > HISTORY_LIMIT) this.#history.shift();
+	}
+
+	/** Only submitted prompts belong on disk; the clearing command must leave it empty. */
+	#rememberSubmittedPrompt(text: string): void {
+		if (/^\s*\/clear-history(?:\s|$)/i.test(text)) return;
+		this.#rememberPrompt(text);
+		try {
+			this.#options.promptHistory?.append(text);
+		} catch (error) {
+			if (this.#historyWarned) return;
+			this.#historyWarned = true;
+			this.#options.notice?.(
+				`prompt history was not saved (${error instanceof Error ? error.message : String(error)}); ↑ recall still works this session`,
+				"warning",
+			);
+		}
+	}
+
+	/**
+	 * Forget every remembered prompt: the ↑ ring, the base editor's own ring, and
+	 * persistent history. Storage errors propagate after the in-memory history is gone.
+	 */
+	clearHistory(): void {
+		this.#history.length = 0;
+		this.#historyIndex = undefined;
+		this.#stashed = "";
+		// Installing an empty storage is the base editor's only way to drop its ring.
+		this.setHistoryStorage({ add: async () => {}, getRecent: () => [] });
+		this.#options.promptHistory?.clear();
 	}
 
 	protected override get nativeSendable(): boolean {
@@ -640,7 +686,7 @@ export class CustomEditor extends Editor {
 			const disposition = await composer.submit(submission);
 			composer.drafts.complete(submission, disposition);
 			if (disposition === "accepted" || disposition === "queued") {
-				this.#rememberPrompt(submission.text);
+				this.#rememberSubmittedPrompt(submission.text);
 				this.addToHistory(submission.text);
 				if (
 					composer.sessionKey() === sessionKey &&
@@ -815,7 +861,7 @@ export class CustomEditor extends Editor {
 		this.#historyIndex = undefined;
 		this.disarm();
 		if (text.trim().length === 0) return;
-		this.#rememberPrompt(text);
+		this.#rememberSubmittedPrompt(text);
 		this.addToHistory(text);
 		await this.#options.onSubmit(text);
 	}

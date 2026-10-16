@@ -7,7 +7,8 @@
  * pipeline smoke-tests the compiled binary that way.
  */
 
-import { loadConfig } from "./config.ts";
+import { PromptHistoryStore } from "./composer/prompt-history.ts";
+import { loadConfig, promptHistoryEnabled } from "./config.ts";
 import { DEFAULT_WS_URL } from "./protocol/client.ts";
 import type { StartupRequest } from "./startup-session.ts";
 import { consumeForkHandoff } from "./terminal/fork.ts";
@@ -260,12 +261,24 @@ export async function main(argv: string[] = Bun.argv.slice(2)): Promise<number> 
 	// with a light background — the answer arrives after the first frame.
 	// Keep CLI-only calls out of the native renderer's import graph, and overlap
 	// config/version I/O with the interactive module load.
+	let configError: unknown;
 	const [{ AppShell }, { initAppearanceTheme }, config, version] = await Promise.all([
 		import("./app.ts"),
 		import("./ui/theme/appearance.ts"),
-		loadConfig(process.cwd()).catch(() => undefined),
+		loadConfig(process.cwd()).catch((error: unknown) => {
+			configError = error;
+			return undefined;
+		}),
 		resolveVersion(),
 	]);
+	// An unreadable config may hide an explicit `prompt_history = false`, so
+	// persistence stays off rather than assuming the default.
+	if (configError !== undefined) {
+		process.stderr.write(
+			`lemon-tui: could not load config (${configError instanceof Error ? configError.message : String(configError)}); prompt history persistence is off until it is fixed\n`,
+		);
+	}
+	const persistHistory = promptHistoryEnabled(config, configError !== undefined);
 	const theme = initAppearanceTheme({ configured: config?.tui?.theme });
 	return await new Promise<number>((resolve) => {
 		const app = new AppShell({
@@ -275,6 +288,7 @@ export async function main(argv: string[] = Bun.argv.slice(2)): Promise<number> 
 			startup: startupRequest(options),
 			version,
 			themePreference: theme.preference,
+			promptHistory: new PromptHistoryStore(undefined, { enabled: persistHistory }),
 			notifications: config?.tui?.notifications,
 			keybindings: config?.tui?.keys,
 			onExit: (code) => resolve(code),
