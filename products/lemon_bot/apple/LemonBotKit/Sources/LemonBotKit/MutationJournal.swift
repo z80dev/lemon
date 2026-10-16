@@ -1,5 +1,10 @@
 import Foundation
 
+private func isProviderManagementPath(_ path: String) -> Bool {
+    if path == "/instance/providers" || path.hasPrefix("/instance/providers/") { return true }
+    return path.hasPrefix("/machines/") && path.split(separator: "/").dropFirst(2).first == "providers"
+}
+
 /// Reconciliation metadata, never a replay queue. Request bodies, credentials, confirmation
 /// tokens and draft content are deliberately absent from this account-bound file.
 public struct MutationIntent: Codable, Hashable, Identifiable {
@@ -11,9 +16,11 @@ public struct MutationIntent: Codable, Hashable, Identifiable {
     public var expectedRevision: Int?
     public var startedAtMs: TimestampMs
     public var state: String
+    /// Nonsecret initiating session ID; absent in older journals, which must not be replayed.
+    public var providerSessionID: ID?
     public var id: String { clientNonce }
-    public init(clientNonce: String, method: String, path: String, resourceIDs: [ID] = [], runID: ID? = nil, expectedRevision: Int? = nil, startedAtMs: TimestampMs = Date().timeIntervalSince1970 * 1000, state: String = "in_flight") {
-        self.clientNonce = clientNonce; self.method = method; self.path = path; self.resourceIDs = resourceIDs; self.runID = runID; self.expectedRevision = expectedRevision; self.startedAtMs = startedAtMs; self.state = state
+    public init(clientNonce: String, method: String, path: String, resourceIDs: [ID] = [], runID: ID? = nil, expectedRevision: Int? = nil, startedAtMs: TimestampMs = Date().timeIntervalSince1970 * 1000, state: String = "in_flight", providerSessionID: ID? = nil) {
+        self.clientNonce = clientNonce; self.method = method; self.path = path; self.resourceIDs = resourceIDs; self.runID = runID; self.expectedRevision = expectedRevision; self.startedAtMs = startedAtMs; self.state = state; self.providerSessionID = providerSessionID
     }
     var messageConversationID: ID? {
         guard method == "POST", path.hasPrefix("/conversations/"), path.hasSuffix("/messages") else { return nil }
@@ -36,7 +43,8 @@ extension LemonBotStore {
             nonce = UUID().uuidString
             payload["clientNonce"] = .string(nonce)
         }
-        let intent = MutationIntent(clientNonce: nonce, method: method, path: path, expectedRevision: payload["revision"]?.intValue)
+        let providerTarget = isProviderManagementPath(path) ? payload["targetId"]?.stringValue.map { [$0] } ?? [] : []
+        let intent = MutationIntent(clientNonce: nonce, method: method, path: path, resourceIDs: providerTarget, expectedRevision: payload["revision"]?.intValue, providerSessionID: path.contains("/providers/openai_codex/device-login") ? account.sessionID : nil)
         var values = pendingIntents; values.append(intent)
         // Persist before the first possible network side effect. Crash/restart cannot silently create a second intent.
         try persistence.saveMutationIntents(values, accountID: account.id)
@@ -50,7 +58,10 @@ extension LemonBotStore {
             if account?.id == accountID { values = pendingIntents }
             else { values = try persistence.loadMutationIntents(accountID: accountID) }
             if let unknown, let index = values.firstIndex(where: { $0.clientNonce == nonce }) {
-                values[index].state = state; values[index].resourceIDs = unknown.0; values[index].runID = unknown.1
+                values[index].state = state
+                if !isProviderManagementPath(values[index].path) {
+                    values[index].resourceIDs = unknown.0; values[index].runID = unknown.1
+                }
             } else { values.removeAll { $0.clientNonce == nonce } }
             try persistence.saveMutationIntents(values, accountID: accountID)
             if account?.id == accountID { pendingIntents = values }
@@ -68,17 +79,47 @@ extension LemonBotStore {
         if let v = value as? SecretRequest, v.gate.state == "outcome_unknown" { return ([v.id], nil) }
         return nil
     }
-    func journaledMutate<T: Decodable>(_ method: String, _ path: String, body: JSONObject, as responseType: T.Type) async throws -> T {
+    func journaledMutate<T: Decodable>(_ method: String, _ path: String, body: JSONObject, as responseType: T.Type, reconcilingProviderNonce: String? = nil) async throws -> T {
         let client = try activeTransport()
         var payload = body
-        let handle = try beginIntent(method, path, payload: &payload)
+        let handle: (String, String)?
+        if let nonce = reconcilingProviderNonce {
+            // F-0077 alone defines identical fixed-intent replay as reconciliation.
+            // Never extend this exception to keys, defaults or disconnect.
+            guard isProviderManagementPath(path), path.contains("/providers/openai_codex/device-login"), let account,
+                  let existing = pendingIntents.first(where: { $0.clientNonce == nonce }),
+                  existing.path == path, existing.method == method,
+                  let sessionID = account.sessionID, existing.providerSessionID == sessionID,
+                  payload["clientNonce"]?.stringValue == nonce,
+                  let targetID = payload["targetId"]?.stringValue, existing.resourceIDs == [targetID],
+                  Set(payload.keys) == Set(["clientNonce", "targetId"]) else { throw ClientError.invalidNonce }
+            handle = (account.id, nonce)
+        } else { handle = try beginIntent(method, path, payload: &payload) }
         defer { if method == "POST", path.hasSuffix("/messages") { scheduleMessageReconciliation() } }
         do {
             let value: T = try await client.mutate(method, path, body: payload, as: responseType)
+            if isProviderManagementPath(path) {
+                do {
+                    if let management = value as? ProviderManagement {
+                        guard management.target.id == payload["targetId"]?.stringValue else { throw ClientError.invalidFrame }
+                    }
+                    if let login = value as? ProviderDeviceLogin {
+                        let parts = path.split(separator: "/").map(String.init)
+                        guard let index = parts.firstIndex(of: "device-login"), let nonce = payload["clientNonce"]?.stringValue,
+                              let targetID = payload["targetId"]?.stringValue else { throw ClientError.invalidFrame }
+                        let loginID = parts.count == index + 1 ? nonce : parts[index + 1].removingPercentEncoding ?? parts[index + 1]
+                        try login.validate(loginID: loginID, targetID: targetID)
+                    }
+                } catch { throw ClientError.outcomeUnknown(payload["clientNonce"]?.stringValue ?? "") }
+            }
             finishIntent(handle, unknown: unknownResources(value))
             return value
         } catch {
-            if let backend = error as? BackendError, path.hasSuffix("/messages"),
+            if reconcilingProviderNonce != nil {
+                // A generic rejection before dispatch says nothing about the original
+                // uncertain action. Only a matching device result releases this fence.
+                finishIntent(handle, unknown: ([], nil))
+            } else if let backend = error as? BackendError, path.hasSuffix("/messages"),
                backend.failure.code != "outcome_unknown",
                backend.failure.details?["clientNonce"]?.stringValue == payload["clientNonce"]?.stringValue,
                let runIDs = backend.failure.details?["runIds"]?.arrayValue?.compactMap(\.stringValue), !runIDs.isEmpty,
@@ -131,6 +172,11 @@ extension LemonBotStore {
                 && receipt.delivery.count == runIDs.count && Set(receipt.delivery.map(\.runId)) == runIDs
                 && receipt.delivery.allSatisfy { delivery in delivery.effectiveMode != "outcome_unknown" && receipt.runs.contains { $0.id == delivery.runId && $0.botId == delivery.botId } }
             if resolved { messageReceipt = receipt }
+        } else if isProviderManagementPath(intent.path), let index = parts.firstIndex(of: "providers") {
+            let _: ProviderManagement = try await read("/" + parts.prefix(index + 1).joined(separator: "/"))
+            // Generic status is useful for review, never an exact mutation receipt.
+            // Device replay remains a separate, explicit fixed-intent action.
+            resolved = false
         } else if parts.count >= 2 {
             let base = "/" + parts[0] + "/" + (try HTTPTransport.pathID(parts[1].removingPercentEncoding ?? parts[1]))
             switch parts[0] {

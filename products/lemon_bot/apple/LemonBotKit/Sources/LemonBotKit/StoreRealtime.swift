@@ -99,7 +99,10 @@ extension LemonBotStore {
     }
     public func sendFrame(_ body: JSONObject) async throws {
         let frame = try JSONDecoder().decode(RealtimeClientFrame.self, from: JSONEncoder().encode(body))
-        if case .presence(let value) = frame { foreground = value.foreground; visibleConversationID = value.conversationId }
+        if case .presence(let value) = frame {
+            foreground = value.foreground; visibleConversationID = value.conversationId
+            providerSettings.setPresentation(visible: providerSettings.visible, active: value.foreground)
+        }
         guard connectionState == "online", let socket else { throw ClientError.offline }
         switch frame {
         case .auth, .subscribe, .ack: throw ClientError.invalidFrame
@@ -118,6 +121,7 @@ extension LemonBotStore {
     }
     public func setPresence(foreground: Bool, conversationID: ID? = nil) async throws {
         self.foreground = foreground
+        providerSettings.setPresentation(visible: providerSettings.visible, active: foreground)
         visibleConversationID = conversationID
         guard connectionState == "online", let socket else { return }
         do { try await sendSocket(.presence(RealtimeClientFramePresence(foreground: foreground, conversationId: conversationID)), on: socket) }

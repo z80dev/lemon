@@ -5,9 +5,9 @@ import { AccountAvatar } from './ui';
 import { BotsScreen, OwnerControlsScreen, MachinesScreen, PairingScreen, SettingsScreen, WorkScreen } from './route-components';
 import './settings-shell.css';
 
-type PaneId = 'account' | 'devices' | 'machines' | 'apps' | 'library' | 'policies' | 'usage' | 'network' | 'workspace' | 'preferences' | 'instance' | 'about';
+type PaneId = 'account' | 'devices' | 'machines' | 'apps' | 'library' | 'policies' | 'usage' | 'network' | 'workspace' | 'preferences' | 'instance' | 'providers' | 'about';
 interface Segment { screen: string; label: string; owner?: boolean; match?: (screen: string) => boolean }
-interface Pane { id: PaneId; title: string; subtitle: string; icon: ComponentType<LucideProps>; color: string; segments: Segment[] }
+interface Pane { id: PaneId; title: string; subtitle: string; icon: ComponentType<LucideProps>; color: string; segments: Segment[]; owner?: boolean }
 
 const panes: Pane[] = [
   { id: 'account', title: 'Account', subtitle: 'Your profile, saved accounts and sign-in.', icon: UserCircle, color: '#8A9A5B', segments: [{ screen: 'settings.account', label: 'Account' }] },
@@ -21,10 +21,10 @@ const panes: Pane[] = [
   { id: 'workspace', title: 'Workspace', subtitle: 'Workspace name, Bot sections, providers and cleanup.', icon: Briefcase, color: '#7A6A3A', segments: [{ screen: 'settings.workspace', label: 'Workspace' }, { screen: 'settings.identity', label: 'Sign-in providers' }, { screen: 'settings.account-cleanup', label: 'Account cleanup', owner: true }] },
   { id: 'preferences', title: 'Preferences', subtitle: 'Appearance, notifications, voice and accessibility.', icon: SlidersHorizontal, color: '#6E766B', segments: [{ screen: 'settings.notifications', label: 'Notifications' }, { screen: 'settings.voice', label: 'Voice' }] },
   { id: 'instance', title: 'Lemon instance', subtitle: 'The Lemon Bot service, its Lemon link and runtime controls.', icon: Monitor, color: '#4F7D55', segments: [{ screen: 'settings.instance', label: 'Lemon instance' }] },
+  { id: 'providers', title: 'Providers', subtitle: 'Sign-in and credentials on the exact execution target, separately from its default.', icon: ShieldCheck, color: '#4F7D55', owner: true, segments: [{ screen: 'settings.providers', label: 'Providers', owner: true }] },
   { id: 'about', title: 'About', subtitle: 'Web client, worker versions and support diagnostics.', icon: Info, color: '#8E8E86', segments: [{ screen: 'settings.about', label: 'About' }] },
 ];
 const account = panes[0];
-const listed = panes.slice(1);
 
 const segmentMatches = (segment: Segment, screen: string) => segment.match ? segment.match(screen) : segment.screen === screen;
 
@@ -62,7 +62,9 @@ export function SettingsRoute({ route }: { route: Route }) {
   const { navigate, snapshot } = useApp();
   const index = route.screen === 'settings';
   const pane = index ? account : panes.find(item => item.segments.some(segment => segmentMatches(segment, route.screen))) ?? account;
-  const owner = snapshot.workspace.ownerUserId === snapshot.user.id;
+  const owner = snapshot.member.role === 'owner' && snapshot.workspace.ownerUserId === snapshot.user.id;
+  const visiblePanes = panes.filter(item => !item.owner || owner);
+  const listed = visiblePanes.slice(1);
   const segments = pane.segments.filter(segment => !segment.owner || owner);
   const subtitle = snapshot.user.email || snapshot.workspace.name;
   const name = snapshot.user.displayName;
@@ -71,7 +73,7 @@ export function SettingsRoute({ route }: { route: Route }) {
     <aside className="settings-side">
       <div className="settings-account-head"><AccountAvatar name={name} size={40}/><div className="settings-account-text"><strong>{name}</strong><small>{subtitle}</small></div></div>
       <nav className="settings-pane-list" aria-label="Settings">
-        {panes.map(item => <button type="button" key={item.id} className={`settings-pane-row ${item.id === pane.id ? 'selected' : ''}`} aria-current={item.id === pane.id ? 'page' : undefined} onClick={() => open(item.segments[0].screen)}><Tile pane={item} size={24}/><span>{item.title}</span></button>)}
+        {visiblePanes.map(item => <button type="button" key={item.id} className={`settings-pane-row ${item.id === pane.id ? 'selected' : ''}`} aria-current={item.id === pane.id ? 'page' : undefined} onClick={() => open(item.segments[0].screen)}><Tile pane={item} size={24}/><span>{item.title}</span></button>)}
       </nav>
     </aside>
     <div className="settings-phone-index">

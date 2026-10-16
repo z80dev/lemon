@@ -10,6 +10,7 @@ import { AboutSettings } from './about';
 import { InboxScreen } from './inbox';
 import { AccountCleanupScreen } from './cleanup';
 import { InstanceSettings } from './instance';
+import { ProvidersSettings } from './providers';
 import './settings.css';
 
 export function SettingsScreen({ route }: { route: Route }) {
@@ -24,6 +25,7 @@ export function SettingsScreen({ route }: { route: Route }) {
     case 'settings.usage': content = <UsageSettings />; break;
     case 'settings.about': content = <AboutSettings />; break;
     case 'settings.instance': content = <InstanceSettings />; break;
+    case 'settings.providers': content = <ProvidersSettings />; break;
     case 'inbox': content = <InboxScreen />; break;
     case 'settings.account': content = <AccountSettings />; break;
     default: content = <section className="panel"><h2>This page isn’t available.</h2><button onClick={() => navigate({ screen: 'settings.account' })}>Back to settings</button></section>;

@@ -10,6 +10,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Apple Providers confirmations survive dialog dismissal, explicit device-login
+  status checks remain available after expiry, and new sessions can safely retire
+  unreachable login fences without replaying or claiming settlement of old work.
 - CI records isolated checkout identities before repository code runs, including
   the required `CI result` summary, so factory integration can verify exact runs.
 - Added read-only Lemon Bot phone readiness diagnostics and an operator-owned
@@ -123,6 +126,11 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Added
 
+- Lemon Bot iPhone and Mac share Providers settings for target-local API-key
+  add/replace, Codex device login in the system browser, and confirmed local
+  disconnect. Capability/readiness and the current default are separate, with a
+  deliberate confirmed default change. Secure input is transient and cleared on
+  submission, failure or cancellation; uncertain actions are never auto-retried.
 - `lemon connect iphone --backend ORIGIN [--origin HTTPS_ORIGIN]` pairs with an
   already-running Lemon Bot from source or packaged Lemon. It uses interactive
   owner product login, HTTPS preflight, explicit exact-request approval, and

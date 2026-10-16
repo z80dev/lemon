@@ -31,17 +31,16 @@ export function ChannelHealth({ channels }: { channels: InstanceChannel[] }) {
 
 export function ProviderHealth({ providers }: { providers: InstanceProvider[] | null }) {
   const labels = { present: 'Key available', missing: 'Key missing', not_required: 'Key not required' };
-  return <section className="panel stack"><h2>Providers</h2>{providers === null ? <p className="muted">Provider details are unavailable.</p> : providers.length ? <ul className="list instance-health">{providers.map(provider => <li className="list-row" key={provider.id}>
-    <div><div className="row spread"><div className="row"><strong>{provider.id}</strong>{provider.isDefault && <Badge>Default</Badge>}</div><Badge tone={provider.credential === 'missing' ? 'warning' : provider.credential === 'present' ? 'good' : 'muted'}>{labels[provider.credential]}</Badge></div>
+  return <section className="panel stack"><h2>Provider diagnostic history</h2><p className="small muted">Controller-only observations, not live readiness or the execution target’s Current default. Historical errors remain after successful calls and clear when Lemon restarts. Manage credentials in Settings → Providers.</p>{providers === null ? <p className="muted">Provider details are unavailable.</p> : providers.length ? <ul className="list instance-health">{providers.map(provider => <li className="list-row" key={provider.id}>
+    <div><div className="row spread"><strong>{provider.id}</strong><Badge tone={provider.credential === 'missing' ? 'warning' : provider.credential === 'present' ? 'good' : 'muted'}>{labels[provider.credential]}</Badge></div>
       {!provider.configured && <p className="small muted">Not configured</p>}
-      {provider.credential === 'missing' && <p className="small warning-text">Add a key with <code>lemon setup</code> on the Lemon host.</p>}
       <HealthError error={provider.lastError}/>
     </div>
   </li>)}</ul> : <p className="muted">No providers configured.</p>}</section>;
 }
 
 export function InstanceSettings() {
-  const { client, snapshot, realtime, updateInstance } = useApp();
+  const { client, snapshot, realtime, updateInstance, navigate } = useApp();
   const role = snapshot.member.role;
   const canView = role === 'owner' || role === 'admin';
   const instance = useInstance(client, canView, updateInstance);
@@ -98,6 +97,7 @@ export function InstanceSettings() {
         {!lemon && !status.lemonUnavailableReason && <p className="muted">Lemon details are unavailable while the link is down.</p>}
       </section>
       {lemon && <ProviderHealth providers={lemon.providers}/>}
+      {role === 'owner' && <button onClick={() => navigate({ screen: 'settings.providers' })}>Manage providers</button>}
       <p className="small muted">Measured {formatTime(status.measuredAtMs)}</p>
       {confirmation && <RuntimeConfirmation action={confirmation} via={status.runtime.via} busy={instance.busy} available={available && status.runtime.actions.includes(confirmation)} error={instance.error} uncertain={instance.uncertain} onCancel={() => setConfirmation(undefined)} onConfirm={async () => { if (await instance.mutate(confirmation)) setConfirmation(undefined); }}/>}
     </>}

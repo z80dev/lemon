@@ -2,13 +2,26 @@ import Foundation
 import Observation
 
 @MainActor @Observable public final class LemonBotStore {
-    public var account: StoredAccount?
+    public var account: StoredAccount? {
+        didSet {
+            if oldValue?.id != account?.id || oldValue?.token != account?.token { providerSettings.reset() }
+        }
+    }
     public var accounts: [StoredAccount] = []
     public var user: User?
     public var workspace: Workspace?
-    public var member: Member?
+    public var member: Member? {
+        didSet { if member?.role != "owner" { providerSettings.reset() } }
+    }
     public var bots: [Bot] = []
-    public var machines: [Machine] = []
+    public var machines: [Machine] = [] {
+        didSet {
+            if let id = providerSettings.machineID,
+               !machines.contains(where: { $0.id == id && $0.ownerUserId == account?.userID && $0.status == "online" && $0.nodeId != nil && (providerSettings.management == nil || $0.nodeId == providerSettings.management?.target.nodeId) }) {
+                providerSettings.reset(machineID: id)
+            }
+        }
+    }
     public var conversations: [Conversation] = []
     public var sections: [Section] = []
     public var notifications: [BotNotification] = []
@@ -20,6 +33,7 @@ import Observation
     public var errorMessage: String?
     public var connectionIssue: ConnectionIssue?
     public var instanceStatus: InstanceStatus?
+    public let providerSettings = ProviderSettingsState()
     public internal(set) var nextRetryAt: Date?
     public internal(set) var lastConnectionAttemptAt: Date?
     public var selectedConversationID: ID? {
@@ -188,6 +202,7 @@ import Observation
         }
     }
     public func signOut() async throws {
+        providerSettings.clearCredential(); providerSettings.cancelConfirmation()
         guard let signedOut = account else { return }
         var failure: Error?
         do { let _: Empty = try await activeTransport().mutate("POST", "/auth/logout", body: [:]) }
@@ -235,6 +250,7 @@ import Observation
     }
     func markReconnectRequired(_ error: Error = ClientError.signedOut) {
         stopSocket(); generation = UUID(); transport = nil
+        providerSettings.reset()
         connectionState = "reconnect_required"
         nextRetryAt = nil
         recordConnectionFailure(error)
@@ -340,6 +356,7 @@ import Observation
         runs = value.activeRuns.filter { $0.initiatorUserId == value.user.id && !foreignBots.contains($0.botId) }
     }
     private func clearLiveState() {
+        providerSettings.reset()
         connectionState = "disconnected"
         connectionIssue = nil; instanceStatus = nil; nextRetryAt = nil; lastConnectionAttemptAt = nil
         user = nil; workspace = nil; member = nil; capabilities = nil; bots = []; machines = []; conversations = []; sections = []; notifications = []; runs = []

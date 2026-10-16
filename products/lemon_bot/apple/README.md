@@ -277,10 +277,12 @@ in Terminal. Normal background reconnect/discovery is independent.
 **Settings → Lemon instance** shows the backend this account is attached to,
 its version/address/start time, the Lemon controller link and its last error,
 and the live Lemon build (version, release channel and short commit), uptime,
-memory, runs, sessions, nodes and skills. Providers show the default model provider,
-credential health and last error; a missing key points to `lemon setup` on the
-Lemon host. Channels show individual connection states and last errors with
-relative times. Missing measurements stay unavailable instead of becoming zero. Owners
+memory, runs, sessions, nodes and skills. The owner-only **Providers** settings
+manage target-local credentials and device login; see the shared
+[Providers workflow](../providers.md#providers-settings-on-web-iphone-and-mac).
+Provider failure history remains diagnostic, not a readiness probe. Channels show
+individual connection states and last errors with relative times. Missing
+measurements stay unavailable instead of becoming zero. Owners
 and admins can view it and reconnect the link; other members see an explanation
 without fetching privileged instance data. About links here for service status
 and keeps client/worker compatibility and safe handoff diagnostics separate.
@@ -427,6 +429,15 @@ Exercise a real backend and attached host: setup/login/OIDC and account switch; 
 ## Native product changes
 
 The native product is separate from Lemon Web/TUI. It adds the shared Apple package and platform apps, complete typed transcript/action surfaces, account-bound realtime/drafts, native interactive host tools, explicit platform input/voice, notifications and privacy-bounded companion/share workflows. No screen streaming, ambient capture, operator-token client storage or automatic destructive mutation replay is introduced.
+
+Providers settings add controller/owned-machine selection, capability and resolver
+status, secure write-only API-key add/replace, confirmed local disconnect, Codex
+device sign-in through an explicitly opened system browser, and a separately
+confirmed default provider/model change. Secret input is transient and discarded
+on submit, failure, cancel and foreground loss; it is never a Keychain item,
+restored draft or mutation-journal payload. Unknown actions retain fixed identities
+and are not automatically retried. No sandbox, entitlement or service-management
+change is part of this feature.
 
 The owner-assistant cutover adds strict named pairing Codable DTOs and nullable session expiry, actual desktop QR/phone scanner, verified preclaim cluster preview, device-local Keychain reconciliation and persistent account/selection restoration. Removed Team/connector-consent/card/event fields are not retained as compatibility shims; assistant, own-Bot groups, host tools, voice/share privacy and unknown mutation lifecycle remain native product APIs.
 
