@@ -395,12 +395,30 @@ defmodule CodingAgent.ExtensionLifecycleDisclosureTest do
         handler_id,
         [:coding_agent, :tool_disclosure, :applied],
         fn _event, measurements, metadata, _ ->
-          send(parent, {:disclosure_telemetry, measurements, metadata})
+          # Telemetry invokes handlers synchronously in the emitting process.
+          if self() == parent do
+            send(parent, {:disclosure_telemetry, measurements, metadata})
+          end
         end,
         nil
       )
 
       on_exit(fn -> :telemetry.detach(handler_id) end)
+
+      # The handler is VM-global, including sessions that outlive other tests.
+      # Force a foreign initialize before ours instead of relying on scheduling.
+      foreign =
+        Task.async(fn ->
+          ExtensionLifecycle.initialize(
+            cwd: tmp_dir,
+            settings_manager: settings(),
+            custom_tools: [],
+            tool_opts: [extension_inventory: {[], []}, mcp_tools: []]
+          )
+        end)
+        |> Task.await()
+
+      assert foreign.tool_disclosure.hidden_count == 0
 
       result =
         ExtensionLifecycle.initialize(
@@ -412,6 +430,7 @@ defmodule CodingAgent.ExtensionLifecycleDisclosureTest do
           ]
         )
 
+      assert result.tool_disclosure.hidden_count == 1
       assert_received {:disclosure_telemetry, measurements, metadata}
       assert measurements.hidden_count == 1
       assert metadata.active == true

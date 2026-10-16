@@ -162,6 +162,10 @@
 
 ### Fixed
 
+- Disclosure telemetry coverage isolates the initializing process and exercises
+  a foreign initialization deterministically, preventing unrelated sessions from
+  substituting their measurements in the once-per-initialize assertion.
+
 - Document backend guardians retain a witnessed process-group leader until
   cleanup, so timeout, abort and caller death stop even redirected descendants
   of immediately exiting converters without signaling unrelated processes.
