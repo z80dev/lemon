@@ -438,6 +438,29 @@ defmodule LemonAutomation.GoalLoopTest do
     assert verdict.source == "judge:configured-judge"
   end
 
+  test "configured router judge model remains an automatic default", %{
+    session_key: session_key
+  } do
+    previous_model = Application.get_env(:lemon_automation, :goal_judge_model)
+    on_exit(fn -> restore_env(:goal_judge_model, previous_model) end)
+    Application.put_env(:lemon_automation, :goal_judge_model, "configured-judge")
+
+    assert {:ok, _goal} = GoalStore.set(session_key, "Judge via router", agent_id: "agent_1")
+    assert {:ok, _goal} = GoalStore.record_continuation(session_key, "previous_continuation")
+
+    assert {:ok, _} =
+             GoalLoop.run_once(session_key,
+               judge_runner: LemonAutomation.GoalJudge.RouterRunner,
+               judge_router_mod: JudgeRouterOk,
+               judge_waiter_mod: JudgeWaiterDone,
+               judge_run_id: "configured_judge"
+             )
+
+    assert_receive {:judge_router_submit, submitted}
+    assert submitted.model == "configured-judge"
+    assert submitted.model_explicit == false
+  end
+
   test "router judge runner submits a judge run and parses the JSON verdict", %{
     session_key: session_key
   } do
@@ -459,6 +482,7 @@ defmodule LemonAutomation.GoalLoopTest do
     assert submitted.origin == :goal_judge
     assert submitted.session_key == "#{session_key}:goal_judge"
     assert submitted.model == "judge-model"
+    assert submitted.model_explicit == true
     assert submitted.meta.goal_judge == true
     assert_receive {:judge_wait, "run_judge", 123}
     assert completed.status == "completed"

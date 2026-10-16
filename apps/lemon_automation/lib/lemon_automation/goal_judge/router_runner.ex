@@ -20,6 +20,7 @@ defmodule LemonAutomation.GoalJudge.RouterRunner do
         tool_policy: %{allow: ["read", "ls", "grep", "find"]},
         prompt: prompt(goal, context),
         run_id: run_id,
+        model_explicit: Map.get(context, :model_explicit),
         meta: %{
           goal_id: goal.id,
           goal_judge: true,

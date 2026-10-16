@@ -111,7 +111,8 @@ defmodule LemonRouter.SubmissionBuilder do
 
       selection =
         ModelSelection.resolve(%{
-          explicit_model: explicit_model,
+          explicit_model: request_model,
+          model_explicit: params.model_explicit,
           meta_model: MapHelpers.get_key(meta, :model),
           session_model: session_model,
           profile_model: profile_model,
@@ -140,6 +141,7 @@ defmodule LemonRouter.SubmissionBuilder do
           agent_id: agent_id,
           thinking_level: resolved_thinking_level,
           model: resolved_model,
+          model_explicit: selection.model_explicit,
           resume_source: resume_source
         })
         |> maybe_put(:system_prompt, resolved_system_prompt)

@@ -32,6 +32,7 @@ defmodule CodingAgent.Session.Lifecycle do
   alias CodingAgent.Tools.Task.Params
   alias CodingAgent.Workspace
   alias LemonAgent.ModelRuntime.StreamOptions
+  alias LemonAgent.ModelRuntime.ModelRouting
 
   @spec initialize(keyword(), pid()) ::
           {:ok, Session.t(), Extensions.extension_status_report() | nil}
@@ -106,11 +107,31 @@ defmodule CodingAgent.Session.Lifecycle do
     session_key = Keyword.get(opts, :session_key, session_manager.header.id)
     agent_id = Keyword.get(opts, :agent_id, "default")
 
-    model =
-      ModelResolver.resolve_session_model(
-        Keyword.get(opts, :model) || restored_context.model,
-        settings_manager
-      )
+    requested_model = Keyword.get(opts, :model)
+
+    requested_explicit =
+      case Keyword.get(opts, :model_explicit) do
+        explicit when is_boolean(explicit) -> explicit
+        _ -> not is_nil(requested_model)
+      end
+
+    model_explicit = requested_explicit or restored_context.model_explicit
+
+    selector =
+      if requested_explicit,
+        do: requested_model,
+        else: restored_context.model || requested_model
+
+    model = ModelResolver.resolve_session_model(selector, settings_manager)
+
+    model_routing =
+      unless model_explicit do
+        ModelRouting.prepare(
+          settings_manager.model_routing,
+          &ModelResolver.resolve_session_model(&1, settings_manager),
+          settings_manager.providers
+        )
+      end
 
     thinking_level =
       LemonAgent.AutoThinking.normalize_level(
@@ -132,7 +153,9 @@ defmodule CodingAgent.Session.Lifecycle do
     session_manager =
       session_manager
       |> SessionManager.append_entry(
-        SessionManager.SessionEntry.model_change(model.provider, model.id)
+        SessionManager.SessionEntry.model_change(model.provider, model.id,
+          explicit: model_explicit
+        )
       )
       |> SessionManager.append_entry(
         SessionManager.SessionEntry.thinking_level_change(thinking_level)
@@ -169,6 +192,7 @@ defmodule CodingAgent.Session.Lifecycle do
     tool_opts =
       opts
       |> Keyword.put(:model, model)
+      |> Keyword.put(:model_explicit, model_explicit)
       |> Keyword.put(:thinking_level, thinking_level)
       |> Keyword.put(:parent_session, session_manager.header.id)
       |> Keyword.put(:session_id, session_manager.header.id)
@@ -374,12 +398,28 @@ defmodule CodingAgent.Session.Lifecycle do
     # session_key (caller-overridable). It scopes credential-pool rotation and
     # committed-fallback pins so a session sticks to one provider+credential
     # (provider prompt caches are keyed per provider+credential).
-    stream_fn =
-      opts
-      |> Keyword.get(:stream_fn)
-      |> ProviderFallback.maybe_wrap(settings_manager, cwd, session_id: session_manager.header.id)
-
     agent_registry_key = {session_manager.header.id, :main, 0}
+    agent_name = LemonAgent.AgentRegistry.via(agent_registry_key)
+    base_stream_fn = Keyword.get(opts, :stream_fn) || (&LemonAi.stream/3)
+
+    # Consult the live branch policy even when the session started explicitly
+    # pinned: navigation can restore an automatic branch (and vice versa).
+    guarded_stream_fn = fn candidate, context, options ->
+      with :ok <-
+             GenServer.call(
+               agent_name,
+               {:check_model_cost, candidate, context, options},
+               :infinity
+             ) do
+        base_stream_fn.(candidate, context, options)
+      end
+    end
+
+    stream_fn =
+      ProviderFallback.maybe_wrap(guarded_stream_fn, settings_manager, cwd,
+        session_id: session_manager.header.id
+      )
+
     retry_settings = SettingsManager.get_retry_settings(settings_manager)
 
     {:ok, agent} =
@@ -397,6 +437,7 @@ defmodule CodingAgent.Session.Lifecycle do
         transform_context: transform_context,
         get_api_key: get_api_key,
         resolve_stream_options: resolve_stream_options,
+        model_routing: model_routing,
         resolve_thinking: resolve_thinking,
         session_id: session_manager.header.id,
         budget_limits: budget_limits,
@@ -521,6 +562,8 @@ defmodule CodingAgent.Session.Lifecycle do
     tool_opts =
       [
         model: state.model,
+        model_explicit:
+          SessionManager.build_session_context(state.session_manager).model_explicit,
         thinking_level: state.thinking_level,
         parent_session: state.session_manager.header.id,
         session_id: state.session_manager.header.id,
@@ -630,10 +673,17 @@ defmodule CodingAgent.Session.Lifecycle do
         previous_session_id = state.session_manager.header.id
         :ok = CodingAgent.Tools.Bash.ShellState.reset(previous_session_id)
 
+        # Preserve automatic selection across reset and resume. The journal reducer
+        # also keeps legacy model entries without provenance conservatively pinned.
+        model_explicit =
+          SessionManager.build_session_context(state.session_manager).model_explicit
+
         new_session_manager =
           SessionManager.new(state.cwd)
           |> SessionManager.append_entry(
-            SessionManager.SessionEntry.model_change(state.model.provider, state.model.id)
+            SessionManager.SessionEntry.model_change(state.model.provider, state.model.id,
+              explicit: model_explicit
+            )
           )
           |> SessionManager.append_entry(
             SessionManager.SessionEntry.thinking_level_change(state.thinking_level)
@@ -698,6 +748,8 @@ defmodule CodingAgent.Session.Lifecycle do
     tool_opts =
       Keyword.merge(state.tool_opts,
         model: state.model,
+        model_explicit:
+          SessionManager.build_session_context(state.session_manager).model_explicit,
         thinking_level: state.thinking_level,
         parent_session: session_id,
         session_id: session_id,

@@ -328,6 +328,7 @@ defmodule LemonRouter.NativeLineage do
              images: request.images || [],
              queue_mode: :collect,
              model: request.model,
+             model_explicit: request.model_explicit,
              cwd: request.cwd,
              resume: request.resume,
              meta: strip_private(request.meta || %{}),

@@ -210,6 +210,7 @@ defmodule CodingAgent.Tools.Task.Params do
 
           Map.merge(launch, %{
             description: description,
+            model_explicit: not is_nil(model),
             name: name,
             prompt: wrap_context(guarded_prompt, context),
             role_id: role_id,
@@ -660,6 +661,10 @@ defmodule CodingAgent.Tools.Task.Params do
       []
       |> maybe_put_kw(:system_prompt, child_system_prompt(opts, validated))
       |> maybe_put_kw(:model, task_model)
+      |> Keyword.put(
+        :model_explicit,
+        validated[:model_explicit] == true or inherited_model_explicit(opts, parent_state)
+      )
       |> maybe_put_kw(:thinking_level, validated[:thinking_level])
       |> Keyword.put(:task_depth, current_task_depth(opts) + 1)
       |> Keyword.put(:task_child, true)
@@ -676,6 +681,20 @@ defmodule CodingAgent.Tools.Task.Params do
       {:run_id, Keyword.get(opts, :child_run_id)},
       {:session_scope, :subagent} | Keyword.merge(base_opts, override_opts)
     ]
+  end
+
+  @doc false
+  def inherited_model_explicit(opts, parent_state \\ nil) do
+    case parent_state || inherited_session_state(opts) do
+      %{session_manager: manager} ->
+        CodingAgent.SessionManager.build_session_context(manager).model_explicit
+
+      _ ->
+        case Keyword.get(opts, :model_explicit) do
+          nil -> not is_nil(Keyword.get(opts, :model))
+          explicit -> explicit == true
+        end
+    end
   end
 
   defp child_execution_context(cwd, validated, opts) do

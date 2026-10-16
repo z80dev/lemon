@@ -818,6 +818,79 @@ defmodule CodingAgent.Session.PlanningTest do
            }
   end
 
+  for completion <- [:exit, :approve] do
+    @completion completion
+
+    test "live plan #{@completion} round trip preserves the automatic zero cap", %{root: root} do
+      session = start_supervised!({Session, capped_plan_opts(root)})
+      Session.subscribe(session)
+
+      assert {:ok, %{"mode" => "plan"}} = Session.plan(session, :enter)
+      assert Session.get_state(session).model.id == "gpt-4o-mini"
+      assert_automatic_plan_cap(session)
+
+      finish_plan(session, @completion)
+      assert Session.get_state(session).model.id == "gpt-4"
+      assert_automatic_plan_cap(session)
+    end
+
+    test "durable plan #{@completion} round trip preserves the automatic zero cap", %{root: root} do
+      opts = capped_plan_opts(root)
+      session = start_supervised!({Session, opts})
+      assert {:ok, %{"mode" => "plan"}} = Session.plan(session, :enter)
+      assert :ok = Session.save(session)
+      path = Session.get_state(session).session_file
+      stop_supervised!(Session)
+
+      assert {:ok, planned} = SessionManager.load_from_file(path)
+      refute SessionManager.build_session_context(planned).model_explicit
+      resumed_opts = Keyword.put(opts, :session_file, path)
+      resumed = start_supervised!({Session, resumed_opts})
+      Session.subscribe(resumed)
+      assert Session.get_state(resumed).model.id == "gpt-4o-mini"
+      assert_automatic_plan_cap(resumed)
+
+      finish_plan(resumed, @completion)
+      assert Session.get_state(resumed).model.id == "gpt-4"
+      assert_automatic_plan_cap(resumed)
+      assert :ok = Session.save(resumed)
+      stop_supervised!(Session)
+
+      assert {:ok, executed} = SessionManager.load_from_file(path)
+      refute SessionManager.build_session_context(executed).model_explicit
+      executing = start_supervised!({Session, resumed_opts})
+      Session.subscribe(executing)
+      assert Session.get_state(executing).model.id == "gpt-4"
+      assert_automatic_plan_cap(executing)
+    end
+  end
+
+  for selection <- [:initial, :during_plan] do
+    @selection selection
+
+    test "an explicit #{@selection} selection still bypasses the cap after a plan round trip",
+         %{root: root} do
+      opts = capped_plan_opts(root)
+      opts = if @selection == :initial, do: Keyword.put(opts, :model, "openai:gpt-4"), else: opts
+      session = start_supervised!({Session, opts})
+      Session.subscribe(session)
+      assert {:ok, %{"mode" => "plan"}} = Session.plan(session, :enter)
+
+      if @selection == :during_plan do
+        model = Session.ModelResolver.resolve_session_model("openai:gpt-4", role_settings())
+        assert :ok = Session.switch_model(session, model)
+      end
+
+      finish_plan(session, :exit)
+      context = SessionManager.build_session_context(Session.get_state(session).session_manager)
+      assert context.model_explicit
+      assert :ok = Session.prompt(session, "Execute the plan.")
+      assert_receive {:routing_provider_call, "gpt-4"}, 5_000
+      assert_receive {:session_event, _, {:agent_end, _}}, 5_000
+      refute_receive {:session_event, _, {:error, :model_routing_cost_cap, _}}, 50
+    end
+  end
+
   test "approval restores the execution model before the next response in the same run", %{
     root: root
   } do
@@ -1145,6 +1218,49 @@ defmodule CodingAgent.Session.PlanningTest do
     """)
 
     LemonCore.Config.reload(root)
+  end
+
+  defp capped_plan_opts(root) do
+    parent = self()
+
+    stream = fn model, _context, _opts ->
+      send(parent, {:routing_provider_call, model.id})
+      {:ok, events(%{stop("done") | model: model.id, provider: model.provider, api: model.api})}
+    end
+
+    settings = %{
+      role_settings()
+      | model_routing: %{"enabled" => true, "max_cost_usd" => 0, "rules" => []}
+    }
+
+    session_opts(root, stream, fn _ -> {:ok, :denied} end, [])
+    |> Keyword.delete(:model)
+    |> Keyword.put(:settings_manager, settings)
+    |> Keyword.put(:workspace_dir, Path.join(root, "workspace"))
+  end
+
+  defp assert_automatic_plan_cap(session) do
+    context = SessionManager.build_session_context(Session.get_state(session).session_manager)
+    refute context.model_explicit
+    assert :ok = Session.prompt(session, "Continue.")
+    assert_receive {:session_event, _, {:error, :model_routing_cost_cap, _}}, 5_000
+    refute_receive {:routing_provider_call, _}, 50
+  end
+
+  defp finish_plan(session, :exit) do
+    assert {:ok, %{"mode" => "code"}} = Session.plan(session, :exit)
+  end
+
+  defp finish_plan(session, :approve) do
+    manager = Session.get_state(session).session_manager
+
+    proposal = %{
+      "path" => Path.join(Planning.plan_dir(manager), "capped-plan.md"),
+      "content" => "# Capped plan"
+    }
+
+    assert :ok = GenServer.call(session, {:resolve_plan_proposal, :approve, proposal})
+    assert {:ok, %{"mode" => "code"}} = Session.plan(session)
   end
 
   defp role_settings do

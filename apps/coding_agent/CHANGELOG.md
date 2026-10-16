@@ -30,6 +30,21 @@
   rejecting writes whose exact target identity belongs to another machine.
   Project credential/default overrides are resolved from the worker's configured
   execution directory; management RPCs cannot supply filesystem paths.
+- `CodingAgent.SettingsManager.model_routing` exposes the raw root
+  `[model_routing]` table (default `%{}`); sessions show the actual routed model
+  per assistant turn with run-unique activity identities, and an explicit model
+  choice bypasses automatic routing. Automatic selection provenance survives
+  session reset, save, resume, tree/entry navigation, committed rewinds, and plan
+  entry/exit or approval (including resume while planning); internal model
+  transitions reapply the automatic cost cap or explicit-selection bypass.
+  Parentless Coordinator and task callers also retain legacy explicit model
+  selections when provenance is omitted or nil; inherited provenance and an
+  explicit `false` continue to preserve automatic routing and its cost cap.
+  Delegated children preserve inherited selection provenance; persona model/role
+  and task-agent config defaults remain automatic rather than bypassing the cap.
+  Fallback candidates
+  rejected before provider invocation do not appear as the actual model in
+  activity events or the usage footer.
 
 - Truncated webfetch and browser snapshot/page-content results retain complete
   sources as session-scoped artifacts and return readable `artifact://` handles.

@@ -59,6 +59,10 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
   `max_tokens` 512-200000, default 8000) configures the opt-in `semantic_find`
   coding tool; the `read_only` and `minimal_core` tool profiles allow it when it
   is enabled.
+- Canonical root `[model_routing]` is loaded raw from global and project config
+  into `LemonCore.Config.model_routing` (default `%{}`, i.e. disabled); project
+  keys override global ones. Validation and model resolution happen in
+  `lemon_agent`.
 
 - `LemonCore.Secrets.get_with_revision/2` and `set_if_revision/4` provide
   incarnation-bound conditional credential saves. A revision is scoped to the
@@ -68,6 +72,10 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
   mutation lease and use Store's atomic compare-and-swap.
 
 ### Fixed
+
+- Profile chat defaults retain automatic model-selection provenance, including
+  managed follow-ups, so configured routing rules and cost caps cannot be bypassed
+  by materializing the profile model. Invocation model overrides remain explicit.
 
 - Markdown session export now backslash-escapes special characters (`_`, `*`,
   backticks, brackets, `<>`, `#`) instead of emitting a literal `\1`

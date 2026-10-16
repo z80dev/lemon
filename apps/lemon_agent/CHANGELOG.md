@@ -6,6 +6,14 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ## [Unreleased]
 
+### Added
+
+- Opt-in automatic model routing via `[model_routing]` (ordered rules with
+  `contains`/`min_chars`/`max_chars`, per-request catalog-projected
+  `max_cost_usd` cap that fails closed on unknown pricing, including configured
+  additions without explicit pricing, and accounts conservatively for Anthropic
+  thinking-output expansion). Explicit model selection always bypasses it.
+
 ### Changed
 
 - Normalize aliases and use implicit function-level exception handling in the

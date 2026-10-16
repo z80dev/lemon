@@ -302,6 +302,7 @@ defmodule CodingAgent.Tools.AgentTest do
     refute inspect(result) =~ "delegating-memory"
     assert req.prompt == "Answer with hello"
     assert req.model == "openai:gpt-4.1"
+    assert req.model_explicit == true
     assert req.session_key == result.details.session_key
     assert req.meta[:invocation_context_key] == "delegating-client"
     refute Map.has_key?(req.meta, "invocation_context_key")
@@ -475,6 +476,65 @@ defmodule CodingAgent.Tools.AgentTest do
     refute CodingAgent.ToolPolicy.allowed?(req.tool_policy, "bash")
     refute CodingAgent.ToolPolicy.allowed?(req.tool_policy, "write")
     refute CodingAgent.ToolPolicy.allowed?(req.tool_policy, "task")
+  end
+
+  @tag :tmp_dir
+  test "normal delegation validation separates persona defaults from explicit model intent", %{
+    tmp_dir: cwd
+  } do
+    agents_dir = Path.join([cwd, ".lemon", "agents"])
+    File.mkdir_p!(agents_dir)
+
+    for {persona_id, model_field, default_model} <- [
+          {"model-default", "model: persona-model", "persona-model"},
+          {"role-default", "role: fast", "@fast"}
+        ] do
+      File.write!(
+        Path.join(agents_dir, "#{persona_id}.md"),
+        "---\ndescription: Test persona\n#{model_field}\n---\nFollow the assignment."
+      )
+
+      for {model, inherited_explicit, expected_model, expected_explicit} <- [
+            {nil, false, default_model, false},
+            {"  ", false, default_model, false},
+            {"explicit-model", false, "explicit-model", true},
+            {"@preferred", false, "@preferred", true},
+            {nil, true, default_model, true}
+          ] do
+        result =
+          AgentTool.execute(
+            "model_provenance",
+            %{
+              "agent_id" => "oracle",
+              "prompt" => "Inspect the project",
+              "role" => persona_id,
+              "model" => model,
+              "auto_followup" => false
+            },
+            nil,
+            nil,
+            cwd,
+            run_orchestrator: __MODULE__.AgentTestStubRunOrchestrator,
+            session_key: "agent:main:main",
+            model_explicit: inherited_explicit
+          )
+
+        assert %LemonAgent.Types.AgentToolResult{} = result
+        assert result.details.status == "queued"
+        assert_receive {:router_submit, %RunRequest{} = request, _count}
+        assert request.model == expected_model
+        assert request.model_explicit == expected_explicit
+        assert request.prompt == "Follow the assignment.\n\nInspect the project"
+
+        :ok =
+          Bus.broadcast(
+            Bus.run_topic(result.details.run_id),
+            Event.new(:run_completed, EventsFixtures.run_completed(answer: "done"))
+          )
+
+        assert wait_for_completed(result.details.task_id).details.status == "completed"
+      end
+    end
   end
 
   test "delegated runs retain parent lineage and reject forged lineage metadata" do

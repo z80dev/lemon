@@ -34,6 +34,8 @@ defmodule CodingAgent.SettingsManager do
           # Model settings
           default_model: model_config() | String.t() | nil,
           model_roles: ModelRoles.roles(),
+          # Raw root `[model_routing]` table; validated by LemonAgent's ModelRouting.prepare/2
+          model_routing: map(),
           default_thinking_level: thinking_level(),
 
           # Provider settings
@@ -90,6 +92,7 @@ defmodule CodingAgent.SettingsManager do
     # Model settings
     default_model: nil,
     model_roles: %{},
+    model_routing: %{},
     default_thinking_level: :medium,
 
     # Provider settings
@@ -183,6 +186,7 @@ defmodule CodingAgent.SettingsManager do
     %__MODULE__{
       default_model: default_model,
       model_roles: config.model_roles,
+      model_routing: config.model_routing || %{},
       default_thinking_level: Map.get(agent, :default_thinking_level, :medium),
       providers: config.providers || %{},
       provider_routing:

@@ -1038,6 +1038,28 @@ defmodule LemonControlPlane.EventBridgeTest do
              } = payload["usage"]
     end
 
+    test "completed shows the actual routed model instead of the request default", %{
+      run_id: run_id
+    } do
+      send(
+        Process.whereis(EventBridge),
+        LemonCore.Event.new(
+          :run_completed,
+          %{
+            completed: %{
+              ok: true,
+              meta: %{model: "gpt-4o-mini", provider: :openai}
+            }
+          },
+          %{run_id: run_id, model: "claude-sonnet-4-20250514"}
+        )
+      )
+
+      assert_receive {:event, "agent", %{"type" => "completed", "model" => "openai:gpt-4o-mini"},
+                      _},
+                     1_000
+    end
+
     test "completed reports no usage as null rather than zeros", %{run_id: run_id} do
       send(
         Process.whereis(EventBridge),

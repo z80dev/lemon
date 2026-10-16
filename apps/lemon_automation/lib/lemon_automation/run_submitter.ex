@@ -248,6 +248,7 @@ defmodule LemonAutomation.RunSubmitter do
     else
       params
       |> Map.put(:model, model)
+      |> Map.put(:model_explicit, true)
       |> Map.update!(:meta, &Map.put(&1, :cron_model_pin, model))
     end
   end

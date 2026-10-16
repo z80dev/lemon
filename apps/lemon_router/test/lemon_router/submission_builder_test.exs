@@ -136,6 +136,55 @@ defmodule LemonRouter.SubmissionBuilderTest do
              )
 
     assert submission.meta[:model] == "request-model"
+    assert submission.execution_request.meta[:model_explicit] == true
+  end
+
+  test "request model provenance survives selection into execution metadata" do
+    for model <- ["persona-model", "@fast"],
+        explicit <- [nil, false, true] do
+      assert {:ok, submission} =
+               SubmissionBuilder.build(
+                 request(unique_session_key("model-provenance"), %{
+                   agent_id: "oracle",
+                   model: model,
+                   model_explicit: explicit,
+                   meta: %{model: "meta-model"}
+                 }),
+                 orchestrator_state()
+               )
+
+      assert submission.execution_request.meta[:model] == model
+      assert submission.execution_request.meta[:model_explicit] == (explicit != false)
+    end
+  end
+
+  test "automatic request provenance does not make a metadata model automatic" do
+    assert {:ok, submission} =
+             SubmissionBuilder.build(
+               request(unique_session_key("meta-model-provenance"), %{
+                 agent_id: "oracle",
+                 model_explicit: false,
+                 meta: %{model: "meta-model"}
+               }),
+               orchestrator_state()
+             )
+
+    assert submission.execution_request.meta[:model] == "meta-model"
+    assert submission.execution_request.meta[:model_explicit] == true
+  end
+
+  test "inherited explicit intent survives profile model selection without request model" do
+    assert {:ok, submission} =
+             SubmissionBuilder.build(
+               request(unique_session_key("inherited-profile-model"), %{
+                 agent_id: "oracle",
+                 model_explicit: true
+               }),
+               orchestrator_state()
+             )
+
+    assert submission.execution_request.meta[:model] == "profile-model"
+    assert submission.execution_request.meta[:model_explicit] == true
   end
 
   test "records explicit native resume provenance in submission metadata" do

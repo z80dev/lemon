@@ -234,6 +234,7 @@ defmodule CodingAgent.BackgroundRun do
       [
         cwd: cwd,
         model: model,
+        model_explicit: not is_nil(Keyword.get(opts, :model)) or source[:model_explicit] == true,
         thinking_level: thinking_level,
         system_prompt: system_prompt,
         settings_manager: source[:settings_manager],
@@ -294,6 +295,8 @@ defmodule CodingAgent.BackgroundRun do
       session_id: state.session_manager.header.id,
       cwd: state.cwd,
       model: state.model,
+      model_explicit:
+        CodingAgent.SessionManager.build_session_context(state.session_manager).model_explicit,
       thinking_level: state.thinking_level,
       explicit_system_prompt: state.explicit_system_prompt,
       settings_manager: state.settings_manager,

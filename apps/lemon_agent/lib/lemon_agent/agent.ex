@@ -90,6 +90,7 @@ defmodule LemonAgent.Agent do
           session_id: String.t() | nil,
           get_api_key: get_api_key_fn() | nil,
           resolve_stream_options: AgentLoopConfig.resolve_stream_options_fn() | nil,
+          model_routing: map() | nil,
           resolve_thinking: AgentLoopConfig.resolve_thinking_fn() | nil,
           thinking_prompt: term() | nil,
           resolved_thinking: StreamOptions.thinking_level() | nil,
@@ -117,6 +118,7 @@ defmodule LemonAgent.Agent do
           session_id: String.t(),
           get_api_key: get_api_key_fn(),
           resolve_stream_options: AgentLoopConfig.resolve_stream_options_fn(),
+          model_routing: map() | nil,
           resolve_thinking: AgentLoopConfig.resolve_thinking_fn(),
           thinking_budgets: map(),
           stream_options: StreamOptions.t(),
@@ -151,6 +153,7 @@ defmodule LemonAgent.Agent do
   - `:session_id` - Optional session identifier for provider caching
   - `:get_api_key` - Function to dynamically resolve API keys
   - `:resolve_stream_options` - Rebuilds options for idle/live model switches in the loop task
+  - `:model_routing` - Prepared opt-in model-routing policy; `set_model/2` disables it
   - `:resolve_thinking` - Bounded per-user-prompt classifier callback for configured `:auto`
   - `:thinking_budgets` - Map of thinking level budgets for token-based providers
   - `:stream_options` - StreamOptions for provider requests (temperature, max_tokens, etc.)
@@ -337,10 +340,12 @@ defmodule LemonAgent.Agent do
 
   Provider-owned options are rebound in the loop task before the next classifier
   or model request. Selecting a model does not resolve credentials in the caller.
+  Explicit selections disable automatic routing. Internal branch restoration may
+  supply the destination's prepared policy with `:model_routing`.
   """
-  @spec set_model(GenServer.server(), LemonAi.Types.Model.t()) :: :ok
-  def set_model(agent, model) do
-    GenServer.call(agent, {:set_model, model})
+  @spec set_model(GenServer.server(), LemonAi.Types.Model.t(), keyword()) :: :ok
+  def set_model(agent, model, opts \\ []) do
+    GenServer.call(agent, {:set_model, model, Keyword.get(opts, :model_routing)})
   end
 
   @doc """
@@ -574,6 +579,7 @@ defmodule LemonAgent.Agent do
       session_id: Keyword.get(opts, :session_id),
       get_api_key: Keyword.get(opts, :get_api_key),
       resolve_stream_options: Keyword.get(opts, :resolve_stream_options),
+      model_routing: Keyword.get(opts, :model_routing),
       resolve_thinking: Keyword.get(opts, :resolve_thinking),
       thinking_prompt: nil,
       resolved_thinking: nil,
@@ -683,7 +689,7 @@ defmodule LemonAgent.Agent do
     {:reply, :ok, %{state | agent_state: new_agent_state}}
   end
 
-  def handle_call({:set_model, model}, _from, state) do
+  def handle_call({:set_model, model, model_routing}, _from, state) do
     new_agent_state = %{state.agent_state | model: model}
     # With no initial model, the first selection owns the supplied options.
     # Later selections retain that owner until the loop rebuilds its local options.
@@ -691,6 +697,7 @@ defmodule LemonAgent.Agent do
      %{
        state
        | agent_state: new_agent_state,
+         model_routing: model_routing,
          stream_options_model: state.stream_options_model || model
      }}
   end
@@ -748,6 +755,30 @@ defmodule LemonAgent.Agent do
 
   def handle_call(:get_model, _from, state) do
     {:reply, state.agent_state.model, state}
+  end
+
+  def handle_call({:route_model, context, options}, _from, state) do
+    result =
+      LemonAgent.ModelRuntime.ModelRouting.select(
+        state.model_routing,
+        state.agent_state.model,
+        context,
+        options
+      )
+
+    {:reply, result, state}
+  end
+
+  def handle_call({:check_model_cost, model, context, options}, _from, state) do
+    result =
+      LemonAgent.ModelRuntime.ModelRouting.check_cap(
+        state.model_routing,
+        model,
+        context,
+        options
+      )
+
+    {:reply, result, state}
   end
 
   def handle_call({:auto_thinking_resolved, abort_ref, marker, effort}, _from, state) do
@@ -1050,6 +1081,22 @@ defmodule LemonAgent.Agent do
       get_api_key: state.get_api_key,
       get_model: fn -> GenServer.call(agent_pid, :get_model, queue_call_timeout) end,
       resolve_stream_options: state.resolve_stream_options,
+      resolve_model:
+        if state.model_routing do
+          fn context, options ->
+            GenServer.call(agent_pid, {:route_model, context, options}, queue_call_timeout)
+          end
+        end,
+      check_model_cost:
+        if state.model_routing do
+          fn model, context, options ->
+            GenServer.call(
+              agent_pid,
+              {:check_model_cost, model, context, options},
+              queue_call_timeout
+            )
+          end
+        end,
       resolve_thinking:
         if(state.agent_state.thinking_level == :auto,
           do: state.resolve_thinking || (&AutoThinking.resolve/3)

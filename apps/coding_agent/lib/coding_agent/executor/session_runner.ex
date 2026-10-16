@@ -229,6 +229,7 @@ defmodule CodingAgent.Executor.SessionRunner do
     session_opts =
       [
         model: get_in(meta, [:model]),
+        model_explicit: model_explicit_from_meta(meta),
         thinking_level: get_in(meta, [:thinking_level]),
         system_prompt: get_in(meta, [:system_prompt]),
         profile_instructions: get_in(meta, [:profile_instructions]),
@@ -645,4 +646,12 @@ defmodule CodingAgent.Executor.SessionRunner do
   defp get_opt(opts, key) when is_map(opts), do: Map.get(opts, key)
   defp get_opt(opts, key) when is_list(opts), do: Keyword.get(opts, key)
   defp get_opt(_opts, _key), do: nil
+
+  # Missing flag stays nil so direct paths keep "nonnil model means explicit".
+  defp model_explicit_from_meta(meta) do
+    case Map.get(meta, :model_explicit, Map.get(meta, "model_explicit")) do
+      value when is_boolean(value) -> value
+      _ -> nil
+    end
+  end
 end

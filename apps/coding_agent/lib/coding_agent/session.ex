@@ -1132,7 +1132,8 @@ defmodule CodingAgent.Session do
     entry =
       SessionEntry.model_change(
         model.provider,
-        model.id
+        model.id,
+        explicit: true
       )
 
     session_manager = SessionManager.append_entry(state.session_manager, entry)
@@ -1336,6 +1337,7 @@ defmodule CodingAgent.Session do
       system_prompt: state.system_prompt,
       cwd: state.cwd,
       model: state.model,
+      model_explicit: SessionManager.build_session_context(state.session_manager).model_explicit,
       thinking_level: state.thinking_level,
       settings_manager: state.settings_manager,
       workspace_dir: state.workspace_dir,
@@ -2511,7 +2513,16 @@ defmodule CodingAgent.Session do
 
     model = ModelResolver.resolve_session_model(model_spec, state.settings_manager)
 
-    :ok = LemonAgent.Agent.set_model(state.agent, model)
+    model_routing =
+      unless context.model_explicit do
+        LemonAgent.ModelRuntime.ModelRouting.prepare(
+          state.settings_manager.model_routing,
+          &ModelResolver.resolve_session_model(&1, state.settings_manager),
+          state.settings_manager.providers
+        )
+      end
+
+    :ok = LemonAgent.Agent.set_model(state.agent, model, model_routing: model_routing)
     :ok = LemonAgent.Agent.set_thinking_level(state.agent, context.thinking_level)
 
     :ok =

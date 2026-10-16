@@ -72,6 +72,7 @@ defmodule CodingAgent.SideQuery do
        snapshot: %{messages: messages, system_prompt: system_prompt},
        cwd: Map.get(snapshot, :cwd) || LemonCore.Cwd.default_cwd(),
        model: Map.get(snapshot, :model),
+       model_explicit: Map.get(snapshot, :model_explicit, false),
        thinking_level: Map.get(snapshot, :thinking_level),
        settings_manager: Map.get(snapshot, :settings_manager),
        workspace_dir: Map.get(snapshot, :workspace_dir),
@@ -99,6 +100,7 @@ defmodule CodingAgent.SideQuery do
        snapshot: %{messages: snapshot.messages, system_prompt: snapshot.system_prompt},
        cwd: snapshot.cwd,
        model: snapshot.model,
+       model_explicit: Map.get(snapshot, :model_explicit, false),
        thinking_level: snapshot.thinking_level,
        settings_manager: snapshot.settings_manager,
        workspace_dir: snapshot.workspace_dir,
@@ -131,6 +133,9 @@ defmodule CodingAgent.SideQuery do
          initial_messages: messages,
          cwd: Keyword.get(opts, :cwd) || LemonCore.Cwd.default_cwd(),
          model: Keyword.get(opts, :model) || MapHelpers.get_key(policy, :model),
+         model_explicit:
+           not is_nil(Keyword.get(opts, :model)) or
+             not is_nil(MapHelpers.get_key(policy, :model)),
          thinking_level:
            Keyword.get(opts, :thinking_level) || MapHelpers.get_key(policy, :thinking_level),
          system_prompt:
@@ -200,7 +205,8 @@ defmodule CodingAgent.SideQuery do
     session_opts =
       [
         cwd: context.cwd,
-        model: context[:model],
+        model: Keyword.get(opts, :model) || context[:model],
+        model_explicit: not is_nil(Keyword.get(opts, :model)) or context[:model_explicit] == true,
         thinking_level: normalize_thinking_level(context[:thinking_level]),
         system_prompt: context[:system_prompt],
         settings_manager: context[:settings_manager],

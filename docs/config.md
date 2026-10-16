@@ -214,6 +214,81 @@ filesystem paths to the profile table. See
 [User-managed profiles](user-guide/profiles.md) for clone, credential-safe
 export, recoverable deletion, and named-node routing.
 
+## Automatic model routing
+
+Automatic per-turn model routing is **opt-in**. It is disabled by default
+(`enabled = false`, or the table omitted). Configure it in the global
+`~/.lemon/config.toml` or project `.lemon/config.toml`; project tables override
+global keys (the `rules` array is replaced as a whole, not merged):
+
+```toml
+[model_routing]
+enabled = true
+max_cost_usd = 0.05        # required when enabled; finite, >= 0
+
+[[model_routing.rules]]    # ordered; first matching rule wins
+model = "@smol"            # any model selector, including [model_roles] aliases
+contains = "typo"          # optional; case-insensitive substring of latest user text
+max_chars = 400            # optional; inclusive, nonnegative integer
+
+[[model_routing.rules]]
+model = "anthropic:claude-sonnet-5"
+min_chars = 401            # optional; inclusive, nonnegative integer
+```
+
+Semantics:
+
+- Rules are evaluated in order against the **latest user text**. A rule matches
+  when every matcher it provides (`contains`, `min_chars`, `max_chars`) holds
+  (AND); a rule without matchers always matches. The first matching rule picks
+  the candidate model; later rules are never consulted as a fallback.
+- If no rule matches, the session's default model is used.
+- Every selected model, including the default, is checked against
+  `max_cost_usd`. The check is a **per-request projection from catalog
+  pricing** using a conservative bytes-based estimate of prompt plus tools and the
+  maximum output; it is not a cumulative invoice guarantee. Anthropic manual
+  thinking can expand the requested output limit, so those requests use the
+  catalog maximum instead of the smaller caller limit. A model with unknown
+  or all-zero pricing, or without a bounded maximum output, **fails closed** and
+  the request is refused rather than silently routed elsewhere.
+  Configured model price overrides must explicitly supply `input`, `output`,
+  `cache_read`, and `cache_write` rates (including genuinely zero rates);
+  omitted rates are unknown, not free. Configured additions whose exact provider
+  and model ID are absent from the catalog also require complete explicit pricing;
+  prices inherited from another model's template are not accepted.
+- An **explicit user-selected model** (for example `/model` or an explicit
+  override) always wins: it bypasses automatic routing and this cap.
+  Explicit choices survive session resume. Automatic selection stays automatic
+  across reset, save, and resume. Tree/entry navigation and committed rewinds
+  restore the destination branch's selection provenance: automatic branches keep
+  their rules and cap, while explicit branches keep their bypass. Older saved
+  model selections without provenance are conservatively treated as explicit;
+  start a new session to apply automatic routing to those conversations.
+  Inherited/default task, coordinator, background, and side-query models preserve
+  that provenance; an explicit child model override still bypasses routing.
+  Persona `model`/`role` defaults and `[runtime.task.agent_models]` are automatic
+  defaults, not explicit child overrides: task, coordinator and router-backed
+  `agent` delegations still apply the rules and cap unless the invocation supplied
+  a model or inherited an explicit parent selection.
+  Profile `model` defaults (including `profile.chat`, `chat.send` with a profile,
+  and model-less managed follow-ups) are automatic as well. An invocation model
+  override remains explicit; legacy requests supplying a model without selection
+  provenance also retain their explicit-selection behavior.
+  Automation reviewer persona/role and configured reviewer/judge defaults retain
+  automatic provenance; explicit job model pins and invocation overrides remain
+  explicit.
+  Entering and leaving plan mode (including resuming a saved plan) also preserves
+  the execution model's automatic policy or explicit selection.
+- `[budgets]` cumulative caps are separate and still apply.
+- Assistant messages record the actual turn's `provider`/`model`. Each completed
+  provider-invoked model call also emits a `Model: provider:model` activity entry
+  in the TUI/web transcript; the run footer uses the last actual model rather
+  than the requested default. Provider fallback candidates are checked against
+  the same cap, and a candidate rejected before invocation is not model activity.
+
+Model selectors and rule values are validated when a session starts, not by the
+config loader; invalid routing config raises a safe configuration error.
+
 ## Cumulative usage budgets
 
 Set optional caps in the global `~/.lemon/config.toml` or project
@@ -957,6 +1032,7 @@ Use only these top-level sections:
 
 - `defaults`
 - `runtime`
+- `model_routing`
 - `budgets`
 - `features`
 - `secrets.sources.<source_id>`

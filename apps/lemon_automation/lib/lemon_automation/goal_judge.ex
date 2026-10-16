@@ -70,6 +70,10 @@ defmodule LemonAutomation.GoalJudge do
         Keyword.get(opts, :judge_model) ||
           Application.get_env(:lemon_automation, :goal_judge_model) ||
           Keyword.get(opts, :model),
+      model_explicit:
+        not is_nil(Keyword.get(opts, :judge_model)) or
+          (is_nil(Application.get_env(:lemon_automation, :goal_judge_model)) and
+             not is_nil(Keyword.get(opts, :model))),
       max_output_chars: Keyword.get(opts, :judge_max_output_chars, 1_000),
       run_id: Keyword.get(opts, :judge_run_id),
       router_mod: Keyword.get(opts, :judge_router_mod, LemonRouter),

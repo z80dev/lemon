@@ -377,67 +377,69 @@ defmodule LemonAgent.Loop.Streaming do
           tools: convert_tools_to_llm(context.tools, config.intent_tracing)
         }
 
-        # Resolve stream function
-        stream_function = stream_fn || config.stream_fn || (&default_stream_fn/3)
+        with {:ok, config} <- route_model(config, llm_context) do
+          # Resolve stream function
+          stream_function = stream_fn || config.stream_fn || (&default_stream_fn/3)
 
-        # Resolve API key (important for expiring tokens)
-        api_key =
-          case config.get_api_key do
-            nil ->
-              config.stream_options.api_key
+          # Resolve API key (important for expiring tokens)
+          api_key =
+            case config.get_api_key do
+              nil ->
+                config.stream_options.api_key
 
-            get_key_fn ->
-              provider = config.model.provider
+              get_key_fn ->
+                provider = config.model.provider
 
-              resolved_key =
-                get_key_fn.(provider) ||
-                  if(is_atom(provider), do: get_key_fn.(Atom.to_string(provider)))
+                resolved_key =
+                  get_key_fn.(provider) ||
+                    if(is_atom(provider), do: get_key_fn.(Atom.to_string(provider)))
 
-              if config.stream_options.api_key_authoritative,
-                do: resolved_key,
-                else: resolved_key || config.stream_options.api_key
-          end
-
-        options = %{config.stream_options | api_key: api_key}
-
-        # Call the stream function (support {:ok, stream} or direct stream pid)
-        case request_with_budget(config, llm_context, options, stream_function) do
-          {:ok, response_stream} ->
-            process_stream_events(
-              context,
-              response_stream,
-              stream,
-              config,
-              signal,
-              llm_context,
-              options
-            )
-
-          {:error, reason} ->
-            Loop.record_budget_usage(config, reason, stream)
-
-            case reason do
-              %AssistantMessage{} = message ->
-                {:failed, %{message | stop_reason: :error}, context, false,
-                 committed_content?(message)}
-
-              _ ->
-                {:error, reason}
+                if config.stream_options.api_key_authoritative,
+                  do: resolved_key,
+                  else: resolved_key || config.stream_options.api_key
             end
 
-          response_stream when is_pid(response_stream) ->
-            process_stream_events(
-              context,
-              response_stream,
-              stream,
-              config,
-              signal,
-              llm_context,
-              options
-            )
+          options = %{config.stream_options | api_key: api_key}
 
-          other ->
-            {:error, {:invalid_stream, other}}
+          # Call the stream function (support {:ok, stream} or direct stream pid)
+          case request_with_budget(config, llm_context, options, stream_function) do
+            {:ok, response_stream} ->
+              process_stream_events(
+                context,
+                response_stream,
+                stream,
+                config,
+                signal,
+                llm_context,
+                options
+              )
+
+            {:error, reason} ->
+              Loop.record_budget_usage(config, reason, stream)
+
+              case reason do
+                %AssistantMessage{} = message ->
+                  {:failed, %{message | stop_reason: :error}, context, false,
+                   committed_content?(message)}
+
+                _ ->
+                  {:error, reason}
+              end
+
+            response_stream when is_pid(response_stream) ->
+              process_stream_events(
+                context,
+                response_stream,
+                stream,
+                config,
+                signal,
+                llm_context,
+                options
+              )
+
+            other ->
+              {:error, {:invalid_stream, other}}
+          end
         end
       else
         {:error, reason} ->
@@ -446,17 +448,33 @@ defmodule LemonAgent.Loop.Streaming do
     end
   end
 
-  defp request_with_budget(%AgentLoopConfig{budget: nil} = config, context, options, stream_fn),
-    do: stream_fn.(config.model, context, options)
+  defp route_model(%AgentLoopConfig{resolve_model: nil} = config, _context), do: {:ok, config}
 
-  defp request_with_budget(config, context, options, stream_fn) do
-    projected = LemonAgent.Budget.project(config.model, context, options)
-
-    case Loop.budget_check(config, projected) do
-      nil -> stream_fn.(config.model, context, options)
-      details -> {:error, {:budget_exceeded, details}}
+  defp route_model(config, context) do
+    with {:ok, model} <- config.resolve_model.(context, config.stream_options) do
+      updated = Loop.refresh_model(%{config | model: model, get_model: nil})
+      {:ok, %{updated | get_model: config.get_model}}
     end
   end
+
+  defp request_with_budget(config, context, options, stream_fn) do
+    with :ok <- check_model_cost(config, context, options) do
+      projected =
+        if config.budget,
+          do: LemonAgent.Budget.project(config.model, context, options),
+          else: %{tokens: 0, cost_usd: 0.0}
+
+      case Loop.budget_check(config, projected) do
+        nil -> stream_fn.(config.model, context, options)
+        details -> {:error, {:budget_exceeded, details}}
+      end
+    end
+  end
+
+  defp check_model_cost(%AgentLoopConfig{check_model_cost: nil}, _context, _options), do: :ok
+
+  defp check_model_cost(config, context, options),
+    do: config.check_model_cost.(config.model, context, options)
 
   # Cancellation can race with a terminal provider event. Preserve its reported
   # usage even though cancellation still strips unexecuted tool calls.

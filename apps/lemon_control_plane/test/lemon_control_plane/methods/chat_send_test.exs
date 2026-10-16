@@ -567,6 +567,58 @@ defmodule LemonControlPlane.Methods.ChatSendTest do
     refute Map.has_key?(request.meta, :invocation_proof_verified)
   end
 
+  test "profileId model defaults remain automatic through zero-cap session construction", %{
+    ctx: ctx,
+    root: root
+  } do
+    assert {:ok, _} =
+             LemonCore.ProfileStore.create(%{id: "routing", model: "openai:gpt-4o"})
+
+    assert {:ok, _} = ChatSend.handle(params(%{"profileId" => "routing"}), ctx)
+    assert_received {:submitted, request}
+    assert request.model == "openai:gpt-4o"
+    assert request.model_explicit == false
+    assert_zero_cap(request, root)
+  end
+
+  defp assert_zero_cap(request, cwd) do
+    settings = %CodingAgent.SettingsManager{
+      default_model: %{provider: :openai, model_id: "gpt-4o", base_url: nil},
+      providers: %{"openai" => %{api_key: "test-key"}},
+      provider_routing: %{enabled: false},
+      retry_enabled: false,
+      compaction_enabled: false,
+      model_routing: %{enabled: true, max_cost_usd: 0, rules: []}
+    }
+
+    file = Path.join(cwd, "routing.jsonl")
+    cwd |> CodingAgent.SessionManager.new() |> CodingAgent.SessionManager.persist(file)
+    owner = self()
+
+    session =
+      start_supervised!(
+        {CodingAgent.Session,
+         cwd: cwd,
+         workspace_dir: cwd,
+         session_file: file,
+         settings_manager: settings,
+         model: request.model,
+         model_explicit: request.model_explicit,
+         system_prompt: "test",
+         tools: [],
+         register: false,
+         stream_fn: fn _, _, _ ->
+           send(owner, :unexpected_provider_call)
+           raise "zero-cap request reached provider"
+         end}
+      )
+
+    CodingAgent.Session.subscribe(session)
+    assert :ok = CodingAgent.Session.prompt(session, request.prompt)
+    assert_receive {:session_event, _, {:error, :model_routing_cost_cap, _}}, 5_000
+    refute_received :unexpected_provider_call
+  end
+
   test "profileId inherits placement and persona for a noncanonical session", %{ctx: ctx} do
     assert {:ok, profile} =
              LemonCore.ProfileStore.create(%{

@@ -73,6 +73,7 @@ defmodule CodingAgent.Tools.TaskPersonasTest do
              Params.validate_run_params(%{"prompt" => "Inspect", "agent" => "architect"}, cwd)
 
     assert persona.model == "@coding"
+    refute persona.model_explicit
     assert persona.persona.prompt == "Explain dependency boundaries."
     assert ToolPolicy.allowed?(persona.tool_policy, "read")
     refute ToolPolicy.allowed?(persona.tool_policy, "write")
@@ -85,6 +86,7 @@ defmodule CodingAgent.Tools.TaskPersonasTest do
              )
 
     assert explicit.model == "@review"
+    assert explicit.model_explicit
 
     settings = %CodingAgent.SettingsManager{
       model_roles: %{
@@ -99,6 +101,9 @@ defmodule CodingAgent.Tools.TaskPersonasTest do
 
     assert Params.build_session_opts(cwd, [settings_manager: settings], explicit)[:model].id ==
              "gpt-4o"
+
+    refute Params.build_session_opts(cwd, [settings_manager: settings], persona)[:model_explicit]
+    assert Params.build_session_opts(cwd, [settings_manager: settings], explicit)[:model_explicit]
 
     assert {:error, _} =
              Params.validate_run_params(%{"prompt" => "Inspect", "role" => "architect"}, cwd)

@@ -969,6 +969,31 @@ defmodule CodingAgent.ExecutionNode.WorkerTest do
     assert recipient == caller.pid
     send(recipient, {:native_controller_reply, reply_ref, {:ok, %{}}})
     assert Task.await(caller) == :ok
+
+    for explicit <- [nil, false, true] do
+      request =
+        LemonCore.RunRequest.new(%{
+          run_id: "child-run",
+          agent_id: "oracle",
+          session_key: "agent:oracle:main",
+          prompt: "child work",
+          model: "@fast",
+          model_explicit: explicit
+        })
+
+      caller = Task.async(fn -> opts.native_followup_submit.(source, request) end)
+
+      assert_receive {:socket_request, ^socket, "node.native.followup", params,
+                      {:native_reply, recipient, reply_ref}, 30_000}
+
+      assert recipient == caller.pid
+      assert params["request"]["model"] == "@fast"
+      assert params["request"]["modelExplicit"] == explicit
+      assert Map.has_key?(params["request"], "modelExplicit")
+      send(recipient, {:native_controller_reply, reply_ref, {:ok, %{"runId" => "child-run"}}})
+      assert Task.await(caller) == {:ok, "child-run"}
+    end
+
     :ok = GenServer.stop(worker)
     Process.exit(context.runner_pid, :kill)
   end

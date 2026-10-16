@@ -235,12 +235,12 @@ defmodule CodingAgent.Tools.TaskRuntimeParityTest do
 
       overridden = settings(%{agent_models: %{"architect" => "@review"}})
 
-      assert {:ok, %{model: "@review"}} =
+      assert {:ok, %{model: "@review", model_explicit: false}} =
                Params.validate_run_params(%{"prompt" => "x", "agent" => "architect"}, cwd,
                  settings_manager: overridden
                )
 
-      assert {:ok, %{model: "openai:gpt-4o"}} =
+      assert {:ok, %{model: "openai:gpt-4o", model_explicit: true}} =
                Params.validate_run_params(
                  %{"prompt" => "x", "agent" => "architect", "model" => "openai:gpt-4o"},
                  cwd,

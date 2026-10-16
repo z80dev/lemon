@@ -92,6 +92,67 @@ defmodule LemonControlPlane.Methods.ProfilesTest do
     {:ok, root: root}
   end
 
+  test "profile.chat defaults remain automatic through zero-cap session construction", %{
+    root: root
+  } do
+    assert {:ok, _} =
+             ProfilesCreate.handle(%{"id" => "routing", "model" => "openai:gpt-4o"}, %{})
+
+    assert {:ok, _} = ProfileChat.handle(%{"id" => "routing", "prompt" => "hello"}, %{})
+    assert_received {:profile_request, request}
+    assert request.model == "openai:gpt-4o"
+    assert request.model_explicit == false
+    assert_zero_cap(request, root)
+
+    assert {:ok, _} =
+             ProfileChat.handle(
+               %{"id" => "routing", "prompt" => "hello", "model" => "openai:gpt-4o-mini"},
+               %{}
+             )
+
+    assert_received {:profile_request, explicit}
+    assert explicit.model == "openai:gpt-4o-mini"
+    assert explicit.model_explicit == true
+  end
+
+  defp assert_zero_cap(request, cwd) do
+    settings = %CodingAgent.SettingsManager{
+      default_model: %{provider: :openai, model_id: "gpt-4o", base_url: nil},
+      providers: %{"openai" => %{api_key: "test-key"}},
+      provider_routing: %{enabled: false},
+      retry_enabled: false,
+      compaction_enabled: false,
+      model_routing: %{enabled: true, max_cost_usd: 0, rules: []}
+    }
+
+    file = Path.join(cwd, "routing.jsonl")
+    cwd |> CodingAgent.SessionManager.new() |> CodingAgent.SessionManager.persist(file)
+    owner = self()
+
+    session =
+      start_supervised!(
+        {CodingAgent.Session,
+         cwd: cwd,
+         workspace_dir: cwd,
+         session_file: file,
+         settings_manager: settings,
+         model: request.model,
+         model_explicit: request.model_explicit,
+         system_prompt: "test",
+         tools: [],
+         register: false,
+         stream_fn: fn _, _, _ ->
+           send(owner, :unexpected_provider_call)
+           raise "zero-cap request reached provider"
+         end}
+      )
+
+    CodingAgent.Session.subscribe(session)
+    assert :ok = CodingAgent.Session.prompt(session, request.prompt)
+    assert_receive {:session_event, _, {:error, :model_routing_cost_cap, _}}, 5_000
+    refute_received :unexpected_provider_call
+  end
+
   test "native profile policy is validated, projected, cloned and inherited by profile chat" do
     policy = %{
       "profile" => "custom",

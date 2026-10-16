@@ -145,6 +145,53 @@ defmodule CodingAgent.CoordinatorTest do
     assert Process.alive?(coordinator)
   end
 
+  for explicit <- [:omitted, nil, false, true] do
+    @explicit explicit
+    test "coordinator retains model provenance #{@explicit} for default children", %{
+      tmp_dir: tmp_dir
+    } do
+      opts = if @explicit == :omitted, do: [], else: [model_explicit: @explicit]
+      coordinator = start_coordinator(tmp_dir, opts)
+      persona_dir = Path.join(tmp_dir, ".lemon/agents")
+      File.mkdir_p!(persona_dir)
+
+      File.write!(Path.join(persona_dir, "architect.md"), """
+      ---
+      description: Architecture review
+      model: openai:gpt-4o
+      ---
+      Inspect architecture.
+      """)
+
+      owner = self()
+
+      :sys.replace_state(coordinator, fn state ->
+        %{
+          state
+          | session_starter: fn opts ->
+              send(owner, {:child_opts, opts})
+              {:error, :admission_failed}
+            end
+        }
+      end)
+
+      Coordinator.run_subagents(coordinator, [%{prompt: "inherited child"}])
+      assert_receive {:child_opts, inherited}
+      assert inherited[:model_explicit] == (@explicit != false)
+      Coordinator.run_subagents(coordinator, [%{prompt: "persona child", subagent: "architect"}])
+      assert_receive {:child_opts, persona}
+      assert persona[:model] == "openai:gpt-4o"
+      assert persona[:model_explicit] == (@explicit != false)
+
+      Coordinator.run_subagents(coordinator, [
+        %{prompt: "explicit child", model: "openai:gpt-4o"}
+      ])
+
+      assert_receive {:child_opts, overridden}
+      assert overridden[:model_explicit] == true
+    end
+  end
+
   describe "run_subagent/2" do
     test "returns the visible assistant answer", %{tmp_dir: tmp_dir} do
       coordinator = start_controlled_coordinator(tmp_dir)

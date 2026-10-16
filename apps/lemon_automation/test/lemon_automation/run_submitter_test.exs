@@ -299,6 +299,7 @@ defmodule LemonAutomation.RunSubmitterTest do
     assert params.run_id == "fixed_profile_run"
     assert params.agent_id == "cron-profile"
     assert params.model == "current-model"
+    assert params.model_explicit == false
     assert params.meta.node == "worker-current"
     assert params.meta.profile_id == "cron-profile"
     assert params.meta.system_prompt == "Current persona"
@@ -336,6 +337,7 @@ defmodule LemonAutomation.RunSubmitterTest do
     assert params.meta.remote_cwd_explicit == true
     assert params.meta.remote_cwd == "/worker/project"
     assert params.model == "cron-model"
+    assert params.model_explicit == true
     assert params.meta.cron_model_pin == "cron-model"
   end
 

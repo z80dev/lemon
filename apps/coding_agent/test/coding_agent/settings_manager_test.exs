@@ -29,6 +29,29 @@ defmodule CodingAgent.SettingsManagerTest do
     %{test_dir: test_dir}
   end
 
+  test "model_routing defaults off and loads the raw project table", %{test_dir: project} do
+    assert SettingsManager.load(project).model_routing == %{}
+
+    File.mkdir_p!(Path.join(project, ".lemon"))
+
+    File.write!(Path.join(project, ".lemon/config.toml"), """
+    [model_routing]
+    enabled = true
+    max_cost_usd = 0.5
+
+    [[model_routing.rules]]
+    model = "@smol"
+    contains = "Quick"
+    max_chars = 80
+    """)
+
+    assert SettingsManager.load(project).model_routing == %{
+             "enabled" => true,
+             "max_cost_usd" => 0.5,
+             "rules" => [%{"model" => "@smol", "contains" => "Quick", "max_chars" => 80}]
+           }
+  end
+
   test "loads canonical budget limits from project config.toml", %{test_dir: project} do
     File.mkdir_p!(Path.join(project, ".lemon"))
 

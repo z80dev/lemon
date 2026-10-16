@@ -93,4 +93,45 @@ defmodule LemonCore.Config.ModelRolesTest do
       assert Enum.any?(errors, &String.contains?(&1, "model_roles"))
     end
   end
+
+  test "model_routing defaults to an empty raw table", context do
+    assert Modular.load(project_dir: context.project).model_routing == %{}
+    assert Config.load(context.project, cache: false).model_routing == %{}
+    assert Config.to_map(Config.load(context.project, cache: false)).model_routing == %{}
+  end
+
+  test "model_routing raw table merges global then project without resolving models", context do
+    File.write!(Path.join([context.home, ".lemon", "config.toml"]), """
+    [model_routing]
+    enabled = false
+    max_cost_usd = 1.5
+
+    [[model_routing.rules]]
+    model = "@smol"
+    max_chars = 200
+    """)
+
+    File.write!(Path.join([context.project, ".lemon", "config.toml"]), """
+    [model_routing]
+    enabled = true
+
+    [[model_routing.rules]]
+    model = "openai:gpt-4o"
+    contains = "refactor"
+    min_chars = 10
+    """)
+
+    expected = %{
+      "enabled" => true,
+      "max_cost_usd" => 1.5,
+      "rules" => [
+        %{"model" => "openai:gpt-4o", "contains" => "refactor", "min_chars" => 10}
+      ]
+    }
+
+    assert Modular.load(project_dir: context.project).model_routing == expected
+    config = Config.load(context.project, cache: false)
+    assert config.model_routing == expected
+    assert Config.get(config, :model_routing) == expected
+  end
 end
