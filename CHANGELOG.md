@@ -66,6 +66,7 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Added
 
+- Telegram gateway setup prints the `https://t.me/<bot_username>` link once the bot token validates.
 - TUI status bar shows the session's cumulative cost, updated after each run
   (including snapshot-managed sessions, counted once per run). Runs without
   cost data, resumed history, and events lost to a reconnect make it a lower

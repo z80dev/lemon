@@ -184,6 +184,7 @@ defmodule LemonCli.Setup.Gateway.Telegram do
     case get_me(io, token) do
       {:ok, username} ->
         io.info.("Connected! Bot username: @#{username}")
+        io.info.("Open your bot: https://t.me/#{username}")
         {:ok, username}
 
       {:error, :unauthorized} ->
