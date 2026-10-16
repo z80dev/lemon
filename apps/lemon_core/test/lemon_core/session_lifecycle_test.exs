@@ -305,6 +305,36 @@ defmodule LemonCore.SessionLifecycleTest do
     assert {:error, :unsupported_format} = SessionLifecycle.export(session_key, format: :pdf)
   end
 
+  test "markdown export backslash-escapes special characters without backreference corruption" do
+    suffix = unique_suffix()
+    session_key = "agent:md_export_#{suffix}:main"
+    secret = "md-secret-#{suffix}"
+    on_exit(fn -> cleanup_sessions([session_key]) end)
+
+    seed_session(
+      session_key,
+      "run-md-#{suffix}",
+      "prompt api_key=#{secret}",
+      "answer",
+      [
+        %{
+          __event__: :action_event,
+          action: %{title: "read_file [a] <b> #1 *x* `c`", kind: :my_tool},
+          ok: true,
+          message: "done"
+        }
+      ]
+    )
+
+    assert {:ok, %{content: content}} = SessionLifecycle.export(session_key, format: :markdown)
+
+    assert content =~ "my\\_tool"
+    assert content =~ "read\\_file \\[a\\] \\<b\\> \\#1 \\*x\\* \\`c\\`"
+    assert content =~ "md\\_export\\_#{suffix}"
+    refute content =~ "\\1"
+    refute content =~ secret
+  end
+
   test "html export is self-contained and escapes every interpolated value" do
     suffix = unique_suffix()
     session_key = "agent:export_html_#{suffix}:main"
