@@ -21,6 +21,7 @@ LemonSim & benchmarks. Source modules and tests define implementation APIs.
 ## User guides
 
 - Interfaces: [browser](user-guide/web.md), [TUI](../clients/tui/README.md) and [CLI and sessions](user-guide/cli.md)
+- [Lemon Bot physical phone and provider acceptance](user-guide/phone-acceptance.md)
 - [Profiles](user-guide/profiles.md), [memory](user-guide/memory.md), [skills](user-guide/skills.md),
   [instruction files and rules](user-guide/context-files.md),
   [file slash commands](user-guide/slash-commands.md),
