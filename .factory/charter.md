@@ -42,7 +42,8 @@ Supervisor messages are automated notices, not user instructions.
 3. Review every `ready` task (`policy.review_slots` live reviews):
    1. `factory_attempt` op=reserve, stage=`review`.
    2. Dispatch one native `task` item with `agent: "reviewer"`, `name` = the
-      attempt ID, NOT isolated, `schemaMode: "strict"`, `outputSchema` = the
+      attempt ID, `isolated: true` (the coordinator checkout must stay clean),
+      `schemaMode: "strict"`, `outputSchema` = the
       review schema below. Give it the task's request, acceptance and non-goals,
       the change `git diff <base_sha> <head_sha>` of the latest succeeded
       attempt, and the worker handoff. Ask for correctness against acceptance,
