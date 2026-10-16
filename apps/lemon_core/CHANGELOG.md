@@ -33,6 +33,10 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ### Fixed
 
+- Markdown session export now backslash-escapes special characters (`_`, `*`,
+  backticks, brackets, `<>`, `#`) instead of emitting a literal `\1`
+  backreference in place of the character (#64).
+
 - Restore refuses before staging or changing state while a source or packaged
   launcher daemon owns the target, including relocated/root-relative stores,
   explicit database file symlinks, unhealthy or starting runtimes, and custom

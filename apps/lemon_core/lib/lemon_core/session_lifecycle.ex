@@ -1038,7 +1038,7 @@ defmodule LemonCore.SessionLifecycle do
   defp markdown_escape(nil), do: ""
 
   defp markdown_escape(value),
-    do: value |> to_string() |> String.replace(~r/([`*_{}\[\]<>#])/, "\\\\1")
+    do: value |> to_string() |> String.replace(~r/([`*_{}\[\]<>#])/, "\\\\\\1")
 
   defp normalize_query(value) when is_binary(value) do
     case value |> String.trim() |> String.downcase() do
