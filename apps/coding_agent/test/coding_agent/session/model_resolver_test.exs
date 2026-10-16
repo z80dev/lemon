@@ -561,6 +561,149 @@ defmodule CodingAgent.Session.ModelResolverTest do
     assert model.id == "gpt-4"
   end
 
+  test "onboarding-only spellings remain independent configured custom runtime providers" do
+    for provider <-
+          ~w(zhipu kimi-k2 chatgpt google-ai-studio gemini-api opencode-zen open-router kimi-code) do
+      settings = %SettingsManager{
+        providers: %{
+          provider => %{
+            api: "openai_completions",
+            base_url: "https://#{provider}.invalid/v1",
+            api_key: "#{provider}-custom-key",
+            models: [%{id: "organization/native:7b"}, %{id: "organization/native"}]
+          }
+        },
+        provider_routing: %{enabled: false}
+      }
+
+      for selector <- [
+            "#{provider}:organization/native:7b",
+            %{provider: provider, model_id: "organization/native:7b"}
+          ] do
+        model = ModelResolver.resolve_session_model(selector, settings)
+
+        assert {model.provider, model.id, model.api} ==
+                 {provider, "organization/native:7b", :openai_completions}
+
+        assert model.base_url == "https://#{provider}.invalid/v1"
+
+        assert ModelResolver.build_get_api_key(settings).(model.provider) ==
+                 "#{provider}-custom-key"
+      end
+
+      model = ModelResolver.resolve_session_model("#{provider}/organization/native", settings)
+      assert {model.provider, model.id} == {provider, "organization/native"}
+    end
+  end
+
+  test "routing retains a custom zhipu fallback independently of canonical zai credentials" do
+    for canonical_key <- [nil, "canonical-zai-key"] do
+      canonical_config =
+        if canonical_key do
+          %{base_url: "https://canonical-zai.invalid/v1", api_key: canonical_key}
+        else
+          %{
+            base_url: "https://canonical-zai.invalid/v1",
+            auth_source: "oauth",
+            oauth_secret: "missing-zai-identity-#{System.unique_integer([:positive])}"
+          }
+        end
+
+      settings = %SettingsManager{
+        default_model: %{provider: :openai, model_id: "gpt-4", base_url: nil},
+        providers: %{
+          "openai" => %{},
+          "zai" => canonical_config,
+          "zhipu" => %{
+            api: "openai_completions",
+            base_url: "https://custom-zhipu.invalid/v1",
+            api_key: "custom-zhipu-key",
+            models: [%{id: "gpt-4"}]
+          }
+        },
+        provider_routing: %{
+          enabled: true,
+          fallback_providers: ["zhipu"],
+          require_credentials: true
+        }
+      }
+
+      primary = ModelResolver.resolve_session_model("openai:gpt-4", settings)
+      assert [fallback] = ModelResolver.runtime_fallback_models(primary, settings)
+      resolved = ModelResolver.resolve_session_model(nil, settings)
+      assert resolved == fallback
+
+      for model <- [fallback, resolved] do
+        assert {model.provider, model.id, model.api} ==
+                 {"zhipu", "gpt-4", :openai_completions}
+
+        assert model.base_url == "https://custom-zhipu.invalid/v1"
+        assert ModelResolver.build_get_api_key(settings).(model.provider) == "custom-zhipu-key"
+      end
+
+      canonical = ModelResolver.resolve_session_model("zai:gpt-4", settings)
+      assert canonical.provider == :zai
+      assert canonical.base_url == "https://canonical-zai.invalid/v1"
+
+      if canonical_key do
+        assert ModelResolver.build_get_api_key(settings).(canonical.provider) == canonical_key
+      else
+        refute LemonAgent.ModelRuntime.Credentials.provider_has_credentials?(:zai, settings)
+      end
+    end
+  end
+
+  test "custom gemini-api does not capture canonical google model additions or replacements" do
+    replacement_id = LemonAi.Models.get_models(:google) |> hd() |> Map.fetch!(:id)
+
+    settings = %SettingsManager{
+      providers: %{
+        "google" => %{
+          base_url: "https://canonical-google.invalid/v1",
+          api_key: "canonical-google-key",
+          headers: %{"X-Provider" => "google", "X-Scope" => "provider"},
+          models:
+            Enum.map([replacement_id, "configured-google-addition"], fn id ->
+              %{
+                id: id,
+                api: "openai_responses",
+                context_window: 65_536,
+                headers: %{"X-Scope" => "model"}
+              }
+            end)
+        },
+        "gemini-api" => %{
+          api: "openai_completions",
+          base_url: "https://custom-gemini.invalid/v1",
+          api_key: "custom-gemini-key",
+          models: [%{id: replacement_id}, %{id: "configured-google-addition"}]
+        }
+      },
+      provider_routing: %{enabled: false}
+    }
+
+    for id <- [replacement_id, "configured-google-addition"] do
+      google = ModelResolver.resolve_session_model("google:#{id}", settings)
+      custom = ModelResolver.resolve_session_model("gemini-api:#{id}", settings)
+
+      assert {google.provider, google.id, google.api} == {:google, id, :openai_responses}
+      assert google.base_url == "https://canonical-google.invalid/v1"
+      assert google.context_window == 65_536
+      assert google.headers["x-provider"] == "google"
+      assert google.headers["x-scope"] == "model"
+      assert ModelResolver.build_get_api_key(settings).(google.provider) == "canonical-google-key"
+
+      assert {custom.provider, custom.id, custom.api} ==
+               {"gemini-api", id, :openai_completions}
+
+      assert custom.base_url == "https://custom-gemini.invalid/v1"
+      assert ModelResolver.build_get_api_key(settings).(custom.provider) == "custom-gemini-key"
+
+      assert ModelResolver.resolve_session_model("google/#{id}", settings) == google
+      assert ModelResolver.resolve_session_model("gemini-api/#{id}", settings) == custom
+    end
+  end
+
   describe "OpenAI-compatible presets" do
     test "provider:model specs keep colons in the model id and apply the configured base url" do
       settings = %SettingsManager{

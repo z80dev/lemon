@@ -231,6 +231,12 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Changed
 
+- Onboarding (`lemon_cli`) resolves canonical provider ids and runtime aliases
+  through `LemonAgent.ModelRuntime.ProviderNames`, including `gemini_cli`.
+  Onboarding-only conveniences such as `zhipu` and `kimi-k2` remain accepted and
+  write canonical ids (`zai` and `kimi`). They are not new runtime aliases, so
+  existing custom provider tables, qualified selectors, routing, model overrides
+  and credentials retain their identities and behavior.
 - The Lemon Bot desktop pet's click-through, drag, click-to-open and live-status
   reaction logic now lives in `LemonBotKit` (`PetInteraction`) and is covered by
   automated Swift tests; behaviour is unchanged. The remaining GUI-only checks are

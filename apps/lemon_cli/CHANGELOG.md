@@ -50,3 +50,12 @@ All notable changes to `lemon_cli` are documented here.
   overrides remain untouched. Referenced shared secrets fail closed rather than
   silently breaking another consumer, including references from the destination
   project's providers and credential pools. Default selection is a separate operation.
+
+### Fixed
+
+- Share canonical provider ids and runtime aliases with
+  `LemonAgent.ModelRuntime.ProviderNames`, including `gemini_cli`. Preserve
+  onboarding-only inputs such as `zhipu`, `kimi-k2`, `chatgpt` and `gemini-api`
+  by writing canonical config ids, without adding runtime aliases that could
+  claim existing custom provider endpoints, model selectors or credentials.
+  Onboarding prompts, OAuth flows and presentation defaults remain local.
