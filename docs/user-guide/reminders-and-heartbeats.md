@@ -262,9 +262,11 @@ and verification command, for example:
 The `goal` tool manages the current session's durable objective:
 
 - `set` stores `objective` and `cwd`; cwd defaults to the current coding
-  session's directory.
-- `start` launches a bounded loop; `max_ticks` limits judge/continuation cycles.
-  `run_once` starts one cycle. An optional `model` pins the coding model.
+  session's directory. `deliver_to` (`auto`, `none`, `telegram:<chat>[:<thread>]`,
+  or `discord:<channel>[:<thread>]`) picks where supervision updates go.
+- `start` launches a bounded loop; `max_ticks` (1–20, default 3) limits
+  judge/continuation cycles. `run_once` starts one cycle. An optional `model`
+  (`provider:model`) pins the coding model.
 - `status` shows the objective, target directory, loop state, active/last run,
   and last result. `meta.lastResult` records completion status and output.
 - `pause` or `stop` disables automatic continuation and cancels the owned run.
@@ -333,8 +335,11 @@ Set a heartbeat from the TUI (`/hb` is an alias):
 /heartbeat clear
 ```
 
-Setting a heartbeat again updates the agent's existing heartbeat job. It runs
-in the server's local time and is delivered to your paired owner chat.
+`/heartbeat` with no argument shows `status`; `stop` and `off` are aliases of
+`clear`. Setting a heartbeat again updates the agent's existing heartbeat job.
+It runs in the server's local time and is delivered to your paired owner chat.
+`/heartbeat` never edits or removes the daily brief, which is owned by
+`[automation] daily_brief`.
 
 Intervals must be cron-exact: minutes that divide 60 (`1m` … `30m`), hours that
 divide 24 (`1h`, `2h`, `3h`, `4h`, `6h`, `8h`, `12h`), or `1d` (daily at 09:00).

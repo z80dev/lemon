@@ -67,7 +67,14 @@ load/resume replay persisted native messages and tool history; close cancels an
 active turn and retains the session for later resume. Fork creates a durable
 branch rather than a new empty chat.
 
-Session configuration exposes registry model selection, thinking level and
+Lemon advertises `/plan`, `/compact`, `/context`, file-defined slash commands
+for the session's cwd, and `/skill:<key>` for workspace skills through
+`available_commands_update`. `/name args` is submitted verbatim and expanded by
+the native executor; `/skill:<key> task` asks the agent to load that skill and
+is rejected if the skill is not available in the workspace.
+
+Session configuration exposes model selection (from the runtime's availability
+catalog, honoring credential and provider-health constraints), thinking level and
 approval policy. Lemon advertises no session modes: plan mode is a `/plan`
 command, not a selectable mode. Approval choices cannot override administrator
 restrictions. Existing local provider credentials

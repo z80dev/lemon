@@ -214,6 +214,10 @@ formatter failure does not undo the write. Edit headers and patch per-file
 `snapshot` tags describe the post-format file, so they can be used directly for
 the next anchored edit. ACP writes retain client-managed formatting behavior.
 
+`write`, `edit` and `patch` also accept `"diagnostics": true` (default false,
+unless enabled in tool options) to report newly introduced language diagnostics
+after the write; see [LSP and diagnostics](lsp.md).
+
 ## Patch hunk matching
 
 Patch hunk context must identify a unique location. Exact matches take precedence;
@@ -368,6 +372,15 @@ hint instead of sorting a traversal-order subset. The fd safety ceiling is
 independent of `max_results`.
 
 ## Structural search limits
+
+`ast_grep` runs the real ast-grep CLI (`ast-grep`, or `sg` when it identifies as
+ast-grep) and is unavailable without it; there is no regex fallback. Use
+`action: "search"` or `"replace"` with a `pattern` (`$NAME`, `$$$ARGS`), optional
+`language` (inferred from extensions when omitted) and `paths` (search defaults
+to `["."]`; replace needs an explicit scope). Replacement defaults to
+`dry_run: true`; applying requires `dry_run: false` and `expected_matches` equal to
+the preview count. `max_results` (default 100, max 1000) limits visible matches
+only, never the replacement scope.
 
 `ast_grep` refuses a scope with more than `max_files` files (default 1000) before
 starting the CLI or writing. Narrow `paths` or explicitly raise the cap. Directory

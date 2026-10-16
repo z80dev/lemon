@@ -175,7 +175,7 @@ defaults to 30000 and is capped at 120000 on every action.
 | `browser_set_cookies` | Set Playwright cookie objects. | `cookies` (required) |
 | `browser_clear_state` | Clear cookies, page storage, and buffered events. | `clearCookies`, `clearStorage`, `clearEvents` (all default `true`) |
 | `browser_screenshot` | Save a screenshot as a local artifact. | `path`, `fullPage`, `type` (`png`, `jpeg`), `includeImage`, `sendToChannel` |
-| `browser_analyze` | Screenshot the page and analyze it with a vision provider. | `provider` (`local_vision`, `openai_vision`), `prompt`, `responseFormat` (`json`, `text`), `detail`, `filename`, `includeImage`, `sendToChannel` |
+| `browser_analyze` | Screenshot the page and analyze it with a vision provider. | `provider` (`local_vision`, `openai_vision`), `prompt`, `model`, `responseFormat` (`json`, `text`), `detail` (`auto`, `low`, `high`), `maxRetries`, `filename`, `path`, `fullPage`, `type`, `includeImage`, `sendToChannel`, `sendScreenshotToChannel` |
 
 Notes:
 
@@ -189,7 +189,8 @@ Notes:
   path.
 - `browser_analyze` returns the analysis text as untrusted output plus safe
   screenshot and analysis metadata. The `prompt` is stored only as redacted
-  metadata.
+  metadata. `sendToChannel` requests final-answer delivery of the analysis
+  artifact; `sendScreenshotToChannel` requests delivery of the screenshot.
 - `browser_get_cookies` redacts values (`[redacted]`) unless `includeValues: true`.
 - `browser_events` dialogs are dismissed by the helper after they are recorded.
 - Raw CDP (`browser.cdp`) is not exposed to the model. At the driver layer it

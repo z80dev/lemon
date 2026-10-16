@@ -17,6 +17,19 @@ on timeout. A local port cannot adopt an ACP client's remote terminal handle;
 supporting detachment there requires a managed terminal backend that retains
 that protocol ownership through session cleanup.
 
+## Working directory, environment and internal URLs
+
+`cwd` runs a command in another existing directory (absolute, or relative to
+the session cwd) instead of a leading `cd`. `env` is an object of extra string
+variables layered over the inherited environment; names must match
+`^[A-Za-z_][A-Za-z0-9_]*$` and values cannot contain NUL. Both apply to
+foreground, PTY, background, service and ACP-terminal runs.
+
+Whole-word `skill://`, `artifact://` and `local://` references in `command`
+(bare or in matching quotes) are replaced with their shell-quoted absolute paths
+before launch; an unresolvable reference fails the call without running anything.
+`https://` and similar URLs are untouched.
+
 ## Dedicated-tool routing
 
 `[runtime.tools.bash.interceptor] enabled = true` opts in to pre-launch routing

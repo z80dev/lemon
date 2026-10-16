@@ -19,9 +19,10 @@ still connected. Headless sessions do not silently choose an answer.
 ```
 
 A call accepts 1–8 questions with unique IDs. Each question has `id`, `question`
-and `options`. An empty options list requests free text. Optional `header` and
-option `description` supply explanatory text. `multi: true` allows multiple
-choices. `recommended` is a zero-based hint, never permission to auto-select.
+and `options` (at most 20, with unique labels). An empty options list requests
+free text. Optional `header` and option `description` supply explanatory text.
+`multi: true` allows multiple choices. `recommended` is a zero-based hint (an
+index into `options`), never permission to auto-select.
 `timeout_ms` is an optional positive deadline; TUI prompts otherwise wait
 until answered, cancelled or disconnected. ACP defaults to five minutes.
 Telegram and Discord prompts have a five-minute maximum; a smaller explicit

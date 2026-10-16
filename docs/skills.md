@@ -12,12 +12,12 @@ File: `apps/lemon_skills/lib/lemon_skills.ex`
 
 ## Skill File Structure
 
-Skills are stored in directories:
+Skills live one per directory at `<skills-root>/<skill-key>/SKILL.md`:
 
-- **Project skills**: `.lemon/skill/<skill-name>/SKILL.md`
-- **Global skills**: `~/.lemon/agent/skill/<skill-name>/SKILL.md`
+- **Project skills**: `.lemon/skill/<skill-name>/SKILL.md`, plus `.agents/skills`, `.omp/skills`, `.claude/skills`, `.codex/skills` and `.github/skills` between the working directory and the repository root
+- **Global skills**: `~/.lemon/agent/skill/<skill-name>/SKILL.md`, plus `~/.agents/skills`, `~/.omp/agent/skills`, `~/.claude/skills` and `~/.codex/skills`
 
-Project skills override global skills with the same name.
+Project skills override global skills with the same key. The exact precedence, the `LEMON_AGENT_DIR` / `LEMON_*_SKILLS_DIR` overrides and isolation behavior are described in the [skills user guide](user-guide/skills.md#discovery-and-precedence). Per-scope settings live in `skills.json` (global `~/.lemon/agent/skills.json`, project `<cwd>/.lemon/skills.json`): its `disabled` list is managed by `LemonSkills.enable/2` and `LemonSkills.disable/2`.
 
 ### SKILL.md Format
 
@@ -61,13 +61,13 @@ await Bun.write("./output.txt", "Hello, World!");
 
 | Field | Required | Description |
 |-------|----------|-------------|
-| `name` | No | Skill identifier (defaults to directory name) |
-| `description` | Yes | Used for relevance matching |
+| `name` | No | Display name (defaults to the directory name, which is the lookup key) |
+| `description` | No (recommended) | One-line summary used for the prompt listing and relevance matching; a missing description is accepted |
 | `tags` | No | Up to 32 bounded safe strings |
 | `keywords` | No | Up to 32 bounded relevance terms |
 | `hide` | No | `true` omits the skill from the model-visible prompt listing, per-turn relevant-skill hints and missing-skill suggestions; it stays loadable by name (`read_skill`, `skill://`, `/skill:<name>`) and in `list`/CLI. Alias: `disable-model-invocation` (Agent Skills standard). Only boolean `true` hides. |
 
-Present names and descriptions must be non-empty, single-line, valid UTF-8 without control or bidirectional formatting characters. Names are limited to 128 bytes, descriptions to 1,024 bytes, and each tag/keyword or requirement item to 128 bytes; list fields accept at most 32 string entries. Prompt rendering applies an additional defensive flatten/clamp/XML-escape pass. All catalog metadata is treated as untrusted discovery data; source/trust provenance is disclosed when a skill is loaded.
+Present names and descriptions must be non-empty, single-line, valid UTF-8 without control or bidirectional formatting characters. Names are limited to 128 bytes, descriptions to 1,024 characters (4,096 bytes), and each tag/keyword or requirement item to 128 bytes; list fields accept at most 32 string entries. Frontmatter may be YAML (`---`) or TOML (`+++`). The manifest also accepts platform, requirement, reference and verification fields — see the [manifest reference](reference/skill-manifest-v2.md). Prompt rendering applies an additional defensive flatten/clamp/XML-escape pass. All catalog metadata is treated as untrusted discovery data; source/trust provenance is disclosed when a skill is loaded.
 
 ## API Reference
 
@@ -92,6 +92,8 @@ Get a specific skill by key.
 ```elixir
 {:ok, skill} = LemonSkills.get("bun-file-io")
 :error = LemonSkills.get("nonexistent")
+```
+
 **Options:**
 - `:cwd` - Project working directory (optional)
 
@@ -132,7 +134,15 @@ Install a skill from a git repository or local path.
 **Options:**
 - `:cwd` - Project working directory for local installation
 - `:global` - Install globally (default: true)
-- `:approve` - Pre-approve installation (default: false)
+- `:approve` - Pre-approve installation (default: false); never overrides an audit block
+- `:force` - Overwrite an existing installation (default: false)
+
+Sources accepted by `install/2`: local paths (`/abs`, `./rel`, `../rel`), git URLs
+(`https://`, `http://`, `git@`, `git+<url>`), `gh:<owner>/<repo>`,
+`hermes:<collection>/<category>/<skill>`, and registry refs
+(`<namespace>/<category>/<name>`).
+
+Install, update and uninstall request approval through the execution-approval flow unless the skill is built-in or `:approve` is set. All non-built-in skills are audited before they are activated; an audit `:warn` needs an extra approval and a `:block` is refused unless a separate exact-bundle security override is approved. Provenance is recorded in `skills.lock.json`.
 
 ### Official Hermes catalog
 
@@ -145,7 +155,7 @@ IDs route through the ordinary installer, static audit, and approval gate.
 {:ok, detailed} = LemonSkills.Sources.Hermes.catalog(query: "paper", details: true)
 ```
 
-Use `mix lemon.skill hermes [query]` in a source checkout, or `/skills` in the
+Use `lemon skill hermes [query]` (options `--category=`, `--collection=`, `--details`) or `/skills` in the
 terminal client for the category browser and multi-select importer.
 
 ### update/2
@@ -173,6 +183,8 @@ Enable or disable a skill.
 :ok = LemonSkills.disable("my-skill")
 ```
 
+**Options:** `:global` (default `true`) selects the global or project `skills.json`; `:cwd` is the project directory (needed for `global: false`). Disabled skills are listed as `disabled` and omitted from the prompt.
+
 ### refresh/1
 
 Force a reload of all skills from disk.
@@ -194,6 +206,29 @@ previews by default, and mutation requires the exact fresh digest.
 See the [skills user guide](user-guide/skills.md#portable-skill-and-automation-bundles)
 for the version 1 manifest, exact confirmation flow, policy boundary, and
 disabled example.
+
+## CLI
+
+`lemon skill <command>` manages skills from the command line. It works in
+installed releases and source checkouts (`./bin/lemon skill`); `mix lemon.skill`
+is a thin wrapper. Commands: `list`, `browse`, `search`, `discover`, `hermes`,
+`install`, `update`, `remove`, `inspect` (alias `info`), `check`, `draft`
+(`list|generate|review|publish|delete`) and `curator`
+(`status|run|pause|resume`). `mix lemon.skill.lint [PATH ...] [--strict] [--json]`
+lints bundles in a source checkout. See the
+[skills user guide](user-guide/skills.md#managing-skills-with-lemon-skill) for
+usage, accepted install sources and trust/approval behavior.
+
+## Agent Tools
+
+| Tool | Purpose |
+|------|---------|
+| `read_skill` | Load a skill by `key`. `view`: `full` (default), `summary`, `section` (with `section`), or `file` (with `path`); optional `include_status`, `include_manifest`, `max_chars`. |
+| `skill_manage` | Procedural-memory writes. `action`: `create`, `edit`, `patch`, `delete`, `write_file`, `remove_file`, `pin`, `unpin`, `archive`, `restore`, `report`; `scope` is `project` (default) or `global`. Supporting files go under `references/`, `templates/`, `scripts/` or `assets/`. Every write is audited; `[skills] write_approval = true` in `config.toml` gates mutating actions behind human approval. |
+| `read` | Also resolves `skill://<key>` (the `SKILL.md`) and `skill://<key>/<relative-path>` (a supporting file), read-only. |
+
+The default `learning_nudge` reminders and optional background review are
+documented in the [skills user guide](user-guide/skills.md#learning-reminders).
 
 ## Creating Skills
 
@@ -395,7 +430,7 @@ The sidecar tracks load/write counters, last-use fields, agent-authored creation
 - stale skills with recent activity are reactivated
 - pinned and non-agent-authored skills are skipped
 - no curator path deletes skills
-`skill_manage`, `remember`, and `recall`.
+
 Each curator run writes a machine report and a human report:
 
 | Scope | Reports |
@@ -405,15 +440,15 @@ Each curator run writes a machine report and a human report:
 
 `run.json` records the run timestamp, duration, transition counts, state transitions, candidates, whether an agent review is required, and the submitted review run id when the background curator launches a follow-up review. `REPORT.md` mirrors the same information in a scan-friendly form. The latest `run.json` path is also stored in `skills.curator.json` as `last_report_path`.
 
-The CLI wrapper is `mix lemon.skill curator status|run|pause|resume`. `run --prompt` also prints the curator review prompt an agent can use to consolidate narrow learned skills into broader umbrella skills via `read_skill` and `skill_manage`. The prompt prefers patching an existing class-level skill first, then updating supporting files such as `references/`, `templates/`, or `scripts/`, then creating a new class-level umbrella only when no existing skill owns the reusable lesson.
+The CLI wrapper is `lemon skill curator status|run|pause|resume` (also `--local`/`--cwd=PATH`, `--stale-after-days=N`, `--archive-after-days=N`). `run --prompt` also prints the curator review prompt an agent can use to consolidate narrow learned skills into broader umbrella skills via `read_skill` and `skill_manage`. The prompt prefers patching an existing class-level skill first, then updating supporting files such as `references/`, `templates/`, or `scripts/`, then creating a new class-level umbrella only when no existing skill owns the reusable lesson.
 
-`LemonAutomation.SkillCuratorManager` provides the background path. It checks for router idleness, respects the persisted curator interval/pause gates, runs the same conservative transitions, and submits the curator review prompt to `LemonRouter` only when agent-authored candidates need an agent consolidation pass. The default target is `agent:default:main`; override it with `config :lemon_automation, :skill_curator, agent_id: "...", session_key: "..."`. Background curator reviews default to a learning-only tool policy with `read_skill`, `skill_manage`, `remember`, and `recall`.
+`LemonAutomation.SkillCuratorManager` provides the background path (on by default). It checks for router idleness, respects the persisted curator interval/pause gates, runs the same conservative transitions, and submits the curator review prompt to `LemonRouter` only when agent-authored candidates need an agent consolidation pass. Configure it with `config :lemon_automation, :skill_curator, ...`: `enabled` (default `true`), `scope`, `cwd`, `interval_hours` (default 168), `min_idle_hours` (default 2), `stale_after_days` (30), `archive_after_days` (90), `tool_policy`, `agent_id` (default `"default"`) and `session_key` (default `agent:<agent_id>:main`, i.e. `agent:default:main`). Background curator reviews default to a learning-only tool policy with `read_skill`, `skill_manage`, `remember`, and `recall`.
 
 ## Project vs Global Skills
 
 | Aspect | Project Skills | Global Skills |
 |--------|----------------|---------------|
-| Location | `.lemon/skill/` | `~/.lemon/agent/skill/` |
+| Location | `.lemon/skill/` (plus `.agents/skills` and other project roots) | `~/.lemon/agent/skill/` (plus `~/.agents/skills` and other user roots) |
 | Scope | Single project | All projects |
 | Override | Overrides global | Default |
 | Use case | Project-specific patterns | General knowledge |
@@ -785,7 +820,6 @@ MCP tools are discovered through `LemonSkills.McpSource`, cached for performance
 - **Recovery**: the host reconnects lost clients after 500/1000/2000/4000 ms and refreshes inventory on success. Exhausting the ladder or more than five client crashes within 30 seconds marks only that server unavailable with a fixed, redacted status reason. Discovery and periodic refresh cannot bypass the breaker; explicit `LemonSkills.McpSource.refresh/0` (or `refresh(source_pid)`) resets it. Failed startup and retired clients are closed.
 - **Bounded calls**: tool execution does not occupy the discovery/status GenServer. Timeouts and disconnects return errors without replaying an in-flight invocation; a timed-out remote mutation may already have taken effect.
 - **External data**: MCP results remain untrusted. Stdio protocol buffering is limited to 8 MiB.
-- **Optional manual smoke**: `MIX_ENV=test mix run scripts/live_mcp_stdio_smoke.exs` exercises the stdio server path against configured services; Lemon does not consume the result file.
 
 ### Disabling MCP
 

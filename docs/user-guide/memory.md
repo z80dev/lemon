@@ -29,6 +29,7 @@ Session keys identify only visible sessions and do not grant access to another
 owner's data.
 Each returned prompt/answer is byte-bounded; recalled content remains untrusted
 data, never instructions.
+
 ---
 
 ## Remember compact facts
@@ -141,9 +142,9 @@ Conversation search uses OR/BM25 lexical matching: results may match any query t
 ranked for relevance. Paraphrases that share a keyword can therefore match even when they do not
 share the full query wording. This is lexical search, not semantic search.
 
-The old `session_search` scroll/browse interface for inspecting a session's message history has
-been removed and has no replacement. The `[features] session_search` setting remains the durable
-memory ingest/search kill switch; setting it to `"off"` disables those features.
+There is no separate `session_search` tool. The `[features] session_search` setting is the durable
+memory ingest/search kill switch, and also gates `recall` browse/scroll; setting it to `"off"`
+disables those features.
 
 ### Automatic recall
 
@@ -184,9 +185,9 @@ role, with that provider's credentials; it does not switch the active session mo
 
 | Need | Use | Why |
 |---|---|---|
-| Save a stable profile fact or compact context | `remember` | Updates bounded assistant-home `USER.md` or `MEMORY.md` |
+| Save a stable profile fact or compact context | `remember` | Updates bounded `user`/`memory` preferences (scoped facts, or assistant-home `USER.md`/`MEMORY.md` in legacy sessions) |
 | Save repository build commands, conventions or gotchas | `remember` target `project` | Isolated compact facts, automatically available in later sessions in the same repository/profile |
-| Find relevant previous conversations and longer workspace notes | `recall` | Searches past conversation summaries and `memory/` Markdown notes |
+| Find relevant previous conversations, saved facts and (legacy sessions) longer workspace notes | `recall` | Searches past conversation summaries, authorized preference/project facts and, in legacy unscoped sessions, `memory/` Markdown notes |
 | Capture a repeatable procedure, command sequence, integration, or checklist | `skill_manage` | Creates or updates an audited reusable skill |
 | Track the current run's work queue | `todo` | Keeps progress in this session's history only; it follows rewind, branch switches, resume and forks, and never leaves the session |
 | Inspect user-editable notes directly | `read` / `grep` | Opens files when direct inspection or editing is needed |

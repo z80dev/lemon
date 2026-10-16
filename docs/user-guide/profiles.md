@@ -26,6 +26,7 @@ lemon profile create research \
   --description "Evidence-first research specialist" \
   --model openai:gpt-5
 
+lemon profile list
 lemon profile show research
 lemon profile chat research "Map the unresolved questions"
 lemon profile roster
@@ -49,19 +50,19 @@ The TUI also supports `clone`, `rename`, credential-safe `export`, and guarded
 same profile ID again through `--confirm`; the TUI never accepts a profile home
 or workspace path. Export's destination is the sole lifecycle output path.
 
-The token-required browser management shell exposes the same core lifecycle at
-`/manage/profiles`. It provides a bounded filterable roster, local/named-node
-availability, profile detail, create, clone, rename, recoverable delete, and a
-direct link to the stable canonical chat. Every write is preview-first. Clone,
-rename, and delete previews bind an opaque hash of the current profile and fail
-closed if it changes; delete also requires the exact profile ID. The page never
-loads derived paths or system prompts into LiveView state. Credential-safe
-export remains available through the CLI, TUI, and control-plane API.
+The token-protected browser UI exposes the same core lifecycle at `/profiles`
+(see [Lemon Web](web.md#sessions-and-profiles)). It provides a bounded
+filterable roster, local/named-node availability, profile detail, create, clone,
+rename, recoverable delete, credential-safe export download, and a direct link
+to the stable canonical chat. Every write is preview-first. Clone, rename, and
+delete previews bind an opaque hash of the current profile and fail closed if it
+changes; delete also requires the exact profile ID. The page never loads derived
+paths or system prompts into LiveView state.
 
-Both launchers start the runtime through the launcher when it is not already
-healthy. The one-shot `profile chat` process then submits to that runtime
-rather than starting a second router whose work would disappear when the CLI
-exits.
+`lemon profile chat` starts the local runtime through the launcher when it is
+not already healthy, then submits to that runtime (in-process, or through
+`profile.chat` on the running control plane) rather than starting a second
+router whose work would disappear when the CLI exits.
 
 Use `--node <name>` at creation time to route canonical chat through an
 authenticated named execution node. The roster reports `local`, `online`, or
@@ -80,7 +81,10 @@ loads metadata there even when the worker's project cwd differs; `read_skill`
 loads the full selected body lazily through the existing skill registry.
 Skill Markdown is not concatenated into `systemPrompt` or truncated to fit it.
 
-All lifecycle reads support `--json`. Chat also accepts `--model` and
+All CLI subcommands support `--json`, and `--config-path` / `--home-state-dir`
+select an alternate config file or Lemon home. `create` and `clone` also accept
+`--description`, `--avatar`, `--system-prompt` and `--node`; `export` accepts
+`--force` to replace an existing file. Chat accepts `--model` and
 `--queue-mode collect|followup|steer|interrupt` overrides. Its working boundary
 remains the derived profile workspace; generic chat/delegation APIs own any
 explicit project-directory selection. Omitting overrides uses the profile and
@@ -94,7 +98,8 @@ lemon profile rename research "Research Prime"
 lemon profile delete research-copy --confirm research-copy
 ```
 
-Clone copies regular profile-home files but rejects symlinks and special files.
+Clone copies regular files from the source home (including its workspace,
+memory and skills) but not `sessions/`, and rejects symlinks and special files.
 Rename updates only presentation metadata. Delete refuses the reserved
 `default` profile, requires an exact matching confirmation value, and moves the
 managed home to `~/.lemon/trash/profiles/` before removing its TOML table. A
@@ -115,14 +120,15 @@ lemon profile export research ./research-profile.json
 
 The default export is deliberately selected-file, not a backup of the entire
 home. It includes portable profile metadata, profile-local config, known
-bootstrap markdown, and text files under the profile skill tree. Before
-encoding it redacts sensitive assignments and recognizable inline credential
-patterns.
+workspace markdown (`AGENTS.md`, `IDENTITY.md`, `README.md`, `SOUL.md`,
+`USER.md`), and text files under the profile skill tree, bounded to 256 files,
+1 MiB per file and 8 MiB in total. Before encoding it redacts sensitive
+assignments and recognizable inline credential patterns.
 
 It does not include:
 
 - sessions or message history;
-- memory content or artifacts;
+- `workspace/memory/` notes or artifacts;
 - binary files or special files;
 - secret-like paths such as `.env`, token, password, credential, or private-key
   files.
@@ -620,6 +626,5 @@ the machine operator's explicit `--allowed-root` admission.
 This vertical covers durable profiles, isolated assistant workspaces, lifecycle,
 canonical and placement-aware extra sessions, profile-bound cron agent runs,
 per-profile MCP tools, node routing, and a roster. Group-room orchestration,
-import/restore, free-form prompt editing in browser/TUI surfaces, browser export,
-and merged multi-controller rosters remain separate product work. The TUI and
-Web lifecycle journeys remain unchanged.
+import/restore, free-form system-prompt editing in the browser UI, and merged
+multi-controller rosters remain separate product work.

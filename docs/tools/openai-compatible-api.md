@@ -83,6 +83,21 @@ the run topic. Chat Completions streams `chat.completion.chunk` objects for
 }
 ```
 
+Other request fields. `agent_id`, `session_key`, `wait`, `timeout_ms` /
+`timeoutMs` and `stream_timeout_ms` / `streamTimeoutMs` are also read from
+`metadata`; the rest are top-level only:
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `agent_id` | `default` | Agent that handles the run. |
+| `session_key` | `agent:<agent_id>:openai` (or the previous response's session key) | Lemon session to run in. |
+| `cwd`, `tool_policy` | unset | Passed through to the run request. |
+| `queue_mode` | `collect` | `followup`, `steer` or `interrupt` to change how the prompt joins a busy session. |
+| `wait`, `timeout_ms` / `timeoutMs` | `false`, 60000 | Wait synchronously for completion. |
+| `stream_timeout_ms` / `streamTimeoutMs` | 60000 | Bound for `stream: true` responses. |
+
+More than 10 image inputs returns `400`; image inputs over 20 MB combined return `413`.
+
 ## Response Boundary
 
 Both generation endpoints return Lemon metadata:
@@ -145,11 +160,8 @@ only and rejects non-allowlisted hosts before starting a Lemon run.
 By default the preview `/v1` surface is unauthenticated for local development.
 Set `:openai_compat_api_token` in `:lemon_control_plane` application config or
 `LEMON_OPENAI_COMPAT_API_TOKEN` / `LEMON_OPENAI_COMPAT_TOKEN` in the environment
-to require either `Authorization: Bearer <token>` or `x-api-key: <token>`.
-
-This keeps the compatibility slice honest while the stable adapter adds broader
-Responses API fields, deployed editor UI coverage, and more provider-specific
-image transport proof beyond the passing OpenRouter vision proof.
+to require either `Authorization: Bearer <token>` or `x-api-key: <token>`. A
+missing token returns HTTP `401`; a wrong token returns `403`.
 
 ## Proof Lane
 
@@ -157,20 +169,13 @@ image transport proof beyond the passing OpenRouter vision proof.
 mix test apps/lemon_control_plane/test/lemon_control_plane/http/router_test.exs --seed 1
 ```
 
-The latest focused lane passed locally on 2026-05-17 with `25 tests, 0
-failures`. It covers health, capabilities, model list shape, single-model
-retrieve shape, chat-completions run submission, responses run submission,
-synchronous wait completion,
-Responses output text mapping, wait timeout handling, session-key metadata,
-`previous_response_id` continuation metadata, stored response retrieval,
-unknown stored response errors, streaming flag metadata, redacted run status,
-unknown-run errors, run cancellation dispatch, Chat Completions SSE over run bus
-events, Responses SSE over run bus events, redacted tool-progress SSE events
-without raw tool detail, optional bearer auth, optional `x-api-key` auth,
-redacted image-input metadata normalization for Chat Completions and Responses,
-data URL image pass-through into runtime-only Lemon image blocks, opt-in
-allowlisted HTTPS image URL fetch into runtime-only image blocks, disallowed
-remote image host rejection before submission, `supportsVision` model metadata,
-known non-vision model rejection before runtime-image submission, prompt
-normalization, and validation errors without starting a real model run.
+The router test covers health, capabilities, model list/retrieve shape,
+chat-completions and responses run submission, synchronous wait and timeout
+handling, session-key metadata, `previous_response_id` continuation, stored
+response retrieval, redacted run status and cancellation, Chat Completions and
+Responses SSE (including redacted tool progress), bearer and `x-api-key` auth,
+image-input normalization, data URL pass-through, allowlisted HTTPS image
+fetch, disallowed-host rejection, `supportsVision` model metadata, known
+non-vision model rejection, and validation errors, all without starting a real
+model run.
 

@@ -42,7 +42,7 @@ size = LemonAgent.Context.estimate_size(messages)
 
 The function handles:
 - Plain text content
-- Content blocks (text, thinking, tool_call, image)
+- Content blocks: text, thinking, tool calls (JSON-encoded arguments) and images (a flat 100 characters each); other block types count as 0
 - System prompt
 
 ### estimate_tokens/1
@@ -124,6 +124,7 @@ or dropped as one unit. This prevents truncation from manufacturing orphaned
 tool calls/results that provider transcript validation would reject. Bookends
 treats `max_messages` and `max_chars` as hard limits; sliding-window mode may
 still exceed a limit only for the documented `keep_first_user: true` reservation.
+An unrecognized `:strategy` falls back to `:sliding_window`.
 
 ### make_transform/1
 
@@ -166,7 +167,9 @@ stats = LemonAgent.Context.stats(messages, system_prompt)
 
 ## Telemetry Events
 
-The module emits the following telemetry events:
+The module emits the following telemetry events. `estimate_size/2` runs inside
+`large_context?/3`, `check_size/3`, `stats/2` and the size check of `truncate/2`,
+so those calls emit `:size` events too.
 
 ### [:lemon_agent, :context, :size]
 
@@ -203,7 +206,9 @@ Emitted when `truncate/2` drops messages.
 
 ## Integration with Agent Loop
 
-The agent loop automatically calls `check_size/2` at each iteration. To enable automatic truncation, configure `transform_context`:
+The agent loop (`LemonAgent.Loop.Streaming`) calls `check_size/2` before each
+LLM call. This only logs and emits the `:warning` telemetry event; it never
+truncates. To truncate automatically, configure `transform_context`:
 
 ```elixir
 # In your session or agent configuration
@@ -215,6 +220,29 @@ config = %AgentLoopConfig{
   )
 }
 ```
+
+`transform_context` receives `(messages, signal)` and returns `{:ok, messages}`,
+a bare list, or `{:error, reason}`; it runs before `convert_to_llm`.
+
+### Coding agent sessions
+
+`CodingAgent.Session` does not use `make_transform/1`. It builds its own
+`transform_context` pipeline, applied only to what is sent to the model (stored
+history is not mutated):
+
+1. Context-checkpoint projection.
+2. `CodingAgent.ContextGuardrails`: caps tool-result bytes (default 60,000), keeps
+   only the newest 3 tool-result images, clamps oversized tool-call arguments and
+   drops thinking blocks, optionally spilling large blobs to disk.
+3. Untrusted tool-output wrapping.
+4. Secret obfuscation.
+5. Your own `:transform_context` option (`(messages, signal) -> messages`), if any.
+
+Pass `:context_guardrails` (a map or keyword list, e.g. `max_tool_result_bytes`,
+`max_tool_result_images`, `spill_dir`) to `CodingAgent.Session` to override the
+guardrail defaults. Window-size management for these sessions is handled by
+compaction (see `[runtime.compaction]` in [Configuration](config.md)), not by
+`LemonAgent.Context.truncate/2`.
 
 ## Examples
 

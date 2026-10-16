@@ -26,11 +26,13 @@ Common options:
 | `--target PATH` | Lemon home. Defaults to `~/.lemon`. |
 | `--workspace-dir PATH` | Lemon assistant workspace. Defaults to `<target>/agent/workspace`. |
 | `--preset user-data` | Import user data. This is the default. |
-| `--preset full --migrate-secrets` | Include the allowlisted secret import path. |
+| `--preset full --migrate-secrets` | Include the allowlisted secret import path. Both flags are required; `--migrate-secrets` alone under the default preset imports no secrets. |
 | `--overwrite` | Replace conflicting target files. Existing files are copied into the migration backup area first. |
 | `--skill-conflict skip` | Treat an existing skill folder as a conflict. This is the default. |
 | `--skill-conflict rename` | Import conflicting skills as `<name>-hermes-import`. |
 | `--no-backup` | Skip the pre-migration zip backup. |
+| `--dry-run` | Print the preview and exit without writing. |
+| `--yes` | Apply without the confirmation prompt (conflicts still require `--overwrite`). |
 
 Use `lemon migrate hermes audit --json` when you need a machine-readable
 compatibility report for automation or support review. The audit is read-only
@@ -51,9 +53,9 @@ before writing. If conflicts are present, it refuses to apply unless
 | `skills/*/SKILL.md` | `<target>/agent/skill/<skill-name>/SKILL.md` |
 | `config.yaml` model/provider base URLs | Compatible `[defaults]` and `[providers.*]` entries in `<target>/config.toml` |
 | `$HERMES_HOME/honcho.json` or `~/.honcho/config.json` | Supported settings in `[honcho]`; API key in Lemon encrypted secrets with `--preset full --migrate-secrets` |
-| `.env` allowlisted secrets | Lemon encrypted secrets, only with `--migrate-secrets` |
+| `.env` allowlisted secrets | Lemon encrypted secrets, only with `--preset full --migrate-secrets` |
 | `state.db` sessions/messages | Searchable Lemon memory documents in `<target>/store/memory.sqlite3` |
-| Known unmapped files | Archived under `<target>/migration/hermes/<timestamp>/archive/` for manual review |
+| Known unmapped files (`config.yaml`, `auth.json`, `cron/`) | Archived under `<target>/migration/hermes/<timestamp>/archive/` for manual review |
 
 Imported Hermes sessions become durable recall records. They are searchable via
 Lemon memory tools, but they are not exact replay/resume records for the old
@@ -136,8 +138,11 @@ Before applying, the command also creates a zip backup at:
 <target>/backups/pre-hermes-migration-<timestamp>.zip
 ```
 
-Secret values are never written to reports. The secret importer reads known
-Hermes environment variable names and the selected Honcho `apiKey`, and writes
+Secret values are never written to reports. The secret importer reads an
+allowlist of Hermes `.env` names (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`,
+`OPENAI_CODEX_API_KEY`, `OPENCODE_API_KEY`, `ZAI_API_KEY`, `MINIMAX_API_KEY`,
+`TELEGRAM_BOT_TOKEN`, `DISCORD_BOT_TOKEN`, `ELEVENLABS_API_KEY`,
+`DEEPGRAM_API_KEY`) and the selected Honcho `apiKey`, and writes
 them through `LemonCore.Secrets`. If the local Lemon secrets master key is not
 available, those items are reported as errors, no plaintext fallback or new
 credential reference is written, and the rest of the migration continues.
