@@ -701,7 +701,8 @@ defmodule CodingAgent.Session.Presentation do
     |> maybe_put_meta(:rationale, approval_pending_value(pending, :rationale))
   end
 
-  defp approval_decision_ok?(decision), do: decision not in [:deny, :timeout, "deny", "timeout"]
+  defp approval_decision_ok?(decision),
+    do: decision not in [:deny, :timeout, :expired, "deny", "timeout", "expired"]
 
   defp approval_decision_message(:approve_once), do: "approved once"
   defp approval_decision_message(:approve_session), do: "approved for session"
@@ -709,12 +710,14 @@ defmodule CodingAgent.Session.Presentation do
   defp approval_decision_message(:approve_global), do: "approved globally"
   defp approval_decision_message(:deny), do: "denied"
   defp approval_decision_message(:timeout), do: "timed out"
+  defp approval_decision_message(:expired), do: "expired because its run ended"
   defp approval_decision_message("approve_once"), do: "approved once"
   defp approval_decision_message("approve_session"), do: "approved for session"
   defp approval_decision_message("approve_agent"), do: "approved for agent"
   defp approval_decision_message("approve_global"), do: "approved globally"
   defp approval_decision_message("deny"), do: "denied"
   defp approval_decision_message("timeout"), do: "timed out"
+  defp approval_decision_message("expired"), do: "expired because its run ended"
   defp approval_decision_message(other), do: to_string(other)
 
   def truncate_result(result) when is_binary(result) do

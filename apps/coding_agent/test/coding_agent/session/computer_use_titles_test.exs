@@ -26,4 +26,18 @@ defmodule CodingAgent.Session.ComputerUseTitlesTest do
                 %{tool: "computer_use", action: %{"origin" => "https://example.com"}}}
              )
   end
+
+  test "an approval expired by its ended run completes as not ok and says why" do
+    pending = %{tool: "computer_use", action: %{"app" => "com.apple.calculator"}}
+
+    for decision <- [:expired, "expired"] do
+      assert %{
+               kind: :approval,
+               phase: :completed,
+               ok: false,
+               message: "expired because its run ended",
+               detail: %{decision: ^decision}
+             } = Presentation.approval_action({:approval_resolved, "a3", decision, pending})
+    end
+  end
 end

@@ -12,6 +12,7 @@
  * approve_global / deny.
  */
 
+import { isExpiredApprovalError } from "../protocol/errors.ts";
 import { METHOD } from "../protocol/methods.ts";
 import { type ApprovalRequestedEvent, PROPOSE_PLAN_TOOL } from "../protocol/types.ts";
 import { asArray, humanTime, pickNumber, pickString } from "./format.ts";
@@ -137,7 +138,15 @@ async function resolve(
 		await ctx.ui.resolveApproval(row.approvalId, decision);
 		return;
 	}
-	await ctx.methods.approvalResolve({ approvalId: row.approvalId, decision });
+	try {
+		await ctx.methods.approvalResolve({ approvalId: row.approvalId, decision });
+	} catch (error) {
+		if (!isExpiredApprovalError(error)) throw error;
+		ctx.store.resolveApproval(row.approvalId, "expired");
+		ctx.ui.refreshStatus();
+		ctx.ui.notice(`approval for ${row.tool ?? "tool"} expired — the run ended`, "warning");
+		return;
+	}
 	// The `exec.approval.resolved` event clears the store; this keeps the local
 	// view honest when the daemon resolves without echoing (older builds).
 	ctx.store.resolveApproval(row.approvalId, decision);

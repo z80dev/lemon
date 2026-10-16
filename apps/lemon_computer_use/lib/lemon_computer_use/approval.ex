@@ -32,6 +32,13 @@ defmodule LemonComputerUse.Approval do
   LCU's own always-allowed list (`lcu apps`) is the operator's separate, Touch
   ID–gated store and is never written from here.
 
+  These requests have no time limit (`expires_in_ms: :infinity`): an operator may
+  take as long as they need while the run is alive. They end with their owner
+  instead. When the run or session that asked ends, `LemonCore.ExecApprovals`
+  expires the pending approval at once (no grace window), the prompt is edited to
+  say so, `answer/3` returns `decline`, and answering it later is refused as
+  expired — an orphaned request can never grant control of an app.
+
   Anything other than a well-formed native-app or website request is cancelled
   (fail closed). Lemon's own apps and Lemon's own local web and control-plane
   origins are always declined: operating the surface that shows Lemon's
@@ -189,6 +196,8 @@ defmodule LemonComputerUse.Approval do
       tool: @tool,
       action: action,
       rationale: bound(message),
+      # No clock deadline: the owning run or session ending expires the request
+      # (LemonCore.ExecApprovals.expire_owner/1), never an elapsed timer.
       expires_in_ms: :infinity
     })
   catch

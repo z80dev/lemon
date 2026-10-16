@@ -20,6 +20,7 @@
  */
 
 import type { Container, TUI } from "@oh-my-pi/pi-tui/tui";
+import { isExpiredApprovalError } from "../../protocol/errors.ts";
 import type { ControlPlaneMethods } from "../../protocol/methods.ts";
 import { type ApprovalRequestedEvent, PROPOSE_PLAN_TOOL } from "../../protocol/types.ts";
 import type { AppStore, PendingApproval } from "../../store/app-store.ts";
@@ -129,6 +130,15 @@ export class ApprovalController {
 			await methods.approvalResolve({ approvalId, decision });
 		} catch (error) {
 			this.#resolving.delete(approvalId);
+			if (isExpiredApprovalError(error)) {
+				// The run ended and the daemon expired the request: it can never be
+				// answered, so forget it instead of restoring a dead panel.
+				events.resolveApproval(approvalId, "expired");
+				notice(`approval for ${pending.event.tool ?? "tool"} expired — the run ended`, "warning");
+				refreshStatus();
+				this.present();
+				return;
+			}
 			notice(`approval failed: ${describeError(error)}`, "error");
 			this.present();
 			return;

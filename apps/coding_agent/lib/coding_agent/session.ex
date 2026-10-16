@@ -859,6 +859,8 @@ defmodule CodingAgent.Session do
 
     maybe_subscribe_exec_approvals(state)
 
+    :ok = LemonCore.ExecApprovalExpiry.watch_session(state.session_manager.header.id, self())
+
     {:ok, state}
   end
 
@@ -1698,6 +1700,11 @@ defmodule CodingAgent.Session do
   def terminate(reason, state) do
     _ = WasmBridge.cancel_host_calls(state, :session_unavailable)
     _ = CompactionManager.cancel_compaction_tasks(state, :session_terminated)
+
+    # Approvals this session still has pending can never be used once it is
+    # gone: expire them (denied) now instead of leaving them answerable.
+    if state.session_manager,
+      do: LemonCore.ExecApprovalExpiry.session_ended(state.session_manager.header.id)
 
     SessionHooks.session_shutdown(state.hooks, %{
       session_id: state.session_manager && state.session_manager.header.id,

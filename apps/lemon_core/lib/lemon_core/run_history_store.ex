@@ -150,7 +150,8 @@ defmodule LemonCore.RunHistoryStore do
         started_at: started_at,
         record: record,
         summary: summary
-      }) do
+      })
+      when is_binary(session_key) and session_key != "" do
     put(server, session_key, started_at, run_id, %{
       events: Map.get(record, :events, []),
       summary: summary,
@@ -159,6 +160,8 @@ defmodule LemonCore.RunHistoryStore do
       started_at: started_at
     })
   end
+
+  def handle_finalize_run(_server, _event), do: :ok
 
   @doc """
   Fetch the most recent `limit` history entries for a session.

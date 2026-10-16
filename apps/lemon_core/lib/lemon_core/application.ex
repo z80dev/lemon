@@ -12,6 +12,8 @@ defmodule LemonCore.Application do
   - LemonCore.ConfigCache - Configuration caching service
   - LemonCore.Store - Key-value storage backend
   - `LemonCore.UsageLedger` - Serialized per-run usage/cost aggregation (finalize-run hook)
+  - `LemonCore.ExecApprovalExpiry` - Expires pending exec approvals whose run or
+    session ended (finalize-run hook)
   - `LemonCore.Secrets.SourceTaskSupervisor` - Bounded external-source tasks
   - `LemonCore.Secrets.SourceCache` - Bounded optional process-local source cache
   - LemonCore.RunHistoryStore - Per-session run history (separate SQLite DB)
@@ -60,6 +62,7 @@ defmodule LemonCore.Application do
     _ = LemonCore.Logging.maybe_add_file_handler()
 
     config_cache_opts = Application.get_env(:lemon_core, LemonCore.ConfigCache, [])
+    _ = LemonCore.ExecApprovalExpiry.runtime_id()
 
     children =
       [
@@ -69,6 +72,7 @@ defmodule LemonCore.Application do
         {LemonCore.ConfigCache, config_cache_opts},
         LemonCore.Store,
         LemonCore.UsageLedger,
+        LemonCore.ExecApprovalExpiry,
         {Task.Supervisor, name: LemonCore.Secrets.SourceTaskSupervisor},
         LemonCore.Secrets.SourceCache
       ] ++

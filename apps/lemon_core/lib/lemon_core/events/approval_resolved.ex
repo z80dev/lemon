@@ -1,7 +1,12 @@
 defmodule LemonCore.Events.ApprovalResolved do
   @moduledoc """
-  A pending approval was decided, denied, timed out, or cancelled by its
-  owner. Published on `exec_approvals`.
+  A pending approval was decided, denied, timed out, cancelled by its owner, or
+  expired because the run or session that owned it ended. Published on
+  `exec_approvals`.
+
+  `:timeout` is a clock deadline; `:expired` is owner end (no grace window).
+  Like `:cancelled`, neither grants anything: the gated call does not run and
+  no policy is installed.
   """
 
   use LemonCore.Events.Payload,
@@ -18,7 +23,8 @@ defmodule LemonCore.Events.ApprovalResolved do
     :approve_global,
     :deny,
     :timeout,
-    :cancelled
+    :cancelled,
+    :expired
   ]
 
   @type decision ::
@@ -29,6 +35,7 @@ defmodule LemonCore.Events.ApprovalResolved do
           | :deny
           | :timeout
           | :cancelled
+          | :expired
   @type t :: %__MODULE__{
           approval_id: String.t(),
           decision: decision(),

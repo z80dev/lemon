@@ -179,7 +179,9 @@ with `/approve [n] [once|session|agent|global]` or `/deny [n]`; `/approvals`
 refreshes the current pending approval snapshot through `exec.approvals.get`.
 Here `n` is the 1-based list index. Approval timeouts also arrive as
 `exec.approval.resolved` notifications with `decision: "timeout"` so terminal
-operators see when a pending request expired.
+operators see when a pending request expired. An approval whose run or session
+ended is expired at once with `decision: "expired"`; the TUI shows
+`approval expired … — the run ended`, and answering it later is refused as expired.
 
 `lemon channels` inspects redacted Telegram and Discord configuration: enabled
 state, credential configuration, binding counts, allowlist counts, and

@@ -4,6 +4,8 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ApprovalRequest do
   alias LemonChannels.Adapters.Telegram.Transport.UpdateProcessor
   alias LemonChannels.RemoteApproval
 
+  @cleared %{reply_markup: %{"inline_keyboard" => []}}
+
   def send(state, payload, opts \\ []) do
     with {:ok, pending, target} <-
            RemoteApproval.request(
@@ -25,10 +27,12 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ApprovalRequest do
         ]
       }
 
-      RemoteApproval.enqueue(
+      RemoteApproval.prompt(
         target,
+        pending.id,
         "Approval requested: #{pending.tool}\n\nAction: #{RemoteApproval.action_text(pending.action)}\n\nChoose:",
         %{reply_markup: markup},
+        @cleared,
         Keyword.put(
           opts,
           :idempotency_key,
@@ -52,22 +56,25 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ApprovalRequest do
 
     case result do
       {:ok, target, decision} ->
-        _ =
-          RemoteApproval.edit(
-            target,
-            cb["message"]["message_id"],
-            decision,
-            %{reply_markup: %{"inline_keyboard" => []}},
-            opts
-          )
-
+        _ = edit_prompt(target, cb, decision, opts)
         state.api_mod.answer_callback_query(state.token, cb["id"], %{"text" => "Recorded"})
+
+      {:error, {:run_ended, target}} ->
+        _ = edit_prompt(target, cb, :expired, opts)
+
+        state.api_mod.answer_callback_query(state.token, cb["id"], %{
+          "text" => "Approval expired: the run ended; nothing was approved"
+        })
 
       _ ->
         state.api_mod.answer_callback_query(state.token, cb["id"], %{
           "text" => "Approval rejected or unavailable; request unchanged"
         })
     end
+  end
+
+  defp edit_prompt(target, cb, decision, opts) do
+    RemoteApproval.edit(target, cb["message"]["message_id"], decision, @cleared, opts)
   end
 
   def text_authorizer(state, message) do

@@ -138,6 +138,45 @@ defmodule LemonChannels.Adapters.Telegram.ApprovalRequestTest do
     refute_receive {:queued, _}
   end
 
+  test "click on an expired approval edits the prompt, answers expired and approves nothing", c do
+    expire(c.pending)
+    opts = Keyword.put(c.opts, :resolve, fn _, _, _ -> flunk("must not resolve") end)
+
+    assert :ok = ApprovalRequest.handle_callback(c.state, c.cb, opts)
+    assert_receive {:answer, "callback", "Approval expired: the run ended; nothing was approved"}
+
+    assert_receive {:queued,
+                    %OutboundPayload{
+                      kind: :edit,
+                      content: %{message_id: "123", text: "Approval: Expired (the run ended)"},
+                      meta: %{reply_markup: %{"inline_keyboard" => []}}
+                    }}
+
+    refute_receive {:queued, _}
+  end
+
+  test "click on a non-expired terminal approval keeps the generic answer", c do
+    :ok = ExecApprovalStore.delete_pending(c.pending.id)
+
+    :ok =
+      ExecApprovalStore.put_pending(c.pending.id, %{
+        resolution: %{approval_id: c.pending.id, outcome: :denied, decision: :deny}
+      })
+
+    assert :ok = ApprovalRequest.handle_callback(c.state, c.cb, c.opts)
+    assert_receive {:answer, "callback", "Approval rejected or unavailable; request unchanged"}
+    refute_receive {:queued, _}
+  end
+
+  test "click on an expired approval from a foreign chat never edits", c do
+    expire(c.pending)
+    foreign = put_in(c.cb, ["message", "chat", "id"], -1_000_000_000_001)
+
+    assert :ok = ApprovalRequest.handle_callback(c.state, foreign, c.opts)
+    assert_receive {:answer, "callback", "Approval rejected or unavailable; request unchanged"}
+    refute_receive {:queued, _}
+  end
+
   test "cross-chat/thread/account, malformed IDs and unauthorized callbacks preserve request",
        c do
     callbacks = [
@@ -265,5 +304,36 @@ defmodule LemonChannels.Adapters.Telegram.ApprovalRequestTest do
 
     assert {:ok, pending} = ExecApprovalStore.fetch_pending(c.pending.id)
     assert pending == c.pending
+  end
+
+  test "prompt payload carries the tracker delivery ack without changing the result", c do
+    assert :ok =
+             ApprovalRequest.send(
+               c.state,
+               %{approval_id: c.pending.id, pending: c.pending},
+               c.opts
+             )
+
+    assert_receive {:queued, %OutboundPayload{notify_pid: pid, notify_ref: ref, meta: meta}}
+    assert pid == Process.whereis(LemonChannels.ApprovalPromptTracker)
+    assert is_reference(ref)
+    assert meta.notify_tag == LemonChannels.ApprovalPromptTracker.notify_tag()
+  end
+
+  defp expire(pending) do
+    :ok = ExecApprovalStore.delete_pending(pending.id)
+
+    :ok =
+      ExecApprovalStore.put_pending(pending.id, %{
+        resolution: %{
+          approval_id: pending.id,
+          session_key: pending.session_key,
+          run_id: pending.run_id,
+          decision: :expired,
+          outcome: :expired,
+          resolved_at_ms: 1,
+          pending_hash: "x"
+        }
+      })
   end
 end

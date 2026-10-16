@@ -8,6 +8,18 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ### Added
 
+- `LemonCore.ExecApprovals.expire_owner/1` expires every pending approval of an
+  ended run (`{:run, run_id}`) or native session (`{:session, session_id}`) at
+  once, with no grace window: the record becomes a redacted `:expired` receipt,
+  a live waiter is denied, nothing is granted and `resolve/3` returns
+  `{:error, :expired}`. `:approval_resolved` carries the new
+  `decision: :expired` (`Events.ApprovalResolved.decisions/0`), and requests with
+  `expires_in_ms: :infinity` are covered. `LemonCore.ExecApprovalExpiry` is the
+  supervised router for the two end signals: the `LemonCore.Store` finalize-run
+  hook (`{LemonCore.ExecApprovalExpiry, :handle_finalize_run}`, wired in
+  `config/config.exs`) and `session_ended/1`. Expiry races a resolver or timeout
+  through the same atomic exact-record transition: first writer wins.
+
 - `LemonCore.Secrets.get_with_revision/2` and `set_if_revision/4` provide
   incarnation-bound conditional credential saves. A revision is scoped to the
   Store process, owner and name; usage reads preserve it, while replacement
@@ -29,6 +41,13 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
   capacity do not spuriously trigger overflow recovery. Pending admission has
   bounded reservations and a five-second wait; workers monitor their creator
   and consumer and release blocked publishers when the handle closes.
+- Approval expiry reconciles durable pending records on daemon recovery, rejects
+  earlier-runtime owners before installing grants, and restores live session
+  monitors on expiry-worker restart. Forced session termination and finalized
+  runs without a session-history key now expire infinite-deadline requests too.
+  Native owner lookup uses the registered agent runtime provider, keeping core
+  independent of the native session registry.
+
 - `LemonCore.Backup` snapshots SQLite databases (identified by file header)
   with `VACUUM INTO` instead of a raw file copy, so a backup taken while a
   WAL-mode writer is active is internally consistent. Live `-wal`, `-shm`, and

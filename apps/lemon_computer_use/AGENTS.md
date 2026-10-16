@@ -26,6 +26,9 @@ approval routing and lifecycle. See [README](README.md) and the
   malformed requests cancel. Only native-app and exact http(s) website-origin
   requests are answered. Lemon's own apps and local Lemon origins are declined.
   Never write LCU's always-allowed store.
+- Approvals ask with `expires_in_ms: :infinity`; the owner ending is their expiry.
+  `ExecApprovals` expires a pending approval when its run or session ends (no
+  grace window), so add neither a clock deadline nor a separate owner-end cleanup.
 - The bridge gets a minimal environment (no provider credentials or `LEMON_*`)
   and the account's real home. Results are forwarded unchanged and untrusted.
 - A bridge crash fails in-flight calls as possibly applied; never retry them.

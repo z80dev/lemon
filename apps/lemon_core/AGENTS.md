@@ -88,9 +88,15 @@ apps; optional consumers register at runtime. See [README](README.md),
   synchronous application by the target process.
 - Query failures stay unavailable/query-failed, never silently idle/empty. Logs
   and errors exclude callbacks, arguments, stacktraces and raw exception reasons.
-- Exec approval resolve/cancel is atomic, first-writer-wins. A losing transition
-  installs no grants. Timeout broadcasts resolution so clients clear pending UI.
-  Audit payloads contain hashes/IDs/decisions, not commands or prompt text.
+- Exec approval resolve/cancel/expiry is atomic, first-writer-wins. A losing
+  transition installs no grants. Timeout and owner-end expiry broadcast
+  resolution so clients clear pending UI. A pending approval expires at once
+  (`decision: :expired`, no grace window) when its run (Store finalize-run hook)
+  or native session (process monitor, including forced shutdown) ends, through
+  `ExecApprovalExpiry`. Recovery expires earlier-runtime pending records but
+  preserves live owners across expiry-worker restarts. Audit payloads contain
+  hashes/IDs/decisions, not
+  commands or prompt text.
 - Bus envelopes use millisecond wall-clock timestamps. In-memory dedupe TTL uses
   monotonic time; durable idempotency uses wall-clock time. Do not mix clocks.
 

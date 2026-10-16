@@ -307,6 +307,15 @@ authorization preserves account/chat/topic, re-fetches the request, rejects
 expiry and atomically consumes that exact snapshot. A rejected, stale, replayed,
 foreign or unavailable decision never says “Recorded” or removes the controls.
 
+Core expires an approval the moment its run or session ends (no grace window).
+`LemonChannels.ApprovalPromptTracker` remembers each delivered prompt's platform
+message ID from the Outbox delivery ack and, on `:approval_resolved` with
+`decision: :expired`, edits that message to “Approval: Expired (the run ended)”
+with the buttons removed. Tracking is volatile and best-effort; a stale button
+pressed after expiry (for example after a restart) edits the prompt the same way,
+says it expired because its run ended, and never approves. A timeout keeps its
+own “no longer pending” answer.
+
 If buttons are unavailable, Telegram and Discord also accept `/approve [id]`
 and `/deny [id]` (including Discord slash commands). With no ID, a single pending
 request in the current chat/topic is selected. Multiple pending requests are

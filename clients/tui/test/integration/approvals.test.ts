@@ -162,6 +162,49 @@ describe("approval flow", () => {
 		expect(approvalBlock(app)?.status).toBe("pending");
 	});
 
+	test("a resolve refused as expired forgets the request instead of restoring the panel", async () => {
+		const { app, server, terminal } = await boot();
+		server.failWith("exec.approval.resolve", "CONFLICT", "Approval expired", {
+			approvalId: "ap-1",
+			reason: "expired",
+		});
+		requested(server);
+		await waitForPanel(app);
+
+		terminal.sendInput("1");
+		await waitFor(() => transcript(app).includes("approval for bash expired — the run ended"), {
+			what: "the expired notice",
+		});
+		expect(app.store.pendingApprovals).toBe(0);
+		expect(app.approvals.panel.visible).toBe(false);
+		expect(approvalBlock(app)).toMatchObject({ status: "resolved", decision: "expired" });
+		expect(transcript(app)).not.toContain("approval failed");
+	});
+
+	test("the daemon expiring an approval dismisses the panel and never reads as granted", async () => {
+		const { app, server } = await boot();
+		requested(server);
+		await waitForPanel(app);
+
+		server.pushEvent("exec.approval.resolved", {
+			approvalId: "ap-1",
+			decision: "expired",
+			runId: "run-1",
+			sessionKey: SESSION,
+			agentId: null,
+			tool: "bash",
+		});
+
+		await waitFor(() => app.approvals.panel.visible === false, { what: "the panel to dismiss" });
+		expect(app.store.pendingApprovals).toBe(0);
+		expect(server.requestsFor("exec.approval.resolve")).toHaveLength(0);
+		expect(approvalBlock(app)).toMatchObject({ status: "resolved", decision: "expired" });
+		await waitFor(() => transcript(app).includes("approval expired for bash — the run ended"), {
+			what: "the expired record",
+		});
+		expect(transcript(app)).not.toContain("approval granted");
+	});
+
 	test("someone else answering dismisses the panel and annotates the record", async () => {
 		const { app, server } = await boot();
 		requested(server);

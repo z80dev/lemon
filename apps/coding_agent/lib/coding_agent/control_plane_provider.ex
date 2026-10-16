@@ -68,6 +68,16 @@ defmodule CodingAgent.ControlPlaneProvider do
     end
   end
 
+  @doc "Look up a native owner without calling a potentially busy session."
+  def native_session_owner(session_id) when is_binary(session_id) do
+    if Process.whereis(CodingAgent.SessionRegistry) do
+      case Registry.lookup(CodingAgent.SessionRegistry, session_id) do
+        [{pid, _}] -> pid
+        [] -> nil
+      end
+    end
+  end
+
   @doc "Read journal todos by native session ID for the progress snapshot API."
   def native_session_todos(session_id, cwd)
       when is_binary(session_id) and session_id != "" and is_binary(cwd) do

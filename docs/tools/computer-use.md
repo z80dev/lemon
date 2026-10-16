@@ -91,6 +91,12 @@ request into an ordinary Lemon approval for tool `computer_use` with action
 | Approve for the agent / globally | The same for this session; Lemon's stored grant also answers the first request of later sessions. |
 | Deny | The runtime refuses the action and the model is told so. |
 
+A computer-use approval has no time limit, but it does not outlive its owner:
+when the run or session that asked ends, Lemon expires the pending approval at
+once (no grace window) and treats it as denied. The Telegram, Discord and TUI
+prompts are edited to say it expired because the run ended, and answering it
+later is refused as expired rather than granting control of an app.
+
 Some apps are never approved: the terminal or app hosting the Lemon runtime
 (LCU's agent-host guard) and Lemon's own clients (`org.lemonbot.*`), because
 operating the window that shows Lemon's approval prompts would let the agent

@@ -5,6 +5,7 @@ defmodule LemonCore.ExecApprovalsTest do
   use LemonCore.Testing.Case, async: false
   @moduletag with_store: true
 
+  alias LemonCore.Events.ApprovalResolved
   alias LemonCore.ExecApprovals
   alias LemonCore.ExecApprovalStore
   alias LemonCore.Store
@@ -32,6 +33,34 @@ defmodule LemonCore.ExecApprovalsTest do
     )
 
     ExecApprovalStore.list_pending()
+  end
+
+  # Starts an untimed request in another process and waits for its request event.
+  defp start_request(overrides) do
+    approval_id = "approval_owner_#{System.unique_integer([:positive])}"
+
+    params =
+      Map.merge(
+        %{
+          run_id: "run_#{approval_id}",
+          session_key: "agent:test:main",
+          agent_id: "test",
+          tool: "bash",
+          action: %{command: "ls"},
+          approval_id: approval_id
+        },
+        overrides
+      )
+
+    task = Task.async(fn -> ExecApprovals.request(params) end)
+
+    assert_receive %LemonCore.Event{
+                     type: :approval_requested,
+                     payload: %{approval_id: ^approval_id}
+                   },
+                   1_000
+
+    {task, approval_id}
   end
 
   defp clear_approval_tables do
@@ -1025,6 +1054,151 @@ defmodule LemonCore.ExecApprovalsTest do
         type: :approval_resolved,
         payload: %{approval_id: ^approval_id}
       }
+    end
+  end
+
+  describe "owner expiry" do
+    setup do
+      LemonCore.Bus.subscribe("exec_approvals")
+      :ok
+    end
+
+    test "a run ending expires its untimed approval: waiter denied, resolve refused, no grant" do
+      run_id = "run_expire_#{System.unique_integer([:positive])}"
+      {task, id} = start_request(%{run_id: run_id, session_id: "sess_#{run_id}"})
+
+      assert {:ok, 1} = ExecApprovals.expire_owner({:run, run_id})
+      assert {:ok, :denied} = Task.await(task, 1_000)
+
+      assert_receive %LemonCore.Event{
+                       type: :approval_resolved,
+                       payload: %{
+                         approval_id: ^id,
+                         decision: :expired,
+                         pending: %{tool: "bash", run_id: ^run_id}
+                       },
+                       meta: %{run_id: ^run_id, session_key: "agent:test:main"}
+                     },
+                     1_000
+
+      assert {:ok, nil} = ExecApprovalStore.fetch_pending(id)
+      assert ExecApprovalStore.list_pending() == []
+
+      assert {:ok, %{resolution: %{outcome: :expired, decision: :expired, run_id: ^run_id}}} =
+               ExecApprovalStore.fetch_record(id)
+
+      for decision <- [:approve_once, :approve_session, :approve_agent, :approve_global, :deny] do
+        assert {:error, :expired} = ExecApprovals.resolve(id, decision)
+
+        assert {:error, :expired} =
+                 ExecApprovals.resolve(id, decision,
+                   expected_session_key: "agent:test:main",
+                   expected_run_id: run_id
+                 )
+      end
+
+      action_hash = hash_action(%{command: "ls"})
+      assert Store.get(:exec_approvals_policy, {"bash", action_hash}) == nil
+
+      assert Store.get(:exec_approvals_policy_session, {"agent:test:main", "bash", action_hash}) ==
+               nil
+
+      assert Store.get(:exec_approvals_policy_agent, {"test", "bash", action_hash}) == nil
+
+      event =
+        LemonCore.Introspection.list(run_id: run_id, event_type: :approval_expired, limit: 1)
+        |> List.first()
+
+      assert %{approval_id: ^id, tool: "bash", owner: "run"} = event.payload
+      assert :expired in ApprovalResolved.decisions()
+    end
+
+    test "a session ending expires only that session's approvals" do
+      {ended, ended_id} = start_request(%{run_id: "run_a", session_id: "sess_ended"})
+      {live, live_id} = start_request(%{run_id: "run_b", session_id: "sess_live"})
+
+      assert {:ok, 1} = ExecApprovals.expire_owner({:session, "sess_ended"})
+      assert {:ok, :denied} = Task.await(ended, 1_000)
+      assert {:error, :expired} = ExecApprovals.resolve(ended_id, :approve_global)
+
+      assert %{id: ^live_id} = ExecApprovalStore.get_pending(live_id)
+      assert {:ok, %{outcome: :approved}} = ExecApprovals.resolve(live_id, :approve_once)
+      assert {:ok, :approved, :approve_once} = Task.await(live, 1_000)
+    end
+
+    test "an approval with no owner ids is never matched by an owner ending" do
+      {task, id} = start_request(%{run_id: nil, session_id: nil})
+
+      assert {:ok, 0} = ExecApprovals.expire_owner({:run, "run_nobody"})
+      assert {:ok, 0} = ExecApprovals.expire_owner({:session, "sess_nobody"})
+      assert %{id: ^id} = ExecApprovalStore.get_pending(id)
+
+      assert {:ok, %{outcome: :denied}} = ExecApprovals.resolve(id, :deny)
+      assert {:ok, :denied} = Task.await(task, 1_000)
+    end
+
+    test "a resolution that already won is left standing" do
+      run_id = "run_won_#{System.unique_integer([:positive])}"
+      {task, id} = start_request(%{run_id: run_id})
+
+      assert {:ok, %{outcome: :approved}} = ExecApprovals.resolve(id, :approve_once)
+      assert {:ok, :approved, :approve_once} = Task.await(task, 1_000)
+
+      assert {:ok, 0} = ExecApprovals.expire_owner({:run, run_id})
+
+      assert {:ok, %{outcome: :approved, replayed: true}} =
+               ExecApprovals.resolve(id, :approve_once,
+                 expected_session_key: "agent:test:main",
+                 expected_run_id: run_id
+               )
+    end
+
+    test "expiring twice is harmless" do
+      run_id = "run_twice_#{System.unique_integer([:positive])}"
+      {task, _id} = start_request(%{run_id: run_id})
+
+      assert {:ok, 1} = ExecApprovals.expire_owner({:run, run_id})
+      assert {:ok, :denied} = Task.await(task, 1_000)
+      assert {:ok, 0} = ExecApprovals.expire_owner({:run, run_id})
+    end
+
+    test "owners must be non-empty run or session ids" do
+      for owner <- [{:run, ""}, {:run, nil}, {:session, 1}, {:node, "n"}, :all, nil] do
+        assert {:error, :invalid_owner} = ExecApprovals.expire_owner(owner)
+      end
+    end
+
+    test "the finalize-run hook expires the finished run's approvals and no others" do
+      run_id = "run_hook_#{System.unique_integer([:positive])}"
+      session_key = "agent:test:hook:#{System.unique_integer([:positive])}"
+      {task, id} = start_request(%{run_id: run_id, session_key: session_key})
+      {other, other_id} = start_request(%{run_id: "run_still_going", session_key: session_key})
+
+      assert :ok =
+               LemonCore.RunStore.finalize(run_id, %{
+                 completed: %{ok: false, error: :aborted},
+                 prompt: "work",
+                 session_key: session_key
+               })
+
+      assert {:ok, :denied} = Task.await(task, 2_000)
+      assert {:error, :expired} = ExecApprovals.resolve(id, :approve_global)
+      assert %{id: ^other_id} = ExecApprovalStore.get_pending(other_id)
+
+      assert {:ok, %{outcome: :denied}} = ExecApprovals.resolve(other_id, :deny)
+      assert {:ok, :denied} = Task.await(other, 1_000)
+    end
+
+    test "a session ending expires through the expiry server" do
+      session_id = "sess_server_#{System.unique_integer([:positive])}"
+      {task, id} = start_request(%{session_id: session_id})
+
+      assert :ok = LemonCore.ExecApprovalExpiry.session_ended(session_id)
+      assert {:ok, :denied} = Task.await(task, 2_000)
+      assert {:error, :expired} = ExecApprovals.resolve(id, :approve_session)
+
+      assert :ok = LemonCore.ExecApprovalExpiry.session_ended(nil)
+      assert :ok = LemonCore.ExecApprovalExpiry.run_ended("")
     end
   end
 

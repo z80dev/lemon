@@ -281,6 +281,31 @@ describe("ApprovalRecordComponent", () => {
 		record.annotate("approve_once");
 		expect(record.decision).toBe("deny");
 	});
+
+	test("an expired, timed-out or cancelled approval never reads as granted", () => {
+		const cases: Array<[string, string]> = [
+			["expired", "approval expired for bash — the run ended"],
+			["timeout", "approval timed out for bash"],
+			["cancelled", "approval withdrawn for bash"],
+		];
+		for (const [decision, line] of cases) {
+			const record = new ApprovalRecordComponent("ap-3", "bash", decision);
+			const plain = renderPlain(record.render(80));
+			expect(plain).toContain(line);
+			expect(plain).not.toContain("granted");
+			expect(JSON.stringify(record.describe())).toContain(line.replace(/^a/, "A"));
+			expect(record.describe()).toMatchObject({ p: { tone: "warning" } });
+		}
+	});
+
+	test("a plan proposal that expired never reads as approved", () => {
+		const expired = new ApprovalRecordComponent("ap-4", "propose_plan", "expired");
+		expect(renderPlain(expired.render(80))).toContain("plan proposal expired — the run ended");
+		expect(JSON.stringify(expired.describe())).toContain("Plan proposal expired — the run ended");
+		const timedOut = new ApprovalRecordComponent("ap-4", "propose_plan", "timeout");
+		expect(renderPlain(timedOut.render(80))).toContain("plan proposal closed (timeout)");
+		expect(renderPlain(timedOut.render(80))).not.toContain("plan approved");
+	});
 });
 
 describe("ApprovalPanelComponent native buttons", () => {

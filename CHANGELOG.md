@@ -200,6 +200,16 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 - Apple voice settings use provider-specific built-in choices instead of requiring
   raw voice IDs, while preserving existing custom voices and explicit saves.
 
+- Pending approvals now expire when their run or session ends, with no grace
+  window. The orphaned request resolves as expired (denied), including
+  computer-use approvals that have no time limit; a waiting tool call is denied,
+  and answering the approval afterwards is refused as expired instead of
+  installing a grant. Telegram and Discord approval prompts are edited to
+  "Approval: Expired (the run ended)" with their buttons removed, the TUI
+  transcript shows `approval expired … — the run ended` (and no longer reads
+  timed-out or withdrawn approvals as granted), and `exec.approval.resolved`
+  carries `decision: "expired"`. Time-based timeouts are unchanged.
+
 ---
 
 ## [2026.10.14]

@@ -38,8 +38,8 @@ defmodule LemonCore.Store do
   channels' Telegram indices). Collaborators attach
   to it instead:
 
-    * `:finalize_run_hooks` / `register_finalize_run_hook/2` — notified when a
-      run belonging to a session is finalized (see `finalize_run/3`).
+    * `:finalize_run_hooks` / `register_finalize_run_hook/2` — notified when any
+      run is finalized, with or without a session key (see `finalize_run/3`).
     * `:cached_tables` / `register_cached_table/2` — generic tables to mirror
       into the read cache, for owners of hot indexes.
     * `:run_history_provider` — module (or `{module, server}`) that
@@ -134,24 +134,24 @@ defmodule LemonCore.Store do
   @doc """
   Record a run's summary and fire the store's finalize-run hooks.
 
-  When the summary carries a non-empty `:session_key`, every hook registered for
-  this store (see `register_finalize_run_hook/2`) is invoked with:
+  Every hook registered for this store (see `register_finalize_run_hook/2`) is
+  invoked after successful finalization, regardless of session index eligibility:
 
       %{
         store: atom(),        # the store's name
         run_id: term(),
         record: map(),        # %{events: [...], summary: ..., started_at: ...}
         summary: map(),
-        session_key: String.t(),
+        session_key: term(),  # nil when absent; only non-empty binaries are indexed
         started_at: integer()
       }
 
   Hooks run in the store process, in registration order, and failures are
-  isolated. Runs without a session key do not fire hooks.
+  isolated. Hooks that require a session must ignore missing or invalid keys.
 
   Hook delivery is **at least once**. Hooks run only after the run record and
-  session index are written, but retrying a successful finalization invokes
-  them again. Hook implementations must therefore be idempotent by `run_id`.
+  any eligible session index are written, but retrying a successful finalization
+  invokes them again. Hook implementations must therefore be idempotent by `run_id`.
   """
   @spec finalize_run(server(), term(), map()) :: :ok | {:error, term()}
   def finalize_run(server \\ __MODULE__, run_id, summary)
@@ -1222,6 +1222,21 @@ defmodule LemonCore.Store do
     with {:ok, record, backend_state} <- ensure_final_record(state, run_id, summary),
          {:ok, backend_state} <-
            finalize_run_session(state, backend_state, run_id, record, summary) do
+      Hooks.invoke(
+        finalize_run_hooks(state),
+        %{
+          store: state.name,
+          run_id: run_id,
+          record: record,
+          summary: summary,
+          session_key: Map.get(summary, :session_key),
+          started_at: record.started_at
+        },
+        op: :finalize_run,
+        store: state.name,
+        run_id: run_id
+      )
+
       {:ok, %{state | backend_state: backend_state}}
     else
       {:error, reason, backend_state} ->
@@ -1290,32 +1305,14 @@ defmodule LemonCore.Store do
     session_key = Map.get(summary, :session_key)
 
     if is_binary(session_key) and session_key != "" do
-      with {:ok, backend_state} <-
-             update_sessions_index(
-               state,
-               backend_state,
-               session_key,
-               run_id,
-               summary,
-               record.started_at
-             ) do
-        Hooks.invoke(
-          finalize_run_hooks(state),
-          %{
-            store: state.name,
-            run_id: run_id,
-            record: record,
-            summary: summary,
-            session_key: session_key,
-            started_at: record.started_at
-          },
-          op: :finalize_run,
-          store: state.name,
-          run_id: run_id
-        )
-
-        {:ok, backend_state}
-      end
+      update_sessions_index(
+        state,
+        backend_state,
+        session_key,
+        run_id,
+        summary,
+        record.started_at
+      )
     else
       {:ok, backend_state}
     end

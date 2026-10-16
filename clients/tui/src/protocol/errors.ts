@@ -139,3 +139,18 @@ export function describeError(error: unknown): string {
 	}
 	return error instanceof Error ? error.message : String(error);
 }
+
+/**
+ * The daemon's answer to resolving an approval whose run ended: `CONFLICT` with
+ * `details.reason === "expired"`. The request can never be answered, so a
+ * client forgets it rather than offering it again.
+ */
+export function isExpiredApprovalError(error: unknown): error is ControlPlaneError {
+	if (!ControlPlaneError.is(error, "CONFLICT")) return false;
+	const details = error.details;
+	return (
+		typeof details === "object" &&
+		details !== null &&
+		(details as { reason?: unknown }).reason === "expired"
+	);
+}

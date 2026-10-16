@@ -26,9 +26,22 @@ defmodule LemonCore.ExecApprovals do
   keys is `{:invocation_context, public_identity, invocation_context_key}`.
   There is no fallback to an unscoped identity; nil-context native callers
   retain their existing keys. The private key never appears in wire receipts.
+
+  ## Owner expiry
+
+  A pending approval belongs to the run (`:run_id`) and native session
+  (`:session_id`) that asked for it. When that owner ends nobody can act on the
+  answer any more, so the approval expires at once: there is no grace window.
+  `expire_owner/1` replaces each of the owner's pending records with a redacted
+  `:expired` receipt, wakes a live waiter as denied and installs no policy. A
+  later `resolve/3` returns `{:error, :expired}`; it can never approve. Run end
+  is observed through the `LemonCore.Store` finalize-run hook and session end
+  from the native session's shutdown, both routed by `LemonCore.ExecApprovalExpiry`.
+  This covers requests with no time limit (`expires_in_ms: :infinity`) too.
   """
 
   alias LemonCore.Events.{ApprovalPending, ApprovalRequested, ApprovalResolved}
+  alias LemonCore.ExecApprovalExpiry
   alias LemonCore.ExecApprovalStore
 
   @type approval_id :: binary()
@@ -52,7 +65,8 @@ defmodule LemonCore.ExecApprovals do
   - `:tool` - Tool name
   - `:action` - Action details map
   - `:rationale` - Optional rationale for the request
-  - `:expires_in_ms` - Timeout in milliseconds (default: no timeout)
+  - `:expires_in_ms` - Timeout in milliseconds (default: no timeout). An
+    approval with no timeout still expires when its run or session ends.
   - `:approval_id` - Optional caller-allocated approval id. Callers that may
   have to cancel the prompt before it resolves (for example, a dispatch that
   can be killed while waiting) allocate the id up front so they can name it to
@@ -60,7 +74,8 @@ defmodule LemonCore.ExecApprovals do
 
   ## Returns
   - `{:ok, :approved, scope}` - Approved at the given scope
-  - `{:ok, :denied}` - Denied
+  - `{:ok, :denied}` - Denied, cancelled by its owner, or expired because its
+    run or session ended (see "Owner expiry")
   - `{:error, :timeout}` - Request timed out. The timeout competes through
     the same exact-record atomic transition as `resolve/3` and `cancel/2`.
     A losing timeout emits no events and installs no policy.
@@ -117,6 +132,8 @@ defmodule LemonCore.ExecApprovals do
             session_id: session_id,
             session_key: session_key,
             agent_id: agent_id,
+            owner_runtime_id: ExecApprovalExpiry.runtime_id(),
+            owner_session_pid: ExecApprovalExpiry.session_owner(session_id),
             invocation_context_key: invocation_context_key,
             tool: tool,
             tool_call_id: params[:tool_call_id],
@@ -222,6 +239,146 @@ defmodule LemonCore.ExecApprovals do
   end
 
   @doc """
+  Expire every pending approval owned by a run or session that has ended.
+
+  `{:run, run_id}` matches the request's `:run_id`; `{:session, session_id}` its
+  native `:session_id`. Each match is atomically replaced by a redacted
+  `:expired` receipt, its waiter (if it is still alive) wakes as denied, and no
+  policy is installed. A competing resolution, timeout or cancellation has
+  exactly one winner; a losing expiry leaves the winner's record alone. Expiry
+  is immediate: there is no grace window. Afterwards `resolve/3` returns
+  `{:error, :expired}` and `LemonCore.ExecApprovalStore.fetch_pending/1` returns
+  `{:ok, nil}`.
+
+  Listeners see `:approval_resolved` with `decision: :expired`. Time-based
+  expiry keeps `decision: :timeout`.
+
+  ## Returns
+
+    * `{:ok, count}` — the number of approvals this call expired (0 is normal)
+    * `{:error, :store_unavailable}` — pending requests could not be read, or an
+      expiry could not be recorded (that approval stays pending and unapproved)
+    * `{:error, :invalid_owner}` — the owner is not a non-empty run or session id
+  """
+  @spec expire_owner({:run | :session, binary()}) ::
+          {:ok, non_neg_integer()} | {:error, :store_unavailable | :invalid_owner}
+  def expire_owner({kind, id}) when kind in [:run, :session] and is_binary(id) and id != "" do
+    with {:ok, rows} <- ExecApprovalStore.fetch_pending_list() do
+      results =
+        for {approval_id, pending} <- rows, owned_by?(pending, approval_id, kind, id) do
+          expire_pending(approval_id, pending, kind)
+        end
+
+      if :error in results,
+        do: {:error, :store_unavailable},
+        else: {:ok, Enum.count(results, &(&1 == :expired))}
+    end
+  end
+
+  def expire_owner(_owner), do: {:error, :invalid_owner}
+
+  @doc false
+  def reconcile_runtime do
+    with {:ok, rows} <- ExecApprovalStore.fetch_pending_list() do
+      Enum.reduce_while(rows, {:ok, 0}, fn {id, pending}, {:ok, count} ->
+        case recovery_owner_gone?(pending) do
+          {:ok, true} ->
+            case expire_pending(id, pending, owner_kind(pending)) do
+              :expired -> {:cont, {:ok, count + 1}}
+              :lost -> {:cont, {:ok, count}}
+              :error -> {:halt, {:error, :store_unavailable}}
+            end
+
+          {:ok, false} ->
+            {:cont, {:ok, count}}
+
+          {:error, _} ->
+            {:halt, {:error, :store_unavailable}}
+        end
+      end)
+    end
+  end
+
+  defp recovery_owner_gone?(pending) do
+    if orphaned_runtime?(pending) or dead_session?(pending) do
+      {:ok, true}
+    else
+      case Map.get(pending, :run_id) do
+        id when is_binary(id) and id != "" ->
+          case LemonCore.RunStore.fetch(id) do
+            {:ok, %{summary: summary}} when is_map(summary) -> {:ok, true}
+            {:ok, _} -> {:ok, false}
+            {:error, _} = error -> error
+          end
+
+        _ ->
+          {:ok, false}
+      end
+    end
+  end
+
+  defp orphaned_runtime?(pending),
+    do: Map.get(pending, :owner_runtime_id) != ExecApprovalExpiry.runtime_id()
+
+  defp dead_session?(pending) do
+    case Map.get(pending, :owner_session_pid) do
+      pid when is_pid(pid) -> node(pid) == node() and not Process.alive?(pid)
+      _ -> false
+    end
+  end
+
+  defp owner_kind(%{run_id: id}) when is_binary(id) and id != "", do: :run
+  defp owner_kind(_pending), do: :session
+
+  defp owned_by?(%{id: approval_id} = pending, approval_id, :run, run_id),
+    do: Map.get(pending, :run_id) == run_id
+
+  defp owned_by?(%{id: approval_id} = pending, approval_id, :session, session_id),
+    do: Map.get(pending, :session_id) == session_id
+
+  defp owned_by?(_pending, _approval_id, _kind, _id), do: false
+
+  defp expire_pending(approval_id, pending, kind) do
+    case retain_terminal(approval_id, pending, :expired, :expired) do
+      :ok ->
+        emit_expiry(approval_id, pending, kind)
+        :expired
+
+      {:error, :mismatch} ->
+        :lost
+
+      {:error, _} ->
+        :error
+    end
+  end
+
+  defp emit_expiry(approval_id, pending, kind) do
+    record_approval_event(:approval_expired, pending, %{
+      approval_id: approval_id,
+      tool: pending.tool,
+      owner: Atom.to_string(kind)
+    })
+
+    LemonCore.Telemetry.approval_resolved(approval_id, :expired, %{
+      tool: pending.tool,
+      run_id: pending.run_id
+    })
+
+    LemonCore.Bus.broadcast(
+      "exec_approvals",
+      LemonCore.Event.new(
+        :approval_resolved,
+        ApprovalResolved.new(%{approval_id: approval_id, decision: :expired, pending: pending}),
+        %{
+          run_id: pending.run_id,
+          session_id: Map.get(pending, :session_id),
+          session_key: pending.session_key
+        }
+      )
+    )
+  end
+
+  @doc """
   Resolve an exact pending approval and return a verified resolution receipt.
 
   `expected_session_key` and `expected_run_id` bind the request's owner identity.
@@ -259,7 +416,8 @@ defmodule LemonCore.ExecApprovals do
         %{id: ^approval_id, tool: tool, action: _, session_key: _, run_id: _, agent_id: _} =
             pending
         when is_binary(tool) ->
-          with :ok <- match_pending(pending, opts) do
+          with :ok <- match_pending(pending, opts),
+               :ok <- ExecApprovalExpiry.ensure_ready() do
             claim = %{resolution: resolution_receipt(pending, decision, :resolving)}
 
             case ExecApprovalStore.transition(approval_id, pending, claim) do
@@ -318,6 +476,12 @@ defmodule LemonCore.ExecApprovals do
 
   defp resolve_claim(approval_id, pending, decision, claim) do
     cond do
+      (not is_nil(Map.get(pending, :owner_runtime_id)) and orphaned_runtime?(pending)) or
+          dead_session?(pending) ->
+        result = finish_resolution(approval_id, claim, :expired, :expired)
+        emit_expiry(approval_id, pending, owner_kind(pending))
+        if match?({:ok, _}, result), do: {:error, :expired}, else: result
+
       expired?(pending) ->
         result = finish_resolution(approval_id, claim, :expired, :timeout)
         emit_approval_timeout(approval_id, pending)
@@ -664,6 +828,11 @@ defmodule LemonCore.ExecApprovals do
           # An owner cancel (`cancel/2`) resolves the waiter like a denial:
           # nobody granted the approval, so the gated call must not run.
           :cancelled ->
+            {:ok, :denied}
+
+          # The owning run or session ended (`expire_owner/1`): nobody can use
+          # an answer any more, so the gated call is denied, never approved.
+          :expired ->
             {:ok, :denied}
 
           :timeout ->
