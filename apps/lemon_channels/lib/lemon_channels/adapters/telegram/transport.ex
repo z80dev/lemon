@@ -166,6 +166,12 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
   end
 
   @impl true
+  def handle_call({:update_allowlist, op, chat_id}, _from, state)
+      when op in [:add, :remove] and is_integer(chat_id) do
+    {:reply, :ok, LemonChannels.Pairing.put_allowlist("telegram", state, chat_id, op)}
+  end
+
+  @impl true
   def handle_info(:poll, state) do
     state = poll_updates(state)
     Process.send_after(self(), :poll, state.poll_interval_ms)

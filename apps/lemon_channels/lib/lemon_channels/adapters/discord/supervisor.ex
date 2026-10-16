@@ -13,17 +13,20 @@ defmodule LemonChannels.Adapters.Discord.Supervisor do
 
   @impl true
   def init(opts) do
+    explicit = Keyword.get(opts, :config)
     base = LemonChannels.GatewayConfig.get(:discord, %{}) || %{}
+    config = merge_config(base, explicit)
 
-    config =
-      base
-      |> merge_config(Keyword.get(opts, :config))
-
-    token = config[:bot_token] || config["bot_token"] || resolve_bot_token_secret(config) || resolve_token()
+    token =
+      config[:bot_token] || config["bot_token"] || resolve_bot_token_secret(config) ||
+        resolve_token()
 
     children =
       if is_binary(token) and String.trim(token) != "" do
-        [{LemonChannels.Adapters.Discord.Transport, [config: config]}]
+        # The child spec must not freeze the gateway config: the transport merges
+        # the persisted policy (including the allowlist) fresh on every start, so
+        # a supervised restart keeps approvals and revocations made since boot.
+        [{LemonChannels.Adapters.Discord.Transport, [config: merge_config(%{}, explicit)]}]
       else
         []
       end

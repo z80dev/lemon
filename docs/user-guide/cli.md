@@ -66,6 +66,7 @@ lemon pairing list
 lemon pairing approve telegram <CODE>
 lemon pairing approve discord <CODE>
 lemon pairing deny telegram <CODE>
+lemon pairing revoke telegram <CHAT_ID>
 ```
 
 For channels configured with `unauthorized_dm_behavior = "pair"`, unknown human
@@ -76,8 +77,13 @@ Wrong-platform, expired and already-used codes fail without changing config.
 
 These commands reuse/start the local runtime and require operator pairing access
 over direct loopback. Approval appends to the user gateway allowlist using the
-same patcher as `gateway setup`; project overrides still win. **Restart Lemon
-after approval** to refresh adapters' authorization state. Success exits 0,
+same patcher as `gateway setup` and applies it to the running adapter, so the
+sender's next message is accepted without restarting Lemon. `revoke` removes the
+chat from the same allowlist and the running adapter, so its next message is
+rejected, including after a supervised adapter restart or daemon restart. An
+emptied Discord `allowed_channel_ids = []` stays deny-all; remove the key to
+leave channels unrestricted. Project overrides still win after a restart. If the running
+adapter cannot be updated, the command exits 1 and says so. Success exits 0,
 operation failures exit 1, and usage errors exit 2. No code is echoed in output.
 See [channel configuration](../config.md#telegram-and-discord-dm-pairing-codes)
 for default behavior, rate limits and lost-code handling.

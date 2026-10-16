@@ -10,6 +10,17 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Approving a channel pairing code now updates the running Telegram/Discord
+  adapter's allowlist, so the sender's next message is accepted without
+  restarting the gateway or daemon. New `lemon pairing revoke <platform>
+  <chat_id>` removes a chat from the config and the running adapter live.
+  `channels.pairing` gains local-operator `activate`/`revoke` actions; unknown
+  senders stay rejected and a failed live update exits non-zero. Transports now
+  read the persisted gateway allowlist on every supervised restart instead of a
+  startup snapshot, and an emptied Discord `allowed_channel_ids` list stays
+  deny-all across restarts (revoking the last channel no longer reopens every
+  channel).
+
 - Run tool-schema snapshot events carry schemas without execute closures, so
   sessions with many tools no longer exceed the 1 MiB subscriber event limit,
   fence direct subscribers and drop `agent_end`.

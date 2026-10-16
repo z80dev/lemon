@@ -6,8 +6,14 @@ defmodule LemonChannels.Pairing do
   Plaintext codes live in memory until expiry so a sender can receive the same
   request again after ten minutes. After a runtime restart an existing request
   remains approvable, but cannot be re-displayed; it expires after one hour.
-  Approval is deliberately absent here: the local operator CLI consumes a code
-  before updating the canonical gateway allowlist.
+  Approval is deliberately absent here: the local operator CLI consumes a code,
+  persists the chat in the canonical gateway allowlist, and then calls
+  `allow/2` so the running transport authorizes the sender on its next inbound
+  update without a restart. `revoke/2` is the live counterpart for removal.
+  Transports read the persisted gateway policy whenever they (re)start, so a
+  supervised restart after approval or revocation keeps the change; `allow/2`
+  and `revoke/2` only make the running process agree with that persisted policy
+  immediately, and never widen it beyond the one chat named.
   """
   use GenServer
 
@@ -16,6 +22,7 @@ defmodule LemonChannels.Pairing do
   @table :channel_pairing_requests
   @alphabet "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
   @ttl_ms :timer.hours(1)
+  @live_timeout_ms 15_000
   @reply_interval_ms :timer.minutes(10)
   @sweep_ms :timer.minutes(5)
 
@@ -38,6 +45,26 @@ defmodule LemonChannels.Pairing do
   def consume(platform, code, opts \\ []) do
     GenServer.call(server(opts), {:consume, platform, code})
   end
+
+  @doc """
+  Add `chat_id` to the running transport's allowlist for `platform`.
+
+  Returns `:ok` once the transport state is updated, `:not_running` when the
+  platform transport is not started (its configured allowlist applies when it
+  does), or `{:error, :unavailable}` when the live update could not be applied.
+  """
+  @spec allow(String.t(), integer()) :: :ok | :not_running | {:error, :unavailable}
+  def allow(platform, chat_id) when is_integer(chat_id), do: update_live(platform, chat_id, :add)
+
+  @doc """
+  Remove `chat_id` from the running transport's allowlist for `platform`.
+
+  Same return values as `allow/2`. A transport left with no allowed chats is
+  unpaired and rejects every sender unless `allow_all_chats` was explicitly set.
+  """
+  @spec revoke(String.t(), integer()) :: :ok | :not_running | {:error, :unavailable}
+  def revoke(platform, chat_id) when is_integer(chat_id),
+    do: update_live(platform, chat_id, :remove)
 
   @doc "Return a pairing reply only for a human DM, never a group or bot."
   def reply(platform, %{peer: %{kind: :dm}, sender: %{id: id} = sender} = inbound)
@@ -217,6 +244,44 @@ defmodule LemonChannels.Pairing do
       end
     end)
   end
+
+  defp update_live(platform, chat_id, op) do
+    with :ok <- validate_platform(platform),
+         name = transport(platform),
+         pid when is_pid(pid) <- Process.whereis(name) do
+      GenServer.call(pid, {:update_allowlist, op, chat_id}, @live_timeout_ms)
+    else
+      nil -> :not_running
+      {:error, _} -> {:error, :unavailable}
+    end
+  catch
+    :exit, {:noproc, _} -> :not_running
+    :exit, _ -> {:error, :unavailable}
+  end
+
+  defp transport("telegram"), do: LemonChannels.Adapters.Telegram.Transport
+  defp transport("discord"), do: LemonChannels.Adapters.Discord.Transport
+
+  @doc false
+  # Transport-side allowlist update. Telegram keeps a list and Discord a MapSet;
+  # both treat an emptied allowlist as deny-all (nil means "not configured").
+  def put_allowlist("telegram", state, chat_id, :add),
+    do: Map.update(state, :allowed_chat_ids, [chat_id], &Enum.uniq((&1 || []) ++ [chat_id]))
+
+  def put_allowlist("telegram", state, chat_id, :remove),
+    do: Map.update(state, :allowed_chat_ids, nil, &(&1 && List.delete(&1, chat_id)))
+
+  def put_allowlist("discord", state, chat_id, :add),
+    do:
+      Map.update(
+        state,
+        :allowed_channel_ids,
+        MapSet.new([chat_id]),
+        &MapSet.put(&1 || MapSet.new(), chat_id)
+      )
+
+  def put_allowlist("discord", state, chat_id, :remove),
+    do: Map.update(state, :allowed_channel_ids, nil, &(&1 && MapSet.delete(&1, chat_id)))
 
   defp digest(platform, code),
     do: :crypto.hash(:sha256, platform <> ":" <> code) |> Base.encode16(case: :lower)

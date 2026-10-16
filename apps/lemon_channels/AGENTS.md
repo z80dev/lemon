@@ -31,6 +31,12 @@ and script notifications.
   `allowed_chat_ids` is authoritative; an empty allowlist is unpaired and drops
   updates unless `allow_all_chats: true` is explicit. `/whoami` may answer before
   auth; unpaired notices are throttled. Transcription runs only after auth.
+- Transports read the persisted gateway allowlist on every (re)start; supervisor
+  child specs must not freeze it. Pairing approval/revocation go through
+  `LemonChannels.Pairing.allow/2` / `revoke/2` (a `:update_allowlist` call to the
+  transport) so running transports update live; never require a restart or widen
+  beyond the named chat. A configured empty Discord `allowed_channel_ids` is
+  deny-all; only an absent key is unrestricted.
 - Discord slash commands must pass the same guild/channel allowlists and
   `deny_unbound_channels` checks as ordinary messages before any read, mutation,
   cancellation, reflection or runtime call.

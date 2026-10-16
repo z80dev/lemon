@@ -18,18 +18,35 @@ defmodule LemonCli.Setup.Gateway.AllowlistConfig do
   @doc "Append a chat to the user config with serialized, atomic replacement."
   def add(platform, chat_id, path \\ Modular.global_path())
       when platform in ["telegram", "discord"] do
-    path = Path.expand(path)
-    :global.trans({{__MODULE__, path}, self()}, fn -> add_locked(platform, chat_id, path) end)
+    update(platform, chat_id, path, fn ids, id -> {:write, Enum.uniq(ids ++ [id])} end)
   end
 
-  defp add_locked(platform, chat_id, path) do
+  @doc "Remove a chat from the user config; an absent chat leaves the file untouched."
+  def remove(platform, chat_id, path \\ Modular.global_path())
+      when platform in ["telegram", "discord"] do
+    update(platform, chat_id, path, fn ids, id ->
+      if id in ids, do: {:write, List.delete(ids, id)}, else: :unchanged
+    end)
+  end
+
+  defp update(platform, chat_id, path, fun) do
+    path = Path.expand(path)
+
+    :global.trans({{__MODULE__, path}, self()}, fn ->
+      update_locked(platform, chat_id, path, fun)
+    end)
+  end
+
+  defp update_locked(platform, chat_id, path, fun) do
     with {id, ""} <- Integer.parse(to_string(chat_id)),
          {:ok, content} <- read(path),
          {:ok, config} <- Toml.decode(content),
          ids when is_list(ids) <- get_in(config, ["gateway", platform, key(platform)]) || [],
          true <- Enum.all?(ids, &is_integer/1) do
-      content = patch(content, platform, Enum.uniq(ids ++ [id]))
-      write_atomic(path, content)
+      case fun.(ids, id) do
+        {:write, updated} -> write_atomic(path, patch(content, platform, updated))
+        :unchanged -> :ok
+      end
     else
       _ -> {:error, :config_write_failed}
     end

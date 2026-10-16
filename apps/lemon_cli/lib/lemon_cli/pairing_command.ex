@@ -38,10 +38,26 @@ defmodule LemonCli.PairingCommand do
     end
   end
 
-  def run(_args, _opts) do
+  def run(["revoke", platform, chat_id], opts) when platform in ["telegram", "discord"] do
+    path = Keyword.get(opts, :config_path, Modular.global_path())
+
+    case Integer.parse(chat_id) do
+      {id, ""} when id > 0 ->
+        config = AllowlistConfig.remove(platform, id, path)
+        live = apply_live("revoke", platform, id, opts)
+        finish_revoke(config, live)
+
+      _ ->
+        usage()
+    end
+  end
+
+  def run(_args, _opts), do: usage()
+
+  defp usage do
     IO.puts(
       :stderr,
-      "Usage: lemon pairing list | approve <telegram|discord> <CODE> | deny <telegram|discord> <CODE>"
+      "Usage: lemon pairing list | approve <telegram|discord> <CODE> | deny <telegram|discord> <CODE> | revoke <telegram|discord> <CHAT_ID>"
     )
 
     2
@@ -57,17 +73,66 @@ defmodule LemonCli.PairingCommand do
 
     case AllowlistConfig.add(platform, row["chat_id"], path) do
       :ok ->
-        IO.puts(
-          "Chat paired. Restart Lemon to apply the updated allowlist; project overrides still take precedence."
-        )
-
-        0
+        finish_approve(apply_live("activate", platform, row["chat_id"], opts))
 
       {:error, _} ->
         failure(
           "Code consumed, but the gateway config could not be updated. Correct the config and ask the sender for a new request."
         )
     end
+  end
+
+  defp finish_approve({:ok, %{"live" => true}}) do
+    IO.puts("Chat paired. The running gateway accepts its next message; no restart needed.")
+    0
+  end
+
+  defp finish_approve({:ok, %{"live" => false}}) do
+    IO.puts(
+      "Chat paired. The channel is not running; the allowlist applies when it starts (project overrides still take precedence)."
+    )
+
+    0
+  end
+
+  defp finish_approve(_unavailable) do
+    failure(
+      "Chat saved to the gateway config, but the running gateway could not be updated. Restart Lemon to apply the allowlist; project overrides still take precedence."
+    )
+  end
+
+  defp finish_revoke(config, live) do
+    case {config, live} do
+      {:ok, {:ok, %{"live" => true}}} ->
+        IO.puts("Chat revoked. The running gateway rejects its next message.")
+        0
+
+      {:ok, {:ok, %{"live" => false}}} ->
+        IO.puts("Chat revoked. The channel is not running; the removal applies when it starts.")
+        0
+
+      {:ok, _} ->
+        failure(
+          "Chat removed from the gateway config, but the running gateway could not be updated. Restart Lemon to revoke access."
+        )
+
+      {_, {:ok, _}} ->
+        failure(
+          "Chat revoked on the running gateway, but the gateway config could not be updated. Correct the config so the revocation survives a restart."
+        )
+
+      _ ->
+        failure(
+          "Could not revoke the chat; check the gateway config, the local runtime and operator authentication."
+        )
+    end
+  end
+
+  defp apply_live(action, platform, chat_id, opts) do
+    request(
+      %{"action" => action, "platform" => platform, "chat_id" => to_string(chat_id)},
+      opts
+    )
   end
 
   defp request(params, opts) do
