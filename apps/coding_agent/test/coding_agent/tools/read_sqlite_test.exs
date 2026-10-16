@@ -75,6 +75,28 @@ defmodule CodingAgent.Tools.ReadSqliteTest do
     assert text(read(tmp_dir, "app.db:codes:007")) =~ "code: 007\n2: name: bond"
   end
 
+  test "row keys reach untyped numeric keys without coercing text keys", %{
+    tmp_dir: tmp_dir,
+    db: db
+  } do
+    {:ok, conn} = Sqlite3.open(db)
+
+    :ok =
+      Sqlite3.execute(conn, """
+      CREATE TABLE loose (id PRIMARY KEY, name TEXT);
+      INSERT INTO loose VALUES (1, 'integer one'), ('001', 'text 001'), (2.5, 'real');
+      """)
+
+    :ok = Sqlite3.close(conn)
+
+    assert text(read(tmp_dir, "app.db:loose:1")) =~ "name: integer one"
+    assert text(read(tmp_dir, "app.db:loose:001")) =~ "name: text 001"
+    assert text(read(tmp_dir, "app.db:loose:2.5")) =~ "name: real"
+    assert text(read(tmp_dir, "app.db:loose:1.0")) =~ "No row found in table 'loose'"
+    assert text(read(tmp_dir, "app.db:users:007")) =~ "name: user7"
+    assert text(read(tmp_dir, "app.db:codes:7")) =~ "No row found in table 'codes'"
+  end
+
   test "raw read queries", %{tmp_dir: tmp_dir} do
     output = text(read(tmp_dir, "app.db?q=SELECT count(*) AS n FROM users WHERE age < 10"))
     assert output =~ "1 row(s)"
