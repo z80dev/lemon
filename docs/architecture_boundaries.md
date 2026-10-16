@@ -42,8 +42,17 @@ silent permissions.
 Run:
 
 ```bash
-mix lemon.quality
+mix lemon.quality          # also part of `scripts/test quality`
+mix lemon.architecture.docs          # regenerate the policy table above
+mix lemon.architecture.docs --check  # fail if the table is stale
 ```
+
+The policy lives in `LemonCore.Quality.ArchitecturePolicy`
+(`apps/lemon_core/lib/lemon_core/quality/architecture_policy.ex`); the table
+between the `architecture_policy` markers is generated from it and must not be
+edited by hand. `mix lemon.quality` runs the docs link check (local Markdown
+links in `docs/**/*.md` must resolve), the generated-table freshness check, the
+architecture check and the duplicate test-module guard.
 
 The architecture checker enforces all of the following:
 
@@ -83,17 +92,17 @@ the dependency policy above, not these source-level rules:
 
 ## Skill Source Taxonomy
 
-Skills are classified by source kind. New source kinds must be added here before being used in code. Trust levels are frozen; the set may only be extended via a documented invariant update.
+Skills are classified by source kind and trust level (`LemonSkills.Entry`). Routing from user-facing identifiers to sources is `LemonSkills.SourceRouter`; install/update/audit rules are `LemonSkills.TrustPolicy`. New source kinds must be added here before being used in code, and the trust-level set may only be extended via a documented invariant update. See the [skills reference](skills.md) and the [skills guide](../apps/lemon_skills/AGENTS.md) for operational detail.
 
 ### Source Kinds
 
 | Source kind | Description | Example identifier |
 | --- | --- | --- |
-| `builtin` | Bundled with the Lemon release. Never fetched from the network. | `builtin/commit-guide` |
+| `builtin` | Bundled with the Lemon release and seeded by `LemonSkills.BuiltinSeeder`. Never fetched from the network. | `builtin` |
 | `local` | A directory on the local filesystem outside the installation. | `/path/to/my-skill` |
-| `git` | A git repository cloned by URL. | `https://github.com/user/skill-repo` |
+| `git` | A git repository: URL, `git+<url>`, SSH URL, `gh:<owner>/<repo>` shorthand, or an official `hermes:<collection>/<path>` ID. | `https://github.com/user/skill-repo` |
 | `registry` | An entry from the official Lemon skill registry, addressed by namespace path. | `official/devops/k8s-rollout` |
-| `well_known` | A curated community source with a stable short identifier (e.g. GitHub user/repo shorthand). | `gh:user/skill-repo` |
+| `well_known` | A skill found by probing well-known registry URL patterns during discovery; recorded as `community`. | *(discovered, no identifier form)* |
 
 ### Trust Levels
 
@@ -101,12 +110,12 @@ Trust levels control install/update policy and audit behavior. Ordered from high
 
 | Trust level | Assigned to | Policy |
 | --- | --- | --- |
-| `builtin` | Source kind `builtin` only. | No audit required. Cannot be uninstalled. |
-| `official` | Skills in the `official/` registry namespace. | Audit runs; `warn` verdicts require acknowledgement; `block` verdicts cannot be overridden. |
-| `trusted` | Sources explicitly added to the user's trusted list. | Same audit policy as `official`. |
-| `community` | All other `git`, `registry`, and `well_known` sources not in the trusted list. | Audit runs; `warn` verdicts require explicit approval; `block` verdicts cannot be overridden. |
+| `builtin` | Source kind `builtin` only. | No audit; the only level that is auto-approved. |
+| `official` | Skills in the `official/` registry namespace and `hermes:` sources. | Audited; install, update and uninstall need explicit approval. |
+| `trusted` | `local` sources (a path the user controls). | Audited; approval required. |
+| `community` | Third-party `git`, `registry` and `well_known` sources. | Audited; approval required. |
 
-`local` skills inherit the trust level of the install scope (`builtin` for bundled seeds, `trusted` when explicitly added by the user, `community` otherwise).
+Every non-builtin install or update is audited. A `warn` verdict needs explicit approval; a `block` verdict is not bypassed by ordinary approval and needs the separate security-override operation bound to the exact bundle hash and findings.
 
 ## Module Placement Rules
 
@@ -114,7 +123,7 @@ These rules complement the dependency policy table above. They must be respected
 
 | Domain | Canonical home | Forbidden locations |
 | --- | --- | --- |
-| Memory scope stores (session, workspace, agent, global) | `lemon_core` | Any other app |
+| Durable memory documents, scoped search/recall, context scopes and lifecycle | `lemon_memory` | `lemon_core` (generic Store only), any other app |
 | Browser capability driver | `lemon_browser` | `lemon_core`, `coding_agent`, `lemon_control_plane` |
 | Agent runtime and channel supervision capability contracts/registries | `lemon_core` | Consumer apps (provider implementations remain in their owning products) |
 | Media job driver | `lemon_media` | `lemon_core`, `lemon_skills`, `lemon_router`, `lemon_control_plane` |
@@ -123,7 +132,8 @@ These rules complement the dependency policy table above. They must be respected
 | omp delegate driver (RPC protocol, session processes, discovery, `omp` tool) | `lemon_omp` | `lemon_core`, `coding_agent`, `lemon_gateway`, `lemon_control_plane` |
 | Native computer-use driver (LCU bridge, approval routing, `cua_js` tools) | `lemon_computer_use` | `lemon_core`, `coding_agent`, `lemon_control_plane` |
 | Skill platform logic (manifest, registry, installer, lockfile, source router, audit) | `lemon_skills` | `coding_agent`, `lemon_core`, `lemon_router` |
-| Prompt assembly and tool registration | `coding_agent` | `lemon_skills`, `lemon_core` |
+| Coding-session prompt assembly and coding/file tool registration | `coding_agent` | `lemon_skills`, `lemon_core` |
+| Assistant-platform tools (`remember`, `recall`, goal, kanban, media, skill tools) | `lemon_skills` | `coding_agent`, `lemon_core` |
 | Execution policy and authority context contracts | `lemon_core` | Any product-specific app |
 | Model/session routing | `lemon_router` | `coding_agent`, `lemon_skills` |
 | Runtime boot, profile, health, env detection | `lemon_core/runtime` | Shell scripts (only thin wrappers allowed there) |

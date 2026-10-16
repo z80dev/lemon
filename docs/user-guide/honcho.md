@@ -161,7 +161,8 @@ per-run upload that is gated.)
 export LEMON_FEATURE_SESSION_SEARCH=off     # or [features] session_search = "off"
 ```
 
-Check it:
+Check it from a source checkout (the command is a Mix task, so it is not available
+in a packaged release):
 
 ```bash
 mix lemon.honcho status
@@ -525,12 +526,15 @@ scrubbed of it before being shown.
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `HONCHO_API_KEY` | — | API key for the hosted deployment |
-| `HONCHO_BASE_URL` | — | Base URL of a self-hosted deployment |
+| `HONCHO_API_KEY` | — | API key for the hosted deployment (or `api_key_secret` in `[honcho]`; never a plaintext TOML key) |
+| `HONCHO_BASE_URL` | — | Base URL of a self-hosted deployment; a trailing `/v3` is stripped |
 | `HONCHO_ENVIRONMENT` | `production` | Deployment used when no base URL is set: `production`, `demo`, `local` |
 | `HONCHO_WORKSPACE` | `lemon` | Workspace owning every peer, session, and conclusion |
-| `HONCHO_PEER` | `$USER` | Peer id representing you |
-| `HONCHO_AI_PEER` | `lemon` | Peer id representing the assistant |
+| `HONCHO_PEER` | `$USER`, then `user` | Peer id representing you; sanitized to `[A-Za-z0-9_-]` (TOML: `user_peer`) |
+| `HONCHO_AI_PEER` | `lemon` | Peer id representing the assistant (TOML: `ai_peer`) |
+| `LEMON_HONCHO_PIN_USER_PEER` | `false` | Pin every channel turn to `user_peer`; see [Gateway identity mapping](#gateway-identity-mapping) |
+| `LEMON_HONCHO_USER_PEER_ALIASES` | `{}` | JSON object mapping channel-qualified sender ids (`telegram_123`) to peer ids |
+| `LEMON_HONCHO_RUNTIME_PEER_PREFIX` | empty | Prefix for non-owner channel sender peers |
 | `HONCHO_TIMEOUT_MS` | `30000` | Timeout for one attempt at a request; a turn-path call may retry a transient failure twice, `mix lemon.honcho ping` never does |
 | `LEMON_HONCHO_ENABLED` | `true` | Master switch; still inert without a key or base URL. Set `false` to ignore a key that stays exported |
 | `LEMON_HONCHO_RECALL_MODE` | `hybrid` | `hybrid` (inject + tools), `context` (inject only), `tools` (tools only) |
@@ -672,9 +676,10 @@ Worth knowing before you go looking for them:
 - **The dialectic is a single pass.** One call at a fixed reasoning level per refresh;
   no self-audit or reconciliation passes, and the level does not scale with the length
   of your message.
-- **One peer per install.** Messages arriving through a channel (Telegram, Discord)
-  are all attributed to `HONCHO_PEER`; there is no mapping from a platform user id to
-  a distinct Honcho peer.
+- **Channel senders are separate peers only by mapping rules.** Owners and
+  CLI/TUI/web turns use `HONCHO_PEER`; other channel senders get their own peer
+  unless pinned or aliased, and a group or guild is never a human identity. See
+  [Gateway identity mapping](#gateway-identity-mapping).
 - **Summaries only, no transcript sync.** There is no mode in which the full
   conversation is uploaded — the two per-run summaries are the whole of what Honcho
   models. See [What Leaves Your Machine](#what-leaves-your-machine).
@@ -695,4 +700,4 @@ Worth knowing before you go looking for them:
 - [`docs/user-guide/setup.md`](setup.md) — installing and configuring Lemon
 - [`apps/lemon_honcho/README.md`](../../apps/lemon_honcho/README.md) — the package, its modules, and its current limits
 
-*Last reviewed: 2026-08-12*
+*Last reviewed: 2026-10-15*

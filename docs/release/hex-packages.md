@@ -4,7 +4,7 @@ The umbrella ships two different things on two different clocks:
 
 | | Artifact | Version scheme | Tag | Tooling |
 |---|---|---|---|---|
-| **Product** | Release tarballs of the whole umbrella | CalVer `YYYY.MM.PATCH` | `v2026.08.0` | `scripts/bump_version.sh` → `.github/workflows/release.yml` |
+| **Product** | Release tarballs of the whole umbrella | CalVer `YYYY.MM.PATCH` | `v2026.08.0` | `scripts/prepare_product_release` (calls `scripts/bump_version.sh`) → `.github/workflows/release.yml` |
 | **Packages** | Five apps on hex.pm | semver, per package | `lemon_ai-v0.2.0` | `scripts/release_package` → `.github/workflows/publish.yml` |
 
 This page covers the second. Status and the decisions behind it are in

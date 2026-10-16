@@ -331,8 +331,9 @@ lemon omp start-many --cwd ~/src/app --isolate --task "Fix parser" --task "Docum
 lemon omp models --free --provider openrouter --limit 30
 lemon omp configure omp_3f9a1c2b7d4e --model provider/model --thinking low
 lemon omp subagent omp_3f9a1c2b7d4e CHILD-ID --limit 20
-lemon omp list
+lemon omp list [--all]
 lemon omp show omp_3f9a1c2b7d4e
+lemon omp watch omp_3f9a1c2b7d4e
 lemon omp send omp_3f9a1c2b7d4e "Skip the docs"
 lemon omp send --follow-up omp_3f9a1c2b7d4e "Then run the linter"
 lemon omp send --redirect omp_3f9a1c2b7d4e "Stop that; fix the parser instead"
@@ -359,8 +360,11 @@ which settings were acknowledged and which step failed; earlier changes
 remain applied, without rollback or automatic retry.
 
 `discover` shows the history source and marks interrupted turns (a hint, not
-proof of a crash). `show` includes approval mode and pending approval ids,
-worktree path/branch and kept/dirty/commit state, and subagent activity.
+proof of a crash). `list` hides ended sessions unless `--all` is given. `watch`
+follows one session's status changes until it is idle, closed or failed;
+Ctrl-C stops watching and never cancels the turn. `show` includes approval mode
+and pending approval ids, worktree path/branch and kept/dirty/commit state, and
+subagent activity.
 Resolve approvals through the TUI or control-plane `exec.approval.resolve`;
 there is no CLI approval resolver. `send --redirect` and `--follow-up` are
 mutually exclusive.

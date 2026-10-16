@@ -182,6 +182,11 @@ Lemon's non-interactive CLI.
   its command points to the intended launcher, then re-run `lemon tern install`
   if the checkout or installation moved. Plain `lemon` always opens the TUI;
   use `tern acp lemon` for the chat.
+- **`lemon tern install` cannot find Tern or refuses to continue:** without
+  `tern` on PATH, pass `--config-dir PATH` (or set `TERN_CONFIG_DIR`). If
+  `plugins/lemon` is unmanaged or modified, or `plugins/lemon.path` is a link,
+  the installer changes nothing; move it aside and retry. A `settings.json` whose
+  `agents.custom` is not an array is also refused untouched.
 - **Agent not found:** the `tern acp` process must see the same `TERN_CONFIG_DIR`
   as the registration. Check Settings → Agents.
 - **Could not attach:** run `lemon doctor`; ensure the runtime port and managed

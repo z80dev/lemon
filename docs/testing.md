@@ -27,7 +27,7 @@ scripts/test path apps/lemon_core/test/lemon_core/quality --seed 1
 | --- | --- |
 | `fast` | `mix compile --warnings-as-errors`, then `mix test --exclude integration` (no coverage). |
 | `changed` | Selects the merge-base-to-working-tree diff (including untracked non-ignored files), compiles with warnings as errors, then runs affected apps and reverse dependencies excluding integration; full scope falls back to `fast`. Runs client checks and docs verification when selected. |
-| `premerge` | Changed-file format check, changed-file `mix credo` with quality's default configuration, skip-tag guard, changed changelog validation, then `changed`; stops at the first failure and prints step timings. |
+| `premerge` | Changed-file format check, changed-file `mix credo` with quality's default configuration, skip-tag guard, changed changelog validation, then `changed --narrow`; stops at the first failure and prints step timings. |
 | `quality` | `mix compile --warnings-as-errors`, `mix format --check-formatted`, `mix credo`, the skip-tag guard, `scripts/check_changelog`, `python3 scripts/test_changed_tests.py`, `shellcheck` on the test/install/update/launcher scripts, `scripts/test_lemon_tui_auth.sh`, `scripts/test_lemon_launcher_reuse.sh`, `scripts/test_lemonup.sh`, `mix lemon.skill.lint`, `mix lemon.quality`, and the quality/eval-harness tests. |
 | `clients` | `clients/tui`: `bun install --frozen-lockfile`, `bun run check`, `bun run lint`, `bun test`. `clients/lemon-browser-node`: `npm ci`, `typecheck`, `lint`, `build`, `npm test`. |
 | `coverage` | `mix compile --warnings-as-errors`, then `mix test --exclude integration --cover` with each app's `test_coverage` threshold. |
@@ -302,7 +302,9 @@ when trimming slower channel suites.
 - `:python3` (`coding_agent`) marks tests that need a `python3` interpreter.
   The app's `test_helper.exs` excludes the tag only when `python3` is missing.
 - `:lldb_dap` (`coding_agent`) marks the real debugger smoke. The app excludes
-  it only when `lldb-dap` or a C compiler is missing.
+  it when `lldb-dap`, a C compiler, or host debuggee launch is unavailable (see above).
+- `:rsvg_convert` (`coding_agent`) marks the real `rsvg-convert` SVG case; excluded
+  when librsvg is not installed.
 - `:ast_grep` (`coding_agent`) marks tests that need the optional ast-grep CLI.
   The app excludes the tag only when backend discovery fails; set
   `LEMON_AST_GREP_EXECUTABLE` to select an installed release binary.
@@ -358,8 +360,10 @@ See [omp verification](../apps/lemon_omp/AGENTS.md#verification) for overrides.
 The remaining manual smoke scripts are not run by CI:
 `scripts/live_telegram_matrix.py` (with `scripts/telegram_driver.py`),
 `scripts/live_discord_matrix.py`, `scripts/live_provider_fallback_smoke.exs`,
-`scripts/live_mcp_stdio_smoke.exs`, and
-`scripts/live_cron_runtime_restart_smoke.exs`.
+`scripts/live_provider_ownership_smoke.exs`, and
+`scripts/live_cron_runtime_restart_smoke.exs`. MCP has no live smoke script: its
+client, transports and fixture server are covered by the deterministic
+`apps/lemon_mcp/test` suite (`scripts/test path apps/lemon_mcp/test`).
 
 ## Umbrella gotchas
 

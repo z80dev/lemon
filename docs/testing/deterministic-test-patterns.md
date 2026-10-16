@@ -12,7 +12,7 @@ This guide captures the patterns Lemon uses to keep CI signal deterministic and 
 ## 2) Prefer explicit synchronization over `Process.sleep/1`
 
 - Use mailbox assertions (`assert_receive`/`refute_receive`) with clear timeouts.
-- Use latch/poll helpers (for example `AsyncHelpers`) when coordination is required.
+- Use latch/poll helpers when coordination is required: `LemonCore.Testing.AsyncHelpers` (`apps/lemon_core/lib/lemon_core/testing/async_helpers.ex`: `assert_eventually/2`, `assert_process_dead/2`, latches, barriers). `coding_agent` and `lemon_gateway` expose thin `AsyncHelpers` wrappers in their `test/support`.
 - Wait for concrete state transitions/events, not elapsed time.
 - For transient LiveView states such as an async submit button's busy indicator,
   assert against the HTML returned by the triggering `render_submit` or
@@ -54,4 +54,4 @@ For ranking/fuzzy matching tests:
 
 ## 6) Add focused regression loops for historically flaky suites
 
-Run critical deterministic suites more than once in CI to catch reintroduced flakes early. Keep these loops targeted to avoid excessive runtime.
+Run critical deterministic suites more than once in CI to catch reintroduced flakes early. `nightly.yml` runs the prompt/skill/overflow regression files with `--repeat-until-failure 5` and `scripts/test eval-fast` with 20 iterations. Keep these loops targeted to avoid excessive runtime.

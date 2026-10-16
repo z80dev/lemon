@@ -29,8 +29,10 @@ credentials, query credentials, or fragments.
 ### Select a compatible destination runtime
 
 Configure runtime selection **on the controller before issuing an invitation**.
-The generated command never trusts an arbitrary `lemon` on the destination's
-`PATH` and never defaults to the latest published release.
+The generated command never defaults to the latest published release. The join
+script never runs an unvetted `lemon` from the destination's `PATH`: a PATH
+runtime is reused only when it reports the exact pinned version and passes the
+bot capability gate.
 
 - **Same-host source development:** for a loopback controller URL (`localhost`,
   `127.0.0.1`, or `::1`), the default is the controller's actual source checkout,
@@ -202,8 +204,9 @@ or assume a matching version has the required APIs.
 
 Source mode uses only the provisioned checkout's `bin/lemon` and requires its
 `mix.exs`; it never falls back to a PATH executable. Release mode first reuses
-`$HOME/.lemon/versions/<configured-version>/bin/lemon` if it reports the exact
-version and passes `node capabilities --json --require-bot`. Otherwise it fetches
+a `lemon` on `PATH`, then `$HOME/.lemon/versions/<configured-version>/bin/lemon`,
+if it reports the exact version and passes `node capabilities --json --require-bot`.
+Otherwise it fetches
 the canonical `install.sh` from the same base URL and exact release tag,
 and installs that exact `LEMON_VERSION` and `LEMON_INSTALL_BASE_URL` with
 `--profile full --require-bot --force --skip-setup --no-modify-path`. The pin
