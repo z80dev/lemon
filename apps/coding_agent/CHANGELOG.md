@@ -93,6 +93,10 @@
 
 ### Changed
 
+- Seen-line edit protection now defaults on: anchored edits to lines not shown in
+  a numbered read are refused. Disable with `[runtime.tools.edit]
+  enforce_seen_lines = false`. The Git guard remains on by default
+  (`[runtime.tools.bash] git_guard = false` disables it).
 - Normalize module aliases, implicit exception handling and direct function calls
   in recently changed coding-agent modules and tests without changing runtime behavior.
 

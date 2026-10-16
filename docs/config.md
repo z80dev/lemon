@@ -1751,11 +1751,11 @@ disable guidance. See [shell tools](tools/shell.md).
 
 ## Anchored Edit Visibility
 
-Enable seen-line enforcement in user or project `.lemon/config.toml`:
+Seen-line enforcement is on by default (strict). Disable it in user or project `.lemon/config.toml`:
 
 ```toml
 [runtime.tools.edit]
-enforce_seen_lines = true # default false
+enforce_seen_lines = false # default true
 ```
 
 Every replaced/deleted line and insertion anchor must have been displayed by a
@@ -1763,8 +1763,7 @@ numbered read of that snapshot in the current session. Omitted summary bodies an
 window gaps do not count; refusals provide a range-read hint without writing.
 Historical recovery checks visibility before translating unchanged anchors.
 Plain `old_text`/`new_text` replacements are unaffected. The setting must be a
-boolean; default false preserves clients that construct tags without tracked
-reads. Tool hosts can explicitly override it with the `:enforce_seen_lines` option.
+boolean; the default (true) refuses anchored edits to unread lines. Tool hosts can explicitly override it with the `:enforce_seen_lines` option.
 See [file tools](tools/files-and-search.md#anchored-edit-recovery-and-formatting)
 for visibility and snapshot-retention details.
 

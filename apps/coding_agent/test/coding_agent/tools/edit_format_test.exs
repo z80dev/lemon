@@ -17,7 +17,13 @@ defmodule CodingAgent.Tools.EditFormatTest do
       {:ok, :formatted}
     end
 
-    opts = [session_id: cwd, format_file_fun: formatter, format_timeout_ms: 321]
+    opts = [
+      session_id: cwd,
+      format_file_fun: formatter,
+      format_timeout_ms: 321,
+      enforce_seen_lines: false
+    ]
+
     on_exit(fn -> FileReadTracker.forget_session(cwd) end)
 
     result =
@@ -91,7 +97,7 @@ defmodule CodingAgent.Tools.EditFormatTest do
       {:ok, :formatted}
     end
 
-    opts = [session_id: cwd, format: true, format_file_fun: formatter]
+    opts = [session_id: cwd, format: true, format_file_fun: formatter, enforce_seen_lines: false]
     on_exit(fn -> FileReadTracker.forget_session(cwd) end)
 
     patch =

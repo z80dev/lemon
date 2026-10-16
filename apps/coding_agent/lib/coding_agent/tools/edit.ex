@@ -64,7 +64,7 @@ defmodule CodingAgent.Tools.Edit do
   ## Parameters
 
     - `cwd` - Current working directory for resolving relative paths
-    - `opts` - Tool configuration, including `:enforce_seen_lines` (default false).
+    - `opts` - Tool configuration, including `:enforce_seen_lines` (default true).
       When enabled, anchored edits require a session id and a numbered read of
       every targeted line; plain text replacements are unaffected.
   """
@@ -340,7 +340,7 @@ defmodule CodingAgent.Tools.Edit do
   defp perform_local_edit(raw, content, spec, _opts, _path), do: perform_edit(raw, content, spec)
 
   defp check_seen_lines(opts, path, tag, edits) do
-    if Keyword.get(opts, :enforce_seen_lines, false) do
+    if Keyword.get(opts, :enforce_seen_lines, true) do
       seen = FileReadTracker.seen_lines(opts, path, tag)
 
       unseen =

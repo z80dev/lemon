@@ -119,7 +119,7 @@ defmodule CodingAgent.Tools.AnchoredEditSeenLinesTest do
              edit(ctx, tag, [%{"start_line" => 120, "end_line" => 140, "operation" => "delete"}])
   end
 
-  test "setting off and default preserve edits outside a read window", ctx do
+  test "setting off preserves edits outside a read window; default refuses them", ctx do
     tag = read(ctx, %{"limit" => 1}).details.snapshot
     disabled = %{ctx | opts: Keyword.put(ctx.opts, :enforce_seen_lines, false)}
 
@@ -129,8 +129,10 @@ defmodule CodingAgent.Tools.AnchoredEditSeenLinesTest do
     tag = AnchoredEdit.snapshot(File.read!(ctx.path))
     default = %{ctx | opts: Keyword.delete(ctx.opts, :enforce_seen_lines)}
 
-    assert %AgentToolResult{} =
+    assert {:error, message} =
              edit(default, tag, [%{"start_line" => 13, "new_text" => "default"}])
+
+    assert message =~ "Unseen lines"
   end
 
   test "plain text replacements are unaffected", ctx do

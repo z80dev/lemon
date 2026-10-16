@@ -172,7 +172,7 @@ defmodule CodingAgent.ToolRegistry do
         Map.get(
           edit_config,
           :enforce_seen_lines,
-          Map.get(edit_config, "enforce_seen_lines", false)
+          Map.get(edit_config, "enforce_seen_lines", true)
         )
       )
 
