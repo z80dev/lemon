@@ -2,9 +2,10 @@ defmodule CodingAgent.ProcessStoreServer do
   @moduledoc """
   GenServer that owns the ProcessStore ETS table and manages DETS persistence.
 
-  This ensures the ETS table survives process crashes and is properly reloaded
-  from DETS on restart. It also handles marking running processes as :lost
-  when the system restarts (since we can't reconnect to OS PIDs).
+  Serializes launch admission, lifetime capacity and artifact accounting with
+  every record mutation. Reload preserves surviving registered sessions,
+  cancels unclaimed queued launches and marks missing live owners as :lost
+  without treating their absence as proof of external workload termination.
   """
 
   use GenServer
@@ -257,6 +258,9 @@ defmodule CodingAgent.ProcessStoreServer do
 
     state =
       case :ets.lookup(@table, id) do
+        [{^id, %{status: :cleared}, _}] ->
+          state
+
         [{^id, record, logs}] ->
           # A lost queue reply must not downgrade an acknowledged process, and a
           # confirmed rejection cannot overwrite a start that crossed the boundary.
@@ -373,6 +377,9 @@ defmodule CodingAgent.ProcessStoreServer do
 
     state =
       case :ets.lookup(@table, id) do
+        [{^id, %{status: :cleared}, _}] ->
+          state
+
         [{^id, record, logs}] ->
           terminal = Map.get(record, :launch_classification) in [:rejected, :expired, :canceled]
 
@@ -937,6 +944,9 @@ defmodule CodingAgent.ProcessStoreServer do
 
   defp do_reserve_artifact(process_id, requested, owner_budget, runtime_budget) do
     case :ets.lookup(@table, process_id) do
+      [{^process_id, %{status: :cleared}, _}] ->
+        {:error, :not_found}
+
       [{^process_id, record, logs}] ->
         owner = Map.get(record, :owner)
 

@@ -111,6 +111,13 @@
 
 ### Fixed
 
+- Managed process capture attachments validate the exact launch owner and
+  fingerprint without resetting output or logs. Cleared launches retain durable
+  receipts and reject late capture writes; failed accounting or capture cleanup
+  releases lifetime capacity once without dropping unreclaimed artifact charges.
+  Clearing a process now leaves its reconciliation session alive when the Store
+  refuses deletion.
+
 - Patch hunks retry whitespace and typographic-punctuation normalization only
   after an exact miss, reject ambiguous matches, and preserve original context.
 
