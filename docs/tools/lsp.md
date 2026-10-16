@@ -92,6 +92,10 @@ Behavior:
   identifies captured paths that may have changed, with an uncertainty warning;
   the receipt does not claim those paths stayed untouched. `changed_files` still
   reports confirmed mutations from completed batches.
+  Failed filesystem steps also report created parent directories, leftover
+  temporary files, files created before a failed write, and partially deleted
+  trees. Created parents and partially deleted trees are identified by their
+  root path, including when the failing operation was the first in the batch.
 - `status` lists every registered server as installed, missing (with its
   install hint) or running for this session.
 

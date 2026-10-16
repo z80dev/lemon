@@ -175,6 +175,9 @@
   `changed_files` and merging affected paths across batches.
 - Workspace-level LSP requests and symbol searches rebind handed-off clients to
   the current session owner before use, so owner death releases their leases.
+- LSP workspace-edit failure receipts retain mutations made by the failing
+  operation itself, including created parent directories, leftover temporary
+  files, failed writes and partially deleted trees.
 
 - Disclosure telemetry coverage isolates the initializing process and exercises
   a foreign initialization deterministically, preventing unrelated sessions from
