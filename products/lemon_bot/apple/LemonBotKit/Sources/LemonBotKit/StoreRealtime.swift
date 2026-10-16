@@ -7,18 +7,24 @@ extension LemonBotStore {
         socket?.cancel(with: .goingAway, reason: nil); socket = nil
         if connectionState != "reconnect_required" { connectionState = "disconnected" }
     }
-    func startSocket() {
+    func startSocket(identityVerified: Bool = false) {
         guard connectionState != "reconnect_required" else { return }
         stopSocket()
         guard account != nil else { return }
         let current = generation
         socketTask = Task { [weak self] in
             var attempt = 0
+            var shouldVerifyIdentity = !identityVerified
             while !Task.isCancelled {
-                guard let self, self.generation == current, let account = self.account, let transport = self.transport else { return }
+                guard let self, self.generation == current, let account = self.account else { return }
                 self.connectionState = "connecting"
                 self.lastConnectionAttemptAt = Date(); self.nextRetryAt = nil
                 do {
+                    if shouldVerifyIdentity { try await self.verifyConnectionIdentity() }
+                    shouldVerifyIdentity = true
+                    try Task.checkCancellation()
+                    try self.assertGeneration(current)
+                    let transport = try self.activeTransport()
                     var c = URLComponents(url: try transport.url("/realtime"), resolvingAgainstBaseURL: false)!
                     c.scheme = c.scheme == "https" ? "wss" : "ws"
                     guard let url = c.url else { throw ClientError.invalidPath }
@@ -41,10 +47,13 @@ extension LemonBotStore {
                         let frame = try JSONDecoder().decode(RealtimeServerFrame.self, from: data)
                         self.lastServerActivity = DispatchTime.now().uptimeNanoseconds
                         if case .ready(let ready) = frame {
-                            guard ready.userId == account.userID, ready.workspaceId == account.workspaceID else { throw ClientError.accountChanged }
+                            guard ready.userId == account.userID, ready.workspaceId == account.workspaceID else {
+                                self.markReconnectRequired(ClientError.accountChanged)
+                                throw ClientError.accountChanged
+                            }
                             _ = try WorkspaceCursor.normalized(ready.cursor)
                             self.connectionState = "syncing"
-                            try await self.synchronize()
+                            try await self.synchronize(identityVerified: true)
                             try await self.sendSocket(.subscribe(RealtimeClientFrameSubscribe(requestId: UUID().uuidString, cursor: self.cursor, conversationIds: [])), on: task)
                             heartbeat?.cancel()
                             heartbeat = Task { [weak self] in

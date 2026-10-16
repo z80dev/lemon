@@ -10,6 +10,11 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Lemon Bot iPhone pairing verifies the advertised backend and workspace before
+  connecting, shows device/code/expiry while waiting for desktop approval, and
+  restores saved sessions read-only without replaying sends or approvals.
+  Pinned Apple accounts recover from temporary HTTP 502/503/504 preflight outages
+  while retaining their credentials and blocking transport until verification succeeds.
 - Withdraw only ACP permission callbacks on approval resolution, not their
   requester/publisher, so native tools reliably receive approval and denial
   decisions, including **Refine plan** responses to `propose_plan`. Cancellation

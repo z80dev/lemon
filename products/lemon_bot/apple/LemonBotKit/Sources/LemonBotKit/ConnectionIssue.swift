@@ -61,6 +61,9 @@ public struct ConnectionIssue: Equatable, Sendable {
         } else if case ClientError.signedOut = error {
             layer = .signedOutOrRevoked; title = "Sign in again"
             reason = "This device is no longer authorized. Sign in or reconnect it to your desktop."
+        } else if let preflight = error as? BotPreflightError {
+            title = "Verify your Lemon Bot connection"
+            reason = preflight.localizedDescription
         } else { reason = "Lemon Bot couldn’t finish connecting. Check the details and try again." }
         return ConnectionIssue(origin: origin(for: baseURL), email: email, layer: layer, title: title, reason: reason, detail: String(reflecting: error) + "\n" + error.localizedDescription, lastAttemptAt: at, nextRetryAt: nextRetryAt)
     }

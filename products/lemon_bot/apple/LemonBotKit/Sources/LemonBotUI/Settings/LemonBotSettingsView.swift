@@ -319,6 +319,7 @@ private struct AccountPane: View {
     let store: LemonBotStore
     @State private var action = UIActionState()
     @State private var addAccount = false
+    @State private var deferredAccountChange = false
     @State private var confirmSignOut = false
     private var name: String { store.user?.displayName ?? store.account?.displayName ?? "this account" }
     var body: some View {
@@ -360,7 +361,16 @@ private struct AccountPane: View {
             }
         }
         .sheet(isPresented: $addAccount) { OnboardingView(store: store) }
-        .onChange(of: store.account?.id) { _, _ in addAccount = false }
+        .onChange(of: store.account?.id) { _, _ in
+            if store.pairingState == "completing" { deferredAccountChange = true }
+            else { addAccount = false }
+        }
+        .onChange(of: store.pairingState) { _, state in
+            if state != "completing", deferredAccountChange {
+                deferredAccountChange = false
+                addAccount = false
+            }
+        }
         .confirmationDialog("Sign out of \(name)?", isPresented: $confirmSignOut, titleVisibility: .visible) {
             Button("Sign out", role: .destructive) { Task { await action.perform { try await store.signOut() } } }
             Button("Cancel", role: .cancel) {}

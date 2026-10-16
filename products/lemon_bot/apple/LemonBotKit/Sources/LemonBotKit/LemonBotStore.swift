@@ -137,10 +137,10 @@ import Observation
         let saved = try saveAuthenticatedAccount(auth, baseURL: client.baseURL, deviceID: auth.session.deviceId, installationID: nil)
         try await restoreAccount(saved)
     }
-    func saveAuthenticatedAccount(_ auth: AuthResult, baseURL: URL, deviceID: ID?, installationID: String?) throws -> StoredAccount {
+    func saveAuthenticatedAccount(_ auth: AuthResult, baseURL: URL, deviceID: ID?, installationID: String?, instanceID: String? = nil) throws -> StoredAccount {
         let normalized = try HTTPTransport.normalizeBaseURL(baseURL)
         let id = ClientPersistence.digest(normalized.absoluteString + "|" + auth.user.id + "|" + auth.workspace.id)
-        let saved = StoredAccount(id: id, baseURL: normalized, email: auth.user.email, displayName: auth.user.displayName, token: auth.token, userID: auth.user.id, workspaceID: auth.workspace.id, deviceID: deviceID, sessionID: auth.session.id, sessionExpiresAtMs: auth.session.expiresAtMs, installationID: installationID)
+        let saved = StoredAccount(id: id, baseURL: normalized, email: auth.user.email, displayName: auth.user.displayName, token: auth.token, userID: auth.user.id, workspaceID: auth.workspace.id, deviceID: deviceID, sessionID: auth.session.id, sessionExpiresAtMs: auth.session.expiresAtMs, installationID: installationID, instanceID: instanceID ?? accounts.first(where: { $0.id == id })?.instanceID)
         try keychain.save(saved)
         accounts = try keychain.load()
         try persistence.saveLastAccountID(saved.id)
@@ -223,7 +223,7 @@ import Observation
         guard connectionState != "reconnect_required" else { throw ClientError.signedOut }
         let current = generation
         stopSocket(); connectionState = "syncing"; lastConnectionAttemptAt = Date(); nextRetryAt = nil
-        do { try await synchronize(); try assertGeneration(current); startSocket() }
+        do { try await synchronize(); try assertGeneration(current); startSocket(identityVerified: true) }
         catch {
             guard generation == current else { throw error }
             if error is CancellationError || (error as? URLError)?.code == .cancelled { throw error }
@@ -233,16 +233,59 @@ import Observation
             throw error
         }
     }
-    func markReconnectRequired() {
+    func markReconnectRequired(_ error: Error = ClientError.signedOut) {
         stopSocket(); generation = UUID(); transport = nil
         connectionState = "reconnect_required"
         nextRetryAt = nil
-        recordConnectionFailure(ClientError.signedOut)
+        recordConnectionFailure(error)
     }
-    func synchronize() async throws {
+    /// Read-only identity fence before sync or socket authentication. Never replace an existing pin.
+    func verifyConnectionIdentity() async throws {
+        guard let saved = account else { throw ClientError.signedOut }
+        #if !os(iOS)
+        // Existing Mac sign-in is outside phone pairing; verified/paired accounts still enforce their pin.
+        guard saved.instanceID != nil else { return }
+        #endif
         let current = generation
+        // UI/platform tasks can run while public preflight awaits. They must not use
+        // a saved session against an unverified endpoint, even for an unrelated request.
+        transport = nil
+        do {
+            let client = BotPreflightClient(session: httpSession)
+            let origin = try PairingLink.exactOrigin(saved.baseURL)
+            let expected: String
+            if let pinned = saved.instanceID { expected = pinned }
+            else {
+                // Upgrade an old iOS account only against its own authenticated workspace.
+                let baseline = try await client.identity(origin: origin, token: saved.token, use: Self.phoneOriginUse)
+                try assertGeneration(current)
+                try BotPreflight.validateIdentity(baseline, expectedInstanceID: baseline.instanceId, workspaceID: saved.workspaceID, use: Self.phoneOriginUse)
+                expected = baseline.instanceId
+            }
+            _ = try await client.preflight(origin: origin, expectedInstanceID: expected, session: BotPreflightSession(token: saved.token, workspaceID: saved.workspaceID), use: Self.phoneOriginUse)
+            try Task.checkCancellation()
+            try assertGeneration(current)
+            if saved.instanceID == nil {
+                var pinned = saved; pinned.instanceID = expected
+                try keychain.save(pinned); accounts = try keychain.load(); account = pinned
+            }
+            transport = try HTTPTransport(baseURL: saved.baseURL, token: saved.token, session: httpSession)
+        } catch {
+            guard generation == current else { throw error }
+            if let preflight = error as? BotPreflightError, preflight != .unavailable { markReconnectRequired(error) }
+            else if let backend = error as? BackendError, backend.status == 401 || backend.status == 403 { markReconnectRequired(error) }
+            throw error
+        }
+    }
+    func synchronize(identityVerified: Bool = false) async throws {
+        let current = generation
+        if !identityVerified { try await verifyConnectionIdentity() }
+        try assertGeneration(current)
         let value: Snapshot = try await read("/sync")
-        guard value.user.id == account?.userID, value.workspace.id == account?.workspaceID else { throw ClientError.accountChanged }
+        guard value.user.id == account?.userID, value.workspace.id == account?.workspaceID else {
+            markReconnectRequired(ClientError.accountChanged)
+            throw ClientError.accountChanged
+        }
         install(value); cursor = try WorkspaceCursor.normalized(value.cursor)
         if value.hasMore.bots { bots = try await allPages("/bots", as: Bot.self) }
         if value.hasMore.machines { machines = try await allPages("/machines", as: Machine.self) }
