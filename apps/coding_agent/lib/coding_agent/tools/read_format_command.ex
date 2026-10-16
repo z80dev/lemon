@@ -3,6 +3,8 @@ defmodule CodingAgent.Tools.ReadFormatCommand do
 
   import LemonAgent.Tools.AbortHelpers, only: [check_abort: 1]
 
+  alias CodingAgent.BashExecutor
+
   # PATH is operator configuration, but relative entries and workspace binaries
   # are not an implicit grant to execute project code for a fetch-only tool.
   def system_executable(name, cwd) do
@@ -106,7 +108,7 @@ defmodule CodingAgent.Tools.ReadFormatCommand do
 
   def run(executable, args, signal, opts \\ []) do
     with :ok <- check_abort(signal),
-         {:ok, port} <- open(executable, args) do
+         {:ok, port, guard} <- start_backend(executable, args, opts) do
       try do
         collect(
           port,
@@ -114,15 +116,132 @@ defmodule CodingAgent.Tools.ReadFormatCommand do
           0,
           signal,
           System.monotonic_time(:millisecond) + Keyword.get(opts, :timeout_ms, 30_000),
-          Keyword.get(opts, :max_bytes, 32 * 1024 * 1024)
+          Keyword.get(opts, :max_bytes, 32 * 1024 * 1024),
+          guard.monitor
         )
       after
-        close(port)
+        release_backend(guard)
       end
     end
   end
 
-  defp open(executable, args) do
+  defp start_backend(executable, args, opts) do
+    caller = self()
+    request = make_ref()
+
+    {owner, monitor} =
+      spawn_monitor(fn -> own_backend(caller, request, executable, args, opts) end)
+
+    receive do
+      {^request, {:ok, port}} ->
+        {:ok, port, %{owner: owner, monitor: monitor}}
+
+      {^request, {:error, reason}} ->
+        Process.demonitor(monitor, [:flush])
+        {:error, reason}
+
+      {:DOWN, ^monitor, :process, ^owner, reason} ->
+        {:error, "Document backend owner exited: #{inspect(reason)}"}
+    end
+  end
+
+  defp own_backend(caller, request, executable, args, opts) do
+    Process.flag(:trap_exit, true)
+    caller_monitor = Process.monitor(caller)
+
+    marker = "\0" <> Base.encode16(:crypto.strong_rand_bytes(24)) <> ":"
+
+    case open(executable, args, marker) do
+      {:ok, port} ->
+        case guard_backend(port, opts) do
+          {:ok, group} ->
+            if group, do: Port.command(port, "start\n")
+            send(caller, {request, {:ok, port}})
+
+            relay_backend(port, caller, caller_monitor, group, false, marker, "")
+
+          {:error, reason} ->
+            send(caller, {request, {:error, reason}})
+        end
+
+      {:error, reason} ->
+        send(caller, {request, {:error, reason}})
+    end
+  end
+
+  defp relay_backend(port, caller, caller_monitor, group, root_exited, marker, pending) do
+    receive do
+      {^port, {:data, bytes}} when not is_nil(group) ->
+        pending = relay_output(port, caller, pending <> bytes, marker)
+        relay_backend(port, caller, caller_monitor, group, root_exited, marker, pending)
+
+      {^port, {:exit_status, _} = payload} ->
+        send(caller, {port, payload})
+        relay_backend(port, caller, caller_monitor, group, true, marker, pending)
+
+      {^port, payload} ->
+        send(caller, {port, payload})
+        relay_backend(port, caller, caller_monitor, group, root_exited, marker, pending)
+
+      {:release, ^caller} ->
+        stop_backend(port, group, root_exited)
+
+      {:DOWN, ^caller_monitor, :process, ^caller, _reason} ->
+        stop_backend(port, group, root_exited)
+
+      {:EXIT, ^port, _reason} ->
+        relay_backend(port, caller, caller_monitor, group, root_exited, marker, pending)
+    end
+  end
+
+  # Only the trusted shell emits this per-invocation completion frame. Retain
+  # a possible partial frame while forwarding all backend bytes unchanged.
+  defp relay_output(port, caller, bytes, marker) do
+    case :binary.split(bytes, marker) do
+      [output, status] ->
+        send(caller, {port, {:data, output}})
+
+        case :binary.split(status, <<0>>) do
+          [status, trailing] ->
+            if trailing != "", do: send(caller, {port, {:data, trailing}})
+            send(caller, {port, {:exit_status, String.to_integer(status)}})
+            ""
+
+          [_partial] ->
+            marker <> status
+        end
+
+      [output] ->
+        size = max(byte_size(output) - byte_size(marker) + 1, 0)
+        <<ready::binary-size(^size), pending::binary>> = output
+        if ready != "", do: send(caller, {port, {:data, ready}})
+        pending
+    end
+  end
+
+  defp stop_backend(port, group, root_exited) do
+    if group, do: BashExecutor.signal_workload_group(group, :sigkill, root_exited)
+    close(port)
+  end
+
+  defp open(executable, args, marker) do
+    # Keep the witnessed leader alive even when the backend forks and exits
+    # before the guardian can observe it. Backend stdin remains EOF, as before.
+    # Completion travels in a private frame; the leader waits for cleanup.
+    {executable, args} =
+      if match?({:unix, _}, :os.type()) do
+        {"/bin/sh",
+         [
+           "-c",
+           ~S(read -r start || exit 125; marker=$1; shift; "$@" </dev/null; status=$?; printf '\000%s:%s\000' "$marker" "$status"; read -r release),
+           "read-backend",
+           marker |> String.trim_leading(<<0>>) |> String.trim_trailing(":"),
+           executable | args
+         ]}
+      else
+        {executable, args}
+      end
+
     {:ok,
      Port.open({:spawn_executable, executable}, [
        :binary,
@@ -135,6 +254,47 @@ defmodule CodingAgent.Tools.ReadFormatCommand do
     error -> {:error, "Cannot start document backend: #{Exception.message(error)}"}
   end
 
+  # The guardian owns the port from creation, so caller death cannot close it
+  # before the process-group witness is checked and surviving children stopped.
+  # On Unix an unwitnessed backend is killed through its still-open port and refused.
+  defp guard_backend(port, opts) do
+    capture = Keyword.get(opts, :capture_group, &BashExecutor.capture_workload_group/1)
+
+    with {:os_pid, os_pid} <- Port.info(port, :os_pid),
+         {:ok, group} <- capture.(os_pid) do
+      {:ok, group}
+    else
+      _ -> unguarded_backend(port, :os.type())
+    end
+  end
+
+  # No process groups or `ps`; closing the port is the existing contract.
+  defp unguarded_backend(_port, {:win32, _}), do: {:ok, nil}
+
+  defp unguarded_backend(port, _unix) do
+    with {:os_pid, os_pid} <- Port.info(port, :os_pid),
+         do: BashExecutor.kill_process_tree(os_pid)
+
+    close(port)
+
+    {:error,
+     "Cannot prove the document backend's process group (needs ps); refusing to run a backend that could not be stopped."}
+  end
+
+  defp release_backend(guard) do
+    send(guard.owner, {:release, self()})
+
+    if Process.alive?(guard.owner) do
+      receive do
+        {:DOWN, ref, :process, owner, _reason}
+        when ref == guard.monitor and owner == guard.owner ->
+          :ok
+      end
+    end
+
+    Process.demonitor(guard.monitor, [:flush])
+  end
+
   # The command can exit between any liveness check and the close, and closing
   # an already-closed port raises; either way the port is gone.
   defp close(port) do
@@ -143,7 +303,7 @@ defmodule CodingAgent.Tools.ReadFormatCommand do
     ArgumentError -> :ok
   end
 
-  defp collect(port, chunks, size, signal, deadline, max_bytes) do
+  defp collect(port, chunks, size, signal, deadline, max_bytes, monitor) do
     with :ok <- check_abort(signal) do
       if System.monotonic_time(:millisecond) >= deadline do
         {:error, "Document backend timed out. Select fewer pages or a smaller document."}
@@ -160,20 +320,25 @@ defmodule CodingAgent.Tools.ReadFormatCommand do
                 size + byte_size(bytes),
                 signal,
                 deadline,
-                max_bytes
+                max_bytes,
+                monitor
               )
             end
 
           {^port, {:exit_status, 0}} ->
-            {:ok, chunks |> Enum.reverse() |> IO.iodata_to_binary()}
+            with :ok <- check_abort(signal),
+                 do: {:ok, chunks |> Enum.reverse() |> IO.iodata_to_binary()}
 
           {^port, {:exit_status, status}} ->
             output = chunks |> Enum.reverse() |> IO.iodata_to_binary()
 
             {:error,
              "Document backend exited with status #{status}: #{String.slice(output, 0, 2000)}"}
+
+          {:DOWN, ^monitor, :process, _owner, reason} ->
+            {:error, "Document backend owner exited: #{inspect(reason)}"}
         after
-          50 -> collect(port, chunks, size, signal, deadline, max_bytes)
+          50 -> collect(port, chunks, size, signal, deadline, max_bytes, monitor)
         end
       end
     end

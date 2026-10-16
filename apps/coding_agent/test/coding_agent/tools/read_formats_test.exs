@@ -1,6 +1,8 @@
 defmodule CodingAgent.Tools.ReadFormatsTest do
   use ExUnit.Case, async: true
 
+  import CodingAgent.AsyncHelpers
+
   alias CodingAgent.Tools.{ReadFormats, ReadFormatText, ReadFormatCommand}
   alias LemonAgent.AbortSignal
   alias LemonAgent.Types.AgentToolResult
@@ -302,6 +304,16 @@ defmodule CodingAgent.Tools.ReadFormatsTest do
     executable = System.find_executable("sh")
     assert {:ok, "hello"} = ReadFormatCommand.run(executable, ["-c", "printf hello"], nil)
 
+    assert {:ok, <<0, "out", 0, "err">>} =
+             ReadFormatCommand.run(
+               executable,
+               ["-c", ~S(printf '\000out\000'; printf err >&2)],
+               nil
+             )
+
+    assert {:error, "Document backend exited with status 7: failure"} =
+             ReadFormatCommand.run(executable, ["-c", "printf failure >&2; exit 7"], nil)
+
     assert {:error, bounded} =
              ReadFormatCommand.run(executable, ["-c", "printf 123456789"], nil, max_bytes: 4)
 
@@ -312,6 +324,170 @@ defmodule CodingAgent.Tools.ReadFormatsTest do
 
     assert timeout =~ "timed out"
   end
+
+  test "immediate commands survive delayed group witnessing" do
+    capture = fn pid ->
+      Process.sleep(100)
+      CodingAgent.BashExecutor.capture_workload_group(pid)
+    end
+
+    for _ <- 1..10 do
+      assert {:ok, "hello"} =
+               ReadFormatCommand.run(System.find_executable("sh"), ["-c", "printf hello"], nil,
+                 capture_group: capture
+               )
+    end
+  end
+
+  test "an immediately exiting backend retains ownership of redirected children", %{tmp_dir: dir} do
+    parent = self()
+    sh = System.find_executable("sh")
+    script = ~S|(sleep 60 </dev/null >/dev/null 2>&1 & echo $! > "$1/child"); echo $$ > "$1/root"|
+    sentinel = Port.open({:spawn_executable, System.find_executable("sleep")}, args: ["60"])
+    {:os_pid, sentinel_pid} = Port.info(sentinel, :os_pid)
+    on_exit(fn -> System.cmd("kill", ["-9", Integer.to_string(sentinel_pid)]) end)
+
+    for cancellation <- [:abort, :death] do
+      signal = AbortSignal.new()
+
+      capture = fn pid ->
+        group = CodingAgent.BashExecutor.capture_workload_group(pid)
+        send(parent, {:witnessed, self()})
+
+        receive do
+          :start -> group
+        end
+      end
+
+      {caller, ref} =
+        spawn_monitor(fn ->
+          result =
+            ReadFormatCommand.run(sh, ["-c", script, "sh", dir], signal, capture_group: capture)
+
+          send(parent, {:result, result})
+        end)
+
+      assert_receive {:witnessed, guardian}, 5_000
+      :erlang.suspend_process(caller)
+      send(guardian, :start)
+      [root, child] = await_backend(dir)
+      assert_eventually(fn -> not os_alive?(root) end, timeout: 5_000)
+      assert os_alive?(child)
+
+      case cancellation do
+        :abort ->
+          AbortSignal.abort(signal)
+          :erlang.resume_process(caller)
+          assert_receive {:result, {:error, "Operation aborted"}}, 5_000
+          assert_receive {:DOWN, ^ref, :process, ^caller, :normal}
+
+        :death ->
+          Process.exit(caller, :kill)
+          assert_receive {:DOWN, ^ref, :process, ^caller, :killed}
+      end
+
+      assert_eventually(fn -> not os_alive?(child) end, timeout: 5_000)
+      assert os_alive?(sentinel_pid)
+    end
+  end
+
+  test "closed ports still clean up witnessed descendants on cancellation", %{tmp_dir: dir} do
+    sh = System.find_executable("sh")
+
+    script =
+      ~S|(sleep 60 </dev/null >/dev/null 2>&1 & echo $! > "$1/child"); echo $$ > "$1/root"; while [ ! -f "$1/exit" ]; do sleep 0.02; done|
+
+    sentinel = Port.open({:spawn_executable, System.find_executable("sleep")}, args: ["60"])
+    {:os_pid, sentinel_pid} = Port.info(sentinel, :os_pid)
+    on_exit(fn -> System.cmd("kill", ["-9", Integer.to_string(sentinel_pid)]) end)
+
+    for cancellation <- [:death, :abort] do
+      signal = AbortSignal.new()
+      parent = self()
+
+      {caller, ref} =
+        spawn_monitor(fn ->
+          result = ReadFormatCommand.run(sh, ["-c", script, "sh", dir], signal)
+          send(parent, {:result, result})
+        end)
+
+      [root, child] = await_backend(dir)
+      :erlang.suspend_process(caller)
+      # Let the guardian witness the child while the root is held alive.
+      Process.sleep(200)
+      File.write!(Path.join(dir, "exit"), "")
+      assert_eventually(fn -> not os_alive?(root) end, timeout: 5_000)
+      assert os_alive?(child)
+
+      case cancellation do
+        :death ->
+          Process.exit(caller, :kill)
+          assert_receive {:DOWN, ^ref, :process, ^caller, :killed}
+
+        :abort ->
+          AbortSignal.abort(signal)
+          :erlang.resume_process(caller)
+          assert_receive {:result, {:error, "Operation aborted"}}, 5_000
+          assert_receive {:DOWN, ^ref, :process, ^caller, :normal}
+      end
+
+      assert_eventually(fn -> not os_alive?(child) end, timeout: 5_000)
+      assert os_alive?(sentinel_pid)
+      File.rm!(Path.join(dir, "exit"))
+    end
+  end
+
+  test "abort and a killed caller stop the whole backend group, nothing else", %{tmp_dir: dir} do
+    sh = System.find_executable("sh")
+    # `child` leaves its subshell (reparented) but stays in the backend's group.
+    script = ~S|(sleep 60 & echo $! > "$1/child"); echo $$ > "$1/root"; exec sleep 60|
+    sentinel = Port.open({:spawn_executable, System.find_executable("sleep")}, args: ["60"])
+    {:os_pid, sentinel_pid} = Port.info(sentinel, :os_pid)
+    on_exit(fn -> System.cmd("kill", ["-9", Integer.to_string(sentinel_pid)]) end)
+
+    signal = AbortSignal.new()
+    task = Task.async(fn -> ReadFormatCommand.run(sh, ["-c", script, "sh", dir], signal) end)
+    backend = await_backend(dir)
+    AbortSignal.abort(signal)
+    assert Task.await(task, 5_000) == {:error, "Operation aborted"}
+    assert_eventually(fn -> not Enum.any?(backend, &os_alive?/1) end, timeout: 5_000)
+
+    {caller, ref} =
+      spawn_monitor(fn -> ReadFormatCommand.run(sh, ["-c", script, "sh", dir], nil) end)
+
+    backend = await_backend(dir)
+    Process.exit(caller, :kill)
+    assert_receive {:DOWN, ^ref, :process, ^caller, :killed}
+    assert_eventually(fn -> not Enum.any?(backend, &os_alive?/1) end, timeout: 5_000)
+
+    task =
+      Task.async(fn ->
+        ReadFormatCommand.run(sh, ["-c", script, "sh", dir], nil, timeout_ms: 500)
+      end)
+
+    backend = await_backend(dir)
+    assert {:error, message} = Task.await(task, 5_000)
+    assert message =~ "timed out"
+    assert_eventually(fn -> not Enum.any?(backend, &os_alive?/1) end, timeout: 5_000)
+
+    assert os_alive?(sentinel_pid)
+  end
+
+  defp await_backend(dir) do
+    files = [Path.join(dir, "root"), Path.join(dir, "child")]
+
+    assert_eventually(
+      fn -> Enum.all?(files, &(File.exists?(&1) and File.read!(&1) =~ ~r/^\d+\n$/)) end,
+      timeout: 5_000
+    )
+
+    pids = Enum.map(files, &(&1 |> File.read!() |> String.trim() |> String.to_integer()))
+    Enum.each(files, &File.rm!/1)
+    pids
+  end
+
+  defp os_alive?(pid),
+    do: match?({_, 0}, System.cmd("kill", ["-0", Integer.to_string(pid)], stderr_to_stdout: true))
 
   defp read(path, cwd, params \\ %{}, opts \\ []),
     do: ReadFormats.read(path, params, nil, cwd, opts)
