@@ -47,6 +47,27 @@ defmodule LemonMemory.SafetyTest do
       end
     end
 
+    test "refuses quoted, nested, and percent-encoded credential shapes" do
+      for sample <- [
+            ~S(run 'PASSWORD=first&mode=last' now),
+            ~S(x=%27PASSWORD%3Dfirst%26mode%3Dlast%27),
+            ~S(message%20text=api_key="first second"),
+            ~S(message%20text="api_key=first second"),
+            ~S(%74oken=api_key="first second"),
+            ~S(%2574oken=first),
+            ~S(%access_key=first),
+            ~S(%bearer=first),
+            ~S(token%3Dfirst)
+          ] do
+        assert Safety.contains_secret?(sample), sample
+        assert Safety.note_refusal_reason(sample), sample
+        {redacted, count} = Safety.redact(sample)
+        assert count > 0
+        refute redacted =~ "first"
+        refute redacted =~ "second"
+      end
+    end
+
     test "ignores clean operational text" do
       refute Safety.contains_secret?("implemented memory lookup and added tests")
       refute Safety.contains_secret?(nil)
