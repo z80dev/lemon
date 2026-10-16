@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Added provider-free owner bootstrap with explicit local `lemon-bot setup`: verifies the existing instance's exact tailnet HTTPS origin, prints only the non-secret origin to stdout and shows the sensitive single-use setup proof only on the controlling terminal. Removed unconditional startup-log setup-code output. Proofs now have a five-minute absolute expiry and persisted ten-attempt fence, atomic race/consume protection and explicit local renewal; existing configured accounts/workspaces and pairing stay unchanged. `setup --print-origin` offers read-only verified-origin discovery without issuing a proof.
 - Added a durable Bot backend identity, minimal public `/v1/setup` product/pairing descriptor and authenticated `/v1/identity` workspace binding. Shared origin preflight refuses wrong services, physical-phone loopback, identity/workspace mismatch, redirects and TLS bypass. Pairing QR links now require `backend/instance/cluster/code`; existing nonce, consent, expiry and revocation semantics remain intact.
 - Added tolerant build/provider/channel instance health and owner-confirmed remote controller restart/stop, observing reconnect/disconnect completion with a 300-second deadline. Replaced the runtime-control boolean with explicit actions and launcher/controller routing.
 - Fixed Apple clients reporting a retired foreground-presence socket's error after a reconnect during an acknowledged message send. Current socket failures and uncertain message nonce fencing remain intact.
@@ -26,4 +27,4 @@
 - Cut all live Bot/chat/routine/channel/helper access over to actual ownership, removing Team publication, managers, other-human group membership, connector lending and the second SQLite memory store. Default personas describe the owner's personal assistant rather than a Team role.
 - Added five-minute one-use QR preview/claim, desktop verification approval, fixed-nonce private completion recovery and persistent installation-bound revocable phone sessions. Safe pairing state events are restricted to current owner desktop devices.
 
-Deployment requires the coordinated platform RPCs, a supported controller default model and destination-local provider credentials with available quota; see README.md and the canonical contracts.
+Bot execution requires the coordinated platform RPCs, a supported controller default model and destination-local provider credentials with available quota; owner setup and management do not require a model/provider. See README.md and the canonical contracts.

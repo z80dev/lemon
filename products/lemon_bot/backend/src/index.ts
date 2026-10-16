@@ -87,11 +87,6 @@ export async function createBackend(config:BackendConfiguration,key:Uint8Array):
     ...createVoiceRoutes(services),...createExperienceRoutes(services),...createIntegrationRoutes(services),
     ...createRuntimeAdmissionRoutes(services),...createPairingRoutes(services)
   ]);
-  if(!store.metadata<string>('workspaceId')){
-    let code:string;const encrypted=store.metadata<string>('setupCode');
-    if(encrypted)code=codec.decrypt<string>(encrypted);else{code=services.id('setup');store.transaction(()=>{store.setMetadata('setupCode',codec.encrypt(code));store.setMetadata('setupCodeDigest',services.mutations.digest(code));});}
-    process.stdout.write(`Lemon Bot one-use setup code: ${code}\n`);
-  }
   experiences.start();
   let reconciling=false;
   const reconcile=async()=>{

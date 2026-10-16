@@ -323,6 +323,8 @@ import json
 import os
 from pathlib import Path
 import re
+import pty
+import select
 import secrets
 import socket
 import struct
@@ -376,7 +378,7 @@ if reported != f"lemon-bot {version}":
 def get(path):
     with urlopen(base + path, timeout=2) as response:
         return response.read(), response.headers.get_content_type()
-# First boot logs contain the genuine one-use setup code: never emit them.
+# Backend logs must never contain an owner proof; setup uses a private PTY below.
 log_path = root / "boot.log"
 def report_image_diagnostics():
     with log_path.open("rb") as private_log:
@@ -432,13 +434,65 @@ with log_path.open("xb") as log:
             body, _ = get("/" + quote(path.relative_to(web).as_posix()))
             if body != path.read_bytes():
                 raise SystemExit("lemon_bot: web asset missing or replaced by SPA fallback")
-        # Consume the real private setup code, then exercise the actual native
-        # image decoder. Version/help intentionally do not load image libraries.
-        code = re.search(r"Lemon Bot one-use setup code: (\S+)", log_path.read_text())
-        if code is None:
-            raise SystemExit("lemon_bot: private first-run setup code was not emitted")
+        origin_probe = subprocess.run(
+            [str(binary), "setup", "--same-machine", "--print-origin"],
+            env=environment, cwd=home, capture_output=True, timeout=30,
+        )
+        if origin_probe.returncode != 0 or origin_probe.stdout != (base + "\n").encode() or origin_probe.stderr:
+            raise SystemExit("lemon_bot: read-only verified same-machine origin failed")
+        # Explicit same-machine setup; the proof stays in private process memory.
+        # pty.fork establishes /dev/tty even on a headless release runner.
+        pid, master = pty.fork()
+        if pid == 0:
+            os.chdir(home)
+            os.execve(str(binary), [str(binary), "setup", "--same-machine"], environment)
+        private_output = bytearray()
+        deadline = time.monotonic() + 30
+        status = None
+        try:
+            while time.monotonic() < deadline:
+                if select.select([master], [], [], 0.1)[0]:
+                    try:
+                        chunk = os.read(master, 4096)
+                    except OSError:
+                        chunk = b""
+                    if not chunk:
+                        done, child_status = os.waitpid(pid, os.WNOHANG)
+                        if done:
+                            status = child_status
+                            break
+                        time.sleep(0.01)
+                        continue
+                    private_output.extend(chunk)
+                    if len(private_output) > 16384:
+                        break
+                done, child_status = os.waitpid(pid, os.WNOHANG)
+                if done:
+                    status = child_status
+                    # Drain buffered PTY bytes before checking the private proof.
+                    while select.select([master], [], [], 0)[0]:
+                        try:
+                            chunk = os.read(master, 4096)
+                        except OSError:
+                            break
+                        if not chunk:
+                            break
+                        private_output.extend(chunk)
+                    break
+        finally:
+            os.close(master)
+            if status is None:
+                done, child_status = os.waitpid(pid, os.WNOHANG)
+                if done:
+                    status = child_status
+                else:
+                    os.kill(pid, 9)
+                    os.waitpid(pid, 0)
+        code = re.search(rb"Lemon Bot one-use setup code: (\S+)", private_output)
+        if status != 0 or code is None:
+            raise SystemExit("lemon_bot: explicit private same-machine setup failed")
         bootstrap = json.dumps({
-            "clientNonce": secrets.token_hex(24), "setupCode": code[1],
+            "clientNonce": secrets.token_hex(24), "setupCode": code[1].decode(),
             "email": "release-smoke@example.com", "password": secrets.token_urlsafe(32),
             "displayName": "Release smoke", "workspaceName": "Release smoke",
         }).encode()

@@ -18,14 +18,14 @@ Keep `LEMON_BOT_DATA_DIR`, private operator configuration and server credential
 sources outside the versioned installation. Installing the backend does not
 install or replace the controller/worker: those use canonical full/min runtime
 profiles, and newly invited workers install the matching published Lemon release.
-An empty backend prints its real one-use local setup code; open its web origin
-and consume that code to create the owner. Never put the controller operator
-credential in a browser, generated join command, archive or public log.
+An empty backend never prints setup credentials in startup logs. Use the explicit
+local [owner setup command](#provider-free-owner-setup) below. Never put the
+controller operator credential in a browser, generated join command, archive or log.
 
 ### Source development
 
 
-Use Bun 1.4 or newer. Start the existing authenticated Lemon controller and configure provider credentials on each execution host. From this directory:
+Use Bun 1.4 or newer. Start the existing authenticated Lemon controller; model/provider credentials on execution hosts are needed for Bot work, not owner setup or management. From this directory:
 
 ```sh
 bun install
@@ -36,7 +36,7 @@ export LEMON_BOT_DATA_DIR="$HOME/.lemon/lemon_bot"
 bun run start
 ```
 
-`bun run dev` enables Bun watch mode. Source execution loads `../web/dist`; build the web product separately with `bun --cwd ../web run build`. Packaged execution loads `bot/web` beside its executable independently of the working directory. `LEMON_BOT_WEB_ROOT` explicitly overrides either layout. Missing web assets produce an explicit installation response without disabling the API. The empty deployment prints a one-use setup code to the operator terminal. It is never part of `/setup`, static assets, ordinary request logs, or clients' configuration. An unused code is encrypted in the private database and remains usable across restart; successful setup consumes it atomically.
+`bun run dev` enables Bun watch mode. Source execution loads `../web/dist`; build the web product separately with `bun --cwd ../web run build`. Packaged execution loads `bot/web` beside its executable independently of the working directory. `LEMON_BOT_WEB_ROOT` explicitly overrides either layout. Missing web assets produce an explicit installation response without disabling the API. Startup logs never contain a setup code; request one explicitly from the local operator terminal as described below.
 
 The public origin must be reachable from execution hosts for the bot MCP endpoint. Use reachable HTTPS, normally Tailscale Serve, for managed Bot provisioning and phone connections. A loopback public URL supports same-machine API/Simulator development but is not evidence that an enrolled worker shares the backend's network namespace. Supply the configured public origin through the proxy; arbitrary browser origins are rejected. Authenticated product clients connect to `/v1` and `/v1/realtime`, never directly to the controller.
 
@@ -58,6 +58,74 @@ Operator `approvedPrivateMcpOrigins` explicitly approves private first-party ori
 Workspace Owners and Admins can inspect the attached instance with `GET /v1/instance` and reconnect its controller link with `POST /v1/instance/reconnect`. The response includes release/build metadata, provider credential presence and channel health, never secret values. Optional malformed upstream sections stay null rather than failing the status read. Owners alone can invoke listed `runtime.actions`: a local launcher enables start/stop/restart, while a connected local or remote controller can advertise restart/stop through its lifecycle RPCs. `runtime.via` identifies the selected route; launcher takes precedence on loopback. Stop/restart require `confirm:true`; POSTs require `clientNonce`. A 202 response is an operation receipt: poll instance status for completion. Controller Restart succeeds on a new link connection timestamp, Stop on disconnection, and either fails after 300 seconds without that observation. Launcher commands run without a shell, with all `LEMON_BOT_*` environment variables stripped, a five-minute deadline, and a 4096-byte output tail. Runtime operations are in-memory and disappear on backend restart.
 
 Provider, identity, push, image, network/egress and host-management configuration belongs to the integration team's [provider guide](../providers.md) and the canonical operator configuration. Missing credentials affect only dependent operations and report a precise prerequisite. Bot tokens and product sessions are different principals; neither exposes the Lemon operator token. Configured backend secret references resolve only explicit private environment/file sources. Destination MCP header `${LEMON_SECRET:NAME}` values resolve only on the execution machine.
+
+## Provider-free owner setup
+
+Start the backend separately with its private environment configured. No model
+provider login, API key or default model is needed to claim the initial owner,
+register phone/browser devices, sign in or inspect the management API. Missing
+providers affect execution readiness, not backend reachability. This command
+does **not** start/install services, provision Tailscale/Serve or enable Funnel.
+
+In the same trusted local operator environment, run:
+
+```sh
+lemon-bot setup
+# Source checkout equivalent, from products/lemon_bot/backend:
+bun src/cli.ts setup
+# Machine-readable discovery only; no proof issuance and no terminal required:
+lemon-bot setup --print-origin
+```
+
+Both forms require `LEMON_BOT_DATA_DIR` and exact `LEMON_BOT_PUBLIC_URL` from the
+running instance. Proof issuance also requires its existing private `master.key`
+or original `LEMON_BOT_ENCRYPTION_KEY`; discovery alone does not read the key.
+Neither form requires controller/operator credentials in its environment.
+
+The command reads the existing private DATA_DIR instance identity and verifies
+the exact configured tailnet HTTPS origin with the shared [preflight](../contracts/preflight.md).
+It sends no operator/product credential or setup proof during the read-only probe,
+refuses redirects/TLS bypass and requires the advertised origin and local instance
+ID to match. It prints **only the verified non-secret origin to stdout**. Normal
+`setup` also displays a separately labelled **sensitive**, five-minute, one-use
+owner setup code directly on the controlling terminal (`/dev/tty`), never to
+stdout/stderr, startup logs or a plaintext file. A controlling terminal is required
+before issuance. Do not record that terminal, share screenshots or put the code
+in argv, a URL, QR, browser storage, analytics or clipboard automatically.
+
+On phone or Web, explicitly open that exact trusted HTTPS origin and use the
+existing owner setup form: enter the separate code, choose account credentials
+and name the workspace. Submit only to that instance's same-origin `/v1/setup`;
+there is no central proxy or cross-origin credential flow. A browser can type the
+origin/code manually; camera or native features are unnecessary. The code proves
+operator custody; a URL or tailnet membership alone is **not** owner authority.
+The resulting product session authorizes the same account/workspace before any
+LLM sign-in. Additional phones use existing owner-approved pairing.
+
+The proof is encrypted at rest with its digest, absolute expiry and attempt count
+in private product metadata. Re-running `setup` during its lifetime reprints the
+same proof without extending expiry or resetting attempts. Ten attempts exhaust
+it across restarts and minute-rate resets; only an explicit local command can
+replace an expired/exhausted proof. The existing ten-per-minute setup/global
+authentication limits still apply, including after local renewal. Claiming
+atomically consumes the proof and creates one owner/workspace/session even when
+requests race; expiry is checked again after password hashing. A fixed-nonce lost
+response can reconcile only the original still-authorized session using the same
+account credentials, never create another owner/session. Old pre-upgrade codes
+without an expiry are refused; request a new proof locally.
+
+Already configured instances refuse new owner setup and retain all existing
+accounts, workspace and device pairing. `setup --print-origin` still works for
+read-only discovery; use normal sign-in/pairing instead of re-bootstrap. For
+explicit **same-machine development/release smoke only**, append
+`--same-machine` (including with `--print-origin`) to permit literal loopback
+`127.0.0.1`/`[::1]` HTTP. This never means physical-phone readiness.
+
+Mock/unit coverage does not establish real phone/Tailscale or provider access.
+Operator acceptance must separately verify the printed TLS origin from the phone
+and browser, claim a fresh isolated instance once, reconnect the same workspace,
+and demonstrate a second claim is refused. Provider sign-in/real model execution
+is separate and never performed automatically by this command or its tests.
 
 ## Runtime prerequisites
 
