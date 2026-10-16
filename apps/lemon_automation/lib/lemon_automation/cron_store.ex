@@ -12,6 +12,8 @@ defmodule LemonAutomation.CronStore do
   - `:cron_audit_events` - Durable lifecycle audit events
   - `:cron_monitor_state` - Monitor-mode output fingerprints keyed by job ID
   - `:cron_preflight_notice_state` - Preflight-failure fingerprints keyed by job ID
+  - `:cron_settings` - Scheduler-wide switches; `:global_pause` holds the durable
+    pause-all marker
 
   Retry intent is stored on the terminal source run (`retry_due_at_ms`,
   `retry_next_attempt`, and root/source lineage). The retry run itself uses a
@@ -37,6 +39,8 @@ defmodule LemonAutomation.CronStore do
   @audit_table :cron_audit_events
   @monitor_table :cron_monitor_state
   @preflight_notice_table :cron_preflight_notice_state
+  @settings_table :cron_settings
+  @global_pause_key :global_pause
   @failure_alert_table :cron_failure_alert_state
   @notices_table :cron_failure_notices
 
@@ -47,7 +51,7 @@ defmodule LemonAutomation.CronStore do
   @doc """
   Store or update a cron job.
   """
-  @spec put_job(CronJob.t()) :: :ok
+  @spec put_job(CronJob.t()) :: :ok | {:error, term()}
   def put_job(%CronJob{} = job) do
     LemonCore.Store.put(@jobs_table, job.id, CronJob.to_storage_map(job))
   end
@@ -79,10 +83,11 @@ defmodule LemonAutomation.CronStore do
   @doc """
   Delete a cron job by ID.
   """
-  @spec delete_job(binary()) :: :ok
+  @spec delete_job(binary()) :: :ok | {:error, term()}
   def delete_job(job_id) do
-    delete_failure_alert_state(job_id)
-    LemonCore.Store.delete(@jobs_table, job_id)
+    with :ok <- delete_failure_alert_state(job_id) do
+      LemonCore.Store.delete(@jobs_table, job_id)
+    end
   end
 
   @doc "Read the durable failure incident state for a job."
@@ -133,6 +138,19 @@ defmodule LemonAutomation.CronStore do
   end
 
   @doc """
+  Strictly enumerate all cron jobs. An unreadable inventory is not an empty one.
+  """
+  @spec list_jobs_result() :: {:ok, [CronJob.t()]} | {:error, :store_unavailable}
+  def list_jobs_result do
+    with {:ok, rows} <- LemonCore.Store.fetch_all(@jobs_table) do
+      {:ok,
+       rows
+       |> Enum.map(fn {_id, map} -> CronJob.from_map(map) end)
+       |> Enum.sort_by(& &1.created_at_ms, :desc)}
+    end
+  end
+
+  @doc """
   List all enabled cron jobs.
   """
   @spec list_enabled_jobs() :: [CronJob.t()]
@@ -148,6 +166,44 @@ defmodule LemonAutomation.CronStore do
   def list_due_jobs do
     list_enabled_jobs()
     |> Enum.filter(&CronJob.due?/1)
+  end
+
+  # ============================================================================
+  # Global Pause
+  # ============================================================================
+
+  @doc """
+  Read the durable pause-all marker.
+
+  `{:ok, nil}` means the scheduler is running; an unavailable store is an error,
+  never "not paused". A marker whose contents cannot be read still reports
+  paused, with an unknown start time.
+  """
+  @spec global_pause() ::
+          {:ok, %{paused_at_ms: non_neg_integer() | nil} | nil} | {:error, :store_unavailable}
+  def global_pause do
+    case LemonCore.Store.fetch(@settings_table, @global_pause_key) do
+      {:ok, nil} -> {:ok, nil}
+      {:ok, marker} -> {:ok, %{paused_at_ms: marker |> paused_at_ms() |> valid_timestamp()}}
+      {:error, _} -> {:error, :store_unavailable}
+    end
+  end
+
+  @doc """
+  Atomically record the pause-all marker. An existing marker is never replaced,
+  so the original pause time survives repeated pause requests.
+  """
+  @spec put_global_pause(non_neg_integer()) :: :ok | {:error, :exists} | {:error, term()}
+  def put_global_pause(paused_at_ms) when is_integer(paused_at_ms) and paused_at_ms >= 0 do
+    LemonCore.Store.put_new(@settings_table, @global_pause_key, %{paused_at_ms: paused_at_ms})
+  end
+
+  @doc """
+  Remove the pause-all marker.
+  """
+  @spec clear_global_pause() :: :ok | {:error, term()}
+  def clear_global_pause do
+    LemonCore.Store.delete(@settings_table, @global_pause_key)
   end
 
   # ============================================================================
@@ -331,6 +387,18 @@ defmodule LemonAutomation.CronStore do
     |> Enum.sort_by(& &1.started_at_ms, :desc)
   end
 
+  @doc "Strictly enumerate all active runs, failing closed when the store cannot be read."
+  @spec active_runs_result() :: {:ok, [CronRun.t()]} | {:error, :store_unavailable}
+  def active_runs_result do
+    with {:ok, rows} <- LemonCore.Store.fetch_all(@runs_table) do
+      {:ok,
+       rows
+       |> Enum.map(fn {_id, map} -> CronRun.from_map(map) end)
+       |> Enum.filter(&CronRun.active?/1)
+       |> Enum.sort_by(& &1.started_at_ms, :desc)}
+    end
+  end
+
   @doc """
   List terminal source runs with durable retry intent that has not been marked
   dispatched. The caller still atomically claims the deterministic retry run.
@@ -338,12 +406,33 @@ defmodule LemonAutomation.CronStore do
   @spec pending_retries() :: [CronRun.t()]
   def pending_retries do
     list_all_runs(limit: 100_000)
-    |> Enum.filter(fn run ->
-      is_integer(meta_value(run.meta, :retry_due_at_ms)) and
-        is_integer(meta_value(run.meta, :retry_next_attempt)) and
-        is_nil(meta_value(run.meta, :retry_dispatched_run_id))
-    end)
+    |> Enum.filter(&retry_pending?/1)
     |> Enum.sort_by(&meta_value(&1.meta, :retry_due_at_ms), :asc)
+  end
+
+  @doc """
+  Strictly enumerate every undispatched retry intent without a history limit.
+  A failed read is not an empty retry queue.
+  """
+  @spec pending_retries_result() :: {:ok, [CronRun.t()]} | {:error, :store_unavailable}
+  def pending_retries_result do
+    with {:ok, rows} <- LemonCore.Store.fetch_all(@runs_table) do
+      {:ok,
+       rows
+       |> Enum.map(fn {_id, map} -> CronRun.from_map(map) end)
+       |> Enum.filter(&retry_pending?/1)
+       |> Enum.sort_by(&meta_value(&1.meta, :retry_due_at_ms), :asc)}
+    end
+  end
+
+  @doc """
+  Permanently skip a source run's undispatched retry. The run stays in history;
+  no retry attempt is ever claimed for it.
+  """
+  @spec abandon_retry(CronRun.t(), atom()) :: :ok | {:error, term()}
+  def abandon_retry(%CronRun{} = source_run, reason) when is_atom(reason) do
+    meta = Map.put(source_run.meta || %{}, :retry_abandoned, Atom.to_string(reason))
+    put_run(%{source_run | meta: meta})
   end
 
   @doc """
@@ -357,11 +446,7 @@ defmodule LemonAutomation.CronStore do
 
     rows
     |> Enum.map(fn {_id, map} -> CronRun.from_map(map) end)
-    |> Enum.filter(fn run ->
-      CronRun.finished?(run) and
-        not (is_integer(meta_value(run.meta, :retry_due_at_ms)) and
-               is_nil(meta_value(run.meta, :retry_dispatched_run_id)))
-    end)
+    |> Enum.filter(fn run -> CronRun.finished?(run) and not retry_undispatched?(run) end)
     |> Enum.group_by(& &1.job_id)
     |> Enum.each(fn {_job_id, runs} ->
       runs
@@ -542,6 +627,23 @@ defmodule LemonAutomation.CronStore do
   end
 
   defp meta_value(_meta, _key), do: nil
+
+  defp retry_pending?(%CronRun{meta: meta} = run) do
+    is_integer(meta_value(meta, :retry_next_attempt)) and retry_undispatched?(run)
+  end
+
+  # Intent that no retry attempt was claimed for and nobody abandoned.
+  defp retry_undispatched?(%CronRun{meta: meta}) do
+    is_integer(meta_value(meta, :retry_due_at_ms)) and
+      is_nil(meta_value(meta, :retry_dispatched_run_id)) and
+      is_nil(meta_value(meta, :retry_abandoned))
+  end
+
+  defp paused_at_ms(marker) when is_map(marker), do: monitor_get(marker, :paused_at_ms)
+  defp paused_at_ms(_marker), do: nil
+
+  defp valid_timestamp(value) when is_integer(value) and value >= 0, do: value
+  defp valid_timestamp(_value), do: nil
 
   defp query_runs(opts, extra_filter \\ nil) do
     project = fn records ->

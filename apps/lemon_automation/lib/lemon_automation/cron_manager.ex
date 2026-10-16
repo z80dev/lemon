@@ -54,6 +54,27 @@ defmodule LemonAutomation.CronManager do
       # Accept the current global default model for an unpinned job
       CronManager.refresh_captured_model("cron_abc")
 
+      # Pause or resume every job; the pause is durable across restarts
+      CronManager.pause_all()
+      CronManager.resume_all()
+      CronManager.pause_status()
+
+  ## Global Pause
+
+  `pause_all/0` holds back every cron job at once, across all profiles:
+  scheduled slots are not claimed, persisted retries wait, and `wake/2` is
+  refused. The marker is stored durably (`CronStore.global_pause/0`), so a daemon
+  restart keeps the pause and leaves stored schedules untouched. It is separate
+  from each job's own `enabled` flag, which neither switch changes. Runs already
+  in flight finish normally and an explicit `run_now/1` still works.
+
+  `resume_all/0` never catches up. Every slot and retry that fell inside the
+  pause is skipped and audited (expired one-shot jobs retire), and each job
+  continues at its next scheduled time. An unreadable marker blocks dispatch.
+  Startup restoration failures also hold dispatch independently of the marker;
+  `pause_status/0` exposes this as `restoration_pending`. Manual runs remain
+  available, and resume may clear the marker before restoration completes.
+
   ## Job Quality Features
 
   - **Monitor mode** (`monitor: true`) - completed runs whose normalized output
@@ -105,6 +126,13 @@ defmodule LemonAutomation.CronManager do
   @call_timeout_ms 10_000
   @task_supervisor LemonAutomation.TaskSupervisor
   @forwarded_summary_max_bytes 12_000
+
+  @typedoc "Durable pause plus the manager's independent startup restoration hold."
+  @type pause_status :: %{
+          paused: boolean(),
+          paused_at_ms: non_neg_integer() | nil,
+          restoration_pending: boolean()
+        }
 
   # ============================================================================
   # Client API
@@ -246,6 +274,43 @@ defmodule LemonAutomation.CronManager do
   end
 
   @doc """
+  Pause every cron job until `resume_all/0`.
+
+  The pause is durable and idempotent: pausing again keeps the original
+  `paused_at_ms`.
+  """
+  @spec pause_all() :: {:ok, pause_status()} | {:error, :store_unavailable}
+  def pause_all do
+    GenServer.call(__MODULE__, :pause_all, @call_timeout_ms)
+  end
+
+  @doc """
+  Lift the global pause, skipping every run missed while it was in effect.
+
+  Returns how many jobs lost a missed slot and how many pending retries were
+  dropped. Resuming a scheduler that is not paused is a no-op.
+  """
+  @spec resume_all() ::
+          {:ok,
+           %{
+             resumed: boolean(),
+             skipped_job_count: non_neg_integer(),
+             skipped_retry_count: non_neg_integer()
+           }}
+          | {:error, :store_unavailable}
+  def resume_all do
+    GenServer.call(__MODULE__, :resume_all, @call_timeout_ms)
+  end
+
+  @doc """
+  Report the durable global pause and the manager-owned startup restoration hold.
+  """
+  @spec pause_status() :: {:ok, pause_status()} | {:error, :store_unavailable}
+  def pause_status do
+    GenServer.call(__MODULE__, :pause_status, @call_timeout_ms)
+  end
+
+  @doc """
   Get run history for a job.
 
   ## Options
@@ -280,20 +345,20 @@ defmodule LemonAutomation.CronManager do
     now = LemonCore.Clock.now_ms()
     config = Config.load().automation
 
-    {jobs, catch_up_slots} =
-      Enum.reduce(jobs, {[], %{}}, fn job, {jobs, slots} ->
-        case restore_schedule(job, now, config.catch_up_missed) do
-          {:keep, job, true} -> {[job | jobs], Map.put(slots, job.id, job.next_run_at_ms)}
-          {:keep, job, false} -> {[job | jobs], slots}
-          :retired -> {jobs, slots}
-        end
-      end)
+    {jobs, catch_up_slots, pending} =
+      case restore_startup_schedules() do
+        {:ok, restored, slots} -> {restored, slots, false}
+        {:error, _} -> {jobs, %{}, true}
+      end
 
     state = %{
       jobs: Map.new(jobs, &{&1.id, &1}),
       tasks: %{},
       task_refs: %{},
       retry_timer: nil,
+      restoration_pending: pending,
+      restoration_backoff_ms: 250,
+      restoration_timer: nil,
       catch_up_slots: catch_up_slots,
       last_cleanup_at_ms: now,
       run_retention_per_job: config.run_retention_per_job,
@@ -317,6 +382,7 @@ defmodule LemonAutomation.CronManager do
       |> recover_stale_active_runs()
       |> dispatch_due_retries()
       |> schedule_retry_tick()
+      |> schedule_restoration()
 
     # Schedule first tick
     schedule_tick()
@@ -568,13 +634,18 @@ defmodule LemonAutomation.CronManager do
         {:reply, {:error, :job_disabled}, state}
 
       job ->
-        if unknown_run_locked?(job) or
-             (Keyword.get(opts, :skip_if_running, false) and job_active_run_locked?(job)) do
-          {:reply, {:error, :already_running}, state}
-        else
-          state = put_in(state.jobs[job.id], job)
-          {run, state} = execute_job(job, :wake, opts, state)
-          {:reply, {:ok, run}, state}
+        cond do
+          dispatch_held?(state) ->
+            {:reply, {:error, :cron_paused}, state}
+
+          unknown_run_locked?(job) or
+              (Keyword.get(opts, :skip_if_running, false) and job_active_run_locked?(job)) ->
+            {:reply, {:error, :already_running}, state}
+
+          true ->
+            state = put_in(state.jobs[job.id], job)
+            {run, state} = execute_job(job, :wake, opts, state)
+            {:reply, {:ok, run}, state}
         end
     end
   end
@@ -583,16 +654,22 @@ defmodule LemonAutomation.CronManager do
   def handle_call({:claim_submission, cron_id, router_id, session_key}, _from, state) do
     case CronStore.get_run(cron_id) do
       %CronRun{status: :running, run_id: ^router_id} = run ->
-        if meta_value(run.meta, :abort_requested) do
-          {:reply, {:error, :aborted}, state}
-        else
-          meta =
-            (run.meta || %{})
-            |> Map.put(:submission_started, true)
-            |> Map.put(:router_session_key, session_key)
+        cond do
+          meta_value(run.meta, :abort_requested) ->
+            {:reply, {:error, :aborted}, state}
 
-          result = CronStore.put_run(%{run | meta: meta})
-          {:reply, result, state}
+          run.triggered_by in [:schedule, :retry] and
+            meta_value(run.meta, :submission_started) != true and dispatch_held?(state) ->
+            {:reply, {:error, :aborted}, state}
+
+          true ->
+            meta =
+              (run.meta || %{})
+              |> Map.put(:submission_started, true)
+              |> Map.put(:router_session_key, session_key)
+
+            result = CronStore.put_run(%{run | meta: meta})
+            {:reply, result, state}
         end
 
       _ ->
@@ -649,6 +726,68 @@ defmodule LemonAutomation.CronManager do
   end
 
   @impl true
+  def handle_call(:pause_status, _from, state) do
+    {:reply, read_pause_status(state), state}
+  end
+
+  @impl true
+  def handle_call(:pause_all, _from, state) do
+    now = LemonCore.Clock.now_ms()
+
+    case CronStore.put_global_pause(now) do
+      :ok ->
+        case invalidate_paused_claims(state) do
+          {:ok, state} ->
+            CronStore.record_audit(:all_jobs_paused, %{source: :cron_manager, status: :paused})
+            Logger.info("[CronManager] All cron jobs paused")
+            {:reply, {:ok, pause_status(%{paused_at_ms: now}, state)}, state}
+
+          {:error, state} ->
+            {:reply, {:error, :store_unavailable}, state}
+        end
+
+      {:error, :exists} ->
+        case invalidate_paused_claims(state) do
+          {:ok, state} -> {:reply, read_pause_status(state), state}
+          {:error, state} -> {:reply, {:error, :store_unavailable}, state}
+        end
+
+      {:error, _} ->
+        {:reply, {:error, :store_unavailable}, state}
+    end
+  end
+
+  @impl true
+  def handle_call(:resume_all, _from, state) do
+    case CronStore.global_pause() do
+      {:ok, nil} ->
+        {:reply, {:ok, %{resumed: false, skipped_job_count: 0, skipped_retry_count: 0}}, state}
+
+      {:ok, %{paused_at_ms: paused_at_ms}} ->
+        now = LemonCore.Clock.now_ms()
+        # A paused restart may have loaded an empty inventory during a read
+        # failure. Reload it strictly for both slot skipping and retry eligibility.
+        # Keep the marker until every durable skip is confirmed; partial failures
+        # only repeat idempotent mutations on the next resume attempt.
+        with {:ok, jobs} <- CronStore.list_jobs_result(),
+             state = %{state | jobs: Map.new(jobs, &{&1.id, &1})},
+             {:ok, state} <- invalidate_paused_claims(state),
+             {:ok, state, skipped_jobs} <- skip_paused_slots(state, now) do
+          finish_resume(state, paused_at_ms, now, skipped_jobs)
+        else
+          {:error, failed_state} when is_map(failed_state) ->
+            {:reply, {:error, :store_unavailable}, failed_state}
+
+          {:error, :store_unavailable} ->
+            {:reply, {:error, :store_unavailable}, state}
+        end
+
+      {:error, _} = error ->
+        {:reply, error, state}
+    end
+  end
+
+  @impl true
   def handle_call({:runs, job_id, opts}, _from, state) do
     runs = CronStore.list_runs(job_id, opts)
     {:reply, runs, state}
@@ -658,6 +797,27 @@ defmodule LemonAutomation.CronManager do
   def handle_cast(:tick, state) do
     state = do_tick(state)
     {:noreply, state}
+  end
+
+  @impl true
+  def handle_info(:restore_schedules, %{restoration_pending: true} = state) do
+    state = %{state | restoration_timer: nil}
+
+    case restore_startup_schedules() do
+      {:ok, jobs, slots} ->
+        state = %{
+          state
+          | jobs: Map.new(jobs, &{&1.id, &1}),
+            catch_up_slots: slots,
+            restoration_pending: false,
+            restoration_backoff_ms: 250
+        }
+
+        {:noreply, state |> dispatch_due_retries() |> schedule_retry_tick()}
+
+      {:error, _} ->
+        {:noreply, schedule_restoration(state)}
+    end
   end
 
   @impl true
@@ -695,13 +855,21 @@ defmodule LemonAutomation.CronManager do
     state =
       with %CronJob{} = job <- Map.get(state.jobs, job_id),
            %CronRun{status: :running} = run <- CronStore.get_run(run_id) do
-        if job.enabled or (job.once and run.triggered_by == :schedule) do
-          submit_claimed_run(job, run, state)
-        else
-          {_run, state} =
-            terminalize_run(state, run, {:aborted, "Job paused before submission"}, [])
+        cond do
+          run.triggered_by in [:schedule, :retry] and dispatch_held?(state) ->
+            {_run, state} =
+              terminalize_run(state, run, {:aborted, "Cron paused before submission"}, [])
 
-          state
+            state
+
+          job.enabled or (job.once and run.triggered_by == :schedule) ->
+            submit_claimed_run(job, run, state)
+
+          true ->
+            {_run, state} =
+              terminalize_run(state, run, {:aborted, "Job paused before submission"}, [])
+
+            state
         end
       else
         %CronRun{} = run ->
@@ -795,6 +963,53 @@ defmodule LemonAutomation.CronManager do
 
   defp abort_router_run(_run), do: :ok
 
+  # Failed durable skips hold dispatch without restarting the supervision tree.
+  defp restore_startup_schedules do
+    with {:ok, marker} <- CronStore.global_pause(),
+         {:ok, jobs} <- CronStore.list_jobs_result() do
+      restore_schedules(
+        jobs,
+        LemonCore.Clock.now_ms(),
+        Config.load().automation.catch_up_missed,
+        marker != nil
+      )
+    end
+  end
+
+  defp schedule_restoration(%{restoration_pending: true, restoration_timer: nil} = state) do
+    timer = Process.send_after(self(), :restore_schedules, state.restoration_backoff_ms)
+
+    %{
+      state
+      | restoration_timer: timer,
+        restoration_backoff_ms: min(state.restoration_backoff_ms * 2, 5_000)
+    }
+  end
+
+  defp schedule_restoration(state), do: state
+
+  defp dispatch_held?(state), do: Map.get(state, :restoration_pending, false) or paused?()
+
+  defp restore_schedules(jobs, now, catch_up, paused) do
+    Enum.reduce_while(jobs, {:ok, [], %{}}, fn job, {:ok, jobs, slots} ->
+      result = if paused, do: {:keep, job, false}, else: restore_schedule(job, now, catch_up)
+
+      case result do
+        {:keep, job, true} ->
+          {:cont, {:ok, [job | jobs], Map.put(slots, job.id, job.next_run_at_ms)}}
+
+        {:keep, job, false} ->
+          {:cont, {:ok, [job | jobs], slots}}
+
+        :retired ->
+          {:cont, {:ok, jobs, slots}}
+
+        {:error, _} = error ->
+          {:halt, error}
+      end
+    end)
+  end
+
   defp restore_schedule(%CronJob{enabled: false} = job, _now, _catch_up),
     do: {:keep, job, false}
 
@@ -813,23 +1028,7 @@ defmodule LemonAutomation.CronManager do
     if catch_up and now - due <= grace do
       {:keep, job, true}
     else
-      Logger.info("[CronManager] Skipping missed slot for #{job.id}")
-
-      CronStore.record_audit(:missed_slot_skipped, %{
-        job_id: job.id,
-        source: :cron_manager,
-        triggered_by: :schedule,
-        reason: if(catch_up, do: :outside_grace, else: :catch_up_disabled)
-      })
-
-      if job.once do
-        CronStore.delete_job(job.id)
-        CronStore.delete_monitor_state(job.id)
-        CronStore.delete_preflight_notice_state(job.id)
-        :retired
-      else
-        reanchor_schedule(job)
-      end
+      skip_missed_slot(job, if(catch_up, do: :outside_grace, else: :catch_up_disabled))
     end
   end
 
@@ -842,8 +1041,173 @@ defmodule LemonAutomation.CronManager do
   defp reanchor_schedule(job) do
     next_run = CronSchedule.next_run_ms(job.schedule, job.timezone)
     job = CronJob.set_next_run(job, next_run)
-    CronStore.put_job(job)
-    {:keep, job, false}
+
+    case CronStore.put_job(job) do
+      :ok -> {:keep, job, false}
+      {:error, _} = error -> error
+    end
+  end
+
+  # Audit a slot that will never run and move the job on to its next occurrence.
+  # One-shot jobs have no next occurrence and retire instead.
+  defp skip_missed_slot(%CronJob{} = job, reason) do
+    result =
+      if job.once do
+        with :ok <- CronStore.delete_monitor_state(job.id),
+             :ok <- CronStore.delete_preflight_notice_state(job.id),
+             :ok <- CronStore.delete_job(job.id) do
+          :retired
+        end
+      else
+        reanchor_schedule(job)
+      end
+
+    unless match?({:error, _}, result) do
+      Logger.info("[CronManager] Skipping missed slot for #{job.id}")
+
+      CronStore.record_audit(:missed_slot_skipped, %{
+        job_id: job.id,
+        source: :cron_manager,
+        triggered_by: :schedule,
+        reason: reason
+      })
+    end
+
+    result
+  end
+
+  # Resume: jobs whose slot fell inside the pause are re-anchored without
+  # running; slots still in the future, and jobs paused on their own, are kept.
+  defp skip_paused_slots(state, now) do
+    Enum.reduce_while(Map.values(state.jobs), {:ok, state, 0}, fn job, {:ok, state, skipped} ->
+      if job.enabled and is_integer(job.next_run_at_ms) and job.next_run_at_ms < now do
+        case skip_missed_slot(job, :global_pause) do
+          {:keep, job, _catch_up} ->
+            {:cont, {:ok, put_in(state.jobs[job.id], job), skipped + 1}}
+
+          :retired ->
+            Events.emit_job_deleted(job)
+            {:cont, {:ok, %{state | jobs: Map.delete(state.jobs, job.id)}, skipped + 1}}
+
+          {:error, _} ->
+            {:halt, {:error, state}}
+        end
+      else
+        {:cont, {:ok, state, skipped}}
+      end
+    end)
+  end
+
+  # A retry that came due while paused is a missed run like any other slot.
+  # Retries of individually paused jobs keep waiting for their own resume.
+  defp abandon_paused_retries(state, paused_at_ms, now) do
+    with {:ok, retries} <- CronStore.pending_retries_result() do
+      Enum.reduce_while(retries, {:ok, 0}, fn source_run, {:ok, skipped} ->
+        due_at_ms = meta_value(source_run.meta, :retry_due_at_ms)
+        job = Map.get(state.jobs, source_run.job_id)
+
+        if match?(%CronJob{enabled: true}, job) and due_at_ms <= now and
+             (is_nil(paused_at_ms) or due_at_ms >= paused_at_ms) do
+          case CronStore.abandon_retry(source_run, :global_pause) do
+            :ok ->
+              CronStore.record_audit(:retry_skipped, %{
+                job_id: source_run.job_id,
+                run_id: source_run.id,
+                source: :cron_manager,
+                triggered_by: :retry,
+                reason: :global_pause
+              })
+
+              {:cont, {:ok, skipped + 1}}
+
+            {:error, _} = error ->
+              {:halt, error}
+          end
+        else
+          {:cont, {:ok, skipped}}
+        end
+      end)
+    end
+  end
+
+  defp finish_resume(state, paused_at_ms, now, skipped_jobs) do
+    with {:ok, skipped_retries} <- abandon_paused_retries(state, paused_at_ms, now),
+         :ok <- CronStore.clear_global_pause() do
+      CronStore.record_audit(:all_jobs_resumed, %{
+        source: :cron_manager,
+        status: :resumed,
+        reason: "skipped #{skipped_jobs} missed slot(s) and #{skipped_retries} retry(ies)"
+      })
+
+      Logger.info(
+        "[CronManager] All cron jobs resumed; skipped #{skipped_jobs} missed slot(s) " <>
+          "and #{skipped_retries} retry(ies)"
+      )
+
+      {:reply,
+       {:ok,
+        %{
+          resumed: true,
+          skipped_job_count: skipped_jobs,
+          skipped_retry_count: skipped_retries
+        }}, schedule_retry_tick(state)}
+    else
+      {:error, _} ->
+        {:reply, {:error, :store_unavailable}, state}
+    end
+  end
+
+  # Persist invalidation before acknowledging pause, even for claims whose
+  # jitter timer has not fired. A later resume must never revive these claims.
+  defp invalidate_paused_claims(state) do
+    case CronStore.active_runs_result() do
+      {:ok, runs} ->
+        Enum.reduce_while(runs, {:ok, state}, fn run, {:ok, state} ->
+          if run.triggered_by in [:schedule, :retry] and
+               meta_value(run.meta, :submission_started) != true do
+            run = %{run | meta: Map.put(run.meta || %{}, :abort_requested, true)}
+
+            case CronStore.put_run(run) do
+              :ok ->
+                {_run, state} =
+                  terminalize_run(state, run, {:aborted, "Cron paused before submission"}, [])
+
+                {:cont, {:ok, state}}
+
+              {:error, _} ->
+                {:halt, {:error, state}}
+            end
+          else
+            {:cont, {:ok, state}}
+          end
+        end)
+
+      {:error, _} ->
+        {:error, state}
+    end
+  end
+
+  # An unreadable marker fails closed: never launch scheduled work while the
+  # switch's state is unknown.
+  defp paused? do
+    case CronStore.global_pause() do
+      {:ok, nil} -> false
+      _paused_or_unknown -> true
+    end
+  end
+
+  defp read_pause_status(state) do
+    with {:ok, marker} <- CronStore.global_pause() do
+      {:ok, pause_status(marker, state)}
+    end
+  end
+
+  defp pause_status(marker, state) do
+    %{
+      paused: not is_nil(marker),
+      paused_at_ms: if(marker, do: marker.paused_at_ms),
+      restoration_pending: state.restoration_pending
+    }
   end
 
   defp do_tick(state) do
@@ -862,15 +1226,16 @@ defmodule LemonAutomation.CronManager do
         state
       end
 
-    # Find due jobs
-    due_jobs =
-      all_jobs
-      |> Enum.filter(&CronJob.due?/1)
-
+    # Find due jobs. A global pause claims nothing and leaves slots untouched
+    # for `resume_all/0` to skip.
     state =
-      Enum.reduce(due_jobs, state, fn job, acc ->
-        run_scheduled_job(job, acc, now)
-      end)
+      if dispatch_held?(state) do
+        state
+      else
+        all_jobs
+        |> Enum.filter(&CronJob.due?/1)
+        |> Enum.reduce(state, fn job, acc -> run_scheduled_job(job, acc, now) end)
+      end
 
     state
     |> dispatch_due_retries()
@@ -1011,6 +1376,8 @@ defmodule LemonAutomation.CronManager do
 
     {run, state}
   end
+
+  defp run_scheduled_job(_job, %{restoration_pending: true} = state, _now), do: state
 
   defp run_scheduled_job(%CronJob{} = job, state, now) do
     if job_active_run_locked?(job) do
@@ -1163,7 +1530,14 @@ defmodule LemonAutomation.CronManager do
       :ok ->
         case CronJob.execution_mode(job) do
           :command ->
-            command_runner().submit(job, run, run_id: run.run_id)
+            with :ok <-
+                   GenServer.call(
+                     manager,
+                     {:claim_submission, run.id, run.run_id, job.session_key},
+                     @call_timeout_ms
+                   ) do
+              command_runner().submit(job, run, run_id: run.run_id)
+            end
 
           :agent ->
             opts =
@@ -1500,6 +1874,10 @@ defmodule LemonAutomation.CronManager do
   defp persist_retry_intent(_job, run), do: {run, :none}
 
   defp dispatch_due_retries(state) do
+    if dispatch_held?(state), do: state, else: dispatch_unpaused_retries(state)
+  end
+
+  defp dispatch_unpaused_retries(state) do
     now = LemonCore.Clock.now_ms()
 
     Enum.reduce(CronStore.pending_retries(), state, fn source_run, state ->
@@ -1603,8 +1981,15 @@ defmodule LemonAutomation.CronManager do
           |> Enum.min(fn -> now + @tick_interval_ms end)
 
         # A past-due retry may be waiting for another active run. Poll gently;
-        # the persisted due time remains the authority across restarts.
-        delay_ms = if due_at_ms <= now, do: 1_000, else: due_at_ms - now
+        # the persisted due time remains the authority across restarts. Nothing
+        # dispatches while paused, so only re-check at the normal tick cadence.
+        delay_ms =
+          cond do
+            dispatch_held?(state) -> @tick_interval_ms
+            due_at_ms <= now -> 1_000
+            true -> due_at_ms - now
+          end
+
         %{state | retry_timer: Process.send_after(self(), :retry_tick, delay_ms)}
     end
   end

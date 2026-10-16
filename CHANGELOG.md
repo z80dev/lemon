@@ -32,6 +32,19 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   on timeout, abort and caller death. A startup handshake witnesses a trusted
   leader before converters execute and retains it through cleanup, including
   when a short-lived converter forks a child and immediately exits.
+- Global cron pause invalidates claimed-but-unsubmitted scheduled and retry runs
+  before acknowledging success, including workers preparing submission and
+  delayed jitter timers. Resume strictly reloads the durable job inventory and
+  keeps the pause in force if job/retry enumeration or any required skipped-slot/
+  retry persistence fails, including after a paused restart with unreadable jobs.
+  Startup storage failures hold scheduled work and retries while durable restoration
+  retries with capped backoff, without restarting automation sibling services.
+  Unreadable pause markers require normal expired-slot/one-shot restoration before
+  dispatch resumes; confirmed pauses still preserve schedules until explicit resume.
+  Status exposes `restorationPending` separately from the durable `paused` marker:
+  resume may clear the marker while scheduled dispatch, wake triggers, and retries
+  remain blocked until restoration succeeds. Explicit manual `run_now` remains
+  available while restoration is pending.
 - Setup/readiness preserve native colon model IDs, including multi-colon IDs.
   Live setup strips only actual provider qualification, honors declared/discovered
   full IDs in the effective provider scope and model overrides, and rejects known
@@ -114,6 +127,14 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   after a crash, and reports permission/lock/cleanup failures truthfully.
   `[tui] prompt_history = false` disables persistence. History stays client-local,
   outside doctor support bundles; backups may include it.
+- One durable switch pauses every cron job across profiles: `lemon cron pause
+  --all` / `resume --all`, `cron.pause`/`cron.resume` with `all: true`, and the
+  `cron` tool's `pause_all`/`resume_all` actions. The pause survives restarts and
+  holds back scheduled runs, retries and wake triggers while in-flight and manual
+  runs continue. Resuming never catches up: slots and retries missed during the
+  pause are skipped and audited, and each job continues at its next scheduled
+  time. `cron.status`, `lemon cron status`, the cron tool and `lemon doctor`
+  report the paused state.
 - TUI status bar shows the session's cumulative cost, updated after each run
   (including snapshot-managed sessions, counted once per run). Runs without
   cost data, resumed history, and events lost to a reconnect make it a lower

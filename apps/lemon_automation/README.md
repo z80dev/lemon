@@ -353,9 +353,9 @@ and the harmless disabled example under
 | `LemonAutomation.CronJob` | `lib/lemon_automation/cron_job.ex` | Job struct with CRUD operations, `due?/1` predicate, serialization |
 | `LemonAutomation.CronRun` | `lib/lemon_automation/cron_run.ex` | Run struct with state machine transitions (pending -> running -> completed/failed/timeout/aborted) |
 | `LemonAutomation.CronSchedule` | `lib/lemon_automation/cron_schedule.ex` | Cron expression parser and next-run time computation |
-| `LemonAutomation.CronStore` | `lib/lemon_automation/cron_store.ex` | Persistence layer using `LemonCore.Store` (tables: `:cron_jobs`, `:cron_runs`) |
+| `LemonAutomation.CronStore` | `lib/lemon_automation/cron_store.ex` | Persistence layer using `LemonCore.Store` (tables: `:cron_jobs`, `:cron_runs`, plus `:cron_settings` for the durable global pause marker) |
 | `LemonAutomation.CronMemory` | `lib/lemon_automation/cron_memory.ex` | Persistent markdown-based cross-run memory for cron jobs |
-| `LemonAutomation.Tools.Cron` | `lib/lemon_automation/tools/cron.ex` | The agent `cron` tool (list/add/update/pause/resume/abort/remove/run/runs); registered with `LemonAgent.ToolRegistry` by `LemonAutomation.Application`, so sessions are offered it through the platform tool registry; non-Lemon session ids (e.g. TUI `tui-…`) fall back to `agent:<id>:main` |
+| `LemonAutomation.Tools.Cron` | `lib/lemon_automation/tools/cron.ex` | The agent `cron` tool (status/list/add/update/pause/resume/pause_all/resume_all/abort/remove/run/runs); registered with `LemonAgent.ToolRegistry` by `LemonAutomation.Application`, so sessions are offered it through the platform tool registry; non-Lemon session ids (e.g. TUI `tui-…`) fall back to `agent:<id>:main` |
 | `LemonAutomation.CronCommandRunner` | `lib/lemon_automation/cron_command_runner.ex` | Supervised no-agent local shell command runner for operator-created command cron jobs |
 | `LemonCore.Doctor.CronDiagnostics` | `apps/lemon_core/lib/lemon_core/doctor/cron_diagnostics.ex` | Core-owned redacted support-bundle diagnostics for cron jobs and runs |
 | `LemonAutomation.Heartbeat` | `lib/lemon_automation/heartbeat.ex` | Heartbeat policy (`meta.heartbeat` jobs; `HEARTBEAT_OK` suppression) applied during CronManager terminalization, plus daily-brief reconciliation from `[automation] daily_brief` |

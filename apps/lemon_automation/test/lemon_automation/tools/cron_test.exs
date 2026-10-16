@@ -28,6 +28,32 @@ defmodule LemonAutomation.Tools.CronTest do
     :ok
   end
 
+  test "status and doctor expose restoration pending even without a durable pause" do
+    alias LemonAutomation.{CronManager, CronStore}
+    alias LemonAutomation.Doctor.Checks.Cron, as: CronCheck
+
+    :ok = CronStore.clear_global_pause()
+    original = :sys.get_state(CronManager).restoration_pending
+    on_exit(fn -> :sys.replace_state(CronManager, &%{&1 | restoration_pending: original}) end)
+    tool = Cron.tool(".", session_key: LemonCore.SessionKey.main("default"))
+
+    for pending <- [true, false] do
+      :sys.replace_state(CronManager, &%{&1 | restoration_pending: pending})
+      status = call_tool(tool, %{"action" => "status"}).details
+      assert status["paused"] == false
+      assert status["restorationPending"] == pending
+      check = Enum.find(CronCheck.run([]), &(&1.name == "automation.cron_paused"))
+
+      if pending do
+        assert check.status == :warn
+        assert check.message =~ "restoration is pending"
+        assert check.remediation =~ "store"
+      else
+        assert check == nil
+      end
+    end
+  end
+
   test "list exposes persisted outcomes and failing filter; status counts failing jobs" do
     alias LemonAutomation.{CronJob, CronManager, CronRun, CronStore}
     tool = Cron.tool(".", session_key: LemonCore.SessionKey.main("default"))

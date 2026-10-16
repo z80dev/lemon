@@ -12,6 +12,8 @@ defmodule LemonCli.CronCommand do
     end
   end
 
+  def run([action, "--all"]) when action in ~w(pause resume), do: mutate_all(action)
+
   def run([action | args]) when action in ~w(pause resume run remove) do
     case OptionParser.parse(args, strict: [yes: :boolean]) do
       {opts, [target], []} when target != "" ->
@@ -66,13 +68,47 @@ defmodule LemonCli.CronCommand do
         1
 
       {:error, _reason} ->
-        IO.puts(
-          :stderr,
-          "Cron operation failed; check runtime health and authentication. Do not retry an uncertain mutation without checking cron status/runs."
-        )
-
-        1
+        operation_failed()
     end
+  end
+
+  # One durable switch for every job: it never resolves or edits individual jobs.
+  defp mutate_all(action) do
+    with {:ok, result} <- RunsCommand.request("cron.#{action}", %{"all" => true}),
+         {:ok, message} <- all_receipt(action, result) do
+      IO.puts(message)
+      0
+    else
+      {:error, _reason} -> operation_failed()
+    end
+  end
+
+  defp all_receipt("pause", %{"all" => true, "paused" => true}) do
+    {:ok,
+     "All cron jobs paused. The pause survives restarts; resume with `lemon cron resume --all`."}
+  end
+
+  defp all_receipt("resume", %{"all" => true, "resumed" => true} = result) do
+    {:ok,
+     "All cron jobs resumed; skipped #{count(result["skippedJobCount"])} missed slot(s) " <>
+       "and #{count(result["skippedRetryCount"])} retry(ies)."}
+  end
+
+  defp all_receipt("resume", %{"all" => true, "resumed" => false}),
+    do: {:ok, "Cron jobs were not paused."}
+
+  defp all_receipt(_action, _result), do: {:error, :invalid_response}
+
+  defp count(value) when is_integer(value) and value >= 0, do: value
+  defp count(_value), do: 0
+
+  defp operation_failed do
+    IO.puts(
+      :stderr,
+      "Cron operation failed; check runtime health and authentication. Do not retry an uncertain mutation without checking cron status/runs."
+    )
+
+    1
   end
 
   defp jobs do
@@ -153,7 +189,7 @@ defmodule LemonCli.CronCommand do
   defp usage do
     IO.puts(
       :stderr,
-      "Use lemon cron list [--failing] [--json] | pause|resume|run <id|name> | remove <id|name> [--yes]."
+      "Use lemon cron list [--failing] [--json] | pause|resume|run <id|name> | pause|resume --all | remove <id|name> [--yes]."
     )
 
     2

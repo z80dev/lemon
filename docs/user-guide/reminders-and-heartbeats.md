@@ -14,7 +14,20 @@ if its stored slot is within half the gap to its next occurrence, clamped to
 2 minutes–2 hours. Catch-up runs have `catch_up: true` in history. Older slots
 are audited as skipped; expired one-off reminders are retired, not moved to
 next year. Paused jobs stay paused. Set `[automation] catch_up_missed = false`
-to disable catch-up.
+to disable catch-up. To stop every job at once, see
+[Pausing all cron jobs](#pausing-all-cron-jobs).
+
+If startup cannot read the global-pause marker or persist a required skipped
+slot/expired one-off retirement, the scheduler stays alive in restoration-pending
+state. All scheduled dispatch, wake requests and retry submissions wait while it
+retries durable restoration, starting after 250 ms and backing off to at most
+5 seconds between attempts. Other automation services and explicit manual runs
+(`run_now`, or `lemon cron run <id|name>`) remain available while restoration is
+pending. Status exposes this independent hold as `restorationPending`; it does
+not mean the durable global pause (`paused`) is set. An unreadable marker is not
+a confirmed pause: after storage recovers, normal startup skipping completes
+before dispatch is allowed. A confirmed durable pause instead preserves stored
+schedules until explicit resume.
 
 A paired chat is needed only for chat delivery. Run history retains the latest
 100 terminal runs per job, cleaned up hourly; active attempts and pending
@@ -82,6 +95,67 @@ lemon restart
 
 See [Setup › Optional Telegram or Discord](setup.md#optional-telegram-or-discord)
 for pairing details.
+
+---
+
+## Pausing all cron jobs
+
+One switch holds back every cron job — reminders, heartbeats, the daily brief,
+scheduled coding jobs, and blueprint jobs — across all profiles, without
+editing the jobs themselves:
+
+```bash
+lemon cron pause --all     # hold back every job
+lemon cron status          # prints "All cron jobs are PAUSED" while it is on
+lemon cron resume --all    # release them
+```
+
+You can also ask the agent to pause or resume all cron jobs (the `cron` tool's
+`pause_all` and `resume_all` actions). Operators using the control plane send
+`cron.pause` or `cron.resume` with `{"all": true}` (admin scope).
+
+- **The pause persists.** It is stored with the rest of cron state, so
+  `lemon restart`, a crash, or a reboot does not lift it. While paused, a
+  restart leaves each job's stored schedule untouched and catches nothing up.
+- **Missed runs are skipped on resume, never caught up.** Every scheduled run
+  that came due during the pause, and every failure retry that came due, is
+  dropped and recorded in the audit log (`missed_slot_skipped`/`retry_skipped`
+  with reason `global_pause`). Each job then continues at its next scheduled
+  time after the resume. A one-off reminder whose time passed during the
+  pause is retired, like any expired one-off. This applies whether or not
+  `catch_up_missed` is set.
+- **What is held back:** scheduled runs, pending retries, and wake triggers.
+  A scheduled or retry run that was claimed a moment before the pause but has
+  not begun submission is invalidated before pause succeeds, even if its jitter
+  timer fires after a subsequent resume. A worker still preparing submission
+  must pass the same pause check at the final submission boundary.
+- **What is not affected:** runs already in progress finish normally (use
+  `cron` → `abort` to stop one), and `lemon cron run <id|name>` still starts a
+  job on demand, as it does for an individually paused job. Each job's own
+  pause is separate: `pause --all` does not change it and `resume --all` does
+  not re-enable an individually paused job. Goal loops, kanban dispatch, and
+  skill curation have their own controls and are not paused.
+- **It is visible.** `lemon cron status` prints the paused state and any pending
+  restoration hold. The JSON projection, `cron.status`, and the cron tool's
+  `status` action carry `paused`, `pausedAtMs`, and `restorationPending`.
+  `paused` describes only the durable global-pause marker;
+  `restorationPending` describes the scheduler's separate startup-restoration
+  hold. `lemon doctor` warns with `automation.cron_paused` so a forgotten pause
+  is noticed.
+
+Pausing again keeps the original pause time, and resuming when nothing is
+paused does nothing. If Lemon cannot read the stored pause state, it holds jobs
+back rather than guessing. Resume strictly reloads the stored jobs even if a
+paused restart could not read them. If it cannot enumerate jobs or retries, or
+persist any required skip (including retiring an expired one-off), it reports an
+error and keeps the global pause in force. Retry resume after storage recovers;
+completed skips are safe to repeat.
+
+A successful resume can clear the durable marker (`paused: false`) while
+`restorationPending` remains `true`. Scheduled dispatch, wake triggers, and
+retries remain blocked until restoration succeeds; resume does not bypass that
+hold. Explicit manual `run_now` requests remain allowed. If there is no durable
+pause to clear, resume is still a no-op and does not clear pending restoration.
 
 ---
 
