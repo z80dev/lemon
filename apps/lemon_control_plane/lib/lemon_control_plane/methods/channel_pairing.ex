@@ -1,5 +1,12 @@
 defmodule LemonControlPlane.Methods.ChannelPairing do
-  @moduledoc "Local operator-only access to pending channel pairing requests."
+  @moduledoc """
+  Local operator-only access to channel pairing requests and the live allowlist.
+
+  `activate` and `revoke` apply a chat to the running transport so approval and
+  revocation take effect on the next inbound message; the caller persists the
+  same change in the canonical gateway config first, and the config cache is
+  reloaded so a supervised transport restart reads the persisted allowlist.
+  """
   @behaviour LemonControlPlane.Method
 
   alias LemonChannels.Pairing
@@ -33,5 +40,28 @@ defmodule LemonControlPlane.Methods.ChannelPairing do
     end
   end
 
+  defp dispatch(%{"action" => action, "platform" => platform, "chat_id" => chat_id})
+       when action in ["activate", "revoke"] and platform in ["telegram", "discord"] and
+              (is_binary(chat_id) or is_integer(chat_id)) do
+    with {id, ""} <- Integer.parse(to_string(chat_id)),
+         live when live in [:ok, :not_running] <- apply_live(action, platform, id) do
+      {:ok, %{"live" => live == :ok}}
+    else
+      _ -> {:error, :unavailable, "Live allowlist update failed", nil}
+    end
+  end
+
   defp dispatch(_params), do: {:error, :invalid_request, "Invalid pairing command", nil}
+
+  # The operator CLI persisted the change moments ago; refresh the cache so a
+  # transport restarted by its supervisor reads the same allowlist.
+  defp apply_live(action, platform, id) do
+    _ = LemonCore.Config.reload()
+    live(action, platform, id)
+  rescue
+    _ -> {:error, :unavailable}
+  end
+
+  defp live("activate", platform, id), do: Pairing.allow(platform, id)
+  defp live("revoke", platform, id), do: Pairing.revoke(platform, id)
 end

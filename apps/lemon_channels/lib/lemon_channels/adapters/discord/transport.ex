@@ -125,7 +125,8 @@ defmodule LemonChannels.Adapters.Discord.Transport do
              consumer_pid: consumer_pid,
              account_id: cfg_get(config, :account_id, "default"),
              allowed_guild_ids: parse_allowed_ids(cfg_get(config, :allowed_guild_ids)),
-             allowed_channel_ids: parse_allowed_ids(cfg_get(config, :allowed_channel_ids)),
+             allowed_channel_ids:
+               parse_allowed_channel_ids(cfg_get(config, :allowed_channel_ids)),
              unauthorized_dm_behavior: cfg_get(config, :unauthorized_dm_behavior, "ignore"),
              deny_unbound_channels: cfg_get(config, :deny_unbound_channels, false),
              bot_user_id: nil,
@@ -156,6 +157,12 @@ defmodule LemonChannels.Adapters.Discord.Transport do
   # ============================================================================
   # GenServer Handlers
   # ============================================================================
+
+  @impl true
+  def handle_call({:update_allowlist, op, channel_id}, _from, state)
+      when op in [:add, :remove] and is_integer(channel_id) do
+    {:reply, :ok, LemonChannels.Pairing.put_allowlist("discord", state, channel_id, op)}
+  end
 
   @impl true
   def handle_info({:discord_event, {:READY, payload, _ws_state}}, state) do
@@ -2992,6 +2999,15 @@ defmodule LemonChannels.Adapters.Discord.Transport do
   # ============================================================================
   # Utility Functions
   # ============================================================================
+
+  # An absent list leaves channels unrestricted, but a configured list is a
+  # closed set even when empty: revoking the last channel must stay deny-all
+  # across restarts instead of reopening every channel.
+  @doc false
+  def parse_allowed_channel_ids(value) when is_list(value),
+    do: value |> Enum.map(&parse_id/1) |> Enum.filter(&is_integer/1) |> MapSet.new()
+
+  def parse_allowed_channel_ids(_), do: nil
 
   defp parse_allowed_ids(value) when is_list(value) do
     ids = value |> Enum.map(&parse_id/1) |> Enum.filter(&is_integer/1)

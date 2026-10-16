@@ -208,6 +208,48 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
     end)
   end
 
+  test "an emptied allowed_channel_ids list stays deny-all at startup" do
+    :ok = Ets.init(:lemon_channels_discord_dedupe)
+    _ = :ets.delete_all_objects(:lemon_channels_discord_dedupe)
+
+    # What `lemon pairing revoke discord <last channel>` persists, as init/1 parses it.
+    closed = Transport.parse_allowed_channel_ids([])
+    assert closed == MapSet.new()
+    assert Transport.parse_allowed_channel_ids(nil) == nil
+
+    with_discord_api(fn ->
+      with_router_bridge(fn ->
+        mention = "<@#{@bot_user_id}> hello"
+        state = Map.put(discord_message_state(), :allowed_channel_ids, closed)
+
+        id = fn ->
+          Integer.to_string(1_503_803_470_493_300_000 + System.unique_integer([:positive]))
+        end
+
+        # Previously unauthorized guild traffic stays rejected after the restart.
+        guild = discord_message(id.(), mention)
+
+        assert {:noreply, ^state} =
+                 Transport.handle_info({:discord_event, {:MESSAGE_CREATE, guild, nil}}, state)
+
+        # So do DMs outside pairing mode.
+        dm = discord_message(id.(), "hello") |> Map.delete("guild_id")
+
+        assert {:noreply, ^state} =
+                 Transport.handle_info({:discord_event, {:MESSAGE_CREATE, dm, nil}}, state)
+
+        # Control: an allowlisted channel still routes through the same path.
+        open = %{state | allowed_channel_ids: MapSet.new([1_475_727_417_372_049_419])}
+        allowed = discord_message(id.(), mention)
+
+        assert {:noreply, %{buffers: buffers}} =
+                 Transport.handle_info({:discord_event, {:MESSAGE_CREATE, allowed, nil}}, open)
+
+        assert map_size(buffers) == 1
+      end)
+    end)
+  end
+
   test "ignores messages authored by the bot" do
     state = %{bot_user_id: @bot_user_id}
 

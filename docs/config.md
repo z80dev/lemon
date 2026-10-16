@@ -2396,7 +2396,14 @@ lemon pairing list
 lemon pairing approve telegram <CODE>
 # Or: lemon pairing approve discord <CODE>
 lemon pairing deny telegram <CODE>
+lemon pairing revoke telegram <CHAT_ID>
 ```
+
+Approval and `revoke` take effect on the running gateway immediately; no restart
+is needed, including after a supervised adapter restart. The allowlist change is
+also written to the user config for later boots. A configured but empty Discord
+`allowed_channel_ids = []` denies every channel (an absent key leaves channels
+unrestricted), so revoking the last channel stays closed across restarts.
 
 The default, `"ignore"`, preserves existing behavior: Telegram's empty-allowlist
 setup hint remains rate-limited, non-allowlisted chats are dropped, and Discord
