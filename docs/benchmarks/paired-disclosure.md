@@ -215,6 +215,22 @@ accounting cannot prevent an in-flight request exceeding an estimate; the hard
 external cap remains mandatory. Paid experiments stay outside ordinary CI and
 must never be automatically triggered by a code change.
 
+## Resumable multi-provider campaign
+
+`mix lemon.eval.coding --campaign` reuses this workflow's schedule, per-trial
+isolation, verifiers, redaction and uncertainty method to run baseline versus
+coding across several providers (`openai-codex`, `zai`) as one resumable command
+with `--providers`, `--variants`, `--repetitions`, `--timeout`,
+`--control-plane-port`, `--output-dir` and `--resume`. It replaces the plan/digest
+gate with an explicit `--live` and forwards only the named provider's own
+credential variable. Its report adds an **equivalent-spend** column (recorded
+token counters x public catalog list price, basis recorded, labelled
+"list-price equivalent, not billed") with cost per verified success undefined at
+zero successes. The exact command, options, resume semantics and spend formula
+are in the [evaluation app guide](https://github.com/z80dev/lemon/blob/main/apps/lemon_evals/README.md#resumable-multi-provider-disclosure-campaign-107).
+No campaign result is recorded by this change; the rollout decision stays
+pending its sanitized report.
+
 ## Pairing and isolation
 
 Each task/repetition has a stable `pair_id`; each variant has a stable `trial_id`

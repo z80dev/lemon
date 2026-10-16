@@ -1,6 +1,8 @@
 defmodule LemonEvals.CodingBenchmarkTest do
   use ExUnit.Case, async: true
 
+  alias Mix.Tasks.Lemon.Eval.Coding
+
   test "omp metrics count assistant messages once rather than replay snapshots" do
     script = ~S'''
     import json, sys
@@ -70,7 +72,7 @@ defmodule LemonEvals.CodingBenchmarkTest do
           ["--no-paired", "--config", "private.toml"]
         ] do
       assert_raise Mix.Error, "Paired authorization/options require --paired", fn ->
-        Mix.Tasks.Lemon.Eval.Coding.run(args)
+        Coding.run(args)
       end
     end
   end
@@ -82,7 +84,7 @@ defmodule LemonEvals.CodingBenchmarkTest do
           ["--schema-budgets=500,50000"]
         ] do
       assert_raise Mix.Error, "Invalid coding benchmark arguments", fn ->
-        Mix.Tasks.Lemon.Eval.Coding.run(lane ++ option)
+        Coding.run(lane ++ option)
       end
     end
   end
@@ -94,6 +96,45 @@ defmodule LemonEvals.CodingBenchmarkTest do
     suite = unittest.defaultTestLoader.loadTestsFromName('test_coding_benchmark_paired')
     result = unittest.TextTestRunner(verbosity=2).run(suite)
     assert result.wasSuccessful(), 'offline paired-trial contracts failed'
+    '''
+
+    assert_python(script)
+  end
+
+  test "campaign options cannot mix with paid or paired lanes or fall through without --campaign" do
+    for {args, message} <- [
+          {["--output-dir", "/tmp/never"], "Campaign options require --campaign"},
+          {["--providers", "zai:glm-5.3"], "Campaign options require --campaign"},
+          {["--paired", "--resume"], "Campaign options require --campaign"},
+          {["--no-campaign", "--control-plane-port", "4290"],
+           "Campaign options require --campaign"},
+          {["--campaign"], "--campaign requires --output-dir"},
+          {["--campaign", "--output-dir", ""], "--campaign requires --output-dir"},
+          {["--campaign", "--paired", "--output-dir", "/tmp/never"], :combined},
+          {["--campaign", "--output", "/tmp/never.json", "--output-dir", "/tmp/never"],
+           :combined},
+          {["--campaign", "--model", "zai:glm-5.3", "--output-dir", "/tmp/never"], :combined},
+          {["--campaign", "--failure-dir", "/tmp/f", "--output-dir", "/tmp/never"], :combined},
+          {["--campaign", "--run-timeout", "5", "--output-dir", "/tmp/never"], :combined},
+          {["--campaign", "--plan", "p.json", "--output-dir", "/tmp/never"], :combined}
+        ] do
+      error =
+        assert_raise Mix.Error, fn -> Coding.run(args) end
+
+      case message do
+        :combined -> assert error.message =~ "--campaign cannot be combined"
+        text -> assert error.message == text
+      end
+    end
+  end
+
+  test "repeated multi-provider campaign satisfies offline ID, isolation, resume and spend contracts" do
+    script = ~S'''
+    import sys, unittest
+    sys.path.insert(0, sys.argv[1])
+    suite = unittest.defaultTestLoader.loadTestsFromName('test_coding_benchmark_campaign')
+    result = unittest.TextTestRunner(verbosity=2).run(suite)
+    assert result.wasSuccessful(), 'offline campaign contracts failed'
     '''
 
     assert_python(script)

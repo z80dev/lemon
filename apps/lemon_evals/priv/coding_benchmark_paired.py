@@ -310,6 +310,13 @@ def sanitize_row(row):
                 'cache_write_tokens', 'output_tokens', 'tool_errors', 'cost_usd', 'wall_seconds',
                 'discovery_failures', 'incorrect_tool_calls', 'tool_error_recoveries'):
         clean[key] = number(row.get(key))
+    # Campaign-only fields; absent from the single-provider paired lane's rows.
+    if isinstance(row.get('provider'), str) and re.fullmatch(r'[a-z0-9-]{1,40}', row['provider']):
+        clean['provider'] = row['provider']
+    if 'equivalent_spend_usd' in row:
+        clean['equivalent_spend_usd'] = number(row['equivalent_spend_usd'])
+        clean['equivalent_spend_status'] = (row.get('equivalent_spend_status')
+                                            if row.get('equivalent_spend_status') in ('priced', 'missing_counters') else None)
     for key in ('configuration_digest', 'fixture_digest'):
         value = row.get(key)
         clean[key] = value if isinstance(value, str) and re.fullmatch(r'[0-9a-f]{64}', value) else None
@@ -349,6 +356,117 @@ def sanitize_row(row):
     return clean
 
 
+def source_identity(root):
+    """Exact revision plus content digests of the working tree and compiled development build."""
+    revision = subprocess.run(['git', 'rev-parse', 'HEAD'], cwd=root, capture_output=True, text=True, check=True).stdout.strip()
+    # Bind dirty/untracked source contents too; never falsely label a dirty run as an exact commit.
+    files = subprocess.run(['git', 'ls-files', '--cached', '--others', '--exclude-standard'], cwd=root,
+                           capture_output=True, text=True, check=True).stdout.splitlines()
+    source_digest = digest({name: hashlib.sha256((root / name).read_bytes()).hexdigest()
+                            for name in sorted(set(files)) if (root / name).is_file()})
+    build_files = sorted((root / '_build' / 'dev' / 'lib').glob('*/ebin/*.beam'))
+    build_digest = digest({str(path.relative_to(root)): hashlib.sha256(path.read_bytes()).hexdigest() for path in build_files})
+    dirty = bool(subprocess.run(['git', 'status', '--porcelain'], cwd=root, capture_output=True, text=True, check=True).stdout.strip())
+    return {'revision': revision, 'source_digest': source_digest, 'dirty': dirty,
+            'build_files': build_files, 'compiled_build_digest': build_digest}
+
+
+RUNTIME_EXPRESSION = (
+    'File.cd!(System.fetch_env!("LEMON_AGENT_PROFILES_CWD")); '
+    'LemonCore.Runtime.Boot.start!(:runtime_full); '
+    'unless Process.whereis(LemonControlPlane.Supervisor), '
+    'do: raise("paired runtime did not acquire its own listener"); '
+    'expected = System.fetch_env!("LEMON_TOOL_DISCLOSURE_PROFILE"); '
+    'unless LemonCore.Config.load().tools.disclosure[:profile] == expected, '
+    'do: raise("paired disclosure profile unavailable"); '
+    'LemonEvals.PayloadProfile.install!(System.fetch_env!("LEMON_EVAL_PROFILE"), '
+    'python: System.fetch_env!("LEMON_EVAL_PYTHON"), paired: true); '
+    'File.write!(System.fetch_env!("LEMON_EVAL_METADATA"), '
+    'Jason.encode!(%{elixir: System.version(), otp: to_string(:erlang.system_info(:otp_release)), '
+    'pricing_catalog_digest: Base.encode16(:crypto.hash(:sha256, :erlang.term_to_binary(LemonAi.Models.list_models())), case: :lower)})); '
+    'Task.start(fn -> wait = fn wait -> '
+    'if File.exists?(Path.join(System.fetch_env!("LEMON_EVAL_STATE"), "flush.request")), '
+    'do: (LemonEvals.PayloadProfile.flush!(); File.write!(Path.join(System.fetch_env!("LEMON_EVAL_STATE"), "flush.done"), "ok")), '
+    'else: (Process.sleep(50); wait.(wait)) end; wait.(wait) end)')
+
+
+def runtime_command(root):
+    """Argv of the production runtime boot; `root` is the umbrella source checkout."""
+    return ['mix', 'run', '--no-start', '--no-halt', '--no-compile', '--no-deps-check', '-e', RUNTIME_EXPRESSION]
+
+
+def execute_trial(root, entry, case, configuration, model, credentials, ports, args, run_case,
+                  fixture_digest, run_deadline=None, runtime_argv=None):
+    """Run one attempt in a fresh runtime, home, store and fixture; teardown always runs.
+
+    `runtime_argv` is a test seam for the offline fixture runtime; production uses `runtime_command`.
+    """
+    runtime = None
+    attempt_start = time.monotonic()
+    with tempfile.TemporaryDirectory(prefix='lemon-paired-runtime-') as temporary:
+        state = Path(temporary)
+        env = isolated_environment(state, configuration, entry['variant'], credentials, ports)
+        profile = state / 'profile.jsonl'
+        metadata = state / 'runtime.json'
+        env.update({'LEMON_EVAL_PROFILE': str(profile), 'LEMON_EVAL_PYTHON': args.profile_python,
+                    'LEMON_EVAL_METADATA': str(metadata), 'LEMON_EVAL_STATE': str(state)})
+        # Load project code first, then change config cwd before boot. This is the
+        # same runtime boot and production CLI, with a dev-only profiling adapter.
+        try:
+            runtime = subprocess.Popen(runtime_argv or runtime_command(root),
+                                       cwd=root, env=env, stdin=subprocess.DEVNULL,
+                                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+            deadline = attempt_start + args.timeout
+            if run_deadline is not None:
+                deadline = min(run_deadline, deadline)
+            while not metadata.exists():
+                if runtime.poll() is not None:
+                    raise OSError('isolated runtime failed')
+                if time.monotonic() >= deadline:
+                    raise subprocess.TimeoutExpired('runtime', args.timeout)
+                time.sleep(0.1)
+            # Avoid client auto-start: only proceed after OUR runtime is ready.
+            with urllib.request.urlopen(f'http://127.0.0.1:{env["LEMON_CONTROL_PLANE_PORT"]}/healthz', timeout=min(5, max(0.01, deadline-time.monotonic()))) as response:
+                if json.load(response).get('ok') is not True:
+                    raise OSError('runtime unhealthy')
+            import argparse
+            attempt_args = argparse.Namespace(**vars(args))
+            attempt_args.timeout = max(0.01, deadline - time.monotonic())
+            attempt_args.environment = env
+            attempt_args.attempt_deadline = deadline
+            attempt_args.trial_id = entry['trial_id']
+            row = {**run_case(case, 'lemon', args.lemon, model, attempt_args), **entry}
+            row['runtime_versions'] = json.loads(metadata.read_text())
+            (state / 'flush.request').write_text('flush')
+            while not (state / 'flush.done').exists() and time.monotonic() < deadline and runtime.poll() is None:
+                time.sleep(0.05)
+        except subprocess.TimeoutExpired:
+            row = failed_row(entry, 'timeout')
+        except (OSError, ValueError, subprocess.SubprocessError):
+            row = failed_row(entry, 'runtime_failed')
+        finally:
+            terminate(runtime)
+        row['schema_diagnostics'] = collect_profile(profile, row.get('run_id'), row.get('turns'))
+        row['schema_diagnostics']['flush_complete'] = (state / 'flush.done').exists()
+        expected_profile = 'legacy' if entry['variant'] == 'baseline' else 'coding'
+        if row['passed'] and row['schema_diagnostics']['applied_profiles'] != [expected_profile]:
+            row['passed'], row['failure'] = False, 'disclosure_not_observed'
+        # This is an outcome-level recovery indicator, not a guess at tool calls.
+        if number(row.get('tool_errors')) is not None:
+            row['tool_error_recoveries'] = int(row['tool_errors'] > 0 and row['passed'])
+        row['discovery_failures'] = row['schema_diagnostics']['discovery_failures']
+        row['incorrect_tool_calls'] = row['schema_diagnostics']['incorrect_tool_calls']
+        row['spend_complete'] = (
+            number(row.get('cost_usd')) is not None
+            and row['schema_diagnostics']['flush_complete']
+            and row['schema_diagnostics']['parent_usage_complete'])
+        row['attempted'] = True
+        row['wall_seconds'] = round(time.monotonic() - attempt_start, 4)
+        row['configuration_digest'] = digest(configuration)
+        row['fixture_digest'] = fixture_digest
+    return row
+
+
 def run_paired(args, cases, run_case):
     root = Path(__file__).resolve().parents[3]
     if Path(args.lemon).resolve() != root / 'bin' / 'lemon':
@@ -362,14 +480,9 @@ def run_paired(args, cases, run_case):
     base = Path(args.config).read_text()
     variants = ['baseline', 'coding']
     configurations = {variant: paired_configuration(base, variant) for variant in variants}
-    revision = subprocess.run(['git', 'rev-parse', 'HEAD'], cwd=root, capture_output=True, text=True, check=True).stdout.strip()
-    # Bind dirty/untracked source contents too; never falsely label a dirty run as an exact commit.
-    files = subprocess.run(['git', 'ls-files', '--cached', '--others', '--exclude-standard'], cwd=root,
-                           capture_output=True, text=True, check=True).stdout.splitlines()
-    source_digest = digest({name: hashlib.sha256((root / name).read_bytes()).hexdigest()
-                            for name in sorted(set(files)) if (root / name).is_file()})
-    build_files = sorted((root / '_build' / 'dev' / 'lib').glob('*/ebin/*.beam'))
-    build_digest = digest({str(path.relative_to(root)): hashlib.sha256(path.read_bytes()).hexdigest() for path in build_files})
+    identity = source_identity(root)
+    revision, source_digest = identity['revision'], identity['source_digest']
+    build_files, build_digest = identity['build_files'], identity['compiled_build_digest']
     experiment = {'tasks': [case['name'] for case in cases], 'model': args.model, 'revision': revision,
                   'source_digest': source_digest, 'repetitions': args.repetitions, 'seed': args.seed,
                   'compiled_build_digest': build_digest,
@@ -414,83 +527,10 @@ def run_paired(args, cases, run_case):
             stop_reason = stop_reason or ('run_deadline' if remaining <= 0 else 'spend_limit')
             row = {**failed_row(entry, stop_reason), 'attempted': False, 'cost_usd': 0}
         else:
-            runtime = None
-            attempt_start = time.monotonic()
-            with tempfile.TemporaryDirectory(prefix='lemon-paired-runtime-') as temporary:
-                state = Path(temporary)
-                env = isolated_environment(state, configurations[entry['variant']], entry['variant'], credentials, runtime_ports())
-                profile = state / 'profile.jsonl'
-                metadata = state / 'runtime.json'
-                env.update({'LEMON_EVAL_PROFILE': str(profile), 'LEMON_EVAL_PYTHON': args.profile_python,
-                            'LEMON_EVAL_METADATA': str(metadata), 'LEMON_EVAL_STATE': str(state)})
-                # Load project code first, then change config cwd before boot. This is the
-                # same runtime boot and production CLI, with a dev-only profiling adapter.
-                expression = ('File.cd!(System.fetch_env!("LEMON_AGENT_PROFILES_CWD")); '
-                              'LemonCore.Runtime.Boot.start!(:runtime_full); '
-                              'unless Process.whereis(LemonControlPlane.Supervisor), '
-                              'do: raise("paired runtime did not acquire its own listener"); '
-                              'expected = System.fetch_env!("LEMON_TOOL_DISCLOSURE_PROFILE"); '
-                              'unless LemonCore.Config.load().tools.disclosure[:profile] == expected, '
-                              'do: raise("paired disclosure profile unavailable"); '
-                              'LemonEvals.PayloadProfile.install!(System.fetch_env!("LEMON_EVAL_PROFILE"), '
-                              'python: System.fetch_env!("LEMON_EVAL_PYTHON"), paired: true); '
-                              'File.write!(System.fetch_env!("LEMON_EVAL_METADATA"), '
-                              'Jason.encode!(%{elixir: System.version(), otp: to_string(:erlang.system_info(:otp_release)), '
-                              'pricing_catalog_digest: Base.encode16(:crypto.hash(:sha256, :erlang.term_to_binary(LemonAi.Models.list_models())), case: :lower)})); '
-                              'Task.start(fn -> wait = fn wait -> '
-                              'if File.exists?(Path.join(System.fetch_env!("LEMON_EVAL_STATE"), "flush.request")), '
-                              'do: (LemonEvals.PayloadProfile.flush!(); File.write!(Path.join(System.fetch_env!("LEMON_EVAL_STATE"), "flush.done"), "ok")), '
-                              'else: (Process.sleep(50); wait.(wait)) end; wait.(wait) end)')
-                try:
-                    runtime = subprocess.Popen(['mix', 'run', '--no-start', '--no-halt', '--no-compile', '--no-deps-check', '-e', expression],
-                                               cwd=root, env=env, stdin=subprocess.DEVNULL,
-                                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
-                    deadline = min(start + args.run_timeout, attempt_start + args.timeout)
-                    while not metadata.exists():
-                        if runtime.poll() is not None:
-                            raise OSError('isolated runtime failed')
-                        if time.monotonic() >= deadline:
-                            raise subprocess.TimeoutExpired('runtime', args.timeout)
-                        time.sleep(0.1)
-                    # Avoid client auto-start: only proceed after OUR runtime is ready.
-                    with urllib.request.urlopen(f'http://127.0.0.1:{env["LEMON_CONTROL_PLANE_PORT"]}/healthz', timeout=min(5, max(0.01, deadline-time.monotonic()))) as response:
-                        if json.load(response).get('ok') is not True:
-                            raise OSError('runtime unhealthy')
-                    import argparse
-                    attempt_args = argparse.Namespace(**vars(args))
-                    attempt_args.timeout = max(0.01, deadline - time.monotonic())
-                    attempt_args.environment = env
-                    attempt_args.attempt_deadline = deadline
-                    attempt_args.trial_id = entry['trial_id']
-                    row = {**run_case(cases_by_name[entry['task']], 'lemon', args.lemon, args.model, attempt_args), **entry}
-                    row['runtime_versions'] = json.loads(metadata.read_text())
-                    (state / 'flush.request').write_text('flush')
-                    while not (state / 'flush.done').exists() and time.monotonic() < deadline and runtime.poll() is None:
-                        time.sleep(0.05)
-                except subprocess.TimeoutExpired:
-                    row = failed_row(entry, 'timeout')
-                except (OSError, ValueError, subprocess.SubprocessError):
-                    row = failed_row(entry, 'runtime_failed')
-                finally:
-                    terminate(runtime)
-                row['schema_diagnostics'] = collect_profile(profile, row.get('run_id'), row.get('turns'))
-                row['schema_diagnostics']['flush_complete'] = (state / 'flush.done').exists()
-                expected_profile = 'legacy' if entry['variant'] == 'baseline' else 'coding'
-                if row['passed'] and row['schema_diagnostics']['applied_profiles'] != [expected_profile]:
-                    row['passed'], row['failure'] = False, 'disclosure_not_observed'
-                # This is an outcome-level recovery indicator, not a guess at tool calls.
-                if number(row.get('tool_errors')) is not None:
-                    row['tool_error_recoveries'] = int(row['tool_errors'] > 0 and row['passed'])
-                row['discovery_failures'] = row['schema_diagnostics']['discovery_failures']
-                row['incorrect_tool_calls'] = row['schema_diagnostics']['incorrect_tool_calls']
-                row['spend_complete'] = (
-                    number(row.get('cost_usd')) is not None
-                    and row['schema_diagnostics']['flush_complete']
-                    and row['schema_diagnostics']['parent_usage_complete'])
-                row['attempted'] = True
-                row['wall_seconds'] = round(time.monotonic() - attempt_start, 4)
-                row['configuration_digest'] = digest(configurations[entry['variant']])
-                row['fixture_digest'] = experiment['fixture_digests'][entry['task']]
+            row = execute_trial(root, entry, cases_by_name[entry['task']], configurations[entry['variant']],
+                                args.model, credentials, runtime_ports(), args, run_case,
+                                experiment['fixture_digests'][entry['task']],
+                                run_deadline=start + args.run_timeout)
         # Runtime IDs, prompts and arbitrary metadata never leave private state.
         row = sanitize_row(row)
         report['results'].append(row)
