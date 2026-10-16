@@ -32,25 +32,33 @@ defmodule LemonCore.Redact do
   Nothing rewrites the input before the regex pass, so every regex replacement
   survives and the result is never less redacted than the regex pass alone.
 
-  The text is scanned as a raw byte view plus up to three percent-decoded views;
-  every decoded byte remembers its original byte span, so each view is checked
-  independently and keys like `%access_key` (whose `%ac` is also a hex escape)
-  still match in the raw view. Every `=`/`:` delimiter yields at most one
-  interval; intervals from all views are unioned rather than skipped past a
-  previous replacement, so overlapping or nested matches cannot leak.
+  The text is scanned as a raw byte view plus up to three percent-decoded views.
+  Each view is a binary plus a sorted table of its decoded escapes (decoded
+  position and original byte span), so any byte maps back to its original span
+  by binary search. Each view is checked independently, and keys like
+  `%access_key` (whose `%ac` is also a hex escape) still match in the raw view.
+  Every `=`/`:` delimiter yields at most one interval; intervals from all views
+  are unioned rather than skipped past a previous replacement, so overlapping
+  or nested matches cannot leak.
 
-  Complexity is linear in the input length. Each view is built in one pass.
-  Next-quote and next-terminator positions are precomputed right to left, so a
-  value's end is found in O(1). A key is scanned backwards only to the previous
-  delimiter, so key scans partition the view. Per delimiter, the remaining work
-  is O(1): the already-redacted check compares at most a constant number of
-  bytes (longer values are never treated as markers), even though value spans
-  of successive delimiters may overlap (`token=token=…secret`). Per-view
-  interval lists are sorted by start, so the union is a linear merge of at most
-  four lists. Mapping intervals through a regex replacement is a single
-  forward walk over the sorted interval endpoints and replaced spans, done
-  once per regex (a constant number). Applying disjoint intervals copies each
-  byte at most once.
+  Complexity is linear in the input length, and plain text stays cheap. Input
+  without `=`, `:` or `%` is skipped, a view is decoded only when it contains a
+  hex escape, and a view that cannot contain a sensitive key (no case-insensitive
+  key-pattern match) is not scanned. Delimiters are found with
+  `:binary.matches/2`; no per-byte tables are built. Next-quote and
+  next-terminator searches use `:binary.match/3` from the value start and cache
+  the last result per kind; value starts ascend, so each search resumes past the
+  previous result and every byte is searched at most once per kind. An escaped
+  quote is detected by counting the backslashes right before it, and those runs
+  are disjoint. A key is scanned backwards only to the previous delimiter, so
+  key scans partition the view. Per delimiter, the remaining work is O(1): the
+  already-redacted check compares at most a constant number of bytes (longer
+  values are never treated as markers), even though value spans of successive
+  delimiters may overlap (`token=token=…secret`). Per-view interval lists are
+  sorted by start, so the union is a linear merge of at most four lists.
+  Mapping intervals through a regex replacement is a single forward walk over
+  the sorted interval endpoints and replaced spans, done once per regex (a
+  constant number). Applying disjoint intervals copies each byte at most once.
   """
 
   @marker "[REDACTED]"
@@ -163,7 +171,10 @@ defmodule LemonCore.Redact do
 
   @tokenizer_rounds 3
   @quotes [?", ?']
-  @terminators ~c" \t\r\n,;&\"'{}[]<>"
+  @terminators Enum.map(~c" \t\r\n,;&\"'{}[]<>", &<<&1>>)
+  # A case-insensitive superset of every key `sensitive_key?/1` accepts.
+  @sensitive_hint Regex.compile!(@key_pattern <> "|mcp_?servers", "i")
+  @strict_hint ~r/session|private/i
 
   defp tokenize(_original, legacy, count, _passes, false, _strict?, _drop?), do: {legacy, count}
 
@@ -184,9 +195,7 @@ defmodule LemonCore.Redact do
     if :binary.match(text, ["=", ":", "%"]) == :nomatch do
       []
     else
-      raw = text |> :binary.bin_to_list() |> Enum.with_index(fn b, i -> {b, i, i + 1} end)
-
-      [raw | decoded_views(raw, @tokenizer_rounds)]
+      [{text, {}} | decoded_views(text, {}, @tokenizer_rounds)]
       |> Enum.map(&scan_view(&1, mode))
       |> Enum.reduce([], &merge_sorted/2)
       |> union()
@@ -220,108 +229,190 @@ defmodule LemonCore.Redact do
     {if(kind == :start, do: x + delta, else: x + 1 + delta), {matches, delta}}
   end
 
-  defp decoded_views(_view, 0), do: []
+  # A view is {bytes, escapes}: `escapes` is a tuple of {position, start, end}
+  # sorted by position, one per decoded byte; other bytes are contiguous with
+  # the preceding entry (or the view start) in the original.
+  defp decoded_views(_bytes, _escapes, 0), do: []
 
-  defp decoded_views(view, rounds) do
-    case percent_decode(view, [], false) do
-      {decoded, true} -> [decoded | decoded_views(decoded, rounds - 1)]
-      {_decoded, false} -> []
+  defp decoded_views(bytes, escapes, rounds) do
+    case escape_positions(bytes) do
+      [] ->
+        []
+
+      positions ->
+        view = {decode(bytes, positions), remap(escapes, positions)}
+        [view | decoded_views(elem(view, 0), elem(view, 1), rounds - 1)]
     end
   end
 
-  defp percent_decode(
-         [{?%, s, _} = percent, {h, _, _} = high, {l, _, e} = low | rest],
-         acc,
-         changed
-       ) do
-    case {hex(h), hex(l)} do
-      {hi, lo} when is_integer(hi) and is_integer(lo) ->
-        percent_decode(rest, [{hi * 16 + lo, s, e} | acc], true)
+  # Positions of `%XX` escapes. Hex digits are never `%`, so escapes found from
+  # every `%` cannot overlap, matching a left-to-right decode.
+  defp escape_positions(bytes) do
+    n = byte_size(bytes)
 
-      _ ->
-        percent_decode([high, low | rest], [percent | acc], changed)
+    for {p, 1} <- :binary.matches(bytes, "%"),
+        p + 2 < n,
+        hex(:binary.at(bytes, p + 1)) != nil and hex(:binary.at(bytes, p + 2)) != nil,
+        do: p
+  end
+
+  defp decode(bytes, positions) do
+    {parts, offset} =
+      Enum.reduce(positions, {[], 0}, fn p, {parts, offset} ->
+        byte = hex(:binary.at(bytes, p + 1)) * 16 + hex(:binary.at(bytes, p + 2))
+        {[byte, binary_part(bytes, offset, p - offset) | parts], p + 3}
+      end)
+
+    IO.iodata_to_binary(
+      Enum.reverse([binary_part(bytes, offset, byte_size(bytes) - offset) | parts])
+    )
+  end
+
+  # Escape table of the decoded view: new escapes span from their `%` to their
+  # second hex digit; old escapes not consumed by a new one shift left.
+  defp remap(escapes, positions) do
+    decoded =
+      Enum.with_index(positions, fn p, k ->
+        {p - 2 * k, elem(span(escapes, p), 0), elem(span(escapes, p + 2), 1)}
+      end)
+
+    escapes
+    |> Tuple.to_list()
+    |> shift_escapes(positions, 0, [])
+    |> merge_sorted(decoded)
+    |> List.to_tuple()
+  end
+
+  defp shift_escapes([], _positions, _shift, acc), do: Enum.reverse(acc)
+
+  defp shift_escapes([{q, s, e} | rest], [], shift, acc),
+    do: shift_escapes(rest, [], shift, [{q - shift, s, e} | acc])
+
+  defp shift_escapes([{q, s, e} | rest], [p | _] = positions, shift, acc) when q < p,
+    do: shift_escapes(rest, positions, shift, [{q - shift, s, e} | acc])
+
+  defp shift_escapes([{q, _, _} | rest], [p | _] = positions, shift, acc) when q <= p + 2,
+    do: shift_escapes(rest, positions, shift, acc)
+
+  defp shift_escapes(escapes, [_ | positions], shift, acc),
+    do: shift_escapes(escapes, positions, shift + 2, acc)
+
+  # Original byte span of view position p.
+  defp span(escapes, p) do
+    case floor_escape(escapes, p, 0, tuple_size(escapes) - 1, nil) do
+      nil -> {p, p + 1}
+      {^p, s, e} -> {s, e}
+      {q, _s, e} -> {e + p - q - 1, e + p - q}
     end
   end
 
-  defp percent_decode([entry | rest], acc, changed),
-    do: percent_decode(rest, [entry | acc], changed)
+  defp floor_escape(_escapes, _p, lo, hi, best) when lo > hi, do: best
 
-  defp percent_decode([], acc, changed), do: {Enum.reverse(acc), changed}
+  defp floor_escape(escapes, p, lo, hi, best) do
+    mid = div(lo + hi, 2)
+    entry = elem(escapes, mid)
+
+    if elem(entry, 0) <= p,
+      do: floor_escape(escapes, p, mid + 1, hi, entry),
+      else: floor_escape(escapes, p, lo, mid - 1, best)
+  end
 
   defp hex(c) when c in ?0..?9, do: c - ?0
   defp hex(c) when c in ?a..?f, do: c - ?a + 10
   defp hex(c) when c in ?A..?F, do: c - ?A + 10
   defp hex(_), do: nil
 
-  # One view: a list of {byte, original_start, original_end}. Returns redaction
-  # intervals in original byte offsets, sorted by start.
-  defp scan_view(view, mode) do
-    bytes = view |> Enum.map(&elem(&1, 0)) |> List.to_tuple()
-    spans = List.to_tuple(view)
-    n = tuple_size(bytes)
-    nexts = next_positions(bytes, n)
-    ctx = Map.merge(mode, %{bytes: bytes, spans: spans, n: n, nexts: nexts})
+  # Returns redaction intervals in original byte offsets, sorted by start.
+  defp scan_view({bytes, escapes}, mode) do
+    if may_hold_key?(bytes, mode.strict?) do
+      ctx = Map.merge(mode, %{bytes: bytes, escapes: escapes, n: byte_size(bytes)})
 
-    0
-    |> Range.new(n - 1, 1)
-    |> Enum.reduce([], fn i, acc ->
-      if elem(bytes, i) in [?=, ?:], do: delimiter(ctx, i, acc), else: acc
-    end)
-    |> Enum.reverse()
+      bytes
+      |> :binary.matches(["=", ":"])
+      |> Enum.reduce({[], %{}}, fn {i, 1}, state -> delimiter(ctx, i, state) end)
+      |> elem(0)
+      |> Enum.reverse()
+    else
+      []
+    end
   end
 
-  # Right-to-left pass: for each position, the next unescaped double quote,
-  # single quote, and value terminator at or after it (n when absent).
-  defp next_positions(bytes, n) do
-    escaped = escaped_flags(bytes, n)
-
-    {dq, sq, term, _} =
-      Enum.reduce((n - 1)..0//-1, {[], [], [], {n, n, n}}, fn i, {dq, sq, term, {d, s, t}} ->
-        byte = elem(bytes, i)
-        quote? = byte in @quotes and not elem(escaped, i)
-        d = if quote? and byte == ?", do: i, else: d
-        s = if quote? and byte == ?', do: i, else: s
-        t = if byte in @terminators, do: i, else: t
-        {[d | dq], [s | sq], [t | term], {d, s, t}}
-      end)
-
-    %{?" => List.to_tuple(dq), ?' => List.to_tuple(sq), term: List.to_tuple(term)}
+  defp may_hold_key?(bytes, strict?) do
+    Regex.match?(@sensitive_hint, bytes) or (strict? and Regex.match?(@strict_hint, bytes))
   end
 
-  defp escaped_flags(bytes, n) do
-    {flags, _} =
-      Enum.map_reduce(0..(n - 1)//1, false, fn i, escape_next? ->
-        {escape_next?, not escape_next? and elem(bytes, i) == ?\\}
-      end)
+  # First unescaped `kind` quote or (`:term`) value terminator at or after i, n
+  # when absent. The last result per kind is cached: it also answers any later
+  # query between its start and the found position.
+  defp next(%{n: n}, _kind, i, cache) when i >= n, do: {n, cache}
 
-    List.to_tuple(flags)
+  defp next(ctx, kind, i, cache) do
+    case cache do
+      %{^kind => {from, found}} when from <= i and i <= found ->
+        {found, cache}
+
+      _ ->
+        found = find(ctx, kind, i)
+        {found, Map.put(cache, kind, {i, found})}
+    end
   end
 
-  defp next(%{nexts: nexts, n: n}, kind, i) when i < n, do: elem(Map.fetch!(nexts, kind), i)
-  defp next(%{n: n}, _kind, _i), do: n
+  defp find(%{n: n}, _kind, i) when i >= n, do: n
 
-  defp delimiter(ctx, i, acc) do
+  defp find(%{bytes: bytes, n: n} = ctx, kind, i) do
+    pattern = if kind == :term, do: @terminators, else: <<kind>>
+
+    case :binary.match(bytes, pattern, scope: {i, n - i}) do
+      :nomatch ->
+        n
+
+      {p, 1} when kind != :term ->
+        if escaped?(bytes, p - 1, false), do: find(ctx, kind, p + 1), else: p
+
+      {p, 1} ->
+        p
+    end
+  end
+
+  # A byte is escaped when an odd-length backslash run directly precedes it.
+  defp escaped?(bytes, j, odd?) when j >= 0 do
+    if :binary.at(bytes, j) == ?\\, do: escaped?(bytes, j - 1, not odd?), else: odd?
+  end
+
+  defp escaped?(_bytes, _j, odd?), do: odd?
+
+  defp delimiter(ctx, i, {acc, cache}) do
     key_end = skip_back(ctx, i - 1, [?\s, ?\t]) + 1
     {key_end, key_quoted?} = closing_key_quote(ctx, key_end)
     key_start = skip_back(ctx, key_end - 1, :key) + 1
-    key = for j <- key_start..(key_end - 1)//1, into: <<>>, do: <<elem(ctx.bytes, j)>>
-    opener = if key_start > 0, do: elem(ctx.bytes, key_start - 1)
+    key = binary_part(ctx.bytes, key_start, key_end - key_start)
+    opener = if key_start > 0, do: :binary.at(ctx.bytes, key_start - 1)
     wrapper = if opener in @quotes and not key_quoted?, do: opener
 
-    with true <- key != "" and (sensitive_key?(key) or (ctx.strict? and strict_key?(key))),
-         v = skip_forward(ctx, i + 1),
-         true <- not ctx.wrapped? or wrapped_value?(ctx, v, wrapper),
-         value_end when value_end > v <- value_end(ctx, v, wrapper),
-         false <- marker_at?(ctx, v, value_end) do
-      start = if ctx.drop?, do: if(opener in @quotes, do: key_start - 1, else: key_start), else: v
-      [{elem(elem(ctx.spans, start), 1), elem(elem(ctx.spans, value_end - 1), 2)} | acc]
+    if key != "" and (sensitive_key?(key) or (ctx.strict? and strict_key?(key))) do
+      v = skip_forward(ctx, i + 1)
+
+      {wrapped?, cache} =
+        if ctx.wrapped?, do: wrapped_value?(ctx, v, wrapper, cache), else: {true, cache}
+
+      {value_end, cache} = if wrapped?, do: value_end(ctx, v, wrapper, cache), else: {v, cache}
+
+      if value_end > v and not marker_at?(ctx, v, value_end) do
+        start =
+          if ctx.drop?, do: if(opener in @quotes, do: key_start - 1, else: key_start), else: v
+
+        interval = {elem(span(ctx.escapes, start), 0), elem(span(ctx.escapes, value_end - 1), 1)}
+        {[interval | acc], cache}
+      else
+        {acc, cache}
+      end
     else
-      _ -> acc
+      {acc, cache}
     end
   end
 
   defp closing_key_quote(ctx, key_end) do
-    if key_end > 0 and elem(ctx.bytes, key_end - 1) in @quotes,
+    if key_end > 0 and :binary.at(ctx.bytes, key_end - 1) in @quotes,
       do: {key_end - 1, true},
       else: {key_end, false}
   end
@@ -329,32 +420,41 @@ defmodule LemonCore.Redact do
   defp skip_back(_ctx, j, _class) when j < 0, do: j
 
   defp skip_back(ctx, j, class) do
-    if member?(elem(ctx.bytes, j), class), do: skip_back(ctx, j - 1, class), else: j
+    if member?(:binary.at(ctx.bytes, j), class), do: skip_back(ctx, j - 1, class), else: j
   end
 
   defp member?(c, :key), do: c in ?a..?z or c in ?A..?Z or c in ?0..?9 or c in ~c"_.-%"
   defp member?(c, set), do: c in set
 
   defp skip_forward(%{n: n} = ctx, v) when v < n do
-    if elem(ctx.bytes, v) in [?\s, ?\t], do: skip_forward(ctx, v + 1), else: v
+    if :binary.at(ctx.bytes, v) in [?\s, ?\t], do: skip_forward(ctx, v + 1), else: v
   end
 
   defp skip_forward(_ctx, v), do: v
 
-  defp wrapped_value?(ctx, v, wrapper) do
-    wrapper != nil and v < ctx.n and elem(ctx.bytes, v) not in @quotes and
-      next(ctx, wrapper, v) < ctx.n
+  defp wrapped_value?(%{n: n} = ctx, v, wrapper, cache)
+       when wrapper != nil and v < n do
+    if :binary.at(ctx.bytes, v) in @quotes do
+      {false, cache}
+    else
+      {found, cache} = next(ctx, wrapper, v, cache)
+      {found < n, cache}
+    end
   end
 
-  defp value_end(%{n: n}, v, _wrapper) when v >= n, do: v
+  defp wrapped_value?(_ctx, _v, _wrapper, cache), do: {false, cache}
 
-  defp value_end(ctx, v, wrapper) do
-    byte = elem(ctx.bytes, v)
+  defp value_end(%{n: n}, v, _wrapper, cache) when v >= n, do: {v, cache}
 
-    cond do
-      byte in @quotes -> min(next(ctx, byte, v + 1) + 1, ctx.n)
-      wrapper && next(ctx, wrapper, v) < ctx.n -> next(ctx, wrapper, v)
-      true -> next(ctx, :term, v)
+  defp value_end(%{n: n} = ctx, v, wrapper, cache) do
+    byte = :binary.at(ctx.bytes, v)
+
+    if byte in @quotes do
+      {found, cache} = next(ctx, byte, v + 1, cache)
+      {min(found + 1, n), cache}
+    else
+      {found, cache} = if wrapper, do: next(ctx, wrapper, v, cache), else: {n, cache}
+      if found < n, do: {found, cache}, else: next(ctx, :term, v, cache)
     end
   end
 
@@ -363,11 +463,7 @@ defmodule LemonCore.Redact do
   @marker_window byte_size(@marker) + 22
 
   defp marker_at?(_ctx, v, value_end) when value_end - v > @marker_window, do: false
-
-  defp marker_at?(ctx, v, value_end) do
-    value = for j <- v..(value_end - 1)//1, into: <<>>, do: <<elem(ctx.bytes, j)>>
-    redacted?(value)
-  end
+  defp marker_at?(ctx, v, value_end), do: redacted?(binary_part(ctx.bytes, v, value_end - v))
 
   defp merge_sorted(a, b), do: merge_sorted(a, b, [])
   defp merge_sorted([], b, acc), do: Enum.reverse(acc, b)

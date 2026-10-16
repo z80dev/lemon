@@ -13,6 +13,11 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
   `%access_key`), assignments nested behind a non-sensitive wrapper
   (`message%20text="api_key=first second"`) and shell-quoted `&`-joined
   assignments are redacted; output is never less redacted than before.
+- The redaction tokenizer scans binaries directly instead of building per-byte
+  tables, skips views that cannot contain a sensitive key, and decodes a view
+  only when it has a hex escape: `Redact.text/1` on 300 KB of mostly plain
+  multibyte text with one credential takes about 1 ms instead of 80-200 ms, so
+  large session snapshots, event projections and memory writes no longer stall.
 
 ### Added
 
