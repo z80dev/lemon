@@ -87,6 +87,20 @@ defmodule LemonCli.RunsCommand do
                 "Cron jobs: #{status["jobCount"] || 0}, enabled: #{status["activeJobs"] || 0}, " <>
                   "failing: #{status["failingJobs"] || 0}"
               )
+
+              if status["paused"] == true do
+                IO.puts(
+                  "All cron jobs are PAUSED; no scheduled run will start. " <>
+                    "Resume with `lemon cron resume --all`."
+                )
+              end
+
+              if status["restorationPending"] == true do
+                IO.puts(
+                  "Cron schedule restoration is PENDING; scheduled runs, retries, and wake triggers " <>
+                    "are held back until restoration succeeds."
+                )
+              end
             end
 
             0

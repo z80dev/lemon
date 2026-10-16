@@ -489,10 +489,15 @@ defmodule LemonCli.CommandRegistry do
       name: "cron",
       summary: "Manage cron jobs and inspect run history",
       usage:
-        "lemon cron list [--failing] [--json] | pause|resume|run <id|name> | remove <id|name> [--yes] | status [--json] | runs [options]",
+        "lemon cron list [--failing] [--json] | pause|resume|run <id|name> | pause|resume --all | remove <id|name> [--yes] | status [--json] | runs [options]",
       subcommands: subcommands(~w(list pause resume run remove status runs)),
       options: [
         option("--failing", ["--failing"], "List only jobs with a nonzero failure streak"),
+        option(
+          "--all",
+          ["--all"],
+          "With pause or resume, hold back or release every cron job at once"
+        ),
         option("--yes", ["--yes"], "Confirm removal without an interactive prompt"),
         option("--job ID", ["--job"], "Select one job; default all current jobs"),
         option(

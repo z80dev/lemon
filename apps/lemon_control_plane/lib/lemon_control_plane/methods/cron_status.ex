@@ -2,7 +2,9 @@ defmodule LemonControlPlane.Methods.CronStatus do
   @moduledoc """
   Handler for the cron.status method.
 
-  Returns the overall status of the cron system.
+  Returns the overall status of the cron system, including the durable global
+  pause (`paused`/`pausedAtMs`) and the independent startup-restoration hold
+  (`restorationPending`). Unknown state is represented by `nil`, not `false`.
   """
 
   @behaviour LemonControlPlane.Method
@@ -50,6 +52,7 @@ defmodule LemonControlPlane.Methods.CronStatus do
           |> Enum.reject(&is_nil/1)
           |> Enum.max(fn -> nil end)
       }
+      |> Map.merge(pause_fields())
     else
       %{
         "enabled" => false,
@@ -67,7 +70,10 @@ defmodule LemonControlPlane.Methods.CronStatus do
         "runStatusCounts" => %{},
         "triggerCounts" => %{},
         "auditActionCounts" => %{},
-        "lastRunAtMs" => nil
+        "lastRunAtMs" => nil,
+        "paused" => nil,
+        "pausedAtMs" => nil,
+        "restorationPending" => nil
       }
     end
   rescue
@@ -88,8 +94,28 @@ defmodule LemonControlPlane.Methods.CronStatus do
         "runStatusCounts" => %{},
         "triggerCounts" => %{},
         "auditActionCounts" => %{},
-        "lastRunAtMs" => nil
+        "lastRunAtMs" => nil,
+        "paused" => nil,
+        "pausedAtMs" => nil,
+        "restorationPending" => nil
       }
+  end
+
+  defp pause_fields do
+    case LemonAutomation.CronManager.pause_status() do
+      {:ok, %{paused: paused, paused_at_ms: paused_at_ms} = status} ->
+        %{
+          "paused" => paused,
+          "pausedAtMs" => paused_at_ms,
+          "restorationPending" => Map.get(status, :restoration_pending)
+        }
+
+      _unknown ->
+        %{"paused" => nil, "pausedAtMs" => nil, "restorationPending" => nil}
+    end
+  catch
+    :exit, _reason ->
+      %{"paused" => nil, "pausedAtMs" => nil, "restorationPending" => nil}
   end
 
   defp get_next_run(jobs) do
@@ -121,6 +147,8 @@ defmodule LemonControlPlane.Methods.CronStatus do
   defp summary(status) do
     %{
       "enabled" => status["enabled"] == true,
+      "paused" => status["paused"],
+      "restorationPending" => status["restorationPending"],
       "jobCount" => status["jobCount"] || 0,
       "activeJobCount" => status["activeJobs"] || 0,
       "failingJobs" => status["failingJobs"] || 0,

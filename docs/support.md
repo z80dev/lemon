@@ -205,7 +205,12 @@ stale-run recoveries, and scheduled retries, plus next/last run timestamps and
 status/trigger/audit count maps. Those counters come from the same durable run
 and audit stores used by support bundles, so operators can see when BEAM
 scheduling is intentionally holding a slot instead of launching a duplicate
-run.
+run. It also reports `paused` and `pausedAtMs` for the durable global cron pause
+(`lemon cron pause --all`), separately from `restorationPending`, the scheduler's
+startup-restoration hold. Even after resume clears `paused`, scheduled dispatch,
+wake triggers, and retries wait until pending restoration succeeds. Explicit
+manual `run_now` requests remain allowed during that hold; see
+[pausing all cron jobs](user-guide/reminders-and-heartbeats.md#pausing-all-cron-jobs).
 
 Cron lifecycle actions also write durable operator audit events to
 `:cron_audit_events`. The control-plane `cron.audit` read method returns raw

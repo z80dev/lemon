@@ -334,6 +334,66 @@ defmodule LemonControlPlane.Methods.CronMethodsTest do
     assert Enum.find(CronManager.list(), &(&1.id == job.id)).enabled == true
   end
 
+  test "cron.status keeps restoration hold separate from the durable pause" do
+    :ok = CronStore.clear_global_pause()
+    original = :sys.get_state(CronManager).restoration_pending
+
+    on_exit(fn ->
+      CronStore.clear_global_pause()
+      :sys.replace_state(CronManager, &%{&1 | restoration_pending: original})
+    end)
+
+    for paused <- [true, false], pending <- [true, false] do
+      if paused,
+        do: CronStore.put_global_pause(LemonCore.Clock.now_ms()),
+        else: CronStore.clear_global_pause()
+
+      :sys.replace_state(CronManager, &%{&1 | restoration_pending: pending})
+      assert {:ok, status} = CronStatus.handle(%{}, %{})
+      assert status["paused"] == paused
+      assert status["restorationPending"] == pending
+      assert status["summary"]["restorationPending"] == pending
+    end
+  end
+
+  test "cron.pause and cron.resume with all drive the durable global pause" do
+    on_exit(fn -> CronStore.clear_global_pause() end)
+    :ok = CronStore.clear_global_pause()
+
+    assert {:ok, %{"paused" => false, "pausedAtMs" => nil, "summary" => %{"paused" => false}}} =
+             CronStatus.handle(%{}, %{})
+
+    assert {:ok,
+            %{"all" => true, "paused" => true, "pausedAtMs" => paused_at, "summary" => summary}} =
+             CronPause.handle(%{"all" => true}, %{})
+
+    assert is_integer(paused_at)
+    assert summary["all"] == true
+    assert summary["cleanup"]["includesPromptText"] == false
+
+    assert {:ok,
+            %{"paused" => true, "pausedAtMs" => ^paused_at, "summary" => %{"paused" => true}}} =
+             CronStatus.handle(%{}, %{})
+
+    assert {:ok,
+            %{
+              "all" => true,
+              "resumed" => true,
+              "skippedJobCount" => skipped_jobs,
+              "skippedRetryCount" => skipped_retries,
+              "summary" => %{"resumed" => true}
+            }} = CronResume.handle(%{"all" => true}, %{})
+
+    assert is_integer(skipped_jobs) and is_integer(skipped_retries)
+    assert {:ok, %{"paused" => false}} = CronStatus.handle(%{}, %{})
+    assert {:ok, %{"resumed" => false}} = CronResume.handle(%{"all" => true}, %{})
+
+    for handler <- [CronPause, CronResume] do
+      assert {:error, {:invalid_request, "Pass either id or all, not both", nil}} =
+               handler.handle(%{"all" => true, "id" => "cron_1"}, %{})
+    end
+  end
+
   test "cron.run exposes manual trigger lifecycle summary", %{job: job} do
     assert {:ok,
             %{

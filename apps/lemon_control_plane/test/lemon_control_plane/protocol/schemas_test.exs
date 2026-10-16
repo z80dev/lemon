@@ -116,6 +116,8 @@ defmodule LemonControlPlane.Protocol.SchemasTest do
     test "validates cron lifecycle schemas" do
       assert :ok = Schemas.validate("cron.pause", %{"id" => "cron_1"})
       assert :ok = Schemas.validate("cron.resume", %{"id" => "cron_1"})
+      assert :ok = Schemas.validate("cron.pause", %{"all" => true})
+      assert :ok = Schemas.validate("cron.resume", %{"all" => true})
       assert :ok = Schemas.validate("cron.abort", %{"runId" => "run_1"})
       assert :ok = Schemas.validate("cron.audit", %{"jobId" => "cron_1", "limit" => 10})
 
@@ -129,6 +131,9 @@ defmodule LemonControlPlane.Protocol.SchemasTest do
 
       assert {:error, msg} = Schemas.validate("cron.pause", %{})
       assert msg =~ "id"
+
+      assert {:error, msg} = Schemas.validate("cron.resume", %{"all" => "yes"})
+      assert msg =~ "expected boolean"
 
       assert {:error, msg} = Schemas.validate("cron.abort", %{})
       assert msg =~ "runId"

@@ -238,8 +238,9 @@ Unknown/expired runs and failed storage queries are errors, not empty timelines.
 See the [timeline method reference](../reference/control-plane.md#runstimelineget).
 
 `cron status` reports job totals, enabled jobs, and `failingJobs` (jobs with a
-nonzero persisted failure streak). Use `--json` for the complete cron status
-projection. See [cron failure alerts](reminders-and-heartbeats.md#failure-alerts-and-recovery).
+nonzero persisted failure streak), and says when every cron job is paused. Use
+`--json` for the complete cron status projection (`paused`, `pausedAtMs`). See
+[cron failure alerts](reminders-and-heartbeats.md#failure-alerts-and-recovery).
 
 `lemon cron list [--failing] [--json]` lists job IDs, names, schedules, enabled
 state, next-run timestamps, failure streaks, and last statuses. `--failing` keeps
@@ -249,6 +250,11 @@ Use `lemon cron pause <id|name>`, `resume <id|name>`, or `run <id|name>` to
 disable scheduled launches, re-enable them, or trigger a manual run through the
 runtime's normal validation. Names match exactly, case-insensitively; duplicate
 names are refused with candidate IDs. Exact IDs take precedence.
+
+`lemon cron pause --all` and `lemon cron resume --all` flip one durable switch
+that holds back every cron job across profiles. The pause survives restarts;
+resuming skips the runs missed meanwhile instead of catching them up. See
+[pausing all cron jobs](reminders-and-heartbeats.md#pausing-all-cron-jobs).
 
 `lemon cron remove <id|name>` asks for confirmation. Non-interactive callers
 must explicitly pass `--yes`; cancellation never removes the job. The TUI offers
@@ -1408,7 +1414,7 @@ Requires a running runtime; never starts one. Recent filters inspect at most 200
 Manage cron jobs and inspect run history.
 
 ```text
-lemon cron list [--failing] [--json] | pause|resume|run <id|name> | remove <id|name> [--yes] | status [--json] | runs [options]
+lemon cron list [--failing] [--json] | pause|resume|run <id|name> | pause|resume --all | remove <id|name> [--yes] | status [--json] | runs [options]
 ```
 
 | Subcommand | Purpose |
@@ -1424,6 +1430,7 @@ lemon cron list [--failing] [--json] | pause|resume|run <id|name> | remove <id|n
 | Option | Purpose |
 | --- | --- |
 | `--failing` | List only jobs with a nonzero failure streak |
+| `--all` | With pause or resume, hold back or release every cron job at once |
 | `--yes` | Confirm removal without an interactive prompt |
 | `--job ID` | Select one job; default all current jobs |
 | `--status S` | pending, running, completed, failed, timeout, or aborted |

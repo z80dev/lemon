@@ -584,14 +584,12 @@ defmodule LemonControlPlane.Protocol.Schemas do
       }
     },
     "cron.pause" => %{
-      required: %{
-        "id" => :string
-      }
+      required_any: [["id", "all"]],
+      optional: %{"id" => :string, "all" => :boolean}
     },
     "cron.resume" => %{
-      required: %{
-        "id" => :string
-      }
+      required_any: [["id", "all"]],
+      optional: %{"id" => :string, "all" => :boolean}
     },
     "cron.abort" => %{
       required: %{

@@ -3,7 +3,8 @@ defmodule LemonAutomation.Tools.Cron do
   LemonAgent tool for managing Lemon internal cron/scheduled jobs.
 
   Supports actions to list, add, update, pause, resume, abort, remove, and trigger cron
-  jobs, as well as viewing run history. Delegates to
+  jobs, as well as viewing run history. `pause_all`/`resume_all` hold back every
+  job at once, durably; resuming skips the runs missed meanwhile. Delegates to
   `LemonAutomation.CronManager` for persistence and scheduling.
 
   Results are delivered to the originating Telegram/Discord chat or, for jobs
@@ -26,7 +27,7 @@ defmodule LemonAutomation.Tools.Cron do
   alias LemonAi.Types.TextContent
   alias LemonAutomation.{CronJob, CronManager, CronMemory}
 
-  @actions ~w(status list add update pause resume abort remove run runs)
+  @actions ~w(status list add update pause resume pause_all resume_all abort remove run runs)
   @default_timeout_ms 300_000
   @default_limit 100
 
@@ -39,7 +40,7 @@ defmodule LemonAutomation.Tools.Cron do
       name: "cron",
       label: "Cron",
       description:
-        "Manage Lemon internal cron jobs: status, list, add, update, pause, resume, abort, remove, run, and runs. Prompt jobs run native coding sessions in cwd (defaults to the current repository). Pause disables future runs; abort stops a specific active cron run. Add/update accepts 5-field cron, recurring shorthands like 'every 30m', and one-shots like 'in 30m' or '2027-01-15T09:00' in the job timezone. Lifecycle actions accept an id or an unambiguous case-insensitive exact name. Results reach the user's paired chat automatically; deliverTo='none' opts out of ordinary results, not rate-limited failure/recovery alerts.",
+        "Manage Lemon internal cron jobs: status, list, add, update, pause, resume, pause_all, resume_all, abort, remove, run, and runs. Prompt jobs run native coding sessions in cwd (defaults to the current repository). Pause disables future runs of one job; pause_all holds back every job until resume_all, survives restarts, and resume_all skips the runs missed meanwhile. Abort stops a specific active cron run. Add/update accepts 5-field cron, recurring shorthands like 'every 30m', and one-shots like 'in 30m' or '2027-01-15T09:00' in the job timezone. Lifecycle actions accept an id or an unambiguous case-insensitive exact name. Results reach the user's paired chat automatically; deliverTo='none' opts out of ordinary results, not rate-limited failure/recovery alerts.",
       parameters: tool_schema(),
       execute: &execute(&1, inherit_cwd(&2, cwd), &3, &4, session_key, agent_id)
     }
@@ -87,7 +88,7 @@ defmodule LemonAutomation.Tools.Cron do
           "type" => "string",
           "enum" => @actions,
           "description" =>
-            "Cron action: status, list, add, update, pause, resume, abort, remove, run, or runs."
+            "Cron action: status, list, add, update, pause, resume, pause_all, resume_all, abort, remove, run, or runs. pause_all/resume_all take no other parameters."
         },
         "includeDisabled" => %{
           "type" => "boolean",
@@ -210,14 +211,17 @@ defmodule LemonAutomation.Tools.Cron do
   end
 
   defp dispatch("status", _params, _session_key, _default_agent_id) do
-    with {:ok, jobs} <- cron_call(:list, []) do
-      payload = %{
-        "enabled" => true,
-        "jobCount" => length(jobs),
-        "activeJobs" => Enum.count(jobs, &truthy?(Map.get(&1, :enabled))),
-        "failingJobs" => Enum.count(jobs, &(CronJob.failure_streak(&1) > 0)),
-        "nextRunAtMs" => next_run_ms(jobs)
-      }
+    with {:ok, jobs} <- cron_call(:list, []),
+         {:ok, pause} <- cron_call(:pause_status, []) do
+      payload =
+        %{
+          "enabled" => true,
+          "jobCount" => length(jobs),
+          "activeJobs" => Enum.count(jobs, &truthy?(Map.get(&1, :enabled))),
+          "failingJobs" => Enum.count(jobs, &(CronJob.failure_streak(&1) > 0)),
+          "nextRunAtMs" => next_run_ms(jobs)
+        }
+        |> Map.merge(pause_payload(pause))
 
       {:ok, {"Cron status", payload}}
     end
@@ -449,6 +453,42 @@ defmodule LemonAutomation.Tools.Cron do
     update_enabled(params, true, "resumed", "Cron job resumed")
   end
 
+  defp dispatch("pause_all", _params, _session_key, _default_agent_id) do
+    case cron_call(:pause_all, []) do
+      {:ok, {:ok, status}} ->
+        {:ok, {"All cron jobs paused", pause_payload({:ok, status})}}
+
+      {:ok, {:error, _reason}} ->
+        {:error, "Could not pause cron jobs: the cron store is unavailable."}
+
+      {:error, _} = error ->
+        error
+    end
+  end
+
+  defp dispatch("resume_all", _params, _session_key, _default_agent_id) do
+    case cron_call(:resume_all, []) do
+      {:ok, {:ok, result}} ->
+        title =
+          if result.resumed, do: "All cron jobs resumed", else: "Cron jobs were not paused"
+
+        payload = %{
+          "paused" => false,
+          "resumed" => result.resumed,
+          "skippedJobCount" => result.skipped_job_count,
+          "skippedRetryCount" => result.skipped_retry_count
+        }
+
+        {:ok, {title, payload}}
+
+      {:ok, {:error, _reason}} ->
+        {:error, "Could not resume cron jobs: the cron store is unavailable."}
+
+      {:error, _} = error ->
+        error
+    end
+  end
+
   defp dispatch("abort", params, _session_key, _default_agent_id) do
     with {:ok, run_id} <- require_run_id(params) do
       case cron_call(:abort_run, [run_id]) do
@@ -672,6 +712,17 @@ defmodule LemonAutomation.Tools.Cron do
 
   defp maybe_filter_agent(jobs, agent_id),
     do: Enum.filter(jobs, &(Map.get(&1, :agent_id) == agent_id))
+
+  # An unreadable pause marker is unknown, not "not paused".
+  defp pause_payload({:ok, %{paused: paused, paused_at_ms: paused_at_ms} = status}),
+    do: %{
+      "paused" => paused,
+      "pausedAtMs" => paused_at_ms,
+      "restorationPending" => Map.get(status, :restoration_pending)
+    }
+
+  defp pause_payload(_unknown),
+    do: %{"paused" => nil, "pausedAtMs" => nil, "restorationPending" => nil}
 
   defp next_run_ms(jobs) do
     jobs

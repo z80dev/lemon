@@ -34,6 +34,16 @@ stores, not a second agent engine. See [README](README.md) and
 - Scheduled retry lineage/due time survives restart. Deterministic root/attempt
   IDs and atomic claims prevent duplicate retries. Manual/wake runs are
   single-shot by default; disabled jobs can run manually but cannot be woken.
+- Global pause is one durable `CronStore` marker (`:cron_settings` /
+  `:global_pause`), never config or app-env. While set, ticks claim no slot,
+  retries wait, wake is refused, a claimed-but-unsubmitted scheduled run is
+  aborted, and restart leaves stored schedules untouched. In-flight runs and
+  explicit `run_now` are unaffected, and per-job `enabled` stays independent.
+  `resume_all/0` skips (audits) every slot and retry missed in the pause,
+  re-anchors each job to its next slot, and clears the marker last. It never
+  catches up. An unreadable marker blocks dispatch pending durable startup
+  restoration; it is not a confirmed pause. Failed restoration retries in-process
+  with bounded backoff rather than restarting the automation supervision tree.
 - The `cron` agent tool lives here (`LemonAutomation.Tools.Cron`) and is
   contributed through `LemonAgent.ToolRegistry` in `Application.start/2`; the
   gateway and coding agent must not name it. Keep its name, schema, result shape

@@ -54,6 +54,35 @@ defmodule LemonCli.OperatorCommandsTest do
              status
   end
 
+  test "cron status says when every cron job is paused" do
+    status = %{"jobCount" => 4, "activeJobs" => 3, "failingJobs" => 0, "paused" => true}
+    Process.put(:operator_response, fn "cron.status", %{} -> {:ok, status} end)
+    output = capture_io(fn -> assert CLI.run(~w(cron status)) == 0 end)
+    assert output =~ "Cron jobs: 4, enabled: 3, failing: 0"
+    assert output =~ "All cron jobs are PAUSED"
+    assert output =~ "lemon cron resume --all"
+
+    assert capture_io(fn -> assert CLI.run(~w(cron status --json)) == 0 end) |> Jason.decode!() ==
+             status
+
+    status = %{status | "paused" => false}
+    Process.put(:operator_response, fn "cron.status", %{} -> {:ok, status} end)
+    refute capture_io(fn -> assert CLI.run(~w(cron status)) == 0 end) =~ "PAUSED"
+  end
+
+  test "cron status exposes restoration pending independently of paused" do
+    for paused <- [true, false, nil], pending <- [true, false, nil] do
+      status = %{"paused" => paused, "restorationPending" => pending}
+      Process.put(:operator_response, fn "cron.status", %{} -> {:ok, status} end)
+      output = capture_io(fn -> assert CLI.run(~w(cron status)) == 0 end)
+      assert output =~ "restoration is PENDING" == (pending == true)
+      assert output =~ "All cron jobs are PAUSED" == (paused == true)
+
+      assert capture_io(fn -> assert CLI.run(~w(cron status --json)) == 0 end)
+             |> Jason.decode!() == status
+    end
+  end
+
   test "since parses exact relative minutes, hours and days" do
     now = 1_000_000_000
     assert RunsCommand.since_ms("30m", now) == {:ok, now - 1_800_000}

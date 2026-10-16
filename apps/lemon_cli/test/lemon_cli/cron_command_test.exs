@@ -9,8 +9,24 @@ defmodule LemonCli.CronCommandTest do
       case method do
         "cron.list" -> {:ok, %{"jobs" => Process.get(:cron_jobs, [])}}
         "cron.run" -> {:ok, %{"runId" => "r1"}}
+        "cron.pause" when is_map_key(params, "all") -> all_reply(%{"paused" => true})
+        "cron.resume" when is_map_key(params, "all") -> all_reply(resumed_receipt())
         _ -> {:ok, %{}}
       end
+    end
+
+    defp all_reply(receipt) do
+      if Process.get(:cron_all_failure),
+        do: {:error, :unavailable},
+        else: {:ok, Map.put(receipt, "all", true)}
+    end
+
+    defp resumed_receipt do
+      Process.get(:cron_all_resume, %{
+        "resumed" => true,
+        "skippedJobCount" => 2,
+        "skippedRetryCount" => 1
+      })
     end
   end
 
@@ -55,6 +71,42 @@ defmodule LemonCli.CronCommandTest do
       capture_io(fn -> assert LemonCli.RunsCommand.run_cron([action, "MORNING"]) == 0 end)
       method = "cron.#{action}"
       assert_received {:request, ^method, %{"id" => "j1"}}
+    end
+  end
+
+  test "pause and resume --all use the one global switch without touching jobs" do
+    output = capture_io(fn -> assert LemonCli.RunsCommand.run_cron(["pause", "--all"]) == 0 end)
+    assert output =~ "All cron jobs paused"
+    assert output =~ "lemon cron resume --all"
+    assert_received {:request, "cron.pause", %{"all" => true} = params}
+    refute Map.has_key?(params, "id")
+
+    output = capture_io(fn -> assert LemonCli.RunsCommand.run_cron(["resume", "--all"]) == 0 end)
+    assert output =~ "All cron jobs resumed; skipped 2 missed slot(s) and 1 retry(ies)"
+    assert_received {:request, "cron.resume", %{"all" => true}}
+    refute_received {:request, "cron.list", _}
+
+    Process.put(:cron_all_resume, %{"resumed" => false})
+    output = capture_io(fn -> assert LemonCli.RunsCommand.run_cron(["resume", "--all"]) == 0 end)
+    assert output =~ "were not paused"
+  end
+
+  test "--all failures and malformed receipts exit nonzero; extra arguments are usage errors" do
+    Process.put(:cron_all_failure, true)
+
+    output =
+      capture_io(:stderr, fn -> assert LemonCli.RunsCommand.run_cron(["pause", "--all"]) == 1 end)
+
+    assert output =~ "Cron operation failed"
+    Process.delete(:cron_all_failure)
+
+    Process.put(:cron_all_resume, %{"unexpected" => true})
+
+    capture_io(:stderr, fn -> assert LemonCli.RunsCommand.run_cron(["resume", "--all"]) == 1 end)
+
+    for args <- [["pause", "--all", "j1"], ["run", "--all"], ["remove", "--all"]] do
+      output = capture_io(:stderr, fn -> assert LemonCli.RunsCommand.run_cron(args) == 2 end)
+      assert output =~ "pause|resume --all"
     end
   end
 
