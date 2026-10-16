@@ -27,6 +27,11 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   also rejects permission requests that register after the approval is resolved.
 - Grep keeps invalid UTF-8 bytes from an over-budget first ripgrep match
   instead of crashing while truncating it.
+- Document extraction keeps its backend port under an independent guardian,
+  stopping the witnessed backend process group (including reparented children)
+  on timeout, abort and caller death. A startup handshake witnesses a trusted
+  leader before converters execute and retains it through cleanup, including
+  when a short-lived converter forks a child and immediately exits.
 - Setup/readiness preserve native colon model IDs, including multi-colon IDs.
   Live setup strips only actual provider qualification, honors declared/discovered
   full IDs in the effective provider scope and model overrides, and rejects known

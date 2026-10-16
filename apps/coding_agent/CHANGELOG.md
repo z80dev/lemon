@@ -147,6 +147,10 @@
 
 ### Fixed
 
+- Document backend guardians retain a witnessed process-group leader until
+  cleanup, so timeout, abort and caller death stop even redirected descendants
+  of immediately exiting converters without signaling unrelated processes.
+
 - Native-followup context tests restore their global coordinator even when setup
   fails, preventing foreign submissions and later cron cancellation tests from
   inheriting a fixture dispatcher.
