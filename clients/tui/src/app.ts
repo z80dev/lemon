@@ -611,9 +611,12 @@ export class AppShell {
 			// A re-handshake means the client's picture of the daemon is stale: which
 			// sessions are live, what landed while the socket was down, and which
 			// approvals are still waiting all have to be re-read.
-			this.client.events.on("resync-needed", ({ sessionKey }) => {
+			this.client.events.on("resync-needed", ({ sessionKey, reason }) => {
 				for (const session of this.store.sessions.values()) {
 					if (sessionKey && session.key !== sessionKey) continue;
+					// A re-handshake or stream overflow can lose `completed` events; the
+					// session's own recovery requests (a sessionKey and no reason) do not.
+					if (!sessionKey || reason) session.markCostUnobserved();
 					if (
 						session !== this.store.focused &&
 						(!session.snapshotIdentity ||
@@ -796,6 +799,7 @@ export class AppShell {
 			contextSource: context.source,
 			runTokens: session.usage?.totalTokens ?? undefined,
 			runCostUsd: session.usage?.costUsd ?? undefined,
+			sessionCost: { usd: session.sessionCostUsd, partial: session.sessionCostPartial },
 			pendingPrompts: this.store.queue.length(session.key),
 			sessionCount: this.store.sessions.size,
 			busy: session.busy,

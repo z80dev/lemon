@@ -41,6 +41,12 @@ export interface StatusBarData {
 	/** Last completed run, not the conversation's context size. */
 	runTokens?: number;
 	runCostUsd?: number;
+	/**
+	 * Cumulative cost of the session's completed runs. `usd` undefined means no
+	 * run reported a cost: shown as unknown, never as zero. `partial` means some
+	 * run did not report one, so `usd` is a lower bound.
+	 */
+	sessionCost?: { usd: number | undefined; partial: boolean };
 	/** Client-side follow-ups for the focused session. */
 	pendingPrompts?: number;
 	branch?: string | null;
@@ -256,6 +262,8 @@ function cacheKey(data: StatusBarData): string {
 		data.contextSource,
 		data.runTokens,
 		data.runCostUsd,
+		data.sessionCost?.usd,
+		data.sessionCost?.partial,
 		data.pendingPrompts,
 		data.branch,
 		data.sessionCount,
@@ -405,7 +413,16 @@ export function buildSegments(data: StatusBarData): Segment[] {
 	return segments;
 }
 
-/** `last 12k tok $0.0042`, or undefined before a run reported either. */
+/** `session $1.20`, `session ≥$1.20` when a run reported no cost, or `session cost unknown`. */
+function sessionCost(data: StatusBarData): string | undefined {
+	const cost = data.sessionCost;
+	if (!cost) return undefined;
+	const usd = cost.usd;
+	if (usd === undefined || !Number.isFinite(usd) || usd < 0) return "session cost unknown";
+	return `session ${cost.partial ? "≥" : ""}$${usd.toFixed(usd < 0.01 ? 4 : 2)}`;
+}
+
+/** `last 12k tok $0.0042 · session $1.20`, or undefined before anything is known. */
 function runUsage(data: StatusBarData): string | undefined {
 	const usage: string[] = [];
 	if (data.runTokens !== undefined && Number.isFinite(data.runTokens) && data.runTokens >= 0) {
@@ -414,7 +431,9 @@ function runUsage(data: StatusBarData): string | undefined {
 	if (data.runCostUsd !== undefined && Number.isFinite(data.runCostUsd) && data.runCostUsd >= 0) {
 		usage.push(`$${data.runCostUsd.toFixed(data.runCostUsd < 0.01 ? 4 : 2)}`);
 	}
-	return usage.length > 0 ? `last ${usage.join(" ")}` : undefined;
+	const last = usage.length > 0 ? `last ${usage.join(" ")}` : undefined;
+	const session = sessionCost(data);
+	return last && session ? `${last} · ${session}` : (last ?? session);
 }
 
 /**

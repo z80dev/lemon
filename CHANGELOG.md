@@ -61,6 +61,12 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Added
 
+- TUI status bar shows the session's cumulative cost, updated after each run
+  (including snapshot-managed sessions, counted once per run). Runs without
+  cost data, resumed history, and events lost to a reconnect make it a lower
+  bound (`session ≥$0.42`), and a session with no known cost shows
+  `session cost unknown` instead of $0.00. The daemon's `sessions.context`
+  ledger reports a missing cost as zero, so a resumed total is never exact.
 - Unified configurable browser provider selection across browser tools, LCU Chrome
   control, doctor and control-plane browser status. Auto selection prefers ready
   LCU, then an authenticated relay, then local Chrome; explicit providers fail

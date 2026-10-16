@@ -767,8 +767,12 @@ export interface ContextAutoCompaction {
  */
 export interface ContextSessionUsage {
 	tokens: number;
-	/** Catalog-estimated cost in USD, not a bill. */
-	costUsd: number;
+	/**
+	 * Catalog-estimated cost in USD, not a bill; undefined when the receipt
+	 * carried none. The daemon's ledger reports a run with no cost as zero, so
+	 * even a present `0` cannot prove the spend is known.
+	 */
+	costUsd: number | undefined;
 	input: number;
 	output: number;
 	cacheRead: number;

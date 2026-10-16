@@ -112,6 +112,36 @@ export class SessionStore {
 	/** Token counts from this session's most recent completed run. */
 	usage: RunUsage | undefined;
 	/**
+	 * Sum of the known costs of this session: the daemon's cumulative ledger when
+	 * it was seeded, plus every run this client saw complete. Undefined until one
+	 * reports; never zero by default.
+	 */
+	sessionCostUsd: number | undefined;
+	/** Runs whose `completed` event was folded into {@link sessionCostUsd} (priced or not). */
+	readonly #costedRuns = new Set<string>();
+	/** Runs that finished but reported no usable cost. */
+	#unpricedRuns = 0;
+	/** Terminal runs a snapshot showed whose completion this client has not seen. */
+	readonly #missedRuns = new Set<string>();
+	/** Terminal runs already inside the ledger-seeded starting total; their late completion adds nothing. */
+	readonly #seededRuns = new Set<string>();
+	/**
+	 * Spend this client cannot account for: stored history it did not watch
+	 * happen, or events lost to a disconnect. The daemon's ledger cannot tell a
+	 * missing cost from zero, so it never clears this.
+	 */
+	#costUnobserved = false;
+
+	/** The total is only a lower bound: some run or history carries unknown cost. */
+	get sessionCostPartial(): boolean {
+		return this.#costUnobserved || this.#unpricedRuns > 0 || this.#missedRuns.size > 0;
+	}
+
+	/** How many completed runs this client has folded into the cumulative cost. */
+	get costedRunCount(): number {
+		return this.#costedRuns.size;
+	}
+	/**
 	 * The daemon's own `sessions.context` measurement. Authoritative when taken;
 	 * the next completed run's usage supersedes it.
 	 */
@@ -242,6 +272,52 @@ export class SessionStore {
 		if (!usage) return;
 		this.usage = usage;
 		this.contextMeasurement = undefined;
+	}
+
+	/**
+	 * Fold a completed run into the cumulative session cost, once per run: the
+	 * same run reported again (a replayed event, a recovery) never counts twice.
+	 * A run without a usable cost never counts as zero; it marks the total partial.
+	 */
+	addRunCost(runId: string, usage: RunUsage | null | undefined): void {
+		if (this.#costedRuns.has(runId)) return;
+		this.#costedRuns.add(runId);
+		this.#missedRuns.delete(runId);
+		if (this.#seededRuns.delete(runId)) return;
+		const cost = usage?.costUsd;
+		if (typeof cost === "number" && Number.isFinite(cost) && cost >= 0) {
+			this.sessionCostUsd = (this.sessionCostUsd ?? 0) + cost;
+		} else {
+			this.#unpricedRuns += 1;
+		}
+	}
+
+	/**
+	 * An authoritative snapshot showed `runId` terminal. If its completion was
+	 * never folded in, its cost is unknown (a later `completed` event still wins).
+	 */
+	noteTerminalRun(runId: string): void {
+		if (!this.#costedRuns.has(runId)) this.#missedRuns.add(runId);
+	}
+
+	/** Spend this client did not observe: loaded history, or events lost to a disconnect. */
+	markCostUnobserved(): void {
+		this.#costUnobserved = true;
+	}
+
+	/**
+	 * Fold in the daemon's cumulative `sessions.context` ledger for a session whose
+	 * earlier runs this client never saw. The ledger reports a missing cost as
+	 * zero, so it is only ever a lower bound: a positive amount seeds the total,
+	 * zero stays unknown. Skipped when a run is in flight or already counted,
+	 * since the ledger may then already include what the live events will add.
+	 */
+	seedPriorCost(ledgerUsd: number | undefined, quiescent: boolean): void {
+		if (ledgerUsd === undefined || !Number.isFinite(ledgerUsd) || ledgerUsd <= 0) return;
+		this.#costUnobserved = true;
+		if (!quiescent || this.#costedRuns.size > 0 || this.sessionCostUsd !== undefined) return;
+		this.sessionCostUsd = ledgerUsd;
+		for (const runId of this.#missedRuns) this.#seededRuns.add(runId);
 	}
 
 	/** Record a `sessions.context` total (and its window) for the gauge. */
