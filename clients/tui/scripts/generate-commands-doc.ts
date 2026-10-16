@@ -75,6 +75,23 @@ export async function renderCommandsDoc(): Promise<string> {
 		lines.push("");
 	}
 	lines.push(
+		"## Prompt history",
+		"",
+		"The ↑ / ↓ prompt recall persists across sessions in",
+		"`~/.lemon/tui-history/history.sqlite3` (SQLite, mode `0600`, private `0700` directory).",
+		"Transactions retain at most 100 prompts and 256 KiB of encoded prompt content;",
+		"SQLite pages and its temporary rollback journal need additional disk space.",
+		"",
+		"- `/clear-history` forgets remembered prompts, clears saved rows and removes legacy sources.",
+		"- Set `prompt_history = false` under `[tui]` in user or project config to stop",
+		"  saving and loading history. Existing history remains until `/clear-history`.",
+		"",
+		"Only submitted prompts are saved; discarded drafts stay in memory for this session.",
+		"Prompts may contain secrets. See [TUI prompt history](../config.md#tui-prompt-history)",
+		"for storage bounds, migration, concurrent clear semantics and backup considerations.",
+		"",
+	);
+	lines.push(
 		"## Configurable keybindings",
 		"",
 		"Set quoted action IDs under `[tui.keys]` in `~/.lemon/config.toml` or the project",

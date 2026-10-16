@@ -12,13 +12,14 @@ test.skipIf(!python || process.platform === "win32")(
 				python!,
 				"-c",
 				String.raw`
-import fcntl, json, os, pty, select, signal, struct, subprocess, sys, termios, time
+import fcntl, json, os, pty, select, shutil, signal, struct, subprocess, sys, tempfile, termios, time
 master, slave = pty.openpty()
 fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack('HHHH', 24, 80, 0, 0))
 original = termios.tcgetattr(slave)
 env = {k: v for k, v in os.environ.items() if not k.startswith('TERN')}
+home = tempfile.mkdtemp()  # prompt history is saved under $HOME; keep it off the real ~/.lemon
 env.update(TERM='xterm-256color', TERM_PROGRAM='', PI_TUI_NATIVE='0', PI_TEST_RUNTIME='0', LEMON_EDITOR='true',
-           LEMON_CONTROL_PLANE_OPERATOR_TOKEN='', LEMON_WS_TOKEN='')
+           LEMON_CONTROL_PLANE_OPERATOR_TOKEN='', LEMON_WS_TOKEN='', HOME=home)
 child = subprocess.Popen([sys.argv[1], 'src/main.ts', '--ws-url', 'ws://127.0.0.1:1/ws'],
                          stdin=slave, stdout=slave, stderr=slave, env=env, start_new_session=True)
 output = bytearray()
@@ -59,6 +60,7 @@ finally:
         child.wait()
     os.close(master)
     os.close(slave)
+    shutil.rmtree(home, ignore_errors=True)
 `,
 				process.execPath,
 			],

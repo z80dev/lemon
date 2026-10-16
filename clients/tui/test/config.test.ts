@@ -10,6 +10,8 @@ import { join } from "node:path";
 import {
 	loadConfig,
 	parseDottedKey,
+	promptHistoryEnabled,
+	resolvePromptHistory,
 	saveDefaultModel,
 	saveTheme,
 	upsertTomlString,
@@ -33,6 +35,53 @@ afterEach(() => {
 function configPath(): string {
 	return join(home, ".lemon", "config.toml");
 }
+
+describe("prompt history setting", () => {
+	test("is on by default and by explicit true", async () => {
+		expect(resolvePromptHistory(undefined)).toBe(true);
+		expect(resolvePromptHistory(true)).toBe(true);
+		expect(resolvePromptHistory((await loadConfig()).tui?.prompt_history)).toBe(true);
+	});
+
+	test("[tui] prompt_history = false turns it off, and so does any other non-true value", async () => {
+		writeConfig("[tui]\nprompt_history = false\n");
+		expect(resolvePromptHistory((await loadConfig()).tui?.prompt_history)).toBe(false);
+		for (const value of ["false", "off", "no", "true", 0, 1]) {
+			expect(resolvePromptHistory(value)).toBe(false);
+		}
+	});
+
+	test("a global opt-out plus an unparsable project config fails closed", async () => {
+		writeConfig("[tui]\nprompt_history = false\n");
+		const project = mkdtempSync(join(tmpdir(), "lemon-tui-project-"));
+		try {
+			mkdirSync(join(project, ".lemon"));
+			writeFileSync(join(project, ".lemon", "config.toml"), "[tui\nprompt_history = ");
+			let failed = false;
+			const config = await loadConfig(project).catch(() => {
+				failed = true;
+				return undefined;
+			});
+			expect(failed).toBe(true);
+			expect(promptHistoryEnabled(config, failed)).toBe(false);
+			// A successful load with the setting absent still defaults on.
+			expect(promptHistoryEnabled({}, false)).toBe(true);
+		} finally {
+			rmSync(project, { recursive: true, force: true });
+		}
+	});
+
+	test("a project config can turn it off", async () => {
+		const project = mkdtempSync(join(tmpdir(), "lemon-tui-project-"));
+		try {
+			mkdirSync(join(project, ".lemon"));
+			writeFileSync(join(project, ".lemon", "config.toml"), "[tui]\nprompt_history = false\n");
+			expect(resolvePromptHistory((await loadConfig(project)).tui?.prompt_history)).toBe(false);
+		} finally {
+			rmSync(project, { recursive: true, force: true });
+		}
+	});
+});
 
 function writeConfig(content: string, mode = 0o600): void {
 	mkdirSync(join(home, ".lemon"), { recursive: true });

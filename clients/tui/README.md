@@ -147,7 +147,10 @@ on reconnect and when opening or changing models. Older daemons without
   as interrupted, not as a generic failed run; real failures retain their error.
   The busy status line shows `enter:<mode>` and `esc:stop`; Escape interrupts
   without discarding a correction in the editor (autocomplete gets Escape first).
-  Shift+Enter inserts a newline. Up/Down recall prompts, and discarded large
+  Shift+Enter inserts a newline. Up/Down recall prompts (kept across sessions in
+  `~/.lemon/tui-history/history.sqlite3`, mode `0600` in a private `0700` directory;
+  `/clear-history` clears saved prompts and `[tui] prompt_history = false` turns it off;
+  see [prompt history](../../docs/config.md#tui-prompt-history)), and discarded large
   pastes remain recoverable after later submissions.
   Ctrl+V accepts clipboard images where the platform provides them, and pasted
   or dragged local image paths attach actual PNG, JPEG, GIF, or WebP bytes.
@@ -559,6 +562,17 @@ bun run check             # tsc --noEmit
 bun run lint              # biome
 bun run gallery           # headless render of every component/state
 ```
+
+After `bun run build:binary`, exercise submitted-only SQLite persistence, restart
+recall and `/clear-history` through the real compiled client with a private
+temporary HOME and a loopback fake control plane (no daemon/provider needed):
+
+```sh
+bun run scripts/prompt-history-smoke.ts "$PWD/dist/darwin-arm64/tui/bin/lemon-tui"
+```
+
+Use the matching `linux-arm64` or `linux-x86_64` artifact on Linux. The smoke uses
+real PTYs and runs the binary, not a separately compiled storage-only fixture.
 
 The opt-in `bun run scripts/recovery-queue-smoke.ts` uses the public AppShell
 in a real terminal and an isolated production router/gateway/native runtime.

@@ -94,6 +94,17 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   owner product login, HTTPS preflight, explicit exact-request approval, and
   consumed-link confirmation without starting services or accepting secret flags.
 - Telegram gateway setup prints the `https://t.me/<bot_username>` link once the bot token validates.
+- TUI prompt history persists across sessions by default in the private local
+  SQLite database `~/.lemon/tui-history/history.sqlite3` (mode `0600`, directory
+  `0700`), using Bun's built-in SQLite. Transactional append, bounded pruning
+  (100 prompts / 256 KiB of encoded content) and clear preserve concurrent
+  writers without stale snapshots; full auto-vacuum and rollback journaling
+  bound physical storage growth separately from the logical content limit.
+  Only submitted prompts are saved. Legacy JSONL and retained backups migrate
+  once; `/clear-history` clears saved rows and legacy sources without reimport
+  after a crash, and reports permission/lock/cleanup failures truthfully.
+  `[tui] prompt_history = false` disables persistence. History stays client-local,
+  outside doctor support bundles; backups may include it.
 - TUI status bar shows the session's cumulative cost, updated after each run
   (including snapshot-managed sessions, counted once per run). Runs without
   cost data, resumed history, and events lost to a reconnect make it a lower

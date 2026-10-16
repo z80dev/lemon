@@ -47,6 +47,7 @@ import {
 	type ComposerSubmission,
 	type SubmissionDisposition,
 } from "./composer/drafts.ts";
+import type { PromptHistoryStore } from "./composer/prompt-history.ts";
 import { type NotificationMode, resolveNotifications } from "./config.ts";
 import { editInExternalEditor } from "./external-editor.ts";
 import { getGitModeline } from "./git-utils.ts";
@@ -142,6 +143,8 @@ export interface AppShellOptions {
 	 * terminal's OSC 11 reports for as long as the client runs.
 	 */
 	themePreference?: ThemePreference;
+	/** Where sent prompts persist across sessions; unset keeps ↑ recall in memory only. */
+	promptHistory?: PromptHistoryStore;
 	notifications?: NotificationMode;
 	keybindings?: unknown;
 	/** Local roots for skills, prompts and file commands; tests inject a fixture home. */
@@ -249,6 +252,7 @@ export class AppShell {
 		// Editor construction needs a theme: pi-tui ships no defaults.
 		const controlKeys: { model?: string; thinking?: string } = {};
 		this.#editor = new CustomEditor({
+			promptHistory: options.promptHistory,
 			theme: getEditorTheme(),
 			onSubmit: async (text) => {
 				const sessionKey = this.store.focusedKey;
@@ -1539,6 +1543,7 @@ export class AppShell {
 			noticeBlock: (lines: string[], level?: NoticeLevel) =>
 				this.events.notice(indentBlock(lines), level),
 			clearTranscript: () => this.#clearTranscript(),
+			clearPromptHistory: () => this.#editor.clearHistory(),
 			requestExit: (code: number) => this.requestExit(code),
 			reconnect: () => this.client.reconnect(),
 			refreshStatus: () => this.#renderStatus(),

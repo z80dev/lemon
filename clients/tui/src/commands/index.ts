@@ -12,6 +12,7 @@ import { contextCommand } from "./context.ts";
 import { copyCommand } from "./copy.ts";
 import {
 	clearCommand,
+	clearHistoryCommand,
 	debugCommand,
 	helpCommand,
 	makeEditorCommand,
@@ -77,6 +78,7 @@ export function createCommandRegistry(options: RegistryOptions = {}): CommandReg
 		copyCommand,
 		quitCommand,
 		clearCommand,
+		clearHistoryCommand,
 		modeCommand,
 		themeCommand,
 		makeEditorCommand(openEditor),

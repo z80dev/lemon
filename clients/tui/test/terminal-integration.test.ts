@@ -1,6 +1,10 @@
 import { expect, test } from "bun:test";
+import { mkdtempSync, rmSync, statSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { TERMINAL } from "@oh-my-pi/pi-tui/terminal-capabilities";
 import { visibleWidth } from "@oh-my-pi/pi-tui/utils";
+import { PromptHistoryStore } from "../src/composer/prompt-history.ts";
 import { resolveNotifications } from "../src/config.ts";
 import { FakeControlPlane } from "../src/dev/fake-server.ts";
 import { ControlPlaneClient } from "../src/protocol/client.ts";
@@ -234,12 +238,15 @@ test("real TUI PTY emits turn/approval signals and restores keyboard, title and 
 		},
 	});
 	const originalFlags = terminal.localFlags;
+	// The child saves prompt history under $HOME; keep that off the real ~/.lemon.
+	const home = mkdtempSync(join(tmpdir(), "lemon-tui-pty-"));
 	const proc = Bun.spawn(
 		[process.execPath, "src/main.ts", "--ws-url", server.url, "--session", "terminal-smoke"],
 		{
 			cwd: new URL("..", import.meta.url).pathname,
 			env: {
 				...process.env,
+				HOME: home,
 				TERN_PANE: "terminal-smoke",
 				TERM_PROGRAM: "Tern",
 				TERM: "xterm-256color",
@@ -348,6 +355,11 @@ test("real TUI PTY emits turn/approval signals and restores keyboard, title and 
 		expect(output).toContain("\x1b]7501;state=clear\x1b\\");
 		expect(output).toContain("\x1b]9;4;0;");
 		expect(terminal.localFlags).toBe(originalFlags);
+		// Prompt history is on by default: saved privately under the scoped $HOME.
+		const historyFile = join(home, ".lemon", "tui-history", "history.sqlite3");
+		expect(new PromptHistoryStore(historyFile).load()).toEqual(["terminal integration smoke"]);
+		expect(statSync(join(home, ".lemon", "tui-history")).mode & 0o777).toBe(0o700);
+		expect(statSync(historyFile).mode & 0o777).toBe(0o600);
 	} finally {
 		if (proc.exitCode === null) {
 			proc.kill();
@@ -355,5 +367,6 @@ test("real TUI PTY emits turn/approval signals and restores keyboard, title and 
 		}
 		terminal.close();
 		server.stop();
+		rmSync(home, { recursive: true, force: true });
 	}
 }, 15000);

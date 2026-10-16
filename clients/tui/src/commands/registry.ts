@@ -66,6 +66,8 @@ export interface CommandHost {
 	copyText?(text: string): Promise<void>;
 	/** Drop every transcript block and clear native scrollback. */
 	clearTranscript(): void;
+	/** Forget recalled prompts in memory and transactionally clear persistent history. */
+	clearPromptHistory?(): void;
 	requestExit(code: number): void;
 	/** Force a reconnect of the control-plane socket. */
 	reconnect(): Promise<void>;
