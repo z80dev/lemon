@@ -68,31 +68,43 @@ defmodule CodingAgent.Tools.Task.Runner do
   defp run_session(session, start_opts, prompt, description, signal, on_update, role_id, opts) do
     session_id = Session.get_stats(session).session_id
     on_update = with_session_id(on_update, session_id)
-    unsubscribe = Session.subscribe(session)
     session_ref = Process.monitor(session)
     timeout_ms = task_session_timeout_ms(opts)
     deadline_ms = if timeout_ms, do: System.monotonic_time(:millisecond) + timeout_ms
 
     try do
       result =
-        with :ok <- attach_control_session(opts[:task_id], session, session_id),
-             :ok <- prompt_idle_session(session, prompt) do
-          await = fn budget ->
-            await_result(
-              session,
-              session_ref,
-              session_id,
-              signal,
-              on_update,
-              description,
-              "",
-              "",
-              role_id,
-              timeout_ms,
-              deadline_ms,
-              task_session_poll_ms(opts),
-              budget
-            )
+        with :ok <- attach_control_session(opts[:task_id], session, session_id) do
+          await = fn next_prompt, budget ->
+            {unsubscribe, delivery} = Session.subscribe(session, tagged: true)
+
+            try do
+              # Each prompt owns a fresh delivery gate. Old events remain fenced
+              # even when they arrive after this mailbox drain.
+              flush_session_events(session_id)
+
+              with :ok <- prompt_idle_session(session, next_prompt) do
+                await_result(
+                  session,
+                  session_ref,
+                  delivery.gate,
+                  session_id,
+                  signal,
+                  on_update,
+                  description,
+                  "",
+                  "",
+                  role_id,
+                  timeout_ms,
+                  deadline_ms,
+                  task_session_poll_ms(opts),
+                  budget
+                )
+              end
+            after
+              drain_session(session, session_ref, session_id, delivery.gate)
+              unsubscribe.()
+            end
           end
 
           details = %{
@@ -109,8 +121,8 @@ defmodule CodingAgent.Tools.Task.Runner do
           }
 
           await_valid_result(
-            session,
             await,
+            prompt,
             details,
             opts[:validate_output],
             @output_retries,
@@ -127,9 +139,7 @@ defmodule CodingAgent.Tools.Task.Runner do
         stop_session(session)
         :erlang.raise(kind, reason, __STACKTRACE__)
     after
-      drain_session(session, session_ref, session_id)
       Process.demonitor(session_ref, [:flush])
-      if is_function(unsubscribe, 0), do: unsubscribe.()
     end
   end
 
@@ -160,8 +170,8 @@ defmodule CodingAgent.Tools.Task.Runner do
   # Re-prompts the same child session when its final output fails the caller's
   # validator. After the retries are spent, the last result is returned and the
   # caller decides whether invalid output fails the task.
-  defp await_valid_result(session, await, details, validator, retries_left, budget) do
-    with {:ok, %{text: text, thinking: thinking} = payload, budget} <- await.(budget) do
+  defp await_valid_result(await, prompt, details, validator, retries_left, budget) do
+    with {:ok, %{text: text, thinking: thinking} = payload, budget} <- await.(prompt, budget) do
       result = %AgentToolResult{
         content: Result.build_update_content(text, thinking),
         details: Map.merge(details, Map.get(payload, :details, %{}))
@@ -169,13 +179,51 @@ defmodule CodingAgent.Tools.Task.Runner do
 
       case {result.details[:budget_exhausted], validate_result(validator, result)} do
         {exhausted, {:error, reason}} when exhausted != true and retries_left > 0 ->
-          with :ok <- prompt_idle_session(session, correction_prompt(reason)) do
-            await_valid_result(session, await, details, validator, retries_left - 1, budget)
-          end
+          await_valid_result(
+            await,
+            correction_prompt(reason),
+            details,
+            validator,
+            retries_left - 1,
+            budget
+          )
 
         _ ->
           result
       end
+    end
+  end
+
+  defp flush_session_events(session_id) do
+    receive do
+      {:session_event, ^session_id, _event} ->
+        flush_session_events(session_id)
+
+      {:session_terminal, ^session_id, _status} ->
+        flush_session_events(session_id)
+
+      {:lemon_bus_delivery, _gate, {:session_event, ^session_id, _event}} ->
+        flush_session_events(session_id)
+
+      {:lemon_bus_delivery, _gate, {:session_terminal, ^session_id, _status}} ->
+        flush_session_events(session_id)
+    after
+      0 -> :ok
+    end
+  end
+
+  defp await_session_event(session_ref, delivery_gate, session_id, timeout) do
+    receive do
+      {:lemon_bus_delivery, ^delivery_gate, {:session_event, ^session_id, _event} = event} ->
+        event
+
+      {:lemon_bus_delivery, ^delivery_gate, {:session_terminal, ^session_id, _status} = event} ->
+        event
+
+      {:DOWN, ^session_ref, :process, _pid, _reason} = event ->
+        event
+    after
+      timeout -> :timeout
     end
   end
 
@@ -221,6 +269,7 @@ defmodule CodingAgent.Tools.Task.Runner do
   defp await_result(
          session,
          session_ref,
+         delivery_gate,
          session_id,
          signal,
          on_update,
@@ -233,15 +282,41 @@ defmodule CodingAgent.Tools.Task.Runner do
          poll_ms,
          budget
        ) do
-    receive do
-      {:session_terminal, ^session_id, :completed} ->
-        completed_result(Session.get_messages(session), signal, last_text, last_thinking, budget)
+    case await_session_event(
+           session_ref,
+           delivery_gate,
+           session_id,
+           await_timeout(deadline_ms, poll_ms)
+         ) do
+      {:session_terminal, ^session_id, status} ->
+        case Session.get_state(session).terminal_event do
+          {:agent_end, messages} ->
+            completed_result(messages, signal, last_text, last_thinking, budget)
 
-      {:session_terminal, ^session_id, :canceled} ->
-        {:error, "Task aborted"}
+          {:error, reason, _partial_state} ->
+            {:error, reason}
 
-      {:session_terminal, ^session_id, :error} ->
-        {:error, "Task session failed"}
+          {:canceled, _reason} ->
+            {:error, "Task aborted"}
+
+          {:turn_end, %{stop_reason: :aborted}, _tool_results} ->
+            {:error, "Task aborted"}
+
+          _ when status == :canceled ->
+            {:error, "Task aborted"}
+
+          _ when status == :error ->
+            {:error, "Task session failed"}
+
+          _ ->
+            completed_result(
+              Session.get_messages(session),
+              signal,
+              last_text,
+              last_thinking,
+              budget
+            )
+        end
 
       {:DOWN, ^session_ref, :process, _pid, reason} ->
         {:error, format_session_exit(reason)}
@@ -259,6 +334,7 @@ defmodule CodingAgent.Tools.Task.Runner do
         await_result(
           session,
           session_ref,
+          delivery_gate,
           session_id,
           signal,
           on_update,
@@ -287,6 +363,7 @@ defmodule CodingAgent.Tools.Task.Runner do
         await_result(
           session,
           session_ref,
+          delivery_gate,
           session_id,
           signal,
           on_update,
@@ -313,6 +390,7 @@ defmodule CodingAgent.Tools.Task.Runner do
         await_result(
           session,
           session_ref,
+          delivery_gate,
           session_id,
           signal,
           on_update,
@@ -346,6 +424,7 @@ defmodule CodingAgent.Tools.Task.Runner do
         await_result(
           session,
           session_ref,
+          delivery_gate,
           session_id,
           signal,
           on_update,
@@ -379,7 +458,7 @@ defmodule CodingAgent.Tools.Task.Runner do
 
         if budget.limit > 0 and budget.count >= div(3 * budget.limit + 1, 2) do
           Session.abort(session)
-          drain_session(session, session_ref, session_id)
+          drain_session(session, session_ref, session_id, delivery_gate)
 
           {:ok,
            %{
@@ -405,6 +484,7 @@ defmodule CodingAgent.Tools.Task.Runner do
           await_result(
             session,
             session_ref,
+            delivery_gate,
             session_id,
             signal,
             on_update,
@@ -432,6 +512,7 @@ defmodule CodingAgent.Tools.Task.Runner do
         await_result(
           session,
           session_ref,
+          delivery_gate,
           session_id,
           signal,
           on_update,
@@ -444,8 +525,8 @@ defmodule CodingAgent.Tools.Task.Runner do
           poll_ms,
           budget
         )
-    after
-      await_timeout(deadline_ms, poll_ms) ->
+
+      :timeout ->
         if AbortSignal.aborted?(signal) do
           Session.abort(session)
           {:error, "Task aborted"}
@@ -459,6 +540,7 @@ defmodule CodingAgent.Tools.Task.Runner do
               await_result(
                 session,
                 session_ref,
+                delivery_gate,
                 session_id,
                 signal,
                 on_update,
@@ -477,6 +559,12 @@ defmodule CodingAgent.Tools.Task.Runner do
   end
 
   defp completed_result(messages, signal, last_text, last_thinking, budget) do
+    messages =
+      messages
+      |> Enum.reverse()
+      |> Enum.take_while(&(Map.get(&1, :role) != :user))
+      |> Enum.reverse()
+
     last = messages |> Enum.filter(&match?(%LemonAi.Types.AssistantMessage{}, &1)) |> List.last()
 
     cond do
@@ -617,27 +705,45 @@ defmodule CodingAgent.Tools.Task.Runner do
     end
   end
 
-  defp drain_session(session, session_ref, session_id) do
+  defp drain_session(session, session_ref, session_id, delivery_gate) do
     if Process.alive?(session) and Session.get_state(session).is_streaming do
       Session.abort(session)
-      await_shutdown(session_ref, session_id, System.monotonic_time(:millisecond) + 1_000)
+
+      await_shutdown(
+        session_ref,
+        session_id,
+        delivery_gate,
+        System.monotonic_time(:millisecond) + 1_000
+      )
     end
   catch
     :exit, _ -> :ok
   end
 
-  defp await_shutdown(session_ref, session_id, deadline) do
+  defp await_shutdown(session_ref, session_id, delivery_gate, deadline) do
     remaining = max(deadline - System.monotonic_time(:millisecond), 0)
 
-    receive do
-      {:DOWN, ^session_ref, :process, _, _} -> :ok
-      {:session_terminal, ^session_id, _status} -> :ok
-      {:session_event, ^session_id, {:agent_end, _}} -> :ok
-      {:session_event, ^session_id, {:canceled, _}} -> :ok
-      {:session_event, ^session_id, {:error, _, _}} -> :ok
-      {:session_event, ^session_id, _} -> await_shutdown(session_ref, session_id, deadline)
-    after
-      remaining -> :ok
+    case await_session_event(session_ref, delivery_gate, session_id, remaining) do
+      {:DOWN, ^session_ref, :process, _, _} ->
+        :ok
+
+      {:session_terminal, ^session_id, _status} ->
+        :ok
+
+      {:session_event, ^session_id, {:agent_end, _}} ->
+        :ok
+
+      {:session_event, ^session_id, {:canceled, _}} ->
+        :ok
+
+      {:session_event, ^session_id, {:error, _, _}} ->
+        :ok
+
+      {:session_event, ^session_id, _} ->
+        await_shutdown(session_ref, session_id, delivery_gate, deadline)
+
+      :timeout ->
+        :ok
     end
   end
 

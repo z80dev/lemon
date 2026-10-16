@@ -609,6 +609,7 @@ defmodule CodingAgent.Session.Lifecycle do
 
         state =
           if was_streaming do
+            state = %{state | terminal_event: {:canceled, :reset}}
             Notifier.broadcast_event(state, {:canceled, :reset})
             Notifier.complete_event_streams(state, {:canceled, :reset})
 

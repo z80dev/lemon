@@ -117,7 +117,9 @@
   releases lifetime capacity once without dropping unreclaimed artifact charges.
   Clearing a process now leaves its reconciliation session alive when the Store
   refuses deletion.
-
+- Sessions retain current-turn error/cancellation terminals until the next turn;
+  fenced subscribers classify aborted, failed and length-limited answers truthfully.
+  Tagged direct subscriptions fence stale unsubscribe closures by generation.
 - Patch hunks retry whitespace and typographic-punctuation normalization only
   after an exact miss, reject ambiguous matches, and preserve original context.
 

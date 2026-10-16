@@ -1,5 +1,5 @@
 defmodule CodingAgent.Executor.SessionRunnerRecoveryTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
   alias CodingAgent.Executor.SessionRunner
   alias CodingAgent.Executor.SessionRunner.Emitter
@@ -10,6 +10,9 @@ defmodule CodingAgent.Executor.SessionRunnerRecoveryTest do
     def start_link(messages), do: GenServer.start_link(__MODULE__, messages)
     def init(messages), do: {:ok, messages}
     def handle_call(:get_messages, _from, messages), do: {:reply, messages, messages}
+
+    def handle_call(:get_state, _from, messages),
+      do: {:reply, %{terminal_event: nil}, messages}
 
     def handle_call(:context_budget, _from, messages),
       do: {:reply, {:error, :unavailable}, messages}
@@ -120,6 +123,83 @@ defmodule CodingAgent.Executor.SessionRunnerRecoveryTest do
 
     assert state.translator.completed_emitted
     refute Process.alive?(owner)
+  end
+
+  test "a fenced real session retains the current loop crash instead of the preceding success" do
+    tmp_dir =
+      Path.join(System.tmp_dir!(), "executor-crash-fence-#{System.unique_integer([:positive])}")
+
+    File.mkdir_p!(tmp_dir)
+    on_exit(fn -> File.rm_rf(tmp_dir) end)
+    parent = self()
+    counter = start_supervised!({Agent, fn -> 0 end})
+
+    stream_fn = fn model, context, options ->
+      case Agent.get_and_update(counter, &{&1, &1 + 1}) do
+        0 ->
+          LemonAgent.Test.Mocks.mock_stream_fn_single(
+            LemonAgent.Test.Mocks.assistant_message("PREVIOUS SUCCESS")
+          ).(model, context, options)
+
+        1 ->
+          send(parent, {:crash_provider_waiting, self()})
+
+          receive do
+            :crash_now -> raise "current loop exploded"
+          end
+      end
+    end
+
+    {:ok, session} =
+      CodingAgent.start_session(
+        cwd: tmp_dir,
+        workspace_dir: tmp_dir,
+        model: LemonAgent.Test.Mocks.mock_model(),
+        tools: [],
+        stream_fn: stream_fn
+      )
+
+    on_exit(fn ->
+      if Process.alive?(session), do: CodingAgent.SessionSupervisor.stop_session(session)
+    end)
+
+    session_id = CodingAgent.Session.get_stats(session).session_id
+    _unsubscribe = CodingAgent.Session.subscribe(session)
+    assert :ok = CodingAgent.Session.prompt(session, "Previous prompt")
+    assert_receive {:session_event, ^session_id, {:agent_end, _}}, 5_000
+    refute CodingAgent.Session.get_state(session).is_streaming
+
+    # Fence this turn on lifecycle traffic before releasing the failing provider.
+    _unsubscribe = CodingAgent.Session.subscribe(session, max_queue: 1)
+    assert :ok = CodingAgent.Session.prompt(session, "Current prompt")
+    assert_receive {:crash_provider_waiting, producer}, 5_000
+    on_exit(fn -> send(producer, :crash_now) end)
+    owner_state = CodingAgent.Session.get_state(session)
+    assert owner_state.terminal_event == nil
+    [{_, _, delivery}] = owner_state.event_listeners
+    assert LemonCore.Bus.Delivery.closed?(delivery)
+    send(producer, :crash_now)
+    assert_receive {:session_terminal, ^session_id, :error} = terminal, 5_000
+
+    state = runner(session)
+
+    state = %{
+      state
+      | session_id: session_id,
+        translator: %{state.translator | session_id: session_id}
+    }
+
+    run_ref = state.run_ref
+    assert {:noreply, state} = SessionRunner.handle_info(terminal, state)
+
+    assert_receive {:engine_event, ^run_ref,
+                    %{__event__: :completed, ok: false, answer: "", error: error}}
+
+    assert error =~ "current loop exploded"
+    refute error =~ "PREVIOUS SUCCESS"
+    assert state.translator.completed_emitted
+    assert {:noreply, ^state} = SessionRunner.handle_info(terminal, state)
+    refute_received {:engine_event, ^run_ref, %{__event__: :completed}}
   end
 
   defp runner(owner) do

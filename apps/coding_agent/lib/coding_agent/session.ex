@@ -149,6 +149,7 @@ defmodule CodingAgent.Session do
     :wasm_tool_names,
     :wasm_status,
     :plan_gate,
+    :terminal_event,
     branch_generation: 0,
     tool_started_at: %{},
     wasm_host_calls: %{},
@@ -221,6 +222,12 @@ defmodule CodingAgent.Session do
           wasm_tool_names: [String.t()],
           wasm_status: map() | nil,
           plan_gate: :atomics.atomics_ref() | nil,
+          terminal_event:
+            {:agent_end, list()}
+            | {:error, term(), term()}
+            | {:canceled, term()}
+            | {:turn_end, LemonAi.Types.AssistantMessage.t(), list()}
+            | nil,
           branch_generation: non_neg_integer(),
           tool_started_at: %{String.t() => integer()},
           wasm_host_calls: %{reference() => map()},
@@ -523,6 +530,8 @@ defmodule CodingAgent.Session do
   ## Returns
 
     * For `:direct` mode: an unsubscribe function `(() -> :ok)`
+    * With `tagged: true`, direct mode returns `{unsubscribe, delivery}` and
+      wraps notifications as `{:lemon_bus_delivery, delivery.gate, message}`.
     * For `:stream` mode: `{:ok, stream_pid}` where `stream_pid` is an `LemonAgent.EventStream`
 
   ## Examples
@@ -540,7 +549,8 @@ defmodule CodingAgent.Session do
       |> LemonAgent.EventStream.events()
       |> Enum.each(fn {:session_event, _id, event} -> IO.inspect(event) end)
   """
-  @spec subscribe(GenServer.server(), keyword()) :: (-> :ok) | {:ok, pid()}
+  @spec subscribe(GenServer.server(), keyword()) ::
+          (-> :ok) | {(-> :ok), LemonCore.Bus.Delivery.t()} | {:ok, pid()}
   def subscribe(session, opts \\ []) do
     mode = Keyword.get(opts, :mode, :direct)
     GenServer.call(session, {:subscribe, self(), mode, opts})
@@ -903,6 +913,7 @@ defmodule CodingAgent.Session do
       {:reply, {:error, :already_streaming}, state}
     else
       state = CompactionLifecycle.cancel_for_new_prompt(state)
+      state = %{state | terminal_event: nil}
       {state, recalled} = refresh_turn_context(state, text)
 
       user_message =
@@ -1421,6 +1432,7 @@ defmodule CodingAgent.Session do
     if had_pending_prompt do
       # If abort lands before deferred prompt dispatch, emit a terminal canceled
       # event so subscribers don't wait for a lifecycle event that never comes.
+      state = %{state | terminal_event: {:canceled, :assistant_aborted}}
       Notifier.broadcast_event(state, {:canceled, :assistant_aborted})
       Notifier.complete_event_streams(state, {:canceled, :assistant_aborted})
 
@@ -1432,6 +1444,10 @@ defmodule CodingAgent.Session do
     else
       {:noreply, state}
     end
+  end
+
+  def handle_cast({:unsubscribe, pid, ref}, state) do
+    {:noreply, Notifier.unsubscribe_direct(state, pid, ref)}
   end
 
   def handle_cast({:unsubscribe, pid}, state) do
@@ -2316,7 +2332,23 @@ defmodule CodingAgent.Session do
 
   @spec handle_agent_event(LemonAgent.Types.agent_event(), t()) :: t()
   defp handle_agent_event(event, state) do
+    state = record_terminal_event(state, event)
     EventHandler.handle(event, state, event_handler_callbacks())
+  end
+
+  defp record_terminal_event(state, event) do
+    terminal =
+      case event do
+        {start} when start in [:agent_start, :turn_start] -> nil
+        {:error, _, _} -> event
+        {:canceled, _} -> event
+        {:message_end, %{stop_reason: :aborted}} -> {:canceled, :assistant_aborted}
+        {:turn_end, %{stop_reason: :aborted}, _} -> event
+        {:agent_end, _} -> state.terminal_event || event
+        _ -> state.terminal_event
+      end
+
+    %{state | terminal_event: terminal}
   end
 
   @spec event_handler_callbacks() :: event_handler_callbacks()

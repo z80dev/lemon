@@ -19,7 +19,7 @@ defmodule CodingAgent.Tools.Task.RequestBudgetTest do
          turns: opts[:turns],
          count: 0,
          messages: [],
-         subscriber: nil,
+         delivery: nil,
          session_id: "budget-fake",
          is_streaming: false
        }}
@@ -30,8 +30,12 @@ defmodule CodingAgent.Tools.Task.RequestBudgetTest do
     def handle_call(:get_state, _from, state), do: {:reply, state, state}
     def handle_call(:get_messages, _from, state), do: {:reply, state.messages, state}
 
-    def handle_call({:subscribe, pid, :direct, _opts}, _from, state) do
-      {:reply, fn -> :ok end, %{state | subscriber: pid}}
+    def handle_call({:subscribe, pid, :direct, opts}, _from, state) do
+      if state.delivery, do: LemonCore.Bus.Delivery.close(state.delivery)
+      delivery = LemonCore.Bus.Delivery.new(pid, tagged: Keyword.get(opts, :tagged, false))
+      unsubscribe = fn -> LemonCore.Bus.Delivery.close(delivery) end
+      subscription = if opts[:tagged], do: {unsubscribe, delivery}, else: unsubscribe
+      {:reply, subscription, %{state | delivery: delivery}}
     end
 
     def handle_call({:prompt, _text, _opts}, _from, state) do
@@ -47,7 +51,12 @@ defmodule CodingAgent.Tools.Task.RequestBudgetTest do
 
     def handle_cast(:abort, state) do
       send(state.owner, {:budget_abort, state.count})
-      send(state.subscriber, {:session_event, state.session_id, {:canceled, :aborted}})
+
+      LemonCore.Bus.Delivery.send(
+        state.delivery,
+        {:session_event, state.session_id, {:canceled, :aborted}}
+      )
+
       {:noreply, %{state | is_streaming: false}}
     end
 
@@ -58,12 +67,19 @@ defmodule CodingAgent.Tools.Task.RequestBudgetTest do
       count = state.count + 1
       message = Mocks.assistant_message("finding-#{count}")
       messages = state.messages ++ [message]
-      send(state.subscriber, {:session_event, state.session_id, {:message_end, message}})
+
+      LemonCore.Bus.Delivery.send(
+        state.delivery,
+        {:session_event, state.session_id, {:message_end, message}}
+      )
 
       if count < state.turns do
         Process.send_after(self(), :emit, 15)
       else
-        send(state.subscriber, {:session_event, state.session_id, {:agent_end, messages}})
+        LemonCore.Bus.Delivery.send(
+          state.delivery,
+          {:session_event, state.session_id, {:agent_end, messages}}
+        )
       end
 
       {:noreply, %{state | count: count, messages: messages, is_streaming: count < state.turns}}

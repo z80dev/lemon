@@ -65,6 +65,95 @@ defmodule LemonControlPlane.EventBridgeBackpressureTest do
     assert Enum.count(healthy_events, &match?({:event, "chat", _, _}, &1)) == 1000
   end
 
+  test "overlapping Bus admissions keep every WebSocket client connected" do
+    suffix = System.unique_integer([:positive])
+    run_id = "concurrent-bridge-run-#{suffix}"
+    sockets = for n <- 1..2, do: {"concurrent-bridge-#{suffix}-#{n}", frozen_consumer()}
+
+    for {id, socket} <- sockets do
+      :ok = Presence.register(id, %{role: :operator, client_id: id, pid: socket})
+    end
+
+    EventBridge.subscribe_run(run_id)
+    bridge = Process.whereis(EventBridge)
+    %{delivery: delivery} = :sys.get_state(bridge)
+    parent = self()
+
+    on_exit(fn ->
+      if Process.whereis(Presence) do
+        for {id, _socket} <- sockets, do: Presence.unregister(id)
+      end
+
+      if Process.whereis(EventBridge), do: EventBridge.unsubscribe_run(run_id)
+    end)
+
+    :ok = :sys.suspend(bridge)
+
+    try do
+      # Hold the serializer so both real broadcasts are pending together.
+      true = :erlang.suspend_process(delivery.admitter)
+
+      publishers =
+        try do
+          publishers =
+            for seq <- 1..2 do
+              spawn_monitor(fn ->
+                receive do
+                  :publish ->
+                    :ok =
+                      Bus.broadcast(
+                        Bus.run_topic(run_id),
+                        Event.new(:delta, %{run_id: run_id, seq: seq, text: "delta-#{seq}"})
+                      )
+                end
+              end)
+            end
+
+          for {pid, _ref} <- publishers do
+            :erlang.trace(pid, true, [:send, {:tracer, parent}])
+            send(pid, :publish)
+          end
+
+          admitter = delivery.admitter
+
+          for {pid, _ref} <- publishers do
+            assert_receive {:trace, ^pid, :send, {:admit, ^pid, _ref, _event}, ^admitter},
+                           1000
+
+            :erlang.trace(pid, false, [:send])
+          end
+
+          refute Delivery.closed?(delivery)
+          publishers
+        after
+          :erlang.resume_process(delivery.admitter)
+        end
+
+      for {pid, ref} <- publishers,
+          do: assert_receive({:DOWN, ^ref, :process, ^pid, :normal}, 1000)
+    after
+      :sys.resume(bridge)
+    end
+
+    %{delivery: current} = :sys.get_state(bridge)
+    assert Delivery.matches?(current, delivery.gate)
+    refute Delivery.closed?(current)
+
+    for {id, socket} <- sockets do
+      refute Delivery.closed?(Presence.get(id).delivery)
+      events = drain(socket)
+      refute {:stream_resync, :overflow} in events
+
+      assert ["delta-1", "delta-2"] ==
+               events
+               |> Enum.flat_map(fn
+                 {:event, "chat", %{"text" => text}, _version} -> [text]
+                 _ -> []
+               end)
+               |> Enum.sort()
+    end
+  end
+
   test "bridge Bus ingress bounds a suspended bridge and signals recovery before rebinding" do
     socket = frozen_consumer()
     suffix = System.unique_integer([:positive])

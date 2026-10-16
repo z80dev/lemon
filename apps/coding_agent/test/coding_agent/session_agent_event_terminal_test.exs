@@ -40,6 +40,49 @@ defmodule CodingAgent.SessionAgentEventTerminalTest do
     session
   end
 
+  test "current-turn terminal preserves failure and cancellation until a new turn" do
+    session = start_session()
+    error = {:error, :provider_failed, %{messages: []}}
+    send(session, {:agent_event, error})
+    assert Session.get_state(session).terminal_event == error
+
+    send(session, {:agent_event, {:agent_end, []}})
+    assert Session.get_state(session).terminal_event == error
+
+    send(session, {:agent_event, {:turn_start}})
+    assert Session.get_state(session).terminal_event == nil
+    canceled = {:canceled, :assistant_aborted}
+    send(session, {:agent_event, canceled})
+    send(session, {:agent_event, {:agent_end, []}})
+    assert Session.get_state(session).terminal_event == canceled
+
+    assert :ok = Session.prompt(session, "next turn")
+    assert Session.get_state(session).terminal_event == nil
+  end
+
+  test "tagged replacement subscription survives an old unsubscribe closure" do
+    session = start_session()
+    {old_unsubscribe, old_delivery} = Session.subscribe(session, tagged: true)
+    {_unsubscribe, delivery} = Session.subscribe(session, tagged: true)
+    assert LemonCore.Bus.Delivery.closed?(old_delivery)
+    old_unsubscribe.()
+    assert [{_, _, ^delivery}] = Session.get_state(session).event_listeners
+    send(session, {:agent_event, {:canceled, :assistant_aborted}})
+    gate = delivery.gate
+
+    assert_receive {:lemon_bus_delivery, ^gate,
+                    {:session_event, _, {:canceled, :assistant_aborted}}}
+  end
+
+  test "aborted message is retained as terminal even when agent_end follows" do
+    session = start_session()
+    message = %AssistantMessage{stop_reason: :aborted, content: []}
+    send(session, {:agent_event, {:message_end, message}})
+    send(session, {:agent_event, {:agent_end, [message]}})
+    assert Session.get_state(session).terminal_event == {:canceled, :assistant_aborted}
+    refute Session.get_state(session).is_streaming
+  end
+
   test "schema snapshot admission accepts nested tool structs but rejects oversized backing" do
     backing = :binary.copy("x", 2048)
     description = binary_part(backing, 0, 256)

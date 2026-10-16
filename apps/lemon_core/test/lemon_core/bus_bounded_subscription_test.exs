@@ -70,6 +70,63 @@ defmodule LemonCore.BusBoundedSubscriptionTest do
       assert Enum.count(messages, &match?({:progress, _}, &1)) == 4
       assert Enum.count(messages, &(&1 == {:stream_resync, :overflow})) == 1
     end
+
+    test "#{backend} admits concurrent publishers across shared topics without resync (tagged=#{tagged})" do
+      Application.put_env(:lemon_core, :bus_backend, unquote(backend))
+      parent = self()
+      suffix = System.unique_integer([:positive])
+      topics = ["concurrent:a:#{suffix}", "concurrent:b:#{suffix}"]
+
+      consumer =
+        spawn(fn ->
+          delivery = Delivery.new(self(), max_queue: 32, tagged: unquote(tagged))
+          for topic <- topics, do: Bus.subscribe(topic, delivery: delivery)
+          send(parent, {:subscribed, self(), delivery})
+
+          receive do
+            :drain -> send(parent, {:drained, self(), collect([])})
+          end
+        end)
+
+      on_exit(fn -> Process.exit(consumer, :kill) end)
+      assert_receive {:subscribed, ^consumer, delivery}
+      # The consumer cannot drain and the complete workload fits exactly.
+      # Only real queue pressure may fence the shared handle.
+      publishers =
+        for n <- 1..32 do
+          spawn_monitor(fn ->
+            send(parent, {:ready, self()})
+
+            receive do
+              :publish ->
+                :ok = Bus.broadcast(Enum.at(topics, rem(n, 2)), {:progress, n})
+            end
+          end)
+        end
+
+      for {pid, _ref} <- publishers, do: assert_receive({:ready, ^pid})
+      for {pid, _ref} <- publishers, do: send(pid, :publish)
+
+      for {pid, ref} <- publishers,
+          do: assert_receive({:DOWN, ^ref, :process, ^pid, :normal}, 1000)
+
+      refute Delivery.closed?(delivery)
+      assert {:message_queue_len, 32} = Process.info(consumer, :message_queue_len)
+      send(consumer, :drain)
+      assert_receive {:drained, ^consumer, messages}
+
+      events =
+        Enum.map(messages, fn
+          {:lemon_bus_delivery, gate, event} ->
+            assert Delivery.matches?(delivery, gate)
+            event
+
+          event ->
+            event
+        end)
+
+      assert Enum.sort(events) == Enum.map(1..32, &{:progress, &1})
+    end
   end
 
   defp collect(acc) do
