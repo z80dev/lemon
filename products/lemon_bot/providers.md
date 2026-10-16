@@ -40,8 +40,8 @@ and `hostname`) from the current default provider/model. Select and display that
 target before submitting a credential. `providers[].methods` comes from the
 runtime's onboarding metadata: `api_key`, supported `device_code`, or
 `unsupported`. A browser-callback function named `login_device_flow` is not
-by itself a phone-compatible device grant. Device-code initiation is a separate
-operation, not implemented by the API-key endpoints.
+by itself a phone-compatible device grant. Codex device-code login uses the
+dedicated start/poll/cancel endpoints below, not an API-key submission.
 
 For either base path:
 
@@ -50,6 +50,9 @@ For either base path:
 | `PUT …/providers/:providerId/api-key` | `{clientNonce,targetId,value}` |
 | `POST …/providers/:providerId/disconnect` | `{clientNonce,targetId}` |
 | `POST …/providers/default` | `{clientNonce,targetId,providerId,modelId}` |
+| `POST …/providers/openai_codex/device-login` | `{clientNonce,targetId}` |
+| `POST …/providers/openai_codex/device-login/:loginId/poll` | `{clientNonce,targetId}` |
+| `POST …/providers/openai_codex/device-login/:loginId/cancel` | `{clientNonce,targetId}` |
 
 Use the canonical provider ID from the listing and the exact returned `targetId`.
 Credential values must be nonempty UTF-8, at most 16,384 bytes, without NUL.
@@ -99,6 +102,103 @@ The returned default is the effective target default, including existing project
 and environment precedence. An explicit default write changes only the global
 default; an active higher-priority override can therefore leave the effective
 selection unchanged.
+
+### Codex device sign-in
+
+Use the exact canonical `openai_codex` provider ID, only when that target advertises
+`device_code` and the corresponding `providers.management.device.*` (or named-node
+`node.providers.management.device.*`) methods. Start's fixed `clientNonce` is the
+`loginId`; preserve it for that entire login. Poll and cancel put that ID in their
+route and each use their own separate fixed mutation nonce. Repeating an identical
+request reconciles fresh target state; it does not replay a cached pending code or
+start another grant. Reusing a nonce for a changed intent or another product
+session conflicts. No client-selected owner/session identity is accepted.
+The runtime provider identifier is `openai_codex`, not the `openai-codex`
+configuration-table name. Use the returned listing ID without converting its
+spelling; the configuration name is not a device API alias.
+
+
+The backend derives opaque SHA-256 bindings from the actual authenticated
+workspace/user and actual product session ID. The target compares those bindings
+with the provider, target and login ID on every action. Another session, user,
+workspace or machine cannot inspect or cancel the pending login. Bearer/device
+revocation, target reassignment and workspace access are rechecked before each
+dispatch and before exposing a late response.
+
+The only public result is
+`{loginId,targetId,providerId,status,verificationUrl,userCode,expiresAtMs,pollIntervalMs}`.
+`status` is `starting`, `pending`, `completed`, `denied`, `expired`, `cancelled`,
+`lost`, or `failed`. Only `pending` has the verification fields: the URL is exactly
+`https://auth.openai.com/codex/device`, the bounded user code is displayed for
+explicit use in the phone's normal system browser, and the advertised expiry and
+poll interval govern status polling. All four fields are null in starting or
+terminal states. Stop polling on terminal status; do not mistake `completed` for
+an account/quota/model-call validation. Reload provider status afterward.
+
+The target's bounded server-side worker performs provider polling and token
+exchange using the existing supported Codex device flow. After successful OAuth,
+tokens wait in its sensitive worker. A normal product poll obtains an internal
+target-generated challenge, then freshly reauthorizes the current initiating
+owner/session/device, policy, exact target and durable revocation generation in
+the issuance transaction before authorizing that exact nonce once. The challenge
+contains 32 cryptographically random bytes encoded as unpadded URL-safe Base64
+and lasts at most five seconds by the target's monotonic clock, with a second check
+inside serialized credential persistence. Repeated challenge reads never extend
+that deadline. No product or
+controller wall-clock authorization timestamps are sent, so clock skew or backward
+jumps cannot extend it. Challenges are memory-only; target restart invalidates
+them. They never reach public clients or product SQLite.
+Revocation durably advances product authority immediately, even while the target
+is offline. No new authorization can follow revoked authority. An already-issued
+authorization has at most the remainder of that five-second window and one write;
+a transaction admitted before expiry may finish afterward. Revocation does not
+retroactively delete an already-persisted provider credential; use local
+disconnect and, when needed, the provider's own grant revocation separately.
+
+Lost acknowledgements retain the fixed completion ID and login binding, never the
+challenge, in a non-blocking journal across restart; the write is never
+automatically retried. Reconnect or a later login action settles that exact ID
+with an empty nonce and a non-writing request, durably consuming it before any
+delayed authorization can write. Settlement remains reachable after
+node-token expiry and re-pairing. A generic pre-dispatch rejection cannot resolve
+an earlier uncertain request; only matching target acknowledgement or an exact
+non-writing login-binding rejection can do so. None of this reconciliation blocks
+owner, session, device, policy or node revocation.
+The public waiting state remains `pending`. A new login cancels an older pending
+login for the same
+owner/target/provider. Cancellation and completion are serialized; cancel cannot
+erase a completed credential or a late completion resurrect a cancelled grant.
+If the runtime restarts and the login is no longer available, reconciliation
+returns `lost`, never an invented completion or a second grant with the old ID.
+Start a new explicitly chosen login with a new nonce after a terminal failure.
+
+Each target allows at most 16 active logins, retains at most 128 public records,
+and bounds a login to 15 minutes. A nonsecret one-MiB spent-ID filter survives
+restart and pruning; it can conservatively return `lost` on a hash collision.
+Its 100,000-ID lifetime ceiling (including cancel-before-start and internal
+completion/settlement attempts) rejects new IDs
+instead of weakening replay protection, and is never automatically reset.
+An out-of-order cancel consumes its login ID before any delayed start.
+Target lifecycle calls time out after 30 seconds; reconcile the same fixed ID
+after an uncertain response rather than issue another grant.
+
+Pending provider device secrets, verifiers and access/refresh tokens remain only
+on the selected target. Successful credentials use the existing encrypted
+secret-store/onboarding configuration persistence path there, without changing
+the selected default or other providers. Product SQLite contains only nonsecret
+intent/admission data, authority generations and unresolved completion IDs, not
+device grant state, codes, tokens or cached device-login results. Unexpected response fields, arbitrary
+verification URLs and secret-bearing errors fail closed without entering client
+responses or receipts.
+
+Device-code sign-in may need to be enabled for the provider account or
+organization. A denied, expired, unavailable or lost flow is explicit; no fallback
+uses a phone-local callback, changes Codex client IDs/registered redirects, opens
+a public callback tunnel, exposes a CLI coding session, or imports unrelated
+phone tokens. Automated coverage uses a clearly marked mock target/provider
+transport; actual browser sign-in and private Tailscale/phone acceptance remain
+operator-assisted and require separate evidence.
+
 
 
 ## OIDC, SCIM and directory governance

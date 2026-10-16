@@ -66,6 +66,59 @@ Device registration is authenticated POST /devices keyed by `(userId,installatio
 
 Instance status describes the backend's attached controller, not the client's host. It includes backend version/start time, sanitized controller link state/retry/error metadata, and nullable measured Lemon metrics. Advertised `status`, `health` fallback, `sessions.active.list`, and `nodes.list` reads run in parallel with five-second bounds; unavailable methods/read failures become null, never a status 5xx. Build metadata, provider credential presence (never key values), channel states/errors and lifecycle capabilities are independently validated: a malformed optional section becomes null without discarding healthy sections. Upstream provider `default` maps to `isDefault`. Owner-only provider management is a separate target-bound API described in the [provider guide](../providers.md#model-providers-on-the-execution-target); missing model credentials do not block that management API. Reconnect resets backoff, including a rejected operator credential, not the workspace or provider configuration.
 
+Codex device sign-in is an owner-only target-bound management operation, not a
+browser OAuth callback or coding session. Start accepts only
+`ProviderDeviceLoginRequest` `{clientNonce,targetId}` and uses that fixed nonce as
+`loginId`. Poll/cancel keep the same route login ID, each with a separate fixed
+mutation nonce. The backend binds the actual authenticated workspace/user and
+actual product session with opaque SHA-256 hashes; clients cannot supply those
+bindings. Each request/replay rechecks current authority, target ownership and
+capability before dispatch, and rechecks authority before returning a late result.
+
+`ProviderDeviceLogin` exposes exactly
+`{loginId,targetId,providerId,status,verificationUrl,userCode,expiresAtMs,pollIntervalMs}`.
+The canonical provider is `openai_codex`. Status is `starting`, `pending`,
+`completed`, `denied`, `expired`, `cancelled`, `lost`, or `failed`; only `pending`
+has non-null verification fields. The only accepted URL is exactly
+`https://auth.openai.com/codex/device`; code is 1–64 ASCII alphanumeric/hyphen
+characters, expiry is an epoch-millisecond timestamp and poll interval is
+1,000–60,000 milliseconds. Other states return all four fields as null.
+Repeated fixed-nonce requests reconcile fresh target state rather than a cached
+pending response. Runtime restart loses the pending grant and returns `lost`;
+it never recreates a flow or claims success for the old ID. New login supersedes
+an older pending login for the same owner/target/provider; cancellation and
+completion are serialized on the target.
+
+All provider grant state, verifiers, polling and token exchange stay target-local.
+Successful OAuth waits in a sensitive target worker; it cannot write merely
+because browser sign-in succeeded. A normal product poll rechecks the initiating
+owner, session, paired device, workspace/directory policy and exact target before
+authorizing a single-use completion valid for at most five seconds (also bounded
+by session and node-token expiry). Product SQLite holds only nonsecret intent,
+safe admission receipts, authority generations and unresolved completion IDs—not
+device secrets, tokens, user codes or device-result snapshots.
+
+Revocation durably invalidates product authority and returns immediately, including
+while the target is offline; it never waits for a pending login or acknowledgement.
+No new authorization is issued after revocation. The residual issuance-to-write
+window for an authorization already in flight is at most five seconds and one
+write; the target checks expiry again inside its serialized credential transaction.
+A write admitted before expiry may finish afterward. A lost or malformed
+acknowledgement retains its fixed completion ID across restart for reconciliation,
+never automatic retry. Reconnect or the next login action can settle that exact
+attempt with `commit:false`, without authorizing persistence. Target settlement
+durably consumes the completion ID so a delayed original request cannot write.
+It remains reachable after node-session expiry and re-pairing. Generic
+pre-dispatch settlement failures say nothing about an earlier uncertain request.
+Only an exact non-writing binding rejection or matching target acknowledgement
+resolves that attempt; reconciliation never gates authority revocation.
+Successful tokens still use the existing target encrypted secret/config path,
+leaving default-model selection separate. Public status/fields are unchanged;
+waiting for completion authorization is `pending`. All operations retain JSON,
+explicit Bearer authentication and existing trusted-origin/CSRF protection.
+See the [provider guide](../providers.md#codex-device-sign-in) for account
+prerequisites, lifecycle behavior and separately required live acceptance.
+
 `runtime.actions` lists only available `start`/`stop`/`restart` actions; clients must not infer them from a boolean. `runtime.via` is `launcher`, `controller`, or null; `reason` explains missing actions. An absolute executable `LEMON_BOT_RUNTIME_LAUNCHER` plus loopback controller takes precedence and enables all three actions using fixed argv `[launcher, 'daemon'|'stop'|'restart']`, no shell, with every `LEMON_BOT_*` variable stripped. Otherwise, a connected controller enables only the intersection of advertised `system.restart`/`system.stop` methods and its measured `status.lifecycle` permissions, including remote controllers. Start while disconnected requires a local launcher.
 
 Lifecycle routes are owner-only, accept one operation at a time, and stop/restart require `confirm:true`. A controller mutation returns 202 only after an accepted RPC receipt; the operation remains running until Restart observes a new `connectedAtMs` or Stop observes disconnection. A 300-second deadline marks failure. Controller operations have null `exitCode` and short human-readable `output`. Launcher operations instead report the real process exit code and a bounded 4096-byte output tail; successful start/restart reconnects the link, but launcher exit alone does not prove controller readiness. Poll `runtime.operation` after 202 without repeating the mutation. Operations are in-memory and lost on backend restart.
@@ -109,10 +162,16 @@ The catalogs in this section and §§10–11 together are exhaustive. Substitute
 | `PUT /instance/providers/:providerId/api-key` | `ProviderApiKeySet` | `ProviderManagement` | `undefined` | Owner | conflict, outcome_unknown, upstream_unavailable, capability_unavailable |
 | `POST /instance/providers/:providerId/disconnect` | `ProviderTargetRequest` | `ProviderManagement` | `undefined` | Owner | conflict, outcome_unknown, upstream_unavailable, capability_unavailable |
 | `POST /instance/providers/default` | `ProviderDefaultSet` | `ProviderManagement` | `undefined` | Owner | conflict, outcome_unknown, upstream_unavailable, capability_unavailable |
+| `POST /instance/providers/:providerId/device-login` | `ProviderDeviceLoginRequest` | `ProviderDeviceLogin` | `undefined` | Owner | nonce_conflict, conflict, outcome_unknown, upstream_unavailable, capability_unavailable |
+| `POST /instance/providers/:providerId/device-login/:loginId/poll` | `ProviderDeviceLoginRequest` | `ProviderDeviceLogin` | `undefined` | Owner + initiating product session | nonce_conflict, conflict, outcome_unknown, upstream_unavailable, capability_unavailable |
+| `POST /instance/providers/:providerId/device-login/:loginId/cancel` | `ProviderDeviceLoginRequest` | `ProviderDeviceLogin` | `undefined` | Owner + initiating product session | nonce_conflict, conflict, outcome_unknown, upstream_unavailable, capability_unavailable |
 | `GET /machines/:id/providers` | `undefined` | `ProviderManagement` | `undefined` | Owner + actual machine owner | machine_offline, upstream_unavailable, capability_unavailable |
 | `PUT /machines/:id/providers/:providerId/api-key` | `ProviderApiKeySet` | `ProviderManagement` | `undefined` | Owner + actual machine owner | conflict, outcome_unknown, machine_offline, upstream_unavailable, capability_unavailable |
 | `POST /machines/:id/providers/:providerId/disconnect` | `ProviderTargetRequest` | `ProviderManagement` | `undefined` | Owner + actual machine owner | conflict, outcome_unknown, machine_offline, upstream_unavailable, capability_unavailable |
 | `POST /machines/:id/providers/default` | `ProviderDefaultSet` | `ProviderManagement` | `undefined` | Owner + actual machine owner | conflict, outcome_unknown, machine_offline, upstream_unavailable, capability_unavailable |
+| `POST /machines/:id/providers/:providerId/device-login` | `ProviderDeviceLoginRequest` | `ProviderDeviceLogin` | `undefined` | Owner + actual machine owner | nonce_conflict, conflict, outcome_unknown, machine_offline, upstream_unavailable, capability_unavailable |
+| `POST /machines/:id/providers/:providerId/device-login/:loginId/poll` | `ProviderDeviceLoginRequest` | `ProviderDeviceLogin` | `undefined` | Owner + actual machine owner + initiating product session | nonce_conflict, conflict, outcome_unknown, machine_offline, upstream_unavailable, capability_unavailable |
+| `POST /machines/:id/providers/:providerId/device-login/:loginId/cancel` | `ProviderDeviceLoginRequest` | `ProviderDeviceLogin` | `undefined` | Owner + actual machine owner + initiating product session | nonce_conflict, conflict, outcome_unknown, machine_offline, upstream_unavailable, capability_unavailable |
 | `GET /sync` | `undefined` | `Snapshot` | `undefined` | Member | — |
 | `GET /machines` | `undefined` | `Page<Machine>` | `PageQuery` | Machine | machine_offline, upstream_unavailable, capability_unavailable, policy_denied |
 | `POST /machines` | `MachineAttach` | `MachineAttachResult` | `undefined` | Admin | conflict, upstream_unavailable |

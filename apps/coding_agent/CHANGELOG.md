@@ -4,6 +4,14 @@
 
 ### Added
 
+- Named workers advertise and execute Codex device login start/poll/cancel plus
+  internal single-use completion/settlement on the authenticated destination.
+  Writing completion stays bound to the initiating worker/controller generation
+  and a five-second authorization; non-writing settlement remains reachable after
+  node expiry/re-pairing without gating revocation. Exact binding rejections remain
+  provably non-writing through the control-plane adapter. Local execution-directory
+  options and exact login bindings are preserved; only public state is returned.
+
 - Opt-in `semantic_find` tool maps a plain-language behavior description to
   `path:line` code locations. It is off by default and registered only when
   `[runtime.tools.semantic_find] enabled = true` and an explicit small model

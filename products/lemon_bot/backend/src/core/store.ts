@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import type { EntityStore } from './services';
 import { fail } from './errors';
+import { recordProviderAuthorityChange } from './provider_completion';
 const storedObject = z.object({ id:z.string().min(1) }).passthrough();
 export class Store implements EntityStore {
   readonly db: Database;
@@ -40,12 +41,13 @@ export class Store implements EntityStore {
   put<T>(collection:string, value:T & {id:string}):T {
     storedObject.parse(value);
     return this.transaction(()=>{
+      recordProviderAuthorityChange(this, collection, value.id, value);
       this.db.query('INSERT INTO entities(collection,id,value) VALUES(?,?,?) ON CONFLICT(collection,id) DO UPDATE SET value=excluded.value').run(collection,value.id,JSON.stringify(value));
       for(const listener of this.writes)listener(collection,value.id,value);
       return value;
     });
   }
-  remove(collection:string,id:string):void { this.db.query('DELETE FROM entities WHERE collection=? AND id=?').run(collection,id); }
+  remove(collection:string,id:string):void { this.transaction(() => { recordProviderAuthorityChange(this,collection,id,null); this.db.query('DELETE FROM entities WHERE collection=? AND id=?').run(collection,id); }); }
   transaction<T>(operation:()=>T):T {
     if(this.depth>0){const result=operation();if(result instanceof Promise)throw new TypeError('SQLite transactions must remain synchronous.');return result;}
     this.db.exec('BEGIN IMMEDIATE'); this.depth=1;
@@ -60,6 +62,6 @@ export class Store implements EntityStore {
     // Metadata schemas belong to each owning module; JSON decoding rejects non-JSON persisted data.
     const value:unknown=JSON.parse(row.value); return value as T;
   }
-  setMetadata(key:string,value:unknown):void { this.db.query('INSERT INTO metadata(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run(key,JSON.stringify(value)); }
+  setMetadata(key:string,value:unknown):void { this.transaction(() => { recordProviderAuthorityChange(this,'$metadata',key,value); this.db.query('INSERT INTO metadata(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run(key,JSON.stringify(value)); }); }
   close():void { this.db.close(); }
 }

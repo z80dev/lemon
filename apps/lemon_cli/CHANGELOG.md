@@ -6,6 +6,30 @@ All notable changes to `lemon_cli` are documented here.
 
 ### Added
 
+- Supervised, target-local Codex device-login start/poll/cancel with exact
+  target/provider/login/owner/session binding and an eight-field public status.
+  Only the fixed OpenAI verification URL and public user code leave the target;
+  grant state, verifier and tokens remain in sensitive workers. Completion,
+  supersession, cancel, credential replacement and disconnect serialize before
+  the existing encrypted-secret/config persistence path, without changing defaults.
+  Device operations use the listing's canonical `openai_codex` ID, while the
+  existing `[providers.openai-codex]` config table is unchanged.
+  Logins expire within 15 minutes; active and retained records are bounded.
+  A durable one-MiB spent-ID filter prevents replay after restart or pruning
+  (conservative collisions return `lost`); canonical Base64 preserves every bit
+  through JSONL reload and malformed/legacy raw-byte records fail closed.
+  Its 100,000-ID lifetime cap includes starts, cancel-before-start and completion
+  attempts, without automatic reset. Successful OAuth waits in a sensitive worker
+  for a single-use internal completion authorization bound to a target-issued
+  nonce and a five-second target-monotonic deadline, rechecked inside serialized
+  persistence. Clock skew or backward wall-clock changes cannot extend admission;
+  restart invalidates every challenge. Expired grants drop pending credentials.
+  Revocation never waits for acknowledgement or an offline
+  target; fixed uncertain completion IDs reconcile without automatically retrying
+  writes. Non-writing settlement survives node expiry/re-pairing and restart,
+  while exact binding rejections remain definitive through the real adapter.
+  Mock lifecycle/transport and isolated encrypted/JSONL tests cover replay,
+  cancellation ordering, authorization expiry and denial; no live sign-in.
 - Destination-local `LemonCli.Setup.ProviderManagement` for authorized transports:
   list provider capabilities/readiness, add or replace an encrypted API key,
   disconnect a local credential, and deliberately change the machine's default

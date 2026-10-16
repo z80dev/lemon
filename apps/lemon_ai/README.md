@@ -233,6 +233,18 @@ snapshot, not continuous synchronization or a separate browser login. Subsequent
 refreshes persist only Lemon's secret, and persistence failure is surfaced rather
 than reporting success with lost rotating credentials.
 
+`LemonAi.Auth.OpenAICodexOAuth.login_device_code/1` supports headless sign-in
+without a localhost callback. Its optional `:on_device_code` callback receives
+only `%{verification_url: url, user_code: code, expires_at_ms: epoch_ms,
+poll_interval_ms: milliseconds}`; the URL is exactly
+`https://auth.openai.com/codex/device`, never a credential-bearing link. The
+device secret and PKCE verifier are not callback metadata. The first and later
+polls honor the provider interval plus a three-second margin, bounded to
+60 seconds; a larger interval fails closed rather than polling too early.
+Grants expire within 15 minutes, and explicit `access_denied`/`expired_token`
+responses are terminal even when the endpoint also uses bare 403/404 for pending.
+The caller still owns lifecycle cancellation and encrypted credential persistence.
+
 For Responses and Codex, `thinking_budgets: %{summary: "auto", service_tier: "priority"}`
 selects reasoning summaries and a service tier (`"auto"`, `"default"`, `"flex"` or
 `"priority"` where the model supports it). Codex honors `tool_choice`. Returned

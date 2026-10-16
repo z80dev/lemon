@@ -31,10 +31,13 @@ defmodule LemonAi.Auth.OpenAICodexOAuth do
   @device_redirect_uri "https://auth.openai.com/deviceauth/callback"
   @device_poll_margin_ms 3_000
   @device_max_polls 120
+  @device_max_lifetime_s 900
+  @device_max_interval_s 57
 
   @type oauth_secret :: %{required(String.t()) => String.t() | integer() | nil}
   @type login_opt ::
           {:on_auth, (String.t(), String.t() | nil -> any())}
+          | {:on_device_code, (map() -> any())}
           | {:on_progress, (String.t() -> any())}
           | {:on_prompt, (map() -> String.t() | charlist())}
           | {:originator, String.t()}
@@ -106,8 +109,12 @@ defmodule LemonAi.Auth.OpenAICodexOAuth do
   code exactly like the browser flow, so the payload is the same refreshable
   Codex login. Polls wait the server interval plus three seconds, at most
   #{@device_max_polls} times and never beyond device-code expiry (15 minutes
-  when omitted by the server). Optional: `:on_progress`, `:sleep` (milliseconds),
-  `:now` (monotonic milliseconds), `:req_options`, and
+  when omitted by the server). `:on_device_code` receives only
+  `%{verification_url: url, user_code: code, expires_at_ms: epoch_ms,
+  poll_interval_ms: milliseconds}`; it never receives the device secret.
+  Device lifetimes are capped at 15 minutes and intervals above 60 seconds
+  (including the margin) fail closed. Optional: `:on_progress`, `:sleep`
+  (milliseconds), `:now` (monotonic milliseconds), `:req_options`, and
   `:device_usercode_url`/`:device_token_url`/`:token_url` overrides for local fakes.
   """
   @spec login_device_code(keyword()) :: {:ok, oauth_secret()} | {:error, term()}
@@ -115,6 +122,7 @@ defmodule LemonAi.Auth.OpenAICodexOAuth do
     notify_progress(opts, "Requesting ChatGPT device authorization...")
 
     with {:ok, device} <- start_device_authorization(opts),
+         :ok <- notify_device_code(device, opts),
          :ok <-
            LemonAi.Auth.OAuthFlow.notify_auth(
              opts,
@@ -140,19 +148,22 @@ defmodule LemonAi.Auth.OpenAICodexOAuth do
         device_auth_id = non_empty_binary(body["device_auth_id"])
         user_code = non_empty_binary(body["user_code"])
         expires_in = parse_integer(body["expires_in"])
-        lifetime_ms = (expires_in || 900) * 1000
+        interval_s = parse_integer(body["interval"]) || 5
+        lifetime_ms = min(expires_in || @device_max_lifetime_s, @device_max_lifetime_s) * 1000
         now = Keyword.get(opts, :now, fn -> System.monotonic_time(:millisecond) end)
 
-        if device_auth_id && user_code &&
+        if is_binary(device_auth_id) and byte_size(device_auth_id) <= 4096 and
+             is_binary(user_code) and byte_size(user_code) in 1..64 and
+             String.match?(user_code, ~r/^[A-Za-z0-9-]+$/) and
+             interval_s in 1..@device_max_interval_s and
              (is_nil(body["expires_in"]) or (is_integer(expires_in) and expires_in > 0)) do
-          interval_s = parse_integer(body["interval"]) || 5
-
           {:ok,
            %{
              device_auth_id: device_auth_id,
              user_code: user_code,
-             interval_ms: max(interval_s, 1) * 1000 + @device_poll_margin_ms,
+             interval_ms: interval_s * 1000 + @device_poll_margin_ms,
              lifetime_ms: lifetime_ms,
+             expires_at_ms: System.system_time(:millisecond) + lifetime_ms,
              deadline_ms: now.() + lifetime_ms
            }}
         else
@@ -167,6 +178,23 @@ defmodule LemonAi.Auth.OpenAICodexOAuth do
     end
   end
 
+  defp notify_device_code(device, opts) do
+    case Keyword.get(opts, :on_device_code) do
+      fun when is_function(fun, 1) ->
+        fun.(%{
+          verification_url: @device_verification_url,
+          user_code: device.user_code,
+          expires_at_ms: device.expires_at_ms,
+          poll_interval_ms: device.interval_ms
+        })
+
+      _ ->
+        :ok
+    end
+
+    :ok
+  end
+
   defp poll_device_authorization(device, opts) do
     now = Keyword.get(opts, :now, fn -> System.monotonic_time(:millisecond) end)
     do_poll_device(device, opts, now, 1, device.lifetime_ms)
@@ -178,7 +206,7 @@ defmodule LemonAi.Auth.OpenAICodexOAuth do
 
   defp do_poll_device(device, opts, now, poll, remaining_ms) do
     sleep = Keyword.get(opts, :sleep, &Process.sleep/1)
-    wait_ms = if poll == 1, do: min(device.interval_ms, 5_000), else: device.interval_ms
+    wait_ms = device.interval_ms
     remaining_ms = min(remaining_ms, device.deadline_ms - now.())
 
     if remaining_ms <= wait_ms do
@@ -202,8 +230,19 @@ defmodule LemonAi.Auth.OpenAICodexOAuth do
           {:ok, _} when remaining_ms <= 0 ->
             {:error, :device_flow_timed_out}
 
-          # The endpoint answers 403/404 until the user approves.
-          {:ok, %{status: status}} when status in [403, 404] ->
+          {:ok, %{body: %{"error" => "access_denied"}}} ->
+            {:error, :access_denied}
+
+          {:ok, %{body: %{"error" => "expired_token"}}} ->
+            {:error, :device_code_expired}
+
+          # Bare 403/404 responses are pending; explicit OAuth denials above are terminal.
+          {:ok, %{status: status, body: body}}
+          when status in [403, 404] and
+                 (not is_map(body) or not is_map_key(body, "error")) ->
+            do_poll_device(device, opts, now, poll + 1, remaining_ms)
+
+          {:ok, %{body: %{"error" => "authorization_pending"}}} ->
             do_poll_device(device, opts, now, poll + 1, remaining_ms)
 
           {:ok, %{status: status, body: %{} = response}} when status in 200..299 ->

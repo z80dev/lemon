@@ -14,6 +14,66 @@ management service with `LemonCore.ProviderManagement`. Both controller and name
 worker runtimes use this registration; core-only runtimes without CLI setup
 support return `unavailable` without attempting credential writes.
 
+Codex device login is supervised on that destination. Authorized transports call
+`device_start/2`, `device_poll/2`, and `device_cancel/2` with the exact
+`targetId`, `providerId` (`openai_codex`), fixed `loginId`, and opaque
+`ownerId`/`sessionId` binding. Every operation compares the binding. Only
+`loginId`, `targetId`, `providerId`, `status`, `verificationUrl`, `userCode`,
+`expiresAtMs`, and `pollIntervalMs` are returned. Pending logins show only
+`https://auth.openai.com/codex/device` and the issued public code; other states
+clear the browser/code/timing fields. The provider grant, verifier, token
+exchange and refreshable credentials remain on the execution machine.
+
+The device API uses the canonical provider ID from provider listing,
+`openai_codex`; the existing TOML table remains `[providers.openai-codex]`.
+
+Polling reads current status; a bounded worker polls the provider at its interval.
+The login is at most 15 minutes, with at most 16 active and 128 retained records.
+A new login cancels the same owner's previous target/provider login, even across
+product sessions. Cancellation, completion, replacement and disconnect serialize;
+only a current, unexpired completion uses the existing encrypted-secret/config
+transaction, and it does not change defaults. Device-code sign-in may need to be
+enabled for the ChatGPT account or organization.
+A cancel received before its matching start consumes the fixed login ID without
+contacting OpenAI; a delayed start cannot reconnect that cancelled intent.
+
+Successful OAuth alone never writes credentials. The product requests an internal
+`device_challenge/2` with the same five-field binding, then reauthorizes the
+initiating owner/session/device, generation and exact execution target under its
+existing authorization lock before issuing `device_complete/2` for that exact
+nonce and a durably single-use completion ID. Only a ready target issues the
+32-byte random URL-safe nonce, bound to the start authority; its own monotonic
+five-second deadline starts at issuance. Repeated requests preserve an unexpired
+challenge without extending it. The internal response adds `challengeNonce`
+(null unless ready); it never reaches public clients or durable storage.
+Tokens wait only in the sensitive target worker. Completion admits only a
+matching, unused, unexpired nonce and rechecks the same monotonic deadline inside
+the serialized credential transaction. Wall-clock skew or rollback cannot extend
+admission, and target restart invalidates all challenges. Revocation prevents new
+authorizations without waiting for a login or acknowledgement; an already-issued
+authorization has only the remainder of that target-local five-second,
+single-write admission window. An admitted write may finish later.
+The controller connection or worker session generation must match the start when
+authorizing a write. Non-writing `commit:false` settlement instead accepts the
+exact original login binding after reconnect/re-pairing, consumes the completion
+ID durably and cannot authorize a delayed write. Uncertain outcomes retain that
+same ID for reconciliation, never automatic retry or a revocation lock. The
+public eight-field status is unchanged; waiting for authorization is `pending`.
+
+
+After lifecycle restart or record expiry, an old login returns `lost`, not success
+or a restarted exchange. A nonsecret, one-MiB spent-ID filter in the target Store
+prevents fixed-ID replay even after volatile records are pruned. Its bytes are
+persisted as canonical Base64 so the JSONL backend can durably retain every hash
+position. Invalid, malformed or legacy raw-byte filter records fail closed;
+they are never treated as an empty filter. It can conservatively report `lost`
+on a hash collision and refuses new starts at its 100,000-ID lifetime ceiling,
+including cancelled-before-start IDs and namespaced completion attempts (whether
+they write credentials or settle without writing). The filter is never
+automatically cleared; credentials and pending grants are not stored in it.
+No localhost callback, client-ID change, hosted relay or phone-side token storage
+is involved.
+
 ## Release CLI contract
 
 The packaged launcher sends runtime CLI arguments through `LemonCli.CLI` as

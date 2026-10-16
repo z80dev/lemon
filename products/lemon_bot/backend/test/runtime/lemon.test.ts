@@ -153,6 +153,50 @@ describe('long-lived operator connection', () => {
       }finally{service.close();}
     }
   });
+  test('preserves scoped definitive provider binding rejection only for device.complete', async () => {
+    for (const method of ['providers.management.device.complete', 'node.providers.management.device.complete']) {
+      const socket = new Socket(); const service = createLemonService(config, { socket: () => socket });
+      try {
+        service.start(); socket.handshake([method]);
+        const result = service.call(method, { completionId: 'fixed_completion' }, { mutation: true, resourceIds: ['owned_machine'] }).catch((error: unknown) => error);
+        socket.deliver({ type: 'res', id: socket.sent[1]!.id, ok: false, error: {
+          code: 'FORBIDDEN', message: 'private owner/session diagnostic',
+          details: { reason: 'provider_binding_rejected', retrySafe: false, mutationMayHaveApplied: false, preDispatch: true, ownerId: 'private owner', sessionId: 'private session', runId: 'private run' },
+        } });
+        const failure = await result;
+        if (!(failure instanceof ApiError)) throw new Error('Expected a typed provider binding rejection.');
+        expect(failure.code).toBe('forbidden'); expect(failure.retrySafe).toBe(false);
+        expect(failure.details).toEqual({ resourceIds: ['owned_machine'], reason: 'provider_binding_rejected', mutationMayHaveApplied: false });
+        expect(JSON.stringify(failure)).not.toContain('private');
+        expect(socket.sent).toHaveLength(2);
+      } finally { service.close(); }
+    }
+  });
+  test('generic forbidden and malformed or method-unrelated provider evidence cannot establish binding rejection', async () => {
+    const cases = [
+      { method: 'providers.management.device.complete', code: 'FORBIDDEN', details: { retrySafe: false, mutationMayHaveApplied: false, preDispatch: true } },
+      { method: 'providers.management.device.complete', code: 'FORBIDDEN', details: { reason: 'provider_binding_rejected', retrySafe: false, mutationMayHaveApplied: 'false' } },
+      { method: 'providers.management.device.complete', code: 'FORBIDDEN', details: { reason: 'provider_binding_rejected', retrySafe: false, mutationMayHaveApplied: true } },
+      { method: 'providers.management.device.complete', code: 'FORBIDDEN', details: { reason: 'provider_binding_rejected', retrySafe: true, mutationMayHaveApplied: false } },
+      { method: 'providers.management.device.complete', code: 'INVALID_REQUEST', details: { reason: 'provider_binding_rejected', retrySafe: false, mutationMayHaveApplied: false } },
+      ...['providers.management.device.start', 'providers.management.device.poll', 'providers.management.device.challenge', 'providers.management.device.cancel', 'node.providers.management.device.start', 'node.providers.management.device.poll', 'node.providers.management.device.challenge', 'node.providers.management.device.cancel', 'providers.management.api_key.set', 'node.fs.write'].map(method => ({
+        method, code: 'FORBIDDEN', details: { reason: 'provider_binding_rejected', retrySafe: false, mutationMayHaveApplied: false },
+      })),
+    ];
+    for (const example of cases) {
+      const socket = new Socket(); const service = createLemonService(config, { socket: () => socket });
+      try {
+        service.start(); socket.handshake([example.method]);
+        const result = service.call(example.method, { reason: 'provider_binding_rejected', mutationMayHaveApplied: false }, { mutation: true }).catch((error: unknown) => error);
+        socket.deliver({ type: 'res', id: socket.sent[1]!.id, ok: false, error: { code: example.code, details: example.details } });
+        const failure = await result;
+        if (!(failure instanceof ApiError)) throw new Error('Expected a typed runtime rejection.');
+        expect(failure.code).toBe(example.details.retrySafe === true ? 'forbidden' : 'outcome_unknown');
+        expect(failure.details).toEqual({ resourceIds: [] });
+        expect(socket.sent).toHaveLength(2);
+      } finally { service.close(); }
+    }
+  });
   test('off-loopback plaintext controller is rejected before socket construction', () => {
     expect(() => createLemonService({ ...config, controlUrl: 'ws://remote.example/ws' })).toThrow(ApiError);
   });

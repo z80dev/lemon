@@ -168,6 +168,91 @@ defmodule LemonCli.Setup.ProviderManagementEncryptedTest do
     end)
   end
 
+  test "mock device completion uses real encrypted persistence and runtime resolution", ctx do
+    File.cd!(ctx.cwd, fn ->
+      alias LemonCli.Setup.DeviceLogin
+
+      server =
+        start_supervised!({DeviceLogin, name: __MODULE__.DeviceLogin, device_store: Store})
+
+      access_token = "synthetic-private-device-access"
+
+      secret = %{
+        "type" => "openai_codex_oauth",
+        "access_token" => access_token,
+        "refresh_token" => "synthetic-private-device-refresh",
+        "account_id" => "mock-device-account",
+        "expires_at_ms" => System.system_time(:millisecond) + 3_600_000
+      }
+
+      # Mock provider only; Store, encryption, config patch/reload and resolver
+      # below are the real destination-local implementations.
+      login = fn opts ->
+        opts[:on_device_code].(%{
+          verification_url: "https://auth.openai.com/codex/device",
+          user_code: "MOCK-DEVICE",
+          expires_at_ms: System.system_time(:millisecond) + 60_000,
+          poll_interval_ms: 8_000
+        })
+
+        {:ok, secret}
+      end
+
+      opts = Keyword.merge(ctx.opts, device_server: server, device_login_fun: login)
+      assert {:ok, listing} = Management.list(opts)
+      codex = Enum.find(listing.providers, &(&1.id == "openai_codex"))
+      assert codex
+      assert "device_code" in codex.methods
+
+      params = %{
+        "targetId" => ctx.opts[:target].id,
+        "providerId" => codex.id,
+        "loginId" => "mock-encrypted-fixed-nonce",
+        "ownerId" => "mock-encrypted-owner",
+        "sessionId" => "mock-encrypted-session"
+      }
+
+      assert {:ok, %{status: "starting"}} = Management.device_start(params, opts)
+      completed = await_device_completion(params, opts)
+      assert completed.userCode == nil
+      assert completed.providerId == codex.id
+      assert {:ok, connected} = Management.list(opts)
+      connected_codex = Enum.find(connected.providers, &(&1.id == completed.providerId))
+      assert connected_codex.configured
+      assert "device_code" in connected_codex.methods
+      refute Jason.encode!(completed) =~ "synthetic-private"
+
+      config = Config.cached(ctx.cwd)
+      assert Credentials.resolve_provider_api_key(:openai_codex, config.providers) == access_token
+      provider = Toml.decode_file!(ctx.config_path)["providers"]["openai-codex"]
+      name = provider["oauth_secret"]
+      assert {:ok, stored} = Secrets.get(name)
+      assert Jason.decode!(stored) == secret
+      assert provider["auth_source"] == "oauth"
+      refute File.read!(ctx.config_path) =~ "synthetic-private"
+
+      journal = File.read!(Path.join(ctx.store_path, "secrets_v1.jsonl"))
+      refute journal =~ "synthetic-private"
+      assert journal =~ "ciphertext"
+      guard_journal = File.read!(Path.join(ctx.store_path, "provider_device_login.jsonl"))
+      refute guard_journal =~ "synthetic-private"
+      refute guard_journal =~ "MOCK-DEVICE"
+      refute guard_journal =~ "mock-encrypted-owner"
+      refute guard_journal =~ "mock-encrypted-session"
+
+      assert :ok = stop_supervised(DeviceLogin)
+
+      restarted =
+        start_supervised!({DeviceLogin, name: __MODULE__.DeviceLogin, device_store: Store})
+
+      opts = Keyword.put(opts, :device_server, restarted)
+      assert {:ok, %{status: "lost"}} = Management.device_start(params, opts)
+
+      assert Credentials.resolve_provider_api_key(:openai_codex, Config.cached(ctx.cwd).providers) ==
+               access_token
+    end)
+  end
+
   test "explicit onboarding config is independent of unrelated runtime reload validation", ctx do
     File.mkdir_p!(Path.dirname(ctx.config_path))
     original = LemonCli.Setup.Scaffold.generate()
@@ -369,5 +454,34 @@ defmodule LemonCli.Setup.ProviderManagementEncryptedTest do
       assert {:error, :not_found} = Secrets.get("old_login")
       assert {:ok, ^login} = Secrets.get("new_login")
     end)
+  end
+
+  defp await_device_completion(params, opts, attempts \\ 200) do
+    assert {:ok, challenge} = Management.device_challenge(params, opts)
+
+    completion =
+      Map.merge(params, %{
+        "completionId" => "mock-encrypted-completion-#{System.unique_integer([:positive])}",
+        "challengeNonce" => challenge.challengeNonce,
+        "commit" => true
+      })
+
+    # The mock OAuth success only makes tokens available. Exercise the real
+    # authorized completion/persistence boundary, not a polling-only shortcut.
+    result =
+      if is_binary(challenge.challengeNonce) do
+        assert {:ok, result} = Management.device_complete(completion, opts)
+        result
+      else
+        Map.delete(challenge, :challengeNonce)
+      end
+
+    if result.status == "completed" or attempts == 0 do
+      assert result.status == "completed"
+      result
+    else
+      Process.sleep(5)
+      await_device_completion(params, opts, attempts - 1)
+    end
   end
 end

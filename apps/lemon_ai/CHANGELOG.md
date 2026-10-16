@@ -22,6 +22,9 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 - `OpenAICodexOAuth.login_device_code/1` (headless ChatGPT device flow) and a
   `:token_url` option on `exchange_code_for_secret/3`;
   `GitHubCopilotOAuth.decode_secret/1` is public.
+- Codex device login's `:on_device_code` callback exposes only the fixed
+  verification URL, public code, absolute expiry and poll interval, without the
+  device secret or PKCE verifier.
 
 ### Changed
 
@@ -42,6 +45,11 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ### Fixed
 
+- Codex device authorization honors the full provider interval before its first
+  poll, bounds grants to 15 minutes and poll intervals to 60 seconds, and
+  distinguishes explicit OAuth denial/expiry from bare 403/404 pending responses.
+  Invalid or oversized public codes/device IDs fail closed. Provider transport
+  and callback tests use mocks, never live token exchanges.
 - Correct uppercase Base64 alphabet values when validating padded image blocks;
   valid JPEG, GIF and WebP inputs no longer fail canonical-padding checks.
 - Gemini CLI / Cloud Code Assist now consumes bounded non-success streaming
