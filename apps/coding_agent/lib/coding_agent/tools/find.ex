@@ -319,7 +319,7 @@ defmodule CodingAgent.Tools.Find do
   defp run_fd(args, cwd, signal) do
     try do
       port =
-        Port.open(
+        LemonCore.NativeProcess.open(
           {:spawn_executable, System.find_executable("fd")},
           [:binary, :exit_status, :stderr_to_stdout, args: args, cd: cwd]
         )

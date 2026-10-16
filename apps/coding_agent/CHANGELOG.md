@@ -4,6 +4,14 @@
 
 ### Added
 
+- Configured local ACP/debug/eval/tool/Wasm launch adapters now participate in
+  opt-in durable native-process tracking. ACP creates and debugger launch/attach
+  dispatches retain external-work uncertainty even after errors; a missing ACP
+  client remains a proven pre-dispatch refusal. LSP diagnostics and formatting
+  keep their bounded BashExecutor path rather than reverting to unbounded commands.
+  JavaScript eval records whole-workload uncertainty before starting its host:
+  terminating the host alone cannot certify cleanup of the detached kernel.
+
 - Native Bash launches participate in opt-in durable evaluation tracking before
   execution. Process sessions, eval kernels and document backends share core
   process-group proofs without changing untracked launch behavior; PTY tracking

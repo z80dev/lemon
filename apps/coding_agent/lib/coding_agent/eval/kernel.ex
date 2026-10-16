@@ -306,7 +306,11 @@ defmodule CodingAgent.Eval.Kernel do
     ]
 
     try do
-      port = Port.open({:spawn_executable, state.runtime}, port_opts)
+      # The JS host launches a detached kernel group. Its local witness cannot
+      # certify whole-workload cleanup if the slot dies before killing that group.
+      if state.language == "js", do: LemonCore.NativeProcess.unsupported!()
+
+      port = LemonCore.NativeProcess.open({:spawn_executable, state.runtime}, port_opts)
       os_pid = with {:os_pid, pid} <- Port.info(port, :os_pid), do: pid
 
       state = %{

@@ -32,6 +32,16 @@ defmodule LemonSkills.McpSource do
   minute; a configuration change reloads the servers on the next call. Pass
   `force_refresh: true` to `discover_tools/1`, or call `refresh/0`, to re-ask
   every connected server immediately.
+
+  ## Native workload ownership
+
+  Stdio clients use `LemonCore.NativeProcess.open/2` through the standalone MCP
+  library's host callback. When native tracking is enabled, client startup and
+  dispatched protocol requests record unsupported whole-workload ownership:
+  a local process group cannot contain arbitrary MCP descendants or remote work.
+  Failed responses and timeouts retain that uncertainty. Cached reads and proven
+  pre-dispatch refusals (such as a missing executable or invalid tool parameters)
+  do not record work.
   """
 
   use GenServer
@@ -1215,11 +1225,16 @@ defmodule LemonSkills.McpSource do
         args: args,
         cwd: Keyword.get(source_opts, :cwd),
         env: Keyword.get(source_opts, :env, []),
+        port_open: &LemonCore.NativeProcess.open/2,
         timeout_ms: Keyword.get(source_opts, :timeout_ms, @client_request_timeout_ms)
       ] ++ sampling_client_opts(command, source_opts) ++ notification_opts(server)
 
-    with {:ok, client_mod} <- stdio_client_module() do
+    with {:ok, client_mod} <- stdio_client_module(),
+         executable when is_binary(executable) <- System.find_executable(command) do
       start_ready_client(client_mod, opts, client_ready_timeout_ms(source_opts))
+    else
+      nil -> {:error, :executable_not_found}
+      error -> error
     end
   end
 
@@ -1261,6 +1276,9 @@ defmodule LemonSkills.McpSource do
   end
 
   defp start_ready_client(client_mod, opts, timeout) do
+    # Startup may dispatch remote work even if readiness subsequently fails.
+    LemonCore.NativeProcess.unsupported!()
+
     with {:ok, client} <- client_mod.start_link(opts) do
       case await_ready(client_mod, client, timeout) do
         :ok ->
@@ -1640,6 +1658,19 @@ defmodule LemonSkills.McpSource do
   defp client_call({:error, reason}, _function, _args), do: {:error, reason}
 
   defp client_call(client_mod, function, args) when is_atom(client_mod) do
+    # Cached state/capability reads are local. Keep uncertainty after any
+    # dispatched protocol operation, including failed discovery and timeouts.
+    if function in [
+         :list_tools,
+         :call_tool,
+         :list_resources,
+         :read_resource,
+         :list_prompts,
+         :get_prompt
+       ] and function_exported?(client_mod, function, length(args)) do
+      LemonCore.NativeProcess.unsupported!()
+    end
+
     apply(client_mod, function, args)
   rescue
     _ -> {:error, :client_error}

@@ -6,6 +6,11 @@ Owns `LemonLsp.Servers` and `LemonLsp.ServerManager` for language-server
 registry metadata and supervised JSON-RPC sessions. It depends only on
 `lemon_core` plus JSON support.
 
+Configured language-server launches use the core native-process seam. Evaluation
+can opt into durable local process-group tracking without changing ordinary
+session ownership or protocol limits. Coding-tool diagnostics and formatters keep
+their timeout/output-bounded BashExecutor path, which uses the same launch seam.
+
 ## Supported language servers
 
 The original providers are ElixirLS (`elixir_ls`), TypeScript Language Server

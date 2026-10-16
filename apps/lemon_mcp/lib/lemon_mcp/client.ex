@@ -56,6 +56,7 @@ defmodule LemonMCP.Client do
           command: String.t(),
           args: [String.t()],
           env: [{String.t(), String.t()}],
+          port_open: (term(), list() -> port()),
           client_name: String.t(),
           client_version: String.t(),
           capabilities: map(),
@@ -93,6 +94,8 @@ defmodule LemonMCP.Client do
   - `:command` - (required) Command to spawn the MCP server
   - `:args` - Arguments to pass to the command (default: [])
   - `:env` - Environment variables as keyword list or map (default: [])
+  - `:port_open` - Host stdio opener `(spec, options -> port)`, defaulting to
+    `&Port.open/2`. Invalid callbacks and host refusals fail startup without fallback.
   - `:client_name` - Client name for handshake (default: "lemon-mcp")
   - `:client_version` - Client version for handshake (default: "0.1.0")
   - `:capabilities` - Client capabilities map (default: %{})
@@ -230,6 +233,7 @@ defmodule LemonMCP.Client do
       args: Keyword.get(opts, :args, []),
       cwd: Keyword.get(opts, :cwd),
       env: Keyword.get(opts, :env, []),
+      port_open: Keyword.get(opts, :port_open, &Port.open/2),
       client_name: Keyword.get(opts, :client_name, "lemon-mcp"),
       client_version: Keyword.get(opts, :client_version, "0.1.0"),
       capabilities: Keyword.get(opts, :capabilities, %{}),
@@ -410,6 +414,7 @@ defmodule LemonMCP.Client do
       args: state.config.args,
       cwd: state.config.cwd,
       env: state.config.env,
+      port_open: state.config.port_open,
       message_handler: handler
     ]
 

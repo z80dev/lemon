@@ -371,7 +371,7 @@ defmodule CodingAgent.Debug.Adapters do
   defp find_command({:xcrun, tool}) do
     with {:unix, :darwin} <- :os.type(),
          xcrun when is_binary(xcrun) <- System.find_executable("xcrun"),
-         {path, 0} <- System.cmd(xcrun, ["-f", tool], stderr_to_stdout: true),
+         {path, 0} <- LemonCore.NativeProcess.cmd(xcrun, ["-f", tool], stderr_to_stdout: true),
          path = String.trim(path),
          true <- File.regular?(path) do
       path

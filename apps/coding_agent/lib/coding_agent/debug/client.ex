@@ -126,7 +126,14 @@ defmodule CodingAgent.Debug.Client do
       %{"seq" => seq, "type" => "request", "command" => command}
       |> maybe_put("arguments", arguments)
 
-    case write(state, Protocol.encode(message)) do
+    encoded = Protocol.encode(message)
+
+    # Launch/attach may create independently owned or external work. Record the
+    # uncertainty before writing; a failed write/response does not prove rollback.
+    # Exited-client and failed-connect refusals never reach this boundary.
+    if command in ["launch", "attach"], do: LemonCore.NativeProcess.unsupported!()
+
+    case write(state, encoded) do
       :ok -> {:reply, {:ok, seq}, %{state | seq: seq}}
       {:error, reason} -> {:reply, {:error, reason}, state}
     end
@@ -364,7 +371,7 @@ defmodule CodingAgent.Debug.Client do
       |> maybe_cd(cwd)
       |> maybe_env(env)
 
-    {:ok, Port.open({:spawn_executable, command}, port_opts)}
+    {:ok, LemonCore.NativeProcess.open({:spawn_executable, command}, port_opts)}
   rescue
     error -> {:error, "cannot start debug adapter #{command}: #{Exception.message(error)}"}
   end
