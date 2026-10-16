@@ -10,6 +10,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Withdraw only ACP permission callbacks on approval resolution, not their
+  requester/publisher, so native tools reliably receive approval and denial
+  decisions, including **Refine plan** responses to `propose_plan`. Cancellation
+  also rejects permission requests that register after the approval is resolved.
 - Setup/readiness preserve native colon model IDs, including multi-colon IDs.
   Live setup strips only actual provider qualification, honors declared/discovered
   full IDs in the effective provider scope and model overrides, and rejects known
