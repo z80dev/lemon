@@ -5,7 +5,7 @@ defmodule LemonCli.CommandRegistryTest do
 
   alias LemonCli.{CLI, CommandRegistry, CompletionCommand}
 
-  @runtime_families ~w(setup model gateway doctor config mcp secrets channels providers blueprints profile backup context sessions runs cron logs omp learn update completion migrate node version send media models policy skill usage)
+  @runtime_families ~w(setup model gateway doctor config mcp secrets channels providers connect blueprints profile backup context sessions runs cron logs omp learn update completion migrate node version send media models policy skill usage)
   @lifecycle ~w(tui web start run daemon stop restart status)
   @release_only ~w(remote eval rpc)
 
@@ -55,6 +55,23 @@ defmodule LemonCli.CommandRegistryTest do
     assert help =~ "--daily-brief HH:MM"
     assert help =~ "--set-default"
     assert help =~ "alias for doctor"
+  end
+
+  test "connect help and completion advertise only the interactive pairing interface" do
+    help = CommandRegistry.help("connect")
+    assert help =~ "iphone"
+    assert help =~ "--backend ORIGIN"
+    assert help =~ "--origin HTTPS_ORIGIN"
+    refute help =~ "--token"
+    refute help =~ "--approve"
+
+    for launcher <- [:source, :release], shell <- ~w(bash zsh fish) do
+      completion = CompletionCommand.render(shell, launcher)
+      assert completion =~ "connect"
+      assert completion =~ "iphone"
+      assert completion =~ if(shell == "fish", do: "-l 'backend'", else: "--backend")
+      assert completion =~ if(shell == "fish", do: "-l 'origin'", else: "--origin")
+    end
   end
 
   test "version and path placeholders describe supported syntax" do

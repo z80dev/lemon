@@ -89,7 +89,7 @@ defmodule LemonCli.CLI do
   Non-halting dispatch over `argv` (command word included). Returns the
   process exit code. Reusable from Mix tasks and tests.
   """
-  @spec run([String.t()]) :: 0 | 1 | 2
+  @spec run([String.t()]) :: non_neg_integer()
   def run(["--version"]), do: run_command("version", ["--verbose"])
 
   def run(argv) when is_list(argv) do
@@ -191,6 +191,7 @@ defmodule LemonCli.CLI do
 
   defp run_command("acp", args), do: LemonCli.AcpCommand.run(args)
   defp run_command("tern", args), do: LemonCli.TernCommand.run(args)
+  defp run_command("connect", args), do: LemonCli.ConnectCommand.run(args)
   defp run_command("run", args), do: LemonCli.PrintCommand.run(args)
   defp run_command("setup", args), do: run_setup(args)
   defp run_command("model", args), do: run_model(args)

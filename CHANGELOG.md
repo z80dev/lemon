@@ -82,6 +82,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Added
 
+- `lemon connect iphone --backend ORIGIN [--origin HTTPS_ORIGIN]` pairs with an
+  already-running Lemon Bot from source or packaged Lemon. It uses interactive
+  owner product login, HTTPS preflight, explicit exact-request approval, and
+  consumed-link confirmation without starting services or accepting secret flags.
 - Telegram gateway setup prints the `https://t.me/<bot_username>` link once the bot token validates.
 - TUI status bar shows the session's cumulative cost, updated after each run
   (including snapshot-managed sessions, counted once per run). Runs without

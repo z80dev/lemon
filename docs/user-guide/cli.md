@@ -88,6 +88,59 @@ operation failures exit 1, and usage errors exit 2. No code is echoed in output.
 See [channel configuration](../config.md#telegram-and-discord-dm-pairing-codes)
 for default behavior, rate limits and lost-code handling.
 
+## Connect an iPhone to Lemon Bot
+
+```bash
+lemon connect iphone --backend http://127.0.0.1:8787
+# Optional explicit public origin:
+lemon connect iphone --backend http://127.0.0.1:8787 \
+  --origin https://bot.example.ts.net
+```
+
+This is a terminal pairing client for an **already-running Lemon Bot backend**,
+not a backend installer or service launcher. `--backend` is required and selects
+the intended configured backend; same-machine loopback HTTP is allowed for that
+connection. `--origin` must be the exact public HTTPS `publicUrl` configured on
+that backend and otherwise defaults to the authenticated descriptor's value:
+the backend, not the CLI, chooses the QR origin. Loopback and HTTPS aliases must
+prove the same instance and workspace identity. The examples are illustrative,
+not a claim that a live origin has been provisioned or verified.
+
+Configure Tailscale HTTPS for the Bot public origin first. The client reuses the
+product's HTTPS/public-origin preflight before issuing a link; fix any reported
+DNS, certificate, routing, or backend-identity mismatch rather than bypassing
+preflight. This command neither configures Tailscale nor starts the Lemon daemon.
+
+If the workspace is uninitialized, complete initial setup and create the local
+owner account through the existing Lemon Bot product UI first. At the terminal,
+sign in with that existing owner's email and **hidden password**. The client uses
+the product login endpoint, keeps its product session only in memory, and attempts
+revocation of only that temporary session on exit, leaving other logins and optional
+OIDC provider sessions untouched. If revocation cannot be confirmed, revoke that
+temporary login in Account → Sessions (normal bounded expiry still applies). Managed sign-in policies
+that cannot use this local login must be
+handled through the existing product UI/account mechanism, not bypassed. Never
+enter an operator/control-plane token. Passwords and sessions must never be put
+in command arguments, environment variables, shell history, or persistent files;
+there are no credential, authentication-bypass, or automatic-approval flags.
+
+Use a real interactive terminal with stdin, stdout, and stderr attached. Do not
+pipe, redirect, record, or run this flow noninteractively: the one-use paste link
+printed for the iPhone is sensitive. Paste it only into the intended iPhone's
+Lemon Bot connection flow. Review the pending request and compare its exact
+request identity, device name and verification code with the phone, then type
+`approve <the displayed six-digit code>` to authorize that exact request.
+`deny`, an empty line, or any other answer denies it; interrupted input never
+approves. Deny unexpected requests. Issuing a link or seeing an approved request
+is not success: pairing succeeds only after the phone completes and the request
+reaches **consumed** status on the same verified backend/workspace.
+
+Source checkouts run the Bot pairing TypeScript entrypoint using Bun without
+requiring the caller's working directory to be the Lemon repository. Packaged
+Lemon uses the independently installed standalone `lemon-bot` executable from
+`~/.lemon/lemon_bot/current/bot/bin/lemon-bot`, or from `PATH`. Install that Bot
+package separately if unavailable; this command never launches its server.
+
 ## Commands and availability
 
 ### Launcher lifecycle commands
