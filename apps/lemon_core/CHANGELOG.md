@@ -6,6 +6,14 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ## [Unreleased]
 
+### Security
+
+- `LemonCore.Redact.text/2` runs a linear-time tokenizer after the regex pass,
+  so percent-encoded keys and delimiters (`%74oken=…`, `token%3D…`,
+  `%access_key`), assignments nested behind a non-sensitive wrapper
+  (`message%20text="api_key=first second"`) and shell-quoted `&`-joined
+  assignments are redacted; output is never less redacted than before.
+
 ### Added
 
 - `LemonCore.ExecApprovals.expire_owner/1` expires every pending approval of an
