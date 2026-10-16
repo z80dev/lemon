@@ -389,7 +389,7 @@ defmodule CodingAgent.Eval.Kernel do
 
   defp owned_kernel_group(%{"pid" => pid}, port_pid)
        when is_integer(pid) and is_integer(port_pid) do
-    with {:ok, group} <- BashExecutor.capture_workload_group(pid),
+    with {:ok, group} <- LemonCore.ProcessGroup.capture_workload_group(pid),
          true <- pid == port_pid or port_child?(group, port_pid) do
       {:ok, group}
     else
@@ -424,7 +424,7 @@ defmodule CodingAgent.Eval.Kernel do
   defp kill_os_processes(state, port_exited) do
     if state.kernel_group do
       root_exited = port_exited and state.kernel_group.root_pid == state.os_pid
-      BashExecutor.signal_workload_group(state.kernel_group, :sigkill, root_exited)
+      LemonCore.ProcessGroup.signal_workload_group(state.kernel_group, :sigkill, root_exited)
     end
 
     if state.os_pid, do: BashExecutor.kill_process_tree(state.os_pid)

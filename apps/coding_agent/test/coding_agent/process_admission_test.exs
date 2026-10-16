@@ -714,18 +714,24 @@ defmodule CodingAgent.ProcessAdmissionTest do
     assert {:ok, state} = ProcessSession.get_state(id)
     original_identity = state.workload_identity
     # Fault-inject the stale ownership evidence, not an actual reused system PID.
-    stale_identity = %{original_identity | root_birth: "another workload"}
+    stale_identity = %{
+      original_identity
+      | root_birth: "another workload",
+        members:
+          Map.put(original_identity.members, original_identity.root_pid, "another workload")
+    }
+
     :sys.replace_state(session, &%{&1 | workload_identity: stale_identity})
     assert {:error, {:outcome_unknown, ^id}} = ProcessManager.kill(id, :sigkill)
-    assert {:alive, _} = CodingAgent.BashExecutor.workload_group_status(original_identity)
+    assert {:alive, _} = LemonCore.ProcessGroup.workload_group_status(original_identity)
     assert File.read!(counter) == "x"
     assert ProcessManager.admission_counts().occupied == 1
     assert {:ok, %{workload_identity: %{ownership_lost: true}}, _} = ProcessStore.get(id)
 
     # Only independently retained, matching ownership evidence can clean up.
-    assert {:ok, _} = CodingAgent.BashExecutor.signal_workload_group(original_identity, :sigkill)
+    assert {:ok, _} = LemonCore.ProcessGroup.signal_workload_group(original_identity, :sigkill)
     assert_receive {:root_exited, ^id}, 5_000
-    assert :terminated = CodingAgent.BashExecutor.workload_group_status(original_identity, true)
+    assert :terminated = LemonCore.ProcessGroup.workload_group_status(original_identity, true)
     assert ProcessManager.admission_counts().occupied == 1
     assert :ok = ProcessManager.confirm_external_termination(id, "admission-test")
     assert ProcessManager.admission_counts().occupied == 0

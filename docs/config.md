@@ -745,6 +745,24 @@ plus scan cost using a system-wide `ps` snapshot. Ownership-lost and nonlocal
 unknown workloads do not schedule this polling. These are local containment
 contracts, not proof of remote workload termination.
 
+The internal evaluation harness can additionally opt into
+`LemonCore.NativeProcess` tracking by calling `configure!/1` with a fresh private
+ledger path before application boot. This is independent of managed-process
+admission and is not a user TOML setting. With no ledger configured, native
+launches keep their existing behavior. Tracked Bash and external-secret launches
+sync an intent before opening a stdin-gated local wrapper, then sync its
+birth-bound group witness before releasing execution. Configuration durably
+establishes the ledger file and newly created directory entries; acknowledged
+records use stable-storage barriers, including `F_FULLFSYNC` on Darwin.
+Existing ledger paths are refused without DETS repair. A missing ledger service,
+failed persistence or unavailable witness refuses release rather than falling
+back to an untracked launch. Ledger snapshots retain uncertain or unsupported
+workloads as occupied; an empty group is termination evidence only for a valid,
+unlost witness. PTY helpers can create separate sessions, so their wrapper group
+alone is not a whole-workload termination proof. Shared
+`LemonCore.ProcessGroup` signalling uses an absolute OS executable and fixed argv,
+never a PATH-selected binary or shell command.
+
 
 The Bun TUI uses the runtime's model and thinking defaults from `[defaults]`.
 The `[tui]` section controls terminal presentation settings loaded at startup.

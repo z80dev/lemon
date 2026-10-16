@@ -4,6 +4,11 @@
 
 ### Added
 
+- Native Bash launches participate in opt-in durable evaluation tracking before
+  execution. Process sessions, eval kernels and document backends share core
+  process-group proofs without changing untracked launch behavior; PTY tracking
+  explicitly retains uncertainty about separately contained workloads.
+
 - Named workers advertise and execute Codex device login start/poll/cancel plus
   internal single-use completion/settlement on the authenticated destination.
   Writing completion stays bound to the initiating worker/controller generation

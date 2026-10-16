@@ -48,7 +48,7 @@ defmodule CodingAgent.ProcessSession do
 
   require Logger
 
-  alias CodingAgent.{BashExecutor, ProcessStore}
+  alias CodingAgent.ProcessStore
   alias LemonCore.TerminalBackends
   alias LemonCore.TerminalBackends.{Docker, Ssh}
 
@@ -643,7 +643,7 @@ defmodule CodingAgent.ProcessSession do
   defp activate_workload(process_id, port, os_pid, output_file) do
     case :os.type() do
       {:unix, _} ->
-        case BashExecutor.capture_workload_group(os_pid) do
+        case LemonCore.ProcessGroup.capture_workload_group(os_pid) do
           {:ok, identity} ->
             ProcessStore.mark_running(process_id, os_pid, identity)
             true = Port.command(port, "\n")
@@ -666,7 +666,7 @@ defmodule CodingAgent.ProcessSession do
 
   defp owned_workload_status(%{backend: :local, workload_identity: identity} = state)
        when is_map(identity) do
-    BashExecutor.workload_group_status(identity, state.root_exited)
+    LemonCore.ProcessGroup.workload_group_status(identity, state.root_exited)
   end
 
   defp owned_workload_status(state), do: {:unknown, state.workload_identity}
@@ -686,7 +686,7 @@ defmodule CodingAgent.ProcessSession do
   end
 
   defp remember_workload_members(%{workload_identity: identity} = state) when is_map(identity) do
-    case BashExecutor.workload_group_status(identity, state.root_exited) do
+    case LemonCore.ProcessGroup.workload_group_status(identity, state.root_exited) do
       {:alive, observed} ->
         if observed != identity,
           do: ProcessStore.update_workload_identity(state.process_id, observed, state.root_exited)
@@ -706,7 +706,11 @@ defmodule CodingAgent.ProcessSession do
   defp remember_workload_members(state), do: state
 
   defp request_workload_stop(state, signal, reason) do
-    case BashExecutor.signal_workload_group(state.workload_identity, signal, state.root_exited) do
+    case LemonCore.ProcessGroup.signal_workload_group(
+           state.workload_identity,
+           signal,
+           state.root_exited
+         ) do
       {:ok, identity} ->
         ProcessStore.update_workload_identity(state.process_id, identity, state.root_exited)
         status = if state.root_exited, do: :lost, else: :killing

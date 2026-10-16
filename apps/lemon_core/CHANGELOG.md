@@ -30,6 +30,15 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ### Added
 
+- `LemonCore.ProcessGroup` shares birth-bound local workload proofs across native
+  consumers, rejecting malformed or lost ownership and retaining absolute,
+  fixed-argv signalling. Opt-in `LemonCore.NativeProcess` evaluation tracking
+  syncs launch intent and ownership witness before releasing a POSIX-compatible
+  stdin gate. Ledger contents and newly created directory entries use durable
+  barriers, including Darwin full-device flushes; barrier failures prevent launch.
+  Existing ledgers are rejected without repair; missing tracking or observation
+  fails closed.
+
 - Provider management supports target-, owner-, and session-bound Codex device
   start/poll/cancel dispatch with a fixed login identity. Internal challenge
   transport carries an ephemeral destination-generated nonce; single-use

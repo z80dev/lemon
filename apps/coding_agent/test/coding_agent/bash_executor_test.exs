@@ -429,3 +429,58 @@ defmodule CodingAgent.BashExecutorTest do
     end
   end
 end
+
+defmodule CodingAgent.BashExecutorTrackingTest do
+  use ExUnit.Case, async: false
+
+  alias CodingAgent.BashExecutor
+  alias LemonCore.{NativeProcess, ProcessGroup}
+
+  @moduletag :tmp_dir
+
+  setup %{tmp_dir: directory} do
+    previous = Application.fetch_env(:lemon_core, :native_process_ledger)
+
+    on_exit(fn ->
+      if pid = Process.whereis(NativeProcess), do: GenServer.stop(pid)
+
+      case previous do
+        {:ok, value} -> Application.put_env(:lemon_core, :native_process_ledger, value)
+        :error -> Application.delete_env(:lemon_core, :native_process_ledger)
+      end
+    end)
+
+    %{ledger: Path.join(directory, "native.dets")}
+  end
+
+  test "guarded Bash launches retain a durable group witness", %{ledger: ledger, tmp_dir: cwd} do
+    assert :ok = NativeProcess.configure!(ledger)
+    assert {:ok, result} = BashExecutor.execute("printf tracked", cwd)
+    assert result.output == "tracked"
+    assert result.exit_code == 0
+    assert [{_id, record, %{}}] = NativeProcess.snapshot()
+    assert record.backend == :local
+    assert ProcessGroup.valid_identity?(record.workload_identity)
+  end
+
+  test "an unavailable ledger returns an error without launching or hanging the guardian", %{
+    ledger: ledger,
+    tmp_dir: cwd
+  } do
+    Application.put_env(:lemon_core, :native_process_ledger, ledger)
+    task = Task.async(fn -> BashExecutor.execute("touch launched", cwd) end)
+    assert {:error, %RuntimeError{}} = Task.await(task, 5_000)
+    refute File.exists?(Path.join(cwd, "launched"))
+  end
+
+  test "PTY launches retain an unsupported whole-workload intent", %{ledger: ledger, tmp_dir: cwd} do
+    assert :ok = NativeProcess.configure!(ledger)
+    assert {:ok, result} = BashExecutor.execute("printf tracked", cwd, pty: true)
+    assert result.output =~ "tracked"
+
+    assert Enum.any?(NativeProcess.snapshot(), fn {_id, record, %{}} ->
+             record.backend == :unsupported and record.capacity_held and
+               not record.termination_confirmed and is_nil(record.workload_identity)
+           end)
+  end
+end

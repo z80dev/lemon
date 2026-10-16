@@ -102,7 +102,7 @@ defmodule CodingAgent.BashExecutor do
       ] ++ port_env(env)
 
     try do
-      {port, os_pid, guardian} = start_guarded_port(spawn_path, port_opts)
+      {port, os_pid, guardian} = start_guarded_port(spawn_path, port_opts, use_pty)
 
       try do
         # Set up timeout (optional). `Process.send_after/3` requires an integer timeout.
@@ -158,7 +158,7 @@ defmodule CodingAgent.BashExecutor do
   # The guardian, not the killable tool worker, owns the Port. If the worker
   # disappears, the shell is still alive while we enumerate/kill descendants.
   # Closing a worker-owned Port first would orphan them before we could find them.
-  defp start_guarded_port(path, opts) do
+  defp start_guarded_port(path, opts, use_pty) do
     caller = self()
     ref = make_ref()
 
@@ -168,12 +168,18 @@ defmodule CodingAgent.BashExecutor do
         monitor = Process.monitor(caller)
 
         try do
-          port = Port.open({:spawn_executable, path}, opts)
+          # PTY helpers may start a separate session: their wrapper group is not
+          # proof of whole-workload ownership.
+          if use_pty, do: LemonCore.NativeProcess.unsupported!()
+          port = LemonCore.NativeProcess.open({:spawn_executable, path}, opts)
           os_pid = get_os_pid(port)
           send(caller, {ref, :started, port, os_pid})
           relay_port(port, os_pid, caller, monitor)
         rescue
           error -> send(caller, {ref, :error, error})
+        catch
+          kind, reason ->
+            send(caller, {ref, :error, RuntimeError.exception("#{kind}: #{inspect(reason)}")})
         end
       end)
 
@@ -604,148 +610,6 @@ defmodule CodingAgent.BashExecutor do
         end
     end
   end
-
-  @doc false
-  def capture_workload_group(os_pid) when is_integer(os_pid) and os_pid > 1 do
-    with {:ok, rows} <- process_group_rows(),
-         %{pgid: ^os_pid, birth: birth} <- Enum.find(rows, &(&1.pid == os_pid)) do
-      members = rows |> Enum.filter(&(&1.pgid == os_pid)) |> group_members()
-
-      {:ok,
-       %{
-         pgid: os_pid,
-         root_pid: os_pid,
-         root_birth: birth,
-         members: members,
-         ownership_lost: false
-       }}
-    else
-      _ -> {:error, :workload_unobservable}
-    end
-  end
-
-  def capture_workload_group(_os_pid), do: {:error, :workload_unobservable}
-
-  @doc false
-  def workload_group_status(identity, root_exited \\ false)
-
-  def workload_group_status(%{ownership_lost: true} = identity, _root_exited),
-    do: {:unknown, identity}
-
-  def workload_group_status(%{pgid: _pgid, root_pid: _root_pid} = identity, root_exited) do
-    case process_group_rows() do
-      {:ok, rows} -> classify_workload_group(rows, identity, root_exited)
-      _ -> {:unknown, identity}
-    end
-  end
-
-  def workload_group_status(identity, _root_exited), do: {:unknown, identity}
-
-  @doc false
-  def signal_workload_group(identity, signal, root_exited \\ false) do
-    case workload_group_status(identity, root_exited) do
-      {:alive, %{pgid: pgid} = observed} when is_integer(pgid) and pgid > 1 ->
-        # The owned group was checked immediately above; never signal a stale
-        # positive root PID after the original shell has exited.
-        case signal_process_group(pgid, signal) do
-          :ok -> {:ok, observed}
-          :error -> {:error, :workload_unobservable, observed}
-        end
-
-      {:alive, observed} ->
-        {:error, :workload_unobservable, observed}
-
-      :terminated ->
-        {:terminated, identity}
-
-      {:unknown, observed} ->
-        {:error, :workload_unobservable, observed}
-    end
-  catch
-    _, _ -> {:error, :workload_unobservable, identity}
-  end
-
-  defp classify_workload_group(rows, %{pgid: pgid, root_pid: root_pid} = identity, root_exited) do
-    root = Enum.find(rows, &(&1.pid == root_pid))
-    live = Enum.filter(rows, &(&1.pgid == pgid and not String.starts_with?(&1.status, "Z")))
-
-    cond do
-      root && not String.starts_with?(root.status, "Z") &&
-          (root_exited || root.birth != identity.root_birth || root.pgid != pgid) ->
-        # Never send a signal to a recycled identity, even if it is later empty.
-        {:unknown, %{identity | ownership_lost: true}}
-
-      live == [] ->
-        :terminated
-
-      (root && root.birth == identity.root_birth) ||
-          Enum.any?(live, &(Map.get(identity.members, &1.pid) == &1.birth)) ->
-        {:alive, %{identity | members: group_members(live)}}
-
-      true ->
-        # The root disappeared before we could bind a surviving member.
-        # Retain capacity, but do not signal an unproven group.
-        {:unknown, identity}
-    end
-  end
-
-  # Signals the whole verified group through an OS-owned absolute `kill`, with
-  # a fixed argv and no shell. A group that exits between the check and the
-  # signal is still reconciled by the caller; a missing binary cannot signal.
-  defp signal_process_group(pgid, signal) do
-    case Enum.find(["/bin/kill", "/usr/bin/kill"], &File.regular?/1) do
-      nil ->
-        :error
-
-      executable ->
-        number = if signal == :sigterm, do: "-15", else: "-9"
-
-        {_output, _status} =
-          System.cmd(executable, [number, "--", "-#{pgid}"], stderr_to_stdout: true)
-
-        :ok
-    end
-  end
-
-  defp process_group_rows do
-    # OS-owned absolute paths, not a command-controlled PATH executable.
-    case Enum.find(["/bin/ps", "/usr/bin/ps"], &File.regular?/1) do
-      nil ->
-        {:error, :workload_unobservable}
-
-      executable ->
-        case System.cmd(executable, ["-axo", "pid=,pgid=,stat=,lstart="], stderr_to_stdout: true) do
-          {output, 0} ->
-            output
-            |> String.split("\n", trim: true)
-            |> Enum.reduce_while({:ok, []}, fn line, {:ok, rows} ->
-              case String.split(String.trim(line), ~r/\s+/, parts: 4) do
-                [pid, pgid, status, birth] ->
-                  with {pid, ""} <- Integer.parse(pid),
-                       {pgid, ""} <- Integer.parse(pgid) do
-                    {:cont, {:ok, [%{pid: pid, pgid: pgid, status: status, birth: birth} | rows]}}
-                  else
-                    _ -> {:halt, {:error, :workload_unobservable}}
-                  end
-
-                _ ->
-                  {:halt, {:error, :workload_unobservable}}
-              end
-            end)
-            |> case do
-              {:ok, [_ | _] = rows} -> {:ok, rows}
-              _ -> {:error, :workload_unobservable}
-            end
-
-          _ ->
-            {:error, :workload_unobservable}
-        end
-    end
-  rescue
-    _ -> {:error, :workload_unobservable}
-  end
-
-  defp group_members(rows), do: Map.new(rows, &{&1.pid, &1.birth})
 
   @doc """
   Kill a process and all of its descendants.

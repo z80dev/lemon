@@ -105,7 +105,7 @@ defmodule LemonCore.Secrets.SourceRunner do
   defp open_port(executable, args, env) do
     if Enum.all?(args, &(is_binary(&1) and not String.contains?(&1, "\0"))) do
       port =
-        Port.open(
+        LemonCore.NativeProcess.open(
           {:spawn_executable, String.to_charlist(executable)},
           [
             :binary,
