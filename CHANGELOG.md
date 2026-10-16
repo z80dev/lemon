@@ -176,6 +176,12 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   catalog), cost per verified success (undefined at zero successes), paired
   wall-time differences, exact revision and sanitized commands. Without `--live`
   it only writes a plan; tests use local fixtures and make no paid calls.
+- `lemon doctor --live --provider NAME` checks one named provider and
+  `--live --provider all` checks the default plus every configured provider
+  (first eight), each with its own `providers.live.<id>` result from the same
+  bounded, redacted, non-generating models-list request. Plain `--live` still
+  checks only the default provider, and `--provider` without `--live` is a usage
+  error; offline doctor is unchanged.
 
 - Unified configurable browser provider selection across browser tools, LCU Chrome
   control, doctor and control-plane browser status. Auto selection prefers ready

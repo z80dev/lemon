@@ -201,6 +201,7 @@ identity requests to configured Telegram/Discord bots. Requests have a five-seco
 timeout and share a six-second overall live-check deadline. Unsupported/OAuth-only
 endpoints are skipped; no completion is generated. Failures count as `FAIL` and
 exit `1`; `--json` includes live results. Output omits raw responses, keys and URLs.
+Add `--provider NAME` (or `--provider all`) to check other configured providers too.
 For credential changes, use the [setup guide](../user-guide/setup.md); for logs
 (`lemon logs`) and redacted support bundles, use [Support](../support.md). Never
 post tokens, raw secrets or an unreviewed bundle.

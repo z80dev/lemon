@@ -37,6 +37,9 @@ defmodule LemonCli.Setup.Verification do
   @type provider_state :: Readiness.provider_state()
   @type setup_state :: Readiness.setup_state()
 
+  # Models-list probes never send a model id; open model sets need one to resolve.
+  @probe_model_id "doctor-probe"
+
   @type verify_ok :: %{
           required(:provider) => String.t(),
           required(:model) => String.t(),
@@ -236,12 +239,24 @@ defmodule LemonCli.Setup.Verification do
 
   defp live_note(_), do: "live check passed"
 
-  @doc "Builds the default provider probe using setup's canonical credential and model resolution."
+  @doc """
+  Builds a provider probe using setup's canonical credential and model resolution.
+
+  Probes the default provider and model unless `:provider` names another one.
+  That provider's probe uses its first configured or catalog model: a
+  non-generating models request only needs the model's wire API, base URL and
+  headers, and never sends the model id.
+  """
   @spec live_input(keyword()) :: {:ok, map()} | {:skip, term()} | {:error, term()}
   def live_input(opts \\ []) do
     config = Keyword.get(opts, :config) || effective_config(opts)
-    provider = config.agent[:default_provider]
-    model = config.agent[:default_model]
+    default_provider = config.agent[:default_provider]
+    provider = Keyword.get(opts, :provider) || default_provider
+
+    model =
+      if same_provider?(provider, default_provider),
+        do: config.agent[:default_model],
+        else: probe_model_id(config, provider)
 
     resolved = Keyword.get(opts, :verification_model) || effective_model(config, provider, model)
     provider_cfg = provider_config(config, provider)
@@ -264,6 +279,41 @@ defmodule LemonCli.Setup.Verification do
         opts = opts |> Keyword.put(:config, config) |> Keyword.put(:verification_model, resolved)
         build_live_input(opts, provider, model)
     end
+  end
+
+  defp same_provider?(nil, nil), do: true
+  defp same_provider?(a, b) when is_nil(a) or is_nil(b), do: false
+
+  defp same_provider?(a, b),
+    do: normalize_provider_name(to_string(a)) == normalize_provider_name(to_string(b))
+
+  # A models request needs a model only for its wire API, base URL and headers.
+  # Prefer a configured model, then the catalog's first; open model sets (presets,
+  # custom providers without a model list) accept any id, so a fixed one resolves.
+  defp probe_model_id(_config, nil), do: nil
+
+  defp probe_model_id(config, provider) do
+    wanted = normalize_provider_name(to_string(provider))
+    registry = registry_provider_atom(provider)
+
+    configured =
+      config
+      |> CustomProviders.models()
+      |> Enum.find(&(normalize_provider_name(to_string(&1.provider)) == wanted))
+
+    catalog = registry && List.first(Models.get_models(registry))
+
+    # Qualified so ids containing ":" survive the provider/model split.
+    id =
+      cond do
+        configured -> configured.id
+        catalog -> catalog.id
+        registry && Presets.preset?(registry) -> @probe_model_id
+        CustomProviders.custom_provider(config, provider) -> @probe_model_id
+        true -> nil
+      end
+
+    id && "#{provider}:#{id}"
   end
 
   defp build_live_input(opts, provider, model) do

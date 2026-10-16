@@ -322,9 +322,13 @@ Use `lemon config migrate` for removed settings, or fix syntax and rerun
 explicit `false` and zero values remain literal. A failing doctor check does not
 abort the report; use `lemon doctor --verbose` for details.
 
-`lemon doctor --live [--verbose] [--json]` opts in to bounded, non-generating
-connectivity checks for the default provider and configured Telegram/Discord
-bots. Without `--live`, doctor remains offline. Live checks run concurrently with
+`lemon doctor --live [--provider NAME|all] [--verbose] [--json]` opts in to
+bounded, non-generating connectivity checks for the default provider and
+configured Telegram/Discord bots. Use `--provider NAME` to check a named provider,
+or `--provider all` to check the default plus every configured provider, with
+per-provider results. The all-provider selection checks at most eight providers;
+any remaining providers are reported as skipped and can be checked by name.
+Without `--live`, doctor remains offline. Live checks run concurrently with
 five-second request timeouts and a six-second overall deadline; unsupported
 endpoints are skipped, failures exit `1`, and redacted results are included in
 JSON and bundles. See [diagnostic details](../support.md#before-opening-a-bug).

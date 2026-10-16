@@ -71,6 +71,45 @@ defmodule LemonCore.Doctor.LiveChecksTest do
     refute inspect(results) =~ "secret.invalid"
   end
 
+  test "live options reach registered live checks only with --live" do
+    previous = Application.get_env(:lemon_core, :doctor_checks)
+    Application.put_env(:lemon_core, :doctor_checks, [RegisteredProbe])
+    on_exit(fn -> Application.put_env(:lemon_core, :doctor_checks, previous) end)
+    parent = self()
+
+    opts = [
+      live_provider: "all",
+      probe: fn ->
+        send(parent, :probed)
+        Check.pass("test.live")
+      end
+    ]
+
+    Doctor.checks(opts)
+    refute_received :probed
+
+    assert Enum.any?(Doctor.checks(Keyword.put(opts, :live, true)), &(&1.name == "test.live"))
+    assert_received :probed
+  end
+
+  test "per-provider jobs keep their order and each fails or passes on its own" do
+    jobs = [
+      {"providers.live.a", fn -> Check.pass("providers.live.a", "ok") end},
+      {"providers.live.b", fn -> raise "boom sk-fake_secret_12345678" end},
+      {"providers.live.c", fn -> Check.skip("providers.live.c", "no endpoint") end}
+    ]
+
+    results = LiveChecks.run(jobs)
+
+    assert Enum.map(results, &{&1.name, &1.status}) == [
+             {"providers.live.a", :pass},
+             {"providers.live.b", :fail},
+             {"providers.live.c", :skip}
+           ]
+
+    refute inspect(results) =~ "boom"
+  end
+
   for {response, expected} <- [
         {{:ok, {{~c"HTTP/1.1", 401, ~c"Unauthorized"}, [], "token=fake-token"}}, :unauthorized},
         {{:ok, {{~c"HTTP/1.1", 503, ~c"Unavailable"}, [], "fake-token"}}, {:http_status, 503}},
