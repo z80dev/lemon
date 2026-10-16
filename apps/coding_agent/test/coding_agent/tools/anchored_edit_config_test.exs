@@ -61,18 +61,24 @@ defmodule CodingAgent.Tools.AnchoredEditConfigTest do
              edit.execute.("edit", edit_params(ctx.path, result.details.snapshot), nil, nil)
   end
 
-  test "unset and false config preserve existing anchored editing", ctx do
+  test "unset config enforces seen lines; false config disables", ctx do
     for setting <- [nil, "false"] do
       cwd = Path.join(ctx.cwd, setting || "unset")
       File.mkdir_p!(Path.join(cwd, ".lemon"))
       if setting, do: configure(cwd, setting)
       settings = SettingsManager.load(cwd)
-      refute settings.tools.edit.enforce_seen_lines
+      assert settings.tools.edit.enforce_seen_lines == is_nil(setting)
       opts = options(ctx.cwd, settings)
       {:ok, edit} = ToolRegistry.get_tool(cwd, "edit", opts)
       File.write!(ctx.path, "first\nhidden\nlast\n")
       tag = AnchoredEdit.snapshot(File.read!(ctx.path))
-      assert %AgentToolResult{} = edit.execute.("edit", edit_params(ctx.path, tag), nil, nil)
+      result = edit.execute.("edit", edit_params(ctx.path, tag), nil, nil)
+
+      if setting do
+        assert %AgentToolResult{} = result
+      else
+        assert {:error, _} = result
+      end
     end
   end
 

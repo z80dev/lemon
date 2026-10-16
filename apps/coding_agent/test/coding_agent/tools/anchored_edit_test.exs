@@ -39,7 +39,7 @@ defmodule CodingAgent.Tools.AnchoredEditTest do
         nil,
         nil,
         cwd,
-        []
+        enforce_seen_lines: false
       )
 
     assert %AgentToolResult{trust: :untrusted, details: edited} = result
@@ -69,7 +69,7 @@ defmodule CodingAgent.Tools.AnchoredEditTest do
                nil,
                nil,
                cwd,
-               []
+               enforce_seen_lines: false
              )
 
     assert message =~ "Snapshot mismatch"
@@ -105,7 +105,7 @@ defmodule CodingAgent.Tools.AnchoredEditTest do
                  nil,
                  nil,
                  cwd,
-                 []
+                 enforce_seen_lines: false
                )
 
       assert File.read!(path) == content
@@ -128,7 +128,7 @@ defmodule CodingAgent.Tools.AnchoredEditTest do
                nil,
                nil,
                cwd,
-               []
+               enforce_seen_lines: false
              )
 
     assert File.read!(path) == <<0xEF, 0xBB, 0xBF>> <> "one\r\nchanged\r\n"
@@ -151,7 +151,7 @@ defmodule CodingAgent.Tools.AnchoredEditTest do
                nil,
                nil,
                cwd,
-               []
+               enforce_seen_lines: false
              )
 
     assert File.read!(path) == "one\ntwo\nthree"
@@ -167,7 +167,7 @@ defmodule CodingAgent.Tools.AnchoredEditTest do
                nil,
                nil,
                cwd,
-               []
+               enforce_seen_lines: false
              )
 
     assert File.read!(path) == "one\n\nthree"
@@ -183,7 +183,7 @@ defmodule CodingAgent.Tools.AnchoredEditTest do
                nil,
                nil,
                cwd,
-               []
+               enforce_seen_lines: false
              )
 
     assert File.read!(path) == ""
@@ -191,7 +191,7 @@ defmodule CodingAgent.Tools.AnchoredEditTest do
 
   test "rebases all uniquely unchanged anchors after unrelated disk changes", %{tmp_dir: cwd} do
     path = Path.join(cwd, "recover.txt")
-    opts = [session_id: cwd]
+    opts = [session_id: cwd, enforce_seen_lines: false]
     on_exit(fn -> CodingAgent.FileReadTracker.forget_session(cwd) end)
     File.write!(path, "first\nreplace\ninsert\nremove\nlast\n")
     read = Read.execute("read", %{"path" => path}, nil, nil, cwd, opts)
@@ -220,7 +220,7 @@ defmodule CodingAgent.Tools.AnchoredEditTest do
 
   test "refuses changed, ambiguous, and unknown historical anchors atomically", %{tmp_dir: cwd} do
     path = Path.join(cwd, "refuse.txt")
-    opts = [session_id: cwd]
+    opts = [session_id: cwd, enforce_seen_lines: false]
     on_exit(fn -> CodingAgent.FileReadTracker.forget_session(cwd) end)
     original = "first\nanchor\nlast\n"
     CodingAgent.FileReadTracker.record(opts, path, original)
@@ -256,7 +256,7 @@ defmodule CodingAgent.Tools.AnchoredEditTest do
 
   test "recovery compares raw bytes rather than normalized whitespace", %{tmp_dir: cwd} do
     path = Path.join(cwd, "raw.txt")
-    opts = [session_id: cwd]
+    opts = [session_id: cwd, enforce_seen_lines: false]
     on_exit(fn -> CodingAgent.FileReadTracker.forget_session(cwd) end)
     original = "first\n  anchor\nlast\n"
     CodingAgent.FileReadTracker.record(opts, path, original)

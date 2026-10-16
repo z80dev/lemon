@@ -255,7 +255,7 @@ defmodule LemonCore.Config.Tools do
   defp resolve_edit(settings) do
     case Map.get(settings, "edit", %{}) do
       section when is_map(section) ->
-        %{enforce_seen_lines: Map.get(section, "enforce_seen_lines", false)}
+        %{enforce_seen_lines: Map.get(section, "enforce_seen_lines", true)}
 
       invalid ->
         invalid
@@ -539,7 +539,7 @@ defmodule LemonCore.Config.Tools do
     %{
       "auto_resize_images" => true,
       "checkpoint" => %{"enabled" => false},
-      "edit" => %{"enforce_seen_lines" => false},
+      "edit" => %{"enforce_seen_lines" => true},
       "bash" => Bash.defaults(),
       "lsp" => @lsp_defaults,
       "browser" => %{"provider" => "auto"},

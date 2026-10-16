@@ -6,9 +6,9 @@ defmodule LemonCore.Config.ToolsTest do
 
   alias LemonCore.Config.{Tools, Validator}
 
-  test "anchored edit visibility defaults off and validates configured booleans" do
-    assert Tools.defaults()["edit"] == %{"enforce_seen_lines" => false}
-    assert Tools.resolve(%{}).edit == %{enforce_seen_lines: false}
+  test "anchored edit visibility defaults on and validates configured booleans" do
+    assert Tools.defaults()["edit"] == %{"enforce_seen_lines" => true}
+    assert Tools.resolve(%{}).edit == %{enforce_seen_lines: true}
 
     for enabled <- [true, false] do
       config = Tools.resolve(%{"tools" => %{"edit" => %{"enforce_seen_lines" => enabled}}})

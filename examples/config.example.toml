@@ -290,6 +290,14 @@ allow_tools = []
 # [runtime.tools]
 # approval_mode = "write" # ask: non-read; write: exec only; yolo: no tier gates
 
+# --- Safety defaults (both on; set false to disable) ---
+# git_guard: destructive Git commands (reset --hard, clean -f, ...) are refused.
+# enforce_seen_lines: anchored edits to lines not shown in a numbered read are refused.
+# [runtime.tools.bash]
+# git_guard = true
+# [runtime.tools.edit]
+# enforce_seen_lines = true
+
 # --- Web Tool Configuration ---
 
 # [runtime.tools.web.search]
