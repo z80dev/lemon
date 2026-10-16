@@ -342,6 +342,10 @@ with ripgrep or the Elixir fallback (which uses `git check-ignore` inside a work
 tree). Pass `"hidden": true` and/or `"no_ignore": true` to include them. `find`
 has the same `hidden`/`no_ignore` switches.
 
+Ripgrep matches retain their original bytes, including invalid UTF-8, even when
+the first match exceeds the output byte budget; truncation does not decode or
+silently replace those bytes.
+
 `semantic_find` is an opt-in, model-backed search for when you know the behavior but
 not the names: it ranks `path:line` candidates from a small model under a per-call
 token cap. It is unavailable unless enabled; see
