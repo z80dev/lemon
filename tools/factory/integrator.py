@@ -261,10 +261,17 @@ class Integrator:
         run = max(pushes, key=lambda r: r["databaseId"])
         if run["status"] != "completed":
             return None
+        if run["conclusion"] == "cancelled":
+            # Main CI keeps one pending run per branch: a newer push cancels ours. The first
+            # non-cancelled run on a descendant commit carries this merge, so it decides.
+            run = self._descendant_run(merge_sha, run["databaseId"])
+            if run is None or run["status"] != "completed":
+                return None
         if run["conclusion"] == "success":
             self.ledger.save_integration(task["id"], event="integration.confirmed", state="confirmed",
                                          ci_run_id=run["databaseId"])
-            self._transition(task["id"], "done", f"main CI run {run['databaseId']} passed on {merge_sha[:12]}")
+            self._transition(task["id"], "done", f"main CI run {run['databaseId']} passed on "
+                             f"{run['headSha'][:12]}, which contains merge {merge_sha[:12]}")
             self._git("push", "--quiet", "origin", "--delete", integration["branch"], check=False)
             return f"{task['id']}: confirmed on main {merge_sha[:12]}"
         log = self._failure_log(task["id"], run["databaseId"])
@@ -281,6 +288,21 @@ class Integrator:
         )
         self._transition(task["id"], "blocked", f"main CI failed after merge; triage {triage['id']}")
         return f"{task['id']}: main CI failed; triage {triage['id']}"
+
+    def _descendant_run(self, merge_sha: str, after_id: int) -> dict[str, Any] | None:
+        runs = self._gh_json("run", "list", "--repo", self.slug, "--workflow", CI_WORKFLOW, "--branch", "main",
+                             "--event", "push", "--limit", "40", "--json", "databaseId,headSha,status,conclusion,event")
+        self._git("fetch", "--quiet", "origin")
+        for candidate in sorted(runs or [], key=lambda r: r["databaseId"]):
+            if candidate["databaseId"] <= after_id or candidate["event"] != "push":
+                continue
+            ancestor = self._git("merge-base", "--is-ancestor", merge_sha, candidate["headSha"], check=False)
+            if ancestor.returncode != 0:
+                continue
+            if candidate["status"] == "completed" and candidate["conclusion"] == "cancelled":
+                continue
+            return candidate
+        return None
 
     def _repair(self, task: dict[str, Any], integration: dict[str, Any] | None, attempt: dict[str, Any] | None,
                 reason: str) -> str:

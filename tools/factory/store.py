@@ -42,7 +42,8 @@ TRANSITIONS: dict[str, set[str]] = {
     "verifying": {"active", "queued", "awaiting_merge", "blocked", "cancelled"},
     "awaiting_merge": {"active", "queued", "landed_pending_confirmation", "blocked", "cancelled"},
     "landed_pending_confirmation": {"active", "done", "blocked"},
-    "blocked": {"inbox", "queued", "active", "needs_input", "cancelled"},
+    # landed_pending_confirmation: an operator resumes main-CI confirmation of an already merged change.
+    "blocked": {"inbox", "queued", "active", "needs_input", "cancelled", "landed_pending_confirmation"},
     "needs_input": {"inbox", "queued", "cancelled"},
     "done": set(),
     "cancelled": set(),

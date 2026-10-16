@@ -168,6 +168,36 @@ class IntegratorTest(unittest.TestCase):
         self.assertEqual(len(triage), 1)
         self.assertEqual((triage[0]["priority"], triage[0]["status"]), ("urgent", "inbox"))
 
+    def test_superseded_main_run_is_confirmed_by_the_next_descendant_run(self) -> None:
+        task_id = self.verifying_task()
+        self.integrator.tick()
+        head = self.ledger.get_integration(task_id)["head_sha"]
+        self.add_run(branch=f"factory/{task_id}", headSha=head, event="pull_request", conclusion="success")
+        self.integrator.tick()
+        self.integrator.tick()
+        merge_sha = self.ledger.get_integration(task_id)["merge_sha"]
+        self.add_run(branch="main", headSha=merge_sha, event="push", conclusion="cancelled")
+        self.integrator.tick()
+        self.assertEqual(self.status(task_id), "landed_pending_confirmation")  # waits; no false triage
+        git(self.home.repo, "fetch", "-q", "origin")
+        git(self.home.repo, "checkout", "-q", "-B", "next", "origin/main")
+        (self.home.repo / "later.txt").write_text("later\n")
+        git(self.home.repo, "add", "later.txt")
+        git(self.home.repo, "commit", "-q", "-m", "later merge")
+        git(self.home.repo, "push", "-q", "origin", "HEAD:main")
+        later = git(self.home.repo, "rev-parse", "HEAD")
+        git(self.home.repo, "checkout", "-q", "main")
+        self.add_run(branch="main", headSha="f" * 40, event="push", conclusion="failure")  # unrelated commit
+        self.add_run(branch="main", headSha=later, event="push", status="in_progress", conclusion=None)
+        self.integrator.tick()
+        self.assertEqual(self.status(task_id), "landed_pending_confirmation")
+        state = json.loads(self.state.read_text())
+        state["runs"][-1].update(status="completed", conclusion="success")
+        self.state.write_text(json.dumps(state))
+        self.integrator.tick()
+        self.assertEqual(self.status(task_id), "done")
+        self.assertFalse([t for t in self.ledger.list_tasks() if t["source"].get("kind") == "ci_failure"])
+
     def test_merge_refuses_a_head_moved_outside_the_factory(self) -> None:
         task_id = self.verifying_task()
         self.integrator.tick()
