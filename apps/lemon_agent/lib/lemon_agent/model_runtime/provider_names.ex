@@ -4,7 +4,10 @@ defmodule LemonAgent.ModelRuntime.ProviderNames do
 
   This module owns Lemon-side provider alias normalization so callers do not
   duplicate provider/env/default-secret knowledge when resolving credentials or
-  runtime stream options.
+  runtime stream options. Onboarding also uses these canonical identities and
+  aliases, translating its additional input-only spellings locally before
+  writing canonical config ids. Those input conveniences are not runtime aliases:
+  a custom provider table may independently use the same name.
   """
 
   @providers %{

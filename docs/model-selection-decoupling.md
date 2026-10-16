@@ -122,6 +122,50 @@ delegate to `ModelCatalog`.
   native and in-process through the task APIs, so there is no
   provider-facade migration here.
 
+### Onboarding provider identities (reconciled)
+
+`LemonAgent.ModelRuntime.ProviderNames` owns canonical provider/config ids and
+runtime aliases. `LemonCli.Onboarding.Providers.find/1` uses that contract over
+the already-permitted CLI → `lemon_agent` dependency. The CLI's provider specs
+retain prompts, OAuth modules/options, auth modes, secret defaults and curated
+model presentation locally; no credential or provider-facade migration is
+involved.
+
+All existing onboarding spellings remain accepted. A small, explicitly
+onboarding-only compatibility map translates these inputs before configuration
+is written:
+
+| Onboarding input | Persisted provider id |
+| --- | --- |
+| `zhipu` | `zai` |
+| `kimi-k2` | `kimi` |
+| `kimi-code` | `kimi_coding` |
+| `chatgpt` | `openai-codex` |
+| `google-ai-studio`, `gemini-api` | `google` |
+| `opencode-zen` | `opencode` |
+| `open-router` | `openrouter` |
+
+These are **not new runtime aliases**. Onboarding always writes the resolved
+canonical id to the provider table and defaults, which the runtime resolves
+without reinterpreting the input spelling. Existing runtime aliases come
+directly from `ProviderNames`, including `glm`/`z.ai` → `zai`, `moonshot` →
+`kimi`, and `gemini_cli`/`gemini-cli`/`gemini` → `google_gemini_cli`.
+`gemini` continues to mean Gemini CLI, not Google's API-key provider.
+
+This split preserves custom identities: an existing `[providers.zhipu]` or
+`[providers.gemini-api]` remains an independent custom endpoint at runtime,
+including qualified model selectors, defaults, credentials, model overrides and
+routing/fallback plans. An unconfigured onboarding-only spelling does not select
+a built-in at runtime. Use the canonical id printed/written by onboarding for
+runtime selectors (for example, `zai:glm-5`, not `zhipu:glm-5`).
+No existing configuration or credentials are rewritten.
+
+Onboarding-only spellings must target canonical config ids and must not overlap
+any runtime alias; a collision fails at compilation rather than silently
+changing its destination. Regression tests cover every supported onboarding
+spelling through config and runtime lookup, runtime alias ownership (including
+the intentional Bedrock config-name sharing), and custom/qualified selectors.
+
 ### Remaining phases (not started)
 
 These consumers still resolve provider/model/credential details locally and
@@ -133,31 +177,6 @@ available"):
   `provider_fallback.ex` — per-session model resolution and the live
   fallback-chain walk (which provider to actually try next after a
   failure), as opposed to `ModelCatalog`'s "what's pickable" snapshot.
-- `apps/lemon_cli/lib/lemon_cli/onboarding/providers.ex` (and the
-  `LemonCli.Onboarding.Provider` struct it builds from in `onboarding/provider.ex`)
-  — **boundary-blocked, not just deferred.** `lemon_cli` is only permitted to
-  depend on `ai` and `lemon_core` (`docs/architecture_boundaries.md:18`), and
-  `LemonAgent.ModelRuntime.ProviderNames` lives in `agent_core`, which isn't in
-  that list. Migrating this file requires a deliberate governance decision
-  first — either extend `lemon_cli`'s permitted deps to include `agent_core`,
-  or move `ProviderNames` (or an equivalent) down into `ai`, which `lemon_cli`
-  already depends on. Don't reach for a dynamic `Code.ensure_loaded?`/`apply`
-  workaround to dodge this; it defeats the point of the boundary check.
-  (`apps/lemon_cli/lib/lemon_cli/setup/provider.ex` has no local table at
-  all — it's a thin wrapper delegating to `Mix.Tasks.Lemon.Onboard` — so
-  nothing to migrate there regardless of the governance outcome.)
-  Only a thin slice of the onboarding table actually overlaps
-  `ProviderNames`: `id`, `aliases`, and `default_secret_name`/
-  `default_secret_name_by_mode`. The rest (OAuth module refs into
-  `LemonAi.Auth.*`, API-key prompts, choice labels, `oauth_opts_builder`, CLI
-  switches, curated `preferred_models`) is onboarding-flow presentation data
-  with no facade equivalent and stays local regardless of how the boundary
-  question is resolved — same pattern as `arena_domains` presentation data.
-  **Reconciliation prerequisite:** the two tables have already drifted, and
-  this needs fixing as part of any future migration to stay
-  behavior-preserving: `lemon_cli`'s table has aliases `ProviderNames` is
-  missing (`"zhipu"` → `zai`, `"kimi-k2"` → `kimi`), and `ProviderNames` has
-  an alias `lemon_cli`'s table is missing (`"gemini_cli"` → `google_gemini_cli`).
 - `apps/lemon_core/lib/lemon_core/provider_config_resolver.ex` and
   `provider_pool_rotator.ex` — provider-specific stream-option resolution
   (project/region/deployment-map/API-key assembly per provider) and

@@ -2,6 +2,31 @@ defmodule LemonCli.Onboarding.Providers do
   @moduledoc false
 
   alias LemonCli.Onboarding.Provider
+  alias LemonAgent.ModelRuntime.ProviderNames
+
+  # Input conveniences for onboarding only, not runtime provider identities.
+  # Always persist the canonical id returned by find/1, never these spellings:
+  # a runtime config table with one of these names may be a custom endpoint.
+  @onboarding_aliases %{
+    "chatgpt" => "openai-codex",
+    "opencode-zen" => "opencode",
+    "google-ai-studio" => "google",
+    "gemini-api" => "google",
+    "kimi-k2" => "kimi",
+    "kimi-code" => "kimi_coding",
+    "zhipu" => "zai",
+    "open-router" => "openrouter"
+  }
+
+  for {name, id} <- @onboarding_aliases do
+    if ProviderNames.canonical_name(name) do
+      raise ArgumentError, "onboarding-only spelling #{name} conflicts with a runtime identity"
+    end
+
+    if ProviderNames.config_name(id) != id do
+      raise ArgumentError, "onboarding spelling #{name} must target a canonical config id"
+    end
+  end
 
   @providers [
     %Provider{
@@ -24,7 +49,6 @@ defmodule LemonCli.Onboarding.Providers do
         "claude-opus-5-5",
         "claude-sonnet-5"
       ],
-      aliases: ["claude"],
       api_key_prompt: "Enter your Anthropic API key: ",
       api_key_choice_label: "Paste API key",
       oauth_choice_label: "Sign in with Claude Pro/Max (browser)",
@@ -61,7 +85,6 @@ defmodule LemonCli.Onboarding.Providers do
       auth_modes: [:oauth, :api_key, :codex_cli, :device],
       default_auth_mode: :oauth,
       preferred_models: ["gpt-6.1-sol", "gpt-6-sol", "gpt-5.6-sol"],
-      aliases: ["chatgpt", "codex", "openai_codex"],
       api_key_prompt: "Enter your OpenAI Codex token: ",
       api_key_choice_label: "Paste existing token",
       oauth_choice_label: "Sign in with ChatGPT (browser OAuth)",
@@ -93,7 +116,6 @@ defmodule LemonCli.Onboarding.Providers do
       auth_modes: [:oauth, :api_key],
       default_auth_mode: :oauth,
       preferred_models: ["gpt-6.1-sol", "claude-sonnet-5.5", "gpt-5"],
-      aliases: ["copilot", "github-copilot"],
       switches: [enterprise_domain: :string, skip_enable_models: :boolean],
       oauth_opts_builder: &__MODULE__.copilot_oauth_opts/1,
       api_key_prompt: "Enter your GitHub Copilot token: ",
@@ -113,7 +135,6 @@ defmodule LemonCli.Onboarding.Providers do
       auth_modes: [:oauth, :api_key],
       default_auth_mode: :oauth,
       preferred_models: ["gemini-4-argon-high", "gemini-pro-agent", "gemini-3-pro-high"],
-      aliases: ["antigravity", "google-antigravity"],
       api_key_prompt:
         "Paste an Antigravity credential payload (for example JSON with token/projectId): ",
       api_key_choice_label: "Paste existing credential",
@@ -133,7 +154,6 @@ defmodule LemonCli.Onboarding.Providers do
       auth_modes: [:api_key, :oauth],
       default_auth_mode: :api_key,
       preferred_models: ["glm-5.3", "glm-5.2", "glm-5"],
-      aliases: ["glm", "zhipu", "z-ai", "z.ai"],
       api_key_prompt: "Enter your Z.AI API key: ",
       api_key_choice_label: "Paste API key",
       oauth_choice_label: "Sign in with Z.AI (creates an API key named lemon)",
@@ -151,7 +171,6 @@ defmodule LemonCli.Onboarding.Providers do
       auth_modes: [:api_key],
       default_auth_mode: :api_key,
       preferred_models: ["kimi-k3", "kimi-k2.7-code", "k2p5"],
-      aliases: ["kimi-k2", "moonshot"],
       api_key_prompt: "Enter your Kimi API key: ",
       api_key_choice_label: "Paste API key",
       auth_source_by_mode: %{api_key: "api_key"}
@@ -166,7 +185,6 @@ defmodule LemonCli.Onboarding.Providers do
       auth_modes: [:api_key],
       default_auth_mode: :api_key,
       preferred_models: ["MiniMax-M3", "MiniMax-M2.7", "MiniMax-M2.5"],
-      aliases: ["mini-max", "minimax-m2"],
       api_key_prompt: "Enter your MiniMax API key: ",
       api_key_choice_label: "Paste API key",
       auth_source_by_mode: %{api_key: "api_key"}
@@ -185,36 +203,21 @@ defmodule LemonCli.Onboarding.Providers do
         "accounts/fireworks/models/glm-5p3",
         "accounts/fireworks/routers/kimi-k2p5-turbo"
       ],
-      aliases: ["fireworks-ai", "fireworks_ai"],
       api_key_prompt: "Enter your Fireworks API key: ",
       api_key_choice_label: "Paste API key",
       auth_source_by_mode: %{api_key: "api_key"}
     },
-    Provider.api_key("google", "Google Gemini API", "Gemini API key (Google AI Studio)",
-      aliases: ["google-ai-studio", "gemini-api"]
-    ),
+    Provider.api_key("google", "Google Gemini API", "Gemini API key (Google AI Studio)"),
     Provider.api_key("groq", "Groq", "Groq API key"),
     Provider.api_key("cerebras", "Cerebras", "Cerebras API key"),
-    Provider.api_key("deepseek", "DeepSeek", "DeepSeek API key", aliases: ["deep-seek"]),
+    Provider.api_key("deepseek", "DeepSeek", "DeepSeek API key"),
     Provider.api_key("mistral", "Mistral", "Mistral API key"),
-    Provider.api_key("huggingface", "Hugging Face", "Hugging Face token for Inference Providers",
-      aliases: ["hugging-face", "hf"]
-    ),
-    Provider.api_key("qwen", "Qwen (DashScope)", "Alibaba Cloud DashScope API key",
-      aliases: ["dashscope"]
-    ),
-    Provider.api_key("vercel_ai_gateway", "Vercel AI Gateway", "Vercel AI Gateway API key",
-      aliases: ["vercel-ai-gateway", "vercel"]
-    ),
-    Provider.api_key("opencode", "OpenCode Zen", "OpenCode Zen API key",
-      aliases: ["opencode-zen"]
-    ),
-    Provider.api_key("opencode_go", "OpenCode Go", "OpenCode Go API key",
-      aliases: ["opencode-go"]
-    ),
-    Provider.api_key("minimax_cn", "MiniMax (China)", "MiniMax China API key",
-      aliases: ["minimax-cn"]
-    ),
+    Provider.api_key("huggingface", "Hugging Face", "Hugging Face token for Inference Providers"),
+    Provider.api_key("qwen", "Qwen (DashScope)", "Alibaba Cloud DashScope API key"),
+    Provider.api_key("vercel_ai_gateway", "Vercel AI Gateway", "Vercel AI Gateway API key"),
+    Provider.api_key("opencode", "OpenCode Zen", "OpenCode Zen API key"),
+    Provider.api_key("opencode_go", "OpenCode Go", "OpenCode Go API key"),
+    Provider.api_key("minimax_cn", "MiniMax (China)", "MiniMax China API key"),
     %Provider{
       id: "google_gemini_cli",
       display_name: "Google Gemini CLI",
@@ -232,7 +235,6 @@ defmodule LemonCli.Onboarding.Providers do
         "gemini-3-pro-preview",
         "gemini-3-flash-preview"
       ],
-      aliases: ["gemini", "gemini-cli", "google-gemini-cli"],
       switches: [project_id: :string],
       oauth_opts_builder: &__MODULE__.gemini_cli_oauth_opts/1,
       api_key_prompt:
@@ -256,7 +258,6 @@ defmodule LemonCli.Onboarding.Providers do
       auth_modes: [:oauth, :api_key],
       default_auth_mode: :oauth,
       preferred_models: ["anthropic/claude-sonnet-5.5", "openai/gpt-6.1-sol"],
-      aliases: ["open-router"],
       api_key_prompt: "Enter your OpenRouter API key: ",
       api_key_choice_label: "Paste API key",
       oauth_choice_label: "Sign in with OpenRouter (browser)",
@@ -276,7 +277,6 @@ defmodule LemonCli.Onboarding.Providers do
       auth_modes: [:api_key, :oauth],
       default_auth_mode: :api_key,
       preferred_models: ["grok-4.7", "grok-4.6", "grok-code-fast-1"],
-      aliases: ["grok", "x-ai"],
       api_key_prompt: "Enter your xAI API key: ",
       api_key_choice_label: "Paste API key",
       oauth_choice_label: "Sign in with SuperGrok or X Premium+ (device code)",
@@ -296,7 +296,6 @@ defmodule LemonCli.Onboarding.Providers do
       auth_modes: [:oauth, :api_key],
       default_auth_mode: :oauth,
       preferred_models: ["k3", "kimi-for-coding", "kimi-k2.5-coding"],
-      aliases: ["kimi-code", "kimi-for-coding"],
       api_key_prompt: "Enter your Kimi Code API key: ",
       api_key_choice_label: "Paste API key",
       oauth_choice_label: "Sign in with Kimi Code (device code)",
@@ -311,11 +310,9 @@ defmodule LemonCli.Onboarding.Providers do
                  id = Atom.to_string(preset.id)
 
                  if preset.local do
-                   Provider.local(id, preset.name, aliases: preset.aliases)
+                   Provider.local(id, preset.name)
                  else
-                   Provider.api_key(id, preset.name, "#{preset.name} API key",
-                     aliases: preset.aliases
-                   )
+                   Provider.api_key(id, preset.name, "#{preset.name} API key")
                  end
                end) ++
                [Provider.local("custom", "Custom OpenAI-compatible endpoint", custom: true)]
@@ -327,11 +324,12 @@ defmodule LemonCli.Onboarding.Providers do
   def find(value) when is_atom(value), do: value |> Atom.to_string() |> find()
 
   def find(value) when is_binary(value) do
-    normalized = normalize_name(value)
+    id =
+      ProviderNames.config_name(value) ||
+        Map.get(@onboarding_aliases, normalize_name(value)) ||
+        normalize_name(value)
 
-    Enum.find(@providers, fn %Provider{id: id, aliases: aliases} ->
-      normalize_name(id) == normalized or Enum.any?(aliases, &(normalize_name(&1) == normalized))
-    end)
+    Enum.find(@providers, &(normalize_name(&1.id) == normalize_name(id)))
   end
 
   def find(_), do: nil
