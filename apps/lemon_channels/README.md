@@ -81,12 +81,18 @@ affect a run. Scheduled runs and direct notifications do not start typing.
 
 **Direct outbound**: Adapter helpers and other low-level callers may still enqueue `OutboundPayload` structs into the Outbox. The Outbox applies chunking (splitting long messages at sentence/word boundaries), deduplication (idempotency keys with a 1-hour TTL), and rate limiting (token bucket per channel/account). Messages are then delivered via the adapter's `deliver/1` callback with exponential-backoff retry on transient failures.
 
-Delivery workers are temporary supervised tasks. Adapter exceptions, malformed
-adapter results, worker exits, and explicitly unknown outcomes report a terminal
-failure to the notifier, release the delivery group, and do not replay the
-external write. A later message in that group can still proceed; unrelated
-groups are unaffected. Platform rejections remain explicit errors, and known
-transient failures such as rate limits still use the configured retry policy.
+Delivery workers are temporary supervised tasks. Delivery is **at-least-once**
+for the channels whose adapters report an unknown outcome: an adapter exception, malformed adapter result, worker exit
+or explicitly unknown outcome (`{:outcome_unknown, _}`; the platform may already
+have accepted the write) is retried with the same payload and idempotency key
+under the bounded retry policy below, so a duplicate message is possible but a
+silently lost one is not. Only when the retry budget is spent does the notifier
+receive the terminal failure; the delivery group is then released. This is the
+deliberate exception to the repository rule that an `:outcome_unknown` mutation
+is never automatically retried, and it applies to outbox message delivery
+alone. Dedupe marks an idempotency key only on confirmed delivery, so confirmed
+sends are never re-sent. Platform rejections remain explicit terminal errors,
+and rate limits honor `retry_after`.
 
 An enqueue acknowledgement means queued, not delivered. A timeout may occur
 after the queue accepted the write, so Telegram's direct-send fallback runs only
@@ -435,19 +441,32 @@ end
 
 ### Retry Behavior
 
-- Exponential backoff: 1s, 2s, 4s (3 retries by default).
-- Only explicit pre-write failures (`failed_connect`, connection refused, DNS)
-  and HTTP 429 responses are retryable; rate limits honor `retry_after`.
+- Exponential backoff: 1s, 2s, 4s (3 retries by default, `max_attempts` under
+  `config :lemon_channels, LemonChannels.Outbox`). One budget covers every
+  retryable failure; when it is spent the last failure is reported terminal.
+- Retried with the same payload and idempotency key: explicit pre-write
+  failures (`failed_connect`, connection refused, DNS), HTTP 429 responses
+  (rate limits honor `retry_after`) and unknown outcomes (`:outcome_unknown`,
+  `{:outcome_unknown, reason}`, adapter exceptions, worker exits).
+- Unknown outcomes are retried at-least-once for the covered channels, by design: a
+  duplicate message is preferred over a lost one. Intermediate unknown
+  outcomes are not reported to the notifier and a Warning is logged per retry. SMTP network failures after DATA and WhatsApp
+  bridge send exceptions are still terminal (tracked in F-0059).
+- Dedupe still suppresses re-sends of confirmed deliveries: a key is marked
+  only on confirmed delivery, a repeated enqueue of a confirmed key returns
+  `{:error, :duplicate}`, and a pending retry whose key was confirmed meanwhile
+  is dropped and notified `{:error, :duplicate}`.
+- Unrecognized errors and definite rejections (such as other HTTP 4xx) are
+  terminal and never requeued.
 - Telegram sends, uploads and media groups with a receive timeout, closed
-  connection or HTTP 5xx return `{:error, {:outcome_unknown, reason}}` without
-  retrying or falling back to another send. Edits conservatively use the same
-  policy. Other unrecognized errors, adapter exceptions and worker exits are
-  terminal, never automatically requeued.
+  connection or HTTP 5xx return `{:error, {:outcome_unknown, reason}}`; the
+  adapter does not retry or fall back to another send itself, the outbox owns
+  the retry. Edits conservatively use the same policy.
 - Discord creates include a delivery-stable nonce and `enforce_nonce` so
-  Nostrum's internal stream retries are idempotent. Returned ambiguous errors
-  are terminal/unknown rather than retried by the outbox.
-- An unknown outcome is not proof of failure: the platform may already display
-  the reply. Inspect it before explicitly sending again.
+  Nostrum's internal stream retries and outbox retries are idempotent.
+- After the retry budget is spent, the terminal unknown outcome is still not
+  proof of failure: the platform may already display the reply. Inspect it
+  before explicitly sending again.
 - Max queue size: 5000 (configurable)
 
 ### Stats

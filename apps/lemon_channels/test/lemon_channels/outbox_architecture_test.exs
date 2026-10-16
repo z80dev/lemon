@@ -1,7 +1,7 @@
 defmodule LemonChannels.OutboxArchitectureTest do
   use ExUnit.Case, async: false
 
-  alias LemonChannels.{Outbox, OutboundPayload, Registry}
+  alias LemonChannels.{OutboundPayload, Outbox, Registry}
   alias LemonChannels.Outbox.{Chunker, Dedupe, RateLimiter}
 
   defmodule BlockingPlugin do
@@ -258,7 +258,14 @@ defmodule LemonChannels.OutboxArchitectureTest do
 
   test "a crashing delivery worker does not wedge processing bookkeeping (supervised task + crash handling)" do
     Registry.register(CrashPlugin)
-    on_exit(fn -> Registry.unregister(CrashPlugin.id()) end)
+    # A worker exit is an unknown outcome retried with backoff; this test checks
+    # the terminal notification, so it spends no retry budget.
+    Application.put_env(:lemon_channels, Outbox, max_attempts: 0)
+
+    on_exit(fn ->
+      Application.delete_env(:lemon_channels, Outbox)
+      Registry.unregister(CrashPlugin.id())
+    end)
 
     baseline_processing = Outbox.stats().processing_count
     notify_ref = make_ref()

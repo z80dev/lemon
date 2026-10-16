@@ -49,8 +49,20 @@ and script notifications.
 
 - Outbox FIFO grouping includes channel, account, peer kind/id and thread.
   Preserve order within a group while allowing independent groups to progress.
-- Retries are bounded and classify platform failures. Honor rate-limit hints;
-  do not turn unknown side-effect outcomes into indiscriminate duplicate sends.
+- Outbox delivery is at-least-once for the channels whose adapters report an unknown outcome. An unknown outcome
+  (adapter `{:outcome_unknown, _}`, adapter exception, worker exit) is retried
+  with the same payload and idempotency key within the bounded `max_attempts`
+  budget, then reported terminal. This is the one deliberate exception to the
+  root never-retry `:outcome_unknown` rule: a rare duplicate message is cheaper
+  than a lost one, and sending is not a state mutation to reconcile. Dedupe is
+  marked only on confirmed delivery and still suppresses re-sends of confirmed
+  keys, including pending retries. Adapters keep returning ambiguous writes as
+  `{:outcome_unknown, _}` and never retry them internally; the outbox owns that
+  retry. Unrecognized errors and definite rejections stay terminal, and the
+  exception covers no other mutation (inbound submission, enqueue timeouts).
+  SMTP network failures after DATA and WhatsApp bridge send exceptions are
+  still terminal (tracked in F-0059).
+  Honor rate-limit hints.
 - Telegram markdown entity offsets are UTF-16, not bytes/graphemes. Truncation
   must preserve native resume lines and table column boundaries.
 - Transport GenServers remain lifecycle shells; add behavior to existing local

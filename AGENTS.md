@@ -108,7 +108,10 @@ is independent of its Phoenix dashboard; keep game rules in `lemon_sim`.
 
 - A successful run submission contains a non-empty run ID. A mutation returning
   `:outcome_unknown` may already have taken effect: retain its fixed ID and
-  reconcile, never automatically retry. Query failures are not idle/empty state.
+  reconcile, never automatically retry. Outbox message delivery alone is exempt:
+  it retries unknown outcomes at-least-once, bounded and with the same
+  idempotency key, because a rare duplicate message costs less than a lost one.
+  Query failures are not idle/empty state.
 - Operator WebSocket authentication requires a configured token by default.
   Tokenless compatibility is explicit and direct-loopback-only. Authenticate
   using the actual socket peer, not caller-supplied role or address fields.

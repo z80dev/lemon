@@ -9,9 +9,23 @@ defmodule LemonChannels.Outbox do
   - Automatic chunking for long messages
   - Telemetry emission
 
-  Adapter exceptions and worker exits are terminal, outcome-unknown failures:
-  a platform may have accepted the write before the worker died. They notify
-  the caller, release the delivery group, and are never replayed automatically.
+  ## Duplicate-delivery policy: at-least-once, bounded
+
+  Delivery is at-least-once for the channels whose adapters report an unknown outcome. A delivery whose outcome is
+  unknown (an adapter `{:outcome_unknown, _}` result, an adapter exception or a
+  worker exit: the platform may have accepted the write) is retried with the
+  same payload, and therefore the same idempotency key, instead of being
+  dropped. A duplicate message is preferred over a silently lost one. This
+  deliberately exempts outbox message delivery from the repository rule that an
+  `:outcome_unknown` mutation is never automatically retried.
+
+  Retries are bounded by `max_attempts` (default 3 retries), one budget shared
+  by all retryable failures, with exponential backoff. When the budget is spent
+  the last failure is reported to the notifier as terminal. Dedupe is marked only
+  on confirmed delivery, so a confirmed send is never re-sent: a repeated
+  enqueue with the same idempotency key, and a pending retry whose key was
+  confirmed meanwhile, are suppressed with `{:error, :duplicate}`. Unrecognized
+  errors and definite rejections are never retried.
   """
 
   use GenServer
@@ -39,7 +53,8 @@ defmodule LemonChannels.Outbox do
   Returns `{:ok, ref}` or `{:error, reason}`.
 
   A call timeout returns `{:error, {:outcome_unknown, :enqueue_timeout}}`:
-  admission may still complete. Callers must not resend automatically.
+  admission may still complete. Callers must not resend automatically; retries
+  of an admitted delivery are owned by the outbox itself (see above).
   """
   @spec enqueue(OutboundPayload.t()) :: {:ok, reference()} | {:error, term()}
   def enqueue(%OutboundPayload{} = payload) do
@@ -197,38 +212,7 @@ defmodule LemonChannels.Outbox do
 
           {:error, reason} ->
             reason = LemonChannels.DeliveryError.classify(reason)
-
-            # Retry only for retryable failures.
-            #
-            # `:unknown_channel` is a configuration/programming error and will never succeed by retrying.
-            if retryable_reason?(reason) and entry.attempts < max_attempts() do
-              {entry, delay_ms} = schedule_retry(entry, reason)
-              queue = :queue.in(entry, state.queue)
-              state = %{state | queue: queue}
-
-              emit_queue_depth_telemetry(state, :retry_scheduled, %{
-                delay_ms: delay_ms,
-                attempts: entry.attempts,
-                reason: inspect(reason, limit: 50)
-              })
-
-              Process.send_after(self(), :process_queue, delay_ms)
-              {:noreply, state}
-            else
-              reason = finalize_failure_reason(reason)
-              failure_meta = outbox_failure_meta(entry)
-
-              Logger.warning(
-                "Delivery failed after #{entry.attempts} attempts: #{inspect(reason)} " <>
-                  "meta=#{inspect(failure_meta)}"
-              )
-
-              maybe_notify_delivery(entry.payload, {:error, reason})
-
-              # Continue processing queue even after failure
-              send(self(), :process_queue)
-              {:noreply, state}
-            end
+            {:noreply, handle_delivery_failure(state, entry, reason)}
         end
     end
   end
@@ -243,24 +227,58 @@ defmodule LemonChannels.Outbox do
         state = %{state | processing: processing}
         state = release_processing_group(state, entry, task_ref)
 
-        # A worker may have sent the message before dying. Release the group,
-        # report the ambiguous failure, and never replay that external write.
-        reason = {:worker_exit, reason}
-        failure_meta = outbox_failure_meta(entry)
-
-        Logger.warning(
-          "Delivery worker exited after #{entry.attempts} attempts: #{inspect(reason)} " <>
-            "meta=#{inspect(failure_meta)}"
-        )
-
-        maybe_notify_delivery(entry.payload, {:error, reason})
-        send(self(), :process_queue)
-        {:noreply, state}
+        # A worker may have sent the message before dying, so its outcome is
+        # unknown and follows the bounded at-least-once retry policy.
+        {:noreply, handle_delivery_failure(state, entry, {:worker_exit, reason})}
     end
   end
 
   def handle_info(_msg, state) do
     {:noreply, state}
+  end
+
+  # Retryable failures are requeued while the shared `max_attempts` budget
+  # lasts; the retried entry keeps its payload and therefore its idempotency key.
+  # Anything else, or an exhausted budget, is reported as a terminal failure.
+  # `:unknown_channel` is a configuration/programming error and will never
+  # succeed by retrying.
+  defp handle_delivery_failure(state, entry, reason) do
+    if retryable_reason?(reason) and entry.attempts < max_attempts() do
+      {entry, delay_ms} = schedule_retry(entry, reason)
+
+      if unknown_outcome?(reason) do
+        Logger.warning(
+          "Retrying delivery after unknown outcome (at-least-once; a duplicate is possible): " <>
+            "attempt=#{entry.attempts}/#{max_attempts()} reason=#{inspect(reason, limit: 50)} " <>
+            "meta=#{inspect(outbox_failure_meta(entry))}"
+        )
+      end
+
+      state = %{state | queue: :queue.in(entry, state.queue)}
+
+      emit_queue_depth_telemetry(state, :retry_scheduled, %{
+        delay_ms: delay_ms,
+        attempts: entry.attempts,
+        reason: inspect(reason, limit: 50)
+      })
+
+      Process.send_after(self(), :process_queue, delay_ms)
+      state
+    else
+      reason = finalize_failure_reason(reason)
+      failure_meta = outbox_failure_meta(entry)
+
+      Logger.warning(
+        "Delivery failed after #{entry.attempts} retries: #{inspect(reason)} " <>
+          "meta=#{inspect(failure_meta)}"
+      )
+
+      maybe_notify_delivery(entry.payload, {:error, reason})
+
+      # Continue processing queue even after failure
+      send(self(), :process_queue)
+      state
+    end
   end
 
   defp maybe_notify_delivery(%OutboundPayload{notify_pid: pid, notify_ref: ref} = payload, result)
@@ -416,34 +434,60 @@ defmodule LemonChannels.Outbox do
       {:ready, entry, queue, wait_ms} ->
         min_wait_ms = min_wait(min_wait_ms, wait_ms)
 
-        case RateLimiter.consume(entry.payload.channel_id, entry.payload.account_id) do
-          :ok ->
-            case start_delivery_task(entry) do
-              {:ok, %Task{} = task} ->
-                processing = Map.put(state.processing, task.ref, entry)
-                processing_groups = Map.put(state.processing_groups, entry.group_key, task.ref)
-
-                state = %{
-                  state
-                  | queue: queue,
-                    processing: processing,
-                    processing_groups: processing_groups
-                }
-
-                do_process_available(state, min_wait_ms)
-
-              {:error, reason} ->
-                Logger.warning("Failed to start outbox delivery worker: #{inspect(reason)}")
-                requeued = :queue.in(entry, queue)
-                {%{state | queue: requeued}, min_wait(min_wait_ms, 50)}
-            end
-
-          {:rate_limited, wait_ms} ->
-            requeued = :queue.in(entry, queue)
-            min_wait_ms = min_wait(min_wait_ms, wait_ms)
-            do_process_available(%{state | queue: requeued}, min_wait_ms)
+        if retry_already_confirmed?(entry) do
+          suppress_confirmed_retry(entry)
+          do_process_available(%{state | queue: queue}, min_wait_ms)
+        else
+          dispatch_entry(state, entry, queue, min_wait_ms)
         end
     end
+  end
+
+  defp dispatch_entry(state, entry, queue, min_wait_ms) do
+    case RateLimiter.consume(entry.payload.channel_id, entry.payload.account_id) do
+      :ok ->
+        case start_delivery_task(entry) do
+          {:ok, %Task{} = task} ->
+            processing = Map.put(state.processing, task.ref, entry)
+            processing_groups = Map.put(state.processing_groups, entry.group_key, task.ref)
+
+            state = %{
+              state
+              | queue: queue,
+                processing: processing,
+                processing_groups: processing_groups
+            }
+
+            do_process_available(state, min_wait_ms)
+
+          {:error, reason} ->
+            Logger.warning("Failed to start outbox delivery worker: #{inspect(reason)}")
+            requeued = :queue.in(entry, queue)
+            {%{state | queue: requeued}, min_wait(min_wait_ms, 50)}
+        end
+
+      {:rate_limited, wait_ms} ->
+        requeued = :queue.in(entry, queue)
+        min_wait_ms = min_wait(min_wait_ms, wait_ms)
+        do_process_available(%{state | queue: requeued}, min_wait_ms)
+    end
+  end
+
+  # A retried entry whose idempotency key was confirmed delivered in the
+  # meantime (e.g. by a same-key entry that succeeded first) must not be re-sent.
+  defp retry_already_confirmed?(%{attempts: attempts, payload: payload}) when attempts > 0 do
+    check_idempotency(payload) == :duplicate
+  end
+
+  defp retry_already_confirmed?(_entry), do: false
+
+  defp suppress_confirmed_retry(entry) do
+    Logger.info(
+      "Suppressed delivery retry: idempotency key already confirmed delivered " <>
+        "meta=#{inspect(outbox_failure_meta(entry))}"
+    )
+
+    maybe_notify_delivery(entry.payload, {:error, :duplicate})
   end
 
   defp dequeue_next_available(queue, processing_groups) do
@@ -601,8 +645,9 @@ defmodule LemonChannels.Outbox do
                 })
               )
 
-              # Observability only: let the supervisor report DOWN, never
-              # turn a potentially completed write into a retryable error.
+              # Observability only: let the supervisor report DOWN. The outbox
+              # treats a worker exit as an unknown outcome and retries it under
+              # the bounded at-least-once policy.
               reraise error, __STACKTRACE__
           end
       end
@@ -717,7 +762,22 @@ defmodule LemonChannels.Outbox do
   defp retryable_reason?({:failed_connect, _reason}), do: true
   defp retryable_reason?(:econnrefused), do: true
   defp retryable_reason?(:nxdomain), do: true
-  defp retryable_reason?(_reason), do: false
+  defp retryable_reason?(reason), do: unknown_outcome?(reason)
+
+  # The platform may already have accepted the write; at-least-once policy
+  # retries these with the same idempotency key. The Discord `*_crashed`
+  # wrappers are rescued adapter exceptions and `{:smtp, :timeout}` is the
+  # email adapter's deadline, which can expire while awaiting acknowledgement
+  # after the message was sent. Definite SMTP rejections and local validation
+  # failures are not listed here and stay terminal.
+  defp unknown_outcome?(:outcome_unknown), do: true
+  defp unknown_outcome?({:outcome_unknown, _detail}), do: true
+  defp unknown_outcome?({:worker_exit, _reason}), do: true
+  defp unknown_outcome?({:discord_send_crashed, _error}), do: true
+  defp unknown_outcome?({:discord_file_crashed, _error}), do: true
+  defp unknown_outcome?({:discord_edit_crashed, _error}), do: true
+  defp unknown_outcome?({:smtp, :timeout}), do: true
+  defp unknown_outcome?(_reason), do: false
 
   defp queue_full?(state, incoming_count)
        when is_integer(incoming_count) and incoming_count > 0 do
