@@ -174,7 +174,7 @@ defmodule CodingAgent.Tools.IgnoreFilter do
     ]
 
     port =
-      Port.open({:spawn_executable, git}, [
+      LemonCore.NativeProcess.open({:spawn_executable, git}, [
         :binary,
         :exit_status,
         :stderr_to_stdout,

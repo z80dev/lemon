@@ -70,7 +70,7 @@ defmodule CodingAgent.Wasm.Builder do
     args = ["build", "--release", "--manifest-path", manifest_path()]
 
     {output, exit_code} =
-      System.cmd("cargo", args,
+      LemonCore.NativeProcess.cmd("cargo", args,
         cd: repo_root(),
         env: [{"CARGO_TARGET_DIR", target_dir()}],
         stderr_to_stdout: true

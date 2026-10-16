@@ -300,7 +300,7 @@ defmodule CodingAgent.Wasm.SidecarSession do
       {:cd, cwd}
     ]
 
-    port = Port.open({:spawn_executable, runtime_path}, opts)
+    port = LemonCore.NativeProcess.open({:spawn_executable, runtime_path}, opts)
     {:ok, port}
   rescue
     error -> {:error, {:port_start_failed, error}}

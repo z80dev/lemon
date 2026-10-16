@@ -243,7 +243,7 @@ defmodule CodingAgent.Tools.ReadFormatCommand do
       end
 
     {:ok,
-     Port.open({:spawn_executable, executable}, [
+     LemonCore.NativeProcess.open({:spawn_executable, executable}, [
        :binary,
        :exit_status,
        :stderr_to_stdout,

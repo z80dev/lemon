@@ -334,7 +334,7 @@ defmodule CodingAgent.SystemPrompt.Environment do
   # unbounded ls-files/status result. No shell is involved.
   defp git_command(git, cwd, args, timeout) do
     port =
-      Port.open({:spawn_executable, String.to_charlist(git)}, [
+      LemonCore.NativeProcess.open({:spawn_executable, String.to_charlist(git)}, [
         :binary,
         :exit_status,
         :use_stdio,

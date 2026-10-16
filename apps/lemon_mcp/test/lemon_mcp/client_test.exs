@@ -351,6 +351,78 @@ defmodule LemonMCP.ClientTest do
 
   alias LemonMCP.Protocol
 
+  test "passes the host port opener through to stdio without falling back on refusal" do
+    parent = self()
+    executable = System.find_executable("sh")
+
+    port_open = fn spec, opts ->
+      send(parent, {:port_open, spec, opts})
+      raise "host refused launch"
+    end
+
+    assert {:error, _reason} =
+             GenServer.start(LemonMCP.Client,
+               command: executable,
+               args: ["-c", "exit 0"],
+               cwd: File.cwd!(),
+               env: [{"MCP_HOST_TEST", "value"}],
+               port_open: port_open
+             )
+
+    assert_receive {:port_open, {:spawn_executable, ^executable}, opts}
+    assert opts[:args] == ["-c", "exit 0"]
+    assert opts[:cd] == File.cwd!()
+    assert opts[:env] == [{~c"MCP_HOST_TEST", ~c"value"}]
+    refute_receive {:port_open, _, _}
+  end
+
+  test "rejects malformed host port openers instead of using the default" do
+    for port_open <- [nil, :invalid, fn _ -> :unused end] do
+      assert {:error, _reason} =
+               GenServer.start(LemonMCP.Client,
+                 command: System.find_executable("sh"),
+                 args: ["-c", "exit 0"],
+                 port_open: port_open
+               )
+    end
+  end
+
+  test "stdio accepts a host-owned port and rejects refusal or malformed results" do
+    parent = self()
+
+    opener = fn spec, opts ->
+      port = Port.open(spec, opts)
+      send(parent, {:opened, port})
+      port
+    end
+
+    {:ok, transport} =
+      GenServer.start(LemonMCP.Transport.Stdio,
+        command: System.find_executable("sh"),
+        args: ["-c", "cat"],
+        port_open: opener
+      )
+
+    assert_receive {:opened, port}
+    assert is_port(port)
+    assert LemonMCP.Transport.Stdio.connected?(transport)
+    assert :ok = LemonMCP.Transport.Stdio.close(transport)
+    GenServer.stop(transport)
+
+    for {result, reason} <- [
+          {{:error, :host_refused}, :host_refused},
+          {nil, :invalid_port_open_result},
+          {:not_a_port, :invalid_port_open_result}
+        ] do
+      assert {:error, ^reason} =
+               GenServer.start(LemonMCP.Transport.Stdio,
+                 command: System.find_executable("sh"),
+                 args: ["-c", "exit 0"],
+                 port_open: fn _, _ -> result end
+               )
+    end
+  end
+
   describe "protocol operations" do
     test "initialize_request creates valid request" do
       request =

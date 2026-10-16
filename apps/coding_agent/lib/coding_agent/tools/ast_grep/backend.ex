@@ -10,7 +10,7 @@ defmodule CodingAgent.Tools.AstGrep.Backend do
   def run(executable, args, cwd, signal, timeout_ms)
       when is_integer(timeout_ms) and timeout_ms > 0 do
     port =
-      Port.open({:spawn_executable, String.to_charlist(executable)}, [
+      LemonCore.NativeProcess.open({:spawn_executable, String.to_charlist(executable)}, [
         :binary,
         :exit_status,
         :use_stdio,

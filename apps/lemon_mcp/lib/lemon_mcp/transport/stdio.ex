@@ -42,6 +42,7 @@ defmodule LemonMCP.Transport.Stdio do
           command: String.t(),
           args: [String.t()],
           env: [{String.t(), String.t()}],
+          port_open: (term(), list() -> port()),
           message_handler: (String.t() -> any()) | nil,
           buffer: String.t(),
           pending: map()
@@ -59,6 +60,8 @@ defmodule LemonMCP.Transport.Stdio do
   - `:command` - (required) The command to spawn the MCP server
   - `:args` - Arguments to pass to the command
   - `:env` - Additional environment variables as keyword list or map
+  - `:port_open` - Host opener `(spec, options -> port)` (default: `&Port.open/2`).
+    Must have arity two and return a port; refusals never fall back to `Port.open/2`.
   - `:message_handler` - Callback function for received messages `(String.t() -> any())`
   - `:name` - GenServer name registration
 
@@ -119,6 +122,7 @@ defmodule LemonMCP.Transport.Stdio do
       args: args,
       cwd: Keyword.get(opts, :cwd),
       env: normalize_env(env),
+      port_open: Keyword.get(opts, :port_open, &Port.open/2),
       message_handler: message_handler,
       buffer: "",
       pending: %{}
@@ -202,6 +206,9 @@ defmodule LemonMCP.Transport.Stdio do
   # Private Functions
   # ============================================================================
 
+  defp spawn_server(%{port_open: port_open}) when not is_function(port_open, 2),
+    do: {:error, :invalid_port_open}
+
   defp spawn_server(state) do
     port_options = [
       :binary,
@@ -217,9 +224,15 @@ defmodule LemonMCP.Transport.Stdio do
       if state.cwd, do: [{:cd, state.cwd} | port_options], else: port_options
 
     with {:ok, executable} <- find_executable(state.command) do
-      case Port.open({:spawn_executable, executable}, port_options) do
+      case state.port_open.({:spawn_executable, executable}, port_options) do
         port when is_port(port) ->
           {:ok, port}
+
+        {:error, reason} ->
+          {:error, reason}
+
+        _ ->
+          {:error, :invalid_port_open_result}
       end
     end
   rescue

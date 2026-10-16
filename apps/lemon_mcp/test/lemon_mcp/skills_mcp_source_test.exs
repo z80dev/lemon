@@ -247,6 +247,150 @@ defmodule LemonMCP.SkillsMcpSourceTest do
     :ok
   end
 
+  describe "native workload ownership" do
+    test "disabled and unconfigured sources do not record unsupported work", %{tmp_dir: dir} do
+      configure_native_tracking(dir)
+      Application.put_env(:lemon_skills, :mcp_disabled, true)
+
+      disabled =
+        start_supervised!({McpSource, name: nil, configs: [{:stdio, "unused", []}]})
+
+      assert McpSource.discover_tools(disabled, []) == []
+      assert {:error, :mcp_disabled} = McpSource.call_tool(disabled, "missing", %{}, [])
+      stop_supervised!(McpSource)
+
+      Application.put_env(:lemon_skills, :mcp_disabled, false)
+      System.delete_env("LEMON_MCP_DISABLED")
+      empty = start_supervised!({McpSource, name: nil, configs: []})
+      assert McpSource.discover_tools(empty, []) == []
+      assert {:error, :not_found} = McpSource.call_tool(empty, "missing", %{}, [])
+      assert LemonCore.NativeProcess.snapshot() == []
+    end
+
+    test "stdio tracks its local group without claiming whole-workload containment", %{
+      tmp_dir: dir
+    } do
+      configure_native_tracking(dir)
+      Application.put_env(:lemon_skills, :mcp_disabled, false)
+      System.delete_env("LEMON_MCP_DISABLED")
+      script = Path.join(dir, "owned_mcp_server.exs")
+      File.write!(script, fixture_server_script())
+
+      source =
+        start_supervised!(
+          {McpSource, name: nil, configs: [{:stdio, System.find_executable("elixir"), [script]}]}
+        )
+
+      tools = McpSource.discover_tools(source, [])
+      assert Enum.any?(tools, &(&1.label == "MCP echo"))
+      rows = LemonCore.NativeProcess.snapshot()
+
+      assert [{_, %{workload_identity: identity}, _}] =
+               Enum.filter(rows, fn {_, record, _} -> record.backend == :local end)
+
+      assert LemonCore.ProcessGroup.valid_identity?(identity)
+
+      assert Enum.any?(rows, fn {_, record, _} ->
+               record.backend == :unsupported and record.capacity_held
+             end)
+
+      # A cached read is local; refreshing an existing connection dispatches again.
+      assert McpSource.discover_tools(source, []) != []
+      assert length(LemonCore.NativeProcess.snapshot()) == length(rows)
+      assert McpSource.discover_tools(source, force_refresh: true) != []
+      refreshed = LemonCore.NativeProcess.snapshot()
+      assert length(refreshed) > length(rows)
+      assert Enum.count(refreshed, fn {_, record, _} -> record.backend == :local end) == 1
+
+      failure = Enum.find(tools, &(&1.label == "MCP fail"))
+      assert {:error, {:tool_error, _}} = McpSource.call_tool(source, failure.name, %{}, [])
+      assert length(LemonCore.NativeProcess.snapshot()) == length(refreshed) + 1
+
+      read_resource = Enum.find(tools, &(&1.label == "MCP resource_read"))
+      assert read_resource
+      assert {:error, _} = McpSource.call_tool(source, read_resource.name, %{}, [])
+      assert length(LemonCore.NativeProcess.snapshot()) == length(refreshed) + 1
+    end
+
+    test "already-connected HTTP discovery and failed calls retain uncertainty", %{tmp_dir: dir} do
+      Application.put_env(:lemon_skills, :mcp_disabled, false)
+      System.delete_env("LEMON_MCP_DISABLED")
+      port = start_http_transport()
+
+      source =
+        start_supervised!(
+          {McpSource, name: nil, configs: [{:http, "http://127.0.0.1:#{port}/mcp"}]}
+        )
+
+      tools = McpSource.discover_tools(source, [])
+      assert tools != []
+      configure_native_tracking(dir)
+      assert McpSource.discover_tools(source, []) != []
+      assert LemonCore.NativeProcess.snapshot() == []
+
+      assert McpSource.discover_tools(source, force_refresh: true) != []
+      rows = LemonCore.NativeProcess.snapshot()
+      assert rows != []
+
+      assert Enum.all?(rows, fn {_, record, _} ->
+               record.backend == :unsupported and record.capacity_held
+             end)
+
+      failure = Enum.find(tools, &(&1.label == "MCP fail"))
+      assert {:error, _} = McpSource.call_tool(source, failure.name, %{}, [])
+      assert length(LemonCore.NativeProcess.snapshot()) == length(rows) + 1
+    end
+
+    test "missing executable is a proven pre-dispatch refusal", %{tmp_dir: dir} do
+      configure_native_tracking(dir)
+      Application.put_env(:lemon_skills, :mcp_disabled, false)
+      System.delete_env("LEMON_MCP_DISABLED")
+
+      source =
+        start_supervised!(
+          {McpSource, name: nil, configs: [{:stdio, Path.join(dir, "missing-server"), []}]}
+        )
+
+      assert {:error, :connection_failed} = McpSource.discover_ready(source)
+
+      assert LemonCore.NativeProcess.snapshot() == []
+    end
+
+    test "failed dispatched startup retains unsupported ownership", %{tmp_dir: dir} do
+      configure_native_tracking(dir)
+      Application.put_env(:lemon_skills, :mcp_disabled, false)
+      System.delete_env("LEMON_MCP_DISABLED")
+      port = start_http_transport()
+
+      source =
+        start_supervised!(
+          {McpSource,
+           name: nil, configs: [{:http, "http://127.0.0.1:#{port}/missing", timeout_ms: 200}]}
+        )
+
+      assert {:error, :connection_failed} = McpSource.discover_ready(source)
+
+      assert [{_, %{backend: :unsupported, capacity_held: true}, %{}}] =
+               LemonCore.NativeProcess.snapshot()
+    end
+  end
+
+  defp configure_native_tracking(dir) do
+    previous = Application.fetch_env(:lemon_core, :native_process_ledger)
+    assert Process.whereis(LemonCore.NativeProcess) == nil
+    :ok = LemonCore.NativeProcess.configure!(Path.join(dir, "native.dets"))
+    ledger = Process.whereis(LemonCore.NativeProcess)
+
+    on_exit(fn ->
+      if Process.alive?(ledger), do: GenServer.stop(ledger)
+
+      case previous do
+        {:ok, value} -> Application.put_env(:lemon_core, :native_process_ledger, value)
+        :error -> Application.delete_env(:lemon_core, :native_process_ledger)
+      end
+    end)
+  end
+
   describe "validate_config/1" do
     test "accepts valid stdio config" do
       assert :ok = McpSource.validate_config({:stdio, "npx", ["-y", "server"]})

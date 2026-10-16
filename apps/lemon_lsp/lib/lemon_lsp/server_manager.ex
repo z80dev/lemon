@@ -803,7 +803,7 @@ defmodule LemonLsp.ServerManager do
       |> maybe_env(command.env)
       |> maybe_cd(cwd)
 
-    port = Port.open({:spawn_executable, executable}, port_opts)
+    port = LemonCore.NativeProcess.open({:spawn_executable, executable}, port_opts)
     os_pid = port_os_pid(port)
 
     {:ok,

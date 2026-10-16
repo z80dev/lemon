@@ -72,6 +72,12 @@ session/profile/run, and explicitly released after bounded idle time. The
 hybrid backend requires an explicit public backend and never treats a hosted
 failure as permission to fall back to a different local identity.
 
+When evaluation enables the core native-process ledger, the local driver is
+tracked before execution. Browser dispatch is separately recorded as uncertain:
+attached browsers and hosted sessions are not contained by the driver's process
+group, and a request error does not prove that external work never started.
+Authorization and unavailable-backend refusals happen before that dispatch record.
+
 ## Vetting a URL first
 
 ```elixir

@@ -292,7 +292,15 @@ defmodule CodingAgent.ACPTerminalExecutor do
   end
 
   defp request(run_id, method, params, timeout) do
-    case LemonCore.ACPClientBridge.request(run_id, method, params, timeout) do
+    # A remote create can have partial effects even when its response is an error.
+    # Only the bridge's missing-client refusal proves dispatch never happened.
+    intent = if method == "terminal/create", do: LemonCore.NativeProcess.unsupported!()
+    response = LemonCore.ACPClientBridge.request(run_id, method, params, timeout)
+
+    if match?({:error, :no_client}, response),
+      do: LemonCore.NativeProcess.reject_unsupported!(intent)
+
+    case response do
       {:ok, %{"result" => result}} when is_map(result) -> {:ok, result}
       {:ok, %{"result" => nil}} -> {:ok, %{}}
       {:ok, %{"error" => _}} -> {:error, :client_request_failed}

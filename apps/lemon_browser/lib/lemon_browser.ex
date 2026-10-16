@@ -16,6 +16,9 @@ defmodule LemonBrowser do
     with :ok <- authorize_method(method, args, opts),
          {:ok, backend, opts} <- resolve_backend(opts),
          true <- backend_available?(backend, opts) do
+      # Remote sessions and attached browsers are not contained by a local
+      # helper's group. Errors after dispatch cannot prove their termination.
+      LemonCore.NativeProcess.unsupported!()
       backend.request(method, args, timeout_ms, opts)
     else
       false -> {:error, :browser_backend_unavailable}

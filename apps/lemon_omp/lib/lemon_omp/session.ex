@@ -920,9 +920,12 @@ defmodule LemonOmp.Session do
       |> add_flag("--resume", Keyword.get(opts, :resume))
 
     File.mkdir_p!(Path.dirname(stderr_path))
+    # Track the RPC process without claiming containment of delegate tools that
+    # can launch independently owned sessions.
+    LemonCore.NativeProcess.unsupported!()
 
     port =
-      Port.open({:spawn_executable, sh}, [
+      LemonCore.NativeProcess.open({:spawn_executable, sh}, [
         :binary,
         :exit_status,
         :use_stdio,

@@ -267,9 +267,11 @@ defmodule LemonBrowser.LocalServer do
     with {:ok, node_path} <- find_node(),
          {:ok, driver_path} <- find_driver(state.driver_opts) do
       args = [driver_path | driver_args(state.driver_opts)]
+      # Browser children and attached sessions can outlive the driver's group.
+      LemonCore.NativeProcess.unsupported!()
 
       port =
-        Port.open({:spawn_executable, node_path}, [
+        LemonCore.NativeProcess.open({:spawn_executable, node_path}, [
           :binary,
           :exit_status,
           :hide,

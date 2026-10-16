@@ -161,7 +161,7 @@ defmodule CodingAgent.Tools.Grep do
         max_bytes: Keyword.get(opts, :max_bytes, @default_max_bytes),
         signal: signal,
         timeout_ms: Keyword.get(opts, :ripgrep_timeout_ms, @ripgrep_timeout_ms),
-        rg_cmd_fun: Keyword.get(opts, :rg_cmd_fun, &System.cmd/3),
+        rg_cmd_fun: Keyword.get(opts, :rg_cmd_fun, &LemonCore.NativeProcess.cmd/3),
         pcre2_available?:
           Keyword.get_lazy(opts, :pcre2_available?, fn -> &pcre2_available?/0 end),
         fallback_timeout_ms: Keyword.get(opts, :fallback_timeout_ms, @ripgrep_timeout_ms),
@@ -269,7 +269,7 @@ defmodule CodingAgent.Tools.Grep do
     case :persistent_term.get(key, :unknown) do
       :unknown ->
         supported? =
-          case System.cmd("rg", ["--pcre2-version"], stderr_to_stdout: true) do
+          case LemonCore.NativeProcess.cmd("rg", ["--pcre2-version"], stderr_to_stdout: true) do
             {_, 0} -> true
             _ -> false
           end
@@ -366,7 +366,7 @@ defmodule CodingAgent.Tools.Grep do
   end
 
   defp run_ripgrep_command(args, opts) do
-    cmd_fun = Map.get(opts, :rg_cmd_fun, &System.cmd/3)
+    cmd_fun = Map.get(opts, :rg_cmd_fun, &LemonCore.NativeProcess.cmd/3)
     timeout_ms = Map.get(opts, :timeout_ms, @ripgrep_timeout_ms)
     signal = Map.get(opts, :signal)
 
