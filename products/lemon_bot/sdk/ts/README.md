@@ -66,7 +66,7 @@ A mixed **own-Bot group** receipt may contain `delivery.effectiveMode:"rejected"
 ## Desktop-to-iPhone pairing
 
 ```ts
-import { LemonBotClient, nonce, parsePairUrl, type PairingIssued } from '@lemon-bot/sdk';
+import { LemonBotClient, nonce, parsePairUrl, preflightBotOrigin, type PairingIssued } from '@lemon-bot/sdk';
 
 // Existing authenticated owner client: the browser keeps its ordinary product session.
 const startNonce = nonce();
@@ -88,6 +88,7 @@ if (pending?.verificationCode) {
 
 // Phone/native consumers parse strictly and use an anonymous client for public steps.
 const link = parsePairUrl(scannedLink);
+await preflightBotOrigin({ origin: link.backendUrl, expectedInstanceId: link.instanceId });
 const phoneClient = new LemonBotClient({ baseUrl: link.backendUrl });
 const preview = await phoneClient.call('POST /pairings/preview', {
   body: { pairCode: link.pairCode, workspaceId: link.workspaceId },
@@ -95,7 +96,7 @@ const preview = await phoneClient.call('POST /pairings/preview', {
 // Show preview.clusterName and exact preview.backendUrl before explicit Claim.
 ```
 
-`parsePairUrl` returns canonical named `PairingLink`. It accepts only bounded `lemonbot://pair` links with exactly one `backend`, `cluster` and 43-character base64url `code`; no credentials, arbitrary route, fragment or additional query keys. Backend must be an exact HTTPS origin; loopback HTTP is only for same-machine development/Simulator. Tailscale reachability is a deployment prerequisite, never inferred from QR content. A localhost QR does not connect a physical iPhone to a desktop's localhost.
+`parsePairUrl` returns canonical named `PairingLink`. It accepts only bounded `lemonbot://pair` links with exactly one `backend`, `instance`, `cluster` and 43-character base64url `code`; three-key legacy links, credentials, arbitrary routes, fragments and additional query keys are rejected. Backend must be an exact HTTPS origin; loopback HTTP is only for same-machine development/Simulator. Tailscale reachability is a deployment prerequisite, never inferred from QR content. A localhost QR does not connect a physical iPhone to a desktop's localhost. The shared [preflight contract](../../contracts/preflight.md) specifies baseline discovery, TLS, public fingerprint validation and authenticated workspace verification after completion/reconnect.
 
 Preview is explicitly non-consuming, nonce-free read data despite using POST. Interrupted preview produces a read error, not an uncertain mutation. Claim, approval, denial, completion and revocation use explicit fixed mutation nonces. Owner refresh/polling uses only GET. Safe owner pairing resources/events never contain QR secret, claim token or session token. Never persist/log `pairUrl` or use an external QR image service; it exists only until claim, original five-minute expiry or the issuing screen closes. An explicit owner reconciliation can request the original issuance receipt with the **same** issuance nonce until that original deadline; it cannot extend expiry or reuse a consumed code. The SDK never performs that POST on its own.
 

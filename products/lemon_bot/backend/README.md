@@ -89,6 +89,15 @@ The desktop owner creates a five-minute one-use pairing QR. The phone previews t
 
 Pending completion evolves with the same nonce. Lost completion responses replay the same encrypted session receipt only before the original five-minute deadline; after that, pair again rather than mint another session. Existing connected credentials survive QR expiry, but device deletion, account/workspace revocation and logout revoke their actual authority. A paired bearer cannot register another installation to evade its device binding. Desktop-only pairing events contain safe state, never credentials; clients without an identified desktop device can use the owner list/detail endpoints.
 
+Before creating a phone QR, read authenticated `GET /v1/identity` on the intended
+configured backend and preflight the advertised HTTPS origin against that instance
+and workspace. `GET /v1/setup` is the minimal public product fingerprint, not a
+generic health probe. A Phoenix 404 (including Lemon Web), controller health or an
+HTTP 200 landing page is not the Bot API. The four-key QR carries the expected
+instance and workspace IDs; public setup does not disclose workspace identity.
+See the shared [preflight contract](../contracts/preflight.md) for TypeScript SDK,
+Mac/iOS and CLI predicates, bounded progress observation and TLS requirements.
+
 Reopening a paired app restores its saved cluster/account selection. Offline state keeps the saved connection without automatically replaying mutations. Revoked credentials require an explicit reconnect.
 
 ## Contributor checks

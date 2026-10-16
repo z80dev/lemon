@@ -5,6 +5,7 @@ import { ApiError, fail } from './errors';
 import { opaqueToken, type SessionSecret } from './auth';
 import { hasProductAccess } from '../enterprise/policy';
 import { z, parse, principal, id, mutation, update } from './validation';
+import { backendDescriptor } from './identity';
 
 const lifetimeMs = 5 * 60 * 1000;
 const secret = z.string().regex(/^[A-Za-z0-9_-]{43}$/);
@@ -21,6 +22,7 @@ interface PrivateClaim extends PrivateMutation { tokenDigest: string; installati
 interface PrivateApproval extends PrivateMutation { state: 'issuing' | 'issued' | 'outcome_unknown'; deviceId: string; sessionId: string | null; encryptedAuth: string | null }
 interface PairingSecret {
   id: string;
+  instanceId: string;
   pairCodeDigest: string;
   revokedAtMs: number | null;
   creation: PrivateMutation;
@@ -90,6 +92,7 @@ function completionProof(s: BackendServices, context: RequestContext): PairingSe
 function pairingAuthority(s: BackendServices, pairing: P.Pairing): void {
   const row = s.store.get<PairingSecret>('pairingSecrets', pairing.id);
   if (!row || row.revokedAtMs !== null) fail('unauthenticated', 'Pairing authority was revoked.');
+  if (row.instanceId !== backendDescriptor(s).instanceId) fail('forbidden', 'The Bot backend identity changed; create a new pairing.');
   if (row.approval) {
     const device = s.store.get<P.Device>('devices', row.approval.deviceId);
     if (!device || device.userId !== pairing.ownerUserId || device.platform !== 'ios' || !row.claim || s.store.metadata<string>(`deviceInstallation:${device.id}`) !== row.claim.installationId) fail('unauthenticated', 'Paired installation authority was revoked.');
@@ -256,9 +259,9 @@ export function createPairingRoutes(s: BackendServices): Route[] {
         const pairCode = opaqueToken();
         const pairing: P.Pairing = s.resource('pairing', { workspaceId: workspace.id, ownerUserId: actor.userId, clusterName: workspace.name, backendUrl, status: 'waiting', expiresAtMs: s.now() + lifetimeMs, deviceName: null, verificationCode: null });
         const url = new URL('lemonbot://pair');
-        url.searchParams.set('backend', backendUrl); url.searchParams.set('cluster', workspace.id); url.searchParams.set('code', pairCode);
+        url.searchParams.set('backend', backendUrl); url.searchParams.set('instance', backendDescriptor(s).instanceId); url.searchParams.set('cluster', workspace.id); url.searchParams.set('code', pairCode);
         const result: P.PairingIssued = { pairing, pairUrl: url.toString() };
-        const row: PairingSecret = { id: pairing.id, pairCodeDigest: s.mutations.digest(pairCode), revokedAtMs: null, creation: { nonce: body.clientNonce, hash: s.mutations.digest(body), receipt: s.encrypt(result) }, claim: null, approval: null, denial: null, completion: null };
+        const row: PairingSecret = { id: pairing.id, instanceId: backendDescriptor(s).instanceId, pairCodeDigest: s.mutations.digest(pairCode), revokedAtMs: null, creation: { nonce: body.clientNonce, hash: s.mutations.digest(body), receipt: s.encrypt(result) }, claim: null, approval: null, denial: null, completion: null };
         store.put('pairings', pairing); store.put('pairingSecrets', row);
         s.events.emit('pairing.upserted', pairing, { userIds: [actor.userId], desktopOnly: true });
         context.nonceResourceIds.push(pairing.id);

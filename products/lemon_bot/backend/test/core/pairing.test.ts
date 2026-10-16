@@ -51,13 +51,43 @@ async function connect(f: PairingFixture, prepared: PreparedPairing): Promise<Ex
 }
 
 describe('owner phone pairing', () => {
+  test('live owner progress publishes after commit without manual reads; private completion polls stay fixed and deadline-bounded', async () => {
+    const f = await fixture();
+    const desktop = await f.services.auth.authenticate(new Request('https://desktop.example/v1/me', { headers: { Authorization: `Bearer ${f.owner.token}` } }), 'owner');
+    if (!desktop) throw new Error('Expected actual desktop session.');
+    const progress: P.Pairing[] = [];
+    const unsubscribe = f.services.events.subscribe((event, audience) => {
+      if (event.event !== 'pairing.upserted' || !f.services.events.visible(desktop, event, audience)) return;
+      expect(f.store.require<P.Pairing>('pairings', event.payload.id)).toEqual(event.payload);
+      progress.push(event.payload);
+    });
+    try {
+      const prepared = await prepare(f);
+      expect(progress.map(value => value.status)).toEqual(['waiting', 'pending_approval']);
+      const path = `/v1/pairings/${prepared.pending.id}/complete`;
+      for (let poll = 0; poll < 3; poll++) {
+        expect(await success(f.fetch('POST', path, prepared.completeBody, null))).toMatchObject({ status: 'pending', expiresAtMs: prepared.pending.expiresAtMs });
+        f.advance(2000);
+      }
+      expect(f.persistentCalls).toBe(0);
+      const completed = await connect(f, prepared);
+      expect(progress.map(value => value.status)).toEqual(['waiting', 'pending_approval', 'approved', 'consumed']);
+      expect(await success(f.fetch('POST', path, prepared.completeBody, null))).toEqual(completed);
+      f.advance(prepared.pending.expiresAtMs - f.services.now());
+      expect(await success(f.fetch('POST', path, prepared.completeBody, null))).toMatchObject({ status: 'expired', expiresAtMs: prepared.pending.expiresAtMs });
+      expect(f.persistentCalls).toBe(1);
+      for (const secret of [prepared.pairCode, prepared.claimed.claimToken, completed.auth.token]) expect(JSON.stringify(progress)).not.toContain(secret);
+    } finally { unsubscribe(); }
+  });
+
   test('one-use QR has exact configured origin; read-only preview supplies the exact cluster name', async () => {
     const f = await fixture(); const started = await start(f);
     const link = new URL(started.issued.pairUrl);
     expect(link.protocol).toBe('lemonbot:'); expect(link.host).toBe('pair');
     expect(link.username).toBe(''); expect(link.password).toBe(''); expect(link.hash).toBe('');
-    expect([...link.searchParams.keys()].sort()).toEqual(['backend', 'cluster', 'code']);
+    expect([...link.searchParams.keys()].sort()).toEqual(['backend', 'cluster', 'code', 'instance']);
     expect(link.searchParams.get('backend')).toBe(f.services.config.publicUrl);
+    expect(link.searchParams.get('instance')).toBe(f.store.metadata('instanceId'));
     expect(link.searchParams.get('cluster')).toBe(f.workspace.id);
     expect(started.pairCode).toMatch(/^[A-Za-z0-9_-]{43}$/);
     expect(started.issued.pairUrl).not.toContain(f.owner.token);
