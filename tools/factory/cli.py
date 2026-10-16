@@ -19,7 +19,7 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import project as projects
-from store import ATTEMPT_LIVE, PRIORITIES, STATUSES, FactoryError, Invalid, Ledger
+from store import ATTEMPT_LIVE, PRIORITIES, STATUSES, AdmissionRefused, FactoryError, Invalid, Ledger
 
 SNAPSHOT_LIMIT = 12
 RELEASE_ROOT = Path(__file__).resolve().parents[2]
@@ -80,6 +80,10 @@ def snapshot_payload(project: projects.Project) -> dict[str, Any]:
         "queued": [_brief(t) for t in by_status["queued"][:SNAPSHOT_LIMIT]],
         "active": [_brief(t) for t in by_status["active"]],
         "ready": [_brief(t) for t in by_status["ready"]],
+        "integrating": [
+            {**_brief(t), "integration": ledger.get_integration(t["id"])}
+            for t in by_status["verifying"] + by_status["awaiting_merge"] + by_status["landed_pending_confirmation"]
+        ],
         "blocked": [_brief(t) for t in by_status["blocked"] + by_status["needs_input"]][:SNAPSHOT_LIMIT],
         "live_attempts": ledger.list_attempts(ATTEMPT_LIVE),
         "unprocessed_events": [
@@ -101,7 +105,11 @@ def _edit_changes(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def seed(ledger: Ledger, path: Path, *, actor: str) -> dict[str, Any]:
-    """Import named approved plan sections; deterministic keys make re-imports idempotent."""
+    """Import named approved plan sections; deterministic keys make re-imports idempotent.
+
+    A packet may carry `status` (`needs_input` or `blocked`) with `reason`: decisions and
+    out-of-reach work are recorded honestly instead of being dispatched.
+    """
     data = json.loads(path.read_text())
     document = data["source"]["document"]
     ids: dict[str, str] = {}
@@ -109,11 +117,14 @@ def seed(ledger: Ledger, path: Path, *, actor: str) -> dict[str, Any]:
     for packet in data["packets"]:
         task, replayed = ledger.add_task(
             {"request": packet["request"], "title": packet["title"], "priority": packet["priority"],
-             "acceptance": packet["acceptance"], "source": {**data["source"], "section": packet["key"]}},
+             "acceptance": packet.get("acceptance", []), "source": {**data["source"], "section": packet["key"]}},
             actor=actor, request_key=f"seed:{document}:{packet['key']}",
         )
+        if not replayed and packet.get("status") in ("needs_input", "blocked"):
+            task = ledger.transition(task["id"], task["revision"], packet["status"], actor=actor,
+                                     reason=packet["reason"], request_key=f"seed-status:{document}:{packet['key']}")
         ids[packet["key"]] = task["id"]
-        imported.append({"key": packet["key"], "id": task["id"], "replayed": replayed})
+        imported.append({"key": packet["key"], "id": task["id"], "status": task["status"], "replayed": replayed})
     for packet in data["packets"]:
         deps = [ids[key] for key in packet.get("depends_on", [])]
         task = ledger.get_task(ids[packet["key"]])
@@ -181,11 +192,17 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     if cmd == "reserve":
         import supervisor
 
-        slots = supervisor.load_policy(project).get(SLOT_POLICY.get(args.stage, ""), 0)
+        policy = supervisor.load_policy(project)
+        slots = policy.get(SLOT_POLICY.get(args.stage, ""), 0)
+        if args.stage == "implement" and "max_ready_backlog" in policy:
+            backlog = ledger.list_tasks(("ready", "verifying", "awaiting_merge"))
+            if len(backlog) >= policy["max_ready_backlog"]:
+                raise AdmissionRefused(f"{len(backlog)} tasks await review/integration; policy allows "
+                                       f"{policy['max_ready_backlog']} before new implementations")
         base_sha = supervisor.verified_base(project, ledger)
         attempt = ledger.reserve_attempt(args.task_id, args.expected_revision, args.stage, epoch=args.epoch,
                                          actor=actor, request_key=args.request_key, base_sha=base_sha,
-                                         max_live=int(slots))
+                                         max_live=int(slots), max_per_day=policy.get("max_attempts_per_day"))
         return {"ok": True, "attempt": attempt}
     if cmd == "attempt":
         attempt = ledger.update_attempt(args.attempt_id, status=args.status, actor=actor, epoch=args.epoch,
@@ -203,6 +220,12 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
 
     import supervisor
 
+    if cmd == "ensure":
+        return supervisor.ensure(project, actor=actor, wait=args.wait)
+    if cmd == "autostart":
+        import install
+
+        return install.autostart(project, enable=not args.disable, interval_s=args.interval)
     if cmd == "start":
         started = supervisor.start(project, actor=actor, wait=args.wait)
         status = status_payload(project)
@@ -306,6 +329,11 @@ def parser() -> argparse.ArgumentParser:
     stop = sub.add_parser("stop")
     stop.add_argument("--abort", action="store_true", help="emergency: kill immediately, record uncertainty")
     stop.add_argument("--wait", type=float, default=90.0)
+    ens = sub.add_parser("ensure", help="watchdog: restart the factory if it should be running and is not")
+    ens.add_argument("--wait", type=float, default=600.0)
+    auto = sub.add_parser("autostart", help="install (or --disable) a launchd watchdog running `ensure`")
+    auto.add_argument("--disable", action="store_true")
+    auto.add_argument("--interval", type=int, default=300)
     return p
 
 

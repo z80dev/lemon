@@ -16,7 +16,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 BUSY_TIMEOUT_MS = 5000
 
 PRIORITIES = ("urgent", "high", "normal", "low")
@@ -38,9 +38,9 @@ TRANSITIONS: dict[str, set[str]] = {
     "inbox": {"queued", "blocked", "needs_input", "cancelled"},
     "queued": {"inbox", "active", "blocked", "needs_input", "cancelled"},
     "active": {"queued", "ready", "blocked", "needs_input", "cancelled"},
-    "ready": {"active", "verifying", "blocked", "cancelled"},
-    "verifying": {"active", "awaiting_merge", "blocked", "cancelled"},
-    "awaiting_merge": {"active", "landed_pending_confirmation", "blocked", "cancelled"},
+    "ready": {"active", "queued", "verifying", "blocked", "cancelled"},
+    "verifying": {"active", "queued", "awaiting_merge", "blocked", "cancelled"},
+    "awaiting_merge": {"active", "queued", "landed_pending_confirmation", "blocked", "cancelled"},
     "landed_pending_confirmation": {"active", "done", "blocked"},
     "blocked": {"inbox", "queued", "active", "needs_input", "cancelled"},
     "needs_input": {"inbox", "queued", "cancelled"},
@@ -51,6 +51,7 @@ EDITABLE = ("title", "goal", "acceptance", "non_goals", "risk", "priority", "dep
 LIST_FIELDS = ("acceptance", "non_goals", "dependencies", "write_set")
 MODES = ("running", "paused", "draining", "stopped")
 ATTEMPT_LIVE = ("reserved", "launched", "running")
+STAGE_REQUIRES = {"implement": "queued", "repair": "queued", "review": "ready"}
 ATTEMPT_FINAL = ("succeeded", "failed", "cancelled", "launch_unknown", "orphaned", "superseded")
 
 _SCHEMA = """
@@ -126,6 +127,20 @@ CREATE TABLE IF NOT EXISTS runtime (
   model TEXT,
   heartbeat_at REAL,
   event_cursor INTEGER NOT NULL DEFAULT 0,
+  detail TEXT NOT NULL DEFAULT '{}',
+  updated_at REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS integrations (
+  task_id TEXT PRIMARY KEY REFERENCES tasks(id),
+  project_id TEXT NOT NULL,
+  attempt_id TEXT NOT NULL,
+  state TEXT NOT NULL,
+  branch TEXT,
+  head_sha TEXT,
+  pr_number INTEGER,
+  ci_run_id INTEGER,
+  merge_sha TEXT,
+  repairs INTEGER NOT NULL DEFAULT 0,
   detail TEXT NOT NULL DEFAULT '{}',
   updated_at REAL NOT NULL
 );
@@ -245,6 +260,8 @@ class Ledger:
                 conn.execute("INSERT INTO meta VALUES ('schema_version', ?)", (str(SCHEMA_VERSION),))
             elif int(row["value"]) > SCHEMA_VERSION:
                 raise FactoryError(f"ledger schema {row['value']} is newer than this factory ({SCHEMA_VERSION})")
+            elif int(row["value"]) < SCHEMA_VERSION:  # additive migrations: new tables only
+                conn.execute("UPDATE meta SET value = ? WHERE key = 'schema_version'", (str(SCHEMA_VERSION),))
             conn.execute(
                 "INSERT OR IGNORE INTO runtime (project_id, updated_at) VALUES (?, ?)",
                 (self.project_id, time.time()),
@@ -529,9 +546,11 @@ class Ledger:
 
     def reserve_attempt(
         self, task_id: str, expected_revision: int, stage: str, *, epoch: int, actor: str, request_key: str | None,
-        base_sha: str | None = None, max_live: int | None = None,
+        base_sha: str | None = None, max_live: int | None = None, max_per_day: int | None = None,
     ) -> dict[str, Any]:
-        """Deterministic admission: runtime mode, epoch fencing, capacity, task state and dependencies."""
+        """Deterministic admission: runtime mode, epoch fencing, capacity, budget, task state and dependencies."""
+        if stage not in STAGE_REQUIRES:
+            raise Invalid(f"stage must be one of {sorted(STAGE_REQUIRES)}")
         request_digest = digest("reserve", {"task_id": task_id, "rev": expected_revision, "stage": stage,
                                             "epoch": epoch})
         with self.write() as conn:
@@ -543,11 +562,13 @@ class Ledger:
                 raise AdmissionRefused(f"factory is {runtime['desired_mode']}/{runtime['mode']}; no new admissions")
             if runtime["epoch"] != epoch:
                 raise AdmissionRefused(f"stale coordinator epoch {epoch}; current is {runtime['epoch']}")
+            if json.loads(runtime["detail"]).get("refreshing"):
+                raise AdmissionRefused("coordinator checkout is being refreshed to the new base; retry shortly")
             task = self._get(conn, task_id)
             if task["revision"] != expected_revision:
                 raise RevisionConflict(f"{task_id} is at revision {task['revision']}", current=task)
-            if task["status"] != "queued":
-                raise AdmissionRefused(f"{task_id} is {task['status']}, not queued")
+            if task["status"] != STAGE_REQUIRES[stage]:
+                raise AdmissionRefused(f"{task_id} is {task['status']}; {stage} needs {STAGE_REQUIRES[stage]}")
             for dep in task["dependencies"]:
                 if self._get(conn, dep)["status"] != "done":
                     raise AdmissionRefused(f"{task_id} depends on {dep}, which is not done")
@@ -565,6 +586,11 @@ class Ledger:
                 ).fetchone()[0]
                 if running >= max_live:
                     raise AdmissionRefused(f"{running} {stage} attempts live; policy allows {max_live}")
+            if max_per_day is not None:
+                today = conn.execute("SELECT COUNT(*) FROM attempts WHERE project_id = ? AND created_at > ?",
+                                     (self.project_id, time.time() - 86400)).fetchone()[0]
+                if today >= max_per_day:
+                    raise AdmissionRefused(f"{today} attempts in the last 24h; policy allows {max_per_day}")
             count = conn.execute("SELECT COUNT(*) FROM attempts WHERE task_id = ? AND stage = ?",
                                  (task_id, stage)).fetchone()[0]
             attempt_id = f"{task_id}-{stage}-{count + 1}"
@@ -574,10 +600,11 @@ class Ledger:
                 " created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 'reserved', ?, ?, ?)",
                 (attempt_id, self.project_id, task_id, expected_revision, stage, epoch, base_sha, now, now),
             )
+            # Implementation/repair make the task active; a review leaves it READY while it runs.
             conn.execute(
-                "UPDATE tasks SET status = 'active', active_attempt = ?, revision = revision + 1, updated_at = ?"
-                " WHERE id = ?",
-                (attempt_id, now, task_id),
+                "UPDATE tasks SET status = CASE WHEN ? = 'review' THEN status ELSE 'active' END, active_attempt = ?,"
+                " revision = revision + 1, updated_at = ? WHERE id = ?",
+                (stage, attempt_id, now, task_id),
             )
             self._event(conn, "attempt.reserved", actor, {"attempt_id": attempt_id, "stage": stage, "epoch": epoch},
                         task_id, request_key)
@@ -635,3 +662,41 @@ class Ledger:
                         attempt["task_id"], request_key)
             self._remember(conn, request_key, "attempt", request_digest, {"attempt_id": attempt_id})
             return self.get_attempt_in(conn, attempt_id)
+
+    # -- integrations --------------------------------------------------------------------
+
+    def get_integration(self, task_id: str) -> dict[str, Any] | None:
+        with self.read() as conn:
+            row = conn.execute("SELECT * FROM integrations WHERE project_id = ? AND task_id = ?",
+                               (self.project_id, task_id)).fetchone()
+        if row is None:
+            return None
+        result = dict(row)
+        result["detail"] = json.loads(result["detail"])
+        return result
+
+    def save_integration(self, task_id: str, *, event: str, actor: str = "integrator", **fields: Any) -> dict[str, Any]:
+        """Upsert the integration record and append its event in one transaction."""
+        allowed = {"attempt_id", "state", "branch", "head_sha", "pr_number", "ci_run_id", "merge_sha", "repairs",
+                   "detail"}
+        if set(fields) - allowed:
+            raise Invalid(f"unknown integration fields {sorted(set(fields) - allowed)}")
+        if "detail" in fields:
+            fields["detail"] = json.dumps(fields["detail"])
+        with self.write() as conn:
+            self._get(conn, task_id)
+            exists = conn.execute("SELECT 1 FROM integrations WHERE task_id = ?", (task_id,)).fetchone()
+            if exists:
+                assignments = ", ".join(f"{k} = ?" for k in fields)
+                conn.execute(f"UPDATE integrations SET {assignments}, updated_at = ? WHERE task_id = ?",
+                             (*fields.values(), time.time(), task_id))
+            else:
+                columns = ["task_id", "project_id", *fields, "updated_at"]
+                conn.execute(f"INSERT INTO integrations ({', '.join(columns)}) VALUES ({', '.join('?' * len(columns))})",
+                             (task_id, self.project_id, *fields.values(), time.time()))
+            payload = {k: v for k, v in fields.items() if k in ("state", "head_sha", "pr_number", "merge_sha",
+                                                                 "ci_run_id")}
+            self._event(conn, event, actor, payload, task_id)
+        integration = self.get_integration(task_id)
+        assert integration is not None
+        return integration
