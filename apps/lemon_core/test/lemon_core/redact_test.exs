@@ -253,8 +253,29 @@ defmodule LemonCore.RedactTest do
     assert large < max(small, 1_000) * 40, "encoded chain: #{small}us -> #{large}us"
   end
 
-  defp time(input) do
-    {micros, _} = :timer.tc(fn -> Redact.text(input) end)
+  test "large mostly-plain multibyte text is redacted in milliseconds" do
+    secret = "sk-" <> String.duplicate("a", 48)
+    plain = String.duplicate("界", 100_000)
+
+    for input <- [
+          "api_key=#{secret} " <> plain,
+          "api_key=#{secret} " <> plain <> " message%20text=ok",
+          "status=ready model=claude " <> plain,
+          plain
+        ],
+        opts <- [[], [drop_keys: true], [strict: true]] do
+      output = Redact.text(input, opts)
+      refute output =~ secret
+      # Strict config exports drop whole sensitive lines by design.
+      assert output =~ plain or (opts == [strict: true] and input =~ "api_key")
+
+      micros = 1..3 |> Enum.map(fn _ -> time(input, opts) end) |> Enum.min()
+      assert micros < 50_000, "#{byte_size(input)} bytes #{inspect(opts)} took #{micros}us"
+    end
+  end
+
+  defp time(input, opts \\ []) do
+    {micros, _} = :timer.tc(fn -> Redact.text(input, opts) end)
     micros
   end
 
