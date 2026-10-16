@@ -58,6 +58,14 @@ defmodule LemonControlPlane.Methods.Registry do
     LemonControlPlane.Methods.SessionBtw,
     # Models
     LemonControlPlane.Methods.ModelsList,
+    LemonControlPlane.Methods.ProvidersManagementList,
+    LemonControlPlane.Methods.ProvidersManagementApiKeySet,
+    LemonControlPlane.Methods.ProvidersManagementDisconnect,
+    LemonControlPlane.Methods.ProvidersManagementDefaultSet,
+    LemonControlPlane.Methods.NodeProvidersManagementList,
+    LemonControlPlane.Methods.NodeProvidersManagementApiKeySet,
+    LemonControlPlane.Methods.NodeProvidersManagementDisconnect,
+    LemonControlPlane.Methods.NodeProvidersManagementDefaultSet,
     # User-managed profiles
     LemonControlPlane.Methods.ProfilesList,
     LemonControlPlane.Methods.ProfilesGet,
@@ -272,9 +280,8 @@ defmodule LemonControlPlane.Methods.Registry do
                 try do
                   module.handle(params, ctx)
                 rescue
-                  e ->
-                    {:error,
-                     Errors.internal_error("Method execution failed", Exception.message(e))}
+                  _ ->
+                    {:error, Errors.internal_error("Method execution failed")}
                 end
 
               {:error, reason} ->

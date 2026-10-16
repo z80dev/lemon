@@ -93,6 +93,9 @@ defmodule LemonControlPlane.NodeIO do
       {:lemon_node_result, ^invoke_id, {:ok, result}} ->
         {:ok, result}
 
+      {:lemon_node_result, ^invoke_id, {:error, {:remote, "target_mismatch"}}} ->
+        {:error, Errors.error(:conflict, "Provider target does not match this machine")}
+
       {:lemon_node_result, ^invoke_id, {:error, {:remote, reason}}}
       when reason in ["process_receipt_limit", "process_limit", "process_busy"] ->
         {:error,

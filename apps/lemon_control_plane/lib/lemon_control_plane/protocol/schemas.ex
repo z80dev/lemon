@@ -711,6 +711,36 @@ defmodule LemonControlPlane.Protocol.Schemas do
         "expectedRunId" => :string
       }
     },
+    "providers.management.list" => %{required: %{}},
+    "providers.management.api_key.set" => %{
+      required: %{"targetId" => :string, "providerId" => :string, "value" => :string}
+    },
+    "providers.management.disconnect" => %{
+      required: %{"targetId" => :string, "providerId" => :string}
+    },
+    "providers.management.default.set" => %{
+      required: %{"targetId" => :string, "providerId" => :string, "modelId" => :string}
+    },
+    "node.providers.management.list" => %{required: %{"nodeId" => :string}},
+    "node.providers.management.api_key.set" => %{
+      required: %{
+        "nodeId" => :string,
+        "targetId" => :string,
+        "providerId" => :string,
+        "value" => :string
+      }
+    },
+    "node.providers.management.disconnect" => %{
+      required: %{"nodeId" => :string, "targetId" => :string, "providerId" => :string}
+    },
+    "node.providers.management.default.set" => %{
+      required: %{
+        "nodeId" => :string,
+        "targetId" => :string,
+        "providerId" => :string,
+        "modelId" => :string
+      }
+    },
 
     # Node methods
     "node.pair.invite" => %{

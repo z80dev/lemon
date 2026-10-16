@@ -320,6 +320,15 @@ defmodule LemonCore.NodeRegistry do
   end
 
   @impl true
+  def format_status(status) do
+    status
+    |> Map.put(:state, :private_node_transport)
+    |> Map.put(:message, :redacted)
+    |> Map.put(:reason, :redacted)
+    |> Map.put(:log, [])
+  end
+
+  @impl true
   def handle_call({:register, _node_id, "", _pid, _generation, _metadata, _revoke?}, _from, state) do
     {:reply, {:error, :invalid_name}, state}
   end

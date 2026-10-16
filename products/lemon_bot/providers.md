@@ -24,6 +24,83 @@ Bot MCP header credentials are destination-node encrypted secrets only. The back
 
 Every Bot and conversation has exactly one human owner. Live work, provider callbacks, native tool admission, cached receipt replay and private notifications require that actual authenticated principal to be the Bot owner. Optional operator deployment controls do not allocate/share Bots or add enterprise setup prerequisites to a personal assistant. Configured external senders must verify the owner's identity; an unlinked sender or workflow cannot fall back to the owner.
 
+## Model providers on the execution target
+
+Model-provider management is separate from the integration adapters below.
+An authenticated workspace Owner can use `GET /v1/instance/providers` for the
+attached controller or `GET /v1/machines/:id/providers` for an enrolled execution
+machine they actually own. Administrative host access or a shared machine ACL
+does not authorize configuring another person's provider account. These endpoints
+work before a model provider is configured; they do not expose coding sessions.
+Use the same private Tailscale HTTPS product origin as the normal Bot app, not
+a relay, Funnel, controller URL in the browser, or phone-local callback.
+
+The response separates the exact target (`id`, durable `nodeId` where applicable,
+and `hostname`) from the current default provider/model. Select and display that
+target before submitting a credential. `providers[].methods` comes from the
+runtime's onboarding metadata: `api_key`, supported `device_code`, or
+`unsupported`. A browser-callback function named `login_device_flow` is not
+by itself a phone-compatible device grant. Device-code initiation is a separate
+operation, not implemented by the API-key endpoints.
+
+For either base path:
+
+| Operation | Request |
+| --- | --- |
+| `PUT …/providers/:providerId/api-key` | `{clientNonce,targetId,value}` |
+| `POST …/providers/:providerId/disconnect` | `{clientNonce,targetId}` |
+| `POST …/providers/default` | `{clientNonce,targetId,providerId,modelId}` |
+
+Use the canonical provider ID from the listing and the exact returned `targetId`.
+Credential values must be nonempty UTF-8, at most 16,384 bytes, without NUL.
+Add and replace use the same write-only endpoint. The target runtime writes the
+existing encrypted Lemon secret store plus provider references in its own
+`~/.lemon/config.toml`, through the same onboarding persistence path as the CLI.
+Named-machine operations never install a key in the controller's store.
+Named-machine status and effective defaults use the worker's configured local
+execution directory, not the controller or worker process directory. Filesystem
+paths are trusted local configuration only and are rejected as RPC input.
+No provider credential is saved in product SQLite, OMP configuration, phone
+Keychain, local drafts, browser storage, transcripts, telemetry, or mutation
+receipts. Product nonce state retains only a keyed intent digest and a safe
+status/error receipt. Clients must clear secure input on success or cancel and
+must not queue or automatically retry secret submissions.
+
+Every write revalidates the current owner session, actual host ownership,
+canonical provider, supported method and exact execution target before dispatch.
+Web requests use JSON and explicit session `Authorization: Bearer …`, never
+ambient cookie authority; the router rejects untrusted origins. A cookie-only
+request cannot authorize a credential write. Native clients use their existing
+revocable account/device session. An uncertain acknowledgement is not a failed
+write: reload the same target's provider status rather than submit another key.
+
+`status` distinguishes `needs_login`, `expired`, `configured`, and `ready`.
+`lastValidation` reports only an actual static resolver check and its time, not a
+provider account/quota/model-call validation. A saved secret alone does not
+prove runtime readiness. `environmentOverrides` contains variable **names**
+only, including encrypted import-env entries; `configurationOverrides` reports
+project configuration, credential-pool or enabled external-source precedence
+that prevents attesting the newly selected global credential.
+Resolve those target-local overrides deliberately; this API never resets pools,
+other providers, Bots or profiles to manufacture a ready result.
+Before replacing or deleting a global encrypted secret, management scans both
+the remaining global consumers and the execution directory's project config.
+Project references (including the selected provider and credential pools) are
+never excluded from this sharing check; a shared reference rejects the write
+without modifying credentials or configuration.
+
+Disconnect is **local removal**, not provider-side key/grant revocation.
+Revoke a key or OAuth grant separately in the provider's dashboard when it must
+stop working elsewhere. Environment/external credentials remain independent
+and can still resolve after local disconnect. Add/replace/disconnect never
+change the default. Choosing a default is an explicit separate request that
+does not rewrite any Bot or profile.
+The returned default is the effective target default, including existing project
+and environment precedence. An explicit default write changes only the global
+default; an active higher-priority override can therefore leave the effective
+selection unchanged.
+
+
 ## OIDC, SCIM and directory governance
 
 Before any provider CRUD, discovery, JWKS, authorization, token exchange or logout, the **server operator** must configure canonical `oidcAllowedOrigins` (exact HTTPS origins) and `oidcClientApprovals` (`{origin,clientId,clientSecretRef}`). Approval defaults to empty; product Owner is not server-operator authority and cannot send a configured secret to an arbitrary issuer. Approve every actual metadata endpoint origin with the same exact client/ref association, including split-origin providers. Redirects are refused; addresses must be public unless the exact origin is explicitly in `oidcApprovedPrivateOrigins`, a subset of allowed origins. Local password authentication remains independent.

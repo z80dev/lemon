@@ -25,6 +25,11 @@
   on resolution errors, including directories replaced between calls.
   ACP client-terminal calls remain stateless and receive no host-local capture
   redirections, supporting clients with a separate filesystem.
+- Named workers advertise owner-authorized provider management methods and execute
+  them against destination-local provider configuration and encrypted credentials,
+  rejecting writes whose exact target identity belongs to another machine.
+  Project credential/default overrides are resolved from the worker's configured
+  execution directory; management RPCs cannot supply filesystem paths.
 
 - Truncated webfetch and browser snapshot/page-content results retain complete
   sources as session-scoped artifacts and return readable `artifact://` handles.

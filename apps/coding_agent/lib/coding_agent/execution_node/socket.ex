@@ -124,8 +124,8 @@ defmodule CodingAgent.ExecutionNode.Socket do
       {:error, :payload_too_large} ->
         {:close, {1009, "payload too large"}, state}
 
-      {:error, reason} ->
-        Logger.warning("Execution node ignored invalid control-plane frame: #{inspect(reason)}")
+      {:error, _reason} ->
+        Logger.warning("Execution node ignored invalid control-plane frame redacted=true")
         {:ok, state}
     end
   end

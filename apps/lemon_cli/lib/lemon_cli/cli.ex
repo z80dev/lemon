@@ -262,6 +262,7 @@ defmodule LemonCli.CLI do
     node_cli = execution_node_cli()
 
     if Code.ensure_loaded?(node_cli) do
+      if command == "join", do: ensure_apps_started!([:lemon_cli])
       forwarded = if command == "capabilities", do: [command | args], else: args
 
       case node_cli.run(forwarded) do

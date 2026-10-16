@@ -34,11 +34,19 @@ defmodule LemonCore.Runtime.Profile do
   @profiles_data %{
     runtime_min: {
       "Minimal runtime: gateway, router, channels, control plane, and coding agent.",
-      [:coding_agent, :lemon_gateway, :lemon_router, :lemon_channels, :lemon_control_plane]
+      [
+        :lemon_cli,
+        :coding_agent,
+        :lemon_gateway,
+        :lemon_router,
+        :lemon_channels,
+        :lemon_control_plane
+      ]
     },
     runtime_full: {
       "Full runtime: all core apps including skills, web UI, and sim UI.",
       [
+        :lemon_cli,
         :coding_agent,
         :lemon_gateway,
         :lemon_router,

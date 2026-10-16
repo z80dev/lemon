@@ -118,21 +118,21 @@ defmodule LemonCli.Onboarding.Runner do
         "Invalid secret name."
       )
 
-    _secret_metadata =
-      if token, do: store_secret!(secret_name, token, spec.api_key_secret_provider, spec)
+    secret_changes =
+      if token,
+        do: [{secret_name, {:set, token, spec.api_key_secret_provider}}],
+        else: []
 
     model =
       if resolve_set_default?(cli_opts[:set_default], spec, io),
         do: choose_local_model!(cli_opts, spec, io, token, opts)
 
-    content =
-      config_path
-      |> read_existing_config!()
+    persist!(config_path, secret_changes, fn content ->
+      content
       |> update_local_config(spec, if(token, do: secret_name))
       |> maybe_set_defaults(model, spec)
+    end)
 
-    validate_toml!(content, config_path)
-    write_config!(config_path, content)
     io.info.("#{spec.display_name} onboarding complete.")
     io.info.("Config: #{config_path}")
     if model, do: io.info.("Default model: #{spec.id}:#{model}")
@@ -150,7 +150,6 @@ defmodule LemonCli.Onboarding.Runner do
       )
 
     config_path = cli_opts[:config_path] || Config.global_path()
-    secret_metadata = store_secret!(secret_name, secret_value, secret_provider, spec)
 
     set_default? = resolve_set_default?(cli_opts[:set_default], spec, io)
 
@@ -162,11 +161,17 @@ defmodule LemonCli.Onboarding.Runner do
         nil
       end
 
-    update_config!(config_path, secret_name, selected_model, auth_mode, spec)
+    secret_provider = secret_provider || spec.api_key_secret_provider
+
+    persist!(config_path, [{secret_name, {:set, secret_value, secret_provider}}], fn content ->
+      content
+      |> update_provider_auth_config(spec, auth_mode, secret_name)
+      |> maybe_set_defaults(selected_model, spec)
+    end)
 
     io.info.("")
     io.info.("#{spec.display_name} onboarding complete.")
-    io.info.("Secret: #{secret_metadata.name}")
+    io.info.("Secret: #{secret_name}")
     io.info.("Config: #{config_path}")
     io.info.("Authentication: #{auth_mode_output_label(auth_mode)}")
 
@@ -535,21 +540,6 @@ defmodule LemonCli.Onboarding.Runner do
     fail!("OAuth flow returned an unsupported credential payload.")
   end
 
-  defp store_secret!(secret_name, secret_value, secret_provider, spec) do
-    case Secrets.set(secret_name, secret_value, provider: secret_provider) do
-      {:ok, metadata} ->
-        metadata
-
-      {:error, :missing_master_key} ->
-        fail!("Missing secrets master key. Run `lemon secrets init`, then retry.")
-
-      {:error, reason} ->
-        fail!(
-          "Failed to store #{spec.display_name} credentials in secrets: #{safe_error_kind(reason)}"
-        )
-    end
-  end
-
   # Auth failures can contain token responses or request structs. Only a stable
   # leading atom is suitable for terminal output.
   defp safe_error_kind(reason) when is_atom(reason), do: Atom.to_string(reason)
@@ -829,24 +819,27 @@ defmodule LemonCli.Onboarding.Runner do
     end)
   end
 
-  defp update_config!(config_path, secret_name, selected_model, auth_mode, %Provider{} = spec) do
-    existing = read_existing_config!(config_path)
-
-    content =
-      existing
-      |> update_provider_auth_config(spec, auth_mode, secret_name)
-      |> maybe_set_defaults(selected_model, spec)
-
-    validate_toml!(content, config_path)
-    write_config!(config_path, content)
+  defp persist!(config_path, changes, patch) do
+    case LemonCli.Setup.ProviderManagement.persist(config_path, changes, patch) do
+      :ok -> :ok
+      {:error, _} -> fail!("Could not save provider credentials and config. Run `lemon doctor`.")
+    end
   end
 
-  defp update_provider_auth_config(content, %Provider{} = spec, auth_mode, secret_name) do
+  @doc false
+  def update_provider_auth_config(content, %Provider{} = spec, auth_mode, secret_name) do
     selected_key = secret_config_key(spec, auth_mode)
 
     keys_to_clear =
-      spec.secret_config_key_by_mode
-      |> Map.values()
+      [
+        "api_key",
+        "api_key_env",
+        "auth",
+        "auth_source",
+        "oauth_secret",
+        "api_key_secret"
+        | Map.values(spec.secret_config_key_by_mode)
+      ]
       |> Enum.uniq()
       |> Enum.reject(&(&1 == selected_key))
 
@@ -883,9 +876,10 @@ defmodule LemonCli.Onboarding.Runner do
     end
   end
 
-  defp maybe_set_defaults(content, nil, _spec), do: content
+  @doc false
+  def maybe_set_defaults(content, nil, _spec), do: content
 
-  defp maybe_set_defaults(content, selected_model, %Provider{} = spec) do
+  def maybe_set_defaults(content, selected_model, %Provider{} = spec) do
     content
     |> TomlPatch.upsert_string("defaults", "provider", spec.id)
     |> TomlPatch.upsert_string("defaults", "model", "#{spec.id}:#{selected_model}")
@@ -906,19 +900,6 @@ defmodule LemonCli.Onboarding.Runner do
         fail!(
           "Could not read the config file. Check permissions, then run `lemon config validate --verbose`."
         )
-    end
-  end
-
-  defp write_config!(config_path, content) do
-    expanded = Path.expand(config_path)
-    File.mkdir_p!(Path.dirname(expanded))
-
-    case File.write(expanded, content) do
-      :ok ->
-        :ok
-
-      {:error, _reason} ->
-        fail!("Could not save the config file. Check permissions, then run `lemon setup`.")
     end
   end
 

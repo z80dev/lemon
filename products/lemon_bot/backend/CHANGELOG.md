@@ -1,16 +1,22 @@
 # Backend changelog
 
-## Unreleased
+## [Unreleased]
+
+### Added
 
 - Added provider-free owner bootstrap with explicit local `lemon-bot setup`: verifies the existing instance's exact tailnet HTTPS origin, prints only the non-secret origin to stdout and shows the sensitive single-use setup proof only on the controlling terminal. Removed unconditional startup-log setup-code output. Proofs now have a five-minute absolute expiry and persisted ten-attempt fence, atomic race/consume protection and explicit local renewal; existing configured accounts/workspaces and pairing stay unchanged. `setup --print-origin` offers read-only verified-origin discovery without issuing a proof.
 - Added terminal-only `lemon connect iphone` / `lemon-bot connect iphone` for an already-running Bot backend: hidden owner account login, shared HTTPS identity/workspace preflight, sensitive one-use paste link, exact device/code approval or denial, read-only uncertain-decision reconciliation and actual phone completion verification. No operator credential, backend launch or automatic approval is used.
 - Phone-pairing CLI cleanup revokes only its temporary product session, preserving unrelated owner logins and optional OIDC provider sessions even on denial or failed preflight.
 - Added a durable Bot backend identity, minimal public `/v1/setup` product/pairing descriptor and authenticated `/v1/identity` workspace binding. Shared origin preflight refuses wrong services, physical-phone loopback, identity/workspace mismatch, redirects and TLS bypass. Pairing QR links now require `backend/instance/cluster/code`; existing nonce, consent, expiry and revocation semantics remain intact.
+- Added owner-only target-bound model-provider capability/status listing, write-only API-key add/replace and local disconnect on the execution machine, and a separate explicit default-model action. Product sessions/origin checks and current actual host ownership apply to initial requests and nonce replay; credentials never enter product storage or receipts.
 - Added tolerant build/provider/channel instance health and owner-confirmed remote controller restart/stop, observing reconnect/disconnect completion with a 300-second deadline. Replaced the runtime-control boolean with explicit actions and launcher/controller routing.
+
+### Fixed
+
 - Fixed Apple clients reporting a retired foreground-presence socket's error after a reconnect during an acknowledged message send. Current socket failures and uncertain message nonce fencing remain intact.
 - Added owner-scoped read-only message receipts that retain the full original group target set and current run outcomes. Native clients automatically reconcile lost/late relay acknowledgements without resending, preserve refused/unknown targets, and acknowledge only the cursor delivered by each realtime frame.
 
-## 0.1.0
+## [0.1.0]
 
 - Added the separate Bun/SQLite product API and static web serving, durable local account/member/device authorization, encrypted private credentials and exact nonce receipts.
 - Added durable owner-only realtime replay, scoped deletion events and atomic sync snapshots.

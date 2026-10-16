@@ -97,6 +97,23 @@ export interface InstanceProvider { id: string; configured: boolean; credential:
 export interface InstanceRuntime { actions: RuntimeAction[]; via: 'launcher' | 'controller' | null; reason: string | null; operation: RuntimeOperation | null }
 export interface RuntimeOperation { id: string; action: RuntimeAction; state: 'running' | 'succeeded' | 'failed'; startedAtMs: TimestampMs; completedAtMs: TimestampMs | null; exitCode: number | null; output: string }
 export interface RuntimeActionRequest extends Mutation { confirm?: boolean }
+/** Target-local, write-only provider management; no credential values or account payloads. */
+export interface ProviderManagement {
+  target: { id: string; nodeId: ID | null; hostname: string };
+  default: { providerId: string | null; modelId: string | null };
+  providers: ManagedProvider[];
+}
+export interface ManagedProvider {
+  id: string; displayName: string; methods: ('api_key' | 'device_code' | 'unsupported')[];
+  configured: boolean; status: 'ready' | 'needs_login' | 'expired' | 'configured';
+  lastValidation: { atMs: TimestampMs; kind: 'resolver'; ready: boolean } | null;
+  environmentOverrides: string[];
+  configurationOverrides: ('project_configuration' | 'credential_pool' | 'external_secret_source')[];
+}
+export interface ProviderTargetRequest extends Mutation { targetId: string }
+/** Transient request only. Never persist this field in drafts, browser storage or product SQLite. */
+export interface ProviderApiKeySet extends ProviderTargetRequest { value: string }
+export interface ProviderDefaultSet extends ProviderTargetRequest { providerId: string; modelId: string }
 export interface Machine extends Resource { nodeId: ID | null; nodeName: string; name: string; ownerUserId: ID; accessUserIds: ID[]; status: 'pending' | 'online' | 'offline' | 'revoked'; lastSeenAtMs: TimestampMs | null; labels: Record<string, string>; botIds: ID[] }
 export interface HostInfo { hostname: string; os: string; osVersion: string; arch: string; cpuCount: number; memTotalBytes: number; memFreeBytes: number; diskTotalBytes: number; diskFreeBytes: number; uptimeSec: number; lemonVersion: string; defaultCwd: string; user: string; measuredAtMs: TimestampMs }
 export interface MachineInvite extends Resource { machineId: ID; inviteCode: string; joinCommand: string; expiresAtMs: TimestampMs; status: 'pending' | 'joined' | 'expired' | 'revoked'; enrollment: 'invited' | 'waiting_for_join' | 'connecting' | 'verifying' | 'online' | 'expired' | 'failed' | 'revoked'; lastError: string | null }
@@ -655,6 +672,14 @@ export interface RestEndpoints {
   'GET /instance': Endpoint<undefined, InstanceStatus>;
   'POST /instance/reconnect': Endpoint<Mutation, InstanceStatus>;
   'POST /instance/runtime/:action': Endpoint<RuntimeActionRequest, RuntimeOperation>;
+  'GET /instance/providers': Endpoint<undefined, ProviderManagement>;
+  'PUT /instance/providers/:providerId/api-key': Endpoint<ProviderApiKeySet, ProviderManagement>;
+  'POST /instance/providers/:providerId/disconnect': Endpoint<ProviderTargetRequest, ProviderManagement>;
+  'POST /instance/providers/default': Endpoint<ProviderDefaultSet, ProviderManagement>;
+  'GET /machines/:id/providers': Endpoint<undefined, ProviderManagement>;
+  'PUT /machines/:id/providers/:providerId/api-key': Endpoint<ProviderApiKeySet, ProviderManagement>;
+  'POST /machines/:id/providers/:providerId/disconnect': Endpoint<ProviderTargetRequest, ProviderManagement>;
+  'POST /machines/:id/providers/default': Endpoint<ProviderDefaultSet, ProviderManagement>;
   'GET /sync': Endpoint<undefined, Snapshot>;
   'GET /machines': Endpoint<undefined, Page<Machine>, PageQuery>;
   'POST /machines': Endpoint<MachineAttach, MachineAttachResult>;

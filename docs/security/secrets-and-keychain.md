@@ -139,6 +139,18 @@ LemonCore.Secrets.set_if_revision(name, refreshed_credential, revision, opts)
   Store instance (default `LemonCore.Store`). Each operation pins its Store
   process so a mid-operation restart cannot silently redirect a mutation.
 
+Provider setup compensation uses `LemonCore.Secrets.snapshot/2` and `restore/3`,
+not a plaintext `get`/`set` round trip. Snapshots capture the encrypted-store
+credential and metadata without touching usage, including already-expired
+credentials. They are opaque, ephemeral credential-bearing data and must never
+be inspected, logged or persisted. Callers serialize the entire mutation and
+compensation sequence. Restore binds the original Store process, owner and name,
+re-encrypts under the current master key using the shared mutation lease, and
+preserves provider, original absolute expiry, creation/modification timestamps
+and usage metadata. It creates a new incarnation rather than reviving an old
+conditional-write revision. Expiry elapsed during a failed mutation remains
+enforced after restoration; compensation never extends the credential lifetime.
+
 ## Master Key Rotation
 
 `lemon secrets rotate-key` (or `mix lemon.secrets.rotate_key`) generates a new

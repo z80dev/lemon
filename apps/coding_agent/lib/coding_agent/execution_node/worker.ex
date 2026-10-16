@@ -49,6 +49,7 @@ defmodule CodingAgent.ExecutionNode.Worker do
   ]
   @shell_methods ["node.shell.open", "node.shell.input", "node.shell.resize", "node.shell.close"]
   @process_methods ["node.process.run", "node.process.get", "node.process.cancel"]
+  @provider_methods ~w(node.providers.management.list node.providers.management.api_key.set node.providers.management.disconnect node.providers.management.default.set)
   @process_capability %{
     "version" => 1,
     "maxStdinBytes" => 1_048_576,
@@ -95,6 +96,7 @@ defmodule CodingAgent.ExecutionNode.Worker do
       Map.new(
         @host_io_methods ++
           @shell_methods ++
+          @provider_methods ++
           ["node.capabilities.get", "node.runtime.features"],
         &{&1, true}
       )
@@ -776,6 +778,20 @@ defmodule CodingAgent.ExecutionNode.Worker do
           {:noreply,
            start_process_task(state, invoke_id, method, args, payload["nodeGeneration"])}
 
+        method in @provider_methods and
+            (not is_binary(state.node_id) or payload["nodeId"] != state.node_id) ->
+          {:noreply, send_invoke_error(state, invoke_id, :node_mismatch)}
+
+        method in @provider_methods ->
+          node_id = state.node_id
+          cwd = state.default_cwd
+          operation = String.replace_prefix(method, "node.providers.management.", "")
+
+          {:noreply,
+           start_service_task(state, invoke_id, :provider_management_failed, fn ->
+             LemonCore.ProviderManagement.execute(operation, args, node_id: node_id, cwd: cwd)
+           end)}
+
         method == "node.runtime.features" ->
           {:noreply, send_host_io_result(state, invoke_id, {:ok, runtime_features()})}
 
@@ -1102,6 +1118,13 @@ defmodule CodingAgent.ExecutionNode.Worker do
 
   defp complete_service_task(state, invoke_id, {:error, reason})
        when reason in [
+              :target_mismatch,
+              :invalid_request,
+              :invalid_provider,
+              :unsupported_method,
+              :invalid_api_key,
+              :invalid_model,
+              :invalid_target,
               :invalid_config,
               :invalid_cwd,
               :runtime_unavailable,

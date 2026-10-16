@@ -1030,6 +1030,14 @@ post-response privacy check.
 
 | Method | Scope | Request | Success payload |
 | --- | --- | --- | --- |
+| `providers.management.list` | admin | `{}` | Redacted provider listing for the controller |
+| `providers.management.api_key.set` | admin | `{targetId,providerId,value}` | Updated redacted listing |
+| `providers.management.disconnect` | admin | `{targetId,providerId}` | Updated redacted listing |
+| `providers.management.default.set` | admin | `{targetId,providerId,modelId}` | Updated redacted listing |
+| `node.providers.management.list` | admin | `{nodeId}` | Redacted provider listing for the destination |
+| `node.providers.management.api_key.set` | admin | `{nodeId,targetId,providerId,value}` | Updated destination listing |
+| `node.providers.management.disconnect` | admin | `{nodeId,targetId,providerId}` | Updated destination listing |
+| `node.providers.management.default.set` | admin | `{nodeId,targetId,providerId,modelId}` | Updated destination listing |
 | `node.pair.invite` | pairing | `{nodeName,nodeId?,purpose?,labels?,expiresInMs?}` | `{inviteId,inviteCode,joinCommand,expiresAtMs,summary}` |
 | `node.pair.invite.revoke` | pairing | `{inviteId}` | `{inviteId,revoked:true}` |
 | `node.capabilities.get` | read | `{nodeId}` | `{nodeId,os,measuredAtMs,stale,items}` |
@@ -1054,6 +1062,35 @@ post-response privacy check.
 | `node.shell.input` | admin | `{shellId,dataBase64}` | `{shellId,accepted:true}` |
 | `node.shell.resize` | admin | `{shellId,cols,rows}` | `{shellId,accepted:true}` |
 | `node.shell.close` | admin | `{shellId}` | `{shellId,accepted:true}` |
+
+Provider management is an owner-authorized, write-only credential surface. Product
+callers must establish workspace ownership and actual machine ownership before
+using its admin RPCs; ordinary machine access is not ownership. A node credential
+cannot call these methods, and generic `node.invoke` cannot bypass their scope.
+List first and bind every write to the returned exact `target.id`. The controller
+has a durable target identity; destination targets bind the authenticated durable
+node ID. A mismatch fails before the provider service mutates anything.
+
+All operations return `{target:{id,nodeId,hostname},default:{providerId,modelId},
+providers:[...]}`. Provider rows contain only capability/configuration/readiness
+metadata: `id`, `displayName`, `methods`, `configured`, `status`,
+`lastValidation`, `environmentOverrides`, and `configurationOverrides`. No API
+key, OAuth material, credential prefix, or upstream error is returned. Provider
+IDs use canonical base IDs, including `openai_codex`. Requests reject unknown
+fields and require bounded nonempty strings (256 bytes for target/provider/model
+IDs, 251 bytes for node IDs, 16 KiB for API-key values). Target and node IDs use
+only ASCII letters, digits, `_`, `.`, `:`, and `-`. Listing is static resolver
+inspection, not a provider call.
+Writes return the same listing shape; environment, project configuration, and
+credential-pool precedence remain visible rather than being silently overwritten.
+
+The optional CLI provider setup service is loaded at runtime without a control
+plane dependency on the CLI app. Named-node operations use authenticated NodeIO
+transport and invoke that service on the destination, never an arbitrary command
+or a controller-side credential store. Unavailable/uncertain mutation responses
+are not automatically retryable: inspect the destination listing before another
+write. Secret-bearing request data and exception text are excluded from transport
+diagnostics.
 
 Invites default to purpose `lemon_bot`, labels `{}`, expiry 15 minutes (bounded
 to 1 ms–24 hours). Labels are a record with at most 32 nonempty keys (64 UTF-8

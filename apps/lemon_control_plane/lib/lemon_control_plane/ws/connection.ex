@@ -210,14 +210,14 @@ defmodule LemonControlPlane.WS.Connection do
 
   def handle_info(:heartbeat, state), do: {:ok, state}
 
-  def handle_info(msg, state) do
-    Logger.debug("Unhandled message in WS connection: #{inspect(msg)}")
+  def handle_info(_msg, state) do
+    Logger.debug("Unhandled message in WS connection redacted=true")
     {:ok, state}
   end
 
   @impl WebSock
-  def terminate(reason, state) do
-    Logger.debug("WebSocket connection terminated: #{state.conn_id}, reason: #{inspect(reason)}")
+  def terminate(_reason, state) do
+    Logger.debug("WebSocket connection terminated: #{state.conn_id}, reason_redacted=true")
 
     if state.delivery, do: Delivery.close(state.delivery)
 
@@ -383,10 +383,8 @@ defmodule LemonControlPlane.WS.Connection do
   defp safe_async_dispatch(method, params, ctx) do
     Registry.dispatch(method, params, ctx)
   catch
-    kind, reason ->
-      Logger.error(
-        "Async WebSocket method #{method} failed: #{Exception.format_banner(kind, reason)}"
-      )
+    _kind, _reason ->
+      Logger.error("Async WebSocket method failed redacted=true")
 
       {:error, Errors.internal_error("Method execution failed")}
   end
