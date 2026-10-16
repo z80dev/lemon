@@ -628,6 +628,7 @@ defmodule CodingAgent.Session.Lifecycle do
         :ok = LemonAgent.Agent.reset(state.agent)
 
         previous_session_id = state.session_manager.header.id
+        :ok = CodingAgent.Tools.Bash.ShellState.reset(previous_session_id)
 
         new_session_manager =
           SessionManager.new(state.cwd)

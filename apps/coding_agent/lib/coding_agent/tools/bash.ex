@@ -29,10 +29,12 @@ defmodule CodingAgent.Tools.Bash do
   alias CodingAgent.ProcessManager
 
   alias CodingAgent.Tools.Bash.{
+    Capture,
     GitGuard,
     Interceptor,
     InternalUrlExpansion,
     Service,
+    ShellState,
     StreamingPreview
   }
 
@@ -69,7 +71,8 @@ defmodule CodingAgent.Tools.Bash do
         "Execute a bash command in the project root (or `cwd`). Foreground commands time out after " <>
           "`timeout` ms (default #{@default_timeout_ms}, max #{@max_timeout_ms}), then continue " <>
           "in the background with a process_id (PTY/ACP terminals are killed instead). Use " <>
-          "bash_output to read output and kill_process to stop. Set `cwd` instead of `cd`; " <>
+          "bash_output to read output and kill_process to stop. Foreground commands keep cwd (within the project) and exported env " <>
+          "between calls; pass `reset: true` to start fresh. Set `cwd` instead of `cd`; " <>
           "quote-heavy values through `env`. skill:// and artifact:// references in the command " <>
           "are replaced with their absolute file paths.",
       label: "Run Command",
@@ -116,6 +119,11 @@ defmodule CodingAgent.Tools.Bash do
               "timeout_s" => %{"type" => "number", "default" => 30}
             },
             "description" => "Return when the log regex matches OR the TCP port accepts"
+          },
+          "reset" => %{
+            "type" => "boolean",
+            "description" =>
+              "Discard this session's persisted shell state (cwd and exported env) before running"
           },
           "pty" => %{
             "type" => "boolean",
@@ -190,9 +198,24 @@ defmodule CodingAgent.Tools.Bash do
       background and use_pty ->
         {:error, "pty is not supported with run_in_background"}
 
+      not is_boolean(Map.get(params, "reset", false)) ->
+        {:error, "reset must be a boolean"}
+
       true ->
-        with {:ok, run_cwd} <- resolve_cwd(Map.get(params, "cwd"), cwd),
-             {:ok, env} <- validate_env(Map.get(params, "env")),
+        session_id = Keyword.get(opts, :session_id)
+        if Map.get(params, "reset", false), do: ShellState.reset(session_id)
+
+        state_session_id =
+          if Keyword.get(opts, :acp_client_terminal) == true and not use_pty and not background and
+               not Map.has_key?(params, "name"),
+             do: nil,
+             else: session_id
+
+        state = ShellState.get(state_session_id, cwd, Keyword.get(opts, :session_pid) || self())
+
+        with {:ok, run_cwd} <- resolve_cwd(Map.get(params, "cwd"), state.cwd || cwd),
+             {:ok, call_env} <- validate_env(Map.get(params, "env")),
+             env = Map.merge(state.env, call_env),
              {:ok, command} <- InternalUrlExpansion.expand(command, Keyword.put(opts, :cwd, cwd)),
              :ok <- Interceptor.check(command, opts),
              :ok <- GitGuard.check(command, run_cwd, Keyword.put(opts, :command_env, env)) do
@@ -220,7 +243,11 @@ defmodule CodingAgent.Tools.Bash do
                   on_update,
                   run_cwd,
                   env,
-                  opts
+                  Keyword.merge(opts,
+                    project_cwd: cwd,
+                    call_env: call_env,
+                    shell_state_token: state.token
+                  )
                 )
               end
           end
@@ -274,6 +301,51 @@ defmodule CodingAgent.Tools.Bash do
   defp validate_env(_env),
     do: {:error, "env must be an object mapping variable names to string values"}
 
+  # Appends an EXIT trap that records the final cwd and environment so the next
+  # call in this session can resume from them.
+  defp wrap_for_capture(command, opts) do
+    session_id = Keyword.get(opts, :session_id)
+    workspace = Keyword.get(opts, :project_cwd)
+
+    if session_id && workspace do
+      capture = Capture.start()
+
+      body =
+        "pwd -P >#{shell_quote(capture.cwd)} 2>/dev/null; env -0 >#{shell_quote(capture.env)} 2>/dev/null"
+
+      trap = "trap #{shell_quote(body)} EXIT\n"
+
+      {trap <> command,
+       Map.merge(capture, %{
+         session_id: session_id,
+         workspace: workspace,
+         token: Keyword.get(opts, :shell_state_token),
+         call_env: Keyword.get(opts, :call_env, %{})
+       })}
+    else
+      {command, nil}
+    end
+  end
+
+  defp finish_capture(nil), do: :ok
+
+  defp finish_capture(capture) do
+    try do
+      ShellState.capture(
+        capture.session_id,
+        capture.token,
+        capture.workspace,
+        capture.cwd,
+        capture.env,
+        capture.call_env
+      )
+    after
+      Capture.finish(capture)
+    end
+  end
+
+  defp shell_quote(value), do: "'" <> String.replace(value, "'", "'\\''") <> "'"
+
   defp resolve_timeout(params, opts) do
     default =
       Keyword.get(opts, :timeout_ms, Keyword.get(opts, :bash_timeout_ms, @default_timeout_ms))
@@ -318,12 +390,30 @@ defmodule CodingAgent.Tools.Bash do
     executor_opts =
       Keyword.merge(executor_opts, Keyword.take(opts, [:session_id, :session_pid]))
 
+    # Client terminals need not share the Lemon host's capture filesystem.
+    {command, capture} =
+      if executor == CodingAgent.ACPTerminalExecutor,
+        do: {command, nil},
+        else: wrap_for_capture(command, opts)
+
     try do
-      case executor.execute(command, cwd, executor_opts) do
+      result =
+        try do
+          executor.execute(command, cwd, executor_opts)
+        catch
+          kind, reason ->
+            if capture, do: Capture.finish(capture)
+            :erlang.raise(kind, reason, __STACKTRACE__)
+        end
+
+      case result do
         {:ok, result} ->
+          finish_capture(capture)
           format_result(result, timeout_ms, cwd, opts)
 
         {:detached, id, snapshot, output} ->
+          if capture, do: Capture.detach(capture, id)
+
           %AgentToolResult{
             content: [
               %TextContent{
@@ -344,6 +434,8 @@ defmodule CodingAgent.Tools.Bash do
           }
 
         {:error, reason} ->
+          finish_capture(capture)
+
           %AgentToolResult{
             content: [%TextContent{text: "Error executing command: #{inspect(reason)}"}],
             is_error: true

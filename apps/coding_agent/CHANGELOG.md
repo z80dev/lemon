@@ -16,6 +16,15 @@
   Complete role chains resolve without fallback. Prompt budgeting reserves a
   byte-level upper bound and message overhead before completion; unaudited
   provider/API pairs (including Codex without an output limit) fail closed.
+- `bash` keeps cwd and exported environment between foreground calls within a
+  session (in memory, confined to the workspace, fresh for new sessions); `reset:
+  true` or resetting the session clears it and invalidates in-flight captures.
+  State expires with its owning session, exported functions are excluded, and
+  private capture files are cleaned up even after detachment or queued cancellation.
+  Saved cwd validation follows symlinks before parent components and fails closed
+  on resolution errors, including directories replaced between calls.
+  ACP client-terminal calls remain stateless and receive no host-local capture
+  redirections, supporting clients with a separate filesystem.
 
 - Truncated webfetch and browser snapshot/page-content results retain complete
   sources as session-scoped artifacts and return readable `artifact://` handles.
