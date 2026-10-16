@@ -17,6 +17,14 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ### Fixed
 
+- Restore refuses before staging or changing state while a source or packaged
+  launcher daemon owns the target, including relocated/root-relative stores,
+  explicit database file symlinks, unhealthy or starting runtimes, and custom
+  runtime PID files. Launcher ownership records are preserved on rejected
+  starts. Lifecycle locks in both invoking and target homes prevent startup
+  racing file replacement or rollback even when the launcher uses a different
+  `HOME`. Backup CLI dispatch no longer bootstraps runtime credentials; refusal
+  gives actionable stop/retry guidance.
 - `LemonCore.Backup` snapshots SQLite databases (identified by file header)
   with `VACUUM INTO` instead of a raw file copy, so a backup taken while a
   WAL-mode writer is active is internally consistent. Live `-wal`, `-shm`, and

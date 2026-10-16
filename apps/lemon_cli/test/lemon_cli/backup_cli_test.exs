@@ -104,6 +104,58 @@ defmodule LemonCli.BackupCLITest do
     refute list_json =~ "COOKIE_SECRET_42"
   end
 
+  test "running target daemon returns an actionable error without changing state", context do
+    create_json = capture_io(fn -> assert CLI.run(["backup", "create", "--json"]) == 0 end)
+    bundle = Jason.decode!(create_json)["result"]["path"]
+    target = Path.join(context.tmp_dir, "daemon-target")
+    run = Path.join(target, "run")
+    File.mkdir_p!(run)
+    File.write!(Path.join(run, "lemon-4040.pid"), "#{System.pid()}\n")
+
+    stderr =
+      capture_io(:stderr, fn ->
+        assert CLI.run(["backup", "restore", bundle, "--target", target, "--json"]) == 1
+      end)
+
+    error = Jason.decode!(stderr)
+    assert error["ok"] == false
+    assert error["error"]["code"] == "daemon_running"
+    assert error["error"]["message"] =~ "lemon stop"
+    assert error["error"]["message"] =~ "control-plane port"
+    assert File.ls!(target) == ["run"]
+    assert File.ls!(run) == ["lemon-4040.pid"]
+    refute File.exists?(Path.join(context.lemon_home, "run"))
+  end
+
+  test "custom PID files protect relocated stores without echoing their path", context do
+    create_json = capture_io(fn -> assert CLI.run(["backup", "create", "--json"]) == 0 end)
+    bundle = Jason.decode!(create_json)["result"]["path"]
+    target = Path.join(context.tmp_dir, "relocated")
+    store = Path.join(target, "store")
+    pid_file = Path.join(context.tmp_dir, "PRIVATE_RUNTIME_PID_PATH")
+    run = Path.join(context.lemon_home, "run")
+    File.mkdir_p!(run)
+    File.mkdir_p!(store)
+    File.write!(pid_file, "#{System.pid()}\n")
+
+    record = "#{context.lemon_home}\n#{store}\n#{pid_file}\n"
+    File.write!(Path.join(run, "lemon-4040.paths"), record)
+
+    stderr =
+      capture_io(:stderr, fn ->
+        assert CLI.run(["backup", "restore", bundle, "--target", target, "--json"]) == 1
+      end)
+
+    error = Jason.decode!(stderr)
+    assert error["error"]["code"] == "daemon_running"
+    assert error["error"]["message"] =~ "LEMON_RUNTIME_PID_FILE"
+    refute stderr =~ pid_file
+    assert File.ls!(store) == []
+    assert File.ls!(target) == ["store"]
+    assert File.ls!(run) == ["lemon-4040.paths"]
+    assert File.read!(Path.join(run, "lemon-4040.paths")) == record
+  end
+
   test "invalid confirmation syntax exits 2 without echoing the token" do
     token = "DO_NOT_ECHO_CONFIRMATION"
 

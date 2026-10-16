@@ -56,6 +56,7 @@ defmodule CodingAgent.Session.NotifierBackpressureTest do
   test "stream ingress is bounded while suspended, with explicit resync and no late revival" do
     consumer = frozen_consumer()
     {:ok, stream, state} = Notifier.subscribe_stream(state(), consumer, max_queue: 8)
+    ref = Process.monitor(stream)
     :ok = :sys.suspend(stream)
 
     for n <- 1..1000, do: Notifier.broadcast_event(state, {:message_update, %{}, "delta #{n}"})
@@ -75,7 +76,6 @@ defmodule CodingAgent.Session.NotifierBackpressureTest do
 
     refute Enum.any?(events, &match?({:agent_end, _}, &1))
 
-    ref = Process.monitor(stream)
     Process.exit(consumer, :kill)
     assert_receive {:DOWN, ^ref, :process, ^stream, :normal}
   end

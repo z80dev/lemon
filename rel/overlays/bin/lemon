@@ -53,7 +53,9 @@ SIM_PORT="${LEMON_SIM_UI_PORT:-4090}"
 LOG_PATH="${RELEASE_TMP:-$LEMON_ROOT/tmp}/log"
 export LEMON_RUNTIME_LOG_DIR="$LOG_PATH"
 PIDFILE="${LEMON_RUNTIME_PID_FILE:-$STATE_DIR/lemon-$PORT.pid}"
+[[ "$PIDFILE" = /* ]] || PIDFILE="$PWD/$PIDFILE"
 ROOTFILE="$STATE_DIR/lemon-$PORT.root"
+LOCK_DIR="$STATE_DIR/lemon-$PORT.lock"
 export LEMON_CLI_LAUNCHER=release LEMON_LAUNCHER="$SCRIPT_DIR/lemon"
 export LEMON_RUNTIME_PROFILE="${PROFILE#lemon_}"
 
@@ -84,6 +86,209 @@ process_identity() {
   state="$(ps -p "$1" -o stat= 2>/dev/null)" || return 1
   [[ "$state" != *Z* ]] || return 1
   ps -p "$1" -o lstart= 2>/dev/null
+}
+
+release_start_lock() {
+  [ "${HAVE_START_LOCK:-0}" = 1 ] || return 0
+  rm -f "$LOCK_DIR/owner"
+  rmdir "$LOCK_DIR" 2>/dev/null || true
+  HAVE_START_LOCK=0
+}
+
+acquire_start_lock() {
+  local owner attempt
+  umask 077
+  mkdir -p "$STATE_DIR"
+  for ((attempt = 0; attempt < 120; attempt++)); do
+    if mkdir "$LOCK_DIR" 2>/dev/null; then
+      printf '%s\n' "$$" > "$LOCK_DIR/owner"
+      HAVE_START_LOCK=1
+      trap release_start_lock EXIT
+      trap 'exit 130' INT
+      trap 'exit 143' TERM
+      return 0
+    fi
+    owner="$(cat "$LOCK_DIR/owner" 2>/dev/null || true)"
+    if [[ "$owner" =~ ^[0-9]+$ ]] && ! kill -0 "$owner" 2>/dev/null &&
+       mkdir "$LOCK_DIR/reaping" 2>/dev/null; then
+      # Only one waiter may reclaim a dead owner. Never recursively remove a
+      # lock: a late waiter must not erase a new launcher's directory.
+      rm -f "$LOCK_DIR/owner"
+      rmdir "$LOCK_DIR/reaping" "$LOCK_DIR" 2>/dev/null || true
+      continue
+    fi
+    sleep 0.25
+  done
+  error "startup is locked at $LOCK_DIR; check its owner before removing an abandoned lock"
+  return 1
+}
+
+# Path.expand/1 normalizes dots before the runtime classifies a store filename.
+# Keep that lexical step separate from physical symlink resolution.
+lexical_path() {
+  local path="$1" remaining component resolved=""
+  [ -n "$path" ] || return 1
+  case "$path" in
+    \~) path="$HOME" ;;
+    \~/*) path="$HOME/${path#\~/}" ;;
+  esac
+  [[ "$path" = /* ]] || path="$PWD/$path"
+  remaining="$path"
+  while [ -n "$remaining" ]; do
+    component="${remaining%%/*}"
+    if [ "$remaining" = "$component" ]; then
+      remaining=""
+    else
+      remaining="${remaining#*/}"
+    fi
+    case "$component" in
+      ""|.) ;;
+      ..) resolved="${resolved%/*}" ;;
+      *) resolved="$resolved/$component" ;;
+    esac
+  done
+  printf '%s\n' "${resolved:-/}"
+}
+
+# Resolve components, including symlinks, without requiring the final path to
+# exist. In particular, a missing component followed by .. must not survive.
+canonical_path() {
+  local path="$1" remaining component resolved="" link links=0
+  [ -n "$path" ] || return 1
+  [[ "$path" = /* ]] || path="$PWD/$path"
+  remaining="$path"
+  while [ -n "$remaining" ]; do
+    component="${remaining%%/*}"
+    if [ "$remaining" = "$component" ]; then
+      remaining=""
+    else
+      remaining="${remaining#*/}"
+    fi
+    case "$component" in
+      ""|.) continue ;;
+      ..) resolved="${resolved%/*}"; continue ;;
+    esac
+    path="$resolved/$component"
+    if [ -L "$path" ]; then
+      links=$((links + 1))
+      [ "$links" -le 40 ] || return 1
+      link="$(readlink "$path")" || return 1
+      [[ "$link" != /* ]] || resolved=""
+      remaining="$link${remaining:+/$remaining}"
+    else
+      resolved="$path"
+    fi
+  done
+  printf '%s\n' "${resolved:-/}"
+}
+
+paths_overlap() {
+  local first="${1%/}" second="${2%/}"
+  case "$first/" in "$second/"*) return 0 ;; esac
+  case "$second/" in "$first/"*) return 0 ;; esac
+  return 1
+}
+
+# Publish the home, logical companion directory, and physical primary database.
+# Match SQLite normalization before resolving the database's own symlinks.
+runtime_state_paths() {
+  local store="${LEMON_STORE_PATH:-$LEMON_HOME_DIR/store}" trailing="" lower primary
+  case "$store" in
+    /*|\~|\~/*) ;;
+    *) store="$LEMON_ROOT/$store" ;;
+  esac
+  [[ "$store" != */ ]] || trailing=/
+  store="$(lexical_path "$store")" || return 1
+  primary="$store/store.sqlite3"
+  lower="$(printf '%s' "$store" | tr '[:upper:]' '[:lower:]')"
+  if [ "$trailing" != / ] && [ ! -d "$store" ]; then
+    case "${lower##*/}" in
+      .db|.sqlite|.sqlite3) ;;
+      *.db|*.sqlite|*.sqlite3)
+        primary="$store"
+        store="${store%/*}"
+        [ -n "$store" ] || store=/
+        ;;
+    esac
+  fi
+  canonical_path "$LEMON_HOME_DIR" || return 1
+  canonical_path "$store" || return 1
+  canonical_path "$primary"
+}
+
+record_runtime_paths() {
+  local temporary paths pidfile
+  paths="$(runtime_state_paths)" || return
+  pidfile="$PIDFILE"
+  [[ "$pidfile" = /* ]] || pidfile="$PWD/$pidfile"
+  temporary="$(mktemp "$STATE_DIR/.paths.XXXXXX")" || return
+  if ! printf '%s\n%s\n' "$paths" "$pidfile" > "$temporary" ||
+     ! chmod 600 "$temporary" ||
+     ! mv "$temporary" "$STATE_DIR/lemon-$PORT.paths"; then
+    rm -f "$temporary"
+    return 1
+  fi
+}
+
+# Restore publishes a completed directory containing owner + target before its
+# final runtime check. Publish our paths under the start lock first, then check
+# restores, so neither side can miss an overlapping operation.
+restore_in_progress() {
+  local lock owner target canonical_target mine paths
+  local mine_paths=()
+  paths="$(runtime_state_paths)" || return 0
+  while IFS= read -r mine; do mine_paths+=("$mine"); done <<< "$paths"
+  for lock in "$STATE_DIR"/restore-*.lock; do
+    [ -d "$lock" ] || continue
+    owner=""
+    target=""
+    { IFS= read -r owner < "$lock/owner"; } 2>/dev/null || true
+    if ! [[ "$owner" =~ ^[1-9][0-9]*$ ]] || ! kill -0 "$owner" 2>/dev/null; then continue; fi
+    { IFS= read -r target < "$lock/target"; } 2>/dev/null || true
+    canonical_target="$(canonical_path "$target" 2>/dev/null || true)"
+    for mine in "${mine_paths[@]}"; do
+      if [ -z "$canonical_target" ] || paths_overlap "$canonical_target" "$mine"; then
+        error "a backup restore (pid $owner) is replacing ${target:-Lemon state}; wait for it to finish, then retry"
+        return 0
+      fi
+    done
+  done
+  return 1
+}
+
+# A previous invocation may have selected a different PIDFILE. Its paths record
+# must remain intact until all registered/current/default processes are dead,
+# even when their control plane has not booted or is unhealthy.
+check_runtime_stopped() {
+  local registered="" fourth="" _ file pid snapshot
+  if [ -f "$STATE_DIR/lemon-$PORT.paths" ]; then
+    {
+      IFS= read -r _
+      IFS= read -r _
+      IFS= read -r registered
+      IFS= read -r fourth || true
+      [ -z "$fourth" ] || registered="$fourth"
+    } < "$STATE_DIR/lemon-$PORT.paths" || true
+  fi
+  for file in "$registered" "$PIDFILE" "$STATE_DIR/lemon-$PORT.pid"; do
+    if [ -z "$file" ] || [ ! -f "$file" ]; then
+      continue
+    fi
+    pid=""
+    IFS= read -r pid < "$file" || true
+    if [[ "$pid" =~ ^[0-9]+$ ]] && process_identity "$pid" >/dev/null; then
+      error "managed runtime is alive but unhealthy (recorded in $file); inspect $LOG_PATH, then run 'lemon stop' with that LEMON_RUNTIME_PID_FILE before retrying"
+      return 1
+    fi
+  done
+  if [ "$PROFILE" != sim_broadcast_platform ] && control_port_in_use; then
+    error "port $PORT is occupied but does not answer Lemon health checks; free it or set LEMON_CONTROL_PLANE_PORT"
+    return 1
+  fi
+  if [ -e "$PIDFILE" ] || [ -L "$PIDFILE" ]; then
+    snapshot="$(update_daemon_snapshot)" || return
+    [ "$snapshot" = stopped ] || return 1
+  fi
 }
 
 # ── Managed operator credential: lets a later TUI or CLI process authenticate
@@ -173,14 +378,36 @@ wait_until() {
   "$1"
 }
 
-# ── Per-user defaults, applied only when unset so server installs that export
-# these keep full control. The umask keeps everything under ~/.lemon private
-# from its first byte. ──
+# Loading existing configuration is read-only. Reuse/refusal and backup commands
+# must not create cookies, credentials, or web secrets as a side effect.
+load_environment() {
+  local store
+  if [ -z "${RELEASE_COOKIE:-}" ] && [ -f "$LEMON_HOME_DIR/cookie" ]; then
+    IFS= read -r RELEASE_COOKIE < "$LEMON_HOME_DIR/cookie" || true
+    export RELEASE_COOKIE
+  fi
+  # shellcheck disable=SC1091
+  [ ! -f "$LEMON_HOME_DIR/env" ] || source "$LEMON_HOME_DIR/env"
+  store="${LEMON_STORE_PATH:-$LEMON_HOME_DIR/store}"
+  case "$store" in
+    \~) store="$HOME" ;;
+    \~/*) store="$HOME/${store#\~/}" ;;
+    /*) ;;
+    *) store="$LEMON_ROOT/$store" ;;
+  esac
+  # Keep the selected filename and trailing slash: resolving a database-file
+  # symlink here would change where LemonCore.Paths places companion databases.
+  LEMON_STORE_PATH="$store"
+  export LEMON_STORE_PATH
+  export PHX_SERVER="${PHX_SERVER:-true}"
+}
+
+# Per-user defaults are persisted only after startup has excluded a live runtime
+# and overlapping restore. Explicit server settings remain caller-owned.
 setup_environment() {
   umask 077
   mkdir -p "$STATE_DIR"
   chmod 700 "$LEMON_HOME_DIR" "$STATE_DIR"
-  export LEMON_STORE_PATH="${LEMON_STORE_PATH:-$LEMON_HOME_DIR/store}"
 
   if [ -z "${RELEASE_COOKIE:-}" ]; then
     [ -s "$LEMON_HOME_DIR/cookie" ] || openssl rand -hex 32 > "$LEMON_HOME_DIR/cookie"
@@ -189,17 +416,12 @@ setup_environment() {
     export RELEASE_COOKIE
   fi
 
-  # shellcheck disable=SC1091
-  [ ! -f "$LEMON_HOME_DIR/env" ] || source "$LEMON_HOME_DIR/env"
-
   if [ -z "${LEMON_WEB_SECRET_KEY_BASE:-}" ]; then
     LEMON_WEB_SECRET_KEY_BASE="$(openssl rand -hex 64)"
     printf 'export LEMON_WEB_SECRET_KEY_BASE=%q\n' "$LEMON_WEB_SECRET_KEY_BASE" >> "$LEMON_HOME_DIR/env"
     chmod 600 "$LEMON_HOME_DIR/env"
     export LEMON_WEB_SECRET_KEY_BASE
   fi
-
-  export PHX_SERVER="${PHX_SERVER:-true}"
 }
 
 # The sim-only release bundles no lemon_cli; keep its few commands CLI-free.
@@ -235,22 +457,36 @@ run_cli() {
 # pid + release root (so stop/restart survive a version flip), and waits for
 # the control plane.
 start_daemon() {
-  local pid="" born attempt snapshot reuse="${1:-1}"
+  local pid="" born attempt reuse="${1:-1}" configure="${2:-0}"
   if [ "$PROFILE" != "sim_broadcast_platform" ] && control_plane_healthy; then
     [ "$reuse" = 1 ] || { error "another runtime is serving port $PORT; restart did not replace it; stop it where it runs, then retry"; return 1; }
     info "a healthy Lemon runtime is already running on port $PORT; reusing it"
     return 0
   fi
-  if [ "$PROFILE" != "sim_broadcast_platform" ] && control_port_in_use; then
-    error "port $PORT is occupied but does not answer Lemon health checks; free it or set LEMON_CONTROL_PLANE_PORT"
+  check_runtime_stopped || return
+  acquire_start_lock || return
+  # Another launcher may have completed while this one waited.
+  if [ "$PROFILE" != "sim_broadcast_platform" ] && control_plane_healthy; then
+    release_start_lock
+    [ "$reuse" = 1 ] || { error "another runtime is serving port $PORT; restart did not replace it; stop it where it runs, then retry"; return 1; }
+    info "a healthy Lemon runtime is already running on port $PORT; reusing it"
+    return 0
+  fi
+  check_runtime_stopped || { release_start_lock; return 1; }
+  record_runtime_paths || { release_start_lock; return 1; }
+  if restore_in_progress; then
+    release_start_lock
     return 1
   fi
-  if [ -e "$PIDFILE" ]; then
-    snapshot="$(update_daemon_snapshot)" || return 1
-    [ "$snapshot" = stopped ] || { error "managed runtime is alive but unhealthy; inspect $LOG_PATH, then run 'lemon stop' before retrying"; return 1; }
-    rm -f "$PIDFILE" "$ROOTFILE"
-  fi
+  setup_environment
   ensure_managed_token || exit 1
+  rm -f "$PIDFILE" "$ROOTFILE"
+  mkdir -p "$(dirname "$PIDFILE")"
+  if [ "$configure" = 1 ]; then
+    # Interactive first launch completes setup while the same startup lock
+    # protects it, before an unconfigured daemon is booted.
+    "$RELEASE_BIN" eval "$CLI_EXPR" setup --if-required || exit 1
+  fi
   release_command "$LEMON_ROOT" daemon
   for ((attempt = 0; attempt < 15; attempt++)); do
     pid="$(release_command "$LEMON_ROOT" pid 2>/dev/null || true)"
@@ -279,6 +515,7 @@ start_daemon() {
     rm -f "$PIDFILE" "$ROOTFILE"
     exit 1
   fi
+  release_start_lock
 }
 
 # An eval VM exports its own release selection into child processes. Never let
@@ -444,7 +681,7 @@ case "$COMMAND" in
     fi
     case "${2:-}:$#" in
       snapshot:2) update_daemon_snapshot ;;
-      restart:4) restart_updated_daemon "$3" "$4" ;;
+      restart:4) load_environment; restart_updated_daemon "$3" "$4" ;;
       *) error "invalid internal update lifecycle request"; exit 2 ;;
     esac
     exit $?
@@ -458,14 +695,25 @@ case "$COMMAND" in
   tui|web|start|daemon|stop|restart|status|__update-daemon|acp|run|-p|--print) require_curl ;;
 esac
 
-setup_environment
+load_environment
+case "$COMMAND" in
+  backup)
+    # Backup is a filesystem operation, not a runtime boot. Avoid production
+    # endpoint secret validation without generating or persisting any secrets.
+    export ELIXIR_ERL_OPTIONS="${ELIXIR_ERL_OPTIONS:-} -elixir config_provider_init nil"
+    run_cli "$@"
+    ;;
+  start|daemon|tui|web|restart|acp) ;;
+  *) setup_environment ;;
+esac
 
 case "$COMMAND" in
   acp)
     shift
     case "${1:-}" in -h|--help) run_cli acp --help ;; esac
-    prepare_runtime_credential || exit 1
     if ! control_plane_healthy; then start_daemon >&2; fi
+    prepare_runtime_credential || exit 1
+    setup_environment
     run_cli acp "$@"
     ;;
   tui)
@@ -478,11 +726,9 @@ case "$COMMAND" in
     [ -n "${LEMON_WS_TOKEN:-}" ] || load_managed_token || status=$?
     [ "$status" -le 1 ] || exit 1
     if ! control_plane_healthy; then
-      # First launch only: finish setup in one VM before starting a daemon.
-      if [ -t 0 ] && [ -t 1 ]; then
-        "$RELEASE_BIN" eval "$CLI_EXPR" setup --if-required || exit 1
-      fi
-      start_daemon
+      configure=0
+      if [ -t 0 ] && [ -t 1 ]; then configure=1; fi
+      start_daemon 1 "$configure"
     fi
     if [ -z "${LEMON_CONTROL_PLANE_OPERATOR_TOKEN:-}${LEMON_WS_TOKEN:-}" ]; then
       case "${LEMON_CONTROL_PLANE_ALLOW_UNAUTHENTICATED_LOOPBACK:-}" in
@@ -525,18 +771,23 @@ case "$COMMAND" in
       info "a healthy Lemon runtime is already running on port $PORT; reusing it"
       exit 0
     fi
-    if [ "$PROFILE" != "sim_broadcast_platform" ] && control_port_in_use; then
-      error "port $PORT is occupied but does not answer Lemon health checks; free it or set LEMON_CONTROL_PLANE_PORT"
-      exit 1
+    check_runtime_stopped || exit 1
+    acquire_start_lock || exit 1
+    if [ "$PROFILE" != "sim_broadcast_platform" ] && control_plane_healthy; then
+      info "a healthy Lemon runtime is already running on port $PORT; reusing it"
+      exit 0
     fi
-    if [ -e "$PIDFILE" ] || [ -L "$PIDFILE" ]; then
-      snapshot="$(update_daemon_snapshot)" || exit 1
-      [ "$snapshot" = stopped ] || { error "managed runtime is alive but unhealthy; inspect $LOG_PATH, then run 'lemon stop' before retrying"; exit 1; }
-    fi
-    rm -f "$PIDFILE" "$ROOTFILE"
+    check_runtime_stopped || exit 1
+    record_runtime_paths || exit 1
+    if restore_in_progress; then exit 1; fi
+    setup_environment
     ensure_managed_token || exit 1
+    rm -f "$PIDFILE" "$ROOTFILE"
+    mkdir -p "$(dirname "$PIDFILE")"
     printf '%s\n' "$$" > "$PIDFILE"
     printf '%s\n' "$LEMON_ROOT" > "$ROOTFILE"
+    # exec retains the lock owner's PID through release boot. Once the runtime
+    # exits, a subsequent launch can reclaim its abandoned startup lock.
     exec "$RELEASE_BIN" start "$@"
     ;;
 
